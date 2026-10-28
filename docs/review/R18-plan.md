@@ -1,7 +1,7 @@
 # R18: detection/re-pick orchestration as an explicit versioned pipeline — plan
 
 step 1, plan only. no code changed. references are to the #40 tree
-(`/home/wfrank/drumspike-40-wt`, 3cb834e = origin/main + #40 policy work) unless a file
+(a local worktree at 3cb834e = origin/main + #40 policy work) unless a file
 differs from origin/main — only `policy.rs` does (it is #40, not on main); every other
 file:line below is valid on origin/main (6f9268c).
 
