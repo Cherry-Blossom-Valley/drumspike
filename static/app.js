@@ -617,6 +617,7 @@ function buildTrackDOM() {
     const tn = row.querySelector(".tname");   // C1: name as text node — no HTML injection
     const nm = document.createElement("span"); nm.className = "tnm"; nm.textContent = name; nm.title = name;
     tn.appendChild(nm);
+    setHeadIcon(row, t.role);   // 0.9.3: the role icon left of the name
     // P3-14c: the header is compact; the 🔗 badge and the hit counts are in the Inspector (source state, Detected, Edited)
     if (t.offline) {
       const b = document.createElement("button"); b.className = "btn mini tOffline"; b.textContent = "offline";
@@ -768,6 +769,27 @@ function weakSignals(tracks) {   // the job's tracks: [[name, text], ...] for th
   return Object.entries(tracks || {}).filter(([, t]) => t.state === "done" && t.weak_signal).map(([n, t]) => [n, `${n}: ${weakSignalText(t.weak_signal)}`]);
 }
 function followersOf(name) { return S.order.filter(n => S.tracks[n] && S.tracks[n].follows === name); }
+/* 0.9.3: the role icon of the track header (inline SVG, no image files, no external fonts).
+   Monochrome currentColor at 14 px; a role change swaps the icon (refreshHeadRole). */
+const ROLE_ICONS = {
+  kick: '<circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2" fill="currentColor"/>',
+  snare: '<rect x="2" y="4.5" width="12" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4 12.5v1.5M8 12.5v1.5M12 12.5v1.5" stroke="currentColor" stroke-width="1.2"/>',
+  tom: '<rect x="3" y="4" width="10" height="8" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3 7.5h10" stroke="currentColor" stroke-width="1"/>',
+  hat: '<path d="M2 6.5h12M3 9.5h10M8 2.5v3M8 11v2.5" stroke="currentColor" stroke-width="1.5" fill="none"/>',
+  cymbal: '<path d="M1.5 5.5h13M8 5.5v8.5" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M6 14h4" stroke="currentColor" stroke-width="1.2"/>',
+  other: '<path d="M1.5 9.5h2l1.5-4 2 6.5 2-6 1 3.5h4.5" fill="none" stroke="currentColor" stroke-width="1.5"/>',
+};
+function roleIconEl(role) {   // a role name is a fixed key, never data: the markup is ours
+  const s = document.createElement("span"); s.className = "trole";
+  s.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">${ROLE_ICONS[role] || ROLE_ICONS.other}</svg>`;
+  s.title = `role: ${role}`;
+  return s;
+}
+function setHeadIcon(row, role) {   // the icon sits left of the name; a role change swaps it at once
+  const tn = row.querySelector(".tname"); if (!tn) return;
+  const cur = tn.querySelector(".trole"); if (cur) cur.remove();
+  tn.insertBefore(roleIconEl(role), tn.querySelector(".tnm"));
+}
 function roleLineText(t) { return `${t.role} · ${nameFromNote(t.note)} (${t.note})` + (t.follows ? ` · follows ${t.follows}` : ""); }
 function followerLocked(name) {   // true (with the message) when the track's hits are derived from another track
   const t = S.tracks[name];
@@ -778,6 +800,7 @@ function followerLocked(name) {   // true (with the message) when the track's hi
 function refreshHeadRole(name) {   // the role line of the header, and the Inspector's when it shows the track
   const row = rowOf(name), t = S.tracks[name];
   if (row && t) {
+    setHeadIcon(row, t.role);   // 0.9.3: a role change swaps the icon at once
     row.querySelector(".nnote").textContent = nameFromNote(t.note);
     row.querySelector(".tfollow").textContent = t.follows ? ` · follows ${t.follows}` : "";   // textContent: a track name is data
     row.classList.toggle("follower", !!t.follows);
@@ -6612,6 +6635,7 @@ function copyProgress(label) {
 }
 function setAnalysisButtons(disabled) {
   $("#analyzeAllBtn").disabled = disabled;
+  $("#analyzeAllBtn").classList.toggle("running", disabled);   // 0.9.3: the accent colour while an analysis runs
   document.querySelectorAll(".bReanalyze").forEach(b => b.disabled = disabled);
   const rm = document.querySelector("#ctxMenu [data-act=reanalyze]"); if (rm) rm.disabled = disabled;
 }
