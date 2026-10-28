@@ -182,6 +182,19 @@ fn decode_bytes(d: &Decoded) -> usize {
     d.samples.len() * std::mem::size_of::<f32>()
 }
 
+/// Removes the inflight key when the request that owns the decode ends, success or
+/// error, so a failed decode leaves no slot behind.
+struct InflightGuard<'a> {
+    map: &'a Mutex<HashMap<DecodeKey, InflightSlot>>,
+    key: DecodeKey,
+}
+
+impl Drop for InflightGuard<'_> {
+    fn drop(&mut self) {
+        lock(self.map).remove(&self.key);
+    }
+}
+
 /// One wait slot for one decode key that is being decoded right now (single-flight): the
 /// first request fills it, the others wait on its lock and share the result.
 type InflightSlot = Arc<Mutex<Option<Arc<Decoded>>>>;
@@ -241,8 +254,8 @@ impl Media {
             return Ok(d);
         }
         // single-flight: the first request for the key decodes, the others wait on the
-        // slot and share the result; a failed decode leaves the slot empty and the
-        // waiters decode themselves.
+        // slot and share the result; a failed decode leaves no slot behind (the waiters
+        // decode themselves).
         let slot = {
             let mut map = lock(&self.inflight);
             Arc::clone(map.entry(key.clone()).or_default())
@@ -251,12 +264,21 @@ impl Media {
         if let Some(d) = g.as_ref() {
             return Ok(Arc::clone(d));
         }
+        // every exit of the decode removes the key again (also the `?` of a failed
+        // decode), so the map keeps no empty slot
+        let guard = InflightGuard {
+            map: &self.inflight,
+            key: key.clone(),
+        };
         let d = Arc::new(decode(path, mode)?);
         self.decode_runs.fetch_add(1, Ordering::Relaxed);
         *g = Some(Arc::clone(&d));
         drop(g);
-        lock(&self.inflight).remove(&key);
+        // the cache entry goes in before the inflight key is removed: a request that
+        // arrives in between hits the cache instead of finding no slot and decoding
+        // again (for an oversized decode the slot stays valid until the remove)
         self.decoded_insert(key, Arc::clone(&d));
+        drop(guard);
         Ok(d)
     }
 

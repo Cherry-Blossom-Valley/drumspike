@@ -108,6 +108,23 @@ fn three_decodes_over_half_the_budget_leave_the_held_bytes_within_it() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+#[test]
+fn a_failing_decode_leaves_no_inflight_slot() {
+    let d = tmp("cache_err");
+    let m = Media::new();
+    std::fs::write(d.join("bad.wav"), b"not a wav file at all").unwrap();
+    assert!(m.decode_cached(&d.join("bad.wav"), MixMode::Ffmpeg).is_err());
+    assert!(
+        lock(&m.inflight).is_empty(),
+        "the failed decode leaves no slot behind"
+    );
+    // a request for the same key afterwards decodes again (no stale empty slot)
+    write(&d.join("bad.wav"), 44_100, 100);
+    let x = m.decode_cached(&d.join("bad.wav"), MixMode::Ffmpeg).unwrap();
+    assert_eq!(x.samples.len(), 100);
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 fn want(full: &[f32], sr: u32, s: usize, e: usize) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&(s as u32).to_le_bytes());
