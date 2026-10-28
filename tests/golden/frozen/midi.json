@@ -8,7 +8,7 @@
    "date": "2026-10-11"
   },
   "linux-arm64": {
-   "sha": "67bb405b249dc8aace623f91f85e441eb324c335",
+   "sha": "390303a33fba89e29c79cfdbbd4644e8a5f2a505",
    "host": "linux-arm64",
    "date": "2026-10-28",
    "note": "dense 500 random hits measured on linux-arm64 (Cherry-Blossom-Valley/drumspike#7): stable over 3 runs, identical bytes to the x86_64 value"
