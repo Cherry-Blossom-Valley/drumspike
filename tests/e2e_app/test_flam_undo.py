@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from app_support import inspect_track, open_project, wait_until
-from conftest import READY, WARM_GOTO_MS, bridge_binary
+from conftest import READY, WARM_GOTO_MS, bridge_binary, start_bridge
 from helpers import ROOT, SR, write_wav
 from test_editor import service_events
 from test_histograms import settled
@@ -27,7 +27,7 @@ def flam_bridge(tmp_path_factory):
     env = dict(os.environ, DRUMSPIKE_HOME=str(home), DRUMSPIKE_PROJECTS=str(home / "projects"),
                DRUMSPIKE_AUTOSAVE_SECONDS="1", DRUMSPIKE_AUDIO="null", DRUMSPIKE_MASTER_GAIN="0")
     env.pop("DRUMSPIKE_FLAM_RULE", None)                      # the rule on, as in the product
-    proc = subprocess.Popen([str(exe)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    proc = start_bridge(exe, env)
     m = re.search(r"http://127\.0\.0\.1:\d+", proc.stdout.readline())
     if not m:
         proc.kill()

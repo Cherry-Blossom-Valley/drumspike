@@ -227,8 +227,8 @@ jobs:
         if: env.CI_RUNNER_MODE != 'github'
         run: |
           # the crewboard binary (crewboard lock), else the older skill script
-          PATH="$HOME/.local/bin:$PATH"; if command -v crewboard >/dev/null; then hl() { crewboard lock "$@"; }; have_lock=yes; elif [ -f "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" ]; then hl() { bash "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" "$@"; }; have_lock=yes; else have_lock=no; fi
-          if [ "$have_lock" = yes ]; then hl ci-wait "$HOME/.cache/drumspike/heavy.lock.d" --owner "ci-${{ github.run_id }}" --pid runner; else echo "::warning::crewboard not installed; CI is protected only by Runner.Worker detection"; fi
+          PATH="$HOME/.local/bin:$PATH"; if command -v crewboard >/dev/null; then hl() { crewboard lock "$@"; }; have_lock=yes; else have_lock=no; fi
+          if [ "$have_lock" = yes ]; then hl ci-wait "$HOME/.cache/drumspike/heavy.lock.d" --holder "ci-${{ github.run_id }}" --pid runner; else echo "::warning::crewboard not installed; CI is protected only by Runner.Worker detection"; fi
 
       - name: No signing settings in the environment
         run: |
@@ -289,12 +289,12 @@ jobs:
         if: env.CI_RUNNER_MODE != 'github'
         id: lock
         run: |
-          PATH="$HOME/.local/bin:$PATH"; if command -v crewboard >/dev/null; then hl() { crewboard lock "$@"; }; have_lock=yes; elif [ -f "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" ]; then hl() { bash "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" "$@"; }; have_lock=yes; else have_lock=no; fi
+          PATH="$HOME/.local/bin:$PATH"; if command -v crewboard >/dev/null; then hl() { crewboard lock "$@"; }; have_lock=yes; else have_lock=no; fi
           lock="$HOME/.cache/drumspike/heavy.lock.d"
           mkdir -p "$HOME/.cache/drumspike"
           if [ "$have_lock" = no ]; then echo "::warning::crewboard not installed; going on without the host lock"; echo "made=false" >> "$GITHUB_OUTPUT"; exit 0; fi
           # take as CI: a waiting agent never blocks it; wait at most 20 minutes, then go on with a warning
-          if hl take "$lock" --ci --owner "ci-${{ github.run_id }}" --wait 1200 --pid runner; then
+          if hl take "$lock" --ci --holder "ci-${{ github.run_id }}" --wait 1200 --pid runner; then
             echo "made=true" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::host lock $lock still held after 20 minutes ($(hl status "$lock" 2>&1 | head -1)); going on without it"
@@ -310,11 +310,11 @@ jobs:
       - name: Release the host lock and leave the CI waiting list
         if: always() && env.CI_RUNNER_MODE != 'github'
         run: |
-          PATH="$HOME/.local/bin:$PATH"; if command -v crewboard >/dev/null; then hl() { crewboard lock "$@"; }; have_lock=yes; elif [ -f "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" ]; then hl() { bash "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" "$@"; }; have_lock=yes; else have_lock=no; fi
+          PATH="$HOME/.local/bin:$PATH"; if command -v crewboard >/dev/null; then hl() { crewboard lock "$@"; }; have_lock=yes; else have_lock=no; fi
           lock="$HOME/.cache/drumspike/heavy.lock.d"
           [ "$have_lock" = yes ] || exit 0
-          if [ "${{ steps.lock.outputs.made }}" = "true" ]; then hl release "$lock" --owner "ci-${{ github.run_id }}"; fi
-          hl ci-done "$lock" --owner "ci-${{ github.run_id }}"
+          if [ "${{ steps.lock.outputs.made }}" = "true" ]; then hl release "$lock" --holder "ci-${{ github.run_id }}"; fi
+          hl ci-done "$lock" --holder "ci-${{ github.run_id }}"
 
       - name: Upload raw JS coverage
         uses: actions/upload-artifact@v4
