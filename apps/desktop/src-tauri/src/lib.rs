@@ -862,6 +862,8 @@ pub fn run() {
             splash::open(app.handle());
             // #463: a self-test window that ends up occluded gets its page suspended by WebKit
             // (rAF and timers stop, the in-page guards cannot fire), so keep it front.
+            // The self-test exists in debug builds only.
+            #[cfg(debug_assertions)]
             if selftest::FRONT_WINDOW.load(std::sync::atomic::Ordering::Relaxed) {
                 let h = app.handle().clone();
                 let front = move || {
