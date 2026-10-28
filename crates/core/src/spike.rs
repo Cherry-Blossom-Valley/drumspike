@@ -503,10 +503,17 @@ pub fn export_spikes(
     };
     let bext = source_bext.map(|b| spike_bext(b, sr, format));
     let gen = SpikeSignalBlocks::new(sr, n_samples, times);
-    write_wav_blockwise(path, &spec, n_samples, bext.as_ref(), WRITE_BLOCK_FRAMES, |start, buf| {
-        gen.fill(n_samples, start, buf);
-        Ok(())
-    })
+    write_wav_blockwise(
+        path,
+        &spec,
+        n_samples,
+        bext.as_ref(),
+        WRITE_BLOCK_FRAMES,
+        |start, buf| {
+            gen.fill(n_samples, start, buf);
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]

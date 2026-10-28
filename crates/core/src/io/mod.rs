@@ -17,8 +17,8 @@ pub use atomic::{write_bytes_atomic, TempFile};
 pub use mix::{ffmpeg_default_mask, ffmpeg_mono_coefs, ffmpeg_stereo_mask_ok, MixMode, Plan};
 pub use reader::{read_wav_bytes, read_wav_mono, Bext, MappedWav, SampleFormat, WavError, WavInfo};
 pub use writer::{
-    encode_bext, encode_samples, encode_wav, encode_wav_raw, write_atomic, write_wav, write_wav_blockwise,
-    WavFormat, WavSpec, WRITE_BLOCK_FRAMES,
+    encode_bext, encode_samples, encode_wav, encode_wav_raw, write_atomic, write_wav, write_wav_blockwise, WavFormat,
+    WavSpec, WRITE_BLOCK_FRAMES,
 };
 
 /// Decode several files in parallel (rayon), one result per path in the same order.

@@ -463,7 +463,12 @@ mod tests {
             channel_mask: 0,
         };
         let bext = source_bext.map(|b| crate::spike::spike_bext(b, sr, format));
-        write_wav(path, &spec, &crate::spike::spike_signal(sr, n_samples, times), bext.as_ref())
+        write_wav(
+            path,
+            &spec,
+            &crate::spike::spike_signal(sr, n_samples, times),
+            bext.as_ref(),
+        )
     }
 
     #[test]
@@ -546,7 +551,11 @@ mod tests {
         };
         assert_eq!(
             blockwise_bytes(&spec(WavFormat::Float32, 2), st, 2, Some(&bext)),
-            encode_wav_raw(&spec(WavFormat::Float32, 2), &encode_samples(WavFormat::Float32, st), Some(&bext))
+            encode_wav_raw(
+                &spec(WavFormat::Float32, 2),
+                &encode_samples(WavFormat::Float32, st),
+                Some(&bext)
+            )
         );
         // extensible 3 channels, Pcm24, 7 frames in blocks of 3: an odd data chunk again
         let c3 = &x[..21];
@@ -570,11 +579,18 @@ mod tests {
         let p = dir.join("order.wav");
         let n = WRITE_BLOCK_FRAMES * 2 + 5;
         let mut calls: Vec<(usize, usize)> = Vec::new();
-        write_wav_blockwise(&p, &spec(WavFormat::Pcm16, 1), n, None, WRITE_BLOCK_FRAMES, |start, buf| {
-            calls.push((start, buf.len()));
-            buf.fill(0.25);
-            Ok(())
-        })
+        write_wav_blockwise(
+            &p,
+            &spec(WavFormat::Pcm16, 1),
+            n,
+            None,
+            WRITE_BLOCK_FRAMES,
+            |start, buf| {
+                calls.push((start, buf.len()));
+                buf.fill(0.25);
+                Ok(())
+            },
+        )
         .unwrap();
         let mut want = Vec::new();
         let mut start = 0;
@@ -632,8 +648,11 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let want =
-            encode_wav_raw(&spec(WavFormat::Pcm16, 1), &encode_samples(WavFormat::Pcm16, &[-0.5, -0.5]), None);
+        let want = encode_wav_raw(
+            &spec(WavFormat::Pcm16, 1),
+            &encode_samples(WavFormat::Pcm16, &[-0.5, -0.5]),
+            None,
+        );
         assert_eq!(std::fs::read(&p).unwrap(), want, "the second write replaced the first");
         let left: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
