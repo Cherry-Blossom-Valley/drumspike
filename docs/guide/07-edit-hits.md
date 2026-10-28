@@ -20,4 +20,6 @@ delete a hit, or move a hit by samples. Every edit is undoable, and the exports 
 Edits stay edits: Drum Spike never changes your audio. Export again after an edit and the DAW
 gets the new files (chapter 5).
 
+![A snare hit selected at the 5 ms zoom; the nudge value shows 1 Sample and the hit line sits one sample to the left of the first motion.](img/07-edit-hits.png)
+
 Next: [velocity](08-velocity.md).
