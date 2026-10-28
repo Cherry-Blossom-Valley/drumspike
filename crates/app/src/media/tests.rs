@@ -61,6 +61,70 @@ fn decode_cache_returns_the_same_decode_and_keeps_three() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+#[test]
+fn eight_threads_on_one_file_decode_it_once_and_share_the_result() {
+    let d = tmp("cache_flight");
+    let m = Media::new();
+    let p = d.join("a.wav");
+    write(&p, 48_000, 20_000);
+    let got: Mutex<Vec<Arc<Decoded>>> = Mutex::new(Vec::new());
+    std::thread::scope(|s| {
+        for _ in 0..8 {
+            let (m, p, got) = (&m, &p, &got);
+            s.spawn(move || {
+                let x = m.decode_cached(p, MixMode::Ffmpeg).unwrap();
+                assert_eq!(x.samples.len(), 20_000);
+                lock(got).push(x);
+            });
+        }
+    });
+    let all = lock(&got);
+    assert_eq!(all.len(), 8);
+    for x in all.iter() {
+        assert!(Arc::ptr_eq(&all[0], x), "all eight requests share one decode");
+    }
+    assert_eq!(m.decode_runs(), 1, "the decoder ran exactly once");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn three_decodes_over_half_the_budget_leave_the_held_bytes_within_it() {
+    let d = tmp("cache_budget");
+    // each decode is 6_000 samples = 24_000 bytes, over half of the 40_000 budget
+    let m = Media::with_budget(40_000);
+    for k in 0..3 {
+        write(&d.join(format!("{k}.wav")), 44_100, 6_000);
+        m.decode_cached(&d.join(format!("{k}.wav")), MixMode::Ffmpeg).unwrap();
+        let held: usize = lock(&m.decoded).iter().map(|(_, x)| x.samples.len() * 4).sum();
+        assert!(held <= 40_000, "held {held} bytes after {k} decodes");
+    }
+    assert_eq!(m.decode_runs(), 3, "every file is its own decode");
+    // an entry larger than the budget is returned but not kept
+    write(&d.join("big.wav"), 44_100, 20_000);
+    let big = m.decode_cached(&d.join("big.wav"), MixMode::Ffmpeg).unwrap();
+    assert_eq!(big.samples.len(), 20_000);
+    let held: usize = lock(&m.decoded).iter().map(|(_, x)| x.samples.len() * 4).sum();
+    assert!(held <= 40_000, "the oversized decode was not kept ({held})");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn a_failing_decode_leaves_no_inflight_slot() {
+    let d = tmp("cache_err");
+    let m = Media::new();
+    std::fs::write(d.join("bad.wav"), b"not a wav file at all").unwrap();
+    assert!(m.decode_cached(&d.join("bad.wav"), MixMode::Ffmpeg).is_err());
+    assert!(
+        lock(&m.inflight).is_empty(),
+        "the failed decode leaves no slot behind"
+    );
+    // a request for the same key afterwards decodes again (no stale empty slot)
+    write(&d.join("bad.wav"), 44_100, 100);
+    let x = m.decode_cached(&d.join("bad.wav"), MixMode::Ffmpeg).unwrap();
+    assert_eq!(x.samples.len(), 100);
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 fn want(full: &[f32], sr: u32, s: usize, e: usize) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&(s as u32).to_le_bytes());
