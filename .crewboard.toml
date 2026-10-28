@@ -1,0 +1,9 @@
+# crewboard initiative file (no secrets). Agents find the board through it.
+initiative = "drumspike-cbv"
+project_owner = "Cherry-Blossom-Valley"
+project_number = 1
+repos = ["Cherry-Blossom-Valley/drumspike"]
+owner_login = "wfrank2509"
+registry_issue = 1
+authority = "AUTHORITY.md"
+crew_login = "wfrank-crew"
