@@ -16,6 +16,7 @@ pub mod bridge;
 pub mod call;
 pub mod candidates;
 pub mod cli;
+pub mod command_policy;
 pub mod commands;
 pub mod confidence;
 pub mod copyjob;

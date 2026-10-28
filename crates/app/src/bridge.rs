@@ -266,7 +266,7 @@ pub struct Bridge {
     static_dir: PathBuf,
 }
 
-use crate::call::{arg_str, opt_i64};
+use crate::command_policy::{arg_str, opt_i64, transport_args, CLOSE_DEFAULT};
 
 /// The MIME type of a static file, by extension.
 pub fn mime_of(path: &Path) -> &'static str {
@@ -371,16 +371,8 @@ impl Bridge {
     /// `analyze_start`; the page fetches the playhead messages with the long poll.
     fn invoke_transport(&self, cmd: &str, args: &Value) -> Result<Reply, AppError> {
         let s = &self.svc;
-        let opt_f64 = |key: &str| -> Result<Option<f64>, AppError> {
-            match args.get(key) {
-                None | Some(Value::Null) => Ok(None),
-                Some(v) => v
-                    .as_f64()
-                    .map(Some)
-                    .ok_or_else(|| AppError::bad(format!("wrong argument `{key}` (number)"))),
-            }
-        };
-        let opt_bool = |key: &str| args.get(key).and_then(Value::as_bool);
+        let opt_f64 = |key: &str| transport_args::opt_f64(args, key);
+        let opt_bool = |key: &str| transport_args::opt_bool(args, key);
         match cmd {
             "transport_play" => {
                 let progress = args
@@ -393,7 +385,7 @@ impl Bridge {
                         p
                     });
                 // P4-40d: an audition window (start, end, loop, tracks); P4-40e: shot (the one-shot preview)
-                let win = crate::transport::PlayWindow::from_args(
+                let win = transport_args::play_window(
                     opt_f64("start")?,
                     opt_f64("end")?,
                     opt_bool("loop"),
@@ -410,7 +402,9 @@ impl Bridge {
                 )
                 .map(Reply::Json)
             }
-            "transport_stop" => Ok(Reply::Json(s.transport_stop(opt_bool("close").unwrap_or(false)))),
+            "transport_stop" => Ok(Reply::Json(
+                s.transport_stop(opt_bool("close").unwrap_or(CLOSE_DEFAULT)),
+            )),
             "transport_seek" => {
                 let p = opt_f64("position")?.ok_or_else(|| AppError::bad("missing argument `position` (number)"))?;
                 s.transport_seek(p).map(Reply::Json)

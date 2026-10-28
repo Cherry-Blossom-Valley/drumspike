@@ -12,31 +12,10 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use crate::api::{self, CommandSpec, Surface, Ty};
+use crate::api::{self, Surface};
+use crate::command_policy::{self as policy, arg_i64, arg_str, opt_i64};
 use crate::reply::{Channels, Reply};
 use crate::{AppError, ListShape, Progress, Service};
-
-pub(crate) fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, AppError> {
-    args.get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::bad(format!("missing or wrong argument `{key}` (string)")))
-}
-
-pub(crate) fn arg_i64(args: &Value, key: &str) -> Result<i64, AppError> {
-    args.get(key)
-        .and_then(Value::as_i64)
-        .ok_or_else(|| AppError::bad(format!("missing or wrong argument `{key}` (integer)")))
-}
-
-pub(crate) fn opt_i64(args: &Value, key: &str) -> Result<Option<i64>, AppError> {
-    match args.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(v) => v
-            .as_i64()
-            .map(Some)
-            .ok_or_else(|| AppError::bad(format!("wrong argument `{key}` (integer)"))),
-    }
-}
 
 /// Run one command with JSON arguments; `None` when `cmd` is not one this function runs.
 pub fn run(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) -> Option<Result<Reply, AppError>> {
@@ -175,14 +154,18 @@ fn run_direct(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) 
                     let p: Progress = Arc::new(move |v: Value| ch.push(&id, v));
                     p
                 });
-            json(s.analyze_start_keep(
-                sid,
-                tracks,
-                params,
-                detector.as_deref(),
-                progress,
-                args.get("keep_edited").and_then(Value::as_bool).unwrap_or(false),
-            ))
+            json(
+                s.analyze_start_keep(
+                    sid,
+                    tracks,
+                    params,
+                    detector.as_deref(),
+                    progress,
+                    args.get("keep_edited")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(policy::PAGE_KEEP_EDITED),
+                ),
+            )
         }
         "analyze_status" => Ok(Reply::Json(s.analyze_status(arg_str(args, "sid")?))),
         "export_midi" => {
@@ -231,92 +214,6 @@ fn run_direct(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) 
     }
 }
 
-/// The arguments an agent gets when it gives none: `(command, key, value)`. The page keeps the old behaviour
-/// (the page sends `keep_edited` itself since P4-9 and no `apply`: it applies the velocities as one undo step).
-const AGENT_DEFAULTS: [(&str, &str, bool); 3] = [
-    ("analyze_start", "keep_edited", true),
-    ("track_repick", "keep_edited", true),
-    ("track_velocity_set", "apply", true),
-];
-
-fn type_ok(ty: Ty, v: &Value) -> bool {
-    match ty {
-        Ty::Str => v.is_string(),
-        Ty::Int => v.is_i64() || v.is_u64(),
-        Ty::Num => v.is_number(),
-        Ty::Bool => v.is_boolean(),
-        Ty::Strs => v.as_array().is_some_and(|a| a.iter().all(Value::is_string)),
-        Ty::Obj => v.is_object(),
-        Ty::Objs => v.as_array().is_some_and(|a| a.iter().all(Value::is_object)),
-        Ty::Any | Ty::TempoMap => true,
-    }
-}
-
-fn type_name(ty: Ty) -> &'static str {
-    match ty {
-        Ty::Str => "string",
-        Ty::Int => "integer",
-        Ty::Num => "number",
-        Ty::Bool => "boolean",
-        Ty::Strs => "list of strings",
-        Ty::Obj => "object",
-        Ty::Objs => "list of objects",
-        Ty::Any => "any value",
-        Ty::TempoMap => "tempo map (object) or null",
-    }
-}
-
-/// Check `args` against the row: no unknown key, every required key, every value of its type (a `null` for an
-/// optional argument counts as not given). 400 with the key named.
-pub fn check_args(row: &CommandSpec, args: &Map<String, Value>) -> Result<(), AppError> {
-    for k in args.keys() {
-        if !row.args.iter().any(|a| a.name == k) {
-            let known: Vec<&str> = row.args.iter().map(|a| a.name).collect();
-            return Err(AppError::bad(format!(
-                "unknown argument `{k}` for {}: its arguments are {}",
-                row.name,
-                if known.is_empty() {
-                    "none".to_string()
-                } else {
-                    known.join(", ")
-                }
-            )));
-        }
-    }
-    for a in row.args {
-        match args.get(a.name) {
-            None | Some(Value::Null) if a.required => {
-                return Err(AppError::bad(format!(
-                    "missing argument `{}` ({})",
-                    a.name,
-                    type_name(a.ty)
-                )))
-            }
-            Some(v) if !v.is_null() && !type_ok(a.ty, v) => {
-                return Err(AppError::bad(format!(
-                    "wrong argument `{}`: expected {}",
-                    a.name,
-                    type_name(a.ty)
-                )))
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-/// True when this call changes the project (its document or folder): the registry's `writes_project`, except what is
-/// allowed on a read-only project: `track_repick` without `store` and
-/// `project_save_as` (the way from a read-only project to a writable copy: the project then is the copy).
-pub fn changes_project(row: &CommandSpec, args: &Map<String, Value>) -> bool {
-    row.writes_project()
-        && match row.name {
-            "project_save_as" => false,
-            "track_repick" => args.get("store").and_then(Value::as_bool) == Some(true),
-            _ => true,
-        }
-}
-
 /// Run a command of the agent surface (see the module docs). `progress` gets the messages of a command that
 /// takes a `progress` channel; the call answers when the command does (a `Poll` row answers at once).
 pub fn call(svc: &Service, name: &str, args: &Value, progress: Option<Progress>) -> Result<Reply, AppError> {
@@ -329,25 +226,10 @@ pub fn call(svc: &Service, name: &str, args: &Value, progress: Option<Progress>)
         _ => return Err(AppError::bad("the arguments must be an object")),
     };
     a.retain(|_, v| !v.is_null());
-    check_args(row, &a)?;
-    for (cmd, key, v) in AGENT_DEFAULTS {
-        if cmd == name {
-            a.entry(key).or_insert(Value::Bool(v));
-        }
-    }
-    if changes_project(row, &a) {
-        if let Some(sid) = a.get("sid").and_then(Value::as_str) {
-            if svc
-                .inner
-                .registry
-                .get(sid)
-                .is_ok_and(|op| crate::registry::lock(&op).read_only)
-            {
-                return Err(AppError::conflict(format!(
-                    "project {sid} is open read-only: {name} changes it; open it for writing (project_open without read_only)"
-                )));
-            }
-        }
+    policy::check_args(row, &a)?;
+    policy::fill_agent_defaults(name, &mut a);
+    if let Some(refusal) = policy::read_only_refusal(svc, row, &a) {
+        return Err(refusal);
     }
     let channels = match progress {
         Some(p) if row.has_progress() => {
@@ -373,47 +255,6 @@ mod tests {
             cross_bleed: None,
             ghost_gate: None,
         })
-    }
-
-    #[test]
-    fn check_args_names_the_key_and_the_type() {
-        let row = api::find("events_edit").unwrap();
-        let m = |v: Value| v.as_object().unwrap().clone();
-        assert!(check_args(
-            row,
-            &m(json!({"sid": "a", "name": "n", "ops": [{"op": "add", "t": 1}]}))
-        )
-        .is_ok());
-        for (bad, text) in [
-            (json!({"name": "n", "ops": []}), "missing argument `sid`"),
-            (
-                json!({"sid": 1, "name": "n", "ops": []}),
-                "wrong argument `sid`: expected string",
-            ),
-            (json!({"sid": "a", "name": "n", "ops": [1]}), "expected list of objects"),
-            (
-                json!({"sid": "a", "name": "n", "ops": [], "x": 1}),
-                "unknown argument `x`",
-            ),
-        ] {
-            let e = check_args(row, &m(bad)).unwrap_err();
-            assert_eq!(e.code, 400);
-            assert!(e.message.contains(text), "{}", e.message);
-        }
-        assert!(check_args(api::find("app_info").unwrap(), &m(json!({"x": 1})))
-            .unwrap_err()
-            .message
-            .contains("none"));
-    }
-
-    #[test]
-    fn a_read_only_project_allows_what_does_not_change_it() {
-        let m = |v: Value| v.as_object().unwrap().clone();
-        let f = |n: &str, a: Value| changes_project(api::find(n).unwrap(), &m(a));
-        assert!(f("events_edit", json!({})) && f("project_save", json!({})) && f("analyze_start", json!({})));
-        assert!(f("track_repick", json!({"store": true})));
-        assert!(!f("track_repick", json!({"store": false})) && !f("track_repick", json!({})));
-        assert!(!f("project_save_as", json!({})) && !f("project_get", json!({})));
     }
 
     #[test]

@@ -388,7 +388,7 @@ impl ExportOpts {
             }
         }
         let compensate = match args.get("compensate") {
-            None | Some(Value::Null) => true,
+            None | Some(Value::Null) => crate::command_policy::COMPENSATE_DEFAULT,
             Some(Value::Bool(b)) => *b,
             Some(_) => return Err(AppError::bad("`compensate` must be true or false")),
         };

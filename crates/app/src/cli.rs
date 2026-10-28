@@ -421,7 +421,7 @@ fn one_shot(svc: &Service, row: &CommandSpec, rest: &[String], io: &mut Io) -> i
             return exit_code(&e);
         }
         let open = api::find("project_open").expect("the registry has project_open");
-        let a = json!({"path": path, "read_only": !crate::call::changes_project(row, &p.args)});
+        let a = json!({"path": path, "read_only": !crate::command_policy::changes_project(row, &p.args)});
         match exec(svc, open, &a, false, None) {
             Ok(summary) => {
                 let sid = summary["sid"].as_str().unwrap_or_default().to_string();
@@ -451,7 +451,7 @@ fn one_shot(svc: &Service, row: &CommandSpec, rest: &[String], io: &mut Io) -> i
     let mut saved_err = None;
     if let (Some(sid), Ok(_)) = (&opened, &result) {
         let dirty = svc.project_get(sid).map(|s| s["dirty"] == true).unwrap_or(false);
-        if crate::call::changes_project(row, &p.args) && p.save && dirty && row.name != "project_save" {
+        if crate::command_policy::changes_project(row, &p.args) && p.save && dirty && row.name != "project_save" {
             if let Err(e) = svc.project_save(sid) {
                 saved_err = Some(e);
             }

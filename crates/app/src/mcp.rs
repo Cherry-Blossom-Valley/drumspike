@@ -205,7 +205,7 @@ fn run_tool(svc: &Service, jobs: &Jobs, name: &str, args: &Value) -> Result<Valu
         };
     }
     // check the arguments before the job starts, so a bad call is an error and not a failed job
-    crate::call::check_args(row, args.as_object().unwrap_or(&serde_json::Map::new()))?;
+    crate::command_policy::check_args(row, args.as_object().unwrap_or(&serde_json::Map::new()))?;
     let id = jobs.start();
     let (svc, jobs2, name2, args2) = (svc.clone(), jobs.clone(), name.to_string(), args.clone());
     let jid = id.clone();
