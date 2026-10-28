@@ -56,9 +56,9 @@ pub fn cut_of(params: Option<&Map<String, Value>>) -> Option<f64> {
 
 /// True for an event out of the output: the loudness cut marked it (`"cut": true`), the tom
 /// bleed rule (`"bleed": true`, [`crate::tom_bleed`]) or the old Learn filter (`"filtered"`, #281 D16).
+/// R16 (#40): the one predicate is [`crate::policy::event_out`].
 pub fn event_cut(e: &Event) -> bool {
-    let on = |k: &str| e.extra.get(k) == Some(&Value::Bool(true));
-    on("cut") || on("bleed") || on("filtered")
+    crate::policy::event_out(e)
 }
 
 /// True for an edited hit (added, or moved away from `orig`): the cut leaves it alone.

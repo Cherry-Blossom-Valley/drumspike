@@ -64,10 +64,9 @@ pub fn format_name(f: WavFormat) -> &'static str {
 
 /// P4-3: an event taken out of the output: the loudness cut (`"cut": true`; `histogram::mark_cut`), the tom bleed
 /// rule (`"bleed": true`; [`crate::tom_bleed`]) or a hit the old Learn filter had taken out (`"filtered"`, #281 D16).
+/// R16 (#40): the one predicate is [`crate::policy::is_out`]; this wrapper keeps the export name.
 pub fn is_cut(e: &Value) -> bool {
-    e.get("cut") == Some(&Value::Bool(true))
-        || crate::tom_bleed::is_bleed(e)
-        || e.get("filtered") == Some(&Value::Bool(true))
+    crate::policy::is_out(e)
 }
 
 /// P4-3: the events that go into the output (MIDI, spikes, clicks): every event without the cut or bleed mark.

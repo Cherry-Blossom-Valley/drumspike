@@ -1,0 +1,22 @@
+{
+ "about": "R16 (#40): the event policy truth table. One file drives the Rust test (crates/app/src/policy.rs) and the page e2e test (tests/e2e_app/test_event_policy_table.py): one row per combination of docs/event-policy.md section 2. Columns: audible (a click plays) and exportable (MIDI, spikes, Export All) are the same gate as `out`; kept (isKept / edit::is_kept: a re-pick or Re-analyze keeps it); out (hgIsCut / policy::is_out); tempo (a candidate of tempo detection: the same one predicate, no exception); grey (lnGreyHit: the Learn filter's grey). A kept hit that still carries an out mark is a state no document holds (Rust strips the marks on edit, the page guards with !isManual): both tests run their own mechanism over those rows and must agree with the row.",
+ "rows": [
+  {"name": "a plain detected hit", "event": {"t": 1.0, "v": 100}, "audible": true, "exportable": true, "kept": false, "out": false, "tempo": true, "grey": false},
+  {"name": "the loudness cut took it out", "event": {"t": 1.0, "v": 100, "cut": true}, "audible": false, "exportable": false, "kept": false, "out": true, "tempo": false, "grey": false},
+  {"name": "the tom bleed rule took it out", "event": {"t": 1.0, "v": 100, "bleed": true}, "audible": false, "exportable": false, "kept": false, "out": true, "tempo": false, "grey": false},
+  {"name": "the old Learn filter took it out", "event": {"t": 1.0, "v": 100, "filtered": true}, "audible": false, "exportable": false, "kept": false, "out": true, "tempo": false, "grey": true},
+  {"name": "a Learn example (this) is a normal hit", "event": {"t": 1.0, "v": 100, "learned": true}, "audible": true, "exportable": true, "kept": false, "out": false, "tempo": true, "grey": false},
+  {"name": "a Learn example the filter took out", "event": {"t": 1.0, "v": 100, "learned": true, "filtered": true}, "audible": false, "exportable": false, "kept": false, "out": true, "tempo": false, "grey": true},
+  {"name": "a flam second stroke is a normal hit", "event": {"t": 1.0, "v": 100, "flam": true}, "audible": true, "exportable": true, "kept": false, "out": false, "tempo": true, "grey": false},
+  {"name": "a flam stroke under the cut", "event": {"t": 1.0, "v": 100, "flam": true, "cut": true}, "audible": false, "exportable": false, "kept": false, "out": true, "tempo": false, "grey": false},
+  {"name": "a kick rescue tag is carried, not a gate", "event": {"t": 1.0, "v": 100, "rescue": true}, "audible": true, "exportable": true, "kept": false, "out": false, "tempo": true, "grey": false},
+  {"name": "a roll fill tag is carried, not a gate", "event": {"t": 1.0, "v": 100, "roll": true}, "audible": true, "exportable": true, "kept": false, "out": false, "tempo": true, "grey": false},
+  {"name": "a stage8 tag is carried, not a gate", "event": {"t": 1.0, "v": 100, "stage8": true}, "audible": true, "exportable": true, "kept": false, "out": false, "tempo": true, "grey": false},
+  {"name": "an added hit is kept", "event": {"t": 1.0, "v": 100, "added": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false},
+  {"name": "a moved hit is kept", "event": {"t": 1.0, "v": 100, "orig": 0.9}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false},
+  {"name": "a hand velocity is kept", "event": {"t": 1.0, "v": 64, "edited": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false},
+  {"name": "a restored hit is kept", "event": {"t": 1.0, "v": 80, "edited": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false},
+  {"name": "a manual hit that still carries the cut mark (the page guards, Rust strips)", "event": {"t": 1.0, "v": 100, "added": true, "cut": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false},
+  {"name": "a moved hit that still carries the Learn mark (the page guards, Rust strips)", "event": {"t": 1.0, "v": 100, "orig": 0.9, "filtered": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false}
+ ]
+}
