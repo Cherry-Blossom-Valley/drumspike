@@ -223,6 +223,10 @@ fn memory_names_the_new_helpers_and_footprints_skip_nothing_when_empty() {
     assert!(m["processes"].is_array() && m["web_content_mb"].is_number());
     assert!(footprints(&[]).is_empty());
     let me = std::process::id();
+    // `footprint --json` is a macOS tool; where it is absent there is no footprint to read.
+    if !std::path::Path::new("/usr/bin/footprint").exists() {
+        return;
+    }
     assert!(footprints(&[me]).get(&me).is_some_and(|b| *b > 0));
 }
 
