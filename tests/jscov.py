@@ -3,7 +3,8 @@ uses the `page` fixture: tests/e2e_app (the page against the app's test bridge, 
 A pytest plugin (tests/conftest.py: pytest_plugins). Result: coverage-js.json (per file the lines, the covered lines,
 the uncovered line numbers and the named functions never called) and a line per file in the terminal summary.
 The run fails when a file is under DRUMSPIKE_JS_FAIL_UNDER (85) % of its lines, unless only a part of the suite
-ran (-k, or -m other than "e2e_app"): the full run (G2) and the run of -m e2e_app alone (G4) gate.
+ran (-k, or -m other than "e2e_app", or a command line that names test files or node IDs): the full run (G2)
+and the run of -m e2e_app alone (G4) gate.
 CI shards (DRUMSPIKE_E2E_SHARD, tests/e2e_app/conftest.py) do not gate; with DRUMSPIKE_JS_COV_OUT=<file> they save the
 raw merged data, and `python tests/jscov.py merge <files>` merges the files, writes coverage-js.json and gates."""
 import base64
@@ -102,6 +103,11 @@ def low_files(report):
     return {n: f["percent"] for n, f in report["files"].items() if f["percent"] < JS_FAIL_UNDER}
 
 
+def names_files_or_nodes(config):
+    """True when the command line selects files or node IDs (like -k, a partial run that cannot gate)."""
+    return any(a.endswith(".py") or "::" in a for a in (getattr(config.option, "file_or_dir", None) or []))
+
+
 def dump_raw(path):
     """Raw merged coverage of this run (a CI shard): bytes as base64, the "called" map, the SHA-256 of each source."""
     raw = {"covered": {n: base64.b64encode(bytes(c)).decode() for n, c in JS_COV["covered"].items()},
@@ -166,9 +172,11 @@ def _js_coverage_report(request):
 
 def pytest_sessionfinish(session, exitstatus):
     """Fail the run when the coverage of a file drops below JS_FAIL_UNDER (only when all e2e_app tests ran;
-    not in a shard run: the CI job js-coverage gates the merged data)."""
+    not in a shard run: the CI job js-coverage gates the merged data; not when the command line names
+    test files or node IDs: that is a partial run, like -k)."""
     rep = JS_COV.get("report")
-    if rep and not os.environ.get("DRUMSPIKE_E2E_SHARD") and session.config.option.keyword == "" \
+    if rep and not os.environ.get("DRUMSPIKE_E2E_SHARD") and not names_files_or_nodes(session.config) \
+            and session.config.option.keyword == "" \
             and session.config.option.markexpr in ("", "e2e_app"):
         low = low_files(rep)
         if low:
