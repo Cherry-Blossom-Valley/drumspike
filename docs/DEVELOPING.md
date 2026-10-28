@@ -368,7 +368,7 @@ Only problems that the project reports record.
 | Parity tests skip (`... not built: cargo build --release ...`) | The release binaries are missing. Build them (section 3) before G2. |
 | `FrozenError: no frozen ... reference` or `the inputs ... differ from the frozen run` | A test case changed (other inputs than at the freeze) or a host has no frozen value for the key. The references cannot be written again without the retired code (section 5). |
 | `e2e_app` tests skip | `ds-bridge` is not built. Run `cargo build -p drumspike-devtools --bin ds-bridge`. Use `DRUMSPIKE_REQUIRE_APP=1` to make a skip a failure. |
-| A run of a few browser test files fails the JS coverage gate | The gate applies unless `-k` or a `-m` other than `e2e_app` is given. Select single tests with `-k`, or read only the test results. |
+| A run of a few browser test files fails the JS coverage gate | The gate applies unless `-k`, a `-m` other than `e2e_app`, or a command line that names test files or node IDs is given. Select single tests with `-k` or a node ID (`test_file.py::test_name`), or read only the test results. |
 | `cargo: command not found` in a CI job | The runner process did not have the tool folders on its `PATH`. The job now adds `~/.cargo/bin`, `~/.local/bin` and `/usr/local/bin` itself. |
 | `build-dmg.sh` stops at the third-party check | `THIRD_PARTY.md` is stale. Run `gen_third_party.py` (section 7) and commit the result. |
 | `release.sh`: `identity not found in the keychain` | Run `security find-identity -v -p codesigning` and copy the name exactly. |
