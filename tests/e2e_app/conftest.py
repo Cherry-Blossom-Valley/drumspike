@@ -106,6 +106,15 @@ def bridge_binary():
     return Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "debug" / "ds-bridge"
 
 
+def start_bridge(exe, env):
+    """The one way the e2e fixtures start `ds-bridge` (#4): with `--exit-on-stdin-eof` and its
+    stdin on an open pipe. The pipe dies with the pytest process, so a SIGKILLed run (no teardown)
+    gives the bridge an EOF and it ends; the teardown (`terminate()` + `wait`) stays as it was.
+    Never close `proc.stdin` while the tests run."""
+    return subprocess.Popen([str(exe), "--exit-on-stdin-eof"], cwd=ROOT, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+
+
 def _builder():
     spec = importlib.util.spec_from_file_location("ds_make_project", ROOT / "apps/desktop/selftest/make_project.py")
     mod = importlib.util.module_from_spec(spec)
@@ -134,7 +143,7 @@ def bridge(tmp_path_factory):
                DRUMSPIKE_KICK_RESCUE="0",   # P4-10 stage 5: nor the kick rescue
                DRUMSPIKE_SNARE_RESCUE="0",   # P4-10 stage 7: nor the snare rescue
                DRUMSPIKE_DETECTORS_DIR=str(home / "detectors"))  # #387: the tests install their plugins here
-    proc = subprocess.Popen([str(exe)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    proc = start_bridge(exe, env)
     line = proc.stdout.readline()
     m = re.search(r"http://127\.0\.0\.1:\d+", line)
     if not m:
@@ -146,10 +155,14 @@ def bridge(tmp_path_factory):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def warm_page(browser, bridge, browser_context_args):
+def warm_page(request, bridge, browser_context_args):
     """X-3: load the page once per session with a long timeout, so that the first test's Page.goto finds a
     warm browser and a warm bridge (autouse: also the tests that load the page themselves, test_tiles.py).
-    Records the time in bridge.warm_s."""
+    Records the time in bridge.warm_s. #4: DRUMSPIKE_NO_WARM_PAGE=1 (the child pytest of
+    test_bridge_stdin_exit.py) only holds the bridge: no browser, no page load."""
+    if os.environ.get("DRUMSPIKE_NO_WARM_PAGE") == "1":
+        return bridge   # #4: the child pytest only holds the bridge; no browser, no page load
+    browser = request.getfixturevalue("browser")
     t0 = time.monotonic()
     ctx = browser.new_context(**browser_context_args)
     try:
