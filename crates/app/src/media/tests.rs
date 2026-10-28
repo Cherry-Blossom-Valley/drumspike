@@ -114,10 +114,7 @@ fn a_failing_decode_leaves_no_inflight_slot() {
     let m = Media::new();
     std::fs::write(d.join("bad.wav"), b"not a wav file at all").unwrap();
     assert!(m.decode_cached(&d.join("bad.wav"), MixMode::Ffmpeg).is_err());
-    assert!(
-        lock(&m.inflight).is_empty(),
-        "the failed decode leaves no slot behind"
-    );
+    assert!(lock(&m.inflight).is_empty(), "the failed decode leaves no slot behind");
     // a request for the same key afterwards decodes again (no stale empty slot)
     write(&d.join("bad.wav"), 44_100, 100);
     let x = m.decode_cached(&d.join("bad.wav"), MixMode::Ffmpeg).unwrap();
