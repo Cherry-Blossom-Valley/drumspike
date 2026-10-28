@@ -21,6 +21,11 @@ def src_text(app):
     return app.locator("#insRoleSrc").inner_text()
 
 
+def expect_src(app, text):
+    # setTrackRole paints the hint after trReload, so S.tracks changes before the hint does: wait on the hint itself
+    expect(app.locator("#insRoleSrc")).to_have_text(text)
+
+
 def offer(app):
     return app.locator("#insNoteOfferRow")
 
@@ -68,11 +73,11 @@ def test_undo_restores_the_matched_name_hint(app, make_project):
         "() => document.querySelector('#insRoleSel') && document.querySelector('#insRoleSel').value === 'kick'")
     assert src_text(app) == "from the name (kick = kick)"
     role_sel(app).select_option("snare")
-    app.wait_for_function("() => S.tracks['Kick In'].role === 'snare'")
-    assert src_text(app) == "set by you"
+    expect_src(app, "set by you")
+    assert app.evaluate("() => S.tracks['Kick In'].role") == "snare"
     menu(app, "undo")
-    app.wait_for_function("() => S.tracks['Kick In'].role === 'kick'")
-    assert src_text(app) == "from the name (kick = kick)"
+    expect_src(app, "from the name (kick = kick)")
+    assert app.evaluate("() => S.tracks['Kick In'].role") == "kick"
 
 
 def test_the_note_offer_works(app, make_project):
@@ -85,7 +90,7 @@ def test_the_note_offer_works(app, make_project):
     app.wait_for_function("() => S.tracks['Clap_01'].note === 38")
     expect(offer(app)).to_be_hidden()
     assert app.evaluate("() => S.tracks['Clap_01'].role") == "snare"
-    assert src_text(app) == "set by you"
+    expect_src(app, "set by you")
 
 
 def test_a_role_change_reanalyzes_and_undo_restores_role_note_and_hits(app, make_project, tmp_path):
@@ -100,7 +105,7 @@ def test_a_role_change_reanalyzes_and_undo_restores_role_note_and_hits(app, make
     app.wait_for_function(
         "b => S.events['Clap_01'] && S.events['Clap_01'].length && JSON.stringify(S.events['Clap_01'].map(e => ({t: e.t, v: e.v}))) !== JSON.stringify(b)", arg=before)
     assert app.evaluate("() => S.tracks['Clap_01'].role") == "snare"
-    assert src_text(app) == "set by you"
+    expect_src(app, "set by you")
 
     menu(app, "undo")
     app.wait_for_function("() => S.tracks['Clap_01'].role === 'other'")
