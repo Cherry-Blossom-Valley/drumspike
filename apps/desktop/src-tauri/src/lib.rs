@@ -553,6 +553,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         app_info,
         about::about_info,
         about::about_third_party,
+        about::open_link,
         startup_mark,
         transport_play,
         transport_stop,
@@ -666,6 +667,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         app_info,
         about::about_info,
         about::about_third_party,
+        about::open_link,
         startup_mark,
         transport_play,
         transport_stop,
@@ -878,6 +880,7 @@ pub fn run() {
                 });
             }
             // #206: the menu is in place; apply the AppKit Shift convention (uppercase, no Shift flag)
+            #[cfg(target_os = "macos")]
             menu::fix_shift_equivalents(app.handle());
             let svc = Service::new(ServiceConfig::from_env(Path::new("")));
             lifecycle_setup(&svc, app.handle());

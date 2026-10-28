@@ -1253,6 +1253,7 @@ pub fn set_preset<R: Runtime>(app: &AppHandle<R>, name: &str) -> tauri::Result<(
         }
     }
     *lock(&PRESET) = preset;
+    #[cfg(target_os = "macos")]
     fix_shift_equivalents(app);
     Ok(())
 }
@@ -1655,6 +1656,24 @@ pub fn perform_key_equivalent_raw<R: Runtime>(app: &AppHandle<R>, chars: &str, c
         let _ = tx.send(matched);
     });
     rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap_or(-1)
+}
+
+/// Linux (and other non-macOS) stubs for the #206 self-test probes: the native-menu introspection
+/// and the key-equivalent probe are AppKit-only; here they report that they are not available, so
+/// the desktop crate compiles and `cargo test -p drumspike-desktop` runs its unit tests.
+#[cfg(all(debug_assertions, not(target_os = "macos")))]
+pub fn ns_menu_rows<R: Runtime>(_app: &AppHandle<R>) -> Value {
+    json!({ "error": "the NSMenu self-test is macOS-only" })
+}
+
+#[cfg(all(debug_assertions, not(target_os = "macos")))]
+pub fn perform_key_equivalent<R: Runtime>(_app: &AppHandle<R>, _key: &str) -> Value {
+    json!({ "error": "the NSMenu self-test is macOS-only" })
+}
+
+#[cfg(all(debug_assertions, not(target_os = "macos")))]
+pub fn perform_key_equivalent_raw<R: Runtime>(_app: &AppHandle<R>, _chars: &str, _cim: &str, _flags: u64) -> i8 {
+    -1
 }
 
 #[cfg(test)]
