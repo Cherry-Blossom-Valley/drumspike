@@ -49,10 +49,18 @@ def _planted_fresh(root):
     return exe
 
 
+def _cargo_escape(path):
+    """The way Cargo writes a path into a dep-info file: every space is a backslash space."""
+    return str(path).replace(" ", "\\ ")
+
+
 def _dep_info(exe, listed):
-    """The dep-info next to the fake binary, the way Cargo writes it: one line 'target: dep ...'."""
+    """The dep-info next to the fake binary, the way Cargo writes it: one line 'target: dep ...',
+    spaces in paths escaped as backslash spaces."""
     dep = Path(str(exe) + ".d")
-    dep.write_text(f"{exe}: {listed}\n")
+    if isinstance(listed, (list, tuple)):
+        listed = " ".join(_cargo_escape(p) for p in listed)
+    dep.write_text(f"{_cargo_escape(exe)}: {listed}\n")
     os.utime(dep, (T0 + 200, T0 + 200))
     return dep
 
@@ -112,6 +120,45 @@ def test_dep_info_ignores_sources_outside_the_build_graph(tmp_path):
     (root / "Cargo.lock").write_text("")
     os.utime(root / "Cargo.lock", (T0 + 300, T0 + 300))   # newer than the binary, NOT listed
     assert mod.stale_source(exe, root) is None
+
+
+def test_dep_info_paths_with_spaces_are_parsed(tmp_path):
+    """#25: a worktree path with a space. Cargo escapes every space as a backslash space, so the
+    parser must unescape instead of splitting the token: a listed source newer than the binary is
+    refused, and the line names it. Red on 9ba7710: the naive split() dropped both halves of the
+    path, no dep survived, and the stale bridge ran unrefused."""
+    mod = _conftest()
+    root = tmp_path / "repo with space"
+    root.mkdir()
+    exe = _planted_fresh(root)
+    lib = root / "crates" / "core" / "src" / "lib.rs"
+    os.utime(lib, (T0 + 300, T0 + 300))   # newer than the binary
+    _dep_info(exe, [lib])                  # the path contains spaces, escaped the way Cargo does
+    msg = mod.stale_source(exe, root)
+    assert msg is not None
+    assert "crates/core/src/lib.rs" in msg
+
+
+def test_dep_info_names_the_newest_listed_source_with_a_space(tmp_path):
+    """#25: two listed sources, the one in the directory with a space is the newest: the refusal
+    names it, not the older plain one. Red on 9ba7710: the spaced path split into two dead tokens,
+    so the line named the older plain source."""
+    mod = _conftest()
+    root = tmp_path / "repo"
+    root.mkdir()
+    exe = _planted_fresh(root)
+    spaced_dir = root / "crates" / "core" / "my dir"
+    spaced_dir.mkdir()
+    spaced = spaced_dir / "lib.rs"
+    spaced.write_text("// newer\\n")
+    os.utime(spaced, (T0 + 300, T0 + 300))
+    plain = root / "crates" / "core" / "src" / "lib.rs"
+    os.utime(plain, (T0 + 250, T0 + 250))   # newer than the binary, older than the spaced one
+    _dep_info(exe, [spaced, plain])
+    msg = mod.stale_source(exe, root)
+    assert msg is not None
+    assert "my dir/lib.rs" in msg
+    assert "newest source crates/core/my dir/lib.rs" in msg
 
 
 def test_cargo_lock_alone_is_not_a_source(tmp_path):
