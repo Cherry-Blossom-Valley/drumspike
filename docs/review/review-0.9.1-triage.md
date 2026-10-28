@@ -11,8 +11,8 @@ Triage of the twenty numbered findings of the 0.9.1 code review (#27) against `m
 Evidence: code marked with the finding id in comments (`#248`, `#249`, `#237`, `#250`, `#251`,
 `#253`), the regression tests named below, and the line references in the finding bodies.
 
-| Finding | Status | Test on main (`git grep -n` finds it) | Gate |
-|---|---|---|---|
+| Finding | Title | Status | Test on main (`git grep -n` finds it) | Gate |
+|---|---|---|---|---|
 | R01 | synthetic spike export can replace source audio | fixed | `a_renamed_tracks_synthetic_export_refuses_its_own_source_and_leaves_it_unchanged` (crates/app/tests/export_safety.rs) | Every exporter (synthetic spikes, audio spikes, MIDI, layer render, bulk) refuses a destination that aliases a protected input of any open project, spelled in any case or through a symlink, and writes nothing when one output collides: crates/app/tests/export_safety.rs, `an_export_that_collides_with_another_tracks_source_is_refused`, `a_bulk_export_with_one_collision_writes_no_file_at_all`. |
 | R02 | failed pending event writes discarded, Save continues | fixed | `test_a_refused_event_write_stops_the_save_and_keeps_the_edit_queued` (tests/e2e_app/test_save_integrity.py) | A refused event write keeps its payload queued, rejects the flush so Save/Export/Re-analyze/switch do not run, and the banner offers Retry/Discard: `test_a_refused_event_write_stops_the_export`, `test_a_refused_event_write_stops_the_reanalyze`, `test_a_refused_event_write_stops_the_project_switch`, `test_retry_sends_the_queued_write_again`. |
 | R03 | UI ignores the save response's dirty result | fixed | `test_a_save_answer_with_dirty_true_keeps_the_page_unsaved` (tests/e2e_app/test_save_integrity.py) | `r.dirty` is honored; an edit during the write keeps the page dirty; a late answer clears only its own project's mark: `test_an_edit_during_a_paused_save_keeps_the_page_unsaved`, `test_a_save_answer_after_a_switch_leaves_the_open_project_alone`. Backend race contract unchanged: `project_save_keeps_the_project_dirty_when_an_edit_comes_during_the_write` (crates/app/tests/lifecycle.rs). |
@@ -55,7 +55,7 @@ find nothing):
 14. `git grep -c track_set_role_rejects_a_note_outside_0_127 -- crates static tests` → crates/app/tests/tracks.rs:1
 15. `git grep -c AnalysisRecipe -- crates static tests` → 0 (open)
 16. `git grep -c is_kept_follows_the_shared_predicate_table -- crates static tests` → crates/app/src/edit/tests.rs:1
-17. `git grep -c DECODE_CACHE_LEN -- crates static tests` → crates/app/src/media.rs (open: item-count cache)
+17. `git grep -c DECODE_CACHE_LEN -- crates static tests` → crates/app/src/media.rs:3 and crates/app/src/media/tests.rs:1 (open: item-count cache)
 18. `git grep -c a_failed_backup_rotation_after_the_commit_is_a_warning_not_a_failed_save -- crates static tests` → crates/core/src/project/save/tests.rs:1 (context for R12)
 19. `git grep -c crate::bridge::{Channels, Reply} -- crates/app/src/call.rs` → 1 (R15 open)
 20. `git grep -c output_len_saturates_for_extreme_inputs -- crates static tests` → crates/core/src/detect/resample/tests.rs:1
