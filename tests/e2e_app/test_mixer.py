@@ -244,9 +244,15 @@ def test_meters_move_while_playing_hold_and_fall_after_the_stop(app, audio_reset
     app.wait_for_function("() => MT.master.drawn[2] > 0")   # P4-40h: the hold line is painted on the master canvas
     assert status(app)["master"] == 0.0, "silent"
     # the light is painted in the frame (F.METER), late on a loaded host: wait for the model
-    # value it derives from (clip, set by a message peak >= 1) first; the class itself gets a
-    # bounded wait whose failure names the measured peak (the gate of #6).
-    app.wait_for_function("() => MT.tracks['Kick In'].clip === true", timeout=10000)
+    # value it derives from (clip, set by a message peak >= 1) first; both waits are bounded
+    # and their failures name the measured peak (the gate of #6).
+    try:
+        app.wait_for_function("() => MT.tracks['Kick In'].clip === true", timeout=10000)
+    except Exception as e:
+        p = app.evaluate("() => { const m = MT.tracks['Kick In']; return {lvl: m.lvl[0], hold: m.hold[0], clip: m.clip}; }")
+        on = app.evaluate(f"() => document.querySelector('{KICK} .mclip').classList.contains('on')")
+        raise AssertionError(f"the clip flag never set: measured peak {p['hold']:.2f} dBFS "
+                             f"(level {p['lvl']:.2f} dBFS, clip {p['clip']}, light {on})") from e
     try:
         app.wait_for_function(f"() => document.querySelector('{KICK} .mclip').classList.contains('on')", timeout=10000)
     except Exception as e:
