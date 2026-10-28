@@ -18,7 +18,7 @@ import pytest
 from helpers import ROOT
 
 JS_FAIL_UNDER = float(os.environ.get("DRUMSPIKE_JS_FAIL_UNDER", "85"))   # % of lines, for each file
-JS_FILES = ("app.js", "state.js", "backend.js", "lanes-gl.js", "tiles-worker.js", "keymap.js")   # tiles-worker.js: a test page runs it with a stand-in scope; keymap.js: P3-13b; state.js: R17 step 1 (#55)
+JS_FILES = ("app.js", "state.js", "persist.js", "backend.js", "lanes-gl.js", "tiles-worker.js", "keymap.js")   # tiles-worker.js: a test page runs it with a stand-in scope; keymap.js: P3-13b; state.js: R17 step 1 (#55); persist.js: R17 step 2 (#55)
 
 # "covered" and "src" map a file name to its coverage bytes and its source; "called" maps
 # "file:function" to whether it ran; "take" saves the coverage of the open page (reload helper)

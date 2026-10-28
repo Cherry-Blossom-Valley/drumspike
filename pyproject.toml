@@ -44,6 +44,7 @@ package = false
 testpaths = ["tests"]
 markers = [
     "e2e_app: app tests: the page against the ds-bridge debug binary (skip without it; fail with DRUMSPIKE_REQUIRE_APP=1)",
+    "js_unit: plain-node module tests over a stubbed B and a minimal document/window, no browser (R17 #55)",
 ]
 addopts = "--browser chromium"
 # #463: a test that stalls (an app.evaluate whose page-side promise never settles) must fail, not hang
