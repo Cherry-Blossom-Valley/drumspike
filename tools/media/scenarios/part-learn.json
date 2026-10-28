@@ -1,7 +1,9 @@
 {
   "name": "part-learn",
-  "title": "Screen recording: Learn, teach by example (guide chapter 11) (#428)",
+  "title": "Screen recording: Learn, teach by example (guide chapter 11) (#428, #450)",
   "script": "docs/product/scripts/rec-learn.md",
+  "standard": true,
+  "drift_limit_ms": 10,
   "viewport": {"width": 1920, "height": 1080},
   "device_scale_factor": 2,
   "seed": "demo",
@@ -12,18 +14,18 @@
       "id": "pl-ghost",
       "steps": [
         {"do": "caption", "text": "Hits > Forget This"},
-        {"do": "lane_click", "track": "s_top", "t": 16.0938,
-         "err": "the ghost note's spike selects it (the Inspector follows)"},
-        {"do": "wait", "cond": "() => S.sel && S.sel.track === 's_top'", "timeout": 10,
-         "err": "the ghost selected"},
+        {"do": "zoom_to", "track": "s_top", "t": 7.0312, "span": 5},
+        {"do": "drag", "track": "s_top", "lane": "wave", "from": 6.6, "to": 9.4,
+         "wait_sel": true, "timeout": 10, "err": "the range over the ghost and its near copies selected"},
+        {"do": "hold", "s": 1.5},
         {"do": "key", "press": "Shift+K"},
         {"do": "wait", "cond": "() => DSLearn.state().pending === 0", "timeout": 30,
          "err": "the Forget This stored"},
         {"do": "wait",
-         "cond": "() => (S.events['s_top']||[]).some(e => e.filtered && Math.abs(e.t - 16.0938) <= 0.025)",
+         "cond": "() => (S.events['s_top']||[]).some(e => e.filtered && Math.abs(e.t - 7.0312) <= 0.025)",
          "timeout": 15, "err": "the ghost greyed"},
-        {"do": "wait", "cond": "() => (document.querySelector('#stMsg')||{textContent:''}).textContent.includes('Forget This on 1 hit')",
-         "timeout": 10, "err": "the status line says what the step did"},
+        {"do": "wait", "cond": "() => /Forget This on [3-9] hits/.test((document.querySelector('#stMsg')||{textContent:''}).textContent)",
+         "timeout": 10, "err": "the status line says Forget This on 3 or more hits"},
         {"do": "hold", "s": 2.0}
       ]
     },
@@ -31,9 +33,10 @@
       "id": "pl-grey",
       "steps": [
         {"do": "caption", "text": "The marked hit and its near copies go grey"},
-        {"do": "wait", "cond": "() => (S.events['s_top']||[]).filter(e => e.filtered).length === 5",
-         "timeout": 15, "err": "the marked hit and its near copies grey (5 hits, Learn takes 5 out)"},
-        {"do": "wait", "cond": "() => (document.querySelector('#stMsg')||{textContent:''}).textContent.includes('Learn takes 5 out')",
+        {"do": "zoom_to", "track": "s_top", "t": 7.0312, "span": 5},
+        {"do": "wait", "cond": "() => (S.events['s_top']||[]).filter(e => e.filtered && Math.abs(e.t - 7.0312) <= 2.5).length >= 3",
+         "timeout": 15, "err": "the marked hits and their near copies grey in the view (3 or more)"},
+        {"do": "wait", "cond": "() => (document.querySelector('#stMsg')||{textContent:''}).textContent.includes('Learn takes')",
          "timeout": 10, "err": "the status line counts the grey hits"},
         {"do": "hold", "s": 3.0}
       ]
@@ -42,8 +45,10 @@
       "id": "pl-add",
       "steps": [
         {"do": "caption", "text": "Hits > Learn This"},
+        {"do": "zoom_to", "track": "s_top", "t": 18.5938, "span": 0.5},
         {"do": "drag", "track": "s_top", "lane": "wave", "from": 18.4438, "to": 18.7438,
          "wait_sel": true, "timeout": 10, "err": "the range over the missed stretch selected"},
+        {"do": "hold", "s": 1.5},
         {"do": "key", "press": "k"},
         {"do": "wait", "cond": "() => DSLearn.state().pending === 0", "timeout": 30,
          "err": "the Learn This stored"},
@@ -55,12 +60,15 @@
     },
     {
       "id": "pl-histogram",
+      "area_sel": "#inspector",
       "steps": [
         {"do": "caption", "text": "The Learn section of the Inspector"},
         {"do": "click", "sel": ".track[data-name=\"s_top\"] .thead .tname", "timeout": 15,
          "err": "s top selected (the Inspector follows the track context)"},
+        {"do": "hold", "s": 1.5},
         {"do": "show_key", "press": "Alt+I", "sel": "#inspector", "timeout": 10,
          "err": "the Inspector"},
+        {"do": "hold", "s": 1.5},
         {"do": "click", "sel": ".insSec[data-sec=\"learn\"] .insSecHead", "timeout": 15,
          "err": "the Learn section opened"},
         {"do": "wait",
@@ -76,8 +84,10 @@
       "id": "pl-remove",
       "steps": [
         {"do": "caption", "text": "Hits > Remove Example"},
+        {"do": "zoom_to", "track": "s_top", "t": 18.5938, "span": 0.5},
         {"do": "drag", "track": "s_top", "lane": "wave", "from": 18.4438, "to": 18.7438,
          "wait_sel": true, "timeout": 10, "err": "the example's range selected again"},
+        {"do": "hold", "s": 1.5},
         {"do": "key", "press": "Alt+K"},
         {"do": "wait", "cond": "() => DSLearn.state().pending === 0", "timeout": 30,
          "err": "the Remove Example stored"},

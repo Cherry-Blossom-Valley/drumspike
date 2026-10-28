@@ -69,12 +69,15 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import threading
 import time
 import wave
 from pathlib import Path
+
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 CACHE = Path.home() / ".cache" / "drumspike" / "media"
@@ -87,10 +90,21 @@ NOTE_TEXT = "AI-generated"     # the media plan's disclosure corner note (owner,
 NOTE_PX = 20
 NOTE_MARGIN_PX = 28
 NOTE_BOTTOM_PX = NOTE_MARGIN_PX - 8   # the explainers' corner note: right 28, bottom 20
-NOTE_COLOR = "#7d8593"         # the explainers' DIM, for the note
+NOTE_COLOR = "#ffffff"         # white on a dark box, so the note reads on the dimmed fades too (owner, 2026-10-28)
+NOTE_BOX = "rgba(0,0,0,0.6)"
+NOTE_PAD_PX = 6
 NOTE_FONT = "Helvetica, Arial, sans-serif"   # one sans-serif family, like the explainers
 STEP_KINDS = ("caption", "key", "show_key", "hide_key", "click", "select", "menu", "answer_save", "answer_pick",
-              "show_dest", "show_text", "lane_click", "drag", "wait", "visible", "text", "hold", "blur")
+              "show_dest", "show_text", "lane_click", "drag", "wait", "visible", "text", "hold", "blur", "zoom_to")
+# The recording standard (docs/product/recording-standard.md), on for a scenario with "standard": true
+ACTION_KINDS = ("key", "show_key", "click", "lane_click", "drag", "select", "menu")
+POINTER_KINDS = ("click", "lane_click", "drag")   # the overlay pointer glides to these before they act
+GLIDE_MS = 450                  # the pointer glides in 300 to 600 ms
+ZOOM_SPAN_S = (0.5, 5.0)        # a zoom_to span: a preset from 500 ms to 5 s
+RESULT_HOLD_S = 1.5             # an action's result stays on screen this long at the same zoom
+CHANGE_MIN_PCT = 2.0            # the action area must change by this share of its pixels (#450 Gate: >= 2 %)
+CHANGE_LEVEL = 16               # a channel moved by this much (of 255) counts as changed (screenshot noise)
+WINDOW_PX = 300                 # a zoomed scene's measured window: +/- this many capture pixels around the hit
 READY = "typeof S !== 'undefined' && typeof B !== 'undefined' && B.app === true && S.loaded > 0"
 CAP_JS = "s => { const c = document.getElementById('__cap'); c.textContent = s; c.style.opacity = s ? 1 : 0; }"
 SHOWKEY_JS = "(a) => window.__dsShowKey(a[0], a[1])"
@@ -181,12 +195,179 @@ def parse_scenario(scenario):
                                        or not isinstance(st.get("from"), (int, float))
                                        or not isinstance(st.get("to"), (int, float))):
                 raise RecordError(f"{sc['id']}: a drag step needs the track and the from/to times")
+            if st["do"] == "zoom_to" and (not isinstance(st.get("track"), str)
+                                          or not isinstance(st.get("t"), (int, float))
+                                          or not isinstance(st.get("span"), (int, float))
+                                          or not ZOOM_SPAN_S[0] <= st["span"] <= ZOOM_SPAN_S[1]):
+                raise RecordError(f"{sc['id']}: a zoom_to step needs the track, the time t and a span "
+                                  f"from {ZOOM_SPAN_S[0]} to {ZOOM_SPAN_S[1]} s")
+    if scenario.get("standard") is True:
+        problems = [p for sc in scenes for p in standard_problems(sc)]
+        if problems:
+            raise RecordError("the recording standard: " + "; ".join(problems))
     seed = scenario.get("seed")
     if seed is not None and seed != "demo":
         raise RecordError("seed must be \"demo\" (the demo session of part 1, built before the video)")
     if "plugins" in scenario and scenario["plugins"] is not True:
         raise RecordError("plugins must be true (the example plugin installs before the video)")
     return {**scenario, "scenes": scenes}
+
+
+# The recording standard (docs/product/recording-standard.md). zoom_to centres the view on the
+# step's time with the span (setView, the app's own view call) and moves the track's row into the
+# middle of the lanes before the action.
+ZOOM_TO_JS = """([track, t, span]) => {
+  const row = document.querySelector(`.track[data-name=${JSON.stringify(track)}]`);
+  if (!row) throw new Error('no track ' + track);
+  S.followHold = true;   // F1: a user view change, the follow does not move the view back
+  setView(t - span / 2, t + span / 2);
+  const x = tToX(t, laneWidth());
+  if (x < 0 || x > laneWidth()) throw new Error('t ' + t + ' is outside the zoomed view');
+  row.scrollIntoView({block: 'center', inline: 'nearest'});
+}"""
+# The overlay pointer: a dot that glides to the target, a ring on the click, a line for a drag.
+# The overlay functions live in OVERLAY_JS (window.__dsPtr*).
+CENTER_JS = """s => {
+  const el = document.querySelector(s);
+  if (!el) throw new Error('no element ' + s);
+  el.scrollIntoView({block: 'center', inline: 'nearest'});
+  const r = el.getBoundingClientRect();
+  return [r.left + r.width / 2, r.top + r.height / 2];
+}"""
+GLIDE_JS = "([x, y, ms]) => window.__dsPtrGlide(x, y, ms)"
+RING_JS = "([x, y]) => window.__dsPtrRing(x, y)"
+DRAG_LINE_JS = "([x1, x2, y]) => window.__dsPtrDrag(x1, x2, y)"
+DRAG_END_JS = "() => window.__dsPtrDragEnd()"
+PTR_HIDE_JS = "() => window.__dsPtrHide()"
+
+
+def has_action(sc):
+    return any(st["do"] in ACTION_KINDS for st in sc["steps"])
+
+
+def standard_problems(sc):
+    """The recording standard of one scene. A pointer step needs a zoom_to before it, unless the
+    scene names its own frame (area_sel: a panel the narration explains). After each action a hold
+    of RESULT_HOLD_S or more comes before the next action or the scene's end, with no zoom_to
+    between (the result holds at the same zoom)."""
+    steps = sc["steps"]
+    problems = []
+    first_ptr = next((i for i, st in enumerate(steps) if st["do"] in POINTER_KINDS), None)
+    if (first_ptr is not None and not sc.get("area_sel")
+            and not any(st["do"] == "zoom_to" for st in steps[:first_ptr])):
+        problems.append(f"{sc['id']}: a pointer step needs a zoom_to before it")
+    for i, st in enumerate(steps):
+        if st["do"] not in ACTION_KINDS:
+            continue
+        held = False
+        for nxt in steps[i + 1:]:
+            if nxt["do"] in ACTION_KINDS or nxt["do"] == "zoom_to":
+                break
+            if nxt["do"] == "hold" and nxt.get("s", 0) >= RESULT_HOLD_S:
+                held = True
+                break
+        if not held:
+            problems.append(f"{sc['id']}: {st['do']} (step {i + 1}) has no hold of {RESULT_HOLD_S:g} s "
+                            "before the next action")
+    return problems
+
+
+def drift_limit(scenario):
+    """The scenario's drift limit in seconds: drift_limit_ms (the Learn recording's 10 ms), else 100 ms."""
+    ms = scenario.get("drift_limit_ms")
+    return DRIFT_LIMIT_S if ms is None else float(ms) / 1000
+
+
+def area_selector(sc):
+    """The element a scene's before and after PNGs cover: its area_sel, else the row of its first track."""
+    if sc.get("area_sel"):
+        return sc["area_sel"]
+    for st in sc["steps"]:
+        if "track" in st:
+            return f'.track[data-name={json.dumps(st["track"])}]'
+    return "body"
+
+
+def glide(page, x, y):
+    """The overlay pointer glides to a target; the step waits for the glide, so the click lands on it."""
+    page.evaluate(GLIDE_JS, [x, y, GLIDE_MS])
+    page.wait_for_timeout(GLIDE_MS)
+
+
+def shoot_area(page, sel, path):
+    """A PNG of the action area without the overlay pointer or the drag line (a guide for the eye,
+    not part of the app's change)."""
+    page.evaluate(PTR_HIDE_JS)
+    page.locator(sel).screenshot(path=str(path))
+
+
+def zoom_t(sc):
+    """The time of a scene's first zoom_to (the hit the view centres), else None."""
+    return next((st["t"] for st in sc["steps"] if st["do"] == "zoom_to"), None)
+
+
+def window_clip(page, sc):
+    """The measured window of a zoomed scene: +/- WINDOW_PX capture pixels around the hit's x (the zoom
+    centres the hit), over the spike lane and the wave lane of the zoom's track. Page CSS pixels."""
+    track = next(st["track"] for st in sc["steps"] if st["do"] == "zoom_to")
+    row = f'.track[data-name={json.dumps(track)}]'
+    spike, wave = page.locator(f"{row} canvas.spike"), page.locator(f"{row} canvas.wave")
+    spike.scroll_into_view_if_needed()
+    a, b = spike.bounding_box(), wave.bounding_box()
+    if not a or not b:
+        raise RecordError(f"{sc['id']}: no spike and wave lane of {track}")
+    x = page.evaluate(LANE_X_JS, [track, zoom_t(sc)])
+    half = WINDOW_PX / page.evaluate("() => window.devicePixelRatio || 1")
+    left, right = max(a["x"], x - half), min(a["x"] + a["width"], x + half)
+    top, bottom = min(a["y"], b["y"]), max(a["y"] + a["height"], b["y"] + b["height"])
+    return {"x": left, "y": top, "width": right - left, "height": bottom - top}
+
+
+def shoot_scene(page, sc, path):
+    """A scene's PNG of its action area: the measured window of a zoomed scene (window_clip), else
+    the element area_selector names. The overlay pointer stays out of it."""
+    if zoom_t(sc) is not None and not sc.get("area_sel"):
+        page.evaluate(PTR_HIDE_JS)
+        page.screenshot(path=str(path), clip=window_clip(page, sc))
+    else:
+        shoot_area(page, area_selector(sc), path)
+
+
+def png_rgb(path):
+    """A PNG's pixels as an (h, w, 3) uint8 array: ffmpeg decodes it, the size is the PNG header's."""
+    data = Path(path).read_bytes()
+    w, h = struct.unpack(">II", data[16:24])
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                         check=True, capture_output=True).stdout
+    if len(raw) != w * h * 3:
+        raise RecordError(f"{path}: the PNG does not decode to {w}x{h} RGB")
+    return np.frombuffer(raw, np.uint8).reshape(h, w, 3)
+
+
+def changed_share(a, b):
+    """The share (%) of the pixels where a channel moved by CHANGE_LEVEL or more between two areas."""
+    if a.shape != b.shape:
+        raise RecordError(f"the before and after areas differ in size: {a.shape} and {b.shape}")
+    moved = np.abs(a.astype(np.int16) - b.astype(np.int16)).max(axis=2) >= CHANGE_LEVEL
+    return 100.0 * float(moved.mean())
+
+
+def change_problems(shots, scenes):
+    """The action check: per action scene the share of its action area that changed between the
+    before and after PNGs. Prints each share; a share under CHANGE_MIN_PCT is a problem."""
+    problems = []
+    for sc in scenes:
+        if not has_action(sc):
+            continue
+        before, after = shots / f"{sc['id']}-before.png", shots / f"{sc['id']}-after.png"
+        if not before.is_file() or not after.is_file():
+            problems.append(f"{sc['id']}: no before and after PNG of the action area")
+            continue
+        pct = changed_share(png_rgb(before), png_rgb(after))
+        print(f"{sc['id']}: {pct:.2f} % of the action area changed")
+        if pct < CHANGE_MIN_PCT:
+            problems.append(f"{sc['id']}: {pct:.2f} % of the action area changed (under {CHANGE_MIN_PCT:g} %)")
+    return problems
 
 
 def menu_pairs(caption):
@@ -452,12 +633,23 @@ def run_step(page, st, env):
         if not hidden:
             page.keyboard.press(pw_press(st["press"]))
             page.wait_for_selector(st["sel"], state="hidden", timeout=timeout)
+    elif kind == "zoom_to":
+        # The view centres on the step's time at the step's span, and the track's row moves into
+        # the middle of the lanes, before the action (the recording standard).
+        page.evaluate(ZOOM_TO_JS, [st["track"], st["t"], st["span"]])
     elif kind == "click":
+        # The pointer glides to the element, rings on the click, then the real click lands.
+        center = page.evaluate(CENTER_JS, st["sel"])
+        if center:   # the stub pages of the tests have no layout: no glide there
+            glide(page, *center)
+            page.evaluate(RING_JS, center)
         page.click(st["sel"], timeout=timeout)
     elif kind == "lane_click":
         # A real mouse click at a lane position: the ghost-note selection of the Learn scenes
         # clicks a hit's spike, which no element selector addresses.
         x, y = lane_point(page, st["track"], st.get("lane", "spike"), st["t"])
+        glide(page, x, y)
+        page.evaluate(RING_JS, [x, y])
         page.mouse.click(x, y)
     elif kind == "drag":
         # A real mouse drag in a lane: the wave lane's range select (the Learn add range).
@@ -465,11 +657,15 @@ def run_step(page, st, env):
         lane = st.get("lane", "wave")
         x1, y = lane_point(page, st["track"], lane, st["from"])
         x2, _ = lane_point(page, st["track"], lane, st["to"])
+        glide(page, x1, y)
+        page.evaluate(RING_JS, [x1, y])
+        page.evaluate(DRAG_LINE_JS, [x1, x2, y])   # the line shows the range the drag makes
         page.mouse.move(x1, y)
         page.mouse.down()
         page.mouse.move((x1 + x2) / 2, y, steps=4)
         page.mouse.move(x2, y, steps=4)
         page.mouse.up()
+        page.evaluate(DRAG_END_JS)
         if st.get("wait_sel"):
             page.wait_for_function("() => DSLearn.state().sel !== null", timeout=timeout)
     elif kind == "blur":
@@ -530,7 +726,7 @@ def dom_problems(page, forbidden):
     return [w for w in forbidden if w.lower() in joined]
 
 
-def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_model=True):
+def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_model=True, shots=None):
     """The scenes in order; every scene is held to its narration length. Returns (marks, drifts,
     waits): the scene start times, the per-scene overrun (the scene's span over its narration
     length; the modal guard, the DOM guard, the model-text check and the caption fade are part
@@ -556,7 +752,10 @@ def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_mo
         if shown:
             raise RecordError(f"{sc['id']}: the page shows forbidden text {shown}")
         sc_waits = []
-        for st in sc["steps"]:
+        first_act = next((k for k, st in enumerate(sc["steps"]) if st["do"] in ACTION_KINDS), None)
+        for k, st in enumerate(sc["steps"]):
+            if shots is not None and k == first_act:   # the before PNG: the area as the action finds it
+                shoot_scene(page, sc, shots / f"{sc['id']}-before.png")
             if st["do"] == "wait":
                 s = clock() - t0
                 try:
@@ -574,6 +773,8 @@ def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_mo
                 except Exception as e:
                     raise RecordError(f"{sc['id']}: {st.get('err') or st['do']}: {e}") from e
         waits.append(sc_waits)
+        if shots is not None and first_act is not None:   # the after PNG: the result after its hold
+            shoot_scene(page, sc, shots / f"{sc['id']}-after.png")
         if check_model:
             text = page.evaluate(VISIBLE_TEXT_JS) or ""
             hits = [ln.strip() for ln in text.splitlines() if MODEL_RE.search(ln)]
@@ -590,9 +791,9 @@ def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_mo
     return marks, drifts, waits
 
 
-def drift_problems(scenes, drifts):
-    return [f"{sc['id']}: drift {d * 1000:+.0f} ms (limit {DRIFT_LIMIT_S * 1000:.0f} ms)"
-            for sc, d in zip(scenes, drifts) if abs(d) > DRIFT_LIMIT_S]
+def drift_problems(scenes, drifts, limit=DRIFT_LIMIT_S):
+    return [f"{sc['id']}: drift {d * 1000:+.0f} ms (limit {limit * 1000:.0f} ms)"
+            for sc, d in zip(scenes, drifts) if abs(d) > limit]
 
 
 # ---------------- the wait compression (option d: the mux repairs a slow scene) ----------------
@@ -723,8 +924,8 @@ def render_note(work):
     """The transparent "AI-generated" note PNG (the explainers' disclosure corner note, owner
     2026-10-23): the shared renderer — record.py burns it into every frame of its own output
     (the landing page plays the three recordings as their own videos) and compose.py overlays
-    it on every frame of the product video, the title cards included. Same place and style as
-    the cards' note was: right 28 px, bottom 20 px."""
+    it on every frame of the product video, the title cards included. Same place as the cards'
+    note was: right 28 px, bottom 20 px. The text sits on a dark box so it reads on dimmed frames."""
     def build():
         from playwright.sync_api import sync_playwright
 
@@ -734,7 +935,9 @@ def render_note(work):
             pg = br.new_page(viewport={"width": 360, "height": 80})
             pg.set_content('<body style="margin:0;background:transparent">'
                            f'<div style="display:inline-block;font-size:{NOTE_PX}px;'
-                           f'font-family:{NOTE_FONT};color:{NOTE_COLOR};">{html.escape(NOTE_TEXT)}</div></body>')
+                           f'font-family:{NOTE_FONT};color:{NOTE_COLOR};background:{NOTE_BOX};'
+                           f'padding:{NOTE_PAD_PX}px;border-radius:{NOTE_PAD_PX}px;">'
+                           f'{html.escape(NOTE_TEXT)}</div></body>')
             pg.locator("div").screenshot(path=str(path), omit_background=True)
             br.close()
         return path
@@ -928,7 +1131,16 @@ def record(root, scenario, items, out, work, keep, check_model=True):
             pg.wait_for_timeout(500)   # the empty state paints before scene 1
             lead = time.monotonic() - t_video0   # the video's head before scene 1: the narration shifts by it
             try:
-                marks, drifts, waits = run_scenes(pg, scenes, durations, env, check_model=check_model)
+                shots = None
+                if scenario.get("standard") is True:   # the recording standard: before/after PNGs of each action
+                    shots = CACHE / "rec" / scenario.get("name", out.stem)
+                    shutil.rmtree(shots, ignore_errors=True)
+                    shots.mkdir(parents=True)
+                marks, drifts, waits = run_scenes(pg, scenes, durations, env, check_model=check_model, shots=shots)
+                if shots is not None:
+                    changed = change_problems(shots, scenes)
+                    if changed:
+                        raise RecordError("the action does not show: " + "; ".join(changed))
                 pg.evaluate(CAP_JS, "")   # the caption fades before the cut
                 pg.wait_for_timeout(600)
             finally:
@@ -950,7 +1162,7 @@ def record(root, scenario, items, out, work, keep, check_model=True):
     os.replace(video, raw)
     total = ffprobe_seconds(raw)
     try:
-        factors, reductions = wait_speeds(drifts, waits)
+        factors, reductions = wait_speeds(drifts, waits, limit=drift_limit(scenario))
     except RecordError as e:
         table = "; ".join(f"{i}: drift {d * 1000:+.0f} ms, wait {sum(e2 - s2 for s2, e2 in waits[i]):.2f} s"
                           for i, d in enumerate(drifts))
@@ -980,9 +1192,34 @@ OVERLAY_JS = """localStorage.removeItem('dsg_sid');
     const c = document.createElement('div'); c.id = '__cap';
     c.style.cssText = 'position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:99999;'
       + 'font:500 22px Inter,Helvetica,sans-serif;color:#f1f4f9;background:rgba(20,22,26,.86);border-radius:10px;padding:8px 18px;opacity:0;transition:opacity .25s';
-    document.body.append(o, c);
+    // The pointer (the recording standard): a dot that glides to the click or drag target, a ring
+    // on the click, a line for a drag. pointer-events none: the app never sees it.
+    const p = document.createElement('div'); p.id = '__ptr';
+    p.style.cssText = 'position:fixed;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;'
+      + 'box-sizing:border-box;background:rgba(255,159,67,.85);border:2px solid #14161a;z-index:99998;'
+      + 'pointer-events:none;opacity:0;transition:opacity .15s';
+    const ln = document.createElement('div'); ln.id = '__drag';
+    ln.style.cssText = 'position:fixed;left:0;top:0;height:4px;margin-top:-2px;background:#ff9f43;z-index:99997;'
+      + 'pointer-events:none;opacity:0';
+    document.body.append(o, c, p, ln);
     window.__dsShowKey = (label, ms) => { o.textContent = label; o.style.opacity = 1;
       clearTimeout(o._t); o._t = setTimeout(() => o.style.opacity = 0, ms); };
+    window.__dsPtrGlide = (x, y, ms) => {
+      p.style.transition = `left ${ms}ms ease-in-out, top ${ms}ms ease-in-out, opacity .15s`;
+      p.style.left = x + 'px'; p.style.top = y + 'px'; p.style.opacity = 1; };
+    window.__dsPtrRing = (x, y) => {
+      const r = document.createElement('div');
+      r.style.cssText = `position:fixed;left:${x}px;top:${y}px;width:24px;height:24px;margin:-12px 0 0 -12px;`
+        + 'box-sizing:border-box;border:3px solid #ff9f43;border-radius:50%;z-index:99997;pointer-events:none;'
+        + 'transition:transform .5s ease-out,opacity .5s ease-out';
+      document.body.append(r);
+      requestAnimationFrame(() => requestAnimationFrame(() => { r.style.transform = 'scale(2.5)'; r.style.opacity = 0; }));
+      setTimeout(() => r.remove(), 700); };
+    window.__dsPtrDrag = (x1, x2, y) => {
+      ln.style.left = Math.min(x1, x2) + 'px'; ln.style.top = y + 'px';
+      ln.style.width = Math.abs(x2 - x1) + 'px'; ln.style.opacity = 1; };
+    window.__dsPtrDragEnd = () => { ln.style.opacity = 0; };
+    window.__dsPtrHide = () => { p.style.opacity = 0; ln.style.opacity = 0; };
   });"""
 
 
@@ -1020,7 +1257,7 @@ def main(argv=None):
             line = f"  {sid}: planned {secs:.2f} s, drift {drift * 1000:+.0f} ms"
             line += f", {speed_label(factor)} wait speed" if factor > 1.0 else ", 1x"
             print(line)
-        bad = drift_problems(scenario["scenes"], drifts)
+        bad = drift_problems(scenario["scenes"], drifts, drift_limit(scenario))
         if bad:
             for b in bad:
                 print(f"FAIL: {b}", file=sys.stderr)
