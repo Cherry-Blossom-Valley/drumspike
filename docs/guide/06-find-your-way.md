@@ -39,4 +39,6 @@ The keys of this chapter are the Pro Tools preset, the default. Drum Spike also 
 preset: **Drum Spike > Settings…** (`Cmd+,`) switches. **Help > Keyboard Shortcuts** lists all
 keys of the current preset.
 
+![A kick and a snare track at the 50 ms zoom; the playhead sits on a hit and the lanes show the neighboring tracks at their heights.](img/06-find-your-way.png)
+
 Next: [edit hits](07-edit-hits.md).
