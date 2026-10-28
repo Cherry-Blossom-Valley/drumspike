@@ -15,12 +15,12 @@ WAVE_H = """() => Object.fromEntries(S.order.map(n => {
 }))"""
 
 
-def handle(app, name):
-    return app.locator(f'.track[data-name="{name}"] .rowResize').bounding_box()
+def handle(app, name, sel=".tlanes"):
+    return app.locator(f'.track[data-name="{name}"] {sel} .rowResize').bounding_box()
 
 
-def drag_border(app, name, dy):
-    box = handle(app, name)
+def drag_border(app, name, dy, sel=".tlanes"):
+    box = handle(app, name, sel)
     app.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
     app.mouse.down()
     app.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2 + dy, steps=8)
@@ -85,3 +85,35 @@ def test_row_heights_set_validates(app, song):
     assert r["changed"] and r["n"] == 1
     bad = invoke(app, "row_heights_set", sid=song, heights={"Kick In": 0})
     assert bad["code"] == 400 and "Kick In" in bad["message"], bad   # a factor of 0 is refused (the message names the track)
+
+
+# #439: the track header's bottom edge is the same drag handle
+def test_a_drag_on_the_header_edge_changes_the_lane_like_the_lane_drag(app, song):
+    h0 = app.evaluate(WAVE_H)
+    order = app.evaluate("() => S.order")
+    second = order[1]
+    drag_border(app, second, 60, sel=".thead")   # the header's bottom edge: the same stored height, the whole row follows
+    h1 = app.evaluate(WAVE_H)
+    assert h1[second] == pytest.approx(h0[second] + 60, abs=2)
+    for n, h in h1.items():
+        if n != second:
+            assert h == h0[n], n
+
+
+def test_a_double_click_on_the_header_edge_resets_the_row(app, song):
+    second = app.evaluate("() => S.order[1]")
+    drag_border(app, second, 60, sel=".thead")
+    box = handle(app, second, ".thead")
+    app.mouse.dblclick(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    edits_done(app)
+    h = app.evaluate(WAVE_H)
+    assert h[second] == 120   # the global medium wave height
+
+
+def test_a_click_on_the_header_handle_does_not_select_the_track(app, song):
+    first = app.evaluate("() => S.order[0]")
+    second = app.evaluate("() => S.order[1]")
+    box = handle(app, second, ".thead")
+    app.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    edits_done(app)
+    assert app.evaluate("() => S.selTrack") == first   # the selection keeps the first track (P4-39c)

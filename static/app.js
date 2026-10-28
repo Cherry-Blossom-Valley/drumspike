@@ -603,6 +603,7 @@ function buildTrackDOM() {
             <div class="mclip"></div>
             <div class="mbars"></div>
           </div>
+          <div class="rowResize" title="Drag: the height of this track's wave lane. Double-click: back to the Track Height"></div>
         </div>
         <div class="tlanes">
           <canvas class="lane spike" height="34"></canvas>
@@ -626,7 +627,7 @@ function buildTrackDOM() {
     row.querySelector(".thead").addEventListener("click", ev => {
       if (headerDragged) { headerDragged = false; return; }   // drag-release, not a click
       if (ev.target.closest("button") || ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") return;
-      if (ev.target.closest(".mslider, .meter")) return;   // P3-16: the mixer controls
+      if (ev.target.closest(".mslider, .meter, .rowResize")) return;   // P3-16: the mixer controls; #439: the height handle
       setSelTrack(name);   // P4-39c: a second click keeps the track selected
     });
     row.querySelector(".thead").addEventListener("contextmenu", ev => { ev.preventDefault(); openTrackMenu(name, ev.clientX, ev.clientY); });   // P3-14e
@@ -634,6 +635,7 @@ function buildTrackDOM() {
     attachTrackHandlers(row, name);
     vlBind(row, name);   // P4-40f: the velocity lane's gestures
     bindRowResize(row, name);   // #167: drag the lower border of the row, double-click resets it
+    bindRowResize(row, name, row.querySelector(".thead .rowResize"));   // #439: the header's bottom edge drags the same height
     bindTrackMix(row, name);   // P3-16
   }
   refreshCounts();
@@ -3800,9 +3802,10 @@ function vlSyncRow(row) {   // the row gets or loses its vel canvas (releaseCanv
     if (c.width) { c.width = 0; c.height = 0; }
     c.remove();
   }
-  const hd = row.querySelector(".rowResize");   // #437: the handle's text follows the lane it drags
-  if (hd) hd.title = VL.on ? "Drag: the height of the velocity lane (the handle is at its bottom edge). Double-click: the wave lane back to the Track Height"
-                           : "Drag: the height of this track's wave lane. Double-click: back to the Track Height";
+  for (const hd of row.querySelectorAll(".rowResize")) {   // #437: the handles' text follows the lane it drags (the row's border and the header's edge, #439)
+    hd.title = VL.on ? "Drag: the height of the velocity lane (the handle is at its bottom edge). Double-click: the wave lane back to the Track Height"
+                     : "Drag: the height of this track's wave lane. Double-click: back to the Track Height";
+  }
 }
 function vlYOf(v, H) { return Math.round(H - (v - 1) / 126 * (H - 4) - 2); }   // the y of a velocity (2 px padding)
 function vlVOf(y, H) { return Math.max(1, Math.min(127, Math.round(1 + (H - 2 - y) / (H - 4) * 126))); }
@@ -7652,8 +7655,8 @@ function rowHeightPx(name) { return Math.round(laneHeights().wave * rowHeightOf(
    factor of the global wave height (the Track Height zoom scales every lane, the dragged one
    included); a double-click puts the row back to the global height. The map lands in the project
    (row_heights) when the drag ends or the double-click resets. */
-function bindRowResize(row, name) {
-  const hd = row.querySelector(".rowResize");
+function bindRowResize(row, name, hd) {   // hd: the handle; the row's lower border (default) or the header's bottom edge (#439: the same drag)
+  hd = hd || row.querySelector(".tlanes .rowResize");
   let drag = null;
   hd.addEventListener("pointerdown", ev => {
     if (ev.button !== 0) return;
