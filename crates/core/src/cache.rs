@@ -410,6 +410,173 @@ mod tests {
         fs::remove_dir_all(&d).unwrap();
     }
 
+    /// R20: every malformed input is a miss or a clear error — never a panic and never
+    /// an allocation the file cannot hold. The table covers the header reader (`open`):
+    /// empty, truncated, wrong magic, wrong version, length fields at 0, at u32::MAX and
+    /// at u64::MAX, and a length larger than the file.
+    #[test]
+    fn malformed_inputs_are_a_miss_or_an_error() {
+        let d = tmp("malformed");
+        let p = d.join(PEAKS_BIN);
+        let good = encode_peaks_bin(48_000, 9000, &compute_peaks(&signal(9000)));
+        // Offsets in the good file: n_samples 16..24, level count 24..28, the last
+        // level's block 44..48 and bins 48..52 (levels 256/35, 4096/2, 65536/1).
+        let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+            ("empty", Vec::new(), "shorter than the header"),
+            ("truncated after the header", good[..28].to_vec(), "cut off"),
+            (
+                "wrong magic",
+                {
+                    let mut b = good.clone();
+                    b[0] = b'X';
+                    b
+                },
+                "magic",
+            ),
+            (
+                "wrong version",
+                {
+                    let mut b = good.clone();
+                    b[8] = 2;
+                    b
+                },
+                "version",
+            ),
+            (
+                "level count 0",
+                {
+                    let mut b = good.clone();
+                    b[24..28].copy_from_slice(&0u32.to_le_bytes());
+                    b
+                },
+                "header says",
+            ),
+            (
+                "level count u32::MAX",
+                {
+                    let mut b = good.clone();
+                    b[24..28].copy_from_slice(&u32::MAX.to_le_bytes());
+                    b
+                },
+                "levels",
+            ),
+            (
+                "block 0",
+                {
+                    let mut b = good.clone();
+                    b[44..48].copy_from_slice(&0u32.to_le_bytes());
+                    b
+                },
+                "block 0",
+            ),
+            (
+                "bins 0",
+                {
+                    let mut b = good.clone();
+                    b[48..52].copy_from_slice(&0u32.to_le_bytes());
+                    b
+                },
+                "bins",
+            ),
+            (
+                "bins u32::MAX",
+                {
+                    let mut b = good.clone();
+                    b[48..52].copy_from_slice(&u32::MAX.to_le_bytes());
+                    b
+                },
+                "bins",
+            ),
+            (
+                "n_samples 0",
+                {
+                    let mut b = good.clone();
+                    b[16..24].copy_from_slice(&0u64.to_le_bytes());
+                    b
+                },
+                "bins",
+            ),
+            (
+                "n_samples u64::MAX",
+                {
+                    let mut b = good.clone();
+                    b[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
+                    b
+                },
+                "bins",
+            ),
+            (
+                "length larger than the file",
+                good[..good.len() - 12].to_vec(),
+                "header says",
+            ),
+        ];
+        // Every case must be refused with a clear format error; the list names the ones
+        // that were not, so one run shows every accepted malformed input.
+        let mut bad: Vec<String> = Vec::new();
+        for (name, bytes, want) in &cases {
+            fs::write(&p, bytes).unwrap();
+            match PeakCache::open(&p) {
+                Ok(_) => bad.push(format!("{name}: opened")),
+                Err(e) => {
+                    let text = e.to_string();
+                    if !matches!(e, CacheError::Format(_)) {
+                        bad.push(format!("{name}: not a format error: {text}"));
+                    } else if !text.contains(want) {
+                        bad.push(format!("{name}: expected \"{want}\" in \"{text}\""));
+                    }
+                }
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "malformed inputs that were not an error:\n{}",
+            bad.join("\n")
+        );
+        // The control: a valid cache file still reads (no format change).
+        fs::write(&p, &good).unwrap();
+        let c = PeakCache::open(&p).unwrap();
+        let infos: Vec<(usize, usize)> = c.levels().iter().map(|l| (l.block, l.bins)).collect();
+        assert_eq!(infos, vec![(256, 35), (4096, 2), (65536, 1)]);
+        assert!(c.read_level(256).unwrap().is_some());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// R20: the tile reader bounds every read and allocation by the level's bins, for
+    /// hostile windows too; a length larger than the file is an error, never a panic.
+    #[test]
+    fn tile_reader_stays_bounded_by_the_level() {
+        let d = tmp("tilebounds");
+        let p = d.join(PEAKS_BIN);
+        fs::write(&p, encode_peaks_bin(48_000, 9000, &compute_peaks(&signal(9000)))).unwrap();
+        let c = PeakCache::open(&p).unwrap();
+        let bins_of = |block: usize| c.levels().iter().find(|l| l.block == block).unwrap().bins;
+        for &(from, to) in &[
+            (0i64, 1i64 << 62),
+            (-(1i64 << 62), -5),
+            (i64::MIN, i64::MAX),
+            (1 << 40, 1 << 41),
+        ] {
+            for &bs in &[256usize, 4096, 65536] {
+                let t = c.tile(bs, from, to).unwrap().unwrap();
+                let bins = bins_of(bs);
+                assert!(t.start <= bins, "start {} past {bins} bins", t.start);
+                assert!(t.min.len() <= bins, "{} mins for {bins} bins", t.min.len());
+                assert_eq!(t.min.len(), t.max.len());
+                assert_eq!(t.min.len(), t.rms.len());
+            }
+        }
+        // A window past the level is an empty tile (a miss), not a huge read.
+        let t = c.tile(256, 1 << 40, 1 << 41).unwrap().unwrap();
+        assert_eq!((t.start, t.min.len()), (35, 0));
+        // The file shrank under the open cache: the read fails with an error.
+        let bytes = fs::read(&p).unwrap();
+        fs::write(&p, &bytes[..10]).unwrap();
+        assert!(matches!(c.tile(256, 0, 10), Err(CacheError::Io(_))));
+        assert!(matches!(c.read_level(256), Err(CacheError::Io(_))));
+        fs::remove_dir_all(&d).unwrap();
+    }
+
     #[test]
     fn write_leaves_no_temporary_file() {
         let d = tmp("tmpfile");
