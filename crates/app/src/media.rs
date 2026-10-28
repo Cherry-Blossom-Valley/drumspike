@@ -19,8 +19,19 @@ use drumspike_core::{read_wav_mono, MappedWav, MixMode, WavError, WavInfo};
 use crate::error::AppError;
 use crate::registry::{lock, OpenProject};
 
-/// How many decoded tracks the cache holds (a 5-minute 96 kHz track is 115 MB).
+/// How many decoded tracks the cache keeps at most (a 5-minute 96 kHz track is 115 MB).
 pub const DECODE_CACHE_LEN: usize = 3;
+
+/// The byte budget of the decode cache: the held samples of all cached decodes together
+/// stay below it (LRU evicts until they do). 512 MiB: two 10-minute 96 kHz tracks (about
+/// 230 MB of f32 each) fit next to one shorter track, so the cache still spares the hot
+/// files while the memory of the process is bounded. Overridable with the env var
+/// `DRUMSPIKE_DECODE_CACHE_BUDGET` (bytes) for tests and tuning. A decode larger than the
+/// budget is returned but not kept.
+pub const DECODE_CACHE_BUDGET_BYTES: usize = 512 * 1024 * 1024;
+
+/// The env var that overrides [`DECODE_CACHE_BUDGET_BYTES`].
+pub const DECODE_CACHE_BUDGET_ENV: &str = "DRUMSPIKE_DECODE_CACHE_BUDGET";
 
 /// How many opened sources the window reader keeps: header, downmix plan and the open file,
 /// no samples (P3-15d).
@@ -165,6 +176,16 @@ fn inode(meta: &std::fs::Metadata) -> u64 {
     }
 }
 
+/// The bytes of one cached decode: the mono samples (`Decoded` holds nothing else that
+/// scales with the file).
+fn decode_bytes(d: &Decoded) -> usize {
+    d.samples.len() * std::mem::size_of::<f32>()
+}
+
+/// One wait slot for one decode key that is being decoded right now (single-flight): the
+/// first request fills it, the others wait on its lock and share the result.
+type InflightSlot = Arc<Mutex<Option<Arc<Decoded>>>>;
+
 /// The caches shared by the commands.
 #[derive(Default)]
 pub struct Media {
@@ -173,16 +194,41 @@ pub struct Media {
     windows: Mutex<Vec<(WindowKey, WindowSlot)>>,
     /// How many times the window reader opened a source (for the tests).
     window_opens: AtomicUsize,
+    /// One slot per decode key that is being decoded right now (single-flight).
+    inflight: Mutex<HashMap<DecodeKey, InflightSlot>>,
+    /// How many decodes ran to the end (for the tests).
+    decode_runs: AtomicUsize,
+    /// The byte budget of the decode cache; `None` reads the env var, else the const.
+    budget: Option<usize>,
 }
 
 impl Media {
     /// Empty caches.
     pub fn new() -> Media {
-        Media::default()
+        Media {
+            budget: std::env::var(DECODE_CACHE_BUDGET_ENV).ok().and_then(|v| v.parse().ok()),
+            ..Media::default()
+        }
     }
 
-    /// The decode of `path` from the cache, else read it and keep the last
-    /// [`DECODE_CACHE_LEN`] decodes. A file that changed (size or time) is read again.
+    /// Empty caches with an explicit byte budget (the tests use a small one).
+    pub fn with_budget(budget: usize) -> Media {
+        Media {
+            budget: Some(budget),
+            ..Media::default()
+        }
+    }
+
+    fn budget(&self) -> usize {
+        self.budget.unwrap_or(DECODE_CACHE_BUDGET_BYTES)
+    }
+
+    /// The decode of `path` from the cache, else read it. Concurrent requests for one
+    /// source identity (path, mode, size, time) wait for one decode and share its `Arc`
+    /// (single-flight). A file that changed (size or time) is read again. The cache keeps
+    /// the last [`DECODE_CACHE_LEN`] decodes within the byte budget
+    /// ([`DECODE_CACHE_BUDGET_BYTES`], LRU); a decode larger than the budget is returned
+    /// but not kept.
     pub fn decode_cached(&self, path: &Path, mode: MixMode) -> Result<Arc<Decoded>, AppError> {
         let meta = std::fs::metadata(path).map_err(|e| AppError::internal(format!("{}: {e}", path.display())))?;
         let key: DecodeKey = (
@@ -191,17 +237,59 @@ impl Media {
             meta.len(),
             meta.modified().ok(),
         );
-        if let Some((_, d)) = lock(&self.decoded).iter().find(|(k, _)| *k == key) {
+        if let Some(d) = self.decoded_hit(&key) {
+            return Ok(d);
+        }
+        // single-flight: the first request for the key decodes, the others wait on the
+        // slot and share the result; a failed decode leaves the slot empty and the
+        // waiters decode themselves.
+        let slot = {
+            let mut map = lock(&self.inflight);
+            Arc::clone(map.entry(key.clone()).or_default())
+        };
+        let mut g = lock(&slot);
+        if let Some(d) = g.as_ref() {
             return Ok(Arc::clone(d));
         }
         let d = Arc::new(decode(path, mode)?);
+        self.decode_runs.fetch_add(1, Ordering::Relaxed);
+        *g = Some(Arc::clone(&d));
+        drop(g);
+        lock(&self.inflight).remove(&key);
+        self.decoded_insert(key, Arc::clone(&d));
+        Ok(d)
+    }
+
+    /// The decode for `key` from the cache, moved to the back (most recently used).
+    fn decoded_hit(&self, key: &DecodeKey) -> Option<Arc<Decoded>> {
+        let mut cache = lock(&self.decoded);
+        let i = cache.iter().position(|(k, _)| k == key)?;
+        let (_, d) = cache.remove(i);
+        let d = Arc::clone(&d);
+        cache.push((key.clone(), d.clone()));
+        Some(d)
+    }
+
+    /// Keep `d` under `key`, evicting least-recently-used decodes until the held bytes
+    /// are within the budget. A decode larger than the budget is not kept.
+    fn decoded_insert(&self, key: DecodeKey, d: Arc<Decoded>) {
+        let budget = self.budget();
+        if decode_bytes(&d) > budget {
+            return;
+        }
         let mut cache = lock(&self.decoded);
         cache.retain(|(k, _)| *k != key);
-        cache.push((key, Arc::clone(&d)));
-        if cache.len() > DECODE_CACHE_LEN {
-            cache.remove(0);
+        cache.push((key, d));
+        let mut held: usize = cache.iter().map(|(_, d)| decode_bytes(d)).sum();
+        while (held > budget || cache.len() > DECODE_CACHE_LEN) && cache.len() > 1 {
+            let (_, old) = cache.remove(0);
+            held -= decode_bytes(&old);
         }
-        Ok(d)
+    }
+
+    /// How many decodes ran to the end since the start (for the tests).
+    pub fn decode_runs(&self) -> usize {
+        self.decode_runs.load(Ordering::Relaxed)
     }
 
     /// The opened source of `path` in `mode` for the window reader: from the cache when the
