@@ -173,6 +173,26 @@ def test_cargo_lock_alone_is_not_a_source(tmp_path):
     assert mod.stale_source(exe, root) is None
 
 
+def test_dep_info_that_parses_to_zero_sources_is_not_fresh(tmp_path):
+    """A dep-info whose listed paths do not exist (Cargo escapes we could not read, a moved
+    target dir) parses to 0 sources: the fallback scan must still find the newer source —
+    an empty parse must never count as fresh, the guard stays loud (#25)."""
+    mod = _conftest()
+    root = tmp_path / "repo"
+    root.mkdir()
+    exe = _planted_fresh(root)
+    # the dep-info lists only a path that does not exist in this tree
+    _dep_info(exe, "/nonexistent/moved-target/debug/libfoo.d")
+    # the fallback scan finds a newer .rs under crates/app (the planted lib.rs is older)
+    app_src = root / "crates" / "app" / "src"
+    app_src.mkdir(parents=True)
+    (app_src / "lib.rs").write_text("// newer\n")
+    os.utime(app_src / "lib.rs", (T0 + 300, T0 + 300))
+    msg = mod.stale_source(exe, root)
+    assert msg is not None
+    assert "crates/app/src/lib.rs" in msg
+
+
 def test_start_command_serves_this_worktree(tmp_path):
     """The bridge starts with --static <repo>/static (this worktree's page, not the build worktree's)."""
     mod = _conftest()
