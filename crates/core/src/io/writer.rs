@@ -88,8 +88,9 @@ fn chunk(out: &mut Vec<u8>, id: &[u8; 4], body: &[u8]) {
     }
 }
 
-/// Build a whole WAV file around already encoded sample bytes (`data` is the data chunk).
-pub fn encode_wav_raw(spec: &WavSpec, data: &[u8], bext: Option<&Bext>) -> Vec<u8> {
+/// The fmt chunk body of a written file (the one [`encode_wav_raw`] and the block writer
+/// build).
+fn fmt_body(spec: &WavSpec) -> Vec<u8> {
     let bps = spec.format.bytes_per_sample();
     let block_align = bps * spec.channels;
     let mut fmt = Vec::with_capacity(40);
@@ -106,9 +107,14 @@ pub fn encode_wav_raw(spec: &WavSpec, data: &[u8], bext: Option<&Bext>) -> Vec<u
         fmt.extend_from_slice(&spec.format.tag().to_le_bytes());
         fmt.extend_from_slice(&SUBFORMAT_TAIL);
     }
+    fmt
+}
+
+/// Build a whole WAV file around already encoded sample bytes (`data` is the data chunk).
+pub fn encode_wav_raw(spec: &WavSpec, data: &[u8], bext: Option<&Bext>) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() + 1024);
     out.extend_from_slice(b"RIFF\0\0\0\0WAVE");
-    chunk(&mut out, b"fmt ", &fmt);
+    chunk(&mut out, b"fmt ", &fmt_body(spec));
     if let Some(b) = bext {
         chunk(&mut out, b"bext", &encode_bext(b));
     }
@@ -118,9 +124,63 @@ pub fn encode_wav_raw(spec: &WavSpec, data: &[u8], bext: Option<&Bext>) -> Vec<u
     out
 }
 
+/// The header of a `n_frames`-long WAV file, written before any sample (the sizes follow
+/// from the frame count): the same bytes [`encode_wav_raw`] builds around the same samples,
+/// an odd data chunk keeping its pad byte in the riff size.
+fn wav_header(spec: &WavSpec, n_frames: usize, bext: Option<&Bext>) -> Vec<u8> {
+    let data_len = n_frames * spec.format.bytes_per_sample() as usize * spec.channels as usize;
+    let mut out = Vec::with_capacity(1024);
+    out.extend_from_slice(b"RIFF\0\0\0\0WAVE");
+    chunk(&mut out, b"fmt ", &fmt_body(spec));
+    if let Some(b) = bext {
+        chunk(&mut out, b"bext", &encode_bext(b));
+    }
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(data_len as u32).to_le_bytes());
+    let riff = (out.len() - 8 + data_len + data_len % 2) as u32;
+    out[4..8].copy_from_slice(&riff.to_le_bytes());
+    out
+}
+
+/// The block size the streaming writer fills and encodes by default: 64 Ki frames (R19
+/// step 2). `export_spikes` writes with it; the block writer takes the size per call.
+pub const WRITE_BLOCK_FRAMES: usize = 64 * 1024;
+
+// The size hook of the block-writer test (#48): per thread, the length in samples of the
+// largest slice `encode_samples` has encoded since it was armed, `None` while disarmed. A
+// doc comment cannot sit on a `thread_local!` invocation, so this is a plain comment.
+#[cfg(test)]
+thread_local! {
+    static ENCODE_HOOK: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Arm the size hook: record every slice [`encode_samples`] encodes on this thread.
+#[cfg(test)]
+pub(crate) fn encode_hook_arm() {
+    ENCODE_HOOK.with(|h| h.set(Some(0)));
+}
+
+/// The largest slice length the size hook has seen since it was armed.
+#[cfg(test)]
+pub(crate) fn encode_hook_max() -> Option<usize> {
+    ENCODE_HOOK.with(std::cell::Cell::get)
+}
+
+/// Note a slice length on the size hook (a no-op while it is disarmed).
+fn encode_hook_note(len: usize) {
+    #[cfg(test)]
+    ENCODE_HOOK.with(|h| {
+        if let Some(m) = h.get() {
+            h.set(Some(m.max(len)));
+        }
+    });
+    let _ = len;
+}
+
 /// Quantise interleaved float samples to `format`: clamp to [-1, 1], scale to the integer
 /// full scale, round to nearest.
 pub fn encode_samples(format: WavFormat, interleaved: &[f32]) -> Vec<u8> {
+    encode_hook_note(interleaved.len());
     let mut buf = Vec::with_capacity(interleaved.len() * format.bytes_per_sample() as usize);
     for &v in interleaved {
         let c = v.clamp(-1.0, 1.0) as f64;
@@ -142,6 +202,45 @@ pub fn encode_wav(spec: &WavSpec, interleaved: &[f32], bext: Option<&Bext>) -> V
 /// Write a WAV file from interleaved float samples.
 pub fn write_wav(path: &Path, spec: &WavSpec, interleaved: &[f32], bext: Option<&Bext>) -> std::io::Result<()> {
     write_atomic(path, &encode_wav(spec, interleaved, bext))
+}
+
+/// Write a `n_frames`-long WAV file in blocks (R19 step 2): the header first (the sizes
+/// follow from the frame count), then the samples block by block — `fill(start, buf)` fills
+/// `buf` with the interleaved samples of the frames `start..start + buf.len() / channels`,
+/// and the writer allocates exactly one `frames_per_block` block and reuses it, so no buffer
+/// of the writer holds more than one block. The file goes through the same atomic temporary
+/// plus rename as [`write_atomic`] (no partial file on error), and the bytes on disk are the
+/// ones [`encode_wav_raw`] builds for the same samples. A `fill` or write error removes the
+/// temporary file and leaves the destination exactly as it was.
+pub fn write_wav_blockwise<F>(
+    path: &Path,
+    spec: &WavSpec,
+    n_frames: usize,
+    bext: Option<&Bext>,
+    frames_per_block: usize,
+    mut fill: F,
+) -> std::io::Result<()>
+where
+    F: FnMut(usize, &mut [f32]) -> std::io::Result<()>,
+{
+    let frames_per_block = frames_per_block.max(1);
+    let channels = spec.channels as usize;
+    let mut t = super::atomic::TempFile::create(path)?;
+    t.write_all(&wav_header(spec, n_frames, bext))?;
+    let mut block = vec![0.0f32; frames_per_block.saturating_mul(channels)];
+    let mut start = 0;
+    while start < n_frames {
+        let frames = frames_per_block.min(n_frames - start);
+        let buf = &mut block[..frames * channels];
+        fill(start, buf)?;
+        t.write_all(&encode_samples(spec.format, buf))?;
+        start += frames;
+    }
+    let data_len = n_frames * spec.format.bytes_per_sample() as usize * channels;
+    if data_len % 2 == 1 {
+        t.write_all(&[0])?; // the pad byte of an odd data chunk (the byte `chunk` appends)
+    }
+    t.commit()
 }
 
 /// Write `bytes` to `path` atomically: a unique temporary file in the same folder (R10,
@@ -318,5 +417,230 @@ mod tests {
         assert_eq!(back.coding_history, "abc");
         let empty = encode_bext(&Bext::default());
         assert_eq!(empty.len(), 602);
+    }
+
+    #[test]
+    fn spike_writer_encodes_never_more_than_one_block_at_once() {
+        // R19 step 2, the size hook: the largest slice the writer encodes for a 3.5-block
+        // spike file. Red on the full-buffer writer: it encodes the whole signal in one call.
+        let dir = std::env::temp_dir().join(format!("drumspike-core-writer-hook-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sr = 48_000u32;
+        let n = WRITE_BLOCK_FRAMES * 7 / 2;
+        let times = [
+            0.0,
+            1.0,
+            (WRITE_BLOCK_FRAMES - 2) as f64 / sr as f64,
+            (WRITE_BLOCK_FRAMES + 3) as f64 / sr as f64,
+            (n - 1) as f64 / sr as f64,
+        ];
+        let src = Bext::default();
+        let out = dir.join("hook.wav");
+        encode_hook_arm();
+        crate::spike::export_spikes(&out, sr, n, &times, Some(&src), WavFormat::Pcm16).unwrap();
+        let max = encode_hook_max().expect("the writer encoded at least one slice");
+        assert!(
+            max <= WRITE_BLOCK_FRAMES,
+            "the writer encoded {max} samples in one slice, more than one block ({WRITE_BLOCK_FRAMES})"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The pre-#48 export path: the whole signal and the whole encoded file in memory.
+    fn old_export_spikes(
+        path: &Path,
+        sr: u32,
+        n_samples: usize,
+        times: &[f64],
+        source_bext: Option<&Bext>,
+        format: WavFormat,
+    ) -> std::io::Result<()> {
+        let spec = WavSpec {
+            sample_rate: sr,
+            channels: 1,
+            format,
+            extensible: false,
+            channel_mask: 0,
+        };
+        let bext = source_bext.map(|b| crate::spike::spike_bext(b, sr, format));
+        write_wav(path, &spec, &crate::spike::spike_signal(sr, n_samples, times), bext.as_ref())
+    }
+
+    #[test]
+    fn spike_export_in_blocks_is_byte_identical_to_the_full_buffer_path() {
+        let dir = std::env::temp_dir().join(format!("drumspike-core-writer-ident-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sr = 48_000u32;
+        let block = WRITE_BLOCK_FRAMES;
+        // the gate lengths: 0, 1, one block - 1, one block, one block + 1, 3.5 blocks
+        let lengths = [0usize, 1, block - 1, block, block + 1, block * 7 / 2];
+        // hits at the start, across the first block border and at the end of the longest file
+        let times = [
+            0.0,
+            1.0,
+            (block - 2) as f64 / sr as f64,
+            (block + 3) as f64 / sr as f64,
+            (lengths[5] - 1) as f64 / sr as f64,
+        ];
+        let src = Bext {
+            time_reference: 123_456,
+            origination_date: "2026-10-28".into(),
+            ..Default::default()
+        };
+        for (k, &n) in lengths.iter().enumerate() {
+            for format in [WavFormat::Pcm16, WavFormat::Pcm24, WavFormat::Float32] {
+                // every second length carries the source bext (the spike file gets its own)
+                let bext = if k % 2 == 0 { Some(&src) } else { None };
+                let old = dir.join(format!("old-{k}-{format:?}.wav"));
+                let new = dir.join(format!("new-{k}-{format:?}.wav"));
+                old_export_spikes(&old, sr, n, &times, bext, format).unwrap();
+                crate::spike::export_spikes(&new, sr, n, &times, bext, format).unwrap();
+                assert_eq!(
+                    std::fs::read(&new).unwrap(),
+                    std::fs::read(&old).unwrap(),
+                    "n={n} {format:?} bext={}",
+                    bext.is_some()
+                );
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Write `samples` through the block writer and read the file back.
+    fn blockwise_bytes(spec: &WavSpec, samples: &[f32], frames_per_block: usize, bext: Option<&Bext>) -> Vec<u8> {
+        let dir = std::env::temp_dir().join(format!("drumspike-core-writer-bw-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("bw.wav");
+        let n = samples.len() / spec.channels as usize;
+        write_wav_blockwise(&p, spec, n, bext, frames_per_block, |start, buf| {
+            let at = start * spec.channels as usize;
+            buf.copy_from_slice(&samples[at..at + buf.len()]);
+            Ok(())
+        })
+        .unwrap();
+        let bytes = std::fs::read(&p).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn write_wav_blockwise_matches_encode_wav_raw_for_small_blocks() {
+        let x: Vec<f32> = (0..30).map(|i| ((i % 17) as f32 * 0.125) - 1.0).collect();
+        // mono Pcm24, 9 frames in blocks of 4: an odd data chunk keeps its pad byte
+        let m9 = &x[..9];
+        assert_eq!(
+            blockwise_bytes(&spec(WavFormat::Pcm24, 1), m9, 4, None),
+            encode_wav_raw(&spec(WavFormat::Pcm24, 1), &encode_samples(WavFormat::Pcm24, m9), None)
+        );
+        // one frame in one oversized block
+        let m1 = &x[..1];
+        assert_eq!(
+            blockwise_bytes(&spec(WavFormat::Pcm16, 1), m1, 100, None),
+            encode_wav_raw(&spec(WavFormat::Pcm16, 1), &encode_samples(WavFormat::Pcm16, m1), None)
+        );
+        // stereo in blocks of 2 frames, with a bext chunk in the header
+        let st = &x[..10];
+        let bext = Bext {
+            time_reference: 42,
+            ..Default::default()
+        };
+        assert_eq!(
+            blockwise_bytes(&spec(WavFormat::Float32, 2), st, 2, Some(&bext)),
+            encode_wav_raw(&spec(WavFormat::Float32, 2), &encode_samples(WavFormat::Float32, st), Some(&bext))
+        );
+        // extensible 3 channels, Pcm24, 7 frames in blocks of 3: an odd data chunk again
+        let c3 = &x[..21];
+        let mut s3 = spec(WavFormat::Pcm24, 3);
+        s3.channel_mask = 0x7;
+        assert_eq!(
+            blockwise_bytes(&s3, c3, 3, None),
+            encode_wav_raw(&s3, &encode_samples(WavFormat::Pcm24, c3), None)
+        );
+        // an empty file is the bare header
+        assert_eq!(
+            blockwise_bytes(&spec(WavFormat::Pcm16, 1), &[], 8, None),
+            encode_wav_raw(&spec(WavFormat::Pcm16, 1), &[], None)
+        );
+    }
+
+    #[test]
+    fn the_block_writer_hands_out_one_block_at_a_time_in_order() {
+        let dir = std::env::temp_dir().join(format!("drumspike-core-writer-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("order.wav");
+        let n = WRITE_BLOCK_FRAMES * 2 + 5;
+        let mut calls: Vec<(usize, usize)> = Vec::new();
+        write_wav_blockwise(&p, &spec(WavFormat::Pcm16, 1), n, None, WRITE_BLOCK_FRAMES, |start, buf| {
+            calls.push((start, buf.len()));
+            buf.fill(0.25);
+            Ok(())
+        })
+        .unwrap();
+        let mut want = Vec::new();
+        let mut start = 0;
+        while start < n {
+            let frames = WRITE_BLOCK_FRAMES.min(n - start);
+            want.push((start, frames));
+            start += frames;
+        }
+        assert_eq!(calls, want, "one block per call, ascending, the last one cut");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_failing_fill_leaves_no_destination_and_no_temporary() {
+        let dir = std::env::temp_dir().join(format!("drumspike-core-writer-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("x.wav");
+        std::fs::write(&dest, b"keep").unwrap();
+        let e = write_wav_blockwise(&dest, &spec(WavFormat::Pcm16, 1), 100, None, 10, |_, _| {
+            Err(std::io::Error::other("fill failed"))
+        })
+        .unwrap_err();
+        assert_eq!(e.to_string(), "fill failed");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"keep", "the destination is untouched");
+        // a destination that did not exist stays absent
+        let gone = dir.join("gone.wav");
+        assert!(
+            write_wav_blockwise(&gone, &spec(WavFormat::Pcm16, 1), 10, None, 5, |_, _| {
+                Err(std::io::Error::other("no"))
+            })
+            .is_err()
+        );
+        assert!(!gone.exists());
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "temporary files left behind: {left:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_block_writer_replaces_the_destination_atomically() {
+        let dir = std::env::temp_dir().join(format!("drumspike-core-writer-repl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("r.wav");
+        write_wav_blockwise(&p, &spec(WavFormat::Pcm16, 1), 4, None, 2, |_, buf| {
+            buf.fill(0.5);
+            Ok(())
+        })
+        .unwrap();
+        write_wav_blockwise(&p, &spec(WavFormat::Pcm16, 1), 2, None, 2, |_, buf| {
+            buf.fill(-0.5);
+            Ok(())
+        })
+        .unwrap();
+        let want =
+            encode_wav_raw(&spec(WavFormat::Pcm16, 1), &encode_samples(WavFormat::Pcm16, &[-0.5, -0.5]), None);
+        assert_eq!(std::fs::read(&p).unwrap(), want, "the second write replaced the first");
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "temporary files left behind: {left:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
