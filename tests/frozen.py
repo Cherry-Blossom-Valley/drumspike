@@ -17,7 +17,8 @@ Modes (DRUMSPIKE_FROZEN): "record" computes and stores the value for this host; 
 default while compute is given) computes it and fails when it differs from a stored value;
 "replay" (the default when compute is None) returns the stored value.
 
-Hosts: the value is stored per CPU architecture (arm64 = arm64-mac, x86_64 = x86-mac). A key with the
+Hosts: the value is stored per platform and CPU architecture (arm64 = arm64-mac, x86_64 = x86-mac,
+linux-arm64 = Linux arm64). A key with the
 same inputs and value on both hosts is kept once ("all"). Replay takes the value of the own host,
 else the shared one; `canonical=True` takes the arm64 value on every host (the Rust decode equals
 the fusing arm64 build on every host, so a decode reference is that of arm64).
@@ -38,7 +39,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DIR = ROOT / "tests" / "golden" / "frozen"
 LARGE = 64 * 1024
 CANONICAL_HOST = "arm64"
-HOST_NAMES = {"arm64": "arm64-mac", "x86_64": "x86-mac"}
+HOST_NAMES = {"arm64": "arm64-mac", "x86_64": "x86-mac", "linux-arm64": "linux-arm64", "linux-x86_64": "linux-x86_64"}
 
 
 class FrozenError(AssertionError):
@@ -47,7 +48,8 @@ class FrozenError(AssertionError):
 
 def host():
     m = platform.machine()
-    return "arm64" if m in ("arm64", "aarch64") else m
+    h = "arm64" if m in ("arm64", "aarch64") else m
+    return h if platform.system() == "Darwin" else f"linux-{h}"
 
 
 def canonical(value):
