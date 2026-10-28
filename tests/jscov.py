@@ -1,4 +1,4 @@
-"""Chromium precise coverage of static/app.js, backend.js, lanes-gl.js, tiles-worker.js and keymap.js (CDP), merged over every test that
+"""Chromium precise coverage of static/app.js, state.js, backend.js, lanes-gl.js, tiles-worker.js and keymap.js (CDP), merged over every test that
 uses the `page` fixture: tests/e2e_app (the page against the app's test bridge, P3-7a; since P3-12 the only browser suite).
 A pytest plugin (tests/conftest.py: pytest_plugins). Result: coverage-js.json (per file the lines, the covered lines,
 the uncovered line numbers and the named functions never called) and a line per file in the terminal summary.
@@ -18,7 +18,7 @@ import pytest
 from helpers import ROOT
 
 JS_FAIL_UNDER = float(os.environ.get("DRUMSPIKE_JS_FAIL_UNDER", "85"))   # % of lines, for each file
-JS_FILES = ("app.js", "backend.js", "lanes-gl.js", "tiles-worker.js", "keymap.js")   # tiles-worker.js: a test page runs it with a stand-in scope; keymap.js: P3-13b
+JS_FILES = ("app.js", "state.js", "backend.js", "lanes-gl.js", "tiles-worker.js", "keymap.js")   # tiles-worker.js: a test page runs it with a stand-in scope; keymap.js: P3-13b; state.js: R17 step 1 (#55)
 
 # "covered" and "src" map a file name to its coverage bytes and its source; "called" maps
 # "file:function" to whether it ran; "take" saves the coverage of the open page (reload helper)
