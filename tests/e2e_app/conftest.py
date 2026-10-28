@@ -137,8 +137,35 @@ def _dep_info_sources(exe, root):
         text = Path(str(exe) + ".d").read_text()
     except OSError:
         return None
+    # Cargo escapes: a backslash-space is a space IN a path; a line ending with a
+    # backslash continues on the next line. A naive split() on whitespace turns one
+    # spaced path into two dead tokens — in a worktree whose path has a space that
+    # kills EVERY listed dep and silently disables the guard (#25).
+    text = text.replace("\\\n", " ")
+    field, _, deps_part = text.partition(":")
+    tokens = []
+    tok = []
+    i = 0
+    while i < len(deps_part):
+        ch = deps_part[i]
+        if ch == "\\" and i + 1 < len(deps_part):
+            if deps_part[i + 1] == " ":
+                tok.append(" ")
+            else:
+                tok.append(deps_part[i + 1])
+            i += 2
+        elif ch.isspace():
+            if tok:
+                tokens.append("".join(tok))
+                tok = []
+            i += 1
+        else:
+            tok.append(ch)
+            i += 1
+    if tok:
+        tokens.append("".join(tok))
     deps = []
-    for tok in text.replace("\\\n", " ").split(":", 1)[-1].split():
+    for tok in tokens:
         path = Path(tok)
         if not path.is_absolute():
             path = root / tok
@@ -155,7 +182,10 @@ def stale_source(exe, root=None):
     root = Path(root) if root is not None else ROOT
     built = exe.stat().st_mtime
     listed = _dep_info_sources(exe, root)
-    if listed is None:
+    if listed is None or not listed:
+        # No dep-info file, or a dep-info that parsed to 0 sources (Cargo escapes we
+        # could not read): fall back to the source scan. An empty parse must never
+        # count as "fresh" — the guard stays loud (#25).
         sources = sorted(root.glob("crates/core/**/*.rs"))
         sources += sorted(root.glob("crates/app/**/*.rs"))
         sources += sorted(root.glob("crates/devtools/**/*.rs"))
