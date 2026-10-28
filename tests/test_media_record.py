@@ -1027,3 +1027,85 @@ def test_the_guard_fails_loudly_without_the_engine(tmp_path, monkeypatch):
     monkeypatch.setattr(check_paths, "_engine", no_engine)
     with pytest.raises(check_paths.PathCheckError, match="rapidocr"):
         check_paths.check_files([tmp_path / "x.png"])
+
+
+# ---------------- #459: the path guard is the last step of the render tools ----------------
+
+import shots  # noqa: E402
+import build  # noqa: E402
+
+
+def _planted_media(tmp_path, name):
+    """A real 1 s media file (any pixels; the engine below is a stub): None without ffmpeg."""
+    out = tmp_path / name
+    done = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=white:s=320x240:d=1",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-frames:v", "30", str(out)],
+        capture_output=True, text=True)
+    if done.returncode != 0:
+        return None
+    return out
+
+
+def _planted_png(tmp_path, name):
+    out = tmp_path / name
+    done = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=white:s=320x240",
+         "-frames:v", "1", str(out)], capture_output=True, text=True)
+    if done.returncode != 0:
+        return None
+    return out
+
+
+def _plant_engine(monkeypatch, tool):
+    """The tool's loaded check_paths instance reads the stub engine: a planted /Users line."""
+    monkeypatch.setattr(tool.path_guard(), "_engine",
+                        lambda: _fake_engine("created in /Users/arm64-mac/x"))
+
+
+def test_record_py_fails_on_a_planted_frame(tmp_path, monkeypatch, capsys):
+    """The recorder's wired-in guard exits non-zero and names the frame (a real MP4, stub OCR)."""
+    mp4 = _planted_media(tmp_path, "rec.mp4")
+    if mp4 is None:
+        pytest.skip("no ffmpeg to plant a frame")
+    _plant_engine(monkeypatch, record)
+    with pytest.raises(SystemExit) as exc:
+        record.run_path_guard([mp4])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "frame 1" in err and "/Users" in err
+
+
+def test_shots_py_fails_on_a_planted_picture(tmp_path, monkeypatch, capsys):
+    """The shot tool's wired-in guard exits non-zero on a planted picture (a real PNG, stub OCR)."""
+    png = _planted_png(tmp_path, "shot.png")
+    if png is None:
+        pytest.skip("no ffmpeg to plant a picture")
+    _plant_engine(monkeypatch, shots)
+    with pytest.raises(SystemExit) as exc:
+        shots.run_path_guard([png])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "/Users" in err and str(png) in err
+
+
+def test_build_py_fails_on_a_planted_frame(tmp_path, monkeypatch, capsys):
+    """The explainer builder's wired-in guard exits non-zero and names the frame (stub OCR)."""
+    mp4 = _planted_media(tmp_path, "explainer.mp4")
+    if mp4 is None:
+        pytest.skip("no ffmpeg to plant a frame")
+    _plant_engine(monkeypatch, build)
+    with pytest.raises(SystemExit) as exc:
+        build.run_path_guard([mp4])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "frame 1" in err and "/Users" in err
+
+
+def test_a_clean_render_passes_the_wired_guard(tmp_path, monkeypatch):
+    """The same wiring passes a clean render (stub OCR reads nothing banned)."""
+    mp4 = _planted_media(tmp_path, "clean.mp4")
+    if mp4 is None:
+        pytest.skip("no ffmpeg to plant a frame")
+    monkeypatch.setattr(record.path_guard(), "_engine", lambda: _fake_engine("Drum Spike"))
+    record.run_path_guard([mp4])   # no SystemExit

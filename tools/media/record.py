@@ -1025,6 +1025,7 @@ def main(argv=None):
             for b in bad:
                 print(f"FAIL: {b}", file=sys.stderr)
             return 1
+        run_path_guard([out])   # #459: the last step — the MP4 must show no private path
         return 0
     except RecordError as e:
         print(f"FAIL: {e}", file=sys.stderr)
@@ -1054,6 +1055,28 @@ def prepare_work(work, keep):
     else:
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
+
+
+# #459: the path guard (check_paths.py) as the last step of the recorder: the written MP4 is
+# OCR'd frame by frame; a private path or host name in any frame FAILs the run (non-zero).
+_CHECK_PATHS = None
+
+
+def path_guard():
+    """The check_paths module, loaded once (the tests patch its _engine on this instance)."""
+    global _CHECK_PATHS
+    if _CHECK_PATHS is None:
+        spec = importlib.util.spec_from_file_location(
+            "ds_check_paths", ROOT / "tools" / "media" / "check_paths.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _CHECK_PATHS = mod
+    return _CHECK_PATHS
+
+
+def run_path_guard(paths):
+    """The wired-in guard on the finished render(s): exits non-zero on a finding."""
+    path_guard().guard([str(p) for p in paths])
 
 
 if __name__ == "__main__":
