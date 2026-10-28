@@ -81,13 +81,33 @@ def check_file(path, engine):
     return findings
 
 
-def check_files(paths):
+def check_files(paths, engine=None):
     """The findings of every file, in order; raises PathCheckError when the OCR cannot run."""
-    engine = _engine()
+    engine = engine or _engine()
     out = []
     for p in paths:
         out.extend(check_file(p, engine))
     return out
+
+
+def guard(paths, engine=None):
+    """The wired-in guard (#459): the finished render(s) must show no private path or host name.
+    On a finding, print the FAIL lines (the file, the frame, the word, the text) and exit
+    non-zero; a clean render prints one clean line per file. Called as the last step of
+    record.py, shots.py and build.py."""
+    try:
+        findings = check_files([Path(p) for p in paths], engine=engine)
+    except PathCheckError as e:
+        print(f"FAIL: {e}", file=sys.stderr)
+        raise SystemExit(2) from None
+    for path, frame, word, text in findings:
+        where = f" {frame}" if frame else ""
+        snippet = " ".join(text.split())[:120]
+        print(f"FAIL: {path}{where}: shows {word!r}: {snippet}", file=sys.stderr)
+    if findings:
+        raise SystemExit(1)
+    for p in paths:
+        print(f"path guard: clean: {p}")
 
 
 def main(argv=None):

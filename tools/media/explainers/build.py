@@ -32,6 +32,7 @@ SCRIPTS = ROOT / "docs" / "product" / "scripts"
 TTS_OUT = Path.home() / ".cache" / "drumspike" / "media" / "tts-out"
 OUT = Path.home() / ".cache" / "drumspike" / "media" / "explainers"
 FRAMES = OUT / "frames"
+CHECK_PATHS = ROOT / "tools" / "media" / "check_paths.py"
 
 # video id -> (script stem, module file, Scene class)
 VIDEOS = {
@@ -132,6 +133,28 @@ def mux(mp4, track, out, length):
         raise SystemExit(f"FAIL: ffmpeg could not mux the audio into {mp4} (exit {done.returncode})")
 
 
+# #459: the path guard (check_paths.py) as the last step of the builder: the written MP4 is
+# OCR'd frame by frame; a private path or host name in any frame FAILs the build (non-zero).
+_CHECK_PATHS = None
+
+
+def path_guard():
+    """The check_paths module, loaded once (the tests patch its _engine on this instance)."""
+    global _CHECK_PATHS
+    if _CHECK_PATHS is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ds_check_paths", CHECK_PATHS)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _CHECK_PATHS = mod
+    return _CHECK_PATHS
+
+
+def run_path_guard(paths):
+    """The wired-in guard on the finished render(s): exits non-zero on a finding."""
+    path_guard().guard([str(p) for p in paths])
+
+
 def probe(mp4):
     """(stream codec types, {codec type: seconds}) of an MP4, from ffprobe."""
     done = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,duration",
@@ -142,6 +165,51 @@ def probe(mp4):
     kinds = [s["codec_type"] for s in streams]
     durations = {s["codec_type"]: float(s["duration"]) for s in streams if "duration" in s}
     return kinds, durations
+
+
+def overlap_probes():
+    """The #459 guard against a planted scene: two overlapping texts must FAIL (named with both
+    texts), the same two apart must pass, and a Text nested in a VGroup is seen. Returns 0 or 1."""
+    from types import SimpleNamespace
+    import explainer_common as ec
+
+    a = ec.Text("the detector keeps one hit", font=ec.FONT, font_size=ec.CAPTION_SIZE)
+    b = ec.Text("it becomes its own hit, on its own first sample", font=ec.FONT,
+                font_size=ec.CAPTION_SIZE).move_to(a.get_center())
+    try:
+        ec.assert_no_text_overlap(SimpleNamespace(mobjects=[a, b]), sid="probe")
+    except ec.OverlapError as e:
+        print(f"overlap probe: the guard failed as expected: {e}")
+    else:
+        print("FAIL: the overlap probe did not catch two overlapping texts", file=sys.stderr)
+        return 1
+    far = ec.Text("second caption far away", font=ec.FONT, font_size=ec.CAPTION_SIZE).to_edge(ec.UP, buff=0.3)
+    nested = ec.VGroup(ec.Text("nested label", font=ec.FONT, font_size=ec.CAPTION_SIZE)).to_edge(ec.LEFT, buff=0.3)
+    try:
+        ec.assert_no_text_overlap(SimpleNamespace(mobjects=[a, far, nested]), sid="probe-apart")
+    except ec.OverlapError as e:
+        print(f"FAIL: the guard fired on separated texts: {e}", file=sys.stderr)
+        return 1
+    print("overlap probe: apart texts and a nested label pass")
+    return 0
+
+
+def check_overlap(quality, tts_out):
+    """--check-overlap: the planted-scene probes, then every explainer through a guarded render
+    (the guard runs on every frame; an overlap FAILs the manim run). Returns 0 or 1."""
+    import explainer_common  # noqa: F401  (needs manim; fail loudly without it)
+    status = overlap_probes()
+    for vid in sorted(VIDEOS):
+        stem, module, scene = VIDEOS[vid]
+        scenes_json = tts_out / stem / "scenes.json"
+        if not scenes_json.exists():
+            print(f"FAIL: no narration for {stem}: run tts.py on it first", file=sys.stderr)
+            return 1
+        with tempfile.TemporaryDirectory(prefix="overlap-") as tmp:
+            work = Path(tmp)
+            render(module, scene, scenes_json, work / "plan.json", work, quality)
+        print(f"overlap guard: clean: explainer-{vid}")
+    return status
 
 
 def build(video_id, work, tts_out, quality):
@@ -189,6 +257,7 @@ def build(video_id, work, tts_out, quality):
     OUT.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(muxed, OUT / f"explainer-{video_id}.mp4")
     print(f"wrote {OUT / f'explainer-{video_id}.mp4'}")
+    run_path_guard([OUT / f"explainer-{video_id}.mp4"])   # #459: the last step
     return 0
 
 
@@ -198,7 +267,12 @@ def main(argv=None):
     ap.add_argument("--tts-out", type=Path, default=TTS_OUT, help="dir of the narration per script (default %(default)s)")
     ap.add_argument("--quality", default="h", choices=["l", "m", "h"],
                     help="manim quality flag: h = 1080p (the release), l = 480p scratch check (default %(default)s)")
+    ap.add_argument("--check-overlap", action="store_true",
+                    help="the #459 overlap guard: planted-scene probes, then every explainer "
+                         "through a guarded render (no mux, no output video)")
     args = ap.parse_args(argv)
+    if args.check_overlap:
+        return check_overlap(args.quality, args.tts_out)
     status = 0
     for video_id in args.videos:
         with tempfile.TemporaryDirectory(prefix="explainer-") as tmp:

@@ -169,10 +169,26 @@ fn the_audio_spike_export_refuses_a_source_collision_too() {
     assert_eq!(file_sha256(&src).unwrap(), before, "the source is unchanged");
 }
 
+/// The case-sensitivity of the temp file system: true when `<probe>` and `<probe>` in another
+/// case name different files. The collision guards assume a case-insensitive FS (APFS).
+fn fs_is_case_sensitive(dir: &Path) -> std::io::Result<bool> {
+    let a = dir.join(".crewboard_case_probe");
+    std::fs::write(&a, b"")?;
+    let insensitive = dir.join(".CREWBOARD_CASE_PROBE").exists();
+    std::fs::remove_file(&a)?;
+    Ok(!insensitive)
+}
+
 #[test]
 fn the_layer_render_refuses_a_protected_file_spelled_in_another_case() {
     let sr = 48_000u32;
     let root = tmp("exp_safety7");
+    if fs_is_case_sensitive(&root).unwrap_or(true) {
+        // the guard's collision check is case-insensitive (APFS); on a case-sensitive FS
+        // (most Linux FS) `ONE SHOT.wav` is simply a new file and no 409 can happen.
+        println!("skipped: case-sensitive file system, the other-case collision cannot happen");
+        return;
+    }
     let dir = project(
         &root,
         "Song",

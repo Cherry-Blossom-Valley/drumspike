@@ -1035,8 +1035,9 @@ fn identity_render(specs: &[TrackSpec]) -> Vec<f32> {
 
 /// P3-20b: normal speed is the output of the transport before half speed existed, sample
 /// for sample. The hash was taken from the same render at `d302d59` (before P3-20b) on
-/// arm64-mac (aarch64). The resampler's FFT and the click's `cos` and `powf` may round
-/// differently on another CPU, so other targets print their hash only.
+/// arm64-mac (aarch64), and on linux-arm64 for Cherry-Blossom-Valley/drumspike#7. The
+/// resampler's FFT and the click's `cos` and `powf` may round differently on another host,
+/// so each host checks its own digest (other targets print their hash only).
 #[test]
 fn transport_normal_speed_render_equals_the_stored_output() {
     let d = tmp("identity");
@@ -1045,8 +1046,13 @@ fn transport_normal_speed_render_equals_the_stored_output() {
     assert_eq!(out.len(), 2 * 40_000);
     let h = fnv1a(&out);
     eprintln!("normal-speed render: fnv1a {h:#018x}");
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     assert_eq!(h, STORED_NORMAL_RENDER_AARCH64, "normal speed changed");
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    assert_eq!(
+        h, STORED_NORMAL_RENDER_LINUX_ARM64,
+        "normal speed changed on linux-arm64"
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }
 
@@ -1306,8 +1312,14 @@ fn speed_names_slowdowns_and_render_rates() {
 }
 
 /// The hash of [`identity_render`] at `d302d59` on aarch64 (see the test above).
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
 const STORED_NORMAL_RENDER_AARCH64: u64 = 0x4aaa_12ad_dea6_a76d;
+
+/// The hash of [`identity_render`] on Linux arm64 (Cherry-Blossom-Valley/drumspike#7): stable over
+/// 3 runs on linux-arm64, and different from the arm64-mac value (the resampler's FFT and the
+/// click's `cos` and `powf` round differently there), so the digest is per host.
+#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+const STORED_NORMAL_RENDER_LINUX_ARM64: u64 = 0xb9c1_dfd1_c55b_de64;
 
 /// P3-20b proof on the generated 30-track session (`DRUMSPIKE_TRACKS_BENCH=<make_session.py folder>`:
 /// 96 kHz files, so the 48 kHz render resamples every track; the hits of `session.json` click): the
