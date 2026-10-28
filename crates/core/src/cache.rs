@@ -19,6 +19,11 @@
 //!
 //! `key.json` next to the file holds the [`CacheKey`] the server writes (`size`, `mtime`,
 //! `head_sha1`). The key is written last, so a half-built folder never looks current.
+//!
+//! The reader refuses any header its writer could not have written (R20): a level count
+//! over 64, a block of 0, a bin count that is not `max(1, n_samples / block)`, and any
+//! length the file does not hold. A malformed file is a clear error — never a panic and
+//! never an allocation the file cannot hold.
 
 use std::fs::{self, File};
 use std::io;
@@ -175,19 +180,32 @@ impl PeakCache {
         if count > 64 {
             return Err(CacheError::Format(format!("{count} levels")));
         }
-        let mut table = vec![0u8; count * 8];
-        if len < (FIXED_HEADER + table.len()) as u64 {
+        // Checked before the allocation, so the table is never longer than the file.
+        if len < FIXED_HEADER as u64 + count as u64 * 8 {
             return Err(CacheError::Format("level table cut off".into()));
         }
+        let mut table = vec![0u8; count * 8];
         read_at(&file, &mut table, FIXED_HEADER as u64)?;
         let mut levels = Vec::with_capacity(count);
         let mut offsets = Vec::with_capacity(count);
         let mut pos = (FIXED_HEADER + table.len()) as u64;
         for i in 0..count {
-            let info = LevelInfo {
-                block: u32_at(&table, i * 8) as usize,
-                bins: u32_at(&table, i * 8 + 4) as usize,
-            };
+            let block = u32_at(&table, i * 8) as usize;
+            let bins = u32_at(&table, i * 8 + 4) as usize;
+            if block == 0 {
+                return Err(CacheError::Format(format!("level {i}: block 0")));
+            }
+            // The writer stores max(1, n_samples / block) bins per level: full blocks
+            // only, the trailing partial block dropped, one zero bin for a level
+            // shorter than the block (compute_peaks, the aggregated levels included).
+            // Anything else is a length the file cannot hold: a header that says
+            // "4 billion frames" is rejected here, before any allocation.
+            if bins as u64 != (n_samples / block as u64).max(1) {
+                return Err(CacheError::Format(format!(
+                    "level {i}: {bins} bins cannot hold {n_samples} samples of block {block}"
+                )));
+            }
+            let info = LevelInfo { block, bins };
             offsets.push(pos);
             pos += info.bins as u64 * 12;
             levels.push(info);
