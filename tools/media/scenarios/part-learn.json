@@ -19,6 +19,8 @@
          "wait_sel": true, "timeout": 10, "err": "the range over the ghost and its near copies selected"},
         {"do": "hold", "s": 1.5},
         {"do": "key", "press": "Shift+K"},
+        {"do": "click", "sel": "#confirmModal button[data-act='keep']", "timeout": 30,
+         "err": "the Learn guard answered: Keep (the first Forget This takes out the ghost and its near copies)"},
         {"do": "wait", "cond": "() => DSLearn.state().pending === 0", "timeout": 30,
          "err": "the Forget This stored"},
         {"do": "wait",
