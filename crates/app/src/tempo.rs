@@ -117,9 +117,11 @@ impl Service {
     }
 }
 
-/// True for an event the loudness cut (P4-3 `"cut": true`) or the tom bleed rule (P4-14 `"bleed": true`) took out.
+/// True for an event out of the tempo detection: the one `out` predicate of
+/// [`crate::policy`] (R16 #40): the cut, the bleed rule and the old Learn filter all take a
+/// hit out of the tempo, as they take it out of every other output path.
 fn is_cut(e: &drumspike_core::Event) -> bool {
-    crate::histogram::event_cut(e)
+    crate::policy::tempo_out(e)
 }
 
 /// The answer of `tempo_map_detect`.

@@ -72,6 +72,46 @@ fn typed_fields_and_unknown_keys_survive_a_round_trip() {
 }
 
 #[test]
+fn a_document_with_every_policy_flag_loads_and_re_saves_byte_identical() {
+    // R16 (#40): every flag of the event policy — the typed ones and the extra ones this tree
+    // never wrote (`stage8`) — loads and re-saves byte-identically; an old document stays
+    // losslessly readable.
+    let text = r#"{"format": 1, "name": "Old Flags", "order": ["K"],
+        "tracks": {"K": {"role": "kick", "note": 36, "events": [
+            {"t": 0.5, "v": 100},
+            {"t": 1.0, "v": 100, "cut": true},
+            {"t": 1.5, "v": 100, "bleed": true},
+            {"t": 2.0, "v": 100, "filtered": true},
+            {"t": 2.5, "v": 100, "learned": true},
+            {"t": 3.0, "v": 100, "flam": true, "cut": true},
+            {"t": 3.5, "v": 100, "roll": true},
+            {"t": 4.0, "v": 100, "rescue": true},
+            {"t": 4.5, "v": 100, "stage8": true, "detector": {"model": "m", "conf": 0.4}},
+            {"t": 5.0, "v": 64, "edited": true},
+            {"t": 5.5, "v": 80, "added": true},
+            {"t": 6.0, "v": 90, "orig": 5.9, "was": {"t": 6.0}}]}}}"#;
+    let doc = Document::from_json(text).unwrap();
+    let k = doc.track("K").unwrap();
+    let ev = k.events();
+    assert_eq!(ev.len(), 12);
+    assert_eq!(ev[1].extra["cut"], Value::Bool(true));
+    assert_eq!(ev[3].extra["filtered"], Value::Bool(true));
+    assert_eq!(ev[5].extra["flam"], Value::Bool(true));
+    assert_eq!(ev[8].extra["stage8"], Value::Bool(true));
+    assert_eq!(ev[8].extra["detector"]["conf"], 0.4);
+    assert_eq!(ev[9].edited, Some(true));
+    assert_eq!(ev[11].extra["was"], serde_json::json!({"t": 6.0}));
+    let once = doc.to_json_pretty();
+    let back = Document::from_json(&once).unwrap();
+    assert_eq!(back, doc);
+    // the re-save is byte-identical: a load-save cycle changes no byte
+    assert_eq!(back.to_json_pretty(), once);
+    for flag in ["cut", "bleed", "filtered", "learned", "flam", "roll", "rescue", "stage8"] {
+        assert!(once.contains(&format!("\"{flag}\"")), "{flag} survives the round trip");
+    }
+}
+
+#[test]
 fn volume_and_pan_are_optional_typed_fields_that_round_trip() {
     // P3-16: absent in an older document (format 1 stays loadable), typed when written
     let old = r#"{"format": 1, "tracks": {"K": {"role": "kick", "events": []}}}"#;
