@@ -3,8 +3,9 @@
 #
 #   bash tools/ci/loaded_repeat.sh N -- <pytest args>
 #
-# A background loop rebuilds drumspike-core in release mode (own target dir, a
-# touched source file before each build, so each build does real work). Before
+# A background loop rebuilds drumspike-core in release mode (own target dir, the
+# package cleaned before each build, so each build does real work). It never
+# touches a source file: the e2e stale-ds-bridge check reads source mtimes. Before
 # each run the script checks that the loop is alive. Run it under one
 # `crewboard lock run` so the heavy work holds the host lock for the whole job.
 # Set LOADED_REPEAT_LOG_DIR to keep the run logs (default: a temp dir).
@@ -32,7 +33,7 @@ LOAD_TARGET=$(mktemp -d) || exit 1
 
 load() {
   while :; do
-    touch crates/core/src/lib.rs
+    CARGO_TARGET_DIR="$LOAD_TARGET" cargo clean -p drumspike-core --release >>"$LOAD_LOG" 2>&1
     CARGO_TARGET_DIR="$LOAD_TARGET" cargo build -p drumspike-core --release >>"$LOAD_LOG" 2>&1
   done
 }
