@@ -120,6 +120,10 @@ drumspike-app policy` counted output.
   (`server.project_error` mapping, docs in `error.rs:61`) must keep the same codes — covered
   by the extended `project_errors_map_like_server_project_error`.
 - Unifying the `keep_edited` default across surfaces would change page behaviour
-  (the page sends the flag itself since P4-9, call.rs:234-235), so the plan keeps the
-  agent-surface default as the only one and pins the difference in the contract test until
-  the coordinator says otherwise.
+  (the page sends the flag itself since P4-9, call.rs:234-235). Decided with the
+  coordinator (#43/c-6481538632): the two defaults stay different, deliberately. The agent
+  surface keeps `true` (an agent does not know about hand edits, so the safe default keeps
+  them); the page always sends the flag itself (backend.js analyze: `!!keepEdited`, the
+  user's choice; repick: `true`), so the wrapper's `unwrap_or(false)` (lib.rs:273) is never
+  reached. The contract test pins both sides: the agent default is `true`, and the page
+  calls send `keep_edited` explicitly, so the wrapper default stays unreachable.
