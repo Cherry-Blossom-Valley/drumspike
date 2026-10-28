@@ -39,6 +39,4 @@ the kick in, sample-exact, with velocities from its own signal.
 
 The layer and the sampler calibration also work from the agent API (chapter 14).
 
-![A kick track and its sub mic in the Inspector; the sub mic row shows follows Kick In and the Layer section holds a one-shot with its onset line.](img/12-followers-and-layers.png)
-
 Next: [tempo, bars and beats](13-tempo.md).

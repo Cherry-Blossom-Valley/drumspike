@@ -9,12 +9,5 @@
   "img/04-first-sample.png": {"chapter": 4, "show": "A hit at the 5 ms zoom; the hit line sits on the first motion of the attack in the waveform."},
   "img/05-export.png": {"chapter": 5, "show": "The Export dialog with the per-track MIDI and spike WAV files and the destination folder."},
   "img/05-audio-spike.png": {"chapter": 5, "show": "A kick hit of the demo session: the raw waveform in cobalt, the low tone below 800 Hz in orange, and the snippet range shaded up to the zero crossing."},
-  "img/06-find-your-way.png": {"chapter": 6, "show": "A kick and a snare track at the 50 ms zoom; the playhead sits on a hit and the lanes show the neighboring tracks at their heights."},
-  "img/07-edit-hits.png": {"chapter": 7, "show": "A snare hit selected at the 5 ms zoom; the nudge value shows 1 Sample and the hit line sits one sample to the left of the first motion."},
-  "img/08-velocity.png": {"chapter": 8, "show": "The velocity lane under two wave lanes; the stalks follow the level of each hit and one stalk is dragged up."},
-  "img/10-bleed.png": {"chapter": 10, "show": "A tom mic lane with a grey bleed hit, and the Other Mics Under Hit panel under the lanes: the snare mic plays louder at the hit time."},
-  "img/11-learn.png": {"chapter": 11, "show": "The Inspector's Learn section of the snare with the Similarity histogram, the Match and Add lines and the counts line under it; the marked ghost and its near copies grey in the lane and the missed hit added."},
-  "img/09-doubtful-hits.png": {"chapter": 9, "show": "The review queue at a doubtful hit: the playhead on the hit, the Doubt field in the info line reads 0.25: 18 dB under the track median."},
-  "img/12-followers-and-layers.png": {"chapter": 12, "show": "A kick track and its sub mic in the Inspector; the sub mic row shows follows Kick In and the Layer section holds a one-shot with its onset line."},
-  "img/13-tempo.png": {"chapter": 13, "show": "A session with a tempo map; the Bars|Beats ruler and the Tempo ruler sit over the lanes and the bar and beat grid runs under the hit lines."}
+  "img/11-learn.png": {"chapter": 11, "show": "The Inspector's Learn section of the snare with the Similarity histogram, the Match and Add lines and the counts line under it; the marked ghost and its near copies grey in the lane and the missed hit added."}
 }

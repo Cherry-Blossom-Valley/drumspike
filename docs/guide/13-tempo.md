@@ -35,6 +35,4 @@ the lanes, and a metronome. The MIDI exports carry the map, so your DAW sees the
 
 The map is part of the project, so it saves with it and the exports use it (chapter 5).
 
-![A session with a tempo map; the Bars|Beats ruler and the Tempo ruler sit over the lanes and the bar and beat grid runs under the hit lines.](img/13-tempo.png)
-
 Next: [automate it](14-automate.md).

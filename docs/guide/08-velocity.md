@@ -20,6 +20,4 @@ session. You shape them in the velocity lane.
 
 For why a velocity is what it is, see the 3b1b explainer "From waveform to velocity" (coming).
 
-![The velocity lane under two wave lanes; the stalks follow the level of each hit and one stalk is dragged up.](img/08-velocity.png)
-
 Next: [doubtful hits first](09-doubtful-hits.md).

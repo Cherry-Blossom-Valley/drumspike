@@ -4,8 +4,8 @@
     uv run --no-project python tools/media/build_site.py [--out dist/site] [--videos DIR] [--no-videos]
 
 The page (site/index.html) uses relative links only, so the folder works at any path; the
-public copy lives at https://cherry-blossom-valley.com/tools/drum-spike/ (served by the
-Cherry Blossom Valley website). The videos never go into git: --videos names the folder with
+public copy lives at https://drumspike.cherry-blossom-valley.com/ (the Cherry Blossom Valley
+website serves the folder under /tools/drum-spike/, and that subdomain shows it). The videos never go into git: --videos names the folder with
 the rendered explainers (default ~/.cache/drumspike/media/explainers, the output of
 tools/media/explainers/). Every local link and asset of the page must exist in the output;
 a missing file is a FAIL (exit 1), unless --no-videos leaves the videos out on purpose.

@@ -40,6 +40,4 @@ The rules run on the analysed tracks, in this order:
 For how Drum Spike tells a hit from bleed, see the 3b1b explainer "Is it a hit or is it bleed?"
 (coming).
 
-![A tom mic lane with a grey bleed hit, and the Other Mics Under Hit panel under the lanes: the snare mic plays louder at the hit time.](img/10-bleed.png)
-
 Next: [Learn: teach by example](11-learn.md).

@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="https://cherry-blossom-valley.com/tools/drum-spike/">Website</a> ·
+  <a href="https://drumspike.cherry-blossom-valley.com/">Website</a> ·
   <a href="https://github.com/Cherry-Blossom-Valley/drumspike/releases/latest">Download</a> ·
   <a href="docs/guide/README.md">User guide</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -118,7 +118,7 @@ and spike lanes with WebGL2 inside a Tauri 2 window; the app has no server and n
 | `static/` | the editor UI |
 | `tests/` | pytest: the UI against the test bridge, parity tests against frozen references |
 | `tools/` | export checker, parity checks, release and media tools, research references ([tools/README.md](tools/README.md)) |
-| `site/` | the [website](https://cherry-blossom-valley.com/tools/drum-spike/) |
+| `site/` | the [website](https://drumspike.cherry-blossom-valley.com/) |
 | `docs/` | [user guide](docs/guide/README.md), [developer guide](docs/DEVELOPING.md), [releasing](docs/RELEASING.md), [release notes](docs/release-notes/), [design records](docs/adr/), [all docs](docs/README.md) |
 
 ## Contributing

@@ -1,5 +1,5 @@
 """The landing page in site/ (one static file, no tracking), served at
-https://cherry-blossom-valley.com/tools/drum-spike/ and built by tools/media/build_site.py.
+https://drumspike.cherry-blossom-valley.com/ and built by tools/media/build_site.py.
 
 The static checks read index.html: every local link and asset exists, every anchor has its id,
 GitHub links point at the planned repository, no script or host outside the list is loaded, and
@@ -26,6 +26,7 @@ ALLOWED_HOSTS = {
     "github.com",
     "cherry-blossom-valley.com",
     "icon-studio.cherry-blossom-valley.com",
+    "drumspike.cherry-blossom-valley.com",
 }
 MAX_PAGE_WITHOUT_VIDEOS = 450 * 1024   # the page, the logo, the icon and the editor screenshot
 # The built videos the page embeds (site/videos/, gitignored; tools/media/build_site.py copies them).
