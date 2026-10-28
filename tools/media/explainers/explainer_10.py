@@ -380,7 +380,11 @@ class Explainer10(Explainer):
                        split_dots,
                        Text("flam", font=FONT, font_size=20, color=ORANGE).next_to(
                            split_dots[-1], UP, buff=0.75))
-        self.t_play(FadeOut(one), FadeIn(split), t=2.5)  # review #1: one title at a time
+        # #459: one title at a time (review #1): the old title fades out BEFORE the new one
+        # fades in (split evenly) — mid-fade both sit at to_edge(UP) and the guard FAILs it.
+        half = 2.5 / 2
+        self.t_play(FadeOut(one), t=half)
+        self.t_play(FadeIn(split), t=half)
         self.say("If the other mics do not explain it as bleed, the second stroke becomes a hit of "
                  "its own, and a late-peaking mic like a snare bottom is skipped.", t=2.0)
         status = Text("Flams: 1 hit added", font=FONT, font_size=24, color=TEXT).to_edge(DOWN, buff=1.1)
@@ -416,10 +420,13 @@ class Explainer10(Explainer):
         info = Text("info line: velocity 96", font=FONT, font_size=22, color=TEXT).to_edge(DOWN, buff=1.1)
         back = hit.copy().set_color(ORANGE)
         self.t_play(FadeIn(info), t=1.5)
-        self.t_play(FadeOut(hit), FadeIn(back), t=1.5)
+        # #459: one line at a time at the bottom edge — split the fade so both are never visible.
+        self.t_play(FadeOut(hit), t=0.75)
+        self.t_play(FadeIn(back), t=0.75)
         self.say("One edit brings a hit back, and an edited hit is never marked again.", t=2.0)
         nxt = Text("D: Hits > Next Doubtful Hit", font=FONT, font_size=22, color=TEXT).to_edge(DOWN, buff=1.1)
-        self.t_play(FadeOut(info), FadeIn(nxt), t=1.5)
+        self.t_play(FadeOut(info), t=0.75)
+        self.t_play(FadeIn(nxt), t=0.75)
         self.say("The review queue takes you to the doubtful hits first.", t=2.0)
 
     def s09_result(self):
