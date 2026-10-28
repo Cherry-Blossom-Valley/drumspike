@@ -1,0 +1,12 @@
+Changes since 0.9.4:
+
+### Lanes
+- Drag the bottom edge of a track header to change that track's height, as on the lane edge; a double-click resets it.
+- New keys: Option+Cmd+1/2/3 for Track Height Small/Medium/Large, Shift+B for the Bars|Beats ruler, Shift+R for the Markers ruler.
+
+### Stability
+- Long sessions use less memory: the cache of decoded tracks is bounded by bytes (512 MiB), and a file that several views ask for at the same time is decoded once.
+- A damaged waveform cache file on disk now gives a clear error instead of a crash or a huge memory allocation.
+
+### Guide
+- The guide shows the seven pictures of chapters 6 to 13.
