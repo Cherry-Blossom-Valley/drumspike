@@ -9,6 +9,9 @@ explainer 01 render (#246, tools/media/explainers/build.py), not of the app. The
 use the example plugin (tests/fixtures/plugins/json_hits.py), installed into the shot home's
 Detectors folder.
 
+Chapters 6 to 13 (#497) are a second session on the same bridge (guide_pictures): the zoom and the
+nudge, the velocity lane, the review queue, the bleed panel, a follower with a layer, the tempo rulers.
+
 Needs the demo session (tools/media/demo_session.py --out ~/.cache/drumspike/media/demo) and the
 debug bridge (cargo build -p drumspike-devtools --bin ds-bridge). Before every screenshot a guard
 reads the status bar, the dialogs and every input value from the DOM and FAILs on "model", "/Users/", "x86-mac", "/var/folders", "/tmp/" or "/private/" (reviews 6396240075 and 6403628912); it prints the count of checked shots and FAILs on 0.
@@ -18,12 +21,15 @@ range that is missing.
 import argparse
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
+import wave
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -147,10 +153,29 @@ def open_project(page, folder):
                            timeout=180000)
 
 
+def open_project_dropping_edits(page, folder):
+    """open_project for a page that was reloaded: the restored project is dirty (the first session's
+    edits), so the app asks 'Save before you open another project?'. Those edits are throwaway:
+    Continue without saving. The wait is for the new session id, not for the old project's state."""
+    old = page.evaluate("() => S.sid")
+    page.evaluate("f => { window.__DS_PICK__ = f; }", str(folder))
+    menu(page, "open", wait=False)
+    page.wait_for_function("() => !S.dirty || !document.querySelector('#confirmModal').classList.contains('hidden')",
+                           timeout=60000)
+    if page.evaluate("() => !document.querySelector('#confirmModal').classList.contains('hidden')"):
+        page.click("#confirmModal button[data-act='skip']")
+    page.wait_for_function("old => S.sid !== old && S.loaded > 0 && S.order.length === 13 && "
+                           "S.order.every(n => n in S.peaks)", arg=old, timeout=180000)
+
+
 def inspect_track(page, name, sections):
     """The Inspector shows the track, selected as a user does; only the given sections are open."""
     page.evaluate("() => { if (!S.inspector) setInspector(true); }")
     if page.evaluate("n => S.selTrack !== n", name):
+        if page.evaluate("() => !document.querySelector('#confirmModal').classList.contains('hidden')"):
+            title, msg = page.evaluate("() => [document.querySelector('#confirmTitle').textContent, "
+                                       "document.querySelector('#confirmMsg').textContent]")
+            raise RuntimeError(f"a dialog is open before the click on {name}: {title!r}: {msg!r}")
         page.locator(f'.track[data-name="{name}"] .thead .tnote').click()
     page.wait_for_function("n => S.selTrack === n && document.querySelector('#insName').value === n", arg=name)
     page.evaluate("s => { for (const k of INS_SEC_ORDER) INSSEC.open[k] = s.includes(k); insSecApply(); }", list(sections))
@@ -169,6 +194,33 @@ def check_dom(page, name):
     bad = [w for w in FORBIDDEN if w.lower() in joined]
     if bad:
         raise RuntimeError(f"{name}: the page shows forbidden text {bad}")
+
+
+def shooter(page, out, wanted, written, checked):
+    """shoot(name, element=None) of one session: the picture of a wanted name, after the guard."""
+    def shoot(name, element=None):
+        if name in wanted:
+            check_dom(page, name)
+            checked[0] += 1
+            if element is not None:
+                element.screenshot(path=str(out / name), type="png")
+            else:
+                page.screenshot(path=str(out / name), type="png")
+            written.append(name)
+    return shoot
+
+
+def make_one_shot(path):
+    """A 0.4 s decaying 90 Hz sine as a mono WAV: the one-shot of the chapter 12 layer."""
+    rate = 48000
+    frames = b"".join(struct.pack("<h", int(20000 * math.exp(-12 * i / rate) * math.sin(2 * math.pi * 90 * i / rate)))
+                      for i in range(int(0.4 * rate)))
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(frames)
+    return path
 
 
 def plant_guard_demo(page):
@@ -195,16 +247,7 @@ def app_pictures(page, work, out, wanted):
     Returns the names written."""
     written = []
     checked = [0]
-
-    def shoot(name, element=None):
-        if name in wanted:
-            check_dom(page, name)
-            checked[0] += 1
-            if element is not None:
-                element.screenshot(path=str(out / name), type="png")
-            else:
-                page.screenshot(path=str(out / name), type="png")
-            written.append(name)
+    shoot = shooter(page, out, wanted, written, checked)
 
     open_project(page, demo_project(work))
 
@@ -317,6 +360,96 @@ def app_pictures(page, work, out, wanted):
     return written, checked[0]
 
 
+def guide_pictures(page, work, out, wanted):
+    """#497: the pictures of chapters 6 to 13 that app_pictures does not take (the zoom and the nudge,
+    the velocity lane, the review queue, the bleed panel, a follower and a layer, the tempo rulers).
+    One session on the demo project; the keys are the app's own, the ones the guide names."""
+    written = []
+    checked = [0]
+    shoot = shooter(page, out, wanted, written, checked)
+    open_project_dropping_edits(page, demo_project(work / "guide"))
+    sid = page.evaluate("() => S.sid")
+    # the reopened project has no hits yet: Analyze All as app_pictures does, then the snare's hits
+    menu(page, "analyze_all", wait=False)
+    page.wait_for_function("() => document.querySelector('#progressText')?.textContent === 'analysis done'",
+                           timeout=900000)
+    inspect_track(page, SNARE, sections=("track", "hits"))
+    page.wait_for_function("n => (S.events[n] || []).length > 0", arg=SNARE, timeout=60000)
+
+    # 06: a kick and a snare track at the 50 ms zoom; the playhead sits on a snare hit
+    t = page.evaluate("n => S.events[n][3].t", SNARE)
+    page.evaluate("([n, t]) => { S.snap = false; S.selTrack = n; S.sel = { track: n, index: 3 }; "
+                  "setView(t - 0.025, t + 0.025); S.playhead = t; }", [SNARE, t])
+    page.wait_for_timeout(1500)
+    shoot("img/06-find-your-way.png")
+
+    # 07: the snare hit at the 5 ms zoom, nudged one sample earlier (Edit > Nudge Value: 1 Sample)
+    page.evaluate("([n, t]) => { S.snap = false; S.selTrack = n; S.sel = { track: n, index: 3 }; "
+                  "setView(t - 0.001, t + 0.004); }", [SNARE, t])
+    page.evaluate("() => { const s = document.querySelector('#nudgeSel'); "
+                  "s.value = '1smp'; s.dispatchEvent(new Event('change')); }")
+    before = page.evaluate("n => S.events[n][3].t", SNARE)
+    page.keyboard.press("ArrowLeft")
+    page.wait_for_function("([n, b]) => S.events[n][3].t < b", arg=[SNARE, before], timeout=15000)
+    page.wait_for_timeout(1500)
+    shoot("img/07-edit-hits.png")
+
+    # 08: the velocity lane under the wave lanes; one stalk of the snare dragged up
+    page.evaluate("() => { if (!VL.on) vlToggle(); }")
+    start = page.evaluate("n => S.events[n][0].t - 0.2", SNARE)
+    page.evaluate("t => setView(t, t + 6)", start)
+    page.wait_for_timeout(1500)
+    vel = page.locator(f'.track[data-name="{SNARE}"] canvas.vel').bounding_box()
+    x = page.evaluate("([n, t]) => GEO.laneX + tToX(t, GEO.laneW)", [SNARE, page.evaluate("n => S.events[n][4].t", SNARE)])
+    page.mouse.move(x, vel["y"] + vel["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(x, vel["y"] + vel["height"] * 0.1, steps=4)
+    page.mouse.up()
+    page.wait_for_timeout(1500)
+    shoot("img/08-velocity.png")
+
+    # 09: the review queue at its first doubtful hit: the playhead on the hit, the Doubt field of the info line
+    page.keyboard.press("d")
+    page.wait_for_function("() => /^doubtful hit 1 of/.test(document.querySelector('#stMsg').textContent)",
+                           timeout=30000)
+    page.wait_for_function("() => !document.querySelector('#ilDoubtF').classList.contains('hidden')", timeout=10000)
+    page.evaluate("() => { const e = S.events[S.sel.track][S.sel.index]; S.playhead = e.t; "
+                  "setView(e.t - 0.5, e.t + 0.5); }")
+    page.wait_for_timeout(1500)
+    print("doubt field:", page.locator("#ilDoubt").inner_text())
+    shoot("img/09-doubtful-hits.png")
+
+    # 10: a tom hit that the other mics explain as bleed (grey in the lane), with the Other Mics Under Hit panel
+    bleed = page.evaluate("""() => { for (const n of ['t1', 't2', 't3']) {
+        const i = (S.events[n] || []).findIndex(e => e.bleed); if (i >= 0) return [n, i, S.events[n][i].t]; }
+        return null; }""")
+    if bleed is None:
+        raise RuntimeError("no bleed hit on the tom mics of the demo session")
+    name, i, t = bleed
+    page.evaluate("([n, i, t]) => { S.snap = false; S.selTrack = n; S.sel = { track: n, index: i }; "
+                  "setView(t - 0.6, t + 0.6); }", [name, i, t])
+    page.evaluate("() => { if (!MX.on) mxToggle(); }")
+    page.wait_for_timeout(1500)
+    # the editor alone (lanes, rulers, the Other Mics panel): the full window is over the 400 KB cap
+    shoot("img/10-bleed.png", element=page.locator("#editor"))
+    page.evaluate("() => { if (MX.on) mxToggle(); }")
+
+    # 12: the sub mic follows the kick in; the Layer section holds a one-shot with its onset line
+    invoke(page, "track_set_follow", sid=sid, name="k out", source="k in")
+    invoke(page, "track_layer_set", sid=sid, name="k out", path=str(make_one_shot(work / "kick-layer.wav")))
+    inspect_track(page, "k out", sections=("track", "layer"))
+    page.wait_for_timeout(1500)
+    shoot("img/12-followers-and-layers.png")
+
+    # 13: the tempo and bar rulers over the lanes, the bar and beat grid (8th lines at this zoom) under the hits
+    page.evaluate("() => { TM.ui.tempo = true; TM.ui.beats = true; TM.ui.grid = true; tmApplyUi(true); "
+                  "setView(0, 8); }")
+    page.wait_for_function("() => !FR.raf && FR.flags === 0", timeout=30000)
+    page.wait_for_timeout(1000)
+    shoot("img/13-tempo.png")
+    return written, checked[0]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--chapters", default="1-5", help="chapter range, e.g. 1-5 or 2,4")
@@ -339,6 +472,10 @@ def main():
                 failures.append(f"{name}: explainer still {src} missing (render tools/media/explainers/build.py 01)")
 
     app_names = {n for n in names if n not in EXPLAINER_STILLS}
+    # app_pictures takes chapters 2 to 5 and 11 (one session); guide_pictures the rest of the app pictures
+    chapter = {k: v["chapter"] for k, v in json.loads(SHOTS.read_text()).items()}
+    first = {n for n in app_names if chapter[n] <= 5 or chapter[n] == 11}
+    later = app_names - first
     if app_names:
         if not BRIDGE.is_file():
             sys.exit(f"ds-bridge not built: cargo build -p drumspike-devtools --bin ds-bridge (looked for {BRIDGE})")
@@ -353,7 +490,13 @@ def main():
                 page = ctx.new_page()
                 page.goto(url + "/", timeout=180000)
                 page.wait_for_function(READY, timeout=180000)
-                written, checked = app_pictures(page, work, GUIDE, app_names)
+                checked = 0
+                if first:
+                    checked += app_pictures(page, work, GUIDE, first)[1]
+                if later:
+                    page.reload(timeout=180000)
+                    page.wait_for_function(READY, timeout=180000)
+                    checked += guide_pictures(page, work, GUIDE, later)[1]
                 print(f"checked shots: {checked}")
                 if checked == 0:
                     failures.append("guard: 0 shots were checked against the forbidden text")

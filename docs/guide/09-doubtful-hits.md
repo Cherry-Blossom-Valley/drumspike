@@ -27,4 +27,6 @@ count. A hit under 0.5 is doubtful.
 The review queue only points at hits. It never changes the detection, and a hit you do not
 touch keeps its place in the exports.
 
+![The review queue at a doubtful hit: the playhead on the hit, the Doubt field in the info line reads 0.25: 18 dB under the track median.](img/09-doubtful-hits.png)
+
 Next: [bleed and the hard cases](10-bleed.md).
