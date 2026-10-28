@@ -7,3 +7,7 @@ owner_login = "wfrank2509"
 registry_issue = 1
 authority = "AUTHORITY.md"
 crew_login = "wfrank-crew"
+# Every agent and the coordinator must use the same interval (stale after 3x, dead 2x later).
+heartbeat_interval = "30m"
+# crewboard start refuses an agent that cannot run these from its work folder (rule toolchain-unreachable).
+required_tools = ["git --version", "cargo --version", "uv --version"]
