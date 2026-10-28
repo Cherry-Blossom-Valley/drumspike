@@ -1,0 +1,8 @@
+{
+  "name": "lifecycle",
+  "timeout_s": 600,
+  "project": "$DRUMSPIKE_SELFTEST_PROJECT",
+  "expect": {"tracks": 30},
+  "steps": ["lifecycle"],
+  "lifecycle": {"rounds": 3, "seek_count": 40}
+}

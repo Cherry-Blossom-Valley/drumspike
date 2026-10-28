@@ -1,0 +1,18 @@
+name: Feature request
+description: An idea that would make Drum Spike more useful.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What do you try to do, and what is hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: How should Drum Spike help? Mention how your DAW does it, if it does.
+    validations:
+      required: true

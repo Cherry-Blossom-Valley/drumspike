@@ -1,0 +1,8 @@
+{
+  "name": "render",
+  "timeout_s": 300,
+  "project": "$DRUMSPIKE_SELFTEST_PROJECT",
+  "expect": {"tracks": 30},
+  "steps": ["render"],
+  "render": {"marks": 20, "seconds": 10, "min_fps": 59, "max_js_p95_ms": 4, "max_underruns": 0, "max_layout_reads": 0}
+}

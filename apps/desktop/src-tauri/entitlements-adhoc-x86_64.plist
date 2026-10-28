@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements of the AD HOC x86_64 build only (P3-11). build-dmg.sh uses this file when it signs the
+  Intel app ad hoc (no DS_CODESIGN_IDENTITY); a Developer ID build always uses entitlements.plist (empty)
+  and build-dmg.sh fails when a Developer ID app has this key.
+
+  com.apple.security.cs.disable-library-validation  IN (ad hoc x86_64 only). The Intel app uses the
+      DSP detector (pure Rust, no foreign libraries). Under the hardened runtime, library validation
+      accepts only libraries of Apple or of the same Team ID as the app. An ad hoc signature has no
+      Team ID. This key is kept for historical parity with the prior model-era build that loaded a
+      foreign library. With the Developer ID the app has a Team ID and library validation stays on.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

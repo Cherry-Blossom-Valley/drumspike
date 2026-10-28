@@ -1,0 +1,57 @@
+[package]
+name = "drumspike-core"
+description = "Drum Spike core: WAV/BWF I/O, peak pyramid, onset refinement, velocities, MIDI, project documents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "drumspike_core"
+path = "src/lib.rs"
+
+# Exact pins (C1); Cargo.lock is committed. No C or C++ dependencies.
+[dependencies]
+memmap2 = "=0.9.11"
+rayon = "=1.12.0"
+serde = { version = "=1.0.229", features = ["derive"] }
+# float_roundtrip: without it serde_json parses "0.041999999999999996" to a neighbouring f64,
+# which moved one refinement window by a sample (found by the rust-core spike).
+# raw_value: the literal of an integer `format` beyond 64 bits (review round 3, finding m3).
+serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+# P1-6: the project document keeps the key order Python wrote (tracks map, unknown fields).
+indexmap = { version = "=2.14.2", features = ["serde"] }
+# P1-6: SHA-1 of the first MiB of a source (head_sha1); pure Rust (RustCrypto).
+sha1 = { version = "=0.11.0", default-features = false }
+# P1-6: local time for the backup file names (project.backup_name uses time.localtime).
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
+# P1-4: the Hilbert envelope of engine._hilbert_env (complex FFT, no approximation).
+rustfft = "=6.4.1"
+# P1-5: MIDI export (24,000 PPQ); std only, the parser's rayon feature is not needed.
+midly = { version = "=0.5.3", default-features = false, features = ["std"] }
+# P3-5a: the native transport (crate::transport) behind the feature `audio`. The app turns
+# it on, the PyO3 module does not. cpal and rtrb as in the spike cpal-transport (docs/migration/spikes.md); rubato
+# resamples a track for playback when the device rate differs from the track rate (the app
+# never changes the device rate; controller decision 2026-10-11).
+cpal = { version = "=0.18.2", optional = true }
+rtrb = { version = "=0.4.0", optional = true }
+rubato = { version = "=5.0.0", optional = true }
+
+[features]
+audio = ["dep:cpal", "dep:rtrb", "dep:rubato"]
+
+# #471: the device probe uses crate::transport, so it builds only with the feature `audio`
+# (a plain `cargo test` must not compile it).
+[[example]]
+name = "clock_probe"
+required-features = ["audio"]
+
+# P2-3: sysctlbyname("hw.physicalcpu") for the intra-op thread count (already in Cargo.lock).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "=0.2.190"
+
+# #281 D16: the tests hash files (project_cross_load, ffmpeg_downmix); the model dependency
+# moved to the model branch, the sha2 test use stays a dev-dependency.
+[dev-dependencies]
+sha2 = { version = "=0.11.0", default-features = false }

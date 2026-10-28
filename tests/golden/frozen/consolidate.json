@@ -1,0 +1,21 @@
+{
+ "kind": "consolidate",
+ "about": "tests/e2e_app/test_relink.py: project.consolidate (the server's Consolidate) on a referenced six-track project: the tracks it changed and their source records (path and mtime left out)",
+ "generated": {
+  "arm64": {
+   "sha": "52dda12c35c1417a90e82f2198cec6836868d1c0",
+   "host": "arm64-mac",
+   "date": "2026-10-11",
+   "tree": "changed"
+  },
+  "x86_64": {
+   "sha": "52dda12c35c1417a90e82f2198cec6836868d1c0",
+   "host": "x86-mac",
+   "date": "2026-10-11"
+  }
+ },
+ "note": "arm64-mac run at 52dda12 with tests/jscov.py and crates/core/parity/check_attribution.py changed in the tree (neither is read by tests/e2e_app/test_relink.py)",
+ "entries": {
+ "six referenced kicks": {"all":{"inputs":"ad222e72f11f2c92e5770145ce763c67985e174b5d0333199d3d7080626ef19c","value":{"changed":["T01","T02","T03","T04","T05","T06"],"records":{"T01":{"mode":"copied","relative":"Audio Files/T01.wav","size":384044,"head_sha1":"566e7608fe274b9a7283db05b279b324499d2a6c"},"T02":{"mode":"copied","relative":"Audio Files/T02.wav","size":384044,"head_sha1":"566e7608fe274b9a7283db05b279b324499d2a6c"},"T03":{"mode":"copied","relative":"Audio Files/T03.wav","size":384044,"head_sha1":"566e7608fe274b9a7283db05b279b324499d2a6c"},"T04":{"mode":"copied","relative":"Audio Files/T04.wav","size":384044,"head_sha1":"566e7608fe274b9a7283db05b279b324499d2a6c"},"T05":{"mode":"copied","relative":"Audio Files/T05.wav","size":384044,"head_sha1":"566e7608fe274b9a7283db05b279b324499d2a6c"},"T06":{"mode":"copied","relative":"Audio Files/T06.wav","size":384044,"head_sha1":"566e7608fe274b9a7283db05b279b324499d2a6c"}}}},"hosts":["arm64","x86_64"]}
+ }
+}

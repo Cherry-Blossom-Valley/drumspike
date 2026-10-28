@@ -1,0 +1,8 @@
+{
+  "name": "playhead_steps",
+  "timeout_s": 900,
+  "project": "$DRUMSPIKE_SELFTEST_PROJECT",
+  "expect": {"tracks": 10},
+  "steps": ["playhead_steps"],
+  "playhead_steps": {"seconds": 10, "settle_ms": 800, "max_jump_px": 1.0, "views": [1, 8, 30]}
+}

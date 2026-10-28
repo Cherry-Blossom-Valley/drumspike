@@ -1,0 +1,22 @@
+{
+ "window": 0.05,
+ "config": "dsp",
+ "compared": 12,
+ "tool_fp": "82c0002c90ff57e6",
+ "git_sha": "629c16d5f0c33239c6da0b270c4e05d8a1a19ff9",
+ "date": "2026-10-25",
+ "numbers": {
+  "drummer_1|kick": 0.8489030431705591,
+  "drummer_1|snare": 0.8075446503087964,
+  "drummer_1|hat": 0.9377795851972346,
+  "drummer_1|tom": 0.7299618320610687,
+  "drummer_2|kick": 0.9838709677419355,
+  "drummer_2|snare": 0.8511281986638094,
+  "drummer_2|hat": 0.901285634432644,
+  "drummer_2|tom": 0.4057584644094908,
+  "drummer_3|kick": 0.9816840811309158,
+  "drummer_3|snare": 0.8204928664072633,
+  "drummer_3|hat": 0.8969601263324121,
+  "drummer_3|tom": 0.39201096534168783
+ }
+}

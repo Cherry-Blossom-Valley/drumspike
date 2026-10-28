@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the hardened runtime (P3-8b). Used by build-dmg.sh and release.sh.
+  The dictionary is empty on purpose: this app needs no exception. No App Sandbox.
+  Each key below was checked and left out. Add one only when a test fails without it.
+
+  com.apple.security.app-sandbox                    OUT. The app reads and writes project folders and
+                                                    audio files anywhere the user points. Owner decision.
+  com.apple.security.cs.allow-jit                   OUT. The DSP detector is pure Rust (no JIT).
+                                                    The web view runs in Apple's own process, not in ours.
+  com.apple.security.cs.allow-unsigned-executable-memory  OUT. Same reason.
+  com.apple.security.cs.disable-library-validation  OUT. No plug-in, no dlopen of a foreign library. The
+                                                    Intel app (P3-11) uses only the DSP detector, so
+                                                    library validation is not needed. Only the ad hoc
+                                                    Intel build turns it off (entitlements-adhoc-x86_64.plist).
+  com.apple.security.device.audio-input             OUT. The app plays audio (CoreAudio output through
+                                                    cpal). It never records. Output needs no entitlement.
+  com.apple.security.network.client                 OUT. Without the sandbox this key does nothing. The
+                                                    app does not use the network (updater is off, B3).
+  Proof: the release .app runs with the hardened runtime and the DSP detector (report, P3-8b).
+-->
+<plist version="1.0">
+<dict/>
+</plist>

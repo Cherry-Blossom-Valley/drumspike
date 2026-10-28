@@ -1,0 +1,17 @@
+{
+ "state": "done",
+ "tracks": {
+  "Kick_In": {
+   "chain": null,
+   "detector": "rust",
+   "n_events": 3,
+   "state": "done"
+  },
+  "Snare_Top": {
+   "chain": null,
+   "detector": "rust",
+   "n_events": 3,
+   "state": "done"
+  }
+ }
+}

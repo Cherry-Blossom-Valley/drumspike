@@ -1,0 +1,19 @@
+# The docs that stay out of the banned-word guard (one repo-relative path per line, a `#`
+# comment per entry on why it stays out). The guard never rewrites history: old release notes
+# keep their text.
+
+# Product planning docs, not user-facing.
+docs/product/feature-path.md   # the feature plan; mentions the wording rules themselves
+docs/product/landing-copy.md   # the landing copy draft; wording goes through its own review
+
+# Release notes before 0.9.3: shipped history, never rewritten.
+docs/release-notes/release-notes-0.3.0.md
+docs/release-notes/release-notes-0.4.0.md
+docs/release-notes/release-notes-0.5.1.md
+docs/release-notes/release-notes-0.6.0.md
+docs/release-notes/release-notes-0.7.0.md
+docs/release-notes/release-notes-0.8.0.md
+docs/release-notes/release-notes-0.9.1.md
+
+# The recorder data of the Learn recording (one line is data for the recorder, not shipped text).
+docs/product/scripts/rec-learn.md

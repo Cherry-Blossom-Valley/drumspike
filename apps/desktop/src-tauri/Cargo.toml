@@ -1,0 +1,48 @@
+[package]
+name = "drumspike-desktop"
+description = "Drum Spike desktop shell (Tauri 2): window, bundle and thin commands; no application logic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "drumspike_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "drumspike-desktop"
+path = "src/main.rs"
+
+# Exact pins (owner decision, P3-1b). No updater plugin (B3).
+[build-dependencies]
+tauri-build = { version = "=2.7.1", features = [] }
+
+[dependencies]
+drumspike-core = { path = "../../../crates/core" }
+drumspike-app = { path = "../../../crates/app" }
+tauri = { version = "=2.12.2", features = [] }
+# P3-3b: native open dialog (the JS side calls window.__TAURI__.dialog.open).
+tauri-plugin-dialog = "=2.8.1"
+# P4-30: the native file drag out of the Export dialog (the JS side calls plugin:drag|start_drag). Apache-2.0 OR MIT
+# (CrabNebula; it uses the crate `drag` 2.1.x of the same authors).
+tauri-plugin-drag = "=2.1.1"
+serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }
+# P3-15c: the 4-worker runtime that `run` gives Tauri (`tauri::async_runtime::set`). Already in the
+# tree through Tauri (same version); MIT.
+tokio = { version = "=1.53.2", default-features = false, features = ["rt-multi-thread"] }
+
+# P4-26: the document-edited dot of the close button (NSWindow setDocumentEdited). Same version and licence (MIT)
+# as the objc2 that Tauri already pulls in; a message send only, no feature.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.5"
+# #206: the self-test reads the NSMenu key equivalents and sends a synthetic keyDown through
+# `NSMenu performKeyEquivalent:`. Same versions as the objc2 that Tauri (via muda) already pulls in.
+objc2-app-kit = "=0.3.2"
+objc2-foundation = "=0.3.2"
+
+[features]
+# P3-15c: spans for every command, the job stages and the lock waits into a Chrome trace file
+# (`DRUMSPIKE_TRACE=<file.json>`); see crates/app/src/trace.rs. Off in every build unless asked for.
+trace = ["drumspike-app/trace"]

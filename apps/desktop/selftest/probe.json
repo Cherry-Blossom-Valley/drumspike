@@ -1,0 +1,6 @@
+{
+  "name": "probe",
+  "driver": "probe",
+  "timeout_s": 120,
+  "expect": {"tracks": 0}
+}

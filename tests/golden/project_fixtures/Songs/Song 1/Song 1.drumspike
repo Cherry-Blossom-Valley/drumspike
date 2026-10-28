@@ -1,0 +1,91 @@
+{
+ "format": 1,
+ "name": "Song 1",
+ "created": 1791721789.551708,
+ "modified": 1791721789.5531719,
+ "settings": {
+  "mix_mode": "average"
+ },
+ "order": [
+  "Kick In",
+  "Snare Top"
+ ],
+ "tracks": {
+  "Kick In": {
+   "role": "kick",
+   "note": 36,
+   "mix_mode": "average",
+   "source": {
+    "mode": "referenced",
+    "path": "/tmp/drumspike-scratch/p3c/freeze-arm64-mac/fixtures/daw/Kick In.wav",
+    "relative": "../../daw/Kick In.wav",
+    "size": 144044,
+    "mtime": 1791721789,
+    "head_sha1": "240b2cb2f4a1a8ca645bd4127656fce0886cf135"
+   },
+   "events": [
+    {
+     "t": 0.30000000000000004,
+     "v": 100
+    },
+    {
+     "t": 0.3333333333333333,
+     "v": 20,
+     "added": true
+    },
+    {
+     "t": 2.675,
+     "v": 127,
+     "orig": 1e-07,
+     "edited": true
+    },
+    {
+     "t": 123456.123456789,
+     "v": 64,
+     "rise": 12.3
+    },
+    {
+     "t": 0.25,
+     "v": 1,
+     "rise_db": 7.25,
+     "id": "l5"
+    },
+    {
+     "t": 1.0000208333333334,
+     "v": 99,
+     "orig": 1.0000208333333334
+    }
+   ],
+   "sr": 48000,
+   "n_samples": 72000,
+   "duration": 1.5,
+   "params": {
+    "min_gap_ms": 20
+   }
+  },
+  "Snare Top": {
+   "role": "snare",
+   "note": 38,
+   "mix_mode": "ffmpeg",
+   "source": {
+    "mode": "copied",
+    "path": "/tmp/drumspike-scratch/p3c/freeze-arm64-mac/fixtures/Songs/Song 1/Audio Files/Snare Top.wav",
+    "relative": "Audio Files/Snare Top.wav",
+    "size": 144044,
+    "mtime": 1791721789,
+    "head_sha1": "58ac1efc60a18848f9c6b5312a93020f7afd7019"
+   },
+   "events": [
+    {
+     "t": 0.5,
+     "v": 77
+    }
+   ]
+  }
+ },
+ "view": {
+  "t0": 0.0,
+  "t1": 1.5,
+  "playhead": 0.3333333333333333
+ }
+}

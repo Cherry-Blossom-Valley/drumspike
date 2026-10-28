@@ -1,0 +1,11 @@
+{
+  "name": "exit",
+  "timeout_s": 900,
+  "project": "$DRUMSPIKE_SELFTEST_PROJECT",
+  "expect": {"tracks": 30, "detector": "rust-dsp", "min_hits_total": 6000},
+  "steps": ["cold_start", "open", "lanes", "frames", "analyze", "export", "render", "play"],
+  "frames": {"seconds": 2},
+  "record_events": true,
+  "render": {"seconds": 10, "min_fps": 59, "max_js_p95_ms": 4, "max_underruns": 0},
+  "play": {"seconds": 60, "probe_ms": 250}
+}

@@ -1,0 +1,46 @@
+[project]
+name = "drumspike"
+version = "0.4.0"
+description = "Drum Spike: the test tools of the desktop app (pytest, the browser tests through the app's test bridge, the reference checks). The app has no Python."
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = []
+
+[dependency-groups]
+# P3-12: the Python server is retired; Python runs the tests only
+dev = [
+    "httpx>=0.28.1",   # tests/e2e_app: requests to the test bridge
+    "mido>=1.3.3",   # P4-4: tools/check_exports.py reads the exported MIDI files
+    "numpy",
+    "playwright==1.63.0",
+    "pytest",
+    "pytest-cov>=7.1.0",   # only for the --no-cov flag the gate commands and CI pass; no Python code is measured
+    "pytest-playwright>=0.10.0",
+    "pytest-timeout>=2.3.1",   # #463: a hung e2e test (a page promise that never settles) must fail in minutes, not hold the host lock for hours
+    "soundfile>=0.14.0",   # P4-4: tools/check_exports.py reads the spike WAVs (libsndfile)
+]
+
+[project.optional-dependencies]
+# #458: the media checks. tools/media/check_paths.py OCRs PNGs and mp4 frames with
+# rapidocr-onnxruntime (a pip engine, no system tesseract needed); the planted-sample
+# tests render their PNGs with pillow. Run the OCR tests with:
+#   uv run --extra media pytest tests/test_media_record.py -q
+# Without the extra the OCR tests skip with a reason; the check itself still FAILs
+# loudly when the engine is missing.
+media = [
+    "rapidocr-onnxruntime>=1.3.0",
+    "pillow>=10.0.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "e2e_app: app tests: the page against the ds-bridge debug binary (skip without it; fail with DRUMSPIKE_REQUIRE_APP=1)",
+]
+addopts = "--browser chromium"
+# #463: a test that stalls (an app.evaluate whose page-side promise never settles) must fail, not hang
+timeout = 600
+timeout_method = "thread"

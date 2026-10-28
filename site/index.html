@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drum Spike - Cherry Blossom Valley</title>
+<meta name="description" content="Drum Spike is a free, open-source macOS app by Cherry Blossom Valley. It finds every hit in your close-mic drum tracks, puts each one on the first sample of its attack, and exports MIDI and spike files that trigger on time.">
+<link rel="canonical" href="https://cherry-blossom-valley.com/tools/drum-spike/">
+<meta property="og:title" content="Drum Spike - every drum hit, on the first sample">
+<meta property="og:url" content="https://cherry-blossom-valley.com/tools/drum-spike/">
+<link rel="icon" href="assets/drumspike-icon.svg">
+<style>
+/* Landing page for Drum Spike (ticket #247). The look of cherry-blossom-valley.com (owner, 2026-10-23):
+   white page, system font, weight 500 headings, a soft rose-to-lavender hero, cards with a grey hairline
+   and 8 px corners, dark icon tiles, a dark footer with the CBV link columns. Colours are tokens: the
+   dark theme only swaps the tokens (prefers-color-scheme). No web fonts, no scripts beyond the hero figure. */
+:root {
+  --bg: #ffffff; --surface: #ffffff; --ink: oklch(0.145 0 0); --text: #374151; --muted: #4b5563; --dim: #6b7280;
+  --line: #e5e7eb; --soft: #f9fafb; --navy: #111827; --navy-2: #1f2937; --on-navy: #ffffff; --on-navy-dim: #9ca3af;
+  --footer-bg: #111827; --footer-line: #1f2937;
+  --rose: #db2777; --rose-soft: #fdf2f8; --rose-line: #fbcfe8; --rose-ink: #9d174d;
+  --hero-a: #fef2f2; --hero-b: #faf5ff; --header-bg: rgba(255,255,255,0.95);
+  --wave: #111827; --thr: #9ca3af;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b0d12; --surface: #141820; --ink: #f3f4f6; --text: #d1d5db; --muted: #9ca3af; --dim: #9ca3af;
+    --line: #2a303c; --soft: #10141b; --navy: #374151; --navy-2: #4b5563; --on-navy: #ffffff; --on-navy-dim: #9ca3af;
+    --footer-bg: #05070a; --footer-line: #1f2937;
+    --rose: #f472b6; --rose-soft: #2a1420; --rose-line: #6b2750; --rose-ink: #f9a8d4;
+    --hero-a: #1a1119; --hero-b: #141228; --header-bg: rgba(11,13,18,0.92);
+    --wave: #f3f4f6; --thr: #6b7280;
+    color-scheme: dark;
+  }
+  .brand img { filter: invert(1); }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.6 -apple-system, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-inline: 24px; }
+h1, h2, h3 { color: var(--ink); font-weight: 500; line-height: 1.2; margin: 0; text-wrap: balance; }
+h2 { font-size: clamp(1.6rem, 3vw, 2rem); }
+h3 { font-size: 1.1rem; }
+p { margin: 0; color: var(--muted); }
+a { color: inherit; }
+code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88em; }
+.sub { font-size: 1.15rem; color: var(--muted); margin-top: 12px; }
+.section-head { text-align: center; max-width: 720px; margin: 0 auto 48px; }
+
+/* header: the CBV logo, the tool name, the page sections and the GitHub link */
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; background: var(--header-bg); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 72px; }
+.brand { display: flex; align-items: center; gap: 14px; text-decoration: none; }
+.brand img { height: 52px; width: auto; display: block; }
+.brand .sep { width: 1px; height: 28px; background: var(--line); }
+.brand .tool { font-weight: 500; font-size: 1.1rem; color: var(--ink); }
+nav.main { display: flex; align-items: center; gap: 28px; }
+nav.main a { text-decoration: none; color: var(--text); font-weight: 500; }
+nav.main a:hover { color: var(--ink); }
+.gh { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; text-decoration: none; font-weight: 500; color: var(--ink); }
+.gh:hover { background: var(--soft); }
+.gh svg { width: 18px; height: 18px; }
+
+/* hero: the CBV gradient, centred like the main site */
+.hero { background: linear-gradient(to right bottom, var(--hero-a), var(--hero-b)); padding-block: 88px 64px; }
+.hero h1 { font-size: clamp(2.2rem, 5.2vw, 3.5rem); text-align: center; letter-spacing: -0.01em; }
+.hero h1 span { color: var(--rose); }
+.hero .sub { text-align: center; max-width: 680px; margin-inline: auto; margin-top: 18px; }
+.badges { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: 500; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }
+.badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--rose); }
+
+/* download buttons: the standard two-line form */
+.dl { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+.dlbtn { display: inline-flex; align-items: center; gap: 12px; min-width: 232px; padding: 11px 20px 11px 16px; border-radius: 10px; text-decoration: none; border: 1px solid var(--navy); transition: transform .08s ease, background .15s ease; }
+.dlbtn:active { transform: translateY(1px); }
+.dlbtn svg { width: 26px; height: 26px; flex: none; }
+.dlbtn .t { display: flex; flex-direction: column; line-height: 1.2; text-align: left; }
+.dlbtn .t small { font-size: 0.74rem; opacity: 0.8; }
+.dlbtn .t b { font-size: 1.05rem; font-weight: 600; }
+.dlbtn.primary { background: var(--navy); color: var(--on-navy); }
+.dlbtn.primary:hover { background: var(--navy-2); }
+.dlbtn.secondary { background: var(--surface); color: var(--ink); }
+.dlbtn.secondary:hover { background: var(--soft); }
+.dlbtn .size { margin-left: auto; padding-left: 12px; font-size: 0.74rem; opacity: 0.7; white-space: nowrap; }
+.fine { text-align: center; font-size: 0.86rem; color: var(--dim); margin-top: 14px; }
+.fine a { color: var(--ink); }
+.which { text-align: center; font-size: 0.82rem; color: var(--dim); margin-top: 6px; }
+
+/* the signature figure */
+.figure { max-width: 760px; margin: 44px auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 20px 20px 14px; }
+.figure svg { display: block; width: 100%; height: auto; }
+.figure .cap { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 0.8rem; color: var(--dim); margin-top: 6px; }
+.k-first { color: var(--rose); } .k-thr { color: var(--dim); }
+
+section { padding-block: 88px; }
+section.alt { background: var(--soft); border-block: 1px solid var(--line); }
+
+/* cards and tiles, as on the main site */
+.grid { display: grid; gap: 24px; }
+.g3 { grid-template-columns: repeat(3, 1fr); }
+.grid > * { min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 24px; }
+.tile { width: 48px; height: 48px; border-radius: 8px; background: var(--navy); color: #fff; display: grid; place-items: center; margin-bottom: 18px; }
+.tile svg { width: 24px; height: 24px; }
+.card h3 { margin-bottom: 8px; }
+.card p { font-size: 0.95rem; }
+
+.split { display: grid; grid-template-columns: 1fr 1.1fr; gap: 48px; align-items: center; }
+.split > * { min-width: 0; }
+.split p + p { margin-top: 14px; }
+.eyebrow { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--rose); font-weight: 600; margin-bottom: 10px; }
+.facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 24px; }
+.fact { border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: var(--surface); }
+.fact .n { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+.fact .l { font-size: 0.8rem; color: var(--dim); line-height: 1.35; margin-top: 4px; }
+
+/* video slots: the explainers, the screen recordings and the product video */
+.slot-fig { margin: 0; }
+.vslot { width: 100%; aspect-ratio: 16 / 9; display: block; border: 1px solid var(--line); border-radius: 8px; background: #000; }
+.vgrid { display: grid; grid-template-columns: minmax(0, 720px); justify-content: center; gap: 24px; margin-top: 32px; }
+.shot { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 8px; }
+.vgrid > * { min-width: 0; }
+.vcap { font-size: 0.82rem; color: var(--dim); margin-top: 8px; }
+.pguide { font-size: 0.85rem; }
+.pguide a { color: var(--rose); font-weight: 500; }
+
+/* the feature path: four steps in order, step 1 is the whole job */
+.path { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; }
+.pstep { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 24px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pstep:first-child { border-color: var(--navy); box-shadow: 0 0 0 1px var(--navy); }
+.pnum { width: 36px; height: 36px; border-radius: 999px; background: var(--navy); color: #fff; display: grid; place-items: center; font-weight: 600; margin-bottom: 6px; }
+.pstep:not(:first-child) .pnum { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
+.pstep p { font-size: 0.95rem; }
+.ptime { margin-top: auto; padding-top: 8px; font-size: 0.8rem; color: var(--rose); font-weight: 500; }
+.pstep:not(:last-child)::after { content: ""; position: absolute; top: 41px; right: -25px; width: 26px; height: 1px; background: var(--line); }
+
+/* open source */
+.oss { display: grid; grid-template-columns: 1.1fr 1fr; gap: 40px; align-items: start; }
+.oss > * { min-width: 0; }
+.repo { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
+.repo-head { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.repo-head svg { width: 22px; height: 22px; flex: none; }
+.repo-head .name { font-weight: 600; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+.repo-head .lic { margin-left: auto; font-size: 0.75rem; font-weight: 500; border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; color: var(--muted); white-space: nowrap; }
+.repo-body { padding: 18px 20px; }
+.repo-body p { font-size: 0.95rem; }
+.repo-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; border-radius: 8px; padding: 9px 14px; font-weight: 500; font-size: 0.93rem; text-decoration: none; border: 1px solid var(--line); color: var(--ink); background: var(--surface); }
+.btn:hover { background: var(--soft); }
+.btn.dark { background: var(--navy); border-color: var(--navy); color: #fff; }
+.btn.dark:hover { background: var(--navy-2); }
+pre.build { margin: 16px 0 0; background: var(--navy); color: #e5e7eb; border-radius: 8px; padding: 14px 16px; font-size: 0.82rem; line-height: 1.55; overflow-x: auto; }
+pre.build .c { color: var(--on-navy-dim); }
+.points { display: grid; gap: 14px; }
+.point { display: grid; grid-template-columns: 40px 1fr; gap: 14px; align-items: start; }
+.point .tile { width: 40px; height: 40px; margin: 0; }
+.point .tile svg { width: 20px; height: 20px; }
+.point h3 { font-size: 1rem; margin-bottom: 2px; }
+.point p { font-size: 0.92rem; }
+
+/* footer: the main site's dark footer and link columns, with Drum Spike under Tools */
+footer { background: var(--footer-bg); color: var(--on-navy); padding-block: 48px 32px; }
+.fcols { display: grid; grid-template-columns: 1.6fr repeat(3, 1fr); gap: 32px; }
+.fcols > * { min-width: 0; }
+footer h4 { margin: 0 0 12px; font-size: 0.95rem; font-weight: 600; color: #fff; }
+footer p, footer a { color: var(--on-navy-dim); font-size: 0.9rem; text-decoration: none; }
+footer a:hover { color: #fff; }
+footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+footer .here { color: #fff; }
+.flogo { height: 56px; width: auto; filter: invert(1); margin-bottom: 12px; display: block; }
+.copy { border-top: 1px solid var(--footer-line); margin-top: 36px; padding-top: 20px; font-size: 0.85rem; color: var(--on-navy-dim); text-align: center; }
+.copy p { color: var(--on-navy-dim); font-size: 0.85rem; }
+
+@media (max-width: 920px) {
+  nav.main .sec { display: none; }
+  .split, .oss { grid-template-columns: 1fr; gap: 28px; }
+  .g3 { grid-template-columns: 1fr 1fr; }
+  .vgrid { grid-template-columns: 1fr; }
+  .path { grid-template-columns: repeat(2, 1fr); }
+  .pstep::after { display: none; }
+  .fcols { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 560px) {
+  .wrap { padding-inline: 16px; }
+  .brand img { height: 44px; }
+  .brand .tool { font-size: 1rem; }
+  .gh .lbl { display: none; }
+  .hero { padding-block: 56px 44px; }
+  section { padding-block: 64px; }
+  .g3, .facts, .fcols, .path, .vgrid { grid-template-columns: 1fr; }
+  .dlbtn { width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="https://cherry-blossom-valley.com" aria-label="Cherry Blossom Valley home">
+      <img src="assets/cbv-logo-main.png" alt="Cherry Blossom Valley">
+      <span class="sep" aria-hidden="true"></span>
+      <span class="tool">Drum Spike</span>
+    </a>
+    <nav class="main">
+      <a class="sec" href="#why">Why</a>
+      <a class="sec" href="#features">Features</a>
+      <a class="sec" href="#open-source">Open source</a>
+      <a class="gh" href="https://github.com/Cherry-Blossom-Valley/drumspike"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span class="lbl">GitHub</span></a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <h1>Every drum hit, on the <span>first sample</span>.</h1>
+    <p class="sub">Drum Spike finds every hit in your close-mic drum tracks, puts each one on the first sample of its attack, and exports MIDI and spike files that trigger on time.</p>
+    <div class="badges">
+      <span class="badge"><span class="dot"></span>Free and open source</span>
+      <span class="badge">Apache-2.0 source code</span>
+      <span class="badge">macOS, Apple silicon and Intel</span>
+    </div>
+
+    <div class="dl" id="download">
+      <a class="dlbtn primary" href="https://github.com/Cherry-Blossom-Valley/drumspike/releases/latest">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+        <span class="t"><small>Download for Mac</small><b>Apple silicon</b></span>
+        <span class="size">M1 and later</span>
+      </a>
+      <a class="dlbtn secondary" href="https://github.com/Cherry-Blossom-Valley/drumspike/releases/latest">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+        <span class="t"><small>Download for Mac</small><b>Intel</b></span>
+        <span class="size">x86-64</span>
+      </a>
+    </div>
+    <p class="fine">Latest release &middot; signed and notarized by Apple &middot; <a href="https://github.com/Cherry-Blossom-Valley/drumspike/releases/latest">release notes and checksums</a></p>
+    <p class="which">Which one? Apple menu &rsaquo; About This Mac: "Chip: Apple M&hellip;" is Apple silicon, "Processor: Intel" is Intel.</p>
+
+    <figure class="figure" aria-label="A snare hit: a level threshold fires late, Drum Spike marks the first sample of the attack">
+      <svg viewBox="0 0 520 250" role="img">
+        <title>A level threshold fires late; Drum Spike marks the first motion</title>
+        <defs><clipPath id="plot"><rect x="20" y="10" width="480" height="200"/></clipPath></defs>
+        <line x1="20" y1="110" x2="500" y2="110" style="stroke:var(--line)" stroke-width="1"/>
+        <g clip-path="url(#plot)"><path id="wave" fill="none" style="stroke:var(--wave)" stroke-width="1.4"/></g>
+        <line x1="20" x2="500" y1="84" y2="84" style="stroke:var(--thr)" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="496" y="78" text-anchor="end" font-size="11" style="fill:var(--dim)" font-family="system-ui, sans-serif">level threshold</text>
+        <line id="thrx" y1="14" y2="206" style="stroke:var(--thr)" stroke-width="1.5"/>
+        <line id="first" y1="14" y2="206" style="stroke:var(--rose)" stroke-width="3"/>
+        <text id="firstl" y="26" font-size="12" style="fill:var(--rose)" font-weight="600" font-family="system-ui, sans-serif">first sample</text>
+        <g font-family="ui-monospace, Menlo, monospace" font-size="10.5" style="fill:var(--dim)">
+          <line x1="20" x2="500" y1="226" y2="226" style="stroke:var(--line)"/>
+          <g id="ticks"></g>
+        </g>
+      </svg>
+      <figcaption class="cap"><span><b class="k-first">rose:</b> where Drum Spike puts the hit</span><span><b class="k-thr">grey:</b> where a level threshold fires</span><span class="mono">1 ms = 48 samples at 48 kHz</span></figcaption>
+    </figure>
+  </div>
+</div>
+
+<section id="what">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>What Drum Spike does</h2>
+      <p class="sub">Three steps from your recording to triggers that fire on time.</p>
+    </div>
+    <div class="grid g3">
+      <div class="card">
+        <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3l2-6 3 12 3-9 2 5h7"/></svg></div>
+        <h3>Finds the real hits</h3>
+        <p>Drum Spike listens to each close mic for its own drum only. It checks which mic heard a hit first and how the hit sounds: a kick in the snare mic is bleed, not a snare hit.</p>
+      </div>
+      <div class="card">
+        <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M3 15c3 0 4-6 6-6s2 9 5 9 3-12 7-12"/></svg></div>
+        <h3>Places them on the first sample</h3>
+        <p>Each hit moves to the first motion of its attack. A soft ghost note and a loud backbeat get the same point.</p>
+      </div>
+      <div class="card">
+        <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
+        <h3>Exports MIDI and spike files</h3>
+        <p>Per track, on your session's time. Spike type Audio writes a short piece of the track's own audio at each hit: the body of the hit, not a click.</p>
+      </div>
+    </div>
+    <figure class="slot-fig" style="margin-top:48px">
+      <video class="vslot" controls preload="metadata" poster="assets/posters/explainer-05.jpg" aria-label="Explainer 5, The body of the hit: the low tone under the attack, its swings counted, the snippet cut at the zero crossing.">
+        <source src="videos/explainer-05.mp4" type="video/mp4">
+      </video>
+      <figcaption class="vcap">Explainer 5, "The body of the hit": what the Audio spike holds and why.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="why" class="alt">
+  <div class="wrap split">
+    <div>
+      <div class="eyebrow">Why it matters</div>
+      <h2>One millisecond is audible.</h2>
+      <p style="margin-top:16px">A trigger that fires one millisecond late against the close mic cuts holes into the sound at 500&nbsp;Hz, 1.5&nbsp;kHz and 2.5&nbsp;kHz, right where a snare has its body and crack. Level-based transient detection fires late on soft hits and early on loud ones, and it fires on bleed.</p>
+      <p>Drum Spike puts every hit on the first motion of its attack, soft or loud.</p>
+      <div class="facts">
+        <div class="fact"><div class="n">48</div><div class="l">samples in one millisecond at 48&nbsp;kHz</div></div>
+        <div class="fact"><div class="n">34&nbsp;cm</div><div class="l">sound travels in one millisecond</div></div>
+        <div class="fact"><div class="n">500&nbsp;Hz</div><div class="l">first notch of a 1&nbsp;ms delay</div></div>
+      </div>
+    </div>
+    <figure class="slot-fig">
+      <video class="vslot" controls preload="metadata" poster="assets/posters/explainer-01.jpg" aria-label="Explainer 1, Why one millisecond matters: a snare plus its copy, 1 ms late, then the delay moves to zero.">
+        <source src="videos/explainer-01.mp4" type="video/mp4">
+      </video>
+      <figcaption class="vcap">Explainer 1, "Why one millisecond matters": a snare plus its copy, 1&nbsp;ms late, then the delay moves to zero.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap split">
+    <figure class="slot-fig">
+      <video class="vslot" controls preload="metadata" poster="assets/posters/explainer-03.jpg" aria-label="Explainer 3, How Drum Spike hears a hit: the level meter fails, the spectrogram and the spectral flux find the hits, the gates drop the bleed.">
+        <source src="videos/explainer-03.mp4" type="video/mp4">
+      </video>
+      <figcaption class="vcap">Explainer 3, "How Drum Spike hears a hit": the spectrogram and the spectral flux find the hits, the gates drop the bleed.</figcaption>
+    </figure>
+  </div>
+  <div class="wrap split" style="margin-top:48px">
+    <figure class="slot-fig">
+      <video class="vslot" controls preload="metadata" poster="assets/posters/explainer-04.jpg" aria-label="Explainer 4, Finding the first sample: the threshold and the walk back, sample by sample.">
+        <source src="videos/explainer-04.mp4" type="video/mp4">
+      </video>
+      <figcaption class="vcap">Explainer 4, "Finding the first sample": the threshold and the walk back, sample by sample.</figcaption>
+    </figure>
+    <div>
+      <div class="eyebrow">How it works</div>
+      <h2>The spectrum finds the hits. The waveform gives the sample.</h2>
+      <p style="margin-top:16px">Drum Spike watches each close mic for a sudden rise of energy in its drum's own frequency bands, and keeps a hit only when it sounds like that drum.</p>
+      <p>Then Drum Spike walks back from the attack's peak, sample by sample, to the first motion of the attack. The threshold sits 33&nbsp;dB under the peak and stays over the noise before the hit.</p>
+      <p>The result is the start of the attack, not the moment a level is crossed.</p>
+    </div>
+  </div>
+</section>
+
+<section id="features" class="alt">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Learn it in four steps</h2>
+      <p class="sub">Step 1 does the whole job. The other steps are there when you need them.</p>
+    </div>
+    <ol class="path">
+      <li class="pstep">
+        <span class="pnum">1</span>
+        <h3>Get the hits</h3>
+        <p>Add your drum tracks, let Drum Spike find the hits, export MIDI and spike files.</p>
+        <span class="ptime">the whole job</span>
+        <span class="pguide"><a href="https://github.com/Cherry-Blossom-Valley/drumspike/blob/main/docs/guide/01-why-sample-exact.md">Guide: part 1</a></span>
+      </li>
+      <li class="pstep">
+        <span class="pnum">2</span>
+        <h3>Check and fix</h3>
+        <p>Listen, zoom in, and correct a hit by hand. The app shows the doubtful hits first.</p>
+        <span class="ptime">when a hit is wrong</span>
+        <span class="pguide"><a href="https://github.com/Cherry-Blossom-Valley/drumspike/blob/main/docs/guide/06-find-your-way.md">Guide: part 2</a></span>
+      </li>
+      <li class="pstep">
+        <span class="pnum">3</span>
+        <h3>Let the app do more</h3>
+        <p>Bleed rules keep the other drums out, flams become two hits, and tempo, followers and layers run on their own.</p>
+        <span class="ptime">for difficult sessions</span>
+        <span class="pguide"><a href="https://github.com/Cherry-Blossom-Valley/drumspike/blob/main/docs/guide/10-bleed.md">Guide: part 3</a></span>
+      </li>
+      <li class="pstep">
+        <span class="pnum">4</span>
+        <h3>Automate it</h3>
+        <p>Run Drum Spike from scripts or AI agents with its command line and MCP server. Detector plug-ins add their own detectors; Drum Spike asks for a plug-in's licence before first use. <a href="https://github.com/Cherry-Blossom-Valley/drumspike/blob/main/docs/guide/03b-detector-plugins.md">Guide: detector plug-ins</a></p>
+        <span class="ptime">for power users</span>
+        <span class="pguide"><a href="https://github.com/Cherry-Blossom-Valley/drumspike/blob/main/docs/guide/14-automate.md">Guide: part 4</a></span>
+      </li>
+    </ol>
+    <p class="fine" style="margin-top:28px">Each step has a short guide. <a href="https://github.com/Cherry-Blossom-Valley/drumspike/blob/main/docs/guide/README.md">Read the guides</a></p>
+    <figure class="slot-fig" style="margin-top:48px">
+      <img class="shot" src="assets/editor.jpg" width="1280" height="800" alt="The Drum Spike editor: the Inspector on the left, kick, snare and tom close mics with their detected hits as spikes above each waveform, and the tempo, meter and bar rulers on top.">
+      <figcaption class="vcap">The editor: one lane per close mic, every detected hit as a spike above the waveform, the Inspector for the selected track.</figcaption>
+    </figure>
+    <div class="vgrid">
+      <figure class="slot-fig">
+        <video class="vslot" controls preload="metadata" poster="assets/posters/explainer-08.jpg" aria-label="Explainer 8, From waveform to velocity.">
+          <source src="videos/explainer-08.mp4" type="video/mp4">
+        </video>
+        <figcaption class="vcap">Explainer 8, "From waveform to velocity": how hard each hit was played.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="open-source">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Open source</div>
+      <h2>Built in the open. Read it, build it, improve it.</h2>
+      <p class="sub">Drum Spike is free. Its source code is on GitHub under the Apache License 2.0.</p>
+    </div>
+    <div class="oss">
+      <div class="repo">
+        <div class="repo-head">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          <a class="name" href="https://github.com/Cherry-Blossom-Valley/drumspike">Cherry-Blossom-Valley / drumspike</a>
+          <span class="lic">Apache-2.0</span>
+        </div>
+        <div class="repo-body">
+          <p>A Rust core for the detection and the sample-exact placement, a Tauri desktop app, a headless CLI and an MCP server.</p>
+          <div class="repo-links">
+            <a class="btn dark" href="https://github.com/Cherry-Blossom-Valley/drumspike">View the code</a>
+            <a class="btn" href="https://github.com/Cherry-Blossom-Valley/drumspike/releases">Releases</a>
+            <a class="btn" href="https://github.com/Cherry-Blossom-Valley/drumspike/issues">Report an issue</a>
+            <a class="btn" href="https://github.com/Cherry-Blossom-Valley/drumspike/blob/main/docs/DEVELOPING.md">Developer guide</a>
+          </div>
+<pre class="build"><span class="c"># on an Apple silicon Mac with Xcode tools, Rust and Node</span>
+git clone https://github.com/Cherry-Blossom-Valley/drumspike
+cd drumspike
+apps/desktop/scripts/build-dmg.sh
+<span class="c"># for Intel, add: --arch x86_64</span></pre>
+        </div>
+      </div>
+      <div>
+        <div class="points">
+          <div class="point">
+            <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></div>
+            <div><h3>Check how it works</h3><p>The detection, the threshold and the walk back are in the code, with tests. No black box between your tracks and your triggers.</p></div>
+          </div>
+          <div class="point">
+            <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0"/></svg></div>
+            <div><h3>Your audio stays on your Mac</h3><p>No account, no upload, no tracking. The analysis runs locally.</p></div>
+          </div>
+          <div class="point">
+            <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></div>
+            <div><h3>Make it better</h3><p>Report a session that trips it up, propose a fix, or add a kit preset. Pull requests are welcome.</p></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="fcols">
+      <div>
+        <img class="flogo" src="assets/cbv-logo-main.png" alt="Cherry Blossom Valley">
+        <p>Music and audio production company specializing in songwriting, audio engineering, agentic audio engineering and music production.</p>
+      </div>
+      <div>
+        <h4>Drum Spike</h4>
+        <ul>
+          <li><a href="#download">Download</a></li>
+          <li><a href="#features">Features</a></li>
+          <li><a href="https://github.com/Cherry-Blossom-Valley/drumspike">Source on GitHub</a></li>
+          <li><a href="https://github.com/Cherry-Blossom-Valley/drumspike/releases">Release notes</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Tools</h4>
+        <ul>
+          <li><a href="https://icon-studio.cherry-blossom-valley.com/">CBV Icon Studio</a></li>
+          <li><a href="https://cherry-blossom-valley.com/tools/drum-spike/" aria-current="page">Drum Spike</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="https://cherry-blossom-valley.com/imprint">Imprint</a></li>
+          <li><a href="https://cherry-blossom-valley.com/privacy">Privacy Policy</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="copy">
+      <p>Drum Spike is free and open source (Apache-2.0).</p>
+      <p>&copy; 2026 Cherry Blossom Valley. All rights reserved. Made by Cherry Blossom Valley.</p>
+    </div>
+  </div>
+</footer>
+
+<script>
+// The hero figure: a synthetic snare onset drawn per sample (48 kHz), 4.5 ms wide.
+(() => {
+  const FS = 48000, X0 = 20, W = 480, Y0 = 110, H = 92, MS = 4.5, N = Math.round(MS * FS / 1000);
+  const start = Math.round(1.2 * FS / 1000);                      // the true first sample, 1.2 ms in
+  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5);
+  const xs = [], ys = [];
+  for (let i = 0; i < N; i++) {
+    const t = (i - start) / FS;
+    let v = rnd() * 0.012;                                          // noise floor
+    if (t >= 0) v += (1 - Math.exp(-t / 0.0006)) * Math.exp(-t / 0.02) * (0.8 * Math.sin(2 * Math.PI * 185 * t) + 0.35 * rnd() + 0.25 * Math.sin(2 * Math.PI * 900 * t));
+    xs.push(X0 + W * i / (N - 1)); ys.push(Y0 - v * H * 0.95);
+  }
+  document.getElementById("wave").setAttribute("d", xs.map((x, i) => (i ? "L" : "M") + x.toFixed(1) + " " + ys[i].toFixed(1)).join(""));
+  const thrY = 84; let cross = ys.findIndex((y, i) => i > start && y <= thrY);   // a level threshold fires here
+  const set = (id, x) => { const e = document.getElementById(id); e.setAttribute("x1", x); e.setAttribute("x2", x); };
+  set("thrx", xs[cross]); set("first", xs[start]);
+  document.getElementById("firstl").setAttribute("x", xs[start] + 6);
+  const ticks = document.getElementById("ticks");
+  for (let m = 0; m <= 4; m++) {
+    const x = X0 + W * (m * FS / 1000) / (N - 1);
+    ticks.insertAdjacentHTML("beforeend", `<line x1="${x}" x2="${x}" y1="222" y2="230" style="stroke:var(--dim)"/><text x="${x}" y="244" text-anchor="middle">${m} ms</text>`);
+  }
+  const late = ((cross - start) * 1000 / FS).toFixed(2);
+  document.querySelector(".figure svg title").textContent = `A level threshold fires ${late} ms late; Drum Spike marks the first motion`;
+})();
+</script>
+</body>
+</html>

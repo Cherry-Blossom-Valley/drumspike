@@ -1,0 +1,20 @@
+{
+  "name": "memory",
+  "timeout_s": 420,
+  "project": "$DRUMSPIKE_SELFTEST_PROJECT",
+  "expect": {
+    "tracks": 30
+  },
+  "steps": [
+    "memory"
+  ],
+  "memory": {
+    "play_seconds": 60,
+    "reopens": 3,
+    "target_web_content_mb": 400,
+    "max_web_content_mb": 800,
+    "max_open_to_drawn_ms": 1000,
+    "max_underruns": 0,
+    "diag": false
+  }
+}

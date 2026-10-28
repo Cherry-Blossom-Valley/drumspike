@@ -1,0 +1,47 @@
+{
+ "dirty": true,
+ "name": "Shapes",
+ "order": [
+  "Kick_In",
+  "Snare_Top"
+ ],
+ "sid": "<sid>",
+ "tracks": {
+  "Kick_In": {
+   "color": "#e05555",
+   "detector": {
+    "chain": null,
+    "detector": "rust",
+    "model": null
+   },
+   "duration": 2.0,
+   "mix_mode": "average",
+   "n_events": 3,
+   "n_samples": 96000,
+   "note": 36,
+   "offline": false,
+   "role": "kick",
+   "source_mode": "copied",
+   "sr": 48000,
+   "status": "ok"
+  },
+  "Snare_Top": {
+   "color": "#e0a13c",
+   "detector": {
+    "chain": null,
+    "detector": "rust",
+    "model": null
+   },
+   "duration": 2.0,
+   "mix_mode": "average",
+   "n_events": 3,
+   "n_samples": 96000,
+   "note": 38,
+   "offline": false,
+   "role": "snare",
+   "source_mode": "copied",
+   "sr": 48000,
+   "status": "ok"
+  }
+ }
+}

@@ -1,0 +1,11 @@
+# The banned-word list of tools/check_wording.py. One entry per line, a `#` comment after the
+# entry says why. A plain word is matched word-bounded and case-insensitively, a multi-word
+# phrase as a substring. The last two entries are sentinels the checker maps to its special
+# rules (the em-dash character, and the ae/oe/ue transliteration rule).
+model   # the app has no model and names none; the docs are user-facing text
+commercial   # shipped text does not discuss commercial use
+no AI   # product wording rule: no "no AI" claims
+without AI   # the same rule, the other form
+model-free   # names the model it denies
+—   # plain hyphens only in documents
+ae/oe/ue   # no umlaut transliterations: write the real umlaut character

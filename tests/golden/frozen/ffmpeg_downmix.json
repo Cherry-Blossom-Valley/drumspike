@@ -1,0 +1,203 @@
+{
+  "kind": "ffmpeg_downmix",
+  "about": "ffmpeg's mono decode (-ac 1, or the pan filter of the average mode) of the random files of downmix_matches_ffmpeg_bit_for_bit: frame count and SHA-256 of the f32le output",
+  "generated": {
+    "sha": "52dda12c35c1417a90e82f2198cec6836868d1c0",
+    "host": "arm64-mac (arm64, fusing ffmpeg)",
+    "ffmpeg": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers"
+  },
+  "cases": {
+    "Pcm16 1ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "ff18cdc86da7df4e1b55d311dfc479427fb046395153fd249a4256aefe910e4a"
+    },
+    "Pcm16 1ch Average": {
+      "frames": 6000,
+      "sha256": "ff18cdc86da7df4e1b55d311dfc479427fb046395153fd249a4256aefe910e4a"
+    },
+    "Pcm16 2ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "a1f5d0ae6e5970c34247ea51a307db6cfd2d8d8acc723396b88bf50c87e1652a"
+    },
+    "Pcm16 2ch Average": {
+      "frames": 6000,
+      "sha256": "32d4a34fb237a40797236fa8176531b43b38b8c55b407230e7e8459dc4c0da6b"
+    },
+    "Pcm16 3ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "d4b3d77a390bef46c23304abfbf41ec0113799be2a9c085ede13922366ba9f7a"
+    },
+    "Pcm16 3ch Average": {
+      "frames": 6000,
+      "sha256": "f19bea625544473a853daf495eb49603df742955dc8c4b799dd4a66edae5253f"
+    },
+    "Pcm16 4ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "c7cfef9508ede7a1aa79d71430cbf85df7a43fa8ecd187c8464a7325cfed4b8e"
+    },
+    "Pcm16 4ch Average": {
+      "frames": 6000,
+      "sha256": "928abc2d1ef90a85b049c1fbefd9a6b8faad15ee2cb3cad83e9a344d7de2d870"
+    },
+    "Pcm16 6ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "3bdfb6323012adabdb330fd580663808d25de5a652088bab2bc0929464d51134"
+    },
+    "Pcm16 6ch Average": {
+      "frames": 6000,
+      "sha256": "118e4beaa0819904bb0f908e55648b4f0c8b0983e3c62aaba9c00682a02d366e"
+    },
+    "Pcm16 8ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "7ae93e5e28a5563b233790a155d9ccb1568fc40901e7512ca76bdd37d7a039b3"
+    },
+    "Pcm16 8ch Average": {
+      "frames": 6000,
+      "sha256": "c658a53d8f82c003d72c3132d5f96729ee08fd57fdb043c44c3fc2cf66bc1927"
+    },
+    "Pcm24 1ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "e9dd197cccb888924099543154c96e084e3cd12ac0625a9b5faaa3efea482f63"
+    },
+    "Pcm24 1ch Average": {
+      "frames": 6000,
+      "sha256": "e9dd197cccb888924099543154c96e084e3cd12ac0625a9b5faaa3efea482f63"
+    },
+    "Pcm24 2ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "b2e7d462f5d669be0d7580d24c51a61ae3e3af1b0cbac71a0706a44fb0afba19"
+    },
+    "Pcm24 2ch Average": {
+      "frames": 6000,
+      "sha256": "67ceed2f6a28e62a58942b28bae43288886bbc2cfcfbabdc7f5b6a5b3741c2f5"
+    },
+    "Pcm24 3ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "1b71679f89e116cdb5bae3186a5cb77f46613268d31ba4e1b6dc28fb9acdb0e4"
+    },
+    "Pcm24 3ch Average": {
+      "frames": 6000,
+      "sha256": "e87ff0c5cb17bb06c654dc5e305be43a72264cbe15353c74420f9b145a72c3f8"
+    },
+    "Pcm24 4ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "ff91887a9044023371fcafcb385992612f8df6b41edf92efff263515d838e198"
+    },
+    "Pcm24 4ch Average": {
+      "frames": 6000,
+      "sha256": "9b1258d1c936f60c9633c787b5a93187d3beacd1595aa03ac3cefdd2c699127c"
+    },
+    "Pcm24 6ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "c478b36ddd12d3623bad0900acd7528bcf10991d129fc560f7e84f7ef1f8f2ee"
+    },
+    "Pcm24 6ch Average": {
+      "frames": 6000,
+      "sha256": "c9011f291e12f917777479094c5ee2f9a108f91a4d2f2c7a0d50536298a72f32"
+    },
+    "Pcm24 8ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "5c34d394d405c8659b9b09295a98be2cac438ff715ce05d4f8b80d19ddb5db99"
+    },
+    "Pcm24 8ch Average": {
+      "frames": 6000,
+      "sha256": "32480ee7f22ab6a7dedaf87ff15e2b479d2ddccc1e1a5b9bb91b52cdea041136"
+    },
+    "Pcm32 1ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "c59dc76391c4c45c50146732c0514799686253044f6b0c59ec6eaaa3b3a1c88e"
+    },
+    "Pcm32 1ch Average": {
+      "frames": 6000,
+      "sha256": "c59dc76391c4c45c50146732c0514799686253044f6b0c59ec6eaaa3b3a1c88e"
+    },
+    "Pcm32 2ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "b7afb0669416ec4ee8de340cf7f7f157a915085fbc987a8b5de69ece388e8e63"
+    },
+    "Pcm32 2ch Average": {
+      "frames": 6000,
+      "sha256": "6c98b7373d4d532cd526d4fcf3fd46c13d3ffc7dc6d33d686f39107638e8f4d3"
+    },
+    "Pcm32 3ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "3fa7d0e6672cc9ff8174ab1becd78f1d4251b8e901c40aca53098d5b923138d9"
+    },
+    "Pcm32 3ch Average": {
+      "frames": 6000,
+      "sha256": "d0f414658a0899520c05b66b89e19a14a89bab03006823fcef18b31b9e0da7d4"
+    },
+    "Pcm32 4ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "1972c29b1cb1f8882f747ec280c98b7983fd9bfc28ea3ee932d865376ab4a2dd"
+    },
+    "Pcm32 4ch Average": {
+      "frames": 6000,
+      "sha256": "e3c491cf550124f69302478271efe8908cfc3c4ef836f439edb67a558ab14645"
+    },
+    "Pcm32 6ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "f707ebea6f6ddaa1db334483aa2c2d44d833d6b1979cb077bcce32f1c67781db"
+    },
+    "Pcm32 6ch Average": {
+      "frames": 6000,
+      "sha256": "11ab38963cf44f556e5b396263e41f071288f1f2e988c9dbf04ce937a865b4bf"
+    },
+    "Pcm32 8ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "2c18f7b1146a3aea319cfd2b3f93d78a2ad24f154aadbd83005ea09e850ba36d"
+    },
+    "Pcm32 8ch Average": {
+      "frames": 6000,
+      "sha256": "a29539a1d89c7d2a556aeabc93e4e4508f62994e839368c8d0c2814092856869"
+    },
+    "Float32 1ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "054538afb9fd4f7ac8ccd6eef2c5c545a117f555d46fe8ca91f5d7d5d1e7a040"
+    },
+    "Float32 1ch Average": {
+      "frames": 6000,
+      "sha256": "054538afb9fd4f7ac8ccd6eef2c5c545a117f555d46fe8ca91f5d7d5d1e7a040"
+    },
+    "Float32 2ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "6d8fe3f050d0ba3ae184d82815e625fce7edc5f043e73882f5c6e6d11eb48d11"
+    },
+    "Float32 2ch Average": {
+      "frames": 6000,
+      "sha256": "63ad1e24a84a4f77662669c930b984975b320591d87ba5806ce33d38257b7669"
+    },
+    "Float32 3ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "b79fdf7fddbc07681ef880e9818d41b74b59d91feea3777282c4b82dfd736b3c"
+    },
+    "Float32 3ch Average": {
+      "frames": 6000,
+      "sha256": "f451a3bf4dbee3b979cdc4b01ea23c2883f7bbfaeb0fd3a4ae760e1082f53bc2"
+    },
+    "Float32 4ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "bf5947d8747f370804a26f4c2b5612af24f0a43f09ebbdbd6c60540704eac816"
+    },
+    "Float32 4ch Average": {
+      "frames": 6000,
+      "sha256": "f4a29ef12e2812fc9a24c9bbedb71cac110cb9ad8c5b7aebfb8701d04dc6dcae"
+    },
+    "Float32 6ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "21cc8e141c8a836aa0f3fd5b48708487a0329c046a384b5e23c6a4328092a7a5"
+    },
+    "Float32 6ch Average": {
+      "frames": 6000,
+      "sha256": "5acf5740206a534bd3bfe0c8c21c336a6e66bd84aea9a6b23550cf86f1f9a377"
+    },
+    "Float32 8ch Ffmpeg": {
+      "frames": 6000,
+      "sha256": "bccdb0a7a08921def15015336c060be049268e1671c373e5492f9110f9bd5523"
+    },
+    "Float32 8ch Average": {
+      "frames": 6000,
+      "sha256": "9696f03e9528c88a747dc8403f43014539a9956b1f7f4b9188d406dd56f29596"
+    }
+  }
+}

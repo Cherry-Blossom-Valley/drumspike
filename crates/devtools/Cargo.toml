@@ -1,0 +1,27 @@
+[package]
+name = "drumspike-devtools"
+description = "Drum Spike developer tools: the parity, bench, cache_tool and service_tool binaries and the ds-bridge test bridge (not part of the product)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# LAYOUT 2: the tool binaries moved here from drumspike-core (parity, bench, cache_tool) and
+# drumspike-app (service_tool, ds-bridge). The product crates keep only product code. Binary names
+# are unchanged; the same exact pins as the product crates (no new crate in Cargo.lock).
+[dependencies]
+drumspike-core = { path = "../core", features = ["audio"] }
+drumspike-app = { path = "../app" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }
+rayon = "=1.12.0"
+
+[features]
+# service_tool records the job stages into a Chrome trace (`DRUMSPIKE_TRACE=<file.json>`).
+trace = ["drumspike-app/trace"]
+
+[dev-dependencies]
+midly = { version = "=0.5.3", default-features = false, features = ["std"] }
+# the tests hash files (they include the app tests common; MIT OR Apache-2.0)
+sha2 = { version = "=0.11.0", default-features = false }

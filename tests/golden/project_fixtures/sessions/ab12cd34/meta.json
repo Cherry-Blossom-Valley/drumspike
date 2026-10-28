@@ -1,0 +1,1 @@
+{"tracks": {"Kick_In": {"role": "kick", "note": 36, "sr": 48000, "n_samples": 72000, "duration": 1.5, "color": "#e05555", "params": {"min_gap_ms": 20}}, "Empty": {"role": "other", "note": 36}}, "name": "Song: Take 2", "created": 1759950000.5, "order": ["Empty", "Kick_In"]}

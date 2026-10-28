@@ -1,0 +1,52 @@
+{
+ "file": "pcm16_short100.wav",
+ "wav_sha256": "9ccf1d5147ca6f0d9f12cdb392b04b6a9d1c99409ec7ec96333224cd1892da4e",
+ "t0s": [0.0, 0.001],
+ "modes": {
+  "ffmpeg": {
+   "sr": 48000,
+   "n_samples": 100,
+   "signal_sha256": "7a12e561363385e9dfeeab326368731c030ed4b374e7f5897ac819159d2884c5",
+   "peaks": {
+    "256": {
+     "n": 1,
+     "min_sha256": "d0bca111f8628137adc4c16f123496dcdd1d590d06cb5d9acd68b39fe656fb97",
+     "max_sha256": "d0bca111f8628137adc4c16f123496dcdd1d590d06cb5d9acd68b39fe656fb97",
+     "rms": [0]
+    },
+    "4096": {
+     "n": 1,
+     "min_sha256": "d0bca111f8628137adc4c16f123496dcdd1d590d06cb5d9acd68b39fe656fb97",
+     "max_sha256": "d0bca111f8628137adc4c16f123496dcdd1d590d06cb5d9acd68b39fe656fb97",
+     "rms": [0]
+    },
+    "65536": {
+     "n": 1,
+     "min_sha256": "d0bca111f8628137adc4c16f123496dcdd1d590d06cb5d9acd68b39fe656fb97",
+     "max_sha256": "d0bca111f8628137adc4c16f123496dcdd1d590d06cb5d9acd68b39fe656fb97",
+     "rms": [0]
+    }
+   },
+   "hits": [
+    {
+     "t0": 0.0,
+     "t": 0.0,
+     "rise_db": null
+    },
+    {
+     "t0": 0.001,
+     "t": 0.001,
+     "rise_db": 0.0
+    }
+   ],
+   "velocities": [20, 20],
+   "midi": {
+    "sha256": "bae2ef3d6623a5a1f69c818fb82ca41279d1c8ab13be6598a5c06a767f5f7ca2",
+    "notes": [
+     [0, 36, 20, 2400],
+     [48, 36, 20, 2400]
+    ]
+   }
+  }
+ }
+}

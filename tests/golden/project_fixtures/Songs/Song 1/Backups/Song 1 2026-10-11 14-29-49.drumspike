@@ -1,0 +1,12 @@
+{
+ "format": 1,
+ "name": "Song 1",
+ "created": 1791721789.551708,
+ "modified": 1791721789.551714,
+ "settings": {
+  "mix_mode": "average"
+ },
+ "order": [],
+ "tracks": {},
+ "view": {}
+}

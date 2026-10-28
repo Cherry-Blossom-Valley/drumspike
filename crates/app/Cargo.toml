@@ -1,0 +1,53 @@
+[package]
+name = "drumspike-app"
+description = "Drum Spike service layer: the commands of the desktop app as plain Rust functions (no Tauri)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "drumspike_app"
+path = "src/lib.rs"
+
+# P3-3a adds no crate that Cargo.lock does not hold already: the same exact pins as
+# drumspike-core. The Tauri wrappers live in apps/desktop/src-tauri; this crate has no
+# Tauri dependency, so x86-mac builds and tests it.
+[dependencies]
+# P3-5b: the app plays through the native transport (feature `audio`: cpal, rtrb, rubato; all on the
+# approved licence list, see the P3-5a report). The PyO3 module does not turn the feature on.
+drumspike-core = { path = "../core", features = ["audio"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }
+# P3-15b: the small preparation pool of the analysis job (the same pin as drumspike-core;
+# no new crate in Cargo.lock). MIT OR Apache-2.0.
+rayon = "=1.12.0"
+
+# P4-4: track names compare as APFS compares file names (canonical caseless match: NFD and full
+# case folding), so two tracks never share their export files or their Analysis folder.
+# caseless: MIT; unicode-normalization: MIT OR Apache-2.0 (and its tinyvec: Zlib OR Apache-2.0 OR MIT).
+caseless = "=0.2.2"
+unicode-normalization = "=0.1.25"
+# #387: the SHA-256 of the accepted licence text goes into the project record (MIT OR Apache-2.0)
+sha2 = { version = "=0.11.0", default-features = false }
+
+# P3-7a: the test bridge (bin ds-bridge, in crates/devtools since LAYOUT 2) serves static/ and the commands over HTTP on 127.0.0.1.
+# X-3 (P3-9b): its HTTP/1.1 server is in src/bridge.rs (std only); tiny_http 0.12 is removed.
+
+
+# P3-15c: the optional `trace` feature records spans (commands, job stages, lock waits) into a Chrome
+# trace file (`DRUMSPIKE_TRACE=<file.json>`). Without the feature none of these crates is built and
+# `crate::trace` compiles to nothing. All MIT.
+tracing = { version = "=0.1.44", optional = true, default-features = false, features = ["std"] }
+tracing-subscriber = { version = "=0.3.23", optional = true, default-features = false, features = ["registry", "std"] }
+tracing-chrome = { version = "=0.7.2", optional = true }
+
+[features]
+trace = ["dep:tracing", "dep:tracing-subscriber", "dep:tracing-chrome"]
+
+[dev-dependencies]
+# P4-8: the tests read note ticks from the exported files (the same pin as drumspike-core; MIT OR Apache-2.0)
+midly = { version = "=0.5.3", default-features = false, features = ["std"] }
+# the tests hash files (relink, export_safety, lifecycle, cross_load; MIT OR Apache-2.0)
+sha2 = { version = "=0.11.0", default-features = false }

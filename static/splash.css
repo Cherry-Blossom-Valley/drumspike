@@ -1,0 +1,24 @@
+/* P3-17: the splash window (640 x 400, borderless, opaque: owner decision, no private macOS API). Same colours as style.css. */
+:root { --bg: #14161a; --panel: #1c1f26; --line: #2c313c; --text: #cdd3de; --dim: #7d8593; --accent: #4da3ff; --orange: #ff9f43; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: var(--bg); overflow: hidden; cursor: default; user-select: none; -webkit-user-select: none; }
+body { font: 13px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); }
+.card {
+  position: relative; width: 100vw; height: 100vh; overflow: hidden;
+  background: radial-gradient(120% 90% at 18% 30%, #232a36 0%, var(--bg) 62%);
+  border: 1px solid var(--line);   /* the 1 px frame of the borderless window */
+  display: flex; flex-direction: column;
+}
+.stage { flex: 1; display: flex; align-items: center; gap: 8px; padding: 18px 36px 0 18px; min-height: 0; }
+.art { flex: none; width: 300px; height: 300px; margin: -14px 0 0 -26px; filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.5)); }
+.text { flex: 1; min-width: 0; margin-left: -34px; }
+.name { margin: 0; font-size: 44px; line-height: 1.05; font-weight: 700; letter-spacing: -0.5px; color: #f2f5fa; }
+.version { margin: 6px 0 26px; color: var(--dim); font-size: 13px; }
+.status { margin: 0 0 10px; color: var(--orange); font-size: 14px; min-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar { height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.bar span { display: block; width: 36%; height: 100%; border-radius: 2px; background: var(--accent); animation: slide 1.5s ease-in-out infinite; }
+@keyframes slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(300%); } }
+.by { flex: none; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 0 0 16px; opacity: 0.35; }
+.by span { font-size: 11px; color: var(--text); letter-spacing: 0.4px; }
+.cbv { height: 40px; width: auto; display: block; }
+@media (prefers-reduced-motion: reduce) { .bar span { animation: none; width: 100%; opacity: 0.5; } }

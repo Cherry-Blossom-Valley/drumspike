@@ -1,0 +1,447 @@
+# CI on the self-hosted Intel Mac runner x86-mac (x86_64, macOS 15, labels self-hosted,
+# x86-mac, x86_64). uv and rustup (stable) are installed for the runner user. The first step puts
+# their folders on the job PATH itself, so the job does not depend on the login PATH of the
+# process that started the runner (the first run, 38046832787, failed with "cargo: command not
+# found" for that reason).
+# P3-12 (owner decision 2026-10-11): the Python server and the PyO3 module are retired. Python
+# is a test tool only (pytest, the browser tests through ds-bridge); no ffmpeg, no maturin, one
+# pytest run. The parity tests compare the Rust tools (target/release/parity, service_tool) with
+# the frozen references in tests/golden/frozen/; DRUMSPIKE_REQUIRE_CORE=1 turns the skip of the
+# tests that need those binaries into a failure, so a missing build cannot pass the job.
+# Phase 3 (card P3-8c, proposal for the owner): the job "test" also builds the test bridge
+# ds-bridge and runs the app e2e tests (gate G4) with the null audio device;
+# DRUMSPIKE_REQUIRE_APP=1 turns the skip of the e2e_app tests (no ds-bridge binary) into a
+# failure. The job "desktop-app" runs on the owner's Apple Silicon Mac (runner label
+# arm64-mac) and only when the owner starts the workflow by hand with the input
+# run_desktop: debug .app (G3), self-test (G5), ad hoc signed .dmg. No signing identity, no
+# notary profile and no secret is used. Setup of that runner: docs/archive/ci-phase3.md.
+# The timeout of the job test is 50 minutes (was 40): G4 adds 3 to 4 minutes.
+# CI split (v3.22, owner decision 2026-10-15): the run is faster in four ways.
+#  - Jobs of one push: "test" (x86-mac, x86: all Rust steps, all pytest tests except e2e_app, and the e2e_app
+#    shard "x86"), "e2e-arm64" (arm64-mac: ds-bridge build, the e2e_app shard "rest" = all other files; it runs on push to
+#    main, by hand and on a PR with the label ci:e2e, not on crew/* pushes (#296), with
+#    the host lock ~/.cache/drumspike/heavy.lock.d, waits at most 20 minutes for it, then goes on), and
+#    "js-coverage" (ubuntu-latest since #52: merges the raw JS coverage of both shards and gates 85 % per file).
+#    "desktop-app" is unchanged (by hand only).
+#  - The shards: DRUMSPIKE_E2E_SHARD (tests/e2e_app/conftest.py) selects test files; the list of the files of the shard
+#    "x86" is tests/e2e_shards.json (every other file is in "rest", so none is lost; a new file runs on arm64).
+#    Measured on the Apple Silicon Mac (2026-10-15, 580 s for all 46 files): the shard x86 is 51 s of it, which is
+#    about 100 s on x86-mac; expected: test about 15 minutes (Rust 10, other tests, shard), e2e-arm64 about 11. Rebalance by moving
+#    file names in that list. No DRUMSPIKE_E2E_SHARD means all tests and the full gate, as before.
+#  - Coverage: a shard run does not gate. With DRUMSPIKE_JS_COV_OUT it writes its raw coverage; both files are
+#    uploaded as the artifacts js-cov-x86 and js-cov-arm64; `python tests/jscov.py merge` (job js-coverage) merges them.
+#  - CI #475 (owner decision 2026-10-27): crew/** pushes start no run at all (the agents run the
+#    full gate locally before done, and a branch run blocks the one x86-mac runner ahead of a main
+#    push). The push trigger is main and feat/** only; a crew branch that wants a CI run uses
+#    workflow_dispatch on its ref (the done notes keep "ci-info: no CI run").
+#  - paths-ignore on the push trigger: a push that changes only docs/** or the root files AGENTS.md, CLAUDE.md,
+#    README.md, .crewboard.toml, AUTHORITY.md (crewboard config, crewboard #24) starts no run. No test reads a file in docs/ (checked 2026-10-15). A push with any other path runs.
+# CI-FB (owner request 2026-10-16): fall back to GitHub-hosted macOS runners when the self-hosted ones
+# (x86-mac, arm64-mac) are too loaded, stale or unresponsive. Each of test, e2e-arm64 and js-coverage
+# picks its own runs-on and CI_RUNNER_MODE inline from the workflow_dispatch input runners (by-hand runs)
+# or, failing that, the repository variable CI_RUNNERS (push runs, no commit needed); unset or anything
+# else than "github" means self-hosted, as before. This runs on ubuntu-latest in no job, so an exhausted
+# or blocked GitHub-hosted minutes quota never stops a self-hosted run. On "github": test and js-coverage
+# run on macos-15-intel (Intel), e2e-arm64 on macos-15 (Apple silicon); desktop-app stays self-hosted only
+# (arm64-mac, by hand). The GitHub-hosted steps install their own Rust (dtolnay/rust-toolchain@stable,
+# the same channel as rust-toolchain.toml) and uv (astral-sh/setup-uv). The
+# heavy-lock step (e2e-arm64) runs only on arm64-mac.
+# Build caches (#52, owner request 2026-10-17; before: no job kept target/, the test job compiled 526 crates per run):
+#  - Self-hosted jobs check out with clean: false and then run `git clean -ffdx -e target/`: every untracked file
+#    (test-results, stray files, node_modules) still goes, but target/ stays at its normal path (tests read
+#    target/release/parity and service_tool), so cargo builds incrementally. No test result or test output is cached:
+#    cargo always runs every test again.
+#  - A disk guard before the first build removes target/ when it is over 20 GB (x86-mac) or 30 GB (arm64-mac) and says so.
+#  - GitHub-hosted (CI-FB): setup-uv with enable-cache, and Swatinem/rust-cache@v2 that saves only on main.
+#  - js-coverage runs on ubuntu-latest: it only merges two artifacts (17 s) and must not queue behind a self-hosted job.
+#    It is the one job on GitHub-hosted minutes in a push run; with no minutes left only this job fails.
+#  - concurrency: a run on main has its own group per commit (release.yml checks the run of each main commit);
+#    a branch run still cancels the older run of the same branch.
+name: ci
+
+on:
+  push:
+    # #475 (owner decision 2026-10-27): crew/** pushes start no run (the agents gate locally);
+    # a crew branch that wants CI uses workflow_dispatch on its ref.
+    branches: [main, "feat/**"]
+    paths-ignore:
+      - "docs/**"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "README.md"
+      - ".crewboard.toml"
+      - "AUTHORITY.md"
+  # #296: a PR that carries the label ci:e2e starts a run on the merge ref; the job e2e-arm64
+  # reads the labels in its if. The labeled event fires for every label, so a run without
+  # ci:e2e ends with all jobs skipped (no runner time). Types stay [labeled] on purpose: a
+  # synchronize trigger would start a second run for every push to an open PR.
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      run_desktop:
+        description: "Also run the job desktop-app on the arm64-mac runner (builds the app, opens a window)"
+        type: boolean
+        default: false
+      runners:
+        description: "Runners for test, e2e-arm64 and js-coverage (CI-FB fallback)"
+        type: choice
+        options: [self-hosted, github]
+        default: self-hosted
+
+# The event name is in the group, so a by-hand run (which can start the arm64-mac job) never
+# cancels the run of a push on the same branch, and the other way round. On main the group is the commit
+# (#52): a push to main never cancels the run of an earlier main commit.
+concurrency:
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  # CI-FB: self-hosted unless a by-hand run asks for "github" (workflow_dispatch input runners) or,
+  # for a push, the repository variable CI_RUNNERS is set to "github". Anything else stays self-hosted.
+  test:
+    # #296: the pull_request trigger (label ci:e2e) exists for the e2e job only
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ fromJSON(((github.event_name == 'workflow_dispatch' && inputs.runners) || vars.CI_RUNNERS) == 'github' && '["macos-15-intel"]' || '["self-hosted","x86-mac"]') }}
+    timeout-minutes: 75
+    env:
+      CARGO_TERM_COLOR: never
+      CI_RUNNER_MODE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.runners) || vars.CI_RUNNERS) == 'github' && 'github' || 'self-hosted' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          clean: false
+
+      # #52: keep target/ between runs (incremental builds); every other untracked file goes as before
+      - name: Clean the workspace, keep target/
+        run: git clean -ffdx -e target/
+
+      # #52: a kept target/ grows; over 20 GB (x86-mac) it goes, and the build starts from scratch
+      - name: Disk guard for target/
+        if: env.CI_RUNNER_MODE != 'github'
+        run: |
+          if [ -d target ]; then
+            kb=$(du -sk target | cut -f1)
+            echo "target/ is $((kb / 1024 / 1024)) GB"
+            if [ "$kb" -gt $((20 * 1024 * 1024)) ]; then echo "::warning::target/ is over 20 GB: removed, this run builds from scratch"; rm -rf target; fi
+          else
+            echo "no target/: this run builds from scratch"
+          fi
+
+      - name: Tool PATH (uv, cargo)
+        if: env.CI_RUNNER_MODE != 'github'
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Rust toolchain (CI-FB, GitHub-hosted)
+        if: env.CI_RUNNER_MODE == 'github'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust build cache (CI-FB, GitHub-hosted)
+        if: env.CI_RUNNER_MODE == 'github'
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: uv (CI-FB, GitHub-hosted)
+        if: env.CI_RUNNER_MODE == 'github'
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+
+      - name: Tool versions
+        run: |
+          cargo --version
+          uv --version
+
+      - name: Rust format
+        run: cargo fmt --all -- --check
+
+      - name: Rust lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      # the parity binary and service_tool: the parity tests call them (P3-12)
+      - name: Release build of the devtools binaries (parity, bench, cache_tool, service_tool)
+        run: |
+          cargo build --release -p drumspike-devtools
+
+      # P3-8c: the test bridge for the tests in tests/e2e_app (debug build only)
+      - name: Debug build of the test bridge (ds-bridge)
+        run: cargo build -p drumspike-devtools --bin ds-bridge
+
+      - name: Python environment
+        run: |
+          uv sync
+          uv run playwright install chromium
+
+      # G2: all tests except e2e_app, plus the e2e_app shard "x86" (the shard "rest" runs in the job e2e-arm64).
+      # The shard run does not gate JS coverage: the job js-coverage does, over both shards.
+      - name: pytest
+        run: |
+          DRUMSPIKE_E2E_SHARD=x86 DRUMSPIKE_JS_COV_OUT="$RUNNER_TEMP/js-cov-x86.json" \
+          DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 DRUMSPIKE_REQUIRE_CORE=1 uv run pytest -q
+
+      - name: Upload raw JS coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: js-cov-x86
+          path: ${{ runner.temp }}/js-cov-x86.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # CI split: the e2e_app shard "rest" on the owner's Apple Silicon Mac (about 2x faster than x86-mac).
+  # #296: no arm64-mac e2e on crew/* pushes: the local gate is the gate and the coordinator's combined-main
+  # gate after each merge covers the e2e. The job runs on push to main, by hand (workflow_dispatch), and
+  # on a PR that carries the label ci:e2e (merge ref). Same signing guard as desktop-app (the job reads no secret).
+  # The host lock ~/.cache/drumspike/heavy.lock.d keeps this job away from the owner's other heavy runs:
+  # wait at most 20 minutes, then go on with a warning. Only the job that made the lock removes it.
+  e2e-arm64:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'ci:e2e')) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ${{ fromJSON(((github.event_name == 'workflow_dispatch' && inputs.runners) || vars.CI_RUNNERS) == 'github' && '["macos-15"]' || '["self-hosted","arm64-mac"]') }}
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: never
+      CI_RUNNER_MODE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.runners) || vars.CI_RUNNERS) == 'github' && 'github' || 'self-hosted' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          clean: false
+
+      # #52: keep target/ between runs (incremental builds); every other untracked file goes as before
+      - name: Clean the workspace, keep target/
+        run: git clean -ffdx -e target/
+
+      # CI goes before the agents on this host : register in the waiting list at once,
+      # so no agent takes the host lock during the setup steps below. Soft: a missing script only warns.
+      - name: Register CI with the host lock
+        if: env.CI_RUNNER_MODE != 'github'
+        run: |
+          # the crewboard binary (crewboard lock), else the older skill script
+          PATH="$HOME/.local/bin:$PATH"; if command -v crewboard >/dev/null; then hl() { crewboard lock "$@"; }; have_lock=yes; elif [ -f "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" ]; then hl() { bash "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" "$@"; }; have_lock=yes; else have_lock=no; fi
+          if [ "$have_lock" = yes ]; then hl ci-wait "$HOME/.cache/drumspike/heavy.lock.d" --owner "ci-${{ github.run_id }}" --pid runner; else echo "::warning::crewboard not installed; CI is protected only by Runner.Worker detection"; fi
+
+      - name: No signing settings in the environment
+        run: |
+          for v in APPLE_SIGNING_IDENTITY APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_API_KEY APPLE_API_ISSUER APPLE_KEYCHAIN_PROFILE DRUMSPIKE_SIGN_IDENTITY DRUMSPIKE_NOTARY_PROFILE; do
+            if [ -n "$(printenv "$v")" ]; then echo "$v is set: remove it from the runner environment"; exit 1; fi
+          done
+
+      - name: Tool PATH (uv, cargo)
+        if: env.CI_RUNNER_MODE != 'github'
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+
+      - name: Rust toolchain (CI-FB, GitHub-hosted)
+        if: env.CI_RUNNER_MODE == 'github'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust build cache (CI-FB, GitHub-hosted)
+        if: env.CI_RUNNER_MODE == 'github'
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: uv (CI-FB, GitHub-hosted)
+        if: env.CI_RUNNER_MODE == 'github'
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+
+      - name: Tool versions
+        run: |
+          cargo --version
+          uv --version
+          uname -m
+
+      # #52: a kept target/ grows; over 30 GB (arm64-mac) it goes, and the build starts from scratch
+      - name: Disk guard for target/
+        if: env.CI_RUNNER_MODE != 'github'
+        run: |
+          if [ -d target ]; then
+            kb=$(du -sk target | cut -f1)
+            echo "target/ is $((kb / 1024 / 1024)) GB"
+            if [ "$kb" -gt $((30 * 1024 * 1024)) ]; then echo "::warning::target/ is over 30 GB: removed, this run builds from scratch"; rm -rf target; fi
+          else
+            echo "no target/: this run builds from scratch"
+          fi
+
+      - name: Python environment
+        run: |
+          uv sync
+          uv run playwright install chromium
+
+      - name: Debug build of the test bridge (ds-bridge)
+        run: cargo build -p drumspike-devtools --bin ds-bridge
+
+      - name: Host lock (heavy.lock.d)
+        if: env.CI_RUNNER_MODE != 'github'
+        id: lock
+        run: |
+          PATH="$HOME/.local/bin:$PATH"; if command -v crewboard >/dev/null; then hl() { crewboard lock "$@"; }; have_lock=yes; elif [ -f "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" ]; then hl() { bash "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" "$@"; }; have_lock=yes; else have_lock=no; fi
+          lock="$HOME/.cache/drumspike/heavy.lock.d"
+          mkdir -p "$HOME/.cache/drumspike"
+          if [ "$have_lock" = no ]; then echo "::warning::crewboard not installed; going on without the host lock"; echo "made=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # take as CI: a waiting agent never blocks it; wait at most 20 minutes, then go on with a warning
+          if hl take "$lock" --ci --owner "ci-${{ github.run_id }}" --wait 1200 --pid runner; then
+            echo "made=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::host lock $lock still held after 20 minutes ($(hl status "$lock" 2>&1 | head -1)); going on without it"
+            echo "made=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: pytest e2e_app, shard rest
+        run: |
+          DRUMSPIKE_E2E_SHARD=rest DRUMSPIKE_JS_COV_OUT="$RUNNER_TEMP/js-cov-arm64.json" \
+          DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 \
+          uv run pytest -q tests/e2e_app
+
+      - name: Release the host lock and leave the CI waiting list
+        if: always() && env.CI_RUNNER_MODE != 'github'
+        run: |
+          PATH="$HOME/.local/bin:$PATH"; if command -v crewboard >/dev/null; then hl() { crewboard lock "$@"; }; have_lock=yes; elif [ -f "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" ]; then hl() { bash "$HOME/.config/agent-skills/crewboard/loops/host-lock.sh" "$@"; }; have_lock=yes; else have_lock=no; fi
+          lock="$HOME/.cache/drumspike/heavy.lock.d"
+          [ "$have_lock" = yes ] || exit 0
+          if [ "${{ steps.lock.outputs.made }}" = "true" ]; then hl release "$lock" --owner "ci-${{ github.run_id }}"; fi
+          hl ci-done "$lock" --owner "ci-${{ github.run_id }}"
+
+      - name: Upload raw JS coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: js-cov-arm64
+          path: ${{ runner.temp }}/js-cov-arm64.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # CI split: merge the raw JS coverage of both shards and fail under 85 % per file (tests/jscov.py merge).
+  # #52: GitHub-hosted (ubuntu-latest) in every mode: the job needs only the two artifacts and uv, and a 17 s job must
+  # not wait 10+ minutes for the x86-mac runner behind a PR's test job (measured 2026-10-17, run 39033773547).
+  js-coverage:
+    needs: [test, e2e-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: uv
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: js-cov-*
+          path: ${{ runner.temp }}/js-cov
+
+      - name: Merge and gate (85 % per file)
+        run: |
+          ls -l "$RUNNER_TEMP"/js-cov/*/*.json
+          uv sync
+          uv run python tests/jscov.py merge "$RUNNER_TEMP"/js-cov/js-cov-x86/js-cov-x86.json "$RUNNER_TEMP"/js-cov/js-cov-arm64/js-cov-arm64.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-js
+          path: coverage-js.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # P3-8c (owner decision B4): the Apple Silicon Mac arm64-mac is a second self-hosted runner.
+  # The job starts only by hand (workflow_dispatch with run_desktop); a dispatch needs write access to
+  # the repository, so forks and outside contributors cannot start it.
+  # No signing: build-dmg.sh signs ad hoc ("codesign --sign -"), which reads no keychain item.
+  # The job has no "secrets." reference and fails when a signing variable is set.
+  desktop-app:
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.run_desktop
+    runs-on: [self-hosted, arm64-mac]
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          clean: false
+
+      # #52: keep target/ between runs (incremental builds); every other untracked file goes as before
+      - name: Clean the workspace, keep target/
+        run: git clean -ffdx -e target/
+
+      # fail when the runner process has a signing setting: this job must stay ad hoc only
+      - name: No signing settings in the environment
+        run: |
+          for v in APPLE_SIGNING_IDENTITY APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_API_KEY APPLE_API_ISSUER APPLE_KEYCHAIN_PROFILE DRUMSPIKE_SIGN_IDENTITY DRUMSPIKE_NOTARY_PROFILE; do
+            if [ -n "$(printenv "$v")" ]; then echo "$v is set: remove it from the runner environment"; exit 1; fi
+          done
+
+      - name: Tool PATH (uv, cargo, Homebrew node)
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/node@22/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+
+      - name: Tool versions and free disk space
+        run: |
+          cargo --version
+          uv --version
+          node --version
+          npm --version
+          uname -m
+          df -h . | tail -1
+
+      # #52: a kept target/ grows; over 30 GB (arm64-mac) it goes, and the build starts from scratch
+      - name: Disk guard for target/
+        run: |
+          if [ -d target ]; then
+            kb=$(du -sk target | cut -f1)
+            echo "target/ is $((kb / 1024 / 1024)) GB"
+            if [ "$kb" -gt $((30 * 1024 * 1024)) ]; then echo "::warning::target/ is over 30 GB: removed, this run builds from scratch"; rm -rf target; fi
+          else
+            echo "no target/: this run builds from scratch"
+          fi
+
+      # the self-test scenarios slice and shell read real tracks (DRUMSPIKE_SELFTEST_SESSION)
+      - name: Self-test session present
+        run: |
+          session="${DRUMSPIKE_SELFTEST_SESSION:-$HOME/.cache/drumspike/sessions/Session A}"
+          test -d "$session/Audio Files" || { echo "no session at $session"; exit 1; }
+
+      - name: Python environment
+        run: uv sync
+
+      - name: THIRD_PARTY.md is current
+        run: uv run --no-project --python 3.12 apps/desktop/scripts/gen_third_party.py --check
+
+      - name: App build, debug (G3)
+        run: |
+          cd apps/desktop
+          npm ci
+          npx tauri build --debug --target aarch64-apple-darwin --bundles app --ci
+
+      - name: Self-test slice (G5, silent)
+        run: apps/desktop/scripts/self-test.sh slice
+
+      - name: Self-test shell (G5, silent)
+        run: apps/desktop/scripts/self-test.sh shell
+
+      - name: Release app and ad hoc signed dmg
+        run: apps/desktop/scripts/build-dmg.sh
+
+      - name: Result files
+        if: always()
+        run: |
+          ls -l target/aarch64-apple-darwin/release/bundle/dmg/*.dmg || true
+          shasum -a 256 target/aarch64-apple-darwin/release/bundle/dmg/*.dmg || true

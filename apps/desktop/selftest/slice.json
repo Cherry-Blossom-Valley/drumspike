@@ -1,0 +1,8 @@
+{
+  "name": "slice",
+  "timeout_s": 300,
+  "project": "$DRUMSPIKE_SELFTEST_PROJECT",
+  "expect": {"tracks": 10, "detector": "rust-dsp", "min_hits_total": 100},
+  "frames": {"seconds": 2, "max_layout_reads": 0},
+  "record_events": true
+}

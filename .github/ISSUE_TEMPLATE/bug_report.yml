@@ -1,0 +1,43 @@
+name: Bug report
+description: Something in Drum Spike does not work as expected.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Drum Spike version
+      description: Help > About in the app.
+      placeholder: "0.9.4"
+    validations:
+      required: true
+  - type: dropdown
+    id: mac
+    attributes:
+      label: Your Mac
+      options: [Apple silicon (M1 or newer), Intel]
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "macOS 15.6"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: What did you do? Name the menu items or keys.
+      placeholder: "1. Add Tracks...\n2. Analyze\n3. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: More information
+      description: Screenshots, the sample rate and format of the audio, or a short audio example if you may share it.

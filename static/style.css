@@ -1,0 +1,470 @@
+:root {
+  --grid-bar: rgba(138,147,163,0.34); --grid-beat: rgba(138,147,163,0.14); --grid-sub: rgba(138,147,163,0.07);   /* P4-8: the bar and beat lines in the lanes; #469: the 8th and 16th lines */
+  --bg: #14161a; --panel: #1c1f26; --panel2: #22262f; --line: #2c313c;
+  --learn-this: #4cc38a; --learn-not: #e5534b;   /* P4-6a: Learn marks (not the role colours) */
+  --text: #cdd3de; --dim: #7d8593; --accent: #4da3ff; --orange: #ff9f43;
+  --thead-w: 230px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+/* P4-29: native app feel. No selection, arrow cursor, no page drag or rubber band; text fields and `.selectable` text keep theirs. */
+html, body { -webkit-user-select: none; user-select: none; cursor: default; overscroll-behavior: none; -webkit-user-drag: none; }
+img, a, canvas { -webkit-user-drag: none; }
+input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=range]), textarea, [contenteditable=""], [contenteditable="true"], .selectable,
+.selectable * { -webkit-user-select: text; user-select: text; cursor: text; }
+button, select, input[type=checkbox], input[type=radio], input[type=range] { cursor: default; }
+:focus:not(:focus-visible) { outline: none; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 13px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+#topbar {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.logo { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 4px; }
+.brandIcon { width: 30px; height: 30px; flex: none; display: block; margin: -3px 0; }   /* P4-28: the SVG has about 10 % padding; the negative margin keeps the top bar height */
+.spacer { flex: 1; }
+.sep { width: 1px; height: 22px; background: var(--line); }
+.tgroup { display: flex; gap: 2px; }
+.btn { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12px;
+  transition: box-shadow .3s, border-color .3s; }
+@keyframes btnflash { 0% { box-shadow: 0 0 0 4px rgba(77,163,255,0.55); border-color: var(--accent); } 100% { box-shadow: 0 0 0 0 rgba(77,163,255,0); } }
+.btn.flash { animation: btnflash .45s ease-out; }
+.btn:hover { background: #2b303b; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.icon { width: 32px; text-align: center; padding: 5px 0; }
+.btn.mini { font-size: 10px; padding: 2px 6px; }
+.btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn:disabled { opacity: .5; cursor: default; }
+.session-box select { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px; }
+.transport { display: flex; align-items: center; gap: 6px; }
+.timebox { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.1; }
+.time { font-variant-numeric: tabular-nums; color: var(--orange); font-weight: 700; font-size: 15px; min-width: 112px; text-align: right; }
+.samplenote { font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.nudgeSel { background: transparent; color: var(--dim); border: 0; border-radius: 4px; padding: 0; font-size: 10px; cursor: pointer; font-variant-numeric: tabular-nums; }   /* P3-20a */
+.nudgeSel:hover { color: var(--text); }
+.ampLbl { font-size: 11px; color: var(--accent, #ffe066); font-variant-numeric: tabular-nums; padding: 0 4px; }   /* P3-20a: hidden at 1x */
+.followToggle { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--dim); cursor: pointer; }
+
+/* P3-14b: the info line has a fixed height, so a selected hit never moves the lanes */
+.infoLine { flex: none; height: 26px; display: flex; align-items: center; padding: 0 12px; background: var(--panel2);
+  border-bottom: 1px solid var(--line); font-size: 12px; white-space: nowrap; overflow: hidden; contain: strict; width: 100%; }
+.ilEmpty { color: var(--dim); }
+.ilFields { display: flex; align-items: center; gap: 18px; min-width: 0; }
+.ilf { display: inline-flex; align-items: baseline; gap: 6px; }
+.ilf i { font-style: normal; color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.ilf b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ilIn { width: 84px; height: 20px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px;
+  padding: 0 5px; font: inherit; font-variant-numeric: tabular-nums; text-align: right; }
+.ilIn:focus { outline: none; border-color: var(--accent); }
+.ilInV { width: 46px; }
+#ilOrigin[data-o="moved"], #ilOrigin[data-o="added"] { color: #ff4fd8; }
+#overviewWrap { position: relative; height: 52px; background: var(--panel); border-bottom: 1px solid var(--line); contain: strict; }
+#overview { width: 100%; height: 100%; display: block; cursor: crosshair; }
+#overviewWrap.hidden { display: none; }   /* #169: View > Show Overview; the lanes take its 52 px */
+#presetBody .presetRow { display: flex; gap: 8px; align-items: center; margin: 6px 0; }   /* #169: Organize Zoom Presets */
+#presetBody .presetRow input { flex: 1; min-width: 0; }
+
+.track.dragging { opacity: 0.92; position: relative; z-index: 5;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.55); background: #1a1f28; }
+#progressWrap { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; max-width: 60%; }   /* in the status bar */
+#statusbar:has(#progressWrap:not(.hidden)) #stMsg { display: none; }   /* a running job shows its own text */
+#progressWrap.hidden { display: none; }
+#progressTrack { flex: none; width: 120px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.08); overflow: hidden; }
+#progressBar { height: 100%; width: 0%; background: var(--accent); transition: width .3s; }
+#progressBar.indeterminate { width: 30% !important; animation: pslide 1.1s infinite linear; }
+@keyframes pslide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+#progressText { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+#progressCancel { flex: none; font-size: 10px; padding: 0 8px; line-height: 15px; }
+body.draggingTrack, body.draggingTrack * { user-select: none !important; cursor: grabbing !important; }
+.thead { cursor: default; user-select: none; }
+
+.track.selTrack .thead { background: #20252f; }
+.track.selTrack .thead::after { content: ""; position: absolute; left: 4px; top: 0; bottom: 0; width: 2px; background: var(--accent); }   /* P3-14c: the accent line next to the colour strip */
+.track.selTrack .tname { color: var(--accent); }
+.track.selTrack { outline: 1px solid rgba(77,163,255,0.35); }
+
+#editor { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; }   /* P3-14a: min-width 0, so the editor gives the Inspector its width (a flex item does not shrink under its content by default) */
+#playheadOverlay {   /* in #editor, over the ruler and the lanes; positionPlayhead keeps its x inside the lane area (P3-14a) */
+  position: absolute; top: 0; bottom: 0; left: 0; width: 1px;
+  background: #ff9f43; z-index: 30; pointer-events: none;
+  box-shadow: 0 0 4px rgba(255,159,67,0.7); will-change: transform;   /* P3-14d: moved by the compositor */
+}
+#playheadOverlay::before {
+  content: ""; position: absolute; top: 0; left: -3px;
+  border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-top: 7px solid #ff9f43;
+}
+#rulerRow { display: flex; border-bottom: 1px solid var(--line); background: var(--panel); contain: layout paint; }
+#rulerRow .thead { width: var(--thead-w); flex: none; padding: 4px 8px; font-size: 10px; color: var(--dim); }
+#rulerClip { flex: 1; min-width: 0; overflow: hidden; position: relative; }   /* P4-1: clips the ruler strip (two views wide) at the lane area */
+#ruler { display: block; height: 22px; cursor: crosshair; image-rendering: pixelated; }   /* P3-17: a canvas without a CSS height takes the 2:1 box of its 300 x 150 backing store, 685 px at 1600 px width, until the first resizeCanvases; P4-1: the width comes from sizeCanvases (a strip: two views) */
+#lanesScroll { flex: 1; overflow: hidden auto; position: relative; z-index: 1; contain: layout paint; }   /* P3-14d: a change inside lays out only the lanes */
+/* #157: the other mics under the selected hit: one small lane per track, under the lanes (View > Other Mics Under Hit) */
+#micsPanel { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 6px 12px; background: var(--panel); border-top: 1px solid var(--line, #2a2f38); }
+.mxRow { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mxHead { display: flex; justify-content: space-between; gap: 8px; }
+.mxName { font-size: 11px; color: var(--muted, #8a93a3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mxGain { font-size: 10px; color: var(--muted, #8a93a3); white-space: nowrap; }
+canvas.mxCan { width: 240px; height: 40px; display: block; border-radius: 3px; }
+#lanesGL { position: absolute; z-index: 0; pointer-events: none; width: 0; height: 0; }   /* P3-6a: the WebGL2 wave lanes under the 2D lanes; P3-17: 0 x 0 until the first size */
+/* P4-1: the GL strip (two views of wave lanes as two bitmaps from the tile worker) over #lanesGL and under the 2D lanes,
+   clipped at the lane area; its inner box moves by a compositor animation. Pixelated: a translation by a fraction of a
+   pixel shows the nearest pixel (sharp hit lines), not a blend of two. */
+#lanesGLStrip { position: absolute; z-index: 0; pointer-events: none; overflow: hidden; display: none; }
+#lanesGLStrip > div { position: absolute; left: 0; top: 0; will-change: transform; }
+#lanesGLStrip canvas { position: absolute; top: 0; image-rendering: pixelated; }
+
+.track { border-bottom: 1px solid var(--line); }
+.track-row { display: flex; }
+/* P3-14c: the compact header (Pro Tools and Cubase models): the role colour on a 4 px strip at the left edge (full height),
+   the name, the role line, then one grid for every track: M, S, the volume and the pan with their readouts under them;
+   the P3-16 meter at the right edge. The header fits the small height (90 px). */
+.thead {
+  width: var(--thead-w); flex: none; background: var(--panel); position: relative;
+  border-right: 1px solid var(--line); padding: 4px 22px 4px 12px; display: flex; flex-direction: column; gap: 1px; overflow: hidden;
+}
+.tstrip { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
+.tname { font-weight: 600; font-size: 12px; line-height: 16px; display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.tname .tnm { overflow: hidden; text-overflow: ellipsis; }
+.tdot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }   /* the Inspector's colour dot */
+.tnote { color: var(--dim); font-size: 10px; line-height: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tctl { display: grid; grid-template-columns: 20px 20px minmax(0, 1fr) 44px; gap: 2px 4px; align-items: center; margin-top: 3px; }
+.tctl .mini { font-size: 10px; padding: 0; height: 16px; line-height: 14px; width: 20px; }
+.tctl .mini.on { background: var(--orange); color: #fff; border-color: var(--orange); }
+.tctl .mslider { width: auto; }
+.tctl .mval { width: auto; text-align: left; line-height: 10px; }
+.tctl .mval[data-for="vol"] { grid-column: 3; }
+.tctl .mval[data-for="pan"] { grid-column: 4; }
+.tlanes { flex: 1; position: relative; min-width: 0; contain: layout paint; }
+canvas.lane { display: block; width: 100%; image-rendering: pixelated; }   /* P4-1: see #lanesGLStrip */
+canvas.spike { height: var(--spike-h, 34px); cursor: crosshair; border-bottom: 1px dashed rgba(255,255,255,0.06); }   /* P3-14c: the heights come from setTrackHeight */
+canvas.wave { height: var(--wave-h, 120px); cursor: crosshair; }
+/* P4-40f: the velocity lane under the spike lane; hidden until View > Velocity Lane turns it on */
+canvas.lane.vel { height: 80px; display: none; cursor: crosshair; border-top: 1px solid rgba(255,255,255,0.05); }   /* #208: the height is the app setting velocity_lane_height (sizeLaneCanvas sets it inline) */
+body.velOn canvas.lane.vel { display: block; }
+canvas.lane.vel.onStalk { cursor: pointer; }
+/* P4-40b: the lane cursor says what a click does. Select: the arrow over a hit (ew-resize: it drags), crosshair on the lane; Option: a plus (add);
+   Option+Shift over a hit: an eraser cross (delete). The classes come from app.js (curApply). */
+canvas.spike.onHit { cursor: ew-resize; }
+#lanesScroll.curAdd canvas.spike, #lanesScroll.curAdd canvas.wave { cursor: copy; }
+#lanesScroll.curDelete canvas.spike.onHit { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20'><path d='M4 4L16 16M16 4L4 16' stroke='white' stroke-width='5' stroke-linecap='round'/><path d='M4 4L16 16M16 4L4 16' stroke='%23d33' stroke-width='2.5' stroke-linecap='round'/></svg>") 10 10, no-drop; }
+#mapRulers canvas.onMarker { cursor: ew-resize; }   /* the bar-1 marker of the Bars|Beats ruler, a tempo step marker */
+.track.muted .tlanes { opacity: .35; }
+.rowResize { position: absolute; left: 0; right: 0; bottom: 0; height: 7px; cursor: ns-resize; z-index: 4; }   /* #167: the drag handle on the lower border of a row */
+.track.solo .thead { outline: 1px solid var(--orange); }
+
+/* P3-16 mixer: volume and pan per track, the track meter, the master fader and meter */
+.mslider { position: relative; height: 12px; background: #11141a; border: 1px solid var(--line); border-radius: 6px; cursor: ew-resize; flex: none; }
+.mslider.vol { width: 86px; }
+.mslider.pan { width: 40px; }
+.mslider .mfill { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(77,163,255,0.35); border-radius: 6px; pointer-events: none; }
+.mslider .mcenter { position: absolute; left: 50%; top: 1px; bottom: 1px; width: 1px; background: var(--line); pointer-events: none; }
+.mslider .mknob { position: absolute; top: -2px; width: 6px; height: 14px; margin-left: -3px; background: var(--text); border-radius: 2px; pointer-events: none; }
+.mval { font-size: 9px; color: var(--dim); font-variant-numeric: tabular-nums; width: 30px; text-align: right; }
+.mval.mvalPan { width: 24px; text-align: left; }
+.meter { position: absolute; right: 5px; top: 5px; bottom: 5px; width: 11px; display: flex; flex-direction: column; gap: 2px; cursor: default; }
+.meter .mclip { height: 5px; flex: none; background: #3a1d1d; border-radius: 1px; cursor: pointer; }
+.mclip.on { background: #ff3b3b; box-shadow: 0 0 4px #ff3b3b; }
+/* P4-40h: the bars and the hold lines are painted on one canvas per meter (app.js drawMeter); the slots, the
+   gradient fill and the 1 px hold lines are drawn there, so the old .mbar/.mlvl/.mhold elements are gone. */
+.meter .mbars { flex: 1; display: flex; min-height: 0; overflow: hidden; }   /* min-height 0: the canvas intrinsic height must not pin the box, or the stale attribute never shrinks */
+.meter .mbars canvas, .mmeter .mhbars canvas { display: block; width: 100%; height: 100%; }
+.master { display: flex; align-items: center; gap: 5px; margin-left: 8px; }
+.master .mlab { font-size: 10px; color: var(--dim); }
+.mmeter { display: flex; align-items: center; gap: 3px; }
+.mmeter .mhbars { display: flex; flex-direction: column; width: 90px; height: 10px; min-width: 0; overflow: hidden; }   /* the two 4 px bars and the 2 px gap of the old markup; min-width 0 against the canvas intrinsic width */
+.mmeter .mclip { width: 6px; height: 10px; background: #3a1d1d; border-radius: 1px; cursor: pointer; }
+#mixTip { position: fixed; z-index: 60; background: #000c; color: #fff; font-size: 10px; padding: 2px 5px; border-radius: 3px; pointer-events: none; font-variant-numeric: tabular-nums; }
+
+/* P3-14a: the Inspector (left zone, Cubase model) replaced the params drawer under the lane. #work holds the
+   Inspector and the editor side by side; the editor (and so the lanes) shrinks by the Inspector's width, which
+   the ResizeObserver of P3-14d reports (no layout read in a frame). */
+#work { flex: 1; display: flex; min-height: 0; min-width: 0; }
+#inspector { width: 320px; flex: none; background: var(--panel); border-right: 1px solid var(--line);
+  overflow: hidden auto; padding: 6px 10px 12px; font-size: 11px; contain: layout paint; }
+#inspector.hidden { display: none !important; }
+.insHead { display: flex; align-items: center; justify-content: space-between; font-size: 10px; font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--dim); margin: 2px 0 8px; }
+.insClose { background: none; border: 0; color: var(--dim); cursor: pointer; font: inherit; font-size: 15px; line-height: 1; padding: 0 2px; }
+.insClose:hover { color: var(--text); }
+.insEmpty { color: var(--dim); font-size: 11px; padding: 10px 0; }
+.insName { display: flex; align-items: center; gap: 6px; }
+.insName .tdot { flex: none; }
+#insName { flex: 1; min-width: 0; background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 4px;
+  padding: 2px 4px; font: inherit; font-size: 13px; font-weight: 600; }
+#insName:hover { border-color: var(--line); }
+#insName:focus { border-color: var(--accent); outline: none; background: var(--panel2); }
+#insRole { margin: 2px 0 0 19px; }
+.insRow { display: flex; align-items: center; gap: 6px; padding: 2px 0; min-width: 0; }
+.insLab { color: var(--dim); width: 56px; flex: none; }
+.insVal { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.insVal.offline { color: #ff6b6b; }
+#inspector { overflow-x: hidden; }
+#inspector .prow { grid-template-columns: 1fr; gap: 2px; padding: 3px 0; }
+#inspector .pctl input[type=number], #inspector .pctl input[type=text] { width: 70px; }
+#inspector .pactions { flex-wrap: wrap; }
+#inspector .insMix { margin-top: 4px; }
+/* P4-25: collapsible sections, the width handle */
+.insSec { border-top: 1px solid var(--line); margin: 0 -10px; padding: 0 10px; }
+.insSec:first-of-type { margin-top: 8px; }
+.insSecHead { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; background: none; border: 0; color: var(--text); cursor: pointer;
+  font: inherit; padding: 6px 0; text-align: left; }
+.insSecHead:hover .insSecTitle { color: var(--accent); }
+.insSecHead:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.insTri { flex: none; width: 0; height: 0; border-left: 5px solid var(--dim); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform .12s; }
+.insSec.open > .insSecHead .insTri { transform: rotate(90deg); }
+.insSecTitle { flex: none; font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.insSum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 10px; font-variant-numeric: tabular-nums; }
+.insSec.open > .insSecHead .insSum { display: none; }
+.insSec:not(.open) > .insSecBody { display: none; }
+.insSecBody { padding: 0 0 6px 11px; }
+#insParams > .pbody { max-width: none; }
+.insMixSlot { margin-top: 6px; }
+#insHandle { flex: none; width: 1px; margin-right: -1px; cursor: col-resize; position: relative; z-index: 3; touch-action: none; }   /* no layout width: the lanes get the rest exactly */
+#insHandle::before { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; width: 6px; }
+#insHandle:hover::before, #insHandle.drag::before { background: var(--accent); opacity: .5; }
+#inspector.hidden + #insHandle { display: none; }
+.pbody { max-width: 760px; }
+.ptitle { font-size: 9px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--accent); margin: 10px 0 4px; padding-bottom: 3px; border-bottom: 1px solid var(--line); }
+.prow { display: grid; grid-template-columns: 190px 1fr; align-items: center; gap: 12px;
+  padding: 3px 0; }
+.prow:hover { background: rgba(255,255,255,0.02); }
+.prow label { font-size: 11px; color: var(--text); display: flex; align-items: center; gap: 5px; cursor: help; }
+.pinfo { cursor: help; font-size: 8px; color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 50%; width: 12px; height: 12px; display: inline-flex; align-items: center;
+  justify-content: center; opacity: .7; flex: none; font-style: normal; }
+.pinfo:hover { opacity: 1; }
+.phint { font-size: 9px; color: var(--dim); }
+.phint.lyWarn { color: var(--orange); font-weight: 600; }
+/* 0.9.1: the role select of the Inspector, dark like the other selects; the hint line under it */
+#insRoleSel { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; font-size: 11px; max-width: 220px; }
+.insRoleHint { padding-left: 62px; white-space: normal; }
+.punit { font-size: 9px; color: var(--dim); }
+.pctl { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pctl input[type=number], .pctl input[type=text] {
+  width: 90px; background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 4px; padding: 3px 6px; font-size: 12px; }
+.pctl input[type=number]:focus, .pctl input[type=text]:focus { border-color: var(--accent); outline: none; }
+.pctl input[type=checkbox] { accent-color: var(--accent); width: 13px; height: 13px; }
+.pctlWide { flex: 1; }
+.pctlWide input[type=range] { flex: 1; accent-color: var(--accent); }
+.pactions { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+/* P3-18: the follow select of the Inspector, the weak-signal note, the follow text of the header and the Add Tracks box */
+.pctl select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; font-size: 11px; max-width: 220px; }
+.pSensNote { color: var(--accent); }
+.tfollow { color: var(--accent); }
+.ufollowWrap { font-size: 10px; color: var(--accent); display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.ufollowWrap input { accent-color: var(--accent); margin: 0; }
+.btn.on { background: var(--accent); color: #0d1015; border-color: var(--accent); }
+
+/* ---------------- the recent list of the empty page; the settings sheet (P3-13a: Drum Spike > Settings) ---------------- */
+.sbProjName { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sbProjSub { font-size: 10px; color: var(--dim); }
+.sbSetGroup { margin-bottom: 14px; }
+/* P3-16: Settings > Audio output */
+#setOutput { width: 100%; }
+#setOutputNow { margin: 2px 0 0 152px; }
+.setWarn { color: #ff6b6b; font-size: 10px; margin: 4px 0 0 152px; }
+#settingsModal .modal-box { width: 420px; }
+#settingsModal .prow { grid-template-columns: 140px 1fr; }
+#settingsModal .pctl input[type=range] { width: 100%; min-width: 0; }
+#settingsModal .pctl input[type=number] { width: 100%; max-width: 90px; }
+.hidden { display: none !important; }
+
+#statusbar {
+  display: flex; gap: 16px; padding: 5px 12px; background: var(--panel);
+  border-top: 1px solid var(--line); font-size: 11px; color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; contain: layout paint;   /* P3-14d: one line, so a long text does not move the lanes */
+}
+#statusbar > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#stSel { color: var(--text); }
+#stSpeed { color: var(--orange); font-weight: 600; }   /* P3-20b: shown while the transport plays at half speed */
+#stDet.warn { color: var(--orange); font-weight: 600; }
+#stDet.err { color: #e5484d; font-weight: 600; }
+#stStale { display: inline-flex; gap: 6px; }   /* #121: Reload from disk, Save anyway */
+.terrmark { color: #e5484d; font-size: 11px; font-weight: 600; margin-top: 2px; word-break: break-word; }
+
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.modal-box { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 18px; width: 600px; max-height: 80vh; overflow: auto; }
+.modal-box h3 { margin: 0 0 6px; }
+.hint { color: var(--dim); font-size: 11px; }
+.keymap { width: 100%; border-collapse: collapse; margin: 8px 0; }
+.keymap td { padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.keymap td:first-child { width: 220px; color: var(--accent); }
+.keymap tr.kmGroup td { padding-top: 10px; color: var(--text); font-weight: 600; font-size: 12px; }   /* P3-13b: one heading per menu */
+.keymap tr.kmNone td:first-child { color: var(--dim); }
+.urow { display: flex; gap: 8px; align-items: center; }
+.urow .fname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.urow select, .urow input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; }
+.urow input { width: 60px; }
+#undoHistModal .modal-box { width: 460px; }
+#undoHistList { display: flex; flex-direction: column; gap: 2px; margin: 8px 0; }
+.uhRow { text-align: left; background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; font-size: 12px; cursor: pointer; }
+.uhRow:hover { border-color: var(--accent); }
+.uhRow.uhRedo { color: var(--dim); font-style: italic; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
+.progress { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 4px; }
+.progress > div { height: 100%; background: var(--accent); width: 0%; transition: width .3s; }
+.empty-state { padding: 60px; text-align: center; color: var(--dim); }
+
+/* ---------------- dirty dot, track badges (P0-8) ---------------- */
+#confirmModal, #importModal { z-index: 130; }   /* above the other dialogs (a prompt of a menu item) */
+.dirtyDot { color: var(--orange); margin-right: 4px; font-size: 12px; }
+.dirEmpty { color: var(--dim); font-size: 11px; padding: 8px; }
+.urowBar { display: flex; gap: 10px; align-items: center; }
+.urow .fname.ref::before { content: "🔗 "; }
+.tlink { font-size: 11px; cursor: help; }
+.tOffline { background: #7a2e2e; border-color: #a33; color: #fff; font-size: 10px; padding: 1px 6px; }
+.track.offline .tlanes { opacity: .4; }
+.imRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; margin: 6px 0; }
+.imRow .imName { font-weight: 600; font-size: 12px; }
+.imRow .imSub { color: var(--dim); font-size: 10px; }
+.sbRecent { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 6px; cursor: pointer; }
+.sbRecent:hover { background: rgba(255,255,255,0.04); }
+.sbRecent .sbProjSub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.empty-state.noProject .esActs { display: flex; gap: 8px; justify-content: center; margin: 14px 0 18px; }
+.empty-state.noProject .ptitle { text-align: center; }
+#esRecentList { max-width: 460px; margin: 0 auto; text-align: left; }
+/* #441: the Clear Recent control of the start screen, under the list */
+#esRecentClear { display: block; margin: 10px auto 0; font-size: 10px; padding: 3px 10px; }
+#esRecentClear[hidden] { display: none; }
+
+/* P3-14e: icon toggles, the zoom dropdown, the track header context menu */
+.zoomSel { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px; font-size: 11px; }
+.btn.tgl { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+.btn.tgl input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.btn.tgl:has(input:checked), .btn.tgl.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn.tgl[data-mode="off"] { opacity: .6; }
+#ctxMenu { position: fixed; z-index: 80; min-width: 150px; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 0; box-shadow: 0 6px 20px rgba(0,0,0,.5); font-size: 12px; }
+#ctxMenu button { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--text); padding: 5px 12px; cursor: pointer; font: inherit; }
+#ctxMenu button:hover:not(:disabled) { background: var(--accent); color: #fff; }
+#ctxMenu button:disabled { opacity: .45; cursor: default; }
+/* P4-3: the histograms of the Inspector. The Sensitivity slider runs over its histogram (Massey DRT): the range input
+   lies on the canvas with a transparent track and a thin tall thumb; app.js draws the bars on the thumb's travel
+   (HG_THUMB = 12 px). The loudness canvas takes its handles by pointer. */
+.hgCol { flex-direction: column; align-items: stretch; gap: 3px; }
+.hgWrap { position: relative; height: 46px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+.hgLoudWrap { height: 64px; }
+.hgCanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.hgLoudCanvas { cursor: ew-resize; touch-action: none; }
+.hgWrap.hgEmpty { height: 20px; }
+.hgSliderRow { position: relative; height: 14px; }
+.pctlWide input.hgRange { -webkit-appearance: none; appearance: none; position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; background: transparent; cursor: ew-resize; }
+input.hgRange::-webkit-slider-runnable-track { height: 2px; background: var(--line); border: 0; margin: 6px 0; }
+input.hgRange::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-top: -5px; border: 0; border-radius: 50%;
+  background: var(--accent); }
+input.hgRange:focus { outline: none; }
+input.hgRange:focus-visible::-webkit-slider-thumb { background: #fff; }
+input.hgRange:disabled { cursor: default; opacity: .5; }
+.hgLine { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 18px; }
+.hgHead { display: flex; align-items: baseline; gap: 4px; min-width: 0; }
+.hgHead .hgSensCount { margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hgMarkRow { position: relative; height: 8px; }
+.hgGapBtn { position: absolute; top: 0; width: 10px; height: 8px; padding: 0; border: 0; background: var(--accent); cursor: pointer;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.hgGapBtn:hover { background: var(--text); }
+
+/* P4-8: the tempo, meter and Bars|Beats rulers above the time ruler (a row is as wide as the time ruler: the same GEO.rulerW) */
+#mapRulers { position: relative; background: var(--panel); contain: layout paint; border-bottom: 1px solid var(--line); }
+#mapRulers .mrow { display: flex; height: 18px; border-bottom: 1px solid var(--line); }
+#mapRulers .mrow:last-of-type { border-bottom: 0; }
+#mapRulers .mrow.hidden, #mapRulers.hidden, #mapEdit.hidden { display: none; }
+#mapRulers .thead { width: var(--thead-w); flex: none; padding: 2px 8px; font-size: 10px; color: var(--dim); display: flex; flex-direction: row; align-items: center; justify-content: space-between; box-sizing: border-box; }
+/* owner 2026-10-14: Detect Tempo on the tempo ruler */
+#mapRulers .mBtn { font: 10px -apple-system, sans-serif; height: 14px; line-height: 12px; padding: 0 6px; color: var(--text); background: transparent;
+  border: 1px solid var(--line); border-radius: 3px; cursor: pointer; }
+#mapRulers .mBtn:hover { border-color: var(--accent); color: var(--accent); }
+#mapRulers .mclip { flex: 1; min-width: 0; overflow: hidden; position: relative; }
+#mapRulers .mcan { display: block; height: 18px; image-rendering: pixelated; }   /* P3-17: a canvas without a CSS height takes its backing-store box */
+#mapEdit { position: absolute; z-index: 5; width: 64px; height: 16px; padding: 0 4px; font: 11px -apple-system, sans-serif; color: var(--text);
+  background: var(--bg); border: 1px solid var(--accent); border-radius: 3px; outline: none; }
+#tempoBody p { margin: 4px 0; }
+#tempoBody .tdim { color: var(--dim); }
+#tempoBody .twarn { color: var(--orange); }
+#tempoBody table { border-collapse: collapse; margin: 4px 0; }
+#tempoBody td { padding: 1px 12px 1px 0; }
+
+/* P4-6a: the Learn row of the Inspector, the range selection in the info line */
+.lnCol { flex-direction: column; align-items: stretch; gap: 4px; }
+.lnBtns { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+/* P4-7a: the Layer section of the Inspector */
+.lyCol { flex-direction: column; align-items: stretch; gap: 4px; }
+.lyZone { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; padding: 8px; border: 1px dashed var(--line); border-radius: 6px; }
+.lyZone.set { border-style: solid; }
+.lyViewHead { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.lyViewInfo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lyViewWrap { position: relative; height: 56px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+.lyView { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+.lyViewTitle { font-size: 11px; font-weight: 600; min-width: 0; }
+.lyFile { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.lyZone:not(.set) .lyFile { color: var(--dim); }
+.lyBtns { display: flex; gap: 4px; flex: none; }
+.smZone { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; padding: 8px; border: 1px dashed var(--line); border-radius: 6px; }
+.smZone.set { border-style: solid; }
+.smFile { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.smZone:not(.set) .smFile { color: var(--dim); white-space: normal; }   /* #243: the placeholder wraps instead of clipping at the default Inspector width */
+.smBtns { display: flex; gap: 4px; flex: none; }
+.lnBtns .btn:disabled { opacity: .4; cursor: default; }
+.lnFilter { font-size: 10px; color: var(--dim); display: inline-flex; align-items: center; gap: 3px; margin-left: 4px; }
+.lnList summary { font-size: 10px; color: var(--dim); cursor: pointer; }
+.lnMk { display: flex; align-items: center; gap: 6px; font-size: 10px; padding: 1px 2px; cursor: pointer; border-radius: 3px; }
+.lnMk.sel { background: var(--panel2); outline: 1px solid var(--accent); }
+.lnMk .lnTxt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lnDot.this { color: var(--learn-this); } .lnDot.not { color: var(--learn-not); }
+.lnX { padding: 0 5px; line-height: 14px; }
+.ilSel { color: var(--accent); font-size: 11px; margin-left: 12px; }
+
+/* P4-25: the stepper of a number field (replaces the native spin buttons) */
+#inspector input[type=number]::-webkit-inner-spin-button, #inspector input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+#inspector input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+.stepper { display: inline-flex; align-items: stretch; }
+.stepper input[type=number], .stepper input[type=text] { border-radius: 0; text-align: center; }
+.stepBtn { width: 22px; min-height: 22px; padding: 0; background: var(--panel2); color: var(--text); border: 1px solid var(--line); cursor: pointer; font: inherit; font-size: 13px; line-height: 1; }
+.stepDn { border-radius: 4px 0 0 4px; border-right: 0; } .stepUp { border-radius: 0 4px 4px 0; border-left: 0; }
+.stepBtn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.stepBtn:active { filter: brightness(1.15); }
+
+/* P4-28: the Rename Project dialog */
+#renameModal .modal-box { width: 380px; }
+#renameField { width: 100%; box-sizing: border-box; margin: 6px 0 4px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--accent); border-radius: 4px; padding: 5px 7px; }
+
+/* P4-6c: the similarity histogram of the Learn row */
+.lnHist { width: 100%; height: 60px; display: block; margin-top: 4px; background: var(--bg); border: 1px solid var(--dim); border-radius: 3px; cursor: crosshair; }
+.lnHist.onLine { cursor: col-resize; }   /* P4-40b: the Match and Add lines (vertical lines, dragged sideways) */
+.lnHistRow { display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--dim); margin-top: 2px; }
+.lnHistRow .lnAuto { color: var(--accent); text-decoration: none; }
+
+/* P4-30: the Export dialog (scoped to #exportModal) */
+#exportModal .modal-box { width: 460px; }
+#exportModal .exSec { margin: 8px 0; }
+#exportModal .exLbl { font-size: 11px; color: var(--dim); margin-bottom: 3px; text-transform: uppercase; letter-spacing: .04em; }
+#exportModal .exRow { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; }
+#exportModal .exRow.off { opacity: .45; }
+#exportModal .exSub { margin: 0 0 2px 22px; }
+#exportModal .exDest { display: flex; gap: 6px; align-items: center; }
+#exportModal #exDest { flex: 1; min-width: 0; box-sizing: border-box; font: inherit; font-size: 12px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; user-select: text; -webkit-user-select: text; text-overflow: ellipsis; }
+#exportModal .exWarn { color: var(--orange); min-height: 0; margin: 2px 0; }
+#exportModal .exWarn:empty, #exportModal #exReplace:empty { display: none; }
+#exportModal .exResult { font-size: 12px; margin: 6px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#exportModal .exResult.hidden { display: none; }
+#exportModal .exActions { align-items: center; }
+#exportModal .exDrags { display: flex; gap: 6px; margin-right: auto; }
+#exportModal .exDrag { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; font-size: 11px; border: 1px dashed var(--line); border-radius: 6px; color: var(--text); background: var(--panel); cursor: grab; user-select: none; -webkit-user-select: none; }
+#exportModal .exDrag.hidden { display: none; }
+#exportModal .exDrag[data-state="ready"]:hover { border-color: var(--accent); }
+#exportModal .exDrag[data-state="preparing"] { cursor: progress; opacity: .7; }
+#exportModal .exDrag[data-state="disabled"], #exportModal .exDrag[data-state="error"] { cursor: default; opacity: .4; }
+#exportModal .exDragN { color: var(--dim); }
+.lnRow .lnHintMsg { display: block; color: var(--orange); margin-top: 2px; }
+/* #387: the licence text of a detector plugin (the modal of the first use and the Settings view) */
+#pluginLicenceModal .plText { max-height: 40vh; overflow: auto; font-size: 11px; line-height: 1.4;
+  white-space: pre-wrap; background: var(--bg, #16181d); border: 1px solid var(--border, #2a2d33);
+  border-radius: 4px; padding: 8px; color: var(--fg, #c8ccd2); }

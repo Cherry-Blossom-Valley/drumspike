@@ -1,0 +1,351 @@
+# P4-41 (owner decision 2026-10-16): release by tag. The controller pushes the tag vX.Y.Z after CI is
+# green on that commit. The jobs run in this order:
+#   check (arm64-mac)       tag = version in four files, release notes file, ci.yml green on the commit
+#   build (arm64-mac)       host lock, release.sh (sign + notarize, both architectures), artifacts
+#   intel-check (x86-mac)      the Intel .dmg under the hardened runtime (docs/RELEASING.md)
+#   publish (arm64-mac)     release.sh --publish-only --draft: a DRAFT release; the owner publishes it in GitHub
+# workflow_dispatch with dry_run runs everything except publish.
+# This workflow signs on purpose, so the signing guard of ci.yml is not used. The jobs read only two NAMES
+# (the identity name and the notary profile name, not secrets). The key and the notary password stay in
+# the owner's keychain on arm64-mac. No step prints the environment.
+# The owner's approval is the click "Publish release" on the draft (GitHub refuses required reviewers on
+# this private repository). A draft is visible only to collaborators.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (vX.Y.Z). Empty: the selected ref (a tag), else v<version of tauri.conf.json> on the selected commit"
+        type: string
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry run: check, build, notarize and Intel check, but no publish"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: never
+  DRUMSPIKE_SIGN_IDENTITY: "Developer ID Application: Wolfgang Frank (2NZX5Q2ESG)"
+  DRUMSPIKE_NOTARY_PROFILE: drumspike-notary
+
+jobs:
+  check:
+    runs-on: [self-hosted, arm64-mac]
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      version: ${{ steps.ver.outputs.version }}
+      sha: ${{ steps.ver.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Tool PATH
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+
+      - name: Tag equals the version in the four files, release notes exist
+        id: ver
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -eu
+          # the version of each file (a missing value stays empty and fails below)
+          v_cargo=$(awk '/^\[workspace\.package\]/{s=1;next} /^\[/{s=0} s && /^version *=/{gsub(/.*= *"|".*/,"");print;exit}' Cargo.toml)
+          [ -n "$v_cargo" ] || v_cargo=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)
+          v_tauri=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' apps/desktop/src-tauri/tauri.conf.json | head -n 1)
+          v_pkg=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' apps/desktop/package.json | head -n 1)
+          v_shell=$(sed -n 's/.*"expect" *: *{.*"version" *: *"\([^"]*\)".*/\1/p' apps/desktop/selftest/shell.json | head -n 1)
+          echo "Cargo.toml:        $v_cargo"
+          echo "tauri.conf.json:   $v_tauri"
+          echo "package.json:      $v_pkg"
+          echo "shell.json expect: $v_shell"
+          if [ -n "$INPUT_TAG" ]; then
+            tag=$INPUT_TAG
+          elif [ "$REF_TYPE" = tag ]; then
+            tag=$REF_NAME
+          else
+            tag="v$v_tauri"
+            echo "No tag given and the ref is a branch: using $tag on this commit (dry run only)."
+            if [ "$DRY_RUN" != true ]; then
+              echo "::error::a release needs a tag: push the tag vX.Y.Z or give it as the tag input. A branch without a tag is for dry_run=true only."
+              exit 1
+            fi
+          fi
+          case "$tag" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "::error::the tag '$tag' is not of the form vX.Y.Z"; exit 1 ;; esac
+          version=${tag#v}
+          for pair in "Cargo.toml=$v_cargo" "tauri.conf.json=$v_tauri" "package.json=$v_pkg" "shell.json=$v_shell"; do
+            if [ "${pair#*=}" != "$version" ]; then
+              echo "::error::tag $tag is version $version, but ${pair%%=*} says '${pair#*=}'. Fix the file, move the tag, push again."
+              exit 1
+            fi
+          done
+          notes="docs/release-notes/release-notes-$version.md"
+          [ -f "$notes" ] || { echo "::error::$notes is missing: write the release notes before the tag"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # ci.yml has paths-ignore (docs/**, AGENTS.md, CLAUDE.md, README.md): a commit that changes only
+      # those has no run. Walk back along the first parent to the nearest commit that ci.yml should
+      # have run on; that run must be green.
+      - name: The ci workflow is green on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          found=""
+          for c in $(git rev-list --first-parent -n 40 HEAD); do
+            runs=$(gh run list --repo "$REPO" --workflow ci.yml --commit "$c" --limit 30 --json conclusion,status,databaseId,event)
+            [ "$(echo "$runs" | jq 'type')" = '"array"' ] || { echo "::error::unexpected answer from gh run list: $runs"; exit 1; }
+            n=$(echo "$runs" | jq 'length')
+            if [ "$n" -gt 0 ]; then
+              found=$c
+              echo "ci runs on $(echo "$c" | cut -c1-8): $n"
+              echo "$runs" | jq -r '.[] | "  run \(.databaseId) \(.event) status=\(.status) conclusion=\(.conclusion)"'
+              if [ "$(echo "$runs" | jq '[.[] | select(.status == "completed" and .conclusion == "success")] | length')" -gt 0 ]; then
+                echo "ci is green on $c"
+                exit 0
+              fi
+              if [ "$(echo "$runs" | jq '[.[] | select(.status != "completed")] | length')" -gt 0 ]; then
+                echo "::error::ci is still running on $c: wait for it, then run this workflow again"
+              else
+                echo "::error::ci is not green on $c (no successful run): fix it or tag a green commit"
+              fi
+              exit 1
+            fi
+            # no run: fine only when the commit changes docs and root notes only
+            if git show --name-only --format= "$c" | grep -v -E '^(docs/|AGENTS\.md$|CLAUDE\.md$|README\.md$)' | grep -q .; then
+              echo "::error::no ci run on $c, and it changes code: push it to main or a feat branch and wait for a green ci, then tag"
+              exit 1
+            fi
+            echo "$(echo "$c" | cut -c1-8) changes only ignored paths (no ci run expected), looking at its parent"
+          done
+          echo "::error::no ci run on the last 40 commits"
+          exit 1
+
+  build:
+    needs: check
+    runs-on: [self-hosted, arm64-mac]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Tool PATH (uv, cargo, Homebrew node)
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/node@22/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+
+      - name: Tool versions
+        run: |
+          cargo --version
+          node --version
+          uname -m
+
+      # same lock as the e2e-arm64 job of ci.yml: wait at most 20 minutes, then go on with a warning
+      - name: Host lock (heavy.lock.d)
+        id: lock
+        run: |
+          lock="$HOME/.cache/drumspike/heavy.lock.d"
+          mkdir -p "$HOME/.cache/drumspike"
+          waited=0
+          until mkdir "$lock" 2>/dev/null; do
+            if [ "$waited" -ge 1200 ]; then
+              echo "::warning::host lock $lock still held after 20 minutes ($(cat "$lock"/* 2>/dev/null | head -1)); going on without it"
+              echo "made=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 15
+            waited=$((waited + 15))
+          done
+          echo "github-actions release build run $GITHUB_RUN_ID $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$lock/info"
+          echo "made=true" >> "$GITHUB_OUTPUT"
+
+      # The keychain is open only while the owner is logged in. A test signature of a copy of /usr/bin/true
+      # shows a locked keychain or a key that asks for a click in the first minute, not after a long build.
+      # No retry. The step prints no key data.
+      - name: Signing key is usable
+        run: |
+          set -u
+          t=$(mktemp -d)
+          cp /usr/bin/true "$t/probe"
+          if ! perl -e 'alarm 60; exec @ARGV' codesign --force --sign "$DRUMSPIKE_SIGN_IDENTITY" "$t/probe" >"$t/out" 2>&1; then
+            echo "::error::the signing key is not usable (keychain locked, owner not logged in, or the key waits for a click). Unlock the login keychain on arm64-mac, then run this workflow again."
+            sed -e 's/^/codesign: /' "$t/out" | head -n 5
+            rm -rf "$t"
+            exit 1
+          fi
+          rm -rf "$t"
+          echo "the signing key works"
+
+      - name: release.sh (build, sign, notarize, both architectures)
+        env:
+          DRUMSPIKE_RELEASE_NOTES: docs/release-notes/release-notes-${{ needs.check.outputs.version }}.md
+        run: apps/desktop/scripts/release.sh
+
+      - name: Release the host lock
+        if: always() && steps.lock.outputs.made == 'true'
+        run: rm -r "$HOME/.cache/drumspike/heavy.lock.d"
+
+      # release.sh writes target/release-X.Y.Z/SHA256SUMS only on publish (with the asset names); this list
+      # of the two .dmg files is for the run page and the Intel check.
+      - name: Check file names, write SHA256SUMS
+        env:
+          V: ${{ needs.check.outputs.version }}
+        run: |
+          set -eu
+          a="target/aarch64-apple-darwin/release/bundle/dmg/Drum Spike_${V}_aarch64.dmg"
+          x="target/x86_64-apple-darwin/release/bundle/dmg/Drum Spike_${V}_x86_64.dmg"
+          ls -l "$a" "$x"
+          mkdir -p "target/release-$V"
+          shasum -a 256 "$a" "$x" | sed 's#  .*/#  #' > "target/release-$V/SHA256SUMS"
+          cat "target/release-$V/SHA256SUMS"
+
+      # three artifacts, one file each: the download path of each is then simply the folder
+      - name: Upload arm64 dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmg-arm64
+          path: target/aarch64-apple-darwin/release/bundle/dmg/Drum Spike_${{ needs.check.outputs.version }}_aarch64.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload x86_64 dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmg-x86_64
+          path: target/x86_64-apple-darwin/release/bundle/dmg/Drum Spike_${{ needs.check.outputs.version }}_x86_64.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload SHA256SUMS
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha256sums
+          path: target/release-${{ needs.check.outputs.version }}/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  # The Intel app under the hardened runtime needs the right Team ID and must start
+  # (docs/RELEASING.md, "Check the Intel app on x86-mac"). Everything stays in
+  # $HOME/release-check.
+  intel-check:
+    needs: [check, build]
+    runs-on: [self-hosted, x86-mac]
+    timeout-minutes: 20
+    env:
+      V: ${{ needs.check.outputs.version }}
+    steps:
+      - name: Download the x86_64 dmg
+        uses: actions/download-artifact@v4
+        with:
+          name: dmg-x86_64
+          path: ~/release-check/in
+
+      - name: Check the Intel app
+        run: |
+          set -eu
+          cd $HOME/release-check
+          dmg="in/Drum Spike_${V}_x86_64.dmg"
+          rm -rf mnt app
+          mkdir mnt app
+          cleanup() { hdiutil detach -quiet "mnt/Drum Spike" 2>/dev/null || true; }
+          trap cleanup EXIT
+          test -f "$dmg" || { echo "::error::no $dmg"; exit 1; }
+          shasum -a 256 "$dmg"
+          spctl -a -vv -t install "$dmg"
+          hdiutil attach -readonly -nobrowse -noautoopen -mountroot mnt "$dmg"
+          ditto "mnt/Drum Spike/Drum Spike.app" "app/Drum Spike.app"
+          hdiutil detach -quiet "mnt/Drum Spike"
+          app="app/Drum Spike.app"
+          spctl -a -vv -t execute "$app"
+          info=$(codesign -dvv "$app" 2>&1)
+          echo "$info" | grep -E 'Authority=Developer|TeamIdentifier|flags'
+          echo "$info" | grep -q '^TeamIdentifier=2NZX5Q2ESG$' || { echo "::error::TeamIdentifier is not 2NZX5Q2ESG: $app"; exit 1; }
+          out=$("$app/Contents/MacOS/drumspike-desktop" --app-info) || { echo "::error::--app-info failed (exit $?)"; echo "$out"; exit 1; }
+          echo "$out"
+          printf '%s' "$out" | /usr/bin/python3 -I -c '
+          import json, sys
+          d = json.load(sys.stdin)
+          assert d["detector"] == "rust", "detector: %r" % (d,)
+          assert d["core_version"], "no core_version: %r" % (d,)
+          print("app-info: detector rust, core", d["core_version"])
+          '
+          echo "the Intel check passed"
+
+      - name: Clean up
+        if: always()
+        run: |
+          hdiutil detach -quiet "$HOME/release-check/mnt/Drum Spike" 2>/dev/null || true
+          rm -rf $HOME/release-check/mnt $HOME/release-check/app ~/release-check/in
+
+  # No environment gate: this job makes a DRAFT release. The owner publishes it in GitHub.
+  # release.sh publishes through the gh login of the owner on arm64-mac: this job sets no GH_TOKEN on purpose.
+  publish:
+    if: ${{ !inputs.dry_run }}
+    needs: [check, build, intel-check]
+    runs-on: [self-hosted, arm64-mac]
+    timeout-minutes: 20
+    steps:
+      # actions/checkout runs "git clean -ffdx" by default: it removes target/ with the notarized files.
+      # So the files come back from the artifacts below. A full clone (fetch-depth 0) lets
+      # "git branch -r --contains HEAD" of release.sh see the branches.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Tool PATH
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+
+      - name: Download the notarized dmg files
+        uses: actions/download-artifact@v4
+        with:
+          name: dmg-arm64
+          path: target/aarch64-apple-darwin/release/bundle/dmg
+
+      - name: Download the notarized x86_64 dmg
+        uses: actions/download-artifact@v4
+        with:
+          name: dmg-x86_64
+          path: target/x86_64-apple-darwin/release/bundle/dmg
+
+      - name: Same files as the build and the Intel check
+        env:
+          V: ${{ needs.check.outputs.version }}
+        run: |
+          set -eu
+          ls -l target/*-apple-darwin/release/bundle/dmg/
+          shasum -a 256 "target/aarch64-apple-darwin/release/bundle/dmg/Drum Spike_${V}_aarch64.dmg" \
+                        "target/x86_64-apple-darwin/release/bundle/dmg/Drum Spike_${V}_x86_64.dmg"
+
+      - name: release.sh --publish-only --draft
+        env:
+          DRUMSPIKE_RELEASE_NOTES: docs/release-notes/release-notes-${{ needs.check.outputs.version }}.md
+        run: apps/desktop/scripts/release.sh --publish-only --draft

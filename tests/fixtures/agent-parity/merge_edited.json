@@ -1,0 +1,157 @@
+{
+ "about": "P4-5 step 2b: merge_edited (Rust) against hgMerge and mergeKept (static/app.js). Keys compared: t, v, added, orig, rise, cut. mergeKept keeps only t, v, added, orig of an edited hit (its snapshot), so the cases give the edited hits no other key.",
+ "cases": [
+  {
+   "name": "an edited hit wins within 20 ms, a moved hit leaves its detected time as a pick",
+   "current": [
+    {
+     "t": 1.0,
+     "v": 80
+    },
+    {
+     "t": 2.0,
+     "v": 90,
+     "added": true
+    },
+    {
+     "t": 3.0,
+     "v": 70,
+     "orig": 2.95
+    }
+   ],
+   "picked": [
+    {
+     "t": 1.0,
+     "v": 81
+    },
+    {
+     "t": 2.01,
+     "v": 60
+    },
+    {
+     "t": 2.95,
+     "v": 55
+    },
+    {
+     "t": 3.5,
+     "v": 77,
+     "rise": 3.1
+    }
+   ],
+   "expected": [
+    {
+     "t": 1.0,
+     "v": 81
+    },
+    {
+     "t": 2.0,
+     "v": 90,
+     "added": true
+    },
+    {
+     "t": 2.95,
+     "v": 55
+    },
+    {
+     "t": 3.0,
+     "v": 70,
+     "orig": 2.95
+    },
+    {
+     "t": 3.5,
+     "v": 77,
+     "rise": 3.1
+    }
+   ]
+  },
+  {
+   "name": "no edited hit: the picks as they are, cut marks kept",
+   "current": [
+    {
+     "t": 1.0,
+     "v": 80
+    },
+    {
+     "t": 2.0,
+     "v": 90,
+     "orig": 2.0
+    }
+   ],
+   "picked": [
+    {
+     "t": 0.5,
+     "v": 50,
+     "cut": true
+    },
+    {
+     "t": 1.5,
+     "v": 99
+    }
+   ],
+   "expected": [
+    {
+     "t": 0.5,
+     "v": 50,
+     "cut": true
+    },
+    {
+     "t": 1.5,
+     "v": 99
+    }
+   ]
+  },
+  {
+   "name": "the window is strict: a pick 19 ms away goes, one exactly 20 ms away stays",
+   "current": [
+    {
+     "t": 2.0,
+     "v": 90,
+     "added": true
+    }
+   ],
+   "picked": [
+    {
+     "t": 2.02,
+     "v": 60
+    },
+    {
+     "t": 1.981,
+     "v": 61
+    }
+   ],
+   "expected": [
+    {
+     "t": 2.0,
+     "v": 90,
+     "added": true
+    },
+    {
+     "t": 2.02,
+     "v": 60
+    }
+   ]
+  },
+  {
+   "name": "no picks: only the edited hits",
+   "current": [
+    {
+     "t": 1.0,
+     "v": 80
+    },
+    {
+     "t": 4.0,
+     "v": 100,
+     "added": true
+    }
+   ],
+   "picked": [],
+   "expected": [
+    {
+     "t": 4.0,
+     "v": 100,
+     "added": true
+    }
+   ]
+  }
+ ]
+}

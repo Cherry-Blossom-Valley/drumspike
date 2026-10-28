@@ -1,0 +1,44 @@
+# Workspace root for the Rust migration (docs/migration/plan.md, phase 1).
+# Members: crates/core (drumspike-core, the application logic), crates/app (drumspike-app, the
+# service layer and commands, P3-3a), crates/devtools (drumspike-devtools: the parity, bench, cache_tool,
+# service_tool and ds-bridge binaries, LAYOUT 2),
+# apps/desktop/src-tauri (drumspike-desktop, the Tauri shell, P3-1b).
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/app", "crates/devtools", "apps/desktop/src-tauri"]
+
+[workspace.package]
+version = "0.9.4"
+edition = "2021"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# Keep the release settings for benches and the parity binary.
+[profile.bench]
+inherits = "release"
+
+# P3-5a: the playback resampler is too slow unoptimized (a full core in debug builds);
+# optimize these crates also in dev builds, the debug .app (G3) included.
+[profile.dev.package.rubato]
+opt-level = 3
+
+[profile.dev.package.realfft]
+opt-level = 3
+
+[profile.dev.package.rustfft]
+opt-level = 3
+
+# P3-5b: at opt-level 0 the debug .app played only after 5 to 6 s and sought in 3 s (30 tracks);
+# the core crate runs the transport reader and mixer, so it is optimized in dev builds too.
+[profile.dev.package.drumspike-core]
+opt-level = 3
+
+# P3-4d: the relink search hashes the first MiB of 30 files; unoptimised SHA-1 took 2 s on x86.
+[profile.dev.package.sha1]
+opt-level = 3

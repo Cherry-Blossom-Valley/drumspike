@@ -1,0 +1,8 @@
+{
+  "name": "keys",
+  "driver": "keys",
+  "timeout_s": 1200,
+  "project": "$DRUMSPIKE_SELFTEST_PROJECT",
+  "work": "$DRUMSPIKE_SELFTEST_DIR",
+  "expect": {"tracks": 10}
+}

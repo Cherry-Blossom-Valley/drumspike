@@ -1,0 +1,88 @@
+{
+  "name": "part1",
+  "title": "Screen recording, part 1: tracks in, hits on the attack, files out (#245)",
+  "script": "docs/product/scripts/rec-part1.md",
+  "viewport": {"width": 1920, "height": 1080},
+  "device_scale_factor": 2,
+  "skip": ["p1-role"],
+  "narration": {"tts_out": "~/.cache/drumspike/media/tts-out/rec-part1"},
+  "out": "~/.cache/drumspike/media/rec/part1.mp4",
+  "scenes": [
+    {"id": "p1-new", "steps": [
+      {"do": "caption", "text": "File > New Project…"},
+      {"do": "hold", "s": 0.6},
+      {"do": "answer_save", "path": "{projects}/Demo"},
+      {"do": "key", "press": "Meta+N"},
+      {"do": "wait", "cond": "() => S.name === 'Demo'", "timeout": 60, "err": "the new project Demo"},
+      {"do": "text", "sel": "#stMsg", "contains": "created Demo", "timeout": 15,
+       "err": "the app's own status line first: setMsg runs in a task of its own after S.name flips, so a rewrite that comes before it is overwritten"},
+      {"do": "show_text", "sel": "#stMsg", "text": "created Demo in ~/Music/Drum Spike/Projects/Demo",
+       "err": "the status bar of the new project, in the neutral home-relative form"}
+    ]},
+    {"id": "p1-add", "steps": [
+      {"do": "caption", "text": "File > Add Tracks…"},
+      {"do": "answer_pick", "path": "{session}/Audio Files"},
+      {"do": "key", "press": "Shift+Meta+I"},
+      {"do": "visible", "sel": "#tracksModal", "timeout": 30, "err": "the Add Tracks list"},
+      {"do": "wait", "cond": "() => { const rows = document.querySelectorAll('#tracksRows .urow'); const row = n => document.querySelector('#tracksRows .urow[data-stem=\"' + n + '\"]'); const role = n => { const el = row(n) && row(n).querySelector('.urole'); return el && el.value; }; const nt = row('new take'); return rows.length === 13 && !!nt && role('k in') === 'kick' && role('s top') === 'snare' && role('t1') === 'tom' && nt.querySelector('.urole').value === 'other' && !nt.querySelector('.ufromaudio') && !nt.querySelector('.uuse').checked; }", "timeout": 30, "err": "the demo rows: 13 rows, the roles from the names, new take without a role and unchecked"},
+      {"do": "select", "sel": "#tracksRows .urow[data-stem=\"new take\"] .urole", "value": "kick", "timeout": 15, "err": "the role of new take set to kick"},
+      {"do": "click", "sel": "#tracksRows .urow[data-stem=\"room\"] .uuse", "timeout": 15, "err": "the room mic checked"},
+      {"do": "hold", "s": 2.5},
+      {"do": "click", "sel": "#tracksAdd"},
+      {"do": "wait", "cond": "() => S.order.length === 13", "timeout": 120, "err": "the 13 demo tracks loaded"}
+    ]},
+    {"id": "p1-analyze", "steps": [
+      {"do": "click", "sel": "#analyzeAllBtn"},
+      {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the analysis started"},
+      {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the analysis finished"}
+    ]},
+    {"id": "p1-role", "steps": [
+      {"do": "click", "sel": ".track[data-name=\"new take\"] .thead .tname"},
+      {"do": "show_key", "press": "Alt+I", "sel": "#inspector", "timeout": 10, "err": "the Inspector"},
+      {"do": "click", "sel": ".insSec[data-sec=\"track\"] .insSecHead"},
+      {"do": "wait", "cond": "() => document.querySelector('#insRoleSel') && document.querySelector('#insRoleSel').value === 'kick'", "timeout": 30, "err": "the Inspector shows the role kick of new take"},
+      {"do": "text", "sel": "#insRoleSrc", "equals": "suggested from the audio", "timeout": 15, "err": "the role hint 'suggested from the audio'"},
+      {"do": "hold", "s": 2.0},
+      {"do": "select", "sel": "#insRoleSel", "value": "tom"},
+      {"do": "wait", "cond": "() => S.tracks['new_take'] && S.tracks['new_take'].role === 'tom'", "timeout": 30, "err": "the role changed to tom"},
+      {"do": "wait", "cond": "() => !analysisRunning", "timeout": 120, "err": "the re-analysis of the track finished"},
+      {"do": "hold", "s": 1.0},
+      {"do": "key", "press": "Meta+Z"},
+      {"do": "wait", "cond": "() => S.tracks['new_take'].role === 'kick'", "timeout": 30, "err": "undo brought the role kick back"},
+      {"do": "text", "sel": "#insRoleSrc", "equals": "suggested from the audio", "timeout": 15, "err": "the hint is back with the role"}
+    ]},
+    {"id": "p1-zoom", "steps": [
+      {"do": "click", "sel": ".track[data-name=\"s_top\"] .thead .tname"},
+      {"do": "key", "press": "Tab"},
+      {"do": "wait", "cond": "() => !document.querySelector('#ilFields').classList.contains('hidden') && document.querySelector('#ilSample').value.length > 0", "timeout": 15, "err": "a snare hit selected (the sample in the info line)"},
+      {"do": "hold", "s": 1.8},
+      {"do": "key", "press": "6"},
+      {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms zoom"},
+      {"do": "hold", "s": 1.2}
+    ]},
+    {"id": "p1-export", "steps": [
+      {"do": "show_dest", "text": "~/Music/Drum Spike/Exports",
+       "err": "the destination in the neutral home-relative form before the dialog opens (shots.py's EXPORTS_SHOWN); the show keeps against the app's own exRender re-renders"},
+      {"do": "key", "press": "Meta+E"},
+      {"do": "visible", "sel": "#exportModal", "timeout": 30, "err": "the Export dialog"},
+      {"do": "wait", "cond": "() => document.querySelector('#exModeTrack').checked && document.querySelector('#exMidi').checked && document.querySelector('#exSpikes').checked && document.querySelector('#exSpikeSynth').checked", "timeout": 15, "err": "the defaults: per track, MIDI and spike WAV, Synthetic"},
+      {"do": "hold", "s": 3.0},
+      {"do": "click", "sel": "#exGo"},
+      {"do": "wait", "cond": "d0 => !EX.busy && EX.done > d0", "arg": "() => EX.done", "timeout": 120, "err": "the export finished"},
+      {"do": "show_dest", "text": "~/Music/Drum Spike/Exports", "err": "the destination again (every exRender of the app re-asserts it; this re-patches if the hook missed)"},
+      {"do": "visible", "sel": "#exResult", "timeout": 15, "err": "the summary lists the files"},
+      {"do": "hold", "s": 2.0},
+      {"do": "click", "sel": "#exCancel"},
+      {"do": "wait", "cond": "() => document.querySelector('#exportModal').classList.contains('hidden')", "timeout": 15, "err": "the dialog closed"}
+    ]},
+    {"id": "p1-again", "steps": [
+      {"do": "key", "press": "Alt+Meta+E"},
+      {"do": "wait", "cond": "d0 => EX.done > d0", "arg": "() => EX.done", "timeout": 120, "err": "the second export finished"},
+      {"do": "wait", "cond": "() => document.querySelector('#stMsg').textContent.startsWith('exported')", "timeout": 15, "err": "the summary shows the files again"},
+      {"do": "hold", "s": 2.5}
+    ]},
+    {"id": "p1-end", "steps": [
+      {"do": "caption", "text": "Next: check and fix (part 2)"}
+    ]}
+  ]
+}

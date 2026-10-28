@@ -1,0 +1,47 @@
+{
+ "created": 0.0,
+ "dirty": true,
+ "document": "<project>/Shapes.drumspike",
+ "folder": "<project>",
+ "format": 1,
+ "modified": 0.0,
+ "name": "Shapes",
+ "order": [
+  "Kick_In",
+  "Snare_Top"
+ ],
+ "settings": {
+  "mix_mode": "average"
+ },
+ "sid": "<sid>",
+ "tracks": {
+  "Kick_In": {
+   "mix_mode": "average",
+   "n_events": 0,
+   "note": 36,
+   "offline": false,
+   "path": "<project>/Audio Files/Kick In.wav",
+   "role": "kick",
+   "source": {
+    "mode": "copied",
+    "path": "<project>/Audio Files/Kick In.wav",
+    "relative": "Audio Files/Kick In.wav"
+   },
+   "status": "ok"
+  },
+  "Snare_Top": {
+   "mix_mode": "average",
+   "n_events": 0,
+   "note": 38,
+   "offline": false,
+   "path": "<project>/Audio Files/Snare Top.wav",
+   "role": "snare",
+   "source": {
+    "mode": "copied",
+    "path": "<project>/Audio Files/Snare Top.wav",
+    "relative": "Audio Files/Snare Top.wav"
+   },
+   "status": "ok"
+  }
+ }
+}

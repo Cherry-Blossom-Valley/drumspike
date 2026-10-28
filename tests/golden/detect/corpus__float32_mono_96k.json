@@ -1,0 +1,50 @@
+{
+ "stem": "corpus__float32_mono_96k",
+ "set": "corpus",
+ "session": "corpus",
+ "file": "float32_mono_96k.wav",
+ "token": null,
+ "wav_sha256": "6c7c5268acbb2a5886019c1f3cdf22ba067be44b5e5e947e6ffc43f4b6082adc",
+ "detector_input_sha256": "5a392aeeee83b0cea3448488b84dd083562e14982167fcd8122a161739f6341d",
+ "resampler": "soxr_hq",
+ "chain": "cli",
+ "samples44": 374850,
+ "signal44_sha256": "8b0fe89cb63025f4e3d009738542c6fa8b2e467f154ca1418b872efd4dd221b6",
+ "frames": 851,
+ "features_shape": [851, 84],
+ "features_sha256": "abf393267d10811ba2717f2de4441b06454aaba3ac3cc3dfe226b5a75307f192",
+ "activations_shape": [851, 5],
+ "activations_sha256": "7ec9b3522806761aef68bbab20f93a0bfe52e46c51f08b913d8f2678f3b1ef46",
+ "ort_max_abs_diff": 2.682209014892578e-07,
+ "r3": {
+  "counts": [7, 0, 0, 0, 0],
+  "onsets": [
+   [19, 0, 0.19],
+   [49, 0, 0.49],
+   [89, 0, 0.89],
+   [309, 0, 3.09],
+   [439, 0, 4.39],
+   [649, 0, 6.49],
+   [794, 0, 7.94]
+  ]
+ },
+ "r4": {
+  "counts": [7, 0, 0, 0, 0],
+  "onsets": [
+   [19, 0, 0.1909090909090909],
+   [49, 0, 0.4909090909090909],
+   [89, 0, 0.8909090909090909],
+   [309, 0, 3.090909090909091],
+   [439, 0, 4.390909090909091],
+   [649, 0, 6.49090909090909],
+   [794, 0, 7.9409090909090905]
+  ],
+  "cli_midi_sha256": "38afce9b565bb149bc34c1d987ce15031c00ab8ad44435e4e2c295f46eb39ff8"
+ },
+ "r3_vs_r4": {
+  "n": 7,
+  "within1": 7,
+  "exact": 7,
+  "pct": 100.0
+ }
+}

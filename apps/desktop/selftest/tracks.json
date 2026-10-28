@@ -1,0 +1,23 @@
+{
+  "name": "tracks",
+  "driver": "tracks",
+  "timeout_s": 420,
+  "work": "$DRUMSPIKE_SELFTEST_DIR",
+  "drop": "$DRUMSPIKE_SELFTEST_DROP",
+  "expect": {
+    "tracks": 10,
+    "min_hits_total": 100,
+    "roles": {
+      "k in_02": "kick",
+      "k out_02": "kick",
+      "k sub_02": "kick",
+      "s top_02": "snare",
+      "s bot_02": "snare",
+      "t1 hh_02": "tom",
+      "t2_02": "tom",
+      "t3_02": "tom",
+      "t4 ri_02": "tom",
+      "hh_03": "hat"
+    }
+  }
+}

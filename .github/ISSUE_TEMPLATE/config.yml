@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: User guide
+    url: https://github.com/Cherry-Blossom-Valley/drumspike/blob/main/docs/guide/README.md
+    about: How to add tracks, find and edit hits, and export.
+  - name: Security vulnerability
+    url: https://github.com/Cherry-Blossom-Valley/drumspike/security/advisories/new
+    about: Report security problems privately, not as an issue.

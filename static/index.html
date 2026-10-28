@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drum Spike</title>
+<link rel="stylesheet" href="/style.css?v=45">
+<link rel="stylesheet" href="/shell.css?v=4">
+</head>
+<body>
+<header id="topbar">
+  <button id="inspectorBtn" class="btn icon tgl" aria-pressed="false" title="View &gt; Show Inspector (Option+I): show or hide the Inspector"><svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true"><rect x="0.75" y="0.75" width="14.5" height="12.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="1.5" y="1.5" width="4.5" height="11" fill="currentColor"/></svg></button>
+  <div class="logo"><img id="brandIcon" class="brandIcon" src="/brand/drumspike-icon.svg" alt="Drum Spike" width="30" height="30" draggable="false"> <span id="dirtyDot" class="dirtyDot hidden" title="unsaved changes">●</span></div>
+  <div class="sep"></div>
+  <button id="addTracksBtn" class="btn icon" title="File &gt; Add Tracks… (Shift+Cmd+I): pick audio files and add them as tracks">⬆</button>
+  <button id="analyzeAllBtn" class="btn icon" title="Hits &gt; Analyze All: detect the hits of every track">⚙</button>
+  <button id="exportAllBtn" class="btn icon" title="File &gt; Export… (Cmd+E): choose what to export (MIDI, spike WAV) and where">⬇</button>
+  <div class="sep"></div>
+  <div class="tgroup" title="Zoom around the playhead (View menu; Cmd+] and Cmd+[, also T and R, + and -)">
+    <button class="btn icon zBtn" data-z="out" title="Zoom out around playhead (-)">−</button>
+    <button class="btn icon zBtn" data-z="in" title="Zoom in around playhead (+)">＋</button>
+  </div>
+  <select id="zoomSel" class="zoomSel" title="View &gt; Zoom Presets (keys 1 to 6): the span of the view, centred on the playhead">
+    <option value="" selected>Zoom</option>
+    <option value="full">Full</option>
+    <option value="30">30 s</option>
+    <option value="5">5 s</option>
+    <option value="0.5">500 ms</option>
+    <option value="0.05">50 ms</option>
+    <option value="0.005">5 ms</option>
+  </select>
+  <span id="ampLbl" class="ampLbl hidden" title="View &gt; Waveform Zoom (Option+Cmd+] and [): the amplitude zoom of the wave lanes. Control+Option+Cmd+[ or Option+A: back to 1x">Amp 1x</span>
+  <label class="btn icon tgl" id="snapTgl" title="Hits &gt; Snap Playhead to Hits (J): a click near a hit puts the playhead exactly on it (10 px or 30 ms)">
+    <input type="checkbox" id="snapChk" checked><span aria-hidden="true">🧲</span>
+  </label>
+  <button id="followBtn" class="btn icon tgl" data-mode="smooth" title="Transport &gt; Follow Playhead (F turns it on and off). A click cycles: smooth (the timeline glides, the playhead stays at 25 %), page (a new page at the edge), off.">⇢</button>
+  <div class="sep"></div>
+  <button id="clickBtn" class="btn icon" title="Transport &gt; Metronome Click (C): a beep on every hit of the audible tracks (pitch per role in Drum Spike &gt; Settings)">🎵</button>
+  <div class="transport">
+    <button id="playBtn" class="btn icon" title="Transport &gt; Play/Stop (Space)">▶</button>
+    <button id="stopBtn" class="btn icon" title="Transport &gt; Stop and Return: stop, the playhead goes back to where playback started (Shift+Return: Go to Playback Start)">■</button>
+    <div class="timebox">
+      <span id="timeDisplay" class="time" title="Main counter. Click: exchange the counters (View &gt; Main Counter &gt; Exchange Counters)">0.000000 s</span>
+      <span id="sampleDisplay" class="samplenote" title="Sub counter: samples at the rate of the selected track, else of the first track">0 smp</span>
+    </div>
+    <div class="timebox">
+      <select id="nudgeSel" class="nudgeSel" title="Edit &gt; Nudge Value (Option+Cmd+numpad + and -): the step of the arrow keys, comma and period. Shift+arrow: 10 times the value."></select>
+    </div>
+    <div class="master" title="Master volume and level (P3-16)">
+      <span class="mlab">Master</span>
+      <div class="mslider vol" id="masterVol" data-ctl="master"><div class="mfill"></div><div class="mknob"></div></div>
+      <span class="mval" data-for="master"></span>
+      <div class="mmeter" id="masterMeter" title="Master level (left, right). The red light: clipped (click to reset)">
+        <div class="mhbars"></div>
+        <div class="mclip"></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div id="infoLine" class="infoLine" role="group" aria-label="Info line">
+  <span id="ilEmpty" class="ilEmpty">No hit selected. Tab: next hit, or click a hit in a spike lane.</span>
+  <span id="ilFields" class="ilFields hidden">
+    <span class="ilf"><i>Track</i><b id="ilTrack"></b></span>
+    <span class="ilf"><i>Hit</i><b id="ilIndex"></b></span>
+    <span class="ilf"><i>Time</i><b id="ilTime"></b></span>
+    <label class="ilf"><i>Sample</i><input id="ilSample" class="ilIn" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" title="Sample of the hit. Return: apply (one undo step). Escape: cancel."></label>
+    <label class="ilf"><i>Velocity</i><input id="ilVel" class="ilIn ilInV" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" title="Velocity 1 to 127. Return: apply (one undo step). Escape: cancel."></label>
+    <span class="ilf"><i>Origin</i><b id="ilOrigin"></b></span>
+    <span class="ilf"><i>Offset</i><b id="ilOffset" title="Distance from the detected position, in samples"></b></span>
+    <span class="ilf hidden" id="ilLearnF"><i>Learn</i><b id="ilLearn" title="This hit is an example of the track's Learn marks"></b></span>
+    <span class="ilf hidden" id="ilDoubtF"><i>Doubt</i><b id="ilDoubt" title="Why the review queue (Hits > Next Doubtful Hit, D) counts this hit as doubtful: its confidence (0 to 1, doubtful under 0.5) and the reasons"></b></span>
+    <span class="ilf hidden" id="ilMatchF"><i>Match</i><b id="ilMatch" title="How well the layer's one-shot matches the close mic at this hit (0 to 1, Layer > Measure); uncertain under 0.5; flip: this hit matches better inverted"></b></span>
+  </span>
+  <span id="ilSel" class="ilSel hidden" title="The range selection (drag in a wave lane): K Learn This, Shift+K Not This, Escape clears it"></span>
+</div>
+
+<div id="overviewWrap">
+  <canvas id="overview" title="Overview: drag the window to pan, double-click to jump, wheel to zoom"></canvas>
+</div>
+
+<div id="settingsModal" class="modal sheet hidden">
+  <div class="modal-box">
+    <h3>Settings</h3>
+    <div class="sbSetGroup" id="setAudio">
+      <div class="ptitle">Audio output</div>
+      <div class="prow">
+        <label for="setOutput">Output device</label>
+        <div class="pctl pctlWide"><select id="setOutput" title="Where Drum Spike plays. System default follows the macOS Sound setting."></select></div>
+      </div>
+      <div class="phint" id="setOutputNow"></div>
+      <div class="phint setWarn hidden" id="setOutputNote"></div>
+    </div>
+    <div class="sbSetGroup" id="setKeys">
+      <div class="ptitle">Keys</div>
+      <div class="prow">
+        <label for="setKeyPreset">Key preset</label>
+        <div class="pctl pctlWide"><select id="setKeyPreset" title="Which key set the page and the menu use. Help > Keyboard Shortcuts lists the keys of the active preset."></select></div>
+      </div>
+      <div class="phint">Pro Tools is the default set. Cubase changes the keys of the hits, the zoom, the nudge, mute, solo and the transport (Help > Keyboard Shortcuts lists them).</div>
+    </div>
+    <div class="sbSetGroup" id="setView">
+      <div class="ptitle">View</div>
+      <div class="prow">
+        <label for="setZoomTall">Zoom Toggle expands track height</label>
+        <div class="pctl"><input type="checkbox" id="setZoomTall"></div>
+      </div>
+      <div class="phint">E zooms to the selected range (or hit). When this is on, E also doubles the height of the track that holds it; E again puts the zoom, the scroll position and the heights back.</div>
+    </div>
+    <div class="sbSetGroup" id="setAudition">
+      <div class="ptitle">Audition</div>
+      <div class="prow">
+        <label for="setAuditionTab">Audition on Tab</label>
+        <div class="pctl"><input type="checkbox" id="setAuditionTab"></div>
+      </div>
+      <div class="phint">A plays the selected hit on its track alone (30 ms before to 250 ms after); Shift+A loops until Escape or Space; a range selection loops the range. When this is on, Tab and the other keys that step to a hit also play it.</div>
+    </div>
+    <div class="sbSetGroup">
+      <div class="ptitle">Metronome click</div>
+      <div class="prow">
+        <label for="setClickOn">Click on every hit</label>
+        <div class="pctl"><input type="checkbox" id="setClickOn"></div>
+      </div>
+      <div class="prow">
+        <label for="setClickVol">Click volume</label>
+        <div class="pctl pctlWide"><input type="range" id="setClickVol" min="0" max="100" value="22"></div>
+      </div>
+      <div class="phint">Plays a short beep on every hit of audible tracks during playback. The pitch is set per role below, so you can hear which lane plays.</div>
+    </div>
+    <div class="sbSetGroup">
+      <div class="ptitle">Click pitches (Hz)</div>
+      <div id="setPitches"></div>
+    </div>
+    <div class="sbSetGroup">
+      <div class="ptitle">Detector plug-ins</div>
+      <div id="setPlugins"><span class="phint">No detector plug-ins installed.</span></div>
+      <div class="phint">A plug-in is one folder per plug-in in
+      ~/Library/Application Support/Drum Spike/Detectors/. The licence text of every plug-in is shown here before its first use in a project.</div>
+    </div>
+    <div class="modal-actions"><button id="settingsDone" class="btn primary">Done</button></div>
+  </div>
+</div>
+
+<div id="tracksModal" class="modal hidden">
+  <div class="modal-box">
+    <h3 id="tracksTitle">Add tracks</h3>
+    <p class="hint" id="tracksGuess"></p>
+    <div class="urowBar" id="tracksPick">
+      <button id="tracksDrums" class="btn mini" title="Check only the files with a drum role (kick, snare, tom, hat, cymbal)">Drums only</button>
+      <button id="tracksAll" class="btn mini" title="Check every file">All</button>
+      <span id="tracksCount" class="hint"></span>
+    </div>
+    <div id="tracksRows"></div>
+    <div id="tracksRejected"></div>
+    <div class="urowBar">
+      <select id="tracksPreset" title="Kit preset: a saved map of track names to roles and notes"></select>
+      <button id="tracksPresetSave" class="btn mini" title="Save the names, roles and notes of this list as a kit preset">Save as kit preset</button>
+      <label class="tcopy" title="Without the box the audio files stay where they are (referenced)"><input type="checkbox" id="tracksCopy"> Copy the audio into the project</label>
+    </div>
+    <div class="modal-actions">
+      <button id="tracksCancel" class="btn">Cancel</button>
+      <button id="tracksAdd" class="btn primary">Add tracks</button>
+    </div>
+  </div>
+</div>
+
+<div id="renameModal" class="modal hidden">
+  <div class="modal-box">
+    <h3>Rename Project</h3>
+    <input id="renameField" type="text" maxlength="80" aria-label="Project name" autocomplete="off" spellcheck="false">
+    <div class="modal-actions">
+      <button id="renameCancel" class="btn">Cancel</button>
+      <button id="renameOk" class="btn primary">Rename</button>
+    </div>
+  </div>
+</div>
+
+<div id="exportModal" class="modal hidden">
+  <div class="modal-box">
+    <h3>Export</h3>
+    <div class="exSec">
+      <div class="exLbl">Tracks</div>
+      <label class="exRow"><input type="radio" name="exScope" id="exScopeAll" value="all"> <span id="exAllText">All tracks</span></label>
+      <label class="exRow"><input type="radio" name="exScope" id="exScopeSel" value="selected"> <span id="exSelText">Selected track</span></label>
+      <div id="exSkipped" class="hint"></div>
+    </div>
+    <div class="exSec">
+      <div class="exLbl">Formats</div>
+      <label class="exRow"><input type="checkbox" id="exMidi"> MIDI (.mid)</label>
+      <div id="exMidiOpts" class="exSub">
+        <label class="exRow"><input type="radio" name="exMode" id="exModeTrack" value="per_track"> One file per track</label>
+        <label class="exRow" title="One type 1 file: the project's tempo map and one MIDI track per drum track, each on its own note"><input type="radio" name="exMode" id="exModeSingle" value="single"> One multi-track file</label>
+      </div>
+      <label class="exRow" title="One marker event (FF 06) per review marker in the one multi-track file, at its time; the note is the text, or Marker N"><input type="checkbox" id="exMarkers"> Markers in MIDI</label>
+      <label class="exRow"><input type="checkbox" id="exComp"> Compensate sampler offset</label>
+      <label class="exRow" title="One blip WAV per track: a line per hit, drawn from the hit's data. Audio spikes cut the track's own audio instead (the body of the hit: about 1.5 cycles of its low tone per hit)."><input type="checkbox" id="exSpikes"> Spikes (.wav)</label>
+      <div id="exSpikeOpts" class="exSub">
+        <label class="exRow" title="The blip spike WAV of today: one line per hit."><input type="radio" name="exSpikeType" id="exSpikeSynth" value="synthetic"> Synthetic</label>
+        <label class="exRow" title="Audio spikes: one WAV per track that holds, at each hit, the body of the hit: about 1.5 cycles of the drum's low tone, ending on a zero crossing (2-60 ms, 10 ms without a tone, cut at the next hit); every sample outside the snippets is zero."><input type="radio" name="exSpikeType" id="exSpikeAudio" value="audio"> Audio (the body of each hit)</label>
+        <label class="exRow"><input type="radio" name="exSpikeType" id="exSpikeBoth" value="both"> Both</label>
+      </div>
+    </div>
+    <div class="exSec">
+      <div class="exLbl">Destination</div>
+      <div class="exDest">
+        <input type="text" id="exDest" readonly spellcheck="false" aria-label="Destination folder" title="The folder the files are written to">
+        <button id="exChoose" class="btn mini" title="Choose a folder">Choose…</button>
+        <button id="exReset" class="btn mini" title="Back to Exports/ in the project folder">Reset</button>
+      </div>
+    </div>
+    <p id="exReplace" class="hint"></p>
+    <p id="exProblem" class="hint exWarn"></p>
+    <div id="exResult" class="exResult hidden"><span id="exResultText"></span> <button id="exReveal" class="btn mini">Show in Finder</button></div>
+    <div class="modal-actions exActions">
+      <div id="exDrags" class="exDrags">
+        <div id="exDragMidi" class="exDrag hidden" data-kind="midi" data-state="disabled" title="Drag the exported MIDI into your DAW"><span class="exIcon">♪</span><span class="exDragLbl">Drag MIDI</span><span class="exDragN"></span></div>
+        <div id="exDragSpikes" class="exDrag hidden" data-kind="spikes" data-state="disabled" title="Drag the spike WAV files into your DAW"><span class="exIcon">〰</span><span class="exDragLbl">Drag Spikes</span><span class="exDragN"></span></div>
+      </div>
+      <button id="exCancel" class="btn">Cancel</button>
+      <button id="exGo" class="btn primary">Export</button>
+    </div>
+  </div>
+</div>
+
+<div id="relinkModal" class="modal hidden">
+  <div class="modal-box">
+    <h3 id="relinkTitle">Find moved audio</h3>
+    <p id="relinkSummary"></p>
+    <div id="relinkAmbiguous"></div>
+    <div id="relinkMissing"></div>
+    <div class="modal-actions">
+      <button id="relinkAgain" class="btn">Search another folder…</button>
+      <button id="relinkClose" class="btn primary">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="reanalyzeModal" class="modal hidden">
+  <div class="modal-box">
+    <h3>Re-analyze</h3>
+    <p id="reanalyzeMsg"></p>
+    <p class="hint">Manually added or moved hits are shown in magenta. A backup of the current
+    events is always kept as <b>events.prev.json</b>. "Keep edited hits" re-inserts them after
+    the analysis and removes auto-detected duplicates within 20 ms.</p>
+    <div class="modal-actions">
+      <button id="raCancel" class="btn">Cancel</button>
+      <button id="raDiscard" class="btn">Discard edits</button>
+      <button id="raKeep" class="btn primary">Keep edited hits</button>
+    </div>
+  </div>
+</div>
+
+<div id="pluginLicenceModal" class="modal hidden">   <!-- #387: the licence of a detector plugin, before its first use -->
+  <div class="modal-box">
+    <h3>Detector plug-in licence</h3>
+    <p id="plIntro"></p>
+    <pre id="plText" class="plText"></pre>
+    <p class="hint">Before the first use, Drum Spike shows the executable path, the licence name and the full licence
+    text. Accepting records the licence and its hash in the project. The executable runs with your user rights.</p>
+    <div class="modal-actions">
+      <button id="plCancel" class="btn">Cancel</button>
+      <button id="plAccept" class="btn primary">Accept and use</button>
+    </div>
+  </div>
+</div>
+
+<div id="pluginMissingModal" class="modal hidden">   <!-- #387: a project names a plugin that is not installed -->
+  <div class="modal-box">
+    <h3>Detector plug-in missing</h3>
+    <p id="pmMsg"></p>
+    <p class="hint">The stored hits stay. You can install the plug-in again (put its folder in
+    Drum Spike/Detectors and reopen this project) or analyze this track with the built-in detector now.</p>
+    <div class="modal-actions">
+      <button id="pmCancel" class="btn">Cancel</button>
+      <button id="pmBuiltin" class="btn primary">Analyze with the built-in detector</button>
+    </div>
+  </div>
+</div>
+
+<div id="confirmModal" class="modal hidden">
+  <div class="modal-box">
+    <h3 id="confirmTitle">Unsaved changes</h3>
+    <p id="confirmMsg"></p>
+    <div class="modal-actions" id="confirmActions"></div>
+  </div>
+</div>
+
+<div id="presetModal" class="modal hidden">   <!-- #169: View > Zoom Presets > Add Current and Organize -->
+  <div class="modal-box">
+    <h3 id="presetTitle">Zoom Presets</h3>
+    <p id="presetHint" class="tdim"></p>
+    <div id="presetBody"></div>
+    <div class="modal-actions">
+      <button id="presetCancel" class="btn">Cancel</button>
+      <button id="presetAccept" class="btn primary">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="tempoModal" class="modal hidden">
+  <div class="modal-box">
+    <h3>Detect Tempo</h3>
+    <div id="tempoBody"></div>
+    <div class="modal-actions">
+      <button id="tempoBar1" class="btn hidden" title="The first bar line is a guess: use the other candidate, two beats later">Bar 1 two beats later</button>
+      <button id="tempoCancel" class="btn">Cancel</button>
+      <button id="tempoAccept" class="btn primary">Accept</button>
+    </div>
+  </div>
+</div>
+
+<div id="importModal" class="modal hidden">
+  <div class="modal-box">
+    <h3>Import old session</h3>
+    <p class="hint">Sessions of the old server store (sessions/&lt;id&gt;/) become project folders with copied audio;
+    the session itself is only read.</p>
+    <div id="importList"></div>
+    <div class="modal-actions">
+      <button id="importCancel" class="btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="helpModal" class="modal sheet hidden">
+  <div class="modal-box">
+    <h3>Keyboard shortcuts</h3>
+    <p class="hint">Every command of the app, by menu. The keys without Cmd, Control or Option work when no text
+    field has the focus; the menu does not show them (it would take them from the text fields).</p>
+    <p class="hint" id="keymapPreset"></p>   <!-- P3-13c: the active key preset -->
+    <table class="keymap" id="keymapTable"></table>   <!-- P3-13b: made from static/keymap.js (DSKeys.renderHelp) -->
+    <div class="modal-actions"><button id="helpDone" class="btn primary">Got it</button></div>
+  </div>
+</div>
+
+<div id="undoHistModal" class="modal sheet hidden">   <!-- P4-40a: Edit > Undo History -->
+  <div class="modal-box">
+    <h3>Undo history</h3>
+    <p class="hint">The last steps, newest first. A click takes the steps back up to and with that row; a grey row is a step
+    that was undone: a click does it again.</p>
+    <div id="undoHistList"></div>
+    <p class="hint hidden" id="undoHistEmpty">No steps yet.</p>
+    <div class="modal-actions"><button id="undoHistDone" class="btn primary">Close</button></div>
+  </div>
+</div>
+
+<div id="work">   <!-- P3-14a: the Inspector (left zone, Cubase model) and the editor side by side -->
+<aside id="inspector" title="Inspector: the selected track (View &gt; Show Inspector, Option+I)">
+  <div class="insHead">Inspector<button id="insClose" class="insClose" title="Hide Inspector (Option+I)" aria-label="Hide Inspector">×</button></div>
+  <div id="insEmpty" class="insEmpty">No track selected. Click a track header.</div>
+  <div id="insBody" class="hidden">
+    <div class="insName">
+      <span class="tdot" id="insColor"></span>
+      <input type="text" id="insName" maxlength="80" aria-label="Track name" title="Track name. Return keeps it, Escape cancels. The name is also the folder under Analysis/ and the stem of the export files.">
+    </div>
+    <div class="tnote" id="insRole"></div>
+    <section class="insSec" data-sec="track">
+      <button type="button" class="insSecHead" aria-expanded="false"><span class="insTri" aria-hidden="true"></span><span class="insSecTitle">Track</span><span class="insSum"></span></button>
+      <div class="insSecBody">
+        <div class="insRow"><span class="insLab">File</span><span class="insVal" id="insFile"></span></div>
+        <div class="insRow"><span class="insLab">State</span><span class="insVal" id="insState"></span><button id="insRelink" class="btn mini tOffline hidden" title="Pick the audio file of this track again">Relink…</button></div>
+        <div class="insRow"><label class="insLab" for="insRoleSel">Role</label><span class="insVal"><select id="insRoleSel" aria-label="Track role" title="The role of this track: kick, snare, tom, hat, cymbal or other. A change re-analyzes the track (the hits are picked again); Undo brings the role, the note and the hits back."></select></span></div>
+        <div class="insRow hidden" id="insRoleSrcRow"><span class="phint insRoleHint" id="insRoleSrc"></span></div>
+        <div class="insRow hidden" id="insNoteOfferRow"><span class="insLab">Note</span><span class="insVal"><span class="phint" id="insNoteOffer"></span> <button id="insNoteOfferBtn" class="btn mini" title="Set the MIDI note to the new role's default">Set note</button></span></div>
+      </div>
+    </section>
+    <section class="insSec" data-sec="hits">
+      <button type="button" class="insSecHead" aria-expanded="false"><span class="insTri" aria-hidden="true"></span><span class="insSecTitle">Hits</span><span class="insSum"></span></button>
+      <div class="insSecBody">
+        <div class="insRow"><span class="insLab">Detected</span><span class="insVal" id="insDetected"></span></div>
+        <div class="insRow"><span class="insLab">Edited</span><span class="insVal" id="insEdited" title="moved or added by hand (magenta)"></span></div>
+        <div class="prow insFlagRow hidden"><label></label><div class="pctl"><span class="phint insFlags"></span></div></div>
+      </div>
+    </section>
+    <div id="insParams"></div>
+    <div class="insMix" id="insMixBox">
+      <div class="row3 insMixRow">
+        <div class="mslider vol" data-ctl="vol"><div class="mfill"></div><div class="mknob"></div></div>
+        <span class="mval" data-for="vol"></span>
+        <div class="mslider pan" data-ctl="pan"><div class="mcenter"></div><div class="mknob"></div></div>
+        <span class="mval mvalPan" data-for="pan"></span>
+      </div>
+    </div>
+  </div>
+</aside>
+<div id="insHandle" role="separator" aria-orientation="vertical" aria-label="Inspector width" title="Drag: Inspector width (260 to 480 px). Double-click: 320 px."></div>
+<main id="editor">
+  <div id="relinkBar" class="hidden"><span id="relinkText"></span><button id="relinkFind" class="btn mini primary" title="Pick the folder that holds the audio now: Drum Spike finds the files by name, size and content">Find moved audio…</button><button id="relinkDismiss" class="btn mini" title="Hide this bar">Not now</button></div>
+  <div id="playheadOverlay" title="playhead"></div>
+  <div id="mapRulers" class="hidden">
+    <div class="mrow hidden" data-ruler="tempo"><div class="thead">Tempo<button id="tempoDetectBtn" class="mBtn" type="button" title="Detect Tempo: suggest a tempo map from the kick and snare hits (also Track &gt; Detect Tempo)">Detect</button></div><div class="mclip"><canvas class="mcan" title="Tempo steps. Double-click: add a step or edit a value. Click a value, then Delete: remove it."></canvas></div></div>
+    <div class="mrow hidden" data-ruler="meter"><div class="thead">Meter</div><div class="mclip"><canvas class="mcan" title="Meter changes. Double-click: add a change at a bar or edit a value (for example 7/8). Click a value, then Delete: remove it."></canvas></div></div>
+    <div class="mrow hidden" data-ruler="beats"><div class="thead">Bars|Beats</div><div class="mclip"><canvas class="mcan" title="Bars and beats from the tempo and meter map. Click: playhead. Drag the bar-1 marker to move bar 1, or double-click it to type its time."></canvas></div></div>
+    <div class="mrow hidden" data-ruler="markers"><div class="thead">Markers</div><div class="mclip"><canvas class="mcan" title="Review markers (M sets one at the selected hit or the playhead). Click: playhead. Click a marker: select it (Delete removes it). Double-click a marker: its note."></canvas></div></div>
+    <input id="mapEdit" class="hidden" type="text" spellcheck="false" autocomplete="off" aria-label="Edit the tempo, meter or bar 1 value">
+  </div>
+  <div id="rulerRow">
+    <div class="thead" title="Click the ruler: playhead. Tab: next hit. Help &gt; Keyboard Shortcuts"></div>
+    <div id="rulerClip"><canvas id="ruler" title="Click the ruler to put the playhead. Tab: next hit. Help &gt; Keyboard Shortcuts"></canvas></div>
+  </div>
+  <div id="lanesScroll"></div>
+  <div id="micsPanel" class="hidden" title="View > Other Mics Under Hit (O): the other tracks in the window of the selected hit (+-50 ms). The line is the hit time."></div>
+</main>
+</div>
+
+<footer id="statusbar">
+  <span id="stSel">no selection</span>
+  <span id="stSpeed" class="hidden" title="Half-speed playback (Shift+Space): one octave down; Space or Shift+Space stops">half speed</span>
+  <span class="spacer"></span>
+  <span id="stDet"></span>
+  <span id="stMsg"></span>
+  <span id="stStale" class="hidden" title="The project file changed on disk since Drum Spike read it (another app, a sync tool or a restored backup)"><button id="stReload" class="btn mini" title="Close the project without saving and open the file from disk">Reload from disk</button><button id="stSaveAnyway" class="btn mini" title="Write the open project over the file on disk (the file on disk goes to Backups/)">Save anyway</button></span>   <!-- #121 -->
+  <span id="stEvFail" class="hidden" title="The edited hits did not reach the project: the step that needed them did not run. Retry sends them again, Discard drops them."><button id="stEvRetry" class="btn mini" title="Send the edited hits to the project again">Retry</button><button id="stEvDiscard" class="btn mini" title="Drop the edited hits (the project keeps the hits it has stored)">Discard</button></span>   <!-- #249 R02: a refused event write -->
+  <div id="progressWrap" class="hidden"><div id="progressTrack"><div id="progressBar"></div></div><span id="progressText"></span><button id="progressCancel" class="btn mini hidden" title="Stop the job. Nothing is changed.">Cancel</button></div>   <!-- the job progress sits in the status bar, not over the ruler -->
+</footer>
+
+<script src="/backend.js?v=57"></script>
+<script src="/lanes-gl.js?v=52"></script>
+<script src="/keymap.js?v=6"></script>
+<script src="/shell.js?v=14"></script>
+<script src="/app.js?v=70"></script>
+</body>
+</html>

@@ -1,0 +1,2 @@
+# Match the spike code style (long expressions on one line).
+max_width = 120

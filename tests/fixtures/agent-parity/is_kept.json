@@ -1,0 +1,14 @@
+{
+ "about": "R04 (#237) ticket #250: the preservation predicate is_kept (crates/app/src/edit.rs) and its page copy isKept (static/app.js) over one shared table. One test per side reads this file: merge_edited_follows_the_fixture_cases style (crates/app/src/edit/tests.rs) and the page test in tests/e2e_app/test_editor.py.",
+ "cases": [
+  {"name": "a plain detected hit is not kept", "hit": {"t": 1.0, "v": 100}, "kept": false},
+  {"name": "an added hit is kept", "hit": {"t": 1.0, "v": 100, "added": true}, "kept": true},
+  {"name": "a moved hit is kept", "hit": {"t": 1.0, "v": 100, "orig": 0.9}, "kept": true},
+  {"name": "a hit at its detected time is not kept", "hit": {"t": 1.0, "v": 100, "orig": 1.0}, "kept": false},
+  {"name": "a hand velocity (edited: true) is kept", "hit": {"t": 1.0, "v": 64, "edited": true}, "kept": true},
+  {"name": "a restored hit (edited: true) is kept", "hit": {"t": 1.0, "v": 80, "edited": true, "bleed": false}, "kept": true},
+  {"name": "edited: false is not kept", "hit": {"t": 1.0, "v": 100, "edited": false}, "kept": false},
+  {"name": "another key that spells edited is not the flag", "hit": {"t": 1.0, "v": 100, "edited": "yes"}, "kept": false},
+  {"name": "edited beats a false-looking orig", "hit": {"t": 1.0, "v": 100, "orig": 1.0, "edited": true}, "kept": true}
+ ]
+}

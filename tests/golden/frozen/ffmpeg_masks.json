@@ -1,0 +1,336 @@
+{
+  "kind": "ffmpeg_masks",
+  "about": "ffmpeg -ac 1 on the stereo WAVE_FORMAT_EXTENSIBLE files of stereo_channel_masks_match_ffmpeg_or_fall_back: frame count and SHA-256 of the f32le output, or \"refused\"",
+  "generated": {
+    "sha": "52dda12c35c1417a90e82f2198cec6836868d1c0",
+    "host": "arm64-mac (arm64, fusing ffmpeg)",
+    "ffmpeg": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers"
+  },
+  "cases": {
+    "Pcm16 0x0": {
+      "frames": 2000,
+      "sha256": "7cf06fa66f78b0d2540664762720149951d93f46403a5354bb76a5c786d4dfe9"
+    },
+    "Pcm16 0x3": {
+      "frames": 2000,
+      "sha256": "a2407adcca3883a8c0b9e2846aff45a904d9b871e9f8915172f50fae932fa685"
+    },
+    "Pcm16 0x4": {
+      "frames": 2000,
+      "sha256": "041b544d6c5737eef4c6158baf91b7ecb9a9f6886c04886e4f2da578857dbb69"
+    },
+    "Pcm16 0x5": "refused",
+    "Pcm16 0xc": {
+      "frames": 2000,
+      "sha256": "b71e21f6859df3b5245c768cffb95f4ee8d9409a9774ab1f29cfc553bf26f9b6"
+    },
+    "Pcm16 0x600": "refused",
+    "Pcm16 0x103": {
+      "frames": 2000,
+      "sha256": "872ad29fef89090996683f2d6f5feab0113826b9a033df1635fd30ea4636ad9f"
+    },
+    "Pcm16 0x80000000": {
+      "frames": 2000,
+      "sha256": "3cbdc62df27af2a303e61d34a2487fd2d12d259da35f9da57dcba5952130f485"
+    },
+    "Pcm24 0x0": {
+      "frames": 2000,
+      "sha256": "8abaa7b60660879ad8ea77b345195762f12198e2718e055345498ca255c3d17b"
+    },
+    "Pcm24 0x7": {
+      "frames": 2000,
+      "sha256": "5c44fde2cca663b07aabcaa08a19fd42fcf7032674958968abc819b183284298"
+    },
+    "Pcm24 0x103": {
+      "frames": 2000,
+      "sha256": "8d916340cb76f0ca6e216fccfd785bcb56e78942e5380fc69e43387aaa68284e"
+    },
+    "Pcm24 0x80000000": {
+      "frames": 2000,
+      "sha256": "30bf9bf5ce738131762b7bee1955327f26f6b7b52d164483a6fac140eacae6b1"
+    },
+    "Pcm24 0x80000003": {
+      "frames": 2000,
+      "sha256": "ec640f450c98c8fa8733acf61541a9460f35497d0835412d88f8478a4cb220af"
+    },
+    "Pcm24 0x8000000c": {
+      "frames": 2000,
+      "sha256": "818862b9eab5aee28cc0941b5c863228b7666906dea6a229345209d8bd754cc9"
+    },
+    "Pcm24 0x1": {
+      "frames": 2000,
+      "sha256": "151f1618c4869820a9aee0d261858ba121995eeb23c5bb644c5a2d5c67254c60"
+    },
+    "Pcm24 0x3": {
+      "frames": 2000,
+      "sha256": "db495f10925084cc99c4f6a37b227ceefed61be7dc2a0cb863682be1eb2b649d"
+    },
+    "Pcm24 0x5": "refused",
+    "Pcm24 0x9": "refused",
+    "Pcm24 0x11": "refused",
+    "Pcm24 0x21": "refused",
+    "Pcm24 0x41": "refused",
+    "Pcm24 0x81": "refused",
+    "Pcm24 0x101": "refused",
+    "Pcm24 0x201": "refused",
+    "Pcm24 0x401": "refused",
+    "Pcm24 0x801": "refused",
+    "Pcm24 0x1001": "refused",
+    "Pcm24 0x2001": "refused",
+    "Pcm24 0x4001": "refused",
+    "Pcm24 0x8001": "refused",
+    "Pcm24 0x10001": "refused",
+    "Pcm24 0x20001": "refused",
+    "Pcm24 0x2": {
+      "frames": 2000,
+      "sha256": "7e737d75c5c34eafd3eb57c21d81cd2f76d3703e23c584b3c493fc37dbdd1763"
+    },
+    "Pcm24 0x6": "refused",
+    "Pcm24 0xa": "refused",
+    "Pcm24 0x12": "refused",
+    "Pcm24 0x22": "refused",
+    "Pcm24 0x42": "refused",
+    "Pcm24 0x82": "refused",
+    "Pcm24 0x102": "refused",
+    "Pcm24 0x202": "refused",
+    "Pcm24 0x402": "refused",
+    "Pcm24 0x802": "refused",
+    "Pcm24 0x1002": "refused",
+    "Pcm24 0x2002": "refused",
+    "Pcm24 0x4002": "refused",
+    "Pcm24 0x8002": "refused",
+    "Pcm24 0x10002": "refused",
+    "Pcm24 0x20002": "refused",
+    "Pcm24 0x4": {
+      "frames": 2000,
+      "sha256": "e43edef1c19e1b574aeedf0dfb13aed77a82d0427cd14353c8a0b43b8e1dabaf"
+    },
+    "Pcm24 0xc": {
+      "frames": 2000,
+      "sha256": "434267f7a2c3d65c98ddc416bc27ef106f881ded2d510342a5fa919e1dc12bef"
+    },
+    "Pcm24 0x14": "refused",
+    "Pcm24 0x24": "refused",
+    "Pcm24 0x44": "refused",
+    "Pcm24 0x84": "refused",
+    "Pcm24 0x104": {
+      "frames": 2000,
+      "sha256": "06c150830e372556b4bfd5a25834f81f8f8454120522238bebf8b5e4ede2e30b"
+    },
+    "Pcm24 0x204": "refused",
+    "Pcm24 0x404": "refused",
+    "Pcm24 0x804": {
+      "frames": 2000,
+      "sha256": "8ab689c328288e753a819be1b692837c19c0bf4f0987d31e68d97efe1ad90116"
+    },
+    "Pcm24 0x1004": "refused",
+    "Pcm24 0x2004": {
+      "frames": 2000,
+      "sha256": "40ac43802949ca8e8cfbd8b15e8e50d9790304f317031d9672c73ba029431e42"
+    },
+    "Pcm24 0x4004": "refused",
+    "Pcm24 0x8004": {
+      "frames": 2000,
+      "sha256": "43ac87edf6ba986f18644ce49552286367e8598eb23a565d0daab31c38bf3fb1"
+    },
+    "Pcm24 0x10004": {
+      "frames": 2000,
+      "sha256": "e55f997e37afa85df9a616ce8e46e719950d9fb2353bd6411b0a48ba008dee09"
+    },
+    "Pcm24 0x20004": {
+      "frames": 2000,
+      "sha256": "580f99636481c6311abf8234a7baea0943002a31a25dd165dea080077e303150"
+    },
+    "Pcm24 0x8": {
+      "frames": 2000,
+      "sha256": "3639baef79d4e245a3f91d5e9546818984cdb2c2e027537e6c620300a3734a57"
+    },
+    "Pcm24 0x18": "refused",
+    "Pcm24 0x28": "refused",
+    "Pcm24 0x48": "refused",
+    "Pcm24 0x88": "refused",
+    "Pcm24 0x108": "refused",
+    "Pcm24 0x208": "refused",
+    "Pcm24 0x408": "refused",
+    "Pcm24 0x808": "refused",
+    "Pcm24 0x1008": "refused",
+    "Pcm24 0x2008": "refused",
+    "Pcm24 0x4008": "refused",
+    "Pcm24 0x8008": "refused",
+    "Pcm24 0x10008": "refused",
+    "Pcm24 0x20008": "refused",
+    "Pcm24 0x10": {
+      "frames": 2000,
+      "sha256": "06829db81f48e4d3400bd1d81c93ccf6a9511f1b5b8f61d78564a6ef2da3600e"
+    },
+    "Pcm24 0x30": "refused",
+    "Pcm24 0x50": "refused",
+    "Pcm24 0x90": "refused",
+    "Pcm24 0x110": "refused",
+    "Pcm24 0x210": "refused",
+    "Pcm24 0x410": "refused",
+    "Pcm24 0x810": "refused",
+    "Pcm24 0x1010": "refused",
+    "Pcm24 0x2010": "refused",
+    "Pcm24 0x4010": "refused",
+    "Pcm24 0x8010": "refused",
+    "Pcm24 0x10010": "refused",
+    "Pcm24 0x20010": "refused",
+    "Pcm24 0x20": {
+      "frames": 2000,
+      "sha256": "8b2f755b79a8142c0c56a4dceb4bd3b1d25358a11af6345f5a68a14d9aba4288"
+    },
+    "Pcm24 0x60": "refused",
+    "Pcm24 0xa0": "refused",
+    "Pcm24 0x120": "refused",
+    "Pcm24 0x220": "refused",
+    "Pcm24 0x420": "refused",
+    "Pcm24 0x820": "refused",
+    "Pcm24 0x1020": "refused",
+    "Pcm24 0x2020": "refused",
+    "Pcm24 0x4020": "refused",
+    "Pcm24 0x8020": "refused",
+    "Pcm24 0x10020": "refused",
+    "Pcm24 0x20020": "refused",
+    "Pcm24 0x40": {
+      "frames": 2000,
+      "sha256": "4a1e234012272212d002a0890f32c3b179a8d7ce0656fa5b5cae7ef2f535888d"
+    },
+    "Pcm24 0xc0": "refused",
+    "Pcm24 0x140": "refused",
+    "Pcm24 0x240": "refused",
+    "Pcm24 0x440": "refused",
+    "Pcm24 0x840": "refused",
+    "Pcm24 0x1040": "refused",
+    "Pcm24 0x2040": "refused",
+    "Pcm24 0x4040": "refused",
+    "Pcm24 0x8040": "refused",
+    "Pcm24 0x10040": "refused",
+    "Pcm24 0x20040": "refused",
+    "Pcm24 0x80": {
+      "frames": 2000,
+      "sha256": "489a2dcc87a6e1a00927f15bb46a07963dfee2bd50c84a11b5df8c3ac3cae033"
+    },
+    "Pcm24 0x180": "refused",
+    "Pcm24 0x280": "refused",
+    "Pcm24 0x480": "refused",
+    "Pcm24 0x880": "refused",
+    "Pcm24 0x1080": "refused",
+    "Pcm24 0x2080": "refused",
+    "Pcm24 0x4080": "refused",
+    "Pcm24 0x8080": "refused",
+    "Pcm24 0x10080": "refused",
+    "Pcm24 0x20080": "refused",
+    "Pcm24 0x100": {
+      "frames": 2000,
+      "sha256": "f4b625a6e452053e1fbfef9611cdc70c35fc41de5d8c7714e7f60232f62ec01c"
+    },
+    "Pcm24 0x300": "refused",
+    "Pcm24 0x500": "refused",
+    "Pcm24 0x900": "refused",
+    "Pcm24 0x1100": "refused",
+    "Pcm24 0x2100": "refused",
+    "Pcm24 0x4100": "refused",
+    "Pcm24 0x8100": "refused",
+    "Pcm24 0x10100": "refused",
+    "Pcm24 0x20100": "refused",
+    "Pcm24 0x200": {
+      "frames": 2000,
+      "sha256": "893c6edc5e1f320291ce5ef35af14d7feaeaaaa09bd83d7a584b3feebb66b427"
+    },
+    "Pcm24 0x600": "refused",
+    "Pcm24 0xa00": "refused",
+    "Pcm24 0x1200": "refused",
+    "Pcm24 0x2200": "refused",
+    "Pcm24 0x4200": "refused",
+    "Pcm24 0x8200": "refused",
+    "Pcm24 0x10200": "refused",
+    "Pcm24 0x20200": "refused",
+    "Pcm24 0x400": {
+      "frames": 2000,
+      "sha256": "e52a5052b0f9bf11405f569cf126351386dadb4878190b7b2e28f0c19d7ef23c"
+    },
+    "Pcm24 0xc00": "refused",
+    "Pcm24 0x1400": "refused",
+    "Pcm24 0x2400": "refused",
+    "Pcm24 0x4400": "refused",
+    "Pcm24 0x8400": "refused",
+    "Pcm24 0x10400": "refused",
+    "Pcm24 0x20400": "refused",
+    "Pcm24 0x800": {
+      "frames": 2000,
+      "sha256": "8413333ea573062f73e077f137c7ed7ad9ac71fd03b7244b68239f7d5d27bd68"
+    },
+    "Pcm24 0x1800": "refused",
+    "Pcm24 0x2800": "refused",
+    "Pcm24 0x4800": "refused",
+    "Pcm24 0x8800": "refused",
+    "Pcm24 0x10800": "refused",
+    "Pcm24 0x20800": "refused",
+    "Pcm24 0x1000": {
+      "frames": 2000,
+      "sha256": "fe05b3ed6d1d31c4dea5cfb56353add9556b7d9c4abc90b23ddc1c779d90b220"
+    },
+    "Pcm24 0x3000": "refused",
+    "Pcm24 0x5000": "refused",
+    "Pcm24 0x9000": "refused",
+    "Pcm24 0x11000": "refused",
+    "Pcm24 0x21000": "refused",
+    "Pcm24 0x2000": {
+      "frames": 2000,
+      "sha256": "6c69d1d0f4db965b38d73c1311d43ae4935098dcd7db84380f2ca73540267fd3"
+    },
+    "Pcm24 0x6000": "refused",
+    "Pcm24 0xa000": "refused",
+    "Pcm24 0x12000": "refused",
+    "Pcm24 0x22000": "refused",
+    "Pcm24 0x4000": {
+      "frames": 2000,
+      "sha256": "b5ece94d7d4cef4c9be03ebfe67efbb621fcf92514dc911db4ba1d2705b0cd28"
+    },
+    "Pcm24 0xc000": "refused",
+    "Pcm24 0x14000": "refused",
+    "Pcm24 0x24000": "refused",
+    "Pcm24 0x8000": {
+      "frames": 2000,
+      "sha256": "1670b333bb88e51ff894845e0a0beced2fc17d438a19f74c901fc9ba39075952"
+    },
+    "Pcm24 0x18000": "refused",
+    "Pcm24 0x28000": "refused",
+    "Pcm24 0x10000": {
+      "frames": 2000,
+      "sha256": "3e396bb21024612bfbc96a4724072fb3b88f98ad55db4befd7154674c28af1aa"
+    },
+    "Pcm24 0x30000": "refused",
+    "Pcm24 0x20000": {
+      "frames": 2000,
+      "sha256": "bd3dbeced305f932f1b4f41472bb5dcdd3864774aeab8cf6a85703273e839184"
+    },
+    "Float32 0x0": {
+      "frames": 2000,
+      "sha256": "7701913bc362457110e87dfb5003f09c16180cd1dfb4f7b15af465e55be2746c"
+    },
+    "Float32 0x3": {
+      "frames": 2000,
+      "sha256": "4ba755993b3f169722fabe15cad56336b6d0b611e765e061bf5ca492ffcbb403"
+    },
+    "Float32 0x4": {
+      "frames": 2000,
+      "sha256": "79587e735b971de0078ae1d0ab85041daac23ac74ff73fddf686f75d1af09a7b"
+    },
+    "Float32 0x5": "refused",
+    "Float32 0xc": {
+      "frames": 2000,
+      "sha256": "b2c0eb19142b4d48a35dc8abb8e79e0bcd71e102b6084a9424a36aff1a3aee70"
+    },
+    "Float32 0x600": "refused",
+    "Float32 0x103": {
+      "frames": 2000,
+      "sha256": "ccd1a454f0188e48b517faab79d67c25c00eab773bea0e4c5558b19784488e46"
+    },
+    "Float32 0x80000000": {
+      "frames": 2000,
+      "sha256": "f31af0067dba80417276e71bf7714504689bc913c5b398c775e904c85c56154f"
+    }
+  }
+}

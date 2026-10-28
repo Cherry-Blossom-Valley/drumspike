@@ -1,0 +1,50 @@
+Drum Spike
+Copyright 2026 Cherry Blossom Valley (Wolfgang Frank)
+
+The source code of Drum Spike in this repository is licensed under the Apache License,
+Version 2.0 (the file LICENSE), with the exceptions below. You may not use these files
+except in compliance with that licence.
+
+-----------------------------------------------------------------------------------------
+1. Methods reimplemented with credit
+-----------------------------------------------------------------------------------------
+
+The feature extraction and peak picking of the detector (crates/core/src/detect/) are an
+independent Rust implementation that reproduces the processing of madmom (Sebastian
+Boeck, Filip Korzeniowski, Jan Schlueter, Florian Krebs, Gerhard Widmer, "madmom: a new
+Python Audio and Music Signal Processing Library", Proceedings of the 24th ACM
+International Conference on Multimedia, 2016; https://github.com/CPJKU/madmom).
+No source code of madmom is part of this repository.
+
+-----------------------------------------------------------------------------------------
+2. Third-party software in the app
+-----------------------------------------------------------------------------------------
+
+- 261 Rust crates: 256 under permissive licences (MIT, Apache-2.0, BSD, Zlib,
+  Unicode, Unlicense) and 5 under MPL-2.0, used without changes. The full list with every licence
+  text and the source of each MPL-2.0 crate: apps/desktop/THIRD_PARTY.md.
+
+The app ships these notices (THIRD_PARTY.md, LICENSE and this file) as bundle resources.
+
+-----------------------------------------------------------------------------------------
+3. Names and brand assets
+-----------------------------------------------------------------------------------------
+
+"Drum Spike", the Drum Spike icon (static/brand/drumspike-icon.svg) and the Cherry
+Blossom Valley logo (static/brand/cbv-logo-white.png) are not licensed under the Apache
+License; they may not be used to name or promote other products. The site logo
+(site/assets/cbv-logo-main.png) and the site icon (site/assets/drumspike-icon.svg) are
+under the same terms. Pro Tools and Avid are
+trademarks of Avid Technology, Inc.; Cubase is a trademark of Steinberg Media
+Technologies GmbH; macOS is a trademark of Apple Inc. Drum Spike is not affiliated with
+these companies; their names are used only to describe compatibility.
+
+-----------------------------------------------------------------------------------------
+4. Media and pictures
+-----------------------------------------------------------------------------------------
+
+The videos, the video posters (site/assets/posters/) and the guide pictures
+(docs/guide/img/) are (c) Cherry Blossom Valley (Wolfgang Frank) and not under the
+Apache License. The videos and posters are made for Drum Spike and carry AI-generated
+content: the narration is AI-generated with Gemini TTS. One table of every non-code
+asset group with its terms and its source: docs/licensing.md.

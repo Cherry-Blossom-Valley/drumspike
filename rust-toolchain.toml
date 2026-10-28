@@ -1,0 +1,4 @@
+# Pinned per docs/phase1-rust-core-prompt.md: the workspace builds on the stable channel.
+# Never change the default toolchain with `rustup default`; rustup reads this file.
+[toolchain]
+channel = "stable"

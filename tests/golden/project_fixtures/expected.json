@@ -1,0 +1,478 @@
+{
+ "root": "/tmp/drumspike-scratch/p3c/freeze-arm64-mac/fixtures",
+ "audio": {
+  "Songs/Song 1/Audio Files/Snare Top.wav": {
+   "size": 144044,
+   "mtime": 1791721789,
+   "sha256": "f255b05873c73eb27015dc01c9e716420a0eb3cb0d65d7a2b0e3377d4a72b4a5",
+   "tone": false
+  },
+  "daw/Kick In.wav": {
+   "size": 144044,
+   "mtime": 1791721789,
+   "sha256": "02a6d637e90f1d989846d382a3ef094ba61a632847c6cbbb05e6bee8794d8150",
+   "tone": false
+  },
+  "daw/Snare Top.wav": {
+   "size": 144044,
+   "mtime": 1791721789,
+   "sha256": "f255b05873c73eb27015dc01c9e716420a0eb3cb0d65d7a2b0e3377d4a72b4a5",
+   "tone": false
+  },
+  "sessions/ab12cd34/tracks/Kick_In/source.wav": {
+   "size": 144044,
+   "mtime": 1791721789,
+   "sha256": "437d3e8ea6bd4a734d0d3726fb4a1e6f7bc767b825f27580211f3f8b333ea17f",
+   "tone": true
+  }
+ },
+ "fixtures": {
+  "two_track": {
+   "path": "Songs/Song 1",
+   "doc": {
+    "format": 1,
+    "name": "Song 1",
+    "created": 1791721789.551708,
+    "modified": 1791721789.5531719,
+    "settings": {
+     "mix_mode": "average"
+    },
+    "order": [
+     "Kick In",
+     "Snare Top"
+    ],
+    "tracks": {
+     "Kick In": {
+      "role": "kick",
+      "note": 36,
+      "mix_mode": "average",
+      "source": {
+       "mode": "referenced",
+       "path": "/tmp/drumspike-scratch/p3c/freeze-arm64-mac/fixtures/daw/Kick In.wav",
+       "relative": "../../daw/Kick In.wav",
+       "size": 144044,
+       "mtime": 1791721789,
+       "head_sha1": "240b2cb2f4a1a8ca645bd4127656fce0886cf135"
+      },
+      "events": [
+       {
+        "t": 0.30000000000000004,
+        "v": 100
+       },
+       {
+        "t": 0.3333333333333333,
+        "v": 20,
+        "added": true
+       },
+       {
+        "t": 2.675,
+        "v": 127,
+        "orig": 1e-07,
+        "edited": true
+       },
+       {
+        "t": 123456.123456789,
+        "v": 64,
+        "rise": 12.3
+       },
+       {
+        "t": 0.25,
+        "v": 1,
+        "rise_db": 7.25,
+        "id": "l5"
+       },
+       {
+        "t": 1.0000208333333334,
+        "v": 99,
+        "orig": 1.0000208333333334
+       }
+      ],
+      "sr": 48000,
+      "n_samples": 72000,
+      "duration": 1.5,
+      "params": {
+       "min_gap_ms": 20
+      }
+     },
+     "Snare Top": {
+      "role": "snare",
+      "note": 38,
+      "mix_mode": "ffmpeg",
+      "source": {
+       "mode": "copied",
+       "path": "/tmp/drumspike-scratch/p3c/freeze-arm64-mac/fixtures/Songs/Song 1/Audio Files/Snare Top.wav",
+       "relative": "Audio Files/Snare Top.wav",
+       "size": 144044,
+       "mtime": 1791721789,
+       "head_sha1": "58ac1efc60a18848f9c6b5312a93020f7afd7019"
+      },
+      "events": [
+       {
+        "t": 0.5,
+        "v": 77
+       }
+      ]
+     }
+    },
+    "view": {
+     "t0": 0.0,
+     "t1": 1.5,
+     "playhead": 0.3333333333333333
+    }
+   },
+   "bits": {
+    "Kick In": [
+     [
+      "343333333333d33f",
+      100,
+      null
+     ],
+     [
+      "555555555555d53f",
+      20,
+      null
+     ],
+     [
+      "6666666666660540",
+      127,
+      "48afbc9af2d77a3e"
+     ],
+     [
+      "74d3adf90124fe40",
+      64,
+      null
+     ],
+     [
+      "000000000000d03f",
+      1,
+      null
+     ],
+     [
+      "edc367d81500f03f",
+      99,
+      "edc367d81500f03f"
+     ]
+    ],
+    "Snare Top": [
+     [
+      "000000000000e03f",
+      77,
+      null
+     ]
+    ]
+   },
+   "kind": "project"
+  },
+  "odd_named": {
+   "path": "Folder",
+   "doc": {
+    "format": 1,
+    "name": "Other",
+    "created": 1759950000,
+    "modified": null,
+    "future_key": [
+     1,
+     2,
+     {
+      "x": null
+     }
+    ],
+    "settings": {
+     "mix_mode": "ffmpeg",
+     "theme": "dark"
+    },
+    "order": [
+     "K",
+     "Empty",
+     "NoSource"
+    ],
+    "view": {
+     "t0": 0.0,
+     "t1": 1.5,
+     "playhead": 0.3333333333333333
+    },
+    "tracks": {
+     "K": {
+      "role": "kick",
+      "note": 36,
+      "sr": 48000,
+      "n_samples": 72000,
+      "duration": 1.5,
+      "color": "#e05555",
+      "params": {
+       "thresholds": [
+        0.22,
+        0.24,
+        0.32,
+        0.22,
+        0.3
+       ],
+       "min_gap_ms": 20
+      },
+      "mix_mode": "average",
+      "lane_height": 120,
+      "source": null,
+      "events": [
+       {
+        "t": 0.30000000000000004,
+        "v": 100,
+        "tag": "x"
+       },
+       {
+        "t": 0.3333333333333333,
+        "v": 20,
+        "added": true
+       },
+       {
+        "t": 2.675,
+        "v": 127,
+        "orig": 1e-07,
+        "edited": true
+       },
+       {
+        "t": 123456.123456789,
+        "v": 64,
+        "rise": 12.3
+       },
+       {
+        "t": 0.25,
+        "v": 1,
+        "rise_db": 7.25,
+        "id": "l5"
+       },
+       {
+        "t": 1.0000208333333334,
+        "v": 99,
+        "orig": 1.0000208333333334
+       }
+      ]
+     },
+     "Empty": {
+      "role": "other",
+      "note": 36,
+      "mix_mode": "ffmpeg",
+      "source": null,
+      "events": []
+     },
+     "NoSource": {
+      "role": "tom",
+      "note": 45,
+      "events": [
+       {
+        "t": 1,
+        "v": 5
+       },
+       {
+        "t": 2.0,
+        "v": 6
+       }
+      ]
+     }
+    }
+   },
+   "bits": {
+    "K": [
+     [
+      "343333333333d33f",
+      100,
+      null
+     ],
+     [
+      "555555555555d53f",
+      20,
+      null
+     ],
+     [
+      "6666666666660540",
+      127,
+      "48afbc9af2d77a3e"
+     ],
+     [
+      "74d3adf90124fe40",
+      64,
+      null
+     ],
+     [
+      "000000000000d03f",
+      1,
+      null
+     ],
+     [
+      "edc367d81500f03f",
+      99,
+      "edc367d81500f03f"
+     ]
+    ],
+    "Empty": [],
+    "NoSource": [
+     [
+      "000000000000f03f",
+      5,
+      null
+     ],
+     [
+      "0000000000000040",
+      6,
+      null
+     ]
+    ]
+   },
+   "kind": "project"
+  },
+  "legacy_session": {
+   "path": "sessions/ab12cd34",
+   "doc": {
+    "format": 1,
+    "name": "Song: Take 2",
+    "created": 1759950000.5,
+    "modified": null,
+    "settings": {
+     "mix_mode": "ffmpeg"
+    },
+    "tracks": {
+     "Kick_In": {
+      "role": "kick",
+      "note": 36,
+      "sr": 48000,
+      "n_samples": 72000,
+      "duration": 1.5,
+      "color": "#e05555",
+      "params": {
+       "min_gap_ms": 20
+      },
+      "source": {
+       "mode": "referenced",
+       "path": "/tmp/drumspike-scratch/p3c/freeze-arm64-mac/fixtures/sessions/ab12cd34/tracks/Kick_In/source.wav",
+       "relative": "tracks/Kick_In/source.wav",
+       "size": 144044,
+       "mtime": 1791721789,
+       "head_sha1": "33b8651f39e000b550b95baa757ad673b43c527b"
+      },
+      "mix_mode": "ffmpeg",
+      "events": [
+       {
+        "t": 0.30000000000000004,
+        "v": 100
+       },
+       {
+        "t": 0.3333333333333333,
+        "v": 20,
+        "added": true
+       },
+       {
+        "t": 2.675,
+        "v": 127,
+        "orig": 1e-07,
+        "edited": true
+       },
+       {
+        "t": 123456.123456789,
+        "v": 64,
+        "rise": 12.3
+       },
+       {
+        "t": 0.25,
+        "v": 1,
+        "rise_db": 7.25,
+        "id": "l5"
+       },
+       {
+        "t": 1.0000208333333334,
+        "v": 99,
+        "orig": 1.0000208333333334
+       }
+      ]
+     },
+     "Empty": {
+      "role": "other",
+      "note": 36,
+      "mix_mode": "ffmpeg",
+      "source": null,
+      "events": []
+     }
+    },
+    "view": {},
+    "order": [
+     "Empty",
+     "Kick_In"
+    ]
+   },
+   "bits": {
+    "Kick_In": [
+     [
+      "343333333333d33f",
+      100,
+      null
+     ],
+     [
+      "555555555555d53f",
+      20,
+      null
+     ],
+     [
+      "6666666666660540",
+      127,
+      "48afbc9af2d77a3e"
+     ],
+     [
+      "74d3adf90124fe40",
+      64,
+      null
+     ],
+     [
+      "000000000000d03f",
+      1,
+      null
+     ],
+     [
+      "edc367d81500f03f",
+      99,
+      "edc367d81500f03f"
+     ]
+    ],
+    "Empty": []
+   },
+   "kind": "session"
+  },
+  "format0_file": {
+   "path": "Old",
+   "doc": {
+    "format": 1,
+    "name": "Old",
+    "created": 1759950000.5,
+    "modified": null,
+    "settings": {
+     "mix_mode": "ffmpeg"
+    },
+    "tracks": {
+     "K": {
+      "role": "kick",
+      "note": 36,
+      "mix_mode": "ffmpeg",
+      "source": null,
+      "events": [
+       {
+        "t": 0.3333333333333333,
+        "v": 5
+       }
+      ]
+     }
+    },
+    "view": {},
+    "order": [
+     "K"
+    ]
+   },
+   "bits": {
+    "K": [
+     [
+      "555555555555d53f",
+      5,
+      null
+     ]
+    ]
+   },
+   "kind": "project"
+  }
+ }
+}

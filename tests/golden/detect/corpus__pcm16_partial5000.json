@@ -1,0 +1,40 @@
+{
+ "stem": "corpus__pcm16_partial5000",
+ "set": "corpus",
+ "session": "corpus",
+ "file": "pcm16_partial5000.wav",
+ "token": null,
+ "wav_sha256": "9640722b15fa05e2451054d0fa16bf1c1a922dda5f2135c2626c242c792b3182",
+ "detector_input_sha256": "77fefbb23f474e5c0f457616a6b85bf3e0321d2022d8c6e64d2479afe45db438",
+ "resampler": "soxr_hq",
+ "chain": "cli",
+ "samples44": 4594,
+ "signal44_sha256": "3bb15da2942bd7e5d3b15d052e38dd5606e6f9f29dfc80545a81290ab00b9bd0",
+ "frames": 11,
+ "features_shape": [11, 84],
+ "features_sha256": "fcaa3243e9f6266c7405d4989c94a6774e5eb482867926214190e819e8cc5bd9",
+ "activations_shape": [11, 5],
+ "activations_sha256": "df5fac28384a3690c1dcdbb94f113409a976b77ce36de2c52d9553ce17365675",
+ "ort_max_abs_diff": 2.384185791015625e-07,
+ "r3": {
+  "counts": [1, 0, 0, 1, 0],
+  "onsets": [
+   [10, 0, 0.1],
+   [10, 3, 0.1]
+  ]
+ },
+ "r4": {
+  "counts": [1, 0, 0, 1, 0],
+  "onsets": [
+   [10, 0, 0.09999999999999999],
+   [10, 3, 0.09999999999999999]
+  ],
+  "cli_midi_sha256": "25dce6109459b6af56be3aeab798ae0f66ca989d78caf8bf7087794c67fc7ce4"
+ },
+ "r3_vs_r4": {
+  "n": 2,
+  "within1": 2,
+  "exact": 2,
+  "pct": 100.0
+ }
+}

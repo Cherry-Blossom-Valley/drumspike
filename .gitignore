@@ -1,0 +1,37 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.coverage
+coverage-js.json
+htmlcov/
+.pytest_cache/
+# Playwright output and test screenshots
+test-results/
+test-shots/
+# Rust build output
+target/
+*.whl
+tools/parity/corpus/
+# audio never goes into git
+*.wav
+*.aif
+*.aiff
+*.flac
+# logs
+*.log
+server.log
+# desktop app: npm packages, Tauri output, bundles
+node_modules/
+apps/desktop/src-tauri/gen/
+*.app
+*.dmg
+# the website build and its videos (built by tools/media/build_site.py)
+site/videos/
+dist/
+# manim's per-run cache of the explainer build
+/media/
+# local state
+/project/
+app_preview.png
+.DS_Store

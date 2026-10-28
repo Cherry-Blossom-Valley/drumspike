@@ -1,0 +1,8 @@
+{
+  "name": "play",
+  "timeout_s": 600,
+  "project": "$DRUMSPIKE_SELFTEST_PROJECT",
+  "expect": {"tracks": 30},
+  "steps": ["cold_start", "open", "lanes", "play"],
+  "play": {"seconds": 60, "probe_ms": 250}
+}

@@ -1,0 +1,32 @@
+# Licensing
+
+One table of every non-code asset group in the public tree, with its terms
+and its source. The source code of Drum Spike is Apache-2.0 (the file
+LICENSE, attributions and exceptions in NOTICE). The check script
+`tools/release/licence_check.py` lists every file under `static/`, `site/`,
+`docs/guide/img/` and the media folders and fails on one that no row below
+covers (run it with `uv run --no-project python tools/release/licence_check.py`).
+
+| Path group | Licence or terms | Source |
+|---|---|---|
+| `static/*.js` | Apache-2.0 (LICENSE, NOTICE) | this repository, no vendored code |
+| `static/*.css` | Apache-2.0 (LICENSE, NOTICE) | this repository |
+| `static/*.html` | Apache-2.0 (LICENSE, NOTICE) | this repository |
+| `static/brand/*` | (c) Cherry Blossom Valley (Wolfgang Frank), not Apache-2.0; may not be used to name or promote other products | made for Drum Spike |
+| `site/index.html` | Apache-2.0 (LICENSE, NOTICE) | this repository |
+| `site/assets/cbv-logo-main.png` | (c) Cherry Blossom Valley (Wolfgang Frank), not Apache-2.0; may not be used to name or promote other products | made for Drum Spike |
+| `site/assets/drumspike-icon.svg` | (c) Cherry Blossom Valley (Wolfgang Frank), not Apache-2.0; may not be used to name or promote other products | made for Drum Spike |
+| `site/assets/editor.jpg` | (c) Cherry Blossom Valley (Wolfgang Frank), not Apache-2.0. A screenshot of the Drum Spike app. | made for Drum Spike |
+| `site/assets/posters/*` | (c) Cherry Blossom Valley (Wolfgang Frank), not Apache-2.0. Posters of AI-generated videos; the narration is AI-generated with Gemini TTS, the pictures are made for Drum Spike. | made for Drum Spike |
+| `docs/guide/img/*` | (c) Cherry Blossom Valley (Wolfgang Frank), not Apache-2.0. Screenshots of the Drum Spike app. | made for Drum Spike |
+
+Notes:
+
+- Owner decision 2026-10-27: the videos, posters and brand pictures are
+  (c) Cherry Blossom Valley, not under Apache-2.0. The videos themselves are
+  not in the repository (they render into a local cache); the posters above
+  stand in for them in the site and carry the AI-generated note.
+- `site/` has no web fonts and no vendored JavaScript: the page uses system
+  fonts and one inline SVG figure (site/index.html, line 16).
+- Trademark lines (Pro Tools, Cubase, macOS) are in NOTICE section 3 and
+  apply to every asset group above.
