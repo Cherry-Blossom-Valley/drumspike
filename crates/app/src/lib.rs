@@ -46,6 +46,7 @@ pub mod plugins;
 pub mod policy;
 pub mod registry;
 pub mod relink;
+pub mod reply;
 pub mod roles;
 pub mod rowheights;
 // P4-7c: the sampler calibration of a track and the MIDI placement that uses it.

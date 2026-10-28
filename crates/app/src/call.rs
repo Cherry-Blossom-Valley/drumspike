@@ -13,7 +13,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use crate::api::{self, CommandSpec, Surface, Ty};
-use crate::bridge::{Channels, Reply};
+use crate::reply::{Channels, Reply};
 use crate::{AppError, ListShape, Progress, Service};
 
 pub(crate) fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, AppError> {

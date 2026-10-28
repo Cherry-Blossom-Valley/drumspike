@@ -14,7 +14,7 @@
 //! Debug builds only: the binary refuses to start in a release build and the Tauri bundle
 //! does not contain it. Nothing here is a security boundary; the server listens on 127.0.0.1.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use crate::reply::{Channels, Reply, QUEUE_CAP};
 use crate::{AppError, Progress, Service};
 
 /// X-3 (P3-9b): how long a connection may stay idle before the bridge closes it.
@@ -185,13 +186,6 @@ pub fn write_reply(w: &mut impl Write, reply: &HttpReply, close: bool) -> std::i
     w.flush()
 }
 
-/// The answer of a command: JSON, or bytes for `peaks_tile` and `samples_window`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Reply {
-    Json(Value),
-    Bytes(Vec<u8>),
-}
-
 /// An HTTP answer, independent of the HTTP crate (so the unit tests need no socket).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpReply {
@@ -214,65 +208,6 @@ impl HttpReply {
             status,
             content_type: "text/plain; charset=utf-8",
             body: msg.as_bytes().to_vec(),
-        }
-    }
-}
-
-/// Most messages one channel keeps; the oldest are dropped (a page that never polls).
-const QUEUE_CAP: usize = 1000;
-
-/// A callback that takes the messages of a channel: id and message.
-type Sink = Box<dyn Fn(&str, Value) + Send + Sync>;
-
-/// The message queues of the channels, by id.
-#[derive(Default)]
-pub struct Channels {
-    queues: Mutex<HashMap<String, VecDeque<Value>>>,
-    cv: Condvar,
-    /// P4-5: a callback that takes the messages instead of the queue (the command-line tool and the MCP server).
-    sink: Option<Sink>,
-}
-
-impl Channels {
-    /// Channels whose messages go to `sink` (channel id, message) at once; nothing is queued.
-    pub fn with_sink(sink: impl Fn(&str, Value) + Send + Sync + 'static) -> Channels {
-        Channels {
-            sink: Some(Box::new(sink)),
-            ..Channels::default()
-        }
-    }
-
-    /// Add a message to the queue of `id` and wake the waiting poll.
-    pub fn push(&self, id: &str, msg: Value) {
-        if let Some(sink) = &self.sink {
-            sink(id, msg);
-            return;
-        }
-        let mut g = self.queues.lock().unwrap_or_else(|e| e.into_inner());
-        let q = g.entry(id.to_string()).or_default();
-        if q.len() >= QUEUE_CAP {
-            q.pop_front();
-        }
-        q.push_back(msg);
-        self.cv.notify_all();
-    }
-
-    /// Take every message of `id`. Waits up to `timeout` for the first one; an empty list
-    /// means the time ran out.
-    pub fn poll(&self, id: &str, timeout: Duration) -> Vec<Value> {
-        let end = Instant::now() + timeout;
-        let mut g = self.queues.lock().unwrap_or_else(|e| e.into_inner());
-        loop {
-            if let Some(q) = g.get_mut(id) {
-                if !q.is_empty() {
-                    return q.drain(..).collect();
-                }
-            }
-            let left = end.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Vec::new();
-            }
-            g = self.cv.wait_timeout(g, left).unwrap_or_else(|e| e.into_inner()).0;
         }
     }
 }

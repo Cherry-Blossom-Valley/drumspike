@@ -25,8 +25,8 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 
 use crate::api::{self, CommandSpec, Run, Ty};
-use crate::bridge::Reply;
 use crate::call::call;
+use crate::reply::Reply;
 use crate::{AppError, Progress, Service};
 
 /// The streams of one run (tests pass buffers).

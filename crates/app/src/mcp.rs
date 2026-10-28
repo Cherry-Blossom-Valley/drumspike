@@ -22,8 +22,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 
 use crate::api::{self, CommandSpec, Run};
-use crate::bridge::Reply;
 use crate::call::call;
+use crate::reply::Reply;
 use crate::{AppError, Progress, Service};
 
 /// The protocol versions the server answers with, newest first.

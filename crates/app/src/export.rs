@@ -25,10 +25,10 @@ use drumspike_core::tempo::TempoMap;
 use drumspike_core::velocity::{velocity_map, VelocityMap};
 use serde_json::{json, Value};
 
-use crate::bridge::Channels;
 use crate::error::AppError;
 use crate::media::mix_mode;
 use crate::registry::{lock, OpenProject};
+use crate::reply::Channels;
 use crate::sampler::{midi_events_shifted, MidiPlan, ShiftInfo};
 use crate::{Progress, Service};
 
