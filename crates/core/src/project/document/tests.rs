@@ -106,7 +106,9 @@ fn a_document_with_every_policy_flag_loads_and_re_saves_byte_identical() {
     assert_eq!(back, doc);
     // the re-save is byte-identical: a load-save cycle changes no byte
     assert_eq!(back.to_json_pretty(), once);
-    for flag in ["cut", "bleed", "filtered", "learned", "flam", "roll", "rescue", "stage8"] {
+    for flag in [
+        "cut", "bleed", "filtered", "learned", "flam", "roll", "rescue", "stage8",
+    ] {
         assert!(once.contains(&format!("\"{flag}\"")), "{flag} survives the round trip");
     }
 }

@@ -20,7 +20,10 @@ pub fn is_manual(e: &Value) -> bool {
     if e.get("added") == Some(&Value::Bool(true)) {
         return true;
     }
-    match (e.get("orig").and_then(Value::as_f64), e.get("t").and_then(Value::as_f64)) {
+    match (
+        e.get("orig").and_then(Value::as_f64),
+        e.get("t").and_then(Value::as_f64),
+    ) {
         (Some(o), Some(t)) => (t - o).abs() > 1e-9,
         _ => false,
     }
@@ -66,8 +69,8 @@ mod tests {
     use serde_json::json;
 
     fn table() -> Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/event-policy/table.json");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/event-policy/table.json");
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
@@ -100,7 +103,12 @@ mod tests {
             // audible and exportable are the same gate: a hit out of the output plays no click
             // and lands in no MIDI or spike file.
             assert_eq!(!is_out(&stripped), row["audible"].as_bool().unwrap(), "{}", row["name"]);
-            assert_eq!(!is_out(&stripped), row["exportable"].as_bool().unwrap(), "{}", row["name"]);
+            assert_eq!(
+                !is_out(&stripped),
+                row["exportable"].as_bool().unwrap(),
+                "{}",
+                row["name"]
+            );
             // the tempo gate: the same one predicate (TEMPO_USES_ONE_PREDICATE)
             assert_eq!(
                 !tempo_out_json(&stripped),
