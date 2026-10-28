@@ -127,10 +127,9 @@ pub fn is_edited(e: &Value) -> bool {
 }
 
 /// True for a hit that is not in the output (the loudness cut, the bleed rule, the Learn filter).
+/// R16 (#40): the one predicate is [`crate::policy::is_out`].
 pub fn is_out(e: &Value) -> bool {
-    ["cut", "bleed", "filtered"]
-        .iter()
-        .any(|k| e.get(*k) == Some(&Value::Bool(true)))
+    crate::policy::is_out(e)
 }
 
 /// The strongest activation of `classes` near time `t` and its class: the frames from
