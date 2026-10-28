@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use crate::detect::attribution::{Biquad, FilterKind};
-use crate::io::{write_wav, Bext, WavFormat, WavSpec};
+use crate::io::{write_wav, write_wav_blockwise, Bext, WavFormat, WavSpec, WRITE_BLOCK_FRAMES};
 use crate::pyops::py_round;
 
 /// Blip length in seconds (full-scale sample plus the decay).
@@ -71,6 +71,54 @@ pub fn spike_signal(sr: u32, n_samples: usize, times: &[f64]) -> Vec<f32> {
         }
     }
     x
+}
+
+/// The block generator of the spike signal (R19 step 2): the ascending in-file hit indices
+/// and the blip, so [`Self::fill`] can produce the samples of [`spike_signal`] one block at
+/// a time, without the whole `n_samples` signal in memory.
+pub struct SpikeSignalBlocks {
+    blip: Vec<f32>,
+    starts: Vec<usize>,
+}
+
+impl SpikeSignalBlocks {
+    /// The generator of the `n_samples`-long signal for `times` (seconds) at `sr`: the same
+    /// hits [`spike_signal`] would place (deduplicated, ascending).
+    pub fn new(sr: u32, n_samples: usize, times: &[f64]) -> Self {
+        let mut starts: Vec<usize> = times.iter().filter_map(|&t| hit_index(t, sr, n_samples)).collect();
+        starts.sort_unstable();
+        starts.dedup();
+        Self { blip: blip(sr), starts }
+    }
+
+    /// Fill `buf` with the signal's frames `start..start + buf.len()` — zeros with the
+    /// `max`-merged blips, exactly as [`spike_signal`] holds them (`buf` must not reach past
+    /// `n_samples`; the writer cuts the last block).
+    pub fn fill(&self, n_samples: usize, start: usize, buf: &mut [f32]) {
+        buf.fill(0.0);
+        let end = (start + buf.len()).min(n_samples);
+        if end <= start {
+            return;
+        }
+        let n = self.blip.len();
+        // the hits that reach into the block: those with i + n > start and i < end (the
+        // blip is short, so a binary search finds them without walking every hit)
+        let lo = self.starts.partition_point(|&i| i + n <= start);
+        let hi = self.starts.partition_point(|&i| i < end);
+        for &i in &self.starts[lo..hi] {
+            for (k, &v) in self.blip.iter().enumerate() {
+                let j = i + k;
+                if j >= end {
+                    break;
+                }
+                if j < start {
+                    continue;
+                }
+                let s = j - start;
+                buf[s] = buf[s].max(v);
+            }
+        }
+    }
 }
 
 /// The `bext` chunk of a spike file: time reference, origination date and time and
@@ -435,6 +483,9 @@ pub fn export_audio_spikes(
 
 /// Write the spike file for `times` (seconds): mono at `sr`, `n_samples` long (the source's
 /// length), encoded as `format`, with [`spike_bext`] when the source has a `bext` chunk.
+/// The signal is produced and encoded block by block (R19 step 2): the writer never holds
+/// more than one [`WRITE_BLOCK_FRAMES`] block of the signal or of the encoded bytes, and the
+/// bytes on disk are the ones the full-buffer path wrote.
 pub fn export_spikes(
     path: &Path,
     sr: u32,
@@ -451,13 +502,48 @@ pub fn export_spikes(
         channel_mask: 0,
     };
     let bext = source_bext.map(|b| spike_bext(b, sr, format));
-    write_wav(path, &spec, &spike_signal(sr, n_samples, times), bext.as_ref())
+    let gen = SpikeSignalBlocks::new(sr, n_samples, times);
+    write_wav_blockwise(
+        path,
+        &spec,
+        n_samples,
+        bext.as_ref(),
+        WRITE_BLOCK_FRAMES,
+        |start, buf| {
+            gen.fill(n_samples, start, buf);
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::io::{read_wav_mono, MixMode};
+
+    #[test]
+    fn spike_blocks_match_the_whole_signal_for_every_block_size() {
+        let sr = 8_000u32;
+        let n = 257usize;
+        // hits inside and across the block borders, one past the end of the file
+        let times = [0.0, 0.0005, 0.001, 0.0015, 0.0319, 0.032, 0.2];
+        let whole = spike_signal(sr, n, &times);
+        let gen = SpikeSignalBlocks::new(sr, n, &times);
+        for bs in [1usize, 2, 3, 5, 8, 64, 256, 257, 400] {
+            let mut start = 0;
+            while start < n {
+                let frames = bs.min(n - start);
+                // garbage in: fill must overwrite every sample of the block
+                let mut buf = vec![7.5f32; frames];
+                gen.fill(n, start, &mut buf);
+                assert_eq!(buf, whole[start..start + frames], "block size {bs} at {start}");
+                start += frames;
+            }
+        }
+        // a signal of no frames has no hits and fills nothing
+        let empty = SpikeSignalBlocks::new(sr, 0, &times);
+        assert!(empty.starts.is_empty());
+    }
 
     #[test]
     fn spike_bext_keeps_the_source_time_and_describes_the_spike_file() {
