@@ -182,8 +182,11 @@ def test_set_in_gap_puts_the_slider_in_the_largest_gap_and_never_on_its_own(app,
 def test_the_canvas_has_no_text_and_the_gap_is_a_marker_under_it(app, hist):
     """P4-25 (owner): no label on the canvas; the gap is a triangle marker under it (click: snap into the gap)."""
     sid, ins = hist
+    # the hook covers only this synchronous draw and is restored at once: a loud-histogram redraw still pending
+    # from the fixture (20 / 127 / cut labels) landed between two evaluates before, and the hook stayed on the prototype
     js(app, """() => { window.__ft = []; const f = CanvasRenderingContext2D.prototype.fillText;
-      CanvasRenderingContext2D.prototype.fillText = function (t, ...r) { window.__ft.push(String(t)); return f.call(this, t, ...r); }; hgDrawSens(); }""")
+      CanvasRenderingContext2D.prototype.fillText = function (t, ...r) { window.__ft.push(String(t)); return f.call(this, t, ...r); };
+      try { hgDrawSens(); } finally { CanvasRenderingContext2D.prototype.fillText = f; } }""")
     assert js(app, "() => window.__ft") == []
     gap = state(app)["sens"]["gap"]
     marker = ins.locator(".hgGapBtn")
