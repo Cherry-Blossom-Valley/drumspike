@@ -338,11 +338,10 @@ pub(crate) fn copy_into_project_with(
     let src = match (src, status) {
         (Some(s), SourceStatus::Ok) => s,
         (_, status) => {
-            return Err(ProjectError::Invalid(format!(
-                "cannot copy source ({}): {}",
-                status.as_str(),
-                record.path_or_relative()
-            )))
+            return Err(ProjectError::CopyFailed {
+                reason: status.as_str().to_string(),
+                path: record.path_or_relative().to_string(),
+            })
         }
     };
     match copy_file_into_project(&src, record, project_dir, name, copy, &|| false)? {

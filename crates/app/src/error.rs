@@ -63,15 +63,14 @@ impl std::error::Error for AppError {}
 impl From<ProjectError> for AppError {
     fn from(e: ProjectError) -> AppError {
         let msg = e.to_string();
-        if matches!(e, ProjectError::Io(..)) {
-            return AppError::internal(msg);
-        }
-        if e.is_format() || msg.contains("already exists") || msg.contains("relink") || msg.contains("cannot copy") {
-            AppError::conflict(msg)
-        } else if msg.contains("no .drumspike document") {
-            AppError::not_found(msg)
-        } else {
-            AppError::bad(msg)
+        match e {
+            ProjectError::Io(..) => AppError::internal(msg),
+            ProjectError::Format(_)
+            | ProjectError::Exists(_)
+            | ProjectError::NeedsRelink { .. }
+            | ProjectError::CopyFailed { .. } => AppError::conflict(msg),
+            ProjectError::NoDocument(_) => AppError::not_found(msg),
+            ProjectError::Invalid(_) => AppError::bad(msg),
         }
     }
 }
@@ -123,15 +122,47 @@ mod tests {
     fn project_errors_map_like_server_project_error() {
         let fmt = AppError::from(ProjectError::Format("newer".into()));
         assert_eq!(fmt.code, 409);
-        for (msg, code) in [
-            ("project already exists: /x", 409),
-            ("track needs a relink", 409),
-            ("cannot copy a file", 409),
-            ("no .drumspike document in /x", 404),
-            ("bad project name: 'a'", 400),
-        ] {
-            assert_eq!(AppError::from(ProjectError::Invalid(msg.into())).code, code, "{msg}");
+        let cases = [
+            (ProjectError::Exists("project already exists: /x".into()), 409),
+            (
+                ProjectError::NeedsRelink {
+                    track: "Kick In".into(),
+                    reason: "missing".into(),
+                },
+                409,
+            ),
+            (
+                ProjectError::CopyFailed {
+                    reason: "missing".into(),
+                    path: "/x.wav".into(),
+                },
+                409,
+            ),
+            (ProjectError::NoDocument("no .drumspike document in /x".into()), 404),
+            (ProjectError::Invalid("bad project name: 'a'".into()), 400),
+        ];
+        for (e, code) in cases {
+            let msg = e.to_string();
+            let app = AppError::from(e);
+            assert_eq!(app.code, code, "{msg}");
+            assert_eq!(app.message, msg, "the message text is unchanged");
         }
+        assert_eq!(
+            ProjectError::NeedsRelink {
+                track: "Kick In".into(),
+                reason: "missing".into(),
+            }
+            .to_string(),
+            "track Kick In: source missing; relink it before Save As"
+        );
+        assert_eq!(
+            ProjectError::CopyFailed {
+                reason: "changed".into(),
+                path: "/x.wav".into(),
+            }
+            .to_string(),
+            "cannot copy source (changed): /x.wav"
+        );
         let io = ProjectError::Io("read x".into(), std::io::Error::other("boom"));
         assert_eq!(AppError::from(io).code, 500);
     }
