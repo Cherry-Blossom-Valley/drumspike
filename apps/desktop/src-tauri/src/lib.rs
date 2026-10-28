@@ -880,6 +880,7 @@ pub fn run() {
                 });
             }
             // #206: the menu is in place; apply the AppKit Shift convention (uppercase, no Shift flag)
+            #[cfg(target_os = "macos")]
             menu::fix_shift_equivalents(app.handle());
             let svc = Service::new(ServiceConfig::from_env(Path::new("")));
             lifecycle_setup(&svc, app.handle());

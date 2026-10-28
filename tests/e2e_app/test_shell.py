@@ -10,7 +10,7 @@ from pathlib import Path
 
 from playwright.sync_api import expect
 
-from app_support import invoke, menu, open_project, wait_until
+from app_support import invoke, menu, open_project, shot_dir, wait_until
 
 
 def sha(path):
@@ -253,6 +253,8 @@ def test_about_shows_the_cbv_logo_licence_and_links_and_opens_them_by_id(app):
     expect(app.locator("#aboutModal")).to_be_visible()
     logo = app.locator("#aboutLogo")
     expect(logo).to_be_visible()
+    # #18: one screenshot of the dialog for the coordinator's visual check.
+    app.locator("#aboutModal").screenshot(path=str(shot_dir("18-about-dialog.png")))
     assert "/brand/cbv-logo-white.png" in logo.get_attribute("src")
     expect(app.locator("#aboutLicence")).to_have_text("Drum Spike is free and open source (Apache-2.0).")
     expect(app.locator("#aboutLinkWebsite")).to_have_text("drumspike.cherry-blossom-valley.com")

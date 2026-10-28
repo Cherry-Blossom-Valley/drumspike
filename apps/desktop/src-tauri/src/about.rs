@@ -34,6 +34,11 @@ pub fn link_address(id: &str) -> Option<&'static str> {
 #[tauri::command]
 pub fn open_link(id: String) -> Result<Value, AppError> {
     let addr = link_address(&id).ok_or_else(|| AppError::not_found(format!("unknown link id: {id}")))?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = addr;
+        Err(AppError::internal("open_link is a macOS feature"))
+    }
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
@@ -42,8 +47,6 @@ pub fn open_link(id: String) -> Result<Value, AppError> {
             .map_err(|e| AppError::internal(format!("open: {e}")))?;
         Ok(Value::Null)
     }
-    #[cfg(not(target_os = "macos"))]
-    Err(AppError::internal("open_link is a macOS feature"))
 }
 
 /// The answer of `about_info`: `name`, `version` and `core_version` (main is model-free, #281 D16).
@@ -135,8 +138,14 @@ mod tests {
 
     #[test]
     fn the_three_link_ids_map_to_exactly_the_three_addresses() {
-        assert_eq!(link_address("website"), Some("https://drumspike.cherry-blossom-valley.com/"));
-        assert_eq!(link_address("source"), Some("https://github.com/Cherry-Blossom-Valley/drumspike"));
+        assert_eq!(
+            link_address("website"),
+            Some("https://drumspike.cherry-blossom-valley.com/")
+        );
+        assert_eq!(
+            link_address("source"),
+            Some("https://github.com/Cherry-Blossom-Valley/drumspike")
+        );
         assert_eq!(link_address("cbv"), Some("https://cherry-blossom-valley.com/"));
     }
 

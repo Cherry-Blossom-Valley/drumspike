@@ -236,6 +236,7 @@ pub static REGISTRY: &[CommandSpec] = &[
     cmd("app_info", "Core version, detector and chain (main is model-free)", &[], r#"{"type":"object","required":["core_version","detector","chain"]}"#, Read, Agent, Quick),
     cmd("about_info", "Data of the About dialog", &[], OBJ, Read, Window, Quick),
     cmd("about_third_party", "Text of the third-party licence list", &[], r#"{"type":"string"}"#, Read, Window, Quick),
+    cmd("open_link", "Open one of the fixed About addresses by id (website, source, cbv)", &[req("id", Ty::Str, "The fixed id of the address")], "{}", App, Window, Quick),
     cmd("startup_mark", "Startup timing probe of the window", &[opt("info", Ty::Str, "Probe text")], "{}", Read, Window, Quick),
     // ---- the transport (needs the window and an audio device)
     cmd("transport_play", "Start playback of a project", &[SID, opt("position", Ty::Num, "Start in seconds"), opt("events", Ty::Any, "Hits per track for the click"), opt("speed", Ty::Num, "1.0 or 0.5"), opt("start", Ty::Num, "Audition: window start in seconds"), opt("end", Ty::Num, "Audition: window end in seconds (with shot, the one-shot's length)"), opt("loop", Ty::Bool, "Audition: play the window again until stop"), opt("tracks", Ty::Strs, "Audition: track names that are audible for this play only (overrides solo)"), opt("shot", Ty::Str, "P4-40e: track name whose layer one-shot plays once at the window start (the Layer view's Play); the track is soloed when tracks is empty")], OBJ, App, Window, Progress),
