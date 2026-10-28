@@ -84,6 +84,28 @@ def record_helpers():
     return mod
 
 
+# #459: the path guard (check_paths.py) as the last step of the shot tool: every written picture
+# is OCR'd; a private path or host name in a picture FAILs the run (non-zero).
+_CHECK_PATHS = None
+
+
+def path_guard():
+    """The check_paths module, loaded once (the tests patch its _engine on this instance)."""
+    global _CHECK_PATHS
+    if _CHECK_PATHS is None:
+        spec = importlib.util.spec_from_file_location(
+            "ds_check_paths", ROOT / "tools" / "media" / "check_paths.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _CHECK_PATHS = mod
+    return _CHECK_PATHS
+
+
+def run_path_guard(paths):
+    """The wired-in guard on the finished picture(s): exits non-zero on a finding."""
+    path_guard().guard([str(p) for p in paths])
+
+
 def demo_project(work):
     """The demo session as a project folder (referenced audio, the roles of the kit)."""
     if not (DEMO / "truth.json").is_file():
@@ -461,6 +483,7 @@ def main():
     if not names:
         sys.exit(f"no picture of chapters {args.chapters} in {SHOTS.name}")
     failures = []
+    stills_written = []
     (GUIDE / "img").mkdir(exist_ok=True)
 
     for name in names:
@@ -468,6 +491,7 @@ def main():
             src = FRAMES / EXPLAINER_STILLS[name]
             if src.is_file():
                 shutil.copyfile(src, GUIDE / name)
+                stills_written.append(name)
             else:
                 failures.append(f"{name}: explainer still {src} missing (render tools/media/explainers/build.py 01)")
 
@@ -476,6 +500,7 @@ def main():
     chapter = {k: v["chapter"] for k, v in json.loads(SHOTS.read_text()).items()}
     first = {n for n in app_names if chapter[n] <= 5 or chapter[n] == 11}
     later = app_names - first
+    written = []
     if app_names:
         if not BRIDGE.is_file():
             sys.exit(f"ds-bridge not built: cargo build -p drumspike-devtools --bin ds-bridge (looked for {BRIDGE})")
@@ -492,11 +517,15 @@ def main():
                 page.wait_for_function(READY, timeout=180000)
                 checked = 0
                 if first:
-                    checked += app_pictures(page, work, GUIDE, first)[1]
+                    wr, ch = app_pictures(page, work, GUIDE, first)
+                    written += wr
+                    checked += ch
                 if later:
                     page.reload(timeout=180000)
                     page.wait_for_function(READY, timeout=180000)
-                    checked += guide_pictures(page, work, GUIDE, later)[1]
+                    wr, ch = guide_pictures(page, work, GUIDE, later)
+                    written += wr
+                    checked += ch
                 print(f"checked shots: {checked}")
                 if checked == 0:
                     failures.append("guard: 0 shots were checked against the forbidden text")
@@ -507,6 +536,12 @@ def main():
             proc.terminate()
             proc.wait(10)
             shutil.rmtree(work, ignore_errors=True)
+
+    # #459: the last step — every written picture is OCR'd; a private path or host name in a
+    # picture FAILs the run (non-zero).
+    guarded = [GUIDE / n for n in stills_written] + [GUIDE / n for n in written]
+    if guarded:
+        run_path_guard(guarded)
 
     for name in names:
         path = GUIDE / name

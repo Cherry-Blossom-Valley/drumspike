@@ -17,6 +17,7 @@ from manim import (  # noqa: F401  (the explainers import the names they use fro
     Rectangle, Scene, Text, VGroup, VMobject, ValueTracker, always_redraw, config,
 )
 
+
 # The app's colours (static/style.css) and the media plan's style: dark, cobalt waveform, orange hits.
 BG = "#14161a"
 PANEL = "#1c1f26"
@@ -47,6 +48,50 @@ def caption(text, width=11.0):
     return t.to_edge(DOWN, buff=0.6)
 
 
+# ---------------- #459: the overlap guard ----------------
+
+class OverlapError(Exception):
+    """Two visible Text/MarkupText mobjects' bounding boxes overlap."""
+
+
+def visible_texts(scene):
+    """Every visible Text/MarkupText of the scene but the corner note (the note is a Text too,
+    and the disclosure never counts as an overlap)."""
+    from manim import MarkupText, Text
+    note = getattr(scene, "note", None)
+    out = []
+    for m in scene.mobjects:
+        for sub in m.get_family():
+            if isinstance(sub, (Text, MarkupText)) and sub is not note:
+                out.append(sub)
+    return out
+
+
+def _label(t):
+    """The readable name of a text mobject: its own string when it carries one."""
+    return repr(getattr(t, "text", None) or t)
+
+
+def assert_no_text_overlap(scene, sid=""):
+    """FAIL (OverlapError, named with the scene and the two texts) when the bounding boxes of two
+    visible Text/MarkupText mobjects overlap. Touching edges are no overlap; a positive
+    intersection area is."""
+    texts = visible_texts(scene)
+    boxes = []
+    for t in texts:
+        # the axis-aligned box of the text: the extreme points of the glyphs
+        boxes.append((t, t.get_critical_point(LEFT)[0], t.get_critical_point(RIGHT)[0],
+                      t.get_critical_point(DOWN)[1], t.get_critical_point(UP)[1]))
+    eps = 1e-6
+    for i in range(len(boxes)):
+        for j in range(i + 1, len(boxes)):
+            _, ax0, ax1, ay0, ay1 = boxes[i]
+            _, bx0, bx1, by0, by1 = boxes[j]
+            if min(ax1, bx1) - max(ax0, bx0) > eps and min(ay1, by1) - max(ay0, by0) > eps:
+                raise OverlapError(
+                    f"{sid}: two visible texts overlap: {_label(boxes[i][0])} and {_label(boxes[j][0])}")
+
+
 class Explainer(Scene):
     """Base of an explainer. Subclasses define a method per scene, named after its id (`s01-hook` is `s01_hook`)."""
 
@@ -63,6 +108,14 @@ class Explainer(Scene):
         self.cap = None  # the caption on screen now, if any
         self.note = Text(NOTE, font=FONT, font_size=18, color=DIM).to_corner(DR, buff=0.3)
         self.add(self.note)
+        # #459: the overlap guard runs on every frame of every play and wait (updaters run
+        # per frame), so a transition frame with two texts on top of each other FAILs the
+        # render too, not only the scene ends.
+        self.note.add_updater(lambda m: self.guard_overlap())
+
+    def guard_overlap(self):
+        """The overlap guard of this frame: OverlapError (named with the scene) on an overlap."""
+        assert_no_text_overlap(self, sid=self.sid or "scene")
 
     def construct(self):
         for sid in self.script_ids:
@@ -99,11 +152,15 @@ class Explainer(Scene):
         self.elapsed += t
 
     def say(self, text, t=2.0):
-        """Show the scene's caption; the one on screen fades out as the new one fades in."""
+        """Show the scene's caption in t seconds total. The one on screen fades out BEFORE the
+        new one fades in (split evenly): two captions on top of each other during a swap are
+        exactly the overlap the #459 guard FAILs, so a swap must never hold both at once."""
         new = caption(text)
-        outs = [FadeOut(self.cap)] if self.cap is not None else []
+        half = t / 2
+        if self.cap is not None:
+            self.t_play(FadeOut(self.cap), t=half)
         self.cap = new
-        self.t_play(*outs, FadeIn(new), t=t)
+        self.t_play(FadeIn(new), t=half)
 
     def tear_down(self):
         path = os.environ.get("DRUMSPIKE_EXPLAINER_PLAN")
