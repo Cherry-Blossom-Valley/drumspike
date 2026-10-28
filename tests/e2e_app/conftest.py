@@ -6,6 +6,19 @@ path of the app (B.app, the byte layouts, the Rust commands) on both hosts witho
 Without the binary the tests skip with the reason; DRUMSPIKE_REQUIRE_APP=1 turns the skip into a
 failure. Binary: $DRUMSPIKE_BRIDGE, else <target>/debug/ds-bridge (target = $CARGO_TARGET_DIR or
 ./target); build it with `cargo build -p drumspike-devtools --bin ds-bridge`.
+
+#495: the bridge starts with `--static <repo>/static`, so the page is always this worktree's,
+even when the binary was built in another worktree (it would serve the static/ of its BUILD
+worktree, its `env!("CARGO_MANIFEST_DIR")`). Before the start the session refuses a stale
+binary: it compares the binary with the files Cargo lists in the dep-info next to it
+(<target>/debug/ds-bridge.d, the build graph the binary was really built from); when one of
+them is newer, every test stops with one line that names the built time and the newest source
+(a skip, a failure with DRUMSPIKE_REQUIRE_APP=1). Without the dep-info file the fallback is
+every *.rs under crates/core, crates/app and crates/devtools (the crates ds-bridge is built
+from) — not apps/desktop/src-tauri/src and not Cargo.lock: a change outside the build graph
+never relinks the binary, so a refusal from it could never be cleared. Unit test:
+tests/test_e2e_bridge_guard.py.
+
 Projects are written by apps/desktop/selftest/make_project.py into temp folders.
 
 X-3 (P3-9b): the first Page.goto of a session could take more than 30 s on a loaded host (cold Chromium,
@@ -106,12 +119,72 @@ def bridge_binary():
     return Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "debug" / "ds-bridge"
 
 
+def start_command(exe):
+    """#495: how the fixture starts the bridge. `--static` serves THIS worktree's static/, not
+    the static/ of the worktree the binary was BUILT in (its env!("CARGO_MANIFEST_DIR"))."""
+    return [str(exe), "--static", str(ROOT / "static"), "--exit-on-stdin-eof"]
+
+
+def _ts(mtime):
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime))
+
+
+def _dep_info_sources(exe, root):
+    """#495: the files the binary was really built from — the deps Cargo lists in the dep-info
+    next to the binary (<name>.d, one line 'target: dep dep ...', backslash continuations
+    allowed). None when there is no dep-info file. Only files that exist are returned."""
+    try:
+        text = Path(str(exe) + ".d").read_text()
+    except OSError:
+        return None
+    deps = []
+    for tok in text.replace("\\\n", " ").split(":", 1)[-1].split():
+        path = Path(tok)
+        if not path.is_absolute():
+            path = root / tok
+        if path.is_file():
+            deps.append(path)
+    return deps
+
+
+def stale_source(exe, root=None):
+    """#495: the one-line refusal when the bridge binary is older than a source, else None.
+    Sources: the build graph of THIS binary — the files Cargo lists in the dep-info next to it
+    (<target>/debug/ds-bridge.d). Without a dep-info file: every *.rs under crates/core,
+    crates/app and crates/devtools, the crates ds-bridge is built from."""
+    root = Path(root) if root is not None else ROOT
+    built = exe.stat().st_mtime
+    listed = _dep_info_sources(exe, root)
+    if listed is None:
+        sources = sorted(root.glob("crates/core/**/*.rs"))
+        sources += sorted(root.glob("crates/app/**/*.rs"))
+        sources += sorted(root.glob("crates/devtools/**/*.rs"))
+    else:
+        sources = listed
+    newest = None
+    for path in sources:
+        try:
+            m = path.stat().st_mtime
+        except OSError:   # a listed source deleted under us
+            continue
+        if m > built and (newest is None or m > newest[1]):
+            newest = (path, m)
+    if newest is None:
+        return None
+    try:
+        where = newest[0].relative_to(root)
+    except ValueError:
+        where = newest[0]
+    return (f"stale ds-bridge (built {_ts(built)}, newest source {where} {_ts(newest[1])}): "
+            f"run cargo build -p drumspike-devtools --bin ds-bridge")
+
+
 def start_bridge(exe, env):
-    """The one way the e2e fixtures start `ds-bridge` (#4): with `--exit-on-stdin-eof` and its
-    stdin on an open pipe. The pipe dies with the pytest process, so a SIGKILLed run (no teardown)
-    gives the bridge an EOF and it ends; the teardown (`terminate()` + `wait`) stays as it was.
-    Never close `proc.stdin` while the tests run."""
-    return subprocess.Popen([str(exe), "--exit-on-stdin-eof"], cwd=ROOT, stdin=subprocess.PIPE,
+    """The one way the e2e fixtures start `ds-bridge` (#4): with `start_command` (#495: `--static`;
+    #4: `--exit-on-stdin-eof`) and its stdin on an open pipe. The pipe dies with the pytest process,
+    so a SIGKILLed run (no teardown) gives the bridge an EOF and it ends; the teardown
+    (`terminate()` + `wait`) stays as it was. Never close `proc.stdin` while the tests run."""
+    return subprocess.Popen(start_command(exe), cwd=ROOT, stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
 
 
@@ -124,12 +197,17 @@ def _builder():
 
 @pytest.fixture(scope="session")
 def bridge(tmp_path_factory):
-    """The running bridge: .url, .proc."""
+    """The running bridge: .url, .proc. Refuses a stale binary (#495)."""
     exe = bridge_binary()
     if not exe.is_file():
         if os.environ.get("DRUMSPIKE_REQUIRE_APP") == "1":
             pytest.fail(f"DRUMSPIKE_REQUIRE_APP=1 and {SKIP.split(' (')[0]} (looked for {exe})", pytrace=False)
         pytest.skip(SKIP)
+    stale = stale_source(exe)   # #495: a stale bridge misled two gates on 2026-10-28 (#463, #469)
+    if stale:
+        if os.environ.get("DRUMSPIKE_REQUIRE_APP") == "1":
+            pytest.fail(stale, pytrace=False)
+        pytest.skip(stale)
     # P3-4a: the bridge keeps recent.json in its own home folder and autosaves dirty projects every second
     # P3-5b: the bridge never plays to a real device: the null device and master gain 0 (also if a caller forgot)
     home = tmp_path_factory.mktemp("dshome")
