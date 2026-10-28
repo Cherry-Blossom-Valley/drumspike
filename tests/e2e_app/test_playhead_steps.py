@@ -17,7 +17,7 @@ import pytest
 
 from app_support import open_project
 
-MEASURE = """([seconds, viewS, mode]) => new Promise(async (done) => {
+MEASURE = """([seconds, viewS, mode, stepAt = 0]) => new Promise(async (done) => {
   try {   // #463: a throw here must settle the promise, else Playwright's evaluate waits forever
   const pxPerSongS = () => laneWidth() / viewDur() * GEO.dpr;   // screen device px per song s at the current view
   const out = { samples: 0, frames: 0, null_frames: 0, max_jump_px: 0, max_jump_ms: 0, jumps_over_1px: 0, top: [], causes: {}, arms: 0, view_moves: 0, max_jump_nv_px: 0, max_jump_nv_ms: 0, nv_cause: "", nv_top: [], frames_log: [] };
@@ -69,6 +69,10 @@ MEASURE = """([seconds, viewS, mode]) => new Promise(async (done) => {
           const step = dp - AC.speed * dt / 1000;   // song s beyond one frame of motion (a null frame between two
           const jumpPx = Math.round(step * pxPerSongS() * 100) / 100;   // drawn ones must not inflate the step)
           out.samples++;
+          /* #14: the forced real step - the hook jumps the drawn playhead (the model the page shows) by
+             0.5 song s at once, after `stepAt` paired frames. The measurement must report it (the hook
+             test asserts the step over the budget; the 9-case test would fail the same way). */
+          if (stepAt && out.samples === stepAt && window.__DS_STEP_PLAYHEAD) window.__DS_STEP_PLAYHEAD(0.5);
           { const g = CP.segs[CP.segs.length - 1];   // #463 probe: per-frame seg identity for the diagnosis
             if (out.frames_log.length < 4000) out.frames_log.push([Math.round(t), Math.round(p * 1e4) / 1e4,
               CP.segs.length, g ? Math.round(g.at0) : null, g ? Math.round(g.pos0 * 1e4) / 1e4 : null,
@@ -141,4 +145,22 @@ def test_the_playhead_does_not_step(app, make_project, mode, view_s):
     assert abs(out["max_jump_nv_px"]) <= budget, \
         f"{mode} (view {view_s} s): the playhead stepped {out['max_jump_nv_px']} px " \
         f"({out['max_jump_nv_ms']} ms, budget {budget:.3f} px); {out}"
+
+
+def test_a_forced_real_step_of_the_drawn_playhead_still_fails(app, make_project):
+    """#14: the test has teeth. The hook __DS_STEP_PLAYHEAD jumps the drawn playhead (the model the page
+    shows) by 0.5 song s after 20 paired frames; the measurement must report a step beyond the budget."""
+    sid = open_project(app, make_project(seconds=40.0))
+    assert sid
+    app.evaluate("() => { setLanesGL(false); }")
+    out = app.evaluate(MEASURE, [10, 30.0, "smooth", 20])
+    app.evaluate("() => setLanesGL(true)")
+    assert "error" not in out, out
+    budget = 1 / app.evaluate("() => GEO.dpr") + out["px_per_s"] / 60 + 0.01
+    # The forced step is a real step of the drawn playhead even though the smooth follow glides the view
+    # across it (the jump lands on a frame whose view moved, so nv_top - which excludes the view's own
+    # moves, a page turn - does not carry it; max_jump_px is the raw measurement and carries it).
+    assert out["jumps_over_1px"] > 0 and abs(out["max_jump_px"]) > budget, \
+        f"the forced real step was not reported (max {out['max_jump_px']} px, budget {budget:.3f} px, " \
+        f"{out['samples']} samples, jumps {out['jumps_over_1px']}); {out}"
 
