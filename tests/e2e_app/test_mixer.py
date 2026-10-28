@@ -216,6 +216,13 @@ def test_reset_volume_and_pan_from_the_track_menu_and_the_header_menu(app, audio
 def test_meters_move_while_playing_hold_and_fall_after_the_stop(app, audio_reset, make_project):
     open_project(app, make_project(seconds=6.0))
     assert meter_scale(app, f"{KICK} .meter") == 0
+    # #6: the +12 dB of the clip light goes in BEFORE the play. The light derives from a meter
+    # message with a peak >= 1 (meterIn sets clip), so a kick must arrive after the gain reached
+    # the mixer. Set mid-play, the waits between the play start and the gain step could put the
+    # playhead past the last kick of the 6 s song (the hits at 0.5, 1.5, 2.5 s) and no clipped
+    # message ever arrived (the x86-mac timeouts of 2026-10-27: .mclip never on within 5 s).
+    # Before the play, the first kick (0.5 s) clips.
+    app.evaluate("() => setTrackMix('Kick In', 12, null)")
     app.click("#playBtn")
     wait_playing(app)
     # #114: under host load the meter arrival rate collapses (11, 7, 6, 7, 7 per 1 s on
@@ -236,9 +243,23 @@ def test_meters_move_while_playing_hold_and_fall_after_the_stop(app, audio_reset
     assert app.evaluate("() => MT.master.hold[0]") > -12
     app.wait_for_function("() => MT.master.drawn[2] > 0")   # P4-40h: the hold line is painted on the master canvas
     assert status(app)["master"] == 0.0, "silent"
-    # +12 dB on the kick clips its meter; a click on the light clears it
-    app.evaluate("() => setTrackMix('Kick In', 12, null)")
-    app.wait_for_function(f"() => document.querySelector('{KICK} .mclip').classList.contains('on')", timeout=5000)
+    # the light is painted in the frame (F.METER), late on a loaded host: wait for the model
+    # value it derives from (clip, set by a message peak >= 1) first; both waits are bounded
+    # and their failures name the measured peak (the gate of #6).
+    try:
+        app.wait_for_function("() => MT.tracks['Kick In'].clip === true", timeout=10000)
+    except Exception as e:
+        p = app.evaluate("() => { const m = MT.tracks['Kick In']; return {lvl: m.lvl[0], hold: m.hold[0], clip: m.clip}; }")
+        on = app.evaluate(f"() => document.querySelector('{KICK} .mclip').classList.contains('on')")
+        raise AssertionError(f"the clip flag never set: measured peak {p['hold']:.2f} dBFS "
+                             f"(level {p['lvl']:.2f} dBFS, clip {p['clip']}, light {on})") from e
+    try:
+        app.wait_for_function(f"() => document.querySelector('{KICK} .mclip').classList.contains('on')", timeout=10000)
+    except Exception as e:
+        p = app.evaluate("() => { const m = MT.tracks['Kick In']; return {lvl: m.lvl[0], hold: m.hold[0], clip: m.clip}; }")
+        on = app.evaluate(f"() => document.querySelector('{KICK} .mclip').classList.contains('on')")
+        raise AssertionError(f"the clip light did not come on: measured peak {p['hold']:.2f} dBFS "
+                             f"(level {p['lvl']:.2f} dBFS, clip {p['clip']}, light {on})") from e
     n = app.evaluate("() => FR.n.meter")
     app.click(f"{KICK} .mclip")
     app.wait_for_function(f"() => !document.querySelector('{KICK} .mclip').classList.contains('on')", timeout=2000)
