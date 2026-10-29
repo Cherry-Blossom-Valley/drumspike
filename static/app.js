@@ -6283,7 +6283,7 @@ function setTrackHeight(name, save) {
   S.trackHeight = name;
   const h = TRACK_HEIGHTS[name], st = document.documentElement.style;
   st.setProperty("--spike-h", `${h.spike}px`); st.setProperty("--wave-h", `${h.wave}px`);
-  st.setProperty("--tart-size", name === "large" ? "76px" : "64px");   // #9: the header drawing scales with the height
+  st.setProperty("--tart-size", name === "large" ? "65px" : "54px");   // #9: the header drawing scales with the height
   if (Object.keys(S.rowH).length) setRowHeights(S.rowH);   // #167: the factors follow the new global height (the zoom scales every lane)
   $("#lanesScroll").dataset.height = name;
   if (save !== false && B.appSettingsSet) B.appSettingsSet("track_height", name).catch(e => setMsg(`settings: ${errText(e)}`));
