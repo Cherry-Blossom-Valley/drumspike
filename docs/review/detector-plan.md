@@ -144,7 +144,7 @@ the attribution does not reach 90 % or an aggregate regresses.
 
 #### The measured outcome (#76, PR #92, merged as 556d271, 2026-10-29)
 
-The miss-cause pass (`tools/kick_miss_causes.py kick`, the counted lines of the x86-mac
+The miss-cause pass (`tools/kick_miss_causes.py kick`, the counted lines of the #76 gate
 chain at 20dfd9f) found no false negative to attribute: with the shape rescue in place the
 kick has 0 false negatives at Sensitivity 50 on all three sessions - 0/302, 0/444, 0/386
 used refs (offsets +6.2/+8.4/+2.6 ms). Kick F1 at the working point 0.925 / 0.999 / 0.999
