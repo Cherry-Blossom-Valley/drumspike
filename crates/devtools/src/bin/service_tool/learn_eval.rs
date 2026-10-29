@@ -22,6 +22,12 @@
 //! - `mode: "filter"`, `sensitivity`, `this: [t]`, `not: [t]`, optional `threshold` (absent: the suggestion,
 //!   `learn.auto`): the app's own filter path (`learn_filter::learn_pick`) against the filter off:
 //!   `{off: [t], on: [t], out: [t]}`.
+//! - `mode: "xprobe"`, `target: <mic index>`, `mics: [{wav, role}, ...]`: package 3b's false-side
+//!   probe (#98), one decode and spectrogram per mic: the raw candidates (frame, time, `rel_db`,
+//!   `similarity`), their spectral flux shapes over the target role's band range (the common basis
+//!   for the template comparison; the shape members and the target's deep candidates), the events
+//!   at Sensitivity 50, and the A6 band level (`cross_bleed::hit_level`) at every candidate and
+//!   event time.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -31,8 +37,14 @@ use std::time::Instant;
 use drumspike_app::learn::CANDIDATE_REACH;
 use drumspike_app::{histogram, jobs, learn_filter, learn_score, media, sensitivity};
 use drumspike_core::analyze::{analyze_detected, detect_events, role_note, AnalyzeParams, Detector};
-use drumspike_core::detect::onset::{detect_onsets_and_cands, Candidate, OnsetParams, Role};
+use drumspike_core::detect::cross_bleed::{hit_level, CrossBleedParams, XKind};
+use drumspike_core::detect::features::features;
+use drumspike_core::detect::onset::{
+    band_range, detect_onsets_and_cands, onsets_with_candidates, Candidate, OnsetParams, Role, N_BANDS,
+};
 use drumspike_core::detect::peaks::FPS;
+use drumspike_core::detect::resample::resample_to_44100;
+use drumspike_core::detect::Chain;
 use drumspike_core::similarity::{self, Recipe, Weights};
 use serde_json::{json, Map, Value};
 
@@ -352,10 +364,122 @@ fn filter(cache: &mut Cache, job: &Value, role: &str, wav: &str) -> Result<Value
     Ok(json!({"off": off_hits, "on": on, "out": out}))
 }
 
+/// The A6 kind of a role name (`cymbal` is an overhead for the level measure).
+fn xkind_of(role: &str) -> XKind {
+    match role {
+        "kick" => XKind::Kick,
+        "snare" => XKind::Snare,
+        "tom" => XKind::Tom,
+        "hat" => XKind::Hat,
+        _ => XKind::Overhead,
+    }
+}
+
+/// The spectral flux shape of frame `i` over `bands` (the `onset.rs` `Shape::Flux` convention,
+/// replicated for the probe: the positive differences to the 3-band maximum of the previous
+/// frame, L2-normalised). The caller validates it against the detector's own `similarity`.
+fn flux_shape_probe(spec: &[f32], i: usize, bands: &std::ops::Range<usize>) -> Vec<f32> {
+    let cur = &spec[i * N_BANDS..(i + 1) * N_BANDS];
+    let zero = vec![0f32; N_BANDS];
+    let prev: &[f32] = if i == 0 {
+        &zero
+    } else {
+        &spec[(i - 1) * N_BANDS..i * N_BANDS]
+    };
+    let mut v: Vec<f32> = bands
+        .clone()
+        .map(|b| {
+            let m = prev[b.saturating_sub(1)]
+                .max(prev[b])
+                .max(prev[(b + 1).min(N_BANDS - 1)]);
+            (cur[b] - m).max(0.0)
+        })
+        .collect();
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt() + 1e-12;
+    v.iter_mut().for_each(|x| *x /= norm);
+    v
+}
+
+/// Package 3b's false-side probe (#98), per mic of one kit, one decode and spectrogram per mic:
+/// the raw candidates (frame, time, `rel_db`, `similarity`), the spectral flux shapes over the
+/// target role's band range for the template members (rel_db within the role's `template_db`) and
+/// the target's deep candidates (the rescue-worthy keeps: similarity >= 0.85, -45 <= rel_db < -6),
+/// the events at the working Sensitivity 50, and the A6 band level at every candidate and event
+/// time. Read-only on the shipped detection: no detector change.
+fn xprobe(job: &Value) -> Result<Value, String> {
+    let mics = job["mics"].as_array().ok_or("xprobe without mics")?;
+    let target = job["target"].as_u64().unwrap_or(0) as usize;
+    let basis_role = mics.get(target).and_then(|m| m["role"].as_str()).unwrap_or("other");
+    let bp = OnsetParams::for_role(Role::parse(basis_role).unwrap_or(Role::Other));
+    let bands = band_range(bp.band_lo_hz, bp.band_hi_hz);
+    let p6 = CrossBleedParams::default();
+    let mut out = Vec::new();
+    for (i, m) in mics.iter().enumerate() {
+        let role = m["role"].as_str().unwrap_or("other");
+        let wav = m["wav"].as_str().ok_or("xprobe mic without wav")?;
+        let dec = media::decode(Path::new(wav), media::mix_mode("ffmpeg")).map_err(|e| e.message)?;
+        let y = resample_to_44100(&dec.samples, dec.sr).map_err(|e| e.to_string())?;
+        let spec = features(&y, Chain::Cli);
+        let rp = OnsetParams::for_role(Role::parse(role).unwrap_or(Role::Other));
+        let (_, cands, weak_limit) = onsets_with_candidates(&spec, &y, &rp);
+        let frames_n = spec.len() / N_BANDS;
+        let mut ids: Vec<usize> = Vec::new();
+        for (k, c) in cands.iter().enumerate() {
+            let member = c.rel_db >= -rp.template_db;
+            let deep = i == target && c.similarity >= 0.85 && c.rel_db >= -45.0 && c.rel_db < -6.0;
+            if (member || deep) && !ids.contains(&k) {
+                ids.push(k);
+            }
+        }
+        let shapes: Vec<Vec<f32>> = ids
+            .iter()
+            .map(|&k| flux_shape_probe(&spec, cands[k].frame.min(frames_n.saturating_sub(1)), &bands))
+            .collect();
+        // the events at the working Sensitivity (the app's default), the stages path
+        let parsed = jobs::parse_params(Some(&params_at(50.0)))?;
+        let scale = sensitivity::scale_of(sensitivity::sensitivity_of(&parsed.params.thresholds)) as f32;
+        let det = Detector::Candidates {
+            cands: &cands,
+            params: &rp,
+            weak_limit,
+            scale,
+        };
+        let det_ev =
+            detect_events(&dec.samples, dec.sr, role, &parsed.params.thresholds, det).map_err(|e| e.to_string())?;
+        let a = analyze_detected(&dec.samples, dec.sr, role, &det_ev, &parsed.params).map_err(|e| e.to_string())?;
+        let kind = xkind_of(role);
+        let events: Vec<f64> = a.events.iter().map(|h| r6(h.t)).collect();
+        let ev_levels: Vec<f64> = events
+            .iter()
+            .map(|&t| hit_level(&dec.samples, dec.sr, kind, t, &p6))
+            .collect();
+        let cand_levels: Vec<f64> = cands
+            .iter()
+            .map(|c| hit_level(&dec.samples, dec.sr, kind, c.time, &p6))
+            .collect();
+        out.push(json!({
+            "role": role,
+            "weak_limit": weak_limit,
+            "cands": cands
+                .iter()
+                .map(|c| json!({"t": r6(c.time), "frame": c.frame, "rel_db": c.rel_db,
+                                "similarity": c.similarity}))
+                .collect::<Vec<_>>(),
+            "shape_ids": ids,
+            "shapes": shapes,
+            "events50": events,
+            "ev_levels": ev_levels,
+            "cand_levels": cand_levels,
+        }));
+    }
+    Ok(json!({ "bands": bands.len(), "mics": out }))
+}
+
 fn one(cache: &mut Cache, job: &Value) -> Result<Value, String> {
     let id = job["id"].as_str().unwrap_or("");
     let role = job["role"].as_str().unwrap_or("other");
-    let wav = job["wav"].as_str().ok_or("job without wav")?;
+    // `xprobe` carries its wavs per mic; every other mode needs the job's own wav.
+    let wav = job["wav"].as_str().unwrap_or_default();
     let mut body = match job["mode"].as_str().unwrap_or("") {
         "cands" => {
             let t = load(cache, wav, role)?;
@@ -363,6 +487,7 @@ fn one(cache: &mut Cache, job: &Value) -> Result<Value, String> {
         }
         "cands_full" => cands_full(cache, job, role, wav)?,
         "stages" => stages(cache, job, role, wav)?,
+        "xprobe" => xprobe(job)?,
         "baseline" => baseline(cache, job, role, wav)?,
         "learn" if job["sets"].is_array() => learn_sets(cache, job, role, wav)?,
         "learn" => learn(cache, job, role, wav)?,
