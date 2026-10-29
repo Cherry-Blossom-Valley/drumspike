@@ -44,17 +44,20 @@ def words_are_set():
 
 
 # #108: a host alias inside an agent name or branch name is fine (claude@arm64-mac,
-# crew/hermes@arm64-mac/108-...); only the bare alias stays banned. Mask the
-# <name>@<alias> occurrences before the word search; a bare alias still hits.
+# crew/hermes@arm64-mac/108-...); only the bare alias stays banned. Mask ONLY the
+# @<alias> part: the part before @ stays in the search text, so a banned login token
+# plus an alias still hits (the #108 send-back finding: `ssh <token>@<alias>` must
+# FAIL). A bare alias (no @ before it) still hits.
 HOST_ALIASES = ("arm64-mac", "x86-mac", "linux-arm64")
 _AGENT_AT_ALIAS = re.compile(
-    r"[A-Za-z0-9._+-]+@(?:arm64-mac|x86-mac|linux-arm64)", re.IGNORECASE)
+    r"([A-Za-z0-9._+-]+)@(?:" + "|".join(HOST_ALIASES) + r")(?![A-Za-z0-9-])",
+    re.IGNORECASE)
 
 
 def hits_in_line(line):
     """The matched words and patterns of one line: [(term, match)]."""
     out = []
-    lowered = _AGENT_AT_ALIAS.sub("", line).lower()
+    lowered = _AGENT_AT_ALIAS.sub(r"\1@", line).lower()
     for w in private_words():
         if w.lower() in lowered:
             out.append((w, w))
