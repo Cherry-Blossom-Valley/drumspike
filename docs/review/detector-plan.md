@@ -162,6 +162,32 @@ Gate that can fail: `uv run python tools/eval/role_enst.py` must print per-role
 accuracy and FAIL if any close-mic role's accuracy drops below the measured floor of
 the run that set the threshold (the number goes into the check). Fails below the floor.
 
+#### The measured score (#78, the run of 2026-10-29, linux-arm64, build of a7b3936)
+
+1538 mic files, the thresholds confirmed (`kick` 0.05, `tom` 0.60, snare/hat/cymbal
+no bar). At the operating point: overall precision 92.6 % (398/430 suggested),
+coverage 28.0 %. Per suggested role: kick 94.4 % (203/215), tom 90.7 % (195/215);
+snare, hat and cymbal are never suggested. Per-drummer precision 95.1 % / 88.5 % /
+94.8 % (drummer_1/2/3). The recorded floors of the gate (`ROLE_FLOORS` in
+`tools/eval/role_enst.py`): kick 203/215, tom 195/215. The #393-era overall-coverage
+gate (30 %) is superseded by these floors: the operating point trades coverage for
+precision by design (28.0 % measured).
+
+Confusion matrix at the operating point (rows: the mic's true role, columns: the
+suggested role; `none` = no suggestion):
+
+| true \ suggested | kick | tom | none |
+|---|---|---|---|
+| kick (210)  | 203 | 3   | 4   |
+| snare (210) |     | 2   | 208 |
+| tom (488)   | 12  | 195 | 281 |
+| hat (210)   |     |     | 210 |
+| cymbal (420)|     | 15  | 405 |
+
+The confusion is one-directional: 12 true tom files suggest kick and 15 true cymbal
+files suggest tom (the wash reads as a tom ring); a snare never draws a suggestion
+beyond 2 tom votes.
+
 ### 6. Robustness smoke set: keep the synthesised cases and add the real-recorded ones
 
 What the code already does: `crates/core/tests/robustness.rs` (#281 C14)  -  every

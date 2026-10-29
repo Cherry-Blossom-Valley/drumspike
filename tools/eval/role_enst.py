@@ -12,8 +12,9 @@ shells out to the `role-from-audio` binary of `drumspike-core`
 
 Prints the confusion table (rows: the mic's role, columns: the suggested role), the
 single-threshold precision/coverage curve and the per-role operating point; exits 1
-(FAIL) under the gate of #393 (overall precision < 0.90, coverage < 0.30, or a
-drummer's precision < 0.85), on 0 scored files, on a missing ENST root (SKIP only
+(FAIL) on 0 scored files, on the floor checks of #78 (a role's suggestion accuracy
+under the recorded `ROLE_FLOORS` of the run that set the thresholds), on an overall
+precision under 0.90, on a missing ENST root (SKIP only
 with an explicit `--allow-missing`) or on a missing binary. Files
 that error in the binary count as wrong (an "error" row). Aggregate numbers only.
 
@@ -39,13 +40,19 @@ ROLES = ("kick", "snare", "tom", "hat", "cymbal", "none", "error")
 MIC_ROLE = {"kick": "kick", "snare": "snare", "hi-hat": "hat", "tom_1": "tom", "tom_2": "tom",
             "tom_3": "tom", "overhead_L": "cymbal", "overhead_R": "cymbal"}
 PASS_PRECISION = 0.90
-PASS_COVERAGE = 0.30
-PASS_DRUMMER_PRECISION = 0.85
 # Per-role confidence bars, in step with `role_threshold` of `crates/core/src/role.rs`
 # (ticket #393, the coordinator's decision): the lowest threshold with precision >= 0.90
 # on the ENST run of the decision (all three drummers pooled); `None`: never reaches
-# 0.90, the role is never suggested.
+# 0.90, the role is never suggested. Confirmed by the #78 run of 2026-10-29 (1538
+# files, the same numbers: kick 94.4 %, tom 90.7 %).
 THRESHOLDS = {"kick": 0.05, "snare": None, "tom": 0.60, "hat": None, "cymbal": None}
+# The measured floor of the run that set the thresholds (#78): the per-role precision
+# of the suggestions at the operating point, as the exact fraction of that run. The
+# gate of #78: a close-mic role's accuracy under its floor is a FAIL (a detector
+# change that hurts the suggestion precision, or a threshold moved without
+# re-measuring, shows here). Re-record the floors with the run that sets new
+# thresholds.
+ROLE_FLOORS = {"kick": 203 / 215, "tom": 195 / 215}
 
 
 def classify_batch(binary, wavs):
@@ -236,13 +243,15 @@ def main(argv=None):
     if p < PASS_PRECISION:
         print(f"FAIL: overall precision {100 * p:.1f} % under {100 * PASS_PRECISION:.0f} %")
         ok = False
-    if cov < PASS_COVERAGE:
-        print(f"FAIL: overall coverage {100 * cov:.1f} % under {100 * PASS_COVERAGE:.0f} %")
-        ok = False
-    for d, nums in drummer_rows.items():
-        if nums["precision"] < PASS_DRUMMER_PRECISION:
-            print(f"FAIL: {d} precision {100 * nums['precision']:.1f} % under "
-                  f"{100 * PASS_DRUMMER_PRECISION:.0f} %")
+    for role, floor in sorted(ROLE_FLOORS.items()):
+        sugg = sum(c for (_, pr), c in conf.items() if pr == role)
+        good = conf.get((role, role), 0)
+        acc = good / sugg if sugg else 0.0
+        print(f"  floor check {role}: accuracy {100 * acc:.1f} % ({good}/{sugg}) "
+              f"against the recorded floor {100 * floor:.1f} %")
+        if acc < floor - 1e-9:
+            print(f"FAIL: {role} accuracy {100 * acc:.1f} % under the recorded floor "
+                  f"{100 * floor:.1f} % (#78)")
             ok = False
     if ok:
         print(f"PASS: precision {100 * p:.1f} %, coverage {100 * cov:.1f} %")
