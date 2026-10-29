@@ -783,9 +783,13 @@ def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_mo
             elif (cand is not None and first_act is not None and not after_shot and k > first_act
                     and view_holds(page, sc)):
                 # A key can move the view as well as a zoom_to (Tab to the next hit, a zoom
-                # preset): keep the last after candidate taken while the view still matched
-                # the scene's first zoom; the scene end promotes it, or shoots fresh.
-                shoot_scene(page, sc, cand)
+                # preset, an async undo): keep the last after candidate taken while the view
+                # still matched the scene's first zoom; the scene end promotes it, or shoots
+                # fresh. A candidate whose view moved between the check and the shot is skipped.
+                try:
+                    shoot_scene(page, sc, cand)
+                except Exception:
+                    pass
             if st["do"] == "wait":
                 s = clock() - t0
                 try:
