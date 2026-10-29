@@ -35,6 +35,10 @@ example helps, if you may share it. Security problems do not go into an issue: s
   parity references (`tests/golden/`) stay as they are.
 - Source audio is never modified, and project format 1 stays loadable.
 - No audio files or build output in git.
+- Private names (session or take names, dataset file names, host paths) never go into a commit,
+  a PR body or a ticket comment. The list is set per host in the environment
+  (`DRUMSPIKE_PRIVATE_WORDS`, `DRUMSPIKE_PRIVATE_PATTERNS`), never in the repo. Check text
+  with `uv run python tools/check_private.py --diff origin/main` or `--text-file <draft>`.
 - Python only through `uv run`; a new Python file needs a user (a test, a script or a documented
   command).
 - Documents: short sentences, plain hyphens.
