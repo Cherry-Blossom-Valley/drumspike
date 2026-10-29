@@ -38,7 +38,6 @@
       {"do": "hold", "s": 1.5}
     ]},
     {"id": "p1-analyze", "steps": [
-      {"do": "caption", "text": "Analyze All"},
       {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "click", "sel": "#analyzeAllBtn"},
       {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the analysis started"},
@@ -64,7 +63,6 @@
       {"do": "hold", "s": 1.5}
     ]},
     {"id": "p1-zoom", "steps": [
-      {"do": "caption", "text": "View > Zoom Presets"},
       {"do": "zoom_to", "track": "s_top", "t": 8.5938, "span": 5},
       {"do": "click", "sel": ".track[data-name=\\\"s_top\\\"] .thead .tname"},
       {"do": "hold", "s": 1.5},
