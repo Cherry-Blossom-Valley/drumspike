@@ -526,10 +526,10 @@ async function reloadFollowers(names) {   // the service derived the followers' 
 }
 async function refreshTrackMeta() {   // after an analysis: the params the retry changed and the follows, without a DOM rebuild
   if (!S.sid) return;
-  const gen = _gen;
+  const gen = loadGen();
   try {
     const r = await B.tracks(S.sid);
-    if (gen !== _gen) return;
+    if (gen !== loadGen()) return;
     for (const [n, t] of Object.entries(r.tracks || {})) {
       if (!S.tracks[n]) continue;
       if (t.params) S.tracks[n].params = t.params;
@@ -2431,9 +2431,9 @@ async function saveProjectNow(flushOnly, force) {   // Cmd/Ctrl+S: flush pending
   try { await flushEvents(); }
   catch (e) { setMsg(`save failed: ${errText(e)}`, "error"); throw e; }   // #249 R02: a refused write stops the save (its message is already on the status line)
   if (flushOnly || !needProject()) return;
-  const sid = S.sid, seq = _editSeq;   // #249 R03: the answer belongs to this project and to the edits up to now
+  const sid = S.sid, seq = editSeq();   // #249 R03: the answer belongs to this project and to the edits up to now
   try { const r = await B.projectSave(sid, force); staleSet(null);
-    if (S.sid === sid) setDirtyState(!!(r && r.dirty) || _editSeq !== seq);   // #249 R03: r.dirty is the truth (the project may have changed during the write); the mark only moves while this project is the open one
+    if (S.sid === sid) setDirtyState(!!(r && r.dirty) || editSeq() !== seq);   // #249 R03: r.dirty is the truth (the project may have changed during the write); the mark only moves while this project is the open one
     setMsg(force ? "project saved over the file on disk" : "project saved");
     /* R12: the save is committed; a failed backup cleanup comes back as a warning on the status line */
     if (r && r.warning) setMsgBg(`project saved, but the backup cleanup failed: ${r.warning}`, "error"); }
@@ -2471,7 +2471,7 @@ async function staleReload(sid) {   // #127: also a project that is not the open
 async function saveOrChoose(sid, name, leave) {
   const cur = sid === S.sid;
   if (cur) { try { await flushEvents(); } catch (e) { setMsg(`save failed: ${errText(e)}`, "error"); return null; } }   // #249 R02: the close/quit save does not run on a refused write
-  const seq = _editSeq;   // #249 R03
+  const seq = editSeq();   // #249 R03
   let r;
   try { r = await B.projectSave(sid); }
   catch(e) {
@@ -2486,7 +2486,7 @@ async function saveOrChoose(sid, name, leave) {
     r = await B.projectSave(sid, true);
     if (_staleSid === sid) staleSet(null);
   }
-  if (sid === S.sid) setDirtyState(!!(r && r.dirty) || _editSeq !== seq);   // #249 R03: the answer clears the mark of its own project only, and only while it is the open one; r.dirty and an edit during the write keep it
+  if (sid === S.sid) setDirtyState(!!(r && r.dirty) || editSeq() !== seq);   // #249 R03: the answer clears the mark of its own project only, and only while it is the open one; r.dirty and an edit during the write keep it
   return "saved";
 }
 function staleSetup() {
@@ -2992,7 +2992,7 @@ function vlBind(row, name) {
     const t0 = xToT(px, W);
     const rect = c.getBoundingClientRect();   // cached: the row does not move during a gesture (offsetY lies once the pointer leaves the canvas)
     VL.drag = { track: name, mode, gen: EDGEN[name] || 0, x0: px, y0: ev.offsetY, curX: px, curY: ev.offsetY, t0, set: new Map(), rect };
-    if (saveTimers[name]) pushEvents(name).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
+    if (hasPendingWrite(name)) pushEvents(name).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
     if (mode === "stalk") {
       const e = evs()[hi], grp = vlGroup(name, e);   // #208: a selected stalk moves the selection, scaled
       VL.drag.anchor = e.id; VL.drag.v0 = e.v; VL.drag.base = grp.length > 1 ? new Map(grp.map(g => [g.id, g.v])) : null;
@@ -3161,7 +3161,7 @@ function attachTrackHandlers(row, name) {
     if (i >= 0) {
       S.sel = {track:name, index:i};
       if (SH.pending || hgRepickBusy()) { invalidateHits(name); updateStatus(); return; }   // an edit is on its way: select, no drag (the hits on the page are not the stored ones yet)
-      if (saveTimers[name]) pushEvents(name).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
+      if (hasPendingWrite(name)) pushEvents(name).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
       dragState = {i, startX: px, origT: evs()[i].t, moved:false, sr: S.tracks[name].sr, gen: EDGEN[name] || 0};
       hitDrag = { track: name, index: i };
       window.addEventListener("mouseup", endHitDrag);
@@ -5307,7 +5307,7 @@ async function trReload(keepStacks, pick) {
 }
 async function trFlush(inQueue) {   // the hit edits on their way, then the page's own writes; a step of the SH queue must not wait for the queue (edIdle)
   if (!inQueue) await edIdle();
-  await Promise.all(Object.keys(saveTimers).map(pushEvents));
+  await Promise.all(pendingWriteTracks().map(pushEvents));
 }
 async function trRemove(name, op) {   // true when the service removed the track; op: the step that a redo runs again (it runs in the SH queue)
   const sid = S.sid;
@@ -5320,7 +5320,7 @@ async function trRemove(name, op) {   // true when the service removed the track
   const rest = S.order.filter(n => n !== name), idx = S.order.indexOf(name);
   const step = op || { type: "trkdel", sid, name, snapshot: null, muted: !!S.muted[name], solo: !!S.solo[name] };
   step.snapshot = r.snapshot; step.muted = !!S.muted[name]; step.solo = !!S.solo[name];
-  delete S.muted[name]; delete S.solo[name]; delete saveTimers[name];
+  delete S.muted[name]; delete S.solo[name]; dropQueuedWrite(name);
   await trReload(!!op, rest[idx] || rest[idx - 1] || null);   // the next track in order, else the previous one
   if (!op) pushUndo(step);
   setMsg(op ? `${name} removed` : `${name} removed (undo: Cmd+Z)`);
@@ -6329,7 +6329,7 @@ async function rangeDelete() {
   if (followerLocked(trk)) return;
   let stored = [];   // the service's hits: the step keeps the fields of each hit as they are stored
   try {
-    if (S.sid && (S.events[trk] || []).length) { if (saveTimers[trk]) await settleEvents(trk); const r = await B.events(S.sid, trk); stored = Array.isArray(r) ? r : (r && r.events) || []; }
+    if (S.sid && (S.events[trk] || []).length) { if (hasPendingWrite(trk)) await settleEvents(trk); const r = await B.events(S.sid, trk); stored = Array.isArray(r) ? r : (r && r.events) || []; }
   } catch (e) { stored = []; }
   return edCall(trk, evs => {
     const pool = stored.slice(), list = [];

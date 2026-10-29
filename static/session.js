@@ -13,6 +13,7 @@
 /* ---------------- the injected hooks ---------------- */
 const SESSION_HOOKS = {};
 function sessionInit(deps) { if (deps) Object.assign(SESSION_HOOKS, deps); }
+function loadGen() { return _gen; }   // R17 step 7: the load generation is asked through this, not read (a stale DOM refresh guards on it)
 
 /* ---------------- sessions, projects ---------------- */
 async function initSessions(keepNone) {   // keepNone: a refresh of the list (dirty event) must not open a project when none is open

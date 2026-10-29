@@ -85,3 +85,11 @@ async function flushEvents() {   /* before S.sid changes, a save, an export, an 
 function cancelEvents(sid) {   // a discarded project: its pending writes are dropped, nothing else is touched
   for (const [t, p] of Object.entries(saveTimers)) if (!sid || p.sid === sid) { clearTimeout(p.timer); delete saveTimers[t]; }
 }
+
+/* ---------------- the queue's interfaces (R17 step 7) ----------------
+   The state of this module is saveTimers and _editSeq; everything else reads them through
+   these (the plan's interface rule: no module reaches into another's state). */
+function hasPendingWrite(track) { return !!saveTimers[track]; }   // is a write of this track queued?
+function pendingWriteTracks() { return Object.keys(saveTimers); }   // the tracks with a queued or in-flight write
+function dropQueuedWrite(track) { delete saveTimers[track]; }   // a removed track's entry goes with it
+function editSeq() { return _editSeq; }   // the counter the save answers compare (#249 R03)

@@ -155,7 +155,7 @@ async function undoSteps(isUndo, count) {
 function undo() { undoRedo(true); }
 function redo() { undoRedo(false); }
 
-function settleEvents(name) { return saveTimers[name] ? editPushEvents(name) : Promise.resolve(); }   // the service reads the stored hits (pushEvents arrives as the injected hook)
+function settleEvents(name) { return hasPendingWrite(name) ? editPushEvents(name) : Promise.resolve(); }   // the service reads the stored hits (pushEvents arrives as the injected hook)
 /* P4-9 stage 2: the service calls that change the hits (a shift, a hit edit, the undo and redo of both) go through one queue
    (shSerial): one after the other, in the order the user made them; SH.pending counts the calls queued or running (a re-pick,
    a save and an export wait for it). Each call reads what it needs when it runs, not when it was asked. */
@@ -201,7 +201,7 @@ async function edNow(name, mk, before) {   // true when the service applied the 
   if (analysisRunning) { jobNote("hit edits are refused while an analysis runs"); return false; }
   if (hgRepickBusy()) { setMsg("a re-pick is being stored: try the edit again"); return false; }
   if (LN.busy > 0) { setMsg("a Learn change is being applied: try the edit again"); return false; }   // P4-6c: its answer replaces the hit list; a Learn call that still waits for the edits on their way does not refuse them (they run first)
-  if (saveTimers[name]) { if (before) before(); try { await settleEvents(name); } catch (e) { setMsg(`edit: ${errText(e)}`, "error"); return false; } }   // the 400 ms writes of other steps reach the service first; #249 R02: a refused one refuses the edit
+  if (hasPendingWrite(name)) { if (before) before(); try { await settleEvents(name); } catch (e) { setMsg(`edit: ${errText(e)}`, "error"); return false; } }   // the 400 ms writes of other steps reach the service first; #249 R02: a refused one refuses the edit
   if (sid !== S.sid || !S.tracks[name]) return false;
   const pl = mk(S.events[name] || []);
   if (!pl) return false;
@@ -300,7 +300,7 @@ function edDelete(trk, id) {   // delete the hit with this id (the key, the righ
   return shSerial(async () => {
     let stored = [];   // the service's hits: the step keeps the fields of the hit as they are stored
     try {
-      if (S.sid && (S.events[trk] || []).some(x => x.id === id)) { if (saveTimers[trk]) await settleEvents(trk); const r = await B.events(S.sid, trk); stored = Array.isArray(r) ? r : (r && r.events) || []; }
+      if (S.sid && (S.events[trk] || []).some(x => x.id === id)) { if (hasPendingWrite(trk)) await settleEvents(trk); const r = await B.events(S.sid, trk); stored = Array.isArray(r) ? r : (r && r.events) || []; }
     } catch (e) { stored = []; }
     return edNow(trk, evs => {
       const j = edIndex(evs, id);
