@@ -490,7 +490,7 @@ fn the_rule_of_an_analysis_and_of_a_repick() {
     };
     // a new analysis runs the current rule unless pinned
     assert_eq!(analysis_rule(&free), RefineRule::CURRENT);
-    assert_eq!(RefineRule::CURRENT, RefineRule::FirstMotion);
+    assert_eq!(RefineRule::CURRENT, RefineRule::Foot);
     assert_eq!(analysis_rule(&pinned), RefineRule::Reference);
     // a re-pick keeps the rule its analysis recorded; no record or no version: before P4-12 (1)
     let rec = |v: Value| {

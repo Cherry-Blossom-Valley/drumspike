@@ -232,7 +232,7 @@ fn rule_versions_and_the_reference_rule() {
     }
     assert_eq!(RefineRule::from_version(0), None);
     assert_eq!(RefineRule::from_version(5), None);
-    assert_eq!(RefineRule::CURRENT, RefineRule::FirstMotion);
+    assert_eq!(RefineRule::CURRENT, RefineRule::Foot);
     // the reference rule is refine_sr, step Kept, on every kind of window
     let x = noisy(&track(&[(0.5, -3.0)], 1.5), -70.0);
     for t0 in [0.486, 0.497, 0.503, 0.65, 2.0] {
@@ -647,6 +647,45 @@ fn the_foot_rule_stops_on_the_last_floor_level_sample() {
         assert_eq!((r.t * sr as f64).round() as i64, truth, "rate {sr}, ramp {ramp}: {r:?}");
         assert_eq!(r.back, BackStep::Moved, "rate {sr}, ramp {ramp}");
     }
+}
+
+#[test]
+fn the_strict_foot_moves_at_most_the_guard_before_the_version_3_foot() {
+    // #101 guard: a shoulder of `len` samples at 0.0112 (between the floor and the threshold) just
+    // before the attack. The strict foot takes the shoulder's start: 17 samples before the version 3
+    // foot for a 16-sample shoulder (more than FM_STRICT_MAX_S at 48 kHz, so the version 3 foot stays),
+    // and 5 samples for a 4-sample shoulder (within the guard, so the strict foot is kept).
+    let n = 24_000usize;
+    let s = 12_000i64;
+    let d = s - 64;
+    let rise = |len: i64| {
+        let mut x = vec![0.0f32; n];
+        for v in &mut x[(d - len) as usize..d as usize] {
+            *v = 0.0112;
+        }
+        for v in &mut x[d as usize..(s + 300) as usize] {
+            *v = 1.0;
+        }
+        x
+    };
+    let x = rise(16);
+    assert_eq!(
+        first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, false),
+        (d, BackStep::Moved)
+    );
+    assert_eq!(foot_strict(&x, d, s - 480, 0.0), d - 17);
+    assert!(samples(FM_STRICT_MAX_S, SR as f64) < 17);
+    assert_eq!(
+        first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, true),
+        (d, BackStep::Moved),
+        "the guard keeps the version 3 foot"
+    );
+    let x = rise(4);
+    assert_eq!(
+        first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, true),
+        (d - 5, BackStep::Moved),
+        "a strict move within the guard is kept"
+    );
 }
 
 #[test]

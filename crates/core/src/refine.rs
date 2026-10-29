@@ -344,13 +344,14 @@ pub enum RefineRule {
     FirstMotion,
     /// Version 4 (#101): [`RefineRule::FirstMotion`] with the foot taken one step stricter. The
     /// back-track's first sample over its threshold is the first sample that leaves the floor, or
-    /// later; the foot is the last floor-level sample before it ([`foot_strict`]).
+    /// later; the foot is the last floor-level sample before it ([`foot_strict`]). The strict foot
+    /// moves at most [`FM_STRICT_MAX_S`] before the version 3 foot, else the version 3 foot stays.
     Foot,
 }
 
 impl RefineRule {
     /// The rule a new analysis runs.
-    pub const CURRENT: RefineRule = RefineRule::FirstMotion;
+    pub const CURRENT: RefineRule = RefineRule::Foot;
 
     /// The version number the document stores.
     pub fn version(self) -> u32 {
@@ -637,6 +638,9 @@ pub const FM_LONG_S: f64 = 0.005;
 pub const FM_LONG_END_S: f64 = 0.0005;
 /// See [`FM_LONG_END_S`] (dB).
 pub const FM_LONG_DB: f64 = 6.0;
+/// The version 4 guard (#101): the strict foot may move at most this far (seconds) before the
+/// version 3 foot. Further than that, the version 3 foot stays.
+pub const FM_STRICT_MAX_S: f64 = 0.00025;
 
 /// P4-31 (candidate A): the version of the kick walk, recorded as `detector.kick_walk`; 0 means the shipped margin.
 pub const KICK_WALK_VERSION: u32 = 1;
@@ -810,7 +814,12 @@ fn first_motion_mid_rule(
     }
     let foot = if strict {
         let end = (s - samples(FM_FLOOR_SKIP_S, srf)).min(n);
-        foot_strict(x, foot, lo, max_abs(x, from, end) as f64)
+        let strict_foot = foot_strict(x, foot, lo, max_abs(x, from, end) as f64);
+        if foot - strict_foot > samples(FM_STRICT_MAX_S, srf) {
+            foot
+        } else {
+            strict_foot
+        }
     } else {
         foot
     };

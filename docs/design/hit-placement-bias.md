@@ -99,8 +99,11 @@ rule. The floor level is the largest `|x|` of the floor window (`FM_FLOOR_S` bef
 last `FM_FLOOR_SKIP_S`). The samples are read raw: the 2-tap mean halves the first sample of a slow rise
 and would read it as floor. A walk that finds no such pair above the walk's bound keeps the version 3 foot.
 
-Version 3 stays the analysis default (`RefineRule::CURRENT`). Version 4 is selected by the version number
-4 or `DRUMSPIKE_REFINE_RULE=foot`. The default change waits for the ENST gate and the owner's decision.
+Version 4 is the analysis default (`RefineRule::CURRENT`), with one guard (decision for 0.9.6): the strict
+foot may move at most 0.25 ms (`FM_STRICT_MAX_S`: 11 samples at 44.1 kHz, 12 at 48 kHz, 24 at 96 kHz) before
+the version 3 foot. Further than that, the version 3 foot stays. The guard covers every synthetic ramp up to
+1 ms and cuts the tail of the real sessions. Version 3 is still selected by the version number 3 or
+`DRUMSPIKE_REFINE_RULE=3`.
 
 Synthetic table, `placement_bias foot`, the same set as step 1 (errors in samples against the foot):
 
