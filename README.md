@@ -41,7 +41,8 @@ Drum Spike is free and open source (Apache-2.0).
 - **Sample-exact placement.** Each hit moves to the first motion of its attack.
 - **Velocity.** How hard each hit was played, from its attack level, shaped in the velocity lane.
 - **Check and fix.** Play, zoom and jump from hit to hit like in a DAW; add, delete or move hits,
-  with undo for every edit. A review queue shows the least certain hits first.
+  with undo for every edit. A review queue shows the least certain hits first, and names the
+  rescue that kept a hit below the level gate.
 - **Bleed and hard cases.** The snare in the tom mic and the kick in the snare mic are recognised
   and cleaned; flams and rolls are split.
 - **Learn.** Mark an unwanted pattern and every similar hit goes; show a missed hit and similar
@@ -98,7 +99,10 @@ release build; [RELEASING.md](docs/RELEASING.md) covers signing and notarization
 
 The Rust core (`crates/core`) runs these steps per track; the app (`crates/app`) runs them as a job:
 
-1. Decode the audio file to mono float32 at its native sample rate (44.1, 48 or 96 kHz).
+1. Decode the audio file to mono float32 at its native sample rate (44.1, 48 or 96 kHz). The
+   cache of decoded tracks is bounded by bytes (512 MiB), and a file that several views ask for
+   at the same time is decoded once; a damaged waveform cache file on disk gives a clear error
+   instead of a crash.
 2. Detect the hits with the DSP onset detector (a log-filtered spectrogram and peak picking).
 3. Keep the hits that match the track's role (kick, snare, tom, hat, cymbal, other), and remove
    bleed from other drums.
