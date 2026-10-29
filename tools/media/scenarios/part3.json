@@ -26,7 +26,7 @@
     ]},
     {"id": "p3-follow2", "area_sel": ".track[data-name=\"k_sub\"]", "steps": [
       {"do": "caption", "text": "Track > Own Detection"},
-      {"do": "click", "sel": ".track[data-name=\\\"k_sub\\\"] .thead .tname", "timeout": 15, "err": "the sub mic selected"},
+      {"do": "click", "sel": ".track[data-name=\"k_sub\"] .thead .tname", "timeout": 15, "err": "the sub mic selected"},
       {"do": "hold", "s": 1.5},
       {"do": "menu", "id": "follow_own", "timeout": 15, "err": "Track > Own Detection"},
       {"do": "wait", "cond": "() => S.tracks['k_sub'] && !S.tracks['k_sub'].src", "timeout": 15, "err": "the sub mic detects its own hits again"},

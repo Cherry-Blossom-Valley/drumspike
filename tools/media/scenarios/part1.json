@@ -97,13 +97,15 @@
       {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 16.0938},
       {"do": "wait", "cond": "() => !document.querySelector('#ilFields').classList.contains('hidden') && document.querySelector('#ilSample').value.length > 0", "timeout": 15, "err": "a hit selected (the edit the narration speaks of)"},
       {"do": "hold", "s": 1.5},
+      {"do": "shot"},
       {"do": "key", "press": "Delete", "err": "the hit deleted (the next edit)"},
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Alt+Meta+E"},
       {"do": "wait", "cond": "() => !EX.busy && EX.done > 0", "timeout": 120,
        "err": "the second export finished (EX.done > d0 races a fast export; the summary wait below asserts it)"},
       {"do": "wait", "cond": "() => document.querySelector('#stMsg').textContent.startsWith('exported')", "timeout": 15, "err": "the summary shows the files again"},
-      {"do": "hold", "s": 2.5}
+      {"do": "hold", "s": 2.5},
+      {"do": "shot"}
     ]},
     {"id": "p1-end", "steps": [
       {"do": "caption", "text": "Next: check and fix (part 2)"}
