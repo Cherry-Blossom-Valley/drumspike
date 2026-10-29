@@ -92,10 +92,12 @@ def numbers_from_per(per):
     return numbers
 
 
-def collect_per(out, root, config, plant=None, tool_fp=None, log=print):
+def collect_per(out, root, config, plant=None, tool_fp=None, log=print, allow_missing=False):
     """The `per` dict of the run files of one configuration (enst.do_score's cell shape), with the
-    planted regression applied. FAILs on a missing run file, a stale run file (a fingerprint that
-    does not match the current tool build), a wrong detector or a missing annotation."""
+    planted regression applied. FAILs on a stale run file (a fingerprint that
+    does not match the current tool build), a wrong detector or a missing annotation; with
+    `allow_missing`, items without a run file are left out instead (the soft-gate report scores
+    what both configurations have)."""
     idx = enst.index_items(root)
     per = {}
     fingerprint = hashlib.sha256()
@@ -107,6 +109,8 @@ def collect_per(out, root, config, plant=None, tool_fp=None, log=print):
                 raise SystemExit(f"FAIL {d}/{stem}: the annotation {item['ann']} is missing")
             p = out / "run" / config / d / f"{stem}.json"
             if not p.is_file():
+                if allow_missing:
+                    continue
                 raise SystemExit(f"FAIL {p} is missing: run the gate again so the item is measured")
             res = json.loads(p.read_text())
             if res.get("tool_fp") != tool_fp:
