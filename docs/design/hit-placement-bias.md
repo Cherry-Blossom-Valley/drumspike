@@ -153,3 +153,31 @@ Limits of this set: a band-limited sharp start has a ripple before the onset tha
 foot rule counts it as leaving the floor (the literal rule), so such a start moves earlier by the length
 of the ripple. The unit test `the_foot_rule_stops_on_the_last_floor_level_sample` covers the synthetic
 starts at 44.1, 48 and 96 kHz only.
+
+## Step 2: the real sessions (Session A, B, C)
+
+The close mics (kick, snare, toms 1 to 3) of the three sessions, analysed by `service_tool` with the
+refinement rule 3 and rule 4 (the same hits, only the refined time differs). Shift = rule 4 minus rule 3,
+in samples, hits matched one to one within 10 ms. Counted over all hits.
+
+| role | hits | unchanged | moved earlier | moved later | shift histogram (samples: count) |
+|---|---|---|---|---|---|
+| kick | 1183 | 0 | 1183 | 0 | -1: 948, -2: 222, -3: 10, -4: 1, -6: 2 |
+| snare | 882 | 17 | 865 | 0 | -1: 264, -2: 360, -3: 41, -4: 46, -5: 69, -6: 26, -7: 16, -8: 9, -9 to -15: 21, -16 to -23: 5, -26 to -67: 8 (-26: 2, and one each at -27, -31, -36, -43, -64, -67) |
+| tom | 315 | 3 | 312 | 0 | -1: 158, -2: 106, -3: 21, -4: 8, -5: 4, -6: 1, -7: 1, -8: 1, -9: 4, -11: 2, -12: 1, -13: 2, -17: 1, -29: 1, -70: 1 |
+
+Kick and tom: the foot moves 1 to 2 samples on almost every hit. Snare: most hits move 1 to 5 samples,
+with a tail of larger moves. The large moves (snare beyond 15 samples, the single tom at -70) are
+walk-backs into the rise of a quieter earlier event: they are the cases to look at before a default change.
+No hit moves later.
+
+F1, pooled over the three sessions, rule 3 and rule 4 identical at +-20 ms and +-50 ms (the event sets
+match; only the times differ):
+
+| role | +-20 ms F1 (rule 3 = rule 4) | +-50 ms F1 (rule 3 = rule 4) |
+|---|---|---|
+| kick | 0.9771 | 0.9780 |
+| snare | 0.8975 | 0.8975 |
+| tom | 0.8867 | 0.8867 |
+
+The F1 is not below main. The ENST gate (12 rows) was not run: the ENST dataset is not on this host.
