@@ -45,7 +45,7 @@
       {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\"layer\"] .lyViewTitle')", "timeout": 30, "err": "the Onset view"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-tempo", "steps": [
+    {"id": "p3-tempo", "area_sel": "#editor", "steps": [
       {"do": "caption", "text": "Track > Detect Tempo…"},
       {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "hold", "s": 0.5},
@@ -67,19 +67,23 @@
       {"do": "wait", "cond": "() => TM.map && Math.abs((TM.map.bar1_s || 0) - S.playhead) < 0.001", "timeout": 15, "err": "bar 1 at the playhead"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-import", "steps": [
+    {"id": "p3-import", "area_sel": "#editor", "steps": [
       {"do": "caption", "text": "File > Import Tempo Map…"},
       {"do": "answer_pick", "path": "{work}/tempo.mid"},
       {"do": "menu", "id": "import_tempo_map", "timeout": 15, "err": "File > Import Tempo Map…"},
       {"do": "wait", "cond": "() => TM.map && Math.abs(TM.map.bpm - 87) < 0.5 && TM.map.changes && TM.map.changes.length > 0", "timeout": 15, "err": "the tempo map of the DAW file"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-grid", "steps": [
+    {"id": "p3-grid", "area_sel": "#editor", "steps": [
       {"do": "caption", "text": "View > Show Bar and Beat Grid"},
       {"do": "key", "press": "G"},
+      {"do": "hold", "s": 1.5},
+      {"do": "menu", "id": "ruler_tempo", "timeout": 15, "err": "View > Tempo Ruler"},
+      {"do": "hold", "s": 1.5},
+      {"do": "menu", "id": "ruler_meter", "timeout": 15, "err": "View > Meter Ruler"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-click", "steps": [
+    {"id": "p3-click", "area_sel": "#editor", "steps": [
       {"do": "caption", "text": "Transport > Metronome Click"},
       {"do": "key", "press": "C"},
       {"do": "hold", "s": 1.5},

@@ -10,7 +10,7 @@
   "narration": {"tts_out": "~/.cache/drumspike/media/tts-out/rec-part1"},
   "out": "~/.cache/drumspike/media/rec/part1.mp4",
   "scenes": [
-    {"id": "p1-new", "steps": [
+    {"id": "p1-new", "area_sel": "#statusbar", "steps": [
       {"do": "caption", "text": "File > New Project…"},
       {"do": "hold", "s": 0.6},
       {"do": "answer_save", "path": "{projects}/Demo"},
@@ -36,7 +36,7 @@
       {"do": "hold", "s": 1.5}
     ]},
     {"id": "p1-analyze", "steps": [
-      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 0.5},
       {"do": "click", "sel": "#analyzeAllBtn"},
       {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the analysis started"},
       {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the analysis finished"},
@@ -60,7 +60,7 @@
       {"do": "text", "sel": "#insRoleSrc", "equals": "suggested from the audio", "timeout": 15, "err": "the hint is back with the role"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-zoom", "steps": [
+    {"id": "p1-zoom", "area_sel": "#editor", "steps": [
       {"do": "zoom_to", "track": "s_top", "t": 8.5938, "span": 5},
       {"do": "click", "sel": ".track[data-name=\"s_top\"] .thead .tname"},
       {"do": "hold", "s": 1.5},
@@ -93,8 +93,15 @@
       {"do": "hold", "s": 1.5}
     ]},
     {"id": "p1-again", "steps": [
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 0.5},
+      {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 16.0938},
+      {"do": "wait", "cond": "() => !document.querySelector('#ilFields').classList.contains('hidden') && document.querySelector('#ilSample').value.length > 0", "timeout": 15, "err": "a hit selected (the edit the narration speaks of)"},
+      {"do": "hold", "s": 1.5},
+      {"do": "key", "press": "Delete", "err": "the hit deleted (the next edit)"},
+      {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Alt+Meta+E"},
-      {"do": "wait", "cond": "d0 => EX.done > d0", "arg": "() => EX.done", "timeout": 120, "err": "the second export finished"},
+      {"do": "wait", "cond": "() => !EX.busy && EX.done > 0", "timeout": 120,
+       "err": "the second export finished (EX.done > d0 races a fast export; the summary wait below asserts it)"},
       {"do": "wait", "cond": "() => document.querySelector('#stMsg').textContent.startsWith('exported')", "timeout": 15, "err": "the summary shows the files again"},
       {"do": "hold", "s": 2.5}
     ]},

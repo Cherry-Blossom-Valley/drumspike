@@ -97,7 +97,7 @@
       {"do": "wait", "cond": "n => (S.events['s_top'] || []).length > n", "arg": "() => (S.events['s_top'] || []).length", "timeout": 60, "err": "the second re-pick found more hits"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p4-keep", "area_sel": "#inspector", "steps": [
+    {"id": "p4-keep", "area_sel": ".track[data-name=\"s_top\"]", "steps": [
       {"do": "caption", "text": "Re-analyze offers Keep"},
       {"do": "click", "sel": ".track[data-name=\"s_top\"] .thead .tname", "timeout": 15, "err": "the snare stays selected (the click leaves the slider)"},
       {"do": "hold", "s": 1.5},

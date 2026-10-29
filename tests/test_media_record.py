@@ -85,6 +85,32 @@ class StubPage:
         return [c for c in self.calls if c[0] == "evaluate"]
 
 
+class LanePage(StubPage):
+    """A page with the mouse and the lane geometry the real lane steps use."""
+
+    BOX = {"x": 90.0, "y": 200.0, "width": 1800.0, "height": 120.0}
+
+    def __init__(self, clock):
+        super().__init__(clock)
+        self.mouse = SimpleNamespace(
+            click=lambda x, y: self._tick(("mouse", "click", x, y)),
+            move=lambda x, y, steps=1: self._tick(("mouse", "move", x, y)),
+            down=lambda: self._tick(("mouse", "down")),
+            up=lambda: self._tick(("mouse", "up")))
+
+    def evaluate(self, js, *a):
+        if js == record.LANE_X_JS:
+            self._tick(("evaluate", js, a))
+            return 900.0   # the page x of the asked time
+        return super().evaluate(js, *a)
+
+    def locator(self, sel):
+        self._tick(("locator", sel))
+        # the real locator scrolls the row into view first (13 rows scroll); the stub models it
+        return SimpleNamespace(scroll_into_view_if_needed=lambda: self._tick(("scroll_into_view", sel)),
+                               bounding_box=lambda: dict(self.BOX))
+
+
 def caption_scene(sid, text):
     return {"id": sid, "steps": [{"do": "caption", "text": text}]}
 
@@ -340,7 +366,7 @@ def test_the_model_check_can_be_turned_off():
 
 # ---------------- the modal guard (the part2 undo history left its dialog open) ----------------
 
-class ModalPage(StubPage):
+class ModalPage(LanePage):
     """A stub that tracks .modal visibility: Alt+Meta+Z opens the undo history (the app's real
     Option+Cmd+Z binding, static/keymap.js undo_history) and #undoHistDone closes it, like the
     app's showModal and its Close button do."""
@@ -415,32 +441,6 @@ def test_the_part2_undo_scene_closes_the_dialog_about_3_s_after_it_opens():
 
 
 # ---------------- the DOM guard (the part1 private paths, coordinator review 6403564803) ----------------
-
-class LanePage(StubPage):
-    """A page with the mouse and the lane geometry the real lane steps use."""
-
-    BOX = {"x": 90.0, "y": 200.0, "width": 1800.0, "height": 120.0}
-
-    def __init__(self, clock):
-        super().__init__(clock)
-        self.mouse = SimpleNamespace(
-            click=lambda x, y: self._tick(("mouse", "click", x, y)),
-            move=lambda x, y, steps=1: self._tick(("mouse", "move", x, y)),
-            down=lambda: self._tick(("mouse", "down")),
-            up=lambda: self._tick(("mouse", "up")))
-
-    def evaluate(self, js, *a):
-        if js == record.LANE_X_JS:
-            self._tick(("evaluate", js, a))
-            return 900.0   # the page x of the asked time
-        return super().evaluate(js, *a)
-
-    def locator(self, sel):
-        self._tick(("locator", sel))
-        # the real locator scrolls the row into view first (13 rows scroll); the stub models it
-        return SimpleNamespace(scroll_into_view_if_needed=lambda: self._tick(("scroll_into_view", sel)),
-                               bounding_box=lambda: dict(self.BOX))
-
 
 class ExportPage(LanePage):
     """A stub that models the two private-path leaks of the old part1: the status bar keeps
