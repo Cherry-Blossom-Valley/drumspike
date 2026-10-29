@@ -89,7 +89,7 @@
       {"do": "hold", "s": 2.0},
       {"do": "shot"}
     ]},
-    {"id": "p3-grid", "area_sel": ".track[data-name=\"s_top\"] canvas.spike", "steps": [
+    {"id": "p3-grid", "area_sel": "#editor", "steps": [
       {"do": "caption", "text": "View > Show Bar and Beat Grid"},
       {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5,
        "err": "a defined 5 s view for the pair (the grid lines are dropped under 6 px apart: a wider view shows none)"},
