@@ -257,7 +257,7 @@ def main(argv=None):
             print(f"FAIL: {d} precision {100 * nums['precision']:.1f} % under "
                   f"{100 * PASS_DRUMMER_PRECISION:.0f} %")
             ok = False
-    if cov < PASS_COVERAGE:
+    if cov < PASS_COVERAGE - 1e-9:
         print(f"FAIL: overall coverage {100 * cov:.1f} % under the recorded floor "
               f"{100 * PASS_COVERAGE:.0f} % (#78)")
         ok = False
