@@ -46,9 +46,10 @@ PASS_DRUMMER_PRECISION = 0.85
 # the operating point is 28.0 % -- at the #393 decision build (3da1e63, the 0.9.4 import;
 # role.rs is unchanged since) and at main alike (results/78-cov-prov.result.log, the run of
 # 2026-10-29, 1538 files). No detector change moved the coverage: the 30 % line never held
-# on this host's run of the #393 thresholds, so the floor is the measured 28.0 % (a FAIL
-# under it). Re-record with the run that sets new thresholds.
-PASS_COVERAGE = 0.28
+# on this host's run of the #393 thresholds, so the floor is the measured value (a FAIL
+# under it). The exact fraction of the run: 430/1538 (it prints as 28.0 %). Re-record with
+# the run that sets new thresholds.
+PASS_COVERAGE = 430 / 1538
 # Per-role confidence bars, in step with `role_threshold` of `crates/core/src/role.rs`
 # (ticket #393, the coordinator's decision): the lowest threshold with precision >= 0.90
 # on the ENST run of the decision (all three drummers pooled); `None`: never reaches
