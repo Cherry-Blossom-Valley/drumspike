@@ -44,11 +44,10 @@ use crate::registry::{lock, OpenProject, Shared};
 use crate::roles::is_sample_name;
 use crate::{Service, ServiceConfig};
 
-/// The version a new analysis runs (`detector.cross_bleed.rule`). 2 is #103 step 2: the hat
-/// source's own verdict (ratio at or under -32 dB, lead at or over -10 ms) and the
-/// nearest-kept-hit evidence match (the stored events carry the refined times, which lost the
-/// keys on kept hits).
-pub const CROSS_BLEED: u32 = 2;
+/// The version a new analysis runs (`detector.cross_bleed.rule`). 1 is #103 step 2: the hat-pair
+/// keys and the nearest-kept-hit evidence match are reporting only — they change no flag, time or
+/// count.
+pub const CROSS_BLEED: u32 = 1;
 
 /// The version of a new analysis: the configuration's pin, else [`CROSS_BLEED`].
 pub fn analysis_cross_bleed(cfg: &ServiceConfig) -> u32 {
