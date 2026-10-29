@@ -478,3 +478,83 @@ fn twenty_minute_take_under_60_s() {
         "the 20-minute case took {total_ms} ms, over the 60 s gate"
     );
 }
+
+/// The host a run happens on, named in the table row and the assertion message.
+fn host_name() -> String {
+    if let Ok(out) = std::process::Command::new("hostname").output() {
+        if out.status.success() {
+            if let Ok(s) = String::from_utf8(out.stdout) {
+                let s = s.trim();
+                if !s.is_empty() {
+                    return s.to_string();
+                }
+            }
+        }
+    }
+    std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into())
+}
+
+/// Detector #8 package 7: the standing analysis speed budget. The reference render is the
+/// 20-minute take above; the wall clock of its analysis per minute of audio (both roles,
+/// so 40 minutes of analysed audio) must stay within 10 % of the recorded budget. The
+/// render itself is not measured (harness cost, not analysis). The host is named in the
+/// assertion message: the budget is recorded for one machine and profile, so a fail on a
+/// slower one reads as a re-record, not a regression.
+///
+/// Recorded: x86-mac (Intel Core i9-8950HK, 12 threads), the default test profile (the
+/// gate command's own debug profile), 2026-10-29, main at 409e6ff. Eight recorded runs
+/// measured 0.237 - 0.388 s per minute (one turbo burst, the rest the sustained rate of
+/// this thermally limited laptop); the constant is the worst of them, so the gate passes
+/// as measured on this machine and trips on a real slowdown.
+const SPEED_BUDGET_S_PER_MIN: f64 = 0.39;
+/// The gate fails when the measured throughput exceeds the recorded budget by more than
+/// this factor (the plan's 10 %).
+const SPEED_BUDGET_SLACK: f64 = 1.10;
+
+/// The budget run: `cargo test -p drumspike-core --test robustness -- --ignored` (the
+/// profile of the recorded budget). The measured throughput and the host are printed as a
+/// table row and named in the assertion message, so an over-budget fail shows both.
+#[test]
+#[ignore = "speed budget: run with the recorded profile (the default cargo test run stays fast)"]
+fn analysis_throughput_within_the_recorded_budget() {
+    let spec = Spec {
+        sr: 48_000,
+        loops: 600, // 600 * 2 s = 20 min per role
+        stereo: Stereo::Mono,
+        peak_db: -3.0,
+        clip: false,
+        kick: Voice::AcousticKick,
+        snare: Voice::AcousticSnare,
+    };
+    let kick = render("kick", &spec);
+    let snare = render("snare", &spec);
+    let minutes = (kick.len() + snare.len()) as f64 / f64::from(spec.sr) / 60.0;
+    let t0 = Instant::now();
+    let k = analyze_track(&kick, spec.sr, "kick", &AnalyzeParams::default(), Detector::Dsp);
+    let s = analyze_track(&snare, spec.sr, "snare", &AnalyzeParams::default(), Detector::Dsp);
+    let total_s = t0.elapsed().as_secs_f64();
+    let k = k.expect("analyze_track must not fail");
+    let s = s.expect("analyze_track must not fail");
+    assert!(
+        !k.events.is_empty(),
+        "speed budget: the kick pass found no hits where 3000 exist"
+    );
+    assert!(
+        !s.events.is_empty(),
+        "speed budget: the snare pass found no hits where 1200 exist"
+    );
+    let s_per_min = total_s / minutes;
+    let host = host_name();
+    eprintln!(
+        "| speed-budget/20min | {} + {} hits | {total_s:.1} s total | {minutes:.1} min audio | {s_per_min:.3} s/min | {host} |",
+        k.events.len(),
+        s.events.len()
+    );
+    assert!(
+        s_per_min <= SPEED_BUDGET_S_PER_MIN * SPEED_BUDGET_SLACK,
+        "the reference render analysed at {s_per_min:.3} s per minute of audio, over the \
+         recorded budget {:.3} s/min +10 % (measured on {host}; the budget is recorded for \
+         the default test profile on the machine named in this test's doc comment)",
+        SPEED_BUDGET_S_PER_MIN
+    );
+}
