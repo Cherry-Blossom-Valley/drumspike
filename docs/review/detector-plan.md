@@ -424,6 +424,33 @@ and the left share of the hat cause must be at most 50 % (a proposed limit; toda
 78.4 %, so the added check FAILs until the hat cause is handled). The package also needs
 `tools/eval/enst_gate.py` within 2 % of baseline on every aggregate, counted lines pasted.
 
+Step 1 (#103), why A6 sees no coinciding hat hit, counted per drummer (`enst_tom_fp.py`,
+tool build 766c3399db3ee97b, the same 210 items, run files of detector fingerprint
+664e695d29b46ef2): 2368 hat FPs left, 2334 of them without an A6 coinciding hit (no
+`a6_lead_ms`; A6 judged 34 and did not drop them). The hat mic's own detected hits near
+each such FP (the cause window +-50 ms, the A6 coincide window 10 ms, from the run files):
+
+| drummer | no hat-mic hit | outside the A6 window | present, not a source | total |
+|---|---|---|---|---|
+| drummer_1 | 5 | 28 | 152 | 185 |
+| drummer_2 | 36 | 151 | 726 | 913 |
+| drummer_3 | 208 | 290 | 738 | 1236 |
+| all | 249 | 469 | 1616 | 2334 |
+
+The third column is the surprise: 1616 hat FPs have a hat-mic detected hit within the A6
+coincide window (2697 of the 7861 scored tom events without A6 keys overall, clustered in
+162 of the 210 items), yet the run file carries no A6 evidence on them. The hat mic IS a
+source in the rule's run: in the sample item (drummer_1/036_phrase_disco_simple_slow_sticks)
+the dropped candidates coincide with hat hits within 2.5 to 4.9 ms and carry lead/ratio. So
+the evidence exists inside the rule but does not reach the stored events of the kept hits.
+Suspected cause (code read, not yet measured): after the A6 re-detection, the kept hits'
+keys are matched to the stored events by an exact time (`(t - e.t).abs() < 1e-3` in
+`crates/app/src/cross_bleed.rs`), while `analyze_detected` re-refines the times before the
+store, so the exact match misses. This is a reporting-path defect first: the hat FPs may be
+reachable by A6 after all, which changes step 2 (a wider window or candidate-source change
+may not be needed; the evidence repair is). Step 2 starts here: repair the key path, re-run
+the table, and only then decide the fix the remaining counts name.
+
 ## Open areas check (umbrella #8 list)
 
 snare ghost notes (1), the kick gap (3), per-track self-calibration (2),
