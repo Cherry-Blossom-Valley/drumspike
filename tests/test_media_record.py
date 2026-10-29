@@ -457,8 +457,9 @@ def test_the_part2_undo_scene_closes_the_dialog_about_3_s_after_it_opens():
     raw = json.loads((ROOT / "tools/media/scenarios/part2.json").read_text())
     steps = next(sc for sc in raw["scenes"] if sc["id"] == "p2-undo")["steps"]
     opened = next(i for i, st in enumerate(steps) if st.get("press") == "Alt+Meta+Z")
-    assert steps[opened + 1]["do"] == "hold" and steps[opened + 1]["s"] == 2.75
-    # ~2.75 s with the modal open (the staged 4a0245a narration: the p123b run overran +202 ms at 3.0)
+    assert steps[opened + 1]["do"] == "hold" and steps[opened + 1]["s"] == 2.4
+    # ~2.4 s with the modal open (the staged 4a0245a narration: the p123b run overran +202 ms at 3.0,
+    # the p1p3b run still +140 ms at 2.75; the other holds are pinned at the 1.5 s standard minimum)
     assert steps[opened + 2] == {"do": "click", "sel": "#undoHistDone"}
     check = steps[opened + 3]
     assert check["do"] == "wait" and "undoHistModal" in check["cond"] and "hidden" in check["cond"]

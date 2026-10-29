@@ -119,8 +119,7 @@
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Right"},
       {"do": "hold", "s": 1.5},
-      {"do": "shot"},
-      {"do": "hold", "s": 1.5}
+      {"do": "shot"}
     ]},
     {"id": "p2-undo", "area_sel": ".track[data-name=\"s_top\"]", "steps": [
       {"do": "caption", "text": "Edit > Undo History…"},
@@ -130,7 +129,7 @@
       {"do": "key", "press": "Shift+Meta+Z"},
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Alt+Meta+Z"},
-      {"do": "hold", "s": 2.75,
+      {"do": "hold", "s": 2.4,
        "err": "the p123b +202 ms overrun against the staged 4a0245a narration; the recorder stretches the rest back to the wav"},
       {"do": "click", "sel": "#undoHistDone"},
       {"do": "wait", "cond": "() => document.querySelector('#undoHistModal').classList.contains('hidden')", "timeout": 15, "err": "the undo history closed"},
