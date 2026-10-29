@@ -31,9 +31,13 @@
       {"do": "shot", "err": "before: the followed hits (copies of k_in) across the spike lane"},
       {"do": "menu", "id": "follow_own", "timeout": 15, "err": "Track > Own Detection"},
       {"do": "wait", "cond": "() => S.tracks['k_sub'] && S.tracks['k_sub'].follows === null", "timeout": 15,
-       "err": "the sub mic is back on its own detection (setTrackFollow writes .follows; the lane drops the followed copies until the re-analyze)"},
-      {"do": "hold", "s": 2.0},
-      {"do": "shot", "err": "after: the followed lines gone (the app's own message: re-analyze to detect its hits)"}
+       "err": "the sub mic is back on its own detection (setTrackFollow writes .follows; the backend keeps the stale followed copies until the re-analyze - track_set_follow returns n_events without derive_one)"},
+      {"do": "hold", "s": 1.5},
+      {"do": "click", "sel": "#analyzeAllBtn", "timeout": 15, "err": "the re-analyze the app's own message asks for"},
+      {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the re-analyze started"},
+      {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the sub mic detected its own hits"},
+      {"do": "hold", "s": 1.5},
+      {"do": "shot", "err": "after: the own detection's hit lines"}
     ]},
     {"id": "p3-layer", "area_sel": "#inspector", "steps": [
       {"do": "caption", "text": "The Layer section of the Inspector"},
