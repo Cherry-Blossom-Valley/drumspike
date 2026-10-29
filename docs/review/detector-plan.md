@@ -98,6 +98,28 @@ prints snare and kick F1 not below the switch-off numbers, counted lines pasted;
 case with the switch off on a 12 dB quieter render of the same material must show the
 gap between quiet and loud shrinking. Fails when an aggregate regresses.
 
+Measured on ENST (#77, 2026-10-29): no flux statistic is stable enough to use, so the
+switch is not built. Package 2 closes as "no code": the finding is this section.
+
+- Probe 1, the 90th percentile of the flux per track (q90): snare spreads from 0.0002 to
+  1.29 within the snare close mic. It cannot serve as the per-role nominal level.
+- Probe 2, three candidate statistics per item at the original level and at a render
+  12 dB quieter (gain 10^(-12/20)). The statistics are the 10th percentile (q10), the
+  median (med) and the median of the 20 strongest local maxima (pk). Spread = max / min
+  of the loud value over the hit lists (001-029) and the phrases (036-089), drummer_1:
+
+  | mic | q10 | med | pk |
+  |---|---|---|---|
+  | kick | 0.00025 to 0.01632 (about 65x) | 0.00071 to 0.12824 (about 180x) | 0.01299 to 11.70 (about 900x) |
+  | snare | 0.00000 for every item (degenerate) | 0 to 0.01507 (zero floor) | 0.00168 to 6.78 (about 4000x) |
+  | hi-hat | 0 to 0.00116 (zero floor) | 0.00013 to 0.05655 (about 435x) | 0.00113 to 6.43 (about 5700x) |
+
+  No statistic is below 4x in any mic. Drummers 2 and 3 were not tabulated; the
+  decision does not depend on them, because drummer_1 already fails every statistic.
+- Option (c) follows from the table: the per-track switch and its level references are
+  dropped, and the code of the WIP commit 2a039af is reverted. The probes are not kept in
+  the tree; these numbers are the record.
+
 ### 3. The kick gap: measure kick on the real sessions and close what the measurement names
 
 What the code already does: kick on ENST is the strongest role (0.98 F1, drummers 2/3)

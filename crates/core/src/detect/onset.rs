@@ -179,12 +179,6 @@ pub struct OnsetParams {
     /// has no `role` key and reads as `Role::Other`.
     #[serde(default)]
     pub role: Role,
-    /// Per-track self-calibration (the switch, default off; env `DRUMSPIKE_SELF_CAL=1` in
-    /// [`OnsetParams::for_role`]): `delta` and `weak_ratio` scale by the track's own flux
-    /// level against the role's nominal one ([`self_cal_scale`]). A file written before the
-    /// field reads as off.
-    #[serde(default)]
-    pub self_cal: bool,
 }
 
 /// Minimum gap of phase 1 (`min_gap_ms` = 20 in `defaultParams` of the app and in
@@ -220,7 +214,6 @@ impl OnsetParams {
             soft_attack_max: None,
             min_gap_s: PHASE1_MIN_GAP_S,
             role: Role::Other,
-            self_cal: false,
         }
     }
 
@@ -313,50 +306,9 @@ impl OnsetParams {
             Role::Other => g,
         };
         p.role = role;
-        p.self_cal = env_flag("DRUMSPIKE_SELF_CAL");
         p
     }
 }
-
-/// `true` when the env var is set to `1` (the switches of the measurement rounds).
-fn env_flag(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|v| v == "1")
-}
-
-/// The nominal flux level per role for [`self_cal_scale`]: the 90th percentile of the flux over
-/// the frames of a nominal close-mic track (measured by the `self_cal_probe` test over the
-/// ENST-Drums close mics). Env `DRUMSPIKE_SELF_CAL_REF_<ROLE>` overrides for a measurement round.
-fn self_cal_ref(role: Role) -> f32 {
-    let (default, name) = match role {
-        Role::Kick => (1.0, "KICK"),
-        Role::Snare => (1.0, "SNARE"),
-        Role::Hat => (1.0, "HAT"),
-        Role::Tom => (1.0, "TOM"),
-        Role::Cymbal => (1.0, "CYMBAL"),
-        Role::Other => (1.0, "OTHER"),
-    };
-    std::env::var(format!("DRUMSPIKE_SELF_CAL_REF_{name}"))
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
-
-/// Self-calibration scale of a track: its 90th-percentile flux over all frames against the
-/// role's nominal one ([`self_cal_ref`]), clamped to [`SELF_CAL_MIN`, `SELF_CAL_MAX`]. A quiet
-/// or compressed track gets a smaller (or larger) flux threshold and weak-flux ratio than the
-/// shipped ones; a track at the nominal level gets 1.0 and keeps every shipped value.
-pub fn self_cal_scale(flux: &[f32], role: Role) -> f32 {
-    let Some(q) = quantile(flux, 0.9) else {
-        return 1.0;
-    };
-    (q / self_cal_ref(role)).clamp(SELF_CAL_MIN, SELF_CAL_MAX)
-}
-
-/// The lowest and highest [`self_cal_scale`] (a track more than 2x off the nominal level keeps
-/// the clamp: the scale does not run away on a silent or a clipped file).
-pub const SELF_CAL_MIN: f32 = 0.5;
-/// See [`SELF_CAL_MIN`].
-pub const SELF_CAL_MAX: f32 = 2.0;
 
 /// One detected hit, with the fields the detector gives the app (frame, time, `rise_db`,
 /// confidence) and the detector's own measurements.
@@ -862,16 +814,11 @@ fn onsets_with_candidates_inner(
         Some(s) => superflux(s, bands.clone()),
         None => flux_raw.clone(),
     };
-    // Self-calibration (the switch): the flux threshold follows the track's own flux level.
-    // The weak-flux limit is already relative to the track's strong flux median, so it is not
-    // scaled again. `1.0` with the switch off: every value stays the shipped one.
-    let cal = if p.self_cal { self_cal_scale(&flux, p.role) } else { 1.0 };
-    let delta = p.delta * cal;
-    let peaks = pick_peaks(&flux, delta, p.pre_avg, p.post_avg, p.pre_max, p.post_max);
+    let peaks = pick_peaks(&flux, p.delta, p.pre_avg, p.post_avg, p.pre_max, p.post_max);
     // A5: the frames the raw (ungained) flux would not have picked at `delta` - the
     // gain-dependent admits, judged below.
     let peaks_raw = if spec_gained.is_some() {
-        pick_peaks(&flux_raw, delta, p.pre_avg, p.post_avg, p.pre_max, p.post_max)
+        pick_peaks(&flux_raw, p.delta, p.pre_avg, p.post_avg, p.pre_max, p.post_max)
     } else {
         peaks.clone()
     };
