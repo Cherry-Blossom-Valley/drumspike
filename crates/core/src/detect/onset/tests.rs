@@ -42,6 +42,24 @@ fn every_role_uses_the_phase1_gap() {
     assert_eq!(OnsetParams::for_role(Role::Other), g);
 }
 #[test]
+fn self_cal_scale_follows_the_track_level_and_clamps() {
+    // The nominal flux level of `Other` is 1.0 (no env override in the tests).
+    assert_eq!(self_cal_scale(&[], Role::Other), 1.0);
+    assert_eq!(self_cal_scale(&[1.0; 50], Role::Other), 1.0);
+    assert!((self_cal_scale(&[0.8; 50], Role::Other) - 0.8).abs() < 1e-6);
+    assert_eq!(self_cal_scale(&[0.1; 50], Role::Other), SELF_CAL_MIN);
+    assert_eq!(self_cal_scale(&[9.0; 50], Role::Other), SELF_CAL_MAX);
+}
+
+#[test]
+fn self_cal_is_off_by_default() {
+    for r in Role::ALL {
+        assert!(!OnsetParams::for_role(r).self_cal, "{}", r.name());
+    }
+    assert!(!OnsetParams::generic().self_cal);
+}
+
+#[test]
 fn band_range_selects_by_centre() {
     let c = band_centres_hz(Chain::Cli);
     let r = band_range(100.0, 1000.0);
