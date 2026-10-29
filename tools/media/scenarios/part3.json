@@ -12,19 +12,16 @@
   "out": "~/.cache/drumspike/media/rec/part3.mp4",
   "session_files": [{"from": "{demo}/k out.wav", "as": "k sub.wav"}],
   "scenes": [
-    {"id": "p3-follow", "area_sel": "#tracksRows .urow[data-stem=\"k sub\"]", "steps": [
+    {"id": "p3-follow", "area_sel": "#editor", "steps": [
       {"do": "caption", "text": "File > Add Tracks…"},
       {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "answer_pick", "path": "{session}/Audio Files"},
       {"do": "key", "press": "Shift+Meta+I"},
       {"do": "visible", "sel": "#tracksModal", "timeout": 30, "err": "the Add Tracks list"},
-      {"do": "wait", "cond": "() => { const w = document.querySelector('#tracksRows .urow[data-stem=\\\"k sub\\\"] .ufollowWrap'); return w && (w.classList.contains('hidden') || !w.querySelector('.ufollow').checked); }", "timeout": 30, "err": "the sub mic row with the follow check still off (the before picture)"},
-      {"do": "shot"},
       {"do": "wait", "cond": "() => { const w = document.querySelector('#tracksRows .urow[data-stem=\\\"k sub\\\"] .ufollowWrap'); return w && !w.classList.contains('hidden') && w.querySelector('.ufollow').checked; }", "timeout": 30, "err": "the sub mic row has the follow check, on"},
       {"do": "hold", "s": 1.5},
-      {"do": "shot"},
-      {"do": "click", "sel": "#tracksCancel", "timeout": 15, "err": "the dialog closed, the check left on"},
-      {"do": "wait", "cond": "() => document.querySelector('#tracksModal').classList.contains('hidden')", "timeout": 15, "err": "the Add Tracks dialog closed"},
+      {"do": "click", "sel": "#tracksAdd", "timeout": 15, "err": "Add: the k sub track lands with the follow on"},
+      {"do": "wait", "cond": "() => document.querySelector('#tracksModal').classList.contains('hidden') && !!document.querySelector('.track[data-name=\\\"k_sub\\\"]')", "timeout": 120, "err": "the dialog closed and the k sub track is in the session"},
       {"do": "hold", "s": 1.5}
     ]},
     {"id": "p3-follow2", "area_sel": ".track[data-name=\"k_out\"]", "steps": [
