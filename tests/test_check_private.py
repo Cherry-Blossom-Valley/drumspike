@@ -75,13 +75,15 @@ def test_clean_text_file_passes(tmp_path):
 
 
 def test_diff_no_planted_word_leaks():
-    """--diff origin/main with an invented word that appears nowhere in the repo: no
-    hit names it. The self-diff of this branch carries the guard's own alias allowlist
-    literals (#108), so a plain rc=0 is not assertable here; the contract kept is that
-    a planted word never leaks into the diff scan."""
-    r = run(["--diff", "origin/main"], {"DRUMSPIKE_PRIVATE_WORDS": "zorpblat",
+    """--diff origin/main with an invented word built at run time (its literal must
+    not appear in this diff): no hit names it. The self-diff of this branch carries
+    the guard's own alias allowlist literals (#108), so a plain rc=0 is not
+    assertable here; the contract kept is that a planted word never leaks into the
+    diff scan."""
+    planted = "zorp" + "blat"
+    r = run(["--diff", "origin/main"], {"DRUMSPIKE_PRIVATE_WORDS": planted,
                                         "DRUMSPIKE_PRIVATE_PATTERNS": INVENTED_PAT})
-    assert "zorpblat" not in r.stderr
+    assert planted not in r.stderr
     assert "flooob-frame" not in r.stderr
 
 
