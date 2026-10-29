@@ -17,7 +17,8 @@ found, files out.
    - Both: a synthetic spike and an audio spike.
 4. Pick the destination folder and export.
 5. **File > Export Again** (`Option+Cmd+E`) repeats the last export with the same settings. This
-   is handy after an edit: export again and the DAW gets the new files.
+   is handy after an edit: export again and the DAW gets the new files. The spike files are
+   written in blocks, so an export of a long track does not hold the whole file in memory.
 
 ![The Export dialog with the per-track MIDI and spike WAV files and the destination folder.](img/05-export.png)
 
