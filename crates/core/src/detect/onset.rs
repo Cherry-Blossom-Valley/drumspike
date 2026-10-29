@@ -230,6 +230,14 @@ impl OnsetParams {
                 ref_quantile: 0.99,
                 gate_db: Some(6.0),
                 shape: Shape::Flux,
+                // Detector #8 package 3 (#76): the shape rescue stays on the kick. Removing it
+                // cut the three real sessions' 51 sub-level false positives but failed the ENST
+                // gate (drummer_1|kick 0.849 -> 0.617, drummer_2 0.984 -> 0.903, drummer_3
+                // 0.982 -> 0.785) and lost 4 refs on Session B at the working Sensitivity: the
+                // rescue's true and false keeps overlap in rel_db, similarity and attack on
+                // both corpora (2871 true / 222 false keeps on the ENST kick mics, 4 true /
+                // 52 false on the sessions; counted distributions in #76), so no
+                // per-candidate threshold separates them.
                 sim_min: Some(0.85),
                 sim_gate_db: 45.0,
                 weak_ratio: 0.25,
