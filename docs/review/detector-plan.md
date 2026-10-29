@@ -142,6 +142,25 @@ the three sessions to a named cause with counted lines, and after the fix
 `tools/eval/enst_gate.py` keeps every kick aggregate within 2 % of baseline. Fails if
 the attribution does not reach 90 % or an aggregate regresses.
 
+#### The measured outcome (#76, PR #92, merged as 556d271, 2026-10-29)
+
+The miss-cause pass (`tools/kick_miss_causes.py kick`, the counted lines of the x86-mac
+chain at 20dfd9f) found no false negative to attribute: with the shape rescue in place the
+kick has 0 false negatives at Sensitivity 50 on all three sessions - 0/302, 0/444, 0/386
+used refs (offsets +6.2/+8.4/+2.6 ms). Kick F1 at the working point 0.925 / 0.999 / 0.999
+(Session A/B/C; Sensitivity 100 0.637 / 0.796 / 0.782, oracle 0.959 / 1.000 / 1.000). The
+kick gap is therefore Session A precision, not recall: the rescue's false keeps, 52 on the
+sessions against 4 true keeps. A 0 FN run is a valid result, not a passed attribution, so
+on 0 false negatives the tool prints `no kick FN at Sensitivity 50: nothing to attribute`
+instead of an attributed percentage (#98).
+
+The rescue probe of #76 labelled every rescue-worthy candidate (similarity >= 0.85,
+-45 <= rel_db < -6) on the kick mics: 2871 true / 222 false keeps on the ENST items, 4
+true / 52 false on the sessions. The true and false keeps overlap in rel_db, similarity
+and attack on both corpora: no per-candidate cut on those three measurements separates
+them (the counted distributions are in the #76 probe record). Package 3b probes the false
+side on other dimensions.
+
 ### 4. Review queue ranking: rank by the detector's own gate verdicts
 
 What the code already does: `crates/app/src/confidence.rs`  -  `track_confidence`
