@@ -111,8 +111,8 @@ shasum -a 256 -c SHA256SUMS                                            # every f
 
 Use a Mac without the build tools, the `aarch64` file on Apple silicon and the `x86_64` file on
 Intel. Download the `.dmg` (a download sets the quarantine flag, so Gatekeeper checks it), drag
-"Drum Spike" to Applications and start it: no "cannot be opened" dialog, Help > About shows the
-version and the licence notice. Offline test: turn Wi-Fi off, copy the app from the `.dmg` again,
+"Drum Spike" to Applications and start it: no "cannot be opened" dialog, Drum Spike > About Drum
+Spike shows the version and the licence notice. Offline test: turn Wi-Fi off, copy the app from the `.dmg` again,
 start it.
 
 ## Entitlements
