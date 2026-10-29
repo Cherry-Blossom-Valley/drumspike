@@ -28,6 +28,14 @@
 //! A hit is doubtful when `c` is under [`DOUBT_BELOW`]. `why` names the tag, a margin under [`DOUBT_BELOW`] and a
 //! level under [`DOUBT_BELOW`] of a doubtful hit.
 //!
+//! Detector #8 package 4: the detector's own gate verdict names itself too. The stored
+//! candidates of the analysis ([`crate::candidates`]) hold the gate that kept each hit's
+//! candidate ([`Gate`], A4); a hit the detector kept only through a rescue says which one —
+//! the soft gate, the shape rescue, a weak flux saved by the time-domain attack — whether or
+//! not it is doubtful. A hit at the flux threshold (the level gate) adds no line: its only
+//! evidence is the level, which `why` names already when it is doubtful. A track without a
+//! current candidate list (no analysis yet, stale after a relink) rates by the level alone.
+//!
 //! # Time coordinates (R13 #237)
 //!
 //! A hit lives in four time coordinates:
@@ -44,6 +52,7 @@
 //! on the audio timeline (#281 D16: the activation margin of the model path moved to
 //! the model branch; the review queue orders by the level evidence alone).
 
+use drumspike_core::detect::onset::{Candidate, Gate};
 use drumspike_core::detect::peaks;
 use drumspike_core::detect::N_CLASSES;
 use drumspike_core::velocity::peak_db;
@@ -168,8 +177,9 @@ pub struct Margin {
 
 /// The rating of one hit: `{c, doubt, why}` (see the module table). `level_db` is the hit's peak
 /// level, `median_db` the track median (`None`: no level factor), `margin` the model margin
-/// (`None`: no kept activations).
-pub fn rate(e: &Value, level_db: f64, median_db: Option<f64>, margin: Option<Margin>) -> Value {
+/// (`None`: no kept activations), `gate` the verdict of the hit's candidate (`None`: no current
+/// candidate list, or no candidate of the hit in it).
+pub fn rate(e: &Value, level_db: f64, median_db: Option<f64>, margin: Option<Margin>, gate: Option<Gate>) -> Value {
     let r2 = |x: f64| (x * 1000.0).round() / 1000.0;
     if is_edited(e) {
         return json!({"c": 1.0, "doubt": false, "why": ["edited by hand"]});
@@ -183,6 +193,14 @@ pub fn rate(e: &Value, level_db: f64, median_db: Option<f64>, margin: Option<Mar
         why.push(tag.to_string());
         cap
     });
+    // the gate that kept the hit's candidate names itself (Detector #8 package 4): a hit kept
+    // only by a rescue is doubtful for the rescue's reason, not (only) the level's
+    match gate {
+        Some(Gate::Soft) => why.push("soft gate: ghost note below the level gate".into()),
+        Some(Gate::Shape) => why.push("shape rescue below the level gate".into()),
+        Some(Gate::WeakAttack) => why.push("weak flux, kept by the time-domain attack".into()),
+        _ => {}
+    }
     // the margin when the model rated the hit; the level only without one
     let c = cap * margin.map_or(level, |m| m.factor);
     let doubt = c < DOUBT_BELOW;
@@ -211,7 +229,8 @@ impl Service {
     /// The `events` times are the shifted-event coordinate (`track_shift_set` moved the stored
     /// hits, the audio did not move). Every read below converts the time to detector time first:
     /// the recorded shift comes off before the activations (`hit_strength`, the frame grid) and
-    /// before the peak level (`peak_db`, the audio samples) — see the module coordinates.
+    /// before the peak level (`peak_db`, the audio samples) — see the module coordinates. The
+    /// gate verdicts come from the stored candidates of the current analysis ([`hit_gates`]).
     pub fn track_confidence(&self, sid: &str, name: &str, events: Option<&[Value]>) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         resolve_shared(&op);
@@ -244,14 +263,50 @@ impl Service {
             .map(|(_, &l)| l)
             .collect();
         let med = median(&kept);
+        let gates = hit_gates(&st, &times, dt);
         let confidence: Vec<Value> = events
             .iter()
             .zip(times.iter().zip(&levels))
-            .map(|(e, (_, &l))| rate(e, l, med, None))
+            .zip(&gates)
+            .map(|((e, (_, &l)), g)| rate(e, l, med, None, *g))
             .collect();
         let source = "level";
         Ok(json!({"confidence": confidence, "source": source, "doubt_below": DOUBT_BELOW}))
     }
+}
+
+/// The gate verdict of each hit's candidate (Detector #8 package 4), `None` where the stored
+/// candidate list has none for it: no analysis yet, a stale list, or the hit is not in it.
+/// A hit's candidate is the kept one within the refinement window of its detector time (`t`
+/// minus the shift): the refinement moves a hit at most 12 ms after (2 ms before) its frame
+/// ([`drumspike_core::refine::RefineWindow::DEFAULT`]) and kept candidates sit at least 20 ms
+/// apart (the minimum gap), so the window holds the hit's own candidate only.
+fn hit_gates(st: &crate::histogram::TrackState, times: &[f64], shift_s: f64) -> Vec<Option<Gate>> {
+    let mut out = vec![None; times.len()];
+    let Some((cands, _, _)) = crate::candidates::read_candidates(
+        &st.dir,
+        &crate::candidates::candidates_key(&st.key, &st.mix, &Value::Null),
+    ) else {
+        return out;
+    };
+    for (i, &t) in times.iter().enumerate() {
+        let td = t - shift_s;
+        let mut best: Option<(&Candidate, f64)> = None;
+        for c in &cands {
+            if !c.kept {
+                continue;
+            }
+            let d = td - c.time;
+            if !(-0.002..=0.012).contains(&d) {
+                continue;
+            }
+            if best.is_none_or(|(_, bd)| d.abs() < bd) {
+                best = Some((c, d.abs()));
+            }
+        }
+        out[i] = best.map(|(c, _)| c.gate);
+    }
+    out
 }
 
 /// The commands of this module for the one dispatcher ([`crate::call`]); `None` for another command.
@@ -366,23 +421,23 @@ mod tests {
             threshold: 0.3,
         });
         // untagged at the median with a strong peak: confident
-        let r = rate(&json!({"t": 1.0}), -10.0, Some(-10.0), strong);
+        let r = rate(&json!({"t": 1.0}), -10.0, Some(-10.0), strong, None);
         assert_eq!((r["c"].as_f64(), r["doubt"].as_bool()), (Some(1.0), Some(false)));
         assert_eq!(r["why"], json!([]));
         // a weak model peak: doubtful, and the reason names it
-        let r = rate(&json!({"t": 1.0}), -10.0, Some(-10.0), weak);
+        let r = rate(&json!({"t": 1.0}), -10.0, Some(-10.0), weak, None);
         assert_eq!((r["c"].as_f64(), r["doubt"].as_bool()), (Some(0.2), Some(true)));
         assert_eq!(r["why"], json!(["weak model peak: 0.36 for a threshold of 0.30"]));
         // 18 dB under the median, no activations: level 0.25
-        let r = rate(&json!({"t": 1.0}), -28.0, Some(-10.0), None);
+        let r = rate(&json!({"t": 1.0}), -28.0, Some(-10.0), None, None);
         assert_eq!(r["c"].as_f64(), Some(0.25));
         assert_eq!(r["why"], json!(["18 dB under the track median"]));
         // a quiet hit (30 dB under the median, a ghost note) with a strong model peak is not doubtful
-        let r = rate(&json!({"t": 1.0}), -40.0, Some(-10.0), strong);
+        let r = rate(&json!({"t": 1.0}), -40.0, Some(-10.0), strong, None);
         assert_eq!((r["c"].as_f64(), r["doubt"].as_bool()), (Some(1.0), Some(false)));
         assert_eq!(r["why"], json!([]));
         // a weak peak on a quiet hit: the margin rates it, the level is a reason
-        let r = rate(&json!({"t": 1.0}), -28.0, Some(-10.0), weak);
+        let r = rate(&json!({"t": 1.0}), -28.0, Some(-10.0), weak, None);
         assert_eq!(r["c"].as_f64(), Some(0.2));
         assert_eq!(
             r["why"],
@@ -392,17 +447,17 @@ mod tests {
             ])
         );
         // a rescue hit without activations: the cap times the level
-        let r = rate(&json!({"t": 1.0, "rescue": true}), -16.0, Some(-10.0), None);
+        let r = rate(&json!({"t": 1.0, "rescue": true}), -16.0, Some(-10.0), None, None);
         assert_eq!(r["c"].as_f64(), Some(0.225));
         assert_eq!(r["why"], json!(["kick rescue (no model hit)"]));
         // and with activations: the cap times the margin
-        let r = rate(&json!({"t": 1.0, "flam": true}), -10.0, Some(-10.0), weak);
+        let r = rate(&json!({"t": 1.0, "flam": true}), -10.0, Some(-10.0), weak, None);
         assert_eq!(r["c"].as_f64(), Some(0.1));
         assert_eq!(
             r["why"],
             json!(["flam second stroke", "weak model peak: 0.36 for a threshold of 0.30"])
         );
-        let r = rate(&json!({"t": 1.0, "flam": true}), -10.0, Some(-10.0), strong);
+        let r = rate(&json!({"t": 1.0, "flam": true}), -10.0, Some(-10.0), strong, None);
         assert_eq!((r["c"].as_f64(), r["doubt"].as_bool()), (Some(0.5), Some(false)));
         // an edited hit and a hit out of the output are never doubtful
         let r = rate(
@@ -410,14 +465,43 @@ mod tests {
             -60.0,
             Some(-10.0),
             weak,
+            None,
         );
         assert_eq!((r["c"].as_f64(), r["doubt"].as_bool()), (Some(1.0), Some(false)));
-        let r = rate(&json!({"t": 1.0, "cut": true}), -60.0, Some(-10.0), weak);
+        let r = rate(&json!({"t": 1.0, "cut": true}), -60.0, Some(-10.0), weak, None);
         assert_eq!(r["why"], json!(["not in the output"]));
         assert_eq!(r["doubt"], json!(false));
         // no median (no hit in the output): the level factor is 1
-        let r = rate(&json!({"t": 1.0}), -60.0, None, None);
+        let r = rate(&json!({"t": 1.0}), -60.0, None, None, None);
         assert_eq!(r["c"].as_f64(), Some(1.0));
+    }
+
+    #[test]
+    fn the_candidate_gate_names_itself_in_why() {
+        // a soft-rescued ghost note: the why names the soft gate, then the level evidence
+        let r = rate(&json!({"t": 1.0}), -28.0, Some(-10.0), None, Some(Gate::Soft));
+        assert_eq!(r["c"].as_f64(), Some(0.25));
+        assert_eq!(r["doubt"], json!(true));
+        assert_eq!(
+            r["why"],
+            json!([
+                "soft gate: ghost note below the level gate",
+                "18 dB under the track median"
+            ])
+        );
+        // a shape rescue names itself too
+        let r = rate(&json!({"t": 1.0}), -10.0, Some(-10.0), None, Some(Gate::Shape));
+        assert_eq!(r["why"], json!(["shape rescue below the level gate"]));
+        assert_eq!(r["doubt"], json!(false));
+        // a weak loud hit kept by its attack
+        let r = rate(&json!({"t": 1.0}), -10.0, Some(-10.0), None, Some(Gate::WeakAttack));
+        assert_eq!(r["why"], json!(["weak flux, kept by the time-domain attack"]));
+        // a loud hit at the flux threshold (the level gate) and no verdict add no line
+        let r = rate(&json!({"t": 1.0}), -10.0, Some(-10.0), None, Some(Gate::Level));
+        assert_eq!((r["c"].as_f64(), r["doubt"].as_bool()), (Some(1.0), Some(false)));
+        assert_eq!(r["why"], json!([]));
+        let r = rate(&json!({"t": 1.0}), -28.0, Some(-10.0), None, None);
+        assert_eq!(r["why"], json!(["18 dB under the track median"]));
     }
 
     #[test]
