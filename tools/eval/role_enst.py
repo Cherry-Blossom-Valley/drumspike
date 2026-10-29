@@ -19,9 +19,9 @@ the recorded coverage floor (see `PASS_COVERAGE`), on a missing ENST root (SKIP 
 with an explicit `--allow-missing`) or on a missing binary. Files
 that error in the binary count as wrong (an "error" row). Aggregate numbers only.
 
-`ENST_ROOT` (default: the linux-arm64 copy under `~/.cache/drumspike/datasets/`, then the
-arm64-mac path) points at the dataset. `--limit N` scores the first N files only (a smoke
-run, never passes the gate).
+`ENST_ROOT` (default: the per-host copy under `~/.cache/drumspike/datasets/`, #95) points
+at the dataset. `--limit N` scores the first N files only (a smoke run, never passes the
+gate).
 """
 import argparse
 import json
@@ -83,7 +83,7 @@ def classify_batch(binary, wavs):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--root", default=None, help="the ENST-Drums root (default: ENST_ROOT, the linux-arm64 copy, the arm64-mac path)")
+    ap.add_argument("--root", default=None, help="the ENST-Drums root (default: ENST_ROOT, else the per-host copy under ~/.cache/drumspike/datasets/)")
     ap.add_argument("--bin", default=str(ROOT / "target" / "release" / "role-from-audio"),
                     help="the role-from-audio binary (default: the release build)")
     ap.add_argument("--limit", type=int, default=0, help="score the first N files only (a smoke run)")
@@ -92,7 +92,7 @@ def main(argv=None):
     ap.add_argument("--per-hit", action="store_true",
                     help="dump the per-hit features (ROLE_HITS mode) instead of scoring")
     a = ap.parse_args(argv)
-    root = a.root or os.environ.get("ENST_ROOT") or str(Path.home() / ".cache" / "drumspike" / "datasets" / "ENST-drums-public")
+    root = a.root or enst.default_root()
     if not Path(root).is_dir():
         if a.allow_missing:
             print(f"SKIP: ENST_ROOT {root} is missing")
