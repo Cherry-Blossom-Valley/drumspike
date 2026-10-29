@@ -230,8 +230,15 @@ impl OnsetParams {
                 ref_quantile: 0.99,
                 gate_db: Some(6.0),
                 shape: Shape::Flux,
-                sim_min: Some(0.85),
-                sim_gate_db: 45.0,
+                // Detector #8 package 3 (#76): no shape rescue on the kick. On the three real
+                // sessions the rescue kept 51 candidates below the level gate that no reference
+                // kick explains (49 of the 351 events of Session A's kick mic, -7 to -19 dB,
+                // sim 0.854-0.953, attack 11.1-41.3 dB) against 1 true hit (sim 0.887, attack
+                // 13.5 dB) — no similarity or attack threshold separates the two, so the rescue
+                // goes. Kick false negatives on the three sessions: 0 at the working
+                // Sensitivity and at every slider value but the strictest (Session B loses 4
+                // refs at Sensitivity 0, kept-not-picked).
+                sim_min: None,
                 weak_ratio: 0.25,
                 attack_db: 15.0,
                 ..g
