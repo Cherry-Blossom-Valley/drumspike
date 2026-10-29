@@ -440,7 +440,7 @@ each such FP (the cause window +-50 ms, the A6 coincide window 10 ms, from the r
 The third column is the surprise: 1616 hat FPs have a hat-mic detected hit within the A6
 coincide window (2697 of the 7861 scored tom events without A6 keys overall, clustered in
 162 of the 210 items), yet the run file carries no A6 evidence on them. The hat mic IS a
-source in the rule's run: in the sample item (drummer_1/036_phrase_disco_simple_slow_sticks)
+source in the rule's run: in the sampled item (a drummer_1 disco phrase, sticks)
 the dropped candidates coincide with hat hits within 2.5 to 4.9 ms and carry lead/ratio. So
 the evidence exists inside the rule but does not reach the stored events of the kept hits.
 Suspected cause (code read, not yet measured): after the A6 re-detection, the kept hits'
@@ -450,6 +450,24 @@ store, so the exact match misses. This is a reporting-path defect first: the hat
 reachable by A6 after all, which changes step 2 (a wider window or candidate-source change
 may not be needed; the evidence repair is). Step 2 starts here: repair the key path, re-run
 the table, and only then decide the fix the remaining counts name.
+
+Step 2 (#103), the measured verdict. The repair is confirmed
+(`crates/app/src/cross_bleed.rs`: the kept-keys match now takes the nearest kept hit within
+25 ms instead of an exact time; hat FPs without A6 keys went from 2334 to 35) and the hat
+pair's own keys are recorded on every hit with a coinciding hat hit
+(`crates/core/src/detect/cross_bleed.rs`, `a6_hat_lead_ms`/`a6_hat_level_db`), because the
+stored `lead_ms`/`ratio_db` are the loudest source's, not the hat's - the -32/-10 pair
+calibrated on the stored keys fired on the wrong distribution (the stored-key sweep
+predicted 857 drops; the hat-pair truth is 433). The sweep on the hat-pair
+keys (build of the 103-hatcal job, 210 ENST items; 1269 of 2236 hat-cause scored FPs and
+160 real strokes carry hat-pair keys; hat FPs p25/50/75 level -22.3/-14.8/-7.3 dB, lead
+-7.4/-5.1/-2.9 ms; real strokes p50 -6.6 dB): the distributions overlap. Best pair
+(level <= -20 dB, lead >= -12 ms): 398 hat FPs removed, 18 real strokes lost, left-share
+76.4 % -> 62.8 % (the limit is 50 %); at level <= -26 the removals fall to 197 for 12 real
+strokes; nothing at <= -32 fires. No pair reaches 50 % without a tom recall loss the gate
+would not accept, so no hat verdict fires: the recording stays, the rule does not. The
+verdict pair is a measured dead end on this evidence; a different rule (band energy, not
+the A6 coincidence form) is the remaining option and is out of this package's scope.
 
 ## Open areas check (umbrella #8 list)
 

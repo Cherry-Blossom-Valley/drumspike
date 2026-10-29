@@ -44,8 +44,11 @@ use crate::registry::{lock, OpenProject, Shared};
 use crate::roles::is_sample_name;
 use crate::{Service, ServiceConfig};
 
-/// The version a new analysis runs (`detector.cross_bleed.rule`).
-pub const CROSS_BLEED: u32 = 1;
+/// The version a new analysis runs (`detector.cross_bleed.rule`). 2 is #103 step 2: the hat
+/// source's own verdict (ratio at or under -32 dB, lead at or over -10 ms) and the
+/// nearest-kept-hit evidence match (the stored events carry the refined times, which lost the
+/// keys on kept hits).
+pub const CROSS_BLEED: u32 = 2;
 
 /// The version of a new analysis: the configuration's pin, else [`CROSS_BLEED`].
 pub fn analysis_cross_bleed(cfg: &ServiceConfig) -> u32 {
@@ -246,6 +249,17 @@ fn set_a6_keys(e: &mut drumspike_core::project::Event, m: CrossMark) {
     } else {
         e.extra.shift_remove("a6_level_db");
     }
+    // #103 step 2 calibration: the hat pair's own lead and level (see `CrossMark::hat_lead_ms`).
+    if let Some(lead) = m.hat_lead_ms {
+        e.extra.insert("a6_hat_lead_ms".into(), json!(lead));
+    } else {
+        e.extra.shift_remove("a6_hat_lead_ms");
+    }
+    if let Some(ratio) = m.hat_ratio_db {
+        e.extra.insert("a6_hat_level_db".into(), json!(ratio));
+    } else {
+        e.extra.shift_remove("a6_hat_level_db");
+    }
 }
 
 fn run_one(
@@ -404,9 +418,23 @@ fn run_one(
         {
             let mut g = lock(op);
             if let Ok(tr) = g.track_mut(&x_mic.name) {
+                // #103 step 1: the stored events carry the refined times of the analysis, not the
+                // re-detection hit time `h.time`, so the exact-time match missed and the A6
+                // evidence was lost on kept hits (1616 hat FPs with a hat hit inside the A6
+                // window and no keys; package 8 of the detector plan). Nearest kept hit within
+                // 25 ms instead: the refinement shift is a few ms and the detector's grid is
+                // 10 ms, so 25 ms cannot reach the next hit of a dense track.
+                const KEY_MATCH_MS: f64 = 0.025;
                 for e in tr.events.iter_mut().flatten() {
-                    if let Some((_, m)) = kept_keys.iter().find(|(t, _)| (t - e.t).abs() < 1e-3) {
-                        set_a6_keys(e, *m);
+                    let mut best: Option<(f64, CrossMark)> = None;
+                    for &(t, m) in &kept_keys {
+                        let d = (t - e.t).abs();
+                        if d <= KEY_MATCH_MS && best.map_or(true, |(bd, _)| d < bd) {
+                            best = Some((d, m));
+                        }
+                    }
+                    if let Some((_, m)) = best {
+                        set_a6_keys(e, m);
                     }
                 }
             }

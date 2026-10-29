@@ -205,13 +205,14 @@ def main(argv=None):
              "|---|" + "---|" * (len(CAUSES) + 2)]
     verdict_ok = True
     grand = {c: 0 for c in CAUSES}
+    sum_ok = True
     for d in enst.DRUMMERS:
         tot = {c: sum(counts[d][m][c] for m in TOM_MICS) for c in CAUSES}
         n = sum(tot.values())
         for c in CAUSES:
             grand[c] += tot[c]
         if sum(tot.values()) != n:
-            verdict_ok = False
+            sum_ok = False
         shares = [100.0 * tot[c] / n if n else 0.0 for c in CAUSES]
         lines.append(f"| {d} | " + " | ".join(str(tot[c]) for c in CAUSES) + f" | {n} | "
                      + " / ".join(f"{s:.1f}" for s in shares) + " |")
@@ -300,8 +301,9 @@ def main(argv=None):
         lines.append(f"FAIL: the hat left-share {hat_share:.1f} % is above {HAT_LIMIT:.0f} %")
         verdict_ok = False
     none_share = gshares["none"]
-    if not verdict_ok:
+    if not sum_ok:
         lines.append("FAIL: the cause counts do not sum to the total FPs")
+        verdict_ok = False
     if none_share > a.max_none:
         lines.append(f"FAIL: {none_share:.1f} % of the tom FPs have no cause (limit {a.max_none:.1f} %)")
         verdict_ok = False
