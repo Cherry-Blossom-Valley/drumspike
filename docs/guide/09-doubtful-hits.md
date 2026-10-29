@@ -17,7 +17,10 @@ count. A hit under 0.5 is doubtful.
 2. Press `Shift+D` for **Hits > Previous Doubtful Hit** to step back. With no doubtful hit
    left, the status line says `no more doubtful hits`.
 3. Read the info line under the toolbar, above the lanes: the Doubt field says the confidence of the hit and the
-   reasons, for example `0.25: 18 dB under the track median`. This tells you what to check.
+   reasons, for example `0.25: 18 dB under the track median`. A hit that the level gate alone
+   would have refused names the rescue that kept it, for example `soft gate: ghost note below
+   the level gate`, `shape rescue below the level gate` or `weak flux, kept by the time-domain
+   attack`. This tells you what to check.
 4. Check the hit: press `A` for **Hits > Audition Hit**, and look at the attack in the lane
    (chapter 4). A doubtful hit that is a real hit stays as it is; one that is not, you delete
    with Delete, or nudge with `Left` and `Right` (chapter 7). Edit the hit and its
