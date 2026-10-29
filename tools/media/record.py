@@ -95,7 +95,8 @@ NOTE_BOX = "rgba(0,0,0,0.6)"
 NOTE_PAD_PX = 6
 NOTE_FONT = "Helvetica, Arial, sans-serif"   # one sans-serif family, like the explainers
 STEP_KINDS = ("caption", "key", "show_key", "hide_key", "click", "select", "menu", "answer_save", "answer_pick",
-              "show_dest", "show_text", "lane_click", "drag", "wait", "visible", "text", "hold", "blur", "zoom_to")
+              "show_dest", "show_text", "lane_click", "drag", "wait", "visible", "text", "hold", "blur", "zoom_to",
+              "shot")
 # The recording standard (docs/product/recording-standard.md), on for a scenario with "standard": true
 ACTION_KINDS = ("key", "show_key", "click", "lane_click", "drag", "select", "menu")
 POINTER_KINDS = ("click", "lane_click", "drag")   # the overlay pointer glides to these before they act
@@ -770,17 +771,22 @@ def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_mo
         sc_waits = []
         first_act = next((k for k, st in enumerate(sc["steps"]) if st["do"] in ACTION_KINDS), None)
         after_shot = False
+        # A scene with explicit shot steps takes every picture at its shot steps: its area (a
+        # dialog, a panel) is often not present at the first action, so the automatic before
+        # picture at the first action would fail or show the wrong state.
+        explicit_shots = any(st["do"] == "shot" for st in sc["steps"])
         cand = shots / f"{sc['id']}-after.cand.png" if shots is not None else None
         for k, st in enumerate(sc["steps"]):
-            if shots is not None and k == first_act:   # the before PNG: the area as the action finds it
-                shoot_scene(page, sc, shots / f"{sc['id']}-before.png")
-            if (shots is not None and first_act is not None and not after_shot
+            if shots is not None and k == first_act and not explicit_shots:
+                shoot_scene(page, sc, shots / f"{sc['id']}-before.png")   # the before PNG: the area as the action finds it
+            if (shots is not None and first_act is not None and not after_shot and not explicit_shots
                     and k > first_act and st["do"] == "zoom_to"):
                 # A later zoom_to moves the view: the after PNG goes here, while the view
                 # still matches the scene's first zoom (the area of the before PNG).
                 shoot_scene(page, sc, shots / f"{sc['id']}-after.png")
                 after_shot = True
-            elif (cand is not None and first_act is not None and not after_shot and k > first_act
+            elif (cand is not None and first_act is not None and not after_shot and not explicit_shots
+                    and k > first_act
                     and view_holds(page, sc)):
                 # A key can move the view as well as a zoom_to (Tab to the next hit, a zoom
                 # preset, an async undo): keep the last after candidate taken while the view
@@ -790,6 +796,17 @@ def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_mo
                     shoot_scene(page, sc, cand)
                 except Exception:
                     pass
+            if st["do"] == "shot":
+                # An explicit picture of the scene's area: the before PNG at the first shot step
+                # (the area as the action finds it), the after PNG at a later one. Scenes that
+                # name a dialog as their area need both while the dialog is open.
+                if shots is not None:
+                    if not (shots / f"{sc['id']}-before.png").is_file():
+                        shoot_scene(page, sc, shots / f"{sc['id']}-before.png")
+                    elif not after_shot:
+                        shoot_scene(page, sc, shots / f"{sc['id']}-after.png")
+                        after_shot = True
+                continue
             if st["do"] == "wait":
                 s = clock() - t0
                 try:

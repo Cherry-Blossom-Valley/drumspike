@@ -10,7 +10,7 @@
   "narration": {"tts_out": "~/.cache/drumspike/media/tts-out/rec-part1"},
   "out": "~/.cache/drumspike/media/rec/part1.mp4",
   "scenes": [
-    {"id": "p1-new", "area_sel": "#statusbar", "steps": [
+    {"id": "p1-new", "area_sel": "#editor", "steps": [
       {"do": "caption", "text": "File > New Project…"},
       {"do": "hold", "s": 0.6},
       {"do": "answer_save", "path": "{projects}/Demo"},
@@ -36,7 +36,7 @@
       {"do": "hold", "s": 1.5}
     ]},
     {"id": "p1-analyze", "steps": [
-      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 0.5},
+      {"do": "zoom_to", "track": "new take", "t": 16.0938, "span": 0.5},
       {"do": "click", "sel": "#analyzeAllBtn"},
       {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the analysis started"},
       {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the analysis finished"},

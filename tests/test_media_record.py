@@ -139,6 +139,29 @@ def test_a_skip_must_name_scenes_of_the_scenario():
         record.parse_scenario({"scenes": [{"id": "s", "steps": []}], "skip": ["s"]})
 
 
+def test_a_scene_with_explicit_shot_steps_takes_its_pictures_at_them(tmp_path, monkeypatch):
+    # A dialog scene names the dialog as its area: the dialog is not present at the first
+    # action, so both pictures are taken at shot steps while the dialog is open.
+    shots = []
+    monkeypatch.setattr(record, "shoot_scene",
+                        lambda page, sc, path: (Path(path).write_bytes(b"png"), shots.append(Path(path).name)))
+    monkeypatch.setattr(record, "run_step", lambda page, st, env: None)
+    clock = Clock()
+    page = StubPage(clock)
+    scene = {"id": "pl-shot", "area_sel": "#someModal", "steps": [
+        {"do": "caption", "text": "c"},
+        {"do": "key", "press": "k"},
+        {"do": "visible", "sel": "#someModal", "timeout": 15, "err": "the dialog"},
+        {"do": "shot"},
+        {"do": "wait", "cond": "() => true", "timeout": 15, "err": "the change"},
+        {"do": "hold", "s": 1.5},
+        {"do": "shot"},
+        {"do": "hold", "s": 1.5}]}
+    record.run_scenes(page, [scene], [8.0], clock=clock, shots=tmp_path)
+    assert shots == ["pl-shot-before.png", "pl-shot-after.png"]
+    assert not (tmp_path / "pl-shot-after.cand.png").exists()
+
+
 def test_an_unknown_step_kind_is_rejected():
     with pytest.raises(record.RecordError, match="unknown step"):
         record.parse_scenario({"scenes": [{"id": "s", "steps": [{"do": "dance"}]}]})
