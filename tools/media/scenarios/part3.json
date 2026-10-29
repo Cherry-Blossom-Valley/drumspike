@@ -24,13 +24,17 @@
       {"do": "wait", "cond": "() => document.querySelector('#tracksModal').classList.contains('hidden') && !!document.querySelector('.track[data-name=\"k_sub\"]')", "timeout": 120, "err": "the dialog closed and the k sub track is in the session"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p3-follow2", "area_sel": ".track[data-name=\"k_sub\"]", "steps": [
+    {"id": "p3-follow2", "steps": [
       {"do": "caption", "text": "Track > Own Detection"},
+      {"do": "zoom_to", "track": "k_sub", "t": 16.0938, "span": 0.5,
+       "err": "the 0.5 s window at the roll: the followed and the own hit lines far enough apart to see (the whole row measured 0.24 % in p123b: 1-2 px lines)"},
       {"do": "click", "sel": ".track[data-name=\"k_sub\"] .thead .tname", "timeout": 15, "err": "the sub mic selected"},
       {"do": "hold", "s": 1.5},
+      {"do": "shot", "err": "before: the followed hits (copies of k_in)"},
       {"do": "menu", "id": "follow_own", "timeout": 15, "err": "Track > Own Detection"},
       {"do": "wait", "cond": "() => S.tracks['k_sub'] && !S.tracks['k_sub'].src", "timeout": 15, "err": "the sub mic detects its own hits again"},
-      {"do": "hold", "s": 2.0}
+      {"do": "hold", "s": 2.0},
+      {"do": "shot", "err": "after: the own detection's hit lines"}
     ]},
     {"id": "p3-layer", "area_sel": "#inspector", "steps": [
       {"do": "caption", "text": "The Layer section of the Inspector"},
@@ -82,10 +86,10 @@
       {"do": "hold", "s": 2.0},
       {"do": "shot"}
     ]},
-    {"id": "p3-grid", "area_sel": "#editor", "steps": [
+    {"id": "p3-grid", "steps": [
       {"do": "caption", "text": "View > Show Bar and Beat Grid"},
-      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 0.5,
-       "err": "the 0.5 s span: enough bar and beat lines cross the lane for the toggle to measure"},
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5,
+       "err": "the 5 s span: the most bar and beat lines the allowed spans put in the window (the 0.5 s span measured 0.05 %: one beat in view)"},
       {"do": "key", "press": "G", "err": "reset: the grid is on by default, this G hides it so the scene's G shows it"},
       {"do": "wait", "cond": "() => TM.gridOn === false", "timeout": 15, "err": "the grid hidden (the reset)"},
       {"do": "hold", "s": 1.5},
