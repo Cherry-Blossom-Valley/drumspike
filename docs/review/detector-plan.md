@@ -465,8 +465,12 @@ keys (build of the 103-hatcal job, 210 ENST items; 1269 of 2236 hat-cause scored
 (level <= -20 dB, lead >= -12 ms): 398 hat FPs removed, 18 real strokes lost, left-share
 76.4 % -> 62.8 % (the limit is 50 %); at level <= -26 the removals fall to 197 for 12 real
 strokes; nothing at <= -32 fires. No pair reaches 50 % without a tom recall loss the gate
-would not accept, so no hat verdict fires: the recording stays, the rule does not. The
-verdict pair is a measured dead end on this evidence; a different rule (band energy, not
+would not accept, so no NEW hat-pair threshold is added: the recording stays. The GENERIC
+verdict (#285) keeps firing on hat pairs exactly as on kick and snare pairs - an
+intermediate commit that bypassed it for hat sources kept 521 hat-bleed tom events that
+main drops (all within the 25 ms window of a hat hit; the 103-tomdiff measurement) and
+regressed the tom F1 rows. The verdict pair is a measured dead end on this evidence; a
+different rule (band energy, not
 the A6 coincidence form) is the remaining option and is out of this package's scope.
 
 ## Open areas check (umbrella #8 list)

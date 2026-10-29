@@ -419,18 +419,22 @@ pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec
                     if r < -p.overhead_margin_db {
                         bleed = true;
                     }
-                } else if s.kind == XKind::Hat {
-                    // #103 step 2: record the hat pair's own evidence on every hit with a
-                    // coinciding hat hit, firing or not (see [`CrossMark::hat_lead_ms`]). No hat
-                    // verdict fires here: the #103 measured verdict (docs/review/detector-plan.md,
-                    // package 8) is that the hat-pair distributions do not separate - the best
-                    // threshold pair (level -20 dB, lead -12 ms) removes 398 of 2927 hat-cause
-                    // scored FPs (left-share 76.4 % -> 62.8 %, limit 50 %) and costs 18 real
-                    // strokes, and every tighter pair trades recall for little; the sweep is
-                    // recorded in the ticket. The learned pair medians stay as stored evidence.
-                    marks[a][j].hat_lead_ms = Some(l);
-                    marks[a][j].hat_ratio_db = Some(r);
                 } else {
+                    // #103 step 2: record the hat pair's own evidence on every hit with a
+                    // coinciding hat hit, firing or not (see [`CrossMark::hat_lead_ms`]). The
+                    // #103 measured verdict (docs/review/detector-plan.md, package 8) is that no
+                    // NEW hat-pair threshold separates (the best pair, level -20 dB and lead
+                    // -12 ms, removes 398 of 2927 hat-cause scored FPs — left-share 76.4 % ->
+                    // 62.8 %, limit 50 % — and costs 18 real strokes; every tighter pair trades
+                    // recall for little; the sweep is recorded in the ticket). The GENERIC
+                    // verdict below still fires on hat pairs exactly as on kick and snare
+                    // pairs — disabling it (an intermediate commit) kept 521 hat-bleed tom
+                    // events that main drops and regressed the tom F1 rows (the 103-tomdiff
+                    // measurement). The learned pair medians stay as stored evidence.
+                    if s.kind == XKind::Hat {
+                        marks[a][j].hat_lead_ms = Some(l);
+                        marks[a][j].hat_ratio_db = Some(r);
+                    }
                     // the verdict (the measured form, #285): the hit is bleed when it arrives later
                     // than the source hit by more than the pair's lead bound AND the level ratio
                     // falls below the margin (`margin_db`: 0.0 = the source strictly louder; the
