@@ -25,9 +25,9 @@ use drumspike_core::project::{
 use drumspike_core::SourceStatus;
 use serde_json::{json, Value};
 
-use crate::bridge::Channels;
 use crate::error::AppError;
 use crate::registry::lock;
+use crate::reply::Channels;
 use crate::tracks::probe;
 use crate::Service;
 

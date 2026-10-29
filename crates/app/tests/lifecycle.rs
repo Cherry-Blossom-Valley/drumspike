@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 
 use common::file_sha256;
 use common::*;
-use drumspike_app::bridge::{Bridge, Reply};
+use drumspike_app::bridge::Bridge;
+use drumspike_app::reply::Reply;
 use drumspike_app::{Progress, Service};
 use drumspike_core::project::{add_track, build_source, load_project, save_project, BACKUPS_DIR};
 use serde_json::{json, Value};
@@ -421,7 +422,7 @@ fn project_save_of_an_unchanged_document_saves_as_before() {
 fn project_save_through_the_dispatcher_takes_force() {
     let (svc, sid, dir, _root) = opened("save_dispatch");
     write_outside(&dir.join("Song.drumspike"));
-    let ch = Arc::new(drumspike_app::bridge::Channels::default());
+    let ch = Arc::new(drumspike_app::reply::Channels::default());
     let run = |args: Value| drumspike_app::lifecycle::dispatch(&svc, &ch, "project_save", &args).unwrap();
     assert_eq!(run(json!({"sid": sid})).unwrap_err().code, 409);
     assert_eq!(run(json!({"sid": sid, "force": false})).unwrap_err().code, 409);

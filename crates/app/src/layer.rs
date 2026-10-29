@@ -962,7 +962,10 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
         return None;
     }
     let run = || -> Result<Value, AppError> {
-        let (sid, name) = (crate::call::arg_str(args, "sid")?, crate::call::arg_str(args, "name")?);
+        let (sid, name) = (
+            crate::command_policy::arg_str(args, "sid")?,
+            crate::command_policy::arg_str(args, "name")?,
+        );
         match cmd {
             "track_layer_set" => svc.track_layer_set(sid, name, args),
             "track_layer_get" => svc.track_layer_get(sid, name),

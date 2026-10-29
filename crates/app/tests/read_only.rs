@@ -16,9 +16,10 @@ use std::sync::Arc;
 
 use common::*;
 use drumspike_app::api::{self, Surface};
-use drumspike_app::bridge::{Bridge, Channels, Reply};
+use drumspike_app::bridge::Bridge;
 use drumspike_app::call;
 use drumspike_app::lock::ProjectLock;
+use drumspike_app::reply::{Channels, Reply};
 use drumspike_app::{AppError, Service, ServiceConfig};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};

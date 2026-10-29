@@ -960,6 +960,188 @@ def test_the_note_renders_while_a_playwright_session_is_open(tmp_path):
     assert png.is_file() and png.name == "note.png" and png.stat().st_size > 0
 
 
+# ---------------- the recording standard (docs/product/recording-standard.md) ----------------
+
+class CenterPage(StubPage):
+    """A page whose click target has a centre (the real page answers CENTER_JS with its box)."""
+
+    def evaluate(self, js, *a):
+        if js == record.CENTER_JS:
+            self._tick(("evaluate", js, a))
+            return [100.0, 200.0]
+        return super().evaluate(js, *a)
+
+
+def test_a_zoom_to_step_centres_the_view_before_the_action():
+    clock = Clock()
+    page = StubPage(clock)
+    record.run_step(page, {"do": "zoom_to", "track": "s top", "t": 16.09, "span": 5}, {})
+    assert ("evaluate", record.ZOOM_TO_JS, (["s top", 16.09, 5],)) in page.calls
+
+
+def test_a_zoom_span_outside_500_ms_to_5_s_is_refused():
+    with pytest.raises(record.RecordError, match="zoom_to step needs"):
+        record.parse_scenario({"scenes": [{"id": "s", "steps": [{"do": "zoom_to", "track": "t", "t": 1.0, "span": 60}]}]})
+    with pytest.raises(record.RecordError, match="zoom_to step needs"):
+        record.parse_scenario({"scenes": [{"id": "s", "steps": [{"do": "zoom_to", "track": "t", "t": 1.0, "span": 0.2}]}]})
+
+
+def test_a_click_glides_the_pointer_to_its_target_before_it_lands():
+    clock = Clock()
+    page = CenterPage(clock)
+    record.run_step(page, {"do": "click", "sel": "#inspector .x"}, {})
+    glide = ("evaluate", record.GLIDE_JS, ([100.0, 200.0, record.GLIDE_MS],))
+    assert glide in page.calls and ("evaluate", record.RING_JS, ([100.0, 200.0],)) in page.calls
+    assert page.calls.index(glide) < page.calls.index(("click", "#inspector .x"))
+    assert page.holds() == [record.GLIDE_MS]   # the step waits for the glide to land
+
+
+def test_a_lane_click_glides_before_the_real_mouse_click():
+    clock = Clock()
+    page = LanePage(clock)
+    record.run_step(page, {"do": "lane_click", "track": "s top", "t": 3.2}, {})
+    glide = ("evaluate", record.GLIDE_JS, ([900.0, 260.0, record.GLIDE_MS],))
+    assert page.calls.index(glide) < page.calls.index(("mouse", "click", 900.0, 260.0))
+
+
+def test_a_drag_shows_its_line_and_ends_it_after_the_mouse_is_up():
+    clock = Clock()
+    page = LanePage(clock)
+    record.run_step(page, {"do": "drag", "track": "s top", "from": 3.0, "to": 3.4}, {})
+    line = page.calls.index(("evaluate", record.DRAG_LINE_JS, ([900.0, 900.0, 260.0],)))
+    up = page.calls.index(("mouse", "up"))
+    end = page.calls.index(("evaluate", record.DRAG_END_JS, ()))
+    assert line < page.calls.index(("mouse", "down")) < up < end
+
+
+def test_the_change_share_counts_the_pixels_that_moved_not_the_noise():
+    import numpy as np
+    a = np.zeros((10, 10, 3), np.uint8)
+    b = a.copy()
+    b[0, :5] = 40                     # 5 of 100 pixels moved a lot
+    b[1, :5] = record.CHANGE_LEVEL - 1   # noise under the level does not count
+    assert record.changed_share(a, b) == pytest.approx(5.0)
+    with pytest.raises(record.RecordError, match="differ in size"):
+        record.changed_share(a, np.zeros((5, 5, 3), np.uint8))
+
+
+def test_an_action_scene_that_barely_changes_fails_the_gate(tmp_path, monkeypatch):
+    import numpy as np
+    shots = {"pl-add-before.png": np.zeros((100, 100, 3), np.uint8),
+             "pl-add-after.png": np.zeros((100, 100, 3), np.uint8),
+             "pl-ghost-before.png": np.zeros((100, 100, 3), np.uint8),
+             "pl-ghost-after.png": np.zeros((100, 100, 3), np.uint8)}
+    shots["pl-ghost-after.png"][:20] = 200   # 20 % changed
+    shots["pl-add-after.png"][:1, :20] = 200  # 0.2 % changed: under the 2 % standard
+    for name in shots:
+        (tmp_path / name).write_bytes(b"png")
+    monkeypatch.setattr(record, "png_rgb", lambda p: shots[Path(p).name])
+    scenes = [{"id": "pl-add", "steps": [{"do": "key", "press": "k"}]},
+              {"id": "pl-ghost", "steps": [{"do": "key", "press": "Shift+K"}]},
+              {"id": "pl-end", "steps": [{"do": "hold", "s": 4.0}]}]
+    problems = record.change_problems(tmp_path, scenes)
+    assert len(problems) == 1 and problems[0].startswith("pl-add: 0.20 % of the action area changed")
+
+
+def test_the_action_area_is_the_scene_s_panel_or_its_first_track():
+    assert record.area_selector({"id": "p", "area_sel": "#inspector", "steps": []}) == "#inspector"
+    assert record.area_selector({"id": "p", "steps": [{"do": "drag", "track": "s top", "from": 1, "to": 2}]}) \
+        == '.track[data-name="s top"]'
+    assert record.area_selector({"id": "p", "steps": [{"do": "hold", "s": 1}]}) == "body"
+
+
+def test_a_scene_with_an_action_takes_its_before_and_after_pictures(tmp_path, monkeypatch):
+    shots = []
+    monkeypatch.setattr(record, "shoot_area", lambda page, sel, path: shots.append((sel, Path(path).name)))
+    clock = Clock()
+    page = StubPage(clock)
+    scene = {"id": "pl-x", "steps": [{"do": "caption", "text": "c"}, {"do": "key", "press": "k"},
+                                     {"do": "hold", "s": 2.0}]}
+    record.run_scenes(page, [scene], [5.0], clock=clock, shots=tmp_path)
+    assert shots == [("body", "pl-x-before.png"), ("body", "pl-x-after.png")]
+
+
+def test_a_scene_with_a_later_zoom_takes_its_after_picture_before_the_zoom_moves(tmp_path, monkeypatch):
+    # pl-grey zooms again after its first action: the after PNG must come while the view still
+    # matches the scene's first zoom, else the measured window throws or compares wrong areas.
+    shots = []
+    monkeypatch.setattr(record, "shoot_scene", lambda page, sc, path: shots.append(Path(path).name))
+    monkeypatch.setattr(record, "run_step", lambda page, st, env: None)
+    clock = Clock()
+    page = StubPage(clock)
+    scene = {"id": "pl-grey", "steps": [
+        {"do": "caption", "text": "c"},
+        {"do": "zoom_to", "track": "s_top", "t": 8.5938, "span": 1},
+        {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 8.5938},
+        {"do": "hold", "s": 1.5},
+        {"do": "zoom_to", "track": "s_top", "t": 9.5312, "span": 1},
+        {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 9.5312},
+        {"do": "hold", "s": 2.0}]}
+    record.run_scenes(page, [scene], [5.0], clock=clock, shots=tmp_path)
+    assert shots == ["pl-grey-before.png", "pl-grey-after.png"]
+
+
+class _Lane:
+    def __init__(self, box):
+        self.box = box
+
+    def scroll_into_view_if_needed(self):
+        pass
+
+    def bounding_box(self):
+        return self.box
+
+
+class _WindowPage:
+    """A page with one track's spike and wave lanes, at a 2x capture (the window's +/- 300 px)."""
+    def __init__(self):
+        self.shots = []
+
+    def locator(self, sel):
+        if "canvas.spike" in sel:
+            return _Lane({"x": 100.0, "y": 50.0, "width": 800.0, "height": 40.0})
+        return _Lane({"x": 100.0, "y": 90.0, "width": 800.0, "height": 120.0})
+
+    def evaluate(self, js, arg=None):
+        if js == record.LANE_X_JS:
+            return 300.0
+        if "devicePixelRatio" in js:
+            return 2.0
+        return None
+
+    def screenshot(self, path, clip):
+        self.shots.append((path, clip))
+
+
+def test_a_zoomed_scene_measures_the_hit_window_over_the_spike_and_wave_lanes(tmp_path):
+    sc = {"id": "pl-add", "steps": [{"do": "zoom_to", "track": "s_top", "t": 18.5938, "span": 0.5},
+                                    {"do": "drag", "track": "s_top", "from": 18.4, "to": 18.7}]}
+    page = _WindowPage()
+    record.shoot_scene(page, sc, tmp_path / "pl-add-before.png")
+    assert page.shots == [(str(tmp_path / "pl-add-before.png"), {"x": 150.0, "y": 50.0, "width": 300.0, "height": 160.0})]
+    panel = {"id": "pl-h", "area_sel": "#inspector", "steps": [{"do": "zoom_to", "track": "s_top", "t": 1.0, "span": 5}]}
+    assert record.zoom_t(panel) == 1.0 and record.area_selector(panel) == "#inspector"
+
+
+def test_the_standard_needs_a_zoom_before_a_pointer_and_a_hold_after_each_action():
+    with pytest.raises(record.RecordError, match="needs a zoom_to before it"):
+        record.parse_scenario({"standard": True, "scenes": [{"id": "s", "steps": [
+            {"do": "lane_click", "track": "s_top", "t": 1.0}, {"do": "hold", "s": 2.0}]}]})
+    with pytest.raises(record.RecordError, match="no hold of 1.5 s"):
+        record.parse_scenario({"standard": True, "scenes": [{"id": "s", "steps": [
+            {"do": "zoom_to", "track": "s_top", "t": 1.0, "span": 5},
+            {"do": "lane_click", "track": "s_top", "t": 1.0}, {"do": "key", "press": "k"},
+            {"do": "hold", "s": 2.0}]}]})
+
+
+def test_the_learn_recording_meets_the_standard_and_its_drift_limit():
+    raw = json.loads((ROOT / "tools" / "media" / "scenarios" / "part-learn.json").read_text(encoding="utf-8"))
+    recorded = record.parse_scenario(raw)
+    assert [sc["id"] for sc in recorded["scenes"]][:5] == ["pl-ghost", "pl-grey", "pl-add", "pl-histogram", "pl-remove"]
+    assert record.drift_limit(raw) == pytest.approx(0.010)
+    assert record.drift_limit({}) == record.DRIFT_LIMIT_S
+
+
 # ---------------- #458: the pre-done guards ----------------
 
 import shutil  # noqa: E402
