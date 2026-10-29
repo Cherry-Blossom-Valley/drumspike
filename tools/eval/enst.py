@@ -6,7 +6,7 @@
         python tools/eval/enst.py --all --configs default,dsp
     python tools/eval/enst.py --score-only       # tables from the existing run files
 
-Data: `ENST_ROOT` (default: the copy under ~/.cache/drumspike/datasets/ENST-drums-public), the public copy of
+Data: `ENST_ROOT` (default: the per-host copy under `~/.cache/drumspike/datasets/`), the public copy of
 Gillet & Richard, "ENST-Drums", ISMIR 2006 (CC BY-NC-ND 4.0). Never commit its audio, annotations or derived
 per-hit copies; only aggregate numbers leave this host. The path is read from the env; a missing root FAILs
 (SKIP only with an explicit `--allow-missing`).
@@ -447,6 +447,15 @@ def do_score(out, root, log=print, configs=None):
     return per
 
 
+def default_root():
+    """The ENST-Drums root: ENST_ROOT, else the per-host copy under
+    ~/.cache/drumspike/datasets/ (#95: no private drive path in the repo)."""
+    env = os.environ.get("ENST_ROOT")
+    if env:
+        return env
+    return str(Path.home() / ".cache" / "drumspike" / "datasets" / "ENST-drums-public")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--all", action="store_true", help="index, tom mapping, the runs, the scores and the tables")
@@ -456,7 +465,7 @@ def main(argv=None):
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--allow-missing", action="store_true", help="SKIP (exit 0) when ENST_ROOT is missing, not FAIL")
     a = ap.parse_args(argv)
-    root = os.environ.get("ENST_ROOT", str(Path.home() / ".cache" / "drumspike" / "datasets" / "ENST-drums-public"))
+    root = default_root()
     if not Path(root).is_dir():
         if a.allow_missing:
             print(f"SKIP: ENST_ROOT {root} is missing")

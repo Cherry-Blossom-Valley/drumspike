@@ -1,4 +1,4 @@
-"""C13 (#389): ENST part B as a standing detection gate on linux-arm64.
+"""C13 (#389): ENST part B as a standing detection gate.
 
     uv run --project . python tools/eval/enst_gate.py
     uv run --project . python tools/eval/enst_gate.py --plant drop-kick-tenth   # the test regression
@@ -16,8 +16,8 @@ Run files: missing items are run through the release `service_tool` exactly like
 (resumable, one file per item). Every run file records the fingerprint (the sha256) of the
 `service_tool` binary that measured it; the gate reruns every item whose run file is missing or
 was written by another build, and refuses to score a stale file. `--rerun` stays as the force
-switch that measures every item again. `ENST_ROOT` (default: the linux-arm64 copy under
-`~/.cache/drumspike/datasets/`, then the arm64-mac path) points at the dataset; a missing root FAILs
+switch that measures every item again. `ENST_ROOT` (default: the
+per-host copy under `~/.cache/drumspike/datasets/`) points at the dataset; a missing root FAILs
 (SKIP only with an explicit `--allow-missing`).
 
 `--refresh-baseline` writes the current numbers as the baseline together with the git sha of the
@@ -270,7 +270,7 @@ def do_gate(root, out, baseline_path, tool=None, config=GATE_CONFIG, plant=None,
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--root", default=None, help="the ENST-Drums root (default: ENST_ROOT, the linux-arm64 copy, the arm64-mac path)")
+    ap.add_argument("--root", default=None, help="the ENST-Drums root (default: ENST_ROOT, the per-host copy under ~/.cache/drumspike/datasets/)")
     ap.add_argument("--tool", default=None, help="the service_tool for missing items (default: DRUMSPIKE_CALIB_TOOL, the release build)")
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--config", default=GATE_CONFIG, help=f"the run configuration (default: {GATE_CONFIG})")
@@ -281,15 +281,8 @@ def main(argv=None):
     ap.add_argument("--allow-missing", action="store_true", help="SKIP (exit 0) when the ENST root is missing, not FAIL")
     ap.add_argument("--baseline", default=str(BASELINE))
     a = ap.parse_args(argv)
-    root = a.root or os.environ.get("ENST_ROOT")
+    root = a.root or os.environ.get("ENST_ROOT") or enst.default_root()
     plant = a.plant or (os.environ.get("ENST_GATE_PLANT") if os.environ.get("ENST_GATE_PLANT") in PLANTS else None)
-    if root is None:
-        for cand in (Path.home() / ".cache" / "drumspike" / "datasets" / "ENST-drums-public",):
-            if cand.is_dir():
-                root = str(cand)
-                break
-    if root is None:
-        root = str(Path.home() / ".cache" / "drumspike" / "datasets" / "ENST-drums-public")
     return do_gate(root, Path(a.out), Path(a.baseline), a.tool, a.config, plant,
                    a.rerun, a.refresh_baseline, a.allow_missing)
 

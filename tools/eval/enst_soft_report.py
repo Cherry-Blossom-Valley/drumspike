@@ -97,13 +97,8 @@ def main(argv=None):
     ap.add_argument("--skip-missing", action="store_true",
                     help="score the items both configurations have instead of FAILing on a gap")
     a = ap.parse_args(argv)
-    root = os.environ.get("ENST_ROOT")
-    if root is None:
-        for cand in (Path.home() / ".cache" / "drumspike" / "datasets" / "ENST-drums-public",):
-            if cand.is_dir():
-                root = str(cand)
-                break
-    if root is None or not Path(root).is_dir():
+    root = os.environ.get("ENST_ROOT") or enst.default_root()
+    if not Path(root).is_dir():
         raise SystemExit(f"FAIL: ENST_ROOT {root} is missing")
     out = Path(a.out)
     tool_path = Path(os.environ.get("DRUMSPIKE_CALIB_TOOL") or ROOT / "target" / "release" / "service_tool")
