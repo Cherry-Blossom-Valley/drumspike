@@ -227,9 +227,69 @@ wall-clock per minute of audio exceeds the recorded budget by > 10 %; the gate
 (`cargo test -p drumspike-core --test robustness -- --ignored`) runs it and prints the
 measured throughput. Fails over budget.
 
+### 8. Tom false positives: the cause of each one and the rule that should remove it
+
+What the code already does: four session-level rules act on the tom close mics.
+Rule CD (`detect/tom_bleed.rs`, versions 1 to 5) marks a tom hit as bleed when its
+tom-band excess over a played other-drum mic is under 9.2 dB; version 2 adds the kick
+and snare close mics as sources (9.2 dB snare, 4.0 dB kick); version 5 keeps a shared
+kick source under 8.0 dB. The pair rule (`tom_pairs`, versions 3 and 4) keeps the
+louder of two output hits on different drums within 12 ms. The cross-track rule
+(`detect/cross_bleed.rs`, A6) judges each tom hit by first-motion lead and level
+against the kick, snare, hi-hat and other tom mics. The transfer gains the rules use
+are in `detect/attribution.rs`.
+
+Measured (`tools/eval/enst_tom_fp.py`, config `dsp`, build a12badbc565958ae, 210
+items, +-50 ms, counted on the release run of #90): 6232 scored tom false positives
+over the three drummers (583 / 2432 / 3217). The nearest annotation of another drum
+gives the cause; "removed" counts the hits the rules flagged (`bleed` or `cut`) that
+sit at that cause, "left" the scored FPs:
+
+| cause | left | share of FPs | removed | left share of (left + removed) |
+|---|---|---|---|---|
+| kick | 1708 | 27.4 % | 1517 | 53 % |
+| snare | 1398 | 22.4 % | 803 | 64 % |
+| hat | 2423 | 38.9 % | 668 | 78 % |
+| cymbal | 443 | 7.1 % | 324 | 58 % |
+| tom-other | 223 | 3.6 % | 312 | 42 % |
+| none | 37 | 0.6 % | 7 | 84 % |
+
+The shares sum to 100 %, the cause counts to 6232 (the script's sum check). The worst
+mic is drummer_3 tom_2 (P 0.185 at R 0.976, 1121 output hits). Flagged hits on the
+own tom annotations: 25 (real strokes the rules removed).
+
+What the table does not say: which rule flagged each removed hit. The output carries
+`bleed` and `cut` only, so the share each rule removes is not measured yet. The
+reasons below are the rules' stated design, not yet tested:
+
+- Hat (39 % of the FPs, 78 % left): rule CD and version 2 measure levels in the tom band
+  (50 to 400 Hz); a hi-hat has little energy there, so its excess over the tom mic is
+  not low. The A6 first-motion test is the rule that should catch it, and hat strokes
+  are bright and weak, so the lead test may not separate them.
+- Kick and snare (50 % of the FPs): version 2 covers them, but the kick threshold of
+  4.0 dB is set against real accents (`tom_bleed.rs` header). Bleed above the threshold
+  is caught; the remainder sits at the threshold.
+- Cymbal (7 %): the overheads are not in the source list of A6 (kick, snare, hi-hat,
+  other toms). The 324 removed cymbal hits show some are caught anyway, so the source
+  list is the question to test, not the whole answer.
+
+Work package: add the rule that set each flag to `enst_tom_fp.py` (a column per rule: CD,
+v2 kick, v2 snare, v3 pair, v5 shared kick, A6), from the per-hit evidence the run files
+carry (if they do not, the evidence goes into the run output first). Then take the hat
+cause, the largest one, and decide on the measured table: add hi-hat and overheads as
+sources of A6 with a threshold set on ENST, or record why the rule cannot separate them.
+No detector change in this package before the table is in the report.
+
+Gate that can fail: `uv run python tools/eval/enst_tom_fp.py` already FAILs when the cause
+counts do not sum to the total or when the `none` share is above 10 % (today: PASS, 0.6 %).
+The work package adds two checks to it: the per-rule columns must sum to the flagged total,
+and the left share of the hat cause must be at most 50 % (a proposed limit; today it is
+78 %, so the added check FAILs until the hat cause is handled). The package also needs
+`tools/eval/enst_gate.py` within 2 % of baseline on every aggregate, counted lines pasted.
+
 ## Open areas check (umbrella #8 list)
 
 snare ghost notes (1), the kick gap (3), per-track self-calibration (2),
 review queue ranking by confidence (4), role suggestion from audio (5), the
-robustness smoke set (6), analysis speed (7)  -  all seven covered above with file
-pointers and one failing-capable Gate each.
+robustness smoke set (6), analysis speed (7), tom false positives (8)  -  all eight
+covered above with file pointers and one failing-capable Gate each.
