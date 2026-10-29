@@ -753,9 +753,16 @@ def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_mo
             raise RecordError(f"{sc['id']}: the page shows forbidden text {shown}")
         sc_waits = []
         first_act = next((k for k, st in enumerate(sc["steps"]) if st["do"] in ACTION_KINDS), None)
+        after_shot = False
         for k, st in enumerate(sc["steps"]):
             if shots is not None and k == first_act:   # the before PNG: the area as the action finds it
                 shoot_scene(page, sc, shots / f"{sc['id']}-before.png")
+            if (shots is not None and first_act is not None and not after_shot
+                    and k > first_act and st["do"] == "zoom_to"):
+                # A later zoom_to moves the view: the after PNG goes here, while the view
+                # still matches the scene's first zoom (the area of the before PNG).
+                shoot_scene(page, sc, shots / f"{sc['id']}-after.png")
+                after_shot = True
             if st["do"] == "wait":
                 s = clock() - t0
                 try:
@@ -773,7 +780,7 @@ def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_mo
                 except Exception as e:
                     raise RecordError(f"{sc['id']}: {st.get('err') or st['do']}: {e}") from e
         waits.append(sc_waits)
-        if shots is not None and first_act is not None:   # the after PNG: the result after its hold
+        if shots is not None and first_act is not None and not after_shot:   # the after PNG: the result after its hold
             shoot_scene(page, sc, shots / f"{sc['id']}-after.png")
         if check_model:
             text = page.evaluate(VISIBLE_TEXT_JS) or ""
