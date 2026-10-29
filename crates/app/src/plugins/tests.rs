@@ -3,6 +3,7 @@
 //! `DRUMSPIKE_DETECTORS_DIR` at it (the env is read per call).
 
 use super::*;
+use std::sync::Mutex;
 
 const LICENCE: &str = "MIT License\n\nPermission is hereby granted, free of charge.\n";
 
@@ -36,7 +37,12 @@ fn make_plugin(dir: &Path, id: &str, extra: Value) -> PathBuf {
     dir.to_path_buf()
 }
 
+/// Tests run in parallel and share the process env: the lock keeps one test's
+/// DETECTORS_DIR from being removed while another test scans its folder.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
 fn with_dir(dir: &Path, f: impl FnOnce()) {
+    let _guard = ENV_LOCK.lock().unwrap();
     std::env::set_var(DETECTORS_DIR_ENV, dir);
     f();
     std::env::remove_var(DETECTORS_DIR_ENV);
