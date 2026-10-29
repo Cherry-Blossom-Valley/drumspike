@@ -30,17 +30,9 @@ impl Lcg {
 }
 
 /// One one-shot of `role` starting at sample `onset` (a sharp start at full level), on a uniform noise
-/// floor of `floor_db` (rms), with first polarity `pol`.
-fn shot(
-    role: usize,
-    sr: u32,
-    n: usize,
-    onset: usize,
-    floor_db: f64,
-    pol: f64,
-    attack_s: f64,
-    rng: &mut Lcg,
-) -> Vec<f32> {
+/// floor of `floor_db` (rms), with first polarity `pol`. `level` is `(floor_db, pol)`.
+fn shot(role: usize, sr: u32, n: usize, onset: usize, level: (f64, f64), attack_s: f64, rng: &mut Lcg) -> Vec<f32> {
+    let (floor_db, pol) = level;
     let srf = sr as f64;
     let mut x = vec![0f32; n];
     let a = 10f64.powf(floor_db / 20.0) * 3f64.sqrt();
@@ -48,7 +40,7 @@ fn shot(
         *v = (a * rng.uni()) as f32;
     }
     let mut prev_noise = 0.0;
-    for k in onset..n {
+    for (k, slot) in x.iter_mut().enumerate().skip(onset) {
         let t = (k - onset) as f64 / srf;
         let v = match role {
             0 => (2.0 * PI * 60.0 * t).cos() * (-t / 0.10).exp(),
@@ -69,7 +61,7 @@ fn shot(
         } else {
             1.0
         };
-        x[k] = (pol * AMP * v * ramp) as f32;
+        *slot = (pol * AMP * v * ramp) as f32;
     }
     x
 }
@@ -117,9 +109,9 @@ fn main() {
                     let a = 10f64.powf(floor / 20.0) * 3f64.sqrt();
                     for &pol in &POLARITIES {
                         for seed in 0..SEEDS {
-                            let mut rng = Lcg(0x9E37_79B9_7F4A_7C15 ^ (seed + 1) * 0x1000_0000_0001);
+                            let mut rng = Lcg(0x9E37_79B9_7F4A_7C15 ^ ((seed + 1) * 0x1000_0000_0001));
                             let onset = (0.3 * sr as f64) as usize + (seed as usize) * 3;
-                            let x = shot(ri, sr, n, onset, floor, pol, attack, &mut rng);
+                            let x = shot(ri, sr, n, onset, (floor, pol), attack, &mut rng);
                             let foot = foot_of(&x, a);
                             let t0 = onset as f64 / sr as f64 - T0_BEFORE_S;
                             let r = refine_rule_peak(&x, t0, sr, &[], RefineWindow::DEFAULT, rule, FM_PEAK_DB);
