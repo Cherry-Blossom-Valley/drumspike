@@ -428,7 +428,7 @@ fn run_one(
                     let mut best: Option<(f64, CrossMark)> = None;
                     for &(t, m) in &kept_keys {
                         let d = (t - e.t).abs();
-                        if d <= KEY_MATCH_MS && best.map_or(true, |(bd, _)| d < bd) {
+                        if d <= KEY_MATCH_MS && best.is_none_or(|(bd, _)| d < bd) {
                             best = Some((d, m));
                         }
                     }
