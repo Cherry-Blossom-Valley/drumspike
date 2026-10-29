@@ -46,6 +46,8 @@
     ]},
     {"id": "p4-import", "steps": [
       {"do": "caption", "text": "File > Add Tracks…"},
+      {"do": "zoom_to", "track": "k_in", "t": 16.0938, "span": 5,
+       "err": "the session view before the first pointer step (the recording standard)"},
       {"do": "answer_pick", "path": "{projects}/Demo/Exports"},
       {"do": "key", "press": "Shift+Meta+I"},
       {"do": "visible", "sel": "#tracksModal", "timeout": 30, "err": "the Add Tracks list of the export folder"},
