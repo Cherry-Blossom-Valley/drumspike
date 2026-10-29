@@ -416,7 +416,33 @@ def test_the_part2_undo_scene_closes_the_dialog_about_3_s_after_it_opens():
 
 # ---------------- the DOM guard (the part1 private paths, coordinator review 6403564803) ----------------
 
-class ExportPage(StubPage):
+class LanePage(StubPage):
+    """A page with the mouse and the lane geometry the real lane steps use."""
+
+    BOX = {"x": 90.0, "y": 200.0, "width": 1800.0, "height": 120.0}
+
+    def __init__(self, clock):
+        super().__init__(clock)
+        self.mouse = SimpleNamespace(
+            click=lambda x, y: self._tick(("mouse", "click", x, y)),
+            move=lambda x, y, steps=1: self._tick(("mouse", "move", x, y)),
+            down=lambda: self._tick(("mouse", "down")),
+            up=lambda: self._tick(("mouse", "up")))
+
+    def evaluate(self, js, *a):
+        if js == record.LANE_X_JS:
+            self._tick(("evaluate", js, a))
+            return 900.0   # the page x of the asked time
+        return super().evaluate(js, *a)
+
+    def locator(self, sel):
+        self._tick(("locator", sel))
+        # the real locator scrolls the row into view first (13 rows scroll); the stub models it
+        return SimpleNamespace(scroll_into_view_if_needed=lambda: self._tick(("scroll_into_view", sel)),
+                               bounding_box=lambda: dict(self.BOX))
+
+
+class ExportPage(LanePage):
     """A stub that models the two private-path leaks of the old part1: the status bar keeps
     'created Demo in <work home>' after the new project (the app's own setMsg) and #exDest
     holds the work-home path after exRender re-renders the input — at the Export click and
@@ -451,6 +477,8 @@ class ExportPage(StubPage):
             self._ex_render()   # the awaited answers re-render once more, after the last show_dest
 
     def evaluate(self, js, *a):
+        if js == record.LANE_X_JS:
+            return super().evaluate(js, *a)   # LanePage answers the lane geometry
         self._tick(("evaluate", js, a))
         if js == record.MODALS_JS:
             return []
@@ -607,32 +635,6 @@ def test_show_steps_need_their_text():
         record.parse_scenario({"scenes": [{"id": "s", "steps": [{"do": "show_dest"}]}]})
     with pytest.raises(record.RecordError, match="show_text step needs"):
         record.parse_scenario({"scenes": [{"id": "s", "steps": [{"do": "show_text", "text": "x"}]}]})
-
-
-class LanePage(StubPage):
-    """A page with the mouse and the lane geometry the real lane steps use."""
-
-    BOX = {"x": 90.0, "y": 200.0, "width": 1800.0, "height": 120.0}
-
-    def __init__(self, clock):
-        super().__init__(clock)
-        self.mouse = SimpleNamespace(
-            click=lambda x, y: self._tick(("mouse", "click", x, y)),
-            move=lambda x, y, steps=1: self._tick(("mouse", "move", x, y)),
-            down=lambda: self._tick(("mouse", "down")),
-            up=lambda: self._tick(("mouse", "up")))
-
-    def evaluate(self, js, *a):
-        if js == record.LANE_X_JS:
-            self._tick(("evaluate", js, a))
-            return 900.0   # the page x of the asked time
-        return super().evaluate(js, *a)
-
-    def locator(self, sel):
-        self._tick(("locator", sel))
-        # the real locator scrolls the row into view first (13 rows scroll); the stub models it
-        return SimpleNamespace(scroll_into_view_if_needed=lambda: self._tick(("scroll_into_view", sel)),
-                               bounding_box=lambda: dict(self.BOX))
 
 
 def test_a_lane_click_and_a_drag_move_the_real_mouse():
