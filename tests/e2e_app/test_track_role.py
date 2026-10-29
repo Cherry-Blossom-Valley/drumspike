@@ -103,7 +103,7 @@ def test_a_role_change_swaps_the_header_icon_at_once(app, make_project):
     role_sel(app).select_option("snare")
     app.wait_for_function(
         "k => { const s = document.querySelector(\".track[data-name='Clap_01'] .thead .tart svg\");"
-        " return s && s.innerHTML !== k && s.innerHTML.includes('rect'); }",        arg=other_icon)
+        " return s && s.innerHTML !== k && s.innerHTML.includes('ellipse'); }",        arg=other_icon)
     assert app.evaluate("() => S.tracks['Clap_01'].role") == "snare"
     menu(app, "undo")
     app.wait_for_function(

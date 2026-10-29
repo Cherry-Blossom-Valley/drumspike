@@ -772,13 +772,20 @@ function followersOf(name) { return S.order.filter(n => S.tracks[n] && S.tracks[
 /* 0.9.3: the role icon of the track header (inline SVG, no image files, no external fonts).
    #9: the instrument drawings of the header, 48x48. */
 const ROLE_ICONS = {
-  // #9: the instrument drawings, 48x48, outline style, stroke currentColor.
-  kick: '<circle cx="24" cy="17" r="12"/><path d="M24 2.5v3M24 28.5v3M9 17h3M36 17h3M12.7 5.7l2.1 2.1M33.2 5.7l-2.1 2.1M12.7 28.3l2.1-2.1M33.2 28.3l-2.1-2.1"/><path d="M13 26.5 9 33M35 26.5l4 6.5"/><path d="M24 29v6M24 35h12M28 35v4"/><circle cx="24" cy="30.5" r="1.8" fill="currentColor" stroke="none"/>',
-  snare: '<rect x="9" y="15" width="30" height="11" rx="2"/><path d="M7 15h34M7 26h34M15 15v11M21 15v11M27 15v11M33 15v11M24 26v7M24 33l-8 8M24 33l8 8"/>',
-  tom: '<rect x="9" y="11" width="30" height="16" rx="2"/><path d="M15 11v16M21 11v16M27 11v16M33 11v16M7 11h34M11 27v12M24 27v12M37 27v12"/>',
-  hat: '<ellipse cx="24" cy="15" rx="13" ry="3"/><ellipse cx="24" cy="21" rx="10" ry="2.5"/><path d="M24 12V6M24 23.5V33M24 33l-9 9M24 33l9 9M15 42h6"/>',
-  cymbal: '<ellipse cx="24" cy="15" rx="15" ry="3.5"/><circle cx="24" cy="15" r="2" opacity=".6"/><path d="M24 18.5V33M24 33l-9 9M24 33l9 9"/>',
-  other: '<rect x="19" y="5" width="10" height="15" rx="5"/><path d="M21 10h6M21 14h6M15 15v3a9 9 0 0 0 18 0v-3M24 27v8M17 38h14"/>',
+  // #9, review 2: 3/4-view instrument drawings, 48x48, stroke currentColor with a light
+  // same-colour fill; the header element gets the track colour (setHeadIcon).
+  // kick: the round front head with tension rods, the spurs and the pedal.
+  kick: '<g fill="none"><circle cx="24" cy="16" r="12"/><circle cx="24" cy="16" r="12" fill="currentColor" fill-opacity=".12"/><path d="M24 1.5v3M24 27.5v3M9 16h3M36 16h3M12.7 4.7l2.1 2.1M33.2 4.7l-2.1 2.1M12.7 27.3l2.1-2.1M33.2 27.3l-2.1-2.1"/><path d="M13 25.5 8.5 33M35 25.5l4.5 7.5"/><path d="M24 28v7M24 35h12M28 35v4"/><circle cx="24" cy="30.5" r="1.8" fill="currentColor" stroke="none"/></g>',
+  // snare: short and wide shell, the top head as an ellipse, lugs, hoop, tripod.
+  snare: '<g fill="none"><path d="M8 15 10.5 26M40 15 37.5 26"/><path d="M10.5 26A14 4.5 0 0 0 37.5 26" /><ellipse cx="24" cy="15" rx="16" ry="5" fill="currentColor" fill-opacity=".12"/><ellipse cx="24" cy="15" rx="13.5" ry="4"/><path d="M11 21h4M33 21h4M17 22.5h3M28 22.5h3"/><path d="M24 29v4M24 33l-8 8M24 33l8 8"/></g>',
+  // tom: the deeper floor tom on three straight legs.
+  tom: '<g fill="none"><path d="M9 10 11.5 32M39 10 36.5 32"/><path d="M11.5 32A13 4.5 0 0 0 36.5 32"/><ellipse cx="24" cy="10" rx="15" ry="4.5" fill="currentColor" fill-opacity=".12"/><ellipse cx="24" cy="10" rx="12.5" ry="3.5"/><path d="M12 17h4M32 17h4M13.5 24h3.5M31 24h3.5"/><path d="M12 33l-2.5 9M24 33v9M36 33l2.5 9"/></g>',
+  // hat: two cymbals on a stand, the footboard of the pedal.
+  hat: '<g fill="none"><ellipse cx="24" cy="14" rx="14" ry="4" fill="currentColor" fill-opacity=".12"/><ellipse cx="24" cy="20" rx="11.5" ry="3.2"/><path d="M24 10.5V6M24 23v10M24 33l-9 9M24 33l9 9"/><path d="M15 42h9"/></g>',
+  // cymbal: a tilted ellipse with a bell on a stand (the crash/ride of the overheads).
+  cymbal: '<g fill="none"><g transform="rotate(-10 24 15)"><ellipse cx="24" cy="15" rx="17" ry="4.5" fill="currentColor" fill-opacity=".12"/><ellipse cx="24" cy="15" rx="17" ry="4.5"/><circle cx="24" cy="13" r="2.6"/></g><path d="M24 20v13M24 33l-9 9M24 33l9 9"/></g>',
+  // other: the microphone (room, clap and every role without its own drum).
+  other: '<g fill="none"><rect x="18" y="4" width="12" height="17" rx="6" fill="currentColor" fill-opacity=".12"/><rect x="18" y="4" width="12" height="17" rx="6"/><path d="M20 9h8M20 13h8M20 17h8M14 15v3a10 10 0 0 0 20 0v-3M24 28v9M15 40h18"/></g>',
 };
 function roleIconEl(role) {   // a role name is a fixed key, never data: the markup is ours
   const s = document.createElement("span"); s.className = "tart";
@@ -786,10 +793,13 @@ function roleIconEl(role) {   // a role name is a fixed key, never data: the mar
   s.title = `role: ${role}`;
   return s;
 }
-function setHeadIcon(row, role) {   // the drawing sits right-aligned in the header's free area; a role change swaps it at once
+function setHeadIcon(row, role) {   // the drawing sits right-aligned in the header's free area, in the track colour
   const th = row.querySelector(".thead"); if (!th) return;
   const cur = th.querySelector(".tart"); if (cur) cur.remove();
-  th.appendChild(roleIconEl(role));
+  const s = roleIconEl(role);
+  const t = S.tracks[row.dataset.name];   // #9 review 2: the drawing takes the track colour
+  if (t && t.color) s.style.color = t.color;
+  th.appendChild(s);
 }
 function roleLineText(t) { return `${t.role} · ${nameFromNote(t.note)} (${t.note})` + (t.follows ? ` · follows ${t.follows}` : ""); }
 function followerLocked(name) {   // true (with the message) when the track's hits are derived from another track
@@ -6273,7 +6283,7 @@ function setTrackHeight(name, save) {
   S.trackHeight = name;
   const h = TRACK_HEIGHTS[name], st = document.documentElement.style;
   st.setProperty("--spike-h", `${h.spike}px`); st.setProperty("--wave-h", `${h.wave}px`);
-  st.setProperty("--tart-size", name === "large" ? "56px" : "44px");   // #9: the header drawing scales with the height
+  st.setProperty("--tart-size", name === "large" ? "76px" : "64px");   // #9: the header drawing scales with the height
   if (Object.keys(S.rowH).length) setRowHeights(S.rowH);   // #167: the factors follow the new global height (the zoom scales every lane)
   $("#lanesScroll").dataset.height = name;
   if (save !== false && B.appSettingsSet) B.appSettingsSet("track_height", name).catch(e => setMsg(`settings: ${errText(e)}`));

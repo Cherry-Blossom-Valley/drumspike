@@ -137,8 +137,8 @@ canvas.mxCan { width: 240px; height: 40px; display: block; border-radius: 3px; }
    #9: an instrument drawing right-aligned in the header's free area, sized with the track
    height (--tart-size, set in setTrackHeight); hidden at Small. A role change swaps it
    (refreshHeadRole). pointer-events off: the header tooltip and the click/drag stay. */
-.tart { position: absolute; right: 26px; bottom: 10px; width: var(--tart-size, 44px); height: var(--tart-size, 44px);
-  color: var(--dim); opacity: 0.85; pointer-events: none; }
+.tart { position: absolute; right: 26px; bottom: 8px; width: var(--tart-size, 64px); height: var(--tart-size, 64px);
+  color: var(--dim); opacity: 0.95; pointer-events: none; }
 .tart svg { display: block; width: 100%; height: 100%; }
 #lanesScroll[data-height="small"] .tart { display: none; }
 .tdot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }   /* the Inspector's colour dot */
