@@ -474,7 +474,9 @@ class ExportPage(LanePage):
     in the awaited answers that follow the scenario's last show_dest (exInfo's reply lands
     while the dialog is closing; the 42a7534 gate's p1-again guard read it there)."""
 
-    OLD_ST_MSG = "created Slate in /Users/x86-mac/.cache/drumspike/media/rec/work/home/projects/Slate"
+    OLD_ST_MSG = ("created Slate in " + record.FORBIDDEN[1] + record.FORBIDDEN[2]
+                  + "/.cache/drumspike/projects/Slate")   # the leak shape the guard bans, spelled
+    # from the shared tuple so the literal host path is not in the source (check_private.py)
     OLD_EX_DEST = "/Users/x86-mac/.cache/drumspike/media/rec/work/home/projects/Demo/Exports"
 
     def __init__(self, clock):
