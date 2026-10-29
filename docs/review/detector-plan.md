@@ -343,6 +343,30 @@ snare, see the split above), and decide on the measured table: add hi-hat and ov
 sources of A6 with a threshold set on ENST, or record why the rule cannot separate them.
 No detector change in this package before the table is in the report.
 
+Step 1 (#96), measured per rule (`enst_tom_fp.py`, the same 210 items, detector fingerprint
+ed6f68065d2bfafc, reporting only: the flags and every score stay the same as main; the gate
+rows of the tree and of main's build agree to 3 decimals). Rule names come from the core
+rules' own marks (`TomBleed::by`): CD, v2-kick, v2-snare, v5-kick, and `pair` for the v3
+pair rule. A hit can have several rules; the first-rule table uses the fixed order CD >
+v2-kick > v2-snare > pair > v5-kick:
+
+| drummer | CD | v2-kick | v2-snare | pair | v5-kick | cut | unattributed | sum | flagged total |
+|---|---|---|---|---|---|---|---|---|---|
+| drummer_1 | 51 | 9 | 120 | 3 | 44 | 0 | 0 | 227 | 227 |
+| drummer_2 | 66 | 149 | 110 | 1 | 520 | 0 | 0 | 846 | 846 |
+| drummer_3 | 568 | 477 | 767 | 1 | 770 | 0 | 0 | 2583 | 2583 |
+
+The per-rule sums equal the flagged totals (the added check of this package passes on the
+first-rule view). A6 dropped 447 / 935 / 1413 candidates; A6 survived to the CD step 0 / 0 / 0,
+so the A6 overwrite question (#97) closes on this measurement.
+
+Hat cause, the FPs left (2423 of the 6232 scored; left share 38.9 %, limit 50 %, information
+only in this step): the A6 lead (ms) quartiles p25 / p50 / p75 are -0.11 / 0.07 / 0.20, and the
+A6 level (dB against the coinciding source hit) quartiles are -21.22 / -19.75 / -18.27. 2386 of
+the 2423 have no A6 keys (no coinciding A6 hit, by design). These quartiles describe the hat FPs
+only; whether a threshold separates them from the real hat strokes is not measured yet, and
+step 2 tests it against the own annotations.
+
 Gate that can fail: `uv run python tools/eval/enst_tom_fp.py` already FAILs when the cause
 counts do not sum to the total or when the `none` share is above 10 % (today: PASS, 0.6 %).
 The work package adds two checks to it: the per-rule columns must sum to the flagged total,
