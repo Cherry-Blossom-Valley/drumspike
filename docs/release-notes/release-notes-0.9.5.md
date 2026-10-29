@@ -1,6 +1,7 @@
 Changes since 0.9.4:
 
 ### Lanes
+- The playhead keeps moving smoothly while the computer is busy (for example during a large build): frames drawn between two clock updates no longer lose the playhead.
 - Drag the bottom edge of a track header to change that track's height, as on the lane edge; a double-click resets it.
 - New keys: Option+Cmd+1/2/3 for Track Height Small/Medium/Large, Shift+B for the Bars|Beats ruler, Shift+R for the Markers ruler.
 
