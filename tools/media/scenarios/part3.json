@@ -87,6 +87,8 @@
     ]},
     {"id": "p3-grid", "area_sel": ".track[data-name=\"s_top\"] canvas.spike", "steps": [
       {"do": "caption", "text": "View > Show Bar and Beat Grid"},
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5,
+       "err": "a defined 5 s view for the pair (the grid lines are dropped under 6 px apart: a wider view shows none)"},
       {"do": "key", "press": "G", "err": "reset: the grid is on by default, this G hides it so the scene's G shows it"},
       {"do": "wait", "cond": "() => TM.gridOn === false", "timeout": 15, "err": "the grid hidden (the reset)"},
       {"do": "hold", "s": 1.5},

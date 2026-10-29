@@ -47,7 +47,8 @@
       {"do": "hold", "s": 1.5},
       {"do": "shot"},
       {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the analysis finished"},
-      {"do": "hold", "s": 2.0}
+      {"do": "hold", "s": 1.5,
+       "err": "the p1c run overran the narration by 153 ms; the holds are pinned at the 1.5 s standard minimum"}
     ]},
     {"id": "p1-role", "area_sel": "#inspector", "steps": [
       {"do": "click", "sel": ".track[data-name=\"new take\"] .thead .tname"},
@@ -75,7 +76,7 @@
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Tab"},
       {"do": "wait", "cond": "() => !document.querySelector('#ilFields').classList.contains('hidden') && document.querySelector('#ilSample').value.length > 0", "timeout": 15, "err": "a snare hit selected (the sample in the info line)"},
-      {"do": "hold", "s": 1.8},
+      {"do": "hold", "s": 1.5},
       {"do": "key", "press": "6"},
       {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms zoom"},
       {"do": "hold", "s": 1.5}
