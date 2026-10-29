@@ -161,6 +161,35 @@ and attack on both corpora: no per-candidate cut on those three measurements sep
 them (the counted distributions are in the #76 probe record). Package 3b probes the false
 side on other dimensions.
 
+#### The measured outcome (#98, the false-side probe, 2026-10-29)
+
+The probe re-derived the #76 keep set exactly: 2871 true / 222 false keeps on the ENST
+items, 0/49, 4/2, 0/1 true/false on Session A/B/C; every keep carries #76's own verdict.
+The kick-band template rebuilt from the candidates reproduces the detector's own
+`similarity` to max 5.9e-07 (service_tool `learn-eval` mode `xprobe`, one decode and
+spectrogram per mic). Three new dimensions per keep: the A6 cross-role claim (the loudest
+co-incident other-mic hit's band level minus the keep's kick-mic band level, 10 ms), the
+competing template (the keep's kick-band flux shape vs every other track's template over
+the same bands) and the inter-onset position (distance to the nearest snare/tom event at
+Sensitivity 50, the containing interval, the position in it). A cut qualifies when it
+keeps >= 99 % of the 2871 ENST true keeps and all 4 session true keeps. The counted best
+cuts, per corpus pooled (the full per-threshold tables are in the probe record):
+
+| Dimension (the removal rule) | ENST true kept | ENST false removed | Session true kept | Session false removed |
+|---|---|---|---|---|
+| xclaim: claimed by a louder co-incident hit (claim > 43.0 dB) | 2847/2871 (99.16 %) | 9/222 | 4/4 | 1/52 |
+| comp: another track's template matches better (margin > -0.005) | 2843/2871 (99.02 %) | 3/222 | 4/4 | 1/52 |
+| gap: far from the snare/tom pattern (d_near > 0.4 ms) | 2844/2871 (99.06 %) | 7/222 | 4/4 | 1/52 |
+| gap: near a pattern hit (d_near < th) | no cut keeps the floor; the best keeps 2842/2871 and removes 3/222, 0/52 | | | |
+| gap: inside a small inter-onset interval (gap < th) | no cut keeps the floor; the best keeps 2842/2871 and removes 3/222, 0/52 | | | |
+
+No dimension separates the false side. The qualifying cuts remove at most 1 of the 52
+session false keeps and 3-9 of the 222 ENST false keeps, and pay 24-28 ENST true keeps
+for that. The false keeps sit where the true keeps sit on xclaim, comp and gap, as they
+do on rel_db, similarity and attack (#76). The rescue's false side has no per-candidate
+cut; package 3's remaining lever for the Session A precision gap is not a candidate
+filter.
+
 ### 4. Review queue ranking: rank by the detector's own gate verdicts
 
 What the code already does: `crates/app/src/confidence.rs`  -  `track_confidence`
