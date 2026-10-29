@@ -189,7 +189,7 @@ pub fn save_as(project: &Project, dir: &Path, name: &str, copy_audio: bool) -> R
     let name = check_name(name)?;
     let pdir = abspath(dir).join(&name);
     if document_path(&pdir).exists() {
-        return Err(ProjectError::Invalid(format!(
+        return Err(ProjectError::Exists(format!(
             "project already exists: {}",
             pdir.display()
         )));
@@ -207,10 +207,10 @@ pub fn save_as(project: &Project, dir: &Path, name: &str, copy_audio: bool) -> R
             let src = match (src, status) {
                 (Some(s), SourceStatus::Ok) => s,
                 (_, status) => {
-                    return Err(ProjectError::Invalid(format!(
-                        "track {tname}: source {}; relink it before Save As",
-                        status.as_str()
-                    )))
+                    return Err(ProjectError::NeedsRelink {
+                        track: tname.to_string(),
+                        reason: status.as_str().to_string(),
+                    })
                 }
             };
             let referenced = build_source(&src, &pdir, "referenced")?;

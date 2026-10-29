@@ -126,6 +126,14 @@
   /* Help > About: the version, what the app does and a button for the third-party list. The version and the
      list come from the shell (B.aboutInfo, B.aboutThirdParty); the plain line is here. Page text goes in with textContent. */
   const ABOUT_SUMMARY = "Drum Spike finds the hits in your close-mic drum tracks and writes MIDI and spike files for them.";
+  /* #18: under the summary line: the CBV logo, the licence line and the two links (their short addresses).
+     A click on a link or on the logo asks the shell to open one fixed address by id (open_link); the
+     page never passes an address. The test bridge records the id in window.__DS_OPEN_LINK__. */
+  const ABOUT_LICENCE = "Drum Spike is free and open source (Apache-2.0).";
+  const ABOUT_LINKS = [
+    ["website", "aboutLinkWebsite", "drumspike.cherry-blossom-valley.com"],
+    ["source", "aboutLinkSource", "github.com/Cherry-Blossom-Valley/drumspike"],
+  ];
   function aboutBox() {
     let m = $q("#aboutModal");
     if (m) return m;
@@ -137,6 +145,20 @@
     el("h3", "aboutTitle").textContent = "About Drum Spike";
     el("p", "aboutVersion", "hint");
     el("p", "aboutSummary").textContent = ABOUT_SUMMARY;
+    const logo = document.createElement("img");
+    logo.id = "aboutLogo"; logo.src = "/brand/cbv-logo-white.png"; logo.alt = "Cherry Blossom Valley"; logo.draggable = false;
+    logo.style.cssText = "display:block;margin:10px auto 4px;height:32px;width:auto;cursor:pointer";
+    logo.onclick = () => { B.openLink("cbv"); };
+    box.appendChild(logo);
+    el("p", "aboutLicence", "hint").textContent = ABOUT_LICENCE;
+    const links = el("p", "aboutLinks");
+    for (const [id, elId, label] of ABOUT_LINKS) {
+      const a = document.createElement("span");
+      a.id = elId; a.textContent = label;
+      a.style.cssText = "cursor:pointer;text-decoration:underline;color:#7ab8ff;margin:0 10px";
+      a.onclick = () => { B.openLink(id); };
+      links.appendChild(a);
+    }
     const third = el("pre", "aboutThird", "hidden selectable"); third.style.cssText = "white-space:pre-wrap;max-height:240px;overflow:auto;font-size:11px";
     const acts = el("div", "aboutActions", "modal-actions");
     const mk = (act, label, cls) => { const b = document.createElement("button"); b.className = "btn" + (cls ? " " + cls : ""); b.textContent = label; b.dataset.act = act; acts.appendChild(b); return b; };

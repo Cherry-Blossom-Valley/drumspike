@@ -36,11 +36,11 @@ use drumspike_core::project::{
 use serde_json::{json, Value};
 
 use crate::autosave;
-use crate::bridge::Channels;
 use crate::error::AppError;
 use crate::jobs::to_json_indent1;
 use crate::lanes::LaneJobs;
 use crate::registry::{lock, Emitter};
+use crate::reply::Channels;
 use crate::{Progress, Service};
 
 /// The commands of this card, as the route map names them.

@@ -324,6 +324,12 @@ function shellMethods(invoke, T) {
       return { name: "Drum Spike", version: "test bridge", core_version: i.core_version, notice: i.notice };
     },
     aboutThirdParty: () => (bridge() ? Promise.resolve("The third-party list is part of the app bundle.") : invoke("about_third_party", {})),
+    /* #18: open one of the fixed About addresses by id (src-tauri/src/about.rs, open_link); the page
+       never passes an address. The test bridge has no browser: it records the id in window.__DS_OPEN_LINK__ */
+    openLink: async id => {
+      if (bridge()) { (window.__DS_OPEN_LINK__ = window.__DS_OPEN_LINK__ || []).push(id); return {}; }
+      return invoke("open_link", { id });
+    },
     /* native pickers: the path, or null */
     pickDir: async (title, start) => {
       const r = await T.dialog.open({ directory: true, multiple: false, title, defaultPath: start || undefined });

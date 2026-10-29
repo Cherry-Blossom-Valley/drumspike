@@ -426,7 +426,7 @@ fn detect_reads_named_tracks_skips_followers_and_cut_hits_and_checks_its_argumen
         None,
     )
     .unwrap();
-    let drumspike_app::bridge::Reply::Json(a) = a else {
+    let drumspike_app::reply::Reply::Json(a) = a else {
         panic!("not JSON")
     };
     assert_eq!(a["tracks"][0]["name"], "k in");

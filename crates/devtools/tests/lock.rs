@@ -8,9 +8,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use common::*;
-use drumspike_app::bridge::Reply;
 use drumspike_app::call::call;
 use drumspike_app::lock::{ProjectLock, LOCK_FILE};
+use drumspike_app::reply::Reply;
 use serde_json::{json, Value};
 
 struct Holder {

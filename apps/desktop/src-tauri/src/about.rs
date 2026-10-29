@@ -7,11 +7,47 @@
 
 use std::path::{Path, PathBuf};
 
+use drumspike_app::AppError;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
 /// The file name of the third-party list in the bundle resources.
 pub const THIRD_PARTY_FILE: &str = "THIRD_PARTY.md";
+
+/// The addresses behind the fixed link ids of the About dialog (#18). The page never passes an
+/// address, only one of these ids, so it cannot open any other address.
+pub const LINK_WEBSITE: &str = "https://drumspike.cherry-blossom-valley.com/";
+pub const LINK_SOURCE: &str = "https://github.com/Cherry-Blossom-Valley/drumspike";
+pub const LINK_CBV: &str = "https://cherry-blossom-valley.com/";
+
+/// The one address of a fixed id; anything else is refused.
+pub fn link_address(id: &str) -> Option<&'static str> {
+    match id {
+        "website" => Some(LINK_WEBSITE),
+        "source" => Some(LINK_SOURCE),
+        "cbv" => Some(LINK_CBV),
+        _ => None,
+    }
+}
+
+/// #18: open one of the fixed addresses of the About dialog by id (`open <address>` on macOS).
+#[tauri::command]
+pub fn open_link(id: String) -> Result<Value, AppError> {
+    let addr = link_address(&id).ok_or_else(|| AppError::not_found(format!("unknown link id: {id}")))?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = addr;
+        Err(AppError::internal("open_link is a macOS feature"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(addr)
+            .status()
+            .map_err(|e| AppError::internal(format!("open: {e}")))?;
+        Ok(Value::Null)
+    }
+}
 
 /// The answer of `about_info`: `name`, `version` and `core_version` (main is model-free, #281 D16).
 pub fn about_value(version: &str) -> Value {
@@ -101,9 +137,31 @@ mod tests {
     }
 
     #[test]
+    fn the_three_link_ids_map_to_exactly_the_three_addresses() {
+        assert_eq!(
+            link_address("website"),
+            Some("https://drumspike.cherry-blossom-valley.com/")
+        );
+        assert_eq!(
+            link_address("source"),
+            Some("https://github.com/Cherry-Blossom-Valley/drumspike")
+        );
+        assert_eq!(link_address("cbv"), Some("https://cherry-blossom-valley.com/"));
+    }
+
+    #[test]
+    fn an_unknown_link_id_is_refused() {
+        assert!(link_address("").is_none());
+        assert!(link_address("Website").is_none());
+        assert!(link_address("cbv ").is_none());
+        assert!(link_address("https://example.com").is_none());
+        assert!(link_address("../../etc/passwd").is_none());
+    }
+
+    #[test]
     fn both_commands_are_in_the_two_handler_lists() {
         let lib = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")).unwrap();
-        for name in ["about::about_info", "about::about_third_party"] {
+        for name in ["about::about_info", "about::about_third_party", "about::open_link"] {
             assert_eq!(
                 lib.matches(name).count(),
                 2,
