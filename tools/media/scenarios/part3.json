@@ -2,6 +2,8 @@
   "name": "part3",
   "title": "Screen recording, part 3: followers, layers and tempo (#337)",
   "script": "docs/product/scripts/rec-part3.md",
+  "standard": true,
+  "drift_limit_ms": 10,
   "viewport": {"width": 1920, "height": 1080},
   "device_scale_factor": 2,
   "skip": [],
@@ -10,7 +12,7 @@
   "out": "~/.cache/drumspike/media/rec/part3.mp4",
   "session_files": [{"from": "{demo}/k out.wav", "as": "k sub.wav"}],
   "scenes": [
-    {"id": "p3-follow", "steps": [
+    {"id": "p3-follow", "area_sel": "#tracksModal", "steps": [
       {"do": "caption", "text": "File > Add Tracks…"},
       {"do": "answer_pick", "path": "{session}/Audio Files"},
       {"do": "key", "press": "Shift+Meta+I"},
@@ -18,30 +20,31 @@
       {"do": "wait", "cond": "() => { const w = document.querySelector('#tracksRows .urow[data-stem=\\\"k sub\\\"] .ufollowWrap'); return w && !w.classList.contains('hidden') && document.querySelector('#tracksRows .urow[data-stem=\\\"k sub\\\"] .ufollow').checked; }", "timeout": 30, "err": "the sub mic row has the follow check, on"},
       {"do": "hold", "s": 1.5},
       {"do": "click", "sel": "#tracksCancel", "timeout": 15, "err": "the dialog closed, the check left on"},
-      {"do": "wait", "cond": "() => document.querySelector('#tracksModal').classList.contains('hidden')", "timeout": 15, "err": "the Add Tracks dialog closed"}
+      {"do": "wait", "cond": "() => document.querySelector('#tracksModal').classList.contains('hidden')", "timeout": 15, "err": "the Add Tracks dialog closed"},
+      {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p3-follow2", "steps": [
+    {"id": "p3-follow2", "area_sel": ".track[data-name=\\\"k_out\\\"]", "steps": [
       {"do": "caption", "text": "Track > Own Detection"},
-      {"do": "click", "sel": ".track[data-name=\"k_out\"] .thead .tname", "timeout": 15, "err": "the sub mic selected"},
-      {"do": "hold", "s": 1.0},
-      {"do": "hold", "s": 1.0}
+      {"do": "click", "sel": ".track[data-name=\\\"k_out\\\"] .thead .tname", "timeout": 15, "err": "the sub mic selected"},
+      {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-layer", "steps": [
+    {"id": "p3-layer", "area_sel": "#inspector", "steps": [
       {"do": "caption", "text": "The Layer section of the Inspector"},
-      {"do": "click", "sel": ".insSec[data-sec=\"layer\"] .insSecHead", "timeout": 15, "err": "the Layer section of the Inspector"},
-      {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\"layer\"] .lyZone')", "timeout": 15, "err": "the drop zone of the layer"},
+      {"do": "click", "sel": ".insSec[data-sec=\\\"layer\\\"] .insSecHead", "timeout": 15, "err": "the Layer section of the Inspector"},
+      {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\\\"layer\\\"] .lyZone')", "timeout": 15, "err": "the drop zone of the layer"},
+      {"do": "hold", "s": 1.5},
       {"do": "answer_pick", "path": "{work}/one-shot.wav"},
-      {"do": "click", "sel": ".insSec[data-sec=\"layer\"] .lyChoose", "timeout": 15, "err": "Choose…"},
-      {"do": "text", "sel": ".insSec[data-sec=\"layer\"] .lyFile", "contains": "one-shot.wav", "timeout": 30, "err": "the one-shot in the zone"},
+      {"do": "click", "sel": ".insSec[data-sec=\\\"layer\\\"] .lyChoose", "timeout": 15, "err": "Choose…"},
+      {"do": "text", "sel": ".insSec[data-sec=\\\"layer\\\"] .lyFile", "contains": "one-shot.wav", "timeout": 30, "err": "the one-shot in the zone"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-layer2", "steps": [
+    {"id": "p3-layer2", "area_sel": "#inspector", "steps": [
       {"do": "caption", "text": "The Onset view"},
-      {"do": "click", "sel": ".insSec[data-sec=\"layer\"] .lyAlign", "timeout": 15, "err": "Align checked"},
-      {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\"layer\"] .lyViewTitle')", "timeout": 30, "err": "the Onset view"},
+      {"do": "click", "sel": ".insSec[data-sec=\\\"layer\\\"] .lyAlign", "timeout": 15, "err": "Align checked"},
+      {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\\\"layer\\\"] .lyViewTitle')", "timeout": 30, "err": "the Onset view"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-tempo", "steps": [
+    {"id": "p3-tempo", "area_sel": "#tempoModal", "steps": [
       {"do": "caption", "text": "Track > Detect Tempo…"},
       {"do": "hold", "s": 0.5},
       {"do": "menu", "id": "detect_tempo", "timeout": 15, "err": "Track > Detect Tempo…"},
@@ -49,12 +52,15 @@
       {"do": "hold", "s": 1.5},
       {"do": "click", "sel": "#tempoAccept", "timeout": 15, "err": "Accept"},
       {"do": "wait", "cond": "() => document.querySelector('#tempoModal').classList.contains('hidden')", "timeout": 15, "err": "the dialog accepted"},
-      {"do": "wait", "cond": "() => ((document.querySelector('#stMsg') || {}).textContent || '').startsWith('tempo map')", "timeout": 15, "err": "the detected map committed (the accept's commit is async; the next scene edits the map)"}
+      {"do": "wait", "cond": "() => ((document.querySelector('#stMsg') || {}).textContent || '').startsWith('tempo map')", "timeout": 15, "err": "the detected map committed (the accept's commit is async; the next scene edits the map)"},
+      {"do": "hold", "s": 1.5}
     ]},
     {"id": "p3-bar1", "steps": [
       {"do": "caption", "text": "Track > Set Bar 1 at Playhead"},
       {"do": "key", "press": "Tab"},
+      {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Tab"},
+      {"do": "hold", "s": 1.5},
       {"do": "menu", "id": "set_bar1", "timeout": 15, "err": "Track > Set Bar 1 at Playhead"},
       {"do": "wait", "cond": "() => TM.map && Math.abs((TM.map.bar1_s || 0) - S.playhead) < 0.001", "timeout": 15, "err": "bar 1 at the playhead"},
       {"do": "hold", "s": 2.0}
@@ -69,17 +75,18 @@
     {"id": "p3-grid", "steps": [
       {"do": "caption", "text": "View > Show Bar and Beat Grid"},
       {"do": "key", "press": "G"},
-      {"do": "hold", "s": 1.0},
-      {"do": "hold", "s": 1.0}
+      {"do": "hold", "s": 2.0}
     ]},
     {"id": "p3-click", "steps": [
       {"do": "caption", "text": "Transport > Metronome Click"},
       {"do": "key", "press": "C"},
+      {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Space"},
       {"do": "wait", "cond": "() => S.playing", "timeout": 15, "err": "the click plays with the hits"},
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Space"},
-      {"do": "wait", "cond": "() => !S.playing", "timeout": 15, "err": "playback stopped"}
+      {"do": "wait", "cond": "() => !S.playing", "timeout": 15, "err": "playback stopped"},
+      {"do": "hold", "s": 1.5}
     ]},
     {"id": "p3-end", "steps": [
       {"do": "caption", "text": "Next: automate it"},

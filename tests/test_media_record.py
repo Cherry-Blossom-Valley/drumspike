@@ -216,7 +216,8 @@ def test_the_one_shot_is_the_head_of_the_sub_mic(tmp_path):
 def test_the_part3_layer_scene_picks_the_work_one_shot():
     raw = json.loads((ROOT / "tools/media/scenarios/part3.json").read_text())
     layer = next(sc for sc in raw["scenes"] if sc["id"] == "p3-layer")
-    assert layer["steps"][3] == {"do": "answer_pick", "path": "{work}/one-shot.wav"}
+    pick = [st for st in layer["steps"] if st["do"] == "answer_pick"]  # the hold of the standard sits before it
+    assert pick == [{"do": "answer_pick", "path": "{work}/one-shot.wav"}]
 
 
 # ---------------- the scene timing (a stub page) ----------------
