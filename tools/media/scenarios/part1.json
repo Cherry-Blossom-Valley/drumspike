@@ -10,7 +10,7 @@
   "narration": {"tts_out": "~/.cache/drumspike/media/tts-out/rec-part1"},
   "out": "~/.cache/drumspike/media/rec/part1.mp4",
   "scenes": [
-    {"id": "p1-new", "area_sel": "#lanesScroll", "steps": [
+    {"id": "p1-new", "area_sel": "#statusbar", "steps": [
       {"do": "caption", "text": "File > New Project…"},
       {"do": "hold", "s": 0.6},
       {"do": "answer_save", "path": "{projects}/Demo"},

@@ -18,10 +18,10 @@
       {"do": "answer_pick", "path": "{session}/Audio Files"},
       {"do": "key", "press": "Shift+Meta+I"},
       {"do": "visible", "sel": "#tracksModal", "timeout": 30, "err": "the Add Tracks list"},
-      {"do": "wait", "cond": "() => { const w = document.querySelector('#tracksRows .urow[data-stem=\\\"k sub\\\"] .ufollowWrap'); return w && !w.classList.contains('hidden') && w.querySelector('.ufollow').checked; }", "timeout": 30, "err": "the sub mic row has the follow check, on"},
+      {"do": "wait", "cond": "() => { const w = document.querySelector('#tracksRows .urow[data-stem=\"k sub\"] .ufollowWrap'); return w && !w.classList.contains('hidden') && w.querySelector('.ufollow').checked; }", "timeout": 30, "err": "the sub mic row has the follow check, on"},
       {"do": "hold", "s": 1.5},
       {"do": "click", "sel": "#tracksAdd", "timeout": 15, "err": "Add: the k sub track lands with the follow on"},
-      {"do": "wait", "cond": "() => document.querySelector('#tracksModal').classList.contains('hidden') && !!document.querySelector('.track[data-name=\\\"k_sub\\\"]')", "timeout": 120, "err": "the dialog closed and the k sub track is in the session"},
+      {"do": "wait", "cond": "() => document.querySelector('#tracksModal').classList.contains('hidden') && !!document.querySelector('.track[data-name=\"k_sub\"]')", "timeout": 120, "err": "the dialog closed and the k sub track is in the session"},
       {"do": "hold", "s": 1.5}
     ]},
     {"id": "p3-follow2", "area_sel": ".track[data-name=\"k_sub\"]", "steps": [
@@ -48,12 +48,12 @@
       {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\"layer\"] .lyViewTitle')", "timeout": 30, "err": "the Onset view"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-tempo", "area_sel": "#mapRulers .mrow[data-ruler=\\\"tempo\\\"]", "steps": [
+    {"id": "p3-tempo", "area_sel": "#mapRulers .mrow[data-ruler=\"tempo\"]", "steps": [
       {"do": "caption", "text": "Track > Detect Tempo…"},
       {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "hold", "s": 0.5},
       {"do": "menu", "id": "ruler_tempo", "timeout": 15, "err": "View > Tempo Ruler (the map lands here)"},
-      {"do": "wait", "cond": "() => { const r = document.querySelector('#mapRulers .mrow[data-ruler=\\\"tempo\\\"]'); return r && !r.classList.contains('hidden'); }", "timeout": 15, "err": "the tempo ruler shown"},
+      {"do": "wait", "cond": "() => { const r = document.querySelector('#mapRulers .mrow[data-ruler=\"tempo\"]'); return r && !r.classList.contains('hidden'); }", "timeout": 15, "err": "the tempo ruler shown"},
       {"do": "hold", "s": 1.5},
       {"do": "shot"},
       {"do": "menu", "id": "detect_tempo", "timeout": 15, "err": "Track > Detect Tempo…"},
@@ -77,7 +77,7 @@
       {"do": "wait", "cond": "() => TM.map && Math.abs((TM.map.bar1_s || 0) - S.playhead) < 0.001", "timeout": 15, "err": "bar 1 at the playhead"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-import", "area_sel": "#mapRulers .mrow[data-ruler=\\\"tempo\\\"]", "steps": [
+    {"id": "p3-import", "area_sel": "#mapRulers .mrow[data-ruler=\"tempo\"]", "steps": [
       {"do": "caption", "text": "File > Import Tempo Map…"},
       {"do": "answer_pick", "path": "{work}/tempo.mid"},
       {"do": "menu", "id": "import_tempo_map", "timeout": 15, "err": "File > Import Tempo Map…"},
