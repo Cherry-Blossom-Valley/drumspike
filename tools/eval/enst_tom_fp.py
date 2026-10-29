@@ -1,4 +1,4 @@
-"""Where the tom false positives of the DSP detector come from (Detector #8 package 8, ticket #90).
+"""Where the tom false positives of the DSP detector come from (Detector #8 package 8, tickets #90 and #96).
 
     uv run python tools/eval/enst_tom_fp.py            # score the dsp run files, print the table, verdict
     uv run python tools/eval/enst_tom_fp.py --max-none 10
@@ -15,12 +15,23 @@ attribution rules already removed from the output, so the table shows which shar
 
 Printed: per drummer and cause the FP count and share (the shares sum to the printed total), per drummer and tom mic
 the pooled P/R/F1 of the gate's semantics next to the per-item matching, and the flagged hits per cause.
-Exit 0 on PASS, 1 on FAIL (the cause shares do not sum to the total, or the share of `none` is above `--max-none`).
+
+#96, per rule (reporting only): a flagged hit carries `by`, the names of the rules that marked it (CD, v2-kick,
+v2-snare, pair, v5-kick; see `TomBleed::by` in the core). Printed: the flagged hits per rule (any rule that fired),
+and per drummer the first rule of each flagged hit in the fixed order RULES (the sum check: the first-rule columns
+add up to the flagged total). A cut hit with no rule is `cut`; a flagged hit with neither is `unattributed` and fails.
+A6 (the cross-track rule) takes its hits out of the events, so its counts come from the track's `detector` record:
+the dropped candidates (`dropped`) and the step-1 marks that reach the CD step (`survive`). The scored hat FPs
+carry `a6_lead_ms` and `a6_level_db`: their quartiles are printed. The hat left-share is information only here.
+
+Exit 0 on PASS, 1 on FAIL (the cause shares do not sum to the total, the share of `none` is above `--max-none`, or the
+first-rule columns do not sum to the flagged total, or a flagged hit has no rule).
 Aggregate numbers only leave this host.
 """
 import argparse
 import json
 import os
+import statistics
 import sys
 from pathlib import Path
 
@@ -34,6 +45,8 @@ CONFIG = "dsp"
 WINDOW = enst.WINDOWS[0]           # the +-50 ms headline window
 CAUSES = ("kick", "snare", "hat", "cymbal", "tom-other", "none")
 TOM_MICS = enst.TOM_MICS
+RULES = ("CD", "v2-kick", "v2-snare", "pair", "v5-kick")   # the fixed order of the first rule
+FIRST_COLS = RULES + ("cut", "unattributed")
 
 
 def item_annotations(evs, tom_map):
@@ -71,17 +84,32 @@ def cause_of(t, mic, anns):
     return role
 
 
+def first_rule(e):
+    """The first rule of a flagged hit in the fixed order RULES; `cut` for a loudness cut without a rule, else
+    `unattributed` (a bleed flag with no rule name)."""
+    by = e.get("by") or []
+    for r in RULES:
+        if r in by:
+            return r
+    return "cut" if e.get("cut") else "unattributed"
+
+
 def score(root, out, tool_fp, log=print):
-    """(counts, flagged, pooled) of the dsp run files: counts[drummer][mic][cause] of the scored FPs, flagged[drummer]
-    [cause] of the flagged hits (bleed or cut) that sit at another drum, pooled[drummer][mic] of the gate semantics."""
+    """(counts, flagged, pooled, rules, hat_a6) of the dsp run files: counts[drummer][mic][cause] of the scored FPs,
+    flagged[drummer][cause] of the flagged hits (bleed or cut) that sit at another drum, pooled[drummer][mic] of the
+    gate semantics, rules[drummer] the #96 per-rule counts (see the module documentation), hat_a6 the (lead, level)
+    keys of the scored hat FPs (None where the key is missing)."""
     idx = enst.index_items(root)
-    counts, flagged, pooled = {}, {}, {}
+    counts, flagged, pooled, rules = {}, {}, {}, {}
+    hat_a6 = []
     for d in enst.DRUMMERS:
         tom_map = enst.tom_mapping(root, d)
         counts[d] = {m: {c: 0 for c in CAUSES} for m in TOM_MICS}
         flagged[d] = {c: 0 for c in CAUSES}
         flagged[d]["own-ref"] = 0
         pooled[d] = {m: {"ref": [], "est": []} for m in TOM_MICS}
+        rules[d] = {"any": {r: 0 for r in RULES}, "first": {c: 0 for c in FIRST_COLS},
+                    "a6": {"dropped": 0, "survive": 0}}
         for stem, item in idx[d].items():
             res = json.loads((out / "run" / CONFIG / d / f"{stem}.json").read_text())
             if res.get("tool_fp") != tool_fp:
@@ -92,13 +120,18 @@ def score(root, out, tool_fp, log=print):
                     continue
                 own = sorted(t for t, role in anns if role == f"tom:{mic}")
                 evs = res["events"][mic]
-                scored = sorted(float(e["t"]) for e in evs if not e.get("bleed") and not e.get("cut"))
+                scored_ev = sorted(((float(e["t"]), e) for e in evs if not e.get("bleed") and not e.get("cut")),
+                                   key=lambda p: p[0])
+                scored = [t for t, _ in scored_ev]
                 pooled[d][mic]["ref"] += own
                 pooled[d][mic]["est"] += scored
                 matched = {j for _, j in enst._match_events(own, scored, WINDOW)}
-                for j, t in enumerate(scored):
+                for j, (t, e) in enumerate(scored_ev):
                     if j not in matched:
-                        counts[d][mic][cause_of(t, mic, anns)] += 1
+                        cause = cause_of(t, mic, anns)
+                        counts[d][mic][cause] += 1
+                        if cause == "hat":
+                            hat_a6.append((e.get("a6_lead_ms"), e.get("a6_level_db")))
                 for e in evs:
                     if not (e.get("bleed") or e.get("cut")):
                         continue
@@ -107,7 +140,23 @@ def score(root, out, tool_fp, log=print):
                         flagged[d]["own-ref"] += 1
                     else:
                         flagged[d][cause_of(t, mic, anns)] += 1
-    return counts, flagged, pooled
+                    by = e.get("by") or []
+                    for r in RULES:
+                        if r in by:
+                            rules[d]["any"][r] += 1
+                    rules[d]["first"][first_rule(e)] += 1
+                cb = ((res.get("detector") or {}).get(mic) or {}).get("cross_bleed") or {}
+                rules[d]["a6"]["dropped"] += len(cb.get("dropped") or [])
+                rules[d]["a6"]["survive"] += int(cb.get("survive") or 0)
+    return counts, flagged, pooled, rules, hat_a6
+
+
+def quartiles(vals):
+    """`p25 / p50 / p75` of the values, `n/a` with fewer than two."""
+    if len(vals) < 2:
+        return "n/a"
+    q = statistics.quantiles(sorted(vals), n=4, method="inclusive")
+    return " / ".join(f"{v:.2f}" for v in q)
 
 
 def main(argv=None):
@@ -133,7 +182,7 @@ def main(argv=None):
     if stale:
         raise SystemExit(f"FAIL: {len(stale)} run file(s) stale or missing (first {stale[0]}); run enst_gate.py first")
 
-    counts, flagged, pooled = score(root, out, tool_fp)
+    counts, flagged, pooled, rules, hat_a6 = score(root, out, tool_fp)
     lines = [f"tom false positives at +-{int(WINDOW * 1000)} ms, config {CONFIG} (build {tool_fp}):", "",
              "Scored FPs per drummer and cause (all tom mics; shares of the drummer's total):", "",
              "| drummer | " + " | ".join(CAUSES) + " | total | shares % (" + " / ".join(CAUSES) + ") |",
@@ -181,6 +230,40 @@ def main(argv=None):
     for d in enst.DRUMMERS:
         lines.append(f"| {d} | " + " | ".join(str(flagged[d][c]) for c in CAUSES) + f" | {flagged[d]['own-ref']} |")
     lines.append("")
+    lines += ["Flagged hits (bleed or cut) per rule, any rule that fired (a hit can count for several rules):", "",
+              "| drummer | " + " | ".join(RULES) + " | A6 dropped | A6 survived to CD |", "|---|" + "---|" * (len(RULES) + 2)]
+    for d in enst.DRUMMERS:
+        rr = rules[d]
+        lines.append(f"| {d} | " + " | ".join(str(rr["any"][r]) for r in RULES)
+                     + f" | {rr['a6']['dropped']} | {rr['a6']['survive']} |")
+    lines.append("")
+    lines += ["Flagged hits per first rule (fixed order " + " > ".join(RULES) + "; cut = a loudness cut with no rule):", "",
+              "| drummer | " + " | ".join(FIRST_COLS) + " | sum | flagged total |", "|---|" + "---|" * (len(FIRST_COLS) + 2)]
+    for d in enst.DRUMMERS:
+        first = rules[d]["first"]
+        fsum = sum(first.values())
+        ftot = sum(flagged[d].values())
+        lines.append(f"| {d} | " + " | ".join(str(first[c]) for c in FIRST_COLS) + f" | {fsum} | {ftot} |")
+        if fsum != ftot:
+            lines.append(f"FAIL: {d} the first-rule columns sum to {fsum}, the flagged total is {ftot}")
+            verdict_ok = False
+    unattributed = sum(rules[d]["first"]["unattributed"] for d in enst.DRUMMERS)
+    if unattributed:
+        lines.append(f"FAIL: {unattributed} flagged hit(s) have no rule name (`by`)")
+        verdict_ok = False
+    lines.append("")
+    hat_leads = [lead for lead, _ in hat_a6 if lead is not None]
+    hat_levels = [lv for _, lv in hat_a6 if lv is not None]
+    hat_missing = sum(1 for lead, level in hat_a6 if lead is None or level is None)
+    hat_removed = sum(flagged[d]["hat"] for d in enst.DRUMMERS)
+    hat_left = grand["hat"]
+    hat_share = 100.0 * hat_left / (hat_left + hat_removed) if hat_left + hat_removed else 0.0
+    lines += [f"Hat FPs left in the output: {len(hat_a6)} of {total} scored tom FPs; A6 lead (ms) quartiles p25 / p50 / p75 "
+              f"(n={len(hat_leads)}): {quartiles(hat_leads)}; A6 level (dB, ratio against the coinciding source hit) "
+              f"quartiles p25 / p50 / p75 (n={len(hat_levels)}): {quartiles(hat_levels)}; without the keys: {hat_missing}",
+              f"hat left-share: {hat_left} / ({hat_left} + {hat_removed}) = {hat_share:.1f} % (the plan's definition: "
+              f"left / (left + removed) of the hat cause; limit 50 %, information only in this step)",
+              ""]
     none_share = gshares["none"]
     if not verdict_ok:
         lines.append("FAIL: the cause counts do not sum to the total FPs")

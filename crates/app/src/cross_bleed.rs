@@ -33,7 +33,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use drumspike_core::analyze::{analyze_detected, role_note, AnalyzeParams};
-use drumspike_core::detect::cross_bleed::{cross_bleed, hit_level, CrossBleedParams, CrossMic, XKind};
+use drumspike_core::detect::cross_bleed::{cross_bleed, hit_level, CrossBleedParams, CrossMark, CrossMic, XKind};
 use drumspike_core::detect::onset::{self, Gate, OnsetParams, Role};
 use drumspike_core::project::Track;
 use drumspike_core::refine::first_motion;
@@ -233,6 +233,21 @@ fn cross_mics<'a>(
 
 /// The rule on one tom close mic: the marks on its events and (with a stored candidate list) the
 /// re-detection with the template exclusion. Returns the track's outcome, `None` when nothing ran.
+/// #96 reporting keys of a hit: the lead (ms) and the level ratio (dB) the rule saw on it, `a6_lead_ms` and
+/// `a6_level_db`. A key is left out when the rule had no coinciding hit. They change no flag, time or count.
+fn set_a6_keys(e: &mut drumspike_core::project::Event, m: CrossMark) {
+    if let Some(lead) = m.lead_ms {
+        e.extra.insert("a6_lead_ms".into(), json!(lead));
+    } else {
+        e.extra.shift_remove("a6_lead_ms");
+    }
+    if let Some(ratio) = m.ratio_db {
+        e.extra.insert("a6_level_db".into(), json!(ratio));
+    } else {
+        e.extra.shift_remove("a6_level_db");
+    }
+}
+
 fn run_one(
     svc: &Service,
     op: &Shared,
@@ -282,10 +297,15 @@ fn run_one(
                 }
             }
         }
+        // #96 reporting keys: the lead and level the rule saw on every hit it judged (no flag changes)
+        for (j, e) in evs.iter_mut().enumerate() {
+            set_a6_keys(e, marks[j]);
+        }
         if let Some(Value::Object(det)) = tr.extra.get_mut("detector") {
+            // `survive`: the step-1 marks that reach the CD step unless the re-detection below replaces the hits
             det.insert(
                 "cross_bleed".into(),
-                json!({"rule": CROSS_BLEED, "on": true, "removed": removed}),
+                json!({"rule": CROSS_BLEED, "on": true, "removed": removed, "survive": removed}),
             );
         }
         g.mark_dirty();
@@ -352,14 +372,45 @@ fn run_one(
         let Ok(analysis) = analyze_detected(&dec_x.samples, sr, "tom", &kept, &params_a) else {
             return Some(json!({"removed": removed, "redetected": redetected}));
         };
-        let det = lock(op)
+        let mut det = lock(op)
             .track(&x_mic.name)
             .ok()
             .and_then(|t| t.extra.get("detector").cloned())
             .unwrap_or_else(|| json!({"detector": "dsp"}));
+        // #96: the dropped candidates with the lead and level the rule saw; the re-detection replaces the step-1 marks
+        if let Some(c) = det.get_mut("cross_bleed") {
+            let dropped_rec: Vec<Value> = dropped
+                .iter()
+                .map(|&j| json!({"t": cands[j].time, "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db}))
+                .collect();
+            c["survive"] = json!(0);
+            c["dropped"] = json!(dropped_rec);
+        }
         if crate::jobs::store_analysis(svc, op, &x_mic.name, (analysis, None), &det, &dec_x, false, true, None).is_err()
         {
             return Some(json!({"removed": removed, "redetected": redetected}));
+        }
+        // #96: the lead and level of the hits A6 kept, on their re-stored events (matched by the candidate's frame)
+        let kept_keys: Vec<(f64, CrossMark)> = hits
+            .iter()
+            .filter(|h| !drop_frames.contains(&h.frame))
+            .filter_map(|h| {
+                cands
+                    .iter()
+                    .position(|c| c.frame == h.frame)
+                    .map(|j| (h.time, marks[j]))
+            })
+            .collect();
+        {
+            let mut g = lock(op);
+            if let Ok(tr) = g.track_mut(&x_mic.name) {
+                for e in tr.events.iter_mut().flatten() {
+                    if let Some((_, m)) = kept_keys.iter().find(|(t, _)| (t - e.t).abs() < 1e-3) {
+                        set_a6_keys(e, *m);
+                    }
+                }
+            }
+            g.mark_dirty();
         }
         // the annotated candidate list back into the analysis dir (the same key)
         if let Err(e) = crate::candidates::write_candidates(&dir, &cands, &params, weak2, &key) {
