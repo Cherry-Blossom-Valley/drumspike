@@ -24,25 +24,25 @@
       {"do": "wait", "cond": "() => document.querySelector('#tracksModal').classList.contains('hidden')", "timeout": 15, "err": "the Add Tracks dialog closed"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p3-follow2", "area_sel": ".track[data-name=\\\"k_out\\\"]", "steps": [
+    {"id": "p3-follow2", "area_sel": ".track[data-name=\"k_out\"]", "steps": [
       {"do": "caption", "text": "Track > Own Detection"},
-      {"do": "click", "sel": ".track[data-name=\\\"k_out\\\"] .thead .tname", "timeout": 15, "err": "the sub mic selected"},
+      {"do": "click", "sel": ".track[data-name=\"k_out\"] .thead .tname", "timeout": 15, "err": "the sub mic selected"},
       {"do": "hold", "s": 2.0}
     ]},
     {"id": "p3-layer", "area_sel": "#inspector", "steps": [
       {"do": "caption", "text": "The Layer section of the Inspector"},
-      {"do": "click", "sel": ".insSec[data-sec=\\\"layer\\\"] .insSecHead", "timeout": 15, "err": "the Layer section of the Inspector"},
-      {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\\\"layer\\\"] .lyZone')", "timeout": 15, "err": "the drop zone of the layer"},
+      {"do": "click", "sel": ".insSec[data-sec=\"layer\"] .insSecHead", "timeout": 15, "err": "the Layer section of the Inspector"},
+      {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\"layer\"] .lyZone')", "timeout": 15, "err": "the drop zone of the layer"},
       {"do": "hold", "s": 1.5},
       {"do": "answer_pick", "path": "{work}/one-shot.wav"},
-      {"do": "click", "sel": ".insSec[data-sec=\\\"layer\\\"] .lyChoose", "timeout": 15, "err": "Choose…"},
-      {"do": "text", "sel": ".insSec[data-sec=\\\"layer\\\"] .lyFile", "contains": "one-shot.wav", "timeout": 30, "err": "the one-shot in the zone"},
+      {"do": "click", "sel": ".insSec[data-sec=\"layer\"] .lyChoose", "timeout": 15, "err": "Choose…"},
+      {"do": "text", "sel": ".insSec[data-sec=\"layer\"] .lyFile", "contains": "one-shot.wav", "timeout": 30, "err": "the one-shot in the zone"},
       {"do": "hold", "s": 2.0}
     ]},
     {"id": "p3-layer2", "area_sel": "#inspector", "steps": [
       {"do": "caption", "text": "The Onset view"},
-      {"do": "click", "sel": ".insSec[data-sec=\\\"layer\\\"] .lyAlign", "timeout": 15, "err": "Align checked"},
-      {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\\\"layer\\\"] .lyViewTitle')", "timeout": 30, "err": "the Onset view"},
+      {"do": "click", "sel": ".insSec[data-sec=\"layer\"] .lyAlign", "timeout": 15, "err": "Align checked"},
+      {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\"layer\"] .lyViewTitle')", "timeout": 30, "err": "the Onset view"},
       {"do": "hold", "s": 2.0}
     ]},
     {"id": "p3-tempo", "steps": [

@@ -110,7 +110,7 @@
     ]},
     {"id": "p2-shape", "steps": [
       {"do": "caption", "text": "Edit > Recompute Velocities"},
-      {"do": "wait", "cond": "() => document.querySelector('.insSec[data-sec=\\\"velocity\\\"] .insSecHead').getAttribute('aria-expanded') === 'true'", "timeout": 15, "err": "the Velocity section open: floor, ceiling, Loudness cut"},
+      {"do": "wait", "cond": "() => document.querySelector('.insSec[data-sec=\"velocity\"] .insSecHead').getAttribute('aria-expanded') === 'true'", "timeout": 15, "err": "the Velocity section open: floor, ceiling, Loudness cut"},
       {"do": "hold", "s": 2.0}
     ]},
     {"id": "p2-end", "steps": [
