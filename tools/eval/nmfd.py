@@ -651,7 +651,7 @@ def main(argv=None):
     ap.add_argument("--score-only", action="store_true", help="the tables from the existing run files")
     ap.add_argument("--out", default=str(OUT))
     a = ap.parse_args(argv)
-    root = os.environ.get("ENST_ROOT", str(Path.home() / ".cache" / "drumspike" / "datasets" / "ENST-drums-public"))
+    root = enst.default_root()
     if not Path(root).is_dir():
         raise SystemExit(f"FAIL: ENST_ROOT {root} is missing")
     out = Path(a.out)
