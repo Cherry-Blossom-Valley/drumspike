@@ -427,10 +427,10 @@ fn analyze_start_runs_the_job_and_stores_events_sr_and_detector() {
     assert!(ev["events"][0]["t"].as_f64().unwrap() > 0.2);
     let t = &svc.tracks_get(&sid).unwrap()["tracks"]["Kick_In"];
     assert_eq!(t["params"], json!({"min_gap_ms": 30, "refine": true}));
-    // P4-12: the record carries the version of the refinement rule the analysis ran (3, stage 2)
+    // P4-12: the record carries the version of the refinement rule the analysis ran (4, the foot, #101)
     assert_eq!(
         t["detector"],
-        json!({"detector": "rust-dsp", "chain": null, "model": null, "refine": 3})
+        json!({"detector": "rust-dsp", "chain": null, "model": null, "refine": 4})
     );
     assert_eq!(t["n_samples"], 168_000);
     assert_eq!(svc.project_get(&sid).unwrap()["dirty"], true);
