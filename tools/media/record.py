@@ -597,7 +597,7 @@ def pw_press(press):
 LANE_X_JS = """([track, t]) => {
   if (typeof S === 'undefined' || !S.tracks || !S.tracks[track]) throw new Error('no track ' + track);
   const x = tToX(t, laneWidth());
-  if (x < 4 || x > laneWidth() - 4) throw new Error('t ' + t + ' is outside the lane view');
+  if (x < 4 || x > laneWidth() - 4) throw new Error('t ' + t + ' is outside the lane view (view '\n    + S.view.t0 + '..' + S.view.t1 + ', playhead ' + S.playhead + ')');
   return GEO.laneX + x;
 }"""
 
