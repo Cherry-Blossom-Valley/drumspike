@@ -4,9 +4,9 @@
    evFailShow, #249 R02) and the clean check (P4-40a). Plain script (no build step), loaded
    after state.js. The functions stay top-level bindings: the e2e tests call markDirty and
    flushEvents and read saveTimers as page globals.
-   persist <-> edit is circular (flushEvents waits for edIdle, edit.js will call markDirty),
-   so edIdle arrives as an injected hook: app.js wires it in boot with persistInit({ edIdle })
-   until edit.js owns it (step 3). */
+   persist <-> edit is circular (flushEvents waits for edIdle, edit.js calls pushEvents),
+   so edIdle arrives as an injected hook: app.js wires it in boot with persistInit({ edIdle });
+   edit.js owns edIdle since step 3. */
 "use strict";
 
 /* ---------------- the injected hooks ----------------

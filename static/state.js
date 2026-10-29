@@ -28,7 +28,6 @@ const S = {
   playReturn: null,    // #207: the play-and-return key that started this play (the next Space or the same key stops and returns)
   muted: {}, solo: {}, clicks: {},
   follow: true,
-  undo: [], redo: [],
   drag: null,
   theadW: 230,
   name: "", dirty: false,   // the open project's name and unsaved-changes flag (P0-8)
