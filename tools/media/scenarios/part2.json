@@ -89,8 +89,9 @@
       {"do": "key", "press": "A"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p2-undo", "area_sel": "#undoHistModal", "steps": [
+    {"id": "p2-undo", "steps": [
       {"do": "caption", "text": "Edit > Undo History…"},
+      {"do": "zoom_to", "track": "s_top", "t": 8.5938, "span": 5},
       {"do": "key", "press": "Meta+Z"},
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Shift+Meta+Z"},

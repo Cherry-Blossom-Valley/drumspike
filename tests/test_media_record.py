@@ -170,7 +170,7 @@ def test_the_part3_scenario_parses_and_matches_the_script():
 def test_the_part3_session_file_is_the_sub_mic_the_wait_targets():
     raw = json.loads((ROOT / "tools/media/scenarios/part3.json").read_text())
     assert raw["session_files"] == [{"from": "{demo}/k out.wav", "as": "k sub.wav"}]
-    cond = raw["scenes"][0]["steps"][4]["cond"]
+    cond = next(st["cond"] for st in raw["scenes"][0]["steps"] if "ufollowWrap" in st.get("cond", ""))  # the standard's zoom_to sits before it
     assert 'data-stem=\\"k sub\\"' in cond
 
 

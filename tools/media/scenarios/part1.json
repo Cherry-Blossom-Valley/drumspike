@@ -22,8 +22,9 @@
        "err": "the status bar of the new project, in the neutral home-relative form"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-add", "area_sel": "#tracksModal", "steps": [
+    {"id": "p1-add", "steps": [
       {"do": "caption", "text": "File > Add Tracks…"},
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "answer_pick", "path": "{session}/Audio Files"},
       {"do": "key", "press": "Shift+Meta+I"},
       {"do": "visible", "sel": "#tracksModal", "timeout": 30, "err": "the Add Tracks list"},
@@ -73,8 +74,9 @@
       {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms zoom"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-export", "area_sel": "#exportModal", "steps": [
+    {"id": "p1-export", "steps": [
       {"do": "caption", "text": "File > Export…"},
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "show_dest", "text": "~/Music/Drum Spike/Exports",
        "err": "the destination in the neutral home-relative form before the dialog opens (shots.py's EXPORTS_SHOWN); the show keeps against the app's own exRender re-renders"},
       {"do": "key", "press": "Meta+E"},

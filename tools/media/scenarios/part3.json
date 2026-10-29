@@ -12,8 +12,9 @@
   "out": "~/.cache/drumspike/media/rec/part3.mp4",
   "session_files": [{"from": "{demo}/k out.wav", "as": "k sub.wav"}],
   "scenes": [
-    {"id": "p3-follow", "area_sel": "#tracksModal", "steps": [
+    {"id": "p3-follow", "steps": [
       {"do": "caption", "text": "File > Add Tracks…"},
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "answer_pick", "path": "{session}/Audio Files"},
       {"do": "key", "press": "Shift+Meta+I"},
       {"do": "visible", "sel": "#tracksModal", "timeout": 30, "err": "the Add Tracks list"},
@@ -44,8 +45,9 @@
       {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\\\"layer\\\"] .lyViewTitle')", "timeout": 30, "err": "the Onset view"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-tempo", "area_sel": "#tempoModal", "steps": [
+    {"id": "p3-tempo", "steps": [
       {"do": "caption", "text": "Track > Detect Tempo…"},
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "hold", "s": 0.5},
       {"do": "menu", "id": "detect_tempo", "timeout": 15, "err": "Track > Detect Tempo…"},
       {"do": "visible", "sel": "#tempoModal", "timeout": 120, "err": "the Detect Tempo dialog: tempo, bar 1, meter, steps"},
