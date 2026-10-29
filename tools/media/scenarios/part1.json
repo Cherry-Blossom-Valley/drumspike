@@ -65,6 +65,7 @@
       {"do": "click", "sel": ".track[data-name=\"s_top\"] .thead .tname"},
       {"do": "hold", "s": 1.5},
       {"do": "lane_click", "track": "s_top", "lane": "wave", "t": 8.585},
+      {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Tab"},
       {"do": "wait", "cond": "() => !document.querySelector('#ilFields').classList.contains('hidden') && document.querySelector('#ilSample').value.length > 0", "timeout": 15, "err": "a snare hit selected (the sample in the info line)"},
       {"do": "hold", "s": 1.8},
