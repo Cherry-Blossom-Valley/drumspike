@@ -1084,6 +1084,46 @@ def test_a_scene_with_a_later_zoom_takes_its_after_picture_before_the_zoom_moves
     assert shots == ["pl-grey-before.png", "pl-grey-after.png"]
 
 
+def test_the_after_picture_survives_a_view_moving_key(tmp_path, monkeypatch):
+    # p1-zoom: Tab and the 5 ms preset move the view after the lane_click; the after PNG is the
+    # last one taken while the view still matched the scene's first zoom, else the measured
+    # window of the moved view throws (the 10 render's window_clip crash).
+    class HoldsView(StubPage):
+        def __init__(self, clock):
+            super().__init__(clock)
+            self.view_still = True   # the page's view still matches the scene's first zoom
+
+        def evaluate(self, js, *a):
+            if js == record.VIEW_HOLDS_JS:
+                self._tick(("evaluate", js, a))
+                return self.view_still
+            return super().evaluate(js, *a)
+
+    shots = []
+    monkeypatch.setattr(record, "shoot_scene",
+                        lambda page, sc, path: (Path(path).write_bytes(b"png"), shots.append(Path(path).name)))
+
+    def run_step(page, st, env):
+        if st.get("press") == "6":
+            page.view_still = False   # the 5 ms preset moves the view
+
+    monkeypatch.setattr(record, "run_step", run_step)
+    clock = Clock()
+    page = HoldsView(clock)
+    scene = {"id": "pl-zoom", "steps": [
+        {"do": "caption", "text": "c"},
+        {"do": "zoom_to", "track": "s_top", "t": 8.5938, "span": 5},
+        {"do": "lane_click", "track": "s_top", "lane": "wave", "t": 8.5},
+        {"do": "hold", "s": 1.5},
+        {"do": "key", "press": "Tab"},
+        {"do": "hold", "s": 1.8},
+        {"do": "key", "press": "6"},
+        {"do": "hold", "s": 1.5}]}
+    record.run_scenes(page, [scene], [8.0], clock=clock, shots=tmp_path)
+    # a candidate before every step while the view held (steps 3-6), promoted at the scene end
+    assert shots == ["pl-zoom-before.png"] + ["pl-zoom-after.cand.png"] * 4
+
+
 class _Lane:
     def __init__(self, box):
         self.box = box

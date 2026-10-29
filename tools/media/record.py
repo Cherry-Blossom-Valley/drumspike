@@ -306,6 +306,22 @@ def zoom_t(sc):
     return next((st["t"] for st in sc["steps"] if st["do"] == "zoom_to"), None)
 
 
+VIEW_HOLDS_JS = """([t, span]) => {
+  if (typeof S === 'undefined' || !S.view) return false;
+  return Math.abs(S.view.t0 - (t - span / 2)) < 1e-6 && Math.abs((S.view.t1 - S.view.t0) - span) < 1e-6;
+}"""
+
+
+def view_holds(page, sc):
+    """True when the page's view is still exactly the scene's first zoom_to (a key such as Tab or a
+    zoom preset can move the view as well as a zoom_to step; the after PNG must be taken before
+    that). False for scenes that name their own frame or do not zoom."""
+    z = next((st for st in sc["steps"] if st["do"] == "zoom_to"), None)
+    if z is None or sc.get("area_sel"):
+        return False
+    return bool(page.evaluate(VIEW_HOLDS_JS, [z["t"], z["span"]]))
+
+
 def window_clip(page, sc):
     """The measured window of a zoomed scene: +/- WINDOW_PX capture pixels around the hit's x (the zoom
     centres the hit), over the spike lane and the wave lane of the zoom's track. Page CSS pixels."""
@@ -754,6 +770,7 @@ def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_mo
         sc_waits = []
         first_act = next((k for k, st in enumerate(sc["steps"]) if st["do"] in ACTION_KINDS), None)
         after_shot = False
+        cand = shots / f"{sc['id']}-after.cand.png" if shots is not None else None
         for k, st in enumerate(sc["steps"]):
             if shots is not None and k == first_act:   # the before PNG: the area as the action finds it
                 shoot_scene(page, sc, shots / f"{sc['id']}-before.png")
@@ -763,6 +780,12 @@ def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_mo
                 # still matches the scene's first zoom (the area of the before PNG).
                 shoot_scene(page, sc, shots / f"{sc['id']}-after.png")
                 after_shot = True
+            elif (cand is not None and first_act is not None and not after_shot and k > first_act
+                    and view_holds(page, sc)):
+                # A key can move the view as well as a zoom_to (Tab to the next hit, a zoom
+                # preset): keep the last after candidate taken while the view still matched
+                # the scene's first zoom; the scene end promotes it, or shoots fresh.
+                shoot_scene(page, sc, cand)
             if st["do"] == "wait":
                 s = clock() - t0
                 try:
@@ -781,7 +804,10 @@ def run_scenes(page, scenes, durations, env=None, clock=time.monotonic, check_mo
                     raise RecordError(f"{sc['id']}: {st.get('err') or st['do']}: {e}") from e
         waits.append(sc_waits)
         if shots is not None and first_act is not None and not after_shot:   # the after PNG: the result after its hold
-            shoot_scene(page, sc, shots / f"{sc['id']}-after.png")
+            if cand is not None and cand.is_file():
+                os.replace(cand, shots / f"{sc['id']}-after.png")   # the last candidate while the view held
+            else:
+                shoot_scene(page, sc, shots / f"{sc['id']}-after.png")
         if check_model:
             text = page.evaluate(VISIBLE_TEXT_JS) or ""
             hits = [ln.strip() for ln in text.splitlines() if MODEL_RE.search(ln)]
