@@ -17,4 +17,4 @@ Changes since 0.9.4:
 - The guide shows the seven pictures of chapters 6 to 13.
 
 ### About
-- Help > About shows the Cherry Blossom Valley logo, the licence line and links to the website and the source code.
+- Drum Spike > About Drum Spike shows the Cherry Blossom Valley logo, the licence line and links to the website and the source code.

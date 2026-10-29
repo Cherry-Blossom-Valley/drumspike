@@ -18,7 +18,7 @@ Committed baseline `tools/eval/enst_gate_baseline.json` (F1, +-50 ms window, con
 | drummer_3 | 0.982 | 0.820 | 0.897 | 0.392 |
 
 Fresh gate run on main (this PR, counted lines in the PR description; config `dsp`,
-210 items, detector fingerprint 948d0edea3026dc4): snare F1 0.827 / 0.867 / 0.820
+210 items, detector fingerprint dadf4539aa159029): snare F1 0.827 / 0.867 / 0.820
 (drummers 1/2/3) - every aggregate at or above its baseline, `rows compared: 12`,
 `PASS`.
 
@@ -184,6 +184,38 @@ Gate that can fail: `uv run python tools/eval/role_enst.py` must print per-role
 accuracy and FAIL if any close-mic role's accuracy drops below the measured floor of
 the run that set the threshold (the number goes into the check). Fails below the floor.
 
+#### The measured score (#78, the run of 2026-10-29, linux-arm64, build of a7b3936)
+
+1538 mic files, the thresholds confirmed (`kick` 0.05, `tom` 0.60, snare/hat/cymbal
+no bar). At the operating point: overall precision 92.6 % (398/430 suggested),
+coverage 28.0 %. Per suggested role: kick 94.4 % (203/215), tom 90.7 % (195/215);
+snare, hat and cymbal are never suggested. Per-drummer precision 95.1 % / 88.5 % /
+94.8 % (drummer_1/2/3). The recorded floors of the gate (`ROLE_FLOORS` in
+`tools/eval/role_enst.py`): kick 203/215, tom 195/215.
+
+The coverage floor: the #393 gate's 30 % does not hold on this host's run of the
+#393 thresholds. role_enst.py was run at the #393 decision build (3da1e63, the
+0.9.4 import -- `role.rs` and `role_threshold` are unchanged since) and at main
+alike, and both print the same line: precision 92.6 %, coverage 28.0 %. No later
+detector change lowered the coverage; the 30 % line never held. The gate keeps a
+coverage check at the measured 28.0 % (`PASS_COVERAGE`, a FAIL under it), so a
+future detector change that trades coverage away still fails the gate.
+
+Confusion matrix at the operating point (rows: the mic's true role, columns: the
+suggested role; `none` = no suggestion):
+
+| true \ suggested | kick | tom | none |
+|---|---|---|---|
+| kick (210)  | 203 | 3   | 4   |
+| snare (210) |     | 2   | 208 |
+| tom (488)   | 12  | 195 | 281 |
+| hat (210)   |     |     | 210 |
+| cymbal (420)|     | 15  | 405 |
+
+The confusion is one-directional: 12 true tom files suggest kick and 15 true cymbal
+files suggest tom (the wash reads as a tom ring); a snare never draws a suggestion
+beyond 2 tom votes.
+
 ### 6. Robustness smoke set: keep the synthesised cases and add the real-recorded ones
 
 What the code already does: `crates/core/tests/robustness.rs` (#281 C14)  -  every
@@ -227,9 +259,100 @@ wall-clock per minute of audio exceeds the recorded budget by > 10 %; the gate
 (`cargo test -p drumspike-core --test robustness -- --ignored`) runs it and prints the
 measured throughput. Fails over budget.
 
+### 8. Tom false positives: the cause of each one and the rule that should remove it
+
+What the code already does: four session-level rules act on the tom close mics.
+Rule CD (`detect/tom_bleed.rs`, versions 1 to 5) marks a tom hit as bleed when its
+tom-band excess over a played other-drum mic is under 9.2 dB; version 2 adds the kick
+and snare close mics as sources (9.2 dB snare, 4.0 dB kick); version 5 keeps a shared
+kick source under 8.0 dB. The pair rule (`tom_pairs`, versions 3 and 4) keeps the
+louder of two output hits on different drums within 12 ms. The cross-track rule
+(`detect/cross_bleed.rs`, A6) judges each tom hit by first-motion lead and level
+against the kick, snare, hi-hat and other tom mics. The transfer gains the rules use
+are in `detect/attribution.rs`.
+
+Measured (`tools/eval/enst_tom_fp.py`, config `dsp`, build a12badbc565958ae, 210
+items, +-50 ms, counted on the release run of #90): 6232 scored tom false positives
+over the three drummers (583 / 2432 / 3217). The nearest annotation of another drum
+gives the cause; "removed" counts the hits the rules flagged (`bleed` or `cut`) that
+sit at that cause, "left" the scored FPs:
+
+| cause | left | share of FPs | removed | left share of (left + removed) |
+|---|---|---|---|---|
+| kick | 1708 | 27.4 % | 1517 | 53 % |
+| snare | 1398 | 22.4 % | 803 | 64 % |
+| hat | 2423 | 38.9 % | 668 | 78 % |
+| cymbal | 443 | 7.1 % | 324 | 58 % |
+| tom-other | 223 | 3.6 % | 312 | 42 % |
+| none | 37 | 0.6 % | 7 | 84 % |
+
+The shares sum to 100 %, the cause counts to 6232 (the script's sum check). The worst
+mic is drummer_3 tom_2 (P 0.185 at R 0.976, 1121 output hits).
+
+Counted per drummer and cause (scored FPs, all tom mics; shares of the drummer's total,
+from the run log of #90):
+
+| drummer | kick | snare | hat | cymbal | tom-other | none | total | shares % (kick / snare / hat / cymbal / tom-other / none) |
+|---|---|---|---|---|---|---|---|---|
+| drummer_1 | 75 | 234 | 199 | 37 | 36 | 2 | 583 | 12.9 / 40.1 / 34.1 / 6.3 / 6.2 / 0.3 |
+| drummer_2 | 789 | 490 | 951 | 177 | 13 | 12 | 2432 | 32.4 / 20.1 / 39.1 / 7.3 / 0.5 / 0.5 |
+| drummer_3 | 844 | 674 | 1273 | 229 | 174 | 23 | 3217 | 26.2 / 21.0 / 39.6 / 7.1 / 5.4 / 0.7 |
+| all | 1708 | 1398 | 2423 | 443 | 223 | 37 | 6232 | 27.4 / 22.4 / 38.9 / 7.1 / 3.6 / 0.6 |
+
+Counted per drummer and tom mic (rows: the mic; the cause columns as above):
+
+| drummer | mic | kick | snare | hat | cymbal | tom-other | none | total |
+|---|---|---|---|---|---|---|---|---|
+| drummer_1 | tom_1 | 27 | 200 | 131 | 21 | 21 | 1 | 401 |
+| drummer_1 | tom_2 | 48 | 34 | 68 | 16 | 15 | 1 | 182 |
+| drummer_2 | tom_1 | 89 | 377 | 431 | 72 | 2 | 3 | 974 |
+| drummer_2 | tom_2 | 700 | 113 | 520 | 105 | 11 | 9 | 1458 |
+| drummer_3 | tom_1 | 56 | 329 | 406 | 30 | 45 | 4 | 870 |
+| drummer_3 | tom_2 | 190 | 195 | 395 | 46 | 94 | 4 | 924 |
+| drummer_3 | tom_3 | 598 | 150 | 472 | 153 | 35 | 15 | 1423 |
+
+Split by drummer: hat is the largest cause for drummers 2 and 3 (39.1 % and 39.6 %), so the
+hat-first step fits them. Drummer_1 is the exception: its largest cause is snare (40.1 %),
+with hat second (34.1 %). On drummer_2 tom_2, kick is the largest cause (700 of 1458).
+
+Two fingerprints appear in the run log. Build a12badbc565958ae is the build of the run files
+that the tables above are counted on; detector fingerprint dadf4539aa159029 is the one the
+gate scoring printed for the same 210 items. Flagged hits on the
+own tom annotations: 25 (real strokes the rules removed).
+
+What the table does not say: which rule flagged each removed hit. The output carries
+`bleed` and `cut` only, so the share each rule removes is not measured yet. The
+reasons below are the rules' stated design, not yet tested:
+
+- Hat (39 % of the FPs, 78 % left): rule CD and version 2 measure levels in the tom band
+  (50 to 400 Hz); a hi-hat has little energy there, so its excess over the tom mic is
+  not low. The A6 first-motion test is the rule that should catch it, and hat strokes
+  are bright and weak, so the lead test may not separate them.
+- Kick and snare (50 % of the FPs): version 2 covers them, but the kick threshold of
+  4.0 dB is set against real accents (`tom_bleed.rs` header). Bleed above the threshold
+  is caught; hypothesis, not measured: the remainder may sit at the threshold.
+- Cymbal (7 %): the overheads are not in the source list of A6 (kick, snare, hi-hat,
+  other toms). The 324 removed cymbal hits show some are caught anyway, so the source
+  list is the question to test, not the whole answer.
+
+Work package: add the rule that set each flag to `enst_tom_fp.py` (a column per rule: CD,
+v2 kick, v2 snare, v3 pair, v5 shared kick, A6), from the per-hit evidence the run files
+carry (if they do not, the evidence goes into the run output first). Then take the hat
+cause, the largest pooled one (the largest for drummers 2 and 3; drummer_1's largest is
+snare, see the split above), and decide on the measured table: add hi-hat and overheads as
+sources of A6 with a threshold set on ENST, or record why the rule cannot separate them.
+No detector change in this package before the table is in the report.
+
+Gate that can fail: `uv run python tools/eval/enst_tom_fp.py` already FAILs when the cause
+counts do not sum to the total or when the `none` share is above 10 % (today: PASS, 0.6 %).
+The work package adds two checks to it: the per-rule columns must sum to the flagged total,
+and the left share of the hat cause must be at most 50 % (a proposed limit; today it is
+78 %, so the added check FAILs until the hat cause is handled). The package also needs
+`tools/eval/enst_gate.py` within 2 % of baseline on every aggregate, counted lines pasted.
+
 ## Open areas check (umbrella #8 list)
 
 snare ghost notes (1), the kick gap (3), per-track self-calibration (2),
 review queue ranking by confidence (4), role suggestion from audio (5), the
-robustness smoke set (6), analysis speed (7)  -  all seven covered above with file
-pointers and one failing-capable Gate each.
+robustness smoke set (6), analysis speed (7), tom false positives (8)  -  all eight
+covered above with file pointers and one failing-capable Gate each.
