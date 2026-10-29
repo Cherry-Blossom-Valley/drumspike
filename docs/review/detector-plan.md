@@ -191,9 +191,15 @@ no bar). At the operating point: overall precision 92.6 % (398/430 suggested),
 coverage 28.0 %. Per suggested role: kick 94.4 % (203/215), tom 90.7 % (195/215);
 snare, hat and cymbal are never suggested. Per-drummer precision 95.1 % / 88.5 % /
 94.8 % (drummer_1/2/3). The recorded floors of the gate (`ROLE_FLOORS` in
-`tools/eval/role_enst.py`): kick 203/215, tom 195/215. The #393-era overall-coverage
-gate (30 %) is superseded by these floors: the operating point trades coverage for
-precision by design (28.0 % measured).
+`tools/eval/role_enst.py`): kick 203/215, tom 195/215.
+
+The coverage floor: the #393 gate's 30 % does not hold on this host's run of the
+#393 thresholds. role_enst.py was run at the #393 decision build (3da1e63, the
+0.9.4 import -- `role.rs` and `role_threshold` are unchanged since) and at main
+alike, and both print the same line: precision 92.6 %, coverage 28.0 %. No later
+detector change lowered the coverage; the 30 % line never held. The gate keeps a
+coverage check at the measured 28.0 % (`PASS_COVERAGE`, a FAIL under it), so a
+future detector change that trades coverage away still fails the gate.
 
 Confusion matrix at the operating point (rows: the mic's true role, columns: the
 suggested role; `none` = no suggestion):
