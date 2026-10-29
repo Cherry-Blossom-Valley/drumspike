@@ -32,7 +32,7 @@ The detector missed one hit. Put the playhead in the gap and press H. The new hi
 
 > Playhead on the hit; 6 (5 ms); Tab; Delete. Caption: Edit > Delete Hit
 
-One hit too many? Select the hit and press Delete. The spike line goes, the audio stays. You can also right-click the hit.
+One hit too many? Select the hit and press Delete. The spike line goes, the audio stays. Right-click works too.
 
 ## p2-nudge
 
@@ -62,4 +62,4 @@ The Inspector sets the floor, the ceiling and the Loudness cut. After a change, 
 
 > Caption: "Next: doubtful hits first".
 
-That is check and fix: find your way, edit the hits, shape the velocity. Next: the hits the app is not sure of.
+That is check and fix: find your way, edit the hits, shape the velocity. Next: the doubtful hits.

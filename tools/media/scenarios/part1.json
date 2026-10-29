@@ -92,7 +92,7 @@
       {"do": "wait", "cond": "() => document.querySelector('#exportModal').classList.contains('hidden')", "timeout": 15, "err": "the dialog closed"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-again", "steps": [
+    {"id": "p1-again", "area_sel": ".track[data-name=\"s_top\"]", "steps": [
       {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 0.5},
       {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 16.0938},
       {"do": "wait", "cond": "() => !document.querySelector('#ilFields').classList.contains('hidden') && document.querySelector('#ilSample').value.length > 0", "timeout": 15, "err": "a hit selected (the edit the narration speaks of)"},
