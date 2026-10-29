@@ -16,11 +16,12 @@ empty background, the velocity stalks are present in the new column, and no velo
 floats in the middle of the lane; at the strip's entry the velocity label sits at the lane's
 left edge. On main the stalk and the label checks fail (the output names the frame).
 
-A track whose row element is not fully inside the strip's painted area is skipped with a note:
-the strip draws only the lanes that intersect the lanes viewport, and an element screenshot of a
-row that pokes out of it (a short test window: three 234 px rows do not fit into a 492 px area)
-reads the dead pixels below the scroll clip - background with scattered event lines - which the
-strip must and does not paint. On a window that shows every row (the mac) all three are checked.
+The test runs at Track Height Small in a taller window (820 px): three 170 px rows fit into the
+lanes viewport on every host, and all three tracks are checked (asserted). The skip below stays
+only as a guard: a row that is not inside the strip's painted area (the strip draws only the
+lanes that intersect the lanes viewport) would read dead pixels below the scroll clip -
+background with scattered event lines - which the strip must and does not paint; the test fails
+loudly when no row (or not every row) fits.
 """
 import time
 from collections import Counter
@@ -28,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from app_support import invoke, open_project
+from app_support import invoke, menu, open_project
 from helpers import SR, synth_track, write_wav
 from test_follow_strip import lane_shot, pixels
 
@@ -143,8 +144,34 @@ def vel_setting_back(app):
             pass   # the page may already be gone; the next session's bridge home starts fresh
 
 
-def test_the_strip_shows_no_tile_seam_while_the_next_answer_is_late(app, make_project, tmp_path, vel_setting_back):
+@pytest.fixture
+def track_height_back(app):
+    """The track height is an app setting persisted in the session's bridge home (it is read at
+    boot), so the test's Track Height Small would leak into every later boot of the folder run.
+    Leave the setting as the test found it."""
+    was = app.evaluate("() => S.trackHeight")
+    yield
+    try:
+        invoke(app, "app_settings_set", key="track_height", value=was)
+    except Exception:
+        pass   # the page may already be gone; the next session's bridge home starts fresh
+
+
+def test_the_strip_shows_no_tile_seam_while_the_next_answer_is_late(app, make_project, tmp_path, vel_setting_back, track_height_back):
     open_project(app, project(make_project, tmp_path))
+    # Track Height Small + a taller window: all three rows fit into the strip's painted area on
+    # every host, so all three tracks are checked below (the default rows poke out)
+    assert menu(app, "height_small") is True
+    app.wait_for_function("() => GEO.waveH === 56")
+    # a taller window: even at Small a 170 px row x 3 (510 px) does not fit the default window's
+    # 492 px lanes viewport, and a row that pokes out would read dead pixels (skipped below)
+    app.set_viewport_size({"width": 1280, "height": 820})
+    app.wait_for_function("""() => {
+        const sc = document.querySelector('#lanesScroll');
+        const rows = [...document.querySelectorAll('#lanesScroll .track .tlanes')].map(e => e.getBoundingClientRect());
+        const s = sc.getBoundingClientRect();
+        return rows.length === 3 && rows.every(r => r.top >= s.top && r.bottom <= s.bottom); }""",
+        timeout=30000)
     app.evaluate("() => { TM.ui.grid = false; tmApplyUi(true); if (!VL.on) vlToggle(); }")
     # the hint text lives inside the vel lane and would trip the mid-lane label check: draw without it
     app.evaluate("() => { VL.hint = false; document.querySelectorAll('#lanesScroll .track').forEach(row => "
@@ -210,5 +237,6 @@ def test_the_strip_shows_no_tile_seam_while_the_next_answer_is_late(app, make_pr
                 f"{n}: no velocity stalks in the new tile column (x > 0.7 W), slide {o:.0f}")
             mid = [x for x in label_columns(img[vel["top"]:vel["top"] + vel["h"]]) if 0.25 * W < x < 0.75 * W]
             assert not mid, f"{n}: velocity label text in the middle of the lane (the stale one-view draw at the seam), columns {mid[:8]}"
-        assert checked, f"no track fully inside the strip's area {st['box']}: rows {st['rows']}"
+            print(f"checked: {checked} inside strip {st['box']}")
+        assert len(checked) == 3, f"expected all three tracks checked, got {checked}: rows {st['rows']} vs strip {st['box']}"
     app.evaluate("() => { if (S.playing) pause(); }")
