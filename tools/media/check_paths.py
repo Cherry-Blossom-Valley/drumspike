@@ -16,9 +16,19 @@ import sys
 import tempfile
 from pathlib import Path
 
-BANNED = ("/Users", "/var/folders", "/home", "/private/tmp", "x86-mac",
-          "admin@", "arm64-mac", "linux-arm64") + tuple(
-    w.strip() for w in __import__("os").environ.get("DRUMSPIKE_PRIVATE_WORDS", "").split(",") if w.strip())
+BANNED_BASE = ("/Users", "/var/folders", "/home", "/private/tmp", "x86-mac",
+               "admin@", "arm64-mac", "linux-arm64")
+
+
+def private_words():
+    """The one shared definition of the private list (#104): the static tokens plus the
+    comma-separated words of DRUMSPIKE_PRIVATE_WORDS (set per host, never in the repo).
+    check_paths.py and check_private.py both read it from here."""
+    return BANNED_BASE + tuple(
+        w.strip() for w in __import__("os").environ.get("DRUMSPIKE_PRIVATE_WORDS", "").split(",") if w.strip())
+
+
+BANNED = private_words()
 FRAMES_FPS = 1   # the mp4 frames OCR'd per second
 
 
