@@ -67,6 +67,25 @@ pub enum ProjectError {
     Format(String),
     /// Every other document problem, with the Python layer's message text.
     Invalid(String),
+    /// The target project folder already holds a document (`project already exists: <dir>`).
+    Exists(String),
+    /// No document in the folder (`no .drumspike document at <path>`).
+    NoDocument(String),
+    /// A track's source is missing or changed, so Save As cannot copy it
+    /// (`track <track>: source <reason>; relink it before Save As`).
+    NeedsRelink {
+        /// The track's name.
+        track: String,
+        /// The source's status (`missing`, `changed`).
+        reason: String,
+    },
+    /// A source cannot be copied into the project (`cannot copy source (<reason>): <path>`).
+    CopyFailed {
+        /// The source's status (`missing`, `changed`).
+        reason: String,
+        /// The source's path, or its relative path.
+        path: String,
+    },
     /// A file-system error (Python lets the `OSError` through; here it carries the path).
     Io(String, std::io::Error),
 }
@@ -74,7 +93,16 @@ pub enum ProjectError {
 impl fmt::Display for ProjectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ProjectError::Format(m) | ProjectError::Invalid(m) => f.write_str(m),
+            ProjectError::Format(m)
+            | ProjectError::Invalid(m)
+            | ProjectError::Exists(m)
+            | ProjectError::NoDocument(m) => f.write_str(m),
+            ProjectError::NeedsRelink { track, reason } => {
+                write!(f, "track {track}: source {reason}; relink it before Save As")
+            }
+            ProjectError::CopyFailed { reason, path } => {
+                write!(f, "cannot copy source ({reason}): {path}")
+            }
             ProjectError::Io(what, e) => write!(f, "{what}: {e}"),
         }
     }
@@ -303,7 +331,7 @@ pub fn find_document(path: &Path) -> Result<PathBuf, ProjectError> {
             return Ok(path.join(&docs[0]));
         }
     }
-    Err(ProjectError::invalid(format!(
+    Err(ProjectError::NoDocument(format!(
         "no {DOC_EXT} document at {}",
         path.display()
     )))
@@ -345,7 +373,7 @@ pub fn new_project(dir: &Path, name: &str) -> Result<Project, ProjectError> {
     let name = check_name(name)?;
     let pdir = abspath(dir).join(&name);
     if document_path(&pdir).exists() {
-        return Err(ProjectError::invalid(format!(
+        return Err(ProjectError::Exists(format!(
             "project already exists: {}",
             pdir.display()
         )));

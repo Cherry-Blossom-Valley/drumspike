@@ -28,6 +28,7 @@ ALLOWED_FILES = ROOT / "docs" / "product" / "banned-words-allowed.txt"
 # The default scope, relative to the repo root.
 SCOPE_GLOBS = (
     "docs/guide/*.md",
+    "docs/product/*.md",   # the recording standard joins the guard; the other two are allow-listed
     "docs/product/scripts/*",
     "docs/release-notes/release-notes-*.md",   # the old notes are on the allow-list
     "site/*.html",

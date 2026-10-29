@@ -174,7 +174,8 @@ fn every_import_command_has_a_test_in_import_rs() {
 
 #[test]
 fn the_bridge_runs_the_import_commands() {
-    use drumspike_app::bridge::{Bridge, Reply};
+    use drumspike_app::bridge::Bridge;
+    use drumspike_app::reply::Reply;
     let root = tmp("bridge");
     let svc = service(&root);
     let sdir = session(&root, "Song: Take 2");

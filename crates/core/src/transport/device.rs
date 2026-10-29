@@ -180,11 +180,19 @@ fn find_device(name: Option<&str>) -> Result<cpal::Device, TransportError> {
         None => host
             .default_output_device()
             .ok_or_else(|| TransportError::Device("no default output device".into())),
-        Some(n) => host
-            .output_devices()
-            .map_err(|e| TransportError::Device(e.to_string()))?
-            .find(|d| device_name(d) == n)
-            .ok_or_else(|| TransportError::Device(format!("the output device \"{n}\" is not connected"))),
+        Some(n) => {
+            // The ALSA host reports the default under a pseudo-device name ("Default Audio
+            // Device") that its enumeration never lists; the default answers to its own name.
+            if let Some(def) = host.default_output_device() {
+                if device_name(&def) == n {
+                    return Ok(def);
+                }
+            }
+            host.output_devices()
+                .map_err(|e| TransportError::Device(e.to_string()))?
+                .find(|d| device_name(d) == n)
+                .ok_or_else(|| TransportError::Device(format!("the output device \"{n}\" is not connected")))
+        }
     }
 }
 
@@ -224,7 +232,18 @@ pub fn output_devices() -> Result<Vec<DeviceInfo>, TransportError> {
     let devs = host
         .output_devices()
         .map_err(|e| TransportError::Device(e.to_string()))?;
-    Ok(devs.filter_map(|d| info_of(&d).ok()).collect())
+    let mut list: Vec<DeviceInfo> = devs.filter_map(|d| info_of(&d).ok()).collect();
+    // The ALSA host's default is a pseudo-device ("Default Audio Device") that the
+    // enumeration never lists; add it, so the default is in the list and selectable by name.
+    // Where the default is a listed device (CoreAudio, PipeWire-as-default) this adds nothing.
+    if let Some(def) = host.default_output_device() {
+        if let Ok(info) = info_of(&def) {
+            if !list.iter().any(|d| d.name == info.name) {
+                list.push(info);
+            }
+        }
+    }
+    Ok(list)
 }
 
 /// How the transport treats an error of the device stream.

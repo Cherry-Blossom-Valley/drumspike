@@ -407,7 +407,10 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
         return None;
     }
     let run = || -> Result<Value, AppError> {
-        let (sid, name) = (crate::call::arg_str(args, "sid")?, crate::call::arg_str(args, "name")?);
+        let (sid, name) = (
+            crate::command_policy::arg_str(args, "sid")?,
+            crate::command_policy::arg_str(args, "name")?,
+        );
         match cmd {
             "sampler_calibration_midi" => {
                 let dest = match args.get("dest") {

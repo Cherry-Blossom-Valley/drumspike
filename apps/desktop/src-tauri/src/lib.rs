@@ -270,7 +270,7 @@ fn analyze_start(
         params.as_ref(),
         detector.as_deref(),
         Some(progress),
-        keep_edited.unwrap_or(false),
+        keep_edited.unwrap_or(drumspike_app::command_policy::PAGE_KEEP_EDITED),
     )
 }
 
@@ -303,7 +303,7 @@ async fn export_midi(
             ppq,
             tempo,
             dest.as_deref(),
-            compensate.unwrap_or(true),
+            compensate.unwrap_or(drumspike_app::command_policy::COMPENSATE_DEFAULT),
         )
     })
     .await
@@ -387,8 +387,13 @@ async fn transport_play(
     });
     blocking(&svc, "transport_play", move |s| {
         let shot_json = shot.map(Value::String);
-        let win =
-            drumspike_app::transport::PlayWindow::from_args(start, end, r#loop, tracks.as_ref(), shot_json.as_ref())?;
+        let win = drumspike_app::command_policy::transport_args::play_window(
+            start,
+            end,
+            r#loop,
+            tracks.as_ref(),
+            shot_json.as_ref(),
+        )?;
         // P4-40d: an audition (start, end, loop, tracks) sends no playhead messages (the service drops the channel)
         s.transport_play_window(&sid, position, events.as_ref(), Some(progress), speed, win)
     })
@@ -398,7 +403,7 @@ async fn transport_play(
 #[tauri::command]
 async fn transport_stop(svc: State<'_, Service>, close: Option<bool>) -> Result<Value, AppError> {
     blocking(&svc, "transport_stop", move |s| {
-        Ok(s.transport_stop(close.unwrap_or(false)))
+        Ok(s.transport_stop(close.unwrap_or(drumspike_app::command_policy::CLOSE_DEFAULT)))
     })
     .await
 }

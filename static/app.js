@@ -3,52 +3,7 @@
    both lanes (spike + waveform), follow-playhead, persistent position readout. */
 "use strict";
 
-/* ---------------- state ---------------- */
-const S = {
-  sid: localStorage.getItem("dsg_sid") || null,
-  tracks: {},
-  order: [],
-  view: { t0: 0, t1: 10 },
-  events: {},          // name -> [{t, v}]
-  peaks: {}, peakErr: {},
-  samplesCache: {},
-  peakAmp: {},
-  snap: true,          // playhead snaps to the nearest hit when clicked close (10px/30ms)
-  selTrack: null,      // track context: header click → Tab navigates this track
-  followMode: "smooth",// smooth | page | off
-  followHold: false,   // user pan/zoom during playback pauses following until next play
-  followResumeAt: null,// P4-wf10: an edit during playback suspended the follow; the song time at which it resumes
-  sel: null,           // {track, index}
-  loaded: 0,           // generation of the last finished loadProject (0 while one runs)
-  playing: false,
-  playStartPos: 0,
-  playReturn: null,    // #207: the play-and-return key that started this play (the next Space or the same key stops and returns)
-  muted: {}, solo: {}, clicks: {},
-  follow: true,
-  undo: [], redo: [],
-  drag: null,
-  theadW: 230,
-  name: "", dirty: false,   // the open project's name and unsaved-changes flag (P0-8)
-  exportAgain: false,   // P4-31: the project keeps an export shape (File > Export Again; greyed before the first)
-  inspector: true,     // P3-14a: View > Show Inspector; an app setting (<home>/settings.json), read at boot
-  ampZoom: 1,   // P3-20a: View > Waveform Zoom (1x to 64x), a display gain of the wave lanes; a view setting
-  nudgeValue: "1smp",   // P3-20a: Edit > Nudge Value (1smp, 10smp, 100smp, 1ms, 10ms); a view setting
-  rowH: {}, zoomTall: false,   // P4-27: wave lane heights of single rows (the Zoom Toggle), and the app setting zoom_toggle_tall
-  trackHeight: "medium",   // P3-14c: View > Track Height (small, medium, large) of every track; an app setting, read at boot
-  overviewOn: true,   // #169: View > Show Overview; the app setting overview, read at boot
-  zoomOwn: [],   // #169: the engineer's zoom presets [{name, span}] (span in seconds); the app setting zoom_presets, read at boot
-};
 const OWN_ZOOM_NAME_MAX = 40;   // #169: the longest name of an own zoom preset
-/* P4-1: S.playhead. While the compositor moves the playhead (block "compositor playhead"), it reads the position that
-   the animation shows now, so every reader (follow, counters, tests, the self-test) sees the drawn playhead between the
-   page's ticks. A write is a move by the user (ruler, lane click, Tab, Enter, a test): while playing, the next tick
-   seeks the transport to it (P3-5b), and the write asks for that tick.
-   P4-1b: while playing, a write of the value the playhead has (PH.v, or the last value the getter gave, PH.r) is no
-   move: `S.playhead = Math.min(S.playhead, maxDur())` (loadProject) and the like must not seek. */
-const PH = { v: 0, r: NaN, user: false };
-Object.defineProperty(S, "playhead", { enumerable: true,
-  get() { if ((CP.anim || SP.on) && !PH.user) return (PH.r = cpPos(performance.now())); PH.r = NaN; return PH.v; },   // P4-1b fix: PH.r only while the compositor moves it
-  set(x) { if (S.playing && (x === PH.v || x === PH.r)) return; PH.v = x; PH.user = true; if (S.playing) requestFrame(); } });
 const ROLE_DEFAULT_NOTE = { kick:36, snare:38, tom:48, hat:42, cymbal:49, other:36 };
 const ROLE_DEFAULT_CLICK = { kick:1000, snare:2500, tom:700, hat:4000, cymbal:3000, other:1500 };
 const $ = s => document.querySelector(s);
@@ -84,6 +39,7 @@ function normEvents(d){
 }
 let _eid = 0;
 function newId(){ return "n" + (++_eid); }
+
 /* manual/edited hits: added by hand, or moved away from their detected position */
 const MANUAL_COLOR = "#ff4fd8";
 function isManual(e) { return !!e.added || (e.orig !== undefined && Math.abs(e.t - e.orig) > 1e-9); }
@@ -92,157 +48,16 @@ function isManual(e) { return !!e.added || (e.orig !== undefined && Math.abs(e.t
    re-analysis and the service's merge (keep_edited), so both see the same edits. */
 function isKept(e) { return isManual(e) || e.edited === true; }
 
-/* ---------------- sessions, global settings, projects ---------------- */
-let _settings = null;
-function SETTINGS() {
-  if (!_settings) {
-    let s = {};
-    try { s = JSON.parse(localStorage.getItem("dsg_settings") || "{}"); } catch(e) {}
-    const def = { click: { enabled: true, volume: 0.22,
-      pitches: Object.assign({}, ROLE_DEFAULT_CLICK) } };
-    s.click = Object.assign(def.click, s.click || {});
-    s.click.pitches = Object.assign({}, def.click.pitches, s.click.pitches || {});
-    s.ui = Object.assign({ infoLine: true, counter: "seconds", auditionTab: false, suspendFollowOnEdit: false, stopReturnToStart: false }, s.ui || {});   // P3-14b: the info line is shown; the main counter shows seconds; P4-wf10: Transport > Suspend Follow when Editing; #436: Transport > Stop Returns to Start
-    if (s.ui.counter !== "samples") s.ui.counter = "seconds";
-    // one-time migration: the per-track 🔈 click became a global one — default it ON
-    if (!localStorage.getItem("dsg_settings_v2")) {
-      s.click.enabled = true;
-      localStorage.setItem("dsg_settings_v2", "1");
-    }
-    _settings = s;
-  }
-  return _settings;
-}
-function saveSettings() { localStorage.setItem("dsg_settings", JSON.stringify(SETTINGS())); appClicksSoon(); }
+/* ---------------- the project name and the unsaved-changes guard ---------------- */
 function setProjName(n) {
   S.name = n || "";
   setDirtyState(S.dirty);   // also syncs the window title
-}
-/* dirty state (P0-8): a dot in the window title and next to the project name while the open
-   project has unsaved changes; the server's flag is the truth (B.projectGet) */
-function setDirtyState(dirty) {
-  S.dirty = !!dirty;
-  $("#dirtyDot").classList.toggle("hidden", !S.dirty);
-  document.title = (S.dirty ? "● " : "") + (S.name || "Drum Spike") + (S.name ? " - Drum Spike" : "");
-  if (typeof DSShell !== "undefined") DSShell.sync();   // P4-26: the native window title follows the name and the unsaved flag
 }
 window.addEventListener("beforeunload", ev => {
   if (!S.dirty) return;
   ev.preventDefault(); ev.returnValue = "unsaved changes";   // the browser shows its own prompt
   return ev.returnValue;
 });
-async function initSessions(keepNone) {   // keepNone: a refresh of the list (dirty event) must not open a project when none is open
-  const sid0 = S.sid, list = await B.sessions();
-  let gone = false;
-  // an open or a close moved S.sid while the list was on its way (a dirty event's refresh runs 100 ms late): the list is
-  // older than that change and must not pick the project, else it resets S.sid to null or to another project
-  if (S.sid !== sid0) { /* keep */ }
-  else if (S.sid && list.some(s => s.sid === S.sid)) { /* keep */ }
-  else if (!S.sid && keepNone) { /* nothing is open on purpose: only the list changes */ }
-  else if (S.sid && keepNone) { gone = true; }   // another client (an agent command) closed the open project: no silent switch to another one
-  else if (list.length) { S.sid = list[0].sid; localStorage.setItem("dsg_sid", S.sid); }
-  else gone = true;   // S3-3: no silent 'Untitled project' folder
-  if (gone) { S.sid = null; localStorage.removeItem("dsg_sid"); setProjName(""); setDirtyState(false); }
-  const cur = list.find(s => s.sid === S.sid);
-  if (cur) { setProjName(cur.name); setDirtyState(cur.dirty); }
-  if (gone && keepNone && !S.sid) loadProject();   // the lanes of the closed project go; the empty page shows
-  renderRecentList();
-  DSShell.sync();   // P3-4b: greys the native menu items while no project is open, refreshes Open Recent; P3-13a: the Window menu
-}
-async function renderRecentList() {   // the Open Recent list of the empty page (no project open); the menu has its own
-  let recent = [];
-  try { recent = await B.recentProjects(); } catch(e) {}
-  const box = $("#esRecentList");
-  if (!box) return;
-  box.innerHTML = "";
-  const clear = $("#esRecentClear");   // #441: the control only makes sense while the list has entries
-  if (clear) clear.hidden = !recent.length;
-  if (!recent.length) { const e = document.createElement("div"); e.className = "phint"; e.textContent = "no recent projects"; box.appendChild(e); return; }
-  for (const r of recent) {
-    const row = document.createElement("div");
-    row.className = "sbRecent";
-    row.title = r.folder;
-    const nm = document.createElement("div"); nm.className = "sbProjName"; nm.textContent = r.name;
-    const sub = document.createElement("div"); sub.className = "sbProjSub"; sub.textContent = r.folder;
-    row.append(nm, sub);
-    row.onclick = () => openProjectPath(r.folder);
-    box.appendChild(row);
-  }
-}
-/* #441 Clear Recent: empties the stored recent list (recent.json) and the File > Open Recent menu
-   (DSShell.sync rebuilds it); the start screen list re-renders to the "no recent projects" state and
-   the status line confirms. No undo; a project opened afterwards starts a new list. */
-async function clearRecentProjects() {
-  try { await B.recentClear(); } catch (e) { return; }
-  await renderRecentList();
-  if (typeof DSShell !== "undefined" && DSShell.sync) DSShell.sync();
-  setMsg("recent projects cleared");
-}
-async function useProject(summary) {   // a project the server returned (new/open/import): make it the current one
-  await flushEvents();   // the project left behind stays open: its pending edits reach it first. #249 R02: a refused write rejects — the switch is aborted before S.sid moves
-  S.sid = summary.sid; localStorage.setItem("dsg_sid", S.sid);
-  await initSessions(); await loadProject();
-  return summary;
-}
-/* leaving a dirty project (opening another, closing): in-page prompt instead of a silent loss */
-async function guardDirty(action) {
-  if (!S.dirty) return true;
-  const a = await askConfirm({ title: "Unsaved changes",
-    msg: `"${S.name}" has unsaved changes. Save before you ${action}? (Unsaved edits stay in memory and in Backups/ autosaves while the project is open.)`,
-    buttons: [{act:"save", label:"Save", cls:"primary"}, {act:"skip", label:"Continue without saving"}, {act:"cancel", label:"Cancel"}] });
-  if (a === "cancel" || a === null) return false;
-  if (a === "save") { try { await saveProjectNow(); } catch (e) { /* #249 R02: the refusal is on the status line */ } if (S.dirty) return false; }
-  return true;
-}
-async function switchTo(sid) {
-  if (sid === S.sid) { await loadProject(); return true; }
-  if (!await guardDirty("switch projects")) return false;
-  try { await flushEvents(); }   // "continue without saving" keeps the edits in the server's memory
-  catch (e) { setMsg(`switch failed: ${errText(e)}`, "error"); return false; }   // #249 R02: the switch does not run on a refused write
-  S.sid = sid; localStorage.setItem("dsg_sid", sid);
-  await loadProject(); await initSessions();
-  return true;
-}
-async function openProjectPath(path) {
-  if (!await guardDirty("open another project")) return false;
-  try {
-    const r = await B.openProject(path);
-    await useProject(r); setMsg(`opened ${r.name}`); return true;
-  } catch(e) { setMsg(`open failed: ${e.message}`, "error"); return false; }
-}
-async function closeProject(sid, name) {
-  const post = body => B.closeProject(sid, !!body.force);
-  let dirty = sid === S.sid ? S.dirty : false;
-  if (!dirty && sid !== S.sid) { try { dirty = (await B.projectGet(sid)).dirty; } catch(e) {} }
-  const prompt = async () => {
-    let a = await askConfirm({ title: "Close project",
-      msg: `"${name}" has unsaved changes. Save before closing? "Discard" closes it and drops the unsaved edits (the last autosave stays in Backups/).`,
-      buttons: [{act:"save", label:"Save and close", cls:"primary"}, {act:"discard", label:"Discard changes"}, {act:"cancel", label:"Cancel"}] });
-    if (a === "save") {   // #127: a file changed on disk asks Save anyway / Reload from disk / Close without saving
-      const s = await saveOrChoose(sid, name, "Close without saving");
-      if (s === "saved") return post({});
-      if (s === "reloaded") return "reloaded";
-      if (s !== "leave") return null;
-      a = "discard";
-    }
-    if (a === "discard") { cancelEvents(sid); return post({force: true}); }
-    return null;
-  };
-  try {
-    let r;
-    if (dirty) r = await prompt();
-    else {
-      try { r = await post({}); }
-      catch(e) { if (!/^409/.test(e.message)) throw e; r = await prompt(); }   // the server knows better
-    }
-    if (r === "reloaded") return false;   // the project stays open with the file from disk
-    if (!r) { setMsg("close cancelled"); return false; }
-  } catch(e) { setMsg(`close failed: ${e.message}`, "error"); return false; }
-  setMsg(`closed ${name}`); cancelEvents(sid);
-  if (sid === S.sid) { S.sid = null; localStorage.removeItem("dsg_sid"); setDirtyState(false); await initSessions(); await loadProject(); }
-  else await initSessions();
-  return true;
-}
 /* ---------------- in-page confirm (replaces window.confirm for project prompts) ---------------- */
 function askConfirm(o) {
   return new Promise(resolve => {
@@ -460,90 +275,7 @@ function showRelinkResult(r, folder) {
   $("#relinkModal").classList.remove("hidden");
 }
 
-/* ---------------- project ---------------- */
-let _gen = 0;   // C5: generation counter — session switches invalidate in-flight loads
-async function loadProject() {
-  if (S.playing) pause();   // the transport plays the project that is leaving
-  const gen = ++_gen;
-  S.loaded = 0; GLQ.loadedSeq = 0;
-  staleSync();   // #121: the choices belong to the project whose file changed
-  if (!S.sid) {   // S3-3: nothing is open; the lanes area offers New / Open / Open Recent
-    S.tracks = {}; S.order = []; S.events = {}; S.peaks = {}; S.samplesCache = {}; S.peakAmp = {};
-    S.sel = null; S.selTrack = null; selMem = { sid: null, order: [] }; S.undo = []; S.redo = []; S.view = { t0: 0, t1: 10 }; S.zoomBack = null; S.rowH = {}; lnReset(); auReset();
-    S.exportAgain = false;   // P4-31: no project, no export shape
-    tmLoad();   // P4-8: no map without a project
-    setProjName(""); setDirtyState(false);
-    buildTrackDOM(); invalidate(F.VIEW); updateStatus(); refreshCounts();
-    S.loaded = gen; refreshRelinkBar();
-    return true;
-  }
-  const r = await B.tracks(S.sid);
-  if (gen !== _gen) return;
-  S.exportAgain = false;
-  try { S.exportAgain = !!(await B.exportLastGet(S.sid)).export_last; } catch (e) {}   // P4-31: File > Export Again follows the export shape of the project
-  if (gen !== _gen) return;
-  S.tracks = r.tracks; S.order = r.order || Object.keys(r.tracks);
-  if (r.name !== undefined) setProjName(r.name);
-  if (r.dirty !== undefined) setDirtyState(r.dirty);
-  S.events = {}; S.peaks = {}; S.peakErr = {}; S.samplesCache = {}; S.peakAmp = {};
-  S.sel = null; S.undo = []; S.redo = []; S.zoomBack = null; S.rowH = {}; lnReset(); auReset();
-  // P4-39c: a project with tracks always has a selected track: the same project keeps it (or the neighbour of a lost
-  // one), a project that opens takes the first track
-  S.selTrack = selMem.sid === S.sid ? pickSelTrack(selMem.order, S.selTrack) : (S.order[0] || null);
-  selMem = { sid: S.sid, order: S.order.slice() };
-  const t1max = Math.max(10, ...S.order.map(n => S.tracks[n].duration));
-  S.view = { t0: 0, t1: t1max };   // open projects at Full zoom level
-  buildTrackDOM();
-  if (B.prepareLanes) { await prepareLanes(S.sid); if (gen !== _gen) return; }   // P3-4a: progress while peaks.bin is built
-  const eng = B.peaksRaw ? glEngine() : null;   // P3-6b: in the app the tile bytes go to the engine, the page keeps no arrays
-  for (let i = 0; i < S.order.length; i += 8) {   // 8 tracks at a time (P3-6b: 30 tracks one after the other took 2 s)
-    await Promise.all(S.order.slice(i, i + 8).map(async n => {
-      S.events[n] = normEvents(await B.events(S.sid, n));
-      if (gen !== _gen) return;   // C5
-      try { S.peaks[n] = await loadPeaks(n, eng); S.peakErr[n] = null; } catch(e) { S.peaks[n] = null; S.peakErr[n] = e.message.replace(/^\d+: /, ""); markLaneDetail(n, e.detail); }
-      S.peakAmp[n] = peakAmpOf(S.peaks[n]);
-    }));
-    if (gen !== _gen) return;   // C5
-  }
-  if (gen !== _gen) return;   // C5
-  try {   // #167: the saved lane-height factors of the rows (the tracks that left are skipped)
-    const rh = await B.rowHeightsGet ? await B.rowHeightsGet(S.sid) : null;
-    if (gen !== _gen) return;
-    if (rh && rh.heights && typeof rh.heights === "object") setRowHeights(Object.fromEntries(Object.entries(rh.heights).filter(([n, f]) => S.tracks[n] && typeof f === "number" && isFinite(f) && f > 0)));
-  } catch (e) { /* no row heights */ }
-  await tmLoad();   // P4-8: the tempo and meter map (the rulers and the grid)
-  if (gen !== _gen) return;
-  S.playhead = Math.min(S.playhead, maxDur());
-  GLQ.loadedSeq = GLQ.eng ? -1 : 0;   // P3-6b: the self-test waits for the engine to answer the first draw with lanes (open to drawn; glDraw sets the number)
-  invalidate(F.VIEW); flushFrame(); updateStatus(); refreshCounts();   // the loaded project is drawn now, not one frame later
-  S.loaded = gen;   // the status line is final: the e2e tests wait for this before they type
-  refreshRelinkBar();   // P3-4d: offline tracks offer "Find moved audio..."
-  return true;   // false-y when a newer loadProject superseded this one (the early returns above)
-}
-async function loadPeaks(n, eng) {   // P3-6b: the tiles of a track to the engine, the page keeps the counts and the coarsest level
-  if (!eng || !B.peaksRaw || !glEngine()) return B.peaks(S.sid, n);
-  const r = await B.peaksRaw(S.sid, n), cur = glEngine();
-  if (!cur) return B.peaks(S.sid, n);
-  cur.addTiles(n, r.raw);
-  return { sr: r.sr, n_samples: r.n_samples, levels: r.levels, tiles: true };
-}
-/* The first open of a project builds peaks.bin for every track (about 1 s per track of 350 s). The
-   service builds them as a job; the progress bar shows track n of m while it runs (P3-4a). */
-async function prepareLanes(sid) {
-  let live = true, shown = false;
-  try {
-    await B.prepareLanes(sid, job => {
-      if (!live || job.state === "done") return;
-      const ts = Object.entries(job.tracks || {});
-      const finished = ts.filter(([, t]) => t.state === "done" || t.state === "error").length;
-      const cur = ts.find(([, t]) => t.state === "running");
-      shown = true;
-      showProgress(Math.round(100 * finished / Math.max(1, ts.length)),
-        `building waveforms: ${Math.min(finished + 1, ts.length)} of ${ts.length}${cur ? ` (${cur[0]})` : ""}`);
-    });
-  } catch (e) { /* the lanes below show the error of each track */ }
-  finally { live = false; if (shown) hideProgress(); }
-}
+/* ---------------- events reload (the analysis wrote new events into the open project) ---------------- */
 async function loadEventsOnly() {
   S.undo.length = 0; S.redo.length = 0;   // B2: stacks reference pre-analysis state
   for (const n of S.order) S.events[n] = normEvents(await B.events(S.sid, n));
@@ -828,10 +560,10 @@ async function reloadFollowers(names) {   // the service derived the followers' 
 }
 async function refreshTrackMeta() {   // after an analysis: the params the retry changed and the follows, without a DOM rebuild
   if (!S.sid) return;
-  const gen = _gen;
+  const gen = loadGen();
   try {
     const r = await B.tracks(S.sid);
-    if (gen !== _gen) return;
+    if (gen !== loadGen()) return;
     for (const [n, t] of Object.entries(r.tracks || {})) {
       if (!S.tracks[n]) continue;
       if (t.params) S.tracks[n].params = t.params;
@@ -870,127 +602,6 @@ async function setTrackFollow(name, src) {
 }
 function followSelected(src) { const n = needTrack(); if (n) return setTrackFollow(n, src); }
 
-/* ---------------- frame scheduler (P3-14d, concurrency review Q2) ----------------
-   Input does not draw. A wheel, drag, scrub, key or edit changes the state and calls invalidate(flags) or
-   invalidateHits(track); one requestAnimationFrame callback (flushFrame) draws what the flags ask for, once per frame,
-   however many events came in that frame (W2). The frame reads no layout: the sizes and places of the editor, the
-   lanes area, the overview, the ruler and every row come from GEO, which a ResizeObserver fills after the browser's
-   own layout (measureGeo). So the frame only writes, and the browser lays out once, after it (W3).
-   Flags: VIEW the whole view (ruler, overview, the near lanes, the GL lanes, the playhead); HEAD the playhead, the
-   time and the overview; PH the playhead and the time (the playback tick); GL the GL lanes only (a scroll, a row
-   moved or changed its class); SIZE the canvas sizes (from GEO); NEAR the canvas stores of the lanes near the view.
-   invalidateHits(track) redraws the hit lines of one track (its spike lane and the 2D layer of its wave lane) and
-   posts no GL draw: the wave did not change. A change of the selected hit redraws the tracks of the old and the new
-   selection by itself. redrawAll() still draws everything at once (tests and the self-test call it).
-   P3-16: METER the level meters of the tracks and the master (transforms only, drawn before a VIEW frame returns). */
-const F = { VIEW: 1, HEAD: 2, PH: 4, GL: 8, SIZE: 16, NEAR: 32, METER: 64 };
-const FR = { flags: 0, tracks: new Set(), raf: 0, inFrame: false, sel: "", sized: "", head: ["", "", "", ""],
-  last: 0, n: { frames: 0, view: 0, tracks: 0, head: 0, gl: 0, size: 0, meter: 0, skipped: 0 } };   // counters: the tests and the self-test read them
-function requestFrame() { if (!FR.raf) FR.raf = requestAnimationFrame(onFrame); }
-function invalidate(flags) { FR.flags |= flags; requestFrame(); }
-function invalidateHits(track) {   // no track: every track (new events from an analysis, velocities)
-  for (const n of track ? [track] : S.order) FR.tracks.add(n);
-  requestFrame();
-}
-/* P4-40c: the 60 Hz cap. On a 120 Hz display a scrub or a hit drag asked for a redraw in every animation frame.
-   A frame that comes less than FR_MIN_MS (12, between the 8.3 ms of 120 Hz and the 16.7 ms of 60 Hz) after the last drawn one waits: the request stays pending (FR.raf is set
-   again) and the next animation frame serves it. Only the frame path off playback is capped; the playback step
-   (`tick`), the compositor playhead (`CP`) and the strip (`SP`) keep their own pace. No setting. */
-const FR_MIN_MS = 12;   // not 16: frame times of a 60 Hz display jitter below 16.7 ms and lost a frame in five (measured)
-const frPending = () => !!(FR.flags || FR.tracks.size || SP.leaving || selKey() !== FR.sel);
-function onFrame(t) {
-  FR.raf = 0;
-  if (S.playing) tick(t);   // the playback step moves the playhead, follows it and draws the frame
-  else if (FR.last && t - FR.last < FR_MIN_MS && t >= FR.last && frPending()) { FR.n.skipped++; requestFrame(); }
-  else flushFrame(t);
-}
-function selKey() { return S.sel ? `${S.sel.track}\u0000${S.sel.index}` : ""; }
-function flushFrame(t) {
-  if (SP.leaving) spLeftCheck();   // P4-1
-  const sk = selKey();
-  if (sk !== FR.sel) {   // the selected hit changed: redraw the hit lines of the old and the new track
-    if (FR.sel) FR.tracks.add(FR.sel.split("\u0000")[0]);
-    if (S.sel) FR.tracks.add(S.sel.track);
-    FR.sel = sk;
-  }
-  if (SP.on && ((FR.flags & (F.VIEW | F.SIZE | F.NEAR | F.GL)) || FR.tracks.size)) spLeave("draw");   // P4-1: back to the frame path
-  let f = FR.flags;
-  const tracks = FR.tracks;
-  if (!f && !tracks.size) return;
-  FR.flags = 0; FR.tracks = new Set();
-  if (t) FR.last = t;   // P4-40c: the time of the last drawn frame (the playback step passes none)
-  FR.inFrame = true; FR.n.frames++;
-  try {
-    if (f & F.METER) { drawMeters(); FR.n.meter++; }   // P3-16
-    if (f & F.SIZE) { sizeCanvases(); FR.n.size++; f |= F.VIEW; }
-    else if ((f & F.NEAR) && syncLaneBuffers()) f |= F.VIEW;   // a lane came near: it has a new canvas store to draw
-    if (f & F.VIEW) { drawAll(); FR.n.view++; return; }
-    for (const n of tracks) if (drawHits(n)) FR.n.tracks++;
-    if (f & F.GL) { glRepaint(); FR.n.gl++; }
-    if (f & F.HEAD) { drawOverview(); FR.n.head++; }
-    if (f & (F.HEAD | F.PH)) drawHead();
-  } finally { FR.inFrame = false; }
-}
-
-/* ---------------- geometry (P3-14d): read after layout, never in a frame ----------------
-   measureGeo runs in the ResizeObserver callback (the browser has just laid out, so the reads do not force a
-   layout) and once at boot. The observer watches the editor, the lanes area, the overview, the ruler and every row;
-   a change of the rows (built, moved) observes them again, and a new observation reports at once. The scroll
-   position comes from the scroll event. Row places are in the coordinates of the scrolled content. */
-const GEO = { ok: false, editorW: 0, laneW: 300, rulerW: 0, laneX: 0, rulerX: 0, ovX: 0, ovW: 0, ovH: 0,
-  scL: 0, scT: 0, scW: 0, scH: 0, scX: 0, scY: 0, top: 0, waveX: 0, waveH: 120, spikeH: 33, dpr: 1, rows: {}, n: 0 };
-let _geoRO = null;
-function measureGeo() {
-  const ed = $("#editor"), sc = $("#lanesScroll"), ow = $("#overviewWrap");
-  GEO.editorW = ed.clientWidth;
-  GEO.laneW = Math.max(300, GEO.editorW - S.theadW - 2);
-  GEO.rulerW = GEO.editorW - S.theadW - 2;
-  GEO.scL = sc.offsetLeft; GEO.scT = sc.offsetTop; GEO.scW = sc.clientWidth; GEO.scH = sc.clientHeight;
-  const sr = sc.getBoundingClientRect();
-  GEO.scX = sr.left + sc.clientLeft; GEO.scY = sr.top + sc.clientTop; GEO.top = sc.scrollTop;
-  GEO.ovW = ow.clientWidth; GEO.ovH = ow.clientHeight;
-  GEO.ovX = $("#overview").getBoundingClientRect().left; GEO.rulerX = $("#rulerClip").getBoundingClientRect().left;
-  const rows = {}, y0 = GEO.top - GEO.scY;
-  sc.querySelectorAll(".track").forEach(row => {   // P4-1: the lane box, not the canvas, which a strip moves by a transform
-    const r = row.getBoundingClientRect(), w = row.querySelector("canvas.wave"), s = row.querySelector("canvas.spike");
-    const tr = row.querySelector(".tlanes").getBoundingClientRect(), wt = tr.top + w.offsetTop;
-    rows[row.dataset.name] = { top: r.top + y0, bottom: r.bottom + y0, wave: wt + y0, waveH: w.clientHeight };   // P4-27: a row can be taller than the others (waveH of its own)
-    GEO.waveX = tr.left - GEO.scX; GEO.laneX = tr.left; GEO.spikeH = s.clientHeight;
-    if (!S.rowH || !S.rowH[row.dataset.name] || GEO.waveH === undefined) GEO.waveH = w.clientHeight;   // GEO.waveH = the height of a row without an override
-  });
-  GEO.rows = rows; GEO.dpr = window.devicePixelRatio || 1; GEO.ok = true; GEO.n++;
-}
-function sizeKey() { return [GEO.laneW, GEO.rulerW, GEO.ovW, GEO.ovH, GEO.waveH, GEO.spikeH, GEO.dpr, rowHKey(), VL.on ? VL.h : 0].join(","); }   // P3-14c: the lane heights too; P4-27: the rows with their own height; #208: the velocity lane's
-let _geoLanes = "";
-function onGeo() {   // the GL lanes are drawn again only when the lanes area or a row moved (not when, say, the status line wrapped)
-  measureGeo();
-  const lanes = [GEO.scL, GEO.scT, GEO.scW, GEO.scH, GEO.waveX, GEO.top, ...Object.entries(GEO.rows).map(([n, g]) => n + g.wave)].join(",");
-  const moved = lanes !== _geoLanes, sized = sizeKey() !== FR.sized;
-  _geoLanes = lanes;
-  if (!moved && !sized) return;
-  invalidate(F.GL | F.NEAR | F.METER | (sized ? F.SIZE : 0));   // P4-40h: rows that moved into the view paint their meters
-  if (!S.playing) flushFrame();   // the layout is fresh now: draw in this frame, before it is painted
-}
-function geoObserve() {   // (again) every element the geometry depends on
-  const sc = $("#lanesScroll");
-  if (!_geoRO) {
-    _geoRO = new ResizeObserver(onGeo);
-    sc.addEventListener("scroll", () => { GEO.top = sc.scrollTop; invalidate(F.GL | F.NEAR | F.METER); }, { passive: true });   // P4-40h: rows that enter the view paint their meters once
-    new MutationObserver(geoObserve).observe(sc, { childList: true });   // rows built, moved or removed
-    new MutationObserver(recs => { if (recs.some(r => r.target !== sc && r.target.tagName !== "CANVAS")) invalidate(F.GL); }).observe(sc, { subtree: true, attributes: true, attributeFilter: ["class"] });   // muted: the GL lane fades; P4-40b: the cursor classes of #lanesScroll and of a spike canvas draw nothing
-  }
-  _geoRO.disconnect();
-  for (const el of [$("#editor"), sc, $("#overviewWrap"), $("#rulerClip"), ...sc.querySelectorAll(".track")]) _geoRO.observe(el);
-}
-window.addEventListener("resize", () => { GEO.dpr = window.devicePixelRatio || 1; invalidate(FR.sized !== sizeKey() ? F.SIZE : F.HEAD); });   // a new screen scale; sizes come from the observer
-function rowOf(name) { return document.querySelector(`.track[data-name="${CSS.escape(name)}"]`); }
-function laneSize(canvas) {
-  if (canvas.classList.contains("spike")) return [GEO.laneW, GEO.spikeH];
-  if (canvas.classList.contains("vel")) return [GEO.laneW, VL.h];   // P4-40f: the velocity lane (#208: its own height)
-  const row = canvas.closest(".track"), g = row && GEO.rows[row.dataset.name];   // P4-27: a row with its own height
-  return [GEO.laneW, g && g.waveH ? g.waveH : GEO.waveH];
-}
-
 /* ---------------- playhead overlay (global, Pro Tools style) ---------------- */
 function positionPlayhead() {   // the overlay lives in #editor; it shows only inside the lane area (never over the header column or the Inspector)
   const W = laneWidth();
@@ -1009,151 +620,6 @@ function drawHead() {   // the playhead and the time display; a text is written 
   if (FR.head[3] !== sub) $("#sampleDisplay").textContent = FR.head[3] = sub;
 }
 
-/* ---------------- compositor playhead (P4-1, phase 3 finding X-2, review Q7) ----------------
-   While the transport plays and the view stands still (follow off; page follow between two page turns; smooth
-   follow left of its anchor at the start of the song, or at its end), the playhead overlay is moved by a Web
-   Animation: a linear translateX that the compositor (Core Animation in the WKWebView) runs between the 4 Hz playhead
-   messages. The page draws no frame for it; P3-15a experiment B put the 60 Hz frames at about 2 points of the app's
-   CPU. The animation comes from the transport model (appPos: the messages and the 1 s clock sync) and is armed again
-   only when the model and the animation differ by more than CP_TOL_S, or the view, the lane width or the speed
-   changed. A timer runs the tick at the moment the view must move (the page turn, the smooth anchor, the end of the
-   view or of the song). The ticks that still run (the meter frames, about 25 Hz; else every CP_SLOW_MS) update the
-   counters and the overview. A seek, a pause, a zoom or a pan stop it (cpStop) or arm it again for the new view.
-   CP.segs and CP.hist keep what was shown (the animations and the drawn ticks) for drawnPlayheadAt. */
-const CP = { anim: null, at0: 0, pos0: 0, rate: 1, pr: 1, dur: 0, until: 0, key: "", timer: 0, slow: 0, arms: 0, segs: [], hist: [] };
-const CP_TOL_S = 0.00025, CP_SLOW_MS = 100, CP_KEEP = 16384, CP_GUARD_S = 0.15;
-/* #463 (re-scope, Ardour's editor.cc super_rapid_screen_update is the model): the 4 Hz anchors carry ms of jitter and
-   the clock sync offset switches samples every second, so a re-arm per sample is a visible step when zoomed in. The
-   page dead-reckons instead and slews: CP_SLEW of the sample error plus a small integrator per sample (Ardour:
-   guess += err*0.12 + I; I += 0.0144*(err - I)), a hard re-anchor only on seek, play, pause, speed change, epoch
-   change or |err| > CP_HARD_S. The running compositor animations are never restarted for a small drift: their
-   playbackRate is corrected (CP_TAU_S time constant), which WebKit keeps on the compositor (measured in the gate). */
-const CP_SLEW = 0.12, CP_SLEW_I = 0.0144, CP_HARD_S = 0.02, CP_TAU_S = 0.5;
-/* #463 (coordinator bound): the pr clamp slews at most CP_PR_MAX - 1 song s per real second, so within 1 s of
-   song time it can remove at most 0.1 song s of divergence. A divergence the clamp cannot remove within 1 s of
-   song time is a real discontinuity, not drift: re-anchor then. Threshold = (CP_PR_MAX - 1) x 1 s = 0.1 song s
-   (100 ms, speed-independent: the clamp removes (CP_PR_MAX - 1) x speed song s per real s, and 1 s of song time
-   takes 1 / speed real s). Seek/play/pause/speed/epoch keep re-anchoring as before. */
-const CP_PR_MIN = 0.9, CP_PR_MAX = 1.1, CP_REANCHOR_S = CP_PR_MAX - 1;
-const cpSnap = x => Math.round(x * GEO.dpr) / GEO.dpr;   // #463: whole device pixels (the playhead overlay; the strip's 2D transforms are written per frame)
-function cpPos(t) { return CP.pos0 + Math.min(Math.max(0, t - CP.at0), CP.dur) / 1000 * CP.rate * CP.pr; }
-function cpRate(e) {   // #463: correct the drift e (song s) through the playback rate, time constant CP_TAU_S
-  const now = performance.now(), shown = cpPos(now);   // the clock's position now, before the rate change
-  const want = CP.rate * CP.pr + e / CP_TAU_S;   // song s per real second
-  CP.pr = Math.min(CP_PR_MAX, Math.max(CP_PR_MIN, want / CP.rate));
-  for (const a of SP.anims) { try { a.updatePlaybackRate(CP.pr); } catch (x) { CP.pr = 1; } }
-  if (CP.anim) { try { CP.anim.updatePlaybackRate(CP.pr); } catch (x) { CP.pr = 1; } }
-  /* #463: updatePlaybackRate keeps the animation's current position; the model must too, else the seg's
-     pos0 + (t - at0) * rate * pr jumps by (t - at0) * rate * dpr at the change (a ms of slew is a step of
-     tens of ms on a long seg). Rebase the clock at `now`: the position stays continuous, the end time too. */
-  CP.at0 = now; CP.pos0 = shown; CP.dur = Math.max(0, CP.at0 + CP.dur - now);
-  /* #14: end the drawn seg here and arm the next one from `now`, instead of moving the last seg in place: the
-     rAF frames sample drawnPlayheadAt at timestamps between the ticks, and a seg moved to `now` leaves them
-     nothing (under a strip the hist ticks are flagged, so the fallback finds only nulls - the smooth-30s case
-     measured 2 paired frames of 43). The seg history is what the page showed; the slew must not erase it. */
-  cpEndSeg(now);
-  CP.segs.push({ at0: now, pos0: shown, rate: CP.rate, pr: CP.pr, dur: CP.dur, end: Infinity });
-  if (CP.segs.length > CP_KEEP) CP.segs.splice(0, CP.segs.length - CP_KEEP);
-}
-/* #14: the test hook that forces a real step of the drawn playhead: the model the page shows (the clock and
-   the live seg with it) jumps by `s` song s at once, so every later drawn position carries the jump until a
-   re-anchor. Only the tests call it (test_playhead_steps.py). */
-window.__DS_STEP_PLAYHEAD = s => {
-  const now = performance.now(), shown = cpPos(now);
-  CP.at0 = now; CP.pos0 = shown + s;
-  const g = CP.segs[CP.segs.length - 1];
-  if (g && g.end === Infinity) { g.at0 = now; g.pos0 = shown + s; }
-};
-function cpEndSeg(t) { const g = CP.segs[CP.segs.length - 1]; if (g && g.end === Infinity) g.end = Math.min(t, g.at0 + g.dur); }
-/* #463: the 2D strip els move per frame from the slewn clock (openDAW, peaks.js, wavesurfer write translateX per
-   frame): a compositor animation interpolates between its keyframes and sits on fractional pixels mid-flight, so
-   spFreeze and the pixel tests saw the strip off the whole device pixel. The GL strip keeps its compositor
-   animation. A frame writes a style only when the snapped value changed. */
-function spWrite(now, force) {
-  if (!SP.on || !SP.els.length || (SP.frozen && !force)) return;
-  const x = -((cpPos(now) - FOLLOW_FRAC * SP.d - SP.s) / SP.d);
-  for (const { el, scale, gl } of SP.els) {
-    if (gl) continue;
-    const tf = `translateX(${cpSnap(x * scale)}px)`;
-    if (el._sptf !== tf) el.style.transform = el._sptf = tf;
-  }
-}
-function cpStop() {
-  clearTimeout(CP.timer); CP.timer = 0; PH.r = NaN;   // P4-1b fix round: the value the animation gave is no longer the playhead's
-  if (!CP.anim) return;
-  const now = performance.now();
-  cpEndSeg(now);
-  /* #463: the cancel must not show the stale inline transform of the last frame path draw: write the animation's
-     current position inline in the same task, else WebKit paints one frame at the position of a page ago. */
-  if (FR.head[0] !== "none") $("#playheadOverlay").style.transform = `translateX(${cpSnap(S.theadW + tToX(cpPos(now), laneWidth()))}px)`;
-  CP.anim.cancel(); CP.anim = null; CP.key = "";
-  FR.head[0] = FR.head[1] = null;   // the inline style shows again: positionPlayhead writes it in this frame
-}
-/* The song time until which the view stands still at playhead `pos` in the current follow mode; null: it moves now.
-   `show`: the playhead is inside the view. Mirrors followStep. */
-function cpStill(pos) {
-  const v = S.view, d = viewDur(), maxD = maxDur();
-  if (S.followMode === "off" || S.followHold) return pos < v.t0 ? { until: v.t0, show: false } : pos <= v.t1 ? { until: v.t1, show: true } : { until: maxD, show: false };
-  if (pos < v.t0 || pos > v.t1) return null;
-  const kind = followKind();
-  if (kind === "page") {
-    const flip = v.t1 - d * 0.1;
-    if (S.followMode === "smooth" && v.t1 >= maxD - 1e-9) return { until: maxD, show: true };   // P4-39b: the view stops at the end of the song
-    return pos <= flip ? { until: flip, show: true } : null;
-  }
-  const anchor = v.t0 + FOLLOW_FRAC * d;
-  if (v.t0 <= 0 && pos < anchor) return { until: anchor, show: true };       // left of the anchor at the start
-  if (v.t1 >= maxD - 1e-9 && pos >= anchor) return { until: maxD, show: true };   // the view is at the end of the song
-  return null;
-}
-/* In the tick: arm (or keep) the animation; false: this frame draws the playhead itself. */
-function cpArm(now) {
-  const pos = AC.drawn, still = AC.running && AC.pending === null && !AC.seeking && !window.__DS_NO_CP__ && cpStill(pos);
-  if (!still) { cpStop(); return false; }
-  const W = laneWidth(), key = `${S.view.t0},${S.view.t1},${W},${S.theadW},${AC.speed},${still.show}`, until = Math.min(still.until, maxDur());
-  if (CP.anim && key === CP.key && CP.until === until && CP.rate === AC.speed && now - CP.at0 < CP.dur) {
-    const e = pos - cpPos(now);   // #463: the model is ahead of the animation by e song s
-    /* #463: slew, never re-anchor for drift. A model hard correction (the device position stall of an underrun
-       catch-up) leaves the clock up to hundreds of ms from the model; re-anchoring here stepped the line by
-       exactly that (gate10). The pr clamp bounds the slew, so any e stays within the step budget per frame.
-       Bound (coordinator): a divergence the clamp cannot remove within 1 s of song time is a real discontinuity,
-       not drift - re-anchor then (|e| > CP_REANCHOR_S, the 276 ms case of gate10). */
-    if (Math.abs(e) > CP_REANCHOR_S) { cpStop(); }
-    else if (Math.abs(e) > CP_TOL_S) { cpRate(e); return true; }
-    else return true;   // still right: the animation keeps the playhead
-  }
-  const dur = Math.max(0, (until - pos) / AC.speed * 1000), el = $("#playheadOverlay");
-  const durX = dur + Math.min(CP_GUARD_S, Math.max(0, maxDur() - until) / AC.speed) * 1000;   // #463: runs past `until`
-  cpStop();
-  if (still.show) {
-    const x0 = cpSnap(S.theadW + tToX(pos, W)), x1 = cpSnap(S.theadW + tToX(Math.min(until + CP_GUARD_S * AC.speed, maxDur()), W));
-    if (FR.head[0] !== "block") el.style.display = FR.head[0] = "block";
-    CP.anim = el.animate([{ transform: `translateX(${x0}px)` }, { transform: `translateX(${x1}px)` }], { duration: durX, easing: "linear", fill: "forwards" });
-    CP.anim.startTime = now;   // the page clock: performance.now and the document timeline share their origin
-    Object.assign(CP, { at0: now, pos0: pos, rate: AC.speed, pr: 1, dur: durX, until, key });
-    CP.segs.push({ at0: now, pos0: pos, rate: AC.speed, pr: 1, dur: durX, end: Infinity });
-    if (CP.segs.length > CP_KEEP) CP.segs.splice(0, CP.segs.length - CP_KEEP);
-    CP.arms++;
-  } else if (FR.head[0] !== "none") el.style.display = FR.head[0] = "none";
-  CP.timer = setTimeout(requestFrame, dur + 1);   // the tick that turns the page, starts the smooth glide or shows it
-  return true;
-}
-/* The playhead the page shows at page time t (the self-test `play` and the tests): the animation that ran then, else
-   the drawn ticks, linear between two of them. late: the time of a tick is its end (after the frame's drawing work). */
-function drawnPlayheadAt(t, late) {
-  for (let i = CP.segs.length - 1; i >= 0; i--) {
-    const g = CP.segs[i];
-    if (t >= g.at0 && t <= Math.min(g.end, g.at0 + g.dur)) return g.pos0 + (t - g.at0) / 1000 * g.rate * (g.pr || 1);
-    if (g.at0 + g.dur < t - 60000) break;
-  }
-  const h = CP.hist, k = late ? 2 : 0;
-  let lo = 0, hi = h.length - 1;
-  if (!h.length || t < h[0][k] || t > h[hi][k]) return null;
-  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (h[m][k] <= t) lo = m; else hi = m; }
-  const a = h[lo], b = h[hi];
-  if (a[3] || b[3]) return null;   // a tick of the compositor mode: the animation, not the tick, drew the playhead
-  return b[k] > a[k] ? a[1] + (b[1] - a[1]) * (t - a[k]) / (b[k] - a[k]) : a[1];
-}
 /* ---------------- follow strip (P4-1, review Q7) ----------------
    Smooth follow moves the view with the playhead. Before, every frame drew the ruler, the spike lanes, the hit lines
    and the GL wave lanes again (60 draws per second since P3-14d). Now the page draws a strip two views wide once
@@ -2975,144 +2441,6 @@ function mxDraw(canvas, r, hitAt, color, peak) {   // r: {start, data} of the wi
   ctx.fillRect(Math.round(hitAt * W), 0, 1, H);
 }
 
-/* ---------------- editing ---------------- */
-/* P4-40a: every step has a `label` ("Delete Hit") and a `where` {track, t}: a hit edit, a Learn change and so on say what
-   they did and where. The step gets both when it is pushed (a site may set them first: nudge, Learn). A move shows its
-   `from` when it is undone (opWhere). Edit > Undo and Redo name the step (undoTitle), an undo reveals its place. A
-   selection or a view change is no step: no pushUndo call exists for them (a test guards it). */
-function undoMeta(op) {
-  const hitT = (trk, id) => { const e = (S.events[trk] || []).find(x => x.id === id); return e ? e.t : null; };
-  const at = (track, t) => ({ track: track || null, t: Number.isFinite(t) ? t : null });
-  const set = (label, where) => { if (!op.label) op.label = label; if (!op.where) op.where = where; };
-  switch (op.type) {
-    case "del": set("Delete Hit", at(op.track, op.t)); break;
-    case "add": set("Add Hit", at(op.track, op.t)); break;
-    case "move": set("Move Hit", at(op.track, op.to)); break;
-    case "setv": set("Set Velocity", at(op.track, hitT(op.track, op.id))); break;
-    case "setv-many": {   // P4-40f: one velocity gesture over several hits, one step
-      const n = (op.list || []).length;
-      set(`Set Velocity (${op.track}, ${n} hits)`, at(op.track, n ? hitT(op.track, (op.list)[0].id) : null));
-      break;
-    }
-    case "del-many": {   // #151: one Delete over a range selection
-      const n = (op.list || []).length;
-      set(`Delete Hits (${op.track}, ${n} hits)`, at(op.track, n ? (op.list)[0].t : null));
-      break;
-    }
-    case "move-many": {   // #151: one nudge over a range selection
-      const n = (op.list || []).length;
-      set(`Nudge Hits (${op.track}, ${n} hits)`, at(op.track, n ? (op.list)[0].from : null));
-      break;
-    }
-    case "shift": set("Shift Hits", at(op.track, null)); break;
-    case "repick": set("Re-pick Hits", at(op.track, null)); break;
-    case "loud": set("Set Loudness Range", at(op.track, null)); break;
-    case "learn": set("Learn Change", at(op.track, null)); break;
-    case "trkdel": set(`Remove Track ${op.name}`, at(op.name, null)); break;
-    case "role": set(`Set Role (${op.track})`, at(op.track, null)); break;
-    case "tempo": set(/^bar 1/.test(op.what || "") ? "Set Bar 1" : op.what ? op.what.charAt(0).toUpperCase() + op.what.slice(1) : "Tempo Map Change", at(null, null)); break;
-    case "vel": {
-      const name = Object.keys(op.tracks || {})[0], id = name ? Object.keys(op.tracks[name].after)[0] : null;
-      set("Recompute Velocities", at(name, id === undefined ? null : hitT(name, id)));
-      break;
-    }
-    default: set("Edit", at(null, null));
-  }
-  return op;
-}
-function opWhere(op, isUndo) { return op.type === "move" && isUndo ? { track: op.track, t: op.from } : (op.where || { track: null, t: null }); }
-function stepText(op, isUndo) {   // "Delete Hit (s top, 12.345 s)"
-  const w = opWhere(op, isUndo), parts = [];
-  if (w.track) parts.push(w.track);
-  if (w.t !== null && w.t !== undefined) parts.push(`${w.t.toFixed(3)} s`);
-  return (op.label || "Edit") + (parts.length ? ` (${parts.join(", ")})` : "");
-}
-function undoTitles() {   // the texts of Edit > Undo and Edit > Redo: the step each one takes, or the plain word
-  const u = S.undo[S.undo.length - 1], r = S.redo[S.redo.length - 1];
-  return { undoTitle: u ? `Undo ${stepText(u, true)}` : "Undo", redoTitle: r ? `Redo ${stepText(r, false)}` : "Redo" };
-}
-function undoShell() { if (window.DSShell && DSShell.sync) DSShell.sync(); }
-function pushUndo(op) { undoMeta(op); S.undo.push(op); if (S.undo.length>300) S.undo.shift(); S.redo.length = 0; undoShell(); }
-function undoReveal(op, isUndo) {   // after an undo or redo: the track is selected, the hit is selected, the view shows the place
-  const w = opWhere(op, isUndo);
-  if (!w.track || !S.tracks[w.track]) return;
-  if (S.selTrack !== w.track) setSelTrack(w.track);
-  if (w.t === null || w.t === undefined) return;
-  const evs = S.events[w.track] || [];
-  let j = op.id ? evs.findIndex(e => e.id === op.id) : -1;
-  if (j < 0) { let best = 0.005; evs.forEach((e, i) => { if (Math.abs(e.t - w.t) < best) { best = Math.abs(e.t - w.t); j = i; } }); }
-  if (j >= 0) S.sel = { track: w.track, index: j };
-  if (w.t < S.view.t0 || w.t > S.view.t1) centerOn(w.t);
-  invalidateHits(w.track); updateStatus();
-}
-/* P4-40a point 2: a dirty project whose document is the saved one again is clean again. The service compares the documents
-   (project_clean_check), so a step the stacks do not know about cannot fool it. It runs after the writes on their way. */
-let cleanTimer = null;
-function cleanCheckSoon() {
-  const sid = S.sid;
-  clearTimeout(cleanTimer);
-  if (!sid || !B.projectCleanCheck) return;
-  cleanTimer = setTimeout(async () => {
-    try {
-      await edIdle(); await Promise.all(Object.keys(saveTimers).map(pushEvents));
-      if (sid !== S.sid || !S.dirty) return;
-      const r = await B.projectCleanCheck(sid);
-      if (sid === S.sid && r && r.dirty === false) setDirtyState(false);
-    } catch (e) { /* the flag stays as it is */ }
-  }, 450);
-}
-function applyOp(op, reverse) {   // a step of the service (shift, add, del, move, setv) answers a promise: true when it was applied
-  if (op.type === "vel") { DSShell.applyVel(op, reverse); updateStatus(); return; }   // P3-4b: Recompute Velocities, all tracks in one step
-  if (op.type === "learn") { lnApplyOp(op, reverse); return; }   // P4-6a: a Learn mark, removal, flip or Forget
-  if (op.type === "tempo") { tmApplyOp(op, reverse); return; }   // P4-8: a change of the tempo and meter map
-  if (op.type === "loud") { hgApplyLoudOp(op, reverse); return; }   // P4-3: the loudness histogram (floor, ceiling, cut)
-  if (op.type === "trkdel") return trApplyOp(op, reverse);   // P4-39a: Track > Remove Track
-  if (op.type === "role") return roleApplyOp(op, reverse);   // 0.9.1: the role of a track (Inspector)
-  if (op.type === "shift") return shiftApplyOp(op, reverse);   // P4-9: the Hitpoint shift
-  if (op.type === "repick") { hgApplyRepickOp(op, reverse); return; }   // P4-3: a stored re-pick of the Sensitivity histogram
-  return edApplyOp(op, reverse);   // P4-9 stage 2: add, del, move, setv: events_edit
-}
-/* P4-9 stage 2 (fix round items b and c): a step moves to the other stack after the service applied it, so a refused
-   undo or redo leaves the stacks as the service is. While a shift or an edit is on its way, an undo or a redo joins the
-   same queue and runs after it (it takes the step that is on top then); the other waits (tm, ln, hg) still drop it with a
-   message, because their own busy flags have no hook that could run it later. */
-function edOwns(op) { return !!op && (op.type === "trkdel" || op.type === "shift" || op.type === "add" || op.type === "del" || op.type === "move" || op.type === "setv" || op.type === "setv-many" || op.type === "del-many" || op.type === "move-many"); }
-async function undoStep(isUndo) {
-  const from = isUndo ? S.undo : S.redo, to = isUndo ? S.redo : S.undo, op = from[from.length - 1];
-  if (tmUndoWaits() || lnUndoWaits() || hgUndoWaits(op) || !op) return;
-  const r = applyOp(op, isUndo);
-  if (r && typeof r.then === "function" && !(await r)) return;   // refused: the step stays where it was
-  const i = from.lastIndexOf(op);
-  if (i < 0) return;   // a new edit cleared the redo stack meanwhile
-  from.splice(i, 1); to.push(op);
-  undoReveal(op, isUndo);
-  setMsg(`${isUndo ? "undid" : "redid"} ${stepText(op, isUndo)}`);
-  undoShell(); cleanCheckSoon();
-  return true;
-}
-function undoRedo(isUndo) {   // answers a promise: true when a step moved
-  const stack = isUndo ? S.undo : S.redo;
-  if (SH.pending || edOwns(stack[stack.length - 1])) return shSerial(() => undoStep(isUndo));
-  return undoStep(isUndo).catch(e => { setMsg(errText(e)); return false; });
-}
-/* P4-40a point 4: Edit > Undo History. The steps newest first: the undone ones (grey) above, then the done ones. A click takes
-   the steps back (a done one) or forward (an undone one) up to and with that row, one after the other. */
-function undoHistoryRows() {
-  const rows = [];
-  S.redo.forEach((op, j) => rows.push({ op, redo: true, count: S.redo.length - j }));
-  for (let k = S.undo.length - 1; k >= 0; k--) rows.push({ op: S.undo[k], redo: false, count: S.undo.length - k });
-  return rows.slice(0, 40);
-}
-async function undoSteps(isUndo, count) {
-  let n = 0;
-  for (let tries = 0; n < count && tries < 40; tries++) {
-    const stack = isUndo ? S.undo : S.redo, before = stack.length;
-    if (!before) break;
-    await undoRedo(isUndo);
-    if (stack.length < before) { n++; tries = 0; } else await new Promise(r => setTimeout(r, 100));   // refused while a write is on its way: wait
-  }
-  return n;
-}
 function openUndoHistory() {
   if (!needProject()) return;
   const box = $("#undoHistList"); box.textContent = "";
@@ -3129,59 +2457,6 @@ function openUndoHistory() {
   }
   showModal("#undoHistModal");
 }
-function undo() { undoRedo(true); }
-function redo() { undoRedo(false); }
-
-/* debounced event writes (400 ms). Each pending write captures the project id and the events array
-   when it is scheduled (S3-1), so a switch, open or close in the meantime cannot send one project's
-   hits to another: the write still goes to its own sid and track. */
-let saveTimers = {};   // track -> {sid, body, timer}
-let _editSeq = 0;   // #249 R03: counts the page's edits (markDirty); a save answer applies only when no edit slipped in during the write
-function eventsBody(track) {
-  const t = S.tracks[track];
-  for (const e of S.events[track] || []) { if (isManual(e)) delete e.cut; if (isManual(e) || e.edited) { delete e.bleed; delete e.filtered; } }   // P4-3, P4-14, P4-6c: an edited hit is never cut, an edited or restored one never bleed nor filtered
-  return { sr: t.sr, duration: t.duration, n_samples: t.n_samples, events: S.events[track] };
-}
-function pushEvents(track) {   // the server holds the events in the open project (dirty until Save)
-  const p = saveTimers[track];
-  if (p) clearTimeout(p.timer);
-  const sid = p ? p.sid : S.sid, body = p ? p.body : eventsBody(track);
-  return B.setEvents(sid, track, body)
-    .then(r => {   // #249 R02: the payload leaves the queue only when the service acknowledged the write
-      if (saveTimers[track] === p) delete saveTimers[track];
-      if (sid !== S.sid) return;
-      return reloadFollowers(r && Array.isArray(r.followers) ? r.followers : followersOf(track))   // P3-18
-        .catch(e => setMsgBg(`followers: ${errText(e)}`, "error"));   // the write is in: a failed follower refresh must not refuse the flush
-    })
-    .catch(e => {   // #249 R02: a refused write stays queued for Retry; the flush rejects, so the step that needed it does not run
-      if (saveTimers[track] !== p) saveTimers[track] = { sid, body, timer: null };
-      return evFailShow(e);
-    });
-}
-/* #249 R02: the status line holds the refused writes with Retry and Discard until the user acts */
-function evFailSet(on) {
-  const el = $("#stEvFail");
-  if (el.classList.contains("hidden") === on) el.classList.toggle("hidden", !on);
-}
-function evFailShow(e) {
-  evFailSet(true);
-  setMsgBg(`the edited hits did not reach the project: ${errText(e)}`, "error");
-  throw e;   // the flush and the step that awaited it refuse to go on
-}
-function markDirty(track) {
-  if (!track) return;
-  _editSeq++;   // #249 R03: an edit while a save is on its way keeps the page dirty, whatever the answer carries
-  setDirtyState(true);
-  if (saveTimers[track]) clearTimeout(saveTimers[track].timer);
-  saveTimers[track] = { sid: S.sid, body: eventsBody(track), timer: setTimeout(() => pushEvents(track).catch(() => {}), 400) };   // #249 R02: a refusal shows on the status line, it is not an unhandled rejection
-}
-async function flushEvents() {   /* before S.sid changes, a save, an export, an analysis: the hit edits on their way first, then the page's own writes. #249 R02: rejects while a write is refused — the caller must not run its step */
-  await edIdle();
-  await Promise.all(Object.keys(saveTimers).map(pushEvents));
-}
-function cancelEvents(sid) {   // a discarded project: its pending writes are dropped, nothing else is touched
-  for (const [t, p] of Object.entries(saveTimers)) if (!sid || p.sid === sid) { clearTimeout(p.timer); delete saveTimers[t]; }
-}
 function needProject() {   // S3-3: the page can show no project at all
   if (S.sid) return true;
   setMsg("no project is open: use New, Open or Open Recent"); return false;
@@ -3190,9 +2465,9 @@ async function saveProjectNow(flushOnly, force) {   // Cmd/Ctrl+S: flush pending
   try { await flushEvents(); }
   catch (e) { setMsg(`save failed: ${errText(e)}`, "error"); throw e; }   // #249 R02: a refused write stops the save (its message is already on the status line)
   if (flushOnly || !needProject()) return;
-  const sid = S.sid, seq = _editSeq;   // #249 R03: the answer belongs to this project and to the edits up to now
+  const sid = S.sid, seq = editSeq();   // #249 R03: the answer belongs to this project and to the edits up to now
   try { const r = await B.projectSave(sid, force); staleSet(null);
-    if (S.sid === sid) setDirtyState(!!(r && r.dirty) || _editSeq !== seq);   // #249 R03: r.dirty is the truth (the project may have changed during the write); the mark only moves while this project is the open one
+    if (S.sid === sid) setDirtyState(!!(r && r.dirty) || editSeq() !== seq);   // #249 R03: r.dirty is the truth (the project may have changed during the write); the mark only moves while this project is the open one
     setMsg(force ? "project saved over the file on disk" : "project saved");
     /* R12: the save is committed; a failed backup cleanup comes back as a warning on the status line */
     if (r && r.warning) setMsgBg(`project saved, but the backup cleanup failed: ${r.warning}`, "error"); }
@@ -3230,7 +2505,7 @@ async function staleReload(sid) {   // #127: also a project that is not the open
 async function saveOrChoose(sid, name, leave) {
   const cur = sid === S.sid;
   if (cur) { try { await flushEvents(); } catch (e) { setMsg(`save failed: ${errText(e)}`, "error"); return null; } }   // #249 R02: the close/quit save does not run on a refused write
-  const seq = _editSeq;   // #249 R03
+  const seq = editSeq();   // #249 R03
   let r;
   try { r = await B.projectSave(sid); }
   catch(e) {
@@ -3245,7 +2520,7 @@ async function saveOrChoose(sid, name, leave) {
     r = await B.projectSave(sid, true);
     if (_staleSid === sid) staleSet(null);
   }
-  if (sid === S.sid) setDirtyState(!!(r && r.dirty) || _editSeq !== seq);   // #249 R03: the answer clears the mark of its own project only, and only while it is the open one; r.dirty and an edit during the write keep it
+  if (sid === S.sid) setDirtyState(!!(r && r.dirty) || editSeq() !== seq);   // #249 R03: the answer clears the mark of its own project only, and only while it is the open one; r.dirty and an edit during the write keep it
   return "saved";
 }
 function staleSetup() {
@@ -3271,211 +2546,6 @@ function showSpeed(speed) {   // the status bar says "half speed" while the tran
   if (el.classList.contains("hidden") === half) el.classList.toggle("hidden", !half);
 }
 function pause() { return appPause(); }
-/* ---------------- native transport (P3-5b) ----------------
-   In the app, play/pause/seek/mute/solo/clicks run on the native transport (crates/app/src/transport.rs).
-   The page holds no audio. The transport sends the heard position on every change of its state and
-   else 4 times a second (P3-15a; each message is a script eval in the WebView)
-   ({t_ns, pos, playing, epoch}); the page extrapolates it for every frame it draws:
-   pos + (now - sent time), where the sent time is t_ns on the page clock. The page clock offset is the
-   smallest (arrival - t_ns) seen since play started (the fastest message has the least delay).
-   The UI follows the playhead as before: S.playhead is set from the model each frame. When the
-   user moves S.playhead during playback (ruler, lane click, Tab, Enter), the next frame sees that it
-   differs from the value drawn last and asks the transport to seek (at most every 60 ms). */
-const AC = { tickAt: 0, sync: null, syncs: [], syncTimer: null, mix: null, mixN: 0, tok: 0, active: false, starting: false, pos: 0, at: 0, running: false, off: Infinity, drawn: 0, errI: 0, epoch: null,
-  pending: null, seeking: false, seekAt: 0, minEpoch: 0, stopping: false, underruns: 0, reopens: 0, last: null, sent: null, speed: 1 };
-let _appQ = Promise.resolve();   // the transport commands run one after the other, in the order the user made them
-function appCmd(fn) { const p = _appQ.then(fn); _appQ = p.catch(() => {}); return p; }
-function appPos(now) { return AC.running ? AC.pos + (now - AC.at) / 1000 * AC.speed : AC.pos; }   // P3-20b: speed 0.5 at half speed
-function appSlew(m) {   // #471: the shared slew/anchor of one sample (4 Hz playhead and 25 Hz meter messages)
-  const recv = performance.now(), sent = m.t_ns / 1e6;
-  AC.off = Math.min(AC.off, recv - sent);   // fallback until the first clock sync: the fastest message has the least delay
-  /* #463: the slewed local clock. A hard re-anchor only on seek, play, pause, speed change, epoch change or a sample
-     more than CP_HARD_S from the shown position; else the shown position gains CP_SLEW of the error plus the
-     integrator (the line keeps its slope, the anchor time shifts). A new clock sync offset is slewed in the same
-     way: appSync no longer steps AC.at, the next samples carry it in through this correction. */
-  const hard = AC.sent === null || m.playing !== AC.running || m.epoch !== AC.epoch
-    || (typeof m.speed === "number" && m.speed > 0 && m.speed !== AC.speed);
-  if (!hard) {
-    const err = m.pos - appPos(recv), c = Math.abs(err) > CP_HARD_S ? 0 : CP_SLEW * err + AC.errI;   // song s
-    AC.errI = Math.abs(err) > CP_HARD_S ? 0 : AC.errI + CP_SLEW_I * (err - AC.errI);
-    if (c) AC.at -= c * 1000 / AC.speed;   // shown(recv) gains c: the anchor moves back by c / (speed / 1000)
-  } else { AC.errI = 0; AC.pos = m.pos; }
-  AC.sent = sent; if (hard) AC.at = sent + (AC.sync !== null ? AC.sync : AC.off); AC.running = !!m.playing;
-  AC.epoch = m.epoch;
-  if (typeof m.speed === "number" && m.speed > 0) AC.speed = m.speed;
-}
-function appOnPlayhead(m) {
-  if (!AC.active || !m || m.sid !== S.sid) return;
-  if (m.error && !m.end) { setMsg(`audio: ${m.error} (trying again)`); AC.running = false; return; }
-  if (m.epoch < AC.minEpoch || AC.seeking || AC.pending !== null) return;   // older than our last seek
-  const metered = !!m.meters;   // #471: the meter message (25 Hz) carries the playhead fields too
-  if (typeof m.pos !== "number" || typeof m.t_ns !== "number") return;   // an old bridge sends meters without them
-  if (metered) onMeters(m);   // P3-16: the meters
-  appSlew(m);
-  if (metered) return;   // the meter message has no underruns, reopens or end fields
-  AC.last = m;
-  AC.underruns = m.underruns; AC.reopens = m.reopens;
-  if (m.end && S.playing && !AC.starting && !AC.stopping) pause();   // the transport ended on its own (project closed)
-}
-/* Clock sync: the channel may deliver every message late (in the app, by about 25 ms), so the min-delay offset
-   is wrong by that delay. A command answers within a millisecond: transport_status carries t_ns, and the
-   middle of the call is the page time of that t_ns (error: half the round trip). The best of the last 8
-   samples (smallest round trip) sets the offset; it is renewed every second. */
-function appSync() {
-  const a = performance.now();
-  return B.transportStatus().then(st => {
-    const b = performance.now();
-    if (!st || typeof st.t_ns !== "number") return;
-    AC.syncs.push({ rtt: b - a, off: (a + b) / 2 - st.t_ns / 1e6 });
-    if (AC.syncs.length > 8) AC.syncs.shift();
-    AC.sync = AC.syncs.reduce((best, x) => x.rtt < best.rtt ? x : best).off;
-    // #463: a better offset is no longer stepped in here (up to 250 ms later it would jump); the next playhead
-    // samples carry it in through the slew of appOnPlayhead, so the shown playhead never steps.
-  }).catch(() => {});
-}
-function appSeekNow() {
-  const target = AC.pending; AC.pending = null; AC.seeking = true; AC.seekAt = performance.now(); AC.errI = 0;   // #463: the seek re-anchors
-  appCmd(() => B.transportSeek(target)).then(r => { AC.minEpoch = r.epoch; })
-    .catch(e => setMsg(`seek failed: ${e.message}`, "error")).finally(() => { AC.seeking = false; });
-}
-function appTickPos() {   // the position to draw in this frame
-  const now = AC.tickAt = performance.now();
-  if (PH.user) {   // the user moved the playhead (P4-1: the setter of S.playhead says so)
-    PH.user = false; cpStop(); spLeave("seek");
-    AC.pending = PH.v; AC.pos = PH.v; AC.running = false; AC.sent = null;
-  }
-  if (AC.pending !== null && !AC.seeking && now - AC.seekAt >= 60) appSeekNow();
-  AC.drawn = (AC.pending !== null || AC.seeking) ? AC.pos : appPos(now);
-  return AC.drawn;
-}
-async function appPlay(speed, returnKey) {   // speed: 0.5 is half speed (P3-20b); undefined plays at normal speed; returnKey: the play-and-return key (#207): the next Space or the same key stops and returns to the start of this play
-  if (S.playing || AC.starting) return;
-  if (!needProject()) return;
-  auReset();   // P4-40d: a play replaces an audition (the host does the same)
-  AC.starting = true;
-  try {
-    const click = SETTINGS().click;
-    const events = {};
-    for (const n of S.order) events[n] = (S.events[n] || []).map(e => e.t);
-    Object.assign(AC, { active: true, off: Infinity, minEpoch: 0, pending: null, seeking: false, running: false, errI: 0, epoch: null,
-      pos: S.playhead, at: performance.now(), drawn: S.playhead, stopping: false, last: null, sent: null, sync: null, syncs: [],
-      speed: speed || 1 });
-    S.playStartPos = S.playhead; PH.user = false;   // P4-1: a move from here on seeks
-    S.playReturn = returnKey || null;   // #207: play-and-return, cleared by every play that the plain keys start
-    const pos0 = S.playhead, tok = ++AC.tok;   // messages of an earlier play (its channel) are dropped by the token
-    const r = await appCmd(async () => {
-      await B.transportMix(S.muted, S.solo);
-      await B.transportClicks(click.enabled, click.volume, click.pitches);
-      return B.transportPlay(S.sid, pos0, events, m => { if (tok === AC.tok) appOnPlayhead(m); }, speed);
-    });
-    AC.minEpoch = r.epoch; AC.names = r.names || null;   // P3-16: the order of the meter values
-    AC.speed = r.speed || 1; showSpeed(AC.speed);
-    if (r.names && r.channels) markTrackChannels(r.names, r.channels);
-    await appSync(); await appSync(); await appSync();
-    clearInterval(AC.syncTimer); AC.syncTimer = setInterval(() => { if (AC.active) appSync(); }, 1000);
-    S.playing = true; S.followHold = false; S.followResumeAt = null; $("#playBtn").textContent = "⏸";
-    if (!r.ready) setMsg("audio is slow to start");
-    else if (r.note) setMsg(r.note);   // P3-16: the saved output device is missing; the system default plays
-    tick();
-  } catch (e) {
-    AC.active = false;
-    setMsg(`playback failed: ${e.message.replace(/^\d+: /, "")}`, "error");
-  } finally { AC.starting = false; }
-}
-function appPause() {
-  if (!S.playing) return;
-  const p = Math.max(0, Math.min(appPos(performance.now()), maxDur()));
-  S.playing = false; AC.stopping = true; AC.active = false; clearInterval(AC.syncTimer); cpStop(); spLeave("pause");
-  $("#playBtn").textContent = "▶"; showSpeed(1);
-  S.playhead = p;
-  appCmd(() => B.transportStop(false)).then(r => {
-    // the transport stopped within a block of our estimate: take its position if nothing moved the playhead since
-    if (S.playhead === p && !S.playing && r && typeof r.pos === "number" && r.rate > 0) { S.playhead = Math.min(r.pos, maxDur()); invalidate(F.HEAD); updateStatus(); }
-  }).catch(e => setMsg(`stop failed: ${e.message}`, "error"));
-  invalidate(F.HEAD);
-}
-function appMix() {   // AC.mix: the round trip of the last change and the transport's own latency (the self-test reads it)
-  const a = performance.now();
-  appCmd(() => B.transportMix(S.muted, S.solo))
-    .then(r => {   // inbound: from the call to the change in the service, on the page clock estimated from the playhead messages
-      const off = AC.sync !== null ? AC.sync : AC.off;
-      const inbound = r && r.t_ns && isFinite(off) ? Math.max(0, r.t_ns / 1e6 + off - a) : null;
-      AC.mix = { rtt: performance.now() - a, latency_ms: r && r.latency_ms !== undefined ? r.latency_ms : null, inbound };
-      AC.mixN++;
-    })
-    .catch(e => setMsg(`mute/solo failed: ${e.message}`, "error"));
-}
-/* ---------------- P4-40d: hit audition and loop ----------------
-   The key "Audition Hit" (A in the Pro Tools preset, Option+A in Cubase) plays the selected track alone, from AU_PRE
-   before the selected hit to AU_POST after it. Shift with the key loops the window until Escape or Space. A range
-   selection (LN.sel) plays and loops the range, and the ruler shows the loop band. The call is a transport_play with
-   start, end, loop and tracks (crates/app/src/transport.rs): the host solos the track for this play only, mute and solo
-   stay as the page set them, and no playhead messages come, so the playhead of the page does not move. Half-Speed
-   applies when the transport plays at half speed, or an audition at half speed runs, as the key is pressed. The click
-   is off during an audition: it is the sound of the track that counts. Setting "Audition on Tab" (SETTINGS().ui.auditionTab):
-   a step to the next or previous hit (Tab, gotoEvent) plays that hit, unless the page plays. Status: "audition s top 12.345 s". */
-const AU_PRE = 0.030, AU_POST = 0.250;
-const AU = { on: false, loop: false, speed: 1, tok: 0, timer: null, win: null, track: null, t: null, until: Infinity };   // until: when a single hit has ended (page clock)   // win: {t0, t1} while the ruler shows a loop
-function auTarget(hit) {   // the window to play: a given hit {track, t}, else the range selection, else the selected hit
-  if (hit) return { track: hit.track, t0: Math.max(0, hit.t - AU_PRE), t1: hit.t + AU_POST, hit: hit.t, range: false };
-  const rg = LN.sel && S.tracks[LN.sel.track] && LN.sel.t1 > LN.sel.t0 ? LN.sel : null;
-  if (rg) return { track: rg.track, t0: rg.t0, t1: rg.t1, hit: null, range: true };
-  const e = S.sel && (S.events[S.sel.track] || [])[S.sel.index];
-  return e ? { track: S.sel.track, t0: Math.max(0, e.t - AU_PRE), t1: e.t + AU_POST, hit: e.t, range: false } : null;
-}
-function auReset() {
-  clearTimeout(AU.timer); AU.timer = null; AU.tok++; AU.on = false; AU.loop = false;
-  if (AU.win) { AU.win = null; invalidate(F.VIEW); }
-}
-function auStop(quiet) {   // Escape, Space, a new play: the host pauses and gives mute and solo back
-  if (!AU.on || performance.now() > AU.until) return false;   // none, or a single hit that has ended: the key keeps its own job
-  auReset();
-  appCmd(() => B.transportStop(false)).catch(e => setMsg(`stop failed: ${e.message}`, "error"));
-  if (!quiet) setMsg("audition stopped");
-  return true;
-}
-async function audition(loop, hit, shot) {   // loop: Shift; hit: {track, t} of a step with Audition on Tab; shot: a track name whose layer one-shot plays once (P4-40e)
-  if (!needProject()) return;
-  let g;
-  if (shot) {
-    const l = lyLayer(shot);
-    if (!l) { setMsg(`audition: ${shot} has no one-shot`); return; }
-    g = { track: shot, t0: 0, t1: l.frames / l.sr, hit: null, range: false, shot: true };
-  } else {
-    g = auTarget(hit);
-    if (!g) { setMsg("audition: select a hit or a range first"); return; }
-  }
-  const looped = g.range || !!loop;
-  const speed = S.playing ? (AC.speed === 0.5 ? 0.5 : 1) : (AU.on ? AU.speed : 1);
-  if (S.playing) pause();
-  auReset();
-  const tok = AU.tok;
-  Object.assign(AU, { on: true, loop: looped, speed, track: g.track, t: g.hit, until: Infinity });
-  if (looped) { AU.win = { t0: g.t0, t1: g.t1 }; invalidate(F.VIEW); }
-  try {
-    const click = SETTINGS().click;
-    const r = await appCmd(async () => {
-      await B.transportMix(S.muted, S.solo);
-      await B.transportClicks(false, click.volume, click.pitches);
-      const o = { track: g.track, start: g.t0, end: g.t1, loop: looped, speed };
-      if (g.shot) o.shot = g.track;   // P4-40e: the one-shot preview voice at the window start
-      return B.transportAudition(S.sid, o);
-    });
-    if (tok !== AU.tok) return;   // stopped or replaced while it started
-    if (!looped) {
-      const ms = (g.t1 - g.t0) / speed * 1000 + 20;
-      AU.until = performance.now() + ms;
-      AU.timer = setTimeout(() => { if (tok === AU.tok) { AU.on = false; AU.timer = null; } }, ms);
-    }
-    setMsg(g.shot ? `one-shot of ${g.track}: ${g.t1.toFixed(3)} s`
-      : g.range ? `audition ${g.track} ${g.t0.toFixed(3)} to ${g.t1.toFixed(3)} s (loop)` : `audition ${g.track} ${g.hit.toFixed(3)} s${looped ? " (loop)" : ""}`);
-    if (r && r.note) setMsg(r.note);
-  } catch (e) {
-    if (tok === AU.tok) auReset();
-    setMsg(`audition failed: ${e.message.replace(/^\d+: /, "")}`, "error");
-  }
-}
-window.DSAudition = { state: () => ({ on: AU.on, loop: AU.loop, speed: AU.speed, track: AU.track, t: AU.t, win: AU.win && { ...AU.win } }) };   // the e2e tests read it
 /* ---------------- mixer: volume, pan and meters per track; master fader and meter (P3-16) ----------------
    Pro Tools style. Volume -inf to +12 dB (the fader position follows VOL_TAPER: 0 dB at 3/4), pan -1 (left) to
    +1 (right); both are kept in the project (track_set_mix, marks it dirty). The master volume is kept in the app
@@ -3956,7 +3026,7 @@ function vlBind(row, name) {
     const t0 = xToT(px, W);
     const rect = c.getBoundingClientRect();   // cached: the row does not move during a gesture (offsetY lies once the pointer leaves the canvas)
     VL.drag = { track: name, mode, gen: EDGEN[name] || 0, x0: px, y0: ev.offsetY, curX: px, curY: ev.offsetY, t0, set: new Map(), rect };
-    if (saveTimers[name]) pushEvents(name).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
+    if (hasPendingWrite(name)) pushEvents(name).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
     if (mode === "stalk") {
       const e = evs()[hi], grp = vlGroup(name, e);   // #208: a selected stalk moves the selection, scaled
       VL.drag.anchor = e.id; VL.drag.v0 = e.v; VL.drag.base = grp.length > 1 ? new Map(grp.map(g => [g.id, g.v])) : null;
@@ -4125,7 +3195,7 @@ function attachTrackHandlers(row, name) {
     if (i >= 0) {
       S.sel = {track:name, index:i};
       if (SH.pending || hgRepickBusy()) { invalidateHits(name); updateStatus(); return; }   // an edit is on its way: select, no drag (the hits on the page are not the stored ones yet)
-      if (saveTimers[name]) pushEvents(name).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
+      if (hasPendingWrite(name)) pushEvents(name).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
       dragState = {i, startX: px, origT: evs()[i].t, moved:false, sr: S.tracks[name].sr, gen: EDGEN[name] || 0};
       hitDrag = { track: name, index: i };
       window.addEventListener("mouseup", endHitDrag);
@@ -5804,18 +4874,6 @@ function adoptEvents(raw, old) {   // the service's hits with page ids; an edite
   const man = (old || []).filter(isManual);
   return normEvents(raw).map(e => { const m = isManual(e) ? man.find(x => Math.abs(x.t - e.t) < 1e-9) : null; e.id = m ? m.id : newId(); return e; });
 }
-function settleEvents(name) { return saveTimers[name] ? pushEvents(name) : Promise.resolve(); }   // the service reads the stored hits
-/* P4-9 stage 2: the service calls that change the hits (a shift, a hit edit, the undo and redo of both) go through one queue
-   (shSerial): one after the other, in the order the user made them; SH.pending counts the calls queued or running (a re-pick,
-   a save and an export wait for it). Each call reads what it needs when it runs, not when it was asked. */
-const SH = { pending: 0, chain: Promise.resolve() };
-function shSerial(call) {
-  SH.pending++;
-  const next = SH.chain.then(call).catch(e => { setMsg(errText(e)); return false; }).finally(() => { SH.pending--; });
-  SH.chain = next;
-  return next;
-}
-async function edIdle() { while (SH.pending) await SH.chain; }   // outside the queue only (a call in the queue would wait for itself)
 function shiftNow(name) { const t = S.tracks[name]; return Math.round((t && t.params && t.params.shift_samples) || 0); }
 async function shiftApply(name, nv) {   // true when the service shifted the track to nv samples; the hits shown are the stored ones
   const sid = S.sid;
@@ -5844,149 +4902,6 @@ async function shiftApplyOp(op, reverse) {   // applyOp: undo and redo of a shif
   const ok = await hgSerial(op.track, () => shiftApply(op.track, to));
   if (ok) setMsg(`${reverse ? "undo" : "redo"}: shift of ${op.track} to ${to} samples`);
   return !!ok;
-}
-/* P4-9 stage 2: the hit edits (add, move, delete, velocity, and the undo and redo of them) are events_edit calls. The page asks
-   (edCall with a plan made when the call runs: the ops, the ids it needs for the hits, the undo step), the service changes
-   the stored hits, the page shows them (events_get) and pushes the undo step after that. A refused call changes nothing and
-   makes no step. The 400 ms write (markDirty) stays for the other steps (velocity map, re-pick undo, Learn); an edit sends
-   those writes first (settleEvents), a save, an export and a re-pick wait for the edits (flushEvents, edIdle).
-   A hit drag shows the hit at the pointer on the page's copy and commits one move on release. */
-const EDGEN = {};   // track -> counter: the page's list of a track was replaced by the stored hits (a drag in progress is void then)
-function adoptHits(raw, old, drop, make) {   // the stored hits with page ids: the hits the call did not touch keep theirs (undo steps)
-  const gone = new Set(drop || []), pool = new Map();
-  for (const e of old) if (!gone.has(e.id)) { const a = pool.get(e.t); if (a) a.push(e.id); else pool.set(e.t, [e.id]); }
-  const fresh = normEvents(raw), left = [];
-  fresh.forEach(e => { const a = pool.get(e.t); if (a && a.length) e.id = a.shift(); else left.push(e); });
-  const want = (make || []).slice();
-  for (const e of left) {
-    const k = want.findIndex(([t]) => Math.abs(t - e.t) < 1e-6);
-    e.id = k >= 0 ? want.splice(k, 1)[0][1] : newId();
-  }
-  return fresh;
-}
-async function edReload(sid, name) {   // after a refused call: the page shows what the service holds
-  try {
-    if (sid !== S.sid || !S.tracks[name]) return;
-    S.events[name] = adoptHits(await B.events(sid, name), S.events[name] || [], [], []);
-    EDGEN[name] = (EDGEN[name] || 0) + 1;
-    invalidateHits(name); refreshCounts(name); updateStatus();
-  } catch (e) { /* the next load shows them */ }
-}
-async function edNow(name, mk, before) {   // true when the service applied the plan mk() made; mk(evs) -> null (nothing to do) or {ops, drop, make, sel, step, msg}
-  const sid = S.sid;
-  if (!sid || !S.tracks[name]) return false;
-  if (analysisRunning) { jobNote("hit edits are refused while an analysis runs"); return false; }
-  if (hgRepickBusy()) { setMsg("a re-pick is being stored: try the edit again"); return false; }
-  if (LN.busy > 0) { setMsg("a Learn change is being applied: try the edit again"); return false; }   // P4-6c: its answer replaces the hit list; a Learn call that still waits for the edits on their way does not refuse them (they run first)
-  if (saveTimers[name]) { if (before) before(); try { await settleEvents(name); } catch (e) { setMsg(`edit: ${errText(e)}`, "error"); return false; } }   // the 400 ms writes of other steps reach the service first; #249 R02: a refused one refuses the edit
-  if (sid !== S.sid || !S.tracks[name]) return false;
-  const pl = mk(S.events[name] || []);
-  if (!pl) return false;
-  let r;
-  try { r = await B.eventsEdit(sid, name, pl.ops); }
-  catch (e) { setMsg(`edit: ${errText(e)}`); await edReload(sid, name); return false; }
-  if (sid !== S.sid || !S.tracks[name]) return false;
-  if (pl.done) pl.done(r);   // #144: the plan reads the answer (where a snapped hit landed)
-  const old = S.events[name] || [], cur = S.sel && S.sel.track === name ? (old[S.sel.index] || {}).id : undefined;
-  let fresh;
-  try { fresh = adoptHits(await B.events(sid, name), old, pl.drop, pl.make); }
-  catch (e) { setMsg(`edit: ${errText(e)}`); return false; }
-  if (sid !== S.sid || !S.tracks[name]) return false;
-  S.events[name] = fresh; EDGEN[name] = (EDGEN[name] || 0) + 1;
-  const want = pl.sel !== undefined ? pl.sel : cur;
-  if (want !== undefined) { const j = want ? fresh.findIndex(x => x.id === want) : -1; S.sel = j >= 0 ? { track: name, index: j } : null; }
-  if (pl.step) pushUndo(pl.step);
-  if (hitDrag && hitDrag.track === name && !pl.drag) hitDrag = null;   // the list was replaced: a drag in progress is void
-  setDirtyState(true); invalidateHits(name); refreshCounts(name); updateStatus();
-  if (pl.ops && pl.ops.some(op => op.op === "add" || op.op === "delete" || op.op === "move")) suspendFollowForEdit();   // P4-wf10
-  if (pl.msg) setMsg(pl.msg);
-  reloadFollowers(Array.isArray(r && r.followers) ? r.followers : followersOf(name));
-  return true;
-}
-function edCall(name, mk, before) { return shSerial(() => edNow(name, mk, before)); }
-const edIndex = (evs, id) => evs.findIndex(e => e.id === id);
-function edApplyOp(op, reverse) {   // applyOp: the ops of a step, forward or back (runs in the queue)
-  if (op.type === "setv-many") {   // P4-40f: one velocity gesture over several hits
-    return edNow(op.track, evs => {
-      const ops = [];
-      for (const s of op.list || []) {
-        const j = edIndex(evs, s.id);
-        if (j < 0) { setMsg(`${reverse ? "undo" : "redo"}: the hit is not there any more`); return null; }
-        ops.push({ op: "velocity", index: j, v: reverse ? s.from : s.to, edited: true, ...(reverse && s.was ? { was: s.was } : {}) });   // R05: the undo restores the hit's field presence
-      }
-      return { ops };
-    });
-  }
-  if (op.type === "del-many") {   // #151: one Delete over a range selection: the undo puts every hit back as it was stored (byte-identical), the redo deletes them again
-    return edNow(op.track, evs => {
-      if (!reverse) {
-        const ops = [];
-        for (const s of op.list || []) {
-          const j = edIndex(evs, s.id);
-          if (j < 0) { setMsg("redo: the hit is not there any more"); return null; }
-          ops.push({ op: "delete", index: j });
-        }
-        return { ops, drop: (op.list || []).map(s => s.id) };
-      }
-      return { ops: (op.list || []).map(s => ({ op: "add", t: s.t, v: s.v, ...(s.added ? {} : { added: false }), ...(s.orig !== undefined ? { orig: s.orig } : {}), ...(s.keep ? { keep: s.keep } : {}) })),
-        make: (op.list || []).map(s => [s.t, s.id]) };
-    });
-  }
-  if (op.type === "move-many") {   // #151: one nudge over a range selection
-    return edNow(op.track, evs => {
-      const ops = [];
-      for (const s of op.list || []) {
-        const j = edIndex(evs, s.id);
-        if (j < 0) { setMsg(`${reverse ? "undo" : "redo"}: the hit is not there any more`); return null; }
-        ops.push({ op: "move", index: j, t: reverse ? s.from : s.to, ...(reverse && s.was ? { was: s.was } : {}) });   // R05
-      }
-      return { ops, drop: (op.list || []).map(s => s.id), make: (op.list || []).map(s => [reverse ? s.from : s.to, s.id]) };
-    });
-  }
-  const id = op.id, label = reverse ? "undo" : "redo";
-  const mk = evs => {
-    const j = edIndex(evs, id);
-    if (op.type === "add" && !reverse || op.type === "del" && reverse) {   // the hit comes back and is selected again
-      const e = op.type === "add" ? { t: op.t, v: op.v } : { t: op.t, v: op.v, ...(op.added ? {} : { added: false }), ...(op.orig !== undefined ? { orig: op.orig } : {}), ...(op.keep ? { keep: op.keep } : {}) };
-      return { ops: [{ op: "add", ...e }], make: [[op.t, id]], sel: id };
-    }
-    if (j < 0) { setMsg(`${label}: the hit is not there any more`); return null; }
-    if (op.type === "add" || op.type === "del") return { ops: [{ op: "delete", index: j }], drop: [id] };
-    if (op.type === "move") { const to = reverse ? op.from : op.to; return { ops: [{ op: "move", index: j, t: to, ...(reverse && op.was ? { was: op.was } : {}) }], drop: [id], make: [[to, id]] }; }
-    return { ops: [{ op: "velocity", index: j, v: reverse ? op.from : op.to, edited: true, ...(reverse && op.was ? { was: op.was } : {}) }] };   // setv; R05: the undo restores the field presence, the redo marks the hit edited again (like the setv-many list branch)
-  };
-  return edNow(op.track, mk);
-}
-/* R05: the field presence of a hit before an edit (the page's copy of the reserved flags; `orig` and
-   `rise` ride along as values). The undo sends it as `was` on the inverse op, so the service puts the
-   hit back byte-identical (`undo(edit(doc)) == doc`): an edited flag a hand velocity or a restore
-   added goes away again, a moved hit's `orig` comes back (or goes), a stripped cut, bleed or
-   filtered mark returns. Every field the forward op can add or take off is in the map, also when
-   the hit did not have it. */
-function hitWas(e) {
-  return { orig: e.orig === undefined ? null : e.orig, edited: !!e.edited, cut: !!e.cut, bleed: !!e.bleed, filtered: !!e.filtered,
-    learned: !!e.learned, roll: !!e.roll, flam: !!e.flam, rescue: !!e.rescue, rise: e.rise !== undefined };
-}
-function delKeep(raw) {   // P4-40a: the stored fields of a deleted hit besides t, v, orig and added (the page's own list drops some, e.g. rise_db); the undo gives them back
-  const out = {};
-  for (const [k, v] of Object.entries(raw || {})) if (!["t", "v", "orig", "added", "id"].includes(k)) out[k] = v;
-  return Object.keys(out).length ? out : undefined;
-}
-function edDelete(trk, id) {   // delete the hit with this id (the key, the right-click)
-  // the read of the stored hits is inside the queue: SH.pending counts the delete from the moment it is asked (edits_done waits for it)
-  return shSerial(async () => {
-    let stored = [];   // the service's hits: the step keeps the fields of the hit as they are stored
-    try {
-      if (S.sid && (S.events[trk] || []).some(x => x.id === id)) { if (saveTimers[trk]) await settleEvents(trk); const r = await B.events(S.sid, trk); stored = Array.isArray(r) ? r : (r && r.events) || []; }
-    } catch (e) { stored = []; }
-    return edNow(trk, evs => {
-      const j = edIndex(evs, id);
-      if (j < 0) return null;
-      const e = evs[j], raw = stored.find(x => Math.abs(x.t - e.t) < 1e-9);
-      return { ops: [{ op: "delete", index: j }], drop: [id], sel: null,
-        step: { type: "del", track: trk, id, t: e.t, v: e.v, added: !!e.added, ...(e.orig !== undefined ? { orig: e.orig } : {}), keep: delKeep(raw) } };
-    });
-  });
 }
 function hgApplyRepickOp(op, reverse) {   // applyOp: undo and redo of a stored re-pick
   const st = reverse ? op.before : op.after, t = S.tracks[op.track];
@@ -6244,29 +5159,6 @@ function nativeFeel() {
   }, true);
 }
 nativeFeel();
-async function loadViewSettings() {   // at boot: the saved state of the Inspector, the key preset and the track height (the defaults stay when there are none)
-  try {
-    const st = await B.appSettingsGet();
-    if (st && typeof st.inspector === "boolean") setInspector(st.inspector, false);
-    if (st && typeof st.key_preset === "string") setKeyPreset(st.key_preset, false);   // P3-13c
-    if (st && TRACK_HEIGHTS[st.track_height]) setTrackHeight(st.track_height, false);   // P3-14c
-    if (st && AMP_STEPS.includes(st.amp_zoom)) setAmpZoom(st.amp_zoom, false);   // P3-20a
-    if (st && typeof st.zoom_toggle_tall === "boolean") setZoomTall(st.zoom_toggle_tall, false);   // P4-27
-    if (st && NUDGE_VALUES[st.nudge_value]) setNudgeValue(st.nudge_value, false);   // P3-20a
-    for (const k of Object.keys(TM_SETTING)) if (st && typeof st[TM_SETTING[k]] === "boolean") TM.ui[k] = st[TM_SETTING[k]];   // P4-8
-    if (st && typeof st.velocity_lane === "boolean") { VL.on = st.velocity_lane; VL.hint = VL.on; vlApply(); }   // P4-40f; #208: the hint shows on an open lane
-    if (st && typeof st.velocity_lane_height === "number" && st.velocity_lane_height >= VL_H_MIN && st.velocity_lane_height <= VL_H_MAX) VL.h = Math.round(st.velocity_lane_height);   // #208
-    if (st && typeof st.other_mics === "boolean") { MX.on = st.other_mics; mxApply(); }   // #157
-    if (st && typeof st.overview === "boolean") setOverview(st.overview, false);   // #169
-    if (st && Array.isArray(st.zoom_presets)) {   // #169: a damaged entry is left out
-      S.zoomOwn = st.zoom_presets.filter(p => p && typeof p.name === "string" && p.name.trim() && Number(p.span) > 0)
-        .map(p => ({ name: p.name.trim().slice(0, OWN_ZOOM_NAME_MAX), span: Number(p.span) }));
-      renderZoomOwn();
-      if (window.DSShell && DSShell.sync) DSShell.sync();
-    }
-    tmColors();
-  } catch (e) { /* no settings */ }
-}
 
 
 /* ---------------- track height (P3-14c; ux-daw-reference.md 3.4 row "Track height", 3.2 View > Track Height) ----------------
@@ -6450,7 +5342,7 @@ async function trReload(keepStacks, pick) {
 }
 async function trFlush(inQueue) {   // the hit edits on their way, then the page's own writes; a step of the SH queue must not wait for the queue (edIdle)
   if (!inQueue) await edIdle();
-  await Promise.all(Object.keys(saveTimers).map(pushEvents));
+  await Promise.all(pendingWriteTracks().map(pushEvents));
 }
 async function trRemove(name, op) {   // true when the service removed the track; op: the step that a redo runs again (it runs in the SH queue)
   const sid = S.sid;
@@ -6463,7 +5355,7 @@ async function trRemove(name, op) {   // true when the service removed the track
   const rest = S.order.filter(n => n !== name), idx = S.order.indexOf(name);
   const step = op || { type: "trkdel", sid, name, snapshot: null, muted: !!S.muted[name], solo: !!S.solo[name] };
   step.snapshot = r.snapshot; step.muted = !!S.muted[name]; step.solo = !!S.solo[name];
-  delete S.muted[name]; delete S.solo[name]; delete saveTimers[name];
+  delete S.muted[name]; delete S.solo[name]; dropQueuedWrite(name);
   await trReload(!!op, rest[idx] || rest[idx - 1] || null);   // the next track in order, else the previous one
   if (!op) pushUndo(step);
   setMsg(op ? `${name} removed` : `${name} removed (undo: Cmd+Z)`);
@@ -7473,7 +6365,7 @@ async function rangeDelete() {
   if (followerLocked(trk)) return;
   let stored = [];   // the service's hits: the step keeps the fields of each hit as they are stored
   try {
-    if (S.sid && (S.events[trk] || []).length) { if (saveTimers[trk]) await settleEvents(trk); const r = await B.events(S.sid, trk); stored = Array.isArray(r) ? r : (r && r.events) || []; }
+    if (S.sid && (S.events[trk] || []).length) { if (hasPendingWrite(trk)) await settleEvents(trk); const r = await B.events(S.sid, trk); stored = Array.isArray(r) ? r : (r && r.events) || []; }
   } catch (e) { stored = []; }
   return edCall(trk, evs => {
     const pool = stored.slice(), list = [];
@@ -8250,6 +7142,9 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
 
 /* ---------------- boot ---------------- */
 (async function boot() {
+  persistInit({ edIdle });   // R17 step 2: persist waits for the edit queue through the injected hook (edit.js owns edIdle since step 3)
+  editInit({ pushEvents, voidHitDrag: name => { if (hitDrag && hitDrag.track === name) hitDrag = null; } });   // R17 step 3: edit.js flushes the writes of other steps through the injected hook; voidHitDrag is the input layer's (a replaced hit list voids an in-flight drag)
+  sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks
   tmInit(); measureGeo(); geoObserve();   // P4-8: the map rulers; P3-14d: the geometry once now, then from the ResizeObserver
   setupUpload(); setupGlobal(); setupInfoLine(); staleSetup();
   if (B.onDirty) {   // P3-4a: the service tells when a project becomes dirty or clean

@@ -37,9 +37,9 @@ use drumspike_core::project::{
 use drumspike_core::{Project, SourceStatus};
 use serde_json::{json, Value};
 
-use crate::bridge::Channels;
 use crate::error::AppError;
 use crate::registry::{lock, Shared};
+use crate::reply::Channels;
 use crate::{Progress, Service};
 
 /// The commands of this card that are not in the lifecycle list.

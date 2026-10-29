@@ -80,3 +80,79 @@ fn level_confidence_and_review_order_do_not_follow_the_shift() {
         assert_eq!(queue_order(&shifted), queue_order(&base), "shift {shift}");
     }
 }
+
+/// Detector #8 package 4: the review queue says which gate kept a hit. A generated session —
+/// a snare track with six loud strokes and two ghost notes 20 dB under them — analyzed by the
+/// DSP detector keeps the ghosts through the soft gate (A1: below the level gate, shape within
+/// `soft_sim` of the template, no kick or tom hit within 30 ms). The `why` of a soft-rescued
+/// hit names the soft gate and its `c` is under [`DOUBT_BELOW`]; a loud hit (the level gate)
+/// does not name it and is not doubtful.
+#[test]
+fn soft_rescued_hit_names_the_soft_gate_and_the_loud_hit_does_not() {
+    let root = tmp("conf_p4_soft");
+    let mut x = kick_signal(&ONSETS, 3.5, 48_000);
+    for &g in &[0.5f64, 2.0] {
+        let ghost = kick_signal(&[g], 3.5, 48_000);
+        for (a, b) in x.iter_mut().zip(ghost) {
+            *a += b * 10f32.powf(-20.0 / 20.0);
+        }
+    }
+    let dir = project(
+        &root,
+        "Song",
+        &[Spec {
+            name: "s top",
+            role: "snare",
+            note: 38,
+            x,
+            sr: 48_000,
+        }],
+    );
+    let svc = service_dsp();
+    let sid = svc.project_open(&dir.display().to_string()).unwrap()["sid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    svc.analyze_start(&sid, Some(vec!["s top".into()]), None, None).unwrap();
+    let st = wait_done(&svc, &sid);
+    assert_eq!(st["tracks"]["s top"]["state"], "done", "{st}");
+    let events = svc.events_get(&sid, "s top").unwrap()["events"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        events.len(),
+        8,
+        "six loud strokes and two soft-rescued ghost notes: {events:?}"
+    );
+    let conf = svc.track_confidence(&sid, "s top", None).unwrap();
+    assert_eq!(conf["source"], "level");
+    let rows = conf["confidence"].as_array().unwrap();
+    assert_eq!(rows.len(), events.len());
+    for (e, r) in events.iter().zip(rows) {
+        let t = e["t"].as_f64().unwrap();
+        let ghost = (t - 0.5).abs() < 0.05 || (t - 2.0).abs() < 0.05;
+        let why = r["why"].as_array().unwrap();
+        if ghost {
+            assert_eq!(r["doubt"], json!(true), "{t}: {r}");
+            assert!(
+                r["c"].as_f64().unwrap() < conf["doubt_below"].as_f64().unwrap(),
+                "{t}: {r}"
+            );
+            assert!(
+                why.iter().any(|w| w.as_str().unwrap().contains("soft gate")),
+                "{t}: {r}"
+            );
+        } else {
+            assert_eq!(r["doubt"], json!(false), "{t}: {r}");
+            assert!(
+                r["c"].as_f64().unwrap() >= conf["doubt_below"].as_f64().unwrap(),
+                "{t}: {r}"
+            );
+            assert!(
+                !why.iter().any(|w| w.as_str().unwrap().contains("soft gate")),
+                "{t}: {r}"
+            );
+        }
+    }
+}

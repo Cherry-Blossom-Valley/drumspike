@@ -65,3 +65,19 @@ fn the_backend_never_asks_for_pcm() {
     }
     assert!(js.contains("peaks_tile") && js.contains("samples_window"));
 }
+
+/// #70: the page sends `keep_edited` itself on both invokes that need it (see `PAGE_KEEP_EDITED`).
+#[test]
+fn the_page_sends_keep_edited_itself() {
+    let js = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../static/backend.js")).unwrap();
+    for command in ["analyze_start", "track_repick"] {
+        let call = format!("invoke(\"{command}\"");
+        let line = js
+            .lines()
+            .find(|l| l.contains(&call))
+            .unwrap_or_else(|| panic!("backend.js has no {call}"));
+        // the code before the trailing `//` comment: a comment that names the flag does not send it
+        let code = line.split("//").next().unwrap();
+        assert!(code.contains("keep_edited"), "{call} does not send keep_edited: {line}");
+    }
+}

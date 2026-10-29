@@ -336,8 +336,8 @@ fn events_edit_add_with_snap_lands_on_the_analysis_onset_with_the_audio_velocity
 /// cut marks to the stored hits; the Service method and an explicit `apply: false` leave them as they were.
 #[test]
 fn track_velocity_set_through_call_stores_the_velocities_and_the_cut() {
-    use drumspike_app::bridge::Reply;
     use drumspike_app::call::call;
+    use drumspike_app::reply::Reply;
     let (svc, sid, _) = opened("vs1");
     svc.analyze_start(&sid, Some(vec!["k in".into()]), None, None).unwrap();
     wait_done(&svc, &sid);
