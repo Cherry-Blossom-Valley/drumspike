@@ -84,8 +84,8 @@
     ]},
     {"id": "p2-delete", "steps": [
       {"do": "caption", "text": "Edit > Delete Hit"},
-      {"do": "zoom_to", "track": "s_top", "t": 8.5938, "span": 0.5},
-      {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 8.5938,
+      {"do": "zoom_to", "track": "s_top", "t": 5.625, "span": 0.5},
+      {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 5.625,
        "err": "the playhead on the hit (Tab takes the next hit from the playhead, not from where an earlier scene left it)"},
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "6"},
@@ -102,8 +102,8 @@
     ]},
     {"id": "p2-nudge", "steps": [
       {"do": "caption", "text": "Edit > Nudge Value > 1 Sample"},
-      {"do": "zoom_to", "track": "s_top", "t": 9.5312, "span": 0.5},
-      {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 9.5312,
+      {"do": "zoom_to", "track": "s_top", "t": 3.125, "span": 0.5},
+      {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 3.125,
        "err": "the playhead on the hit the nudge moves"},
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "6"},
