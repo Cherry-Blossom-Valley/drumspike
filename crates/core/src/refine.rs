@@ -703,21 +703,22 @@ pub fn first_motion_peak(
     next: Option<f64>,
     peak_db: f64,
 ) -> (i64, BackStep) {
-    back_track(x, s, sr, t0, prev, next, peak_db, false)
+    back_track(x, s, sr, t0, (prev, next), peak_db, false)
 }
 
 /// The back-track of [`first_motion_peak`]; `strict` takes the foot one step stricter ([`foot_strict`], version 4).
+/// `neighbors` are the previous and the next hit time (`None` at the ends).
 fn back_track(
     x: &[f32],
     s: i64,
     sr: u32,
     t0: f64,
-    prev: Option<f64>,
-    next: Option<f64>,
+    neighbors: (Option<f64>, Option<f64>),
     peak_db: f64,
     strict: bool,
 ) -> (i64, BackStep) {
     let srf = sr as f64;
+    let (prev, next) = neighbors;
     let prev_mid = prev.map(|p| py_int(((p + t0) / 2.0) * srf));
     let next_mid = next.map(|nx| py_int(((t0 + nx) / 2.0) * srf));
     first_motion_mid_rule(x, s, sr, prev_mid, next_mid, peak_db, strict)
@@ -860,7 +861,7 @@ fn refine_back_peak(
         }
     }
     let s = (r.t * srf).round() as i64;
-    let (foot, back) = back_track(x, s, sr, t0, prev, next, peak_db, strict);
+    let (foot, back) = back_track(x, s, sr, t0, (prev, next), peak_db, strict);
     Refined {
         t: if back == BackStep::Moved {
             foot as f64 / srf
