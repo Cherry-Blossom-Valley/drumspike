@@ -284,8 +284,7 @@ def main(argv=None):
     root = a.root or os.environ.get("ENST_ROOT")
     plant = a.plant or (os.environ.get("ENST_GATE_PLANT") if os.environ.get("ENST_GATE_PLANT") in PLANTS else None)
     if root is None:
-        for cand in (Path.home() / ".cache" / "drumspike" / "datasets" / "ENST-drums-public",
-                     Path("/Volumes/Corsair-4TB/Datasets/ENST_Drums/ENST-drums-public")):
+        for cand in (Path.home() / ".cache" / "drumspike" / "datasets" / "ENST-drums-public",):
             if cand.is_dir():
                 root = str(cand)
                 break

@@ -6,7 +6,7 @@
         python tools/eval/enst.py --all --configs default,dsp
     python tools/eval/enst.py --score-only       # tables from the existing run files
 
-Data: `ENST_ROOT` (default /Volumes/Corsair-4TB/Datasets/ENST_Drums/ENST-drums-public), the public copy of
+Data: `ENST_ROOT` (default: the copy under ~/.cache/drumspike/datasets/ENST-drums-public), the public copy of
 Gillet & Richard, "ENST-Drums", ISMIR 2006 (CC BY-NC-ND 4.0). Never commit its audio, annotations or derived
 per-hit copies; only aggregate numbers leave this host. The path is read from the env; a missing root FAILs
 (SKIP only with an explicit `--allow-missing`).
@@ -456,7 +456,7 @@ def main(argv=None):
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--allow-missing", action="store_true", help="SKIP (exit 0) when ENST_ROOT is missing, not FAIL")
     a = ap.parse_args(argv)
-    root = os.environ.get("ENST_ROOT", "/Volumes/Corsair-4TB/Datasets/ENST_Drums/ENST-drums-public")
+    root = os.environ.get("ENST_ROOT", str(Path.home() / ".cache" / "drumspike" / "datasets" / "ENST-drums-public"))
     if not Path(root).is_dir():
         if a.allow_missing:
             print(f"SKIP: ENST_ROOT {root} is missing")
