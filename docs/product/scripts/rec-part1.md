@@ -30,7 +30,7 @@ One file has a name that says nothing: new take. Drum Spike listened to it and s
 
 ## p1-zoom
 
-> Select a snare hit; press 6 (5 ms zoom); the spike sits on the first motion of the attack; the sample counter in the info line.
+> Click the wave lane just before a hit (the playhead), then Tab selects the hit; press 6 (5 ms zoom); the spike sits on the first motion of the attack; the sample counter in the info line.
 
 Zoom in to five milliseconds. Every hit sits on the first sample of its attack, not on a level threshold.
 
