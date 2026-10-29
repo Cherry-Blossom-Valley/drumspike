@@ -30,15 +30,15 @@ The detector missed one hit. Put the playhead in the gap and press H. The new hi
 
 ## p2-delete
 
-> Select a hit; press Delete. Caption: Edit > Delete Hit
+> Playhead on the hit; 6 (5 ms); Tab; Delete. Caption: Edit > Delete Hit
 
-Select a hit and press Delete. You can also right-click it.
+One hit too many? Select the hit and press Delete. The spike line goes, the audio stays. You can also right-click the hit.
 
 ## p2-nudge
 
-> Select a hit; Left; Right; Edit > Nudge Value > 1 Sample; press A. Caption: Edit > Nudge Value > 1 Sample
+> Playhead on the hit; 6 (5 ms); Edit > Nudge Value > 1 Sample; Tab; A. Caption: Edit > Nudge Value > 1 Sample
 
-Left and Right nudge a hit, one sample at the smallest. Press A: the hit plays alone, from just before to just after.
+A hit a sample off? Nudge. Set the value to one sample and press A. The hit moves one sample closer to the attack.
 
 ## p2-undo
 

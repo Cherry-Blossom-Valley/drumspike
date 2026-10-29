@@ -11,10 +11,16 @@ workflow only.
 ## p4-export
 
 > Select the kick. Track > Export Selected Tracks… (Shift+Cmd+E); MIDI off, Spikes on, type Audio; Export. Caption: Track > Export Selected Tracks…
-> The summary names the audio spike file. Spike type Synthetic, Export again: the click spike. Add Tracks on the export folder: the two spike WAVs, checked, Add.
+> The summary names the audio spike file. Spike type Synthetic, Export again: the click spike.
+
+The export has a new spike type, and it is called Audio. An audio spike holds the body of each hit, the wave around the attack. The click spike keeps only the attack itself. Export once for each: the summary names the file it wrote. Here the two of them are, side by side.
+
+## p4-import
+
+> File > Add Tracks… on the export folder: the two spike WAVs, checked, Add. Caption: File > Add Tracks…
 > Select the kick, Tab, 5 (50 ms zoom), then select the audio spike track: its lane sits next to the click spike.
 
-The export has a new spike type, Audio. It holds the body of each hit. The click spike keeps only the attack. Here they are side by side.
+The exports can come back in. Add Tracks from the export folder: the two spike WAVs of the kick, checked. The 5 ms preset at a hit shows the spike against the wave.
 
 ## p4-detector
 
@@ -33,7 +39,7 @@ The Sensitivity slider re-picks the detection from the kept candidates. Raise it
 
 > Snare: Tab selects a hit; the info line: type a velocity over the old one, Return. Re-analyze: the dialog offers Keep. Keep edited hits. Caption: Re-analyze offers Keep
 
-Your edits survive a re-analyze. Set a velocity by hand, then re-analyze. The dialog offers Keep, and the hand velocity stays.
+Your edits survive a re-analyze. Set a velocity by hand: select a hit with Tab, type the velocity over the old one in the info line, and press Return. Then run the re-analyze. The dialog offers Keep edited hits, and the hand velocity stays.
 
 ## p4-end
 

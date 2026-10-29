@@ -42,7 +42,10 @@
       {"do": "hold", "s": 1.5},
       {"do": "click", "sel": "#exCancel", "timeout": 15, "err": "the dialog closed"},
       {"do": "wait", "cond": "() => document.querySelector('#exportModal').classList.contains('hidden')", "timeout": 15, "err": "the Export dialog closed"},
-      {"do": "hold", "s": 1.5},
+      {"do": "hold", "s": 1.5}
+    ]},
+    {"id": "p4-import", "steps": [
+      {"do": "caption", "text": "File > Add Tracks…"},
       {"do": "answer_pick", "path": "{projects}/Demo/Exports"},
       {"do": "key", "press": "Shift+Meta+I"},
       {"do": "visible", "sel": "#tracksModal", "timeout": 30, "err": "the Add Tracks list of the export folder"},
