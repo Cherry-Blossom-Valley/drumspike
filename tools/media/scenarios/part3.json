@@ -51,11 +51,6 @@
     {"id": "p3-tempo", "area_sel": "#mapRulers", "steps": [
       {"do": "caption", "text": "Track > Detect Tempo…"},
       {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
-      {"do": "menu", "id": "ruler_tempo", "timeout": 15, "err": "View > Tempo Ruler: the tempo value moves when the map commits"},
-      {"do": "hold", "s": 1.5},
-      {"do": "menu", "id": "ruler_meter", "timeout": 15, "err": "View > Meter Ruler"},
-      {"do": "hold", "s": 1.5},
-      {"do": "menu", "id": "ruler_beats", "timeout": 15, "err": "View > Bars|Beats Ruler: at the 5 s span at least 4 bar numbers are on screen"},
       {"do": "hold", "s": 1.5},
       {"do": "shot"},
       {"do": "menu", "id": "detect_tempo", "timeout": 15, "err": "Track > Detect Tempo…"},

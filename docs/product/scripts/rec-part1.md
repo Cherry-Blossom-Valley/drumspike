@@ -6,7 +6,7 @@ Chapters 2 to 5 of `docs/product/feature-path.md`, on the demo session. Narratio
 
 ## p1-new
 
-> Cmd+N, name "Demo", choose a folder. Caption: File > New Project…
+> Cmd+N, name "Slate", choose a folder. Caption: File > New Project…
 
 Start with a new project. Press Command N and give it a name.
 

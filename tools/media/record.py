@@ -1167,14 +1167,6 @@ def record(root, scenario, items, out, work, keep, check_model=True):
         with sync_playwright() as pw:
             br = pw.chromium.launch()
             sid = seed_demo(br, url, env) if scenario.get("seed") == "demo" else None
-            if sid and scenario.get("seed_frees_project"):
-                # seed_frees_project: the seed created the project on disk (B.newProject writes
-                # the layout), so a scene that re-creates it via File > New Project would hit
-                # the 409 "project already exists". The open session lives in memory; the
-                # folder goes so the name is free again (part 1's p1-new reshape).
-                seeded = Path(env["projects"]) / "Demo"
-                if seeded.is_dir():
-                    shutil.rmtree(seeded)
             place_session_files(scenario, env)
             ctx = br.new_context(viewport={"width": vp_w, "height": vp_h}, device_scale_factor=dsf,
                                  record_video_dir=str(work / "raw"),

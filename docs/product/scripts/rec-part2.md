@@ -36,9 +36,9 @@ One hit too many? Select the hit and press Delete. The spike line goes, the audi
 
 ## p2-nudge
 
-> Playhead on the hit; 6 (5 ms); Edit > Nudge Value > 1 Sample; Tab; A. Caption: Edit > Nudge Value > 1 Sample
+> Playhead on the hit; 6 (5 ms); Edit > Nudge Value > 1 Sample; Tab; Right. Caption: Edit > Nudge Value > 1 Sample
 
-A hit a sample off? Nudge. Set the value to one sample and press A. The hit moves one sample closer to the attack.
+A hit a sample off? Nudge. Set the value to one sample and press Right. The hit moves one sample closer to the attack.
 
 ## p2-undo
 

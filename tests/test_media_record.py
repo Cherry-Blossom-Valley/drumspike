@@ -472,7 +472,7 @@ class ExportPage(LanePage):
     in the awaited answers that follow the scenario's last show_dest (exInfo's reply lands
     while the dialog is closing; the 42a7534 gate's p1-again guard read it there)."""
 
-    OLD_ST_MSG = "created Demo in /Users/x86-mac/.cache/drumspike/media/rec/work/home/projects/Demo"
+    OLD_ST_MSG = "created Slate in /Users/x86-mac/.cache/drumspike/media/rec/work/home/projects/Slate"
     OLD_EX_DEST = "/Users/x86-mac/.cache/drumspike/media/rec/work/home/projects/Demo/Exports"
 
     def __init__(self, clock):
@@ -610,7 +610,7 @@ def test_the_new_part1_shows_no_private_path_at_any_scene_start():
     clock = Clock()
     page = ExportPage(clock)
     record.run_scenes(page, record.parse_scenario(raw)["scenes"], [1.0] * 7, clock=clock)
-    assert page.st_msg == "created Demo in ~/Music/Drum Spike/Projects/Demo"
+    assert page.st_msg == "created Slate in ~/Music/Drum Spike/Projects/Slate"
     assert page.ex_dest == "~/Music/Drum Spike/Exports"   # kept through the export's re-renders
 
 
@@ -703,7 +703,7 @@ class LateStatusPage(ExportPage):
             self.st_msg = self.OLD_ST_MSG
 
     def wait_for_function(self, cond, arg=None, timeout=None):
-        if self._pending_write and "created Demo" in cond:
+        if self._pending_write and "created " in cond:
             self._flush()   # the write lands while the page waits for the app's own line
         return super().wait_for_function(cond, arg=arg, timeout=timeout)
 
@@ -743,7 +743,7 @@ def test_the_new_part1_waits_for_the_app_s_line_before_the_rewrite():
     clock = Clock()
     page = LateStatusPage(clock)
     record.run_scenes(page, record.parse_scenario(raw)["scenes"], [1.0] * 7, clock=clock)
-    assert page.st_msg == "created Demo in ~/Music/Drum Spike/Projects/Demo"   # not overwritten
+    assert page.st_msg == "created Slate in ~/Music/Drum Spike/Projects/Slate"   # not overwritten
 
 
 # ---------------- the steps on the stub (overlay and dialogs) ----------------
