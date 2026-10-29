@@ -2,6 +2,8 @@
   "name": "part3",
   "title": "Screen recording, part 3: followers, layers and tempo (#337)",
   "script": "docs/product/scripts/rec-part3.md",
+  "standard": true,
+  "drift_limit_ms": 10,
   "viewport": {"width": 1920, "height": 1080},
   "device_scale_factor": 2,
   "skip": [],
@@ -10,76 +12,110 @@
   "out": "~/.cache/drumspike/media/rec/part3.mp4",
   "session_files": [{"from": "{demo}/k out.wav", "as": "k sub.wav"}],
   "scenes": [
-    {"id": "p3-follow", "steps": [
+    {"id": "p3-follow", "area_sel": "#editor", "steps": [
       {"do": "caption", "text": "File > Add Tracks…"},
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "answer_pick", "path": "{session}/Audio Files"},
       {"do": "key", "press": "Shift+Meta+I"},
       {"do": "visible", "sel": "#tracksModal", "timeout": 30, "err": "the Add Tracks list"},
-      {"do": "wait", "cond": "() => { const w = document.querySelector('#tracksRows .urow[data-stem=\\\"k sub\\\"] .ufollowWrap'); return w && !w.classList.contains('hidden') && document.querySelector('#tracksRows .urow[data-stem=\\\"k sub\\\"] .ufollow').checked; }", "timeout": 30, "err": "the sub mic row has the follow check, on"},
+      {"do": "wait", "cond": "() => { const w = document.querySelector('#tracksRows .urow[data-stem=\"k sub\"] .ufollowWrap'); return w && !w.classList.contains('hidden') && w.querySelector('.ufollow').checked; }", "timeout": 30, "err": "the sub mic row has the follow check, on"},
       {"do": "hold", "s": 1.5},
-      {"do": "click", "sel": "#tracksCancel", "timeout": 15, "err": "the dialog closed, the check left on"},
-      {"do": "wait", "cond": "() => document.querySelector('#tracksModal').classList.contains('hidden')", "timeout": 15, "err": "the Add Tracks dialog closed"}
+      {"do": "click", "sel": "#tracksAdd", "timeout": 15, "err": "Add: the k sub track lands with the follow on"},
+      {"do": "wait", "cond": "() => document.querySelector('#tracksModal').classList.contains('hidden') && !!document.querySelector('.track[data-name=\"k_sub\"]')", "timeout": 120, "err": "the dialog closed and the k sub track is in the session"},
+      {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p3-follow2", "steps": [
+    {"id": "p3-follow2", "area_sel": ".track[data-name=\"k_sub\"] canvas.spike", "steps": [
       {"do": "caption", "text": "Track > Own Detection"},
-      {"do": "click", "sel": ".track[data-name=\"k_out\"] .thead .tname", "timeout": 15, "err": "the sub mic selected"},
-      {"do": "hold", "s": 1.0},
-      {"do": "hold", "s": 1.0}
+      {"do": "click", "sel": ".track[data-name=\"k_sub\"] .thead .tname", "timeout": 15, "err": "the sub mic selected"},
+      {"do": "hold", "s": 1.5},
+      {"do": "shot", "err": "before: the followed hits (copies of k_in) across the spike lane"},
+      {"do": "menu", "id": "follow_own", "timeout": 15, "err": "Track > Own Detection"},
+      {"do": "wait", "cond": "() => S.tracks['k_sub'] && S.tracks['k_sub'].follows === null", "timeout": 15,
+       "err": "the sub mic is back on its own detection (setTrackFollow writes .follows; the backend keeps the stale followed copies until the re-analyze - track_set_follow returns n_events without derive_one)"},
+      {"do": "hold", "s": 1.5},
+      {"do": "click", "sel": "#analyzeAllBtn", "timeout": 15, "err": "the re-analyze the app's own message asks for"},
+      {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the re-analyze started"},
+      {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the sub mic detected its own hits"},
+      {"do": "hold", "s": 1.5},
+      {"do": "shot", "err": "after: the own detection's hit lines"}
     ]},
-    {"id": "p3-layer", "steps": [
+    {"id": "p3-layer", "area_sel": "#inspector", "steps": [
       {"do": "caption", "text": "The Layer section of the Inspector"},
       {"do": "click", "sel": ".insSec[data-sec=\"layer\"] .insSecHead", "timeout": 15, "err": "the Layer section of the Inspector"},
       {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\"layer\"] .lyZone')", "timeout": 15, "err": "the drop zone of the layer"},
+      {"do": "hold", "s": 1.5},
       {"do": "answer_pick", "path": "{work}/one-shot.wav"},
       {"do": "click", "sel": ".insSec[data-sec=\"layer\"] .lyChoose", "timeout": 15, "err": "Choose…"},
       {"do": "text", "sel": ".insSec[data-sec=\"layer\"] .lyFile", "contains": "one-shot.wav", "timeout": 30, "err": "the one-shot in the zone"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-layer2", "steps": [
+    {"id": "p3-layer2", "area_sel": "#inspector", "steps": [
       {"do": "caption", "text": "The Onset view"},
       {"do": "click", "sel": ".insSec[data-sec=\"layer\"] .lyAlign", "timeout": 15, "err": "Align checked"},
       {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\"layer\"] .lyViewTitle')", "timeout": 30, "err": "the Onset view"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-tempo", "steps": [
+    {"id": "p3-tempo", "area_sel": "#mapRulers", "steps": [
       {"do": "caption", "text": "Track > Detect Tempo…"},
-      {"do": "hold", "s": 0.5},
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
+      {"do": "hold", "s": 1.5},
+      {"do": "shot"},
       {"do": "menu", "id": "detect_tempo", "timeout": 15, "err": "Track > Detect Tempo…"},
       {"do": "visible", "sel": "#tempoModal", "timeout": 120, "err": "the Detect Tempo dialog: tempo, bar 1, meter, steps"},
-      {"do": "hold", "s": 1.5},
+      {"do": "wait", "cond": "() => document.querySelector('#tempoBody').children.length > 0", "timeout": 120, "err": "the detection filled the dialog (tempo, bar 1, meter, steps)"},
+      {"do": "hold", "s": 2.0},
       {"do": "click", "sel": "#tempoAccept", "timeout": 15, "err": "Accept"},
       {"do": "wait", "cond": "() => document.querySelector('#tempoModal').classList.contains('hidden')", "timeout": 15, "err": "the dialog accepted"},
-      {"do": "wait", "cond": "() => ((document.querySelector('#stMsg') || {}).textContent || '').startsWith('tempo map')", "timeout": 15, "err": "the detected map committed (the accept's commit is async; the next scene edits the map)"}
+      {"do": "wait", "cond": "() => ((document.querySelector('#stMsg') || {}).textContent || '').startsWith('tempo map')", "timeout": 15, "err": "the detected map committed (the accept's commit is async; the next scene edits the map)"},
+      {"do": "hold", "s": 1.5},
+      {"do": "shot"}
     ]},
     {"id": "p3-bar1", "steps": [
       {"do": "caption", "text": "Track > Set Bar 1 at Playhead"},
       {"do": "key", "press": "Tab"},
+      {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Tab"},
+      {"do": "hold", "s": 1.5},
       {"do": "menu", "id": "set_bar1", "timeout": 15, "err": "Track > Set Bar 1 at Playhead"},
       {"do": "wait", "cond": "() => TM.map && Math.abs((TM.map.bar1_s || 0) - S.playhead) < 0.001", "timeout": 15, "err": "bar 1 at the playhead"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-import", "steps": [
+    {"id": "p3-import", "area_sel": "#mapRulers", "steps": [
       {"do": "caption", "text": "File > Import Tempo Map…"},
       {"do": "answer_pick", "path": "{work}/tempo.mid"},
+      {"do": "shot"},
       {"do": "menu", "id": "import_tempo_map", "timeout": 15, "err": "File > Import Tempo Map…"},
       {"do": "wait", "cond": "() => TM.map && Math.abs(TM.map.bpm - 87) < 0.5 && TM.map.changes && TM.map.changes.length > 0", "timeout": 15, "err": "the tempo map of the DAW file"},
-      {"do": "hold", "s": 2.0}
+      {"do": "hold", "s": 2.0},
+      {"do": "shot"}
     ]},
-    {"id": "p3-grid", "steps": [
+    {"id": "p3-grid", "area_sel": "#editor", "steps": [
       {"do": "caption", "text": "View > Show Bar and Beat Grid"},
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5,
+       "err": "a defined 5 s view for the pair (the grid lines are dropped under 6 px apart: a wider view shows none)"},
+      {"do": "menu", "id": "ruler_tempo", "timeout": 15, "err": "reset: the Tempo ruler is on by default, this hides it so the scene's View > Tempo Ruler shows it"},
+      {"do": "hold", "s": 1.5},
+      {"do": "key", "press": "G", "err": "reset: the grid is on by default, this G hides it so the scene's G shows it"},
+      {"do": "wait", "cond": "() => TM.gridOn === false && TM.vis.tempo === false", "timeout": 15, "err": "the grid hidden and the Tempo ruler hidden (the reset)"},
+      {"do": "hold", "s": 1.5},
+      {"do": "shot"},
       {"do": "key", "press": "G"},
-      {"do": "hold", "s": 1.0},
-      {"do": "hold", "s": 1.0}
+      {"do": "hold", "s": 1.5},
+      {"do": "menu", "id": "ruler_tempo", "timeout": 15, "err": "View > Tempo Ruler"},
+      {"do": "wait", "cond": "() => TM.gridOn === true && TM.vis.tempo === true", "timeout": 15, "err": "the bar and beat grid shown and the Tempo ruler back"},
+      {"do": "hold", "s": 1.5},
+      {"do": "shot"}
     ]},
-    {"id": "p3-click", "steps": [
+    {"id": "p3-click", "area_sel": "#clickBtn", "steps": [
       {"do": "caption", "text": "Transport > Metronome Click"},
       {"do": "key", "press": "C"},
+      {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Space"},
       {"do": "wait", "cond": "() => S.playing", "timeout": 15, "err": "the click plays with the hits"},
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Space"},
-      {"do": "wait", "cond": "() => !S.playing", "timeout": 15, "err": "playback stopped"}
+      {"do": "wait", "cond": "() => !S.playing", "timeout": 15, "err": "playback stopped"},
+      {"do": "hold", "s": 1.5}
     ]},
     {"id": "p3-end", "steps": [
       {"do": "caption", "text": "Next: automate it"},
