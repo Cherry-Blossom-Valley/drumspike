@@ -22,7 +22,10 @@ and per drummer the first rule of each flagged hit in the fixed order RULES (the
 add up to the flagged total). A cut hit with no rule is `cut`; a flagged hit with neither is `unattributed` and fails.
 A6 (the cross-track rule) takes its hits out of the events, so its counts come from the track's `detector` record:
 the dropped candidates (`dropped`) and the step-1 marks that reach the CD step (`survive`). The scored hat FPs
-carry `a6_lead_ms` and `a6_level_db`: their quartiles are printed. The hat left-share is information only here.
+carry `a6_lead_ms` and `a6_level_db`: their quartiles are printed. The hat left-share is the gate of
+#103 step 2: FAIL above 50 %. #103 step 1: the hat FPs without an A6 coinciding hit are counted per drummer by
+why: the hat mic has no detected hit within the cause window, one outside the A6 coincide window (10 ms), or
+one inside it that A6 did not use as a source.
 
 Exit 0 on PASS, 1 on FAIL (the cause shares do not sum to the total, the share of `none` is above `--max-none`, or the
 first-rule columns do not sum to the flagged total, or a flagged hit has no rule).
@@ -45,7 +48,9 @@ CONFIG = "dsp"
 WINDOW = enst.WINDOWS[0]           # the +-50 ms headline window
 CAUSES = ("kick", "snare", "hat", "cymbal", "tom-other", "none")
 TOM_MICS = enst.TOM_MICS
-RULES = ("CD", "v2-kick", "v2-snare", "pair", "v5-kick")   # the fixed order of the first rule
+RULES = ("CD", "v2-kick", "v2-snare", "pair", "v5-kick", "hat")   # the fixed order of the first rule
+HAT_LIMIT = 50.0   # the gate: the hat left-share must be at or under this (#103 step 2; a FAIL above it)
+A6_COINCIDE_MS = 10.0   # A6's coincide_ms (CrossBleedParams::default, #284)
 FIRST_COLS = RULES + ("cut", "unattributed")
 
 
@@ -102,6 +107,7 @@ def score(root, out, tool_fp, log=print):
     idx = enst.index_items(root)
     counts, flagged, pooled, rules = {}, {}, {}, {}
     hat_a6 = []
+    hat_why = {}   # #103 step 1: per drummer, why a hat FP has no coinciding hat hit for A6
     for d in enst.DRUMMERS:
         tom_map = enst.tom_mapping(root, d)
         counts[d] = {m: {c: 0 for c in CAUSES} for m in TOM_MICS}
@@ -110,11 +116,13 @@ def score(root, out, tool_fp, log=print):
         pooled[d] = {m: {"ref": [], "est": []} for m in TOM_MICS}
         rules[d] = {"any": {r: 0 for r in RULES}, "first": {c: 0 for c in FIRST_COLS},
                     "a6": {"dropped": 0, "survive": 0}}
+        hat_why[d] = {"no hat-mic hit": 0, "outside the A6 window": 0, "present, not a source": 0}
         for stem, item in idx[d].items():
             res = json.loads((out / "run" / CONFIG / d / f"{stem}.json").read_text())
             if res.get("tool_fp") != tool_fp:
                 raise SystemExit(f"FAIL {d}/{stem}: run file is stale (tool_fp {res.get('tool_fp')!r})")
             anns = item_annotations(enst.read_annotation(item["ann"]), tom_map)
+            hat_times = [float(e["t"]) for e in res["events"].get("hi-hat", [])]
             for mic in TOM_MICS:
                 if mic not in res["events"]:
                     continue
@@ -132,6 +140,20 @@ def score(root, out, tool_fp, log=print):
                         counts[d][mic][cause] += 1
                         if cause == "hat":
                             hat_a6.append((e.get("a6_lead_ms"), e.get("a6_level_db")))
+                            if e.get("a6_lead_ms") is None:
+                                # #103 step 1: A6 saw no coinciding hat hit. Why? The hat mic's own
+                                # detected hits near the FP: none within the cause window, one but
+                                # outside the A6 coincide window, or one inside it that A6 still did
+                                # not use as a source (the source hit comes from the hat track's full
+                                # candidate list, so a run-file hit within 10 ms is always a source
+                                # hit candidate — this bucket measures that it was not).
+                                near = [abs(ht - t) for ht in hat_times if abs(ht - t) <= WINDOW]
+                                if not near:
+                                    hat_why[d]["no hat-mic hit"] += 1
+                                elif min(near) > A6_COINCIDE_MS / 1000.0:
+                                    hat_why[d]["outside the A6 window"] += 1
+                                else:
+                                    hat_why[d]["present, not a source"] += 1
                 for e in evs:
                     if not (e.get("bleed") or e.get("cut")):
                         continue
@@ -148,7 +170,7 @@ def score(root, out, tool_fp, log=print):
                 cb = ((res.get("detector") or {}).get(mic) or {}).get("cross_bleed") or {}
                 rules[d]["a6"]["dropped"] += len(cb.get("dropped") or [])
                 rules[d]["a6"]["survive"] += int(cb.get("survive") or 0)
-    return counts, flagged, pooled, rules, hat_a6
+    return counts, flagged, pooled, rules, hat_a6, hat_why
 
 
 def quartiles(vals):
@@ -176,20 +198,21 @@ def main(argv=None):
     if stale:
         raise SystemExit(f"FAIL: {len(stale)} run file(s) stale or missing (first {stale[0]}); run enst_gate.py first")
 
-    counts, flagged, pooled, rules, hat_a6 = score(root, out, tool_fp)
+    counts, flagged, pooled, rules, hat_a6, hat_why = score(root, out, tool_fp)
     lines = [f"tom false positives at +-{int(WINDOW * 1000)} ms, config {CONFIG} (build {tool_fp}):", "",
              "Scored FPs per drummer and cause (all tom mics; shares of the drummer's total):", "",
              "| drummer | " + " | ".join(CAUSES) + " | total | shares % (" + " / ".join(CAUSES) + ") |",
              "|---|" + "---|" * (len(CAUSES) + 2)]
     verdict_ok = True
     grand = {c: 0 for c in CAUSES}
+    sum_ok = True
     for d in enst.DRUMMERS:
         tot = {c: sum(counts[d][m][c] for m in TOM_MICS) for c in CAUSES}
         n = sum(tot.values())
         for c in CAUSES:
             grand[c] += tot[c]
         if sum(tot.values()) != n:
-            verdict_ok = False
+            sum_ok = False
         shares = [100.0 * tot[c] / n if n else 0.0 for c in CAUSES]
         lines.append(f"| {d} | " + " | ".join(str(tot[c]) for c in CAUSES) + f" | {n} | "
                      + " / ".join(f"{s:.1f}" for s in shares) + " |")
@@ -256,11 +279,31 @@ def main(argv=None):
               f"(n={len(hat_leads)}): {quartiles(hat_leads)}; A6 level (dB, ratio against the coinciding source hit) "
               f"quartiles p25 / p50 / p75 (n={len(hat_levels)}): {quartiles(hat_levels)}; without the keys: {hat_missing}",
               f"hat left-share: {hat_left} / ({hat_left} + {hat_removed}) = {hat_share:.1f} % (the plan's definition: "
-              f"left / (left + removed) of the hat cause; limit 50 %, information only in this step)",
-              ""]
+              f"left / (left + removed) of the hat cause; limit {HAT_LIMIT:.0f} %, FAIL above it)",
+              "",
+              "#103 step 1: the hat FPs without an A6 coinciding hit (no `a6_lead_ms`), per drummer the hat mic's "
+              "own detected hits near the FP (the cause window is the +-"
+              f"{int(WINDOW * 1000)} ms window, the A6 coincide window is {A6_COINCIDE_MS:.0f} ms):",
+              "",
+              "| drummer | no hat-mic hit | outside the A6 window | present, not a source | total |",
+              "|---|---|---|---|---|"]
+    for d in enst.DRUMMERS:
+        w = hat_why[d]
+        lines.append(f"| {d} | " + " | ".join(str(w[k]) for k in
+                     ("no hat-mic hit", "outside the A6 window", "present, not a source"))
+                     + f" | {sum(w.values())} |")
+    wtot = {k: sum(hat_why[d][k] for d in enst.DRUMMERS) for k in hat_why[enst.DRUMMERS[0]]}
+    lines.append("| all | " + " | ".join(str(wtot[k]) for k in
+                 ("no hat-mic hit", "outside the A6 window", "present, not a source"))
+                 + f" | {sum(wtot.values())} |")
+    lines.append("")
+    if hat_share > HAT_LIMIT:
+        lines.append(f"FAIL: the hat left-share {hat_share:.1f} % is above {HAT_LIMIT:.0f} %")
+        verdict_ok = False
     none_share = gshares["none"]
-    if not verdict_ok:
+    if not sum_ok:
         lines.append("FAIL: the cause counts do not sum to the total FPs")
+        verdict_ok = False
     if none_share > a.max_none:
         lines.append(f"FAIL: {none_share:.1f} % of the tom FPs have no cause (limit {a.max_none:.1f} %)")
         verdict_ok = False

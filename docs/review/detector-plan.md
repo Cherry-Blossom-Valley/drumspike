@@ -424,6 +424,55 @@ and the left share of the hat cause must be at most 50 % (a proposed limit; toda
 78.4 %, so the added check FAILs until the hat cause is handled). The package also needs
 `tools/eval/enst_gate.py` within 2 % of baseline on every aggregate, counted lines pasted.
 
+Step 1 (#103), why A6 sees no coinciding hat hit, counted per drummer (`enst_tom_fp.py`,
+tool build 766c3399db3ee97b, the same 210 items, run files of detector fingerprint
+664e695d29b46ef2): 2368 hat FPs left, 2334 of them without an A6 coinciding hit (no
+`a6_lead_ms`; A6 judged 34 and did not drop them). The hat mic's own detected hits near
+each such FP (the cause window +-50 ms, the A6 coincide window 10 ms, from the run files):
+
+| drummer | no hat-mic hit | outside the A6 window | present, not a source | total |
+|---|---|---|---|---|
+| drummer_1 | 5 | 28 | 152 | 185 |
+| drummer_2 | 36 | 151 | 726 | 913 |
+| drummer_3 | 208 | 290 | 738 | 1236 |
+| all | 249 | 469 | 1616 | 2334 |
+
+The third column is the surprise: 1616 hat FPs have a hat-mic detected hit within the A6
+coincide window (2697 of the 7861 scored tom events without A6 keys overall, clustered in
+162 of the 210 items), yet the run file carries no A6 evidence on them. The hat mic IS a
+source in the rule's run: in the sampled item (a drummer_1 disco phrase, sticks)
+the dropped candidates coincide with hat hits within 2.5 to 4.9 ms and carry lead/ratio. So
+the evidence exists inside the rule but does not reach the stored events of the kept hits.
+Suspected cause (code read, not yet measured): after the A6 re-detection, the kept hits'
+keys are matched to the stored events by an exact time (`(t - e.t).abs() < 1e-3` in
+`crates/app/src/cross_bleed.rs`), while `analyze_detected` re-refines the times before the
+store, so the exact match misses. This is a reporting-path defect first: the hat FPs may be
+reachable by A6 after all, which changes step 2 (a wider window or candidate-source change
+may not be needed; the evidence repair is). Step 2 starts here: repair the key path, re-run
+the table, and only then decide the fix the remaining counts name.
+
+Step 2 (#103), the measured verdict. The repair is confirmed
+(`crates/app/src/cross_bleed.rs`: the kept-keys match now takes the nearest kept hit within
+25 ms instead of an exact time; hat FPs without A6 keys went from 2334 to 35) and the hat
+pair's own keys are recorded on every hit with a coinciding hat hit
+(`crates/core/src/detect/cross_bleed.rs`, `a6_hat_lead_ms`/`a6_hat_level_db`), because the
+stored `lead_ms`/`ratio_db` are the loudest source's, not the hat's - the -32/-10 pair
+calibrated on the stored keys fired on the wrong distribution (the stored-key sweep
+predicted 857 drops; the hat-pair truth is 433). The sweep on the hat-pair
+keys (build of the 103-hatcal job, 210 ENST items; 1269 of 2236 hat-cause scored FPs and
+160 real strokes carry hat-pair keys; hat FPs p25/50/75 level -22.3/-14.8/-7.3 dB, lead
+-7.4/-5.1/-2.9 ms; real strokes p50 -6.6 dB): the distributions overlap. Best pair
+(level <= -20 dB, lead >= -12 ms): 398 hat FPs removed, 18 real strokes lost, left-share
+76.4 % -> 62.8 % (the limit is 50 %); at level <= -26 the removals fall to 197 for 12 real
+strokes; nothing at <= -32 fires. No pair reaches 50 % without a tom recall loss the gate
+would not accept, so no NEW hat-pair threshold is added: the recording stays. The GENERIC
+verdict (#285) keeps firing on hat pairs exactly as on kick and snare pairs - an
+intermediate commit that bypassed it for hat sources kept 521 hat-bleed tom events that
+main drops (all within the 25 ms window of a hat hit; the 103-tomdiff measurement) and
+regressed the tom F1 rows. The verdict pair is a measured dead end on this evidence; a
+different rule (band energy, not
+the A6 coincidence form) is the remaining option and is out of this package's scope.
+
 ## Open areas check (umbrella #8 list)
 
 snare ghost notes (1), the kick gap (3), per-track self-calibration (2),
