@@ -1013,9 +1013,23 @@ function cpRate(e) {   // #463: correct the drift e (song s) through the playbac
      pos0 + (t - at0) * rate * pr jumps by (t - at0) * rate * dpr at the change (a ms of slew is a step of
      tens of ms on a long seg). Rebase the clock at `now`: the position stays continuous, the end time too. */
   CP.at0 = now; CP.pos0 = shown; CP.dur = Math.max(0, CP.at0 + CP.dur - now);
-  const g = CP.segs[CP.segs.length - 1];   // drawnPlayheadAt reads the seg at the slewn rate
-  if (g && g.end === Infinity) { g.at0 = now; g.pos0 = shown; g.pr = CP.pr; g.dur = Math.max(0, g.at0 + g.dur - now); }
+  /* #14: end the drawn seg here and arm the next one from `now`, instead of moving the last seg in place: the
+     rAF frames sample drawnPlayheadAt at timestamps between the ticks, and a seg moved to `now` leaves them
+     nothing (under a strip the hist ticks are flagged, so the fallback finds only nulls - the smooth-30s case
+     measured 2 paired frames of 43). The seg history is what the page showed; the slew must not erase it. */
+  cpEndSeg(now);
+  CP.segs.push({ at0: now, pos0: shown, rate: CP.rate, pr: CP.pr, dur: CP.dur, end: Infinity });
+  if (CP.segs.length > CP_KEEP) CP.segs.splice(0, CP.segs.length - CP_KEEP);
 }
+/* #14: the test hook that forces a real step of the drawn playhead: the model the page shows (the clock and
+   the live seg with it) jumps by `s` song s at once, so every later drawn position carries the jump until a
+   re-anchor. Only the tests call it (test_playhead_steps.py). */
+window.__DS_STEP_PLAYHEAD = s => {
+  const now = performance.now(), shown = cpPos(now);
+  CP.at0 = now; CP.pos0 = shown + s;
+  const g = CP.segs[CP.segs.length - 1];
+  if (g && g.end === Infinity) { g.at0 = now; g.pos0 = shown + s; }
+};
 function cpEndSeg(t) { const g = CP.segs[CP.segs.length - 1]; if (g && g.end === Infinity) g.end = Math.min(t, g.at0 + g.dur); }
 /* #463: the 2D strip els move per frame from the slewn clock (openDAW, peaks.js, wavesurfer write translateX per
    frame): a compositor animation interpolates between its keyframes and sits on fractional pixels mid-flight, so
