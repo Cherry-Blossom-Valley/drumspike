@@ -39,7 +39,7 @@ hits over 62.5 s; these keys take you through them fast.
 
 The keys of this chapter are the Pro Tools preset, the default. Drum Spike also has a Cubase
 preset: **Drum Spike > Settings…** (`Cmd+,`) switches. **Help > Keyboard Shortcuts** lists all
-keys of the current preset. **Help > About Drum Spike** shows the Cherry Blossom Valley logo,
+keys of the current preset. **Drum Spike > About Drum Spike** shows the Cherry Blossom Valley logo,
 the licence line and links to the website and the source code.
 
 ![A kick and a snare track at the 50 ms zoom; the playhead sits on a hit and the lanes show the neighboring tracks at their heights.](img/06-find-your-way.png)
