@@ -166,14 +166,8 @@ def main(argv=None):
     ap.add_argument("--tool", default=None, help="the service_tool the run files were measured with (default: the release build)")
     ap.add_argument("--max-none", type=float, default=10.0, help="FAIL when more than this share of the FPs has no cause (default 10)")
     a = ap.parse_args(argv)
-    root = a.root or os.environ.get("ENST_ROOT")
-    if root is None:
-        for cand in (Path.home() / ".cache" / "drumspike" / "datasets" / "ENST-drums-public",
-                     Path("/Volumes/Corsair-4TB/Datasets/ENST_Drums/ENST-drums-public")):
-            if cand.is_dir():
-                root = str(cand)
-                break
-    if root is None or not Path(root).is_dir():
+    root = a.root or os.environ.get("ENST_ROOT") or enst.default_root()
+    if not Path(root).is_dir():
         raise SystemExit(f"FAIL: ENST_ROOT {root} is missing")
     out = Path(a.out)
     tool_path = Path(a.tool or os.environ.get("DRUMSPIKE_CALIB_TOOL") or ROOT / "target" / "release" / "service_tool")
