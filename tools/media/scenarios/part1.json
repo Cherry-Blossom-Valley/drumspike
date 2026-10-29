@@ -10,7 +10,7 @@
   "narration": {"tts_out": "~/.cache/drumspike/media/tts-out/rec-part1"},
   "out": "~/.cache/drumspike/media/rec/part1.mp4",
   "scenes": [
-    {"id": "p1-new", "area_sel": "#statusbar", "steps": [
+    {"id": "p1-new", "area_sel": "#editor", "steps": [
       {"do": "caption", "text": "File > New Project…"},
       {"do": "hold", "s": 0.6},
       {"do": "answer_save", "path": "{projects}/Demo"},
@@ -35,7 +35,7 @@
       {"do": "wait", "cond": "() => S.order.length === 13", "timeout": 120, "err": "the 13 demo tracks loaded"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-analyze", "steps": [
+    {"id": "p1-analyze", "area_sel": "#lanesScroll", "steps": [
       {"do": "zoom_to", "track": "new_take", "t": 16.0938, "span": 0.5},
       {"do": "click", "sel": "#analyzeAllBtn"},
       {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the analysis started"},
@@ -95,7 +95,10 @@
     {"id": "p1-again", "area_sel": ".track[data-name=\"s_top\"]", "steps": [
       {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 0.5},
       {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 16.0938},
+      {"do": "hold", "s": 1.5},
       {"do": "wait", "cond": "() => !document.querySelector('#ilFields').classList.contains('hidden') && document.querySelector('#ilSample').value.length > 0", "timeout": 15, "err": "a hit selected (the edit the narration speaks of)"},
+      {"do": "key", "press": "6"},
+      {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms window (the deleted spike wide enough to see, as in part 2)"},
       {"do": "hold", "s": 1.5},
       {"do": "shot"},
       {"do": "key", "press": "Delete", "err": "the hit deleted (the next edit)"},
