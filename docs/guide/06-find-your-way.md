@@ -11,7 +11,9 @@ hits over 62.5 s; these keys take you through them fast.
    the playhead back where the play started. The keys reach the app from anywhere: after a
    click on a button or a slider (the Sensitivity slider of a histogram, for example) Space
    still plays. Only a text field keeps its keys, and the status line tells you when a
-   transport key went into one. **Transport > Stop Returns to Start** (`I`) is a mode like
+   transport key went into one. While the computer is busy (a large build, for example), the
+   playhead keeps moving smoothly: frames drawn between two clock updates no longer lose the
+   playhead. **Transport > Stop Returns to Start** (`I`) is a mode like
    Suspend Follow when Editing: while it is checked, a Stop (Space while playing, or the ■
    button) puts the playhead back where the play started, exactly like `Option+Space`; the
    setting survives a restart.
@@ -37,7 +39,8 @@ hits over 62.5 s; these keys take you through them fast.
 
 The keys of this chapter are the Pro Tools preset, the default. Drum Spike also has a Cubase
 preset: **Drum Spike > Settings…** (`Cmd+,`) switches. **Help > Keyboard Shortcuts** lists all
-keys of the current preset.
+keys of the current preset. **Help > About Drum Spike** shows the Cherry Blossom Valley logo,
+the licence line and links to the website and the source code.
 
 ![A kick and a snare track at the 50 ms zoom; the playhead sits on a hit and the lanes show the neighboring tracks at their heights.](img/06-find-your-way.png)
 
