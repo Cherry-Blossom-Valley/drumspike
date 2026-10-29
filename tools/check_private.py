@@ -43,10 +43,18 @@ def words_are_set():
     return "DRUMSPIKE_PRIVATE_WORDS" in __import__("os").environ
 
 
+# #108: a host alias inside an agent name or branch name is fine (claude@arm64-mac,
+# crew/hermes@arm64-mac/108-...); only the bare alias stays banned. Mask the
+# <name>@<alias> occurrences before the word search; a bare alias still hits.
+HOST_ALIASES = ("arm64-mac", "x86-mac", "linux-arm64")
+_AGENT_AT_ALIAS = re.compile(
+    r"[A-Za-z0-9._+-]+@(?:arm64-mac|x86-mac|linux-arm64)", re.IGNORECASE)
+
+
 def hits_in_line(line):
     """The matched words and patterns of one line: [(term, match)]."""
     out = []
-    lowered = line.lower()
+    lowered = _AGENT_AT_ALIAS.sub("", line).lower()
     for w in private_words():
         if w.lower() in lowered:
             out.append((w, w))

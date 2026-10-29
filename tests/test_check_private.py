@@ -100,3 +100,26 @@ def test_bad_pattern_regex_is_loud(tmp_path):
     r = run([str(f)], {"DRUMSPIKE_PRIVATE_WORDS": "quuxcorp",
                        "DRUMSPIKE_PRIVATE_PATTERNS": "(unclosed"})
     assert r.returncode == 2
+
+
+# #108: agent and branch names with a host alias are allowed; the bare alias stays banned.
+def test_agent_name_passes(tmp_path):
+    f = tmp_path / "note.md"
+    f.write_text("assigned to claude@arm64-mac for review\n", encoding="utf-8")
+    r = run([str(f)], {"DRUMSPIKE_PRIVATE_WORDS": "quuxcorp"})
+    assert r.returncode == 0, r.stderr
+
+
+def test_branch_name_passes(tmp_path):
+    f = tmp_path / "note.md"
+    f.write_text("branch: crew/hermes@arm64-mac/108-check-private-py\n", encoding="utf-8")
+    r = run([str(f)], {"DRUMSPIKE_PRIVATE_WORDS": "quuxcorp"})
+    assert r.returncode == 0, r.stderr
+
+
+def test_bare_alias_flagged(tmp_path):
+    f = tmp_path / "note.md"
+    f.write_text("the run happened on arm64-mac\n", encoding="utf-8")
+    r = run([str(f)], {"DRUMSPIKE_PRIVATE_WORDS": "quuxcorp"})
+    assert r.returncode == 1
+    assert "arm64-mac" in r.stderr
