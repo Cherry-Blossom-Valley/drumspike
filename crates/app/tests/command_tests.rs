@@ -76,6 +76,8 @@ fn the_page_sends_keep_edited_itself() {
             .lines()
             .find(|l| l.contains(&call))
             .unwrap_or_else(|| panic!("backend.js has no {call}"));
-        assert!(line.contains("keep_edited"), "{call} does not send keep_edited: {line}");
+        // the code before the trailing `//` comment: a comment that names the flag does not send it
+        let code = line.split("//").next().unwrap();
+        assert!(code.contains("keep_edited"), "{call} does not send keep_edited: {line}");
     }
 }
