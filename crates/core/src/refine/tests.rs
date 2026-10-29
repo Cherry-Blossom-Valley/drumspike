@@ -217,15 +217,21 @@ fn rule_versions_and_the_reference_rule() {
         (
             RefineRule::Reference.version(),
             RefineRule::Reach.version(),
-            RefineRule::FirstMotion.version()
+            RefineRule::FirstMotion.version(),
+            RefineRule::Foot.version()
         ),
-        (1, 2, 3)
+        (1, 2, 3, 4)
     );
-    for r in [RefineRule::Reference, RefineRule::Reach, RefineRule::FirstMotion] {
+    for r in [
+        RefineRule::Reference,
+        RefineRule::Reach,
+        RefineRule::FirstMotion,
+        RefineRule::Foot,
+    ] {
         assert_eq!(RefineRule::from_version(u64::from(r.version())), Some(r));
     }
     assert_eq!(RefineRule::from_version(0), None);
-    assert_eq!(RefineRule::from_version(4), None);
+    assert_eq!(RefineRule::from_version(5), None);
     assert_eq!(RefineRule::CURRENT, RefineRule::FirstMotion);
     // the reference rule is refine_sr, step Kept, on every kind of window
     let x = noisy(&track(&[(0.5, -3.0)], 1.5), -70.0);
@@ -605,6 +611,42 @@ fn a_sharp_start_stays_also_when_band_limited() {
     assert!(y[on - 1].abs() > 0.5 * 0.05, "the ripple is there: {}", y[on - 1]);
     let (foot, _) = first_motion(&y, on as i64 + 1, SR, 0.497, None, None);
     assert!((on as i64 - 1..=on as i64 + 1).contains(&foot), "{foot}");
+}
+
+#[test]
+fn the_foot_rule_stops_on_the_last_floor_level_sample() {
+    // #101: a uniform floor of amplitude A and a hit with a sharp start or a raised-cosine start. The
+    // foot is the sample before the first sample that leaves the floor (|x| > A), at each rate.
+    const A: f64 = 0.0017;
+    for (sr, ramp) in [(44_100u32, 0usize), (48_000, 0), (48_000, 24), (96_000, 48)] {
+        let on = (0.3 * sr as f64) as usize;
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut x: Vec<f32> = (0..sr as usize / 2)
+            .map(|_| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (A * ((seed >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0)) as f32
+            })
+            .collect();
+        for k in 0..(0.1 * sr as f64) as usize {
+            let t = k as f64 / sr as f64;
+            let env = if k >= ramp {
+                1.0
+            } else {
+                0.5 - 0.5 * (std::f64::consts::PI * k as f64 / ramp as f64).cos()
+            };
+            let v = 0.8 * env * (-t / 0.06).exp() * (2.0 * std::f64::consts::PI * 180.0 * t + 0.7).sin();
+            x[on + k] += v as f32;
+        }
+        let truth = x
+            .iter()
+            .position(|v| f64::from(v.abs()) > A)
+            .expect("the hit leaves the floor") as i64
+            - 1;
+        let t0 = on as f64 / sr as f64 - 0.006;
+        let r = refine_rule_peak(&x, t0, sr, &[], W, RefineRule::Foot, FM_PEAK_DB);
+        assert_eq!((r.t * sr as f64).round() as i64, truth, "rate {sr}, ramp {ramp}: {r:?}");
+        assert_eq!(r.back, BackStep::Moved, "rate {sr}, ramp {ramp}");
+    }
 }
 
 #[test]

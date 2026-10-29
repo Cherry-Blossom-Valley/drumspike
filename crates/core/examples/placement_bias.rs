@@ -91,7 +91,11 @@ fn foot_of(x: &[f32], a: f64) -> usize {
 }
 
 fn main() {
-    let rule = RefineRule::CURRENT;
+    // `placement_bias foot` measures the version 4 rule; no argument measures the analysis rule (CURRENT).
+    let rule = match std::env::args().nth(1).as_deref() {
+        Some("foot") => RefineRule::Foot,
+        _ => RefineRule::CURRENT,
+    };
     println!(
         "placement error in samples (refined time minus the true onset, and minus the foot), rule {:?}, peak {} dB",
         rule, FM_PEAK_DB

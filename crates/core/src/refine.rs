@@ -342,6 +342,10 @@ pub enum RefineRule {
     /// Version 3 (P4-12 stage 2): [`refine_first_motion`], version 2 and then the back-track to
     /// the first motion of the hit.
     FirstMotion,
+    /// Version 4 (#101): [`RefineRule::FirstMotion`] with the foot taken one step stricter. The
+    /// back-track's first sample over its threshold is the first sample that leaves the floor, or
+    /// later; the foot is the last floor-level sample before it ([`foot_strict`]).
+    Foot,
 }
 
 impl RefineRule {
@@ -354,6 +358,7 @@ impl RefineRule {
             RefineRule::Reference => 1,
             RefineRule::Reach => 2,
             RefineRule::FirstMotion => 3,
+            RefineRule::Foot => 4,
         }
     }
 
@@ -363,6 +368,7 @@ impl RefineRule {
             1 => Some(RefineRule::Reference),
             2 => Some(RefineRule::Reach),
             3 => Some(RefineRule::FirstMotion),
+            4 => Some(RefineRule::Foot),
             _ => None,
         }
     }
@@ -697,27 +703,64 @@ pub fn first_motion_peak(
     next: Option<f64>,
     peak_db: f64,
 ) -> (i64, BackStep) {
+    back_track(x, s, sr, t0, prev, next, peak_db, false)
+}
+
+/// The back-track of [`first_motion_peak`]; `strict` takes the foot one step stricter ([`foot_strict`], version 4).
+fn back_track(
+    x: &[f32],
+    s: i64,
+    sr: u32,
+    t0: f64,
+    prev: Option<f64>,
+    next: Option<f64>,
+    peak_db: f64,
+    strict: bool,
+) -> (i64, BackStep) {
     let srf = sr as f64;
     let prev_mid = prev.map(|p| py_int(((p + t0) / 2.0) * srf));
     let next_mid = next.map(|nx| py_int(((t0 + nx) / 2.0) * srf));
-    first_motion_mid_peak(x, s, sr, prev_mid, next_mid, peak_db)
+    first_motion_mid_rule(x, s, sr, prev_mid, next_mid, peak_db, strict)
 }
 
 /// [`first_motion`] with the bounds as samples: `prev_mid` bounds the walk and the floor window (the midpoint to the
 /// previous hit), `next_mid` the peak window (the midpoint to the next hit). P4-13 stage B: the flam rule walks from a
 /// second stroke's re-rise with `prev_mid` at the dip after the first stroke (`tools/onset_guard.py` `walk`).
 pub fn first_motion_mid(x: &[f32], s: i64, sr: u32, prev_mid: Option<i64>, next_mid: Option<i64>) -> (i64, BackStep) {
-    first_motion_mid_peak(x, s, sr, prev_mid, next_mid, FM_PEAK_DB)
+    first_motion_mid_rule(x, s, sr, prev_mid, next_mid, FM_PEAK_DB, false)
 }
 
-/// [`first_motion_mid`] with another peak margin `peak_db` in place of [`FM_PEAK_DB`].
-fn first_motion_mid_peak(
+/// The strict foot of version 4 (#101). `d` is the walk's first sample over the threshold. Walking back from
+/// it, the floor is the last two samples at or under `floor` (two in a row: a single quiet sample inside a
+/// noisy rise is not the floor). The foot is the last floor-level sample before the first sample that leaves
+/// that floor after it. No such pair above `lo`: `d` stays. The samples are read raw: the 2-tap mean halves
+/// the first sample of a slow rise and reads it as floor.
+fn foot_strict(x: &[f32], d: i64, lo: i64, floor: f64) -> i64 {
+    let quiet = |i: i64| (x[i as usize].abs() as f64) <= floor;
+    let mut i = d;
+    while i - 2 >= lo && !(quiet(i - 1) && quiet(i - 2)) {
+        i -= 1;
+    }
+    if i - 2 < lo {
+        return d;
+    }
+    let mut j = i - 1;
+    while j < d && quiet(j) {
+        j += 1;
+    }
+    j - 1
+}
+
+/// [`first_motion_mid`] with another peak margin `peak_db` in place of [`FM_PEAK_DB`], and the foot taken
+/// strict ([`foot_strict`]) when `strict`.
+fn first_motion_mid_rule(
     x: &[f32],
     s: i64,
     sr: u32,
     prev_mid: Option<i64>,
     next_mid: Option<i64>,
     peak_db: f64,
+    strict: bool,
 ) -> (i64, BackStep) {
     let srf = sr as f64;
     let n = x.len() as i64;
@@ -764,6 +807,12 @@ fn first_motion_mid_peak(
             return (s, BackStep::Separate);
         }
     }
+    let foot = if strict {
+        let end = (s - samples(FM_FLOOR_SKIP_S, srf)).min(n);
+        foot_strict(x, foot, lo, max_abs(x, from, end) as f64)
+    } else {
+        foot
+    };
     if foot < s {
         (foot, BackStep::Moved)
     } else {
@@ -787,6 +836,19 @@ pub fn refine_first_motion_peak(
     win: RefineWindow,
     peak_db: f64,
 ) -> Refined {
+    refine_back_peak(x, t0, sr, neighbors, win, peak_db, false)
+}
+
+/// [`refine_first_motion_peak`] with the strict foot of version 4 ([`RefineRule::Foot`]) when `strict`.
+fn refine_back_peak(
+    x: &[f32],
+    t0: f64,
+    sr: u32,
+    neighbors: &[f64],
+    win: RefineWindow,
+    peak_db: f64,
+    strict: bool,
+) -> Refined {
     let r = refine_reach(x, t0, sr, neighbors, win);
     let srf = sr as f64;
     let (mut prev, mut next): (Option<f64>, Option<f64>) = (None, None);
@@ -798,7 +860,7 @@ pub fn refine_first_motion_peak(
         }
     }
     let s = (r.t * srf).round() as i64;
-    let (foot, back) = first_motion_peak(x, s, sr, t0, prev, next, peak_db);
+    let (foot, back) = back_track(x, s, sr, t0, prev, next, peak_db, strict);
     Refined {
         t: if back == BackStep::Moved {
             foot as f64 / srf
@@ -837,6 +899,7 @@ pub fn refine_rule_peak(
         }
         RefineRule::Reach => refine_reach(x, t0, sr, neighbors, win),
         RefineRule::FirstMotion => refine_first_motion_peak(x, t0, sr, neighbors, win, peak_db),
+        RefineRule::Foot => refine_back_peak(x, t0, sr, neighbors, win, peak_db, true),
     }
 }
 

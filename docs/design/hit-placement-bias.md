@@ -88,3 +88,68 @@ Errors in samples, refined time minus the target. Median and 10th / 90th percent
 - Real sessions (Session A to C): not measured. The session audio is not in
   `~/.cache/drumspike/sessions` on this host (the directory does not exist), so the walk-back
   histogram waits for the location of the sessions.
+
+## Step 2: the foot rule (version 4, `RefineRule::Foot`)
+
+The back-track of version 3 stops at the first sample over its threshold. Version 4 takes the foot one
+step stricter (`foot_strict` in `crates/core/src/refine.rs`): from that sample, walk back over the samples
+that are above the floor level until two samples in a row are at or under the floor. The foot is the last
+of those two-in-a-row floor samples before the first sample that leaves the floor, that is the owner's
+rule. The floor level is the largest `|x|` of the floor window (`FM_FLOOR_S` before the hit, without its
+last `FM_FLOOR_SKIP_S`). The samples are read raw: the 2-tap mean halves the first sample of a slow rise
+and would read it as floor. A walk that finds no such pair above the walk's bound keeps the version 3 foot.
+
+Version 3 stays the analysis default (`RefineRule::CURRENT`). Version 4 is selected by the version number
+4 or `DRUMSPIKE_REFINE_RULE=foot`. The default change waits for the ENST gate and the owner's decision.
+
+Synthetic table, `placement_bias foot`, the same set as step 1 (errors in samples against the foot):
+
+| rate | role | attack ms | onset median | p10 | p90 | foot median | p10 | p90 | early (<-1 vs foot) | moved | kept |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 44100 | kick | 0 | -1.00 | -1.00 | -1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 44100 | kick | 0.5 | +0.00 | -0.00 | +0.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 44100 | kick | 1 | +1.00 | -0.00 | +1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 44100 | snare | 0 | -1.00 | -1.00 | -1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 44100 | snare | 0.5 | +0.00 | -0.00 | +1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 44100 | snare | 1 | +1.00 | -0.00 | +3.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 44100 | tom | 0 | -1.00 | -1.00 | -1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 44100 | tom | 0.5 | +0.00 | -0.00 | +0.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 44100 | tom | 1 | +1.00 | -0.00 | +1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 44100 | hat | 0 | -1.00 | -1.00 | -1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 44100 | hat | 0.5 | +0.00 | -0.00 | +1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 44100 | hat | 1 | +1.00 | -0.00 | +2.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | kick | 0 | -1.00 | -1.00 | -1.00 | +0.00 | +0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | kick | 0.5 | +0.00 | -0.00 | +0.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | kick | 1 | +1.00 | +0.00 | +1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | snare | 0 | -1.00 | -1.00 | -1.00 | +0.00 | +0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | snare | 0.5 | +0.00 | +0.00 | +1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | snare | 1 | +1.00 | -0.00 | +3.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | tom | 0 | -1.00 | -1.00 | -1.00 | +0.00 | +0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | tom | 0.5 | +0.00 | -0.00 | +0.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | tom | 1 | +1.00 | +0.00 | +1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | hat | 0 | -1.00 | -1.00 | -1.00 | +0.00 | +0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | hat | 0.5 | +0.00 | +0.00 | +1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 48000 | hat | 1 | +1.00 | +0.00 | +3.00 | +0.00 | +0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | kick | 0 | -1.00 | -1.00 | -1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | kick | 0.5 | +1.00 | +0.00 | +1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | kick | 1 | +3.00 | +0.00 | +3.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | snare | 0 | -1.00 | -1.00 | -1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | snare | 0.5 | +1.00 | +0.00 | +3.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | snare | 1 | +3.00 | +0.00 | +6.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | tom | 0 | -1.00 | -1.00 | -1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | tom | 0.5 | +1.00 | +0.00 | +1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | tom | 1 | +3.00 | +0.00 | +3.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | hat | 0 | -1.00 | -1.00 | -1.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | hat | 0.5 | +1.00 | +0.00 | +2.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+| 96000 | hat | 1 | +3.00 | +0.00 | +6.00 | +0.00 | -0.00 | +0.00 | 0 | 120 | 0 |
+
+Reading: the foot median is 0 on every row (the fix rule: within +-0.5 sample), no hit is more than
+one sample before the foot (`early` is 0 on every row), and the p10 is never before the foot. The
+onset column shows the same hits against the true onset: the sharp start sits one sample before it.
+Against step 1: the sharp start moves from +1 to 0 on every row, and the ramps move from +3 to +16
+(foot medians of step 1) to 0.
+
+Limits of this set: a band-limited sharp start has a ripple before the onset that is above the floor; the
+foot rule counts it as leaving the floor (the literal rule), so such a start moves earlier by the length
+of the ripple. The unit test `the_foot_rule_stops_on_the_last_floor_level_sample` covers the synthetic
+starts at 44.1, 48 and 96 kHz only.
