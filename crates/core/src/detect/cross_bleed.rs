@@ -175,6 +175,16 @@ pub struct CrossMark {
     pub lead_ms: Option<f64>,
     /// The level ratio against it (dB, `L_X - L_S`). `None` without a coinciding hit.
     pub ratio_db: Option<f64>,
+    /// #103 step 2 calibration: the lead against the coinciding HAT source hit specifically
+    /// (the pair the hat verdict judges), `None` without a coinciding hat hit. The stored
+    /// `lead_ms`/`ratio_db` are the loudest source's, which for a hat-cause FP is often the
+    /// kick or the snare — the hat verdict's own pair was never recorded, so the -32/-10
+    /// pair calibrated on the stored keys fired on the wrong distribution (433 drops where
+    /// the sweep on the stored keys predicted 857).
+    pub hat_lead_ms: Option<f64>,
+    /// The level ratio against the coinciding hat hit (dB, `L_X - L_hat`). See
+    /// [`CrossMark::hat_lead_ms`].
+    pub hat_ratio_db: Option<f64>,
 }
 
 /// The learned bounds of one pair (a tom mic index, a source index): the median lead and ratio of the
@@ -305,6 +315,8 @@ pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec
                     bleed: false,
                     lead_ms: None,
                     ratio_db: None,
+                    hat_lead_ms: None,
+                    hat_ratio_db: None,
                 };
                 m.motion.len()
             ]
@@ -408,6 +420,21 @@ pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec
                         bleed = true;
                     }
                 } else {
+                    // #103 step 2: record the hat pair's own evidence on every hit with a
+                    // coinciding hat hit, firing or not (see [`CrossMark::hat_lead_ms`]). The
+                    // #103 measured verdict (docs/review/detector-plan.md, package 8) is that no
+                    // NEW hat-pair threshold separates (the best pair, level -20 dB and lead
+                    // -12 ms, removes 398 of 2927 hat-cause scored FPs — left-share 76.4 % ->
+                    // 62.8 %, limit 50 % — and costs 18 real strokes; every tighter pair trades
+                    // recall for little; the sweep is recorded in the ticket). The GENERIC
+                    // verdict below still fires on hat pairs exactly as on kick and snare
+                    // pairs — disabling it (an intermediate commit) kept 521 hat-bleed tom
+                    // events that main drops and regressed the tom F1 rows (the 103-tomdiff
+                    // measurement). The learned pair medians stay as stored evidence.
+                    if s.kind == XKind::Hat {
+                        marks[a][j].hat_lead_ms = Some(l);
+                        marks[a][j].hat_ratio_db = Some(r);
+                    }
                     // the verdict (the measured form, #285): the hit is bleed when it arrives later
                     // than the source hit by more than the pair's lead bound AND the level ratio
                     // falls below the margin (`margin_db`: 0.0 = the source strictly louder; the

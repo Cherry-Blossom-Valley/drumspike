@@ -163,10 +163,15 @@ fn hat_hit(x: &mut [f32], t0: f64, db: f64) {
 }
 
 #[test]
-fn a_hat_bleed_on_a_tom_mic_is_dropped() {
+fn a_hat_pairs_evidence_is_recorded_and_the_generic_verdict_fires() {
     // #285: the hi-hat close mic is a source kind. The hat plays alone three times (the clear
-    // cases) and once with a real tom hit; the tom mic hears the hat 1 ms later and 18 dB under
-    // and its detector fires on the bleed of the unison hit: the rule drops it.
+    // cases) and once with a real tom hit; the tom mic hears the hat 1 ms later and 18 dB under.
+    // #103 step 2, the measured verdict (docs/review/detector-plan.md package 8): the hat-pair
+    // distributions overlap, so no NEW hat threshold is added — the pair's own evidence is
+    // recorded on every hit. The GENERIC #285 verdict still fires on hat pairs exactly as on
+    // kick and snare pairs: the hat-cause arrivals (later than the hat by more than the pair's
+    // lead bound, quieter) are dropped. Bypassing the generic verdict for hat sources kept 521
+    // hat-bleed tom events that main drops and regressed the tom F1 rows (103-tomdiff).
     let n = (2.0f64 * f64::from(SR)) as usize;
     let mut hat = vec![0f32; n];
     let mut tom = vec![0f32; n];
@@ -193,11 +198,15 @@ fn a_hat_bleed_on_a_tom_mic_is_dropped() {
     ];
     let (marks, learned) = cross_bleed(&mics, SR, &CrossBleedParams::default());
     assert_eq!(learned[0].source, 1);
-    // the three clear-case bleeds are dropped; the real tom hit stays
-    assert!(marks[0][0].bleed, "{:?}", marks[0][0]);
-    assert!(marks[0][1].bleed, "{:?}", marks[0][1]);
-    assert!(marks[0][2].bleed, "{:?}", marks[0][2]);
+    // the hat pair's own lead/ratio is recorded on every hit, and the generic verdict fires:
+    // the three bleed arrivals (1 ms after the hat, 15 dB under) are dropped, the real tom
+    // hit (louder than the hat in the tom band, ratio +4.9 dB) stays.
+    for m in &marks[0][..3] {
+        assert!(m.hat_lead_ms.is_some() && m.hat_ratio_db.is_some(), "{:?}", m);
+        assert!(m.bleed, "{:?}", m);
+    }
     assert!(!marks[0][3].bleed, "{:?}", marks[0][3]);
+    assert!(marks[0][3].hat_lead_ms.is_some(), "{:?}", marks[0][3]);
 }
 
 #[test]
