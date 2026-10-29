@@ -39,7 +39,7 @@ The Sensitivity slider re-picks the detection from the kept candidates. Raise it
 
 > Snare: Tab selects a hit; the info line: type a velocity over the old one, Return. Re-analyze: the dialog offers Keep. Keep edited hits. Caption: Re-analyze offers Keep
 
-Your edits survive a re-analyze. Set a velocity by hand: select a hit with Tab, type the velocity over the old one in the info line, and press Return. Then run the re-analyze. The dialog offers Keep edited hits, and the hand velocity stays.
+Your edits survive a re-analyze. Set a velocity by hand. Press Tab to select a hit, type the velocity over the old one in the info line, and press Return. Then run the re-analyze. The dialog offers Keep edited hits, and the hand velocity stays.
 
 ## p4-end
 
