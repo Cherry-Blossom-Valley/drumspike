@@ -2,43 +2,59 @@
   "name": "part1",
   "title": "Screen recording, part 1: tracks in, hits on the attack, files out (#245)",
   "script": "docs/product/scripts/rec-part1.md",
+  "standard": true,
+  "drift_limit_ms": 10,
   "viewport": {"width": 1920, "height": 1080},
   "device_scale_factor": 2,
   "skip": ["p1-role"],
+  "seed": "demo",
   "narration": {"tts_out": "~/.cache/drumspike/media/tts-out/rec-part1"},
   "out": "~/.cache/drumspike/media/rec/part1.mp4",
   "scenes": [
-    {"id": "p1-new", "steps": [
+    {"id": "p1-new", "area_sel": "#editor", "steps": [
+      {"do": "wait", "cond": "() => S.order.length === 13", "timeout": 60, "err": "the demo session open first: the editor goes from its 13 tracks to an empty project (recording-standard.md reshape)"},
       {"do": "caption", "text": "File > New Project…"},
       {"do": "hold", "s": 0.6},
-      {"do": "answer_save", "path": "{projects}/Demo"},
+      {"do": "answer_save", "path": "{projects}/Slate"},
       {"do": "key", "press": "Meta+N"},
-      {"do": "wait", "cond": "() => S.name === 'Demo'", "timeout": 60, "err": "the new project Demo"},
-      {"do": "text", "sel": "#stMsg", "contains": "created Demo", "timeout": 15,
+      {"do": "wait", "cond": "() => S.name === 'Slate' && S.order.length === 0", "timeout": 60, "err": "the new empty project Slate (a name the open demo session does not hold: the registry keeps the entry of an open folder, so the new project cannot reuse the name Demo)"},
+      {"do": "text", "sel": "#stMsg", "contains": "created Slate", "timeout": 15,
        "err": "the app's own status line first: setMsg runs in a task of its own after S.name flips, so a rewrite that comes before it is overwritten"},
-      {"do": "show_text", "sel": "#stMsg", "text": "created Demo in ~/Music/Drum Spike/Projects/Demo",
-       "err": "the status bar of the new project, in the neutral home-relative form"}
+      {"do": "show_text", "sel": "#stMsg", "text": "created Slate in ~/Music/Drum Spike/Projects/Slate",
+       "err": "the status bar of the new project, in the neutral home-relative form"},
+      {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-add", "steps": [
+    {"id": "p1-add", "area_sel": "body", "steps": [
       {"do": "caption", "text": "File > Add Tracks…"},
       {"do": "answer_pick", "path": "{session}/Audio Files"},
       {"do": "key", "press": "Shift+Meta+I"},
       {"do": "visible", "sel": "#tracksModal", "timeout": 30, "err": "the Add Tracks list"},
-      {"do": "wait", "cond": "() => { const rows = document.querySelectorAll('#tracksRows .urow'); const row = n => document.querySelector('#tracksRows .urow[data-stem=\"' + n + '\"]'); const role = n => { const el = row(n) && row(n).querySelector('.urole'); return el && el.value; }; const nt = row('new take'); return rows.length === 13 && !!nt && role('k in') === 'kick' && role('s top') === 'snare' && role('t1') === 'tom' && nt.querySelector('.urole').value === 'other' && !nt.querySelector('.ufromaudio') && !nt.querySelector('.uuse').checked; }", "timeout": 30, "err": "the demo rows: 13 rows, the roles from the names, new take without a role and unchecked"},
-      {"do": "select", "sel": "#tracksRows .urow[data-stem=\"new take\"] .urole", "value": "kick", "timeout": 15, "err": "the role of new take set to kick"},
-      {"do": "click", "sel": "#tracksRows .urow[data-stem=\"room\"] .uuse", "timeout": 15, "err": "the room mic checked"},
+      {"do": "wait", "cond": "() => { const rows = document.querySelectorAll('#tracksRows .urow'); const row = n => document.querySelector('#tracksRows .urow[data-stem=\"' + n + '\"]'); const role = n => { const el = row(n) && row(n).querySelector('.urole'); return el && el.value; }; const nt = row('new take'); return rows.length === 13 && !!nt && role('k in') === 'kick' && role('s top') === 'snare' && role('t1') === 'tom' && nt.querySelector('.urole').value === 'kick' && !!nt.querySelector('.ufromaudio') && nt.querySelector('.uuse').checked; }", "timeout": 30, "err": "the demo rows: 13 rows, the roles from the names, new take suggested kick from the audio and checked"},
       {"do": "hold", "s": 2.5},
+      {"do": "click", "sel": "#tracksRows .urow[data-stem=\"room\"] .uuse", "timeout": 15, "err": "the room mic checked"},
+      {"do": "hold", "s": 1.5},
       {"do": "click", "sel": "#tracksAdd"},
-      {"do": "wait", "cond": "() => S.order.length === 13", "timeout": 120, "err": "the 13 demo tracks loaded"}
+      {"do": "wait", "cond": "() => S.order.length === 13", "timeout": 120, "err": "the 13 demo tracks loaded"},
+      {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-analyze", "steps": [
+    {"id": "p1-analyze", "area_sel": "#statusbar", "steps": [
+      {"do": "zoom_to", "track": "new_take", "t": 2.1875, "span": 0.5},
+      {"do": "lane_click", "track": "new_take", "lane": "wave", "t": 2.1875},
+      {"do": "hold", "s": 1.5},
+      {"do": "shot"},
       {"do": "click", "sel": "#analyzeAllBtn"},
       {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the analysis started"},
-      {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the analysis finished"}
+      {"do": "hold", "s": 1.5},
+      {"do": "shot"},
+      {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the analysis finished"},
+      {"do": "hold", "s": 1.5,
+       "err": "the p1c run overran the narration by 153 ms; the holds are pinned at the 1.5 s standard minimum"}
     ]},
-    {"id": "p1-role", "steps": [
+    {"id": "p1-role", "area_sel": "#inspector", "steps": [
       {"do": "click", "sel": ".track[data-name=\"new take\"] .thead .tname"},
+      {"do": "hold", "s": 1.5},
       {"do": "show_key", "press": "Alt+I", "sel": "#inspector", "timeout": 10, "err": "the Inspector"},
+      {"do": "hold", "s": 1.5},
       {"do": "click", "sel": ".insSec[data-sec=\"track\"] .insSecHead"},
       {"do": "wait", "cond": "() => document.querySelector('#insRoleSel') && document.querySelector('#insRoleSel').value === 'kick'", "timeout": 30, "err": "the Inspector shows the role kick of new take"},
       {"do": "text", "sel": "#insRoleSrc", "equals": "suggested from the audio", "timeout": 15, "err": "the role hint 'suggested from the audio'"},
@@ -46,21 +62,28 @@
       {"do": "select", "sel": "#insRoleSel", "value": "tom"},
       {"do": "wait", "cond": "() => S.tracks['new_take'] && S.tracks['new_take'].role === 'tom'", "timeout": 30, "err": "the role changed to tom"},
       {"do": "wait", "cond": "() => !analysisRunning", "timeout": 120, "err": "the re-analysis of the track finished"},
-      {"do": "hold", "s": 1.0},
+      {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Meta+Z"},
       {"do": "wait", "cond": "() => S.tracks['new_take'].role === 'kick'", "timeout": 30, "err": "undo brought the role kick back"},
-      {"do": "text", "sel": "#insRoleSrc", "equals": "suggested from the audio", "timeout": 15, "err": "the hint is back with the role"}
+      {"do": "text", "sel": "#insRoleSrc", "equals": "suggested from the audio", "timeout": 15, "err": "the hint is back with the role"},
+      {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-zoom", "steps": [
+    {"id": "p1-zoom", "area_sel": "#editor", "steps": [
+      {"do": "zoom_to", "track": "s_top", "t": 8.5938, "span": 5},
       {"do": "click", "sel": ".track[data-name=\"s_top\"] .thead .tname"},
+      {"do": "hold", "s": 1.5},
+      {"do": "lane_click", "track": "s_top", "lane": "wave", "t": 8.5},
+      {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Tab"},
       {"do": "wait", "cond": "() => !document.querySelector('#ilFields').classList.contains('hidden') && document.querySelector('#ilSample').value.length > 0", "timeout": 15, "err": "a snare hit selected (the sample in the info line)"},
-      {"do": "hold", "s": 1.8},
+      {"do": "hold", "s": 1.5},
       {"do": "key", "press": "6"},
       {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms zoom"},
-      {"do": "hold", "s": 1.2}
+      {"do": "hold", "s": 1.5}
     ]},
     {"id": "p1-export", "steps": [
+      {"do": "caption", "text": "File > Export…"},
+      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "show_dest", "text": "~/Music/Drum Spike/Exports",
        "err": "the destination in the neutral home-relative form before the dialog opens (shots.py's EXPORTS_SHOWN); the show keeps against the app's own exRender re-renders"},
       {"do": "key", "press": "Meta+E"},
@@ -68,18 +91,33 @@
       {"do": "wait", "cond": "() => document.querySelector('#exModeTrack').checked && document.querySelector('#exMidi').checked && document.querySelector('#exSpikes').checked && document.querySelector('#exSpikeSynth').checked", "timeout": 15, "err": "the defaults: per track, MIDI and spike WAV, Synthetic"},
       {"do": "hold", "s": 3.0},
       {"do": "click", "sel": "#exGo"},
-      {"do": "wait", "cond": "d0 => !EX.busy && EX.done > d0", "arg": "() => EX.done", "timeout": 120, "err": "the export finished"},
+      {"do": "wait", "cond": "() => !EX.busy && document.querySelector('#exResult') && !document.querySelector('#exResult').classList.contains('hidden')", "timeout": 120,
+       "err": "the export finished (the summary shows the files; EX.done alone races a 0.1 s export: d0 is read after the export already completed)"},
       {"do": "show_dest", "text": "~/Music/Drum Spike/Exports", "err": "the destination again (every exRender of the app re-asserts it; this re-patches if the hook missed)"},
       {"do": "visible", "sel": "#exResult", "timeout": 15, "err": "the summary lists the files"},
       {"do": "hold", "s": 2.0},
       {"do": "click", "sel": "#exCancel"},
-      {"do": "wait", "cond": "() => document.querySelector('#exportModal').classList.contains('hidden')", "timeout": 15, "err": "the dialog closed"}
+      {"do": "wait", "cond": "() => document.querySelector('#exportModal').classList.contains('hidden')", "timeout": 15, "err": "the dialog closed"},
+      {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-again", "steps": [
+    {"id": "p1-again", "area_sel": "#statusbar", "steps": [
+      {"do": "zoom_to", "track": "s_top", "t": 3.125, "span": 0.5},
+      {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 3.125},
+      {"do": "hold", "s": 1.5},
+      {"do": "wait", "cond": "() => !document.querySelector('#ilFields').classList.contains('hidden') && document.querySelector('#ilSample').value.length > 0", "timeout": 15, "err": "a hit selected (the edit the narration speaks of)"},
+      {"do": "key", "press": "6"},
+      {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms window (the deleted spike wide enough to see, as in part 2)"},
+      {"do": "hold", "s": 1.5},
+      {"do": "shot", "err": "before: the hit still selected (#stSel names it) and the first summary still in #stMsg"},
+      {"do": "key", "press": "Delete", "err": "the hit deleted (the next edit)"},
+      {"do": "wait", "cond": "() => document.querySelector('#stSel').textContent === 'no selection'", "timeout": 15, "err": "the selection cleared (the edit is in the status bar; edDelete writes no #stMsg message, the 0.00 % p123b pair was the stale export summary twice)"},
+      {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Alt+Meta+E"},
-      {"do": "wait", "cond": "d0 => EX.done > d0", "arg": "() => EX.done", "timeout": 120, "err": "the second export finished"},
+      {"do": "wait", "cond": "() => !EX.busy && EX.done > 0", "timeout": 120,
+       "err": "the second export finished (EX.done > d0 races a fast export; the summary wait below asserts it)"},
       {"do": "wait", "cond": "() => document.querySelector('#stMsg').textContent.startsWith('exported')", "timeout": 15, "err": "the summary shows the files again"},
-      {"do": "hold", "s": 2.5}
+      {"do": "hold", "s": 1.5},
+      {"do": "shot"}
     ]},
     {"id": "p1-end", "steps": [
       {"do": "caption", "text": "Next: check and fix (part 2)"}
