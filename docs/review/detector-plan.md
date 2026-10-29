@@ -18,7 +18,7 @@ Committed baseline `tools/eval/enst_gate_baseline.json` (F1, +-50 ms window, con
 | drummer_3 | 0.982 | 0.820 | 0.897 | 0.392 |
 
 Fresh gate run on main (this PR, counted lines in the PR description; config `dsp`,
-210 items, detector fingerprint 948d0edea3026dc4): snare F1 0.827 / 0.867 / 0.820
+210 items, detector fingerprint dadf4539aa159029): snare F1 0.827 / 0.867 / 0.820
 (drummers 1/2/3) - every aggregate at or above its baseline, `rows compared: 12`,
 `PASS`.
 
@@ -255,7 +255,37 @@ sit at that cause, "left" the scored FPs:
 | none | 37 | 0.6 % | 7 | 84 % |
 
 The shares sum to 100 %, the cause counts to 6232 (the script's sum check). The worst
-mic is drummer_3 tom_2 (P 0.185 at R 0.976, 1121 output hits). Flagged hits on the
+mic is drummer_3 tom_2 (P 0.185 at R 0.976, 1121 output hits).
+
+Counted per drummer and cause (scored FPs, all tom mics; shares of the drummer's total,
+from the run log of #90):
+
+| drummer | kick | snare | hat | cymbal | tom-other | none | total | shares % (kick / snare / hat / cymbal / tom-other / none) |
+|---|---|---|---|---|---|---|---|---|
+| drummer_1 | 75 | 234 | 199 | 37 | 36 | 2 | 583 | 12.9 / 40.1 / 34.1 / 6.3 / 6.2 / 0.3 |
+| drummer_2 | 789 | 490 | 951 | 177 | 13 | 12 | 2432 | 32.4 / 20.1 / 39.1 / 7.3 / 0.5 / 0.5 |
+| drummer_3 | 844 | 674 | 1273 | 229 | 174 | 23 | 3217 | 26.2 / 21.0 / 39.6 / 7.1 / 5.4 / 0.7 |
+| all | 1708 | 1398 | 2423 | 443 | 223 | 37 | 6232 | 27.4 / 22.4 / 38.9 / 7.1 / 3.6 / 0.6 |
+
+Counted per drummer and tom mic (rows: the mic; the cause columns as above):
+
+| drummer | mic | kick | snare | hat | cymbal | tom-other | none | total |
+|---|---|---|---|---|---|---|---|---|
+| drummer_1 | tom_1 | 27 | 200 | 131 | 21 | 21 | 1 | 401 |
+| drummer_1 | tom_2 | 48 | 34 | 68 | 16 | 15 | 1 | 182 |
+| drummer_2 | tom_1 | 89 | 377 | 431 | 72 | 2 | 3 | 974 |
+| drummer_2 | tom_2 | 700 | 113 | 520 | 105 | 11 | 9 | 1458 |
+| drummer_3 | tom_1 | 56 | 329 | 406 | 30 | 45 | 4 | 870 |
+| drummer_3 | tom_2 | 190 | 195 | 395 | 46 | 94 | 4 | 924 |
+| drummer_3 | tom_3 | 598 | 150 | 472 | 153 | 35 | 15 | 1423 |
+
+Split by drummer: hat is the largest cause for drummers 2 and 3 (39.1 % and 39.6 %), so the
+hat-first step fits them. Drummer_1 is the exception: its largest cause is snare (40.1 %),
+with hat second (34.1 %). On drummer_2 tom_2, kick is the largest cause (700 of 1458).
+
+Two fingerprints appear in the run log. Build a12badbc565958ae is the build of the run files
+that the tables above are counted on; detector fingerprint dadf4539aa159029 is the one the
+gate scoring printed for the same 210 items. Flagged hits on the
 own tom annotations: 25 (real strokes the rules removed).
 
 What the table does not say: which rule flagged each removed hit. The output carries
@@ -268,7 +298,7 @@ reasons below are the rules' stated design, not yet tested:
   are bright and weak, so the lead test may not separate them.
 - Kick and snare (50 % of the FPs): version 2 covers them, but the kick threshold of
   4.0 dB is set against real accents (`tom_bleed.rs` header). Bleed above the threshold
-  is caught; the remainder sits at the threshold.
+  is caught; hypothesis, not measured: the remainder may sit at the threshold.
 - Cymbal (7 %): the overheads are not in the source list of A6 (kick, snare, hi-hat,
   other toms). The 324 removed cymbal hits show some are caught anyway, so the source
   list is the question to test, not the whole answer.
@@ -276,7 +306,8 @@ reasons below are the rules' stated design, not yet tested:
 Work package: add the rule that set each flag to `enst_tom_fp.py` (a column per rule: CD,
 v2 kick, v2 snare, v3 pair, v5 shared kick, A6), from the per-hit evidence the run files
 carry (if they do not, the evidence goes into the run output first). Then take the hat
-cause, the largest one, and decide on the measured table: add hi-hat and overheads as
+cause, the largest pooled one (the largest for drummers 2 and 3; drummer_1's largest is
+snare, see the split above), and decide on the measured table: add hi-hat and overheads as
 sources of A6 with a threshold set on ENST, or record why the rule cannot separate them.
 No detector change in this package before the table is in the report.
 
