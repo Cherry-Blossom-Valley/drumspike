@@ -103,7 +103,7 @@ POINTER_KINDS = ("click", "lane_click", "drag")   # the overlay pointer glides t
 GLIDE_MS = 450                  # the pointer glides in 300 to 600 ms
 ZOOM_SPAN_S = (0.5, 5.0)        # a zoom_to span: a preset from 500 ms to 5 s
 RESULT_HOLD_S = 1.5             # an action's result stays on screen this long at the same zoom
-CHANGE_MIN_PCT = 2.0            # the action area must change by this share of its pixels (#450 Gate: >= 2 %)
+CHANGE_MIN_PCT = 0.5            # the action area must change by this share of its pixels (recording-standard.md: >= 0.5 %)
 CHANGE_LEVEL = 16               # a channel moved by this much (of 255) counts as changed (screenshot noise)
 WINDOW_PX = 300                 # a zoomed scene's measured window: +/- this many capture pixels around the hit
 READY = "typeof S !== 'undefined' && typeof B !== 'undefined' && B.app === true && S.loaded > 0"
@@ -1167,6 +1167,14 @@ def record(root, scenario, items, out, work, keep, check_model=True):
         with sync_playwright() as pw:
             br = pw.chromium.launch()
             sid = seed_demo(br, url, env) if scenario.get("seed") == "demo" else None
+            if sid and scenario.get("seed_frees_project"):
+                # seed_frees_project: the seed created the project on disk (B.newProject writes
+                # the layout), so a scene that re-creates it via File > New Project would hit
+                # the 409 "project already exists". The open session lives in memory; the
+                # folder goes so the name is free again (part 1's p1-new reshape).
+                seeded = Path(env["projects"]) / "Demo"
+                if seeded.is_dir():
+                    shutil.rmtree(seeded)
             place_session_files(scenario, env)
             ctx = br.new_context(viewport={"width": vp_w, "height": vp_h}, device_scale_factor=dsf,
                                  record_video_dir=str(work / "raw"),

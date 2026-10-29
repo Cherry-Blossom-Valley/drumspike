@@ -35,12 +35,13 @@
     ]},
     {"id": "p2-zoom", "area_sel": "#editor", "steps": [
       {"do": "caption", "text": "View > Zoom Presets > 5 ms"},
-      {"do": "key", "press": "1"},
-      {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) > 1", "timeout": 15, "err": "the whole session first (p1-zoom left the 5 ms view, the first preset would show nothing)"},
-      {"do": "hold", "s": 1.5},
+      {"do": "zoom_to", "track": "s_top", "t": 8.5938, "span": 5,
+       "err": "the whole session first (p1-zoom left the 5 ms view, the first preset would show nothing); a zoom_to, not the 1 key: one action fewer in a 12.8 s scene"},
+      {"do": "shot"},
       {"do": "key", "press": "6"},
       {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms zoom"},
       {"do": "hold", "s": 1.5},
+      {"do": "shot"},
       {"do": "key", "press": "5"},
       {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.051", "timeout": 15, "err": "the 50 ms zoom"},
       {"do": "hold", "s": 1.5},
@@ -67,8 +68,10 @@
       {"do": "wait", "cond": "() => !document.querySelector('#overviewWrap').classList.contains('hidden')", "timeout": 15, "err": "the whole session in one strip"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p2-add", "steps": [
+    {"id": "p2-add", "area_sel": ".track[data-name=\"s_top\"]", "steps": [
       {"do": "caption", "text": "Edit > Add Hit at Playhead"},
+      {"do": "click", "sel": ".track[data-name=\"s_top\"] .thead .tname", "timeout": 15, "err": "s_top selected (H adds on the selected track; a no-track-selected message would change nothing)"},
+      {"do": "hold", "s": 1.5},
       {"do": "zoom_to", "track": "s_top", "t": 56.7, "span": 0.5},
       {"do": "lane_click", "track": "s_top", "lane": "wave", "t": 56.7,
        "err": "the playhead in the gap (no hit within 0.6 s there, the detector missed one)"},
@@ -79,8 +82,7 @@
       {"do": "shot"},
       {"do": "key", "press": "H"},
       {"do": "hold", "s": 1.5},
-      {"do": "shot"},
-      {"do": "hold", "s": 1.5}
+      {"do": "shot"}
     ]},
     {"id": "p2-delete", "steps": [
       {"do": "caption", "text": "Edit > Delete Hit"},

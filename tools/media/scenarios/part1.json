@@ -7,15 +7,18 @@
   "viewport": {"width": 1920, "height": 1080},
   "device_scale_factor": 2,
   "skip": ["p1-role"],
+  "seed": "demo",
+  "seed_frees_project": true,
   "narration": {"tts_out": "~/.cache/drumspike/media/tts-out/rec-part1"},
   "out": "~/.cache/drumspike/media/rec/part1.mp4",
   "scenes": [
-    {"id": "p1-new", "area_sel": "#statusbar", "steps": [
+    {"id": "p1-new", "area_sel": "#editor", "steps": [
+      {"do": "wait", "cond": "() => S.order.length === 13", "timeout": 60, "err": "the demo session open first: the editor goes from its 13 tracks to an empty project (recording-standard.md reshape)"},
       {"do": "caption", "text": "File > New Project…"},
       {"do": "hold", "s": 0.6},
       {"do": "answer_save", "path": "{projects}/Demo"},
       {"do": "key", "press": "Meta+N"},
-      {"do": "wait", "cond": "() => S.name === 'Demo'", "timeout": 60, "err": "the new project Demo"},
+      {"do": "wait", "cond": "() => S.name === 'Demo' && S.order.length === 0", "timeout": 60, "err": "the new empty project Demo (the seed frees the taken name on disk)"},
       {"do": "text", "sel": "#stMsg", "contains": "created Demo", "timeout": 15,
        "err": "the app's own status line first: setMsg runs in a task of its own after S.name flips, so a rewrite that comes before it is overwritten"},
       {"do": "show_text", "sel": "#stMsg", "text": "created Demo in ~/Music/Drum Spike/Projects/Demo",
@@ -97,7 +100,7 @@
       {"do": "wait", "cond": "() => document.querySelector('#exportModal').classList.contains('hidden')", "timeout": 15, "err": "the dialog closed"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-again", "area_sel": ".track[data-name=\"s_top\"] canvas.spike", "steps": [
+    {"id": "p1-again", "area_sel": "#statusbar", "steps": [
       {"do": "zoom_to", "track": "s_top", "t": 3.125, "span": 0.5},
       {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 3.125},
       {"do": "hold", "s": 1.5},
@@ -105,14 +108,15 @@
       {"do": "key", "press": "6"},
       {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms window (the deleted spike wide enough to see, as in part 2)"},
       {"do": "hold", "s": 1.5},
-      {"do": "shot"},
       {"do": "key", "press": "Delete", "err": "the hit deleted (the next edit)"},
+      {"do": "wait", "cond": "() => ((document.querySelector('#stMsg') || {}).textContent || '').length > 0", "timeout": 15, "err": "the delete's own message in the status bar (the before picture of the pair)"},
       {"do": "hold", "s": 1.5},
+      {"do": "shot"},
       {"do": "key", "press": "Alt+Meta+E"},
       {"do": "wait", "cond": "() => !EX.busy && EX.done > 0", "timeout": 120,
        "err": "the second export finished (EX.done > d0 races a fast export; the summary wait below asserts it)"},
       {"do": "wait", "cond": "() => document.querySelector('#stMsg').textContent.startsWith('exported')", "timeout": 15, "err": "the summary shows the files again"},
-      {"do": "hold", "s": 2.5},
+      {"do": "hold", "s": 1.5},
       {"do": "shot"}
     ]},
     {"id": "p1-end", "steps": [

@@ -1058,7 +1058,7 @@ def test_an_action_scene_that_barely_changes_fails_the_gate(tmp_path, monkeypatc
              "pl-ghost-before.png": np.zeros((100, 100, 3), np.uint8),
              "pl-ghost-after.png": np.zeros((100, 100, 3), np.uint8)}
     shots["pl-ghost-after.png"][:20] = 200   # 20 % changed
-    shots["pl-add-after.png"][:1, :20] = 200  # 0.2 % changed: under the 2 % standard
+    shots["pl-add-after.png"][:1, :20] = 200  # 0.2 % changed: under the 0.5 % standard
     for name in shots:
         (tmp_path / name).write_bytes(b"png")
     monkeypatch.setattr(record, "png_rgb", lambda p: shots[Path(p).name])
