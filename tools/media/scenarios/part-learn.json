@@ -36,17 +36,15 @@
       "id": "pl-grey",
       "steps": [
         {"do": "caption", "text": "The marked hit and its near copies go grey"},
-        {"do": "zoom_to", "track": "s_top", "t": 8.5938, "span": 1},
+        {"do": "zoom_to", "track": "s_top", "t": 8.2812, "span": 2.6},
         {"do": "wait", "cond": "() => (S.events['s_top']||[]).filter(e => e.filtered && Math.abs(e.t - 7.0312) <= 2.5).length >= 3",
          "timeout": 15, "err": "the marked hits and their near copies grey in the view (3 or more)"},
         {"do": "wait", "cond": "() => (document.querySelector('#stMsg')||{textContent:''}).textContent.includes('Learn takes')",
          "timeout": 10, "err": "the status line counts the grey hits"},
         {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 8.5938},
         {"do": "hold", "s": 1.5},
-        {"do": "zoom_to", "track": "s_top", "t": 9.5312, "span": 1},
         {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 9.5312},
         {"do": "hold", "s": 1.5},
-        {"do": "zoom_to", "track": "s_top", "t": 7.0312, "span": 1},
         {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 7.0312},
         {"do": "hold", "s": 2.0}
       ]
