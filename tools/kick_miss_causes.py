@@ -93,6 +93,15 @@ def cause_of(t: float, prev_used: float | None, ev: np.ndarray, picked: np.ndarr
     return "no candidate", d
 
 
+def summary_line(total_fn: int, total_named: int) -> str:
+    """The attribution summary line: a 0 FN run is a valid result, not a FAIL, but it must
+    not read as a passed attribution (#98)."""
+    if total_fn:
+        return (f"total FN {total_fn}, attributed to named causes {total_named} "
+                f"({100.0 * total_named / total_fn:.1f} %)")
+    return f"no kick FN at Sensitivity {WORK_SENS}: nothing to attribute"
+
+
 def cmd_kick(ctx: le.Ctx) -> dict:
     base = le.load_json(ctx, "baseline.json")
     refs = le.load_json(ctx, "refs.json")
@@ -148,8 +157,7 @@ def cmd_kick(ctx: le.Ctx) -> dict:
                  f"{WORK_SENS}):")
     for k, v in sorted(cause_total.items()):
         lines.append(f"  {k}: {v}")
-    lines.append(f"  total FN {total_fn}, attributed to named causes {total_named} "
-                 f"({100.0 * total_named / total_fn if total_fn else 100.0:.1f} %)")
+    lines.append(f"  {summary_line(total_fn, total_named)}")
     for s, m, _stem, _role in kicks:
         jid = le.job_id(s, m)
         b = base[jid]
