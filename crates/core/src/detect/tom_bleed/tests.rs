@@ -1146,6 +1146,20 @@ fn a_shared_kick_source_marks_the_kick_bleed_on_the_floor_tom() {
         own.iter().all(|&j| !r.bleed[2][j] && !r.shared_kick_bleed[2][j]),
         "tom 3's own strokes stay"
     );
+    // the names say which rule marked each hit (#96): the guarded kick is named, and `bleed` is the OR of the names
+    assert!(
+        kick_bleed.iter().all(|&j| r.by[2][j].contains(&"v5-kick")),
+        "the kick bleed names v5-kick"
+    );
+    assert!(
+        own.iter().all(|&j| r.by[2][j].is_empty()),
+        "tom 3's own strokes name no rule"
+    );
+    for (m, hits) in r.bleed.iter().enumerate() {
+        for (j, &b) in hits.iter().enumerate() {
+            assert_eq!(b, !r.by[m][j].is_empty(), "mic {m} hit {j}: bleed and by agree");
+        }
+    }
 }
 
 #[test]

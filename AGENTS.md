@@ -77,6 +77,13 @@ release builds are in `docs/DEVELOPING.md`, sections 4, 7 and 8.
   one PR with `Closes #<n>`. The coordinator verifies and merges; agents never merge.
 - Keep the first line of a commit message short. Put measurements in a report file, not in the
   commit body.
+- The repository and the board are public, and all test data is internal only (the real
+  sessions, ENST, STAR Drums): no audio, derived files, frames, song, take or file names in a
+  commit, PR body or ticket comment. Public text carries aggregates and Session A/B/C only.
+- Before `done`, run `uv run python tools/check_private.py --diff origin/main` and
+  `uv run python tools/check_private.py --text-file <pr-body-or-comment-draft>`. Exit 1 names the
+  file, line and word; exit 2 means `DRUMSPIKE_PRIVATE_WORDS` is unset on the host (it is set per
+  host, never in the repo).
 
 ## Do not touch
 

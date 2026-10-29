@@ -93,6 +93,25 @@ def test_the_note_offer_works(app, make_project):
     expect_src(app, "set by you")
 
 
+def test_a_role_change_swaps_the_header_icon_at_once(app, make_project):
+    # 0.9.3: the header icon is inline SVG and follows the role the moment it changes
+    # #9: the icon is the instrument drawing in the header (.tart), not a glyph in the name row
+    show(app, make_project)
+    other_icon = app.evaluate(
+        "() => document.querySelector(\".track[data-name='Clap_01'] .thead .tart svg\").innerHTML")
+    assert other_icon and "path" in other_icon, other_icon   # the 'other' icon (the name gives no role)
+    role_sel(app).select_option("snare")
+    app.wait_for_function(
+        "k => { const s = document.querySelector(\".track[data-name='Clap_01'] .thead .tart svg\");"
+        " return s && s.innerHTML !== k && s.innerHTML.includes('ellipse'); }",        arg=other_icon)
+    assert app.evaluate("() => S.tracks['Clap_01'].role") == "snare"
+    menu(app, "undo")
+    app.wait_for_function(
+        "k => document.querySelector(\".track[data-name='Clap_01'] .thead .tart svg\").innerHTML === k",
+        arg=other_icon)
+    assert app.evaluate("() => S.tracks['Clap_01'].role") == "other"
+
+
 def test_a_role_change_reanalyzes_and_undo_restores_role_note_and_hits(app, make_project, tmp_path):
     if not has_model(app):
         pytest.skip("the re-pick of a role change needs the model (the DSP fallback keeps no activations)")

@@ -352,6 +352,10 @@ pub struct TomBleed {
     /// (all false there): when rule CD is off for fewer than two played tom close mics, the caller applies these
     /// marks itself; when rule CD is on they are already in `bleed`.
     pub shared_kick_bleed: Vec<Vec<bool>>,
+    /// Per mic, per hit: the rules that mark it, by name (`CD`, `v2-snare`, `v2-kick`, `v5-kick`; empty when none).
+    /// The reporting key of the eval (#96): with rule CD on, a hit is in `bleed` exactly when this is not empty; with
+    /// the rule off for fewer than two played mics only `v5-kick` can be listed (the marks of `shared_kick_bleed`).
+    pub by: Vec<Vec<Vec<&'static str>>>,
 }
 
 impl TomBleed {
@@ -522,11 +526,23 @@ pub fn tom_bleed_with(
             shared.iter_mut().for_each(|m| *m = false);
         }
         if r.off.is_none() {
-            for (b, e) in r.bleed[a].iter_mut().zip(&ex) {
-                *b |= e[0] < p.snare_threshold_db || e[1] < p.kick_threshold_db;
+            for (j, (b, e)) in r.bleed[a].iter_mut().zip(&ex).enumerate() {
+                let (snare, kick) = (e[0] < p.snare_threshold_db, e[1] < p.kick_threshold_db);
+                *b |= snare || kick;
+                if snare {
+                    r.by[a][j].push("v2-snare");
+                }
+                if kick {
+                    r.by[a][j].push("v2-kick");
+                }
             }
             for (b, &m) in r.bleed[a].iter_mut().zip(&shared) {
                 *b |= m;
+            }
+        }
+        for (j, &m) in shared.iter().enumerate() {
+            if m {
+                r.by[a][j].push("v5-kick");
             }
         }
         excess.push(ex);
@@ -744,10 +760,21 @@ fn run_pass(mics: &[TomMic], sr: u32, p: &TomBleedParams, group: &[usize]) -> To
                 .collect()
         })
         .collect();
-    let bleed = excess
+    let by: Vec<Vec<Vec<&'static str>>> = excess
         .iter()
-        .map(|ex| ex.iter().map(|&e| off.is_none() && e < p.threshold_db).collect())
+        .map(|ex| {
+            ex.iter()
+                .map(|&e| {
+                    if off.is_none() && e < p.threshold_db {
+                        vec!["CD"]
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .collect()
+        })
         .collect();
+    let bleed = by.iter().map(|ex| ex.iter().map(|b| !b.is_empty()).collect()).collect();
     TomBleed {
         off,
         mics: stats,
@@ -758,6 +785,7 @@ fn run_pass(mics: &[TomMic], sr: u32, p: &TomBleedParams, group: &[usize]) -> To
         sources: Vec::new(),
         source_excess: Vec::new(),
         shared_kick_bleed: Vec::new(),
+        by,
     }
 }
 

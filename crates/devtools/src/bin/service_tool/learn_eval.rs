@@ -7,6 +7,10 @@
 //! DSP-only `patch-2` (option A) and `mfcc-2` (the ablation).
 //!
 //! - `mode: "cands"`: the detection candidates `[t, class, similarity, v]` (`histogram::dsp_detection_candidates`).
+//! - `mode: "cands_full"`: the raw candidates with their stored measurements and gate verdicts
+//!   (the `Candidate` list of `detect_onsets_and_cands`, for the miss-cause passes).
+//! - `mode: "stages"`, `values: [v, ...]`: per value the pre-dedup picks and the final events
+//!   (the `detect_events`/`analyze_detected` pair of `baseline`, for the miss-cause passes).
 //! - `mode: "baseline"`, `values: [v, ...]`: the hits at each Sensitivity value: `{hits: [[t, ...], ...]}`.
 //! - `mode: "learn"`, `sensitivity`, `this: [t]`, `not: [t]`, `variants: [{name, recipe, weights, centre}]`,
 //!   `grid: [threshold, ...]`: per variant the candidate scores, the examples' scores and the automatic
@@ -179,6 +183,39 @@ fn filtered_hits(
     Ok(a.events.iter().map(|h| r6(h.t)).collect())
 }
 
+/// The miss-cause passes' view of one Sensitivity value: the pre-dedup picks (`detect_events`)
+/// and the final events (`analyze_detected`), so a Python pass can tell a min-gap drop from a
+/// gate drop without replaying the picker.
+fn stages(cache: &mut Cache, job: &Value, role: &str, wav: &str) -> Result<Value, String> {
+    let t = load(cache, wav, role)?;
+    let mut rows = Vec::new();
+    for v in times(&job["values"]) {
+        let parsed = jobs::parse_params(Some(&params_at(v)))?;
+        let det = picked(&t, role, &parsed.params)?;
+        let a = analyze_detected(&t.dec.samples, t.dec.sr, role, &det, &parsed.params).map_err(|e| e.to_string())?;
+        rows.push(json!({
+            "v": v,
+            "picked": det.iter().map(|p| r6(p.0)).collect::<Vec<_>>(),
+            "events": a.events.iter().map(|h| r6(h.t)).collect::<Vec<_>>(),
+        }));
+    }
+    Ok(json!({"stages": rows}))
+}
+
+/// The raw candidates with their stored measurements and gate verdicts (the `Candidate` list of
+/// the detection), plus the detection's weak-flux limit: the input of the miss-cause passes.
+fn cands_full(cache: &mut Cache, _job: &Value, role: &str, wav: &str) -> Result<Value, String> {
+    let t = load(cache, wav, role)?;
+    Ok(json!({
+        "weak_limit": t.weak_limit,
+        "candidates": t.cands.iter().map(|c| json!({
+            "t": r6(c.time), "frame": c.frame, "flux": c.flux, "rel_db": c.rel_db,
+            "similarity": c.similarity, "attack": c.attack, "kept": c.kept,
+            "gate": c.gate, "soft_busy": c.soft_busy,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
 fn baseline(cache: &mut Cache, job: &Value, role: &str, wav: &str) -> Result<Value, String> {
     let t = load(cache, wav, role)?;
     let mut hits = Vec::new();
@@ -324,6 +361,8 @@ fn one(cache: &mut Cache, job: &Value) -> Result<Value, String> {
             let t = load(cache, wav, role)?;
             json!({"candidates": t.rows})
         }
+        "cands_full" => cands_full(cache, job, role, wav)?,
+        "stages" => stages(cache, job, role, wav)?,
         "baseline" => baseline(cache, job, role, wav)?,
         "learn" if job["sets"].is_array() => learn_sets(cache, job, role, wav)?,
         "learn" => learn(cache, job, role, wav)?,
