@@ -252,13 +252,17 @@ def main(argv=None):
         lines.append(f"FAIL: {unattributed} flagged hit(s) have no rule name (`by`)")
         verdict_ok = False
     lines.append("")
-    hat_n = len(hat_a6)
+    hat_leads = [lead for lead, _ in hat_a6 if lead is not None]
+    hat_levels = [lv for _, lv in hat_a6 if lv is not None]
     hat_missing = sum(1 for lead, level in hat_a6 if lead is None or level is None)
-    lines += [f"Hat FPs left in the output: {hat_n}; A6 lead (ms) quartiles p25 / p50 / p75: "
-              f"{quartiles([lead for lead, _ in hat_a6 if lead is not None])}; A6 level (dB, ratio against the "
-              f"coinciding source hit) quartiles: {quartiles([lv for _, lv in hat_a6 if lv is not None])}; "
-              f"without the keys: {hat_missing}",
-              f"hat left-share: {gshares['hat']:.1f} % of the tom FPs (limit 50 %, information only in this step)",
+    hat_removed = sum(flagged[d]["hat"] for d in enst.DRUMMERS)
+    hat_left = grand["hat"]
+    hat_share = 100.0 * hat_left / (hat_left + hat_removed) if hat_left + hat_removed else 0.0
+    lines += [f"Hat FPs left in the output: {len(hat_a6)} of {total} scored tom FPs; A6 lead (ms) quartiles p25 / p50 / p75 "
+              f"(n={len(hat_leads)}): {quartiles(hat_leads)}; A6 level (dB, ratio against the coinciding source hit) "
+              f"quartiles p25 / p50 / p75 (n={len(hat_levels)}): {quartiles(hat_levels)}; without the keys: {hat_missing}",
+              f"hat left-share: {hat_left} / ({hat_left} + {hat_removed}) = {hat_share:.1f} % (the plan's definition: "
+              f"left / (left + removed) of the hat cause; limit 50 %, information only in this step)",
               ""]
     none_share = gshares["none"]
     if not verdict_ok:

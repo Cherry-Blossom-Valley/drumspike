@@ -343,10 +343,11 @@ snare, see the split above), and decide on the measured table: add hi-hat and ov
 sources of A6 with a threshold set on ENST, or record why the rule cannot separate them.
 No detector change in this package before the table is in the report.
 
-Step 1 (#96), measured per rule (`enst_tom_fp.py`, the same 210 items, detector fingerprint
-ed6f68065d2bfafc, reporting only: the flags and every score stay the same as main; the gate
-rows of the tree and of main's build agree to 3 decimals). Rule names come from the core
-rules' own marks (`TomBleed::by`): CD, v2-kick, v2-snare, v5-kick, and `pair` for the v3
+Step 1 (#96), measured per rule (`enst_tom_fp.py`, the same 210 items; the run is tool build
+1421cb996b4076ac on the run files of detector fingerprint e91751e0e9208064, the merged tree
+of PR #100 at bd2ef53, log `results/96-merged.result.log`; reporting only: the flags and every
+score stay the same as main; the gate rows of the tree and of main's build agree to 3 decimals).
+Rule names come from the core rules' own marks (`TomBleed::by`): CD, v2-kick, v2-snare, v5-kick, and `pair` for the v3
 pair rule. A hit can have several rules; the first-rule table uses the fixed order CD >
 v2-kick > v2-snare > pair > v5-kick:
 
@@ -360,18 +361,19 @@ The per-rule sums equal the flagged totals (the added check of this package pass
 first-rule view). A6 dropped 447 / 935 / 1413 candidates; A6 survived to the CD step 0 / 0 / 0,
 so the A6 overwrite question (#97) closes on this measurement.
 
-Hat cause, the FPs left (2423 of the 6232 scored; left share 38.9 %, limit 50 %, information
-only in this step): the A6 lead (ms) quartiles p25 / p50 / p75 are -0.11 / 0.07 / 0.20, and the
-A6 level (dB against the coinciding source hit) quartiles are -21.22 / -19.75 / -18.27. 2386 of
-the 2423 have no A6 keys (no coinciding A6 hit, by design). These quartiles describe the hat FPs
-only; whether a threshold separates them from the real hat strokes is not measured yet, and
-step 2 tests it against the own annotations.
+Hat cause, the FPs left: 2423 of the 6232 scored. The left share is left / (left + removed) of
+the hat cause = 2423 / (2423 + 668) = 78.4 % (limit 50 %, information only in this step). A6
+keys exist on n=37 of the 2423 hat FPs; the other 2386 have no coinciding A6 hit, by design, so
+an A6 threshold cannot remove them, and step 2 starts from that. On the 37: the A6 lead (ms)
+quartiles p25 / p50 / p75 are -0.11 / 0.07 / 0.20 and the A6 level (dB against the coinciding
+source hit) quartiles are -21.22 / -19.75 / -18.27. Whether a threshold separates these 37 from
+the real hat strokes is not measured yet; step 2 tests it against the own annotations.
 
 Gate that can fail: `uv run python tools/eval/enst_tom_fp.py` already FAILs when the cause
 counts do not sum to the total or when the `none` share is above 10 % (today: PASS, 0.6 %).
 The work package adds two checks to it: the per-rule columns must sum to the flagged total,
 and the left share of the hat cause must be at most 50 % (a proposed limit; today it is
-78 %, so the added check FAILs until the hat cause is handled). The package also needs
+78.4 %, so the added check FAILs until the hat cause is handled). The package also needs
 `tools/eval/enst_gate.py` within 2 % of baseline on every aggregate, counted lines pasted.
 
 ## Open areas check (umbrella #8 list)
