@@ -85,8 +85,8 @@
     {"id": "p2-delete", "steps": [
       {"do": "caption", "text": "Edit > Delete Hit"},
       {"do": "zoom_to", "track": "s_top", "t": 5.625, "span": 0.5},
-      {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 5.625,
-       "err": "the playhead on the hit (Tab takes the next hit from the playhead, not from where an earlier scene left it)"},
+      {"do": "lane_click", "track": "s_top", "lane": "wave", "t": 5.625,
+       "err": "the playhead on the hit (a spike-lane click on a hit selects it instead; Tab takes the next hit from the playhead)"},
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "6"},
       {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms window"},
@@ -103,8 +103,8 @@
     {"id": "p2-nudge", "steps": [
       {"do": "caption", "text": "Edit > Nudge Value > 1 Sample"},
       {"do": "zoom_to", "track": "s_top", "t": 3.125, "span": 0.5},
-      {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 3.125,
-       "err": "the playhead on the hit the nudge moves"},
+      {"do": "lane_click", "track": "s_top", "lane": "wave", "t": 3.125,
+       "err": "the playhead on the hit the nudge moves (a spike-lane click on a hit selects it instead)"},
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "6"},
       {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms window"},
