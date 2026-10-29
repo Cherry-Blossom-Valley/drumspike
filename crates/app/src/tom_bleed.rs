@@ -236,12 +236,16 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
         .collect();
     // the pair rule is off when rule CD is off for "fewer than two played": kick and snare bleed on an unplayed tom mic
     // could win there and mark a soft real hit; it stays on for tom tracks edited to digital silence
+    let v2: Option<Vec<Vec<bool>>> = outcome
+        .as_ref()
+        .ok()
+        .map(|(by, _)| by.iter().map(|m| m.iter().map(|h| !h.is_empty()).collect()).collect());
     let pairs: Option<Result<Vec<Vec<bool>>, String>> =
         (pair_versions.iter().any(|&v| v >= PAIRS_FROM)).then(|| match &outcome {
             Err(r) if r.reason.starts_with(PLAYED_OFF) => {
                 Err(format!("the pair rule is off with rule CD: {}", r.reason))
             }
-            _ => pair_rule(svc, &mics, &pair_versions, outcome.as_ref().ok().map(|(b, _)| b)),
+            _ => pair_rule(svc, &mics, &pair_versions, v2.as_ref()),
         });
     let mut tracks = Map::new();
     let mut pair_tracks = Map::new();
@@ -256,9 +260,9 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
                 continue; // the hits changed while the rule ran: they keep what they have
             }
             let marks = match (&outcome, v) {
-                (Ok((bleed, _)), 1..) => Some(&bleed[i]),
+                (Ok((by, _)), 1..) => Some(&by[i]),
                 // version 5: rule CD off for fewer than two played still applies the guarded shared kick marks
-                (Err(off), 5..) => off.kick_marks.as_ref().map(|m| &m[i]),
+                (Err(off), 5..) => off.kick_by.as_ref().map(|m| &m[i]),
                 _ => None,
             };
             let pair_marks = match (&pairs, v >= PAIRS_FROM) {
@@ -269,13 +273,19 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
             let mut pair_removed = 0;
             for (j, e) in tr.events.iter_mut().flatten().enumerate() {
                 let by_pair = pair_marks.is_some_and(|m| m[j]);
-                let on = (marks.is_some_and(|m| m[j]) || by_pair) && !edited(e);
+                let mut by: Vec<&str> = marks.map_or_else(Vec::new, |m| m[j].clone());
+                if by_pair {
+                    by.push("pair");
+                }
+                let on = !by.is_empty() && !edited(e);
                 if on {
                     e.extra.insert("bleed".into(), Value::Bool(true));
+                    e.extra.insert("by".into(), json!(by));
                     removed += 1;
-                    pair_removed += usize::from(by_pair && !marks.is_some_and(|m| m[j]));
+                    pair_removed += usize::from(by_pair && marks.is_none_or(|m| m[j].is_empty()));
                 } else {
                     e.extra.shift_remove("bleed");
+                    e.extra.shift_remove("by");
                 }
             }
             if let Some(Value::Object(det)) = tr.extra.get_mut("detector") {
@@ -448,23 +458,23 @@ fn pair_rule(
     Ok(tom_pairs(&input, sr, &TomBleedParams::default()))
 }
 
-/// Decode the mics and run the core rule: per mic the marks and whether it is played, or why it is off. When rule CD
-/// is off for fewer than two played, version 5 still applies the guarded shared kick marks (#362): the error carries
-/// them (`kick_marks`, `None` for digital silence and for the other off states).
-type Marks = Result<(Vec<Vec<bool>>, Vec<bool>), OffRule>;
+/// Per mic, per hit: the core rules that mark the hit by name ([`drumspike_core::detect::tom_bleed::TomBleed::by`]).
+type RuleBy = Vec<Vec<Vec<&'static str>>>;
+
+/// Decode the mics and run the core rule: per mic the rules that mark each hit and whether it is played, or why it is
+/// off. When rule CD is off for fewer than two played, version 5 still applies the guarded shared kick marks (#362):
+/// the error carries them (`kick_by`, `None` for digital silence and for the other off states).
+type Marks = Result<(RuleBy, Vec<bool>), OffRule>;
 
 /// Why the rule is off, with the marks version 5 applies despite the off state.
 struct OffRule {
     reason: String,
-    kick_marks: Option<Vec<Vec<bool>>>,
+    kick_by: Option<RuleBy>,
 }
 
 impl OffRule {
     fn plain(reason: String) -> Self {
-        OffRule {
-            reason,
-            kick_marks: None,
-        }
+        OffRule { reason, kick_by: None }
     }
 }
 
@@ -547,9 +557,9 @@ fn rule_marks(
     match &r.off {
         Some(off) => Err(OffRule {
             reason: off_reason(off, names),
-            kick_marks: matches!(off, Off::FewerThanTwoPlayed { .. }).then(|| r.shared_kick_bleed.clone()),
+            kick_by: matches!(off, Off::FewerThanTwoPlayed { .. }).then(|| r.by.clone()),
         }),
-        None => Ok((r.bleed, r.mics.iter().map(|m| m.played).collect())),
+        None => Ok((r.by, r.mics.iter().map(|m| m.played).collect())),
     }
 }
 
