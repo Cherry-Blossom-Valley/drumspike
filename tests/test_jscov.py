@@ -16,6 +16,9 @@ NODE_ID = "tests/e2e_app/test_render.py::test_fallback_without_webgl2"   # a `pa
 def test_a_node_id_run_of_one_passing_test_exits_0_with_the_floor_at_85():
     """Red before the fix: the gate read a node-ID run as a full run and failed the floor."""
     env = dict(os.environ, DRUMSPIKE_JS_FAIL_UNDER="85")
+    # the CI job's shard variables would deselect NODE_ID (shard "rest") and switch the gate off
+    for k in ("DRUMSPIKE_E2E_SHARD", "DRUMSPIKE_JS_COV_OUT"):
+        env.pop(k, None)
     r = subprocess.run([sys.executable, "-m", "pytest", NODE_ID, "-q", "--no-header",
                         "-p", "no:cacheprovider"],
                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=900)
@@ -32,6 +35,12 @@ def _session(keyword="", markexpr="", file_or_dir=()):
                                pluginmanager=SimpleNamespace(get_plugin=lambda name: tr)),
         exitstatus=0,
         lines=lines), lines
+
+
+@pytest.fixture(autouse=True)
+def _no_shard(monkeypatch):
+    """A CI shard run does not gate (jscov.pytest_sessionfinish): these tests check the gate itself."""
+    monkeypatch.delenv("DRUMSPIKE_E2E_SHARD", raising=False)
 
 
 def test_a_full_run_still_fails_when_a_file_is_under_the_floor(monkeypatch):
