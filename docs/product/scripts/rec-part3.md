@@ -48,7 +48,7 @@ Import Tempo Map takes the tempo from a MIDI file of your DAW. One undo step.
 
 ## p3-grid
 
-> Press G; View > Tempo Ruler; View > Meter Ruler. Caption: View > Show Bar and Beat Grid
+> Press G; View > Tempo Ruler. Caption: View > Show Bar and Beat Grid
 
 Press G for the bar and beat grid. The Tempo and Meter rulers show the steps and the changes.
 
