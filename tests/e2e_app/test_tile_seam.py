@@ -15,6 +15,12 @@ the test browser draws. Asserts, per track, at the delayed frames: no column of 
 empty background, the velocity stalks are present in the new column, and no velocity label text
 floats in the middle of the lane; at the strip's entry the velocity label sits at the lane's
 left edge. On main the stalk and the label checks fail (the output names the frame).
+
+A track whose row element is not fully inside the strip's painted area is skipped with a note:
+the strip draws only the lanes that intersect the lanes viewport, and an element screenshot of a
+row that pokes out of it (a short test window: three 234 px rows do not fit into a 492 px area)
+reads the dead pixels below the scroll clip - background with scattered event lines - which the
+strip must and does not paint. On a window that shows every row (the mac) all three are checked.
 """
 import time
 from collections import Counter
@@ -40,7 +46,15 @@ STATE = """() => {
   const tl = row && row.querySelector('.tlanes'), vel = row && row.querySelector('.vel'), wv = row && row.querySelector('.wave');
   const tr = tl && tl.getBoundingClientRect();
   const rel = c => { const r = c.getBoundingClientRect(); return { top: Math.round(r.top - tr.top), h: Math.round(r.height) }; };
+  const box = document.querySelector('#lanesGLStrip');
+  const br = box && box.getBoundingClientRect();
+  const rows = {};
+  for (const n of ['Kick In', 'Snare Top', 'Hat L']) {
+    const el = document.querySelector(`.track[data-name="${n}"] .tlanes`);
+    if (el) { const r = el.getBoundingClientRect(); rows[n] = { top: Math.round(r.top), h: Math.round(r.height) }; }
+  }
   return { ph: cpPos(now), playing: S.playing, dpr: GEO.dpr, laneW: GEO.laneW, scW: GEO.scW,
+    box: br ? { top: Math.round(br.top), h: Math.round(br.height) } : null, rows,
     sp: { on: SP.on, s: SP.s, d: SP.d, req: !!SP.req, done: SP.req ? !!SP.req.done : null },
     tl: tr ? { w: Math.round(tr.width), h: Math.round(tr.height) } : null,
     wave: wv && tr ? rel(wv) : null, vel: vel && tr ? rel(vel) : null };
@@ -178,7 +192,16 @@ def test_the_strip_shows_no_tile_seam_while_the_next_answer_is_late(app, make_pr
         s, d, W = st["sp"]["s"], st["sp"]["d"], st["laneW"]
         o = (st["ph"] - 0.25 * d - s) / d * W   # the strip's slide at the frame
         assert 0.45 * W <= o <= 0.62 * W, f"the new column is not safely in view (slide {o} of {W}): {st['sp']}"
+        assert st["box"], "no strip box at the delayed frame"
+        checked = []
         for n, img in shot.items():
+            r = st["rows"].get(n)
+            # a row that pokes out of the strip's painted area: its element screenshot reads dead
+            # pixels below the scroll clip, which the strip must not paint (a short test window)
+            if not r or r["top"] < st["box"]["top"] or r["top"] + r["h"] > st["box"]["top"] + st["box"]["h"]:
+                print(f"skip {n}: its row ({r}) is not inside the strip's area {st['box']}")
+                continue
+            checked.append(n)
             wave, vel = st["wave"], st["vel"]
             empty = empty_columns(img[wave["top"]:wave["top"] + wave["h"]])
             assert not empty, f"{n}: empty wave columns at the delayed frame (the tile gap), first {empty[:8]} (slide {o:.0f} of {W})"
@@ -187,4 +210,5 @@ def test_the_strip_shows_no_tile_seam_while_the_next_answer_is_late(app, make_pr
                 f"{n}: no velocity stalks in the new tile column (x > 0.7 W), slide {o:.0f}")
             mid = [x for x in label_columns(img[vel["top"]:vel["top"] + vel["h"]]) if 0.25 * W < x < 0.75 * W]
             assert not mid, f"{n}: velocity label text in the middle of the lane (the stale one-view draw at the seam), columns {mid[:8]}"
+        assert checked, f"no track fully inside the strip's area {st['box']}: rows {st['rows']}"
     app.evaluate("() => { if (S.playing) pause(); }")
