@@ -22,9 +22,8 @@
        "err": "the status bar of the new project, in the neutral home-relative form"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-add", "steps": [
+    {"id": "p1-add", "area_sel": "body", "steps": [
       {"do": "caption", "text": "File > Add Tracks…"},
-      {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "answer_pick", "path": "{session}/Audio Files"},
       {"do": "key", "press": "Shift+Meta+I"},
       {"do": "visible", "sel": "#tracksModal", "timeout": 30, "err": "the Add Tracks list"},
