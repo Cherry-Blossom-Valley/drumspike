@@ -32,6 +32,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from contextlib import contextmanager
@@ -131,11 +132,20 @@ def demo_project(tmp_path_factory):
 def loaded_build():
     """The owner's background cargo build: the workspace compiles into a fresh scratch
     target dir (so it really compiles) with every core busy while the capture runs.
-    Killed and deleted when the capture ends; the test asserts it never exited early."""
+    Killed and deleted when the capture ends; the test asserts it never exited early.
+
+    The desktop GUI crate is excluded on Linux: its tao/tauri dependency needs the
+    libdbus-1 system headers a test host need not provide (a host fact, #54) and the
+    e2e bridge never links it. The storm compiles the Rust the bridge and the gates
+    build (drumspike-core, drumspike-app, the devtools); macOS builds the whole
+    workspace as before."""
     cargo = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
     target = tempfile.mkdtemp(prefix="ds444-load-")
     env = dict(os.environ, CARGO_TARGET_DIR=target)
-    proc = subprocess.Popen([cargo, "build", "--offline"], cwd=str(ROOT), env=env,
+    cmd = [cargo, "build", "--offline"]
+    if sys.platform.startswith("linux"):
+        cmd += ["--workspace", "--exclude", "drumspike-desktop"]
+    proc = subprocess.Popen(cmd, cwd=str(ROOT), env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         yield proc

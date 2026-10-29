@@ -570,6 +570,10 @@ fn tracks_scan_the_real_session_folders_when_present() {
         rejected += scan["rejected"].as_array().unwrap().len();
         for e in std::fs::read_dir(&audio).unwrap().filter_map(Result::ok) {
             let n = e.file_name().to_string_lossy().into_owned();
+            // skip macOS AppleDouble resource-fork files (._*) and other hidden entries, like the scanner does
+            if n.starts_with('.') {
+                continue;
+            }
             let Some(stem) = n.strip_suffix(".wav") else { continue };
             if let Some(role) = guess_role(stem) {
                 seen.push((stem.to_string(), role.to_string()));
