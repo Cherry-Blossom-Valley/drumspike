@@ -770,25 +770,26 @@ function weakSignals(tracks) {   // the job's tracks: [[name, text], ...] for th
 }
 function followersOf(name) { return S.order.filter(n => S.tracks[n] && S.tracks[n].follows === name); }
 /* 0.9.3: the role icon of the track header (inline SVG, no image files, no external fonts).
-   Monochrome currentColor at 14 px; a role change swaps the icon (refreshHeadRole). */
+   #9: the instrument drawings of the header, 48x48. */
 const ROLE_ICONS = {
-  kick: '<circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2" fill="currentColor"/>',
-  snare: '<rect x="2" y="4.5" width="12" height="6" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4 12.5v1.5M8 12.5v1.5M12 12.5v1.5" stroke="currentColor" stroke-width="1.2"/>',
-  tom: '<rect x="3" y="4" width="10" height="8" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3 7.5h10" stroke="currentColor" stroke-width="1"/>',
-  hat: '<path d="M2 6.5h12M3 9.5h10M8 2.5v3M8 11v2.5" stroke="currentColor" stroke-width="1.5" fill="none"/>',
-  cymbal: '<path d="M1.5 5.5h13M8 5.5v8.5" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M6 14h4" stroke="currentColor" stroke-width="1.2"/>',
-  other: '<path d="M1.5 9.5h2l1.5-4 2 6.5 2-6 1 3.5h4.5" fill="none" stroke="currentColor" stroke-width="1.5"/>',
+  // #9: the instrument drawings, 48x48, outline style, stroke currentColor.
+  kick: '<circle cx="24" cy="17" r="12"/><path d="M24 2.5v3M24 28.5v3M9 17h3M36 17h3M12.7 5.7l2.1 2.1M33.2 5.7l-2.1 2.1M12.7 28.3l2.1-2.1M33.2 28.3l-2.1-2.1"/><path d="M13 26.5 9 33M35 26.5l4 6.5"/><path d="M24 29v6M24 35h12M28 35v4"/><circle cx="24" cy="30.5" r="1.8" fill="currentColor" stroke="none"/>',
+  snare: '<rect x="9" y="15" width="30" height="11" rx="2"/><path d="M7 15h34M7 26h34M15 15v11M21 15v11M27 15v11M33 15v11M24 26v7M24 33l-8 8M24 33l8 8"/>',
+  tom: '<rect x="9" y="11" width="30" height="16" rx="2"/><path d="M15 11v16M21 11v16M27 11v16M33 11v16M7 11h34M11 27v12M24 27v12M37 27v12"/>',
+  hat: '<ellipse cx="24" cy="15" rx="13" ry="3"/><ellipse cx="24" cy="21" rx="10" ry="2.5"/><path d="M24 12V6M24 23.5V33M24 33l-9 9M24 33l9 9M15 42h6"/>',
+  cymbal: '<ellipse cx="24" cy="15" rx="15" ry="3.5"/><circle cx="24" cy="15" r="2" opacity=".6"/><path d="M24 18.5V33M24 33l-9 9M24 33l9 9"/>',
+  other: '<rect x="19" y="5" width="10" height="15" rx="5"/><path d="M21 10h6M21 14h6M15 15v3a9 9 0 0 0 18 0v-3M24 27v8M17 38h14"/>',
 };
 function roleIconEl(role) {   // a role name is a fixed key, never data: the markup is ours
-  const s = document.createElement("span"); s.className = "trole";
-  s.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">${ROLE_ICONS[role] || ROLE_ICONS.other}</svg>`;
+  const s = document.createElement("span"); s.className = "tart";
+  s.innerHTML = `<svg viewBox="0 0 48 48" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ROLE_ICONS[role] || ROLE_ICONS.other}</svg>`;
   s.title = `role: ${role}`;
   return s;
 }
-function setHeadIcon(row, role) {   // the icon sits left of the name; a role change swaps it at once
-  const tn = row.querySelector(".tname"); if (!tn) return;
-  const cur = tn.querySelector(".trole"); if (cur) cur.remove();
-  tn.insertBefore(roleIconEl(role), tn.querySelector(".tnm"));
+function setHeadIcon(row, role) {   // the drawing sits right-aligned in the header's free area; a role change swaps it at once
+  const th = row.querySelector(".thead"); if (!th) return;
+  const cur = th.querySelector(".tart"); if (cur) cur.remove();
+  th.appendChild(roleIconEl(role));
 }
 function roleLineText(t) { return `${t.role} · ${nameFromNote(t.note)} (${t.note})` + (t.follows ? ` · follows ${t.follows}` : ""); }
 function followerLocked(name) {   // true (with the message) when the track's hits are derived from another track
@@ -6272,6 +6273,7 @@ function setTrackHeight(name, save) {
   S.trackHeight = name;
   const h = TRACK_HEIGHTS[name], st = document.documentElement.style;
   st.setProperty("--spike-h", `${h.spike}px`); st.setProperty("--wave-h", `${h.wave}px`);
+  st.setProperty("--tart-size", name === "large" ? "56px" : "44px");   // #9: the header drawing scales with the height
   if (Object.keys(S.rowH).length) setRowHeights(S.rowH);   // #167: the factors follow the new global height (the zoom scales every lane)
   $("#lanesScroll").dataset.height = name;
   if (save !== false && B.appSettingsSet) B.appSettingsSet("track_height", name).catch(e => setMsg(`settings: ${errText(e)}`));

@@ -133,8 +133,14 @@ canvas.mxCan { width: 240px; height: 40px; display: block; border-radius: 3px; }
 .tstrip { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
 .tname { font-weight: 600; font-size: 12px; line-height: 16px; display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
 .tname .tnm { overflow: hidden; text-overflow: ellipsis; }
-.tname .trole { flex: none; display: inline-flex; width: 14px; height: 14px; color: inherit; opacity: 0.9; }   /* 0.9.3: the role icon, monochrome in the text colour */
-.tname .trole svg { display: block; width: 14px; height: 14px; }
+/* 0.9.3: the role icon of the track header (inline SVG, no image files, no external fonts).
+   #9: an instrument drawing right-aligned in the header's free area, sized with the track
+   height (--tart-size, set in setTrackHeight); hidden at Small. A role change swaps it
+   (refreshHeadRole). pointer-events off: the header tooltip and the click/drag stay. */
+.tart { position: absolute; right: 26px; bottom: 10px; width: var(--tart-size, 44px); height: var(--tart-size, 44px);
+  color: var(--dim); opacity: 0.85; pointer-events: none; }
+.tart svg { display: block; width: 100%; height: 100%; }
+#lanesScroll[data-height="small"] .tart { display: none; }
 .tdot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }   /* the Inspector's colour dot */
 .tnote { color: var(--dim); font-size: 10px; line-height: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tctl { display: grid; grid-template-columns: 20px 20px minmax(0, 1fr) 44px; gap: 2px 4px; align-items: center; margin-top: 3px; }
