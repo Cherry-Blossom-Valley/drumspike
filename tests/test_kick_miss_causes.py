@@ -66,3 +66,15 @@ def test_the_previous_refs_candidate_is_a_merged_peak():
 def test_nothing_near_is_no_candidate():
     cause, d = kmc.cause_of(1.000, None, np.zeros(0), np.zeros(0), [C(1.100, "Level")])
     assert cause == "no candidate" and d["nearest_cand_ms"] == 100.0
+
+
+def test_a_zero_fn_run_is_not_a_passed_attribution():
+    # #98: a 0 FN run is a valid result, but the line must not read as a passed attribution.
+    line = kmc.summary_line(0, 0)
+    assert line == "no kick FN at Sensitivity 50: nothing to attribute"
+    assert "attributed" not in line
+
+
+def test_a_nonzero_fn_run_keeps_the_counted_attribution_line():
+    assert kmc.summary_line(4, 4) == "total FN 4, attributed to named causes 4 (100.0 %)"
+    assert kmc.summary_line(7, 5) == "total FN 7, attributed to named causes 5 (71.4 %)"
