@@ -1061,6 +1061,26 @@ def test_a_scene_with_an_action_takes_its_before_and_after_pictures(tmp_path, mo
     assert shots == [("body", "pl-x-before.png"), ("body", "pl-x-after.png")]
 
 
+def test_a_scene_with_a_later_zoom_takes_its_after_picture_before_the_zoom_moves(tmp_path, monkeypatch):
+    # pl-grey zooms again after its first action: the after PNG must come while the view still
+    # matches the scene's first zoom, else the measured window throws or compares wrong areas.
+    shots = []
+    monkeypatch.setattr(record, "shoot_scene", lambda page, sc, path: shots.append(Path(path).name))
+    monkeypatch.setattr(record, "run_step", lambda page, st, env: None)
+    clock = Clock()
+    page = StubPage(clock)
+    scene = {"id": "pl-grey", "steps": [
+        {"do": "caption", "text": "c"},
+        {"do": "zoom_to", "track": "s_top", "t": 8.5938, "span": 1},
+        {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 8.5938},
+        {"do": "hold", "s": 1.5},
+        {"do": "zoom_to", "track": "s_top", "t": 9.5312, "span": 1},
+        {"do": "lane_click", "track": "s_top", "lane": "spike", "t": 9.5312},
+        {"do": "hold", "s": 2.0}]}
+    record.run_scenes(page, [scene], [5.0], clock=clock, shots=tmp_path)
+    assert shots == ["pl-grey-before.png", "pl-grey-after.png"]
+
+
 class _Lane:
     def __init__(self, box):
         self.box = box
