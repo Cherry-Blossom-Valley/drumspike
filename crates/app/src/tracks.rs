@@ -32,11 +32,11 @@ use drumspike_core::project::{
 use drumspike_core::SourceStatus;
 use serde_json::{json, Value};
 
-use crate::bridge::Channels;
-use crate::call::opt_i64;
+use crate::command_policy::opt_i64;
 use crate::copyjob::Meter;
 use crate::error::AppError;
 use crate::registry::lock;
+use crate::reply::Channels;
 use crate::roles::{default_note, guess, is_role, role_color, Rule};
 use crate::{Progress, Service};
 

@@ -210,7 +210,8 @@ fn core_analyze_one(j: &Value) -> Result<Value, String> {
 /// renames a file (a track goes offline or comes back). Prints one JSON line per step:
 /// `{cmd, answer}` or `{cmd, error: {code, message}}`; a failed step does not stop the script.
 fn run(script: &str) -> Result<(), String> {
-    use drumspike_app::bridge::{Bridge, Reply};
+    use drumspike_app::bridge::Bridge;
+    use drumspike_app::reply::Reply;
     let text = std::fs::read_to_string(script).map_err(|e| format!("{script}: {e}"))?;
     let steps: Vec<Value> = serde_json::from_str(&text).map_err(|e| format!("{script}: {e}"))?;
     let statics = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../static");

@@ -4,8 +4,9 @@
 mod common;
 
 use common::*;
-use drumspike_app::bridge::{Bridge, Reply};
+use drumspike_app::bridge::Bridge;
 use drumspike_app::export::{check_dest, ExportOpts, MidiMode};
+use drumspike_app::reply::Reply;
 use drumspike_app::SHELL_COMMANDS;
 use serde_json::{json, Value};
 
