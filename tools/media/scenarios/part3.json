@@ -24,9 +24,12 @@
       {"do": "wait", "cond": "() => document.querySelector('#tracksModal').classList.contains('hidden') && !!document.querySelector('.track[data-name=\\\"k_sub\\\"]')", "timeout": 120, "err": "the dialog closed and the k sub track is in the session"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p3-follow2", "area_sel": ".track[data-name=\"k_out\"]", "steps": [
+    {"id": "p3-follow2", "area_sel": ".track[data-name=\"k_sub\"]", "steps": [
       {"do": "caption", "text": "Track > Own Detection"},
-      {"do": "click", "sel": ".track[data-name=\"k_out\"] .thead .tname", "timeout": 15, "err": "the sub mic selected"},
+      {"do": "click", "sel": ".track[data-name=\\\"k_sub\\\"] .thead .tname", "timeout": 15, "err": "the sub mic selected"},
+      {"do": "hold", "s": 1.5},
+      {"do": "menu", "id": "follow_own", "timeout": 15, "err": "Track > Own Detection"},
+      {"do": "wait", "cond": "() => S.tracks['k_sub'] && !S.tracks['k_sub'].src", "timeout": 15, "err": "the sub mic detects its own hits again"},
       {"do": "hold", "s": 2.0}
     ]},
     {"id": "p3-layer", "area_sel": "#inspector", "steps": [
@@ -45,19 +48,23 @@
       {"do": "wait", "cond": "() => !!document.querySelector('.insSec[data-sec=\"layer\"] .lyViewTitle')", "timeout": 30, "err": "the Onset view"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-tempo", "area_sel": "#tempoBody", "steps": [
+    {"id": "p3-tempo", "area_sel": "#mapRulers .mrow[data-ruler=\\\"tempo\\\"]", "steps": [
       {"do": "caption", "text": "Track > Detect Tempo…"},
       {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "hold", "s": 0.5},
-      {"do": "menu", "id": "detect_tempo", "timeout": 15, "err": "Track > Detect Tempo…"},
-      {"do": "visible", "sel": "#tempoModal", "timeout": 120, "err": "the Detect Tempo dialog: tempo, bar 1, meter, steps"},
-      {"do": "shot"},
-      {"do": "wait", "cond": "() => document.querySelector('#tempoBody').children.length > 0", "timeout": 120, "err": "the detection filled the dialog (tempo, bar 1, meter, steps)"},
+      {"do": "menu", "id": "ruler_tempo", "timeout": 15, "err": "View > Tempo Ruler (the map lands here)"},
+      {"do": "wait", "cond": "() => { const r = document.querySelector('#mapRulers .mrow[data-ruler=\\\"tempo\\\"]'); return r && !r.classList.contains('hidden'); }", "timeout": 15, "err": "the tempo ruler shown"},
       {"do": "hold", "s": 1.5},
       {"do": "shot"},
+      {"do": "menu", "id": "detect_tempo", "timeout": 15, "err": "Track > Detect Tempo…"},
+      {"do": "visible", "sel": "#tempoModal", "timeout": 120, "err": "the Detect Tempo dialog: tempo, bar 1, meter, steps"},
+      {"do": "wait", "cond": "() => document.querySelector('#tempoBody').children.length > 0", "timeout": 120, "err": "the detection filled the dialog (tempo, bar 1, meter, steps)"},
+      {"do": "hold", "s": 1.5},
       {"do": "click", "sel": "#tempoAccept", "timeout": 15, "err": "Accept"},
       {"do": "wait", "cond": "() => document.querySelector('#tempoModal').classList.contains('hidden')", "timeout": 15, "err": "the dialog accepted"},
       {"do": "wait", "cond": "() => ((document.querySelector('#stMsg') || {}).textContent || '').startsWith('tempo map')", "timeout": 15, "err": "the detected map committed (the accept's commit is async; the next scene edits the map)"},
+      {"do": "hold", "s": 1.5},
+      {"do": "shot"},
       {"do": "hold", "s": 1.5}
     ]},
     {"id": "p3-bar1", "steps": [
@@ -70,7 +77,7 @@
       {"do": "wait", "cond": "() => TM.map && Math.abs((TM.map.bar1_s || 0) - S.playhead) < 0.001", "timeout": 15, "err": "bar 1 at the playhead"},
       {"do": "hold", "s": 2.0}
     ]},
-    {"id": "p3-import", "area_sel": "#rulerRow", "steps": [
+    {"id": "p3-import", "area_sel": "#mapRulers .mrow[data-ruler=\\\"tempo\\\"]", "steps": [
       {"do": "caption", "text": "File > Import Tempo Map…"},
       {"do": "answer_pick", "path": "{work}/tempo.mid"},
       {"do": "menu", "id": "import_tempo_map", "timeout": 15, "err": "File > Import Tempo Map…"},
