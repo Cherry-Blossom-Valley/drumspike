@@ -47,10 +47,13 @@ release builds are in `docs/DEVELOPING.md`, sections 4, 7 and 8.
 ### Which gates when
 
 - While you work: only the affected tests (`cargo test -p <crate> <name>`, `uv run pytest <file>`).
-- Once before hand-back: G1 (fmt, clippy, cargo test), the tool builds and G2. G2 contains the
-  `e2e_app` tests. G3 and G5 only when the change touches `apps/desktop/` or the ticket names a
-  self-test.
-- A push to a `crew/**` branch starts no CI run: the local gate is the gate. CI runs on `main`.
+- Once before hand-back, scoped like CI (#125, `tools/ci/scope.py`): G1 (fmt, clippy, cargo test)
+  only when the change touches Rust or the app; G2 without `tests/e2e_app` when it touches only
+  `tools/`, `site/` or non-e2e tests; the `e2e_app` tests only when it touches the app, `static/`
+  or the e2e tests and their helpers. G3 and G5 only when the change touches `apps/desktop/` or
+  the ticket names a self-test. The ENST gate and the session check only for detector code.
+- A push to a `crew/**` branch starts no CI run, and you do not dispatch one: the local gate is
+  the gate, and main's CI runs the full scope after the merge.
 - No `[skip ci]` in a PR title or in a commit that changes code. Docs-only changes need no
   marker: CI ignores `docs/` by path.
 

@@ -55,7 +55,12 @@ def shard_selects(name, shard, files):
     """Is the test file `name` (e.g. test_menus.py) in `shard`? `files` is the sorted list of all e2e_app test files.
     Shard forms: "<i>/<n>" (1-based, round robin over the sorted list), or a name from tests/e2e_shards.json
     ({"x86": [files]}): that list is the shard, every other file belongs to the shard "rest" (so a new file is
-    never lost). Unknown name: ValueError."""
+    never lost). "<name>@<i>/<n>" (#125) is part i of n of the shard <name>, round robin over its sorted files, so
+    one CI runner can run a shard in n parallel processes. Unknown name: ValueError."""
+    if "@" in shard:
+        base, part = shard.split("@", 1)
+        own = [f for f in files if shard_selects(f, base, files)]
+        return name in own and shard_selects(name, part, own)
     if "/" in shard:
         i, n = (int(x) for x in shard.split("/"))
         if not 1 <= i <= n:

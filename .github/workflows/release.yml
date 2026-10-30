@@ -49,7 +49,7 @@ jobs:
       version: ${{ steps.ver.outputs.version }}
       sha: ${{ steps.ver.outputs.sha }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
@@ -148,7 +148,7 @@ jobs:
     runs-on: [self-hosted, arm64-mac]
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.check.outputs.sha }}
           fetch-depth: 0
@@ -227,7 +227,7 @@ jobs:
 
       # three artifacts, one file each: the download path of each is then simply the folder
       - name: Upload arm64 dmg
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dmg-arm64
           path: target/aarch64-apple-darwin/release/bundle/dmg/Drum Spike_${{ needs.check.outputs.version }}_aarch64.dmg
@@ -235,7 +235,7 @@ jobs:
           retention-days: 7
 
       - name: Upload x86_64 dmg
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dmg-x86_64
           path: target/x86_64-apple-darwin/release/bundle/dmg/Drum Spike_${{ needs.check.outputs.version }}_x86_64.dmg
@@ -243,7 +243,7 @@ jobs:
           retention-days: 7
 
       - name: Upload SHA256SUMS
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sha256sums
           path: target/release-${{ needs.check.outputs.version }}/SHA256SUMS
@@ -261,7 +261,7 @@ jobs:
       V: ${{ needs.check.outputs.version }}
     steps:
       - name: Download the x86_64 dmg
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dmg-x86_64
           path: ~/release-check/in
@@ -314,7 +314,7 @@ jobs:
       # actions/checkout runs "git clean -ffdx" by default: it removes target/ with the notarized files.
       # So the files come back from the artifacts below. A full clone (fetch-depth 0) lets
       # "git branch -r --contains HEAD" of release.sh see the branches.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.check.outputs.sha }}
           fetch-depth: 0
@@ -325,13 +325,13 @@ jobs:
           echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
 
       - name: Download the notarized dmg files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dmg-arm64
           path: target/aarch64-apple-darwin/release/bundle/dmg
 
       - name: Download the notarized x86_64 dmg
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dmg-x86_64
           path: target/x86_64-apple-darwin/release/bundle/dmg
