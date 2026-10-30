@@ -871,3 +871,91 @@ fn track_layer_align_marks_an_edge_hit_uncertain_and_reports_no_lag_for_it() {
     );
     assert_eq!(a["uncertain"], 1);
 }
+
+/// Campaign 0.9.6 S3 (#117): a failed layer render left a folder named like the target file
+/// (`Exports/<track>_layer.wav/` plus a `<track>_layer.wav.drumspike` sidecar), and every later
+/// render failed with 400 "the path is a folder" until the folder was removed by hand. The next
+/// render now removes the leftover and succeeds, on the default target...
+#[test]
+fn export_layer_clears_a_leftover_folder_at_the_default_target_and_renders() {
+    let (svc, sid, root) = session("layer_leftover_default", vec![0.0; 96_000], 48_000, &HITS);
+    let f = root.join("shots").join("kick one.wav");
+    wav(&f, 48_000, &[shot(48_000, 480, 0.3, 1)], None);
+    svc.track_layer_set(&sid, "k in", &json!({"path": f.to_str().unwrap()}))
+        .unwrap();
+    let dir = PathBuf::from(svc.project_get(&sid).unwrap()["folder"].as_str().unwrap());
+    let exports = dir.join("Exports");
+    let folder = exports.join("k in_layer.wav");
+    // plant the leftover the failure produces: the folder plus its sidecar
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(exports.join("k in_layer.wav.drumspike"), b"{}").unwrap();
+    let r = svc.export_layer(&sid, "k in").unwrap();
+    assert_eq!(r["path"], json!(folder.display().to_string()));
+    assert!(folder.is_file(), "the render wrote the file over the leftover");
+    assert!(
+        !exports.join("k in_layer.wav.drumspike").exists(),
+        "the sidecar of the leftover is gone too"
+    );
+}
+
+/// ... and on an explicit `path` (the save dialog's file).
+#[test]
+fn export_layer_clears_a_leftover_folder_at_the_chosen_path_and_renders() {
+    let (svc, sid, root) = session("layer_leftover_picked", vec![0.0; 96_000], 48_000, &HITS);
+    let f = root.join("shots").join("kick one.wav");
+    wav(&f, 48_000, &[shot(48_000, 480, 0.3, 1)], None);
+    svc.track_layer_set(&sid, "k in", &json!({"path": f.to_str().unwrap()}))
+        .unwrap();
+    let want = root.join("picked").join("k in layer.wav");
+    std::fs::create_dir_all(&want).unwrap();
+    std::fs::write(root.join("picked").join("k in layer.wav.drumspike"), b"{}").unwrap();
+    svc.export_layer_to(&sid, "k in", want.to_str()).unwrap();
+    assert!(want.is_file());
+    assert!(!root.join("picked").join("k in layer.wav.drumspike").exists());
+}
+
+/// A folder with real content at the target belongs to the engineer: it is not deleted, and the
+/// 400 names the path and what to do. An empty folder without the sidecar is not provably a
+/// render leftover and is left alone as well.
+#[test]
+fn export_layer_refuses_a_foreign_folder_at_the_target_without_touching_it() {
+    let (svc, sid, root) = session("layer_foreign_folder", vec![0.0; 96_000], 48_000, &HITS);
+    let f = root.join("shots").join("kick one.wav");
+    wav(&f, 48_000, &[shot(48_000, 480, 0.3, 1)], None);
+    svc.track_layer_set(&sid, "k in", &json!({"path": f.to_str().unwrap()}))
+        .unwrap();
+    let dir = PathBuf::from(svc.project_get(&sid).unwrap()["folder"].as_str().unwrap());
+    let exports = dir.join("Exports");
+    // a folder with content at the default target
+    let folder = exports.join("k in_layer.wav");
+    std::fs::create_dir_all(folder.join("notes")).unwrap();
+    std::fs::write(folder.join("notes").join("readme.txt"), b"mine").unwrap();
+    let e = svc.export_layer(&sid, "k in").unwrap_err();
+    assert_eq!(e.code, 400);
+    assert!(e.message.contains("the path is a folder"), "{e}");
+    assert!(e.message.contains("remove the folder"), "{e}");
+    assert_eq!(
+        std::fs::read(folder.join("notes").join("readme.txt")).unwrap(),
+        b"mine",
+        "the foreign folder is untouched"
+    );
+    // an empty folder without the sidecar at an explicit target: refused, not deleted
+    let want = root.join("picked").join("k in layer.wav");
+    std::fs::create_dir_all(&want).unwrap();
+    let e = svc.export_layer_to(&sid, "k in", want.to_str()).unwrap_err();
+    assert_eq!(e.code, 400);
+    assert!(want.is_dir(), "the empty folder is left alone");
+    // a folder holding a foreign project document at the default target: refused, not deleted
+    let docs = exports.join("k in_layer.wav");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("Song.drumspike"), b"{\"format\": 1}").unwrap();
+    let e = svc.export_layer(&sid, "k in").unwrap_err();
+    assert_eq!(e.code, 400);
+    assert!(e.message.contains("the path is a folder"), "{e}");
+    assert_eq!(
+        std::fs::read(docs.join("Song.drumspike")).unwrap(),
+        b"{\"format\": 1}",
+        "the folder with the foreign document is untouched"
+    );
+    assert!(docs.is_dir());
+}
