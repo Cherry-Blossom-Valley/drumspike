@@ -131,8 +131,10 @@
       need(differ.length === 0, `the live menu and static/keymap.js differ: ${differ.join("; ")}`);
       need(DSKeys.problems(DSKeys.COMMANDS).length === 0, `static/keymap.js: ${DSKeys.problems(DSKeys.COMMANDS).join("; ")}`);
       const withAccel = rep.items.filter(i => i.accel).length;
-      const wantAccel = preset === "default" ? 37 : 32;   // #169/#170: Show Overview (Option+O) has a key in both presets; P3-19: Open Most Recent and Keyboard Shortcuts, P3-20a: Waveform Zoom In, Out, Reset and P4-31: Export Again have a key in the Pro Tools preset only; P4-40g's Next and Previous Marker have one in both, P4-40d's Audition Hit in the Cubase preset (#158)
-      need(withAccel === wantAccel && DSKeys.menuKeys(preset).length === withAccel, `${withAccel} items have a shortcut, the table ${DSKeys.menuKeys(preset).length}, expected ${wantAccel}`);
+      // #195: derived from the key table (as test_keys does), so a new item with a shortcut
+      // cannot stale the count; the menu and the table must simply agree
+      const wantAccel = DSKeys.menuKeys(preset).length;
+      need(withAccel === wantAccel, `${withAccel} items have a shortcut, the table ${wantAccel}`);
       const titles = ["Drum Spike", "File", "Edit", "View", "Transport", "Hits", "Track", "Window", "Help"];
       need(rep.menus.join() === titles.join(), `menus: ${rep.menus.join(", ")}`);
       const checks = rep.items.filter(i => i.kind === "check").map(i => i.id);
