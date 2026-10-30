@@ -1,7 +1,9 @@
 //! Synthetic onset error of the placement (#101): one-shots at exact onset samples on a noise floor.
 //! Prints the error (refined time in samples minus the true onset) per role and rate.
 //! Run: cargo run --release -p drumspike-core --example placement_bias
-use drumspike_core::refine::{refine_rule_peak, BackStep, RefineRule, RefineWindow, FM_PEAK_DB};
+use drumspike_core::refine::{
+    refine_foot_tuned, refine_rule_peak, BackStep, FootCap, FootTune, Overrun, RefineRule, RefineWindow, FM_PEAK_DB,
+};
 use std::f64::consts::PI;
 
 const ROLES: [&str; 4] = ["kick", "snare", "tom", "hat"];
@@ -83,11 +85,24 @@ fn foot_of(x: &[f32], a: f64) -> usize {
 }
 
 fn main() {
-    // `placement_bias foot` measures the version 4 rule; no argument measures the analysis rule (CURRENT).
-    let rule = match std::env::args().nth(1).as_deref() {
+    // `placement_bias first` measures the version 3 rule, `foot` the version 4 rule, `foot5` the version 5 rule
+    // (#127); no argument measures the analysis rule (CURRENT).
+    // `placement_bias tuned <cap samples> <keep|clamp>` measures a version 5 foot with other cap knobs (#127).
+    let args: Vec<String> = std::env::args().collect();
+    let rule = match args.get(1).map(String::as_str) {
+        Some("first") => RefineRule::FirstMotion,
         Some("foot") => RefineRule::Foot,
+        Some("foot5") => RefineRule::FootCapped,
         _ => RefineRule::CURRENT,
     };
+    let tuned = (args.get(1).map(String::as_str) == Some("tuned")).then(|| FootTune {
+        cap: FootCap::Samples(args[2].parse().expect("cap samples")),
+        overrun: if args[3] == "clamp" {
+            Overrun::Clamp
+        } else {
+            Overrun::Keep
+        },
+    });
     println!(
         "placement error in samples (refined time minus the true onset, and minus the foot), rule {:?}, peak {} dB",
         rule, FM_PEAK_DB
@@ -114,7 +129,12 @@ fn main() {
                             let x = shot(ri, sr, n, onset, (floor, pol), attack, &mut rng);
                             let foot = foot_of(&x, a);
                             let t0 = onset as f64 / sr as f64 - T0_BEFORE_S;
-                            let r = refine_rule_peak(&x, t0, sr, &[], RefineWindow::DEFAULT, rule, FM_PEAK_DB);
+                            let r = match tuned {
+                                Some(tune) => {
+                                    refine_foot_tuned(&x, t0, sr, &[], RefineWindow::DEFAULT, FM_PEAK_DB, tune)
+                                }
+                                None => refine_rule_peak(&x, t0, sr, &[], RefineWindow::DEFAULT, rule, FM_PEAK_DB),
+                            };
                             errs.push(r.t * sr as f64 - onset as f64);
                             ferrs.push(r.t * sr as f64 - foot as f64);
                             match r.back {
