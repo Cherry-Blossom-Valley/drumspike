@@ -32,7 +32,7 @@ use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
 use crate::detect::peaks::FPS;
-use crate::refine::{refine_sr, RefineWindow};
+use crate::refine::{RefineWindow, refine_sr};
 
 /// The feature recipe: the name a track's `learn.method` stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -630,7 +630,7 @@ pub fn filter_detected(
             .iter()
             .enumerate()
             .filter(|(_, (t, _))| (t - n).abs() <= reach)
-            .min_by(|a, b| (a.1 .0 - n).abs().total_cmp(&(b.1 .0 - n).abs()))
+            .min_by(|a, b| (a.1.0 - n).abs().total_cmp(&(b.1.0 - n).abs()))
             .map(|(i, _)| i);
         if let Some(i) = near {
             out.remove(i);

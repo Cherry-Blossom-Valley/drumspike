@@ -18,22 +18,22 @@
 use std::path::Path;
 
 use drumspike_core::analyze::{
-    analyze_detected, analyze_flags, detect_events, role_note, Analysis, AnalyzeParams, Detector,
+    Analysis, AnalyzeParams, Detector, analyze_detected, analyze_flags, detect_events, role_note,
 };
 use drumspike_core::detect::onset::{Candidate, OnsetParams};
 use drumspike_core::detect::peaks::FPS;
-use drumspike_core::similarity::{self, Recipe, DEFAULT_THRESHOLD};
+use drumspike_core::similarity::{self, DEFAULT_THRESHOLD, Recipe};
 use drumspike_core::velocity::attack_ms;
 use serde_json::{Map, Value};
 
-use crate::edit::{is_kept, MERGE_WINDOW};
+use crate::edit::{MERGE_WINDOW, is_kept};
 use crate::histogram::{analysis_values, dsp_detection_candidates};
-use crate::learn::{filter_on, learn_of_track, shift_s_of, METHOD};
+use crate::learn::{METHOD, filter_on, learn_of_track, shift_s_of};
 use crate::learn_score::{
-    candidate_frames, effective_threshold, example_times, frame_values, learn_key, read_learn, score_all, solid_frames,
-    write_learn, Centre,
+    Centre, candidate_frames, effective_threshold, example_times, frame_values, learn_key, read_learn, score_all,
+    solid_frames, write_learn,
 };
-use crate::registry::{lock, Shared};
+use crate::registry::{Shared, lock};
 use crate::sensitivity::{scale_of, sensitivity_of};
 
 /// The reach of an example to a hit or a candidate (seconds): the marks resolve to candidates
@@ -148,7 +148,7 @@ pub fn mark_out(
             .iter()
             .enumerate()
             .filter(|(_, (t, _))| (t - n).abs() <= REACH + 1e-9)
-            .min_by(|a, b| (a.1 .0 - n).abs().total_cmp(&(b.1 .0 - n).abs()))
+            .min_by(|a, b| (a.1.0 - n).abs().total_cmp(&(b.1.0 - n).abs()))
             .map(|(i, _)| i);
         if let Some(i) = near {
             out[i] = true;

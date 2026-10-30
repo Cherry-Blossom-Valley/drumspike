@@ -27,11 +27,11 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use crate::detect::onset::{self, detect_onsets, OnsetError, Role};
+use crate::detect::onset::{self, OnsetError, Role, detect_onsets};
 use crate::detect::{DetectError, N_CLASSES};
 use crate::pyops::py_round_digits;
-use crate::refine::{refine_track_rule_peak, BackStep, Hit, ReachStep, RefineRule, RefineWindow, FM_PEAK_DB};
-use crate::velocity::{velocity_map, VelocityMap};
+use crate::refine::{BackStep, FM_PEAK_DB, Hit, ReachStep, RefineRule, RefineWindow, refine_track_rule_peak};
+use crate::velocity::{VelocityMap, velocity_map};
 
 /// The source rates the core analyses (`engine.DETECT_RATES`, the rates of the resampler).
 pub const DETECT_RATES: [u32; 3] = [44_100, 48_000, 96_000];

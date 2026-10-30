@@ -4,11 +4,11 @@
 mod common;
 
 use common::*;
-use drumspike_app::bridge::Bridge;
-use drumspike_app::export::{check_dest, ExportOpts, MidiMode};
-use drumspike_app::reply::Reply;
 use drumspike_app::SHELL_COMMANDS;
-use serde_json::{json, Value};
+use drumspike_app::bridge::Bridge;
+use drumspike_app::export::{ExportOpts, MidiMode, check_dest};
+use drumspike_app::reply::Reply;
+use serde_json::{Value, json};
 
 fn opened(tag: &str) -> (drumspike_app::Service, String, std::path::PathBuf, std::path::PathBuf) {
     let root = tmp(tag);
@@ -152,11 +152,13 @@ fn check_dest_wants_an_absolute_existing_writable_folder() {
         }
         std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    assert!(std::fs::read_dir(&root).unwrap().all(|e| !e
-        .unwrap()
-        .file_name()
-        .to_string_lossy()
-        .starts_with(".drumspike-write")));
+    assert!(
+        std::fs::read_dir(&root).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".drumspike-write"))
+    );
     std::fs::remove_dir_all(&root).unwrap();
 }
 

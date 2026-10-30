@@ -13,8 +13,8 @@ use common::*;
 use drumspike_app::bridge::Bridge;
 use drumspike_app::reply::Reply;
 use drumspike_app::{Progress, Service};
-use drumspike_core::project::{add_track, build_source, load_project, save_project, BACKUPS_DIR};
-use serde_json::{json, Value};
+use drumspike_core::project::{BACKUPS_DIR, add_track, build_source, load_project, save_project};
+use serde_json::{Value, json};
 
 /// Open a two-track project; returns (service, sid, folder, root). The service has a home folder.
 fn opened(tag: &str) -> (Service, String, PathBuf, PathBuf) {
@@ -1057,10 +1057,12 @@ fn autosave_tick_hits_the_stale_write_check_and_tells_the_page_once() {
         let ev = seen.lock().unwrap();
         assert_eq!(ev.len(), 1);
         assert_eq!(ev[0]["sid"], json!(sid));
-        assert!(ev[0]["message"]
-            .as_str()
-            .unwrap()
-            .starts_with(drumspike_app::registry::CHANGED_ON_DISK));
+        assert!(
+            ev[0]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with(drumspike_app::registry::CHANGED_ON_DISK)
+        );
     }
     assert_eq!(svc.autosave_tick(base + Duration::from_secs(183)).len(), 1);
     assert_eq!(seen.lock().unwrap().len(), 1, "one event per outside change");

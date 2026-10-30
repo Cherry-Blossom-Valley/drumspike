@@ -15,7 +15,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use drumspike_core::io::{
-    encode_wav_raw, ffmpeg_default_mask, ffmpeg_stereo_mask_ok, read_wav_mono, MixMode, WavFormat, WavSpec,
+    MixMode, WavFormat, WavSpec, encode_wav_raw, ffmpeg_default_mask, ffmpeg_stereo_mask_ok, read_wav_mono,
 };
 
 struct Lcg(u64);
@@ -206,7 +206,9 @@ fn stereo_channel_masks_match_the_frozen_ffmpeg_decode_or_refuse() {
         }
     }
     std::fs::remove_dir_all(&dir).unwrap();
-    eprintln!("stereo masks: {same} bit-identical, {other_fold} folded differently by ffmpeg (rust refuses), {refused} refused by both");
+    eprintln!(
+        "stereo masks: {same} bit-identical, {other_fold} folded differently by ffmpeg (rust refuses), {refused} refused by both"
+    );
     assert_eq!(n, want.len(), "every frozen case is compared");
     assert!(failures.is_empty(), "stereo masks:\n{}", failures.join("\n"));
 }

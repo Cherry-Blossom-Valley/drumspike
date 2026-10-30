@@ -1,7 +1,7 @@
 //! A5 probe: the false hit of the robustness 44k/snare case under the gained-spec rule.
 //! Run: `cargo test -p drumspike-core --test false_hit_probe -j 8 -- --nocapture`
 
-use drumspike_core::analyze::{analyze_track_dsp_cands, AnalyzeParams};
+use drumspike_core::analyze::{AnalyzeParams, analyze_track_dsp_cands};
 
 #[path = "level_calib_render.rs"]
 mod kit;

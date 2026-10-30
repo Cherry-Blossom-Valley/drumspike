@@ -1,7 +1,7 @@
 //! Tests of the cross-track bleed rule (#281 A6): a planted kick bleed on a tom track is dropped, a
 //! real tom hit 10 ms after a kick is kept.
 
-use super::{cross_bleed, CrossBleedParams, CrossMic, XKind};
+use super::{CrossBleedParams, CrossMic, XKind, cross_bleed};
 
 const SR: u32 = 48_000;
 

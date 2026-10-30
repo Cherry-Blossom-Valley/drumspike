@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::AppError;
 
@@ -219,10 +219,10 @@ pub fn load_one(folder: &Path) -> Result<Installed, String> {
 /// The Detectors folder: `$DRUMSPIKE_DETECTORS_DIR`, else
 /// `~/Library/Application Support/Drum Spike/Detectors`.
 pub fn detectors_dir() -> PathBuf {
-    if let Ok(d) = std::env::var(DETECTORS_DIR_ENV) {
-        if !d.is_empty() {
-            return PathBuf::from(d);
-        }
+    if let Ok(d) = std::env::var(DETECTORS_DIR_ENV)
+        && !d.is_empty()
+    {
+        return PathBuf::from(d);
     }
     let home = std::env::var("HOME").unwrap_or_default();
     PathBuf::from(home).join("Library/Application Support/Drum Spike/Detectors")

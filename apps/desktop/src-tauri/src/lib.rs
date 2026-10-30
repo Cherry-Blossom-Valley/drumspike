@@ -31,7 +31,7 @@ pub mod tempo;
 pub mod tracks;
 pub mod window;
 
-pub use drumspike_app::{app_info_value, CHAIN, DETECTOR};
+pub use drumspike_app::{CHAIN, DETECTOR, app_info_value};
 
 /// Start of the process, for the optional cold-start log.
 static START: OnceLock<Instant> = OnceLock::new();
@@ -931,15 +931,15 @@ fn self_test_setup<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Buil
 /// `DRUMSPIKE_PROJECTS` (set by `Service::new`) win over these defaults. P4-5: also names the app in the project lock.
 fn lifecycle_setup(svc: &Service, app: &tauri::AppHandle) {
     svc.set_lock_client("app"); // P4-5: a project the app opens for writing is locked against the agent tools
-    if svc.home().is_none() {
-        if let Ok(dir) = app.path().app_data_dir() {
-            svc.set_home(dir);
-        }
+    if svc.home().is_none()
+        && let Ok(dir) = app.path().app_data_dir()
+    {
+        svc.set_home(dir);
     }
-    if std::env::var_os("DRUMSPIKE_PROJECTS").is_none_or(|v| v.is_empty()) {
-        if let Ok(dir) = app.path().document_dir() {
-            svc.set_projects_dir(dir.join("Drumspike Projects"));
-        }
+    if std::env::var_os("DRUMSPIKE_PROJECTS").is_none_or(|v| v.is_empty())
+        && let Ok(dir) = app.path().document_dir()
+    {
+        svc.set_projects_dir(dir.join("Drumspike Projects"));
     }
     let handle = app.clone();
     svc.set_emitter(Arc::new(move |name: &str, payload: Value| {
@@ -989,9 +989,11 @@ pub fn run() {
                     }
                 };
                 front();
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    front();
+                std::thread::spawn(move || {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        front();
+                    }
                 });
             }
             // #206: the menu is in place; apply the AppKit Shift convention (uppercase, no Shift flag)

@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-use super::clock::{host_now_ns, StampMap};
+use super::clock::{StampMap, host_now_ns};
 use super::mixer::Engine;
 use super::{Shared, TransportError};
 
@@ -183,10 +183,10 @@ fn find_device(name: Option<&str>) -> Result<cpal::Device, TransportError> {
         Some(n) => {
             // The ALSA host reports the default under a pseudo-device name ("Default Audio
             // Device") that its enumeration never lists; the default answers to its own name.
-            if let Some(def) = host.default_output_device() {
-                if device_name(&def) == n {
-                    return Ok(def);
-                }
+            if let Some(def) = host.default_output_device()
+                && device_name(&def) == n
+            {
+                return Ok(def);
             }
             host.output_devices()
                 .map_err(|e| TransportError::Device(e.to_string()))?
@@ -236,12 +236,11 @@ pub fn output_devices() -> Result<Vec<DeviceInfo>, TransportError> {
     // The ALSA host's default is a pseudo-device ("Default Audio Device") that the
     // enumeration never lists; add it, so the default is in the list and selectable by name.
     // Where the default is a listed device (CoreAudio, PipeWire-as-default) this adds nothing.
-    if let Some(def) = host.default_output_device() {
-        if let Ok(info) = info_of(&def) {
-            if !list.iter().any(|d| d.name == info.name) {
-                list.push(info);
-            }
-        }
+    if let Some(def) = host.default_output_device()
+        && let Ok(info) = info_of(&def)
+        && !list.iter().any(|d| d.name == info.name)
+    {
+        list.push(info);
     }
     Ok(list)
 }
@@ -283,10 +282,10 @@ pub enum Running {
 
 impl Drop for Running {
     fn drop(&mut self) {
-        if let Running::Cpal(stream, name) = self {
-            if let Some(st) = stream.take() {
-                let _ = guarded(name, CLOSE_LIMIT, true, move || drop(st));
-            }
+        if let Running::Cpal(stream, name) = self
+            && let Some(st) = stream.take()
+        {
+            let _ = guarded(name, CLOSE_LIMIT, true, move || drop(st));
         }
         if let Running::Null { stop, thread } = self {
             stop.store(true, Ordering::Release);

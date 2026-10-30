@@ -1,6 +1,6 @@
 //! The unit tests of `role.rs` (#281 item 10, the ticket's gate (a)): synthetic tracks.
 
-use super::{role_features, role_from_audio, role_from_audio_confidence, role_threshold, Role};
+use super::{Role, role_features, role_from_audio, role_from_audio_confidence, role_threshold};
 use std::f64::consts::PI;
 
 const SR: u32 = 44100;

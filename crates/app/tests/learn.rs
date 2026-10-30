@@ -4,9 +4,9 @@
 mod common;
 
 use common::*;
-use drumspike_app::{Service, LEARN_COMMANDS};
+use drumspike_app::{LEARN_COMMANDS, Service};
 use drumspike_core::project::load_project;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Barrier};
 
 /// A project with a kick in, a kick sub and a snare; the kick in holds the hits `hits`.
@@ -723,9 +723,10 @@ fn a_learn_change_keeps_hand_deletions_and_velocities_and_undo_restores_the_snap
     assert_eq!(learn_of(&svc, &sid, "k in"), learn_before);
     assert_eq!(r["filter"]["events"].as_array().unwrap(), &edited);
     // a snapshot that is not a list is refused
-    assert!(svc
-        .track_learn_set_events(&sid, "k in", &learn_before, Some(&json!({"t": 1})))
-        .is_err());
+    assert!(
+        svc.track_learn_set_events(&sid, "k in", &learn_before, Some(&json!({"t": 1})))
+            .is_err()
+    );
 }
 
 /// P4-35: every Learn change answers the hits the filter takes out before and after (`learn_out_before`,
@@ -1240,7 +1241,7 @@ fn events_set_by_hand_refuses_while_another_write_runs_and_keeps_learn_matching(
     assert_eq!(e.code, 409, "{e:?}");
     assert!(e.message.contains("try again"), "the conflict is retryable: {e:?}");
     drop(g); // the write in flight is done
-             // the page's edited list (the hit at 1.0 deleted) retries and lands with its bookkeeping
+    // the page's edited list (the hit at 1.0 deleted) retries and lands with its bookkeeping
     let edited: Vec<Value> = [0.5_f64, 1.5]
         .iter()
         .map(|t| json!({"t": t, "v": 90, "learned": true}))

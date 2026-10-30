@@ -116,14 +116,14 @@ pub fn check_args(row: &CommandSpec, args: &Map<String, Value>) -> Result<(), Ap
                     "missing argument `{}` ({})",
                     a.name,
                     type_name(a.ty)
-                )))
+                )));
             }
             Some(v) if !v.is_null() && !type_ok(a.ty, v) => {
                 return Err(AppError::bad(format!(
                     "wrong argument `{}`: expected {}",
                     a.name,
                     type_name(a.ty)
-                )))
+                )));
             }
             _ => {}
         }
@@ -166,8 +166,8 @@ pub fn read_only_refusal(svc: &Service, row: &CommandSpec, args: &Map<String, Va
 pub mod transport_args {
     use serde_json::Value;
 
-    use crate::transport::PlayWindow;
     use crate::AppError;
+    use crate::transport::PlayWindow;
 
     /// A number or nothing; any other value is a 400 naming the key.
     pub fn opt_f64(args: &Value, key: &str) -> Result<Option<f64>, AppError> {

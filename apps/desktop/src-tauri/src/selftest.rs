@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// The page script that runs the scenario.
 pub const DRIVER: &str = include_str!("../../selftest/driver.js");
@@ -226,16 +226,15 @@ pub fn footprint_report(
         cmd.arg("-p").arg(p.to_string());
     }
     let ok = cmd.arg("--json").arg(&file).output().is_ok();
-    if ok {
-        if let Some(v) = std::fs::read_to_string(&file)
+    if ok
+        && let Some(v) = std::fs::read_to_string(&file)
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        {
-            for p in v["processes"].as_array().into_iter().flatten() {
-                if let (Some(pid), Some(fp)) = (p["pid"].as_u64(), p["footprint"].as_u64()) {
-                    map.insert(pid as u32, fp);
-                    cats.insert(pid as u32, top_categories(p, 6));
-                }
+    {
+        for p in v["processes"].as_array().into_iter().flatten() {
+            if let (Some(pid), Some(fp)) = (p["pid"].as_u64(), p["footprint"].as_u64()) {
+                map.insert(pid as u32, fp);
+                cats.insert(pid as u32, top_categories(p, 6));
             }
         }
     }

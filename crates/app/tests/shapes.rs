@@ -48,22 +48,26 @@ fn the_nine_json_commands_have_the_keys_of_the_server_responses() {
         status.as_object_mut().unwrap().shift_remove("flam").is_some(),
         "{status}"
     );
-    assert!(status["tracks"]["Snare_Top"]
-        .as_object_mut()
-        .unwrap()
-        .shift_remove("flam")
-        .is_some());
+    assert!(
+        status["tracks"]["Snare_Top"]
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("flam")
+            .is_some()
+    );
     // #281 A1: the snare ghost-note gate's outcome (`ghost_gate` of the job and of the track) is the app's
     // own key; it is taken out, every other key is compared as before
     assert!(
         status.as_object_mut().unwrap().shift_remove("ghost_gate").is_some(),
         "{status}"
     );
-    assert!(status["tracks"]["Snare_Top"]
-        .as_object_mut()
-        .unwrap()
-        .shift_remove("ghost_gate")
-        .is_some());
+    assert!(
+        status["tracks"]["Snare_Top"]
+            .as_object_mut()
+            .unwrap()
+            .shift_remove("ghost_gate")
+            .is_some()
+    );
     same_keys("analyze_status", &status, "analyze_status");
 
     same_keys("project_get", &svc.project_get(&sid).unwrap(), "project_get");

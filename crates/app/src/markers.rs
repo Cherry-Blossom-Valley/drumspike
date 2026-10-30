@@ -10,11 +10,11 @@
 //!   `previous` list, so one more call undoes it (as `tempo_map_set` does for the map). The entries
 //!   are stored sorted by `t`.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
+use crate::Service;
 use crate::error::AppError;
 use crate::registry::lock;
-use crate::Service;
 
 /// The document key of the marker list.
 pub const DOC_KEY: &str = "markers";

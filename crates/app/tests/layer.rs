@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 
 use common::*;
 use drumspike_app::Service;
-use drumspike_core::io::{read_wav_bytes, write_wav as write_core, Bext, WavFormat, WavSpec};
-use drumspike_core::layer::{render_layer, OneShot};
+use drumspike_core::io::{Bext, WavFormat, WavSpec, read_wav_bytes, write_wav as write_core};
+use drumspike_core::layer::{OneShot, render_layer};
 use drumspike_core::transport::device::Output;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// A drum-like one-shot: `pre` samples of silence, a decaying 150 Hz tone and a short noise burst.
 fn shot(sr: u32, pre: usize, secs: f64, seed: u64) -> Vec<f32> {

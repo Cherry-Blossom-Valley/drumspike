@@ -9,9 +9,9 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use common::*;
 use drumspike_app::call::call;
-use drumspike_app::lock::{ProjectLock, LOCK_FILE};
+use drumspike_app::lock::{LOCK_FILE, ProjectLock};
 use drumspike_app::reply::Reply;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 struct Holder {
     child: Child,
@@ -302,9 +302,10 @@ fn a_refused_save_as_removes_only_what_the_call_made() {
     );
     // a folder the user made stays, without the lock file
     std::fs::create_dir_all(out.join("Third")).unwrap();
-    assert!(app
-        .project_save_as(&sid, Some("Third"), Some(&out_s), true, None)
-        .is_err());
+    assert!(
+        app.project_save_as(&sid, Some("Third"), Some(&out_s), true, None)
+            .is_err()
+    );
     assert!(out.join("Third").is_dir() && !out.join("Third").join(LOCK_FILE).exists());
     app.job_cancel(&sid);
 }
@@ -375,10 +376,12 @@ fn a_plain_save_as_is_refused_while_another_process_builds_the_partial_folder_of
     assert!(e.message.contains("cli (pid"), "{}", e.message);
     assert!(!out.join("Moved").exists(), "nothing was written");
     // the old project is untouched, and once the other copy is gone the Save As works
-    assert!(app.project_get(&sid).unwrap()["folder"]
-        .as_str()
-        .unwrap()
-        .ends_with("/Src"));
+    assert!(
+        app.project_get(&sid).unwrap()["folder"]
+            .as_str()
+            .unwrap()
+            .ends_with("/Src")
+    );
     drop(theirs);
     app.project_save_as(&sid, Some("Moved"), Some(&out.display().to_string()), false, None)
         .unwrap();

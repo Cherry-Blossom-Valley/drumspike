@@ -5,7 +5,7 @@
 //!
 //! Usage: `role-from-audio <file.wav>...`
 
-use drumspike_core::io::{read_wav_mono, MixMode};
+use drumspike_core::io::{MixMode, read_wav_mono};
 use drumspike_core::role::{role_features, role_from_audio, role_from_audio_confidence};
 use std::path::PathBuf;
 

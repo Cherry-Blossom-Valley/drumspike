@@ -18,18 +18,18 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Instant;
 
 use drumspike_core::io::{MappedWav, MixMode, SampleFormat, WavFormat};
-use drumspike_core::midi::{export_midi_map as write_midi, export_multi_midi, MidiEvent, MidiTrack};
+use drumspike_core::midi::{MidiEvent, MidiTrack, export_midi_map as write_midi, export_multi_midi};
 use drumspike_core::project::EXPORTS_DIR;
 use drumspike_core::spike::{export_audio_spikes, export_spikes as write_spikes, hit_index};
 use drumspike_core::tempo::TempoMap;
-use drumspike_core::velocity::{velocity_map, VelocityMap};
-use serde_json::{json, Value};
+use drumspike_core::velocity::{VelocityMap, velocity_map};
+use serde_json::{Value, json};
 
 use crate::error::AppError;
 use crate::media::mix_mode;
-use crate::registry::{lock, OpenProject};
+use crate::registry::{OpenProject, lock};
 use crate::reply::Channels;
-use crate::sampler::{midi_events_shifted, MidiPlan, ShiftInfo};
+use crate::sampler::{MidiPlan, ShiftInfo, midi_events_shifted};
 use crate::{Progress, Service};
 
 /// MIDI ticks per quarter note and tempo of the MIDI files that Export all writes (the page's
@@ -811,13 +811,15 @@ impl Service {
         };
         std::thread::scope(|s| {
             for _ in 0..workers {
-                s.spawn(|| loop {
-                    let i = next.fetch_add(1, Ordering::SeqCst);
-                    let Some(job) = jobs.get(i) else { break };
-                    let r = export_track(job, &dir, opts);
-                    lock(&results)[i] = Some(r);
-                    let done = finished.fetch_add(1, Ordering::SeqCst) + 1;
-                    say(json!({"state": "running", "done": done, "total": total, "track": job.name}));
+                s.spawn(|| {
+                    loop {
+                        let i = next.fetch_add(1, Ordering::SeqCst);
+                        let Some(job) = jobs.get(i) else { break };
+                        let r = export_track(job, &dir, opts);
+                        lock(&results)[i] = Some(r);
+                        let done = finished.fetch_add(1, Ordering::SeqCst) + 1;
+                        say(json!({"state": "running", "done": done, "total": total, "track": job.name}));
+                    }
                 });
             }
         });

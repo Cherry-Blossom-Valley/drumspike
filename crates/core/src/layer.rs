@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::io::MappedWav;
-use crate::refine::{refine_rule, RefineRule, RefineWindow};
+use crate::refine::{RefineRule, RefineWindow, refine_rule};
 
 /// The longest one-shot the app takes (seconds).
 pub const MAX_ONE_SHOT_S: f64 = 20.0;
@@ -238,7 +238,7 @@ fn read_aiff(b: &[u8]) -> Result<OneShot, String> {
             return Err(format!(
                 "AIFC compression {:?} is not supported",
                 String::from_utf8_lossy(other)
-            ))
+            ));
         }
     };
     let n = frames.min(data.len() / (width * ch));
@@ -447,11 +447,7 @@ pub struct HitXcorr {
 impl HitXcorr {
     /// The sign of the better match: +1 (as is) or -1 (inverted); +1 on a tie.
     pub fn sign(&self) -> i8 {
-        if self.neg_r > self.pos_r {
-            -1
-        } else {
-            1
-        }
+        if self.neg_r > self.pos_r { -1 } else { 1 }
     }
 
     /// The lag and the height for polarity `sign` (+1 or -1).

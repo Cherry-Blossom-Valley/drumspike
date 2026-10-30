@@ -9,12 +9,12 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::*;
-use drumspike_app::export::ExportOpts;
 use drumspike_app::Service;
-use drumspike_core::io::{write_wav as write_core, WavFormat, WavSpec};
+use drumspike_app::export::ExportOpts;
+use drumspike_core::io::{WavFormat, WavSpec, write_wav as write_core};
 use drumspike_core::transport::device::Output;
 use midly::{MidiMessage, Smf, TrackEventKind};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const SR: u32 = 48_000;
 
@@ -272,9 +272,11 @@ fn track_sampler_set_measures_a_planted_delay_and_polarity_and_keeps_them() {
     // an empty path removes it
     let r = svc.track_sampler_set(&sid2, "k in", &json!({"path": ""})).unwrap();
     assert_eq!(r["sampler"], Value::Null);
-    assert!(svc.tracks_get(&sid2).unwrap()["tracks"]["k in"]
-        .get("sampler")
-        .is_none());
+    assert!(
+        svc.tracks_get(&sid2).unwrap()["tracks"]["k in"]
+            .get("sampler")
+            .is_none()
+    );
 }
 
 #[test]

@@ -4,9 +4,9 @@
 mod common;
 
 use common::*;
-use drumspike_app::{Service, LIFECYCLE_COMMANDS};
+use drumspike_app::{LIFECYCLE_COMMANDS, Service};
 use drumspike_core::project::{load_project, save_project};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const SR: u32 = 48_000;
 
@@ -87,9 +87,11 @@ fn a_follower_takes_the_positions_of_the_source_and_its_own_velocities() {
     svc.track_set_follow(&sid, "k sub", Some("k in")).unwrap();
     let r = svc.track_set_follow(&sid, "k sub", None).unwrap();
     assert_eq!(r, json!({"follows": null, "n_events": 6}));
-    assert!(svc.tracks_get(&sid).unwrap()["tracks"]["k sub"]
-        .get("follows")
-        .is_none());
+    assert!(
+        svc.tracks_get(&sid).unwrap()["tracks"]["k sub"]
+            .get("follows")
+            .is_none()
+    );
 }
 
 #[test]
@@ -197,9 +199,11 @@ fn a_rename_of_the_source_follows_and_a_gone_source_clears_the_follower() {
     );
     assert!(f["follows"].is_null());
     assert!(events(&svc, &sid, "k sub").is_empty());
-    assert!(svc.tracks_get(&sid).unwrap()["tracks"]["k sub"]
-        .get("follows")
-        .is_none());
+    assert!(
+        svc.tracks_get(&sid).unwrap()["tracks"]["k sub"]
+            .get("follows")
+            .is_none()
+    );
 }
 
 #[test]
@@ -245,7 +249,7 @@ fn a_silent_track_reports_no_hits_and_the_dsp_fallback_does_not_retry() {
 /// export of that track is a 409 and writes no file. `expected_times` is what the follower must hold.
 #[test]
 fn a_follower_stale_after_an_offline_edit_is_derived_again_at_export() {
-    use drumspike_core::midi::{midi_bytes, MidiEvent};
+    use drumspike_core::midi::{MidiEvent, midi_bytes};
     let (svc, sid, dir) = kick_and_sub("stale_export");
     svc.events_set(&sid, "k in", &json!([{"t": 0.25, "v": 100}, {"t": 1.25, "v": 100}]))
         .unwrap();

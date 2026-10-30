@@ -9,7 +9,7 @@ members = ["crates/core", "crates/app", "crates/devtools", "apps/desktop/src-tau
 
 [workspace.package]
 version = "0.9.7"
-edition = "2021"
+edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0"
 publish = false

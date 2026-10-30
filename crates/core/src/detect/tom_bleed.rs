@@ -94,8 +94,8 @@
 //! Every value is computed in a fixed order in `f64`; window bounds use [`ms_to_samples`].
 
 use super::attribution::{
-    band_peak_db, band_sections, calibrate_gain, ms_to_samples, percentile, AttributionError, AttributionParams,
-    Biquad, FilterKind, Role, Transfer,
+    AttributionError, AttributionParams, Biquad, FilterKind, Role, Transfer, band_peak_db, band_sections,
+    calibrate_gain, ms_to_samples, percentile,
 };
 use super::flam::zero_phase;
 
@@ -468,7 +468,7 @@ pub fn tom_bleed_with(
             let qv: Vec<f64> = st
                 .iter()
                 .zip(&all)
-                .filter(|(&c, _)| !near(&tom_sorted, c, quiet))
+                .filter(|(c, _)| !near(&tom_sorted, **c, quiet))
                 .map(|(_, &v)| v)
                 .collect();
             let gain = calibrate_gain(&all, &qv, p.percentile, p.min_hits).map(|g| g.0);
@@ -481,7 +481,7 @@ pub fn tom_bleed_with(
             let qv2: Vec<f64> = tom_strong
                 .iter()
                 .zip(&all2)
-                .filter(|(&c, _)| !near(&src_sorted[si], c, quiet))
+                .filter(|(c, _)| !near(&src_sorted[si], **c, quiet))
                 .map(|(_, &v)| v)
                 .collect();
             let back = calibrate_gain(&all2, &qv2, p.percentile, p.min_hits).map(|g| g.0);

@@ -10,8 +10,8 @@ use std::time::Instant;
 use common::*;
 use drumspike_app::roles::guess_role;
 use drumspike_app::{Progress, Service, TRACKS_COMMANDS};
-use drumspike_core::project::{load_project, SourceStatus};
-use serde_json::{json, Value};
+use drumspike_core::project::{SourceStatus, load_project};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 fn service(root: &Path) -> Service {

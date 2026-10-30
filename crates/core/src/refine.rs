@@ -30,7 +30,7 @@ use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
 
 use crate::pyops::py_int;
-use crate::velocity::{velocity_map, VelocityMap};
+use crate::velocity::{VelocityMap, velocity_map};
 
 /// The steepest-rise search window around the coarse time `t0`, in ms (`lo_ms`, `hi_ms` of
 /// `engine._refine_sr`). The detector reports hits about 6 ms before the attack, so the
@@ -312,11 +312,7 @@ fn refine_detail(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWind
     let thr = 0.25f32 * mx;
     let idx = seg.iter().position(|v| v.abs() >= thr).unwrap_or(0);
     let t = if idx == 0 {
-        if flat {
-            t0
-        } else {
-            anchor as f64 / srf
-        }
+        if flat { t0 } else { anchor as f64 / srf }
     } else {
         (i0 + idx as i64) as f64 / srf
     };

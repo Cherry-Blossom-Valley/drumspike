@@ -52,17 +52,17 @@
 //! on the audio timeline (#281 D16: the activation margin of the model path moved to
 //! the model branch; the review queue orders by the level evidence alone).
 
+use drumspike_core::detect::N_CLASSES;
 use drumspike_core::detect::onset::{Candidate, Gate};
 use drumspike_core::detect::peaks;
-use drumspike_core::detect::N_CLASSES;
 use drumspike_core::velocity::peak_db;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
+use crate::Service;
 use crate::error::AppError;
 use crate::export::hit_times;
 use crate::media::mix_mode;
 use crate::registry::resolve_shared;
-use crate::Service;
 
 /// The commands of this card.
 pub const CONFIDENCE_COMMANDS: [&str; 1] = ["track_confidence"];
@@ -516,8 +516,10 @@ mod tests {
         });
         assert!(dispatch(&svc, "markers_get", &json!({})).is_none());
         assert!(dispatch(&svc, "track_confidence", &json!({})).unwrap().is_err());
-        assert!(dispatch(&svc, "track_confidence", &json!({"sid": "x", "name": "y"}))
-            .unwrap()
-            .is_err());
+        assert!(
+            dispatch(&svc, "track_confidence", &json!({"sid": "x", "name": "y"}))
+                .unwrap()
+                .is_err()
+        );
     }
 }

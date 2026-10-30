@@ -25,12 +25,12 @@
 
 use std::path::Path;
 
-use midly::num::{u15, u24, u28, u4, u7};
+use midly::num::{u4, u7, u15, u24, u28};
 use midly::{Format, Header, MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind};
 use serde::{Deserialize, Serialize};
 
 use crate::pyops::py_round;
-use crate::tempo::{tempo_us, TempoMap, TickMap, BAR1_MARKER};
+use crate::tempo::{BAR1_MARKER, TempoMap, TickMap, tempo_us};
 
 /// Default ticks per quarter note (`engine.export_midi(ppq=24000)`).
 pub const DEFAULT_PPQ: u16 = 24_000;
@@ -128,11 +128,7 @@ pub fn tick_scale(ppq: u16, tempo: f64) -> f64 {
 /// `PrettyMIDI.time_to_tick(t)` on a fresh object: 0 for `t <= 0`, else `round(t / tick_scale)`
 /// with ties to even.
 pub fn time_to_tick(t: f64, tick_scale: f64) -> i64 {
-    if t <= 0.0 {
-        0
-    } else {
-        py_round(t / tick_scale)
-    }
+    if t <= 0.0 { 0 } else { py_round(t / tick_scale) }
 }
 
 /// The `set_tempo` value pretty_midi writes: `int(6e7 / (60 / (tick_scale * ppq)))` in

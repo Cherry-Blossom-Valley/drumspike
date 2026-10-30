@@ -30,15 +30,15 @@
 use std::path::PathBuf;
 
 use drumspike_core::detect::flam::{
-    applies, attack_env, late_peak_db, late_peaking, late_share, second_onsets, transfer_gains, FlamParams, Second,
-    FLAM_RULE_VERSION,
+    FLAM_RULE_VERSION, FlamParams, Second, applies, attack_env, late_peak_db, late_peaking, late_share, second_onsets,
+    transfer_gains,
 };
 use drumspike_core::project::Event;
 use drumspike_core::velocity::{peak_db, velocity_of_db};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::media::mix_mode;
-use crate::registry::{lock, Shared};
+use crate::registry::{Shared, lock};
 use crate::roles::is_sample_name;
 use crate::{Service, ServiceConfig};
 

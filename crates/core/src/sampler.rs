@@ -13,8 +13,8 @@
 //! * [`compensate`]: the MIDI time of a note: the aligned attack minus the offset, rounded to the
 //!   sample. The sub-sample part of an alignment exists only in the render.
 
-use crate::layer::{attack_template, one_shot_onset, xcorr_hit, AlignParams};
-use crate::midi::{midi_bytes_map, MidiError, MidiEvent};
+use crate::layer::{AlignParams, attack_template, one_shot_onset, xcorr_hit};
+use crate::midi::{MidiError, MidiEvent, midi_bytes_map};
 use crate::tempo::{TempoMap, TickMap};
 
 /// The velocity of the calibration note.
@@ -139,11 +139,7 @@ pub fn bounce_polarity(
 /// value is true). `sr` is the rate of the track the samples are of.
 pub fn compensate(t: f64, lag_samples: f64, offset_samples: f64, sr: u32) -> (f64, bool) {
     let s = (t * sr as f64 + lag_samples - offset_samples).round();
-    if s < 0.0 {
-        (0.0, true)
-    } else {
-        (s / sr as f64, false)
-    }
+    if s < 0.0 { (0.0, true) } else { (s / sr as f64, false) }
 }
 
 #[cfg(test)]

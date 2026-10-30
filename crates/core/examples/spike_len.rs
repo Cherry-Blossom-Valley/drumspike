@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use drumspike_core::{audio_snippet_lengths, read_wav_mono, MixMode};
+use drumspike_core::{MixMode, audio_snippet_lengths, read_wav_mono};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut wav: Option<PathBuf> = None;

@@ -34,17 +34,17 @@ use std::path::{Component, Path, PathBuf};
 use serde_json::{Map, Number, Value};
 
 pub use document::{
-    empty_document, now, Document, Event, Settings, Source, Track, DEFAULT_MIX_MODE, FORMAT, MIX_MODES, SOURCE_MODES,
+    DEFAULT_MIX_MODE, Document, Event, FORMAT, MIX_MODES, SOURCE_MODES, Settings, Source, Track, empty_document, now,
 };
 pub use save::{
-    backup_name, free_name, rotate_backups, save_as, save_project, save_project_into, save_project_report,
-    write_document, BACKUPS_KEEP,
+    BACKUPS_KEEP, backup_name, free_name, rotate_backups, save_as, save_project, save_project_into,
+    save_project_report, write_document,
 };
 pub use source::{
-    bext_origination, build_source, cache_key, consolidate, copy_chunked, copy_into_project, copy_into_project_ctl,
-    head_cache_counts, head_sha1, relink_search, relinked_source, resolve_source, source_candidates, source_matches,
-    CacheKey, CopyCtl, CopyOutcome, HeadCacheCounts, SearchHit, SearchReport, SearchResult, SearchTarget, SourceStatus,
-    COPY_CHUNK, HEAD_BYTES, HEAD_CACHE_MAX, HEAD_CACHE_SETTLE, SEARCH_MAX_FILES,
+    COPY_CHUNK, CacheKey, CopyCtl, CopyOutcome, HEAD_BYTES, HEAD_CACHE_MAX, HEAD_CACHE_SETTLE, HeadCacheCounts,
+    SEARCH_MAX_FILES, SearchHit, SearchReport, SearchResult, SearchTarget, SourceStatus, bext_origination,
+    build_source, cache_key, consolidate, copy_chunked, copy_into_project, copy_into_project_ctl, head_cache_counts,
+    head_sha1, relink_search, relinked_source, resolve_source, source_candidates, source_matches,
 };
 
 /// Document file extension.
@@ -438,13 +438,13 @@ fn migrate_with(mut value: Value, big: Option<String>) -> Result<Document, Proje
             return Err(ProjectError::invalid(format!(
                 "bad format field: {}",
                 big.expect("literal")
-            )))
+            )));
         }
         Some(other) => {
             return Err(ProjectError::invalid(format!(
                 "bad format field: {}",
                 format_repr(other)
-            )))
+            )));
         }
     };
     if fmt < 0 {
@@ -540,7 +540,7 @@ fn migrate_0_to_1(doc: Value) -> Result<Value, ProjectError> {
             _ => {
                 return Err(ProjectError::invalid(format!(
                     "format 0: track {tname} must be an object"
-                )))
+                )));
             }
         };
         t.entry("mix_mode").or_insert_with(|| Value::from("ffmpeg"));
@@ -553,14 +553,14 @@ fn migrate_0_to_1(doc: Value) -> Result<Value, ProjectError> {
                 _ => {
                     return Err(ProjectError::invalid(format!(
                         "format 0: events of {tname} must be a list"
-                    )))
+                    )));
                 }
             },
             Some(Value::Array(a)) => a.clone(),
             Some(_) => {
                 return Err(ProjectError::invalid(format!(
                     "format 0: events of {tname} must be a list"
-                )))
+                )));
             }
         };
         t.insert("events".into(), Value::Array(ev));
@@ -597,7 +597,7 @@ pub fn legacy_session_document(session_dir: &Path) -> Result<Value, ProjectError
             return Err(ProjectError::invalid(format!(
                 "{} is not a session document",
                 mp.display()
-            )))
+            )));
         }
     };
     root.insert("format".into(), Value::from(0));

@@ -49,10 +49,12 @@ fn names_are_checked_like_python() {
     }
     assert_eq!(check_name("  Drum Song 03 ").unwrap(), "Drum Song 03");
     for bad in ["", " ", ".", "..", "a/b", "a\\b", "../../x", "a\0b"] {
-        assert!(check_track_name(bad)
-            .unwrap_err()
-            .to_string()
-            .starts_with("bad track name: '"));
+        assert!(
+            check_track_name(bad)
+                .unwrap_err()
+                .to_string()
+                .starts_with("bad track name: '")
+        );
     }
     assert_eq!(check_track_name("Kick In").unwrap(), "Kick In");
     assert_eq!(check_track_name("Song: Take 2").unwrap(), "Song: Take 2"); // a colon is fine in a track name
@@ -97,10 +99,12 @@ fn new_project_creates_layout_and_document() {
     assert_eq!(load_project(&p.path()).unwrap().doc, q.doc);
     let e = new_project(&d, "Drum Song 03").unwrap_err().to_string();
     assert!(e.starts_with("project already exists: "), "{e}");
-    assert!(new_project(&d, "a/b")
-        .unwrap_err()
-        .to_string()
-        .starts_with("bad project name"));
+    assert!(
+        new_project(&d, "a/b")
+            .unwrap_err()
+            .to_string()
+            .starts_with("bad project name")
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }
 
@@ -231,9 +235,11 @@ fn migrate_forward_rejects_bad_documents() {
     for bad in ["", " ", ".", "..", "a/b", "a\\b", "../../x", "a\0b"] {
         let e = err(serde_json::json!({"format": 1, "tracks": {bad: {"role": "kick"}}}));
         assert!(e.to_string().starts_with("bad track name"), "{e}");
-        assert!(err(serde_json::json!({"tracks": {bad: {"role": "kick"}}}))
-            .to_string()
-            .starts_with("bad track name"));
+        assert!(
+            err(serde_json::json!({"tracks": {bad: {"role": "kick"}}}))
+                .to_string()
+                .starts_with("bad track name")
+        );
     }
     assert_eq!(
         err(serde_json::json!({"tracks": {"A": 3}})).to_string(),
@@ -248,12 +254,14 @@ fn migrate_forward_rejects_bad_documents() {
         "format 0: events must be an object"
     );
     assert!(migrate_forward(serde_json::json!({"tracks": {}, "events": []})).is_ok()); // falsy, like `or {}`
-                                                                                       // Python accepts any value in a track; the Rust layer keeps what it cannot type
+    // Python accepts any value in a track; the Rust layer keeps what it cannot type
     let odd = migrate_forward(serde_json::json!({"format": 1, "tracks": {"A": {"note": "x"}, "B": 3}})).unwrap();
     assert_eq!(odd.extra["tracks"], serde_json::json!({"A": {"note": "x"}, "B": 3}));
-    assert!(err(serde_json::json!({"format": 1, "tracks": {"A": {}, "a/b": 3}}))
-        .to_string()
-        .starts_with("bad track name"));
+    assert!(
+        err(serde_json::json!({"format": 1, "tracks": {"A": {}, "a/b": 3}}))
+            .to_string()
+            .starts_with("bad track name")
+    );
 }
 
 #[test]
@@ -261,16 +269,20 @@ fn load_project_errors_and_find_document() {
     let d = tmp("load");
     let e = load_project(&d).unwrap_err().to_string();
     assert_eq!(e, format!("no .drumspike document at {}", d.display()));
-    assert!(load_project(&d.join("nowhere"))
-        .unwrap_err()
-        .to_string()
-        .starts_with("no .drumspike document at "));
+    assert!(
+        load_project(&d.join("nowhere"))
+            .unwrap_err()
+            .to_string()
+            .starts_with("no .drumspike document at ")
+    );
     let a = d.join("a.drumspike");
     std::fs::write(&a, "{nope").unwrap();
-    assert!(load_project(&a)
-        .unwrap_err()
-        .to_string()
-        .contains("is not valid JSON: "));
+    assert!(
+        load_project(&a)
+            .unwrap_err()
+            .to_string()
+            .contains("is not valid JSON: ")
+    );
     // bytes that are not UTF-8 and a byte order mark: "not valid JSON", not an I/O error
     for bad in [&b"{\"name\": \"\xff\"}"[..], &b"\xef\xbb\xbf{}"[..]] {
         std::fs::write(&a, bad).unwrap();
@@ -286,10 +298,12 @@ fn load_project_errors_and_find_document() {
         format!("{} is not a project document", a.display())
     );
     std::fs::write(d.join("b.drumspike"), "{}").unwrap();
-    assert!(load_project(&d)
-        .unwrap_err()
-        .to_string()
-        .starts_with("no .drumspike document")); // two candidates
+    assert!(
+        load_project(&d)
+            .unwrap_err()
+            .to_string()
+            .starts_with("no .drumspike document")
+    ); // two candidates
     std::fs::remove_file(&a).unwrap();
     assert_eq!(find_document(&d).unwrap(), d.join("b.drumspike")); // the only one
     let p = load_project(&d).unwrap(); // {} is a format-0 document without tracks
@@ -371,20 +385,24 @@ fn legacy_session_document_reads_meta_events_and_sources() {
         format!("no meta.json in {}", d.display())
     );
     std::fs::write(sdir.join("meta.json"), r#"{"tracks": {"../x": {}}}"#).unwrap();
-    assert!(legacy_session_document(&sdir)
-        .unwrap_err()
-        .to_string()
-        .starts_with("bad track name"));
+    assert!(
+        legacy_session_document(&sdir)
+            .unwrap_err()
+            .to_string()
+            .starts_with("bad track name")
+    );
     std::fs::write(sdir.join("meta.json"), r#"{"tracks": []}"#).unwrap();
     assert_eq!(
         legacy_session_document(&sdir).unwrap_err().to_string(),
         "format 0: tracks must be an object"
     );
     std::fs::write(sdir.join("meta.json"), "[1]").unwrap();
-    assert!(legacy_session_document(&sdir)
-        .unwrap_err()
-        .to_string()
-        .ends_with("is not a session document"));
+    assert!(
+        legacy_session_document(&sdir)
+            .unwrap_err()
+            .to_string()
+            .ends_with("is not a session document")
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }
 

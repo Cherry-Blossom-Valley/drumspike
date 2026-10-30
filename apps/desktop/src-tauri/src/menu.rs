@@ -16,7 +16,7 @@
 
 use std::sync::{LazyLock, Mutex};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::menu::{
     CheckMenuItem, CheckMenuItemBuilder, Menu, MenuBuilder, MenuItem, MenuItemBuilder, MenuItemKind,
     PredefinedMenuItem, Submenu, SubmenuBuilder,
@@ -713,32 +713,32 @@ pub fn check_states(state: &Value) -> Vec<(&'static str, bool)> {
     if let Some(b) = state.get("overview").and_then(Value::as_bool) {
         out.push((OVERVIEW.id, b));
     }
-    if let Some(mode) = state.get("counter").and_then(Value::as_str) {
-        if COUNTER_MODES.iter().any(|(m, _)| *m == mode) {
-            for (m, id) in COUNTER_MODES {
-                out.push((id, m == mode));
-            }
+    if let Some(mode) = state.get("counter").and_then(Value::as_str)
+        && COUNTER_MODES.iter().any(|(m, _)| *m == mode)
+    {
+        for (m, id) in COUNTER_MODES {
+            out.push((id, m == mode));
         }
     }
-    if let Some(mode) = state.get("trackHeight").and_then(Value::as_str) {
-        if HEIGHT_MODES.iter().any(|(m, _)| *m == mode) {
-            for (m, id) in HEIGHT_MODES {
-                out.push((id, m == mode));
-            }
+    if let Some(mode) = state.get("trackHeight").and_then(Value::as_str)
+        && HEIGHT_MODES.iter().any(|(m, _)| *m == mode)
+    {
+        for (m, id) in HEIGHT_MODES {
+            out.push((id, m == mode));
         }
     }
-    if let Some(mode) = state.get("nudgeValue").and_then(Value::as_str) {
-        if NUDGE_MODES.iter().any(|(m, _)| *m == mode) {
-            for (m, id) in NUDGE_MODES {
-                out.push((id, m == mode));
-            }
+    if let Some(mode) = state.get("nudgeValue").and_then(Value::as_str)
+        && NUDGE_MODES.iter().any(|(m, _)| *m == mode)
+    {
+        for (m, id) in NUDGE_MODES {
+            out.push((id, m == mode));
         }
     }
-    if let Some(mode) = state.get("follow").and_then(Value::as_str) {
-        if FOLLOW_MODES.iter().any(|(m, _)| *m == mode) {
-            for (m, id) in FOLLOW_MODES {
-                out.push((id, m == mode));
-            }
+    if let Some(mode) = state.get("follow").and_then(Value::as_str)
+        && FOLLOW_MODES.iter().any(|(m, _)| *m == mode)
+    {
+        for (m, id) in FOLLOW_MODES {
+            out.push((id, m == mode));
         }
     }
     out
@@ -1547,11 +1547,11 @@ pub fn fix_shift_equivalents<R: Runtime>(app: &AppHandle<R>) {
                 }
                 let ke = it.keyEquivalent().to_string();
                 let mut ch = ke.chars();
-                if let (Some(c), None) = (ch.next(), ch.next()) {
-                    if c.is_ascii_alphabetic() {
-                        it.setKeyEquivalent(&NSString::from_str(&c.to_ascii_uppercase().to_string()));
-                        it.setKeyEquivalentModifierMask(NSEventModifierFlags(mask & !(1 << 17)));
-                    }
+                if let (Some(c), None) = (ch.next(), ch.next())
+                    && c.is_ascii_alphabetic()
+                {
+                    it.setKeyEquivalent(&NSString::from_str(&c.to_ascii_uppercase().to_string()));
+                    it.setKeyEquivalentModifierMask(NSEventModifierFlags(mask & !(1 << 17)));
                 }
             }
         }

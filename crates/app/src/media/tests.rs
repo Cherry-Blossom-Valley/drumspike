@@ -1,5 +1,5 @@
 use super::*;
-use drumspike_core::io::{encode_wav, WavFormat, WavSpec};
+use drumspike_core::io::{WavFormat, WavSpec, encode_wav};
 
 fn tmp(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("ds_app_media_{tag}_{}", std::process::id()));

@@ -18,18 +18,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use drumspike_core::project::{
-    abspath, build_source, relink_search, relinked_source, resolve_source, source_matches, SearchHit, SearchTarget,
-    AUDIO_DIR,
-};
 use drumspike_core::SourceStatus;
-use serde_json::{json, Value};
+use drumspike_core::project::{
+    AUDIO_DIR, SearchHit, SearchTarget, abspath, build_source, relink_search, relinked_source, resolve_source,
+    source_matches,
+};
+use serde_json::{Value, json};
 
+use crate::Service;
 use crate::error::AppError;
 use crate::registry::lock;
 use crate::reply::Channels;
 use crate::tracks::probe;
-use crate::Service;
 
 /// P4-7a fix 6: a layer file is a search target with the key `<track>` + this suffix (a control character no
 /// track name has), so that the results map back to the track and to the layer.
@@ -127,22 +127,22 @@ impl Service {
             g.resolve(); // a file moved since the open or the last look shows up now
             let mut t = Vec::new();
             for (name, tr) in g.project.doc.tracks() {
-                if g.offline(name) {
-                    if let Some(rec) = tr.source_ref() {
-                        t.push(SearchTarget {
-                            track: name.clone(),
-                            record: rec.clone(),
-                        });
-                    }
+                if g.offline(name)
+                    && let Some(rec) = tr.source_ref()
+                {
+                    t.push(SearchTarget {
+                        track: name.clone(),
+                        record: rec.clone(),
+                    });
                 }
                 // the layer file of the track: offline when its record does not resolve to the file
-                if let Some(l) = crate::layer::layer_of(&tr.extra) {
-                    if resolve_source(Some(&l.source), &g.project.dir).1 != SourceStatus::Ok {
-                        t.push(SearchTarget {
-                            track: format!("{name}{LAYER_KEY}"),
-                            record: l.source,
-                        });
-                    }
+                if let Some(l) = crate::layer::layer_of(&tr.extra)
+                    && resolve_source(Some(&l.source), &g.project.dir).1 != SourceStatus::Ok
+                {
+                    t.push(SearchTarget {
+                        track: format!("{name}{LAYER_KEY}"),
+                        record: l.source,
+                    });
                 }
             }
             (t, g.project.dir.clone())
@@ -180,11 +180,11 @@ impl Service {
                         };
                         if layer {
                             // the layer record of the track (its other settings stay)
-                            if let Some(tr) = g.project.doc.track_mut(tname) {
-                                if let Some(mut l) = crate::layer::layer_of(&tr.extra) {
-                                    l.source = new;
-                                    tr.extra.insert("layer".into(), l.to_json());
-                                }
+                            if let Some(tr) = g.project.doc.track_mut(tname)
+                                && let Some(mut l) = crate::layer::layer_of(&tr.extra)
+                            {
+                                l.source = new;
+                                tr.extra.insert("layer".into(), l.to_json());
                             }
                         } else {
                             if let Some(tr) = g.project.doc.track_mut(tname) {

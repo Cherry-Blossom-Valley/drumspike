@@ -16,9 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use common::*;
-use drumspike_app::api::{find, Run, Surface, REGISTRY};
+use drumspike_app::api::{REGISTRY, Run, Surface, find};
 use drumspike_app::cli;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn tauri_src() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/src")
@@ -41,11 +41,7 @@ fn handler_lists(lib: &str) -> (BTreeSet<String>, BTreeSet<String>) {
     }
     assert_eq!(lists.len(), 2, "a release and a debug handler list");
     let (a, b) = (lists.remove(0), lists.remove(0));
-    if b.len() >= a.len() {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if b.len() >= a.len() { (a, b) } else { (b, a) }
 }
 
 /// A wrapper: its parameters (name, type text) and whether the attribute renames to snake_case.
@@ -436,9 +432,11 @@ fn every_agent_row_has_a_cli_subcommand_and_an_mcp_tool() {
     };
     let code = cli::run(&svc, &["transport_play".into()], &mut io);
     assert_eq!(code, 3, "an unknown command exits 3, as `help nope` does");
-    assert!(String::from_utf8(err.lock().unwrap().clone())
-        .unwrap()
-        .contains("unknown command"));
+    assert!(
+        String::from_utf8(err.lock().unwrap().clone())
+            .unwrap()
+            .contains("unknown command")
+    );
 }
 
 struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);

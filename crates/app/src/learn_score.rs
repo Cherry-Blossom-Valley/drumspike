@@ -23,13 +23,13 @@ use std::time::Instant;
 
 use drumspike_core::detect::peaks::FPS;
 use drumspike_core::similarity::{self, Recipe, Weights};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
+use crate::Service;
 use crate::error::AppError;
-use crate::learn::{learn_of, CANDIDATE_REACH, METHOD};
+use crate::learn::{CANDIDATE_REACH, METHOD, learn_of};
 use crate::media::mix_mode;
 use crate::registry::{lock, resolve_shared};
-use crate::Service;
 
 /// The features file inside `Analysis/<track>/`.
 pub const LEARN_BIN: &str = "learn.bin";
@@ -346,11 +346,7 @@ pub fn score_all(
                     above += usize::from(*v >= first.auto);
                 }
             }
-            if 2 * above > n {
-                once(None)
-            } else {
-                first
-            }
+            if 2 * above > n { once(None) } else { first }
         }
         Centre::Bleed => {
             let first = once(Some(&track()));

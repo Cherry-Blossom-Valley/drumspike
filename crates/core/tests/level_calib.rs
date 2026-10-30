@@ -11,7 +11,7 @@
 //!
 //! Run: `cargo test -p drumspike-core --test level_calib -j 8 -- --nocapture`
 
-use drumspike_core::analyze::{analyze_track, AnalyzeParams, Detector};
+use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track};
 
 #[path = "level_calib_render.rs"]
 mod kit;

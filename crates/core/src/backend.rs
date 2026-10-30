@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::detect::onset::{detect_onsets, OnsetError};
 use crate::detect::CLASS_NOTES;
+use crate::detect::onset::{OnsetError, detect_onsets};
 use crate::io::{WavFormat, WavSpec};
 
 /// The protocol classes, in the internal class order (`N_CLASSES`), plus `other`.
@@ -115,7 +115,7 @@ impl From<OnsetError> for BackendError {
 pub trait DetectorBackend {
     /// The hits of one track and, optionally, its candidate list.
     fn detect(&self, x: &[f32], sr: u32, role: &str)
-        -> Result<(Vec<DetectedHit>, Option<CandidateList>), BackendError>;
+    -> Result<(Vec<DetectedHit>, Option<CandidateList>), BackendError>;
 }
 
 /// The built-in DSP detector (the default): [`detect_onsets`] with the role's parameters.
@@ -218,12 +218,12 @@ pub fn validate_response(
     file_len_s: f64,
     duration_s: f64,
 ) -> Result<Validated, BackendError> {
-    if let Some(p) = response.protocol {
-        if p != 1 {
-            return Err(BackendError::Protocol(format!(
-                "plugin speaks protocol {p}, this app speaks protocol 1"
-            )));
-        }
+    if let Some(p) = response.protocol
+        && p != 1
+    {
+        return Err(BackendError::Protocol(format!(
+            "plugin speaks protocol {p}, this app speaks protocol 1"
+        )));
     }
     if let Some(e) = &response.error {
         return Err(BackendError::Plugin(e.clone()));
@@ -437,19 +437,19 @@ impl ExternalDetector {
         }
         let response: PluginResponse =
             serde_json::from_str(&lines[0]).map_err(|e| BackendError::Json(format!("{}: {e}", self.id)))?;
-        if let Some(status) = status {
-            if status != 0 {
-                let tail = stderr_tail(&stderr);
-                return Err(BackendError::Process(format!(
-                    "{id} exited with {status}{}",
-                    if tail.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {tail}")
-                    },
-                    id = self.id
-                )));
-            }
+        if let Some(status) = status
+            && status != 0
+        {
+            let tail = stderr_tail(&stderr);
+            return Err(BackendError::Process(format!(
+                "{id} exited with {status}{}",
+                if tail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {tail}")
+                },
+                id = self.id
+            )));
         }
         validate_response(&response, file_len_s, file_len_s)
     }

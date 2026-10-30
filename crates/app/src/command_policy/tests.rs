@@ -1,4 +1,4 @@
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::*;
 use crate::api;
@@ -21,11 +21,13 @@ fn m(v: Value) -> Map<String, Value> {
 #[test]
 fn check_args_names_the_key_and_the_type() {
     let row = api::find("events_edit").unwrap();
-    assert!(check_args(
-        row,
-        &m(json!({"sid": "a", "name": "n", "ops": [{"op": "add", "t": 1}]}))
-    )
-    .is_ok());
+    assert!(
+        check_args(
+            row,
+            &m(json!({"sid": "a", "name": "n", "ops": [{"op": "add", "t": 1}]}))
+        )
+        .is_ok()
+    );
     for (bad, text) in [
         (json!({"name": "n", "ops": []}), "missing argument `sid`"),
         (
@@ -42,10 +44,12 @@ fn check_args_names_the_key_and_the_type() {
         assert_eq!(e.code, 400);
         assert!(e.message.contains(text), "{}", e.message);
     }
-    assert!(check_args(api::find("app_info").unwrap(), &m(json!({"x": 1})))
-        .unwrap_err()
-        .message
-        .contains("none"));
+    assert!(
+        check_args(api::find("app_info").unwrap(), &m(json!({"x": 1})))
+            .unwrap_err()
+            .message
+            .contains("none")
+    );
 }
 
 #[test]
@@ -85,9 +89,11 @@ fn the_defaults_are_pinned_once() {
 fn equal_defaults_on_the_bridge_and_the_policy() {
     let opts = crate::export::ExportOpts::from_args(&json!({})).unwrap();
     assert_eq!(opts.compensate, COMPENSATE_DEFAULT);
-    assert!(transport_args::play_window(None, None, None, None, None)
-        .unwrap()
-        .is_none());
+    assert!(
+        transport_args::play_window(None, None, None, None, None)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(transport_args::opt_f64(&json!({}), "start").unwrap(), None);
     assert_eq!(transport_args::opt_bool(&json!({}), "close"), None);
 }
