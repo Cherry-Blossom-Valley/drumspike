@@ -249,7 +249,7 @@ pub const TRACKS_REMOVE: Item = item("tracks_remove", "Remove Track", true);
 pub const SHORTCUTS: Item = item("shortcuts", "Keyboard Shortcuts", false);
 
 /// Every custom item (not the Open Recent and Window entries, not the system items Cut, Copy and so on).
-pub const SPEC: [Item; 107] = [
+pub const SPEC: [Item; 109] = [
     ABOUT,
     SETTINGS,
     QUIT,
