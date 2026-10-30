@@ -30,6 +30,10 @@ def frames_of(samples):
     return f"{frames // (FPS * 3600) % 100:02d}:{frames // (FPS * 60) % 60:02d}:{frames // FPS % 60:02d}:{frames % FPS:02d} tc"
 
 
+def bb_of(bar, beat, ticks=0):
+    return f"{bar}| {beat:2}| {ticks:4}"
+
+
 def set_playhead(app, t):
     app.evaluate("t => { S.playhead = t; drawHead(); }", t)
 
@@ -46,8 +50,19 @@ def test_bars_beats_and_timecode_at_three_positions(app, make_project, tmp_path)
             main = app.evaluate("() => document.querySelector('#timeDisplay').textContent")
             sub = app.evaluate("() => document.querySelector('#sampleDisplay').textContent")
             if mode == "barsbeats":
-                assert main == f"{bar}.{beat}", f"Bars|Beats at {t} s: {main}"
+                assert main == bb_of(bar, beat), f"Bars|Beats at {t} s: {main}"
                 assert sub == frames_of(samples), f"sub Timecode at {t} s: {sub}"
             else:
                 assert main == frames_of(samples), f"Timecode at {t} s: {main}"
-                assert sub == f"{bar}.{beat}", f"sub Bars|Beats at {t} s: {sub}"
+                assert sub == bb_of(bar, beat), f"sub Bars|Beats at {t} s: {sub}"
+
+
+def test_bars_beats_counts_at_the_default_map_without_a_tempo_map(app, make_project, tmp_path):
+    sid = open_project(app, build(make_project, tmp_path, name="CounterDefault"))
+    app.evaluate('() => setCounter("barsbeats")')
+    set_playhead(app, 3.0)   # 120 BPM 4/4: bar 2, beat 3
+    assert app.evaluate("() => document.querySelector('#timeDisplay').textContent") == bb_of(2, 3)
+    set_playhead(app, 2.25)   # half a beat into bar 2: 480 of 960 ticks
+    assert app.evaluate("() => document.querySelector('#timeDisplay').textContent") == bb_of(2, 1, 480)
+    set_playhead(app, 2.75)   # half a beat into bar 2 beat 2: 480 of 960 ticks
+    assert app.evaluate("() => document.querySelector('#timeDisplay').textContent") == bb_of(2, 2, 480)

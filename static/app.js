@@ -961,11 +961,21 @@ function counterRate() {
   const t = (S.selTrack && S.tracks[S.selTrack]) || (S.order.length && S.tracks[S.order[0]]);
   return t && t.sr ? t.sr : 48000;
 }
+function counterBBText(bar, beat, ticks) {   // #149: the Pro Tools Bars|Beats shape, 960 ticks per beat
+  return `${bar}| ${String(beat).padStart(2, " ")}| ${String(ticks).padStart(4, " ")}`;
+}
 function counterBarsBeats() {
+  const m = TM.map;
+  if (!m) {   // no map: the default one the export uses, 120 BPM 4/4, bar 1 at 0 s
+    const total = S.playhead * 2;   // quarter-note beats at 120 BPM
+    return counterBBText(Math.floor(total / 4) + 1, Math.floor(total % 4) + 1, Math.round((total % 1) * 960) % 960);
+  }
   const g = tmGrid();
-  if (!g || !g.t.length) return "1.1";
+  if (!g || !g.t.length) return counterBBText(1, 1, 0);
   const i = tmNearest(g.t, S.playhead);
-  return `${g.bar[i]}.${g.beat[i]}`;
+  const dt = (i + 1 < g.t.length ? g.t[i + 1] - g.t[i] : 0.5) || 0.5;
+  const ticks = Math.round((S.playhead - g.t[i]) / dt * 960);
+  return counterBBText(g.bar[i], g.beat[i], ((ticks % 960) + 960) % 960);
 }
 function counterTimecode() {
   const fps = 30, sr = counterRate();
@@ -988,7 +998,7 @@ function setCounter(mode) {   // View > Main Counter: "seconds", "samples", "bar
   if (!(mode in COUNTER_PAIRS)) return;
   SETTINGS().ui.counter = mode; saveSettings();
   FR.head[2] = FR.head[3] = null; invalidate(F.HEAD);
-  $("#timeDisplay").title = `Main counter (${mode}). Click: exchange the counters (View > Main Counter > Exchange Counters)`;
+  $("#timeDisplay").title = `Main counter (${mode}${mode === "timecode" ? ", 30 fps" : ""}). Click: exchange the counters (View > Main Counter > Exchange Counters)`;
   DSShell.sync();
 }
 function exchangeCounters() { setCounter(COUNTER_PAIRS[SETTINGS().ui.counter] || "seconds"); }
