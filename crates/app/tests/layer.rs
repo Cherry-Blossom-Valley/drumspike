@@ -945,4 +945,17 @@ fn export_layer_refuses_a_foreign_folder_at_the_target_without_touching_it() {
     let e = svc.export_layer_to(&sid, "k in", want.to_str()).unwrap_err();
     assert_eq!(e.code, 400);
     assert!(want.is_dir(), "the empty folder is left alone");
+    // a folder holding a foreign project document at the default target: refused, not deleted
+    let docs = exports.join("k in_layer.wav");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("Song.drumspike"), b"{\"format\": 1}").unwrap();
+    let e = svc.export_layer(&sid, "k in").unwrap_err();
+    assert_eq!(e.code, 400);
+    assert!(e.message.contains("the path is a folder"), "{e}");
+    assert_eq!(
+        std::fs::read(docs.join("Song.drumspike")).unwrap(),
+        b"{\"format\": 1}",
+        "the folder with the foreign document is untouched"
+    );
+    assert!(docs.is_dir());
 }

@@ -312,7 +312,7 @@ pub(crate) fn protected_files(g: &OpenProject) -> Vec<PathBuf> {
 /// The 400 for a render target that is a folder (and was not a recoverable leftover).
 fn folder_error(path: &Path) -> AppError {
     AppError::bad(format!(
-        "the path is a folder: {} — the render writes a file there; remove the folder or choose another file",
+        "the path is a folder: {}: the render writes a file there; remove the folder or choose another file",
         path.display()
     ))
 }
@@ -825,37 +825,32 @@ impl Service {
 
     /// The leftover of a failed layer render (campaign 0.9.6 S3, docs/review/test-campaign-0.9.6/117):
     /// a folder named like the target file plus a `<target>.drumspike` sidecar blocked every later
-    /// render with 400 "the path is a folder" until the folder was removed by hand. A folder at the
-    /// target that holds nothing or only `.drumspike` files is such a leftover: it is removed, so the
-    /// render can run (`true`). A folder with any other content belongs to the engineer: it stays
-    /// exactly as it was and the render answers 400 with a message that says so (`false`).
+    /// render with 400 "the path is a folder" until the folder was removed by hand. Only the proven
+    /// leftover shape is cleared: an empty folder at the target with the `<target>.drumspike`
+    /// sidecar file beside it (`true`; the sidecar goes with it). Every other folder at the target
+    /// belongs to the engineer: it stays exactly as it was and the render answers 400 with a
+    /// message that says so (`false`).
     fn clear_render_leftover(path: &Path) -> bool {
         if !path.is_dir() {
             return false;
         }
-        let Ok(entries) = std::fs::read_dir(path) else {
-            return false;
-        };
         let name = path
             .file_name()
             .map_or(String::new(), |n| n.to_string_lossy().into_owned());
         let sidecar = path.with_file_name(format!("{name}{DOC_EXT}"));
-        let mut saw = false;
-        for e in entries.flatten() {
-            if !e.path().is_file() || !e.file_name().to_string_lossy().ends_with(DOC_EXT) {
-                return false; // a subfolder or another file type: foreign content, left alone
-            }
-            saw = true;
+        if !sidecar.is_file() {
+            return false; // without the sidecar the folder is not provably a render leftover
         }
-        if !saw && !sidecar.is_file() {
-            return false; // an empty folder without the sidecar is not provably a render leftover
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return false;
+        };
+        if entries.count() > 0 {
+            return false; // any content: foreign, left alone
         }
-        if std::fs::remove_dir_all(path).is_err() {
+        if std::fs::remove_dir(path).is_err() {
             return false;
         }
-        if sidecar.is_file() {
-            let _ = std::fs::remove_file(&sidecar);
-        }
+        let _ = std::fs::remove_file(&sidecar);
         true
     }
 
