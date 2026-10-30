@@ -287,6 +287,8 @@
     overview: () => setOverview(!S.overviewOn),   // #169: View > Show Overview
     counter_seconds: () => setCounter("seconds"),
     counter_samples: () => setCounter("samples"),
+    counter_barsbeats: () => setCounter("barsbeats"),   // #149
+    counter_timecode: () => setCounter("timecode"),   // #149
     counter_exchange: () => exchangeCounters(),
     play_stop: () => playStop(),
     half_speed: () => halfSpeedPlayStop(),   // P3-20b: Transport > Half-Speed Play
