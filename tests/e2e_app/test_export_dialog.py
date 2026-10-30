@@ -15,6 +15,7 @@ from playwright.sync_api import expect
 
 from app_support import ex_confirm_tempo, ex_run, invoke, menu, open_project, wait_until
 from test_shell import with_hits
+from test_tempo_map import hit_train, set_hits
 
 
 def project_with_hits(app, make_project, **kw):
@@ -564,3 +565,69 @@ def test_a_project_with_a_set_map_exports_without_the_notice(app, make_project):
     r = invoke(app, "export_all", sid=sid, dest=str(folder / "Ref"))
     assert r["warnings"] == []                                               # and the reply carries no warning
     app.click("#exCancel")
+
+
+def test_the_notice_names_the_real_places_and_set_tempo_opens_detect_tempo(app, make_project):
+    # the coordinator's send-back: the notice must name the real places (no "Tempo panel") and offer Set Tempo…,
+    # which closes the notice without writing and opens Track > Detect Tempo
+    folder = make_project(seconds=62.0)
+    sid = open_project(app, folder)
+    kick, snare = hit_train()
+    set_hits(app, sid, "Kick In", kick)
+    set_hits(app, sid, "Snare Top", snare)
+    app.evaluate("async () => { await loadProject(); }")
+    app.wait_for_function("() => S.events['Kick In'] && S.events['Kick In'].length === 48")
+    menu(app, "export")
+    app.click("#exGo")
+    expect(app.locator("#confirmModal")).to_be_visible()
+    expect(app.locator("#confirmTitle")).to_have_text("No tempo set")
+    expect(app.locator("#confirmMsg")).to_contain_text("Track > Detect Tempo")
+    expect(app.locator("#confirmMsg")).to_contain_text("File > Import Tempo Map")
+    expect(app.locator("#confirmMsg")).to_contain_text("Tempo ruler")
+    expect(app.locator('#confirmActions [data-act="set_tempo"]')).to_have_text("Set Tempo…")
+    app.locator('#confirmActions [data-act="set_tempo"]').click()
+    expect(app.locator("#confirmModal")).to_be_hidden()                      # the notice closes without writing
+    app.wait_for_function("() => !document.querySelector('#tempoModal').classList.contains('hidden')",
+                          timeout=60000)                                     # Track > Detect Tempo opens
+    expect(app.locator("#stMsg")).to_contain_text("tempo detected")          # the export was cancelled: no export message
+    assert exports(Path(folder)) == []
+    app.click("#tempoCancel")
+
+
+def test_the_answer_is_per_project_a_second_default_map_project_asks_again(app, make_project):
+    sid, folder = project_with_hits(app, make_project)
+    menu(app, "export")
+    run_and_close(app)                                                       # Export anyway: the answer holds for THIS project
+    assert len(exports(folder)) == 4
+    sid2, folder2 = project_with_hits(app, make_project)                     # a second project, also the default map
+    menu(app, "export")
+    app.click("#exGo")
+    expect(app.locator("#confirmModal")).to_be_visible()                     # the notice asks again (per project, not per page)
+    app.locator('#confirmActions [data-act="anyway"]').click()
+    wait_until(lambda: len(exports(folder2)) == 4, msg="the export")
+    app.click("#exCancel")
+    open_project(app, folder)                                                # back to the first project: it asks again too
+    menu(app, "export")
+    app.click("#exGo")
+    expect(app.locator("#confirmModal")).to_be_visible()
+    app.locator('#confirmActions [data-act="anyway"]').click()
+    wait_until(lambda: len(exports(folder)) == 4, msg="the export")
+    app.click("#exCancel")
+
+
+def test_export_again_on_the_default_map_asks_and_cancel_writes_no_file(app, make_project):
+    sid, folder = project_with_hits(app, make_project)
+    menu(app, "export")
+    app.locator("#exSpikes").uncheck()                                       # MIDI only, so Export Again writes MIDI
+    run_and_close(app)                                                       # the first export answers the notice, the shape is recorded
+    assert exports(folder) == ["Kick In_spike.mid", "Snare Top_spike.mid"]   # the recorded shape: per-track MIDI
+    clear_exports(folder)
+    app.evaluate("async () => { await loadProject(); }")                     # a fresh open: the answer is gone
+    app.wait_for_function("() => S.loaded > 0")
+    menu(app, "export_again", wait=False)                                    # no dialog — but the notice asks before it writes
+    expect(app.locator("#confirmModal")).to_be_visible()
+    expect(app.locator("#confirmTitle")).to_have_text("No tempo set")
+    app.locator('#confirmActions [data-act="cancel"]').click()
+    expect(app.locator("#stMsg")).to_contain_text("export cancelled")
+    assert exports(folder) == []                                             # Cancel writes no file
+    expect(app.locator("#exportModal")).to_be_hidden()

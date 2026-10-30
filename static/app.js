@@ -5703,7 +5703,7 @@ const EX = { open: false, scope: "all", selected: null, midi: true, spikes: true
   /* #172: the export-finished event for the e2e tests: the count of the exports this page has finished */
   destOk: true, replace: 0, busy: false, done: 0, drag: { midi: null, spikes: null }, timer: null, dragSeq: 0, dragChain: Promise.resolve(),
   infoSeq: 0, lastFile: null, ran: false,
-  /* #151: the default-tempo notice asks once per page session (the answer "Export anyway" is kept) */
+  /* #151: the default-tempo answer holds per project (loadProject resets it when a project opens) */
   tempoAck: false };
 function exTrackSets() {   // the tracks the options name: the ones that export, and the skipped ones with the reason
   const pool = EX.scope === "selected" ? (EX.selected && S.tracks[EX.selected] ? [EX.selected] : []) : S.order.slice();
@@ -5869,20 +5869,25 @@ function exSummary(r) {   // "exported 2 MIDI and 2 spike files to Exports/ in t
   const where = EX.def && r.dest === EX.def ? "Exports/ in the project folder" : r.dest;   // P4-31: export again runs with the dialog closed (EX.def may be empty)
   return `exported ${what} to ${where} (${(r.elapsed_ms / 1000).toFixed(1)} s)`;
 }
+/* #151: the default-tempo notice, shared by the Export dialog and File > Export Again: a MIDI export of a
+   project whose tempo map is the default map would use 120 BPM. "anyway" lets the export write; "set_tempo"
+   opens Track > Detect Tempo without writing; "cancel" writes nothing. A tempo_map_get that fails never asks. */
+async function askDefaultTempo() {
+  let def = false;
+  try { def = !!(await B.tempoMapGet(S.sid)).default; } catch (e) { return "anyway"; }
+  if (!def) return "anyway";
+  return await askConfirm({ title: "No tempo set",
+    msg: "The export uses the default 120 BPM. Set the tempo first: Track > Detect Tempo, File > Import Tempo Map, or the Tempo ruler. Or export anyway.",
+    buttons: [{ label: "Cancel", act: "cancel" }, { label: "Set Tempo…", act: "set_tempo" }, { label: "Export anyway", act: "anyway", cls: "primary" }] });
+}
 async function exRun() {
   if (EX.busy || $("#exGo").disabled) return;
   EX.busy = true;   // set before the notice: while it asks, exClose (Escape) is refused
   /* #151: a MIDI export with no tempo set uses the default 120 BPM: ask before the first export writes */
   if (EX.midi && !EX.tempoAck) {
-    let def = false;
-    try { def = !!(await B.tempoMapGet(S.sid)).default; } catch (e) { /* no answer: no notice */ }
-    if (def) {
-      const a = await askConfirm({ title: "No tempo set",
-        msg: "The export uses the default 120 BPM. Set the tempo in the Tempo panel first, or export anyway.",
-        buttons: [{ label: "Cancel", act: "cancel" }, { label: "Export anyway", act: "anyway", cls: "primary" }] });
-      if (a !== "anyway") { EX.busy = false; setMsg("export cancelled"); return; }   // no file is written
-    }
-    EX.tempoAck = true;   // the answer holds for the session: the next export does not ask again
+    const a = await askDefaultTempo();
+    if (a !== "anyway") { EX.busy = false; setMsg("export cancelled"); if (a === "set_tempo") detectTempo(); return; }   // no file is written
+    EX.tempoAck = true;   // the answer holds for this project: the next export does not ask again
   }
   const o = exOpts(true), n = o.tracks.length;
   EX.ran = true; $("#exCancel").textContent = "Close"; exRender();
@@ -5944,6 +5949,12 @@ async function exportAgain() {   // P4-31: File > Export Again: the last export 
   if (last.scope === "selected" && last.track) o.tracks = [last.track];   // the track of the last export, not the selection of now
   if (last.dest) o.dest = last.dest;
   const n = (o.tracks || S.order).length;
+  /* #151: Export Again asks the same notice before it writes (the dialog path sets EX.tempoAck the same way) */
+  if ((o.formats || []).includes("midi") && !EX.tempoAck) {
+    const a = await askDefaultTempo();
+    if (a !== "anyway") { setMsg("export cancelled"); if (a === "set_tempo") detectTempo(); return; }
+    EX.tempoAck = true;
+  }
   exAgainBusy = true;
   try {
     await flushEvents();   // the service writes from its own copy of the events
@@ -7159,7 +7170,7 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
 (async function boot() {
   persistInit({ edIdle });   // R17 step 2: persist waits for the edit queue through the injected hook (edit.js owns edIdle since step 3)
   editInit({ pushEvents, voidHitDrag: name => { if (hitDrag && hitDrag.track === name) hitDrag = null; } });   // R17 step 3: edit.js flushes the writes of other steps through the injected hook; voidHitDrag is the input layer's (a replaced hit list voids an in-flight drag)
-  sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks
+  sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; }, exTempoReset: () => { EX.tempoAck = false; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks; #151: the default-tempo answer is per project
   tmInit(); measureGeo(); geoObserve();   // P4-8: the map rulers; P3-14d: the geometry once now, then from the ResizeObserver
   setupUpload(); setupGlobal(); setupInfoLine(); staleSetup();
   if (B.onDirty) {   // P3-4a: the service tells when a project becomes dirty or clean
