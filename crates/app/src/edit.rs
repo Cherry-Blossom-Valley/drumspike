@@ -178,10 +178,11 @@ pub fn apply_ops(
                     hit["orig"] = json!(orig);
                 }
                 // P4-40a: `keep` {..} gives back the other fields the deleted hit had (`rise`, `rise_db`, ...): the undo of a
-                // delete restores the hit as it was, so the project can be the saved one again
+                // delete restores the hit as it was, so the project can be the saved one again. #154: the stored `id`
+                // comes back too — the undo of a delete used to lose it, so the state was not the one before the step.
                 if let Some(keep) = o.get("keep").and_then(Value::as_object) {
                     for (k, v) in keep {
-                        if !["t", "v", "added", "orig", "id"].contains(&k.as_str()) && hit.get(k).is_none() {
+                        if !["t", "v", "added", "orig"].contains(&k.as_str()) && hit.get(k).is_none() {
                             hit[k] = v.clone();
                         }
                     }

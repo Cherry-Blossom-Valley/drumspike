@@ -290,9 +290,9 @@ function hitWas(e) {
   return { orig: e.orig === undefined ? null : e.orig, edited: !!e.edited, cut: !!e.cut, bleed: !!e.bleed, filtered: !!e.filtered,
     learned: !!e.learned, roll: !!e.roll, flam: !!e.flam, rescue: !!e.rescue, rise: e.rise !== undefined };
 }
-function delKeep(raw) {   // P4-40a: the stored fields of a deleted hit besides t, v, orig and added (the page's own list drops some, e.g. rise_db); the undo gives them back
+function delKeep(raw) {   // P4-40a: the stored fields of a deleted hit besides t, v, orig and added (the page's own list drops some, e.g. rise_db); the undo gives them back. #154: the stored `id` too, so the undo of a delete restores the hit byte-identically
   const out = {};
-  for (const [k, v] of Object.entries(raw || {})) if (!["t", "v", "orig", "added", "id"].includes(k)) out[k] = v;
+  for (const [k, v] of Object.entries(raw || {})) if (!["t", "v", "orig", "added"].includes(k)) out[k] = v;
   return Object.keys(out).length ? out : undefined;
 }
 function edDelete(trk, id) {   // delete the hit with this id (the key, the right-click)
