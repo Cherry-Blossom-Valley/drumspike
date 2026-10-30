@@ -11,8 +11,8 @@ fn ids_are_unique_and_do_not_use_the_entry_prefixes() {
         && ![RECENT_ID, WINDOW_ID, PROJECT_ID, FOLLOW_ID, FOLLOW_TRACK_ID].contains(&i.id)));
     assert_eq!(
         SPEC.len(),
-        107,
-        "#169 adds Show Overview, Add Current and Organize; #157 adds Other Mics Under Hit; #158 adds Set Marker at Selection, Next Marker, Previous Marker, Zoom Toggle, Audition Hit, Select Previous Track and Select Next Track; #150 adds Next and Previous Doubtful Hit; P4-wf10 adds Suspend Follow when Editing; #436 adds Stop Returns to Start; P4-31 adds Export Again, P4-40f adds Velocity Lane, P4-40g adds Markers Ruler, P4-40a adds Undo History, P4-39a adds Remove Track, P4-39d adds Set Bar 1 at Playhead, P3-20a adds three Waveform Zoom and five Nudge Value items, P3-20b Half-Speed Play, P4-8 Import Tempo Map, Detect Tempo, three rulers and the grid, P4-6a Learn This, Not This, Learn Filter and Forget Examples, P4-36 Forget This; P4-30 drops Import and Export Project Zip, Export All, Export MIDI and Export Spikes for Export and Export Selected Tracks; #468 adds Set Bar 1 at Audio Start; #175 adds Active Hits Only and All Found Hits (Tab Moves To)"
+        109,
+        "#169 adds Show Overview, Add Current and Organize; #157 adds Other Mics Under Hit; #158 adds Set Marker at Selection, Next Marker, Previous Marker, Zoom Toggle, Audition Hit, Select Previous Track and Select Next Track; #150 adds Next and Previous Doubtful Hit; P4-wf10 adds Suspend Follow when Editing; #436 adds Stop Returns to Start; P4-31 adds Export Again, P4-40f adds Velocity Lane, P4-40g adds Markers Ruler, P4-40a adds Undo History, P4-39a adds Remove Track, P4-39d adds Set Bar 1 at Playhead, P3-20a adds three Waveform Zoom and five Nudge Value items, P3-20b Half-Speed Play, P4-8 Import Tempo Map, Detect Tempo, three rulers and the grid, P4-6a Learn This, Not This, Learn Filter and Forget Examples, P4-36 Forget This; P4-30 drops Import and Export Project Zip, Export All, Export MIDI and Export Spikes for Export and Export Selected Tracks; #468 adds Set Bar 1 at Audio Start; #149 adds Bars|Beats and Timecode (30 fps); #175 adds Active Hits Only and All Found Hits (Tab Moves To)"
     );
 }
 
@@ -307,7 +307,7 @@ fn the_key_table_parses_and_no_key_is_in_two_commands() {
     assert_eq!(rows, keymap());
     let problems = keymap_problems(&rows);
     assert!(problems.is_empty(), "static/keymap.js: {problems:#?}");
-    assert_eq!(rows.len(), 113); // 105 menu items (#169: Show Overview, Add Current, Organize) (#157: Other Mics Under Hit; #158: Set Marker at Selection, Next Marker, Previous Marker, Zoom Toggle, Audition Hit, Select Previous Track, Select Next Track; #150: Next and Previous Doubtful Hit; P4-wf10: Suspend Follow when Editing; P4-31: Export Again; P4-40f: Velocity Lane; P4-40g: Markers Ruler; P4-40a: Undo History) (P4-39a: Remove Track; P4-39d: Set Bar 1 at Playhead; #468: Set Bar 1 at Audio Start) (P4-36: Forget This) (P4-30: three fewer) (P4-8: six more; P4-6a: four more) (#436: Stop Returns to Start) (#175: two more, Tab Moves To) and 13 keys without a menu item (P4-40g: Set Marker at Selection, Next Marker, Previous Marker; P4-40d: Audition Hit) (P3-20a: two more, Nudge Value Up and Down; P3-20b: Half-Speed Play)
+    assert_eq!(rows.len(), 115); // 107 menu items (#169: Show Overview, Add Current, Organize) (#157: Other Mics Under Hit; #158: Set Marker at Selection, Next Marker, Previous Marker, Zoom Toggle, Audition Hit, Select Previous Track, Select Next Track; #150: Next and Previous Doubtful Hit; P4-wf10: Suspend Follow when Editing; P4-31: Export Again; P4-40f: Velocity Lane; P4-40g: Markers Ruler; P4-40a: Undo History) (P4-39a: Remove Track; P4-39d: Set Bar 1 at Playhead; #468: Set Bar 1 at Audio Start) (P4-36: Forget This) (P4-30: three fewer) (P4-8: six more; P4-6a: four more) (#436: Stop Returns to Start) (#149: Bars|Beats, Timecode) (#175: two more, Tab Moves To) and 15 keys without a menu item (P4-40g: Set Marker at Selection, Next Marker, Previous Marker; P4-40d: Audition Hit) (P3-20a: two more, Nudge Value Up and Down; P3-20b: Half-Speed Play) (#175: two more, Active Hits Only and All Found Hits)
 }
 
 /// #207, owner rule of 2026-10-21: no key of the table is a macOS standard shortcut, in either preset, not
@@ -652,6 +652,8 @@ fn items_that_need_no_project() {
             "overview",
             "counter_seconds",
             "counter_samples",
+            "counter_barsbeats",
+            "counter_timecode",
             "counter_exchange",
             "tab_active",
             "tab_all",
@@ -694,6 +696,8 @@ fn check_items_are_snap_click_info_line_and_the_radio_modes() {
             "overview",
             "counter_seconds",
             "counter_samples",
+            "counter_barsbeats",
+            "counter_timecode",
             "tab_active",
             "tab_all",
             "ruler_tempo",
@@ -809,7 +813,9 @@ fn check_states_follow_the_page_state() {
         [
             ("info_line", false),
             ("counter_seconds", false),
-            ("counter_samples", true)
+            ("counter_samples", true),
+            ("counter_barsbeats", false),
+            ("counter_timecode", false)
         ]
     );
     // P3-20a: exactly one Nudge Value item is checked; an unknown value leaves the items alone
