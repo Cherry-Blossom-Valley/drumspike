@@ -284,9 +284,11 @@ def test_the_key_table_has_the_new_rows_and_the_dot_key(app):
     rows = app.evaluate("""() => Object.fromEntries(DSKeys.COMMANDS.filter(c => /^(info_line|counter_)/.test(c.id))
         .map(c => [c.id, [c.path, c.title, c.menu_key, c.page_keys]]))""")
     assert rows == {"info_line": ["View", "Show Info Line", "Cmd+I", []],
+                    "counter_barsbeats": ["View > Main Counter", "Bars|Beats", None, []],
+                    "counter_timecode": ["View > Main Counter", "Timecode (30 fps)", None, []],
                     "counter_seconds": ["View > Main Counter", "Seconds", None, []],
                     "counter_samples": ["View > Main Counter", "Samples", None, []],
-                    "counter_exchange": ["View > Main Counter", "Exchange Counters", None, []]}   # P3-19: the key . is a nudge key in the default preset
+                    "counter_exchange": ["View > Main Counter", "Exchange Counters", None, []]}   # P3-19: the key . is a nudge key in the default preset; #149: Bars|Beats and Timecode (30 fps)
     assert app.evaluate("() => DSKeys.problems(DSKeys.COMMANDS)") == []
 
 
