@@ -951,24 +951,61 @@ function spSyncView() {   // input while a strip shows: the view of this moment 
 }
 for (const t of ["pointerdown", "mousedown", "mousemove", "wheel", "click", "dblclick", "contextmenu", "keydown"])
   window.addEventListener(t, spSyncView, { capture: true, passive: true });
-/* P3-14b: counters. Main counter: seconds with 6 decimals, or samples; the sub counter shows the other one. The sample
-   rate is the one of the selected track, else of the first track. */
+/* P3-14b: counters. Main counter: seconds with 6 decimals, samples, Bars|Beats (bar.beat of the
+   tempo map, #149) or Timecode (HH:MM:SS:FF at 30 frames per second from the sample position,
+   #149); the sub counter shows the other format of the pair (seconds<->samples,
+   Bars|Beats<->Timecode). The sample rate is the one of the selected track, else of the first
+   track. The Timecode frame rate is 30, non drop: frames = floor(t * 30) over the whole project. */
+const COUNTER_PAIRS = { seconds: "samples", samples: "seconds", barsbeats: "timecode", timecode: "barsbeats" };
 function counterRate() {
   const t = (S.selTrack && S.tracks[S.selTrack]) || (S.order.length && S.tracks[S.order[0]]);
   return t && t.sr ? t.sr : 48000;
 }
+function counterBBText(bar, beat, ticks) {   // #149: the Pro Tools Bars|Beats shape, 960 ticks per beat
+  return `${bar}| ${String(beat).padStart(2, " ")}| ${String(ticks).padStart(4, " ")}`;
+}
+function counterBarsBeats() {
+  const m = TM.map;
+  if (!m) {   // no map: the default one the export uses, 120 BPM 4/4, bar 1 at 0 s
+    const total = S.playhead * 2;   // quarter-note beats at 120 BPM
+    return counterBBText(Math.floor(total / 4) + 1, Math.floor(total % 4) + 1, Math.round((total % 1) * 960) % 960);
+  }
+  const g = tmGrid();
+  if (!g || !g.t.length) return counterBBText(1, 1, 0);
+  let i = tmLower(g.t, S.playhead) - 1;   // the beat at or before the playhead (#149)
+  if (i < 0) return counterBBText(1, 1, 0);   // before bar 1: clamped to 1| 1| 000
+  // the grid times accumulate (tmGrid), so a playhead on a beat can sit a hair below its
+  // grid time: treat anything within a microsecond of the next beat as that beat (#149)
+  if (i + 1 < g.t.length && g.t[i + 1] - S.playhead * 1 <= 1e-6) i++;
+  const dt = (i + 1 < g.t.length ? g.t[i + 1] - g.t[i] : 0.5) || 0.5;
+  const ticks = ((Math.round((S.playhead - g.t[i]) / dt * 960) % 960) + 960) % 960;
+  return counterBBText(g.bar[i], g.beat[i], Math.max(0, ticks));
+}
+function counterTimecode() {
+  const fps = 30, sr = counterRate();
+  const t = Math.round(S.playhead * sr) / sr;   // the sample position of the playhead (#149)
+  let frames = Math.floor(t * fps);
+  const ff = frames % fps; frames = Math.floor(frames / fps);
+  const ss = frames % 60; frames = Math.floor(frames / 60);
+  const mm = frames % 60, hh = Math.floor(frames / 60);
+  const two = n => String(n).padStart(2, "0");
+  return `${two(hh)}:${two(mm)}:${two(ss)}:${two(ff)} tc`;
+}
 function counterTexts() {
   const secs = `${fmt(S.playhead, 6)} s`, smp = `${Math.round(S.playhead * counterRate())} smp`;
-  return SETTINGS().ui.counter === "samples" ? [smp, secs] : [secs, smp];
+  const bb = counterBarsBeats(), tc = counterTimecode();
+  const texts = { seconds: secs, samples: smp, barsbeats: bb, timecode: tc };
+  const main = texts[SETTINGS().ui.counter] || secs;
+  return [main, texts[COUNTER_PAIRS[SETTINGS().ui.counter] || "samples"]];
 }
-function setCounter(mode) {   // View > Main Counter: "seconds" or "samples"
-  if (mode !== "seconds" && mode !== "samples") return;
+function setCounter(mode) {   // View > Main Counter: "seconds", "samples", "barsbeats" or "timecode" (#149)
+  if (!(mode in COUNTER_PAIRS)) return;
   SETTINGS().ui.counter = mode; saveSettings();
   FR.head[2] = FR.head[3] = null; invalidate(F.HEAD);
-  $("#timeDisplay").title = `Main counter (${mode}). Click: exchange the counters (View > Main Counter > Exchange Counters)`;
+  $("#timeDisplay").title = `Main counter (${mode}${mode === "timecode" ? ", 30 fps" : ""}). Click: exchange the counters (View > Main Counter > Exchange Counters)`;
   DSShell.sync();
 }
-function exchangeCounters() { setCounter(SETTINGS().ui.counter === "seconds" ? "samples" : "seconds"); }
+function exchangeCounters() { setCounter(COUNTER_PAIRS[SETTINGS().ui.counter] || "seconds"); }
 
 /* ---------------- canvas sizing ---------------- */
 function laneWidth() { return GEO.laneW; }
