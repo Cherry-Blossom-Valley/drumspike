@@ -244,6 +244,18 @@ pub static REGISTRY: &[CommandSpec] = &[
     ),
     cmd("about_info", "Data of the About dialog", &[], OBJ, Read, Window, Quick),
     cmd(
+        "feedback_send",
+        "Post the previewed feedback report to the CBV feedback gateway (#164)",
+        &[
+            req("payload", Ty::Obj, "The exact JSON the form previewed: kind, title, description, steps?, meta"),
+            opt("url", Ty::Str, "Gateway URL; the default is the CBV feedback gateway"),
+        ],
+        OBJ,
+        App,
+        Window,
+        Quick,
+    ),
+    cmd(
         "about_third_party",
         "Text of the third-party licence list",
         &[],

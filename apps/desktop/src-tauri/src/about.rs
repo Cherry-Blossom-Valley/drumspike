@@ -49,11 +49,13 @@ pub fn open_link(id: String) -> Result<Value, AppError> {
     }
 }
 
-/// The answer of `about_info`: `name`, `version` and `core_version` (main is model-free, #281 D16).
+/// The answer of `about_info`: `name`, `version`, `build_sha` and `core_version` (main is
+/// model-free, #281 D16). `build_sha` comes from the build (`DS_BUILD_SHA=...`), else `dev`.
 pub fn about_value(version: &str) -> Value {
     json!({
         "name": "Drum Spike",
         "version": version,
+        "build_sha": option_env!("DS_BUILD_SHA").unwrap_or("dev"),
         "core_version": drumspike_core::VERSION,
     })
 }
@@ -109,6 +111,7 @@ mod tests {
         assert_eq!(v["name"], "Drum Spike");
         assert_eq!(v["version"], "9.8.7");
         assert_eq!(v["core_version"], drumspike_core::VERSION);
+        assert!(v["build_sha"].is_string(), "build_sha: the build sets DS_BUILD_SHA, else dev");
         assert!(
             v.get("notice").is_none(),
             "the model notice is gone with the model (#281 D16)"

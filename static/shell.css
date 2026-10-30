@@ -20,3 +20,15 @@
 #relinkAmbiguous .rlName, #relinkMissing .rlName { font-weight: 600; }
 #relinkAmbiguous button.rlPick { display: block; margin: 3px 0 0 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 #relinkMissing .rlDiff { color: #e0a13c; margin-left: 12px; }
+
+/* #164 (part 2 of #153): the Feedback button and its form */
+#feedbackBtn { margin-left: auto; flex: none; }
+.fbBox { width: 620px; max-width: 92vw; max-height: 92vh; overflow-y: auto; }
+.fbBox .fbField { display: flex; flex-direction: column; gap: 3px; margin: 8px 0; }
+.fbBox .fbField label { font-size: 11px; color: var(--muted, #8a93a6); }
+.fbBox .fbField input, .fbBox .fbField textarea { background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 4px; padding: 5px 7px; font: inherit; resize: vertical; }
+.fbBox #fbPreview { background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 8px; max-height: 140px; overflow: auto; font-size: 11px; white-space: pre-wrap; }
+.fbBox #fbMsg { min-height: 16px; }
+.fbBox #fbMsg:not(:empty) { color: #e0a13c; }

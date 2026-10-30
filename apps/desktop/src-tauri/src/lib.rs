@@ -154,6 +154,15 @@ async fn app_info(svc: State<'_, Service>) -> Result<Value, AppError> {
 ///
 /// # Errors
 ///
+/// Errors with the private-word guard of the payload (400) or when the feedback gateway cannot be reached or refuses.
+#[tauri::command]
+async fn feedback_send(svc: State<'_, Service>, payload: Value, url: Option<String>) -> Result<Value, AppError> {
+    blocking(&svc, "feedback_send", move |s| s.feedback_send(&payload, url.as_deref())).await
+}
+
+///
+/// # Errors
+///
 /// Errors when the project folder cannot be opened (missing, unreadable or not a Drum Spike project) or the blocking pool fails.
 #[tauri::command(rename_all = "snake_case")]
 async fn project_open(svc: State<'_, Service>, path: String, read_only: Option<bool>) -> Result<Value, AppError> {
@@ -660,6 +669,7 @@ const STARTUP_SCRIPT: &str = "requestAnimationFrame(() => { \
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         app_info,
+        feedback_send,
         about::about_info,
         about::about_third_party,
         about::open_link,
@@ -774,6 +784,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         app_info,
+        feedback_send,
         about::about_info,
         about::about_third_party,
         about::open_link,
