@@ -10,7 +10,7 @@ from pathlib import Path
 
 from playwright.sync_api import expect
 
-from app_support import invoke, menu, open_project, shot_dir, wait_until
+from app_support import ex_confirm_tempo, invoke, menu, open_project, shot_dir, wait_until
 
 
 def sha(path):
@@ -44,6 +44,7 @@ def test_the_export_dialog_counts_the_files_it_replaces_and_asks_no_second_quest
     app.click("#exportAllBtn")
     expect(app.locator("#exReplace")).to_have_text("No file will be replaced.")
     app.click("#exGo")                                                      # nothing to replace
+    ex_confirm_tempo(app)
     wait_until(lambda: invoke(app, "export_existing", sid=sid)["count"] == 4, msg="the first export")
     # the first export has ended (its message), then the message goes: both exports write the same text, so the second
     # wait must not see the first one's (CI 38681872052, x86-mac)
@@ -55,7 +56,8 @@ def test_the_export_dialog_counts_the_files_it_replaces_and_asks_no_second_quest
     app.click("#exCancel")
     app.click("#exportAllBtn")                                              # files exist: the dialog says so
     expect(app.locator("#exReplace")).to_have_text("4 files will be replaced")
-    app.click("#exGo")                                                      # no confirm dialog
+    app.click("#exGo")                                                      # no confirm dialog (the tempo notice was answered)
+    ex_confirm_tempo(app)
     expect(app.locator("#stMsg")).to_contain_text("exported 2 MIDI and 2 spike files")
     expect(app.locator("#confirmModal")).to_be_hidden()
     wait_until(lambda: mid.stat().st_mtime > 1, msg="the second export writes the file again")
@@ -70,6 +72,7 @@ def test_export_from_the_menu_opens_the_dialog(app, make_project):
     menu(app, "export")
     expect(app.locator("#exportModal")).to_be_visible()
     app.click("#exGo")
+    ex_confirm_tempo(app)
     wait_until(lambda: invoke(app, "export_existing", sid=sid)["count"] == 4, msg="the first export")
 
 

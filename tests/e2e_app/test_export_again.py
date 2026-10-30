@@ -31,10 +31,30 @@ def press_again(app):
     """#226: the Export Again key through the native menu arrives late under load, and the stale
     "exported ..." message of an earlier export already satisfies wait_export (the check then saw an
     empty folder). Wait for the export-finished event first (#172: EX.done), the same signal ex_run
-    uses; only then is the message and the folder the result of THIS key press."""
+    uses; only then is the message and the folder the result of THIS key press.
+    #151: on the default map Export Again asks the default-tempo notice before it writes; the helper
+    answers Export anyway (a set map never asks, and the gate test drives the notice itself)."""
     done0 = app.evaluate("() => EX.done")
     app.keyboard.press("Alt+Meta+E")
+    app.wait_for_function(
+        """d0 => (!document.querySelector('#confirmModal').classList.contains('hidden')
+             && document.querySelector('#confirmActions [data-act="anyway"]')) || EX.done > d0""",
+        arg=done0, timeout=60000)
+    if not app.evaluate("() => document.querySelector('#confirmModal').classList.contains('hidden')"):
+        app.locator('#confirmActions [data-act="anyway"]').click()
     app.wait_for_function("d0 => EX.done > d0", arg=done0, timeout=60000)
+
+
+def answer_tempo_notice(app):
+    """#151: Export Again on the default map asks the default-tempo notice before it writes; the
+    tests that reload the project between the export and Export Again answer Export anyway here
+    (a set map never asks, and the gate test in test_export_dialog.py drives the notice itself)."""
+    app.wait_for_function(
+        """() => (!document.querySelector('#confirmModal').classList.contains('hidden')
+              && document.querySelector('#confirmActions [data-act="anyway"]'))
+             || document.querySelector('#stMsg').textContent.startsWith('exported')""", timeout=60000)
+    if not app.evaluate("() => document.querySelector('#confirmModal').classList.contains('hidden')"):
+        app.locator('#confirmActions [data-act="anyway"]').click()
 
 
 def test_export_again_is_greyed_before_the_first_export_and_says_so(app, make_project):
@@ -113,7 +133,8 @@ def test_export_again_writes_to_the_same_place(app, make_project, tmp_path):
     menu(app, "export")                                                # the dest is kept anyway: control
     expect(app.locator("#exDest")).to_have_value(str(out))
     app.keyboard.press("Escape")
-    menu(app, "export_again")                                          # the item: the same place, no dialog
+    menu(app, "export_again", wait=False)                               # the item: the same place, no dialog
+    answer_tempo_notice(app)                                           # #151: the reloaded project asks on the default map
     wait_export(app)
     assert exports(folder) == [] and len(list(out.iterdir())) == 4
     expect(app.locator("#exportModal")).to_be_hidden()
