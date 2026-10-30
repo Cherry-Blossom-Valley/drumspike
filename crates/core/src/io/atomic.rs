@@ -91,14 +91,17 @@ impl TempFile {
         &self.path
     }
 
-    /// The open temporary file.
-    pub fn file_mut(&mut self) -> &mut File {
-        self.file.as_mut().expect("the temporary file is open")
+    /// The open temporary file, or an error when it was already taken (only possible after
+    /// `commit_via` moved it; the type never closes it before that).
+    fn file_mut(&mut self) -> io::Result<&mut File> {
+        self.file
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the temporary file is already closed"))
     }
 
     /// Write all of `bytes` to the temporary file.
     pub fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.file_mut().write_all(bytes)
+        self.file_mut()?.write_all(bytes)
     }
 
     /// Flush and sync the temporary file to disk, close it, rename it onto `dest`, fsync the
@@ -109,7 +112,10 @@ impl TempFile {
 
     fn commit_via(self, finish: impl FnOnce(File, &Path, &Path) -> io::Result<()>) -> io::Result<()> {
         let mut s = self;
-        let f = s.file.take().expect("the temporary file is open");
+        let f = s
+            .file
+            .take()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the temporary file is already closed"))?;
         finish(f, &s.path, &s.dest)?; // an error keeps committed=false: the drop removes the file
         s.committed = true;
         Ok(())
@@ -142,7 +148,7 @@ fn write_bytes_atomic_via(
     finish: impl FnOnce(File, &Path, &Path) -> io::Result<()>,
 ) -> io::Result<()> {
     let mut t = TempFile::create(path)?;
-    write(t.file_mut(), bytes)?;
+    write(t.file_mut()?, bytes)?;
     t.commit_via(finish)
 }
 

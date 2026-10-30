@@ -4,6 +4,7 @@ The parser and timing tests are pure; the end-to-end tests render the title card
 Playwright (as the real run does). No network, no TTS API."""
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -17,8 +18,34 @@ import compose  # noqa: E402
 import record  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE_MEDIA = Path.home() / ".cache" / "drumspike" / "media"
+# The gate host's media dir; DRUMSPIKE_GATE_MEDIA redirects it (the skip-per-missing-clip
+# check runs against a temp set that has the recording clip but no explainer clip).
+GATE_MEDIA = Path(os.environ.get(
+    "DRUMSPIKE_GATE_MEDIA", str(Path.home() / ".cache" / "drumspike" / "media")))
+MEDIA_ROOT = str(Path.home() / ".cache" / "drumspike" / "media")
 GATE_TTS = Path("/Users/Shared/drumspike-media/tts-out")
+
+
+def gated_plan_raw():
+    """The product-video plan with its media root rewritten to GATE_MEDIA."""
+    raw = json.loads((ROOT / "tools/media/product-video.json").read_text(encoding="utf-8"))
+    for sc in raw["scenes"]:
+        for cl in sc["clips"]:
+            src = cl.get("source")
+            if isinstance(src, str) and os.path.expanduser(src).startswith(MEDIA_ROOT):
+                exp = os.path.expanduser(src)
+                cl["source"] = str(GATE_MEDIA / exp[len(MEDIA_ROOT):].lstrip("/"))
+    return raw
+
+
+def skip_when_a_plan_clip_is_missing(raw):
+    """Skip naming the first clip file of the plan that the host is missing."""
+    missing = next((cl["source"] for sc in raw["scenes"] for cl in sc["clips"]
+                    if isinstance(cl.get("source"), str)
+                    and not Path(cl["source"]).expanduser().is_file()),
+                   None)
+    if missing is not None:
+        pytest.skip(f"the gate host's media is missing {missing}")
 
 
 def stub_clip(path, seconds):
@@ -52,10 +79,9 @@ def script_ids(md):
 # ---------------- the real plan ----------------
 
 def test_the_product_video_plan_parses_and_matches_the_script():
-    if not (GATE_MEDIA / "rec" / "part1.mp4").is_file():
-        pytest.skip("the gate host's media is not present")
-    plan = compose.parse_plan(json.loads(
-        (ROOT / "tools/media/product-video.json").read_text(encoding="utf-8")))
+    raw = gated_plan_raw()
+    skip_when_a_plan_clip_is_missing(raw)
+    plan = compose.parse_plan(raw)
     assert [sc["id"] for sc in plan["scenes"]] == \
         script_ids(ROOT / "docs/product/scripts/product-video.md")
     items = compose.load_narration(GATE_TTS / "product-video", [sc["id"] for sc in plan["scenes"]])
@@ -196,10 +222,9 @@ def test_the_parser_refuses_a_non_string_url():
 
 
 def test_the_end_card_carries_the_licence_and_an_empty_url():
-    if not (GATE_MEDIA / "rec" / "part1.mp4").is_file():
-        pytest.skip("the gate host's media is not present")
-    plan = json.loads((ROOT / "tools/media/product-video.json").read_text(encoding="utf-8"))
-    end = next(cl for sc in plan["scenes"] if sc["id"] == "pv-end" for cl in sc["clips"])
+    raw = gated_plan_raw()
+    skip_when_a_plan_clip_is_missing(raw)
+    end = next(cl for sc in raw["scenes"] if sc["id"] == "pv-end" for cl in sc["clips"])
     assert end["url"] == ""   # the repo is private for now: no URL line
     assert "Drum Spike is free and open source (Apache-2.0)." in end["title"]
 
