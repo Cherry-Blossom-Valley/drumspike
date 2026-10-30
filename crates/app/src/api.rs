@@ -247,7 +247,11 @@ pub static REGISTRY: &[CommandSpec] = &[
         "feedback_send",
         "Post the previewed feedback report to the CBV feedback gateway (#164)",
         &[
-            req("payload", Ty::Obj, "The exact JSON the form previewed: kind, title, description, steps?, meta"),
+            req(
+                "payload",
+                Ty::Obj,
+                "The exact JSON the form previewed: kind, title, description, steps?, meta",
+            ),
             opt("url", Ty::Str, "Gateway URL; the default is the CBV feedback gateway"),
         ],
         OBJ,

@@ -157,7 +157,10 @@ async fn app_info(svc: State<'_, Service>) -> Result<Value, AppError> {
 /// Errors with the private-word guard of the payload (400) or when the feedback gateway cannot be reached or refuses.
 #[tauri::command]
 async fn feedback_send(svc: State<'_, Service>, payload: Value, url: Option<String>) -> Result<Value, AppError> {
-    blocking(&svc, "feedback_send", move |s| s.feedback_send(&payload, url.as_deref())).await
+    blocking(&svc, "feedback_send", move |s| {
+        s.feedback_send(&payload, url.as_deref())
+    })
+    .await
 }
 
 ///

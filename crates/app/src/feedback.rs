@@ -16,8 +16,7 @@ use crate::AppError;
 /// The CBV feedback gateway (the owner's design decision on #153: option b, the CBV site
 /// backend). The default of the app setting `feedback_url` (the page passes it); the route is
 /// part 1, `POST .../feedback` of the make-server-91a5b4f8 edge function.
-pub const FEEDBACK_URL: &str =
-    "https://pubtzkqxycnqqhmrfnhn.supabase.co/functions/v1/make-server-91a5b4f8/feedback";
+pub const FEEDBACK_URL: &str = "https://pubtzkqxycnqqhmrfnhn.supabase.co/functions/v1/make-server-91a5b4f8/feedback";
 
 /// The public anon key of the CBV site (Cherry-Blossom-Valley/Cbvsite
 /// utils/supabase/info.tsx `publicAnonKey`): public by design, it ships in the website's JS.
@@ -59,9 +58,7 @@ pub fn private_hits(text: &str) -> Vec<String> {
         let t = tok.trim_end_matches(['.', ',', ';', '!', '?', ')']);
         let is_path = (t.starts_with('/') && t.contains('/'))
             || t.starts_with("~/")
-            || (t.len() > 3
-                && t.as_bytes()[1] == b':'
-                && (t.as_bytes()[2] == b'\\' || t.as_bytes()[2] == b'/'));
+            || (t.len() > 3 && t.as_bytes()[1] == b':' && (t.as_bytes()[2] == b'\\' || t.as_bytes()[2] == b'/'));
         if is_path && !out.iter().any(|h| h == t) {
             out.push(t.to_string());
         }
@@ -161,7 +158,10 @@ fn post(url: &str, body: &[u8]) -> Result<Value, AppError> {
             .and_then(Value::as_str)
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("the feedback gateway answered {code}"));
-        return Err(AppError { code: code.clamp(400, 599) as u16, message: msg });
+        return Err(AppError {
+            code: code.clamp(400, 599) as u16,
+            message: msg,
+        });
     }
     Ok(value)
 }
@@ -268,9 +268,14 @@ mod tests {
             check_payload(&json!({"kind": "spam", "title": "t"})).unwrap_err().code,
             400
         );
-        assert_eq!(check_payload(&json!({"kind": "bug", "title": " "})).unwrap_err().code, 400);
         assert_eq!(
-            check_payload(&json!({"kind": "bug", "title": "/etc/passwd"})).unwrap_err().code,
+            check_payload(&json!({"kind": "bug", "title": " "})).unwrap_err().code,
+            400
+        );
+        assert_eq!(
+            check_payload(&json!({"kind": "bug", "title": "/etc/passwd"}))
+                .unwrap_err()
+                .code,
             400
         );
     }
@@ -297,7 +302,11 @@ mod tests {
         assert_eq!(r["ok"], true);
         assert_eq!(r["issue_url"], "https://example.com/x/1");
         let want = serde_json::to_vec(&payload).unwrap();
-        assert_eq!(&*got.lock().unwrap(), &want[..], "the gateway receives exactly the previewed JSON");
+        assert_eq!(
+            &*got.lock().unwrap(),
+            &want[..],
+            "the gateway receives exactly the previewed JSON"
+        );
     }
 
     #[test]

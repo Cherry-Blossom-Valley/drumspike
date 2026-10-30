@@ -111,7 +111,10 @@ mod tests {
         assert_eq!(v["name"], "Drum Spike");
         assert_eq!(v["version"], "9.8.7");
         assert_eq!(v["core_version"], drumspike_core::VERSION);
-        assert!(v["build_sha"].is_string(), "build_sha: the build sets DS_BUILD_SHA, else dev");
+        assert!(
+            v["build_sha"].is_string(),
+            "build_sha: the build sets DS_BUILD_SHA, else dev"
+        );
         assert!(
             v.get("notice").is_none(),
             "the model notice is gone with the model (#281 D16)"
