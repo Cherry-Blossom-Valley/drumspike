@@ -6636,14 +6636,30 @@ function renderPresetRows(body) {   // one row per own preset: the name (renamed
    setting track_height is not touched. */
 const ZOOM_TOGGLE_SPAN = 0.005;
 function rowHKey() { return S.rowH ? Object.entries(S.rowH).map(([n, h]) => n + "=" + h).join("|") : ""; }
-function setRowHeights(map) {   // map: track name -> factor of the global wave height (an override), {} = every row as the Track height says; #167
+function setRowHeights(map) {   // map: track name -> factor of the global wave height (an override), {} = every row as the Track Height says; #167
   S.rowH = {};
   for (const row of document.querySelectorAll("#lanesScroll .track")) {
     const f = map[row.dataset.name];
     if (f) { S.rowH[row.dataset.name] = f; row.style.setProperty("--wave-h", `${Math.round(laneHeights().wave * f)}px`); }
     else row.style.removeProperty("--wave-h");
+    setHeadTartFit(row);   // #172: a row dragged below the header drawing's height hides the drawing
   }
   invalidate(F.SIZE | F.GL | F.NEAR);
+}
+/* #172: the role drawing (.tart) sits bottom-right in the header (bottom: 8px); when the row is
+   dragged short it would overlap the .tctl controls (the M/S buttons and the pan slider). The
+   drawing shows only while the header is tall enough for the drawing and its 8 px margin above
+   the top of the controls. The size is the authored --tart-size, not the live box: a hidden
+   drawing measures 0 px and would unhide itself (an oscillation). Measured here (outside the
+   frame loop), not per frame. */
+function setHeadTartFit(row) {
+  const th = row.querySelector(".thead");
+  const tctl = th && th.querySelector(".tctl");
+  const tart = th && th.querySelector(".tart");
+  if (!th || !tctl || !tart) return;
+  const size = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--tart-size")) || 54;
+  const needed = tctl.offsetTop + 8 + size;
+  th.classList.toggle("tart-hidden", row.offsetHeight < needed);
 }
 function rowHeightsSave() {   // #167: the factor map into the project document (the drag and the double-click land here)
   if (!S.sid || !B.rowHeightsSet) return;
