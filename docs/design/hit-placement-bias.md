@@ -160,19 +160,23 @@ starts at 44.1, 48 and 96 kHz only.
 ## Step 2: the real sessions (Session A, B, C)
 
 The close mics (kick, snare, toms 1 to 3) of the three sessions, analysed by `service_tool` with the
-refinement rule 3 and rule 4 (the same hits, only the refined time differs). Shift = rule 4 minus rule 3,
-in samples, hits matched one to one within 10 ms. Counted over all hits.
+refinement rule 3 and rule 4 (the same hits, only the refined time differs). Rule 4 is the guarded default
+(the strict foot with the 0.25 ms guard above). Shift = rule 4 minus rule 3, in samples, hits matched one to
+one within 10 ms. Counted over all hits, run at eb72455.
 
 | role | hits | unchanged | moved earlier | moved later | shift histogram (samples: count) |
 |---|---|---|---|---|---|
 | kick | 1183 | 0 | 1183 | 0 | -1: 948, -2: 222, -3: 10, -4: 1, -6: 2 |
-| snare | 882 | 17 | 865 | 0 | -1: 264, -2: 360, -3: 41, -4: 46, -5: 69, -6: 26, -7: 16, -8: 9, -9 to -15: 21, -16 to -23: 5, -26 to -67: 8 (-26: 2, and one each at -27, -31, -36, -43, -64, -67) |
-| tom | 315 | 3 | 312 | 0 | -1: 158, -2: 106, -3: 21, -4: 8, -5: 4, -6: 1, -7: 1, -8: 1, -9: 4, -11: 2, -12: 1, -13: 2, -17: 1, -29: 1, -70: 1 |
+| snare | 882 | 33 | 849 | 0 | -1: 264, -2: 360, -3: 41, -4: 46, -5: 69, -6: 26, -7: 16, -8: 9, -9: 3, -10: 7, -11: 5, -12: 3 |
+| tom | 315 | 8 | 307 | 0 | -1: 158, -2: 106, -3: 21, -4: 8, -5: 4, -6: 1, -7: 1, -8: 1, -9: 4, -11: 2, -12: 1 |
 
-Kick and tom: the foot moves 1 to 2 samples on almost every hit. Snare: most hits move 1 to 5 samples,
-with a tail of larger moves. The large moves (snare beyond 15 samples, the single tom at -70) are
-walk-backs into the rise of a quieter earlier event: they are the cases to look at before a default change.
+Kick and tom: the foot moves 1 to 2 samples on almost every hit. Snare: most hits move 1 to 5 samples.
 No hit moves later.
+
+The guard kept the version 3 foot on 0 kick, 16 snare and 5 tom hits (the unchanged count with the guard
+minus the unchanged count of the unguarded run: snare 33 - 17, tom 8 - 3). The unguarded tails (snare -16 to
+-67, tom -13 to -70) are the walk-backs that the guard cuts. On the synthetic set (table above) the guard
+keeps the version 3 foot on 0 of the 4320 hits (36 rows of 120).
 
 F1, pooled over the three sessions, rule 3 and rule 4 identical at +-20 ms and +-50 ms (the event sets
 match; only the times differ):
