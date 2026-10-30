@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from playwright.sync_api import expect
 
-from app_support import invoke, menu, open_project, shot_dir, wait_until
+from app_support import ex_confirm_tempo, invoke, menu, open_project, shot_dir, wait_until
 from helpers import SR, synth_track, write_wav
 
 NAMES = [("k in_02", "kick"), ("k out_02", "kick"), ("s top_02", "snare"), ("t2_02", "tom"), ("hh_03", "hat"),
@@ -132,6 +132,7 @@ def test_four_user_actions_from_the_folder_drop_to_export_all(app, tmp_path):
     expect(app.locator("#progressText")).to_have_text("analysis done", timeout=120000)
     app.click("#exportAllBtn")                                              # action 4: the dialog opens with everything chosen (P4-30: one more click)
     app.click("#exGo")
+    ex_confirm_tempo(app)
     app.evaluate("() => window.__actions.push('export')")
     sid = app.evaluate("() => S.sid")
     out = Path(invoke(app, "project_get", sid=sid)["folder"]) / "Exports"

@@ -829,6 +829,10 @@ impl Service {
         let mut outside = serde_json::Map::new();
         let mut sampler = serde_json::Map::new();
         let mut warnings: Vec<String> = Vec::new();
+        // #151: a MIDI export on the default map uses the default 120 BPM: the reply says so (only then)
+        if opts.midi && crate::tempo::doc_map(&lock(&op).project.doc)?.is_default() {
+            warnings.push("No tempo set: the MIDI export uses the default 120 BPM.".to_string());
+        }
         for (job, r) in jobs.iter().zip(lock(&results).iter()) {
             let Some(r) = r else { continue };
             for p in [&r.midi, &r.spike, &r.audio].into_iter().flatten() {
