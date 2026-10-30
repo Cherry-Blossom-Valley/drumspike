@@ -6649,13 +6649,16 @@ function setRowHeights(map) {   // map: track name -> factor of the global wave 
 /* #172: the role drawing (.tart) sits bottom-right in the header (bottom: 8px); when the row is
    dragged short it would overlap the .tctl controls (the M/S buttons and the pan slider). The
    drawing shows only while the header is tall enough for the drawing and its 8 px margin above
-   the top of the controls. Measured here (outside the frame loop), not per frame. */
+   the top of the controls. The size is the authored --tart-size, not the live box: a hidden
+   drawing measures 0 px and would unhide itself (an oscillation). Measured here (outside the
+   frame loop), not per frame. */
 function setHeadTartFit(row) {
   const th = row.querySelector(".thead");
   const tctl = th && th.querySelector(".tctl");
   const tart = th && th.querySelector(".tart");
   if (!th || !tctl || !tart) return;
-  const needed = tctl.offsetTop + 8 + tart.getBoundingClientRect().height;
+  const size = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--tart-size")) || 54;
+  const needed = tctl.offsetTop + 8 + size;
   th.classList.toggle("tart-hidden", row.offsetHeight < needed);
 }
 function rowHeightsSave() {   // #167: the factor map into the project document (the drag and the double-click land here)
