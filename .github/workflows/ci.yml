@@ -120,7 +120,7 @@ jobs:
       rust: ${{ steps.scope.outputs.rust }}
       e2e: ${{ steps.scope.outputs.e2e }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Scope of this run
@@ -141,7 +141,7 @@ jobs:
       CARGO_TERM_COLOR: never
       CI_RUNNER_MODE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.runners) || vars.CI_RUNNERS) == 'github' && 'github' || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -232,7 +232,7 @@ jobs:
 
       - name: Upload raw JS coverage
         if: needs.scope.outputs.e2e == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: js-cov-x86
           path: ${{ runner.temp }}/js-cov-x86.json
@@ -259,7 +259,7 @@ jobs:
       CARGO_TERM_COLOR: never
       CI_RUNNER_MODE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.runners) || vars.CI_RUNNERS) == 'github' && 'github' || 'self-hosted' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -376,7 +376,7 @@ jobs:
           hl ci-done "$lock" --holder "ci-${{ github.run_id }}"
 
       - name: Upload raw JS coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: js-cov-arm64
           path: ${{ runner.temp }}/js-cov-arm64-*.json
@@ -392,14 +392,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: uv
         uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: js-cov-*
           path: ${{ runner.temp }}/js-cov
@@ -410,7 +410,7 @@ jobs:
           uv sync
           uv run python tests/jscov.py merge "$RUNNER_TEMP"/js-cov/*/*.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage-js
@@ -431,7 +431,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: never
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           clean: false
 
