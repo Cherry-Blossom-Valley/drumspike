@@ -13,8 +13,9 @@ from pathlib import Path
 import mido
 from playwright.sync_api import expect
 
-from app_support import ex_run, invoke, menu, open_project, wait_until
+from app_support import ex_confirm_tempo, ex_run, invoke, menu, open_project, wait_until
 from test_shell import with_hits
+from test_tempo_map import hit_train, set_hits
 
 
 def project_with_hits(app, make_project, **kw):
@@ -209,6 +210,7 @@ def test_the_dialog_says_how_many_files_it_replaces_and_enter_and_escape_work(ap
     menu(app, "export")
     app.evaluate("() => document.activeElement.blur()")
     app.keyboard.press("Enter")                                              # Enter = Export
+    ex_confirm_tempo(app)                                                    # the default-tempo notice answers (once)
     wait_until(lambda: len(exports(folder)) == 4, msg="Enter exported")
     app.wait_for_function("() => !EX.busy")
     expect(app.locator("#exResult")).to_be_visible()
@@ -296,6 +298,8 @@ def test_page_keys_are_off_while_the_dialog_is_open(app, make_project):
     menu(app, "export")
     app.locator("#exGo").focus()
     app.keyboard.press("Space")                                               # Space plays and stops in the page
+    ex_confirm_tempo(app)   # #151: Space on the focused button activates it: the export asks on the default map
+    app.wait_for_function("() => !EX.busy")   # the export ran; the dialog answers Escape again
     app.keyboard.press("j")
     app.keyboard.press("m")
     app.wait_for_timeout(300)
@@ -315,6 +319,27 @@ def test_page_keys_are_off_while_the_dialog_is_open(app, make_project):
 
 
 # ---------- the drag tiles ----------
+
+def drag_tile(app, tile):
+    """A press and a move of 4 px on a drag tile starts the native drag (static/app.js)."""
+    box = tile.bounding_box()
+    app.mouse.move(box["x"] + 5, box["y"] + 5)
+    app.mouse.down()
+    app.mouse.move(box["x"] + 60, box["y"] + 20, steps=4)
+    app.mouse.up()
+
+
+def drag_answer_tempo(app):
+    """#151: a Drag MIDI press on the default map asks the default-tempo notice before the drag; the
+    helper answers Export anyway (a set map or an answered project never asks; the gate test drives
+    the notice itself). The drag proceeds after the answer (the native drag is backend-initiated)."""
+    app.wait_for_function(
+        """() => (!document.querySelector('#confirmModal').classList.contains('hidden')
+              && document.querySelector('#confirmActions [data-act="anyway"]'))
+             || (window.__DS_DRAG__ || []).length > 0""", timeout=60000)
+    if not app.evaluate("() => document.querySelector('#confirmModal').classList.contains('hidden')"):
+        app.locator('#confirmActions [data-act="anyway"]').click()
+
 
 def test_the_drag_tiles_prepare_the_files_and_a_drag_calls_the_native_drag_with_their_paths(app, make_project, tmp_path):
     sid, folder = project_with_hits(app, make_project)
@@ -340,11 +365,8 @@ def test_the_drag_tiles_prepare_the_files_and_a_drag_calls_the_native_drag_with_
     assert sorted(p.name for p in (folder / "Exports").iterdir()) == [".drag"]
     app.evaluate("() => { window.__slow = false; }")
     app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'")
-    box = midi.bounding_box()
-    app.mouse.move(box["x"] + 5, box["y"] + 5)
-    app.mouse.down()
-    app.mouse.move(box["x"] + 60, box["y"] + 20, steps=4)
-    app.mouse.up()
+    drag_tile(app, midi)
+    drag_answer_tempo(app)                                                  # #151: the press asks on the default map; answered once for the project
     drags = app.evaluate("() => window.__DS_DRAG__")
     assert len(drags) == 1 and sorted(Path(p).name for p in drags[0]) == ["Kick In_spike.mid", "Snare Top_spike.mid"]
     assert all(Path(p).is_file() and Path(p).parent == folder / "Exports" for p in drags[0])   # the dragged files are the exports (#433)
@@ -358,11 +380,8 @@ def test_the_drag_tiles_prepare_the_files_and_a_drag_calls_the_native_drag_with_
     app.locator("#exModeSingle").check()
     expect(midi.locator(".exDragN")).to_have_text("1 file")
     app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'")
-    box = midi.bounding_box()
-    app.mouse.move(box["x"] + 5, box["y"] + 5)
-    app.mouse.down()
-    app.mouse.move(box["x"] + 60, box["y"] + 20, steps=4)
-    app.mouse.up()
+    drag_tile(app, midi)                                                    # the project's answer holds: the drag asks no more
+    app.wait_for_function("() => (window.__DS_DRAG__ || []).length === 2", timeout=60000)
     drags = app.evaluate("() => window.__DS_DRAG__")
     assert len(drags) == 2 and [Path(p).name for p in drags[1]] == [app.evaluate("() => S.name") + "_drums.mid"]
     # the tile of an unchecked format is hidden, and a format without tracks is disabled
@@ -405,6 +424,7 @@ def test_show_in_finder_names_the_first_file_after_an_export(app, make_project, 
     menu(app, "export")
     expect(app.locator("#exResult")).to_be_hidden()
     app.click("#exGo")
+    ex_confirm_tempo(app)
     expect(app.locator("#exResult")).to_be_visible()
     expect(app.locator("#exResultText")).to_contain_text("Exported 2 MIDI and 2 spike files to Exports/ in the project folder")
     expect(app.locator("#exCancel")).to_have_text("Close")
@@ -502,3 +522,165 @@ def test_the_commands_take_a_dest_and_refuse_a_bad_one(app, make_project, tmp_pa
     assert r["midi_file"] == str(out / (app.evaluate("() => S.name") + "_drums.mid")) and r["dest"] == str(out)
     assert invoke(app, "export_all", sid=sid, midi_mode="both")["code"] == 400
     assert re.search(r"midi_mode", invoke(app, "export_all", sid=sid, midi_mode="both")["message"])
+
+
+# ---------- #151: the default-tempo notice ----------
+
+def test_the_default_tempo_notice_asks_and_cancel_writes_no_file(app, make_project):
+    sid, folder = project_with_hits(app, make_project)
+    menu(app, "export")
+    app.click("#exGo")
+    expect(app.locator("#confirmModal")).to_be_visible()
+    expect(app.locator("#confirmTitle")).to_have_text("No tempo set")
+    expect(app.locator("#confirmMsg")).to_contain_text("120 BPM")
+    app.locator('#confirmActions [data-act="cancel"]').click()
+    expect(app.locator("#confirmModal")).to_be_hidden()
+    expect(app.locator("#stMsg")).to_contain_text("export cancelled")
+    assert exports(folder) == []                                             # Cancel writes no file
+    # the dialog stays open and exports after the answer; the session answers only once
+    app.click("#exGo")
+    ex_confirm_tempo(app)
+    wait_until(lambda: exports(folder) == ["Kick In_spike.mid", "Kick In_spike.wav",
+                                           "Snare Top_spike.mid", "Snare Top_spike.wav"], msg="the export")
+    app.click("#exCancel")
+    clear_exports(folder)
+    menu(app, "export")
+    run_and_close(app)                                                       # no second notice in this session
+    expect(app.locator("#confirmModal")).to_be_hidden()
+    assert len(exports(folder)) == 4
+
+
+def test_export_anyway_writes_the_bytes_of_today_and_the_reply_carries_the_warning(app, make_project):
+    sid, folder = project_with_hits(app, make_project)
+    (folder / "Ref").mkdir()                                                 # the dest folder must exist
+    invoke(app, "export_midi", sid=sid, name="Kick In", dest=str(folder / "Ref"))   # the service path of today
+    ref = (folder / "Ref" / "Kick In_spike.mid").read_bytes()
+    menu(app, "export")
+    app.locator("#exSpikes").uncheck()
+    app.locator("#exModeTrack").check()
+    app.click("#exGo")
+    ex_confirm_tempo(app)
+    wait_until(lambda: exports(folder) == ["Kick In_spike.mid", "Snare Top_spike.mid"], msg="the export")
+    assert (folder / "Exports" / "Kick In_spike.mid").read_bytes() == ref    # Export anyway: the same bytes as today
+    r = invoke(app, "export_all", sid=sid)
+    assert "No tempo set: the MIDI export uses the default 120 BPM." in r["warnings"]   # the reply warns on the default map
+    app.click("#exCancel")
+
+
+def test_a_project_with_a_set_map_exports_without_the_notice(app, make_project):
+    sid, folder = project_with_hits(app, make_project)
+    invoke(app, "tempo_map_set", sid=sid, map={"bpm": 100})
+    menu(app, "export")
+    app.click("#exGo")
+    app.wait_for_timeout(300)
+    expect(app.locator("#confirmModal")).to_be_hidden()                      # no notice on a set map
+    wait_until(lambda: exports(folder) == ["Kick In_spike.mid", "Kick In_spike.wav",
+                                           "Snare Top_spike.mid", "Snare Top_spike.wav"], msg="the export")
+    (folder / "Ref").mkdir()
+    r = invoke(app, "export_all", sid=sid, dest=str(folder / "Ref"))
+    assert r["warnings"] == []                                               # and the reply carries no warning
+    app.click("#exCancel")
+
+
+def test_the_notice_names_the_real_places_and_set_tempo_opens_detect_tempo(app, make_project):
+    # the coordinator's send-back: the notice must name the real places (no "Tempo panel") and offer Set Tempo…,
+    # which closes the notice without writing and opens Track > Detect Tempo
+    folder = make_project(seconds=62.0)
+    sid = open_project(app, folder)
+    kick, snare = hit_train()
+    set_hits(app, sid, "Kick In", kick)
+    set_hits(app, sid, "Snare Top", snare)
+    app.evaluate("async () => { await loadProject(); }")
+    app.wait_for_function("() => S.events['Kick In'] && S.events['Kick In'].length === 48")
+    menu(app, "export")
+    app.click("#exGo")
+    expect(app.locator("#confirmModal")).to_be_visible()
+    expect(app.locator("#confirmTitle")).to_have_text("No tempo set")
+    expect(app.locator("#confirmMsg")).to_contain_text("Track > Detect Tempo")
+    expect(app.locator("#confirmMsg")).to_contain_text("File > Import Tempo Map")
+    expect(app.locator("#confirmMsg")).to_contain_text("Tempo ruler")
+    expect(app.locator('#confirmActions [data-act="set_tempo"]')).to_have_text("Set Tempo…")
+    app.locator('#confirmActions [data-act="set_tempo"]').click()
+    expect(app.locator("#confirmModal")).to_be_hidden()                      # the notice closes without writing
+    app.wait_for_function("() => !document.querySelector('#tempoModal').classList.contains('hidden')",
+                          timeout=60000)                                     # Track > Detect Tempo opens
+    expect(app.locator("#stMsg")).to_contain_text("tempo detected")          # the export was cancelled: no export message
+    assert exports(Path(folder)) == []
+    app.click("#tempoCancel")
+
+
+def test_the_answer_is_per_project_a_second_default_map_project_asks_again(app, make_project):
+    sid, folder = project_with_hits(app, make_project)
+    menu(app, "export")
+    run_and_close(app)                                                       # Export anyway: the answer holds for THIS project
+    assert len(exports(folder)) == 4
+    sid2, folder2 = project_with_hits(app, make_project)                     # a second project, also the default map
+    menu(app, "export")
+    app.click("#exGo")
+    expect(app.locator("#confirmModal")).to_be_visible()                     # the notice asks again (per project, not per page)
+    app.locator('#confirmActions [data-act="anyway"]').click()
+    wait_until(lambda: len(exports(folder2)) == 4, msg="the export")
+    app.click("#exCancel")
+    open_project(app, folder)                                                # back to the first project: it asks again too
+    menu(app, "export")
+    app.click("#exGo")
+    expect(app.locator("#confirmModal")).to_be_visible()
+    app.locator('#confirmActions [data-act="anyway"]').click()
+    wait_until(lambda: len(exports(folder)) == 4, msg="the export")
+    app.click("#exCancel")
+
+
+def test_export_again_on_the_default_map_asks_and_cancel_writes_no_file(app, make_project):
+    sid, folder = project_with_hits(app, make_project)
+    menu(app, "export")
+    app.locator("#exSpikes").uncheck()                                       # MIDI only, so Export Again writes MIDI
+    run_and_close(app)                                                       # the first export answers the notice, the shape is recorded
+    assert exports(folder) == ["Kick In_spike.mid", "Snare Top_spike.mid"]   # the recorded shape: per-track MIDI
+    clear_exports(folder)
+    app.evaluate("async () => { await loadProject(); }")                     # a fresh open: the answer is gone
+    app.wait_for_function("() => S.loaded > 0")
+    menu(app, "export_again", wait=False)                                    # no dialog — but the notice asks before it writes
+    expect(app.locator("#confirmModal")).to_be_visible()
+    expect(app.locator("#confirmTitle")).to_have_text("No tempo set")
+    app.locator('#confirmActions [data-act="cancel"]').click()
+    expect(app.locator("#stMsg")).to_contain_text("export cancelled")
+    assert exports(folder) == []                                             # Cancel writes no file
+    expect(app.locator("#exportModal")).to_be_hidden()
+
+
+def test_the_drag_midi_tile_warns_and_asks_on_the_default_map(app, make_project):
+    # the coordinator's second send-back: the Drag MIDI tile writes 120 BPM MIDI on the default map with
+    # no notice — the tile shows a visible warning, a press asks the notice, Cancel starts no drag and
+    # writes no file, and only the project's "Export anyway" lets the tile drag. A set map: as today.
+    sid, folder = project_with_hits(app, make_project)
+    menu(app, "export")
+    app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'")
+    expect(app.locator("#exDragMidi .exDragW")).to_be_visible()              # the visible 120 BPM warning
+    drag_tile(app, app.locator("#exDragMidi"))
+    expect(app.locator("#confirmModal")).to_be_visible()                     # the press asks the same notice
+    expect(app.locator("#confirmTitle")).to_have_text("No tempo set")
+    app.locator('#confirmActions [data-act="cancel"]').click()
+    app.wait_for_timeout(300)
+    assert app.evaluate("() => window.__DS_DRAG__ || []") == []              # Cancel starts no drag
+    assert exports(folder) == []                                             # and no file is written
+    drag_tile(app, app.locator("#exDragMidi"))
+    expect(app.locator("#confirmModal")).to_be_visible()                     # the answer was Cancel: it asks again
+    app.locator('#confirmActions [data-act="anyway"]').click()
+    wait_until(lambda: len(app.evaluate("() => window.__DS_DRAG__ || []")) == 1, msg="the drag")
+    drags = app.evaluate("() => window.__DS_DRAG__")
+    assert sorted(Path(p).name for p in drags[0]) == ["Kick In_spike.mid", "Snare Top_spike.mid"]
+    assert sorted(p.name for p in (folder / "Exports").iterdir() if p.name != ".drag") == [
+        "Kick In_spike.mid", "Snare Top_spike.mid"]                          # the drag wrote the files
+    expect(app.locator("#exDragMidi .exDragW")).to_be_hidden()               # the answer holds for the project
+    app.keyboard.press("Escape")
+    # a set map: no warning, the drag works as today
+    invoke(app, "tempo_map_set", sid=sid, map={"bpm": 100})
+    app.evaluate("async () => { await loadProject(); }")
+    app.wait_for_function("() => S.loaded > 0")
+    menu(app, "export")
+    app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'")
+    expect(app.locator("#exDragMidi .exDragW")).to_be_hidden()               # no warning on a set map
+    drag_tile(app, app.locator("#exDragMidi"))
+    wait_until(lambda: len(app.evaluate("() => window.__DS_DRAG__ || []")) == 2, msg="the drag on the set map")
+    app.wait_for_timeout(300)
+    expect(app.locator("#confirmModal")).to_be_hidden()                      # no notice: the drag went straight through

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from playwright.sync_api import expect
 
-from app_support import export_dialog, invoke, menu, open_project, wait_until
+from app_support import ex_confirm_tempo, export_dialog, invoke, menu, open_project, wait_until
 
 ROOT = Path(__file__).resolve().parents[2]
 SR = 48000
@@ -296,6 +296,7 @@ def test_track_items_mute_solo_export_and_analyze_the_selected_track(app, make_p
     expect(app.locator("#exScopeSel")).to_be_checked()
     app.locator("#exSpikes").uncheck()
     app.click("#exGo")
+    ex_confirm_tempo(app)
     expect(app.locator("#stMsg")).to_contain_text("exported 1 MIDI file to Exports/")
     app.click("#exCancel")
     assert (folder / "Exports" / "Snare Top_spike.mid").is_file()

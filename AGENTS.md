@@ -52,7 +52,7 @@ release builds are in `docs/DEVELOPING.md`, sections 4, 7 and 8.
   `tools/`, `site/` or non-e2e tests; the `e2e_app` tests only when it touches the app, `static/`
   or the e2e tests and their helpers. G3 and G5 only when the change touches `apps/desktop/` or
   the ticket names a self-test. The ENST gate and the session check only for detector code.
-- A push to a `crew/**` branch starts no CI run, and you do not dispatch one: the local gate is
+- A push to a `crew/**` branch starts no CI run, and you do not dispatch one (ci.yml refuses a by-hand run on `crew/**` that the owner did not start): the local gate is
   the gate, and main's CI runs the full scope after the merge.
 - No `[skip ci]` in a PR title or in a commit that changes code. Docs-only changes need no
   marker: CI ignores `docs/` by path.

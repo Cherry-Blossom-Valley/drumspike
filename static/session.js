@@ -141,6 +141,7 @@ async function loadProject() {
     S.tracks = {}; S.order = []; S.events = {}; S.peaks = {}; S.samplesCache = {}; S.peakAmp = {};
     S.sel = null; S.selTrack = null; SESSION_HOOKS.setSelMem({ sid: null, order: [] }); S.undo = []; S.redo = []; S.view = { t0: 0, t1: 10 }; S.zoomBack = null; S.rowH = {}; SESSION_HOOKS.lnReset(); SESSION_HOOKS.auReset();
     S.exportAgain = false;   // P4-31: no project, no export shape
+    if (SESSION_HOOKS.exTempoReset) SESSION_HOOKS.exTempoReset();   // #151: no project, no kept default-tempo answer
     SESSION_HOOKS.tmLoad();   // P4-8: no map without a project
     setProjName(""); setDirtyState(false);
     buildTrackDOM(); invalidate(F.VIEW); updateStatus(); refreshCounts();
@@ -150,6 +151,7 @@ async function loadProject() {
   const r = await B.tracks(S.sid);
   if (gen !== _gen) return;
   S.exportAgain = false;
+  if (SESSION_HOOKS.exTempoReset) SESSION_HOOKS.exTempoReset();   // #151: the default-tempo answer is per project, not per page session
   try { S.exportAgain = !!(await B.exportLastGet(S.sid)).export_last; } catch (e) {}   // P4-31: File > Export Again follows the export shape of the project
   if (gen !== _gen) return;
   S.tracks = r.tracks; S.order = r.order || Object.keys(r.tracks);
