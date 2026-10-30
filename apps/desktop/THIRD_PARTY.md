@@ -265,7 +265,7 @@ These crates are used exactly as published on crates.io. Their source code is av
 | time-macros | 0.2.32 | MIT OR Apache-2.0 | MIT | https://github.com/time-rs/time | both |
 | tinystr | 0.8.4 | Unicode-3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | both |
 | tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT | MIT | https://github.com/Lokathor/tinyvec | both |
-| tokio | 1.53.2 | MIT | MIT | https://github.com/tokio-rs/tokio | both |
+| tokio | 1.53.3 | MIT | MIT | https://github.com/tokio-rs/tokio | both |
 | toml | 1.1.8+spec-1.1.0 | MIT OR Apache-2.0 | MIT | https://github.com/toml-rs/toml | both |
 | toml_datetime | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 | MIT | https://github.com/toml-rs/toml | both |
 | toml_parser | 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 | MIT | https://github.com/toml-rs/toml | both |
@@ -9402,7 +9402,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 ### Text 140
 
-Used by: tokio 1.53.2
+Used by: tokio 1.53.3
 
 ~~~~text
 MIT License
