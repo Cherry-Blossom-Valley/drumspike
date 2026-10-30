@@ -172,7 +172,13 @@ pub const INFO_LINE: Item = check("info_line", "Show Info Line");
 pub const OVERVIEW: Item = check("overview", "Show Overview");
 pub const COUNTER_SECONDS: Item = check("counter_seconds", "Seconds");
 pub const COUNTER_SAMPLES: Item = check("counter_samples", "Samples");
+/// #149: Bars|Beats (bar|beat|ticks, 960 ticks per beat) and Timecode (a fixed 30 fps, not the session rate).
+pub const COUNTER_BARSBEATS: Item = check("counter_barsbeats", "Bars|Beats");
+pub const COUNTER_TIMECODE: Item = check("counter_timecode", "Timecode (30 fps)");
 pub const COUNTER_EXCHANGE: Item = item("counter_exchange", "Exchange Counters", false);
+/// #175: View > Tab Moves To (radio items; which hits the Tab keys step to, a user setting of the page).
+pub const TAB_ACTIVE: Item = check("tab_active", "Active Hits Only");
+pub const TAB_ALL: Item = check("tab_all", "All Found Hits");
 pub const RULER_TEMPO: Item = check("ruler_tempo", "Tempo Ruler");
 pub const RULER_METER: Item = check("ruler_meter", "Meter Ruler");
 pub const RULER_BEATS: Item = check("ruler_beats", "Bars|Beats Ruler");
@@ -243,7 +249,7 @@ pub const TRACKS_REMOVE: Item = item("tracks_remove", "Remove Track", true);
 pub const SHORTCUTS: Item = item("shortcuts", "Keyboard Shortcuts", false);
 
 /// Every custom item (not the Open Recent and Window entries, not the system items Cut, Copy and so on).
-pub const SPEC: [Item; 105] = [
+pub const SPEC: [Item; 109] = [
     ABOUT,
     SETTINGS,
     QUIT,
@@ -299,7 +305,11 @@ pub const SPEC: [Item; 105] = [
     OVERVIEW,
     COUNTER_SECONDS,
     COUNTER_SAMPLES,
+    COUNTER_BARSBEATS,
+    COUNTER_TIMECODE,
     COUNTER_EXCHANGE,
+    TAB_ACTIVE,
+    TAB_ALL,
     RULER_TEMPO,
     RULER_METER,
     RULER_BEATS,
@@ -359,7 +369,15 @@ pub const FOLLOW_MODES: [(&str, &str); 3] = [
 ];
 
 /// The main counter modes of the page and their radio items (check items, exactly one of them on).
-pub const COUNTER_MODES: [(&str, &str); 2] = [("seconds", "counter_seconds"), ("samples", "counter_samples")];
+pub const COUNTER_MODES: [(&str, &str); 4] = [
+    ("seconds", "counter_seconds"),
+    ("samples", "counter_samples"),
+    ("barsbeats", "counter_barsbeats"),
+    ("timecode", "counter_timecode"),
+];
+
+/// The "Tab moves to" modes of the page (#175) and their radio items (check items, exactly one of them on).
+pub const TAB_MODES: [(&str, &str); 2] = [("active", "tab_active"), ("all", "tab_all")];
 
 /// The nudge values of the page (P3-20a) and their radio items (check items, exactly one of them on).
 pub const NUDGE_MODES: [(&str, &str); 5] = [
@@ -720,6 +738,13 @@ pub fn check_states(state: &Value) -> Vec<(&'static str, bool)> {
             out.push((id, m == mode));
         }
     }
+    if let Some(mode) = state.get("tabMode").and_then(Value::as_str)
+        && TAB_MODES.iter().any(|(m, _)| *m == mode)
+    {
+        for (m, id) in TAB_MODES {
+            out.push((id, m == mode));
+        }
+    }
     if let Some(mode) = state.get("trackHeight").and_then(Value::as_str)
         && HEIGHT_MODES.iter().any(|(m, _)| *m == mode)
     {
@@ -930,8 +955,14 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let counter = SubmenuBuilder::with_id(app, "main_counter", "Main Counter")
         .item(&ck(&COUNTER_SECONDS, true)?)
         .item(&ck(&COUNTER_SAMPLES, false)?)
+        .item(&ck(&COUNTER_BARSBEATS, false)?) // #149
+        .item(&ck(&COUNTER_TIMECODE, false)?) // #149: a fixed 30 fps, not the session rate
         .separator()
         .item(&mi(&COUNTER_EXCHANGE)?)
+        .build()?;
+    let tab_mode = SubmenuBuilder::with_id(app, "tab_mode", "Tab Moves To") // #175
+        .item(&ck(&TAB_ACTIVE, true)?) // the default: active hits only
+        .item(&ck(&TAB_ALL, false)?)
         .build()?;
     let view = SubmenuBuilder::new(app, "View")
         .item(&mi(&ZOOM_IN)?)
@@ -946,6 +977,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&ck(&INFO_LINE, true)?)
         .item(&ck(&OVERVIEW, true)?)
         .item(&counter)
+        .item(&tab_mode) // #175: View > Tab Moves To
         .separator()
         .item(&ck(&RULER_TEMPO, true)?)
         .item(&ck(&RULER_METER, true)?)
