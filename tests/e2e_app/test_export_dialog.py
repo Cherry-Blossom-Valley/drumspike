@@ -320,6 +320,27 @@ def test_page_keys_are_off_while_the_dialog_is_open(app, make_project):
 
 # ---------- the drag tiles ----------
 
+def drag_tile(app, tile):
+    """A press and a move of 4 px on a drag tile starts the native drag (static/app.js)."""
+    box = tile.bounding_box()
+    app.mouse.move(box["x"] + 5, box["y"] + 5)
+    app.mouse.down()
+    app.mouse.move(box["x"] + 60, box["y"] + 20, steps=4)
+    app.mouse.up()
+
+
+def drag_answer_tempo(app):
+    """#151: a Drag MIDI press on the default map asks the default-tempo notice before the drag; the
+    helper answers Export anyway (a set map or an answered project never asks; the gate test drives
+    the notice itself). The drag proceeds after the answer (the native drag is backend-initiated)."""
+    app.wait_for_function(
+        """() => (!document.querySelector('#confirmModal').classList.contains('hidden')
+              && document.querySelector('#confirmActions [data-act="anyway"]'))
+             || (window.__DS_DRAG__ || []).length > 0""", timeout=60000)
+    if not app.evaluate("() => document.querySelector('#confirmModal').classList.contains('hidden')"):
+        app.locator('#confirmActions [data-act="anyway"]').click()
+
+
 def test_the_drag_tiles_prepare_the_files_and_a_drag_calls_the_native_drag_with_their_paths(app, make_project, tmp_path):
     sid, folder = project_with_hits(app, make_project)
     # a slow render shows "preparing..." on the tile, and a drag then does nothing (the files are not there yet)
@@ -344,11 +365,8 @@ def test_the_drag_tiles_prepare_the_files_and_a_drag_calls_the_native_drag_with_
     assert sorted(p.name for p in (folder / "Exports").iterdir()) == [".drag"]
     app.evaluate("() => { window.__slow = false; }")
     app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'")
-    box = midi.bounding_box()
-    app.mouse.move(box["x"] + 5, box["y"] + 5)
-    app.mouse.down()
-    app.mouse.move(box["x"] + 60, box["y"] + 20, steps=4)
-    app.mouse.up()
+    drag_tile(app, midi)
+    drag_answer_tempo(app)                                                  # #151: the press asks on the default map; answered once for the project
     drags = app.evaluate("() => window.__DS_DRAG__")
     assert len(drags) == 1 and sorted(Path(p).name for p in drags[0]) == ["Kick In_spike.mid", "Snare Top_spike.mid"]
     assert all(Path(p).is_file() and Path(p).parent == folder / "Exports" for p in drags[0])   # the dragged files are the exports (#433)
@@ -362,11 +380,8 @@ def test_the_drag_tiles_prepare_the_files_and_a_drag_calls_the_native_drag_with_
     app.locator("#exModeSingle").check()
     expect(midi.locator(".exDragN")).to_have_text("1 file")
     app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'")
-    box = midi.bounding_box()
-    app.mouse.move(box["x"] + 5, box["y"] + 5)
-    app.mouse.down()
-    app.mouse.move(box["x"] + 60, box["y"] + 20, steps=4)
-    app.mouse.up()
+    drag_tile(app, midi)                                                    # the project's answer holds: the drag asks no more
+    app.wait_for_function("() => (window.__DS_DRAG__ || []).length === 2", timeout=60000)
     drags = app.evaluate("() => window.__DS_DRAG__")
     assert len(drags) == 2 and [Path(p).name for p in drags[1]] == [app.evaluate("() => S.name") + "_drums.mid"]
     # the tile of an unchecked format is hidden, and a format without tracks is disabled
@@ -631,3 +646,41 @@ def test_export_again_on_the_default_map_asks_and_cancel_writes_no_file(app, mak
     expect(app.locator("#stMsg")).to_contain_text("export cancelled")
     assert exports(folder) == []                                             # Cancel writes no file
     expect(app.locator("#exportModal")).to_be_hidden()
+
+
+def test_the_drag_midi_tile_warns_and_asks_on_the_default_map(app, make_project):
+    # the coordinator's second send-back: the Drag MIDI tile writes 120 BPM MIDI on the default map with
+    # no notice — the tile shows a visible warning, a press asks the notice, Cancel starts no drag and
+    # writes no file, and only the project's "Export anyway" lets the tile drag. A set map: as today.
+    sid, folder = project_with_hits(app, make_project)
+    menu(app, "export")
+    app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'")
+    expect(app.locator("#exDragMidi .exDragW")).to_be_visible()              # the visible 120 BPM warning
+    drag_tile(app, app.locator("#exDragMidi"))
+    expect(app.locator("#confirmModal")).to_be_visible()                     # the press asks the same notice
+    expect(app.locator("#confirmTitle")).to_have_text("No tempo set")
+    app.locator('#confirmActions [data-act="cancel"]').click()
+    app.wait_for_timeout(300)
+    assert app.evaluate("() => window.__DS_DRAG__ || []") == []              # Cancel starts no drag
+    assert exports(folder) == []                                             # and no file is written
+    drag_tile(app, app.locator("#exDragMidi"))
+    expect(app.locator("#confirmModal")).to_be_visible()                     # the answer was Cancel: it asks again
+    app.locator('#confirmActions [data-act="anyway"]').click()
+    wait_until(lambda: len(app.evaluate("() => window.__DS_DRAG__ || []")) == 1, msg="the drag")
+    drags = app.evaluate("() => window.__DS_DRAG__")
+    assert sorted(Path(p).name for p in drags[0]) == ["Kick In_spike.mid", "Snare Top_spike.mid"]
+    assert sorted(p.name for p in (folder / "Exports").iterdir() if p.name != ".drag") == [
+        "Kick In_spike.mid", "Snare Top_spike.mid"]                          # the drag wrote the files
+    expect(app.locator("#exDragMidi .exDragW")).to_be_hidden()               # the answer holds for the project
+    app.keyboard.press("Escape")
+    # a set map: no warning, the drag works as today
+    invoke(app, "tempo_map_set", sid=sid, map={"bpm": 100})
+    app.evaluate("async () => { await loadProject(); }")
+    app.wait_for_function("() => S.loaded > 0")
+    menu(app, "export")
+    app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'")
+    expect(app.locator("#exDragMidi .exDragW")).to_be_hidden()               # no warning on a set map
+    drag_tile(app, app.locator("#exDragMidi"))
+    wait_until(lambda: len(app.evaluate("() => window.__DS_DRAG__ || []")) == 2, msg="the drag on the set map")
+    app.wait_for_timeout(300)
+    expect(app.locator("#confirmModal")).to_be_hidden()                      # no notice: the drag went straight through

@@ -5702,7 +5702,7 @@ function markLaneDetail(name, detail) {   // tooltip of a lane that cannot draw
 const EX = { open: false, scope: "all", selected: null, midi: true, spikes: true, spikeType: "synthetic", mode: "per_track", comp: false, markers: false, dest: "", def: "", remembered: null,
   /* #172: the export-finished event for the e2e tests: the count of the exports this page has finished */
   destOk: true, replace: 0, busy: false, done: 0, drag: { midi: null, spikes: null }, timer: null, dragSeq: 0, dragChain: Promise.resolve(),
-  infoSeq: 0, lastFile: null, ran: false,
+  infoSeq: 0, lastFile: null, ran: false, tempoSeq: 0, tempoDefault: false,
   /* #151: the default-tempo answer holds per project (loadProject resets it when a project opens) */
   tempoAck: false };
 function exTrackSets() {   // the tracks the options name: the ones that export, and the skipped ones with the reason
@@ -5753,6 +5753,8 @@ function exRender() {   // the controls from EX; the Export button and the tiles
     t.dataset.state = !names.length || !EX.midi && !EX.spikes ? "disabled" : EX.drag.failed ? "error" : files ? "ready" : "preparing";
     t.querySelector(".exDragN").textContent = t.dataset.state === "preparing" ? "preparing…" : files ? exPlural(files.length, "file", "files") : "";
   }
+  /* #151: on the default map the Drag MIDI tile shows the visible 120 BPM warning until the project's answer */
+  $("#exDragMidi .exDragW").classList.toggle("hidden", !(EX.midi && EX.tempoDefault && !EX.tempoAck));
 }
 async function exInfo() {   // the replace count of the current options (the newest answer wins)
   const my = ++EX.infoSeq;
@@ -5787,7 +5789,13 @@ function exDragSchedule(now) {   // the tiles show "preparing…" until the file
     });
   }, now ? 0 : 400);
 }
-function exChanged() { $("#exResult").classList.add("hidden"); exRender(); exInfo(); exDragSchedule(); }
+function exChanged() { $("#exResult").classList.add("hidden"); exRender(); exInfo(); exDragSchedule(); exTempoDefault(); }
+/* #151: the default-ness of the map drives the visible 120 BPM warning of the Drag MIDI tile; the newest answer wins */
+async function exTempoDefault() {
+  const my = ++EX.tempoSeq, sid = S.sid;
+  try { const d = !!(await B.tempoMapGet(sid)).default; if (my === EX.tempoSeq) { EX.tempoDefault = d; exRender(); } }
+  catch (e) { if (my === EX.tempoSeq) EX.tempoDefault = false; }
+}
 async function openExport(scope, track) {
   if (!needProject()) return;
   if (EX.open) { $("#exGo").focus(); return; }
@@ -5875,6 +5883,7 @@ function exSummary(r) {   // "exported 2 MIDI and 2 spike files to Exports/ in t
 async function askDefaultTempo() {
   let def = false;
   try { def = !!(await B.tempoMapGet(S.sid)).default; } catch (e) { return "anyway"; }
+  EX.tempoDefault = def;   // the same answer drives the visible warning of the Drag MIDI tile
   if (!def) return "anyway";
   return await askConfirm({ title: "No tempo set",
     msg: "The export uses the default 120 BPM. Set the tempo first: Track > Detect Tempo, File > Import Tempo Map, or the Tempo ruler. Or export anyway.",
@@ -5918,6 +5927,15 @@ async function exRun() {
 async function exDragStart(kind) {
   const files = EX.drag[kind];
   if (!files || !files.length) return;
+  /* #151: a drag of the MIDI tile on the default map writes 120 BPM MIDI: the press asks the same notice
+     first; Cancel starts no drag and no file moves, Set Tempo… opens Track > Detect Tempo, and only the
+     project's "Export anyway" (the per-project answer) lets the tile drag. A set map never asks. */
+  if (kind === "midi" && !EX.tempoAck) {
+    const a = await askDefaultTempo();
+    if (a !== "anyway") { if (a === "set_tempo") detectTempo(); return; }
+    EX.tempoAck = true;
+    exRender();
+  }
   let out;
   try { out = (await B.exportDragTake(S.sid, files)).files; }   // #433: the dragged files move into Exports/ (the export names): they stay after the drag and the close
   catch (e) { setMsg(`drag failed: ${errText(e)}`, "error"); return; }

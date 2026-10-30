@@ -133,7 +133,7 @@ def test_export_again_writes_to_the_same_place(app, make_project, tmp_path):
     menu(app, "export")                                                # the dest is kept anyway: control
     expect(app.locator("#exDest")).to_have_value(str(out))
     app.keyboard.press("Escape")
-    menu(app, "export_again")                                          # the item: the same place, no dialog
+    menu(app, "export_again", wait=False)                               # the item: the same place, no dialog
     answer_tempo_notice(app)                                           # #151: the reloaded project asks on the default map
     wait_export(app)
     assert exports(folder) == [] and len(list(out.iterdir())) == 4
