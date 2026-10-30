@@ -38,8 +38,15 @@ def set_playhead(app, t):
     app.evaluate("t => { S.playhead = t; drawHead(); }", t)
 
 
+def reset_tm(app):
+    # the shell keeps TM.map/TM.grid across projects (one page for the whole session):
+    # every counter test starts from the state it tests
+    app.evaluate("() => { TM.map = null; TM.grid = null; }")
+
+
 def test_bars_beats_and_timecode_at_three_positions(app, make_project, tmp_path):
     sid = open_project(app, build(make_project, tmp_path, name="Counter"))
+    reset_tm(app)
     invoke(app, "tempo_map_set", sid=sid, map=MAP)
     app.evaluate("async () => { await tmLoad(); }")
     for mode in ("barsbeats", "timecode"):
@@ -59,6 +66,7 @@ def test_bars_beats_and_timecode_at_three_positions(app, make_project, tmp_path)
 
 def test_bars_beats_counts_at_the_default_map_without_a_tempo_map(app, make_project, tmp_path):
     sid = open_project(app, build(make_project, tmp_path, name="CounterDefault"))
+    reset_tm(app)
     app.evaluate('() => setCounter("barsbeats")')
     set_playhead(app, 3.0)   # 120 BPM 4/4: bar 2, beat 3
     assert app.evaluate("() => document.querySelector('#timeDisplay').textContent") == bb_of(2, 3)
@@ -66,3 +74,29 @@ def test_bars_beats_counts_at_the_default_map_without_a_tempo_map(app, make_proj
     assert app.evaluate("() => document.querySelector('#timeDisplay').textContent") == bb_of(2, 1, 480)
     set_playhead(app, 2.75)   # half a beat into bar 2 beat 2: 480 of 960 ticks
     assert app.evaluate("() => document.querySelector('#timeDisplay').textContent") == bb_of(2, 2, 480)
+
+
+def test_bars_beats_between_beats_of_the_map(app, make_project, tmp_path):
+    # the coordinator's defect 1: the beat at or before the playhead, not the nearest one;
+    # these positions failed on the tmNearest version (they read beat 2 with wrapped ticks).
+    sid = open_project(app, build(make_project, tmp_path, name="CounterBetween"))
+    reset_tm(app)
+    invoke(app, "tempo_map_set", sid=sid, map=MAP)
+    app.evaluate("async () => { await tmLoad(); }")
+    app.evaluate('() => setCounter("barsbeats")')
+    set_playhead(app, 2.0 + 0.25 * 2 / 3)   # a quarter beat after 2.1 (90 BPM: 2/3 s per beat)
+    assert app.evaluate("() => document.querySelector('#timeDisplay').textContent") == bb_of(2, 1, 240)
+    set_playhead(app, 2.0 + 0.75 * 2 / 3)   # three quarters into beat 2.1: 720 of 960 ticks
+    assert app.evaluate("() => document.querySelector('#timeDisplay').textContent") == bb_of(2, 1, 720)
+
+
+def test_bars_beats_before_bar_1_is_clamped(app, make_project, tmp_path):
+    # the coordinator's defect 2: a playhead before bar 1 has no beat at or before it;
+    # the counter clamps to 1| 1| 000 (chosen over counting back from bar 1).
+    sid = open_project(app, build(make_project, tmp_path, name="CounterBeforeBar1"))
+    reset_tm(app)
+    invoke(app, "tempo_map_set", sid=sid, map={**MAP, "bar1_s": 1.0})
+    app.evaluate("async () => { await tmLoad(); }")
+    app.evaluate('() => setCounter("barsbeats")')
+    set_playhead(app, 0.5)
+    assert app.evaluate("() => document.querySelector('#timeDisplay').textContent") == bb_of(1, 1)

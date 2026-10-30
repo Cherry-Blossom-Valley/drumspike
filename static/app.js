@@ -972,10 +972,14 @@ function counterBarsBeats() {
   }
   const g = tmGrid();
   if (!g || !g.t.length) return counterBBText(1, 1, 0);
-  const i = tmNearest(g.t, S.playhead);
+  let i = tmLower(g.t, S.playhead) - 1;   // the beat at or before the playhead (#149)
+  if (i < 0) return counterBBText(1, 1, 0);   // before bar 1: clamped to 1| 1| 000
+  // the grid times accumulate (tmGrid), so a playhead on a beat can sit a hair below its
+  // grid time: treat anything within a microsecond of the next beat as that beat (#149)
+  if (i + 1 < g.t.length && g.t[i + 1] - S.playhead * 1 <= 1e-6) i++;
   const dt = (i + 1 < g.t.length ? g.t[i + 1] - g.t[i] : 0.5) || 0.5;
-  const ticks = Math.round((S.playhead - g.t[i]) / dt * 960);
-  return counterBBText(g.bar[i], g.beat[i], ((ticks % 960) + 960) % 960);
+  const ticks = ((Math.round((S.playhead - g.t[i]) / dt * 960) % 960) + 960) % 960;
+  return counterBBText(g.bar[i], g.beat[i], Math.max(0, ticks));
 }
 function counterTimecode() {
   const fps = 30, sr = counterRate();
