@@ -168,6 +168,29 @@ fn a_slow_ballad_with_sixteenth_kicks_is_not_called_double_tempo() {
     );
 }
 
+/// #130: a half-time backbeat - the true tempo is 134, the kick plays its 8ths and the snare
+/// recurs every 4 beats (once per bar) - is not called 67. Up to #130 the snare backbeat
+/// credited the 67 pick (+1.0: the snare sits at 2 of its periods) and the (1 + backbeat)
+/// factor decided over the prior.
+#[test]
+fn a_half_time_backbeat_at_134_is_not_called_67() {
+    let s = Section {
+        bars: 40,
+        bpm: 134.0,
+        beats: 4,
+        kick: "x.x.x.x.x.x.x.x.",
+        snare: "x...............",
+    };
+    let (hits, _) = build(&Train::default(), &[s]);
+    let d = detect(&hits, &params()).unwrap();
+    assert!(
+        (d.bpm - 134.0).abs() < 0.05,
+        "bpm {} alternatives {:?}",
+        d.bpm,
+        d.alternatives
+    );
+}
+
 #[test]
 fn a_fast_punk_beat_is_not_called_half_tempo() {
     let s = Section {
