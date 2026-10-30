@@ -218,21 +218,23 @@ fn rule_versions_and_the_reference_rule() {
             RefineRule::Reference.version(),
             RefineRule::Reach.version(),
             RefineRule::FirstMotion.version(),
-            RefineRule::Foot.version()
+            RefineRule::Foot.version(),
+            RefineRule::FootCapped.version()
         ),
-        (1, 2, 3, 4)
+        (1, 2, 3, 4, 5)
     );
     for r in [
         RefineRule::Reference,
         RefineRule::Reach,
         RefineRule::FirstMotion,
         RefineRule::Foot,
+        RefineRule::FootCapped,
     ] {
         assert_eq!(RefineRule::from_version(u64::from(r.version())), Some(r));
     }
     assert_eq!(RefineRule::from_version(0), None);
-    assert_eq!(RefineRule::from_version(5), None);
-    assert_eq!(RefineRule::CURRENT, RefineRule::Foot);
+    assert_eq!(RefineRule::from_version(6), None);
+    assert_eq!(RefineRule::CURRENT, RefineRule::FootCapped);
     // the reference rule is refine_sr, step Kept, on every kind of window
     let x = noisy(&track(&[(0.5, -3.0)], 1.5), -70.0);
     for t0 in [0.486, 0.497, 0.503, 0.65, 2.0] {
@@ -670,22 +672,55 @@ fn the_strict_foot_moves_at_most_the_guard_before_the_version_3_foot() {
     };
     let x = rise(16);
     assert_eq!(
-        first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, false),
+        first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, None),
         (d, BackStep::Moved)
     );
     assert_eq!(foot_strict(&x, d, s - 480, 0.0), d - 17);
     assert!(samples(FM_STRICT_MAX_S, SR as f64) < 17);
     assert_eq!(
-        first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, true),
+        first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, Some(FootTune::V4)),
         (d, BackStep::Moved),
         "the guard keeps the version 3 foot"
     );
     let x = rise(4);
     assert_eq!(
-        first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, true),
+        first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, Some(FootTune::V4)),
         (d - 5, BackStep::Moved),
         "a strict move within the guard is kept"
     );
+}
+
+#[test]
+fn the_version_5_cap_keeps_or_clamps_a_move_beyond_three_samples() {
+    // #127: the same 16-sample shoulder as the version 4 guard test. The strict foot is 17 samples before
+    // the version 3 foot, beyond the 3-sample cap: the version 5 foot moves to the cap (clamp), the keep
+    // variant keeps the version 3 foot.
+    let n = 24_000usize;
+    let s = 12_000i64;
+    let d = s - 64;
+    let mut x = vec![0.0f32; n];
+    for v in &mut x[(d - 16) as usize..d as usize] {
+        *v = 0.0112;
+    }
+    for v in &mut x[d as usize..(s + 300) as usize] {
+        *v = 1.0;
+    }
+    let keep = FootTune {
+        overrun: Overrun::Keep,
+        ..FootTune::V5
+    };
+    assert_eq!(
+        first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, Some(FootTune::V5)),
+        (d - 3, BackStep::Moved),
+        "clamp: three samples before the version 3 foot"
+    );
+    assert_eq!(
+        first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, Some(keep)),
+        (d, BackStep::Moved),
+        "keep: the version 3 foot"
+    );
+    assert_eq!(FootTune::V5.cap, FootCap::Samples(3));
+    assert_eq!(FootTune::V4.cap, FootCap::Seconds(FM_STRICT_MAX_S));
 }
 
 #[test]
