@@ -470,7 +470,9 @@ fn the_rule_of_an_analysis_and_of_a_repick() {
     assert_eq!(parse_rule("reach"), Some(RefineRule::Reach));
     assert_eq!(parse_rule("3"), Some(RefineRule::FirstMotion));
     assert_eq!(parse_rule("First-Motion"), Some(RefineRule::FirstMotion));
-    assert_eq!(parse_rule("4"), None);
+    assert_eq!(parse_rule("foot"), Some(RefineRule::Foot));
+    assert_eq!(parse_rule("4"), Some(RefineRule::Foot));
+    assert_eq!(parse_rule("5"), None);
     assert_eq!(parse_rule(""), None);
     let free = ServiceConfig {
         refine_rule: None,
@@ -488,7 +490,7 @@ fn the_rule_of_an_analysis_and_of_a_repick() {
     };
     // a new analysis runs the current rule unless pinned
     assert_eq!(analysis_rule(&free), RefineRule::CURRENT);
-    assert_eq!(RefineRule::CURRENT, RefineRule::FirstMotion);
+    assert_eq!(RefineRule::CURRENT, RefineRule::Foot);
     assert_eq!(analysis_rule(&pinned), RefineRule::Reference);
     // a re-pick keeps the rule its analysis recorded; no record or no version: before P4-12 (1)
     let rec = |v: Value| {

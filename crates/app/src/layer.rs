@@ -1035,14 +1035,15 @@ mod tests {
             sr: 96_000,
             chans: vec![chans],
         };
-        assert_eq!(job_onset(&job(SourceStatus::Changed), &shot2), 1000);
+        // the foot of the version 4 rule (#101): one sample before the first full-scale sample
+        assert_eq!(job_onset(&job(SourceStatus::Changed), &shot2), 999);
         // fix 7: the render's onset is not rounded; a re-measured one stays whole
         let shot44 = OneShot {
             sr: 44_100,
             chans: vec![vec![0.0; 44_100]],
         };
         assert!((job_onset_exact(&job(SourceStatus::Ok), &shot44) - 44.1).abs() < 1e-9);
-        assert_eq!(job_onset_exact(&job(SourceStatus::Changed), &shot2), 1000.0);
+        assert_eq!(job_onset_exact(&job(SourceStatus::Changed), &shot2), 999.0);
     }
 
     #[test]
