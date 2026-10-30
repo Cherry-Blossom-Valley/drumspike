@@ -948,8 +948,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .separator()
         .item(&mi(&COUNTER_EXCHANGE)?)
         .build()?;
-    let tab_mode = SubmenuBuilder::with_id(app, "tab_mode", "Tab Moves To")   // #175
-        .item(&ck(&TAB_ACTIVE, true)?)   // the default: active hits only
+    let tab_mode = SubmenuBuilder::with_id(app, "tab_mode", "Tab Moves To") // #175
+        .item(&ck(&TAB_ACTIVE, true)?) // the default: active hits only
         .item(&ck(&TAB_ALL, false)?)
         .build()?;
     let view = SubmenuBuilder::new(app, "View")
@@ -965,7 +965,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&ck(&INFO_LINE, true)?)
         .item(&ck(&OVERVIEW, true)?)
         .item(&counter)
-        .item(&tab_mode)   // #175: View > Tab Moves To
+        .item(&tab_mode) // #175: View > Tab Moves To
         .separator()
         .item(&ck(&RULER_TEMPO, true)?)
         .item(&ck(&RULER_METER, true)?)
