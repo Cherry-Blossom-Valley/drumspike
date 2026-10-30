@@ -474,6 +474,7 @@ input.hgRange:disabled { cursor: default; opacity: .5; }
 #exportModal .exDrag[data-state="preparing"] { cursor: progress; opacity: .7; }
 #exportModal .exDrag[data-state="disabled"], #exportModal .exDrag[data-state="error"] { cursor: default; opacity: .4; }
 #exportModal .exDragN { color: var(--dim); }
+#exportModal .exDragW { color: #c28a1f; font-weight: 600; }   /* #151: the visible 120 BPM warning on the Drag MIDI tile */
 .lnRow .lnHintMsg { display: block; color: var(--orange); margin-top: 2px; }
 /* #387: the licence text of a detector plugin (the modal of the first use and the Settings view) */
 #pluginLicenceModal .plText { max-height: 40vh; overflow: auto; font-size: 11px; line-height: 1.4;

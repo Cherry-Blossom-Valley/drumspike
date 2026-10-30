@@ -6,7 +6,7 @@ from pathlib import Path
 
 from playwright.sync_api import expect
 
-from app_support import inspect_track, menu, open_project, track_menu
+from app_support import ex_confirm_tempo, inspect_track, menu, open_project, track_menu
 
 
 def text(page):
@@ -58,6 +58,7 @@ def test_the_toolbar_icons_run_add_analyze_and_export(app, make_project):
     app.click("#exportAllBtn")
     expect(app.locator("#exportModal")).to_be_visible()                              # P4-30: the arrow opens the Export dialog
     app.click("#exGo")
+    ex_confirm_tempo(app)
     expect(app.locator("#stMsg")).to_contain_text("exported 2 MIDI and 2 spike files to Exports/", timeout=30000)
     app.click("#exCancel")
     app.click("#addTracksBtn")                                                       # the file dialog of the bridge: cancelled
