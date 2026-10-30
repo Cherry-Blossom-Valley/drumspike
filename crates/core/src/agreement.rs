@@ -230,10 +230,10 @@ fn xcorr_score(x: &[f32], from: i64, tpl: &[f64]) -> Option<f64> {
 fn xcorr_lag(x: &[f32], base: i64, span: i64, tpl: &[f64]) -> Option<(i64, f64, bool)> {
     let mut best: Option<(i64, f64)> = None;
     for d in -span..=span {
-        if let Some(score) = xcorr_score(x, base + d, tpl) {
-            if best.is_none_or(|(_, s)| score.abs() > s.abs()) {
-                best = Some((d, score));
-            }
+        if let Some(score) = xcorr_score(x, base + d, tpl)
+            && best.is_none_or(|(_, s)| score.abs() > s.abs())
+        {
+            best = Some((d, score));
         }
     }
     let (d, score) = best?;
@@ -263,14 +263,16 @@ pub fn agreement_track(x: &[f32], sr: u32, hits: &[f64]) -> Vec<Agreement> {
             // to the template's own onset (its first pre-window holds the pre-onset audio)
             let tpl_pre = (AGREEMENT_TPL_PRE_S * srf).round() as i64;
             let mut e3: Option<i64> = None;
-            if !tpl.is_empty() && s + lo - span >= 0 && s + hi + span <= x.len() as i64 {
-                if let Some((d, score, at_edge)) = xcorr_lag(x, s + lo, span, &tpl) {
-                    // the polarity comes from the best score even when the lag itself
-                    // sits at the search edge and is not an estimate
-                    out.polarity = if score >= 0.0 { 1 } else { -1 };
-                    if !at_edge {
-                        e3 = Some(s + lo + d + tpl_pre);
-                    }
+            if !tpl.is_empty()
+                && s + lo - span >= 0
+                && s + hi + span <= x.len() as i64
+                && let Some((d, score, at_edge)) = xcorr_lag(x, s + lo, span, &tpl)
+            {
+                // the polarity comes from the best score even when the lag itself
+                // sits at the search edge and is not an estimate
+                out.polarity = if score >= 0.0 { 1 } else { -1 };
+                if !at_edge {
+                    e3 = Some(s + lo + d + tpl_pre);
                 }
             }
             let ests: Vec<i64> = [e1, e2, e3].into_iter().flatten().collect();

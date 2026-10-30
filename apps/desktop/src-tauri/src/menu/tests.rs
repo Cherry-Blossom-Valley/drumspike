@@ -78,9 +78,11 @@ fn the_reference_keys_are_the_accelerators_or_page_keys() {
     assert_eq!(acc(&INSPECTOR), "Alt+I");
     assert_eq!(acc(&HEIGHT_TALLER), "CmdOrCtrl+ArrowDown"); // P3-14c, reference 3.2 (Cubase Zoom In Tracks)
     assert_eq!(acc(&HEIGHT_SHORTER), "CmdOrCtrl+ArrowUp");
-    assert!([HEIGHT_SMALL, HEIGHT_MEDIUM, HEIGHT_LARGE]
-        .iter()
-        .all(|i| accel_of(i.id, "default").is_none() && accel_of(i.id, "cubase").is_none()));
+    assert!(
+        [HEIGHT_SMALL, HEIGHT_MEDIUM, HEIGHT_LARGE]
+            .iter()
+            .all(|i| accel_of(i.id, "default").is_none() && accel_of(i.id, "cubase").is_none())
+    );
     assert_eq!(acc(&GO_END), "Alt+Enter");
     assert_eq!(acc(&PREV_HIT), "Alt+Tab");
     assert_eq!(acc(&NEXT_HIT_ALL), "Ctrl+Tab");
@@ -515,20 +517,28 @@ fn a_broken_table_is_refused_with_the_reason() {
             .unwrap_err()
             .contains("no id")
     );
-    assert!(parse_keymap(&wrap(r#"[{"id": "a", "page_keys": [], "cubase": null}]"#))
+    assert!(
+        parse_keymap(&wrap(r#"[{"id": "a", "page_keys": [], "cubase": null}]"#))
+            .unwrap_err()
+            .contains("no title")
+    );
+    assert!(
+        parse_keymap(&wrap(r#"[{"id": 1}]"#))
+            .unwrap_err()
+            .contains("not a string")
+    );
+    assert!(
+        parse_keymap(&wrap(
+            r#"[{"id": "a", "title": "A", "page_keys": "J", "cubase": null}]"#
+        ))
         .unwrap_err()
-        .contains("no title"));
-    assert!(parse_keymap(&wrap(r#"[{"id": 1}]"#))
-        .unwrap_err()
-        .contains("not a string"));
-    assert!(parse_keymap(&wrap(
-        r#"[{"id": "a", "title": "A", "page_keys": "J", "cubase": null}]"#
-    ))
-    .unwrap_err()
-    .contains("page_keys"));
-    assert!(parse_keymap(&wrap(r#"[{"id": "a", "title": "A", "page_keys": []}]"#))
-        .unwrap_err()
-        .contains("no \"cubase\""));
+        .contains("page_keys")
+    );
+    assert!(
+        parse_keymap(&wrap(r#"[{"id": "a", "title": "A", "page_keys": []}]"#))
+            .unwrap_err()
+            .contains("no \"cubase\"")
+    );
     let c = &parse_keymap(&wrap(
         r#"[{"id": "a", "title": "A", "menu_key": "Cmd+A", "page_keys": ["A"], "cubase": ["B"]}]"#,
     ))
@@ -601,9 +611,10 @@ fn every_item_has_a_command() {
     // #293: every item works, the Learn items included (the DSP candidates carry them again)
     let later: Vec<&str> = SPEC.iter().filter(|i| !i.ready).map(|i| i.id).collect();
     assert!(later.is_empty(), "{later:?}");
-    assert!(SPEC
-        .iter()
-        .any(|i| i.id == "learn_filter" && i.needs_project && i.kind == Kind::Check));
+    assert!(
+        SPEC.iter()
+            .any(|i| i.id == "learn_filter" && i.needs_project && i.kind == Kind::Check)
+    );
     assert!(
         SPEC.iter().any(|i| i.id == "consolidate" && i.needs_project),
         "Consolidate needs a project"
@@ -698,18 +709,26 @@ fn check_items_are_snap_click_info_line_and_the_radio_modes() {
             "learn_filter"
         ]
     );
-    assert!(COUNTER_MODES
-        .iter()
-        .all(|(_, id)| SPEC.iter().any(|i| i.id == *id && i.kind == Kind::Check)));
-    assert!(FOLLOW_MODES
-        .iter()
-        .all(|(_, id)| SPEC.iter().any(|i| i.id == *id && i.kind == Kind::Check)));
-    assert!(HEIGHT_MODES
-        .iter()
-        .all(|(_, id)| SPEC.iter().any(|i| i.id == *id && i.kind == Kind::Check)));
-    assert!(NUDGE_MODES
-        .iter()
-        .all(|(_, id)| SPEC.iter().any(|i| i.id == *id && i.kind == Kind::Check)));
+    assert!(
+        COUNTER_MODES
+            .iter()
+            .all(|(_, id)| SPEC.iter().any(|i| i.id == *id && i.kind == Kind::Check))
+    );
+    assert!(
+        FOLLOW_MODES
+            .iter()
+            .all(|(_, id)| SPEC.iter().any(|i| i.id == *id && i.kind == Kind::Check))
+    );
+    assert!(
+        HEIGHT_MODES
+            .iter()
+            .all(|(_, id)| SPEC.iter().any(|i| i.id == *id && i.kind == Kind::Check))
+    );
+    assert!(
+        NUDGE_MODES
+            .iter()
+            .all(|(_, id)| SPEC.iter().any(|i| i.id == *id && i.kind == Kind::Check))
+    );
 }
 
 #[test]
@@ -857,7 +876,8 @@ fn the_undo_and_redo_titles_take_the_pages_text() {
     assert_eq!(cut.chars().count(), 90);
     assert!(cut.ends_with('\u{2026}') && cut.starts_with("Undo xxx"));
     // the label of an Edit item with a page text is still the keymap's label
-    assert!(SPEC
-        .iter()
-        .any(|i| i.id == "undo_history" && i.label == "Undo History\u{2026}" && i.needs_project));
+    assert!(
+        SPEC.iter()
+            .any(|i| i.id == "undo_history" && i.label == "Undo History\u{2026}" && i.needs_project)
+    );
 }

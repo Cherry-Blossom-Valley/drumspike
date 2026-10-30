@@ -26,13 +26,13 @@ use std::path::Path;
 
 use drumspike_core::cache::CacheTile;
 use drumspike_core::midi::export_midi_map as write_midi;
-use drumspike_core::project::{load_project, Event};
-use serde_json::{json, Value};
+use drumspike_core::project::{Event, load_project};
+use serde_json::{Value, json};
 
 use crate::error::AppError;
 use crate::jobs;
 use crate::media::PeakRequest;
-use crate::registry::{lock, OpenProject};
+use crate::registry::{OpenProject, lock};
 use crate::{Progress, Service};
 
 /// The detector family the app uses (the Rust detector in `drumspike-core`).

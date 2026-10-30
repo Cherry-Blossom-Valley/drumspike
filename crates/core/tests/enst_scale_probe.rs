@@ -7,8 +7,8 @@
 
 use drumspike_core::detect::features::N_BANDS;
 use drumspike_core::detect::onset::band_range;
-use drumspike_core::detect::{prepare, Chain, DetectError};
-use drumspike_core::io::{read_wav_mono, MixMode};
+use drumspike_core::detect::{Chain, DetectError, prepare};
+use drumspike_core::io::{MixMode, read_wav_mono};
 use std::path::PathBuf;
 
 fn role_bands(role: &str) -> std::ops::Range<usize> {

@@ -1,8 +1,8 @@
 //! Tests of the Learn filter's pure parts with planted faults (concept 3.3, 3.6).
 
 use super::{
-    dropped_times, forced_this, forget_attack_gate, mark_out, note_dropped, refilter_merge, role_hits, threshold_of,
-    undrop_at, EDITED_REACH, REACH,
+    EDITED_REACH, REACH, dropped_times, forced_this, forget_attack_gate, mark_out, note_dropped, refilter_merge,
+    role_hits, threshold_of, undrop_at,
 };
 use serde_json::json;
 
@@ -369,7 +369,7 @@ fn add_times_takes_below_sens_candidates_over_th_and_skips_not_and_known() {
     let sc = [0.2, 0.9, 0.5];
     let got = super::add_times(&cands, &fr, &sc, 100.0, 0.85, &[], &[]);
     assert_eq!(got, vec![1.0]); // planted fault: the solid one or the low score fail this
-                                // a Forget example within 50 ms excludes the hit
+    // a Forget example within 50 ms excludes the hit
     let got = super::add_times(&cands, &fr, &sc, 100.0, 0.85, &[], &[1.02]);
     assert!(got.is_empty());
     // a detection hit within REACH excludes it

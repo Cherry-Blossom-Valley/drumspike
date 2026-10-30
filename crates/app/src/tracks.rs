@@ -25,19 +25,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use drumspike_core::SourceStatus;
 use drumspike_core::io::{MappedWav, MixMode};
 use drumspike_core::project::{
-    add_track, build_source, check_track_name, copy_into_project_ctl, Track, ANALYSIS_DIR, AUDIO_DIR,
+    ANALYSIS_DIR, AUDIO_DIR, Track, add_track, build_source, check_track_name, copy_into_project_ctl,
 };
-use drumspike_core::SourceStatus;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::command_policy::opt_i64;
 use crate::copyjob::Meter;
 use crate::error::AppError;
 use crate::registry::lock;
 use crate::reply::Channels;
-use crate::roles::{default_note, guess, is_role, role_color, Rule};
+use crate::roles::{Rule, default_note, guess, is_role, role_color};
 use crate::{Progress, Service};
 
 /// The commands of this card, as the route map names them.
@@ -289,11 +289,7 @@ pub fn safe_name(stem: &str, idx: usize) -> String {
             gap = true;
         }
     }
-    if out.is_empty() {
-        format!("track{idx}")
-    } else {
-        out
-    }
+    if out.is_empty() { format!("track{idx}") } else { out }
 }
 
 fn str_list(v: Option<&Value>) -> Vec<Value> {
@@ -358,15 +354,16 @@ impl Service {
                 Ok(p) => {
                     let mut g = guess(&p.stem, &rules);
                     // a Drum Spike export (#216) gets no role, neither from its name nor from its audio
-                    if g.source == crate::roles::Source::None && !crate::roles::is_export_name(&p.stem) {
-                        if let Some(role) = self.audio_suggestion(&p).unwrap_or(None) {
-                            g = crate::roles::Guess {
-                                role: role.to_string(),
-                                note: default_note(role),
-                                source: crate::roles::Source::Audio,
-                                matched: None,
-                            };
-                        }
+                    if g.source == crate::roles::Source::None
+                        && !crate::roles::is_export_name(&p.stem)
+                        && let Some(role) = self.audio_suggestion(&p).unwrap_or(None)
+                    {
+                        g = crate::roles::Guess {
+                            role: role.to_string(),
+                            note: default_note(role),
+                            source: crate::roles::Source::Audio,
+                            matched: None,
+                        };
                     }
                     if matches!(g.source, crate::roles::Source::Preset | crate::roles::Source::Scheme) {
                         guessed += 1;
@@ -619,17 +616,17 @@ impl Service {
                 crate::roles::ROLES.join(", ")
             )));
         }
-        if let Some(s) = source {
-            if !matches!(s, "user" | "guess" | "audio" | "scheme" | "none" | "preset") {
-                return Err(AppError::bad(format!(
-                    "wrong `source` {s} (user, guess, audio; the undo also takes scheme, none, preset)"
-                )));
-            }
+        if let Some(s) = source
+            && !matches!(s, "user" | "guess" | "audio" | "scheme" | "none" | "preset")
+        {
+            return Err(AppError::bad(format!(
+                "wrong `source` {s} (user, guess, audio; the undo also takes scheme, none, preset)"
+            )));
         }
-        if let Some(n) = note {
-            if !(0..=127).contains(&n) {
-                return Err(AppError::bad(format!("note must be 0 to 127, not {n}")));
-            }
+        if let Some(n) = note
+            && !(0..=127).contains(&n)
+        {
+            return Err(AppError::bad(format!("note must be 0 to 127, not {n}")));
         }
         let op = self.inner.registry.get_writable(sid)?;
         // R09: a busy project (an analysis queued or running, another write active) refuses the

@@ -11,11 +11,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use drumspike_core::project::{
-    backup_name, free_name, rotate_backups, write_document, BACKUPS_DIR, BACKUPS_KEEP, FORMAT,
+    BACKUPS_DIR, BACKUPS_KEEP, FORMAT, backup_name, free_name, rotate_backups, write_document,
 };
 
 use crate::error::AppError;
-use crate::registry::{lock, Shared};
+use crate::registry::{Shared, lock};
 use crate::{Inner, Service};
 
 /// The default interval, in seconds.
@@ -38,13 +38,15 @@ pub fn tick_period(interval: Duration) -> Duration {
 /// Start the thread for a new service.
 pub(crate) fn spawn(inner: &Arc<Inner>) {
     let weak = Arc::downgrade(inner);
-    let _ = std::thread::Builder::new().name("autosave".into()).spawn(move || loop {
-        let Some(inner) = weak.upgrade() else { break };
-        let svc = Service { inner };
-        svc.autosave_tick(Instant::now());
-        let wait = tick_period(svc.autosave_interval());
-        drop(svc);
-        std::thread::sleep(wait);
+    let _ = std::thread::Builder::new().name("autosave".into()).spawn(move || {
+        loop {
+            let Some(inner) = weak.upgrade() else { break };
+            let svc = Service { inner };
+            svc.autosave_tick(Instant::now());
+            let wait = tick_period(svc.autosave_interval());
+            drop(svc);
+            std::thread::sleep(wait);
+        }
     });
 }
 

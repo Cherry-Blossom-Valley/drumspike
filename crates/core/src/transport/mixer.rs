@@ -32,8 +32,8 @@
 //! speed; the callback takes it with the target, and publishes `frame_pos / slowdown` as the
 //! session frame. The mix itself does not change.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use rtrb::{Consumer, Producer};
 
@@ -112,11 +112,7 @@ pub fn audible_gains(n: usize, mute: &[bool], solo: &[bool]) -> Vec<f32> {
         .map(|i| {
             let s = solo.get(i).copied().unwrap_or(false);
             let m = mute.get(i).copied().unwrap_or(false);
-            if s || (!any_solo && !m) {
-                1.0
-            } else {
-                0.0
-            }
+            if s || (!any_solo && !m) { 1.0 } else { 0.0 }
         })
         .collect()
 }
@@ -255,10 +251,10 @@ impl Engine {
                 // #201: the window end of the request in output frames at the render rate; a
                 // seek without one clears the end (a plain play plays on)
                 self.end_at = end_at.map(|e| e.saturating_mul(slowdown));
-                if let Some((ls, le)) = self.loop_range {
-                    if self.frame_pos >= le {
-                        self.frame_pos = ls + (self.frame_pos - ls) % (le - ls);
-                    }
+                if let Some((ls, le)) = self.loop_range
+                    && self.frame_pos >= le
+                {
+                    self.frame_pos = ls + (self.frame_pos - ls) % (le - ls);
                 }
                 self.seek_tag = tag;
                 // #430: a seek repositions every source; the lag of the old position is void
@@ -374,10 +370,10 @@ impl Engine {
             // #166: a block never spans the wrap point of a loop: the clicks and the layer
             // voices of a block are placed at its first frame, so a block that runs over the
             // region end would misplace them on the far side of the wrap
-            if let Some((ls, le)) = self.loop_range {
-                if self.frame_pos >= le {
-                    self.frame_pos = ls + (self.frame_pos - ls) % (le - ls);
-                }
+            if let Some((ls, le)) = self.loop_range
+                && self.frame_pos >= le
+            {
+                self.frame_pos = ls + (self.frame_pos - ls) % (le - ls);
             }
             let mut n = (frames - done).min(MAX_BLOCK);
             if let Some((_, le)) = self.loop_range {

@@ -7,7 +7,7 @@ mod common;
 use std::os::unix::fs::PermissionsExt;
 
 use common::*;
-use drumspike_app::lock::{fake_lock_error, ProjectLock};
+use drumspike_app::lock::{ProjectLock, fake_lock_error};
 use serde_json::Value;
 
 fn app(root: &std::path::Path) -> drumspike_app::Service {

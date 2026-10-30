@@ -36,15 +36,15 @@
 //! (P4-38e: `dropped`, the times of the Learn hits the engineer deleted, before the Hitpoint shift; a Learn change
 //! does not bring them back, [`crate::learn_filter::note_dropped`]).
 
-use drumspike_core::refine::{refine_sr, RefineWindow};
-use serde_json::{json, Map, Value};
+use drumspike_core::refine::{RefineWindow, refine_sr};
+use serde_json::{Map, Value, json};
 
+use crate::Service;
 use crate::commands::{assign_events, events_set_out};
 use crate::error::AppError;
 use crate::export::hit_times;
 use crate::media::mix_mode;
 use crate::registry::{lock, resolve_shared};
-use crate::Service;
 
 /// The commands of this card, as the route map names them.
 pub const LEARN_COMMANDS: [&str; 7] = [
@@ -338,15 +338,15 @@ pub fn check_learn(learn: &Map<String, Value>) -> Result<(), AppError> {
             return bad(&format!("`{k}` has the wrong type"));
         }
     }
-    if let Some(t) = learn.get("threshold").and_then(Value::as_f64) {
-        if !(0.0..=1.0).contains(&t) {
-            return bad("`threshold` must be 0 to 1");
-        }
+    if let Some(t) = learn.get("threshold").and_then(Value::as_f64)
+        && !(0.0..=1.0).contains(&t)
+    {
+        return bad("`threshold` must be 0 to 1");
     }
-    if let Some(t) = learn.get("add").and_then(Value::as_f64) {
-        if !(0.0..=1.0).contains(&t) {
-            return bad("`add` must be 0 to 1");
-        }
+    if let Some(t) = learn.get("add").and_then(Value::as_f64)
+        && !(0.0..=1.0).contains(&t)
+    {
+        return bad("`add` must be 0 to 1");
     }
     // P4-38e: the deleted Learn hits
     let num = |x: &Value| x.as_f64().is_some_and(f64::is_finite);
@@ -660,10 +660,10 @@ impl Service {
             let n = assign_events(&mut g, name, events)?;
             let new = events.as_array().map(Vec::as_slice).unwrap_or_default();
             let tr = g.track_mut(name)?;
-            if let Some(mut learn) = learn_of(&tr.extra) {
-                if crate::learn_filter::note_dropped(&mut learn, &old, new, shift_s_of(tr)) {
-                    tr.extra.insert("learn".into(), Value::Object(learn));
-                }
+            if let Some(mut learn) = learn_of(&tr.extra)
+                && crate::learn_filter::note_dropped(&mut learn, &old, new, shift_s_of(tr))
+            {
+                tr.extra.insert("learn".into(), Value::Object(learn));
             }
             g.mark_dirty();
             n

@@ -27,8 +27,8 @@ pub struct Span {
 
 #[cfg(feature = "trace")]
 mod imp {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use tracing::span::{Attributes, Id, Record};
     use tracing::{Event, Subscriber};

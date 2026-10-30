@@ -25,12 +25,12 @@
 
 use std::sync::Arc;
 
-use drumspike_core::analyze::{analyze_detected, role_note, AnalyzeParams};
+use drumspike_core::analyze::{AnalyzeParams, analyze_detected, role_note};
 use drumspike_core::detect::onset::{self, OverheadSource};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use crate::media::{mix_mode, Decoded};
-use crate::registry::{lock, OpenProject, Shared};
+use crate::media::{Decoded, mix_mode};
+use crate::registry::{OpenProject, Shared, lock};
 use crate::roles::is_sample_name;
 use crate::{Service, ServiceConfig};
 

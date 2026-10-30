@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use common::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn three_track_project(root: &Path, tag: &str) -> std::path::PathBuf {
     project(

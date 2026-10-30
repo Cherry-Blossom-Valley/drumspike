@@ -5,7 +5,7 @@ mod common;
 
 use common::*;
 use drumspike_app::Service;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Barrier};
 
 fn opened(tag: &str) -> (Service, String, std::path::PathBuf) {
@@ -243,9 +243,11 @@ fn analyze_start_keep_edited_keeps_the_hand_edits_and_the_default_replaces_them(
     // the default (the page): the analysis replaces everything
     svc.analyze_start(&sid, Some(vec!["k in".into()]), None, None).unwrap();
     wait_done(&svc, &sid);
-    assert!(hits(&svc, &sid, "k in")
-        .iter()
-        .all(|e| e.get("added").is_none() && e.get("orig").is_none()));
+    assert!(
+        hits(&svc, &sid, "k in")
+            .iter()
+            .all(|e| e.get("added").is_none() && e.get("orig").is_none())
+    );
     svc.events_edit(&sid, "k in", &ops).unwrap();
     svc.analyze_start_keep(&sid, Some(vec!["k in".into()]), None, None, None, true)
         .unwrap();
@@ -381,7 +383,7 @@ fn track_velocity_set_through_call_stores_the_velocities_and_the_cut() {
 // re-pick (`merge_edited` keeps the edited hits and drops the picks at their times).
 #[test]
 fn events_edit_batch_setv_is_one_step_that_survives_recompute_and_repick() {
-    use drumspike_core::io::{encode_wav, WavFormat, WavSpec};
+    use drumspike_core::io::{WavFormat, WavSpec, encode_wav};
     let root = tmp("ee-setv");
     let mut p = drumspike_core::project::new_project(&root, "Song").unwrap();
     let x = kick_signal(&ONSETS, 3.5, 48_000);
@@ -481,7 +483,7 @@ fn events_edit_refuses_with_a_retryable_conflict_while_another_write_runs() {
     assert_eq!(e.code, 409, "{e:?}");
     assert!(e.message.contains("try again"), "the conflict is retryable: {e:?}");
     drop(g); // the write in flight is done
-             // the refused edit retries and lands; the edit whose critical section the guard stood for lands too
+    // the refused edit retries and lands; the edit whose critical section the guard stood for lands too
     svc.events_edit(&sid, "k in", &[json!({"op": "add", "t": 0.25})])
         .unwrap();
     svc.events_edit(&sid, "k in", &[json!({"op": "add", "t": 1.75})])

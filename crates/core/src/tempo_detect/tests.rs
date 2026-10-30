@@ -410,9 +410,19 @@ fn session_d_kick_only_session_suggests_92_and_bar_1_on_the_beat() {
     let d = detect(&session_d(), &DetectParams::default()).unwrap();
     println!(
         "Session D: suggested {} BPM (fitted {:.4}, error bar {:.5}), confidence {}, bar 1 at {:.4} s (backbeat {}, downbeat {}, alternative {:.4}), alternatives {:?}, meter {:?} feel {:?}, on beat {}, jitter {} ms",
-        d.map.bpm, d.bpm, d.bpm_error_bar, d.confidence, d.bar1_s, d.bar1_backbeat,
-        d.bar1_downbeat, d.bar1_alternative_s, d.alternatives, d.meter, d.meter_feel,
-        d.on_beat, d.jitter_ms
+        d.map.bpm,
+        d.bpm,
+        d.bpm_error_bar,
+        d.confidence,
+        d.bar1_s,
+        d.bar1_backbeat,
+        d.bar1_downbeat,
+        d.bar1_alternative_s,
+        d.alternatives,
+        d.meter,
+        d.meter_feel,
+        d.on_beat,
+        d.jitter_ms
     );
     // #472: the kick-only session is played at 92 BPM; the half tempo (46) must not win.
     assert!(

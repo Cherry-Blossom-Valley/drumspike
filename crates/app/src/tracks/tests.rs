@@ -1,6 +1,6 @@
 use super::*;
 use crate::ServiceConfig;
-use drumspike_core::io::{encode_wav, WavFormat, WavSpec};
+use drumspike_core::io::{WavFormat, WavSpec, encode_wav};
 
 fn tmp(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("ds_tracks_{tag}_{}", std::process::id()));
@@ -76,19 +76,23 @@ fn probe_accepts_the_three_rates_and_says_why_it_rejects() {
     );
     assert_eq!(r.name, "rate.wav");
     aiff(&d.join("a.aif"));
-    assert!(probe(&d.join("a.aif"))
-        .unwrap_err()
-        .reason
-        .starts_with("AIFF files are not supported"));
+    assert!(
+        probe(&d.join("a.aif"))
+            .unwrap_err()
+            .reason
+            .starts_with("AIFF files are not supported")
+    );
     aiff(&d.join("liar.wav")); // the first bytes decide, not the extension
     assert!(probe(&d.join("liar.wav")).unwrap_err().reason.starts_with("AIFF"));
     std::fs::write(d.join("a.flac"), b"fLaC....").unwrap();
     assert!(probe(&d.join("a.flac")).unwrap_err().reason.starts_with("FLAC files"));
     std::fs::write(d.join("notes.txt"), b"hello").unwrap();
-    assert!(probe(&d.join("notes.txt"))
-        .unwrap_err()
-        .reason
-        .contains("no audio file"));
+    assert!(
+        probe(&d.join("notes.txt"))
+            .unwrap_err()
+            .reason
+            .contains("no audio file")
+    );
     std::fs::write(d.join("junk.wav"), b"this is not a wave file at all").unwrap();
     assert!(probe(&d.join("junk.wav")).unwrap_err().reason.contains("not supported"));
     std::fs::write(d.join("empty.wav"), b"").unwrap();
@@ -187,12 +191,14 @@ fn tracks_scan_guesses_roles_and_lists_rejected_files() {
     assert_eq!(r["guessed"], 5);
     let rej = r["rejected"].as_array().unwrap();
     assert_eq!(rej.len(), 2);
-    assert!(rej
-        .iter()
-        .any(|x| x["name"] == "old.aif" && x["reason"].as_str().unwrap().contains("AIFF")));
-    assert!(rej
-        .iter()
-        .any(|x| x["name"] == "rate.wav" && x["reason"].as_str().unwrap().contains("88200")));
+    assert!(
+        rej.iter()
+            .any(|x| x["name"] == "old.aif" && x["reason"].as_str().unwrap().contains("AIFF"))
+    );
+    assert!(
+        rej.iter()
+            .any(|x| x["name"] == "rate.wav" && x["reason"].as_str().unwrap().contains("88200"))
+    );
     assert_eq!(service().tracks_scan(&[], None).unwrap()["files"], json!([]));
     let s = service();
     s.set_home(d.join("home"));

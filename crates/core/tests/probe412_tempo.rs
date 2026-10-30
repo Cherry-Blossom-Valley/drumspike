@@ -6,10 +6,10 @@
 //! candidates themselves are real strokes (attack 60 dB, flux 5.0 at t 34.91).
 //! Run: `cargo test -p drumspike-core --test probe412_tempo -j 8 -- --nocapture --ignored`
 
-use drumspike_core::analyze::{analyze_track, AnalyzeParams, Detector};
+use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track};
 use drumspike_core::detect::features::N_BANDS;
-use drumspike_core::detect::{prepare, Chain};
-use drumspike_core::{read_wav_mono, MixMode};
+use drumspike_core::detect::{Chain, prepare};
+use drumspike_core::{MixMode, read_wav_mono};
 use std::path::PathBuf;
 
 fn mag_q995(path: &std::path::Path, role: &str) {
@@ -51,7 +51,9 @@ fn hit_times(path: &std::path::Path, role: &str) -> Vec<f64> {
 fn probe() {
     let dir = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".cache/drumspike/sessions/Session A/Audio Files");
     for rule in ["0", "1"] {
-        std::env::set_var("DRUMSPIKE_DELTA_RULE", rule);
+        unsafe {
+            std::env::set_var("DRUMSPIKE_DELTA_RULE", rule);
+        }
         for (file, role) in [("k in_02.wav", "kick"), ("s top_02.wav", "snare")] {
             mag_q995(&dir.join(file), role);
             let (x, info) = read_wav_mono(&dir.join(file), MixMode::Average).unwrap();

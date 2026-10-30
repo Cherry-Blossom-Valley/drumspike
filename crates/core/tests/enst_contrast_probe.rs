@@ -5,7 +5,7 @@
 //! Run: `ENST_ROOT=~/.cache/drumspike/datasets/ENST-drums-public cargo test -p drumspike-core --test enst_contrast_probe -j 8 -- --nocapture --ignored`
 
 use drumspike_core::detect::onset::{band_range, superflux};
-use drumspike_core::detect::{prepare, Chain, DetectError};
+use drumspike_core::detect::{Chain, DetectError, prepare};
 use drumspike_core::io::read_wav_mono;
 use std::path::PathBuf;
 

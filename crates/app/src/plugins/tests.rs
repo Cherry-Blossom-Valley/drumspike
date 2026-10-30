@@ -43,9 +43,13 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn with_dir(dir: &Path, f: impl FnOnce()) {
     let _guard = ENV_LOCK.lock().unwrap();
-    std::env::set_var(DETECTORS_DIR_ENV, dir);
+    unsafe {
+        std::env::set_var(DETECTORS_DIR_ENV, dir);
+    }
     f();
-    std::env::remove_var(DETECTORS_DIR_ENV);
+    unsafe {
+        std::env::remove_var(DETECTORS_DIR_ENV);
+    }
 }
 
 #[test]

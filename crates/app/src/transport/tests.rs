@@ -76,13 +76,19 @@ fn clicks_use_the_page_pitch_or_the_role_default() {
 #[test]
 fn the_master_gain_comes_from_the_environment_only_when_valid() {
     // One test owns DRUMSPIKE_MASTER_GAIN: the process environment is shared.
-    std::env::remove_var("DRUMSPIKE_MASTER_GAIN");
+    unsafe {
+        std::env::remove_var("DRUMSPIKE_MASTER_GAIN");
+    }
     assert_eq!(master_from_env(), 1.0);
     for (v, want) in [("0.0", 0.0), ("0.25", 0.25), ("-1", 1.0), ("x", 1.0), ("inf", 1.0)] {
-        std::env::set_var("DRUMSPIKE_MASTER_GAIN", v);
+        unsafe {
+            std::env::set_var("DRUMSPIKE_MASTER_GAIN", v);
+        }
         assert_eq!(master_from_env(), want, "{v}");
     }
-    std::env::remove_var("DRUMSPIKE_MASTER_GAIN");
+    unsafe {
+        std::env::remove_var("DRUMSPIKE_MASTER_GAIN");
+    }
 }
 
 #[test]
@@ -157,7 +163,7 @@ fn dev_err_maps_argument_errors_to_400_and_the_rest_to_500() {
 
 /// A service with an open (silent) transport on one tiny track, and the same plan as a lost one.
 fn service_with_open_plan(tag: &str) -> (Service, Vec<String>) {
-    use drumspike_core::io::{write_wav, WavFormat, WavSpec};
+    use drumspike_core::io::{WavFormat, WavSpec, write_wav};
     let dir = std::env::temp_dir().join(format!("ds_unit_{tag}_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("t.wav");

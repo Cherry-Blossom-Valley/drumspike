@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use super::reader::{
-    Bext, BEXT_DATE, BEXT_DESCRIPTION, BEXT_FIXED_LEN, BEXT_ORIGINATOR, BEXT_ORIGINATOR_REFERENCE, BEXT_TIME,
-    BEXT_TIME_REFERENCE, BEXT_VERSION, SUBFORMAT_TAIL,
+    BEXT_DATE, BEXT_DESCRIPTION, BEXT_FIXED_LEN, BEXT_ORIGINATOR, BEXT_ORIGINATOR_REFERENCE, BEXT_TIME,
+    BEXT_TIME_REFERENCE, BEXT_VERSION, Bext, SUBFORMAT_TAIL,
 };
 
 /// Sample encoding of a written file.
@@ -254,7 +254,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::{read_wav_mono, MixMode, SampleFormat, WavInfo};
+    use crate::io::{MixMode, SampleFormat, WavInfo, read_wav_mono};
 
     fn tmp(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("drumspike-core-writer-{}", std::process::id()));

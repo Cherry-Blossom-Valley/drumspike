@@ -188,13 +188,7 @@ impl Resampler {
         let b: Vec<f64> = (-n_b..=n_b)
             .map(|i| stage(i as f64 * delta, FC_B, BETA_B, T_B))
             .collect();
-        let b_at = |n: i64| -> f64 {
-            if n.abs() > n_b {
-                0.0
-            } else {
-                b[(n + n_b) as usize]
-            }
-        };
+        let b_at = |n: i64| -> f64 { if n.abs() > n_b { 0.0 } else { b[(n + n_b) as usize] } };
         // The composite kernel is zero at |tau| >= T_A + T_B.
         let half = (HALF_LENGTH_S * sr).ceil() as usize + 1;
         let taps = 2 * half;

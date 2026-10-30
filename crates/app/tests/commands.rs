@@ -9,9 +9,9 @@ use common::file_sha256;
 use common::*;
 use drumspike_app::{ListShape, Progress, Service, ServiceConfig};
 use drumspike_core::io::MixMode;
-use drumspike_core::midi::{midi_bytes, MidiEvent};
-use drumspike_core::{read_wav_mono, Track};
-use serde_json::{json, Value};
+use drumspike_core::midi::{MidiEvent, midi_bytes};
+use drumspike_core::{Track, read_wav_mono};
+use serde_json::{Value, json};
 
 /// Open a two-track project; returns (service, sid, folder, root).
 fn opened(tag: &str) -> (Service, String, std::path::PathBuf, std::path::PathBuf) {
@@ -439,12 +439,14 @@ fn analyze_start_runs_the_job_and_stores_events_sr_and_detector() {
     let seen = seen.lock().unwrap();
     assert!(seen.iter().all(|m| m["sid"] == sid.as_str()));
     assert_eq!(seen.last().unwrap()["job"]["state"], "done");
-    assert!(seen
-        .iter()
-        .any(|m| m["job"]["tracks"]["Kick_In"]["stage"] == "decoding"));
-    assert!(seen
-        .iter()
-        .any(|m| m["job"]["tracks"]["Kick_In"]["stage"] == "analyzing"));
+    assert!(
+        seen.iter()
+            .any(|m| m["job"]["tracks"]["Kick_In"]["stage"] == "decoding")
+    );
+    assert!(
+        seen.iter()
+            .any(|m| m["job"]["tracks"]["Kick_In"]["stage"] == "analyzing")
+    );
     // the second run keeps the first events in Backups/<track>.events.prev.json
     svc.events_set(&sid, "Kick_In", &json!([{"t": 0.6, "v": 77, "added": true}]))
         .unwrap();
@@ -575,15 +577,19 @@ fn analyze_status_reports_a_bad_rate_and_bad_params_as_a_track_error() {
     svc.analyze_start(&sid, None, params.as_object(), None).unwrap();
     let st = wait_done(&svc, &sid);
     assert_eq!(st["tracks"]["Odd"]["state"], "error");
-    assert!(st["tracks"]["Odd"]["error"]
-        .as_str()
-        .unwrap()
-        .contains("unsupported sample rate 22050"));
+    assert!(
+        st["tracks"]["Odd"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported sample rate 22050")
+    );
     assert_eq!(st["tracks"]["Kick_In"]["state"], "error");
-    assert!(st["tracks"]["Kick_In"]["error"]
-        .as_str()
-        .unwrap()
-        .contains("bad params: min_gap_ms"));
+    assert!(
+        st["tracks"]["Kick_In"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("bad params: min_gap_ms")
+    );
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -727,7 +733,7 @@ fn spike_project(tag: &str) -> (Service, String, std::path::PathBuf, std::path::
     (svc, sid, p.dir, root)
 }
 
-use drumspike_core::io::{encode_wav, WavFormat, WavSpec};
+use drumspike_core::io::{WavFormat, WavSpec, encode_wav};
 
 fn hits() -> Vec<Value> {
     vec![

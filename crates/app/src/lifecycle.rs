@@ -30,16 +30,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use drumspike_core::project::{
-    abspath, check_name, check_track_name, document_path, new_project, save_as, save_project_report, write_document,
-    Settings, ANALYSIS_DIR, DEFAULT_MIX_MODE,
+    ANALYSIS_DIR, DEFAULT_MIX_MODE, Settings, abspath, check_name, check_track_name, document_path, new_project,
+    save_as, save_project_report, write_document,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::autosave;
 use crate::error::AppError;
 use crate::jobs::to_json_indent1;
 use crate::lanes::LaneJobs;
-use crate::registry::{lock, Emitter};
+use crate::registry::{Emitter, lock};
 use crate::reply::Channels;
 use crate::{Progress, Service};
 
@@ -371,10 +371,10 @@ impl Service {
         }
         // P4-5 (L2): a copy Save As to this name that is running holds `<name>.partial`; 409 now, not after its copy
         let partial = crate::copyjob::partial_of(&pdir);
-        if partial.join(crate::lock::LOCK_FILE).exists() {
-            if let Some(client) = self.lock_client() {
-                crate::lock::ProjectLock::acquire(&partial, &client)?; // dropped at once
-            }
+        if partial.join(crate::lock::LOCK_FILE).exists()
+            && let Some(client) = self.lock_client()
+        {
+            crate::lock::ProjectLock::acquire(&partial, &client)?; // dropped at once
         }
         let new_folder = self.lock_new_folder(&pdir)?;
         let (new_dir, new_name, summary) = {

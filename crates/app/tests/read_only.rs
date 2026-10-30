@@ -21,7 +21,7 @@ use drumspike_app::call;
 use drumspike_app::lock::ProjectLock;
 use drumspike_app::reply::{Channels, Reply};
 use drumspike_app::{AppError, Service, ServiceConfig};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const KICK: &str = "Kick_In";
@@ -50,9 +50,11 @@ impl Session {
             "Song",
             &[kick_spec(KICK, "kick", 36), kick_spec(SNARE, "snare", 38)],
         );
-        let hits = json!((0..8)
-            .map(|i| json!({"t": 0.5 + i as f64 * 0.5, "v": 0.8}))
-            .collect::<Vec<_>>());
+        let hits = json!(
+            (0..8)
+                .map(|i| json!({"t": 0.5 + i as f64 * 0.5, "v": 0.8}))
+                .collect::<Vec<_>>()
+        );
         // the DSP detector always: the re-pick preview answers then
         let cfg = || ServiceConfig {
             refine_rule: None,
@@ -97,8 +99,7 @@ impl Session {
             if let Err(e) = prep.track_repick(&sid, name, None, false) {
                 panic!(
                     "R270 setup: the kept detection of {name} is not found after the analysis (the re-pick lookup): {} ({}); job: {job}",
-                    e.message,
-                    e.code,
+                    e.message, e.code,
                 );
             }
         }

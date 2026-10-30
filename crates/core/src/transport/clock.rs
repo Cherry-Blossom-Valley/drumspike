@@ -13,8 +13,8 @@
 //! callback publishes the session frame (at the device rate) and the slowdown (1 or 2), and
 //! [`Playhead::frame_at`] extrapolates at `sample_rate / slowdown` session frames per second.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 /// One playhead sample: `frame` (device rate) is heard at `host_time_ns`.

@@ -31,14 +31,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use drumspike_core::project::{
-    abspath, check_name, copy_into_project_ctl, document_path, ensure_layout, resolve_source, save_project_into,
-    CopyCtl, Source,
+    CopyCtl, Source, abspath, check_name, copy_into_project_ctl, document_path, ensure_layout, resolve_source,
+    save_project_into,
 };
 use drumspike_core::{Project, SourceStatus};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::AppError;
-use crate::registry::{lock, Shared};
+use crate::registry::{Shared, lock};
 use crate::reply::Channels;
 use crate::{Progress, Service};
 
@@ -93,13 +93,13 @@ impl CopyJobs {
     /// Register a new job of `kind` for `sid`; 409 while another job of that project runs.
     pub fn start(&self, sid: &str, kind: &'static str) -> Result<Arc<JobCtl>, AppError> {
         let mut map = lock(&self.map);
-        if let Some(j) = map.get(sid) {
-            if j.running() {
-                return Err(AppError::conflict(format!(
-                    "another job ({}) is running for this project: wait for it or cancel it",
-                    j.kind
-                )));
-            }
+        if let Some(j) = map.get(sid)
+            && j.running()
+        {
+            return Err(AppError::conflict(format!(
+                "another job ({}) is running for this project: wait for it or cancel it",
+                j.kind
+            )));
         }
         let id = format!("{kind}-{}", self.seq.fetch_add(1, Ordering::SeqCst) + 1);
         let job = Arc::new(JobCtl {
@@ -317,13 +317,13 @@ fn snapshot_items(g: &crate::registry::OpenProject, only_referenced: bool, what:
                     "cannot copy source ({}): {}",
                     status.as_str(),
                     rec.path_or_relative()
-                )))
+                )));
             }
             (status, _) => {
                 return Err(AppError::conflict(format!(
                     "track {name}: source {}; relink it before {what}",
                     status.as_str()
-                )))
+                )));
             }
         }
     }
@@ -404,10 +404,10 @@ pub(crate) fn partial_of(pdir: &Path) -> PathBuf {
 /// The record `src` with an absolute `path` inside `from` moved to the same place inside `to`.
 fn rebase(src: &Source, from: &Path, to: &Path) -> Source {
     let mut s = src.clone();
-    if let Some(p) = &src.path {
-        if let Ok(rel) = Path::new(p).strip_prefix(from) {
-            s.path = Some(to.join(rel).display().to_string());
-        }
+    if let Some(p) = &src.path
+        && let Ok(rel) = Path::new(p).strip_prefix(from)
+    {
+        s.path = Some(to.join(rel).display().to_string());
     }
     s
 }
@@ -475,10 +475,10 @@ impl Service {
         // never leaves a destination folder without a document. The lock is on the partial folder (its lock file
         // moves with the rename); a lock held on an existing destination folder refuses the call too.
         let build = partial_of(&pdir);
-        if pdir.join(crate::lock::LOCK_FILE).exists() {
-            if let Some(client) = self.lock_client() {
-                crate::lock::ProjectLock::acquire(&pdir, &client)?; // 409 when it is held; dropped at once
-            }
+        if pdir.join(crate::lock::LOCK_FILE).exists()
+            && let Some(client) = self.lock_client()
+        {
+            crate::lock::ProjectLock::acquire(&pdir, &client)?; // 409 when it is held; dropped at once
         }
         self.clear_stale_partial(&build)?;
         let new_folder = self.lock_new_folder(&build)?; // dropped on every error path below: what this call made goes

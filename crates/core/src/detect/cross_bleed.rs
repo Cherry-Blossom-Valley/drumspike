@@ -56,7 +56,7 @@
 //!
 //! Every value is computed in a fixed order in `f64`; window bounds use [`ms_to_samples`].
 
-use super::attribution::{band_peak_db, band_sections, ms_to_samples, Biquad, Role};
+use super::attribution::{Biquad, Role, band_peak_db, band_sections, ms_to_samples};
 use crate::refine::first_motion;
 
 /// The kind of a close mic of the rule.

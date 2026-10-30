@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use drumspike_core::project::CacheKey;
-use drumspike_core::{build_cache, compute_peaks, read_wav_mono, MixMode, PeakCache, Track};
+use drumspike_core::{MixMode, PeakCache, Track, build_cache, compute_peaks, read_wav_mono};
 use rayon::prelude::*;
 
 fn wavs(dir: &Path) -> Vec<PathBuf> {

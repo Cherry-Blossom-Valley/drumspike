@@ -28,18 +28,18 @@
 use std::path::PathBuf;
 
 use drumspike_core::io::MappedWav;
-use drumspike_core::layer::{one_shot_onset, read_one_shot, AlignParams};
+use drumspike_core::layer::{AlignParams, one_shot_onset, read_one_shot};
 use drumspike_core::midi::MidiEvent;
 use drumspike_core::pyops::py_round;
 use drumspike_core::sampler::{bounce_polarity, calibration_midi, calibration_time, compensate, measure_offset};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
+use crate::Service;
 use crate::error::AppError;
-use crate::export::{export_dir, EXPORT_PPQ, EXPORT_TEMPO};
-use crate::layer::{applied_lag, layer_job, opt_path, protected_files, save_target, LayerHit, Polarity};
+use crate::export::{EXPORT_PPQ, EXPORT_TEMPO, export_dir};
+use crate::layer::{LayerHit, Polarity, applied_lag, layer_job, opt_path, protected_files, save_target};
 use crate::media::mix_mode;
 use crate::registry::lock;
-use crate::Service;
 
 /// The commands of the sampler calibration.
 pub const SAMPLER_COMMANDS: [&str; 3] = ["sampler_calibration_midi", "track_sampler_get", "track_sampler_set"];
@@ -333,13 +333,13 @@ impl Service {
         let m = measure_offset(&mono, shot.sr, note_on).map_err(AppError::bad)?;
         // the polarity against the close mic, when its audio and hits are there
         let mut polarity = None;
-        if let (Some(mic), false) = (mic, hits.is_empty()) {
-            if let Ok(d) = self.inner.media.decode_cached(&mic, mode) {
-                let at = shot.resampled(d.sr).mono();
-                let onset = one_shot_onset(&at, d.sr);
-                let idx: Vec<i64> = hits.iter().map(|t| py_round(t * d.sr as f64)).collect();
-                polarity = bounce_polarity(&at, onset, &d.samples, &idx, d.sr, &AlignParams::default());
-            }
+        if let (Some(mic), false) = (mic, hits.is_empty())
+            && let Ok(d) = self.inner.media.decode_cached(&mic, mode)
+        {
+            let at = shot.resampled(d.sr).mono();
+            let onset = one_shot_onset(&at, d.sr);
+            let idx: Vec<i64> = hits.iter().map(|t| py_round(t * d.sr as f64)).collect();
+            polarity = bounce_polarity(&at, onset, &d.samples, &idx, d.sr, &AlignParams::default());
         }
         let s = Sampler {
             offset_samples: m.offset_samples,
@@ -489,10 +489,11 @@ mod tests {
         let info = info.unwrap();
         assert_eq!((info.notes, info.clamped, info.aligned), (3, 1, true));
         assert!((info.offset_ms - 100.0 / 48.0).abs() < 1e-9);
-        assert!(info
-            .warning("k")
-            .unwrap()
-            .contains("1 note would fall before the start"));
+        assert!(
+            info.warning("k")
+                .unwrap()
+                .contains("1 note would fall before the start")
+        );
         let ok = ShiftInfo { clamped: 0, ..info };
         assert!(ok.warning("k").is_none());
         assert_eq!(ok.to_json()["clamped"], 0);

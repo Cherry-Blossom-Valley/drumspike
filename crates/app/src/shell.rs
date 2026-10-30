@@ -10,12 +10,12 @@
 use std::path::PathBuf;
 
 use drumspike_core::project::EXPORTS_DIR;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::error::AppError;
-use crate::export::{check_dest, check_export_plan, multi_file_name, select_tracks, ExportOpts, MidiMode};
-use crate::registry::lock;
 use crate::Service;
+use crate::error::AppError;
+use crate::export::{ExportOpts, MidiMode, check_dest, check_export_plan, multi_file_name, select_tracks};
+use crate::registry::lock;
 
 /// The commands of this card that the service owns (the bridge and the Tauri wrapper use the names).
 pub const SHELL_COMMANDS: [&str; 7] = [

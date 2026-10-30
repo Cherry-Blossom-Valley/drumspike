@@ -13,12 +13,12 @@ use std::path::Path;
 
 use rayon::prelude::*;
 
-pub use atomic::{write_bytes_atomic, TempFile};
-pub use mix::{ffmpeg_default_mask, ffmpeg_mono_coefs, ffmpeg_stereo_mask_ok, MixMode, Plan};
-pub use reader::{read_wav_bytes, read_wav_mono, Bext, MappedWav, SampleFormat, WavError, WavInfo};
+pub use atomic::{TempFile, write_bytes_atomic};
+pub use mix::{MixMode, Plan, ffmpeg_default_mask, ffmpeg_mono_coefs, ffmpeg_stereo_mask_ok};
+pub use reader::{Bext, MappedWav, SampleFormat, WavError, WavInfo, read_wav_bytes, read_wav_mono};
 pub use writer::{
-    encode_bext, encode_samples, encode_wav, encode_wav_raw, write_atomic, write_wav, write_wav_blockwise, WavFormat,
-    WavSpec, WRITE_BLOCK_FRAMES,
+    WRITE_BLOCK_FRAMES, WavFormat, WavSpec, encode_bext, encode_samples, encode_wav, encode_wav_raw, write_atomic,
+    write_wav, write_wav_blockwise,
 };
 
 /// Decode several files in parallel (rayon), one result per path in the same order.

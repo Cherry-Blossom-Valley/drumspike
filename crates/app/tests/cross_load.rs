@@ -18,7 +18,7 @@ use std::path::Path;
 
 use common::*;
 use drumspike_core::project::{add_track, build_source, copy_into_project, new_project, save_project};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// The frozen value of `key` (one host's value, else the shared one).
 fn frozen(key: &str) -> Value {

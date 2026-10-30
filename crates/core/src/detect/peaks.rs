@@ -234,11 +234,7 @@ fn pick_madmom(x: &[f32], threshold: f32, b: &mut Branches) -> Vec<usize> {
         .map(|(&a, &m)| if a >= m + threshold { a } else { 0.0 })
         .collect();
     let at = |i: isize| {
-        if i < 0 || i >= n as isize {
-            0.0
-        } else {
-            det[i as usize]
-        }
+        if i < 0 || i >= n as isize { 0.0 } else { det[i as usize] }
     };
     let peaks: Vec<usize> = (0..n)
         .filter(|&t| {

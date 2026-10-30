@@ -81,11 +81,7 @@ pub fn sensitivity_of(th: &[f64; N_CLASSES]) -> f64 {
     } else {
         OLD_MAX + (MAX - OLD_MAX) * (SCALE_AT_OLD_MAX / s).ln() / (SCALE_AT_OLD_MAX / scale_at_max()).ln()
     };
-    if v.is_finite() {
-        v.clamp(0.0, MAX)
-    } else {
-        MAX
-    }
+    if v.is_finite() { v.clamp(0.0, MAX) } else { MAX }
 }
 
 /// The slider value of a gate scale `s` (the inverse of [`scale_of`], A4): the value whose
@@ -96,11 +92,7 @@ pub fn slider_of_scale(s: f64) -> f64 {
     } else {
         OLD_MAX + (MAX - OLD_MAX) * (SCALE_AT_OLD_MAX / s).ln() / (SCALE_AT_OLD_MAX / scale_at_max()).ln()
     };
-    if v.is_finite() {
-        v.clamp(0.0, MAX)
-    } else {
-        MAX
-    }
+    if v.is_finite() { v.clamp(0.0, MAX) } else { MAX }
 }
 
 /// The retry steps above the sensitivity of `current`: the values of [`RETRY_STEPS`] that lower

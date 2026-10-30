@@ -36,17 +36,17 @@ use std::time::Instant;
 
 use drumspike_app::learn::CANDIDATE_REACH;
 use drumspike_app::{histogram, jobs, learn_filter, learn_score, media, sensitivity};
-use drumspike_core::analyze::{analyze_detected, detect_events, role_note, AnalyzeParams, Detector};
-use drumspike_core::detect::cross_bleed::{hit_level, CrossBleedParams, XKind};
+use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_detected, detect_events, role_note};
+use drumspike_core::detect::Chain;
+use drumspike_core::detect::cross_bleed::{CrossBleedParams, XKind, hit_level};
 use drumspike_core::detect::features::features;
 use drumspike_core::detect::onset::{
-    band_range, detect_onsets_and_cands, onsets_with_candidates, Candidate, OnsetParams, Role, N_BANDS,
+    Candidate, N_BANDS, OnsetParams, Role, band_range, detect_onsets_and_cands, onsets_with_candidates,
 };
 use drumspike_core::detect::peaks::FPS;
 use drumspike_core::detect::resample::resample_to_44100;
-use drumspike_core::detect::Chain;
 use drumspike_core::similarity::{self, Recipe, Weights};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 /// A decoded file with its DSP detection (the kept candidates of a track).
 struct Track {

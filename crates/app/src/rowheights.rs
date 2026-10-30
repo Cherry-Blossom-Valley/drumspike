@@ -10,11 +10,11 @@
 //! * `row_heights_set {sid, heights}`: replace the whole map in one step. 400 when an entry has a
 //!   factor that is no positive finite number. Answers `{heights, changed, n}`.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
+use crate::Service;
 use crate::error::AppError;
 use crate::registry::lock;
-use crate::Service;
 
 /// The document key of the row-height map.
 pub const DOC_KEY: &str = "row_heights";
@@ -68,7 +68,7 @@ impl Service {
             _ => {
                 return Err(AppError::bad(
                     "missing or wrong argument `heights` (object of track name -> factor)",
-                ))
+                ));
             }
         };
         for (name, v) in &obj {

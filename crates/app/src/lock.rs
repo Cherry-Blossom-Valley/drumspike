@@ -15,7 +15,7 @@ use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::AppError;
 

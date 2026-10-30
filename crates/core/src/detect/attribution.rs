@@ -69,7 +69,7 @@
 //! Every value is computed in a fixed order in `f64`; window bounds use
 //! `floor(ms * sr / 1000 + 0.5)` samples. The result does not depend on the thread count.
 
-use crate::refine::{refine_sr, RefineWindow};
+use crate::refine::{RefineWindow, refine_sr};
 
 /// The track role as the app names it (`engine.ROLE_CLASSES`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -593,7 +593,7 @@ fn bleed(tracks: &[TrackInput], sr: u32, p: &AttributionParams, out: &mut Attrib
                     .hits
                     .iter()
                     .zip(&pk)
-                    .filter(|(_, &v)| v >= p90 - p.calib_strong_db)
+                    .filter(|(_, v)| **v >= p90 - p.calib_strong_db)
                     .map(|(h, _)| h.sample)
                     .collect(),
                 None => Vec::new(),

@@ -8,9 +8,9 @@
 //! drumspike-core --test quiet_gain_probe -j 8 -- --nocapture --ignored --test-threads=4`
 
 use drumspike_core::detect::features::N_BANDS;
-use drumspike_core::detect::onset::{band_range, OnsetParams, Role};
-use drumspike_core::detect::{prepare, Chain, DetectError};
-use drumspike_core::io::{read_wav_mono, MixMode};
+use drumspike_core::detect::onset::{OnsetParams, Role, band_range};
+use drumspike_core::detect::{Chain, DetectError, prepare};
+use drumspike_core::io::{MixMode, read_wav_mono};
 use std::path::{Path, PathBuf};
 
 fn role_of(mic: &str) -> Option<Role> {

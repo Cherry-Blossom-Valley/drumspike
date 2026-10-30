@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use crate::detect::attribution::{Biquad, FilterKind};
-use crate::io::{write_wav, write_wav_blockwise, Bext, WavFormat, WavSpec, WRITE_BLOCK_FRAMES};
+use crate::io::{Bext, WRITE_BLOCK_FRAMES, WavFormat, WavSpec, write_wav, write_wav_blockwise};
 use crate::pyops::py_round;
 
 /// Blip length in seconds (full-scale sample plus the decay).
@@ -295,11 +295,7 @@ fn snippet_end(x: &[f32], smooth: &[f32], start: usize, sr: u32) -> (Option<usiz
                     }
                 }
             }
-            if best_d <= tol {
-                best
-            } else {
-                target
-            }
+            if best_d <= tol { best } else { target }
         } else {
             // no dominant low component: the 10 ms default (the fade-out covers the cut)
             start + ((AUDIO_DEFAULT_S * sr as f64).round() as usize)
@@ -370,11 +366,7 @@ fn third_significant_lobe_end(smooth: &[f32], start: usize, scan_to: usize, cros
             }
         }
     }
-    if count >= 3 {
-        end
-    } else {
-        last_sig_end
-    }
+    if count >= 3 { end } else { last_sig_end }
 }
 
 /// The largest `|v|` of a lobe and the sign at its sample `(0.0, 0)` for an empty or
@@ -502,7 +494,7 @@ pub fn export_spikes(
         channel_mask: 0,
     };
     let bext = source_bext.map(|b| spike_bext(b, sr, format));
-    let gen = SpikeSignalBlocks::new(sr, n_samples, times);
+    let blocks = SpikeSignalBlocks::new(sr, n_samples, times);
     write_wav_blockwise(
         path,
         &spec,
@@ -510,7 +502,7 @@ pub fn export_spikes(
         bext.as_ref(),
         WRITE_BLOCK_FRAMES,
         |start, buf| {
-            gen.fill(n_samples, start, buf);
+            blocks.fill(n_samples, start, buf);
             Ok(())
         },
     )
@@ -519,7 +511,7 @@ pub fn export_spikes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::{read_wav_mono, MixMode};
+    use crate::io::{MixMode, read_wav_mono};
 
     #[test]
     fn spike_blocks_match_the_whole_signal_for_every_block_size() {
@@ -528,14 +520,14 @@ mod tests {
         // hits inside and across the block borders, one past the end of the file
         let times = [0.0, 0.0005, 0.001, 0.0015, 0.0319, 0.032, 0.2];
         let whole = spike_signal(sr, n, &times);
-        let gen = SpikeSignalBlocks::new(sr, n, &times);
+        let blocks = SpikeSignalBlocks::new(sr, n, &times);
         for bs in [1usize, 2, 3, 5, 8, 64, 256, 257, 400] {
             let mut start = 0;
             while start < n {
                 let frames = bs.min(n - start);
                 // garbage in: fill must overwrite every sample of the block
                 let mut buf = vec![7.5f32; frames];
-                gen.fill(n, start, &mut buf);
+                blocks.fill(n, start, &mut buf);
                 assert_eq!(buf, whole[start..start + frames], "block size {bs} at {start}");
                 start += frames;
             }
@@ -569,9 +561,11 @@ mod tests {
         assert_eq!(b.version, 1);
         assert_eq!(b.coding_history, "A=PCM,F=96000,W=24,M=mono,T=Drum Spike");
         for (f, w) in [(WavFormat::Pcm16, 16), (WavFormat::Pcm32, 32), (WavFormat::Float32, 32)] {
-            assert!(spike_bext(&src, 48_000, f)
-                .coding_history
-                .starts_with(&format!("A=PCM,F=48000,W={w},")));
+            assert!(
+                spike_bext(&src, 48_000, f)
+                    .coding_history
+                    .starts_with(&format!("A=PCM,F=48000,W={w},"))
+            );
         }
         assert_eq!(spike_bext(&Bext::default(), 44_100, WavFormat::Pcm16).time_reference, 0);
     }
