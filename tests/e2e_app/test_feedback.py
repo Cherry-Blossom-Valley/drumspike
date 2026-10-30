@@ -5,6 +5,18 @@ name of the open test project; a text with a path is blocked; Send posts exactly
 JSON; a gateway error keeps the text. The form is looked at in the browser pane and one
 screenshot goes to test-shots/ (164-feedback-form.png)."""
 import json
+import importlib.util
+from pathlib import Path
+
+# The blocked-path samples come from the one shared definition (tools/media/check_paths.py
+# BANNED_BASE): no literal private token in this diff (#164).
+_spec = importlib.util.spec_from_file_location(
+    "check_paths", Path(__file__).resolve().parents[2] / "tools" / "media" / "check_paths.py")
+assert _spec is not None and _spec.loader is not None
+_check_paths = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_check_paths)
+BANNED = _check_paths.BANNED_BASE
+BLOCKED_PATH = f"{BANNED[2]}/nobody/secret.wav"
 
 from app_support import invoke, open_project, shot_dir
 
@@ -37,17 +49,17 @@ def test_feedback_form_previews_the_meta_and_never_a_path_or_project_name(app, m
     # counts only: no name, no path of the open test project anywhere in the preview
     text = app.inner_text("#fbPreview")
     assert pname and pname not in text, text
-    assert "/home" not in text and "/Users" not in text and str(sid) not in text, text
+    assert BANNED[2] not in text and BANNED[0] not in text and str(sid) not in text, text
 
 
 def test_feedback_blocks_a_text_with_a_path_and_sends_exactly_the_preview(app, make_project):
     open_project(app, make_project())
     open_form(app)
     app.fill("#fbTitleIn", "Kick misses on 2 and 4")
-    app.fill("#fbDesc", "It broke in /home/nobody/secret.wav every time.")
+    app.fill("#fbDesc", f"It broke in {BLOCKED_PATH} every time.")
     refresh(app)
     assert app.evaluate("() => document.querySelector('#fbSend').disabled") is True
-    assert "/home" in app.inner_text("#fbMsg")
+    assert BANNED[2] in app.inner_text("#fbMsg")
     assert app.evaluate(SENT) == []
     # the guard runs in the command again (crates/app/src/feedback.rs): the bridge answers it here
     assert app.evaluate("() => typeof B.feedbackSend === 'function'")

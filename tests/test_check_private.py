@@ -1,5 +1,6 @@
 """#104: tests for the private-name text guard. Fixtures use invented words only
 (ZUMQUUX, FLOOB-FRAME), never a real private name."""
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -144,6 +145,81 @@ def test_login_token_with_alias_flagged(tmp_path):
     r = run([str(f)], {"DRUMSPIKE_PRIVATE_WORDS": "zumquux-77"})
     assert r.returncode == 1
     assert "zumquux-77" in r.stderr
+
+
+# #164 decision (narrow): an added diff line quoting the shared base list passes only when
+# it carries the marker comment and ALL its hits are BANNED_BASE tokens. A host word on a
+# marked line still fails; an unmarked base token still fails. The samples are built at run
+# time from the shared constant and planted words, so this diff carries no literal token
+# outside the marked definition lines.
+def _diff_scan(tmp_path, lines, env_extra):
+    import os
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (repo / "f.txt").write_text("clean\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    git("checkout", "-qb", "feature")
+    (repo / "f.txt").write_text("clean\n" + "\n".join(lines) + "\n", encoding="utf-8")
+    git("commit", "-am", "second")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("DRUMSPIKE_PRIVATE_")}
+    env.update(env_extra)
+    env.setdefault("DRUMSPIKE_PRIVATE_WORDS", "quuxcorp")
+    return subprocess.run(
+        [sys.executable, str(TOOLS / "check_private.py"), "--diff", "main"],
+        capture_output=True, text=True, env=env, cwd=repo)
+
+
+def test_marked_base_only_line_passes(tmp_path):
+    line = f'const X = ["{check_private.BANNED_BASE[0]}"];  // {check_private.LIST_MARKER}'
+    r = _diff_scan(tmp_path, [line], {})
+    assert r.returncode == 0, r.stderr
+
+
+def test_marked_line_with_host_word_fails(tmp_path):
+    planted = "zorp" + "blat"
+    line = (f'const X = ["{check_private.BANNED_BASE[0]}"];  // '
+            f'{check_private.LIST_MARKER} planted {planted}')
+    r = _diff_scan(tmp_path, [line], {"DRUMSPIKE_PRIVATE_WORDS": f"quuxcorp,{planted}"})
+    assert r.returncode == 1, r.stderr
+    assert planted in r.stderr
+
+
+def test_marked_line_with_pattern_hit_fails(tmp_path):
+    line = (f'const X = ["{check_private.BANNED_BASE[0]}"];  // '
+            f'{check_private.LIST_MARKER} some-flooob-frame.npz')
+    r = _diff_scan(tmp_path, [line], {"DRUMSPIKE_PRIVATE_PATTERNS": INVENTED_PAT})
+    assert r.returncode == 1, r.stderr
+
+
+def test_unmarked_base_token_fails(tmp_path):
+    line = f'const X = ["{check_private.BANNED_BASE[0]}"];'
+    r = _diff_scan(tmp_path, [line], {})
+    assert r.returncode == 1, r.stderr
+    assert check_private.BANNED_BASE[0] in r.stderr
+
+
+def test_app_guards_share_the_base_list():
+    """The Rust and JS guard constants and check_paths.BANNED_BASE are the one list, so
+    they cannot drift."""
+    rust = (REPO / "crates" / "app" / "src" / "feedback.rs").read_text(encoding="utf-8")
+    m = re.search(r"pub const PRIVATE_WORDS: \[&str; (\d+)\] = \[(.*?)\];", rust, re.S)
+    assert m is not None
+    n = int(m.group(1))
+    rust_items = re.findall(r'"([^"]*)"', m.group(2))
+    assert len(rust_items) == n
+    assert tuple(rust_items) == check_private.BANNED_BASE
+    js = (REPO / "static" / "shell.js").read_text(encoding="utf-8")
+    m2 = re.search(r"const FB_PRIVATE = \[(.*?)\];", js, re.S)
+    assert m2 is not None
+    assert tuple(re.findall(r'"([^"]*)"', m2.group(1))) == check_private.BANNED_BASE
 
 
 def test_login_token_with_alias_in_branch_flagged(tmp_path):

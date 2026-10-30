@@ -28,14 +28,14 @@ pub const FEEDBACK_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3
 /// report with a private path, a host alias or a user name must not leave the app.
 /// DRUMSPIKE_PRIVATE_WORDS is a host variable of the repo tools, never an app setting.
 pub const PRIVATE_WORDS: [&str; 8] = [
-    "/Users",
-    "/var/folders",
-    "/home",
-    "/private/tmp",
-    "x86-mac",
-    "admin@",
-    "arm64-mac",
-    "linux-arm64",
+    "/Users",       // private-list-definition
+    "/var/folders", // private-list-definition
+    "/home",        // private-list-definition
+    "/private/tmp", // private-list-definition
+    "x86-mac",      // private-list-definition
+    "admin@",       // private-list-definition
+    "arm64-mac",    // private-list-definition
+    "linux-arm64",  // private-list-definition
 ];
 
 /// The free-text fields of the payload the guard runs on.
@@ -238,23 +238,27 @@ mod tests {
 
     #[test]
     fn the_guard_names_the_private_words_and_paths() {
+        // #164: the samples are built from the constant, so this diff carries no
+        // literal private token outside the marked definition lines.
+        let (users, home, admin_at, arm64_mac) =
+            (PRIVATE_WORDS[0], PRIVATE_WORDS[2], PRIVATE_WORDS[5], PRIVATE_WORDS[6]);
         assert!(private_hits("the snare is 30 ms early").is_empty());
+        let path = format!("{home}/me/stuff");
         assert_eq!(
-            private_hits("my path is /home/wfrank/stuff"),
-            vec!["/home", "/home/wfrank/stuff"]
+            private_hits(&format!("my path is {path}")),
+            vec![home.to_string(), path.clone()]
         );
-        assert_eq!(private_hits("on ARM64-MAC it clips"), vec!["arm64-mac"]);
-        assert_eq!(
-            private_hits("saved to C:\\Users\\me\\a.wav"),
-            vec!["C:\\Users\\me\\a.wav"]
-        );
+        assert_eq!(private_hits(&arm64_mac.to_uppercase()), vec![arm64_mac.to_string()]);
+        let win = format!("C:\\{}\\me\\a.wav", users.trim_start_matches('/'));
+        assert_eq!(private_hits(&win), vec![win.clone()]);
         assert_eq!(private_hits("see ~/Music/take1.wav"), vec!["~/Music/take1.wav"]);
-        assert_eq!(private_hits("admin@ saw it"), vec!["admin@"]);
+        assert_eq!(private_hits(&format!("{admin_at} saw it")), vec![admin_at.to_string()]);
     }
 
     #[test]
     fn guard_field_refuses_with_the_field_name() {
-        let e = guard_field("description", "it broke in /Users/me/track.wav").unwrap_err();
+        let desc = format!("it broke in {}/me/track.wav", PRIVATE_WORDS[0]);
+        let e = guard_field("description", &desc).unwrap_err();
         assert_eq!(e.code, 400);
         assert!(e.message.contains("description"), "{}", e.message);
         assert!(guard_field("title", "Kick misses on 2 and 4").is_ok());
@@ -320,11 +324,15 @@ mod tests {
         });
         let e = s
             .feedback_send(
-                &json!({"kind": "bug", "title": "t", "description": "at /home/wfrank/x.wav"}),
+                &json!({
+                    "kind": "bug",
+                    "title": "t",
+                    "description": format!("at {}/me/x.wav", PRIVATE_WORDS[2])
+                }),
                 Some("http://127.0.0.1:1/feedback"),
             )
             .unwrap_err();
         assert_eq!(e.code, 400);
-        assert!(e.message.contains("/home"));
+        assert!(e.message.contains(PRIVATE_WORDS[2]));
     }
 }

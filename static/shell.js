@@ -196,7 +196,7 @@
      private-word guard as the docs (tools/media/check_paths.py BANNED_BASE) runs on the free text
      before anything is sent, and again in crates/app/src/feedback.rs before the POST. */
   const FB_KINDS = [["bug", "Bug"], ["improvement", "Improvement"], ["other", "Other"]];
-  const FB_PRIVATE = ["/Users", "/var/folders", "/home", "/private/tmp", "x86-mac", "admin@", "arm64-mac", "linux-arm64"];
+  const FB_PRIVATE = ["/Users", "/var/folders", "/home", "/private/tmp", "x86-mac", "admin@", "arm64-mac", "linux-arm64"];  // private-list-definition
   function fbHits(text) {
     const out = new Set(), low = text.toLowerCase();
     for (const w of FB_PRIVATE) if (low.includes(w)) out.add(w);
