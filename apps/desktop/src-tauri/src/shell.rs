@@ -2,9 +2,9 @@
 //! service, `menu.rs`, `open.rs` or `window.rs`. The self-test commands exist in debug builds only.
 
 use drumspike_app::{AppError, ListShape, Service};
+use serde_json::Value;
 #[cfg(debug_assertions)]
 use serde_json::json;
-use serde_json::Value;
 use tauri::{AppHandle, State};
 
 use crate::{menu, open, window};
