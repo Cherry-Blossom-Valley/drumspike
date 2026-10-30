@@ -229,6 +229,21 @@ def open_export(page, scope="all", track=None, via="button"):
     page.wait_for_function("() => !document.querySelector('#exportModal').classList.contains('hidden')")
 
 
+def ex_confirm_tempo(page):
+    """#151: the default-tempo notice: the first MIDI export on a project without a tempo map asks
+    (Export anyway / Cancel). The helper answers Export anyway; a test that wants the notice itself
+    drives the confirm on its own."""
+    btn = page.locator('#confirmActions [data-act="anyway"]')
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:   # the notice asks after tempo_map_get answers: either it shows or the export starts
+        if btn.is_visible():
+            btn.click()
+            return
+        if page.evaluate("() => EX.ran"):
+            return   # no notice: the map is set, MIDI is off or the session already answered
+        page.wait_for_timeout(50)
+
+
 def ex_run(page, timeout=60000):
     """Click Export and wait for the export-finished event (#172). Race: a click's handler runs a task later, so a
     bare wait for !EX.busy passed before exRun had set the flag and the dialog closed mid-export (the files were
@@ -236,6 +251,7 @@ def ex_run(page, timeout=60000):
     has finished (static/app.js)."""
     done0 = page.evaluate("() => EX.done")
     page.click("#exGo")
+    ex_confirm_tempo(page)   # #151: the default-tempo notice, when it asks
     page.wait_for_function("d0 => !EX.busy && EX.done > d0", arg=done0, timeout=timeout)
 
 

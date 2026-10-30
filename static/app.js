@@ -5702,7 +5702,9 @@ function markLaneDetail(name, detail) {   // tooltip of a lane that cannot draw
 const EX = { open: false, scope: "all", selected: null, midi: true, spikes: true, spikeType: "synthetic", mode: "per_track", comp: false, markers: false, dest: "", def: "", remembered: null,
   /* #172: the export-finished event for the e2e tests: the count of the exports this page has finished */
   destOk: true, replace: 0, busy: false, done: 0, drag: { midi: null, spikes: null }, timer: null, dragSeq: 0, dragChain: Promise.resolve(),
-  infoSeq: 0, lastFile: null, ran: false };
+  infoSeq: 0, lastFile: null, ran: false,
+  /* #151: the default-tempo notice asks once per page session (the answer "Export anyway" is kept) */
+  tempoAck: false };
 function exTrackSets() {   // the tracks the options name: the ones that export, and the skipped ones with the reason
   const pool = EX.scope === "selected" ? (EX.selected && S.tracks[EX.selected] ? [EX.selected] : []) : S.order.slice();
   const ok = n => S.tracks[n] && !S.tracks[n].offline && (S.events[n] || []).length > 0;
@@ -5869,8 +5871,21 @@ function exSummary(r) {   // "exported 2 MIDI and 2 spike files to Exports/ in t
 }
 async function exRun() {
   if (EX.busy || $("#exGo").disabled) return;
+  EX.busy = true;   // set before the notice: while it asks, exClose (Escape) is refused
+  /* #151: a MIDI export with no tempo set uses the default 120 BPM: ask before the first export writes */
+  if (EX.midi && !EX.tempoAck) {
+    let def = false;
+    try { def = !!(await B.tempoMapGet(S.sid)).default; } catch (e) { /* no answer: no notice */ }
+    if (def) {
+      const a = await askConfirm({ title: "No tempo set",
+        msg: "The export uses the default 120 BPM. Set the tempo in the Tempo panel first, or export anyway.",
+        buttons: [{ label: "Cancel", act: "cancel" }, { label: "Export anyway", act: "anyway", cls: "primary" }] });
+      if (a !== "anyway") { EX.busy = false; setMsg("export cancelled"); return; }   // no file is written
+    }
+    EX.tempoAck = true;   // the answer holds for the session: the next export does not ask again
+  }
   const o = exOpts(true), n = o.tracks.length;
-  EX.busy = true; EX.ran = true; $("#exCancel").textContent = "Close"; exRender();
+  EX.ran = true; $("#exCancel").textContent = "Close"; exRender();
   try {
     await flushEvents();   // the service writes from its own copy of the events
     showProgress(0, `Exporting 0/${n}`);

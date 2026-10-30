@@ -13,7 +13,7 @@ from pathlib import Path
 import mido
 from playwright.sync_api import expect
 
-from app_support import ex_run, invoke, menu, open_project, wait_until
+from app_support import ex_confirm_tempo, ex_run, invoke, menu, open_project, wait_until
 from test_shell import with_hits
 
 
@@ -209,6 +209,7 @@ def test_the_dialog_says_how_many_files_it_replaces_and_enter_and_escape_work(ap
     menu(app, "export")
     app.evaluate("() => document.activeElement.blur()")
     app.keyboard.press("Enter")                                              # Enter = Export
+    ex_confirm_tempo(app)                                                    # the default-tempo notice answers (once)
     wait_until(lambda: len(exports(folder)) == 4, msg="Enter exported")
     app.wait_for_function("() => !EX.busy")
     expect(app.locator("#exResult")).to_be_visible()
@@ -296,6 +297,8 @@ def test_page_keys_are_off_while_the_dialog_is_open(app, make_project):
     menu(app, "export")
     app.locator("#exGo").focus()
     app.keyboard.press("Space")                                               # Space plays and stops in the page
+    ex_confirm_tempo(app)   # #151: Space on the focused button activates it: the export asks on the default map
+    app.wait_for_function("() => !EX.busy")   # the export ran; the dialog answers Escape again
     app.keyboard.press("j")
     app.keyboard.press("m")
     app.wait_for_timeout(300)
@@ -405,6 +408,7 @@ def test_show_in_finder_names_the_first_file_after_an_export(app, make_project, 
     menu(app, "export")
     expect(app.locator("#exResult")).to_be_hidden()
     app.click("#exGo")
+    ex_confirm_tempo(app)
     expect(app.locator("#exResult")).to_be_visible()
     expect(app.locator("#exResultText")).to_contain_text("Exported 2 MIDI and 2 spike files to Exports/ in the project folder")
     expect(app.locator("#exCancel")).to_have_text("Close")
@@ -502,3 +506,61 @@ def test_the_commands_take_a_dest_and_refuse_a_bad_one(app, make_project, tmp_pa
     assert r["midi_file"] == str(out / (app.evaluate("() => S.name") + "_drums.mid")) and r["dest"] == str(out)
     assert invoke(app, "export_all", sid=sid, midi_mode="both")["code"] == 400
     assert re.search(r"midi_mode", invoke(app, "export_all", sid=sid, midi_mode="both")["message"])
+
+
+# ---------- #151: the default-tempo notice ----------
+
+def test_the_default_tempo_notice_asks_and_cancel_writes_no_file(app, make_project):
+    sid, folder = project_with_hits(app, make_project)
+    menu(app, "export")
+    app.click("#exGo")
+    expect(app.locator("#confirmModal")).to_be_visible()
+    expect(app.locator("#confirmTitle")).to_have_text("No tempo set")
+    expect(app.locator("#confirmMsg")).to_contain_text("120 BPM")
+    app.locator('#confirmActions [data-act="cancel"]').click()
+    expect(app.locator("#confirmModal")).to_be_hidden()
+    expect(app.locator("#stMsg")).to_contain_text("export cancelled")
+    assert exports(folder) == []                                             # Cancel writes no file
+    # the dialog stays open and exports after the answer; the session answers only once
+    app.click("#exGo")
+    ex_confirm_tempo(app)
+    wait_until(lambda: exports(folder) == ["Kick In_spike.mid", "Kick In_spike.wav",
+                                           "Snare Top_spike.mid", "Snare Top_spike.wav"], msg="the export")
+    app.click("#exCancel")
+    clear_exports(folder)
+    menu(app, "export")
+    run_and_close(app)                                                       # no second notice in this session
+    expect(app.locator("#confirmModal")).to_be_hidden()
+    assert len(exports(folder)) == 4
+
+
+def test_export_anyway_writes_the_bytes_of_today_and_the_reply_carries_the_warning(app, make_project):
+    sid, folder = project_with_hits(app, make_project)
+    (folder / "Ref").mkdir()                                                 # the dest folder must exist
+    invoke(app, "export_midi", sid=sid, name="Kick In", dest=str(folder / "Ref"))   # the service path of today
+    ref = (folder / "Ref" / "Kick In_spike.mid").read_bytes()
+    menu(app, "export")
+    app.locator("#exSpikes").uncheck()
+    app.locator("#exModeTrack").check()
+    app.click("#exGo")
+    ex_confirm_tempo(app)
+    wait_until(lambda: exports(folder) == ["Kick In_spike.mid", "Snare Top_spike.mid"], msg="the export")
+    assert (folder / "Exports" / "Kick In_spike.mid").read_bytes() == ref    # Export anyway: the same bytes as today
+    r = invoke(app, "export_all", sid=sid)
+    assert "No tempo set: the MIDI export uses the default 120 BPM." in r["warnings"]   # the reply warns on the default map
+    app.click("#exCancel")
+
+
+def test_a_project_with_a_set_map_exports_without_the_notice(app, make_project):
+    sid, folder = project_with_hits(app, make_project)
+    invoke(app, "tempo_map_set", sid=sid, map={"bpm": 100})
+    menu(app, "export")
+    app.click("#exGo")
+    app.wait_for_timeout(300)
+    expect(app.locator("#confirmModal")).to_be_hidden()                      # no notice on a set map
+    wait_until(lambda: exports(folder) == ["Kick In_spike.mid", "Kick In_spike.wav",
+                                           "Snare Top_spike.mid", "Snare Top_spike.wav"], msg="the export")
+    (folder / "Ref").mkdir()
+    r = invoke(app, "export_all", sid=sid, dest=str(folder / "Ref"))
+    assert r["warnings"] == []                                               # and the reply carries no warning
+    app.click("#exCancel")

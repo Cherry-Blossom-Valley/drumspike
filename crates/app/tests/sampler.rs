@@ -369,7 +369,18 @@ fn track_sampler_get_then_every_midi_export_moves_the_notes_by_the_offset() {
     let r = svc.export_all_opts(&sid, &o, None).unwrap();
     assert_eq!(ticks(r["files"][0].as_str().unwrap()), expect(off));
     assert_eq!(r["sampler"]["k in"]["clamped"], 1);
-    assert_eq!(r["warnings"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        r["warnings"].as_array().unwrap().len(),
+        2,
+        "the sampler warning and the default-tempo notice (#151)"
+    );
+    assert!(
+        r["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("before the start"))
+    );
     // ... the multi-track file
     let o = ExportOpts::from_args(&json!({"dest": d, "formats": ["midi"], "midi_mode": "single"})).unwrap();
     let r = svc.export_all_opts(&sid, &o, None).unwrap();
