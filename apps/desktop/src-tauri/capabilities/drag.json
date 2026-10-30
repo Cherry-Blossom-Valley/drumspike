@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "drag",
+  "description": "Main window: the native file drag out of the Export dialog and the MIDI and spike tiles (plugin:drag|start_drag)",
+  "windows": ["main"],
+  "permissions": ["drag:allow-start-drag"]
+}
