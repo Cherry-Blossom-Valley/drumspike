@@ -339,6 +339,8 @@ def drag_answer_tempo(app):
              || (window.__DS_DRAG__ || []).length > 0""", timeout=60000)
     if not app.evaluate("() => document.querySelector('#confirmModal').classList.contains('hidden')"):
         app.locator('#confirmActions [data-act="anyway"]').click()
+    # the drag runs after the answer (exportDragTake, then the native drag): wait for it, a loaded host is slow here
+    app.wait_for_function("() => (window.__DS_DRAG__ || []).length > 0", timeout=60000)
 
 
 def test_the_drag_tiles_prepare_the_files_and_a_drag_calls_the_native_drag_with_their_paths(app, make_project, tmp_path):
