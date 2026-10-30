@@ -23,7 +23,7 @@ pub const FEEDBACK_URL: &str =
 /// utils/supabase/info.tsx `publicAnonKey`): public by design, it ships in the website's JS.
 /// Supabase edge functions want it as `Authorization: Bearer <anon key>`, exactly like the
 /// site's contact form sends it. It is not a secret and must never be one.
-pub const FEEDBACK_ANON_KEY: &str = "eyJhbG...Sxl0";
+pub const FEEDBACK_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB1YnR6a3F4eWNucXFobXJmbmhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc2MjcxMzMsImV4cCI6MjA4MzIwMzEzM30.yye8PrO22dIkvCLmGV-mMwaW-jYFB-3Ns3IXk32Sxl0";
 
 /// The static part of the private-word guard (tools/media/check_paths.py `BANNED_BASE`): a
 /// report with a private path, a host alias or a user name must not leave the app.
