@@ -1015,6 +1015,7 @@ function sizeCanvases() {   // in the frame: every canvas to the sizes of GEO (w
   ov.width = GEO.ovW * dpr; ov.height = GEO.ovH * dpr;
   ov.getContext("2d").setTransform(dpr,0,0,dpr,0,0);
   rul.style.width = rw + "px"; rul.style.height = "22px";
+  rul.style.transform = ""; rul._sptf = "";   // #150: the time ruler drops its strip transform with its size, like the lane canvases (sizeLaneCanvas)
   rul.width = rw * dpr; rul.height = 22 * dpr; rul.getContext("2d").setTransform(dpr,0,0,dpr,0,0);
   sizeMapCanvases();   // P4-8
   FR.sized = sizeKey();
@@ -1359,6 +1360,7 @@ function sizeMapCanvases() {   // in the frame (and for a strip): the visible ca
     if (!TM.vis[k]) continue;
     const c = TM.cans[k];
     c.style.width = rw + "px"; c.style.height = TM_H + "px";
+    c.style.transform = ""; c._sptf = "";   // #150: a map ruler sized for a draw is not on a strip (the stale strip transform would shift the draw off the clip)
     c.width = rw * dpr; c.height = TM_H * dpr; c.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 }
@@ -1373,12 +1375,9 @@ function drawMarkerRuler(kind, c) {
   else if (!TM.map) return;
   ctx.font = "10px -apple-system, sans-serif"; ctx.textBaseline = "middle"; ctx.lineWidth = 1;
   const mk = tmMarkers(kind), selId = TM.sel && TM.sel.kind === kind ? TM.sel.id : null;
-  let carry = null, first = null;
   for (const it of mk) {
     const x = Math.round(tToX(it.t, W)) + 0.5;
     if (x > W) break;
-    if (x < 0) { carry = it; continue; }
-    if (first === null) first = x;
     const on = it.id === selId;
     ctx.strokeStyle = on ? col.accent : (kind === "markers" ? col.orange : col.dim);
     ctx.fillStyle = on ? col.accent : col.text;
@@ -1388,7 +1387,22 @@ function drawMarkerRuler(kind, c) {
     }
     ctx.fillText(it.text, x + 4, H / 2);
   }
-  if (carry && kind !== "markers" && (first === null || first > tmTextW(carry.text) + 12)) { ctx.fillStyle = col.dim; ctx.fillText(carry.text, 3, H / 2); }   // the value in force at the left edge
+  /* #150: the value in force at the left edge of each view the canvas draws. One view: the label at x 3. Under the
+     follow strip the canvas holds two views (spApply, SP.drawing): a label only at x 3 would glide off-screen with
+     the first view, so the second view's left edge gets its own carry label too (the last marker left of that edge). */
+  if (kind !== "markers") {
+    const half = SP.drawing ? W / 2 : W;
+    for (let vx = 0; vx < W; vx += half) {
+      let c2 = null, f2 = null;
+      for (const it of mk) {
+        const x = Math.round(tToX(it.t, W)) + 0.5;
+        if (x >= vx + half) break;
+        if (x < vx) { c2 = it; continue; }
+        if (f2 === null) f2 = x;
+      }
+      if (c2 && (f2 === null || f2 - vx > tmTextW(c2.text) + 12)) { ctx.fillStyle = col.dim; ctx.fillText(c2.text, vx + 3, H / 2); }
+    }
+  }
 }
 function drawBeatsRuler(c) {
   const ctx = c.getContext("2d"), W = GEO.rulerW, H = TM_H, col = TM.col;

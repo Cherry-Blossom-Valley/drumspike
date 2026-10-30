@@ -542,6 +542,65 @@ def test_the_rulers_move_with_the_follow_strip(app, make_project):
     assert js(app, "() => TM_KINDS.every(k => TM.cans[k].parentNode.style.clipPath === '')")
 
 
+def test_the_carry_label_stays_in_view_while_the_follow_strip_plays(app, make_project):
+    """#150: the map has no step in view, so each ruler shows only the carry label (the value in force at the left
+    edge). Stopped it sits at x 3 of the draw. Under the follow strip the canvas holds two views on twice the width
+    (spApply): a label only at x 3 glides off-screen with the first view, so the second view's left edge must carry
+    its own label. Checked as text pixels in the left 40 px of the visible Tempo and Meter clips."""
+    song = open_project(app, make_project(seconds=40.0))
+    set_map(app, song, {"bpm": 92, "meter": [4, 4]})   # no steps, no changes: no marker in view but the starts at t 0
+    assert js(app, "() => tmMarkers('tempo').map(m => m.text)") == ["92"] and js(app, "() => tmMarkers('meter').map(m => m.text)") == ["4/4"]
+    app.evaluate("() => { TM.ui.tempo = TM.ui.meter = true; TM.ui.beats = false; tmApplyUi(true); }")
+
+    def clip_text_pixels(kind, png):
+        from collections import Counter
+        rows = pixels(png)
+        reg = [px for row in rows for px in row[:40]]
+        bg = Counter(reg).most_common(1)[0][0]
+        n = sum(1 for px in reg if sum(abs(a - b) for a, b in zip(px, bg)) > 60)
+        return n
+
+    def shot(kind):
+        return app.locator(f'#mapRulers .mrow[data-ruler="{kind}"] .mclip').screenshot(animations="allow")
+
+    def hold_strip_12px_into_the_second_view():
+        held = js(app, """() => {
+            const d = SP.d, RW = GEO.rulerW, s = SP.s;
+            const v0 = s + (RW - 12) / RW * d;   // the model time the visible left edge shows: 12 px short of view 2's first label column
+            const t = CP.at0 + (v0 + FOLLOW_FRAC * d - CP.pos0) / (CP.rate * CP.pr) * 1000;
+            spFreeze(t);
+            return { d, RW, s, v0 };
+        }""")
+        app.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+        return held
+
+    # (a) stopped, the view left of the starts: the carry label shows in the left 40 px
+    app.evaluate("() => { S.playhead = 0; setView(4, 8); }")
+    app.wait_for_function(IDLE)
+    for kind in ("tempo", "meter"):
+        assert clip_text_pixels(kind, shot(kind)) > 15, f"{kind}: no carry label while stopped"
+
+    # (b) playing under the strip: the visible window sits inside the second view; its left edge holds the label too
+    app.evaluate("() => { setFollow('smooth'); S.followHold = false; S.playhead = 0; setView(0, 8); }")
+    app.wait_for_function(IDLE)
+    app.click("#playBtn")
+    app.wait_for_function("() => S.playing && AC.running", timeout=20000)
+    app.wait_for_function("() => SP.on", timeout=20000)
+    hold_strip_12px_into_the_second_view()
+    assert app.evaluate("() => GEO.dpr") == 1, "the pixel checks assume a device scale of 1 (the test browser)"
+    for kind in ("tempo", "meter"):
+        assert clip_text_pixels(kind, shot(kind)) > 15, f"{kind}: the strip draws the carry label off-screen"
+    app.locator("#mapRulers").screenshot(path="test-shots/150-strip-carry-label.png", animations="allow")
+    app.evaluate("() => spFreeze(null)")
+
+    # (c) after stop: the frame path draws again, the label is back
+    app.click("#playBtn")
+    app.wait_for_function("() => !S.playing && !SP.on")
+    app.wait_for_function(IDLE)
+    for kind in ("tempo", "meter"):
+        assert clip_text_pixels(kind, shot(kind)) > 15, f"{kind}: no carry label after the stop"
+
+
 # ---------- fix round: undo while a change is stored, click away, equal values, dialog ----------
 
 def delay(app, fn, ms):
