@@ -809,7 +809,9 @@ fn check_states_follow_the_page_state() {
         [
             ("info_line", false),
             ("counter_seconds", false),
-            ("counter_samples", true)
+            ("counter_samples", true),
+            ("counter_barsbeats", false),
+            ("counter_timecode", false)
         ]
     );
     // P3-20a: exactly one Nudge Value item is checked; an unknown value leaves the items alone
