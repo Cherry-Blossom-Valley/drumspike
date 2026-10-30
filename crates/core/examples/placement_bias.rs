@@ -85,11 +85,12 @@ fn foot_of(x: &[f32], a: f64) -> usize {
 }
 
 fn main() {
-    // `placement_bias foot` measures the version 4 rule, `foot5` the version 5 rule (#127); no argument measures
-    // the analysis rule (CURRENT).
+    // `placement_bias first` measures the version 3 rule, `foot` the version 4 rule, `foot5` the version 5 rule
+    // (#127); no argument measures the analysis rule (CURRENT).
     // `placement_bias tuned <cap samples> <keep|clamp>` measures a version 5 foot with other cap knobs (#127).
     let args: Vec<String> = std::env::args().collect();
     let rule = match args.get(1).map(String::as_str) {
+        Some("first") => RefineRule::FirstMotion,
         Some("foot") => RefineRule::Foot,
         Some("foot5") => RefineRule::FootCapped,
         _ => RefineRule::CURRENT,
