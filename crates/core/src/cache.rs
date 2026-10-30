@@ -153,8 +153,23 @@ fn read_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
     }
 }
 
-fn u32_at(b: &[u8], i: usize) -> u32 {
-    u32::from_le_bytes(b[i..i + 4].try_into().expect("4 bytes"))
+/// The `N` bytes at `i` as a little-endian unsigned integer, `Err` when the slice is
+/// shorter (the module's doc: a malformed file is a clear error, never a panic).
+fn uint_at<const N: usize>(b: &[u8], i: usize) -> io::Result<u64> {
+    let s = b
+        .get(i..i + N)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "header cut off"))?;
+    // `get(i..i+N)` is `Some` only when the whole range is in bounds, so `s` holds
+    // exactly N bytes and the loop below cannot overflow or miss an element.
+    let mut v = 0u64;
+    for (k, byte) in s.iter().enumerate() {
+        v |= (*byte as u64) << (8 * k);
+    }
+    Ok(v)
+}
+
+fn u32_at(b: &[u8], i: usize) -> io::Result<u32> {
+    Ok(uint_at::<4>(b, i)? as u32)
 }
 
 impl PeakCache {
@@ -170,13 +185,13 @@ impl PeakCache {
         if head[..8] != MAGIC {
             return Err(CacheError::Format("bad magic".into()));
         }
-        let version = u32_at(&head, 8);
+        let version = u32_at(&head, 8)?;
         if version != VERSION {
             return Err(CacheError::Format(format!("version {version}, expected {VERSION}")));
         }
-        let sr = u32_at(&head, 12);
-        let n_samples = u64::from_le_bytes(head[16..24].try_into().expect("8 bytes"));
-        let count = u32_at(&head, 24) as usize;
+        let sr = u32_at(&head, 12)?;
+        let n_samples = uint_at::<8>(&head, 16)?;
+        let count = u32_at(&head, 24)? as usize;
         if count > 64 {
             return Err(CacheError::Format(format!("{count} levels")));
         }
@@ -190,8 +205,8 @@ impl PeakCache {
         let mut offsets = Vec::with_capacity(count);
         let mut pos = (FIXED_HEADER + table.len()) as u64;
         for i in 0..count {
-            let block = u32_at(&table, i * 8) as usize;
-            let bins = u32_at(&table, i * 8 + 4) as usize;
+            let block = u32_at(&table, i * 8)? as usize;
+            let bins = u32_at(&table, i * 8 + 4)? as usize;
             if block == 0 {
                 return Err(CacheError::Format(format!("level {i}: block 0")));
             }
@@ -269,7 +284,11 @@ impl PeakCache {
         let Some(info) = self.index(level).map(|i| self.levels[i]) else {
             return Ok(None);
         };
-        let t = self.tile(level, 0, info.bins as i64)?.expect("level exists");
+        let t = match self.tile(level, 0, info.bins as i64)? {
+            Some(t) => t,
+            // unreachable: `tile` answers `Some` for every level `index` knows
+            None => return Err(CacheError::Format(format!("level {level} vanished"))),
+        };
         let up = |v: Vec<f32>| v.into_iter().map(f64::from).collect::<Vec<f64>>();
         Ok(Some(PeakLevel {
             min: up(t.min),
