@@ -874,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "drumspike-app"
-version = "0.9.6"
+version = "0.9.7"
 dependencies = [
  "caseless",
  "drumspike-core",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "drumspike-core"
-version = "0.9.6"
+version = "0.9.7"
 dependencies = [
  "chrono",
  "cpal",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "drumspike-desktop"
-version = "0.9.6"
+version = "0.9.7"
 dependencies = [
  "drumspike-app",
  "drumspike-core",
@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "drumspike-devtools"
-version = "0.9.6"
+version = "0.9.7"
 dependencies = [
  "drumspike-app",
  "drumspike-core",
