@@ -37,10 +37,9 @@ fn note_ons(bytes: &[u8]) -> Vec<(usize, u64, u8, u8)> {
                 message: MidiMessage::NoteOn { key, vel },
                 ..
             } = e.kind
+                && vel.as_int() > 0
             {
-                if vel.as_int() > 0 {
-                    out.push((i, tick, key.as_int(), vel.as_int()));
-                }
+                out.push((i, tick, key.as_int(), vel.as_int()));
             }
         }
     }

@@ -274,7 +274,7 @@ fn the_multi_track_file_holds_no_review_markers_when_the_export_has_none() {
 
 // ---------- P4-8: the tempo map ----------
 
-use crate::tempo::{import_midi, MeterChange, TempoStep};
+use crate::tempo::{MeterChange, TempoStep, import_midi};
 
 fn map3() -> TempoMap {
     // ticks are exact: 120 BPM is 48,000 ticks per second, 100 BPM 40,000, 150 BPM 60,000
@@ -322,10 +322,9 @@ fn worst_error_ticks(bytes: &[u8], hits: &[f64]) -> (f64, usize) {
             message: MidiMessage::NoteOn { vel, .. },
             ..
         } = e.kind
+            && vel.as_int() > 0
         {
-            if vel.as_int() > 0 {
-                ons.push(at);
-            }
+            ons.push(at);
         }
     }
     assert_eq!(ons.len(), hits.len(), "one note per hit");
@@ -451,10 +450,9 @@ fn worst_daw_error_s(bytes: &[u8], bpm: f64, hits: &[f64]) -> f64 {
             message: MidiMessage::NoteOn { vel, .. },
             ..
         } = e.kind
+            && vel.as_int() > 0
         {
-            if vel.as_int() > 0 {
-                ons.push(at);
-            }
+            ons.push(at);
         }
     }
     assert_eq!(ons.len(), hits.len(), "one note per hit");
@@ -583,10 +581,9 @@ fn a_hit_before_bar_1_and_a_hit_before_0_s_keep_their_place() {
                 message: MidiMessage::NoteOn { vel, .. },
                 ..
             } = e.kind
+                && vel.as_int() > 0
             {
-                if vel.as_int() > 0 {
-                    v.push(at);
-                }
+                v.push(at);
             }
         }
         v

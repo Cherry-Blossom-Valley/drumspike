@@ -13,7 +13,7 @@
 
 use std::time::Instant;
 
-use drumspike_core::analyze::{analyze_track, AnalyzeParams, Detector};
+use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track};
 
 /// The pattern: one 2 s loop at 120 BPM. The kick track carries the kicks, the snare
 /// track the snares; the roles are analysed as separate close mics, so overlapping
@@ -481,14 +481,13 @@ fn twenty_minute_take_under_60_s() {
 
 /// The host a run happens on, named in the table row and the assertion message.
 fn host_name() -> String {
-    if let Ok(out) = std::process::Command::new("hostname").output() {
-        if out.status.success() {
-            if let Ok(s) = String::from_utf8(out.stdout) {
-                let s = s.trim();
-                if !s.is_empty() {
-                    return s.to_string();
-                }
-            }
+    if let Ok(out) = std::process::Command::new("hostname").output()
+        && out.status.success()
+        && let Ok(s) = String::from_utf8(out.stdout)
+    {
+        let s = s.trim();
+        if !s.is_empty() {
+            return s.to_string();
         }
     }
     std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into())

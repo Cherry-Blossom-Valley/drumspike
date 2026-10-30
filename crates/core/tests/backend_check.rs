@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use drumspike_core::backend::{BackendError, DetectorBackend, DspBackend, ExternalDetector};
-use drumspike_core::{analyze_track, read_wav_mono, AnalyzeParams, Detector, MixMode};
+use drumspike_core::{AnalyzeParams, Detector, MixMode, analyze_track, read_wav_mono};
 
 /// A 10 s synthetic kick train: the same signal the detector tests use.
 fn signal() -> Vec<f32> {

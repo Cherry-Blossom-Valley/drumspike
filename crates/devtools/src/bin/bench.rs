@@ -33,11 +33,11 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use drumspike_core::detect::onset::{detect_onsets, Role};
-use drumspike_core::io::{write_wav, WavFormat, WavSpec};
+use drumspike_core::detect::onset::{Role, detect_onsets};
+use drumspike_core::io::{WavFormat, WavSpec, write_wav};
 use drumspike_core::{
-    compute_peaks, decode_many, read_wav_bytes, read_wav_mono, refine_track, velocity_map, MixMode, RefineWindow,
-    VelocityMap,
+    MixMode, RefineWindow, VelocityMap, compute_peaks, decode_many, read_wav_bytes, read_wav_mono, refine_track,
+    velocity_map,
 };
 use rayon::prelude::*;
 

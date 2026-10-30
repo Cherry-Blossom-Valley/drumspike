@@ -14,13 +14,13 @@
 //! follow the rename; a removed source) gets its own detection back with no events.
 
 use drumspike_core::project::Event;
-use drumspike_core::velocity::{velocity_map, VelocityMap};
-use serde_json::{json, Map, Value};
+use drumspike_core::velocity::{VelocityMap, velocity_map};
+use serde_json::{Map, Value, json};
 
-use crate::error::AppError;
-use crate::media::{mix_mode, Decoded};
-use crate::registry::{lock, OpenProject, Shared};
 use crate::Service;
+use crate::error::AppError;
+use crate::media::{Decoded, mix_mode};
+use crate::registry::{OpenProject, Shared, lock};
 
 /// The derived events of a follower: every hit of `src` at the same sample position in the
 /// follower's rate (`round(t * sr) / sr`; equal rates and on-grid times give the same `t`),
@@ -307,9 +307,10 @@ mod tests {
         let ev = derive_events(&src, &x, SR, &VelocityMap::default());
         assert_eq!(ev.iter().map(|e| e.t).collect::<Vec<_>>(), [0.5, 1.0]);
         assert_eq!(ev.iter().map(|e| e.v).collect::<Vec<_>>(), [Some(127), Some(20)]);
-        assert!(ev
-            .iter()
-            .all(|e| e.rise.is_none() && e.added.is_none() && e.orig.is_none()));
+        assert!(
+            ev.iter()
+                .all(|e| e.rise.is_none() && e.added.is_none() && e.orig.is_none())
+        );
         // another rate: the same time rounded to the follower's grid
         let ev = derive_events(
             &[Event::new(0.5 + 1.0 / 96_000.0, 100)],

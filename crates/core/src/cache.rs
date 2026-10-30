@@ -29,7 +29,7 @@ use std::fs::{self, File};
 use std::io;
 use std::path::Path;
 
-use crate::peaks::{clamp_window, compute_peaks, PeakLevel};
+use crate::peaks::{PeakLevel, clamp_window, compute_peaks};
 use crate::project::CacheKey;
 
 /// File name of the binary cache inside `Analysis/<track>/`.

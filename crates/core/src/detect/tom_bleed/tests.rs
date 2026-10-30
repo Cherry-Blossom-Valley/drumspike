@@ -359,7 +359,7 @@ fn a_bleed_only_mic_takes_no_real_hit_at_any_gain() {
         let of_drum0: Vec<bool> = k.hits[2]
             .iter()
             .zip(&r.bleed[2])
-            .filter(|(&h, _)| own[0].iter().any(|&o| (h - o).abs() < 100))
+            .filter(|(h, _)| own[0].iter().any(|o| (*h - *o).abs() < 100))
             .map(|(_, &b)| b)
             .collect();
         assert!(!of_drum0.is_empty());

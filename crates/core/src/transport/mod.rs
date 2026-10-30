@@ -114,11 +114,7 @@ impl Speed {
 
     /// The speed of a slowdown: 2 is half speed, any other value normal speed.
     pub fn from_slowdown(n: u32) -> Speed {
-        if n == 2 {
-            Speed::Half
-        } else {
-            Speed::Normal
-        }
+        if n == 2 { Speed::Half } else { Speed::Normal }
     }
 
     /// The rate the reader resamples the tracks to: `device_rate` times the slowdown.
@@ -695,14 +691,14 @@ impl Control {
     }
 
     fn set_clicks(&mut self, s: &ClickSettings) -> Result<(), TransportError> {
-        if let Some(p) = &s.pitches {
-            if p.len() != self.meta.len() {
-                return Err(TransportError::Arg(format!(
-                    "{} pitches for {} tracks",
-                    p.len(),
-                    self.meta.len()
-                )));
-            }
+        if let Some(p) = &s.pitches
+            && p.len() != self.meta.len()
+        {
+            return Err(TransportError::Arg(format!(
+                "{} pitches for {} tracks",
+                p.len(),
+                self.meta.len()
+            )));
         }
         self.shared.clicks_on.store(s.enabled, Ordering::Relaxed);
         let pitch_change = s

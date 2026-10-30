@@ -32,15 +32,15 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use drumspike_core::analyze::{analyze_detected, role_note, AnalyzeParams};
-use drumspike_core::detect::cross_bleed::{cross_bleed, hit_level, CrossBleedParams, CrossMark, CrossMic, XKind};
+use drumspike_core::analyze::{AnalyzeParams, analyze_detected, role_note};
+use drumspike_core::detect::cross_bleed::{CrossBleedParams, CrossMark, CrossMic, XKind, cross_bleed, hit_level};
 use drumspike_core::detect::onset::{self, Gate, OnsetParams, Role};
 use drumspike_core::project::Track;
 use drumspike_core::refine::first_motion;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use crate::media::{mix_mode, Decoded};
-use crate::registry::{lock, OpenProject, Shared};
+use crate::media::{Decoded, mix_mode};
+use crate::registry::{OpenProject, Shared, lock};
 use crate::roles::is_sample_name;
 use crate::{Service, ServiceConfig};
 
@@ -279,10 +279,10 @@ fn run_one(
         if !m.kind.is_some() || i == a {
             continue;
         }
-        if let Ok(d) = svc.inner.media.decode_cached(&m.path, mix_mode(&m.mix)) {
-            if d.sr == dec_x.sr {
-                srcs.push((i, d));
-            }
+        if let Ok(d) = svc.inner.media.decode_cached(&m.path, mix_mode(&m.mix))
+            && d.sr == dec_x.sr
+        {
+            srcs.push((i, d));
         }
     }
     if srcs.is_empty() {

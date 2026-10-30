@@ -12,7 +12,7 @@ use common::*;
 use drumspike_app::transport::PLAYHEAD_POLL;
 use drumspike_app::{DeviceKey, Progress, Service, TRANSPORT_COMMANDS};
 use drumspike_core::transport::device::Output;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn null() -> Output {
     Output::Null { sample_rate: None }
@@ -1182,10 +1182,12 @@ fn output_select_keeps_the_choice_and_falls_back_to_the_system_default_with_a_me
     svc2.set_home(&home);
     svc2.set_device_list(Some(devices(&["Speakers"])));
     assert_eq!(svc2.outputs_list()["choice"], "Studio");
-    assert!(svc2.output_select(Some("Studio")).unwrap()["note"]
-        .as_str()
-        .unwrap()
-        .contains("Studio"));
+    assert!(
+        svc2.output_select(Some("Studio")).unwrap()["note"]
+            .as_str()
+            .unwrap()
+            .contains("Studio")
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1471,7 +1473,7 @@ fn transport_play_window_previews_the_layer_one_shot_once() {
     // through the track's fader — and solos the track. The hits sit at 0.25 s and later, outside
     // the 0.2 s window, so the only voice that can start is the preview. Planted fault: the same
     // window without `shot` starts no voice at all.
-    use drumspike_core::io::{write_wav as write_core, WavFormat, WavSpec};
+    use drumspike_core::io::{WavFormat, WavSpec, write_wav as write_core};
     let (svc, sid, root) = opened("tp_shot", &["Kick_In", "Snare_Top"]);
     let f = root.join("shots").join("shot.wav");
     let sr = 48_000u32;

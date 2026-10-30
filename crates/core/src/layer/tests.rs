@@ -1,5 +1,5 @@
 use super::*;
-use crate::io::{write_wav, WavFormat, WavSpec};
+use crate::io::{WavFormat, WavSpec, write_wav};
 
 /// A drum-like one-shot: `pre` samples of silence, then a decaying 180 Hz tone plus a decaying
 /// noise burst (a fixed LCG), `len` samples in all.

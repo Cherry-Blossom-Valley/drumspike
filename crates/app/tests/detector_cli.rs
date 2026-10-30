@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use common::*;
 use drumspike_app::cli::{self, Io};
 use drumspike_core::project::load_project;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const TIMES: [f64; 6] = [0.25, 0.75, 1.25, 1.75, 2.25, 2.75];
 
@@ -80,7 +80,9 @@ fn install_plugin(dir: &std::path::Path) {
 fn the_cli_runs_an_analysis_with_the_example_plugin() {
     let root = tmp("detector_cli");
     install_plugin(&root.join("detectors"));
-    std::env::set_var("DRUMSPIKE_DETECTORS_DIR", root.join("detectors"));
+    unsafe {
+        std::env::set_var("DRUMSPIKE_DETECTORS_DIR", root.join("detectors"));
+    }
 
     let svc = service_dsp();
     let dir = project(&root, "Song", &[kick_spec("Kick", "kick", 36)]);
@@ -142,5 +144,7 @@ fn the_cli_runs_an_analysis_with_the_example_plugin() {
     assert_eq!(rec["detector"], "rust-dsp");
     assert!(rec.get("plugin").is_none(), "{rec}");
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("DRUMSPIKE_DETECTORS_DIR");
+    unsafe {
+        std::env::remove_var("DRUMSPIKE_DETECTORS_DIR");
+    }
 }

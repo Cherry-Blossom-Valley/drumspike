@@ -25,8 +25,8 @@
 
 use std::path::{Path, PathBuf};
 
-use drumspike_core::detect::nmfd::{self, NmfdParams, Template};
 use drumspike_core::detect::Chain;
+use drumspike_core::detect::nmfd::{self, NmfdParams, Template};
 
 fn parse_times(s: &str) -> Result<Vec<f64>, String> {
     s.split(',')

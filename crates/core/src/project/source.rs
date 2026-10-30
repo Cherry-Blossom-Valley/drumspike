@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
-use super::document::{Source, Track, SOURCE_MODES};
-use super::{abspath, basename, io_err, normpath, relpath, Project, ProjectError, AUDIO_DIR};
+use super::document::{SOURCE_MODES, Source, Track};
+use super::{AUDIO_DIR, Project, ProjectError, abspath, basename, io_err, normpath, relpath};
 
 /// `head_sha1` covers the first MiB of a file.
 pub const HEAD_BYTES: usize = 1024 * 1024;
@@ -138,16 +138,16 @@ pub fn head_cache_counts() -> HeadCacheCounts {
 /// the read. The flag is true when the hash came from the cache.
 fn head_sha1_settled(path: &Path, settle: std::time::Duration) -> Result<(String, bool), ProjectError> {
     let key = head_key(path, settle);
-    if let Some(k) = key {
-        if let Some(h) = with_head_cache(|c| {
+    if let Some(k) = key
+        && let Some(h) = with_head_cache(|c| {
             let h = c.map.get(&k).cloned();
             if h.is_some() {
                 c.counts.hits += 1;
             }
             h
-        }) {
-            return Ok((h, true));
-        }
+        })
+    {
+        return Ok((h, true));
     }
     let h = hash_head_now(path)?;
     let still = key.filter(|k| head_key(path, settle) == Some(*k));
@@ -341,7 +341,7 @@ pub(crate) fn copy_into_project_with(
             return Err(ProjectError::CopyFailed {
                 reason: status.as_str().to_string(),
                 path: record.path_or_relative().to_string(),
-            })
+            });
         }
     };
     match copy_file_into_project(&src, record, project_dir, name, copy, &|| false)? {
@@ -422,10 +422,10 @@ pub fn copy_into_project_ctl(
         |s, d| copy_chunked(s, d, ctl),
         ctl.cancelled,
     )?;
-    if let Some(o) = &out {
-        if o.created.is_none() {
-            (ctl.on_bytes)(record.size.unwrap_or(0).max(0) as u64);
-        }
+    if let Some(o) = &out
+        && o.created.is_none()
+    {
+        (ctl.on_bytes)(record.size.unwrap_or(0).max(0) as u64);
     }
     Ok(out)
 }
@@ -600,8 +600,8 @@ fn hash_heads(
     paths: &[PathBuf],
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> std::collections::HashMap<PathBuf, Option<String>> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     let out = Mutex::new(std::collections::HashMap::new());
     let next = AtomicUsize::new(0);
     let workers = std::thread::available_parallelism()

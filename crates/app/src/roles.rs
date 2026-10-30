@@ -13,10 +13,10 @@
 
 use std::path::PathBuf;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::error::AppError;
 use crate::Service;
+use crate::error::AppError;
 
 /// The roles of a track.
 pub const ROLES: [&str; 6] = ["kick", "snare", "tom", "hat", "cymbal", "other"];
@@ -68,10 +68,10 @@ pub fn normalize(stem: &str) -> String {
     let digits = s.chars().rev().take_while(char::is_ascii_digit).count();
     if digits > 0 {
         let cut = s.len() - digits;
-        if let Some(rest) = s[..cut].strip_suffix('_') {
-            if !is_bare_tom_name(rest) {
-                s = rest.to_string();
-            }
+        if let Some(rest) = s[..cut].strip_suffix('_')
+            && !is_bare_tom_name(rest)
+        {
+            s = rest.to_string();
         }
     }
     s.split(|c: char| c.is_whitespace() || c == '_' || c == '-' || c == '.')

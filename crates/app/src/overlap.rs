@@ -19,8 +19,8 @@
 //! * The detector session is not touched here: the detector step runs on the caller's
 //!   thread as before, one track at a time.
 
-use std::sync::mpsc::sync_channel;
 use std::sync::OnceLock;
+use std::sync::mpsc::sync_channel;
 
 /// Threads of the preparation pool by default: 8, or the physical cores when there are fewer.
 /// The decode of one track is one thread; the resample and the features split their frames

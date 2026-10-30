@@ -4,7 +4,7 @@
 
 use drumspike_core::detect::features::N_BANDS;
 use drumspike_core::detect::onset::superflux;
-use drumspike_core::detect::{prepare, Chain, DetectError};
+use drumspike_core::detect::{Chain, DetectError, prepare};
 
 #[path = "level_calib_render.rs"]
 mod kit;

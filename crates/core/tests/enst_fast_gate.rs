@@ -5,8 +5,8 @@
 //!
 //! Run: `ENST_ROOT=~/.cache/drumspike/datasets/ENST-drums-public cargo test -p drumspike-core --test enst_fast_gate -j 8 -- --nocapture --ignored`
 
-use drumspike_core::analyze::{analyze_track, AnalyzeParams, Detector};
-use drumspike_core::io::{read_wav_mono, MixMode};
+use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track};
+use drumspike_core::io::{MixMode, read_wav_mono};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

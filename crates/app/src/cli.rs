@@ -22,7 +22,7 @@ use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::api::{self, CommandSpec, Run, Ty};
 use crate::call::call;
@@ -154,11 +154,11 @@ fn parse_flags(row: &CommandSpec, rest: &[String], io: &mut Io) -> Result<Parsed
                     take(rest, &mut i, flag)?
                 };
                 let v = flag_value(row, other, &raw)?;
-                if row.args.iter().any(|a| a.name == other && a.ty == Ty::Strs) {
-                    if let (Some(Value::Array(old)), Value::Array(new)) = (p.args.get_mut(other), &v) {
-                        old.extend(new.clone()); // a repeated flag adds to the list
-                        continue;
-                    }
+                if row.args.iter().any(|a| a.name == other && a.ty == Ty::Strs)
+                    && let (Some(Value::Array(old)), Value::Array(new)) = (p.args.get_mut(other), &v)
+                {
+                    old.extend(new.clone()); // a repeated flag adds to the list
+                    continue;
                 }
                 p.args.insert(other.to_string(), v);
             }
@@ -321,10 +321,10 @@ fn step(svc: &Service, v: &Value, sid: &mut String, progress: &Progress) -> (Val
     let args = with_sid(v.get("args").unwrap_or(&Value::Null), sid);
     let wait = v.get("wait").and_then(Value::as_bool).unwrap_or(false);
     let r = exec(svc, row, &args, wait, Some(progress.clone()));
-    if let Ok(res) = &r {
-        if let Some(s) = res.get("sid").and_then(Value::as_str) {
-            *sid = s.to_string();
-        }
+    if let Ok(res) = &r
+        && let Some(s) = res.get("sid").and_then(Value::as_str)
+    {
+        *sid = s.to_string();
     }
     line(r)
 }
@@ -438,7 +438,7 @@ fn one_shot(svc: &Service, row: &CommandSpec, rest: &[String], io: &mut Io) -> i
     let sid_arg = args.get("sid").and_then(Value::as_str).map(str::to_string);
     let result = exec(svc, row, &Value::Object(args), true, Some(progress.clone()));
     svc.wait_idle(&|v| progress(json!({"exit": v}))); // a copy job answers at once and runs on: wait before saving and closing
-                                                      // a copy job answered `{job}` when it started; the one-shot prints how it ended (`job` and, when done, `result`)
+    // a copy job answered `{job}` when it started; the one-shot prints how it ended (`job` and, when done, `result`)
     let result = match (result, sid_arg) {
         (Ok(v), Some(sid))
             if v.get("job").is_some() && matches!(row.name, "project_save_as" | "project_consolidate") =>
@@ -451,10 +451,13 @@ fn one_shot(svc: &Service, row: &CommandSpec, rest: &[String], io: &mut Io) -> i
     let mut saved_err = None;
     if let (Some(sid), Ok(_)) = (&opened, &result) {
         let dirty = svc.project_get(sid).map(|s| s["dirty"] == true).unwrap_or(false);
-        if crate::command_policy::changes_project(row, &p.args) && p.save && dirty && row.name != "project_save" {
-            if let Err(e) = svc.project_save(sid) {
-                saved_err = Some(e);
-            }
+        if crate::command_policy::changes_project(row, &p.args)
+            && p.save
+            && dirty
+            && row.name != "project_save"
+            && let Err(e) = svc.project_save(sid)
+        {
+            saved_err = Some(e);
         }
     }
     if let Some(sid) = &opened {

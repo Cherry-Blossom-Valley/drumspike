@@ -24,9 +24,9 @@ use std::process::ExitCode;
 #[path = "service_tool/learn_eval.rs"]
 mod learn_eval;
 
-use drumspike_app::{jobs, media, Service, ServiceConfig};
-use drumspike_core::analyze::{analyze_detected, detect_events, AnalyzeParams, Detector};
-use serde_json::{json, Value};
+use drumspike_app::{Service, ServiceConfig, jobs, media};
+use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_detected, detect_events};
+use serde_json::{Value, json};
 
 fn service() -> Service {
     let models = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models");

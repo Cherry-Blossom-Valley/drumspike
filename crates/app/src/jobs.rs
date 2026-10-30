@@ -36,16 +36,16 @@ use std::sync::{Arc, Mutex};
 
 use drumspike_core::analyze::{Analysis, AnalyzeParams};
 use drumspike_core::detect::N_CLASSES;
-use drumspike_core::project::{cache_key, CacheKey, Event, ANALYSIS_DIR, BACKUPS_DIR};
+use drumspike_core::project::{ANALYSIS_DIR, BACKUPS_DIR, CacheKey, Event, cache_key};
 use drumspike_core::refine::{RefineRule, RefineWindow};
 use drumspike_core::velocity::VelocityMap;
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::error::AppError;
-use crate::media::{decode, mix_mode, Decoded};
+use crate::media::{Decoded, decode, mix_mode};
 use crate::overlap;
-use crate::registry::{lock, Shared};
+use crate::registry::{Shared, lock};
 use crate::sensitivity;
 use crate::{Progress, Service, ServiceConfig};
 
@@ -62,14 +62,14 @@ pub const CANCELLED_ERROR: &str = "analysis cancelled";
 /// active one counts as cancelled, so a stale worker writes no state and commits nothing.
 #[derive(Clone, Debug)]
 pub struct JobToken {
-    gen: u64,
+    generation: u64,
     flag: Arc<AtomicBool>,
 }
 
 impl JobToken {
     /// The generation of the job (unique per process, higher is newer).
-    pub fn gen(&self) -> u64 {
-        self.gen
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Whether the job was asked to stop. The flag belongs to this generation alone; a
@@ -174,7 +174,7 @@ impl Jobs {
             tracks.insert(t.clone(), json!({"state": "queued"}));
         }
         let token = JobToken {
-            gen: self.next.fetch_add(1, Ordering::Relaxed),
+            generation: self.next.fetch_add(1, Ordering::Relaxed),
             flag: Arc::new(AtomicBool::new(false)),
         };
         lock(&self.active).insert(sid.to_string(), token.clone());
@@ -215,7 +215,9 @@ impl Jobs {
     /// R08: whether `token` is still the active generation of `sid` (the project is open
     /// and no newer job replaced it).
     fn is_active(&self, sid: &str, token: &JobToken) -> bool {
-        lock(&self.active).get(sid).is_some_and(|t| t.gen == token.gen)
+        lock(&self.active)
+            .get(sid)
+            .is_some_and(|t| t.generation == token.generation)
     }
 
     /// R08: whether the job of `token` may keep running: still the active generation and
@@ -358,10 +360,10 @@ pub fn parse_params(params: Option<&Map<String, Value>>) -> Result<ParsedParams,
         }
     }
     // P4-5: `sensitivity` (0 to 150, the Inspector slider) without `thresholds` gives the thresholds
-    if m.get("thresholds").is_none() {
-        if let Some(v) = m.get("sensitivity").and_then(Value::as_f64) {
-            p.thresholds = crate::sensitivity::thresholds_of(v);
-        }
+    if m.get("thresholds").is_none()
+        && let Some(v) = m.get("sensitivity").and_then(Value::as_f64)
+    {
+        p.thresholds = crate::sensitivity::thresholds_of(v);
     }
     // #387: the Detector select of the Inspector. `builtin`, empty and absent select the
     // built-in DSP detector; anything else is a plugin id.
@@ -677,10 +679,9 @@ pub(crate) fn start(svc: &Service, sid: &str, targets: Vec<String>, progress: Op
                 &sid,
                 &token,
                 &format!("analysis stopped by an internal error: {detail}"),
-            ) {
-                if let Some(p) = progress.as_ref() {
-                    p(json!({"sid": sid, "job": job}));
-                }
+            ) && let Some(p) = progress.as_ref()
+            {
+                p(json!({"sid": sid, "job": job}));
             }
         }
     });
@@ -747,33 +748,33 @@ fn run_job(svc: &Service, sid: &str, targets: &[String], token: &JobToken, progr
         // #281 A6: the cross-track bleed rule first (it re-detects the tom targets; the tom bleed
         // rule judges the hits it leaves)
         let v = crate::cross_bleed::analysis_cross_bleed(&svc.inner.config);
-        if v > 0 {
-            if let Some(cb) = crate::cross_bleed::run_step(svc, op, &analysed.clone()) {
-                emit(jobs.update(sid, token, |j| {
-                    if let Some(tracks) = cb["tracks"].as_object() {
-                        for (name, out) in tracks {
-                            j["tracks"][name.as_str()]["cross_bleed"] = out.clone();
-                        }
+        if v > 0
+            && let Some(cb) = crate::cross_bleed::run_step(svc, op, &analysed.clone())
+        {
+            emit(jobs.update(sid, token, |j| {
+                if let Some(tracks) = cb["tracks"].as_object() {
+                    for (name, out) in tracks {
+                        j["tracks"][name.as_str()]["cross_bleed"] = out.clone();
                     }
-                    j["cross_bleed"] = cb.clone();
-                }));
-            }
+                }
+                j["cross_bleed"] = cb.clone();
+            }));
         }
         // #281 A1: the snare ghost-note gate's busy clearance next (it re-detects the snare
         // targets with the soft rescue denied to the busy candidates; the flam rule and the
         // snare rescue judge the hits it leaves)
         let v = crate::ghost_gate::analysis_ghost_gate(&svc.inner.config);
-        if v > 0 {
-            if let Some(gg) = crate::ghost_gate::run_step(svc, op, &analysed.clone()) {
-                emit(jobs.update(sid, token, |j| {
-                    if let Some(tracks) = gg["tracks"].as_object() {
-                        for (name, out) in tracks {
-                            j["tracks"][name.as_str()]["ghost_gate"] = out.clone();
-                        }
+        if v > 0
+            && let Some(gg) = crate::ghost_gate::run_step(svc, op, &analysed.clone())
+        {
+            emit(jobs.update(sid, token, |j| {
+                if let Some(tracks) = gg["tracks"].as_object() {
+                    for (name, out) in tracks {
+                        j["tracks"][name.as_str()]["ghost_gate"] = out.clone();
                     }
-                    j["ghost_gate"] = gg.clone();
-                }));
-            }
+                }
+                j["ghost_gate"] = gg.clone();
+            }));
         }
         let v = crate::tom_bleed::analysis_bleed_rule(&svc.inner.config);
         let targets: Vec<(String, u32)> = analysed.iter().map(|n| (n.clone(), v)).collect();
@@ -957,10 +958,8 @@ fn finish_one(
             .get("plugin_licences")
             .and_then(Value::as_object)
             .is_some_and(|m| m.contains_key(id));
-        if !recorded {
-            if let Some(inst) = crate::plugins::find(id) {
-                crate::plugins::record_acceptance(&mut lock(op), &inst);
-            }
+        if !recorded && let Some(inst) = crate::plugins::find(id) {
+            crate::plugins::record_acceptance(&mut lock(op), &inst);
         }
     }
     // P3-18: no hit at this sensitivity: the picking again with lower thresholds; the DSP

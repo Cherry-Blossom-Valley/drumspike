@@ -5,16 +5,16 @@
 //! from it with `serde_json::to_value`, so every key the Python layer wrote, known or not,
 //! comes back as it was.
 
-use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
+use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Instant, SystemTime};
 
-use drumspike_core::project::{resolve_source, Source, Track};
+use drumspike_core::project::{Source, Track, resolve_source};
 use drumspike_core::{Document, Project, SourceStatus};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::error::AppError;
 

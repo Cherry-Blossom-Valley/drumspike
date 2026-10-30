@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 
 use common::file_sha256;
 use common::*;
-use drumspike_app::{Progress, Service, COPYJOB_COMMANDS, RELINK_COMMANDS};
-use drumspike_core::project::{consolidate, load_project, AUDIO_DIR};
-use serde_json::{json, Value};
+use drumspike_app::{COPYJOB_COMMANDS, Progress, RELINK_COMMANDS, Service};
+use drumspike_core::project::{AUDIO_DIR, consolidate, load_project};
+use serde_json::{Value, json};
 
 fn service(root: &Path) -> Service {
     let svc = service_dsp();
@@ -834,7 +834,10 @@ fn relink_bench_of_the_generated_session() {
     let same = all_events(&svc, &sid) == events;
     eprintln!(
         "BENCH relink: offline {offline}, relinked {} of {}, online after {ok}, search {:.0} ms (files {}), events unchanged {same}",
-        r["relinked"], r["offline"], t_search.as_secs_f64() * 1000.0, r["files_seen"]
+        r["relinked"],
+        r["offline"],
+        t_search.as_secs_f64() * 1000.0,
+        r["files_seen"]
     );
     assert_eq!(ok, 30);
     assert!(same);
@@ -868,7 +871,10 @@ fn relink_bench_of_the_generated_session() {
     let (online, copied, total) = statuses(&svc, again["sid"].as_str().unwrap());
     eprintln!(
         "BENCH save as: state {}, {n_msgs} progress updates, edit during the copy ok {}, copy {:.2} s, opens {online} / {total} online ({copied} copied), tmp files {}",
-        st["state"], edit.load(Ordering::SeqCst), t_copy.as_secs_f64(), files_with_ext(&new_dir, "tmp").len()
+        st["state"],
+        edit.load(Ordering::SeqCst),
+        t_copy.as_secs_f64(),
+        files_with_ext(&new_dir, "tmp").len()
     );
     assert_eq!((st["state"].as_str(), online, total), (Some("done"), 30, 30));
     assert!(n_msgs >= 10 && edit.load(Ordering::SeqCst));
@@ -927,7 +933,11 @@ fn relink_bench_of_the_generated_session() {
     }
     eprintln!(
         "BENCH consolidate: job {} in {:.2} s (core {:.2} s), {} tracks changed (core {}), records equal paths aside {equal} / 30",
-        st["state"], t_job.as_secs_f64(), t_core.as_secs_f64(), st["result"]["consolidated"].as_array().unwrap().len(), changed.len()
+        st["state"],
+        t_job.as_secs_f64(),
+        t_core.as_secs_f64(),
+        st["result"]["consolidated"].as_array().unwrap().len(),
+        changed.len()
     );
     assert_eq!(equal, 30);
     let after: Vec<String> = wavs.iter().map(|p| file_sha256(p).unwrap()).collect();

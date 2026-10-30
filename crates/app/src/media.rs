@@ -10,14 +10,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use drumspike_core::cache::{build_cache, cache_is_current, PeakCache, PEAKS_BIN};
-use drumspike_core::io::{encode_samples, Plan, WavFormat};
+use drumspike_core::cache::{PEAKS_BIN, PeakCache, build_cache, cache_is_current};
+use drumspike_core::io::{Plan, WavFormat, encode_samples};
 use drumspike_core::layer::OneShot;
-use drumspike_core::project::{cache_key, CacheKey, ANALYSIS_DIR};
-use drumspike_core::{read_wav_mono, MappedWav, MixMode, WavError, WavInfo};
+use drumspike_core::project::{ANALYSIS_DIR, CacheKey, cache_key};
+use drumspike_core::{MappedWav, MixMode, WavError, WavInfo, read_wav_mono};
 
 use crate::error::AppError;
-use crate::registry::{lock, OpenProject};
+use crate::registry::{OpenProject, lock};
 
 /// How many decoded tracks the cache keeps at most (a 5-minute 96 kHz track is 115 MB).
 pub const DECODE_CACHE_LEN: usize = 3;
@@ -52,12 +52,14 @@ pub fn on_peak_workers(n: usize, work: impl Fn(usize) + Sync) {
     let next = AtomicUsize::new(0);
     std::thread::scope(|s| {
         for _ in 0..workers {
-            s.spawn(|| loop {
-                let i = next.fetch_add(1, Ordering::Relaxed);
-                if i >= n {
-                    break;
+            s.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= n {
+                        break;
+                    }
+                    work(i);
                 }
-                work(i);
             });
         }
     });
@@ -349,7 +351,7 @@ impl Media {
                 None => Arc::default(),
             };
             // an older state of the same file in the same mode is not needed again
-            list.retain(|(k, _)| !(k.0 .0 == key.0 .0 && k.0 .1 == key.0 .1));
+            list.retain(|(k, _)| !(k.0.0 == key.0.0 && k.0.1 == key.0.1));
             list.push((key, Arc::clone(&slot)));
             if list.len() > WINDOW_SOURCES_LEN {
                 list.remove(0);

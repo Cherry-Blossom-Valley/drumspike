@@ -1,5 +1,5 @@
 use super::*;
-use crate::io::{read_wav_mono, write_wav, WavFormat, WavSpec};
+use crate::io::{WavFormat, WavSpec, read_wav_mono, write_wav};
 use std::path::Path;
 
 fn tmp(name: &str) -> PathBuf {
@@ -691,13 +691,14 @@ fn transport_click_settings_and_hits_update_and_mute_clicks() {
     let out = o.render(2_000);
     assert_eq!(onsets(&out, 50)[0], 500);
     assert!(o.set_hits(30, vec![]).is_err());
-    assert!(o
-        .set_clicks(&ClickSettings {
+    assert!(
+        o.set_clicks(&ClickSettings {
             enabled: true,
             volume: 0.5,
             pitches: Some(vec![1.0])
         })
-        .is_err());
+        .is_err()
+    );
     std::fs::remove_dir_all(&d).unwrap();
 }
 
@@ -712,11 +713,7 @@ fn tone(t: f64) -> f64 {
         .iter()
         .map(|(f, a)| a * (2.0 * std::f64::consts::PI * f * t).sin())
         .sum();
-    if t < 0.0 {
-        0.0
-    } else {
-        fade * s
-    }
+    if t < 0.0 { 0.0 } else { fade * s }
 }
 
 /// Max abs error of the left channel against `tone` summed `k` times, frames `from..`,
@@ -905,12 +902,16 @@ fn transport_null_device_plays_in_real_time() {
 fn transport_error_messages() {
     assert_eq!(TransportError::Arg("x".into()).to_string(), "x");
     assert!(TransportError::Track("y".into()).to_string().starts_with("track"));
-    assert!(TransportError::Device("z".into())
-        .to_string()
-        .starts_with("audio device"));
-    assert!(TransportError::NoAnswer("w".into())
-        .to_string()
-        .starts_with("audio device: w"));
+    assert!(
+        TransportError::Device("z".into())
+            .to_string()
+            .starts_with("audio device")
+    );
+    assert!(
+        TransportError::NoAnswer("w".into())
+            .to_string()
+            .starts_with("audio device: w")
+    );
 }
 
 #[test]

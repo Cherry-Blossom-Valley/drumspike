@@ -96,19 +96,25 @@ fn bad_input_is_a_json_rpc_error_not_silence() {
 #[test]
 fn tool_descriptions_say_what_the_agent_must_know() {
     let t = |n: &str| tool(api::find(n).unwrap());
-    assert!(t("events_edit")["description"]
-        .as_str()
-        .unwrap()
-        .contains("call project_save"));
-    assert!(t("analyze_start")["description"]
-        .as_str()
-        .unwrap()
-        .contains("poll analyze_status"));
+    assert!(
+        t("events_edit")["description"]
+            .as_str()
+            .unwrap()
+            .contains("call project_save")
+    );
+    assert!(
+        t("analyze_start")["description"]
+            .as_str()
+            .unwrap()
+            .contains("poll analyze_status")
+    );
     assert!(t("export_all")["description"].as_str().unwrap().contains("job_get"));
-    assert!(!t("project_get")["description"]
-        .as_str()
-        .unwrap()
-        .contains("project_save"));
+    assert!(
+        !t("project_get")["description"]
+            .as_str()
+            .unwrap()
+            .contains("project_save")
+    );
     assert_eq!(t("project_get")["annotations"]["readOnlyHint"], true);
     assert_eq!(t("events_edit")["annotations"]["readOnlyHint"], false);
     assert!(

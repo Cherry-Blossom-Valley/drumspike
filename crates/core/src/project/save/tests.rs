@@ -1,7 +1,7 @@
 use super::super::tests::tmp;
 use super::*;
-use crate::io::{write_wav, WavFormat, WavSpec};
-use crate::project::{add_track, load_project, new_project, Event, AUDIO_DIR};
+use crate::io::{WavFormat, WavSpec, write_wav};
+use crate::project::{AUDIO_DIR, Event, add_track, load_project, new_project};
 use serde_json::Value;
 
 #[test]
@@ -13,11 +13,13 @@ fn save_project_into_writes_the_document_under_its_own_name_into_another_folder(
     assert_eq!(path, other.join("Final.drumspike"));
     let doc = std::fs::read_to_string(&path).unwrap();
     assert!(doc.contains("\"name\": \"Final\""), "{doc}");
-    assert!(!p.dir.join("Backups").read_dir().unwrap().any(|e| e
-        .unwrap()
-        .file_name()
-        .to_string_lossy()
-        .ends_with(".partial")));
+    assert!(
+        !p.dir.join("Backups").read_dir().unwrap().any(|e| e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".partial"))
+    );
     assert!(
         other.join("Audio Files").is_dir(),
         "the layout is made in the other folder"
@@ -135,9 +137,10 @@ fn save_is_atomic_and_rotates_backups_to_ten() {
     }
     let b = backups(&bdir);
     assert_eq!(b.len(), 10);
-    assert!(b
-        .iter()
-        .all(|f| f.file_name().unwrap().to_string_lossy().starts_with("Rot 20")));
+    assert!(
+        b.iter()
+            .all(|f| f.file_name().unwrap().to_string_lossy().starts_with("Rot 20"))
+    );
     assert!(!bdir.join("x.tmp").exists());
     assert_eq!(view_i(b.last().unwrap()), 11); // newest backup = previous document
     assert_eq!(view_i(&b[0]), 2); // the oldest three were removed

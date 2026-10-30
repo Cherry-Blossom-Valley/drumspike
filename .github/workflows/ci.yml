@@ -109,7 +109,11 @@ concurrency:
 
 jobs:
   # #125: which jobs this run needs (tools/ci/scope.py). By-hand runs and PRs are always full.
+  # A by-hand run on a crew/** branch is refused unless the owner (wfrank2509) started it: the
+  # agents gate locally (AGENTS.md "Which gates when"); three dispatches on 2026-10-30 held the
+  # release runner. The other jobs need scope, so a refused scope skips the whole run.
   scope:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/crew/') && github.actor != 'wfrank2509') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

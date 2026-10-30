@@ -121,17 +121,17 @@ use std::time::{Duration, Instant};
 use drumspike_core::io::MappedWav;
 use drumspike_core::layer::OneShot;
 use drumspike_core::spike::hit_index;
-use drumspike_core::transport::clicks::{role_pitch, DEFAULT_CLICK_VOLUME};
-use drumspike_core::transport::clock::{host_now_ns, Playhead};
+use drumspike_core::transport::clicks::{DEFAULT_CLICK_VOLUME, role_pitch};
+use drumspike_core::transport::clock::{Playhead, host_now_ns};
 use drumspike_core::transport::device::{
-    default_output_info, is_blocked, output_devices, output_info, resolve_choice, DeviceInfo, Output,
+    DeviceInfo, Output, default_output_info, is_blocked, output_devices, output_info, resolve_choice,
 };
 use drumspike_core::transport::layer::{LayerBank, LayerVoices};
 use drumspike_core::transport::mixer::{MAX_DB, MIN_DB};
 use drumspike_core::transport::{
     CallbackCounter, ClickSettings, MeterSnapshot, Speed, TrackSpec, Transport, TransportConfig, TransportError,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::error::AppError;
 use crate::media::mix_mode;
@@ -351,10 +351,10 @@ impl PlayWindow {
                     .to_string(),
             ),
         };
-        if let Some(n) = &shot {
-            if !tracks.iter().any(|t| t == n) {
-                tracks.push(n.clone());
-            }
+        if let Some(n) = &shot
+            && !tracks.iter().any(|t| t == n)
+        {
+            tracks.push(n.clone());
         }
         let looped = looped.unwrap_or(false);
         if start.is_none() && end.is_none() && !looped && tracks.is_empty() && shot.is_none() {
@@ -609,32 +609,34 @@ fn finish_audition(st: &mut HostState) {
 /// (#201) and wraps a loop (#166): the thread only sees the pause — the engine's end, or a pause
 /// from outside (a device loss, a close). It ends when `audition_gen` changes (a stop, another
 /// play or the end).
-fn spawn_audition(host: &Arc<Mutex<HostState>>, gen: u64) {
+fn spawn_audition(host: &Arc<Mutex<HostState>>, gen_n: u64) {
     let weak: Weak<Mutex<HostState>> = Arc::downgrade(host);
     let _ = std::thread::Builder::new()
         .name("drumspike-audition".into())
-        .spawn(move || loop {
-            let Some(h) = weak.upgrade() else { return };
-            {
-                let mut guard = lock(&h);
-                let st = &mut *guard;
-                if st.audition_gen != gen || st.audition.is_none() {
-                    return;
+        .spawn(move || {
+            loop {
+                let Some(h) = weak.upgrade() else { return };
+                {
+                    let mut guard = lock(&h);
+                    let st = &mut *guard;
+                    if st.audition_gen != gen_n || st.audition.is_none() {
+                        return;
+                    }
+                    let Some(o) = st.open.as_mut() else {
+                        st.audition = None;
+                        st.audition_gen += 1;
+                        return;
+                    };
+                    if !o.transport.is_playing() {
+                        // the engine ended the window (#201) or a pause from outside (a device
+                        // loss, a close): the audition is over
+                        finish_audition(st);
+                        return;
+                    }
                 }
-                let Some(o) = st.open.as_mut() else {
-                    st.audition = None;
-                    st.audition_gen += 1;
-                    return;
-                };
-                if !o.transport.is_playing() {
-                    // the engine ended the window (#201) or a pause from outside (a device
-                    // loss, a close): the audition is over
-                    finish_audition(st);
-                    return;
-                }
+                drop(h);
+                sleep(Duration::from_millis(1));
             }
-            drop(h);
-            sleep(Duration::from_millis(1));
         });
 }
 
@@ -884,23 +886,25 @@ fn spawn_watcher(host: &Arc<Mutex<HostState>>) {
     let weak: Weak<Mutex<HostState>> = Arc::downgrade(host);
     let _ = std::thread::Builder::new()
         .name("drumspike-audio-watch".into())
-        .spawn(move || loop {
-            let period = match weak.upgrade() {
-                Some(h) => lock(&h).watch_period,
-                None => return,
-            };
-            sleep(period);
-            let Some(h) = weak.upgrade() else { return };
-            let input = {
-                let st = lock(&h);
-                // nothing to compare without an open transport: no device query
-                if st.open.is_none() && st.lost.is_none() {
-                    continue;
-                }
-                probe_input(&st)
-            };
-            let seen = probe(input);
-            watch_tick(&mut lock(&h), seen);
+        .spawn(move || {
+            loop {
+                let period = match weak.upgrade() {
+                    Some(h) => lock(&h).watch_period,
+                    None => return,
+                };
+                sleep(period);
+                let Some(h) = weak.upgrade() else { return };
+                let input = {
+                    let st = lock(&h);
+                    // nothing to compare without an open transport: no device query
+                    if st.open.is_none() && st.lost.is_none() {
+                        continue;
+                    }
+                    probe_input(&st)
+                };
+                let seen = probe(input);
+                watch_tick(&mut lock(&h), seen);
+            }
         });
 }
 
@@ -966,7 +970,7 @@ fn next_meter_due(due: Option<Instant>, now: Instant) -> Instant {
 /// starts: on a change of [`playhead_key`] (looked at every [`PLAYHEAD_POLL`]) and at least
 /// every [`PLAYHEAD_PERIOD`]. It sends a last message with `end: true`. P3-16: while the
 /// transport plays it also sends the meter message every [`METER_PERIOD`].
-fn spawn_sender(host: &Arc<Mutex<HostState>>, gen: u64, sid: String, progress: Progress) {
+fn spawn_sender(host: &Arc<Mutex<HostState>>, gen_n: u64, sid: String, progress: Progress) {
     let weak: Weak<Mutex<HostState>> = Arc::downgrade(host);
     let _ = std::thread::Builder::new().name("drumspike-playhead".into()).spawn(move || {
         let mut sent: Option<(Instant, PlayheadKey)> = None;
@@ -975,7 +979,7 @@ fn spawn_sender(host: &Arc<Mutex<HostState>>, gen: u64, sid: String, progress: P
             let Some(h) = weak.upgrade() else { return };
             let (msg, meters) = {
                 let st = lock(&h);
-                if st.sender_gen != gen {
+                if st.sender_gen != gen_n {
                     return;
                 }
                 let meters = match &st.open {
@@ -1315,11 +1319,11 @@ impl Service {
         let mut st = lock(&self.host().st);
         let st = &mut *st;
         let mut result = Ok(());
-        if let Some(o) = st.open.as_mut().filter(|o| o.plan.sid == sid && o.plan.names == names) {
-            if o.plan.layers != layers {
-                o.plan.layers = layers.clone();
-                result = push_layers(&mut st.layer_tpls, o);
-            }
+        if let Some(o) = st.open.as_mut().filter(|o| o.plan.sid == sid && o.plan.names == names)
+            && o.plan.layers != layers
+        {
+            o.plan.layers = layers.clone();
+            result = push_layers(&mut st.layer_tpls, o);
         }
         if let Some(l) = st.lost.as_mut().filter(|l| l.plan.sid == sid && l.plan.names == names) {
             l.plan.layers = layers;
@@ -1399,10 +1403,10 @@ impl Service {
             // one-shot's length (409 for a track without a layer, before the transport opens), and
             // the shot track is the only audible one when the caller named none.
             let mut tracks = w.tracks.clone();
-            if let Some(n) = &w.shot {
-                if !tracks.iter().any(|t| t == n) {
-                    tracks.push(n.clone());
-                }
+            if let Some(n) = &w.shot
+                && !tracks.iter().any(|t| t == n)
+            {
+                tracks.push(n.clone());
             }
             let end = match (&w.shot, w.end) {
                 (Some(n), None) => Some(start + self.layer_len_s(sid, n)?),
@@ -1435,16 +1439,16 @@ impl Service {
             let at = audition.as_ref().unwrap().start;
             self.plan_with_preview(sid, n, &mut plan, at)?;
         }
-        if let Some(a) = &audition {
-            if let Some(n) = a.win.tracks.iter().find(|n| !plan.names.contains(n)) {
-                return Err(AppError::bad(format!(
-                    "audition track \"{n}\" is not in the project's playable tracks"
-                )));
-            }
+        if let Some(a) = &audition
+            && let Some(n) = a.win.tracks.iter().find(|n| !plan.names.contains(n))
+        {
+            return Err(AppError::bad(format!(
+                "audition track \"{n}\" is not in the project's playable tracks"
+            )));
         }
         let t0 = Instant::now();
         let t0_ns = host_now_ns();
-        let (gen, rate, counter, epoch, sought, agen) = {
+        let (gen_n, rate, counter, epoch, sought, agen) = {
             let host = self.host();
             let mut st = lock(&host.st);
             if !st.watcher_started {
@@ -1563,7 +1567,7 @@ impl Service {
         }
         // the first message already shows the position after the seek (and `playing` when it plays)
         if let Some(p) = progress {
-            spawn_sender(&self.host().st, gen, sid.to_string(), p);
+            spawn_sender(&self.host().st, gen_n, sid.to_string(), p);
         }
         let mut st = lock(&self.host().st);
         st.last_start_ms = Some(start_ms);
@@ -1612,7 +1616,7 @@ impl Service {
             match &st.open {
                 Some(o) => o.transport.pause(),
                 None => {
-                    return json!({"open": false, "playing": false, "frame": 0, "rate": 0, "pos": 0.0, "epoch": st.epoch})
+                    return json!({"open": false, "playing": false, "frame": 0, "rate": 0, "pos": 0.0, "epoch": st.epoch});
                 }
             }
         }
@@ -1863,14 +1867,15 @@ impl Service {
             m.insert("layer_last_start".into(), json!(s.layer_last_start));
             m.insert(
                 "layers".into(),
-                json!(o
-                    .plan
-                    .names
-                    .iter()
-                    .zip(&o.plan.layers)
-                    .filter(|(_, l)| l.is_some())
-                    .map(|(n, l)| json!({"name": n, "voices": l.as_ref().map_or(0, |l| l.starts.len())}))
-                    .collect::<Vec<_>>()),
+                json!(
+                    o.plan
+                        .names
+                        .iter()
+                        .zip(&o.plan.layers)
+                        .filter(|(_, l)| l.is_some())
+                        .map(|(n, l)| json!({"name": n, "voices": l.as_ref().map_or(0, |l| l.starts.len())}))
+                        .collect::<Vec<_>>()
+                ),
             );
             m.insert(
                 "mix_latency_ms".into(),
@@ -1916,17 +1921,17 @@ impl Service {
         };
         let mut st = lock(&self.host().st);
         let mut applied = false;
-        if let Some(o) = st.open.as_mut().filter(|o| o.plan.sid == sid) {
-            if let Some(i) = o.plan.names.iter().position(|n| n == name) {
-                o.transport.set_volume_pan(i, db as f32, pn as f32).map_err(dev_err)?;
-                o.plan.vols[i] = (db, pn);
-                applied = true;
-            }
+        if let Some(o) = st.open.as_mut().filter(|o| o.plan.sid == sid)
+            && let Some(i) = o.plan.names.iter().position(|n| n == name)
+        {
+            o.transport.set_volume_pan(i, db as f32, pn as f32).map_err(dev_err)?;
+            o.plan.vols[i] = (db, pn);
+            applied = true;
         }
-        if let Some(l) = st.lost.as_mut().filter(|l| l.plan.sid == sid) {
-            if let Some(i) = l.plan.names.iter().position(|n| n == name) {
-                l.plan.vols[i] = (db, pn);
-            }
+        if let Some(l) = st.lost.as_mut().filter(|l| l.plan.sid == sid)
+            && let Some(i) = l.plan.names.iter().position(|n| n == name)
+        {
+            l.plan.vols[i] = (db, pn);
         }
         Ok(json!({"volume_db": db, "pan": pn, "applied": applied}))
     }

@@ -2,7 +2,7 @@
 //! Prints the error (refined time in samples minus the true onset) per role and rate.
 //! Run: cargo run --release -p drumspike-core --example placement_bias
 use drumspike_core::refine::{
-    refine_foot_tuned, refine_rule_peak, BackStep, FootCap, FootTune, Overrun, RefineRule, RefineWindow, FM_PEAK_DB,
+    BackStep, FM_PEAK_DB, FootCap, FootTune, Overrun, RefineRule, RefineWindow, refine_foot_tuned, refine_rule_peak,
 };
 use std::f64::consts::PI;
 
@@ -111,7 +111,9 @@ fn main() {
         "pooled over floors {:?} dBFS, polarities +1/-1, {} seeds each",
         FLOORS_DB, SEEDS
     );
-    println!("| rate | role | attack ms | n | onset median | p10 | p90 | foot median | p10 | p90 | early (<-1 vs foot) | moved | kept | busy | separate |");
+    println!(
+        "| rate | role | attack ms | n | onset median | p10 | p90 | foot median | p10 | p90 | early (<-1 vs foot) | moved | kept | busy | separate |"
+    );
     println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
     for &sr in &RATES {
         let n = (sr as usize) * 3 / 5;
@@ -155,7 +157,21 @@ fn main() {
                 let early = ferrs.iter().filter(|&&e| e < -1.0).count();
                 println!(
                     "| {} | {} | {} | {} | {:+.2} | {:+.2} | {:+.2} | {:+.2} | {:+.2} | {:+.2} | {} | {} | {} | {} | {} |",
-                    sr, role, attack * 1000.0, errs.len(), med, p10, p90, fmed, fp10, fp90, early, moved, kept, busy, sep
+                    sr,
+                    role,
+                    attack * 1000.0,
+                    errs.len(),
+                    med,
+                    p10,
+                    p90,
+                    fmed,
+                    fp10,
+                    fp90,
+                    early,
+                    moved,
+                    kept,
+                    busy,
+                    sep
                 );
             }
         }

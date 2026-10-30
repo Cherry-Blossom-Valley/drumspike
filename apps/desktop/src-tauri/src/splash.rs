@@ -10,7 +10,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
 
 /// The splash stays at least this long from its first painted frame, so that it never flashes.
@@ -115,10 +115,10 @@ fn js_status(text: &str) -> String {
 
 /// Set the status line (stage: 1 model, 2 editor, 3 project, 4 tracks).
 pub fn status<R: Runtime>(app: &AppHandle<R>, stage: u8, text: &str) {
-    if let Some(s) = app.try_state::<SplashState>() {
-        if let Ok(mut i) = s.0.lock() {
-            i.set_status(stage, text);
-        }
+    if let Some(s) = app.try_state::<SplashState>()
+        && let Ok(mut i) = s.0.lock()
+    {
+        i.set_status(stage, text);
     }
 }
 

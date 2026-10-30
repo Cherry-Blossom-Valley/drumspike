@@ -5,8 +5,8 @@
 mod common;
 
 use common::*;
-use drumspike_app::{Service, HISTOGRAM_COMMANDS};
-use serde_json::{json, Map, Value};
+use drumspike_app::{HISTOGRAM_COMMANDS, Service};
+use serde_json::{Map, Value, json};
 
 const SR: u32 = 48_000;
 
@@ -344,9 +344,11 @@ fn track_velocity_set_with_a_cut_marks_the_quiet_hits_and_they_leave_the_output(
     // the cut off: every mark goes
     let r = svc.track_velocity_set(&sid, "k in", -40.0, -6.0, None, None).unwrap();
     assert!(r["events"].as_array().unwrap().iter().all(|e| e.get("cut").is_none()));
-    assert!(svc.tracks_get(&sid).unwrap()["tracks"]["k in"]["params"]
-        .get("vel_cut_db")
-        .is_none());
+    assert!(
+        svc.tracks_get(&sid).unwrap()["tracks"]["k in"]["params"]
+            .get("vel_cut_db")
+            .is_none()
+    );
     assert_eq!(
         svc.track_velocity_set(&sid, "k in", -40.0, -6.0, Some(f64::INFINITY), None)
             .unwrap_err()

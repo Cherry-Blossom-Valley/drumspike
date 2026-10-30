@@ -1015,6 +1015,7 @@ function sizeCanvases() {   // in the frame: every canvas to the sizes of GEO (w
   ov.width = GEO.ovW * dpr; ov.height = GEO.ovH * dpr;
   ov.getContext("2d").setTransform(dpr,0,0,dpr,0,0);
   rul.style.width = rw + "px"; rul.style.height = "22px";
+  rul.style.transform = ""; rul._sptf = "";   // #150: the time ruler drops its strip transform with its size, like the lane canvases (sizeLaneCanvas)
   rul.width = rw * dpr; rul.height = 22 * dpr; rul.getContext("2d").setTransform(dpr,0,0,dpr,0,0);
   sizeMapCanvases();   // P4-8
   FR.sized = sizeKey();
@@ -1359,6 +1360,7 @@ function sizeMapCanvases() {   // in the frame (and for a strip): the visible ca
     if (!TM.vis[k]) continue;
     const c = TM.cans[k];
     c.style.width = rw + "px"; c.style.height = TM_H + "px";
+    c.style.transform = ""; c._sptf = "";   // #150: a map ruler sized for a draw is not on a strip (the stale strip transform would shift the draw off the clip)
     c.width = rw * dpr; c.height = TM_H * dpr; c.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 }
@@ -1373,12 +1375,9 @@ function drawMarkerRuler(kind, c) {
   else if (!TM.map) return;
   ctx.font = "10px -apple-system, sans-serif"; ctx.textBaseline = "middle"; ctx.lineWidth = 1;
   const mk = tmMarkers(kind), selId = TM.sel && TM.sel.kind === kind ? TM.sel.id : null;
-  let carry = null, first = null;
   for (const it of mk) {
     const x = Math.round(tToX(it.t, W)) + 0.5;
     if (x > W) break;
-    if (x < 0) { carry = it; continue; }
-    if (first === null) first = x;
     const on = it.id === selId;
     ctx.strokeStyle = on ? col.accent : (kind === "markers" ? col.orange : col.dim);
     ctx.fillStyle = on ? col.accent : col.text;
@@ -1388,7 +1387,22 @@ function drawMarkerRuler(kind, c) {
     }
     ctx.fillText(it.text, x + 4, H / 2);
   }
-  if (carry && kind !== "markers" && (first === null || first > tmTextW(carry.text) + 12)) { ctx.fillStyle = col.dim; ctx.fillText(carry.text, 3, H / 2); }   // the value in force at the left edge
+  /* #150: the value in force at the left edge of each view the canvas draws. One view: the label at x 3. Under the
+     follow strip the canvas holds two views (spApply, SP.drawing): a label only at x 3 would glide off-screen with
+     the first view, so the second view's left edge gets its own carry label too (the last marker left of that edge). */
+  if (kind !== "markers") {
+    const half = SP.drawing ? W / 2 : W;
+    for (let vx = 0; vx < W; vx += half) {
+      let c2 = null, f2 = null;
+      for (const it of mk) {
+        const x = Math.round(tToX(it.t, W)) + 0.5;
+        if (x >= vx + half) break;
+        if (x < vx) { c2 = it; continue; }
+        if (f2 === null) f2 = x;
+      }
+      if (c2 && (f2 === null || f2 - vx > tmTextW(c2.text) + 12)) { ctx.fillStyle = col.dim; ctx.fillText(c2.text, vx + 3, H / 2); }
+    }
+  }
 }
 function drawBeatsRuler(c) {
   const ctx = c.getContext("2d"), W = GEO.rulerW, H = TM_H, col = TM.col;
@@ -5702,7 +5716,9 @@ function markLaneDetail(name, detail) {   // tooltip of a lane that cannot draw
 const EX = { open: false, scope: "all", selected: null, midi: true, spikes: true, spikeType: "synthetic", mode: "per_track", comp: false, markers: false, dest: "", def: "", remembered: null,
   /* #172: the export-finished event for the e2e tests: the count of the exports this page has finished */
   destOk: true, replace: 0, busy: false, done: 0, drag: { midi: null, spikes: null }, timer: null, dragSeq: 0, dragChain: Promise.resolve(),
-  infoSeq: 0, lastFile: null, ran: false };
+  infoSeq: 0, lastFile: null, ran: false, tempoSeq: 0, tempoDefault: false,
+  /* #151: the default-tempo answer holds per project (loadProject resets it when a project opens) */
+  tempoAck: false };
 function exTrackSets() {   // the tracks the options name: the ones that export, and the skipped ones with the reason
   const pool = EX.scope === "selected" ? (EX.selected && S.tracks[EX.selected] ? [EX.selected] : []) : S.order.slice();
   const ok = n => S.tracks[n] && !S.tracks[n].offline && (S.events[n] || []).length > 0;
@@ -5751,6 +5767,8 @@ function exRender() {   // the controls from EX; the Export button and the tiles
     t.dataset.state = !names.length || !EX.midi && !EX.spikes ? "disabled" : EX.drag.failed ? "error" : files ? "ready" : "preparing";
     t.querySelector(".exDragN").textContent = t.dataset.state === "preparing" ? "preparing…" : files ? exPlural(files.length, "file", "files") : "";
   }
+  /* #151: on the default map the Drag MIDI tile shows the visible 120 BPM warning until the project's answer */
+  $("#exDragMidi .exDragW").classList.toggle("hidden", !(EX.midi && EX.tempoDefault && !EX.tempoAck));
 }
 async function exInfo() {   // the replace count of the current options (the newest answer wins)
   const my = ++EX.infoSeq;
@@ -5785,7 +5803,13 @@ function exDragSchedule(now) {   // the tiles show "preparing…" until the file
     });
   }, now ? 0 : 400);
 }
-function exChanged() { $("#exResult").classList.add("hidden"); exRender(); exInfo(); exDragSchedule(); }
+function exChanged() { $("#exResult").classList.add("hidden"); exRender(); exInfo(); exDragSchedule(); exTempoDefault(); }
+/* #151: the default-ness of the map drives the visible 120 BPM warning of the Drag MIDI tile; the newest answer wins */
+async function exTempoDefault() {
+  const my = ++EX.tempoSeq, sid = S.sid;
+  try { const d = !!(await B.tempoMapGet(sid)).default; if (my === EX.tempoSeq) { EX.tempoDefault = d; exRender(); } }
+  catch (e) { if (my === EX.tempoSeq) EX.tempoDefault = false; }
+}
 async function openExport(scope, track) {
   if (!needProject()) return;
   if (EX.open) { $("#exGo").focus(); return; }
@@ -5867,10 +5891,29 @@ function exSummary(r) {   // "exported 2 MIDI and 2 spike files to Exports/ in t
   const where = EX.def && r.dest === EX.def ? "Exports/ in the project folder" : r.dest;   // P4-31: export again runs with the dialog closed (EX.def may be empty)
   return `exported ${what} to ${where} (${(r.elapsed_ms / 1000).toFixed(1)} s)`;
 }
+/* #151: the default-tempo notice, shared by the Export dialog and File > Export Again: a MIDI export of a
+   project whose tempo map is the default map would use 120 BPM. "anyway" lets the export write; "set_tempo"
+   opens Track > Detect Tempo without writing; "cancel" writes nothing. A tempo_map_get that fails never asks. */
+async function askDefaultTempo() {
+  let def = false;
+  try { def = !!(await B.tempoMapGet(S.sid)).default; } catch (e) { return "anyway"; }
+  EX.tempoDefault = def;   // the same answer drives the visible warning of the Drag MIDI tile
+  if (!def) return "anyway";
+  return await askConfirm({ title: "No tempo set",
+    msg: "The export uses the default 120 BPM. Set the tempo first: Track > Detect Tempo, File > Import Tempo Map, or the Tempo ruler. Or export anyway.",
+    buttons: [{ label: "Cancel", act: "cancel" }, { label: "Set Tempo…", act: "set_tempo" }, { label: "Export anyway", act: "anyway", cls: "primary" }] });
+}
 async function exRun() {
   if (EX.busy || $("#exGo").disabled) return;
+  EX.busy = true;   // set before the notice: while it asks, exClose (Escape) is refused
+  /* #151: a MIDI export with no tempo set uses the default 120 BPM: ask before the first export writes */
+  if (EX.midi && !EX.tempoAck) {
+    const a = await askDefaultTempo();
+    if (a !== "anyway") { EX.busy = false; setMsg("export cancelled"); if (a === "set_tempo") detectTempo(); return; }   // no file is written
+    EX.tempoAck = true;   // the answer holds for this project: the next export does not ask again
+  }
   const o = exOpts(true), n = o.tracks.length;
-  EX.busy = true; EX.ran = true; $("#exCancel").textContent = "Close"; exRender();
+  EX.ran = true; $("#exCancel").textContent = "Close"; exRender();
   try {
     await flushEvents();   // the service writes from its own copy of the events
     showProgress(0, `Exporting 0/${n}`);
@@ -5898,6 +5941,15 @@ async function exRun() {
 async function exDragStart(kind) {
   const files = EX.drag[kind];
   if (!files || !files.length) return;
+  /* #151: a drag of the MIDI tile on the default map writes 120 BPM MIDI: the press asks the same notice
+     first; Cancel starts no drag and no file moves, Set Tempo… opens Track > Detect Tempo, and only the
+     project's "Export anyway" (the per-project answer) lets the tile drag. A set map never asks. */
+  if (kind === "midi" && !EX.tempoAck) {
+    const a = await askDefaultTempo();
+    if (a !== "anyway") { if (a === "set_tempo") detectTempo(); return; }
+    EX.tempoAck = true;
+    exRender();
+  }
   let out;
   try { out = (await B.exportDragTake(S.sid, files)).files; }   // #433: the dragged files move into Exports/ (the export names): they stay after the drag and the close
   catch (e) { setMsg(`drag failed: ${errText(e)}`, "error"); return; }
@@ -5929,6 +5981,12 @@ async function exportAgain() {   // P4-31: File > Export Again: the last export 
   if (last.scope === "selected" && last.track) o.tracks = [last.track];   // the track of the last export, not the selection of now
   if (last.dest) o.dest = last.dest;
   const n = (o.tracks || S.order).length;
+  /* #151: Export Again asks the same notice before it writes (the dialog path sets EX.tempoAck the same way) */
+  if ((o.formats || []).includes("midi") && !EX.tempoAck) {
+    const a = await askDefaultTempo();
+    if (a !== "anyway") { setMsg("export cancelled"); if (a === "set_tempo") detectTempo(); return; }
+    EX.tempoAck = true;
+  }
   exAgainBusy = true;
   try {
     await flushEvents();   // the service writes from its own copy of the events
@@ -7144,7 +7202,7 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
 (async function boot() {
   persistInit({ edIdle });   // R17 step 2: persist waits for the edit queue through the injected hook (edit.js owns edIdle since step 3)
   editInit({ pushEvents, voidHitDrag: name => { if (hitDrag && hitDrag.track === name) hitDrag = null; } });   // R17 step 3: edit.js flushes the writes of other steps through the injected hook; voidHitDrag is the input layer's (a replaced hit list voids an in-flight drag)
-  sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks
+  sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; }, exTempoReset: () => { EX.tempoAck = false; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks; #151: the default-tempo answer is per project
   tmInit(); measureGeo(); geoObserve();   // P4-8: the map rulers; P3-14d: the geometry once now, then from the ResizeObserver
   setupUpload(); setupGlobal(); setupInfoLine(); staleSetup();
   if (B.onDirty) {   // P3-4a: the service tells when a project becomes dirty or clean

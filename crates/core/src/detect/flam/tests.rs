@@ -1,6 +1,6 @@
 use super::*;
-use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
+use rustfft::num_complex::Complex;
 
 const SR: u32 = 48_000;
 

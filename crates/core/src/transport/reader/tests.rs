@@ -1,5 +1,5 @@
 use super::*;
-use crate::io::{write_wav, WavFormat, WavSpec};
+use crate::io::{WavFormat, WavSpec, write_wav};
 
 fn tmp(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("drumspike-transport-reader-{}-{name}", std::process::id()));

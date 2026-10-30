@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use drumspike_app::{Service, ServiceConfig};
-use drumspike_core::io::{encode_wav, WavFormat, WavSpec};
+use drumspike_core::io::{WavFormat, WavSpec, encode_wav};
 use drumspike_core::project::{add_track, build_source, new_project, save_project};
 use serde_json::Value;
 

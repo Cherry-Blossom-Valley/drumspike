@@ -62,10 +62,10 @@ impl Channels {
         let end = Instant::now() + timeout;
         let mut g = self.queues.lock().unwrap_or_else(|e| e.into_inner());
         loop {
-            if let Some(q) = g.get_mut(id) {
-                if !q.is_empty() {
-                    return q.drain(..).collect();
-                }
+            if let Some(q) = g.get_mut(id)
+                && !q.is_empty()
+            {
+                return q.drain(..).collect();
             }
             let left = end.saturating_duration_since(Instant::now());
             if left.is_zero() {

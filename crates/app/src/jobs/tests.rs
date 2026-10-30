@@ -107,7 +107,7 @@ fn a_second_start_replaces_the_job_and_the_stale_generation_writes_nothing() {
     j.update("s1", &first, |v| v["state"] = Value::from("running")).unwrap();
     assert!(j.running("s1"));
     let second = j.queue("s1", &["a".into()]);
-    assert_ne!(first.gen(), second.gen(), "a new job is a new generation");
+    assert_ne!(first.generation(), second.generation(), "a new job is a new generation");
     assert!(!j.active("s1", &first), "the replaced generation is stale");
     assert!(j.active("s1", &second));
     assert_eq!(
@@ -188,8 +188,8 @@ fn a_closed_project_ignores_late_callbacks_and_a_reopen_gets_a_fresh_generation(
     assert_eq!(j.status("s1")["state"], "idle");
     // the reopen: a fresh generation, and the late progress of the closed one stays out
     let reopened = j.queue("s1", &["a".into()]);
-    assert_ne!(reopened.gen(), queued.gen());
-    assert_ne!(reopened.gen(), running.gen());
+    assert_ne!(reopened.generation(), queued.generation());
+    assert_ne!(reopened.generation(), running.generation());
     assert!(j.active("s1", &reopened));
     assert!(!j.active("s1", &running));
     assert_eq!(
@@ -454,9 +454,11 @@ fn the_retry_lowers_the_thresholds_step_by_step_until_a_hit_appears() {
         })
     };
     assert!(retry_without_hits(&mut none, &sensitivity::BASE).unwrap().is_none());
-    assert!(retry_without_hits(&mut none, &sensitivity::thresholds_of(150.0))
-        .unwrap()
-        .is_none());
+    assert!(
+        retry_without_hits(&mut none, &sensitivity::thresholds_of(150.0))
+            .unwrap()
+            .is_none()
+    );
     let mut fail = |_: &[f64; N_CLASSES]| -> Result<Analysis, String> { Err("boom".into()) };
     assert_eq!(retry_without_hits(&mut fail, &sensitivity::BASE).unwrap_err(), "boom");
 }

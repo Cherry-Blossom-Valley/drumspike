@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use drumspike_app::AppError;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
 
 /// The file name of the third-party list in the bundle resources.

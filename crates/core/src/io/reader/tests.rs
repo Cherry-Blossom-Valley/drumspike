@@ -1,5 +1,5 @@
 use super::*;
-use crate::io::writer::{encode_wav, encode_wav_raw, WavFormat, WavSpec};
+use crate::io::writer::{WavFormat, WavSpec, encode_wav, encode_wav_raw};
 
 #[test]
 fn bext_parse_accepts_338_bytes_like_python() {

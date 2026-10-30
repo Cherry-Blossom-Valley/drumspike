@@ -149,9 +149,10 @@ fn onsets_from_spectrogram_keeps_the_gap_and_the_confidence_range() {
     for w in hits.windows(2) {
         assert!(w[1].time - w[0].time >= 0.05 - 1e-9);
     }
-    assert!(hits
-        .iter()
-        .all(|h| h.rise_db.is_none() && (0.0..=1.0).contains(&h.confidence)));
+    assert!(
+        hits.iter()
+            .all(|h| h.rise_db.is_none() && (0.0..=1.0).contains(&h.confidence))
+    );
     assert!(hits.iter().any(|h| h.confidence == 1.0));
     assert!(onsets_from_spectrogram(&[], &[], &p).is_empty());
 }

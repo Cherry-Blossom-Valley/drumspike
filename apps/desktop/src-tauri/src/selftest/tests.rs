@@ -26,7 +26,9 @@ fn scenario_path_maps_names_and_keeps_paths() {
 
 #[test]
 fn resolve_env_replaces_dollar_strings_everywhere() {
-    std::env::set_var("DS_SELFTEST_UNIT", "/p");
+    unsafe {
+        std::env::set_var("DS_SELFTEST_UNIT", "/p");
+    }
     let mut v = json!({"a": "$DS_SELFTEST_UNIT", "b": ["x", "$DS_SELFTEST_UNIT"], "c": {"d": "plain", "e": 3}});
     resolve_env(&mut v).unwrap();
     assert_eq!(v, json!({"a": "/p", "b": ["x", "/p"], "c": {"d": "plain", "e": 3}}));
@@ -36,7 +38,9 @@ fn resolve_env_replaces_dollar_strings_everywhere() {
 
 #[test]
 fn the_slice_scenario_loads_and_has_the_fields_the_driver_reads() {
-    std::env::set_var("DRUMSPIKE_SELFTEST_PROJECT", "/tmp/p");
+    unsafe {
+        std::env::set_var("DRUMSPIKE_SELFTEST_PROJECT", "/tmp/p");
+    }
     let v = load_scenario(&Request {
         scenario: "slice".into(),
         out: PathBuf::from("x"),
@@ -75,7 +79,9 @@ fn init_script_sets_the_scenario_before_the_driver() {
 
 #[test]
 fn the_memory_scenario_loads_with_the_limits_of_the_card() {
-    std::env::set_var("DRUMSPIKE_SELFTEST_PROJECT", "/tmp/p");
+    unsafe {
+        std::env::set_var("DRUMSPIKE_SELFTEST_PROJECT", "/tmp/p");
+    }
     let v = load_scenario(&Request {
         scenario: "memory".into(),
         out: PathBuf::from("x"),
@@ -146,7 +152,9 @@ fn the_shell_scenario_loads_with_its_own_driver_and_the_fields_the_driver_reads(
         ("DRUMSPIKE_SELFTEST_DIR", "/tmp/w"),
         ("DRUMSPIKE_SELFTEST_OPEN_DOC", ""),
     ] {
-        std::env::set_var(k, v);
+        unsafe {
+            std::env::set_var(k, v);
+        }
     }
     let v = load_scenario(&Request {
         scenario: "shell".into(),
@@ -232,7 +240,9 @@ fn memory_names_the_new_helpers_and_footprints_skip_nothing_when_empty() {
 
 #[test]
 fn the_tracks_scenario_loads_with_its_own_driver_and_counts_four_actions() {
-    std::env::set_var("DRUMSPIKE_SELFTEST_DROP", "/tmp/drop");
+    unsafe {
+        std::env::set_var("DRUMSPIKE_SELFTEST_DROP", "/tmp/drop");
+    }
     let v = load_scenario(&Request {
         scenario: "tracks".into(),
         out: PathBuf::from("x"),

@@ -38,7 +38,7 @@ pub mod analyze;
 
 pub mod agreement;
 pub mod backend;
-pub use analyze::{analyze_detected, analyze_track, Analysis, AnalyzeError, AnalyzeParams, Detector};
+pub use analyze::{Analysis, AnalyzeError, AnalyzeParams, Detector, analyze_detected, analyze_track};
 pub use backend::{BackendError, CandidateList, DetectedHit, DetectorBackend, DspBackend, ExternalDetector};
 
 pub mod detect;
@@ -65,26 +65,26 @@ pub mod tempo_detect;
 pub mod transport;
 pub mod velocity;
 
-pub use cache::{build_cache, cache_is_current, CacheError, CacheTile, PeakCache};
-pub use detect::resample::{resample_to_44100, ResampleError, Resampler, TARGET_RATE};
-pub use io::{decode_many, read_wav_bytes, read_wav_mono, Bext, MappedWav, MixMode, SampleFormat, WavError, WavInfo};
+pub use cache::{CacheError, CacheTile, PeakCache, build_cache, cache_is_current};
+pub use detect::resample::{ResampleError, Resampler, TARGET_RATE, resample_to_44100};
+pub use io::{Bext, MappedWav, MixMode, SampleFormat, WavError, WavInfo, decode_many, read_wav_bytes, read_wav_mono};
 pub use midi::{
-    export_midi, export_midi_map, export_multi_midi, midi_bytes, midi_bytes_map, multi_midi_bytes, note_events,
-    MidiError, MidiEvent, MidiMarker, MidiTrack, NoteEvent,
+    MidiError, MidiEvent, MidiMarker, MidiTrack, NoteEvent, export_midi, export_midi_map, export_multi_midi,
+    midi_bytes, midi_bytes_map, multi_midi_bytes, note_events,
 };
-pub use peaks::{compute_peaks, compute_peaks_levels, PeakLevel, PeakTile, SampleWindow, Track, PEAK_LEVELS};
+pub use peaks::{PEAK_LEVELS, PeakLevel, PeakTile, SampleWindow, Track, compute_peaks, compute_peaks_levels};
 pub use project::{Document, Event, Project, ProjectError, Source, SourceStatus};
 pub use refine::{
-    first_motion, hilbert_env, recompute_velocities, refine_first_motion, refine_reach, refine_rule, refine_sr,
-    refine_track, refine_track_rule, BackStep, Hit, ReachStep, RefineRule, RefineWindow, Refined,
+    BackStep, Hit, ReachStep, RefineRule, RefineWindow, Refined, first_motion, hilbert_env, recompute_velocities,
+    refine_first_motion, refine_reach, refine_rule, refine_sr, refine_track, refine_track_rule,
 };
 pub use spike::{
+    AUDIO_BEXT_DESCRIPTION, AUDIO_DEFAULT_S, AUDIO_FADE_S, AUDIO_MAX_S, AUDIO_MIN_S, AUDIO_PERIOD_WINDOW_S,
     audio_snippet_lengths, audio_spike_bext, audio_spike_signal, export_audio_spikes, export_spikes, period_samples,
-    spike_bext, spike_signal, AUDIO_BEXT_DESCRIPTION, AUDIO_DEFAULT_S, AUDIO_FADE_S, AUDIO_MAX_S, AUDIO_MIN_S,
-    AUDIO_PERIOD_WINDOW_S,
+    spike_bext, spike_signal,
 };
-pub use tempo::{import_midi, TempoMap, TickMap};
-pub use velocity::{peak_in, velocity_map, VelocityMap};
+pub use tempo::{TempoMap, TickMap, import_midi};
+pub use velocity::{VelocityMap, peak_in, velocity_map};
 
 #[cfg(test)]
 mod version_tests {

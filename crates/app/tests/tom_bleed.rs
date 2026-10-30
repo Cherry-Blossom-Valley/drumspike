@@ -4,9 +4,9 @@
 mod common;
 
 use common::*;
-use drumspike_app::tom_bleed::{run_after, BLEED_RULE};
 use drumspike_app::Service;
-use serde_json::{json, Map, Value};
+use drumspike_app::tom_bleed::{BLEED_RULE, run_after};
+use serde_json::{Map, Value, json};
 
 const SR: u32 = 48_000;
 const SECONDS: f64 = 12.0;
@@ -256,9 +256,11 @@ fn marked_hits_are_the_bleed_and_leave_the_output_until_restored() {
     assert!(detector(&svc, &sid, "t1").get("bleed_rule").is_none());
     assert_eq!(marked(&svc, &sid, "t3").len(), 24, "only the targets change");
     assert_eq!(owns[0].len(), 12);
-    assert!(run_after(&svc, &sid, &targets(&["s top", "t1 sampl"], 1))
-        .unwrap()
-        .is_none());
+    assert!(
+        run_after(&svc, &sid, &targets(&["s top", "t1 sampl"], 1))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -1025,8 +1027,10 @@ fn the_pair_rule_is_off_when_rule_cd_is_off_for_fewer_than_two_played_toms() {
     assert!(marked(&svc, &sid, "t1").is_empty() && marked(&svc, &sid, "t2").is_empty());
     let det = detector(&svc, &sid, "t1");
     assert_eq!(det["bleed"]["pairs"]["on"], false);
-    assert!(det["bleed"]["pairs"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("fewer than two played"));
+    assert!(
+        det["bleed"]["pairs"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("fewer than two played")
+    );
 }

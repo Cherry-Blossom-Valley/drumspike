@@ -77,7 +77,7 @@ impl TempFile {
                         dest: dest.to_path_buf(),
                         file: Some(file),
                         committed: false,
-                    })
+                    });
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
                 Err(e) => return Err(e),

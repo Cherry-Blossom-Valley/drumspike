@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{cli, mcp, Service, ServiceConfig};
+use crate::{Service, ServiceConfig, cli, mcp};
 
 /// The name the user gives the symlink to the app binary: called by this name, the binary is the command-line tool.
 pub const TOOL_NAME: &str = "drumspike";
@@ -32,10 +32,10 @@ pub fn service(models_dir: &Path, client: &str) -> Service {
     {
         svc.set_copy_delay(std::time::Duration::from_millis(ms));
     }
-    if svc.home().is_none() {
-        if let Some(h) = default_home() {
-            svc.set_home(h);
-        }
+    if svc.home().is_none()
+        && let Some(h) = default_home()
+    {
+        svc.set_home(h);
     }
     svc
 }
@@ -101,9 +101,11 @@ mod tests {
     #[test]
     fn the_home_is_the_app_data_folder_on_a_mac() {
         if cfg!(target_os = "macos") {
-            assert!(default_home()
-                .unwrap()
-                .ends_with("Library/Application Support/com.cbv.drumspike"));
+            assert!(
+                default_home()
+                    .unwrap()
+                    .ends_with("Library/Application Support/com.cbv.drumspike")
+            );
         }
     }
 }

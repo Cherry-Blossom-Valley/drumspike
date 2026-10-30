@@ -33,8 +33,8 @@
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use rtrb::Producer;
@@ -149,11 +149,7 @@ pub struct TrackSource {
 }
 
 fn gcd(a: u64, b: u64) -> u64 {
-    if b == 0 {
-        a
-    } else {
-        gcd(b, a % b)
-    }
+    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 impl Resample {
@@ -550,11 +546,11 @@ impl Reader {
             let mut lag = sh.ring_lag[i].swap(0, Ordering::Acquire);
             while lag > 0 {
                 // wrap at the loop end before it is crossed, exactly like the push below
-                if let Some((ls, le)) = self.loop_range {
-                    if self.next_out[i] >= le {
-                        src.seek(ls);
-                        self.next_out[i] = ls;
-                    }
+                if let Some((ls, le)) = self.loop_range
+                    && self.next_out[i] >= le
+                {
+                    src.seek(ls);
+                    self.next_out[i] = ls;
                 }
                 let room = match self.loop_range {
                     Some((_, le)) => (le - self.next_out[i]).min(lag),
@@ -572,11 +568,11 @@ impl Reader {
                 while left > 0 {
                     // #166: wrap at the loop end before it is crossed, so the ring carries the
                     // region again without a flush (no gap at the wrap point)
-                    if let Some((ls, le)) = self.loop_range {
-                        if self.next_out[i] >= le {
-                            src.seek(ls);
-                            self.next_out[i] = ls;
-                        }
+                    if let Some((ls, le)) = self.loop_range
+                        && self.next_out[i] >= le
+                    {
+                        src.seek(ls);
+                        self.next_out[i] = ls;
                     }
                     let want = match self.loop_range {
                         Some((_, le)) => (le - self.next_out[i]).min(left as u64),

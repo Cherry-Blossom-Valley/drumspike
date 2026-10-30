@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// The document extension without the dot.
@@ -73,10 +73,10 @@ pub fn push<R: Runtime>(app: &AppHandle<R>, paths: Vec<String>) {
     if paths.is_empty() {
         return;
     }
-    if let Some(q) = app.try_state::<OpenQueue>() {
-        if let Ok(mut l) = q.0.lock() {
-            l.extend(paths.iter().cloned());
-        }
+    if let Some(q) = app.try_state::<OpenQueue>()
+        && let Ok(mut l) = q.0.lock()
+    {
+        l.extend(paths.iter().cloned());
     }
     #[cfg(debug_assertions)]
     log_for_tests(&paths);
@@ -113,11 +113,11 @@ pub fn take<R: Runtime>(app: &AppHandle<R>) -> Value {
 #[cfg(debug_assertions)]
 fn log_for_tests(paths: &[String]) {
     use std::io::Write;
-    if let Some(f) = std::env::var_os("DRUMSPIKE_OPEN_LOG") {
-        if let Ok(mut h) = std::fs::OpenOptions::new().create(true).append(true).open(f) {
-            for p in paths {
-                let _ = writeln!(h, "{p}");
-            }
+    if let Some(f) = std::env::var_os("DRUMSPIKE_OPEN_LOG")
+        && let Ok(mut h) = std::fs::OpenOptions::new().create(true).append(true).open(f)
+    {
+        for p in paths {
+            let _ = writeln!(h, "{p}");
         }
     }
 }

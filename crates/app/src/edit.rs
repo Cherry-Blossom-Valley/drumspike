@@ -12,13 +12,13 @@
 //! * `export_midi_stored`: `export_midi` with the page's values filled from the document: the
 //!   track's note and its stored hits when the call gives none.
 
-use drumspike_core::refine::{refine_rule_peak, ReachStep, RefineRule, RefineWindow};
-use serde_json::{json, Map, Value};
+use drumspike_core::refine::{ReachStep, RefineRule, RefineWindow, refine_rule_peak};
+use serde_json::{Map, Value, json};
 
+use crate::Service;
 use crate::error::AppError;
 use crate::media::mix_mode;
 use crate::registry::lock;
-use crate::Service;
 
 /// The edit commands of this card.
 pub const EDIT_COMMANDS: [&str; 2] = ["events_edit", "track_shift_set"];
@@ -178,10 +178,11 @@ pub fn apply_ops(
                     hit["orig"] = json!(orig);
                 }
                 // P4-40a: `keep` {..} gives back the other fields the deleted hit had (`rise`, `rise_db`, ...): the undo of a
-                // delete restores the hit as it was, so the project can be the saved one again
+                // delete restores the hit as it was, so the project can be the saved one again. #154: the stored `id`
+                // comes back too — the undo of a delete used to lose it, so the state was not the one before the step.
                 if let Some(keep) = o.get("keep").and_then(Value::as_object) {
                     for (k, v) in keep {
-                        if !["t", "v", "added", "orig", "id"].contains(&k.as_str()) && hit.get(k).is_none() {
+                        if !["t", "v", "added", "orig"].contains(&k.as_str()) && hit.get(k).is_none() {
                             hit[k] = v.clone();
                         }
                     }
@@ -238,7 +239,7 @@ pub fn apply_ops(
             other => {
                 return Err(AppError::bad(format!(
                     "unknown op `{other}`: use add, delete, move, velocity or restore"
-                )))
+                )));
             }
         }
     }
