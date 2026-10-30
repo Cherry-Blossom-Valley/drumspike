@@ -67,7 +67,7 @@ use drumspike_core::refine::RefineRule;
 
 use serde_json::Value;
 
-pub use commands::{app_info_value, ListShape, CHAIN, COMMANDS, DETECTOR};
+pub use commands::{CHAIN, COMMANDS, DETECTOR, ListShape, app_info_value};
 pub use copyjob::COPYJOB_COMMANDS;
 pub use edit::EDIT_COMMANDS;
 pub use error::AppError;
@@ -207,31 +207,53 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("probe.bin"), b"x").unwrap();
         // P4-12: the refinement pin (this test owns DRUMSPIKE_REFINE_RULE as well)
-        std::env::remove_var("DRUMSPIKE_REFINE_RULE");
+        unsafe {
+            std::env::remove_var("DRUMSPIKE_REFINE_RULE");
+        }
         assert_eq!(ServiceConfig::from_env(&dir).refine_rule, None);
-        std::env::set_var("DRUMSPIKE_REFINE_RULE", "1");
+        unsafe {
+            std::env::set_var("DRUMSPIKE_REFINE_RULE", "1");
+        }
         assert_eq!(ServiceConfig::from_env(&dir).refine_rule, Some(RefineRule::Reference));
-        std::env::set_var("DRUMSPIKE_REFINE_RULE", "2");
+        unsafe {
+            std::env::set_var("DRUMSPIKE_REFINE_RULE", "2");
+        }
         assert_eq!(ServiceConfig::from_env(&dir).refine_rule, Some(RefineRule::Reach));
-        std::env::set_var("DRUMSPIKE_REFINE_RULE", "3");
+        unsafe {
+            std::env::set_var("DRUMSPIKE_REFINE_RULE", "3");
+        }
         assert_eq!(ServiceConfig::from_env(&dir).refine_rule, Some(RefineRule::FirstMotion));
-        std::env::set_var("DRUMSPIKE_REFINE_RULE", "x");
+        unsafe {
+            std::env::set_var("DRUMSPIKE_REFINE_RULE", "x");
+        }
         assert_eq!(ServiceConfig::from_env(&dir).refine_rule, None);
-        std::env::remove_var("DRUMSPIKE_REFINE_RULE");
+        unsafe {
+            std::env::remove_var("DRUMSPIKE_REFINE_RULE");
+        }
         // P4-14: the bleed rule pin (this test owns DRUMSPIKE_BLEED_RULE as well)
-        std::env::remove_var("DRUMSPIKE_BLEED_RULE");
+        unsafe {
+            std::env::remove_var("DRUMSPIKE_BLEED_RULE");
+        }
         assert_eq!(ServiceConfig::from_env(&dir).bleed_rule, None);
-        std::env::set_var("DRUMSPIKE_BLEED_RULE", "0");
+        unsafe {
+            std::env::set_var("DRUMSPIKE_BLEED_RULE", "0");
+        }
         assert_eq!(ServiceConfig::from_env(&dir).bleed_rule, Some(0));
-        std::env::set_var("DRUMSPIKE_BLEED_RULE", "1");
+        unsafe {
+            std::env::set_var("DRUMSPIKE_BLEED_RULE", "1");
+        }
         assert_eq!(ServiceConfig::from_env(&dir).bleed_rule, Some(1));
-        std::env::set_var("DRUMSPIKE_BLEED_RULE", "7");
+        unsafe {
+            std::env::set_var("DRUMSPIKE_BLEED_RULE", "7");
+        }
         assert_eq!(
             ServiceConfig::from_env(&dir).bleed_rule,
             None,
             "a version this build does not know"
         );
-        std::env::remove_var("DRUMSPIKE_BLEED_RULE");
+        unsafe {
+            std::env::remove_var("DRUMSPIKE_BLEED_RULE");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

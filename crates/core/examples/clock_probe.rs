@@ -17,9 +17,9 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use drumspike_core::MixMode;
 use drumspike_core::transport::device::Output;
 use drumspike_core::transport::{TrackSpec, Transport, TransportConfig};
-use drumspike_core::MixMode;
 
 /// A 220 Hz sine, 16-bit mono at 48 kHz, `secs` long.
 fn write_tone(path: &Path, secs: u32) -> std::io::Result<()> {

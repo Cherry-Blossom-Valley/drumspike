@@ -20,7 +20,7 @@
 //! * bar 1 at a time after 0 s is a marker event `Bar 1` in the tempo track at its tick (no
 //!   marker when bar 1 is at 0 s). A bar 1 before 0 s is not supported yet.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::project::Document;
 use crate::pyops::py_round;

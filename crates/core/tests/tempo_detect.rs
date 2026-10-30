@@ -3,7 +3,7 @@
 //! Each train is built bar by bar from a pattern of eighth notes (kick and snare), with a
 //! seeded jitter, dropped hits and swing. The checks name the known tempo, step and bar 1.
 
-use drumspike_core::tempo_detect::{detect, DetectParams, Hit, Role};
+use drumspike_core::tempo_detect::{DetectParams, Hit, Role, detect};
 
 /// A small deterministic random source (xorshift64*).
 struct Rng(u64);
@@ -385,7 +385,9 @@ fn row(name: &str, train: &Train, sections: &[Section]) -> (f64, bool, f64, f64,
 
 #[test]
 fn the_synthetic_error_table_stays_within_half_a_bpm() {
-    println!("| train | bpm | error | steps found/known | step bpm error | step time error ms | bar 1 error ms | jitter ms | confidence |");
+    println!(
+        "| train | bpm | error | steps found/known | step bpm error | step time error ms | bar 1 error ms | jitter ms | confidence |"
+    );
     println!("|---|---|---|---|---|---|---|---|---|");
     let click = Train::default();
     let human = Train {

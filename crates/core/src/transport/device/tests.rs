@@ -131,7 +131,7 @@ fn cpal_stream_is_send() {
 #[ignore = "needs a device that does not answer (DRUMSPIKE_HANG_DEVICE)"]
 fn a_device_that_does_not_answer_fails_within_the_open_limit() {
     use super::super::{TrackSpec, Transport, TransportConfig};
-    use crate::io::{write_wav, MixMode, WavFormat, WavSpec};
+    use crate::io::{MixMode, WavFormat, WavSpec, write_wav};
     let name = std::env::var("DRUMSPIKE_HANG_DEVICE").expect("set DRUMSPIKE_HANG_DEVICE");
     let dir = std::env::temp_dir().join(format!("drumspike-hang-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -209,7 +209,7 @@ fn rss_mb() -> f64 {
 #[test]
 #[ignore = "needs the audio device and a generated session (DRUMSPIKE_SESSION)"]
 fn device_plays_the_session_silently() {
-    use super::super::{clicks, ClickSettings, TrackSpec, Transport, TransportConfig};
+    use super::super::{ClickSettings, TrackSpec, Transport, TransportConfig, clicks};
     use crate::io::MixMode;
     let dir = std::path::PathBuf::from(
         std::env::var("DRUMSPIKE_SESSION").expect("set DRUMSPIKE_SESSION to a make_session.py folder"),

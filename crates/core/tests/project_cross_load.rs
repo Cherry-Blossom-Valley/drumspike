@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use drumspike_core::project::{legacy_session_document, load_project, migrate_forward, Document};
+use drumspike_core::project::{Document, legacy_session_document, load_project, migrate_forward};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 

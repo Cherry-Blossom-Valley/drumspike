@@ -5,9 +5,9 @@
 mod common;
 
 use common::*;
-use drumspike_app::flam::FLAM_RULE;
 use drumspike_app::Service;
-use serde_json::{json, Map, Value};
+use drumspike_app::flam::FLAM_RULE;
+use serde_json::{Map, Value, json};
 
 const SR: u32 = 48_000;
 

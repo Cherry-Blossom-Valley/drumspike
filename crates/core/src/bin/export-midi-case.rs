@@ -9,7 +9,7 @@
 //!   "path": "..."}`
 //! and it writes the file at `path`, printing nothing on success.
 
-use drumspike_core::midi::{export_midi_map, export_multi_midi, MidiEvent, MidiMarker, MidiTrack};
+use drumspike_core::midi::{MidiEvent, MidiMarker, MidiTrack, export_midi_map, export_multi_midi};
 use drumspike_core::tempo::TempoMap;
 use std::io::Read;
 use std::path::Path;

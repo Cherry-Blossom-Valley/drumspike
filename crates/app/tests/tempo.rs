@@ -5,8 +5,8 @@ mod common;
 
 use common::*;
 use drumspike_app::Service;
-use drumspike_core::midi::{midi_bytes, MidiEvent};
-use serde_json::{json, Value};
+use drumspike_core::midi::{MidiEvent, midi_bytes};
+use serde_json::{Value, json};
 
 const HITS: [f64; 6] = [0.25, 0.75, 1.25, 1.75, 2.25, 2.75];
 
@@ -60,10 +60,9 @@ fn note_ticks(path: &str) -> Vec<u64> {
             message: midly::MidiMessage::NoteOn { vel, .. },
             ..
         } = e.kind
+            && vel.as_int() > 0
         {
-            if vel.as_int() > 0 {
-                out.push(at);
-            }
+            out.push(at);
         }
     }
     out
@@ -82,9 +81,11 @@ fn a_new_project_has_the_default_map_and_the_key_is_not_stored() {
     let r = svc.tempo_map_set(&sid, &json!({})).unwrap();
     assert_eq!(r["changed"], false);
     assert!(!svc.project_get(&sid).unwrap()["dirty"].as_bool().unwrap());
-    assert!(!std::fs::read_to_string(dir.join("Tempo.drumspike"))
-        .unwrap()
-        .contains("tempo_map"));
+    assert!(
+        !std::fs::read_to_string(dir.join("Tempo.drumspike"))
+            .unwrap()
+            .contains("tempo_map")
+    );
 }
 
 #[test]
@@ -120,9 +121,11 @@ fn set_replaces_the_whole_map_in_one_step_and_previous_undoes_it() {
     // a null map is the default map and removes the key again
     svc.tempo_map_set(&sid2, &Value::Null).unwrap();
     svc.project_save(&sid2).unwrap();
-    assert!(!std::fs::read_to_string(dir.join("Tempo.drumspike"))
-        .unwrap()
-        .contains("tempo_map"));
+    assert!(
+        !std::fs::read_to_string(dir.join("Tempo.drumspike"))
+            .unwrap()
+            .contains("tempo_map")
+    );
 }
 
 #[test]
@@ -281,11 +284,7 @@ fn train() -> (Vec<Value>, Vec<Value>, f64) {
         }
         for b in 0..4 {
             let e = json!({"t": t + b as f64 * beat, "v": 100});
-            if b % 2 == 0 {
-                k.push(e)
-            } else {
-                s.push(e)
-            }
+            if b % 2 == 0 { k.push(e) } else { s.push(e) }
         }
         t += 4.0 * beat;
     }
@@ -450,11 +449,7 @@ fn sections_train(secs: &[(usize, f64)]) -> (Vec<Value>, Vec<Value>, Vec<f64>) {
         for _ in 0..bars {
             for (b, kick) in [(0.0, true), (1.0, false), (2.0, true), (2.5, true), (3.0, false)] {
                 let e = json!({"t": t + b * beat, "v": 100});
-                if kick {
-                    k.push(e)
-                } else {
-                    s.push(e)
-                }
+                if kick { k.push(e) } else { s.push(e) }
             }
             t += 4.0 * beat;
         }

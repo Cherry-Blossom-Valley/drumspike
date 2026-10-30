@@ -13,16 +13,16 @@
 
 use std::path::{Path, PathBuf};
 
-use drumspike_core::project::{
-    abspath, copy_into_project, ensure_layout, legacy_session_document, migrate_forward, save_project, BACKUPS_DIR,
-};
 use drumspike_core::Project;
-use serde_json::{json, Value};
+use drumspike_core::project::{
+    BACKUPS_DIR, abspath, copy_into_project, ensure_layout, legacy_session_document, migrate_forward, save_project,
+};
+use serde_json::{Value, json};
 
+use crate::Service;
 use crate::error::AppError;
 use crate::lifecycle::unique_folder;
 use crate::registry::lock;
-use crate::Service;
 
 /// The commands of this card, as the route map names them.
 pub const IMPORT_COMMANDS: [&str; 2] = ["legacy_list", "project_import"];

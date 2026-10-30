@@ -2,7 +2,9 @@
 //! service, `menu.rs`, `open.rs` or `window.rs`. The self-test commands exist in debug builds only.
 
 use drumspike_app::{AppError, ListShape, Service};
-use serde_json::{json, Value};
+use serde_json::Value;
+#[cfg(debug_assertions)]
+use serde_json::json;
 use tauri::{AppHandle, State};
 
 use crate::{menu, open, window};
@@ -36,7 +38,7 @@ pub fn shell_sync(
     menu::sync_window(&app, &menu::window_entries(&svc.project_list(ListShape::Ids), current)).map_err(err)?;
     menu::sync_checks(&app, &state).map_err(err)?;
     menu::sync_follow(&app, &menu::follow_entries(&state)).map_err(err)?; // P3-18: Track > Follow Hits Of
-                                                                          // #169: Zoom Presets > the own presets
+    // #169: Zoom Presets > the own presets
     menu::sync_zoom_own(&app, &menu::zoom_own_names(&state)).map_err(err)?;
     // P3-13c: the key preset (app setting `key_preset`) sets the accelerators; a missing or unknown name keeps the menu as it is
     if let Some(p) = state.get("keyPreset").and_then(Value::as_str) {

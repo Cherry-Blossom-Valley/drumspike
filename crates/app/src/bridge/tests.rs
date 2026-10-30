@@ -151,9 +151,11 @@ fn write_reply_sends_the_length_and_the_connection_header() {
     ] {
         let mut out = Vec::new();
         write_reply(&mut out, &HttpReply::text(code, ""), false).unwrap();
-        assert!(String::from_utf8(out)
-            .unwrap()
-            .starts_with(&format!("HTTP/1.1 {code} {reason}\r\n")));
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .starts_with(&format!("HTTP/1.1 {code} {reason}\r\n"))
+        );
     }
 }
 

@@ -228,13 +228,13 @@ pub fn pick_hits(h: &[f32], p: &NmfdParams) -> Vec<f64> {
     let gap = (p.min_gap_s * FRAMES_PER_S).round() as usize;
     let mut keep: Vec<usize> = Vec::new();
     for &i in &peaks {
-        if let Some(&j) = keep.last() {
-            if i - j < gap {
-                if h[i] > h[j] {
-                    keep.pop();
-                } else {
-                    continue;
-                }
+        if let Some(&j) = keep.last()
+            && i - j < gap
+        {
+            if h[i] > h[j] {
+                keep.pop();
+            } else {
+                continue;
             }
         }
         keep.push(i);
@@ -390,14 +390,16 @@ mod tests {
 
     #[test]
     fn empty_inputs_give_no_activations() {
-        assert!(nmfd_activations(
-            &[],
-            &[Template {
-                bands: vec![0.0; N_BANDS]
-            }],
-            10
-        )
-        .is_empty());
+        assert!(
+            nmfd_activations(
+                &[],
+                &[Template {
+                    bands: vec![0.0; N_BANDS]
+                }],
+                10
+            )
+            .is_empty()
+        );
         assert!(nmfd_activations(&spec_with(5, &[(1, 3, 10.0)]), &[], 10).is_empty());
     }
 }

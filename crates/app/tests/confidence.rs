@@ -6,7 +6,7 @@
 mod common;
 
 use common::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// The review queue order (D) of a `track_confidence` answer: the doubtful hits, lowest
 /// confidence first, ties by hit index.

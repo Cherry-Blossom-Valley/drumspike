@@ -15,16 +15,18 @@ fn role_names_map_to_roles() {
     assert!(Role::Kick.is_ks() && Role::Snare.is_ks() && !Role::Tom.is_ks() && !Role::Cymbal.is_ks());
 }
 
-/// #130: the tempo-referee pin. The parse is pure and tested without writing the process
-/// env: the detection tests run in parallel threads and read the same variable.
+/// #130: the tempo-referee pin. The parse is a pure function and is tested without
+/// touching the process env: the detection tests run in parallel threads, and edition 2024
+/// makes env writes unsafe for exactly that reason.
 #[test]
 fn the_tempo_rule_pin_parses_and_defaults_to_2() {
     assert_eq!(parse_rule(None), 2);
     assert_eq!(parse_rule(Some("1")), 1, "1 pins the shipped referee");
     assert_eq!(parse_rule(Some("x")), 2);
     assert_eq!(parse_rule(Some("0")), 0, "0 pins the shipped referee too");
-    std::env::remove_var("DRUMSPIKE_TEMPO_RULE");
-    assert_eq!(tempo_rule(), 2, "unset is the #130 product default");
+    if std::env::var("DRUMSPIKE_TEMPO_RULE").is_err() {
+        assert_eq!(tempo_rule(), 2, "unset is the #130 product default");
+    }
 }
 
 #[test]
@@ -422,9 +424,19 @@ fn session_d_kick_only_session_suggests_92_and_bar_1_on_the_beat() {
     let d = detect(&session_d(), &DetectParams::default()).unwrap();
     println!(
         "Session D: suggested {} BPM (fitted {:.4}, error bar {:.5}), confidence {}, bar 1 at {:.4} s (backbeat {}, downbeat {}, alternative {:.4}), alternatives {:?}, meter {:?} feel {:?}, on beat {}, jitter {} ms",
-        d.map.bpm, d.bpm, d.bpm_error_bar, d.confidence, d.bar1_s, d.bar1_backbeat,
-        d.bar1_downbeat, d.bar1_alternative_s, d.alternatives, d.meter, d.meter_feel,
-        d.on_beat, d.jitter_ms
+        d.map.bpm,
+        d.bpm,
+        d.bpm_error_bar,
+        d.confidence,
+        d.bar1_s,
+        d.bar1_backbeat,
+        d.bar1_downbeat,
+        d.bar1_alternative_s,
+        d.alternatives,
+        d.meter,
+        d.meter_feel,
+        d.on_beat,
+        d.jitter_ms
     );
     // #472: the kick-only session is played at 92 BPM; the half tempo (46) must not win.
     assert!(

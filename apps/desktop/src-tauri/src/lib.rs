@@ -31,7 +31,7 @@ pub mod tempo;
 pub mod tracks;
 pub mod window;
 
-pub use drumspike_app::{app_info_value, CHAIN, DETECTOR};
+pub use drumspike_app::{CHAIN, DETECTOR, app_info_value};
 
 /// Start of the process, for the optional cold-start log.
 static START: OnceLock<Instant> = OnceLock::new();
@@ -142,11 +142,19 @@ pub fn headless_as(program: &str, args: &[String]) -> Option<i32> {
     }
 }
 
+///
+/// # Errors
+///
+/// Errors when the app-info answer cannot be read on the blocking pool.
 #[tauri::command]
 async fn app_info(svc: State<'_, Service>) -> Result<Value, AppError> {
     blocking(&svc, "app_info", |s| Ok(s.app_info())).await
 }
 
+///
+/// # Errors
+///
+/// Errors when the project folder cannot be opened (missing, unreadable or not a Drum Spike project) or the blocking pool fails.
 #[tauri::command(rename_all = "snake_case")]
 async fn project_open(svc: State<'_, Service>, path: String, read_only: Option<bool>) -> Result<Value, AppError> {
     blocking(&svc, "project_open", move |s| {
@@ -155,6 +163,10 @@ async fn project_open(svc: State<'_, Service>, path: String, read_only: Option<b
     .await
 }
 
+///
+/// # Errors
+///
+/// Errors when the project is unknown to the service or the blocking pool fails.
 #[tauri::command]
 async fn project_get(svc: State<'_, Service>, sid: String) -> Result<Value, AppError> {
     blocking(&svc, "project_get", move |s| s.project_get(&sid)).await
@@ -165,27 +177,47 @@ fn project_list(svc: State<'_, Service>, shape: Option<String>) -> Value {
     svc.project_list(ListShape::parse(shape.as_deref()))
 }
 
+///
+/// # Errors
+///
+/// Errors when the project is unknown to the service or the blocking pool fails.
 #[tauri::command]
 async fn tracks_get(svc: State<'_, Service>, sid: String) -> Result<Value, AppError> {
     blocking(&svc, "tracks_get", move |s| s.tracks_get(&sid)).await
 }
 
+///
+/// # Errors
+///
+/// Errors when the event set cannot be read from the service.
 #[tauri::command]
 fn events_get(svc: State<'_, Service>, sid: String, name: String) -> Result<Value, AppError> {
     svc.events_get(&sid, &name)
 }
 
+///
+/// # Errors
+///
+/// Errors when the event set cannot be validated or written.
 #[tauri::command]
 fn events_set(svc: State<'_, Service>, sid: String, name: String, events: Value) -> Result<Value, AppError> {
     svc.events_set(&sid, &name, &events)
 }
 
+///
+/// # Errors
+///
+/// Errors when the peaks of the sample cannot be read (unknown project, missing analysis) or the blocking pool fails.
 #[tauri::command]
 async fn peaks_info(svc: State<'_, Service>, sid: String, name: String) -> Result<Value, AppError> {
     blocking(&svc, "peaks_info", move |s| s.peaks_info(&sid, &name)).await
 }
 
 /// Bytes: `u32 level, u32 start, u32 n`, then `min[n]`, `max[n]`, `rms[n]` as f32 (little endian).
+///
+/// # Errors
+///
+/// Errors when the tile cannot be rendered (unknown sample, bad range or level) or the blocking pool fails.
 #[tauri::command]
 async fn peaks_tile(
     svc: State<'_, Service>,
@@ -201,6 +233,10 @@ async fn peaks_tile(
 }
 
 /// Bytes: `u32 start, u32 sample rate`, then the samples as f32 (little endian).
+///
+/// # Errors
+///
+/// Errors when the window cannot be read (unknown sample, bad range) or the blocking pool fails.
 #[tauri::command]
 async fn samples_window(
     svc: State<'_, Service>,
@@ -217,6 +253,10 @@ async fn samples_window(
 }
 
 /// P4-40e: the Layer view's waveform of the one-shot. Same bytes as `samples_window`.
+///
+/// # Errors
+///
+/// Errors when the layer waveform cannot be read (unknown track or sample, bad range) or the blocking pool fails.
 #[tauri::command(rename_all = "snake_case")]
 async fn track_layer_wave(
     svc: State<'_, Service>,
@@ -234,6 +274,10 @@ async fn track_layer_wave(
 
 /// P4-40e: the Layer view's waveform of the sampler calibration bounce. Same bytes as
 /// `samples_window`.
+///
+/// # Errors
+///
+/// Errors when the sampler calibration waveform cannot be read (bad range) or the blocking pool fails.
 #[tauri::command(rename_all = "snake_case")]
 async fn track_sampler_wave(
     svc: State<'_, Service>,
@@ -251,6 +295,10 @@ async fn track_sampler_wave(
 
 /// Starts the job and returns at once; the channel `progress` gets `{sid, job}` after every
 /// change of the job (the page passes a channel; it may ignore the messages and poll instead).
+///
+/// # Errors
+///
+/// Errors when the analysis cannot be started for the project.
 #[tauri::command(rename_all = "snake_case")]
 fn analyze_start(
     svc: State<'_, Service>,
@@ -279,6 +327,10 @@ fn analyze_status(svc: State<'_, Service>, sid: String) -> Value {
     svc.analyze_status(&sid)
 }
 
+///
+/// # Errors
+///
+/// Errors when the MIDI export fails (unknown project or track, write failure) or the blocking pool fails.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // the wrapper takes the arguments of the command (api.rs row)
 async fn export_midi(
@@ -310,6 +362,10 @@ async fn export_midi(
 }
 
 /// P3-3c: `Exports/<name>_spike.wav` for the hits of the call (or of the document).
+///
+/// # Errors
+///
+/// Errors when the spike WAV export fails (unknown project or track, write failure) or the blocking pool fails.
 #[tauri::command]
 async fn export_spikes(
     svc: State<'_, Service>,
@@ -326,6 +382,10 @@ async fn export_spikes(
 
 /// P3-3c: MIDI and spike files of every track. Runs on the async pool; the channel gets
 /// `{sid, export: {state, done, total, track}}` after each track.
+///
+/// # Errors
+///
+/// Errors when the export options are invalid or the export fails (unknown project, write failure, blocking pool).
 #[tauri::command(rename_all = "snake_case")]
 #[allow(clippy::too_many_arguments)] // the wrapper takes the arguments of the command (api.rs row)
 async fn export_all(
@@ -351,6 +411,10 @@ async fn export_all(
 }
 
 /// P3-3c: route 34, the times stay and `v` is computed again.
+///
+/// # Errors
+///
+/// Errors when the velocities cannot be recomputed (unknown project or track) or the blocking pool fails.
 #[tauri::command]
 async fn velocities_recompute(
     svc: State<'_, Service>,
@@ -367,6 +431,10 @@ async fn velocities_recompute(
 /// Starts the transport (opens it when needed), plays from `position` seconds and returns when
 /// the first block plays. The channel `progress` gets the playhead messages (on a change, else 4 Hz).
 /// P3-20b: `speed` 0.5 plays at half speed (one octave down); 1 or none at normal speed.
+///
+/// # Errors
+///
+/// Errors when the play arguments are invalid (window, speed or shot) or the transport cannot start.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // the wrapper takes the arguments of the command (api.rs row)
 async fn transport_play(
@@ -400,6 +468,10 @@ async fn transport_play(
     .await
 }
 
+///
+/// # Errors
+///
+/// Errors when the transport cannot be stopped (blocking pool failure).
 #[tauri::command]
 async fn transport_stop(svc: State<'_, Service>, close: Option<bool>) -> Result<Value, AppError> {
     blocking(&svc, "transport_stop", move |s| {
@@ -410,11 +482,19 @@ async fn transport_stop(svc: State<'_, Service>, close: Option<bool>) -> Result<
 
 /// P3-15c: the seek waits (up to 100 ms) for the callback to take it, without the host lock and
 /// on the blocking pool.
+///
+/// # Errors
+///
+/// Errors when the transport cannot seek to the position.
 #[tauri::command]
 async fn transport_seek(svc: State<'_, Service>, position: f64) -> Result<Value, AppError> {
     blocking(&svc, "transport_seek", move |s| s.transport_seek(position)).await
 }
 
+///
+/// # Errors
+///
+/// Errors when the mix state cannot be applied.
 #[tauri::command]
 async fn transport_mix(svc: State<'_, Service>, mute: Option<Value>, solo: Option<Value>) -> Result<Value, AppError> {
     blocking(&svc, "transport_mix", move |s| {
@@ -423,6 +503,10 @@ async fn transport_mix(svc: State<'_, Service>, mute: Option<Value>, solo: Optio
     .await
 }
 
+///
+/// # Errors
+///
+/// Errors when the click settings cannot be applied.
 #[tauri::command]
 async fn transport_clicks(
     svc: State<'_, Service>,
@@ -437,12 +521,20 @@ async fn transport_clicks(
 }
 
 /// On the blocking pool: the host lock can be held while a transport opens its files.
+///
+/// # Errors
+///
+/// Errors when the transport status cannot be read on the blocking pool.
 #[tauri::command]
 async fn transport_status(svc: State<'_, Service>) -> Result<Value, AppError> {
     blocking(&svc, "transport_status", |s| Ok(s.transport_status())).await
 }
 
 /// P3-16: a track's playback volume (dB) and pan; kept in the project.
+///
+/// # Errors
+///
+/// Errors when the track is unknown or the mix cannot be applied.
 #[tauri::command(rename_all = "snake_case")]
 async fn track_set_mix(
     svc: State<'_, Service>,
@@ -458,18 +550,30 @@ async fn track_set_mix(
 }
 
 /// P3-16: the master volume (dB); kept in the app settings.
+///
+/// # Errors
+///
+/// Errors when the master volume cannot be applied.
 #[tauri::command(rename_all = "snake_case")]
 async fn transport_master(svc: State<'_, Service>, volume_db: f64) -> Result<Value, AppError> {
     blocking(&svc, "transport_master", move |s| s.transport_master(volume_db)).await
 }
 
 /// P3-16: the output devices, the choice and the device in use (a CoreAudio query: blocking pool).
+///
+/// # Errors
+///
+/// Errors when the output devices cannot be listed on the blocking pool.
 #[tauri::command]
 async fn outputs_list(svc: State<'_, Service>) -> Result<Value, AppError> {
     blocking(&svc, "outputs_list", |s| Ok(s.outputs_list())).await
 }
 
 /// P3-16: choose the output device by name (`null`: the system default); kept in the app settings.
+///
+/// # Errors
+///
+/// Errors when the device cannot be selected (unknown device name) or the blocking pool fails.
 #[tauri::command]
 async fn output_select(svc: State<'_, Service>, device: Option<String>) -> Result<Value, AppError> {
     blocking(&svc, "output_select", move |s| s.output_select(device.as_deref())).await
@@ -827,15 +931,15 @@ fn self_test_setup<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Buil
 /// `DRUMSPIKE_PROJECTS` (set by `Service::new`) win over these defaults. P4-5: also names the app in the project lock.
 fn lifecycle_setup(svc: &Service, app: &tauri::AppHandle) {
     svc.set_lock_client("app"); // P4-5: a project the app opens for writing is locked against the agent tools
-    if svc.home().is_none() {
-        if let Ok(dir) = app.path().app_data_dir() {
-            svc.set_home(dir);
-        }
+    if svc.home().is_none()
+        && let Ok(dir) = app.path().app_data_dir()
+    {
+        svc.set_home(dir);
     }
-    if std::env::var_os("DRUMSPIKE_PROJECTS").is_none_or(|v| v.is_empty()) {
-        if let Ok(dir) = app.path().document_dir() {
-            svc.set_projects_dir(dir.join("Drumspike Projects"));
-        }
+    if std::env::var_os("DRUMSPIKE_PROJECTS").is_none_or(|v| v.is_empty())
+        && let Ok(dir) = app.path().document_dir()
+    {
+        svc.set_projects_dir(dir.join("Drumspike Projects"));
     }
     let handle = app.clone();
     svc.set_emitter(Arc::new(move |name: &str, payload: Value| {
@@ -844,6 +948,12 @@ fn lifecycle_setup(svc: &Service, app: &tauri::AppHandle) {
 }
 
 /// Build and run the app.
+///
+/// # Panics
+///
+/// Panics when the Tauri app cannot be built (`.expect("error while building the Drum Spike
+/// app")`): the one app-level startup panic (F-6 of the engineering review). Nothing after a
+/// successful build panics.
 pub fn run() {
     START.set(Instant::now()).ok();
     // P3-15c: the trace (feature `trace`, `DRUMSPIKE_TRACE=<file>`) starts first, so its clock
@@ -879,9 +989,11 @@ pub fn run() {
                     }
                 };
                 front();
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    front();
+                std::thread::spawn(move || {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        front();
+                    }
                 });
             }
             // #206: the menu is in place; apply the AppKit Shift convention (uppercase, no Shift flag)

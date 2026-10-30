@@ -7,10 +7,10 @@ use std::time::SystemTime;
 
 use chrono::{Local, TimeZone};
 
-use super::document::{now, Document, FORMAT};
-use super::source::{build_source, copy_into_project, resolve_source, splitext, SourceStatus};
+use super::document::{Document, FORMAT, now};
+use super::source::{SourceStatus, build_source, copy_into_project, resolve_source, splitext};
 use super::{
-    abspath, check_name, document_path, ensure_layout, io_err, py_repr, Project, ProjectError, BACKUPS_DIR, DOC_EXT,
+    BACKUPS_DIR, DOC_EXT, Project, ProjectError, abspath, check_name, document_path, ensure_layout, io_err, py_repr,
 };
 
 /// How many `.drumspike` files `Backups/` keeps (`project.BACKUPS_KEEP`).
@@ -210,7 +210,7 @@ pub fn save_as(project: &Project, dir: &Path, name: &str, copy_audio: bool) -> R
                     return Err(ProjectError::NeedsRelink {
                         track: tname.to_string(),
                         reason: status.as_str().to_string(),
-                    })
+                    });
                 }
             };
             let referenced = build_source(&src, &pdir, "referenced")?;

@@ -7,9 +7,9 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::*;
-use drumspike_app::{Service, IMPORT_COMMANDS};
+use drumspike_app::{IMPORT_COMMANDS, Service};
 use drumspike_core::project::load_project;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn service(root: &Path) -> Service {
     let svc = service_dsp();
@@ -59,12 +59,14 @@ fn check_imported(svc: &Service, sum: &Value, sdir: &Path) {
     assert_eq!(sum["tracks"]["Kick_In"]["status"], "ok");
     let folder = PathBuf::from(sum["folder"].as_str().unwrap());
     assert!(folder.starts_with(svc.projects_dir()), "{folder:?}");
-    assert!(folder
-        .file_name()
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .starts_with("Song- Take 2"));
+    assert!(
+        folder
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("Song- Take 2")
+    );
     let p = load_project(&folder).unwrap();
     assert_eq!(p.doc.format, 1);
     assert_eq!(p.doc.created.as_ref().unwrap().as_f64(), Some(1759950000.5));

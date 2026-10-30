@@ -44,11 +44,11 @@ use std::fmt;
 
 use rayon::prelude::*;
 
-use super::cross_bleed::{hit_level_full_band, CrossBleedParams};
-use super::features::{band_centres_hz, features};
-use super::resample::{resample_to_44100, ResampleError};
 use super::Chain;
-use crate::refine::{refine_track, RefineWindow};
+use super::cross_bleed::{CrossBleedParams, hit_level_full_band};
+use super::features::{band_centres_hz, features};
+use super::resample::{ResampleError, resample_to_44100};
+use crate::refine::{RefineWindow, refine_track};
 
 pub use super::features::{FPS, FRAME_SIZE, HOP, N_BANDS, N_FFT_BINS};
 

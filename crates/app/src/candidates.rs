@@ -19,7 +19,7 @@ use std::path::Path;
 
 use drumspike_core::detect::onset::{Candidate, Gate, OnsetParams};
 use drumspike_core::project::CacheKey;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::jobs::CHAIN_KIND;
 

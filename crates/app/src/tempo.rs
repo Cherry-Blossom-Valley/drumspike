@@ -14,15 +14,15 @@
 //! see `docs/migration/project-format.md`. The MIDI export of a project uses it
 //! (`export::export_midi`, Export All); the default map writes the bytes of the exports before this card.
 
-use drumspike_core::tempo::{import_midi, TempoMap};
+use drumspike_core::tempo::{TempoMap, import_midi};
 use drumspike_core::tempo_detect::{
-    detect, refit_bar1, DetectParams, Detection, Hit, Role, DEFAULT_VELOCITY, ISOLATED_S,
+    DEFAULT_VELOCITY, DetectParams, Detection, Hit, ISOLATED_S, Role, detect, refit_bar1,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
+use crate::Service;
 use crate::error::AppError;
 use crate::registry::lock;
-use crate::Service;
 
 /// The commands of this card.
 pub const TEMPO_COMMANDS: [&str; 5] = [

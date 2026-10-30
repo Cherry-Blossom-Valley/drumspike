@@ -262,7 +262,9 @@ fn empty_document_has_every_key_the_python_layer_writes() {
     let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
     assert_eq!(
         keys,
-        ["format", "name", "created", "modified", "settings", "order", "tracks", "view"]
+        [
+            "format", "name", "created", "modified", "settings", "order", "tracks", "view"
+        ]
     );
     assert!(v["modified"].is_null());
     assert_eq!(v["settings"]["mix_mode"], "ffmpeg");

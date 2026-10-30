@@ -2,7 +2,7 @@
 //! with the release app's `--analyze` mode, so `tools/parity/check_service.py` can run
 //! the analysis inside a built `.app` (its DSP detector) with `--bin`.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::Service;
 

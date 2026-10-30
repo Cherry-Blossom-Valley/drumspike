@@ -130,27 +130,27 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use drumspike_core::detect::attribution::{
-    attribute, AttributionParams, FilterKind, HitInput, Role as AttrRole, TrackInput,
-};
-use drumspike_core::detect::features::{features, num_frames, N_BANDS};
-use drumspike_core::detect::flam::zero_phase;
-use drumspike_core::detect::onset::{band_range, detect_onsets_with, superflux, OnsetParams, Role, Shape};
-use drumspike_core::detect::resample::{resample_to_44100, Resampler, TARGET_RATE};
-use drumspike_core::detect::tom_bleed::{
-    pair_level_db, pair_marks, stroke_rise_db, tom_bleed_with, Off as BleedOff, PairMic, SourceKind, SourceMic,
-    TomBleedParams, TomMic, Unused, PAIR_HP_HZ,
-};
 use drumspike_core::detect::Chain;
-use drumspike_core::io::{decode_many, read_wav_mono, write_wav, MappedWav, MixMode, WavFormat, WavInfo, WavSpec};
+use drumspike_core::detect::attribution::{
+    AttributionParams, FilterKind, HitInput, Role as AttrRole, TrackInput, attribute,
+};
+use drumspike_core::detect::features::{N_BANDS, features, num_frames};
+use drumspike_core::detect::flam::zero_phase;
+use drumspike_core::detect::onset::{OnsetParams, Role, Shape, band_range, detect_onsets_with, superflux};
+use drumspike_core::detect::resample::{Resampler, TARGET_RATE, resample_to_44100};
+use drumspike_core::detect::tom_bleed::{
+    Off as BleedOff, PAIR_HP_HZ, PairMic, SourceKind, SourceMic, TomBleedParams, TomMic, Unused, pair_level_db,
+    pair_marks, stroke_rise_db, tom_bleed_with,
+};
+use drumspike_core::io::{MappedWav, MixMode, WavFormat, WavInfo, WavSpec, decode_many, read_wav_mono, write_wav};
 use drumspike_core::midi::{
-    export_midi, note_events, MidiEvent, NoteEvent, DEFAULT_PPQ, DEFAULT_TEMPO, DEFAULT_VELOCITY,
+    DEFAULT_PPQ, DEFAULT_TEMPO, DEFAULT_VELOCITY, MidiEvent, NoteEvent, export_midi, note_events,
 };
 use drumspike_core::peaks::{PeakLevel, Track};
 use drumspike_core::project::{self, Project};
-use drumspike_core::refine::{refine_rule_peak, refine_sr, BackStep, ReachStep, RefineRule, RefineWindow, FM_PEAK_DB};
+use drumspike_core::refine::{BackStep, FM_PEAK_DB, ReachStep, RefineRule, RefineWindow, refine_rule_peak, refine_sr};
 use drumspike_core::spike::export_spikes;
-use drumspike_core::velocity::{velocity_map, VelocityMap};
+use drumspike_core::velocity::{VelocityMap, velocity_map};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -321,7 +321,7 @@ fn run_refine(job_path: &Path) -> Result<(), String> {
                     back: None,
                 }
             }
-            RefineRule::Reach | RefineRule::FirstMotion | RefineRule::Foot => {
+            RefineRule::Reach | RefineRule::FirstMotion | RefineRule::Foot | RefineRule::FootCapped => {
                 let r = refine_rule_peak(&x, h.t0, sr, &h.neighbors, win, rule, job.peak_db.unwrap_or(FM_PEAK_DB));
                 let step = match r.step {
                     ReachStep::Kept => "kept",
@@ -1194,7 +1194,7 @@ struct FlamJob {
 }
 
 fn run_flam(job_path: &Path, out: &Path) -> Result<(), String> {
-    use drumspike_core::detect::flam::{added, attack_env, flam_split, late_peak_db, late_share, FlamParams};
+    use drumspike_core::detect::flam::{FlamParams, added, attack_env, flam_split, late_peak_db, late_share};
     let s = std::fs::read_to_string(job_path).map_err(|e| format!("read {}: {e}", job_path.display()))?;
     let job: FlamJob = serde_json::from_str(&s).map_err(|e| format!("manifest json: {e}"))?;
     let mut paths: Vec<&PathBuf> = vec![&job.path];

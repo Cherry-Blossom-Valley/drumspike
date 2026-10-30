@@ -1,6 +1,6 @@
 use super::super::tests::tmp;
 use super::*;
-use crate::io::{write_wav, Bext, WavFormat, WavSpec};
+use crate::io::{Bext, WavFormat, WavSpec, write_wav};
 use crate::project::{add_track, new_project};
 
 fn spec() -> WavSpec {

@@ -43,13 +43,13 @@
 use std::path::PathBuf;
 
 use drumspike_core::detect::tom_bleed::{
-    tom_bleed_with, tom_pairs, Off, PairMic, SourceKind, SourceMic, TomBleedParams, TomMic, RULE_VERSION,
+    Off, PairMic, RULE_VERSION, SourceKind, SourceMic, TomBleedParams, TomMic, tom_bleed_with, tom_pairs,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::error::AppError;
 use crate::media::mix_mode;
-use crate::registry::{lock, Shared};
+use crate::registry::{Shared, lock};
 use crate::roles::{drum_of, is_sample_name};
 use crate::{Service, ServiceConfig};
 
@@ -329,7 +329,7 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
             names
                 .iter()
                 .zip(played)
-                .filter(|(_, &p)| p)
+                .filter(|(_, p)| **p)
                 .map(|(n, _)| Value::from(n.as_str()))
                 .collect(),
         ),
@@ -532,10 +532,10 @@ fn rule_marks(
     // version 2: a source that cannot be read or has another rate is left out
     let mut src_dec = Vec::with_capacity(srcs.len());
     for m in srcs {
-        if let Ok(d) = svc.inner.media.decode_cached(&m.path, mix_mode(&m.mix)) {
-            if d.sr == sr {
-                src_dec.push((m, d));
-            }
+        if let Ok(d) = svc.inner.media.decode_cached(&m.path, mix_mode(&m.mix))
+            && d.sr == sr
+        {
+            src_dec.push((m, d));
         }
     }
     let sources: Vec<SourceMic> = src_dec

@@ -31,7 +31,7 @@ tauri-plugin-drag = "=2.1.1"
 serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }
 # P3-15c: the 4-worker runtime that `run` gives Tauri (`tauri::async_runtime::set`). Already in the
 # tree through Tauri (same version); MIT.
-tokio = { version = "=1.53.2", default-features = false, features = ["rt-multi-thread"] }
+tokio = { version = "=1.53.3", default-features = false, features = ["rt-multi-thread"] }
 
 # P4-26: the document-edited dot of the close button (NSWindow setDocumentEdited). Same version and licence (MIT)
 # as the objc2 that Tauri already pulls in; a message send only, no feature.

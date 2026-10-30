@@ -31,10 +31,11 @@ use std::path::PathBuf;
 use drumspike_core::analyze::role_classes;
 use drumspike_core::detect::CLASS_NOTES;
 use drumspike_core::detect::N_CLASSES;
-use drumspike_core::project::{cache_key, Event, Track, ANALYSIS_DIR};
+use drumspike_core::project::{ANALYSIS_DIR, Event, Track, cache_key};
 use drumspike_core::velocity::{peak_db, velocity_of_db};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
+use crate::Service;
 use crate::candidates::{candidates_key, read_candidates};
 use crate::error::AppError;
 use crate::export::hit_times;
@@ -44,7 +45,6 @@ use crate::learn::learn_of_track;
 use crate::media::mix_mode;
 use crate::registry::{lock, resolve_shared};
 use crate::sensitivity;
-use crate::Service;
 
 /// The loudness cut of a track's params (`vel_cut_db`), `None` when it is off.
 pub fn cut_of(params: Option<&Map<String, Value>>) -> Option<f64> {
@@ -388,7 +388,7 @@ impl Service {
             Err(_) => {
                 return Err(AppError::conflict(format!(
                     "no kept detection for {name}: re-analyze it once"
-                )))
+                )));
             }
         };
         let source = st.source.clone()?;
@@ -767,10 +767,10 @@ impl Service {
         let mut g = lock(&op);
         // P4-5: a `sensitivity` without `thresholds` (an agent) stores the thresholds the page's slider would
         let mut params = params.clone();
-        if !params.contains_key("thresholds") {
-            if let Some(v) = params.get("sensitivity").and_then(Value::as_f64) {
-                params.insert("thresholds".into(), json!(sensitivity::thresholds_of(v)));
-            }
+        if !params.contains_key("thresholds")
+            && let Some(v) = params.get("sensitivity").and_then(Value::as_f64)
+        {
+            params.insert("thresholds".into(), json!(sensitivity::thresholds_of(v)));
         }
         g.track_mut(name)?.params = Some(params.clone());
         g.mark_dirty();

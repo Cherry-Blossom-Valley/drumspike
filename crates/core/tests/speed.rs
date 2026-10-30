@@ -14,7 +14,7 @@
 
 use std::time::Instant;
 
-use drumspike_core::analyze::{analyze_track, AnalyzeParams, Detector};
+use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track};
 
 /// The session: 5 minutes at 120 BPM (150 bars of a 2 s loop).
 const LOOPS: usize = 150;

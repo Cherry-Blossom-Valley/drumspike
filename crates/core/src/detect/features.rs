@@ -35,8 +35,8 @@ use rayon::prelude::*;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
-use super::resample::TARGET_RATE;
 use super::Chain;
+use super::resample::TARGET_RATE;
 
 /// Hop size in samples at 44.1 kHz (100 frames per second).
 pub const HOP: usize = 441;

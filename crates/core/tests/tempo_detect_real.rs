@@ -8,10 +8,10 @@
 
 use std::path::{Path, PathBuf};
 
-use drumspike_core::analyze::{analyze_track, AnalyzeParams, Detector};
+use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track};
 use drumspike_core::tempo::TickMap;
-use drumspike_core::tempo_detect::{detect, DetectParams, Hit, Role};
-use drumspike_core::{read_wav_mono, MixMode};
+use drumspike_core::tempo_detect::{DetectParams, Hit, Role, detect};
+use drumspike_core::{MixMode, read_wav_mono};
 
 /// Ticks per quarter note of the MIDI export (`export_midi_stored`).
 const PPQ: u16 = 24_000;

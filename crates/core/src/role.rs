@@ -25,7 +25,7 @@
 //! The `role-from-audio` dev binary (same crate) runs it over a WAV file for the
 //! `tools/eval` scripts.
 
-use rustfft::{num_complex::Complex, FftPlanner};
+use rustfft::{FftPlanner, num_complex::Complex};
 
 /// A drum role the classifier can suggest. The string is the app's role name
 /// (`crates/app/src/roles.rs`).
@@ -502,11 +502,10 @@ fn hit_list(a: &Analysis) -> Vec<RoleHitFeatures> {
         // 0-50 ms.
         let win_s = (end - o) as f64 * a.hop_s;
         let early_n = (((0.1 / a.hop_s).round() as usize).max(1)).min(hi_env.len());
-        let (peak_hi, peak_i) =
-            hi_env[..early_n]
-                .iter()
-                .enumerate()
-                .fold((0.0_f64, 0), |acc, (i, &p)| if p > acc.0 { (p, i) } else { acc });
+        let (peak_hi, peak_i) = hi_env[..early_n]
+            .iter()
+            .enumerate()
+            .fold((0.0_f64, 0), |acc, (i, &p)| if p > acc.0 { (p, i) } else { acc });
         let t20 = if peak_hi > 0.0 {
             let limit = peak_hi * 0.01; // -20 dB in power
             match hi_env[peak_i..].iter().position(|&p| p <= limit) {

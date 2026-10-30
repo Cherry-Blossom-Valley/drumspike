@@ -21,9 +21,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::reply::{Channels, Reply, QUEUE_CAP};
+use crate::reply::{Channels, QUEUE_CAP, Reply};
 use crate::{AppError, Progress, Service};
 
 /// X-3 (P3-9b): how long a connection may stay idle before the bridge closes it.
@@ -266,7 +266,7 @@ pub struct Bridge {
     static_dir: PathBuf,
 }
 
-use crate::command_policy::{arg_str, opt_i64, transport_args, CLOSE_DEFAULT};
+use crate::command_policy::{CLOSE_DEFAULT, arg_str, opt_i64, transport_args};
 
 /// The MIME type of a static file, by extension.
 pub fn mime_of(path: &Path) -> &'static str {

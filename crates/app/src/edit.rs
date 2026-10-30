@@ -12,13 +12,13 @@
 //! * `export_midi_stored`: `export_midi` with the page's values filled from the document: the
 //!   track's note and its stored hits when the call gives none.
 
-use drumspike_core::refine::{refine_rule_peak, ReachStep, RefineRule, RefineWindow};
-use serde_json::{json, Map, Value};
+use drumspike_core::refine::{ReachStep, RefineRule, RefineWindow, refine_rule_peak};
+use serde_json::{Map, Value, json};
 
+use crate::Service;
 use crate::error::AppError;
 use crate::media::mix_mode;
 use crate::registry::lock;
-use crate::Service;
 
 /// The edit commands of this card.
 pub const EDIT_COMMANDS: [&str; 2] = ["events_edit", "track_shift_set"];
@@ -238,7 +238,7 @@ pub fn apply_ops(
             other => {
                 return Err(AppError::bad(format!(
                     "unknown op `{other}`: use add, delete, move, velocity or restore"
-                )))
+                )));
             }
         }
     }

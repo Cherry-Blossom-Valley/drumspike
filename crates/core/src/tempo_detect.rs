@@ -212,10 +212,10 @@ impl DetectParams {
                 "bpm_range must lie in 20 to 400 BPM and span an octave, not {lo} to {hi}"
             ));
         }
-        if let Some(d) = self.duration_s {
-            if !(d.is_finite() && d > 0.0) {
-                return Err(format!("duration_s must be a positive number, not {d}"));
-            }
+        if let Some(d) = self.duration_s
+            && !(d.is_finite() && d > 0.0)
+        {
+            return Err(format!("duration_s must be a positive number, not {d}"));
         }
         Ok(())
     }
@@ -574,19 +574,11 @@ fn octave_shares(hits: &[Hit], p: f64) -> (f64, f64) {
 /// beats): the 67 pick carries quarter 0.284 against 0.037 on the 134 grid and 134's comb
 /// is 0.971 of the best - flagged; the ballad at 67 with sixteenth kicks carries quarter
 /// 0.125 and stays.
-fn half_time_backbeat(
-    hits: &[Hit],
-    snare: &LagHist,
-    rows: &[(f64, f64, f64)],
-    p: f64,
-) -> bool {
+fn half_time_backbeat(hits: &[Hit], snare: &LagHist, rows: &[(f64, f64, f64)], p: f64) -> bool {
     if backbeat(snare, p) <= 0.0 {
         return false;
     }
-    let Some(&(_, dcomb, _)) = rows
-        .iter()
-        .find(|&&(q, _, _)| (q / (p / 2.0)).ln().abs() < 0.03)
-    else {
+    let Some(&(_, dcomb, _)) = rows.iter().find(|&&(q, _, _)| (q / (p / 2.0)).ln().abs() < 0.03) else {
         return false;
     };
     if dcomb < HALF_TIME_DBL_COMB {
@@ -1370,11 +1362,7 @@ fn corr(fs: &[Vec<f64>], lag: usize) -> f64 {
             b += w * w;
         }
     }
-    if a > 0.0 && b > 0.0 {
-        s / (a * b).sqrt()
-    } else {
-        0.0
-    }
+    if a > 0.0 && b > 0.0 { s / (a * b).sqrt() } else { 0.0 }
 }
 
 /// A sign test of two counts: `tanh(z / 2)` with `z = (a - b) / sqrt(a + b + 1)`, -1 to 1 (0 for
@@ -1787,11 +1775,11 @@ fn detect_at(hits: &[Hit], params: &DetectParams) -> Result<Detection, String> {
         tried.push(pcs[j].start);
         let mut fewer = pcs.clone();
         fewer.remove(j);
-        if let Ok(r) = track_and_fit(&hits, &fewer, params, phi_hint) {
-            if r.on_beat >= run.on_beat {
-                pcs = fewer;
-                run = r;
-            }
+        if let Ok(r) = track_and_fit(&hits, &fewer, params, phi_hint)
+            && r.on_beat >= run.on_beat
+        {
+            pcs = fewer;
+            run = r;
         }
     }
     let TrackFit {

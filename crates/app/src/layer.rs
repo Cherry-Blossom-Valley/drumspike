@@ -42,19 +42,19 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use drumspike_core::io::{write_wav, Bext, MappedWav, WavFormat, WavSpec};
+use drumspike_core::io::{Bext, MappedWav, WavFormat, WavSpec, write_wav};
 use drumspike_core::layer::{
-    attack_template, majority_sign, read_one_shot, render_layer, xcorr_hit, AlignParams, Curve, HitXcorr, OneShot,
+    AlignParams, Curve, HitXcorr, OneShot, attack_template, majority_sign, read_one_shot, render_layer, xcorr_hit,
 };
-use drumspike_core::project::{build_source, resolve_source, Source, SourceStatus, EXPORTS_DIR};
+use drumspike_core::project::{EXPORTS_DIR, Source, SourceStatus, build_source, resolve_source};
 use drumspike_core::spike::hit_index;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
+use crate::Service;
 use crate::error::AppError;
 use crate::export::check_file_owner;
 use crate::media::mix_mode;
-use crate::registry::{lock, OpenProject};
-use crate::Service;
+use crate::registry::{OpenProject, lock};
 
 /// The commands of the layer.
 pub const LAYER_COMMANDS: [&str; 4] = [
@@ -389,11 +389,7 @@ fn align_key(file: &Path, layer: &Layer, mic: &Path, p: &AlignParams) -> String 
 /// lag with a low match ([`UNCERTAIN_MATCH`]) is applied and only flagged uncertain.
 pub fn applied_lag(x: &HitXcorr, sign: i8) -> f64 {
     let (lag, _, edge) = x.for_sign_edge(sign);
-    if edge {
-        0.0
-    } else {
-        lag
-    }
+    if edge { 0.0 } else { lag }
 }
 
 /// The per-hit alignment of a track (P4-7b).
@@ -695,7 +691,7 @@ impl Service {
                 (None, None) => {
                     return Err(AppError::conflict(format!(
                         "track {name} has no layer: give a one-shot file (`path`) first"
-                    )))
+                    )));
                 }
             };
             if let Some(v) = level {
