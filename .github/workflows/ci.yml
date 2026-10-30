@@ -57,6 +57,16 @@
 #    It is the one job on GitHub-hosted minutes in a push run; with no minutes left only this job fails.
 #  - concurrency: a run on main has its own group per commit (release.yml checks the run of each main commit);
 #    a branch run still cancels the older run of the same branch.
+# #125 (owner request 2026-10-30, "much too long and too frequent"): a run does only what the change needs.
+#  - Job "scope" (ubuntu-latest, seconds): tools/ci/scope.py diffs the pushed commit against the nearest first-parent
+#    ancestor with a green ci run and sets the mode. none: docs, root text files, version-only edits (the release
+#    commit) - every other job is skipped and the run is green. py: also tools/, site/ and the non-e2e tests - pytest
+#    without tests/e2e_app, no Rust step, no e2e job, no JS coverage. full: everything else, every by-hand run and PR.
+#    A cancelled or failed run never counts as the base, so a skipped check is always made up by the next run.
+#  - e2e-arm64 runs the shard "rest" in 3 parallel parts (DRUMSPIKE_E2E_SHARD=rest@i/3; tests/test_e2e_shards.py
+#    proves the parts split the shard exactly), each with its own bridge, Playwright output and raw JS coverage.
+#  - Main pushes share one concurrency group without cancel-in-progress: the running main run finishes, and a newer
+#    push replaces an older main run that is still waiting (batching). The next run's diff covers the replaced commit.
 name: ci
 
 on:
@@ -92,16 +102,39 @@ on:
 # The event name is in the group, so a by-hand run (which can start the arm64-mac job) never
 # cancels the run of a push on the same branch, and the other way round. On main the group is the commit
 # (#52): a push to main never cancels the run of an earlier main commit.
+# #125: main pushes share one group and never cancel a running run; a newer push replaces a waiting one.
 concurrency:
-  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
+  group: ci-${{ (github.ref == 'refs/heads/main' && github.event_name == 'push') && 'main-push' || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ !(github.ref == 'refs/heads/main' && github.event_name == 'push') }}
 
 jobs:
+  # #125: which jobs this run needs (tools/ci/scope.py). By-hand runs and PRs are always full.
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      mode: ${{ steps.scope.outputs.mode }}
+      rust: ${{ steps.scope.outputs.rust }}
+      e2e: ${{ steps.scope.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Scope of this run
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/ci/scope.py --event "${{ github.event_name }}" --repo "${{ github.repository }}" --output "$GITHUB_OUTPUT" | tee -a "$GITHUB_STEP_SUMMARY"
+
   # CI-FB: self-hosted unless a by-hand run asks for "github" (workflow_dispatch input runners) or,
   # for a push, the repository variable CI_RUNNERS is set to "github". Anything else stays self-hosted.
   test:
-    # #296: the pull_request trigger (label ci:e2e) exists for the e2e job only
-    if: github.event_name != 'pull_request'
+    # #296: the pull_request trigger (label ci:e2e) exists for the e2e job only; #125: not for scope none
+    needs: scope
+    if: github.event_name != 'pull_request' && needs.scope.outputs.mode != 'none'
     runs-on: ${{ fromJSON(((github.event_name == 'workflow_dispatch' && inputs.runners) || vars.CI_RUNNERS) == 'github' && '["macos-15-intel"]' || '["self-hosted","x86-mac"]') }}
     timeout-minutes: 75
     env:
@@ -158,12 +191,15 @@ jobs:
           uv --version
 
       - name: Rust format
+        if: needs.scope.outputs.rust == 'true'
         run: cargo fmt --all -- --check
 
       - name: Rust lint
+        if: needs.scope.outputs.rust == 'true'
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Rust tests
+        if: needs.scope.outputs.rust == 'true'
         run: cargo test --workspace
 
       # the parity binary and service_tool: the parity tests call them (P3-12)
@@ -182,12 +218,20 @@ jobs:
 
       # G2: all tests except e2e_app, plus the e2e_app shard "x86" (the shard "rest" runs in the job e2e-arm64).
       # The shard run does not gate JS coverage: the job js-coverage does, over both shards.
+      # #125: scope py runs pytest without the e2e tests (no app change since the last green run)
       - name: pytest
+        env:
+          SCOPE_E2E: ${{ needs.scope.outputs.e2e }}
         run: |
-          DRUMSPIKE_E2E_SHARD=x86 DRUMSPIKE_JS_COV_OUT="$RUNNER_TEMP/js-cov-x86.json" \
-          DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 DRUMSPIKE_REQUIRE_CORE=1 uv run pytest -q
+          if [ "$SCOPE_E2E" = true ]; then
+            DRUMSPIKE_E2E_SHARD=x86 DRUMSPIKE_JS_COV_OUT="$RUNNER_TEMP/js-cov-x86.json" \
+            DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 DRUMSPIKE_REQUIRE_CORE=1 uv run pytest -q
+          else
+            DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_CORE=1 uv run pytest -q --ignore=tests/e2e_app
+          fi
 
       - name: Upload raw JS coverage
+        if: needs.scope.outputs.e2e == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: js-cov-x86
@@ -202,11 +246,13 @@ jobs:
   # The host lock ~/.cache/drumspike/heavy.lock.d keeps this job away from the owner's other heavy runs:
   # wait at most 20 minutes, then go on with a warning. Only the job that made the lock removes it.
   e2e-arm64:
+    needs: scope
     if: >-
+      needs.scope.outputs.e2e == 'true' && (
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
        contains(github.event.pull_request.labels.*.name, 'ci:e2e')) ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ${{ fromJSON(((github.event_name == 'workflow_dispatch' && inputs.runners) || vars.CI_RUNNERS) == 'github' && '["macos-15"]' || '["self-hosted","arm64-mac"]') }}
     timeout-minutes: 60
     env:
@@ -301,11 +347,24 @@ jobs:
             echo "made=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: pytest e2e_app, shard rest
+      # #125: the shard rest in 3 parallel parts (rest@i/3), each with its own bridge, Playwright output and coverage
+      - name: pytest e2e_app, shard rest (3 parallel parts)
         run: |
-          DRUMSPIKE_E2E_SHARD=rest DRUMSPIKE_JS_COV_OUT="$RUNNER_TEMP/js-cov-arm64.json" \
-          DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 \
-          uv run pytest -q tests/e2e_app
+          pids=()
+          for i in 1 2 3; do
+            DRUMSPIKE_E2E_SHARD="rest@$i/3" DRUMSPIKE_JS_COV_OUT="$RUNNER_TEMP/js-cov-arm64-$i.json" \
+            DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 \
+            uv run pytest -q -p no:cacheprovider --output "$RUNNER_TEMP/pw-$i" tests/e2e_app \
+              > "$RUNNER_TEMP/e2e-part-$i.log" 2>&1 &
+            pids+=($!)
+          done
+          rc=0
+          for i in 1 2 3; do
+            wait "${pids[$((i - 1))]}" || rc=1
+            echo "::group::e2e part $i/3"; cat "$RUNNER_TEMP/e2e-part-$i.log"; echo "::endgroup::"
+            echo "part $i/3: $(tail -1 "$RUNNER_TEMP/e2e-part-$i.log")"
+          done
+          exit $rc
 
       - name: Release the host lock and leave the CI waiting list
         if: always() && env.CI_RUNNER_MODE != 'github'
@@ -320,7 +379,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: js-cov-arm64
-          path: ${{ runner.temp }}/js-cov-arm64.json
+          path: ${{ runner.temp }}/js-cov-arm64-*.json
           if-no-files-found: error
           retention-days: 7
 
@@ -328,7 +387,8 @@ jobs:
   # #52: GitHub-hosted (ubuntu-latest) in every mode: the job needs only the two artifacts and uv, and a 17 s job must
   # not wait 10+ minutes for the x86-mac runner behind a PR's test job (measured 2026-10-17, run 39033773547).
   js-coverage:
-    needs: [test, e2e-arm64]
+    needs: [scope, test, e2e-arm64]
+    if: needs.scope.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -348,7 +408,7 @@ jobs:
         run: |
           ls -l "$RUNNER_TEMP"/js-cov/*/*.json
           uv sync
-          uv run python tests/jscov.py merge "$RUNNER_TEMP"/js-cov/js-cov-x86/js-cov-x86.json "$RUNNER_TEMP"/js-cov/js-cov-arm64/js-cov-arm64.json
+          uv run python tests/jscov.py merge "$RUNNER_TEMP"/js-cov/*/*.json
 
       - uses: actions/upload-artifact@v4
         if: always()
