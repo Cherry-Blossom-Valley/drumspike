@@ -1062,7 +1062,9 @@ pub fn dispatch<R: Runtime>(app: &AppHandle<R>, id: &str) -> Value {
     // #206 diagnosis: which menu ids reach the Rust side (selftest_menu_log). The file copy
     // (DRUMSPIKE_MENU_LOG_FILE) lets the real-event probe on arm64-mac read the ids that a
     // physical press via osascript dispatched (the probe cannot call the tauri command).
-    MENU_LOG.lock().unwrap().push(id.to_string());
+    // a poisoned lock is unwrapped: the log entries are still pushed (the poison of another
+    // thread's panic must not take the menu dispatch down, #206 diagnosis)
+    MENU_LOG.lock().unwrap_or_else(|e| e.into_inner()).push(id.to_string());
     #[cfg(debug_assertions)]
     if let Ok(path) = std::env::var("DRUMSPIKE_MENU_LOG_FILE") {
         use std::io::Write;
