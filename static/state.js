@@ -61,7 +61,7 @@ function SETTINGS() {
       pitches: Object.assign({}, ROLE_DEFAULT_CLICK) } };
     s.click = Object.assign(def.click, s.click || {});
     s.click.pitches = Object.assign({}, def.click.pitches, s.click.pitches || {});
-    s.ui = Object.assign({ infoLine: true, counter: "seconds", auditionTab: false, suspendFollowOnEdit: false, stopReturnToStart: false }, s.ui || {});   // P3-14b: the info line is shown; the main counter shows seconds; P4-wf10: Transport > Suspend Follow when Editing; #436: Transport > Stop Returns to Start
+    s.ui = Object.assign({ infoLine: true, counter: "seconds", auditionTab: false, suspendFollowOnEdit: false, stopReturnToStart: false, tabMode: "active" }, s.ui || {});   // P3-14b: the info line is shown; the main counter shows seconds; P4-wf10: Transport > Suspend Follow when Editing; #436: Transport > Stop Returns to Start; #175: Tab moves to active hits only
     if (!["samples", "barsbeats", "timecode"].includes(s.ui.counter)) s.ui.counter = "seconds";   // #149: Bars|Beats and Timecode counters too
     // one-time migration: the per-track 🔈 click became a global one — default it ON
     if (!localStorage.getItem("dsg_settings_v2")) {
