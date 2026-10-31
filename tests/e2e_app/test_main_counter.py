@@ -100,3 +100,34 @@ def test_bars_beats_before_bar_1_is_clamped(app, make_project, tmp_path):
     app.evaluate('() => setCounter("barsbeats")')
     set_playhead(app, 0.5)
     assert app.evaluate("() => document.querySelector('#timeDisplay').textContent") == bb_of(1, 1)
+
+
+def main_text(app):
+    return app.evaluate("() => document.querySelector('#timeDisplay').textContent")
+
+
+def test_bars_beats_ticks_are_floored_without_a_tempo_map(app, make_project, tmp_path):
+    # #208: 959.5 ticks or more rounded to 960, wrapped to 0 and kept the old beat (a beat too early)
+    open_project(app, build(make_project, tmp_path, name="CounterFloorDefault"))
+    reset_tm(app)
+    app.evaluate('() => setCounter("barsbeats")')
+    set_playhead(app, 2.0 + 0.9995 * 0.5)   # 120 BPM: 0.9995 of bar 2 beat 1
+    assert main_text(app) == bb_of(2, 1, 959)
+    set_playhead(app, 2.5)   # exactly on bar 2 beat 2
+    assert main_text(app) == bb_of(2, 2, 0)
+    set_playhead(app, 2.25)   # half a beat
+    assert main_text(app) == bb_of(2, 1, 480)
+
+
+def test_bars_beats_ticks_are_floored_with_a_tempo_map(app, make_project, tmp_path):
+    sid = open_project(app, build(make_project, tmp_path, name="CounterFloorMap"))
+    reset_tm(app)
+    invoke(app, "tempo_map_set", sid=sid, map=MAP)
+    app.evaluate("async () => { await tmLoad(); }")
+    app.evaluate('() => setCounter("barsbeats")')
+    set_playhead(app, 2.0 + 0.9995 * 2 / 3)   # 90 BPM: 0.9995 of bar 2 beat 1
+    assert main_text(app) == bb_of(2, 1, 959)
+    set_playhead(app, 2.0 + 2 / 3)   # exactly on bar 2 beat 2
+    assert main_text(app) == bb_of(2, 2, 0)
+    set_playhead(app, 2.0 + 0.5 * 2 / 3)   # half a beat
+    assert main_text(app) == bb_of(2, 1, 480)
