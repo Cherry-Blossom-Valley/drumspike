@@ -169,7 +169,7 @@
           const r = await T.invoke("selftest_menu_report");
           const bad = r.items.filter(i => i.enabled !== enabledWant(i)).map(i => `${i.id}=${i.enabled}`);
           lastBad = bad;
-          return bad.length ? bad : null;
+          return bad.length ? null : true;   // wait until NOTHING mismatches; the bad list rides in the timeout error
         }, "the menu enabled state to follow the page state", 10000);
       } catch (e) {
         const snap = lastBad.length ? ` last mismatch: ${lastBad.join(", ")}` : "";
@@ -505,7 +505,7 @@
       await click("export");
       await until(() => visible("#exportModal"), "the Export dialog", 15000);
       $q("#exGo").click();
-      await until(() => new RegExp(`exported ${n} MIDI and ${n} spike files?`).test($q("#stMsg").textContent), "Export", 60000);
+      await until(() => new RegExp(`exported ${n} MIDI and ${n} spike files?`).test($q("#stMsg").textContent), `Export (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 60000);
       const have = await T.invoke("export_existing", { sid });
       need(have.count === 2 * n, `Exports/ holds ${have.count} files, expected ${2 * n}`);
       $q("#exCancel").click();
