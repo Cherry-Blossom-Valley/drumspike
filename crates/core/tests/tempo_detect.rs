@@ -141,7 +141,7 @@ fn one_step_is_found_on_its_bar_line_with_both_tempos() {
     assert!((d.bpm - 120.0).abs() < 0.1, "bpm {}", d.bpm);
     assert_eq!(d.steps.len(), 1, "steps {:?}", d.steps);
     let s = d.steps[0];
-    assert!((s.bpm - 100.0).abs() < 0.1, "step {:?}", s);
+    assert!((s.bpm - 100.0).abs() < 0.1, "step {s:?}");
     assert!((s.t - starts[1]).abs() < 0.01, "step at {} want {}", s.t, starts[1]);
     assert_eq!(s.bar, 33);
     assert_eq!(s.bars, 32);
@@ -165,6 +165,51 @@ fn a_slow_ballad_with_sixteenth_kicks_is_not_called_double_tempo() {
         "bpm {} alternatives {:?}",
         d.bpm,
         d.alternatives
+    );
+}
+
+/// #130: a half-time backbeat - the true tempo is 134, the kick plays its 8ths and the snare
+/// recurs every 4 beats (once per bar) - is not called 67. Up to #130 the snare backbeat
+/// credited the 67 pick (+1.0: the snare sits at 2 of its periods) and the (1 + backbeat)
+/// factor decided over the prior.
+#[test]
+fn a_half_time_backbeat_at_134_is_not_called_67() {
+    let s = Section {
+        bars: 40,
+        bpm: 134.0,
+        beats: 4,
+        kick: "x.x.x.x.x.x.x.x.",
+        snare: "x...............",
+    };
+    let (hits, _) = build(&Train::default(), &[s]);
+    let d = detect(&hits, &params()).unwrap();
+    assert!(
+        (d.bpm - 134.0).abs() < 0.05,
+        "bpm {} alternatives {:?}",
+        d.bpm,
+        d.alternatives
+    );
+}
+
+/// #180: a half-time groove with the snare on beat 3 of the bar (one snare per 4 beats) has
+/// bar 1 two beats before the snare; the 2-and-4 reading put it one beat late.
+#[test]
+fn bar_1_of_a_half_time_snare_on_beat_3_is_on_the_bar_line() {
+    let s = Section {
+        bars: 40,
+        bpm: 134.0,
+        beats: 4,
+        kick: "x.x.x.x.x.x.x.x.",
+        snare: "........x.......",
+    };
+    let (hits, starts) = build(&Train::default(), &[s]);
+    let d = detect(&hits, &params()).unwrap();
+    assert!((d.bpm - 134.0).abs() < 0.05, "bpm {}", d.bpm);
+    assert!(
+        off_bar(d.bar1_s, starts[0], 240.0 / 134.0) < 0.02,
+        "bar 1 {} want {}",
+        d.bar1_s,
+        starts[0]
     );
 }
 

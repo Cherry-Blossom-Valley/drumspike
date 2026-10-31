@@ -25,10 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let wav = wav.ok_or("--wav is required")?;
-    let times: Vec<f64> = times_in
-        .split_whitespace()
-        .map(|t| t.parse())
-        .collect::<Result<_, _>>()?;
+    let times: Vec<f64> = times_in.split_whitespace().map(str::parse).collect::<Result<_, _>>()?;
     let (signal, info) = read_wav_mono(&wav, MixMode::Average)?;
     let lens = audio_snippet_lengths(&signal, info.sample_rate, &times);
     let ms: Vec<f64> = lens.iter().map(|l| 1000.0 * l).collect();

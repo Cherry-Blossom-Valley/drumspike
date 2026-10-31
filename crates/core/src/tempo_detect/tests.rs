@@ -15,6 +15,21 @@ fn role_names_map_to_roles() {
     assert!(Role::Kick.is_ks() && Role::Snare.is_ks() && !Role::Tom.is_ks() && !Role::Cymbal.is_ks());
 }
 
+/// #130: the tempo-referee pin. The parse is a pure function and is tested without
+/// touching the process env: the detection tests run in parallel threads, and edition 2024
+/// makes env writes unsafe for exactly that reason.
+#[test]
+fn the_tempo_rule_pin_parses_and_defaults_to_3() {
+    assert_eq!(parse_rule(None), 3);
+    assert_eq!(parse_rule(Some("1")), 1, "1 pins the shipped referee");
+    assert_eq!(parse_rule(Some("2")), 2, "2 pins the #130 referee");
+    assert_eq!(parse_rule(Some("x")), 3);
+    assert_eq!(parse_rule(Some("0")), 0, "0 pins the shipped referee too");
+    if std::env::var("DRUMSPIKE_TEMPO_RULE").is_err() {
+        assert_eq!(tempo_rule(), 3, "unset is the #180 product default");
+    }
+}
+
 #[test]
 fn a_new_hit_has_the_default_velocity_and_the_velocity_weighs_it() {
     let h = Hit::new(1.0, Role::Snare);

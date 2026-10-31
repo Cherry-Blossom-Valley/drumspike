@@ -91,14 +91,17 @@ impl TempFile {
         &self.path
     }
 
-    /// The open temporary file.
-    pub fn file_mut(&mut self) -> &mut File {
-        self.file.as_mut().expect("the temporary file is open")
+    /// The open temporary file, or an error when it was already taken (only possible after
+    /// `commit_via` moved it; the type never closes it before that).
+    fn file_mut(&mut self) -> io::Result<&mut File> {
+        self.file
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the temporary file is already closed"))
     }
 
     /// Write all of `bytes` to the temporary file.
     pub fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.file_mut().write_all(bytes)
+        self.file_mut()?.write_all(bytes)
     }
 
     /// Flush and sync the temporary file to disk, close it, rename it onto `dest`, fsync the
@@ -109,7 +112,10 @@ impl TempFile {
 
     fn commit_via(self, finish: impl FnOnce(File, &Path, &Path) -> io::Result<()>) -> io::Result<()> {
         let mut s = self;
-        let f = s.file.take().expect("the temporary file is open");
+        let f = s
+            .file
+            .take()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the temporary file is already closed"))?;
         finish(f, &s.path, &s.dest)?; // an error keeps committed=false: the drop removes the file
         s.committed = true;
         Ok(())
@@ -131,7 +137,7 @@ impl Drop for TempFile {
 /// and `path` stays exactly as it was. This is the shared helper behind `io::write_atomic`,
 /// `write_document` and the app's JSON/preset/activation writers (R10).
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    write_bytes_atomic_via(path, bytes, |f, b| f.write_all(b), finish_real)
+    write_bytes_atomic_via(path, bytes, std::io::Write::write_all, finish_real)
 }
 
 /// [`write_bytes_atomic`] with the write and the finish injected (the tests inject failures).
@@ -142,7 +148,7 @@ fn write_bytes_atomic_via(
     finish: impl FnOnce(File, &Path, &Path) -> io::Result<()>,
 ) -> io::Result<()> {
     let mut t = TempFile::create(path)?;
-    write(t.file_mut(), bytes)?;
+    write(t.file_mut()?, bytes)?;
     t.commit_via(finish)
 }
 
@@ -214,12 +220,9 @@ mod tests {
     fn an_injected_sync_failure_leaves_no_temporary_and_no_destination() {
         let d = tmp_dir("sfail");
         let dest = d.join("x.bin");
-        let e = write_bytes_atomic_via(
-            &dest,
-            b"payload",
-            |f, b| f.write_all(b),
-            |_, _, _| Err(io::Error::other("sync failed")),
-        )
+        let e = write_bytes_atomic_via(&dest, b"payload", std::io::Write::write_all, |_, _, _| {
+            Err(io::Error::other("sync failed"))
+        })
         .unwrap_err();
         assert_eq!(e.to_string(), "sync failed");
         assert!(!dest.exists(), "the destination was not created");

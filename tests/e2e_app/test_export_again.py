@@ -115,6 +115,13 @@ def test_the_dialog_keeps_its_choices_per_project_and_export_again_writes_the_sa
     assert exports(folder) == sorted([name, "Kick In_spike.wav", "Snare Top_spike.wav"])
 
 
+def visible(d):
+    """The files of an export folder without dot files: the app's short-lived write probe
+    (`.drumspike-write-test…tmp`, check_dest) can sit there for a moment while a destination
+    check runs, and a listing at that moment caught it under load (#170 gate)."""
+    return sorted(p.name for p in d.iterdir() if not p.name.startswith("."))
+
+
 def test_export_again_writes_to_the_same_place(app, make_project, tmp_path):
     sid, folder = project_with_hits(app, make_project)
     out = tmp_path / "again"
@@ -126,7 +133,7 @@ def test_export_again_writes_to_the_same_place(app, make_project, tmp_path):
     # export runs into Exports/ under load (the same race as #226)
     wait_until(lambda: app.evaluate("() => EX.dest") == str(out), msg="the chosen export folder")
     run_and_close(app)
-    assert sorted(p.name for p in out.iterdir()) == [
+    assert visible(out) == [
         "Kick In_spike.mid", "Kick In_spike.wav", "Snare Top_spike.mid", "Snare Top_spike.wav"]
     assert exports(folder) == []
     app.evaluate("async () => { await loadProject(); }")
@@ -136,7 +143,7 @@ def test_export_again_writes_to_the_same_place(app, make_project, tmp_path):
     menu(app, "export_again", wait=False)                               # the item: the same place, no dialog
     answer_tempo_notice(app)                                           # #151: the reloaded project asks on the default map
     wait_export(app)
-    assert exports(folder) == [] and len(list(out.iterdir())) == 4
+    assert exports(folder) == [] and len(visible(out)) == 4
     expect(app.locator("#exportModal")).to_be_hidden()
     expect(app.locator("#stMsg")).to_contain_text(f"to {out}")
 

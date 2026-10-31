@@ -14,6 +14,75 @@ rust-version = "1.90"
 license = "Apache-2.0"
 publish = false
 
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "allow" # 4992: 1282/3582/127/1 (warn once burned down; clippy.toml exempts tests)
+
+# R8 (#168) baseline: every lint below fires today and is allowed with its count (core/app/devtools/desktop,
+# lib + bins + tests, all targets). The burn-down removes one allow at a time; a lint at 0 is deleted here.
+cast_possible_truncation = "allow" # 804: 594/171/33/6
+cast_precision_loss = "allow" # 609: 447/144/17/1
+must_use_candidate = "allow" # 530: 289/199/0/42
+cast_lossless = "allow" # 493: 400/88/5/0
+many_single_char_names = "allow" # 447: 363/58/26/0
+cast_sign_loss = "allow" # 444: 356/78/10/0
+missing_errors_doc = "allow" # 370: 115/174/0/81
+cast_possible_wrap = "allow" # 226: 200/20/6/0
+doc_markdown = "allow" # 128: 75/22/8/23
+needless_pass_by_value = "allow" # 124: 4/19/1/100
+assert_is_empty = "allow" # 109: 59/38/0/12
+unreadable_literal = "allow" # 75: 55/17/0/3
+float_cmp = "allow" # 41: 27/14/0/0
+too_many_lines = "allow" # 41: 15/19/4/3
+manual_midpoint = "allow" # 31: 28/3/0/0
+map_unwrap_or = "allow" # 31: 17/12/1/1
+missing_panics_doc = "allow" # 24: 14/9/0/1
+similar_names = "allow" # 21: 15/4/2/0
+match_same_arms = "allow" # 20: 14/6/0/0
+cloned_instead_of_copied = "allow" # 14: 8/3/3/0
+single_match_else = "allow" # 14: 0/13/1/0
+manual_let_else = "allow" # 11: 5/6/0/0
+maybe_infinite_iter = "allow" # 11: 10/1/0/0
+format_collect = "allow" # 10: 4/5/1/0
+items_after_statements = "allow" # 9: 3/4/0/2
+needless_for_each = "allow" # 9: 7/0/2/0
+assigning_clones = "allow" # 8: 0/8/0/0
+unused_self = "allow" # 7: 1/5/1/0
+unnecessary_wraps = "allow" # 6: 0/6/0/0
+default_trait_access = "allow" # 5: 1/4/0/0
+format_push_string = "allow" # 5: 0/5/0/0
+if_not_else = "allow" # 4: 3/0/0/1
+implicit_clone = "allow" # 4: 3/1/0/0
+match_wildcard_for_single_variants = "allow" # 4: 2/2/0/0
+nonminimal_bool = "allow" # 4: 0/3/0/1
+case_sensitive_file_extension_comparisons = "allow" # 3: 1/1/0/1
+elidable_lifetime_names = "allow" # 3: 0/3/0/0
+manual_assert_eq = "allow" # 3: 0/1/1/1
+return_self_not_must_use = "allow" # 3: 3/0/0/0
+stable_sort_primitive = "allow" # 3: 3/0/0/0
+bool_to_int_with_if = "allow" # 2: 0/1/0/1
+ignored_unit_patterns = "allow" # 2: 0/2/0/0
+index_refutable_slice = "allow" # 2: 2/0/0/0
+ptr_as_ptr = "allow" # 2: 0/2/0/0
+range_plus_one = "allow" # 2: 2/0/0/0
+struct_field_names = "allow" # 2: 0/2/0/0
+trivially_copy_pass_by_ref = "allow" # 2: 2/0/0/0
+unnested_or_patterns = "allow" # 2: 1/1/0/0
+used_underscore_binding = "allow" # 2: 0/1/1/0
+borrow_as_ptr = "allow" # 1: 1/0/0/0
+comparison_chain = "allow" # 1: 1/0/0/0
+inconsistent_struct_constructor = "allow" # 1: 0/1/0/0
+large_stack_arrays = "allow" # 1: 1/0/0/0
+option_option = "allow" # 1: 1/0/0/0
+ref_option = "allow" # 1: 0/1/0/0
+single_char_pattern = "allow" # 1: 1/0/0/0
+struct_excessive_bools = "allow" # 1: 0/1/0/0
+unchecked_time_subtraction = "allow" # 1: 0/1/0/0
+unnecessary_box_returns = "allow" # 1: 1/0/0/0
+unnecessary_debug_formatting = "allow" # 1: 0/1/0/0
+unnecessary_semicolon = "allow" # 1: 0/0/0/1
+
 [profile.release]
 opt-level = 3
 lto = "thin"

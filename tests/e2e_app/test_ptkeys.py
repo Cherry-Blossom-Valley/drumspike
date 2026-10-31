@@ -97,6 +97,32 @@ def test_z_undoes_and_shift_z_redoes(app, make_project):
     assert js(app, "() => [S.undo.length, S.redo.length]") == [0, 1]
 
 
+def test_z_and_shift_z_as_written_undo_and_redo_a_deleted_hit(app, make_project):
+    """#155 (campaign #117 S2 keys): the keymap's own notation keys, pressed as written, undo and
+    redo a UI edit. The campaign's key sweep measured Z and Shift+Z as no-ops; the sweep pressed
+    the rows in table order and export (Cmd+E) is the row right before undo — its modal owns every
+    key (exKey stops propagation), so the sweep lost Z and Shift+Z (the #207 trap, see
+    keys_driver.js). With no dialog open they run: after a Delete on a selected hit, Z brings the
+    hit back (S.undo shrinks, the edit is gone) and Shift+Z removes it again (the redo)."""
+    sid = open_project(app, make_project(seconds=12.0))
+    with_hits(app, sid, {"Kick In": [1.0, 2.0]})
+    select_track(app, "Kick In")
+    app.evaluate("() => { S.playhead = 0; S.sel = null; setView(0, 10); }")
+    app.keyboard.press("Tab")                                             # the hit at 1.0 s is selected
+    app.keyboard.press("Delete")                                          # the edit: the hit is gone
+    edits_done(app)
+    wait_until(lambda: js(app, "() => S.undo.length") == 1, msg="the del step")
+    assert js(app, "() => S.events['Kick In'].length") == 1
+    app.keyboard.press("Z")                                               # undo, as the keymap writes it
+    edits_done(app)
+    wait_until(lambda: js(app, "() => S.undo.length") == 0, msg="Z undid the del")
+    assert js(app, "() => S.events['Kick In'].length") == 2               # the edit is gone
+    app.keyboard.press("Shift+Z")                                         # redo, as the keymap writes it
+    edits_done(app)
+    wait_until(lambda: js(app, "() => S.redo.length") == 0, msg="Shift+Z redid the del")
+    assert js(app, "() => S.events['Kick In'].length") == 1               # and the hit is gone again
+
+
 def test_e_zooms_to_the_hit_and_back(app, make_project):
     sid = open_project(app, make_project(seconds=12.0))
     with_hits(app, sid, {"Kick In": [1.0, 2.0]})

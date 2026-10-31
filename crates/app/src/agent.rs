@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn other_arguments_are_not_for_the_agent_modes() {
         let m = Path::new("/nonexistent");
-        let a = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let a = |s: &[&str]| s.iter().map(std::string::ToString::to_string).collect::<Vec<_>>();
         assert_eq!(entry("/x/drumspike-desktop", &a(&["--app-info"]), m), None);
         assert_eq!(entry("/x/drumspike-desktop", &[], m), None);
         assert_eq!(entry("/x/drumspike-desktop", &a(&["help"]), m), None);

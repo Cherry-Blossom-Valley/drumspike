@@ -1,0 +1,50 @@
+# cargo-deny policy (R2, engineering review docs/review/engineering-review.md F-2,
+# owner go 2026-10-30). Checked by `cargo deny check advisories bans sources licenses`
+# (the CI step is added by the owner push; agents run it locally, gate of #171).
+#
+# Policy in one line: the crates.io registry only, no git sources, every advisory
+# either fixed or explicitly ignored with its reason below, licences limited to the
+# permissive set the workspace actually ships.
+
+[advisories]
+# The two unmaintained/unsound crates of the current dependency tree that cannot be
+# fixed without the dependency bumps the review plans separately (F-1: glib/GTK
+# 0.18 -> 0.20 "needs its own measured ticket when tauri allows glib 0.20"):
+# - RUSTSEC-2024-0370 proc-macro-error 1.0.4 is unmaintained; it comes only via
+#   glib-macros/gtk3-macros 0.18 (build-time proc macros, not shipped code) and
+#   disappears with glib 0.20.
+# - RUSTSEC-2024-0429 (glib < 0.20, unsound `VariantStrIter`) is a function-level
+#   advisory: cargo-deny cannot check it (it matches no crate on its own) — it stays
+#   covered by the glib 0.20 bump (F-1) and cargo audit.
+ignore = [
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error 1.0.4 unmaintained, via glib-macros/gtk3-macros 0.18 (build-time only); gone with the glib 0.20 bump (F-1)" },
+]
+# RUSTSEC-2026-0386 (tokio < 1.53.3) is fixed: the lock holds tokio 1.53.3 (R1).
+
+[licenses]
+# The permissive set the workspace ships; everything else fails the check.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+    "Unlicense",
+]
+
+[bans]
+# Duplicates are a known hygiene finding (F-3: 67 duplicate crate names) tracked by
+# its own work; they are not licence/supply-chain policy, so they warn only here.
+# Wildcards warn too: the workspace's own crates are path dependencies without a
+# version (the intended shape), which counts as a wildcard.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

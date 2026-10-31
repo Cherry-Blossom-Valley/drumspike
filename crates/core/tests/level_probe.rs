@@ -20,7 +20,7 @@ fn mag_scale(role: &str, peak_db: f64) -> Result<(), DetectError> {
             mags.push(10f32.powf(spec[i * N_BANDS + b]) - 1.0);
         }
     }
-    mags.sort_by(|a, b| a.total_cmp(b));
+    mags.sort_by(f32::total_cmp);
     let q = |p: f32| -> f32 { mags[((mags.len() as f32 - 1.0) * p).round() as usize] };
     println!("{role} {peak_db:>5} dB: mag q995 {:.4} q999 {:.4}", q(0.995), q(0.999));
     Ok(())

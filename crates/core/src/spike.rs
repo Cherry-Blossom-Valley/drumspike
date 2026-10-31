@@ -818,7 +818,7 @@ mod tests {
                 if dt < 0.0 {
                     return 0.0;
                 }
-                for &(b0, b1, amp) in lobes.iter() {
+                for &(b0, b1, amp) in &lobes {
                     if dt < b1 {
                         if dt < b0 {
                             return 0.0;

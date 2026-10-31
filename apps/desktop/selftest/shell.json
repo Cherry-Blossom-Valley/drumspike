@@ -5,5 +5,5 @@
   "project": "$DRUMSPIKE_SELFTEST_PROJECT",
   "work": "$DRUMSPIKE_SELFTEST_DIR",
   "open_doc": "$DRUMSPIKE_SELFTEST_OPEN_DOC",
-  "expect": {"tracks": 3, "menu_items": 105, "version": "0.9.8"}
+  "expect": {"tracks": 3, "menu_items": 109, "version": "0.9.8"}
 }

@@ -231,7 +231,7 @@ pub fn relpath(path: &Path, start: &Path) -> String {
         .collect();
     let common = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
     let mut parts: Vec<&str> = vec![".."; b.len() - common];
-    parts.extend(a[common..].iter().map(|s| s.as_str()));
+    parts.extend(a[common..].iter().map(std::string::String::as_str));
     if parts.is_empty() {
         ".".to_string()
     } else {
@@ -322,7 +322,7 @@ pub fn find_document(path: &Path) -> Result<PathBuf, ProjectError> {
         }
         let mut docs: Vec<String> = std::fs::read_dir(&path)
             .map_err(io_err(format!("list {}", path.display())))?
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.ends_with(DOC_EXT))
             .collect();

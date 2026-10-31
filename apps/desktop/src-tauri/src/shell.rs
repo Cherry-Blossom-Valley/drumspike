@@ -227,7 +227,13 @@ pub fn selftest_menu_key(app: AppHandle, key: String) -> Value {
 #[cfg(debug_assertions)]
 #[tauri::command]
 pub fn selftest_menu_log() -> Value {
-    serde_json::to_value(menu::MENU_LOG.lock().unwrap_or_else(|e| e.into_inner()).clone()).unwrap_or(json!([]))
+    serde_json::to_value(
+        menu::MENU_LOG
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone(),
+    )
+    .unwrap_or(json!([]))
 }
 
 /// Self-test (#206) diagnosis: a synthetic keyDown with explicit characters/flags, for probing which

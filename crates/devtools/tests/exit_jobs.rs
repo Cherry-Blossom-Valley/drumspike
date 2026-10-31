@@ -44,7 +44,7 @@ fn assert_complete(dest: &Path, src_dir: &Path) {
         doc.is_file(),
         "no document in {}: {:?}",
         dest.display(),
-        std::fs::read_dir(dest).map(|d| d.count())
+        std::fs::read_dir(dest).map(std::iter::Iterator::count)
     );
     let doc: Value = serde_json::from_str(&std::fs::read_to_string(doc).unwrap()).unwrap();
     for name in ["k in", "k out", "s top"] {
@@ -187,7 +187,7 @@ fn a_killed_copy_save_as_leaves_no_half_made_destination_and_the_next_attempt_cl
     assert!(
         !dest.exists(),
         "no destination folder (with audio and no document) after a kill: {:?}",
-        std::fs::read_dir(&dest).map(|d| d.count())
+        std::fs::read_dir(&dest).map(std::iter::Iterator::count)
     );
     assert!(partial.is_dir(), "the stale partial folder is what the kill left");
 

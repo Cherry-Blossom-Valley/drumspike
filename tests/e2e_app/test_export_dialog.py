@@ -339,6 +339,8 @@ def drag_answer_tempo(app):
              || (window.__DS_DRAG__ || []).length > 0""", timeout=60000)
     if not app.evaluate("() => document.querySelector('#confirmModal').classList.contains('hidden')"):
         app.locator('#confirmActions [data-act="anyway"]').click()
+    # the drag runs after the answer (exportDragTake, then the native drag): wait for it, a loaded host is slow here
+    app.wait_for_function("() => (window.__DS_DRAG__ || []).length > 0", timeout=60000)
 
 
 def test_the_drag_tiles_prepare_the_files_and_a_drag_calls_the_native_drag_with_their_paths(app, make_project, tmp_path):
@@ -618,15 +620,20 @@ def test_the_answer_is_per_project_a_second_default_map_project_asks_again(app, 
     menu(app, "export")
     app.click("#exGo")
     expect(app.locator("#confirmModal")).to_be_visible()                     # the notice asks again (per project, not per page)
+    d0 = app.evaluate("() => EX.done")
     app.locator('#confirmActions [data-act="anyway"]').click()
     wait_until(lambda: len(exports(folder2)) == 4, msg="the export")
+    # the files exist before the export ends; Cancel is refused while EX.busy, so wait for the export-finished event (#172)
+    app.wait_for_function("d0 => EX.done > d0", arg=d0)
     app.click("#exCancel")
     open_project(app, folder)                                                # back to the first project: it asks again too
     menu(app, "export")
     app.click("#exGo")
     expect(app.locator("#confirmModal")).to_be_visible()
+    d0 = app.evaluate("() => EX.done")
     app.locator('#confirmActions [data-act="anyway"]').click()
     wait_until(lambda: len(exports(folder)) == 4, msg="the export")
+    app.wait_for_function("d0 => EX.done > d0", arg=d0)
     app.click("#exCancel")
 
 

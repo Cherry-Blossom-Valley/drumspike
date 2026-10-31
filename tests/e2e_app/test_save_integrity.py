@@ -93,6 +93,7 @@ def test_a_refused_event_write_stops_the_export(app, make_project):
       B.setEvents = () => Promise.reject(new Error("%s"));
       B.exportLastGet = () => Promise.resolve({ export_last: { formats: ["midi"], midi_mode: "per_track", compensate: true } });
       B.exportAll = () => { window._ex++; return Promise.resolve({}); };
+      EX.tempoAck = true;   // #151: the project has no tempo map; the notice is answered (test_export_again drives it)
       markDirty("Kick In");
     }""" % REFUSED)
     js(app, 'async () => { await exportAgain(); }')   # exportAgain catches its own failure

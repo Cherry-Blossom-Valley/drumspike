@@ -16,6 +16,11 @@
 //!    #472: without a snare (a kick-only session) the octave referee reads the phase shares: a
 //!    candidate with more kick weight a quarter beat off its grid than on it is the half
 //!    tempo, and its double takes the vote.
+//!    #130: with a snare, the backbeat verdict is corroborated by the shares before it
+//!    decides: a pick that carries the off-beat 8ths of a finer grid while its double holds
+//!    the weight on the beat with a nearly as strong comb is the half tempo of a half-time
+//!    backbeat, and its double takes the vote (`DRUMSPIKE_TEMPO_RULE=1` pins the shipped
+//!    referee).
 //! 2. Local period: the same comb in windows of 4 bars (at least 8 s), hop 1 bar, limited to
 //!    0.69 to 1.45 times the global period (no octave jumps). A dynamic programme cuts the local
 //!    periods into constant pieces of at least `min_bars` windows (L1 cost, a penalty per piece).
@@ -89,6 +94,12 @@ const FIT_ISOLATED_BEATS: i64 = 16;
 const FIT_MIN_GROUP_BEATS: usize = 4;
 /// Snare and tom hits at or above this velocity count for a fill.
 const FILL_VELOCITY: f64 = 60.0;
+/// #130: the smallest quarter-beat weight share at which a candidate's own grid shows the
+/// off-beat 8ths of a finer grid (the half-time backbeat's pick carries a real 4x grid).
+const HALF_TIME_MIN_QUART: f64 = 0.2;
+/// #130: the smallest comb of the double tempo (relative to the best candidate) at which
+/// the double counts as the corroborating beat of a half-time backbeat.
+const HALF_TIME_DBL_COMB: f64 = 0.8;
 
 /// The role of a hit; the weight of kick and snare is 1, of other drums 0.5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -489,6 +500,31 @@ fn prior(bpm: f64) -> f64 {
     (-0.5 * (bpm / 120.0).log2().powi(2)).exp()
 }
 
+/// Half-time snare (#180): the busier beat of the snare's pair holds at least this many
+/// times the snares of its partner, and at least [`HALF_TIME_MIN_SNARES`] of them.
+const HALF_TIME_RATIO: f64 = 2.0;
+const HALF_TIME_MIN_SNARES: f64 = 8.0;
+
+/// #130 tempo-referee version (env `DRUMSPIKE_TEMPO_RULE`; unset counts as 3, the #180
+/// product default). Version 1 pins the shipped referee: with a snare, the backbeat alone
+/// picks the octave and the shares stay out of it. Version 2 corroborates the backbeat
+/// verdict with the sub-beat shares (see [`half_time_backbeat`]). Version 3 adds the
+/// half-time bar 1 of #180 (see `bars`). The detection is read
+/// only: a project analysed before keeps its tempo until it is detected again.
+pub fn tempo_rule() -> u32 {
+    parse_rule(std::env::var("DRUMSPIKE_TEMPO_RULE").ok().as_deref())
+}
+
+/// The pin value behind [`tempo_rule`]: `1` and `0` pin the shipped referee, `2` the #130
+/// one, an unset or unparseable value is rule 3. A pure function so its test does not write
+/// the process env, which the parallel detection tests share.
+fn parse_rule(v: Option<&str>) -> u32 {
+    match v {
+        Some(v) => v.parse().unwrap_or(3),
+        None => 3,
+    }
+}
+
 /// Backbeat evidence of beat period `p`: snare to snare at 2 beats against 1 and 3 beats, and
 /// against a snare period shorter than 2 beats (2p/3 or 2p/5: then `p` is 3 or 5 true beats,
 /// whose doubles are even numbers of beats too). -0.5 to 1; 0 without enough snare hits.
@@ -528,6 +564,38 @@ fn octave_shares(hits: &[Hit], p: f64) -> (f64, f64) {
         return (0.0, 0.0);
     }
     (on / all, quart / all)
+}
+
+/// #130: is the candidate at period `p` the half tempo of a half-time backbeat? The backbeat
+/// referee cannot tell "snare on 2 and 4 at `p`" from "snare every 4 beats at `2p`" - the
+/// snare-to-snare histogram is the same - so the verdict of a positive backbeat is
+/// corroborated by the sub-beat shares before it decides the octave. The artifact pick
+/// carries a real finer grid (a quarter-beat share of at least [`HALF_TIME_MIN_QUART`]:
+/// the off-beat 8ths of the true tempo) while its double holds the weight on the beat
+/// (more than `p` does) with a comb close to the best candidate's (at least
+/// [`HALF_TIME_DBL_COMB`]) and almost nothing a quarter beat off. A straight backbeat
+/// (no quarter-beat weight: kick on 1 and 3), a ghost-note funk groove (a strong kick a
+/// quarter beat off, but a weak double) and a beat whose double is out of range or under
+/// the comb gate stay at `p`. The Session A session (map 134, kick 8ths, snare every 4
+/// beats): the 67 pick carries quarter 0.284 against 0.037 on the 134 grid and 134's comb
+/// is 0.971 of the best - flagged; the ballad at 67 with sixteenth kicks carries quarter
+/// 0.125 and stays.
+fn half_time_backbeat(hits: &[Hit], snare: &LagHist, rows: &[(f64, f64, f64)], p: f64) -> bool {
+    if backbeat(snare, p) <= 0.0 {
+        return false;
+    }
+    let Some(&(_, dcomb, _)) = rows.iter().find(|&&(q, _, _)| (q / (p / 2.0)).ln().abs() < 0.03) else {
+        return false;
+    };
+    if dcomb < HALF_TIME_DBL_COMB {
+        return false;
+    }
+    let (on, quart) = octave_shares(hits, p);
+    if quart < HALF_TIME_MIN_QUART {
+        return false;
+    }
+    let (don, dquart) = octave_shares(hits, p / 2.0);
+    don > on && dquart < quart
 }
 
 struct Global {
@@ -598,7 +666,16 @@ fn global_period(hits: &[Hit], params: &DetectParams) -> Result<Global, String> 
     // grid of the rest of the song, which the shares cannot tell from a half tempo (the
     // 120/140/120 trains read 46 % off the 120 grid).
     let half_tempo: Vec<bool> = if n_snare >= MIN_HITS {
-        vec![false; rows.len()]
+        // #130: with a snare the backbeat picks the octave; since rule 2 its verdict is
+        // corroborated by the sub-beat shares before it decides (the half-time backbeat),
+        // unless DRUMSPIKE_TEMPO_RULE pins the shipped referee.
+        if tempo_rule() < 2 {
+            vec![false; rows.len()]
+        } else {
+            rows.iter()
+                .map(|(p, _, _)| half_time_backbeat(hits, &snare, &rows, *p))
+                .collect()
+        }
     } else {
         rows.iter()
             .map(|(p, _, _)| {
@@ -1065,7 +1142,7 @@ fn invert(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
         }
         m.swap(c, piv);
         let d = m[c][c];
-        for x in m[c].iter_mut() {
+        for x in &mut m[c] {
             *x /= d;
         }
         let pivot = m[c].clone();
@@ -1384,9 +1461,19 @@ fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
             let (k0, k1) = (pair(&k, 0), pair(&k, 1));
             (i64::from(k1 > k0), sign_test(k0.max(k1), k0.min(k1)))
         };
-        let (a, b) = (votes(par), votes(par + 2));
-        let (down, alt) = if a >= b { (par, par + 2) } else { (par + 2, par) };
-        (down, alt, backbeat, sign_test(a.max(b), a.min(b)))
+        // #180: under a half-time snare (one beat of the pair holds the snare, its partner
+        // under half as many) the snare is on beat 3, so beat 1 is two beats from it, in the
+        // snare's own pair. The 2-and-4 reading above picks the other pair: a beat late.
+        let sp = i64::from(s1 > s0);
+        let (h0, h1) = (class(&s, sp), class(&s, sp + 2));
+        let (hi, lo, hc) = if h0 >= h1 { (h0, h1, sp) } else { (h1, h0, sp + 2) };
+        if tempo_rule() >= 3 && s0 != s1 && hi >= HALF_TIME_MIN_SNARES && hi >= HALF_TIME_RATIO * lo {
+            (hc + 2, hc, backbeat, sign_test(hi, lo))
+        } else {
+            let (a, b) = (votes(par), votes(par + 2));
+            let (down, alt) = if a >= b { (par, par + 2) } else { (par + 2, par) };
+            (down, alt, backbeat, sign_test(a.max(b), a.min(b)))
+        }
     } else {
         let scores: Vec<f64> = (0..bpb).map(|o| votes(o) - class(&s, o)).collect();
         let mut order: Vec<usize> = (0..scores.len()).collect();

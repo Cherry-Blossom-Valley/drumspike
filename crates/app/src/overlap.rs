@@ -35,7 +35,9 @@ pub fn default_threads() -> usize {
 /// it cannot be read.
 /// The physical core count of this host; 0 when it cannot be read.
 pub fn physical_cores() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0)
+    std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(0)
 }
 
 /// The pool size: [`default_threads`], or `DRUMSPIKE_PREPARE_THREADS` (a positive number) for

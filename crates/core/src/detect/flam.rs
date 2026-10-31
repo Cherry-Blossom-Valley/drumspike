@@ -239,7 +239,7 @@ pub fn np_percentile(v: &[f64], q: f64) -> Option<f64> {
         return None;
     }
     let mut s = v.to_vec();
-    s.sort_by(|a, b| a.total_cmp(b));
+    s.sort_by(f64::total_cmp);
     let n = s.len();
     let vi = (n - 1) as f64 * (q / 100.0);
     let lo = (vi.floor().max(0.0) as usize).min(n - 1);
@@ -253,7 +253,7 @@ pub fn np_percentile(v: &[f64], q: f64) -> Option<f64> {
 /// `np.median` of a non-empty slice.
 fn median(v: &[f64]) -> f64 {
     let mut s = v.to_vec();
-    s.sort_by(|a, b| a.total_cmp(b));
+    s.sort_by(f64::total_cmp);
     let n = s.len();
     if n % 2 == 1 {
         s[n / 2]
@@ -359,7 +359,7 @@ pub fn calibrate(env_a: &[f64], env_b: &[f64], peaks: &[usize], own: &[f64], rat
 pub fn transfer_gains(env_a: &[f64], sources: &[&[f64]], own: &[f64], sr: u32, hop: usize) -> Vec<Option<f64>> {
     let rate = sr as f64 / hop as f64;
     let mut own: Vec<f64> = own.to_vec();
-    own.sort_by(|a, b| a.total_cmp(b));
+    own.sort_by(f64::total_cmp);
     sources
         .iter()
         .map(|env_b| {
@@ -384,7 +384,7 @@ pub fn second_onsets(
     let hop = hop_of(sr) as i64;
     let srf = sr as f64;
     let mut times: Vec<f64> = hits.to_vec();
-    times.sort_by(|a, b| a.total_cmp(b));
+    times.sort_by(f64::total_cmp);
     let nb = env.len() as i64;
     let (rise_b, peak_b, min_b, max_b, guard_b) = (
         blocks(p.rise_s),

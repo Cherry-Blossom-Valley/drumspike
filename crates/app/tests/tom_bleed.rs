@@ -214,7 +214,7 @@ fn marked_hits_are_the_bleed_and_leave_the_output_until_restored() {
     );
     assert_eq!(svc.export_spikes(&sid, "t1", None).unwrap()["n_events"], 12);
     let out = svc.export_all(&sid, None).unwrap();
-    assert!(out["errors"].as_array().is_none_or(|e| e.is_empty()), "{out}");
+    assert!(out["errors"].as_array().is_none_or(std::vec::Vec::is_empty), "{out}");
     svc.track_set_follow(&sid, "fol", Some("t1")).unwrap();
     assert_eq!(events(&svc, &sid, "fol").len(), 12);
     // a restore puts one hit back (the follower follows), a move takes the mark off another
@@ -544,7 +544,7 @@ fn toms_and_snare() -> TomsAndSnare {
         }
     }
     let mut s = 5u64;
-    for v in snare.iter_mut() {
+    for v in &mut snare {
         s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         *v += 1e-4 * (((s >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0) as f32;
     }
@@ -756,7 +756,7 @@ fn a_cut_hit_takes_no_part_in_the_pair_rule() {
     // t2's first own hit is cut (the loudness cut): out of the output, so t1's bleed hit of it has no winner
     let mut ev = events(&svc, &sid, "t2");
     let first = owns[1][0];
-    for e in ev.iter_mut() {
+    for e in &mut ev {
         if (e["t"].as_f64().unwrap() * f64::from(SR)).round() as usize == first {
             e["cut"] = json!(true);
         }
@@ -998,7 +998,7 @@ fn the_pair_rule_is_off_when_rule_cd_is_off_for_fewer_than_two_played_toms() {
         burst(&mut quiet, s, 0.03, 60.0);
     }
     let mut seed = 11u64;
-    for v in quiet.iter_mut() {
+    for v in &mut quiet {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         *v += 3e-3 * (((seed >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0) as f32;
     }

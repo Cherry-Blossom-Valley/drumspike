@@ -33,7 +33,7 @@ fn scale_of(spec: &[f32], bands: &std::ops::Range<usize>) -> Option<f32> {
     if mags.is_empty() {
         return None;
     }
-    mags.sort_by(|a, b| a.total_cmp(b));
+    mags.sort_by(f32::total_cmp);
     let pos = 0.995 * (mags.len() - 1) as f64;
     let lo = pos.floor() as usize;
     let hi = (lo + 1).min(mags.len() - 1);

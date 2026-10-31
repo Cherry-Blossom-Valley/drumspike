@@ -84,11 +84,11 @@ static FAKE_ERROR: Mutex<Option<std::io::ErrorKind>> = Mutex::new(None);
 /// Make every following lock fail as a volume without `flock` support does (`None` ends it). For tests; process wide.
 #[doc(hidden)]
 pub fn fake_lock_error(kind: Option<std::io::ErrorKind>) {
-    *FAKE_ERROR.lock().unwrap_or_else(|p| p.into_inner()) = kind;
+    *FAKE_ERROR.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = kind;
 }
 
 fn try_lock(file: &File) -> Result<(), TryLockError> {
-    if let Some(kind) = *FAKE_ERROR.lock().unwrap_or_else(|p| p.into_inner()) {
+    if let Some(kind) = *FAKE_ERROR.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
         return Err(TryLockError::Error(std::io::Error::new(
             kind,
             "operation not supported",

@@ -232,7 +232,7 @@ fn the_service_refuses_every_mutating_command_on_a_read_only_session() {
     let bridge = Bridge::new(s.svc.clone(), repo_root().join("static"));
     let ch = Arc::new(Channels::default());
     let mut refused_count = 0;
-    for row in api::REGISTRY.iter() {
+    for row in api::REGISTRY {
         // the list is the registry's, not a hand-written one; the rows without a session
         // (project_new, project_import) and the documented exception (project_save_as) are out
         if !row.writes_project() || row.name == "project_save_as" || !row.args.iter().any(|a| a.name == "sid") {

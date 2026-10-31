@@ -47,7 +47,7 @@ impl Channels {
             sink(id, msg);
             return;
         }
-        let mut g = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.queues.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let q = g.entry(id.to_string()).or_default();
         if q.len() >= QUEUE_CAP {
             q.pop_front();
@@ -60,7 +60,7 @@ impl Channels {
     /// means the time ran out.
     pub fn poll(&self, id: &str, timeout: Duration) -> Vec<Value> {
         let end = Instant::now() + timeout;
-        let mut g = self.queues.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.queues.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if let Some(q) = g.get_mut(id)
                 && !q.is_empty()
@@ -71,7 +71,11 @@ impl Channels {
             if left.is_zero() {
                 return Vec::new();
             }
-            g = self.cv.wait_timeout(g, left).unwrap_or_else(|e| e.into_inner()).0;
+            g = self
+                .cv
+                .wait_timeout(g, left)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
         }
     }
 }

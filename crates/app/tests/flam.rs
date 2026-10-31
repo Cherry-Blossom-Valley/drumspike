@@ -69,7 +69,7 @@ fn flam_track(seed: u64) -> (Vec<f32>, Vec<f64>) {
             place(&mut x, &s, t, -6.0);
         }
     }
-    for v in x.iter_mut() {
+    for v in &mut x {
         *v += 1e-4 * rng.next() as f32;
     }
     (x, mains)
