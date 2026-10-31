@@ -6911,6 +6911,7 @@ function setAuditionTab(on) {
   st.ui.auditionTab = !!on; saveSettings();
   $("#setAuditionTab").checked = st.ui.auditionTab;
   $("#auditionTabBtn").classList.toggle("on", st.ui.auditionTab);
+  $("#auditionTabBtn").setAttribute("aria-pressed", st.ui.auditionTab ? "true" : "false");
   DSShell.sync();
 }
 function toggleAuditionTab() {
@@ -7176,6 +7177,7 @@ function setupGlobal() {
   $("#clickBtn").classList.toggle("on", !!st.click.enabled);
   $("#clickBtn").onclick = () => toggleClick();
   $("#auditionTabBtn").classList.toggle("on", !!st.ui.auditionTab);   // #240
+  $("#auditionTabBtn").setAttribute("aria-pressed", st.ui.auditionTab ? "true" : "false");
   $("#auditionTabBtn").onclick = () => toggleAuditionTab();
   $("#followBtn").onclick = () => { const m = ["smooth", "page", "off"]; setFollow(m[(m.indexOf(S.followMode) + 1) % 3]); setMsg(`follow playhead: ${S.followMode}`); };
   $("#snapChk").onchange = ev => setSnap(ev.target.checked);

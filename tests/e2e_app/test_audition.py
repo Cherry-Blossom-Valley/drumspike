@@ -256,7 +256,7 @@ def audition_tab_state(app):
 
 
 def test_the_toolbar_button_and_the_shortcut_flip_audition_tab_together(app, song):
-    """#240: the toolbar button and Shift+T each flip the setting, the button state, the menu
+    """#240: the toolbar button and U each flip the setting, the button state, the menu
     check, the Settings checkbox and the saved app settings together. Before each action the
     setting is off (waited, not assumed). Screenshots of the toolbar on and off go to test-shots/."""
     off = {"setting": False, "saved": False, "button": False, "menu": False, "checkbox": False}
@@ -268,10 +268,10 @@ def test_the_toolbar_button_and_the_shortcut_flip_audition_tab_together(app, son
     app.screenshot(path=str(shot_dir("240-audition-tab-on.png")))
     app.evaluate("() => setAuditionTab(false)")
     wait_until(lambda: audition_tab_state(app) == off, msg="the setting is off before the key")
-    app.keyboard.press("Shift+T")   # the shortcut flips it on
-    wait_until(lambda: audition_tab_state(app) == on, msg="Shift+T flips all five")
+    app.keyboard.press("U")   # the shortcut flips it on
+    wait_until(lambda: audition_tab_state(app) == on, msg="U flips all five")
     app.screenshot(path=str(shot_dir("240-audition-tab-on.png")))
-    app.keyboard.press("Shift+T")   # and off again
-    wait_until(lambda: audition_tab_state(app) == off, msg="Shift+T flips it back off")
+    app.keyboard.press("U")   # and off again
+    wait_until(lambda: audition_tab_state(app) == off, msg="U flips it back off")
     app.screenshot(path=str(shot_dir("240-audition-tab-off.png")))
     app.evaluate("() => setAuditionTab(false)")

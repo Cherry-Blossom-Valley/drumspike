@@ -732,7 +732,7 @@ pub fn check_states(state: &Value) -> Vec<(&'static str, bool)> {
         ("otherMics", &OTHER_MICS),
         ("suspendFollow", &SUSPEND_FOLLOW), // P4-wf10: Transport > Suspend Follow when Editing
         ("stopReturnMode", &STOP_RETURN_MODE), // #436: Transport > Stop Returns to Start
-        ("auditionTab", &AUDITION_TAB), // #240: Transport > Audition on Tab
+        ("auditionTab", &AUDITION_TAB),     // #240: Transport > Audition on Tab
     ] {
         if let Some(b) = state.get(key).and_then(Value::as_bool) {
             out.push((item.id, b));
