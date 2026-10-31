@@ -108,6 +108,7 @@ function applyOp(op, reverse) {   // a step of the service (shift, add, del, mov
   if (op.type === "trkdel") return trApplyOp(op, reverse);   // P4-39a: Track > Remove Track
   if (op.type === "role") return roleApplyOp(op, reverse);   // 0.9.1: the role of a track (Inspector)
   if (op.type === "shift") return shiftApplyOp(op, reverse);   // P4-9: the Hitpoint shift
+  if (op.type === "params") { hgApplyParamsOp(op, reverse); return; }   // #232: a stored detection setting (the refine window)
   if (op.type === "repick") { hgApplyRepickOp(op, reverse); return; }   // P4-3: a stored re-pick of the Sensitivity histogram
   return edApplyOp(op, reverse);   // P4-9 stage 2: add, del, move, setv: events_edit
 }

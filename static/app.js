@@ -340,7 +340,7 @@ function buildTrackDOM() {
         <div class="tlanes">
           <canvas class="lane spike" height="34"></canvas>
           <canvas class="lane wave"  height="120"></canvas>
-          ${VL.on ? `<canvas class="lane vel"   height="${VL.h}"></canvas>` : ""}
+          ${VL.on ? velWrapHtml() : ""}
           <div class="rowResize" title="Drag: the height of this track's wave lane. Double-click: back to the Track Height"></div>
         </div>
       </div>`;
@@ -2992,13 +2992,16 @@ const ovXOf = ev => ev.clientX - GEO.ovX;
    velocity_lane, default off); it draws with the hits of its row (drawHits), so the edits show live.
    #208: the lane is 80 px by default and its height is the app setting velocity_lane_height (drag its bottom border,
    24 to 400 px). A header "Velocity" with a 127 / 64 / 0 scale, a dot on each stalk top, the selected stalk and the
-   hits of a selected range in yellow, a hover label (velocity, time, why a stalk is grey), and a one-line hint
-   until the first gesture. A drag of a selected stalk scales all selected hits by the same ratio. */
+   hits of a selected range in yellow, a hover label (velocity, time, why a stalk is grey); the
+   gesture hint is the Velocity label's tooltip (#245). A drag of a selected stalk scales all
+   selected hits by the same ratio. */
 const VL_H_DEF = 80, VL_H_MIN = 24, VL_H_MAX = 400;
-const VL = { on: false, drag: null, h: VL_H_DEF, hover: null, hint: false };   // drag: {track, mode, gen, x0, y0, set: Map(id -> [from, to]), anchor, v0, base}; hover: {track, id}; hint: the one-line hint shows
+const VL = { on: false, drag: null, h: VL_H_DEF, hover: null };   // drag: {track, mode, gen, x0, y0, set: Map(id -> [from, to]), anchor, v0, base}; hover: {track, id}
+/* #245: the gesture hint lives on the Velocity label as a tooltip (a title on .velLabel), not
+   drawn into the lane canvas: text over the stalks read like data. */
+const VL_HINT = "Drag a stalk to set velocity. Option-drag: draw a line. Cmd-drag: draw freehand.";
 function vlToggle() {
   VL.on = !VL.on;
-  VL.hint = VL.on;
   if (B.appSettingsSet) B.appSettingsSet("velocity_lane", VL.on).catch(e => setMsg(`settings: ${errText(e)}`));
   vlApply();
   setMsg(`Velocity lane ${VL.on ? "shown" : "hidden"}`);
@@ -3010,16 +3013,34 @@ function vlApply() {   // after a toggle: the rows grow or shrink, the canvases 
   invalidate(F.SIZE | F.VIEW | F.GL);
   if (window.DSShell && DSShell.sync) DSShell.sync();
 }
+/* #245: the velocity lane's canvas lives in a .velWrap with the Velocity label span (the gesture
+   hint is the label's tooltip): both the row template and vlSyncRow build the same pair. */
+function velWrapHtml() {
+  return `<div class="velWrap"><canvas class="lane vel" height="${VL.h}"></canvas>` +
+         `<span class="velLabel" title="${VL_HINT}">Velocity</span></div>`;
+}
+function velLabelNode() {
+  const label = document.createElement("span");   // the tooltip of the Velocity label: the gesture hint (#245)
+  label.className = "velLabel";
+  label.title = VL_HINT;
+  label.textContent = "Velocity";
+  return label;
+}
 function vlSyncRow(row) {   // the row gets or loses its vel canvas (releaseCanvases gives the store back at once)
   let c = row.querySelector(".vel");
   if (VL.on && !c) {
     c = document.createElement("canvas");
     c.className = "lane vel"; c.height = VL.h;
-    row.querySelector(".wave").after(c);
+    const wrap = document.createElement("div");   // #245: wraps the canvas so the label sits on it, not in it
+    wrap.className = "velWrap";
+    wrap.appendChild(c);
+    wrap.appendChild(velLabelNode());
+    row.querySelector(".wave").after(wrap);
     vlBind(row, row.dataset.name);
   } else if (!VL.on && c) {
     if (c.width) { c.width = 0; c.height = 0; }
-    c.remove();
+    const wrap = c.closest(".velWrap");
+    if (wrap) wrap.remove(); else c.remove();
   }
   for (const hd of row.querySelectorAll(".rowResize")) {   // #437: the handles' text follows the lane it drags (the row's border and the header's edge, #439)
     hd.title = VL.on ? "Drag: the height of the velocity lane (the handle is at its bottom edge). Double-click: the wave lane back to the Track Height"
@@ -3039,11 +3060,9 @@ function drawVelLane(canvas, name) {
   ctx.setLineDash([]);
   // #208: the scale at the right edge (127 top, 64 middle, 0 bottom) and the name at the left
   ctx.fillStyle = "rgba(138,147,163,0.9)"; ctx.font = "10px sans-serif"; ctx.textBaseline = "middle";
-  // the header (127, Velocity, the hint) hangs below the 127 line, so its full glyph height is inside the lane (#208)
+  // the header (127, Velocity) hangs below the 127 line, so its full glyph height is inside the lane (#208)
   const headY = vlYOf(127, H) + 4;
-  ctx.textBaseline = "top";
   ctx.textAlign = "right"; ctx.fillText("127", W - 3, headY);
-  ctx.textAlign = "left"; ctx.fillText("Velocity", 4, headY);
   ctx.textBaseline = "middle";
   ctx.textAlign = "right"; ctx.fillText("64", W - 3, vlYOf(64, H)); ctx.fillText("0", W - 3, H - 6);
   const evs = S.events[name] || [];
@@ -3072,12 +3091,6 @@ function drawVelLane(canvas, name) {
     ctx.fillStyle = "rgba(16,20,28,0.92)"; ctx.fillRect(bx, H - 15, tw, 13);
     ctx.fillStyle = "#e6e9ef"; ctx.textAlign = "left"; ctx.fillText(txt, bx + 4, H - 8);
   }
-  if (VL.hint && W > 420) {   // the one-line hint until the first gesture
-    ctx.fillStyle = "rgba(230,233,239,0.75)"; ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    ctx.fillText("Drag a stalk to set velocity. Option-drag: draw a line. Cmd-drag: draw freehand.", 64, headY);
-    ctx.textBaseline = "middle";
-  }
   ctx.textAlign = "left";
 }
 /* The gestures of one row's velocity lane. A gesture previews on the page's copy and commits once: one events_edit call,
@@ -3095,7 +3108,6 @@ function vlBind(row, name) {
   const commit = () => {
     const d = VL.drag; VL.drag = null;
     if (!d) return;
-    VL.hint = false;
     const list = [...d.set.entries()].map(([id, [from, to, was]]) => ({ id, from, to, ...(was ? { was } : {}) })).filter(s => s.to !== s.from);
     if (!list.length || d.gen !== (EDGEN[name] || 0)) { invalidateHits(name); if (list.length) setMsg("the hits changed during the drag: the velocities were dropped"); return; }
     const step = list.length === 1
@@ -3458,6 +3470,14 @@ function buildParamsPanel(div, name, p) {
         <label>Refine to attack ${info("After detection, each hit is moved to the first sample crossing 25% of the local peak — the physical stick impact, sample-exact. Leave this on; disable only to compare raw detector output.")}</label>
         <div class="pctl"><input type="checkbox" class="pRefine" ${p.refine?"checked":""}></div>
       </div>
+      ${p.refine !== false ? `<div class="prow">
+        <label>Refine window low ${info("The search window around the coarse detection time, in ms: the refine looks for the attack from this far before it. Default -2. Stored at once; the next re-analyze uses it.")}</label>
+        <div class="pctl"><input type="number" class="pRefineLo" step="1" value="${Number.isFinite(p.refine_lo_ms) ? p.refine_lo_ms : -2}"><span class="punit">ms</span></div>
+      </div>
+      <div class="prow">
+        <label>Refine window high ${info("The search window around the coarse detection time, in ms: the refine looks for the attack up to this far after it. Default 12. Stored at once; the next re-analyze uses it.")}</label>
+        <div class="pctl"><input type="number" class="pRefineHi" step="1" value="${Number.isFinite(p.refine_hi_ms) ? p.refine_hi_ms : 12}"><span class="punit">ms</span></div>
+      </div>` : ""}
       ${t.role === "snare" ? `<div class="prow">
         <label>Split flams ${info("A flam or two strokes closer than about 30 ms look like one hit to the detector. On (the default for snare tracks): the second stroke inside a hit becomes a hit of its own, unless another mic of the project explains it as bleed. Off: one hit per flam. Applies on the next re-analyze.")}</label>
         <div class="pctl"><input type="checkbox" class="pFlam" ${p.flam_split !== false ? "checked" : ""}></div>
@@ -3561,12 +3581,16 @@ function buildParamsPanel(div, name, p) {
     setDetectorFill(name);   // async: the installed plugins that support role and rate
   }
   if (t.follows) {   // the detection settings are not used for a follower
-    for (const sel of [".pSens", ".pGap", ".pRefine", ".pFlam"]) { const el = div.querySelector(sel); if (el) el.disabled = true; }
+    for (const sel of [".pSens", ".pGap", ".pRefine", ".pRefineLo", ".pRefineHi", ".pFlam"]) { const el = div.querySelector(sel); if (el) el.disabled = true; }
     noteRow.classList.remove("hidden"); note.textContent = `follows ${t.follows}: the hits are derived from it, the detection settings are not used`;
     div.querySelector(".pactions .phint").textContent = "re-analyze derives the hits from the followed track again";
   }
   div.querySelector(".pGap").onchange = ev => p.min_gap_ms = +ev.target.value;
   div.querySelector(".pRefine").onchange = ev => p.refine = ev.target.checked;
+  // #232: the refine window is stored at once (track_params_set, one undo step), so an agent and
+  // the app see the same number (tracks_get), and Undo brings the old window back
+  div.querySelector(".pRefineLo").onchange = ev => paramsFieldCommit(name, "refine_lo_ms", Math.round(+ev.target.value || 0));
+  div.querySelector(".pRefineHi").onchange = ev => paramsFieldCommit(name, "refine_hi_ms", Math.round(+ev.target.value || 0));
   const flam = div.querySelector(".pFlam");   // P4-13 stage B: snare tracks only; the track param flam_split (absent = on)
   if (flam) { flam.title = "Applies on the next re-analyze"; flam.onchange = ev => p.flam_split = ev.target.checked; }
   div.querySelector(".pShift").onchange = ev => {   // P4-9: the service shifts the hits (track_shift_set); the page shows the result
@@ -5019,6 +5043,32 @@ function hgApplyRepickOp(op, reverse) {   // applyOp: undo and redo of a stored 
   if (INS.name === op.track) syncInspector(true);
 }
 
+/* #232: an Inspector number that is stored at once (the refine window): one track_params_set, one undo step. */
+const PARAM_FIELD_DEFAULTS = { refine_lo_ms: -2, refine_hi_ms: 12 };   // the shown defaults (RefineWindow::DEFAULT)
+function paramsFieldCommit(name, key, value) {
+  const t = S.tracks[name]; if (!t) return value;
+  const before = JSON.parse(JSON.stringify(t.params || {}));
+  if (before[key] === undefined) before[key] = PARAM_FIELD_DEFAULTS[key];   // the shown default is the undo's before
+  t.params = t.params || defaultParams(t.role);
+  t.params[key] = value;
+  pushUndo({ type: "params", label: "Detection setting", sid: S.sid, track: name,
+    before: { params: before }, after: { params: JSON.parse(JSON.stringify(t.params)) } });
+  const sid = S.sid;
+  hgSerial(name, () => B.paramsSet(sid, name, JSON.parse(JSON.stringify(t.params))))
+    .then(() => setDirtyState(true));
+  return value;
+}
+function hgApplyParamsOp(op, reverse) {   // applyOp: undo and redo of a stored params change (the refine window)
+  if (op.sid !== S.sid) { setMsg("that project is not the open one"); return; }
+  const st = reverse ? op.before : op.after, t = S.tracks[op.track];
+  if (t) {
+    t.params = JSON.parse(JSON.stringify(st.params));
+    hgSerial(op.track, () => B.paramsSet(op.sid, op.track, JSON.parse(JSON.stringify(t.params))));
+  }
+  setDirtyState(true);
+  if (INS.name === op.track) syncInspector(true);
+}
+
 /* the loudness histogram: dBFS on x, the floor and ceiling handles, the velocity ramp, and the loudness cut (controller
    decision 4, DRT's Loudness slider filters): a third handle, off at the left edge. A detected hit below it is grey in
    the histogram and in the lane and leaves the output (MIDI, spikes, Export All, the click, a follower); it stays in the
@@ -5372,6 +5422,16 @@ function insRoleControls(offer) {   // the role select, the source hint and the 
   const srcTxt = insRoleSourceText(t);
   $("#insRoleSrc").textContent = srcTxt;
   $("#insRoleSrc").classList.toggle("lyWarn", srcTxt.startsWith("not recognised"));
+  // #232: the name pattern the role was guessed from. A role of the user or of the audio has none
+  // (the service clears it): the field is disabled there; an edit goes through track_set_role with
+  // the role kept (one undo step, like the role change).
+  const rm = $("#insRoleMatch");
+  if (rm) {
+    rm.value = t.role_match ?? "";
+    const locked = t.role_source === "user" || t.role_source === "audio";
+    rm.disabled = locked;
+    rm.placeholder = locked ? "—" : "";
+  }
   const orow = $("#insNoteOfferRow");
   INS.offer = offer && offer.suggest_note != null && offer.note !== offer.suggest_note
     ? { name: INS.name, role: offer.role, note: offer.note, suggest_note: offer.suggest_note, role_source: offer.role_source } : null;
@@ -5591,6 +5651,13 @@ function setupInspector() {   // once, at boot: the name field, the Relink butto
   $("#insNoteOfferBtn").onclick = () => {   // 0.9.1: the note offer of a role change
     const o = INS.offer; if (!o) return;
     setTrackRole(o.name, o.role, { note: o.suggest_note, source: o.role_source });
+  };
+  $("#insRoleMatch").onchange = ev => {   // #232: the name pattern the role was guessed from
+    const name = INS.name, t = S.tracks[name], v = ev.target.value.trim();
+    if (!name || !t || v === (t.role_match ?? "")) return;
+    setTrackRole(name, t.role, { role_match: v || null, source: t.role_source }).then(ok => {
+      if (!ok && INS.name === name) ev.target.value = S.tracks[name] ? (S.tracks[name].role_match ?? "") : ev.target.value;
+    });
   };
   $("#inspectorBtn").onclick = () => toggleInspector();   // P4-25: the toolbar button, the same as View > Show Inspector
   $("#insClose").onclick = () => toggleInspector();   // the × in the title bar: the same as View > Show Inspector (the check item follows)
@@ -5914,6 +5981,7 @@ async function openExport(scope, track) {
   try { info = await B.exportExisting(S.sid, {}); } catch (e) { setMsg(`export failed: ${errText(e)}`, "error"); return; }
   EX.def = info.default_dest; EX.remembered = info.remembered;
   EX.markers = !!info.export_markers;   // P4-40g: the remembered "Markers in MIDI" checkbox
+  if (info.export_compensate !== undefined) EX.comp = !!info.export_compensate;   // #232: the kept "Compensate" checkbox seeds the dialog
   const last = info.export_last;   // P4-31: the project keeps what its last export wrote with (and every choice, recorded at once)
   if (last) {
     EX.midi = last.formats.includes("midi"); EX.spikes = last.formats.includes("spikes") || last.formats.includes("audio");
@@ -6094,7 +6162,13 @@ function setupExport() {
   $("#exScopeSel").onchange = () => { EX.scope = "selected"; exChanged(); exRecord(); };
   $("#exMidi").onchange = ev => { EX.midi = ev.target.checked; exChanged(); exRecord(); };
   $("#exSpikes").onchange = ev => { EX.spikes = ev.target.checked; exChanged(); exRecord(); };
-  $("#exComp").onchange = ev => { EX.comp = ev.target.checked; exChanged(); exRecord(); };
+  $("#exComp").onchange = async ev => {   // #232: the checkbox is remembered per project (like the markers one)
+    const on = ev.target.checked;
+    EX.comp = on;
+    try { await B.exportCompensateSet(S.sid, on); setDirtyState(true); }
+    catch (e) { setMsg(`the Compensate choice failed: ${errText(e)}`, "error"); }
+    exChanged(); exRecord();
+  };
   $("#exMarkers").onchange = async ev => {   // P4-40g: the checkbox is remembered per project
     const on = ev.target.checked;
     EX.markers = on;
@@ -6737,18 +6811,20 @@ function setRowHeights(map) {   // map: track name -> factor of the global wave 
 }
 /* #172: the role drawing (.tart) sits bottom-right in the header (bottom: 8px); when the row is
    dragged short it would overlap the .tctl controls (the M/S buttons and the pan slider). The
-   drawing shows only while the header is tall enough for the drawing and its 8 px margin above
-   the top of the controls. The size is the authored --tart-size, not the live box: a hidden
-   drawing measures 0 px and would unhide itself (an oscillation). Measured here (outside the
-   frame loop), not per frame. */
+   drawing shows only while the header is tall enough for the drawing plus its 8 px margin above
+   the BOTTOM of the controls (#241: the readouts under the M/S buttons are part of .tctl, so
+   the rule measures tctl.offsetHeight too — the old tctl.offsetTop + 8 + size hid the drawing
+   ~2 rows of heights too late and let it clip the readouts). The size is the authored
+   --tart-size, not the live box: a hidden drawing measures 0 px and would unhide itself (an
+   oscillation). Measured here (outside the frame loop), not per frame. */
 function setHeadTartFit(row) {
   const th = row.querySelector(".thead");
   const tctl = th && th.querySelector(".tctl");
   const tart = th && th.querySelector(".tart");
   if (!th || !tctl || !tart) return;
   const size = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--tart-size")) || 54;
-  const needed = tctl.offsetTop + 8 + size;
-  th.classList.toggle("tart-hidden", row.offsetHeight < needed);
+  const needed = tctl.offsetTop + tctl.offsetHeight + 8 + size;
+  th.classList.toggle("tart-hidden", th.offsetHeight < needed);
 }
 function rowHeightsSave() {   // #167: the factor map into the project document (the drag and the double-click land here)
   if (!S.sid || !B.rowHeightsSet) return;
@@ -6888,6 +6964,21 @@ function toggleStopReturnMode() {
   st.ui.stopReturnToStart = !st.ui.stopReturnToStart; saveSettings();
   setMsg(`stop returns to start: ${st.ui.stopReturnToStart ? "on" : "off"}`);
   DSShell.sync();
+}
+/* #240: Audition on Tab as a toolbar button and a shortcut: a step to a hit (Tab) plays it, unless
+   the page plays. One flip sets the button state, the Settings checkbox, the menu check and the
+   saved app settings together (like setClick). */
+function setAuditionTab(on) {
+  const st = SETTINGS();
+  st.ui.auditionTab = !!on; saveSettings();
+  $("#setAuditionTab").checked = st.ui.auditionTab;
+  $("#auditionTabBtn").classList.toggle("on", st.ui.auditionTab);
+  $("#auditionTabBtn").setAttribute("aria-pressed", st.ui.auditionTab ? "true" : "false");
+  DSShell.sync();
+}
+function toggleAuditionTab() {
+  setAuditionTab(!SETTINGS().ui.auditionTab);
+  setMsg(`audition on tab: ${SETTINGS().ui.auditionTab ? "on" : "off"}`);
 }
 function suspendFollowForEdit() {   // an edit during playback: hold the view, resume 2 s of playback later
   if (!SETTINGS().ui.suspendFollowOnEdit || !S.playing || S.followMode === "off") return;
@@ -7122,7 +7213,7 @@ function setupGlobal() {
   $("#setTabMode").value = SETTINGS().ui.tabMode === "all" ? "all" : "active";   // #175
   $("#setTabMode").onchange = ev => setTabMode(ev.target.value);
   $("#setAuditionTab").checked = !!SETTINGS().ui.auditionTab;   // P4-40d
-  $("#setAuditionTab").onchange = ev => { SETTINGS().ui.auditionTab = ev.target.checked; saveSettings(); };
+  $("#setAuditionTab").onchange = ev => setAuditionTab(ev.target.checked);   // #240: one flip for button, checkbox, menu and settings
   setupMaster();   // P3-16
   $("#tempoDetectBtn").onclick = () => DSShell.menu({id: "detect_tempo"});   // owner 2026-10-14: the same as Track > Detect Tempo
   setupInspector();   // P3-14a
@@ -7147,6 +7238,9 @@ function setupGlobal() {
   }
   $("#clickBtn").classList.toggle("on", !!st.click.enabled);
   $("#clickBtn").onclick = () => toggleClick();
+  $("#auditionTabBtn").classList.toggle("on", !!st.ui.auditionTab);   // #240
+  $("#auditionTabBtn").setAttribute("aria-pressed", st.ui.auditionTab ? "true" : "false");
+  $("#auditionTabBtn").onclick = () => toggleAuditionTab();
   $("#followBtn").onclick = () => { const m = ["smooth", "page", "off"]; setFollow(m[(m.indexOf(S.followMode) + 1) % 3]); setMsg(`follow playhead: ${S.followMode}`); };
   $("#snapChk").onchange = ev => setSnap(ev.target.checked);
   $("#raKeep").onclick = () => { if (pendingRA) { const l = pendingRA; pendingRA = null; runAnalysis(l, true); } };

@@ -194,6 +194,7 @@ fn row_args(row: &api::CommandSpec, s: &Session) -> Value {
             ("t0", _) => json!(0.2),
             ("t1", _) => json!(0.3),
             ("on", _) => json!(true),
+            ("compensate", _) => json!(true),
             ("events", drumspike_app::api::Ty::Objs) => json!([{"t": 0.25, "v": 0.8}]),
             ("ops", _) => json!([{"op": "add", "t": 0.3, "v": 0.7}]),
             ("markers", _) => json!([{"t": 1.0}]),

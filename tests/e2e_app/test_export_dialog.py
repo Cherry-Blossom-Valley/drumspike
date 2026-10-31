@@ -31,6 +31,14 @@ def exports(folder):
     return sorted(p.name for p in d.iterdir() if p.is_file()) if d.exists() else []
 
 
+def visible(folder):
+    """The files of a chosen export folder without dot files: the app's short-lived write probe
+    (`.drumspike-write-test…tmp`, check_dest) can sit there for a moment while a destination check
+    runs (the #170 gate), and the dialog's un-awaited exInfo replace-count refresh after an export
+    runs one: a listing at that moment caught it under load (the #220 gate, full suite)."""
+    return sorted(p.name for p in folder.iterdir() if not p.name.startswith("."))
+
+
 def modal_visible(app):
     return app.evaluate("() => !document.querySelector('#exportModal').classList.contains('hidden')")
 
@@ -152,7 +160,7 @@ def test_choose_writes_into_the_chosen_folder_and_reset_goes_back_to_exports(app
     assert app.evaluate("() => window.__dialogOpts.directory") is True       # the native folder picker
     run_and_close(app)
     assert exports(folder) == []                                              # the default folder is untouched
-    assert sorted(p.name for p in out.iterdir()) == ["Kick In_spike.mid", "Kick In_spike.wav", "Snare Top_spike.mid", "Snare Top_spike.wav"]
+    assert visible(out) == ["Kick In_spike.mid", "Kick In_spike.wav", "Snare Top_spike.mid", "Snare Top_spike.wav"]
     expect(app.locator("#stMsg")).to_contain_text(f"to {out}")
     # the choice is kept in the project: a new dialog starts with it, and the saved document has it
     menu(app, "export")

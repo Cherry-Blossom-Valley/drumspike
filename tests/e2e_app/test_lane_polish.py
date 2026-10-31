@@ -33,10 +33,23 @@ def test_tab_jumps_out_of_the_window_draw_no_coarse_envelope(app, make_project):
     assert app.evaluate("() => GLQ.held") >= 1
 
 
+FAULT_JUMPS = """async () => { const real = ensureSamples, gates = [];   // the fault shows only while the window fetch is pending
+  window.ensureSamples = (n, s, e) => new Promise(res => gates.push(() => real(n, s, e).then(res)));
+  GLQ.noHold = true;
+  const m0 = GLQ.eng.stats.modes.slice();
+  for (let i = 0; i < 3; i++) { gotoEvent(1); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); }
+  await new Promise(r => setTimeout(r, 400));
+  const modes = GLQ.eng.stats.modes.map((x, k) => x - m0[k]);
+  window.ensureSamples = real; gates.forEach(g => g());          // the answers come after the read: they cannot mask the fault
+  return modes; }"""
+
+
 def test_planted_fault_without_the_hold_the_envelope_blocks_show(app, make_project):
     tab_setup(app, make_project)
-    app.evaluate("() => { GLQ.noHold = true; }")
-    modes = app.evaluate(JUMPS)
+    # #220 gate run 3: on the loaded host the sample-window answer beat the draw pass, every draw
+    # was exact ([0, 2, 0]) and the planted fault never showed. Hold the answers back (the GATED
+    # idiom) so the draw pass runs with the fetch pending: without the hold, the envelope draws.
+    modes = app.evaluate(FAULT_JUMPS)
     assert modes[0] > 0, modes                                    # the old behaviour: a coarse envelope draw per jump
 
 

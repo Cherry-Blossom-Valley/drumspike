@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Drum Spike</title>
-<link rel="stylesheet" href="/style.css?v=45">
+<link rel="stylesheet" href="/style.css?v=46">
 <link rel="stylesheet" href="/shell.css?v=4">
 </head>
 <body>
@@ -36,6 +36,7 @@
   <button id="followBtn" class="btn icon tgl" data-mode="smooth" title="Transport &gt; Follow Playhead (F turns it on and off). A click cycles: smooth (the timeline glides, the playhead stays at 25 %), page (a new page at the edge), off.">⇢</button>
   <div class="sep"></div>
   <button id="clickBtn" class="btn icon" title="Transport &gt; Metronome Click (C): a beep on every hit of the audible tracks (pitch per role in Drum Spike &gt; Settings)">🎵</button>
+  <button id="auditionTabBtn" class="btn icon tgl" aria-pressed="false" title="Transport &gt; Audition on Tab (U turns it on and off): Tab plays the hit it steps to (Settings &gt; Audition on Tab)"><svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true"><path d="M4.6 5.4C4.6 2.6 6.9 1.1 9.3 1.6c2.4.5 3.8 2.4 3.3 4.8-.3 1.4-1.4 2.3-2.4 3.3-.8.8-1.3 1.6-1.3 2.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M7.2 5.2c.1-1 1-1.6 1.9-1.2.9.4 1.2 1.4.8 2.2-.3.6-.8.8-1.2 1.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
   <div class="transport">
     <button id="playBtn" class="btn icon" title="Transport &gt; Play/Stop (Space)">▶</button>
     <button id="stopBtn" class="btn icon" title="Transport &gt; Stop and Return: stop, the playhead goes back to where playback started (Shift+Return: Go to Playback Start)">■</button>
@@ -56,7 +57,7 @@
       </div>
     </div>
   </div>
-  <button id="feedbackBtn" class="btn icon" title="Send Feedback (#164): report a bug, an improvement or anything else to the Cherry Blossom Valley feedback gateway. The preview shows exactly what is sent; counts only, never a path.">?</button>
+  <button id="feedbackBtn" class="btn" title="Send Feedback (#164): report a bug, an improvement or anything else to the Cherry Blossom Valley feedback gateway. The preview shows exactly what is sent; counts only, never a path.">Feedback</button>
 </header>
 
 <div id="infoLine" class="infoLine" role="group" aria-label="Info line">
@@ -375,6 +376,7 @@
         <div class="insRow"><span class="insLab">State</span><span class="insVal" id="insState"></span><button id="insRelink" class="btn mini tOffline hidden" title="Pick the audio file of this track again">Relink…</button></div>
         <div class="insRow"><label class="insLab" for="insRoleSel">Role</label><span class="insVal"><select id="insRoleSel" aria-label="Track role" title="The role of this track: kick, snare, tom, hat, cymbal or other. A change re-analyzes the track (the hits are picked again); Undo brings the role, the note and the hits back."></select></span></div>
         <div class="insRow hidden" id="insRoleSrcRow"><span class="phint insRoleHint" id="insRoleSrc"></span></div>
+        <div class="insRow" id="insRoleMatchRow"><label class="insLab" for="insRoleMatch">Name pattern</label><span class="insVal"><input type="text" id="insRoleMatch" maxlength="80" aria-label="Name pattern the role was guessed from" title="The words of the track name the role was guessed from (read-only for a role you or the audio set; editable otherwise). Undo brings the old pattern back."></span></div>
         <div class="insRow hidden" id="insNoteOfferRow"><span class="insLab">Note</span><span class="insVal"><span class="phint" id="insNoteOffer"></span> <button id="insNoteOfferBtn" class="btn mini" title="Set the MIDI note to the new role's default">Set note</button></span></div>
       </div>
     </section>
