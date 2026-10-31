@@ -95,8 +95,10 @@
         .catch(async e => { throw new Error(`${e.message}: ${JSON.stringify(await rep())}`); });
       need(r.reason === "ready", `the splash ended by ${r.reason}, not by the page: ${JSON.stringify(r)}`);
       need(r.main_visible_now === true, "the main window is not visible after the splash closed");
-      need(typeof r.painted_ms === "number", `the splash page reported no first paint: ${JSON.stringify(r)}`);
-      need(r.closed_after_paint_ms >= r.min_ms, `the splash showed ${r.closed_after_paint_ms} ms from its first paint (min ${r.min_ms})`);
+      // #441: the splash waits for the first painted frame; a page that never paints closes the splash
+      // from the open instead (the paint-skip fallback, allowed by the gate) - only the shown time differs
+      const paintSkipped = typeof r.painted_ms !== "number";
+      if (!paintSkipped) need(r.closed_after_paint_ms >= r.min_ms, `the splash showed ${r.closed_after_paint_ms} ms from its first paint (min ${r.min_ms})`);
       need(r.splash_closed_ms >= r.min_ms && r.splash_closed_ms <= r.max_ms, `the splash closed after ${r.splash_closed_ms} ms (limits ${r.min_ms} to ${r.max_ms})`);
       need(r.main_shown_ms >= r.ready_ms, `the main window was shown at ${r.main_shown_ms} ms, before the ready call at ${r.ready_ms} ms`);
       const texts = r.steps.map(x => x.text);
@@ -754,6 +756,177 @@
       await msgIs(/^import cancelled$/);
       report.metrics.menu_tempo_map = { accepted_bpm: m.bpm, imported_bpm: imp.bpm };
       return report.metrics.menu_tempo_map;
+    });
+
+    // #221: the items that no earlier step triggers, each through the real menu dispatch (the payload id,
+    // the state, the settings and the project content are checked, and everything is put back afterwards)
+    await step("menu_view_transport_rest", async () => {
+      const done = [];
+      const sid = S.sid, name = S.order[0];
+      const stored = () => T.invoke("tempo_map_get", { sid });
+      // View > Tab Moves To (radio): the setting follows, then back
+      const tabWas = SETTINGS().ui.tabMode === "all" ? "all" : "active";
+      await click("tab_active");
+      await until(() => SETTINGS().ui.tabMode === "active", "Tab Moves To > Active Hits Only", 10000);
+      await click("tab_all");
+      await until(() => SETTINGS().ui.tabMode === "all", "Tab Moves To > All Found Hits", 10000);
+      setTabMode(tabWas);
+      await until(() => SETTINGS().ui.tabMode === tabWas, "Tab Moves To back", 10000);
+      done.push("tab_active", "tab_all");
+      // the check items without a toolbar control: the mark and the state follow, then back
+      const flip = async (id, get, what) => {
+        const was = get();
+        await click(id);
+        await until(() => get() === !was, `${what} after the menu item`, 10000);
+        await click(id);
+        await until(() => get() === was, `${what} back`, 10000);
+        done.push(id);
+      };
+      await flip("ruler_markers", () => tmShown("markers"), "the Markers Ruler");
+      await flip("velocity_lane", () => VL.on, "the Velocity Lane");
+      await flip("other_mics", () => MX.on, "Other Mics Under Hit");
+      await flip("overview", () => S.overviewOn, "Show Overview");
+      await flip("suspend_follow", () => !!SETTINGS().ui.suspendFollowOnEdit, "Suspend Follow when Editing");
+      await flip("stop_return_mode", () => !!SETTINGS().ui.stopReturnToStart, "Stop Returns to Start");
+      // #240: Transport > Audition on Tab (the saved ui.auditionTab, the toolbar button and the menu check flip together)
+      await flip("audition_tab", () => !!SETTINGS().ui.auditionTab, "Audition on Tab");
+      // Main Counter: Bars|Beats and Timecode (the radio items of #149), then the counter as it was
+      const counterWas = SETTINGS().ui.counter;
+      await click("counter_barsbeats");
+      await until(() => SETTINGS().ui.counter === "barsbeats", "Main Counter > Bars|Beats", 10000);
+      await click("counter_timecode");
+      await until(() => SETTINGS().ui.counter === "timecode", "Main Counter > Timecode (30 fps)", 10000);
+      await click(`counter_${counterWas}`);
+      await until(() => SETTINGS().ui.counter === counterWas, "the Main Counter as it was", 10000);
+      done.push("counter_barsbeats", "counter_timecode", `counter_${counterWas}`);
+      // View > Zoom Toggle: the view goes to the 5 ms window, then back
+      S.playhead = 1.5; setView(0, 2);
+      await click("zoom_toggle");
+      await until(() => S.zoomBack && Math.abs(S.view.t1 - S.view.t0 - 0.005) < 1e-9, "Zoom Toggle in", 10000);
+      await click("zoom_toggle");
+      await until(() => !S.zoomBack && Math.abs(S.view.t1 - S.view.t0 - 2) < 1e-9, "Zoom Toggle back", 10000);
+      done.push("zoom_toggle");
+      // View > Zoom Presets: Organize opens the dialog (no own presets yet), Add Current saves the span
+      // of the view and the menu lists the own preset; the list is put back at the end
+      await click("zoom_organize");
+      await until(() => visible("#presetModal") && /No own presets yet/.test($q("#presetHint").textContent), "the Organize dialog", 5000);
+      $q("#presetAccept").click();
+      await until(() => !visible("#presetModal"), "the Organize dialog to close", 5000);
+      done.push("zoom_organize");
+      const ownWas = S.zoomOwn;
+      setView(0, 1);
+      await click("zoom_add");
+      await until(() => visible("#presetModal") && $q("#presetName"), "the Add Current dialog", 5000);
+      $q("#presetName").value = "Self Test Span";
+      $q("#presetAccept").click();
+      await until(() => !visible("#presetModal") && S.zoomOwn.length === ownWas.length + 1, "the own preset saved", 5000);
+      // the menu update goes through the async shell_sync; the report lists the Zoom Presets submenu ids
+      await until(async () => ((await T.invoke("selftest_menu_report")).zoom_own || []).some(id => id === "zoom_own:0"), "the menu lists the own preset", 5000);
+      done.push("zoom_add");
+      // Edit > Set Marker at Selection (the playhead; the service stores the list), then the jumps
+      const mkWas = MK.list.length;
+      S.sel = null; S.playhead = 1.25;
+      await click("markers_set");
+      await until(() => MK.pending === 0 && MK.list.length === mkWas + 1 && MK.list.some(m => Math.abs(m.t - 1.25) < 1e-9), "the marker at the playhead", 15000);
+      S.playhead = 0.5;
+      await click("marker_next");
+      await until(() => Math.abs(S.playhead - 1.25) < 1e-9, "Next Marker", 10000);
+      S.playhead = 3;
+      await click("marker_prev");
+      await until(() => Math.abs(S.playhead - 1.25) < 1e-9, "Previous Marker", 10000);
+      done.push("markers_set", "marker_next", "marker_prev");
+      mkCommit(MK.list.slice(0, mkWas), "markers put back");
+      await until(() => MK.pending === 0 && MK.list.length === mkWas, "the marker list put back", 15000);
+      // Track > Set Bar 1 at Playhead and at Audio Start: the map commits, Undo brings it back.
+      // The fresh project's map has bar 1 at the audio start already (the default bar1_s is 0):
+      // the playhead set goes first, or the audio-start set is a no change and pushes no step
+      // (gate run 1 timed out on "bar 1 at 0.000 s: no change" with an empty undo stack).
+      const bar1Was = (await stored()).map.bar1_s;
+      S.sel = null; S.playhead = 0.8;
+      await click("set_bar1");
+      await until(async () => Math.abs((await stored()).map.bar1_s - 0.8) < 1e-9, "Set Bar 1 at Playhead", 15000);
+      // an undo while the commit chain still stores (tmUndoWaits) is refused, and the step is pushed
+      // after the service answers: wait for the pushed step on the undo stack (the marker put-back and
+      // the tempo commit run on different queues, so the op is found by payload, not by stack position),
+      // then retry the undo until the map is back - a click before the push would pop an older step
+      const tempoOp = bar1 => S.undo.find(o => o.type === "tempo" && o.after && Math.abs((o.after.bar1_s || 0) - bar1) < 1e-9);
+      // #221: a timed-out bar 1 wait must say why: the last steps of the stacks, the queue state and the status line
+      const stackDump = () => `undo=[${S.undo.slice(-3).map(o => `${o.type}/${o.what || ""}${o.after ? ` bar1_s=${o.after.bar1_s}` : ""}`).join(" | ")}] redo=${S.redo.length} TM.pending=${TM.pending} msg=${JSON.stringify($q("#stMsg").textContent)}`;
+      const undoUntil = (want, what, pend = () => false) => {
+        let sent = 0;   // a retry only after 250 ms: the click needs a tick to take the step off the stack
+        return until(async () => {
+          if (!pend() && Date.now() - sent > 250 && !(await want())) { sent = Date.now(); await click("undo"); }
+          return await want();
+        }, what, 15000).catch(e => { throw new Error(`${e.message} [${stackDump()}]`); });
+      };
+      await until(() => tempoOp(0.8), "the bar 1 step on the undo stack", 15000).catch(e => { throw new Error(`${e.message} [${stackDump()}]`); });
+      await click("set_bar1_audio");
+      await until(async () => Math.abs((await stored()).map.bar1_s) < 1e-9, "Set Bar 1 at Audio Start", 15000);
+      await until(() => tempoOp(0), "the bar 1 step on the undo stack", 15000).catch(e => { throw new Error(`${e.message} [${stackDump()}]`); });
+      // the undo pops last in, first out: the audio-start set goes back to the playhead set, the
+      // playhead set back to bar1Was - each undoUntil pops its own step and its pend stops the
+      // clicks once that step is off the stack, so the two waits run in this order
+      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - 0.8) < 1e-9, "Undo of Set Bar 1 at Audio Start", () => TM.pending > 0 || !tempoOp(0));
+      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1", () => TM.pending > 0 || !tempoOp(0.8));
+      done.push("set_bar1", "set_bar1_audio");
+      // Edit > Undo History: the sheet lists the steps of the tempo map, Done closes it
+      await click("undo_history");
+      await until(() => visible("#undoHistModal") && $q("#undoHistList").children.length > 0, "the Undo History sheet", 5000);
+      $q("#undoHistDone").click();
+      await until(() => !visible("#undoHistModal"), "the Undo History sheet to close", 5000);
+      done.push("undo_history");
+      // File > Export Again with nothing exported yet (the bridge answer is stubbed: the Copy Song
+      // exports of the earlier steps must not be rewritten): the message, no dialog, no files
+      const realLast = B.exportLastGet;
+      B.exportLastGet = async () => ({ export_last: null });
+      try { await click("export_again"); await msgIs(/nothing exported yet/); }
+      finally { B.exportLastGet = realLast; }
+      done.push("export_again");
+      // Hits > Next and Previous Doubtful Hit (the queue of a fresh analysis is empty: the message says so)
+      await click("review_next");
+      await until(() => /doubtful|review queue/.test($q("#stMsg").textContent), "Next Doubtful Hit", 10000);
+      await click("review_prev");
+      await until(() => /doubtful|review queue/.test($q("#stMsg").textContent), "Previous Doubtful Hit", 10000);
+      done.push("review_next", "review_prev");
+      // Hits > Audition Hit on the first hit of the selected track (the master gain is 0), then stop
+      S.selTrack = name;
+      await until(() => (S.events[name] || []).length > 0, "the hits for the audition", 15000);
+      S.sel = { track: name, index: 0 };
+      await click("audition");
+      await until(() => AU.on === true, "Audition Hit", 15000);
+      auStop();
+      await until(() => AU.on === false, "the audition to stop", 15000);
+      done.push("audition");
+      // Hits > Remove Example without a selection: the message asks for one
+      S.sel = null; lnSetSel(null); lnSetMark(null);
+      await click("learn_forget_this");
+      await msgIs(/Remove Example: select a hit, a range or a mark first/);
+      done.push("learn_forget_this");
+      // Track > Select Next and Previous Track
+      S.selTrack = name;
+      await click("next_track");
+      await until(() => S.selTrack === S.order[1], "Select Next Track", 10000);
+      await click("prev_track");
+      await until(() => S.selTrack === name, "Select Previous Track", 10000);
+      done.push("next_track", "prev_track");
+      // Track > Remove Track: the confirm, the track gone, Undo brings it back with its hits
+      S.selTrack = name;
+      await until(() => SH.pending === 0, "the event writes to settle", 15000);
+      await click("tracks_remove");
+      await answer("remove", "the Remove Track confirm");
+      await until(() => !S.order.includes(name), "Remove Track", 15000);
+      // trRemove reloads the page before it pushes the step: wait for the trkdel op on the undo stack
+      // (by payload - the SH and the page queues can reorder), then undo; a refusal retries while the
+      // op is still on the stack - a click before the push would pop an older step
+      const trkdelOp = () => S.undo.find(o => o.type === "trkdel" && o.sid === S.sid && o.name === name);
+      await until(() => !S.order.includes(name) && trkdelOp(), "the removal step on the undo stack", 15000);
+      await undoUntil(() => S.order.includes(name) && (S.events[name] || []).length > 0, "Undo brings the track back", () => SH.pending > 0 || !trkdelOp());
+      done.push("tracks_remove");
+      S.zoomOwn = ownWas; saveZoomOwn();   // the menu does not list the own preset any more
+      await until(async () => !((await T.invoke("selftest_menu_report")).zoom_own || []).some(id => id.startsWith("zoom_own:")), "the own preset out of the menu", 10000);
+      S.selTrack = null;
+      report.metrics.menu_rest = { items: done.length, list: done };
+      return report.metrics.menu_rest;
     });
 
     await step("menu_save_as", async () => {
