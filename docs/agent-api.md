@@ -250,8 +250,9 @@ event (FF 06) per review marker at its time through the tempo map, the note as t
 (counted from 1 in time order). The per-track files keep only the map's own `Bar 1` marker.
 
 #232: `export_compensate_set {sid, compensate}` keeps the Export dialog's "Compensate" checkbox in the
-document field `export_compensate` (absent is the default, true); `export_last_get` and
-`export_existing` answer it as `export_compensate`. An `export_all` without a per-call `compensate`
+document field `export_compensate` (absent is the default, true); `export_last_get` answers the
+effective value as `export_compensate`, `export_existing` only a kept choice (`null` before one, so the
+dialog keeps its own default: on when a track has a sampler calibration). An `export_all` without a per-call `compensate`
 uses the kept value; an explicit `compensate` argument still wins.
 
 #232: the four settings that the #120 inventory named as gaps are numbers the agent and the app both
