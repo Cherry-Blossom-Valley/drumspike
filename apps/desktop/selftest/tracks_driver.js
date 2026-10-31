@@ -107,6 +107,16 @@
       $q("#exportAllBtn").click();   // P4-30: the arrow opens the Export dialog (everything chosen), Export runs it
       await until(() => !$q("#exportModal").classList.contains("hidden"), "the Export dialog", 15000);
       $q("#exGo").click();
+      // #151: a project without a tempo map asks "No tempo set" before the first export;
+      // answer it the way a user would (Export anyway), then the export runs
+      await until(() => !$q("#confirmModal").classList.contains("hidden") || /exported \d+ MIDI and \d+ spike files/.test($q("#stMsg").textContent), "the tempo notice or the export", 15000);
+      if (!$q("#confirmModal").classList.contains("hidden")) {
+        const t = $("#confirmTitle").textContent;
+        need(t === "No tempo set", `unexpected confirm "${t}" before the export`);
+        const anyway = $q("#confirmActions button[data-act='anyway']");
+        need(!!anyway, "the tempo notice has no Export anyway button");
+        anyway.click();
+      }
       await until(() => /exported \d+ MIDI and \d+ spike files/.test($q("#stMsg").textContent), "Export", 120000);
       report.metrics.export_ms = r2(now() - t);
       const ex = await T.invoke("export_existing", { sid: S.sid });
