@@ -72,6 +72,7 @@ function makeEnv() {
     setMsgBg() {},
     errText: (e) => (e && e.message) || String(e),
     isManual: () => false,
+    isKept: () => false,   // #242: persist.js eventsBody reads it (app.js defines it)
     requestFrame() {},
     reloadFollowers(...a) { calls.followers.push(a); return Promise.resolve(); },
     followersOf: (t) => [t],
