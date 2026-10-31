@@ -93,7 +93,7 @@ fn prepare_merges_two_mics_of_one_drum_and_drops_bad_late_and_isolated_times() {
 fn two_mics_of_one_drum_give_the_detection_of_one() {
     let mut one = Vec::new();
     for i in 0..128 {
-        let t = 0.5 + i as f64 * 0.5;
+        let t = 0.5 + f64::from(i) * 0.5;
         one.push(if i % 2 == 0 { kick(t) } else { Hit::new(t, Role::Snare) });
     }
     let mut two = one.clone();
@@ -365,7 +365,7 @@ fn session_e_shifted_by_each_sixteenth_keeps_bar_1_on_the_backbeat() {
     // stays after 0 s) give the same tempo and bar 1 moved by the same time.
     let s16 = 60.0 / 118.0 / 4.0;
     for k in 0..4 {
-        let shift = 4.0 * 4.0 * s16 + k as f64 * s16;
+        let shift = 4.0 * 4.0 * s16 + f64::from(k) * s16;
         let d = rr_detect(false, shift);
         assert!((d.map.bpm - 118.0).abs() <= 0.05, "shift {k}/16: {} BPM", d.map.bpm);
         assert!(
@@ -396,7 +396,9 @@ fn the_simple_ratio_test_knows_the_guarded_ratios_and_their_tolerance() {
 
 #[test]
 fn grid_share_reads_on_grid_hits_and_rejects_off_grid_ones() {
-    let on: Vec<Hit> = (0..16).map(|k| Hit::new(10.0 + k as f64 * 0.5, Role::Kick)).collect();
+    let on: Vec<Hit> = (0..16)
+        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5, Role::Kick))
+        .collect();
     assert!((grid_share(&on, 10.0, 20.0, 0.5) - 1.0).abs() < 1e-9);
     // The same hits against a 3/4 grid: 0.5/0.375 is 4/3 beats; every third hit still lands
     // on it by arithmetic, but the share stays far under the own grid's 1.0.
@@ -493,7 +495,7 @@ fn the_refit_of_a_typed_start_tempo_puts_bar_1_on_a_beat_the_hits_support() {
 fn the_refit_refuses_a_bad_tempo_and_too_few_hits() {
     assert!(refit_bar1(&session_d(), 0.0, 2.555).is_err());
     assert!(refit_bar1(&session_d(), -92.0, 2.555).is_err());
-    let few: Vec<Hit> = (0..4).map(|k| Hit::new(k as f64 * 0.5, Role::Kick)).collect();
+    let few: Vec<Hit> = (0..4).map(|k| Hit::new(f64::from(k) * 0.5, Role::Kick)).collect();
     let e = refit_bar1(&few, 92.0, 0.0).unwrap_err();
     assert!(e.contains("at least 8"), "{e}");
 }
@@ -503,9 +505,9 @@ fn the_refit_refuses_a_bad_tempo_and_too_few_hits() {
 #[test]
 fn the_guard_drops_a_simple_ratio_piece_that_the_old_grid_explains_as_well() {
     let mut hits: Vec<Hit> = (0..20)
-        .map(|k| Hit::new(10.0 + k as f64 * 0.5 + 0.01, Role::Kick))
+        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5 + 0.01, Role::Kick))
         .collect();
-    hits.extend((0..8).map(|k| Hit::new(10.5 + k as f64, Role::Snare)));
+    hits.extend((0..8).map(|k| Hit::new(10.5 + f64::from(k), Role::Snare)));
     let pcs = vec![
         Piece {
             start: 0.0,
@@ -524,8 +526,10 @@ fn the_guard_drops_a_simple_ratio_piece_that_the_old_grid_explains_as_well() {
 /// A real step at a simple ratio: its hits are on its own grid and off the old one.
 #[test]
 fn the_guard_keeps_a_simple_ratio_piece_that_its_own_grid_explains() {
-    let mut hits: Vec<Hit> = (0..20).map(|k| Hit::new(0.0 + k as f64 * 0.5, Role::Kick)).collect();
-    hits.extend((0..24).map(|k| Hit::new(10.0 + k as f64 * 0.375, Role::Snare)));
+    let mut hits: Vec<Hit> = (0..20)
+        .map(|k| Hit::new(0.0 + f64::from(k) * 0.5, Role::Kick))
+        .collect();
+    hits.extend((0..24).map(|k| Hit::new(10.0 + f64::from(k) * 0.375, Role::Snare)));
     let pcs = vec![
         Piece {
             start: 0.0,
@@ -544,7 +548,9 @@ fn the_guard_keeps_a_simple_ratio_piece_that_its_own_grid_explains() {
 /// a piece with fewer kick and snare hits than the comb needs is left to the fit's rules.
 #[test]
 fn the_guard_leaves_other_ratios_and_very_thin_pieces_alone() {
-    let hits: Vec<Hit> = (0..20).map(|k| Hit::new(10.0 + k as f64 * 0.5, Role::Kick)).collect();
+    let hits: Vec<Hit> = (0..20)
+        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5, Role::Kick))
+        .collect();
     // 126 over 100: no simple ratio, the piece stays even though the old grid fits better.
     let pcs = vec![
         Piece {
@@ -558,7 +564,9 @@ fn the_guard_leaves_other_ratios_and_very_thin_pieces_alone() {
     ];
     assert_eq!(guard_simple_ratio_pieces(&hits, &pcs).len(), 2);
     // A 4/3 piece with 3 hits in its window: below the guard's evidence floor.
-    let thin: Vec<Hit> = (0..3).map(|k| Hit::new(10.0 + k as f64 * 0.5, Role::Kick)).collect();
+    let thin: Vec<Hit> = (0..3)
+        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5, Role::Kick))
+        .collect();
     let pcs = vec![
         Piece {
             start: 0.0,

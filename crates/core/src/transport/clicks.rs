@@ -53,7 +53,7 @@ pub fn role_pitch(role: &str) -> f32 {
 /// The click envelope at `t` seconds for `volume` (the two exponential ramps of `app.js`,
 /// then the floor until the stop).
 pub fn envelope(t: f64, volume: f32) -> f64 {
-    let v = volume as f64;
+    let v = f64::from(volume);
     if v <= 0.0 || !(0.0..STOP_S).contains(&t) {
         return 0.0;
     }
@@ -70,8 +70,8 @@ pub fn envelope(t: f64, volume: f32) -> f64 {
 /// band-limited square at `pitch_hz` in cosine phase times [`envelope`]. Empty when the
 /// volume is 0, the pitch is not positive or the pitch is at or above Nyquist.
 pub fn click_template(pitch_hz: f32, volume: f32, sample_rate: u32) -> Vec<f32> {
-    let sr = sample_rate as f64;
-    let f = pitch_hz as f64;
+    let sr = f64::from(sample_rate);
+    let f = f64::from(pitch_hz);
     if volume <= 0.0 || f <= 0.0 || f >= sr / 2.0 {
         return Vec::new();
     }
@@ -79,17 +79,17 @@ pub fn click_template(pitch_hz: f32, volume: f32, sample_rate: u32) -> Vec<f32> 
     // square = 4/pi * sum over odd k of (-1)^((k-1)/2) cos(2 pi k f t) / k, k f < sr / 2
     let harmonics: Vec<(f64, f64)> = (0..)
         .map(|i| 2 * i + 1)
-        .take_while(|k| (*k as f64) * f < sr / 2.0)
+        .take_while(|k| f64::from(*k) * f < sr / 2.0)
         .map(|k| {
             let sign = if (k / 2) % 2 == 0 { 1.0 } else { -1.0 };
-            (k as f64, sign * 4.0 / (PI * k as f64))
+            (f64::from(k), sign * 4.0 / (PI * f64::from(k)))
         })
         .collect();
     let osc = |t: f64| -> f64 { harmonics.iter().map(|(k, a)| a * (2.0 * PI * k * f * t).cos()).sum() };
     // normalise the peak of the continuous wave to 1 (WebAudio normalises its periodic
     // waves): the maximum over one period on a fine grid
     let peak = (0..4096)
-        .map(|i| osc(i as f64 / (4096.0 * f)).abs())
+        .map(|i| osc(f64::from(i) / (4096.0 * f)).abs())
         .fold(0.0f64, f64::max);
     let norm = if peak > 0.0 { 1.0 / peak } else { 0.0 };
     (0..n)
@@ -106,8 +106,8 @@ pub fn map_hit(hit: u64, track_rate: u32, device_rate: u32) -> u64 {
     if track_rate == device_rate {
         return hit;
     }
-    let num = hit as u128 * device_rate as u128;
-    let den = track_rate as u128;
+    let num = u128::from(hit) * u128::from(device_rate);
+    let den = u128::from(track_rate);
     let q = num / den;
     let r = num % den;
     let up = match (2 * r).cmp(&den) {
@@ -115,7 +115,7 @@ pub fn map_hit(hit: u64, track_rate: u32, device_rate: u32) -> u64 {
         std::cmp::Ordering::Less => false,
         std::cmp::Ordering::Equal => q % 2 == 1,
     };
-    (q + up as u128) as u64
+    (q + u128::from(up)) as u64
 }
 
 /// The clicks of one track at the device rate: sorted onset frames and the template.
@@ -203,7 +203,7 @@ mod tests {
             (envelope(0.001, 0.22) - (0.0001f64 * 0.22).sqrt()).abs() < 1e-9,
             "geometric midpoint"
         );
-        assert!((envelope(0.0299999, 0.22) - 0.0001).abs() < 1e-6);
+        assert!((envelope(0.029_999_9, 0.22) - 0.0001).abs() < 1e-6);
         assert_eq!(envelope(0.035, 0.22), 0.0001);
         assert_eq!(envelope(0.040, 0.22), 0.0);
         assert_eq!(envelope(-0.001, 0.22), 0.0);
@@ -215,7 +215,7 @@ mod tests {
         for sr in [44_100u32, 48_000, 96_000] {
             for (_, f) in ROLE_DEFAULT_CLICK {
                 let t = click_template(f, 0.22, sr);
-                assert_eq!(t.len(), (0.04 * sr as f64).round() as usize);
+                assert_eq!(t.len(), (0.04 * f64::from(sr)).round() as usize);
                 assert!(t[0] > 0.0, "the first sample is the top of the square");
                 // the floor 0.0001 times the square at its plateau centre (1 / Gibbs peak)
                 assert!(t[0] > 0.00005 && t[0] <= 0.0001, "starts at the floor: {}", t[0]);

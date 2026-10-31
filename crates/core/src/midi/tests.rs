@@ -195,7 +195,7 @@ fn markers_of(b: &[u8]) -> Vec<(u64, String)> {
     let smf = midly::Smf::parse(b).unwrap();
     let (mut tick, mut out) = (0u64, Vec::new());
     for e in &smf.tracks[0] {
-        tick += e.delta.as_int() as u64;
+        tick += u64::from(e.delta.as_int());
         if let TrackEventKind::Meta(MetaMessage::Marker(t)) = e.kind {
             out.push((tick, String::from_utf8_lossy(t).into_owned()));
         }
@@ -300,15 +300,15 @@ fn map3() -> TempoMap {
 fn worst_error_ticks(bytes: &[u8], hits: &[f64]) -> (f64, usize) {
     let smf = Smf::parse(bytes).unwrap();
     let ppq = match smf.header.timing {
-        Timing::Metrical(p) => p.as_int() as i128,
+        Timing::Metrical(p) => i128::from(p.as_int()),
         _ => panic!("not metrical"),
     };
     let mut tempos: Vec<(i128, i128)> = vec![]; // (tick, us)
     let mut at = 0i128;
     for e in &smf.tracks[0] {
-        at += e.delta.as_int() as i128;
+        at += i128::from(e.delta.as_int());
         if let TrackEventKind::Meta(MetaMessage::Tempo(us)) = e.kind {
-            tempos.push((at, us.as_int() as i128));
+            tempos.push((at, i128::from(us.as_int())));
         }
     }
     if tempos.first().is_none_or(|t| t.0 != 0) {
@@ -317,7 +317,7 @@ fn worst_error_ticks(bytes: &[u8], hits: &[f64]) -> (f64, usize) {
     let mut ons = vec![];
     let mut at = 0i128;
     for e in &smf.tracks[1] {
-        at += e.delta.as_int() as i128;
+        at += i128::from(e.delta.as_int());
         if let TrackEventKind::Midi {
             message: MidiMessage::NoteOn { vel, .. },
             ..
@@ -393,7 +393,7 @@ fn the_default_map_writes_the_bytes_of_the_old_export() {
 #[test]
 fn a_single_tempo_export_round_trips_through_its_own_events_and_holds_the_user_tempo() {
     let ppq = 24_000;
-    let hits: Vec<f64> = (0..600).map(|i| 2.025 + i as f64 * (60.0 / 118.0)).collect(); // 2 s to 6 min
+    let hits: Vec<f64> = (0..600).map(|i| 2.025 + f64::from(i) * (60.0 / 118.0)).collect(); // 2 s to 6 min
     let evs: Vec<MidiEvent> = hits.iter().map(|&t| ev(t, 90)).collect();
     let b = midi_bytes_map(&evs, 36, ppq, &TempoMap::default(), 118.0).unwrap();
     let (worst, n) = worst_error_ticks(&b, &hits);
@@ -430,8 +430,8 @@ fn a_single_tempo_export_round_trips_through_its_own_events_and_holds_the_user_t
 /// mismatch of the worst tempo `bpm`, in ticks of the written tempo.
 fn integer_tempo_round_trip_ticks(bpm: f64, ppq: u16, t_max: f64, boundaries: usize) -> f64 {
     let exact = 6e7 / bpm;
-    let us = tempo_us(bpm).expect("in range") as f64;
-    (boundaries as f64 + 1.0) * 0.5 + t_max * (us - exact).abs() / exact * (ppq as f64 * 1e6) / us
+    let us = f64::from(tempo_us(bpm).expect("in range"));
+    (boundaries as f64 + 1.0) * 0.5 + t_max * (us - exact).abs() / exact * (f64::from(ppq) * 1e6) / us
 }
 
 /// The worst error of the notes against a DAW that ignores the file's tempo events and applies
@@ -445,7 +445,7 @@ fn worst_daw_error_s(bytes: &[u8], bpm: f64, hits: &[f64]) -> f64 {
     let mut ons = vec![];
     let mut at = 0u64;
     for e in &smf.tracks[1] {
-        at += e.delta.as_int() as u64;
+        at += u64::from(e.delta.as_int());
         if let TrackEventKind::Midi {
             message: MidiMessage::NoteOn { vel, .. },
             ..
@@ -457,14 +457,14 @@ fn worst_daw_error_s(bytes: &[u8], bpm: f64, hits: &[f64]) -> f64 {
     }
     assert_eq!(ons.len(), hits.len(), "one note per hit");
     ons.iter().zip(hits).fold(0f64, |worst, (&tick, &hit)| {
-        worst.max((tick as f64 * 60.0 / (bpm * ppq as f64) - hit).abs())
+        worst.max((tick as f64 * 60.0 / (bpm * f64::from(ppq)) - hit).abs())
     })
 }
 
 #[test]
 fn three_tempo_steps_and_a_meter_change_round_trip_with_every_note_within_half_a_tick() {
     let map = map3();
-    let hits: Vec<f64> = (0..400).map(|i| 0.013 + i as f64 * 0.1111).collect(); // 0.013 s to 44.4 s
+    let hits: Vec<f64> = (0..400).map(|i| 0.013 + f64::from(i) * 0.1111).collect(); // 0.013 s to 44.4 s
     let evs: Vec<MidiEvent> = hits.iter().map(|&t| ev(t, 90)).collect();
     let b = midi_bytes_map(&evs, 38, DEFAULT_PPQ, &map, DEFAULT_TEMPO).unwrap();
     let (worst, n) = worst_error_ticks(&b, &hits);
@@ -576,7 +576,7 @@ fn a_hit_before_bar_1_and_a_hit_before_0_s_keep_their_place() {
         let mut at = 0u64;
         let mut v = vec![];
         for e in &smf.tracks[1] {
-            at += e.delta.as_int() as u64;
+            at += u64::from(e.delta.as_int());
             if let TrackEventKind::Midi {
                 message: MidiMessage::NoteOn { vel, .. },
                 ..
@@ -671,7 +671,7 @@ fn read_back(b: &[u8]) -> (Vec<(String, NoteOns)>, Vec<u32>) {
     for (i, tr) in smf.tracks.iter().enumerate() {
         let (mut tick, mut name, mut ons) = (0u64, String::new(), Vec::new());
         for e in tr {
-            tick += e.delta.as_int() as u64;
+            tick += u64::from(e.delta.as_int());
             match e.kind {
                 TrackEventKind::Meta(MetaMessage::Tempo(us)) if i == 0 => tempos.push(us.as_int()),
                 TrackEventKind::Meta(MetaMessage::TrackName(n)) => name = String::from_utf8_lossy(n).into_owned(),

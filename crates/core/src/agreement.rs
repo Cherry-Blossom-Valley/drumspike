@@ -72,7 +72,7 @@ pub struct Agreement {
 /// The element-wise median of the hit windows: the track template. Hits whose window
 /// would leave the signal are left out; with no full window the template is empty.
 fn template(x: &[f32], sr: u32, hits: &[f64]) -> Vec<f64> {
-    let srf = sr as f64;
+    let srf = f64::from(sr);
     let n = x.len() as i64;
     let pre = (AGREEMENT_TPL_PRE_S * srf).round() as i64;
     let post = (AGREEMENT_TPL_POST_S * srf).round() as i64;
@@ -84,7 +84,7 @@ fn template(x: &[f32], sr: u32, hits: &[f64]) -> Vec<f64> {
             cuts.push(
                 x[(s - pre) as usize..(s + post) as usize]
                     .iter()
-                    .map(|&v| v as f64)
+                    .map(|&v| f64::from(v))
                     .collect(),
             );
         }
@@ -121,7 +121,7 @@ fn env_first_motion(x: &[f32], from: i64, to: i64) -> Option<i64> {
     if mx < AGREEMENT_SILENCE {
         return None;
     }
-    let thr = (mx as f64 * 10f64.powf(-AGREEMENT_FM_PEAK_DB / 20.0)) as f32;
+    let thr = (f64::from(mx) * 10f64.powf(-AGREEMENT_FM_PEAK_DB / 20.0)) as f32;
     seg.iter()
         .position(|v| v.abs() >= thr)
         .map(|i| f as i64 + i as i64)
@@ -159,7 +159,7 @@ fn aic_change_point(x: &[f32], from: i64, to: i64) -> Option<i64> {
     let mut s1 = vec![0.0f64; (t - f + 1) as usize];
     let mut s2 = vec![0.0f64; (t - f + 1) as usize];
     for i in f..t {
-        let v = x[i as usize] as f64;
+        let v = f64::from(x[i as usize]);
         s1[(i - f + 1) as usize] = s1[(i - f) as usize] + v;
         s2[(i - f + 1) as usize] = s2[(i - f) as usize] + v * v;
     }
@@ -212,7 +212,7 @@ fn xcorr_score(x: &[f32], from: i64, tpl: &[f64]) -> Option<f64> {
     let mut eseg = 0.0;
     let mut etpl = 0.0;
     for i in 0..tpl.len() {
-        let s = seg[i] as f64;
+        let s = f64::from(seg[i]);
         num += s * tpl[i];
         eseg += s * s;
         etpl += tpl[i] * tpl[i];
@@ -244,7 +244,7 @@ fn xcorr_lag(x: &[f32], base: i64, span: i64, tpl: &[f64]) -> Option<(i64, f64, 
 /// refined times, in the order given) against the signal `x` at `sr`. The hit times and
 /// the hit set are never touched.
 pub fn agreement_track(x: &[f32], sr: u32, hits: &[f64]) -> Vec<Agreement> {
-    let srf = sr as f64;
+    let srf = f64::from(sr);
     let tpl = template(x, sr, hits);
     let lo = (AGREEMENT_LO_S * srf).round() as i64;
     let hi = (AGREEMENT_HI_S * srf).round() as i64;

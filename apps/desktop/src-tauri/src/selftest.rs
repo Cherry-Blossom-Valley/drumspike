@@ -229,7 +229,7 @@ pub fn top_categories(process: &Value, n: usize) -> Vec<Value> {
     rows.sort_by(|a, b| b.1.total_cmp(&a.1));
     rows.into_iter()
         .take(n)
-        .map(|(k, b)| json!([k, (b / 1048576.0 * 10.0).round() / 10.0]))
+        .map(|(k, b)| json!([k, (b / 1_048_576.0 * 10.0).round() / 10.0]))
         .collect()
 }
 
@@ -274,7 +274,7 @@ pub fn memory() -> Value {
     let before = HELPERS_BEFORE.get().cloned().unwrap_or_default();
     let ours: Vec<Helper> = helpers_now().into_iter().filter(|h| !before.contains(&h.pid)).collect();
     let (fp, cats) = footprint_report(&ours.iter().map(|h| h.pid).collect::<Vec<_>>());
-    let mb = |b: u64| (b as f64 / 1048576.0 * 10.0).round() / 10.0;
+    let mb = |b: u64| (b as f64 / 1_048_576.0 * 10.0).round() / 10.0;
     let procs: Vec<Value> = ours
         .iter()
         .map(|h| {

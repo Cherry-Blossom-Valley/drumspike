@@ -204,20 +204,20 @@ impl Plan {
         debug_assert_eq!(frame.len(), self.ch);
         const SCALE: f32 = 1.0 / 32768.0;
         if self.ch == 1 {
-            return frame[0] as f32 * SCALE;
+            return f32::from(frame[0]) * SCALE;
         }
         match self.mode {
             MixMode::Ffmpeg => {
                 let mut f = [0.0f32; 8];
                 for (o, s) in f.iter_mut().zip(frame) {
-                    *o = *s as f32 * SCALE;
+                    *o = f32::from(*s) * SCALE;
                 }
                 self.ffmpeg_fold(&f[..frame.len()])
             }
             MixMode::Average => {
-                let sum: i64 = frame.iter().map(|&s| s as i64 * self.q as i64).sum();
+                let sum: i64 = frame.iter().map(|&s| i64::from(s) * i64::from(self.q)).sum();
                 // ffmpeg stores the Q15 result in an int16 (wraps like C on overflow)
-                (((sum + 16384) >> 15) as i16) as f32 * SCALE
+                f32::from(((sum + 16384) >> 15) as i16) * SCALE
             }
         }
     }
@@ -227,7 +227,7 @@ impl Plan {
     #[inline]
     pub fn fold_s32(&self, frame: &[i32]) -> f32 {
         debug_assert_eq!(frame.len(), self.ch);
-        const SCALE: f32 = 1.0 / 2147483648.0;
+        const SCALE: f32 = 1.0 / 2_147_483_648.0;
         if self.ch == 1 {
             return frame[0] as f32 * SCALE;
         }
@@ -333,20 +333,20 @@ mod tests {
     #[test]
     fn average_24_bit_chains_in_float_and_rounds_ties_to_even() {
         let p3 = Plan::new(MixMode::Average, 3, 0).unwrap();
-        assert_eq!(p3.g, 0.333333f64 as f32);
+        assert_eq!(p3.g, 0.333_333_f64 as f32);
         let s: [i32; 3] = [1 << 8, 2 << 8, 4 << 8]; // 24-bit values 1, 2, 4 shifted
         let g = p3.g;
         let v = (s[2] as f32).mul_add(g, (s[1] as f32).mul_add(g, (s[0] as f32).mul_add(g, 0.0)));
-        assert_eq!(p3.fold_s32(&s), (v.round_ties_even() as i32) as f32 / 2147483648.0);
+        assert_eq!(p3.fold_s32(&s), (v.round_ties_even() as i32) as f32 / 2_147_483_648.0);
         // the exact mean is 2.333 LSB, ffmpeg lands on 2 LSB: half an LSB away at most
-        assert!((p3.fold_s32(&s) - 7.0 / 3.0 / 8388608.0).abs() < 0.5 / 8388608.0);
+        assert!((p3.fold_s32(&s) - 7.0 / 3.0 / 8_388_608.0).abs() < 0.5 / 8_388_608.0);
     }
 
     #[test]
     fn pan_gain_prints_like_the_engine() {
         assert_eq!(pan_gain(2), 0.5);
-        assert_eq!(pan_gain(3), 0.333333);
-        assert_eq!(pan_gain(6), 0.166667);
-        assert_eq!(pan_gain(7), 0.142857);
+        assert_eq!(pan_gain(3), 0.333_333);
+        assert_eq!(pan_gain(6), 0.166_667);
+        assert_eq!(pan_gain(7), 0.142_857);
     }
 }

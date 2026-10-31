@@ -163,7 +163,7 @@ fn uint_at<const N: usize>(b: &[u8], i: usize) -> io::Result<u64> {
     // exactly N bytes and the loop below cannot overflow or miss an element.
     let mut v = 0u64;
     for (k, byte) in s.iter().enumerate() {
-        v |= (*byte as u64) << (8 * k);
+        v |= u64::from(*byte) << (8 * k);
     }
     Ok(v)
 }

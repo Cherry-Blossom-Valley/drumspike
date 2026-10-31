@@ -24,7 +24,9 @@ fn burst(x: &mut [f32], at: usize, amp: f32, freq: f64) {
         }
         let t = i as f64 / f64::from(SR);
         phase += 2.0 * std::f64::consts::PI * freq * (1.0 + (-t / 0.02).exp()) / f64::from(SR);
-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         let noise = ((s >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0;
         let env = (t / 0.0005).min(1.0) * (-t / 0.08).exp();
         x[k] += amp * (phase.sin() * env + 0.5 * noise * (-t / 0.002).exp()) as f32;
@@ -35,7 +37,7 @@ fn burst(x: &mut [f32], at: usize, amp: f32, freq: f64) {
 fn own(d: usize) -> Vec<(usize, f32)> {
     (0..12)
         .map(|i| {
-            let t = 0.5 + 0.3 * d as f64 + 0.9 * i as f64;
+            let t = 0.5 + 0.3 * d as f64 + 0.9 * f64::from(i);
             ((t * f64::from(SR)) as usize, if i % 3 == 2 { 0.1 } else { 0.5 })
         })
         .collect()
@@ -72,7 +74,9 @@ fn toms_with(leak: f32) -> Toms {
     }
     let mut s = 7u64;
     for v in x.iter_mut().flatten() {
-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         *v += 1e-4 * (((s >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0) as f32;
     }
     for v in owns.iter_mut().chain(bleeds.iter_mut()) {
@@ -519,7 +523,7 @@ fn toms_and_snare() -> TomsAndSnare {
     let (mut x, owns, bleeds) = toms();
     let mut snare = vec![0.0f32; x[0].len()];
     let at: Vec<usize> = (0..12)
-        .map(|i| ((0.65 + 0.9 * i as f64) * f64::from(SR)) as usize)
+        .map(|i| ((0.65 + 0.9 * f64::from(i)) * f64::from(SR)) as usize)
         .collect();
     let mut listed: Vec<Vec<usize>> = (0..3)
         .map(|m| owns[m].iter().chain(&bleeds[m]).copied().collect())
@@ -545,7 +549,9 @@ fn toms_and_snare() -> TomsAndSnare {
     }
     let mut s = 5u64;
     for v in &mut snare {
-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         *v += 1e-4 * (((s >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0) as f32;
     }
     (x, snare, listed, from_snare, at)
@@ -999,7 +1005,9 @@ fn the_pair_rule_is_off_when_rule_cd_is_off_for_fewer_than_two_played_toms() {
     }
     let mut seed = 11u64;
     for v in &mut quiet {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         *v += 3e-3 * (((seed >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0) as f32;
     }
     let dir = project(
