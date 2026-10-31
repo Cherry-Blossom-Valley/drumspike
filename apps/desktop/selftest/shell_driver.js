@@ -835,7 +835,10 @@
       done.push("markers_set", "marker_next", "marker_prev");
       mkCommit(MK.list.slice(0, mkWas), "markers put back");
       await until(() => MK.pending === 0 && MK.list.length === mkWas, "the marker list put back", 15000);
-      // Track > Set Bar 1 at Playhead and at Audio Start: the map commits, Undo brings it back
+      // Track > Set Bar 1 at Playhead and at Audio Start: the map commits, Undo brings it back.
+      // The fresh project's map has bar 1 at the audio start already (the default bar1_s is 0):
+      // the playhead set goes first, or the audio-start set is a no change and pushes no step
+      // (gate run 1 timed out on "bar 1 at 0.000 s: no change" with an empty undo stack).
       const bar1Was = (await stored()).map.bar1_s;
       S.sel = null; S.playhead = 0.8;
       await click("set_bar1");
@@ -855,11 +858,14 @@
         }, what, 15000).catch(e => { throw new Error(`${e.message} [${stackDump()}]`); });
       };
       await until(() => tempoOp(0.8), "the bar 1 step on the undo stack", 15000).catch(e => { throw new Error(`${e.message} [${stackDump()}]`); });
-      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1", () => TM.pending > 0 || !tempoOp(0.8));
       await click("set_bar1_audio");
       await until(async () => Math.abs((await stored()).map.bar1_s) < 1e-9, "Set Bar 1 at Audio Start", 15000);
       await until(() => tempoOp(0), "the bar 1 step on the undo stack", 15000).catch(e => { throw new Error(`${e.message} [${stackDump()}]`); });
-      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1 at Audio Start", () => TM.pending > 0 || !tempoOp(0));
+      // the undo pops last in, first out: the audio-start set goes back to the playhead set, the
+      // playhead set back to bar1Was - each undoUntil pops its own step and its pend stops the
+      // clicks once that step is off the stack, so the two waits run in this order
+      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - 0.8) < 1e-9, "Undo of Set Bar 1 at Audio Start", () => TM.pending > 0 || !tempoOp(0));
+      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1", () => TM.pending > 0 || !tempoOp(0.8));
       done.push("set_bar1", "set_bar1_audio");
       // Edit > Undo History: the sheet lists the steps of the tempo map, Done closes it
       await click("undo_history");
