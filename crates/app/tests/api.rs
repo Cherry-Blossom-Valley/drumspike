@@ -347,6 +347,7 @@ fn result_schemas_name_keys_that_real_answers_have() {
         ("export_all", svc.export_all(&sid, None).unwrap()),
         ("export_dest_set", svc.export_dest_set(&sid, None).unwrap()),
         ("export_markers_set", svc.export_markers_set(&sid, false).unwrap()),
+        ("export_compensate_set", svc.export_compensate_set(&sid, false).unwrap()),
         ("export_last_get", svc.export_last_get(&sid).unwrap()),
         (
             "export_last_set",
@@ -655,6 +656,7 @@ fn every_mcp_answer_validates_against_its_output_schema_and_every_tool_and_batch
         ("project_clean_check", sd(json!({}))),
         ("export_dest_set", sd(json!({}))),
         ("export_markers_set", sd(json!({"on": true}))),
+        ("export_compensate_set", sd(json!({"compensate": false}))),
         ("export_last_get", sd(json!({}))),
         ("export_last_set", sd(json!({"formats": ["midi"]}))),
         ("project_consolidate", sd(json!({}))),

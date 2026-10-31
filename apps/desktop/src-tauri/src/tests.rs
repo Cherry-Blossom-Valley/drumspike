@@ -99,7 +99,7 @@ fn every_shell_command_is_in_the_handler_lists() {
         }
         n += 1;
     }
-    assert_eq!(n, 19); // #433: export_drag_take; P4-31: export_last_get and export_last_set; P4-30: export_dest_set, export_drag_prepare and reveal_path; P4-40g: export_markers_set; #206: selftest_ns_menu, selftest_menu_key, selftest_menu_log and selftest_menu_probe
+    assert_eq!(n, 20); // #232: export_compensate_set; #433: export_drag_take; P4-31: export_last_get and export_last_set; P4-30: export_dest_set, export_drag_prepare and reveal_path; P4-40g: export_markers_set; #206: selftest_ns_menu, selftest_menu_key, selftest_menu_log and selftest_menu_probe
 }
 
 /// P3-15c: the runtime has 4 workers named `ds-async`, and `blocking` runs the body on another

@@ -296,6 +296,7 @@ function shellMethods(invoke, T) {
     exportExisting: (sid, o) => invoke("export_existing", { sid, ...exportArgs(o) }),
     exportDestSet: (sid, dest) => invoke("export_dest_set", { sid, dest: dest || null }),   // the folder the project keeps; null: back to Exports/
     exportMarkersSet: (sid, on) => invoke("export_markers_set", { sid, on }),   // P4-40g: the remembered "Markers in MIDI" checkbox
+    exportCompensateSet: (sid, compensate) => invoke("export_compensate_set", { sid, compensate }),   // #232: the kept "Compensate" checkbox
     exportLastGet: sid => invoke("export_last_get", { sid }),   // P4-31: {export_last} = the export shape of the project, or none
     exportLastSet: (sid, last) => invoke("export_last_set", { sid, ...last }),   // P4-31: the dialog's choices at once, and what an export ran with
     /* pre-renders the files of the drag tiles into Exports/.drag (hidden; never the chosen folder): {dir, midi: [paths], spikes: [paths], errors}; {clear: true} removes them */

@@ -26,8 +26,8 @@ Documented in the track `params` map (`crates/app/src/jobs.rs` `parse_params`). 
 | 2 | Class thresholds | 5 numbers, 0.01 to 0.85 (kick, snare, tom, hat, cymbal; default 0.22, 0.24, 0.32, 0.22, 0.30) | `params.thresholds` (wins over `sensitivity`) | none |
 | 3 | Minimum gap | 1 to 500 ms, default 20 (UI step 1 ms) | `params.min_gap_ms` | none |
 | 4 | Refine to attack | bool, default on | `params.refine` | none |
-| 5 | Refine window low | ms, default -2 (the search window around the coarse time) | `params.refine_lo_ms` | UI gap: no Inspector control (agent sets it, the app shows it only via the detector record) |
-| 6 | Refine window high | ms, default 12 | `params.refine_hi_ms` | UI gap: same as refine_lo_ms |
+| 5 | Refine window low | ms, default -2 (the search window around the coarse time) | `params.refine_lo_ms` | none (#232: the Inspector's Detection section has the field) |
+| 6 | Refine window high | ms, default 12 | `params.refine_hi_ms` | none (#232: the Inspector's Detection section has the field) |
 | 7 | Hitpoint shift | -100000 to 100000 samples, step 1, default 0 (positive = later) | `params.shift_samples`, also `track_shift_set {shift_samples}` (shifts the stored hits at once) | none |
 | 8 | Velocity floor | dBFS, default -40 (velocity 20 at or below) | `params.vel_lo_db` | none |
 | 9 | Velocity ceiling | dBFS, default -6 (velocity 127 at or above) | `params.vel_hi_db` | none |
@@ -47,7 +47,7 @@ variables, not document settings, so they are out of scope here.
 |---|---|---|---|---|
 | 13 | Role | enum: kick, snare, tom, hat, cymbal, sample, other (plus the audio-based suggestion) | `track_set_role {role}` | none |
 | 14 | MIDI note | 0 to 127 (General MIDI: kick 36, snare 38, hat 42, toms 41 to 50, crash 49, ride 51) | `track_set_note {note}`, also `track_set_role {note}` | none |
-| 15 | Role match | string, the name pattern the role was guessed from | `track_set_role {role_match}` | UI gap: the Inspector shows the role but no role_match field (an agent can set it) |
+| 15 | Role match | string, the name pattern the role was guessed from | `track_set_role {role_match}` | none (#232: the Inspector's Track section has the field) |
 | 16 | Follower | the name of another track, or own detection (empty) | `track_set_follow {source}` (`source: null` is own detection) | none |
 | 17 | Track volume | -120 to +12 dB, step 0.1 (fader -inf to +12) | `track_set_mix {volume_db}` | none |
 | 18 | Track pan | -1 to 1, step 0.01 | `track_set_mix {pan}` | none |
@@ -56,11 +56,11 @@ variables, not document settings, so they are out of scope here.
 | 21 | Layer level | -60 to +12 dB, step 0.5, default 0 | `track_layer_set {level_db}` | none |
 | 22 | Layer polarity | normal or inverted | `track_layer_set {polarity}` | none |
 | 23 | Layer curve | db, linear or fixed | `track_layer_set {curve}` | none |
-| 24 | Layer range | 0 to 96 dB, step 1, default 24 | `track_layer_set {curve}` object | UI gap and agent gap: the range lives inside the `curve` value; `track_layer_set` takes no plain `range` number (it is reachable as part of `curve`) |
+| 24 | Layer range | 0 to 96 dB, step 1, default 24 | `track_layer_set {curve}` object, also `track_layer_set {range}` (#232: the plain number) | none |
 | 25 | Layer align | bool (align the one-shot to the hits) | `track_layer_set {align}` | none |
 | 26 | Layer onset | samples of the one-shot (overrides the measured onset; `null` resets) | `track_layer_set {onset}` | none |
 | 27 | Sampler calibration | file path plus the measured record (`offset_samples`, `sr`, `polarity`, `match`, `measured_at`) | `track_sampler_set {path, one_shot}`; an empty `path` removes it | none |
-| 28 | Sampler compensate | bool, default true (notes at the aligned attack minus the offset) | per-export argument `compensate` on `export_midi`, `export_all`, `export_layer` | UI gap: the Export dialog checkbox has no agent command that keeps it in the document (unlike `export_markers_set`; it is a per-call argument only) |
+| 28 | Sampler compensate | bool, default true (notes at the aligned attack minus the offset) | per-export argument `compensate` on `export_midi`, `export_all`, `export_layer`; also `export_compensate_set {compensate}` (#232: the kept document field `export_compensate`, what the Export dialog checkbox and an `export_all` without a per-call `compensate` use) | none |
 | 29 | Learn filter on | bool (hits unlike the examples go grey and leave MIDI, spikes and the click) | `track_learn_set {learn}` (`on` inside the `learn` object) | none |
 | 30 | Learn threshold | similarity score 0 to 1 (the red line of the Learn histogram) | `track_learn_set {learn}` (`threshold` inside the object) | none |
 | 31 | Learn examples | the mark list (`kind`, `t0`, `t1` or `hit`) | `track_learn_mark`, `track_learn_remove`, `track_learn_forget_at`, `track_learn_flip`, `track_learn_forget` | none |
@@ -146,14 +146,15 @@ scheme: `k in`, `k out`, `s top`, `s bot`, `t1`, `t2`, `t3`, `hh`, `ride`, `oh l
 
 ## Counts
 
-- Table A: 12 rows, 2 UI gaps (refine_lo_ms, refine_hi_ms have no app control).
-- Table B: 19 rows, 3 gaps (role_match UI, layer range inside `curve`, sampler compensate as a
-  per-call argument without a kept document field).
+- Table A: 12 rows, no gaps (#232 closed the two UI gaps of the refine window).
+- Table B: 19 rows, no gaps (#232 closed the role_match UI gap, the layer range as a plain number
+  and the kept Compensate checkbox).
 - Table C: 9 rows, 1 gap (no name patterns in the exported tracks).
 - Table D: 16 view-state keys (agent-writable but unused headless) + 5 audio settings
   (Window-only, out of scope for headless).
 - Walk: 6 steps, 3 gaps (Pro Tools session input, name-pattern selection, export per role).
 
 Total: 61 counted rows plus the walk. Every setting of tables A to C is reachable headless on
-the agent surface today except the 4 named gaps; the headless job of step 2 needs no
-Window-only command.
+the agent surface today, and every gap of the four named in the walk is closed except the walk's
+(the headless job of step 2 needs no Window-only command). #232 closed the four UI/agent gaps of
+tables A and B (refine window, role match, layer range, compensate).

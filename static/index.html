@@ -368,6 +368,7 @@
         <div class="insRow"><span class="insLab">State</span><span class="insVal" id="insState"></span><button id="insRelink" class="btn mini tOffline hidden" title="Pick the audio file of this track again">Relink…</button></div>
         <div class="insRow"><label class="insLab" for="insRoleSel">Role</label><span class="insVal"><select id="insRoleSel" aria-label="Track role" title="The role of this track: kick, snare, tom, hat, cymbal or other. A change re-analyzes the track (the hits are picked again); Undo brings the role, the note and the hits back."></select></span></div>
         <div class="insRow hidden" id="insRoleSrcRow"><span class="phint insRoleHint" id="insRoleSrc"></span></div>
+        <div class="insRow" id="insRoleMatchRow"><label class="insLab" for="insRoleMatch">Name pattern</label><span class="insVal"><input type="text" id="insRoleMatch" maxlength="80" aria-label="Name pattern the role was guessed from" title="The words of the track name the role was guessed from (read-only for a role you or the audio set; editable otherwise). Undo brings the old pattern back."></span></div>
         <div class="insRow hidden" id="insNoteOfferRow"><span class="insLab">Note</span><span class="insVal"><span class="phint" id="insNoteOffer"></span> <button id="insNoteOfferBtn" class="btn mini" title="Set the MIDI note to the new role's default">Set note</button></span></div>
       </div>
     </section>
