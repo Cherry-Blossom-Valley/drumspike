@@ -3589,8 +3589,10 @@ function buildParamsPanel(div, name, p) {
   div.querySelector(".pRefine").onchange = ev => p.refine = ev.target.checked;
   // #232: the refine window is stored at once (track_params_set, one undo step), so an agent and
   // the app see the same number (tracks_get), and Undo brings the old window back
-  div.querySelector(".pRefineLo").onchange = ev => paramsFieldCommit(name, "refine_lo_ms", Math.round(+ev.target.value || 0));
-  div.querySelector(".pRefineHi").onchange = ev => paramsFieldCommit(name, "refine_hi_ms", Math.round(+ev.target.value || 0));
+  // the fields exist only while Refine to attack is on (a missing field threw here and cut the panel's setup short)
+  const refLo = div.querySelector(".pRefineLo"), refHi = div.querySelector(".pRefineHi");
+  if (refLo) refLo.onchange = ev => paramsFieldCommit(name, "refine_lo_ms", Math.round(+ev.target.value || 0));
+  if (refHi) refHi.onchange = ev => paramsFieldCommit(name, "refine_hi_ms", Math.round(+ev.target.value || 0));
   const flam = div.querySelector(".pFlam");   // P4-13 stage B: snare tracks only; the track param flam_split (absent = on)
   if (flam) { flam.title = "Applies on the next re-analyze"; flam.onchange = ev => p.flam_split = ev.target.checked; }
   div.querySelector(".pShift").onchange = ev => {   // P4-9: the service shifts the hits (track_shift_set); the page shows the result
