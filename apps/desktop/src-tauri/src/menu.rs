@@ -172,7 +172,13 @@ pub const INFO_LINE: Item = check("info_line", "Show Info Line");
 pub const OVERVIEW: Item = check("overview", "Show Overview");
 pub const COUNTER_SECONDS: Item = check("counter_seconds", "Seconds");
 pub const COUNTER_SAMPLES: Item = check("counter_samples", "Samples");
+/// #149: Bars|Beats (bar|beat|ticks, 960 ticks per beat) and Timecode (a fixed 30 fps, not the session rate).
+pub const COUNTER_BARSBEATS: Item = check("counter_barsbeats", "Bars|Beats");
+pub const COUNTER_TIMECODE: Item = check("counter_timecode", "Timecode (30 fps)");
 pub const COUNTER_EXCHANGE: Item = item("counter_exchange", "Exchange Counters", false);
+/// #175: View > Tab Moves To (radio items; which hits the Tab keys step to, a user setting of the page).
+pub const TAB_ACTIVE: Item = check("tab_active", "Active Hits Only");
+pub const TAB_ALL: Item = check("tab_all", "All Found Hits");
 pub const RULER_TEMPO: Item = check("ruler_tempo", "Tempo Ruler");
 pub const RULER_METER: Item = check("ruler_meter", "Meter Ruler");
 pub const RULER_BEATS: Item = check("ruler_beats", "Bars|Beats Ruler");
@@ -243,7 +249,7 @@ pub const TRACKS_REMOVE: Item = item("tracks_remove", "Remove Track", true);
 pub const SHORTCUTS: Item = item("shortcuts", "Keyboard Shortcuts", false);
 
 /// Every custom item (not the Open Recent and Window entries, not the system items Cut, Copy and so on).
-pub const SPEC: [Item; 105] = [
+pub const SPEC: [Item; 109] = [
     ABOUT,
     SETTINGS,
     QUIT,
@@ -299,7 +305,11 @@ pub const SPEC: [Item; 105] = [
     OVERVIEW,
     COUNTER_SECONDS,
     COUNTER_SAMPLES,
+    COUNTER_BARSBEATS,
+    COUNTER_TIMECODE,
     COUNTER_EXCHANGE,
+    TAB_ACTIVE,
+    TAB_ALL,
     RULER_TEMPO,
     RULER_METER,
     RULER_BEATS,
@@ -359,7 +369,15 @@ pub const FOLLOW_MODES: [(&str, &str); 3] = [
 ];
 
 /// The main counter modes of the page and their radio items (check items, exactly one of them on).
-pub const COUNTER_MODES: [(&str, &str); 2] = [("seconds", "counter_seconds"), ("samples", "counter_samples")];
+pub const COUNTER_MODES: [(&str, &str); 4] = [
+    ("seconds", "counter_seconds"),
+    ("samples", "counter_samples"),
+    ("barsbeats", "counter_barsbeats"),
+    ("timecode", "counter_timecode"),
+];
+
+/// The "Tab moves to" modes of the page (#175) and their radio items (check items, exactly one of them on).
+pub const TAB_MODES: [(&str, &str); 2] = [("active", "tab_active"), ("all", "tab_all")];
 
 /// The nudge values of the page (P3-20a) and their radio items (check items, exactly one of them on).
 pub const NUDGE_MODES: [(&str, &str); 5] = [
@@ -433,6 +451,7 @@ pub struct KeyCommand {
 impl KeyCommand {
     /// The menu accelerator of the command in a preset (P3-13c): in `cubase` the first key of the row's list with
     /// Cmd, Control or Option (the other keys are page keys), else the row's `menu_key`; `None` without a menu item.
+    #[must_use]
     pub fn menu_key_in(&self, preset: &str) -> Option<String> {
         self.menu.as_ref()?;
         match (&self.cubase, preset) {
@@ -442,6 +461,7 @@ impl KeyCommand {
     }
 
     /// The keys of the command in a preset: `default` (the menu key, then the page keys) or `cubase`.
+    #[must_use]
     pub fn keys(&self, preset: &str) -> Vec<String> {
         match (&self.cubase, preset) {
             (Some(c), "cubase") => c.clone(),
@@ -451,6 +471,11 @@ impl KeyCommand {
 }
 
 /// The rows of a key table file: the strict JSON between the markers `KEYMAP-BEGIN` and `KEYMAP-END`.
+///
+/// # Errors
+///
+/// When a marker is missing, the text between them is not strict JSON or not a list, or a row has
+/// no `id`, no `title` or no `cubase` key, or a field of the wrong type. The message names the row.
 pub fn parse_keymap(src: &str) -> Result<Vec<KeyCommand>, String> {
     let a = src.find(KEYMAP_BEGIN).ok_or("no KEYMAP-BEGIN marker")? + KEYMAP_BEGIN.len();
     let b = a + src[a..].find(KEYMAP_END).ok_or("no KEYMAP-END marker")?;
@@ -494,6 +519,7 @@ pub fn parse_keymap(src: &str) -> Result<Vec<KeyCommand>, String> {
 /// A key of the table split into its modifiers and its key (`Shift+Cmd+S`: `["Shift", "Cmd"]`, `S`), or `None`
 /// when it is not in the table's notation (unknown key, modifiers out of the order Control, Option, Shift, Cmd,
 /// Shift on a character key).
+#[must_use]
 pub fn parse_key(s: &str) -> Option<(Vec<&str>, &str)> {
     let mut parts: Vec<&str> = s.split('+').collect();
     let key = parts.pop()?;
@@ -513,13 +539,15 @@ pub fn parse_key(s: &str) -> Option<(Vec<&str>, &str)> {
 }
 
 /// The key has Cmd, Control or Option: it can be a menu accelerator (a text field does not need it).
+#[must_use]
 pub fn has_menu_modifier(key: &str) -> bool {
     parse_key(key).is_some_and(|(mods, _)| mods.iter().any(|m| *m != "Shift"))
 }
 
 /// A key of the table in the Tauri accelerator notation: `Shift+Cmd+S` is `CmdOrCtrl+Shift+S`, `Option+Return` is
-/// `Alt+Enter` (modifier order Ctrl, CmdOrCtrl, Alt, Shift, as the menu had them in P3-13a). `None` when the key is
+/// `Alt+Enter` (modifier order Ctrl, `CmdOrCtrl`, Alt, Shift, as the menu had them in P3-13a). `None` when the key is
 /// not in the table's notation.
+#[must_use]
 pub fn tauri_accel(key: &str) -> Option<String> {
     let (mods, k) = parse_key(key)?;
     let mut out: Vec<&str> = [
@@ -550,6 +578,7 @@ pub fn tauri_accel(key: &str) -> Option<String> {
 /// Everything wrong with a key table: an id twice, a menu key without Cmd, Control or Option or without a menu
 /// item, a key not in the notation, a key in two commands (in the default and in the Cubase preset). Empty when the
 /// table is good. `DSKeys.problems` in `static/keymap.js` makes the same checks in the page.
+#[must_use]
 pub fn keymap_problems(rows: &[KeyCommand]) -> Vec<String> {
     let mut out = Vec::new();
     let mut ids = std::collections::HashSet::new();
@@ -576,7 +605,7 @@ pub fn keymap_problems(rows: &[KeyCommand]) -> Vec<String> {
                 }
                 match seen.get(&k) {
                     Some(other) if *other != c.id => {
-                        out.push(format!("{preset}: key {k} is in two commands: {other} and {}", c.id))
+                        out.push(format!("{preset}: key {k} is in two commands: {other} and {}", c.id));
                     }
                     Some(_) => out.push(format!("{preset}: key {k} is twice in {}", c.id)),
                     None => {}
@@ -596,17 +625,20 @@ static KEYMAP: LazyLock<Vec<KeyCommand>> = LazyLock::new(|| {
 });
 
 /// The key table of this build (`static/keymap.js`). Empty when the file does not parse (a test makes sure it does).
+#[must_use]
 pub fn keymap() -> &'static [KeyCommand] {
     &KEYMAP
 }
 
 /// The row of the menu item `id`.
+#[must_use]
 pub fn key_row(id: &str) -> Option<&'static KeyCommand> {
     keymap().iter().find(|c| c.menu.as_deref() == Some(id))
 }
 
 /// The accelerator of the menu item `id` in the Tauri notation: the `menu_key` of its row in the key table.
 /// `build` sets exactly this; there is no other source of menu keys.
+#[must_use]
 pub fn accel_of(id: &str, preset: &str) -> Option<String> {
     key_row(id)
         .and_then(|c| c.menu_key_in(preset))
@@ -617,6 +649,7 @@ pub fn accel_of(id: &str, preset: &str) -> Option<String> {
 pub const PRESETS: [&str; 2] = ["default", "cubase"];
 
 /// `name` when it is a preset, else the default one (a damaged setting never leaves the menu without keys).
+#[must_use]
 pub fn preset_or_default(name: &str) -> &'static str {
     PRESETS.iter().copied().find(|p| *p == name).unwrap_or("default")
 }
@@ -625,6 +658,7 @@ pub fn preset_or_default(name: &str) -> &'static str {
 static PRESET: Mutex<&'static str> = Mutex::new("default");
 
 /// The preset of the accelerators that the live menu has now.
+#[must_use]
 pub fn current_preset() -> &'static str {
     *lock(&PRESET)
 }
@@ -671,7 +705,7 @@ pub type RecentState = MenuState;
 pub static MENU_LOG: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The check states that the page reports (`{snap, follow, click, infoLine, counter, inspector, trackHeight, nudgeValue, suspendFollow}`): one `(item id, checked)` per check item.
@@ -720,6 +754,13 @@ pub fn check_states(state: &Value) -> Vec<(&'static str, bool)> {
             out.push((id, m == mode));
         }
     }
+    if let Some(mode) = state.get("tabMode").and_then(Value::as_str)
+        && TAB_MODES.iter().any(|(m, _)| *m == mode)
+    {
+        for (m, id) in TAB_MODES {
+            out.push((id, m == mode));
+        }
+    }
     if let Some(mode) = state.get("trackHeight").and_then(Value::as_str)
         && HEIGHT_MODES.iter().any(|(m, _)| *m == mode)
     {
@@ -746,6 +787,7 @@ pub fn check_states(state: &Value) -> Vec<(&'static str, bool)> {
 
 /// The Window menu's entries from the service's project list (`project_list` shape `ids`: `{id, name}`, in the
 /// order of opening) and the page's current project.
+#[must_use]
 pub fn window_entries(list: &Value, current: Option<&str>) -> Vec<WindowEntry> {
     list.as_array()
         .map(|rows| {
@@ -828,22 +870,23 @@ fn no_projects<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MenuItem<R>> {
         .build(app)
 }
 
-/// The whole menu bar (reference section 3.2). The check items start as the page starts (snap on, follow
-/// smooth, click on); the page's first sync sets them to its real state.
-pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let mi = |it: &Item| make_item(app, it);
-    let ck = |it: &Item, on: bool| make_check(app, it, on);
-    let recent = SubmenuBuilder::with_id(app, RECENT_ID, "Open Recent")
+/// The Open Recent submenu with its "No Recent Projects" placeholder; `sync_recent` fills it.
+fn recent_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::with_id(app, RECENT_ID, "Open Recent")
         .item(
             &MenuItemBuilder::with_id("recent:none", "No Recent Projects")
                 .enabled(false)
                 .build(app)?,
         )
-        .build()?;
-    let app_menu = SubmenuBuilder::new(app, "Drum Spike")
-        .item(&mi(&ABOUT)?)
+        .build()
+}
+
+/// The Drum Spike menu: About, Settings, the macOS services and window items, Quit.
+fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::new(app, "Drum Spike")
+        .item(&make_item(app, &ABOUT)?)
         .separator()
-        .item(&mi(&SETTINGS)?)
+        .item(&make_item(app, &SETTINGS)?)
         .separator()
         .item(&PredefinedMenuItem::services(app, None)?)
         .separator()
@@ -851,187 +894,261 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&PredefinedMenuItem::hide_others(app, None)?)
         .item(&PredefinedMenuItem::show_all(app, None)?)
         .separator()
-        .item(&mi(&QUIT)?)
-        .build()?;
-    // one item in two menus (File and Track; Add Tracks): muda keeps both native items in step (enabled state)
-    let open_recent = mi(&OPEN_RECENT)?;
-    open_recent.set_enabled(false)?; // P3-19: `sync` enables it when Open Recent has an entry
-    let add_tracks = mi(&ADD_TRACKS)?;
-    let file = SubmenuBuilder::new(app, "File")
-        .item(&mi(&NEW)?)
-        .item(&mi(&OPEN)?)
-        .item(&recent)
-        .item(&open_recent)
+        .item(&make_item(app, &QUIT)?)
+        .build()
+}
+
+/// The File menu: project open/save, Add Tracks, the imports, Export and Export Again. `add_tracks`
+/// is the same item as in the Track menu; `open_recent` arrives disabled (P3-19: `sync` enables it
+/// when Open Recent has an entry).
+fn file_menu<R: Runtime>(
+    app: &AppHandle<R>,
+    recent: &Submenu<R>,
+    open_recent: &MenuItem<R>,
+    add_tracks: &MenuItem<R>,
+) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::new(app, "File")
+        .item(&make_item(app, &NEW)?)
+        .item(&make_item(app, &OPEN)?)
+        .item(recent)
+        .item(open_recent)
         .separator()
-        .item(&mi(&CLOSE)?)
-        .item(&mi(&SAVE)?)
-        .item(&mi(&SAVE_AS)?)
-        .item(&mi(&RENAME)?)
+        .item(&make_item(app, &CLOSE)?)
+        .item(&make_item(app, &SAVE)?)
+        .item(&make_item(app, &SAVE_AS)?)
+        .item(&make_item(app, &RENAME)?)
         .separator()
-        .item(&add_tracks)
-        .item(&mi(&IMPORT_OLD)?)
-        .item(&mi(&IMPORT_TEMPO_MAP)?)
-        .item(&mi(&CONSOLIDATE)?)
+        .item(add_tracks)
+        .item(&make_item(app, &IMPORT_OLD)?)
+        .item(&make_item(app, &IMPORT_TEMPO_MAP)?)
+        .item(&make_item(app, &CONSOLIDATE)?)
         .separator()
-        .item(&mi(&EXPORT)?)
-        .item(&mi(&EXPORT_AGAIN)?)
-        .build()?;
+        .item(&make_item(app, &EXPORT)?)
+        .item(&make_item(app, &EXPORT_AGAIN)?)
+        .build()
+}
+
+/// The Edit menu: undo/redo and history, the macOS clipboard items, the hit edits, the Nudge Value
+/// submenu and Recompute Velocities.
+fn edit_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
     let nudge_value = SubmenuBuilder::with_id(app, "nudge_value", "Nudge Value")
-        .item(&ck(&NUDGE_VAL_1SMP, true)?)
-        .item(&ck(&NUDGE_VAL_10SMP, false)?)
-        .item(&ck(&NUDGE_VAL_100SMP, false)?)
-        .item(&ck(&NUDGE_VAL_1MS, false)?)
-        .item(&ck(&NUDGE_VAL_10MS, false)?)
+        .item(&make_check(app, &NUDGE_VAL_1SMP, true)?)
+        .item(&make_check(app, &NUDGE_VAL_10SMP, false)?)
+        .item(&make_check(app, &NUDGE_VAL_100SMP, false)?)
+        .item(&make_check(app, &NUDGE_VAL_1MS, false)?)
+        .item(&make_check(app, &NUDGE_VAL_10MS, false)?)
         .build()?;
-    let edit = SubmenuBuilder::new(app, "Edit")
-        .item(&mi(&UNDO)?)
-        .item(&mi(&REDO)?)
-        .item(&mi(&UNDO_HISTORY)?)
+    SubmenuBuilder::new(app, "Edit")
+        .item(&make_item(app, &UNDO)?)
+        .item(&make_item(app, &REDO)?)
+        .item(&make_item(app, &UNDO_HISTORY)?)
         .separator()
         .item(&PredefinedMenuItem::cut(app, None)?)
         .item(&PredefinedMenuItem::copy(app, None)?)
         .item(&PredefinedMenuItem::paste(app, None)?)
         .item(&PredefinedMenuItem::select_all(app, None)?)
         .separator()
-        .item(&mi(&DELETE_HIT)?)
-        .item(&mi(&ADD_HIT)?)
-        .item(&mi(&MARKERS_SET)?) // #158 (rank 8)
-        .item(&mi(&NUDGE_EARLIER)?)
-        .item(&mi(&NUDGE_LATER)?)
+        .item(&make_item(app, &DELETE_HIT)?)
+        .item(&make_item(app, &ADD_HIT)?)
+        .item(&make_item(app, &MARKERS_SET)?) // #158 (rank 8)
+        .item(&make_item(app, &NUDGE_EARLIER)?)
+        .item(&make_item(app, &NUDGE_LATER)?)
         .item(&nudge_value)
         .separator()
-        .item(&mi(&RECOMPUTE)?)
-        .build()?;
+        .item(&make_item(app, &RECOMPUTE)?)
+        .build()
+}
+
+/// The View menu: the zoom items with the Waveform Zoom, Zoom Presets and Track Height submenus,
+/// the page check items, the Main Counter and Tab Moves To submenus, the rulers, the grid, the
+/// velocity lane and the other mics, and the macOS fullscreen item.
+fn view_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
     // #169: the own presets follow Organize (sync_zoom_own appends them)
     let presets = SubmenuBuilder::with_id(app, ZOOM_PRESETS_ID, "Zoom Presets")
-        .item(&mi(&ZOOM_FULL)?)
-        .item(&mi(&ZOOM_30S)?)
-        .item(&mi(&ZOOM_5S)?)
-        .item(&mi(&ZOOM_500MS)?)
-        .item(&mi(&ZOOM_50MS)?)
-        .item(&mi(&ZOOM_5MS)?)
+        .item(&make_item(app, &ZOOM_FULL)?)
+        .item(&make_item(app, &ZOOM_30S)?)
+        .item(&make_item(app, &ZOOM_5S)?)
+        .item(&make_item(app, &ZOOM_500MS)?)
+        .item(&make_item(app, &ZOOM_50MS)?)
+        .item(&make_item(app, &ZOOM_5MS)?)
         .separator()
-        .item(&mi(&ZOOM_ADD)?)
-        .item(&mi(&ZOOM_ORGANIZE)?)
+        .item(&make_item(app, &ZOOM_ADD)?)
+        .item(&make_item(app, &ZOOM_ORGANIZE)?)
         .build()?;
     let amp = SubmenuBuilder::with_id(app, "waveform_zoom", "Waveform Zoom")
-        .item(&mi(&AMP_IN)?)
-        .item(&mi(&AMP_OUT)?)
-        .item(&mi(&AMP_RESET)?)
+        .item(&make_item(app, &AMP_IN)?)
+        .item(&make_item(app, &AMP_OUT)?)
+        .item(&make_item(app, &AMP_RESET)?)
         .build()?;
     let height = SubmenuBuilder::with_id(app, "track_height", "Track Height")
-        .item(&mi(&HEIGHT_TALLER)?)
-        .item(&mi(&HEIGHT_SHORTER)?)
+        .item(&make_item(app, &HEIGHT_TALLER)?)
+        .item(&make_item(app, &HEIGHT_SHORTER)?)
         .separator()
-        .item(&ck(&HEIGHT_SMALL, false)?)
-        .item(&ck(&HEIGHT_MEDIUM, true)?)
-        .item(&ck(&HEIGHT_LARGE, false)?)
+        .item(&make_check(app, &HEIGHT_SMALL, false)?)
+        .item(&make_check(app, &HEIGHT_MEDIUM, true)?)
+        .item(&make_check(app, &HEIGHT_LARGE, false)?)
         .build()?;
     let counter = SubmenuBuilder::with_id(app, "main_counter", "Main Counter")
-        .item(&ck(&COUNTER_SECONDS, true)?)
-        .item(&ck(&COUNTER_SAMPLES, false)?)
+        .item(&make_check(app, &COUNTER_SECONDS, true)?)
+        .item(&make_check(app, &COUNTER_SAMPLES, false)?)
+        .item(&make_check(app, &COUNTER_BARSBEATS, false)?) // #149
+        .item(&make_check(app, &COUNTER_TIMECODE, false)?) // #149: a fixed 30 fps, not the session rate
         .separator()
-        .item(&mi(&COUNTER_EXCHANGE)?)
+        .item(&make_item(app, &COUNTER_EXCHANGE)?)
         .build()?;
-    let view = SubmenuBuilder::new(app, "View")
-        .item(&mi(&ZOOM_IN)?)
-        .item(&mi(&ZOOM_OUT)?)
-        .item(&mi(&ZOOM_PROJECT)?)
-        .item(&mi(&ZOOM_TOGGLE)?) // #158 (rank 8)
+    let tab_mode = SubmenuBuilder::with_id(app, "tab_mode", "Tab Moves To") // #175
+        .item(&make_check(app, &TAB_ACTIVE, true)?) // the default: active hits only
+        .item(&make_check(app, &TAB_ALL, false)?)
+        .build()?;
+    SubmenuBuilder::new(app, "View")
+        .item(&make_item(app, &ZOOM_IN)?)
+        .item(&make_item(app, &ZOOM_OUT)?)
+        .item(&make_item(app, &ZOOM_PROJECT)?)
+        .item(&make_item(app, &ZOOM_TOGGLE)?) // #158 (rank 8)
         .item(&amp)
         .item(&presets)
         .item(&height)
         .separator()
-        .item(&ck(&INSPECTOR, true)?)
-        .item(&ck(&INFO_LINE, true)?)
-        .item(&ck(&OVERVIEW, true)?)
+        .item(&make_check(app, &INSPECTOR, true)?)
+        .item(&make_check(app, &INFO_LINE, true)?)
+        .item(&make_check(app, &OVERVIEW, true)?)
         .item(&counter)
+        .item(&tab_mode) // #175: View > Tab Moves To
         .separator()
-        .item(&ck(&RULER_TEMPO, true)?)
-        .item(&ck(&RULER_METER, true)?)
-        .item(&ck(&RULER_BEATS, true)?)
-        .item(&ck(&RULER_MARKERS, true)?)
-        .item(&ck(&GRID, true)?)
-        .item(&ck(&VELOCITY_LANE, false)?)
-        .item(&ck(&OTHER_MICS, false)?)
+        .item(&make_check(app, &RULER_TEMPO, true)?)
+        .item(&make_check(app, &RULER_METER, true)?)
+        .item(&make_check(app, &RULER_BEATS, true)?)
+        .item(&make_check(app, &RULER_MARKERS, true)?)
+        .item(&make_check(app, &GRID, true)?)
+        .item(&make_check(app, &VELOCITY_LANE, false)?)
+        .item(&make_check(app, &OTHER_MICS, false)?)
         .separator()
         .item(&PredefinedMenuItem::fullscreen(app, None)?)
-        .build()?;
+        .build()
+}
+
+/// The Transport menu: play and speed, the go-to items and the markers, the follow items and the
+/// click.
+fn transport_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
     let follow = SubmenuBuilder::with_id(app, "follow", "Follow Playhead")
-        .item(&ck(&FOLLOW_SMOOTH, true)?)
-        .item(&ck(&FOLLOW_PAGE, false)?)
-        .item(&ck(&FOLLOW_OFF, false)?)
+        .item(&make_check(app, &FOLLOW_SMOOTH, true)?)
+        .item(&make_check(app, &FOLLOW_PAGE, false)?)
+        .item(&make_check(app, &FOLLOW_OFF, false)?)
         .build()?;
-    let transport = SubmenuBuilder::new(app, "Transport")
-        .item(&mi(&PLAY_STOP)?)
-        .item(&mi(&HALF_SPEED)?)
-        .item(&mi(&STOP_RETURN)?)
+    SubmenuBuilder::new(app, "Transport")
+        .item(&make_item(app, &PLAY_STOP)?)
+        .item(&make_item(app, &HALF_SPEED)?)
+        .item(&make_item(app, &STOP_RETURN)?)
         .separator()
-        .item(&mi(&GO_START)?)
-        .item(&mi(&GO_END)?)
-        .item(&mi(&GO_PLAY_START)?)
-        .item(&mi(&MARKER_NEXT)?) // #158 (rank 8)
-        .item(&mi(&MARKER_PREV)?)
+        .item(&make_item(app, &GO_START)?)
+        .item(&make_item(app, &GO_END)?)
+        .item(&make_item(app, &GO_PLAY_START)?)
+        .item(&make_item(app, &MARKER_NEXT)?) // #158 (rank 8)
+        .item(&make_item(app, &MARKER_PREV)?)
         .separator()
         .item(&follow)
-        .item(&mi(&FOLLOW_TOGGLE)?)
-        .item(&ck(&SUSPEND_FOLLOW, false)?)
-        .item(&ck(&STOP_RETURN_MODE, false)?)
+        .item(&make_item(app, &FOLLOW_TOGGLE)?)
+        .item(&make_check(app, &SUSPEND_FOLLOW, false)?)
+        .item(&make_check(app, &STOP_RETURN_MODE, false)?)
         .separator()
-        .item(&ck(&CLICK, true)?)
-        .build()?;
-    let hits = SubmenuBuilder::new(app, "Hits")
-        .item(&mi(&NEXT_HIT)?)
-        .item(&mi(&PREV_HIT)?)
-        .item(&mi(&NEXT_HIT_ALL)?)
-        .item(&mi(&PREV_HIT_ALL)?)
-        .item(&mi(&REVIEW_NEXT)?)
-        .item(&mi(&REVIEW_PREV)?)
-        .item(&mi(&AUDITION)?) // #158 (rank 8)
+        .item(&make_check(app, &CLICK, true)?)
+        .build()
+}
+
+/// The Hits menu: the hit navigation, the review and audition, Snap, the analysis and the learn
+/// items.
+fn hits_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::new(app, "Hits")
+        .item(&make_item(app, &NEXT_HIT)?)
+        .item(&make_item(app, &PREV_HIT)?)
+        .item(&make_item(app, &NEXT_HIT_ALL)?)
+        .item(&make_item(app, &PREV_HIT_ALL)?)
+        .item(&make_item(app, &REVIEW_NEXT)?)
+        .item(&make_item(app, &REVIEW_PREV)?)
+        .item(&make_item(app, &AUDITION)?) // #158 (rank 8)
         .separator()
-        .item(&ck(&SNAP, true)?)
+        .item(&make_check(app, &SNAP, true)?)
         .separator()
-        .item(&mi(&ANALYZE_TRACK)?)
-        .item(&mi(&ANALYZE_ALL)?)
+        .item(&make_item(app, &ANALYZE_TRACK)?)
+        .item(&make_item(app, &ANALYZE_ALL)?)
         .separator()
-        .item(&mi(&LEARN_THIS)?)
-        .item(&mi(&LEARN_NOT)?)
-        .item(&mi(&LEARN_FORGET_THIS)?)
-        .item(&ck(&LEARN_FILTER, false)?)
-        .item(&mi(&LEARN_FORGET)?)
-        .build()?;
+        .item(&make_item(app, &LEARN_THIS)?)
+        .item(&make_item(app, &LEARN_NOT)?)
+        .item(&make_item(app, &LEARN_FORGET_THIS)?)
+        .item(&make_check(app, &LEARN_FILTER, false)?)
+        .item(&make_item(app, &LEARN_FORGET)?)
+        .build()
+}
+
+/// The Track menu: Add Tracks (the same item as in the File menu), the track navigation, the mix
+/// items, Follow Hits Of and Own Detection, the tempo items, Export Selected Tracks and Remove
+/// Tracks.
+fn track_menu<R: Runtime>(app: &AppHandle<R>, add_tracks: &MenuItem<R>) -> tauri::Result<Submenu<R>> {
     // P3-18: Follow Hits Of lists the other tracks of the project (sync_follow), Own Detection is the plain item
     let follow_of = SubmenuBuilder::with_id(app, FOLLOW_ID, "Follow Hits Of")
         .item(&no_tracks(app)?)
         .build()?;
-    let track = SubmenuBuilder::new(app, "Track")
-        .item(&add_tracks)
+    SubmenuBuilder::new(app, "Track")
+        .item(add_tracks)
         .separator()
-        .item(&mi(&PREV_TRACK)?) // #158 (rank 8)
-        .item(&mi(&NEXT_TRACK)?)
+        .item(&make_item(app, &PREV_TRACK)?) // #158 (rank 8)
+        .item(&make_item(app, &NEXT_TRACK)?)
         .separator()
-        .item(&mi(&MUTE_TRACK)?)
-        .item(&mi(&SOLO_TRACK)?)
-        .item(&mi(&RESET_MIX)?)
+        .item(&make_item(app, &MUTE_TRACK)?)
+        .item(&make_item(app, &SOLO_TRACK)?)
+        .item(&make_item(app, &RESET_MIX)?)
         .separator()
         .item(&follow_of)
-        .item(&mi(&FOLLOW_OWN)?)
+        .item(&make_item(app, &FOLLOW_OWN)?)
         .separator()
-        .item(&mi(&DETECT_TEMPO)?)
-        .item(&mi(&SET_BAR1)?)
-        .item(&mi(&SET_BAR1_AUDIO)?) // #468
+        .item(&make_item(app, &DETECT_TEMPO)?)
+        .item(&make_item(app, &SET_BAR1)?)
+        .item(&make_item(app, &SET_BAR1_AUDIO)?) // #468
         .separator()
-        .item(&mi(&EXPORT_SELECTED)?)
+        .item(&make_item(app, &EXPORT_SELECTED)?)
         .separator()
-        .item(&mi(&TRACKS_REMOVE)?)
-        .build()?;
-    let window = SubmenuBuilder::with_id(app, WINDOW_ID, "Window")
+        .item(&make_item(app, &TRACKS_REMOVE)?)
+        .build()
+}
+
+/// The Window menu: the project list placeholder (`sync_window`) and the macOS window items.
+fn window_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::with_id(app, WINDOW_ID, "Window")
         .item(&no_projects(app)?)
         .separator()
         .item(&PredefinedMenuItem::minimize(app, None)?)
         .item(&PredefinedMenuItem::maximize(app, Some("Zoom"))?)
-        .build()?;
-    let help = SubmenuBuilder::new(app, "Help").item(&mi(&SHORTCUTS)?).build()?;
+        .build()
+}
+
+/// The Help menu: Keyboard Shortcuts.
+fn help_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::new(app, "Help")
+        .item(&make_item(app, &SHORTCUTS)?)
+        .build()
+}
+
+/// The whole menu bar (reference section 3.2). The check items start as the page starts (snap on, follow
+/// smooth, click on); the page's first sync sets them to its real state.
+///
+/// # Errors
+///
+/// When the windowing library cannot create a menu, a submenu or an item.
+pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    // one item in two menus (File and Track; Add Tracks): muda keeps both native items in step (enabled state)
+    let add_tracks = make_item(app, &ADD_TRACKS)?;
+    let open_recent = make_item(app, &OPEN_RECENT)?;
+    open_recent.set_enabled(false)?; // P3-19: `sync` enables it when Open Recent has an entry
+    let recent = recent_menu(app)?;
+    let app_menu = app_menu(app)?;
+    let file = file_menu(app, &recent, &open_recent, &add_tracks)?;
+    let edit = edit_menu(app)?;
+    let view = view_menu(app)?;
+    let transport = transport_menu(app)?;
+    let hits = hits_menu(app)?;
+    let track = track_menu(app, &add_tracks)?;
+    let window = window_menu(app)?;
+    let help = help_menu(app)?;
     MenuBuilder::new(app)
         .items(&[
             &app_menu, &file, &edit, &view, &transport, &hits, &track, &window, &help,
@@ -1046,6 +1163,7 @@ fn entry_no(id: &str, prefix: &str) -> Option<usize> {
 
 /// An id of this menu: a custom item, an Open Recent entry, the Clear Recent item or a Window menu
 /// project entry.
+#[must_use]
 pub fn is_known(id: &str) -> bool {
     SPEC.iter().any(|i| i.id == id)
         || id == RECENT_CLEAR_ID
@@ -1062,12 +1180,17 @@ pub fn dispatch<R: Runtime>(app: &AppHandle<R>, id: &str) -> Value {
     // #206 diagnosis: which menu ids reach the Rust side (selftest_menu_log). The file copy
     // (DRUMSPIKE_MENU_LOG_FILE) lets the real-event probe on arm64-mac read the ids that a
     // physical press via osascript dispatched (the probe cannot call the tauri command).
-    MENU_LOG.lock().unwrap().push(id.to_string());
+    // a poisoned lock is unwrapped: the log entries are still pushed (the poison of another
+    // thread's panic must not take the menu dispatch down, #206 diagnosis)
+    MENU_LOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(id.to_string());
     #[cfg(debug_assertions)]
     if let Ok(path) = std::env::var("DRUMSPIKE_MENU_LOG_FILE") {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-            let _ = writeln!(f, "{}", id);
+            let _ = writeln!(f, "{id}");
         }
     }
     if !is_known(id) {
@@ -1140,6 +1263,7 @@ fn set_enabled<R: Runtime>(menu: &Menu<R>, id: &str, on: bool) -> tauri::Result<
 }
 
 /// P4-40a: the text of Edit > Undo or Redo: the page's text (one line, at most 90 characters), the plain label for an empty one.
+#[must_use]
 pub fn step_title(label: &str, page: &str) -> String {
     let one: String = page.split_whitespace().collect::<Vec<_>>().join(" ");
     if one.is_empty() {
@@ -1154,6 +1278,11 @@ pub fn step_title(label: &str, page: &str) -> String {
 
 /// Grey the items that need a project while none is open, and refresh the Open Recent list.
 /// `recent` holds the project folders, newest first.
+///
+/// # Errors
+///
+/// When the windowing library cannot enable or disable an item, or change the Open Recent
+/// submenu. Nothing happens (and nothing fails) when the app has no menu yet.
 pub fn sync<R: Runtime>(app: &AppHandle<R>, has_project: bool, recent: &[String]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     for it in SPEC.iter().filter(|i| i.needs_project) {
@@ -1194,6 +1323,11 @@ pub fn sync<R: Runtime>(app: &AppHandle<R>, has_project: bool, recent: &[String]
 
 /// Set the check items to the page's state (`{snap, follow, click, infoLine, counter, inspector, trackHeight, nudgeValue}`, see [`check_states`]). A native click on a
 /// check item toggles its mark before the page has run the item; this call puts the page's state back.
+///
+/// # Errors
+///
+/// When the windowing library cannot set the checked state of an item. Nothing happens (and
+/// nothing fails) when the app has no menu yet.
 pub fn sync_checks<R: Runtime>(app: &AppHandle<R>, state: &Value) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     for (id, on) in check_states(state) {
@@ -1238,6 +1372,10 @@ pub fn sync_checks<R: Runtime>(app: &AppHandle<R>, state: &Value) -> tauri::Resu
 /// Give every item the accelerators of a key preset (P3-13c). The items stay (their marks, enabled state, and the
 /// Open Recent and Window entries are kept), only the key equivalents change: the same result as a new menu bar,
 /// without the flicker. Does nothing when the preset is the one the menu has. An unknown name is the default.
+///
+/// # Errors
+///
+/// When the windowing library cannot set the accelerator of an item.
 pub fn set_preset<R: Runtime>(app: &AppHandle<R>, name: &str) -> tauri::Result<()> {
     let preset = preset_or_default(name);
     if current_preset() == preset {
@@ -1260,6 +1398,11 @@ pub fn set_preset<R: Runtime>(app: &AppHandle<R>, name: &str) -> tauri::Result<(
 
 /// The Window menu: one check item per open project (the current one checked) before Minimize and Zoom.
 /// The entries are made again only when the projects or their names changed; the marks are set every time.
+///
+/// # Errors
+///
+/// When the windowing library cannot remove, add or mark a Window menu item. Nothing happens (and
+/// nothing fails) when the app has no menu or the Window submenu is missing.
 pub fn sync_window<R: Runtime>(app: &AppHandle<R>, entries: &[WindowEntry]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     let Some(sub) = find_submenu(&menu, WINDOW_ID) else {
@@ -1298,6 +1441,11 @@ pub fn sync_window<R: Runtime>(app: &AppHandle<R>, entries: &[WindowEntry]) -> t
 
 /// P3-18: Track > Follow Hits Of: one check item per other track of the project (the followed one checked).
 /// The entries are made again only when the tracks changed; the marks are set every time.
+///
+/// # Errors
+///
+/// When the windowing library cannot remove, add or mark a Follow Hits Of item. Nothing happens
+/// (and nothing fails) when the app has no menu or the submenu is missing.
 pub fn sync_follow<R: Runtime>(app: &AppHandle<R>, entries: &[FollowEntry]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     let Some(sub) = find_submenu(&menu, FOLLOW_ID) else {
@@ -1334,6 +1482,11 @@ pub fn sync_follow<R: Runtime>(app: &AppHandle<R>, entries: &[FollowEntry]) -> t
 
 /// #169: View > Zoom Presets: the own presets after Organize, one item per name. The first five carry Option+1 to
 /// Option+5. The entries are made again only when the names changed (or the submenu lost them).
+///
+/// # Errors
+///
+/// When the windowing library cannot remove or add a Zoom Presets item. Nothing happens (and
+/// nothing fails) when the app has no menu or the submenu is missing.
 pub fn sync_zoom_own<R: Runtime>(app: &AppHandle<R>, names: &[String]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     let Some(sub) = find_submenu(&menu, ZOOM_PRESETS_ID) else {
@@ -1365,7 +1518,7 @@ pub fn sync_zoom_own<R: Runtime>(app: &AppHandle<R>, names: &[String]) -> tauri:
 }
 
 /// What the live menu holds, for the self-test (debug builds): one row per custom item with its label,
-/// shortcut, kind, enabled and checked state as the NSMenu has them, the menu titles, the entries of Open
+/// shortcut, kind, enabled and checked state as the `NSMenu` has them, the menu titles, the entries of Open
 /// Recent, and the entries of the Window menu.
 pub fn report<R: Runtime>(app: &AppHandle<R>) -> Value {
     let Some(menu) = app.menu() else {
@@ -1438,11 +1591,11 @@ pub fn report<R: Runtime>(app: &AppHandle<R>) -> Value {
     json!({"items": items, "recent": recent, "window": window, "follow": follow, "menus": menus, "preset": current_preset()})
 }
 
-/// The NSEvent characters and modifier flags of a key of the table (`"Cmd+Down"`): the key
+/// The `NSEvent` characters and modifier flags of a key of the table (`"Cmd+Down"`): the key
 /// equivalent that macOS matches a physical key press against (muda's mapping in
 /// `muda/src/accelerator/macos.rs`). Returns `(characters, charactersIgnoringModifiers, flags)`.
 /// A physical Shift+Cmd press has the uppercase character in `characters` and the lowercase one
-/// in `charactersIgnoringModifiers` — NSMenu keys its match off the latter, so the synthetic
+/// in `charactersIgnoringModifiers` — `NSMenu` keys its match off the latter, so the synthetic
 /// event must carry both (the probe of #206: `characters` alone matched nothing). None when the
 /// key is not in the table's notation.
 #[cfg(all(target_os = "macos", debug_assertions))]
@@ -1513,9 +1666,9 @@ fn ns_event_key(key: &str) -> Option<(String, String, u64)> {
     Some((chars, cim, flags))
 }
 
-/// #206: the AppKit convention for a Shift+Cmd accelerator: the key equivalent carries the
+/// #206: the `AppKit` convention for a Shift+Cmd accelerator: the key equivalent carries the
 /// SHIFTED (uppercase) character and the modifier mask does NOT contain Shift. muda registers
-/// the lowercase character with Shift in the mask; NSMenu then matches a physical Shift+Cmd
+/// the lowercase character with Shift in the mask; `NSMenu` then matches a physical Shift+Cmd
 /// press case-insensitively against `charactersIgnoringModifiers` and an earlier Cmd-only item
 /// consumes the event (Save ate Shift+Cmd+S). With the convention the match is exact. Runs on
 /// the main thread; walks the whole menu bar and rewrites only letter key equivalents of items
@@ -1533,7 +1686,7 @@ pub fn fix_shift_equivalents<R: Runtime>(app: &AppHandle<R>) {
             return;
         };
         fn walk(menu: &objc2_app_kit::NSMenu) {
-            for it in menu.itemArray().iter() {
+            for it in &menu.itemArray() {
                 if it.hasSubmenu() {
                     if let Some(sub) = it.submenu() {
                         walk(&sub);
@@ -1555,7 +1708,7 @@ pub fn fix_shift_equivalents<R: Runtime>(app: &AppHandle<R>) {
                 }
             }
         }
-        for sub in menu.itemArray().iter() {
+        for sub in &menu.itemArray() {
             if let Some(s) = sub.submenu() {
                 walk(&s);
             }
@@ -1564,7 +1717,7 @@ pub fn fix_shift_equivalents<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// The main menu as macOS has it (debug builds, the self-test of #206): one row per menu item
-/// with the menu title, the label, the key equivalent and the modifier mask of the NSMenu. This
+/// with the menu title, the label, the key equivalent and the modifier mask of the `NSMenu`. This
 /// is what `performKeyEquivalent` matches a physical key against — not the accelerator strings
 /// that [`report`] shows. Separators (no label) are left out.
 #[cfg(all(target_os = "macos", debug_assertions))]
@@ -1584,7 +1737,7 @@ pub fn ns_menu_rows<R: Runtime>(app: &AppHandle<R>) -> Value {
             let mut rows = Vec::new();
             // nested submenus too (View > Waveform Zoom > In): walk every level
             fn walk(menu: &objc2_app_kit::NSMenu, title: &str, rows: &mut Vec<Value>) {
-                for it in menu.itemArray().iter() {
+                for it in &menu.itemArray() {
                     if it.hasSubmenu() {
                         if let Some(sub) = it.submenu() {
                             walk(&sub, &it.title().to_string(), rows);
@@ -1601,7 +1754,7 @@ pub fn ns_menu_rows<R: Runtime>(app: &AppHandle<R>) -> Value {
                     }));
                 }
             }
-            for sub in menu.itemArray().iter() {
+            for sub in &menu.itemArray() {
                 let title = sub.title().to_string();
                 let Some(sub) = sub.submenu() else { continue };
                 walk(&sub, &title, &mut rows);
@@ -1615,7 +1768,7 @@ pub fn ns_menu_rows<R: Runtime>(app: &AppHandle<R>) -> Value {
 }
 
 /// The real native menu path of a `menu_key` (debug builds, the self-test of #206): a synthetic
-/// keyDown NSEvent for `key` (in the table's notation) goes to the app's main menu through
+/// keyDown `NSEvent` for `key` (in the table's notation) goes to the app's main menu through
 /// `NSMenu performKeyEquivalent:` — the same route a physical key press takes. `matched` says
 /// whether the menu performed the key equivalent (the item fired: its action sent the
 /// `MenuEvent`, `on_menu_event` dispatches it and the page handler runs). `rows` is
@@ -1630,7 +1783,7 @@ pub fn perform_key_equivalent<R: Runtime>(app: &AppHandle<R>, key: &str) -> Valu
 }
 
 /// The raw event probe behind [`perform_key_equivalent`] (the self-test diagnoses which
-/// characters/flags variant the NSMenu matches): the probe passes the `characters` variant and
+/// characters/flags variant the `NSMenu` matches): the probe passes the `characters` variant and
 /// uses it for `charactersIgnoringModifiers` too. Returns 1 performed, 0 not, -1 no main thread.
 #[cfg(all(target_os = "macos", debug_assertions))]
 pub fn perform_key_equivalent_raw<R: Runtime>(app: &AppHandle<R>, chars: &str, cim: &str, flags: u64) -> i8 {

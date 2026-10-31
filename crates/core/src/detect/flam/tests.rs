@@ -23,12 +23,12 @@ fn stroke(x: &mut [f64], t: f64, amp: f64, n: &mut Noise) {
 
 /// A noise stroke with the decay `tau` (s), `len` seconds long.
 fn stroke_tau(x: &mut [f64], t: f64, amp: f64, tau: f64, len: f64, n: &mut Noise) {
-    let i0 = (t * SR as f64).round() as usize;
-    for k in 0..(len * SR as f64) as usize {
+    let i0 = (t * f64::from(SR)).round() as usize;
+    for k in 0..(len * f64::from(SR)) as usize {
         if i0 + k >= x.len() {
             break;
         }
-        x[i0 + k] += amp * n.next() * (-(k as f64) / (tau * SR as f64)).exp();
+        x[i0 + k] += amp * n.next() * (-(k as f64) / (tau * f64::from(SR))).exp();
     }
 }
 
@@ -38,7 +38,7 @@ fn f32s(x: &[f64]) -> Vec<f32> {
 
 /// A snare mic: single strokes every 0.5 s from 0.5 s, and flams (a grace 6 dB under, the main `gap` later) at `flams`.
 fn snare(n_hits: usize, flams: &[(f64, f64)], noise_db: f64) -> (Vec<f32>, Vec<f64>) {
-    let mut x = vec![0.0f64; (0.5 * (n_hits + 2) as f64 * SR as f64) as usize];
+    let mut x = vec![0.0f64; (0.5 * (n_hits + 2) as f64 * f64::from(SR)) as usize];
     let mut nz = Noise(0x1234_5678_9abc_def1);
     let mut hits = Vec::new();
     for i in 0..n_hits {
@@ -52,7 +52,7 @@ fn snare(n_hits: usize, flams: &[(f64, f64)], noise_db: f64) -> (Vec<f32>, Vec<f
         hits.push(t);
     }
     let g = 10f64.powf(noise_db / 20.0);
-    for v in x.iter_mut() {
+    for v in &mut x {
         *v += g * nz.next();
     }
     (f32s(&x), hits)
@@ -104,7 +104,7 @@ fn the_time_domain_zero_phase_filter_equals_the_frequency_domain_one() {
     let nf = (x.len() + 2 * pad).next_power_of_two();
     let mut buf = vec![Complex::new(0.0f64, 0.0); nf];
     for (i, &v) in x.iter().enumerate() {
-        buf[pad + i].re = v as f64;
+        buf[pad + i].re = f64::from(v);
     }
     let mut planner = FftPlanner::<f64>::new();
     planner.plan_fft_forward(nf).process(&mut buf);
@@ -123,7 +123,7 @@ fn the_time_domain_zero_phase_filter_equals_the_frequency_domain_one() {
     // no stage: the signal as it is
     assert_eq!(
         zero_phase(&x[..4], sr, &[]),
-        x[..4].iter().map(|&v| v as f64).collect::<Vec<_>>()
+        x[..4].iter().map(|&v| f64::from(v)).collect::<Vec<_>>()
     );
 }
 
@@ -237,10 +237,10 @@ fn a_re_rise_another_mic_explains_is_bleed() {
     // own: single strokes; a source B (the hat) strokes 25 ms after four of them and at 12 other times, and the own mic
     // hears B 20 dB lower: those re-rises are bleed. Without the source they are added.
     let n = 24;
-    let mut own = vec![0.0f64; (0.5 * (n + 2) as f64 * SR as f64) as usize];
+    let mut own = vec![0.0f64; (0.5 * f64::from(n + 2) * f64::from(SR)) as usize];
     let mut b = own.clone();
     let mut nz = Noise(99);
-    let hits: Vec<f64> = (0..n).map(|i| 0.5 + 0.5 * i as f64).collect();
+    let hits: Vec<f64> = (0..n).map(|i| 0.5 + 0.5 * f64::from(i)).collect();
     for &t in &hits {
         stroke(&mut own, t, 0.5, &mut nz);
     }
@@ -269,16 +269,16 @@ fn a_second_stroke_on_the_first_strokes_ring_never_starts_before_the_dips_next_b
     // (busy) and the stroke stays at the rise block c, which is not before the bound: no clamp is needed (the old one
     // was dead; a `debug_assert` in `second_onsets` guards it). Exact: the block grid, not before the bound.
     let p = FlamParams::default();
-    let mut x = vec![0.0f64; (0.5 * 12.0 * SR as f64) as usize];
+    let mut x = vec![0.0f64; (0.5 * 12.0 * f64::from(SR)) as usize];
     let mut nz = Noise(0xfeed_beef_0123_4567);
-    let hits: Vec<f64> = (0..10).map(|i| 0.5 + 0.5 * i as f64).collect();
+    let hits: Vec<f64> = (0..10).map(|i| 0.5 + 0.5 * f64::from(i)).collect();
     for &t in &hits {
         stroke_tau(&mut x, t, 1.0, 0.02, 0.1, &mut nz);
         if (t - 2.0).abs() < 1e-9 || (t - 4.0).abs() < 1e-9 {
             stroke_tau(&mut x, t + 0.025, 1.5, 0.003, 0.04, &mut nz);
         }
     }
-    for v in x.iter_mut() {
+    for v in &mut x {
         *v += 1e-5 * nz.next();
     }
     let x = f32s(&x);
@@ -286,10 +286,14 @@ fn a_second_stroke_on_the_first_strokes_ring_never_starts_before_the_dips_next_b
     let found = second_onsets(&x, SR, &hits, &p, &env, &[]);
     assert_eq!(found.len(), 2, "{found:?}");
     for (s, main) in found.iter().zip([2.025, 4.025]) {
-        let at = (s.t * SR as f64).round() as i64;
+        let at = (s.t * f64::from(SR)).round() as i64;
         assert!(at >= (s.dip + 1) * hop as i64, "not before the bound: {s:?}");
         assert_eq!(at % hop as i64, 0, "a block start: {s:?}");
-        assert_eq!(at, (main * SR as f64).round() as i64, "the main stroke's onset: {s:?}");
+        assert_eq!(
+            at,
+            (main * f64::from(SR)).round() as i64,
+            "the main stroke's onset: {s:?}"
+        );
     }
 }
 
@@ -337,10 +341,10 @@ fn a_top_like_mic_decays_early_and_a_wire_like_mic_peaks_late() {
     // 12 single strokes: top = a 3 ms decay (late peak far under the first); bottom = a weak first stroke and the wires'
     // louder rise 14 ms later (the late peak over the first)
     let p = FlamParams::default();
-    let mut top = vec![0.0f64; (0.5 * 14.0 * SR as f64) as usize];
+    let mut top = vec![0.0f64; (0.5 * 14.0 * f64::from(SR)) as usize];
     let mut bot = top.clone();
     let mut nz = Noise(77);
-    let hits: Vec<f64> = (0..12).map(|i| 0.5 + 0.5 * i as f64).collect();
+    let hits: Vec<f64> = (0..12).map(|i| 0.5 + 0.5 * f64::from(i)).collect();
     for &t in &hits {
         stroke(&mut top, t, 0.5, &mut nz);
         stroke(&mut bot, t, 0.2, &mut nz);
@@ -370,9 +374,9 @@ fn a_top_like_mic_decays_early_and_a_wire_like_mic_peaks_late() {
 fn a_ringy_top_mic_with_a_slow_decay_is_not_late_peaking_although_its_a_is_over_the_gate() {
     // a 60 ms decay: on a monotone decay A is the decay at 12 ms (about -1.7 dB, over -3), but no hit peaks late (W 0)
     let p = FlamParams::default();
-    let mut x = vec![0.0f64; (0.5 * 14.0 * SR as f64) as usize];
+    let mut x = vec![0.0f64; (0.5 * 14.0 * f64::from(SR)) as usize];
     let mut nz = Noise(5);
-    let hits: Vec<f64> = (0..12).map(|i| 0.5 + 0.5 * i as f64).collect();
+    let hits: Vec<f64> = (0..12).map(|i| 0.5 + 0.5 * f64::from(i)).collect();
     for &t in &hits {
         stroke_tau(&mut x, t, 0.5, 0.06, 0.2, &mut nz);
     }
@@ -418,9 +422,9 @@ fn the_walk_does_not_move_a_second_stroke_back_over_a_ring_before_the_dip() {
     let p = FlamParams::default();
     let mut x = vec![0.0f64; SR as usize];
     let tone = |x: &mut [f64], t: f64, amp: f64, tau: f64, len: f64| {
-        let i0 = (t * SR as f64).round() as usize;
-        for k in 0..(len * SR as f64) as usize {
-            let s = k as f64 / SR as f64;
+        let i0 = (t * f64::from(SR)).round() as usize;
+        for k in 0..(len * f64::from(SR)) as usize {
+            let s = k as f64 / f64::from(SR);
             x[i0 + k] += amp * (2.0 * std::f64::consts::PI * 3000.0 * s).sin() * (-s / tau).exp();
         }
     };
@@ -433,9 +437,9 @@ fn the_walk_does_not_move_a_second_stroke_back_over_a_ring_before_the_dip() {
     let found = second_onsets(&x, SR, &[0.5], &p, &env, &[]);
     assert_eq!(found.len(), 1, "{found:?}");
     let s = &found[0];
-    let at = (s.t * SR as f64).round() as i64;
+    let at = (s.t * f64::from(SR)).round() as i64;
     let bound = (s.dip + 1) * hop as i64;
-    let (free, _) = crate::refine::first_motion_mid(&x, (c * SR as f64).round() as i64, SR, None, None);
+    let (free, _) = crate::refine::first_motion_mid(&x, (c * f64::from(SR)).round() as i64, SR, None, None);
     assert!(free < bound, "the unbounded walk ends before the bound: {free} {bound}");
     assert!(at >= bound, "the bounded walk does not: {at} {bound} {s:?}");
 }

@@ -223,6 +223,12 @@ fn run_direct(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) 
 
 /// Run a command of the agent surface (see the module docs). `progress` gets the messages of a command that
 /// takes a `progress` channel; the call answers when the command does (a `Poll` row answers at once).
+///
+/// # Errors
+///
+/// A 404 [`AppError`] when `name` is not a command of the agent surface; a 400 when `args` is neither an object
+/// nor `null` or fails the row's argument check; a 409 when the command changes a project that is open
+/// read-only; otherwise the error of the command itself.
 pub fn call(svc: &Service, name: &str, args: &Value, progress: Option<Progress>) -> Result<Reply, AppError> {
     let row = api::find(name)
         .filter(|c| c.surface == Surface::Agent)

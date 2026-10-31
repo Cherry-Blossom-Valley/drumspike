@@ -16,7 +16,7 @@
 //!    ([`transfer_gains`], the P2-6 calibration). The re-rise is bleed when B's envelope in `[c - 2 ms, c + 1 ms]` plus
 //!    `G` plus `margin_db` (10 dB) reaches the stroke's peak P2. A bleed stroke is not added.
 //!
-//! The parameters are the stage 1 rule R9_m10 ([`FlamParams::default`]). The Python reference is `tools/flam_pairs.py`
+//! The parameters are the stage 1 rule `R9_m10` ([`FlamParams::default`]). The Python reference is `tools/flam_pairs.py`
 //! (`attack_env`, `transfer_gains`, `second_onsets`) as `tools/flam_split.py` runs it; the parity check is
 //! `tests/test_rust_flam.py` and `tools/flam_split.py parity`. The measurements are in
 //! `docs/migration/phase4-report.md`, sections "P4-13 stage 1", "P4-13 stage 2, stage A" and "P4-13 stage B".
@@ -37,9 +37,9 @@ use crate::refine::first_motion_mid;
 pub const FLAM_RULE_VERSION: u32 = 1;
 
 /// The block length of the attack envelope (seconds); every block count of the rule is a time over this.
-pub const HOP_S: f64 = 0.000125;
+pub const HOP_S: f64 = 0.000_125;
 
-/// The parameters of the rule (the stage 1 choice R9_m10; `tools/flam_pairs.py` `DEFAULTS`).
+/// The parameters of the rule (the stage 1 choice `R9_m10`; `tools/flam_pairs.py` `DEFAULTS`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlamParams {
     /// The high-pass corner of the attack envelope (Hz); 0 = no filter.
@@ -89,6 +89,7 @@ impl Default for FlamParams {
 
 /// The roles the rule of `version` runs on. Version 1: the snare (P4-13 stage A measured kick and toms: no stroke
 /// test for them).
+#[must_use]
 pub fn applies(version: u32, role: &str) -> bool {
     version >= 1 && role == "snare"
 }
@@ -126,20 +127,22 @@ fn blocks(s: f64) -> i64 {
 }
 
 /// The block length in samples at rate `sr`: `max(1, int(round(HOP_S * sr)))`.
+#[must_use]
 pub fn hop_of(sr: u32) -> usize {
-    py_round(HOP_S * sr as f64).max(1) as usize
+    py_round(HOP_S * f64::from(sr)).max(1) as usize
 }
 
 /// `x` through the biquad `stages` [(kind, corner Hz)], each twice forward and twice backward: zero phase, the power
 /// response `|H|^4` per stage (`tools/onset_guard.py` `zero_phase`). The backward passes start 0.25 s after the end.
+#[must_use]
 pub fn zero_phase(x: &[f32], sr: u32, stages: &[(FilterKind, f64)]) -> Vec<f64> {
     let n = x.len();
     if stages.is_empty() {
-        return x.iter().map(|&v| v as f64).collect();
+        return x.iter().map(|&v| f64::from(v)).collect();
     }
-    let pad = py_int(0.25 * sr as f64).max(0) as usize;
+    let pad = py_int(0.25 * f64::from(sr)).max(0) as usize;
     let mut y: Vec<f64> = Vec::with_capacity(n + pad);
-    y.extend(x.iter().map(|&v| v as f64));
+    y.extend(x.iter().map(|&v| f64::from(v)));
     y.resize(n + pad, 0.0);
     let run = |y: &mut [f64], q: &Biquad, back: bool| {
         let (mut z0, mut z1) = (0.0f64, 0.0f64);
@@ -166,11 +169,12 @@ pub fn zero_phase(x: &[f32], sr: u32, stages: &[(FilterKind, f64)]) -> Vec<f64> 
 
 /// The attack envelope of `x` on the block grid: the maximum of `|high-pass(x)|` per block of [`hop_of`] samples, held
 /// over `hold_s` (the block and the ones before it). Returns the envelope and the block length in samples.
+#[must_use]
 pub fn attack_env(x: &[f32], sr: u32, p: &FlamParams) -> (Vec<f64>, usize) {
     let y = if p.hp_hz != 0.0 {
         zero_phase(x, sr, &[(FilterKind::HighPass, p.hp_hz)])
     } else {
-        x.iter().map(|&v| v as f64).collect()
+        x.iter().map(|&v| f64::from(v)).collect()
     };
     let hop = hop_of(sr);
     let nb = y.len() / hop;
@@ -192,11 +196,11 @@ pub const LATE_SHARE_MIN: f64 = 0.4;
 /// Per hit (s) with a full 30 ms window and a first peak: the largest attack-envelope block in `[hit + peak_s, hit +
 /// 30 ms)` over the largest in `[hit, hit + peak_s)` (a ratio). `env`: the [`attack_env`]; `sr`, `hop`: rate and block.
 fn late_ratios(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamParams) -> Vec<f64> {
-    let r = sr as f64 / hop as f64;
+    let r = f64::from(sr) / hop as f64;
     let (f, e) = (py_int(p.peak_s * r).max(1), py_int(LATE_PEAK_END_S * r));
     hits.iter()
         .filter_map(|&t| {
-            let b = py_int(t * sr as f64).div_euclid(hop as i64);
+            let b = py_int(t * f64::from(sr)).div_euclid(hop as i64);
             if b < 0 || b + e >= env.len() as i64 {
                 return None;
             }
@@ -211,6 +215,7 @@ fn late_ratios(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamParams) -
 
 /// The late peak `A` of a mic: the median over `hits` of the [`late_ratios`] in dB (`tools/flam_pairs.py`
 /// `late_peak_db`); `None` without a value.
+#[must_use]
 pub fn late_peak_db(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamParams) -> Option<f64> {
     let v: Vec<f64> = late_ratios(env, hits, sr, hop, p)
         .iter()
@@ -221,6 +226,7 @@ pub fn late_peak_db(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamPara
 
 /// The late share `W` of a mic: the share of the same hits whose late peak beats the first (ratio over 1);
 /// `None` without a value (`tools/flam_pairs.py` `late_share`).
+#[must_use]
 pub fn late_share(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamParams) -> Option<f64> {
     let v = late_ratios(env, hits, sr, hop, p);
     (!v.is_empty()).then(|| v.iter().filter(|&&r| r > 1.0).count() as f64 / v.len() as f64)
@@ -228,6 +234,7 @@ pub fn late_share(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamParams
 
 /// True for a late-peaking mic (a snare bottom): the late peak `A` is [`LATE_PEAK_MAX_DB`] or more AND the share `W`
 /// is [`LATE_SHARE_MIN`] or more. `A` alone measures the decay: a ringy undamped top mic has `A` over -3 dB and `W` near 0.
+#[must_use]
 pub fn late_peaking(late_db: Option<f64>, share: Option<f64>) -> bool {
     late_db.is_some_and(|v| v >= LATE_PEAK_MAX_DB) && share.is_some_and(|w| w >= LATE_SHARE_MIN)
 }
@@ -239,7 +246,7 @@ pub fn np_percentile(v: &[f64], q: f64) -> Option<f64> {
         return None;
     }
     let mut s = v.to_vec();
-    s.sort_by(|a, b| a.total_cmp(b));
+    s.sort_by(f64::total_cmp);
     let n = s.len();
     let vi = (n - 1) as f64 * (q / 100.0);
     let lo = (vi.floor().max(0.0) as usize).min(n - 1);
@@ -253,7 +260,7 @@ pub fn np_percentile(v: &[f64], q: f64) -> Option<f64> {
 /// `np.median` of a non-empty slice.
 fn median(v: &[f64]) -> f64 {
     let mut s = v.to_vec();
-    s.sort_by(|a, b| a.total_cmp(b));
+    s.sort_by(f64::total_cmp);
     let n = s.len();
     if n % 2 == 1 {
         s[n / 2]
@@ -290,6 +297,7 @@ fn max_of(v: &[f64]) -> f64 {
 
 /// The strong hits of a mic B (`tools/onset_guard.py` `strong_peaks`): per block of 50 ms of its envelope (`rate`
 /// blocks per second) the largest block, kept when within 15 dB of the 99.5th percentile of those maxima.
+#[must_use]
 pub fn strong_peaks(env: &[f64], rate: f64) -> Vec<usize> {
     let b = py_int(0.050 * rate).max(1) as usize;
     let nb = env.len() / b;
@@ -315,6 +323,7 @@ pub fn strong_peaks(env: &[f64], rate: f64) -> Vec<usize> {
 /// `G(B->A)` in dB (`tools/onset_guard.py` `calibrate_gain`, P2-6): at B's strong blocks `peaks` the level of A's
 /// envelope minus B's in `[-0.5, +8)` ms; the 10th percentile over those where A has no own hit (`own`, sorted
 /// seconds) within 30 ms when there are 5 of them, else over all; `None` with fewer than 5.
+#[must_use]
 pub fn calibrate(env_a: &[f64], env_b: &[f64], peaks: &[usize], own: &[f64], rate: f64) -> Option<f64> {
     const MIN_HITS: usize = 5;
     if peaks.len() < MIN_HITS {
@@ -357,9 +366,9 @@ pub fn calibrate(env_a: &[f64], env_b: &[f64], peaks: &[usize], own: &[f64], rat
 /// `transfer_gains`): per source its gain, `None` without one (fewer than 5 strong hits). `own`: the own output hits
 /// (s); `sr`, `hop`: the rate and the block length. A source is compared over the common length.
 pub fn transfer_gains(env_a: &[f64], sources: &[&[f64]], own: &[f64], sr: u32, hop: usize) -> Vec<Option<f64>> {
-    let rate = sr as f64 / hop as f64;
+    let rate = f64::from(sr) / hop as f64;
     let mut own: Vec<f64> = own.to_vec();
-    own.sort_by(|a, b| a.total_cmp(b));
+    own.sort_by(f64::total_cmp);
     sources
         .iter()
         .map(|env_b| {
@@ -382,9 +391,9 @@ pub fn second_onsets(
     gains: &[(&[f64], f64)],
 ) -> Vec<Second> {
     let hop = hop_of(sr) as i64;
-    let srf = sr as f64;
+    let srf = f64::from(sr);
     let mut times: Vec<f64> = hits.to_vec();
-    times.sort_by(|a, b| a.total_cmp(b));
+    times.sort_by(f64::total_cmp);
     let nb = env.len() as i64;
     let (rise_b, peak_b, min_b, max_b, guard_b) = (
         blocks(p.rise_s),
@@ -488,6 +497,7 @@ pub fn flam_split(
 }
 
 /// The times of the strokes the rule adds: those the bleed gate leaves.
+#[must_use]
 pub fn added(found: &[Second]) -> Vec<f64> {
     found.iter().filter(|s| !s.bleed).map(|s| s.t).collect()
 }

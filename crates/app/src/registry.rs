@@ -36,7 +36,7 @@ pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     }
     #[cfg(not(feature = "trace"))]
     {
-        m.lock().unwrap_or_else(|p| p.into_inner())
+        m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -55,6 +55,7 @@ impl EmitterSlot {
     }
 
     /// The emitter, when one is set.
+    #[must_use]
     pub fn get(&self) -> Option<Emitter> {
         lock(&self.0).clone()
     }
@@ -123,10 +124,14 @@ pub struct OpenProject {
     pub disk: Option<DiskStamp>,
     /// #121: the outside stamp the autosave reported already (one `project-stale` event per outside change).
     pub stale_noted: Option<DiskStamp>,
+    /// #228: why the last autosave failed; `None` after a good autosave or a save. It is the `autosave_error` key of the
+    /// summary, and `autosave-failed` goes to the page once per failure streak.
+    pub autosave_error: Option<String>,
 }
 
 impl OpenProject {
     /// A project with every source resolved.
+    #[must_use]
     pub fn new(sid: String, project: Project) -> OpenProject {
         let saved_doc = project.doc.clone();
         let disk = DiskStamp::of(&project.path());
@@ -145,6 +150,7 @@ impl OpenProject {
             lock_note: None,
             disk,
             stale_noted: None,
+            autosave_error: None,
         };
         op.resolve();
         op
@@ -152,11 +158,16 @@ impl OpenProject {
 
     /// #121: the stamp of the document file now, when it is not the one this process read or wrote last. A missing
     /// file is no change (a save writes it again and loses nothing).
+    #[must_use]
     pub fn disk_change(&self) -> Option<DiskStamp> {
         DiskStamp::of(&self.project.path()).filter(|now| Some(*now) != self.disk)
     }
 
     /// #121: 409 when the document on disk changed since this process read or wrote it ([`CHANGED_ON_DISK`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns a 409 error when the document file differs in size or modification time from the last read or write.
     pub fn check_disk(&self) -> Result<(), AppError> {
         match self.disk_change() {
             None => Ok(()),
@@ -171,6 +182,22 @@ impl OpenProject {
     pub fn restamp(&mut self) {
         self.disk = DiskStamp::of(&self.project.path());
         self.stale_noted = None;
+        self.autosave_error = None; // #228: a save wrote the document; the failure streak is over
+    }
+
+    /// #228: record the outcome of an autosave. An error is kept until a good autosave or a save clears it, and
+    /// `autosave-failed` `{sid, message}` goes to the page on the first error of a streak only. Answers true when it sent one.
+    pub fn note_autosave(&mut self, outcome: Result<(), &str>) -> bool {
+        let Err(message) = outcome else {
+            self.autosave_error = None;
+            return false;
+        };
+        let first = self.autosave_error.is_none();
+        self.autosave_error = Some(message.to_string());
+        if first && let Some(f) = self.emitter.get() {
+            f("autosave-failed", json!({"sid": self.sid, "message": message}));
+        }
+        first
     }
 
     /// #121: send `project-stale` `{sid, message}` once per outside change of the document file (the autosave looks).
@@ -213,6 +240,7 @@ impl OpenProject {
     }
 
     /// The folder and the source record of every track (what [`OpenProject::resolve`] reads).
+    #[must_use]
     pub fn records(&self) -> (PathBuf, Vec<(String, Option<Source>)>) {
         let recs = self
             .project
@@ -224,16 +252,22 @@ impl OpenProject {
     }
 
     /// True unless the source was found with the recorded size and head hash.
+    #[must_use]
     pub fn offline(&self, name: &str) -> bool {
         self.status.get(name) != Some(&SourceStatus::Ok)
     }
 
     /// The status text of a track (`missing` for an unknown name, like the server).
+    #[must_use]
     pub fn status_str(&self, name: &str) -> &'static str {
         self.status.get(name).map_or("missing", |s| s.as_str())
     }
 
     /// One track; 400 `unknown track` like `OpenProject.track`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error (`unknown track`) when the project has no track of this name.
     pub fn track(&self, name: &str) -> Result<&Track, AppError> {
         self.project
             .doc
@@ -242,6 +276,10 @@ impl OpenProject {
     }
 
     /// One track, mutable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error (`unknown track`) when the project has no track of this name.
     pub fn track_mut(&mut self, name: &str) -> Result<&mut Track, AppError> {
         self.project
             .doc
@@ -250,6 +288,11 @@ impl OpenProject {
     }
 
     /// The path of the track's audio; 409 when the track is offline.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for an unknown track and a 409 error when the track is offline (its audio file is
+    /// missing or changed).
     pub fn source(&self, name: &str) -> Result<PathBuf, AppError> {
         self.track(name)?;
         if self.offline(name) {
@@ -315,6 +358,11 @@ impl OpenProject {
     }
 
     /// The track record as a JSON object (every key the document holds).
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for an unknown track and an internal error if the track does not serialise as a
+    /// JSON object.
     pub fn track_object(&self, name: &str) -> Result<Map<String, Value>, AppError> {
         let tr = self.track(name)?;
         match serde_json::to_value(tr) {
@@ -326,6 +374,11 @@ impl OpenProject {
     /// `OpenProject.public_track`: the record without `events` and `source`, plus
     /// `source_mode`, `status`, `offline` and `n_events`. P3-15c: the events are not serialised
     /// (see [`track_object_light`]); `tracks_get` holds the project lock a short time only.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for an unknown track and an internal error if the track does not serialise as a
+    /// JSON object.
     pub fn public_track(&self, name: &str) -> Result<Value, AppError> {
         let tr = self.track(name)?;
         let mut m = track_object_light(tr)?;
@@ -357,6 +410,7 @@ impl OpenProject {
 
     /// `OpenProject.summary`: what `project_open` and `project_get` answer. P3-15c: the
     /// document keys come from a copy without tracks (see [`doc_head_value`]).
+    #[must_use]
     pub fn summary(&self) -> Value {
         let doc = &self.project.doc;
         let dv = doc_head_value(doc);
@@ -401,6 +455,9 @@ impl OpenProject {
         if let Some(note) = &self.lock_note {
             out["lock"] = Value::String(note.clone()); // P4-5: only a process that locks has the key
         }
+        if let Some(err) = &self.autosave_error {
+            out["autosave_error"] = Value::String(err.clone()); // #228: only a project whose last autosave failed has the key
+        }
         out
     }
 
@@ -409,7 +466,7 @@ impl OpenProject {
         let doc = &self.project.doc;
         match doc.modified {
             Some(Some(m)) if m != 0.0 => m,
-            _ => doc.created.as_ref().and_then(|n| n.as_f64()).unwrap_or(0.0),
+            _ => doc.created.as_ref().and_then(serde_json::Number::as_f64).unwrap_or(0.0),
         }
     }
 }
@@ -421,6 +478,10 @@ pub type Shared = Arc<Mutex<OpenProject>>;
 /// record (`serde_json::to_value` of the track minus those two keys), without serialising or
 /// copying the events (P3-15c: 6,000 hits made `tracks_get` hold the project lock for 55 ms
 /// in the debug app).
+///
+/// # Errors
+///
+/// Returns an internal error if a track field does not serialise to JSON or the track is not a JSON object.
 pub fn track_object_light(tr: &Track) -> Result<Map<String, Value>, AppError> {
     // every field is named: a new field of `Track` must be decided here
     let Track {
@@ -471,6 +532,7 @@ pub fn track_object_light(tr: &Track) -> Result<Map<String, Value>, AppError> {
 
 /// The document as JSON without `tracks`, `order` and `view`: the keys `format`, `name`,
 /// `created`, `modified`, `settings` and the unknown ones, as the full document writes them.
+#[must_use]
 pub fn doc_head_value(doc: &Document) -> Value {
     let Document {
         format,
@@ -532,6 +594,7 @@ pub struct Registry {
 
 impl Registry {
     /// An empty registry.
+    #[must_use]
     pub fn new() -> Registry {
         Registry::default()
     }
@@ -564,6 +627,11 @@ impl Registry {
     /// Put a loaded project into the registry; a folder that is open already keeps its entry
     /// (`server._register`). P3-15c: the sources are resolved (file heads hashed) before the
     /// registry lock is taken, so other commands do not wait for the disk.
+    ///
+    /// # Panics
+    ///
+    /// Panics through `expect` if [`Registry::register_with`] without a lock returns an error, which cannot
+    /// happen because only the lock path fails.
     pub fn register(&self, project: Project) -> Shared {
         self.register_with(project, false, None)
             .expect("registering without a lock cannot fail")
@@ -572,6 +640,11 @@ impl Registry {
     /// [`Registry::register`] for a process that locks (P4-5): with `client` and not `read_only` the folder's
     /// [`crate::lock::ProjectLock`] is taken first (409 when another process holds it); `read_only` marks the
     /// project so that every command that changes it is refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 409 error when `client` is given, the project is not `read_only`, and another process holds
+    /// the folder's lock.
     pub fn register_with(&self, project: Project, read_only: bool, client: Option<&str>) -> Result<Shared, AppError> {
         if let Some(op) = Registry::find_dir(&lock(&self.open), &project.dir) {
             return Ok(op);
@@ -616,6 +689,10 @@ impl Registry {
     }
 
     /// `server.proj`: the project with this id; 404 `no such project`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when no open project has this id.
     pub fn get(&self, sid: &str) -> Result<Shared, AppError> {
         lock(&self.open)
             .iter()
@@ -630,6 +707,10 @@ impl Registry {
     /// command-line tool, the MCP server and the test bridge share the policy. The documented
     /// exceptions fetch with [`Registry::get`]: `project_save_as` (the way from a read-only project
     /// to a writable copy) and a `track_repick` without `store` (the preview).
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when the project id is unknown and a 409 error when the project is open read-only.
     pub fn get_writable(&self, sid: &str) -> Result<Shared, AppError> {
         let op = self.get(sid)?;
         if lock(&op).read_only {
@@ -647,6 +728,10 @@ impl Registry {
     }
 
     /// Take the project with this id out of the registry (`project_close`); 404 when unknown.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when no open project has this id.
     pub fn remove(&self, sid: &str) -> Result<Shared, AppError> {
         let mut open = lock(&self.open);
         let i = open

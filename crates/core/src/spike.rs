@@ -40,15 +40,17 @@ pub const AUDIO_PERIOD_WINDOW_S: f64 = 0.030;
 pub const AUDIO_LOW_HZ: f64 = 800.0;
 
 /// The blip shape at `sr`: `n = max(2, round(0.001 * sr))` samples, `1 - i / n`.
+#[must_use]
 pub fn blip(sr: u32) -> Vec<f32> {
-    let n = ((BLIP_S * sr as f64).round() as usize).max(2);
+    let n = ((BLIP_S * f64::from(sr)).round() as usize).max(2);
     (0..n).map(|i| (1.0 - i as f64 / n as f64) as f32).collect()
 }
 
 /// Sample index of a hit: `round(t * sr)` with ties to even (hit times are `k / sr`, so the
 /// product is exact for refined hits); `None` outside `[0, n_samples)`.
+#[must_use]
 pub fn hit_index(t: f64, sr: u32, n_samples: usize) -> Option<usize> {
-    let i = py_round(t * sr as f64);
+    let i = py_round(t * f64::from(sr));
     if i < 0 || i as u64 >= n_samples as u64 {
         None
     } else {
@@ -57,6 +59,7 @@ pub fn hit_index(t: f64, sr: u32, n_samples: usize) -> Option<usize> {
 }
 
 /// The mono spike signal: `n_samples` zeros with a [`blip`] at every hit.
+#[must_use]
 pub fn spike_signal(sr: u32, n_samples: usize, times: &[f64]) -> Vec<f32> {
     let mut x = vec![0.0f32; n_samples];
     let b = blip(sr);
@@ -84,6 +87,7 @@ pub struct SpikeSignalBlocks {
 impl SpikeSignalBlocks {
     /// The generator of the `n_samples`-long signal for `times` (seconds) at `sr`: the same
     /// hits [`spike_signal`] would place (deduplicated, ascending).
+    #[must_use]
     pub fn new(sr: u32, n_samples: usize, times: &[f64]) -> Self {
         let mut starts: Vec<usize> = times.iter().filter_map(|&t| hit_index(t, sr, n_samples)).collect();
         starts.sort_unstable();
@@ -124,12 +128,14 @@ impl SpikeSignalBlocks {
 /// The `bext` chunk of a spike file: time reference, origination date and time and
 /// originator copied from the source record, the description and coding history of the
 /// spike file itself.
+#[must_use]
 pub fn spike_bext(source: &Bext, sr: u32, format: WavFormat) -> Bext {
     bext_with_description(source, sr, format, BEXT_DESCRIPTION)
 }
 
 /// The `bext` chunk of an audio-spike file: the source time reference, the audio-spike
 /// description (#209).
+#[must_use]
 pub fn audio_spike_bext(source: &Bext, sr: u32, format: WavFormat) -> Bext {
     bext_with_description(source, sr, format, AUDIO_BEXT_DESCRIPTION)
 }
@@ -159,12 +165,13 @@ fn is_crossing(x: &[f32], j: usize) -> bool {
 /// zero between the two signs (a digital-silence run at a crossing) still counts, at the
 /// first nonzero sample after it. `None` with fewer than two crossings (silence, a
 /// constant, the window too short).
+#[must_use]
 pub fn period_samples(x: &[f32], start: usize, sr: u32) -> Option<f64> {
     // R14: `start` past the signal is a documented `None`, not an underflow panic.
     if start >= x.len() {
         return None;
     }
-    let window = ((AUDIO_PERIOD_WINDOW_S * sr as f64).round() as usize).min(x.len() - start);
+    let window = ((AUDIO_PERIOD_WINDOW_S * f64::from(sr)).round() as usize).min(x.len() - start);
     if window < 4 || start + window > x.len() {
         return None;
     }
@@ -220,7 +227,7 @@ fn lowpass_once(x: &[f32], sr: u32) -> Vec<f32> {
     let mut z = [[0.0f64; 2]; 2];
     let mut out = Vec::with_capacity(x.len());
     for &v in x {
-        let mut y = v as f64;
+        let mut y = f64::from(v);
         for (s, zs) in stages.iter().zip(z.iter_mut()) {
             let o = s.b[0] * y + zs[0];
             zs[0] = s.b[1] * y - s.a[0] * o + zs[1];
@@ -267,8 +274,8 @@ fn snippet_end(x: &[f32], smooth: &[f32], start: usize, sr: u32) -> (Option<usiz
     if start >= x.len() || start + 1 >= x.len() {
         return (None, false);
     }
-    let min_len = ((AUDIO_MIN_S * sr as f64).round() as usize).max(2);
-    let max_len = ((AUDIO_MAX_S * sr as f64).round() as usize).max(min_len);
+    let min_len = ((AUDIO_MIN_S * f64::from(sr)).round() as usize).max(2);
+    let max_len = ((AUDIO_MAX_S * f64::from(sr)).round() as usize).max(min_len);
     let scan_to = x.len().min(start.saturating_add(max_len) + 1);
     let mut found = false;
     let end = if smooth.len() > start {
@@ -283,7 +290,7 @@ fn snippet_end(x: &[f32], smooth: &[f32], start: usize, sr: u32) -> (Option<usiz
         if let Some(target) = target {
             found = true;
             // snap to the nearest raw crossing within +-1 ms (#378 round 2)
-            let tol = ((0.001 * sr as f64).round() as usize).max(2);
+            let tol = ((0.001 * f64::from(sr)).round() as usize).max(2);
             let mut best = target;
             let mut best_d = tol + 1;
             for j in start + 1..scan_to {
@@ -298,10 +305,10 @@ fn snippet_end(x: &[f32], smooth: &[f32], start: usize, sr: u32) -> (Option<usiz
             if best_d <= tol { best } else { target }
         } else {
             // no dominant low component: the 10 ms default (the fade-out covers the cut)
-            start + ((AUDIO_DEFAULT_S * sr as f64).round() as usize)
+            start + ((AUDIO_DEFAULT_S * f64::from(sr)).round() as usize)
         }
     } else {
-        start + ((AUDIO_DEFAULT_S * sr as f64).round() as usize)
+        start + ((AUDIO_DEFAULT_S * f64::from(sr)).round() as usize)
     };
     let end = end.max(start + min_len).min(start + max_len).min(x.len());
     if end <= start {
@@ -420,6 +427,7 @@ fn snippet_ends(source: &[f32], sr: u32, times: &[f64]) -> Vec<(usize, usize, bo
 /// the next hit cuts, a fade-out of at most [`AUDIO_FADE_S`] to the end, #378). Every other
 /// sample is exact zero. Returns the signal and the number of hits that got the default
 /// length (no dominant low component found, #378).
+#[must_use]
 pub fn audio_spike_signal(source: &[f32], sr: u32, times: &[f64]) -> (Vec<f32>, usize) {
     let mut out = vec![0.0f32; source.len()];
     let mut no_low = 0;
@@ -427,7 +435,7 @@ pub fn audio_spike_signal(source: &[f32], sr: u32, times: &[f64]) -> (Vec<f32>, 
         if !found {
             no_low += 1;
         }
-        let fade = (((AUDIO_FADE_S * sr as f64).round() as usize).max(1)).min(end - start);
+        let fade = (((AUDIO_FADE_S * f64::from(sr)).round() as usize).max(1)).min(end - start);
         let fade_from = end - fade;
         out[start..end].copy_from_slice(&source[start..end]);
         for (j, i) in (fade_from..end).enumerate() {
@@ -441,10 +449,11 @@ pub fn audio_spike_signal(source: &[f32], sr: u32, times: &[f64]) -> (Vec<f32>, 
 /// (ascending hit index; hits outside the file and degenerate zero-length snippets have no
 /// entry), for the measurement tools (#378). The same lengths the real export
 /// ([`audio_spike_signal`]) writes.
+#[must_use]
 pub fn audio_snippet_lengths(source: &[f32], sr: u32, times: &[f64]) -> Vec<f64> {
     snippet_ends(source, sr, times)
         .into_iter()
-        .map(|(start, end, _)| (end - start) as f64 / sr as f64)
+        .map(|(start, end, _)| (end - start) as f64 / f64::from(sr))
         .collect()
 }
 
@@ -452,6 +461,10 @@ pub fn audio_snippet_lengths(source: &[f32], sr: u32, times: &[f64]) -> Vec<f64>
 /// ([`audio_spike_signal`]): mono at `sr`, `source.len()` long, encoded as `format`, with
 /// [`audio_spike_bext`] when the source has a `bext` chunk. Returns the number of hits that
 /// got the default length because no dominant low component was found (#378).
+///
+/// # Errors
+///
+/// The I/O error when the file at `path` cannot be created or written.
 pub fn export_audio_spikes(
     path: &Path,
     sr: u32,
@@ -478,6 +491,10 @@ pub fn export_audio_spikes(
 /// The signal is produced and encoded block by block (R19 step 2): the writer never holds
 /// more than one [`WRITE_BLOCK_FRAMES`] block of the signal or of the encoded bytes, and the
 /// bytes on disk are the ones the full-buffer path wrote.
+///
+/// # Errors
+///
+/// The I/O error when the file at `path` cannot be created or written.
 pub fn export_spikes(
     path: &Path,
     sr: u32,
@@ -625,7 +642,7 @@ mod tests {
         // zero crossing, so 1.5 periods land exactly on a falling crossing
         let source: Vec<f32> = (0..96_000)
             .map(|i| {
-                let dt = i as f64 / 48_000.0 - 0.5;
+                let dt = f64::from(i) / 48_000.0 - 0.5;
                 if dt < 0.0 {
                     0.0
                 } else {
@@ -668,7 +685,7 @@ mod tests {
         let end = (start + 1..).find(|&j| x[j] == 0.0).unwrap();
         assert_eq!(
             end - start,
-            (AUDIO_DEFAULT_S * sr as f64).round() as usize,
+            (AUDIO_DEFAULT_S * f64::from(sr)).round() as usize,
             "the 10 ms default"
         );
         for &v in x.iter().take(end - 48).skip(start) {
@@ -689,7 +706,7 @@ mod tests {
         // the 2 ms minimum
         let source: Vec<f32> = (0..96_000)
             .map(|i| {
-                let dt = i as f64 / 48_000.0 - 0.5;
+                let dt = f64::from(i) / 48_000.0 - 0.5;
                 if dt < 0.0 {
                     0.0
                 } else {
@@ -701,9 +718,9 @@ mod tests {
         let end = (24_001..).find(|&j| x[j] == 0.0).unwrap();
         // no low tone: the snippet sits at the 2 ms minimum (the lowpass group delay of a
         // 6 kHz residual may push the 3rd crossing a fraction of a millisecond past it)
-        assert!(end - 24_000 >= (AUDIO_MIN_S * sr as f64).round() as usize);
+        assert!(end - 24_000 >= (AUDIO_MIN_S * f64::from(sr)).round() as usize);
         assert!(
-            end - 24_000 <= (0.0023 * sr as f64).round() as usize,
+            end - 24_000 <= (0.0023 * f64::from(sr)).round() as usize,
             "at the 2 ms minimum"
         );
         // 40 Hz starting at the hit: 1.5 periods are 1800 samples (37.5 ms) - inside the
@@ -711,7 +728,7 @@ mod tests {
         // smoothed crossing, snapped to the raw crossing at the full period x 1.5
         let source: Vec<f32> = (0..96_000)
             .map(|i| {
-                let dt = i as f64 / 48_000.0 - 0.5;
+                let dt = f64::from(i) / 48_000.0 - 0.5;
                 if dt < 0.0 {
                     0.0
                 } else {
@@ -738,14 +755,14 @@ mod tests {
         let start = 24_000usize;
         let source: Vec<f32> = (0..96_000)
             .map(|i| {
-                let dt = i as f64 / sr as f64 - t0;
+                let dt = f64::from(i) / f64::from(sr) - t0;
                 if dt < 0.0 {
                     return 0.0;
                 }
                 let mut v = (std::f64::consts::TAU * 55.0 * dt).sin() * (-3.0 * dt).exp();
                 if dt < 0.003 {
                     v += (std::f64::consts::TAU * 3_000.0 * dt).sin() * (-3_000.0 * dt).exp() * 0.8;
-                    let s = (i as f64 * 12.9898).sin() * 43758.5453;
+                    let s = (f64::from(i) * 12.9898).sin() * 43758.5453;
                     v += (s - s.floor() - 0.5) * 0.3;
                 }
                 v as f32
@@ -753,7 +770,7 @@ mod tests {
             .collect();
         let (x, _) = audio_spike_signal(&source, sr, &[t0]);
         let end = (start + 1..).find(|&j| x[j] == 0.0).unwrap();
-        let len_ms = (end - start) as f64 / sr as f64 * 1000.0;
+        let len_ms = (end - start) as f64 / f64::from(sr) * 1000.0;
         assert!((len_ms - 27.3).abs() <= 2.0, "kick snippet {len_ms} ms, want 27.3 +-2");
         assert!(
             is_crossing(&source, end),
@@ -771,7 +788,7 @@ mod tests {
         let start = 24_000usize;
         let source: Vec<f32> = (0..96_000)
             .map(|i| {
-                let dt = i as f64 / sr as f64 - t0;
+                let dt = f64::from(i) / f64::from(sr) - t0;
                 if dt < 0.0 {
                     return 0.0;
                 }
@@ -787,7 +804,7 @@ mod tests {
             .collect();
         let (x, _) = audio_spike_signal(&source, sr, &[t0]);
         let end = (start + 1..).find(|&j| x[j] == 0.0).unwrap();
-        let len_ms = (end - start) as f64 / sr as f64 * 1000.0;
+        let len_ms = (end - start) as f64 / f64::from(sr) * 1000.0;
         // the whole 3rd lobe ends at 1.5 periods = 27.3 ms, +-1 ms
         assert!(
             (len_ms - 27.3).abs() <= 1.0,
@@ -814,11 +831,11 @@ mod tests {
         ];
         let source: Vec<f32> = (0..96_000)
             .map(|i| {
-                let dt = i as f64 / sr as f64 - t0;
+                let dt = f64::from(i) / f64::from(sr) - t0;
                 if dt < 0.0 {
                     return 0.0;
                 }
-                for &(b0, b1, amp) in lobes.iter() {
+                for &(b0, b1, amp) in &lobes {
                     if dt < b1 {
                         if dt < b0 {
                             return 0.0;
@@ -832,7 +849,7 @@ mod tests {
             .collect();
         let (x, _) = audio_spike_signal(&source, sr, &[t0]);
         let end = (start + 1..).find(|&j| x[j] == 0.0).unwrap();
-        let len_ms = (end - start) as f64 / sr as f64 * 1000.0;
+        let len_ms = (end - start) as f64 / f64::from(sr) * 1000.0;
         assert!(
             (len_ms - 16.0).abs() <= 1.0,
             "Session A kick snippet {len_ms} ms, want the end of lobe 2 at 16.0 +-1"
@@ -847,7 +864,7 @@ mod tests {
         let start = 24_000usize;
         let source: Vec<f32> = (0..96_000)
             .map(|i| {
-                let dt = i as f64 / sr as f64 - t0;
+                let dt = f64::from(i) / f64::from(sr) - t0;
                 if dt < 0.0 {
                     0.0
                 } else {
@@ -857,7 +874,7 @@ mod tests {
             .collect();
         let (x, _) = audio_spike_signal(&source, sr, &[t0]);
         let end = (start + 1..).find(|&j| x[j] == 0.0).unwrap();
-        let len_ms = (end - start) as f64 / sr as f64 * 1000.0;
+        let len_ms = (end - start) as f64 / f64::from(sr) * 1000.0;
         assert!(
             (len_ms - 37.5).abs() <= 2.0,
             "40 Hz kick snippet {len_ms} ms, want 37.5 +-2"
@@ -872,39 +889,39 @@ mod tests {
         let start = 24_000usize;
         let source: Vec<f32> = (0..96_000)
             .map(|i| {
-                let dt = i as f64 / sr as f64 - t0;
+                let dt = f64::from(i) / f64::from(sr) - t0;
                 if dt < 0.0 {
                     return 0.0;
                 }
                 let mut v = (std::f64::consts::TAU * 200.0 * dt).sin() * (-8.0 * dt).exp();
-                let s = (i as f64 * 12.9898).sin() * 43758.5453;
+                let s = (f64::from(i) * 12.9898).sin() * 43758.5453;
                 v += (s - s.floor() - 0.5) * 0.3;
                 v as f32
             })
             .collect();
         let (x, _) = audio_spike_signal(&source, sr, &[t0]);
         let end = (start + 1..).find(|&j| x[j] == 0.0).unwrap();
-        let len_ms = (end - start) as f64 / sr as f64 * 1000.0;
+        let len_ms = (end - start) as f64 / f64::from(sr) * 1000.0;
         assert!((len_ms - 7.5).abs() <= 1.0, "snare snippet {len_ms} ms, want 7.5 +-1");
     }
 
     /// #378 round 3: a tone that runs CONTINUOUSLY through the hit (no silence before,
-    /// the shape of the app test the_audio_export_leaves_the_source_unchanged_and_writes_
-    /// the_snippets) counts the same three lobes: the zero-phase smoothing puts the
+    /// the shape of the app test `the_audio_export_leaves_the_source_unchanged_and_writes`_
+    /// `the_snippets`) counts the same three lobes: the zero-phase smoothing puts the
     /// smoothed crossings on the real ones, free of the causal group delay.
     #[test]
     fn a_continuous_tone_counts_the_same_three_lobes() {
         let sr = 48_000u32;
         let source: Vec<f32> = (0..96_000)
-            .map(|i| (std::f64::consts::TAU * 240.0 * i as f64 / sr as f64).sin() as f32)
+            .map(|i| (std::f64::consts::TAU * 240.0 * f64::from(i) / f64::from(sr)).sin() as f32)
             .collect();
         let lens = audio_snippet_lengths(&source, sr, &[0.5]);
         assert_eq!(lens.len(), 1);
         // 1.5 periods of 200 samples = 300, on a real crossing of the source
         assert!(
-            (lens[0] * sr as f64 - 300.0).abs() <= 2.0,
+            (lens[0] * f64::from(sr) - 300.0).abs() <= 2.0,
             "continuous 240 Hz snippet {} samples, want 300",
-            lens[0] * sr as f64
+            lens[0] * f64::from(sr)
         );
     }
 
@@ -914,7 +931,7 @@ mod tests {
         let sr = 48_000u32;
         let source: Vec<f32> = (0..96_000)
             .map(|i| {
-                let dt = i as f64 / 48_000.0 - 0.5;
+                let dt = f64::from(i) / 48_000.0 - 0.5;
                 if dt < 0.0 {
                     0.0
                 } else {
@@ -934,7 +951,7 @@ mod tests {
         // 240 Hz: 1.5 periods are 300 samples (6.25 ms); the second hit starts 3 ms after the
         // first (144 samples), so the first snippet is cut there
         let source: Vec<f32> = (0..96_000)
-            .map(|i| (std::f64::consts::TAU * 240.0 * i as f64 / 48_000.0).sin() as f32)
+            .map(|i| (std::f64::consts::TAU * 240.0 * f64::from(i) / 48_000.0).sin() as f32)
             .collect();
         let (x, _) = audio_spike_signal(&source, sr, &[0.5, 0.503]);
         assert_eq!(x[24_000], source[24_000]);
@@ -956,7 +973,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let sr = 48_000u32;
         let source: Vec<f32> = (0..96_000)
-            .map(|i| (std::f64::consts::TAU * 240.0 * i as f64 / 48_000.0).sin() as f32)
+            .map(|i| (std::f64::consts::TAU * 240.0 * f64::from(i) / 48_000.0).sin() as f32)
             .collect();
         let src = Bext {
             time_reference: 123_456,

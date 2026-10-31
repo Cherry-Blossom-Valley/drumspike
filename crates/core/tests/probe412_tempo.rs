@@ -26,7 +26,7 @@ fn mag_q995(path: &std::path::Path, role: &str) {
             mags.push(10f32.powf(spec[i * N_BANDS + b]) - 1.0);
         }
     }
-    mags.sort_by(|a, b| a.total_cmp(b));
+    mags.sort_by(f32::total_cmp);
     let q = |p: f32| -> f32 { mags[((mags.len() as f32 - 1.0) * p).round() as usize] };
     println!(
         "{} {role}: mag q995 {:.4} q999 {:.4}",

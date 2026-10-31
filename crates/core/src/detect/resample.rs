@@ -21,14 +21,14 @@
 //! ```
 //!
 //! Stage B is the anti-alias lowpass: `fc_B` = 21,099.0 Hz (the middle of the transition
-//! band from 0.913 of the output Nyquist, soxr_hq's `passband_end`, to 22,050 Hz),
+//! band from 0.913 of the output Nyquist, `soxr_hq`'s `passband_end`, to 22,050 Hz),
 //! `beta_B` = 13.711 (about 133 dB), half length `T_B` = 2.3177 ms. Stage A is a short
 //! pre-filter, `fc_A` = 43,419 Hz, `beta_A` = 14.064, `T_A` = 72.93 us (3.5 input samples
-//! at 48 kHz); it reproduces the slow passband droop of soxr_hq (-0.0022 dB at 18 kHz,
+//! at 48 kHz); it reproduces the slow passband droop of `soxr_hq` (-0.0022 dB at 18 kHz,
 //! -0.0078 dB at 20 kHz) that a single flat Kaiser design lacks. A single Kaiser stage
 //! matched soxr to 73 dB on white noise and failed the 80 dB gate on the hi-hat tracks (69
 //! to 76 dB); the cascade matches soxr's measured kernel to 133 dB (white noise) at both
-//! rates. The six numbers are a least-squares fit of this kernel family to soxr_hq 1.1.0's
+//! rates. The six numbers are a least-squares fit of this kernel family to `soxr_hq` 1.1.0's
 //! measured impulse response (`tools/parity/fit_resample_kernel.py`); the response is
 //! -3 dB at 20.96 kHz, -80 dB at 21.92 kHz, below -137 dB from 22.05 kHz on.
 //!
@@ -158,6 +158,10 @@ pub struct Resampler {
 
 impl Resampler {
     /// Build the table for `sr_in`; `Err` for any rate other than 44,100, 48,000 or 96,000.
+    ///
+    /// # Errors
+    ///
+    /// [`ResampleError::UnsupportedRate`] when `sr_in` is not 44,100, 48,000 or 96,000 Hz.
     pub fn new(sr_in: u32) -> Result<Resampler, ResampleError> {
         let (m, q) = match sr_in {
             44_100 => (147, 0usize),
@@ -220,6 +224,15 @@ impl Resampler {
     }
 
     /// The process-wide table for `sr_in`, built on first use.
+    ///
+    /// # Errors
+    ///
+    /// [`ResampleError::UnsupportedRate`] when `sr_in` is not 44,100, 48,000 or 96,000 Hz.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the `expect("supported rate")` on [`Resampler::new`] runs only for
+    /// a rate that the `match` above has already accepted.
     pub fn shared(sr_in: u32) -> Result<&'static Resampler, ResampleError> {
         static R44: OnceLock<Resampler> = OnceLock::new();
         static R48: OnceLock<Resampler> = OnceLock::new();
@@ -234,17 +247,20 @@ impl Resampler {
     }
 
     /// The source rate this table was built for.
+    #[must_use]
     pub fn source_rate(&self) -> u32 {
         self.sr_in
     }
 
     /// Taps per phase (0 for the 44.1 kHz pass-through).
+    #[must_use]
     pub fn taps_per_phase(&self) -> usize {
         self.taps
     }
 
     /// Output length for `n` input samples: `ceil(n * 147 / M)`, saturating at
     /// `usize::MAX` for inputs where the multiplication would overflow (R14).
+    #[must_use]
     pub fn output_len(&self, n: usize) -> usize {
         n.saturating_mul(PHASES).div_ceil(self.m)
     }
@@ -276,6 +292,7 @@ impl Resampler {
     }
 
     /// Resample `x` (mono, the source rate of this table) to 44.1 kHz.
+    #[must_use]
     pub fn process(&self, x: &[f32]) -> Vec<f32> {
         if self.m == PHASES {
             return x.to_vec();
@@ -302,6 +319,10 @@ impl Resampler {
 /// Resample a mono signal at `sr_in` to 44.1 kHz with the shared table (see the module
 /// docs). A 44.1 kHz signal is returned unchanged; any other rate than 48 or 96 kHz is an
 /// error.
+///
+/// # Errors
+///
+/// [`ResampleError::UnsupportedRate`] when `sr_in` is not 44,100, 48,000 or 96,000 Hz.
 pub fn resample_to_44100(x: &[f32], sr_in: u32) -> Result<Vec<f32>, ResampleError> {
     Ok(Resampler::shared(sr_in)?.process(x))
 }

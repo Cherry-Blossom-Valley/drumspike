@@ -125,6 +125,7 @@ pub struct Event {
 
 impl Event {
     /// A plain hit with a time and a velocity.
+    #[must_use]
     pub fn new(t: f64, v: i64) -> Event {
         Event {
             t,
@@ -157,6 +158,7 @@ pub struct Source {
 
 impl Source {
     /// The display path of a record: `path`, else `relative`, else empty.
+    #[must_use]
     pub fn path_or_relative(&self) -> &str {
         self.path.as_deref().or(self.relative.as_deref()).unwrap_or("")
     }
@@ -206,16 +208,19 @@ pub struct Track {
 
 impl Track {
     /// The source record when one is attached.
+    #[must_use]
     pub fn source_ref(&self) -> Option<&Source> {
         self.source.as_ref().and_then(|s| s.as_ref())
     }
 
     /// The hits (empty when the key is absent).
+    #[must_use]
     pub fn events(&self) -> &[Event] {
         self.events.as_deref().unwrap_or(&[])
     }
 
     /// The track's mix mode, `ffmpeg` when absent (what the server assumes).
+    #[must_use]
     pub fn mix_mode_or_default(&self) -> &str {
         self.mix_mode.as_deref().unwrap_or("ffmpeg")
     }
@@ -266,6 +271,7 @@ impl Document {
     }
 
     /// One track by name.
+    #[must_use]
     pub fn track(&self, name: &str) -> Option<&Track> {
         self.tracks.as_ref().and_then(|m| m.get(name))
     }
@@ -276,6 +282,7 @@ impl Document {
     }
 
     /// `settings.mix_mode` or [`DEFAULT_MIX_MODE`] (`project.default_mix_mode`).
+    #[must_use]
     pub fn default_mix_mode(&self) -> &str {
         self.settings
             .as_ref()
@@ -285,6 +292,7 @@ impl Document {
 
     /// The display order: the stored `order` entries that name a track, then every other
     /// track in document order (`server.track_order`).
+    #[must_use]
     pub fn track_order(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .order
@@ -302,11 +310,21 @@ impl Document {
     }
 
     /// Parse a document from JSON text (no migration, no checks; see `migrate_forward`).
+    ///
+    /// # Errors
+    ///
+    /// The `serde_json` error when `text` is not valid JSON or does not fit the document shape.
     pub fn from_json(text: &str) -> Result<Document, serde_json::Error> {
         serde_json::from_str(text)
     }
 
     /// Compact JSON of the document (the binding hands this to Python's `json.loads`).
+    ///
+    /// # Panics
+    ///
+    /// Panics through `expect("a document serialises")` if `serde_json` fails to serialise the
+    /// document, which a well-formed document (finite numbers, string keys) never does.
+    #[must_use]
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("a document serialises")
     }
@@ -314,6 +332,13 @@ impl Document {
     /// The document as Python's `json.dump(doc, f, indent=1)` lays it out: one space per
     /// level, `": "` after a key, one item per line. Floats print in the shortest form that
     /// reads back to the same double (`1e-7` where Python writes `1e-07`; the value is the same).
+    ///
+    /// # Panics
+    ///
+    /// Panics through `expect("a document serialises")` if serialisation fails, which a
+    /// well-formed document never does; the `expect("serde_json writes UTF-8")` on the output
+    /// cannot fire because `serde_json` writes UTF-8.
+    #[must_use]
     pub fn to_json_pretty(&self) -> String {
         let mut buf = Vec::new();
         let fmt = serde_json::ser::PrettyFormatter::with_indent(b" ");
@@ -490,6 +515,13 @@ impl Serialize for Document {
 }
 
 /// `project.empty_document(name, mix_mode)`.
+///
+/// # Panics
+///
+/// Panics at the `expect("finite time")` on `Number::from_f64(now())` if the
+/// clock value were not finite; `now()` returns a finite number of seconds, so
+/// this does not happen.
+#[must_use]
 pub fn empty_document(name: &str, mix_mode: &str) -> Document {
     Document {
         format: FORMAT,
@@ -508,11 +540,11 @@ pub fn empty_document(name: &str, mix_mode: &str) -> Document {
 }
 
 /// `time.time()`: seconds since the Unix epoch as a double.
+#[must_use]
 pub fn now() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
+        .map_or(0.0, |d| d.as_secs_f64())
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! Self-test mode (P3-7a, debug builds only). The app starts with
 //! `--self-test <scenario> --out <report.json>`: the page runs the scenario in the real
-//! WKWebView (`apps/desktop/selftest/driver.js`), sends one JSON report to the command
+//! `WKWebView` (`apps/desktop/selftest/driver.js`), sends one JSON report to the command
 //! `selftest_report`, and the process writes the file and exits (0 = pass, 1 = fail, 2 =
 //! the scenario could not start). It replaces the debug probe of P3-3b. The report holds
 //! numbers and no screenshot, so macOS asks for no screen permission.
@@ -44,7 +44,7 @@ pub fn driver_for(scenario: &Value) -> &'static str {
 /// The step "play" (P3-5b): defines `window.__selftestPlay`, loaded before the driver.
 pub const PLAY: &str = include_str!("../../selftest/play.js");
 
-/// The step "playhead_steps" (#463): defines `window.__selftestPlayheadSteps`, loaded before the driver.
+/// The step "`playhead_steps`" (#463): defines `window.__selftestPlayheadSteps`, loaded before the driver.
 pub const PLAYHEAD_STEPS: &str = include_str!("../../selftest/playhead_steps.js");
 
 /// The step "memory" (P3-6b): defines `window.__selftestMemory`, loaded before the driver.
@@ -59,12 +59,17 @@ pub struct Request {
     pub out: PathBuf,
 }
 
-/// True while a self-test runs: WebKit fully suspends a page whose window is occluded (rAF and
+/// True while a self-test runs: `WebKit` fully suspends a page whose window is occluded (rAF and
 /// timers alike), which hangs the in-page wall-clock guards, so lib.rs keeps the window front.
 pub static FRONT_WINDOW: AtomicBool = AtomicBool::new(false);
 
 /// `--self-test <scenario> --out <file>` in `args` (without the program name). `Ok(None)`
 /// when the flag is absent; an error when it is incomplete.
+///
+/// # Errors
+///
+/// When `--self-test` is not followed by a scenario (a value that starts with `--` is none), when
+/// `--out` is missing, or when `--out` is not followed by a file name.
 pub fn parse_args(args: &[String]) -> Result<Option<Request>, String> {
     let Some(i) = args.iter().position(|a| a == "--self-test") else {
         return Ok(None);
@@ -88,6 +93,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<Request>, String> {
 }
 
 /// A name becomes `apps/desktop/selftest/<name>.json` of this checkout; a path stays.
+#[must_use]
 pub fn scenario_path(scenario: &str) -> PathBuf {
     if scenario.contains('/') || scenario.ends_with(".json") {
         PathBuf::from(scenario)
@@ -98,22 +104,37 @@ pub fn scenario_path(scenario: &str) -> PathBuf {
     }
 }
 
-/// Replace every string `"$NAME"` in the scenario with the environment variable `NAME`.
-pub fn resolve_env(v: &mut Value) -> Result<(), String> {
+/// Replace every string `"$NAME"` in the scenario with the environment variable `NAME`,
+/// or with what `lookup` answers for it (#194: the test seam).
+fn resolve_env_with(v: &mut Value, lookup: &dyn Fn(&str) -> Option<String>) -> Result<(), String> {
     match v {
         Value::String(s) => {
             if let Some(name) = s.strip_prefix('$') {
-                *s = std::env::var(name).map_err(|_| format!("the scenario needs the environment variable {name}"))?;
+                *s = lookup(name).ok_or_else(|| format!("the scenario needs the environment variable {name}"))?;
             }
         }
-        Value::Array(a) => a.iter_mut().try_for_each(resolve_env)?,
-        Value::Object(o) => o.values_mut().try_for_each(resolve_env)?,
+        Value::Array(a) => a.iter_mut().try_for_each(|x| resolve_env_with(x, lookup))?,
+        Value::Object(o) => o.values_mut().try_for_each(|x| resolve_env_with(x, lookup))?,
         _ => {}
     }
     Ok(())
 }
 
+/// Replace every string `"$NAME"` in the scenario with the environment variable `NAME`.
+///
+/// # Errors
+///
+/// When a `$NAME` string names an environment variable that is not set (or not valid Unicode).
+pub fn resolve_env(v: &mut Value) -> Result<(), String> {
+    resolve_env_with(v, &|name| std::env::var(name).ok())
+}
+
 /// The scenario file as JSON with `$NAME` strings resolved; it must have a `name`.
+///
+/// # Errors
+///
+/// When the scenario file cannot be read, is not valid JSON, has no string `name`, or needs an
+/// environment variable that is not set.
 pub fn load_scenario(req: &Request) -> Result<Value, String> {
     let path = scenario_path(&req.scenario);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read scenario {}: {e}", path.display()))?;
@@ -125,7 +146,32 @@ pub fn load_scenario(req: &Request) -> Result<Value, String> {
     Ok(v)
 }
 
+/// [`load_scenario`] with the `$NAME` variables taken from `vars` instead of the
+/// process environment (#194): a test loads a scenario without writing process env that
+/// other parallel tests read. Later pairs win on a duplicate name.
+///
+/// # Errors
+///
+/// When the scenario file cannot be read, is not valid JSON, has no string `name`, or needs a
+/// variable that `vars` does not hold.
+pub fn load_scenario_from(req: &Request, vars: &[(&str, &str)]) -> Result<Value, String> {
+    let path = scenario_path(&req.scenario);
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read scenario {}: {e}", path.display()))?;
+    let mut v: Value = serde_json::from_str(&text).map_err(|e| format!("scenario {}: {e}", path.display()))?;
+    if v.get("name").and_then(Value::as_str).is_none() {
+        return Err(format!("scenario {} has no name", path.display()));
+    }
+    resolve_env_with(&mut v, &|name| {
+        vars.iter()
+            .rev()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| (*v).to_string())
+    })?;
+    Ok(v)
+}
+
 /// The script the page runs after `load`: the scenario as `window.__SELFTEST__`, then the driver.
+#[must_use]
 pub fn init_script(scenario: &Value) -> String {
     format!(
         "window.addEventListener('load', () => {{ if (/splash\\.html$/.test(location.pathname)) return; window.__SELFTEST__ = {scenario};\n{PLAY}\n{PLAYHEAD_STEPS}\n{MEMORY}\n{driver}\n}});",
@@ -135,7 +181,7 @@ pub fn init_script(scenario: &Value) -> String {
     )
 }
 
-/// One WebKit helper process (`ps` row).
+/// One `WebKit` helper process (`ps` row).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Helper {
     pub pid: u32,
@@ -144,7 +190,8 @@ pub struct Helper {
     pub kind: String,
 }
 
-/// The WebKit helper processes in the output of `ps -ax -o pid=,rss=,comm=`.
+/// The `WebKit` helper processes in the output of `ps -ax -o pid=,rss=,comm=`.
+#[must_use]
 pub fn parse_helpers(ps: &str) -> Vec<Helper> {
     let mut out = Vec::new();
     for line in ps.lines() {
@@ -181,18 +228,20 @@ fn helpers_now() -> Vec<Helper> {
 
 static HELPERS_BEFORE: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
 
-/// Call once before the web view exists: the WebKit helpers of other apps are not ours.
+/// Call once before the web view exists: the `WebKit` helpers of other apps are not ours.
 pub fn snapshot_helpers() {
     HELPERS_BEFORE.get_or_init(|| helpers_now().iter().map(|h| h.pid).collect());
 }
 
 /// Physical footprint in bytes of each pid (`footprint --json`); a pid that is gone is missing.
+#[must_use]
 pub fn footprints(pids: &[u32]) -> std::collections::HashMap<u32, u64> {
     footprint_report(pids).0
 }
 
 /// The largest memory categories (dirty bytes, compressed pages included) of a `footprint --json` process entry:
 /// `[["WebKit Malloc", 123.4], ...]` in MB, at most `n` entries.
+#[must_use]
 pub fn top_categories(process: &Value, n: usize) -> Vec<Value> {
     // `dirty` already includes the compressed (swapped) pages; the sum of `dirty` is the footprint
     let mut rows: Vec<(String, f64)> = process["categories"]
@@ -204,11 +253,12 @@ pub fn top_categories(process: &Value, n: usize) -> Vec<Value> {
     rows.sort_by(|a, b| b.1.total_cmp(&a.1));
     rows.into_iter()
         .take(n)
-        .map(|(k, b)| json!([k, (b / 1048576.0 * 10.0).round() / 10.0]))
+        .map(|(k, b)| json!([k, (b / 1_048_576.0 * 10.0).round() / 10.0]))
         .collect()
 }
 
 /// Footprints and the top categories of each pid, from one `footprint --json` call.
+#[must_use]
 pub fn footprint_report(
     pids: &[u32],
 ) -> (
@@ -242,14 +292,14 @@ pub fn footprint_report(
     (map, cats)
 }
 
-/// Memory of the WebKit helpers that started after `snapshot_helpers` (this app's web view):
+/// Memory of the `WebKit` helpers that started after `snapshot_helpers` (this app's web view):
 /// `{processes: [{pid, kind, footprint_mb, rss_mb, top: [[category, MB]]}], web_content_mb, web_content_rss_mb, gpu_mb,
-/// web_content_count}`. `web_content_mb` is the largest footprint among the new WebContent processes.
+/// web_content_count}`. `web_content_mb` is the largest footprint among the new `WebContent` processes.
 pub fn memory() -> Value {
     let before = HELPERS_BEFORE.get().cloned().unwrap_or_default();
     let ours: Vec<Helper> = helpers_now().into_iter().filter(|h| !before.contains(&h.pid)).collect();
     let (fp, cats) = footprint_report(&ours.iter().map(|h| h.pid).collect::<Vec<_>>());
-    let mb = |b: u64| (b as f64 / 1048576.0 * 10.0).round() / 10.0;
+    let mb = |b: u64| (b as f64 / 1_048_576.0 * 10.0).round() / 10.0;
     let procs: Vec<Value> = ours
         .iter()
         .map(|h| {
@@ -270,6 +320,7 @@ pub fn memory() -> Value {
 }
 
 /// The facts about this build that go into every report.
+#[must_use]
 pub fn host_info() -> Value {
     json!({
         "os": std::env::consts::OS,
@@ -280,11 +331,16 @@ pub fn host_info() -> Value {
 }
 
 /// A report for a run that did not reach the driver.
+#[must_use]
 pub fn failure_report(scenario: &str, why: &str) -> Value {
     json!({"scenario": scenario, "pass": false, "steps": [], "metrics": {}, "errors": [why]})
 }
 
 /// Add the host facts and the scenario, write the report as pretty JSON; returns whether it passed.
+///
+/// # Errors
+///
+/// When the report cannot be serialized, or the file `out` cannot be written.
 pub fn write_report(out: &Path, mut report: Value, cold_ms: f64) -> Result<bool, String> {
     let pass = report.get("pass").and_then(Value::as_bool).unwrap_or(false);
     if let Some(o) = report.as_object_mut() {

@@ -21,6 +21,7 @@ pub const LINK_SOURCE: &str = "https://github.com/Cherry-Blossom-Valley/drumspik
 pub const LINK_CBV: &str = "https://cherry-blossom-valley.com/";
 
 /// The one address of a fixed id; anything else is refused.
+#[must_use]
 pub fn link_address(id: &str) -> Option<&'static str> {
     match id {
         "website" => Some(LINK_WEBSITE),
@@ -31,6 +32,11 @@ pub fn link_address(id: &str) -> Option<&'static str> {
 }
 
 /// #18: open one of the fixed addresses of the About dialog by id (`open <address>` on macOS).
+///
+/// # Errors
+///
+/// 404 when `id` is none of `website`, `source` and `cbv`. 500 on a platform other than macOS, and
+/// on macOS when the `open` command cannot be started.
 #[tauri::command]
 pub fn open_link(id: String) -> Result<Value, AppError> {
     let addr = link_address(&id).ok_or_else(|| AppError::not_found(format!("unknown link id: {id}")))?;
@@ -51,6 +57,7 @@ pub fn open_link(id: String) -> Result<Value, AppError> {
 
 /// The answer of `about_info`: `name`, `version`, `build_sha` and `core_version` (main is
 /// model-free, #281 D16). `build_sha` comes from the build (`DS_BUILD_SHA=...`), else `dev`.
+#[must_use]
 pub fn about_value(version: &str) -> Value {
     json!({
         "name": "Drum Spike",
@@ -62,6 +69,7 @@ pub fn about_value(version: &str) -> Value {
 
 /// The first existing third-party list: in the bundle resources, else (a plain `cargo run`) next to
 /// `src-tauri` in the repository.
+#[must_use]
 pub fn third_party_path(resource_dir: Option<&Path>) -> Option<PathBuf> {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(THIRD_PARTY_FILE);
     resource_dir

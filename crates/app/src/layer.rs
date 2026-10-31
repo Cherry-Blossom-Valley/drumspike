@@ -46,7 +46,7 @@ use drumspike_core::io::{Bext, MappedWav, WavFormat, WavSpec, write_wav};
 use drumspike_core::layer::{
     AlignParams, Curve, HitXcorr, OneShot, attack_template, majority_sign, read_one_shot, render_layer, xcorr_hit,
 };
-use drumspike_core::project::{EXPORTS_DIR, Source, SourceStatus, build_source, resolve_source};
+use drumspike_core::project::{DOC_EXT, EXPORTS_DIR, Source, SourceStatus, build_source, resolve_source};
 use drumspike_core::spike::hit_index;
 use serde_json::{Map, Value, json};
 
@@ -91,6 +91,7 @@ pub enum Polarity {
 
 impl Polarity {
     /// The name in the document.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Polarity::Normal => "normal",
@@ -100,6 +101,7 @@ impl Polarity {
     }
 
     /// The polarity of a name; `None` for another text.
+    #[must_use]
     pub fn parse(s: &str) -> Option<Polarity> {
         match s {
             "normal" => Some(Polarity::Normal),
@@ -165,6 +167,7 @@ impl Layer {
     }
 
     /// The JSON object of the layer.
+    #[must_use]
     pub fn to_json(&self) -> Value {
         json!({
             "source": serde_json::to_value(&self.source).unwrap_or(Value::Null),
@@ -182,16 +185,19 @@ impl Layer {
     }
 
     /// The onset the layer uses: the override, else the measured one (P4-40e).
+    #[must_use]
     pub fn onset_eff(&self) -> usize {
         self.onset_set.unwrap_or(self.onset)
     }
 
     /// The onset in seconds (of the effective onset, P4-40e).
+    #[must_use]
     pub fn onset_s(&self) -> f64 {
-        self.onset_eff() as f64 / self.sr as f64
+        self.onset_eff() as f64 / f64::from(self.sr)
     }
 
     /// The onset at `sr` in whole samples (the one-shot resampled to `sr` keeps it there).
+    #[must_use]
     pub fn onset_at(&self, sr: u32) -> usize {
         self.onset_at_of(self.onset_eff(), sr)
     }
@@ -201,20 +207,22 @@ impl Layer {
         if sr == self.sr {
             onset
         } else {
-            (onset as f64 * sr as f64 / self.sr as f64).round() as usize
+            (onset as f64 * f64::from(sr) / f64::from(self.sr)).round() as usize
         }
     }
 
     /// The onset at `sr` in samples, not rounded: the render places the one-shot resampled to `sr`
     /// with its attack at this fractional sample (P4-7a fix 7).
+    #[must_use]
     pub fn onset_exact_at(&self, sr: u32) -> f64 {
-        self.onset_eff() as f64 * sr as f64 / self.sr as f64
+        self.onset_eff() as f64 * f64::from(sr) / f64::from(self.sr)
     }
 
     /// The gain of a hit with velocity `v` and polarity `sign` (+1 or -1).
+    #[must_use]
     pub fn gain(&self, v: i64, sign: i8) -> f32 {
         let level = 10f64.powf(self.level_db.clamp(LEVEL_MIN_DB, LEVEL_MAX_DB) / 20.0);
-        (sign as f64 * level * self.curve.gain(v)) as f32
+        (f64::from(sign) * level * self.curve.gain(v)) as f32
     }
 }
 
@@ -309,6 +317,14 @@ pub(crate) fn protected_files(g: &OpenProject) -> Vec<PathBuf> {
     out
 }
 
+/// The 400 for a render target that is a folder (and was not a recoverable leftover).
+fn folder_error(path: &Path) -> AppError {
+    AppError::bad(format!(
+        "the path is a folder: {}: the render writes a file there; remove the folder or choose another file",
+        path.display()
+    ))
+}
+
 /// A file that a render or a calibration save writes (P4-7d): an absolute path in an existing folder, not a
 /// folder, and not one of the `protected` files. 400 for a relative path or a folder, 404 for a missing
 /// folder, 409 for a protected file.
@@ -321,7 +337,7 @@ pub(crate) fn save_target(path: &str, protected: &[PathBuf]) -> Result<PathBuf, 
         return Err(AppError::not_found(format!("the folder does not exist: {path}")));
     }
     if p.is_dir() {
-        return Err(AppError::bad(format!("the path is a folder: {path}")));
+        return Err(folder_error(p));
     }
     let canon = |f: &Path| crate::export::path_key(f);
     if protected.iter().any(|f| canon(f) == canon(p)) {
@@ -387,6 +403,7 @@ fn align_key(file: &Path, layer: &Layer, mic: &Path, p: &AlignParams) -> String 
 /// lag of the signed correlation for that sign (the search maximises the correlation of the one-shot as it
 /// plays, not its absolute value), 0 when it sits on the search edge (the true lag may be outside the window). A
 /// lag with a low match ([`UNCERTAIN_MATCH`]) is applied and only flagged uncertain.
+#[must_use]
 pub fn applied_lag(x: &HitXcorr, sign: i8) -> f64 {
     let (lag, _, edge) = x.for_sign_edge(sign);
     if edge { 0.0 } else { lag }
@@ -405,6 +422,7 @@ pub struct Alignment {
 
 impl Alignment {
     /// The sign the layer uses: its polarity, or the majority for `auto`.
+    #[must_use]
     pub fn sign_for(&self, p: Polarity) -> i8 {
         match p {
             Polarity::Normal => 1,
@@ -460,7 +478,7 @@ impl Service {
         let key = align_key(file, &job.layer, mic, &p);
         let idx: Vec<i64> = hits
             .iter()
-            .map(|h| drumspike_core::pyops::py_round(h.t * sr as f64))
+            .map(|h| drumspike_core::pyops::py_round(h.t * f64::from(sr)))
             .collect();
         let mut missing: Vec<i64> = {
             let c = lock(&self.inner.layers.align);
@@ -476,7 +494,7 @@ impl Service {
             let shot = self.layer_shot(file, Some(sr))?;
             let mono = shot.mono();
             let (a, pre) = attack_template(&mono, job_onset(job, &shot), sr, &p);
-            let max_lag = (p.max_lag_s * sr as f64).round() as usize;
+            let max_lag = (p.max_lag_s * f64::from(sr)).round() as usize;
             for i in missing {
                 fresh.insert(i, xcorr_hit(&decoded.samples, i, &a, pre, max_lag));
             }
@@ -529,7 +547,7 @@ impl Service {
             });
         let onset_s = if job.status == SourceStatus::Changed {
             // the file changed under the layer record: re-measure (samples at the shot's rate)
-            job_onset(job, &shot) as f64 / shot.sr as f64
+            job_onset(job, &shot) as f64 / f64::from(shot.sr)
         } else {
             job.layer.onset_s()
         };
@@ -539,7 +557,7 @@ impl Service {
             .map(|(k, h)| {
                 let lag_s = match (&al, job.layer.align) {
                     // an edge lag is uncertain: do not shift (the true lag may be outside the window)
-                    (Some(a), true) => a.hits[k].map_or(0.0, |x| applied_lag(&x, sign) / a.sr as f64),
+                    (Some(a), true) => a.hits[k].map_or(0.0, |x| applied_lag(&x, sign) / f64::from(a.sr)),
                     _ => 0.0,
                 };
                 (h.t + lag_s - onset_s, job.layer.gain(h.v, sign))
@@ -550,6 +568,10 @@ impl Service {
 
     /// `track_layer_get {sid, name}`: `{layer, status, path, file, onset_ms}`; `layer` is `null` (and
     /// the rest too) for a track without a layer.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` when `sid` is unknown or the project has no track `name`.
     pub fn track_layer_get(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -561,6 +583,11 @@ impl Service {
     /// `[start, end)` in its own samples — the Layer view's waveform. The bytes of
     /// `samples_window`: `u32 start`, `u32 rate`, then f32. The window is clamped to the file and
     /// capped at [`MAX_WINDOW_SAMPLES`]. 409 without a layer or its file.
+    ///
+    /// # Errors
+    ///
+    /// A 409 `AppError` when the track has no layer or its layer file is missing; an error for an unknown session or
+    /// track, or when the one-shot cannot be read.
     pub fn track_layer_wave(&self, sid: &str, name: &str, start: i64, end: i64) -> Result<Vec<u8>, AppError> {
         let op = self.inner.registry.get(sid)?;
         let file = {
@@ -583,6 +610,12 @@ impl Service {
     /// project dirty and updates an open transport of the project. Answers as
     /// [`Service::track_layer_get`]. 400 for a file the app cannot read or a wrong value; 409 for a
     /// setting on a track without a layer.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown or read-only session or an unknown track; a 400 when `path` is not a string or
+    /// null or its file cannot be read, `level_db`, `polarity`, `curve`, `on`, `align` or `onset` has a wrong value,
+    /// or `onset` is not before the end of the one-shot; a 409 when no layer exists and no `path` is given.
     pub fn track_layer_set(&self, sid: &str, name: &str, args: &Value) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let dir = {
@@ -748,6 +781,11 @@ impl Service {
     /// uses (`sign`: its polarity, or the majority for `auto`); `match` is 0 to 1; a hit's own `sign`
     /// is the better of the two; `flips` are the hits whose own sign is not the majority's. 409 without
     /// a layer, with a missing layer file or an offline track.
+    ///
+    /// # Errors
+    ///
+    /// A 409 `AppError` when the track has no layer, its layer file is missing or the track is offline; an error for
+    /// an unknown session or track, or when the one-shot or the track audio cannot be read.
     pub fn track_layer_align(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let job = {
@@ -811,11 +849,53 @@ impl Service {
     /// sample in the file). 409 without a layer, for a missing layer file, an offline track, a track
     /// whose files are another track's, a stale follower that cannot be derived, and a `path` that is
     /// a source or a one-shot in use.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::export_layer_to`] (this is the call with `path` of `None`).
     pub fn export_layer(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         self.export_layer_to(sid, name, None)
     }
 
+    /// The leftover of a failed layer render (campaign 0.9.6 S3, docs/review/test-campaign-0.9.6/117):
+    /// a folder named like the target file plus a `<target>.drumspike` sidecar blocked every later
+    /// render with 400 "the path is a folder" until the folder was removed by hand. Only the proven
+    /// leftover shape is cleared: an empty folder at the target with the `<target>.drumspike`
+    /// sidecar file beside it (`true`; the sidecar goes with it). Every other folder at the target
+    /// belongs to the engineer: it stays exactly as it was and the render answers 400 with a
+    /// message that says so (`false`).
+    fn clear_render_leftover(path: &Path) -> bool {
+        if !path.is_dir() {
+            return false;
+        }
+        let name = path
+            .file_name()
+            .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+        let sidecar = path.with_file_name(format!("{name}{DOC_EXT}"));
+        if !sidecar.is_file() {
+            return false; // without the sidecar the folder is not provably a render leftover
+        }
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return false;
+        };
+        if entries.count() > 0 {
+            return false; // any content: foreign, left alone
+        }
+        if std::fs::remove_dir(path).is_err() {
+            return false;
+        }
+        let _ = std::fs::remove_file(&sidecar);
+        true
+    }
+
     /// [`Service::export_layer`] into the file `path` (an absolute path, see [`save_target`]) when given.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown or read-only session; a 409 for a track without a layer, a missing layer file, an
+    /// offline track, files owned by another track or a stale follower that cannot be derived; a 400 for a `path`
+    /// that is not allowed (`save_target`), a folder at the target, a protected file or a source that cannot be
+    /// opened; a 500 when `Exports/` or the output file cannot be written.
     pub fn export_layer_to(&self, sid: &str, name: &str, path: Option<&str>) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         {
@@ -830,7 +910,11 @@ impl Service {
             (job, g.project.subdir(EXPORTS_DIR), protected_files(&g))
         };
         let target = match path {
-            Some(p) => Some(save_target(p, &protected)?),
+            Some(p) => {
+                // a folder at the target from a failed earlier render must not block this one
+                Self::clear_render_leftover(Path::new(p));
+                Some(save_target(p, &protected)?)
+            }
             None => None,
         };
         let file = job
@@ -874,13 +958,15 @@ impl Service {
         let out = render_layer(n, &shot, job_onset_exact(&job, &shot), &hits);
         let ch = out.len();
         let inter: Vec<f32> = (0..n).flat_map(|i| out.iter().map(move |c| c[i])).collect();
-        let path = match target {
-            Some(p) => p,
-            None => {
-                std::fs::create_dir_all(&dir).map_err(|e| AppError::internal(format!("{}: {e}", dir.display())))?;
-                dir.join(format!("{name}_layer.wav"))
-            }
+        let path = if let Some(p) = target {
+            p
+        } else {
+            std::fs::create_dir_all(&dir).map_err(|e| AppError::internal(format!("{}: {e}", dir.display())))?;
+            dir.join(format!("{name}_layer.wav"))
         };
+        if path.is_dir() && !Self::clear_render_leftover(&path) {
+            return Err(folder_error(&path));
+        }
         // R01: the render must not write a protected file (a source, one-shot or bounce of any
         // open project) in any spelling of the path
         crate::export::check_export_plan(std::slice::from_ref(&path), &self.protected_files_everywhere())?;
@@ -913,6 +999,7 @@ impl Service {
 
 /// The `bext` chunk of a layer file: the source's time reference, date, time and originator, the
 /// layer's description and coding history.
+#[must_use]
 pub fn layer_bext(source: &Bext, sr: u32, channels: usize) -> Bext {
     Bext {
         description: BEXT_DESCRIPTION.to_string(),
@@ -953,6 +1040,7 @@ fn get_json(job: Option<&LayerJob>) -> Value {
 
 /// Run a command of the layer for the bridge, the command line and the MCP server; `None` when `cmd`
 /// is not one of them.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !LAYER_COMMANDS.contains(&cmd) {
         return None;
@@ -1107,7 +1195,7 @@ mod tests {
         assert!((l.onset_exact_at(44_100) - 44.1).abs() < 1e-9);
         assert_eq!(l.onset_exact_at(48_000), 48.0);
         let g = l.gain(127, 1);
-        assert!((g as f64 - 10f64.powf(-6.0 / 20.0)).abs() < 1e-6);
+        assert!((f64::from(g) - 10f64.powf(-6.0 / 20.0)).abs() < 1e-6);
         assert_eq!(l.gain(127, -1), -g);
         assert!((l.gain(0, 1)).abs() < 1e-9, "linear curve at velocity 0");
         let loud = Layer {
@@ -1115,7 +1203,7 @@ mod tests {
             ..layer()
         };
         assert!(
-            (loud.gain(127, 1) as f64 - 10f64.powf(12.0 / 20.0)).abs() < 1e-5,
+            (f64::from(loud.gain(127, 1)) - 10f64.powf(12.0 / 20.0)).abs() < 1e-5,
             "clamped"
         );
         for p in [Polarity::Normal, Polarity::Invert, Polarity::Auto] {

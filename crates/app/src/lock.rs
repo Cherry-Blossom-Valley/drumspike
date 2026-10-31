@@ -42,6 +42,7 @@ pub enum Lock {
 
 impl Lock {
     /// The text of the open answer's `lock` field: `held` or `unavailable: <why>`.
+    #[must_use]
     pub fn note(&self) -> String {
         match self {
             Lock::Held(_) => "held".to_string(),
@@ -50,6 +51,7 @@ impl Lock {
     }
 
     /// The lock, when held.
+    #[must_use]
     pub fn into_held(self) -> Option<ProjectLock> {
         match self {
             Lock::Held(l) => Some(l),
@@ -84,11 +86,11 @@ static FAKE_ERROR: Mutex<Option<std::io::ErrorKind>> = Mutex::new(None);
 /// Make every following lock fail as a volume without `flock` support does (`None` ends it). For tests; process wide.
 #[doc(hidden)]
 pub fn fake_lock_error(kind: Option<std::io::ErrorKind>) {
-    *FAKE_ERROR.lock().unwrap_or_else(|p| p.into_inner()) = kind;
+    *FAKE_ERROR.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = kind;
 }
 
 fn try_lock(file: &File) -> Result<(), TryLockError> {
-    if let Some(kind) = *FAKE_ERROR.lock().unwrap_or_else(|p| p.into_inner()) {
+    if let Some(kind) = *FAKE_ERROR.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
         return Err(TryLockError::Error(std::io::Error::new(
             kind,
             "operation not supported",
@@ -101,6 +103,10 @@ impl ProjectLock {
     /// Take the lock of the project folder `dir` for `client` (`app`, `cli`, `mcp`). 409 only when another process
     /// holds it (the message names its client and pid). Any other failure (the file cannot be made, the file system has
     /// no locks) is [`Lock::Unavailable`], not an error: the project opens unlocked.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 409 error when another process holds the lock on `dir`.
     pub fn acquire(dir: &Path, client: &str) -> Result<Lock, AppError> {
         let path = dir.join(LOCK_FILE);
         // A lock file this user cannot write (another user's 0644 file on a shared folder) can still be locked: the
@@ -122,9 +128,10 @@ impl ProjectLock {
         match try_lock(&file) {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => {
-                let who = holder(&mut file)
-                    .map(|(pid, client)| format!("{client} (pid {pid})"))
-                    .unwrap_or_else(|| "another process".into());
+                let who = holder(&mut file).map_or_else(
+                    || "another process".into(),
+                    |(pid, client)| format!("{client} (pid {pid})"),
+                );
                 return Err(AppError::conflict(format!(
                     "the project is open for writing in {who}: close it there, or open it read-only"
                 )));
@@ -143,11 +150,13 @@ impl ProjectLock {
     }
 
     /// The pid and client named in the lock file of `dir` (whoever holds it), for tests and messages.
+    #[must_use]
     pub fn holder_of(dir: &Path) -> Option<(u32, String)> {
         holder(&mut File::open(dir.join(LOCK_FILE)).ok()?)
     }
 
     /// The lock file.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }

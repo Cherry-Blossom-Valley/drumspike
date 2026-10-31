@@ -16,6 +16,11 @@
 //!    #472: without a snare (a kick-only session) the octave referee reads the phase shares: a
 //!    candidate with more kick weight a quarter beat off its grid than on it is the half
 //!    tempo, and its double takes the vote.
+//!    #130: with a snare, the backbeat verdict is corroborated by the shares before it
+//!    decides: a pick that carries the off-beat 8ths of a finer grid while its double holds
+//!    the weight on the beat with a nearly as strong comb is the half tempo of a half-time
+//!    backbeat, and its double takes the vote (`DRUMSPIKE_TEMPO_RULE=1` pins the shipped
+//!    referee).
 //! 2. Local period: the same comb in windows of 4 bars (at least 8 s), hop 1 bar, limited to
 //!    0.69 to 1.45 times the global period (no octave jumps). A dynamic programme cuts the local
 //!    periods into constant pieces of at least `min_bars` windows (L1 cost, a penalty per piece).
@@ -89,6 +94,12 @@ const FIT_ISOLATED_BEATS: i64 = 16;
 const FIT_MIN_GROUP_BEATS: usize = 4;
 /// Snare and tom hits at or above this velocity count for a fill.
 const FILL_VELOCITY: f64 = 60.0;
+/// #130: the smallest quarter-beat weight share at which a candidate's own grid shows the
+/// off-beat 8ths of a finer grid (the half-time backbeat's pick carries a real 4x grid).
+const HALF_TIME_MIN_QUART: f64 = 0.2;
+/// #130: the smallest comb of the double tempo (relative to the best candidate) at which
+/// the double counts as the corroborating beat of a half-time backbeat.
+const HALF_TIME_DBL_COMB: f64 = 0.8;
 
 /// The role of a hit; the weight of kick and snare is 1, of other drums 0.5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,6 +119,7 @@ pub enum Role {
 impl Role {
     /// The role of a document role name (`kick`, `snare`, `tom`, `cymbal`; anything else is
     /// `Other`).
+    #[must_use]
     pub fn from_name(name: &str) -> Role {
         match name {
             "kick" => Role::Kick,
@@ -145,6 +157,7 @@ pub struct Hit {
 
 impl Hit {
     /// A hit with the default velocity.
+    #[must_use]
     pub fn new(t: f64, role: Role) -> Hit {
         Hit {
             t,
@@ -188,6 +201,12 @@ impl Default for DetectParams {
 
 impl DetectParams {
     /// Check the fields; the message names the fault.
+    ///
+    /// # Errors
+    ///
+    /// A message when `min_bars` is outside 1 to 64, `min_step_pct` is not finite or outside 0.1
+    /// to 50, `bpm_range` is not finite, outside 20 to 400 BPM or narrower than an octave, or
+    /// `duration_s` is set but not a positive finite number.
     pub fn validate(&self) -> Result<(), String> {
         if !(1..=64).contains(&self.min_bars) {
             return Err(format!("min_bars must be 1 to 64, not {}", self.min_bars));
@@ -336,6 +355,7 @@ pub struct Prepared {
 
 /// Sort, drop non-finite and negative times and times after `until`, merge hits of one role
 /// within [`DEDUPE_S`] (the first time, the louder velocity), and leave out isolated hits.
+#[must_use]
 pub fn prepare(hits: &[Hit], until: Option<f64>) -> Prepared {
     let until = until.unwrap_or(f64::INFINITY);
     let mut late = 0;
@@ -475,7 +495,7 @@ fn best_period(h: &LagHist, lo: f64, hi: f64, max_teeth: usize) -> Option<(f64, 
 fn refine_period(h: &LagHist, p0: f64, c0: f64, max_teeth: usize) -> (f64, f64) {
     let mut best = (p0, c0);
     for i in -20..=20 {
-        let p = p0 * (1.0 + i as f64 * 0.0001);
+        let p = p0 * (1.0 + f64::from(i) * 0.0001);
         let c = h.comb(p, max_teeth);
         if c > best.1 {
             best = (p, c);
@@ -487,6 +507,32 @@ fn refine_period(h: &LagHist, p0: f64, c0: f64, max_teeth: usize) -> (f64, f64) 
 /// Wide prior on the tempo: a Gaussian in octaves around 120 BPM, one octave wide.
 fn prior(bpm: f64) -> f64 {
     (-0.5 * (bpm / 120.0).log2().powi(2)).exp()
+}
+
+/// Half-time snare (#180): the busier beat of the snare's pair holds at least this many
+/// times the snares of its partner, and at least [`HALF_TIME_MIN_SNARES`] of them.
+const HALF_TIME_RATIO: f64 = 2.0;
+const HALF_TIME_MIN_SNARES: f64 = 8.0;
+
+/// #130 tempo-referee version (env `DRUMSPIKE_TEMPO_RULE`; unset counts as 3, the #180
+/// product default). Version 1 pins the shipped referee: with a snare, the backbeat alone
+/// picks the octave and the shares stay out of it. Version 2 corroborates the backbeat
+/// verdict with the sub-beat shares (see [`half_time_backbeat`]). Version 3 adds the
+/// half-time bar 1 of #180 (see `bars`). The detection is read
+/// only: a project analysed before keeps its tempo until it is detected again.
+#[must_use]
+pub fn tempo_rule() -> u32 {
+    parse_rule(std::env::var("DRUMSPIKE_TEMPO_RULE").ok().as_deref())
+}
+
+/// The pin value behind [`tempo_rule`]: `1` and `0` pin the shipped referee, `2` the #130
+/// one, an unset or unparseable value is rule 3. A pure function so its test does not write
+/// the process env, which the parallel detection tests share.
+fn parse_rule(v: Option<&str>) -> u32 {
+    match v {
+        Some(v) => v.parse().unwrap_or(3),
+        None => 3,
+    }
 }
 
 /// Backbeat evidence of beat period `p`: snare to snare at 2 beats against 1 and 3 beats, and
@@ -528,6 +574,38 @@ fn octave_shares(hits: &[Hit], p: f64) -> (f64, f64) {
         return (0.0, 0.0);
     }
     (on / all, quart / all)
+}
+
+/// #130: is the candidate at period `p` the half tempo of a half-time backbeat? The backbeat
+/// referee cannot tell "snare on 2 and 4 at `p`" from "snare every 4 beats at `2p`" - the
+/// snare-to-snare histogram is the same - so the verdict of a positive backbeat is
+/// corroborated by the sub-beat shares before it decides the octave. The artifact pick
+/// carries a real finer grid (a quarter-beat share of at least [`HALF_TIME_MIN_QUART`]:
+/// the off-beat 8ths of the true tempo) while its double holds the weight on the beat
+/// (more than `p` does) with a comb close to the best candidate's (at least
+/// [`HALF_TIME_DBL_COMB`]) and almost nothing a quarter beat off. A straight backbeat
+/// (no quarter-beat weight: kick on 1 and 3), a ghost-note funk groove (a strong kick a
+/// quarter beat off, but a weak double) and a beat whose double is out of range or under
+/// the comb gate stay at `p`. The Session A session (map 134, kick 8ths, snare every 4
+/// beats): the 67 pick carries quarter 0.284 against 0.037 on the 134 grid and 134's comb
+/// is 0.971 of the best - flagged; the ballad at 67 with sixteenth kicks carries quarter
+/// 0.125 and stays.
+fn half_time_backbeat(hits: &[Hit], snare: &LagHist, rows: &[(f64, f64, f64)], p: f64) -> bool {
+    if backbeat(snare, p) <= 0.0 {
+        return false;
+    }
+    let Some(&(_, dcomb, _)) = rows.iter().find(|&&(q, _, _)| (q / (p / 2.0)).ln().abs() < 0.03) else {
+        return false;
+    };
+    if dcomb < HALF_TIME_DBL_COMB {
+        return false;
+    }
+    let (on, quart) = octave_shares(hits, p);
+    if quart < HALF_TIME_MIN_QUART {
+        return false;
+    }
+    let (don, dquart) = octave_shares(hits, p / 2.0);
+    don > on && dquart < quart
 }
 
 struct Global {
@@ -598,7 +676,16 @@ fn global_period(hits: &[Hit], params: &DetectParams) -> Result<Global, String> 
     // grid of the rest of the song, which the shares cannot tell from a half tempo (the
     // 120/140/120 trains read 46 % off the 120 grid).
     let half_tempo: Vec<bool> = if n_snare >= MIN_HITS {
-        vec![false; rows.len()]
+        // #130: with a snare the backbeat picks the octave; since rule 2 its verdict is
+        // corroborated by the sub-beat shares before it decides (the half-time backbeat),
+        // unless DRUMSPIKE_TEMPO_RULE pins the shipped referee.
+        if tempo_rule() < 2 {
+            vec![false; rows.len()]
+        } else {
+            rows.iter()
+                .map(|(p, _, _)| half_time_backbeat(hits, &snare, &rows, *p))
+                .collect()
+        }
     } else {
         rows.iter()
             .map(|(p, _, _)| {
@@ -854,7 +941,7 @@ fn phase_kernel(hits: &[Hit], p: f64, t0: f64, t1: f64, phi: f64) -> f64 {
 fn phase_scored(hits: &[Hit], p: f64, t0: f64, t1: f64) -> (f64, f64) {
     let mut best = (0.0, f64::NEG_INFINITY);
     for k in 0..200 {
-        let phi = k as f64 / 200.0 * p;
+        let phi = f64::from(k) / 200.0 * p;
         let s = phase_kernel(hits, p, t0, t1, phi);
         if s > best.1 {
             best = (phi, s);
@@ -1065,7 +1152,7 @@ fn invert(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
         }
         m.swap(c, piv);
         let d = m[c][c];
-        for x in m[c].iter_mut() {
+        for x in &mut m[c] {
             *x /= d;
         }
         let pivot = m[c].clone();
@@ -1249,7 +1336,7 @@ fn snap(g: &Grid, kept: &[OnBeat], last_beat: i64) -> (Grid, Vec<f64>) {
         let steps = 200.0;
         let mut best = (0.0f64, score(0.0));
         for k in -200..=200 {
-            let off = k as f64 / steps * p1 / 4.0;
+            let off = f64::from(k) / steps * p1 / 4.0;
             let s = score(off);
             if s > best.1 {
                 best = (off, s);
@@ -1384,9 +1471,19 @@ fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
             let (k0, k1) = (pair(&k, 0), pair(&k, 1));
             (i64::from(k1 > k0), sign_test(k0.max(k1), k0.min(k1)))
         };
-        let (a, b) = (votes(par), votes(par + 2));
-        let (down, alt) = if a >= b { (par, par + 2) } else { (par + 2, par) };
-        (down, alt, backbeat, sign_test(a.max(b), a.min(b)))
+        // #180: under a half-time snare (one beat of the pair holds the snare, its partner
+        // under half as many) the snare is on beat 3, so beat 1 is two beats from it, in the
+        // snare's own pair. The 2-and-4 reading above picks the other pair: a beat late.
+        let sp = i64::from(s1 > s0);
+        let (h0, h1) = (class(&s, sp), class(&s, sp + 2));
+        let (hi, lo, hc) = if h0 >= h1 { (h0, h1, sp) } else { (h1, h0, sp + 2) };
+        if tempo_rule() >= 3 && s0 != s1 && hi >= HALF_TIME_MIN_SNARES && hi >= HALF_TIME_RATIO * lo {
+            (hc + 2, hc, backbeat, sign_test(hi, lo))
+        } else {
+            let (a, b) = (votes(par), votes(par + 2));
+            let (down, alt) = if a >= b { (par, par + 2) } else { (par + 2, par) };
+            (down, alt, backbeat, sign_test(a.max(b), a.min(b)))
+        }
     } else {
         let scores: Vec<f64> = (0..bpb).map(|o| votes(o) - class(&s, o)).collect();
         let mut order: Vec<usize> = (0..scores.len()).collect();
@@ -1426,7 +1523,7 @@ fn is_simple_ratio(a: f64, b: f64) -> bool {
 fn grid_share(hits: &[Hit], t0: f64, t1: f64, period: f64) -> f64 {
     let mut best = 0.0f64;
     for k in 0..200 {
-        let phi = k as f64 / 200.0 * period;
+        let phi = f64::from(k) / 200.0 * period;
         let (mut w_on, mut w_all) = (0.0, 0.0);
         for h in hits.iter().filter(|h| h.role.is_ks() && h.t >= t0 && h.t < t1) {
             let x = (h.t - phi).rem_euclid(period);
@@ -1495,6 +1592,11 @@ fn round_to(x: f64, q: f64) -> f64 {
 
 /// Suggest a tempo map from the hits. Errors: fewer than [`MIN_HITS`] kick and snare hits, no
 /// regular beat, hits spanning more than [`MAX_SPAN_S`], parameters out of range.
+///
+/// # Errors
+///
+/// A message when `params` fails [`DetectParams::validate`], there are fewer than [`MIN_HITS`]
+/// kick and snare hits, the hits span more than [`MAX_SPAN_S`], or no regular beat is found.
 pub fn detect(hits: &[Hit], params: &DetectParams) -> Result<Detection, String> {
     let mut d = detect_at(hits, params)?;
     if params.min_bars > PROBE_BARS {
@@ -1515,7 +1617,7 @@ pub fn detect(hits: &[Hit], params: &DetectParams) -> Result<Detection, String> 
             d.excursions = p
                 .steps
                 .iter()
-                .filter(|s| s.bars < params.min_bars as i64)
+                .filter(|s| s.bars < i64::from(params.min_bars))
                 .filter(|s| (s.bpm / at(s.t)).ln().abs() >= (1.0 + params.min_step_pct / 100.0).ln())
                 .map(|s| Excursion {
                     t: s.t,
@@ -1548,6 +1650,11 @@ pub struct Bar1Refit {
 /// could be a 16th or an eighth off: this session's 16th "and" carries more hits than the
 /// beats). Errors: a tempo that is not positive and finite, fewer than [`MIN_HITS`] kick and
 /// snare hits.
+///
+/// # Errors
+///
+/// A message when `bpm` is not a positive finite number, or `hits` holds fewer than
+/// [`MIN_HITS`] kick and snare hits.
 pub fn refit_bar1(hits: &[Hit], bpm: f64, current_bar1_s: f64) -> Result<Bar1Refit, String> {
     if !(bpm.is_finite() && bpm > 0.0) {
         return Err(format!("tempo {bpm} BPM: the refit needs a positive tempo"));
@@ -1564,7 +1671,7 @@ pub fn refit_bar1(hits: &[Hit], bpm: f64, current_bar1_s: f64) -> Result<Bar1Ref
     let from = current_bar1_s.rem_euclid(p) - 0.25 * p;
     let mut best = (from.rem_euclid(p), f64::NEG_INFINITY);
     for k in 0..=400 {
-        let phi = (from + 0.5 * p * k as f64 / 400.0).rem_euclid(p);
+        let phi = (from + 0.5 * p * f64::from(k) / 400.0).rem_euclid(p);
         let s = phase_kernel(&ks, p, t0, t1 + p, phi);
         if s > best.1 {
             best = (phi, s);
@@ -1630,7 +1737,7 @@ fn track_and_fit(
     place_breaks(&on, &mut breaks, bars.down, bars.bpb);
     breaks.dedup();
     let step = (1.0 + params.min_step_pct / 100.0).ln();
-    let min_beats = params.min_bars as i64 * bars.bpb;
+    let min_beats = i64::from(params.min_bars) * bars.bpb;
     let last_beat = beats.len() as i64 - 1;
     let (fitted, kept) = loop {
         let Some((g, kept)) = fit(&on, &breaks) else {

@@ -60,6 +60,10 @@ impl From<ResampleError> for DetectError {
 
 /// The preparation of the detector (P3-15b): [`resample`] to 44.1 kHz and the chain's
 /// [`features`] (`(T, 84)` row-major).
+///
+/// # Errors
+///
+/// [`DetectError::Resample`] when `sr` is not 44.1, 48 or 96 kHz.
 pub fn prepare(signal: &[f32], sr: u32, chain: Chain) -> Result<Vec<f32>, DetectError> {
     let y = resample::resample_to_44100(signal, sr)?;
     Ok(features::features(&y, chain.feature_recipe()))
@@ -67,7 +71,7 @@ pub fn prepare(signal: &[f32], sr: u32, chain: Chain) -> Result<Vec<f32>, Detect
 
 /// The reference chain that [`features`] and [`peaks`] follow.
 ///
-/// * [`Chain::Cli`]: the CLI reference (the PyTorch port
+/// * [`Chain::Cli`]: the CLI reference (the `PyTorch` port
 ///   the CLI reference: `AudioProcessor` with the filterbank grid anchored at fmin = 20 Hz,
 ///   `1 + len / 441` frames, and the port's own `PeakPicker`). The Rust detector equals the
 ///   CLI with this chain.
@@ -95,6 +99,7 @@ impl Chain {
     pub const ALL: [Chain; 3] = [Chain::Cli, Chain::Madmom, Chain::Mix];
 
     /// Parse `cli`, `madmom` or `mix` (case-insensitive).
+    #[must_use]
     pub fn parse(s: &str) -> Option<Chain> {
         match s.to_ascii_lowercase().as_str() {
             "cli" => Some(Chain::Cli),
@@ -105,6 +110,7 @@ impl Chain {
     }
 
     /// The name that [`Chain::parse`] reads.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Chain::Cli => "cli",
@@ -114,6 +120,7 @@ impl Chain {
     }
 
     /// The chain whose feature recipe this chain uses ([`Chain::Cli`] or [`Chain::Madmom`]).
+    #[must_use]
     pub fn feature_recipe(self) -> Chain {
         match self {
             Chain::Madmom => Chain::Madmom,
@@ -122,6 +129,7 @@ impl Chain {
     }
 
     /// The chain whose peak picker this chain uses ([`Chain::Cli`] or [`Chain::Madmom`]).
+    #[must_use]
     pub fn picker(self) -> Chain {
         match self {
             Chain::Cli => Chain::Cli,
@@ -134,7 +142,7 @@ impl Chain {
 mod tests {
     use super::*;
 
-    /// Kicks like tests/helpers.kick_hit (125 -> 55 Hz sweep, 0.5 ms attack, 0.12 s decay)
+    /// Kicks like `tests/helpers.kick_hit` (125 -> 55 Hz sweep, 0.5 ms attack, 0.12 s decay)
     /// at `onsets` seconds, -3 dB, at `sr`.
     fn kicks(onsets: &[f64], dur: f64, sr: u32) -> Vec<f32> {
         let n = (dur * f64::from(sr)) as usize;

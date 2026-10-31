@@ -26,6 +26,7 @@ use crate::registry::{OpenProject, Shared, lock};
 /// follower's rate (`round(t * sr) / sr`; equal rates and on-grid times give the same `t`),
 /// the velocity from the follower's signal at that position, as a detected hit gets it
 /// (`velocity_map`, `peak_in` over -5 ms to +60 ms). Only `t` and `v`: no `rise`, no edit marks.
+#[must_use]
 pub fn derive_events(src: &[Event], dst_samples: &[f32], dst_sr: u32, map: &VelocityMap) -> Vec<Event> {
     let sr = f64::from(dst_sr);
     let times: Vec<f64> = src.iter().map(|e| (e.t * sr).round() / sr).collect();
@@ -34,6 +35,7 @@ pub fn derive_events(src: &[Event], dst_samples: &[f32], dst_sr: u32, map: &Velo
 }
 
 /// The velocity map of a track's params (`vel_lo_db`, `vel_hi_db`; the defaults -40 and -6 dB).
+#[must_use]
 pub fn velocity_map_of(params: Option<&Map<String, Value>>) -> VelocityMap {
     let p = |k: &str, d: f64| params.and_then(|m| m.get(k)).and_then(Value::as_f64).unwrap_or(d);
     VelocityMap {
@@ -44,6 +46,7 @@ pub fn velocity_map_of(params: Option<&Map<String, Value>>) -> VelocityMap {
 }
 
 /// The tracks that follow `source`, in the document's order.
+#[must_use]
 pub fn followers_of(g: &OpenProject, source: &str) -> Vec<String> {
     g.project
         .doc
@@ -54,6 +57,10 @@ pub fn followers_of(g: &OpenProject, source: &str) -> Vec<String> {
 }
 
 /// 409 when `name` follows another track: its hits are not edited, the source's are.
+///
+/// # Errors
+///
+/// A 409 `AppError` when `name` follows a track; the lookup error when the project has no track `name`.
 pub fn check_own(g: &OpenProject, name: &str) -> Result<(), AppError> {
     match g.track(name)?.follows.as_deref() {
         Some(src) => Err(AppError::conflict(format!(
@@ -79,6 +86,11 @@ fn store(g: &mut OpenProject, name: &str, events: Vec<Event>, dec: &Decoded) -> 
 /// Derive the events of the follower `name` from its source and store them. Returns the
 /// number of hits. A follower whose source is gone gets its own detection back (no `follows`,
 /// no events) and 0. 400 when `name` follows nothing, 409 when its audio is offline.
+///
+/// # Errors
+///
+/// A 400 `AppError` when `name` follows no track; the lookup error for an unknown track; a 409 when the follower's
+/// audio is offline; the decode error when its audio cannot be read.
 pub fn derive_one(svc: &Service, op: &Shared, name: &str) -> Result<usize, AppError> {
     let (src_events, path, mix, map, cut) = {
         let mut g = lock(op);
@@ -217,6 +229,7 @@ pub(crate) fn refresh_stale(svc: &Service, op: &Shared) -> Vec<String> {
 }
 
 /// The names of the followers that were derived again, as the answers carry them.
+#[must_use]
 pub fn refreshed_names(rows: &[(String, Result<usize, AppError>)]) -> Vec<Value> {
     rows.iter()
         .filter(|(_, r)| r.is_ok())
@@ -232,6 +245,12 @@ impl Service {
     /// until the next analysis. 400 for the track itself, an unknown source, a source that
     /// follows a track, or a track that has followers; 409 when the follower is offline.
     /// Answers `{follows, n_events}`.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown or read-only session or an unknown track; a 400 for the cases above (itself,
+    /// unknown source, chained follow, a track with followers); the error of the first derivation ([`derive_one`]),
+    /// after which the previous `follows` is restored.
     pub fn track_set_follow(&self, sid: &str, name: &str, source: Option<&str>) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         crate::registry::resolve_shared(&op);

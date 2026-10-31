@@ -482,7 +482,7 @@ fn seek_requests_are_read_whole_under_a_writer() {
                 assert_eq!(target, 10 * tag, "torn request");
                 // P3-20b: the speed belongs to the same request
                 if tag > 0 {
-                    assert_eq!(speed.slowdown() as u64, 1 + (tag + 1) % 2, "torn speed");
+                    assert_eq!(u64::from(speed.slowdown()), 1 + (tag + 1) % 2, "torn speed");
                 }
                 assert!(loop_range.is_none(), "these requests carry no loop");
                 assert!(end_at.is_none(), "these requests carry no window end");
@@ -581,7 +581,7 @@ fn transport_after_an_underrun_a_resampled_track_sits_at_the_engine_position_aga
 /// Silent tracks with hits; the clicks are the only signal.
 fn click_session(dir: &Path, sr: u32, spacing: u64) -> Vec<TrackSpec> {
     let roles = ["kick", "snare", "tom", "hat", "cymbal", "other"];
-    let frames = (2.6 * sr as f64) as usize;
+    let frames = (2.6 * f64::from(sr)) as usize;
     (0..30u64)
         .map(|t| {
             let p = dir.join(format!("c{t:02}.wav"));
@@ -613,7 +613,7 @@ fn onsets(out: &[f32], gap: usize) -> Vec<u64> {
 fn transport_every_click_starts_at_offset_0_at_its_hit_sample() {
     for sr in [48_000u32, 96_000] {
         let d = tmp(&format!("clicks{sr}"));
-        let spacing = (0.042 * sr as f64) as u64; // longer than a click (40 ms)
+        let spacing = (0.042 * f64::from(sr)) as u64; // longer than a click (40 ms)
         let specs = click_session(&d, sr, spacing);
         let cfg = TransportConfig {
             clicks_on: true,
@@ -725,7 +725,7 @@ fn max_err(out: &[f32], from: u64, sr: u32, k: f64, end: u64) -> f64 {
         .enumerate()
         .map(|(i, f)| (from + i as u64, f[0]))
         .filter(|(j, _)| *j < end)
-        .map(|(j, v)| (v as f64 - k * tone(j as f64 / sr as f64)).abs())
+        .map(|(j, v)| (f64::from(v) - k * tone(j as f64 / f64::from(sr))).abs())
         .fold(0.0, f64::max)
 }
 
@@ -738,7 +738,9 @@ fn transport_resampled_render_matches_the_signal_within_the_tolerance() {
     let d = tmp("resample");
     let mut specs = Vec::new();
     for (k, sr) in [96_000u32, 44_100].iter().enumerate() {
-        let x: Vec<f32> = (0..*sr as usize).map(|i| tone(i as f64 / *sr as f64) as f32).collect();
+        let x: Vec<f32> = (0..*sr as usize)
+            .map(|i| tone(i as f64 / f64::from(*sr)) as f32)
+            .collect();
         let p = d.join(format!("r{k}.wav"));
         write(&p, *sr, 1, WavFormat::Float32, &x);
         specs.push(spec(p, MixMode::Average, vec![], 1000.0));
@@ -790,7 +792,7 @@ fn transport_tracks_at_the_device_rate_stay_bitwise_in_a_resampled_session() {
 fn transport_resampled_clicks_sit_at_the_mapped_device_samples() {
     for sr in [96_000u32, 44_100] {
         let d = tmp(&format!("rsclicks{sr}"));
-        let spacing = (0.042 * sr as f64) as u64;
+        let spacing = (0.042 * f64::from(sr)) as u64;
         let specs = click_session(&d, sr, spacing);
         let cfg = TransportConfig {
             clicks_on: true,
@@ -971,7 +973,7 @@ fn fnv1a(x: &[f32]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     for v in x {
         for b in v.to_bits().to_le_bytes() {
-            h ^= b as u64;
+            h ^= u64::from(b);
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
     }
@@ -999,11 +1001,11 @@ fn identity_session(dir: &Path) -> Vec<TrackSpec> {
     .into_iter()
     .enumerate()
     {
-        let frames = (1.5 * sr as f64) as usize;
+        let frames = (1.5 * f64::from(sr)) as usize;
         let x: Vec<f32> = (0..frames * ch as usize).map(|_| rnd()).collect();
         let p = dir.join(format!("id{k}.wav"));
         write(&p, sr, ch, format, &x);
-        let step = sr as u64 / 10 + 17 * k as u64;
+        let step = u64::from(sr) / 10 + 17 * k as u64;
         let hits = (0..14u64).map(|i| 300 + 11 * k as u64 + i * step).collect();
         specs.push(spec(
             p,
@@ -1115,7 +1117,7 @@ fn transport_half_speed_plays_a_1_khz_sine_at_500_hz_for_twice_as_long() {
     let d = tmp("halfsine");
     let sr = 48_000u32;
     let x: Vec<f32> = (0..sr as usize)
-        .map(|i| (0.5 * (2.0 * std::f64::consts::PI * 1_000.0 * i as f64 / sr as f64).sin()) as f32)
+        .map(|i| (0.5 * (2.0 * std::f64::consts::PI * 1_000.0 * i as f64 / f64::from(sr)).sin()) as f32)
         .collect();
     let p = d.join("sine.wav");
     write(&p, sr, 1, WavFormat::Float32, &x);
@@ -1139,7 +1141,7 @@ fn transport_half_speed_plays_a_1_khz_sine_at_500_hz_for_twice_as_long() {
     // the steady part: 1 s of output away from the edges
     let left: Vec<f64> = out.as_chunks::<2>().0[24_000..72_000]
         .iter()
-        .map(|f| f[0] as f64)
+        .map(|f| f64::from(f[0]))
         .collect();
     let (p500, p1000, p250) = (
         tone_power(&left, 500.0, 48_000.0),
@@ -1151,7 +1153,7 @@ fn transport_half_speed_plays_a_1_khz_sine_at_500_hz_for_twice_as_long() {
     assert!(p1000 < 1e-9 && p250 < 1e-9, "no energy left at 1 kHz: {p1000}, {p250}");
     let nl: Vec<f64> = n_out.as_chunks::<2>().0[0..48_000]
         .iter()
-        .map(|f| f[0] as f64)
+        .map(|f| f64::from(f[0]))
         .collect();
     assert!(tone_power(&nl, 1_000.0, 48_000.0) > 0.06, "normal speed is at 1 kHz");
     // the same after a change while it plays: from session frame 12,000 at half speed
@@ -1166,7 +1168,7 @@ fn transport_half_speed_plays_a_1_khz_sine_at_500_hz_for_twice_as_long() {
     );
     let left: Vec<f64> = out.as_chunks::<2>().0[10_000..58_000]
         .iter()
-        .map(|f| f[0] as f64)
+        .map(|f| f64::from(f[0]))
         .collect();
     assert!((tone_power(&left, 500.0, 48_000.0) - 0.0625).abs() < 1e-3);
     std::fs::remove_dir_all(&d).unwrap();
@@ -1218,7 +1220,7 @@ fn transport_half_speed_clicks_fall_at_twice_the_session_interval() {
         let d = tmp(&format!("halfclicks{sr}"));
         let p = d.join("silent.wav");
         write(&p, sr, 1, WavFormat::Pcm24, &vec![0.0; 2 * sr as usize]);
-        let step = sr as u64 / 10; // 0.1 s
+        let step = u64::from(sr) / 10; // 0.1 s
         let hits: Vec<u64> = (0..15).map(|i| 1_000 + i * step).collect();
         let specs = vec![spec(p, MixMode::Average, hits.clone(), clicks::role_pitch("snare"))];
         let cfg = TransportConfig {
@@ -1332,7 +1334,7 @@ fn transport_normal_speed_render_of_the_generated_session_hash() {
     fn fnv(h: &mut u64, x: &[f32]) {
         for v in x {
             for b in v.to_bits().to_le_bytes() {
-                *h ^= b as u64;
+                *h ^= u64::from(b);
                 *h = h.wrapping_mul(0x0000_0100_0000_01b3);
             }
         }
@@ -1484,7 +1486,7 @@ fn transport_layer_cost_on_the_generated_session() {
     let (plain, v0, _) = time(false);
     let (with, v1, _) = time(true);
     // the layer mixing alone over the whole 300 s, in callback-sized blocks
-    let frames = (meta["seconds"].as_f64().unwrap() * rate as f64) as u64;
+    let frames = (meta["seconds"].as_f64().unwrap() * f64::from(rate)) as u64;
     let (mut l, mut r) = (vec![0.0f32; 256], vec![0.0f32; 256]);
     let t0 = Instant::now();
     let mut started = 0;
@@ -1501,8 +1503,8 @@ fn transport_layer_cost_on_the_generated_session() {
     println!(
         "LAYER COST: 30 tracks, {secs} s offline render: {plain:.3} s without layers ({v0} voices), {with:.3} s with 5 layers \
          ({v1} voices); layer mixing alone over {:.0} s: {mix:.3} s for {started} voices = {:.3} % of real time",
-        frames as f64 / rate as f64,
-        100.0 * mix / (frames as f64 / rate as f64)
+        frames as f64 / f64::from(rate),
+        100.0 * mix / (frames as f64 / f64::from(rate))
     );
     assert_eq!(v0, 0);
     assert!(v1 > 0);
@@ -1513,7 +1515,7 @@ fn transport_layer_cost_on_the_generated_session() {
 /// A 0.5 s synthetic click track at `sr`: sharp decaying clicks at the given frames, plus two
 /// outside the loop region (at 300 and `tail`), so a wrap into them would be heard in the compare.
 fn click_track(dir: &Path, name: &str, sr: u32, at: &[usize]) -> TrackSpec {
-    let n = (0.5 * sr as f64) as usize;
+    let n = (0.5 * f64::from(sr)) as usize;
     let mut x = vec![0.0f32; n];
     for &f in at {
         let decay = 3.0f64; // ~1/(ln 3) per frame: a click rings for a few dozen frames
@@ -1657,7 +1659,7 @@ fn transport_audition_starved_delivers_every_frame_up_to_the_window_end() {
     let d = tmp("t201end");
     let sr = 48_000u32;
     // 4 s of tone: every frame of the window carries signal
-    let x: Vec<f32> = (0..sr * 4).map(|i| tone(i as f64 / sr as f64) as f32).collect();
+    let x: Vec<f32> = (0..sr * 4).map(|i| tone(f64::from(i) / f64::from(sr)) as f32).collect();
     write(&d.join("a.wav"), sr, 1, WavFormat::Float32, &x);
     let specs = vec![spec(d.join("a.wav"), MixMode::Average, vec![], 1000.0)];
     // a small ring, so the starved reader runs it dry early in the window
@@ -1667,11 +1669,11 @@ fn transport_audition_starved_delivers_every_frame_up_to_the_window_end() {
         ..small_cfg(256)
     };
     let mut o = Offline::new(&specs, sr, cfg).unwrap();
-    let (start, end) = (sr as u64, 2 * sr as u64); // a 1 s window inside the tone
+    let (start, end) = (u64::from(sr), 2 * u64::from(sr)); // a 1 s window inside the tone
     o.seek_tagged_window(start, 1, None, Some(end));
     o.settle();
     let block = 256usize;
-    let period_ns = (block as f64 * 1e9 / sr as f64).round() as u64;
+    let period_ns = (block as f64 * 1e9 / f64::from(sr)).round() as u64;
     let mut clock = 1_000_000_000u64;
     let mut i = 0u64;
     let mut underrun_seen = false;
@@ -1740,7 +1742,7 @@ fn transport_audition_starved_delivers_every_frame_up_to_the_window_end() {
     assert_eq!(tail.len(), tail_len * 2, "the tail was delivered whole");
     for (k, v) in tail.iter().enumerate() {
         let f = want_from + (k / 2) as u64;
-        assert_eq!(*v, x[f as usize], "the tail at frame {} is not the audition's audio", f);
+        assert_eq!(*v, x[f as usize], "the tail at frame {f} is not the audition's audio");
     }
     // one more render publishes the paused end (the engine's next callback in the app)
     let mut buf = vec![0.0f32; 2 * block];

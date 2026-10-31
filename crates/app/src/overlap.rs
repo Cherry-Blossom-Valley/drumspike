@@ -27,6 +27,7 @@ use std::sync::mpsc::sync_channel;
 /// over the pool (`par_chunks_mut`, bit-identical for any thread count). Measured on arm64-mac
 /// (12 cores, 30 tracks of 5 minutes at 96 kHz, host load under 8 at the start): 4 threads
 /// 38.5 s (the preparation is the slower stage), 8 threads 33.6 s, 12 threads 33.7 s.
+#[must_use]
 pub fn default_threads() -> usize {
     physical_cores().clamp(1, 8)
 }
@@ -35,11 +36,11 @@ pub fn default_threads() -> usize {
 /// it cannot be read.
 /// The physical core count of this host; 0 when it cannot be read.
 pub fn physical_cores() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0)
+    std::thread::available_parallelism().map_or(0, std::num::NonZero::get)
 }
 
 /// The pool size: [`default_threads`], or `DRUMSPIKE_PREPARE_THREADS` (a positive number) for
-/// a measurement. The pool threads keep the default QoS class: a lower class (utility) made
+/// a measurement. The pool threads keep the default `QoS` class: a lower class (utility) made
 /// the preparation 7 times slower when other work ran on the host (266.8 s against 38.5 s
 /// for the 30 tracks), because the kernel then gives the cores to everything else first.
 pub fn pool_threads() -> usize {
@@ -53,6 +54,10 @@ pub fn pool_threads() -> usize {
 /// The pool the preparation runs on, built once per process (threads `ds-prepare-<n>`).
 /// Rayon's `par_*` calls inside [`rayon::ThreadPool::install`] run on this pool, not on the
 /// global one.
+///
+/// # Panics
+///
+/// Panics on the first call (through `expect`) if the rayon thread pool cannot be started.
 pub fn pool() -> &'static rayon::ThreadPool {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {

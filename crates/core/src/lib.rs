@@ -4,7 +4,7 @@
 //! parity is proven by the harness under `tools/parity/`, not assumed. Modules:
 //!
 //! * [`io`]: memory-mapped WAV/BWF reader at native rate (PCM 16/24/32, IEEE float 32,
-//!   `bext`, iXML, WAVE_FORMAT_EXTENSIBLE), the explicit [`MixMode`] downmix, a WAV writer
+//!   `bext`, iXML, `WAVE_FORMAT_EXTENSIBLE`), the explicit [`MixMode`] downmix, a WAV writer
 //!   and a rayon helper that decodes several files in parallel.
 //! * [`peaks`]: the min/max/RMS pyramid of `engine.compute_peaks` and the tile API the
 //!   waveform view reads (`peaks(level, from, to)`, `samples(from, to)`).
@@ -29,7 +29,7 @@
 
 #![warn(missing_docs)]
 
-/// Version of the `drumspike-core` crate (the workspace version); the app and the PyO3 module report it.
+/// Version of the `drumspike-core` crate (the workspace version); the app and the `PyO3` module report it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod cache;

@@ -28,7 +28,7 @@ pub const PEAK_LEVELS: [usize; 3] = [256, 4096, 65536];
 /// Returned as f64 so JSON carries the same value Python's `tolist()` produces.
 #[inline]
 fn round5_f32(v: f32) -> f64 {
-    ((v * 1e5f32).round_ties_even() / 1e5f32) as f64
+    f64::from((v * 1e5f32).round_ties_even() / 1e5f32)
 }
 
 /// Raw (unrounded) statistics of one bucket.
@@ -53,14 +53,14 @@ fn raw_level(x: &[f32], bs: usize) -> Vec<Raw> {
                 for (k, &v) in q.iter().enumerate() {
                     mn = mn.min(v);
                     mx = mx.max(v);
-                    let d = v as f64;
+                    let d = f64::from(v);
                     ss[k] += d * d;
                 }
             }
             for &v in rest {
                 mn = mn.min(v);
                 mx = mx.max(v);
-                let d = v as f64;
+                let d = f64::from(v);
                 ss[0] += d * d;
             }
             Raw {
@@ -93,6 +93,7 @@ fn finish_level(raw: &[Raw], bs: usize) -> PeakLevel {
 }
 
 /// One level of the pyramid: `(n // bs) * bs` samples in buckets of `bs`.
+#[must_use]
 pub fn peaks_level(x: &[f32], bs: usize) -> PeakLevel {
     finish_level(&raw_level(x, bs), bs)
 }
@@ -102,6 +103,7 @@ pub fn peaks_level(x: &[f32], bs: usize) -> PeakLevel {
 /// One pass over the samples: the 4096 and 65536 levels are aggregates of the 256-level
 /// buckets (min of mins, max of maxs, sum of sums of squares). Min/max are exact; the RMS
 /// differs from a direct computation only by f64 summation order (far below 1e-5).
+#[must_use]
 pub fn compute_peaks(x: &[f32]) -> Vec<(usize, PeakLevel)> {
     compute_peaks_levels(x, &PEAK_LEVELS)
 }
@@ -109,6 +111,7 @@ pub fn compute_peaks(x: &[f32]) -> Vec<(usize, PeakLevel)> {
 /// `engine.compute_peaks(x, levels)` for arbitrary bucket sizes. A level that is a
 /// multiple of the previous one is aggregated from it, every other level is computed
 /// from the samples.
+#[must_use]
 pub fn compute_peaks_levels(x: &[f32], levels: &[usize]) -> Vec<(usize, PeakLevel)> {
     let mut out = Vec::with_capacity(levels.len());
     let mut prev: Option<(usize, Vec<Raw>)> = None;
@@ -148,6 +151,7 @@ pub fn compute_peaks_levels(x: &[f32], levels: &[usize]) -> Vec<(usize, PeakLeve
 /// The clamp of the UI's `ensureSamples`: `s = min(max(0, from), len)`,
 /// `e = max(s, min(len, to))`. A window past the end is empty, never an error.
 #[inline]
+#[must_use]
 pub fn clamp_window(len: usize, from: i64, to: i64) -> (usize, usize) {
     let s = (from.max(0) as usize).min(len);
     let e = (to.max(0) as usize).min(len).max(s);
@@ -189,43 +193,51 @@ pub struct Track {
 
 impl Track {
     /// Build the default pyramid ([`PEAK_LEVELS`]) over `samples`.
+    #[must_use]
     pub fn new(sr: u32, samples: Vec<f32>) -> Track {
         Track::with_levels(sr, samples, &PEAK_LEVELS)
     }
 
     /// Build a pyramid with the given bucket sizes.
+    #[must_use]
     pub fn with_levels(sr: u32, samples: Vec<f32>, levels: &[usize]) -> Track {
         let levels = compute_peaks_levels(&samples, levels);
         Track { sr, samples, levels }
     }
 
     /// Sample count.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.samples.len()
     }
 
     /// True when the track has no samples.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.samples.is_empty()
     }
 
     /// All samples.
+    #[must_use]
     pub fn all_samples(&self) -> &[f32] {
         &self.samples
     }
 
     /// All levels, `(bucket size, level)` in the order they were built.
+    #[must_use]
     pub fn levels(&self) -> &[(usize, PeakLevel)] {
         &self.levels
     }
 
     /// The level with bucket size `bs`.
+    #[must_use]
     pub fn level(&self, bs: usize) -> Option<&PeakLevel> {
         self.levels.iter().find(|(b, _)| *b == bs).map(|(_, l)| l)
     }
 
     /// Buckets `[from, to)` of the level with bucket size `level`, clamped to the level
     /// like [`clamp_window`]; `None` when the pyramid has no such level.
+    #[must_use]
     pub fn peaks(&self, level: usize, from: i64, to: i64) -> Option<PeakTile<'_>> {
         let l = self.level(level)?;
         let (s, e) = clamp_window(l.n, from, to);
@@ -239,6 +251,7 @@ impl Track {
     }
 
     /// Samples `[from, to)` clamped like the UI's `ensureSamples` (see [`clamp_window`]).
+    #[must_use]
     pub fn samples(&self, from: i64, to: i64) -> SampleWindow<'_> {
         let (s, e) = clamp_window(self.samples.len(), from, to);
         SampleWindow {
@@ -310,19 +323,19 @@ mod tests {
     #[test]
     fn peaks_level_drops_the_partial_block_and_rounds_to_5_decimals() {
         let mut x = vec![0.0f32; 256 * 2 + 100];
-        x[3] = 0.123456;
+        x[3] = 0.123_456;
         x[300] = -0.5;
         x[600] = 1.0; // in the dropped partial block
         let l = peaks_level(&x, 256);
         assert_eq!(l.n, 2);
         // the value is the float32 0.12346 widened to f64, exactly what numpy's tolist() gives
-        assert_eq!(l.max, vec![0.12346f32 as f64, 0.0]);
+        assert_eq!(l.max, vec![f64::from(0.12346f32), 0.0]);
         assert_eq!(l.min, vec![0.0, -0.5]);
-        let rms0 = ((0.123456f64 * 0.123456) / 256.0).sqrt() as f32;
-        assert_eq!(l.rms[0], ((rms0 * 1e5).round_ties_even() / 1e5) as f64);
+        let rms0 = ((0.123_456_f64 * 0.123_456) / 256.0).sqrt() as f32;
+        assert_eq!(l.rms[0], f64::from((rms0 * 1e5).round_ties_even() / 1e5));
         assert_eq!(
             l.rms[1],
-            ((0.5f32 * 0.5 / 256.0).sqrt() * 1e5f32).round_ties_even() as f64 / 1e5
+            f64::from(((0.5f32 * 0.5 / 256.0).sqrt() * 1e5f32).round_ties_even()) / 1e5
         );
     }
 

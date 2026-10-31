@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 import httpx
@@ -299,6 +300,25 @@ def test_a_file_changed_on_disk_is_not_overwritten_and_the_status_line_offers_re
     assert project_get(app, new_sid)["dirty"] is False
     assert invoke(app, "tracks_get", sid=new_sid)["tracks"]["Kick In"]["note"] == 52
     assert "project_save" in app.invokes
+
+
+def test_a_failed_autosave_shows_an_error_on_the_status_line_and_a_save_clears_it(app, make_project):
+    # #228: Backups/ is a file, so the autosave (interval 1 s) cannot write; the page says so, the project status carries it
+    folder = make_project(tracks=(("Kick In", "kick", 36),))
+    sid = open_project(app, folder)
+    bdir = Path(folder, "Backups")
+    shutil.rmtree(bdir, ignore_errors=True)
+    bdir.write_text("not a folder")
+    invoke(app, "track_set_note", sid=sid, name="Kick In", note=45)
+    msg = app.locator("#stMsg")
+    expect(msg).to_contain_text("Autosave failed:", timeout=30000)
+    expect(msg).to_contain_text("Your edits are not backed up; save the project.", timeout=30000)
+    assert project_get(app, sid)["autosave_error"]
+    bdir.unlink()
+    app.keyboard.press("Control+s")
+    expect(msg).not_to_contain_text("Autosave failed", timeout=30000)
+    expect(msg).to_contain_text("saved", timeout=30000)
+    assert "autosave_error" not in project_get(app, sid)
 
 
 def test_a_failed_backup_cleanup_is_a_warning_on_the_status_line(app, make_project):

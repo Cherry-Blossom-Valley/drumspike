@@ -479,7 +479,13 @@ fn analyze_start_rejects_an_unknown_track_and_an_unknown_project() {
     let e = svc
         .analyze_start(&sid, Some(vec!["nope".into()]), None, None)
         .unwrap_err();
-    assert_eq!((e.code, e.message.as_str()), (400, "unknown track nope"));
+    assert_eq!(
+        (e.code, e.message.as_str()),
+        (
+            400,
+            "the pattern \"nope\" matches no track (the tracks: Kick_In, Snare_Top)"
+        )
+    );
     assert_eq!(svc.analyze_status(&sid)["state"], "idle", "nothing started");
     assert_eq!(svc.analyze_start("nope", None, None, None).unwrap_err().code, 404);
     std::fs::remove_dir_all(&root).unwrap();
@@ -881,7 +887,7 @@ fn export_all_writes_the_audio_spikes_when_the_format_is_chosen() {
     let mut checked = 0;
     let mut with_audio = 0;
     for t in [0.25, 1.5, 3.499] {
-        let start = (t * info.sample_rate as f64).round() as usize;
+        let start = (t * f64::from(info.sample_rate)).round() as usize;
         let from = start.saturating_sub(64);
         assert!(
             x[from..start].iter().all(|&v| v == 0.0),

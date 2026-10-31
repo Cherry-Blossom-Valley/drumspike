@@ -204,7 +204,7 @@ fn the_layer_render_refuses_a_protected_file_spelled_in_another_case() {
     // the one-shot of the layer
     let shot_file = root.join("shots").join("st.wav");
     let x: Vec<f32> = (0..48_000)
-        .map(|i| ((std::f64::consts::TAU * 240.0 * i as f64 / 48_000.0).sin() * 0.2) as f32)
+        .map(|i| ((std::f64::consts::TAU * 240.0 * f64::from(i) / 48_000.0).sin() * 0.2) as f32)
         .collect();
     common::write_wav(&shot_file, sr, &x);
     svc.track_layer_set(&sid, "k in", &serde_json::json!({"path": shot_file.to_str().unwrap()}))
@@ -272,7 +272,7 @@ fn the_single_track_midi_export_refuses_a_protected_file() {
     // the bounce of the `kick_spike` track: a WAV that the export output would name
     let bounce = root.join("daw").join("kick_spike.mid");
     let x: Vec<f32> = (0..48_000)
-        .map(|i| ((std::f64::consts::TAU * 240.0 * i as f64 / f64::from(sr)).sin() * 0.2) as f32)
+        .map(|i| ((std::f64::consts::TAU * 240.0 * f64::from(i) / f64::from(sr)).sin() * 0.2) as f32)
         .collect();
     common::write_wav(&bounce, sr, &x);
     svc.track_sampler_set(

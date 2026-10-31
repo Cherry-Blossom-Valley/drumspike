@@ -58,7 +58,7 @@ pub struct Jobs(
 
 impl Jobs {
     fn start(&self) -> String {
-        let mut g = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.0 += 1;
         let id = format!("j{}", g.0);
         g.1.insert(
@@ -72,13 +72,19 @@ impl Jobs {
     }
 
     fn update(&self, id: &str, f: impl FnOnce(&mut Job)) {
-        if let Some(j) = self.0.lock().unwrap_or_else(|p| p.into_inner()).1.get_mut(id) {
+        if let Some(j) = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .1
+            .get_mut(id)
+        {
             f(j);
         }
     }
 
     fn get(&self, id: &str) -> Option<Value> {
-        let g = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let g = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let j = g.1.get(id)?;
         let mut v = json!({"job": id, "state": j.state, "progress": j.progress});
         if let Some(r) = &j.result {
@@ -119,6 +125,7 @@ fn describe(c: &CommandSpec) -> String {
 }
 
 /// The `tools/list` entry of a row.
+#[must_use]
 pub fn tool(c: &CommandSpec) -> Value {
     let mut t = json!({
         "name": c.name,
@@ -159,7 +166,7 @@ pub fn tools() -> Vec<Value> {
 }
 
 fn send(out: &Out, v: &Value) {
-    let mut o = out.lock().unwrap_or_else(|p| p.into_inner());
+    let mut o = out.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let _ = writeln!(o, "{v}");
     let _ = o.flush();
 }
@@ -225,7 +232,10 @@ fn run_tool(svc: &Service, jobs: &Jobs, name: &str, args: &Value) -> Result<Valu
             }
         });
     });
-    jobs.1.lock().unwrap_or_else(|p| p.into_inner()).push(handle);
+    jobs.1
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(handle);
     Ok(json!({"job": id}))
 }
 
@@ -300,7 +310,7 @@ pub fn serve_with(svc: &Service, jobs: &Jobs, input: impl BufRead, out: Box<dyn 
     }
     // P4-5 (L3): stdin is closed, but a job started by a `Progress` tool or a copy or analysis job may still run: the
     // process ends only when they are done, so no destination stays half made (progress on stderr)
-    let handles: Vec<_> = std::mem::take(&mut *jobs.1.lock().unwrap_or_else(|p| p.into_inner()));
+    let handles: Vec<_> = std::mem::take(&mut *jobs.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     for h in handles {
         let _ = h.join();
     }

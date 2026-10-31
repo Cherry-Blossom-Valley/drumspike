@@ -3,8 +3,8 @@
 //! [`Service`] holds the registry of open projects, the analysis job, the model and the
 //! caches. Its methods (module [`commands`]) take plain arguments and return JSON with the
 //! keys of the Python server's responses, or bytes. They have no Tauri type in their
-//! signatures, so the tests run without a window and without a WebView, and x86-mac builds
-//! and tests this crate. `apps/desktop/src-tauri` holds the thin wrappers; the test bridge
+//! signatures, so the tests run without a window and without a `WebView`, and the Intel Mac
+//! host builds and tests this crate. `apps/desktop/src-tauri` holds the thin wrappers; the test bridge
 //! of P3-7a (`bridge.rs`, `crates/devtools/src/bin/ds-bridge.rs`) calls the same methods.
 //!
 //! Errors are [`AppError`] with the server's codes (400, 404, 409) and a message.
@@ -44,6 +44,7 @@ pub mod markers;
 pub mod mcp;
 pub mod media;
 pub mod overlap;
+pub mod patterns;
 pub mod plugins;
 pub mod policy;
 pub mod registry;
@@ -114,6 +115,7 @@ pub struct ServiceConfig {
 
 impl ServiceConfig {
     /// The refinement pin from `DRUMSPIKE_REFINE_RULE` ([`jobs::parse_rule`]).
+    #[must_use]
     pub fn from_env(_models_dir: &Path) -> ServiceConfig {
         ServiceConfig {
             refine_rule: std::env::var("DRUMSPIKE_REFINE_RULE")
@@ -159,6 +161,7 @@ pub struct Service {
 
 impl Service {
     /// A service with no open project.
+    #[must_use]
     pub fn new(config: ServiceConfig) -> Service {
         let inner = Arc::new(Inner {
             config,
@@ -183,16 +186,19 @@ impl Service {
     }
 
     /// The lock client name, when locking is on.
+    #[must_use]
     pub fn lock_client(&self) -> Option<String> {
         registry::lock(&self.inner.lock_client).clone()
     }
 
     /// The configuration.
+    #[must_use]
     pub fn config(&self) -> &ServiceConfig {
         &self.inner.config
     }
 
     /// The analysis jobs and the re-pick stores (P4-3 fix round: the tests mark a store).
+    #[must_use]
     pub fn jobs(&self) -> &jobs::Jobs {
         &self.inner.jobs
     }

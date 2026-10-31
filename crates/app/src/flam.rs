@@ -46,17 +46,20 @@ use crate::{Service, ServiceConfig};
 pub const FLAM_RULE: u32 = FLAM_RULE_VERSION;
 
 /// `DRUMSPIKE_FLAM_RULE` as a version: `0` (no rule) up to [`FLAM_RULE`]; `None` for anything else.
+#[must_use]
 pub fn parse_flam_rule(v: &str) -> Option<u32> {
     v.trim().parse::<u32>().ok().filter(|&n| n <= FLAM_RULE)
 }
 
 /// The version of a new analysis: the configuration's pin, else [`FLAM_RULE`].
+#[must_use]
 pub fn analysis_flam_rule(cfg: &ServiceConfig) -> u32 {
     cfg.flam_rule.unwrap_or(FLAM_RULE)
 }
 
 /// The version of a re-pick: the configuration's pin, else the one the track's `detector` record carries. No record
 /// (an analysis from before P4-13 stage B) is version 0; a version this build does not know runs the current one.
+#[must_use]
 pub fn recorded_flam_rule(cfg: &ServiceConfig, detector: Option<&Value>) -> u32 {
     if let Some(v) = cfg.flam_rule {
         return v;
@@ -72,16 +75,19 @@ pub fn recorded_flam_rule(cfg: &ServiceConfig, detector: Option<&Value>) -> u32 
 }
 
 /// A snare close mic of the rule (a target): role `snare` and no sample or trigger track.
+#[must_use]
 pub fn is_snare_close_mic(name: &str, role: Option<&str>) -> bool {
     role.is_some_and(|r| applies(FLAM_RULE, r)) && !is_sample_name(name)
 }
 
 /// A source of the bleed gate: no snare track and no sample or trigger track.
+#[must_use]
 pub fn is_source(name: &str, role: Option<&str>) -> bool {
     role != Some("snare") && !is_sample_name(name)
 }
 
 /// The track's switch: the param `flam_split` (absent: on).
+#[must_use]
 pub fn switched_on(params: Option<&Map<String, Value>>) -> bool {
     match params.and_then(|m| m.get("flam_split")) {
         None | Some(Value::Null) => true,
@@ -91,6 +97,7 @@ pub fn switched_on(params: Option<&Map<String, Value>>) -> bool {
 }
 
 /// True for an event the rule added (`"flam": true`).
+#[must_use]
 pub fn is_flam(e: &Event) -> bool {
     e.extra.get("flam") == Some(&Value::Bool(true))
 }
@@ -111,6 +118,7 @@ pub const LATE_REASON: &str = "late-peaking mic (snare bottom)";
 /// The events of one target after the rule: the events without the not-edited flam hits of an earlier run, plus the
 /// strokes `found` adds (sorted by time). `x`: the target's signal; `params`: its track params (velocity map and the
 /// loudness cut). Returns the events and the number added.
+#[must_use]
 pub fn with_flams(
     events: &[Event],
     found: &[Second],
@@ -381,8 +389,8 @@ mod tests {
     fn the_added_hits_are_tagged_sorted_and_take_the_tracks_velocity_and_cut() {
         let sr = 48_000;
         let mut x = vec![0.0f32; sr as usize * 2];
-        x[(1.03 * sr as f64) as usize + 10] = 0.5; // -6 dB at the second stroke
-        x[(1.53 * sr as f64) as usize + 10] = 0.001; // -60 dB: under a cut at -50
+        x[(1.03 * f64::from(sr)) as usize + 10] = 0.5; // -6 dB at the second stroke
+        x[(1.53 * f64::from(sr)) as usize + 10] = 0.001; // -60 dB: under a cut at -50
         let mut old = Event::new(1.2, 90);
         old.extra.insert("flam".into(), Value::Bool(true));
         let mut moved = Event::new(1.7, 90);

@@ -338,6 +338,17 @@ def app(page, warm_page, request):
             save_trace(page.context, request.node.nodeid)
         raise
     page.url_base = bridge.url
+    # #178: a test's toggled app setting persists in the bridge's settings.json into the next test's
+    # page (the velocity-lane setup of test_undo_r05 failed test_menus with velocityLane True != False).
+    # Reset the settings that tests toggle to their defaults before each test; a test that wants one
+    # turns it on itself (the velocity-lane, other-mics, overview and zoom-preset setups do).
+    page.evaluate("""() => {
+      if (VL.on) vlToggle();   // the velocity lane: default off (the toggle persists and applies)
+      if (VL.h !== VL_H_DEF) { VL.h = VL_H_DEF; if (B.appSettingsSet) B.appSettingsSet('velocity_lane_height', VL_H_DEF); }
+      if (S.trackHeight !== 'medium') setTrackHeight('medium');
+      for (const k of TM_KINDS.concat(['grid'])) if (TM.ui[k] !== null) { TM.ui[k] = null; if (B.appSettingsSet) B.appSettingsSet(TM_SETTING[k], null); }
+      tmApplyUi(true);
+    }""")
     page.home = bridge.home
     page.invokes = invokes
     page.errors = errors   # P4-67: a failure message can show them

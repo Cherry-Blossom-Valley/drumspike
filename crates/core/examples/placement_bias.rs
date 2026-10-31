@@ -1,6 +1,6 @@
 //! Synthetic onset error of the placement (#101): one-shots at exact onset samples on a noise floor.
 //! Prints the error (refined time in samples minus the true onset) per role and rate.
-//! Run: cargo run --release -p drumspike-core --example placement_bias
+//! Run: cargo run --release -p drumspike-core --example `placement_bias`
 use drumspike_core::refine::{
     BackStep, FM_PEAK_DB, FootCap, FootTune, Overrun, RefineRule, RefineWindow, refine_foot_tuned, refine_rule_peak,
 };
@@ -15,7 +15,7 @@ const POLARITIES: [f64; 2] = [1.0, -1.0];
 const ATTACKS_S: [f64; 3] = [0.0, 0.0005, 0.001];
 const SEEDS: u64 = 30;
 const AMP: f64 = 0.5;
-/// The detector reports hits about 6 ms before the attack (refine.rs, RefineWindow docs).
+/// The detector reports hits about 6 ms before the attack (refine.rs, `RefineWindow` docs).
 const T0_BEFORE_S: f64 = 0.006;
 
 struct Lcg(u64);
@@ -25,8 +25,8 @@ impl Lcg {
     fn uni(&mut self) -> f64 {
         self.0 = self
             .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         (self.0 >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
     }
 }
@@ -35,10 +35,10 @@ impl Lcg {
 /// floor of `floor_db` (rms), with first polarity `pol`. `level` is `(floor_db, pol)`.
 fn shot(role: usize, sr: u32, n: usize, onset: usize, level: (f64, f64), attack_s: f64, rng: &mut Lcg) -> Vec<f32> {
     let (floor_db, pol) = level;
-    let srf = sr as f64;
+    let srf = f64::from(sr);
     let mut x = vec![0f32; n];
     let a = 10f64.powf(floor_db / 20.0) * 3f64.sqrt();
-    for v in x.iter_mut() {
+    for v in &mut x {
         *v = (a * rng.uni()) as f32;
     }
     let mut prev_noise = 0.0;
@@ -69,7 +69,7 @@ fn shot(role: usize, sr: u32, n: usize, onset: usize, level: (f64, f64), attack_
 }
 
 fn pct(v: &mut [f64], p: f64) -> f64 {
-    v.sort_by(|a, b| a.total_cmp(b));
+    v.sort_by(f64::total_cmp);
     let i = ((v.len() - 1) as f64 * p).round() as usize;
     v[i]
 }
@@ -79,7 +79,7 @@ fn pct(v: &mut [f64], p: f64) -> f64 {
 fn foot_of(x: &[f32], a: f64) -> usize {
     let dep = x
         .iter()
-        .position(|v| (v.abs() as f64) > a * (1.0 + 1e-6))
+        .position(|v| f64::from(v.abs()) > a * (1.0 + 1e-6))
         .expect("the shot leaves the floor");
     dep - 1
 }
@@ -104,13 +104,9 @@ fn main() {
         },
     });
     println!(
-        "placement error in samples (refined time minus the true onset, and minus the foot), rule {:?}, peak {} dB",
-        rule, FM_PEAK_DB
+        "placement error in samples (refined time minus the true onset, and minus the foot), rule {rule:?}, peak {FM_PEAK_DB} dB"
     );
-    println!(
-        "pooled over floors {:?} dBFS, polarities +1/-1, {} seeds each",
-        FLOORS_DB, SEEDS
-    );
+    println!("pooled over floors {FLOORS_DB:?} dBFS, polarities +1/-1, {SEEDS} seeds each");
     println!(
         "| rate | role | attack ms | n | onset median | p10 | p90 | foot median | p10 | p90 | early (<-1 vs foot) | moved | kept | busy | separate |"
     );
@@ -127,18 +123,18 @@ fn main() {
                     for &pol in &POLARITIES {
                         for seed in 0..SEEDS {
                             let mut rng = Lcg(0x9E37_79B9_7F4A_7C15 ^ ((seed + 1) * 0x1000_0000_0001));
-                            let onset = (0.3 * sr as f64) as usize + (seed as usize) * 3;
+                            let onset = (0.3 * f64::from(sr)) as usize + (seed as usize) * 3;
                             let x = shot(ri, sr, n, onset, (floor, pol), attack, &mut rng);
                             let foot = foot_of(&x, a);
-                            let t0 = onset as f64 / sr as f64 - T0_BEFORE_S;
+                            let t0 = onset as f64 / f64::from(sr) - T0_BEFORE_S;
                             let r = match tuned {
                                 Some(tune) => {
                                     refine_foot_tuned(&x, t0, sr, &[], RefineWindow::DEFAULT, FM_PEAK_DB, tune)
                                 }
                                 None => refine_rule_peak(&x, t0, sr, &[], RefineWindow::DEFAULT, rule, FM_PEAK_DB),
                             };
-                            errs.push(r.t * sr as f64 - onset as f64);
-                            ferrs.push(r.t * sr as f64 - foot as f64);
+                            errs.push(r.t * f64::from(sr) - onset as f64);
+                            ferrs.push(r.t * f64::from(sr) - foot as f64);
                             match r.back {
                                 BackStep::Moved => moved += 1,
                                 BackStep::Kept | BackStep::Off => kept += 1,

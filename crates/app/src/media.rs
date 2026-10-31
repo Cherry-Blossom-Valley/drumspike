@@ -75,6 +75,7 @@ pub struct Decoded {
 }
 
 /// `ffmpeg` (the default of an older document) or `average`.
+#[must_use]
 pub fn mix_mode(name: &str) -> MixMode {
     if name == "average" {
         MixMode::Average
@@ -93,6 +94,11 @@ fn named(path: &Path, e: WavError) -> AppError {
 }
 
 /// Read and downmix a WAV file (the source is only read).
+///
+/// # Errors
+///
+/// Returns an internal error (with the path in front) when the file cannot be opened or read, and a 400 error
+/// when it is not a supported WAV format.
 pub fn decode(path: &Path, mode: MixMode) -> Result<Decoded, AppError> {
     let (samples, info) = read_wav_mono(path, mode).map_err(|e| named(path, e))?;
     Ok(Decoded {
@@ -117,6 +123,11 @@ pub struct PeakRequest {
 
 impl PeakRequest {
     /// The request for `name`; 400 for an unknown track.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error when the project has no track of this name. An offline track is not an error here: its
+    /// 409 is kept in the `source` field.
     pub fn of(op: &OpenProject, name: &str) -> Result<PeakRequest, AppError> {
         let tr = op.track(name)?;
         Ok(PeakRequest {
@@ -219,6 +230,7 @@ pub struct Media {
 
 impl Media {
     /// Empty caches.
+    #[must_use]
     pub fn new() -> Media {
         Media {
             budget: std::env::var(DECODE_CACHE_BUDGET_ENV).ok().and_then(|v| v.parse().ok()),
@@ -227,6 +239,7 @@ impl Media {
     }
 
     /// Empty caches with an explicit byte budget (the tests use a small one).
+    #[must_use]
     pub fn with_budget(budget: usize) -> Media {
         Media {
             budget: Some(budget),
@@ -244,6 +257,11 @@ impl Media {
     /// the last [`DECODE_CACHE_LEN`] decodes within the byte budget
     /// ([`DECODE_CACHE_BUDGET_BYTES`], LRU); a decode larger than the budget is returned
     /// but not kept.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the file's metadata or contents cannot be read, and a 400 error when it
+    /// is not a supported WAV format.
     pub fn decode_cached(&self, path: &Path, mode: MixMode) -> Result<Arc<Decoded>, AppError> {
         let meta = std::fs::metadata(path).map_err(|e| AppError::internal(format!("{}: {e}", path.display())))?;
         let key: DecodeKey = (
@@ -259,22 +277,21 @@ impl Media {
         // slot and share the result; a failed decode leaves no slot behind (the waiters
         // decode themselves).
         let held = lock(&self.inflight).get(&key).map(Arc::clone);
-        let slot = match held {
-            Some(slot) => slot,
+        let slot = if let Some(slot) = held {
+            slot
+        } else {
             // The owner of a finished decode removes its key only after the cache
             // insert, so no slot here means the decode is in the cache already (a
             // failed or an oversized decode is not). This second lookup closes the
             // window between the two lookups of this request: without it, a request
             // that lost that race decoded again, and the eight-thread test saw two
             // decodes once under load (#58).
-            None => {
-                if let Some(d) = self.decoded_hit(&key) {
-                    return Ok(d);
-                }
-                // a parallel first request may have made the slot in between
-                let mut map = lock(&self.inflight);
-                Arc::clone(map.entry(key.clone()).or_default())
+            if let Some(d) = self.decoded_hit(&key) {
+                return Ok(d);
             }
+            // a parallel first request may have made the slot in between
+            let mut map = lock(&self.inflight);
+            Arc::clone(map.entry(key.clone()).or_default())
         };
         let mut g = lock(&slot);
         if let Some(d) = g.as_ref() {
@@ -378,6 +395,11 @@ impl Media {
     /// as 0, the window holds at most `max` samples and ends at the end of the track. Only
     /// the frames of the window are read (one positioned read) and folded with the decoder of
     /// the full decode, so the values equal the same samples of [`decode`] bit for bit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the file's metadata or the window's frames cannot be read, and a 400 error
+    /// when the file is not a supported WAV format.
     pub fn window_bytes(
         &self,
         path: &Path,
@@ -421,6 +443,11 @@ impl Media {
     /// an offline track with a cache still shows its lanes. The decode is not kept (P3-15d:
     /// the sample windows read the file themselves; six parallel builds would otherwise
     /// leave three tracks of up to 115 MB in memory).
+    ///
+    /// # Errors
+    ///
+    /// Returns the 409 error of an offline track when the cache is stale and the source is missing, the errors of
+    /// [`decode`] for the source, and an internal error when `peaks.bin` cannot be built or opened.
     pub fn peak_cache(&self, req: &PeakRequest) -> Result<PeakCache, AppError> {
         let guard = self.folder_lock(&req.dir);
         let _g = lock(&guard);
@@ -436,6 +463,7 @@ impl Media {
 /// The bytes of a one-shot window (P4-40e, the Layer view's waveform): `u32 start`, `u32 rate`,
 /// then the mono samples `[start, end)` of `shot` as f32 — the shape of `samples_window`. The
 /// window is clamped to the file and capped at [`crate::commands::MAX_WINDOW_SAMPLES`].
+#[must_use]
 pub fn wave_bytes(shot: &OneShot, start: i64, end: i64) -> Vec<u8> {
     let mono = shot.mono();
     let n = mono.len() as i64;

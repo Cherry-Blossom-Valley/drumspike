@@ -105,6 +105,7 @@ fn traced(
 ///   folder), for `tools/parity/check_service.py --bin`; exit 0, or 1 on an error.
 ///
 /// Any other first argument returns `None` and the app starts as usual.
+#[must_use]
 pub fn headless(args: &[String]) -> Option<i32> {
     headless_as("", args)
 }
@@ -406,6 +407,7 @@ async fn export_all(
     dest: Option<String>,
     midi_mode: Option<String>,
     tracks: Option<Vec<String>>,
+    roles: Option<Vec<String>>,
     formats: Option<Vec<String>>,
     compensate: Option<bool>,
     progress: Channel<Value>,
@@ -415,7 +417,7 @@ async fn export_all(
     });
     // P4-30: the options of the Export dialog; the same parser as the bridge and the command line
     let opts = drumspike_app::export::ExportOpts::from_args(&serde_json::json!({
-        "dest": dest, "midi_mode": midi_mode, "tracks": tracks, "formats": formats, "compensate": compensate }))?;
+        "dest": dest, "midi_mode": midi_mode, "tracks": tracks, "roles": roles, "formats": formats, "compensate": compensate }))?;
     blocking(&svc, "export_all", move |s| {
         s.export_all_opts(&sid, &opts, Some(progress))
     })
@@ -571,7 +573,7 @@ async fn transport_master(svc: State<'_, Service>, volume_db: f64) -> Result<Val
     blocking(&svc, "transport_master", move |s| s.transport_master(volume_db)).await
 }
 
-/// P3-16: the output devices, the choice and the device in use (a CoreAudio query: blocking pool).
+/// P3-16: the output devices, the choice and the device in use (a `CoreAudio` query: blocking pool).
 ///
 /// # Errors
 ///
@@ -622,8 +624,8 @@ fn selftest_clock() -> f64 {
     START.get().map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0)
 }
 
-/// Self-test (P3-6b, debug builds only): footprint of the WebKit helper processes of this app
-/// (WebContent, GPU), as `selftest::memory` describes.
+/// Self-test (P3-6b, debug builds only): footprint of the `WebKit` helper processes of this app
+/// (`WebContent`, GPU), as `selftest::memory` describes.
 #[cfg(debug_assertions)]
 #[tauri::command]
 async fn selftest_memory() -> Value {
@@ -972,7 +974,7 @@ pub fn run() {
     START.set(Instant::now()).ok();
     // P3-15c: the trace (feature `trace`, `DRUMSPIKE_TRACE=<file>`) starts first, so its clock
     // and the self-test clock (`selftest_clock`) differ by the offset of its first event
-    drumspike_app::trace::init_from_env(START.get().map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0));
+    let _ = drumspike_app::trace::init_from_env(START.get().map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0));
     async_runtime_setup();
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

@@ -22,6 +22,7 @@ pub enum WavFormat {
 
 impl WavFormat {
     /// Container bytes per sample.
+    #[must_use]
     pub fn bytes_per_sample(self) -> u16 {
         match self {
             WavFormat::Pcm16 => 2,
@@ -46,7 +47,7 @@ pub struct WavSpec {
     pub channels: u16,
     /// Sample encoding.
     pub format: WavFormat,
-    /// Write a WAVE_FORMAT_EXTENSIBLE header (what DAWs write for more than two channels).
+    /// Write a `WAVE_FORMAT_EXTENSIBLE` header (what DAWs write for more than two channels).
     pub extensible: bool,
     /// Channel mask for the extensible header (0 = unspecified).
     pub channel_mask: u32,
@@ -60,6 +61,7 @@ fn put_field(c: &mut [u8], at: usize, width: usize, s: &str) {
 
 /// Encode a `bext` chunk body (fixed 602 bytes plus the coding history, NUL-padded to an
 /// even length).
+#[must_use]
 pub fn encode_bext(b: &Bext) -> Vec<u8> {
     let mut c = vec![0u8; BEXT_FIXED_LEN];
     put_field(&mut c, BEXT_DESCRIPTION, 256, &b.description);
@@ -97,7 +99,7 @@ fn fmt_body(spec: &WavSpec) -> Vec<u8> {
     fmt.extend_from_slice(&(if spec.extensible { 0xFFFEu16 } else { spec.format.tag() }).to_le_bytes());
     fmt.extend_from_slice(&spec.channels.to_le_bytes());
     fmt.extend_from_slice(&spec.sample_rate.to_le_bytes());
-    fmt.extend_from_slice(&(spec.sample_rate * block_align as u32).to_le_bytes());
+    fmt.extend_from_slice(&(spec.sample_rate * u32::from(block_align)).to_le_bytes());
     fmt.extend_from_slice(&block_align.to_le_bytes());
     fmt.extend_from_slice(&(8 * bps).to_le_bytes());
     if spec.extensible {
@@ -111,6 +113,7 @@ fn fmt_body(spec: &WavSpec) -> Vec<u8> {
 }
 
 /// Build a whole WAV file around already encoded sample bytes (`data` is the data chunk).
+#[must_use]
 pub fn encode_wav_raw(spec: &WavSpec, data: &[u8], bext: Option<&Bext>) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() + 1024);
     out.extend_from_slice(b"RIFF\0\0\0\0WAVE");
@@ -179,27 +182,33 @@ fn encode_hook_note(len: usize) {
 
 /// Quantise interleaved float samples to `format`: clamp to [-1, 1], scale to the integer
 /// full scale, round to nearest.
+#[must_use]
 pub fn encode_samples(format: WavFormat, interleaved: &[f32]) -> Vec<u8> {
     encode_hook_note(interleaved.len());
     let mut buf = Vec::with_capacity(interleaved.len() * format.bytes_per_sample() as usize);
     for &v in interleaved {
-        let c = v.clamp(-1.0, 1.0) as f64;
+        let c = f64::from(v.clamp(-1.0, 1.0));
         match format {
             WavFormat::Float32 => buf.extend_from_slice(&v.to_le_bytes()),
             WavFormat::Pcm16 => buf.extend_from_slice(&((c * 32767.0).round() as i16).to_le_bytes()),
-            WavFormat::Pcm24 => buf.extend_from_slice(&((c * 8388607.0).round() as i32).to_le_bytes()[..3]),
-            WavFormat::Pcm32 => buf.extend_from_slice(&((c * 2147483647.0).round() as i32).to_le_bytes()),
+            WavFormat::Pcm24 => buf.extend_from_slice(&((c * 8_388_607.0).round() as i32).to_le_bytes()[..3]),
+            WavFormat::Pcm32 => buf.extend_from_slice(&((c * 2_147_483_647.0).round() as i32).to_le_bytes()),
         }
     }
     buf
 }
 
 /// Build a whole WAV file from interleaved float samples.
+#[must_use]
 pub fn encode_wav(spec: &WavSpec, interleaved: &[f32], bext: Option<&Bext>) -> Vec<u8> {
     encode_wav_raw(spec, &encode_samples(spec.format, interleaved), bext)
 }
 
 /// Write a WAV file from interleaved float samples.
+///
+/// # Errors
+///
+/// An [`std::io::Error`] from the atomic write (see [`write_atomic`]).
 pub fn write_wav(path: &Path, spec: &WavSpec, interleaved: &[f32], bext: Option<&Bext>) -> std::io::Result<()> {
     write_atomic(path, &encode_wav(spec, interleaved, bext))
 }
@@ -212,6 +221,11 @@ pub fn write_wav(path: &Path, spec: &WavSpec, interleaved: &[f32], bext: Option<
 /// plus rename as [`write_atomic`] (no partial file on error), and the bytes on disk are the
 /// ones [`encode_wav_raw`] builds for the same samples. A `fill` or write error removes the
 /// temporary file and leaves the destination exactly as it was.
+///
+/// # Errors
+///
+/// An [`std::io::Error`] when the temporary file cannot be created, written or renamed, or
+/// the error `fill` returns for a block.
 pub fn write_wav_blockwise<F>(
     path: &Path,
     spec: &WavSpec,
@@ -247,6 +261,11 @@ where
 /// opened with `create_new`, so two writers never share one inode), synced to disk, then a
 /// rename, so a reader never sees a half-written file (P4-7c). The temporary file is removed
 /// when the write fails (the guard of the shared helper, `io::atomic`).
+///
+/// # Errors
+///
+/// An [`std::io::Error`] when the path has no file name, the temporary file cannot be
+/// created, written or synced, or the rename fails.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     super::atomic::write_bytes_atomic(path, bytes)
 }
@@ -367,11 +386,11 @@ mod tests {
 
     #[test]
     fn every_format_round_trips_within_one_lsb() {
-        let x = [0.5f32, -1.0, 2.0, 0.123456, -0.000123];
+        let x = [0.5f32, -1.0, 2.0, 0.123_456, -0.000_123];
         for (fmt, lsb) in [
             (WavFormat::Pcm16, 1.0 / 32767.0),
-            (WavFormat::Pcm24, 1.0 / 8388607.0),
-            (WavFormat::Pcm32, 1.0 / 8388608.0),
+            (WavFormat::Pcm24, 1.0 / 8_388_607.0),
+            (WavFormat::Pcm32, 1.0 / 8_388_608.0),
             (WavFormat::Float32, 0.0),
         ] {
             let b = encode_wav(&spec(fmt, 1), &x, None);
@@ -430,9 +449,9 @@ mod tests {
         let times = [
             0.0,
             1.0,
-            (WRITE_BLOCK_FRAMES - 2) as f64 / sr as f64,
-            (WRITE_BLOCK_FRAMES + 3) as f64 / sr as f64,
-            (n - 1) as f64 / sr as f64,
+            (WRITE_BLOCK_FRAMES - 2) as f64 / f64::from(sr),
+            (WRITE_BLOCK_FRAMES + 3) as f64 / f64::from(sr),
+            (n - 1) as f64 / f64::from(sr),
         ];
         let src = Bext::default();
         let out = dir.join("hook.wav");
@@ -483,9 +502,9 @@ mod tests {
         let times = [
             0.0,
             1.0,
-            (block - 2) as f64 / sr as f64,
-            (block + 3) as f64 / sr as f64,
-            (lengths[5] - 1) as f64 / sr as f64,
+            (block - 2) as f64 / f64::from(sr),
+            (block + 3) as f64 / f64::from(sr),
+            (lengths[5] - 1) as f64 / f64::from(sr),
         ];
         let src = Bext {
             time_reference: 123_456,

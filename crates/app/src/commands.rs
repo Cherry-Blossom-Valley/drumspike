@@ -67,6 +67,7 @@ pub const COMMANDS: [&str; 16] = [
 
 /// The answer of `app_info`: core version, detector and chain (main is model-free, #281 D16:
 /// the DSP detector is the only path). The arguments are the legacy signature; both are ignored.
+#[must_use]
 pub fn app_info_value(_dir: &Path, _load: bool) -> Value {
     json!({
         "core_version": drumspike_core::VERSION,
@@ -87,6 +88,7 @@ pub enum ListShape {
 
 impl ListShape {
     /// `ids` gives [`ListShape::Ids`]; anything else, or nothing, [`ListShape::Sessions`].
+    #[must_use]
     pub fn parse(s: Option<&str>) -> ListShape {
         if s == Some("ids") {
             ListShape::Ids
@@ -105,6 +107,7 @@ fn push_f32(out: &mut Vec<u8>, v: &[f32]) {
 }
 
 /// The bytes of a peak tile (layout in the module docs).
+#[must_use]
 pub fn tile_bytes(t: &CacheTile) -> Vec<u8> {
     let n = t.min.len();
     let mut out = Vec::with_capacity(12 + 12 * n);
@@ -135,6 +138,7 @@ impl Service {
     }
 
     /// `app_info`.
+    #[must_use]
     pub fn app_info(&self) -> Value {
         self.app_info_value()
     }
@@ -148,6 +152,10 @@ impl Service {
     /// project". Now the call answers only when the entry is still registered after the summary
     /// ([`Registry::is_open`](crate::registry::Registry::is_open)); else the project loads again
     /// as a new session. A close after that check comes after the open, as on one thread.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::project_open_with`].
     pub fn project_open(&self, path: &str) -> Result<Value, AppError> {
         self.project_open_with(path, false)
     }
@@ -155,6 +163,12 @@ impl Service {
     /// [`Service::project_open`] with `read_only` (P4-5): no project lock is taken, the document is the saved one,
     /// and a command that changes the project is refused (409) by [`crate::call::call`]. The summary then has
     /// `read_only: true`. A folder that is open in this process already keeps its entry and its mode.
+    ///
+    /// # Errors
+    ///
+    /// A 400 [`AppError`] for an empty `path`; the load error when the folder or document cannot be read or
+    /// parsed; the registry error when it cannot be registered (for example a project lock held elsewhere);
+    /// a 409 when the project was closed again while it opened on every one of `OPEN_ATTEMPTS` attempts.
     pub fn project_open_with(&self, path: &str, read_only: bool) -> Result<Value, AppError> {
         if path.is_empty() {
             return Err(AppError::bad("path required"));
@@ -182,6 +196,10 @@ impl Service {
     }
 
     /// `GET /api/project/{sid}`: the summary; a file moved since the open shows up here.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] when no project is open under `sid`.
     pub fn project_get(&self, sid: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         crate::registry::resolve_shared(&op);
@@ -190,6 +208,7 @@ impl Service {
     }
 
     /// `GET /api/sessions` or `GET /api/project`: the open projects.
+    #[must_use]
     pub fn project_list(&self, shape: ListShape) -> Value {
         let mut rows: Vec<(f64, Value)> = Vec::new();
         for (sid, op) in self.inner.registry.all() {
@@ -216,6 +235,11 @@ impl Service {
     }
 
     /// `GET /api/tracks/{sid}`: every track as the page sees it; every source is resolved again.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] when no project is open under `sid`; the error of building the public form of a
+    /// track that cannot be shown.
     pub fn tracks_get(&self, sid: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         crate::registry::resolve_shared(&op);
@@ -236,6 +260,10 @@ impl Service {
     }
 
     /// `GET /api/events/{sid}/{name}`: `{sr, duration, n_samples, events}`.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] when no project is open under `sid` or the project has no track `name`.
     pub fn events_get(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -254,6 +282,12 @@ impl Service {
     /// is kept as it is, untyped. R07: the plain write is a writer of the project like an edit
     /// or a re-pick store: it takes the store guard once here, so it cannot commit over a
     /// concurrent write of the same project (the write refuses with a retryable 409 instead).
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] for an unknown `sid` or track; a 409 when the project is open read-only, when
+    /// another write or a running analysis holds the project, or when the track is a follower (its hits
+    /// are the source's); a 400 when `events` cannot be stored.
     pub fn events_set(&self, sid: &str, name: &str, events: &Value) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let _guard = self.begin_write(sid)?;
@@ -297,6 +331,11 @@ impl Service {
 
     /// `GET /api/peaks/{sid}/{name}`, the header part: `{sr, n_samples, levels}` where
     /// `levels` maps each block size to `{"n": bins}`. The values come as tiles.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] for an unknown `sid` or track; the error of building the peak cache when the
+    /// track's audio cannot be read or decoded.
     pub fn peaks_info(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let cache = self.open_peaks(sid, name)?;
         let mut levels = serde_json::Map::new();
@@ -308,6 +347,11 @@ impl Service {
 
     /// `GET /api/peaks/{sid}/{name}`, one tile: bins `[from, to)` of the level with block
     /// size `level`, clamped to the level (bytes, see the module docs).
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Service::peaks_info`] (unknown project or track, unreadable audio); a 400
+    /// [`AppError`] when the cache has no level with block size `level` or the range is invalid.
     pub fn peaks_tile(&self, sid: &str, name: &str, level: usize, from: i64, to: i64) -> Result<Vec<u8>, AppError> {
         let cache = self.open_peaks(sid, name)?;
         match cache.tile(level, from, to)? {
@@ -320,6 +364,11 @@ impl Service {
     /// [`MAX_WINDOW_SAMPLES`], clamped to the track (bytes, see the module docs). P3-15d: only
     /// the window is read from the file (`Media::window_bytes`); the bytes equal the window of
     /// the full decode.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] for an unknown `sid` or track; the error of resolving the track's source or
+    /// reading its audio file.
     pub fn samples_window(&self, sid: &str, name: &str, start: i64, end: i64) -> Result<Vec<u8>, AppError> {
         let op = self.inner.registry.get(sid)?;
         let (src, mix) = {
@@ -333,6 +382,10 @@ impl Service {
     /// `POST /api/analyze/{sid}`: store `params` per track, then start the job on a worker
     /// thread. `tracks` defaults to every track. `progress` gets `{"sid", "job"}` after every
     /// change of the job (the `analyze_status` value). Returns `{"started": [names]}`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::analyze_start_keep`].
     pub fn analyze_start(
         &self,
         sid: &str,
@@ -346,6 +399,11 @@ impl Service {
     /// [`Service::analyze_start`] with `keep_edited` (P4-5 step 2b): the hits the engineer added or
     /// moved stay in the new events and win within 20 ms over the detected ones. The page sends
     /// `keep_edited` for Re-analyze > Keep (P4-9); the agent surface (`call`) defaults it to true.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] for an unknown `sid`; a 409 when the project is open read-only, an analysis is
+    /// already queued or running, or a re-pick is being stored; a 400 when a name in `tracks` is not a track.
     pub fn analyze_start_keep(
         &self,
         sid: &str,
@@ -373,9 +431,12 @@ impl Service {
             .ok_or_else(|| AppError::conflict("a re-pick is being stored: try again"))?;
         let targets = {
             let mut g = lock(&op);
+            let all: Vec<String> = g.project.doc.tracks().map(|(n, _)| n.clone()).collect();
             let targets: Vec<String> = match tracks {
-                Some(t) if !t.is_empty() => t,
-                _ => g.project.doc.tracks().map(|(n, _)| n.clone()).collect(),
+                // #120: the names accept the patterns (exact, glob, `t1-t4`); a pattern that
+                // matches nothing is a 400 that names it
+                Some(t) if !t.is_empty() => crate::patterns::expand(&all, &t)?,
+                _ => all,
             };
             for t in &targets {
                 if g.project.doc.track(t).is_none() {
@@ -410,6 +471,7 @@ impl Service {
     }
 
     /// `GET /api/job/{sid}`: `{state, tracks: {name: {state, stage?, n_events, detector, ...}}}`.
+    #[must_use]
     pub fn analyze_status(&self, sid: &str) -> Value {
         self.inner.jobs.status(sid)
     }
@@ -422,6 +484,10 @@ impl Service {
     /// before its start (the file moves them to 0 s); 409
     /// when the track's files are another track's (`export::check_file_owner`) or a stale
     /// follower cannot be derived; a follower writes its own derived hits, never `events`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::export_midi_with`].
     pub fn export_midi(
         &self,
         sid: &str,
@@ -435,6 +501,10 @@ impl Service {
     }
 
     /// P4-30: [`Service::export_midi`] into the folder `dest` (`export::check_dest`); `None` is `Exports/`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::export_midi_with`].
     #[allow(clippy::too_many_arguments)]
     pub fn export_midi_to(
         &self,
@@ -452,6 +522,13 @@ impl Service {
     /// P4-7c: [`Service::export_midi_to`] with the choice to compensate the track's sampler offset (the notes
     /// at the aligned attack minus the offset; `sampler` and `warnings` in the answer say what moved). A track
     /// without a calibration is written as before.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] for an unknown `sid` or track; a 409 when the project is open read-only, the track's
+    /// files are another track's, or a stale follower cannot be derived; a 400 when `ppq` does not fit a
+    /// `u16`, `dest` is not an allowed folder, or the tempo map or sampler offset is invalid; an error when
+    /// the target is a protected file or the `.mid` file cannot be written.
     #[allow(clippy::too_many_arguments)]
     pub fn export_midi_with(
         &self,
@@ -535,15 +612,12 @@ pub(crate) fn assign_events(g: &mut OpenProject, name: &str, events: &Value) -> 
     let n = list.len();
     let typed = serde_json::from_value::<Vec<Event>>(events.clone());
     let tr = g.track_mut(name)?;
-    match typed {
-        Ok(ev) => {
-            tr.events = Some(ev);
-            tr.extra.shift_remove("events");
-        }
-        Err(_) => {
-            tr.events = None;
-            tr.extra.insert("events".into(), events.clone());
-        }
+    if let Ok(ev) = typed {
+        tr.events = Some(ev);
+        tr.extra.shift_remove("events");
+    } else {
+        tr.events = None;
+        tr.extra.insert("events".into(), events.clone());
     }
     Ok(n)
 }

@@ -4,7 +4,7 @@
 //! row-major order. Output: the onsets of all five classes, sorted by frame and class, with
 //! `time = frame / 100`. Each class is picked on its own column with its threshold
 //! ([`THRESHOLDS`]: BD 0.22, SD 0.24, TT 0.32, HH 0.22, CY+RD 0.30) and the reference timing
-//! (pre_avg 0.1 s, post_avg 0.01 s, pre_max 0.02 s, post_max 0.01 s, combine 0.02 s at 100
+//! (`pre_avg` 0.1 s, `post_avg` 0.01 s, `pre_max` 0.02 s, `post_max` 0.01 s, combine 0.02 s at 100
 //! fps: 10, 1, 2, 1 and 2 frames). [`Chain`] selects the rules ([`Chain::Mix`] uses the
 //! madmom rules; `docs/archive/phase2-report.md`, section "P2-1c R3 vs CLI gap"):
 //!
@@ -22,7 +22,7 @@
 //! the reference arithmetic bit for bit (checked on all 5.9 million values of the 56
 //! reference files of each chain, `docs/archive/phase2-report.md`, section P2-4):
 //!
-//! * CLI: `np.convolve` calls the BLAS `sdot` (OpenBLAS) for each output: the 12 products
+//! * CLI: `np.convolve` calls the BLAS `sdot` (`OpenBLAS`) for each output: the 12 products
 //!   `x * f32(1/12)` are rounded to `f32` and summed in `f64` in window order, and the sum is
 //!   rounded to `f32`.
 //! * madmom: scipy's `NI_UniformFilter1D` keeps a running `f64` sum over the zero-padded
@@ -94,6 +94,7 @@ pub struct Branches {
 
 impl Branches {
     /// The counters as `(name, value)` pairs, in declaration order.
+    #[must_use]
     pub fn pairs(&self) -> [(&'static str, usize); 12] {
         [
             ("peaks", self.peaks),
@@ -131,6 +132,7 @@ impl Branches {
 /// The chain's moving average of one activation column over `[t - 10, t + 1]` (module
 /// docs: edge padding and the `sdot` sum for [`Chain::Cli`], zero padding and the scipy
 /// running sum for [`Chain::Madmom`]).
+#[must_use]
 pub fn moving_average(x: &[f32], chain: Chain) -> Vec<f32> {
     let n = x.len();
     if n == 0 {
@@ -296,6 +298,7 @@ pub fn pick_column(x: &[f32], threshold: f64, chain: Chain, b: &mut Branches) ->
 /// when `s >= th` (up to the `f32` rounding of `avg + th` in the madmom rule); its neighbours
 /// and the combine rule can still take it out, so the hit count at `th` comes from
 /// [`pick_column`], not from these strengths.
+#[must_use]
 pub fn candidates(x: &[f32], floor: f64, chain: Chain) -> Vec<(usize, f32)> {
     let frames = pick_column(x, floor, chain, &mut Branches::default());
     if frames.is_empty() {
@@ -310,6 +313,7 @@ pub fn candidates(x: &[f32], floor: f64, chain: Chain) -> Vec<(usize, f32)> {
 /// # Panics
 ///
 /// When `activations.len()` is not a multiple of [`N_CLASSES`].
+#[must_use]
 pub fn pick_counted(activations: &[f32], chain: Chain) -> (Vec<Onset>, Branches) {
     pick_counted_with(activations, chain, &THRESHOLDS)
 }
@@ -344,6 +348,7 @@ fn pick_counted_with(activations: &[f32], chain: Chain, thresholds: &[f64; N_CLA
 /// # Panics
 ///
 /// When `activations.len()` is not a multiple of [`N_CLASSES`].
+#[must_use]
 pub fn pick(activations: &[f32], chain: Chain) -> Vec<Onset> {
     pick_counted(activations, chain).0
 }
@@ -355,6 +360,7 @@ pub fn pick(activations: &[f32], chain: Chain) -> Vec<Onset> {
 /// # Panics
 ///
 /// When `activations.len()` is not a multiple of [`N_CLASSES`].
+#[must_use]
 pub fn pick_with(activations: &[f32], chain: Chain, thresholds: &[f64; N_CLASSES]) -> Vec<Onset> {
     pick_counted_with(activations, chain, thresholds).0
 }

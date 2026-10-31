@@ -4,7 +4,7 @@ use crate::refine::refine_sr;
 
 const SR: u32 = 48_000;
 
-/// tests/helpers.kick_hit: pitch sweep 125 -> 55 Hz, 0.5 ms attack ramp, 0.12 s decay.
+/// `tests/helpers.kick_hit`: pitch sweep 125 -> 55 Hz, 0.5 ms attack ramp, 0.12 s decay.
 fn track(onsets: &[(f64, f64)], dur: f64, sr: u32) -> Vec<f32> {
     let srf = f64::from(sr);
     let mut x = vec![0.0f64; (dur * srf) as usize];
@@ -32,7 +32,7 @@ fn kicks(sr: u32) -> Vec<f32> {
     track(&o, 3.5, sr)
 }
 
-/// The Python composition of engine.analyze_track, written out with the ported pieces
+/// The Python composition of `engine.analyze_track`, written out with the ported pieces
 /// one call at a time (the reference of the unit tests).
 fn reference(x: &[f32], sr: u32, role: &str, detected: &[(f64, u8)], p: &AnalyzeParams) -> Vec<Hit> {
     let mut ev: Vec<(f64, u8)> = detected.to_vec();
@@ -74,7 +74,7 @@ fn reference(x: &[f32], sr: u32, role: &str, detected: &[(f64, u8)], p: &Analyze
     if p.shift_samples != 0 {
         pairs = pairs
             .iter()
-            .map(|&(t, r)| (t + p.shift_samples as f64 / sr as f64, r))
+            .map(|&(t, r)| (t + p.shift_samples as f64 / f64::from(sr), r))
             .collect();
     }
     let v = velocity_map(x, sr, &pairs.iter().map(|p| p.0).collect::<Vec<_>>(), &p.velocity);
@@ -113,7 +113,7 @@ fn role_classes_and_notes_follow_the_engine() {
 #[test]
 fn thresholds_round_to_3_decimals_like_the_cli_format() {
     // float(f"{t:.3f}") in Python 3.12
-    let t = round_thresholds(&[0.2225, 0.0005, 0.2345, 0.9995, 0.30000000000000004]);
+    let t = round_thresholds(&[0.2225, 0.0005, 0.2345, 0.9995, 0.300_000_000_000_000_04]);
     assert_eq!(t, [0.223, 0.001, 0.234, 1.0, 0.3]);
     assert_eq!(
         round_thresholds(&[0.125, 0.1225, 0.2215, 0.0015, 0.0025]),

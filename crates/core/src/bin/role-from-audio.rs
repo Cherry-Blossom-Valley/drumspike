@@ -55,8 +55,8 @@ fn main() {
                 "t20_hi": f.t20_hi, "ratio_hi": f.ratio_hi, "hi_sustain": f.hi_sustain,
                 "onsets_per_s": f.onsets_per_s, "crest": f.crest,
             },
-            "role": role.map(|r| r.as_str()),
-            "raw_role": raw_role.map(|r| r.as_str()),
+            "role": role.map(drumspike_core::role::Role::as_str),
+            "raw_role": raw_role.map(drumspike_core::role::Role::as_str),
             "confidence": confidence,
         })
         .to_string();

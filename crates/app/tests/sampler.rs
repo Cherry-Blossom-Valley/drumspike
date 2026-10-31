@@ -21,7 +21,7 @@ const SR: u32 = 48_000;
 /// A drum-like shot: `pre` samples of silence, a decaying 150 Hz tone and a short noise burst.
 fn shot(pre: usize, secs: f64, seed: u64) -> Vec<f32> {
     let mut s = seed;
-    let n = (secs * SR as f64) as usize;
+    let n = (secs * f64::from(SR)) as usize;
     (0..n)
         .map(|i| {
             if i < pre {
@@ -31,7 +31,7 @@ fn shot(pre: usize, secs: f64, seed: u64) -> Vec<f32> {
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
             let u = ((s >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0;
-            let t = (i - pre) as f64 / SR as f64;
+            let t = (i - pre) as f64 / f64::from(SR);
             (0.6 * (2.0 * std::f64::consts::PI * 150.0 * t).sin() * (-t / 0.05).exp() + 0.4 * u * (-t / 0.003).exp())
                 as f32
         })
@@ -68,7 +68,7 @@ fn session(tag: &str, lag: usize) -> (Service, String, PathBuf) {
     let root = tmp(tag);
     let mut x = vec![0.0f32; 5 * SR as usize];
     for t in HITS {
-        let at = (t * SR as f64).round() as usize + lag;
+        let at = (t * f64::from(SR)).round() as usize + lag;
         for (i, v) in shot(0, 0.4, 1).iter().enumerate() {
             x[at + i] += *v;
         }
@@ -105,10 +105,10 @@ fn notes(path: &str) -> Vec<(String, u64, u8, u8)> {
         let mut name = i.to_string();
         let mut tick = 0u64;
         for e in tr {
-            tick += e.delta.as_int() as u64;
+            tick += u64::from(e.delta.as_int());
             match e.kind {
                 TrackEventKind::Meta(midly::MetaMessage::TrackName(n)) => {
-                    name = String::from_utf8_lossy(n).into_owned()
+                    name = String::from_utf8_lossy(n).into_owned();
                 }
                 TrackEventKind::Midi {
                     message: MidiMessage::NoteOn { key, vel },
@@ -132,7 +132,7 @@ fn set_bounce(svc: &Service, sid: &str, path: &Path) -> Value {
 
 /// The note ticks the hits would have without any calibration.
 fn plain_ticks() -> Vec<u64> {
-    HITS.iter().map(|t| (t * SR as f64).round() as u64).collect()
+    HITS.iter().map(|t| (t * f64::from(SR)).round() as u64).collect()
 }
 
 #[test]

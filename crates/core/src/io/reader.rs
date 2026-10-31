@@ -1,7 +1,7 @@
 //! Memory-mapped WAV/BWF reader: RIFF chunk walker and sample decoding.
 //!
 //! Supported: RIFF/WAVE with PCM 16/24/32 (tag 1) and IEEE float 32 (tag 3), plain or
-//! WAVE_FORMAT_EXTENSIBLE headers, any channel count, `bext` and `iXML` chunks. RF64 and
+//! `WAVE_FORMAT_EXTENSIBLE` headers, any channel count, `bext` and `iXML` chunks. RF64 and
 //! BW64 (64-bit sizes) are recognised and rejected with a clear error; support comes later.
 
 use std::fmt;
@@ -62,7 +62,7 @@ pub struct Bext {
     pub origination_date: String,
     /// `hh:mm:ss`, 8 bytes.
     pub origination_time: String,
-    /// First sample's position since midnight in samples (TimeReferenceLow | High << 32).
+    /// First sample's position since midnight in samples (`TimeReferenceLow` | High << 32).
     pub time_reference: u64,
     /// BWF version.
     pub version: u16,
@@ -91,6 +91,7 @@ impl Bext {
     /// time (338 bytes), the minimum `project.bext_origination` accepts. A chunk of 338 to
     /// 345 bytes has no time reference and reads 0; a chunk without the version field
     /// reads version 0.
+    #[must_use]
     pub fn parse(c: &[u8]) -> Option<Bext> {
         if c.len() < BEXT_TIME_REFERENCE {
             return None;
@@ -123,6 +124,7 @@ impl Bext {
 
     /// `"<date>T<time>Z"` as `project.bext_origination` writes it into a source record;
     /// `None` when the date is empty.
+    #[must_use]
     pub fn origination(&self) -> Option<String> {
         if self.origination_date.is_empty() {
             None
@@ -138,7 +140,7 @@ impl Bext {
 pub struct WavInfo {
     /// The format tag (1 = PCM, 3 = IEEE float); for an extensible header the sub-format.
     pub format_tag: u16,
-    /// True when the header is WAVE_FORMAT_EXTENSIBLE.
+    /// True when the header is `WAVE_FORMAT_EXTENSIBLE`.
     pub extensible: bool,
     /// The extensible header's channel mask (speaker positions); 0 when absent or unset.
     pub channel_mask: u32,
@@ -243,6 +245,12 @@ fn parse_fmt(c: &[u8]) -> Result<Fmt, WavError> {
 
 impl WavInfo {
     /// Walk the RIFF chunks of `bytes` (a whole WAV file in memory or mmap).
+    ///
+    /// # Errors
+    ///
+    /// [`WavError::Format`] when the bytes are RF64/BW64 or not RIFF/WAVE, the `fmt ` or
+    /// `data` chunk is missing or the `fmt ` chunk is malformed, the sample format and width
+    /// are unsupported, or `nBlockAlign` disagrees with the channels and width.
     pub fn parse(bytes: &[u8]) -> Result<WavInfo, WavError> {
         let err = |s: &str| WavError::Format(s.to_string());
         if bytes.len() >= 4 && (&bytes[0..4] == b"RF64" || &bytes[0..4] == b"BW64") {
@@ -323,18 +331,28 @@ impl WavInfo {
         })
     }
 
-    /// The `bext` TimeReference (first sample's position since midnight, in samples).
+    /// The `bext` `TimeReference` (first sample's position since midnight, in samples).
+    #[must_use]
     pub fn time_reference(&self) -> Option<u64> {
         self.bext.as_ref().map(|b| b.time_reference)
     }
 
     /// The downmix plan for this file in `mode` (see [`Plan::new`] for the errors).
+    ///
+    /// # Errors
+    ///
+    /// [`WavError::Format`] with the message of [`Plan::new`] when the channel count or mask
+    /// is not supported by `mode`.
     pub fn mix_plan(&self, mode: MixMode) -> Result<Plan, WavError> {
         let mask = if self.extensible { self.channel_mask } else { 0 };
         Plan::new(mode, self.channels as usize, mask).map_err(WavError::Format)
     }
 
     /// Decode the data chunk to mono f32 at native rate, folded with `mode`.
+    ///
+    /// # Errors
+    ///
+    /// [`WavError::Format`] when the downmix `mode` is refused for this file (see [`Plan::new`]).
     pub fn decode_mono(&self, bytes: &[u8], mode: MixMode) -> Result<Vec<f32>, WavError> {
         let plan = self.mix_plan(mode)?;
         let d = &bytes[self.data_offset..self.data_offset + self.n_frames * self.block_align];
@@ -348,7 +366,7 @@ impl WavInfo {
             (SampleFormat::Pcm, 3) => decode_frames::<3, i32>(
                 d,
                 ch,
-                |b| (((b[2] as i8 as i32) << 16) | ((b[1] as i32) << 8) | b[0] as i32) << 8,
+                |b| ((i32::from(b[2] as i8) << 16) | (i32::from(b[1]) << 8) | i32::from(b[0])) << 8,
                 |f| plan.fold_s32(f),
             ),
             (SampleFormat::Pcm, 4) => decode_frames::<4, i32>(d, ch, |b| i32::from_le_bytes(*b), |f| plan.fold_s32(f)),
@@ -360,6 +378,14 @@ impl WavInfo {
     /// `channels` samples per frame), each sample converted exactly as the sample of a mono
     /// file is (the 1-channel fold of [`Plan`]). Returns the frames written. The playback of a
     /// stereo file uses it; detection and exports stay on the mono fold.
+    ///
+    /// # Panics
+    ///
+    /// The `expect("one channel")` on the 1-channel [`Plan`] cannot fail. The
+    /// `unreachable!("validated in parse")` arm is reached only for a sample format and width
+    /// that [`WavInfo::parse`] rejects, so it needs a hand-built `WavInfo`. The final division
+    /// by the channel count panics for a `WavInfo` with 0 channels, which is likewise not
+    /// produced by `parse`.
     pub fn decode_channels_into(&self, data: &[u8], out: &mut [f32]) -> usize {
         let ch = self.channels as usize;
         let one = Plan::new(MixMode::Average, 1, 0).expect("one channel");
@@ -373,7 +399,7 @@ impl WavInfo {
             (SampleFormat::Pcm, 3) => decode_samples_into::<3, i32>(
                 data,
                 out,
-                |b| (((b[2] as i8 as i32) << 16) | ((b[1] as i32) << 8) | b[0] as i32) << 8,
+                |b| ((i32::from(b[2] as i8) << 16) | (i32::from(b[1]) << 8) | i32::from(b[0])) << 8,
                 |x| one.fold_s32(&[x]),
             ),
             (SampleFormat::Pcm, 4) => {
@@ -403,7 +429,7 @@ impl WavInfo {
                 data,
                 ch,
                 out,
-                |b| (((b[2] as i8 as i32) << 16) | ((b[1] as i32) << 8) | b[0] as i32) << 8,
+                |b| ((i32::from(b[2] as i8) << 16) | (i32::from(b[1]) << 8) | i32::from(b[0])) << 8,
                 |f| plan.fold_s32(f),
             ),
             (SampleFormat::Pcm, 4) => {
@@ -503,6 +529,11 @@ pub struct MappedWav {
 
 impl MappedWav {
     /// Open `path` read-only, map it and parse the header. The file is never written.
+    ///
+    /// # Errors
+    ///
+    /// [`WavError::Io`] when the file cannot be opened or mapped; [`WavError::Format`] when
+    /// the header is not a supported WAV (see [`WavInfo::parse`]).
     pub fn open(path: &Path) -> Result<MappedWav, WavError> {
         let f = File::open(path)?;
         // SAFETY: the mapping is read-only and the file is opened read-only, so the only way
@@ -515,10 +546,15 @@ impl MappedWav {
         Ok(MappedWav { info, mmap })
     }
     /// The whole file as bytes.
+    #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.mmap
     }
     /// Decode the data chunk to mono f32 (see [`WavInfo::decode_mono`]).
+    ///
+    /// # Errors
+    ///
+    /// [`WavError::Format`] when the downmix `mode` is refused for this file (see [`Plan::new`]).
     pub fn decode_mono(&self, mode: MixMode) -> Result<Vec<f32>, WavError> {
         self.info.decode_mono(&self.mmap, mode)
     }
@@ -549,6 +585,11 @@ impl MappedWav {
 }
 
 /// Convenience: mmap, parse, decode.
+///
+/// # Errors
+///
+/// [`WavError::Io`] when the file cannot be opened or mapped; [`WavError::Format`] when the
+/// header is unsupported or the downmix `mode` is refused for this file (see [`Plan::new`]).
 pub fn read_wav_mono(path: &Path, mode: MixMode) -> Result<(Vec<f32>, WavInfo), WavError> {
     let m = MappedWav::open(path)?;
     let x = m.decode_mono(mode)?;
@@ -559,6 +600,11 @@ pub fn read_wav_mono(path: &Path, mode: MixMode) -> Result<(Vec<f32>, WavInfo), 
 /// uses this instead of [`MappedWav`]: a source file that another program truncates while
 /// it is read then gives a short read or a format error, not a SIGBUS that ends the server
 /// process. For a file in the page cache the copy costs about as much as the mapping.
+///
+/// # Errors
+///
+/// [`WavError::Io`] when the file cannot be read; [`WavError::Format`] when the bytes are not
+/// a WAV file this reader supports (see [`WavInfo::parse`]).
 pub fn read_wav_bytes(path: &Path) -> Result<(Vec<u8>, WavInfo), WavError> {
     let bytes = std::fs::read(path)?;
     let info = WavInfo::parse(&bytes)?;

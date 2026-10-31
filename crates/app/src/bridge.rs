@@ -2,7 +2,7 @@
 //!
 //! `ds-bridge` (`crates/devtools/src/bin/ds-bridge.rs`) is the only user. It serves `static/` and
 //! `POST /invoke/<command>` on 127.0.0.1, so the page runs in Chromium (Playwright) on both
-//! hosts without a WebView. A command here calls the same `Service` method as the Tauri
+//! hosts without a `WebView`. A command here calls the same `Service` method as the Tauri
 //! wrapper of the same name in `apps/desktop/src-tauri/src/lib.rs`; only the arguments
 //! come from JSON instead of from Tauri. Errors keep the server's codes as the HTTP status
 //! and as the body `{code, message}`.
@@ -33,13 +33,17 @@ pub const IDLE_READ_TIMEOUT: Duration = Duration::from_secs(2);
 pub const MAX_BODY: usize = 256 << 20;
 
 /// The listening socket of `ds-bridge` on 127.0.0.1 (`port` 0: a free port).
+///
+/// # Errors
+///
+/// The [`std::io::Error`] of binding 127.0.0.1:`port`, for example when the port is in use or not permitted.
 pub fn listen(port: u16) -> std::io::Result<TcpListener> {
     TcpListener::bind(("127.0.0.1", port))
 }
 
 /// X-3 (P3-9b): the HTTP/1.1 server of the bridge, one thread per connection.
 ///
-/// Until P3-9b the bridge used tiny_http 0.12. Its pool reads each connection on one of its threads
+/// Until P3-9b the bridge used `tiny_http` 0.12. Its pool reads each connection on one of its threads
 /// with no read timeout and starts with 4 threads. Chromium opens up to 6 connections for the first
 /// page load and leaves some idle (preconnects); when the pool queued a connection while its threads
 /// waited on idle ones, the page load stalled until Chromium gave up (the `Page.goto` timeouts of G4,
@@ -117,6 +121,13 @@ fn read_line(r: &mut impl BufRead) -> std::io::Result<Option<String>> {
 /// Read the next request of a connection. `Ok(None)`: the client closed the connection, or it stayed
 /// idle for the read timeout before the first byte of a request. A body needs `Content-Length`
 /// (the page's `fetch` always sends it); a chunked body is refused.
+///
+/// # Errors
+///
+/// An [`std::io::Error`] of kind `InvalidData` for a request line that is not `METHOD URL HTTP/1.x`, a line over
+/// 16 KB or not UTF-8, a header without `:`, a bad or over-[`MAX_BODY`] `Content-Length`, a chunked body, more
+/// than 100 headers, or a head that ends early; any other read error of `r`, including an end of input inside
+/// the body. A read timeout before the first byte is `Ok(None)`, not an error.
 pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>> {
     let line = match read_line(r) {
         Ok(Some(l)) => l,
@@ -165,6 +176,10 @@ pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>
 }
 
 /// Write one answer with its length (and `Connection: close` when the connection ends after it).
+///
+/// # Errors
+///
+/// The [`std::io::Error`] of writing or flushing to `w`, for example a connection the client closed.
 pub fn write_reply(w: &mut impl Write, reply: &HttpReply, close: bool) -> std::io::Result<()> {
     let reason = match reply.status {
         200 => "OK",
@@ -224,7 +239,7 @@ pub struct EventLog {
 impl EventLog {
     /// Add `{event, payload}` and wake the waiting polls.
     pub fn push(&self, name: &str, payload: Value) {
-        let mut g = self.log.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.0 += 1;
         let n = g.0;
         if g.1.len() >= QUEUE_CAP {
@@ -236,14 +251,14 @@ impl EventLog {
 
     /// The number of the newest entry (0 for an empty log).
     pub fn head(&self) -> u64 {
-        self.log.lock().unwrap_or_else(|e| e.into_inner()).0
+        self.log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).0
     }
 
     /// The entries after number `after`; waits up to `timeout` for the first one. Returns
     /// `{"seq": newest number, "events": [...]}`.
     pub fn poll(&self, after: u64, timeout: Duration) -> Value {
         let end = Instant::now() + timeout;
-        let mut g = self.log.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if g.0 > after {
                 let events: Vec<Value> = g.1.iter().filter(|(n, _)| *n > after).map(|(_, v)| v.clone()).collect();
@@ -253,7 +268,11 @@ impl EventLog {
             if left.is_zero() {
                 return json!({"seq": g.0, "events": []});
             }
-            g = self.cv.wait_timeout(g, left).unwrap_or_else(|e| e.into_inner()).0;
+            g = self
+                .cv
+                .wait_timeout(g, left)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
         }
     }
 }
@@ -269,6 +288,7 @@ pub struct Bridge {
 use crate::command_policy::{CLOSE_DEFAULT, arg_str, opt_i64, transport_args};
 
 /// The MIME type of a static file, by extension.
+#[must_use]
 pub fn mime_of(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "html" => "text/html; charset=utf-8",
@@ -287,6 +307,7 @@ pub fn mime_of(path: &Path) -> &'static str {
 pub const BRIDGE_FLAG: &str = "<script>window.__DS_BRIDGE__ = true;</script>";
 
 /// `index.html` with [`BRIDGE_FLAG`] right after `<head>`.
+#[must_use]
 pub fn inject_flag(html: &str) -> String {
     match html.find("<head>") {
         Some(i) => format!("{}{}{}", &html[..i + 6], BRIDGE_FLAG, &html[i + 6..]),
@@ -320,12 +341,17 @@ impl Bridge {
     }
 
     /// The event log (for tests and for the long poll of `GET /events`).
+    #[must_use]
     pub fn events(&self) -> &Arc<EventLog> {
         &self.events
     }
 
     /// Put the event `menu` `{id, path?, sid?}` into the event log, as a click on a native menu item does in
     /// the app (P3-13a). Returns the payload.
+    ///
+    /// # Errors
+    ///
+    /// A 400 [`AppError`] when `args` has no string `id`.
     pub fn menu_event(&self, args: &Value) -> Result<Value, AppError> {
         let mut payload = json!({"id": arg_str(args, "id")?});
         for key in ["path", "sid", "name"] {
@@ -342,6 +368,7 @@ impl Bridge {
     }
 
     /// The channels (for tests and for the long poll).
+    #[must_use]
     pub fn channels(&self) -> &Arc<Channels> {
         &self.channels
     }
@@ -349,6 +376,11 @@ impl Bridge {
     /// Run one command with JSON arguments. The names and argument names are those of the
     /// Tauri wrappers (`apps/desktop/src-tauri/src/lib.rs`). The commands of the agent surface run
     /// in [`crate::call::run`]; the bridge adds the test commands and the transport.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] for an unknown command; a 400 for a missing or wrongly typed argument (for example
+    /// `ms`, `position`, `volume_db`, `device`, `devices`); otherwise the error of the command itself.
     pub fn invoke(&self, cmd: &str, args: &Value) -> Result<Reply, AppError> {
         let s = &self.svc;
         match cmd {

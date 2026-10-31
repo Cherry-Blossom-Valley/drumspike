@@ -45,6 +45,7 @@ pub enum Role {
 
 impl Role {
     /// The app's role name.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Role::Kick => "kick",
@@ -138,6 +139,7 @@ const LOUD_DB: f64 = 12.0; // the hits within this of the loudest onset carry th
 /// A role is suggested only when its confidence reaches that role's own bar
 /// ([`role_threshold`]); a role with no bar (never 90 % precise on ENST) is never
 /// suggested.
+#[must_use]
 pub fn role_from_audio(samples: &[f32], sr: u32) -> Option<Role> {
     let (role, confidence) = role_from_audio_confidence(samples, sr);
     role.filter(|r| role_threshold(*r).is_some_and(|bar| confidence >= bar))
@@ -158,6 +160,7 @@ pub fn role_from_audio(samples: &[f32], sr: u32) -> Option<Role> {
 /// - hat: never above 65 %; no bar.
 /// - cymbal: the wash veto never fired on the run (0 suggestions at any threshold);
 ///   no bar.
+#[must_use]
 pub fn role_threshold(role: Role) -> Option<f64> {
     match role {
         Role::Kick => Some(0.05),
@@ -168,6 +171,7 @@ pub fn role_threshold(role: Role) -> Option<f64> {
 
 /// The suggested role with its confidence: the vote margin between the best and the
 /// second role, or the wash veto strength for a cymbal. `None` has confidence 0.
+#[must_use]
 pub fn role_from_audio_confidence(samples: &[f32], sr: u32) -> (Option<Role>, f64) {
     if samples.is_empty() {
         return (None, 0.0);
@@ -182,6 +186,7 @@ pub fn role_from_audio_confidence(samples: &[f32], sr: u32) -> (Option<Role>, f6
 }
 
 /// The features of one clip (see the module docs).
+#[must_use]
 pub fn role_features(samples: &[f32], sr: u32) -> RoleFeatures {
     let f = RoleFeatures::zeroed();
     let n = samples.len();
@@ -296,7 +301,7 @@ fn features_from(a: &Analysis, hits: &[RoleHitFeatures]) -> RoleFeatures {
         let local_peak = a.env_db[o..]
             .iter()
             .take((0.15 / a.hop_s).max(1.0) as usize)
-            .cloned()
+            .copied()
             .fold(f64::NEG_INFINITY, f64::max);
         let limit = local_peak - target_drop;
         let end = a.onsets.get(oi + 1).copied().unwrap_or(a.env_db.len());
@@ -320,6 +325,7 @@ fn features_from(a: &Analysis, hits: &[RoleHitFeatures]) -> RoleFeatures {
 }
 
 /// The per-hit features of every loud hit of the clip (the eval's per-hit mode).
+#[must_use]
 pub fn hit_features(samples: &[f32], sr: u32) -> Vec<RoleHitFeatures> {
     if samples.is_empty() {
         return Vec::new();
@@ -376,14 +382,14 @@ fn analyze(samples: &[f32], sr: u32) -> Analysis {
     // of 6 dB or more over the previous ~46 ms (the frame smoothing of the RMS needs the
     // longer window; a single-frame step would miss overlapping hits).
     let env_db: Vec<f64> = env.iter().map(|e| 20.0 * e.max(1e-12).log10()).collect();
-    let peak_env = env.iter().cloned().fold(0.0, f64::max);
+    let peak_env = env.iter().copied().fold(0.0, f64::max);
     let peak_db = 20.0 * peak_env.max(1e-12).log10();
     let gate_db = peak_db - 45.0; // ignore the noise floor
     let rise_frames = (0.046 / hop_s).max(1.0) as usize;
     let mut onsets: Vec<usize> = Vec::new();
     let mut i = rise_frames;
     while i < env_db.len() {
-        let before = env_db[i - rise_frames..i].iter().cloned().fold(f64::INFINITY, f64::min);
+        let before = env_db[i - rise_frames..i].iter().copied().fold(f64::INFINITY, f64::min);
         if env_db[i] > gate_db && env_db[i] - before >= 6.0 {
             onsets.push(i);
             i += (0.05 / hop_s).max(1.0) as usize; // 50 ms refractory
@@ -396,7 +402,7 @@ fn analyze(samples: &[f32], sr: u32) -> Analysis {
     // bleed of the others. A 12 dB window keeps enough hits for a median.
     let mut loud: Vec<usize> = Vec::new();
     if !onsets.is_empty() {
-        let max_hit = onsets.iter().filter_map(|&o| env.get(o)).cloned().fold(0.0, f64::max);
+        let max_hit = onsets.iter().filter_map(|&o| env.get(o)).copied().fold(0.0, f64::max);
         let floor = max_hit * 10.0_f64.powf(-LOUD_DB / 20.0);
         loud.extend(onsets.iter().copied().filter(|&o| env[o] >= floor));
     }

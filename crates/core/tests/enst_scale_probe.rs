@@ -32,7 +32,7 @@ fn mag_scale(spec: &[f32], bands: &std::ops::Range<usize>) -> Option<f32> {
     if mags.is_empty() {
         return None;
     }
-    mags.sort_by(|a, b| a.total_cmp(b));
+    mags.sort_by(f32::total_cmp);
     Some(mags[((mags.len() as f32 - 1.0) * 0.995).round() as usize])
 }
 
@@ -51,7 +51,7 @@ fn enst_scale_per_role() -> Result<(), DetectError> {
             let mut n = 0;
             for entry in dir.read_dir().into_iter().flatten().flatten() {
                 let wav = entry.path();
-                if wav.extension().map(|e| e != "wav").unwrap_or(true) || n >= 8 {
+                if wav.extension().is_none_or(|e| e != "wav") || n >= 8 {
                     continue;
                 }
                 let name = wav.file_name().unwrap().to_string_lossy();
@@ -69,7 +69,7 @@ fn enst_scale_per_role() -> Result<(), DetectError> {
                 n += 1;
             }
             if !scales.is_empty() {
-                scales.sort_by(|a, b| a.total_cmp(b));
+                scales.sort_by(f32::total_cmp);
                 println!(
                     "{drummer}/{mic}: n {} median q995-mag {:.4} (min {:.4} max {:.4})",
                     scales.len(),

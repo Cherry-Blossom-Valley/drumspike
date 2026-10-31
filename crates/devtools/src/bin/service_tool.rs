@@ -162,18 +162,16 @@ fn core_analyze_one(j: &Value) -> Result<Value, String> {
             .and_then(drumspike_core::refine::RefineRule::from_version)
             .ok_or_else(|| format!("unknown rule {r}"))?;
     }
-    let detected: Vec<(f64, u8)> = match j.get("detected").and_then(Value::as_array) {
-        Some(list) => list
-            .iter()
+    let detected: Vec<(f64, u8)> = if let Some(list) = j.get("detected").and_then(Value::as_array) {
+        list.iter()
             .map(|p| (p[0].as_f64().unwrap_or(f64::NAN), p[1].as_u64().unwrap_or(0) as u8))
-            .collect(),
-        None => {
-            if let Some(e) = &parsed.thresholds_error {
-                return Err(e.clone());
-            }
-            params.thresholds = AnalyzeParams::default().thresholds;
-            detect_events(&dec.samples, dec.sr, role, &params.thresholds, Detector::Dsp).map_err(|e| e.to_string())?
+            .collect()
+    } else {
+        if let Some(e) = &parsed.thresholds_error {
+            return Err(e.clone());
         }
+        params.thresholds = AnalyzeParams::default().thresholds;
+        detect_events(&dec.samples, dec.sr, role, &params.thresholds, Detector::Dsp).map_err(|e| e.to_string())?
     };
     let a = analyze_detected(&dec.samples, dec.sr, role, &detected, &params).map_err(|e| e.to_string())?;
     let events: Vec<Value> = a
@@ -228,7 +226,7 @@ fn run(script: &str) -> Result<(), String> {
                 });
                 match st {
                     Ok(v) if v["state"] == "queued" || v["state"] == "running" => {
-                        std::thread::sleep(std::time::Duration::from_millis(20))
+                        std::thread::sleep(std::time::Duration::from_millis(20));
                     }
                     other => break other,
                 }
@@ -271,7 +269,7 @@ fn with_sid(v: Value, sid: &str) -> Value {
 fn main() -> ExitCode {
     // P3-15b: built with `--features trace` and started with `DRUMSPIKE_TRACE=<file.json>`, the
     // tool records the job stages (`analyze:decode`, `analyze:prepare`, `analyze:detect`).
-    drumspike_app::trace::init_from_env(0.0);
+    let _ = drumspike_app::trace::init_from_env(0.0);
     let args: Vec<String> = std::env::args().skip(1).collect();
     // P4-5: `service_tool cli ...` and `service_tool mcp` are the command-line tool and the MCP server of the app
     // (the same engine; the app binary carries them as `drumspike-desktop cli` and `drumspike-desktop mcp`)

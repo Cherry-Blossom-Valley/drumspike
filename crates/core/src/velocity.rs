@@ -3,13 +3,14 @@
 use crate::pyops::{py_round, window};
 
 /// `engine.peak_in(x, t, sr)`: max |x| in `[t - 5 ms, t + 60 ms)`, 0.0 for an empty window.
+#[must_use]
 pub fn peak_in(x: &[f32], t: f64, sr: u32) -> f64 {
     let (i0, i1) = window(x.len(), t, sr, 0.005, 0.060);
     let seg = &x[i0..i1];
     if seg.is_empty() {
         return 0.0;
     }
-    seg.iter().fold(0.0f32, |m, v| m.max(v.abs())) as f64
+    f64::from(seg.iter().fold(0.0f32, |m, v| m.max(v.abs())))
 }
 
 /// The dB-to-velocity map of `engine.velocity_map`: `lo_db` maps to `lo_v`, `hi_db` to
@@ -39,6 +40,7 @@ impl Default for VelocityMap {
 
 /// The peak level of the hit at `t` in dBFS: [`peak_in`] as `20 log10`, at least -180 dB
 /// (P4-3: the loudness histogram; [`velocity_map`] uses the same value).
+#[must_use]
 pub fn peak_db(x: &[f32], t: f64, sr: u32) -> f64 {
     20.0 * peak_in(x, t, sr).max(1e-9).log10()
 }
@@ -46,6 +48,7 @@ pub fn peak_db(x: &[f32], t: f64, sr: u32) -> f64 {
 /// #293 (B8): the attack time (ms) of the hit at `t`, in the window of [`peak_in`]: from the first sample that reaches
 /// 10 % of the window's peak to the peak. A stroke on its own mic rises in well under a millisecond; bleed of another
 /// drum arrives smeared over several. 0.0 for an empty or silent window.
+#[must_use]
 pub fn attack_ms(x: &[f32], t: f64, sr: u32) -> f64 {
     let (i0, i1) = window(x.len(), t, sr, 0.005, 0.060);
     let seg = &x[i0..i1];
@@ -66,6 +69,7 @@ pub fn attack_ms(x: &[f32], t: f64, sr: u32) -> f64 {
 
 /// The velocity of a peak level `d` (dBFS) with the map `m` (P4-3: the page computes the same
 /// numbers while the engineer drags a handle of the loudness histogram).
+#[must_use]
 pub fn velocity_of_db(d: f64, m: &VelocityMap) -> i64 {
     let denom = (m.hi_db - m.lo_db).max(1e-6);
     let span = (m.hi_v - m.lo_v) as f64;
@@ -74,6 +78,7 @@ pub fn velocity_of_db(d: f64, m: &VelocityMap) -> i64 {
 }
 
 /// `engine.velocity_map(x, sr, times)`: dB-mapped velocities, Python `round` = ties to even.
+#[must_use]
 pub fn velocity_map(x: &[f32], sr: u32, times: &[f64], m: &VelocityMap) -> Vec<i64> {
     times.iter().map(|&t| velocity_of_db(peak_db(x, t, sr), m)).collect()
 }
@@ -84,17 +89,17 @@ mod tests {
 
     const SR: u32 = 48_000;
 
-    /// Mono signal with a single-sample peak of exactly `db` dBFS at time `t` (tests/test_engine.py).
+    /// Mono signal with a single-sample peak of exactly `db` dBFS at time `t` (`tests/test_engine.py`).
     fn spike_at(db: f64, t: f64) -> Vec<f32> {
         let mut x = vec![0.0f32; SR as usize];
-        x[(t * SR as f64) as usize] = 10f64.powf(db / 20.0) as f32;
+        x[(t * f64::from(SR)) as usize] = 10f64.powf(db / 20.0) as f32;
         x
     }
 
     #[test]
     fn peak_in_finds_the_peak_and_handles_empty_windows() {
         let x = spike_at(-6.0, 0.5);
-        assert_eq!(peak_in(&x, 0.5, SR), 10f64.powf(-0.3) as f32 as f64);
+        assert_eq!(peak_in(&x, 0.5, SR), f64::from(10f64.powf(-0.3) as f32));
         assert_eq!(peak_in(&x, 0.5 + 0.0051, SR), 0.0, "peak just before the window");
         assert_eq!(peak_in(&x, 5.0, SR), 0.0, "window past the end is empty");
     }

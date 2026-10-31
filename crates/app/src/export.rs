@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 
 use crate::error::AppError;
 use crate::media::mix_mode;
-use crate::registry::{OpenProject, lock};
+use crate::registry::{OpenProject, Shared, lock};
 use crate::reply::Channels;
 use crate::sampler::{MidiPlan, ShiftInfo, midi_events_shifted};
 use crate::{Progress, Service};
@@ -43,6 +43,7 @@ pub const EXPORT_WORKERS: usize = 6;
 
 /// The WAV sample format a spike file takes from its source: the same container width, float
 /// stays float.
+#[must_use]
 pub fn spike_format(format: SampleFormat, bytes_per_sample: usize) -> WavFormat {
     match (format, bytes_per_sample) {
         (SampleFormat::Float, _) => WavFormat::Float32,
@@ -53,6 +54,7 @@ pub fn spike_format(format: SampleFormat, bytes_per_sample: usize) -> WavFormat 
 }
 
 /// The name of a [`WavFormat`] as `drumspike_core.write_spike_wav` takes it.
+#[must_use]
 pub fn format_name(f: WavFormat) -> &'static str {
     match f {
         WavFormat::Pcm16 => "pcm16",
@@ -65,16 +67,22 @@ pub fn format_name(f: WavFormat) -> &'static str {
 /// P4-3: an event taken out of the output: the loudness cut (`"cut": true`; `histogram::mark_cut`), the tom bleed
 /// rule (`"bleed": true`; [`crate::tom_bleed`]) or a hit the old Learn filter had taken out (`"filtered"`, #281 D16).
 /// R16 (#40): the one predicate is [`crate::policy::is_out`]; this wrapper keeps the export name.
+#[must_use]
 pub fn is_cut(e: &Value) -> bool {
     crate::policy::is_out(e)
 }
 
 /// P4-3: the events that go into the output (MIDI, spikes, clicks): every event without the cut or bleed mark.
+#[must_use]
 pub fn uncut(events: &[Value]) -> Vec<Value> {
     events.iter().filter(|e| !is_cut(e)).cloned().collect()
 }
 
 /// The hit times of an event list: every event needs a numeric `t`.
+///
+/// # Errors
+///
+/// A 400 `AppError` when any event has no `t` or a `t` that is not a number.
 pub fn hit_times(events: &[Value]) -> Result<Vec<f64>, AppError> {
     events
         .iter()
@@ -107,12 +115,14 @@ pub(crate) fn midi_events(events: &[Value]) -> Result<Vec<MidiEvent>, AppError> 
 /// P4-4: the number of hits that have no sample in a file of `n_samples` at `sr`: `round(t * sr)`
 /// before the first or after the last sample. The spike file cannot hold them; the MIDI file
 /// keeps them (a hit at or before 0 s is a note at 0 s). The answers carry the count as `outside`.
+#[must_use]
 pub fn outside_count(times: &[f64], sr: u32, n_samples: usize) -> usize {
     times.iter().filter(|&&t| hit_index(t, sr, n_samples).is_none()).count()
 }
 
 /// P4-4 fix round: the hits before the first sample (`round(t * sr) < 0`), a part of
 /// [`outside_count`]. The MIDI file moves them to 0 s (the frozen rule of the MIDI export).
+#[must_use]
 pub fn before_count(times: &[f64], sr: u32) -> usize {
     times
         .iter()
@@ -142,6 +152,7 @@ pub(crate) fn audio_length(op: &crate::registry::Shared, name: &str) -> Option<(
 /// P4-4: the key under which a disk that ignores case and normalisation (APFS by default) sees a
 /// file name: the canonical caseless form NFD(casefold(NFD(name))) of Unicode (full case
 /// folding: `Straße` and `STRASSE`, `ΟΔΟΣ` and `οδος`; NFD: a precomposed and a decomposed `Ü`).
+#[must_use]
 pub fn file_name_key(name: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
     let folded = caseless::default_case_fold_str(&name.nfd().collect::<String>());
@@ -150,6 +161,7 @@ pub fn file_name_key(name: &str) -> String {
 
 /// P4-4: true when two track names are one file name on such a disk ([`file_name_key`]): `Kick`
 /// and `kick` share the export files and the `Analysis/` folder.
+#[must_use]
 pub fn same_file_name(a: &str, b: &str) -> bool {
     file_name_key(a) == file_name_key(b)
 }
@@ -237,9 +249,9 @@ fn export_dest_slots() -> &'static (Mutex<HashSet<PathBuf>>, Condvar) {
 pub(crate) fn export_dest_acquire(dir: &Path) -> DestGuard {
     let key = path_key(dir);
     let (m, cv) = export_dest_slots();
-    let mut busy = m.lock().unwrap_or_else(|e| e.into_inner());
+    let mut busy = m.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     while busy.contains(&key) {
-        busy = cv.wait(busy).unwrap_or_else(|e| e.into_inner());
+        busy = cv.wait(busy).unwrap_or_else(std::sync::PoisonError::into_inner);
     }
     busy.insert(key.clone());
     DestGuard(key)
@@ -251,7 +263,7 @@ pub(crate) struct DestGuard(PathBuf);
 impl Drop for DestGuard {
     fn drop(&mut self) {
         let (m, cv) = export_dest_slots();
-        let mut busy = m.lock().unwrap_or_else(|e| e.into_inner());
+        let mut busy = m.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         busy.remove(&self.0);
         cv.notify_all();
     }
@@ -275,6 +287,7 @@ pub fn doc_export_markers_on(doc: &drumspike_core::Document) -> bool {
 /// The review markers of `doc` for the multi-track MIDI file (P4-40g): the entries with a numeric
 /// `t`, sorted by time (stable), the note carried as it is; `multi_midi_bytes` writes the text or
 /// the `Marker N` fallback.
+#[must_use]
 pub fn doc_export_markers(doc: &drumspike_core::Document) -> Vec<(f64, Option<String>)> {
     let mut ms: Vec<(f64, Option<String>)> = crate::markers::doc_markers(doc)
         .iter()
@@ -299,6 +312,10 @@ pub enum MidiMode {
 
 impl MidiMode {
     /// `per_track` (also when absent) or `single`; any other text is a 400.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` when `s` is text other than `per_track` or `single`.
     pub fn parse(s: Option<&str>) -> Result<MidiMode, AppError> {
         match s {
             None | Some("per_track") => Ok(MidiMode::PerTrack),
@@ -316,8 +333,12 @@ pub struct ExportOpts {
     pub dest: Option<String>,
     /// How the MIDI files are written.
     pub midi_mode: MidiMode,
-    /// The tracks to export, `None` for all of them.
+    /// The tracks to export, `None` for all of them. The names accept the patterns (exact,
+    /// glob, `t1-t4`); a pattern that matches nothing is a 400 that names it.
     pub tracks: Option<Vec<String>>,
+    /// #120: export by role instead of (or on top of) `tracks`: the tracks whose role is one of
+    /// these (case-insensitive). A role that no track has is a 400 that names it.
+    pub roles: Option<Vec<String>>,
     /// Write MIDI.
     pub midi: bool,
     /// Write spike WAVs.
@@ -336,6 +357,7 @@ impl Default for ExportOpts {
             dest: None,
             midi_mode: MidiMode::PerTrack,
             tracks: None,
+            roles: None,
             midi: true,
             spikes: true,
             audio: false,
@@ -347,6 +369,11 @@ impl Default for ExportOpts {
 impl ExportOpts {
     /// The options of a call: `dest` (text), `midi_mode`, `tracks` (list of names) and `formats` (a list of
     /// `midi` and `spikes`, at least one). A missing key is the default.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` when `dest`, `midi_mode` or `compensate` has the wrong type, `tracks` or `formats` is not a
+    /// list of strings, `midi_mode` is unknown, or `formats` holds an unknown name or none of midi, spikes, audio.
     pub fn from_args(args: &Value) -> Result<ExportOpts, AppError> {
         let strs = |k: &str| -> Result<Option<Vec<String>>, AppError> {
             match args.get(k) {
@@ -396,6 +423,7 @@ impl ExportOpts {
             dest,
             midi_mode,
             tracks: strs("tracks")?,
+            roles: strs("roles")?,
             midi,
             spikes,
             audio,
@@ -410,6 +438,11 @@ impl ExportOpts {
 /// file or a symlink with an old probe name survives, and concurrent checks never collide.
 /// 400 for a relative path, a file or a folder that refuses a write, 404 for a path that
 /// does not exist.
+///
+/// # Errors
+///
+/// A 400 `AppError` for a relative path, a path that is not a folder, or a folder in which the probe file cannot be
+/// created; a 404 when the path does not exist.
 pub fn check_dest(dest: &str) -> Result<PathBuf, AppError> {
     let p = Path::new(dest);
     if !p.is_absolute() {
@@ -430,19 +463,23 @@ pub fn check_dest(dest: &str) -> Result<PathBuf, AppError> {
 
 /// P4-30: the folder an export writes to: `dest` when given (checked by [`check_dest`]), else `Exports/` of the
 /// project (made when it is missing).
+///
+/// # Errors
+///
+/// Any error of [`check_dest`] for a given `dest`; a 500 `AppError` when `Exports/` cannot be created.
 pub fn export_dir(g: &OpenProject, dest: Option<&str>) -> Result<PathBuf, AppError> {
-    match dest {
-        Some(d) => check_dest(d),
-        None => {
-            let dir = g.project.subdir(EXPORTS_DIR);
-            std::fs::create_dir_all(&dir).map_err(|e| AppError::internal(format!("{}: {e}", dir.display())))?;
-            Ok(dir)
-        }
+    if let Some(d) = dest {
+        check_dest(d)
+    } else {
+        let dir = g.project.subdir(EXPORTS_DIR);
+        std::fs::create_dir_all(&dir).map_err(|e| AppError::internal(format!("{}: {e}", dir.display())))?;
+        Ok(dir)
     }
 }
 
 /// P4-30: the file name of the multi-track MIDI file of a project: `<name>_drums.mid` with the characters a file
 /// name cannot hold replaced by `-`.
+#[must_use]
 pub fn multi_file_name(project_name: &str) -> String {
     let n: String = project_name
         .chars()
@@ -459,6 +496,10 @@ pub fn multi_file_name(project_name: &str) -> String {
 }
 
 /// P4-30: `all` filtered to `want` (in the order of `all`); a name that no track has is a 400.
+///
+/// # Errors
+///
+/// A 400 `AppError` naming the first wanted track that is not in `all`.
 pub fn select_tracks(all: Vec<String>, want: Option<&[String]>) -> Result<Vec<String>, AppError> {
     let Some(want) = want else { return Ok(all) };
     if let Some(n) = want.iter().find(|n| !all.contains(n)) {
@@ -478,6 +519,29 @@ struct Job {
     /// P4-7c: the MIDI events of the track (the sampler offset applied) and what that did; `None` when the
     /// export writes no MIDI or the track's hits could not be read.
     midi: Option<Result<MidiPlan, AppError>>,
+}
+
+/// The reply accumulators of `export_all_opts` (R10): the written files with their counts, the
+/// per-track errors, the hits with no sample in their file (`outside`), the sampler calibration
+/// facts and the warnings (seeded with the #151 default-map note, so it stays the first warning).
+#[derive(Default)]
+struct ExportTally {
+    /// The written files, as display strings.
+    files: Vec<Value>,
+    /// How many tracks wrote a MIDI file.
+    midi: usize,
+    /// How many tracks wrote a spike WAV.
+    spikes: usize,
+    /// How many tracks wrote an audio spike WAV.
+    audio: usize,
+    /// The per-track errors, as `{"name", "code", "message"}`.
+    errors: Vec<Value>,
+    /// P4-4: a track with hits of no sample in its file, mapped to their count.
+    outside: serde_json::Map<String, Value>,
+    /// The sampler calibration facts per track, as their JSON.
+    sampler: serde_json::Map<String, Value>,
+    /// The warnings of the reply (the #151 note first, then the sampler ones).
+    warnings: Vec<String>,
 }
 
 /// The facts of a written spike file.
@@ -502,6 +566,11 @@ pub struct SpikeFile {
 /// Write the spike file `out` for `times` at the rate, length and sample format of `source`,
 /// with the source's `bext` time reference. A source the core cannot read is a 400 that names
 /// the file.
+///
+/// # Errors
+///
+/// A 400 (or the core's code) `AppError` naming `source` when it cannot be opened as a WAV file; a 500 when `out`
+/// cannot be written.
 pub fn write_spike_file(source: &Path, out: &Path, times: &[f64]) -> Result<SpikeFile, AppError> {
     let wav = MappedWav::open(source).map_err(|e| {
         let e = AppError::from(e);
@@ -548,6 +617,11 @@ fn out_is_source(source: &Path, out: &Path) -> bool {
 /// export would overwrite the track's file); the source is never written. A source the core
 /// cannot read is a 400 that names the file. Returns the facts and the number of hits that
 /// got the default length (no period found).
+///
+/// # Errors
+///
+/// A 400 `AppError` when `out` is the source file; a 400 (or the core's code) naming `source` when it cannot be
+/// opened or decoded; a 500 when `out` cannot be written.
 pub fn write_audio_spike_file(source: &Path, out: &Path, times: &[f64]) -> Result<(SpikeFile, usize), AppError> {
     if out_is_source(source, out) {
         return Err(AppError::bad(format!(
@@ -643,11 +717,22 @@ impl Service {
     /// another track's ([`check_file_owner`]) and a stale follower that cannot be derived; 400
     /// for a source that is not a WAV file the core reads. A follower exports its own derived
     /// hits (the document's, made fresh by [`crate::follow::fresh_for_export`]), never `events`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::export_spikes_to`] (this is the call with `dest` of `None`).
     pub fn export_spikes(&self, sid: &str, name: &str, events: Option<&[Value]>) -> Result<Value, AppError> {
         self.export_spikes_to(sid, name, events, None)
     }
 
     /// P4-30: [`Service::export_spikes`] into the folder `dest` (see [`check_dest`]); `None` is `Exports/`.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown or read-only session, an unknown track, an offline source or files owned by
+    /// another track (409), a bad `dest` ([`check_dest`]), an output that is a protected file, an event without a
+    /// numeric `t` (400), a stale follower that cannot be derived, or a source or output file that fails
+    /// ([`write_spike_file`]).
     pub fn export_spikes_to(
         &self,
         sid: &str,
@@ -693,6 +778,10 @@ impl Service {
     /// in its file (tracks with none are left out); a follower whose hits are stale is derived
     /// first (`followers` lists them; one that cannot be derived is an error and gets no files);
     /// a track whose files are an earlier track's ([`check_file_owner`]) is an error.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::export_all_opts`] (this is the call with the default options).
     pub fn export_all(&self, sid: &str, progress: Option<Progress>) -> Result<Value, AppError> {
         self.export_all_opts(sid, &ExportOpts::default(), progress)
     }
@@ -702,25 +791,99 @@ impl Service {
     /// tempo map; one MIDI track per exported track on its own note) instead of the `<track>_spike.mid` files; a
     /// track that failed is left out of it and named in `errors`. The answer also has `dest` (the folder) and
     /// `midi_file` (the path of the single file, else null). 400 for a bad `dest`, an unknown track name.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown or read-only session, an unknown track in `opts.tracks` or a bad `dest` (400/404),
+    /// a document with an unreadable tempo map, or an output that collides with a protected file (nothing is written
+    /// then). A failing single track is not an error: it is reported in `errors` of the answer.
     pub fn export_all_opts(&self, sid: &str, opts: &ExportOpts, progress: Option<Progress>) -> Result<Value, AppError> {
         let started = Instant::now();
         let op = self.inner.registry.get_writable(sid)?;
         crate::registry::resolve_shared(&op);
         let all: Vec<String> = lock(&op).project.doc.tracks().map(|(n, _)| n.clone()).collect();
-        let names = select_tracks(all, opts.tracks.as_deref())?;
+        // #120: `tracks` takes the patterns (exact, glob, `t1-t4`), a pattern that matches
+        // nothing is a 400 that names it; `roles` keeps the tracks whose role is one of it
+        let mut names = match opts.tracks.as_deref() {
+            Some(pats) => crate::patterns::expand(&all, pats)?,
+            None => all.clone(),
+        };
+        if let Some(roles) = opts.roles.as_deref() {
+            let g = lock(&op);
+            names.retain(|n| {
+                g.project
+                    .doc
+                    .track(n)
+                    .and_then(|t| t.role.clone())
+                    .is_some_and(|r| roles.iter().any(|x| x.eq_ignore_ascii_case(&r)))
+            });
+        }
+        if let Some(roles) = opts.roles.as_deref()
+            && names.is_empty()
+        {
+            return Err(AppError::bad(format!(
+                "no track with a role of {} (the roles: {})",
+                roles.join(", "),
+                all.join(", ")
+            )));
+        }
         let dir = export_dir(&lock(&op), opts.dest.as_deref())?;
         // R10: a second export to the same folder serializes behind this one
         let _dest_guard = export_dest_acquire(&dir);
         let single_name = multi_file_name(&lock(&op).project.name());
+        let (mut refused, refreshed) = self.refresh_followers(&op, &names);
+        let mut jobs = Self::build_jobs(&op, &names, &mut refused)?;
+        self.precompute_midi(sid, opts, &mut jobs);
+        self.check_plan_staged(&dir, opts, &names, &single_name, &refused)?;
+        let total = jobs.len();
+        let say = |v: Value| {
+            if let Some(p) = &progress {
+                p(json!({"sid": sid, "export": v}));
+            }
+        };
+        let results = Self::run_export_workers(&jobs, &dir, opts, total, &say);
+        let warnings = Self::default_map_warning(&op, opts)?;
+        let mut tally = Self::collect_results(&jobs, &results, warnings);
+        let midi_file = if opts.midi && opts.midi_mode == MidiMode::Single {
+            Self::write_single_midi(&op, &dir, &single_name, &jobs, &mut tally)?
+        } else {
+            Value::Null
+        };
+        let out = json!({
+            "dest": dir.display().to_string(),
+            "midi_file": midi_file,
+            "files": tally.files,
+            "midi": tally.midi,
+            "spikes": tally.spikes,
+            "audio": tally.audio,
+            "errors": tally.errors,
+            "elapsed_ms": started.elapsed().as_millis() as u64,
+            "outside": tally.outside,
+            "followers": refreshed,
+            "sampler": tally.sampler,
+            "warnings": tally.warnings,
+        });
+        say(json!({"state": "done", "done": total, "total": total, "result": out}));
+        Ok(out)
+    }
+
+    /// The owner check and the follower refresh of `export_all_opts`: a track whose files are an
+    /// earlier track's ([`check_file_owner`]) or whose followers cannot be derived is refused with
+    /// its error; a follower refreshed here is named in the second list.
+    fn refresh_followers(
+        &self,
+        op: &Shared,
+        names: &[String],
+    ) -> (std::collections::HashMap<String, AppError>, Vec<Value>) {
         let mut refused = std::collections::HashMap::new();
         let mut refreshed = Vec::new();
-        for name in &names {
+        for name in names {
             // round 2: the owner check first, so a 409 never names another track's files as this track's
-            if let Err(e) = check_file_owner(&lock(&op), name) {
+            if let Err(e) = check_file_owner(&lock(op), name) {
                 refused.insert(name.clone(), e);
                 continue;
             }
-            match crate::follow::fresh_for_export(self, &op, name) {
+            match crate::follow::fresh_for_export(self, op, name) {
                 Ok(true) => refreshed.push(Value::from(name.as_str())),
                 Ok(false) => {}
                 Err(e) => {
@@ -728,37 +891,48 @@ impl Service {
                 }
             }
         }
-        let mut jobs = {
-            let g = lock(&op);
-            let mut jobs = Vec::with_capacity(names.len());
-            let map = crate::tempo::doc_map(&g.project.doc)?;
-            for name in names.iter().cloned() {
-                let note = g.track(&name)?.note.unwrap_or(36);
-                let events = match refused.remove(&name) {
-                    Some(e) => Err(e),
-                    None => Ok(()),
-                }
-                .and_then(|()| g.track_object(&name))
-                .map(|m| {
-                    m.get("events")
-                        .and_then(Value::as_array)
-                        .map_or_else(Vec::new, |a| uncut(a))
-                });
-                jobs.push(Job {
-                    source: g.source(&name),
-                    events,
-                    note,
-                    map: map.clone(),
-                    midi: None,
-                    name,
-                });
+        (refused, refreshed)
+    }
+
+    /// The export jobs of `export_all_opts`: per track the source, the uncut events (or the error
+    /// that refused the track, removed from `refused` here), the note and the project's tempo map.
+    fn build_jobs(
+        op: &Shared,
+        names: &[String],
+        refused: &mut std::collections::HashMap<String, AppError>,
+    ) -> Result<Vec<Job>, AppError> {
+        let g = lock(op);
+        let mut jobs = Vec::with_capacity(names.len());
+        let map = crate::tempo::doc_map(&g.project.doc)?;
+        for name in names.iter().cloned() {
+            let note = g.track(&name)?.note.unwrap_or(36);
+            let events = match refused.remove(&name) {
+                Some(e) => Err(e),
+                None => Ok(()),
             }
-            jobs
-        };
-        // P4-7c: the notes of a track with a sampler calibration, before the workers start (the lags of the
-        // layer's alignment read the track's audio)
+            .and_then(|()| g.track_object(&name))
+            .map(|m| {
+                m.get("events")
+                    .and_then(Value::as_array)
+                    .map_or_else(Vec::new, |a| uncut(a))
+            });
+            jobs.push(Job {
+                source: g.source(&name),
+                events,
+                note,
+                map: map.clone(),
+                midi: None,
+                name,
+            });
+        }
+        Ok(jobs)
+    }
+
+    /// P4-7c: the notes of a track with a sampler calibration, before the workers start (the lags of the
+    /// layer's alignment read the track's audio). `opts.midi` gates it: without MIDI nothing precomputes.
+    fn precompute_midi(&self, sid: &str, opts: &ExportOpts, jobs: &mut [Job]) {
         if opts.midi {
-            for job in &mut jobs {
+            for job in jobs.iter_mut() {
                 let midi = match &job.events {
                     Ok(events) => Some((|| {
                         let shift = if opts.compensate {
@@ -773,30 +947,50 @@ impl Service {
                 job.midi = midi;
             }
         }
-        // R01: the whole plan is checked before anything is written: one collision refuses the
-        // entire export, no output of it lands (the folder listing stays as it was)
-        {
-            let mut plan: Vec<PathBuf> = Vec::new();
-            if opts.midi && opts.midi_mode == MidiMode::Single {
-                plan.push(dir.join(&single_name));
-            }
-            for name in &names {
-                if refused.contains_key(name) {
-                    continue;
-                }
-                if opts.midi && opts.midi_mode == MidiMode::PerTrack {
-                    plan.push(dir.join(format!("{name}_spike.mid")));
-                }
-                if opts.spikes {
-                    plan.push(dir.join(format!("{name}_spike.wav")));
-                }
-                if opts.audio {
-                    plan.push(dir.join(format!("{name}_audio_spike.wav")));
-                }
-            }
-            check_export_plan(&plan, &self.protected_files_everywhere())?;
+    }
+
+    /// R01: the whole plan is checked before anything is written: one collision refuses the
+    /// entire export, no output of it lands (the folder listing stays as it was).
+    fn check_plan_staged(
+        &self,
+        dir: &Path,
+        opts: &ExportOpts,
+        names: &[String],
+        single_name: &str,
+        refused: &std::collections::HashMap<String, AppError>,
+    ) -> Result<(), AppError> {
+        let mut plan: Vec<PathBuf> = Vec::new();
+        if opts.midi && opts.midi_mode == MidiMode::Single {
+            plan.push(dir.join(single_name));
         }
-        let total = jobs.len();
+        for name in names {
+            if refused.contains_key(name) {
+                continue;
+            }
+            if opts.midi && opts.midi_mode == MidiMode::PerTrack {
+                plan.push(dir.join(format!("{name}_spike.mid")));
+            }
+            if opts.spikes {
+                plan.push(dir.join(format!("{name}_spike.wav")));
+            }
+            if opts.audio {
+                plan.push(dir.join(format!("{name}_audio_spike.wav")));
+            }
+        }
+        check_export_plan(&plan, &self.protected_files_everywhere())?;
+        Ok(())
+    }
+
+    /// The worker pool of `export_all_opts`: up to [`EXPORT_WORKERS`] threads (the machine's
+    /// parallelism, at least 1) pull the next job index and write each [`TrackResult`] into its
+    /// slot; `say` reports `{state: "running", done, total, track}` after each track.
+    fn run_export_workers(
+        jobs: &[Job],
+        dir: &Path,
+        opts: &ExportOpts,
+        total: usize,
+        say: &(impl Fn(Value) + Sync),
+    ) -> Vec<Option<TrackResult>> {
         let results: Mutex<Vec<Option<TrackResult>>> = Mutex::new((0..total).map(|_| None).collect());
         let next = AtomicUsize::new(0);
         let finished = AtomicUsize::new(0);
@@ -804,18 +998,13 @@ impl Service {
             .map_or(2, usize::from)
             .clamp(1, EXPORT_WORKERS)
             .min(total.max(1));
-        let say = |v: Value| {
-            if let Some(p) = &progress {
-                p(json!({"sid": sid, "export": v}));
-            }
-        };
         std::thread::scope(|s| {
             for _ in 0..workers {
                 s.spawn(|| {
                     loop {
                         let i = next.fetch_add(1, Ordering::SeqCst);
                         let Some(job) = jobs.get(i) else { break };
-                        let r = export_track(job, &dir, opts);
+                        let r = export_track(job, dir, opts);
                         lock(&results)[i] = Some(r);
                         let done = finished.fetch_add(1, Ordering::SeqCst) + 1;
                         say(json!({"state": "running", "done": done, "total": total, "track": job.name}));
@@ -823,111 +1012,129 @@ impl Service {
                 });
             }
         });
-        let mut files = Vec::new();
-        let (mut midi, mut spikes, mut audio) = (0usize, 0usize, 0usize);
-        let mut errors = Vec::new();
-        let mut outside = serde_json::Map::new();
-        let mut sampler = serde_json::Map::new();
-        let mut warnings: Vec<String> = Vec::new();
-        // #151: a MIDI export on the default map uses the default 120 BPM: the reply says so (only then)
-        if opts.midi && crate::tempo::doc_map(&lock(&op).project.doc)?.is_default() {
-            warnings.push("No tempo set: the MIDI export uses the default 120 BPM.".to_string());
+        results.into_inner().unwrap()
+    }
+
+    /// #151: a MIDI export on the default map uses the default 120 BPM: the reply says so (only then).
+    fn default_map_warning(op: &Shared, opts: &ExportOpts) -> Result<Vec<String>, AppError> {
+        if opts.midi && crate::tempo::doc_map(&lock(op).project.doc)?.is_default() {
+            return Ok(vec![
+                "No tempo set: the MIDI export uses the default 120 BPM.".to_string(),
+            ]);
         }
-        for (job, r) in jobs.iter().zip(lock(&results).iter()) {
+        Ok(Vec::new())
+    }
+
+    /// The reply accumulators of `export_all_opts` from the worker slots: the files of each track
+    /// in order, the counts, the per-track errors, the outside hits and the sampler facts.
+    fn collect_results(jobs: &[Job], results: &[Option<TrackResult>], warnings: Vec<String>) -> ExportTally {
+        let mut tally = ExportTally {
+            warnings,
+            ..Default::default()
+        };
+        for (job, r) in jobs.iter().zip(results.iter()) {
             let Some(r) = r else { continue };
             for p in [&r.midi, &r.spike, &r.audio].into_iter().flatten() {
-                files.push(Value::from(p.display().to_string()));
+                tally.files.push(Value::from(p.display().to_string()));
             }
             if r.outside > 0 {
-                outside.insert(job.name.clone(), Value::from(r.outside));
+                tally.outside.insert(job.name.clone(), Value::from(r.outside));
             }
-            midi += usize::from(r.midi.is_some());
-            spikes += usize::from(r.spike.is_some());
-            audio += usize::from(r.audio.is_some());
+            tally.midi += usize::from(r.midi.is_some());
+            tally.spikes += usize::from(r.spike.is_some());
+            tally.audio += usize::from(r.audio.is_some());
             if let Some(i) = &r.sampler {
-                sampler.insert(job.name.clone(), i.to_json());
-                warnings.extend(i.warning(&job.name));
+                tally.sampler.insert(job.name.clone(), i.to_json());
+                tally.warnings.extend(i.warning(&job.name));
             }
             for e in &r.errors {
-                errors.push(json!({"name": job.name, "code": e.code, "message": e.message}));
+                tally
+                    .errors
+                    .push(json!({"name": job.name, "code": e.code, "message": e.message}));
             }
         }
-        let mut midi_file = Value::Null;
-        if opts.midi && opts.midi_mode == MidiMode::Single {
-            let mut staged = Vec::new();
-            for job in &jobs {
-                match &job.midi {
-                    Some(Ok((e, info))) => {
-                        if let Some(i) = info {
-                            sampler.insert(job.name.clone(), i.to_json());
-                            warnings.extend(i.warning(&job.name));
-                        }
-                        staged.push((job.name.as_str(), job.note, e.clone()));
+        tally
+    }
+
+    /// `MidiMode::Single`: stage the per-track MIDI plans into one type 1 file `<project>_drums.mid`
+    /// (the project's tempo map, one MIDI track per exported track on its own note); a track whose
+    /// events failed is named in `errors` and left out of the file. Pushes the written file onto
+    /// `tally.files`, sets `tally.midi` to 1 and answers the path for the reply's `midi_file`
+    /// (`Null` when the file could not be written).
+    fn write_single_midi(
+        op: &Shared,
+        dir: &Path,
+        single_name: &str,
+        jobs: &[Job],
+        tally: &mut ExportTally,
+    ) -> Result<Value, AppError> {
+        let mut staged = Vec::new();
+        for job in jobs {
+            match &job.midi {
+                Some(Ok((e, info))) => {
+                    if let Some(i) = info {
+                        tally.sampler.insert(job.name.clone(), i.to_json());
+                        tally.warnings.extend(i.warning(&job.name));
                     }
-                    Some(Err(e)) => errors.push(json!({"name": job.name, "code": e.code, "message": e.message})),
-                    None => {}
+                    staged.push((job.name.as_str(), job.note, e.clone()));
                 }
-            }
-            let tracks: Vec<MidiTrack> = staged
-                .iter()
-                .map(|(n, note, e)| MidiTrack {
-                    name: n,
-                    note: *note,
-                    events: e,
-                })
-                .collect();
-            let out = dir.join(&single_name);
-            let (map, midi_markers) = {
-                let g = lock(&op);
-                let map = crate::tempo::doc_map(&g.project.doc)?;
-                let markers = if doc_export_markers_on(&g.project.doc) {
-                    doc_export_markers(&g.project.doc)
-                } else {
-                    Vec::new()
-                };
-                (map, markers)
-            };
-            let markers: Vec<drumspike_core::midi::MidiMarker> = midi_markers
-                .iter()
-                .map(|(t, note)| drumspike_core::midi::MidiMarker {
-                    t: *t,
-                    note: note.as_deref(),
-                })
-                .collect();
-            match export_multi_midi(&tracks, &markers, &out, EXPORT_PPQ, &map, EXPORT_TEMPO) {
-                Ok(()) => {
-                    files.push(Value::from(out.display().to_string()));
-                    midi = 1;
-                    midi_file = Value::from(out.display().to_string());
-                }
-                Err(e) => {
-                    let e = AppError::from(e);
-                    errors.push(json!({"name": "(all tracks)", "code": e.code, "message": e.message}));
-                }
+                Some(Err(e)) => tally
+                    .errors
+                    .push(json!({"name": job.name, "code": e.code, "message": e.message})),
+                None => {}
             }
         }
-        let out = json!({
-            "dest": dir.display().to_string(),
-            "midi_file": midi_file,
-            "files": files,
-            "midi": midi,
-            "spikes": spikes,
-            "audio": audio,
-            "errors": errors,
-            "elapsed_ms": started.elapsed().as_millis() as u64,
-            "outside": outside,
-            "followers": refreshed,
-            "sampler": sampler,
-            "warnings": warnings,
-        });
-        say(json!({"state": "done", "done": total, "total": total, "result": out}));
-        Ok(out)
+        let tracks: Vec<MidiTrack> = staged
+            .iter()
+            .map(|(n, note, e)| MidiTrack {
+                name: n,
+                note: *note,
+                events: e,
+            })
+            .collect();
+        let out = dir.join(single_name);
+        let (map, midi_markers) = {
+            let g = lock(op);
+            let map = crate::tempo::doc_map(&g.project.doc)?;
+            let markers = if doc_export_markers_on(&g.project.doc) {
+                doc_export_markers(&g.project.doc)
+            } else {
+                Vec::new()
+            };
+            (map, markers)
+        };
+        let markers: Vec<drumspike_core::midi::MidiMarker> = midi_markers
+            .iter()
+            .map(|(t, note)| drumspike_core::midi::MidiMarker {
+                t: *t,
+                note: note.as_deref(),
+            })
+            .collect();
+        match export_multi_midi(&tracks, &markers, &out, EXPORT_PPQ, &map, EXPORT_TEMPO) {
+            Ok(()) => {
+                tally.files.push(Value::from(out.display().to_string()));
+                tally.midi = 1;
+                Ok(Value::from(out.display().to_string()))
+            }
+            Err(e) => {
+                let e = AppError::from(e);
+                tally
+                    .errors
+                    .push(json!({"name": "(all tracks)", "code": e.code, "message": e.message}));
+                Ok(Value::Null)
+            }
+        }
     }
 
     /// `velocities_recompute {sid, name, events?}` (route 34): keep the hit times, recompute
     /// `v` from the track's decoded audio with the track's `vel_lo_db` and `vel_hi_db`
     /// (default -40 and -6 dB; velocities 20 to 127). Every other key of an event stays.
     /// Returns `{events}`. The events are `events` when the call holds them, else the track's.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown session or track, an offline source, an event without a numeric `t` or that is not
+    /// an object (400), or audio that cannot be decoded.
     pub fn velocities_recompute(&self, sid: &str, name: &str, events: Option<&[Value]>) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         crate::registry::resolve_shared(&op);
@@ -1050,6 +1257,11 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
 }
 
 /// The bridge side of the three commands (`bridge.rs` calls this for their names).
+///
+/// # Errors
+///
+/// A 400 `AppError` for a missing or non-string `sid` or `name`, `events` that is not a list, or bad export options;
+/// a 404 for an unknown command; otherwise the errors of the command called.
 pub fn bridge_call(
     s: &Service,
     channels: &std::sync::Arc<Channels>,
@@ -1210,7 +1422,7 @@ mod tests {
             channel_mask: 0,
         };
         let x: Vec<f32> = (0..48_000)
-            .map(|i| (std::f64::consts::TAU * 240.0 * i as f64 / 48_000.0).sin() as f32)
+            .map(|i| (std::f64::consts::TAU * 240.0 * f64::from(i) / 48_000.0).sin() as f32)
             .collect();
         let src = d.join("kick in.wav");
         drumspike_core::io::write_wav(&src, &spec, &x, None).unwrap();
@@ -1240,7 +1452,7 @@ mod tests {
             channel_mask: 0,
         };
         let x: Vec<f32> = (0..96_000)
-            .map(|i| (std::f64::consts::TAU * 240.0 * i as f64 / 48_000.0).sin() as f32)
+            .map(|i| (std::f64::consts::TAU * 240.0 * f64::from(i) / 48_000.0).sin() as f32)
             .collect();
         let stereo: Vec<f32> = x.iter().flat_map(|&v| [v, v * 0.5]).collect();
         let src = d.join("snare.wav");

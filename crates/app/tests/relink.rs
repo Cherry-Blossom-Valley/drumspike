@@ -50,7 +50,7 @@ fn session(svc: &Service, root: &Path, n: usize) -> (String, PathBuf, Vec<PathBu
     let files = make_audio(root, "audio", n);
     let (sid, dir) = open_new(svc, "Song");
     let paths: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
-    let r = svc.tracks_add(&sid, &paths, &[], &[], false, None).unwrap();
+    let r = svc.tracks_add(&sid, &paths, None, &[], &[], false, None).unwrap();
     assert_eq!(r["added"].as_array().unwrap().len(), n);
     for (i, name) in r["added"].as_array().unwrap().iter().enumerate() {
         let ev = json!([{"t": 0.1 + 0.013 * (i + 1) as f64, "v": 100}]);
@@ -229,7 +229,7 @@ fn project_save_as_copy_cancel_removes_every_file_and_leaves_the_project_as_it_w
     let p: Progress = Arc::new(move |v: Value| {
         sink(v.clone());
         if v["copy"]["done"] == 3 {
-            s2.job_cancel(&sid2);
+            let _ = s2.job_cancel(&sid2);
         }
     });
     svc.project_save_as(&sid, Some("Song Copy"), Some(out.to_str().unwrap()), true, Some(p))
@@ -316,7 +316,7 @@ fn project_save_as_copy_second_job_is_refused_while_one_runs() {
             let a = s2.project_consolidate(&sid2, None).unwrap_err();
             let b = s2.relink_search(&sid2, "/tmp").unwrap_err();
             let c = s2
-                .tracks_add(&sid2, &["/nonexistent.wav".to_string()], &[], &[], true, None)
+                .tracks_add(&sid2, &["/nonexistent.wav".to_string()], None, &[], &[], true, None)
                 .unwrap_err();
             r2.store(
                 usize::from(a.code == 409) + usize::from(b.code == 409) + usize::from(c.code == 409),
@@ -382,8 +382,8 @@ fn project_consolidate_gives_the_records_of_the_core_consolidate() {
     let files = make_audio(&root, "audio2", 5);
     let (sid, dir) = open_new(&svc, "Mixed");
     let paths: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
-    svc.tracks_add(&sid, &paths[..2], &[], &[], true, None).unwrap();
-    svc.tracks_add(&sid, &paths[2..], &[], &[], false, None).unwrap();
+    svc.tracks_add(&sid, &paths[..2], None, &[], &[], true, None).unwrap();
+    svc.tracks_add(&sid, &paths[2..], None, &[], &[], false, None).unwrap();
     svc.project_save(&sid).unwrap();
     // the reference: the core function the Python server calls (`project.consolidate`), on a copy of the folder
     let ref_dir = root.join("ref/Mixed");
@@ -443,7 +443,7 @@ fn project_consolidate_cancel_removes_the_copied_files_and_changes_no_record() {
     let p: Progress = Arc::new(move |v: Value| {
         sink(v.clone());
         if v["copy"]["done"] == 4 {
-            s2.job_cancel(&sid2);
+            let _ = s2.job_cancel(&sid2);
         }
     });
     svc.project_consolidate(&sid, Some(p)).unwrap();
@@ -512,10 +512,10 @@ fn tracks_add_copy_cancel_adds_no_track_and_leaves_no_file() {
     let p: Progress = Arc::new(move |v: Value| {
         sink(v.clone());
         if v["add"]["state"] == "running" && v["add"]["done"] == 4 {
-            s2.job_cancel(&sid2);
+            let _ = s2.job_cancel(&sid2);
         }
     });
-    let r = svc.tracks_add(&sid, &paths, &[], &[], true, Some(p)).unwrap();
+    let r = svc.tracks_add(&sid, &paths, None, &[], &[], true, Some(p)).unwrap();
     assert_eq!(r["cancelled"], true, "{r}");
     assert_eq!(r["added"], json!([]));
     assert_eq!(final_state(&seen, "add"), "cancelled");
@@ -530,11 +530,11 @@ fn tracks_add_copy_cancel_adds_no_track_and_leaves_no_file() {
     );
     assert_eq!(svc.job_status(&sid)["state"], "cancelled");
     // the same call without the cancel adds all ten
-    let r = svc.tracks_add(&sid, &paths, &[], &[], true, None).unwrap();
+    let r = svc.tracks_add(&sid, &paths, None, &[], &[], true, None).unwrap();
     assert_eq!(r["added"].as_array().unwrap().len(), 10);
     assert_eq!(files_with_ext(&dir.join(AUDIO_DIR), "wav").len(), 10);
     // a referenced add does not take a job slot
-    svc.tracks_add(&sid, &paths[..1], &[], &[], false, None).unwrap();
+    svc.tracks_add(&sid, &paths[..1], None, &[], &[], false, None).unwrap();
 }
 
 // ---------- project_relink ----------
@@ -798,7 +798,7 @@ fn relink_bench_of_the_generated_session() {
     }
     let (sid, dir) = open_new(&svc, "Bench");
     let paths = [audio.display().to_string()];
-    let r = svc.tracks_add(&sid, &paths, &[], &[], false, None).unwrap();
+    let r = svc.tracks_add(&sid, &paths, None, &[], &[], false, None).unwrap();
     let names: Vec<String> = r["added"]
         .as_array()
         .unwrap()
@@ -891,7 +891,7 @@ fn relink_bench_of_the_generated_session() {
     let (s2, sid2) = (svc.clone(), sid.clone());
     let p: Progress = Arc::new(move |v: Value| {
         if v["copy"]["done"] == 5 {
-            s2.job_cancel(&sid2);
+            let _ = s2.job_cancel(&sid2);
         }
     });
     svc.project_save_as(&sid, Some("Cancelled"), Some(out2.to_str().unwrap()), true, Some(p))

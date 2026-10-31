@@ -46,6 +46,9 @@ pub(crate) fn drag_dir_of(g: &crate::registry::OpenProject) -> PathBuf {
 
 impl Service {
     /// #433: the drag folder of an open project (`Exports/.drag`).
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project.
     pub fn drag_dir(&self, sid: &str) -> Result<PathBuf, AppError> {
         let op = self.inner.registry.get(sid)?;
         let dir = drag_dir_of(&lock(&op));
@@ -65,11 +68,19 @@ impl Service {
     /// the single MIDI file counts instead of the per-track MIDI files. Answer `{count, files, dest,
     /// default_dest, remembered}`: `dest` is the folder checked, `remembered` the folder the project keeps
     /// (`export_dest_set`) or null. A bad `dest` is the 400 or 404 of [`check_dest`].
+    ///
+    /// # Errors
+    /// The same as [`Service::export_existing_opts`] with the default options (so only 404 when
+    /// `sid` is not an open project).
     pub fn export_existing(&self, sid: &str) -> Result<Value, AppError> {
         self.export_existing_opts(sid, &ExportOpts::default())
     }
 
     /// P4-30: [`Service::export_existing`] with the options of the dialog.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project; the 400 or 404 of [`check_dest`] for a bad `dest`;
+    /// an error from `select_tracks` for an unknown track name in `opts.tracks`.
     pub fn export_existing_opts(&self, sid: &str, opts: &ExportOpts) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -137,6 +148,10 @@ impl Service {
     /// `export_dest_set {sid, dest?}`: keep `dest` as the export folder of the project (the document field
     /// `export_dest`; the project is dirty until it is saved). A null or empty `dest` removes the field (back
     /// to `Exports/`). The folder must pass [`check_dest`]. Answer `{export_dest}`.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project; 409 when the project is open read-only; the 400 or
+    /// 404 of [`check_dest`] for a `dest` that is not a usable folder.
     pub fn export_dest_set(&self, sid: &str, dest: Option<&str>) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let dest = dest.filter(|d| !d.is_empty());
@@ -169,6 +184,9 @@ impl Service {
     /// `export_markers_set {sid, on}`: keep the Export dialog's "Markers in MIDI" checkbox for the project
     /// (the document field `export_markers` of `crate::export`; the project is dirty until it is saved).
     /// Off removes the field (the default). Answer `{export_markers}`.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project; 409 when the project is open read-only.
     pub fn export_markers_set(&self, sid: &str, on: bool) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let mut g = lock(&op);
@@ -189,6 +207,9 @@ impl Service {
 
     /// `export_last_get {sid}`: the export shape of the project (the choices the Export dialog shows again and
     /// the Export again key repeats), or `null` before the first export. Answer `{export_last}`.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project.
     pub fn export_last_get(&self, sid: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -200,6 +221,12 @@ impl Service {
     /// the project is dirty until it is saved). The page records the dialog's choices at once (like the folder
     /// and the markers checkbox) and what an export ran with. `dest: null` is `Exports/` in the project folder;
     /// a `dest` must pass [`check_dest`]. `scope: "selected"` names the `track`. Answer `{export_last, changed}`.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project; 409 when the project is open read-only; 400 when
+    /// `formats` is missing, empty or unknown, `midi_mode`, `compensate`, `scope`, `track` or
+    /// `dest` has the wrong type or value, a selected scope has no `track`, or `dest` fails
+    /// [`check_dest`].
     pub fn export_last_set(&self, sid: &str, args: &Value) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let last = last_from_args(args)?;
@@ -214,6 +241,9 @@ impl Service {
 
     /// `export_drag_prepare {sid, clear: true}`: remove the pre-rendered drag files (the dialog closes or cancels).
     /// Answers the empty form of [`Service::export_drag_prepare`].
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project.
     pub fn export_drag_clear(&self, sid: &str) -> Result<Value, AppError> {
         let dir = self.drag_dir(sid)?;
         drag_clear_dir(&dir);
@@ -230,6 +260,10 @@ impl Service {
     /// it previews ([`Service::export_all_opts`]), so `followers` names the tracks whose hits the render derived
     /// again (P4-4): the page applies them like an export's, or a derive that happened while the dialog was open
     /// never reaches it (the real export then finds everything fresh and names none).
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project; 409 when the project is open read-only; 500 when the
+    /// drag folder cannot be created; any error of [`Service::export_all_opts`] for the options.
     pub fn export_drag_prepare(&self, sid: &str, opts: &ExportOpts) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         drop(op);
@@ -259,6 +293,11 @@ impl Service {
     /// (atomic, same folder tree), so the dragged file is the export the Export command writes. Answer
     /// `{files: [paths in Exports/]}`. A path outside the drag folder is a 400, a file that is not there (never
     /// rendered, or already taken) a 404, and an output that would replace a protected file a 409 ([`check_export_plan`]).
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project, or a drag file is not rendered; 409 when the project
+    /// is open read-only or an output would replace a protected file; 400 when a path is not in
+    /// the project's drag folder; 500 when `Exports/` cannot be created or a rename fails.
     pub fn export_drag_take(&self, sid: &str, paths: &[String]) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let (drag, exports) = {
@@ -359,9 +398,8 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
     if !SHELL_COMMANDS.contains(&cmd) {
         return None;
     }
-    let sid = match args.get("sid").and_then(Value::as_str) {
-        Some(sid) => sid,
-        None => return Some(Err(AppError::bad("missing or wrong argument `sid` (string)"))),
+    let Some(sid) = args.get("sid").and_then(Value::as_str) else {
+        return Some(Err(AppError::bad("missing or wrong argument `sid` (string)")));
     };
     Some(match cmd {
         "export_existing" => ExportOpts::from_args(args).and_then(|o| svc.export_existing_opts(sid, &o)),

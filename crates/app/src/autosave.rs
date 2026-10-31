@@ -4,7 +4,9 @@
 //! document's bytes do not change (Pro Tools behaviour). The files count against the same
 //! rotation of ten as the pre-save copies. The thread holds only a weak reference to the
 //! service and ends with it. #121: after the write it runs the stale-write check of `project_save`
-//! and sends `project-stale` `{sid, message}` once when the document changed on disk.
+//! and sends `project-stale` `{sid, message}` once when the document changed on disk. #228: a failed write is kept
+//! as `autosave_error` on the project (cleared by a good autosave or a save) and sent as `autosave-failed`
+//! `{sid, message}` on the first failure of a streak.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,6 +24,7 @@ use crate::{Inner, Service};
 pub const DEFAULT_SECONDS: f64 = 120.0;
 
 /// `DRUMSPIKE_AUTOSAVE_SECONDS` as a duration: a positive number of seconds, else the default.
+#[must_use]
 pub fn interval_from(text: Option<&str>) -> Duration {
     let secs = text
         .and_then(|t| t.trim().parse::<f64>().ok())
@@ -31,6 +34,7 @@ pub fn interval_from(text: Option<&str>) -> Duration {
 }
 
 /// How often the thread looks at the projects: a quarter of the interval, 25 ms to 500 ms.
+#[must_use]
 pub fn tick_period(interval: Duration) -> Duration {
     (interval / 4).clamp(Duration::from_millis(25), Duration::from_millis(500))
 }
@@ -42,7 +46,7 @@ pub(crate) fn spawn(inner: &Arc<Inner>) {
         loop {
             let Some(inner) = weak.upgrade() else { break };
             let svc = Service { inner };
-            svc.autosave_tick(Instant::now());
+            let _ = svc.autosave_tick(Instant::now());
             let wait = tick_period(svc.autosave_interval());
             drop(svc);
             std::thread::sleep(wait);
@@ -53,6 +57,7 @@ pub(crate) fn spawn(inner: &Arc<Inner>) {
 impl Service {
     /// Autosave every dirty project whose interval has passed at `now` (the clock starts when
     /// the project becomes dirty and again after each autosave). Returns the files written.
+    #[must_use]
     pub fn autosave_tick(&self, now: Instant) -> Vec<PathBuf> {
         let interval = self.autosave_interval();
         let mut written = Vec::new();
@@ -68,12 +73,21 @@ impl Service {
             if !due {
                 continue;
             }
-            match self.autosave_one(&op) {
-                Ok(p) => written.push(p),
-                Err(e) => eprintln!("autosave failed: {e}"),
+            let outcome = self.autosave_one(&op);
+            // #228: the error stays on the project and goes to the page (and the agent status) as well as to stderr.
+            let mut g = lock(&op);
+            match outcome {
+                Ok(p) => {
+                    g.note_autosave(Ok(()));
+                    written.push(p);
+                }
+                Err(e) => {
+                    eprintln!("autosave failed: {e}");
+                    g.note_autosave(Err(&e.message));
+                }
             }
             // A failed write waits for the next interval too; it must not retry on every tick.
-            lock(&op).last_autosave = Some(now);
+            g.last_autosave = Some(now);
         }
         written
     }

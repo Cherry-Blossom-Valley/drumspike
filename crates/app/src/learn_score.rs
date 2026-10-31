@@ -42,6 +42,7 @@ pub const VERSION: u32 = 1;
 const HEADER: usize = 24;
 
 /// FNV-1a (64 bit) of the candidate frames, as 16 hex digits: the candidate part of the cache key.
+#[must_use]
 pub fn frames_hash(frames: &[u32]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for f in frames {
@@ -55,11 +56,18 @@ pub fn frames_hash(frames: &[u32]) -> String {
 
 /// The key of a track's features: the source's key (the candidates' lifetime), the candidate frames' hash
 /// and the method. #293: the DSP candidates replace the kept activations, so the key has no model part.
+#[must_use]
 pub fn learn_key(source: &Value, frames: &[u32], method: &str) -> Value {
     json!({"source": source, "candidates": frames_hash(frames), "method": method})
 }
 
 /// Write the features (`frames.len() x dim` values in `feats`) and their key into `dir`. The key goes last.
+///
+/// # Errors
+///
+/// An `InvalidInput` io error when `feats.len()` is not `frames.len() * dim`; otherwise the io error of creating `dir`
+/// or of writing or renaming the temporary files (the old key file is removed first, so a failure leaves no valid
+/// cache).
 pub fn write_learn(dir: &Path, frames: &[u32], feats: &[f32], dim: usize, key: &Value) -> io::Result<()> {
     if feats.len() != frames.len() * dim {
         return Err(io::Error::new(
@@ -98,6 +106,12 @@ static TMP_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 
 /// The features in `dir` when their key equals `key`, the dimension is `dim` and the file is whole:
 /// `(frames, features)`; else `None`.
+///
+/// # Panics
+///
+/// The two `expect` calls on the header slices (4 and 8 bytes) cannot fire: the file is at least `HEADER` (24) bytes
+/// long when they run.
+#[must_use]
 pub fn read_learn(dir: &Path, key: &Value, dim: usize) -> Option<(Vec<u32>, Vec<f32>)> {
     let stored: Value = serde_json::from_str(&fs::read_to_string(dir.join(LEARN_KEY)).ok()?).ok()?;
     if stored != *key {
@@ -119,6 +133,7 @@ pub fn read_learn(dir: &Path, key: &Value, dim: usize) -> Option<(Vec<u32>, Vec<
 }
 
 /// The unique candidate frames of `[t, class, strength, v]` rows (time order).
+#[must_use]
 pub fn candidate_frames(cands: &[Value]) -> Vec<u32> {
     let mut f: Vec<u32> = cands
         .iter()
@@ -145,6 +160,7 @@ pub fn frame_values(cands: &[Value], frames: &[u32]) -> Vec<u64> {
 }
 
 /// The index of the frame nearest to `t` within [`CANDIDATE_REACH`] in the sorted `frames`.
+#[must_use]
 pub fn nearest_frame(frames: &[u32], t: f64) -> Option<usize> {
     let f = t * FPS;
     let i = frames.partition_point(|&x| f64::from(x) < f);
@@ -201,6 +217,7 @@ impl Centre {
     pub const APP: Centre = Centre::Track;
 
     /// The name in `service_tool learn-eval` (`none`, `track`, `bleed`, `auto`).
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Centre::None => "none",
@@ -211,6 +228,7 @@ impl Centre {
     }
 
     /// The mode of a name, `None` for an unknown one.
+    #[must_use]
     pub fn parse(name: &str) -> Option<Centre> {
         [Centre::None, Centre::Track, Centre::Bleed, Centre::Auto]
             .into_iter()
@@ -220,6 +238,7 @@ impl Centre {
 
 /// The frames that pass the Sensitivity `sens`: a frame's lowest slider value ([`frame_values`]) at
 /// or under it.
+#[must_use]
 pub fn solid_frames(values: &[u64], sens: f64) -> Vec<bool> {
     values.iter().map(|&v| v as f64 <= sens).collect()
 }
@@ -408,6 +427,11 @@ impl Service {
     /// `learn.auto` is set, `auto_on`, else the stored one), `cache` `hit` or `built`, the time in
     /// ms. Without kept candidates `{state: "missing"}` (#293: there is no model state). 409 for an offline track or a
     /// gone source.
+    ///
+    /// # Errors
+    ///
+    /// A 409 `AppError` for an offline track or a follower whose source is gone; an error for an unknown session or
+    /// track, a `learn` object that cannot be read, or audio that cannot be decoded.
     pub fn track_learn_scores(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let c = match self.learn_ctx(sid, name)? {
             Ok(c) => c,
@@ -470,6 +494,7 @@ pub fn auto_on(learn: &Map<String, Value>) -> bool {
 
 /// P4-6c: the threshold the Learn filter uses: the suggestion of the scores while `learn.auto` is
 /// set ([`auto_on`]), else the stored `threshold` (default [`similarity::DEFAULT_THRESHOLD`]).
+#[must_use]
 pub fn effective_threshold(learn: &Map<String, Value>, scored: &Scored) -> f32 {
     if auto_on(learn) {
         scored.suggest
@@ -575,9 +600,9 @@ impl Service {
             .filter(|&t| nearest_frame(&frames, t).is_none())
             .collect();
         let d = if far.is_empty() { None } else { Some(decode()?) };
-        let sens = crate::jobs::parse_params(st.params.as_ref())
-            .map(|p| crate::sensitivity::sensitivity_of(&p.params.thresholds).round())
-            .unwrap_or(crate::sensitivity::DEFAULT);
+        let sens = crate::jobs::parse_params(st.params.as_ref()).map_or(crate::sensitivity::DEFAULT, |p| {
+            crate::sensitivity::sensitivity_of(&p.params.thresholds).round()
+        });
         let solid = solid_frames(&frame_values(&cands, &frames), sens);
         let scored = score_all(
             &frames,

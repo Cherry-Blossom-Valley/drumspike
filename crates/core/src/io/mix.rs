@@ -43,6 +43,7 @@ const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
 /// ffmpeg's default mono downmix coefficients for `ch` channels, in channel order.
 /// Verified against ffmpeg 9.0.2 for 1 to 8 channels (default layouts: mono, stereo,
 /// 2.1, 4.0, 5.0, 5.1, 6.1, 7.1).
+#[must_use]
 pub fn ffmpeg_mono_coefs(ch: usize) -> Option<&'static [f32]> {
     const T: [&[f32]; 8] = [
         &[1.0],
@@ -57,8 +58,9 @@ pub fn ffmpeg_mono_coefs(ch: usize) -> Option<&'static [f32]> {
     T.get(ch.wrapping_sub(1)).copied()
 }
 
-/// The WAVE_FORMAT_EXTENSIBLE channel mask of ffmpeg's default layout for `ch` channels
+/// The `WAVE_FORMAT_EXTENSIBLE` channel mask of ffmpeg's default layout for `ch` channels
 /// (0 for 1 and 2 channels; for stereo see [`ffmpeg_stereo_mask_ok`]).
+#[must_use]
 pub fn ffmpeg_default_mask(ch: usize) -> u32 {
     match ch {
         3 => 0x00B,
@@ -71,8 +73,8 @@ pub fn ffmpeg_default_mask(ch: usize) -> u32 {
     }
 }
 
-/// The speaker bits of a WAVE_FORMAT_EXTENSIBLE channel mask (SPEAKER_FRONT_LEFT to
-/// SPEAKER_TOP_BACK_RIGHT); bit 31 (SPEAKER_ALL) and the reserved bits are not positions.
+/// The speaker bits of a `WAVE_FORMAT_EXTENSIBLE` channel mask (`SPEAKER_FRONT_LEFT` to
+/// `SPEAKER_TOP_BACK_RIGHT`); bit 31 (`SPEAKER_ALL`) and the reserved bits are not positions.
 const SPEAKER_BITS: u32 = 0x3_FFFF;
 
 /// True when `ffmpeg -ac 1` folds a 2-channel file with this mask as plain stereo, the
@@ -83,6 +85,7 @@ const SPEAKER_BITS: u32 = 0x3_FFFF;
 /// with fewer or more than two speaker bits (0, a single bit, 0x7, 0x103, 0x80000000) does
 /// not match the channel count, ffmpeg falls back to the default stereo layout, and the
 /// result is plain stereo.
+#[must_use]
 pub fn ffmpeg_stereo_mask_ok(channel_mask: u32) -> bool {
     (channel_mask & SPEAKER_BITS).count_ones() != 2 || channel_mask & SPEAKER_BITS == 0x3
 }
@@ -113,6 +116,11 @@ impl Plan {
     /// other than FL+FR ([`ffmpeg_stereo_mask_ok`]), would select another matrix in ffmpeg
     /// or make it fail, so it is an error instead of a silent mismatch (the binding then
     /// hands the file to ffmpeg). `Average` takes any channel count and mask.
+    ///
+    /// # Errors
+    ///
+    /// A message when `ch` is 0, or in `Ffmpeg` mode when `ch` is above 8, the channel mask
+    /// differs from ffmpeg's default for more than two channels, or a stereo mask is not FL+FR.
     pub fn new(mode: MixMode, ch: usize, channel_mask: u32) -> Result<Plan, String> {
         if ch == 0 {
             return Err("zero channels".into());
@@ -156,11 +164,13 @@ impl Plan {
     }
 
     /// The mode this plan folds with.
+    #[must_use]
     pub fn mode(&self) -> MixMode {
         self.mode
     }
 
     /// Channel count of the input frames.
+    #[must_use]
     pub fn channels(&self) -> usize {
         self.ch
     }
@@ -187,6 +197,7 @@ impl Plan {
 
     /// Fold one frame of float samples (IEEE float input).
     #[inline]
+    #[must_use]
     pub fn fold_f32(&self, frame: &[f32]) -> f32 {
         debug_assert_eq!(frame.len(), self.ch);
         if self.ch == 1 {
@@ -200,24 +211,25 @@ impl Plan {
 
     /// Fold one frame of 16-bit samples.
     #[inline]
+    #[must_use]
     pub fn fold_s16(&self, frame: &[i16]) -> f32 {
         debug_assert_eq!(frame.len(), self.ch);
         const SCALE: f32 = 1.0 / 32768.0;
         if self.ch == 1 {
-            return frame[0] as f32 * SCALE;
+            return f32::from(frame[0]) * SCALE;
         }
         match self.mode {
             MixMode::Ffmpeg => {
                 let mut f = [0.0f32; 8];
                 for (o, s) in f.iter_mut().zip(frame) {
-                    *o = *s as f32 * SCALE;
+                    *o = f32::from(*s) * SCALE;
                 }
                 self.ffmpeg_fold(&f[..frame.len()])
             }
             MixMode::Average => {
-                let sum: i64 = frame.iter().map(|&s| s as i64 * self.q as i64).sum();
+                let sum: i64 = frame.iter().map(|&s| i64::from(s) * i64::from(self.q)).sum();
                 // ffmpeg stores the Q15 result in an int16 (wraps like C on overflow)
-                (((sum + 16384) >> 15) as i16) as f32 * SCALE
+                f32::from(((sum + 16384) >> 15) as i16) * SCALE
             }
         }
     }
@@ -225,9 +237,10 @@ impl Plan {
     /// Fold one frame of 32-bit integer samples; 24-bit input is passed shifted up by 8,
     /// which is how ffmpeg holds it.
     #[inline]
+    #[must_use]
     pub fn fold_s32(&self, frame: &[i32]) -> f32 {
         debug_assert_eq!(frame.len(), self.ch);
-        const SCALE: f32 = 1.0 / 2147483648.0;
+        const SCALE: f32 = 1.0 / 2_147_483_648.0;
         if self.ch == 1 {
             return frame[0] as f32 * SCALE;
         }
@@ -333,20 +346,20 @@ mod tests {
     #[test]
     fn average_24_bit_chains_in_float_and_rounds_ties_to_even() {
         let p3 = Plan::new(MixMode::Average, 3, 0).unwrap();
-        assert_eq!(p3.g, 0.333333f64 as f32);
+        assert_eq!(p3.g, 0.333_333_f64 as f32);
         let s: [i32; 3] = [1 << 8, 2 << 8, 4 << 8]; // 24-bit values 1, 2, 4 shifted
         let g = p3.g;
         let v = (s[2] as f32).mul_add(g, (s[1] as f32).mul_add(g, (s[0] as f32).mul_add(g, 0.0)));
-        assert_eq!(p3.fold_s32(&s), (v.round_ties_even() as i32) as f32 / 2147483648.0);
+        assert_eq!(p3.fold_s32(&s), (v.round_ties_even() as i32) as f32 / 2_147_483_648.0);
         // the exact mean is 2.333 LSB, ffmpeg lands on 2 LSB: half an LSB away at most
-        assert!((p3.fold_s32(&s) - 7.0 / 3.0 / 8388608.0).abs() < 0.5 / 8388608.0);
+        assert!((p3.fold_s32(&s) - 7.0 / 3.0 / 8_388_608.0).abs() < 0.5 / 8_388_608.0);
     }
 
     #[test]
     fn pan_gain_prints_like_the_engine() {
         assert_eq!(pan_gain(2), 0.5);
-        assert_eq!(pan_gain(3), 0.333333);
-        assert_eq!(pan_gain(6), 0.166667);
-        assert_eq!(pan_gain(7), 0.142857);
+        assert_eq!(pan_gain(3), 0.333_333);
+        assert_eq!(pan_gain(6), 0.166_667);
+        assert_eq!(pan_gain(7), 0.142_857);
     }
 }

@@ -2,7 +2,7 @@
   "name": "drum-spike-desktop",
   "private": true,
   "license": "Apache-2.0",
-  "version": "0.9.7",
+  "version": "0.9.9",
   "description": "Drum Spike desktop app: Tauri 2 shell around the static frontend. The only npm package is the pinned Tauri CLI.",
   "scripts": {
     "tauri": "tauri"

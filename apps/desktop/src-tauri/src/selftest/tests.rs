@@ -1,7 +1,7 @@
 use super::*;
 
 fn s(v: &[&str]) -> Vec<String> {
-    v.iter().map(|x| x.to_string()).collect()
+    v.iter().map(std::string::ToString::to_string).collect()
 }
 
 #[test]
@@ -220,7 +220,10 @@ fn parse_helpers_keeps_the_webkit_helpers_only() {
     let ps = "  101  2048 /usr/bin/foo\n  202 340112 /System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent\n  303 9000 /x/com.apple.WebKit.GPU\nbad line\n";
     let h = parse_helpers(ps);
     assert_eq!(h.len(), 2);
-    assert_eq!((h[0].pid, h[0].rss_kb, h[0].kind.as_str()), (202, 340112, "WebContent"));
+    assert_eq!(
+        (h[0].pid, h[0].rss_kb, h[0].kind.as_str()),
+        (202, 340_112, "WebContent")
+    );
     assert_eq!(h[1].kind, "GPU");
 }
 
@@ -240,19 +243,25 @@ fn memory_names_the_new_helpers_and_footprints_skip_nothing_when_empty() {
 
 #[test]
 fn the_tracks_scenario_loads_with_its_own_driver_and_counts_four_actions() {
-    unsafe {
-        std::env::set_var("DRUMSPIKE_SELFTEST_DROP", "/tmp/drop");
-    }
-    let v = load_scenario(&Request {
-        scenario: "tracks".into(),
-        out: PathBuf::from("x"),
-    })
+    // #194: the variables come from the argument, not the process env — this test ran green
+    // only when the shell test had left DRUMSPIKE_SELFTEST_DIR set first.
+    let v = load_scenario_from(
+        &Request {
+            scenario: "tracks".into(),
+            out: PathBuf::from("x"),
+        },
+        &[
+            ("DRUMSPIKE_SELFTEST_DIR", "/tmp/w"),
+            ("DRUMSPIKE_SELFTEST_DROP", "/tmp/drop"),
+        ],
+    )
     .unwrap();
     assert_eq!(
         (v["name"].as_str(), v["driver"].as_str()),
         (Some("tracks"), Some("tracks"))
     );
     assert_eq!(v["drop"], "/tmp/drop");
+    assert_eq!(v["work"], "/tmp/w");
     assert!(driver_for(&v) == TRACKS_DRIVER && TRACKS_DRIVER != DRIVER && TRACKS_DRIVER != SHELL_DRIVER);
     assert_eq!(
         v["expect"]["roles"].as_object().unwrap().len() as u64,

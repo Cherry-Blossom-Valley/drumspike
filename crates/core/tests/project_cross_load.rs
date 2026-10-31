@@ -138,11 +138,7 @@ fn check_document(name: &str, doc: &Document, fx: &Value) {
         assert_eq!(events.len(), expected.len(), "{name}/{track}: event count");
         for (e, want) in events.iter().zip(expected) {
             assert_eq!(bits(e.t), want[0].as_str().unwrap(), "{name}/{track}: t");
-            assert_eq!(
-                e.v.map(Value::from).unwrap_or(Value::Null),
-                want[1],
-                "{name}/{track}: v"
-            );
+            assert_eq!(e.v.map_or(Value::Null, Value::from), want[1], "{name}/{track}: v");
             match (&e.orig, &want[2]) {
                 (Some(o), Value::String(s)) => assert_eq!(&bits(*o), s, "{name}/{track}: orig"),
                 (None, Value::Null) => {}
@@ -184,7 +180,7 @@ fn documents_written_by_python_load_bit_exact() {
             assert_eq!(k.events()[0].extra["tag"], "x");
             assert_eq!(k.source, Some(None));
             assert_eq!(doc.track("NoSource").unwrap().source, None);
-            assert_eq!(doc.created.as_ref().unwrap().as_i64(), Some(1759950000));
+            assert_eq!(doc.created.as_ref().unwrap().as_i64(), Some(1_759_950_000));
         }
     }
     std::fs::remove_dir_all(&dir).unwrap();

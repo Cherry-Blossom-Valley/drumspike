@@ -57,17 +57,20 @@ use crate::{Service, ServiceConfig};
 pub const BLEED_RULE: u32 = RULE_VERSION;
 
 /// `DRUMSPIKE_BLEED_RULE` as a version: `0` (no rule) up to [`BLEED_RULE`]; `None` for anything else.
+#[must_use]
 pub fn parse_bleed_rule(v: &str) -> Option<u32> {
     v.trim().parse::<u32>().ok().filter(|&n| n <= BLEED_RULE)
 }
 
 /// The version of a new analysis: the configuration's pin, else [`BLEED_RULE`].
+#[must_use]
 pub fn analysis_bleed_rule(cfg: &ServiceConfig) -> u32 {
     cfg.bleed_rule.unwrap_or(BLEED_RULE)
 }
 
 /// The version of a re-pick: the configuration's pin, else the one the track's `detector` record carries. No record
 /// (an analysis from before P4-14) is version 0; a version this build does not know runs the current one.
+#[must_use]
 pub fn recorded_bleed_rule(cfg: &ServiceConfig, detector: Option<&Value>) -> u32 {
     if let Some(v) = cfg.bleed_rule {
         return v;
@@ -83,11 +86,13 @@ pub fn recorded_bleed_rule(cfg: &ServiceConfig, detector: Option<&Value>) -> u32
 }
 
 /// A tom close mic of the rule: role `tom` and no sample or trigger track.
+#[must_use]
 pub fn is_tom_close_mic(name: &str, role: Option<&str>) -> bool {
     role == Some("tom") && !is_sample_name(name)
 }
 
 /// Version 2: the kind of a source mic of the rule: role `kick` or `snare` and no sample or trigger track.
+#[must_use]
 pub fn source_kind(name: &str, role: Option<&str>) -> Option<SourceKind> {
     if is_sample_name(name) {
         return None;
@@ -120,6 +125,7 @@ fn pair_record(pairs: &Option<Result<Vec<Vec<bool>>, String>>, removed: usize) -
 }
 
 /// True for an event the rule marked (`"bleed": true`).
+#[must_use]
 pub fn is_bleed(e: &Value) -> bool {
     e.get("bleed") == Some(&Value::Bool(true))
 }
@@ -131,6 +137,7 @@ fn edited(e: &drumspike_core::project::Event) -> bool {
 }
 
 /// The text of an off state, with the track names.
+#[must_use]
 pub fn off_reason(off: &Off, names: &[String]) -> String {
     let list = |v: &[usize]| {
         if v.is_empty() {
@@ -378,6 +385,9 @@ pub(crate) fn repick_targets(svc: &Service, op: &Shared, name: &str, v: u32) -> 
 
 /// [`run_step`] for an open project `sid`: the step the job and the re-pick run after they store (the tests and a
 /// tool that set the hits by hand call it).
+///
+/// # Errors
+/// 404 when `sid` is not an open project; `run_step` itself reports nothing as an error.
 pub fn run_after(svc: &Service, sid: &str, targets: &[(String, u32)]) -> Result<Option<Value>, AppError> {
     let op = svc.inner.registry.get(sid)?;
     Ok(run_step(svc, &op, targets))
@@ -526,7 +536,7 @@ fn rule_marks(
         .map(|(m, d)| TomMic {
             drum: m.drum.clone().expect("checked above"),
             signal: &d.samples,
-            hits: m.times.iter().map(|t| (t * sr as f64).round() as i64).collect(),
+            hits: m.times.iter().map(|t| (t * f64::from(sr)).round() as i64).collect(),
         })
         .collect();
     // version 2: a source that cannot be read or has another rate is left out
@@ -543,7 +553,7 @@ fn rule_marks(
         .map(|(m, d)| SourceMic {
             kind: m.kind.expect("a source"),
             signal: &d.samples,
-            hits: m.times.iter().map(|t| (t * sr as f64).round() as i64).collect(),
+            hits: m.times.iter().map(|t| (t * f64::from(sr)).round() as i64).collect(),
         })
         .collect();
     used.extend(src_dec.iter().map(|(m, _)| m.name.clone()));

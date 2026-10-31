@@ -283,7 +283,7 @@ fn train() -> (Vec<Value>, Vec<Value>, f64) {
             step = t;
         }
         for b in 0..4 {
-            let e = json!({"t": t + b as f64 * beat, "v": 100});
+            let e = json!({"t": t + f64::from(b) * beat, "v": 100});
             if b % 2 == 0 { k.push(e) } else { s.push(e) }
         }
         t += 4.0 * beat;
@@ -610,7 +610,7 @@ fn funk_train(seed: u64) -> (Vec<Value>, Vec<Value>) {
     let mut vel = Rng(seed ^ 0x9E37_79B9_7F4A_7C15);
     let (mut k, mut s) = (vec![], vec![]);
     for bar in 0..48 {
-        let t0 = 1.0 + bar as f64 * 4.0 * beat;
+        let t0 = 1.0 + f64::from(bar) * 4.0 * beat;
         for (out, pat) in [(&mut k, kick), (&mut s, snare)] {
             for (i, c) in pat.chars().enumerate() {
                 if c == '.' {
@@ -694,7 +694,7 @@ fn refit_bar1_answers_the_beat_phase_the_hits_support() {
     let (svc, sid, dir) = opened_long("tm_refit1");
     let beat = 60.0 / 92.0;
     let train: Vec<Value> = (0..24)
-        .map(|k| json!({"t": (k as f64 * beat * 1e6).round() / 1e6, "v": 100}))
+        .map(|k| json!({"t": (f64::from(k) * beat * 1e6).round() / 1e6, "v": 100}))
         .collect();
     svc.events_set(&sid, "k in", &Value::Array(train)).unwrap();
     svc.events_set(&sid, "s top", &Value::Array(vec![])).unwrap();
@@ -737,7 +737,7 @@ fn refit_bar1_refuses_a_bad_tempo_and_too_few_hits() {
     let e = svc.tempo_map_refit_bar1(&sid, 1500.0).unwrap_err();
     assert_eq!(e.code, 400, "{e}");
     // 12 kick and snare hits here: the refit answers. With fewer than 8 it refuses.
-    let few: Vec<Value> = (0..4).map(|k| json!({"t": k as f64 * 0.5, "v": 100})).collect();
+    let few: Vec<Value> = (0..4).map(|k| json!({"t": f64::from(k) * 0.5, "v": 100})).collect();
     svc.events_set(&sid, "k in", &Value::Array(few)).unwrap();
     svc.events_set(&sid, "s top", &Value::Array(vec![])).unwrap();
     let e = svc.tempo_map_refit_bar1(&sid, 92.0).unwrap_err();

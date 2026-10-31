@@ -25,14 +25,14 @@ fn session(root: &Path, name: &str) -> PathBuf {
     write_wav(&td.join("source.wav"), 48_000, &kick_signal(&ONSETS, 3.5, 48_000));
     std::fs::write(
         td.join("events.json"),
-        json!({"sr": 48000, "duration": 3.5, "n_samples": 168000, "events": [{"t": 0.25, "v": 100}, {"t": 0.75, "v": 90, "added": true}]})
+        json!({"sr": 48000, "duration": 3.5, "n_samples": 168_000, "events": [{"t": 0.25, "v": 100}, {"t": 0.75, "v": 90, "added": true}]})
             .to_string(),
     )
     .unwrap();
     std::fs::write(td.join("events.json.prev.json"), r#"{"events": [{"t": 0.5, "v": 1}]}"#).unwrap();
-    let meta = json!({"tracks": {"Kick_In": {"role": "kick", "note": 36, "sr": 48000, "n_samples": 168000,
+    let meta = json!({"tracks": {"Kick_In": {"role": "kick", "note": 36, "sr": 48000, "n_samples": 168_000,
         "duration": 3.5, "color": "#e05555", "params": {"min_gap_ms": 20}}},
-        "name": name, "created": 1759950000.5, "order": ["Kick_In"]});
+        "name": name, "created": 1_759_950_000.5, "order": ["Kick_In"]});
     std::fs::write(sdir.join("meta.json"), meta.to_string()).unwrap();
     sdir
 }
@@ -69,7 +69,7 @@ fn check_imported(svc: &Service, sum: &Value, sdir: &Path) {
     );
     let p = load_project(&folder).unwrap();
     assert_eq!(p.doc.format, 1);
-    assert_eq!(p.doc.created.as_ref().unwrap().as_f64(), Some(1759950000.5));
+    assert_eq!(p.doc.created.as_ref().unwrap().as_f64(), Some(1_759_950_000.5));
     assert_eq!(p.doc.settings.as_ref().unwrap().mix_mode.as_deref(), Some("ffmpeg"));
     let k = p.doc.track("Kick_In").unwrap();
     assert_eq!(k.events().len(), 2);
@@ -182,23 +182,21 @@ fn the_bridge_runs_the_import_commands() {
     let svc = service(&root);
     let sdir = session(&root, "Song: Take 2");
     let b = Bridge::new(svc, repo_root().join("static"));
-    let rows = match b
+    let Reply::Json(rows) = b
         .invoke(
             "legacy_list",
             &json!({"folder": root.join("sessions").to_str().unwrap()}),
         )
         .unwrap()
-    {
-        Reply::Json(v) => v,
-        _ => panic!("json expected"),
+    else {
+        panic!("json expected")
     };
     assert_eq!(rows[0]["session_id"], "ab12cd34");
-    let sum = match b
+    let Reply::Json(sum) = b
         .invoke("project_import", &json!({"session_dir": sdir.to_str().unwrap()}))
         .unwrap()
-    {
-        Reply::Json(v) => v,
-        _ => panic!("json expected"),
+    else {
+        panic!("json expected")
     };
     assert_eq!(sum["name"], "Song: Take 2");
     let e = b.invoke("project_import", &json!({})).err().unwrap();

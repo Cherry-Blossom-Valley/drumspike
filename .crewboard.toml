@@ -2,7 +2,7 @@
 initiative = "drumspike-cbv"
 project_owner = "Cherry-Blossom-Valley"
 project_number = 1
-repos = ["Cherry-Blossom-Valley/drumspike"]
+repos = ["Cherry-Blossom-Valley/drumspike", "Cherry-Blossom-Valley/Cbvsite"]
 owner_login = "wfrank2509"
 registry_issue = 1
 authority = "AUTHORITY.md"

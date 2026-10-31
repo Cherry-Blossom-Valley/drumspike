@@ -76,7 +76,7 @@ pub enum TransportError {
     Device(String),
     /// A bad argument (no tracks, a list of the wrong length, a bad track index).
     Arg(String),
-    /// P3-16: the output device does not answer (CoreAudio blocks); see [`device::OPEN_LIMIT`].
+    /// P3-16: the output device does not answer (`CoreAudio` blocks); see [`device::OPEN_LIMIT`].
     NoAnswer(String),
 }
 
@@ -105,6 +105,7 @@ pub enum Speed {
 
 impl Speed {
     /// Output frames per session frame: 1 at normal speed, 2 at half speed.
+    #[must_use]
     pub fn slowdown(self) -> u32 {
         match self {
             Speed::Normal => 1,
@@ -113,22 +114,26 @@ impl Speed {
     }
 
     /// The speed of a slowdown: 2 is half speed, any other value normal speed.
+    #[must_use]
     pub fn from_slowdown(n: u32) -> Speed {
         if n == 2 { Speed::Half } else { Speed::Normal }
     }
 
     /// The rate the reader resamples the tracks to: `device_rate` times the slowdown.
+    #[must_use]
     pub fn render_rate(self, device_rate: u32) -> u32 {
         device_rate * self.slowdown()
     }
 
     /// Session seconds per second of playback: 1.0 or 0.5 (the value of the app's commands and
     /// messages).
+    #[must_use]
     pub fn rate(self) -> f64 {
-        1.0 / self.slowdown() as f64
+        1.0 / f64::from(self.slowdown())
     }
 
     /// The speed of a playback rate of [`Speed::rate`] (1.0 or 0.5); `None` for another value.
+    #[must_use]
     pub fn from_rate(rate: f64) -> Option<Speed> {
         if rate == 1.0 {
             Some(Speed::Normal)
@@ -399,7 +404,10 @@ impl Shared {
         loop_range: Option<(u64, u64)>,
         end_at: Option<u64>,
     ) {
-        let _one_writer = self.seek_write.lock().unwrap_or_else(|e| e.into_inner());
+        let _one_writer = self
+            .seek_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let s = self.seek_seq.load(Ordering::Relaxed);
         self.seek_seq.store(s.wrapping_add(1), Ordering::Relaxed);
         std::sync::atomic::fence(Ordering::Release);
@@ -568,10 +576,14 @@ fn build(tracks: &[TrackSpec], device_rate: u32, cfg: &TransportConfig) -> Resul
             pitch: t.click_pitch,
         })
         .collect();
-    let session_frames = sources.iter().map(|s| s.device_frames()).max().unwrap_or(0);
+    let session_frames = sources
+        .iter()
+        .map(reader::TrackSource::device_frames)
+        .max()
+        .unwrap_or(0);
     let shared = Arc::new(Shared::new(tracks.len(), cfg.clicks_on, cfg.speed));
     let clock = Arc::new(Clock::new(device_rate));
-    let chans: Vec<usize> = sources.iter().map(|s| s.channels()).collect();
+    let chans: Vec<usize> = sources.iter().map(reader::TrackSource::channels).collect();
     let (producers, consumers): (Vec<_>, Vec<_>) = chans
         .iter()
         .map(|c| RingBuffer::<f32>::new(cfg.ring_frames * c))
@@ -768,11 +780,13 @@ pub struct CallbackCounter {
 
 impl CallbackCounter {
     /// The callbacks so far (the `callbacks` of [`Transport::stats`]).
+    #[must_use]
     pub fn get(&self) -> u64 {
         self.shared.stats.callbacks.load(Ordering::Relaxed)
     }
 
     /// The tag of the last seek the callback has taken (`seek_tag` of [`Transport::playhead`]).
+    #[must_use]
     pub fn seek_taken(&self) -> u64 {
         self.clock.read().seek_tag
     }
@@ -789,6 +803,15 @@ pub struct Transport {
 impl Transport {
     /// Open the session on `output`: start the reader thread and the stream (paused at
     /// frame 0). The device rate is the device's current rate (see the module docs).
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `tracks` is empty or the ring and prefill sizes of `cfg`
+    /// are too small; [`TransportError::NoAnswer`] when the output device is still blocked in
+    /// `CoreAudio` from an earlier open; [`TransportError::Track`] when a track cannot be opened
+    /// or has a zero sample rate; [`TransportError::Device`] when the device cannot be found
+    /// or queried, the reader thread or the stream cannot start, or the device rate changes
+    /// while opening.
     pub fn open(tracks: &[TrackSpec], output: Output, cfg: TransportConfig) -> Result<Transport, TransportError> {
         // P3-16: a device whose last open is still blocked in CoreAudio is refused before the
         // tracks are opened
@@ -1006,15 +1029,23 @@ impl Transport {
 
     /// The device frame of `seconds` (rounded; 0 for a negative time).
     pub fn frame_of(&self, seconds: f64) -> u64 {
-        (seconds.max(0.0) * self.ctl.device_rate as f64).round() as u64
+        (seconds.max(0.0) * f64::from(self.ctl.device_rate)).round() as u64
     }
 
     /// Mute and solo (`audible()` of `app.js`), applied at the next callback.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `mute` or `solo` is longer than the number of tracks.
     pub fn set_mix(&self, mute: &[bool], solo: &[bool]) -> Result<(), TransportError> {
         self.ctl.set_mix(mute, solo)
     }
 
     /// Set one track's gain directly.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `track` is not a track of the session.
     pub fn set_track_gain(&self, track: usize, gain: f32) -> Result<(), TransportError> {
         self.ctl.set_track_gain(track, gain)
     }
@@ -1026,13 +1057,17 @@ impl Transport {
 
     /// P3-16: one track's volume (dB, [`mixer::MIN_DB`] and below is off, up to
     /// [`mixer::MAX_DB`]) and pan (-1 left to +1 right), applied at the next callback.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `track` is not a track of the session.
     pub fn set_volume_pan(&self, track: usize, volume_db: f32, pan: f32) -> Result<(), TransportError> {
         self.ctl.set_volume_pan(track, volume_db, pan)
     }
 
     /// P3-16: the user's master volume in dB (before the master gain of the tests).
     pub fn set_master_volume_db(&self, volume_db: f32) {
-        self.ctl.set_master_volume_db(volume_db)
+        self.ctl.set_master_volume_db(volume_db);
     }
 
     /// P3-16: the peak meters since the last call (and resets them).
@@ -1041,22 +1076,42 @@ impl Transport {
     }
 
     /// Clicks on or off, volume and pitches.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `s.pitches` does not hold one pitch per track, or the click
+    /// update queue is full (retry after the next callback).
     pub fn set_clicks(&mut self, s: &ClickSettings) -> Result<(), TransportError> {
         self.ctl.set_clicks(s)
     }
 
     /// Replace one track's hit samples (track rate) after an edit.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `track` is not a track of the session, or the click update
+    /// queue is full (retry after the next callback).
     pub fn set_hits(&mut self, track: usize, hits: Vec<u64>) -> Result<(), TransportError> {
         self.ctl.set_hits(track, hits)
     }
 
     /// Replace the hit samples of every track at once (one click bank, not one per track).
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `hits` does not hold one list per track, or the click
+    /// update queue is full (retry after the next callback).
     pub fn set_all_hits(&mut self, hits: Vec<Vec<u64>>) -> Result<(), TransportError> {
         self.ctl.set_all_hits(hits)
     }
 
     /// P4-7a: the layer voices of every track (one entry per track, `None`: no layer), applied at
     /// the next callback. A transport without layers does no layer work in the callback.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `bank` does not hold one entry per track, or the layer
+    /// update queue is full (retry after the next callback).
     pub fn set_layers(&mut self, bank: LayerBank) -> Result<(), TransportError> {
         self.ctl.set_layers(bank)
     }
@@ -1122,6 +1177,12 @@ pub struct Offline {
 impl Offline {
     /// Build the session at `device_rate`, playing, at frame 0, blocks of
     /// `cfg.buffer_frames`.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `tracks` is empty or the ring and prefill sizes of `cfg`
+    /// are too small; [`TransportError::Track`] when a track cannot be opened or has a zero
+    /// sample rate.
     pub fn new(tracks: &[TrackSpec], device_rate: u32, cfg: TransportConfig) -> Result<Offline, TransportError> {
         let p = build(tracks, device_rate, &cfg)?;
         p.shared.playing.store(true, Ordering::Release);
@@ -1228,11 +1289,19 @@ impl Offline {
     }
 
     /// Mute and solo (see [`Transport::set_mix`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `mute` or `solo` is longer than the number of tracks.
     pub fn set_mix(&mut self, mute: &[bool], solo: &[bool]) -> Result<(), TransportError> {
         self.ctl.set_mix(mute, solo)
     }
 
     /// One track's gain (see [`Transport::set_track_gain`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `track` is not a track of the session.
     pub fn set_track_gain(&mut self, track: usize, gain: f32) -> Result<(), TransportError> {
         self.ctl.set_track_gain(track, gain)
     }
@@ -1243,13 +1312,17 @@ impl Offline {
     }
 
     /// Volume and pan of one track (see [`Transport::set_volume_pan`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `track` is not a track of the session.
     pub fn set_volume_pan(&mut self, track: usize, volume_db: f32, pan: f32) -> Result<(), TransportError> {
         self.ctl.set_volume_pan(track, volume_db, pan)
     }
 
     /// Master volume (see [`Transport::set_master_volume_db`]).
     pub fn set_master_volume_db(&mut self, volume_db: f32) {
-        self.ctl.set_master_volume_db(volume_db)
+        self.ctl.set_master_volume_db(volume_db);
     }
 
     /// The meters (see [`Transport::take_meters`]).
@@ -1263,11 +1336,21 @@ impl Offline {
     }
 
     /// Clicks (see [`Transport::set_clicks`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `s.pitches` does not hold one pitch per track, or the click
+    /// update queue is full (retry after the next callback).
     pub fn set_clicks(&mut self, s: &ClickSettings) -> Result<(), TransportError> {
         self.ctl.set_clicks(s)
     }
 
     /// Hits of one track (see [`Transport::set_hits`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `track` is not a track of the session, or the click update
+    /// queue is full (retry after the next callback).
     pub fn set_hits(&mut self, track: usize, hits: Vec<u64>) -> Result<(), TransportError> {
         self.ctl.set_hits(track, hits)
     }
@@ -1288,11 +1371,21 @@ impl Offline {
     }
 
     /// Replace the hit samples of every track at once (see [`Transport::set_all_hits`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `hits` does not hold one list per track, or the click
+    /// update queue is full (retry after the next callback).
     pub fn set_all_hits(&mut self, hits: Vec<Vec<u64>>) -> Result<(), TransportError> {
         self.ctl.set_all_hits(hits)
     }
 
     /// The layer voices (see [`Transport::set_layers`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Arg`] when `bank` does not hold one entry per track, or the layer
+    /// update queue is full (retry after the next callback).
     pub fn set_layers(&mut self, bank: LayerBank) -> Result<(), TransportError> {
         self.ctl.set_layers(bank)
     }

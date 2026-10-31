@@ -92,6 +92,7 @@ pub struct CacheTile {
 }
 
 /// Encode `peaks.bin` for a track of `n_samples` samples at `sr`.
+#[must_use]
 pub fn encode_peaks_bin(sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) -> Vec<u8> {
     let total: usize = levels.iter().map(|(_, l)| l.n * 3 * 4).sum();
     let mut out = Vec::with_capacity(FIXED_HEADER + levels.len() * 8 + total);
@@ -106,7 +107,7 @@ pub fn encode_peaks_bin(sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) 
     }
     for (_, l) in levels {
         for v in [&l.min, &l.max, &l.rms] {
-            for &x in v.iter() {
+            for &x in v {
                 out.extend_from_slice(&(x as f32).to_le_bytes());
             }
         }
@@ -115,6 +116,10 @@ pub fn encode_peaks_bin(sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) 
 }
 
 /// Write `peaks.bin` atomically (temporary file, then rename).
+///
+/// # Errors
+///
+/// [`CacheError::Io`] when the temporary file cannot be written or renamed over `path`.
 pub fn write_peaks_bin(path: &Path, sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) -> Result<(), CacheError> {
     let bytes = encode_peaks_bin(sr, n_samples, levels);
     let tmp = path.with_extension("bin.tmp");
@@ -153,12 +158,33 @@ fn read_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
     }
 }
 
-fn u32_at(b: &[u8], i: usize) -> u32 {
-    u32::from_le_bytes(b[i..i + 4].try_into().expect("4 bytes"))
+/// The `N` bytes at `i` as a little-endian unsigned integer, `Err` when the slice is
+/// shorter (the module's doc: a malformed file is a clear error, never a panic).
+fn uint_at<const N: usize>(b: &[u8], i: usize) -> io::Result<u64> {
+    let s = b
+        .get(i..i + N)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "header cut off"))?;
+    // `get(i..i+N)` is `Some` only when the whole range is in bounds, so `s` holds
+    // exactly N bytes and the loop below cannot overflow or miss an element.
+    let mut v = 0u64;
+    for (k, byte) in s.iter().enumerate() {
+        v |= u64::from(*byte) << (8 * k);
+    }
+    Ok(v)
+}
+
+fn u32_at(b: &[u8], i: usize) -> io::Result<u32> {
+    Ok(uint_at::<4>(b, i)? as u32)
 }
 
 impl PeakCache {
     /// Open `peaks.bin`: read and check the header and the file length.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Io`] when the file cannot be opened or read; [`CacheError::Format`] when
+    /// it is shorter than the header, has a bad magic or version, declares more than 64
+    /// levels, or its level table or level data are cut off.
     pub fn open(path: &Path) -> Result<PeakCache, CacheError> {
         let file = File::open(path)?;
         let len = file.metadata()?.len();
@@ -170,13 +196,13 @@ impl PeakCache {
         if head[..8] != MAGIC {
             return Err(CacheError::Format("bad magic".into()));
         }
-        let version = u32_at(&head, 8);
+        let version = u32_at(&head, 8)?;
         if version != VERSION {
             return Err(CacheError::Format(format!("version {version}, expected {VERSION}")));
         }
-        let sr = u32_at(&head, 12);
-        let n_samples = u64::from_le_bytes(head[16..24].try_into().expect("8 bytes"));
-        let count = u32_at(&head, 24) as usize;
+        let sr = u32_at(&head, 12)?;
+        let n_samples = uint_at::<8>(&head, 16)?;
+        let count = u32_at(&head, 24)? as usize;
         if count > 64 {
             return Err(CacheError::Format(format!("{count} levels")));
         }
@@ -190,8 +216,8 @@ impl PeakCache {
         let mut offsets = Vec::with_capacity(count);
         let mut pos = (FIXED_HEADER + table.len()) as u64;
         for i in 0..count {
-            let block = u32_at(&table, i * 8) as usize;
-            let bins = u32_at(&table, i * 8 + 4) as usize;
+            let block = u32_at(&table, i * 8)? as usize;
+            let bins = u32_at(&table, i * 8 + 4)? as usize;
             if block == 0 {
                 return Err(CacheError::Format(format!("level {i}: block 0")));
             }
@@ -223,16 +249,19 @@ impl PeakCache {
     }
 
     /// Sample rate of the track.
+    #[must_use]
     pub fn sr(&self) -> u32 {
         self.sr
     }
 
     /// Sample count of the track.
+    #[must_use]
     pub fn n_samples(&self) -> u64 {
         self.n_samples
     }
 
     /// Block size and bin count of every level, in file order.
+    #[must_use]
     pub fn levels(&self) -> &[LevelInfo] {
         &self.levels
     }
@@ -243,6 +272,11 @@ impl PeakCache {
 
     /// Bins `[from, to)` of the level with block size `level`, clamped like
     /// [`crate::Track::peaks`]; `None` when the file has no such level.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Io`] when a positioned read of a column fails (for example a file cut
+    /// short after it was opened).
     pub fn tile(&self, level: usize, from: i64, to: i64) -> Result<Option<CacheTile>, CacheError> {
         let Some(i) = self.index(level) else { return Ok(None) };
         let info = self.levels[i];
@@ -265,11 +299,19 @@ impl PeakCache {
     }
 
     /// One whole level as a [`PeakLevel`] (for tests and tools; the app reads tiles).
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Io`] when a positioned read fails or the file is shorter than its
+    /// header says; [`CacheError::Format`] when the level disappears between lookup and read.
     pub fn read_level(&self, level: usize) -> Result<Option<PeakLevel>, CacheError> {
         let Some(info) = self.index(level).map(|i| self.levels[i]) else {
             return Ok(None);
         };
-        let t = self.tile(level, 0, info.bins as i64)?.expect("level exists");
+        let Some(t) = self.tile(level, 0, info.bins as i64)? else {
+            // unreachable: `tile` answers `Some` for every level `index` knows
+            return Err(CacheError::Format(format!("level {level} vanished")));
+        };
         let up = |v: Vec<f32>| v.into_iter().map(f64::from).collect::<Vec<f64>>();
         Ok(Some(PeakLevel {
             min: up(t.min),
@@ -281,6 +323,7 @@ impl PeakCache {
 }
 
 /// True when `dir` holds a `peaks.bin` and a `key.json` equal to `key`.
+#[must_use]
 pub fn cache_is_current(dir: &Path, key: &CacheKey) -> bool {
     dir.join(PEAKS_BIN).is_file() && key.matches_file(dir)
 }
@@ -288,6 +331,11 @@ pub fn cache_is_current(dir: &Path, key: &CacheKey) -> bool {
 /// Build `dir/peaks.bin` and `dir/key.json` from decoded mono samples. The folder is
 /// created when missing; other files in it (the server's `peaks.json`) stay. `key.json`
 /// comes last.
+///
+/// # Errors
+///
+/// [`CacheError::Io`] when the folder cannot be created or `peaks.bin` or `key.json` cannot
+/// be written or renamed; [`CacheError::Format`] when the key cannot be serialised.
 pub fn build_cache(dir: &Path, sr: u32, samples: &[f32], key: &CacheKey) -> Result<(), CacheError> {
     fs::create_dir_all(dir)?;
     let levels = compute_peaks(samples);
@@ -430,8 +478,8 @@ mod tests {
 
     /// R20: every malformed input is a miss or a clear error — never a panic and never
     /// an allocation the file cannot hold. The table covers the header reader (`open`):
-    /// empty, truncated, wrong magic, wrong version, length fields at 0, at u32::MAX and
-    /// at u64::MAX, and a length larger than the file.
+    /// empty, truncated, wrong magic, wrong version, length fields at 0, at `u32::MAX` and
+    /// at `u64::MAX`, and a length larger than the file.
     #[test]
     fn malformed_inputs_are_a_miss_or_an_error() {
         let d = tmp("malformed");

@@ -31,9 +31,9 @@
 //!
 //! MIDI job (P1-5, `check_midi.py`): `{"events": [{"t": s, "v": int}], "note": 36, "ppq":
 //! 24000, "tempo": 120.0}` (`v` defaults to 100 like `engine.export_midi`); writes the file
-//! and prints `{"notes": [{"tick", "note", "velocity", "duration"}]}`. Spike job: `{"source`:
-//! wav, "times": [s, ...], "format": "pcm16"|"pcm24"|"float32"}`; writes the spike file at the
-//! source's rate and length with its `bext` and prints `{"sr", "n_samples", "time_reference"}`.
+//! and prints `{"notes": [{"tick", "note", "velocity", "duration"}]}`. Spike job:
+//! `{"source": wav, "times": [s, ...], "format": "pcm16"|"pcm24"|"float32"}`; writes the spike file
+//! at the source's rate and length with its `bext` and prints `{"sr", "n_samples", "time_reference"}`.
 //!
 //! ```text
 //! parity resample <in.wav> <out.wav> [--mix ffmpeg|average] [--mono-out mono.wav]
@@ -70,7 +70,7 @@
 //! field of the role's `OnsetParams` for tuning (every field by its name; `gate_db` and
 //! `sim_min` also take `none`, `shape` takes `flux` or `spectrum`). `detect` is the whole
 //! `detect_onsets_with` call; `resample` and `spectrogram` time those two stages again
-//! separately for the breakdown. `--odf-out <file>` also writes the SuperFlux onset function as
+//! separately for the breakdown. `--odf-out <file>` also writes the `SuperFlux` onset function as
 //! raw little-endian f32 (one value per frame). Prints a one-line summary.
 //!
 //! ```text
@@ -581,7 +581,7 @@ fn run_features(args: &[String]) -> Result<(), String> {
         "sr": sr,
         "n_samples": x.len(),
         "frames": frames,
-        "min_s": seconds.iter().cloned().fold(f64::INFINITY, f64::min),
+        "min_s": seconds.iter().copied().fold(f64::INFINITY, f64::min),
         "seconds": seconds,
     });
     println!("{doc}");
@@ -1250,9 +1250,9 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
-fn parse_ints(s: &str) -> Vec<i64> {
+fn parse_ints(s: &str) -> Result<Vec<i64>, String> {
     s.split(',')
-        .map(|v| v.trim().parse::<i64>().expect("integer list"))
+        .map(|v| v.trim().parse::<i64>().map_err(|e| format!("{s:?}: {e}")))
         .collect()
 }
 
@@ -1327,6 +1327,16 @@ fn main() -> ExitCode {
             }
         };
     }
+    match run_default(&args) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run_default(args: &[String]) -> Result<ExitCode, String> {
     let path = PathBuf::from(&args[0]);
     let mut t0: Vec<f64> = Vec::new();
     let mut mix = MixMode::Ffmpeg;
@@ -1338,8 +1348,8 @@ fn main() -> ExitCode {
         let val = |k: usize| args.get(k).cloned().unwrap_or_default();
         match args[i].as_str() {
             "--t0-file" => {
-                let s = std::fs::read_to_string(val(i + 1)).expect("read t0 file");
-                t0.extend(serde_json::from_str::<Vec<f64>>(&s).expect("t0 json array"));
+                let s = std::fs::read_to_string(val(i + 1)).map_err(|e| format!("read {}: {e}", val(i + 1)))?;
+                t0.extend(serde_json::from_str::<Vec<f64>>(&s).map_err(|e| format!("t0 json array: {e}"))?);
                 i += 2;
             }
             "--mix" => {
@@ -1348,7 +1358,7 @@ fn main() -> ExitCode {
                     "average" => MixMode::Average,
                     m => {
                         eprintln!("unknown mix mode {m}");
-                        return ExitCode::from(2);
+                        return Ok(ExitCode::from(2));
                     }
                 };
                 i += 2;
@@ -1358,29 +1368,29 @@ fn main() -> ExitCode {
                 i += 2;
             }
             "--tile" => {
-                let v = parse_ints(&val(i + 1));
+                let v = parse_ints(&val(i + 1))?;
                 if v.len() != 3 {
-                    return usage();
+                    return Ok(usage());
                 }
                 tiles.push((v[0] as usize, v[1], v[2]));
                 i += 2;
             }
             "--samples" => {
-                let v = parse_ints(&val(i + 1));
+                let v = parse_ints(&val(i + 1))?;
                 if v.len() != 2 {
-                    return usage();
+                    return Ok(usage());
                 }
                 windows.push((v[0], v[1]));
                 i += 2;
             }
-            _ => return usage(),
+            _ => return Ok(usage()),
         }
     }
     let (x, info) = match read_wav_mono(&path, mix) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("error: {e}");
-            return ExitCode::from(1);
+            return Ok(ExitCode::from(1));
         }
     };
     if let Some(p) = pcm_out {
@@ -1390,7 +1400,7 @@ fn main() -> ExitCode {
         }
         if let Err(e) = std::fs::write(&p, buf) {
             eprintln!("error: write {}: {e}", p.display());
-            return ExitCode::from(1);
+            return Ok(ExitCode::from(1));
         }
     }
     let sr = info.sample_rate;
@@ -1436,7 +1446,7 @@ fn main() -> ExitCode {
         samples,
     };
     println!("{}", serde_json::to_string(&out).expect("json"));
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
@@ -1516,7 +1526,7 @@ mod tests {
         assert_eq!(j["onsets"][0], serde_json::json!([3, 2, 0.03, 0.5]));
         let a: Vec<String> = ["--mix", "average", "--repeat", "3"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         assert!(matches!(parse_mix_repeat(&a).unwrap(), (MixMode::Average, 3)));
         std::fs::remove_dir_all(&dir).ok();

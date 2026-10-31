@@ -78,6 +78,7 @@ pub struct Probe {
 
 impl Probe {
     /// Duration in seconds.
+    #[must_use]
     pub fn duration(&self) -> f64 {
         self.n_frames as f64 / f64::from(self.sr)
     }
@@ -162,6 +163,11 @@ fn magic(path: &Path) -> std::io::Result<[u8; 12]> {
 
 /// Read the header of `path` and decide: a [`Probe`] for a file the analysis reads, else the
 /// [`Reject`] with the reason. No sample is read.
+///
+/// # Errors
+/// A [`Reject`] when the file is missing or unreadable, is not a file, is AIFF or another
+/// non-WAV audio format, is not a WAV file, has an unsupported WAV format or sample rate, or
+/// holds no samples.
 pub fn probe(path: &Path) -> Result<Probe, Reject> {
     let no = |why: String| Reject::new(path, why);
     let meta = std::fs::metadata(path).map_err(|e| {
@@ -275,6 +281,7 @@ pub fn expand(paths: &[String]) -> Vec<PathBuf> {
 
 /// The track name of a file: letters, digits and `-` stay, every other run becomes one `_`
 /// (`server.safe_name`); `track<n>` when nothing is left.
+#[must_use]
 pub fn safe_name(stem: &str, idx: usize) -> String {
     let mut out = String::new();
     let mut gap = false;
@@ -340,6 +347,10 @@ impl Service {
     /// [`Service::audio_suggestion`]
     /// for the files whose name gives no role (#225): their row carries the suggested role with
     /// `guess: "audio"`.
+    ///
+    /// # Errors
+    /// The error of `load_rules` (for example 404 for an unknown kit preset) when `preset` is
+    /// given. A file that cannot be read is listed in `rejected`, not an error.
     pub fn tracks_scan(&self, paths: &[String], preset: Option<&str>) -> Result<Value, AppError> {
         let t0 = Instant::now();
         let rules: Vec<Rule> = match preset.map(str::trim).filter(|p| !p.is_empty()) {
@@ -391,18 +402,20 @@ impl Service {
     /// decode error is no suggestion: the scan never fails on one file.
     fn audio_suggestion(&self, p: &Probe) -> Result<Option<&'static str>, AppError> {
         const SUGGEST_S: usize = 30;
-        let decoded = match crate::media::decode(&p.path, MixMode::Ffmpeg) {
-            Ok(d) => d,
-            Err(_) => return Ok(None),
+        let Ok(decoded) = crate::media::decode(&p.path, MixMode::Ffmpeg) else {
+            return Ok(None);
         };
         let n = decoded.samples.len().min(decoded.sr as usize * SUGGEST_S);
         Ok(drumspike_core::role::role_from_audio(&decoded.samples[..n], decoded.sr)
             .map(drumspike_core::role::Role::as_str))
     }
 
-    /// `tracks_add {sid, paths, roles, notes, copy, progress}` (route 23): add one track per
-    /// readable file. `roles` and `notes` are lists in the order of the files `paths` stand for
-    /// (see [`expand`]); an entry that is missing, `null` or wrong gets the guess from the name
+    #[allow(clippy::too_many_arguments)]
+    /// `tracks_add {sid, paths, tracks?, roles, notes, copy, progress}` (route 23): add one track per
+    /// readable file. With `tracks` (name patterns on the file stems, see [`crate::patterns`]) only
+    /// the files that a pattern stands for are added; a pattern that matches no scanned file is a
+    /// 400 that names it. `roles` and `notes` are lists in the order of the filtered files; an
+    /// entry that is missing, `null` or wrong gets the guess from the name
     /// (the note: the default note of the role). The source record is `referenced`; with
     /// `copy` the file is copied into `Audio Files/` and the record is `copied`. `progress`
     /// gets `{sid, add: {state, done, total, file}}` before and after each file (`state` is
@@ -411,10 +424,16 @@ impl Service {
     /// lanes are ready; `peaks_build_start` then finds nothing to do. Answers
     /// `{added: [names], tracks: [{name, role, note, path, mode}], rejected, peaks_ms, elapsed_ms}`; files
     /// that are not added are in `rejected` (a request with only such files is not an error).
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project; 409 when the project is open read-only or the copy
+    /// job cannot start; an error from `add_track` (for example a bad track name) after a file
+    /// was accepted. A file that cannot be probed or copied is reported in `rejected`, not here.
     pub fn tracks_add(
         &self,
         sid: &str,
         paths: &[String],
+        tracks: Option<&[String]>,
         roles: &[Value],
         notes: &[Value],
         copy: bool,
@@ -424,6 +443,32 @@ impl Service {
         let op = self.inner.registry.get_writable(sid)?;
         let dir = lock(&op).project.dir.clone();
         let list = expand(paths);
+        // #120: `tracks` filters the scanned files by name pattern (exact, glob, `t1-t4`) on the
+        // file stem; a pattern that matches no scanned file is a 400 that names it. `roles` and
+        // `notes` then align with the filtered files.
+        let list = match tracks {
+            Some(pats) if !pats.is_empty() => {
+                let stems: Vec<String> = list
+                    .iter()
+                    .map(|p| {
+                        p.file_stem()
+                            .map_or_else(String::new, |s| s.to_string_lossy().into_owned())
+                    })
+                    .collect();
+                let keep = crate::patterns::expand(&stems, pats)?;
+                let keep: Vec<String> = keep.iter().map(|s| s.to_lowercase()).collect();
+                list.into_iter()
+                    .filter(|p| {
+                        let s = p
+                            .file_stem()
+                            .map_or_else(String::new, |s| s.to_string_lossy().into_owned())
+                            .to_lowercase();
+                        keep.contains(&s)
+                    })
+                    .collect()
+            }
+            _ => list,
+        };
         let total = list.len();
         let emit = |state: &str, done: usize, file: &str, result: Option<&Value>| {
             if let Some(p) = progress.as_ref() {
@@ -599,6 +644,12 @@ impl Service {
     /// `{name, role, note, role_source, suggest_note, reanalyzed, previous: {role, note,
     /// role_source, role_match, events}}`; `previous` is the undo state, `suggest_note` the new role's
     /// default note when the stored note was the old role's default and no note was given.
+    ///
+    /// # Errors
+    /// 400 when `role` is not a known role, `source` is not a known source, `note` is outside 0
+    /// to 127, or `events` is not a list; 404 when `sid` is not an open project or `name` is not a
+    /// track; 409 when the project is open read-only or an analysis or another write runs; any
+    /// error of the re-pick, after which the role fields are put back.
     #[allow(clippy::too_many_arguments)]
     pub fn track_set_role(
         &self,
@@ -647,13 +698,16 @@ impl Service {
             )
         };
         let changed = old.0.as_deref() != Some(role);
-        let source = source.map(str::to_string).unwrap_or_else(|| {
-            if changed {
-                "user".into()
-            } else {
-                old.2.clone().unwrap_or_else(|| "user".into())
-            }
-        });
+        let source = source.map_or_else(
+            || {
+                if changed {
+                    "user".into()
+                } else {
+                    old.2.clone().unwrap_or_else(|| "user".into())
+                }
+            },
+            str::to_string,
+        );
         let skip = changed && events.is_none() && self.repick_skip(&op, name)?;
         // the role fields and the hits go in as one command: the undo's `events` are stored
         // first (a non-list refuses with 400 before the role goes in), and a failing re-pick
@@ -743,6 +797,12 @@ impl Service {
     /// copy job of the project runs. Answers `{sid, removed, unfollowed, order, tracks}` (`order` and `tracks` as
     /// `tracks_get` has them for the tracks that are left); with `snapshot` also `snapshot`: one `{name, index,
     /// order_index, track, followers}` per removed track, the input of [`Service::tracks_restore`].
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project or a name is not a track; 409 when the project is
+    /// open read-only or an analysis, lane build or copy job runs; 400 when `names` is empty;
+    /// 500 when an `Analysis/<name>/` folder cannot be deleted or a track record cannot be
+    /// serialized.
     pub fn tracks_remove(&self, sid: &str, names: &[String], snapshot: bool) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let mut want: Vec<String> = Vec::new();
@@ -834,6 +894,11 @@ impl Service {
     /// the sources and build the peak caches that the removal deleted. 400 for a snapshot that is no list or holds a bad
     /// record, 409 when a track of that name exists. The activations and Learn scores of the deleted folders come back with
     /// the next analysis. Marks the project dirty. Answers `{restored, order}`.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project; 409 when the project is open read-only or a track of
+    /// that name exists; 400 when `tracks` is not a list, a row has no valid `name`, or a track
+    /// record cannot be parsed.
     pub fn tracks_restore(&self, sid: &str, tracks: &Value) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let list = tracks
@@ -933,6 +998,19 @@ pub fn dispatch(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value
                 svc.tracks_add(
                     arg_str(args, "sid")?,
                     &string_list(args, "paths")?,
+                    args.get("tracks")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .map(|v| {
+                                    v.as_str()
+                                        .map(str::to_string)
+                                        .ok_or_else(|| AppError::bad("`tracks` must hold strings"))
+                                })
+                                .collect::<Result<Vec<_>, _>>()
+                        })
+                        .transpose()?
+                        .as_deref(),
                     &str_list(args.get("roles")),
                     &str_list(args.get("notes")),
                     args.get("copy").and_then(Value::as_bool).unwrap_or(false),

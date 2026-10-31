@@ -48,7 +48,7 @@ fn collector() -> (Progress, Log) {
     let l = log.clone();
     let p: Progress = Arc::new(move |v: Value| {
         if v.get("meters").is_none() {
-            l.lock().unwrap().push(v)
+            l.lock().unwrap().push(v);
         }
     });
     (p, log)
@@ -169,7 +169,7 @@ fn transport_play_starts_the_clock_and_sends_the_playhead_on_changes_and_at_4_hz
     let seek_t = msgs[n0..].iter().find(|m| m["epoch"].as_u64() == Some(e)).unwrap()["t_ns"]
         .as_u64()
         .unwrap();
-    let prev_t = msgs[..n0].last().map(|m| m["t_ns"].as_u64().unwrap()).unwrap_or(seek_t);
+    let prev_t = msgs[..n0].last().map_or(seek_t, |m| m["t_ns"].as_u64().unwrap());
     let gap_ms = seek_t.saturating_sub(prev_t) / 1_000_000;
     if look < 0.060 {
         assert!(
@@ -185,7 +185,7 @@ fn transport_play_starts_the_clock_and_sends_the_playhead_on_changes_and_at_4_hz
             look * 1000.0
         );
     }
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -239,7 +239,7 @@ fn transport_seek_sends_no_message_with_the_new_epoch_and_the_old_position() {
         answers.push((r["epoch"].as_u64().unwrap(), target));
         ms(30 + (k as u64 % 3) * 7);
     }
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     let msgs = log.lock().unwrap().clone();
     let near = |pos: f64, t: f64| (t - 0.01..t + 0.3).contains(&pos);
     let mut checked = 0;
@@ -293,7 +293,7 @@ fn transport_seek_stress_every_message_of_a_seek_epoch_shows_that_seek() {
     // The page routes meter messages (`meters`, no epoch) away before it reads the playhead.
     let p: Progress = Arc::new(move |v: Value| {
         if v.get("meters").is_none() {
-            l.lock().unwrap().push(SeekEv::Msg(v))
+            l.lock().unwrap().push(SeekEv::Msg(v));
         }
     });
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -303,7 +303,7 @@ fn transport_seek_stress_every_message_of_a_seek_epoch_shows_that_seek() {
             std::thread::spawn(move || {
                 let mut x = 0u64;
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    x = std::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1));
+                    x = std::hint::black_box(x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1));
                 }
             })
         })
@@ -326,7 +326,7 @@ fn transport_seek_stress_every_message_of_a_seek_epoch_shows_that_seek() {
         // gaps of 5 to 41 ms: some seeks come before the refill ends, some after
         ms(5 + (k as u64 * 7) % 37);
     }
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     for b in busy {
         b.join().unwrap();
@@ -381,7 +381,7 @@ fn transport_seek_stress_every_message_of_a_seek_epoch_shows_that_seek() {
     // as the page sees it
     let (mut seeking, mut min_epoch, mut last) = (false, 0u64, 0.2f64);
     let (mut accepted, mut jumps) = (0, 0);
-    for e in log.iter() {
+    for e in &log {
         match e {
             SeekEv::Ask => seeking = true,
             SeekEv::Answer(a, t) => {
@@ -435,7 +435,7 @@ fn transport_seek_moves_the_playhead_while_playing_and_while_paused() {
     let s2 = svc.transport_seek(0.25).unwrap();
     assert!(s2["epoch"].as_u64().unwrap() > e1, "every seek has a new epoch");
     // paused seek: the position moves, the transport stays paused
-    svc.transport_stop(false);
+    let _ = svc.transport_stop(false);
     let s3 = svc.transport_seek(1.0).unwrap();
     assert_eq!(s3["frame"], 48_000);
     wait_for("the paused seek", 2.0, || {
@@ -448,7 +448,7 @@ fn transport_seek_moves_the_playhead_while_playing_and_while_paused() {
     // bad arguments
     assert_eq!(svc.transport_seek(-1.0).unwrap_err().code, 400);
     assert_eq!(svc.transport_seek(f64::NAN).unwrap_err().code, 400);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -526,7 +526,7 @@ fn transport_mix_mutes_and_solos_by_name_and_reports_the_latency() {
         json!(["Kick_In", "Snare_Top", "Tom_1"])
     );
     assert_eq!(svc.transport_mix(&json!([1]), &Value::Null).unwrap_err().code, 400);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -566,9 +566,10 @@ fn transport_clicks_apply_to_the_open_transport_and_to_the_next_open() {
     }
     // many quick changes do not fail (the update queue drains once per block)
     for i in 0..20 {
-        svc.transport_clicks(None, Some(0.1 + 0.01 * i as f64), None).unwrap();
+        svc.transport_clicks(None, Some(0.1 + 0.01 * f64::from(i)), None)
+            .unwrap();
     }
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -578,12 +579,12 @@ fn transport_play_uses_the_events_of_the_call_for_the_clicks() {
     // nothing analysed yet: the project holds no events
     svc.transport_play(&sid, Some(0.0), None, None).unwrap();
     assert_eq!(svc.transport_status()["hits"], 0);
-    svc.transport_stop(false);
+    let _ = svc.transport_stop(false);
     // events as numbers and as objects; the same sample twice counts once
     let ev = json!({"Kick_In": [0.5, 1.0, 1.0, 2.0], "Snare_Top": [{"t": 0.75, "v": 90}, {"t": 1.5}]});
     svc.transport_play(&sid, Some(0.0), Some(&ev), None).unwrap();
     assert_eq!(svc.transport_status()["hits"], 5);
-    svc.transport_stop(false);
+    let _ = svc.transport_stop(false);
     // the project's own events count when the call has none
     svc.events_set(&sid, "Kick_In", &json!([{"t": 0.25, "v": 100}, {"t": 0.5, "v": 90}]))
         .unwrap();
@@ -592,7 +593,7 @@ fn transport_play_uses_the_events_of_the_call_for_the_clicks() {
     // a bad position is a 400
     assert_eq!(svc.transport_play(&sid, Some(-1.0), None, None).unwrap_err().code, 400);
     assert_eq!(svc.transport_play("nope", None, None, None).unwrap_err().code, 404);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -606,7 +607,7 @@ fn transport_status_of_a_closed_transport_has_the_host_fields_only() {
     assert_eq!(st["lost"], Value::Null);
     assert!(st.get("frame").is_none());
     assert_eq!(st["clicks"]["enabled"], true);
-    assert_eq!(st["clicks"]["volume"], 0.22f32 as f64);
+    assert_eq!(st["clicks"]["volume"], f64::from(0.22f32));
 }
 
 #[test]
@@ -615,7 +616,7 @@ fn transport_play_skips_offline_tracks_and_refuses_a_project_without_audio() {
     std::fs::remove_file(root.join("daw/Snare_Top.wav")).unwrap();
     let r = svc.transport_play(&sid, Some(0.0), None, None).unwrap();
     assert_eq!(r["tracks"], 1, "the offline track is left out");
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_file(root.join("daw/Kick_In.wav")).unwrap();
     let e = svc.transport_play(&sid, None, None, None).unwrap_err();
     assert_eq!(e.code, 409);
@@ -628,7 +629,7 @@ fn transport_play_opens_again_when_the_tracks_change() {
     let (svc, sid, root) = opened("tp_reopen_tracks", &["Kick_In", "Snare_Top"]);
     svc.transport_play(&sid, Some(0.0), None, None).unwrap();
     assert_eq!(svc.transport_status()["tracks"], 2);
-    svc.transport_stop(false);
+    let _ = svc.transport_stop(false);
     std::fs::remove_file(root.join("daw/Snare_Top.wav")).unwrap();
     let r = svc.transport_play(&sid, Some(0.0), None, None).unwrap();
     assert_eq!(r["tracks"], 1, "a changed track list opens the transport again");
@@ -701,7 +702,7 @@ fn transport_play_follows_a_change_of_the_output_device() {
     let last = log.lock().unwrap().last().unwrap().clone();
     assert_eq!(last["rate"], 44_100);
     assert_eq!(last["reopens"], 1);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -745,7 +746,7 @@ fn transport_play_reports_a_lost_device_and_recovers() {
     assert_eq!(st["lost"], Value::Null);
     assert_eq!(st["rate"], 44_100);
     assert_eq!(st["requested"], true);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -777,7 +778,7 @@ fn transport_master_gain_zero_keeps_the_output_silent_and_the_mix_running() {
         "pre-gain peak shows that the mix and the clicks ran"
     );
     assert_eq!(st["underruns"], 0);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -793,7 +794,7 @@ fn transport_play_runs_past_the_end_and_plays_again_from_the_start() {
         "the transport keeps its clock after the files end: {st}"
     );
     assert_eq!(st["underruns"], 0, "the end of a file is silence, not an underrun");
-    svc.transport_stop(false);
+    let _ = svc.transport_stop(false);
     let (p, log) = collector();
     let r = svc.transport_play(&sid, Some(0.0), None, Some(p)).unwrap();
     assert_eq!(r["ready"], true, "{r}");
@@ -816,7 +817,7 @@ fn transport_play_runs_past_the_end_and_plays_again_from_the_start() {
         !after.is_empty() && after.iter().all(|p| (2.99..3.6).contains(p)),
         "{after:?}"
     );
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -847,7 +848,7 @@ fn transport_device_plays_silently_on_the_default_output() {
     assert_eq!(st["reopens"], 0, "{st}");
     assert!(st["callbacks"].as_u64().unwrap() > 100, "{st}");
     assert_eq!(st["underruns"], 0);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -901,7 +902,7 @@ fn track_set_mix_keeps_volume_and_pan_in_the_project_and_applies_them_live() {
     assert_eq!(t["dirty"], true);
     assert_eq!(t["tracks"]["Kick_In"]["volume_db"], -120.0);
     assert_eq!(t["tracks"]["Snare_Top"]["pan"], 0.5);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     // errors
     assert_eq!(
         svc.track_set_mix(&sid, "Nope", Some(0.0), None).unwrap_err().code,
@@ -959,7 +960,7 @@ fn transport_play_sends_the_meters_at_about_25_hz_while_playing() {
             while !pstop.load(std::sync::atomic::Ordering::Relaxed) {
                 std::thread::sleep(PLAYHEAD_POLL);
                 // the sender's own push path: sleep, then the log lock (no push here)
-                let _g = plog.lock().unwrap_or_else(|e| e.into_inner());
+                let _g = plog.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 pwakes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         })
@@ -1076,12 +1077,12 @@ fn transport_play_sends_the_meters_at_about_25_hz_while_playing() {
         0.6 * expected
     );
     // no meter messages after the pause
-    svc.transport_stop(false);
+    let _ = svc.transport_stop(false);
     ms(100);
     let n1 = meter_msgs(&log).len();
     ms(300);
     assert_eq!(meter_msgs(&log).len(), n1, "no meters while paused");
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1112,7 +1113,7 @@ fn transport_master_sets_the_master_volume_and_keeps_it_in_the_app_settings() {
     assert!(late.iter().any(|x| x["meters"][0].as_f64().unwrap() > 0.01));
     assert_eq!(svc.transport_master(f64::NAN).unwrap_err().code, 400);
     svc.transport_master(3.0).unwrap();
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     // a new service with the same home reads it back
     let svc2 = service_dsp();
     svc2.set_home(&home);
@@ -1139,7 +1140,7 @@ fn outputs_list_lists_the_devices_the_choice_and_the_current_device() {
     let d = svc.outputs_list();
     assert_eq!(d["current"]["name"], "null");
     assert!(d["current"]["rate"].as_u64().unwrap() > 0);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1173,7 +1174,7 @@ fn output_select_keeps_the_choice_and_falls_back_to_the_system_default_with_a_me
     let st = svc.transport_status();
     assert_eq!(st["reopens"].as_u64().unwrap(), reopens + 1);
     assert_eq!(st["requested"], true);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     assert_eq!(svc.output_select(Some(" ")).unwrap_err().code, 400);
     // a new service reads the choice and gives the message before any play
     svc.output_select(Some("Studio")).unwrap();
@@ -1274,7 +1275,7 @@ fn transport_play_at_half_speed_runs_the_playhead_at_half_the_rate_and_back() {
         .transport_play_at(&sid, Some(0.0), None, None, Some(2.0))
         .unwrap_err();
     assert_eq!(e.code, 400, "{}", e.message);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1299,7 +1300,7 @@ fn transport_play_at_half_speed_keeps_the_speed_after_a_device_change() {
     );
     let half = rate_over(&svc, 600);
     assert!((half - 0.5).abs() < 0.06, "half speed on the new device: {half}");
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1328,7 +1329,7 @@ fn transport_play_half_speed_start_latency_of_both_designs() {
     let r = svc.project_new(Some("Latency"), None, None).unwrap();
     let sid = r["sid"].as_str().unwrap().to_string();
     let add = svc
-        .tracks_add(&sid, &[folder.display().to_string()], &[], &[], false, None)
+        .tracks_add(&sid, &[folder.display().to_string()], None, &[], &[], false, None)
         .unwrap();
     assert_eq!(add["added"].as_array().unwrap().len(), 30, "{add}");
     let st0 = svc.transport_play(&sid, Some(10.0), None, None).unwrap();
@@ -1342,7 +1343,7 @@ fn transport_play_half_speed_start_latency_of_both_designs() {
     );
     assert_eq!(st0["master"], 0.0, "silent");
     ms(500);
-    svc.transport_stop(false);
+    let _ = svc.transport_stop(false);
     let (mut field, mut reopen) = (Vec::new(), Vec::new());
     for k in 0..rounds {
         let pos = 20.0 + 37.0 * k as f64;
@@ -1350,11 +1351,11 @@ fn transport_play_half_speed_start_latency_of_both_designs() {
             // the same start state for both: open, paused after a normal-speed play
             svc.transport_play(&sid, Some(pos - 5.0), None, None).unwrap();
             ms(300);
-            svc.transport_stop(false);
+            let _ = svc.transport_stop(false);
             ms(200);
             let t = Instant::now();
             if design == "reopen" {
-                svc.transport_stop(true);
+                let _ = svc.transport_stop(true);
             }
             let close_ms = t.elapsed().as_secs_f64() * 1e3;
             let r = svc.transport_play_at(&sid, Some(pos), None, None, Some(0.5)).unwrap();
@@ -1377,7 +1378,7 @@ fn transport_play_half_speed_start_latency_of_both_designs() {
                 reopen.push((start, heard.unwrap_or(start)));
             }
             ms(300);
-            svc.transport_stop(false);
+            let _ = svc.transport_stop(false);
         }
     }
     let med = |v: &Vec<(f64, f64)>, i: usize| {
@@ -1399,7 +1400,7 @@ fn transport_play_half_speed_start_latency_of_both_designs() {
         med(&reopen, 1).0,
         med(&reopen, 1).1
     );
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1419,7 +1420,7 @@ fn window(start: f64, end: Option<f64>, looped: bool, tracks: &[&str]) -> Option
         start: Some(start),
         end,
         looped,
-        tracks: tracks.iter().map(|t| t.to_string()).collect(),
+        tracks: tracks.iter().map(std::string::ToString::to_string).collect(),
         shot: None,
     })
 }
@@ -1463,7 +1464,7 @@ fn transport_play_window_plays_one_track_to_its_end_and_leaves_mute_and_solo_alo
     // a play of the page (no window) uses the page's mix as well
     svc.transport_play(&sid, Some(0.0), None, None).unwrap();
     assert_eq!(svc.transport_status()["audible"], json!(["Tom_1"]));
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1477,7 +1478,7 @@ fn transport_play_window_previews_the_layer_one_shot_once() {
     let (svc, sid, root) = opened("tp_shot", &["Kick_In", "Snare_Top"]);
     let f = root.join("shots").join("shot.wav");
     let sr = 48_000u32;
-    let n = (0.2 * sr as f64) as usize;
+    let n = (0.2 * f64::from(sr)) as usize;
     let mut x = vec![0.0f32; n];
     x[480..].fill(0.8); // the attack at 480: the measured onset
     std::fs::create_dir_all(f.parent().unwrap()).unwrap();
@@ -1543,7 +1544,7 @@ fn transport_play_window_previews_the_layer_one_shot_once() {
             .code,
         409
     );
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1584,11 +1585,11 @@ fn transport_play_window_loop_wraps_in_the_engine_without_a_seek_per_pass() {
         seek_tags.iter().all(|t| *t == first),
         "no seek per pass: the seek tag stayed at {first}, saw {seek_tags:?}"
     );
-    svc.transport_stop(false);
+    let _ = svc.transport_stop(false);
     let st = svc.transport_status();
     assert_eq!(st["audition"], Value::Null);
     assert_eq!(st["audible"], json!(["Kick_In", "Snare_Top"]));
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1616,7 +1617,7 @@ fn a_plain_play_without_a_position_ends_an_armed_loop() {
     let pos = st["pos"].as_f64().unwrap();
     assert!(pos > 0.65, "the play ran past the old region end (no wrap): {pos}");
     assert_eq!(st["audition"], Value::Null);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1648,7 +1649,7 @@ fn transport_play_window_with_loop_repeats_until_stop_and_a_stop_gives_the_mix_b
         ms(5);
     }
     assert!(jumps >= 2, "{jumps} jumps back to the start in 1.2 s");
-    svc.transport_stop(false);
+    let _ = svc.transport_stop(false);
     let st = svc.transport_status();
     assert_eq!(st["audition"], Value::Null);
     assert_eq!(st["audible"], json!(["Kick_In", "Snare_Top"]));
@@ -1656,7 +1657,7 @@ fn transport_play_window_with_loop_repeats_until_stop_and_a_stop_gives_the_mix_b
     let p0 = svc.transport_status()["pos"].as_f64().unwrap();
     ms(300);
     assert_eq!(svc.transport_status()["pos"].as_f64().unwrap(), p0);
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1729,7 +1730,7 @@ fn transport_play_window_without_progress_sends_nothing_and_a_new_play_replaces_
         "the first audition's end did not stop the second"
     );
     assert_eq!(st["audible"], json!(["Snare_Top"]));
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1754,7 +1755,7 @@ fn transport_play_window_at_half_speed_ends_at_the_window_end_in_session_time() 
     // (P4-40d-t). Allowed: up to 0.05 s of session (0.1 s of wall) below the end.
     assert!((0.7 - 0.05..0.8).contains(&pos), "{pos}");
     assert!(took > 0.35, "0.2 s of session at half speed takes 0.4 s, took {took}");
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
 }
 
