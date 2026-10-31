@@ -191,7 +191,7 @@
         need(differ.length === 0, `${preset}: the live menu and the table differ: ${differ.join("; ")}`);
         need(rep.items.every(i => i.in_menu), `${preset}: items missing in the live menu`);
         const withAccel = rep.items.filter(i => i.accel).length;
-        need(withAccel === DSKeys.menuKeys(preset).length && withAccel === (preset === "default" ? 33 : 28), `${preset}: ${withAccel} accelerators, table ${DSKeys.menuKeys(preset).length}`);   // P3-19
+        need(withAccel === DSKeys.menuKeys(preset).length, `${preset}: ${withAccel} accelerators, table ${DSKeys.menuKeys(preset).length}`);   // P3-19, #195: derived from the key table like menu_table (was a stale hard-coded 33/28)
         return { rep, byId, withAccel };
       };
       // P4-26: the step never SAVES a preset (setKeyPreset(name, false)): a failed check used to leave "cubase" in the settings.json
