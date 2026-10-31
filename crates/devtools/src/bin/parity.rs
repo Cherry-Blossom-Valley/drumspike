@@ -31,9 +31,9 @@
 //!
 //! MIDI job (P1-5, `check_midi.py`): `{"events": [{"t": s, "v": int}], "note": 36, "ppq":
 //! 24000, "tempo": 120.0}` (`v` defaults to 100 like `engine.export_midi`); writes the file
-//! and prints `{"notes": [{"tick", "note", "velocity", "duration"}]}`. Spike job: `{"source`:
-//! wav, "times": [s, ...], "format": "pcm16"|"pcm24"|"float32"}`; writes the spike file at the
-//! source's rate and length with its `bext` and prints `{"sr", "n_samples", "time_reference"}`.
+//! and prints `{"notes": [{"tick", "note", "velocity", "duration"}]}`. Spike job:
+//! `{"source": wav, "times": [s, ...], "format": "pcm16"|"pcm24"|"float32"}`; writes the spike file
+//! at the source's rate and length with its `bext` and prints `{"sr", "n_samples", "time_reference"}`.
 //!
 //! ```text
 //! parity resample <in.wav> <out.wav> [--mix ffmpeg|average] [--mono-out mono.wav]
@@ -70,7 +70,7 @@
 //! field of the role's `OnsetParams` for tuning (every field by its name; `gate_db` and
 //! `sim_min` also take `none`, `shape` takes `flux` or `spectrum`). `detect` is the whole
 //! `detect_onsets_with` call; `resample` and `spectrogram` time those two stages again
-//! separately for the breakdown. `--odf-out <file>` also writes the SuperFlux onset function as
+//! separately for the breakdown. `--odf-out <file>` also writes the `SuperFlux` onset function as
 //! raw little-endian f32 (one value per frame). Prints a one-line summary.
 //!
 //! ```text
@@ -581,7 +581,7 @@ fn run_features(args: &[String]) -> Result<(), String> {
         "sr": sr,
         "n_samples": x.len(),
         "frames": frames,
-        "min_s": seconds.iter().cloned().fold(f64::INFINITY, f64::min),
+        "min_s": seconds.iter().copied().fold(f64::INFINITY, f64::min),
         "seconds": seconds,
     });
     println!("{doc}");

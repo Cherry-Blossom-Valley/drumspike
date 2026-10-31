@@ -312,7 +312,7 @@ fn the_key_table_parses_and_no_key_is_in_two_commands() {
 
 /// #207, owner rule of 2026-10-21: no key of the table is a macOS standard shortcut, in either preset, not
 /// even as an extra key. The list holds the gate's shortcuts: Spotlight (Cmd+Space), the input source
-/// (Control+Space), Mission Control (Control+arrows), app switching (Cmd+Tab, Cmd+`), the screenshots
+/// (Control+Space), Mission Control (Control+arrows), app switching (Cmd+Tab, Cmd+Backtick), the screenshots
 /// (Shift+Cmd+3/4/5), hide and minimize (Cmd+H, Cmd+M) and Force Quit (Cmd+Option+Escape). Cmd+Q and Cmd+,
 /// are the macOS standard Quit and Settings commands of the app itself and stay on them.
 #[test]

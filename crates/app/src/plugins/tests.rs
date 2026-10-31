@@ -38,7 +38,7 @@ fn make_plugin(dir: &Path, id: &str, extra: Value) -> PathBuf {
 }
 
 /// Tests run in parallel and share the process env: the lock keeps one test's
-/// DETECTORS_DIR from being removed while another test scans its folder.
+/// `DETECTORS_DIR` from being removed while another test scans its folder.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn with_dir(dir: &Path, f: impl FnOnce()) {

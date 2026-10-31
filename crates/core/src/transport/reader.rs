@@ -598,7 +598,7 @@ impl Reader {
         wrote
     }
 
-    /// Run until `shared.stop` is set (the reader thread's body). The thread runs at QoS
+    /// Run until `shared.stop` is set (the reader thread's body). The thread runs at `QoS`
     /// user-interactive. When no ring needs data it parks for [`IDLE_SLEEP`], during a seek
     /// handshake for [`SEEK_SLEEP`]; `Transport::seek` and the drop of the transport unpark it.
     pub(crate) fn run(mut self) {
@@ -611,7 +611,7 @@ impl Reader {
     }
 }
 
-/// Ask the system to run the calling thread at QoS user-interactive (the reader thread,
+/// Ask the system to run the calling thread at `QoS` user-interactive (the reader thread,
 /// P3-15a); macOS then keeps it on a performance core under load. Returns whether the call
 /// succeeded (always false outside macOS).
 pub fn set_reader_qos() -> bool {

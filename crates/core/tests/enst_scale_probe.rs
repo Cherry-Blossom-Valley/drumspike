@@ -51,7 +51,7 @@ fn enst_scale_per_role() -> Result<(), DetectError> {
             let mut n = 0;
             for entry in dir.read_dir().into_iter().flatten().flatten() {
                 let wav = entry.path();
-                if wav.extension().map(|e| e != "wav").unwrap_or(true) || n >= 8 {
+                if wav.extension().is_none_or(|e| e != "wav") || n >= 8 {
                     continue;
                 }
                 let name = wav.file_name().unwrap().to_string_lossy();

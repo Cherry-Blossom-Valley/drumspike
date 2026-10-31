@@ -431,13 +431,12 @@ pub fn check_dest(dest: &str) -> Result<PathBuf, AppError> {
 /// P4-30: the folder an export writes to: `dest` when given (checked by [`check_dest`]), else `Exports/` of the
 /// project (made when it is missing).
 pub fn export_dir(g: &OpenProject, dest: Option<&str>) -> Result<PathBuf, AppError> {
-    match dest {
-        Some(d) => check_dest(d),
-        None => {
-            let dir = g.project.subdir(EXPORTS_DIR);
-            std::fs::create_dir_all(&dir).map_err(|e| AppError::internal(format!("{}: {e}", dir.display())))?;
-            Ok(dir)
-        }
+    if let Some(d) = dest {
+        check_dest(d)
+    } else {
+        let dir = g.project.subdir(EXPORTS_DIR);
+        std::fs::create_dir_all(&dir).map_err(|e| AppError::internal(format!("{}: {e}", dir.display())))?;
+        Ok(dir)
     }
 }
 

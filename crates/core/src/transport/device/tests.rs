@@ -195,8 +195,7 @@ fn rss_mb() -> f64 {
         .output();
     out.ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<f64>().ok())
-        .map(|kb| kb / 1024.0)
-        .unwrap_or(f64::NAN)
+        .map_or(f64::NAN, |kb| kb / 1024.0)
 }
 
 /// P3-5a device test (arm64-mac): `DRUMSPIKE_SESSION=<folder of make_session.py>`, optional

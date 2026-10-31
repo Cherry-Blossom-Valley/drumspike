@@ -169,7 +169,7 @@ fn transport_play_starts_the_clock_and_sends_the_playhead_on_changes_and_at_4_hz
     let seek_t = msgs[n0..].iter().find(|m| m["epoch"].as_u64() == Some(e)).unwrap()["t_ns"]
         .as_u64()
         .unwrap();
-    let prev_t = msgs[..n0].last().map(|m| m["t_ns"].as_u64().unwrap()).unwrap_or(seek_t);
+    let prev_t = msgs[..n0].last().map_or(seek_t, |m| m["t_ns"].as_u64().unwrap());
     let gap_ms = seek_t.saturating_sub(prev_t) / 1_000_000;
     if look < 0.060 {
         assert!(

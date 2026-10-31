@@ -83,8 +83,8 @@ fn note_events_carry_tick_note_velocity_and_duration() {
     ));
 }
 
-/// The bytes engine.export_midi wrote for [{"t": 0.5, "v": 90}, {"t": 0.52}, {"t": 0.0, "v": 1}],
-/// note 36 (pretty_midi 0.2.11, mido 1.3.3), captured while building this module.
+/// The bytes `engine.export_midi` wrote for [{"t": 0.5, "v": 90}, {"t": 0.52}, {"t": 0.0, "v": 1}],
+/// note 36 (`pretty_midi` 0.2.11, mido 1.3.3), captured while building this module.
 const PYTHON_FILE: &str = "4d54686400000006000100025dc04d54726b0000001300ff510307a12000ff58040402180801ff2f00\
 4d54726b0000002a00ff03067370696b657300c900009924019260240081a860245a874024648b2024008740240001ff2f00";
 
@@ -107,7 +107,7 @@ fn bytes_match_the_python_export() {
     assert_eq!(b, unhex(PYTHON_FILE));
 }
 
-/// engine.export_midi for [{"t": 0.5, "v": 90}, {"t": 123456.123456789, "v": 50}, {"t": 0.52}],
+/// `engine.export_midi` for [{"t": 0.5, "v": 90}, {"t": 123456.123456789, "v": 50}, {"t": 0.52}],
 /// note 36: the gap to the late hit is a 5-byte quantity (mido 1.3.3), captured for S2-1.
 const PYTHON_LONG_GAP: &str = "4d54686400000006000100025dc04d54726b0000001300ff510307a12000ff58040402180801ff2f00\
 4d54726b0000002e00ff03067370696b657300c90081bb4099245a874024648b202400874024009689d6984624329260240001ff2f00";

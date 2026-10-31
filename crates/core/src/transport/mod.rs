@@ -76,7 +76,7 @@ pub enum TransportError {
     Device(String),
     /// A bad argument (no tracks, a list of the wrong length, a bad track index).
     Arg(String),
-    /// P3-16: the output device does not answer (CoreAudio blocks); see [`device::OPEN_LIMIT`].
+    /// P3-16: the output device does not answer (`CoreAudio` blocks); see [`device::OPEN_LIMIT`].
     NoAnswer(String),
 }
 

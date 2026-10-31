@@ -536,7 +536,7 @@ pub fn has_menu_modifier(key: &str) -> bool {
 }
 
 /// A key of the table in the Tauri accelerator notation: `Shift+Cmd+S` is `CmdOrCtrl+Shift+S`, `Option+Return` is
-/// `Alt+Enter` (modifier order Ctrl, CmdOrCtrl, Alt, Shift, as the menu had them in P3-13a). `None` when the key is
+/// `Alt+Enter` (modifier order Ctrl, `CmdOrCtrl`, Alt, Shift, as the menu had them in P3-13a). `None` when the key is
 /// not in the table's notation.
 pub fn tauri_accel(key: &str) -> Option<String> {
     let (mods, k) = parse_key(key)?;
@@ -1402,7 +1402,7 @@ pub fn sync_zoom_own<R: Runtime>(app: &AppHandle<R>, names: &[String]) -> tauri:
 }
 
 /// What the live menu holds, for the self-test (debug builds): one row per custom item with its label,
-/// shortcut, kind, enabled and checked state as the NSMenu has them, the menu titles, the entries of Open
+/// shortcut, kind, enabled and checked state as the `NSMenu` has them, the menu titles, the entries of Open
 /// Recent, and the entries of the Window menu.
 pub fn report<R: Runtime>(app: &AppHandle<R>) -> Value {
     let Some(menu) = app.menu() else {
