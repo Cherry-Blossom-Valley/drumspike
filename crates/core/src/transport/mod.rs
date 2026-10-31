@@ -801,7 +801,7 @@ impl Transport {
     ///
     /// [`TransportError::Arg`] when `tracks` is empty or the ring and prefill sizes of `cfg`
     /// are too small; [`TransportError::NoAnswer`] when the output device is still blocked in
-    /// CoreAudio from an earlier open; [`TransportError::Track`] when a track cannot be opened
+    /// `CoreAudio` from an earlier open; [`TransportError::Track`] when a track cannot be opened
     /// or has a zero sample rate; [`TransportError::Device`] when the device cannot be found
     /// or queried, the reader thread or the stream cannot start, or the device rate changes
     /// while opening.
