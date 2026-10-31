@@ -22,7 +22,11 @@ body {
 #topbar {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
   background: var(--panel); border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;   /* #250: below the toolbar's natural width the rows wrap instead of the right side being cut off */
 }
+/* #250: a toolbar control never shrinks under its natural width (the icon buttons keep their
+   size, the timebox, the nudge select and the Master group move whole to the next row) */
+#topbar > * { flex: none; }
 .logo { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 4px; }
 .brandIcon { width: 30px; height: 30px; flex: none; display: block; margin: -3px 0; }   /* P4-28: the SVG has about 10 % padding; the negative margin keeps the top bar height */
 .spacer { flex: 1; }
