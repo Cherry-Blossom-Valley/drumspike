@@ -138,7 +138,10 @@
       const titles = ["Drum Spike", "File", "Edit", "View", "Transport", "Hits", "Track", "Window", "Help"];
       need(rep.menus.join() === titles.join(), `menus: ${rep.menus.join(", ")}`);
       const checks = rep.items.filter(i => i.kind === "check").map(i => i.id);
-      need(checks.join() === "nudge_val_1smp,nudge_val_10smp,nudge_val_100smp,nudge_val_1ms,nudge_val_10ms,height_small,height_medium,height_large,inspector,info_line,overview,counter_seconds,counter_samples,ruler_tempo,ruler_meter,ruler_beats,grid,follow_smooth,follow_page,follow_off,suspend_follow,click,snap,learn_filter", `check items: ${checks}`);   // P4-wf10: Suspend Follow when Editing
+      // #195: list updated to the menu of main 04ccb96; new check items named in the comment:
+      // #149 counter Bars|Beats and Timecode, #175 Tab Moves To (radio), the markers ruler,
+      // #208/#157 Velocity Lane and Other Mics Under Hit, #436 Stop Returns to Start
+      need(checks.join() === "nudge_val_1smp,nudge_val_10smp,nudge_val_100smp,nudge_val_1ms,nudge_val_10ms,height_small,height_medium,height_large,inspector,info_line,overview,counter_seconds,counter_samples,counter_barsbeats,counter_timecode,tab_active,tab_all,ruler_tempo,ruler_meter,ruler_beats,ruler_markers,grid,velocity_lane,other_mics,stop_return_mode,follow_smooth,follow_page,follow_off,suspend_follow,click,snap,learn_filter", `check items: ${checks}`);   // P4-wf10: Suspend Follow when Editing
       // no project is open: only the items that need none are enabled, and none of the later-card items
       const hasRecent = rep.recent.some(r => /^recent:\d+$/.test(r));   // P3-19: Open Most Recent follows the Open Recent list
       const wrong = rep.items.filter(i => i.enabled !== (i.id === "open_recent" ? hasRecent : i.ready && !i.needs_project)).map(i => `${i.id}=${i.enabled}`);
