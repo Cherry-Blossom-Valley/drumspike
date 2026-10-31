@@ -46,7 +46,7 @@ pub struct WavSpec {
     pub channels: u16,
     /// Sample encoding.
     pub format: WavFormat,
-    /// Write a WAVE_FORMAT_EXTENSIBLE header (what DAWs write for more than two channels).
+    /// Write a `WAVE_FORMAT_EXTENSIBLE` header (what DAWs write for more than two channels).
     pub extensible: bool,
     /// Channel mask for the extensible header (0 = unspecified).
     pub channel_mask: u32,

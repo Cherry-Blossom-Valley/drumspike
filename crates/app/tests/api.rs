@@ -44,7 +44,7 @@ fn handler_lists(lib: &str) -> (BTreeSet<String>, BTreeSet<String>) {
     if b.len() >= a.len() { (a, b) } else { (b, a) }
 }
 
-/// A wrapper: its parameters (name, type text) and whether the attribute renames to snake_case.
+/// A wrapper: its parameters (name, type text) and whether the attribute renames to `snake_case`.
 struct Wrapper {
     params: Vec<(String, String)>,
     snake: bool,

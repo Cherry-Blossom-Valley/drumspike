@@ -74,7 +74,7 @@
 //!
 //! # Rule version 5: the guarded shared kick source (#362)
 //!
-//! On ENST drummer_3 the floor tom (`tom_3`) sits next to the kick: the kick and the floor tom hear each other
+//! On ENST `drummer_3` the floor tom (`tom_3`) sits next to the kick: the kick and the floor tom hear each other
 //! about as loud, so `G(kick->tom_3) + G(tom_3->kick)` lies above [`TomBleedParams::shared_sum_db`] and version 2
 //! rejects the kick source as a shared pair - the kick bleed on the floor tom stays in the output (0.264 F1, 1682
 //! kick false positives; `docs/migration/reports/release-0.9.2-enst.md`). Version 5 keeps a kick source whose gain
@@ -83,7 +83,7 @@
 //! reaches: measured p50 4.8 dB, real strokes p5 24 dB) and the hit has no own 2 kHz attack on the tom mic (the
 //! high-band part of [`stroke_rise_db`] under [`TomBleedParams::kick_shared_rise_db`], 15.0 dB: a real stroke's
 //! stick click, which a kick bleed leaves on the tom mic about as often as not - the full-band rise does not
-//! separate, the kick's own transient is an attack). Measured on the 68 drummer_3 items: about 1140 kick false
+//! separate, the kick's own transient is an attack). Measured on the 68 `drummer_3` items: about 1140 kick false
 //! positives marked, 1 real stroke lost. The marks are in [`TomBleed::shared_kick_bleed`] and, when rule CD is on,
 //! also in [`TomBleed::bleed`]; when rule CD is off for fewer than two played tom close mics they stay in
 //! [`TomBleed::shared_kick_bleed`] alone (the caller applies them there; never for a mic edited to digital
@@ -120,13 +120,13 @@ pub const PAIR_KEEP_RISE_DB: f64 = 10.0;
 pub const PAIR_HP_HZ: f64 = 2000.0;
 
 /// Version 5: the kick excess under which a hit is marked by the guarded shared kick source (dB, #362). Higher than
-/// the unguarded [`TomBleedParams::kick_threshold_db`] (4.0): on ENST drummer_3 the kick bleed on the floor tom lies
+/// the unguarded [`TomBleedParams::kick_threshold_db`] (4.0): on ENST `drummer_3` the kick bleed on the floor tom lies
 /// at p50 4.8, p95 9.7 dB, the real strokes at p5 24 dB, so 8.0 catches most of the bleed; the rise guard keeps the
 /// real strokes (1 of 371 lost at this value, 15 without it).
 pub const KICK_SHARED_THRESHOLD_DB: f64 = 8.0;
 
 /// Version 5: a hit the guarded shared kick source would mark stays a hit when its own 2 kHz attack rise (the
-/// high-band part of [`stroke_rise_db`]) is this many dB or more (dB, #362). On ENST drummer_3 the kick-only bleed
+/// high-band part of [`stroke_rise_db`]) is this many dB or more (dB, #362). On ENST `drummer_3` the kick-only bleed
 /// sits at p50 13.1, the real strokes (with or without the kick) at p50 30 or more; 15.0 keeps all but 1 of the
 /// real strokes while the unguarded rule loses 15.
 pub const KICK_SHARED_RISE_DB: f64 = 15.0;

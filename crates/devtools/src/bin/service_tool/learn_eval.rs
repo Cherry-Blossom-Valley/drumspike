@@ -402,8 +402,8 @@ fn flux_shape_probe(spec: &[f32], i: usize, bands: &std::ops::Range<usize>) -> V
 
 /// Package 3b's false-side probe (#98), per mic of one kit, one decode and spectrogram per mic:
 /// the raw candidates (frame, time, `rel_db`, `similarity`), the spectral flux shapes over the
-/// target role's band range for the template members (rel_db within the role's `template_db`) and
-/// the target's deep candidates (the rescue-worthy keeps: similarity >= 0.85, -45 <= rel_db < -6),
+/// target role's band range for the template members (`rel_db` within the role's `template_db`) and
+/// the target's deep candidates (the rescue-worthy keeps: similarity >= 0.85, -45 <= `rel_db` < -6),
 /// the events at the working Sensitivity 50, and the A6 band level at every candidate and event
 /// time. Read-only on the shipped detection: no detector change.
 fn xprobe(job: &Value) -> Result<Value, String> {

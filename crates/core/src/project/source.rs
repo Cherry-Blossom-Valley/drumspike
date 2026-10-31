@@ -40,7 +40,7 @@ impl SourceStatus {
 
 fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
     let mut f = File::open(path)?;
-    let mut buf = Vec::with_capacity(HEAD_BYTES.min(f.metadata().map(|m| m.len() as usize).unwrap_or(HEAD_BYTES)));
+    let mut buf = Vec::with_capacity(HEAD_BYTES.min(f.metadata().map_or(HEAD_BYTES, |m| m.len() as usize)));
     f.by_ref().take(HEAD_BYTES as u64).read_to_end(&mut buf)?;
     Ok(buf)
 }
@@ -286,9 +286,8 @@ pub fn source_candidates(record: &Source, project_dir: &Path) -> Vec<PathBuf> {
 /// `project.resolve_source`: the first candidate with matching size and head hash
 /// (`Ok`), else the first existing candidate (`Changed`), else `(None, Missing)`.
 pub fn resolve_source(record: Option<&Source>, project_dir: &Path) -> (Option<PathBuf>, SourceStatus) {
-    let record = match record {
-        Some(r) => r,
-        None => return (None, SourceStatus::Missing),
+    let Some(record) = record else {
+        return (None, SourceStatus::Missing);
     };
     let mut existing = None;
     for c in source_candidates(record, project_dir) {
@@ -472,7 +471,7 @@ fn copy_file_into_project(
             created: None,
         }));
     }
-    let base = name.map(str::to_string).unwrap_or_else(|| basename(src).to_string());
+    let base = name.map_or_else(|| basename(src).to_string(), str::to_string);
     let (stem, ext) = splitext(&base);
     let mut cand = base.clone();
     let mut k = 1;
@@ -499,8 +498,8 @@ fn copy_file_into_project(
             e,
         ));
     }
-    let src_len = std::fs::metadata(src).map(|m| m.len()).unwrap_or(u64::MAX);
-    let tmp_len = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+    let src_len = std::fs::metadata(src).map_or(u64::MAX, |m| m.len());
+    let tmp_len = std::fs::metadata(&tmp).map_or(0, |m| m.len());
     if tmp_len != src_len {
         let _ = std::fs::remove_file(&tmp);
         return Err(ProjectError::Invalid(format!(
@@ -548,10 +547,7 @@ pub fn consolidate(project: &mut Project) -> Result<Vec<String>, ProjectError> {
     let mut changed = Vec::new();
     if let Some(tracks) = project.doc.tracks.as_mut() {
         for (name, tr) in tracks.iter_mut() {
-            let referenced = tr
-                .source_ref()
-                .map(|r| r.mode.as_deref() == Some("referenced"))
-                .unwrap_or(false);
+            let referenced = tr.source_ref().is_some_and(|r| r.mode.as_deref() == Some("referenced"));
             if referenced {
                 let rec = copy_into_project(tr.source_ref().expect("checked"), &dir, None)?;
                 tr.source = Some(Some(rec));
@@ -891,9 +887,8 @@ impl CacheKey {
     /// Panics through `expect("a key serialises")` if the key cannot be turned into a JSON
     /// value, which three optional scalars never fail to do.
     pub fn matches_file(&self, analysis_dir: &Path) -> bool {
-        let text = match std::fs::read_to_string(analysis_dir.join("key.json")) {
-            Ok(t) => t,
-            Err(_) => return false,
+        let Ok(text) = std::fs::read_to_string(analysis_dir.join("key.json")) else {
+            return false;
         };
         match serde_json::from_str::<serde_json::Value>(&text) {
             Ok(v) => v == serde_json::to_value(self).expect("a key serialises"),

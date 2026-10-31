@@ -2,7 +2,7 @@
 //!
 //! This module
 //! still gives a hit list for a close-mic drum track. It is a SuperFlux-style detector
-//! (Boeck and Widmer, DAFx 2013) on the log-filtered spectrogram of P2-2, with peak picking
+//! (Boeck and Widmer, `DAFx` 2013) on the log-filtered spectrogram of P2-2, with peak picking
 //! on one adaptive threshold, gates against bleed and the phase 1 minimum gap. The
 //! parameters per role are in [`OnsetParams::for_role`]; the report
 //! `docs/archive/phase2-report.md` (section P2-5) has the measurements behind them.
@@ -15,7 +15,7 @@
 //!    each side, `1 + len / 441` frames at 100 fps, `np.hanning(2048)`, `|X|[:1024]`, the
 //!    fmin-anchored 12-band triangular filterbank, `log10(1 + x)` in `f32`). The bands of a
 //!    role are selected on the CLI grid's centre frequencies.
-//! 3. SuperFlux: `flux[i] = sum_b max(0, S[i, b] - maxfilt3(S[i - 1])[b])` over the role's
+//! 3. `SuperFlux`: `flux[i] = sum_b max(0, S[i, b] - maxfilt3(S[i - 1])[b])` over the role's
 //!    bands, with a 3-band maximum filter along frequency on the previous frame (1-frame
 //!    lag). The frame before frame 0 is silence (the framing already pads with zeros).
 //! 4. Peak picking (madmom `peak_picking` structure): a frame is a candidate when
@@ -442,7 +442,7 @@ pub fn band_range(lo_hz: f64, hi_hz: f64) -> std::ops::Range<usize> {
     lo..hi.max(lo)
 }
 
-/// SuperFlux onset function of a `(frames, 84)` log spectrogram over the bands `bands`:
+/// `SuperFlux` onset function of a `(frames, 84)` log spectrogram over the bands `bands`:
 /// the positive differences to the 3-band maximum filter of the previous frame, summed.
 /// The frame before frame 0 is silence.
 pub fn superflux(spec: &[f32], bands: std::ops::Range<usize>) -> Vec<f32> {

@@ -57,7 +57,7 @@ pub fn ffmpeg_mono_coefs(ch: usize) -> Option<&'static [f32]> {
     T.get(ch.wrapping_sub(1)).copied()
 }
 
-/// The WAVE_FORMAT_EXTENSIBLE channel mask of ffmpeg's default layout for `ch` channels
+/// The `WAVE_FORMAT_EXTENSIBLE` channel mask of ffmpeg's default layout for `ch` channels
 /// (0 for 1 and 2 channels; for stereo see [`ffmpeg_stereo_mask_ok`]).
 pub fn ffmpeg_default_mask(ch: usize) -> u32 {
     match ch {
@@ -71,8 +71,8 @@ pub fn ffmpeg_default_mask(ch: usize) -> u32 {
     }
 }
 
-/// The speaker bits of a WAVE_FORMAT_EXTENSIBLE channel mask (SPEAKER_FRONT_LEFT to
-/// SPEAKER_TOP_BACK_RIGHT); bit 31 (SPEAKER_ALL) and the reserved bits are not positions.
+/// The speaker bits of a `WAVE_FORMAT_EXTENSIBLE` channel mask (`SPEAKER_FRONT_LEFT` to
+/// `SPEAKER_TOP_BACK_RIGHT`); bit 31 (`SPEAKER_ALL`) and the reserved bits are not positions.
 const SPEAKER_BITS: u32 = 0x3_FFFF;
 
 /// True when `ffmpeg -ac 1` folds a 2-channel file with this mask as plain stereo, the

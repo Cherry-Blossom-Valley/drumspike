@@ -230,7 +230,7 @@ fn run_role(case: &str, role: &str, spec: &Spec, band: &Band) {
                     continue;
                 }
                 let d = (h.t - want).abs();
-                if d <= band.tol_s && best.map(|(_, bd)| d < bd).unwrap_or(true) {
+                if d <= band.tol_s && best.is_none_or(|(_, bd)| d < bd) {
                     best = Some((i, d));
                 }
             }

@@ -8,7 +8,7 @@
 //! | `ipc` | every IPC call, on the thread that dispatches it (the main thread of the app): the whole command for a non-async command, the dispatch for an async one | `name`, `thread` |
 //! | `cmd` | the body of a command on the blocking pool (`blocking` in `apps/desktop/src-tauri`) | `name`, `thread` |
 //! | `job` | the stages of the background jobs (analysis, lanes, copy, export, import, relink) | `name`, `thread` |
-//! | `lock_wait` | a [`crate::registry::lock`] call that had to wait | `at` (file:line of the caller), `thread` |
+//! | `lock_wait` | a [`crate::registry::lock`] call that had to wait | `at` (<file:line> of the caller), `thread` |
 //!
 //! `DRUMSPIKE_TRACE=<file.json>` turns the recording on ([`init_from_env`]); [`finish`] writes
 //! the end of the file. Without the feature every function here is an empty inline function,

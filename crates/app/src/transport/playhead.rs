@@ -18,7 +18,7 @@ pub const PLAYHEAD_PERIOD: Duration = Duration::from_millis(250);
 /// How often the playhead thread looks at the state: a change is sent within this time.
 pub const PLAYHEAD_POLL: Duration = Duration::from_millis(20);
 
-/// The playhead fields of an open transport at the host now (epoch, t_ns, frame, rate, pos,
+/// The playhead fields of an open transport at the host now (epoch, `t_ns`, frame, rate, pos,
 /// playing, speed). The playhead message and the meter message both carry them (#471).
 fn playhead_fields(st: &HostState, o: &Open) -> Map<String, Value> {
     let ph = o.transport.playhead();

@@ -71,7 +71,7 @@ pub fn prepare(signal: &[f32], sr: u32, chain: Chain) -> Result<Vec<f32>, Detect
 
 /// The reference chain that [`features`] and [`peaks`] follow.
 ///
-/// * [`Chain::Cli`]: the CLI reference (the PyTorch port
+/// * [`Chain::Cli`]: the CLI reference (the `PyTorch` port
 ///   the CLI reference: `AudioProcessor` with the filterbank grid anchored at fmin = 20 Hz,
 ///   `1 + len / 441` frames, and the port's own `PeakPicker`). The Rust detector equals the
 ///   CLI with this chain.
@@ -138,7 +138,7 @@ impl Chain {
 mod tests {
     use super::*;
 
-    /// Kicks like tests/helpers.kick_hit (125 -> 55 Hz sweep, 0.5 ms attack, 0.12 s decay)
+    /// Kicks like `tests/helpers.kick_hit` (125 -> 55 Hz sweep, 0.5 ms attack, 0.12 s decay)
     /// at `onsets` seconds, -3 dB, at `sr`.
     fn kicks(onsets: &[f64], dur: f64, sr: u32) -> Vec<f32> {
         let n = (dur * f64::from(sr)) as usize;

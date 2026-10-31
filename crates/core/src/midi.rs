@@ -5,7 +5,7 @@
 //! mido. This module produces the same file:
 //!
 //! * format 1, two tracks, `ppq` ticks per quarter note;
-//! * track 0: `set_tempo` and `time_signature` 4/4 at tick 0 (in that order, pretty_midi
+//! * track 0: `set_tempo` and `time_signature` 4/4 at tick 0 (in that order, `pretty_midi`
 //!   sorts by event type), `end_of_track` one tick later;
 //! * track 1: `track_name` "spikes", `program_change` 0 on channel 10, per event a
 //!   `note_on` with the velocity and a `note_on` with velocity 0 at `t + 0.05 s`, all sorted
@@ -95,7 +95,7 @@ pub enum MidiError {
     /// The tempo map cannot be written (P4-8): the message names the fault.
     Map(String),
     /// Writing the file failed: the error kind (so the binding can raise the matching
-    /// OSError subclass) and the message.
+    /// `OSError` subclass) and the message.
     Io(std::io::ErrorKind, String),
 }
 
@@ -131,7 +131,7 @@ pub fn time_to_tick(t: f64, tick_scale: f64) -> i64 {
     if t <= 0.0 { 0 } else { py_round(t / tick_scale) }
 }
 
-/// The `set_tempo` value pretty_midi writes: `int(6e7 / (60 / (tick_scale * ppq)))` in
+/// The `set_tempo` value `pretty_midi` writes: `int(6e7 / (60 / (tick_scale * ppq)))` in
 /// microseconds per quarter note, with the same floating-point steps.
 pub fn tempo_meta(ppq: u16, tempo: f64) -> u32 {
     let ts = tick_scale(ppq, tempo);
@@ -147,7 +147,7 @@ fn check_timing(ppq: u16, tempo: f64) -> Result<(), MidiError> {
 }
 
 /// The note tuples `(tick, note, velocity, duration)` of an export, one per event in input
-/// order: what `engine.export_midi` writes and what pretty_midi reads back.
+/// order: what `engine.export_midi` writes and what `pretty_midi` reads back.
 ///
 /// # Errors
 ///
@@ -185,7 +185,7 @@ pub fn note_events(events: &[MidiEvent], note: i64, ppq: u16, tempo: f64) -> Res
         .collect()
 }
 
-/// A channel message of track 1 before the delta encoding, with pretty_midi's sort key.
+/// A channel message of track 1 before the delta encoding, with `pretty_midi`'s sort key.
 #[derive(Debug, Clone, Copy)]
 struct Msg {
     tick: u64,
@@ -214,7 +214,7 @@ pub enum Meta0 {
 }
 
 impl Meta0 {
-    /// pretty_midi's order of events at one tick: tempo, then time signature (then the marker).
+    /// `pretty_midi`'s order of events at one tick: tempo, then time signature (then the marker).
     fn rank(&self) -> u8 {
         match self {
             Meta0::Tempo(_) => 0,
@@ -404,9 +404,7 @@ pub struct MidiMarker<'a> {
 
 /// The text of marker `i`: the note, or `Marker N` (N from 1).
 fn marker_text(m: &MidiMarker, i: usize) -> String {
-    m.note
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("Marker {}", i + 1))
+    m.note.map_or_else(|| format!("Marker {}", i + 1), str::to_string)
 }
 
 /// The review markers for an export through a tempo map: one `marker` per marker at the tick of
@@ -542,7 +540,7 @@ pub fn export_multi_midi(
     Ok(())
 }
 
-/// Track 1 before the delta encoding, in pretty_midi's order.
+/// Track 1 before the delta encoding, in `pretty_midi`'s order.
 fn track1_messages(notes: &[NoteEvent]) -> Vec<Msg> {
     let mut msgs: Vec<Msg> = Vec::with_capacity(2 * notes.len() + 2);
     msgs.push(Msg {

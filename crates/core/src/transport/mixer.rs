@@ -10,7 +10,7 @@
 //! ([`channel_gains`]); at 0 dB and centre both are exactly 1.0, so the output is the
 //! output of P3-5a bit for bit (left and right equal). A mono device gets
 //! `(s_l + s_r) * 0.5`, which is `s` itself when left and right are equal. Tracks sum at unity
-//! like the WebAudio graph of `app.js` (no 1/N scaling). The clicks follow mute and solo, not
+//! like the `WebAudio` graph of `app.js` (no 1/N scaling). The clicks follow mute and solo, not
 //! the volume and pan (they are the metronome). The callback never allocates, locks or does
 //! I/O.
 //!

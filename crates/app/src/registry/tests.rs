@@ -147,9 +147,8 @@ fn light_track_object_and_doc_head_equal_the_full_serialisation() {
     }
     op.project.doc.extra.insert("future_key".into(), json!([1, 2]));
     let full = |tr: &Track| {
-        let mut m = match serde_json::to_value(tr).unwrap() {
-            Value::Object(m) => m,
-            _ => unreachable!(),
+        let Value::Object(mut m) = serde_json::to_value(tr).unwrap() else {
+            unreachable!()
         };
         m.shift_remove("events");
         m.shift_remove("source");

@@ -126,9 +126,10 @@ impl ProjectLock {
         match try_lock(&file) {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => {
-                let who = holder(&mut file)
-                    .map(|(pid, client)| format!("{client} (pid {pid})"))
-                    .unwrap_or_else(|| "another process".into());
+                let who = holder(&mut file).map_or_else(
+                    || "another process".into(),
+                    |(pid, client)| format!("{client} (pid {pid})"),
+                );
                 return Err(AppError::conflict(format!(
                     "the project is open for writing in {who}: close it there, or open it read-only"
                 )));

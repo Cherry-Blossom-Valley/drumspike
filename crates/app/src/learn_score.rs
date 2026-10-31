@@ -591,9 +591,9 @@ impl Service {
             .filter(|&t| nearest_frame(&frames, t).is_none())
             .collect();
         let d = if far.is_empty() { None } else { Some(decode()?) };
-        let sens = crate::jobs::parse_params(st.params.as_ref())
-            .map(|p| crate::sensitivity::sensitivity_of(&p.params.thresholds).round())
-            .unwrap_or(crate::sensitivity::DEFAULT);
+        let sens = crate::jobs::parse_params(st.params.as_ref()).map_or(crate::sensitivity::DEFAULT, |p| {
+            crate::sensitivity::sensitivity_of(&p.params.thresholds).round()
+        });
         let solid = solid_frames(&frame_values(&cands, &frames), sens);
         let scored = score_all(
             &frames,

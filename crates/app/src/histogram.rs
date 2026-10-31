@@ -396,13 +396,10 @@ impl Service {
             let g = lock(&op);
             jobs::recorded_rule(&self.inner.config, g.track(name)?.extra.get("detector"))
         };
-        let kept = match self.kept_detection(&st)? {
-            Ok(k) => k,
-            Err(_) => {
-                return Err(AppError::conflict(format!(
-                    "no kept detection for {name}: re-analyze it once"
-                )));
-            }
+        let Ok(kept) = self.kept_detection(&st)? else {
+            return Err(AppError::conflict(format!(
+                "no kept detection for {name}: re-analyze it once"
+            )));
         };
         let source = st.source.clone()?;
         let dec = self.inner.media.decode_cached(&source, mix_mode(&st.mix))?;
@@ -434,44 +431,40 @@ impl Service {
         let rows = dsp_detection_candidates(&cands, &cparams, weak_limit, &st.role);
         let scale = sensitivity::scale_of(sensitivity::sensitivity_of(&parsed.params.thresholds)) as f32;
         let mut dropped: Vec<f64> = Vec::new();
-        let (base, forced) = match learn_of_track(&op, name) {
-            Some(learn) => {
-                // P4-38e: the Learn hits the engineer deleted (times before the Hitpoint shift) stay out
-                let shift_s = crate::learn::shift_s_of(lock(&op).track(name)?);
-                dropped = crate::learn_filter::dropped_times(&learn)
-                    .into_iter()
-                    .map(|d| d + shift_s)
-                    .collect();
-                let edited = crate::learn_filter::edited_times(&self.events_of(sid, name)?);
-                let pick = crate::learn_filter::learn_pick(
-                    &dec.samples,
-                    dec.sr,
-                    &st.role,
-                    (&cands, &cparams, weak_limit),
-                    &rows,
-                    &learn,
-                    &edited,
-                    &parsed.params,
-                    sensitivity::sensitivity_of(&parsed.params.thresholds).round(),
-                    scale,
-                    Some(&st.dir),
-                    Some(&json!({"source": st.key, "mix": st.mix})),
-                )
-                .map_err(AppError::bad)?;
-                (analysis_values(&pick.base), analysis_values(&pick.forced))
-            }
-            None => {
-                let detector = drumspike_core::analyze::Detector::Candidates {
-                    cands: &cands,
-                    params: &cparams,
-                    weak_limit,
-                    scale,
-                };
-                let a =
-                    drumspike_core::analyze::analyze_track(&dec.samples, dec.sr, &st.role, &parsed.params, detector)
-                        .map_err(|e| AppError::bad(e.to_string()))?;
-                (analysis_values(&a), Vec::new())
-            }
+        let (base, forced) = if let Some(learn) = learn_of_track(&op, name) {
+            // P4-38e: the Learn hits the engineer deleted (times before the Hitpoint shift) stay out
+            let shift_s = crate::learn::shift_s_of(lock(&op).track(name)?);
+            dropped = crate::learn_filter::dropped_times(&learn)
+                .into_iter()
+                .map(|d| d + shift_s)
+                .collect();
+            let edited = crate::learn_filter::edited_times(&self.events_of(sid, name)?);
+            let pick = crate::learn_filter::learn_pick(
+                &dec.samples,
+                dec.sr,
+                &st.role,
+                (&cands, &cparams, weak_limit),
+                &rows,
+                &learn,
+                &edited,
+                &parsed.params,
+                sensitivity::sensitivity_of(&parsed.params.thresholds).round(),
+                scale,
+                Some(&st.dir),
+                Some(&json!({"source": st.key, "mix": st.mix})),
+            )
+            .map_err(AppError::bad)?;
+            (analysis_values(&pick.base), analysis_values(&pick.forced))
+        } else {
+            let detector = drumspike_core::analyze::Detector::Candidates {
+                cands: &cands,
+                params: &cparams,
+                weak_limit,
+                scale,
+            };
+            let a = drumspike_core::analyze::analyze_track(&dec.samples, dec.sr, &st.role, &parsed.params, detector)
+                .map_err(|e| AppError::bad(e.to_string()))?;
+            (analysis_values(&a), Vec::new())
         };
         let (mut base, mut forced) = (base, forced);
         mark_cut_values(&mut forced, &dec.samples, dec.sr, cut_of(params.as_ref()))?;

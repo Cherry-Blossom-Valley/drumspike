@@ -21,14 +21,14 @@
 //! ```
 //!
 //! Stage B is the anti-alias lowpass: `fc_B` = 21,099.0 Hz (the middle of the transition
-//! band from 0.913 of the output Nyquist, soxr_hq's `passband_end`, to 22,050 Hz),
+//! band from 0.913 of the output Nyquist, `soxr_hq`'s `passband_end`, to 22,050 Hz),
 //! `beta_B` = 13.711 (about 133 dB), half length `T_B` = 2.3177 ms. Stage A is a short
 //! pre-filter, `fc_A` = 43,419 Hz, `beta_A` = 14.064, `T_A` = 72.93 us (3.5 input samples
-//! at 48 kHz); it reproduces the slow passband droop of soxr_hq (-0.0022 dB at 18 kHz,
+//! at 48 kHz); it reproduces the slow passband droop of `soxr_hq` (-0.0022 dB at 18 kHz,
 //! -0.0078 dB at 20 kHz) that a single flat Kaiser design lacks. A single Kaiser stage
 //! matched soxr to 73 dB on white noise and failed the 80 dB gate on the hi-hat tracks (69
 //! to 76 dB); the cascade matches soxr's measured kernel to 133 dB (white noise) at both
-//! rates. The six numbers are a least-squares fit of this kernel family to soxr_hq 1.1.0's
+//! rates. The six numbers are a least-squares fit of this kernel family to `soxr_hq` 1.1.0's
 //! measured impulse response (`tools/parity/fit_resample_kernel.py`); the response is
 //! -3 dB at 20.96 kHz, -80 dB at 21.92 kHz, below -137 dB from 22.05 kHz on.
 //!

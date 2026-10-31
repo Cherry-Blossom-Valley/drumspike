@@ -944,14 +944,14 @@ impl Service {
     /// followers?}`) or `filter_error` (no kept activations, an analysis running).
     fn learn_refilter(&self, sid: &str, target: &str, was_on: bool, out: &mut Value) {
         // P4-35: the hits the filter takes out before and after the step (the answer's guard counts)
-        let before = self.events_of(sid, target).map(|e| out_counts(&e)).unwrap_or((0, 0));
+        let before = self.events_of(sid, target).map_or((0, 0), |e| out_counts(&e));
         if !was_on && !self.learn_pick_runs(sid, target) {
             add_out_counts(out, before, before);
             return;
         }
         match self.learn_refilter_track(sid, target) {
             Ok(r) => {
-                let after = r["events"].as_array().map(|e| out_counts(e)).unwrap_or(before);
+                let after = r["events"].as_array().map_or(before, |e| out_counts(e));
                 add_out_counts(out, before, after);
                 out["filter"] = r;
             }
@@ -1083,7 +1083,7 @@ impl Service {
     }
 
     /// P4-38b: delete the document hits that K added (`learned` + `added`) and that no remaining
-    /// Learn This example supports any more (within CANDIDATE_REACH). Returns how many went.
+    /// Learn This example supports any more (within `CANDIDATE_REACH`). Returns how many went.
     fn sweep_unsupported_learned(&self, sid: &str, name: &str) -> Result<usize, AppError> {
         let learn = {
             let op = self.inner.registry.get(sid)?;
@@ -1203,7 +1203,7 @@ impl Service {
         };
         let (target, routed) = self.learn_target(sid, name)?;
         let was_on = self.learn_pick_runs(sid, &target);
-        let before = self.events_of(sid, &target).map(|e| out_counts(&e)).unwrap_or((0, 0));
+        let before = self.events_of(sid, &target).map_or((0, 0), |e| out_counts(&e));
         let ((), learn) = self.learn_edit(sid, &target, |l| {
             *l = new;
             Ok(())

@@ -16,7 +16,7 @@
 //!    ([`transfer_gains`], the P2-6 calibration). The re-rise is bleed when B's envelope in `[c - 2 ms, c + 1 ms]` plus
 //!    `G` plus `margin_db` (10 dB) reaches the stroke's peak P2. A bleed stroke is not added.
 //!
-//! The parameters are the stage 1 rule R9_m10 ([`FlamParams::default`]). The Python reference is `tools/flam_pairs.py`
+//! The parameters are the stage 1 rule `R9_m10` ([`FlamParams::default`]). The Python reference is `tools/flam_pairs.py`
 //! (`attack_env`, `transfer_gains`, `second_onsets`) as `tools/flam_split.py` runs it; the parity check is
 //! `tests/test_rust_flam.py` and `tools/flam_split.py parity`. The measurements are in
 //! `docs/migration/phase4-report.md`, sections "P4-13 stage 1", "P4-13 stage 2, stage A" and "P4-13 stage B".
@@ -39,7 +39,7 @@ pub const FLAM_RULE_VERSION: u32 = 1;
 /// The block length of the attack envelope (seconds); every block count of the rule is a time over this.
 pub const HOP_S: f64 = 0.000125;
 
-/// The parameters of the rule (the stage 1 choice R9_m10; `tools/flam_pairs.py` `DEFAULTS`).
+/// The parameters of the rule (the stage 1 choice `R9_m10`; `tools/flam_pairs.py` `DEFAULTS`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlamParams {
     /// The high-pass corner of the attack envelope (Hz); 0 = no filter.

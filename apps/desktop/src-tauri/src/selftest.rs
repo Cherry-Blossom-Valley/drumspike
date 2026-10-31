@@ -1,6 +1,6 @@
 //! Self-test mode (P3-7a, debug builds only). The app starts with
 //! `--self-test <scenario> --out <report.json>`: the page runs the scenario in the real
-//! WKWebView (`apps/desktop/selftest/driver.js`), sends one JSON report to the command
+//! `WKWebView` (`apps/desktop/selftest/driver.js`), sends one JSON report to the command
 //! `selftest_report`, and the process writes the file and exits (0 = pass, 1 = fail, 2 =
 //! the scenario could not start). It replaces the debug probe of P3-3b. The report holds
 //! numbers and no screenshot, so macOS asks for no screen permission.
@@ -44,7 +44,7 @@ pub fn driver_for(scenario: &Value) -> &'static str {
 /// The step "play" (P3-5b): defines `window.__selftestPlay`, loaded before the driver.
 pub const PLAY: &str = include_str!("../../selftest/play.js");
 
-/// The step "playhead_steps" (#463): defines `window.__selftestPlayheadSteps`, loaded before the driver.
+/// The step "`playhead_steps`" (#463): defines `window.__selftestPlayheadSteps`, loaded before the driver.
 pub const PLAYHEAD_STEPS: &str = include_str!("../../selftest/playhead_steps.js");
 
 /// The step "memory" (P3-6b): defines `window.__selftestMemory`, loaded before the driver.
@@ -59,7 +59,7 @@ pub struct Request {
     pub out: PathBuf,
 }
 
-/// True while a self-test runs: WebKit fully suspends a page whose window is occluded (rAF and
+/// True while a self-test runs: `WebKit` fully suspends a page whose window is occluded (rAF and
 /// timers alike), which hangs the in-page wall-clock guards, so lib.rs keeps the window front.
 pub static FRONT_WINDOW: AtomicBool = AtomicBool::new(false);
 
@@ -179,7 +179,7 @@ pub fn init_script(scenario: &Value) -> String {
     )
 }
 
-/// One WebKit helper process (`ps` row).
+/// One `WebKit` helper process (`ps` row).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Helper {
     pub pid: u32,
@@ -188,7 +188,7 @@ pub struct Helper {
     pub kind: String,
 }
 
-/// The WebKit helper processes in the output of `ps -ax -o pid=,rss=,comm=`.
+/// The `WebKit` helper processes in the output of `ps -ax -o pid=,rss=,comm=`.
 pub fn parse_helpers(ps: &str) -> Vec<Helper> {
     let mut out = Vec::new();
     for line in ps.lines() {
@@ -225,7 +225,7 @@ fn helpers_now() -> Vec<Helper> {
 
 static HELPERS_BEFORE: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
 
-/// Call once before the web view exists: the WebKit helpers of other apps are not ours.
+/// Call once before the web view exists: the `WebKit` helpers of other apps are not ours.
 pub fn snapshot_helpers() {
     HELPERS_BEFORE.get_or_init(|| helpers_now().iter().map(|h| h.pid).collect());
 }
@@ -286,9 +286,9 @@ pub fn footprint_report(
     (map, cats)
 }
 
-/// Memory of the WebKit helpers that started after `snapshot_helpers` (this app's web view):
+/// Memory of the `WebKit` helpers that started after `snapshot_helpers` (this app's web view):
 /// `{processes: [{pid, kind, footprint_mb, rss_mb, top: [[category, MB]]}], web_content_mb, web_content_rss_mb, gpu_mb,
-/// web_content_count}`. `web_content_mb` is the largest footprint among the new WebContent processes.
+/// web_content_count}`. `web_content_mb` is the largest footprint among the new `WebContent` processes.
 pub fn memory() -> Value {
     let before = HELPERS_BEFORE.get().cloned().unwrap_or_default();
     let ours: Vec<Helper> = helpers_now().into_iter().filter(|h| !before.contains(&h.pid)).collect();

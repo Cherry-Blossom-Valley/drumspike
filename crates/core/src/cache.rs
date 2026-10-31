@@ -304,10 +304,9 @@ impl PeakCache {
         let Some(info) = self.index(level).map(|i| self.levels[i]) else {
             return Ok(None);
         };
-        let t = match self.tile(level, 0, info.bins as i64)? {
-            Some(t) => t,
+        let Some(t) = self.tile(level, 0, info.bins as i64)? else {
             // unreachable: `tile` answers `Some` for every level `index` knows
-            None => return Err(CacheError::Format(format!("level {level} vanished"))),
+            return Err(CacheError::Format(format!("level {level} vanished")));
         };
         let up = |v: Vec<f32>| v.into_iter().map(f64::from).collect::<Vec<f64>>();
         Ok(Some(PeakLevel {
@@ -474,8 +473,8 @@ mod tests {
 
     /// R20: every malformed input is a miss or a clear error — never a panic and never
     /// an allocation the file cannot hold. The table covers the header reader (`open`):
-    /// empty, truncated, wrong magic, wrong version, length fields at 0, at u32::MAX and
-    /// at u64::MAX, and a length larger than the file.
+    /// empty, truncated, wrong magic, wrong version, length fields at 0, at `u32::MAX` and
+    /// at `u64::MAX`, and a length larger than the file.
     #[test]
     fn malformed_inputs_are_a_miss_or_an_error() {
         let d = tmp("malformed");

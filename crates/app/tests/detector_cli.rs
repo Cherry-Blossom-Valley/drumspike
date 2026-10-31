@@ -1,5 +1,5 @@
 //! #388: the CLI runs an analysis with the example plugin
-//! (tests/fixtures/plugins/json_hits.py) against a fixture WAV, and the hits match the
+//! (`tests/fixtures/plugins/json_hits.py`) against a fixture WAV, and the hits match the
 //! plugin's times.json. The plugin is installed into a temp Detectors folder that
 //! `DRUMSPIKE_DETECTORS_DIR` names (see crates/app/src/plugins.rs).
 
@@ -47,7 +47,7 @@ fn io(input: &str) -> (Io, Buf, Buf) {
     )
 }
 
-/// The example plugin (tests/fixtures/plugins/json_hits.py) as a real install: the fixture
+/// The example plugin (`tests/fixtures/plugins/json_hits.py`) as a real install: the fixture
 /// script, times.json and the manifest.
 fn install_plugin(dir: &std::path::Path) {
     let folder = dir.join("json-hits");

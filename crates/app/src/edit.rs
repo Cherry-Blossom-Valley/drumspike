@@ -576,21 +576,19 @@ impl Service {
         dest: Option<&str>,
         compensate: bool,
     ) -> Result<Value, AppError> {
-        let note = match note {
-            Some(n) => n,
-            None => {
-                let op = self.inner.registry.get_writable(sid)?;
-                let g = lock(&op);
-                g.track(name)?.note.unwrap_or(36)
-            }
+        let note = if let Some(n) = note {
+            n
+        } else {
+            let op = self.inner.registry.get_writable(sid)?;
+            let g = lock(&op);
+            g.track(name)?.note.unwrap_or(36)
         };
         let stored;
-        let events = match events {
-            Some(e) => e,
-            None => {
-                stored = self.track_events(sid, name)?;
-                &stored[..]
-            }
+        let events = if let Some(e) = events {
+            e
+        } else {
+            stored = self.track_events(sid, name)?;
+            &stored[..]
         };
         self.export_midi_with(
             sid,
@@ -615,15 +613,14 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
             .and_then(Value::as_str)
             .ok_or_else(|| AppError::bad(format!("missing or wrong argument `{k}` (string)")))
     };
-    Some((|| match cmd {
-        "events_edit" => {
+    Some((|| {
+        if cmd == "events_edit" {
             let ops = args
                 .get("ops")
                 .and_then(Value::as_array)
                 .ok_or_else(|| AppError::bad("missing or wrong argument `ops` (list)"))?;
             svc.events_edit(s("sid")?, s("name")?, ops)
-        }
-        _ => {
+        } else {
             let n = args
                 .get("shift_samples")
                 .and_then(Value::as_i64)

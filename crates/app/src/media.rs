@@ -274,22 +274,21 @@ impl Media {
         // slot and share the result; a failed decode leaves no slot behind (the waiters
         // decode themselves).
         let held = lock(&self.inflight).get(&key).map(Arc::clone);
-        let slot = match held {
-            Some(slot) => slot,
+        let slot = if let Some(slot) = held {
+            slot
+        } else {
             // The owner of a finished decode removes its key only after the cache
             // insert, so no slot here means the decode is in the cache already (a
             // failed or an oversized decode is not). This second lookup closes the
             // window between the two lookups of this request: without it, a request
             // that lost that race decoded again, and the eight-thread test saw two
             // decodes once under load (#58).
-            None => {
-                if let Some(d) = self.decoded_hit(&key) {
-                    return Ok(d);
-                }
-                // a parallel first request may have made the slot in between
-                let mut map = lock(&self.inflight);
-                Arc::clone(map.entry(key.clone()).or_default())
+            if let Some(d) = self.decoded_hit(&key) {
+                return Ok(d);
             }
+            // a parallel first request may have made the slot in between
+            let mut map = lock(&self.inflight);
+            Arc::clone(map.entry(key.clone()).or_default())
         };
         let mut g = lock(&slot);
         if let Some(d) = g.as_ref() {

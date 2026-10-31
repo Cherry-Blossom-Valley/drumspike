@@ -272,7 +272,7 @@ struct Seg {
     /// #466: the exact microseconds per quarter of the map's tempo (6e7 / bpm). The ticks are
     /// computed from this, so a DAW running the user's exact tempo sees every note within the
     /// tick rounding; a DAW that applies the file's whole-microsecond `set_tempo` instead sees
-    /// the relative mismatch |us - exact_us| / exact_us, which no SMF can avoid for a tempo
+    /// the relative mismatch |us - `exact_us`| / `exact_us`, which no SMF can avoid for a tempo
     /// whose quarter is not a whole number of microseconds (about 1.3e-7, or 2 samples over
     /// 5 minutes at 48 kHz). Equal to `us` for a whole-microsecond tempo and for every map
     /// read from a file ([`TickMap::from_events`]), so those grids are unchanged.

@@ -1,7 +1,7 @@
 //! Memory-mapped WAV/BWF reader: RIFF chunk walker and sample decoding.
 //!
 //! Supported: RIFF/WAVE with PCM 16/24/32 (tag 1) and IEEE float 32 (tag 3), plain or
-//! WAVE_FORMAT_EXTENSIBLE headers, any channel count, `bext` and `iXML` chunks. RF64 and
+//! `WAVE_FORMAT_EXTENSIBLE` headers, any channel count, `bext` and `iXML` chunks. RF64 and
 //! BW64 (64-bit sizes) are recognised and rejected with a clear error; support comes later.
 
 use std::fmt;
@@ -62,7 +62,7 @@ pub struct Bext {
     pub origination_date: String,
     /// `hh:mm:ss`, 8 bytes.
     pub origination_time: String,
-    /// First sample's position since midnight in samples (TimeReferenceLow | High << 32).
+    /// First sample's position since midnight in samples (`TimeReferenceLow` | High << 32).
     pub time_reference: u64,
     /// BWF version.
     pub version: u16,
@@ -138,7 +138,7 @@ impl Bext {
 pub struct WavInfo {
     /// The format tag (1 = PCM, 3 = IEEE float); for an extensible header the sub-format.
     pub format_tag: u16,
-    /// True when the header is WAVE_FORMAT_EXTENSIBLE.
+    /// True when the header is `WAVE_FORMAT_EXTENSIBLE`.
     pub extensible: bool,
     /// The extensible header's channel mask (speaker positions); 0 when absent or unset.
     pub channel_mask: u32,
@@ -329,7 +329,7 @@ impl WavInfo {
         })
     }
 
-    /// The `bext` TimeReference (first sample's position since midnight, in samples).
+    /// The `bext` `TimeReference` (first sample's position since midnight, in samples).
     pub fn time_reference(&self) -> Option<u64> {
         self.bext.as_ref().map(|b| b.time_reference)
     }

@@ -123,7 +123,7 @@ fn dc_passes() {
 }
 
 /// A 1 kHz and a 10 kHz sine keep amplitude and frequency: compare the interior with the
-/// ideal sine at 44.1 kHz (zero group delay). The design follows soxr_hq's passband
+/// ideal sine at 44.1 kHz (zero group delay). The design follows `soxr_hq`'s passband
 /// droop (about -0.00002 dB at 10 kHz), so the bound is 1e-5 absolute at amplitude 0.5;
 /// the interpolated zero crossings give the frequency within 0.01 % and the projection on
 /// the ideal sine the amplitude within 1e-5.

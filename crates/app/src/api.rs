@@ -6,7 +6,7 @@
 //! tests of `tests/api.rs` fail when a `#[tauri::command]` has no row, when a row has no
 //! command, when the argument names of a wrapper differ from the row, and (here) when the
 //! test bridge does not run a command of the agent surface. The names and arguments are those
-//! of the Tauri wrappers (snake_case on the wire); the schemas are JSON Schema, draft 2020-12
+//! of the Tauri wrappers (`snake_case` on the wire); the schemas are JSON Schema, draft 2020-12
 //! subset (`type`, `properties`, `required`, `items`, `description`).
 //!
 //! The registry has no behaviour of its own: calling a command stays with the dispatchers of the

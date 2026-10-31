@@ -4,7 +4,7 @@
 //! the activation dump (model branch only) in the same folder, the same lifetime, the same reset on re-analysis).
 //!
 //! Layout of `candidates.bin` (little endian): the magic `DSCND\0\0\0`, `u32` version 1,
-//! `u64` count, then per candidate: `u64` frame, `f64` time, `f32` flux, `f32` rel_db,
+//! `u64` count, then per candidate: `u64` frame, `f64` time, `f32` flux, `f32` `rel_db`,
 //! `f32` similarity, `f32` attack, `u8` kept, `u8` gate. Version 2 (A6) appends two `f32`
 //! per record, the cross-mic lead (ms) and the band level ratio (dB) against the loudest
 //! coinciding hit of a kick or snare track, NaN when there is none (the cross-track rule ran

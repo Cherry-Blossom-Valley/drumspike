@@ -398,9 +398,8 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
     if !SHELL_COMMANDS.contains(&cmd) {
         return None;
     }
-    let sid = match args.get("sid").and_then(Value::as_str) {
-        Some(sid) => sid,
-        None => return Some(Err(AppError::bad("missing or wrong argument `sid` (string)"))),
+    let Some(sid) = args.get("sid").and_then(Value::as_str) else {
+        return Some(Err(AppError::bad("missing or wrong argument `sid` (string)")));
     };
     Some(match cmd {
         "export_existing" => ExportOpts::from_args(args).and_then(|o| svc.export_existing_opts(sid, &o)),

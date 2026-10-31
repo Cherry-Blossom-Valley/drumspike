@@ -327,7 +327,7 @@ impl Extractor {
 
 /// The floor of [`DB_RANGE`] under the maximum, for the cepstrum input.
 fn floor_db(mut v: Vec<f32>) -> Vec<f32> {
-    let top = v.iter().cloned().fold(f32::MIN, f32::max);
+    let top = v.iter().copied().fold(f32::MIN, f32::max);
     for x in &mut v {
         *x = x.max(top - DB_RANGE);
     }
@@ -355,7 +355,7 @@ pub fn normalise(v: &[f32], db: bool) -> Vec<f32> {
     if v.is_empty() {
         return Vec::new();
     }
-    let top = v.iter().cloned().fold(f32::MIN, f32::max);
+    let top = v.iter().copied().fold(f32::MIN, f32::max);
     let w: Vec<f32> = v.iter().map(|&x| if db { x.max(top - DB_RANGE) } else { x }).collect();
     let mean = w.iter().sum::<f32>() / w.len() as f32;
     let c: Vec<f32> = w.iter().map(|x| x - mean).collect();
