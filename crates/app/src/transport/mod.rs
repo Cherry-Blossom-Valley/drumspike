@@ -752,6 +752,9 @@ impl Service {
     /// start_ms, open_ms, master, speed, heard_ms}` once the first playing block is rendered
     /// (`ready`), or after 10 s. `heard_ms` (P3-20b) is the time from the call to the moment the
     /// first sample of that block is heard (the block's playback time; `null` before it). It plays at normal speed ([`Service::transport_play_at`] takes a speed).
+    ///
+    /// # Errors
+    /// The same as [`Service::transport_play_window`] without a window or a speed.
     pub fn transport_play(
         &self,
         sid: &str,
@@ -767,6 +770,9 @@ impl Service {
     /// the running stream, as part of the play's seek (from `position`, else from where it is);
     /// otherwise the transport opens at that speed. `start_ms` is the time from the call to the
     /// first block at that speed.
+    ///
+    /// # Errors
+    /// The same as [`Service::transport_play_window`] without a window.
     pub fn transport_play_at(
         &self,
         sid: &str,
@@ -786,6 +792,18 @@ impl Service {
     /// `shot` (P4-40e) the one-shot of that track plays once as a preview voice at the window start (the Layer view's Play);
     /// without an `end` the window ends at the start plus the one-shot's length, and without `tracks` the shot track is the
     /// only audible one. 409 for a track without a layer or its file.
+    ///
+    /// # Errors
+    /// 400 when `position`, or the `start` or `end` of `win`, is negative or not finite, `end` is
+    /// not after `start`, `loop` has no `end`, `speed` is not 1 or 0.5, or an audition track is not
+    /// a playable track of the project; 409 for a `shot` track without a layer or its file; 404 when
+    /// `sid` is not an open project; any error of building the plan or opening the audio device;
+    /// 500 when the device is gone before the answer is built.
+    ///
+    /// # Panics
+    /// Panics on `expect("open after start")` if the transport is not open right after it was
+    /// opened or reused under the same lock, and on the `unwrap()` of the audition when a `shot`
+    /// is set without one; neither can happen, as both are set just before.
     pub fn transport_play_window(
         &self,
         sid: &str,
@@ -1059,6 +1077,9 @@ impl Service {
     /// `transport_seek`: move to `position` seconds, playing or paused. 409 without an open
     /// transport. Answers `{frame, rate, pos, epoch}`: the target frame and the epoch the
     /// messages after the seek carry.
+    ///
+    /// # Errors
+    /// 400 when `position` is negative or not finite; 409 when no transport is open.
     pub fn transport_seek(&self, position: f64) -> Result<Value, AppError> {
         if !position.is_finite() || position < 0.0 {
             return Err(AppError::bad("position must be a number of seconds, 0 or more"));
@@ -1087,6 +1108,10 @@ impl Service {
     /// false). The state stays when no transport is open and applies at the next open.
     /// Answers `{applied, tracks_audible, latency_ms, t_ns}` (`t_ns`: when the change was made, on the clock of the playhead messages): while the transport plays, `latency_ms`
     /// is the time from this change to the moment the first block with the new gains is heard.
+    ///
+    /// # Errors
+    /// 400 when `mute` or `solo` is neither null nor an object `{track: bool}`; 500 when the open
+    /// transport refuses the new mix.
     pub fn transport_mix(&self, mute: &Value, solo: &Value) -> Result<Value, AppError> {
         let read = |v: &Value, what: &str| -> Result<HashMap<String, bool>, AppError> {
             match v {
@@ -1135,6 +1160,11 @@ impl Service {
     /// `transport_clicks`: the metronome. `enabled`, `volume` (0 to 1) and `pitches`
     /// (`{role: Hz}`) are optional; a missing one stays. Applies to the open transport at
     /// once and to every later open. Answers `{enabled, volume, applied}`.
+    ///
+    /// # Errors
+    /// 400 when `volume` is outside 0 to 1, `pitches` is not an object of `{role: Hz}` with Hz
+    /// above 0; 500 when the open transport still refuses the settings after about 100 ms of
+    /// retries.
     pub fn transport_clicks(
         &self,
         enabled: Option<bool>,
@@ -1307,6 +1337,11 @@ impl Service {
     /// [`MAX_DB`]) and pan (-1 to +1) of one track; a missing value stays. Kept in the project
     /// (`volume_db`, `pan`; marks it dirty) and applied to the open transport of this project at
     /// the next callback. Answers `{volume_db, pan, applied}`.
+    ///
+    /// # Errors
+    /// 400 when `volume_db` or `pan` is not a finite number; 404 when `sid` is not an open project
+    /// or `name` is not a track; 409 when the project is open read-only; 500 when the open
+    /// transport refuses the new volume or pan.
     pub fn track_set_mix(
         &self,
         sid: &str,
@@ -1352,6 +1387,10 @@ impl Service {
     /// [`MAX_DB`]), applied to the open transport at once and to every later open, kept in the
     /// app settings. It comes before the master gain of `DRUMSPIKE_MASTER_GAIN`. Answers
     /// `{volume_db, applied}`.
+    ///
+    /// # Errors
+    /// 400 when `volume_db` is not a finite number; otherwise the error of writing the app
+    /// settings file (500 when it cannot be written).
     pub fn transport_master(&self, volume_db: f64) -> Result<Value, AppError> {
         if !volume_db.is_finite() {
             return Err(AppError::bad("volume_db must be a number"));
@@ -1423,6 +1462,10 @@ impl Service {
     /// Kept in the app settings. An open transport reopens on it at the same position and
     /// state; a missing device gives the system default and the `note`. Answers like
     /// [`Service::outputs_list`].
+    ///
+    /// # Errors
+    /// 400 when `device` is an empty or blank name; otherwise the error of writing the app
+    /// settings file (500 when it cannot be written).
     pub fn output_select(&self, device: Option<&str>) -> Result<Value, AppError> {
         if device.is_some_and(|d| d.trim().is_empty()) {
             return Err(AppError::bad("device must be a device name or null"));

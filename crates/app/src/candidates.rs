@@ -53,6 +53,11 @@ pub fn candidates_key(source: &CacheKey, mix: &str, _model: &Value) -> Value {
 
 /// Write the candidates, their detection params, the weak-flux limit and the key into `dir`
 /// (made when missing). The key goes last.
+///
+/// # Errors
+///
+/// The [`io::Error`] of creating `dir` or of writing `candidates.bin` or the key file atomically (for example
+/// `dir` is not writable or is a file).
 pub fn write_candidates(
     dir: &Path,
     cands: &[Candidate],
@@ -122,6 +127,12 @@ pub fn read_candidates_meta(dir: &Path) -> Option<(OnsetParams, f32, Value)> {
 
 /// The stored record of `dir` when its key equals `key` and the file is whole; else `None`.
 /// Returns the candidates, the detection's parameters and its weak-flux limit.
+///
+/// # Panics
+///
+/// Panics (slice indexing, `expect` on fixed-size `try_into`) only if a record lies outside the file; the
+/// check that the file length equals header plus `n` records of the version's size rules that out for any
+/// file content.
 pub fn read_candidates(dir: &Path, key: &Value) -> Option<(Vec<Candidate>, OnsetParams, f32)> {
     let meta: Value = serde_json::from_str(&fs::read_to_string(dir.join(CANDIDATES_KEY)).ok()?).ok()?;
     if meta.get("key")? != key {

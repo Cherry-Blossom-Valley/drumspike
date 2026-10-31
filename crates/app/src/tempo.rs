@@ -43,6 +43,9 @@ pub const METER_RULE: &str = "per beat the kick hits minus the snare hits on the
 pub const IMPORT_LIMIT: u64 = 64 << 20;
 
 /// The map of a document; a stored value that is not a valid map is an error with a message.
+///
+/// # Errors
+/// 400 when the tempo map stored in the document does not parse as a valid map.
 pub fn doc_map(doc: &drumspike_core::Document) -> Result<TempoMap, AppError> {
     doc.tempo_map()
         .map_err(|e| AppError::bad(format!("the stored tempo map is not valid: {e}")))
@@ -50,6 +53,9 @@ pub fn doc_map(doc: &drumspike_core::Document) -> Result<TempoMap, AppError> {
 
 impl Service {
     /// `tempo_map_get {sid}`: `{map, default}`.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project; 400 when the stored tempo map is not valid.
     pub fn tempo_map_get(&self, sid: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -79,6 +85,10 @@ impl Service {
     /// `tempo_map_set {sid, map}`: replace the whole map. 400 for a map that is not valid
     /// (the message names the fault). Answers `{map, previous, changed}`; `previous` is null
     /// when the stored value was not a valid map (it is replaced in any case).
+    ///
+    /// # Errors
+    /// 400 when `map` is not a valid tempo map; 404 when `sid` is not an open project; 409 when
+    /// the project is open read-only.
     pub fn tempo_map_set(&self, sid: &str, map: &Value) -> Result<Value, AppError> {
         let m = if map.is_null() {
             TempoMap::default()
@@ -92,6 +102,10 @@ impl Service {
     /// 404 for a missing file, 400 for a file that is not a MIDI file, has no tempo or
     /// time-signature event, or holds a tempo outside 4 to 1000 BPM. Answers
     /// `{map, previous, changed, ppq, tempo_events, meter_events, snapped}`.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project or `path` cannot be stat-ed; 409 when the project is
+    /// open read-only; 400 as listed above; 500 when the file cannot be read.
     pub fn tempo_map_import_midi(&self, sid: &str, path: &str) -> Result<Value, AppError> {
         self.inner.registry.get_writable(sid)?;
         let p = std::path::Path::new(path);
@@ -159,6 +173,11 @@ impl Service {
     /// after the end of the longest used track (they are dropped with a warning). Read only: the
     /// project's map does not change. 404 for an unknown track, 400 for bad parameters or too
     /// few hits.
+    ///
+    /// # Errors
+    /// 400 when `min_bars` is outside the valid range or `DetectParams::validate` rejects the
+    /// parameters, or when `detect` finds too few hits; 404 when `sid` is not an open project or a
+    /// name in `tracks` is not a track; 400 when the stored tempo map is not valid.
     pub fn tempo_map_detect(
         &self,
         sid: &str,
@@ -269,6 +288,10 @@ impl Service {
     /// with `tempo_map_set` together with the typed tempo, so one undo step restores both.
     /// 400 for a bpm that is not a positive number of at most 1000, or fewer than 8 kick and
     /// snare hits. Answers `{bar1_s, support, hits, previous_bar1_s, bpm, changed}`.
+    ///
+    /// # Errors
+    /// 404 when no project has the id `sid`; 400 when `bpm` is not in (0, 1000], when the stored
+    /// tempo map is not valid, or when `refit_bar1` finds too few hits.
     pub fn tempo_map_refit_bar1(&self, sid: &str, bpm: f64) -> Result<Value, AppError> {
         if !(bpm.is_finite() && bpm > 0.0 && bpm <= 1000.0) {
             return Err(AppError::bad(format!(

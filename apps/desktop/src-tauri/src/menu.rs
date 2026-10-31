@@ -469,6 +469,11 @@ impl KeyCommand {
 }
 
 /// The rows of a key table file: the strict JSON between the markers `KEYMAP-BEGIN` and `KEYMAP-END`.
+///
+/// # Errors
+///
+/// When a marker is missing, the text between them is not strict JSON or not a list, or a row has
+/// no `id`, no `title` or no `cubase` key, or a field of the wrong type. The message names the row.
 pub fn parse_keymap(src: &str) -> Result<Vec<KeyCommand>, String> {
     let a = src.find(KEYMAP_BEGIN).ok_or("no KEYMAP-BEGIN marker")? + KEYMAP_BEGIN.len();
     let b = a + src[a..].find(KEYMAP_END).ok_or("no KEYMAP-END marker")?;
@@ -855,6 +860,10 @@ fn no_projects<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MenuItem<R>> {
 
 /// The whole menu bar (reference section 3.2). The check items start as the page starts (snap on, follow
 /// smooth, click on); the page's first sync sets them to its real state.
+///
+/// # Errors
+///
+/// When the windowing library cannot create a menu, a submenu or an item.
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let mi = |it: &Item| make_item(app, it);
     let ck = |it: &Item, on: bool| make_check(app, it, on);
@@ -1191,6 +1200,11 @@ pub fn step_title(label: &str, page: &str) -> String {
 
 /// Grey the items that need a project while none is open, and refresh the Open Recent list.
 /// `recent` holds the project folders, newest first.
+///
+/// # Errors
+///
+/// When the windowing library cannot enable or disable an item, or change the Open Recent
+/// submenu. Nothing happens (and nothing fails) when the app has no menu yet.
 pub fn sync<R: Runtime>(app: &AppHandle<R>, has_project: bool, recent: &[String]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     for it in SPEC.iter().filter(|i| i.needs_project) {
@@ -1231,6 +1245,11 @@ pub fn sync<R: Runtime>(app: &AppHandle<R>, has_project: bool, recent: &[String]
 
 /// Set the check items to the page's state (`{snap, follow, click, infoLine, counter, inspector, trackHeight, nudgeValue}`, see [`check_states`]). A native click on a
 /// check item toggles its mark before the page has run the item; this call puts the page's state back.
+///
+/// # Errors
+///
+/// When the windowing library cannot set the checked state of an item. Nothing happens (and
+/// nothing fails) when the app has no menu yet.
 pub fn sync_checks<R: Runtime>(app: &AppHandle<R>, state: &Value) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     for (id, on) in check_states(state) {
@@ -1275,6 +1294,10 @@ pub fn sync_checks<R: Runtime>(app: &AppHandle<R>, state: &Value) -> tauri::Resu
 /// Give every item the accelerators of a key preset (P3-13c). The items stay (their marks, enabled state, and the
 /// Open Recent and Window entries are kept), only the key equivalents change: the same result as a new menu bar,
 /// without the flicker. Does nothing when the preset is the one the menu has. An unknown name is the default.
+///
+/// # Errors
+///
+/// When the windowing library cannot set the accelerator of an item.
 pub fn set_preset<R: Runtime>(app: &AppHandle<R>, name: &str) -> tauri::Result<()> {
     let preset = preset_or_default(name);
     if current_preset() == preset {
@@ -1297,6 +1320,11 @@ pub fn set_preset<R: Runtime>(app: &AppHandle<R>, name: &str) -> tauri::Result<(
 
 /// The Window menu: one check item per open project (the current one checked) before Minimize and Zoom.
 /// The entries are made again only when the projects or their names changed; the marks are set every time.
+///
+/// # Errors
+///
+/// When the windowing library cannot remove, add or mark a Window menu item. Nothing happens (and
+/// nothing fails) when the app has no menu or the Window submenu is missing.
 pub fn sync_window<R: Runtime>(app: &AppHandle<R>, entries: &[WindowEntry]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     let Some(sub) = find_submenu(&menu, WINDOW_ID) else {
@@ -1335,6 +1363,11 @@ pub fn sync_window<R: Runtime>(app: &AppHandle<R>, entries: &[WindowEntry]) -> t
 
 /// P3-18: Track > Follow Hits Of: one check item per other track of the project (the followed one checked).
 /// The entries are made again only when the tracks changed; the marks are set every time.
+///
+/// # Errors
+///
+/// When the windowing library cannot remove, add or mark a Follow Hits Of item. Nothing happens
+/// (and nothing fails) when the app has no menu or the submenu is missing.
 pub fn sync_follow<R: Runtime>(app: &AppHandle<R>, entries: &[FollowEntry]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     let Some(sub) = find_submenu(&menu, FOLLOW_ID) else {
@@ -1371,6 +1404,11 @@ pub fn sync_follow<R: Runtime>(app: &AppHandle<R>, entries: &[FollowEntry]) -> t
 
 /// #169: View > Zoom Presets: the own presets after Organize, one item per name. The first five carry Option+1 to
 /// Option+5. The entries are made again only when the names changed (or the submenu lost them).
+///
+/// # Errors
+///
+/// When the windowing library cannot remove or add a Zoom Presets item. Nothing happens (and
+/// nothing fails) when the app has no menu or the submenu is missing.
 pub fn sync_zoom_own<R: Runtime>(app: &AppHandle<R>, names: &[String]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     let Some(sub) = find_submenu(&menu, ZOOM_PRESETS_ID) else {

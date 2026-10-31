@@ -243,6 +243,11 @@ fn xcorr_lag(x: &[f32], base: i64, span: i64, tpl: &[f64]) -> Option<(i64, f64, 
 /// The agreement of every hit of a track: the estimates of `hits` (seconds, the final
 /// refined times, in the order given) against the signal `x` at `sr`. The hit times and
 /// the hit set are never touched.
+///
+/// # Panics
+///
+/// Never in practice: the `unwrap` calls on the `min` and `max` of the per-hit estimates run
+/// only when at least two estimates exist, so the iterator is never empty.
 pub fn agreement_track(x: &[f32], sr: u32, hits: &[f64]) -> Vec<Agreement> {
     let srf = sr as f64;
     let tpl = template(x, sr, hits);

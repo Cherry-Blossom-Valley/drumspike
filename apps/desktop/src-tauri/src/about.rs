@@ -31,6 +31,11 @@ pub fn link_address(id: &str) -> Option<&'static str> {
 }
 
 /// #18: open one of the fixed addresses of the About dialog by id (`open <address>` on macOS).
+///
+/// # Errors
+///
+/// 404 when `id` is none of `website`, `source` and `cbv`. 500 on a platform other than macOS, and
+/// on macOS when the `open` command cannot be started.
 #[tauri::command]
 pub fn open_link(id: String) -> Result<Value, AppError> {
     let addr = link_address(&id).ok_or_else(|| AppError::not_found(format!("unknown link id: {id}")))?;

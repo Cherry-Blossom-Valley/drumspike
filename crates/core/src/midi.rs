@@ -148,6 +148,13 @@ fn check_timing(ppq: u16, tempo: f64) -> Result<(), MidiError> {
 
 /// The note tuples `(tick, note, velocity, duration)` of an export, one per event in input
 /// order: what `engine.export_midi` writes and what pretty_midi reads back.
+///
+/// # Errors
+///
+/// [`MidiError::Timing`] when `ppq` is 0 or above 0x7FFF, or `tempo` is not a positive finite
+/// number; [`MidiError::Note`] when `note` is outside 0..=127; [`MidiError::Velocity`] when an
+/// event velocity is outside 0..=127; [`MidiError::Tick`] when an event time is not finite or
+/// beyond [`MAX_TICK`].
 pub fn note_events(events: &[MidiEvent], note: i64, ppq: u16, tempo: f64) -> Result<Vec<NoteEvent>, MidiError> {
     check_timing(ppq, tempo)?;
     let key = u8::try_from(note)
@@ -241,6 +248,12 @@ fn single_tick_map(ppq: u16, tempo: f64) -> Result<TickMap, MidiError> {
 }
 
 /// The bytes `engine.export_midi(events, note, path, ppq, tempo)` writes.
+///
+/// # Errors
+///
+/// Every error of [`note_events`]; also [`MidiError::Timing`] when the tempo meta value does
+/// not fit 24 bits, and [`MidiError::Tick`] or [`MidiError::Map`] when the file writer cannot
+/// encode a delta or the tempo.
 pub fn midi_bytes(events: &[MidiEvent], note: i64, ppq: u16, tempo: f64) -> Result<Vec<u8>, MidiError> {
     let notes = note_events(events, note, ppq, tempo)?;
     let tempo_us = u24::try_from(tempo_meta(ppq, tempo)).ok_or(MidiError::Timing { ppq, tempo })?;
@@ -271,6 +284,12 @@ fn write_file(msgs: &[Msg], ppq: u16, track0: &[(u64, Meta0)]) -> Result<Vec<u8>
 
 /// The note tuples of an export through a tempo map: like [`note_events`], with the ticks of
 /// `tm` (the file's own tempo events) instead of one tempo.
+///
+/// # Errors
+///
+/// [`MidiError::Note`] when `note` is outside 0..=127; [`MidiError::Velocity`] when an event
+/// velocity is outside 0..=127; [`MidiError::Tick`] when an event time is not finite or
+/// beyond [`MAX_TICK`].
 pub fn note_events_tm(events: &[MidiEvent], note: i64, tm: &TickMap) -> Result<Vec<NoteEvent>, MidiError> {
     let key = u8::try_from(note)
         .ok()
@@ -322,6 +341,11 @@ fn map_track0(tm: &TickMap, map: &TempoMap) -> Result<Vec<(u64, Meta0)>, MidiErr
 /// of [`midi_bytes`] at `legacy_tempo` (the golden and frozen files); any other map writes the
 /// tempo, the time signatures and the `Bar 1` marker in the tempo track and each note at its
 /// time through the map ([`TickMap`]); then `legacy_tempo` is not used.
+///
+/// # Errors
+///
+/// [`MidiError::Map`] when the tempo map, its meter events or `legacy_tempo` are invalid;
+/// otherwise the errors of [`note_events_tm`] and of the file writer ([`MidiError::Tick`]).
 pub fn midi_bytes_map(
     events: &[MidiEvent],
     note: i64,
@@ -342,6 +366,10 @@ pub fn midi_bytes_map(
 }
 
 /// [`midi_bytes_map`] written to `path`.
+///
+/// # Errors
+///
+/// Every error of [`midi_bytes_map`]; [`MidiError::Io`] when the atomic write to `path` fails.
 pub fn export_midi_map(
     events: &[MidiEvent],
     note: i64,
@@ -401,6 +429,12 @@ fn marker_events_tm(markers: &[MidiMarker], tm: &TickMap) -> Result<Vec<(u64, Me
 /// each on its own note, channel 10, with the same note length and ticks as the per-track files.
 /// P4-40g: one `marker` event per review marker in the tempo track, at its time through the map.
 /// A time distance beyond 28 bits (about 93 minutes at 24,000 PPQ) is refused with [`MidiError::Tick`].
+///
+/// # Errors
+///
+/// [`MidiError::Map`] when the tempo map or `legacy_tempo` is invalid; [`MidiError::Note`],
+/// [`MidiError::Velocity`] or [`MidiError::Tick`] for a track note, velocity or time (or a
+/// marker time) that cannot be encoded.
 pub fn multi_midi_bytes(
     tracks: &[MidiTrack],
     markers: &[MidiMarker],
@@ -492,6 +526,10 @@ fn meta_track(track0: &[(u64, Meta0)]) -> Result<Vec<TrackEvent<'_>>, MidiError>
 }
 
 /// [`multi_midi_bytes`] written to `path`.
+///
+/// # Errors
+///
+/// Every error of [`multi_midi_bytes`]; [`MidiError::Io`] when the atomic write to `path` fails.
 pub fn export_multi_midi(
     tracks: &[MidiTrack],
     markers: &[MidiMarker],
@@ -674,6 +712,10 @@ fn write_smf(msgs: &[Msg], ppq: u16, track0: &[(u64, Meta0)]) -> Vec<u8> {
 }
 
 /// `engine.export_midi`: write the single-note drum MIDI file for `events` to `path`.
+///
+/// # Errors
+///
+/// Every error of [`midi_bytes`]; [`MidiError::Io`] when the atomic write to `path` fails.
 pub fn export_midi(events: &[MidiEvent], note: i64, path: &Path, ppq: u16, tempo: f64) -> Result<(), MidiError> {
     let bytes = midi_bytes(events, note, ppq, tempo)?;
     crate::io::write_atomic(path, &bytes)?;

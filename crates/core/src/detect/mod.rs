@@ -60,6 +60,10 @@ impl From<ResampleError> for DetectError {
 
 /// The preparation of the detector (P3-15b): [`resample`] to 44.1 kHz and the chain's
 /// [`features`] (`(T, 84)` row-major).
+///
+/// # Errors
+///
+/// [`DetectError::Resample`] when `sr` is not 44.1, 48 or 96 kHz.
 pub fn prepare(signal: &[f32], sr: u32, chain: Chain) -> Result<Vec<f32>, DetectError> {
     let y = resample::resample_to_44100(signal, sr)?;
     Ok(features::features(&y, chain.feature_recipe()))

@@ -163,6 +163,11 @@ fn next_id(marks: &[Value]) -> String {
 /// goes when it is empty). 400 when a kind would hold more than [`MAX_EXAMPLES`]: then nothing
 /// changes. A new object gets `on: false`, `threshold: 0.5`, `auto: true` (concept 3.2: the threshold
 /// follows the examples until the engineer drags it) and the method.
+///
+/// # Errors
+///
+/// A 400 `AppError` when `kind` is not `this` or `not`, or when the kind would hold more than [`MAX_EXAMPLES`]
+/// examples (`learn` is unchanged then).
 pub fn apply_mark(
     learn: &mut Map<String, Value>,
     kind: &str,
@@ -237,6 +242,11 @@ pub fn apply_mark(
 
 /// Remove the mark `id` (with `at`: only the example nearest to it, within [`SAME_HIT`]). The
 /// number of removed examples; 400 for an unknown id or time. The mark goes when it is empty.
+///
+/// # Errors
+///
+/// A 400 `AppError` when no mark has the id `id`, or when `at` is given and the mark has no example within
+/// [`SAME_HIT`] of it.
 pub fn remove_mark(learn: &mut Map<String, Value>, id: &str, at: Option<f64>) -> Result<usize, AppError> {
     let mut marks: Vec<Value> = marks_of(learn).to_vec();
     let mi = marks
@@ -299,6 +309,11 @@ pub fn forget_at(learn: &mut Map<String, Value>, t0: f64, t1: f64, hit: bool) ->
 
 /// Change the kind of the mark `id`. 400 for an unknown id, or when the other kind would hold more
 /// than [`MAX_EXAMPLES`]. Returns the new kind.
+///
+/// # Errors
+///
+/// A 400 `AppError` when no mark has the id `id`, or when the other kind would then hold more than
+/// [`MAX_EXAMPLES`] examples.
 pub fn flip_mark(learn: &mut Map<String, Value>, id: &str) -> Result<&'static str, AppError> {
     let (n_this, n_not) = counts(learn);
     let mut marks: Vec<Value> = marks_of(learn).to_vec();
@@ -325,6 +340,12 @@ pub fn flip_mark(learn: &mut Map<String, Value>, id: &str) -> Result<&'static st
 /// Check a `learn` object that the page or an agent sends back (`track_learn_set`): `marks` is a
 /// list of `{id (string), kind, t0, t1 (numbers), at (list of numbers)}` with unique ids, the
 /// optional keys have their type, and no kind holds more than [`MAX_EXAMPLES`]. Unknown keys pass.
+///
+/// # Errors
+///
+/// A 400 `AppError` (`` `learn`: ... ``) for a wrong type of `on`, `auto`, `threshold`, `method`, `add` or `dropped`,
+/// a `threshold` or `add` outside 0 to 1, a `marks` that is not a list, a mark with a missing or duplicate `id`, a
+/// bad `kind`, non-numeric `t0`, `t1` or `at`, or more than [`MAX_EXAMPLES`] examples of one kind.
 pub fn check_learn(learn: &Map<String, Value>) -> Result<(), AppError> {
     let bad = |m: &str| Err(AppError::bad(format!("`learn`: {m}")));
     for (k, ok) in [
@@ -558,6 +579,10 @@ pub struct Resolved {
 }
 
 /// The active hits of a range: `t0 <= t <= t1`, no loudness cut and no tom bleed mark; their times minus `shift_s`.
+///
+/// # Errors
+///
+/// A 400 `AppError` when an event has no numeric `t`.
 pub fn active_hits(events: &[Value], t0: f64, t1: f64, shift_s: f64) -> Result<Vec<f64>, AppError> {
     let times = hit_times(events)?;
     Ok(events
@@ -569,6 +594,10 @@ pub fn active_hits(events: &[Value], t0: f64, t1: f64, shift_s: f64) -> Result<V
 }
 
 /// The nearest stored hit to `t` within [`HIT_REACH`] (cut hits too): its time minus `shift_s`.
+///
+/// # Errors
+///
+/// A 400 `AppError` when an event has no numeric `t`.
 pub fn hit_at(events: &[Value], t: f64, shift_s: f64) -> Result<Option<f64>, AppError> {
     let times = hit_times(events)?;
     Ok(times
@@ -631,6 +660,12 @@ impl Service {
     /// and the Learn hits that the edit deleted go in the track's `learn.dropped`, so the next Learn change does not
     /// bring them back ([`crate::learn_filter::note_dropped`]; a hit put back takes its time out again).
     /// R07: the write is one writer of the project: it takes the store guard once here.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown or read-only session or an unknown track; a 409 when another write or an analysis
+    /// runs, or when `name` follows a track ([`crate::follow::check_own`]); a 400 when `events` is not a list of valid
+    /// hits.
     pub fn events_set_by_hand(&self, sid: &str, name: &str, events: &Value) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let _guard = self.begin_write(sid)?;
@@ -721,6 +756,12 @@ impl Service {
     /// when the range holds nothing to learn (no error). 400 for wrong arguments, a hit that is not
     /// there and a kind over [`MAX_EXAMPLES`]; 409 for an offline track whose audio the last rule
     /// needs, and a follower whose source is gone.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` for a `kind` other than `this` or `not`, both or neither of `range` and `hit`, a non-finite
+    /// time, a negative `hit`, no hit or candidate at `hit` for a `not` mark, or a kind over [`MAX_EXAMPLES`]; a 409
+    /// for an offline track or a follower whose source is gone; an error for an unknown or read-only session or track.
     pub fn track_learn_mark(
         &self,
         sid: &str,
@@ -982,6 +1023,11 @@ impl Service {
 
     /// `track_learn_remove {sid, name, id, at?}`: remove a mark, or with `at` (seconds, an example
     /// time of `learn`) one example of it. Answers `{removed, learn, track, routed}`.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` for an unknown mark `id` or an `at` with no example (see [`remove_mark`]); a 409 for a
+    /// follower whose source is gone; an error for an unknown or read-only session or track.
     pub fn track_learn_remove(&self, sid: &str, name: &str, id: &str, at: Option<f64>) -> Result<Value, AppError> {
         let (target, routed) = self.learn_target(sid, name)?;
         let was_on = self.learn_pick_runs(sid, &target);
@@ -994,6 +1040,12 @@ impl Service {
     /// `track_learn_forget_at {sid, name, t0, t1 | hit}` (P4-36, Forget This): remove the examples at
     /// one hit ([`HIT_REACH`]) or inside a range. Answers `{removed, learn, track, routed}`;
     /// `removed: 0` (no example there) changes nothing, not even the dirty flag. 400 for wrong arguments.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` when both or neither of `range` and `hit` are given or a time is not finite; a 409 for a
+    /// follower whose source is gone; an error for an unknown or read-only session or track, or when sweeping the
+    /// hits that lost their support fails.
     pub fn track_learn_forget_at(
         &self,
         sid: &str,
@@ -1068,6 +1120,11 @@ impl Service {
 
     /// `track_learn_flip {sid, name, id}`: change a mark from "this" to "not" or back. Answers
     /// `{kind, learn, track, routed}`.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` for an unknown mark `id` or when the other kind would hold more than [`MAX_EXAMPLES`] (see
+    /// [`flip_mark`]); a 409 for a follower whose source is gone; an error for an unknown or read-only session or track.
     pub fn track_learn_flip(&self, sid: &str, name: &str, id: &str) -> Result<Value, AppError> {
         let (target, routed) = self.learn_target(sid, name)?;
         let was_on = self.learn_pick_runs(sid, &target);
@@ -1079,6 +1136,11 @@ impl Service {
 
     /// `track_learn_forget {sid, name}`: remove every mark of the track (none is fine). Answers
     /// `{forgotten, examples, learn, track, routed}`; the examples go, `on`, `threshold`, `auto` and `method` stay.
+    ///
+    /// # Errors
+    ///
+    /// A 409 `AppError` for a follower whose source is gone; an error for an unknown or read-only session or track, or
+    /// when sweeping the learned hits that lost their support fails.
     pub fn track_learn_forget(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let (target, routed) = self.learn_target(sid, name)?;
         let was_on = self.learn_pick_runs(sid, &target);
@@ -1104,6 +1166,10 @@ impl Service {
 
     /// `track_learn_set {sid, name, learn}`: store the whole `learn` object (`null` removes the key): the undo and redo of a step. Checked by [`check_learn`]. Answers
     /// `{learn, track, routed}`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::track_learn_set_events`] (this is the call without `events`).
     pub fn track_learn_set(&self, sid: &str, name: &str, learn: &Value) -> Result<Value, AppError> {
         self.track_learn_set_events(sid, name, learn, None)
     }
@@ -1111,6 +1177,12 @@ impl Service {
     /// P4-6c: [`Service::track_learn_set`] with `events`: the learn object and that hit list of the
     /// target track are stored as they are (`events_set`), no marking runs; the answer's `filter`
     /// holds the stored hits. The page's undo and redo of a Learn step restore their snapshot so.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` when `events` is not a list, `learn` is neither an object nor null, or `learn` fails
+    /// [`check_learn`]; a 409 for a follower whose source is gone; an error for an unknown or read-only session or
+    /// track, or when storing `events` fails.
     pub fn track_learn_set_events(
         &self,
         sid: &str,

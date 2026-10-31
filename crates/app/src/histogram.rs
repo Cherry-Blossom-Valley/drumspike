@@ -80,6 +80,10 @@ pub fn mark_cut_events(events: &mut [Event], x: &[f32], sr: u32, cut: Option<f64
 }
 
 /// [`mark_cut_events`] for the JSON events of the page (`t`, `added`, `orig`); every event must be an object.
+///
+/// # Errors
+///
+/// A 400 `AppError` when an event is not a JSON object or has no numeric `t`; the events before it are already marked.
 pub fn mark_cut_values(events: &mut [Value], x: &[f32], sr: u32, cut: Option<f64>) -> Result<(), AppError> {
     for e in events {
         let m = e
@@ -296,6 +300,11 @@ impl Service {
     /// `{state: "ok", classes, candidates, gap}` ([`detection_candidates`], [`largest_gap`]), or
     /// `{state}` with `follows` (a follower: its hits come from its source), `no_model` or
     /// `missing`. 409 for an offline track.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown session or track, an event without a numeric `t` (400), a track whose source is
+    /// offline (409), audio that cannot be decoded, or an unreadable kept detection.
     pub fn track_histograms(&self, sid: &str, name: &str, events: Option<&[Value]>) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         resolve_shared(&op);
@@ -344,6 +353,10 @@ impl Service {
     /// sensitivity, the followers), and the answer carries the job's entry as `entry`.
     /// 409: a follower, no model, no current activations (Re-analyze once), an analysis running,
     /// an offline track; 400: wrong params.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::track_repick_keep`] (this is the call with `keep_edited` false).
     pub fn track_repick(
         &self,
         sid: &str,
@@ -486,6 +499,12 @@ impl Service {
     /// edited hits of the track ([`crate::edit::merge_edited`]), and the answer holds the stored
     /// events. Without `store` the answer is the pick merged the same way (not stored), with
     /// `levels` aligned with the merged events (P4-9: the page's live preview).
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown track or a read-only session (with `store`), a follower, no kept activations, a
+    /// running analysis, another write in progress or an offline source (409), params that do not parse or do not
+    /// suit the role (400), or a failing store.
     pub fn track_repick_keep(
         &self,
         sid: &str,
@@ -628,6 +647,10 @@ impl Service {
     /// with `v` mapped from each hit's peak level and the cut marks, not stored (the page applies
     /// them as one undo step, as Recompute Velocities). A follower derives its hits again with the
     /// new map and cut and stores them; its answer carries `follows`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::track_velocity_set_apply`] (this is the call with `apply` false).
     pub fn track_velocity_set(
         &self,
         sid: &str,
@@ -644,6 +667,12 @@ impl Service {
     /// track's stored events (as `events_set` does with the answer), so a later export has them. The Service default is
     /// false (the page applies the answer itself as one undo step); `call::call` defaults it to true. The answer gets
     /// `applied: true`. A follower derives and stores its hits in both cases.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` when `lo_db`, `hi_db` or `cut_db` is not finite, an event is not an object or has no numeric
+    /// `t`; a 409 while an analysis runs or another write is in progress, or when the source is offline; an error
+    /// for an unknown session (or a read-only one) or track. Nothing is stored on an error.
     #[allow(clippy::too_many_arguments)]
     pub fn track_velocity_set_apply(
         &self,
@@ -761,6 +790,11 @@ impl Service {
     /// (the object `analyze_start` takes). The undo and redo of a stored re-pick send the
     /// slider's params back, so a Save writes the params of the hits it shows. 409 while an
     /// analysis or a re-pick store runs.
+    ///
+    /// # Errors
+    ///
+    /// A 409 `AppError` while an analysis or another write runs; an error for an unknown or read-only session or an
+    /// unknown track.
     pub fn track_params_set(&self, sid: &str, name: &str, params: &Map<String, Value>) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let _guard = self.begin_write(sid)?;

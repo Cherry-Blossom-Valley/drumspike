@@ -378,6 +378,9 @@ pub(crate) fn repick_targets(svc: &Service, op: &Shared, name: &str, v: u32) -> 
 
 /// [`run_step`] for an open project `sid`: the step the job and the re-pick run after they store (the tests and a
 /// tool that set the hits by hand call it).
+///
+/// # Errors
+/// 404 when `sid` is not an open project; `run_step` itself reports nothing as an error.
 pub fn run_after(svc: &Service, sid: &str, targets: &[(String, u32)]) -> Result<Option<Value>, AppError> {
     let op = svc.inner.registry.get(sid)?;
     Ok(run_step(svc, &op, targets))

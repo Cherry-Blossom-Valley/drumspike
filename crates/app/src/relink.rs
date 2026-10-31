@@ -55,6 +55,12 @@ impl Service {
     /// (`force`) refreshes the track's rate and length from its header; the hit times stay.
     /// Answers `{track, status, source, matched, followers}` (P4-4: the followers derived again,
     /// [`crate::follow::refresh_stale`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error for an unknown project id or a `path` that is no file, a 400 error for an unknown
+    /// track or an unreadable audio header, and a 409 error when the project is open read-only or the file does
+    /// not match the source record without `force`. Building the new source record can also fail.
     pub fn project_relink(&self, sid: &str, track: &str, path: &str, force: bool) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let path = abspath(Path::new(path));
@@ -114,6 +120,11 @@ impl Service {
     /// was done so far with `cancelled: true` and relinks nothing. 404 for a folder that does
     /// not exist, 409 while another job of the project runs. A project with no offline track
     /// answers `offline: 0`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error for an unknown project id or a `folder` that is not a directory, and a 409 error when
+    /// the project is open read-only or another job of the project runs.
     pub fn relink_search(&self, sid: &str, folder: &str) -> Result<Value, AppError> {
         let _span = crate::trace::stage("relink:search");
         let t0 = Instant::now();

@@ -114,6 +114,12 @@ impl From<OnsetError> for BackendError {
 /// A detector backend: step 1 of the analysis for one track.
 pub trait DetectorBackend {
     /// The hits of one track and, optionally, its candidate list.
+    ///
+    /// # Errors
+    ///
+    /// A [`BackendError`] when the backend cannot analyse the track: [`BackendError::Onset`]
+    /// for the built-in DSP detector, the plugin variants (`Plugin`, `Process`, `Limit`,
+    /// `Protocol`, `Json`, `Io`) for an external detector plugin.
     fn detect(&self, x: &[f32], sr: u32, role: &str)
     -> Result<(Vec<DetectedHit>, Option<CandidateList>), BackendError>;
 }
@@ -213,6 +219,12 @@ pub struct Validated {
 
 /// Validate one response (the design section 5): drop out-of-range and unknown-class hits,
 /// clamp the confidences, sort by time and enforce the rate and total limits.
+///
+/// # Errors
+///
+/// [`BackendError::Protocol`] when the response names a protocol other than 1;
+/// [`BackendError::Plugin`] when the plugin reported an error; [`BackendError::Limit`] when
+/// the hit or candidate count, or its rate per second, is over the limit.
 pub fn validate_response(
     response: &PluginResponse,
     file_len_s: f64,

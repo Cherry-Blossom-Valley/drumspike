@@ -24,6 +24,11 @@ pub const SHAPE_HITS: usize = 64;
 
 /// The tick and the time (seconds) of the calibration note: the start of bar 2 (bar 1 of the map
 /// holds the start meter): 2.000 s with the default map. `ppq` is the file's resolution.
+///
+/// # Errors
+///
+/// The message of [`TickMap::new`] when `ppq` or the tempo map is invalid, or a message that the
+/// map's meter does not fit a whole number of ticks per bar at this `ppq`.
 pub fn calibration_time(map: &TempoMap, ppq: u16) -> Result<(i64, f64), String> {
     let tm = TickMap::new(ppq, map)?;
     let bar = tm.bar_ticks(map.meter.0, map.meter.1).ok_or_else(|| {
@@ -39,6 +44,11 @@ pub fn calibration_time(map: &TempoMap, ppq: u16) -> Result<(i64, f64), String> 
 /// The calibration MIDI file: one note `note` (velocity 100) at [`calibration_time`], written
 /// through the map like every export (`legacy_tempo` is used for the default map only). Returns
 /// the bytes and the note's time in seconds.
+///
+/// # Errors
+///
+/// [`MidiError::Map`] when [`calibration_time`] fails; otherwise the errors of
+/// [`midi_bytes_map`] (for example [`MidiError::Note`] when `note` is outside 0..=127).
 pub fn calibration_midi(note: i64, map: &TempoMap, ppq: u16, legacy_tempo: f64) -> Result<(Vec<u8>, f64), MidiError> {
     let (_, t) = calibration_time(map, ppq).map_err(MidiError::Map)?;
     let ev = [MidiEvent {
@@ -61,6 +71,11 @@ pub struct Offset {
 
 /// The delay of the bounce's transient: its onset (the one-shots' rule) minus `note_on_s`. `Err`
 /// for a silent bounce.
+///
+/// # Errors
+///
+/// An error message when `sr` is 0 or every sample of the bounce is exactly zero ("the bounce is
+/// silent").
 pub fn measure_offset(bounce: &[f32], sr: u32, note_on_s: f64) -> Result<Offset, String> {
     if sr == 0 || bounce.iter().all(|v| *v == 0.0) {
         return Err("the bounce is silent".to_string());

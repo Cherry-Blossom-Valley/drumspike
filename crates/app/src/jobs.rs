@@ -320,6 +320,12 @@ fn float_or(m: &Map<String, Value>, key: &str, default: f64) -> Result<f64, Stri
 /// `shift_samples` (0), `vel_lo_db` (-40), `vel_hi_db` (-6), `refine_lo_ms` and
 /// `refine_hi_ms` (only with `refine`), `thresholds` (0.22, 0.24, 0.32, 0.22, 0.30), or
 /// `sensitivity` (P4-5: the slider value 0 to 150; `thresholds` wins when both are there).
+///
+/// # Errors
+///
+/// A `bad params: <key>` message when `min_gap_ms`, `shift_samples`, `vel_lo_db`, `vel_hi_db`, `refine_lo_ms` or
+/// `refine_hi_ms` is not a number, a bool or a numeric string. A bad `thresholds` list is not an error here: it is
+/// kept in `thresholds_error` and refused when the detection runs.
 pub fn parse_params(params: Option<&Map<String, Value>>) -> Result<ParsedParams, String> {
     let empty = Map::new();
     let m = params.unwrap_or(&empty);
@@ -463,12 +469,22 @@ pub struct DetectorSlot;
 
 impl DetectorSlot {
     /// The detector the slot runs (P3-15b). The job asks once at its start.
+    ///
+    /// # Errors
+    ///
+    /// Never on the model-free main: the slot always answers [`Kind::Dsp`].
     pub fn kind(&self, _cfg: &ServiceConfig) -> Result<Kind, AppError> {
         Ok(Kind::Dsp)
     }
 
     /// The DSP detection with its candidate list (A4): the third return carries the kept
     /// candidates for the Sensitivity slider and `track_repick`.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` when `parsed` holds a bad `thresholds` list, when the DSP analysis rejects the role or
+    /// signal, or (with a detector plugin) when the plugin is not installed, does not list the role or the sample
+    /// rate, cannot resample, or its run fails.
     pub fn analyze_prepared_cands(
         &self,
         _cfg: &ServiceConfig,
@@ -574,6 +590,10 @@ impl DetectorSlot {
     }
 
     /// [`Self::analyze_prepared_cands`]: the kept candidates are internal to the job path.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Self::analyze_prepared_cands`].
     pub fn analyze_prepared(
         &self,
         cfg: &ServiceConfig,
@@ -589,6 +609,10 @@ impl DetectorSlot {
 
     /// The DSP detection with its kept candidates; the activation slot is always `None`
     /// (#281 D16: main is model-free).
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Self::analyze_prepared_cands`].
     pub fn analyze_kept(
         &self,
         cfg: &ServiceConfig,
@@ -604,6 +628,10 @@ impl DetectorSlot {
 
     /// Always `None` on the model-free main: no model meta (the old documents keep their
     /// recorded `detector.model`).
+    ///
+    /// # Errors
+    ///
+    /// Never on the model-free main: the slot always answers `Ok(None)`.
     pub fn model_meta(&self, _cfg: &ServiceConfig) -> Result<Option<Value>, AppError> {
         Ok(None)
     }
@@ -633,6 +661,11 @@ fn weak_retry(
 }
 
 /// `json.dump(value, f, indent=1)`.
+///
+/// # Panics
+///
+/// Panics (`expect`) when `v` fails to serialize, e.g. a map with non-string keys; the callers pass JSON values and
+/// document types, which always serialize. The UTF-8 `expect` cannot fire.
 pub fn to_json_indent1(v: &impl Serialize) -> String {
     let mut buf = Vec::new();
     let fmt = serde_json::ser::PrettyFormatter::with_indent(b" ");
@@ -830,6 +863,10 @@ pub const RETRY_GROWTH: f64 = 0.10;
 /// hit is kept; the next step replaces it while its count is more than [`RETRY_GROWTH`]
 /// above the kept one; the first step that does not grow that much ends the retry. Returns
 /// the kept step (sensitivity, thresholds, analysis), or `None` when every step stays at 0.
+///
+/// # Errors
+///
+/// The message of the first `run` that fails; the retry stops there.
 pub fn retry_without_hits(
     run: &mut dyn FnMut(&[f64; N_CLASSES]) -> Result<Analysis, String>,
     current: &[f64; N_CLASSES],

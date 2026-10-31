@@ -200,6 +200,10 @@ pub fn encode_wav(spec: &WavSpec, interleaved: &[f32], bext: Option<&Bext>) -> V
 }
 
 /// Write a WAV file from interleaved float samples.
+///
+/// # Errors
+///
+/// An [`std::io::Error`] from the atomic write (see [`write_atomic`]).
 pub fn write_wav(path: &Path, spec: &WavSpec, interleaved: &[f32], bext: Option<&Bext>) -> std::io::Result<()> {
     write_atomic(path, &encode_wav(spec, interleaved, bext))
 }
@@ -212,6 +216,11 @@ pub fn write_wav(path: &Path, spec: &WavSpec, interleaved: &[f32], bext: Option<
 /// plus rename as [`write_atomic`] (no partial file on error), and the bytes on disk are the
 /// ones [`encode_wav_raw`] builds for the same samples. A `fill` or write error removes the
 /// temporary file and leaves the destination exactly as it was.
+///
+/// # Errors
+///
+/// An [`std::io::Error`] when the temporary file cannot be created, written or renamed, or
+/// the error `fill` returns for a block.
 pub fn write_wav_blockwise<F>(
     path: &Path,
     spec: &WavSpec,
@@ -247,6 +256,11 @@ where
 /// opened with `create_new`, so two writers never share one inode), synced to disk, then a
 /// rename, so a reader never sees a half-written file (P4-7c). The temporary file is removed
 /// when the write fails (the guard of the shared helper, `io::atomic`).
+///
+/// # Errors
+///
+/// An [`std::io::Error`] when the path has no file name, the temporary file cannot be
+/// created, written or synced, or the rename fails.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     super::atomic::write_bytes_atomic(path, bytes)
 }
