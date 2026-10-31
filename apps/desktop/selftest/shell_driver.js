@@ -502,8 +502,10 @@
       const sid = S.sid;
       const names = S.order.filter(k => S.tracks[k] && !S.tracks[k].offline && (S.events[k] || []).length > 0), n = names.length;
       need(n > 0, "no track has hits to export");
+      // The dialog opens only after openExport's bridge calls return: wait for EX.open AND
+      // #exportModal without `hidden` (openExport:5898), never for the text alone.
       await click("export");
-      await until(() => visible("#exportModal"), "the Export dialog", 15000);
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog", 15000);
       $q("#exGo").click();
       // #151: a project without a tempo map asks "No tempo set" before the first export;
       // answer it the way a user would (Export anyway), then the export runs. The notice
@@ -519,13 +521,21 @@
       await until(() => new RegExp(`exported ${n} MIDI and ${n} spike files?`).test($q("#stMsg").textContent), `Export (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 60000);
       const have = await T.invoke("export_existing", { sid });
       need(have.count === 2 * n, `Exports/ holds ${have.count} files, expected ${2 * n}`);
+      // Cancel only while the dialog is really open (EX.open), and wait until it is closed again.
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog open after the export", 15000);
       $q("#exCancel").click();
+      await until(() => EX.open === false && !visible("#exportModal"), "the Export dialog closed after Cancel", 10000);
+      need(EX.open === false && !visible("#exportModal"), "the Export dialog is not closed before the second open");
       await click("export");
+      // #exReplace keeps its old text after a close (exClose does not clear it): the wait must be
+      // on the dialog being OPEN first, or Escape races openExport's pending bridge calls and the
+      // dialog reopens after exClose (openExport:5898 removes `hidden` again).
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog open again", 15000);
       await until(() => $q("#exReplace").textContent === `${2 * n} files will be replaced`, "the replace count in the dialog", 15000);
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       // P4-31: after an export ran, the message keeps its result — "export cancelled" only
       // comes from a cancel before the first export; Escape must close the dialog either way.
-      await until(() => !visible("#exportModal") && (/export cancelled/.test($q("#stMsg").textContent) || new RegExp(`exported ${n} MIDI and ${n} spike files?`).test($q("#stMsg").textContent)), `Escape (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 10000);
+      await until(() => EX.open === false && !visible("#exportModal") && (/export cancelled/.test($q("#stMsg").textContent) || new RegExp(`exported ${n} MIDI and ${n} spike files?`).test($q("#stMsg").textContent)), `Escape (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 10000);
       return { files: have.count };
     });
 
