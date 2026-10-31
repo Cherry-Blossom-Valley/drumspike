@@ -464,6 +464,7 @@
     other_mics: () => mxToggle(),   // #157: View > Other Mics Under Hit
     suspend_follow: () => toggleSuspendFollow(),   // P4-wf10: Transport > Suspend Follow when Editing
     stop_return_mode: () => toggleStopReturnMode(),   // #436: Transport > Stop Returns to Start
+    audition_tab: () => toggleAuditionTab(),   // #240: Transport > Audition on Tab
     project: p => (p.sid ? switchTo(p.sid) : undefined),   // Window menu: one entry per open project
     shortcuts: () => openShortcuts(),
   };
@@ -504,6 +505,7 @@
       suspendFollow: !!SETTINGS().ui.suspendFollowOnEdit,   // P4-wf10: Transport > Suspend Follow when Editing
       tabMode: SETTINGS().ui.tabMode === "all" ? "all" : "active",   // #175: View > Tab Moves To
       stopReturnMode: !!SETTINGS().ui.stopReturnToStart,   // #436: Transport > Stop Returns to Start
+      auditionTab: !!SETTINGS().ui.auditionTab,   // #240: Transport > Audition on Tab
       exportAgain: !!S.exportAgain,   // P4-31: File > Export Again is greyed before the project keeps an export shape
       undo: S.undo.length > 0, redo: S.redo.length > 0,   // #158 (rank 9): Edit > Undo and Redo are greyed while their stack is empty
       selHit: !!(S.sel || LN.sel),   // #158 (rank 9): Delete, the nudge items and Audition Hit need a hit or range selection
