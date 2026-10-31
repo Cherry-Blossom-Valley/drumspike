@@ -298,7 +298,7 @@ fn lanes_fast_path_bench_of_the_generated_session() {
     let sid = r["sid"].as_str().unwrap().to_string();
     let dir = PathBuf::from(r["folder"].as_str().unwrap());
     let add = svc
-        .tracks_add(&sid, &[folder.display().to_string()], &[], &[], false, None)
+        .tracks_add(&sid, &[folder.display().to_string()], None, &[], &[], false, None)
         .unwrap();
     let names: Vec<String> = add["added"]
         .as_array()

@@ -395,6 +395,7 @@ async fn export_all(
     dest: Option<String>,
     midi_mode: Option<String>,
     tracks: Option<Vec<String>>,
+    roles: Option<Vec<String>>,
     formats: Option<Vec<String>>,
     compensate: Option<bool>,
     progress: Channel<Value>,
@@ -404,7 +405,7 @@ async fn export_all(
     });
     // P4-30: the options of the Export dialog; the same parser as the bridge and the command line
     let opts = drumspike_app::export::ExportOpts::from_args(&serde_json::json!({
-        "dest": dest, "midi_mode": midi_mode, "tracks": tracks, "formats": formats, "compensate": compensate }))?;
+        "dest": dest, "midi_mode": midi_mode, "tracks": tracks, "roles": roles, "formats": formats, "compensate": compensate }))?;
     blocking(&svc, "export_all", move |s| {
         s.export_all_opts(&sid, &opts, Some(progress))
     })
