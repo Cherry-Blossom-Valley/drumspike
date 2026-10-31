@@ -951,24 +951,61 @@ function spSyncView() {   // input while a strip shows: the view of this moment 
 }
 for (const t of ["pointerdown", "mousedown", "mousemove", "wheel", "click", "dblclick", "contextmenu", "keydown"])
   window.addEventListener(t, spSyncView, { capture: true, passive: true });
-/* P3-14b: counters. Main counter: seconds with 6 decimals, or samples; the sub counter shows the other one. The sample
-   rate is the one of the selected track, else of the first track. */
+/* P3-14b: counters. Main counter: seconds with 6 decimals, samples, Bars|Beats (bar.beat of the
+   tempo map, #149) or Timecode (HH:MM:SS:FF at 30 frames per second from the sample position,
+   #149); the sub counter shows the other format of the pair (seconds<->samples,
+   Bars|Beats<->Timecode). The sample rate is the one of the selected track, else of the first
+   track. The Timecode frame rate is 30, non drop: frames = floor(t * 30) over the whole project. */
+const COUNTER_PAIRS = { seconds: "samples", samples: "seconds", barsbeats: "timecode", timecode: "barsbeats" };
 function counterRate() {
   const t = (S.selTrack && S.tracks[S.selTrack]) || (S.order.length && S.tracks[S.order[0]]);
   return t && t.sr ? t.sr : 48000;
 }
+function counterBBText(bar, beat, ticks) {   // #149: the Pro Tools Bars|Beats shape, 960 ticks per beat
+  return `${bar}| ${String(beat).padStart(2, " ")}| ${String(ticks).padStart(4, " ")}`;
+}
+function counterBarsBeats() {
+  const m = TM.map;
+  if (!m) {   // no map: the default one the export uses, 120 BPM 4/4, bar 1 at 0 s
+    const total = S.playhead * 2;   // quarter-note beats at 120 BPM
+    return counterBBText(Math.floor(total / 4) + 1, Math.floor(total % 4) + 1, Math.round((total % 1) * 960) % 960);
+  }
+  const g = tmGrid();
+  if (!g || !g.t.length) return counterBBText(1, 1, 0);
+  let i = tmLower(g.t, S.playhead) - 1;   // the beat at or before the playhead (#149)
+  if (i < 0) return counterBBText(1, 1, 0);   // before bar 1: clamped to 1| 1| 000
+  // the grid times accumulate (tmGrid), so a playhead on a beat can sit a hair below its
+  // grid time: treat anything within a microsecond of the next beat as that beat (#149)
+  if (i + 1 < g.t.length && g.t[i + 1] - S.playhead * 1 <= 1e-6) i++;
+  const dt = (i + 1 < g.t.length ? g.t[i + 1] - g.t[i] : 0.5) || 0.5;
+  const ticks = ((Math.round((S.playhead - g.t[i]) / dt * 960) % 960) + 960) % 960;
+  return counterBBText(g.bar[i], g.beat[i], Math.max(0, ticks));
+}
+function counterTimecode() {
+  const fps = 30, sr = counterRate();
+  const t = Math.round(S.playhead * sr) / sr;   // the sample position of the playhead (#149)
+  let frames = Math.floor(t * fps);
+  const ff = frames % fps; frames = Math.floor(frames / fps);
+  const ss = frames % 60; frames = Math.floor(frames / 60);
+  const mm = frames % 60, hh = Math.floor(frames / 60);
+  const two = n => String(n).padStart(2, "0");
+  return `${two(hh)}:${two(mm)}:${two(ss)}:${two(ff)} tc`;
+}
 function counterTexts() {
   const secs = `${fmt(S.playhead, 6)} s`, smp = `${Math.round(S.playhead * counterRate())} smp`;
-  return SETTINGS().ui.counter === "samples" ? [smp, secs] : [secs, smp];
+  const bb = counterBarsBeats(), tc = counterTimecode();
+  const texts = { seconds: secs, samples: smp, barsbeats: bb, timecode: tc };
+  const main = texts[SETTINGS().ui.counter] || secs;
+  return [main, texts[COUNTER_PAIRS[SETTINGS().ui.counter] || "samples"]];
 }
-function setCounter(mode) {   // View > Main Counter: "seconds" or "samples"
-  if (mode !== "seconds" && mode !== "samples") return;
+function setCounter(mode) {   // View > Main Counter: "seconds", "samples", "barsbeats" or "timecode" (#149)
+  if (!(mode in COUNTER_PAIRS)) return;
   SETTINGS().ui.counter = mode; saveSettings();
   FR.head[2] = FR.head[3] = null; invalidate(F.HEAD);
-  $("#timeDisplay").title = `Main counter (${mode}). Click: exchange the counters (View > Main Counter > Exchange Counters)`;
+  $("#timeDisplay").title = `Main counter (${mode}${mode === "timecode" ? ", 30 fps" : ""}). Click: exchange the counters (View > Main Counter > Exchange Counters)`;
   DSShell.sync();
 }
-function exchangeCounters() { setCounter(SETTINGS().ui.counter === "seconds" ? "samples" : "seconds"); }
+function exchangeCounters() { setCounter(COUNTER_PAIRS[SETTINGS().ui.counter] || "seconds"); }
 
 /* ---------------- canvas sizing ---------------- */
 function laneWidth() { return GEO.laneW; }
@@ -2207,12 +2244,12 @@ function drawEventLines(canvas, name) {
   for (const i of hitsIn(events, S.view.t0 - pad, S.view.t1 + pad, dragSkip(name))) {
     const x = Math.round(tToX(events[i].t, W)) + 0.5;
     if (x < -5 || x > W+5) continue;
-    if (S.sel && S.sel.track===name && S.sel.index===i) { sel = { x, i }; continue; }
     const t0 = events[i].t;
     const pv = lnPreview(name, events[i]);   // P4-6c: a threshold drag shows the grey of the live threshold
-    const grey = pv === null ? hgIsCut(events[i]) : pv || hgCutOnly(events[i]);
-    const notTint = !grey && lnNot && lnNot.length && lnNear(lnNot, t0);   // marked "not", still in the output (filter off, or an edited hit)
-    const c = grey ? HG_GREY : notTint ? LN_NOT_TINT : (isManual(events[i]) || events[i].edited) ? MANUAL_COLOR : (isSpike ? color : "#cdd3de");   // P4-3: a cut hit is grey; P4-6c: so is a hit the Learn filter took out; a "not" example still in the output is tinted; P4-40f: a hand velocity keeps the manual colour
+    const evGrey = pv === null ? hgIsCut(events[i]) : pv || hgCutOnly(events[i]);
+    if (S.sel && S.sel.track===name && S.sel.index===i) { sel = { x, i, grey: evGrey }; continue; }   // #175: a selected deactivated hit keeps its state visible
+    const notTint = !evGrey && lnNot && lnNot.length && lnNear(lnNot, t0);   // marked "not", still in the output (filter off, or an edited hit)
+    const c = evGrey ? HG_GREY : notTint ? LN_NOT_TINT : (isManual(events[i]) || events[i].edited) ? MANUAL_COLOR : (isSpike ? color : "#cdd3de");   // P4-3: a cut hit is grey; P4-6c: so is a hit the Learn filter took out; a "not" example still in the output is tinted; P4-40f: a hand velocity keeps the manual colour
     (groups.get(c) || groups.set(c, []).get(c)).push(x);
   }
   const gone = HG.ghosts[name];   // P4-3: while the Sensitivity moves, the hits that go stay as grey lines
@@ -2234,12 +2271,29 @@ function drawEventLines(canvas, name) {
     if (isSpike) { ctx.fillStyle = c; for (const x of xs) { ctx.beginPath(); ctx.moveTo(x-4, 0); ctx.lineTo(x+4, 0); ctx.lineTo(x, 7); ctx.closePath(); ctx.fill(); } }
   }
   if (sel) {
-    ctx.globalAlpha = 1; ctx.strokeStyle = "#ffe066"; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(sel.x, 0); ctx.lineTo(sel.x, H); ctx.stroke();
-    if (isSpike) {
-      ctx.fillStyle = "#ffe066";
-      ctx.beginPath(); ctx.moveTo(sel.x-4, 0); ctx.lineTo(sel.x+4, 0); ctx.lineTo(sel.x, 7); ctx.closePath(); ctx.fill();
-      ctx.font = "9px sans-serif"; ctx.fillText(`${sel.i+1}/${events.length}`, sel.x+5, 9);
+    ctx.globalAlpha = 1;
+    if (sel.grey) {   // #175: a selected deactivated hit stays visibly deactivated: the line dashed and grey, the marker in the deactivated colour, the selection ring yellow
+      ctx.strokeStyle = HG_GREY; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(sel.x, 0); ctx.lineTo(sel.x, H); ctx.stroke();
+      ctx.setLineDash([]);
+      if (isSpike) {
+        ctx.fillStyle = HG_GREY;
+        ctx.beginPath(); ctx.moveTo(sel.x-4, 0); ctx.lineTo(sel.x+4, 0); ctx.lineTo(sel.x, 7); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = "#ffe066"; ctx.lineWidth = 1.5;   // the selection ring around the grey marker
+        ctx.beginPath(); ctx.arc(sel.x, 3.5, 7, 0, 2 * Math.PI); ctx.stroke();
+        ctx.font = "9px sans-serif";
+        ctx.fillStyle = "#cdd3de";
+        ctx.fillText(`${sel.i+1}/${events.length} · deactivated`, sel.x+5, 9);
+      }
+    } else {
+      ctx.strokeStyle = "#ffe066"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(sel.x, 0); ctx.lineTo(sel.x, H); ctx.stroke();
+      if (isSpike) {
+        ctx.fillStyle = "#ffe066";
+        ctx.beginPath(); ctx.moveTo(sel.x-4, 0); ctx.lineTo(sel.x+4, 0); ctx.lineTo(sel.x, 7); ctx.closePath(); ctx.fill();
+        ctx.font = "9px sans-serif"; ctx.fillStyle = "#ffe066";
+        ctx.fillText(`${sel.i+1}/${events.length}`, sel.x+5, 9);
+      }
     }
   }
   ctx.globalAlpha = 1; ctx.lineWidth = 1;
@@ -2314,7 +2368,10 @@ function gotoEvent(dir, forceGlobal) {
     if (e && Math.abs(e.t - S.playhead) < 1e-9)
       refPos = all.findIndex(p => p.track === S.sel.track && p.index === S.sel.index);
   }
-  const grey = p => lnGreyHit(p.track, S.events[p.track][p.index]);   // P4-6c: Tab skips the grey hits of the Learn filter
+  // #175: the "Tab moves to" setting. "all found hits" visits the deactivated hits too; the default
+  // ("active hits only") skips them and the grey hits of the Learn filter (P4-6c).
+  const allHits = SETTINGS().ui.tabMode === "all";
+  const grey = p => !allHits && (lnGreyHit(p.track, S.events[p.track][p.index]) || hgIsCut(S.events[p.track][p.index]));
   let target = null;
   if (dir > 0) {
     for (let i=0; i<all.length; i++) {
@@ -6268,7 +6325,8 @@ function selShellSync() {   // #158 (rank 9): Delete, the nudge items and Auditi
 }
 function updateStatus() {   // P3-14b: the status bar is short; the info line has the details
   const e = S.sel && (S.events[S.sel.track] || [])[S.sel.index];
-  $("#stSel").textContent = e ? `${S.sel.track}: hit ${S.sel.index + 1}/${S.events[S.sel.track].length}` : "no selection";
+  const cut = e ? (hgIsCut(e) || (lnLearn(S.sel.track) && lnGreyHit(S.sel.track, e))) : false;   // #175: a deactivated hit says so
+  $("#stSel").textContent = e ? `${S.sel.track}: hit ${S.sel.index + 1}/${S.events[S.sel.track].length}${cut ? " · deactivated" : ""}` : "no selection";
   ensureSelTrack();   // P4-39c
   drawInfo();
   syncInspector();   // P3-14a: the Inspector follows the selected track
@@ -6309,7 +6367,8 @@ function drawInfo() {
   if (!e) return;
   const tr = S.tracks[S.sel.track], sr = tr.sr, o = hitOrigin(e, sr);
   ilSet("ilTrack", S.sel.track);
-  ilSet("ilIndex", `${S.sel.index + 1}/${S.events[S.sel.track].length}`);
+  const cut = hgIsCut(e) || (lnLearn(S.sel.track) && lnGreyHit(S.sel.track, e));   // #175: a deactivated hit says so
+  ilSet("ilIndex", `${S.sel.index + 1}/${S.events[S.sel.track].length}${cut ? " · deactivated" : ""}`);
   ilSet("ilTime", `${fmt(e.t, 6)} s`);
   if (document.activeElement !== $("#ilSample")) ilSet("ilSample", String(Math.round(e.t * sr)), "value");
   if (document.activeElement !== $("#ilVel")) ilSet("ilVel", String(e.v), "value");
@@ -6708,6 +6767,13 @@ function setZoomTall(on, save) {
   const c = $("#setZoomTall"); if (c) c.checked = S.zoomTall;
   if (save !== false && B.appSettingsSet) B.appSettingsSet("zoom_toggle_tall", S.zoomTall).catch(e => setMsg(`settings: ${errText(e)}`));
 }
+function setTabMode(mode) {   // #175: View > Tab Moves To (radio: active hits only | all found hits)
+  SETTINGS().ui.tabMode = mode === "all" ? "all" : "active";
+  saveSettings();
+  const c = $("#setTabMode"); if (c) c.value = SETTINGS().ui.tabMode;
+  setMsg(`Tab moves to: ${SETTINGS().ui.tabMode === "all" ? "all found hits" : "active hits only"}`);
+  DSShell.sync();
+}
 function zoomToggle(keep) {
   if (!needProject()) return;
   if (keep) { S.zoomBack = null; setMsg("zoom kept: E zooms in again"); return; }
@@ -7023,6 +7089,8 @@ function setupGlobal() {
   kp.value = DSKeys.preset;
   kp.onchange = ev => setKeyPreset(ev.target.value);
   $("#setZoomTall").onchange = ev => setZoomTall(ev.target.checked);   // P4-27
+  $("#setTabMode").value = SETTINGS().ui.tabMode === "all" ? "all" : "active";   // #175
+  $("#setTabMode").onchange = ev => setTabMode(ev.target.value);
   $("#setAuditionTab").checked = !!SETTINGS().ui.auditionTab;   // P4-40d
   $("#setAuditionTab").onchange = ev => { SETTINGS().ui.auditionTab = ev.target.checked; saveSettings(); };
   setupMaster();   // P3-16

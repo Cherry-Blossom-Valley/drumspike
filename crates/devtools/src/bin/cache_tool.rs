@@ -18,17 +18,17 @@ use drumspike_core::project::CacheKey;
 use drumspike_core::{MixMode, PeakCache, Track, build_cache, compute_peaks, read_wav_mono};
 use rayon::prelude::*;
 
-fn wavs(dir: &Path) -> Vec<PathBuf> {
+fn wavs(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
-        .expect("read dir")
+        .map_err(|e| format!("read {}: {e}", dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e == "wav"))
         .collect();
     v.sort();
-    v
+    Ok(v)
 }
 
-fn check(dir: &Path) -> bool {
+fn check(dir: &Path) -> Result<bool, String> {
     let key = CacheKey {
         size: Some(1),
         mtime: Some(2),
@@ -36,22 +36,25 @@ fn check(dir: &Path) -> bool {
     };
     let tmp = std::env::temp_dir().join(format!("cache_tool_check_{}", std::process::id()));
     let (mut cases, mut bad) = (0, 0);
-    for p in wavs(dir) {
+    for p in wavs(dir)? {
         for mode in [MixMode::Ffmpeg, MixMode::Average] {
             let Ok((x, info)) = read_wav_mono(&p, mode) else {
                 continue;
             };
             cases += 1;
             let want = compute_peaks(&x);
-            let d = tmp.join(p.file_stem().unwrap());
-            build_cache(&d, info.sample_rate, &x, &key).expect("build");
-            let c = PeakCache::open(&d.join("peaks.bin")).expect("open");
+            let d = tmp.join(p.file_stem().unwrap_or_default());
+            build_cache(&d, info.sample_rate, &x, &key).map_err(|e| e.to_string())?;
+            let c = PeakCache::open(&d.join("peaks.bin")).map_err(|e| e.to_string())?;
             let mut problems = Vec::new();
             if c.sr() != info.sample_rate || c.n_samples() != x.len() as u64 {
                 problems.push("header".to_string());
             }
             for (bs, lv) in &want {
-                let got = c.read_level(*bs).expect("read").expect("level");
+                let got = c
+                    .read_level(*bs)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("level {bs} missing"))?;
                 let eq = |a: &[f64], b: &[f64]| {
                     a.len() == b.len() && a.iter().zip(b).all(|(p, q)| p.to_bits() == q.to_bits())
                 };
@@ -69,15 +72,18 @@ fn check(dir: &Path) -> bool {
                     (lv.n as i64 + 5, lv.n as i64 + 9),
                     (5, 2),
                 ] {
-                    let w = t.peaks(*bs, f, to).expect("level");
-                    let g = c.tile(*bs, f, to).expect("tile").expect("level");
+                    let w = t.peaks(*bs, f, to).ok_or_else(|| format!("level {bs} missing"))?;
+                    let g = c
+                        .tile(*bs, f, to)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| format!("tile {bs} {f}..{to} missing"))?;
                     let up = |v: &[f32]| v.iter().map(|&q| f64::from(q)).collect::<Vec<f64>>();
                     if g.start != w.start || up(&g.min) != w.min || up(&g.max) != w.max || up(&g.rms) != w.rms {
                         problems.push(format!("tile {bs} {f}..{to}"));
                     }
                 }
             }
-            let name = format!("{} {:?}", p.file_name().unwrap().to_string_lossy(), mode);
+            let name = format!("{} {:?}", p.file_name().unwrap_or_default().to_string_lossy(), mode);
             if problems.is_empty() {
                 println!("ok   {name}");
             } else {
@@ -88,11 +94,11 @@ fn check(dir: &Path) -> bool {
     }
     let _ = std::fs::remove_dir_all(&tmp);
     println!("{} / {} cases pass", cases - bad, cases);
-    cases > 0 && bad == 0
+    Ok(cases > 0 && bad == 0)
 }
 
-fn bench(dir: &Path, runs: usize) {
-    let files = wavs(dir);
+fn bench(dir: &Path, runs: usize) -> Result<(), String> {
+    let files = wavs(dir)?;
     let out = dir.join(".cache_bench");
     let key = CacheKey {
         size: None,
@@ -105,29 +111,33 @@ fn bench(dir: &Path, runs: usize) {
         let t = Instant::now();
         let n: usize = files
             .par_iter()
-            .map(|p| {
-                let (x, info) = read_wav_mono(p, MixMode::Average).expect("decode");
-                build_cache(&out.join(p.file_stem().unwrap()), info.sample_rate, &x, &key).expect("build");
-                x.len()
+            .map(|p| -> Result<usize, String> {
+                let (x, info) = read_wav_mono(p, MixMode::Average).map_err(|e| e.to_string())?;
+                build_cache(&out.join(p.file_stem().unwrap_or_default()), info.sample_rate, &x, &key)
+                    .map_err(|e| e.to_string())?;
+                Ok(x.len())
             })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
             .sum();
         times.push((t.elapsed().as_secs_f64(), n));
     }
     // Same work with the samples already in memory: the cost of the cache alone.
     let sig: Vec<(u32, Vec<f32>)> = files
         .iter()
-        .map(|p| {
-            let (x, i) = read_wav_mono(p, MixMode::Average).expect("decode");
-            (i.sample_rate, x)
+        .map(|p| -> Result<(u32, Vec<f32>), String> {
+            let (x, i) = read_wav_mono(p, MixMode::Average).map_err(|e| e.to_string())?;
+            Ok((i.sample_rate, x))
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     let mut cache_only = Vec::new();
     for _ in 0..runs {
         let _ = std::fs::remove_dir_all(&out);
         let t = Instant::now();
-        sig.par_iter().enumerate().for_each(|(i, (sr, x))| {
-            build_cache(&out.join(format!("t{i}")), *sr, x, &key).expect("build");
-        });
+        sig.par_iter()
+            .enumerate()
+            .map(|(i, (sr, x))| build_cache(&out.join(format!("t{i}")), *sr, x, &key).map_err(|e| e.to_string()))
+            .collect::<Result<(), _>>()?;
         cache_only.push(t.elapsed().as_secs_f64());
     }
     let _ = std::fs::remove_dir_all(&out);
@@ -141,16 +151,17 @@ fn bench(dir: &Path, runs: usize) {
         "peaks + write only (samples in memory), s per run: {}",
         fmt(&cache_only)
     );
+    Ok(())
 }
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
-    match (a.get(1).map(String::as_str), a.get(2)) {
-        (Some("check"), Some(d)) => {
-            if !check(Path::new(d)) {
+    let result = match (a.get(1).map(String::as_str), a.get(2)) {
+        (Some("check"), Some(d)) => check(Path::new(d)).map(|ok| {
+            if !ok {
                 std::process::exit(1);
             }
-        }
+        }),
         (Some("bench"), Some(d)) => {
             let runs = a
                 .iter()
@@ -158,11 +169,15 @@ fn main() {
                 .and_then(|i| a.get(i + 1))
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3);
-            bench(Path::new(d), runs);
+            bench(Path::new(d), runs)
         }
         _ => {
             eprintln!("usage: cache_tool check <corpus_dir> | bench <session_dir> [--runs N]");
             std::process::exit(2);
         }
+    };
+    if let Err(e) = result {
+        eprintln!("error: {e}");
+        std::process::exit(1);
     }
 }
