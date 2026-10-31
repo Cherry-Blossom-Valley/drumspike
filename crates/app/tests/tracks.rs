@@ -533,9 +533,10 @@ fn tracks_scan_roles_of_the_scheme_names_of_the_three_real_sessions() {
 #[test]
 fn tracks_scan_the_real_session_folders_when_present() {
     const SONGS: [&str; 3] = ["Session A", "Session B", "Session C"];
-    let base = std::env::var_os("DRUMSPIKE_REAL_SESSIONS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".cache/drumspike/sessions"));
+    let base = std::env::var_os("DRUMSPIKE_REAL_SESSIONS").map_or_else(
+        || PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".cache/drumspike/sessions"),
+        PathBuf::from,
+    );
     let mut seen: Vec<(String, String)> = Vec::new();
     let (mut songs, mut files, mut rejected) = (0, 0, 0);
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(&base)

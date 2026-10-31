@@ -51,7 +51,7 @@ pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// tests/helpers.kick_hit: pitch sweep 125 -> 55 Hz, 0.5 ms attack ramp, 0.12 s decay.
+/// `tests/helpers.kick_hit`: pitch sweep 125 -> 55 Hz, 0.5 ms attack ramp, 0.12 s decay.
 pub fn kick_signal(onsets: &[f64], dur: f64, sr: u32) -> Vec<f32> {
     let srf = f64::from(sr);
     let mut x = vec![0.0f64; (dur * srf) as usize];
@@ -229,8 +229,7 @@ pub fn final_state(seen: &Arc<Mutex<Vec<Value>>>, key: &str) -> Value {
             .lock()
             .unwrap()
             .last()
-            .map(|v| v[key]["state"].clone())
-            .unwrap_or(Value::Null);
+            .map_or(Value::Null, |v| v[key]["state"].clone());
         if (last != "running" && !last.is_null()) || Instant::now() > end {
             return last;
         }
@@ -238,7 +237,7 @@ pub fn final_state(seen: &Arc<Mutex<Vec<Value>>>, key: &str) -> Value {
     }
 }
 
-/// Lowercase hex of bytes (sha2 0.11 no longer implements LowerHex for the digest).
+/// Lowercase hex of bytes (sha2 0.11 no longer implements `LowerHex` for the digest).
 pub fn hex(bytes: impl AsRef<[u8]>) -> String {
     bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }

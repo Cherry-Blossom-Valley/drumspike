@@ -1,4 +1,4 @@
-//! #363: the [`DetectorBackend`] seam. The DspBackend path is byte-identical to the old
+//! #363: the [`DetectorBackend`] seam. The `DspBackend` path is byte-identical to the old
 //! `Detector::Dsp` call (the golden guarantee of the ticket: the default analysis output
 //! does not change), and the `ExternalDetector` adapter runs the example plugin
 //! (`tests/fixtures/plugins/json_hits.py`) and the error cases of the design section 5.
@@ -22,7 +22,7 @@ fn signal() -> Vec<f32> {
     x
 }
 
-/// The DspBackend path equals the old `Detector::Dsp` call, on the fixture WAVs when they
+/// The `DspBackend` path equals the old `Detector::Dsp` call, on the fixture WAVs when they
 /// are present (the three real sessions, read only) and on the synthetic signal always.
 #[test]
 fn the_dsp_backend_path_equals_the_old_call() {

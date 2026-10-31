@@ -1,5 +1,5 @@
 //! A5 probe: how the flux and its peak contrast scale with the recording level, on the
-//! level_calib kit. Not a gate; prints the numbers the relative-delta rule is calibrated
+//! `level_calib` kit. Not a gate; prints the numbers the relative-delta rule is calibrated
 //! from. Run: `cargo test -p drumspike-core --test level_probe -j 8 -- --nocapture`
 
 use drumspike_core::detect::features::N_BANDS;

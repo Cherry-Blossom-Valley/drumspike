@@ -23,7 +23,7 @@ pub const COMPENSATE_DEFAULT: bool = true;
 pub const CLOSE_DEFAULT: bool = false;
 /// `analyze_start` on the page surface without `keep_edited`: the page applies the answer itself
 /// (the page sends the flag since P4-9; the default is only reached by a script that omits it).
-/// `the_page_sends_keep_edited_itself` (tests/command_tests.rs) pins that the page sends it.
+/// `the_page_sends_keep_edited_itself` (`tests/command_tests.rs`) pins that the page sends it.
 pub const PAGE_KEEP_EDITED: bool = false;
 
 pub fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, AppError> {

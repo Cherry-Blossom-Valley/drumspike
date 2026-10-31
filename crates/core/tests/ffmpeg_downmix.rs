@@ -6,7 +6,7 @@
 //! for `MixMode::Average`, output `f32le`). P3-12: ffmpeg's outputs are frozen in
 //! `tests/golden/frozen/ffmpeg_downmix.json` and `ffmpeg_masks.json` (frame count and SHA-256 of the
 //! `f32le` bytes), recorded on arm64-mac with the fusing ffmpeg 9.0.2 at the commit named there. The reader
-//! uses `f32::mul_add` and equals that build on every host, so the comparison is exact on x86_64 too
+//! uses `f32::mul_add` and equals that build on every host, so the comparison is exact on `x86_64` too
 //! (before P3-12 the x86 run skipped it: its ffmpeg does not fuse, finding X1). No ffmpeg is needed.
 
 use std::path::PathBuf;
@@ -140,7 +140,7 @@ fn downmix_matches_the_frozen_ffmpeg_decode_bit_for_bit() {
     );
 }
 
-/// Stereo WAVE_FORMAT_EXTENSIBLE files with every mask of two speaker bits, every single bit and the odd
+/// Stereo `WAVE_FORMAT_EXTENSIBLE` files with every mask of two speaker bits, every single bit and the odd
 /// cases: where the Rust `Ffmpeg` decode returns a signal it is ffmpeg's bit for bit; where ffmpeg folded
 /// differently or refused the file, the Rust decode is an error (finding F2 of phase 1 stage 3; the app then
 /// says the file is not supported).

@@ -1,6 +1,6 @@
 //! Synthetic onset error of the placement (#101): one-shots at exact onset samples on a noise floor.
 //! Prints the error (refined time in samples minus the true onset) per role and rate.
-//! Run: cargo run --release -p drumspike-core --example placement_bias
+//! Run: cargo run --release -p drumspike-core --example `placement_bias`
 use drumspike_core::refine::{
     BackStep, FM_PEAK_DB, FootCap, FootTune, Overrun, RefineRule, RefineWindow, refine_foot_tuned, refine_rule_peak,
 };
@@ -15,7 +15,7 @@ const POLARITIES: [f64; 2] = [1.0, -1.0];
 const ATTACKS_S: [f64; 3] = [0.0, 0.0005, 0.001];
 const SEEDS: u64 = 30;
 const AMP: f64 = 0.5;
-/// The detector reports hits about 6 ms before the attack (refine.rs, RefineWindow docs).
+/// The detector reports hits about 6 ms before the attack (refine.rs, `RefineWindow` docs).
 const T0_BEFORE_S: f64 = 0.006;
 
 struct Lcg(u64);

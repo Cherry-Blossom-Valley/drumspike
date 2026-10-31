@@ -281,7 +281,7 @@ pub fn splash_dismiss(app: AppHandle) -> Value {
     let Some(state) = app.try_state::<SplashState>() else {
         return json!({"ok": false});
     };
-    let finished = state.0.lock().map(|i| i.finished).unwrap_or(true);
+    let finished = state.0.lock().map_or(true, |i| i.finished);
     if !finished {
         finish(&app, "dismissed");
     }

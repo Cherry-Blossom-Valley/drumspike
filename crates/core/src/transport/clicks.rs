@@ -1,4 +1,4 @@
-//! Hit clicks: the WebAudio click of `static/app.js`, rendered at the exact sample.
+//! Hit clicks: the `WebAudio` click of `static/app.js`, rendered at the exact sample.
 //!
 //! `app.js` plays one click per hit: a square oscillator at the role pitch through a gain
 //! that starts at 0.0001, rises exponentially to the click volume in 2 ms, falls
@@ -6,10 +6,10 @@
 //! through the track's gain, so mute and solo also silence the clicks of a track.
 //!
 //! Here the click is a template built before playback (never in the audio callback): a
-//! band-limited square (odd harmonics below Nyquist, peak normalised to 1, as WebAudio's
+//! band-limited square (odd harmonics below Nyquist, peak normalised to 1, as `WebAudio`'s
 //! normalised periodic wave) in cosine phase, so the first sample of the click is the top
 //! of the square and the click starts at offset 0 at its hit sample. The value is close to
-//! the WebAudio click, not equal to it sample for sample.
+//! the `WebAudio` click, not equal to it sample for sample.
 //!
 //! P3-20b: at half speed the output frame of session time `t` is `t * 2 * device_rate`, so a
 //! hit's click goes to `round(hit * 2 * device_rate / track_rate)` (the same mapping at twice the
@@ -33,7 +33,7 @@ pub const ROLE_DEFAULT_CLICK: [(&str, f32); 6] = [
 /// The default click volume of `app.js` (`SETTINGS().click.volume`).
 pub const DEFAULT_CLICK_VOLUME: f32 = 0.22;
 
-/// Envelope floor of the WebAudio ramps (`0.0001`).
+/// Envelope floor of the `WebAudio` ramps (`0.0001`).
 const FLOOR: f64 = 0.0001;
 /// End of the attack ramp, seconds.
 const ATTACK_S: f64 = 0.002;
@@ -47,8 +47,7 @@ pub fn role_pitch(role: &str) -> f32 {
     ROLE_DEFAULT_CLICK
         .iter()
         .find(|(r, _)| *r == role)
-        .map(|(_, f)| *f)
-        .unwrap_or(1500.0)
+        .map_or(1500.0, |(_, f)| *f)
 }
 
 /// The click envelope at `t` seconds for `volume` (the two exponential ramps of `app.js`,

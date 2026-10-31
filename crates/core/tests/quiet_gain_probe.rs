@@ -56,7 +56,7 @@ fn enst_gain_factor_per_item() -> Result<(), DetectError> {
                 .flatten()
                 .flatten()
                 .map(|e| e.path())
-                .filter(|p| p.extension().map(|e| e == "wav").unwrap_or(false))
+                .filter(|p| p.extension().is_some_and(|e| e == "wav"))
                 .collect();
             paths.sort();
             for wav in paths {

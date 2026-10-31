@@ -1,5 +1,5 @@
 use super::*;
-/// A kick like tests/helpers.kick_hit (pitch sweep 125 -> 55 Hz, linear 0.5 ms attack
+/// A kick like `tests/helpers.kick_hit` (pitch sweep 125 -> 55 Hz, linear 0.5 ms attack
 /// ramp, exponential decay), but 1.5 s long instead of 0.4 s, so that no hit ends with
 /// a hard cut (a step in the signal is an onset of its own).
 fn kick_track(sr: u32, dur_s: f64, onsets: &[(f64, f64)]) -> Vec<f32> {

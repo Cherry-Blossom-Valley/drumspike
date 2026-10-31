@@ -391,9 +391,8 @@ impl Service {
     /// decode error is no suggestion: the scan never fails on one file.
     fn audio_suggestion(&self, p: &Probe) -> Result<Option<&'static str>, AppError> {
         const SUGGEST_S: usize = 30;
-        let decoded = match crate::media::decode(&p.path, MixMode::Ffmpeg) {
-            Ok(d) => d,
-            Err(_) => return Ok(None),
+        let Ok(decoded) = crate::media::decode(&p.path, MixMode::Ffmpeg) else {
+            return Ok(None);
         };
         let n = decoded.samples.len().min(decoded.sr as usize * SUGGEST_S);
         Ok(drumspike_core::role::role_from_audio(&decoded.samples[..n], decoded.sr)
@@ -647,13 +646,16 @@ impl Service {
             )
         };
         let changed = old.0.as_deref() != Some(role);
-        let source = source.map(str::to_string).unwrap_or_else(|| {
-            if changed {
-                "user".into()
-            } else {
-                old.2.clone().unwrap_or_else(|| "user".into())
-            }
-        });
+        let source = source.map_or_else(
+            || {
+                if changed {
+                    "user".into()
+                } else {
+                    old.2.clone().unwrap_or_else(|| "user".into())
+                }
+            },
+            str::to_string,
+        );
         let skip = changed && events.is_none() && self.repick_skip(&op, name)?;
         // the role fields and the hits go in as one command: the undo's `events` are stored
         // first (a non-list refuses with 400 before the role goes in), and a failing re-pick

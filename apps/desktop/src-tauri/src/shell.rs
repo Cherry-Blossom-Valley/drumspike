@@ -209,7 +209,7 @@ pub fn selftest_close_window(app: AppHandle) -> Result<(), AppError> {
         .map_err(|e| AppError::internal(e.to_string()))
 }
 
-/// Self-test (#206): the main menu as macOS has it (NSMenu key equivalents and modifier masks).
+/// Self-test (#206): the main menu as macOS has it (`NSMenu` key equivalents and modifier masks).
 #[cfg(debug_assertions)]
 #[tauri::command]
 pub fn selftest_ns_menu(app: AppHandle) -> Value {
@@ -237,7 +237,7 @@ pub fn selftest_menu_log() -> Value {
 }
 
 /// Self-test (#206) diagnosis: a synthetic keyDown with explicit characters/flags, for probing which
-/// variant of an event the NSMenu matches (`selftest_menu_key` builds the physical-looking one).
+/// variant of an event the `NSMenu` matches (`selftest_menu_key` builds the physical-looking one).
 #[cfg(debug_assertions)]
 #[tauri::command]
 pub fn selftest_menu_probe(app: AppHandle, chars: String, flags: u64) -> Value {

@@ -3,7 +3,7 @@ use super::*;
 const SR: u32 = 48_000;
 const W: RefineWindow = RefineWindow::DEFAULT;
 
-/// tests/helpers.kick_hit: pitch sweep 125 -> 55 Hz, attack ramp, exponential decay.
+/// `tests/helpers.kick_hit`: pitch sweep 125 -> 55 Hz, attack ramp, exponential decay.
 fn kick_hit(n: usize, attack_ms: f64) -> Vec<f64> {
     let mut out = Vec::with_capacity(n);
     let mut cum = 0.0;

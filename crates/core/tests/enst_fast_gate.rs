@@ -1,5 +1,5 @@
 //! A5 fast gate probe: run the DSP detector over the ENST phrase items directly (no
-//! service_tool) and print the pooled P/R/F1 per drummer and role at +-50 ms - the same
+//! `service_tool`) and print the pooled P/R/F1 per drummer and role at +-50 ms - the same
 //! numbers the standing gate produces, for fast iteration on the delta rule. Ignored by
 //! default (needs `ENST_ROOT`); the final numbers come from `tools/eval/enst_gate.py`.
 //!
@@ -104,8 +104,7 @@ fn enst_fast_gate() {
             .flatten()
             .map(|e| e.path())
             .filter(|p| {
-                p.extension().map(|e| e == "txt").unwrap_or(false)
-                    && p.file_name().unwrap().to_string_lossy().contains("phrase")
+                p.extension().is_some_and(|e| e == "txt") && p.file_name().unwrap().to_string_lossy().contains("phrase")
             })
             .collect();
         anns.sort();

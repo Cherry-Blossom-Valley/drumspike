@@ -46,7 +46,7 @@
 //! `progress` gets a message when the state changes (epoch, `playing`, underruns, reopens),
 //! else one every 250 ms (4 Hz, P3-15a) while the transport plays, and a last one with
 //! `end: true`. Each message is a `webview.eval` in the app (Tauri sends channel messages
-//! under 8 KiB that way). Measured in P3-15a: going from 30 Hz to 4 Hz lowers the WebKit
+//! under 8 KiB that way). Measured in P3-15a: going from 30 Hz to 4 Hz lowers the `WebKit`
 //! allocator scavenger only from about 3.8 % to 3.3 % of a core; the 60 Hz drawing of the page
 //! keeps it busy (`docs/archive/phase3-report.md`, section P3-15a). The message format:
 //! `{sid, epoch, t_ns, frame, rate, pos, playing, speed, underruns, reopens, end}`.
@@ -380,19 +380,18 @@ fn probe_input(st: &HostState) -> ProbeInput {
 
 /// What the watcher sees now: the test override for a null output; for the real one the chosen
 /// device when it is connected and answers, else the system's default output. `None`: nothing
-/// to compare (no device answers). P3-15c: the CoreAudio query runs without the host lock (the
+/// to compare (no device answers). P3-15c: the `CoreAudio` query runs without the host lock (the
 /// caller passes what it read under the lock).
 fn probe(input: ProbeInput) -> Option<DeviceKey> {
-    match input.output {
-        Output::Null { .. } => input.override_key,
-        _ => {
-            let _span = crate::trace::stage("transport:device_query");
-            let chosen = input
-                .choice
-                .filter(|n| !is_blocked(n))
-                .and_then(|n| output_info(Some(&n)).ok());
-            chosen.or_else(|| default_output_info().ok()).map(|d| DeviceKey::of(&d))
-        }
+    if let Output::Null { .. } = input.output {
+        input.override_key
+    } else {
+        let _span = crate::trace::stage("transport:device_query");
+        let chosen = input
+            .choice
+            .filter(|n| !is_blocked(n))
+            .and_then(|n| output_info(Some(&n)).ok());
+        chosen.or_else(|| default_output_info().ok()).map(|d| DeviceKey::of(&d))
     }
 }
 
@@ -400,24 +399,21 @@ fn probe(input: ProbeInput) -> Option<DeviceKey> {
 /// override's rate (and resolves the choice against the test device list); the real output
 /// resolves the choice against the connected devices ([`resolve_choice`]).
 fn output_for(st: &HostState) -> (Output, Option<String>) {
-    match &st.output {
-        Output::Null { .. } => {
-            let names: Vec<String> = st.device_list.iter().flatten().map(|k| k.name.clone()).collect();
-            let note = st.choice.as_deref().and_then(|c| resolve_choice(Some(c), &names).1);
-            let out = match &st.probe_override {
-                Some(k) => Output::Null {
-                    sample_rate: Some(k.rate),
-                },
-                None => st.output.clone(),
-            };
-            (out, note)
-        }
-        _ => {
-            let names: Vec<String> = output_devices()
-                .map(|l| l.into_iter().map(|d| d.name).collect())
-                .unwrap_or_default();
-            resolve_choice(st.choice.as_deref(), &names)
-        }
+    if let Output::Null { .. } = &st.output {
+        let names: Vec<String> = st.device_list.iter().flatten().map(|k| k.name.clone()).collect();
+        let note = st.choice.as_deref().and_then(|c| resolve_choice(Some(c), &names).1);
+        let out = match &st.probe_override {
+            Some(k) => Output::Null {
+                sample_rate: Some(k.rate),
+            },
+            None => st.output.clone(),
+        };
+        (out, note)
+    } else {
+        let names: Vec<String> = output_devices()
+            .map(|l| l.into_iter().map(|d| d.name).collect())
+            .unwrap_or_default();
+        resolve_choice(st.choice.as_deref(), &names)
     }
 }
 
@@ -1373,7 +1369,7 @@ impl Service {
     /// `outputs_list` (P3-16): `{devices: [{name, rate, channels, default}], choice, current,
     /// note, null_output}`. `choice` is the saved device name (`null`: the system default),
     /// `current` the device the open transport plays on (`null` when none is open), `note` why
-    /// it does not (or, with no open transport, will not) play on the choice. The CoreAudio query
+    /// it does not (or, with no open transport, will not) play on the choice. The `CoreAudio` query
     /// runs without the host lock.
     pub fn outputs_list(&self) -> Value {
         self.load_audio_settings();
@@ -1394,12 +1390,11 @@ impl Service {
         };
         let st = lock(&self.host().st);
         // with no open transport the message follows the list of now; an open one keeps the note of its open
-        let note = match &st.open {
-            Some(_) => st.note.clone(),
-            None => {
-                let names: Vec<String> = list.iter().map(|k| k.name.clone()).collect();
-                st.choice.as_deref().and_then(|c| resolve_choice(Some(c), &names).1)
-            }
+        let note = if st.open.is_some() {
+            st.note.clone()
+        } else {
+            let names: Vec<String> = list.iter().map(|k| k.name.clone()).collect();
+            st.choice.as_deref().and_then(|c| resolve_choice(Some(c), &names).1)
         };
         let devices: Vec<Value> = list
             .iter()

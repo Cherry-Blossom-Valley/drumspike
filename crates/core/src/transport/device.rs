@@ -5,8 +5,8 @@
 //! current rate, with its current channel count and sample format. The app never changes
 //! the device rate; a track at another rate is resampled for playback by the reader.
 //!
-//! P3-16: [`Output::Default`] builds the stream on cpal's default device, which CoreAudio
-//! plays through its DefaultOutput unit: that unit moves to a new system default by itself
+//! P3-16: [`Output::Default`] builds the stream on cpal's default device, which `CoreAudio`
+//! plays through its `DefaultOutput` unit: that unit moves to a new system default by itself
 //! (cpal reports `DeviceChanged`), but keeps the stream format (rate, channels) of the device
 //! it was opened on. [`Output::Device`] pins the stream to one device by name (HAL output
 //! unit); when that device goes away, cpal reports `DeviceNotAvailable` and the stream stops.
@@ -88,7 +88,7 @@ pub const OPEN_LIMIT: Duration = Duration::from_secs(5);
 /// its worker thread.
 pub const CLOSE_LIMIT: Duration = Duration::from_secs(2);
 
-/// The devices whose worker thread is blocked in CoreAudio now.
+/// The devices whose worker thread is blocked in `CoreAudio` now.
 static BLOCKED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 fn blocked() -> std::sync::MutexGuard<'static, BTreeSet<String>> {
@@ -102,7 +102,7 @@ fn no_answer(name: &str) -> TransportError {
     ))
 }
 
-/// Whether a worker thread of device `name` is still blocked in CoreAudio.
+/// Whether a worker thread of device `name` is still blocked in `CoreAudio`.
 pub fn is_blocked(name: &str) -> bool {
     blocked().contains(name)
 }
@@ -166,11 +166,10 @@ pub struct DeviceInfo {
     pub buffer_frames: Option<u32>,
 }
 
-/// The name cpal gives a device (the CoreAudio device name).
+/// The name cpal gives a device (the `CoreAudio` device name).
 fn device_name(dev: &cpal::Device) -> String {
     dev.description()
-        .map(|d| d.name().to_string())
-        .unwrap_or_else(|_| "output".into())
+        .map_or_else(|_| "output".into(), |d| d.name().to_string())
 }
 
 /// The device of `name` (`None`: the system default), or the error that names what is missing.
