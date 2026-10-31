@@ -568,6 +568,10 @@ impl Service {
 
     /// `track_layer_get {sid, name}`: `{layer, status, path, file, onset_ms}`; `layer` is `null` (and
     /// the rest too) for a track without a layer.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` when `sid` is unknown or the project has no track `name`.
     pub fn track_layer_get(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -579,6 +583,11 @@ impl Service {
     /// `[start, end)` in its own samples — the Layer view's waveform. The bytes of
     /// `samples_window`: `u32 start`, `u32 rate`, then f32. The window is clamped to the file and
     /// capped at [`MAX_WINDOW_SAMPLES`]. 409 without a layer or its file.
+    ///
+    /// # Errors
+    ///
+    /// A 409 `AppError` when the track has no layer or its layer file is missing; an error for an unknown session or
+    /// track, or when the one-shot cannot be read.
     pub fn track_layer_wave(&self, sid: &str, name: &str, start: i64, end: i64) -> Result<Vec<u8>, AppError> {
         let op = self.inner.registry.get(sid)?;
         let file = {
@@ -601,6 +610,12 @@ impl Service {
     /// project dirty and updates an open transport of the project. Answers as
     /// [`Service::track_layer_get`]. 400 for a file the app cannot read or a wrong value; 409 for a
     /// setting on a track without a layer.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown or read-only session or an unknown track; a 400 when `path` is not a string or
+    /// null or its file cannot be read, `level_db`, `polarity`, `curve`, `on`, `align` or `onset` has a wrong value,
+    /// or `onset` is not before the end of the one-shot; a 409 when no layer exists and no `path` is given.
     pub fn track_layer_set(&self, sid: &str, name: &str, args: &Value) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let dir = {
@@ -766,6 +781,11 @@ impl Service {
     /// uses (`sign`: its polarity, or the majority for `auto`); `match` is 0 to 1; a hit's own `sign`
     /// is the better of the two; `flips` are the hits whose own sign is not the majority's. 409 without
     /// a layer, with a missing layer file or an offline track.
+    ///
+    /// # Errors
+    ///
+    /// A 409 `AppError` when the track has no layer, its layer file is missing or the track is offline; an error for
+    /// an unknown session or track, or when the one-shot or the track audio cannot be read.
     pub fn track_layer_align(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let job = {
@@ -829,6 +849,10 @@ impl Service {
     /// sample in the file). 409 without a layer, for a missing layer file, an offline track, a track
     /// whose files are another track's, a stale follower that cannot be derived, and a `path` that is
     /// a source or a one-shot in use.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::export_layer_to`] (this is the call with `path` of `None`).
     pub fn export_layer(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         self.export_layer_to(sid, name, None)
     }
@@ -865,6 +889,13 @@ impl Service {
     }
 
     /// [`Service::export_layer`] into the file `path` (an absolute path, see [`save_target`]) when given.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown or read-only session; a 409 for a track without a layer, a missing layer file, an
+    /// offline track, files owned by another track or a stale follower that cannot be derived; a 400 for a `path`
+    /// that is not allowed (`save_target`), a folder at the target, a protected file or a source that cannot be
+    /// opened; a 500 when `Exports/` or the output file cannot be written.
     pub fn export_layer_to(&self, sid: &str, name: &str, path: Option<&str>) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         {

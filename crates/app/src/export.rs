@@ -79,6 +79,10 @@ pub fn uncut(events: &[Value]) -> Vec<Value> {
 }
 
 /// The hit times of an event list: every event needs a numeric `t`.
+///
+/// # Errors
+///
+/// A 400 `AppError` when any event has no `t` or a `t` that is not a number.
 pub fn hit_times(events: &[Value]) -> Result<Vec<f64>, AppError> {
     events
         .iter()
@@ -308,6 +312,10 @@ pub enum MidiMode {
 
 impl MidiMode {
     /// `per_track` (also when absent) or `single`; any other text is a 400.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` when `s` is text other than `per_track` or `single`.
     pub fn parse(s: Option<&str>) -> Result<MidiMode, AppError> {
         match s {
             None | Some("per_track") => Ok(MidiMode::PerTrack),
@@ -356,6 +364,11 @@ impl Default for ExportOpts {
 impl ExportOpts {
     /// The options of a call: `dest` (text), `midi_mode`, `tracks` (list of names) and `formats` (a list of
     /// `midi` and `spikes`, at least one). A missing key is the default.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` when `dest`, `midi_mode` or `compensate` has the wrong type, `tracks` or `formats` is not a
+    /// list of strings, `midi_mode` is unknown, or `formats` holds an unknown name or none of midi, spikes, audio.
     pub fn from_args(args: &Value) -> Result<ExportOpts, AppError> {
         let strs = |k: &str| -> Result<Option<Vec<String>>, AppError> {
             match args.get(k) {
@@ -419,6 +432,11 @@ impl ExportOpts {
 /// file or a symlink with an old probe name survives, and concurrent checks never collide.
 /// 400 for a relative path, a file or a folder that refuses a write, 404 for a path that
 /// does not exist.
+///
+/// # Errors
+///
+/// A 400 `AppError` for a relative path, a path that is not a folder, or a folder in which the probe file cannot be
+/// created; a 404 when the path does not exist.
 pub fn check_dest(dest: &str) -> Result<PathBuf, AppError> {
     let p = Path::new(dest);
     if !p.is_absolute() {
@@ -439,6 +457,10 @@ pub fn check_dest(dest: &str) -> Result<PathBuf, AppError> {
 
 /// P4-30: the folder an export writes to: `dest` when given (checked by [`check_dest`]), else `Exports/` of the
 /// project (made when it is missing).
+///
+/// # Errors
+///
+/// Any error of [`check_dest`] for a given `dest`; a 500 `AppError` when `Exports/` cannot be created.
 pub fn export_dir(g: &OpenProject, dest: Option<&str>) -> Result<PathBuf, AppError> {
     if let Some(d) = dest {
         check_dest(d)
@@ -468,6 +490,10 @@ pub fn multi_file_name(project_name: &str) -> String {
 }
 
 /// P4-30: `all` filtered to `want` (in the order of `all`); a name that no track has is a 400.
+///
+/// # Errors
+///
+/// A 400 `AppError` naming the first wanted track that is not in `all`.
 pub fn select_tracks(all: Vec<String>, want: Option<&[String]>) -> Result<Vec<String>, AppError> {
     let Some(want) = want else { return Ok(all) };
     if let Some(n) = want.iter().find(|n| !all.contains(n)) {
@@ -534,6 +560,11 @@ pub struct SpikeFile {
 /// Write the spike file `out` for `times` at the rate, length and sample format of `source`,
 /// with the source's `bext` time reference. A source the core cannot read is a 400 that names
 /// the file.
+///
+/// # Errors
+///
+/// A 400 (or the core's code) `AppError` naming `source` when it cannot be opened as a WAV file; a 500 when `out`
+/// cannot be written.
 pub fn write_spike_file(source: &Path, out: &Path, times: &[f64]) -> Result<SpikeFile, AppError> {
     let wav = MappedWav::open(source).map_err(|e| {
         let e = AppError::from(e);
@@ -580,6 +611,11 @@ fn out_is_source(source: &Path, out: &Path) -> bool {
 /// export would overwrite the track's file); the source is never written. A source the core
 /// cannot read is a 400 that names the file. Returns the facts and the number of hits that
 /// got the default length (no period found).
+///
+/// # Errors
+///
+/// A 400 `AppError` when `out` is the source file; a 400 (or the core's code) naming `source` when it cannot be
+/// opened or decoded; a 500 when `out` cannot be written.
 pub fn write_audio_spike_file(source: &Path, out: &Path, times: &[f64]) -> Result<(SpikeFile, usize), AppError> {
     if out_is_source(source, out) {
         return Err(AppError::bad(format!(
@@ -675,11 +711,22 @@ impl Service {
     /// another track's ([`check_file_owner`]) and a stale follower that cannot be derived; 400
     /// for a source that is not a WAV file the core reads. A follower exports its own derived
     /// hits (the document's, made fresh by [`crate::follow::fresh_for_export`]), never `events`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::export_spikes_to`] (this is the call with `dest` of `None`).
     pub fn export_spikes(&self, sid: &str, name: &str, events: Option<&[Value]>) -> Result<Value, AppError> {
         self.export_spikes_to(sid, name, events, None)
     }
 
     /// P4-30: [`Service::export_spikes`] into the folder `dest` (see [`check_dest`]); `None` is `Exports/`.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown or read-only session, an unknown track, an offline source or files owned by
+    /// another track (409), a bad `dest` ([`check_dest`]), an output that is a protected file, an event without a
+    /// numeric `t` (400), a stale follower that cannot be derived, or a source or output file that fails
+    /// ([`write_spike_file`]).
     pub fn export_spikes_to(
         &self,
         sid: &str,
@@ -725,6 +772,10 @@ impl Service {
     /// in its file (tracks with none are left out); a follower whose hits are stale is derived
     /// first (`followers` lists them; one that cannot be derived is an error and gets no files);
     /// a track whose files are an earlier track's ([`check_file_owner`]) is an error.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::export_all_opts`] (this is the call with the default options).
     pub fn export_all(&self, sid: &str, progress: Option<Progress>) -> Result<Value, AppError> {
         self.export_all_opts(sid, &ExportOpts::default(), progress)
     }
@@ -734,6 +785,12 @@ impl Service {
     /// tempo map; one MIDI track per exported track on its own note) instead of the `<track>_spike.mid` files; a
     /// track that failed is left out of it and named in `errors`. The answer also has `dest` (the folder) and
     /// `midi_file` (the path of the single file, else null). 400 for a bad `dest`, an unknown track name.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown or read-only session, an unknown track in `opts.tracks` or a bad `dest` (400/404),
+    /// a document with an unreadable tempo map, or an output that collides with a protected file (nothing is written
+    /// then). A failing single track is not an error: it is reported in `errors` of the answer.
     pub fn export_all_opts(&self, sid: &str, opts: &ExportOpts, progress: Option<Progress>) -> Result<Value, AppError> {
         let started = Instant::now();
         let op = self.inner.registry.get_writable(sid)?;
@@ -1043,6 +1100,11 @@ impl Service {
     /// `v` from the track's decoded audio with the track's `vel_lo_db` and `vel_hi_db`
     /// (default -40 and -6 dB; velocities 20 to 127). Every other key of an event stays.
     /// Returns `{events}`. The events are `events` when the call holds them, else the track's.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` for an unknown session or track, an offline source, an event without a numeric `t` or that is not
+    /// an object (400), or audio that cannot be decoded.
     pub fn velocities_recompute(&self, sid: &str, name: &str, events: Option<&[Value]>) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         crate::registry::resolve_shared(&op);
@@ -1165,6 +1227,11 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
 }
 
 /// The bridge side of the three commands (`bridge.rs` calls this for their names).
+///
+/// # Errors
+///
+/// A 400 `AppError` for a missing or non-string `sid` or `name`, `events` that is not a list, or bad export options;
+/// a 404 for an unknown command; otherwise the errors of the command called.
 pub fn bridge_call(
     s: &Service,
     channels: &std::sync::Arc<Channels>,

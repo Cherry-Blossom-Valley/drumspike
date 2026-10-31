@@ -172,6 +172,9 @@ pub type MidiPlan = (Vec<MidiEvent>, Option<ShiftInfo>);
 /// The MIDI events of `events` (`t` and `v`, a missing `v` is 100) with the sampler shift applied:
 /// each note at the aligned attack minus the offset, on a whole sample. Without a shift the events are
 /// the plain ones.
+///
+/// # Errors
+/// 400 when an entry of `events` has no valid `t` (the error of `export::midi_events`).
 pub fn midi_events_shifted(events: &[Value], shift: Option<&Shift>) -> Result<MidiPlan, AppError> {
     let mut ev = crate::export::midi_events(events)?;
     let Some(s) = shift else { return Ok((ev, None)) };
@@ -240,12 +243,21 @@ impl Service {
     /// `sampler_calibration_midi {sid, name, dest?}`: write `<name>_calibration.mid` into `dest` (else
     /// `Exports/`): one note (the track's note, velocity 100) on the start of bar 2 of the tempo map. Answers
     /// `{path, size, note, t, tick, ppq, text}`; `t` is the note-on time in seconds, `text` says what to do next.
+    ///
+    /// # Errors
+    /// The same as [`Service::sampler_calibration_midi_to`] without a `path`.
     pub fn sampler_calibration_midi(&self, sid: &str, name: &str, dest: Option<&str>) -> Result<Value, AppError> {
         self.sampler_calibration_midi_to(sid, name, dest, None)
     }
 
     /// [`Service::sampler_calibration_midi`] into the file `path` when given (P4-7d: the save dialog's file; it
     /// replaces `dest` and the name `<name>_calibration.mid`; see `save_target` in `layer.rs`).
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project or `name` is not a track; 409 when the project is
+    /// open read-only; an error from `save_target` or `export_dir` for a bad `path` or `dest`; 400
+    /// when the stored tempo map is not valid or has no usable bar 2; 500 when the file cannot be
+    /// written.
     pub fn sampler_calibration_midi_to(
         &self,
         sid: &str,
@@ -284,6 +296,9 @@ impl Service {
 
     /// `track_sampler_get {sid, name}`: `{sampler, offset_ms, polarity, file}`; all null for a track without
     /// a calibration.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project or `name` is not a track.
     pub fn track_sampler_get(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -297,6 +312,12 @@ impl Service {
     /// `one_shot: true` also sets the bounce as the track's layer one-shot (its polarity, when measured, goes
     /// to the layer). Answers `{sampler, offset_ms, polarity, file, layer}` (`layer`: the answer of
     /// `track_layer_get` after a `one_shot`, else null). 400 for a bounce the app cannot read or a silent one.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project or `name` is not a track; 409 when the project is
+    /// open read-only; 400 when `path` or `one_shot` has the wrong type, the stored tempo map is
+    /// not valid, or the bounce cannot be read or measured; any error of `track_layer_set` after a
+    /// `one_shot`.
     pub fn track_sampler_set(&self, sid: &str, name: &str, args: &Value) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let path = match args.get("path") {
@@ -376,6 +397,10 @@ impl Service {
     /// bounce `[start, end)` in its own samples — the Layer view draws it with the sampler offset
     /// line. The bytes of `samples_window` (see [`crate::media::wave_bytes`]). 409 without a
     /// calibration or its file.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project or `name` is not a track; 409 when the track has no
+    /// sampler calibration; otherwise whatever reading the calibration file as a one-shot returns.
     pub fn track_sampler_wave(&self, sid: &str, name: &str, start: i64, end: i64) -> Result<Vec<u8>, AppError> {
         let op = self.inner.registry.get(sid)?;
         let file = {

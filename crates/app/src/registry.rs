@@ -160,6 +160,10 @@ impl OpenProject {
     }
 
     /// #121: 409 when the document on disk changed since this process read or wrote it ([`CHANGED_ON_DISK`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns a 409 error when the document file differs in size or modification time from the last read or write.
     pub fn check_disk(&self) -> Result<(), AppError> {
         match self.disk_change() {
             None => Ok(()),
@@ -240,6 +244,10 @@ impl OpenProject {
     }
 
     /// One track; 400 `unknown track` like `OpenProject.track`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error (`unknown track`) when the project has no track of this name.
     pub fn track(&self, name: &str) -> Result<&Track, AppError> {
         self.project
             .doc
@@ -248,6 +256,10 @@ impl OpenProject {
     }
 
     /// One track, mutable.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error (`unknown track`) when the project has no track of this name.
     pub fn track_mut(&mut self, name: &str) -> Result<&mut Track, AppError> {
         self.project
             .doc
@@ -256,6 +268,11 @@ impl OpenProject {
     }
 
     /// The path of the track's audio; 409 when the track is offline.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for an unknown track and a 409 error when the track is offline (its audio file is
+    /// missing or changed).
     pub fn source(&self, name: &str) -> Result<PathBuf, AppError> {
         self.track(name)?;
         if self.offline(name) {
@@ -321,6 +338,11 @@ impl OpenProject {
     }
 
     /// The track record as a JSON object (every key the document holds).
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for an unknown track and an internal error if the track does not serialise as a
+    /// JSON object.
     pub fn track_object(&self, name: &str) -> Result<Map<String, Value>, AppError> {
         let tr = self.track(name)?;
         match serde_json::to_value(tr) {
@@ -332,6 +354,11 @@ impl OpenProject {
     /// `OpenProject.public_track`: the record without `events` and `source`, plus
     /// `source_mode`, `status`, `offline` and `n_events`. P3-15c: the events are not serialised
     /// (see [`track_object_light`]); `tracks_get` holds the project lock a short time only.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for an unknown track and an internal error if the track does not serialise as a
+    /// JSON object.
     pub fn public_track(&self, name: &str) -> Result<Value, AppError> {
         let tr = self.track(name)?;
         let mut m = track_object_light(tr)?;
@@ -428,6 +455,10 @@ pub type Shared = Arc<Mutex<OpenProject>>;
 /// record (`serde_json::to_value` of the track minus those two keys), without serialising or
 /// copying the events (P3-15c: 6,000 hits made `tracks_get` hold the project lock for 55 ms
 /// in the debug app).
+///
+/// # Errors
+///
+/// Returns an internal error if a track field does not serialise to JSON or the track is not a JSON object.
 pub fn track_object_light(tr: &Track) -> Result<Map<String, Value>, AppError> {
     // every field is named: a new field of `Track` must be decided here
     let Track {
@@ -573,6 +604,11 @@ impl Registry {
     /// Put a loaded project into the registry; a folder that is open already keeps its entry
     /// (`server._register`). P3-15c: the sources are resolved (file heads hashed) before the
     /// registry lock is taken, so other commands do not wait for the disk.
+    ///
+    /// # Panics
+    ///
+    /// Panics through `expect` if [`Registry::register_with`] without a lock returns an error, which cannot
+    /// happen because only the lock path fails.
     pub fn register(&self, project: Project) -> Shared {
         self.register_with(project, false, None)
             .expect("registering without a lock cannot fail")
@@ -581,6 +617,11 @@ impl Registry {
     /// [`Registry::register`] for a process that locks (P4-5): with `client` and not `read_only` the folder's
     /// [`crate::lock::ProjectLock`] is taken first (409 when another process holds it); `read_only` marks the
     /// project so that every command that changes it is refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 409 error when `client` is given, the project is not `read_only`, and another process holds
+    /// the folder's lock.
     pub fn register_with(&self, project: Project, read_only: bool, client: Option<&str>) -> Result<Shared, AppError> {
         if let Some(op) = Registry::find_dir(&lock(&self.open), &project.dir) {
             return Ok(op);
@@ -625,6 +666,10 @@ impl Registry {
     }
 
     /// `server.proj`: the project with this id; 404 `no such project`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when no open project has this id.
     pub fn get(&self, sid: &str) -> Result<Shared, AppError> {
         lock(&self.open)
             .iter()
@@ -639,6 +684,10 @@ impl Registry {
     /// command-line tool, the MCP server and the test bridge share the policy. The documented
     /// exceptions fetch with [`Registry::get`]: `project_save_as` (the way from a read-only project
     /// to a writable copy) and a `track_repick` without `store` (the preview).
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when the project id is unknown and a 409 error when the project is open read-only.
     pub fn get_writable(&self, sid: &str) -> Result<Shared, AppError> {
         let op = self.get(sid)?;
         if lock(&op).read_only {
@@ -656,6 +705,10 @@ impl Registry {
     }
 
     /// Take the project with this id out of the registry (`project_close`); 404 when unknown.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when no open project has this id.
     pub fn remove(&self, sid: &str) -> Result<Shared, AppError> {
         let mut open = lock(&self.open);
         let i = open

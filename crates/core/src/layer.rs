@@ -115,6 +115,11 @@ fn planar(inter: &[f32], ch: usize) -> Vec<Vec<f32>> {
 
 /// Read a one-shot: a WAV file (RIFF/WAVE, the core reader) or an AIFF/AIFC file. The error text
 /// names what is wrong (format, length, an empty file).
+///
+/// # Errors
+///
+/// A message when the file cannot be read, is not a valid WAV or AIFF/AIFC file, holds no
+/// audio (zero frames or rate 0), or is longer than the one-shot limit.
 pub fn read_one_shot(path: &Path) -> Result<OneShot, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let shot = if bytes.len() >= 12 && &bytes[0..4] == b"FORM" {

@@ -52,6 +52,10 @@ pub fn set_doc_row_heights(doc: &mut drumspike_core::Document, heights: &Value) 
 
 impl Service {
     /// `row_heights_get {sid}`: `{heights, n}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when the project id is unknown.
     pub fn row_heights_get(&self, sid: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -63,6 +67,11 @@ impl Service {
     /// `row_heights_set {sid, heights}`: replace the whole map. 400 when an entry has a factor
     /// that is no positive finite number (the message names the track). Answers
     /// `{heights, changed, n}`. An empty map clears the overrides.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error when `heights` is not an object or a factor is not a positive finite number, a 404
+    /// error for an unknown project id, and a 409 error when the project is open read-only.
     pub fn row_heights_set(&self, sid: &str, heights: &Value) -> Result<Value, AppError> {
         let obj = match heights {
             Value::Object(m) => m.clone(),

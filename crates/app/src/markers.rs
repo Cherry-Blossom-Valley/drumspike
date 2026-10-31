@@ -47,6 +47,10 @@ pub fn set_doc_markers(doc: &mut drumspike_core::Document, markers: &[Value]) {
 
 impl Service {
     /// `markers_get {sid}`: `{markers, n}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when the project id is unknown.
     pub fn markers_get(&self, sid: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -59,6 +63,11 @@ impl Service {
     /// or a `note` that is no string (the message names the index). Answers
     /// `{markers, previous, changed, n}`; `previous` is the list before the call, so one more
     /// call with it undoes the change. An empty list clears the markers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error when an entry is not an object with a numeric `t` and an optional string `note`, a
+    /// 404 error for an unknown project id, and a 409 error when the project is open read-only.
     pub fn markers_set(&self, sid: &str, markers: &[Value]) -> Result<Value, AppError> {
         for (i, v) in markers.iter().enumerate() {
             let ok = v.is_object()

@@ -254,6 +254,10 @@ pub fn document_path(project_dir: &Path) -> PathBuf {
 }
 
 /// Create the four sub-folders (`project.ensure_layout`).
+///
+/// # Errors
+///
+/// [`ProjectError::Io`] when a sub-folder cannot be created.
 pub fn ensure_layout(project_dir: &Path) -> Result<(), ProjectError> {
     for d in SUBDIRS {
         let p = project_dir.join(d);
@@ -284,6 +288,11 @@ fn py_repr(s: &str) -> String {
 
 /// `project.check_name`: a new project's name becomes its folder name as typed; no path
 /// separators, no NUL, no `:`; returns the stripped name.
+///
+/// # Errors
+///
+/// [`ProjectError::Invalid`] when the stripped name is empty, `.` or `..`, or contains `/`, `\`,
+/// `:` or NUL.
 pub fn check_name(name: &str) -> Result<String, ProjectError> {
     let n = name.trim();
     if n.is_empty()
@@ -301,6 +310,10 @@ pub fn check_name(name: &str) -> Result<String, ProjectError> {
 
 /// `project.check_track_name`: a track name is a folder name under `Analysis/` and a file
 /// stem under `Backups/` and `Exports/`; no path separators, no NUL, not `.`/`..`, not blank.
+///
+/// # Errors
+///
+/// [`ProjectError::Invalid`] when the name is blank, `.` or `..`, or contains `/`, `\` or NUL.
 pub fn check_track_name(name: &str) -> Result<&str, ProjectError> {
     if name.trim().is_empty()
         || name == "."
@@ -318,6 +331,12 @@ pub fn check_track_name(name: &str) -> Result<&str, ProjectError> {
 
 /// `project.find_document`: folder or document path -> document path (the folder's own
 /// name first, else the only `.drumspike` file in the folder).
+///
+/// # Errors
+///
+/// [`ProjectError::NoDocument`] when the path is neither a file nor a folder with exactly one
+/// document (and none under the folder's own name); [`ProjectError::Io`] when the folder cannot
+/// be listed.
 pub fn find_document(path: &Path) -> Result<PathBuf, ProjectError> {
     let path = abspath(path);
     if path.is_file() {
@@ -358,6 +377,12 @@ fn read_json(path: &Path) -> Result<(Value, String), ProjectError> {
 
 /// `project.load_project`: open a project from its folder or its document; older formats
 /// are migrated in memory, the file on disk is not touched.
+///
+/// # Errors
+///
+/// [`ProjectError::NoDocument`] or [`ProjectError::Io`] when no document is found or it cannot
+/// be read; [`ProjectError::Invalid`] when it is not valid UTF-8 JSON, not an object, or has a
+/// bad `format` field or track name; [`ProjectError::Format`] when it was written by a newer app.
 pub fn load_project(path: &Path) -> Result<Project, ProjectError> {
     let doc_path = find_document(path)?;
     let (value, text) = read_json(&doc_path)?;
@@ -377,6 +402,11 @@ pub fn load_project(path: &Path) -> Result<Project, ProjectError> {
 }
 
 /// `project.new_project`: create `<dir>/<name>/` with the layout and an empty document.
+///
+/// # Errors
+///
+/// [`ProjectError::Invalid`] for a bad `name`; [`ProjectError::Exists`] when the folder already
+/// holds a document; [`ProjectError::Io`] when the layout or the first save fails.
 pub fn new_project(dir: &Path, name: &str) -> Result<Project, ProjectError> {
     let name = check_name(name)?;
     let pdir = abspath(dir).join(&name);
@@ -407,6 +437,11 @@ fn format_repr(v: &Value) -> String {
 
 /// `project.migrate_forward`: upgrade a document of any older format to [`FORMAT`] in
 /// memory and check the track names. Newer formats give [`ProjectError::Format`].
+///
+/// # Errors
+///
+/// [`ProjectError::Format`] for a format newer than [`FORMAT`]; [`ProjectError::Invalid`] for a
+/// bad or negative `format` field, a malformed document, or a bad track name.
 pub fn migrate_forward(value: Value) -> Result<Document, ProjectError> {
     migrate_with(value, None)
 }
@@ -415,6 +450,10 @@ pub fn migrate_forward(value: Value) -> Result<Document, ProjectError> {
 /// beyond 64 bits as a float, Python's json as an int: the literal in `text` decides, so
 /// `"format": 100000000000000000000000` is the newer-format error, as in Python, and
 /// `"format": 1e23` stays a bad format field (review round 3, finding m3).
+///
+/// # Errors
+///
+/// The same as [`migrate_forward`].
 pub fn migrate_forward_from_text(value: Value, text: &str) -> Result<Document, ProjectError> {
     let big = match value.get("format") {
         Some(Value::Number(n)) if n.as_f64().is_some_and(|f| f.abs() >= 2f64.powi(63)) => big_int_format(text),
@@ -590,6 +629,17 @@ fn migrate_0_to_1(doc: Value) -> Result<Value, ProjectError> {
 /// `tracks/<name>/{events.json, source.wav}`) as a format-0 document value. Sources are
 /// referenced records that point at the session's `source.wav`; nothing in the session
 /// folder is changed.
+///
+/// # Errors
+///
+/// [`ProjectError::Invalid`] when `meta.json` is missing, not JSON, not an object, has `tracks`
+/// that is not an object, or names a bad track; [`ProjectError::Io`] when a file cannot be read
+/// or a source cannot be hashed.
+///
+/// # Panics
+///
+/// Panics through `expect("a record serialises")` if a source record cannot be converted to a
+/// JSON value, which a plain record never fails to do.
 pub fn legacy_session_document(session_dir: &Path) -> Result<Value, ProjectError> {
     let mp = session_dir.join("meta.json");
     if !mp.is_file() {
@@ -637,6 +687,16 @@ pub fn legacy_session_document(session_dir: &Path) -> Result<Value, ProjectError
 /// `project.add_track`: register a track with its source record (`None` while no file is
 /// attached) and append it to `order`; the caller sets `sr`, `n_samples`, `duration`,
 /// `color` and `params` on the returned track.
+///
+/// # Errors
+///
+/// [`ProjectError::Invalid`] when a track called `name` exists or `mix_mode` is not one of the
+/// mix modes.
+///
+/// # Panics
+///
+/// Panics through `expect("just inserted")` only if the track inserted a line earlier is
+/// missing, which cannot happen.
 pub fn add_track<'a>(
     project: &'a mut Project,
     name: &str,

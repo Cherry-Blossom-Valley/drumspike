@@ -89,6 +89,11 @@ impl Service {
     /// Answers `{"started": [names that need a build]}`; the job is `done` at once when that
     /// list is empty. A track error (an offline track without a cache is not in the list; a
     /// file that cannot be decoded is) ends that track only.
+    ///
+    /// # Errors
+    ///
+    /// An `AppError` when `sid` is unknown or the session is read-only, or when a name in `tracks` is not a track of
+    /// the project. Nothing is queued then.
     pub fn peaks_build_start(
         &self,
         sid: &str,

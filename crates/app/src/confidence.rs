@@ -150,6 +150,10 @@ pub fn is_out(e: &Value) -> bool {
 /// row-major. `t` is a detector time on the audio timeline (see the module coordinates): the
 /// frames of the activations sit there, so a shifted event time must be converted first.
 /// `None` when the window holds no frame or `classes` is empty.
+///
+/// # Panics
+///
+/// Panics (slice indexing of `act`) when a class in `classes` is not below [`N_CLASSES`].
 #[must_use]
 pub fn hit_strength(act: &[f32], classes: &[usize], t: f64) -> Option<(f64, usize)> {
     let frames = act.len() / N_CLASSES;
@@ -237,6 +241,11 @@ impl Service {
     /// the recorded shift comes off before the activations (`hit_strength`, the frame grid) and
     /// before the peak level (`peak_db`, the audio samples) — see the module coordinates. The
     /// gate verdicts come from the stored candidates of the current analysis ([`hit_gates`]).
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] for an unknown `sid` or track; a 409 for an offline track (its source cannot be
+    /// resolved); a 400 when an event has no numeric `t`; the decode error when the audio cannot be read.
     pub fn track_confidence(&self, sid: &str, name: &str, events: Option<&[Value]>) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         resolve_shared(&op);

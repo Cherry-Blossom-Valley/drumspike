@@ -116,6 +116,11 @@ impl Plan {
     /// other than FL+FR ([`ffmpeg_stereo_mask_ok`]), would select another matrix in ffmpeg
     /// or make it fail, so it is an error instead of a silent mismatch (the binding then
     /// hands the file to ffmpeg). `Average` takes any channel count and mask.
+    ///
+    /// # Errors
+    ///
+    /// A message when `ch` is 0, or in `Ffmpeg` mode when `ch` is above 8, the channel mask
+    /// differs from ffmpeg's default for more than two channels, or a stereo mask is not FL+FR.
     pub fn new(mode: MixMode, ch: usize, channel_mask: u32) -> Result<Plan, String> {
         if ch == 0 {
             return Err("zero channels".into());

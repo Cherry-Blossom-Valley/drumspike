@@ -150,6 +150,11 @@ fn guarded<T: Send + 'static>(
 }
 
 /// The name of the device an output opens now (`None`: the system default), or the error.
+///
+/// # Errors
+///
+/// With `device` `None`, [`TransportError::Device`] when the host has no default output device.
+/// A given name is returned as is, without a check that the device exists.
 pub fn target_name(device: Option<&str>) -> Result<String, TransportError> {
     match device {
         Some(n) => Ok(n.to_string()),
@@ -213,23 +218,43 @@ fn info_of(dev: &cpal::Device) -> Result<DeviceInfo, TransportError> {
 }
 
 /// The device's current rate and channel count, without opening a stream.
+///
+/// # Errors
+///
+/// [`TransportError::Device`] when there is no default output device or it does not report
+/// its output configuration.
 pub fn default_output_rate() -> Result<(u32, u16), TransportError> {
     output_info(None).map(|i| (i.sample_rate, i.channels))
 }
 
 /// The default output device as the system reports it now: name, current rate, channels. The
 /// app polls it to see a change of the output (P3-5b); it opens no stream.
+///
+/// # Errors
+///
+/// [`TransportError::Device`] when there is no default output device or it does not report
+/// its output configuration.
 pub fn default_output_info() -> Result<DeviceInfo, TransportError> {
     output_info(None)
 }
 
 /// [`default_output_info`] for the device of `name` (`None`: the system default).
+///
+/// # Errors
+///
+/// [`TransportError::Device`] when the host cannot list its output devices, no device of
+/// `name` is connected (or, for `None`, there is no default), or the device does not report
+/// its output configuration.
 pub fn output_info(name: Option<&str>) -> Result<DeviceInfo, TransportError> {
     info_of(&find_device(name)?)
 }
 
 /// Every output device the system lists now, with its current rate and channels (P3-16:
 /// the Settings list). A device that does not answer its configuration is left out.
+///
+/// # Errors
+///
+/// [`TransportError::Device`] when the host cannot enumerate its output devices.
 pub fn output_devices() -> Result<Vec<DeviceInfo>, TransportError> {
     let host = cpal::default_host();
     let devs = host

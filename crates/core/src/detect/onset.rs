@@ -1141,6 +1141,10 @@ pub fn onsets_from_spectrogram(spec: &[f32], x44: &[f32], p: &OnsetParams) -> Ve
 
 /// Detect the hits of a mono track at `sr` (44.1, 48 or 96 kHz) for `role` with the tuned
 /// parameters of [`OnsetParams::for_role`].
+///
+/// # Errors
+///
+/// [`OnsetError::Resample`] when `sr` is not 44.1, 48 or 96 kHz.
 pub fn detect_onsets(x: &[f32], sr: u32, role: Role) -> Result<Vec<OnsetHit>, OnsetError> {
     detect_onsets_with(x, sr, &OnsetParams::for_role(role))
 }
@@ -1148,6 +1152,10 @@ pub fn detect_onsets(x: &[f32], sr: u32, role: Role) -> Result<Vec<OnsetHit>, On
 /// [`detect_onsets`] with explicit parameters. `rise_db` comes from the phase 1
 /// refinement on the native-rate signal at each frame time; the time itself stays the
 /// frame time.
+///
+/// # Errors
+///
+/// [`OnsetError::Resample`] when `sr` is not 44.1, 48 or 96 kHz.
 pub fn detect_onsets_with(x: &[f32], sr: u32, p: &OnsetParams) -> Result<Vec<OnsetHit>, OnsetError> {
     Ok(detect_onsets_and_cands(x, sr, p)?.0)
 }
@@ -1156,6 +1164,10 @@ pub fn detect_onsets_with(x: &[f32], sr: u32, p: &OnsetParams) -> Result<Vec<Ons
 /// candidates coincide with a louder confirmed hit on another track; they take no part in the loud-hit
 /// template (see [`onsets_with_candidates_excluding`]). The peak picking is deterministic, so the
 /// indices are the same in the re-run.
+///
+/// # Errors
+///
+/// [`OnsetError::Resample`] when `sr` is not 44.1, 48 or 96 kHz.
 pub fn detect_onsets_and_cands_excluding(
     x: &[f32],
     sr: u32,
@@ -1176,6 +1188,10 @@ pub fn detect_onsets_and_cands_excluding(
 /// indices whose candidates coincide with a kick or tom hit within 30 ms; they cannot pass the
 /// soft gate (see [`onsets_with_candidates_soft_excluding`]). The peak picking is deterministic,
 /// so the indices are the same in the re-run.
+///
+/// # Errors
+///
+/// [`OnsetError::Resample`] when `sr` is not 44.1, 48 or 96 kHz.
 pub fn detect_onsets_and_cands_soft_excluding(
     x: &[f32],
     sr: u32,
@@ -1195,6 +1211,10 @@ pub fn detect_onsets_and_cands_soft_excluding(
 /// [`detect_onsets_with`] with the peak-picked candidate list and the weak-flux limit of
 /// the detection (A4): the model-free detector keeps every candidate with its gate verdict,
 /// so the Sensitivity slider and `track_repick` pick again without a new detection.
+///
+/// # Errors
+///
+/// [`OnsetError::Resample`] when `sr` is not 44.1, 48 or 96 kHz.
 pub fn detect_onsets_and_cands(
     x: &[f32],
     sr: u32,

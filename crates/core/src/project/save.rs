@@ -35,6 +35,10 @@ pub fn free_name(dir: &Path, base: &str) -> String {
 /// `None` for now. The name becomes one path component (finding G1): `/`, `\`, `:` and NUL
 /// turn into `-`, and a name that is `.` or `..` is refused ("bad project name"), so a
 /// document name can never move the backup out of `Backups/`.
+///
+/// # Errors
+///
+/// [`ProjectError::Invalid`] when `name` is `.` or `..`.
 pub fn backup_name(name: &str, when: Option<f64>) -> Result<String, ProjectError> {
     let safe: String = name
         .chars()
@@ -53,6 +57,11 @@ pub fn backup_name(name: &str, when: Option<f64>) -> Result<String, ProjectError
 
 /// `project.rotate_backups`: keep the newest `keep` documents in `Backups/` (by mtime,
 /// then name) and remove the rest; returns the removed paths. A missing folder is a no-op.
+///
+/// # Errors
+///
+/// [`ProjectError::Io`] when the `Backups/` folder cannot be listed or an old backup cannot
+/// be removed.
 pub fn rotate_backups(project_dir: &Path, keep: usize) -> Result<Vec<PathBuf>, ProjectError> {
     let bdir = project_dir.join(BACKUPS_DIR);
     if !bdir.is_dir() {
@@ -84,6 +93,11 @@ pub fn rotate_backups(project_dir: &Path, keep: usize) -> Result<Vec<PathBuf>, P
 /// `project.write_document`: atomic write through the shared helper (`io::atomic`): a unique
 /// `<path>.<pid>-<unpredictable>.tmp` file in the same folder, synced to disk, renamed over
 /// `path`, the folder fsynced (R10). The layout is Python's `json.dump(doc, f, indent=1)`.
+///
+/// # Errors
+///
+/// [`ProjectError::Io`] when the temporary file cannot be created, written, or renamed over
+/// `path`.
 pub fn write_document(doc: &Document, path: &Path) -> Result<(), ProjectError> {
     let mut t = crate::io::TempFile::create(path).map_err(io_err(format!("create {}", path.display())))?;
     let text = doc.to_json_pretty();
@@ -119,6 +133,11 @@ pub struct SaveReport {
 /// [`BACKUPS_KEEP`]. Returns the document path. A rotation failure after the commit
 /// is an error here (the strict contract of [`save_project`]); use
 /// [`save_project_report`] to get the committed path with the warning instead.
+///
+/// # Errors
+///
+/// [`ProjectError::Io`] when the project layout, the pre-save backup, the document write or
+/// the backup rotation fails; [`ProjectError::Invalid`] when the project name is `.` or `..`.
 pub fn save_project(project: &mut Project) -> Result<PathBuf, ProjectError> {
     let report = save_project_with(project, |a, b| std::fs::hard_link(a, b))?;
     match report.warning {
@@ -131,6 +150,12 @@ pub fn save_project(project: &mut Project) -> Result<PathBuf, ProjectError> {
 /// is renamed into place does not undo the commit; it comes back as a `warning` next
 /// to the path. A failure to make the pre-save backup or to write the document is
 /// still an `Err` (nothing is committed, no baseline moves).
+///
+/// # Errors
+///
+/// [`ProjectError::Io`] when the project layout, the pre-save backup or the document write
+/// fails; [`ProjectError::Invalid`] when the project name is `.` or `..`. A rotation failure
+/// is not an error here but the report's `warning`.
 pub fn save_project_report(project: &mut Project) -> Result<SaveReport, ProjectError> {
     save_project_with(project, |a, b| std::fs::hard_link(a, b))
 }
@@ -165,6 +190,11 @@ pub(crate) fn save_project_with(
 /// Write the document of `project` into the folder `dir` instead of its own folder (same file name as
 /// `project.path()`), setting `format`, `name` and `modified` as [`save_project`] does, without backups. For a copy that is
 /// built in `<name>.partial` and renamed to `<name>` when it is complete (P4-5): the document is in place before the rename.
+///
+/// # Errors
+///
+/// [`ProjectError::Io`] when the layout in `dir` or the document write fails;
+/// [`ProjectError::Invalid`] when the project has no document file name.
 pub fn save_project_into(project: &mut Project, dir: &Path) -> Result<PathBuf, ProjectError> {
     let name = project.name();
     project.doc.format = FORMAT;
@@ -186,6 +216,13 @@ pub fn save_project_into(project: &mut Project, dir: &Path) -> Result<PathBuf, P
 /// every source is referenced where it is now (a copied file of the old project becomes a
 /// referenced file of the new one). An offline source is an error before anything is written
 /// to the new folder's document.
+///
+/// # Errors
+///
+/// [`ProjectError::Invalid`] for a bad `name`; [`ProjectError::Exists`] when `<dir>/<name>/`
+/// already holds a document; [`ProjectError::NeedsRelink`] when a track's source is missing or
+/// changed; [`ProjectError::CopyFailed`] or [`ProjectError::Io`] when a source cannot be
+/// hashed or copied or the new project cannot be written.
 pub fn save_as(project: &Project, dir: &Path, name: &str, copy_audio: bool) -> Result<Project, ProjectError> {
     let name = check_name(name)?;
     let pdir = abspath(dir).join(&name);

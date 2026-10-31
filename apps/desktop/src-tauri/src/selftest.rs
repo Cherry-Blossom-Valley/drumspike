@@ -65,6 +65,11 @@ pub static FRONT_WINDOW: AtomicBool = AtomicBool::new(false);
 
 /// `--self-test <scenario> --out <file>` in `args` (without the program name). `Ok(None)`
 /// when the flag is absent; an error when it is incomplete.
+///
+/// # Errors
+///
+/// When `--self-test` is not followed by a scenario (a value that starts with `--` is none), when
+/// `--out` is missing, or when `--out` is not followed by a file name.
 pub fn parse_args(args: &[String]) -> Result<Option<Request>, String> {
     let Some(i) = args.iter().position(|a| a == "--self-test") else {
         return Ok(None);
@@ -116,11 +121,20 @@ fn resolve_env_with(v: &mut Value, lookup: &dyn Fn(&str) -> Option<String>) -> R
 }
 
 /// Replace every string `"$NAME"` in the scenario with the environment variable `NAME`.
+///
+/// # Errors
+///
+/// When a `$NAME` string names an environment variable that is not set (or not valid Unicode).
 pub fn resolve_env(v: &mut Value) -> Result<(), String> {
     resolve_env_with(v, &|name| std::env::var(name).ok())
 }
 
 /// The scenario file as JSON with `$NAME` strings resolved; it must have a `name`.
+///
+/// # Errors
+///
+/// When the scenario file cannot be read, is not valid JSON, has no string `name`, or needs an
+/// environment variable that is not set.
 pub fn load_scenario(req: &Request) -> Result<Value, String> {
     let path = scenario_path(&req.scenario);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read scenario {}: {e}", path.display()))?;
@@ -135,6 +149,11 @@ pub fn load_scenario(req: &Request) -> Result<Value, String> {
 /// [`load_scenario`] with the `$NAME` variables taken from `vars` instead of the
 /// process environment (#194): a test loads a scenario without writing process env that
 /// other parallel tests read. Later pairs win on a duplicate name.
+///
+/// # Errors
+///
+/// When the scenario file cannot be read, is not valid JSON, has no string `name`, or needs a
+/// variable that `vars` does not hold.
 pub fn load_scenario_from(req: &Request, vars: &[(&str, &str)]) -> Result<Value, String> {
     let path = scenario_path(&req.scenario);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read scenario {}: {e}", path.display()))?;
@@ -318,6 +337,10 @@ pub fn failure_report(scenario: &str, why: &str) -> Value {
 }
 
 /// Add the host facts and the scenario, write the report as pretty JSON; returns whether it passed.
+///
+/// # Errors
+///
+/// When the report cannot be serialized, or the file `out` cannot be written.
 pub fn write_report(out: &Path, mut report: Value, cold_ms: f64) -> Result<bool, String> {
     let pass = report.get("pass").and_then(Value::as_bool).unwrap_or(false);
     if let Some(o) = report.as_object_mut() {

@@ -161,6 +161,10 @@ impl CommandSpec {
     }
 
     /// The JSON Schema of the result.
+    ///
+    /// # Panics
+    ///
+    /// Panics (`expect`) when the row's `result` text is not valid JSON; a registry test pins that every row's is.
     #[must_use]
     pub fn result_schema(&self) -> Value {
         serde_json::from_str(self.result).expect("a registry result schema is valid JSON")

@@ -62,6 +62,12 @@ pub fn learn_key(source: &Value, frames: &[u32], method: &str) -> Value {
 }
 
 /// Write the features (`frames.len() x dim` values in `feats`) and their key into `dir`. The key goes last.
+///
+/// # Errors
+///
+/// An `InvalidInput` io error when `feats.len()` is not `frames.len() * dim`; otherwise the io error of creating `dir`
+/// or of writing or renaming the temporary files (the old key file is removed first, so a failure leaves no valid
+/// cache).
 pub fn write_learn(dir: &Path, frames: &[u32], feats: &[f32], dim: usize, key: &Value) -> io::Result<()> {
     if feats.len() != frames.len() * dim {
         return Err(io::Error::new(
@@ -100,6 +106,11 @@ static TMP_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 
 /// The features in `dir` when their key equals `key`, the dimension is `dim` and the file is whole:
 /// `(frames, features)`; else `None`.
+///
+/// # Panics
+///
+/// The two `expect` calls on the header slices (4 and 8 bytes) cannot fire: the file is at least `HEADER` (24) bytes
+/// long when they run.
 #[must_use]
 pub fn read_learn(dir: &Path, key: &Value, dim: usize) -> Option<(Vec<u32>, Vec<f32>)> {
     let stored: Value = serde_json::from_str(&fs::read_to_string(dir.join(LEARN_KEY)).ok()?).ok()?;
@@ -416,6 +427,11 @@ impl Service {
     /// `learn.auto` is set, `auto_on`, else the stored one), `cache` `hit` or `built`, the time in
     /// ms. Without kept candidates `{state: "missing"}` (#293: there is no model state). 409 for an offline track or a
     /// gone source.
+    ///
+    /// # Errors
+    ///
+    /// A 409 `AppError` for an offline track or a follower whose source is gone; an error for an unknown session or
+    /// track, a `learn` object that cannot be read, or audio that cannot be decoded.
     pub fn track_learn_scores(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let c = match self.learn_ctx(sid, name)? {
             Ok(c) => c,

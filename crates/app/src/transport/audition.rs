@@ -36,6 +36,10 @@ impl PlayWindow {
     /// none is given. `tracks` is a list of track names (a wrong type or an empty list is a 400).
     /// `shot` (P4-40e) is a track name whose one-shot plays as a preview; it solos the track when
     /// no `tracks` are given.
+    ///
+    /// # Errors
+    /// 400 when `tracks` is not a non-empty list of strings, or `shot` is not a non-empty track name
+    /// (or null).
     pub fn from_args(
         start: Option<f64>,
         end: Option<f64>,

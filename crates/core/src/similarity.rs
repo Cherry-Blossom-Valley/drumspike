@@ -552,6 +552,13 @@ fn median(v: &[f32]) -> f32 {
 /// Fewer than 4 candidates or no "this" score: [`DEFAULT_THRESHOLD`]. The "not" scores do not move it:
 /// a forced "not" example goes anyway, and a negative that sounds like the hits (bleed of the same drum,
 /// a hit the reference lacks) must not drag the threshold into the hits.
+///
+/// # Panics
+///
+/// Panics through `expect("a non-empty window")` or `expect("the window holds its lowest bin")`
+/// if the histogram window `b0..=b1` around the boundary is empty, which does not happen for
+/// finite scores because `b0 <= b1`; a NaN score or threshold could break that. The histogram
+/// indexing is clamped to `HIST_BINS - 1` and cannot go out of range.
 #[must_use]
 pub fn auto_threshold(cands: &[f32], this: &[f32], _not: &[f32]) -> f32 {
     if this.is_empty() || cands.len() < 4 {

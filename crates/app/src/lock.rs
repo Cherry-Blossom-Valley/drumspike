@@ -103,6 +103,10 @@ impl ProjectLock {
     /// Take the lock of the project folder `dir` for `client` (`app`, `cli`, `mcp`). 409 only when another process
     /// holds it (the message names its client and pid). Any other failure (the file cannot be made, the file system has
     /// no locks) is [`Lock::Unavailable`], not an error: the project opens unlocked.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 409 error when another process holds the lock on `dir`.
     pub fn acquire(dir: &Path, client: &str) -> Result<Lock, AppError> {
         let path = dir.join(LOCK_FILE);
         // A lock file this user cannot write (another user's 0644 file on a shared folder) can still be locked: the

@@ -210,6 +210,10 @@ impl Resample {
 impl TrackSource {
     /// Open `path` for playback at `device_rate`: a stereo file keeps both channels, any
     /// other file is folded with `mode`.
+    ///
+    /// # Errors
+    ///
+    /// As [`TrackSource::open_at`] with `out_rate` equal to `device_rate`.
     pub fn open(
         path: &Path,
         mode: MixMode,
@@ -222,6 +226,12 @@ impl TrackSource {
     /// P3-20b: [`TrackSource::open`] with the frames resampled to `out_rate` (twice the
     /// device rate at half speed, see [`super::Speed::render_rate`]). [`TrackSource::device_frames`]
     /// still counts frames at `device_rate`.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Track`] when the file cannot be mapped or opened as a WAV, has no
+    /// mix plan for `mode`, or the track rate, `device_rate` or `out_rate` is 0; also the
+    /// error of building the resampler for the track rate and `out_rate`.
     pub fn open_at(
         path: &Path,
         mode: MixMode,
@@ -279,6 +289,12 @@ impl TrackSource {
     /// [`TrackSource::seek`]). The resampler of the old rate is kept for the next change back,
     /// so each rate builds its resampler once. When the resampler cannot be built, the source
     /// gives silence until the next change and the error is returned.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Track`] when `out_rate` is 0; otherwise the error of building a
+    /// resampler from the track rate to `out_rate` (none when `out_rate` is unchanged or a
+    /// resampler for it is kept).
     pub fn set_out_rate(&mut self, out_rate: u32) -> Result<(), TransportError> {
         if out_rate == self.out_rate {
             return Ok(());
@@ -416,6 +432,12 @@ impl TrackSource {
 
     /// Fill `out` with the next device frames (`out.len() / channels()` of them, interleaved;
     /// zeros past the end of the track). Returns the nanoseconds spent inside the resampler.
+    ///
+    /// # Panics
+    ///
+    /// Panics (an `expect` or `unwrap`) only if the resampler's fixed adapter or block sizes
+    /// are inconsistent, or the resampler is missing inside the resampling loop. Neither
+    /// happens while the source's own invariants hold.
     pub fn fill(&mut self, out: &mut [f32]) -> u64 {
         let c = self.chans;
         let frames = out.len() / c;

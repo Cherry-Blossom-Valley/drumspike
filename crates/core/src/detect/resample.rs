@@ -158,6 +158,10 @@ pub struct Resampler {
 
 impl Resampler {
     /// Build the table for `sr_in`; `Err` for any rate other than 44,100, 48,000 or 96,000.
+    ///
+    /// # Errors
+    ///
+    /// [`ResampleError::UnsupportedRate`] when `sr_in` is not 44,100, 48,000 or 96,000 Hz.
     pub fn new(sr_in: u32) -> Result<Resampler, ResampleError> {
         let (m, q) = match sr_in {
             44_100 => (147, 0usize),
@@ -220,6 +224,15 @@ impl Resampler {
     }
 
     /// The process-wide table for `sr_in`, built on first use.
+    ///
+    /// # Errors
+    ///
+    /// [`ResampleError::UnsupportedRate`] when `sr_in` is not 44,100, 48,000 or 96,000 Hz.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the `expect("supported rate")` on [`Resampler::new`] runs only for
+    /// a rate that the `match` above has already accepted.
     pub fn shared(sr_in: u32) -> Result<&'static Resampler, ResampleError> {
         static R44: OnceLock<Resampler> = OnceLock::new();
         static R48: OnceLock<Resampler> = OnceLock::new();
@@ -306,6 +319,10 @@ impl Resampler {
 /// Resample a mono signal at `sr_in` to 44.1 kHz with the shared table (see the module
 /// docs). A 44.1 kHz signal is returned unchanged; any other rate than 48 or 96 kHz is an
 /// error.
+///
+/// # Errors
+///
+/// [`ResampleError::UnsupportedRate`] when `sr_in` is not 44,100, 48,000 or 96,000 Hz.
 pub fn resample_to_44100(x: &[f32], sr_in: u32) -> Result<Vec<f32>, ResampleError> {
     Ok(Resampler::shared(sr_in)?.process(x))
 }

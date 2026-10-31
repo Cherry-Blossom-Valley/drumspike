@@ -75,6 +75,10 @@ impl Service {
     /// `GET /api/project/legacy`: the sessions of the old server in `folder`: every sub-folder
     /// with a readable `meta.json` (sorted by name), as `{session_id, name, tracks, dir}`. When
     /// `folder` holds a `meta.json` itself, it is the one session. 404 when `folder` is no folder.
+    ///
+    /// # Errors
+    ///
+    /// A 404 `AppError` when `folder` is empty or not a directory; a 500 when the folder cannot be listed.
     pub fn legacy_list(&self, folder: &str) -> Result<Value, AppError> {
         let root = Path::new(folder);
         if folder.trim().is_empty() || !root.is_dir() {
@@ -118,6 +122,11 @@ impl Service {
 
     /// `POST /api/project/import`: open a session folder of the old server (`session_dir`) as a new project.
     /// Answers the summary of `project_open`. 400 for an empty `session_dir`, 404 for a folder that is not there.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` for an empty `session_dir`; a 404 when it is not a folder; the migration, copy (500) or save
+    /// error when the session cannot be read, migrated or written (the new folder is then removed).
     pub fn project_import(&self, session_dir: &str) -> Result<Value, AppError> {
         let _span = crate::trace::stage("import");
         let dir = session_dir.trim();
