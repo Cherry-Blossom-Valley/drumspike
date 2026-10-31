@@ -28,7 +28,7 @@ pub const PEAK_LEVELS: [usize; 3] = [256, 4096, 65536];
 /// Returned as f64 so JSON carries the same value Python's `tolist()` produces.
 #[inline]
 fn round5_f32(v: f32) -> f64 {
-    ((v * 1e5f32).round_ties_even() / 1e5f32) as f64
+    f64::from((v * 1e5f32).round_ties_even() / 1e5f32)
 }
 
 /// Raw (unrounded) statistics of one bucket.
@@ -53,14 +53,14 @@ fn raw_level(x: &[f32], bs: usize) -> Vec<Raw> {
                 for (k, &v) in q.iter().enumerate() {
                     mn = mn.min(v);
                     mx = mx.max(v);
-                    let d = v as f64;
+                    let d = f64::from(v);
                     ss[k] += d * d;
                 }
             }
             for &v in rest {
                 mn = mn.min(v);
                 mx = mx.max(v);
-                let d = v as f64;
+                let d = f64::from(v);
                 ss[0] += d * d;
             }
             Raw {
@@ -310,19 +310,19 @@ mod tests {
     #[test]
     fn peaks_level_drops_the_partial_block_and_rounds_to_5_decimals() {
         let mut x = vec![0.0f32; 256 * 2 + 100];
-        x[3] = 0.123456;
+        x[3] = 0.123_456;
         x[300] = -0.5;
         x[600] = 1.0; // in the dropped partial block
         let l = peaks_level(&x, 256);
         assert_eq!(l.n, 2);
         // the value is the float32 0.12346 widened to f64, exactly what numpy's tolist() gives
-        assert_eq!(l.max, vec![0.12346f32 as f64, 0.0]);
+        assert_eq!(l.max, vec![f64::from(0.12346f32), 0.0]);
         assert_eq!(l.min, vec![0.0, -0.5]);
-        let rms0 = ((0.123456f64 * 0.123456) / 256.0).sqrt() as f32;
-        assert_eq!(l.rms[0], ((rms0 * 1e5).round_ties_even() / 1e5) as f64);
+        let rms0 = ((0.123_456_f64 * 0.123_456) / 256.0).sqrt() as f32;
+        assert_eq!(l.rms[0], f64::from((rms0 * 1e5).round_ties_even() / 1e5));
         assert_eq!(
             l.rms[1],
-            ((0.5f32 * 0.5 / 256.0).sqrt() * 1e5f32).round_ties_even() as f64 / 1e5
+            f64::from(((0.5f32 * 0.5 / 256.0).sqrt() * 1e5f32).round_ties_even()) / 1e5
         );
     }
 

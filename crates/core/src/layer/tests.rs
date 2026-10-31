@@ -16,7 +16,7 @@ fn shot_signal(sr: u32, pre: usize, len: usize, seed: u64) -> Vec<f32> {
             if i < pre {
                 return 0.0;
             }
-            let t = (i - pre) as f64 / sr as f64;
+            let t = (i - pre) as f64 / f64::from(sr);
             let tone = (2.0 * std::f64::consts::PI * 180.0 * t).sin() * (-t / 0.08).exp();
             let burst = noise() * (-t / 0.004).exp();
             (0.7 * tone + 0.5 * burst) as f32
@@ -147,17 +147,17 @@ fn one_shot_mono_interleaved_and_resampled() {
 #[test]
 fn the_onset_is_the_attack_not_the_file_start() {
     for sr in [44_100u32, 48_000, 96_000] {
-        let pre = (0.012 * sr as f64) as usize;
+        let pre = (0.012 * f64::from(sr)) as usize;
         let x = shot_signal(sr, pre, sr as usize / 2, 7);
         let on = one_shot_onset(&x, sr);
         assert!(
-            (on as i64 - pre as i64).abs() <= (0.0005 * sr as f64) as i64,
+            (on as i64 - pre as i64).abs() <= (0.0005 * f64::from(sr)) as i64,
             "{sr}: onset {on} for the attack at {pre}"
         );
         // an attack at the first sample
         let y = shot_signal(sr, 0, sr as usize / 4, 3);
         let o = one_shot_onset(&y, sr);
-        assert!(o as f64 <= 0.0005 * sr as f64, "{sr}: {o}");
+        assert!(o as f64 <= 0.0005 * f64::from(sr), "{sr}: {o}");
     }
     assert_eq!(one_shot_onset(&[0.0; 100], 48_000), 0);
     assert_eq!(one_shot_onset(&[], 48_000), 0);
@@ -167,17 +167,17 @@ fn the_onset_is_the_attack_not_the_file_start() {
 fn sinc_resample_keeps_a_tone() {
     let (from, to) = (44_100u32, 48_000u32);
     let x: Vec<f32> = (0..4_410)
-        .map(|i| (2.0 * std::f64::consts::PI * 1000.0 * i as f64 / from as f64).sin() as f32)
+        .map(|i| (2.0 * std::f64::consts::PI * 1000.0 * f64::from(i) / f64::from(from)).sin() as f32)
         .collect();
     let y = sinc_resample(&x, from, to);
     assert_eq!(y.len(), 4_800);
     for (m, v) in y.iter().enumerate().take(4_700).skip(100) {
-        let want = (2.0 * std::f64::consts::PI * 1000.0 * m as f64 / to as f64).sin();
-        assert!((*v as f64 - want).abs() < 2e-3, "{m}: {v} {want}");
+        let want = (2.0 * std::f64::consts::PI * 1000.0 * m as f64 / f64::from(to)).sin();
+        assert!((f64::from(*v) - want).abs() < 2e-3, "{m}: {v} {want}");
     }
     // downwards: a tone above the new Nyquist is removed
     let hi: Vec<f32> = (0..9_600)
-        .map(|i| (2.0 * std::f64::consts::PI * 30_000.0 * i as f64 / 96_000.0).sin() as f32)
+        .map(|i| (2.0 * std::f64::consts::PI * 30_000.0 * f64::from(i) / 96_000.0).sin() as f32)
         .collect();
     let d = sinc_resample(&hi, 96_000, 48_000);
     assert_eq!(d.len(), 4_800);
@@ -189,13 +189,13 @@ fn sinc_resample_keeps_a_tone() {
 #[test]
 fn frac_delayed_shifts_by_the_fraction() {
     let f = |t: f64| (2.0 * std::f64::consts::PI * t / 37.0).sin() * (-((t - 200.0) / 80.0).powi(2)).exp();
-    let x: Vec<f32> = (0..400).map(|i| f(i as f64) as f32).collect();
+    let x: Vec<f32> = (0..400).map(|i| f(f64::from(i)) as f32).collect();
     for frac in [0.0, 0.25, 0.5, 0.9] {
         let y = frac_delayed(&x, frac);
         assert_eq!(y.len(), 400 + 2 * SINC_HALF);
         for n in 50..350usize {
             let want = f(n as f64 - frac);
-            let got = y[n + SINC_HALF] as f64;
+            let got = f64::from(y[n + SINC_HALF]);
             assert!((got - want).abs() < 2e-3, "frac {frac} n {n}: {got} {want}");
         }
     }
@@ -258,7 +258,7 @@ fn xcorr_finds_planted_lags_and_the_inverted_polarity() {
     let (a, pre) = attack_template(&shot, onset, sr, &p);
     assert_eq!(pre, 48);
     assert_eq!(a.len(), 480);
-    let max_lag = (p.max_lag_s * sr as f64).round() as usize;
+    let max_lag = (p.max_lag_s * f64::from(sr)).round() as usize;
     let hit = 20_000i64;
     for (lag, sign) in [
         (0.0, 1.0f32),
@@ -294,10 +294,10 @@ fn xcorr_marks_a_lag_on_the_search_edge_uncertain() {
     let onset = one_shot_onset(&shot, sr);
     let p = AlignParams::default();
     let (a, pre) = attack_template(&shot, onset, sr, &p);
-    let max_lag = (p.max_lag_s * sr as f64).round() as usize;
+    let max_lag = (p.max_lag_s * f64::from(sr)).round() as usize;
     // a lag exactly on the window's edge: the best sits on the last index
     let far = p.max_lag_s;
-    let mic = mic_with(&shot, onset, 20_000.0 + far * sr as f64, 1.0, sr as usize);
+    let mic = mic_with(&shot, onset, 20_000.0 + far * f64::from(sr), 1.0, sr as usize);
     let x = xcorr_hit(&mic, 20_000, &a, pre, max_lag).unwrap();
     assert!(x.pos_edge, "{x:?}");
     // a well-inside lag is not on the edge

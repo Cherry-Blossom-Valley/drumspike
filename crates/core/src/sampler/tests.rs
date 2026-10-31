@@ -17,7 +17,7 @@ fn shot(sr: u32, pre: usize, len: usize, seed: u64) -> Vec<f32> {
             if i < pre {
                 return 0.0;
             }
-            let t = (i - pre) as f64 / sr as f64;
+            let t = (i - pre) as f64 / f64::from(sr);
             let tone = (2.0 * std::f64::consts::PI * 180.0 * t).sin() * (-t / 0.08).exp();
             let burst = noise() * (-t / 0.004).exp();
             (0.7 * tone + 0.5 * burst) as f32
@@ -32,7 +32,7 @@ fn note_ons(bytes: &[u8]) -> Vec<(usize, u64, u8, u8)> {
     for (i, tr) in smf.tracks.iter().enumerate() {
         let mut tick = 0u64;
         for e in tr {
-            tick += e.delta.as_int() as u64;
+            tick += u64::from(e.delta.as_int());
             if let TrackEventKind::Midi {
                 message: MidiMessage::NoteOn { key, vel },
                 ..
@@ -94,17 +94,17 @@ fn the_offset_follows_a_planted_delay_exactly() {
     for sr in [44_100u32, 48_000, 96_000] {
         let note = 2.0;
         let at = |d: usize| {
-            let x = shot(sr, (note * sr as f64) as usize + d, 4 * sr as usize, 5);
+            let x = shot(sr, (note * f64::from(sr)) as usize + d, 4 * sr as usize, 5);
             measure_offset(&x, sr, note).unwrap()
         };
         let base = at(0);
         assert!(
-            base.offset_samples.abs() <= 0.0005 * sr as f64,
+            base.offset_samples.abs() <= 0.0005 * f64::from(sr),
             "{sr}: bias {}",
             base.offset_samples
         );
         for ms in [0.1, 1.0, 5.5, 12.0, 40.0] {
-            let d = (ms * 1e-3 * sr as f64).round() as usize;
+            let d = (ms * 1e-3 * f64::from(sr)).round() as usize;
             let m = at(d);
             assert_eq!(m.offset_samples - base.offset_samples, d as f64, "{sr} Hz, {d} samples");
             assert_eq!(m.sr, sr);
@@ -115,7 +115,7 @@ fn the_offset_follows_a_planted_delay_exactly() {
 #[test]
 fn a_note_that_is_not_on_a_whole_sample_gives_a_fractional_offset() {
     let sr = 44_100;
-    let note = 2.0 + 0.3 / sr as f64;
+    let note = 2.0 + 0.3 / f64::from(sr);
     let x = shot(sr, 2 * sr as usize + 100, 3 * sr as usize, 5);
     let m = measure_offset(&x, sr, note).unwrap();
     let m0 = measure_offset(&shot(sr, 2 * sr as usize, 3 * sr as usize, 5), sr, 2.0).unwrap();

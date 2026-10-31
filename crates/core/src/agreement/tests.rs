@@ -7,12 +7,12 @@ use super::*;
 /// A synthetic one-shot: sharp attack at sample 0, exponential decay, tone `f`.
 /// The first non-zero sample is the onset (sample-exact ground truth).
 fn shot(n: usize, sr: u32, f: f64, level: f64, polarity: i32) -> Vec<f32> {
-    let dt = 1.0 / sr as f64;
+    let dt = 1.0 / f64::from(sr);
     (0..n)
         .map(|i| {
             let t = i as f64 * dt;
             let env = (1.0 - (-t / 0.002).exp()) * (-t / 0.080).exp();
-            let v: f64 = (polarity as f64) * level * env * (2.0 * std::f64::consts::PI * f * t).sin();
+            let v: f64 = f64::from(polarity) * level * env * (2.0 * std::f64::consts::PI * f * t).sin();
             v as f32
         })
         .collect()
@@ -20,15 +20,15 @@ fn shot(n: usize, sr: u32, f: f64, level: f64, polarity: i32) -> Vec<f32> {
 
 /// A track of planted one-shots at exact sample positions.
 fn kit(sr: u32, dur_s: f64, f: f64, events: &[(i64, i32)]) -> (Vec<f32>, Vec<f64>) {
-    let n = (dur_s * sr as f64) as usize;
+    let n = (dur_s * f64::from(sr)) as usize;
     let mut x = vec![0.0f32; n];
     for &(s, pol) in events {
-        let sh = shot((0.4 * sr as f64) as usize, sr, f, 0.5, pol);
+        let sh = shot((0.4 * f64::from(sr)) as usize, sr, f, 0.5, pol);
         for (i, v) in sh.iter().enumerate() {
             x[s as usize + i] += v;
         }
     }
-    let hits = events.iter().map(|&(s, _)| s as f64 / sr as f64).collect();
+    let hits = events.iter().map(|&(s, _)| s as f64 / f64::from(sr)).collect();
     (x, hits)
 }
 
@@ -38,11 +38,11 @@ fn kit(sr: u32, dur_s: f64, f: f64, events: &[(i64, i32)]) -> (Vec<f32>, Vec<f64
 fn clean_kit(sr: u32, f: f64, n: u32, pol_at: Option<usize>) -> (Vec<f32>, Vec<f64>, Vec<i64>) {
     let events: Vec<(i64, i32)> = (0u32..n)
         .map(|i| {
-            let s = 4800 + i as i64 * sr as i64 * 2 / 5;
+            let s = 4800 + i64::from(i) * i64::from(sr) * 2 / 5;
             (s, if Some(i as usize) == pol_at { -1 } else { 1 })
         })
         .collect();
-    let (x, hits) = kit(sr, (n as f64) * 0.4 + 1.0, f, &events);
+    let (x, hits) = kit(sr, f64::from(n) * 0.4 + 1.0, f, &events);
     let trues = events.iter().map(|&(s, _)| s).collect();
     (x, hits, trues)
 }
@@ -106,7 +106,7 @@ fn env_first_motion_finds_the_foot() {
 fn xcorr_lag_at_the_search_edge_is_not_an_estimate() {
     let sr = 48_000u32;
     // the template: a shot with its onset 2 ms in (the pre-window)
-    let tpl: Vec<f64> = shot(720, sr, 170.0, 0.5, 1).iter().map(|&v| v as f64).collect();
+    let tpl: Vec<f64> = shot(720, sr, 170.0, 0.5, 1).iter().map(|&v| f64::from(v)).collect();
     let span = 240i64;
     let sh = shot(9600, sr, 170.0, 0.5, 1);
     // the signal holds the same shot with its onset exactly at the far edge of the
@@ -190,7 +190,7 @@ fn polarity_right_on_every_planted_inverted_hit() {
     // hits every 0.25 s from 0.5 s; the hits at 1.5 s and 2.5 s are planted phase-inverted
     let events: Vec<(i64, i32)> = (0u32..8)
         .map(|i| {
-            let s = (i as i64 + 2) * sr as i64 / 4;
+            let s = (i64::from(i) + 2) * i64::from(sr) / 4;
             (s, if i == 4 || i == 6 { -1 } else { 1 })
         })
         .collect();
@@ -225,7 +225,7 @@ fn median_onset_error_stays_zero_and_spread_is_stored() {
     let mut errs: Vec<i64> = hits
         .iter()
         .zip(trues.iter())
-        .map(|(h, t)| (h * sr as f64).round() as i64 - t)
+        .map(|(h, t)| (h * f64::from(sr)).round() as i64 - t)
         .collect();
     errs.sort();
     let median = errs[errs.len() / 2];
@@ -236,17 +236,17 @@ fn median_onset_error_stays_zero_and_spread_is_stored() {
     let with_spread = ag.iter().filter(|a| a.timing_confidence.is_some()).count();
     println!("spread stored on {} of {} hits", with_spread, ag.len());
     assert_eq!(with_spread, ag.len());
-    assert!(ag.iter().all(|a| a.timing_confidence.unwrap() < 0.025 * sr as f64));
+    assert!(ag.iter().all(|a| a.timing_confidence.unwrap() < 0.025 * f64::from(sr)));
     // silence: no estimates
     let mut quiet = vec![0.0f32; sr as usize];
     assert_eq!(
-        agreement_track(&quiet, sr, &[1000.0 / sr as f64])[0],
+        agreement_track(&quiet, sr, &[1000.0 / f64::from(sr)])[0],
         Agreement::default()
     );
     // a window far under the silence limit: no spread
     quiet[1000] = 1e-6f32;
     assert_eq!(
-        agreement_track(&quiet, sr, &[1000.0 / sr as f64])[0].timing_confidence,
+        agreement_track(&quiet, sr, &[1000.0 / f64::from(sr)])[0].timing_confidence,
         None
     );
 }
@@ -285,7 +285,7 @@ fn inverted_template_majority_gives_negative_score() {
     // inverted hit as -1 even against a loud neighbour
     let sr = 48_000u32;
     let events: Vec<(i64, i32)> = (0u32..7)
-        .map(|i| (i as i64 * sr as i64 / 4, if i == 3 { -1 } else { 1 }))
+        .map(|i| (i64::from(i) * i64::from(sr) / 4, if i == 3 { -1 } else { 1 }))
         .collect();
     let (x, hits) = kit(sr, 2.25, 170.0, &events);
     let ag = agreement_track(&x, sr, &hits);

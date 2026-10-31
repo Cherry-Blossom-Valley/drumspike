@@ -180,7 +180,7 @@ fn documents_written_by_python_load_bit_exact() {
             assert_eq!(k.events()[0].extra["tag"], "x");
             assert_eq!(k.source, Some(None));
             assert_eq!(doc.track("NoSource").unwrap().source, None);
-            assert_eq!(doc.created.as_ref().unwrap().as_i64(), Some(1759950000));
+            assert_eq!(doc.created.as_ref().unwrap().as_i64(), Some(1_759_950_000));
         }
     }
     std::fs::remove_dir_all(&dir).unwrap();

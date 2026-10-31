@@ -312,7 +312,7 @@ fn device_plays_the_session_silently() {
         wall,
         s1.callbacks - s0.callbacks,
         s1.rendered_frames - s0.rendered_frames,
-        (s1.rendered_frames - s0.rendered_frames) as f64 / info.sample_rate as f64,
+        (s1.rendered_frames - s0.rendered_frames) as f64 / f64::from(info.sample_rate),
         p.frame,
         s1.underruns,
         s1.underrun_frames,
@@ -339,5 +339,5 @@ fn device_plays_the_session_silently() {
     assert_eq!(info.sample_rate, rate_before);
     assert_eq!(s1.underruns, 0, "underruns");
     assert!(s1.peak > 0.0, "the mix ran");
-    assert!((s1.rendered_frames as f64) >= 0.95 * secs * info.sample_rate as f64);
+    assert!((s1.rendered_frames as f64) >= 0.95 * secs * f64::from(info.sample_rate));
 }

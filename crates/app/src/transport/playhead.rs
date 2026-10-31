@@ -29,7 +29,7 @@ fn playhead_fields(st: &HostState, o: &Open) -> Map<String, Value> {
         "t_ns": now,
         "frame": frame,
         "rate": ph.sample_rate,
-        "pos": frame as f64 / ph.sample_rate as f64,
+        "pos": frame as f64 / f64::from(ph.sample_rate),
         "playing": ph.playing,
         "speed": ph.rate(),
     })

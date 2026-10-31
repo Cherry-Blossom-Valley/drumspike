@@ -881,7 +881,7 @@ fn export_all_writes_the_audio_spikes_when_the_format_is_chosen() {
     let mut checked = 0;
     let mut with_audio = 0;
     for t in [0.25, 1.5, 3.499] {
-        let start = (t * info.sample_rate as f64).round() as usize;
+        let start = (t * f64::from(info.sample_rate)).round() as usize;
         let from = start.saturating_sub(64);
         assert!(
             x[from..start].iter().all(|&v| v == 0.0),
