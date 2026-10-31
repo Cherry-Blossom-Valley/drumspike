@@ -111,11 +111,13 @@
     // #195: the one enabled-state expectation, shared by menu_table and menu_state_follows_project
     // (menu.rs sync + sync_checks): open_recent tracks the recent list, export_again also needs an
     // export shape, undo/redo are greyed while their stack is empty (#158 rank 9), the four hit
-    // items need a hit selection. `S` is the live page state of the running scenario.
+    // items need a hit selection and Re-analyze Selection a range (#265). `S` is the live page
+    // state of the running scenario.
     const menuEnabledWant = (rep, hasProj) => i => i.id === "open_recent" ? rep.recent.some(r => /^recent:\d+$/.test(r))   // P3-19
       : i.id === "undo" ? i.ready && hasProj && S.undo.length > 0
       : i.id === "redo" ? i.ready && hasProj && S.redo.length > 0
       : i.id === "delete_hit" || i.id === "nudge_earlier" || i.id === "nudge_later" || i.id === "audition" ? i.ready && hasProj && !!S.sel
+      : i.id === "reanalyze_selection" ? i.ready && hasProj && !!(LN.sel && LN.sel.t1 > LN.sel.t0)   // #265: the hits of the range only
       : i.ready && (hasProj ? i.id !== "export_again" || !!S.exportAgain : !i.needs_project);
 
     await step("menu_table", async () => {
@@ -711,6 +713,28 @@
       S.selTrack = null;
       report.metrics.menu_new_items = { items: done.length, analyze_track: one, analyze_all: all };
       return report.metrics.menu_new_items;
+    });
+
+    await step("menu_reanalyze_selection", async () => {
+      // #265: Hits > Re-analyze Selection: the hits of a range selection (LN.sel) only. A range
+      // with hits but no edited one (the Keep dialog would open otherwise); the info line reports
+      // the replacement and the run is one undo step, so the scenario leaves no mark. The menu
+      // state without a range is checked by menuEnabledWant (the item is greyed without one).
+      const name = S.order[0];
+      const before = (S.events[name] || []).map(e => ({ ...e }));
+      need(before.length > 0, `no hits on ${name} for the range run`);
+      S.sel = null; S.selTrack = name;
+      lnSetSel(name, before[0].t - 0.1, before[before.length - 1].t + 0.1);
+      await click("reanalyze_selection");
+      await until(() => { if (visible("#reanalyzeModal")) $q("#raDiscard").click(); return S.undo.length > 0 && S.undo[S.undo.length - 1].type === "reanalyze"; }, "Re-analyze Selection to push its step", 30000);
+      await until(() => SH.pending === 0 && $q("#stMsg").textContent.length > 0, "the range run to finish (the info line)", 180000);
+      const after = (S.events[name] || []).map(e => ({ ...e }));
+      const info = $q("#stMsg").textContent;
+      await click("undo");
+      await until(() => SH.pending === 0 && JSON.stringify((S.events[name] || []).map(e => e.t)) === JSON.stringify(before.map(e => e.t)), "the undo of Re-analyze Selection", 15000);
+      lnSetSel(null);
+      report.metrics.menu_reanalyze_selection = { track: name, before: before.length, after: after.length, info };
+      return report.metrics.menu_reanalyze_selection;
     });
 
     await step("menu_tempo_map", async () => {
