@@ -2605,6 +2605,10 @@ function staleSetup() {
     if (!p || p.sid !== S.sid) return;
     staleSet(p.sid); setMsgBg(p.message, "error");
   }).catch(() => {});
+  if (B.listen) B.listen("autosave-failed", p => {   // #228: the autosave could not write Backups/; once per failure streak
+    if (!p || p.sid !== S.sid) return;
+    setMsgBg(`Autosave failed: ${p.message}. Your edits are not backed up; save the project.`, "error");
+  }).catch(() => {});
 }
 
 /* ---------------- playback: the native transport (P3-5b) ---------------- */

@@ -124,6 +124,9 @@ pub struct OpenProject {
     pub disk: Option<DiskStamp>,
     /// #121: the outside stamp the autosave reported already (one `project-stale` event per outside change).
     pub stale_noted: Option<DiskStamp>,
+    /// #228: why the last autosave failed; `None` after a good autosave or a save. It is the `autosave_error` key of the
+    /// summary, and `autosave-failed` goes to the page once per failure streak.
+    pub autosave_error: Option<String>,
 }
 
 impl OpenProject {
@@ -147,6 +150,7 @@ impl OpenProject {
             lock_note: None,
             disk,
             stale_noted: None,
+            autosave_error: None,
         };
         op.resolve();
         op
@@ -178,6 +182,22 @@ impl OpenProject {
     pub fn restamp(&mut self) {
         self.disk = DiskStamp::of(&self.project.path());
         self.stale_noted = None;
+        self.autosave_error = None; // #228: a save wrote the document; the failure streak is over
+    }
+
+    /// #228: record the outcome of an autosave. An error is kept until a good autosave or a save clears it, and
+    /// `autosave-failed` `{sid, message}` goes to the page on the first error of a streak only. Answers true when it sent one.
+    pub fn note_autosave(&mut self, outcome: Result<(), &str>) -> bool {
+        let Err(message) = outcome else {
+            self.autosave_error = None;
+            return false;
+        };
+        let first = self.autosave_error.is_none();
+        self.autosave_error = Some(message.to_string());
+        if first && let Some(f) = self.emitter.get() {
+            f("autosave-failed", json!({"sid": self.sid, "message": message}));
+        }
+        first
     }
 
     /// #121: send `project-stale` `{sid, message}` once per outside change of the document file (the autosave looks).
@@ -434,6 +454,9 @@ impl OpenProject {
         }
         if let Some(note) = &self.lock_note {
             out["lock"] = Value::String(note.clone()); // P4-5: only a process that locks has the key
+        }
+        if let Some(err) = &self.autosave_error {
+            out["autosave_error"] = Value::String(err.clone()); // #228: only a project whose last autosave failed has the key
         }
         out
     }
