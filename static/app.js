@@ -5981,7 +5981,7 @@ async function openExport(scope, track) {
   try { info = await B.exportExisting(S.sid, {}); } catch (e) { setMsg(`export failed: ${errText(e)}`, "error"); return; }
   EX.def = info.default_dest; EX.remembered = info.remembered;
   EX.markers = !!info.export_markers;   // P4-40g: the remembered "Markers in MIDI" checkbox
-  if (info.export_compensate !== undefined) EX.comp = !!info.export_compensate;   // #232: the kept "Compensate" checkbox seeds the dialog
+  if (typeof info.export_compensate === "boolean") EX.comp = info.export_compensate;   // #232: a kept "Compensate" choice seeds the dialog; null: the calibration default above
   const last = info.export_last;   // P4-31: the project keeps what its last export wrote with (and every choice, recorded at once)
   if (last) {
     EX.midi = last.formats.includes("midi"); EX.spikes = last.formats.includes("spikes") || last.formats.includes("audio");
