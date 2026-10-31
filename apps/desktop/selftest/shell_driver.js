@@ -110,12 +110,12 @@
 
     // #195: the one enabled-state expectation, shared by menu_table and menu_state_follows_project
     // (menu.rs sync + sync_checks): open_recent tracks the recent list, export_again also needs an
-    // export shape, undo/redo are greyed while their stack is empty (#158 rank 9), the four hit
+    // export shape, undo/redo are greyed while their stack is empty (#158 rank 9), the five hit
     // items need a hit selection. `S` is the live page state of the running scenario.
     const menuEnabledWant = (rep, hasProj) => i => i.id === "open_recent" ? rep.recent.some(r => /^recent:\d+$/.test(r))   // P3-19
       : i.id === "undo" ? i.ready && hasProj && S.undo.length > 0
       : i.id === "redo" ? i.ready && hasProj && S.redo.length > 0
-      : i.id === "delete_hit" || i.id === "nudge_earlier" || i.id === "nudge_later" || i.id === "audition" ? i.ready && hasProj && !!S.sel
+      : i.id === "delete_hit" || i.id === "nudge_earlier" || i.id === "nudge_later" || i.id === "audition" || i.id === "toggle_hit_active" ? i.ready && hasProj && !!S.sel
       : i.ready && (hasProj ? i.id !== "export_again" || !!S.exportAgain : !i.needs_project);
 
     await step("menu_table", async () => {
@@ -257,7 +257,7 @@
       // the lagging items ride in the timeout error (the 2776224 shape): a bare timeout
       // says nothing about which item did not follow. The expectation is the same model as
       // menu_table (menuEnabledWant): after File > Open of a fresh project, undo/redo and the
-      // four hit items are legitimately greyed (#158 rank 9) until the page state has a stack
+      // five hit items are legitimately greyed (#158 rank 9) until the page state has a stack
       // step or a hit selection — `enabled === ready` alone can never pass.
       let lastBad = [];
       try {
@@ -655,6 +655,16 @@
       await click("delete_hit");
       await until(() => SH.pending === 0 && S.events[name].length === 3 && !S.sel, "Delete Hit", 15000);
       done.push("add_hit", "nudge_later", "nudge_earlier", "delete_hit");
+      // #242: Hits > Toggle Hit Active on the hit at 1 s: deactivated, then active again; the undo
+      // takes both steps back (the flags of `was`), so the scenario leaves no mark on the stored hit
+      S.selTrack = name; S.sel = { track: name, index: S.events[name].findIndex(e => Math.abs(e.t - 1) < 1e-9) }; DSShell.sync();
+      await click("toggle_hit_active");
+      await until(() => SH.pending === 0 && S.events[name][S.sel.index].deactivated === true && !S.events[name][S.sel.index].keep, "Toggle Hit Active (deactivated)", 15000);
+      await click("toggle_hit_active");
+      await until(() => SH.pending === 0 && S.events[name][S.sel.index].keep === true && !S.events[name][S.sel.index].deactivated, "Toggle Hit Active (active again)", 15000);
+      await click("undo"); await click("undo");
+      await until(() => SH.pending === 0 && !S.events[name][S.sel.index].keep && !S.events[name][S.sel.index].deactivated, "the undo of Toggle Hit Active", 15000);
+      done.push("toggle_hit_active");
       // Track: mute and solo the selected track, its MIDI and spike file
       await click("mute_track"); need(S.muted[name] === true, "Mute Selected Track");
       await click("mute_track"); need(!S.muted[name], "Mute Selected Track again");

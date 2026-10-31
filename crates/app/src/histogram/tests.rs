@@ -40,6 +40,22 @@ fn cut_of_event_cut_and_the_marks_follow_the_level_and_spare_edited_hits() {
     let mut one = [quiet];
     mark_cut_events(&mut one, &x, sr, Some(-30.0));
     assert!(event_cut(&one[0]), "a restored quiet hit is cut");
+    // #242: a hit the user keeps is never marked, whatever its level; the flag stays the only reason
+    let mut kept = Event::new(0.5, 30);
+    kept.extra.insert("keep".into(), Value::Bool(true));
+    let mut one = [kept];
+    mark_cut_events(&mut one, &x, sr, Some(-30.0));
+    assert!(!event_cut(&one[0]), "a kept hit is never cut");
+    assert_eq!(one[0].extra.get("keep"), Some(&Value::Bool(true)));
+    let mut vals = [json!({"t": 0.5, "keep": true, "cut": true})];
+    mark_cut_values(&mut vals, &x, sr, Some(-30.0)).unwrap();
+    assert!(vals[0].get("cut").is_none(), "the mark goes and does not come back");
+    let mut vals = [json!({"t": 0.5, "deactivated": true})];
+    mark_cut_values(&mut vals, &x, sr, Some(-30.0)).unwrap();
+    assert_eq!(
+        vals[0]["cut"], true,
+        "a deactivated hit can still carry the mark (deactivated wins anyway)"
+    );
     let mut vals = [json!({"t": 0.5, "edited": true})];
     mark_cut_values(&mut vals, &x, sr, Some(-30.0)).unwrap();
     assert_eq!(vals[0]["cut"], true);

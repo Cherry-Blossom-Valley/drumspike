@@ -42,7 +42,7 @@ let saveTimers = {};   // track -> {sid, body, timer}
 let _editSeq = 0;   // #249 R03: counts the page's edits (markDirty); a save answer applies only when no edit slipped in during the write
 function eventsBody(track) {
   const t = S.tracks[track];
-  for (const e of S.events[track] || []) { if (isManual(e)) delete e.cut; if (isManual(e) || e.edited) { delete e.bleed; delete e.filtered; } }   // P4-3, P4-14, P4-6c: an edited hit is never cut, an edited or restored one never bleed nor filtered
+  for (const e of S.events[track] || []) { if (isManual(e) || e.keep === true) delete e.cut; if (isKept(e)) { delete e.bleed; delete e.filtered; } }   // P4-3, P4-14, P4-6c: an edited hit is never cut, a kept one never bleed nor filtered; #242: a hit the user keeps is never cut
   return { sr: t.sr, duration: t.duration, n_samples: t.n_samples, events: S.events[track] };
 }
 function pushEvents(track) {   // the server holds the events in the open project (dirty until Save)
