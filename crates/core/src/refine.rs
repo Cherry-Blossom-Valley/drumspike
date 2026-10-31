@@ -715,7 +715,7 @@ fn floor_before(x: &[f32], s: i64, from: i64, srf: f64) -> f64 {
     let mut m: Vec<f64> = (0..nb)
         .map(|k| max_abs(x, end - (k + 1) * b, end - k * b) as f64)
         .collect();
-    m.sort_by(|a, c| a.total_cmp(c));
+    m.sort_by(f64::total_cmp);
     let n = m.len();
     if n % 2 == 1 {
         m[n / 2]

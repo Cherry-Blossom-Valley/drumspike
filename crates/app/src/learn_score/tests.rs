@@ -167,7 +167,7 @@ fn write_learn_writes_the_key_last_and_leaves_no_temporary_file() {
     assert!(!d.join(LEARN_KEY).exists(), "a key without its features");
     let left: Vec<_> = fs::read_dir(&d)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.file_name())
         .collect();
     assert_eq!(left, vec![std::ffi::OsString::from(LEARN_BIN)], "{left:?}");

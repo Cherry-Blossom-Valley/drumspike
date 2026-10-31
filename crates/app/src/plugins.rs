@@ -236,7 +236,7 @@ pub fn list() -> Vec<Installed> {
         return Vec::new();
     };
     let mut folders: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| p.is_dir())
         .collect();

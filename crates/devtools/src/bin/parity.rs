@@ -1526,7 +1526,7 @@ mod tests {
         assert_eq!(j["onsets"][0], serde_json::json!([3, 2, 0.03, 0.5]));
         let a: Vec<String> = ["--mix", "average", "--repeat", "3"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         assert!(matches!(parse_mix_repeat(&a).unwrap(), (MixMode::Average, 3)));
         std::fs::remove_dir_all(&dir).ok();

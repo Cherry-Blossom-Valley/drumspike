@@ -606,7 +606,7 @@ fn read_recent(path: &Path) -> Vec<Value> {
             Value::Array(a) => Some(a),
             _ => None,
         })
-        .map(|a| a.into_iter().filter(|e| e.is_object()).collect())
+        .map(|a| a.into_iter().filter(serde_json::Value::is_object).collect())
         .unwrap_or_default()
 }
 

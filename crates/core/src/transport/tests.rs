@@ -1740,7 +1740,7 @@ fn transport_audition_starved_delivers_every_frame_up_to_the_window_end() {
     assert_eq!(tail.len(), tail_len * 2, "the tail was delivered whole");
     for (k, v) in tail.iter().enumerate() {
         let f = want_from + (k / 2) as u64;
-        assert_eq!(*v, x[f as usize], "the tail at frame {} is not the audition's audio", f);
+        assert_eq!(*v, x[f as usize], "the tail at frame {f} is not the audition's audio");
     }
     // one more render publishes the paused end (the engine's next callback in the app)
     let mut buf = vec![0.0f32; 2 * block];

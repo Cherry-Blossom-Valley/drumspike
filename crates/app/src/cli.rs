@@ -47,7 +47,7 @@ impl Io {
     }
 
     fn say_err(&self, line: &str) {
-        let mut e = self.err.lock().unwrap_or_else(|p| p.into_inner());
+        let mut e = self.err.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _ = writeln!(e, "{line}");
     }
 }
@@ -218,7 +218,7 @@ fn job_failed(v: &Value) -> bool {
 fn progress_to(io: &Io) -> Progress {
     let err = Arc::clone(&io.err);
     Arc::new(move |v: Value| {
-        let mut e = err.lock().unwrap_or_else(|p| p.into_inner());
+        let mut e = err.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _ = writeln!(e, "{}", json!({"progress": v}));
     })
 }

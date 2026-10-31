@@ -282,7 +282,7 @@ fn the_menu_key_of_a_row_in_a_preset() {
         title: "X".into(),
         menu_key: menu_key.map(Into::into),
         page_keys: vec!["Q".into()],
-        cubase: cubase.map(|l| l.iter().map(|k| k.to_string()).collect()),
+        cubase: cubase.map(|l| l.iter().map(std::string::ToString::to_string).collect()),
     };
     let r = row(Some("x"), Some("Cmd+K"), Some(&["Shift+F", "Option+N", "Cmd+L"]));
     assert_eq!(r.menu_key_in("cubase").as_deref(), Some("Option+N"));

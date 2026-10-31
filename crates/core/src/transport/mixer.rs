@@ -258,7 +258,7 @@ impl Engine {
                 }
                 self.seek_tag = tag;
                 // #430: a seek repositions every source; the lag of the old position is void
-                for a in sh.ring_lag.iter() {
+                for a in &sh.ring_lag {
                     a.store(0, Ordering::Release);
                 }
                 self.state = State::Flushing;
@@ -302,7 +302,7 @@ impl Engine {
             let _ = self.click_ret.push(old);
         }
         // P4-7a: a new layer bank, the same way
-        if let Some(Ok(bank)) = self.layer_rx.as_mut().map(|r| r.pop()) {
+        if let Some(Ok(bank)) = self.layer_rx.as_mut().map(rtrb::Consumer::pop) {
             let old = std::mem::replace(&mut self.layers, bank);
             if let Some(ret) = self.layer_ret.as_mut() {
                 let _ = ret.push(old);

@@ -92,7 +92,7 @@ pub const CLOSE_LIMIT: Duration = Duration::from_secs(2);
 static BLOCKED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 fn blocked() -> std::sync::MutexGuard<'static, BTreeSet<String>> {
-    BLOCKED.lock().unwrap_or_else(|e| e.into_inner())
+    BLOCKED.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The error of a device that does not answer.
