@@ -19,7 +19,14 @@ ticks from the exact tempo while `int(6e7/bpm)` truncated the written `set_tempo
 over 6 minutes). The 92 BPM cases FAIL the DAW check before the #466 fix (ticks from the
 rounded set_tempo). Counted output, exit 1 when a gate fails.
 
-Usage: `uv run python tools/check_midi_timing.py [--bin path] [--keep]`
+Usage: `uv run python tools/check_midi_timing.py [--bin path] [--keep] [--quick]`
+
+`--quick` (the pytest corpus, #174): three representative cases (the #434 default-map
+round trip, the stored map at 118, the #466 default map at 92.000) over the first 30 s
+of each hit list. The error the check hunts is a systematic set_tempo truncation, whose
+excess over the gate scales with the span exactly like the gate itself, so a 30 s window
+fails the same code the 6-minute window fails. The full corpus (all five cases over the
+full spans) stays in the release check: `uv run python tools/release/cut.py check-midi`.
 """
 
 import argparse
@@ -58,30 +65,56 @@ while True:
 EVENTS92 = [{"t": t, "v": 100} for t in HITS92]
 N92 = len(HITS92)
 
+# The spans the gates are computed over: the full corpus runs the drift cases past the 6
+# minute mark (307 s) and the 92 BPM cases over the owner's 5 minutes (300 s); --quick runs
+# the first 30 s (#174).
+DRIFT_SPAN = 307.0
+T92_SPAN = 300.0
+QUICK_SPAN = 30.0
 
-def case(name):
+
+def case(name, quick=False):
     """The cases: the drift case (default map, caller tempo), the stored map, the multi-track
-    file; and the #466 cases at 92.000 BPM with the sample-level DAW check."""
+    file; and the #466 cases at 92.000 BPM with the sample-level DAW check. `--quick` keeps
+    three representative cases over the first 30 s of each hit list (#174)."""
+    drift_t = QUICK_SPAN if quick else DRIFT_SPAN
+    t92 = QUICK_SPAN if quick else T92_SPAN
+    hits118 = [t for t in HITS if t <= drift_t]
+    hits92 = [t for t in HITS92 if t <= t92]
+    if quick:
+        yield name + ": single tempo 118 (default map)", {
+            "kind": "single", "events": [{"t": t, "v": 100} for t in hits118], "note": 36, "ppq": PPQ,
+            "map": None, "legacy_tempo": BPM,
+        }, {"bpm": BPM, "hits": hits118, "daw_ms": True, "t_max": drift_t}
+        yield name + ": stored map 118", {
+            "kind": "single", "events": [{"t": t, "v": 100} for t in hits118], "note": 36, "ppq": PPQ,
+            "map": {"bpm": BPM, "bar1_s": BAR1}, "legacy_tempo": 120.0,
+        }, {"bpm": BPM, "hits": hits118, "daw_ms": True, "t_max": drift_t}
+        yield name + ": single tempo 92 (default map, #466)", {
+            "kind": "single", "events": [{"t": t, "v": 100} for t in hits92], "note": 36, "ppq": PPQ,
+            "map": None, "legacy_tempo": BPM92,
+        }, {"bpm": BPM92, "hits": hits92, "daw_ms": False, "t_max": t92}
+        return
     yield name + ": single tempo 118 (default map)", {
         "kind": "single", "events": EVENTS, "note": 36, "ppq": PPQ,
         "map": None, "legacy_tempo": BPM,
-    }, {"bpm": BPM, "hits": HITS, "daw_ms": True}
+    }, {"bpm": BPM, "hits": HITS, "daw_ms": True, "t_max": DRIFT_SPAN}
     yield name + ": stored map 118", {
         "kind": "single", "events": EVENTS, "note": 36, "ppq": PPQ,
         "map": {"bpm": BPM, "bar1_s": BAR1}, "legacy_tempo": 120.0,
-    }, {"bpm": BPM, "hits": HITS, "daw_ms": True}
+    }, {"bpm": BPM, "hits": HITS, "daw_ms": True, "t_max": DRIFT_SPAN}
     yield name + ": multi-track, tempo 118 (default map)", {
         "kind": "multi", "note": 36, "ppq": PPQ, "map": None, "legacy_tempo": BPM,
         "tracks": [{"name": "Kick In", "note": 36, "events": EVENTS}],
-    }, {"bpm": BPM, "hits": HITS, "daw_ms": True}
+    }, {"bpm": BPM, "hits": HITS, "daw_ms": True, "t_max": DRIFT_SPAN}
     yield name + ": single tempo 92 (default map, #466)", {
         "kind": "single", "events": EVENTS92, "note": 36, "ppq": PPQ,
         "map": None, "legacy_tempo": BPM92,
-    }, {"bpm": BPM92, "hits": HITS92, "daw_ms": False}
+    }, {"bpm": BPM92, "hits": HITS92, "daw_ms": False, "t_max": T92_SPAN}
     yield name + ": stored map 92 (default tempo, #466)", {
         "kind": "single", "events": EVENTS92, "note": 36, "ppq": PPQ,
         "map": {"bpm": BPM92, "bar1_s": 0.0}, "legacy_tempo": 120.0,
-    }, {"bpm": BPM92, "hits": HITS92, "daw_ms": False}
+    }, {"bpm": BPM92, "hits": HITS92, "daw_ms": False, "t_max": T92_SPAN}
 
 
 def build_bin(debug_bin):
@@ -177,7 +210,7 @@ def check_case(label, job, tmp, bin_path, ctx):
     if ctx["daw_ms"]:
         # the #434 cases: ticks for the round trip, ms for the DAW at 118.000; the round-trip
         # gate is the documented integer-set_tempo limit (#466), no longer 1 tick
-        rt_gate_limit = integer_limit_ticks(bpm, ppq, 307.0)
+        rt_gate_limit = integer_limit_ticks(bpm, ppq, ctx.get("t_max", DRIFT_SPAN))
         rt_gate = max(rt) * ppq * 1e6 / tempos[0][1]
         daw_err = max(daw) * 1e3
         rt_ok = rt_gate <= rt_gate_limit
@@ -188,7 +221,7 @@ def check_case(label, job, tmp, bin_path, ctx):
         ]
     else:
         # the #466 cases: samples at 48 kHz for both, against a DAW at the user's 92.000
-        rt_gate_limit = integer_limit_samples(bpm, ppq, 300.0)
+        rt_gate_limit = integer_limit_samples(bpm, ppq, ctx.get("t_max", T92_SPAN))
         rt_gate = max(rt) * SR
         daw_err = max(daw) * SR
         rt_ok = rt_gate <= rt_gate_limit
@@ -205,20 +238,27 @@ def main():
     ap.add_argument("--bin", type=Path, default=TARGET / "debug" / "export-midi-case",
                     help="the export-midi-case binary (default: built into target/debug)")
     ap.add_argument("--keep", action="store_true", help="keep the scratch folder")
+    ap.add_argument("--quick", action="store_true",
+                    help="the pytest corpus (#174): three representative cases over the first 30 s;"
+                         " the full corpus stays in `tools/release/cut.py check-midi`")
     args = ap.parse_args()
     bin_path = build_bin(args.bin)
     n = ok = 0
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        for label, job, ctx in case("drift"):
+        for label, job, ctx in case("drift", quick=args.quick):
             n += 1
             good, lines = check_case(label, job, tmp, bin_path, ctx)
             ok += good
             print("\n".join(lines))
-    print(
-        f"\n{ok}/{n} cases pass (the 118 BPM cases gate the #434 round trip, the 92 BPM cases"
-        " the #466 DAW check; both fail on the code before their fix)"
-    )
+    if args.quick:
+        print(f"\n{ok}/{n} cases pass (quick corpus: three representative cases over the first"
+              f" {QUICK_SPAN:.0f} s; the full corpus runs in the release check)")
+    else:
+        print(
+            f"\n{ok}/{n} cases pass (the 118 BPM cases gate the #434 round trip, the 92 BPM cases"
+            " the #466 DAW check; both fail on the code before their fix)"
+        )
     return 0 if ok == n else 1
 
 
