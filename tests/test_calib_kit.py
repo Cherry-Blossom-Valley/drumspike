@@ -6,6 +6,7 @@ import csv
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,16 @@ import calib_kit as ck  # noqa: E402
 from core_tools import SERVICE_TOOL, require  # noqa: E402
 
 SR = 48000
+
+
+# #174: the synthetic kit is deterministic (seeded), so the tests that only read it share one
+# session-scoped build instead of rebuilding it per test. The end-to-end test, which writes
+# results under the kit root, copies it into its own tmp_path first.
+@pytest.fixture(scope="session")
+def kit_session(tmp_path_factory):
+    out = tmp_path_factory.mktemp("calib-kit")
+    ck.generate(out, quick=True, real_per_shell=4, log=lambda *_: None)
+    return out
 
 
 def first_nonzero(y):
@@ -62,8 +73,8 @@ def test_fractional_starts_are_within_a_hundredth_of_a_sample(shell):
         assert abs((lo + hi) / 2 - frac) < 0.01, (shell, frac, (lo + hi) / 2)
 
 
-def test_the_reference_of_a_mix_matches_the_audio_and_the_midi(tmp_path):
-    ck.generate(tmp_path, quick=True, real_per_shell=4, log=lambda *_: None)
+def test_the_reference_of_a_mix_matches_the_audio_and_the_midi(kit_session):
+    tmp_path = kit_session
     kinds = ("syn", "real") if ck.LOGIC.is_dir() else ("syn",)   # CI hosts have no Logic content
     for kind in kinds:
         for shell in ck.SHELLS:
@@ -86,8 +97,8 @@ def test_the_reference_of_a_mix_matches_the_audio_and_the_midi(tmp_path):
             assert max(abs(a - b) for a, b in zip(got, want)) <= 0.5 / 48000 + 1e-9   # within half a tick
 
 
-def test_a_clean_mix_holds_exact_first_samples_at_the_reference(tmp_path):
-    ck.generate(tmp_path, quick=True, real_per_shell=4, log=lambda *_: None)
+def test_a_clean_mix_holds_exact_first_samples_at_the_reference(kit_session):
+    tmp_path = kit_session
     rows = ck.read_csv(tmp_path / "ref" / "syn" / "clean" / "kick_48000.csv")
     x, _ = sf.read(str(tmp_path / "audio" / "syn" / "clean" / "kick_48000.wav"))
     n = 0
@@ -99,10 +110,10 @@ def test_a_clean_mix_holds_exact_first_samples_at_the_reference(tmp_path):
     assert n >= 4
 
 
-def test_real_references_carry_both_starts_and_the_features(tmp_path):
+def test_real_references_carry_both_starts_and_the_features(kit_session):
     if not ck.LOGIC.is_dir():
         pytest.skip("no Logic content on this host")
-    ck.generate(tmp_path, quick=True, real_per_shell=4, log=lambda *_: None)
+    tmp_path = kit_session
     rows = ck.read_csv(tmp_path / "ref" / "real" / "clean" / "snare_44100.csv")
     x, _ = sf.read(str(tmp_path / "audio" / "real" / "clean" / "snare_44100.wav"))
     for r in rows:
@@ -163,12 +174,14 @@ def test_the_midi_of_a_detection_is_read_through_its_tempo(tmp_path):
     assert ck.midi_hits_s(tmp_path / "d.mid") == [2.0]
 
 
-def test_tables_and_compare_end_to_end_with_the_dsp_detector(tmp_path):
+def test_tables_and_compare_end_to_end_with_the_dsp_detector(tmp_path, kit_session):
+    # writes results under the kit root, so it works on its own copy of the shared kit (#174)
+    for sub in ("audio", "ref"):
+        shutil.copytree(kit_session / sub, tmp_path / sub)
     tool = require(SERVICE_TOOL)
     env_before = os.environ.get("DRUMSPIKE_CALIB_TOOL")
     os.environ["DRUMSPIKE_CALIB_TOOL"] = str(tool)
     try:
-        ck.generate(tmp_path, quick=True, real_per_shell=4, log=lambda *_: None)
         n = ck.run_all(tmp_path, jobs=2, detectors=["dsp"], only=r"syn/clean/(kick|snare)_", log=lambda *_: None)
         assert n == 2
         res = ck.compare(tmp_path, log=lambda *_: None)
@@ -217,7 +230,7 @@ def test_the_fingerprint_finds_the_fundamental_where_it_is_clear():
     assert slow["rise1090_ms"] > fast["rise1090_ms"] + 1.5 and fast["decay_ms"] > 20.0
 
 
-def test_the_sweeps_keep_the_exact_start_and_name_their_axis(tmp_path):
+def test_the_sweeps_keep_the_exact_start_and_name_their_axis(kit_session):
     for shell in ck.SHELLS:
         axes = ck.sweep_axes(shell, quick=False)
         assert {a for a, _, _ in axes} == ({"tune", "click", "band"} if shell == "snare" else {"tune", "click"})
@@ -225,7 +238,7 @@ def test_the_sweeps_keep_the_exact_start_and_name_their_axis(tmp_path):
             assert ("band" in kw) == (shell == "snare") and kw["click"] is not None
             s = ck.make_shot(shell, SR, 0.0, ck.SWEEP_LEVEL_DB, 1, 0.0, seed=7, **kw)
             assert first_nonzero(s["y"]) == s["lead"] == int(s["abs_off"])
-    ck.generate(tmp_path, quick=True, real_per_shell=4, log=lambda *_: None)
+    tmp_path = kit_session
     rows = ck.read_csv(tmp_path / "ref" / "sweep" / "clean" / "snare_48000.csv")
     main = [r for r in rows if r["group"] == "main"]
     assert {r["axis"] for r in main} == {"tune", "click", "band"}
@@ -277,10 +290,10 @@ def test_the_slicer_returns_the_exact_start_of_every_planted_slice():
     assert [a for a, _ in ck.slice_by_gaps(np.abs(x), sr)] == [1000, 30000, 80000, 200000]
 
 
-def test_the_acoustic_set_gets_its_slices_and_references(tmp_path):
+def test_the_acoustic_set_gets_its_slices_and_references(kit_session):
     if not ck.DKD.is_dir():
         pytest.skip("no Drum Kit Designer content on this host")
-    ck.generate(tmp_path, quick=True, real_per_shell=4, log=lambda *_: None)
+    tmp_path = kit_session
     rows = ck.read_csv(tmp_path / "ref" / "acoustic" / "clean" / "kick_44100.csv")
     x, _ = sf.read(str(tmp_path / "audio" / "acoustic" / "clean" / "kick_44100.wav"))
     assert len(rows) >= 8

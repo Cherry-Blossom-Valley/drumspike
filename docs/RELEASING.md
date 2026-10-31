@@ -65,6 +65,7 @@ apps/desktop/scripts/release.sh                      # both architectures: build
 Then run the Intel check and the checks below. Publish only when they pass:
 
 ```sh
+uv run --no-project python tools/release/cut.py check-midi   # the full MIDI timing corpus (#174; the pytest run keeps the quick corpus only)
 apps/desktop/scripts/release.sh --publish-only --dry-run
 apps/desktop/scripts/release.sh --publish-only
 ```
