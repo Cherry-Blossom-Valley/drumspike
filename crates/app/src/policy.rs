@@ -14,6 +14,15 @@ use serde_json::Value;
 /// and the old Learn filter (`"filtered": true`; #281 D16).
 const OUT_KEYS: [&str; 3] = ["cut", "bleed", "filtered"];
 
+/// #242: the per-hit overrides of `Toggle Hit Active`, carried in `extra` like the marks.
+/// `"deactivated": true` takes a hit out of the output whatever the rules say; `"keep": true`
+/// holds a deactivated hit in the output. The user's choice wins over every automatic mark
+/// (the predicates below), survives a re-analyze (it is a kept hit of [`is_kept`], so
+/// `edit::merge_edited` preserves it) and a change of the cut or bleed threshold or of the
+/// Learn (the marking rules never touch the flags, and [`crate::histogram`] skips kept hits).
+const USER_OUT_KEY: &str = "deactivated";
+const USER_KEEP_KEY: &str = "keep";
+
 /// A hand-edited hit: added, or moved away from its detected time. Structural: it reads only
 /// `added` and `orig`, never the reserved `edited` flag (the page's `isManual`).
 pub fn is_manual(e: &Value) -> bool {
@@ -29,25 +38,46 @@ pub fn is_manual(e: &Value) -> bool {
     }
 }
 
-/// A hit the engineer keeps as it is: a hand-edited hit, or one with the document's reserved
-/// edit flag `edited: true` (a hand velocity or a restore). The page's `isKept` is this rule.
+/// A hit the engineer keeps as it is: a hand-edited hit, one with the document's reserved
+/// edit flag `edited: true` (a hand velocity or a restore), or one of the user's per-hit
+/// overrides of #242 (`keep`/`deactivated` — a re-pick or Re-analyze keeps those too). The
+/// page's `isKept` is this rule.
 #[must_use]
 pub fn is_kept(e: &Value) -> bool {
-    is_manual(e) || e.get("edited") == Some(&Value::Bool(true))
+    is_manual(e)
+        || e.get("edited") == Some(&Value::Bool(true))
+        || e.get(USER_KEEP_KEY) == Some(&Value::Bool(true))
+        || e.get(USER_OUT_KEY) == Some(&Value::Bool(true))
 }
 
 /// True for a hit out of the output (MIDI, spikes, Export All, the click, Learn scoring).
 /// A kept hit never carries an out mark: Rust strips the marks on edit (edit.rs), the page
-/// guards its predicates with `!isManual` — one policy, two mechanisms (R1).
+/// guards its predicates with `!isManual` — one policy, two mechanisms (R1). The user's
+/// `deactivated` wins over everything; the user's `keep` wins over the automatic marks (#242).
 #[must_use]
 pub fn is_out(e: &Value) -> bool {
-    OUT_KEYS.iter().any(|k| e.get(k) == Some(&Value::Bool(true)))
+    e.get(USER_OUT_KEY) == Some(&Value::Bool(true))
+        || (e.get(USER_KEEP_KEY) != Some(&Value::Bool(true))
+            && OUT_KEYS.iter().any(|k| e.get(k) == Some(&Value::Bool(true))))
 }
 
 /// [`is_out`] for the typed events of a document (the marks live in `extra`).
 #[must_use]
 pub fn event_out(e: &Event) -> bool {
-    OUT_KEYS.iter().any(|k| e.extra.get(*k) == Some(&Value::Bool(true)))
+    event_user_out(e) || (!event_user_kept(e) && OUT_KEYS.iter().any(|k| e.extra.get(*k) == Some(&Value::Bool(true))))
+}
+
+/// The user's `keep` of #242 for the typed events: the marking rules read it to leave a kept
+/// hit alone.
+#[must_use]
+pub fn event_user_kept(e: &Event) -> bool {
+    e.extra.get(USER_KEEP_KEY) == Some(&Value::Bool(true))
+}
+
+/// The user's `deactivated` of #242 for the typed events.
+#[must_use]
+pub fn event_user_out(e: &Event) -> bool {
+    e.extra.get(USER_OUT_KEY) == Some(&Value::Bool(true))
 }
 
 /// R2 in this tree: tempo detection has no predicate of its own — it calls the same one
@@ -141,5 +171,34 @@ mod tests {
         let tempo_e = mk(json!({"filtered": true}));
         assert!(tempo_out(&tempo_e), "{}", TEMPO_USES_ONE_PREDICATE);
         assert!(tempo_out(&mk(json!({"bleed": true}))));
+    }
+
+    /// #242: the user's overrides win over the automatic marks, `deactivated` over `keep`.
+    #[test]
+    fn is_out_follows_the_user_override() {
+        // a deactivated hit is out whatever the marks say, also with none
+        assert!(is_out(&json!({"t": 1.0, "deactivated": true})));
+        assert!(is_out(&json!({"t": 1.0, "deactivated": true, "cut": true})));
+        assert!(is_out(&json!({"t": 1.0, "deactivated": true, "v": 100})));
+        // a kept hit is in the output under every mark
+        assert!(!is_out(&json!({"t": 1.0, "keep": true})));
+        assert!(!is_out(&json!({"t": 1.0, "keep": true, "cut": true})));
+        assert!(!is_out(
+            &json!({"t": 1.0, "keep": true, "bleed": true, "filtered": true})
+        ));
+        // deactivated wins over keep (a state the toggle never writes, but the order is fixed)
+        assert!(is_out(&json!({"t": 1.0, "keep": true, "deactivated": true})));
+        // the typed predicate reads the same flags from `extra`
+        let mk = |extra: Value| Event {
+            t: 1.0,
+            extra: extra.as_object().unwrap().clone(),
+            ..Default::default()
+        };
+        assert!(event_out(&mk(json!({"deactivated": true}))));
+        assert!(!event_out(&mk(json!({"keep": true, "cut": true}))));
+        assert!(event_out(&mk(json!({"keep": true, "deactivated": true}))));
+        // a kept hit is no tempo candidate when it is deactivated, and one when it is kept in
+        assert!(tempo_out(&mk(json!({"deactivated": true}))));
+        assert!(!tempo_out(&mk(json!({"keep": true, "filtered": true}))));
     }
 }
