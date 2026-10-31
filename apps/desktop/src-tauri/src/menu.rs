@@ -208,6 +208,8 @@ pub const FOLLOW_TOGGLE: Item = item("follow_toggle", "Follow Playhead On/Off", 
 pub const SUSPEND_FOLLOW: Item = check("suspend_follow", "Suspend Follow when Editing");
 /// #436: while checked, a Stop puts the playhead back where the play started (a user setting: the page reports it).
 pub const STOP_RETURN_MODE: Item = check("stop_return_mode", "Stop Returns to Start");
+/// #240: a Tab step to a hit plays it (a user setting: the page reports it).
+pub const AUDITION_TAB: Item = check("audition_tab", "Audition on Tab");
 pub const CLICK: Item = check("click", "Metronome Click");
 // Hits
 pub const NEXT_HIT: Item = item("next_hit", "Next Hit", true);
@@ -251,7 +253,7 @@ pub const DRUMSPIKE_HELP: Item = item("drumspike_help", "Drum Spike Help", false
 pub const SHORTCUTS: Item = item("shortcuts", "Keyboard Shortcuts", false);
 
 /// Every custom item (not the Open Recent and Window entries, not the system items Cut, Copy and so on).
-pub const SPEC: [Item; 110] = [
+pub const SPEC: [Item; 111] = [
     ABOUT,
     SETTINGS,
     QUIT,
@@ -323,6 +325,7 @@ pub const SPEC: [Item; 110] = [
     HALF_SPEED,
     STOP_RETURN,
     STOP_RETURN_MODE,
+    AUDITION_TAB,
     GO_START,
     GO_END,
     GO_PLAY_START,
@@ -732,6 +735,7 @@ pub fn check_states(state: &Value) -> Vec<(&'static str, bool)> {
         ("otherMics", &OTHER_MICS),
         ("suspendFollow", &SUSPEND_FOLLOW), // P4-wf10: Transport > Suspend Follow when Editing
         ("stopReturnMode", &STOP_RETURN_MODE), // #436: Transport > Stop Returns to Start
+        ("auditionTab", &AUDITION_TAB),     // #240: Transport > Audition on Tab
     ] {
         if let Some(b) = state.get(key).and_then(Value::as_bool) {
             out.push((item.id, b));
@@ -1053,6 +1057,7 @@ fn transport_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
         .item(&make_item(app, &FOLLOW_TOGGLE)?)
         .item(&make_check(app, &SUSPEND_FOLLOW, false)?)
         .item(&make_check(app, &STOP_RETURN_MODE, false)?)
+        .item(&make_check(app, &AUDITION_TAB, false)?)
         .separator()
         .item(&make_check(app, &CLICK, true)?)
         .build()

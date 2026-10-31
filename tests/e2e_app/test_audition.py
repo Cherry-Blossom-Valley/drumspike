@@ -6,7 +6,7 @@ applies; the setting "Audition on Tab" plays the hit that Tab steps to. The host
 the playhead of the page, mute and solo do not change."""
 import pytest
 
-from app_support import open_project, wait_until
+from app_support import open_project, shot_dir, wait_until
 from test_menus import select_track, with_hits
 
 
@@ -242,3 +242,36 @@ def test_audition_on_tab_plays_the_hit_that_tab_steps_to(song):
     assert msg(app) == "" and app.evaluate("() => S.playing") is True and status(app).get("audition") is None
     app.keyboard.press("Space")
     set_audition_tab(app, False)
+
+
+def audition_tab_state(app):
+    """The five views of the setting at once: the page setting, the saved app settings, the
+    toolbar button, the menu check and the Settings checkbox."""
+    return app.evaluate("""() => ({
+      setting: SETTINGS().ui.auditionTab,
+      saved: JSON.parse(localStorage.getItem('dsg_settings')).ui.auditionTab,
+      button: document.querySelector('#auditionTabBtn').classList.contains('on'),
+      menu: DSShell.menuState().auditionTab,
+      checkbox: document.querySelector('#setAuditionTab').checked })""")
+
+
+def test_the_toolbar_button_and_the_shortcut_flip_audition_tab_together(app, song):
+    """#240: the toolbar button and U each flip the setting, the button state, the menu
+    check, the Settings checkbox and the saved app settings together. Before each action the
+    setting is off (waited, not assumed). Screenshots of the toolbar on and off go to test-shots/."""
+    off = {"setting": False, "saved": False, "button": False, "menu": False, "checkbox": False}
+    on = {"setting": True, "saved": True, "button": True, "menu": True, "checkbox": True}
+    app.evaluate("() => setAuditionTab(false)")
+    wait_until(lambda: audition_tab_state(app) == off, msg="the setting is off before the click")
+    app.click("#auditionTabBtn")   # the button flips it on
+    wait_until(lambda: audition_tab_state(app) == on, msg="the click flips all five")
+    app.screenshot(path=str(shot_dir("240-audition-tab-on.png")))
+    app.evaluate("() => setAuditionTab(false)")
+    wait_until(lambda: audition_tab_state(app) == off, msg="the setting is off before the key")
+    app.keyboard.press("U")   # the shortcut flips it on
+    wait_until(lambda: audition_tab_state(app) == on, msg="U flips all five")
+    app.screenshot(path=str(shot_dir("240-audition-tab-on.png")))
+    app.keyboard.press("U")   # and off again
+    wait_until(lambda: audition_tab_state(app) == off, msg="U flips it back off")
+    app.screenshot(path=str(shot_dir("240-audition-tab-off.png")))
+    app.evaluate("() => setAuditionTab(false)")

@@ -6903,6 +6903,21 @@ function toggleStopReturnMode() {
   setMsg(`stop returns to start: ${st.ui.stopReturnToStart ? "on" : "off"}`);
   DSShell.sync();
 }
+/* #240: Audition on Tab as a toolbar button and a shortcut: a step to a hit (Tab) plays it, unless
+   the page plays. One flip sets the button state, the Settings checkbox, the menu check and the
+   saved app settings together (like setClick). */
+function setAuditionTab(on) {
+  const st = SETTINGS();
+  st.ui.auditionTab = !!on; saveSettings();
+  $("#setAuditionTab").checked = st.ui.auditionTab;
+  $("#auditionTabBtn").classList.toggle("on", st.ui.auditionTab);
+  $("#auditionTabBtn").setAttribute("aria-pressed", st.ui.auditionTab ? "true" : "false");
+  DSShell.sync();
+}
+function toggleAuditionTab() {
+  setAuditionTab(!SETTINGS().ui.auditionTab);
+  setMsg(`audition on tab: ${SETTINGS().ui.auditionTab ? "on" : "off"}`);
+}
 function suspendFollowForEdit() {   // an edit during playback: hold the view, resume 2 s of playback later
   if (!SETTINGS().ui.suspendFollowOnEdit || !S.playing || S.followMode === "off") return;
   S.followHold = true;
@@ -7134,7 +7149,7 @@ function setupGlobal() {
   $("#setTabMode").value = SETTINGS().ui.tabMode === "all" ? "all" : "active";   // #175
   $("#setTabMode").onchange = ev => setTabMode(ev.target.value);
   $("#setAuditionTab").checked = !!SETTINGS().ui.auditionTab;   // P4-40d
-  $("#setAuditionTab").onchange = ev => { SETTINGS().ui.auditionTab = ev.target.checked; saveSettings(); };
+  $("#setAuditionTab").onchange = ev => setAuditionTab(ev.target.checked);   // #240: one flip for button, checkbox, menu and settings
   setupMaster();   // P3-16
   $("#tempoDetectBtn").onclick = () => DSShell.menu({id: "detect_tempo"});   // owner 2026-10-14: the same as Track > Detect Tempo
   setupInspector();   // P3-14a
@@ -7160,6 +7175,9 @@ function setupGlobal() {
   }
   $("#clickBtn").classList.toggle("on", !!st.click.enabled);
   $("#clickBtn").onclick = () => toggleClick();
+  $("#auditionTabBtn").classList.toggle("on", !!st.ui.auditionTab);   // #240
+  $("#auditionTabBtn").setAttribute("aria-pressed", st.ui.auditionTab ? "true" : "false");
+  $("#auditionTabBtn").onclick = () => toggleAuditionTab();
   $("#followBtn").onclick = () => { const m = ["smooth", "page", "off"]; setFollow(m[(m.indexOf(S.followMode) + 1) % 3]); setMsg(`follow playhead: ${S.followMode}`); };
   $("#snapChk").onchange = ev => setSnap(ev.target.checked);
   $("#raKeep").onclick = () => { if (pendingRA) { const l = pendingRA; pendingRA = null; runAnalysis(l, true); } };

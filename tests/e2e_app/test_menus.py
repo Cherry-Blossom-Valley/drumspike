@@ -47,7 +47,7 @@ def empty_page(page):
 
 def test_every_menu_item_has_a_handler_in_the_page(app):
     ids = spec_ids()
-    assert len(ids) == 110 and len(set(ids)) == 110                         # #169: Show Overview, Add Current, Organize; #157: Other Mics Under Hit; #158: Set Marker at Selection, Next Marker, Previous Marker, Zoom Toggle, Audition Hit, Select Previous Track, Select Next Track; #150: Next and Previous Doubtful Hit; P4-wf10: Suspend Follow when Editing; #436: Stop Returns to Start; P4-31: Export Again; P4-40f: Velocity Lane; P4-40g: Markers Ruler; P4-40a: Undo History; P4-39a: Remove Track; P4-39d: Set Bar 1 at Playhead; P4-30: Export and Export Selected Tracks for five items, no zip items; P4-6a: Learn This, Forget This, Remove Example, Learn Filter, Forget Examples; P4-8: Import Tempo Map, Detect Tempo, three rulers, the grid; P3-18: Own Detection; P3-19: Open Most Recent; P3-20a: Waveform Zoom, Nudge Value; P3-20b: Half-Speed Play; #468: Set Bar 1 at Audio Start; #175: Active Hits Only, All Found Hits (Tab Moves To); #255: Drum Spike Help
+    assert len(ids) == 111 and len(set(ids)) == 111   # #240: Audition on Tab; #255: Drum Spike Help; #169: Show Overview, Add Current, Organize; #157: Other Mics Under Hit; #158: Set Marker at Selection, Next Marker, Previous Marker, Zoom Toggle, Audition Hit, Select Previous Track, Select Next Track; #150: Next and Previous Doubtful Hit; P4-wf10: Suspend Follow when Editing; #436: Stop Returns to Start; P4-31: Export Again; P4-40f: Velocity Lane; P4-40g: Markers Ruler; P4-40a: Undo History; P4-39a: Remove Track; P4-39d: Set Bar 1 at Playhead; P4-30: Export and Export Selected Tracks for five items, no zip items; P4-6a: Learn This, Forget This, Remove Example, Learn Filter, Forget Examples; P4-8: Import Tempo Map, Detect Tempo, three rulers, the grid; P3-18: Own Detection; P3-19: Open Most Recent; P3-20a: Waveform Zoom, Nudge Value; P3-20b: Half-Speed Play; #468: Set Bar 1 at Audio Start; #175: Active Hits Only, All Found Hits (Tab Moves To)
     handlers = set(app.evaluate("() => Object.keys(DSShell.handlers)"))
     assert set(ids) - handlers == set()
     assert handlers - set(ids) == {"recent", "recent_clear", "project", "follow", "zoom_own"}   # the Open Recent, Clear Recent (#441), Window, Follow Hits Of and own zoom preset entries
@@ -118,6 +118,7 @@ def test_check_items_follow_the_toolbar_and_the_keys(app, make_project):
                                               "suspendFollow": False,   # P4-wf10
                                               "tabMode": "active",   # #175: View > Tab Moves To
                                               "stopReturnMode": False,   # #436
+                                              "auditionTab": False,   # #240
                                               "tracks": ["Kick In", "Snare Top"], "selected": "Kick In", "follows": None,
                                               "learnFilter": False}   # P3-14a: Show Inspector; P3-14c: Track Height; P3-18: Follow Hits Of; P4-6c: Hits > Learn Filter; P4-40f: Velocity Lane
     # Snap Playhead to Hits: the toolbar box, the menu item and J
@@ -156,6 +157,7 @@ def test_check_items_follow_the_toolbar_and_the_keys(app, make_project):
                                               "suspendFollow": False,   # P4-wf10
                                               "tabMode": "active",   # #175: View > Tab Moves To
                                               "stopReturnMode": False,   # #436
+                                              "auditionTab": False,   # #240
                                               "tracks": ["Kick In", "Snare Top"], "selected": "Kick In", "follows": None, "learnFilter": False}
     app.evaluate("() => { document.querySelector('#tmpKeys').remove(); setClick(true); setSnap(true); }")
     assert state(app)["current"] == app.evaluate("() => S.sid")

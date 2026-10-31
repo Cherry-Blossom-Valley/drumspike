@@ -151,7 +151,7 @@
       // #195: list updated to the menu of main 04ccb96; new check items named in the comment:
       // #149 counter Bars|Beats and Timecode, #175 Tab Moves To (radio), the markers ruler,
       // #208/#157 Velocity Lane and Other Mics Under Hit, #436 Stop Returns to Start
-      need(checks.join() === "nudge_val_1smp,nudge_val_10smp,nudge_val_100smp,nudge_val_1ms,nudge_val_10ms,height_small,height_medium,height_large,inspector,info_line,overview,counter_seconds,counter_samples,counter_barsbeats,counter_timecode,tab_active,tab_all,ruler_tempo,ruler_meter,ruler_beats,ruler_markers,grid,velocity_lane,other_mics,stop_return_mode,follow_smooth,follow_page,follow_off,suspend_follow,click,snap,learn_filter", `check items: ${checks}`);   // P4-wf10: Suspend Follow when Editing
+      need(checks.join() === "nudge_val_1smp,nudge_val_10smp,nudge_val_100smp,nudge_val_1ms,nudge_val_10ms,height_small,height_medium,height_large,inspector,info_line,overview,counter_seconds,counter_samples,counter_barsbeats,counter_timecode,tab_active,tab_all,ruler_tempo,ruler_meter,ruler_beats,ruler_markers,grid,velocity_lane,other_mics,stop_return_mode,audition_tab,follow_smooth,follow_page,follow_off,suspend_follow,click,snap,learn_filter", `check items: ${checks}`);   // P4-wf10: Suspend Follow when Editing
       // #195: the document from `open -a` can already be open here (it arrives 6 s in, the splash
       // closes after 5-15 s), so the enabled state is read after menu sync with a project. The
       // expectation follows menu.rs sync: open_recent tracks the recent list, export_again also
