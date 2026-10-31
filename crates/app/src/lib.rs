@@ -3,8 +3,8 @@
 //! [`Service`] holds the registry of open projects, the analysis job, the model and the
 //! caches. Its methods (module [`commands`]) take plain arguments and return JSON with the
 //! keys of the Python server's responses, or bytes. They have no Tauri type in their
-//! signatures, so the tests run without a window and without a `WebView`, and x86-mac builds
-//! and tests this crate. `apps/desktop/src-tauri` holds the thin wrappers; the test bridge
+//! signatures, so the tests run without a window and without a `WebView`, and the Intel Mac
+//! host builds and tests this crate. `apps/desktop/src-tauri` holds the thin wrappers; the test bridge
 //! of P3-7a (`bridge.rs`, `crates/devtools/src/bin/ds-bridge.rs`) calls the same methods.
 //!
 //! Errors are [`AppError`] with the server's codes (400, 404, 409) and a message.
