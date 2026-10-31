@@ -52,6 +52,7 @@
       "../THIRD_PARTY.md": "THIRD_PARTY.md"
     },
     "macOS": {
+      "files": {"Resources/document.icns": "icons/document.icns"},
       "hardenedRuntime": true,
       "entitlements": "entitlements.plist"
     }
