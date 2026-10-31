@@ -692,7 +692,7 @@ fn track_layer_set_gives_the_playing_transport_its_voices_at_both_speeds() {
     // off while open: the transport drops the voices at once
     svc.track_layer_set(&sid, "k in", &json!({"on": false})).unwrap();
     assert_eq!(svc.transport_status()["layers"], json!([]));
-    svc.transport_stop(false);
+    let _ = svc.transport_stop(false);
     // on again, half speed: the voices at twice the frame
     svc.track_layer_set(&sid, "k in", &json!({"on": true})).unwrap();
     svc.transport_play_at(&sid, Some(1.6), None, None, Some(0.5)).unwrap();
@@ -705,7 +705,7 @@ fn track_layer_set_gives_the_playing_transport_its_voices_at_both_speeds() {
         st["layer_last_start"],
         json!(2 * ((1.75 * f64::from(sr)).round() as i64 - onset))
     );
-    svc.transport_stop(true);
+    let _ = svc.transport_stop(true);
 }
 
 /// A session with the layer file `shots/one.wav` set on `k in`; returns (service, sid, root, the file).

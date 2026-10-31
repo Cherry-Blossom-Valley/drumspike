@@ -234,6 +234,7 @@ fn levels(mic: &CrossMic, sr: u32, w: (i64, i64), pre: i64) -> Vec<f64> {
 
 /// The band level (dBFS) of a hit of `kind` at time `t` (s) in `x` at rate `sr`, with the rule's
 /// level window (for the caller's coincidence tests, e.g. the template exclusion).
+#[must_use]
 pub fn hit_level(x: &[f32], sr: u32, kind: XKind, t: f64, p: &CrossBleedParams) -> f64 {
     let sec = band_sections(kind.role().band(), sr);
     let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
@@ -244,6 +245,7 @@ pub fn hit_level(x: &[f32], sr: u32, kind: XKind, t: f64, p: &CrossBleedParams) 
 /// The FULL-BAND peak level (dBFS) of a hit at time `t` (s) in `x` at rate `sr`, with the rule's
 /// level window — the #286 A1 common-band measure: the overhead is a mix of everything; only
 /// a common band compares like with like (no filter sections, the same measure on both mics).
+#[must_use]
 pub fn hit_level_full_band(x: &[f32], sr: u32, t: f64, p: &CrossBleedParams) -> f64 {
     let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
     let pre = ms_to_samples(p.preroll_ms, sr);
@@ -267,6 +269,7 @@ fn median(v: &mut [f64]) -> Option<f64> {
 /// Run the rule over the close mics of one session (see the module documentation). All signals are at
 /// rate `sr`. Returns per tom mic (input order), per hit (input order) the [`CrossMark`], and the
 /// learned bounds per pair (tom order, then source order).
+#[must_use]
 pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
     let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
     let pre = ms_to_samples(p.preroll_ms, sr);

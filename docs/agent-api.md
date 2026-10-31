@@ -62,6 +62,45 @@ drumspike export_all --project ~/Song
   line each; `drumspike run script.json` runs a list of steps and stops at the first error. `"$sid"` in an argument is the
   sid of the last answer that had one. Nothing is saved unless a step is `project_save`.
 
+## Track patterns, session folders and the example job
+
+- A Pro Tools session folder is an input of its own: `tracks_scan` and `tracks_add` accept a folder that holds no audio of its
+  own but has an `Audio Files/` subfolder and use the WAV files of that subfolder. The `.ptx` stays ignored (no PT
+  integration; the track names and roles come from the file names, or from the `roles` argument).
+- Name patterns stand for track names on the agent surface. `tracks_add {tracks}` is a filter on the scanned files (matched
+  against the file stems, `roles` and `notes` then align with the filtered files), `analyze_start {tracks}` and
+  `export_all {tracks}` accept patterns in the name list. A pattern is an exact name (`k in`), a glob (`t*`, `s?top`:
+  `*` any run of characters, `?` one, not case-sensitive) or a numbered range (`t1-t4`: every track `t1`, `t2`, ... up to
+  and including `t4`). A pattern that matches nothing is an error (400) that names the pattern.
+- `export_all {roles: ["kick", "snare"]}` exports the tracks whose role is one of these (case-insensitive), on its own or
+  on top of `tracks` (then only the tracks of both). A role that no track has is an error (400) that names the role.
+
+The owner's example job as a worked `drumspike run` script on the demo project (the generator
+`uv run python tools/media/demo_session.py --out DIR` makes 13 mics in the owner's name scheme; the session folder form
+puts them in `DIR/Audio Files/` beside a `song.ptx`):
+
+```json
+[
+  {"command": "project_new", "args": {"name": "Demo", "dir": "/tmp/drumspike-demo"}},
+  {"command": "tracks_add", "args": {"sid": "$sid", "paths": ["/tmp/demo-session"], "tracks": ["k in", "s top", "t1-t3"]}},
+  {"command": "analyze_start", "wait": true, "args": {"sid": "$sid",
+      "tracks": ["k in", "s top", "t1-t3"],
+      "params": {"k_in": {"sensitivity": 55}, "s_top": {"sensitivity": 60, "vel_hi_db": -8}, "t1": {"sensitivity": 50}}}},
+  {"command": "tempo_map_detect", "args": {"sid": "$sid"}},
+  {"command": "export_all", "args": {"sid": "$sid", "roles": ["kick"], "formats": ["midi", "spikes"]}},
+  {"command": "export_all", "args": {"sid": "$sid", "roles": ["snare"], "formats": ["midi", "spikes"]}},
+  {"command": "export_all", "args": {"sid": "$sid", "tracks": ["t1-t3"], "formats": ["midi", "spikes"]}},
+  {"command": "project_save", "args": {"sid": "$sid"}}
+]
+```
+
+`tracks_add` picks the kick in, the snare top and the three toms out of the session folder by pattern (the rest of the
+mics stays out); the track names are the safe names of the file stems (`k in` becomes `k_in`), so `params` and later
+exact names use them, while the patterns accept the stem's spelling. `analyze_start` analyses exactly those with
+per-track params, and the three `export_all` steps write `Exports/<track>_spike.mid` and `<track>_spike.wav` per role
+group. `tempo_map_detect` answers a suggestion; pass it to `tempo_map_set` (or use `tempo_map_import_midi {path}` with
+the DAW's own map) before the exports when the map should differ from the default 120 BPM.
+
 ## MCP
 
 `drumspike mcp` speaks JSON-RPC 2.0, one message per line on stdin and stdout (protocol versions 2025-06-18, 2025-03-26 and
@@ -81,7 +120,8 @@ an object result has an `outputSchema` and `structuredContent`. An error is a re
 - `track_velocity_set` also writes the new velocities and cut marks to the stored hits (`apply`, default true here; the page sends
   `apply: false` and applies the answer itself). It recomputes every velocity, so it comes before single-hit velocity edits.
 - Export (P4-30): `export_all` takes `dest` (an absolute, existing, writable folder; default `Exports/` in the project folder), `midi_mode`
-  (`per_track`, the default, or `single`), `tracks` (names, default all) and `formats` (`midi` and/or `spikes`, default both). `single` writes one
+  (`per_track`, the default, or `single`), `tracks` (names or patterns, default all), `roles` (export by role, see the next section) and
+  `formats` (`midi` and/or `spikes`, default both). `single` writes one
   type 1 file `<project>_drums.mid` instead of the `<track>_spike.mid` files: the project's tempo map, one MIDI track per exported track named after
   it, each on its own note (the track's note), the same ticks as the per-track files. The answer adds `dest` and `midi_file`. `export_midi` and
   `export_spikes` take `dest` too. `export_existing` takes the same options and lists the files that `export_all` would replace (a bad `dest` is

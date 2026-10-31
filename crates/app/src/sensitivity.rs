@@ -52,6 +52,7 @@ fn scale_at_max() -> f64 {
 }
 
 /// The factor every threshold is multiplied with at the slider value `v` (clamped to 0 to [`MAX`]).
+#[must_use]
 pub fn scale_of(v: f64) -> f64 {
     let v = if v.is_finite() { v.clamp(0.0, MAX) } else { DEFAULT };
     if v <= OLD_MAX {
@@ -65,6 +66,7 @@ pub fn scale_of(v: f64) -> f64 {
 }
 
 /// The five thresholds at the slider value `v`.
+#[must_use]
 pub fn thresholds_of(v: f64) -> [f64; N_CLASSES] {
     let s = scale_of(v);
     BASE.map(|b| (b * s).clamp(FLOOR, CEIL))
@@ -73,6 +75,7 @@ pub fn thresholds_of(v: f64) -> [f64; N_CLASSES] {
 /// The slider value of a track's thresholds: the mean of the five against the mean of the base
 /// (the inverse of [`thresholds_of`] for every value of the slider; a hand-written list gives the
 /// value of its mean). Not rounded; the page rounds for the slider.
+#[must_use]
 pub fn sensitivity_of(th: &[f64; N_CLASSES]) -> f64 {
     let mean = th.iter().sum::<f64>() / N_CLASSES as f64;
     let s = mean / base_mean();
@@ -86,6 +89,7 @@ pub fn sensitivity_of(th: &[f64; N_CLASSES]) -> f64 {
 
 /// The slider value of a gate scale `s` (the inverse of [`scale_of`], A4): the value whose
 /// thresholds are `base * s`. Not rounded; the page rounds for the slider.
+#[must_use]
 pub fn slider_of_scale(s: f64) -> f64 {
     let v = if s >= SCALE_AT_OLD_MAX {
         (1.6 - s) / 1.2 * OLD_MAX

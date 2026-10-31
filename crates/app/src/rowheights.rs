@@ -25,6 +25,7 @@ pub const ROW_HEIGHTS_COMMANDS: [&str; 2] = ["row_heights_get", "row_heights_set
 /// The stored row heights: the entries of the `row_heights` object whose value is a positive
 /// finite number (the rest of the object stays as it is in the document; a value of another type
 /// reads as no override, a non-object as none).
+#[must_use]
 pub fn doc_row_heights(doc: &drumspike_core::Document) -> Value {
     match doc.extra.get(DOC_KEY) {
         Some(Value::Object(m)) => {
@@ -51,6 +52,10 @@ pub fn set_doc_row_heights(doc: &mut drumspike_core::Document, heights: &Value) 
 
 impl Service {
     /// `row_heights_get {sid}`: `{heights, n}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when the project id is unknown.
     pub fn row_heights_get(&self, sid: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -62,6 +67,11 @@ impl Service {
     /// `row_heights_set {sid, heights}`: replace the whole map. 400 when an entry has a factor
     /// that is no positive finite number (the message names the track). Answers
     /// `{heights, changed, n}`. An empty map clears the overrides.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error when `heights` is not an object or a factor is not a positive finite number, a 404
+    /// error for an unknown project id, and a 409 error when the project is open read-only.
     pub fn row_heights_set(&self, sid: &str, heights: &Value) -> Result<Value, AppError> {
         let obj = match heights {
             Value::Object(m) => m.clone(),
@@ -94,6 +104,7 @@ impl Service {
 
 /// Run a command of this card for the bridge, the command line and the MCP server; `None` when
 /// `cmd` is not one of them.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !ROW_HEIGHTS_COMMANDS.contains(&cmd) {
         return None;

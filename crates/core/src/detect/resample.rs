@@ -158,6 +158,10 @@ pub struct Resampler {
 
 impl Resampler {
     /// Build the table for `sr_in`; `Err` for any rate other than 44,100, 48,000 or 96,000.
+    ///
+    /// # Errors
+    ///
+    /// [`ResampleError::UnsupportedRate`] when `sr_in` is not 44,100, 48,000 or 96,000 Hz.
     pub fn new(sr_in: u32) -> Result<Resampler, ResampleError> {
         let (m, q) = match sr_in {
             44_100 => (147, 0usize),
@@ -220,6 +224,15 @@ impl Resampler {
     }
 
     /// The process-wide table for `sr_in`, built on first use.
+    ///
+    /// # Errors
+    ///
+    /// [`ResampleError::UnsupportedRate`] when `sr_in` is not 44,100, 48,000 or 96,000 Hz.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the `expect("supported rate")` on [`Resampler::new`] runs only for
+    /// a rate that the `match` above has already accepted.
     pub fn shared(sr_in: u32) -> Result<&'static Resampler, ResampleError> {
         static R44: OnceLock<Resampler> = OnceLock::new();
         static R48: OnceLock<Resampler> = OnceLock::new();
@@ -234,17 +247,20 @@ impl Resampler {
     }
 
     /// The source rate this table was built for.
+    #[must_use]
     pub fn source_rate(&self) -> u32 {
         self.sr_in
     }
 
     /// Taps per phase (0 for the 44.1 kHz pass-through).
+    #[must_use]
     pub fn taps_per_phase(&self) -> usize {
         self.taps
     }
 
     /// Output length for `n` input samples: `ceil(n * 147 / M)`, saturating at
     /// `usize::MAX` for inputs where the multiplication would overflow (R14).
+    #[must_use]
     pub fn output_len(&self, n: usize) -> usize {
         n.saturating_mul(PHASES).div_ceil(self.m)
     }
@@ -276,6 +292,7 @@ impl Resampler {
     }
 
     /// Resample `x` (mono, the source rate of this table) to 44.1 kHz.
+    #[must_use]
     pub fn process(&self, x: &[f32]) -> Vec<f32> {
         if self.m == PHASES {
             return x.to_vec();
@@ -302,6 +319,10 @@ impl Resampler {
 /// Resample a mono signal at `sr_in` to 44.1 kHz with the shared table (see the module
 /// docs). A 44.1 kHz signal is returned unchanged; any other rate than 48 or 96 kHz is an
 /// error.
+///
+/// # Errors
+///
+/// [`ResampleError::UnsupportedRate`] when `sr_in` is not 44,100, 48,000 or 96,000 Hz.
 pub fn resample_to_44100(x: &[f32], sr_in: u32) -> Result<Vec<f32>, ResampleError> {
     Ok(Resampler::shared(sr_in)?.process(x))
 }

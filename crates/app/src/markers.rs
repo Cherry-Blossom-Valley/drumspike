@@ -24,6 +24,7 @@ pub const MARKERS_COMMANDS: [&str; 2] = ["markers_get", "markers_set"];
 
 /// The stored markers: the entries of the `markers` list with a numeric `t` (the rest of the list
 /// stays as it is in the document; a value of another type is no list and reads as none).
+#[must_use]
 pub fn doc_markers(doc: &drumspike_core::Document) -> Vec<Value> {
     match doc.extra.get(DOC_KEY) {
         Some(Value::Array(a)) => a
@@ -46,6 +47,10 @@ pub fn set_doc_markers(doc: &mut drumspike_core::Document, markers: &[Value]) {
 
 impl Service {
     /// `markers_get {sid}`: `{markers, n}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when the project id is unknown.
     pub fn markers_get(&self, sid: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -58,6 +63,11 @@ impl Service {
     /// or a `note` that is no string (the message names the index). Answers
     /// `{markers, previous, changed, n}`; `previous` is the list before the call, so one more
     /// call with it undoes the change. An empty list clears the markers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error when an entry is not an object with a numeric `t` and an optional string `note`, a
+    /// 404 error for an unknown project id, and a 409 error when the project is open read-only.
     pub fn markers_set(&self, sid: &str, markers: &[Value]) -> Result<Value, AppError> {
         for (i, v) in markers.iter().enumerate() {
             let ok = v.is_object()
@@ -92,6 +102,7 @@ impl Service {
 
 /// Run a command of this card for the bridge, the command line and the MCP server; `None` when
 /// `cmd` is not one of them.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !MARKERS_COMMANDS.contains(&cmd) {
         return None;

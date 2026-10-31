@@ -130,12 +130,14 @@ pub struct CommandSpec {
 
 impl CommandSpec {
     /// True when the command changes the project (its document or its folder).
+    #[must_use]
     pub fn writes_project(&self) -> bool {
         matches!(self.effect, Effect::Doc | Effect::Files)
     }
 
     /// True when the call takes a `progress` channel: the Tauri wrapper has the parameter, the
     /// CLI prints progress lines and the MCP server runs the call as a background job.
+    #[must_use]
     pub fn has_progress(&self) -> bool {
         matches!(self.run, Run::Progress) || matches!(self.run, Run::Poll(_)) && self.takes_progress_channel()
     }
@@ -146,6 +148,7 @@ impl CommandSpec {
     }
 
     /// The JSON Schema of the arguments (an object with the argument names as keys).
+    #[must_use]
     pub fn args_schema(&self) -> Value {
         let mut props = serde_json::Map::new();
         for a in self.args {
@@ -158,6 +161,11 @@ impl CommandSpec {
     }
 
     /// The JSON Schema of the result.
+    ///
+    /// # Panics
+    ///
+    /// Panics (`expect`) when the row's `result` text is not valid JSON; a registry test pins that every row's is.
+    #[must_use]
     pub fn result_schema(&self) -> Value {
         serde_json::from_str(self.result).expect("a registry result schema is valid JSON")
     }
@@ -530,7 +538,11 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Detect the hits of some or all tracks; poll analyze_status",
         &[
             SID,
-            opt("tracks", Ty::Strs, "Track names; default all"),
+            opt(
+                "tracks",
+                Ty::Strs,
+                "Track names or patterns (exact, glob `t*`, range `t1-t4`); default all; a pattern that matches nothing is an error",
+            ),
             opt(
                 "params",
                 Ty::Obj,
@@ -599,7 +611,16 @@ pub static REGISTRY: &[CommandSpec] = &[
                 Ty::Str,
                 "per_track (default: <track>_spike.mid per track) or single (one type 1 file <project>_drums.mid, one MIDI track per drum track, the project's tempo map)",
             ),
-            opt("tracks", Ty::Strs, "Track names; default all"),
+            opt(
+                "tracks",
+                Ty::Strs,
+                "Track names or patterns (exact, glob `t*`, range `t1-t4`); default all; a pattern that matches nothing is an error",
+            ),
+            opt(
+                "roles",
+                Ty::Strs,
+                "Export by role instead of (or on top of) tracks: the tracks whose role is one of these (case-insensitive); a role that no track has is an error",
+            ),
             opt(
                 "formats",
                 Ty::Strs,
@@ -976,8 +997,17 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Add one track per audio file",
         &[
             SID,
-            req("paths", Ty::Strs, "Files or folders"),
-            opt("roles", Ty::Any, "Role per file"),
+            req(
+                "paths",
+                Ty::Strs,
+                "Files or folders; a folder with an `Audio Files` subfolder and no audio of its own is a Pro Tools session folder (the `.ptx` stays ignored)",
+            ),
+            opt(
+                "tracks",
+                Ty::Strs,
+                "Filter on the scanned files by name pattern (exact, glob `t*`, range `t1-t4`); a pattern that matches no scanned file is an error",
+            ),
+            opt("roles", Ty::Any, "Role per file (in the order of the filtered files)"),
             opt("notes", Ty::Any, "MIDI note per file"),
             opt("copy", Ty::Bool, "Copy the audio into the project"),
         ],
@@ -1705,6 +1735,7 @@ pub static REGISTRY: &[CommandSpec] = &[
 ];
 
 /// The row of a command.
+#[must_use]
 pub fn find(name: &str) -> Option<&'static CommandSpec> {
     REGISTRY.iter().find(|c| c.name == name)
 }
@@ -1715,6 +1746,7 @@ pub fn agent_commands() -> impl Iterator<Item = &'static CommandSpec> {
 }
 
 /// The MCP tool list entry of a command: `{name, description, inputSchema}`.
+#[must_use]
 pub fn tool_entry(c: &CommandSpec) -> Value {
     json!({"name": c.name, "description": c.about, "inputSchema": c.args_schema()})
 }

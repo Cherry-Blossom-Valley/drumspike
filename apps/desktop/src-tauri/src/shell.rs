@@ -14,6 +14,11 @@ use crate::{menu, open, window};
 /// check items and the Window menu (the service's open projects, the current one checked); `state.keyPreset` (P3-13c)
 /// sets the accelerators of the key preset; `projectName` and `dirty` (P4-26) set the window title.
 /// Answer: the number of recent entries.
+///
+/// # Errors
+///
+/// 500 when the native menu or the Window, Track and View submenus cannot be updated (a menu
+/// call of the windowing library fails).
 #[tauri::command(rename_all = "snake_case")]
 pub fn shell_sync(
     app: AppHandle,
@@ -58,6 +63,7 @@ pub fn shell_sync(
 
 /// Take the paths that came from the Finder, the Dock or a drop: `{projects, others}`.
 #[tauri::command]
+#[must_use]
 pub fn open_paths_take(app: AppHandle) -> Value {
     open::take(&app)
 }
@@ -69,6 +75,12 @@ pub fn quit_app(app: AppHandle) {
 }
 
 /// The files that Export all would replace (P4-30: for the options of the Export dialog): `{count, files, dest, ...}`.
+///
+/// # Errors
+///
+/// 400 when `dest`, `midi_mode`, `tracks`, `formats` or `compensate` has a wrong type or value,
+/// or `formats` names no known format. 404 when the project is unknown, or `dest` is not a
+/// folder that exists, or a name in `tracks` is not a track.
 #[tauri::command(rename_all = "snake_case")]
 pub fn export_existing(
     svc: State<'_, Service>,
@@ -84,12 +96,21 @@ pub fn export_existing(
 }
 
 /// P4-30: keep the export folder of the project (`null` back to `Exports/`).
+///
+/// # Errors
+///
+/// 404 when the project is unknown. 409 when the project is open read-only. 400 or 404 when
+/// `dest` is not a usable folder.
 #[tauri::command]
 pub fn export_dest_set(svc: State<'_, Service>, sid: String, dest: Option<String>) -> Result<Value, AppError> {
     svc.export_dest_set(&sid, dest.as_deref())
 }
 
-// P4-40g: keep the "Markers in MIDI" checkbox of the Export dialog.
+/// P4-40g: keep the "Markers in MIDI" checkbox of the Export dialog.
+///
+/// # Errors
+///
+/// 404 when the project is unknown. 409 when the project is open read-only.
 #[tauri::command]
 pub fn export_markers_set(svc: State<'_, Service>, sid: String, on: bool) -> Result<Value, AppError> {
     svc.export_markers_set(&sid, on)
@@ -97,12 +118,23 @@ pub fn export_markers_set(svc: State<'_, Service>, sid: String, on: bool) -> Res
 
 /// P4-31: the export shape of the project (what the dialog shows again and Export again repeats); `null`
 /// before the first export.
+///
+/// # Errors
+///
+/// 404 when the project is unknown.
 #[tauri::command]
 pub fn export_last_get(svc: State<'_, Service>, sid: String) -> Result<Value, AppError> {
     svc.export_last_get(&sid)
 }
 
 /// P4-31: keep the export shape of the project (the dialog's choices at once, and what an export ran with).
+///
+/// # Errors
+///
+/// 404 when the project is unknown. 409 when the project is open read-only. 400 when `formats` is
+/// empty or names an unknown format, when `midi_mode`, `compensate`, `scope`, `track` or `dest`
+/// has a wrong type or value, when the scope is `selected` without a `track`, or when `dest` is
+/// not a usable folder.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command(rename_all = "snake_case")]
 pub fn export_last_set(
@@ -123,6 +155,12 @@ pub fn export_last_set(
 }
 
 /// P4-30: render the files of the dialog's drag tiles into `Exports/.drag/` (file work: the blocking pool).
+///
+/// # Errors
+///
+/// 404 when the project is unknown. With `clear` that is the only error. Otherwise: 400 when an
+/// option has a wrong type or value; 409 when the project is open read-only; 500 when the drag
+/// folder cannot be created; and any error of the export render for the options.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn export_drag_prepare(
     svc: State<'_, Service>,
@@ -141,12 +179,23 @@ pub async fn export_drag_prepare(
 }
 
 /// #433: a drag starts: the pre-rendered files move from `Exports/.drag/` into `Exports/` (file work: the blocking pool).
+///
+/// # Errors
+///
+/// 400 when a path is not in the drag folder of the project. 404 when the project is unknown or
+/// a drag file is not rendered (or already taken). 409 when the project is open read-only, or an
+/// output would replace a protected file. 500 when `Exports/` cannot be created or a rename fails.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn export_drag_take(svc: State<'_, Service>, sid: String, paths: Vec<String>) -> Result<Value, AppError> {
     crate::blocking(&svc, "export_drag_take", move |s| s.export_drag_take(&sid, &paths)).await
 }
 
 /// P4-30: show a file or folder in the Finder (the Export dialog's "Show in Finder"): `open -R <path>`.
+///
+/// # Errors
+///
+/// 404 when `path` is not absolute or does not exist. 500 when the `open` command cannot be
+/// started, and on a platform other than macOS.
 #[tauri::command]
 pub fn reveal_path(path: String) -> Result<Value, AppError> {
     let p = std::path::Path::new(&path);
@@ -180,6 +229,7 @@ fn export_opts(
 /// Self-test: a click on the menu item `id`, through the code that a real click runs.
 #[cfg(debug_assertions)]
 #[tauri::command]
+#[must_use]
 pub fn selftest_menu(app: AppHandle, id: String) -> Value {
     menu::dispatch(&app, &id)
 }
@@ -187,6 +237,7 @@ pub fn selftest_menu(app: AppHandle, id: String) -> Value {
 /// Self-test: the items of the live menu with their enabled state.
 #[cfg(debug_assertions)]
 #[tauri::command]
+#[must_use]
 pub fn selftest_menu_report(app: AppHandle) -> Value {
     menu::report(&app)
 }
@@ -199,6 +250,10 @@ pub fn selftest_open_paths(app: AppHandle, paths: Vec<String>) {
 }
 
 /// Self-test: the close button. `WebviewWindow::close` sends `CloseRequested` like the button.
+///
+/// # Errors
+///
+/// 500 when there is no window labelled `main`, or closing it fails.
 #[cfg(debug_assertions)]
 #[tauri::command]
 pub fn selftest_close_window(app: AppHandle) -> Result<(), AppError> {
@@ -212,6 +267,7 @@ pub fn selftest_close_window(app: AppHandle) -> Result<(), AppError> {
 /// Self-test (#206): the main menu as macOS has it (`NSMenu` key equivalents and modifier masks).
 #[cfg(debug_assertions)]
 #[tauri::command]
+#[must_use]
 pub fn selftest_ns_menu(app: AppHandle) -> Value {
     menu::ns_menu_rows(&app)
 }
@@ -219,6 +275,7 @@ pub fn selftest_ns_menu(app: AppHandle) -> Value {
 /// Self-test (#206): a `menu_key` through the real native menu path (`NSMenu performKeyEquivalent:`).
 #[cfg(debug_assertions)]
 #[tauri::command]
+#[must_use]
 pub fn selftest_menu_key(app: AppHandle, key: String) -> Value {
     menu::perform_key_equivalent(&app, &key)
 }
@@ -240,6 +297,7 @@ pub fn selftest_menu_log() -> Value {
 /// variant of an event the `NSMenu` matches (`selftest_menu_key` builds the physical-looking one).
 #[cfg(debug_assertions)]
 #[tauri::command]
+#[must_use]
 pub fn selftest_menu_probe(app: AppHandle, chars: String, flags: u64) -> Value {
     json!({"matched": menu::perform_key_equivalent_raw(&app, &chars, &chars, flags)})
 }

@@ -24,12 +24,14 @@ use crate::io::{WavFormat, WavSpec};
 pub const CLASSES: [&str; 6] = ["kick", "snare", "tom", "hat", "cymbal", "other"];
 
 /// The index of `class` in [`CLASSES`], or `None` for an unknown class (dropped).
+#[must_use]
 pub fn class_index(class: &str) -> Option<u8> {
     CLASSES.iter().position(|&c| c == class).map(|i| i as u8)
 }
 
 /// The MIDI note of an internal class index at the track's `role` (the `other` class and an
 /// unknown role take the role's note, as [`crate::analyze::role_note`] does).
+#[must_use]
 pub fn class_note(class: u8, role: &str) -> u8 {
     if (class as usize) < CLASS_NOTES.len() {
         CLASS_NOTES[class as usize]
@@ -114,6 +116,12 @@ impl From<OnsetError> for BackendError {
 /// A detector backend: step 1 of the analysis for one track.
 pub trait DetectorBackend {
     /// The hits of one track and, optionally, its candidate list.
+    ///
+    /// # Errors
+    ///
+    /// A [`BackendError`] when the backend cannot analyse the track: [`BackendError::Onset`]
+    /// for the built-in DSP detector, the plugin variants (`Plugin`, `Process`, `Limit`,
+    /// `Protocol`, `Json`, `Io`) for an external detector plugin.
     fn detect(&self, x: &[f32], sr: u32, role: &str)
     -> Result<(Vec<DetectedHit>, Option<CandidateList>), BackendError>;
 }
@@ -213,6 +221,12 @@ pub struct Validated {
 
 /// Validate one response (the design section 5): drop out-of-range and unknown-class hits,
 /// clamp the confidences, sort by time and enforce the rate and total limits.
+///
+/// # Errors
+///
+/// [`BackendError::Protocol`] when the response names a protocol other than 1;
+/// [`BackendError::Plugin`] when the plugin reported an error; [`BackendError::Limit`] when
+/// the hit or candidate count, or its rate per second, is over the limit.
 pub fn validate_response(
     response: &PluginResponse,
     file_len_s: f64,

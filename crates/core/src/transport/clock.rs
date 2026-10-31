@@ -38,12 +38,14 @@ pub struct Playhead {
 
 impl Playhead {
     /// The position in seconds.
+    #[must_use]
     pub fn seconds(&self) -> f64 {
         self.frame as f64 / f64::from(self.sample_rate)
     }
 
     /// The frame at host time `now_ns`: extrapolated at the sample rate divided by the
     /// slowdown while playing, `frame` otherwise; never before `frame`.
+    #[must_use]
     pub fn frame_at(&self, now_ns: u64) -> u64 {
         if !self.playing || now_ns <= self.host_time_ns {
             return self.frame;
@@ -54,6 +56,7 @@ impl Playhead {
     }
 
     /// P3-20b: session seconds per second of playback (1.0 or 0.5).
+    #[must_use]
     pub fn rate(&self) -> f64 {
         1.0 / f64::from(self.slowdown.max(1))
     }
@@ -91,6 +94,7 @@ impl Default for StampMap {
 
 impl StampMap {
     /// An empty map: the first block sets the offset.
+    #[must_use]
     pub fn new() -> StampMap {
         StampMap {
             recent: [0; STAMP_WINDOW],
@@ -125,6 +129,7 @@ pub struct Clock {
 
 impl Clock {
     /// A clock at frame 0, not playing.
+    #[must_use]
     pub fn new(sample_rate: u32) -> Clock {
         Clock {
             seq: AtomicU64::new(0),

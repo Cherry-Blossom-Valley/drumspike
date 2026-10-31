@@ -210,6 +210,10 @@ impl Resample {
 impl TrackSource {
     /// Open `path` for playback at `device_rate`: a stereo file keeps both channels, any
     /// other file is folded with `mode`.
+    ///
+    /// # Errors
+    ///
+    /// As [`TrackSource::open_at`] with `out_rate` equal to `device_rate`.
     pub fn open(
         path: &Path,
         mode: MixMode,
@@ -222,6 +226,12 @@ impl TrackSource {
     /// P3-20b: [`TrackSource::open`] with the frames resampled to `out_rate` (twice the
     /// device rate at half speed, see [`super::Speed::render_rate`]). [`TrackSource::device_frames`]
     /// still counts frames at `device_rate`.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Track`] when the file cannot be mapped or opened as a WAV, has no
+    /// mix plan for `mode`, or the track rate, `device_rate` or `out_rate` is 0; also the
+    /// error of building the resampler for the track rate and `out_rate`.
     pub fn open_at(
         path: &Path,
         mode: MixMode,
@@ -279,6 +289,12 @@ impl TrackSource {
     /// [`TrackSource::seek`]). The resampler of the old rate is kept for the next change back,
     /// so each rate builds its resampler once. When the resampler cannot be built, the source
     /// gives silence until the next change and the error is returned.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError::Track`] when `out_rate` is 0; otherwise the error of building a
+    /// resampler from the track rate to `out_rate` (none when `out_rate` is unchanged or a
+    /// resampler for it is kept).
     pub fn set_out_rate(&mut self, out_rate: u32) -> Result<(), TransportError> {
         if out_rate == self.out_rate {
             return Ok(());
@@ -308,26 +324,31 @@ impl TrackSource {
     }
 
     /// P3-20b: the rate of the frames [`TrackSource::fill`] gives (the device rate at normal speed).
+    #[must_use]
     pub fn out_rate(&self) -> u32 {
         self.out_rate
     }
 
     /// The track's own sample rate.
+    #[must_use]
     pub fn track_rate(&self) -> u32 {
         self.track_rate
     }
 
     /// Track length in device frames (rounded up).
+    #[must_use]
     pub fn device_frames(&self) -> u64 {
         (self.info.n_frames as u64 * u64::from(self.device_rate)).div_ceil(u64::from(self.track_rate))
     }
 
     /// Channels the source puts in its ring per frame: 2 for a stereo file, else 1.
+    #[must_use]
     pub fn channels(&self) -> usize {
         self.chans
     }
 
     /// Whether this track is resampled.
+    #[must_use]
     pub fn resampled(&self) -> bool {
         self.rs.is_some()
     }
@@ -401,6 +422,7 @@ impl TrackSource {
     }
 
     /// Positioned reads so far ([`Residency::Pread`]; 0 for a mapped source).
+    #[must_use]
     pub fn reads(&self) -> u64 {
         match &self.bytes {
             Bytes::File { reads, .. } => *reads,
@@ -410,6 +432,12 @@ impl TrackSource {
 
     /// Fill `out` with the next device frames (`out.len() / channels()` of them, interleaved;
     /// zeros past the end of the track). Returns the nanoseconds spent inside the resampler.
+    ///
+    /// # Panics
+    ///
+    /// Panics (an `expect` or `unwrap`) only if the resampler's fixed adapter or block sizes
+    /// are inconsistent, or the resampler is missing inside the resampling loop. Neither
+    /// happens while the source's own invariants hold.
     pub fn fill(&mut self, out: &mut [f32]) -> u64 {
         let c = self.chans;
         let frames = out.len() / c;
@@ -602,7 +630,7 @@ impl Reader {
     /// user-interactive. When no ring needs data it parks for [`IDLE_SLEEP`], during a seek
     /// handshake for [`SEEK_SLEEP`]; `Transport::seek` and the drop of the transport unpark it.
     pub(crate) fn run(mut self) {
-        set_reader_qos();
+        let _ = set_reader_qos();
         while !self.shared.stop.load(Ordering::Acquire) {
             if !self.step() {
                 std::thread::park_timeout(if self.waiting { SEEK_SLEEP } else { IDLE_SLEEP });
@@ -614,6 +642,7 @@ impl Reader {
 /// Ask the system to run the calling thread at `QoS` user-interactive (the reader thread,
 /// P3-15a); macOS then keeps it on a performance core under load. Returns whether the call
 /// succeeded (always false outside macOS).
+#[must_use]
 pub fn set_reader_qos() -> bool {
     #[cfg(target_os = "macos")]
     {

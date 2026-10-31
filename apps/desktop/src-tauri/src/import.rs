@@ -9,11 +9,23 @@ use tauri::State;
 
 use crate::blocking;
 
+/// List the sessions of the old server in `folder` (the folder itself, or its sub-folders).
+///
+/// # Errors
+///
+/// 404 when `folder` is empty or not a directory.
 #[tauri::command]
 pub async fn legacy_list(svc: State<'_, Service>, folder: String) -> Result<Value, AppError> {
     blocking(&svc, "legacy_list", move |s| s.legacy_list(&folder)).await
 }
 
+/// Open the session folder `session_dir` of the old server as a new project with copied audio.
+///
+/// # Errors
+///
+/// 400 for an empty `session_dir`. 404 when it is not a directory. Other errors come from reading
+/// the old session, copying its audio or creating the new project folder; a failed import
+/// removes the new folder.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn project_import(svc: State<'_, Service>, session_dir: String) -> Result<Value, AppError> {
     blocking(&svc, "project_import", move |s| s.project_import(&session_dir)).await

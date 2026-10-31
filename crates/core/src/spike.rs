@@ -40,6 +40,7 @@ pub const AUDIO_PERIOD_WINDOW_S: f64 = 0.030;
 pub const AUDIO_LOW_HZ: f64 = 800.0;
 
 /// The blip shape at `sr`: `n = max(2, round(0.001 * sr))` samples, `1 - i / n`.
+#[must_use]
 pub fn blip(sr: u32) -> Vec<f32> {
     let n = ((BLIP_S * f64::from(sr)).round() as usize).max(2);
     (0..n).map(|i| (1.0 - i as f64 / n as f64) as f32).collect()
@@ -47,6 +48,7 @@ pub fn blip(sr: u32) -> Vec<f32> {
 
 /// Sample index of a hit: `round(t * sr)` with ties to even (hit times are `k / sr`, so the
 /// product is exact for refined hits); `None` outside `[0, n_samples)`.
+#[must_use]
 pub fn hit_index(t: f64, sr: u32, n_samples: usize) -> Option<usize> {
     let i = py_round(t * f64::from(sr));
     if i < 0 || i as u64 >= n_samples as u64 {
@@ -57,6 +59,7 @@ pub fn hit_index(t: f64, sr: u32, n_samples: usize) -> Option<usize> {
 }
 
 /// The mono spike signal: `n_samples` zeros with a [`blip`] at every hit.
+#[must_use]
 pub fn spike_signal(sr: u32, n_samples: usize, times: &[f64]) -> Vec<f32> {
     let mut x = vec![0.0f32; n_samples];
     let b = blip(sr);
@@ -84,6 +87,7 @@ pub struct SpikeSignalBlocks {
 impl SpikeSignalBlocks {
     /// The generator of the `n_samples`-long signal for `times` (seconds) at `sr`: the same
     /// hits [`spike_signal`] would place (deduplicated, ascending).
+    #[must_use]
     pub fn new(sr: u32, n_samples: usize, times: &[f64]) -> Self {
         let mut starts: Vec<usize> = times.iter().filter_map(|&t| hit_index(t, sr, n_samples)).collect();
         starts.sort_unstable();
@@ -124,12 +128,14 @@ impl SpikeSignalBlocks {
 /// The `bext` chunk of a spike file: time reference, origination date and time and
 /// originator copied from the source record, the description and coding history of the
 /// spike file itself.
+#[must_use]
 pub fn spike_bext(source: &Bext, sr: u32, format: WavFormat) -> Bext {
     bext_with_description(source, sr, format, BEXT_DESCRIPTION)
 }
 
 /// The `bext` chunk of an audio-spike file: the source time reference, the audio-spike
 /// description (#209).
+#[must_use]
 pub fn audio_spike_bext(source: &Bext, sr: u32, format: WavFormat) -> Bext {
     bext_with_description(source, sr, format, AUDIO_BEXT_DESCRIPTION)
 }
@@ -159,6 +165,7 @@ fn is_crossing(x: &[f32], j: usize) -> bool {
 /// zero between the two signs (a digital-silence run at a crossing) still counts, at the
 /// first nonzero sample after it. `None` with fewer than two crossings (silence, a
 /// constant, the window too short).
+#[must_use]
 pub fn period_samples(x: &[f32], start: usize, sr: u32) -> Option<f64> {
     // R14: `start` past the signal is a documented `None`, not an underflow panic.
     if start >= x.len() {
@@ -420,6 +427,7 @@ fn snippet_ends(source: &[f32], sr: u32, times: &[f64]) -> Vec<(usize, usize, bo
 /// the next hit cuts, a fade-out of at most [`AUDIO_FADE_S`] to the end, #378). Every other
 /// sample is exact zero. Returns the signal and the number of hits that got the default
 /// length (no dominant low component found, #378).
+#[must_use]
 pub fn audio_spike_signal(source: &[f32], sr: u32, times: &[f64]) -> (Vec<f32>, usize) {
     let mut out = vec![0.0f32; source.len()];
     let mut no_low = 0;
@@ -441,6 +449,7 @@ pub fn audio_spike_signal(source: &[f32], sr: u32, times: &[f64]) -> (Vec<f32>, 
 /// (ascending hit index; hits outside the file and degenerate zero-length snippets have no
 /// entry), for the measurement tools (#378). The same lengths the real export
 /// ([`audio_spike_signal`]) writes.
+#[must_use]
 pub fn audio_snippet_lengths(source: &[f32], sr: u32, times: &[f64]) -> Vec<f64> {
     snippet_ends(source, sr, times)
         .into_iter()
@@ -452,6 +461,10 @@ pub fn audio_snippet_lengths(source: &[f32], sr: u32, times: &[f64]) -> Vec<f64>
 /// ([`audio_spike_signal`]): mono at `sr`, `source.len()` long, encoded as `format`, with
 /// [`audio_spike_bext`] when the source has a `bext` chunk. Returns the number of hits that
 /// got the default length because no dominant low component was found (#378).
+///
+/// # Errors
+///
+/// The I/O error when the file at `path` cannot be created or written.
 pub fn export_audio_spikes(
     path: &Path,
     sr: u32,
@@ -478,6 +491,10 @@ pub fn export_audio_spikes(
 /// The signal is produced and encoded block by block (R19 step 2): the writer never holds
 /// more than one [`WRITE_BLOCK_FRAMES`] block of the signal or of the encoded bytes, and the
 /// bytes on disk are the ones the full-buffer path wrote.
+///
+/// # Errors
+///
+/// The I/O error when the file at `path` cannot be created or written.
 pub fn export_spikes(
     path: &Path,
     sr: u32,

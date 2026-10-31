@@ -171,6 +171,7 @@ fn tracks_add_references_the_files_where_they_are_and_leaves_them_unchanged() {
         .tracks_add(
             &sid,
             &[root.join("daw").display().to_string()],
+            None,
             &[],
             &[],
             false,
@@ -247,7 +248,7 @@ fn tracks_add_copies_into_audio_files_when_asked_and_reports_progress() {
     let b = put(&root, "daw/oh_01.wav", 48_000);
     let (progress, seen) = collect();
     let r = svc
-        .tracks_add(&sid, &[a.clone(), b], &[], &[], true, Some(progress))
+        .tracks_add(&sid, &[a.clone(), b], None, &[], &[], true, Some(progress))
         .unwrap();
     assert_eq!(r["added"], json!(["k_in_02", "oh_01"]));
     assert_eq!(r["tracks"][0]["mode"], "copied");
@@ -280,7 +281,7 @@ fn tracks_add_uses_the_roles_and_notes_of_the_call_and_guesses_the_rest() {
         .collect();
     let roles = [json!("tom"), json!("bass"), Value::Null, json!("cymbal")];
     let notes = [json!(50), json!(500), json!("x"), Value::Null];
-    let r = svc.tracks_add(&sid, &files, &roles, &notes, false, None).unwrap();
+    let r = svc.tracks_add(&sid, &files, None, &roles, &notes, false, None).unwrap();
     let got: Vec<(String, i64)> = r["tracks"]
         .as_array()
         .unwrap()
@@ -313,7 +314,7 @@ fn tracks_add_records_the_role_source_and_the_matched_words_of_a_kept_guess() {
         .collect();
     let roles = [Value::Null, Value::Null, json!("snare")];
     let notes = [Value::Null, Value::Null, Value::Null];
-    svc.tracks_add(&sid, &files, &roles, &notes, false, None).unwrap();
+    svc.tracks_add(&sid, &files, None, &roles, &notes, false, None).unwrap();
     let tr = |sid: &str, name: &str| svc.tracks_get(sid).unwrap()["tracks"][name].clone();
     let k = tr(&sid, "k_in_01");
     assert_eq!(k["role_source"], json!("scheme"));
@@ -340,7 +341,7 @@ fn tracks_add_makes_names_unique_ignoring_case() {
     let a = put(&root, "one/Kick.wav", 48_000);
     let b = put(&root, "two/kick.wav", 48_000);
     let c = put(&root, "three/KICK.wav", 48_000);
-    let r = svc.tracks_add(&sid, &[a, b, c], &[], &[], false, None).unwrap();
+    let r = svc.tracks_add(&sid, &[a, b, c], None, &[], &[], false, None).unwrap();
     assert_eq!(r["added"], json!(["Kick", "kick_2", "KICK_3"]));
 }
 
@@ -352,11 +353,11 @@ fn tracks_add_makes_unique_names_and_adds_to_the_tracks_already_there() {
     let a = put(&root, "one/k in_02.wav", 48_000);
     let b = put(&root, "two/k in_02.wav", 48_000);
     assert_eq!(
-        svc.tracks_add(&sid, &[a], &[], &[], false, None).unwrap()["added"],
+        svc.tracks_add(&sid, &[a], None, &[], &[], false, None).unwrap()["added"],
         json!(["k_in_02"])
     );
     assert_eq!(
-        svc.tracks_add(&sid, &[b], &[], &[], false, None).unwrap()["added"],
+        svc.tracks_add(&sid, &[b], None, &[], &[], false, None).unwrap()["added"],
         json!(["k_in_02_2"])
     );
     assert_eq!(svc.project_get(&sid).unwrap()["order"], json!(["k_in_02", "k_in_02_2"]));
@@ -379,7 +380,7 @@ fn tracks_add_rejects_aiff_and_88_khz_with_the_reason_and_adds_the_rest() {
         root.join("daw/broken.wav").display().to_string(),
         root.join("daw/gone.wav").display().to_string(),
     ];
-    let r = svc.tracks_add(&sid, &all, &[], &[], false, None).unwrap();
+    let r = svc.tracks_add(&sid, &all, None, &[], &[], false, None).unwrap();
     assert_eq!(r["added"], json!(["k_in_02"]));
     let rej = r["rejected"].as_array().unwrap();
     assert_eq!(rej.len(), 4);
@@ -397,7 +398,7 @@ fn tracks_add_rejects_aiff_and_88_khz_with_the_reason_and_adds_the_rest() {
     // only rejected files: not an error, nothing added, the project stays clean
     let (sid2, _) = new_project(&svc, "Other");
     let r = svc
-        .tracks_add(&sid2, &[aiff.display().to_string()], &[], &[], false, None)
+        .tracks_add(&sid2, &[aiff.display().to_string()], None, &[], &[], false, None)
         .unwrap();
     assert_eq!(
         (r["added"].clone(), r["rejected"].as_array().unwrap().len()),
@@ -411,7 +412,9 @@ fn tracks_add_knows_the_project() {
     let root = tmp("add_unknown");
     let svc = service(&root);
     assert_eq!(
-        svc.tracks_add("nope", &[], &[], &[], false, None).unwrap_err().code,
+        svc.tracks_add("nope", &[], None, &[], &[], false, None)
+            .unwrap_err()
+            .code,
         404
     );
 }
@@ -427,7 +430,9 @@ fn tracks_add_builds_the_peak_caches_so_the_lane_job_has_nothing_left() {
         put(&root, "daw/oh_01.wav", 96_000),
     ];
     let (progress, seen) = collect();
-    let r = svc.tracks_add(&sid, &files, &[], &[], false, Some(progress)).unwrap();
+    let r = svc
+        .tracks_add(&sid, &files, None, &[], &[], false, Some(progress))
+        .unwrap();
     assert!(r["peaks_ms"].as_f64().unwrap() > 0.0);
     for t in ["k_in_02", "s_top_02", "oh_01"] {
         assert!(dir.join("Analysis").join(t).join("peaks.bin").is_file(), "{t}");
@@ -448,6 +453,7 @@ fn tracks_add_builds_the_peak_caches_so_the_lane_job_has_nothing_left() {
         .tracks_add(
             &sid,
             &[root.join("none.wav").display().to_string()],
+            None,
             &[],
             &[],
             false,
@@ -463,7 +469,7 @@ fn the_added_tracks_survive_save_and_open_with_their_status() {
     let svc = service(&root);
     let (sid, dir) = new_project(&svc, "Song");
     let f = put(&root, "daw/oh_01.wav", 48_000);
-    svc.tracks_add(&sid, &[f], &[], &[], false, None).unwrap();
+    svc.tracks_add(&sid, &[f], None, &[], &[], false, None).unwrap();
     svc.project_save(&sid).unwrap();
     let again = service(&root);
     let o = again.project_open(dir.to_str().unwrap()).unwrap();
@@ -632,7 +638,7 @@ fn tracks_add_import_time_of_the_generated_session() {
         let scan = svc.tracks_scan(&[folder.display().to_string()], None).unwrap();
         let t_scan = t0.elapsed();
         let r = svc
-            .tracks_add(&sid, &[folder.display().to_string()], &[], &[], false, None)
+            .tracks_add(&sid, &[folder.display().to_string()], None, &[], &[], false, None)
             .unwrap();
         let t_add = t0.elapsed();
         svc.peaks_build_start(&sid, None, None).unwrap(); // nothing left: tracks_add built the caches

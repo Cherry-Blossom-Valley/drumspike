@@ -9,6 +9,13 @@ use tauri::State;
 
 use crate::blocking;
 
+/// The loudness levels of the hits and the detection candidates of the track `name`.
+///
+/// # Errors
+///
+/// 404 when the project or the track is unknown. 400 when a hit in `events` (or in the stored
+/// list) has no valid time. An error also comes from a track without a usable source (offline)
+/// and from a source that cannot be decoded (500).
 #[tauri::command]
 pub async fn track_histograms(
     svc: State<'_, Service>,
@@ -22,6 +29,15 @@ pub async fn track_histograms(
     .await
 }
 
+/// Pick the hits of the track `name` again from the kept candidates with the slider's `params`;
+/// with `store` the result replaces the stored hits, otherwise it is a preview.
+///
+/// # Errors
+///
+/// 404 when the project or the track is unknown. 409 when `store` is set and the project is open
+/// read-only, or when another write of the project is in progress. An error also comes from a
+/// track that has no kept candidates to re-pick from, from `params` that do not parse (400) and
+/// from a source that cannot be decoded (500).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn track_repick(
     svc: State<'_, Service>,
@@ -44,6 +60,11 @@ pub async fn track_repick(
 }
 
 /// Fix round: the undo and redo of a re-pick store the slider's params again.
+///
+/// # Errors
+///
+/// 404 when the project or the track is unknown. 409 when the project is open read-only or
+/// another write of the project is in progress.
 #[tauri::command]
 pub async fn track_params_set(
     svc: State<'_, Service>,
@@ -57,6 +78,15 @@ pub async fn track_params_set(
     .await
 }
 
+/// Store the velocity range (`lo_db`, `hi_db`, optional `cut_db`) of the track `name`; with
+/// `apply` the velocities of the hits are recomputed.
+///
+/// # Errors
+///
+/// 400 when `lo_db`, `hi_db` or `cut_db` is not a finite number, or a hit in `events` is invalid.
+/// 404 when the project or the track is unknown. 409 when the project is open read-only or
+/// another write of the project is in progress. A rejected command changes nothing. An error
+/// also comes from a source that cannot be decoded (500).
 #[tauri::command(rename_all = "snake_case")]
 #[allow(clippy::too_many_arguments)]
 pub async fn track_velocity_set(
@@ -84,6 +114,13 @@ pub async fn track_velocity_set(
 }
 
 /// #150: the confidence of each hit for the review queue (`crates/app/src/confidence.rs`).
+///
+/// # Errors
+///
+/// 404 when the project or the track is unknown. 400 when a hit in `events` (or in the stored
+/// list) has no valid time. An error also comes from a track without a usable source (offline)
+/// and from a source that cannot be decoded (500). A track that follows another track answers
+/// without reading audio.
 #[tauri::command]
 pub async fn track_confidence(
     svc: State<'_, Service>,

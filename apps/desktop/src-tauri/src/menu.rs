@@ -451,6 +451,7 @@ pub struct KeyCommand {
 impl KeyCommand {
     /// The menu accelerator of the command in a preset (P3-13c): in `cubase` the first key of the row's list with
     /// Cmd, Control or Option (the other keys are page keys), else the row's `menu_key`; `None` without a menu item.
+    #[must_use]
     pub fn menu_key_in(&self, preset: &str) -> Option<String> {
         self.menu.as_ref()?;
         match (&self.cubase, preset) {
@@ -460,6 +461,7 @@ impl KeyCommand {
     }
 
     /// The keys of the command in a preset: `default` (the menu key, then the page keys) or `cubase`.
+    #[must_use]
     pub fn keys(&self, preset: &str) -> Vec<String> {
         match (&self.cubase, preset) {
             (Some(c), "cubase") => c.clone(),
@@ -469,6 +471,11 @@ impl KeyCommand {
 }
 
 /// The rows of a key table file: the strict JSON between the markers `KEYMAP-BEGIN` and `KEYMAP-END`.
+///
+/// # Errors
+///
+/// When a marker is missing, the text between them is not strict JSON or not a list, or a row has
+/// no `id`, no `title` or no `cubase` key, or a field of the wrong type. The message names the row.
 pub fn parse_keymap(src: &str) -> Result<Vec<KeyCommand>, String> {
     let a = src.find(KEYMAP_BEGIN).ok_or("no KEYMAP-BEGIN marker")? + KEYMAP_BEGIN.len();
     let b = a + src[a..].find(KEYMAP_END).ok_or("no KEYMAP-END marker")?;
@@ -512,6 +519,7 @@ pub fn parse_keymap(src: &str) -> Result<Vec<KeyCommand>, String> {
 /// A key of the table split into its modifiers and its key (`Shift+Cmd+S`: `["Shift", "Cmd"]`, `S`), or `None`
 /// when it is not in the table's notation (unknown key, modifiers out of the order Control, Option, Shift, Cmd,
 /// Shift on a character key).
+#[must_use]
 pub fn parse_key(s: &str) -> Option<(Vec<&str>, &str)> {
     let mut parts: Vec<&str> = s.split('+').collect();
     let key = parts.pop()?;
@@ -531,6 +539,7 @@ pub fn parse_key(s: &str) -> Option<(Vec<&str>, &str)> {
 }
 
 /// The key has Cmd, Control or Option: it can be a menu accelerator (a text field does not need it).
+#[must_use]
 pub fn has_menu_modifier(key: &str) -> bool {
     parse_key(key).is_some_and(|(mods, _)| mods.iter().any(|m| *m != "Shift"))
 }
@@ -538,6 +547,7 @@ pub fn has_menu_modifier(key: &str) -> bool {
 /// A key of the table in the Tauri accelerator notation: `Shift+Cmd+S` is `CmdOrCtrl+Shift+S`, `Option+Return` is
 /// `Alt+Enter` (modifier order Ctrl, `CmdOrCtrl`, Alt, Shift, as the menu had them in P3-13a). `None` when the key is
 /// not in the table's notation.
+#[must_use]
 pub fn tauri_accel(key: &str) -> Option<String> {
     let (mods, k) = parse_key(key)?;
     let mut out: Vec<&str> = [
@@ -568,6 +578,7 @@ pub fn tauri_accel(key: &str) -> Option<String> {
 /// Everything wrong with a key table: an id twice, a menu key without Cmd, Control or Option or without a menu
 /// item, a key not in the notation, a key in two commands (in the default and in the Cubase preset). Empty when the
 /// table is good. `DSKeys.problems` in `static/keymap.js` makes the same checks in the page.
+#[must_use]
 pub fn keymap_problems(rows: &[KeyCommand]) -> Vec<String> {
     let mut out = Vec::new();
     let mut ids = std::collections::HashSet::new();
@@ -614,17 +625,20 @@ static KEYMAP: LazyLock<Vec<KeyCommand>> = LazyLock::new(|| {
 });
 
 /// The key table of this build (`static/keymap.js`). Empty when the file does not parse (a test makes sure it does).
+#[must_use]
 pub fn keymap() -> &'static [KeyCommand] {
     &KEYMAP
 }
 
 /// The row of the menu item `id`.
+#[must_use]
 pub fn key_row(id: &str) -> Option<&'static KeyCommand> {
     keymap().iter().find(|c| c.menu.as_deref() == Some(id))
 }
 
 /// The accelerator of the menu item `id` in the Tauri notation: the `menu_key` of its row in the key table.
 /// `build` sets exactly this; there is no other source of menu keys.
+#[must_use]
 pub fn accel_of(id: &str, preset: &str) -> Option<String> {
     key_row(id)
         .and_then(|c| c.menu_key_in(preset))
@@ -635,6 +649,7 @@ pub fn accel_of(id: &str, preset: &str) -> Option<String> {
 pub const PRESETS: [&str; 2] = ["default", "cubase"];
 
 /// `name` when it is a preset, else the default one (a damaged setting never leaves the menu without keys).
+#[must_use]
 pub fn preset_or_default(name: &str) -> &'static str {
     PRESETS.iter().copied().find(|p| *p == name).unwrap_or("default")
 }
@@ -643,6 +658,7 @@ pub fn preset_or_default(name: &str) -> &'static str {
 static PRESET: Mutex<&'static str> = Mutex::new("default");
 
 /// The preset of the accelerators that the live menu has now.
+#[must_use]
 pub fn current_preset() -> &'static str {
     *lock(&PRESET)
 }
@@ -771,6 +787,7 @@ pub fn check_states(state: &Value) -> Vec<(&'static str, bool)> {
 
 /// The Window menu's entries from the service's project list (`project_list` shape `ids`: `{id, name}`, in the
 /// order of opening) and the page's current project.
+#[must_use]
 pub fn window_entries(list: &Value, current: Option<&str>) -> Vec<WindowEntry> {
     list.as_array()
         .map(|rows| {
@@ -1113,6 +1130,10 @@ fn help_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
 
 /// The whole menu bar (reference section 3.2). The check items start as the page starts (snap on, follow
 /// smooth, click on); the page's first sync sets them to its real state.
+///
+/// # Errors
+///
+/// When the windowing library cannot create a menu, a submenu or an item.
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     // one item in two menus (File and Track; Add Tracks): muda keeps both native items in step (enabled state)
     let add_tracks = make_item(app, &ADD_TRACKS)?;
@@ -1142,6 +1163,7 @@ fn entry_no(id: &str, prefix: &str) -> Option<usize> {
 
 /// An id of this menu: a custom item, an Open Recent entry, the Clear Recent item or a Window menu
 /// project entry.
+#[must_use]
 pub fn is_known(id: &str) -> bool {
     SPEC.iter().any(|i| i.id == id)
         || id == RECENT_CLEAR_ID
@@ -1241,6 +1263,7 @@ fn set_enabled<R: Runtime>(menu: &Menu<R>, id: &str, on: bool) -> tauri::Result<
 }
 
 /// P4-40a: the text of Edit > Undo or Redo: the page's text (one line, at most 90 characters), the plain label for an empty one.
+#[must_use]
 pub fn step_title(label: &str, page: &str) -> String {
     let one: String = page.split_whitespace().collect::<Vec<_>>().join(" ");
     if one.is_empty() {
@@ -1255,6 +1278,11 @@ pub fn step_title(label: &str, page: &str) -> String {
 
 /// Grey the items that need a project while none is open, and refresh the Open Recent list.
 /// `recent` holds the project folders, newest first.
+///
+/// # Errors
+///
+/// When the windowing library cannot enable or disable an item, or change the Open Recent
+/// submenu. Nothing happens (and nothing fails) when the app has no menu yet.
 pub fn sync<R: Runtime>(app: &AppHandle<R>, has_project: bool, recent: &[String]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     for it in SPEC.iter().filter(|i| i.needs_project) {
@@ -1295,6 +1323,11 @@ pub fn sync<R: Runtime>(app: &AppHandle<R>, has_project: bool, recent: &[String]
 
 /// Set the check items to the page's state (`{snap, follow, click, infoLine, counter, inspector, trackHeight, nudgeValue}`, see [`check_states`]). A native click on a
 /// check item toggles its mark before the page has run the item; this call puts the page's state back.
+///
+/// # Errors
+///
+/// When the windowing library cannot set the checked state of an item. Nothing happens (and
+/// nothing fails) when the app has no menu yet.
 pub fn sync_checks<R: Runtime>(app: &AppHandle<R>, state: &Value) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     for (id, on) in check_states(state) {
@@ -1339,6 +1372,10 @@ pub fn sync_checks<R: Runtime>(app: &AppHandle<R>, state: &Value) -> tauri::Resu
 /// Give every item the accelerators of a key preset (P3-13c). The items stay (their marks, enabled state, and the
 /// Open Recent and Window entries are kept), only the key equivalents change: the same result as a new menu bar,
 /// without the flicker. Does nothing when the preset is the one the menu has. An unknown name is the default.
+///
+/// # Errors
+///
+/// When the windowing library cannot set the accelerator of an item.
 pub fn set_preset<R: Runtime>(app: &AppHandle<R>, name: &str) -> tauri::Result<()> {
     let preset = preset_or_default(name);
     if current_preset() == preset {
@@ -1361,6 +1398,11 @@ pub fn set_preset<R: Runtime>(app: &AppHandle<R>, name: &str) -> tauri::Result<(
 
 /// The Window menu: one check item per open project (the current one checked) before Minimize and Zoom.
 /// The entries are made again only when the projects or their names changed; the marks are set every time.
+///
+/// # Errors
+///
+/// When the windowing library cannot remove, add or mark a Window menu item. Nothing happens (and
+/// nothing fails) when the app has no menu or the Window submenu is missing.
 pub fn sync_window<R: Runtime>(app: &AppHandle<R>, entries: &[WindowEntry]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     let Some(sub) = find_submenu(&menu, WINDOW_ID) else {
@@ -1399,6 +1441,11 @@ pub fn sync_window<R: Runtime>(app: &AppHandle<R>, entries: &[WindowEntry]) -> t
 
 /// P3-18: Track > Follow Hits Of: one check item per other track of the project (the followed one checked).
 /// The entries are made again only when the tracks changed; the marks are set every time.
+///
+/// # Errors
+///
+/// When the windowing library cannot remove, add or mark a Follow Hits Of item. Nothing happens
+/// (and nothing fails) when the app has no menu or the submenu is missing.
 pub fn sync_follow<R: Runtime>(app: &AppHandle<R>, entries: &[FollowEntry]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     let Some(sub) = find_submenu(&menu, FOLLOW_ID) else {
@@ -1435,6 +1482,11 @@ pub fn sync_follow<R: Runtime>(app: &AppHandle<R>, entries: &[FollowEntry]) -> t
 
 /// #169: View > Zoom Presets: the own presets after Organize, one item per name. The first five carry Option+1 to
 /// Option+5. The entries are made again only when the names changed (or the submenu lost them).
+///
+/// # Errors
+///
+/// When the windowing library cannot remove or add a Zoom Presets item. Nothing happens (and
+/// nothing fails) when the app has no menu or the submenu is missing.
 pub fn sync_zoom_own<R: Runtime>(app: &AppHandle<R>, names: &[String]) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
     let Some(sub) = find_submenu(&menu, ZOOM_PRESETS_ID) else {

@@ -24,6 +24,7 @@ use crate::{Inner, Service};
 pub const DEFAULT_SECONDS: f64 = 120.0;
 
 /// `DRUMSPIKE_AUTOSAVE_SECONDS` as a duration: a positive number of seconds, else the default.
+#[must_use]
 pub fn interval_from(text: Option<&str>) -> Duration {
     let secs = text
         .and_then(|t| t.trim().parse::<f64>().ok())
@@ -33,6 +34,7 @@ pub fn interval_from(text: Option<&str>) -> Duration {
 }
 
 /// How often the thread looks at the projects: a quarter of the interval, 25 ms to 500 ms.
+#[must_use]
 pub fn tick_period(interval: Duration) -> Duration {
     (interval / 4).clamp(Duration::from_millis(25), Duration::from_millis(500))
 }
@@ -44,7 +46,7 @@ pub(crate) fn spawn(inner: &Arc<Inner>) {
         loop {
             let Some(inner) = weak.upgrade() else { break };
             let svc = Service { inner };
-            svc.autosave_tick(Instant::now());
+            let _ = svc.autosave_tick(Instant::now());
             let wait = tick_period(svc.autosave_interval());
             drop(svc);
             std::thread::sleep(wait);
@@ -55,6 +57,7 @@ pub(crate) fn spawn(inner: &Arc<Inner>) {
 impl Service {
     /// Autosave every dirty project whose interval has passed at `now` (the clock starts when
     /// the project becomes dirty and again after each autosave). Returns the files written.
+    #[must_use]
     pub fn autosave_tick(&self, now: Instant) -> Vec<PathBuf> {
         let interval = self.autosave_interval();
         let mut written = Vec::new();
