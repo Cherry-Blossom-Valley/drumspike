@@ -37,7 +37,7 @@ use crate::refine::first_motion_mid;
 pub const FLAM_RULE_VERSION: u32 = 1;
 
 /// The block length of the attack envelope (seconds); every block count of the rule is a time over this.
-pub const HOP_S: f64 = 0.000125;
+pub const HOP_S: f64 = 0.000_125;
 
 /// The parameters of the rule (the stage 1 choice `R9_m10`; `tools/flam_pairs.py` `DEFAULTS`).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -127,7 +127,7 @@ fn blocks(s: f64) -> i64 {
 
 /// The block length in samples at rate `sr`: `max(1, int(round(HOP_S * sr)))`.
 pub fn hop_of(sr: u32) -> usize {
-    py_round(HOP_S * sr as f64).max(1) as usize
+    py_round(HOP_S * f64::from(sr)).max(1) as usize
 }
 
 /// `x` through the biquad `stages` [(kind, corner Hz)], each twice forward and twice backward: zero phase, the power
@@ -135,11 +135,11 @@ pub fn hop_of(sr: u32) -> usize {
 pub fn zero_phase(x: &[f32], sr: u32, stages: &[(FilterKind, f64)]) -> Vec<f64> {
     let n = x.len();
     if stages.is_empty() {
-        return x.iter().map(|&v| v as f64).collect();
+        return x.iter().map(|&v| f64::from(v)).collect();
     }
-    let pad = py_int(0.25 * sr as f64).max(0) as usize;
+    let pad = py_int(0.25 * f64::from(sr)).max(0) as usize;
     let mut y: Vec<f64> = Vec::with_capacity(n + pad);
-    y.extend(x.iter().map(|&v| v as f64));
+    y.extend(x.iter().map(|&v| f64::from(v)));
     y.resize(n + pad, 0.0);
     let run = |y: &mut [f64], q: &Biquad, back: bool| {
         let (mut z0, mut z1) = (0.0f64, 0.0f64);
@@ -170,7 +170,7 @@ pub fn attack_env(x: &[f32], sr: u32, p: &FlamParams) -> (Vec<f64>, usize) {
     let y = if p.hp_hz != 0.0 {
         zero_phase(x, sr, &[(FilterKind::HighPass, p.hp_hz)])
     } else {
-        x.iter().map(|&v| v as f64).collect()
+        x.iter().map(|&v| f64::from(v)).collect()
     };
     let hop = hop_of(sr);
     let nb = y.len() / hop;
@@ -192,11 +192,11 @@ pub const LATE_SHARE_MIN: f64 = 0.4;
 /// Per hit (s) with a full 30 ms window and a first peak: the largest attack-envelope block in `[hit + peak_s, hit +
 /// 30 ms)` over the largest in `[hit, hit + peak_s)` (a ratio). `env`: the [`attack_env`]; `sr`, `hop`: rate and block.
 fn late_ratios(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamParams) -> Vec<f64> {
-    let r = sr as f64 / hop as f64;
+    let r = f64::from(sr) / hop as f64;
     let (f, e) = (py_int(p.peak_s * r).max(1), py_int(LATE_PEAK_END_S * r));
     hits.iter()
         .filter_map(|&t| {
-            let b = py_int(t * sr as f64).div_euclid(hop as i64);
+            let b = py_int(t * f64::from(sr)).div_euclid(hop as i64);
             if b < 0 || b + e >= env.len() as i64 {
                 return None;
             }
@@ -357,7 +357,7 @@ pub fn calibrate(env_a: &[f64], env_b: &[f64], peaks: &[usize], own: &[f64], rat
 /// `transfer_gains`): per source its gain, `None` without one (fewer than 5 strong hits). `own`: the own output hits
 /// (s); `sr`, `hop`: the rate and the block length. A source is compared over the common length.
 pub fn transfer_gains(env_a: &[f64], sources: &[&[f64]], own: &[f64], sr: u32, hop: usize) -> Vec<Option<f64>> {
-    let rate = sr as f64 / hop as f64;
+    let rate = f64::from(sr) / hop as f64;
     let mut own: Vec<f64> = own.to_vec();
     own.sort_by(f64::total_cmp);
     sources
@@ -382,7 +382,7 @@ pub fn second_onsets(
     gains: &[(&[f64], f64)],
 ) -> Vec<Second> {
     let hop = hop_of(sr) as i64;
-    let srf = sr as f64;
+    let srf = f64::from(sr);
     let mut times: Vec<f64> = hits.to_vec();
     times.sort_by(f64::total_cmp);
     let nb = env.len() as i64;

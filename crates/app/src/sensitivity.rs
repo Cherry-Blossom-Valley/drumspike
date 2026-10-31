@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn the_old_range_gives_the_same_thresholds_as_before() {
         for v in 0..=100 {
-            assert_eq!(thresholds_of(v as f64), old(v as f64), "v = {v}");
+            assert_eq!(thresholds_of(f64::from(v)), old(f64::from(v)), "v = {v}");
         }
         assert_eq!(thresholds_of(DEFAULT), BASE);
         assert_eq!(
@@ -140,7 +140,7 @@ mod tests {
         assert!(end.iter().all(|t| (FLOOR..0.02).contains(t)), "{end:?}");
         let mut last = thresholds_of(0.0);
         for v in 1..=150 {
-            let th = thresholds_of(v as f64);
+            let th = thresholds_of(f64::from(v));
             for k in 0..N_CLASSES {
                 assert!(th[k] < last[k], "v = {v}: {th:?} is not below {last:?}");
             }
@@ -158,8 +158,8 @@ mod tests {
     #[test]
     fn the_inverse_gives_the_slider_value_back() {
         for v in 0..=150 {
-            let back = sensitivity_of(&thresholds_of(v as f64));
-            assert!((back - v as f64).abs() < 1e-6, "v = {v}: {back}");
+            let back = sensitivity_of(&thresholds_of(f64::from(v)));
+            assert!((back - f64::from(v)).abs() < 1e-6, "v = {v}: {back}");
         }
         assert!((sensitivity_of(&BASE) - DEFAULT).abs() < 1e-12);
         // the readout of P3-14a divided the mean by 0.32 and showed 66 for the defaults; now 50

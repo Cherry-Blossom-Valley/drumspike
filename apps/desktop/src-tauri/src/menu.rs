@@ -1094,7 +1094,7 @@ fn track_menu<R: Runtime>(app: &AppHandle<R>, add_tracks: &MenuItem<R>) -> tauri
         .build()
 }
 
-/// The Window menu: the project list placeholder (sync_window) and the macOS window items.
+/// The Window menu: the project list placeholder (`sync_window`) and the macOS window items.
 fn window_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
     SubmenuBuilder::with_id(app, WINDOW_ID, "Window")
         .item(&no_projects(app)?)

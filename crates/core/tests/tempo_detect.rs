@@ -335,7 +335,7 @@ fn a_waltz_is_three_four_and_a_backbeat_is_four_four() {
 
 #[test]
 fn too_few_hits_and_bad_parameters_are_refused() {
-    let hits: Vec<Hit> = (0..5).map(|i| Hit::new(i as f64 * 0.5, Role::Kick)).collect();
+    let hits: Vec<Hit> = (0..5).map(|i| Hit::new(f64::from(i) * 0.5, Role::Kick)).collect();
     assert!(detect(&hits, &params()).unwrap_err().contains("at least 8"));
     let (hits, _) = build(&Train::default(), &[rock(8, 120.0)]);
     for bad in [
@@ -616,7 +616,7 @@ fn one_and_three(pickup: &str, crash: bool) -> (Vec<Hit>, f64, f64) {
     match pickup {
         "fill" => {
             for i in 0..8 {
-                hits.push(Hit::new(bar1 - 2.0 * beat + i as f64 * beat / 4.0, Role::Snare));
+                hits.push(Hit::new(bar1 - 2.0 * beat + f64::from(i) * beat / 4.0, Role::Snare));
             }
         }
         "groove" => {
@@ -626,10 +626,10 @@ fn one_and_three(pickup: &str, crash: bool) -> (Vec<Hit>, f64, f64) {
         _ => {}
     }
     for bar in 0..32 {
-        let t = bar1 + bar as f64 * 4.0 * beat;
+        let t = bar1 + f64::from(bar) * 4.0 * beat;
         for b in 0..4 {
             let role = if b % 2 == 0 { Role::Kick } else { Role::Snare };
-            hits.push(Hit::new(t + b as f64 * beat, role));
+            hits.push(Hit::new(t + f64::from(b) * beat, role));
         }
         if crash && bar % 4 == 0 {
             hits.push(Hit::new(t + 0.002, Role::Cymbal));

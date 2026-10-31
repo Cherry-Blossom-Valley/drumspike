@@ -125,7 +125,7 @@ impl Speed {
     /// Session seconds per second of playback: 1.0 or 0.5 (the value of the app's commands and
     /// messages).
     pub fn rate(self) -> f64 {
-        1.0 / self.slowdown() as f64
+        1.0 / f64::from(self.slowdown())
     }
 
     /// The speed of a playback rate of [`Speed::rate`] (1.0 or 0.5); `None` for another value.
@@ -1013,7 +1013,7 @@ impl Transport {
 
     /// The device frame of `seconds` (rounded; 0 for a negative time).
     pub fn frame_of(&self, seconds: f64) -> u64 {
-        (seconds.max(0.0) * self.ctl.device_rate as f64).round() as u64
+        (seconds.max(0.0) * f64::from(self.ctl.device_rate)).round() as u64
     }
 
     /// Mute and solo (`audible()` of `app.js`), applied at the next callback.

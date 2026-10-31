@@ -119,10 +119,10 @@ fn synth(n: usize, seed: u64) -> Vec<f32> {
             ((s >> 33) as f32 / (1u64 << 31) as f32 - 0.5) * 0.002
         })
         .collect();
-    let hit_len = (0.25 * SR as f64) as usize;
+    let hit_len = (0.25 * f64::from(SR)) as usize;
     let mut k = 0usize;
     loop {
-        let start = ((k as f64 + 0.1) * HIT_EVERY_S * SR as f64) as usize + (seed as usize % 7);
+        let start = ((k as f64 + 0.1) * HIT_EVERY_S * f64::from(SR)) as usize + (seed as usize % 7);
         if start >= n {
             break;
         }
@@ -141,11 +141,11 @@ fn onsets(n: usize, seed: u64) -> Vec<f64> {
     let mut out = Vec::new();
     let mut k = 0usize;
     loop {
-        let start = ((k as f64 + 0.1) * HIT_EVERY_S * SR as f64) as usize + (seed as usize % 7);
+        let start = ((k as f64 + 0.1) * HIT_EVERY_S * f64::from(SR)) as usize + (seed as usize % 7);
         if start >= n {
             break;
         }
-        out.push(start as f64 / SR as f64 + 0.004);
+        out.push(start as f64 / f64::from(SR) + 0.004);
         k += 1;
     }
     out
@@ -245,7 +245,7 @@ fn time<T>(runs: usize, mut f: impl FnMut() -> T) -> (f64, f64) {
 
 fn run() -> Result<(), String> {
     let a = parse_args()?;
-    let n = (a.seconds * SR as f64) as usize;
+    let n = (a.seconds * f64::from(SR)) as usize;
     let dir = a
         .dir
         .clone()

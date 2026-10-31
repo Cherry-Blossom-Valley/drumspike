@@ -101,12 +101,12 @@ impl Sampler {
 
     /// The offset in samples of a track at `sr`.
     pub fn offset_at(&self, sr: u32) -> f64 {
-        self.offset_samples * sr as f64 / self.sr as f64
+        self.offset_samples * f64::from(sr) / f64::from(self.sr)
     }
 
     /// The offset in milliseconds.
     pub fn offset_ms(&self) -> f64 {
-        self.offset_samples / self.sr as f64 * 1000.0
+        self.offset_samples / f64::from(self.sr) * 1000.0
     }
 }
 
@@ -177,7 +177,7 @@ pub fn midi_events_shifted(events: &[Value], shift: Option<&Shift>) -> Result<Mi
         clamped += usize::from(c);
     }
     let info = ShiftInfo {
-        offset_ms: s.offset / s.sr as f64 * 1000.0,
+        offset_ms: s.offset / f64::from(s.sr) * 1000.0,
         aligned: s.aligned,
         notes: ev.len(),
         clamped,
@@ -215,7 +215,7 @@ impl Service {
                 .collect();
             if let Ok(al) = self.layer_alignment(sid, name, &job, &hits) {
                 let sign = al.sign_for(job.layer.polarity);
-                let scale = sr as f64 / al.sr as f64;
+                let scale = f64::from(sr) / f64::from(al.sr);
                 for (l, x) in lags.iter_mut().zip(&al.hits) {
                     // an edge or low-match lag is not applied by the render, nor by the MIDI file
                     *l = x.map_or(0.0, |x| applied_lag(&x, sign) * scale);
@@ -338,7 +338,7 @@ impl Service {
         {
             let at = shot.resampled(d.sr).mono();
             let onset = one_shot_onset(&at, d.sr);
-            let idx: Vec<i64> = hits.iter().map(|t| py_round(t * d.sr as f64)).collect();
+            let idx: Vec<i64> = hits.iter().map(|t| py_round(t * f64::from(d.sr))).collect();
             polarity = bounce_polarity(&at, onset, &d.samples, &idx, d.sr, &AlignParams::default());
         }
         let s = Sampler {

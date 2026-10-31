@@ -526,7 +526,7 @@ fn rule_marks(
         .map(|(m, d)| TomMic {
             drum: m.drum.clone().expect("checked above"),
             signal: &d.samples,
-            hits: m.times.iter().map(|t| (t * sr as f64).round() as i64).collect(),
+            hits: m.times.iter().map(|t| (t * f64::from(sr)).round() as i64).collect(),
         })
         .collect();
     // version 2: a source that cannot be read or has another rate is left out
@@ -543,7 +543,7 @@ fn rule_marks(
         .map(|(m, d)| SourceMic {
             kind: m.kind.expect("a source"),
             signal: &d.samples,
-            hits: m.times.iter().map(|t| (t * sr as f64).round() as i64).collect(),
+            hits: m.times.iter().map(|t| (t * f64::from(sr)).round() as i64).collect(),
         })
         .collect();
     used.extend(src_dec.iter().map(|(m, _)| m.name.clone()));

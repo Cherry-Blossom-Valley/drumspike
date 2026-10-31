@@ -32,7 +32,7 @@ fn typed_fields_and_unknown_keys_survive_a_round_trip() {
     assert_eq!(ev[0].t, 0.1 + 0.2);
     assert_eq!(ev[1].t, 1.0 / 3.0);
     assert_eq!(ev[1].added, Some(true));
-    assert_eq!(ev[2].orig, Some(2.6749791666666667));
+    assert_eq!(ev[2].orig, Some(2.674_979_166_666_666_7));
     assert_eq!(ev[2].edited, Some(true));
     assert_eq!(ev[2].rise_db, Some(7.25));
     assert_eq!(ev[2].id, Some(Value::from("l4")));

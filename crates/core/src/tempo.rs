@@ -326,7 +326,7 @@ impl TickMap {
             if tick <= last.tick {
                 let last_mut = tm.segs.last_mut().expect("one segment");
                 last_mut.us = us; // the last event at a tick wins
-                last_mut.exact_us = us as f64;
+                last_mut.exact_us = f64::from(us);
                 continue;
             }
             let start_s = tm.time(tick);
@@ -334,7 +334,7 @@ impl TickMap {
                 tick,
                 start_s,
                 us,
-                exact_us: us as f64,
+                exact_us: f64::from(us),
             });
         }
         tm
@@ -353,7 +353,7 @@ impl TickMap {
     /// Time in seconds of a tick.
     pub fn time(&self, tick: i64) -> f64 {
         let s = self.seg_at_tick(tick);
-        s.start_s + (tick - s.tick) as f64 * s.exact_us / (self.ppq as f64 * 1e6)
+        s.start_s + (tick - s.tick) as f64 * s.exact_us / (f64::from(self.ppq) * 1e6)
     }
 
     /// The tick nearest to a time (ties to even); 0 for a time at or before 0.
@@ -363,13 +363,13 @@ impl TickMap {
         }
         let i = self.segs.partition_point(|s| s.start_s <= t);
         let s = &self.segs[i.saturating_sub(1)];
-        s.tick + py_round((t - s.start_s) * (self.ppq as f64 * 1e6) / s.exact_us)
+        s.tick + py_round((t - s.start_s) * (f64::from(self.ppq) * 1e6) / s.exact_us)
     }
 
     /// Ticks of a bar of `num/den`: `ppq * 4 * num / den`; `None` when that is not a whole number.
     pub fn bar_ticks(&self, num: u8, den: u8) -> Option<i64> {
-        let x = self.ppq as i64 * 4 * num as i64;
-        (x % den as i64 == 0).then_some(x / den as i64)
+        let x = i64::from(self.ppq) * 4 * i64::from(num);
+        (x % i64::from(den) == 0).then_some(x / i64::from(den))
     }
 
     /// The tick of bar 1 for a map: `bar1_s` as a tick.
@@ -389,7 +389,7 @@ impl TickMap {
                     cur.0, cur.1, self.ppq
                 )
             })?;
-            tick += (c.bar - bar) as i64 * len;
+            tick += i64::from(c.bar - bar) * len;
             bar = c.bar;
             cur = (c.num, c.den);
             out.push((tick, c.num, c.den));
@@ -430,12 +430,12 @@ pub fn import_midi(bytes: &[u8]) -> Result<Imported, String> {
     for track in &smf.tracks {
         let mut tick = 0i64;
         for e in track {
-            tick += e.delta.as_int() as i64;
+            tick += i64::from(e.delta.as_int());
             if let TrackEventKind::Meta(m) = &e.kind {
                 match m {
                     MetaMessage::Tempo(us) => tempos.push((tick, us.as_int())),
                     MetaMessage::TimeSignature(n, dp, _, _) => {
-                        let den = 1u32.checked_shl(*dp as u32).filter(|d| *d <= 64);
+                        let den = 1u32.checked_shl(u32::from(*dp)).filter(|d| *d <= 64);
                         match den {
                             Some(d) if valid_meter(*n, d as u8) => sigs.push((tick, *n, d as u8)),
                             _ => return Err(format!("time signature {n}/2^{dp} is not supported")),
@@ -453,7 +453,7 @@ pub fn import_midi(bytes: &[u8]) -> Result<Imported, String> {
     sigs.sort_by_key(|e| e.0);
     let (n_tempo, n_sig) = (tempos.len(), sigs.len());
     for &(_, us) in &tempos {
-        let bpm = 6e7 / us.max(1) as f64;
+        let bpm = 6e7 / f64::from(us.max(1));
         if !(BPM_RANGE.0..=BPM_RANGE.1).contains(&bpm) {
             return Err(format!(
                 "a tempo of {us} microseconds per quarter is outside {} to {} BPM",
@@ -463,11 +463,11 @@ pub fn import_midi(bytes: &[u8]) -> Result<Imported, String> {
     }
     let tm = TickMap::from_events(ppq, &tempos);
     let mut map = TempoMap {
-        bpm: 6e7 / tm.segs[0].us as f64,
+        bpm: 6e7 / f64::from(tm.segs[0].us),
         ..TempoMap::default()
     };
     for s in &tm.segs[1..] {
-        let bpm = 6e7 / s.us as f64;
+        let bpm = 6e7 / f64::from(s.us);
         let prev = map.steps.last().map_or(map.bpm, |p| p.bpm);
         if bpm != prev {
             map.steps.push(TempoStep { t: s.start_s, bpm });
