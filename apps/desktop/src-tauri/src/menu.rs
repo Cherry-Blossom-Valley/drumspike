@@ -451,6 +451,7 @@ pub struct KeyCommand {
 impl KeyCommand {
     /// The menu accelerator of the command in a preset (P3-13c): in `cubase` the first key of the row's list with
     /// Cmd, Control or Option (the other keys are page keys), else the row's `menu_key`; `None` without a menu item.
+    #[must_use]
     pub fn menu_key_in(&self, preset: &str) -> Option<String> {
         self.menu.as_ref()?;
         match (&self.cubase, preset) {
@@ -460,6 +461,7 @@ impl KeyCommand {
     }
 
     /// The keys of the command in a preset: `default` (the menu key, then the page keys) or `cubase`.
+    #[must_use]
     pub fn keys(&self, preset: &str) -> Vec<String> {
         match (&self.cubase, preset) {
             (Some(c), "cubase") => c.clone(),
@@ -517,6 +519,7 @@ pub fn parse_keymap(src: &str) -> Result<Vec<KeyCommand>, String> {
 /// A key of the table split into its modifiers and its key (`Shift+Cmd+S`: `["Shift", "Cmd"]`, `S`), or `None`
 /// when it is not in the table's notation (unknown key, modifiers out of the order Control, Option, Shift, Cmd,
 /// Shift on a character key).
+#[must_use]
 pub fn parse_key(s: &str) -> Option<(Vec<&str>, &str)> {
     let mut parts: Vec<&str> = s.split('+').collect();
     let key = parts.pop()?;
@@ -536,6 +539,7 @@ pub fn parse_key(s: &str) -> Option<(Vec<&str>, &str)> {
 }
 
 /// The key has Cmd, Control or Option: it can be a menu accelerator (a text field does not need it).
+#[must_use]
 pub fn has_menu_modifier(key: &str) -> bool {
     parse_key(key).is_some_and(|(mods, _)| mods.iter().any(|m| *m != "Shift"))
 }
@@ -543,6 +547,7 @@ pub fn has_menu_modifier(key: &str) -> bool {
 /// A key of the table in the Tauri accelerator notation: `Shift+Cmd+S` is `CmdOrCtrl+Shift+S`, `Option+Return` is
 /// `Alt+Enter` (modifier order Ctrl, `CmdOrCtrl`, Alt, Shift, as the menu had them in P3-13a). `None` when the key is
 /// not in the table's notation.
+#[must_use]
 pub fn tauri_accel(key: &str) -> Option<String> {
     let (mods, k) = parse_key(key)?;
     let mut out: Vec<&str> = [
@@ -573,6 +578,7 @@ pub fn tauri_accel(key: &str) -> Option<String> {
 /// Everything wrong with a key table: an id twice, a menu key without Cmd, Control or Option or without a menu
 /// item, a key not in the notation, a key in two commands (in the default and in the Cubase preset). Empty when the
 /// table is good. `DSKeys.problems` in `static/keymap.js` makes the same checks in the page.
+#[must_use]
 pub fn keymap_problems(rows: &[KeyCommand]) -> Vec<String> {
     let mut out = Vec::new();
     let mut ids = std::collections::HashSet::new();
@@ -619,17 +625,20 @@ static KEYMAP: LazyLock<Vec<KeyCommand>> = LazyLock::new(|| {
 });
 
 /// The key table of this build (`static/keymap.js`). Empty when the file does not parse (a test makes sure it does).
+#[must_use]
 pub fn keymap() -> &'static [KeyCommand] {
     &KEYMAP
 }
 
 /// The row of the menu item `id`.
+#[must_use]
 pub fn key_row(id: &str) -> Option<&'static KeyCommand> {
     keymap().iter().find(|c| c.menu.as_deref() == Some(id))
 }
 
 /// The accelerator of the menu item `id` in the Tauri notation: the `menu_key` of its row in the key table.
 /// `build` sets exactly this; there is no other source of menu keys.
+#[must_use]
 pub fn accel_of(id: &str, preset: &str) -> Option<String> {
     key_row(id)
         .and_then(|c| c.menu_key_in(preset))
@@ -640,6 +649,7 @@ pub fn accel_of(id: &str, preset: &str) -> Option<String> {
 pub const PRESETS: [&str; 2] = ["default", "cubase"];
 
 /// `name` when it is a preset, else the default one (a damaged setting never leaves the menu without keys).
+#[must_use]
 pub fn preset_or_default(name: &str) -> &'static str {
     PRESETS.iter().copied().find(|p| *p == name).unwrap_or("default")
 }
@@ -648,6 +658,7 @@ pub fn preset_or_default(name: &str) -> &'static str {
 static PRESET: Mutex<&'static str> = Mutex::new("default");
 
 /// The preset of the accelerators that the live menu has now.
+#[must_use]
 pub fn current_preset() -> &'static str {
     *lock(&PRESET)
 }
@@ -776,6 +787,7 @@ pub fn check_states(state: &Value) -> Vec<(&'static str, bool)> {
 
 /// The Window menu's entries from the service's project list (`project_list` shape `ids`: `{id, name}`, in the
 /// order of opening) and the page's current project.
+#[must_use]
 pub fn window_entries(list: &Value, current: Option<&str>) -> Vec<WindowEntry> {
     list.as_array()
         .map(|rows| {
@@ -1151,6 +1163,7 @@ fn entry_no(id: &str, prefix: &str) -> Option<usize> {
 
 /// An id of this menu: a custom item, an Open Recent entry, the Clear Recent item or a Window menu
 /// project entry.
+#[must_use]
 pub fn is_known(id: &str) -> bool {
     SPEC.iter().any(|i| i.id == id)
         || id == RECENT_CLEAR_ID
@@ -1250,6 +1263,7 @@ fn set_enabled<R: Runtime>(menu: &Menu<R>, id: &str, on: bool) -> tauri::Result<
 }
 
 /// P4-40a: the text of Edit > Undo or Redo: the page's text (one line, at most 90 characters), the plain label for an empty one.
+#[must_use]
 pub fn step_title(label: &str, page: &str) -> String {
     let one: String = page.split_whitespace().collect::<Vec<_>>().join(" ");
     if one.is_empty() {

@@ -52,11 +52,13 @@ pub enum Output {
 
 impl Output {
     /// `DRUMSPIKE_AUDIO=null` selects the null device, anything else the default device.
+    #[must_use]
     pub fn from_env() -> Output {
         Output::from_value(std::env::var("DRUMSPIKE_AUDIO").ok().as_deref())
     }
 
     /// The choice for one value of `DRUMSPIKE_AUDIO` (see [`Output::from_env`]).
+    #[must_use]
     pub fn from_value(v: Option<&str>) -> Output {
         match v {
             Some(s) if s.eq_ignore_ascii_case("null") => Output::Null { sample_rate: None },
@@ -68,6 +70,7 @@ impl Output {
 /// The output for a saved choice (`None`: the system default) when the devices `available`
 /// are connected: the named device when it is in the list, else the system default and the
 /// text that says so (P3-16: a missing saved device falls back with a message).
+#[must_use]
 pub fn resolve_choice(choice: Option<&str>, available: &[String]) -> (Output, Option<String>) {
     match choice {
         None => (Output::Default, None),
@@ -103,6 +106,7 @@ fn no_answer(name: &str) -> TransportError {
 }
 
 /// Whether a worker thread of device `name` is still blocked in `CoreAudio`.
+#[must_use]
 pub fn is_blocked(name: &str) -> bool {
     blocked().contains(name)
 }
@@ -281,6 +285,7 @@ pub enum ErrorClass {
 }
 
 /// Sort a cpal error kind into [`ErrorClass`].
+#[must_use]
 pub fn classify_error(kind: cpal::ErrorKind) -> ErrorClass {
     use cpal::ErrorKind as K;
     match kind {

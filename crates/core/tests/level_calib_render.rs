@@ -30,6 +30,7 @@ pub enum Voice {
 }
 
 impl Voice {
+    #[must_use]
     pub fn len_s(self) -> f64 {
         match self {
             Voice::AcousticKick => 0.4,
@@ -54,6 +55,7 @@ impl Voice {
     }
 }
 
+#[must_use]
 pub fn render(role: &str, peak_db: f64) -> Vec<f32> {
     let voice = if role == "kick" {
         Voice::AcousticKick
@@ -87,6 +89,7 @@ pub fn render(role: &str, peak_db: f64) -> Vec<f32> {
 }
 
 #[allow(dead_code)]
+#[must_use]
 pub fn role_bands(role: &str) -> std::ops::Range<usize> {
     let (lo, hi) = match role {
         "kick" => (20.0, 4_000.0),

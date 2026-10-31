@@ -269,7 +269,7 @@ fn with_sid(v: Value, sid: &str) -> Value {
 fn main() -> ExitCode {
     // P3-15b: built with `--features trace` and started with `DRUMSPIKE_TRACE=<file.json>`, the
     // tool records the job stages (`analyze:decode`, `analyze:prepare`, `analyze:detect`).
-    drumspike_app::trace::init_from_env(0.0);
+    let _ = drumspike_app::trace::init_from_env(0.0);
     let args: Vec<String> = std::env::args().skip(1).collect();
     // P4-5: `service_tool cli ...` and `service_tool mcp` are the command-line tool and the MCP server of the app
     // (the same engine; the app binary carries them as `drumspike-desktop cli` and `drumspike-desktop mcp`)

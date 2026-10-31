@@ -145,6 +145,7 @@ impl Service {
     }
 
     /// The job of [`Service::peaks_build_start`].
+    #[must_use]
     pub fn peaks_build_status(&self, sid: &str) -> Value {
         self.inner.life.lanes.status(sid)
     }

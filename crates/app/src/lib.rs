@@ -113,6 +113,7 @@ pub struct ServiceConfig {
 
 impl ServiceConfig {
     /// The refinement pin from `DRUMSPIKE_REFINE_RULE` ([`jobs::parse_rule`]).
+    #[must_use]
     pub fn from_env(_models_dir: &Path) -> ServiceConfig {
         ServiceConfig {
             refine_rule: std::env::var("DRUMSPIKE_REFINE_RULE")
@@ -158,6 +159,7 @@ pub struct Service {
 
 impl Service {
     /// A service with no open project.
+    #[must_use]
     pub fn new(config: ServiceConfig) -> Service {
         let inner = Arc::new(Inner {
             config,
@@ -182,16 +184,19 @@ impl Service {
     }
 
     /// The lock client name, when locking is on.
+    #[must_use]
     pub fn lock_client(&self) -> Option<String> {
         registry::lock(&self.inner.lock_client).clone()
     }
 
     /// The configuration.
+    #[must_use]
     pub fn config(&self) -> &ServiceConfig {
         &self.inner.config
     }
 
     /// The analysis jobs and the re-pick stores (P4-3 fix round: the tests mark a store).
+    #[must_use]
     pub fn jobs(&self) -> &jobs::Jobs {
         &self.inner.jobs
     }

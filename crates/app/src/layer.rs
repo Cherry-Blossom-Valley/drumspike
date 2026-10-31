@@ -91,6 +91,7 @@ pub enum Polarity {
 
 impl Polarity {
     /// The name in the document.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Polarity::Normal => "normal",
@@ -100,6 +101,7 @@ impl Polarity {
     }
 
     /// The polarity of a name; `None` for another text.
+    #[must_use]
     pub fn parse(s: &str) -> Option<Polarity> {
         match s {
             "normal" => Some(Polarity::Normal),
@@ -165,6 +167,7 @@ impl Layer {
     }
 
     /// The JSON object of the layer.
+    #[must_use]
     pub fn to_json(&self) -> Value {
         json!({
             "source": serde_json::to_value(&self.source).unwrap_or(Value::Null),
@@ -182,16 +185,19 @@ impl Layer {
     }
 
     /// The onset the layer uses: the override, else the measured one (P4-40e).
+    #[must_use]
     pub fn onset_eff(&self) -> usize {
         self.onset_set.unwrap_or(self.onset)
     }
 
     /// The onset in seconds (of the effective onset, P4-40e).
+    #[must_use]
     pub fn onset_s(&self) -> f64 {
         self.onset_eff() as f64 / f64::from(self.sr)
     }
 
     /// The onset at `sr` in whole samples (the one-shot resampled to `sr` keeps it there).
+    #[must_use]
     pub fn onset_at(&self, sr: u32) -> usize {
         self.onset_at_of(self.onset_eff(), sr)
     }
@@ -207,11 +213,13 @@ impl Layer {
 
     /// The onset at `sr` in samples, not rounded: the render places the one-shot resampled to `sr`
     /// with its attack at this fractional sample (P4-7a fix 7).
+    #[must_use]
     pub fn onset_exact_at(&self, sr: u32) -> f64 {
         self.onset_eff() as f64 * f64::from(sr) / f64::from(self.sr)
     }
 
     /// The gain of a hit with velocity `v` and polarity `sign` (+1 or -1).
+    #[must_use]
     pub fn gain(&self, v: i64, sign: i8) -> f32 {
         let level = 10f64.powf(self.level_db.clamp(LEVEL_MIN_DB, LEVEL_MAX_DB) / 20.0);
         (f64::from(sign) * level * self.curve.gain(v)) as f32
@@ -395,6 +403,7 @@ fn align_key(file: &Path, layer: &Layer, mic: &Path, p: &AlignParams) -> String 
 /// lag of the signed correlation for that sign (the search maximises the correlation of the one-shot as it
 /// plays, not its absolute value), 0 when it sits on the search edge (the true lag may be outside the window). A
 /// lag with a low match ([`UNCERTAIN_MATCH`]) is applied and only flagged uncertain.
+#[must_use]
 pub fn applied_lag(x: &HitXcorr, sign: i8) -> f64 {
     let (lag, _, edge) = x.for_sign_edge(sign);
     if edge { 0.0 } else { lag }
@@ -413,6 +422,7 @@ pub struct Alignment {
 
 impl Alignment {
     /// The sign the layer uses: its polarity, or the majority for `auto`.
+    #[must_use]
     pub fn sign_for(&self, p: Polarity) -> i8 {
         match p {
             Polarity::Normal => 1,
@@ -989,6 +999,7 @@ impl Service {
 
 /// The `bext` chunk of a layer file: the source's time reference, date, time and originator, the
 /// layer's description and coding history.
+#[must_use]
 pub fn layer_bext(source: &Bext, sr: u32, channels: usize) -> Bext {
     Bext {
         description: BEXT_DESCRIPTION.to_string(),
@@ -1029,6 +1040,7 @@ fn get_json(job: Option<&LayerJob>) -> Value {
 
 /// Run a command of the layer for the bridge, the command line and the MCP server; `None` when `cmd`
 /// is not one of them.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !LAYER_COMMANDS.contains(&cmd) {
         return None;

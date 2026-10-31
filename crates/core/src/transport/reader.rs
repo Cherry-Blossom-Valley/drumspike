@@ -324,26 +324,31 @@ impl TrackSource {
     }
 
     /// P3-20b: the rate of the frames [`TrackSource::fill`] gives (the device rate at normal speed).
+    #[must_use]
     pub fn out_rate(&self) -> u32 {
         self.out_rate
     }
 
     /// The track's own sample rate.
+    #[must_use]
     pub fn track_rate(&self) -> u32 {
         self.track_rate
     }
 
     /// Track length in device frames (rounded up).
+    #[must_use]
     pub fn device_frames(&self) -> u64 {
         (self.info.n_frames as u64 * u64::from(self.device_rate)).div_ceil(u64::from(self.track_rate))
     }
 
     /// Channels the source puts in its ring per frame: 2 for a stereo file, else 1.
+    #[must_use]
     pub fn channels(&self) -> usize {
         self.chans
     }
 
     /// Whether this track is resampled.
+    #[must_use]
     pub fn resampled(&self) -> bool {
         self.rs.is_some()
     }
@@ -417,6 +422,7 @@ impl TrackSource {
     }
 
     /// Positioned reads so far ([`Residency::Pread`]; 0 for a mapped source).
+    #[must_use]
     pub fn reads(&self) -> u64 {
         match &self.bytes {
             Bytes::File { reads, .. } => *reads,
@@ -624,7 +630,7 @@ impl Reader {
     /// user-interactive. When no ring needs data it parks for [`IDLE_SLEEP`], during a seek
     /// handshake for [`SEEK_SLEEP`]; `Transport::seek` and the drop of the transport unpark it.
     pub(crate) fn run(mut self) {
-        set_reader_qos();
+        let _ = set_reader_qos();
         while !self.shared.stop.load(Ordering::Acquire) {
             if !self.step() {
                 std::thread::park_timeout(if self.waiting { SEEK_SLEEP } else { IDLE_SLEEP });
@@ -636,6 +642,7 @@ impl Reader {
 /// Ask the system to run the calling thread at `QoS` user-interactive (the reader thread,
 /// P3-15a); macOS then keeps it on a performance core under load. Returns whether the call
 /// succeeded (always false outside macOS).
+#[must_use]
 pub fn set_reader_qos() -> bool {
     #[cfg(target_os = "macos")]
     {

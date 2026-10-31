@@ -72,6 +72,7 @@ pub struct Installed {
 
 impl Installed {
     /// The SHA-256 of the licence text, hex (the project record of section 6).
+    #[must_use]
     pub fn licence_sha256(&self) -> String {
         use sha2::{Digest, Sha256};
         let hash = Sha256::digest(self.licence_text.as_bytes());
@@ -79,6 +80,7 @@ impl Installed {
     }
 
     /// True when the manifest lists this role.
+    #[must_use]
     pub fn supports_role(&self, role: &str) -> bool {
         self.manifest.roles.iter().any(|r| r == role)
     }
@@ -86,6 +88,7 @@ impl Installed {
     /// The rate the app passes: the file's own rate when the plugin lists it, else the first
     /// listed rate when the app can resample to it (48 or 96 kHz source to 44.1 kHz),
     /// else `None` (the track fails with a readable error).
+    #[must_use]
     pub fn pass_rate(&self, sr: u32) -> Option<u32> {
         if self.manifest.sample_rates.contains(&sr) {
             return Some(sr);
@@ -98,6 +101,7 @@ impl Installed {
     }
 
     /// The free-form params of the request: the track's params without the app's own keys.
+    #[must_use]
     pub fn request_params(params: &serde_json::Map<String, Value>) -> Value {
         const RESERVED: [&str; 14] = [
             "detector",
@@ -224,6 +228,7 @@ pub fn load_one(folder: &Path) -> Result<Installed, String> {
 
 /// The Detectors folder: `$DRUMSPIKE_DETECTORS_DIR`, else
 /// `~/Library/Application Support/Drum Spike/Detectors`.
+#[must_use]
 pub fn detectors_dir() -> PathBuf {
     if let Ok(d) = std::env::var(DETECTORS_DIR_ENV)
         && !d.is_empty()
@@ -268,6 +273,7 @@ pub fn list() -> Vec<Installed> {
 
 /// One installed plugin by id; `None` when it is not installed (an invalid manifest counts
 /// as missing: the plugin is invisible).
+#[must_use]
 pub fn find(id: &str) -> Option<Installed> {
     list().into_iter().find(|i| i.manifest.id == id)
 }
@@ -363,6 +369,7 @@ fn plugin_accept(svc: &crate::Service, args: &Value) -> Result<Value, AppError> 
 }
 
 /// The dispatcher of the plug-in commands (`None` for a name this module does not run).
+#[must_use]
 pub fn dispatch(svc: &crate::Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     match cmd {
         "plugins_list" => Some(plugins_list(svc, args)),

@@ -55,6 +55,7 @@ impl EmitterSlot {
     }
 
     /// The emitter, when one is set.
+    #[must_use]
     pub fn get(&self) -> Option<Emitter> {
         lock(&self.0).clone()
     }
@@ -127,6 +128,7 @@ pub struct OpenProject {
 
 impl OpenProject {
     /// A project with every source resolved.
+    #[must_use]
     pub fn new(sid: String, project: Project) -> OpenProject {
         let saved_doc = project.doc.clone();
         let disk = DiskStamp::of(&project.path());
@@ -152,6 +154,7 @@ impl OpenProject {
 
     /// #121: the stamp of the document file now, when it is not the one this process read or wrote last. A missing
     /// file is no change (a save writes it again and loses nothing).
+    #[must_use]
     pub fn disk_change(&self) -> Option<DiskStamp> {
         DiskStamp::of(&self.project.path()).filter(|now| Some(*now) != self.disk)
     }
@@ -217,6 +220,7 @@ impl OpenProject {
     }
 
     /// The folder and the source record of every track (what [`OpenProject::resolve`] reads).
+    #[must_use]
     pub fn records(&self) -> (PathBuf, Vec<(String, Option<Source>)>) {
         let recs = self
             .project
@@ -228,11 +232,13 @@ impl OpenProject {
     }
 
     /// True unless the source was found with the recorded size and head hash.
+    #[must_use]
     pub fn offline(&self, name: &str) -> bool {
         self.status.get(name) != Some(&SourceStatus::Ok)
     }
 
     /// The status text of a track (`missing` for an unknown name, like the server).
+    #[must_use]
     pub fn status_str(&self, name: &str) -> &'static str {
         self.status.get(name).map_or("missing", |s| s.as_str())
     }
@@ -384,6 +390,7 @@ impl OpenProject {
 
     /// `OpenProject.summary`: what `project_open` and `project_get` answer. P3-15c: the
     /// document keys come from a copy without tracks (see [`doc_head_value`]).
+    #[must_use]
     pub fn summary(&self) -> Value {
         let doc = &self.project.doc;
         let dv = doc_head_value(doc);
@@ -502,6 +509,7 @@ pub fn track_object_light(tr: &Track) -> Result<Map<String, Value>, AppError> {
 
 /// The document as JSON without `tracks`, `order` and `view`: the keys `format`, `name`,
 /// `created`, `modified`, `settings` and the unknown ones, as the full document writes them.
+#[must_use]
 pub fn doc_head_value(doc: &Document) -> Value {
     let Document {
         format,
@@ -563,6 +571,7 @@ pub struct Registry {
 
 impl Registry {
     /// An empty registry.
+    #[must_use]
     pub fn new() -> Registry {
         Registry::default()
     }

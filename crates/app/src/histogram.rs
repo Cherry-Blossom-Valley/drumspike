@@ -57,6 +57,7 @@ pub fn cut_of(params: Option<&Map<String, Value>>) -> Option<f64> {
 /// True for an event out of the output: the loudness cut marked it (`"cut": true`), the tom
 /// bleed rule (`"bleed": true`, [`crate::tom_bleed`]) or the old Learn filter (`"filtered"`, #281 D16).
 /// R16 (#40): the one predicate is [`crate::policy::event_out`].
+#[must_use]
 pub fn event_cut(e: &Event) -> bool {
     crate::policy::event_out(e)
 }
@@ -113,6 +114,7 @@ pub const HISTOGRAM_COMMANDS: [&str; 4] = [
 ];
 
 /// The model classes (0 to 4) a role keeps: the classes whose note is in [`role_classes`].
+#[must_use]
 pub fn role_class_indices(role: &str) -> Vec<usize> {
     let notes = role_classes(role);
     (0..N_CLASSES).filter(|&c| notes.contains(&CLASS_NOTES[c])).collect()
@@ -121,6 +123,7 @@ pub fn role_class_indices(role: &str) -> Vec<usize> {
 /// The first whole slider value at which a candidate of class `c` with the margin `strength`
 /// passes its threshold (the thresholds fall as the slider rises); [`sensitivity::MAX`] when
 /// none does (a margin below the floor by the `f32` rounding).
+#[must_use]
 pub fn slider_value_of(strength: f32, c: usize, table: &[[f32; N_CLASSES]]) -> usize {
     table.partition_point(|th| th[c] > strength).min(table.len() - 1)
 }
@@ -128,6 +131,7 @@ pub fn slider_value_of(strength: f32, c: usize, table: &[[f32; N_CLASSES]]) -> u
 /// The widest run of whole slider values without a candidate between the lowest and the
 /// highest value that has one (DRT: "mind the gap"): `{from, to, mid}` (the empty values
 /// `from..=to`, `mid` the whole value in the middle), or `None` without an inner gap.
+#[must_use]
 pub fn largest_gap(values: &[usize]) -> Option<Value> {
     let mut v: Vec<usize> = values.to_vec();
     v.sort_unstable();
@@ -141,6 +145,7 @@ pub fn largest_gap(values: &[usize]) -> Option<Value> {
     }
     best.map(|(a, b)| json!({"from": a, "to": b, "mid": (a + b) / 2}))
 }
+#[must_use]
 pub fn dsp_detection_candidates(
     cands: &[drumspike_core::detect::onset::Candidate],
     params: &drumspike_core::detect::onset::OnsetParams,
@@ -821,6 +826,7 @@ fn arg_f64(args: &Value, key: &str) -> Result<f64, AppError> {
 
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them. The
 /// argument names are those of the Tauri wrappers.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     let events = || args.get("events").and_then(Value::as_array).map(Vec::as_slice);
     let run = || -> Result<Value, AppError> {

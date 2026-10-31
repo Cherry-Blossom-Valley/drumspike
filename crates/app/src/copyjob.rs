@@ -719,6 +719,7 @@ impl Service {
     }
 
     /// `job_status {sid}`: the state of the running job or of the last one.
+    #[must_use]
     pub fn job_status(&self, sid: &str) -> Value {
         self.inner.copyjobs.status(sid)
     }
@@ -729,6 +730,7 @@ impl Service {
     /// running analysis of the project is asked to stop instead (answer `{sid, cancelling:
     /// true, kind: "analyze"}`); it ends after the track in its model step, and the tracks that
     /// did not run get the error `analysis cancelled`.
+    #[must_use]
     pub fn job_cancel(&self, sid: &str) -> Value {
         let v = self.inner.copyjobs.cancel(sid);
         if v["cancelling"] == true {

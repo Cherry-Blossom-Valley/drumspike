@@ -282,6 +282,7 @@ pub async fn peaks_build_start(
 }
 
 #[tauri::command]
+#[must_use]
 pub fn peaks_build_status(svc: State<'_, Service>, sid: String) -> Value {
     svc.peaks_build_status(&sid)
 }

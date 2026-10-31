@@ -75,6 +75,7 @@ pub struct Decoded {
 }
 
 /// `ffmpeg` (the default of an older document) or `average`.
+#[must_use]
 pub fn mix_mode(name: &str) -> MixMode {
     if name == "average" {
         MixMode::Average
@@ -229,6 +230,7 @@ pub struct Media {
 
 impl Media {
     /// Empty caches.
+    #[must_use]
     pub fn new() -> Media {
         Media {
             budget: std::env::var(DECODE_CACHE_BUDGET_ENV).ok().and_then(|v| v.parse().ok()),
@@ -237,6 +239,7 @@ impl Media {
     }
 
     /// Empty caches with an explicit byte budget (the tests use a small one).
+    #[must_use]
     pub fn with_budget(budget: usize) -> Media {
         Media {
             budget: Some(budget),
@@ -460,6 +463,7 @@ impl Media {
 /// The bytes of a one-shot window (P4-40e, the Layer view's waveform): `u32 start`, `u32 rate`,
 /// then the mono samples `[start, end)` of `shot` as f32 — the shape of `samples_window`. The
 /// window is clamped to the file and capped at [`crate::commands::MAX_WINDOW_SAMPLES`].
+#[must_use]
 pub fn wave_bytes(shot: &OneShot, start: i64, end: i64) -> Vec<u8> {
     let mono = shot.mono();
     let n = mono.len() as i64;

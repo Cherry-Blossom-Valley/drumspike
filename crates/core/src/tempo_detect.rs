@@ -119,6 +119,7 @@ pub enum Role {
 impl Role {
     /// The role of a document role name (`kick`, `snare`, `tom`, `cymbal`; anything else is
     /// `Other`).
+    #[must_use]
     pub fn from_name(name: &str) -> Role {
         match name {
             "kick" => Role::Kick,
@@ -156,6 +157,7 @@ pub struct Hit {
 
 impl Hit {
     /// A hit with the default velocity.
+    #[must_use]
     pub fn new(t: f64, role: Role) -> Hit {
         Hit {
             t,
@@ -353,6 +355,7 @@ pub struct Prepared {
 
 /// Sort, drop non-finite and negative times and times after `until`, merge hits of one role
 /// within [`DEDUPE_S`] (the first time, the louder velocity), and leave out isolated hits.
+#[must_use]
 pub fn prepare(hits: &[Hit], until: Option<f64>) -> Prepared {
     let until = until.unwrap_or(f64::INFINITY);
     let mut late = 0;
@@ -517,6 +520,7 @@ const HALF_TIME_MIN_SNARES: f64 = 8.0;
 /// verdict with the sub-beat shares (see [`half_time_backbeat`]). Version 3 adds the
 /// half-time bar 1 of #180 (see `bars`). The detection is read
 /// only: a project analysed before keeps its tempo until it is detected again.
+#[must_use]
 pub fn tempo_rule() -> u32 {
     parse_rule(std::env::var("DRUMSPIKE_TEMPO_RULE").ok().as_deref())
 }

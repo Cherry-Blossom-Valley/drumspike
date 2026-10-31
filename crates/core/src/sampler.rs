@@ -92,6 +92,7 @@ pub fn measure_offset(bounce: &[f32], sr: u32, note_on_s: f64) -> Result<Offset,
 /// window from `pre + max_lag` samples before the hit to `len + max_lag` after it, each window
 /// scaled to a root-mean-square of 1 (silent windows are left out). `None` without a usable hit.
 /// The hit sits at index `pre + max_lag` of the result.
+#[must_use]
 pub fn median_shape(mic: &[f32], hits: &[i64], pre: usize, len: usize, max_lag: usize) -> Option<Vec<f32>> {
     let total = pre + len + 2 * max_lag;
     let start = pre + max_lag;
@@ -132,6 +133,7 @@ pub fn median_shape(mic: &[f32], hits: &[i64], pre: usize, len: usize, max_lag: 
 /// its attack ([`AlignParams`]) is correlated with the median shape of the mic's hits `hits`
 /// (sample numbers), within the search range of `p`. `None` when no hit has a usable window or the
 /// bounce's attack is silent.
+#[must_use]
 pub fn bounce_polarity(
     bounce: &[f32],
     onset: usize,
@@ -152,6 +154,7 @@ pub fn bounce_polarity(
 /// The MIDI time of a note: the aligned attack `t * sr + lag_samples` minus `offset_samples`, rounded
 /// to the sample, in seconds. A note that would fall before the first sample goes to 0 s (the second
 /// value is true). `sr` is the rate of the track the samples are of.
+#[must_use]
 pub fn compensate(t: f64, lag_samples: f64, offset_samples: f64, sr: u32) -> (f64, bool) {
     let s = (t * f64::from(sr) + lag_samples - offset_samples).round();
     if s < 0.0 {

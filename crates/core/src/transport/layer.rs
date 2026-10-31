@@ -33,6 +33,7 @@ impl LayerVoices {
     /// Voices from the start times in seconds (the time of the one-shot's first sample, which is the
     /// hit time minus the one-shot's onset) and their gains. `tpl` and `tpl_half` are the one-shot at
     /// `device_rate` and at twice it, interleaved with `channels` (1 or 2).
+    #[must_use]
     pub fn new(
         channels: usize,
         tpl: Arc<Vec<f32>>,

@@ -87,6 +87,7 @@ pub struct State {
 impl State {
     /// `DRUMSPIKE_HOME` (home folder), `DRUMSPIKE_PROJECTS` (default folder of new projects)
     /// and `DRUMSPIKE_AUTOSAVE_SECONDS` (default 120) from the environment.
+    #[must_use]
     pub fn from_env() -> State {
         let dir = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
         let secs = std::env::var("DRUMSPIKE_AUTOSAVE_SECONDS").ok();
@@ -102,6 +103,7 @@ impl State {
 }
 
 /// The server's default folder for new projects: `~/Documents/Drumspike Projects`.
+#[must_use]
 pub fn default_projects_dir() -> PathBuf {
     match std::env::var_os("HOME").filter(|v| !v.is_empty()) {
         Some(h) => PathBuf::from(h).join("Documents").join("Drumspike Projects"),
@@ -120,6 +122,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 }
 
 /// `server.unique_folder`: `<base>`, `<base> 2`, `<base> 3` ... the first that does not exist in `dir`.
+#[must_use]
 pub fn unique_folder(dir: &Path, base: &str) -> String {
     let mut name = base.to_string();
     let mut k = 1;
@@ -147,6 +150,7 @@ impl Service {
     }
 
     /// The home folder, when one is set.
+    #[must_use]
     pub fn home(&self) -> Option<PathBuf> {
         lock(&self.inner.life.home).clone()
     }
@@ -173,6 +177,7 @@ impl Service {
     }
 
     /// The autosave interval.
+    #[must_use]
     pub fn autosave_interval(&self) -> Duration {
         Duration::from_millis(self.inner.life.autosave_ms.load(Ordering::Relaxed))
     }
@@ -204,6 +209,7 @@ impl Service {
     }
 
     /// `GET /api/project/recent`: the last ten project folders that still exist, most recent first.
+    #[must_use]
     pub fn project_recent(&self) -> Value {
         let Some(home) = self.home() else {
             return json!([]);
@@ -219,6 +225,7 @@ impl Service {
 
     /// #441 Clear Recent: empty the stored recent list. Answers the number of entries the
     /// file held. Without a home folder nothing is written and the answer is `{"cleared": 0}`.
+    #[must_use]
     pub fn project_recent_clear(&self) -> Value {
         let Some(home) = self.home() else {
             return json!({"cleared": 0});

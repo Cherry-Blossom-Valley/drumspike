@@ -45,6 +45,7 @@ pub enum Recipe {
 
 impl Recipe {
     /// The method name of the recipe.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Recipe::Patch => "patch-2",
@@ -53,6 +54,7 @@ impl Recipe {
     }
 
     /// The recipe of a method name, `None` for an unknown one.
+    #[must_use]
     pub fn parse(name: &str) -> Option<Recipe> {
         match name {
             "patch-2" => Some(Recipe::Patch),
@@ -62,6 +64,7 @@ impl Recipe {
     }
 
     /// The length of each block: attack, body, envelope.
+    #[must_use]
     pub fn dims(self) -> [usize; 3] {
         match self {
             Recipe::Patch => [ATTACK_FRAMES * ATTACK_BANDS, body_edges_patch().len() - 1, ENV_STEPS],
@@ -70,11 +73,13 @@ impl Recipe {
     }
 
     /// The length of a feature vector.
+    #[must_use]
     pub fn len(self) -> usize {
         self.dims().iter().sum()
     }
 
     /// Always false: a recipe has blocks (clippy's `len_without_is_empty`).
+    #[must_use]
     pub fn is_empty(self) -> bool {
         self.len() == 0
     }
@@ -135,6 +140,7 @@ impl Weights {
     };
 
     /// The three weights in block order.
+    #[must_use]
     pub fn as_array(&self) -> [f32; 3] {
         [self.attack, self.body, self.env]
     }
@@ -253,6 +259,7 @@ pub struct Extractor {
 
 impl Extractor {
     /// The extractor for signals of rate `sr`.
+    #[must_use]
     pub fn new(sr: u32, recipe: Recipe) -> Extractor {
         let top = TOP_HZ.min(f64::from(sr) / 2.0 * 0.95);
         let mut planner = FftPlanner::new();
@@ -278,6 +285,7 @@ impl Extractor {
     }
 
     /// The recipe of this extractor.
+    #[must_use]
     pub fn recipe(&self) -> Recipe {
         self.recipe
     }
@@ -287,6 +295,7 @@ impl Extractor {
     }
 
     /// The three blocks at the anchor `t` (seconds) of `x`.
+    #[must_use]
     pub fn blocks(&self, x: &[f32], t: f64) -> Blocks {
         let mut buf = Vec::new();
         let mut attack = Vec::with_capacity(self.recipe.dims()[0]);
@@ -380,6 +389,7 @@ pub struct Blocks {
 
 impl Blocks {
     /// The blocks one after the other (the cache layout, [`Recipe::len`] values).
+    #[must_use]
     pub fn flat(&self) -> Vec<f32> {
         let mut v = Vec::with_capacity(self.attack.len() + self.body.len() + self.env.len());
         v.extend(&self.attack);
@@ -391,12 +401,14 @@ impl Blocks {
 
 /// The anchor of a detector time `t`: the refinement's steepest rise in its window (`-2..+12` ms,
 /// [`RefineWindow::DEFAULT`]) without neighbours, so it does not depend on which neighbours survive.
+#[must_use]
 pub fn anchor(x: &[f32], sr: u32, t: f64) -> f64 {
     refine_sr(x, t, sr, &[], RefineWindow::DEFAULT).0
 }
 
 /// The flat feature vectors ([`Blocks::flat`]) of the candidates at the detector times `times`
 /// (seconds) in `x`. Runs on all cores.
+#[must_use]
 pub fn candidate_features(x: &[f32], sr: u32, times: &[f64], recipe: Recipe) -> Vec<Vec<f32>> {
     let ex = Extractor::new(sr, recipe);
     times
@@ -407,6 +419,7 @@ pub fn candidate_features(x: &[f32], sr: u32, times: &[f64], recipe: Recipe) -> 
 
 /// The mean of the flat vectors `feats` (`n x recipe.len()`, one after the other): the track's
 /// typical candidate, which [`centred`] takes off. Zeros for no vector.
+#[must_use]
 pub fn track_mean(feats: &[f32], recipe: Recipe) -> Vec<f32> {
     let dim = recipe.len();
     let mut m = vec![0f32; dim];
@@ -428,6 +441,7 @@ pub fn track_mean(feats: &[f32], recipe: Recipe) -> Vec<f32> {
 /// mean's block, L2-normalised again (a block with nothing left is zeros). Every candidate on one
 /// mic shares the mic's colour (its spectral tilt, the bleed it always hears), which makes all
 /// cosines high; without it the cosine measures how a candidate differs from the typical one.
+#[must_use]
 pub fn centred(flat: &[f32], mean: &[f32], recipe: Recipe) -> Vec<f32> {
     let mut out = Vec::with_capacity(flat.len());
     let mut i = 0;
@@ -446,6 +460,7 @@ pub fn centred(flat: &[f32], mean: &[f32], recipe: Recipe) -> Vec<f32> {
 }
 
 /// A flat vector with the block weights applied, normalised as a whole (all zeros stay zeros).
+#[must_use]
 pub fn weigh(flat: &[f32], recipe: Recipe, w: &Weights) -> Vec<f32> {
     let dims = recipe.dims();
     let ws = w.as_array();
@@ -465,11 +480,13 @@ pub fn weigh(flat: &[f32], recipe: Recipe, w: &Weights) -> Vec<f32> {
 }
 
 /// The cosine of two weighted vectors ([`weigh`]): their dot product.
+#[must_use]
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
 /// The mean of the `min(K_NEAREST, n)` highest similarities of `c` to `examples`; 0 without examples.
+#[must_use]
 pub fn nearest_mean(c: &[f32], examples: &[&[f32]]) -> f32 {
     if examples.is_empty() {
         return 0.0;
@@ -481,6 +498,7 @@ pub fn nearest_mean(c: &[f32], examples: &[&[f32]]) -> f32 {
 }
 
 /// The score of section 3.1 of a weighted vector `c` against the positive and negative examples.
+#[must_use]
 pub fn score(c: &[f32], pos: &[&[f32]], neg: &[&[f32]]) -> f32 {
     let sp = nearest_mean(c, pos);
     let sn = if neg.is_empty() { 0.0 } else { nearest_mean(c, neg) };
@@ -489,6 +507,7 @@ pub fn score(c: &[f32], pos: &[&[f32]], neg: &[&[f32]]) -> f32 {
 
 /// The scores of the examples themselves, each without itself (leave one out): `(this, not)`.
 /// A "this" example with no other positive scores against the negatives only.
+#[must_use]
 pub fn example_scores(pos: &[&[f32]], neg: &[&[f32]]) -> (Vec<f32>, Vec<f32>) {
     fn others<'a>(v: &[&'a [f32]], i: usize) -> Vec<&'a [f32]> {
         v.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, e)| *e).collect()
@@ -540,6 +559,7 @@ fn median(v: &[f32]) -> f32 {
 /// if the histogram window `b0..=b1` around the boundary is empty, which does not happen for
 /// finite scores because `b0 <= b1`; a NaN score or threshold could break that. The histogram
 /// indexing is clamped to `HIST_BINS - 1` and cannot go out of range.
+#[must_use]
 pub fn auto_threshold(cands: &[f32], this: &[f32], _not: &[f32]) -> f32 {
     if this.is_empty() || cands.len() < 4 {
         return DEFAULT_THRESHOLD;
@@ -604,6 +624,7 @@ pub const SUGGEST_BOTH: f32 = 0.4;
 /// * "not" examples only: [`SUGGEST_NOT_ONLY`];
 /// * "this" examples only: [`auto_threshold`];
 /// * both: [`SUGGEST_BOTH`].
+#[must_use]
 pub fn suggest_threshold(cands: &[f32], this: &[f32], not: &[f32]) -> f32 {
     match (this.is_empty(), not.is_empty()) {
         (true, true) => DEFAULT_THRESHOLD,
@@ -618,6 +639,7 @@ pub fn suggest_threshold(cands: &[f32], this: &[f32], not: &[f32]) -> f32 {
 /// `threshold` (`scores` holds `(frame, score)` sorted by frame; a frame without a score stays).
 /// Then the forced examples: the hit nearest to each `not` time within `reach` seconds goes, and a
 /// `this` time without a hit within `reach` comes back as `(time, note)`. Sorted by time and note.
+#[must_use]
 pub fn filter_detected(
     detected: &[(f64, u8)],
     scores: &[(usize, f32)],

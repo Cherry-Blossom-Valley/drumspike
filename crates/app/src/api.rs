@@ -130,12 +130,14 @@ pub struct CommandSpec {
 
 impl CommandSpec {
     /// True when the command changes the project (its document or its folder).
+    #[must_use]
     pub fn writes_project(&self) -> bool {
         matches!(self.effect, Effect::Doc | Effect::Files)
     }
 
     /// True when the call takes a `progress` channel: the Tauri wrapper has the parameter, the
     /// CLI prints progress lines and the MCP server runs the call as a background job.
+    #[must_use]
     pub fn has_progress(&self) -> bool {
         matches!(self.run, Run::Progress) || matches!(self.run, Run::Poll(_)) && self.takes_progress_channel()
     }
@@ -146,6 +148,7 @@ impl CommandSpec {
     }
 
     /// The JSON Schema of the arguments (an object with the argument names as keys).
+    #[must_use]
     pub fn args_schema(&self) -> Value {
         let mut props = serde_json::Map::new();
         for a in self.args {
@@ -162,6 +165,7 @@ impl CommandSpec {
     /// # Panics
     ///
     /// Panics (`expect`) when the row's `result` text is not valid JSON; a registry test pins that every row's is.
+    #[must_use]
     pub fn result_schema(&self) -> Value {
         serde_json::from_str(self.result).expect("a registry result schema is valid JSON")
     }
@@ -1709,6 +1713,7 @@ pub static REGISTRY: &[CommandSpec] = &[
 ];
 
 /// The row of a command.
+#[must_use]
 pub fn find(name: &str) -> Option<&'static CommandSpec> {
     REGISTRY.iter().find(|c| c.name == name)
 }
@@ -1719,6 +1724,7 @@ pub fn agent_commands() -> impl Iterator<Item = &'static CommandSpec> {
 }
 
 /// The MCP tool list entry of a command: `{name, description, inputSchema}`.
+#[must_use]
 pub fn tool_entry(c: &CommandSpec) -> Value {
     json!({"name": c.name, "description": c.about, "inputSchema": c.args_schema()})
 }

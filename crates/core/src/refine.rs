@@ -98,6 +98,7 @@ fn plan(n: usize, inverse: bool) -> Arc<dyn Fft<f64>> {
 /// even `n`), 2 for the positive frequencies, 0 for the negative ones. The inverse transform
 /// is scaled by `1/n` like `np.fft.ifft`; the magnitude is `hypot(re, im)` like `np.abs`.
 /// An empty input gives an empty envelope.
+#[must_use]
 pub fn hilbert_env(seg: &[f64]) -> Vec<f64> {
     let n = seg.len();
     if n == 0 {
@@ -128,6 +129,7 @@ pub fn hilbert_env(seg: &[f64]) -> Vec<f64> {
 /// values of the full convolution, offset `(min(len) - 1) / 2` into it (numpy swaps the
 /// operands when `v` is longer). Products are summed in ascending index of the longer
 /// operand.
+#[must_use]
 pub fn convolve_same(a: &[f64], v: &[f64]) -> Vec<f64> {
     let (long, short) = if a.len() >= v.len() { (a, v) } else { (v, a) };
     let (n, k) = (long.len(), short.len());
@@ -151,6 +153,7 @@ pub fn convolve_same(a: &[f64], v: &[f64]) -> Vec<f64> {
 
 /// The smoothed log envelope of `engine._refine_sr` for one cut: `20 * log10(env + 1e-9)`
 /// after the `k_sm`-point moving average. Exposed for the parity harness and tests.
+#[must_use]
 pub fn log_envelope(seg: &[f64], k_sm: usize) -> Vec<f64> {
     let env = hilbert_env(seg);
     let kernel = vec![1.0 / k_sm as f64; k_sm];
@@ -166,6 +169,7 @@ pub fn log_envelope(seg: &[f64], k_sm: usize) -> Vec<f64> {
 /// passes the previous and the next one); the nearest below and above `t0` clip the search
 /// window `win` at the midpoints. This is refinement version 1 ([`RefineRule::Reference`]),
 /// pinned to the frozen references; [`refine_reach`] builds on it.
+#[must_use]
 pub fn refine_sr(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWindow) -> (f64, Option<f64>) {
     let d = refine_detail(x, t0, sr, neighbors, win);
     (d.t, d.rise)
@@ -353,6 +357,7 @@ impl RefineRule {
     pub const CURRENT: RefineRule = RefineRule::FootCapped;
 
     /// The version number the document stores.
+    #[must_use]
     pub fn version(self) -> u32 {
         match self {
             RefineRule::Reference => 1,
@@ -364,6 +369,7 @@ impl RefineRule {
     }
 
     /// The rule of a stored version number; `None` for a version this build does not know.
+    #[must_use]
     pub fn from_version(v: u64) -> Option<RefineRule> {
         match v {
             1 => Some(RefineRule::Reference),
@@ -529,6 +535,7 @@ fn tail_fix(x: &[f32], rs: &RuleState, prev: Option<f64>, srf: f64) -> Option<f6
 /// When the reference gave `t0` back (no attack in its window) and the reach finds none either,
 /// `t0` stays and the hit is flagged [`ReachStep::Unresolved`]. Everywhere else the result is
 /// the reference's, bit for bit; `rise` is always the reference's.
+#[must_use]
 pub fn refine_reach(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWindow) -> Refined {
     let srf = f64::from(sr);
     let d = refine_detail(x, t0, sr, neighbors, win);
@@ -736,11 +743,13 @@ fn floor_before(x: &[f32], s: i64, from: i64, srf: f64) -> f64 {
 /// reaches that bound without a gap keeps `s` ([`BackStep::Busy`]). A walk of more than
 /// [`FM_LONG_S`] is taken only over the hit's own body ([`BackStep::Separate`] else). The result is
 /// never later than `s`.
+#[must_use]
 pub fn first_motion(x: &[f32], s: i64, sr: u32, t0: f64, prev: Option<f64>, next: Option<f64>) -> (i64, BackStep) {
     first_motion_peak(x, s, sr, t0, prev, next, FM_PEAK_DB)
 }
 
 /// [`first_motion`] with another peak margin `peak_db` in place of [`FM_PEAK_DB`] (P4-31: kick tracks).
+#[must_use]
 pub fn first_motion_peak(
     x: &[f32],
     s: i64,
@@ -774,6 +783,7 @@ fn back_track(
 /// [`first_motion`] with the bounds as samples: `prev_mid` bounds the walk and the floor window (the midpoint to the
 /// previous hit), `next_mid` the peak window (the midpoint to the next hit). P4-13 stage B: the flam rule walks from a
 /// second stroke's re-rise with `prev_mid` at the dip after the first stroke (`tools/onset_guard.py` `walk`).
+#[must_use]
 pub fn first_motion_mid(x: &[f32], s: i64, sr: u32, prev_mid: Option<i64>, next_mid: Option<i64>) -> (i64, BackStep) {
     first_motion_mid_rule(x, s, sr, prev_mid, next_mid, FM_PEAK_DB, None)
 }
@@ -884,11 +894,13 @@ fn first_motion_mid_rule(
 /// Refinement version 3 (P4-12 stage 2, [`RefineRule::FirstMotion`]): [`refine_reach`], then the
 /// back-track [`first_motion`] from its time. `rise` and the reach step are version 2's; a hit
 /// moves only earlier, and only where the back-track finds the foot of its attack.
+#[must_use]
 pub fn refine_first_motion(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWindow) -> Refined {
     refine_first_motion_peak(x, t0, sr, neighbors, win, FM_PEAK_DB)
 }
 
 /// [`refine_first_motion`] with another back-track peak margin (P4-31).
+#[must_use]
 pub fn refine_first_motion_peak(
     x: &[f32],
     t0: f64,
@@ -901,6 +913,7 @@ pub fn refine_first_motion_peak(
 }
 
 /// [`refine_rule_peak`] with the version 5 foot of another `tune` (the placement measurements of #127).
+#[must_use]
 pub fn refine_foot_tuned(
     x: &[f32],
     t0: f64,
@@ -948,11 +961,13 @@ fn refine_back_peak(
 }
 
 /// [`refine_reach`] or [`refine_sr`], as `rule` says.
+#[must_use]
 pub fn refine_rule(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWindow, rule: RefineRule) -> Refined {
     refine_rule_peak(x, t0, sr, neighbors, win, rule, FM_PEAK_DB)
 }
 
 /// [`refine_rule`] with the back-track peak margin `peak_db` (it matters for [`RefineRule::FirstMotion`] only).
+#[must_use]
 pub fn refine_rule_peak(
     x: &[f32],
     t0: f64,
@@ -981,11 +996,13 @@ pub fn refine_rule_peak(
 
 /// [`refine_track`] with the rule of the analysis: the previous and the next coarse hit are the
 /// neighbours of each one.
+#[must_use]
 pub fn refine_track_rule(x: &[f32], sr: u32, coarse: &[f64], win: RefineWindow, rule: RefineRule) -> Vec<Refined> {
     refine_track_rule_peak(x, sr, coarse, win, rule, FM_PEAK_DB)
 }
 
 /// [`refine_track_rule`] with the back-track peak margin `peak_db` (P4-31).
+#[must_use]
 pub fn refine_track_rule_peak(
     x: &[f32],
     sr: u32,
@@ -1016,6 +1033,7 @@ fn neighbours(coarse: &[f64], i: usize) -> Vec<f64> {
 /// Refine every coarse hit of a track the way `engine.analyze_track` does: the previous and
 /// the next coarse hit are the neighbours of each one. `coarse` is the min-gap deduplicated,
 /// ascending detector output; the result is in the same order (not re-sorted, not re-deduped).
+#[must_use]
 pub fn refine_track(x: &[f32], sr: u32, coarse: &[f64], win: RefineWindow) -> Vec<(f64, Option<f64>)> {
     coarse
         .iter()

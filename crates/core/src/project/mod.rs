@@ -116,6 +116,7 @@ impl ProjectError {
     }
 
     /// True for the newer-format error (`isinstance(e, ProjectFormatError)`).
+    #[must_use]
     pub fn is_format(&self) -> bool {
         matches!(self, ProjectError::Format(_))
     }
@@ -152,6 +153,7 @@ impl Project {
     }
 
     /// `doc.name` or the folder's name.
+    #[must_use]
     pub fn name(&self) -> String {
         match self.doc.name.as_deref() {
             Some(n) if !n.is_empty() => n.to_string(),
@@ -160,11 +162,13 @@ impl Project {
     }
 
     /// The document path (`doc_path` or the folder's own name).
+    #[must_use]
     pub fn path(&self) -> PathBuf {
         self.doc_path.clone().unwrap_or_else(|| document_path(&self.dir))
     }
 
     /// `<dir>/<which>`.
+    #[must_use]
     pub fn subdir(&self, which: &str) -> PathBuf {
         self.dir.join(which)
     }
@@ -173,6 +177,7 @@ impl Project {
 // ---------- paths (os.path semantics) ----------
 
 /// `os.path.normpath`: collapse `.`/`..` lexically and repeated separators; no symlink lookup.
+#[must_use]
 pub fn normpath(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     let mut depth = 0usize;
@@ -202,6 +207,7 @@ pub fn normpath(p: &Path) -> PathBuf {
 }
 
 /// `os.path.abspath`: the current directory joined and normalised, no symlink lookup.
+#[must_use]
 pub fn abspath(p: &Path) -> PathBuf {
     if p.is_absolute() {
         normpath(p)
@@ -212,6 +218,7 @@ pub fn abspath(p: &Path) -> PathBuf {
 }
 
 /// `os.path.basename`: the last component as a string (empty for a root).
+#[must_use]
 pub fn basename(p: &Path) -> &str {
     p.file_name().and_then(|s| s.to_str()).unwrap_or("")
 }
@@ -240,6 +247,7 @@ pub fn relpath(path: &Path, start: &Path) -> String {
 }
 
 /// `project.document_path`: `<project_dir>/<basename of the absolute folder>.drumspike`.
+#[must_use]
 pub fn document_path(project_dir: &Path) -> PathBuf {
     let abs = abspath(project_dir);
     project_dir.join(format!("{}{}", basename(&abs), DOC_EXT))

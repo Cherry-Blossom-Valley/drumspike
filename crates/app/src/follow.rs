@@ -26,6 +26,7 @@ use crate::registry::{OpenProject, Shared, lock};
 /// follower's rate (`round(t * sr) / sr`; equal rates and on-grid times give the same `t`),
 /// the velocity from the follower's signal at that position, as a detected hit gets it
 /// (`velocity_map`, `peak_in` over -5 ms to +60 ms). Only `t` and `v`: no `rise`, no edit marks.
+#[must_use]
 pub fn derive_events(src: &[Event], dst_samples: &[f32], dst_sr: u32, map: &VelocityMap) -> Vec<Event> {
     let sr = f64::from(dst_sr);
     let times: Vec<f64> = src.iter().map(|e| (e.t * sr).round() / sr).collect();
@@ -34,6 +35,7 @@ pub fn derive_events(src: &[Event], dst_samples: &[f32], dst_sr: u32, map: &Velo
 }
 
 /// The velocity map of a track's params (`vel_lo_db`, `vel_hi_db`; the defaults -40 and -6 dB).
+#[must_use]
 pub fn velocity_map_of(params: Option<&Map<String, Value>>) -> VelocityMap {
     let p = |k: &str, d: f64| params.and_then(|m| m.get(k)).and_then(Value::as_f64).unwrap_or(d);
     VelocityMap {
@@ -44,6 +46,7 @@ pub fn velocity_map_of(params: Option<&Map<String, Value>>) -> VelocityMap {
 }
 
 /// The tracks that follow `source`, in the document's order.
+#[must_use]
 pub fn followers_of(g: &OpenProject, source: &str) -> Vec<String> {
     g.project
         .doc
@@ -226,6 +229,7 @@ pub(crate) fn refresh_stale(svc: &Service, op: &Shared) -> Vec<String> {
 }
 
 /// The names of the followers that were derived again, as the answers carry them.
+#[must_use]
 pub fn refreshed_names(rows: &[(String, Result<usize, AppError>)]) -> Vec<Value> {
     rows.iter()
         .filter(|(_, r)| r.is_ok())

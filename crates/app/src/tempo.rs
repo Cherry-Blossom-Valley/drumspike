@@ -139,6 +139,7 @@ fn is_cut(e: &drumspike_core::Event) -> bool {
 }
 
 /// The answer of `tempo_map_detect`.
+#[must_use]
 pub fn detection_json(d: &Detection, tracks: Vec<Value>, params: &DetectParams, warnings: Vec<String>) -> Value {
     let r4 = |x: f64| (x * 10_000.0).round() / 10_000.0;
     let r6 = |x: f64| (x * 1_000_000.0).round() / 1_000_000.0;
@@ -329,6 +330,7 @@ impl Service {
 }
 
 /// Run a command of this card for the dispatcher; `None` when `cmd` is not one of them.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !TEMPO_COMMANDS.contains(&cmd) {
         return None;
