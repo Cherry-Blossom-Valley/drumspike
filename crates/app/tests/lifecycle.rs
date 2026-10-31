@@ -1073,6 +1073,63 @@ fn autosave_tick_hits_the_stale_write_check_and_tells_the_page_once() {
     );
 }
 
+/// #228: a failed autosave stays on the project (`autosave_error` in the summary) and goes to the page once per failure
+/// streak; a good autosave clears it.
+#[test]
+fn a_failed_autosave_is_kept_and_a_good_one_clears_it() {
+    let (svc, sid, dir, _root) = opened("autosave_failed");
+    let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let sink = Arc::clone(&seen);
+    svc.set_emitter(Arc::new(move |name, v| {
+        if name == "autosave-failed" {
+            sink.lock().unwrap().push(v);
+        }
+    }));
+    svc.set_autosave_interval(Duration::from_secs(60));
+    let backups = dir.join(BACKUPS_DIR);
+    let _ = std::fs::remove_dir_all(&backups);
+    std::fs::write(&backups, b"not a folder").unwrap();
+    svc.track_set_note(&sid, "Kick_In", 46).unwrap();
+    assert!(svc.project_get(&sid).unwrap().get("autosave_error").is_none());
+    let base = Instant::now();
+    assert!(
+        svc.autosave_tick(base + Duration::from_secs(61)).is_empty(),
+        "the write fails"
+    );
+    let err = svc.project_get(&sid).unwrap()["autosave_error"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(err.contains(BACKUPS_DIR), "{err}");
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert_eq!(seen.lock().unwrap()[0]["sid"], json!(sid));
+    assert_eq!(seen.lock().unwrap()[0]["message"], json!(err));
+    assert!(
+        svc.autosave_tick(base + Duration::from_secs(122)).is_empty(),
+        "it retries per interval"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1, "one event per failure streak");
+    assert!(svc.project_get(&sid).unwrap().get("autosave_error").is_some());
+    std::fs::remove_file(&backups).unwrap();
+    assert_eq!(svc.autosave_tick(base + Duration::from_secs(183)).len(), 1);
+    assert!(
+        svc.project_get(&sid).unwrap().get("autosave_error").is_none(),
+        "a good autosave clears it"
+    );
+    // a save clears it too
+    std::fs::remove_dir_all(&backups).unwrap();
+    std::fs::write(&backups, b"not a folder").unwrap();
+    svc.track_set_note(&sid, "Kick_In", 47).unwrap();
+    assert!(svc.autosave_tick(base + Duration::from_secs(300)).is_empty());
+    assert!(svc.project_get(&sid).unwrap().get("autosave_error").is_some());
+    std::fs::remove_file(&backups).unwrap();
+    svc.project_save(&sid).unwrap();
+    assert!(
+        svc.project_get(&sid).unwrap().get("autosave_error").is_none(),
+        "a save clears it"
+    );
+}
+
 #[test]
 fn autosave_tick_restarts_the_clock_after_each_backup() {
     let (svc, sid, _dir, _root) = opened("autosave_clock");

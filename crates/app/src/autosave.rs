@@ -4,7 +4,9 @@
 //! document's bytes do not change (Pro Tools behaviour). The files count against the same
 //! rotation of ten as the pre-save copies. The thread holds only a weak reference to the
 //! service and ends with it. #121: after the write it runs the stale-write check of `project_save`
-//! and sends `project-stale` `{sid, message}` once when the document changed on disk.
+//! and sends `project-stale` `{sid, message}` once when the document changed on disk. #228: a failed write is kept
+//! as `autosave_error` on the project (cleared by a good autosave or a save) and sent as `autosave-failed`
+//! `{sid, message}` on the first failure of a streak.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -71,12 +73,21 @@ impl Service {
             if !due {
                 continue;
             }
-            match self.autosave_one(&op) {
-                Ok(p) => written.push(p),
-                Err(e) => eprintln!("autosave failed: {e}"),
+            let outcome = self.autosave_one(&op);
+            // #228: the error stays on the project and goes to the page (and the agent status) as well as to stderr.
+            let mut g = lock(&op);
+            match outcome {
+                Ok(p) => {
+                    g.note_autosave(Ok(()));
+                    written.push(p);
+                }
+                Err(e) => {
+                    eprintln!("autosave failed: {e}");
+                    g.note_autosave(Err(&e.message));
+                }
             }
             // A failed write waits for the next interval too; it must not retry on every tick.
-            lock(&op).last_autosave = Some(now);
+            g.last_autosave = Some(now);
         }
         written
     }
