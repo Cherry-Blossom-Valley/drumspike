@@ -1593,7 +1593,11 @@ pub fn report<R: Runtime>(app: &AppHandle<R>) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    json!({"items": items, "recent": recent, "window": window, "follow": follow, "menus": menus, "preset": current_preset()})
+    let zoom_own = find_submenu(&menu, ZOOM_PRESETS_ID)
+        .and_then(|s| s.items().ok())
+        .map(|v| v.iter().map(|k| k.id().as_ref().to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    json!({"items": items, "recent": recent, "window": window, "follow": follow, "menus": menus, "preset": current_preset(), "zoom_own": zoom_own})
 }
 
 /// The `NSEvent` characters and modifier flags of a key of the table (`"Cmd+Down"`): the key
