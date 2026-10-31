@@ -247,7 +247,10 @@ fn the_tracks_scenario_loads_with_its_own_driver_and_counts_four_actions() {
             scenario: "tracks".into(),
             out: PathBuf::from("x"),
         },
-        &[("DRUMSPIKE_SELFTEST_DIR", "/tmp/w"), ("DRUMSPIKE_SELFTEST_DROP", "/tmp/drop")],
+        &[
+            ("DRUMSPIKE_SELFTEST_DIR", "/tmp/w"),
+            ("DRUMSPIKE_SELFTEST_DROP", "/tmp/drop"),
+        ],
     )
     .unwrap();
     assert_eq!(

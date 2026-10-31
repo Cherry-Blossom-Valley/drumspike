@@ -104,8 +104,7 @@ fn resolve_env_with(v: &mut Value, lookup: &dyn Fn(&str) -> Option<String>) -> R
     match v {
         Value::String(s) => {
             if let Some(name) = s.strip_prefix('$') {
-                *s = lookup(name)
-                    .ok_or_else(|| format!("the scenario needs the environment variable {name}"))?;
+                *s = lookup(name).ok_or_else(|| format!("the scenario needs the environment variable {name}"))?;
             }
         }
         Value::Array(a) => a.iter_mut().try_for_each(|x| resolve_env_with(x, lookup))?,
