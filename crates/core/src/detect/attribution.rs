@@ -514,6 +514,10 @@ fn has_near(sorted: &[i64], v: i64, tol: i64) -> bool {
 
 /// Compute the flags of every hit of one session (see the module documentation). All
 /// signals are at rate `sr`. With both flags off every [`HitFlags`] is empty.
+///
+/// # Errors
+///
+/// [`AttributionError::ZeroRate`] when `sr` is 0.
 pub fn attribute(tracks: &[TrackInput], sr: u32, p: &AttributionParams) -> Result<Attribution, AttributionError> {
     if sr == 0 {
         return Err(AttributionError::ZeroRate);

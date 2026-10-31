@@ -33,6 +33,10 @@ pub const IDLE_READ_TIMEOUT: Duration = Duration::from_secs(2);
 pub const MAX_BODY: usize = 256 << 20;
 
 /// The listening socket of `ds-bridge` on 127.0.0.1 (`port` 0: a free port).
+///
+/// # Errors
+///
+/// The [`std::io::Error`] of binding 127.0.0.1:`port`, for example when the port is in use or not permitted.
 pub fn listen(port: u16) -> std::io::Result<TcpListener> {
     TcpListener::bind(("127.0.0.1", port))
 }
@@ -117,6 +121,13 @@ fn read_line(r: &mut impl BufRead) -> std::io::Result<Option<String>> {
 /// Read the next request of a connection. `Ok(None)`: the client closed the connection, or it stayed
 /// idle for the read timeout before the first byte of a request. A body needs `Content-Length`
 /// (the page's `fetch` always sends it); a chunked body is refused.
+///
+/// # Errors
+///
+/// An [`std::io::Error`] of kind `InvalidData` for a request line that is not `METHOD URL HTTP/1.x`, a line over
+/// 16 KB or not UTF-8, a header without `:`, a bad or over-[`MAX_BODY`] `Content-Length`, a chunked body, more
+/// than 100 headers, or a head that ends early; any other read error of `r`, including an end of input inside
+/// the body. A read timeout before the first byte is `Ok(None)`, not an error.
 pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>> {
     let line = match read_line(r) {
         Ok(Some(l)) => l,
@@ -165,6 +176,10 @@ pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>
 }
 
 /// Write one answer with its length (and `Connection: close` when the connection ends after it).
+///
+/// # Errors
+///
+/// The [`std::io::Error`] of writing or flushing to `w`, for example a connection the client closed.
 pub fn write_reply(w: &mut impl Write, reply: &HttpReply, close: bool) -> std::io::Result<()> {
     let reason = match reply.status {
         200 => "OK",
@@ -330,6 +345,10 @@ impl Bridge {
 
     /// Put the event `menu` `{id, path?, sid?}` into the event log, as a click on a native menu item does in
     /// the app (P3-13a). Returns the payload.
+    ///
+    /// # Errors
+    ///
+    /// A 400 [`AppError`] when `args` has no string `id`.
     pub fn menu_event(&self, args: &Value) -> Result<Value, AppError> {
         let mut payload = json!({"id": arg_str(args, "id")?});
         for key in ["path", "sid", "name"] {
@@ -353,6 +372,11 @@ impl Bridge {
     /// Run one command with JSON arguments. The names and argument names are those of the
     /// Tauri wrappers (`apps/desktop/src-tauri/src/lib.rs`). The commands of the agent surface run
     /// in [`crate::call::run`]; the bridge adds the test commands and the transport.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] for an unknown command; a 400 for a missing or wrongly typed argument (for example
+    /// `ms`, `position`, `volume_db`, `device`, `devices`); otherwise the error of the command itself.
     pub fn invoke(&self, cmd: &str, args: &Value) -> Result<Reply, AppError> {
         let s = &self.svc;
         match cmd {

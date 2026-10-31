@@ -93,6 +93,11 @@ fn named(path: &Path, e: WavError) -> AppError {
 }
 
 /// Read and downmix a WAV file (the source is only read).
+///
+/// # Errors
+///
+/// Returns an internal error (with the path in front) when the file cannot be opened or read, and a 400 error
+/// when it is not a supported WAV format.
 pub fn decode(path: &Path, mode: MixMode) -> Result<Decoded, AppError> {
     let (samples, info) = read_wav_mono(path, mode).map_err(|e| named(path, e))?;
     Ok(Decoded {
@@ -117,6 +122,11 @@ pub struct PeakRequest {
 
 impl PeakRequest {
     /// The request for `name`; 400 for an unknown track.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error when the project has no track of this name. An offline track is not an error here: its
+    /// 409 is kept in the `source` field.
     pub fn of(op: &OpenProject, name: &str) -> Result<PeakRequest, AppError> {
         let tr = op.track(name)?;
         Ok(PeakRequest {
@@ -244,6 +254,11 @@ impl Media {
     /// the last [`DECODE_CACHE_LEN`] decodes within the byte budget
     /// ([`DECODE_CACHE_BUDGET_BYTES`], LRU); a decode larger than the budget is returned
     /// but not kept.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the file's metadata or contents cannot be read, and a 400 error when it
+    /// is not a supported WAV format.
     pub fn decode_cached(&self, path: &Path, mode: MixMode) -> Result<Arc<Decoded>, AppError> {
         let meta = std::fs::metadata(path).map_err(|e| AppError::internal(format!("{}: {e}", path.display())))?;
         let key: DecodeKey = (
@@ -377,6 +392,11 @@ impl Media {
     /// as 0, the window holds at most `max` samples and ends at the end of the track. Only
     /// the frames of the window are read (one positioned read) and folded with the decoder of
     /// the full decode, so the values equal the same samples of [`decode`] bit for bit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error when the file's metadata or the window's frames cannot be read, and a 400 error
+    /// when the file is not a supported WAV format.
     pub fn window_bytes(
         &self,
         path: &Path,
@@ -420,6 +440,11 @@ impl Media {
     /// an offline track with a cache still shows its lanes. The decode is not kept (P3-15d:
     /// the sample windows read the file themselves; six parallel builds would otherwise
     /// leave three tracks of up to 115 MB in memory).
+    ///
+    /// # Errors
+    ///
+    /// Returns the 409 error of an offline track when the cache is stale and the source is missing, the errors of
+    /// [`decode`] for the source, and an internal error when `peaks.bin` cannot be built or opened.
     pub fn peak_cache(&self, req: &PeakRequest) -> Result<PeakCache, AppError> {
         let guard = self.folder_lock(&req.dir);
         let _g = lock(&guard);

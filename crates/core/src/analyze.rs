@@ -321,6 +321,11 @@ fn check_rate(sr: u32) -> Result<(), AnalyzeError> {
 /// Step 1: the detector's hits as `(time, note)` in the detector's order. The model gets
 /// the thresholds rounded to 3 decimals; a DSP hit carries [`role_note`], and an unknown role
 /// runs the DSP fallback with the parameters of `other`.
+///
+/// # Errors
+///
+/// [`AnalyzeError::Rate`] when `sr` is not 44.1, 48 or 96 kHz; [`AnalyzeError::Onset`] when
+/// the DSP detector fails; [`AnalyzeError::Backend`] when the detector backend fails.
 pub fn detect_events(
     x: &[f32],
     sr: u32,
@@ -363,6 +368,10 @@ fn by_time(a: f64, b: f64) -> Ordering {
 /// Steps 2 to 6 on the detector's hits `detected` (`(time, note)`): the role filter, the
 /// sort and min-gap dedup, the refinement with the second sort and dedup, the shift, the
 /// velocities and the rounded `rise`.
+///
+/// # Errors
+///
+/// [`AnalyzeError::Rate`] when `sr` is not 44.1, 48 or 96 kHz.
 pub fn analyze_detected(
     x: &[f32],
     sr: u32,
@@ -376,6 +385,10 @@ pub fn analyze_detected(
 /// P4-6c: [`analyze_detected`] with the two flags per detected hit that [`detect_hits`] and the Learn filter give
 /// (`roll`: added by the roll fill; `out`: the Learn filter takes it out of the output; empty: none), carried through
 /// the dedups and the refinement into [`Analysis::roll`] and [`Analysis::learn_out`].
+///
+/// # Errors
+///
+/// [`AnalyzeError::Rate`] when `sr` is not 44.1, 48 or 96 kHz.
 pub fn analyze_flags(
     x: &[f32],
     sr: u32,
@@ -506,6 +519,11 @@ fn analyze_flagged(
 /// `x` is the native-rate mono signal (the track's downmix), `sr` its rate (44.1, 48 or
 /// 96 kHz), `role` the track's role (`kick`, `snare`, `tom`, `hat`, `cymbal`, `other`; any
 /// other name filters like `other` and runs the DSP fallback with its parameters).
+///
+/// # Errors
+///
+/// [`AnalyzeError::Rate`] when `sr` is not 44.1, 48 or 96 kHz; [`AnalyzeError::Onset`] or
+/// [`AnalyzeError::Backend`] when the detector fails.
 pub fn analyze_track(
     x: &[f32],
     sr: u32,
@@ -521,6 +539,11 @@ pub fn analyze_track(
 /// [`analyze_track`] with [`Detector::Dsp`] (identical events), plus the peak-picked
 /// candidates with their gate verdicts, the detection's parameters and its weak-flux limit
 /// for the store. One resample and one spectrogram for both.
+///
+/// # Errors
+///
+/// [`AnalyzeError::Rate`] when `sr` is not 44.1, 48 or 96 kHz; [`AnalyzeError::Onset`] when
+/// the DSP detector fails.
 pub fn analyze_track_dsp_cands(
     x: &[f32],
     sr: u32,
@@ -542,6 +565,11 @@ pub type DetectedHits = (Vec<(f64, u8)>, Vec<bool>);
 /// P4-6c: step 1 of [`analyze_track`], the detector's hits with the pick rules that run on them (P4-19: the roll
 /// fill; its flag per hit, empty when it added none or does not apply). The Learn filter marks these hits and then
 /// runs [`analyze_flags`], so a hit list with the filter on holds the same hits as without it.
+///
+/// # Errors
+///
+/// [`AnalyzeError::Rate`] when `sr` is not 44.1, 48 or 96 kHz; [`AnalyzeError::Onset`] or
+/// [`AnalyzeError::Backend`] when the detector fails.
 pub fn detect_hits(
     x: &[f32],
     sr: u32,

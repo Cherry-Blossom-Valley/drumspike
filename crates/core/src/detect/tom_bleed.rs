@@ -412,6 +412,10 @@ pub fn strong_hits(x: &[f32], hits: &[i64], w: (i64, i64), strong_db: f64) -> Ve
 
 /// Version 2: rule CD on the tom close mics ([`tom_bleed`]) with the kick and snare close mics `sources` (see the
 /// module documentation). Without sources it is [`tom_bleed`].
+///
+/// # Errors
+///
+/// [`AttributionError::ZeroRate`] when `sr` is 0.
 pub fn tom_bleed_with(
     mics: &[TomMic],
     sources: &[SourceMic],
@@ -555,6 +559,10 @@ pub fn tom_bleed_with(
 }
 
 /// Run the rule on the tom close mics of one session (see the module documentation). All signals are at rate `sr`.
+///
+/// # Errors
+///
+/// [`AttributionError::ZeroRate`] when `sr` is 0.
 pub fn tom_bleed(mics: &[TomMic], sr: u32, p: &TomBleedParams) -> Result<TomBleed, AttributionError> {
     if sr == 0 {
         return Err(AttributionError::ZeroRate);

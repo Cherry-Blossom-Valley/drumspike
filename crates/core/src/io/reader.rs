@@ -243,6 +243,12 @@ fn parse_fmt(c: &[u8]) -> Result<Fmt, WavError> {
 
 impl WavInfo {
     /// Walk the RIFF chunks of `bytes` (a whole WAV file in memory or mmap).
+    ///
+    /// # Errors
+    ///
+    /// [`WavError::Format`] when the bytes are RF64/BW64 or not RIFF/WAVE, the `fmt ` or
+    /// `data` chunk is missing or the `fmt ` chunk is malformed, the sample format and width
+    /// are unsupported, or `nBlockAlign` disagrees with the channels and width.
     pub fn parse(bytes: &[u8]) -> Result<WavInfo, WavError> {
         let err = |s: &str| WavError::Format(s.to_string());
         if bytes.len() >= 4 && (&bytes[0..4] == b"RF64" || &bytes[0..4] == b"BW64") {
@@ -329,12 +335,21 @@ impl WavInfo {
     }
 
     /// The downmix plan for this file in `mode` (see [`Plan::new`] for the errors).
+    ///
+    /// # Errors
+    ///
+    /// [`WavError::Format`] with the message of [`Plan::new`] when the channel count or mask
+    /// is not supported by `mode`.
     pub fn mix_plan(&self, mode: MixMode) -> Result<Plan, WavError> {
         let mask = if self.extensible { self.channel_mask } else { 0 };
         Plan::new(mode, self.channels as usize, mask).map_err(WavError::Format)
     }
 
     /// Decode the data chunk to mono f32 at native rate, folded with `mode`.
+    ///
+    /// # Errors
+    ///
+    /// [`WavError::Format`] when the downmix `mode` is refused for this file (see [`Plan::new`]).
     pub fn decode_mono(&self, bytes: &[u8], mode: MixMode) -> Result<Vec<f32>, WavError> {
         let plan = self.mix_plan(mode)?;
         let d = &bytes[self.data_offset..self.data_offset + self.n_frames * self.block_align];
@@ -360,6 +375,14 @@ impl WavInfo {
     /// `channels` samples per frame), each sample converted exactly as the sample of a mono
     /// file is (the 1-channel fold of [`Plan`]). Returns the frames written. The playback of a
     /// stereo file uses it; detection and exports stay on the mono fold.
+    ///
+    /// # Panics
+    ///
+    /// The `expect("one channel")` on the 1-channel [`Plan`] cannot fail. The
+    /// `unreachable!("validated in parse")` arm is reached only for a sample format and width
+    /// that [`WavInfo::parse`] rejects, so it needs a hand-built `WavInfo`. The final division
+    /// by the channel count panics for a `WavInfo` with 0 channels, which is likewise not
+    /// produced by `parse`.
     pub fn decode_channels_into(&self, data: &[u8], out: &mut [f32]) -> usize {
         let ch = self.channels as usize;
         let one = Plan::new(MixMode::Average, 1, 0).expect("one channel");
@@ -503,6 +526,11 @@ pub struct MappedWav {
 
 impl MappedWav {
     /// Open `path` read-only, map it and parse the header. The file is never written.
+    ///
+    /// # Errors
+    ///
+    /// [`WavError::Io`] when the file cannot be opened or mapped; [`WavError::Format`] when
+    /// the header is not a supported WAV (see [`WavInfo::parse`]).
     pub fn open(path: &Path) -> Result<MappedWav, WavError> {
         let f = File::open(path)?;
         // SAFETY: the mapping is read-only and the file is opened read-only, so the only way
@@ -519,6 +547,10 @@ impl MappedWav {
         &self.mmap
     }
     /// Decode the data chunk to mono f32 (see [`WavInfo::decode_mono`]).
+    ///
+    /// # Errors
+    ///
+    /// [`WavError::Format`] when the downmix `mode` is refused for this file (see [`Plan::new`]).
     pub fn decode_mono(&self, mode: MixMode) -> Result<Vec<f32>, WavError> {
         self.info.decode_mono(&self.mmap, mode)
     }
@@ -549,6 +581,11 @@ impl MappedWav {
 }
 
 /// Convenience: mmap, parse, decode.
+///
+/// # Errors
+///
+/// [`WavError::Io`] when the file cannot be opened or mapped; [`WavError::Format`] when the
+/// header is unsupported or the downmix `mode` is refused for this file (see [`Plan::new`]).
 pub fn read_wav_mono(path: &Path, mode: MixMode) -> Result<(Vec<f32>, WavInfo), WavError> {
     let m = MappedWav::open(path)?;
     let x = m.decode_mono(mode)?;
@@ -559,6 +596,11 @@ pub fn read_wav_mono(path: &Path, mode: MixMode) -> Result<(Vec<f32>, WavInfo), 
 /// uses this instead of [`MappedWav`]: a source file that another program truncates while
 /// it is read then gives a short read or a format error, not a SIGBUS that ends the server
 /// process. For a file in the page cache the copy costs about as much as the mapping.
+///
+/// # Errors
+///
+/// [`WavError::Io`] when the file cannot be read; [`WavError::Format`] when the bytes are not
+/// a WAV file this reader supports (see [`WavInfo::parse`]).
 pub fn read_wav_bytes(path: &Path) -> Result<(Vec<u8>, WavInfo), WavError> {
     let bytes = std::fs::read(path)?;
     let info = WavInfo::parse(&bytes)?;

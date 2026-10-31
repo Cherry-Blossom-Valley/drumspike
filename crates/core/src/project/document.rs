@@ -302,11 +302,20 @@ impl Document {
     }
 
     /// Parse a document from JSON text (no migration, no checks; see `migrate_forward`).
+    ///
+    /// # Errors
+    ///
+    /// The `serde_json` error when `text` is not valid JSON or does not fit the document shape.
     pub fn from_json(text: &str) -> Result<Document, serde_json::Error> {
         serde_json::from_str(text)
     }
 
     /// Compact JSON of the document (the binding hands this to Python's `json.loads`).
+    ///
+    /// # Panics
+    ///
+    /// Panics through `expect("a document serialises")` if `serde_json` fails to serialise the
+    /// document, which a well-formed document (finite numbers, string keys) never does.
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("a document serialises")
     }
@@ -314,6 +323,12 @@ impl Document {
     /// The document as Python's `json.dump(doc, f, indent=1)` lays it out: one space per
     /// level, `": "` after a key, one item per line. Floats print in the shortest form that
     /// reads back to the same double (`1e-7` where Python writes `1e-07`; the value is the same).
+    ///
+    /// # Panics
+    ///
+    /// Panics through `expect("a document serialises")` if serialisation fails, which a
+    /// well-formed document never does; the `expect("serde_json writes UTF-8")` on the output
+    /// cannot fire because `serde_json` writes UTF-8.
     pub fn to_json_pretty(&self) -> String {
         let mut buf = Vec::new();
         let fmt = serde_json::ser::PrettyFormatter::with_indent(b" ");
@@ -490,6 +505,12 @@ impl Serialize for Document {
 }
 
 /// `project.empty_document(name, mix_mode)`.
+///
+/// # Panics
+///
+/// Panics at the `expect("finite time")` on `Number::from_f64(now())` if the
+/// clock value were not finite; `now()` returns a finite number of seconds, so
+/// this does not happen.
 pub fn empty_document(name: &str, mix_mode: &str) -> Document {
     Document {
         format: FORMAT,

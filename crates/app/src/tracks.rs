@@ -162,6 +162,11 @@ fn magic(path: &Path) -> std::io::Result<[u8; 12]> {
 
 /// Read the header of `path` and decide: a [`Probe`] for a file the analysis reads, else the
 /// [`Reject`] with the reason. No sample is read.
+///
+/// # Errors
+/// A [`Reject`] when the file is missing or unreadable, is not a file, is AIFF or another
+/// non-WAV audio format, is not a WAV file, has an unsupported WAV format or sample rate, or
+/// holds no samples.
 pub fn probe(path: &Path) -> Result<Probe, Reject> {
     let no = |why: String| Reject::new(path, why);
     let meta = std::fs::metadata(path).map_err(|e| {
@@ -340,6 +345,10 @@ impl Service {
     /// [`Service::audio_suggestion`]
     /// for the files whose name gives no role (#225): their row carries the suggested role with
     /// `guess: "audio"`.
+    ///
+    /// # Errors
+    /// The error of `load_rules` (for example 404 for an unknown kit preset) when `preset` is
+    /// given. A file that cannot be read is listed in `rejected`, not an error.
     pub fn tracks_scan(&self, paths: &[String], preset: Option<&str>) -> Result<Value, AppError> {
         let t0 = Instant::now();
         let rules: Vec<Rule> = match preset.map(str::trim).filter(|p| !p.is_empty()) {
@@ -410,6 +419,11 @@ impl Service {
     /// lanes are ready; `peaks_build_start` then finds nothing to do. Answers
     /// `{added: [names], tracks: [{name, role, note, path, mode}], rejected, peaks_ms, elapsed_ms}`; files
     /// that are not added are in `rejected` (a request with only such files is not an error).
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project; 409 when the project is open read-only or the copy
+    /// job cannot start; an error from `add_track` (for example a bad track name) after a file
+    /// was accepted. A file that cannot be probed or copied is reported in `rejected`, not here.
     pub fn tracks_add(
         &self,
         sid: &str,
@@ -598,6 +612,12 @@ impl Service {
     /// `{name, role, note, role_source, suggest_note, reanalyzed, previous: {role, note,
     /// role_source, role_match, events}}`; `previous` is the undo state, `suggest_note` the new role's
     /// default note when the stored note was the old role's default and no note was given.
+    ///
+    /// # Errors
+    /// 400 when `role` is not a known role, `source` is not a known source, `note` is outside 0
+    /// to 127, or `events` is not a list; 404 when `sid` is not an open project or `name` is not a
+    /// track; 409 when the project is open read-only or an analysis or another write runs; any
+    /// error of the re-pick, after which the role fields are put back.
     #[allow(clippy::too_many_arguments)]
     pub fn track_set_role(
         &self,
@@ -745,6 +765,12 @@ impl Service {
     /// copy job of the project runs. Answers `{sid, removed, unfollowed, order, tracks}` (`order` and `tracks` as
     /// `tracks_get` has them for the tracks that are left); with `snapshot` also `snapshot`: one `{name, index,
     /// order_index, track, followers}` per removed track, the input of [`Service::tracks_restore`].
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project or a name is not a track; 409 when the project is
+    /// open read-only or an analysis, lane build or copy job runs; 400 when `names` is empty;
+    /// 500 when an `Analysis/<name>/` folder cannot be deleted or a track record cannot be
+    /// serialized.
     pub fn tracks_remove(&self, sid: &str, names: &[String], snapshot: bool) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let mut want: Vec<String> = Vec::new();
@@ -836,6 +862,11 @@ impl Service {
     /// the sources and build the peak caches that the removal deleted. 400 for a snapshot that is no list or holds a bad
     /// record, 409 when a track of that name exists. The activations and Learn scores of the deleted folders come back with
     /// the next analysis. Marks the project dirty. Answers `{restored, order}`.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project; 409 when the project is open read-only or a track of
+    /// that name exists; 400 when `tracks` is not a list, a row has no valid `name`, or a track
+    /// record cannot be parsed.
     pub fn tracks_restore(&self, sid: &str, tracks: &Value) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let list = tracks

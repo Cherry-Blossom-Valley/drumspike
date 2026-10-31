@@ -452,6 +452,10 @@ pub fn audio_snippet_lengths(source: &[f32], sr: u32, times: &[f64]) -> Vec<f64>
 /// ([`audio_spike_signal`]): mono at `sr`, `source.len()` long, encoded as `format`, with
 /// [`audio_spike_bext`] when the source has a `bext` chunk. Returns the number of hits that
 /// got the default length because no dominant low component was found (#378).
+///
+/// # Errors
+///
+/// The I/O error when the file at `path` cannot be created or written.
 pub fn export_audio_spikes(
     path: &Path,
     sr: u32,
@@ -478,6 +482,10 @@ pub fn export_audio_spikes(
 /// The signal is produced and encoded block by block (R19 step 2): the writer never holds
 /// more than one [`WRITE_BLOCK_FRAMES`] block of the signal or of the encoded bytes, and the
 /// bytes on disk are the ones the full-buffer path wrote.
+///
+/// # Errors
+///
+/// The I/O error when the file at `path` cannot be created or written.
 pub fn export_spikes(
     path: &Path,
     sr: u32,

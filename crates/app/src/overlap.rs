@@ -53,6 +53,10 @@ pub fn pool_threads() -> usize {
 /// The pool the preparation runs on, built once per process (threads `ds-prepare-<n>`).
 /// Rayon's `par_*` calls inside [`rayon::ThreadPool::install`] run on this pool, not on the
 /// global one.
+///
+/// # Panics
+///
+/// Panics on the first call (through `expect`) if the rayon thread pool cannot be started.
 pub fn pool() -> &'static rayon::ThreadPool {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {

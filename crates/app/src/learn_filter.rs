@@ -191,6 +191,12 @@ pub struct LearnPick {
 /// when it is on ([`mark_out`]), the Add rule adds the candidates below the Sensitivity that look like a
 /// "this" example, and the forced "this" hits come in on their own analysis. `dir`/`key` enable the
 /// feature cache. No roll flags: the roll fill ran on the model's activations, which are gone (#281 D16).
+///
+/// # Errors
+///
+/// The text of the analysis error when the detection or either of the combined analyses is refused for the role or
+/// signal. An unknown `learn.method` falls back to the default recipe (`learn: unknown method` only if that were
+/// unknown too).
 #[allow(clippy::too_many_arguments)]
 pub fn learn_pick(
     x: &[f32],

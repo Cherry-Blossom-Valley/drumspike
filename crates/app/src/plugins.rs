@@ -153,6 +153,12 @@ fn valid_version(v: &str) -> bool {
 
 /// Load and validate one plugin folder: the manifest and the licence text. The error is the
 /// reason the plugin is invisible (the design section 3).
+///
+/// # Errors
+///
+/// Returns the reason as text when `manifest.json` is missing, unreadable, over [`MAX_MANIFEST_BYTES`] or invalid
+/// JSON, when a field fails validation (id, name, version, protocol, roles, sample rates, licence), or when the
+/// executable is not a file or the licence file is unreadable.
 pub fn load_one(folder: &Path) -> Result<Installed, String> {
     let manifest_path = folder.join("manifest.json");
     let meta = std::fs::metadata(&manifest_path).map_err(|e| format!("no manifest.json: {e}"))?;
