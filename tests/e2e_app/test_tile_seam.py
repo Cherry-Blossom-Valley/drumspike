@@ -12,9 +12,9 @@ The test plays a project with the velocity lane on, delays the worker's tile ans
 column is in view and the next strip is still pending. The lanes scroll is narrowed by 15 px so
 the geometry is the owner's (the clientWidth smaller than the lane width) whatever scrollbars
 the test browser draws. Asserts, per track, at the delayed frames: no column of the wave lane is
-empty background, the velocity stalks are present in the new column, and no velocity label text
-floats in the middle of the lane; at the strip's entry the velocity label sits at the lane's
-left edge. On main the stalk and the label checks fail (the output names the frame).
+empty background, the velocity stalks are present in the new column, and no scale text
+floats in the middle of the lane; at the strip's entry the scale sits at the lane's
+right edge. On main the stalk and the scale checks fail (the output names the frame).
 
 The test runs at Track Height Small in a taller window (820 px): three 170 px rows fit into the
 lanes viewport on every host, and all three tracks are checked (asserted). The skip below stays
@@ -68,6 +68,9 @@ VEL_LABELS = """() => { const c = document.querySelector('.track[data-name="Kick
       if (d[i + 3] > 200 && r >= 100 && r <= 190 && g >= 100 && g <= 200 && b >= 100 && b <= 210 && Math.max(r, g, b) - Math.min(r, g, b) <= 30) n++; }
     if (n >= 2) cols.push(x); }
   return { w: c.width, cols }; }"""
+# #245: the Velocity label is DOM, not canvas text; the lane's scale text (127 / 64 / 0) is the
+# same colour probe: at the entry it sits at the canvas's right edge, and no scale text floats
+# in the middle of the lane.
 
 
 def project(make_project, tmp_path):
@@ -173,9 +176,10 @@ def test_the_strip_shows_no_tile_seam_while_the_next_answer_is_late(app, make_pr
         return rows.length === 3 && rows.every(r => r.top >= s.top && r.bottom <= s.bottom); }""",
         timeout=30000)
     app.evaluate("() => { TM.ui.grid = false; tmApplyUi(true); if (!VL.on) vlToggle(); }")
-    # the hint text lives inside the vel lane and would trip the mid-lane label check: draw without it
-    app.evaluate("() => { VL.hint = false; document.querySelectorAll('#lanesScroll .track').forEach(row => "
-                 "{ const c = row.querySelector('.vel'); if (c && S.tracks[row.dataset.name]) drawVelLane(c, row.dataset.name); }); }")
+    # #245: the lane no longer draws the gesture hint (it is the Velocity label's tooltip); redraw
+    # anyway so the check sees the settled lane
+    app.evaluate("() => document.querySelectorAll('#lanesScroll .track').forEach(row => "
+                 "{ const c = row.querySelector('.vel'); if (c && S.tracks[row.dataset.name]) drawVelLane(c, row.dataset.name); });")
     # the owner's scrollbar: the scroll's client width falls short of the lane's right edge
     # (waveX + laneW), so the pre-fix tile image (scW wide) cuts the lane there
     app.add_style_tag(content="#lanesScroll { width: calc(100% - 15px) !important; }")
@@ -188,9 +192,9 @@ def test_the_strip_shows_no_tile_seam_while_the_next_answer_is_late(app, make_pr
     app.click("#playBtn")
     app.wait_for_function("() => S.playing && AC.running", timeout=30000)
     app.wait_for_function("() => SP.on", timeout=30000)
-    # the entry: the velocity label sits at the lane's left edge of its canvas
+    # the entry: the lane's scale text (the 127 at the top right) sits at the canvas's right edge
     lab = app.evaluate(VEL_LABELS)
-    assert lab["cols"] and min(lab["cols"]) < 70 * dpr, f"no velocity label at the lane's left edge at the entry: {lab}"
+    assert lab["cols"] and max(lab["cols"]) > lab["w"] - 70 * dpr, f"no velocity scale at the lane's right edge at the entry: {lab}"
 
     colors = app.evaluate(
         "() => Object.fromEntries(['Kick In', 'Snare Top', 'Hat L'].map(n => [n, S.tracks[n].color]))")

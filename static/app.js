@@ -340,7 +340,7 @@ function buildTrackDOM() {
         <div class="tlanes">
           <canvas class="lane spike" height="34"></canvas>
           <canvas class="lane wave"  height="120"></canvas>
-          ${VL.on ? `<canvas class="lane vel"   height="${VL.h}"></canvas>` : ""}
+          ${VL.on ? velWrapHtml() : ""}
           <div class="rowResize" title="Drag: the height of this track's wave lane. Double-click: back to the Track Height"></div>
         </div>
       </div>`;
@@ -2992,13 +2992,16 @@ const ovXOf = ev => ev.clientX - GEO.ovX;
    velocity_lane, default off); it draws with the hits of its row (drawHits), so the edits show live.
    #208: the lane is 80 px by default and its height is the app setting velocity_lane_height (drag its bottom border,
    24 to 400 px). A header "Velocity" with a 127 / 64 / 0 scale, a dot on each stalk top, the selected stalk and the
-   hits of a selected range in yellow, a hover label (velocity, time, why a stalk is grey), and a one-line hint
-   until the first gesture. A drag of a selected stalk scales all selected hits by the same ratio. */
+   hits of a selected range in yellow, a hover label (velocity, time, why a stalk is grey); the
+   gesture hint is the Velocity label's tooltip (#245). A drag of a selected stalk scales all
+   selected hits by the same ratio. */
 const VL_H_DEF = 80, VL_H_MIN = 24, VL_H_MAX = 400;
-const VL = { on: false, drag: null, h: VL_H_DEF, hover: null, hint: false };   // drag: {track, mode, gen, x0, y0, set: Map(id -> [from, to]), anchor, v0, base}; hover: {track, id}; hint: the one-line hint shows
+const VL = { on: false, drag: null, h: VL_H_DEF, hover: null };   // drag: {track, mode, gen, x0, y0, set: Map(id -> [from, to]), anchor, v0, base}; hover: {track, id}
+/* #245: the gesture hint lives on the Velocity label as a tooltip (a title on .velLabel), not
+   drawn into the lane canvas: text over the stalks read like data. */
+const VL_HINT = "Drag a stalk to set velocity. Option-drag: draw a line. Cmd-drag: draw freehand.";
 function vlToggle() {
   VL.on = !VL.on;
-  VL.hint = VL.on;
   if (B.appSettingsSet) B.appSettingsSet("velocity_lane", VL.on).catch(e => setMsg(`settings: ${errText(e)}`));
   vlApply();
   setMsg(`Velocity lane ${VL.on ? "shown" : "hidden"}`);
@@ -3010,16 +3013,34 @@ function vlApply() {   // after a toggle: the rows grow or shrink, the canvases 
   invalidate(F.SIZE | F.VIEW | F.GL);
   if (window.DSShell && DSShell.sync) DSShell.sync();
 }
+/* #245: the velocity lane's canvas lives in a .velWrap with the Velocity label span (the gesture
+   hint is the label's tooltip): both the row template and vlSyncRow build the same pair. */
+function velWrapHtml() {
+  return `<div class="velWrap"><canvas class="lane vel" height="${VL.h}"></canvas>` +
+         `<span class="velLabel" title="${VL_HINT}">Velocity</span></div>`;
+}
+function velLabelNode() {
+  const label = document.createElement("span");   // the tooltip of the Velocity label: the gesture hint (#245)
+  label.className = "velLabel";
+  label.title = VL_HINT;
+  label.textContent = "Velocity";
+  return label;
+}
 function vlSyncRow(row) {   // the row gets or loses its vel canvas (releaseCanvases gives the store back at once)
   let c = row.querySelector(".vel");
   if (VL.on && !c) {
     c = document.createElement("canvas");
     c.className = "lane vel"; c.height = VL.h;
-    row.querySelector(".wave").after(c);
+    const wrap = document.createElement("div");   // #245: wraps the canvas so the label sits on it, not in it
+    wrap.className = "velWrap";
+    wrap.appendChild(c);
+    wrap.appendChild(velLabelNode());
+    row.querySelector(".wave").after(wrap);
     vlBind(row, row.dataset.name);
   } else if (!VL.on && c) {
     if (c.width) { c.width = 0; c.height = 0; }
-    c.remove();
+    const wrap = c.closest(".velWrap");
+    if (wrap) wrap.remove(); else c.remove();
   }
   for (const hd of row.querySelectorAll(".rowResize")) {   // #437: the handles' text follows the lane it drags (the row's border and the header's edge, #439)
     hd.title = VL.on ? "Drag: the height of the velocity lane (the handle is at its bottom edge). Double-click: the wave lane back to the Track Height"
@@ -3039,11 +3060,9 @@ function drawVelLane(canvas, name) {
   ctx.setLineDash([]);
   // #208: the scale at the right edge (127 top, 64 middle, 0 bottom) and the name at the left
   ctx.fillStyle = "rgba(138,147,163,0.9)"; ctx.font = "10px sans-serif"; ctx.textBaseline = "middle";
-  // the header (127, Velocity, the hint) hangs below the 127 line, so its full glyph height is inside the lane (#208)
+  // the header (127, Velocity) hangs below the 127 line, so its full glyph height is inside the lane (#208)
   const headY = vlYOf(127, H) + 4;
-  ctx.textBaseline = "top";
   ctx.textAlign = "right"; ctx.fillText("127", W - 3, headY);
-  ctx.textAlign = "left"; ctx.fillText("Velocity", 4, headY);
   ctx.textBaseline = "middle";
   ctx.textAlign = "right"; ctx.fillText("64", W - 3, vlYOf(64, H)); ctx.fillText("0", W - 3, H - 6);
   const evs = S.events[name] || [];
@@ -3072,12 +3091,6 @@ function drawVelLane(canvas, name) {
     ctx.fillStyle = "rgba(16,20,28,0.92)"; ctx.fillRect(bx, H - 15, tw, 13);
     ctx.fillStyle = "#e6e9ef"; ctx.textAlign = "left"; ctx.fillText(txt, bx + 4, H - 8);
   }
-  if (VL.hint && W > 420) {   // the one-line hint until the first gesture
-    ctx.fillStyle = "rgba(230,233,239,0.75)"; ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    ctx.fillText("Drag a stalk to set velocity. Option-drag: draw a line. Cmd-drag: draw freehand.", 64, headY);
-    ctx.textBaseline = "middle";
-  }
   ctx.textAlign = "left";
 }
 /* The gestures of one row's velocity lane. A gesture previews on the page's copy and commits once: one events_edit call,
@@ -3095,7 +3108,6 @@ function vlBind(row, name) {
   const commit = () => {
     const d = VL.drag; VL.drag = null;
     if (!d) return;
-    VL.hint = false;
     const list = [...d.set.entries()].map(([id, [from, to, was]]) => ({ id, from, to, ...(was ? { was } : {}) })).filter(s => s.to !== s.from);
     if (!list.length || d.gen !== (EDGEN[name] || 0)) { invalidateHits(name); if (list.length) setMsg("the hits changed during the drag: the velocities were dropped"); return; }
     const step = list.length === 1
