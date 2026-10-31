@@ -286,6 +286,15 @@ pub static REGISTRY: &[CommandSpec] = &[
         Quick,
     ),
     cmd(
+        "open_url",
+        "Open an http(s) link of the help in the default browser (#255)",
+        &[req("url", Ty::Str, "The http(s) address to open")],
+        "{}",
+        App,
+        Window,
+        Quick,
+    ),
+    cmd(
         "startup_mark",
         "Startup timing probe of the window",
         &[opt("info", Ty::Str, "Probe text")],
