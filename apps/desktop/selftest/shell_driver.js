@@ -145,12 +145,22 @@
       // #195: the document from `open -a` can already be open here (it arrives 6 s in, the splash
       // closes after 5-15 s), so the enabled state is read after menu sync with a project. The
       // expectation follows menu.rs sync: open_recent tracks the recent list, export_again also
-      // needs an export shape, everything else is enabled iff it is ready (and, without a
+      // needs an export shape, undo/redo are greyed while their stack is empty (#158 rank 9),
+      // delete_hit/nudge_earlier/nudge_later/audition need a hit selection (the page sends
+      // `selHit` with every sync), everything else is enabled iff it is ready (and, without a
       // project, does not need one).
       const hasProj = !!S.sid;
-      const hasRecent = rep.recent.some(r => /^recent:\d+$/.test(r));   // P3-19: Open Most Recent follows the Open Recent list
-      const wrong = rep.items.filter(i => i.enabled !== (i.id === "open_recent" ? hasRecent
-        : i.ready && (hasProj ? i.id !== "export_again" || !!S.exportAgain : !i.needs_project))).map(i => `${i.id}=${i.enabled}`);
+      const enabledWant = i => i.id === "open_recent" ? rep.recent.some(r => /^recent:\d+$/.test(r))   // P3-19
+        : i.id === "undo" ? i.ready && hasProj && S.undo.length > 0
+        : i.id === "redo" ? i.ready && hasProj && S.redo.length > 0
+        : i.id === "delete_hit" || i.id === "nudge_earlier" || i.id === "nudge_later" || i.id === "audition" ? i.ready && hasProj && !!S.sel
+        : i.ready && (hasProj ? i.id !== "export_again" || !!S.exportAgain : !i.needs_project);
+      // the page syncs the menu shortly after the document arrives; re-read the report until it matches
+      const wrong = await until(async () => {
+        const r = await T.invoke("selftest_menu_report");
+        const bad = r.items.filter(i => i.enabled !== enabledWant(i)).map(i => `${i.id}=${i.enabled}`);
+        return bad.length ? bad : null;
+      }, "the menu enabled state to follow the page state", 10000);
       need(wrong.length === 0, `enabled state: ${wrong.join(", ")}`);
       need(rep.recent.length >= 1, "Open Recent has no entry at all (not even the placeholder)");
       report.metrics.menu = { items: rep.items.length, menus: rep.menus.length, later: rep.items.filter(i => !i.ready).map(i => `${i.id} (${i.card})`),
