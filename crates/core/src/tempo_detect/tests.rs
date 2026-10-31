@@ -19,13 +19,14 @@ fn role_names_map_to_roles() {
 /// touching the process env: the detection tests run in parallel threads, and edition 2024
 /// makes env writes unsafe for exactly that reason.
 #[test]
-fn the_tempo_rule_pin_parses_and_defaults_to_2() {
-    assert_eq!(parse_rule(None), 2);
+fn the_tempo_rule_pin_parses_and_defaults_to_3() {
+    assert_eq!(parse_rule(None), 3);
     assert_eq!(parse_rule(Some("1")), 1, "1 pins the shipped referee");
-    assert_eq!(parse_rule(Some("x")), 2);
+    assert_eq!(parse_rule(Some("2")), 2, "2 pins the #130 referee");
+    assert_eq!(parse_rule(Some("x")), 3);
     assert_eq!(parse_rule(Some("0")), 0, "0 pins the shipped referee too");
     if std::env::var("DRUMSPIKE_TEMPO_RULE").is_err() {
-        assert_eq!(tempo_rule(), 2, "unset is the #130 product default");
+        assert_eq!(tempo_rule(), 3, "unset is the #180 product default");
     }
 }
 

@@ -728,9 +728,11 @@ def test_after_a_strip_leave_in_a_glide_the_wave_moves_on_without_a_jump(app, ma
     behind (test op "stall": 150 ms from the arm, then 50 ms after each of the next 12 draws; the P4-2
     verifier's form), so the strip stands in for many frames and the first draws after the leave are old (#lanesGL may
     take over only with a draw at most two frames old). Measured in each
-    frame (JUMP_LOOP): how far the shown GL wave is from the view of that frame. Allowed: 4 px while the strip stands in
-    (the animation and the frame's view are read up to two frames apart: 1.6 px per frame), and 3 px of change from
-    the last strip frame to the first #lanesGL frame (the swap). After the swap the frame path
+    frame (JUMP_LOOP): how far the shown GL wave is from the view of that frame. Allowed: 8 px while the strip stands in
+    (the animation and the frame's view are read up to two frames apart: 1.6 px per frame, widened with the frame
+    interval; #187 measured the noise at up to 6.16 px on a loaded host), and 6 px of change from
+    the last strip frame to the first #lanesGL frame (the swap; the measured noise tops out at 4.75 px, the defect it
+    guards at 12 to 17 px). After the swap the frame path
     shows its GL draw as the worker answers it (W4); in Chromium's software GL that lags more and more (not this test)."""
     open_project(app, project(make_project, tmp_path))
     play_until_strip(app, swaps=1)
@@ -766,13 +768,17 @@ def test_after_a_strip_leave_in_a_glide_the_wave_moves_on_without_a_jump(app, ma
     print(f"strip leave: {i1 - i0} frames until #lanesGL shows, largest offset of the wave meanwhile {max(map(abs, hold))} px, swap {round(swap, 2)} px")
     # P4-42: the offsets are errors of reading the animation and the view up to two frames apart (1.6 px per frame at 60 Hz), so a
     # frame that came late (a loaded host: the frame interval shows it) widens them in proportion: the allowance is
-    # the limit at 60 Hz plus 2 x the wave speed x the time that a frame took beyond 16.7 ms. On a quiet host it is 4 and 3 px.
+    # the limit at 60 Hz plus 2 x the wave speed x the time that a frame took beyond 16.7 ms. #187 (40 measured runs on a
+    # loaded arm64 host, 20 idle 20 under the CI shard load): the frame-interval-widened 4/3 px bound still failed CI
+    # (5.17 px against 4.70) and covered the measured noise by as little as 0.07 px (hold) and 0.94 px (swap), while the
+    # noise itself tops out at 6.16 px (hold) and 4.75 px (swap) and the defect it guards shows 12 to 17 px. Base limits
+    # 8/6 px: above every measured value with margin, still under half of the defect's floor.
     rate = app.evaluate("() => GEO.laneW / viewDur()")   # px per second of the transport (1 s per s)
 
     def allowed(limit, rows):
         dt = max((b[6] - a[6] for a, b in zip(rows, rows[1:])), default=0) / 1000
         return limit + 2 * rate * max(0.0, dt - 1 / 60)
-    a_hold, a_swap = allowed(4, jf[max(i0 - 1, 0):i1]), allowed(3, jf[i1 - 3:i1 + 2])
+    a_hold, a_swap = allowed(8, jf[max(i0 - 1, 0):i1]), allowed(6, jf[i1 - 3:i1 + 2])
     # #280: the takeover draw's own age widens the swap bound. The stall harness holds the worker
     # 150 ms plus 12 x 50 ms and a loaded host stretches frames on top, so the first #lanesGL draw
     # can be wall-clock old BY DESIGN (spLeftCheck waits on a frame count, posted[-3], not on wall

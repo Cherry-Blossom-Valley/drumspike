@@ -27,25 +27,35 @@ fn selftest_clock_counts_from_the_start_of_the_process() {
     assert!(selftest_clock() > a && a >= 0.0);
 }
 
+/// F-9: one capability file per concern, each with explicit permissions. No file grants `core:default`.
 #[test]
-fn capability_allows_the_open_and_save_dialogs_and_the_file_drag_only() {
-    let cap = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities/default.json")).unwrap();
-    let v: Value = serde_json::from_str(&cap).unwrap();
-    let perms: Vec<&str> = v["permissions"]
-        .as_array()
+fn capabilities_grant_each_concern_its_permissions_and_nothing_more() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+    let mut granted: Vec<(String, Vec<String>)> = std::fs::read_dir(&dir)
         .unwrap()
-        .iter()
-        .filter_map(Value::as_str)
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .map(|p| {
+            let v: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+            let perms = v["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_str().unwrap().to_string())
+                .collect();
+            (v["identifier"].as_str().unwrap().to_string(), perms)
+        })
         .collect();
-    assert_eq!(
-        perms,
-        [
-            "core:default",
-            "dialog:allow-open",
-            "dialog:allow-save",
-            "drag:allow-start-drag"
-        ]
-    );
+    granted.sort();
+    let expected: Vec<(String, Vec<String>)> = [
+        ("default", vec!["core:event:allow-listen"]),
+        ("dialogs", vec!["dialog:allow-open", "dialog:allow-save"]),
+        ("drag", vec!["drag:allow-start-drag"]),
+    ]
+    .into_iter()
+    .map(|(id, perms)| (id.to_string(), perms.into_iter().map(String::from).collect()))
+    .collect();
+    assert_eq!(granted, expected);
 }
 
 #[test]

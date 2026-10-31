@@ -121,13 +121,10 @@ fn the_real_sessions_give_their_session_tempo_within_half_a_bpm() {
         // right. Hard for Session A (0.0045 s) and Session C (0.0021 s) under DSP hits; the
         // bar 1 of "Session B" (0.9555 s, two beats) lives in `tempo_detect_real_bar1`
         // (#317). No eprintln-only check: the failing session is asserted --ignored.
-        // #130: on Session A the half-time corroboration moves the pick to 134 and the bar 1
-        // sits one 134-beat into the grid (0.444 s measured): the bar-1 stage keeps its own
-        // backbeat pair under the half-time snare. Out of #130's scope; the assertion follows
-        // the measured pick (within a beat) until the owner rules on the bar 1.
-        let bar1_bound = if session == "Session A" { 0.5 } else { 0.02 };
+        // #180: Session A's half-time snare (beat 3) puts bar 1 on the reference since rule 3
+        // (it sat one 134-beat late, 0.444 s, with rule 2).
         if session != "Session B" {
-            assert!(d.bar1_s < bar1_bound, "{session}: bar 1 at {} s", d.bar1_s);
+            assert!(d.bar1_s < 0.02, "{session}: bar 1 at {} s", d.bar1_s);
         }
         seen += 1;
     }

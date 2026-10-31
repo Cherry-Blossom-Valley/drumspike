@@ -46,7 +46,7 @@ use drumspike_core::io::{Bext, MappedWav, WavFormat, WavSpec, write_wav};
 use drumspike_core::layer::{
     AlignParams, Curve, HitXcorr, OneShot, attack_template, majority_sign, read_one_shot, render_layer, xcorr_hit,
 };
-use drumspike_core::project::{EXPORTS_DIR, Source, SourceStatus, build_source, resolve_source};
+use drumspike_core::project::{DOC_EXT, EXPORTS_DIR, Source, SourceStatus, build_source, resolve_source};
 use drumspike_core::spike::hit_index;
 use serde_json::{Map, Value, json};
 
@@ -309,6 +309,14 @@ pub(crate) fn protected_files(g: &OpenProject) -> Vec<PathBuf> {
     out
 }
 
+/// The 400 for a render target that is a folder (and was not a recoverable leftover).
+fn folder_error(path: &Path) -> AppError {
+    AppError::bad(format!(
+        "the path is a folder: {}: the render writes a file there; remove the folder or choose another file",
+        path.display()
+    ))
+}
+
 /// A file that a render or a calibration save writes (P4-7d): an absolute path in an existing folder, not a
 /// folder, and not one of the `protected` files. 400 for a relative path or a folder, 404 for a missing
 /// folder, 409 for a protected file.
@@ -321,7 +329,7 @@ pub(crate) fn save_target(path: &str, protected: &[PathBuf]) -> Result<PathBuf, 
         return Err(AppError::not_found(format!("the folder does not exist: {path}")));
     }
     if p.is_dir() {
-        return Err(AppError::bad(format!("the path is a folder: {path}")));
+        return Err(folder_error(p));
     }
     let canon = |f: &Path| crate::export::path_key(f);
     if protected.iter().any(|f| canon(f) == canon(p)) {
@@ -815,6 +823,37 @@ impl Service {
         self.export_layer_to(sid, name, None)
     }
 
+    /// The leftover of a failed layer render (campaign 0.9.6 S3, docs/review/test-campaign-0.9.6/117):
+    /// a folder named like the target file plus a `<target>.drumspike` sidecar blocked every later
+    /// render with 400 "the path is a folder" until the folder was removed by hand. Only the proven
+    /// leftover shape is cleared: an empty folder at the target with the `<target>.drumspike`
+    /// sidecar file beside it (`true`; the sidecar goes with it). Every other folder at the target
+    /// belongs to the engineer: it stays exactly as it was and the render answers 400 with a
+    /// message that says so (`false`).
+    fn clear_render_leftover(path: &Path) -> bool {
+        if !path.is_dir() {
+            return false;
+        }
+        let name = path
+            .file_name()
+            .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+        let sidecar = path.with_file_name(format!("{name}{DOC_EXT}"));
+        if !sidecar.is_file() {
+            return false; // without the sidecar the folder is not provably a render leftover
+        }
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return false;
+        };
+        if entries.count() > 0 {
+            return false; // any content: foreign, left alone
+        }
+        if std::fs::remove_dir(path).is_err() {
+            return false;
+        }
+        let _ = std::fs::remove_file(&sidecar);
+        true
+    }
+
     /// [`Service::export_layer`] into the file `path` (an absolute path, see [`save_target`]) when given.
     pub fn export_layer_to(&self, sid: &str, name: &str, path: Option<&str>) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
@@ -830,7 +869,11 @@ impl Service {
             (job, g.project.subdir(EXPORTS_DIR), protected_files(&g))
         };
         let target = match path {
-            Some(p) => Some(save_target(p, &protected)?),
+            Some(p) => {
+                // a folder at the target from a failed earlier render must not block this one
+                Self::clear_render_leftover(Path::new(p));
+                Some(save_target(p, &protected)?)
+            }
             None => None,
         };
         let file = job
@@ -881,6 +924,9 @@ impl Service {
                 dir.join(format!("{name}_layer.wav"))
             }
         };
+        if path.is_dir() && !Self::clear_render_leftover(&path) {
+            return Err(folder_error(&path));
+        }
         // R01: the render must not write a protected file (a source, one-shot or bounce of any
         // open project) in any spelling of the path
         crate::export::check_export_plan(std::slice::from_ref(&path), &self.protected_files_everywhere())?;

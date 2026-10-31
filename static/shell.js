@@ -287,7 +287,11 @@
     overview: () => setOverview(!S.overviewOn),   // #169: View > Show Overview
     counter_seconds: () => setCounter("seconds"),
     counter_samples: () => setCounter("samples"),
+    counter_barsbeats: () => setCounter("barsbeats"),   // #149
+    counter_timecode: () => setCounter("timecode"),   // #149
     counter_exchange: () => exchangeCounters(),
+    tab_active: () => setTabMode("active"),   // #175: View > Tab Moves To (radio)
+    tab_all: () => setTabMode("all"),
     play_stop: () => playStop(),
     half_speed: () => halfSpeedPlayStop(),   // P3-20b: Transport > Half-Speed Play
     stop_return: () => { if (needProject()) stopAndReturn(); },
@@ -375,6 +379,7 @@
       overview: !!S.overviewOn, zoomOwn: (S.zoomOwn || []).map(p => p.name),   // #169: Show Overview; the own zoom presets (names, in order)
       tempoRuler: tmShown("tempo"), meterRuler: tmShown("meter"), beatsRuler: tmShown("beats"), markersRuler: tmShown("markers"), grid: tmShown("grid"), velocityLane: VL.on, otherMics: MX.on, keyPreset: DSKeys.preset, projectName: S.sid ? S.name : "", dirty: !!(S.sid && S.dirty),   // P4-26: the window title; P4-22 markersRuler; P4-40f: velocityLane
       suspendFollow: !!SETTINGS().ui.suspendFollowOnEdit,   // P4-wf10: Transport > Suspend Follow when Editing
+      tabMode: SETTINGS().ui.tabMode === "all" ? "all" : "active",   // #175: View > Tab Moves To
       stopReturnMode: !!SETTINGS().ui.stopReturnToStart,   // #436: Transport > Stop Returns to Start
       exportAgain: !!S.exportAgain,   // P4-31: File > Export Again is greyed before the project keeps an export shape
       undo: S.undo.length > 0, redo: S.redo.length > 0,   // #158 (rank 9): Edit > Undo and Redo are greyed while their stack is empty
