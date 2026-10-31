@@ -117,6 +117,7 @@ pub fn filter_on(learn: &Map<String, Value>) -> bool {
 
 /// P4-38d: true when the Learn pick of this `learn` object runs: the filter is on ([`filter_on`]),
 /// or it holds a Learn This example (the Add rule runs with the filter off too).
+#[must_use]
 pub fn pick_runs(learn: &Map<String, Value>) -> bool {
     filter_on(learn) || counts(learn).0 > 0
 }
@@ -392,6 +393,7 @@ pub fn check_learn(learn: &Map<String, Value>) -> Result<(), AppError> {
 
 /// The strongest candidate (`[t, class, strength, v]`, see `histogram::detection_candidates`) with
 /// `t0 <= t <= t1`: its time.
+#[must_use]
 pub fn strongest_candidate(cands: &[Value], t0: f64, t1: f64) -> Option<f64> {
     cands
         .iter()
@@ -402,6 +404,7 @@ pub fn strongest_candidate(cands: &[Value], t0: f64, t1: f64) -> Option<f64> {
 }
 
 /// The candidate nearest to `t`, within [`CANDIDATE_REACH`]: its time.
+#[must_use]
 pub fn nearest_candidate(cands: &[Value], t: f64) -> Option<f64> {
     cands
         .iter()
@@ -413,6 +416,7 @@ pub fn nearest_candidate(cands: &[Value], t: f64) -> Option<f64> {
 /// The steepest envelope rise of at least [`RISE_MIN_DB`] in `t0..=t1` of `x` (the refine step's
 /// anchor rule, [`refine_sr`]): the time of the attack, or `None`. A range longer than
 /// `RISE_PIECES` steps of [`RISE_STEP`] seconds counts its first part only.
+#[must_use]
 pub fn rise_example(x: &[f32], sr: u32, t0: f64, t1: f64) -> Option<f64> {
     rise_at_least(x, sr, t0, t1, RISE_MIN_DB)
 }
@@ -423,6 +427,7 @@ pub const WEAK_RISE_DB: f64 = 2.0;
 /// #81: the time of a K-add on a range with no hit, no candidate and no [`rise_example`]: the steepest envelope rise
 /// of at least [`WEAK_RISE_DB`] in `t0..=t1` (the attack the engineer heard is soft or under a ring), else `None` (the
 /// [`range_centre`]).
+#[must_use]
 pub fn weak_rise(x: &[f32], sr: u32, t0: f64, t1: f64) -> Option<f64> {
     weak_rise_clear(x, sr, t0, t1, &[])
 }
@@ -433,6 +438,7 @@ pub const BLEED_REACH: f64 = 0.012;
 const PEAK_WIN: f64 = 0.020;
 
 /// The peak magnitude of `x` in `t..t + PEAK_WIN`.
+#[must_use]
 pub fn peak_after(x: &[f32], sr: u32, t: f64) -> f32 {
     let a = ((t.max(0.0) * f64::from(sr)) as usize).min(x.len());
     let b = (((t + PEAK_WIN).max(0.0) * f64::from(sr)) as usize).min(x.len());
@@ -442,6 +448,7 @@ pub fn peak_after(x: &[f32], sr: u32, t: f64) -> f32 {
 /// #81: [`weak_rise`] without the bleed rises: the steepest rise of at least [`WEAK_RISE_DB`] in `t0..=t1` that has
 /// no hit of another close mic within [`BLEED_REACH`] whose level ([`peak_after`]) is over the rise's level in `x`.
 /// `others`: the hits of the other close mics, `(time, level)`. `None`: no clear rise (the [`range_centre`]).
+#[must_use]
 pub fn weak_rise_clear(x: &[f32], sr: u32, t0: f64, t1: f64, others: &[(f64, f32)]) -> Option<f64> {
     let mut rises = rises_of(x, sr, t0, t1, WEAK_RISE_DB);
     rises.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -463,6 +470,7 @@ fn bleed_of(x: &[f32], sr: u32, t: f64, others: &[(f64, f32)]) -> Option<(f64, f
 /// #81: the K-add of a range with no clear rise: the range centre. The engineer draws the range around the hit they
 /// heard, so the centre is off by half the range at most; the range start was off by up to a whole range, and the
 /// loudest point lies after the attack (the peak follows it) or on the bleed of another drum.
+#[must_use]
 pub fn range_centre(t0: f64, t1: f64) -> f64 {
     (t0 + t1) / 2.0
 }
@@ -470,6 +478,7 @@ pub fn range_centre(t0: f64, t1: f64) -> f64 {
 /// #81: why [`weak_rise_clear`] took or left each piece of `t0..=t1`: one `{piece, t, db, why}` per piece, `why` one of
 /// `taken`, `no attack` (refine gave the piece start back), `under 2 dB`, `outside the range`, `bleed` (with
 /// `bleed_t` and `bleed_level` of the louder hit, and the rise's own `level`), `steeper rise taken`, `same time`.
+#[must_use]
 pub fn rise_log(x: &[f32], sr: u32, t0: f64, t1: f64, others: &[(f64, f32)]) -> Vec<Value> {
     let taken = weak_rise_clear(x, sr, t0, t1, others);
     let mut seen: Vec<f64> = Vec::new();
@@ -1190,6 +1199,7 @@ fn opt_f64(args: &Value, key: &str) -> Result<Option<f64>, AppError> {
 }
 
 /// Run a command of this card for the bridge and `call`; `None` when `cmd` is not one of them.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     let run = || -> Result<Value, AppError> {
         let (sid, name) = (arg_str(args, "sid")?, arg_str(args, "name")?);

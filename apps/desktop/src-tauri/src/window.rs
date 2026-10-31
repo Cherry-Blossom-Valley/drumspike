@@ -20,6 +20,7 @@ pub struct QuitGate {
 }
 
 /// Hold a close or quit request back for the page's prompts?
+#[must_use]
 pub fn should_hold(page_ready: bool, gate_open: bool) -> bool {
     page_ready && !gate_open
 }

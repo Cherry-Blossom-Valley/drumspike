@@ -25,6 +25,7 @@ pub const ROW_HEIGHTS_COMMANDS: [&str; 2] = ["row_heights_get", "row_heights_set
 /// The stored row heights: the entries of the `row_heights` object whose value is a positive
 /// finite number (the rest of the object stays as it is in the document; a value of another type
 /// reads as no override, a non-object as none).
+#[must_use]
 pub fn doc_row_heights(doc: &drumspike_core::Document) -> Value {
     match doc.extra.get(DOC_KEY) {
         Some(Value::Object(m)) => {
@@ -94,6 +95,7 @@ impl Service {
 
 /// Run a command of this card for the bridge, the command line and the MCP server; `None` when
 /// `cmd` is not one of them.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !ROW_HEIGHTS_COMMANDS.contains(&cmd) {
         return None;

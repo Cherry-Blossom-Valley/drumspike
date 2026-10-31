@@ -42,6 +42,7 @@ pub enum Lock {
 
 impl Lock {
     /// The text of the open answer's `lock` field: `held` or `unavailable: <why>`.
+    #[must_use]
     pub fn note(&self) -> String {
         match self {
             Lock::Held(_) => "held".to_string(),
@@ -50,6 +51,7 @@ impl Lock {
     }
 
     /// The lock, when held.
+    #[must_use]
     pub fn into_held(self) -> Option<ProjectLock> {
         match self {
             Lock::Held(l) => Some(l),
@@ -144,11 +146,13 @@ impl ProjectLock {
     }
 
     /// The pid and client named in the lock file of `dir` (whoever holds it), for tests and messages.
+    #[must_use]
     pub fn holder_of(dir: &Path) -> Option<(u32, String)> {
         holder(&mut File::open(dir.join(LOCK_FILE)).ok()?)
     }
 
     /// The lock file.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }

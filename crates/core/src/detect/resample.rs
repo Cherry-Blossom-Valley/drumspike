@@ -234,17 +234,20 @@ impl Resampler {
     }
 
     /// The source rate this table was built for.
+    #[must_use]
     pub fn source_rate(&self) -> u32 {
         self.sr_in
     }
 
     /// Taps per phase (0 for the 44.1 kHz pass-through).
+    #[must_use]
     pub fn taps_per_phase(&self) -> usize {
         self.taps
     }
 
     /// Output length for `n` input samples: `ceil(n * 147 / M)`, saturating at
     /// `usize::MAX` for inputs where the multiplication would overflow (R14).
+    #[must_use]
     pub fn output_len(&self, n: usize) -> usize {
         n.saturating_mul(PHASES).div_ceil(self.m)
     }
@@ -276,6 +279,7 @@ impl Resampler {
     }
 
     /// Resample `x` (mono, the source rate of this table) to 44.1 kHz.
+    #[must_use]
     pub fn process(&self, x: &[f32]) -> Vec<f32> {
         if self.m == PHASES {
             return x.to_vec();

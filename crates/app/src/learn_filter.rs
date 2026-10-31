@@ -82,6 +82,7 @@ pub fn forget_attack_gate(out: &mut [bool], attacks: &[f64], marks_ms: &[f64], b
 /// lies off the marks' span, and it is no "not" example). The score and the threshold are the caller's: this is the
 /// gate alone, so the Learn drag preview and the stored filter read one decision. All false unless the track has
 /// "not" examples and no "this" example, the only case the gate runs in [`learn_pick`].
+#[must_use]
 pub fn attack_gate_kept(x: &[f32], sr: u32, times: &[f64], this: &[f64], not: &[f64]) -> Vec<bool> {
     if !this.is_empty() || not.is_empty() {
         return vec![false; times.len()];
@@ -107,6 +108,7 @@ pub struct AttackProfile {
 
 /// The [`AttackProfile`] of a Forget-only track (`not` non-empty: the window is the marks' span, see
 /// [`forget_attack_gate`]).
+#[must_use]
 pub fn attack_profile(x: &[f32], sr: u32, times: &[f64], not: &[f64]) -> AttackProfile {
     let attacks = times.iter().map(|&t| attack_ms(x, t, sr)).collect();
     let marks_ms: Vec<f64> = not.iter().map(|&n| attack_ms(x, n, sr)).collect();
@@ -126,6 +128,7 @@ pub fn attack_profile(x: &[f32], sr: u32, times: &[f64], not: &[f64]) -> AttackP
 /// `threshold`, unless a "this" example is within [`REACH`] or an edited hit within
 /// [`EDITED_REACH`]; and true for the hit nearest to each "not" example within [`REACH`]. A hit
 /// without a candidate (no score) stays in.
+#[must_use]
 pub fn mark_out(
     det: &[(f64, u8)],
     frames: &[u32],
@@ -159,6 +162,7 @@ pub fn mark_out(
 
 /// The detected hits of the track's role (and their roll flags): the role filter of
 /// `analyze::analyze_flags`, applied before the examples look at the hits.
+#[must_use]
 pub fn role_hits(det: &[(f64, u8)], roll: &[bool], role: &str) -> (Vec<(f64, u8)>, Vec<bool>) {
     let classes = drumspike_core::analyze::role_classes(role);
     let keep = |n: u8| role == "other" || classes.contains(&n);
@@ -474,6 +478,7 @@ pub fn forced_this(det: &[(f64, u8)], cands: &[Value], this: &[f64]) -> Vec<f64>
 /// * P4-38e: a forced or Add-rule hit within [`MERGE_WINDOW`] of a `dropped` time (the hand deletions of
 ///   [`note_dropped`], times after the Hitpoint shift) stays out: a deleted Learn hit stays deleted;
 /// * a flam hit (P4-13 stage B, `"flam": true`) stays with every field and is filtered when its first stroke is.
+#[must_use]
 pub fn refilter_merge(current: &[Value], base: &[Value], forced: &[Value], dropped: &[f64]) -> Vec<Value> {
     let t = |e: &Value| e.get("t").and_then(Value::as_f64).unwrap_or(0.0);
     let filtered = |e: &Value| e.get(FILTERED) == Some(&Value::Bool(true));

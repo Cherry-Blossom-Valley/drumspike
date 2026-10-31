@@ -22,6 +22,7 @@ pub enum WavFormat {
 
 impl WavFormat {
     /// Container bytes per sample.
+    #[must_use]
     pub fn bytes_per_sample(self) -> u16 {
         match self {
             WavFormat::Pcm16 => 2,
@@ -60,6 +61,7 @@ fn put_field(c: &mut [u8], at: usize, width: usize, s: &str) {
 
 /// Encode a `bext` chunk body (fixed 602 bytes plus the coding history, NUL-padded to an
 /// even length).
+#[must_use]
 pub fn encode_bext(b: &Bext) -> Vec<u8> {
     let mut c = vec![0u8; BEXT_FIXED_LEN];
     put_field(&mut c, BEXT_DESCRIPTION, 256, &b.description);
@@ -111,6 +113,7 @@ fn fmt_body(spec: &WavSpec) -> Vec<u8> {
 }
 
 /// Build a whole WAV file around already encoded sample bytes (`data` is the data chunk).
+#[must_use]
 pub fn encode_wav_raw(spec: &WavSpec, data: &[u8], bext: Option<&Bext>) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() + 1024);
     out.extend_from_slice(b"RIFF\0\0\0\0WAVE");
@@ -179,6 +182,7 @@ fn encode_hook_note(len: usize) {
 
 /// Quantise interleaved float samples to `format`: clamp to [-1, 1], scale to the integer
 /// full scale, round to nearest.
+#[must_use]
 pub fn encode_samples(format: WavFormat, interleaved: &[f32]) -> Vec<u8> {
     encode_hook_note(interleaved.len());
     let mut buf = Vec::with_capacity(interleaved.len() * format.bytes_per_sample() as usize);
@@ -195,6 +199,7 @@ pub fn encode_samples(format: WavFormat, interleaved: &[f32]) -> Vec<u8> {
 }
 
 /// Build a whole WAV file from interleaved float samples.
+#[must_use]
 pub fn encode_wav(spec: &WavSpec, interleaved: &[f32], bext: Option<&Bext>) -> Vec<u8> {
     encode_wav_raw(spec, &encode_samples(spec.format, interleaved), bext)
 }

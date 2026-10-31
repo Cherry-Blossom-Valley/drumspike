@@ -50,6 +50,7 @@ use crate::{Service, ServiceConfig};
 pub const CROSS_BLEED: u32 = 1;
 
 /// The version of a new analysis: the configuration's pin, else [`CROSS_BLEED`].
+#[must_use]
 pub fn analysis_cross_bleed(cfg: &ServiceConfig) -> u32 {
     cfg.cross_bleed.unwrap_or(CROSS_BLEED)
 }

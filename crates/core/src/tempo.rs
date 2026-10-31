@@ -100,6 +100,7 @@ fn check_bpm(bpm: f64, what: &str) -> Result<(), String> {
 
 impl TempoMap {
     /// True for the default map (the one the document does not store).
+    #[must_use]
     pub fn is_default(&self) -> bool {
         *self == TempoMap::default()
     }
@@ -149,6 +150,7 @@ impl TempoMap {
     }
 
     /// The map as JSON: `{bpm, steps: [{t, bpm}], meter: [num, den], changes: [{bar, meter: [num, den]}], bar1_s}`.
+    #[must_use]
     pub fn to_json(&self) -> Value {
         json!({
             "bpm": self.bpm,
@@ -311,6 +313,7 @@ impl TickMap {
 
     /// The map from the tempo events of a file: `(tick, microseconds per quarter)`, sorted by
     /// tick; none at tick 0 means 500,000 (the MIDI default of 120 BPM).
+    #[must_use]
     pub fn from_events(ppq: u16, events: &[(i64, u32)]) -> TickMap {
         let mut tm = TickMap {
             ppq,
@@ -341,6 +344,7 @@ impl TickMap {
     }
 
     /// The tempo events of the file: `(tick, microseconds per quarter)`, the first at tick 0.
+    #[must_use]
     pub fn tempo_events(&self) -> Vec<(i64, u32)> {
         self.segs.iter().map(|s| (s.tick, s.us)).collect()
     }
@@ -351,12 +355,14 @@ impl TickMap {
     }
 
     /// Time in seconds of a tick.
+    #[must_use]
     pub fn time(&self, tick: i64) -> f64 {
         let s = self.seg_at_tick(tick);
         s.start_s + (tick - s.tick) as f64 * s.exact_us / (self.ppq as f64 * 1e6)
     }
 
     /// The tick nearest to a time (ties to even); 0 for a time at or before 0.
+    #[must_use]
     pub fn tick(&self, t: f64) -> i64 {
         if t <= 0.0 {
             return 0;
@@ -367,12 +373,14 @@ impl TickMap {
     }
 
     /// Ticks of a bar of `num/den`: `ppq * 4 * num / den`; `None` when that is not a whole number.
+    #[must_use]
     pub fn bar_ticks(&self, num: u8, den: u8) -> Option<i64> {
         let x = self.ppq as i64 * 4 * num as i64;
         (x % den as i64 == 0).then_some(x / den as i64)
     }
 
     /// The tick of bar 1 for a map: `bar1_s` as a tick.
+    #[must_use]
     pub fn bar1_tick(&self, map: &TempoMap) -> i64 {
         self.tick(map.bar1_s)
     }

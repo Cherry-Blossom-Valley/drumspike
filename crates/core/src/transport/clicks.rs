@@ -43,6 +43,7 @@ const DECAY_S: f64 = 0.030;
 const STOP_S: f64 = 0.040;
 
 /// The default click pitch of a role (`ROLE_DEFAULT_CLICK[role] || 1500`).
+#[must_use]
 pub fn role_pitch(role: &str) -> f32 {
     ROLE_DEFAULT_CLICK
         .iter()
@@ -52,6 +53,7 @@ pub fn role_pitch(role: &str) -> f32 {
 
 /// The click envelope at `t` seconds for `volume` (the two exponential ramps of `app.js`,
 /// then the floor until the stop).
+#[must_use]
 pub fn envelope(t: f64, volume: f32) -> f64 {
     let v = volume as f64;
     if v <= 0.0 || !(0.0..STOP_S).contains(&t) {
@@ -102,6 +104,7 @@ pub fn click_template(pitch_hz: f32, volume: f32, sample_rate: u32) -> Vec<f32> 
 
 /// Map a hit sample at the track rate to the device sample:
 /// `round(hit * device_rate / track_rate)`, ties to even, in exact integer arithmetic.
+#[must_use]
 pub fn map_hit(hit: u64, track_rate: u32, device_rate: u32) -> u64 {
     if track_rate == device_rate {
         return hit;
@@ -140,6 +143,7 @@ impl TrackClicks {
     /// Build from hit samples at `track_rate` (any order; mapped with [`map_hit`], sorted,
     /// duplicates kept) and the click sound. The onsets of both speeds are built here, on the
     /// control side, so a speed change needs no new bank.
+    #[must_use]
     pub fn new(hits: &[u64], track_rate: u32, device_rate: u32, pitch_hz: f32, volume: f32) -> TrackClicks {
         TrackClicks {
             onsets: mapped(hits, track_rate, device_rate),

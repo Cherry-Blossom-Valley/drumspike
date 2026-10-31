@@ -24,6 +24,7 @@ pub const MARKERS_COMMANDS: [&str; 2] = ["markers_get", "markers_set"];
 
 /// The stored markers: the entries of the `markers` list with a numeric `t` (the rest of the list
 /// stays as it is in the document; a value of another type is no list and reads as none).
+#[must_use]
 pub fn doc_markers(doc: &drumspike_core::Document) -> Vec<Value> {
     match doc.extra.get(DOC_KEY) {
         Some(Value::Array(a)) => a
@@ -92,6 +93,7 @@ impl Service {
 
 /// Run a command of this card for the bridge, the command line and the MCP server; `None` when
 /// `cmd` is not one of them.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !MARKERS_COMMANDS.contains(&cmd) {
         return None;

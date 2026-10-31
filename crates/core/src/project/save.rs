@@ -18,6 +18,7 @@ pub const BACKUPS_KEEP: usize = 10;
 
 /// `project.free_name`: `<base>` or `<stem> (2).<ext>`, `(3)`, ... the first that does not
 /// exist in `dir`.
+#[must_use]
 pub fn free_name(dir: &Path, base: &str) -> String {
     let (stem, ext) = splitext(base);
     let mut cand = base.to_string();

@@ -58,6 +58,7 @@ pub fn shell_sync(
 
 /// Take the paths that came from the Finder, the Dock or a drop: `{projects, others}`.
 #[tauri::command]
+#[must_use]
 pub fn open_paths_take(app: AppHandle) -> Value {
     open::take(&app)
 }
@@ -180,6 +181,7 @@ fn export_opts(
 /// Self-test: a click on the menu item `id`, through the code that a real click runs.
 #[cfg(debug_assertions)]
 #[tauri::command]
+#[must_use]
 pub fn selftest_menu(app: AppHandle, id: String) -> Value {
     menu::dispatch(&app, &id)
 }
@@ -187,6 +189,7 @@ pub fn selftest_menu(app: AppHandle, id: String) -> Value {
 /// Self-test: the items of the live menu with their enabled state.
 #[cfg(debug_assertions)]
 #[tauri::command]
+#[must_use]
 pub fn selftest_menu_report(app: AppHandle) -> Value {
     menu::report(&app)
 }
@@ -212,6 +215,7 @@ pub fn selftest_close_window(app: AppHandle) -> Result<(), AppError> {
 /// Self-test (#206): the main menu as macOS has it (`NSMenu` key equivalents and modifier masks).
 #[cfg(debug_assertions)]
 #[tauri::command]
+#[must_use]
 pub fn selftest_ns_menu(app: AppHandle) -> Value {
     menu::ns_menu_rows(&app)
 }
@@ -219,6 +223,7 @@ pub fn selftest_ns_menu(app: AppHandle) -> Value {
 /// Self-test (#206): a `menu_key` through the real native menu path (`NSMenu performKeyEquivalent:`).
 #[cfg(debug_assertions)]
 #[tauri::command]
+#[must_use]
 pub fn selftest_menu_key(app: AppHandle, key: String) -> Value {
     menu::perform_key_equivalent(&app, &key)
 }
@@ -240,6 +245,7 @@ pub fn selftest_menu_log() -> Value {
 /// variant of an event the `NSMenu` matches (`selftest_menu_key` builds the physical-looking one).
 #[cfg(debug_assertions)]
 #[tauri::command]
+#[must_use]
 pub fn selftest_menu_probe(app: AppHandle, chars: String, flags: u64) -> Value {
     json!({"matched": menu::perform_key_equivalent_raw(&app, &chars, &chars, flags)})
 }

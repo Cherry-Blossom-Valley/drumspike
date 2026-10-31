@@ -3,6 +3,7 @@
 use crate::pyops::{py_round, window};
 
 /// `engine.peak_in(x, t, sr)`: max |x| in `[t - 5 ms, t + 60 ms)`, 0.0 for an empty window.
+#[must_use]
 pub fn peak_in(x: &[f32], t: f64, sr: u32) -> f64 {
     let (i0, i1) = window(x.len(), t, sr, 0.005, 0.060);
     let seg = &x[i0..i1];
@@ -39,6 +40,7 @@ impl Default for VelocityMap {
 
 /// The peak level of the hit at `t` in dBFS: [`peak_in`] as `20 log10`, at least -180 dB
 /// (P4-3: the loudness histogram; [`velocity_map`] uses the same value).
+#[must_use]
 pub fn peak_db(x: &[f32], t: f64, sr: u32) -> f64 {
     20.0 * peak_in(x, t, sr).max(1e-9).log10()
 }
@@ -46,6 +48,7 @@ pub fn peak_db(x: &[f32], t: f64, sr: u32) -> f64 {
 /// #293 (B8): the attack time (ms) of the hit at `t`, in the window of [`peak_in`]: from the first sample that reaches
 /// 10 % of the window's peak to the peak. A stroke on its own mic rises in well under a millisecond; bleed of another
 /// drum arrives smeared over several. 0.0 for an empty or silent window.
+#[must_use]
 pub fn attack_ms(x: &[f32], t: f64, sr: u32) -> f64 {
     let (i0, i1) = window(x.len(), t, sr, 0.005, 0.060);
     let seg = &x[i0..i1];
@@ -66,6 +69,7 @@ pub fn attack_ms(x: &[f32], t: f64, sr: u32) -> f64 {
 
 /// The velocity of a peak level `d` (dBFS) with the map `m` (P4-3: the page computes the same
 /// numbers while the engineer drags a handle of the loudness histogram).
+#[must_use]
 pub fn velocity_of_db(d: f64, m: &VelocityMap) -> i64 {
     let denom = (m.hi_db - m.lo_db).max(1e-6);
     let span = (m.hi_v - m.lo_v) as f64;
@@ -74,6 +78,7 @@ pub fn velocity_of_db(d: f64, m: &VelocityMap) -> i64 {
 }
 
 /// `engine.velocity_map(x, sr, times)`: dB-mapped velocities, Python `round` = ties to even.
+#[must_use]
 pub fn velocity_map(x: &[f32], sr: u32, times: &[f64], m: &VelocityMap) -> Vec<i64> {
     times.iter().map(|&t| velocity_of_db(peak_db(x, t, sr), m)).collect()
 }

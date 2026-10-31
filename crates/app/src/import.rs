@@ -30,6 +30,7 @@ pub const IMPORT_COMMANDS: [&str; 2] = ["legacy_list", "project_import"];
 /// `server.folder_name`: a project name as a folder name. Runs of `/`, `\`, `:` and NUL become
 /// one `-`; the result is stripped of white space and dots, cut to 80 characters, and
 /// `Imported project` when nothing is left.
+#[must_use]
 pub fn folder_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut in_run = false;
@@ -183,6 +184,7 @@ fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, AppError> {
 
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them. The
 /// argument names are those of the Tauri wrappers in `apps/desktop/src-tauri/src/import.rs`.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     let run = || -> Result<Value, AppError> {
         match cmd {

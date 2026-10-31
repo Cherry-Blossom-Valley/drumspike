@@ -24,12 +24,14 @@ use crate::io::{WavFormat, WavSpec};
 pub const CLASSES: [&str; 6] = ["kick", "snare", "tom", "hat", "cymbal", "other"];
 
 /// The index of `class` in [`CLASSES`], or `None` for an unknown class (dropped).
+#[must_use]
 pub fn class_index(class: &str) -> Option<u8> {
     CLASSES.iter().position(|&c| c == class).map(|i| i as u8)
 }
 
 /// The MIDI note of an internal class index at the track's `role` (the `other` class and an
 /// unknown role take the role's note, as [`crate::analyze::role_note`] does).
+#[must_use]
 pub fn class_note(class: u8, role: &str) -> u8 {
     if (class as usize) < CLASS_NOTES.len() {
         CLASS_NOTES[class as usize]

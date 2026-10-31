@@ -105,6 +105,7 @@ fn traced(
 ///   folder), for `tools/parity/check_service.py --bin`; exit 0, or 1 on an error.
 ///
 /// Any other first argument returns `None` and the app starts as usual.
+#[must_use]
 pub fn headless(args: &[String]) -> Option<i32> {
     headless_as("", args)
 }
@@ -958,7 +959,7 @@ pub fn run() {
     START.set(Instant::now()).ok();
     // P3-15c: the trace (feature `trace`, `DRUMSPIKE_TRACE=<file>`) starts first, so its clock
     // and the self-test clock (`selftest_clock`) differ by the offset of its first event
-    drumspike_app::trace::init_from_env(START.get().map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0));
+    let _ = drumspike_app::trace::init_from_env(START.get().map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0));
     async_runtime_setup();
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

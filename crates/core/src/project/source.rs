@@ -29,6 +29,7 @@ pub enum SourceStatus {
 
 impl SourceStatus {
     /// `ok`, `changed` or `missing`, as the server reports it.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             SourceStatus::Ok => "ok",
@@ -129,6 +130,7 @@ fn with_head_cache<T>(f: impl FnOnce(&mut HeadCache) -> T) -> T {
 }
 
 /// The counters of the head-hash cache (tests and measurements).
+#[must_use]
 pub fn head_cache_counts() -> HeadCacheCounts {
     with_head_cache(|c| c.counts)
 }
@@ -167,6 +169,7 @@ fn head_sha1_settled(path: &Path, settle: std::time::Duration) -> Result<(String
 /// `bext` chunk found in the first MiB, as `YYYY-MM-DDThh:mm:ssZ`; `None` for a file that
 /// is not RIFF/WAVE, has no `bext`, a `bext` shorter than 338 bytes, an empty date or
 /// cannot be read.
+#[must_use]
 pub fn bext_origination(path: &Path) -> Option<String> {
     let head = read_head(path).ok()?;
     if head.len() < 12 || &head[..4] != b"RIFF" || &head[8..12] != b"WAVE" {
@@ -236,6 +239,7 @@ pub fn build_source(path: &Path, project_dir: &Path, mode: &str) -> Result<Sourc
 
 /// `project.source_matches`: size and head hash of `path` equal the record's (false when
 /// the file cannot be read).
+#[must_use]
 pub fn source_matches(record: &Source, path: &Path) -> bool {
     let size = match std::fs::metadata(path) {
         Ok(m) => m.len() as i64,
@@ -252,6 +256,7 @@ pub fn source_matches(record: &Source, path: &Path) -> bool {
 
 /// `project.source_candidates`: the resolution order, duplicates removed: the absolute
 /// `path`, `<project>/<relative>` normalised, `<project>/Audio Files/<basename>`.
+#[must_use]
 pub fn source_candidates(record: &Source, project_dir: &Path) -> Vec<PathBuf> {
     let project_dir = abspath(project_dir);
     let mut out: Vec<PathBuf> = Vec::new();
@@ -276,6 +281,7 @@ pub fn source_candidates(record: &Source, project_dir: &Path) -> Vec<PathBuf> {
 
 /// `project.resolve_source`: the first candidate with matching size and head hash
 /// (`Ok`), else the first existing candidate (`Changed`), else `(None, Missing)`.
+#[must_use]
 pub fn resolve_source(record: Option<&Source>, project_dir: &Path) -> (Option<PathBuf>, SourceStatus) {
     let Some(record) = record else {
         return (None, SourceStatus::Missing);
@@ -823,6 +829,7 @@ pub struct CacheKey {
 }
 
 /// `server.cache_key(track)`.
+#[must_use]
 pub fn cache_key(track: &Track) -> CacheKey {
     let rec = track.source_ref();
     CacheKey {
@@ -835,6 +842,7 @@ pub fn cache_key(track: &Track) -> CacheKey {
 impl CacheKey {
     /// True when `<analysis_dir>/key.json` holds exactly this key (a missing or unreadable
     /// file is stale, like `server.analysis_dir`).
+    #[must_use]
     pub fn matches_file(&self, analysis_dir: &Path) -> bool {
         let Ok(text) = std::fs::read_to_string(analysis_dir.join("key.json")) else {
             return false;

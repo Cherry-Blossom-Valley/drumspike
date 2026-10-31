@@ -6,12 +6,14 @@
 
 /// Python `int(f)` for a finite float: truncation toward zero.
 #[inline]
+#[must_use]
 pub fn py_int(f: f64) -> i64 {
     f as i64
 }
 
 /// Python `round(f)` on a float: ties go to the even neighbour.
 #[inline]
+#[must_use]
 pub fn py_round(f: f64) -> i64 {
     f.round_ties_even() as i64
 }
@@ -21,6 +23,7 @@ pub fn py_round(f: f64) -> i64 {
 /// fixed-precision formatting rounds the exact value the same way, so `round(0.25, 1)` is
 /// 0.2, `round(0.35, 1)` is 0.3 (0.35 is stored below the tie) and `round(-0.04, 1)` is -0.0.
 /// A non-finite value comes back unchanged.
+#[must_use]
 pub fn py_round_digits(f: f64, ndigits: usize) -> f64 {
     if !f.is_finite() {
         return f;
@@ -35,6 +38,7 @@ pub fn py_round_digits(f: f64, ndigits: usize) -> f64 {
 /// a negative upper bound (`t < -post`, never produced by the detector) counts from the end
 /// like `x[0:-n]`, so `engine.peak_in` and this helper agree for every `t`.
 #[inline]
+#[must_use]
 pub fn window(len: usize, t: f64, sr: u32, pre: f64, post: f64) -> (usize, usize) {
     let srf = sr as f64;
     let i0 = (py_int((t - pre) * srf).max(0) as usize).min(len);

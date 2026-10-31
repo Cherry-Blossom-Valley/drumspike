@@ -125,6 +125,7 @@ fn describe(c: &CommandSpec) -> String {
 }
 
 /// The `tools/list` entry of a row.
+#[must_use]
 pub fn tool(c: &CommandSpec) -> Value {
     let mut t = json!({
         "name": c.name,

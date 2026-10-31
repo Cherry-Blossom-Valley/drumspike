@@ -43,6 +43,7 @@ const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
 /// ffmpeg's default mono downmix coefficients for `ch` channels, in channel order.
 /// Verified against ffmpeg 9.0.2 for 1 to 8 channels (default layouts: mono, stereo,
 /// 2.1, 4.0, 5.0, 5.1, 6.1, 7.1).
+#[must_use]
 pub fn ffmpeg_mono_coefs(ch: usize) -> Option<&'static [f32]> {
     const T: [&[f32]; 8] = [
         &[1.0],
@@ -59,6 +60,7 @@ pub fn ffmpeg_mono_coefs(ch: usize) -> Option<&'static [f32]> {
 
 /// The `WAVE_FORMAT_EXTENSIBLE` channel mask of ffmpeg's default layout for `ch` channels
 /// (0 for 1 and 2 channels; for stereo see [`ffmpeg_stereo_mask_ok`]).
+#[must_use]
 pub fn ffmpeg_default_mask(ch: usize) -> u32 {
     match ch {
         3 => 0x00B,
@@ -83,6 +85,7 @@ const SPEAKER_BITS: u32 = 0x3_FFFF;
 /// with fewer or more than two speaker bits (0, a single bit, 0x7, 0x103, 0x80000000) does
 /// not match the channel count, ffmpeg falls back to the default stereo layout, and the
 /// result is plain stereo.
+#[must_use]
 pub fn ffmpeg_stereo_mask_ok(channel_mask: u32) -> bool {
     (channel_mask & SPEAKER_BITS).count_ones() != 2 || channel_mask & SPEAKER_BITS == 0x3
 }
@@ -156,11 +159,13 @@ impl Plan {
     }
 
     /// The mode this plan folds with.
+    #[must_use]
     pub fn mode(&self) -> MixMode {
         self.mode
     }
 
     /// Channel count of the input frames.
+    #[must_use]
     pub fn channels(&self) -> usize {
         self.ch
     }
@@ -187,6 +192,7 @@ impl Plan {
 
     /// Fold one frame of float samples (IEEE float input).
     #[inline]
+    #[must_use]
     pub fn fold_f32(&self, frame: &[f32]) -> f32 {
         debug_assert_eq!(frame.len(), self.ch);
         if self.ch == 1 {
@@ -200,6 +206,7 @@ impl Plan {
 
     /// Fold one frame of 16-bit samples.
     #[inline]
+    #[must_use]
     pub fn fold_s16(&self, frame: &[i16]) -> f32 {
         debug_assert_eq!(frame.len(), self.ch);
         const SCALE: f32 = 1.0 / 32768.0;
@@ -225,6 +232,7 @@ impl Plan {
     /// Fold one frame of 32-bit integer samples; 24-bit input is passed shifted up by 8,
     /// which is how ffmpeg holds it.
     #[inline]
+    #[must_use]
     pub fn fold_s32(&self, frame: &[i32]) -> f32 {
         debug_assert_eq!(frame.len(), self.ch);
         const SCALE: f32 = 1.0 / 2147483648.0;

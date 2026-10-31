@@ -54,6 +54,7 @@ fn on_grid(t: f64, sr: Option<i64>) -> f64 {
 }
 
 /// The length of a track in seconds: `duration`, else `n_samples / sr`; `None` when unknown.
+#[must_use]
 pub fn track_end(tr: &drumspike_core::project::Track) -> Option<f64> {
     tr.duration
         .filter(|d| d.is_finite() && *d > 0.0)
@@ -269,6 +270,7 @@ pub const SNAP_RISE_DB: f64 = 6.0;
 /// it: the refinement `rule` (back-track margin `peak_db`) with `click` as the coarse time, its search window
 /// +-[`SNAP_S`], clipped at the midpoints to `neighbors` (the track's other hits). `None` when no attack lies within
 /// [`SNAP_S`] of the click.
+#[must_use]
 pub fn snap_onset(x: &[f32], sr: u32, click: f64, neighbors: &[f64], rule: RefineRule, peak_db: f64) -> Option<f64> {
     let ms = SNAP_S * 1000.0;
     let win = RefineWindow { lo_ms: -ms, hi_ms: ms };
@@ -289,6 +291,7 @@ pub const MERGE_WINDOW: f64 = 0.020;
 /// hit is dropped, the edited hits stay as they are, the list is sorted by time (the picks first
 /// on a tie). An edited hit is one added by hand, moved away from its detected time, or (P4-14) restored from the
 /// tom bleed mark ([`is_kept`]).
+#[must_use]
 pub fn merge_edited(picked: Vec<Value>, current: &[Value]) -> Vec<Value> {
     let t = |e: &Value| e.get("t").and_then(Value::as_f64).unwrap_or(0.0);
     let edited: Vec<&Value> = current.iter().filter(|e| e.as_object().is_some_and(is_kept)).collect();
@@ -570,6 +573,7 @@ impl Service {
 }
 
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !EDIT_COMMANDS.contains(&cmd) {
         return None;

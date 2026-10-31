@@ -45,6 +45,7 @@ pub enum Role {
 
 impl Role {
     /// The app's role name.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Role::Kick => "kick",
@@ -138,6 +139,7 @@ const LOUD_DB: f64 = 12.0; // the hits within this of the loudest onset carry th
 /// A role is suggested only when its confidence reaches that role's own bar
 /// ([`role_threshold`]); a role with no bar (never 90 % precise on ENST) is never
 /// suggested.
+#[must_use]
 pub fn role_from_audio(samples: &[f32], sr: u32) -> Option<Role> {
     let (role, confidence) = role_from_audio_confidence(samples, sr);
     role.filter(|r| role_threshold(*r).is_some_and(|bar| confidence >= bar))
@@ -158,6 +160,7 @@ pub fn role_from_audio(samples: &[f32], sr: u32) -> Option<Role> {
 /// - hat: never above 65 %; no bar.
 /// - cymbal: the wash veto never fired on the run (0 suggestions at any threshold);
 ///   no bar.
+#[must_use]
 pub fn role_threshold(role: Role) -> Option<f64> {
     match role {
         Role::Kick => Some(0.05),
@@ -168,6 +171,7 @@ pub fn role_threshold(role: Role) -> Option<f64> {
 
 /// The suggested role with its confidence: the vote margin between the best and the
 /// second role, or the wash veto strength for a cymbal. `None` has confidence 0.
+#[must_use]
 pub fn role_from_audio_confidence(samples: &[f32], sr: u32) -> (Option<Role>, f64) {
     if samples.is_empty() {
         return (None, 0.0);
@@ -182,6 +186,7 @@ pub fn role_from_audio_confidence(samples: &[f32], sr: u32) -> (Option<Role>, f6
 }
 
 /// The features of one clip (see the module docs).
+#[must_use]
 pub fn role_features(samples: &[f32], sr: u32) -> RoleFeatures {
     let f = RoleFeatures::zeroed();
     let n = samples.len();
@@ -320,6 +325,7 @@ fn features_from(a: &Analysis, hits: &[RoleHitFeatures]) -> RoleFeatures {
 }
 
 /// The per-hit features of every loud hit of the clip (the eval's per-hit mode).
+#[must_use]
 pub fn hit_features(samples: &[f32], sr: u32) -> Vec<RoleHitFeatures> {
     if samples.is_empty() {
         return Vec::new();

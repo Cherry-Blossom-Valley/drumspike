@@ -31,6 +31,7 @@ pub fn is_manual(e: &Value) -> bool {
 
 /// A hit the engineer keeps as it is: a hand-edited hit, or one with the document's reserved
 /// edit flag `edited: true` (a hand velocity or a restore). The page's `isKept` is this rule.
+#[must_use]
 pub fn is_kept(e: &Value) -> bool {
     is_manual(e) || e.get("edited") == Some(&Value::Bool(true))
 }
@@ -38,11 +39,13 @@ pub fn is_kept(e: &Value) -> bool {
 /// True for a hit out of the output (MIDI, spikes, Export All, the click, Learn scoring).
 /// A kept hit never carries an out mark: Rust strips the marks on edit (edit.rs), the page
 /// guards its predicates with `!isManual` — one policy, two mechanisms (R1).
+#[must_use]
 pub fn is_out(e: &Value) -> bool {
     OUT_KEYS.iter().any(|k| e.get(k) == Some(&Value::Bool(true)))
 }
 
 /// [`is_out`] for the typed events of a document (the marks live in `extra`).
+#[must_use]
 pub fn event_out(e: &Event) -> bool {
     OUT_KEYS.iter().any(|k| e.extra.get(*k) == Some(&Value::Bool(true)))
 }
@@ -54,11 +57,13 @@ pub const TEMPO_USES_ONE_PREDICATE: &str =
     "tempo detection uses the one `out` predicate: a cut, bled or filtered hit is no tempo candidate";
 
 /// [`is_out`] for the tempo detection: the same one predicate, no exception.
+#[must_use]
 pub fn tempo_out(e: &Event) -> bool {
     event_out(e)
 }
 
 /// [`tempo_out`] for the JSON events of the page and the tests.
+#[must_use]
 pub fn tempo_out_json(e: &Value) -> bool {
     is_out(e)
 }

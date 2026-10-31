@@ -87,6 +87,7 @@ impl TempFile {
     }
 
     /// The path of the temporary file.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }

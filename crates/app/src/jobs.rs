@@ -68,12 +68,14 @@ pub struct JobToken {
 
 impl JobToken {
     /// The generation of the job (unique per process, higher is newer).
+    #[must_use]
     pub fn generation(&self) -> u64 {
         self.generation
     }
 
     /// Whether the job was asked to stop. The flag belongs to this generation alone; a
     /// stale generation is stopped by [`Jobs::active`] instead (it is never reused).
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::SeqCst)
     }
@@ -410,6 +412,7 @@ pub fn parse_rule(v: &str) -> Option<RefineRule> {
 
 /// P4-12: the rule of a new analysis (`analyze_start`): the pin of the configuration, else
 /// [`RefineRule::CURRENT`].
+#[must_use]
 pub fn analysis_rule(cfg: &ServiceConfig) -> RefineRule {
     cfg.refine_rule.unwrap_or(RefineRule::CURRENT)
 }

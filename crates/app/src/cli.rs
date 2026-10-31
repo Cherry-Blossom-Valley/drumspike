@@ -38,6 +38,7 @@ pub struct Io {
 
 impl Io {
     /// The process's stdin, stdout and stderr.
+    #[must_use]
     pub fn stdio() -> Io {
         Io {
             input: Box::new(std::io::BufReader::new(std::io::stdin())),
@@ -54,6 +55,7 @@ impl Io {
 
 /// The exit code of an error: 2 for 400, 3 for 404, 4 for 409, else 1. An unknown track is a 400 of the service (the
 /// page reads that code), but it is "not found" for a caller of this tool: 3, like an unknown command or project.
+#[must_use]
 pub fn exit_code(e: &AppError) -> i32 {
     match e.code {
         400 if e.message.starts_with("unknown track") => 3,
@@ -275,6 +277,7 @@ pub fn help_text(command: Option<&str>) -> Result<String, AppError> {
 }
 
 /// The registry of the agent surface as JSON: what `drumspike commands` prints.
+#[must_use]
 pub fn commands_json() -> Value {
     let rows: Vec<Value> = api::agent_commands()
         .map(|c| {

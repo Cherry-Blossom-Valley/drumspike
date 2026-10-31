@@ -193,6 +193,7 @@ pub struct AnalyzeBranches {
 
 impl AnalyzeBranches {
     /// The counters as `(name, count)` pairs in a fixed order.
+    #[must_use]
     pub fn pairs(&self) -> [(&'static str, usize); 17] {
         [
             ("tracks", self.tracks),
@@ -256,16 +257,19 @@ pub struct Analysis {
 
 impl Analysis {
     /// True when the roll fill added event `i`.
+    #[must_use]
     pub fn is_roll(&self, i: usize) -> bool {
         self.roll.get(i).copied().unwrap_or(false)
     }
 
     /// P4-6c: true when the Learn filter takes event `i` out of the output.
+    #[must_use]
     pub fn is_learn_out(&self, i: usize) -> bool {
         self.learn_out.get(i).copied().unwrap_or(false)
     }
 
     /// P4-38b: true when the Learn Add rule added event `i`.
+    #[must_use]
     pub fn is_learned(&self, i: usize) -> bool {
         self.learned.get(i).copied().unwrap_or(false)
     }
@@ -273,6 +277,7 @@ impl Analysis {
 
 /// The MIDI notes a role keeps (`engine.ROLE_CLASSES`); an unknown role gets the set of
 /// `other` (every note from 28 to 59).
+#[must_use]
 pub fn role_classes(role: &str) -> &'static [u8] {
     const OTHER: [u8; 32] = {
         let mut a = [0u8; 32];
@@ -295,6 +300,7 @@ pub fn role_classes(role: &str) -> &'static [u8] {
 
 /// The note of a DSP fallback hit (`engine.ROLE_NOTE`; an unknown role gets 35 like
 /// `other`).
+#[must_use]
 pub fn role_note(role: &str) -> u8 {
     match role {
         "snare" => 38,
@@ -306,6 +312,7 @@ pub fn role_note(role: &str) -> u8 {
 }
 
 /// The thresholds as the CLI receives them: `float(f"{t:.3f}")` for each.
+#[must_use]
 pub fn round_thresholds(t: &[f64; N_CLASSES]) -> [f64; N_CLASSES] {
     t.map(|v| py_round_digits(v, 3))
 }

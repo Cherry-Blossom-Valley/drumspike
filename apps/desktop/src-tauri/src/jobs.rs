@@ -30,11 +30,13 @@ pub async fn project_consolidate(
 }
 
 #[tauri::command]
+#[must_use]
 pub fn job_status(svc: State<'_, Service>, sid: String) -> Value {
     svc.job_status(&sid)
 }
 
 #[tauri::command]
+#[must_use]
 pub fn job_cancel(svc: State<'_, Service>, sid: String) -> Value {
     svc.job_cancel(&sid)
 }

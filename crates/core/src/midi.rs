@@ -121,18 +121,21 @@ impl From<std::io::Error> for MidiError {
 }
 
 /// Seconds per tick, as `PrettyMIDI.__init__` stores it: `60.0 / (initial_tempo * resolution)`.
+#[must_use]
 pub fn tick_scale(ppq: u16, tempo: f64) -> f64 {
     60.0 / (tempo * ppq as f64)
 }
 
 /// `PrettyMIDI.time_to_tick(t)` on a fresh object: 0 for `t <= 0`, else `round(t / tick_scale)`
 /// with ties to even.
+#[must_use]
 pub fn time_to_tick(t: f64, tick_scale: f64) -> i64 {
     if t <= 0.0 { 0 } else { py_round(t / tick_scale) }
 }
 
 /// The `set_tempo` value `pretty_midi` writes: `int(6e7 / (60 / (tick_scale * ppq)))` in
 /// microseconds per quarter note, with the same floating-point steps.
+#[must_use]
 pub fn tempo_meta(ppq: u16, tempo: f64) -> u32 {
     let ts = tick_scale(ppq, tempo);
     let bpm = 60.0 / (ts * ppq as f64);

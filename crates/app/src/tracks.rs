@@ -78,6 +78,7 @@ pub struct Probe {
 
 impl Probe {
     /// Duration in seconds.
+    #[must_use]
     pub fn duration(&self) -> f64 {
         self.n_frames as f64 / f64::from(self.sr)
     }
@@ -275,6 +276,7 @@ pub fn expand(paths: &[String]) -> Vec<PathBuf> {
 
 /// The track name of a file: letters, digits and `-` stay, every other run becomes one `_`
 /// (`server.safe_name`); `track<n>` when nothing is left.
+#[must_use]
 pub fn safe_name(stem: &str, idx: usize) -> String {
     let mut out = String::new();
     let mut gap = false;

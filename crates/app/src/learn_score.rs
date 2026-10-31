@@ -42,6 +42,7 @@ pub const VERSION: u32 = 1;
 const HEADER: usize = 24;
 
 /// FNV-1a (64 bit) of the candidate frames, as 16 hex digits: the candidate part of the cache key.
+#[must_use]
 pub fn frames_hash(frames: &[u32]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for f in frames {
@@ -55,6 +56,7 @@ pub fn frames_hash(frames: &[u32]) -> String {
 
 /// The key of a track's features: the source's key (the candidates' lifetime), the candidate frames' hash
 /// and the method. #293: the DSP candidates replace the kept activations, so the key has no model part.
+#[must_use]
 pub fn learn_key(source: &Value, frames: &[u32], method: &str) -> Value {
     json!({"source": source, "candidates": frames_hash(frames), "method": method})
 }
@@ -98,6 +100,7 @@ static TMP_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 
 /// The features in `dir` when their key equals `key`, the dimension is `dim` and the file is whole:
 /// `(frames, features)`; else `None`.
+#[must_use]
 pub fn read_learn(dir: &Path, key: &Value, dim: usize) -> Option<(Vec<u32>, Vec<f32>)> {
     let stored: Value = serde_json::from_str(&fs::read_to_string(dir.join(LEARN_KEY)).ok()?).ok()?;
     if stored != *key {
@@ -119,6 +122,7 @@ pub fn read_learn(dir: &Path, key: &Value, dim: usize) -> Option<(Vec<u32>, Vec<
 }
 
 /// The unique candidate frames of `[t, class, strength, v]` rows (time order).
+#[must_use]
 pub fn candidate_frames(cands: &[Value]) -> Vec<u32> {
     let mut f: Vec<u32> = cands
         .iter()
@@ -145,6 +149,7 @@ pub fn frame_values(cands: &[Value], frames: &[u32]) -> Vec<u64> {
 }
 
 /// The index of the frame nearest to `t` within [`CANDIDATE_REACH`] in the sorted `frames`.
+#[must_use]
 pub fn nearest_frame(frames: &[u32], t: f64) -> Option<usize> {
     let f = t * FPS;
     let i = frames.partition_point(|&x| f64::from(x) < f);
@@ -201,6 +206,7 @@ impl Centre {
     pub const APP: Centre = Centre::Track;
 
     /// The name in `service_tool learn-eval` (`none`, `track`, `bleed`, `auto`).
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Centre::None => "none",
@@ -211,6 +217,7 @@ impl Centre {
     }
 
     /// The mode of a name, `None` for an unknown one.
+    #[must_use]
     pub fn parse(name: &str) -> Option<Centre> {
         [Centre::None, Centre::Track, Centre::Bleed, Centre::Auto]
             .into_iter()
@@ -220,6 +227,7 @@ impl Centre {
 
 /// The frames that pass the Sensitivity `sens`: a frame's lowest slider value ([`frame_values`]) at
 /// or under it.
+#[must_use]
 pub fn solid_frames(values: &[u64], sens: f64) -> Vec<bool> {
     values.iter().map(|&v| v as f64 <= sens).collect()
 }
@@ -470,6 +478,7 @@ pub fn auto_on(learn: &Map<String, Value>) -> bool {
 
 /// P4-6c: the threshold the Learn filter uses: the suggestion of the scores while `learn.auto` is
 /// set ([`auto_on`]), else the stored `threshold` (default [`similarity::DEFAULT_THRESHOLD`]).
+#[must_use]
 pub fn effective_threshold(learn: &Map<String, Value>, scored: &Scored) -> f32 {
     if auto_on(learn) {
         scored.suggest
