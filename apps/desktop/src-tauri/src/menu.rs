@@ -1570,7 +1570,7 @@ pub fn fix_shift_equivalents<R: Runtime>(app: &AppHandle<R>) {
             return;
         };
         fn walk(menu: &objc2_app_kit::NSMenu) {
-            for it in menu.itemArray().iter() {
+            for it in &menu.itemArray() {
                 if it.hasSubmenu() {
                     if let Some(sub) = it.submenu() {
                         walk(&sub);
@@ -1592,7 +1592,7 @@ pub fn fix_shift_equivalents<R: Runtime>(app: &AppHandle<R>) {
                 }
             }
         }
-        for sub in menu.itemArray().iter() {
+        for sub in &menu.itemArray() {
             if let Some(s) = sub.submenu() {
                 walk(&s);
             }
@@ -1621,7 +1621,7 @@ pub fn ns_menu_rows<R: Runtime>(app: &AppHandle<R>) -> Value {
             let mut rows = Vec::new();
             // nested submenus too (View > Waveform Zoom > In): walk every level
             fn walk(menu: &objc2_app_kit::NSMenu, title: &str, rows: &mut Vec<Value>) {
-                for it in menu.itemArray().iter() {
+                for it in &menu.itemArray() {
                     if it.hasSubmenu() {
                         if let Some(sub) = it.submenu() {
                             walk(&sub, &it.title().to_string(), rows);
@@ -1638,7 +1638,7 @@ pub fn ns_menu_rows<R: Runtime>(app: &AppHandle<R>) -> Value {
                     }));
                 }
             }
-            for sub in menu.itemArray().iter() {
+            for sub in &menu.itemArray() {
                 let title = sub.title().to_string();
                 let Some(sub) = sub.submenu() else { continue };
                 walk(&sub, &title, &mut rows);
