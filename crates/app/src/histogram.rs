@@ -68,10 +68,13 @@ fn edited(added: bool, orig: Option<f64>, t: f64) -> bool {
 }
 
 /// Mark the detected hits of `events` whose peak level in `x` is below `cut` (`"cut": true`) and clear the mark of
-/// the others; with `cut` off every mark goes. Edited hits never carry it.
+/// the others; with `cut` off every mark goes. Edited hits never carry it, nor a hit the user keeps (#242: the
+/// override wins, the predicate takes care of the rest).
 pub fn mark_cut_events(events: &mut [Event], x: &[f32], sr: u32, cut: Option<f64>) {
     for e in events {
-        let on = cut.is_some_and(|c| !edited(e.added == Some(true), e.orig, e.t) && peak_db(x, e.t, sr) < c);
+        let on = cut.is_some_and(|c| {
+            !edited(e.added == Some(true), e.orig, e.t) && !crate::policy::event_user_kept(e) && peak_db(x, e.t, sr) < c
+        });
         if on {
             e.extra.insert("cut".into(), Value::Bool(true));
         } else {
@@ -96,7 +99,8 @@ pub fn mark_cut_values(events: &mut [Value], x: &[f32], sr: u32, cut: Option<f64
             .ok_or_else(|| AppError::bad("every event needs a numeric t"))?;
         let added = m.get("added") == Some(&Value::Bool(true));
         let orig = m.get("orig").and_then(Value::as_f64);
-        if cut.is_some_and(|c| !edited(added, orig, t) && peak_db(x, t, sr) < c) {
+        let kept = m.get("keep") == Some(&Value::Bool(true)); // #242: the user's override wins
+        if cut.is_some_and(|c| !edited(added, orig, t) && !kept && peak_db(x, t, sr) < c) {
             m.insert("cut".into(), Value::Bool(true));
         } else {
             m.shift_remove("cut");

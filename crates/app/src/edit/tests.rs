@@ -14,7 +14,7 @@ fn apply_ops_adds_moves_deletes_and_sets_velocities() {
         json!({"op": "velocity", "index": 1, "v": 64}),
     ];
     let (out, c) = apply_ops(list, &ops, Some(100), None).unwrap();
-    assert_eq!(c, [1, 1, 1, 1, 0]);
+    assert_eq!(c, [1, 1, 1, 1, 0, 0]);
     assert_eq!(
         out,
         vec![
@@ -54,7 +54,7 @@ fn restore_and_an_edit_clear_the_tom_bleed_mark() {
         json!({"op": "restore", "index": 3}),
     ];
     let (out, c) = apply_ops(list, &ops, None, None).unwrap();
-    assert_eq!(c, [0, 0, 1, 0, 1], "a restore of an unmarked hit counts nothing");
+    assert_eq!(c, [0, 0, 1, 0, 1, 0], "a restore of an unmarked hit counts nothing");
     assert_eq!(out[0], json!({"t": 0.5, "v": 80, "edited": true}), "restored and kept");
     assert_eq!(
         out[1],
@@ -226,7 +226,7 @@ fn restore_and_an_edit_clear_the_learn_filter_mark() {
         json!({"op": "move", "index": 1, "t": 1.1}),
     ];
     let (out, c) = apply_ops(list, &ops, None, None).unwrap();
-    assert_eq!(c, [0, 0, 1, 0, 1]);
+    assert_eq!(c, [0, 0, 1, 0, 1, 0]);
     assert_eq!(out[0], json!({"t": 0.5, "v": 80, "edited": true}), "restored and kept");
     assert_eq!(
         out[1],
@@ -364,6 +364,89 @@ fn after_the_undo_a_repick_treats_the_hit_as_before_the_edit() {
     let pick = json!({"t": 1.0, "v": 70});
     let merged = merge_edited(vec![pick.clone()], &undone);
     assert_eq!(merged, vec![pick], "the pick wins over the undone hit");
+}
+
+/// #242: the toggle op sets and clears the user's per-hit flags exactly, the undo sends the
+/// state before as `was`, and the strip removes the automatic marks from a hit the user keeps.
+#[test]
+fn the_toggle_op_sets_the_user_flags_and_the_undo_restores_the_state() {
+    let list = vec![json!({"t": 1.0, "v": 90, "cut": true}), json!({"t": 2.0, "v": 90})];
+    // a deactivated hit becomes active: keep goes on, a deactivated mark comes off
+    let (out, c) = apply_ops(
+        list.clone(),
+        &[json!({"op": "toggle", "index": 0, "keep": true, "deactivated": false})],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(c, [0, 0, 0, 0, 0, 1]);
+    assert_eq!(
+        out[0],
+        json!({"t": 1.0, "v": 90, "keep": true}),
+        "kept in the output; the cut mark leaves with the strip"
+    );
+    // an active hit becomes deactivated: the user's own mark goes on
+    let (out, c) = apply_ops(
+        list.clone(),
+        &[json!({"op": "toggle", "index": 1, "keep": false, "deactivated": true})],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(c, [0, 0, 0, 0, 0, 1]);
+    assert_eq!(out[1], json!({"t": 2.0, "v": 90, "deactivated": true}));
+    // the undo sends the state before: the flags go back to absent, the cut mark comes back
+    let (undone, c) = apply_ops(
+        out,
+        &[json!({"op": "toggle", "index": 0, "keep": false, "deactivated": false, "was": {"cut": true, "keep": false, "deactivated": false}})],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(c, [0, 0, 0, 0, 0, 1]);
+    assert_eq!(undone[0], list[0], "byte-identical with the hit before the toggle");
+    // a missing or non-boolean flag is a 400 and nothing changes
+    let e = apply_ops(list.clone(), &[json!({"op": "toggle", "index": 0})], None, None).unwrap_err();
+    assert_eq!(e.code, 400);
+    let e = apply_ops(
+        list,
+        &[json!({"op": "toggle", "index": 0, "keep": 1, "deactivated": false})],
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(e.code, 400);
+}
+
+/// #242: a kept hit survives a re-pick or Re-analyze merge (`merge_edited` reads `is_kept`),
+/// with its flags; a pick at another time comes in beside it.
+#[test]
+fn merge_edited_keeps_a_toggled_hit() {
+    let current = vec![json!({"t": 2.0, "v": 90, "deactivated": true, "cut": true})];
+    let merged = merge_edited(
+        vec![
+            json!({"t": 0.5, "v": 80}),
+            json!({"t": 1.5, "v": 80}),
+            json!({"t": 2.5, "v": 80}),
+        ],
+        &current,
+    );
+    assert_eq!(
+        merged,
+        vec![
+            json!({"t": 0.5, "v": 80}),
+            json!({"t": 1.5, "v": 80}),
+            json!({"t": 2.0, "v": 90, "deactivated": true, "cut": true}),
+            json!({"t": 2.5, "v": 80}),
+        ],
+        "the toggled hit stays as it is between the picks"
+    );
+    let kept = vec![json!({"t": 2.0, "v": 90, "keep": true})];
+    let merged = merge_edited(vec![json!({"t": 2.0, "v": 70})], &kept);
+    assert_eq!(
+        merged, kept,
+        "a pick within the merge window loses against the kept hit"
+    );
 }
 
 /// A synthetic kick (the app tests' `kick_signal`) at each of `onsets` in `dur` seconds at 48 kHz.
