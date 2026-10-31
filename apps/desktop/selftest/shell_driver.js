@@ -506,8 +506,10 @@
       await until(() => visible("#exportModal"), "the Export dialog", 15000);
       $q("#exGo").click();
       // #151: a project without a tempo map asks "No tempo set" before the first export;
-      // answer it the way a user would (Export anyway), then the export runs
-      await until(() => !visible("#confirmModal") || /exported \d+ MIDI and \d+ spike files/.test($q("#stMsg").textContent), "the tempo notice or the export", 15000);
+      // answer it the way a user would (Export anyway), then the export runs. The notice
+      // appears a few IPC round-trips after the click: wait for it to SHOW (or for the
+      // export to have finished without one), never for "not visible yet".
+      await until(() => visible("#confirmModal") || /exported \d+ MIDI and \d+ spike files?/.test($q("#stMsg").textContent), `the tempo notice or the export (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 15000);
       if (visible("#confirmModal")) {
         need($q("#confirmTitle").textContent === "No tempo set", `unexpected confirm "${$q("#confirmTitle").textContent}" before the export`);
         const anyway = $q("#confirmActions button[data-act='anyway']");
