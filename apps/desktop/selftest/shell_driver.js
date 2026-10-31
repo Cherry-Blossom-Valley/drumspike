@@ -106,6 +106,16 @@
       return { ready_ms: r.ready_ms, painted_ms: r.painted_ms, main_shown_ms: r.main_shown_ms, splash_closed_ms: r.splash_closed_ms, closed_after_paint_ms: r.closed_after_paint_ms, steps: r.steps };
     });
 
+    // #195: the one enabled-state expectation, shared by menu_table and menu_state_follows_project
+    // (menu.rs sync + sync_checks): open_recent tracks the recent list, export_again also needs an
+    // export shape, undo/redo are greyed while their stack is empty (#158 rank 9), the four hit
+    // items need a hit selection. `S` is the live page state of the running scenario.
+    const menuEnabledWant = (rep, hasProj) => i => i.id === "open_recent" ? rep.recent.some(r => /^recent:\d+$/.test(r))   // P3-19
+      : i.id === "undo" ? i.ready && hasProj && S.undo.length > 0
+      : i.id === "redo" ? i.ready && hasProj && S.redo.length > 0
+      : i.id === "delete_hit" || i.id === "nudge_earlier" || i.id === "nudge_later" || i.id === "audition" ? i.ready && hasProj && !!S.sel
+      : i.ready && (hasProj ? i.id !== "export_again" || !!S.exportAgain : !i.needs_project);
+
     await step("menu_table", async () => {
       await until(async () => (await T.invoke("selftest_menu_report")).items, "the menu report", 10000);
       const rep = await T.invoke("selftest_menu_report");
@@ -131,16 +141,40 @@
       need(differ.length === 0, `the live menu and static/keymap.js differ: ${differ.join("; ")}`);
       need(DSKeys.problems(DSKeys.COMMANDS).length === 0, `static/keymap.js: ${DSKeys.problems(DSKeys.COMMANDS).join("; ")}`);
       const withAccel = rep.items.filter(i => i.accel).length;
-      const wantAccel = preset === "default" ? 37 : 32;   // #169/#170: Show Overview (Option+O) has a key in both presets; P3-19: Open Most Recent and Keyboard Shortcuts, P3-20a: Waveform Zoom In, Out, Reset and P4-31: Export Again have a key in the Pro Tools preset only; P4-40g's Next and Previous Marker have one in both, P4-40d's Audition Hit in the Cubase preset (#158)
-      need(withAccel === wantAccel && DSKeys.menuKeys(preset).length === withAccel, `${withAccel} items have a shortcut, the table ${DSKeys.menuKeys(preset).length}, expected ${wantAccel}`);
+      // #195: derived from the key table (as test_keys does), so a new item with a shortcut
+      // cannot stale the count; the menu and the table must simply agree
+      const wantAccel = DSKeys.menuKeys(preset).length;
+      need(withAccel === wantAccel, `${withAccel} items have a shortcut, the table ${wantAccel}`);
       const titles = ["Drum Spike", "File", "Edit", "View", "Transport", "Hits", "Track", "Window", "Help"];
       need(rep.menus.join() === titles.join(), `menus: ${rep.menus.join(", ")}`);
       const checks = rep.items.filter(i => i.kind === "check").map(i => i.id);
-      need(checks.join() === "nudge_val_1smp,nudge_val_10smp,nudge_val_100smp,nudge_val_1ms,nudge_val_10ms,height_small,height_medium,height_large,inspector,info_line,overview,counter_seconds,counter_samples,ruler_tempo,ruler_meter,ruler_beats,grid,follow_smooth,follow_page,follow_off,suspend_follow,click,snap,learn_filter", `check items: ${checks}`);   // P4-wf10: Suspend Follow when Editing
-      // no project is open: only the items that need none are enabled, and none of the later-card items
-      const hasRecent = rep.recent.some(r => /^recent:\d+$/.test(r));   // P3-19: Open Most Recent follows the Open Recent list
-      const wrong = rep.items.filter(i => i.enabled !== (i.id === "open_recent" ? hasRecent : i.ready && !i.needs_project)).map(i => `${i.id}=${i.enabled}`);
-      need(wrong.length === 0, `enabled state without a project: ${wrong.join(", ")}`);
+      // #195: list updated to the menu of main 04ccb96; new check items named in the comment:
+      // #149 counter Bars|Beats and Timecode, #175 Tab Moves To (radio), the markers ruler,
+      // #208/#157 Velocity Lane and Other Mics Under Hit, #436 Stop Returns to Start
+      need(checks.join() === "nudge_val_1smp,nudge_val_10smp,nudge_val_100smp,nudge_val_1ms,nudge_val_10ms,height_small,height_medium,height_large,inspector,info_line,overview,counter_seconds,counter_samples,counter_barsbeats,counter_timecode,tab_active,tab_all,ruler_tempo,ruler_meter,ruler_beats,ruler_markers,grid,velocity_lane,other_mics,stop_return_mode,follow_smooth,follow_page,follow_off,suspend_follow,click,snap,learn_filter", `check items: ${checks}`);   // P4-wf10: Suspend Follow when Editing
+      // #195: the document from `open -a` can already be open here (it arrives 6 s in, the splash
+      // closes after 5-15 s), so the enabled state is read after menu sync with a project. The
+      // expectation follows menu.rs sync: open_recent tracks the recent list, export_again also
+      // needs an export shape, undo/redo are greyed while their stack is empty (#158 rank 9),
+      // delete_hit/nudge_earlier/nudge_later/audition need a hit selection (the page sends
+      // `selHit` with every sync), everything else is enabled iff it is ready (and, without a
+      // project, does not need one).
+      const hasProj = !!S.sid;
+      const enabledWant = menuEnabledWant(rep, hasProj);
+      // the page syncs the menu shortly after the document arrives; re-read the report until it matches.
+      // The bad list rides in the timeout error: without it a timeout says nothing about which item lagged.
+      let lastBad = [];
+      try {
+        await until(async () => {
+          const r = await T.invoke("selftest_menu_report");
+          const bad = r.items.filter(i => i.enabled !== enabledWant(i)).map(i => `${i.id}=${i.enabled}`);
+          lastBad = bad;
+          return bad.length ? null : true;   // wait until NOTHING mismatches; the bad list rides in the timeout error
+        }, "the menu enabled state to follow the page state", 10000);
+      } catch (e) {
+        const snap = lastBad.length ? ` last mismatch: ${lastBad.join(", ")}` : "";
+        throw new Error(`${e.message};${snap} (S.sid=${S.sid}, S.sel=${JSON.stringify(S.sel)}, undo=${S.undo.length}, redo=${S.redo.length})`);
+      }
       need(rep.recent.length >= 1, "Open Recent has no entry at all (not even the placeholder)");
       report.metrics.menu = { items: rep.items.length, menus: rep.menus.length, later: rep.items.filter(i => !i.ready).map(i => `${i.id} (${i.card})`),
         accelerators: withAccel, check_items: checks.length, page_keys: rep.items.reduce((n, i) => n + (i.page_keys || []).length, 0),
@@ -163,7 +197,7 @@
         need(differ.length === 0, `${preset}: the live menu and the table differ: ${differ.join("; ")}`);
         need(rep.items.every(i => i.in_menu), `${preset}: items missing in the live menu`);
         const withAccel = rep.items.filter(i => i.accel).length;
-        need(withAccel === DSKeys.menuKeys(preset).length && withAccel === (preset === "default" ? 33 : 28), `${preset}: ${withAccel} accelerators, table ${DSKeys.menuKeys(preset).length}`);   // P3-19
+        need(withAccel === DSKeys.menuKeys(preset).length, `${preset}: ${withAccel} accelerators, table ${DSKeys.menuKeys(preset).length}`);   // P3-19, #195: derived from the key table like menu_table (was a stale hard-coded 33/28)
         return { rep, byId, withAccel };
       };
       // P4-26: the step never SAVES a preset (setKeyPreset(name, false)): a failed check used to leave "cubase" in the settings.json
@@ -218,12 +252,26 @@
     });
 
     await step("menu_state_follows_project", async () => {
-      await until(async () => {
+      // the lagging items ride in the timeout error (the 2776224 shape): a bare timeout
+      // says nothing about which item did not follow. The expectation is the same model as
+      // menu_table (menuEnabledWant): after File > Open of a fresh project, undo/redo and the
+      // four hit items are legitimately greyed (#158 rank 9) until the page state has a stack
+      // step or a hit selection — `enabled === ready` alone can never pass.
+      let lastBad = [];
+      try {
+        const hasProj = !!S.sid;
         const rep = await T.invoke("selftest_menu_report");
-        return rep.items.every(i => i.id === "export_again"   // P4-31: greyed until the project keeps an export shape (the page says so)
-          ? i.enabled === (i.ready && !!S.exportAgain)
-          : i.enabled === i.ready);
-      }, "the menu to enable the items of an open project", 10000);
+        const enabledWant = menuEnabledWant(rep, hasProj);
+        await until(async () => {
+          const r = await T.invoke("selftest_menu_report");
+          const bad = r.items.filter(i => i.enabled !== enabledWant(i)).map(i => `${i.id}=${i.enabled} (ready=${i.ready})`);
+          lastBad = bad;
+          return bad.length ? null : true;
+        }, "the menu to enable the items of an open project", 10000);
+      } catch (e) {
+        const snap = lastBad.length ? ` last mismatch: ${lastBad.join(", ")}` : "";
+        throw new Error(`${e.message};${snap} (S.sid=${S.sid}, S.exportAgain=${JSON.stringify(S.exportAgain)}, S.sel=${JSON.stringify(S.sel)}, undo=${S.undo.length}, redo=${S.redo.length})`);
+      }
       const rep = await T.invoke("selftest_menu_report");
       const off = rep.items.filter(i => !i.enabled).map(i => i.id).sort();
       return { disabled_with_project: off };
@@ -454,17 +502,40 @@
       const sid = S.sid;
       const names = S.order.filter(k => S.tracks[k] && !S.tracks[k].offline && (S.events[k] || []).length > 0), n = names.length;
       need(n > 0, "no track has hits to export");
+      // The dialog opens only after openExport's bridge calls return: wait for EX.open AND
+      // #exportModal without `hidden` (openExport:5898), never for the text alone.
       await click("export");
-      await until(() => visible("#exportModal"), "the Export dialog", 15000);
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog", 15000);
       $q("#exGo").click();
-      await until(() => new RegExp(`exported ${n} MIDI and ${n} spike files?`).test($q("#stMsg").textContent), "Export", 60000);
+      // #151: a project without a tempo map asks "No tempo set" before the first export;
+      // answer it the way a user would (Export anyway), then the export runs. The notice
+      // appears a few IPC round-trips after the click: wait for it to SHOW (or for the
+      // export to have finished without one), never for "not visible yet".
+      await until(() => visible("#confirmModal") || /exported \d+ MIDI and \d+ spike files?/.test($q("#stMsg").textContent), `the tempo notice or the export (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 15000);
+      if (visible("#confirmModal")) {
+        need($q("#confirmTitle").textContent === "No tempo set", `unexpected confirm "${$q("#confirmTitle").textContent}" before the export`);
+        const anyway = $q("#confirmActions button[data-act='anyway']");
+        need(!!anyway, "the tempo notice has no Export anyway button");
+        anyway.click();
+      }
+      await until(() => new RegExp(`exported ${n} MIDI and ${n} spike files?`).test($q("#stMsg").textContent), `Export (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 60000);
       const have = await T.invoke("export_existing", { sid });
       need(have.count === 2 * n, `Exports/ holds ${have.count} files, expected ${2 * n}`);
+      // Cancel only while the dialog is really open (EX.open), and wait until it is closed again.
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog open after the export", 15000);
       $q("#exCancel").click();
+      await until(() => EX.open === false && !visible("#exportModal"), "the Export dialog closed after Cancel", 10000);
+      need(EX.open === false && !visible("#exportModal"), "the Export dialog is not closed before the second open");
       await click("export");
+      // #exReplace keeps its old text after a close (exClose does not clear it): the wait must be
+      // on the dialog being OPEN first, or Escape races openExport's pending bridge calls and the
+      // dialog reopens after exClose (openExport:5898 removes `hidden` again).
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog open again", 15000);
       await until(() => $q("#exReplace").textContent === `${2 * n} files will be replaced`, "the replace count in the dialog", 15000);
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await until(() => !visible("#exportModal") && /export cancelled/.test($q("#stMsg").textContent), "Escape", 10000);
+      // P4-31: after an export ran, the message keeps its result — "export cancelled" only
+      // comes from a cancel before the first export; Escape must close the dialog either way.
+      await until(() => EX.open === false && !visible("#exportModal") && (/export cancelled/.test($q("#stMsg").textContent) || new RegExp(`exported ${n} MIDI and ${n} spike files?`).test($q("#stMsg").textContent)), `Escape (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 10000);
       return { files: have.count };
     });
 
@@ -593,16 +664,37 @@
       await click("reset_mix");
       need(S.tracks[name].volume_db === 0 && S.tracks[name].pan === 0, `Reset Volume and Pan: ${S.tracks[name].volume_db} ${S.tracks[name].pan}`);
       const setChk = (sel, v) => { if ($q(sel).checked !== v) $q(sel).click(); };
-      await click("export_selected");   // P4-30: the Export dialog with the selected track: MIDI only, then spikes only
-      await until(() => visible("#exportModal") && $q("#exScopeSel").checked, "the Export dialog for the selected track", 15000);
-      setChk("#exMidi", true); setChk("#exSpikes", false); $q("#exGo").click();
-      await msgIs(/^exported 1 MIDI file to /);
-      $q("#exCancel").click();
+      // P4-30: the Export dialog with the selected track: MIDI only, then spikes only.
+      // The dialog opens only after openExport's bridge calls return: wait for EX.open AND
+      // #exportModal without `hidden`, never for the text alone (menu_export shape).
+      const answerTempoNotice = async (wantRe, what) => {
+        // #151: a project without a tempo map asks "No tempo set" before the first export;
+        // answer it the way a user would (Export anyway). The notice appears a few IPC
+        // round-trips after the click: wait for it to SHOW (or for the export to have
+        // finished without one), never for "not visible yet".
+        await until(() => visible("#confirmModal") || wantRe.test($q("#stMsg").textContent), `${what}: the tempo notice or the export (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 15000);
+        if (visible("#confirmModal")) {
+          need($q("#confirmTitle").textContent === "No tempo set", `${what}: unexpected confirm "${$q("#confirmTitle").textContent}"`);
+          const anyway = $q("#confirmActions button[data-act='anyway']");
+          need(!!anyway, `${what}: the tempo notice has no Export anyway button`);
+          anyway.click();
+        }
+        await msgIs(wantRe);
+      };
       await click("export_selected");
-      await until(() => visible("#exportModal"), "the Export dialog again", 15000);
-      setChk("#exMidi", false); setChk("#exSpikes", true); $q("#exGo").click();
-      await msgIs(/^exported 1 spike file to /);
+      await until(() => EX.open === true && visible("#exportModal") && $q("#exScopeSel").checked, "the Export dialog for the selected track", 15000);
+      setChk("#exMidi", true); setChk("#exSpikes", false); $q("#exGo").click();
+      await answerTempoNotice(/^exported 1 MIDI file to /, "the MIDI export of the selected track");
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog open after the MIDI export", 15000);
       $q("#exCancel").click();
+      await until(() => EX.open === false && !visible("#exportModal"), "the Export dialog closed after Cancel", 10000);
+      await click("export_selected");
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog again", 15000);
+      setChk("#exMidi", false); setChk("#exSpikes", true); $q("#exGo").click();
+      await answerTempoNotice(/^exported 1 spike file to /, "the spike export of the selected track");
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog open after the spike export", 15000);
+      $q("#exCancel").click();
+      await until(() => EX.open === false && !visible("#exportModal"), "the Export dialog closed after the spike export", 10000);
       done.push("mute_track", "solo_track", "reset_mix", "export_selected");
       // Hits > Analyze Selected Track, Analyze All: the real analysis (the re-analyze question: discard the edits)
       const analyzed = async (id, what) => {
@@ -934,7 +1026,7 @@
       need(list.includes("# Third-party software in Drum Spike") && list.includes("MPL-2.0") && crates > 100, `third-party list: ${crates} crates`);
       $q('#aboutActions button[data-act="ok"]').click();
       await until(() => $q("#aboutModal").classList.contains("hidden"), "the About window to close", 15000);
-      return { title: "About Drum Spike", version: info.version, notice_chars: notice.length, third_party_crates: crates };
+      return { title: "About Drum Spike", version: info.version, notice_chars: list.length, third_party_crates: crates };
     });
 
     await step("menu_close", async () => {
