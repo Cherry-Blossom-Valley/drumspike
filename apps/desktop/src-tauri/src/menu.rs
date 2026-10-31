@@ -223,6 +223,9 @@ pub const REVIEW_PREV: Item = item("review_prev", "Previous Doubtful Hit", true)
 pub const AUDITION: Item = item("audition", "Audition Hit", true);
 pub const SNAP: Item = check("snap", "Snap Playhead to Hits");
 pub const ANALYZE_TRACK: Item = item("analyze_track", "Analyze Selected Track", true);
+/// #265: Re-analyze Selection, the hits of the range only (greyed without a range: `sync_checks`
+/// reads `selRange`).
+pub const REANALYZE_SELECTION: Item = item("reanalyze_selection", "Re-analyze Selection", true);
 pub const ANALYZE_ALL: Item = item("analyze_all", "Analyze All", true);
 // P4-6a: Learn marks (P4-6c: the filter is a check item; #293: the Learn items work on the DSP candidates)
 pub const LEARN_THIS: Item = item("learn_this", "Learn This", true);
@@ -251,7 +254,7 @@ pub const TRACKS_REMOVE: Item = item("tracks_remove", "Remove Track", true);
 pub const SHORTCUTS: Item = item("shortcuts", "Keyboard Shortcuts", false);
 
 /// Every custom item (not the Open Recent and Window entries, not the system items Cut, Copy and so on).
-pub const SPEC: [Item; 110] = [
+pub const SPEC: [Item; 111] = [
     ABOUT,
     SETTINGS,
     QUIT,
@@ -344,6 +347,7 @@ pub const SPEC: [Item; 110] = [
     AUDITION,
     SNAP,
     ANALYZE_TRACK,
+    REANALYZE_SELECTION,
     ANALYZE_ALL,
     LEARN_THIS,
     LEARN_NOT,
@@ -1075,6 +1079,7 @@ fn hits_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
         .item(&make_check(app, &SNAP, true)?)
         .separator()
         .item(&make_item(app, &ANALYZE_TRACK)?)
+        .item(&make_item(app, &REANALYZE_SELECTION)?) // #265: the hits of the range only
         .item(&make_item(app, &ANALYZE_ALL)?)
         .separator()
         .item(&make_item(app, &LEARN_THIS)?)
@@ -1365,6 +1370,10 @@ pub fn sync_checks<R: Runtime>(app: &AppHandle<R>, state: &Value) -> tauri::Resu
         for it in [DELETE_HIT, NUDGE_EARLIER, NUDGE_LATER, AUDITION] {
             set_enabled(&menu, it.id, on)?;
         }
+    }
+    // #265: Hits > Re-analyze Selection is greyed without a range selection (LN.sel)
+    if let Some(on) = state.get("selRange").and_then(Value::as_bool) {
+        set_enabled(&menu, REANALYZE_SELECTION.id, on)?;
     }
     // P4-31: File > Export Again follows the export shape of the project (greyed before the first export; the
     // page sends the key whenever it syncs, and `S.exportAgain` is false without a project)

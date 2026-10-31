@@ -420,7 +420,7 @@ def test_the_context_menus_of_the_selection_and_of_a_mark_bar(lrn):
     box = lane_box(page, "Kick In", "wave")
     page.mouse.click(px(page, 1.2), box["y"] + 30, button="right")
     items = page.locator("#ctxMenu button")
-    assert [t.strip() for t in items.all_inner_texts()] == ["Learn This", "Forget This", "Clear Selection"]
+    assert [t.strip() for t in items.all_inner_texts()] == ["Learn This", "Forget This", "Re-analyze Selection", "Clear Selection"]   # #265: the range item in the selection menu
     page.locator('#ctxMenu [data-act="learn"]').click()
     settled(page)
     assert len(learn_of(page, sid)["marks"][0]["at"]) == 2

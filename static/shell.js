@@ -434,6 +434,7 @@
     review_prev: () => { if (needProject()) reviewStep(-1); },
     snap: () => toggleSnap(),
     analyze_track: () => analyzeSelected(),
+    reanalyze_selection: () => reanalyzeSelected(),   // #265: the hits of the range only (greyed without a range)
     analyze_all: () => { if (needProject()) startAnalysis(null); },
     learn_this: () => learnMark("this"),   // P4-6a: Hits > Learn This (K), Forget This (Shift+K), Learn Filter (greyed until P4-6b), Forget Examples of Track
     learn_not: () => learnMark("not"),
@@ -509,6 +510,7 @@
       exportAgain: !!S.exportAgain,   // P4-31: File > Export Again is greyed before the project keeps an export shape
       undo: S.undo.length > 0, redo: S.redo.length > 0,   // #158 (rank 9): Edit > Undo and Redo are greyed while their stack is empty
       selHit: !!(S.sel || LN.sel),   // #158 (rank 9): Delete, the nudge items and Audition Hit need a hit or range selection
+      selRange: !!(LN.sel && LN.sel.t1 > LN.sel.t0),   // #265: Hits > Re-analyze Selection needs a range selection
       tracks: S.sid ? S.order.slice() : [], selected: sel, follows: (sel && S.tracks[sel].follows) || null,
       ...(typeof undoTitles === "function" ? undoTitles() : {}),   // P4-40a: Edit > Undo and Redo name their step
       learnFilter: !!(sel && typeof lnFilterOn === "function" && lnFilterOn(lnTarget(sel))) };   // P4-6c: Hits > Learn Filter

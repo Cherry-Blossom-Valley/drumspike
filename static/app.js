@@ -4598,7 +4598,7 @@ function lnContext(ev, name, lane) {
       ["flip", m.kind === "this" ? "Change to Forget This" : "Change to Learn This", () => learnFlip(name, m.id)]];
   } else if (LN.sel && LN.sel.track === name) {
     const t = xToT(px, W);
-    if (t >= LN.sel.t0 && t <= LN.sel.t1) items = [["learn", "Learn This", () => learnMark("this")], ["not", "Forget This", () => learnMark("not")], ["clear", "Clear Selection", () => lnClearSel()]];
+    if (t >= LN.sel.t0 && t <= LN.sel.t1) items = [["learn", "Learn This", () => learnMark("this")], ["not", "Forget This", () => learnMark("not")], ["resel", "Re-analyze Selection", () => reanalyzeSelected()], ["clear", "Clear Selection", () => lnClearSel()]];   // #265: the range only, like the Hits menu item
   }
   if (!items) return false;
   ev.preventDefault(); openCtxItems(items, ev.clientX, ev.clientY);
@@ -5710,6 +5710,71 @@ function setAnalysisButtons(disabled) {
   $("#analyzeAllBtn").classList.toggle("running", disabled);   // 0.9.3: the accent colour while an analysis runs
   document.querySelectorAll(".bReanalyze").forEach(b => b.disabled = disabled);
   const rm = document.querySelector("#ctxMenu [data-act=reanalyze]"); if (rm) rm.disabled = disabled;
+}
+
+/* ---------------- Re-analyze Selection (#265) ----------------
+   Hits > Re-analyze Selection, Shift+R and the range context menu entry: the hits of the selected
+   range (LN.sel) only, on its track. The service runs the detector with a 100 ms pad, takes only
+   the hits inside [t0, t1], leaves the hits outside bit-identical and refreshes the followers; the
+   answer carries the whole event list and the info line text. Edited hits inside the range follow
+   the Keep dialog (its text names the range); the run is one undo step "Re-analyze Selection"
+   (before/after, like a re-pick), the backup of the previous events is the service's. */
+let pendingRASel = null;   // the range of a Re-analyze Selection waiting for the Keep answer
+function reanalyzeSelected() {
+  if (!needProject()) return;
+  const s = LN.sel && LN.sel.t1 > LN.sel.t0 ? LN.sel : null;
+  if (!s) { setMsg("no range selected: drag a wave lane first"); return; }
+  if (analysisRunning) { setMsg("analysis already running — wait for it to finish"); return; }
+  if (followerLocked(s.track)) return;
+  shSerial(async () => {
+    if (hasPendingWrite(s.track)) await settleEvents(s.track);
+    let inside = 0, kept = 0;
+    try {
+      const r = await B.events(S.sid, s.track);
+      const stored = Array.isArray(r) ? r : (r && r.events) || [];
+      inside = stored.filter(e => e.t >= s.t0 - 1e-9 && e.t <= s.t1 + 1e-9).length;
+      kept = stored.filter(e => e.t >= s.t0 - 1e-9 && e.t <= s.t1 + 1e-9 && isKept(e)).length;
+    } catch (e) { setMsg(`re-analyze: ${errText(e)}`, "error"); return; }
+    if (!inside) { setMsg(`no hits in the range (${fmt(s.t0, 3)} to ${fmt(s.t1, 3)} s)`); return; }
+    if (kept) {   // rule 4: the Keep dialog opens only when edited hits are in the range, and names the range
+      $("#reanalyzeMsg").innerHTML = "";
+      const p = $("#reanalyzeMsg");
+      p.appendChild(document.createTextNode(
+        `Re-analyzing ${s.track} from ${fmt(s.t0, 3)} to ${fmt(s.t1, 3)} s: ` +
+        `${inside} ${inside === 1 ? "hit" : "hits"} in the range, ${kept} edited.`));
+      $("#reanalyzeModal").classList.remove("hidden");
+      pendingRASel = { track: s.track, t0: s.t0, t1: s.t1 };
+      return;
+    }
+    return runReanalyzeSelection(s, false);
+  });
+}
+async function runReanalyzeSelection(s, keep) {
+  $("#reanalyzeModal").classList.add("hidden");
+  const name = s.track;
+  try {
+    const before = (S.events[name] || []).map(e => ({ ...e }));   // the page's copy with ids: the undo step's before
+    setMsg("re-analyzing the range…");
+    const r = await B.reanalyzeSelection(S.sid, name, s.t0, s.t1, !!keep);
+    const old = S.events[name] || [];
+    S.events[name] = adoptHits(r.events, old, [], []);
+    EDGEN[name] = (EDGEN[name] || 0) + 1;
+    if (S.sel && S.sel.track === name) S.sel = null;
+    pushUndo({ type: "reanalyze", track: name, t0: s.t0, t1: s.t1,
+      before: { events: before }, after: { events: (S.events[name] || []).map(e => ({ ...e })) } });
+    setDirtyState(true);   // the service stored the merged hits
+    invalidateHits(name); refreshCounts(name); updateStatus();
+    setMsg(r.info);   // rule 7: the track, the range and "N hits replaced by M"
+    reloadFollowers(Array.isArray(r.followers) ? r.followers : followersOf(name));
+    if (INS.name === name) syncInspector(true);
+  } catch (e) { setMsg(`re-analyze failed: ${errText(e)}`, "error"); }
+}
+function raApplyOp(op, reverse) {   // applyOp: the undo and redo of a Re-analyze Selection (before/after, like a re-pick)
+  const st = reverse ? op.before : op.after;
+  S.events[op.track] = st.events.map(e => ({ ...e }));
+  if (S.sel && S.sel.track === op.track) S.sel = null;
+  markDirty(op.track); invalidateHits(op.track); refreshCounts(op.track); updateStatus();
+  if (INS.name === op.track) syncInspector(true);
 }
 
 /* ---------------- analysis ---------------- */
@@ -7243,9 +7308,9 @@ function setupGlobal() {
   $("#auditionTabBtn").onclick = () => toggleAuditionTab();
   $("#followBtn").onclick = () => { const m = ["smooth", "page", "off"]; setFollow(m[(m.indexOf(S.followMode) + 1) % 3]); setMsg(`follow playhead: ${S.followMode}`); };
   $("#snapChk").onchange = ev => setSnap(ev.target.checked);
-  $("#raKeep").onclick = () => { if (pendingRA) { const l = pendingRA; pendingRA = null; runAnalysis(l, true); } };
-  $("#raDiscard").onclick = () => { if (pendingRA) { const l = pendingRA; pendingRA = null; runAnalysis(l, false); } };
-  $("#raCancel").onclick = () => { $("#reanalyzeModal").classList.add("hidden"); pendingRA = null; setMsg("re-analyze cancelled"); };
+  $("#raKeep").onclick = () => { if (pendingRA) { const l = pendingRA; pendingRA = null; runAnalysis(l, true); } if (pendingRASel) { const s = pendingRASel; pendingRASel = null; runReanalyzeSelection(s, true); } };
+  $("#raDiscard").onclick = () => { if (pendingRA) { const l = pendingRA; pendingRA = null; runAnalysis(l, false); } if (pendingRASel) { const s = pendingRASel; pendingRASel = null; runReanalyzeSelection(s, false); } };
+  $("#raCancel").onclick = () => { $("#reanalyzeModal").classList.add("hidden"); pendingRA = null; pendingRASel = null; setMsg("re-analyze cancelled"); };
   document.querySelectorAll(".zBtn").forEach(b => b.onclick = () => zoomPlayhead(b.dataset.z === "in" ? 0.5 : 2));
   $("#zoomSel").onchange = ev => { const v = ev.target.value; ev.target.value = ""; if (v && needProject()) applyZoomSpan(v); };
   $("#ruler").addEventListener("mousedown", rulerDown);

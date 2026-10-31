@@ -158,6 +158,16 @@ or change the live project of the running app (a local socket for that is a poss
 
 ## Hits and notes
 
+- `reanalyze_selection {sid, name, t0, t1, keep_edited?}` (#265): re-analyzes only the hits of the
+  time range `[t0, t1]` (seconds) on one track. The detector runs with a 100 ms pad on both sides;
+  only hits whose refined time lies in the range are taken, the hits outside keep their times, ids
+  and velocities, and a new hit closer than the minimum gap to an untouched outside hit is dropped.
+  `keep_edited` (default true) keeps the hits added or moved by hand inside the range (they win
+  within 20 ms over a picked one); the backup of the previous events is written as for a
+  whole-track run and the followers of the track are refreshed. The answer is
+  `{track, t0, t1, replaced, n_new, events, info, followers?}`, with `events` the whole stored
+  list and `info` the line the page shows (`Kick In: re-analyzed 0.900 to 2.100 s, 3 hits replaced
+  by 4`). A follower is refused (409), as in `events_set`.
 - `events_get` gives `[{t, v, ...}]` (`t` in seconds, `v` velocity 1 to 127). `events_edit` ops address a hit by its position
   in that list before the call; an added or moved hit must lie within the track (0 s to its `duration`, else 400). A hit you add has `added: true`; a hit you move keeps its detected time in `orig`; an edited hit
   is never cut by the loudness cut. `{op: add, t, v, added: false, orig?}` puts a hit back as a detected one (the page's undo of a delete).

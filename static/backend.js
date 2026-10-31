@@ -89,6 +89,8 @@ function ipcBackend(T) {
     eventsEdit: (sid, name, ops) => invoke("events_edit", { sid, name, ops }),   // P4-9 stage 2: add, delete, move, velocity of single hits
     peaks, peaksRaw, samples, job,
     analyze: (sid, tracks, params, keepEdited) => invoke("analyze_start", { sid, tracks, params, keep_edited: !!keepEdited, progress: new T.core.Channel() }),   // P4-9: keep_edited merges the edited hits in the service
+    /* #265: re-analyzes only the hits of [t0, t1] on one track; answers {track, t0, t1, replaced, n_new, events, info} */
+    reanalyzeSelection: (sid, name, t0, t1, keepEdited) => invoke("reanalyze_selection", { sid, name, t0, t1, keep_edited: !!keepEdited }),
     /* writes Exports/<name>_spike.mid in the project folder; answers {path, size, n_events} */
     exportMidi: (sid, name, note, events, ppq) => invoke("export_midi", { sid, name, note, events, ppq }),   // P4-8: the tempo map decides the tempo
     /* P3-3c: Exports/<name>_spike.wav at the rate, length, format and bext time reference of the source;

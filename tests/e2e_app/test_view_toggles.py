@@ -1,6 +1,6 @@
 """#439: page keys for the View toggles that had none, and the menu check item follows.
 
-Shift+B (Bars|Beats Ruler), Shift+R (Markers Ruler) and Option+Cmd+1/2/3 (Track Height
+Shift+B (Bars|Beats Ruler), Option+Shift+R (Markers Ruler; #265 moved Shift+R to Re-analyze Selection) and Option+Cmd+1/2/3 (Track Height
 small/medium/large) run the same handlers as the menu items; `__DS_MENU_STATE__` is the check
 state the native menu greys and checks from (DSShell.sync), so a flip here is the menu check
 item following. Velocity Lane (V) and Other Mics Under Hit (O) had keys already.
@@ -27,11 +27,11 @@ def test_shift_b_toggles_the_bars_beats_ruler_and_the_check_item_follows(app, so
     assert state(app)["beatsRuler"] is s0
 
 
-def test_shift_r_toggles_the_markers_ruler_and_the_check_item_follows(app, song):
+def test_shift_option_r_toggles_the_markers_ruler_and_the_check_item_follows(app, song):
     s0 = state(app)["markersRuler"]
-    app.keyboard.press("Shift+R")
+    app.keyboard.press("Shift+Alt+R")
     assert state(app)["markersRuler"] is (not s0)
-    app.keyboard.press("Shift+R")
+    app.keyboard.press("Shift+Alt+R")
     assert state(app)["markersRuler"] is s0
 
 

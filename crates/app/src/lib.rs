@@ -47,6 +47,7 @@ pub mod overlap;
 pub mod patterns;
 pub mod plugins;
 pub mod policy;
+pub mod reanalyze;
 pub mod registry;
 pub mod relink;
 pub mod reply;
