@@ -116,6 +116,16 @@ pub fn export_markers_set(svc: State<'_, Service>, sid: String, on: bool) -> Res
     svc.export_markers_set(&sid, on)
 }
 
+/// #232: keep the "Compensate" checkbox of the Export dialog.
+///
+/// # Errors
+///
+/// 404 when the project is unknown. 409 when the project is open read-only.
+#[tauri::command]
+pub fn export_compensate_set(svc: State<'_, Service>, sid: String, compensate: bool) -> Result<Value, AppError> {
+    svc.export_compensate_set(&sid, compensate)
+}
+
 /// P4-31: the export shape of the project (what the dialog shows again and Export again repeats); `null`
 /// before the first export.
 ///

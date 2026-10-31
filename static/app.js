@@ -3470,6 +3470,14 @@ function buildParamsPanel(div, name, p) {
         <label>Refine to attack ${info("After detection, each hit is moved to the first sample crossing 25% of the local peak — the physical stick impact, sample-exact. Leave this on; disable only to compare raw detector output.")}</label>
         <div class="pctl"><input type="checkbox" class="pRefine" ${p.refine?"checked":""}></div>
       </div>
+      ${p.refine !== false ? `<div class="prow">
+        <label>Refine window low ${info("The search window around the coarse detection time, in ms: the refine looks for the attack from this far before it. Default -2. Stored at once; the next re-analyze uses it.")}</label>
+        <div class="pctl"><input type="number" class="pRefineLo" step="1" value="${Number.isFinite(p.refine_lo_ms) ? p.refine_lo_ms : -2}"><span class="punit">ms</span></div>
+      </div>
+      <div class="prow">
+        <label>Refine window high ${info("The search window around the coarse detection time, in ms: the refine looks for the attack up to this far after it. Default 12. Stored at once; the next re-analyze uses it.")}</label>
+        <div class="pctl"><input type="number" class="pRefineHi" step="1" value="${Number.isFinite(p.refine_hi_ms) ? p.refine_hi_ms : 12}"><span class="punit">ms</span></div>
+      </div>` : ""}
       ${t.role === "snare" ? `<div class="prow">
         <label>Split flams ${info("A flam or two strokes closer than about 30 ms look like one hit to the detector. On (the default for snare tracks): the second stroke inside a hit becomes a hit of its own, unless another mic of the project explains it as bleed. Off: one hit per flam. Applies on the next re-analyze.")}</label>
         <div class="pctl"><input type="checkbox" class="pFlam" ${p.flam_split !== false ? "checked" : ""}></div>
@@ -3573,12 +3581,16 @@ function buildParamsPanel(div, name, p) {
     setDetectorFill(name);   // async: the installed plugins that support role and rate
   }
   if (t.follows) {   // the detection settings are not used for a follower
-    for (const sel of [".pSens", ".pGap", ".pRefine", ".pFlam"]) { const el = div.querySelector(sel); if (el) el.disabled = true; }
+    for (const sel of [".pSens", ".pGap", ".pRefine", ".pRefineLo", ".pRefineHi", ".pFlam"]) { const el = div.querySelector(sel); if (el) el.disabled = true; }
     noteRow.classList.remove("hidden"); note.textContent = `follows ${t.follows}: the hits are derived from it, the detection settings are not used`;
     div.querySelector(".pactions .phint").textContent = "re-analyze derives the hits from the followed track again";
   }
   div.querySelector(".pGap").onchange = ev => p.min_gap_ms = +ev.target.value;
   div.querySelector(".pRefine").onchange = ev => p.refine = ev.target.checked;
+  // #232: the refine window is stored at once (track_params_set, one undo step), so an agent and
+  // the app see the same number (tracks_get), and Undo brings the old window back
+  div.querySelector(".pRefineLo").onchange = ev => paramsFieldCommit(name, "refine_lo_ms", Math.round(+ev.target.value || 0));
+  div.querySelector(".pRefineHi").onchange = ev => paramsFieldCommit(name, "refine_hi_ms", Math.round(+ev.target.value || 0));
   const flam = div.querySelector(".pFlam");   // P4-13 stage B: snare tracks only; the track param flam_split (absent = on)
   if (flam) { flam.title = "Applies on the next re-analyze"; flam.onchange = ev => p.flam_split = ev.target.checked; }
   div.querySelector(".pShift").onchange = ev => {   // P4-9: the service shifts the hits (track_shift_set); the page shows the result
@@ -5031,6 +5043,32 @@ function hgApplyRepickOp(op, reverse) {   // applyOp: undo and redo of a stored 
   if (INS.name === op.track) syncInspector(true);
 }
 
+/* #232: an Inspector number that is stored at once (the refine window): one track_params_set, one undo step. */
+const PARAM_FIELD_DEFAULTS = { refine_lo_ms: -2, refine_hi_ms: 12 };   // the shown defaults (RefineWindow::DEFAULT)
+function paramsFieldCommit(name, key, value) {
+  const t = S.tracks[name]; if (!t) return value;
+  const before = JSON.parse(JSON.stringify(t.params || {}));
+  if (before[key] === undefined) before[key] = PARAM_FIELD_DEFAULTS[key];   // the shown default is the undo's before
+  t.params = t.params || defaultParams(t.role);
+  t.params[key] = value;
+  pushUndo({ type: "params", label: "Detection setting", sid: S.sid, track: name,
+    before: { params: before }, after: { params: JSON.parse(JSON.stringify(t.params)) } });
+  const sid = S.sid;
+  hgSerial(name, () => B.paramsSet(sid, name, JSON.parse(JSON.stringify(t.params))))
+    .then(() => setDirtyState(true));
+  return value;
+}
+function hgApplyParamsOp(op, reverse) {   // applyOp: undo and redo of a stored params change (the refine window)
+  if (op.sid !== S.sid) { setMsg("that project is not the open one"); return; }
+  const st = reverse ? op.before : op.after, t = S.tracks[op.track];
+  if (t) {
+    t.params = JSON.parse(JSON.stringify(st.params));
+    hgSerial(op.track, () => B.paramsSet(op.sid, op.track, JSON.parse(JSON.stringify(t.params))));
+  }
+  setDirtyState(true);
+  if (INS.name === op.track) syncInspector(true);
+}
+
 /* the loudness histogram: dBFS on x, the floor and ceiling handles, the velocity ramp, and the loudness cut (controller
    decision 4, DRT's Loudness slider filters): a third handle, off at the left edge. A detected hit below it is grey in
    the histogram and in the lane and leaves the output (MIDI, spikes, Export All, the click, a follower); it stays in the
@@ -5384,6 +5422,16 @@ function insRoleControls(offer) {   // the role select, the source hint and the 
   const srcTxt = insRoleSourceText(t);
   $("#insRoleSrc").textContent = srcTxt;
   $("#insRoleSrc").classList.toggle("lyWarn", srcTxt.startsWith("not recognised"));
+  // #232: the name pattern the role was guessed from. A role of the user or of the audio has none
+  // (the service clears it): the field is disabled there; an edit goes through track_set_role with
+  // the role kept (one undo step, like the role change).
+  const rm = $("#insRoleMatch");
+  if (rm) {
+    rm.value = t.role_match ?? "";
+    const locked = t.role_source === "user" || t.role_source === "audio";
+    rm.disabled = locked;
+    rm.placeholder = locked ? "—" : "";
+  }
   const orow = $("#insNoteOfferRow");
   INS.offer = offer && offer.suggest_note != null && offer.note !== offer.suggest_note
     ? { name: INS.name, role: offer.role, note: offer.note, suggest_note: offer.suggest_note, role_source: offer.role_source } : null;
@@ -5603,6 +5651,13 @@ function setupInspector() {   // once, at boot: the name field, the Relink butto
   $("#insNoteOfferBtn").onclick = () => {   // 0.9.1: the note offer of a role change
     const o = INS.offer; if (!o) return;
     setTrackRole(o.name, o.role, { note: o.suggest_note, source: o.role_source });
+  };
+  $("#insRoleMatch").onchange = ev => {   // #232: the name pattern the role was guessed from
+    const name = INS.name, t = S.tracks[name], v = ev.target.value.trim();
+    if (!name || !t || v === (t.role_match ?? "")) return;
+    setTrackRole(name, t.role, { role_match: v || null, source: t.role_source }).then(ok => {
+      if (!ok && INS.name === name) ev.target.value = S.tracks[name] ? (S.tracks[name].role_match ?? "") : ev.target.value;
+    });
   };
   $("#inspectorBtn").onclick = () => toggleInspector();   // P4-25: the toolbar button, the same as View > Show Inspector
   $("#insClose").onclick = () => toggleInspector();   // the × in the title bar: the same as View > Show Inspector (the check item follows)
@@ -5926,6 +5981,7 @@ async function openExport(scope, track) {
   try { info = await B.exportExisting(S.sid, {}); } catch (e) { setMsg(`export failed: ${errText(e)}`, "error"); return; }
   EX.def = info.default_dest; EX.remembered = info.remembered;
   EX.markers = !!info.export_markers;   // P4-40g: the remembered "Markers in MIDI" checkbox
+  if (info.export_compensate !== undefined) EX.comp = !!info.export_compensate;   // #232: the kept "Compensate" checkbox seeds the dialog
   const last = info.export_last;   // P4-31: the project keeps what its last export wrote with (and every choice, recorded at once)
   if (last) {
     EX.midi = last.formats.includes("midi"); EX.spikes = last.formats.includes("spikes") || last.formats.includes("audio");
@@ -6106,7 +6162,13 @@ function setupExport() {
   $("#exScopeSel").onchange = () => { EX.scope = "selected"; exChanged(); exRecord(); };
   $("#exMidi").onchange = ev => { EX.midi = ev.target.checked; exChanged(); exRecord(); };
   $("#exSpikes").onchange = ev => { EX.spikes = ev.target.checked; exChanged(); exRecord(); };
-  $("#exComp").onchange = ev => { EX.comp = ev.target.checked; exChanged(); exRecord(); };
+  $("#exComp").onchange = async ev => {   // #232: the checkbox is remembered per project (like the markers one)
+    const on = ev.target.checked;
+    EX.comp = on;
+    try { await B.exportCompensateSet(S.sid, on); setDirtyState(true); }
+    catch (e) { setMsg(`the Compensate choice failed: ${errText(e)}`, "error"); }
+    exChanged(); exRecord();
+  };
   $("#exMarkers").onchange = async ev => {   // P4-40g: the checkbox is remembered per project
     const on = ev.target.checked;
     EX.markers = on;
