@@ -845,18 +845,20 @@
       // the tempo commit run on different queues, so the op is found by payload, not by stack position),
       // then retry the undo until the map is back - a click before the push would pop an older step
       const tempoOp = bar1 => S.undo.find(o => o.type === "tempo" && o.after && Math.abs((o.after.bar1_s || 0) - bar1) < 1e-9);
+      // #221: a timed-out bar 1 wait must say why: the last steps of the stacks, the queue state and the status line
+      const stackDump = () => `undo=[${S.undo.slice(-3).map(o => `${o.type}/${o.what || ""}${o.after ? ` bar1_s=${o.after.bar1_s}` : ""}`).join(" | ")}] redo=${S.redo.length} TM.pending=${TM.pending} msg=${JSON.stringify($q("#stMsg").textContent)}`;
       const undoUntil = (want, what, pend = () => false) => {
         let sent = 0;   // a retry only after 250 ms: the click needs a tick to take the step off the stack
         return until(async () => {
           if (!pend() && Date.now() - sent > 250 && !(await want())) { sent = Date.now(); await click("undo"); }
           return await want();
-        }, what, 15000);
+        }, what, 15000).catch(e => { throw new Error(`${e.message} [${stackDump()}]`); });
       };
-      await until(() => tempoOp(0.8), "the bar 1 step on the undo stack", 15000);
+      await until(() => tempoOp(0.8), "the bar 1 step on the undo stack", 15000).catch(e => { throw new Error(`${e.message} [${stackDump()}]`); });
       await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1", () => TM.pending > 0 || !tempoOp(0.8));
       await click("set_bar1_audio");
       await until(async () => Math.abs((await stored()).map.bar1_s) < 1e-9, "Set Bar 1 at Audio Start", 15000);
-      await until(() => tempoOp(0), "the bar 1 step on the undo stack", 15000);
+      await until(() => tempoOp(0), "the bar 1 step on the undo stack", 15000).catch(e => { throw new Error(`${e.message} [${stackDump()}]`); });
       await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1 at Audio Start", () => TM.pending > 0 || !tempoOp(0));
       done.push("set_bar1", "set_bar1_audio");
       // Edit > Undo History: the sheet lists the steps of the tempo map, Done closes it
