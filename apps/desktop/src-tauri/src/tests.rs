@@ -71,6 +71,30 @@ fn the_bundle_declares_the_document_type_and_project_folders() {
     assert_eq!(open::DOC_EXT, "drumspike");
 }
 
+/// #235: the merged `Info.plist` gives the document type and the exported type the document icon, the file
+/// is in the bundle resources, and the plist keeps the names and the type identifier of `tauri.conf.json`.
+#[test]
+fn the_document_type_has_its_own_icon_in_the_bundle() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let plist = std::fs::read_to_string(dir.join("Info.plist")).unwrap();
+    for key in ["CFBundleTypeIconFile", "UTTypeIconFile"] {
+        assert!(
+            plist.contains(&format!("<key>{key}</key>\n\t\t\t<string>document.icns</string>")),
+            "{key}"
+        );
+    }
+    for s in ["Drum Spike project", "com.cbv.drumspike.project", "public.folder"] {
+        assert!(plist.contains(s), "{s}");
+    }
+    let conf: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("tauri.conf.json")).unwrap()).unwrap();
+    assert_eq!(
+        conf["bundle"]["macOS"]["files"]["Resources/document.icns"],
+        "icons/document.icns"
+    );
+    let icns = std::fs::read(dir.join("icons/document.icns")).unwrap();
+    assert_eq!(&icns[..4], b"icns");
+}
+
 /// Every `#[tauri::command]` of `shell.rs` is in the handler of the debug build, and (the self-test ones
 /// excepted) in the handler of the release build: a command that is not listed fails only in the app.
 #[test]
