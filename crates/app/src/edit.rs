@@ -78,11 +78,15 @@ fn is_manual(e: &Map<String, Value>) -> bool {
     }
 }
 
-/// A hit the engineer keeps as it is: a hand-edited hit, or one restored from the tom bleed mark (P4-14 fix round:
-/// `edited: true`, the document's reserved edit flag). A re-pick or Re-analyze with `keep_edited` keeps it, and the
-/// tom bleed rule never marks it.
+/// A hit the engineer keeps as it is: a hand-edited hit, one restored from the tom bleed mark (P4-14 fix round:
+/// `edited: true`, the document's reserved edit flag), or one of the user's per-hit overrides of #242
+/// (`keep`/`deactivated` — a re-pick or Re-analyze keeps those too, `merge_edited`). A re-pick or Re-analyze with
+/// `keep_edited` keeps it, and the tom bleed rule never marks it.
 pub fn is_kept(e: &Map<String, Value>) -> bool {
-    is_manual(e) || e.get("edited").and_then(Value::as_bool) == Some(true)
+    is_manual(e)
+        || e.get("edited").and_then(Value::as_bool) == Some(true)
+        || e.get("keep").and_then(Value::as_bool) == Some(true)
+        || e.get("deactivated").and_then(Value::as_bool) == Some(true)
 }
 
 fn hit_index(op: &Map<String, Value>, n: usize) -> Result<usize, AppError> {
@@ -108,7 +112,7 @@ fn check_end(t: f64, end: Option<f64>) -> Result<(), AppError> {
 /// position in that list at the start of the call. An added or moved hit must lie within the
 /// track (0 to `end` seconds; P4-8 fix round 2: a hit far after the end made the tempo detection
 /// track millions of beats). Returns the new sorted list and the counts
-/// `(added, deleted, moved, velocity, restored)`.
+/// `(added, deleted, moved, velocity, restored, toggled)`.
 /// R05: `was` on an op restores the exact field presence the hit had before the edit, so the page's
 /// undo makes the document byte-identical (`undo(edit(doc)) == doc`): a bool key sets the flag
 /// (`true`) or takes it off (`false`), `orig: <number>` sets it and `orig: null` takes it off.
@@ -133,7 +137,8 @@ fn apply_was(e: &mut serde_json::Map<String, Value>, was: Option<&Value>) {
                     e.shift_remove("rise");
                 }
             }
-            "edited" | "cut" | "bleed" | "filtered" | "learned" | "roll" | "flam" | "rescue" => {
+            "edited" | "cut" | "bleed" | "filtered" | "learned" | "roll" | "flam" | "rescue" | "keep"
+            | "deactivated" => {
                 if v.as_bool() == Some(true) {
                     e.insert(k.clone(), json!(true));
                 } else {
@@ -146,7 +151,7 @@ fn apply_was(e: &mut serde_json::Map<String, Value>, was: Option<&Value>) {
 }
 
 /// Apply `ops` to `events` and return the new sorted list with the counts `(added, deleted, moved,
-/// velocity, restored)` (see the comment above `apply_was` for the rules of the ops).
+/// velocity, restored, toggled)` (see the comment above `apply_was` for the rules of the ops).
 ///
 /// # Errors
 ///
@@ -159,11 +164,11 @@ pub fn apply_ops(
     ops: &[Value],
     sr: Option<i64>,
     end: Option<f64>,
-) -> Result<(Vec<Value>, [usize; 5]), AppError> {
+) -> Result<(Vec<Value>, [usize; 6]), AppError> {
     let n = events.len();
     let mut list: Vec<Option<Value>> = events.into_iter().map(Some).collect();
     let mut added = Vec::new();
-    let mut counts = [0usize; 5];
+    let mut counts = [0usize; 6];
     for op in ops {
         let o = op
             .as_object()
@@ -246,6 +251,33 @@ pub fn apply_ops(
                     counts[3] += 1;
                 }
             }
+            "toggle" => {
+                // #242: set the user's per-hit state exactly as the op says (`true` sets the
+                // flag, `false` takes it off); the page's undo sends the state before, so the
+                // document comes back byte-identical. The marks stay where they are: the
+                // predicates give the flags the win (policy::is_out), the strip below removes
+                // them from a kept hit.
+                let i = hit_index(o, n)?;
+                let slot = list[i]
+                    .as_mut()
+                    .ok_or_else(|| AppError::bad(format!("hit {i} was deleted by an earlier op")))?;
+                let e = slot
+                    .as_object_mut()
+                    .ok_or_else(|| AppError::bad("every event must be an object"))?;
+                for k in ["keep", "deactivated"] {
+                    match o.get(k) {
+                        Some(Value::Bool(true)) => {
+                            e.insert(k.into(), Value::Bool(true));
+                        }
+                        Some(Value::Bool(false)) => {
+                            e.shift_remove(k);
+                        }
+                        _ => return Err(AppError::bad(format!("`{k}` must be a boolean"))),
+                    }
+                }
+                apply_was(e, o.get("was"));
+                counts[5] += 1;
+            }
             other => {
                 return Err(AppError::bad(format!(
                     "unknown op `{other}`: use add, delete, move, velocity or restore"
@@ -259,8 +291,8 @@ pub fn apply_ops(
         t(a).total_cmp(&t(b))
     });
     for e in out.iter_mut().filter_map(Value::as_object_mut) {
-        if is_manual(e) {
-            e.remove("cut"); // an edited hit is never cut (the page's eventsBody)
+        if is_manual(e) || e.get("keep").and_then(Value::as_bool) == Some(true) {
+            e.remove("cut"); // an edited hit is never cut (the page's eventsBody); nor a hit the user keeps (#242)
         }
         if is_kept(e) {
             e.remove("bleed"); // P4-14: an edited or restored hit is never marked by the tom bleed rule
@@ -317,13 +349,14 @@ impl Service {
     /// `events_edit {sid, name, ops}`: change single hits. An op is one of
     /// `{op:"add", t, v?, added?, orig?, snap?}` (velocity 100; `added: false` with `orig` puts back a detected or moved hit; `keep` {..} gives back its other fields;
     /// #144: `snap: true` puts the hit on the attack within [`SNAP_S`] of `t` with the velocity of the audio there), `{op:"delete", index}`, `{op:"move", index, t}` and
-    /// `{op:"velocity", index, v, edited?: true}` (a hand velocity marks the hit `edited`, P4-40f) and `{op:"restore", index}` (P4-14: the hit loses its tom bleed mark and goes back
-    /// into the output). R05: `move`, `velocity` and `restore` ops may carry `was` {..}, the field
+    /// `{op:"velocity", index, v, edited?: true}` (a hand velocity marks the hit `edited`, P4-40f), `{op:"restore", index}` (P4-14: the hit loses its tom bleed mark and goes back
+    /// into the output) and `{op:"toggle", index, keep, deactivated}` (#242: the user's per-hit state — `true` sets the flag, `false` takes it
+    /// off; the page's undo sends the state before as `was`). R05: `move`, `velocity`, `restore` and `toggle` ops may carry `was` {..}, the field
     /// presence the hit had before the edit (bool flags, `orig` as a number or null); the page's
     /// undo sends it, so the document comes back byte-identical; `index` is the position in the list `events_get` returned
     /// before the call, `t` seconds (put on the sample grid). The ops apply as a whole: a bad op
     /// changes nothing. A follower is refused (409), as in `events_set`. Returns
-    /// `{saved, added, deleted, moved, velocity, restored, followers?, snaps?}`; `snaps` holds one
+    /// `{saved, added, deleted, moved, velocity, restored, toggled, followers?, snaps?}`; `snaps` holds one
     /// `{click, t, v, snapped}` per add with `snap: true`.
     ///
     /// # Errors
@@ -374,6 +407,7 @@ impl Service {
         out["moved"] = c[2].into();
         out["velocity"] = c[3].into();
         out["restored"] = c[4].into();
+        out["toggled"] = c[5].into();
         if !snaps.is_empty() {
             out["snaps"] = Value::Array(snaps);
         }

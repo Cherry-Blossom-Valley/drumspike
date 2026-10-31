@@ -130,10 +130,13 @@ pub fn is_bleed(e: &Value) -> bool {
     e.get("bleed") == Some(&Value::Bool(true))
 }
 
-/// An edited hit (added, moved from `orig`, or restored: `edited: true`, as [`crate::edit::is_kept`]): the rule never
-/// marks it.
+/// An edited hit (added, moved from `orig`, or restored: `edited: true`, as [`crate::edit::is_kept`]) or one the
+/// user keeps (#242): the rule never marks it.
 fn edited(e: &drumspike_core::project::Event) -> bool {
-    e.added == Some(true) || e.orig.is_some_and(|o| (o - e.t).abs() > 1e-9) || e.edited == Some(true)
+    e.added == Some(true)
+        || e.orig.is_some_and(|o| (o - e.t).abs() > 1e-9)
+        || e.edited == Some(true)
+        || crate::policy::event_user_kept(e)
 }
 
 /// The text of an off state, with the track names.

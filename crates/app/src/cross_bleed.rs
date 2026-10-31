@@ -186,6 +186,7 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[String]) -> Option
                         e.added == Some(true)
                             || e.orig.is_some_and(|o| (o - e.t).abs() > 1e-9)
                             || e.edited == Some(true)
+                            || crate::policy::event_user_kept(e) // #242: the user's override wins
                     })
                     .collect(),
             });

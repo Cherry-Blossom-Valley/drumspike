@@ -41,6 +41,7 @@ function undoMeta(op) {
   const set = (label, where) => { if (!op.label) op.label = label; if (!op.where) op.where = where; };
   switch (op.type) {
     case "del": set("Delete Hit", at(op.track, op.t)); break;
+    case "toggle": set("Toggle Hit Active", at(op.track, op.t)); break;   // #242
     case "add": set("Add Hit", at(op.track, op.t)); break;
     case "move": set("Move Hit", at(op.track, op.to)); break;
     case "setv": set("Set Velocity", at(op.track, hitT(op.track, op.id))); break;
@@ -116,7 +117,7 @@ function applyOp(op, reverse) {   // a step of the service (shift, add, del, mov
    undo or redo leaves the stacks as the service is. While a shift or an edit is on its way, an undo or a redo joins the
    same queue and runs after it (it takes the step that is on top then); the other waits (tm, ln, hg) still drop it with a
    message, because their own busy flags have no hook that could run it later. */
-function edOwns(op) { return !!op && (op.type === "trkdel" || op.type === "shift" || op.type === "add" || op.type === "del" || op.type === "move" || op.type === "setv" || op.type === "setv-many" || op.type === "del-many" || op.type === "move-many"); }
+function edOwns(op) { return !!op && (op.type === "trkdel" || op.type === "shift" || op.type === "add" || op.type === "del" || op.type === "move" || op.type === "setv" || op.type === "setv-many" || op.type === "del-many" || op.type === "move-many" || op.type === "toggle"); }
 async function undoStep(isUndo) {
   const from = isUndo ? S.undo : S.redo, to = isUndo ? S.redo : S.undo, op = from[from.length - 1];
   if (tmUndoWaits() || lnUndoWaits() || hgUndoWaits(op) || !op) return;
@@ -267,6 +268,14 @@ function edApplyOp(op, reverse) {   // applyOp: the ops of a step, forward or ba
       return { ops, drop: (op.list || []).map(s => s.id), make: (op.list || []).map(s => [reverse ? s.from : s.to, s.id]) };
     });
   }
+  if (op.type === "toggle") {   // #242: Toggle Hit Active: forward to the step's `to`, back to the flags `was` holds
+    return edNow(op.track, evs => {
+      const j = edIndex(evs, op.id);
+      if (j < 0) { setMsg(`${reverse ? "undo" : "redo"}: the hit is not there any more`); return null; }
+      if (reverse) return { ops: [{ op: "toggle", index: j, keep: op.was.keep, deactivated: op.was.deactivated, was: op.was }], sel: op.id };
+      return { ops: [{ op: "toggle", index: j, keep: op.to.keep, deactivated: op.to.deactivated }], sel: op.id };
+    });
+  }
   const id = op.id, label = reverse ? "undo" : "redo";
   const mk = evs => {
     const j = edIndex(evs, id);
@@ -289,7 +298,7 @@ function edApplyOp(op, reverse) {   // applyOp: the ops of a step, forward or ba
    the hit did not have it. */
 function hitWas(e) {
   return { orig: e.orig === undefined ? null : e.orig, edited: !!e.edited, cut: !!e.cut, bleed: !!e.bleed, filtered: !!e.filtered,
-    learned: !!e.learned, roll: !!e.roll, flam: !!e.flam, rescue: !!e.rescue, rise: e.rise !== undefined };
+    learned: !!e.learned, roll: !!e.roll, flam: !!e.flam, rescue: !!e.rescue, keep: !!e.keep, deactivated: !!e.deactivated, rise: e.rise !== undefined };
 }
 function delKeep(raw) {   // P4-40a: the stored fields of a deleted hit besides t, v, orig and added (the page's own list drops some, e.g. rise_db); the undo gives them back. #154: the stored `id` too, so the undo of a delete restores the hit byte-identically
   const out = {};

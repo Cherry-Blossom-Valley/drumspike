@@ -17,6 +17,10 @@
   {"name": "a hand velocity is kept", "event": {"t": 1.0, "v": 64, "edited": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false},
   {"name": "a restored hit is kept", "event": {"t": 1.0, "v": 80, "edited": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false},
   {"name": "a manual hit that still carries the cut mark (the page guards, Rust strips)", "event": {"t": 1.0, "v": 100, "added": true, "cut": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false},
-  {"name": "a moved hit that still carries the Learn mark (the page guards, Rust strips)", "event": {"t": 1.0, "v": 100, "orig": 0.9, "filtered": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false}
+  {"name": "a moved hit that still carries the Learn mark (the page guards, Rust strips)", "event": {"t": 1.0, "v": 100, "orig": 0.9, "filtered": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false},
+  {"name": "a hit the user keeps in the output under the cut (#242)", "event": {"t": 1.0, "v": 100, "cut": true, "keep": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false},
+  {"name": "a hit the user keeps in the output under the Learn filter (#242)", "event": {"t": 1.0, "v": 100, "filtered": true, "keep": true}, "audible": true, "exportable": true, "kept": true, "out": false, "tempo": true, "grey": false},
+  {"name": "a hit the user deactivated (#242)", "event": {"t": 1.0, "v": 100, "deactivated": true}, "audible": false, "exportable": false, "kept": true, "out": true, "tempo": false, "grey": false},
+  {"name": "a deactivated hit that still carries the cut mark (deactivated wins)", "event": {"t": 1.0, "v": 100, "deactivated": true, "cut": true}, "audible": false, "exportable": false, "kept": true, "out": true, "tempo": false, "grey": false}
  ]
 }
