@@ -408,8 +408,11 @@ def cmd_check_midi(args):
     The pytest run keeps only the quick corpus (tests/test_midi_timing.py), so the whole
     corpus is checked here, before a tag goes out."""
     root = find_root(args.root)
+    # The child needs the project env (mido is a dependency of the project, #217): the
+    # documented command runs this tool with `uv run --no-project python`, whose interpreter
+    # has no project dependencies, so do not reuse sys.executable for the checker.
     r = subprocess.run(
-        [sys.executable, str(root / "tools" / "check_midi_timing.py")],
+        ["uv", "run", "python", str(root / "tools" / "check_midi_timing.py")],
         cwd=str(root), capture_output=True, text=True,
     )
     tail = (r.stdout[-1500:] + r.stderr[-500:]).strip()
