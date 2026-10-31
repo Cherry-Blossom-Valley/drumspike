@@ -233,7 +233,7 @@ pub fn percentile(v: &[f64], q: f64) -> Option<f64> {
         return None;
     }
     let mut s = v.to_vec();
-    s.sort_by(|a, b| a.total_cmp(b));
+    s.sort_by(f64::total_cmp);
     let pos = q / 100.0 * (s.len() - 1) as f64;
     let lo = pos.floor() as usize;
     let hi = (lo + 1).min(s.len() - 1);

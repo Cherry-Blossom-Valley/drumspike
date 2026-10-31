@@ -153,15 +153,13 @@ fn five_minute_8_track_session_under_10_s() {
         rows.push((role.to_string(), ms));
     }
     let total_ms = total.elapsed().as_millis();
-    println!("| TOTAL  | 8 tracks | {:>6} ms |", total_ms);
+    println!("| TOTAL  | 8 tracks | {total_ms:>6} ms |");
     for (role, ms) in &rows {
-        println!("  {:5}: {:>6} ms", role, ms);
+        println!("  {role:5}: {ms:>6} ms");
     }
-    println!("  total: {:>6} ms (limit {} ms)", total_ms, TOTAL_LIMIT_MS);
+    println!("  total: {total_ms:>6} ms (limit {TOTAL_LIMIT_MS} ms)");
     assert!(
         total_ms <= TOTAL_LIMIT_MS,
-        "5-minute 8-track session took {} ms, over the {} ms bound",
-        total_ms,
-        TOTAL_LIMIT_MS
+        "5-minute 8-track session took {total_ms} ms, over the {TOTAL_LIMIT_MS} ms bound"
     );
 }

@@ -1142,7 +1142,7 @@ fn invert(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
         }
         m.swap(c, piv);
         let d = m[c][c];
-        for x in m[c].iter_mut() {
+        for x in &mut m[c] {
             *x /= d;
         }
         let pivot = m[c].clone();

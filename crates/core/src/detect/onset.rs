@@ -605,7 +605,7 @@ fn quantile(v: &[f32], q: f32) -> Option<f32> {
         return None;
     }
     let mut s = v.to_vec();
-    s.sort_by(|a, b| a.total_cmp(b));
+    s.sort_by(f32::total_cmp);
     let pos = f64::from(q.clamp(0.0, 1.0)) * (s.len() - 1) as f64;
     let lo = pos.floor() as usize;
     let hi = (lo + 1).min(s.len() - 1);
@@ -668,7 +668,7 @@ fn median(buf: &mut [f32]) -> f32 {
     if n == 0 {
         return 0.0;
     }
-    let (_, hi, _) = buf.select_nth_unstable_by(n / 2, |p, q| p.total_cmp(q));
+    let (_, hi, _) = buf.select_nth_unstable_by(n / 2, f32::total_cmp);
     let hi = *hi;
     if n % 2 == 1 {
         return hi;

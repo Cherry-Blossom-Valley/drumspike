@@ -141,7 +141,7 @@ fn one_step_is_found_on_its_bar_line_with_both_tempos() {
     assert!((d.bpm - 120.0).abs() < 0.1, "bpm {}", d.bpm);
     assert_eq!(d.steps.len(), 1, "steps {:?}", d.steps);
     let s = d.steps[0];
-    assert!((s.bpm - 100.0).abs() < 0.1, "step {:?}", s);
+    assert!((s.bpm - 100.0).abs() < 0.1, "step {s:?}");
     assert!((s.t - starts[1]).abs() < 0.01, "step at {} want {}", s.t, starts[1]);
     assert_eq!(s.bar, 33);
     assert_eq!(s.bars, 32);

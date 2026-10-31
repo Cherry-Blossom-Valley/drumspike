@@ -95,7 +95,7 @@ fn template(x: &[f32], sr: u32, hits: &[f64]) -> Vec<f64> {
     (0..len)
         .map(|i| {
             let mut col: Vec<f64> = cuts.iter().map(|c| c[i]).collect();
-            col.sort_by(|a, b| a.total_cmp(b));
+            col.sort_by(f64::total_cmp);
             let m = col.len();
             if m % 2 == 1 {
                 col[m / 2]

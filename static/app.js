@@ -967,8 +967,10 @@ function counterBBText(bar, beat, ticks) {   // #149: the Pro Tools Bars|Beats s
 function counterBarsBeats() {
   const m = TM.map;
   if (!m) {   // no map: the default one the export uses, 120 BPM 4/4, bar 1 at 0 s
-    const total = S.playhead * 2;   // quarter-note beats at 120 BPM
-    return counterBBText(Math.floor(total / 4) + 1, Math.floor(total % 4) + 1, Math.round((total % 1) * 960) % 960);
+    // quarter-note beats at 120 BPM; the same microsecond snap to the next beat as below, and the
+    // ticks are floored (#208: rounding showed 960 -> 0 of the old beat, a beat too early)
+    const total = S.playhead * 2 + 2e-6;
+    return counterBBText(Math.floor(total / 4) + 1, Math.floor(total % 4) + 1, Math.min(959, Math.floor((total % 1) * 960 + 1e-6)));
   }
   const g = tmGrid();
   if (!g || !g.t.length) return counterBBText(1, 1, 0);
@@ -978,8 +980,8 @@ function counterBarsBeats() {
   // grid time: treat anything within a microsecond of the next beat as that beat (#149)
   if (i + 1 < g.t.length && g.t[i + 1] - S.playhead * 1 <= 1e-6) i++;
   const dt = (i + 1 < g.t.length ? g.t[i + 1] - g.t[i] : 0.5) || 0.5;
-  const ticks = ((Math.round((S.playhead - g.t[i]) / dt * 960) % 960) + 960) % 960;
-  return counterBBText(g.bar[i], g.beat[i], Math.max(0, ticks));
+  const ticks = Math.floor((S.playhead - g.t[i]) / dt * 960 + 1e-6);   // floored, never a beat too early (#208)
+  return counterBBText(g.bar[i], g.beat[i], Math.max(0, Math.min(959, ticks)));
 }
 function counterTimecode() {
   const fps = 30, sr = counterRate();

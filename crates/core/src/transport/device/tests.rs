@@ -39,7 +39,7 @@ fn guarded_gives_up_after_the_limit_and_refuses_the_device_until_its_worker_retu
     assert!(!is_blocked(name));
     let t0 = Instant::now();
     let e = guarded(name, Duration::from_millis(50), false, || {
-        std::thread::sleep(Duration::from_millis(400))
+        std::thread::sleep(Duration::from_millis(400));
     })
     .unwrap_err();
     assert!(

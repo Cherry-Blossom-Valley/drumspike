@@ -120,7 +120,7 @@ struct HeadCache {
 static HEAD_CACHE: std::sync::Mutex<Option<HeadCache>> = std::sync::Mutex::new(None);
 
 fn with_head_cache<T>(f: impl FnOnce(&mut HeadCache) -> T) -> T {
-    let mut g = HEAD_CACHE.lock().unwrap_or_else(|p| p.into_inner());
+    let mut g = HEAD_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let c = g.get_or_insert_with(|| HeadCache {
         map: std::collections::HashMap::new(),
         counts: HeadCacheCounts::default(),
@@ -615,12 +615,14 @@ fn hash_heads(
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(p) = paths.get(i) else { break };
                     let h = head_sha1(p).ok();
-                    out.lock().unwrap_or_else(|e| e.into_inner()).insert(p.clone(), h);
+                    out.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(p.clone(), h);
                 }
             });
         }
     });
-    out.into_inner().unwrap_or_else(|e| e.into_inner())
+    out.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The folder search of the relink flow. Walks `folder` (sub-folders too; no symbolic link is

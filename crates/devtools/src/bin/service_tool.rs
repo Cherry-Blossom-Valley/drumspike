@@ -228,7 +228,7 @@ fn run(script: &str) -> Result<(), String> {
                 });
                 match st {
                     Ok(v) if v["state"] == "queued" || v["state"] == "running" => {
-                        std::thread::sleep(std::time::Duration::from_millis(20))
+                        std::thread::sleep(std::time::Duration::from_millis(20));
                     }
                     other => break other,
                 }

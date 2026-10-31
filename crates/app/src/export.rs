@@ -237,9 +237,9 @@ fn export_dest_slots() -> &'static (Mutex<HashSet<PathBuf>>, Condvar) {
 pub(crate) fn export_dest_acquire(dir: &Path) -> DestGuard {
     let key = path_key(dir);
     let (m, cv) = export_dest_slots();
-    let mut busy = m.lock().unwrap_or_else(|e| e.into_inner());
+    let mut busy = m.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     while busy.contains(&key) {
-        busy = cv.wait(busy).unwrap_or_else(|e| e.into_inner());
+        busy = cv.wait(busy).unwrap_or_else(std::sync::PoisonError::into_inner);
     }
     busy.insert(key.clone());
     DestGuard(key)
@@ -251,7 +251,7 @@ pub(crate) struct DestGuard(PathBuf);
 impl Drop for DestGuard {
     fn drop(&mut self) {
         let (m, cv) = export_dest_slots();
-        let mut busy = m.lock().unwrap_or_else(|e| e.into_inner());
+        let mut busy = m.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         busy.remove(&self.0);
         cv.notify_all();
     }

@@ -535,7 +535,7 @@ impl DetectorSlot {
                     .manifest
                     .sample_rates
                     .iter()
-                    .map(|r| r.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(", ")
             ))
@@ -672,7 +672,7 @@ pub(crate) fn start(svc: &Service, sid: &str, targets: Vec<String>, progress: Op
             // its cause (R270: the setup then can say why the kept detection is missing).
             let detail = payload
                 .downcast_ref::<&str>()
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .or_else(|| payload.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "panic without a message".to_string());
             if let Some(job) = svc.inner.jobs.fail_unfinished(
@@ -704,7 +704,7 @@ fn run_job(svc: &Service, sid: &str, targets: &[String], token: &JobToken, progr
     let kind = svc.inner.detector.kind(&svc.inner.config).ok();
     let prepare = |name: &String| -> Result<Prepared, String> {
         emit(jobs.update(sid, token, |j| {
-            j["tracks"][name.as_str()] = json!({"state": "running", "stage": "decoding"})
+            j["tracks"][name.as_str()] = json!({"state": "running", "stage": "decoding"});
         }));
         let op = op.as_ref().map_err(|e| e.message.clone())?;
         prepare_one(op, name, kind)
@@ -712,7 +712,7 @@ fn run_job(svc: &Service, sid: &str, targets: &[String], token: &JobToken, progr
     let mut analysed: Vec<String> = Vec::new(); // P4-14: the tracks the bleed rule may mark
     let mut consume = |name: &String, prepared: Result<Prepared, String>| {
         emit(jobs.update(sid, token, |j| {
-            j["tracks"][name.as_str()] = json!({"state": "running", "stage": "analyzing"})
+            j["tracks"][name.as_str()] = json!({"state": "running", "stage": "analyzing"});
         }));
         let result = prepared.and_then(|p| {
             finish_one(

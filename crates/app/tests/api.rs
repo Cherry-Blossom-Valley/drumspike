@@ -398,7 +398,7 @@ fn every_agent_row_has_a_cli_subcommand_and_an_mcp_tool() {
         .iter()
         .map(|c| c["name"].as_str().unwrap().to_string())
         .collect();
-    let want: BTreeSet<String> = agent.iter().map(|s| s.to_string()).collect();
+    let want: BTreeSet<String> = agent.iter().map(std::string::ToString::to_string).collect();
     assert_eq!(listed, want, "`drumspike commands`");
     let mut with_job = want.clone();
     with_job.insert("job_get".into());

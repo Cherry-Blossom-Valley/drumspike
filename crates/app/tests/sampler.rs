@@ -108,7 +108,7 @@ fn notes(path: &str) -> Vec<(String, u64, u8, u8)> {
             tick += e.delta.as_int() as u64;
             match e.kind {
                 TrackEventKind::Meta(midly::MetaMessage::TrackName(n)) => {
-                    name = String::from_utf8_lossy(n).into_owned()
+                    name = String::from_utf8_lossy(n).into_owned();
                 }
                 TrackEventKind::Midi {
                     message: MidiMessage::NoteOn { key, vel },
