@@ -24,9 +24,9 @@ pub const FEEDBACK_URL: &str = "https://pubtzkqxycnqqhmrfnhn.supabase.co/functio
 /// site's contact form sends it. It is not a secret and must never be one.
 pub const FEEDBACK_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB1YnR6a3F4eWNucXFobXJmbmhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc2MjcxMzMsImV4cCI6MjA4MzIwMzEzM30.yye8PrO22dIkvCLmGV-mMwaW-jYFB-3Ns3IXk32Sxl0";
 
-/// The static part of the private-word guard (tools/media/check_paths.py `BANNED_BASE`): a
+/// The static part of the private-word guard (`tools/media/check_paths.py` `BANNED_BASE`): a
 /// report with a private path, a host alias or a user name must not leave the app.
-/// DRUMSPIKE_PRIVATE_WORDS is a host variable of the repo tools, never an app setting.
+/// `DRUMSPIKE_PRIVATE_WORDS` is a host variable of the repo tools, never an app setting.
 pub const PRIVATE_WORDS: [&str; 8] = [
     "/Users",       // private-list-definition
     "/var/folders", // private-list-definition
@@ -45,6 +45,7 @@ const GUARDED_FIELDS: [&str; 3] = ["title", "description", "steps"];
 pub const KINDS: [&str; 3] = ["bug", "improvement", "other"];
 
 /// The private words and path-like tokens of one free text: `[]` when the text may leave the app.
+#[must_use]
 pub fn private_hits(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let low = text.to_lowercase();
@@ -67,6 +68,10 @@ pub fn private_hits(text: &str) -> Vec<String> {
 }
 
 /// The guard for one field: a clear error names the field and the hit, the report is not sent.
+///
+/// # Errors
+///
+/// `AppError::bad` when the text holds a private word or a path-like token.
 pub fn guard_field(field: &str, text: &str) -> Result<(), AppError> {
     let hits = private_hits(text);
     if hits.is_empty() {
@@ -79,6 +84,11 @@ pub fn guard_field(field: &str, text: &str) -> Result<(), AppError> {
 }
 
 /// The body the gateway receives: the payload the page previewed, byte for byte.
+///
+/// # Errors
+///
+/// `AppError::bad` when the payload is not a JSON object, the kind is unknown, the
+/// title is empty or a guarded field fails the private-word guard.
 pub fn check_payload(payload: &Value) -> Result<(), AppError> {
     let obj = payload
         .as_object()
@@ -153,11 +163,10 @@ fn post(url: &str, body: &[u8]) -> Result<Value, AppError> {
     let value = serde_json::from_str(text).unwrap_or(Value::Null);
     if !(200..300).contains(&code) {
         // the gateway's own message (rate limit, spam rule) reaches the form
-        let msg = value
-            .get("error")
-            .and_then(Value::as_str)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("the feedback gateway answered {code}"));
+        let msg = value.get("error").and_then(Value::as_str).map_or_else(
+            || format!("the feedback gateway answered {code}"),
+            std::string::ToString::to_string,
+        );
         return Err(AppError {
             code: code.clamp(400, 599) as u16,
             message: msg,
@@ -169,6 +178,11 @@ fn post(url: &str, body: &[u8]) -> Result<Value, AppError> {
 impl super::Service {
     /// `feedback_send`: the guard, then the exact previewed JSON to the gateway.
     /// The URL comes from the page (one constant there); `None` or empty: the default.
+    ///
+    /// # Errors
+    ///
+    /// `AppError` when the payload fails the guard, is not valid JSON, or the
+    /// gateway call fails (non-2xx or curl error).
     pub fn feedback_send(&self, payload: &Value, url: Option<&str>) -> Result<Value, AppError> {
         check_payload(payload)?;
         let url = match url {
