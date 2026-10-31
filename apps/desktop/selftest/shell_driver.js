@@ -523,7 +523,9 @@
       await click("export");
       await until(() => $q("#exReplace").textContent === `${2 * n} files will be replaced`, "the replace count in the dialog", 15000);
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await until(() => !visible("#exportModal") && /export cancelled/.test($q("#stMsg").textContent), "Escape", 10000);
+      // P4-31: after an export ran, the message keeps its result — "export cancelled" only
+      // comes from a cancel before the first export; Escape must close the dialog either way.
+      await until(() => !visible("#exportModal") && (/export cancelled/.test($q("#stMsg").textContent) || new RegExp(`exported ${n} MIDI and ${n} spike files?`).test($q("#stMsg").textContent)), `Escape (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 10000);
       return { files: have.count };
     });
 
