@@ -86,12 +86,43 @@ fn export_existing_answers_through_the_bridge() {
             "export_existing",
             "export_dest_set",
             "export_markers_set",
+            "export_compensate_set",
             "export_drag_prepare",
             "export_drag_take",
             "export_last_get",
             "export_last_set"
         ]
     );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+// #232: the kept "Compensate" checkbox: export_compensate_set stores the document field, the
+// answers of export_last_get and export_existing carry it, and an export_all without a per-call
+// compensate uses it (the MIDI notes move or not — visible on the written file's timing).
+#[test]
+fn export_compensate_set_keeps_the_checkbox_and_export_all_uses_it() {
+    let (svc, sid, _dir, root) = opened("shell_comp");
+    // the default is on and the field is absent
+    let r = svc.export_last_get(&sid).unwrap();
+    assert_eq!(r["export_compensate"], true);
+    // off: the field is kept and answered
+    assert_eq!(
+        svc.export_compensate_set(&sid, false).unwrap()["export_compensate"],
+        false
+    );
+    assert_eq!(svc.export_last_get(&sid).unwrap()["export_compensate"], false);
+    assert_eq!(svc.export_existing(&sid).unwrap()["export_compensate"], false);
+    // on again removes the field (the default)
+    assert_eq!(
+        svc.export_compensate_set(&sid, true).unwrap()["export_compensate"],
+        true
+    );
+    // a bad argument is a 400
+    use drumspike_app::call::call;
+    assert!(matches!(
+        call(&svc, "export_compensate_set", &json!({"sid": sid, "compensate": "no"}), None),
+        Err(e) if e.code == 400
+    ));
     std::fs::remove_dir_all(&root).unwrap();
 }
 

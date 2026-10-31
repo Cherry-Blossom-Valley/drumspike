@@ -962,3 +962,31 @@ fn export_layer_refuses_a_foreign_folder_at_the_target_without_touching_it() {
     );
     assert!(docs.is_dir());
 }
+
+// #232: the plain `range` number of the dB velocity curve (the layer's range setting as its own
+// agent argument): stored in the curve, refused for a curve of linear or fixed, 0 to 96 bounded.
+#[test]
+fn track_layer_set_stores_the_plain_range_of_the_db_curve() {
+    let (svc, sid, root) = session("layer_range", vec![0.0; 96_000], 48_000, &HITS);
+    let f = root.join("shots").join("kick one.wav");
+    wav(&f, 48_000, &[shot(48_000, 480, 0.3, 1)], None);
+    svc.track_layer_set(&sid, "k in", &json!({"path": f.to_str().unwrap()}))
+        .unwrap();
+    // a number without a curve key: the db range
+    let l = svc.track_layer_set(&sid, "k in", &json!({"range": 48})).unwrap();
+    assert_eq!(l["layer"]["curve"], json!({"kind": "db", "range_db": 48.0}));
+    // together with a curve: the range of the new db curve
+    let l = svc
+        .track_layer_set(&sid, "k in", &json!({"curve": {"kind": "db"}, "range": 12}))
+        .unwrap();
+    assert_eq!(l["layer"]["curve"], json!({"kind": "db", "range_db": 12.0}));
+    // refused for linear and fixed, and outside 0 to 96
+    svc.track_layer_set(&sid, "k in", &json!({"curve": {"kind": "linear"}}))
+        .unwrap();
+    let e = svc.track_layer_set(&sid, "k in", &json!({"range": 24})).unwrap_err();
+    assert_eq!(e.code, 400);
+    assert!(e.message.contains("db curve"), "{e}");
+    let e = svc.track_layer_set(&sid, "k in", &json!({"range": 97})).unwrap_err();
+    assert_eq!(e.code, 400);
+    std::fs::remove_dir_all(&root).unwrap();
+}

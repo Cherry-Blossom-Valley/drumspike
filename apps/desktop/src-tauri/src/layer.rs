@@ -26,11 +26,12 @@ pub async fn track_layer_set(
     polarity: Option<String>,
     on: Option<bool>,
     curve: Option<Value>,
+    range: Option<f64>,
     align: Option<bool>,
     onset: Option<Value>,
 ) -> Result<Value, AppError> {
     blocking(&svc, "track_layer_set", move |s| {
-        let mut args = json!({"level_db": level_db, "polarity": polarity, "on": on, "curve": curve, "align": align});
+        let mut args = json!({"level_db": level_db, "polarity": polarity, "on": on, "curve": curve, "range": range, "align": align});
         // a missing `path` keeps the file; `null` removes the layer
         if let Some(p) = path {
             args["path"] = p;
