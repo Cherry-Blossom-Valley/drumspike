@@ -28,6 +28,7 @@ use std::cell::RefCell;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::pyops::py_int;
 use crate::velocity::{VelocityMap, velocity_map};
@@ -809,6 +810,40 @@ fn foot_strict(x: &[f32], d: i64, lo: i64, floor: f64) -> i64 {
     j - 1
 }
 
+static LEAD_IN: AtomicBool = AtomicBool::new(true);
+
+/// Switches the lead-in of the walk (#239) on or off for the whole process. For the before/after measurement
+/// (`examples/lead_in_check.rs`) only: the product leaves it on.
+pub fn set_lead_in(on: bool) {
+    LEAD_IN.store(on, Ordering::Relaxed);
+}
+
+/// The lead-in of a walk (#239). The threshold `thr` follows the peak, so a small first bump before the main swing
+/// (under `thr`, over the floor) ends the walk at the swing. `foot` is the walk's foot: this goes on back from it over
+/// the samples at or above [`FM_FLOOR_DB`] over the `floor` (the same gap rule), never past `lo`
+/// ([`FM_SPAN_S`] before the hit), and returns the first sample of that rise. A rise that does not end by `lo`, no
+/// floor, or a `thr` that is not above that level: `foot` stays.
+fn lead_in(x: &[f32], foot: i64, lo: i64, floor: f64, thr: f64, gap: i64) -> i64 {
+    if !LEAD_IN.load(Ordering::Relaxed) {
+        return foot;
+    }
+    let low = floor * 10f64.powf(FM_FLOOR_DB / 20.0);
+    if low <= 0.0 || low >= thr {
+        return foot;
+    }
+    let mut lead = foot;
+    let mut i = foot;
+    while i > lo {
+        i -= 1;
+        if two_tap(x, i as usize) >= low {
+            lead = i;
+        } else if lead - i >= gap {
+            return lead;
+        }
+    }
+    foot
+}
+
 /// [`first_motion_mid`] with another peak margin `peak_db` in place of [`FM_PEAK_DB`], and the foot taken
 /// strict ([`foot_strict`], capped by `tune`) when `tune` is `Some`.
 fn first_motion_mid_rule(
@@ -865,6 +900,7 @@ fn first_motion_mid_rule(
             return (s, BackStep::Separate);
         }
     }
+    let foot = lead_in(x, foot, lo, floor, thr, gap);
     let foot = match tune {
         None => foot,
         Some(tune) => {

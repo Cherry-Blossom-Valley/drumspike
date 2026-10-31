@@ -1026,8 +1026,8 @@ fn floor_of(n: usize, a: f64) -> Vec<f32> {
         .collect()
 }
 
-/// Adds a 180 Hz decaying sine of peak `amp` from sample `from` with a raised-cosine start of `ramp` samples.
-fn swing(x: &mut [f32], from: usize, ramp: usize, amp: f64) {
+/// Adds a decaying sine of `hz` and peak `amp` from sample `from` with a raised-cosine start of `ramp` samples.
+fn swing(x: &mut [f32], from: usize, ramp: usize, amp: f64, hz: f64) {
     for k in 0..(0.1 * f64::from(SR)) as usize {
         let t = k as f64 / f64::from(SR);
         let env = if k >= ramp {
@@ -1035,7 +1035,7 @@ fn swing(x: &mut [f32], from: usize, ramp: usize, amp: f64) {
         } else {
             0.5 - 0.5 * (std::f64::consts::PI * k as f64 / ramp as f64).cos()
         };
-        x[from + k] += (amp * env * (-t / 0.06).exp() * (2.0 * std::f64::consts::PI * 180.0 * t + 0.7).sin()) as f32;
+        x[from + k] += (amp * env * (-t / 0.06).exp() * (2.0 * std::f64::consts::PI * hz * t + 0.7).sin()) as f32;
     }
 }
 
@@ -1052,11 +1052,18 @@ fn a_small_first_bump_before_the_main_swing_is_the_hits_start() {
     const A: f64 = 0.0017;
     let on = 24_000;
     let mut x = floor_of(48_000, A);
-    swing(&mut x, on, 24, 0.01);
-    swing(&mut x, on + 144, 0, 0.8);
-    let dep = x.iter().position(|v| f64::from(v.abs()) > A).expect("the hit leaves the floor") as i64;
+    swing(&mut x, on, 24, 0.01, 1000.0);
+    swing(&mut x, on + 144, 0, 0.8, 180.0);
+    let dep = x
+        .iter()
+        .position(|v| f64::from(v.abs()) > 2.0 * A)
+        .expect("the hit leaves the floor") as i64;
     let off = refined_sample(&x, on) - dep;
-    assert!((-1..=1).contains(&off), "{off} samples from the first sample over the floor");
+    // the walk reads the two-tap level, which lags a raised-cosine start by a few samples; before the lead-in it was 135
+    assert!(
+        (-1..=3).contains(&off),
+        "{off} samples from the first sample over twice the floor"
+    );
 }
 
 #[test]
@@ -1067,8 +1074,19 @@ fn a_hit_is_not_found_before_the_first_sample_over_the_floor() {
     let on = 24_000;
     let mut x = floor_of(48_000, A);
     x[on - 144..on].copy_from_slice(&floor_of(144, A / 4.0));
-    swing(&mut x, on, 24, 0.8);
+    swing(&mut x, on, 24, 0.8, 180.0);
     let dep = (on - 144 + x[on - 144..].iter().position(|v| f64::from(v.abs()) > A / 4.0).unwrap()) as i64;
     let off = refined_sample(&x, on) - dep;
-    assert!((-12..=1).contains(&off), "{off} samples from the first sample over the quiet floor");
+    assert!(
+        (-12..=1).contains(&off),
+        "{off} samples from the first sample over the quiet floor"
+    );
+}
+
+#[test]
+fn the_lead_in_switch_is_on_for_the_product() {
+    // the switch is for the measurement example; it is a process-wide flag, so this only sets it on (the default)
+    set_lead_in(true);
+    let (x, on) = lead_in_hit();
+    assert!(refined_sample(&x, on) > 0);
 }
