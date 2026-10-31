@@ -246,10 +246,12 @@ pub const EXPORT_SELECTED: Item = item("export_selected", "Export Selected Track
 /// P4-39a: removes the selected track (greyed without a selected track: `sync_checks` reads `selected`).
 pub const TRACKS_REMOVE: Item = item("tracks_remove", "Remove Track", true);
 // Help
+/// #255: the manual (static/help, prebuilt from docs/guide) with its Shortcuts section.
+pub const DRUMSPIKE_HELP: Item = item("drumspike_help", "Drum Spike Help", false);
 pub const SHORTCUTS: Item = item("shortcuts", "Keyboard Shortcuts", false);
 
 /// Every custom item (not the Open Recent and Window entries, not the system items Cut, Copy and so on).
-pub const SPEC: [Item; 109] = [
+pub const SPEC: [Item; 110] = [
     ABOUT,
     SETTINGS,
     QUIT,
@@ -358,6 +360,7 @@ pub const SPEC: [Item; 109] = [
     SET_BAR1_AUDIO,
     EXPORT_SELECTED,
     TRACKS_REMOVE,
+    DRUMSPIKE_HELP,
     SHORTCUTS,
 ];
 
@@ -1121,9 +1124,10 @@ fn window_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
         .build()
 }
 
-/// The Help menu: Keyboard Shortcuts.
+/// The Help menu: Drum Spike Help (the manual) and Keyboard Shortcuts.
 fn help_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
     SubmenuBuilder::new(app, "Help")
+        .item(&make_item(app, &DRUMSPIKE_HELP)?) // #255: before Keyboard Shortcuts
         .item(&make_item(app, &SHORTCUTS)?)
         .build()
 }

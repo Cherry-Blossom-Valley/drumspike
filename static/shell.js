@@ -466,6 +466,7 @@
     stop_return_mode: () => toggleStopReturnMode(),   // #436: Transport > Stop Returns to Start
     project: p => (p.sid ? switchTo(p.sid) : undefined),   // Window menu: one entry per open project
     shortcuts: () => openShortcuts(),
+    drumspike_help: () => DSHelp.open(),   // #255: Help > Drum Spike Help (the manual)
   };
   /* Runs the item. While a dialog of the page is open the menu waits: the user answers the dialog first
      (a second dialog would take the place of the first one). After the item the menu gets the state again:

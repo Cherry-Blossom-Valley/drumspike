@@ -1,0 +1,9 @@
+<h1>1. Why sample-exact matters</h1>
+<p>A trigger or a sample replacer fires a new sound for every drum hit in a close-mic track. If it fires late, the new sound smears the original. One millisecond of delay is enough: the close mic and the triggered sound filter each other, and the attack loses its punch.</p>
+<h2>What goes wrong without it</h2>
+<p>DAW transient detectors work on loudness. They fire on a wrong sample, or they fire twice on one hit, or they fire on another drum that leaks into the mic. Every one of these is audible.</p>
+<h2>What Drum Spike does</h2>
+<p>Drum Spike finds every drum hit in a close-mic track. It puts one MIDI note and one spike on the first sample of the attack of the hit. It does this per drum track, so a snare mic yields snare hits and nothing else.</p>
+<p><img src="help/img/01-why-sample-exact.png" alt="A close-mic hit against a triggered sample fired 1 ms late; the smeared attack is visible."></p>
+<p><img src="help/img/01-attack-aligned.png" alt="The same hit with the trigger on the first sample of the attack; the two attacks line up."></p>
+<p>Next: <a class="chapter" href="02-add-tracks.html">bring in a session</a>.</p>

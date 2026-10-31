@@ -1,0 +1,84 @@
+{
+ "chapters": [
+  {
+   "file": "01-why-sample-exact.html",
+   "title": "1. Why sample-exact matters",
+   "source": "docs/guide/01-why-sample-exact.md"
+  },
+  {
+   "file": "02-add-tracks.html",
+   "title": "2. Bring in a session",
+   "source": "docs/guide/02-add-tracks.md"
+  },
+  {
+   "file": "03-detection.html",
+   "title": "3. Detection",
+   "source": "docs/guide/03-detection.md"
+  },
+  {
+   "file": "03b-detector-plugins.html",
+   "title": "3b. Detector plug-ins",
+   "source": "docs/guide/03b-detector-plugins.md"
+  },
+  {
+   "file": "04-first-sample.html",
+   "title": "4. Sample-exact",
+   "source": "docs/guide/04-first-sample.md"
+  },
+  {
+   "file": "05-export.html",
+   "title": "5. Export",
+   "source": "docs/guide/05-export.md"
+  },
+  {
+   "file": "06-find-your-way.html",
+   "title": "6. Find your way: play, zoom, move between hits",
+   "source": "docs/guide/06-find-your-way.md"
+  },
+  {
+   "file": "07-edit-hits.html",
+   "title": "7. Edit hits",
+   "source": "docs/guide/07-edit-hits.md"
+  },
+  {
+   "file": "08-velocity.html",
+   "title": "8. Velocity: how hard each hit was played",
+   "source": "docs/guide/08-velocity.md"
+  },
+  {
+   "file": "09-doubtful-hits.html",
+   "title": "9. Doubtful hits first",
+   "source": "docs/guide/09-doubtful-hits.md"
+  },
+  {
+   "file": "10-bleed.html",
+   "title": "10. Bleed and the hard cases",
+   "source": "docs/guide/10-bleed.md"
+  },
+  {
+   "file": "11-learn.html",
+   "title": "11. Learn: teach by example",
+   "source": "docs/guide/11-learn.md"
+  },
+  {
+   "file": "12-followers-and-layers.html",
+   "title": "12. Follower tracks and layers",
+   "source": "docs/guide/12-followers-and-layers.md"
+  },
+  {
+   "file": "13-tempo.html",
+   "title": "13. Tempo, bars and beats",
+   "source": "docs/guide/13-tempo.md"
+  },
+  {
+   "file": "14-automate.html",
+   "title": "14. Automate it (agent API)",
+   "source": "docs/guide/14-automate.md"
+  },
+  {
+   "file": "best-results.html",
+   "title": "Get the best results",
+   "source": "docs/guide/best-results.md"
+  }
+ ]
+}
