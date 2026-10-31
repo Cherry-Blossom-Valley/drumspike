@@ -664,16 +664,37 @@
       await click("reset_mix");
       need(S.tracks[name].volume_db === 0 && S.tracks[name].pan === 0, `Reset Volume and Pan: ${S.tracks[name].volume_db} ${S.tracks[name].pan}`);
       const setChk = (sel, v) => { if ($q(sel).checked !== v) $q(sel).click(); };
-      await click("export_selected");   // P4-30: the Export dialog with the selected track: MIDI only, then spikes only
-      await until(() => visible("#exportModal") && $q("#exScopeSel").checked, "the Export dialog for the selected track", 15000);
-      setChk("#exMidi", true); setChk("#exSpikes", false); $q("#exGo").click();
-      await msgIs(/^exported 1 MIDI file to /);
-      $q("#exCancel").click();
+      // P4-30: the Export dialog with the selected track: MIDI only, then spikes only.
+      // The dialog opens only after openExport's bridge calls return: wait for EX.open AND
+      // #exportModal without `hidden`, never for the text alone (menu_export shape).
+      const answerTempoNotice = async (wantRe, what) => {
+        // #151: a project without a tempo map asks "No tempo set" before the first export;
+        // answer it the way a user would (Export anyway). The notice appears a few IPC
+        // round-trips after the click: wait for it to SHOW (or for the export to have
+        // finished without one), never for "not visible yet".
+        await until(() => visible("#confirmModal") || wantRe.test($q("#stMsg").textContent), `${what}: the tempo notice or the export (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 15000);
+        if (visible("#confirmModal")) {
+          need($q("#confirmTitle").textContent === "No tempo set", `${what}: unexpected confirm "${$q("#confirmTitle").textContent}"`);
+          const anyway = $q("#confirmActions button[data-act='anyway']");
+          need(!!anyway, `${what}: the tempo notice has no Export anyway button`);
+          anyway.click();
+        }
+        await msgIs(wantRe);
+      };
       await click("export_selected");
-      await until(() => visible("#exportModal"), "the Export dialog again", 15000);
-      setChk("#exMidi", false); setChk("#exSpikes", true); $q("#exGo").click();
-      await msgIs(/^exported 1 spike file to /);
+      await until(() => EX.open === true && visible("#exportModal") && $q("#exScopeSel").checked, "the Export dialog for the selected track", 15000);
+      setChk("#exMidi", true); setChk("#exSpikes", false); $q("#exGo").click();
+      await answerTempoNotice(/^exported 1 MIDI file to /, "the MIDI export of the selected track");
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog open after the MIDI export", 15000);
       $q("#exCancel").click();
+      await until(() => EX.open === false && !visible("#exportModal"), "the Export dialog closed after Cancel", 10000);
+      await click("export_selected");
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog again", 15000);
+      setChk("#exMidi", false); setChk("#exSpikes", true); $q("#exGo").click();
+      await answerTempoNotice(/^exported 1 spike file to /, "the spike export of the selected track");
+      await until(() => EX.open === true && visible("#exportModal"), "the Export dialog open after the spike export", 15000);
+      $q("#exCancel").click();
+      await until(() => EX.open === false && !visible("#exportModal"), "the Export dialog closed after the spike export", 10000);
       done.push("mute_track", "solo_track", "reset_mix", "export_selected");
       // Hits > Analyze Selected Track, Analyze All: the real analysis (the re-analyze question: discard the edits)
       const analyzed = async (id, what) => {
@@ -861,7 +882,7 @@
       need(list.includes("# Third-party software in Drum Spike") && list.includes("MPL-2.0") && crates > 100, `third-party list: ${crates} crates`);
       $q('#aboutActions button[data-act="ok"]').click();
       await until(() => $q("#aboutModal").classList.contains("hidden"), "the About window to close", 15000);
-      return { title: "About Drum Spike", version: info.version, notice_chars: notice.length, third_party_crates: crates };
+      return { title: "About Drum Spike", version: info.version, notice_chars: list.length, third_party_crates: crates };
     });
 
     await step("menu_close", async () => {
