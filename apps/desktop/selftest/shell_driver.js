@@ -816,8 +816,8 @@
       $q("#presetName").value = "Self Test Span";
       $q("#presetAccept").click();
       await until(() => !visible("#presetModal") && S.zoomOwn.length === ownWas.length + 1, "the own preset saved", 5000);
-      // the menu update goes through the async shell_sync, so retry instead of a one-shot need
-      await until(async () => (await T.invoke("selftest_menu_report")).items.some(i => i.id === "zoom_own:0"), "the menu lists the own preset", 5000);
+      // the menu update goes through the async shell_sync; the report lists the Zoom Presets submenu ids
+      await until(async () => ((await T.invoke("selftest_menu_report")).zoom_own || []).some(id => id === "zoom_own:0"), "the menu lists the own preset", 5000);
       done.push("zoom_add");
       // Edit > Set Marker at Selection (the playhead; the service stores the list), then the jumps
       const mkWas = MK.list.length;
@@ -895,7 +895,7 @@
       await until(() => S.order.includes(name) && (S.events[name] || []).length > 0, "Undo brings the track back", 15000);
       done.push("tracks_remove");
       S.zoomOwn = ownWas; saveZoomOwn();   // the menu does not list the own preset any more
-      await until(async () => !((await T.invoke("selftest_menu_report")).items.some(i => i.id.startsWith("zoom_own:"))), "the own preset out of the menu", 10000);
+      await until(async () => !((await T.invoke("selftest_menu_report")).zoom_own || []).some(id => id.startsWith("zoom_own:")), "the own preset out of the menu", 10000);
       S.selTrack = null;
       report.metrics.menu_rest = { items: done.length, list: done };
       return report.metrics.menu_rest;
