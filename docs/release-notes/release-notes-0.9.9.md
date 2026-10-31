@@ -1,5 +1,8 @@
 Changes since 0.9.8:
 
+### Finder
+- Drum Spike project files (`.drumspike`) have their own document icon in Finder: a page with the Drum Spike mark. A double-click on a project file opens it in Drum Spike.
+
 ### Data safety
 - A failed autosave is now shown on the status line: "Autosave failed: … Your edits are not backed up; save the project." Before, the error went only to the system log, so a full disk or a folder without write access could stop the backups without a word. The message comes once per failure; the next good autosave or a save clears it. The agent API project status carries the same error.
 
