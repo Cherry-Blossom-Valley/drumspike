@@ -194,7 +194,7 @@ def test_marked_line_with_host_word_fails(tmp_path):
 
 def test_marked_line_with_pattern_hit_fails(tmp_path):
     line = (f'const X = ["{check_private.BANNED_BASE[0]}"];  // '
-            f'{check_private.LIST_MARKER} some-flooob-frame.npz')
+            f'{check_private.LIST_MARKER} some-' + "flooob" + '-frame.npz')
     r = _diff_scan(tmp_path, [line], {"DRUMSPIKE_PRIVATE_PATTERNS": INVENTED_PAT})
     assert r.returncode == 1, r.stderr
 
