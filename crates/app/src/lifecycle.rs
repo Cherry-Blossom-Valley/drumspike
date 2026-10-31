@@ -237,6 +237,12 @@ impl Service {
     /// folder exists); a given name that exists is 409. `dir` defaults to [`Service::projects_dir`].
     /// `audio_mode` (`referenced`, the default, or `copied`) is kept in `settings.audio_mode`
     /// for the track import. Answers the summary of `project_open`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error when `audio_mode` is neither `referenced` nor `copied` or the name is not a valid
+    /// folder name, a 409 error when the project folder already exists or its lock is held by another process,
+    /// and an internal error when the target folder or the document cannot be written.
     pub fn project_new(
         &self,
         name: Option<&str>,
@@ -286,11 +292,21 @@ impl Service {
     ///
     /// #121: the document on disk must be the one this process read or wrote last (size and modification time); else
     /// nothing is written and the answer is 409 ([`crate::registry::CHANGED_ON_DISK`]). See [`Service::project_save_with`].
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Service::project_save_with`] with `force` false.
     pub fn project_save(&self, sid: &str) -> Result<Value, AppError> {
         self.project_save_with(sid, false)
     }
 
     /// [`Service::project_save`]; with `force` (Save anyway, #121) the document is written also when it changed on disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error for an unknown project id, a 409 error when the project is open read-only or (without
+    /// `force`) when the document on disk changed since it was read or written, and an error when the document
+    /// or its backup cannot be written.
     pub fn project_save_with(&self, sid: &str, force: bool) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let _io = lock(&self.inner.life.io);
@@ -327,6 +343,10 @@ impl Service {
 
     /// `project_clean_check {sid}` (P4-40a): clears the dirty flag when the open document equals the one saved last (the
     /// page calls it after an undo or redo; the project is the saved state again). Changes nothing else. Answers `{dirty}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when the project id is unknown.
     pub fn project_clean_check(&self, sid: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let dirty = lock(&op).clean_if_saved();
@@ -339,6 +359,12 @@ impl Service {
     /// project is clean. Answers the summary. With `copy_audio` the audio is copied into the
     /// new `Audio Files/` as a job (`copyjob.rs`): the answer is `{job: <state>}` and the summary
     /// comes as the `result` of the finished job; `progress` gets `{sid, copy: ...}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for a missing or invalid `name`, a 404 error for an unknown project id, and a 409
+    /// error when `<dir>/<name>/` already holds a project, a copy to that name is running, or its lock is held
+    /// by another process. Writing the new folder or document can also fail with an internal error.
     pub fn project_save_as(
         &self,
         sid: &str,
@@ -416,6 +442,11 @@ impl Service {
 
     /// `POST /api/project/{sid}/close` and `/api/session/{sid}/archive`: take the project out of
     /// the registry. 409 while it is dirty unless `force`. Answers `{closed, folder}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when the project id is unknown and a 409 error when the project has unsaved
+    /// changes and `force` is false.
     pub fn project_close(&self, sid: &str, force: bool) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let (folder, drag) = {
@@ -438,6 +469,11 @@ impl Service {
 
     /// `POST /api/session/{sid}/rename`: the display name only (folder and document keep their
     /// names). Trimmed, cut to 80 characters, no path parts. Marks the project dirty.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error for an unknown project id, a 409 error when the project is open read-only, and a
+    /// 400 error for an empty name or one that is not a valid file name.
     pub fn project_rename(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let name = name.trim();
@@ -453,6 +489,11 @@ impl Service {
 
     /// `POST /api/reorder/{sid}`: the display order, a permutation of the track names. Marks
     /// the project dirty. Answers `{order}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error for an unknown project id, a 409 error when the project is open read-only, and a
+    /// 400 error when `order` is not a list of strings that is a permutation of the track names.
     pub fn tracks_reorder(&self, sid: &str, order: &Value) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let mut g = lock(&op);
@@ -475,6 +516,11 @@ impl Service {
 
     /// `POST /api/setnote/{sid}/{name}`: the MIDI note of a track, 0 to 127 (the server only
     /// takes an integer). Marks the project dirty. Answers `{note}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error for an unknown project id, a 409 error when the project is open read-only, and a
+    /// 400 error for an unknown track or a `note` outside 0 to 127.
     pub fn track_set_note(&self, sid: &str, name: &str, note: i64) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let mut g = lock(&op);
@@ -492,6 +538,12 @@ impl Service {
     /// track keeps its place. 400 for a bad or unknown name, 409 when the new name is taken or
     /// when an analysis, a lane build or a copy job of the project runs (they write under the
     /// old name). Marks the project dirty. Answers `{name}` (the new name).
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error for an unknown project id, a 400 error for an unknown track or a new name that is too
+    /// long or invalid, and a 409 error when the project is open read-only, the new name is taken, or an
+    /// analysis, lane build or copy job of the project runs.
     pub fn track_rename(&self, sid: &str, name: &str, new_name: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let new_name = new_name.trim();
@@ -579,6 +631,11 @@ impl Service {
     /// identifier (`[a-z_]`, 1 to 32 characters); the audio keys (`audio_output`, `master_db`)
     /// belong to the transport (400). Answers `{key, value}`; without a home folder nothing is
     /// written.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error when `key` is not 1 to 32 characters of `[a-z_]` or is an audio key, and an internal
+    /// error when `settings.json` in the home folder cannot be written.
     pub fn app_settings_set(&self, key: &str, value: &Value) -> Result<Value, AppError> {
         let short = (1..=32).contains(&key.len()) && key.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
         if !short {

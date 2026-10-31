@@ -10,6 +10,11 @@ use crate::Service;
 /// document), wait for the job and return one object per folder:
 /// `{"project", "job", "events": {track: events}}` (the events of `events_get`).
 /// The first folder that does not open or start is an error.
+///
+/// # Errors
+///
+/// A message prefixed with the folder when `project_open` or `analyze_start` fails for it; the plain error text when
+/// the events of a finished track cannot be read. The folders after the failing one are not processed.
 pub fn analyze_projects(svc: &Service, dirs: &[String]) -> Result<Vec<Value>, String> {
     let mut out = Vec::with_capacity(dirs.len());
     for dir in dirs {

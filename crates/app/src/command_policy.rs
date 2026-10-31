@@ -26,18 +26,33 @@ pub const CLOSE_DEFAULT: bool = false;
 /// `the_page_sends_keep_edited_itself` (`tests/command_tests.rs`) pins that the page sends it.
 pub const PAGE_KEEP_EDITED: bool = false;
 
+/// The string argument `key` of `args`.
+///
+/// # Errors
+///
+/// A 400 [`AppError`] when `key` is missing or its value is not a JSON string.
 pub fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, AppError> {
     args.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::bad(format!("missing or wrong argument `{key}` (string)")))
 }
 
+/// The integer argument `key` of `args`.
+///
+/// # Errors
+///
+/// A 400 [`AppError`] when `key` is missing or its value is not an integer that fits an `i64`.
 pub fn arg_i64(args: &Value, key: &str) -> Result<i64, AppError> {
     args.get(key)
         .and_then(Value::as_i64)
         .ok_or_else(|| AppError::bad(format!("missing or wrong argument `{key}` (integer)")))
 }
 
+/// The integer argument `key` of `args`, or `None` when it is missing or `null`.
+///
+/// # Errors
+///
+/// A 400 [`AppError`] when `key` is given but its value is not an integer that fits an `i64`.
 pub fn opt_i64(args: &Value, key: &str) -> Result<Option<i64>, AppError> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -94,6 +109,11 @@ fn type_name(ty: Ty) -> &'static str {
 
 /// Check `args` against the row: no unknown key, every required key, every value of its type (a `null` for an
 /// optional argument counts as not given). 400 with the key named.
+///
+/// # Errors
+///
+/// A 400 [`AppError`] for an argument key the row does not list, a missing or `null` required argument,
+/// or a value of the wrong type.
 pub fn check_args(row: &CommandSpec, args: &Map<String, Value>) -> Result<(), AppError> {
     for k in args.keys() {
         if !row.args.iter().any(|a| a.name == k) {
@@ -170,6 +190,10 @@ pub mod transport_args {
     use crate::transport::PlayWindow;
 
     /// A number or nothing; any other value is a 400 naming the key.
+    ///
+    /// # Errors
+    ///
+    /// A 400 [`AppError`] when `key` is given (not `null`) but its value is not a number.
     pub fn opt_f64(args: &Value, key: &str) -> Result<Option<f64>, AppError> {
         match args.get(key) {
             None | Some(Value::Null) => Ok(None),
@@ -188,6 +212,10 @@ pub mod transport_args {
 
     /// The audition window of `transport_play` (P4-40d: start, end, loop, tracks; P4-40e: shot). Both surfaces
     /// build it with [`PlayWindow::from_args`], so the default (no window) and the checks are the same.
+    ///
+    /// # Errors
+    ///
+    /// The 400 [`AppError`] of [`PlayWindow::from_args`] for an invalid window (see there).
     pub fn play_window(
         start: Option<f64>,
         end: Option<f64>,

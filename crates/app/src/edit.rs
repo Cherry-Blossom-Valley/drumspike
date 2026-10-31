@@ -144,6 +144,15 @@ fn apply_was(e: &mut serde_json::Map<String, Value>, was: Option<&Value>) {
     }
 }
 
+/// Apply `ops` to `events` and return the new sorted list with the counts `(added, deleted, moved,
+/// velocity, restored)` (see the comment above `apply_was` for the rules of the ops).
+///
+/// # Errors
+///
+/// A 400 [`AppError`] for an op that is not an object or has an unknown `op`; for an `add` or `move` with a missing
+/// or non-numeric `t`, a negative `t` on `add`, or a `t` after `end`; for a bad `v`; for an `index` that is not a
+/// non-negative integer below the number of events; for an event that is not an object; or for a hit that an
+/// earlier op of the same call deleted.
 pub fn apply_ops(
     events: Vec<Value>,
     ops: &[Value],
@@ -313,6 +322,12 @@ impl Service {
     /// changes nothing. A follower is refused (409), as in `events_set`. Returns
     /// `{saved, added, deleted, moved, velocity, restored, followers?, snaps?}`; `snaps` holds one
     /// `{click, t, v, snapped}` per add with `snap: true`.
+    ///
+    /// # Errors
+    ///
+    /// A 400 [`AppError`] when `ops` is empty or any op is invalid (see [`apply_ops`]; nothing changes then); a 404
+    /// for an unknown `sid` or track; a 409 when the project is open read-only, the track is a follower, or another
+    /// write or a running analysis holds the project; the decode error when a snap needs audio that cannot be read.
     pub fn events_edit(&self, sid: &str, name: &str, ops: &[Value]) -> Result<Value, AppError> {
         self.events_edit_as(sid, name, ops, true)
     }
@@ -451,6 +466,12 @@ impl Service {
     /// (`params.shift_samples`, 0 when none) and the new value is stored for the next analysis.
     /// 400 outside +-[`SHIFT_LIMIT`] or for a track without a sample rate; 409 for a follower and
     /// while an analysis or a re-pick store runs. Returns `{shift_samples, delta, moved}`.
+    ///
+    /// # Errors
+    ///
+    /// A 400 [`AppError`] when `shift_samples` is outside +-[`SHIFT_LIMIT`] or the track has no sample rate; a 404
+    /// for an unknown `sid` or track; a 409 when the project is open read-only, the track is a follower, or another
+    /// write or a running analysis holds the project.
     pub fn track_shift_set(&self, sid: &str, name: &str, shift_samples: i64) -> Result<Value, AppError> {
         if shift_samples.unsigned_abs() > SHIFT_LIMIT as u64 {
             return Err(AppError::bad(format!("shift_samples out of range +-{SHIFT_LIMIT}")));
@@ -502,6 +523,10 @@ impl Service {
     /// `export_midi` with the values the page passes taken from the document when the call has
     /// none: `note` is the track's note (36 without one), `events` the track's stored hits,
     /// `ppq` 24000, `tempo` 120. The Tauri command and the test bridge call this.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::export_midi_stored_with`].
     pub fn export_midi_stored(
         &self,
         sid: &str,
@@ -515,6 +540,10 @@ impl Service {
     }
 
     /// P4-30: [`Service::export_midi_stored`] into the folder `dest`; `None` is `Exports/`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::export_midi_stored_with`].
     #[allow(clippy::too_many_arguments)]
     pub fn export_midi_stored_to(
         &self,
@@ -530,6 +559,11 @@ impl Service {
     }
 
     /// P4-7c: [`Service::export_midi_stored_to`] with the choice to compensate the sampler offset.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] for an unknown `sid` or track; a 409 when the project is open read-only; otherwise the
+    /// errors of [`Service::export_midi_with`] (bad `ppq`, bad `dest`, a protected target, an unwritable `.mid`).
     #[allow(clippy::too_many_arguments)]
     pub fn export_midi_stored_with(
         &self,

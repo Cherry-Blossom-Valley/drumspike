@@ -14,6 +14,14 @@ use tauri::ipc::Channel;
 
 use crate::blocking;
 
+/// Start the job that copies the referenced audio of the project into its folder. It returns at
+/// once; the progress goes to `progress`.
+///
+/// # Errors
+///
+/// 404 when the project is unknown. 409 when the project is open read-only, or a copy job of the
+/// project is already running. The copy itself runs on a thread, and its failure is reported as
+/// a message on `progress`, not here.
 #[tauri::command]
 pub async fn project_consolidate(
     svc: State<'_, Service>,
@@ -39,6 +47,14 @@ pub fn job_cancel(svc: State<'_, Service>, sid: String) -> Value {
     svc.job_cancel(&sid)
 }
 
+/// Point the track `track` at the audio file `path`.
+///
+/// # Errors
+///
+/// 404 when the project or the track is unknown, or `path` is not a file. 409 when the project is
+/// open read-only, or the file does not match the track's source (size or head hash) and `force`
+/// is not set. 400 when a forced file cannot be read as audio. Other errors come from recording
+/// the new source.
 #[tauri::command]
 pub async fn project_relink(
     svc: State<'_, Service>,
@@ -53,6 +69,12 @@ pub async fn project_relink(
     .await
 }
 
+/// Search `folder` for the files of the offline tracks (and offline layer files) of the project.
+///
+/// # Errors
+///
+/// 404 when the project is unknown or `folder` is not a directory. 409 when the project is open
+/// read-only.
 #[tauri::command]
 pub async fn relink_search(svc: State<'_, Service>, sid: String, folder: String) -> Result<Value, AppError> {
     blocking(&svc, "relink_search", move |s| s.relink_search(&sid, &folder)).await

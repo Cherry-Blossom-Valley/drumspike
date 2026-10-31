@@ -166,6 +166,10 @@ pub fn guess_role(stem: &str) -> Option<&'static str> {
 
 /// [`guess_role`] with the words of the name that matched (normalised, space-separated; the
 /// hint of the Inspector shows them: `k in = kick`). Two-word matches carry both words.
+///
+/// # Panics
+///
+/// Contains an `unwrap` of the next word that is reached only when that word exists, so it does not panic in practice.
 pub fn guess_role_matched(stem: &str) -> Option<(&'static str, String)> {
     if is_export_name(stem) {
         return None;
@@ -277,6 +281,10 @@ impl Rule {
     }
 
     /// A rule from JSON; 400 for a pattern without words, an unknown role or a note outside 0 to 127.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for a pattern without words, an unknown role or a note outside 0 to 127.
     pub fn from_json(v: &Value) -> Result<Rule, AppError> {
         let pattern = normalize(v.get("pattern").and_then(Value::as_str).unwrap_or(""));
         if pattern.is_empty() {
@@ -408,6 +416,10 @@ impl Service {
     }
 
     /// `kit_presets_list`: `[{name, rules}]` sorted by name. A file that is no preset is skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 409 error when the service has no home folder.
     pub fn kit_presets_list(&self) -> Result<Value, AppError> {
         let dir = self.preset_dir()?;
         let mut out: Vec<(String, usize)> = Vec::new();
@@ -430,6 +442,11 @@ impl Service {
 
     /// `kit_preset_save {name, rules}`: write `<home>/kit-presets/<name>.json` (a preset of the
     /// same name is replaced). Answers `{name, rules, path}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for an empty name, a `rules` value that is not a list, or an invalid rule; a 409 error
+    /// without a home folder; and an internal error when the preset folder or file cannot be written.
     pub fn kit_preset_save(&self, name: &str, rules: &Value) -> Result<Value, AppError> {
         let stem = preset_file_stem(name)?;
         let list = rules
@@ -447,6 +464,11 @@ impl Service {
     }
 
     /// `kit_preset_load {name}`: `{name, rules: [{pattern, role, note}]}`; 404 for an unknown name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when no preset file has this name, a 400 error for an empty name or a damaged preset
+    /// file, and a 409 error without a home folder.
     pub fn kit_preset_load(&self, name: &str) -> Result<Value, AppError> {
         let (name, rules) = self.load_rules(name)?;
         Ok(json!({"name": name, "rules": rules.iter().map(Rule::to_json).collect::<Vec<_>>()}))

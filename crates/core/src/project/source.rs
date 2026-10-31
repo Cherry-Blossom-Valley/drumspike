@@ -48,6 +48,10 @@ fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
 /// `project.head_sha1`: lower-case hex SHA-1 of the first MiB. P3-15c: the hash of a file
 /// that did not change is kept in a cache of the process (see [`HeadCacheCounts`]), so an
 /// open, `project_get` and `tracks_get` read each unchanged source head once.
+///
+/// # Errors
+///
+/// [`ProjectError::Io`] when the file cannot be opened, stat-ed or read.
 pub fn head_sha1(path: &Path) -> Result<String, ProjectError> {
     head_sha1_settled(path, HEAD_CACHE_SETTLE).map(|(h, _)| h)
 }
@@ -216,6 +220,11 @@ fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
 
 /// `project.build_source`: the record for an audio file (absolute path, project-relative
 /// posix path, size, whole-second mtime, head hash, `bext_origination` when present).
+///
+/// # Errors
+///
+/// [`ProjectError::Invalid`] when `mode` is not a source mode; [`ProjectError::Io`] when the
+/// file cannot be stat-ed or its head cannot be read.
 pub fn build_source(path: &Path, project_dir: &Path, mode: &str) -> Result<Source, ProjectError> {
     if !SOURCE_MODES.contains(&mode) {
         return Err(ProjectError::Invalid(format!("bad source mode: '{mode}'")));
@@ -320,6 +329,12 @@ fn copy2(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// matching identity is reused, not copied twice: the source itself when it lives there, or
 /// `Audio Files/<name>` (or a `(2)`, `(3)` name in that sequence) when that file has the
 /// record's size and head hash. The source file is never modified.
+///
+/// # Errors
+///
+/// [`ProjectError::CopyFailed`] when the record's file is missing or changed;
+/// [`ProjectError::Io`] when `Audio Files/` cannot be created or the copy or rename fails;
+/// [`ProjectError::Invalid`] when the copy is incomplete or does not match the record.
 pub fn copy_into_project(record: &Source, project_dir: &Path, name: Option<&str>) -> Result<Source, ProjectError> {
     copy_into_project_with(record, project_dir, name, copy2)
 }
@@ -373,6 +388,11 @@ pub const COPY_CHUNK: usize = 4 * 1024 * 1024;
 
 /// `shutil.copy2` in chunks: the bytes plus the access and modification times. Asks `ctl`
 /// before each chunk; a cancel stops with `ErrorKind::Interrupted` (the caller removes `dst`).
+///
+/// # Errors
+///
+/// An `Interrupted` error when `ctl` reports a cancel; otherwise the I/O error from opening
+/// `src`, creating `dst`, or reading, writing or flushing the data.
 pub fn copy_chunked(src: &Path, dst: &Path, ctl: &CopyCtl<'_>) -> std::io::Result<()> {
     use std::io::Write;
     let mut input = File::open(src)?;
@@ -406,6 +426,12 @@ pub fn copy_chunked(src: &Path, dst: &Path, ctl: &CopyCtl<'_>) -> std::io::Resul
 /// caller) into `project_dir/Audio Files/`, in chunks, with cancel and byte progress. `record`
 /// is the identity the copy must have. Returns `Ok(None)` after a cancel: the temporary file
 /// is removed and nothing else is left behind. A failed copy removes its temporary file too.
+///
+/// # Errors
+///
+/// [`ProjectError::Io`] when `Audio Files/` cannot be created or the copy or rename fails;
+/// [`ProjectError::Invalid`] when the copy is incomplete or its size or head hash differ from
+/// `record`.
 pub fn copy_into_project_ctl(
     src: &Path,
     record: &Source,
@@ -505,6 +531,17 @@ pub(crate) fn splitext(name: &str) -> (&str, &str) {
 
 /// `project.consolidate`: copy every referenced source into `Audio Files/` and rewrite its
 /// record; returns the names of the tracks changed, in document order.
+///
+/// # Errors
+///
+/// The first error of [`copy_into_project`] ([`ProjectError::CopyFailed`] for a missing or
+/// changed source, [`ProjectError::Io`] or [`ProjectError::Invalid`] for a failed copy); tracks
+/// before it have already been rewritten.
+///
+/// # Panics
+///
+/// Panics through `expect("checked")` only if a track's source record vanishes between the
+/// `referenced` test and the copy, which cannot happen.
 pub fn consolidate(project: &mut Project) -> Result<Vec<String>, ProjectError> {
     let dir = project.dir.clone();
     let mut changed = Vec::new();
@@ -632,6 +669,10 @@ fn hash_heads(
 /// One file is `Found`; two or more are `Ambiguous` and none is chosen; none is `Missing`.
 /// A record without a head hash matches by size alone. Files are only read (the first MiB of
 /// a candidate whose size fits). `cancelled` is asked between folders and between hashes.
+///
+/// # Errors
+///
+/// [`ProjectError::Invalid`] when `folder` is not a folder.
 pub fn relink_search(
     folder: &Path,
     targets: &[SearchTarget],
@@ -792,6 +833,11 @@ pub fn relink_search(
 /// stay, because the search has just checked them; so does `mtime`, which keeps the
 /// `Analysis/` cache key and the cache current. A record without size or head hash is built
 /// from the file ([`build_source`]).
+///
+/// # Errors
+///
+/// Only when the record lacks size or head hash: the errors of [`build_source`]
+/// ([`ProjectError::Io`] when the file cannot be read).
 pub fn relinked_source(record: &Source, path: &Path, project_dir: &Path) -> Result<Source, ProjectError> {
     let path = abspath(path);
     let pdir = abspath(project_dir);
@@ -835,6 +881,11 @@ pub fn cache_key(track: &Track) -> CacheKey {
 impl CacheKey {
     /// True when `<analysis_dir>/key.json` holds exactly this key (a missing or unreadable
     /// file is stale, like `server.analysis_dir`).
+    ///
+    /// # Panics
+    ///
+    /// Panics through `expect("a key serialises")` if the key cannot be turned into a JSON
+    /// value, which three optional scalars never fail to do.
     pub fn matches_file(&self, analysis_dir: &Path) -> bool {
         let Ok(text) = std::fs::read_to_string(analysis_dir.join("key.json")) else {
             return false;
