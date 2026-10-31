@@ -3,7 +3,7 @@
 //! is `bar1_s / beat` with the beat of the detected map. Output lines `BAR1 <session> ...`.
 //! Skips when the folder is absent: `DRUMSPIKE_TEMPO_SAMPLES`, else `~/.cache/drumspike/sessions`.
 //!
-//! Run: `DRUMSPIKE_TEMPO_SAMPLES=/Users/Shared/drumspike-data/sessions cargo test -p
+//! Run: `DRUMSPIKE_TEMPO_SAMPLES<the sessions folder> cargo test -p
 //! drumspike-core --test tempo_detect_bar1_probe -- --nocapture --ignored`
 
 use std::path::{Path, PathBuf};
