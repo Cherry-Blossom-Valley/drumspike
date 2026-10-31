@@ -160,6 +160,11 @@ canvas.wave { height: var(--wave-h, 120px); cursor: crosshair; }
 canvas.lane.vel { height: 80px; display: none; cursor: crosshair; border-top: 1px solid rgba(255,255,255,0.05); }   /* #208: the height is the app setting velocity_lane_height (sizeLaneCanvas sets it inline) */
 body.velOn canvas.lane.vel { display: block; }
 canvas.lane.vel.onStalk { cursor: pointer; }
+/* #245: the velocity lane's Velocity label is a DOM span over the canvas (the gesture hint is its
+   tooltip), not canvas text: hint text over the stalks read like data. Same font and colour as
+   the lane's scale text. */
+.velWrap { position: relative; }
+.velLabel { position: absolute; left: 4px; top: 5px; font: 10px sans-serif; color: rgba(138,147,163,0.9); pointer-events: auto; }
 /* P4-40b: the lane cursor says what a click does. Select: the arrow over a hit (ew-resize: it drags), crosshair on the lane; Option: a plus (add);
    Option+Shift over a hit: an eraser cross (delete). The classes come from app.js (curApply). */
 canvas.spike.onHit { cursor: ew-resize; }
