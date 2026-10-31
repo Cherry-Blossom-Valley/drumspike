@@ -142,10 +142,16 @@
       // #149 counter Bars|Beats and Timecode, #175 Tab Moves To (radio), the markers ruler,
       // #208/#157 Velocity Lane and Other Mics Under Hit, #436 Stop Returns to Start
       need(checks.join() === "nudge_val_1smp,nudge_val_10smp,nudge_val_100smp,nudge_val_1ms,nudge_val_10ms,height_small,height_medium,height_large,inspector,info_line,overview,counter_seconds,counter_samples,counter_barsbeats,counter_timecode,tab_active,tab_all,ruler_tempo,ruler_meter,ruler_beats,ruler_markers,grid,velocity_lane,other_mics,stop_return_mode,follow_smooth,follow_page,follow_off,suspend_follow,click,snap,learn_filter", `check items: ${checks}`);   // P4-wf10: Suspend Follow when Editing
-      // no project is open: only the items that need none are enabled, and none of the later-card items
+      // #195: the document from `open -a` can already be open here (it arrives 6 s in, the splash
+      // closes after 5-15 s), so the enabled state is read after menu sync with a project. The
+      // expectation follows menu.rs sync: open_recent tracks the recent list, export_again also
+      // needs an export shape, everything else is enabled iff it is ready (and, without a
+      // project, does not need one).
+      const hasProj = !!S.sid;
       const hasRecent = rep.recent.some(r => /^recent:\d+$/.test(r));   // P3-19: Open Most Recent follows the Open Recent list
-      const wrong = rep.items.filter(i => i.enabled !== (i.id === "open_recent" ? hasRecent : i.ready && !i.needs_project)).map(i => `${i.id}=${i.enabled}`);
-      need(wrong.length === 0, `enabled state without a project: ${wrong.join(", ")}`);
+      const wrong = rep.items.filter(i => i.enabled !== (i.id === "open_recent" ? hasRecent
+        : i.ready && (hasProj ? i.id !== "export_again" || !!S.exportAgain : !i.needs_project))).map(i => `${i.id}=${i.enabled}`);
+      need(wrong.length === 0, `enabled state: ${wrong.join(", ")}`);
       need(rep.recent.length >= 1, "Open Recent has no entry at all (not even the placeholder)");
       report.metrics.menu = { items: rep.items.length, menus: rep.menus.length, later: rep.items.filter(i => !i.ready).map(i => `${i.id} (${i.card})`),
         accelerators: withAccel, check_items: checks.length, page_keys: rep.items.reduce((n, i) => n + (i.page_keys || []).length, 0),
