@@ -1475,11 +1475,11 @@ pub fn report<R: Runtime>(app: &AppHandle<R>) -> Value {
     json!({"items": items, "recent": recent, "window": window, "follow": follow, "menus": menus, "preset": current_preset()})
 }
 
-/// The NSEvent characters and modifier flags of a key of the table (`"Cmd+Down"`): the key
+/// The `NSEvent` characters and modifier flags of a key of the table (`"Cmd+Down"`): the key
 /// equivalent that macOS matches a physical key press against (muda's mapping in
 /// `muda/src/accelerator/macos.rs`). Returns `(characters, charactersIgnoringModifiers, flags)`.
 /// A physical Shift+Cmd press has the uppercase character in `characters` and the lowercase one
-/// in `charactersIgnoringModifiers` — NSMenu keys its match off the latter, so the synthetic
+/// in `charactersIgnoringModifiers` — `NSMenu` keys its match off the latter, so the synthetic
 /// event must carry both (the probe of #206: `characters` alone matched nothing). None when the
 /// key is not in the table's notation.
 #[cfg(all(target_os = "macos", debug_assertions))]
@@ -1550,9 +1550,9 @@ fn ns_event_key(key: &str) -> Option<(String, String, u64)> {
     Some((chars, cim, flags))
 }
 
-/// #206: the AppKit convention for a Shift+Cmd accelerator: the key equivalent carries the
+/// #206: the `AppKit` convention for a Shift+Cmd accelerator: the key equivalent carries the
 /// SHIFTED (uppercase) character and the modifier mask does NOT contain Shift. muda registers
-/// the lowercase character with Shift in the mask; NSMenu then matches a physical Shift+Cmd
+/// the lowercase character with Shift in the mask; `NSMenu` then matches a physical Shift+Cmd
 /// press case-insensitively against `charactersIgnoringModifiers` and an earlier Cmd-only item
 /// consumes the event (Save ate Shift+Cmd+S). With the convention the match is exact. Runs on
 /// the main thread; walks the whole menu bar and rewrites only letter key equivalents of items
@@ -1601,7 +1601,7 @@ pub fn fix_shift_equivalents<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// The main menu as macOS has it (debug builds, the self-test of #206): one row per menu item
-/// with the menu title, the label, the key equivalent and the modifier mask of the NSMenu. This
+/// with the menu title, the label, the key equivalent and the modifier mask of the `NSMenu`. This
 /// is what `performKeyEquivalent` matches a physical key against — not the accelerator strings
 /// that [`report`] shows. Separators (no label) are left out.
 #[cfg(all(target_os = "macos", debug_assertions))]
@@ -1652,7 +1652,7 @@ pub fn ns_menu_rows<R: Runtime>(app: &AppHandle<R>) -> Value {
 }
 
 /// The real native menu path of a `menu_key` (debug builds, the self-test of #206): a synthetic
-/// keyDown NSEvent for `key` (in the table's notation) goes to the app's main menu through
+/// keyDown `NSEvent` for `key` (in the table's notation) goes to the app's main menu through
 /// `NSMenu performKeyEquivalent:` — the same route a physical key press takes. `matched` says
 /// whether the menu performed the key equivalent (the item fired: its action sent the
 /// `MenuEvent`, `on_menu_event` dispatches it and the page handler runs). `rows` is
@@ -1667,7 +1667,7 @@ pub fn perform_key_equivalent<R: Runtime>(app: &AppHandle<R>, key: &str) -> Valu
 }
 
 /// The raw event probe behind [`perform_key_equivalent`] (the self-test diagnoses which
-/// characters/flags variant the NSMenu matches): the probe passes the `characters` variant and
+/// characters/flags variant the `NSMenu` matches): the probe passes the `characters` variant and
 /// uses it for `charactersIgnoringModifiers` too. Returns 1 performed, 0 not, -1 no main thread.
 #[cfg(all(target_os = "macos", debug_assertions))]
 pub fn perform_key_equivalent_raw<R: Runtime>(app: &AppHandle<R>, chars: &str, cim: &str, flags: u64) -> i8 {
