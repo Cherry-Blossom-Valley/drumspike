@@ -59,6 +59,7 @@ FM_SPAN_S = 0.010
 FM_LONG_S = 0.005
 FM_LONG_END_S = 0.0005
 FM_LONG_DB = 6.0
+LEAD_IN_MAX_S = 0.0015
 
 
 def _n(s, sr):
@@ -84,9 +85,27 @@ def two_tap(x):
     return np.abs(x + p) / 2.0
 
 
-def walk(x, s, sr, prev_mid=None, next_mid=None, stop=None, run=1, tt=None):
+def _lead_in(tt, off, foot, lo, fl, thr, gap, sr):
+    """`refine.rs` `lead_in` (#239): from the walk's foot on back over the samples at or above the floor + 6 dB (the
+    same gap rule), at most `LEAD_IN_MAX_S` and never past `lo`; the first sample of that rise, else `foot`."""
+    low = fl * 10 ** (FM_FLOOR_DB / 20)
+    if low <= 0.0 or low >= thr:
+        return foot
+    lo = max(lo, foot - _n(LEAD_IN_MAX_S, sr))
+    lead, i = foot, foot
+    while i > lo:
+        i -= 1
+        if tt[i - off] >= low:
+            lead = i
+        elif lead - i >= gap:
+            return lead
+    return foot
+
+
+def walk(x, s, sr, prev_mid=None, next_mid=None, stop=None, run=1, tt=None, lead_in=False):
     """The version 3 back-track from sample `s` (`first_motion`), on `x`; `prev_mid`/`next_mid` are the midpoints to
-    the neighbouring hits (samples). With `stop` = (offset, bool array from that sample on): a run of `run` or more stopped samples ends
+    the neighbouring hits (samples). With `lead_in` (the app's rule since #239) the foot goes on back over a rise over
+    the floor, at most 1.5 ms. With `stop` = (offset, bool array from that sample on): a run of `run` or more stopped samples ends
     the walk (candidate A); a stopped sample never becomes the foot. Returns (foot, step) with step one of moved,
     kept, busy, separate, stopped."""
     n = len(x)
@@ -134,6 +153,8 @@ def walk(x, s, sr, prev_mid=None, next_mid=None, stop=None, run=1, tt=None):
         at = float(np.abs(x[s:s + e]).max())
         if held < at * 10 ** (-FM_LONG_DB / 20):
             return s, "separate"
+    if lead_in and how != "stopped":
+        foot = _lead_in(tt, off, foot, lo, fl, thr, gap, sr)
     if foot < s:
         return foot, how if how == "stopped" else "moved"
     return s, "kept" if how != "stopped" else "stopped"
