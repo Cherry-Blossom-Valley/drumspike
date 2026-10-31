@@ -195,6 +195,7 @@ fn shell_driver_runs_every_step_of_the_card_and_reports_through_the_quit_path() 
         "step(\"menu_window\"",
         "step(\"menu_new_items\"",
         "step(\"menu_edit_undo_redo_recompute\"",
+        "step(\"menu_view_transport_rest\"", // #221: the items no other step triggers
         "step(\"menu_save\"",
         "step(\"menu_export\"",
         "step(\"menu_save_as\"",
