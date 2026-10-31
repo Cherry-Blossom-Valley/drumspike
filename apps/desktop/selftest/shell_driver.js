@@ -840,12 +840,18 @@
       S.sel = null; S.playhead = 0.8;
       await click("set_bar1");
       await until(async () => Math.abs((await stored()).map.bar1_s - 0.8) < 1e-9, "Set Bar 1 at Playhead", 15000);
-      await click("undo");
-      await until(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1", 15000);
+      // an undo while the commit chain still stores (tmUndoWaits) is refused: retry until the map is back
+      const undoUntil = async (want, what) => {
+        let sent = 0;   // a retry only after 250 ms: the click needs a tick to set TM.pending
+        await until(async () => {
+          if (!TM.pending && Date.now() - sent > 250 && !(await want())) { sent = Date.now(); await click("undo"); }
+          return await want();
+        }, what, 15000);
+      };
+      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1");
       await click("set_bar1_audio");
       await until(async () => Math.abs((await stored()).map.bar1_s) < 1e-9, "Set Bar 1 at Audio Start", 15000);
-      await click("undo");
-      await until(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1 at Audio Start", 15000);
+      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1 at Audio Start");
       done.push("set_bar1", "set_bar1_audio");
       // Edit > Undo History: the sheet lists the steps of the tempo map, Done closes it
       await click("undo_history");
