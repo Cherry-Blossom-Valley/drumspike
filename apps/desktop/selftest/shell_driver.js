@@ -106,6 +106,16 @@
       return { ready_ms: r.ready_ms, painted_ms: r.painted_ms, main_shown_ms: r.main_shown_ms, splash_closed_ms: r.splash_closed_ms, closed_after_paint_ms: r.closed_after_paint_ms, steps: r.steps };
     });
 
+    // #195: the one enabled-state expectation, shared by menu_table and menu_state_follows_project
+    // (menu.rs sync + sync_checks): open_recent tracks the recent list, export_again also needs an
+    // export shape, undo/redo are greyed while their stack is empty (#158 rank 9), the four hit
+    // items need a hit selection. `S` is the live page state of the running scenario.
+    const menuEnabledWant = (rep, hasProj) => i => i.id === "open_recent" ? rep.recent.some(r => /^recent:\d+$/.test(r))   // P3-19
+      : i.id === "undo" ? i.ready && hasProj && S.undo.length > 0
+      : i.id === "redo" ? i.ready && hasProj && S.redo.length > 0
+      : i.id === "delete_hit" || i.id === "nudge_earlier" || i.id === "nudge_later" || i.id === "audition" ? i.ready && hasProj && !!S.sel
+      : i.ready && (hasProj ? i.id !== "export_again" || !!S.exportAgain : !i.needs_project);
+
     await step("menu_table", async () => {
       await until(async () => (await T.invoke("selftest_menu_report")).items, "the menu report", 10000);
       const rep = await T.invoke("selftest_menu_report");
@@ -150,11 +160,7 @@
       // `selHit` with every sync), everything else is enabled iff it is ready (and, without a
       // project, does not need one).
       const hasProj = !!S.sid;
-      const enabledWant = i => i.id === "open_recent" ? rep.recent.some(r => /^recent:\d+$/.test(r))   // P3-19
-        : i.id === "undo" ? i.ready && hasProj && S.undo.length > 0
-        : i.id === "redo" ? i.ready && hasProj && S.redo.length > 0
-        : i.id === "delete_hit" || i.id === "nudge_earlier" || i.id === "nudge_later" || i.id === "audition" ? i.ready && hasProj && !!S.sel
-        : i.ready && (hasProj ? i.id !== "export_again" || !!S.exportAgain : !i.needs_project);
+      const enabledWant = menuEnabledWant(rep, hasProj);
       // the page syncs the menu shortly after the document arrives; re-read the report until it matches.
       // The bad list rides in the timeout error: without it a timeout says nothing about which item lagged.
       let lastBad = [];
@@ -247,20 +253,24 @@
 
     await step("menu_state_follows_project", async () => {
       // the lagging items ride in the timeout error (the 2776224 shape): a bare timeout
-      // says nothing about which item did not follow.
+      // says nothing about which item did not follow. The expectation is the same model as
+      // menu_table (menuEnabledWant): after File > Open of a fresh project, undo/redo and the
+      // four hit items are legitimately greyed (#158 rank 9) until the page state has a stack
+      // step or a hit selection — `enabled === ready` alone can never pass.
       let lastBad = [];
       try {
+        const hasProj = !!S.sid;
+        const rep = await T.invoke("selftest_menu_report");
+        const enabledWant = menuEnabledWant(rep, hasProj);
         await until(async () => {
-          const rep = await T.invoke("selftest_menu_report");
-          const bad = rep.items.filter(i => i.id === "export_again"   // P4-31: greyed until the project keeps an export shape (the page says so)
-            ? i.enabled !== (i.ready && !!S.exportAgain)
-            : i.enabled !== i.ready).map(i => `${i.id}=${i.enabled} (ready=${i.ready})`);
+          const r = await T.invoke("selftest_menu_report");
+          const bad = r.items.filter(i => i.enabled !== enabledWant(i)).map(i => `${i.id}=${i.enabled} (ready=${i.ready})`);
           lastBad = bad;
           return bad.length ? null : true;
         }, "the menu to enable the items of an open project", 10000);
       } catch (e) {
         const snap = lastBad.length ? ` last mismatch: ${lastBad.join(", ")}` : "";
-        throw new Error(`${e.message};${snap} (S.sid=${S.sid}, S.exportAgain=${JSON.stringify(S.exportAgain)})`);
+        throw new Error(`${e.message};${snap} (S.sid=${S.sid}, S.exportAgain=${JSON.stringify(S.exportAgain)}, S.sel=${JSON.stringify(S.sel)}, undo=${S.undo.length}, redo=${S.redo.length})`);
       }
       const rep = await T.invoke("selftest_menu_report");
       const off = rep.items.filter(i => !i.enabled).map(i => i.id).sort();
