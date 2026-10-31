@@ -246,12 +246,22 @@
     });
 
     await step("menu_state_follows_project", async () => {
-      await until(async () => {
-        const rep = await T.invoke("selftest_menu_report");
-        return rep.items.every(i => i.id === "export_again"   // P4-31: greyed until the project keeps an export shape (the page says so)
-          ? i.enabled === (i.ready && !!S.exportAgain)
-          : i.enabled === i.ready);
-      }, "the menu to enable the items of an open project", 10000);
+      // the lagging items ride in the timeout error (the 2776224 shape): a bare timeout
+      // says nothing about which item did not follow.
+      let lastBad = [];
+      try {
+        await until(async () => {
+          const rep = await T.invoke("selftest_menu_report");
+          const bad = rep.items.filter(i => i.id === "export_again"   // P4-31: greyed until the project keeps an export shape (the page says so)
+            ? i.enabled !== (i.ready && !!S.exportAgain)
+            : i.enabled !== i.ready).map(i => `${i.id}=${i.enabled} (ready=${i.ready})`);
+          lastBad = bad;
+          return bad.length ? null : true;
+        }, "the menu to enable the items of an open project", 10000);
+      } catch (e) {
+        const snap = lastBad.length ? ` last mismatch: ${lastBad.join(", ")}` : "";
+        throw new Error(`${e.message};${snap} (S.sid=${S.sid}, S.exportAgain=${JSON.stringify(S.exportAgain)})`);
+      }
       const rep = await T.invoke("selftest_menu_report");
       const off = rep.items.filter(i => !i.enabled).map(i => i.id).sort();
       return { disabled_with_project: off };
