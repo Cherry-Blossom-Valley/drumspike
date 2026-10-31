@@ -155,13 +155,20 @@
         : i.id === "redo" ? i.ready && hasProj && S.redo.length > 0
         : i.id === "delete_hit" || i.id === "nudge_earlier" || i.id === "nudge_later" || i.id === "audition" ? i.ready && hasProj && !!S.sel
         : i.ready && (hasProj ? i.id !== "export_again" || !!S.exportAgain : !i.needs_project);
-      // the page syncs the menu shortly after the document arrives; re-read the report until it matches
-      const wrong = await until(async () => {
-        const r = await T.invoke("selftest_menu_report");
-        const bad = r.items.filter(i => i.enabled !== enabledWant(i)).map(i => `${i.id}=${i.enabled}`);
-        return bad.length ? bad : null;
-      }, "the menu enabled state to follow the page state", 10000);
-      need(wrong.length === 0, `enabled state: ${wrong.join(", ")}`);
+      // the page syncs the menu shortly after the document arrives; re-read the report until it matches.
+      // The bad list rides in the timeout error: without it a timeout says nothing about which item lagged.
+      let lastBad = [];
+      try {
+        await until(async () => {
+          const r = await T.invoke("selftest_menu_report");
+          const bad = r.items.filter(i => i.enabled !== enabledWant(i)).map(i => `${i.id}=${i.enabled}`);
+          lastBad = bad;
+          return bad.length ? bad : null;
+        }, "the menu enabled state to follow the page state", 10000);
+      } catch (e) {
+        const snap = lastBad.length ? ` last mismatch: ${lastBad.join(", ")}` : "";
+        throw new Error(`${e.message};${snap} (S.sid=${S.sid}, S.sel=${JSON.stringify(S.sel)}, undo=${S.undo.length}, redo=${S.redo.length})`);
+      }
       need(rep.recent.length >= 1, "Open Recent has no entry at all (not even the placeholder)");
       report.metrics.menu = { items: rep.items.length, menus: rep.menus.length, later: rep.items.filter(i => !i.ready).map(i => `${i.id} (${i.card})`),
         accelerators: withAccel, check_items: checks.length, page_keys: rep.items.reduce((n, i) => n + (i.page_keys || []).length, 0),
