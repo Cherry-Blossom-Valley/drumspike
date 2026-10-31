@@ -118,25 +118,41 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use drumspike_core::io::MappedWav;
+#[cfg(test)]
 use drumspike_core::layer::OneShot;
-use drumspike_core::spike::hit_index;
 use drumspike_core::transport::clicks::{DEFAULT_CLICK_VOLUME, role_pitch};
 use drumspike_core::transport::clock::{Playhead, host_now_ns};
 use drumspike_core::transport::device::{
     DeviceInfo, Output, default_output_info, is_blocked, output_devices, output_info, resolve_choice,
 };
-use drumspike_core::transport::layer::{LayerBank, LayerVoices};
 use drumspike_core::transport::mixer::{MAX_DB, MIN_DB};
-use drumspike_core::transport::{
-    CallbackCounter, ClickSettings, MeterSnapshot, Speed, TrackSpec, Transport, TransportConfig, TransportError,
-};
+use drumspike_core::transport::{CallbackCounter, ClickSettings, Speed, Transport, TransportConfig, TransportError};
+#[cfg(test)]
+use drumspike_core::transport::{MeterSnapshot, TrackSpec};
 use serde_json::{Map, Value, json};
 
 use crate::error::AppError;
+#[cfg(test)]
 use crate::media::mix_mode;
 use crate::registry::lock;
 use crate::{Progress, Service};
+
+mod audition;
+mod meter;
+mod plan;
+mod playhead;
+
+pub use audition::PlayWindow;
+pub(crate) use audition::{Audition, spawn_audition};
+pub use meter::METER_PERIOD;
+pub(crate) use meter::{meter_message, next_meter_due};
+#[cfg(test)]
+pub(crate) use plan::LAYER_PLAN_CALLS;
+#[cfg(test)]
+pub(crate) use plan::{LayerPlan, hits_from_times, layer_bank, times_of};
+pub(crate) use plan::{LayerTpls, Plan, push_layers};
+pub(crate) use playhead::spawn_sender;
+pub use playhead::{PLAYHEAD_PERIOD, PLAYHEAD_POLL};
 
 /// Every command of the transport. (`COMMANDS` in `commands.rs` lists the slice; the
 /// route map test of this card reads this list.)
@@ -153,17 +169,8 @@ pub const TRANSPORT_COMMANDS: [&str; 10] = [
     "output_select",
 ];
 
-/// Longest time between two playhead messages while nothing changes (4 Hz, P3-15a).
-pub const PLAYHEAD_PERIOD: Duration = Duration::from_millis(250);
-/// How often the playhead thread looks at the state: a change is sent within this time.
-pub const PLAYHEAD_POLL: Duration = Duration::from_millis(20);
 /// Time between two looks at the default output device.
 pub const WATCH_PERIOD: Duration = Duration::from_millis(500);
-/// Time between two meter messages while the transport plays (P3-16: 25 Hz). Each message is
-/// due one period after the due time of the one before (not after its send time), so a late
-/// look of the playhead thread (timer slack on a loaded Intel runner: CI run 38376400763 had
-/// 17 Hz) does not lower the rate while the thread looks at least once per period.
-pub const METER_PERIOD: Duration = Duration::from_millis(40);
 /// How long `transport_play` waits for the first playing block.
 const START_WAIT: Duration = Duration::from_secs(10);
 
@@ -202,17 +209,6 @@ fn clamp_pan(pan: f64) -> f64 {
     pan.clamp(-1.0, 1.0)
 }
 
-/// Round a meter value to 4 decimals for the message.
-fn meter_value(v: f32) -> f64 {
-    ((v as f64) * 1e4).round() / 1e4
-}
-
-/// The meter message of a [`MeterSnapshot`] (see the module docs).
-fn meter_message(sid: &str, m: &MeterSnapshot) -> Value {
-    let flat: Vec<f64> = m.tracks.iter().flatten().map(|v| meter_value(*v)).collect();
-    json!({"sid": sid, "meters": flat, "master": [meter_value(m.master[0]), meter_value(m.master[1])]})
-}
-
 /// The metronome settings the page owns (`SETTINGS().click` in `app.js`).
 #[derive(Debug, Clone)]
 struct ClickState {
@@ -228,54 +224,7 @@ impl ClickState {
     }
 }
 
-/// P4-7a: the layer of one track in a plan: the one-shot (its own rate) and per voice the time of
-/// its first sample (seconds) and its gain.
-#[derive(Debug, Clone)]
-pub(crate) struct LayerPlan {
-    path: PathBuf,
-    shot: Arc<OneShot>,
-    starts: Vec<(f64, f32)>,
-}
-
-impl PartialEq for LayerPlan {
-    fn eq(&self, o: &LayerPlan) -> bool {
-        self.path == o.path && (Arc::ptr_eq(&self.shot, &o.shot) || *self.shot == *o.shot) && self.starts == o.starts
-    }
-}
-
-/// The tracks of an open transport: what the transport needs to open again.
-#[derive(Debug, Clone)]
-struct Plan {
-    sid: String,
-    names: Vec<String>,
-    roles: Vec<String>,
-    /// Path, mix mode and hits (at the track's own rate) per track.
-    specs: Vec<TrackSpec>,
-    /// P3-16: volume (dB) and pan per track, from the project.
-    vols: Vec<(f64, f64)>,
-    /// P4-7a: the layer of each track (`None`: none, off or its file missing).
-    layers: Vec<Option<LayerPlan>>,
-}
-
-impl Plan {
-    /// The same tracks (names and files) as `other`: an open transport can serve it.
-    fn same_tracks(&self, other: &Plan) -> bool {
-        self.sid == other.sid
-            && self.names == other.names
-            && self.specs.len() == other.specs.len()
-            && self
-                .specs
-                .iter()
-                .zip(&other.specs)
-                .all(|(a, b)| a.path == b.path && a.mode == b.mode)
-    }
-
-    fn hits(&self) -> Vec<Vec<u64>> {
-        self.specs.iter().map(|s| s.hits.clone()).collect()
-    }
-}
-
-struct Open {
+pub(crate) struct Open {
     plan: Plan,
     transport: Transport,
     key: DeviceKey,
@@ -284,12 +233,6 @@ struct Open {
     /// P3-15f: the epoch of the last seek requested on this transport, also its seek tag (0:
     /// none). See [`heard_epoch`].
     seek_epoch: u64,
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Test hook: how often this thread built layer plans.
-    static LAYER_PLAN_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A reopen that failed: tried again at the next watcher tick.
@@ -302,94 +245,7 @@ struct Lost {
     error: String,
 }
 
-/// P4-40d: the window of an audition (a `transport_play` with `start`, `end`, `loop` or `tracks`).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct PlayWindow {
-    /// Where the window starts (seconds); without it the call's `position`, else 0.
-    pub start: Option<f64>,
-    /// Where it ends (seconds): the play pauses there, or jumps back to `start` with `looped`.
-    /// P4-40e: without an `end` and with a `shot`, the end is the one-shot's length.
-    pub end: Option<f64>,
-    /// Play the window again and again until `transport_stop` or another play.
-    pub looped: bool,
-    /// The tracks that are audible during this play and no others (overrides solo and mute of
-    /// these names); empty: mute and solo stay as they are.
-    pub tracks: Vec<String>,
-    /// P4-40e: the track whose layer one-shot plays once as a preview voice at the start of the
-    /// window (the Layer view's Play). Without `tracks`, the shot track is the only audible one.
-    /// The close mic of the track sounds as in any audition.
-    pub shot: Option<String>,
-}
-
-impl PlayWindow {
-    /// The window of a command's arguments (`start`, `end`, `loop`, `tracks`, `shot`); `None` when
-    /// none is given. `tracks` is a list of track names (a wrong type or an empty list is a 400).
-    /// `shot` (P4-40e) is a track name whose one-shot plays as a preview; it solos the track when
-    /// no `tracks` are given.
-    pub fn from_args(
-        start: Option<f64>,
-        end: Option<f64>,
-        looped: Option<bool>,
-        tracks: Option<&Value>,
-        shot: Option<&Value>,
-    ) -> Result<Option<PlayWindow>, AppError> {
-        let mut tracks = match tracks {
-            None | Some(Value::Null) => Vec::new(),
-            Some(Value::Array(a)) if !a.is_empty() => a
-                .iter()
-                .map(|v| v.as_str().map(str::to_string))
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| AppError::bad("`tracks` must be a list of track names"))?,
-            Some(_) => return Err(AppError::bad("`tracks` must be a non-empty list of track names")),
-        };
-        let shot = match shot {
-            None | Some(Value::Null) => None,
-            Some(v) => Some(
-                v.as_str()
-                    .filter(|s| !s.is_empty())
-                    .ok_or_else(|| AppError::bad("`shot` must be a track name (or null)"))?
-                    .to_string(),
-            ),
-        };
-        if let Some(n) = &shot
-            && !tracks.iter().any(|t| t == n)
-        {
-            tracks.push(n.clone());
-        }
-        let looped = looped.unwrap_or(false);
-        if start.is_none() && end.is_none() && !looped && tracks.is_empty() && shot.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(PlayWindow {
-            start,
-            end,
-            looped,
-            tracks,
-            shot,
-        }))
-    }
-}
-
-/// The audition that is running (see [`PlayWindow`]); `mute` and `solo` of the host stay as they were.
-#[derive(Debug, Clone)]
-struct Audition {
-    win: PlayWindow,
-    start: f64,
-}
-
-impl Audition {
-    fn json(&self) -> Value {
-        // `shot` only when there is one (the plain audition answer stays as it was)
-        let mut v =
-            json!({"tracks": self.win.tracks, "start": self.start, "end": self.win.end, "loop": self.win.looped});
-        if let Some(s) = &self.win.shot {
-            v["shot"] = json!(s);
-        }
-        v
-    }
-}
-
-struct HostState {
+pub(crate) struct HostState {
     open: Option<Open>,
     /// P4-40d: the running audition (its solo override and window).
     audition: Option<Audition>,
@@ -593,53 +449,6 @@ fn restore_mix(st: &HostState) {
     }
 }
 
-/// End the audition: pause, and give mute and solo back to the page's state.
-fn finish_audition(st: &mut HostState) {
-    st.audition = None;
-    st.audition_gen += 1;
-    st.epoch += 1;
-    if let Some(o) = &st.open {
-        o.transport.pause();
-    }
-    restore_mix(st);
-}
-
-/// The thread of an audition: it watches the transport (every millisecond) and gives mute and
-/// solo back when the audition is over. The engine ends a windowed audition itself at its end
-/// (#201) and wraps a loop (#166): the thread only sees the pause — the engine's end, or a pause
-/// from outside (a device loss, a close). It ends when `audition_gen` changes (a stop, another
-/// play or the end).
-fn spawn_audition(host: &Arc<Mutex<HostState>>, gen_n: u64) {
-    let weak: Weak<Mutex<HostState>> = Arc::downgrade(host);
-    let _ = std::thread::Builder::new()
-        .name("drumspike-audition".into())
-        .spawn(move || {
-            loop {
-                let Some(h) = weak.upgrade() else { return };
-                {
-                    let mut guard = lock(&h);
-                    let st = &mut *guard;
-                    if st.audition_gen != gen_n || st.audition.is_none() {
-                        return;
-                    }
-                    let Some(o) = st.open.as_mut() else {
-                        st.audition = None;
-                        st.audition_gen += 1;
-                        return;
-                    };
-                    if !o.transport.is_playing() {
-                        // the engine ended the window (#201) or a pause from outside (a device
-                        // loss, a close): the audition is over
-                        finish_audition(st);
-                        return;
-                    }
-                }
-                drop(h);
-                sleep(Duration::from_millis(1));
-            }
-        });
-}
-
 /// Push mute, solo, master gain, volume and pan, the master volume and the click pitches into
 /// an open transport.
 fn apply_state(st: &HostState, open: &mut Open) -> Result<(), AppError> {
@@ -658,60 +467,6 @@ fn apply_state(st: &HostState, open: &mut Open) -> Result<(), AppError> {
         pitches: Some(pitches),
     })
     .map_err(dev_err)
-}
-
-/// P4-7a: the one-shots at a device rate and at twice it (interleaved), by (one-shot identity, rate).
-/// Keyed by the Arc pointer, not by path: a replaced file of the same length must not reuse the
-/// stale template.
-type LayerTpls = HashMap<(usize, u32), (Arc<OneShot>, Arc<Vec<f32>>, Arc<Vec<f32>>)>;
-
-/// The most one-shot templates the host keeps (each at one device rate).
-const LAYER_TPLS_MAX: usize = 32;
-
-/// P4-7a: the layer bank of `plan` at the device `rate`: the one-shots resampled to the rate and to
-/// twice it (kept in `tpls`), the voices at their frames.
-fn layer_bank(tpls: &mut LayerTpls, plan: &Plan, rate: u32) -> LayerBank {
-    plan.layers
-        .iter()
-        .map(|l| {
-            let l = l.as_ref()?;
-            let key = (Arc::as_ptr(&l.shot) as *const () as usize, rate);
-            if !tpls.contains_key(&key) && tpls.len() >= LAYER_TPLS_MAX {
-                tpls.clear();
-            }
-            // the entry holds the Arc, so its address cannot be reused while it is cached; a hit is
-            // checked by identity all the same
-            let fresh = || {
-                (
-                    Arc::clone(&l.shot),
-                    Arc::new(l.shot.resampled(rate).interleaved()),
-                    Arc::new(l.shot.resampled(2 * rate).interleaved()),
-                )
-            };
-            let e = tpls.entry(key).or_insert_with(fresh);
-            if !Arc::ptr_eq(&e.0, &l.shot) {
-                *e = fresh();
-            }
-            let (tpl, half) = (e.1.clone(), e.2.clone());
-            Some(LayerVoices::new(l.shot.channels(), tpl, half, &l.starts, rate))
-        })
-        .collect()
-}
-
-/// Hand the layers of the open plan to its transport (none when no track has a layer and the
-/// transport never had one). The update queue drains once per callback: retry briefly.
-fn push_layers(tpls: &mut LayerTpls, o: &mut Open) -> Result<(), AppError> {
-    let rate = o.transport.sample_rate();
-    let bank = layer_bank(tpls, &o.plan, rate);
-    let mut r = o.transport.set_layers(bank.clone());
-    for _ in 0..50 {
-        if r.is_ok() {
-            break;
-        }
-        sleep(Duration::from_millis(2));
-        r = o.transport.set_layers(bank.clone());
-    }
-    r.map_err(dev_err)
 }
 
 /// Open the transport for `plan` on the output the host chose, paused at frame 0, at `speed`. A
@@ -908,160 +663,6 @@ fn spawn_watcher(host: &Arc<Mutex<HostState>>) {
         });
 }
 
-/// The playhead fields of an open transport at the host now (epoch, t_ns, frame, rate, pos,
-/// playing, speed). The playhead message and the meter message both carry them (#471).
-fn playhead_fields(st: &HostState, o: &Open) -> Map<String, Value> {
-    let ph = o.transport.playhead();
-    let now = host_now_ns();
-    let frame = ph.frame_at(now);
-    json!({
-        "epoch": heard_epoch(st, o, &ph),
-        "t_ns": now,
-        "frame": frame,
-        "rate": ph.sample_rate,
-        "pos": frame as f64 / ph.sample_rate as f64,
-        "playing": ph.playing,
-        "speed": ph.rate(),
-    })
-    .as_object()
-    .cloned()
-    .unwrap_or_default()
-}
-
-/// The playhead message of an open transport (see the module docs).
-fn playhead_message(st: &HostState, o: &Open, end: bool) -> Value {
-    let mut msg = playhead_fields(st, o);
-    msg.insert("sid".into(), json!(o.plan.sid));
-    msg.insert("underruns".into(), json!(o.transport.stats().underruns));
-    msg.insert("reopens".into(), json!(st.reopens));
-    msg.insert("end".into(), json!(end));
-    Value::Object(msg)
-}
-
-/// What makes the playhead thread send at once: (epoch, playing as heard, underruns, reopens,
-/// lost, slowdown as heard).
-type PlayheadKey = (u64, bool, u64, u64, bool, u32);
-
-/// The [`PlayheadKey`] of the host now.
-fn playhead_key(st: &HostState) -> PlayheadKey {
-    let (epoch, playing, underruns, slowdown) = st.open.as_ref().map_or((st.epoch, false, 0, 1), |o| {
-        let ph = o.transport.playhead();
-        (
-            heard_epoch(st, o, &ph),
-            ph.playing,
-            o.transport.stats().underruns,
-            ph.slowdown,
-        )
-    });
-    (epoch, playing, underruns, st.reopens, st.lost.is_some(), slowdown)
-}
-
-/// When the meter message after one sent at `now` is due: a period after the due time of the one
-/// sent (so late looks keep the rate), or a period after `now` for the first one and after a
-/// delay of more than a period (no burst to catch up).
-fn next_meter_due(due: Option<Instant>, now: Instant) -> Instant {
-    match due {
-        Some(d) if now.saturating_duration_since(d) < METER_PERIOD => d + METER_PERIOD,
-        _ => now + METER_PERIOD,
-    }
-}
-
-/// The thread that sends the playhead until the transport pauses, closes or a newer play
-/// starts: on a change of [`playhead_key`] (looked at every [`PLAYHEAD_POLL`]) and at least
-/// every [`PLAYHEAD_PERIOD`]. It sends a last message with `end: true`. P3-16: while the
-/// transport plays it also sends the meter message every [`METER_PERIOD`].
-fn spawn_sender(host: &Arc<Mutex<HostState>>, gen_n: u64, sid: String, progress: Progress) {
-    let weak: Weak<Mutex<HostState>> = Arc::downgrade(host);
-    let _ = std::thread::Builder::new().name("drumspike-playhead".into()).spawn(move || {
-        let mut sent: Option<(Instant, PlayheadKey)> = None;
-        let mut metered: Option<Instant> = None;
-        loop {
-            let Some(h) = weak.upgrade() else { return };
-            let (msg, meters) = {
-                let st = lock(&h);
-                if st.sender_gen != gen_n {
-                    return;
-                }
-                let meters = match &st.open {
-                    // `metered`: when the next meter message is due ([`METER_PERIOD`])
-                    Some(o) if o.transport.is_playing() && metered.is_none_or(|due| Instant::now() >= due) => {
-                        metered = Some(next_meter_due(metered, Instant::now()));
-                        // #471: the meter message carries the playhead fields too (one eval per period)
-                        let mut msg = meter_message(&o.plan.sid, &o.transport.take_meters());
-                        if let Some(obj) = msg.as_object_mut() {
-                            obj.extend(playhead_fields(&st, o));
-                        }
-                        Some(msg)
-                    }
-                    _ => None,
-                };
-                let stopping = !st.open.as_ref().is_some_and(|o| o.transport.is_playing()) && st.lost.is_none();
-                let key = playhead_key(&st);
-                let due = match sent {
-                    None => true,
-                    Some((at, k)) => k != key || at.elapsed() >= PLAYHEAD_PERIOD || stopping,
-                };
-                let msg = if due {
-                    sent = Some((Instant::now(), key));
-                    Some(match &st.open {
-                        Some(o) if o.transport.is_playing() => (playhead_message(&st, o, false), false),
-                        Some(o) => (playhead_message(&st, o, true), true),
-                        None => {
-                            let (error, pos) = st
-                                .lost
-                                .as_ref()
-                                .map_or((Value::Null, 0.0), |l| (json!(l.error), l.position_s));
-                            let msg = json!({"sid": sid, "epoch": st.epoch, "t_ns": host_now_ns(), "frame": 0, "rate": 0,
-                                "pos": pos, "playing": false, "speed": 1.0, "underruns": 0, "reopens": st.reopens,
-                                "end": error.is_null(), "error": error});
-                            (msg, error.is_null())
-                        }
-                    })
-                } else {
-                    None
-                };
-                (msg, meters)
-            };
-            drop(h);
-            if let Some(m) = meters {
-                progress(m);
-            }
-            if let Some((msg, last)) = msg {
-                progress(msg);
-                if last {
-                    return;
-                }
-            }
-            sleep(PLAYHEAD_POLL);
-        }
-    });
-}
-
-/// Hit samples (at the track's own rate) from event times in seconds.
-fn hits_from_times(times: impl Iterator<Item = f64>, rate: u32, n_samples: Option<i64>) -> Vec<u64> {
-    let n = n_samples.filter(|n| *n > 0).map_or(usize::MAX, |n| n as usize);
-    let mut v: Vec<u64> = times
-        .filter(|t| t.is_finite())
-        .filter_map(|t| hit_index(t, rate, n))
-        .map(|i| i as u64)
-        .collect();
-    v.sort_unstable();
-    v.dedup();
-    v
-}
-
-/// The times of one `events` entry of `transport_play`: numbers, or objects with a `t`.
-fn times_of(list: &Value) -> Vec<f64> {
-    list.as_array()
-        .map(|a| {
-            a.iter()
-                .filter(|e| !crate::export::is_cut(e)) // P4-3: a hit of the loudness cut gets no click
-                .filter_map(|e| e.as_f64().or_else(|| e.get("t").and_then(Value::as_f64)))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 impl Service {
     fn host(&self) -> &TransportHost {
         &self.inner.transport
@@ -1140,195 +741,6 @@ impl Service {
         if let Some(p) = watch_period {
             st.watch_period = p;
         }
-    }
-
-    /// The plan for a project: the tracks in order that have a source, with their hits from
-    /// `events` (name to times) or, without it, from the project's own events.
-    fn transport_plan(&self, sid: &str, events: Option<&Value>) -> Result<Plan, AppError> {
-        let op = self.inner.registry.get(sid)?;
-        struct Row {
-            name: String,
-            role: String,
-            path: PathBuf,
-            mode: drumspike_core::MixMode,
-            n_samples: Option<i64>,
-            times: Vec<f64>,
-            vol: (f64, f64),
-        }
-        crate::registry::resolve_shared(&op);
-        let rows: Vec<Row> = {
-            let g = lock(&op);
-            let mut rows = Vec::new();
-            for name in g.project.doc.track_order() {
-                let Ok(tr) = g.track(&name) else { continue };
-                let Ok(path) = g.source(&name) else { continue };
-                let times = match events.and_then(|e| e.get(&name)) {
-                    Some(list) => times_of(list),
-                    None => tr
-                        .events()
-                        .iter()
-                        .filter(|e| !crate::histogram::event_cut(e))
-                        .map(|e| e.t)
-                        .collect(),
-                };
-                rows.push(Row {
-                    vol: (tr.volume_db.map_or(0.0, clamp_db), tr.pan.map_or(0.0, clamp_pan)),
-                    role: tr.role.clone().unwrap_or_else(|| "other".into()),
-                    mode: mix_mode(tr.mix_mode_or_default()),
-                    n_samples: tr.n_samples,
-                    name,
-                    path,
-                    times,
-                });
-            }
-            rows
-        };
-        if rows.is_empty() {
-            return Err(AppError::conflict("no track with an audio file to play"));
-        }
-        let names: Vec<String> = rows.iter().map(|r| r.name.clone()).collect();
-        let layers = self.layer_plans(sid, &names);
-        let mut plan = Plan {
-            sid: sid.to_string(),
-            names: Vec::new(),
-            roles: Vec::new(),
-            specs: Vec::new(),
-            vols: Vec::new(),
-            layers,
-        };
-        for r in rows {
-            let rate = MappedWav::open(&r.path)
-                .map_err(|e| AppError::internal(format!("{}: {e}", r.path.display())))?
-                .info
-                .sample_rate;
-            plan.specs.push(TrackSpec {
-                hits: hits_from_times(r.times.into_iter(), rate, r.n_samples),
-                path: r.path,
-                mode: r.mode,
-                click_pitch: role_pitch(&r.role),
-            });
-            plan.names.push(r.name);
-            plan.roles.push(r.role);
-            plan.vols.push(r.vol);
-        }
-        Ok(plan)
-    }
-
-    /// P4-7a: the layer plan of each track in `names` (the document's uncut hits; see the module docs).
-    fn layer_plans(&self, sid: &str, names: &[String]) -> Vec<Option<LayerPlan>> {
-        #[cfg(test)]
-        LAYER_PLAN_CALLS.with(|c| c.set(c.get() + 1));
-        let Ok(op) = self.inner.registry.get(sid) else {
-            return vec![None; names.len()];
-        };
-        let jobs: Vec<Option<crate::layer::LayerJob>> = {
-            let g = lock(&op);
-            names
-                .iter()
-                .map(|n| crate::layer::layer_job(&g, n).ok().flatten())
-                .collect()
-        };
-        names
-            .iter()
-            .zip(jobs)
-            .map(|(n, job)| {
-                let job = job?;
-                let (shot, starts) = self.layer_voices(sid, n, &job, &job.hits)?;
-                Some(LayerPlan {
-                    path: job.file.clone()?,
-                    shot,
-                    starts,
-                })
-            })
-            .collect()
-    }
-
-    /// P4-40e: the length of a track's one-shot in seconds (the document's layer record), for the
-    /// preview window's end. 409 without a layer.
-    fn layer_len_s(&self, sid: &str, name: &str) -> Result<f64, AppError> {
-        let op = self.inner.registry.get(sid)?;
-        let g = lock(&op);
-        let tr = g.track(name)?;
-        let layer = crate::layer::layer_of(&tr.extra)
-            .ok_or_else(|| AppError::conflict(format!("track {name} has no layer")))?;
-        Ok(layer.frames as f64 / layer.sr as f64)
-    }
-
-    /// P4-40e: append the preview voice (the one-shot once, its first sample at `at_s`) to the
-    /// layer plan of `name`. The gain is the layer's at velocity 127 with its polarity (auto
-    /// behaves as normal: the preview runs no alignment). A layer that is off (or without voices)
-    /// still gets its voice. 409 without a layer or its file.
-    fn plan_with_preview(&self, sid: &str, name: &str, plan: &mut Plan, at_s: f64) -> Result<(), AppError> {
-        let op = self.inner.registry.get(sid)?;
-        let job = {
-            let g = lock(&op);
-            crate::layer::layer_job(&g, name)?
-                .ok_or_else(|| AppError::conflict(format!("track {name} has no layer")))?
-        };
-        let idx = plan.names.iter().position(|n| n == name).ok_or_else(|| {
-            AppError::bad(format!(
-                "preview track \"{name}\" is not in the project's playable tracks"
-            ))
-        })?;
-        let sign = if job.layer.polarity == crate::layer::Polarity::Invert {
-            -1
-        } else {
-            1
-        };
-        let gain = job.layer.gain(127, sign);
-        let file = job
-            .file
-            .clone()
-            .ok_or_else(|| AppError::conflict(format!("the layer file of track {name} is missing")))?;
-        let shot = self.layer_shot(&file, None)?;
-        match plan.layers[idx].as_mut() {
-            Some(l) => l.starts.push((at_s, gain)),
-            None => {
-                plan.layers[idx] = Some(LayerPlan {
-                    path: file,
-                    shot,
-                    starts: vec![(at_s, gain)],
-                });
-            }
-        }
-        Ok(())
-    }
-
-    /// P4-7a: after a layer setting changed, give the open transport of `sid` its new layers (no
-    /// transport open for the project: nothing to do; the next play builds them). The plans are
-    /// built once, before the host lock (mic decode, alignment and the project lock are slow). A
-    /// failed hand-over to the transport is the `Err`.
-    pub(crate) fn transport_refresh_layers(&self, sid: &str) -> Result<(), AppError> {
-        let names = {
-            let st = lock(&self.host().st);
-            match &st.open {
-                Some(o) if o.plan.sid == sid => o.plan.names.clone(),
-                _ => match &st.lost {
-                    Some(l) if l.plan.sid == sid => l.plan.names.clone(),
-                    _ => return Ok(()),
-                },
-            }
-        };
-        let layers = self.layer_plans(sid, &names);
-        self.apply_layers(sid, &names, layers)
-    }
-
-    /// Put `layers` (one per track of `names`) into the open plan and its transport, and into a
-    /// lost plan. Holds the host lock only for that: no plan is built here.
-    fn apply_layers(&self, sid: &str, names: &[String], layers: Vec<Option<LayerPlan>>) -> Result<(), AppError> {
-        let mut st = lock(&self.host().st);
-        let st = &mut *st;
-        let mut result = Ok(());
-        if let Some(o) = st.open.as_mut().filter(|o| o.plan.sid == sid && o.plan.names == names)
-            && o.plan.layers != layers
-        {
-            o.plan.layers = layers.clone();
-            result = push_layers(&mut st.layer_tpls, o);
-        }
-        if let Some(l) = st.lost.as_mut().filter(|l| l.plan.sid == sid && l.plan.names == names) {
-            l.plan.layers = layers;
-        }
-        result
     }
 
     /// `transport_play`: play from `position` (seconds; without it from where the transport

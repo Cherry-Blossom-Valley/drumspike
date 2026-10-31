@@ -83,11 +83,7 @@ fn parse_args() -> Result<Args, String> {
         };
         match argv[i].as_str() {
             "--tracks" => a.tracks = num("--tracks N")?,
-            "--seconds" => {
-                a.seconds = val()
-                    .parse::<f64>()
-                    .map_err(|e| format!("--seconds S: {e}"))?
-            }
+            "--seconds" => a.seconds = val().parse::<f64>().map_err(|e| format!("--seconds S: {e}"))?,
             "--runs" => a.runs = num("--runs N")?.max(1),
             "--detect-runs" => a.detect_runs = num("--detect-runs N")?,
             "--dir" => a.dir = Some(PathBuf::from(val())),
@@ -267,7 +263,9 @@ fn run() -> Result<(), String> {
     paths
         .par_iter()
         .enumerate()
-        .map(|(k, p)| write_wav(p, &spec, &synth(n, k as u64 + 1), None).map_err(|e| format!("write {}: {e}", p.display())))
+        .map(|(k, p)| {
+            write_wav(p, &spec, &synth(n, k as u64 + 1), None).map_err(|e| format!("write {}: {e}", p.display()))
+        })
         .collect::<Result<(), _>>()?;
     // the files above were written by this run, so their metadata is there
     let bytes: u64 = paths
@@ -293,7 +291,9 @@ fn run() -> Result<(), String> {
         (
             "decode 1 track".to_string(),
             // the same file decoded above, so the error arm cannot fire
-            time(a.runs, || read_wav_mono(first, MixMode::Average).map_or(0, |r| r.0.len())),
+            time(a.runs, || {
+                read_wav_mono(first, MixMode::Average).map_or(0, |r| r.0.len())
+            }),
         ),
         (
             "decode 1 track (read_wav_bytes)".to_string(),
