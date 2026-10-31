@@ -1583,23 +1583,7 @@ function tmEditEnd(commit) {
     const b = Number(v);
     if (!v || !Number.isFinite(b) || b <= 0) { setMsg("tempo: type a number of BPM, for example 95"); return; }
     if (it.add && tmBpmText(b) === it.text) { setMsg("tempo: the same as the tempo there, no step added"); return; }   // a step equal to the value in force changes nothing
-    if (it.id === "start") {
-      next.bpm = b;
-      if (next.steps.length) return void tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays: the map has steps`);
-      // #468: a typed start tempo on a map without steps re-fits bar 1 to the hits (the phase of
-      // the kick and snare hits at the new tempo, tempo_map_refit_bar1): the grid sits on them
-      // again. The commit is one step, so one undo restores the tempo and bar 1 together.
-      const sid0 = S.sid, was = TM.map.bar1_s;
-      return void (async () => {
-        try {
-          const r = await B.tempoMapRefitBar1(sid0, b);
-          if (sid0 !== S.sid) return;
-          if (Math.abs(r.bar1_s - was) < 1e-9) return void tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays at ${fmt(was, 3)} s`);
-          next.bar1_s = r.bar1_s;
-          return void tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 moved from ${fmt(was, 3)} s to ${fmt(r.bar1_s, 3)} s`);
-        } catch (e) { return void tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays: ${errText(e)}`); }
-      })();
-    }
+    if (it.id === "start") { next.bpm = b; return void tmCommitStartTempo(next); }
     if (it.add) { next.steps.push({ t: it.t, bpm: b }); next.steps.sort((p, q) => p.t - q.t); }
     else next.steps[it.i].bpm = b;
     return void tmCommit(next, it.add ? `tempo step ${tmBpmText(b)} BPM at ${fmt(it.t, 2)} s` : `tempo ${tmBpmText(b)} BPM`);
@@ -1755,6 +1739,23 @@ function tmUndoWaits() {   // like hgUndoWaits: an undo while a change is stored
   setMsg("a tempo map change is being stored: undo and redo wait for it");
   return true;
 }
+/* A new start tempo (next.bpm), from the Tempo ruler or the Detect Tempo dialog; answers the commit's promise.
+   #468: on a map without steps bar 1 is re-fitted to the hits (the phase of the kick and snare hits at
+   the new tempo, tempo_map_refit_bar1), so the grid sits on them again; a map with steps keeps bar 1.
+   The commit is one step, so one undo restores the tempo and bar 1 together. Hotfix 0.9.10: bar 1 is
+   never before 0 s (a map with a negative bar 1 is refused, and the old tempo stayed). */
+async function tmCommitStartTempo(next) {
+  const b = next.bpm, was = next.bar1_s, sid0 = S.sid;
+  if (next.steps.length) return tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays: the map has steps`);
+  try {
+    const r = await B.tempoMapRefitBar1(sid0, b);
+    if (sid0 !== S.sid) return false;
+    const at = Math.max(0, r.bar1_s);
+    if (Math.abs(at - was) < 1e-9) return tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays at ${fmt(was, 3)} s`);
+    next.bar1_s = at;
+    return tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 moved from ${fmt(was, 3)} s to ${fmt(at, 3)} s`);
+  } catch (e) { return tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays: ${errText(e)}`); }
+}
 function tmCommit(next, what) {
   const sid = S.sid;
   return tmQueue(async () => {
@@ -1851,12 +1852,35 @@ function tmDetectDialog(d) {
     b1.textContent = b1Text();
     b1.onclick = () => { later = !later; b1.textContent = b1Text(); render(); };
     $("#tempoCancel").onclick = () => { setMsg("detect tempo cancelled"); close(false); };
-    $("#tempoAccept").onclick = async () => {
+    const chosen = () => {   // the suggestion with the chosen bar 1
       const map = JSON.parse(JSON.stringify(d.suggestion));
       if (later) map.bar1_s = d.bar1.alternative;
-      m.classList.add("hidden"); document.removeEventListener("keydown", esc, true);
-      resolve(await tmCommit(map, "tempo map detected"));
+      return map;
     };
+    const done = async commit => { m.classList.add("hidden"); document.removeEventListener("keydown", esc, true); resolve(await commit); };
+    // Hotfix 0.9.10 (owner): three answers. The detected tempo as suggested; half of it (the detector
+    // can lock on double time) when that is above 40 BPM; or a typed tempo. The last two commit like a
+    // start tempo typed in the Tempo ruler (tmCommitStartTempo); the tempo steps scale with the start.
+    const atTempo = b => {
+      const map = chosen(), k = b / map.bpm;
+      map.bpm = b;
+      for (const st of map.steps) st.bpm *= k;
+      return tmCommitStartTempo(map);
+    };
+    const half = d.suggestion.bpm / 2, hb = $("#tempoHalf"), own = $("#tempoOwn");
+    $("#tempoAccept").textContent = `Use ${whole(d.suggestion.bpm)} BPM`;
+    $("#tempoAccept").onclick = () => done(tmCommit(chosen(), "tempo map detected"));
+    hb.classList.toggle("hidden", !(half > 40));
+    hb.textContent = `Half time: ${whole(half)} BPM`;
+    hb.onclick = () => done(atTempo(half));
+    own.value = "";
+    const ownUse = () => {
+      const b = Number(own.value.trim());
+      if (!own.value.trim() || !Number.isFinite(b) || b <= 0 || b > 1000) { setMsg("tempo: type a number of BPM, for example 92"); own.focus(); return; }
+      done(atTempo(b));
+    };
+    $("#tempoOwnUse").onclick = ownUse;
+    own.onkeydown = ev => { if (ev.key === "Enter") { ev.preventDefault(); ownUse(); } };
     render();
     m.classList.remove("hidden");
   });

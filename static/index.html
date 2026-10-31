@@ -310,9 +310,15 @@
   <div class="modal-box">
     <h3>Detect Tempo</h3>
     <div id="tempoBody"></div>
+    <div class="tempoOwnRow">
+      <label for="tempoOwn">Own tempo</label>
+      <input id="tempoOwn" type="text" inputmode="decimal" spellcheck="false" autocomplete="off" placeholder="BPM" aria-label="Own tempo in BPM">
+      <button id="tempoOwnUse" class="btn" title="Use the typed tempo, as if typed in the Tempo ruler">Use own tempo</button>
+    </div>
     <div class="modal-actions">
       <button id="tempoBar1" class="btn hidden" title="The first bar line is a guess: use the other candidate, two beats later">Bar 1 two beats later</button>
       <button id="tempoCancel" class="btn">Cancel</button>
+      <button id="tempoHalf" class="btn hidden" title="Half the detected tempo: the detector can lock on double time">Half time</button>
       <button id="tempoAccept" class="btn primary">Accept</button>
     </div>
   </div>

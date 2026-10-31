@@ -490,6 +490,23 @@ fn the_refit_of_a_typed_start_tempo_puts_bar_1_on_a_beat_the_hits_support() {
     assert!(r.support > 0.0, "the phase has no hit support");
 }
 
+/// Owner hotfix 0.9.10: the downbeat on the first hit fits a hair before 0 s (the hits sit 1 ms
+/// early on the beats from 0 s). The refit keeps bar 1 at 0 s, so the typed tempo commits: a
+/// negative bar 1 made `tempo_map_set` refuse the map and the old tempo stayed.
+#[test]
+fn the_refit_never_puts_bar_1_before_the_audio_starts() {
+    let beat = 60.0 / 92.0;
+    let hits: Vec<Hit> = (1..96)
+        .map(|k| {
+            let role = if k % 2 == 0 { Role::Snare } else { Role::Kick };
+            Hit::new(f64::from(k) * beat - 0.001, role)
+        })
+        .collect();
+    let r = refit_bar1(&hits, 92.0, 0.0).unwrap();
+    assert!(r.bar1_s >= 0.0, "bar 1 at {} s, before the audio starts", r.bar1_s);
+    assert!(r.bar1_s < 0.005, "bar 1 moved to {} s, off the first beat", r.bar1_s);
+}
+
 /// The refit refuses a tempo that is not a positive number and too few kick and snare hits.
 #[test]
 fn the_refit_refuses_a_bad_tempo_and_too_few_hits() {
