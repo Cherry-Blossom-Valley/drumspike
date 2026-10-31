@@ -225,7 +225,7 @@ fn refine_detail(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWind
             nxt = Some(nt);
         }
     }
-    let srf = sr as f64;
+    let srf = f64::from(sr);
     let next_mid = nxt.map(|n| py_int(((t0 + n) / 2.0) * srf));
     let bail = |rise: Option<f64>| Detail {
         t: t0,
@@ -242,7 +242,7 @@ fn refine_detail(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWind
         return bail(None);
     }
     let (a, b) = (a as usize, b as usize);
-    let cut: Vec<f64> = x[a..b].iter().map(|&v| v as f64).collect();
+    let cut: Vec<f64> = x[a..b].iter().map(|&v| f64::from(v)).collect();
     let k_sm = py_int(SMOOTH_S * srf).max(1) as usize;
     let e = log_envelope(&cut, k_sm);
     let l = py_int(RISE_S * srf).max(0) as usize;
@@ -537,7 +537,7 @@ fn tail_fix(x: &[f32], rs: &RuleState, prev: Option<f64>, srf: f64) -> Option<f6
 /// the reference's, bit for bit; `rise` is always the reference's.
 #[must_use]
 pub fn refine_reach(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWindow) -> Refined {
-    let srf = sr as f64;
+    let srf = f64::from(sr);
     let d = refine_detail(x, t0, sr, neighbors, win);
     let kept = Refined {
         t: d.t,
@@ -705,8 +705,8 @@ fn samples(s: f64, srf: f64) -> i64 {
 /// The 2-tap mean `|x[i] + x[i - 1]| / 2` (`x[-1]` = 0). It nulls the Nyquist ripple of a
 /// band-limited sharp start, so the walk does not read that ripple as motion.
 fn two_tap(x: &[f32], i: usize) -> f64 {
-    let prev = if i > 0 { x[i - 1] as f64 } else { 0.0 };
-    (x[i] as f64 + prev).abs() / 2.0
+    let prev = if i > 0 { f64::from(x[i - 1]) } else { 0.0 };
+    (f64::from(x[i]) + prev).abs() / 2.0
 }
 
 /// The floor before sample `s`: the median of the [`FM_BLOCK_S`] block maxima of `|x|` in
@@ -720,7 +720,7 @@ fn floor_before(x: &[f32], s: i64, from: i64, srf: f64) -> f64 {
     }
     let nb = (end - from) / b;
     let mut m: Vec<f64> = (0..nb)
-        .map(|k| max_abs(x, end - (k + 1) * b, end - k * b) as f64)
+        .map(|k| f64::from(max_abs(x, end - (k + 1) * b, end - k * b)))
         .collect();
     m.sort_by(f64::total_cmp);
     let n = m.len();
@@ -773,7 +773,7 @@ fn back_track(
     peak_db: f64,
     tune: Option<FootTune>,
 ) -> (i64, BackStep) {
-    let srf = sr as f64;
+    let srf = f64::from(sr);
     let (prev, next) = neighbors;
     let prev_mid = prev.map(|p| py_int(((p + t0) / 2.0) * srf));
     let next_mid = next.map(|nx| py_int(((t0 + nx) / 2.0) * srf));
@@ -794,7 +794,7 @@ pub fn first_motion_mid(x: &[f32], s: i64, sr: u32, prev_mid: Option<i64>, next_
 /// that floor after it. No such pair above `lo`: `d` stays. The samples are read raw: the 2-tap mean halves the
 /// first sample of a slow rise and reads it as floor.
 fn foot_strict(x: &[f32], d: i64, lo: i64, floor: f64) -> i64 {
-    let quiet = |i: i64| (x[i as usize].abs() as f64) <= floor;
+    let quiet = |i: i64| f64::from(x[i as usize].abs()) <= floor;
     let mut i = d;
     while i - 2 >= lo && !(quiet(i - 1) && quiet(i - 2)) {
         i -= 1;
@@ -820,7 +820,7 @@ fn first_motion_mid_rule(
     peak_db: f64,
     tune: Option<FootTune>,
 ) -> (i64, BackStep) {
-    let srf = sr as f64;
+    let srf = f64::from(sr);
     let n = x.len() as i64;
     if s <= 0 || s >= n {
         return (s, BackStep::Kept);
@@ -829,7 +829,7 @@ fn first_motion_mid_rule(
     if let Some(m) = next_mid {
         pe = pe.min(m);
     }
-    let pk = max_abs(x, s, pe) as f64;
+    let pk = f64::from(max_abs(x, s, pe));
     if pk < 1e-4 {
         return (s, BackStep::Kept);
     }
@@ -859,8 +859,8 @@ fn first_motion_mid_rule(
     }
     if s - foot > samples(FM_LONG_S, srf) {
         let e = samples(FM_LONG_END_S, srf).max(1);
-        let held = max_abs(x, foot, (s - e).max(foot + 1)) as f64;
-        let at = max_abs(x, s, s + e) as f64;
+        let held = f64::from(max_abs(x, foot, (s - e).max(foot + 1)));
+        let at = f64::from(max_abs(x, s, s + e));
         if held < at * 10f64.powf(-FM_LONG_DB / 20.0) {
             return (s, BackStep::Separate);
         }
@@ -869,7 +869,7 @@ fn first_motion_mid_rule(
         None => foot,
         Some(tune) => {
             let end = (s - samples(FM_FLOOR_SKIP_S, srf)).min(n);
-            let strict_foot = foot_strict(x, foot, lo, max_abs(x, from, end) as f64);
+            let strict_foot = foot_strict(x, foot, lo, f64::from(max_abs(x, from, end)));
             let cap = match tune.cap {
                 FootCap::Seconds(t) => samples(t, srf),
                 FootCap::Samples(k) => k,
@@ -938,7 +938,7 @@ fn refine_back_peak(
     tune: Option<FootTune>,
 ) -> Refined {
     let r = refine_reach(x, t0, sr, neighbors, win);
-    let srf = sr as f64;
+    let srf = f64::from(sr);
     let (mut prev, mut next): (Option<f64>, Option<f64>) = (None, None);
     for &nt in neighbors {
         if nt < t0 && prev.is_none_or(|p| nt > p) {

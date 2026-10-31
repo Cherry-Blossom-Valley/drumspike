@@ -52,7 +52,7 @@ impl Session {
         );
         let hits = json!(
             (0..8)
-                .map(|i| json!({"t": 0.5 + i as f64 * 0.5, "v": 0.8}))
+                .map(|i| json!({"t": 0.5 + f64::from(i) * 0.5, "v": 0.8}))
                 .collect::<Vec<_>>()
         );
         // the DSP detector always: the re-pick preview answers then

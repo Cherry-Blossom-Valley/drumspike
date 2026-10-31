@@ -1325,7 +1325,7 @@ mod tests {
             channel_mask: 0,
         };
         let x: Vec<f32> = (0..48_000)
-            .map(|i| (std::f64::consts::TAU * 240.0 * i as f64 / 48_000.0).sin() as f32)
+            .map(|i| (std::f64::consts::TAU * 240.0 * f64::from(i) / 48_000.0).sin() as f32)
             .collect();
         let src = d.join("kick in.wav");
         drumspike_core::io::write_wav(&src, &spec, &x, None).unwrap();
@@ -1355,7 +1355,7 @@ mod tests {
             channel_mask: 0,
         };
         let x: Vec<f32> = (0..96_000)
-            .map(|i| (std::f64::consts::TAU * 240.0 * i as f64 / 48_000.0).sin() as f32)
+            .map(|i| (std::f64::consts::TAU * 240.0 * f64::from(i) / 48_000.0).sin() as f32)
             .collect();
         let stereo: Vec<f32> = x.iter().flat_map(|&v| [v, v * 0.5]).collect();
         let src = d.join("snare.wav");

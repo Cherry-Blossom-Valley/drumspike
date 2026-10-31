@@ -87,7 +87,7 @@ fn pick_peaks_follows_the_median_threshold_and_local_maximum() {
 fn attack_is_large_for_a_click_and_small_for_a_steady_tone() {
     let n = 44_100;
     let tone: Vec<f32> = (0..n)
-        .map(|i| (0.5 * (2.0 * std::f64::consts::PI * 90.0 * i as f64 / 44_100.0).sin()) as f32)
+        .map(|i| (0.5 * (2.0 * std::f64::consts::PI * 90.0 * f64::from(i) / 44_100.0).sin()) as f32)
         .collect();
     // The envelope of a low tone ripples by a few dB within its period.
     assert!(attack_db(&tone, 50) < 6.0, "{}", attack_db(&tone, 50));
@@ -169,13 +169,13 @@ fn snare_bleed(sr: u32, t0: f64, gain_db: f64) -> impl Fn(&mut [f32]) {
     move |x: &mut [f32]| {
         let i0 = (t0 * f64::from(sr)).round() as usize;
         let g = 10f64.powf(gain_db / 20.0);
-        let mut state = 0x2545F4914F6CDD1Du64;
+        let mut state = 0x2545_F491_4F6C_DD1D_u64;
         for k in 0..(0.3 * f64::from(sr)) as usize {
             let Some(v) = x.get_mut(i0 + k) else { break };
             let t = k as f64 / f64::from(sr);
             state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             let noise = ((state >> 33) as f64 / (1u64 << 31) as f64) - 1.0;
             // a 2 kHz-ish ring plus noise: energy far above the kick's band range
             let env = (t / 0.0005).min(1.0) * (-t / 0.08).exp();
@@ -242,13 +242,13 @@ fn snare_hit(sr: u32, t0: f64, gain_db: f64) -> impl Fn(&mut [f32]) {
     move |x: &mut [f32]| {
         let i0 = (t0 * f64::from(sr)).round() as usize;
         let g = 10f64.powf(gain_db / 20.0);
-        let mut state = 0x9E3779B97F4A7C15u64;
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
         for k in 0..(0.3 * f64::from(sr)) as usize {
             let Some(v) = x.get_mut(i0 + k) else { break };
             let t = k as f64 / f64::from(sr);
             state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             let noise = ((state >> 33) as f64 / (1u64 << 31) as f64) - 1.0;
             let env = (t / 0.0005).min(1.0) * (-t / 0.06).exp();
             *v += (g * env * (0.4 * noise + 0.6 * (2.0 * std::f64::consts::PI * 190.0 * t).sin())) as f32;

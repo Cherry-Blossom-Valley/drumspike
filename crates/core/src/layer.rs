@@ -135,7 +135,7 @@ pub fn read_one_shot(path: &Path) -> Result<OneShot, String> {
     if shot.frames() == 0 || shot.sr == 0 {
         return Err(format!("{}: the file holds no audio", path.display()));
     }
-    if shot.frames() as f64 > MAX_ONE_SHOT_S * shot.sr as f64 {
+    if shot.frames() as f64 > MAX_ONE_SHOT_S * f64::from(shot.sr) {
         return Err(format!(
             "{}: a one-shot is at most {MAX_ONE_SHOT_S} s long",
             path.display()
@@ -151,10 +151,10 @@ pub fn ext80_to_f64(b: &[u8]) -> f64 {
         return 0.0;
     }
     let sign = if b[0] & 0x80 != 0 { -1.0 } else { 1.0 };
-    let exp = (((b[0] & 0x7F) as i32) << 8) | b[1] as i32;
+    let exp = (i32::from(b[0] & 0x7F) << 8) | i32::from(b[1]);
     let mut m = 0u64;
     for &x in &b[2..10] {
-        m = (m << 8) | x as u64;
+        m = (m << 8) | u64::from(x);
     }
     if exp == 0 && m == 0 {
         return 0.0;
@@ -211,10 +211,10 @@ fn read_aiff(b: &[u8]) -> Result<OneShot, String> {
     let data = &b[(s0 + 8 + be32(s0) as usize).min(s1)..s1];
     let (width, conv): (usize, SampleConv) = match comp {
         b"NONE" | b"twos" => match bits.div_ceil(8) {
-            1 => (1, Box::new(|s: &[u8]| s[0] as i8 as f32 / 128.0)),
+            1 => (1, Box::new(|s: &[u8]| f32::from(s[0] as i8) / 128.0)),
             2 => (
                 2,
-                Box::new(|s: &[u8]| i16::from_be_bytes([s[0], s[1]]) as f32 / 32768.0),
+                Box::new(|s: &[u8]| f32::from(i16::from_be_bytes([s[0], s[1]])) / 32768.0),
             ),
             3 => (
                 3,
@@ -228,7 +228,7 @@ fn read_aiff(b: &[u8]) -> Result<OneShot, String> {
         },
         b"sowt" if bits <= 16 => (
             2,
-            Box::new(|s: &[u8]| i16::from_le_bytes([s[0], s[1]]) as f32 / 32768.0),
+            Box::new(|s: &[u8]| f32::from(i16::from_le_bytes([s[0], s[1]])) / 32768.0),
         ),
         b"fl32" | b"FL32" => (4, Box::new(|s: &[u8]| f32::from_be_bytes([s[0], s[1], s[2], s[3]]))),
         b"fl64" | b"FL64" => (
@@ -266,16 +266,16 @@ pub fn one_shot_onset(x: &[f32], sr: u32) -> usize {
     }
     // the rule reads a pre-attack level before the attack: a one-shot that starts with its
     // attack gets that much silence in front (and the result is moved back)
-    let pad = (ONSET_PAD_S * sr as f64).round() as usize;
+    let pad = (ONSET_PAD_S * f64::from(sr)).round() as usize;
     let mut padded = vec![0.0f32; pad];
     padded.extend_from_slice(x);
     let first = padded
         .iter()
         .position(|v| v.abs() >= COARSE_SHARE * peak)
         .unwrap_or(pad);
-    let t0 = (first as f64 / sr as f64 - COARSE_LEAD_S).max(0.0);
+    let t0 = (first as f64 / f64::from(sr) - COARSE_LEAD_S).max(0.0);
     let r = refine_rule(&padded, t0, sr, &[], RefineWindow::DEFAULT, RefineRule::CURRENT);
-    let i = (r.t * sr as f64).round() - pad as f64;
+    let i = (r.t * f64::from(sr)).round() - pad as f64;
     if i.is_finite() && i >= 0.0 {
         (i as usize).min(x.len() - 1)
     } else {
@@ -310,7 +310,7 @@ pub fn sinc_resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || from == 0 || to == 0 {
         return x.to_vec();
     }
-    let ratio = to as f64 / from as f64;
+    let ratio = f64::from(to) / f64::from(from);
     let fc = ratio.min(1.0);
     let half = SINC_HALF as f64 / fc;
     let n_out = (x.len() as f64 * ratio).round() as usize;
@@ -322,7 +322,7 @@ pub fn sinc_resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
             let mut acc = 0.0f64;
             for (k, &v) in x.iter().enumerate().take(hi + 1).skip(lo) {
                 let t = pos - k as f64;
-                acc += v as f64 * fc * sinc(fc * t) * blackman(t / half);
+                acc += f64::from(v) * fc * sinc(fc * t) * blackman(t / half);
             }
             acc as f32
         })
@@ -347,7 +347,7 @@ pub fn frac_delayed(x: &[f32], frac: f64) -> Vec<f32> {
             for (ti, d) in (-h..=h).enumerate() {
                 let k = nn - d;
                 if k >= 0 && (k as usize) < x.len() {
-                    acc += x[k as usize] as f64 * taps[ti];
+                    acc += f64::from(x[k as usize]) * taps[ti];
                 }
             }
             acc as f32
@@ -488,8 +488,8 @@ impl HitXcorr {
 /// in samples.
 #[must_use]
 pub fn attack_template(x: &[f32], onset: usize, sr: u32, p: &AlignParams) -> (Vec<f32>, usize) {
-    let pre = ((p.pre_s * sr as f64).round() as usize).min(onset);
-    let len = ((p.attack_s * sr as f64).round() as usize).max(1);
+    let pre = ((p.pre_s * f64::from(sr)).round() as usize).min(onset);
+    let len = ((p.attack_s * f64::from(sr)).round() as usize).max(1);
     let a0 = onset - pre;
     let a1 = (a0 + len).min(x.len());
     (x[a0..a1].to_vec(), pre)
@@ -517,7 +517,7 @@ fn parabolic(y: &[f64], i: usize) -> (f64, f64) {
 #[must_use]
 pub fn xcorr_hit(mic: &[f32], hit: i64, a: &[f32], pre: usize, max_lag: usize) -> Option<HitXcorr> {
     let l = a.len();
-    let an: f64 = a.iter().map(|v| (*v as f64) * (*v as f64)).sum::<f64>().sqrt();
+    let an: f64 = a.iter().map(|v| f64::from(*v) * f64::from(*v)).sum::<f64>().sqrt();
     if l == 0 || an <= 0.0 {
         return None;
     }
@@ -529,7 +529,7 @@ pub fn xcorr_hit(mic: &[f32], hit: i64, a: &[f32], pre: usize, max_lag: usize) -
         .map(|k| {
             let i = s0 + k;
             if i >= 0 && (i as usize) < mic.len() {
-                mic[i as usize] as f64
+                f64::from(mic[i as usize])
             } else {
                 0.0
             }
@@ -548,7 +548,7 @@ pub fn xcorr_hit(mic: &[f32], hit: i64, a: &[f32], pre: usize, max_lag: usize) -
             continue;
         }
         any = true;
-        let dot: f64 = a.iter().zip(&seg[j..j + l]).map(|(p, q)| *p as f64 * q).sum();
+        let dot: f64 = a.iter().zip(&seg[j..j + l]).map(|(p, q)| f64::from(*p) * q).sum();
         *out = dot / (an * e.sqrt());
     }
     if !any {
@@ -607,7 +607,7 @@ pub fn render_layer(n_frames: usize, shot: &OneShot, onset: f64, hits: &[(f64, f
         }
         let start = pos - onset;
         let mut i0 = start.floor();
-        let mut q = ((start - i0) * FRAC_STEPS as f64).round() as u32;
+        let mut q = ((start - i0) * f64::from(FRAC_STEPS)).round() as u32;
         if q == FRAC_STEPS {
             q = 0;
             i0 += 1.0;
@@ -618,7 +618,7 @@ pub fn render_layer(n_frames: usize, shot: &OneShot, onset: f64, hits: &[(f64, f
             let v = delayed.entry(q).or_insert_with(|| {
                 shot.chans
                     .iter()
-                    .map(|c| frac_delayed(c, q as f64 / FRAC_STEPS as f64))
+                    .map(|c| frac_delayed(c, f64::from(q) / f64::from(FRAC_STEPS)))
                     .collect()
             });
             (&*v, i0 as i64 - SINC_HALF as i64)

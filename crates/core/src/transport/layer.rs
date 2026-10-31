@@ -50,7 +50,7 @@ impl LayerVoices {
             v.sort_by_key(|s| s.0);
             v
         };
-        let r = device_rate as f64;
+        let r = f64::from(device_rate);
         LayerVoices {
             channels: channels.clamp(1, 2),
             tpl,

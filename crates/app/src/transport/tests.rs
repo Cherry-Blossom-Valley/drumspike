@@ -95,8 +95,8 @@ fn the_master_gain_comes_from_the_environment_only_when_valid() {
 fn volume_and_pan_are_clamped_to_the_fader_range() {
     assert_eq!(clamp_db(0.0), 0.0);
     assert_eq!(clamp_db(-6.5), -6.5);
-    assert_eq!(clamp_db(40.0), MAX_DB as f64);
-    assert_eq!(clamp_db(-1e9), MIN_DB as f64);
+    assert_eq!(clamp_db(40.0), f64::from(MAX_DB));
+    assert_eq!(clamp_db(-1e9), f64::from(MIN_DB));
     assert_eq!(clamp_db(-7.3), -7.3, "no f32 rounding in the document");
     assert_eq!(clamp_pan(0.25), 0.25);
     assert_eq!(clamp_pan(-7.0), -1.0);

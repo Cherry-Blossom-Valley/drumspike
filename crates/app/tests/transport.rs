@@ -303,7 +303,7 @@ fn transport_seek_stress_every_message_of_a_seek_epoch_shows_that_seek() {
             std::thread::spawn(move || {
                 let mut x = 0u64;
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    x = std::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1));
+                    x = std::hint::black_box(x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1));
                 }
             })
         })
@@ -566,7 +566,8 @@ fn transport_clicks_apply_to_the_open_transport_and_to_the_next_open() {
     }
     // many quick changes do not fail (the update queue drains once per block)
     for i in 0..20 {
-        svc.transport_clicks(None, Some(0.1 + 0.01 * i as f64), None).unwrap();
+        svc.transport_clicks(None, Some(0.1 + 0.01 * f64::from(i)), None)
+            .unwrap();
     }
     let _ = svc.transport_stop(true);
     std::fs::remove_dir_all(root).unwrap();
@@ -606,7 +607,7 @@ fn transport_status_of_a_closed_transport_has_the_host_fields_only() {
     assert_eq!(st["lost"], Value::Null);
     assert!(st.get("frame").is_none());
     assert_eq!(st["clicks"]["enabled"], true);
-    assert_eq!(st["clicks"]["volume"], 0.22f32 as f64);
+    assert_eq!(st["clicks"]["volume"], f64::from(0.22f32));
 }
 
 #[test]
@@ -1477,7 +1478,7 @@ fn transport_play_window_previews_the_layer_one_shot_once() {
     let (svc, sid, root) = opened("tp_shot", &["Kick_In", "Snare_Top"]);
     let f = root.join("shots").join("shot.wav");
     let sr = 48_000u32;
-    let n = (0.2 * sr as f64) as usize;
+    let n = (0.2 * f64::from(sr)) as usize;
     let mut x = vec![0.0f32; n];
     x[480..].fill(0.8); // the attack at 480: the measured onset
     std::fs::create_dir_all(f.parent().unwrap()).unwrap();

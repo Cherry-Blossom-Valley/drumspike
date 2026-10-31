@@ -151,14 +151,14 @@ fn migrate_forward_from_format_0_values() {
     assert_eq!(a.source, Some(None));
     // {"events": [...]} and a track without events; a stored order that lists every track
     let doc = migrate_forward(serde_json::json!({
-        "format": 0, "name": "Song: Take 2", "created": 1759950000.5, "order": ["Empty", "Kick_In"],
+        "format": 0, "name": "Song: Take 2", "created": 1_759_950_000.5, "order": ["Empty", "Kick_In"],
         "tracks": {"Kick_In": {"role": "kick", "note": 36, "params": {"min_gap_ms": 20}, "color": "#e05555"},
                    "Empty": {"role": "other", "note": 36}},
         "events": {"Kick_In": {"sr": 48000, "events": [{"t": 1.0 / 3.0, "v": 20, "added": true}]}}
     }))
     .unwrap();
     assert_eq!(doc.name.as_deref(), Some("Song: Take 2"));
-    assert_eq!(doc.created.as_ref().unwrap().as_f64(), Some(1759950000.5));
+    assert_eq!(doc.created.as_ref().unwrap().as_f64(), Some(1_759_950_000.5));
     assert_eq!(doc.order, Some(vec!["Empty".to_string(), "Kick_In".to_string()]));
     let k = doc.track("Kick_In").unwrap();
     assert_eq!(k.events()[0].t, 1.0 / 3.0);

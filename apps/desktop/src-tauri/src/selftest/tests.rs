@@ -220,7 +220,10 @@ fn parse_helpers_keeps_the_webkit_helpers_only() {
     let ps = "  101  2048 /usr/bin/foo\n  202 340112 /System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent\n  303 9000 /x/com.apple.WebKit.GPU\nbad line\n";
     let h = parse_helpers(ps);
     assert_eq!(h.len(), 2);
-    assert_eq!((h[0].pid, h[0].rss_kb, h[0].kind.as_str()), (202, 340112, "WebContent"));
+    assert_eq!(
+        (h[0].pid, h[0].rss_kb, h[0].kind.as_str()),
+        (202, 340_112, "WebContent")
+    );
     assert_eq!(h[1].kind, "GPU");
 }
 

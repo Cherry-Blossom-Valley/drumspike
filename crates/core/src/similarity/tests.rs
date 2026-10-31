@@ -32,7 +32,7 @@ fn signal() -> (Vec<f32>, Vec<f64>, Vec<f64>) {
     let mut x = vec![0f32; SR as usize * 6];
     let (mut tom, mut snare) = (vec![], vec![]);
     for i in 0..10 {
-        let t = 0.2 + i as f64 * 0.5;
+        let t = 0.2 + f64::from(i) * 0.5;
         if i % 2 == 0 {
             burst(&mut x, t, 110.0, 0.2 + 0.05 * i as f32, 0.15);
             tom.push(t);

@@ -40,7 +40,7 @@ impl Playhead {
     /// The position in seconds.
     #[must_use]
     pub fn seconds(&self) -> f64 {
-        self.frame as f64 / self.sample_rate as f64
+        self.frame as f64 / f64::from(self.sample_rate)
     }
 
     /// The frame at host time `now_ns`: extrapolated at the sample rate divided by the
@@ -50,15 +50,15 @@ impl Playhead {
         if !self.playing || now_ns <= self.host_time_ns {
             return self.frame;
         }
-        let dt = (now_ns - self.host_time_ns) as u128;
-        let per = 1_000_000_000u128 * self.slowdown.max(1) as u128;
-        self.frame + (dt * self.sample_rate as u128 / per) as u64
+        let dt = u128::from(now_ns - self.host_time_ns);
+        let per = 1_000_000_000u128 * u128::from(self.slowdown.max(1));
+        self.frame + (dt * u128::from(self.sample_rate) / per) as u64
     }
 
     /// P3-20b: session seconds per second of playback (1.0 or 0.5).
     #[must_use]
     pub fn rate(&self) -> f64 {
-        1.0 / self.slowdown.max(1) as f64
+        1.0 / f64::from(self.slowdown.max(1))
     }
 }
 
@@ -107,7 +107,7 @@ impl StampMap {
     /// the device-clock instants (ns) of the callback and of the playback; `host_at_callback` is
     /// [`host_now_ns`] read in the callback.
     pub fn host_play_ns(&mut self, callback: i128, playback: i128, host_at_callback: u64) -> u64 {
-        self.recent[self.next] = host_at_callback as i128 - callback;
+        self.recent[self.next] = i128::from(host_at_callback) - callback;
         self.next = (self.next + 1) % STAMP_WINDOW;
         self.filled = (self.filled + 1).min(STAMP_WINDOW);
         let offset = self.recent[..self.filled].iter().copied().min().unwrap_or(0);
@@ -240,11 +240,11 @@ mod tests {
             seed = seed
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
-            let wake = ((seed >> 33) % 200_000) as i128;
+            let wake = i128::from((seed >> 33) % 200_000);
             let host = (callback + OFFSET + wake) as u64;
-            let play = map.host_play_ns(callback, callback + LATENCY, host) as i128;
+            let play = i128::from(map.host_play_ns(callback, callback + LATENCY, host));
             let ideal = callback + LATENCY + OFFSET;
-            naive_worst = naive_worst.max((host as i128 + LATENCY - ideal).abs());
+            naive_worst = naive_worst.max((i128::from(host) + LATENCY - ideal).abs());
             if k >= STAMP_WINDOW as i128 {
                 worst = worst.max((play - ideal).abs());
             }

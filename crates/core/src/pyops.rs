@@ -40,7 +40,7 @@ pub fn py_round_digits(f: f64, ndigits: usize) -> f64 {
 #[inline]
 #[must_use]
 pub fn window(len: usize, t: f64, sr: u32, pre: f64, post: f64) -> (usize, usize) {
-    let srf = sr as f64;
+    let srf = f64::from(sr);
     let i0 = (py_int((t - pre) * srf).max(0) as usize).min(len);
     let mut i1 = py_int((t + post) * srf).min(len as i64);
     if i1 < 0 {
@@ -89,7 +89,7 @@ mod tests {
             (-0.25, -0.2),
             (-0.75, -0.8),
             (12.25, 12.2),
-            (0.04999999, 0.0),
+            (0.049_999_99, 0.0),
             (99.95, 100.0),
             (3.45, 3.5),
             (62.75, 62.8),

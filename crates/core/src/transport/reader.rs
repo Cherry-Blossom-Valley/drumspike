@@ -159,9 +159,9 @@ impl Resample {
         if track_rate == out_rate {
             return Ok(None);
         }
-        let g = gcd(track_rate as u64, out_rate as u64);
-        let out_unit = out_rate as u64 / g;
-        let in_unit = track_rate as u64 / g;
+        let g = gcd(u64::from(track_rate), u64::from(out_rate));
+        let out_unit = u64::from(out_rate) / g;
+        let in_unit = u64::from(track_rate) / g;
         // FFT blocks of an even input size near 512 frames on the rates' grid: with an odd
         // size the true delay is half an input frame off `output_delay()` (measured: a
         // 0.54-frame shift for 44.1 to 48 kHz with rubato's default 1029-frame block).
@@ -322,7 +322,7 @@ impl TrackSource {
     /// Track length in device frames (rounded up).
     #[must_use]
     pub fn device_frames(&self) -> u64 {
-        (self.info.n_frames as u64 * self.device_rate as u64).div_ceil(self.track_rate as u64)
+        (self.info.n_frames as u64 * u64::from(self.device_rate)).div_ceil(u64::from(self.track_rate))
     }
 
     /// Channels the source puts in its ring per frame: 2 for a stereo file, else 1.

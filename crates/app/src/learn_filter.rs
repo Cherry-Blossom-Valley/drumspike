@@ -426,7 +426,7 @@ pub fn add_times(
         let f = crate::learn_score::nearest_frame(frames, t);
         let Some(i) = f else { continue };
         let Some(&s) = scores.get(i) else { continue };
-        if (s as f64) < th as f64 {
+        if f64::from(s) < f64::from(th) {
             continue;
         }
         if det.iter().any(|&(d, _)| (d - t).abs() <= REACH + 1e-9) {

@@ -18,8 +18,8 @@ impl Normal {
     fn uniform(&mut self) -> f64 {
         self.0 = self
             .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         ((self.0 >> 11) as f64 + 0.5) / (1u64 << 53) as f64
     }
     fn next(&mut self) -> f64 {
@@ -57,7 +57,7 @@ fn flam_track(seed: u64) -> (Vec<f32>, Vec<f64>) {
     let mut x = vec![0.0f32; 12 * SR as usize];
     let mut mains = Vec::new();
     for i in 0..10 {
-        let t = 1.0 + i as f64;
+        let t = 1.0 + f64::from(i);
         if i % 3 == 2 {
             let g = snare(&mut rng, 0.008);
             place(&mut x, &g, t, -8.0);
@@ -80,7 +80,7 @@ fn other_track(seed: u64, hz: f64) -> Vec<f32> {
     let mut rng = Normal(seed);
     let mut x = vec![0.0f32; 12 * SR as usize];
     for i in 0..20 {
-        let at = ((1.25 + 0.5 * i as f64) * f64::from(SR)) as usize;
+        let at = ((1.25 + 0.5 * f64::from(i)) * f64::from(SR)) as usize;
         for k in 0..(SR as usize / 10) {
             let t = k as f64 / f64::from(SR);
             let v = if hz > 0.0 {
@@ -101,7 +101,7 @@ fn few_track(seed: u64) -> Vec<f32> {
     let mut rng = Normal(seed);
     let mut x = vec![0.0f32; 12 * SR as usize];
     for i in 0..3 {
-        let at = ((1.25 + 3.0 * i as f64) * f64::from(SR)) as usize;
+        let at = ((1.25 + 3.0 * f64::from(i)) * f64::from(SR)) as usize;
         for k in 0..(SR as usize / 10) {
             let t = k as f64 / f64::from(SR);
             x[at + k] += (0.4 * rng.next() * (-t / 0.02).exp()) as f32;

@@ -30,7 +30,6 @@ missing_errors_doc = "allow" # 370: 115/174/0/81
 cast_possible_wrap = "allow" # 226: 200/20/6/0
 needless_pass_by_value = "allow" # 124: 4/19/1/100
 assert_is_empty = "allow" # 109: 59/38/0/12
-unreadable_literal = "allow" # 75: 55/17/0/3
 float_cmp = "allow" # 41: 27/14/0/0
 too_many_lines = "allow" # 41: 15/19/4/3
 manual_midpoint = "allow" # 31: 28/3/0/0

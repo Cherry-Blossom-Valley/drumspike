@@ -60,7 +60,7 @@ pub fn db_to_gain(db: f32) -> f32 {
     if db.is_nan() || db <= MIN_DB {
         return 0.0;
     }
-    10f64.powf(db.min(MAX_DB) as f64 / 20.0) as f32
+    10f64.powf(f64::from(db.min(MAX_DB)) / 20.0) as f32
 }
 
 /// The pan law: constant power with -3 dB at the centre against a hard pan, normalised so
@@ -73,7 +73,7 @@ pub fn pan_gains(pan: f32) -> (f32, f32) {
     if pan.is_nan() || pan == 0.0 {
         return (1.0, 1.0);
     }
-    let p = pan.clamp(-1.0, 1.0) as f64;
+    let p = f64::from(pan.clamp(-1.0, 1.0));
     let theta = (p + 1.0) * std::f64::consts::FRAC_PI_4;
     // cos(pi / 2) is 6e-17 in f64: a hard pan gives exactly 0.0 on the other side
     let side = |v: f64| {
@@ -229,7 +229,7 @@ impl Engine {
     /// The session frame (at the device rate) of the next sample the engine renders; at half
     /// speed the output frame divided by 2, rounded down.
     pub fn frame_pos(&self) -> u64 {
-        self.frame_pos / self.speed.slowdown() as u64
+        self.frame_pos / u64::from(self.speed.slowdown())
     }
 
     /// Whether the engine plays from the rings (no seek or refill pending).
@@ -247,7 +247,7 @@ impl Engine {
             if let Some((target, tag, speed, loop_range, end_at)) = sh.seek_request() {
                 self.seen_gen = g;
                 self.speed = speed;
-                let slowdown = speed.slowdown() as u64;
+                let slowdown = u64::from(speed.slowdown());
                 self.frame_pos = target.saturating_mul(slowdown);
                 // #166: the region of the request in output frames at the render rate; a seek
                 // without one ends a running loop. A target at or past the end starts wrapped.
@@ -331,7 +331,7 @@ impl Engine {
         let live = playing && self.state == State::Ready;
         let slowdown = self.speed.slowdown();
         self.clock.publish(
-            self.frame_pos / slowdown as u64,
+            self.frame_pos / u64::from(slowdown),
             host_play_ns,
             live,
             self.seek_tag,

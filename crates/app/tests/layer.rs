@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 /// A drum-like one-shot: `pre` samples of silence, a decaying 150 Hz tone and a short noise burst.
 fn shot(sr: u32, pre: usize, secs: f64, seed: u64) -> Vec<f32> {
     let mut s = seed;
-    let n = (secs * sr as f64) as usize;
+    let n = (secs * f64::from(sr)) as usize;
     (0..n)
         .map(|i| {
             if i < pre {
@@ -28,7 +28,7 @@ fn shot(sr: u32, pre: usize, secs: f64, seed: u64) -> Vec<f32> {
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
             let u = ((s >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0;
-            let t = (i - pre) as f64 / sr as f64;
+            let t = (i - pre) as f64 / f64::from(sr);
             (0.6 * (2.0 * std::f64::consts::PI * 150.0 * t).sin() * (-t / 0.05).exp() + 0.4 * u * (-t / 0.003).exp())
                 as f32
         })
@@ -205,7 +205,7 @@ fn aiff(be: &[u8], ch: i16, sr: u32) -> Vec<u8> {
     // the rate as an 80-bit extended number (exponent 16383 + 15, the rate in the top bits)
     let e = 16383 + 15u16;
     comm.extend_from_slice(&e.to_be_bytes());
-    comm.extend_from_slice(&((sr as u64) << 48).to_be_bytes());
+    comm.extend_from_slice(&(u64::from(sr) << 48).to_be_bytes());
     let mut ssnd = vec![0u8; 8];
     ssnd.extend_from_slice(be);
     let mut body = b"AIFF".to_vec();
@@ -364,7 +364,7 @@ fn export_layer_places_the_onset_on_every_hit_sample() {
     // each hit: the one-shot's onset sample on the hit's sample, the gain of the dB curve
     let db = |v: i64| 10f64.powf(-24.0 * (1.0 - v as f64 / 127.0) / 20.0) as f32;
     for (t, v) in HITS {
-        let i = (t * sr as f64).round() as usize;
+        let i = (t * f64::from(sr)).round() as usize;
         let g = db(v);
         for k in [0usize, 1, 2, 100, 5_000] {
             assert_eq!(out[0][i - onset + k], g * left[k], "hit {t} sample {k}");
@@ -373,7 +373,7 @@ fn export_layer_places_the_onset_on_every_hit_sample() {
         assert_eq!(out[0][i], g * left[onset], "the onset on the hit");
     }
     // the cut hit has no layer
-    let c = (1.5 * sr as f64) as usize;
+    let c = (1.5 * f64::from(sr)) as usize;
     assert_eq!(out[0][c - onset + 300], 0.0);
     // inverted, fixed curve, -6 dB
     svc.track_layer_set(
@@ -387,7 +387,7 @@ fn export_layer_places_the_onset_on_every_hit_sample() {
     let (_, out, _) = read_back(&path);
     let g = -(10f64.powf(-6.0 / 20.0)) as f32;
     for (t, _) in HITS {
-        let i = (t * sr as f64).round() as usize;
+        let i = (t * f64::from(sr)).round() as usize;
         assert_eq!(out[0][i], g * left[onset], "inverted at {t}");
     }
     // a one-shot at 44.1 kHz on a 48 kHz track: resampled once, the onset at the track's rate.
@@ -413,7 +413,7 @@ fn export_layer_places_the_onset_on_every_hit_sample() {
         chans: vec![shot(44_100, 442, 0.2, 5)],
     }
     .resampled(48_000);
-    let i = (0.25 * sr as f64).round() as usize;
+    let i = (0.25 * f64::from(sr)).round() as usize;
     // the level (-6 dB) and the fixed curve stay from before
     assert_eq!(out[0][i], (10f64.powf(-6.0 / 20.0) as f32) * rs.chans[0][on48]);
     // no layer: 409; another track's file names: 409 (the P4-4 owner rule)
@@ -436,7 +436,7 @@ fn export_layer_places_the_overridden_onset_on_every_hit_sample() {
         .unwrap()["layer"]["onset"]
         .as_u64()
         .unwrap() as usize;
-    let i0 = (0.25 * sr as f64).round() as usize; // the first hit, velocity 127: the level itself
+    let i0 = (0.25 * f64::from(sr)).round() as usize; // the first hit, velocity 127: the level itself
     let db = |v: i64| 10f64.powf(-24.0 * (1.0 - v as f64 / 127.0) / 20.0) as f32;
     let left = shot(sr, 480, 0.2, 1);
 
@@ -458,11 +458,11 @@ fn export_layer_places_the_overridden_onset_on_every_hit_sample() {
         ),
         (onset as u64, onset as u64 + 961)
     );
-    assert!((r["onset_ms"].as_f64().unwrap() - 1000.0 * (onset + 961) as f64 / sr as f64).abs() < 0.01);
+    assert!((r["onset_ms"].as_f64().unwrap() - 1000.0 * (onset + 961) as f64 / f64::from(sr)).abs() < 0.01);
     let d = 961usize;
     let out2 = render();
     for (t, v) in HITS {
-        let i = (t * sr as f64).round() as usize;
+        let i = (t * f64::from(sr)).round() as usize;
         // every hit's voice sits the difference later
         for k in [0usize, 1, 2, 100, 5_000] {
             assert_eq!(
@@ -486,7 +486,7 @@ fn export_layer_places_the_overridden_onset_on_every_hit_sample() {
     assert_eq!(r["layer"]["onset"].as_u64().unwrap(), onset as u64);
     let out3 = render();
     for (t, v) in HITS {
-        let i = (t * sr as f64).round() as usize;
+        let i = (t * f64::from(sr)).round() as usize;
         assert_eq!(
             out3[i - onset + 2],
             db(v) * left[2],
@@ -522,7 +522,7 @@ fn planted_mic(sr: u32, n: usize, x: &[f32], onset: usize, hits: &[(f64, f64)], 
     };
     let pos: Vec<(f64, f32)> = hits
         .iter()
-        .map(|(t, lag)| ((t * sr as f64).round() + lag, sign * 0.8))
+        .map(|(t, lag)| ((t * f64::from(sr)).round() + lag, sign * 0.8))
         .collect();
     let mut mic = render_layer(n, &s, onset as f64, &pos).remove(0);
     for (i, m) in mic.iter_mut().enumerate() {
@@ -533,12 +533,12 @@ fn planted_mic(sr: u32, n: usize, x: &[f32], onset: usize, hits: &[(f64, f64)], 
 
 /// An aperiodic one-shot: `pre` samples of silence, a 0.3 ms rise and a 2.5 ms exponential decay.
 fn pulse(sr: u32, pre: usize, secs: f64) -> Vec<f32> {
-    (0..(secs * sr as f64) as usize)
+    (0..(secs * f64::from(sr)) as usize)
         .map(|i| {
             if i < pre {
                 return 0.0;
             }
-            let t = (i - pre) as f64 / sr as f64;
+            let t = (i - pre) as f64 / f64::from(sr);
             ((t / 0.0003).min(1.0) * (-t / 0.0025).exp()) as f32
         })
         .collect()
@@ -636,11 +636,11 @@ fn track_layer_align_recovers_planted_lags_and_the_polarity() {
     assert_eq!((r["aligned"].clone(), r["sign"].clone()), (json!(true), json!(-1)));
     let (_, out, _) = read_back(Path::new(r["path"].as_str().unwrap()));
     for (t, _) in planted {
-        let i = (t * sr as f64).round() as usize;
+        let i = (t * f64::from(sr)).round() as usize;
         let (mut e, mut p) = (0.0f64, 0.0f64);
         for k in i - 100..i + 2_000 {
-            e += ((out[0][k] - mic[k]) as f64).powi(2);
-            p += (mic[k] as f64).powi(2);
+            e += f64::from(out[0][k] - mic[k]).powi(2);
+            p += f64::from(mic[k]).powi(2);
         }
         assert!(e / p < 1e-3, "hit {t}: residual {}", e / p);
     }
@@ -648,11 +648,11 @@ fn track_layer_align_recovers_planted_lags_and_the_polarity() {
     svc.track_layer_set(&sid, "k in", &json!({"align": false})).unwrap();
     let r = svc.export_layer(&sid, "k in").unwrap();
     let (_, out, _) = read_back(Path::new(r["path"].as_str().unwrap()));
-    let i = (1.25 * sr as f64).round() as usize;
+    let i = (1.25 * f64::from(sr)).round() as usize;
     let (mut e, mut p) = (0.0f64, 0.0f64);
     for k in i - 100..i + 2_000 {
-        e += ((out[0][k] - mic[k]) as f64).powi(2);
-        p += (mic[k] as f64).powi(2);
+        e += f64::from(out[0][k] - mic[k]).powi(2);
+        p += f64::from(mic[k]).powi(2);
     }
     assert!(e / p > 0.05, "the 12-sample lag is not corrected: {}", e / p);
 }
@@ -685,7 +685,10 @@ fn track_layer_set_gives_the_playing_transport_its_voices_at_both_speeds() {
     let st = svc.transport_status();
     assert_eq!(st["layer_voices"], 4);
     // the last voice: the one-shot's first sample at the hit's frame minus the onset
-    assert_eq!(st["layer_last_start"], json!((1.75 * sr as f64).round() as i64 - onset));
+    assert_eq!(
+        st["layer_last_start"],
+        json!((1.75 * f64::from(sr)).round() as i64 - onset)
+    );
     // off while open: the transport drops the voices at once
     svc.track_layer_set(&sid, "k in", &json!({"on": false})).unwrap();
     assert_eq!(svc.transport_status()["layers"], json!([]));
@@ -700,7 +703,7 @@ fn track_layer_set_gives_the_playing_transport_its_voices_at_both_speeds() {
     assert_eq!(st["layer_voices"], 5);
     assert_eq!(
         st["layer_last_start"],
-        json!(2 * ((1.75 * sr as f64).round() as i64 - onset))
+        json!(2 * ((1.75 * f64::from(sr)).round() as i64 - onset))
     );
     let _ = svc.transport_stop(true);
 }
