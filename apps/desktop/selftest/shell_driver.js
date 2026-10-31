@@ -788,6 +788,8 @@
       await flip("overview", () => S.overviewOn, "Show Overview");
       await flip("suspend_follow", () => !!SETTINGS().ui.suspendFollowOnEdit, "Suspend Follow when Editing");
       await flip("stop_return_mode", () => !!SETTINGS().ui.stopReturnToStart, "Stop Returns to Start");
+      // #240: Transport > Audition on Tab (the saved ui.auditionTab, the toolbar button and the menu check flip together)
+      await flip("audition_tab", () => !!SETTINGS().ui.auditionTab, "Audition on Tab");
       // Main Counter: Bars|Beats and Timecode (the radio items of #149), then the counter as it was
       const counterWas = SETTINGS().ui.counter;
       await click("counter_barsbeats");
