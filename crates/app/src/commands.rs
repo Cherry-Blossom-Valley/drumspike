@@ -431,9 +431,12 @@ impl Service {
             .ok_or_else(|| AppError::conflict("a re-pick is being stored: try again"))?;
         let targets = {
             let mut g = lock(&op);
+            let all: Vec<String> = g.project.doc.tracks().map(|(n, _)| n.clone()).collect();
             let targets: Vec<String> = match tracks {
-                Some(t) if !t.is_empty() => t,
-                _ => g.project.doc.tracks().map(|(n, _)| n.clone()).collect(),
+                // #120: the names accept the patterns (exact, glob, `t1-t4`); a pattern that
+                // matches nothing is a 400 that names it
+                Some(t) if !t.is_empty() => crate::patterns::expand(&all, &t)?,
+                _ => all,
             };
             for t in &targets {
                 if g.project.doc.track(t).is_none() {

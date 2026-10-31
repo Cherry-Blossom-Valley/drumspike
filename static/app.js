@@ -340,7 +340,7 @@ function buildTrackDOM() {
         <div class="tlanes">
           <canvas class="lane spike" height="34"></canvas>
           <canvas class="lane wave"  height="120"></canvas>
-          ${VL.on ? `<canvas class="lane vel"   height="${VL.h}"></canvas>` : ""}
+          ${VL.on ? velWrapHtml() : ""}
           <div class="rowResize" title="Drag: the height of this track's wave lane. Double-click: back to the Track Height"></div>
         </div>
       </div>`;
@@ -1583,23 +1583,7 @@ function tmEditEnd(commit) {
     const b = Number(v);
     if (!v || !Number.isFinite(b) || b <= 0) { setMsg("tempo: type a number of BPM, for example 95"); return; }
     if (it.add && tmBpmText(b) === it.text) { setMsg("tempo: the same as the tempo there, no step added"); return; }   // a step equal to the value in force changes nothing
-    if (it.id === "start") {
-      next.bpm = b;
-      if (next.steps.length) return void tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays: the map has steps`);
-      // #468: a typed start tempo on a map without steps re-fits bar 1 to the hits (the phase of
-      // the kick and snare hits at the new tempo, tempo_map_refit_bar1): the grid sits on them
-      // again. The commit is one step, so one undo restores the tempo and bar 1 together.
-      const sid0 = S.sid, was = TM.map.bar1_s;
-      return void (async () => {
-        try {
-          const r = await B.tempoMapRefitBar1(sid0, b);
-          if (sid0 !== S.sid) return;
-          if (Math.abs(r.bar1_s - was) < 1e-9) return void tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays at ${fmt(was, 3)} s`);
-          next.bar1_s = r.bar1_s;
-          return void tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 moved from ${fmt(was, 3)} s to ${fmt(r.bar1_s, 3)} s`);
-        } catch (e) { return void tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays: ${errText(e)}`); }
-      })();
-    }
+    if (it.id === "start") { next.bpm = b; return void tmCommitStartTempo(next); }
     if (it.add) { next.steps.push({ t: it.t, bpm: b }); next.steps.sort((p, q) => p.t - q.t); }
     else next.steps[it.i].bpm = b;
     return void tmCommit(next, it.add ? `tempo step ${tmBpmText(b)} BPM at ${fmt(it.t, 2)} s` : `tempo ${tmBpmText(b)} BPM`);
@@ -1755,6 +1739,23 @@ function tmUndoWaits() {   // like hgUndoWaits: an undo while a change is stored
   setMsg("a tempo map change is being stored: undo and redo wait for it");
   return true;
 }
+/* A new start tempo (next.bpm), from the Tempo ruler or the Detect Tempo dialog; answers the commit's promise.
+   #468: on a map without steps bar 1 is re-fitted to the hits (the phase of the kick and snare hits at
+   the new tempo, tempo_map_refit_bar1), so the grid sits on them again; a map with steps keeps bar 1.
+   The commit is one step, so one undo restores the tempo and bar 1 together. Hotfix 0.9.10: bar 1 is
+   never before 0 s (a map with a negative bar 1 is refused, and the old tempo stayed). */
+async function tmCommitStartTempo(next) {
+  const b = next.bpm, was = next.bar1_s, sid0 = S.sid;
+  if (next.steps.length) return tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays: the map has steps`);
+  try {
+    const r = await B.tempoMapRefitBar1(sid0, b);
+    if (sid0 !== S.sid) return false;
+    const at = Math.max(0, r.bar1_s);
+    if (Math.abs(at - was) < 1e-9) return tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays at ${fmt(was, 3)} s`);
+    next.bar1_s = at;
+    return tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 moved from ${fmt(was, 3)} s to ${fmt(at, 3)} s`);
+  } catch (e) { return tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays: ${errText(e)}`); }
+}
 function tmCommit(next, what) {
   const sid = S.sid;
   return tmQueue(async () => {
@@ -1851,12 +1852,35 @@ function tmDetectDialog(d) {
     b1.textContent = b1Text();
     b1.onclick = () => { later = !later; b1.textContent = b1Text(); render(); };
     $("#tempoCancel").onclick = () => { setMsg("detect tempo cancelled"); close(false); };
-    $("#tempoAccept").onclick = async () => {
+    const chosen = () => {   // the suggestion with the chosen bar 1
       const map = JSON.parse(JSON.stringify(d.suggestion));
       if (later) map.bar1_s = d.bar1.alternative;
-      m.classList.add("hidden"); document.removeEventListener("keydown", esc, true);
-      resolve(await tmCommit(map, "tempo map detected"));
+      return map;
     };
+    const done = async commit => { m.classList.add("hidden"); document.removeEventListener("keydown", esc, true); resolve(await commit); };
+    // Hotfix 0.9.10 (owner): three answers. The detected tempo as suggested; half of it (the detector
+    // can lock on double time) when that is above 40 BPM; or a typed tempo. The last two commit like a
+    // start tempo typed in the Tempo ruler (tmCommitStartTempo); the tempo steps scale with the start.
+    const atTempo = b => {
+      const map = chosen(), k = b / map.bpm;
+      map.bpm = b;
+      for (const st of map.steps) st.bpm *= k;
+      return tmCommitStartTempo(map);
+    };
+    const half = d.suggestion.bpm / 2, hb = $("#tempoHalf"), own = $("#tempoOwn");
+    $("#tempoAccept").textContent = `Use ${whole(d.suggestion.bpm)} BPM`;
+    $("#tempoAccept").onclick = () => done(tmCommit(chosen(), "tempo map detected"));
+    hb.classList.toggle("hidden", !(half > 40));
+    hb.textContent = `Half time: ${whole(half)} BPM`;
+    hb.onclick = () => done(atTempo(half));
+    own.value = "";
+    const ownUse = () => {
+      const b = Number(own.value.trim());
+      if (!own.value.trim() || !Number.isFinite(b) || b <= 0 || b > 1000) { setMsg("tempo: type a number of BPM, for example 92"); own.focus(); return; }
+      done(atTempo(b));
+    };
+    $("#tempoOwnUse").onclick = ownUse;
+    own.onkeydown = ev => { if (ev.key === "Enter") { ev.preventDefault(); ownUse(); } };
     render();
     m.classList.remove("hidden");
   });
@@ -2605,6 +2629,10 @@ function staleSetup() {
     if (!p || p.sid !== S.sid) return;
     staleSet(p.sid); setMsgBg(p.message, "error");
   }).catch(() => {});
+  if (B.listen) B.listen("autosave-failed", p => {   // #228: the autosave could not write Backups/; once per failure streak
+    if (!p || p.sid !== S.sid) return;
+    setMsgBg(`Autosave failed: ${p.message}. Your edits are not backed up; save the project.`, "error");
+  }).catch(() => {});
 }
 
 /* ---------------- playback: the native transport (P3-5b) ---------------- */
@@ -2964,13 +2992,16 @@ const ovXOf = ev => ev.clientX - GEO.ovX;
    velocity_lane, default off); it draws with the hits of its row (drawHits), so the edits show live.
    #208: the lane is 80 px by default and its height is the app setting velocity_lane_height (drag its bottom border,
    24 to 400 px). A header "Velocity" with a 127 / 64 / 0 scale, a dot on each stalk top, the selected stalk and the
-   hits of a selected range in yellow, a hover label (velocity, time, why a stalk is grey), and a one-line hint
-   until the first gesture. A drag of a selected stalk scales all selected hits by the same ratio. */
+   hits of a selected range in yellow, a hover label (velocity, time, why a stalk is grey); the
+   gesture hint is the Velocity label's tooltip (#245). A drag of a selected stalk scales all
+   selected hits by the same ratio. */
 const VL_H_DEF = 80, VL_H_MIN = 24, VL_H_MAX = 400;
-const VL = { on: false, drag: null, h: VL_H_DEF, hover: null, hint: false };   // drag: {track, mode, gen, x0, y0, set: Map(id -> [from, to]), anchor, v0, base}; hover: {track, id}; hint: the one-line hint shows
+const VL = { on: false, drag: null, h: VL_H_DEF, hover: null };   // drag: {track, mode, gen, x0, y0, set: Map(id -> [from, to]), anchor, v0, base}; hover: {track, id}
+/* #245: the gesture hint lives on the Velocity label as a tooltip (a title on .velLabel), not
+   drawn into the lane canvas: text over the stalks read like data. */
+const VL_HINT = "Drag a stalk to set velocity. Option-drag: draw a line. Cmd-drag: draw freehand.";
 function vlToggle() {
   VL.on = !VL.on;
-  VL.hint = VL.on;
   if (B.appSettingsSet) B.appSettingsSet("velocity_lane", VL.on).catch(e => setMsg(`settings: ${errText(e)}`));
   vlApply();
   setMsg(`Velocity lane ${VL.on ? "shown" : "hidden"}`);
@@ -2982,16 +3013,34 @@ function vlApply() {   // after a toggle: the rows grow or shrink, the canvases 
   invalidate(F.SIZE | F.VIEW | F.GL);
   if (window.DSShell && DSShell.sync) DSShell.sync();
 }
+/* #245: the velocity lane's canvas lives in a .velWrap with the Velocity label span (the gesture
+   hint is the label's tooltip): both the row template and vlSyncRow build the same pair. */
+function velWrapHtml() {
+  return `<div class="velWrap"><canvas class="lane vel" height="${VL.h}"></canvas>` +
+         `<span class="velLabel" title="${VL_HINT}">Velocity</span></div>`;
+}
+function velLabelNode() {
+  const label = document.createElement("span");   // the tooltip of the Velocity label: the gesture hint (#245)
+  label.className = "velLabel";
+  label.title = VL_HINT;
+  label.textContent = "Velocity";
+  return label;
+}
 function vlSyncRow(row) {   // the row gets or loses its vel canvas (releaseCanvases gives the store back at once)
   let c = row.querySelector(".vel");
   if (VL.on && !c) {
     c = document.createElement("canvas");
     c.className = "lane vel"; c.height = VL.h;
-    row.querySelector(".wave").after(c);
+    const wrap = document.createElement("div");   // #245: wraps the canvas so the label sits on it, not in it
+    wrap.className = "velWrap";
+    wrap.appendChild(c);
+    wrap.appendChild(velLabelNode());
+    row.querySelector(".wave").after(wrap);
     vlBind(row, row.dataset.name);
   } else if (!VL.on && c) {
     if (c.width) { c.width = 0; c.height = 0; }
-    c.remove();
+    const wrap = c.closest(".velWrap");
+    if (wrap) wrap.remove(); else c.remove();
   }
   for (const hd of row.querySelectorAll(".rowResize")) {   // #437: the handles' text follows the lane it drags (the row's border and the header's edge, #439)
     hd.title = VL.on ? "Drag: the height of the velocity lane (the handle is at its bottom edge). Double-click: the wave lane back to the Track Height"
@@ -3011,11 +3060,9 @@ function drawVelLane(canvas, name) {
   ctx.setLineDash([]);
   // #208: the scale at the right edge (127 top, 64 middle, 0 bottom) and the name at the left
   ctx.fillStyle = "rgba(138,147,163,0.9)"; ctx.font = "10px sans-serif"; ctx.textBaseline = "middle";
-  // the header (127, Velocity, the hint) hangs below the 127 line, so its full glyph height is inside the lane (#208)
+  // the header (127, Velocity) hangs below the 127 line, so its full glyph height is inside the lane (#208)
   const headY = vlYOf(127, H) + 4;
-  ctx.textBaseline = "top";
   ctx.textAlign = "right"; ctx.fillText("127", W - 3, headY);
-  ctx.textAlign = "left"; ctx.fillText("Velocity", 4, headY);
   ctx.textBaseline = "middle";
   ctx.textAlign = "right"; ctx.fillText("64", W - 3, vlYOf(64, H)); ctx.fillText("0", W - 3, H - 6);
   const evs = S.events[name] || [];
@@ -3044,12 +3091,6 @@ function drawVelLane(canvas, name) {
     ctx.fillStyle = "rgba(16,20,28,0.92)"; ctx.fillRect(bx, H - 15, tw, 13);
     ctx.fillStyle = "#e6e9ef"; ctx.textAlign = "left"; ctx.fillText(txt, bx + 4, H - 8);
   }
-  if (VL.hint && W > 420) {   // the one-line hint until the first gesture
-    ctx.fillStyle = "rgba(230,233,239,0.75)"; ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    ctx.fillText("Drag a stalk to set velocity. Option-drag: draw a line. Cmd-drag: draw freehand.", 64, headY);
-    ctx.textBaseline = "middle";
-  }
   ctx.textAlign = "left";
 }
 /* The gestures of one row's velocity lane. A gesture previews on the page's copy and commits once: one events_edit call,
@@ -3067,7 +3108,6 @@ function vlBind(row, name) {
   const commit = () => {
     const d = VL.drag; VL.drag = null;
     if (!d) return;
-    VL.hint = false;
     const list = [...d.set.entries()].map(([id, [from, to, was]]) => ({ id, from, to, ...(was ? { was } : {}) })).filter(s => s.to !== s.from);
     if (!list.length || d.gen !== (EDGEN[name] || 0)) { invalidateHits(name); if (list.length) setMsg("the hits changed during the drag: the velocities were dropped"); return; }
     const step = list.length === 1
@@ -6709,18 +6749,20 @@ function setRowHeights(map) {   // map: track name -> factor of the global wave 
 }
 /* #172: the role drawing (.tart) sits bottom-right in the header (bottom: 8px); when the row is
    dragged short it would overlap the .tctl controls (the M/S buttons and the pan slider). The
-   drawing shows only while the header is tall enough for the drawing and its 8 px margin above
-   the top of the controls. The size is the authored --tart-size, not the live box: a hidden
-   drawing measures 0 px and would unhide itself (an oscillation). Measured here (outside the
-   frame loop), not per frame. */
+   drawing shows only while the header is tall enough for the drawing plus its 8 px margin above
+   the BOTTOM of the controls (#241: the readouts under the M/S buttons are part of .tctl, so
+   the rule measures tctl.offsetHeight too — the old tctl.offsetTop + 8 + size hid the drawing
+   ~2 rows of heights too late and let it clip the readouts). The size is the authored
+   --tart-size, not the live box: a hidden drawing measures 0 px and would unhide itself (an
+   oscillation). Measured here (outside the frame loop), not per frame. */
 function setHeadTartFit(row) {
   const th = row.querySelector(".thead");
   const tctl = th && th.querySelector(".tctl");
   const tart = th && th.querySelector(".tart");
   if (!th || !tctl || !tart) return;
   const size = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--tart-size")) || 54;
-  const needed = tctl.offsetTop + 8 + size;
-  th.classList.toggle("tart-hidden", row.offsetHeight < needed);
+  const needed = tctl.offsetTop + tctl.offsetHeight + 8 + size;
+  th.classList.toggle("tart-hidden", th.offsetHeight < needed);
 }
 function rowHeightsSave() {   // #167: the factor map into the project document (the drag and the double-click land here)
   if (!S.sid || !B.rowHeightsSet) return;
@@ -6860,6 +6902,21 @@ function toggleStopReturnMode() {
   st.ui.stopReturnToStart = !st.ui.stopReturnToStart; saveSettings();
   setMsg(`stop returns to start: ${st.ui.stopReturnToStart ? "on" : "off"}`);
   DSShell.sync();
+}
+/* #240: Audition on Tab as a toolbar button and a shortcut: a step to a hit (Tab) plays it, unless
+   the page plays. One flip sets the button state, the Settings checkbox, the menu check and the
+   saved app settings together (like setClick). */
+function setAuditionTab(on) {
+  const st = SETTINGS();
+  st.ui.auditionTab = !!on; saveSettings();
+  $("#setAuditionTab").checked = st.ui.auditionTab;
+  $("#auditionTabBtn").classList.toggle("on", st.ui.auditionTab);
+  $("#auditionTabBtn").setAttribute("aria-pressed", st.ui.auditionTab ? "true" : "false");
+  DSShell.sync();
+}
+function toggleAuditionTab() {
+  setAuditionTab(!SETTINGS().ui.auditionTab);
+  setMsg(`audition on tab: ${SETTINGS().ui.auditionTab ? "on" : "off"}`);
 }
 function suspendFollowForEdit() {   // an edit during playback: hold the view, resume 2 s of playback later
   if (!SETTINGS().ui.suspendFollowOnEdit || !S.playing || S.followMode === "off") return;
@@ -7094,7 +7151,7 @@ function setupGlobal() {
   $("#setTabMode").value = SETTINGS().ui.tabMode === "all" ? "all" : "active";   // #175
   $("#setTabMode").onchange = ev => setTabMode(ev.target.value);
   $("#setAuditionTab").checked = !!SETTINGS().ui.auditionTab;   // P4-40d
-  $("#setAuditionTab").onchange = ev => { SETTINGS().ui.auditionTab = ev.target.checked; saveSettings(); };
+  $("#setAuditionTab").onchange = ev => setAuditionTab(ev.target.checked);   // #240: one flip for button, checkbox, menu and settings
   setupMaster();   // P3-16
   $("#tempoDetectBtn").onclick = () => DSShell.menu({id: "detect_tempo"});   // owner 2026-10-14: the same as Track > Detect Tempo
   setupInspector();   // P3-14a
@@ -7119,6 +7176,9 @@ function setupGlobal() {
   }
   $("#clickBtn").classList.toggle("on", !!st.click.enabled);
   $("#clickBtn").onclick = () => toggleClick();
+  $("#auditionTabBtn").classList.toggle("on", !!st.ui.auditionTab);   // #240
+  $("#auditionTabBtn").setAttribute("aria-pressed", st.ui.auditionTab ? "true" : "false");
+  $("#auditionTabBtn").onclick = () => toggleAuditionTab();
   $("#followBtn").onclick = () => { const m = ["smooth", "page", "off"]; setFollow(m[(m.indexOf(S.followMode) + 1) % 3]); setMsg(`follow playhead: ${S.followMode}`); };
   $("#snapChk").onchange = ev => setSnap(ev.target.checked);
   $("#raKeep").onclick = () => { if (pendingRA) { const l = pendingRA; pendingRA = null; runAnalysis(l, true); } };

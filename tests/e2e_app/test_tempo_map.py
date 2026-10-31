@@ -437,6 +437,57 @@ def test_the_dialog_shows_whole_number_tempos_only_even_when_the_fit_is_fraction
     wait_until(lambda: abs(stored(app, song)["bpm"] - 91.9999) < 1e-9, msg="the map keeps the exact value")
 
 
+DOUBLE_TIME = """(bpm) => {
+    B.tempoMapDetect = async () => ({
+      suggestion: {bpm, steps: [], meter: [4, 4], changes: [], bar1_s: 0},
+      start: {bpm, error_bar: 0.05, confidence: 0.22, range_edge: false, alternatives: [{bpm: bpm / 2, score: 0.7, comb: 0.9, gated: false}]},
+      bar1: {t: 0, confidence: 1, backbeat: 0.5, downbeat: 0.4, alternative: 1.3},
+      meter: {value: [4, 4], confidence: 0.35, feel: null},
+      steps: [], excursions: [],
+      fit: {on_beat: 0.72, jitter_ms: 3.7, hits: 736, beats: 874, late: 0, isolated: 0}, tracks: [], params: {}, warnings: [], changed: false });
+  }"""
+
+
+def test_the_dialog_offers_the_detected_tempo_half_time_and_an_own_tempo(app, song):
+    # Hotfix 0.9.10 (owner): a song at 92 BPM detected as 184 (double time). Half time and a typed
+    # tempo commit like a start tempo typed in the Tempo ruler; half time only above 40 BPM.
+    app.evaluate(DOUBLE_TIME, 184)
+    menu(app, "detect_tempo", wait=False)
+    app.wait_for_function("() => !$('#tempoModal').classList.contains('hidden')")
+    assert app.inner_text("#tempoAccept") == "Use 184 BPM"
+    assert app.is_visible("#tempoHalf") and app.inner_text("#tempoHalf") == "Half time: 92 BPM"
+    app.click("#tempoHalf")
+    wait_until(lambda: stored(app, song)["bpm"] == 92, msg="half time is stored")
+    settle(app)
+    assert stored(app, song)["bar1_s"] >= 0
+    menu(app, "detect_tempo", wait=False)
+    app.wait_for_function("() => !$('#tempoModal').classList.contains('hidden')")
+    app.fill("#tempoOwn", "fast")
+    app.click("#tempoOwnUse")
+    assert "type a number of BPM" in msg(app) and app.is_visible("#tempoModal"), msg(app)
+    app.fill("#tempoOwn", "95")
+    app.press("#tempoOwn", "Enter")
+    wait_until(lambda: stored(app, song)["bpm"] == 95, msg="the own tempo is stored")
+    settle(app)
+    app.evaluate(DOUBLE_TIME, 70)
+    menu(app, "detect_tempo", wait=False)
+    app.wait_for_function("() => !$('#tempoModal').classList.contains('hidden')")
+    assert not app.is_visible("#tempoHalf"), "35 BPM is not offered as half time"
+    app.click("#tempoCancel")
+    assert stored(app, song)["bpm"] == 95
+
+
+def test_a_typed_start_tempo_commits_when_the_refit_puts_bar_1_before_0_s(app, song):
+    # Hotfix 0.9.10: on a real session the refit answered bar 1 at -0.0008 s, the service refused
+    # the map and the detected 184 BPM stayed. The page keeps bar 1 at 0 s.
+    set_map(app, song, {"bpm": 184, "bar1_s": 0})
+    app.evaluate("() => { B.tempoMapRefitBar1 = async (sid, bpm) => ({bar1_s: -0.0008, support: 1, hits: 700, previous_bar1_s: 0, bpm, changed: false}); }")
+    app.evaluate("() => { TM.ui.tempo = true; tmApplyUi(true); tmEditStart('tempo', tmMarkers('tempo').find(x => x.id === 'start')); }")
+    type_in_field(app, "92")
+    m = stored(app, song)
+    assert m["bpm"] == 92 and m["bar1_s"] == 0, (m, msg(app))
+
+
 def test_detect_tempo_without_hits_says_why(app, song):
     for name in ("Kick In", "Snare Top"):
         set_hits(app, song, name, [])

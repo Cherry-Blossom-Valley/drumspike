@@ -83,12 +83,29 @@ def check_text_file(path):
     return check_lines(Path(path).read_text(encoding="utf-8").splitlines(), str(path))
 
 
+# #164 decision (narrow): an ADDED line of a diff may quote the shared base list, so the
+# app guard can restate tools/media/check_paths.py BANNED_BASE without failing its own
+# gate. The line passes only when (i) it carries the marker comment and (ii) ALL its hits
+# are BANNED_BASE tokens: a hit from DRUMSPIKE_PRIVATE_WORDS or DRUMSPIKE_PRIVATE_PATTERNS
+# on a marked line still fails. Only the definition lines take the marker (PRIVATE_WORDS in
+# crates/app/src/feedback.rs, FB_PRIVATE in static/shell.js).
+LIST_MARKER = "private-list-definition"
+
+
+def added_line_allowed(line, line_hits):
+    """True when an added diff line only restates the shared base list."""
+    return LIST_MARKER in line and all(term in BANNED_BASE for term, _ in line_hits)
+
+
 def check_diff(base):
     """The added lines of `git diff <base>...HEAD` scanned as pseudo-file '+<base>...HEAD'."""
     diff = subprocess.run(["git", "diff", f"{base}...HEAD"], capture_output=True,
                           text=True, check=True).stdout
     lines = [l[1:] for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++")]
-    return check_lines(lines, f"git diff {base}...HEAD (added lines)")
+    return [(f"git diff {base}...HEAD (added lines)", i, term, match)
+            for i, line in enumerate(lines, start=1)
+            for term, match in hits_in_line(line)
+            if not added_line_allowed(line, hits_in_line(line))]
 
 
 def main(argv=None):

@@ -410,9 +410,12 @@ impl Service {
             .map(drumspike_core::role::Role::as_str))
     }
 
-    /// `tracks_add {sid, paths, roles, notes, copy, progress}` (route 23): add one track per
-    /// readable file. `roles` and `notes` are lists in the order of the files `paths` stand for
-    /// (see [`expand`]); an entry that is missing, `null` or wrong gets the guess from the name
+    #[allow(clippy::too_many_arguments)]
+    /// `tracks_add {sid, paths, tracks?, roles, notes, copy, progress}` (route 23): add one track per
+    /// readable file. With `tracks` (name patterns on the file stems, see [`crate::patterns`]) only
+    /// the files that a pattern stands for are added; a pattern that matches no scanned file is a
+    /// 400 that names it. `roles` and `notes` are lists in the order of the filtered files; an
+    /// entry that is missing, `null` or wrong gets the guess from the name
     /// (the note: the default note of the role). The source record is `referenced`; with
     /// `copy` the file is copied into `Audio Files/` and the record is `copied`. `progress`
     /// gets `{sid, add: {state, done, total, file}}` before and after each file (`state` is
@@ -430,6 +433,7 @@ impl Service {
         &self,
         sid: &str,
         paths: &[String],
+        tracks: Option<&[String]>,
         roles: &[Value],
         notes: &[Value],
         copy: bool,
@@ -439,6 +443,32 @@ impl Service {
         let op = self.inner.registry.get_writable(sid)?;
         let dir = lock(&op).project.dir.clone();
         let list = expand(paths);
+        // #120: `tracks` filters the scanned files by name pattern (exact, glob, `t1-t4`) on the
+        // file stem; a pattern that matches no scanned file is a 400 that names it. `roles` and
+        // `notes` then align with the filtered files.
+        let list = match tracks {
+            Some(pats) if !pats.is_empty() => {
+                let stems: Vec<String> = list
+                    .iter()
+                    .map(|p| {
+                        p.file_stem()
+                            .map_or_else(String::new, |s| s.to_string_lossy().into_owned())
+                    })
+                    .collect();
+                let keep = crate::patterns::expand(&stems, pats)?;
+                let keep: Vec<String> = keep.iter().map(|s| s.to_lowercase()).collect();
+                list.into_iter()
+                    .filter(|p| {
+                        let s = p
+                            .file_stem()
+                            .map_or_else(String::new, |s| s.to_string_lossy().into_owned())
+                            .to_lowercase();
+                        keep.contains(&s)
+                    })
+                    .collect()
+            }
+            _ => list,
+        };
         let total = list.len();
         let emit = |state: &str, done: usize, file: &str, result: Option<&Value>| {
             if let Some(p) = progress.as_ref() {
@@ -968,6 +998,19 @@ pub fn dispatch(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value
                 svc.tracks_add(
                     arg_str(args, "sid")?,
                     &string_list(args, "paths")?,
+                    args.get("tracks")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .map(|v| {
+                                    v.as_str()
+                                        .map(str::to_string)
+                                        .ok_or_else(|| AppError::bad("`tracks` must hold strings"))
+                                })
+                                .collect::<Result<Vec<_>, _>>()
+                        })
+                        .transpose()?
+                        .as_deref(),
                     &str_list(args.get("roles")),
                     &str_list(args.get("notes")),
                     args.get("copy").and_then(Value::as_bool).unwrap_or(false),
