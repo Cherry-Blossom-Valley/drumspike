@@ -1048,22 +1048,52 @@ fn refined_sample(x: &[f32], on: usize) -> i64 {
 
 #[test]
 fn a_small_first_bump_before_the_main_swing_is_the_hits_start() {
-    // a bump at 6 times the floor, then the main swing 3 ms later: the hit starts at the bump
+    // a bump at 6 times the floor, then the main swing 1 ms later: the hit starts at the bump
     const A: f64 = 0.0017;
     let on = 24_000;
     let mut x = floor_of(48_000, A);
     swing(&mut x, on, 24, 0.01, 1000.0);
-    swing(&mut x, on + 144, 0, 0.8, 180.0);
+    swing(&mut x, on + 48, 0, 0.8, 180.0);
     let dep = x
         .iter()
         .position(|v| f64::from(v.abs()) > 2.0 * A)
         .expect("the hit leaves the floor") as i64;
     let off = refined_sample(&x, on) - dep;
-    // the walk reads the two-tap level, which lags a raised-cosine start by a few samples; before the lead-in it was 135
+    // the walk reads the two-tap level, which lags a raised-cosine start by a few samples; before the lead-in it was 45
     assert!(
         (-1..=3).contains(&off),
         "{off} samples from the first sample over twice the floor"
     );
+}
+
+#[test]
+fn a_rise_longer_than_the_lead_in_bound_is_not_joined() {
+    // the same bump 3 ms before the swing (twice the 1.5 ms bound): a separate earlier event, the hit stays at the swing
+    const A: f64 = 0.0017;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    swing(&mut x, on, 24, 0.01, 1000.0);
+    swing(&mut x, on + 144, 0, 0.8, 180.0);
+    let off = refined_sample(&x, on) - on as i64;
+    assert!(off > 100, "{off} samples after the bump");
+}
+
+#[test]
+fn the_trace_shows_the_walk_and_its_lead_in() {
+    const A: f64 = 0.0017;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    swing(&mut x, on, 24, 0.01, 1000.0);
+    swing(&mut x, on + 48, 0, 0.8, 180.0);
+    let tr = first_motion_trace(&x, on as i64 + 60, SR, None, None).expect("a walk");
+    assert!(tr.lead < tr.foot && tr.foot - tr.lead <= 72, "{tr:?}");
+    assert!(tr.floor > 0.0 && tr.thr > tr.floor * 2.0, "{tr:?}");
+    assert_eq!(
+        first_motion_mid(&x, on as i64 + 60, SR, None, None).0,
+        tr.lead,
+        "the trace is the walk"
+    );
+    assert_eq!(first_motion_trace(&vec![0.0; 100], 50, SR, None, None), None);
 }
 
 #[test]

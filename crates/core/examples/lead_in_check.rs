@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track};
-use drumspike_core::refine::{RefineRule, set_lead_in};
+use drumspike_core::refine::{RefineRule, first_motion_trace, set_lead_in};
 use drumspike_core::{MixMode, read_wav_mono};
 
 /// The noise floor before a hit: the median of the 1 ms block maxima of `|x|` in the 60 ms to 12 ms before it.
@@ -64,6 +64,8 @@ struct Tally {
     late: usize,
     moved: usize,
     largest_ms: f64,
+    /// Moves under 0.25 ms, 0.25 to 1 ms, 1 to 3 ms, over 3 ms.
+    dist: [usize; 4],
 }
 
 fn tally(x: &[f32], sr: u32, role: &str, t: &mut Tally) {
@@ -83,7 +85,14 @@ fn tally(x: &[f32], sr: u32, role: &str, t: &mut Tally) {
         t.hits += 1;
         if (a - b).abs() > 0.5 / srf {
             t.moved += 1;
-            t.largest_ms = t.largest_ms.max((a - b).abs() * 1000.0);
+            let ms = (a - b).abs() * 1000.0;
+            t.largest_ms = t.largest_ms.max(ms);
+            t.dist[match ms {
+                m if m < 0.25 => 0,
+                m if m < 1.0 => 1,
+                m if m < 3.0 => 2,
+                _ => 3,
+            }] += 1;
         }
         if let Some(d) = departure(x, *a, srf) {
             let off = *a * srf - d as f64;
@@ -109,10 +118,62 @@ fn files(audio: &Path, prefix: &str) -> Vec<PathBuf> {
     v
 }
 
+/// Per-hit dump: for each time in `times_s` (seconds, as shown in the editor), the nearest hit of `x` without and with
+/// the lead-in, its distance to the first sample over 2x floor, and the walk's floor, threshold, foot and lead-in
+/// (samples before the hit's own refined sample). The walk is traced from the refined sample without the lead-in plus
+/// one, so threshold and floor can differ by a sample's worth from the analysis.
+fn dump(x: &[f32], sr: u32, role: &str, times_s: &[f64]) {
+    let srf = f64::from(sr);
+    set_lead_in(false);
+    let before = times(x, sr, role);
+    set_lead_in(true);
+    let after = times(x, sr, role);
+    println!(
+        "| asked s | hit before s | hit after s | move ms | off 2x floor before/after smp | floor | thr | foot | lead-in |"
+    );
+    println!("|---|---|---|---|---|---|---|---|---|");
+    for &q in times_s {
+        let Some(k) = (0..after.len()).min_by(|&i, &j| (after[i] - q).abs().total_cmp(&(after[j] - q).abs())) else {
+            println!("| {q:.4} | no hit |");
+            continue;
+        };
+        let (b, a) = (before[k.min(before.len() - 1)], after[k]);
+        let dep = departure(x, a, srf);
+        let off = |t: f64| dep.map_or("-".to_string(), |d| format!("{:.1}", t * srf - d as f64));
+        let s = (b * srf).round() as i64 + 1;
+        let tr = first_motion_trace(x, s, sr, None, None);
+        let tr_txt = tr.map_or("| - | - | - | - |".to_string(), |t| {
+            format!("| {:.5} | {:.5} | {} | {} |", t.floor, t.thr, t.foot - s, t.lead - s)
+        });
+        println!(
+            "| {q:.4} | {b:.5} | {a:.5} | {:.3} | {}/{} {tr_txt}",
+            (a - b) * 1000.0,
+            off(b),
+            off(a)
+        );
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.len() >= 5 && args[0] == "--dump" {
+        // --dump <sessions dir> <label> <kick|snare> <t,t,...>
+        let (role, prefix) = if args[3] == "kick" {
+            ("kick", "k in")
+        } else {
+            ("snare", "s top")
+        };
+        let ts: Vec<f64> = args[4].split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        for p in files(&PathBuf::from(&args[1]).join(&args[2]).join("Audio Files"), prefix) {
+            if let Ok((x, info)) = read_wav_mono(&p, MixMode::Average) {
+                dump(&x, info.sample_rate, role, &ts);
+            }
+        }
+        return;
+    }
     if args.len() < 2 {
         eprintln!("usage: lead_in_check <sessions dir> <label>[=<kick file>,<snare file>] ...");
+        eprintln!("       lead_in_check --dump <sessions dir> <label> <kick|snare> <t,t,...>");
         std::process::exit(64);
     }
     let dir = PathBuf::from(&args[0]);
@@ -120,9 +181,9 @@ fn main() {
         "hits: early = more than 0.25 ms before the first sample over 2x floor, late = 2 or more samples after it"
     );
     println!(
-        "| session | role | hits | early before | early after | late before | late after | moved | largest move ms |"
+        "| session | role | hits | early before | early after | late before | late after | moved | largest move ms | moves <0.25/0.25-1/1-3/>3 ms |"
     );
-    println!("|---|---|---|---|---|---|---|---|---|");
+    println!("|---|---|---|---|---|---|---|---|---|---|");
     for spec in &args[1..] {
         let (label, named) = match spec.split_once('=') {
             Some((l, f)) => (l, f.split_once(',')),
@@ -157,8 +218,18 @@ fn main() {
                 set_lead_in(true);
             }
             println!(
-                "| {label} | {role} | {} | {} | {} | {} | {} | {} | {:.3} |",
-                moved.hits, off.early, moved.early, off.late, moved.late, moved.moved, moved.largest_ms
+                "| {label} | {role} | {} | {} | {} | {} | {} | {} | {:.3} | {}/{}/{}/{} |",
+                moved.hits,
+                off.early,
+                moved.early,
+                off.late,
+                moved.late,
+                moved.moved,
+                moved.largest_ms,
+                moved.dist[0],
+                moved.dist[1],
+                moved.dist[2],
+                moved.dist[3]
             );
         }
     }
