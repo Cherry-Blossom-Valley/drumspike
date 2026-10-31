@@ -112,6 +112,9 @@ def test_pause_holds_the_position_and_stop_returns_to_the_start(app, make_projec
     app.evaluate("() => { S.playhead = 0.4; }")
     app.click("#playBtn")
     wait_playing(app)
+    # #220 sweep: on the loaded x86 gate the start latency alone put the playhead at 2.66 s when
+    # the pause landed (the window assumed 0.4 + 0.7 s): anchor on the position now, not on 0.4
+    p0 = app.evaluate("() => S.playhead")
     app.wait_for_timeout(700)
     app.click("#playBtn")
     app.wait_for_function("() => S.playing === false")
@@ -119,7 +122,8 @@ def test_pause_holds_the_position_and_stop_returns_to_the_start(app, make_projec
     p = app.evaluate("() => S.playhead")
     st = status(app)
     assert st["playing"] is False and st["requested"] is False
-    assert 0.9 < p < 1.8, p
+    # #220 sweep: the 0.7 s dwell plus the delivery of the pause click; a busy runner schedules it late
+    assert p0 + 0.3 < p < p0 + 3.0, (p, p0)
     assert abs(st["pos"] - p) < 0.03, (st["pos"], p)
     app.wait_for_timeout(300)
     assert app.evaluate("() => S.playhead") == p
@@ -127,7 +131,8 @@ def test_pause_holds_the_position_and_stop_returns_to_the_start(app, make_projec
     # play again continues from the playhead
     app.click("#playBtn")
     wait_playing(app)
-    assert 0.9 < app.evaluate("() => S.playhead") < 2.4
+    # #220 sweep: the replay click lands late on a busy runner too: anchored on p, not on absolutes
+    assert p <= app.evaluate("() => S.playhead") < p + 3.0
     # stop (the square button) returns to where playback started
     app.click("#stopBtn")
     app.wait_for_function("() => S.playing === false")
