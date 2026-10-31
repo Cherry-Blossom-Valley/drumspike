@@ -188,6 +188,129 @@
     });
   }
 
+  /* ---------------- Feedback (part 2 of #153, #164) ---------------- */
+  /* The Feedback button at the top right opens a form (kind, title, description, optional steps) with
+     a live preview of the exact JSON the app posts to the CBV feedback gateway (B.feedbackSend; the
+     test bridge answers the command, so e2e never needs the network). The meta holds counts only:
+     never a file name, a folder path, a project name, audio, a user or a host name. The same
+     private-word guard as the docs (tools/media/check_paths.py BANNED_BASE) runs on the free text
+     before anything is sent, and again in crates/app/src/feedback.rs before the POST. */
+  const FB_KINDS = [["bug", "Bug"], ["improvement", "Improvement"], ["other", "Other"]];
+  const FB_PRIVATE = ["/Users", "/var/folders", "/home", "/private/tmp", "x86-mac", "admin@", "arm64-mac", "linux-arm64"];  // private-list-definition
+  function fbHits(text) {
+    const out = new Set(), low = text.toLowerCase();
+    for (const w of FB_PRIVATE) if (low.includes(w)) out.add(w);
+    for (const tok of text.split(/\s+/)) {
+      const t = tok.replace(/^[^\w]+|[^\w]+$/g, "");
+      if ((t.startsWith("/") && t.includes("/")) || t.startsWith("~/") || /^[A-Za-z]:[\\/]/.test(t)) out.add(t);
+    }
+    return [...out];
+  }
+  async function feedbackMeta() {
+    let info = {}, back = {};
+    try { info = await B.aboutInfo(); } catch (e) { /* the counts stay */ }
+    try { back = await B.backendInfo(); } catch (e) { /* the defaults stay */ }
+    let dur = 0, sr = null;
+    for (const n of S.order) {
+      const p = S.peaks[n];
+      if (p && p.sr) { sr = p.sr; dur = Math.max(dur, (p.n_samples || 0) / p.sr); }
+    }
+    let hits = 0;
+    for (const n of Object.keys(S.events)) hits += (S.events[n] || []).length;
+    const ua = navigator.userAgent;
+    return {
+      app_version: info.version || "unknown",
+      build_sha: info.build_sha || "unknown",
+      core_version: info.core_version || back.core || "unknown",
+      os: (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "unknown",
+      arch: /arm|aarch/i.test(ua) ? "arm64" : (/x86_64|x64|Win64|amd64/i.test(ua) ? "x86_64" : "unknown"),
+      language: navigator.language || "unknown",
+      detector: back.detector || "rust",
+      counts: { tracks: S.order.length, hits, sample_rate: sr, session_length_s: Math.round(dur) },   // counts only, never a name or a path
+    };
+  }
+  function feedbackBox() {
+    let m = $q("#fbModal");
+    if (m) return m;
+    m = document.createElement("div"); m.id = "fbModal"; m.className = "modal hidden";
+    const box = document.createElement("div"); box.className = "modal-box fbBox";
+    const el = (tag, id, cls) => { const e = document.createElement(tag); if (id) e.id = id; if (cls) e.className = cls; box.appendChild(e); return e; };
+    el("h3", "fbTitle").textContent = "Send Feedback";
+    el("p", "fbIntro", "phint").textContent = "Goes to the Cherry Blossom Valley feedback gateway and opens an issue in the Drum Spike repo. The preview below is the exact text that is sent.";
+    const row = el("div", "fbKindRow", "prow");
+    const lab = document.createElement("label"); lab.textContent = "Kind "; row.appendChild(lab);
+    const sel = document.createElement("select"); sel.id = "fbKind";
+    for (const [v, t] of FB_KINDS) { const o = document.createElement("option"); o.value = v; o.textContent = t; sel.appendChild(o); }
+    row.appendChild(sel);
+    const mk = (id, label, rows) => {
+      const wrap = el("div", id + "Wrap", "fbField");
+      const l = document.createElement("label"); l.htmlFor = id; l.textContent = label; wrap.appendChild(l);
+      const f = document.createElement(rows ? "textarea" : "input"); f.id = id;
+      if (rows) f.rows = rows;
+      wrap.appendChild(f);
+      return f;
+    };
+    mk("fbTitleIn", "Title (one line)").type = "text";
+    mk("fbDesc", "What happened?", 4);
+    mk("fbSteps", "Steps to reproduce (optional)", 3);
+    el("div", "fbPreviewLabel", "ptitle").textContent = "Preview (exactly what is sent)";
+    el("pre", "fbPreview", "fbPreview");
+    el("div", "fbMsg", "phint");
+    const acts = el("div", "fbActions", "modal-actions");
+    const cancel = document.createElement("button"); cancel.id = "fbCancel"; cancel.className = "btn"; cancel.textContent = "Cancel"; acts.appendChild(cancel);
+    const send = document.createElement("button"); send.id = "fbSend"; send.className = "btn primary"; send.textContent = "Send"; acts.appendChild(send);
+    document.body.appendChild(m); m.appendChild(box);
+    return m;
+  }
+  async function feedback() {
+    const m = feedbackBox();
+    const meta = await feedbackMeta();
+    /* The gateway URL is the app setting `feedback_url`, the built-in default when it is not set
+       (so it can change without a release; the owner's answer on #164). */
+    let settings = {};
+    try { settings = await B.appSettingsGet() || {}; } catch (e) { /* the default stays */ }
+    const gateway = typeof settings.feedback_url === "string" && settings.feedback_url ? settings.feedback_url : null;
+    const fields = [$q("#fbKind"), $q("#fbTitleIn"), $q("#fbDesc"), $q("#fbSteps")];
+    const payload = () => {
+      const p = { kind: $q("#fbKind").value, title: $q("#fbTitleIn").value.trim(), description: $q("#fbDesc").value };
+      if ($q("#fbSteps").value.trim()) p.steps = $q("#fbSteps").value.trim();
+      p.meta = meta;
+      return p;
+    };
+    const refresh = () => {
+      $q("#fbPreview").textContent = JSON.stringify(payload(), null, 2);
+      const hits = fbHits([$q("#fbTitleIn").value, $q("#fbDesc").value, $q("#fbSteps").value].join("\n"));
+      const bad = hits.length || !$q("#fbTitleIn").value.trim();
+      $q("#fbSend").disabled = bad;
+      const msg = $q("#fbMsg");
+      if (hits.length) msg.textContent = `Not sent: the text holds a private name or path (${hits.join(", ")}). Remove it and send again.`;
+      else if (!msg.textContent.startsWith("Sent")) msg.textContent = "";
+    };
+    for (const f of fields.slice(1)) f.oninput = refresh;
+    refresh();
+    m.classList.remove("hidden");
+    await new Promise(resolve => {
+      const done = () => { m.classList.add("hidden"); document.removeEventListener("keydown", esc, true); resolve(); };
+      const esc = ev => { if (ev.key === "Escape") { ev.stopPropagation(); done(); } };
+      document.addEventListener("keydown", esc, true);
+      $q("#fbCancel").onclick = done;
+      $q("#fbSend").onclick = async () => {
+        const btn = $q("#fbSend");
+        btn.disabled = true;
+        try {
+          const r = await B.feedbackSend(JSON.parse($q("#fbPreview").textContent), gateway);   // exactly the previewed JSON
+          $q("#fbMsg").textContent = "Sent. Thank you" + (r && r.issue_url ? `: ${r.issue_url}` : "") + ".";
+          $q("#fbTitleIn").value = ""; $q("#fbDesc").value = ""; $q("#fbSteps").value = "";
+          refresh();
+        } catch (e) {
+          $q("#fbMsg").textContent = `Not sent: ${e.message} The text is kept; try again.`;
+        } finally {
+          btn.disabled = false;
+        }
+      };
+    });
+  }
+
   /* ---------------- native dialogs instead of the in-page folder browser (route 12) ---------------- */
   /* Answers like pickFolder(): {dir, name?, copy?, file?} or null (the native dialogs; the page has no folder browser). */
   async function nativePick(o) {
@@ -406,6 +529,14 @@
   }
 
   window.DSShell = { menuOwnsKey, menu, log, quitFlow, renameCurrent, renameProject,
-    recomputeVelocities, applyVel, about, nativePick, takeOpenPaths, menuState, sync, boot, hooks, handlers,
+    recomputeVelocities, applyVel, about, feedback, nativePick, takeOpenPaths, menuState, sync, boot, hooks, handlers,
     listening: () => booted };
+
+  /* The Feedback button (top right, index.html). Bound here, not in app.js: it belongs to the shell
+     like About. #164 */
+  const fbBind = () => {
+    const b = $q("#feedbackBtn");
+    if (b && !b.dataset.fb) { b.dataset.fb = "1"; b.onclick = () => { feedback(); }; }
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fbBind); else fbBind();
 })();

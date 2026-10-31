@@ -24,6 +24,7 @@ pub mod cross_bleed;
 pub mod edit;
 pub mod error;
 pub mod export;
+pub mod feedback;
 pub mod flam;
 pub mod follow;
 pub mod ghost_gate;
