@@ -17,12 +17,14 @@ two sides cannot drift.
 | `learned` | Learn Add / Learn sweep / analysis | a Learn example |
 | `flam` | flam.rs (second stroke) | flam stroke |
 | `roll`, `rescue`, `stage8` | the model path; carried in `extra` | carried, no output effect; confidence cap (confidence.rs) |
+| `keep` | Hits > Toggle Hit Active on a deactivated hit (edit.rs `toggle` op, #242) | the user's per-hit override: the hit stays in the output whatever the rules marked |
+| `deactivated` | Hits > Toggle Hit Active on an active hit (edit.rs `toggle` op, #242) | the user's per-hit override: the hit leaves the output |
 
 ## The policy
 
-    out(e)  = (cut || bleed || filtered)          [Rust, after the strip]
-    hgIsCut(e) = (cut || bleed || filtered) && !isManual(e)   [page]
-    kept(e) = is_manual(e) || edited === true
+    out(e)  = deactivated === true || (!(keep === true) && (cut || bleed || filtered))   [Rust, after the strip]
+    hgIsCut(e) = deactivated === true || ((cut || bleed || filtered) && !isManual(e) && keep !== true)   [page]
+    kept(e) = is_manual(e) || edited === true || keep === true || deactivated === true
 
 - One predicate, one module: `crates/app/src/policy.rs` (`is_out`, `event_out`, `is_manual`,
   `is_kept`). The duplicates call it: `export::is_cut` (MIDI, spikes, Export All, the click
@@ -37,9 +39,15 @@ two sides cannot drift.
   filtered** hit is no tempo candidate (`policy::TEMPO_USES_ONE_PREDICATE`). The behaviour
   is unchanged; the table's `tempo` column pins it.
 - R3 — `edited` is the document's reserved flag; `is_manual` is structural
-  (`added` or `t != orig`); `is_kept = is_manual || edited`.
+  (`added` or `t != orig`); `is_kept = is_manual || edited || keep || deactivated` (the
+  flags of R5).
 - R4 — undo/redo restores field presence via `was`; `was` is an op payload, never a stored
   event flag.
+- R5 (#242) — the user's per-hit overrides: `deactivated` wins over every mark and over
+  `keep`; `keep` wins over the automatic marks. The marking rules (the loudness cut, the
+  tom bleed and cross bleed rules, the Learn filter) never mark a `keep` hit, and the strip
+  removes the marks from a kept hit, so the flags stay the single reason a toggled hit is
+  in or out. One toggle is one undo step: the undo sends the state before as `was`.
 
 ## The truth table
 

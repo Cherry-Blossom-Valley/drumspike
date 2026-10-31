@@ -35,6 +35,8 @@ function normEvents(d){
     if (e.learned) o.learned = true;   // P4-38b: a K added it (kept so undo and redo snapshots keep the tag)
     if (e.filtered) o.filtered = true;   // P4-6c: the Learn filter took it out of the output (a grey hit)
     if (e.edited) o.edited = true;   // P4-14 fix round: restored from the bleed mark, kept by a re-pick or Re-analyze
+    if (e.keep) o.keep = true;   // #242: the user keeps the hit in the output (Toggle Hit Active)
+    if (e.deactivated) o.deactivated = true;   // #242: the user took the hit out of the output (Toggle Hit Active)
     return o; }).sort((a, b) => a.t - b.t);   // P3-14d: hitsIn searches them by time (the service sends them sorted)
 }
 let _eid = 0;
@@ -43,10 +45,11 @@ function newId(){ return "n" + (++_eid); }
 /* manual/edited hits: added by hand, or moved away from their detected position */
 const MANUAL_COLOR = "#ff4fd8";
 function isManual(e) { return !!e.added || (e.orig !== undefined && Math.abs(e.t - e.orig) > 1e-9); }
-/* a kept hit: manual, or a hand velocity or a restored hit (`edited: true`) — the page's copy of
-   edit::is_kept (crates/app/src/edit.rs). One predicate decides the Keep/Discard dialog of a
-   re-analysis and the service's merge (keep_edited), so both see the same edits. */
-function isKept(e) { return isManual(e) || e.edited === true; }
+/* a kept hit: manual, a hand velocity or a restored hit (`edited: true`), or one of the user's
+   per-hit overrides of #242 (`keep`/`deactivated`) — the page's copy of edit::is_kept
+   (crates/app/src/edit.rs). One predicate decides the Keep/Discard dialog of a re-analysis and
+   the service's merge (keep_edited), so both see the same edits. */
+function isKept(e) { return isManual(e) || e.edited === true || e.keep === true || e.deactivated === true; }
 
 /* ---------------- the project name and the unsaved-changes guard ---------------- */
 function setProjName(n) {
@@ -4477,7 +4480,7 @@ function lnScoreAt(name, t) {   // the score of the candidate nearest to t (unsh
 function lnShift(name) { const t = S.tracks[name]; return t && t.sr && t.params ? (t.params.shift_samples || 0) / t.sr : 0; }
 function lnPreview(name, e) {   // P4-6c: during a threshold drag the grey of a hit follows the live threshold (null: no drag)
   const x = LN_SC[lnTarget(name)]; if (!x || !x.drag || !lnFilterOn(name)) return null;
-  if (isManual(e)) return false;   // an edited hit is never filtered
+  if (isManual(e) || e.keep === true || e.deactivated === true) return false;   // an edited hit is never filtered; the user's overrides win (#242)
   const lnT = lnTimes(name);
   if (lnT.this.length && lnNear(lnT.this, e.t)) return false;   // a "this" example stays
   if (lnT.not.length && lnNear(lnT.not, e.t)) return true;
@@ -4487,7 +4490,7 @@ function lnPreview(name, e) {   // P4-6c: during a threshold drag the grey of a 
 }
 function lnGreyHit(name, e) {   // P4-6c: a grey hit of the Learn filter (the stored mark, or the drag's preview)
   const pv = lnPreview(name, e);
-  return pv === null ? !!e.filtered && !isManual(e) : pv;
+  return pv === null ? !!e.filtered && !isManual(e) && e.keep !== true && e.deactivated !== true : pv;
 }
 function lnHistDraw(name) {   // the Similarity histogram of the Learn row (concept 3.2)
   const cv = document.querySelector("#inspector .lnHist"); if (!cv) return;
@@ -5074,8 +5077,8 @@ function hgApplyParamsOp(op, reverse) {   // applyOp: undo and redo of a stored 
    the histogram and in the lane and leaves the output (MIDI, spikes, Export All, the click, a follower); it stays in the
    document (e.cut). An edited hit is never cut. */
 function hgCutOf(p) { return Number.isFinite(p.vel_cut_db) ? p.vel_cut_db : null; }
-function hgIsCut(e) { return (!!e.cut || !!e.bleed || !!e.filtered) && !isManual(e); }   // P4-14: a hit of the tom bleed rule shows as a cut hit (owner: tom-bleed-show); P4-6c: so does one the Learn filter took out
-function hgCutOnly(e) { return (!!e.cut || !!e.bleed) && !isManual(e); }   // the cut and bleed marks without the Learn filter's (its drag preview decides that one)
+function hgIsCut(e) { return !!e.deactivated || ((!!e.cut || !!e.bleed || !!e.filtered) && !isManual(e) && e.keep !== true); }   // P4-14: a hit of the tom bleed rule shows as a cut hit (owner: tom-bleed-show); P4-6c: so does one the Learn filter took out; #242: the user's deactivated wins, the user's keep holds the hit in
+function hgCutOnly(e) { return !!e.deactivated || ((!!e.cut || !!e.bleed) && !isManual(e) && e.keep !== true); }   // the cut and bleed marks without the Learn filter's (its drag preview decides that one)
 function hgLoudRange() {   // P4-25: the actual dBFS range of the hits plus 2 dB, widened to hold the floor, the ceiling and the cut handles (at least 12 dB)
   if (HG.vel.drag && HG.vel.drag.range) return HG.vel.drag.range;   // a drag keeps its axis: the handle under the pointer must not move away
   const lv = (HG.d ? HG.d.loudness.levels : []).filter(Number.isFinite), c = hgCutOf(HG.p);
@@ -5097,7 +5100,7 @@ function hgLoudState() {
     const b = Math.max(0, Math.min(bins.length - 1, Math.floor(l) - r.lo));
     bins[b]++;
     const e = evs[i];
-    if (cut !== null && l < cut && !(e && isManual(e))) { cutBins[b]++; nCut++; }
+    if (cut !== null && l < cut && !(e && isManual(e)) && !(e && e.keep === true)) { cutBins[b]++; nCut++; }   // #242: a hit the user keeps is never counted as cut
   });
   return { range: r, bins, cutBins, n: HG.d.loudness.levels.length, nCut, floor: HG.p.vel_lo_db, ceiling: HG.p.vel_hi_db, cut };
 }
@@ -5171,7 +5174,7 @@ function hgLiveVelocities() {
     const d = HG.lv.get(e.id);
     if (d === undefined) continue;
     e.v = velOfDb(d, p.vel_lo_db, p.vel_hi_db);
-    if (cut !== null && d < cut && !isManual(e)) e.cut = true; else delete e.cut;
+    if (cut !== null && d < cut && !isManual(e) && e.keep !== true) e.cut = true; else delete e.cut;   // #242: a hit the user keeps is never marked
   }
   invalidateHits(name); updateStatus();
 }
@@ -6574,6 +6577,36 @@ function deleteSelectedHit() {
   const trk = S.sel.track, e = (S.events[trk] || [])[S.sel.index];
   if (followerLocked(trk)) return;   // P3-18
   if (e) return edDelete(trk, e.id);
+}
+/* #242: Hits > Toggle Hit Active (X). The selected hit flips between active and deactivated: a
+   deactivated one (the loudness cut, the tom bleed rule, the Learn filter or the user's own
+   mark) gets `keep: true` — the user's override that wins over every automatic mark — and an
+   active one gets `deactivated: true`, the explicit per-hit user mark. The flags ride in the
+   hit (edit.rs `toggle` op), so export, MIDI, spikes and the click follow (policy::is_out), the
+   lane drawing, the info line and the Tab navigation follow (hgIsCut), and the choice survives
+   a re-analyze (a kept hit of merge_edited), a cut or bleed threshold change and a Learn
+   change. One toggle is one undo step: the step records the flags the hit had, the undo sends
+   them back as `was` (byte-identical, R05). */
+function toggleHitActive() {
+  if (!S.sel) { setMsg("no hit selected"); return; }
+  const trk = S.sel.track, id = ((S.events[trk] || [])[(S.sel || {}).index] || {}).id;
+  if (followerLocked(trk)) return;   // P3-18
+  if (id === undefined) { setMsg("no hit selected"); return; }
+  return shSerial(async () => {
+    let stored = [];   // the service's hits: the step keeps the flags of the hit as they are stored
+    try {
+      if (S.sid && (S.events[trk] || []).some(x => x.id === id)) { if (hasPendingWrite(trk)) await settleEvents(trk); const r = await B.events(S.sid, trk); stored = Array.isArray(r) ? r : (r && r.events) || []; }
+    } catch (e) { stored = []; }
+    return edNow(trk, evs => {
+      const j = edIndex(evs, id);
+      if (j < 0) { setMsg("the hit is not there any more"); return null; }
+      const e = evs[j];
+      const raw = stored.find(x => Math.abs(x.t - e.t) < 1e-9) || e;
+      const to = hgIsCut(e) ? { keep: true, deactivated: false } : { keep: false, deactivated: true };
+      return { ops: [{ op: "toggle", index: j, keep: to.keep, deactivated: to.deactivated }], sel: id,
+        step: { type: "toggle", track: trk, id, t: e.t, to, was: hitWas(raw) } };
+    });
+  });
 }
 /* #151 (workflow polish rank 3): Delete and the nudge keys act on every hit of the range selection, so a bleed
    burst or a whole fill is one action, not one per hit. One events_edit call with one op per hit, one undo step
