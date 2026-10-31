@@ -43,6 +43,7 @@ pub mod markers;
 pub mod mcp;
 pub mod media;
 pub mod overlap;
+pub mod patterns;
 pub mod plugins;
 pub mod policy;
 pub mod registry;

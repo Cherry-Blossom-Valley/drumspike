@@ -538,7 +538,11 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Detect the hits of some or all tracks; poll analyze_status",
         &[
             SID,
-            opt("tracks", Ty::Strs, "Track names; default all"),
+            opt(
+                "tracks",
+                Ty::Strs,
+                "Track names or patterns (exact, glob `t*`, range `t1-t4`); default all; a pattern that matches nothing is an error",
+            ),
             opt(
                 "params",
                 Ty::Obj,
@@ -607,7 +611,16 @@ pub static REGISTRY: &[CommandSpec] = &[
                 Ty::Str,
                 "per_track (default: <track>_spike.mid per track) or single (one type 1 file <project>_drums.mid, one MIDI track per drum track, the project's tempo map)",
             ),
-            opt("tracks", Ty::Strs, "Track names; default all"),
+            opt(
+                "tracks",
+                Ty::Strs,
+                "Track names or patterns (exact, glob `t*`, range `t1-t4`); default all; a pattern that matches nothing is an error",
+            ),
+            opt(
+                "roles",
+                Ty::Strs,
+                "Export by role instead of (or on top of) tracks: the tracks whose role is one of these (case-insensitive); a role that no track has is an error",
+            ),
             opt(
                 "formats",
                 Ty::Strs,
@@ -984,8 +997,17 @@ pub static REGISTRY: &[CommandSpec] = &[
         "Add one track per audio file",
         &[
             SID,
-            req("paths", Ty::Strs, "Files or folders"),
-            opt("roles", Ty::Any, "Role per file"),
+            req(
+                "paths",
+                Ty::Strs,
+                "Files or folders; a folder with an `Audio Files` subfolder and no audio of its own is a Pro Tools session folder (the `.ptx` stays ignored)",
+            ),
+            opt(
+                "tracks",
+                Ty::Strs,
+                "Filter on the scanned files by name pattern (exact, glob `t*`, range `t1-t4`); a pattern that matches no scanned file is an error",
+            ),
+            opt("roles", Ty::Any, "Role per file (in the order of the filtered files)"),
             opt("notes", Ty::Any, "MIDI note per file"),
             opt("copy", Ty::Bool, "Copy the audio into the project"),
         ],

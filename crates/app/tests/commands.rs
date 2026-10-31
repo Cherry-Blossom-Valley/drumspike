@@ -479,7 +479,13 @@ fn analyze_start_rejects_an_unknown_track_and_an_unknown_project() {
     let e = svc
         .analyze_start(&sid, Some(vec!["nope".into()]), None, None)
         .unwrap_err();
-    assert_eq!((e.code, e.message.as_str()), (400, "unknown track nope"));
+    assert_eq!(
+        (e.code, e.message.as_str()),
+        (
+            400,
+            "the pattern \"nope\" matches no track (the tracks: Kick_In, Snare_Top)"
+        )
+    );
     assert_eq!(svc.analyze_status(&sid)["state"], "idle", "nothing started");
     assert_eq!(svc.analyze_start("nope", None, None, None).unwrap_err().code, 404);
     std::fs::remove_dir_all(&root).unwrap();

@@ -333,8 +333,12 @@ pub struct ExportOpts {
     pub dest: Option<String>,
     /// How the MIDI files are written.
     pub midi_mode: MidiMode,
-    /// The tracks to export, `None` for all of them.
+    /// The tracks to export, `None` for all of them. The names accept the patterns (exact,
+    /// glob, `t1-t4`); a pattern that matches nothing is a 400 that names it.
     pub tracks: Option<Vec<String>>,
+    /// #120: export by role instead of (or on top of) `tracks`: the tracks whose role is one of
+    /// these (case-insensitive). A role that no track has is a 400 that names it.
+    pub roles: Option<Vec<String>>,
     /// Write MIDI.
     pub midi: bool,
     /// Write spike WAVs.
@@ -353,6 +357,7 @@ impl Default for ExportOpts {
             dest: None,
             midi_mode: MidiMode::PerTrack,
             tracks: None,
+            roles: None,
             midi: true,
             spikes: true,
             audio: false,
@@ -418,6 +423,7 @@ impl ExportOpts {
             dest,
             midi_mode,
             tracks: strs("tracks")?,
+            roles: strs("roles")?,
             midi,
             spikes,
             audio,
@@ -796,7 +802,31 @@ impl Service {
         let op = self.inner.registry.get_writable(sid)?;
         crate::registry::resolve_shared(&op);
         let all: Vec<String> = lock(&op).project.doc.tracks().map(|(n, _)| n.clone()).collect();
-        let names = select_tracks(all, opts.tracks.as_deref())?;
+        // #120: `tracks` takes the patterns (exact, glob, `t1-t4`), a pattern that matches
+        // nothing is a 400 that names it; `roles` keeps the tracks whose role is one of it
+        let mut names = match opts.tracks.as_deref() {
+            Some(pats) => crate::patterns::expand(&all, pats)?,
+            None => all.clone(),
+        };
+        if let Some(roles) = opts.roles.as_deref() {
+            let g = lock(&op);
+            names.retain(|n| {
+                g.project
+                    .doc
+                    .track(n)
+                    .and_then(|t| t.role.clone())
+                    .is_some_and(|r| roles.iter().any(|x| x.eq_ignore_ascii_case(&r)))
+            });
+        }
+        if let Some(roles) = opts.roles.as_deref()
+            && names.is_empty()
+        {
+            return Err(AppError::bad(format!(
+                "no track with a role of {} (the roles: {})",
+                roles.join(", "),
+                all.join(", ")
+            )));
+        }
         let dir = export_dir(&lock(&op), opts.dest.as_deref())?;
         // R10: a second export to the same folder serializes behind this one
         let _dest_guard = export_dest_acquire(&dir);
