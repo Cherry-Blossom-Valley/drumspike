@@ -190,7 +190,7 @@ fn stereo_channel_masks_match_the_frozen_ffmpeg_decode_or_refuse() {
                         w["frames"].as_u64().map(|f| f as usize),
                         "{fmt:?} {mask:#x}: Average still decodes"
                     );
-                    other_fold += 1
+                    other_fold += 1;
                 }
                 (false, None) => refused += 1,
                 _ => failures.push(format!(

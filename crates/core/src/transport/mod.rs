@@ -399,7 +399,10 @@ impl Shared {
         loop_range: Option<(u64, u64)>,
         end_at: Option<u64>,
     ) {
-        let _one_writer = self.seek_write.lock().unwrap_or_else(|e| e.into_inner());
+        let _one_writer = self
+            .seek_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let s = self.seek_seq.load(Ordering::Relaxed);
         self.seek_seq.store(s.wrapping_add(1), Ordering::Relaxed);
         std::sync::atomic::fence(Ordering::Release);
@@ -568,10 +571,14 @@ fn build(tracks: &[TrackSpec], device_rate: u32, cfg: &TransportConfig) -> Resul
             pitch: t.click_pitch,
         })
         .collect();
-    let session_frames = sources.iter().map(|s| s.device_frames()).max().unwrap_or(0);
+    let session_frames = sources
+        .iter()
+        .map(reader::TrackSource::device_frames)
+        .max()
+        .unwrap_or(0);
     let shared = Arc::new(Shared::new(tracks.len(), cfg.clicks_on, cfg.speed));
     let clock = Arc::new(Clock::new(device_rate));
-    let chans: Vec<usize> = sources.iter().map(|s| s.channels()).collect();
+    let chans: Vec<usize> = sources.iter().map(reader::TrackSource::channels).collect();
     let (producers, consumers): (Vec<_>, Vec<_>) = chans
         .iter()
         .map(|c| RingBuffer::<f32>::new(cfg.ring_frames * c))
@@ -1032,7 +1039,7 @@ impl Transport {
 
     /// P3-16: the user's master volume in dB (before the master gain of the tests).
     pub fn set_master_volume_db(&self, volume_db: f32) {
-        self.ctl.set_master_volume_db(volume_db)
+        self.ctl.set_master_volume_db(volume_db);
     }
 
     /// P3-16: the peak meters since the last call (and resets them).
@@ -1249,7 +1256,7 @@ impl Offline {
 
     /// Master volume (see [`Transport::set_master_volume_db`]).
     pub fn set_master_volume_db(&mut self, volume_db: f32) {
-        self.ctl.set_master_volume_db(volume_db)
+        self.ctl.set_master_volume_db(volume_db);
     }
 
     /// The meters (see [`Transport::take_meters`]).

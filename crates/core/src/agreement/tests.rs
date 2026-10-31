@@ -49,7 +49,7 @@ fn clean_kit(sr: u32, f: f64, n: u32, pol_at: Option<usize>) -> (Vec<f32>, Vec<f
 
 fn sorted_spreads(ag: &[Agreement]) -> Vec<f64> {
     let mut v: Vec<f64> = ag.iter().filter_map(|a| a.timing_confidence).collect();
-    v.sort_by(|a, b| a.total_cmp(b));
+    v.sort_by(f64::total_cmp);
     v
 }
 
@@ -118,7 +118,7 @@ fn xcorr_lag_at_the_search_edge_is_not_an_estimate() {
     }
     let base = 96i64;
     let (d, score, at_edge) = xcorr_lag(&x, base, span, &tpl).expect("no lag at all");
-    assert!(at_edge, "edge lag not flagged: d {}", d);
+    assert!(at_edge, "edge lag not flagged: d {d}");
     assert!(score.abs() > 0.9);
     // the same shot aligned at the base: lag 0, not at the edge
     let mut y = vec![0.0f32; 48000];
@@ -139,7 +139,7 @@ fn clean_hits_agree_within_half_millisecond() {
         let (x, hits, _) = clean_kit(sr, f, 8, None);
         let ag = agreement_track(&x, sr, &hits);
         let sp = sorted_spreads(&ag);
-        assert_eq!(sp.len(), hits.len(), "FAIL: missing spreads on {}", role);
+        assert_eq!(sp.len(), hits.len(), "FAIL: missing spreads on {role}");
         let worst = sp[sp.len() - 1];
         println!(
             "{}: clean spread median {:.0}, worst {:.0}",
@@ -147,7 +147,7 @@ fn clean_hits_agree_within_half_millisecond() {
             median_of(&sp),
             worst
         );
-        assert!(worst <= 24.0, "FAIL: {} spread {} > 24", role, worst);
+        assert!(worst <= 24.0, "FAIL: {role} spread {worst} > 24");
     }
 }
 
@@ -166,7 +166,7 @@ fn noise_and_smeared_attack_widen_the_spread() {
         *v += (0.1 * n) as f32;
     }
     let noisy_med = median_of(&sorted_spreads(&agreement_track(&noisy, sr, &hits)));
-    println!("clean {:.0}, noisy {:.0}", clean, noisy_med);
+    println!("clean {clean:.0}, noisy {noisy_med:.0}");
     assert!(noisy_med > clean, "FAIL: noise did not widen the spread");
     // a smeared attack: the same shots behind a 2 ms box smear
     let smeared: Vec<f32> = {
@@ -180,7 +180,7 @@ fn noise_and_smeared_attack_widen_the_spread() {
         s
     };
     let smear_med = median_of(&sorted_spreads(&agreement_track(&smeared, sr, &hits)));
-    println!("smeared {:.0}", smear_med);
+    println!("smeared {smear_med:.0}");
     assert!(smear_med > clean, "FAIL: smear did not widen the spread");
 }
 
@@ -209,7 +209,7 @@ fn polarity_right_on_every_planted_inverted_hit() {
             );
         }
     }
-    println!("polarity checked {} hits, {} misses", checked, misses);
+    println!("polarity checked {checked} hits, {misses} misses");
     assert!(checked > 0, "FAIL: 0 checked hits");
     assert_eq!(misses, 0, "FAIL: polarity misses");
 }
@@ -262,7 +262,7 @@ fn timing_confidence_distribution_per_role() {
         let (x, hits, _) = clean_kit(sr, f, 12, Some(5));
         let ag = agreement_track(&x, sr, &hits);
         let sp = sorted_spreads(&ag);
-        assert_eq!(sp.len(), hits.len(), "FAIL: 0 checked hits for {}", role);
+        assert_eq!(sp.len(), hits.len(), "FAIL: 0 checked hits for {role}");
         let n = sp.len();
         let median = median_of(&sp);
         let p95 = sp[(0.95 * (n - 1) as f64).round() as usize];
@@ -272,11 +272,10 @@ fn timing_confidence_distribution_per_role() {
             .filter(|(i, a)| if *i == 5 { a.polarity == -1 } else { a.polarity == 1 })
             .count();
         println!(
-            "{}: checked {} hits, spread median {:.0} samples, p95 {:.0} samples, polarity on target {} of {}",
-            role, n, median, p95, inv_ok, n
+            "{role}: checked {n} hits, spread median {median:.0} samples, p95 {p95:.0} samples, polarity on target {inv_ok} of {n}"
         );
-        assert_eq!(inv_ok, n, "FAIL: polarity misses on {}", role);
-        assert!(p95 <= 24.0, "FAIL: {} p95 spread {} > 24", role, p95);
+        assert_eq!(inv_ok, n, "FAIL: polarity misses on {role}");
+        assert!(p95 <= 24.0, "FAIL: {role} p95 spread {p95} > 24");
     }
 }
 

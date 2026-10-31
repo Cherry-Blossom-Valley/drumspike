@@ -106,7 +106,7 @@ pub fn encode_peaks_bin(sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) 
     }
     for (_, l) in levels {
         for v in [&l.min, &l.max, &l.rms] {
-            for &x in v.iter() {
+            for &x in v {
                 out.extend_from_slice(&(x as f32).to_le_bytes());
             }
         }

@@ -20,7 +20,7 @@ fn events(v: &serde_json::Value) -> Vec<MidiEvent> {
         .iter()
         .map(|e| MidiEvent {
             t: e["t"].as_f64().expect("t"),
-            v: e.get("v").and_then(|v| v.as_i64()).unwrap_or(100),
+            v: e.get("v").and_then(serde_json::Value::as_i64).unwrap_or(100),
         })
         .collect()
 }

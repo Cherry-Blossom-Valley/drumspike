@@ -232,7 +232,11 @@ impl Spectrum {
         self.bands
             .iter()
             .map(|&(a, b)| {
-                let p: f32 = buf[a..b].iter().map(|c| c.norm_sqr()).sum::<f32>() / (b - a) as f32;
+                let p: f32 = buf[a..b]
+                    .iter()
+                    .map(rustfft::num_complex::Complex::norm_sqr)
+                    .sum::<f32>()
+                    / (b - a) as f32;
                 10.0 * (p + 1e-20).log10()
             })
             .collect()

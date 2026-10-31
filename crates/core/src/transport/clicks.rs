@@ -152,7 +152,7 @@ impl TrackClicks {
     /// Add `gain` times the clicks that overlap the block `frame0 .. frame0 + out.len()` to
     /// `out` (mono). No allocation; used by the audio callback.
     pub fn add_block(&self, out: &mut [f32], frame0: u64, gain: f32) {
-        self.add_block_at(out, frame0, gain, Speed::Normal)
+        self.add_block_at(out, frame0, gain, Speed::Normal);
     }
 
     /// P3-20b: [`TrackClicks::add_block`] at `speed`; `frame0` counts output frames

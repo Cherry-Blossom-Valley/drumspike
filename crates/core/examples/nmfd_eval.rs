@@ -66,10 +66,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--template-new" => groups.push(Vec::new()),
             "--save-template" => {
-                save_template = Some(PathBuf::from(args.next().expect("--save-template needs a path")))
+                save_template = Some(PathBuf::from(args.next().expect("--save-template needs a path")));
             }
             "--templates-file" => {
-                templates_file = Some(PathBuf::from(args.next().expect("--templates-file needs a path")))
+                templates_file = Some(PathBuf::from(args.next().expect("--templates-file needs a path")));
             }
             "--iters" => iters = args.next().expect("--iters needs a number").parse()?,
             "--max-hits" => max_hits = args.next().expect("--max-hits needs a number").parse()?,
@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             other => return Err(format!("unknown argument {other}").into()),
         }
     }
-    if groups.last().is_some_and(|g| g.is_empty()) {
+    if groups.last().is_some_and(std::vec::Vec::is_empty) {
         groups.pop(); // a trailing --template-new
     }
 
@@ -109,13 +109,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for (w, ts) in group {
                 let w = w
                     .as_ref()
-                    .map(|p| p.as_path())
+                    .map(std::path::PathBuf::as_path)
                     .or(wav.as_deref())
                     .ok_or("a --template without --template-wav needs the analyzed --wav")?;
                 specs.push(spec_of(w)?);
                 hit_sets.push(ts.as_slice());
             }
-            let set_refs: Vec<&[f32]> = specs.iter().map(|s| s.as_slice()).collect();
+            let set_refs: Vec<&[f32]> = specs.iter().map(std::vec::Vec::as_slice).collect();
             out.push(
                 nmfd::template_from_hits_multi(&set_refs, &hit_sets, 1, max_hits)
                     .ok_or("a drum has too few template hits")?,

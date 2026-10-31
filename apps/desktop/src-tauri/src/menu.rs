@@ -594,7 +594,7 @@ pub fn keymap_problems(rows: &[KeyCommand]) -> Vec<String> {
                 }
                 match seen.get(&k) {
                     Some(other) if *other != c.id => {
-                        out.push(format!("{preset}: key {k} is in two commands: {other} and {}", c.id))
+                        out.push(format!("{preset}: key {k} is in two commands: {other} and {}", c.id));
                     }
                     Some(_) => out.push(format!("{preset}: key {k} is twice in {}", c.id)),
                     None => {}
@@ -689,7 +689,7 @@ pub type RecentState = MenuState;
 pub static MENU_LOG: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The check states that the page reports (`{snap, follow, click, infoLine, counter, inspector, trackHeight, nudgeValue, suspendFollow}`): one `(item id, checked)` per check item.
@@ -1096,12 +1096,15 @@ pub fn dispatch<R: Runtime>(app: &AppHandle<R>, id: &str) -> Value {
     // physical press via osascript dispatched (the probe cannot call the tauri command).
     // a poisoned lock is unwrapped: the log entries are still pushed (the poison of another
     // thread's panic must not take the menu dispatch down, #206 diagnosis)
-    MENU_LOG.lock().unwrap_or_else(|e| e.into_inner()).push(id.to_string());
+    MENU_LOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(id.to_string());
     #[cfg(debug_assertions)]
     if let Ok(path) = std::env::var("DRUMSPIKE_MENU_LOG_FILE") {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-            let _ = writeln!(f, "{}", id);
+            let _ = writeln!(f, "{id}");
         }
     }
     if !is_known(id) {
@@ -1567,7 +1570,7 @@ pub fn fix_shift_equivalents<R: Runtime>(app: &AppHandle<R>) {
             return;
         };
         fn walk(menu: &objc2_app_kit::NSMenu) {
-            for it in menu.itemArray().iter() {
+            for it in &menu.itemArray() {
                 if it.hasSubmenu() {
                     if let Some(sub) = it.submenu() {
                         walk(&sub);
@@ -1589,7 +1592,7 @@ pub fn fix_shift_equivalents<R: Runtime>(app: &AppHandle<R>) {
                 }
             }
         }
-        for sub in menu.itemArray().iter() {
+        for sub in &menu.itemArray() {
             if let Some(s) = sub.submenu() {
                 walk(&s);
             }
@@ -1618,7 +1621,7 @@ pub fn ns_menu_rows<R: Runtime>(app: &AppHandle<R>) -> Value {
             let mut rows = Vec::new();
             // nested submenus too (View > Waveform Zoom > In): walk every level
             fn walk(menu: &objc2_app_kit::NSMenu, title: &str, rows: &mut Vec<Value>) {
-                for it in menu.itemArray().iter() {
+                for it in &menu.itemArray() {
                     if it.hasSubmenu() {
                         if let Some(sub) = it.submenu() {
                             walk(&sub, &it.title().to_string(), rows);
@@ -1635,7 +1638,7 @@ pub fn ns_menu_rows<R: Runtime>(app: &AppHandle<R>) -> Value {
                     }));
                 }
             }
-            for sub in menu.itemArray().iter() {
+            for sub in &menu.itemArray() {
                 let title = sub.title().to_string();
                 let Some(sub) = sub.submenu() else { continue };
                 walk(&sub, &title, &mut rows);

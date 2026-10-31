@@ -59,7 +59,7 @@ pub fn rotate_backups(project_dir: &Path, keep: usize) -> Result<Vec<PathBuf>, P
     }
     let mut docs: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(&bdir)
         .map_err(io_err(format!("list {}", bdir.display())))?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_name().to_string_lossy().ends_with(DOC_EXT))
         .map(|e| {
             let p = e.path();

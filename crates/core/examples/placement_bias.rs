@@ -38,7 +38,7 @@ fn shot(role: usize, sr: u32, n: usize, onset: usize, level: (f64, f64), attack_
     let srf = sr as f64;
     let mut x = vec![0f32; n];
     let a = 10f64.powf(floor_db / 20.0) * 3f64.sqrt();
-    for v in x.iter_mut() {
+    for v in &mut x {
         *v = (a * rng.uni()) as f32;
     }
     let mut prev_noise = 0.0;
@@ -69,7 +69,7 @@ fn shot(role: usize, sr: u32, n: usize, onset: usize, level: (f64, f64), attack_
 }
 
 fn pct(v: &mut [f64], p: f64) -> f64 {
-    v.sort_by(|a, b| a.total_cmp(b));
+    v.sort_by(f64::total_cmp);
     let i = ((v.len() - 1) as f64 * p).round() as usize;
     v[i]
 }
@@ -104,13 +104,9 @@ fn main() {
         },
     });
     println!(
-        "placement error in samples (refined time minus the true onset, and minus the foot), rule {:?}, peak {} dB",
-        rule, FM_PEAK_DB
+        "placement error in samples (refined time minus the true onset, and minus the foot), rule {rule:?}, peak {FM_PEAK_DB} dB"
     );
-    println!(
-        "pooled over floors {:?} dBFS, polarities +1/-1, {} seeds each",
-        FLOORS_DB, SEEDS
-    );
+    println!("pooled over floors {FLOORS_DB:?} dBFS, polarities +1/-1, {SEEDS} seeds each");
     println!(
         "| rate | role | attack ms | n | onset median | p10 | p90 | foot median | p10 | p90 | early (<-1 vs foot) | moved | kept | busy | separate |"
     );
