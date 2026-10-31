@@ -853,22 +853,23 @@ fn no_projects<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MenuItem<R>> {
         .build(app)
 }
 
-/// The whole menu bar (reference section 3.2). The check items start as the page starts (snap on, follow
-/// smooth, click on); the page's first sync sets them to its real state.
-pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let mi = |it: &Item| make_item(app, it);
-    let ck = |it: &Item, on: bool| make_check(app, it, on);
-    let recent = SubmenuBuilder::with_id(app, RECENT_ID, "Open Recent")
+/// The Open Recent submenu with its "No Recent Projects" placeholder; `sync_recent` fills it.
+fn recent_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::with_id(app, RECENT_ID, "Open Recent")
         .item(
             &MenuItemBuilder::with_id("recent:none", "No Recent Projects")
                 .enabled(false)
                 .build(app)?,
         )
-        .build()?;
-    let app_menu = SubmenuBuilder::new(app, "Drum Spike")
-        .item(&mi(&ABOUT)?)
+        .build()
+}
+
+/// The Drum Spike menu: About, Settings, the macOS services and window items, Quit.
+fn app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::new(app, "Drum Spike")
+        .item(&make_item(app, &ABOUT)?)
         .separator()
-        .item(&mi(&SETTINGS)?)
+        .item(&make_item(app, &SETTINGS)?)
         .separator()
         .item(&PredefinedMenuItem::services(app, None)?)
         .separator()
@@ -876,194 +877,257 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&PredefinedMenuItem::hide_others(app, None)?)
         .item(&PredefinedMenuItem::show_all(app, None)?)
         .separator()
-        .item(&mi(&QUIT)?)
-        .build()?;
-    // one item in two menus (File and Track; Add Tracks): muda keeps both native items in step (enabled state)
-    let open_recent = mi(&OPEN_RECENT)?;
-    open_recent.set_enabled(false)?; // P3-19: `sync` enables it when Open Recent has an entry
-    let add_tracks = mi(&ADD_TRACKS)?;
-    let file = SubmenuBuilder::new(app, "File")
-        .item(&mi(&NEW)?)
-        .item(&mi(&OPEN)?)
-        .item(&recent)
-        .item(&open_recent)
+        .item(&make_item(app, &QUIT)?)
+        .build()
+}
+
+/// The File menu: project open/save, Add Tracks, the imports, Export and Export Again. `add_tracks`
+/// is the same item as in the Track menu; `open_recent` arrives disabled (P3-19: `sync` enables it
+/// when Open Recent has an entry).
+fn file_menu<R: Runtime>(
+    app: &AppHandle<R>,
+    recent: &Submenu<R>,
+    open_recent: &MenuItem<R>,
+    add_tracks: &MenuItem<R>,
+) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::new(app, "File")
+        .item(&make_item(app, &NEW)?)
+        .item(&make_item(app, &OPEN)?)
+        .item(recent)
+        .item(open_recent)
         .separator()
-        .item(&mi(&CLOSE)?)
-        .item(&mi(&SAVE)?)
-        .item(&mi(&SAVE_AS)?)
-        .item(&mi(&RENAME)?)
+        .item(&make_item(app, &CLOSE)?)
+        .item(&make_item(app, &SAVE)?)
+        .item(&make_item(app, &SAVE_AS)?)
+        .item(&make_item(app, &RENAME)?)
         .separator()
-        .item(&add_tracks)
-        .item(&mi(&IMPORT_OLD)?)
-        .item(&mi(&IMPORT_TEMPO_MAP)?)
-        .item(&mi(&CONSOLIDATE)?)
+        .item(add_tracks)
+        .item(&make_item(app, &IMPORT_OLD)?)
+        .item(&make_item(app, &IMPORT_TEMPO_MAP)?)
+        .item(&make_item(app, &CONSOLIDATE)?)
         .separator()
-        .item(&mi(&EXPORT)?)
-        .item(&mi(&EXPORT_AGAIN)?)
-        .build()?;
+        .item(&make_item(app, &EXPORT)?)
+        .item(&make_item(app, &EXPORT_AGAIN)?)
+        .build()
+}
+
+/// The Edit menu: undo/redo and history, the macOS clipboard items, the hit edits, the Nudge Value
+/// submenu and Recompute Velocities.
+fn edit_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
     let nudge_value = SubmenuBuilder::with_id(app, "nudge_value", "Nudge Value")
-        .item(&ck(&NUDGE_VAL_1SMP, true)?)
-        .item(&ck(&NUDGE_VAL_10SMP, false)?)
-        .item(&ck(&NUDGE_VAL_100SMP, false)?)
-        .item(&ck(&NUDGE_VAL_1MS, false)?)
-        .item(&ck(&NUDGE_VAL_10MS, false)?)
+        .item(&make_check(app, &NUDGE_VAL_1SMP, true)?)
+        .item(&make_check(app, &NUDGE_VAL_10SMP, false)?)
+        .item(&make_check(app, &NUDGE_VAL_100SMP, false)?)
+        .item(&make_check(app, &NUDGE_VAL_1MS, false)?)
+        .item(&make_check(app, &NUDGE_VAL_10MS, false)?)
         .build()?;
-    let edit = SubmenuBuilder::new(app, "Edit")
-        .item(&mi(&UNDO)?)
-        .item(&mi(&REDO)?)
-        .item(&mi(&UNDO_HISTORY)?)
+    SubmenuBuilder::new(app, "Edit")
+        .item(&make_item(app, &UNDO)?)
+        .item(&make_item(app, &REDO)?)
+        .item(&make_item(app, &UNDO_HISTORY)?)
         .separator()
         .item(&PredefinedMenuItem::cut(app, None)?)
         .item(&PredefinedMenuItem::copy(app, None)?)
         .item(&PredefinedMenuItem::paste(app, None)?)
         .item(&PredefinedMenuItem::select_all(app, None)?)
         .separator()
-        .item(&mi(&DELETE_HIT)?)
-        .item(&mi(&ADD_HIT)?)
-        .item(&mi(&MARKERS_SET)?) // #158 (rank 8)
-        .item(&mi(&NUDGE_EARLIER)?)
-        .item(&mi(&NUDGE_LATER)?)
+        .item(&make_item(app, &DELETE_HIT)?)
+        .item(&make_item(app, &ADD_HIT)?)
+        .item(&make_item(app, &MARKERS_SET)?) // #158 (rank 8)
+        .item(&make_item(app, &NUDGE_EARLIER)?)
+        .item(&make_item(app, &NUDGE_LATER)?)
         .item(&nudge_value)
         .separator()
-        .item(&mi(&RECOMPUTE)?)
-        .build()?;
+        .item(&make_item(app, &RECOMPUTE)?)
+        .build()
+}
+
+/// The View menu: the zoom items with the Waveform Zoom, Zoom Presets and Track Height submenus,
+/// the page check items, the Main Counter and Tab Moves To submenus, the rulers, the grid, the
+/// velocity lane and the other mics, and the macOS fullscreen item.
+fn view_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
     // #169: the own presets follow Organize (sync_zoom_own appends them)
     let presets = SubmenuBuilder::with_id(app, ZOOM_PRESETS_ID, "Zoom Presets")
-        .item(&mi(&ZOOM_FULL)?)
-        .item(&mi(&ZOOM_30S)?)
-        .item(&mi(&ZOOM_5S)?)
-        .item(&mi(&ZOOM_500MS)?)
-        .item(&mi(&ZOOM_50MS)?)
-        .item(&mi(&ZOOM_5MS)?)
+        .item(&make_item(app, &ZOOM_FULL)?)
+        .item(&make_item(app, &ZOOM_30S)?)
+        .item(&make_item(app, &ZOOM_5S)?)
+        .item(&make_item(app, &ZOOM_500MS)?)
+        .item(&make_item(app, &ZOOM_50MS)?)
+        .item(&make_item(app, &ZOOM_5MS)?)
         .separator()
-        .item(&mi(&ZOOM_ADD)?)
-        .item(&mi(&ZOOM_ORGANIZE)?)
+        .item(&make_item(app, &ZOOM_ADD)?)
+        .item(&make_item(app, &ZOOM_ORGANIZE)?)
         .build()?;
     let amp = SubmenuBuilder::with_id(app, "waveform_zoom", "Waveform Zoom")
-        .item(&mi(&AMP_IN)?)
-        .item(&mi(&AMP_OUT)?)
-        .item(&mi(&AMP_RESET)?)
+        .item(&make_item(app, &AMP_IN)?)
+        .item(&make_item(app, &AMP_OUT)?)
+        .item(&make_item(app, &AMP_RESET)?)
         .build()?;
     let height = SubmenuBuilder::with_id(app, "track_height", "Track Height")
-        .item(&mi(&HEIGHT_TALLER)?)
-        .item(&mi(&HEIGHT_SHORTER)?)
+        .item(&make_item(app, &HEIGHT_TALLER)?)
+        .item(&make_item(app, &HEIGHT_SHORTER)?)
         .separator()
-        .item(&ck(&HEIGHT_SMALL, false)?)
-        .item(&ck(&HEIGHT_MEDIUM, true)?)
-        .item(&ck(&HEIGHT_LARGE, false)?)
+        .item(&make_check(app, &HEIGHT_SMALL, false)?)
+        .item(&make_check(app, &HEIGHT_MEDIUM, true)?)
+        .item(&make_check(app, &HEIGHT_LARGE, false)?)
         .build()?;
     let counter = SubmenuBuilder::with_id(app, "main_counter", "Main Counter")
-        .item(&ck(&COUNTER_SECONDS, true)?)
-        .item(&ck(&COUNTER_SAMPLES, false)?)
-        .item(&ck(&COUNTER_BARSBEATS, false)?) // #149
-        .item(&ck(&COUNTER_TIMECODE, false)?) // #149: a fixed 30 fps, not the session rate
+        .item(&make_check(app, &COUNTER_SECONDS, true)?)
+        .item(&make_check(app, &COUNTER_SAMPLES, false)?)
+        .item(&make_check(app, &COUNTER_BARSBEATS, false)?) // #149
+        .item(&make_check(app, &COUNTER_TIMECODE, false)?) // #149: a fixed 30 fps, not the session rate
         .separator()
-        .item(&mi(&COUNTER_EXCHANGE)?)
+        .item(&make_item(app, &COUNTER_EXCHANGE)?)
         .build()?;
     let tab_mode = SubmenuBuilder::with_id(app, "tab_mode", "Tab Moves To") // #175
-        .item(&ck(&TAB_ACTIVE, true)?) // the default: active hits only
-        .item(&ck(&TAB_ALL, false)?)
+        .item(&make_check(app, &TAB_ACTIVE, true)?) // the default: active hits only
+        .item(&make_check(app, &TAB_ALL, false)?)
         .build()?;
-    let view = SubmenuBuilder::new(app, "View")
-        .item(&mi(&ZOOM_IN)?)
-        .item(&mi(&ZOOM_OUT)?)
-        .item(&mi(&ZOOM_PROJECT)?)
-        .item(&mi(&ZOOM_TOGGLE)?) // #158 (rank 8)
+    SubmenuBuilder::new(app, "View")
+        .item(&make_item(app, &ZOOM_IN)?)
+        .item(&make_item(app, &ZOOM_OUT)?)
+        .item(&make_item(app, &ZOOM_PROJECT)?)
+        .item(&make_item(app, &ZOOM_TOGGLE)?) // #158 (rank 8)
         .item(&amp)
         .item(&presets)
         .item(&height)
         .separator()
-        .item(&ck(&INSPECTOR, true)?)
-        .item(&ck(&INFO_LINE, true)?)
-        .item(&ck(&OVERVIEW, true)?)
+        .item(&make_check(app, &INSPECTOR, true)?)
+        .item(&make_check(app, &INFO_LINE, true)?)
+        .item(&make_check(app, &OVERVIEW, true)?)
         .item(&counter)
         .item(&tab_mode) // #175: View > Tab Moves To
         .separator()
-        .item(&ck(&RULER_TEMPO, true)?)
-        .item(&ck(&RULER_METER, true)?)
-        .item(&ck(&RULER_BEATS, true)?)
-        .item(&ck(&RULER_MARKERS, true)?)
-        .item(&ck(&GRID, true)?)
-        .item(&ck(&VELOCITY_LANE, false)?)
-        .item(&ck(&OTHER_MICS, false)?)
+        .item(&make_check(app, &RULER_TEMPO, true)?)
+        .item(&make_check(app, &RULER_METER, true)?)
+        .item(&make_check(app, &RULER_BEATS, true)?)
+        .item(&make_check(app, &RULER_MARKERS, true)?)
+        .item(&make_check(app, &GRID, true)?)
+        .item(&make_check(app, &VELOCITY_LANE, false)?)
+        .item(&make_check(app, &OTHER_MICS, false)?)
         .separator()
         .item(&PredefinedMenuItem::fullscreen(app, None)?)
-        .build()?;
+        .build()
+}
+
+/// The Transport menu: play and speed, the go-to items and the markers, the follow items and the
+/// click.
+fn transport_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
     let follow = SubmenuBuilder::with_id(app, "follow", "Follow Playhead")
-        .item(&ck(&FOLLOW_SMOOTH, true)?)
-        .item(&ck(&FOLLOW_PAGE, false)?)
-        .item(&ck(&FOLLOW_OFF, false)?)
+        .item(&make_check(app, &FOLLOW_SMOOTH, true)?)
+        .item(&make_check(app, &FOLLOW_PAGE, false)?)
+        .item(&make_check(app, &FOLLOW_OFF, false)?)
         .build()?;
-    let transport = SubmenuBuilder::new(app, "Transport")
-        .item(&mi(&PLAY_STOP)?)
-        .item(&mi(&HALF_SPEED)?)
-        .item(&mi(&STOP_RETURN)?)
+    SubmenuBuilder::new(app, "Transport")
+        .item(&make_item(app, &PLAY_STOP)?)
+        .item(&make_item(app, &HALF_SPEED)?)
+        .item(&make_item(app, &STOP_RETURN)?)
         .separator()
-        .item(&mi(&GO_START)?)
-        .item(&mi(&GO_END)?)
-        .item(&mi(&GO_PLAY_START)?)
-        .item(&mi(&MARKER_NEXT)?) // #158 (rank 8)
-        .item(&mi(&MARKER_PREV)?)
+        .item(&make_item(app, &GO_START)?)
+        .item(&make_item(app, &GO_END)?)
+        .item(&make_item(app, &GO_PLAY_START)?)
+        .item(&make_item(app, &MARKER_NEXT)?) // #158 (rank 8)
+        .item(&make_item(app, &MARKER_PREV)?)
         .separator()
         .item(&follow)
-        .item(&mi(&FOLLOW_TOGGLE)?)
-        .item(&ck(&SUSPEND_FOLLOW, false)?)
-        .item(&ck(&STOP_RETURN_MODE, false)?)
+        .item(&make_item(app, &FOLLOW_TOGGLE)?)
+        .item(&make_check(app, &SUSPEND_FOLLOW, false)?)
+        .item(&make_check(app, &STOP_RETURN_MODE, false)?)
         .separator()
-        .item(&ck(&CLICK, true)?)
-        .build()?;
-    let hits = SubmenuBuilder::new(app, "Hits")
-        .item(&mi(&NEXT_HIT)?)
-        .item(&mi(&PREV_HIT)?)
-        .item(&mi(&NEXT_HIT_ALL)?)
-        .item(&mi(&PREV_HIT_ALL)?)
-        .item(&mi(&REVIEW_NEXT)?)
-        .item(&mi(&REVIEW_PREV)?)
-        .item(&mi(&AUDITION)?) // #158 (rank 8)
+        .item(&make_check(app, &CLICK, true)?)
+        .build()
+}
+
+/// The Hits menu: the hit navigation, the review and audition, Snap, the analysis and the learn
+/// items.
+fn hits_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::new(app, "Hits")
+        .item(&make_item(app, &NEXT_HIT)?)
+        .item(&make_item(app, &PREV_HIT)?)
+        .item(&make_item(app, &NEXT_HIT_ALL)?)
+        .item(&make_item(app, &PREV_HIT_ALL)?)
+        .item(&make_item(app, &REVIEW_NEXT)?)
+        .item(&make_item(app, &REVIEW_PREV)?)
+        .item(&make_item(app, &AUDITION)?) // #158 (rank 8)
         .separator()
-        .item(&ck(&SNAP, true)?)
+        .item(&make_check(app, &SNAP, true)?)
         .separator()
-        .item(&mi(&ANALYZE_TRACK)?)
-        .item(&mi(&ANALYZE_ALL)?)
+        .item(&make_item(app, &ANALYZE_TRACK)?)
+        .item(&make_item(app, &ANALYZE_ALL)?)
         .separator()
-        .item(&mi(&LEARN_THIS)?)
-        .item(&mi(&LEARN_NOT)?)
-        .item(&mi(&LEARN_FORGET_THIS)?)
-        .item(&ck(&LEARN_FILTER, false)?)
-        .item(&mi(&LEARN_FORGET)?)
-        .build()?;
+        .item(&make_item(app, &LEARN_THIS)?)
+        .item(&make_item(app, &LEARN_NOT)?)
+        .item(&make_item(app, &LEARN_FORGET_THIS)?)
+        .item(&make_check(app, &LEARN_FILTER, false)?)
+        .item(&make_item(app, &LEARN_FORGET)?)
+        .build()
+}
+
+/// The Track menu: Add Tracks (the same item as in the File menu), the track navigation, the mix
+/// items, Follow Hits Of and Own Detection, the tempo items, Export Selected Tracks and Remove
+/// Tracks.
+fn track_menu<R: Runtime>(app: &AppHandle<R>, add_tracks: &MenuItem<R>) -> tauri::Result<Submenu<R>> {
     // P3-18: Follow Hits Of lists the other tracks of the project (sync_follow), Own Detection is the plain item
     let follow_of = SubmenuBuilder::with_id(app, FOLLOW_ID, "Follow Hits Of")
         .item(&no_tracks(app)?)
         .build()?;
-    let track = SubmenuBuilder::new(app, "Track")
-        .item(&add_tracks)
+    SubmenuBuilder::new(app, "Track")
+        .item(add_tracks)
         .separator()
-        .item(&mi(&PREV_TRACK)?) // #158 (rank 8)
-        .item(&mi(&NEXT_TRACK)?)
+        .item(&make_item(app, &PREV_TRACK)?) // #158 (rank 8)
+        .item(&make_item(app, &NEXT_TRACK)?)
         .separator()
-        .item(&mi(&MUTE_TRACK)?)
-        .item(&mi(&SOLO_TRACK)?)
-        .item(&mi(&RESET_MIX)?)
+        .item(&make_item(app, &MUTE_TRACK)?)
+        .item(&make_item(app, &SOLO_TRACK)?)
+        .item(&make_item(app, &RESET_MIX)?)
         .separator()
         .item(&follow_of)
-        .item(&mi(&FOLLOW_OWN)?)
+        .item(&make_item(app, &FOLLOW_OWN)?)
         .separator()
-        .item(&mi(&DETECT_TEMPO)?)
-        .item(&mi(&SET_BAR1)?)
-        .item(&mi(&SET_BAR1_AUDIO)?) // #468
+        .item(&make_item(app, &DETECT_TEMPO)?)
+        .item(&make_item(app, &SET_BAR1)?)
+        .item(&make_item(app, &SET_BAR1_AUDIO)?) // #468
         .separator()
-        .item(&mi(&EXPORT_SELECTED)?)
+        .item(&make_item(app, &EXPORT_SELECTED)?)
         .separator()
-        .item(&mi(&TRACKS_REMOVE)?)
-        .build()?;
-    let window = SubmenuBuilder::with_id(app, WINDOW_ID, "Window")
+        .item(&make_item(app, &TRACKS_REMOVE)?)
+        .build()
+}
+
+/// The Window menu: the project list placeholder (sync_window) and the macOS window items.
+fn window_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::with_id(app, WINDOW_ID, "Window")
         .item(&no_projects(app)?)
         .separator()
         .item(&PredefinedMenuItem::minimize(app, None)?)
         .item(&PredefinedMenuItem::maximize(app, Some("Zoom"))?)
-        .build()?;
-    let help = SubmenuBuilder::new(app, "Help").item(&mi(&SHORTCUTS)?).build()?;
+        .build()
+}
+
+/// The Help menu: Keyboard Shortcuts.
+fn help_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    SubmenuBuilder::new(app, "Help")
+        .item(&make_item(app, &SHORTCUTS)?)
+        .build()
+}
+
+/// The whole menu bar (reference section 3.2). The check items start as the page starts (snap on, follow
+/// smooth, click on); the page's first sync sets them to its real state.
+pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    // one item in two menus (File and Track; Add Tracks): muda keeps both native items in step (enabled state)
+    let add_tracks = make_item(app, &ADD_TRACKS)?;
+    let open_recent = make_item(app, &OPEN_RECENT)?;
+    open_recent.set_enabled(false)?; // P3-19: `sync` enables it when Open Recent has an entry
+    let recent = recent_menu(app)?;
+    let app_menu = app_menu(app)?;
+    let file = file_menu(app, &recent, &open_recent, &add_tracks)?;
+    let edit = edit_menu(app)?;
+    let view = view_menu(app)?;
+    let transport = transport_menu(app)?;
+    let hits = hits_menu(app)?;
+    let track = track_menu(app, &add_tracks)?;
+    let window = window_menu(app)?;
+    let help = help_menu(app)?;
     MenuBuilder::new(app)
         .items(&[
             &app_menu, &file, &edit, &view, &transport, &hits, &track, &window, &help,
