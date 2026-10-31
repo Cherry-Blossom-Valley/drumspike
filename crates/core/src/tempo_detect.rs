@@ -1648,8 +1648,8 @@ pub struct Bar1Refit {
 /// current bar 1 — the same local rule the detector's `snap` uses, so bar 1 keeps its number
 /// and its musical position and only slides to the nearest supported phase (the global winner
 /// could be a 16th or an eighth off: this session's 16th "and" carries more hits than the
-/// beats). Errors: a tempo that is not positive and finite, fewer than [`MIN_HITS`] kick and
-/// snare hits.
+/// beats). Bar 1 is never before 0 s. Errors: a tempo that is not positive and finite, fewer
+/// than [`MIN_HITS`] kick and snare hits.
 ///
 /// # Errors
 ///
@@ -1678,7 +1678,10 @@ pub fn refit_bar1(hits: &[Hit], bpm: f64, current_bar1_s: f64) -> Result<Bar1Ref
         }
     }
     let (phi, support) = best;
-    let bar1_s = phi + ((current_bar1_s - phi) / p).round() * p;
+    // Bar 1 before 0 s is not a valid map (`TempoMap::validate`): a downbeat on the first hit can
+    // fit a hair early (-0.8 ms on a real session, owner hotfix 0.9.10), so the refit clamps to
+    // 0 s like the detector does with its own bar 1.
+    let bar1_s = (phi + ((current_bar1_s - phi) / p).round() * p).max(0.0);
     Ok(Bar1Refit { bar1_s, support })
 }
 
