@@ -4,7 +4,7 @@
 //!
 //! | Command | Effect |
 //! |---|---|
-//! | `track_layer_set {sid, name, path?, level_db?, polarity?, on?, curve?, align?, onset?}` | set, change or (`path: null` or `""`) remove the layer of a track; a new `path` reads the file and measures its onset; `onset` (samples) overrides the measured one, `onset: null` resets to it (P4-40e) |
+//! | `track_layer_set {sid, name, path?, level_db?, polarity?, on?, curve?, range?, align?, onset?}` | set, change or (`path: null` or `"")` remove the layer of a track; a new `path` reads the file and measures its onset; `onset` (samples) overrides the measured one, `onset: null` resets to it (P4-40e) |
 //! | `track_layer_get {sid, name}` | the layer, the state of its file and its onset |
 //! | `track_layer_align {sid, name}` | P4-7b: per hit the alignment of the one-shot to the close mic (lag, match, sign) and the track's polarity |
 //! | `export_layer {sid, name}` | write `Exports/<name>_layer.wav` |
@@ -601,12 +601,14 @@ impl Service {
         Ok(crate::media::wave_bytes(&shot, start, end))
     }
 
-    /// `track_layer_set {sid, name, path?, level_db?, polarity?, on?, curve?, align?, onset?}`: a `path` (WAV or
+    /// `track_layer_set {sid, name, path?, level_db?, polarity?, on?, curve?, range?, align?, onset?}`: a `path` (WAV or
     /// AIFF) sets the one-shot (read, onset measured, a source record kept; the other settings stay
     /// when a layer was there, else they take their defaults), `path: null` or `""` removes the layer; the
     /// other keys change one setting each. `onset` (P4-40e, samples of the one-shot) overrides the
-    /// measured onset for the render, the playback and the Align; `onset: null` resets to the measured
-    /// one; a new `path` clears an override (an `onset` of the same call sets a fresh one). Marks the
+    /// measured onset for the render, the playback and the Align; `onset: null` resets to the
+    /// measured one; a new `path` clears an override (an `onset` of the same call sets a fresh one).
+    /// `range` (the velocity curve's range in dB, 0 to 96) sets the range of the dB curve; a curve
+    /// of `linear` or `fixed` must be set to `db` first (400 otherwise). Marks the
     /// project dirty and updates an open transport of the project. Answers as
     /// [`Service::track_layer_get`]. 400 for a file the app cannot read or a wrong value; 409 for a
     /// setting on a track without a layer.
@@ -614,7 +616,7 @@ impl Service {
     /// # Errors
     ///
     /// An `AppError` for an unknown or read-only session or an unknown track; a 400 when `path` is not a string or
-    /// null or its file cannot be read, `level_db`, `polarity`, `curve`, `on`, `align` or `onset` has a wrong value,
+    /// null or its file cannot be read, `level_db`, `polarity`, `curve`, `range`, `on`, `align` or `onset` has a wrong value,
     /// or `onset` is not before the end of the one-shot; a 409 when no layer exists and no `path` is given.
     pub fn track_layer_set(&self, sid: &str, name: &str, args: &Value) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
@@ -660,6 +662,17 @@ impl Service {
             Some(v) => Some(Curve::from_json(v).ok_or_else(|| {
                 AppError::bad("`curve` must be {kind: db, range_db 0 to 96}, {kind: linear} or {kind: fixed}")
             })?),
+        };
+        // #232: the plain `range` number of the velocity curve's dB kind (the Inspector's dB-range
+        // field). A curve of linear or fixed must go to db first (`curve`), so the number is never
+        // silently ignored.
+        let range = match args.get("range") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(
+                v.as_f64()
+                    .filter(|x| x.is_finite() && (0.0..=96.0).contains(x))
+                    .ok_or_else(|| AppError::bad("`range` must be a number of dB, 0 to 96"))?,
+            ),
         };
         let flag = |k: &str| -> Result<Option<bool>, AppError> {
             match args.get(k) {
@@ -735,6 +748,14 @@ impl Service {
             }
             if let Some(v) = curve {
                 layer.curve = v;
+            }
+            if let Some(r) = range {
+                if !matches!(layer.curve, Curve::Db { .. }) {
+                    return Err(AppError::bad(
+                        "`range` needs the db curve: set `curve` to {\"kind\": \"db\"} first",
+                    ));
+                }
+                layer.curve = Curve::Db { range_db: r };
             }
             if let Some(v) = on {
                 layer.on = v;

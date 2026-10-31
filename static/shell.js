@@ -382,6 +382,7 @@
     marker_next: () => { if (needProject()) markerJump(1); },   // #158 (rank 8): Transport > Next Marker
     marker_prev: () => { if (needProject()) markerJump(-1); },
     audition: () => { if (needProject()) audition(false); },   // #158 (rank 8): Hits > Audition Hit (the Shift loop stays the page's Shift+A)
+    toggle_hit_active: () => { if (needProject()) toggleHitActive(); },   // #242: Hits > Toggle Hit Active (X)
     add_hit: () => addHitAtPlayhead(),
     nudge_earlier: () => { if (needProject()) nudgeUnits(-1); },
     nudge_later: () => { if (needProject()) nudgeUnits(1); },

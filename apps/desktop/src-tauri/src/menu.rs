@@ -221,6 +221,8 @@ pub const REVIEW_NEXT: Item = item("review_next", "Next Doubtful Hit", true);
 pub const REVIEW_PREV: Item = item("review_prev", "Previous Doubtful Hit", true);
 /// #158 (rank 8): P4-40d's audition (A and Shift+A are page keys; the Cubase preset owns Option+A).
 pub const AUDITION: Item = item("audition", "Audition Hit", true);
+/// #242: the selected hit between active and deactivated (X is the page key in both presets).
+pub const TOGGLE_HIT_ACTIVE: Item = item("toggle_hit_active", "Toggle Hit Active", true);
 pub const SNAP: Item = check("snap", "Snap Playhead to Hits");
 pub const ANALYZE_TRACK: Item = item("analyze_track", "Analyze Selected Track", true);
 pub const ANALYZE_ALL: Item = item("analyze_all", "Analyze All", true);
@@ -253,7 +255,7 @@ pub const DRUMSPIKE_HELP: Item = item("drumspike_help", "Drum Spike Help", false
 pub const SHORTCUTS: Item = item("shortcuts", "Keyboard Shortcuts", false);
 
 /// Every custom item (not the Open Recent and Window entries, not the system items Cut, Copy and so on).
-pub const SPEC: [Item; 111] = [
+pub const SPEC: [Item; 112] = [
     ABOUT,
     SETTINGS,
     QUIT,
@@ -344,6 +346,7 @@ pub const SPEC: [Item; 111] = [
     REVIEW_NEXT,
     REVIEW_PREV,
     AUDITION,
+    TOGGLE_HIT_ACTIVE,
     SNAP,
     ANALYZE_TRACK,
     ANALYZE_ALL,
@@ -1074,6 +1077,7 @@ fn hits_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
         .item(&make_item(app, &REVIEW_NEXT)?)
         .item(&make_item(app, &REVIEW_PREV)?)
         .item(&make_item(app, &AUDITION)?) // #158 (rank 8)
+        .item(&make_item(app, &TOGGLE_HIT_ACTIVE)?) // #242
         .separator()
         .item(&make_check(app, &SNAP, true)?)
         .separator()
@@ -1366,7 +1370,7 @@ pub fn sync_checks<R: Runtime>(app: &AppHandle<R>, state: &Value) -> tauri::Resu
     // #158 (rank 9): the items that need a hit selection (a hit or a range) are greyed without one. `sync` has
     // already enabled them with the project; a state without the key (an old page) keeps that state.
     if let Some(on) = state.get("selHit").and_then(Value::as_bool) {
-        for it in [DELETE_HIT, NUDGE_EARLIER, NUDGE_LATER, AUDITION] {
+        for it in [DELETE_HIT, NUDGE_EARLIER, NUDGE_LATER, AUDITION, TOGGLE_HIT_ACTIVE] {
             set_enabled(&menu, it.id, on)?;
         }
     }
@@ -1597,7 +1601,11 @@ pub fn report<R: Runtime>(app: &AppHandle<R>) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    json!({"items": items, "recent": recent, "window": window, "follow": follow, "menus": menus, "preset": current_preset()})
+    let zoom_own = find_submenu(&menu, ZOOM_PRESETS_ID)
+        .and_then(|s| s.items().ok())
+        .map(|v| v.iter().map(|k| k.id().as_ref().to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    json!({"items": items, "recent": recent, "window": window, "follow": follow, "menus": menus, "preset": current_preset(), "zoom_own": zoom_own})
 }
 
 /// The `NSEvent` characters and modifier flags of a key of the table (`"Cmd+Down"`): the key

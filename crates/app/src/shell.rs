@@ -18,10 +18,11 @@ use crate::export::{ExportOpts, MidiMode, check_dest, check_export_plan, multi_f
 use crate::registry::lock;
 
 /// The commands of this card that the service owns (the bridge and the Tauri wrapper use the names).
-pub const SHELL_COMMANDS: [&str; 7] = [
+pub const SHELL_COMMANDS: [&str; 8] = [
     "export_existing",
     "export_dest_set",
     "export_markers_set",
+    "export_compensate_set",
     "export_drag_prepare",
     "export_drag_take",
     "export_last_get",
@@ -141,6 +142,9 @@ impl Service {
             json!({"count": files.len(), "files": files, "dest": dir.display().to_string(),
                   "default_dest": default_dir.display().to_string(), "remembered": remembered,
                   "export_markers": crate::export::doc_export_markers_on(&g.project.doc),
+                  // a kept choice only (null before one): the dialog's own default (on when a track has a
+                  // sampler calibration) holds until the user sets the box
+                  "export_compensate": g.project.doc.extra.get(crate::export::EXPORT_COMPENSATE_KEY).cloned().unwrap_or(Value::Null),
                   "export_last": g.project.doc.extra.get(LAST_KEY).cloned().unwrap_or(Value::Null)}),
         )
     }
@@ -205,6 +209,26 @@ impl Service {
         Ok(json!({"export_markers": on}))
     }
 
+    /// `export_compensate_set {sid, compensate}`: keep the Export dialog's "Compensate" checkbox for
+    /// the project (#232, the document field `export_compensate` of `crate::export`; the project is
+    /// dirty until it is saved). An `export_all` without a per-call `compensate` uses it. Answer
+    /// `{export_compensate}`.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project; 409 when the project is open read-only.
+    pub fn export_compensate_set(&self, sid: &str, compensate: bool) -> Result<Value, AppError> {
+        let op = self.inner.registry.get_writable(sid)?;
+        let mut g = lock(&op);
+        // the choice is kept as it is, also when it equals the agent default: `export_existing`
+        // answers only a kept choice, so the dialog can tell "the user chose on" from "not chosen"
+        let key = crate::export::EXPORT_COMPENSATE_KEY;
+        if g.project.doc.extra.get(key).and_then(Value::as_bool) != Some(compensate) {
+            g.project.doc.extra.insert(key.into(), Value::from(compensate));
+            g.mark_dirty();
+        }
+        Ok(json!({"export_compensate": compensate}))
+    }
+
     /// `export_last_get {sid}`: the export shape of the project (the choices the Export dialog shows again and
     /// the Export again key repeats), or `null` before the first export. Answer `{export_last}`.
     ///
@@ -213,7 +237,10 @@ impl Service {
     pub fn export_last_get(&self, sid: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
-        Ok(json!({"export_last": g.project.doc.extra.get(LAST_KEY).cloned().unwrap_or(Value::Null)}))
+        Ok(json!({
+            "export_last": g.project.doc.extra.get(LAST_KEY).cloned().unwrap_or(Value::Null),
+            "export_compensate": crate::export::doc_export_compensate(&g.project.doc),
+        }))
     }
 
     /// `export_last_set {sid, formats, midi_mode?, compensate?, scope?, track?, dest?}`: keep the export shape
@@ -421,6 +448,10 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
             Some(Value::Bool(on)) => svc.export_markers_set(sid, *on),
             _ => Err(AppError::bad("`on` must be true or false")),
         },
+        "export_compensate_set" => match args.get("compensate") {
+            Some(Value::Bool(b)) => svc.export_compensate_set(sid, *b),
+            _ => Err(AppError::bad("`compensate` must be true or false")),
+        },
         "export_last_get" => svc.export_last_get(sid),
         "export_last_set" => svc.export_last_set(sid, args),
         _ => match args.get("dest") {
@@ -466,6 +497,7 @@ mod tests {
                 "export_existing",
                 "export_dest_set",
                 "export_markers_set",
+                "export_compensate_set",
                 "export_drag_prepare",
                 "export_drag_take",
                 "export_last_get",

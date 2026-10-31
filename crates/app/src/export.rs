@@ -284,6 +284,19 @@ pub fn doc_export_markers_on(doc: &drumspike_core::Document) -> bool {
         .unwrap_or(false)
 }
 
+/// #232: the document key of the kept "Compensate" checkbox of the Export dialog (a boolean;
+/// absent means the default, `crate::command_policy::COMPENSATE_DEFAULT`).
+pub const EXPORT_COMPENSATE_KEY: &str = "export_compensate";
+
+/// #232: the kept "Compensate" checkbox of `doc` (absent: the default, true).
+#[must_use]
+pub fn doc_export_compensate(doc: &drumspike_core::Document) -> bool {
+    doc.extra
+        .get(EXPORT_COMPENSATE_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(crate::command_policy::COMPENSATE_DEFAULT)
+}
+
 /// The review markers of `doc` for the multi-track MIDI file (P4-40g): the entries with a numeric
 /// `t`, sorted by time (stable), the note carried as it is; `multi_midi_bytes` writes the text or
 /// the `Marker N` fallback.
@@ -1296,7 +1309,14 @@ pub fn bridge_call(
                     let p: Progress = std::sync::Arc::new(move |v: Value| ch.push(&id, v));
                     p
                 });
-            s.export_all_opts(str_arg("sid")?, &ExportOpts::from_args(args)?, progress)
+            let sid = str_arg("sid")?;
+            let mut o = ExportOpts::from_args(args)?;
+            if args.get("compensate").is_none() {
+                // #232: no per-call `compensate`: the kept Export-dialog checkbox of the project decides
+                let op = s.inner.registry.get(sid)?;
+                o.compensate = doc_export_compensate(&crate::registry::lock(&op).project.doc);
+            }
+            s.export_all_opts(sid, &o, progress)
         }
         other => Err(AppError::not_found(format!("unknown command {other}"))),
     }

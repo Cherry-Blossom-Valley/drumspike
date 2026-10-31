@@ -249,6 +249,18 @@ With it on, the one multi-track file (`<project>_drums.mid`, `midi_mode: "single
 event (FF 06) per review marker at its time through the tempo map, the note as the text or `Marker N`
 (counted from 1 in time order). The per-track files keep only the map's own `Bar 1` marker.
 
+#232: `export_compensate_set {sid, compensate}` keeps the Export dialog's "Compensate" checkbox in the
+document field `export_compensate` (absent is the default, true); `export_last_get` answers the
+effective value as `export_compensate`, `export_existing` only a kept choice (`null` before one, so the
+dialog keeps its own default: on when a track has a sampler calibration). An `export_all` without a per-call `compensate`
+uses the kept value; an explicit `compensate` argument still wins.
+
+#232: the four settings that the #120 inventory named as gaps are numbers the agent and the app both
+set: `track_params_set`/`track_repick` carry the refine window (`refine_lo_ms`, `refine_hi_ms`, also
+in the Inspector's Detection section), the role's name pattern (`track_set_role {role_match}`) is in
+the Inspector's Track section, `track_layer_set {range}` takes the velocity curve's dB range as a
+plain number (the curve must be `db`), and the Compensate checkbox is `export_compensate_set`.
+
 ## What the agent cannot do
 
 Play back (the transport needs the window and a sound device), draw or read waveform tiles, undo (close the project without

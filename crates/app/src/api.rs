@@ -923,6 +923,22 @@ pub static REGISTRY: &[CommandSpec] = &[
         Quick,
     ),
     cmd(
+        "export_compensate_set",
+        "Keep the Export dialog's Compensate checkbox for the project (a document field); export_all without compensate uses it",
+        &[
+            SID,
+            req(
+                "compensate",
+                Ty::Bool,
+                "true: the sampler offset moves the MIDI notes (the default); false: off",
+            ),
+        ],
+        r#"{"type":"object","required":["export_compensate"]}"#,
+        Doc,
+        Agent,
+        Quick,
+    ),
+    cmd(
         "export_last_get",
         "The export shape of the project (what the Export dialog shows again and Export again repeats); none before the first export",
         &[SID],
@@ -1521,6 +1537,11 @@ pub static REGISTRY: &[CommandSpec] = &[
                 "curve",
                 Ty::Obj,
                 "Velocity curve: {kind: db, range_db} (default 24 dB), {kind: linear} or {kind: fixed}",
+            ),
+            opt(
+                "range",
+                Ty::Num,
+                "The range in dB of the db velocity curve (0 to 96); the curve must be db",
             ),
             opt(
                 "align",
