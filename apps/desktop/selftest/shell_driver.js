@@ -805,7 +805,7 @@
       // View > Zoom Presets: Organize opens the dialog (no own presets yet), Add Current saves the span
       // of the view and the menu lists the own preset; the list is put back at the end
       await click("zoom_organize");
-      await until(() => visible("#presetModal") && /No own presets yet/.test($q("#presetBody").textContent), "the Organize dialog", 5000);
+      await until(() => visible("#presetModal") && /No own presets yet/.test($q("#presetHint").textContent), "the Organize dialog", 5000);
       $q("#presetAccept").click();
       await until(() => !visible("#presetModal"), "the Organize dialog to close", 5000);
       done.push("zoom_organize");
