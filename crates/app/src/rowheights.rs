@@ -55,7 +55,7 @@ impl Service {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
         let heights = doc_row_heights(&g.project.doc);
-        let n = heights.as_object().map_or(0, |m| m.len());
+        let n = heights.as_object().map_or(0, serde_json::Map::len);
         Ok(json!({ "heights": heights, "n": n }))
     }
 

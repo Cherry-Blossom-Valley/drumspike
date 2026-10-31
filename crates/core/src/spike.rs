@@ -818,7 +818,7 @@ mod tests {
                 if dt < 0.0 {
                     return 0.0;
                 }
-                for &(b0, b1, amp) in lobes.iter() {
+                for &(b0, b1, amp) in &lobes {
                     if dt < b1 {
                         if dt < b0 {
                             return 0.0;
@@ -889,8 +889,8 @@ mod tests {
     }
 
     /// #378 round 3: a tone that runs CONTINUOUSLY through the hit (no silence before,
-    /// the shape of the app test the_audio_export_leaves_the_source_unchanged_and_writes_
-    /// the_snippets) counts the same three lobes: the zero-phase smoothing puts the
+    /// the shape of the app test `the_audio_export_leaves_the_source_unchanged_and_writes`_
+    /// `the_snippets`) counts the same three lobes: the zero-phase smoothing puts the
     /// smoothed crossings on the real ones, free of the causal group delay.
     #[test]
     fn a_continuous_tone_counts_the_same_three_lobes() {

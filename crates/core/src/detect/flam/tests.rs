@@ -52,7 +52,7 @@ fn snare(n_hits: usize, flams: &[(f64, f64)], noise_db: f64) -> (Vec<f32>, Vec<f
         hits.push(t);
     }
     let g = 10f64.powf(noise_db / 20.0);
-    for v in x.iter_mut() {
+    for v in &mut x {
         *v += g * nz.next();
     }
     (f32s(&x), hits)
@@ -278,7 +278,7 @@ fn a_second_stroke_on_the_first_strokes_ring_never_starts_before_the_dips_next_b
             stroke_tau(&mut x, t + 0.025, 1.5, 0.003, 0.04, &mut nz);
         }
     }
-    for v in x.iter_mut() {
+    for v in &mut x {
         *v += 1e-5 * nz.next();
     }
     let x = f32s(&x);

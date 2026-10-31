@@ -11,12 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_check_midi_timing_passes():
+    """#174: the quick corpus in pytest (three representative cases over 30 s, target under
+    5 s); the full five-case corpus over the full spans runs in the release check
+    (`tools/release/cut.py check-midi`)."""
     r = subprocess.run(
-        [sys.executable, str(ROOT / "tools" / "check_midi_timing.py")],
+        [sys.executable, str(ROOT / "tools" / "check_midi_timing.py"), "--quick"],
         capture_output=True,
         text=True,
         cwd=ROOT,
         timeout=1200,
     )
     assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-800:]
-    assert "5/5 cases pass" in r.stdout, r.stdout[-500:]
+    assert "3/3 cases pass" in r.stdout, r.stdout[-500:]

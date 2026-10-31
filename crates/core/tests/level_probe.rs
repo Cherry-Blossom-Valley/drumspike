@@ -1,5 +1,5 @@
 //! A5 probe: how the flux and its peak contrast scale with the recording level, on the
-//! level_calib kit. Not a gate; prints the numbers the relative-delta rule is calibrated
+//! `level_calib` kit. Not a gate; prints the numbers the relative-delta rule is calibrated
 //! from. Run: `cargo test -p drumspike-core --test level_probe -j 8 -- --nocapture`
 
 use drumspike_core::detect::features::N_BANDS;
@@ -20,7 +20,7 @@ fn mag_scale(role: &str, peak_db: f64) -> Result<(), DetectError> {
             mags.push(10f32.powf(spec[i * N_BANDS + b]) - 1.0);
         }
     }
-    mags.sort_by(|a, b| a.total_cmp(b));
+    mags.sort_by(f32::total_cmp);
     let q = |p: f32| -> f32 { mags[((mags.len() as f32 - 1.0) * p).round() as usize] };
     println!("{role} {peak_db:>5} dB: mag q995 {:.4} q999 {:.4}", q(0.995), q(0.999));
     Ok(())

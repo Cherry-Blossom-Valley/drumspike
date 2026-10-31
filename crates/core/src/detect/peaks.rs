@@ -4,7 +4,7 @@
 //! row-major order. Output: the onsets of all five classes, sorted by frame and class, with
 //! `time = frame / 100`. Each class is picked on its own column with its threshold
 //! ([`THRESHOLDS`]: BD 0.22, SD 0.24, TT 0.32, HH 0.22, CY+RD 0.30) and the reference timing
-//! (pre_avg 0.1 s, post_avg 0.01 s, pre_max 0.02 s, post_max 0.01 s, combine 0.02 s at 100
+//! (`pre_avg` 0.1 s, `post_avg` 0.01 s, `pre_max` 0.02 s, `post_max` 0.01 s, combine 0.02 s at 100
 //! fps: 10, 1, 2, 1 and 2 frames). [`Chain`] selects the rules ([`Chain::Mix`] uses the
 //! madmom rules; `docs/archive/phase2-report.md`, section "P2-1c R3 vs CLI gap"):
 //!
@@ -22,7 +22,7 @@
 //! the reference arithmetic bit for bit (checked on all 5.9 million values of the 56
 //! reference files of each chain, `docs/archive/phase2-report.md`, section P2-4):
 //!
-//! * CLI: `np.convolve` calls the BLAS `sdot` (OpenBLAS) for each output: the 12 products
+//! * CLI: `np.convolve` calls the BLAS `sdot` (`OpenBLAS`) for each output: the 12 products
 //!   `x * f32(1/12)` are rounded to `f32` and summed in `f64` in window order, and the sum is
 //!   rounded to `f32`.
 //! * madmom: scipy's `NI_UniformFilter1D` keeps a running `f64` sum over the zero-padded

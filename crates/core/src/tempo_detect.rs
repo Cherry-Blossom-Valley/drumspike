@@ -500,22 +500,28 @@ fn prior(bpm: f64) -> f64 {
     (-0.5 * (bpm / 120.0).log2().powi(2)).exp()
 }
 
-/// #130 tempo-referee version (env `DRUMSPIKE_TEMPO_RULE`; unset counts as 2, the #130
+/// Half-time snare (#180): the busier beat of the snare's pair holds at least this many
+/// times the snares of its partner, and at least [`HALF_TIME_MIN_SNARES`] of them.
+const HALF_TIME_RATIO: f64 = 2.0;
+const HALF_TIME_MIN_SNARES: f64 = 8.0;
+
+/// #130 tempo-referee version (env `DRUMSPIKE_TEMPO_RULE`; unset counts as 3, the #180
 /// product default). Version 1 pins the shipped referee: with a snare, the backbeat alone
 /// picks the octave and the shares stay out of it. Version 2 corroborates the backbeat
-/// verdict with the sub-beat shares (see [`half_time_backbeat`]). The detection is read
+/// verdict with the sub-beat shares (see [`half_time_backbeat`]). Version 3 adds the
+/// half-time bar 1 of #180 (see `bars`). The detection is read
 /// only: a project analysed before keeps its tempo until it is detected again.
 pub fn tempo_rule() -> u32 {
     parse_rule(std::env::var("DRUMSPIKE_TEMPO_RULE").ok().as_deref())
 }
 
-/// The pin value behind [`tempo_rule`]: `1` and `0` pin the shipped referee, an unset or
-/// unparseable value is rule 2. A pure function so its test does not write the process env,
-/// which the parallel detection tests share.
+/// The pin value behind [`tempo_rule`]: `1` and `0` pin the shipped referee, `2` the #130
+/// one, an unset or unparseable value is rule 3. A pure function so its test does not write
+/// the process env, which the parallel detection tests share.
 fn parse_rule(v: Option<&str>) -> u32 {
     match v {
-        Some(v) => v.parse().unwrap_or(2),
-        None => 2,
+        Some(v) => v.parse().unwrap_or(3),
+        None => 3,
     }
 }
 
@@ -1136,7 +1142,7 @@ fn invert(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
         }
         m.swap(c, piv);
         let d = m[c][c];
-        for x in m[c].iter_mut() {
+        for x in &mut m[c] {
             *x /= d;
         }
         let pivot = m[c].clone();
@@ -1455,9 +1461,19 @@ fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
             let (k0, k1) = (pair(&k, 0), pair(&k, 1));
             (i64::from(k1 > k0), sign_test(k0.max(k1), k0.min(k1)))
         };
-        let (a, b) = (votes(par), votes(par + 2));
-        let (down, alt) = if a >= b { (par, par + 2) } else { (par + 2, par) };
-        (down, alt, backbeat, sign_test(a.max(b), a.min(b)))
+        // #180: under a half-time snare (one beat of the pair holds the snare, its partner
+        // under half as many) the snare is on beat 3, so beat 1 is two beats from it, in the
+        // snare's own pair. The 2-and-4 reading above picks the other pair: a beat late.
+        let sp = i64::from(s1 > s0);
+        let (h0, h1) = (class(&s, sp), class(&s, sp + 2));
+        let (hi, lo, hc) = if h0 >= h1 { (h0, h1, sp) } else { (h1, h0, sp + 2) };
+        if tempo_rule() >= 3 && s0 != s1 && hi >= HALF_TIME_MIN_SNARES && hi >= HALF_TIME_RATIO * lo {
+            (hc + 2, hc, backbeat, sign_test(hi, lo))
+        } else {
+            let (a, b) = (votes(par), votes(par + 2));
+            let (down, alt) = if a >= b { (par, par + 2) } else { (par + 2, par) };
+            (down, alt, backbeat, sign_test(a.max(b), a.min(b)))
+        }
     } else {
         let scores: Vec<f64> = (0..bpb).map(|o| votes(o) - class(&s, o)).collect();
         let mut order: Vec<usize> = (0..scores.len()).collect();

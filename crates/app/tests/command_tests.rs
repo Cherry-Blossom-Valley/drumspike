@@ -11,7 +11,7 @@ fn has_tests(file: &str, commands: &[&str]) -> Vec<String> {
     commands
         .iter()
         .filter(|c| !src.contains(&format!("fn {c}_")))
-        .map(|c| c.to_string())
+        .map(std::string::ToString::to_string)
         .collect()
 }
 

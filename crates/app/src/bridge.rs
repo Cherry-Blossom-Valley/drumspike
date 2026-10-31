@@ -2,7 +2,7 @@
 //!
 //! `ds-bridge` (`crates/devtools/src/bin/ds-bridge.rs`) is the only user. It serves `static/` and
 //! `POST /invoke/<command>` on 127.0.0.1, so the page runs in Chromium (Playwright) on both
-//! hosts without a WebView. A command here calls the same `Service` method as the Tauri
+//! hosts without a `WebView`. A command here calls the same `Service` method as the Tauri
 //! wrapper of the same name in `apps/desktop/src-tauri/src/lib.rs`; only the arguments
 //! come from JSON instead of from Tauri. Errors keep the server's codes as the HTTP status
 //! and as the body `{code, message}`.
@@ -39,7 +39,7 @@ pub fn listen(port: u16) -> std::io::Result<TcpListener> {
 
 /// X-3 (P3-9b): the HTTP/1.1 server of the bridge, one thread per connection.
 ///
-/// Until P3-9b the bridge used tiny_http 0.12. Its pool reads each connection on one of its threads
+/// Until P3-9b the bridge used `tiny_http` 0.12. Its pool reads each connection on one of its threads
 /// with no read timeout and starts with 4 threads. Chromium opens up to 6 connections for the first
 /// page load and leaves some idle (preconnects); when the pool queued a connection while its threads
 /// waited on idle ones, the page load stalled until Chromium gave up (the `Page.goto` timeouts of G4,
@@ -224,7 +224,7 @@ pub struct EventLog {
 impl EventLog {
     /// Add `{event, payload}` and wake the waiting polls.
     pub fn push(&self, name: &str, payload: Value) {
-        let mut g = self.log.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.0 += 1;
         let n = g.0;
         if g.1.len() >= QUEUE_CAP {
@@ -236,14 +236,14 @@ impl EventLog {
 
     /// The number of the newest entry (0 for an empty log).
     pub fn head(&self) -> u64 {
-        self.log.lock().unwrap_or_else(|e| e.into_inner()).0
+        self.log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).0
     }
 
     /// The entries after number `after`; waits up to `timeout` for the first one. Returns
     /// `{"seq": newest number, "events": [...]}`.
     pub fn poll(&self, after: u64, timeout: Duration) -> Value {
         let end = Instant::now() + timeout;
-        let mut g = self.log.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if g.0 > after {
                 let events: Vec<Value> = g.1.iter().filter(|(n, _)| *n > after).map(|(_, v)| v.clone()).collect();
@@ -253,7 +253,11 @@ impl EventLog {
             if left.is_zero() {
                 return json!({"seq": g.0, "events": []});
             }
-            g = self.cv.wait_timeout(g, left).unwrap_or_else(|e| e.into_inner()).0;
+            g = self
+                .cv
+                .wait_timeout(g, left)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
         }
     }
 }

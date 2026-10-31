@@ -15,7 +15,7 @@
 //!
 //! * `decode 1 track`: [`read_wav_mono`] of one file (mmap, conversion, mono fold);
 //! * `decode 1 track (read_wav_bytes)`: the same file read into memory with
-//!   [`read_wav_bytes`] and decoded (the path of the PyO3 binding, retired in P3-12);
+//!   [`read_wav_bytes`] and decoded (the path of the `PyO3` binding, retired in P3-12);
 //! * `peaks 1 track`: [`compute_peaks`] of that signal (256 / 4096 / 65536);
 //! * `refine 1 track`: [`refine_track`] of every hit (the detector's coarse times are the
 //!   true onsets plus 4 ms) and [`velocity_map`] at the refined times;
@@ -44,7 +44,7 @@ use rayon::prelude::*;
 const SR: u32 = 48_000;
 const HIT_EVERY_S: f64 = 0.5;
 
-/// Read `path` into memory and decode it, as the PyO3 binding does (no memory mapping).
+/// Read `path` into memory and decode it, as the `PyO3` binding does (no memory mapping).
 fn decode_bytes(path: &Path) -> Result<Vec<f32>, String> {
     let (bytes, info) = read_wav_bytes(path).map_err(|e| e.to_string())?;
     info.decode_mono(&bytes, MixMode::Average).map_err(|e| e.to_string())
@@ -83,11 +83,7 @@ fn parse_args() -> Result<Args, String> {
         };
         match argv[i].as_str() {
             "--tracks" => a.tracks = num("--tracks N")?,
-            "--seconds" => {
-                a.seconds = val()
-                    .parse::<f64>()
-                    .map_err(|e| format!("--seconds S: {e}"))?
-            }
+            "--seconds" => a.seconds = val().parse::<f64>().map_err(|e| format!("--seconds S: {e}"))?,
             "--runs" => a.runs = num("--runs N")?.max(1),
             "--detect-runs" => a.detect_runs = num("--detect-runs N")?,
             "--dir" => a.dir = Some(PathBuf::from(val())),
@@ -267,7 +263,9 @@ fn run() -> Result<(), String> {
     paths
         .par_iter()
         .enumerate()
-        .map(|(k, p)| write_wav(p, &spec, &synth(n, k as u64 + 1), None).map_err(|e| format!("write {}: {e}", p.display())))
+        .map(|(k, p)| {
+            write_wav(p, &spec, &synth(n, k as u64 + 1), None).map_err(|e| format!("write {}: {e}", p.display()))
+        })
         .collect::<Result<(), _>>()?;
     // the files above were written by this run, so their metadata is there
     let bytes: u64 = paths
@@ -293,7 +291,9 @@ fn run() -> Result<(), String> {
         (
             "decode 1 track".to_string(),
             // the same file decoded above, so the error arm cannot fire
-            time(a.runs, || read_wav_mono(first, MixMode::Average).map_or(0, |r| r.0.len())),
+            time(a.runs, || {
+                read_wav_mono(first, MixMode::Average).map_or(0, |r| r.0.len())
+            }),
         ),
         (
             "decode 1 track (read_wav_bytes)".to_string(),
@@ -354,7 +354,7 @@ fn run() -> Result<(), String> {
         rows.push((
             format!("detect 1 track ({}): decode .. velocities", det.name()),
             (
-                one_sorted.iter().cloned().fold(f64::INFINITY, f64::min),
+                one_sorted.iter().copied().fold(f64::INFINITY, f64::min),
                 median(&mut one_sorted),
             ),
         ));
@@ -366,7 +366,7 @@ fn run() -> Result<(), String> {
                 det.name(),
                 stage_runs[0].hits
             ),
-            (tot.iter().cloned().fold(f64::INFINITY, f64::min), median(&mut tot)),
+            (tot.iter().copied().fold(f64::INFINITY, f64::min), median(&mut tot)),
         ));
     }
 

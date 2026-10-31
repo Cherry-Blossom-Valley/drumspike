@@ -84,7 +84,7 @@ mod tests {
 
     const SR: u32 = 48_000;
 
-    /// Mono signal with a single-sample peak of exactly `db` dBFS at time `t` (tests/test_engine.py).
+    /// Mono signal with a single-sample peak of exactly `db` dBFS at time `t` (`tests/test_engine.py`).
     fn spike_at(db: f64, t: f64) -> Vec<f32> {
         let mut x = vec![0.0f32; SR as usize];
         x[(t * SR as f64) as usize] = 10f64.powf(db / 20.0) as f32;

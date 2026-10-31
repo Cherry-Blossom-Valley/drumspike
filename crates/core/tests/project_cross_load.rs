@@ -138,11 +138,7 @@ fn check_document(name: &str, doc: &Document, fx: &Value) {
         assert_eq!(events.len(), expected.len(), "{name}/{track}: event count");
         for (e, want) in events.iter().zip(expected) {
             assert_eq!(bits(e.t), want[0].as_str().unwrap(), "{name}/{track}: t");
-            assert_eq!(
-                e.v.map(Value::from).unwrap_or(Value::Null),
-                want[1],
-                "{name}/{track}: v"
-            );
+            assert_eq!(e.v.map_or(Value::Null, Value::from), want[1], "{name}/{track}: v");
             match (&e.orig, &want[2]) {
                 (Some(o), Value::String(s)) => assert_eq!(&bits(*o), s, "{name}/{track}: orig"),
                 (None, Value::Null) => {}

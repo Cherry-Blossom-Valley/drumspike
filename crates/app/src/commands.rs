@@ -535,15 +535,12 @@ pub(crate) fn assign_events(g: &mut OpenProject, name: &str, events: &Value) -> 
     let n = list.len();
     let typed = serde_json::from_value::<Vec<Event>>(events.clone());
     let tr = g.track_mut(name)?;
-    match typed {
-        Ok(ev) => {
-            tr.events = Some(ev);
-            tr.extra.shift_remove("events");
-        }
-        Err(_) => {
-            tr.events = None;
-            tr.extra.insert("events".into(), events.clone());
-        }
+    if let Ok(ev) = typed {
+        tr.events = Some(ev);
+        tr.extra.shift_remove("events");
+    } else {
+        tr.events = None;
+        tr.extra.insert("events".into(), events.clone());
     }
     Ok(n)
 }

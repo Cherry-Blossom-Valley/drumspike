@@ -282,7 +282,7 @@ fn the_menu_key_of_a_row_in_a_preset() {
         title: "X".into(),
         menu_key: menu_key.map(Into::into),
         page_keys: vec!["Q".into()],
-        cubase: cubase.map(|l| l.iter().map(|k| k.to_string()).collect()),
+        cubase: cubase.map(|l| l.iter().map(std::string::ToString::to_string).collect()),
     };
     let r = row(Some("x"), Some("Cmd+K"), Some(&["Shift+F", "Option+N", "Cmd+L"]));
     assert_eq!(r.menu_key_in("cubase").as_deref(), Some("Option+N"));
@@ -312,7 +312,7 @@ fn the_key_table_parses_and_no_key_is_in_two_commands() {
 
 /// #207, owner rule of 2026-10-21: no key of the table is a macOS standard shortcut, in either preset, not
 /// even as an extra key. The list holds the gate's shortcuts: Spotlight (Cmd+Space), the input source
-/// (Control+Space), Mission Control (Control+arrows), app switching (Cmd+Tab, Cmd+`), the screenshots
+/// (Control+Space), Mission Control (Control+arrows), app switching (Cmd+Tab, Cmd+Backtick), the screenshots
 /// (Shift+Cmd+3/4/5), hide and minimize (Cmd+H, Cmd+M) and Force Quit (Cmd+Option+Escape). Cmd+Q and Cmd+,
 /// are the macOS standard Quit and Settings commands of the app itself and stay on them.
 #[test]

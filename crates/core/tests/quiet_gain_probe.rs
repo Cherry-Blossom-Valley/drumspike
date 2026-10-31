@@ -33,7 +33,7 @@ fn scale_of(spec: &[f32], bands: &std::ops::Range<usize>) -> Option<f32> {
     if mags.is_empty() {
         return None;
     }
-    mags.sort_by(|a, b| a.total_cmp(b));
+    mags.sort_by(f32::total_cmp);
     let pos = 0.995 * (mags.len() - 1) as f64;
     let lo = pos.floor() as usize;
     let hi = (lo + 1).min(mags.len() - 1);
@@ -56,7 +56,7 @@ fn enst_gain_factor_per_item() -> Result<(), DetectError> {
                 .flatten()
                 .flatten()
                 .map(|e| e.path())
-                .filter(|p| p.extension().map(|e| e == "wav").unwrap_or(false))
+                .filter(|p| p.extension().is_some_and(|e| e == "wav"))
                 .collect();
             paths.sort();
             for wav in paths {

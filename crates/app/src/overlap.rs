@@ -35,11 +35,11 @@ pub fn default_threads() -> usize {
 /// it cannot be read.
 /// The physical core count of this host; 0 when it cannot be read.
 pub fn physical_cores() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0)
+    std::thread::available_parallelism().map_or(0, std::num::NonZero::get)
 }
 
 /// The pool size: [`default_threads`], or `DRUMSPIKE_PREPARE_THREADS` (a positive number) for
-/// a measurement. The pool threads keep the default QoS class: a lower class (utility) made
+/// a measurement. The pool threads keep the default `QoS` class: a lower class (utility) made
 /// the preparation 7 times slower when other work ran on the host (266.8 s against 38.5 s
 /// for the 30 tracks), because the kernel then gives the cores to everything else first.
 pub fn pool_threads() -> usize {

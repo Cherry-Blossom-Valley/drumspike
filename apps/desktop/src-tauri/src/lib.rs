@@ -559,7 +559,7 @@ async fn transport_master(svc: State<'_, Service>, volume_db: f64) -> Result<Val
     blocking(&svc, "transport_master", move |s| s.transport_master(volume_db)).await
 }
 
-/// P3-16: the output devices, the choice and the device in use (a CoreAudio query: blocking pool).
+/// P3-16: the output devices, the choice and the device in use (a `CoreAudio` query: blocking pool).
 ///
 /// # Errors
 ///
@@ -610,8 +610,8 @@ fn selftest_clock() -> f64 {
     START.get().map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0)
 }
 
-/// Self-test (P3-6b, debug builds only): footprint of the WebKit helper processes of this app
-/// (WebContent, GPU), as `selftest::memory` describes.
+/// Self-test (P3-6b, debug builds only): footprint of the `WebKit` helper processes of this app
+/// (`WebContent`, GPU), as `selftest::memory` describes.
 #[cfg(debug_assertions)]
 #[tauri::command]
 async fn selftest_memory() -> Value {

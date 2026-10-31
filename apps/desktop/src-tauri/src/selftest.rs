@@ -1,6 +1,6 @@
 //! Self-test mode (P3-7a, debug builds only). The app starts with
 //! `--self-test <scenario> --out <report.json>`: the page runs the scenario in the real
-//! WKWebView (`apps/desktop/selftest/driver.js`), sends one JSON report to the command
+//! `WKWebView` (`apps/desktop/selftest/driver.js`), sends one JSON report to the command
 //! `selftest_report`, and the process writes the file and exits (0 = pass, 1 = fail, 2 =
 //! the scenario could not start). It replaces the debug probe of P3-3b. The report holds
 //! numbers and no screenshot, so macOS asks for no screen permission.
@@ -44,7 +44,7 @@ pub fn driver_for(scenario: &Value) -> &'static str {
 /// The step "play" (P3-5b): defines `window.__selftestPlay`, loaded before the driver.
 pub const PLAY: &str = include_str!("../../selftest/play.js");
 
-/// The step "playhead_steps" (#463): defines `window.__selftestPlayheadSteps`, loaded before the driver.
+/// The step "`playhead_steps`" (#463): defines `window.__selftestPlayheadSteps`, loaded before the driver.
 pub const PLAYHEAD_STEPS: &str = include_str!("../../selftest/playhead_steps.js");
 
 /// The step "memory" (P3-6b): defines `window.__selftestMemory`, loaded before the driver.
@@ -59,7 +59,7 @@ pub struct Request {
     pub out: PathBuf,
 }
 
-/// True while a self-test runs: WebKit fully suspends a page whose window is occluded (rAF and
+/// True while a self-test runs: `WebKit` fully suspends a page whose window is occluded (rAF and
 /// timers alike), which hangs the in-page wall-clock guards, so lib.rs keeps the window front.
 pub static FRONT_WINDOW: AtomicBool = AtomicBool::new(false);
 
@@ -98,19 +98,25 @@ pub fn scenario_path(scenario: &str) -> PathBuf {
     }
 }
 
-/// Replace every string `"$NAME"` in the scenario with the environment variable `NAME`.
-pub fn resolve_env(v: &mut Value) -> Result<(), String> {
+/// Replace every string `"$NAME"` in the scenario with the environment variable `NAME`,
+/// or with what `lookup` answers for it (#194: the test seam).
+fn resolve_env_with(v: &mut Value, lookup: &dyn Fn(&str) -> Option<String>) -> Result<(), String> {
     match v {
         Value::String(s) => {
             if let Some(name) = s.strip_prefix('$') {
-                *s = std::env::var(name).map_err(|_| format!("the scenario needs the environment variable {name}"))?;
+                *s = lookup(name).ok_or_else(|| format!("the scenario needs the environment variable {name}"))?;
             }
         }
-        Value::Array(a) => a.iter_mut().try_for_each(resolve_env)?,
-        Value::Object(o) => o.values_mut().try_for_each(resolve_env)?,
+        Value::Array(a) => a.iter_mut().try_for_each(|x| resolve_env_with(x, lookup))?,
+        Value::Object(o) => o.values_mut().try_for_each(|x| resolve_env_with(x, lookup))?,
         _ => {}
     }
     Ok(())
+}
+
+/// Replace every string `"$NAME"` in the scenario with the environment variable `NAME`.
+pub fn resolve_env(v: &mut Value) -> Result<(), String> {
+    resolve_env_with(v, &|name| std::env::var(name).ok())
 }
 
 /// The scenario file as JSON with `$NAME` strings resolved; it must have a `name`.
@@ -125,6 +131,25 @@ pub fn load_scenario(req: &Request) -> Result<Value, String> {
     Ok(v)
 }
 
+/// [`load_scenario`] with the `$NAME` variables taken from `vars` instead of the
+/// process environment (#194): a test loads a scenario without writing process env that
+/// other parallel tests read. Later pairs win on a duplicate name.
+pub fn load_scenario_from(req: &Request, vars: &[(&str, &str)]) -> Result<Value, String> {
+    let path = scenario_path(&req.scenario);
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read scenario {}: {e}", path.display()))?;
+    let mut v: Value = serde_json::from_str(&text).map_err(|e| format!("scenario {}: {e}", path.display()))?;
+    if v.get("name").and_then(Value::as_str).is_none() {
+        return Err(format!("scenario {} has no name", path.display()));
+    }
+    resolve_env_with(&mut v, &|name| {
+        vars.iter()
+            .rev()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| (*v).to_string())
+    })?;
+    Ok(v)
+}
+
 /// The script the page runs after `load`: the scenario as `window.__SELFTEST__`, then the driver.
 pub fn init_script(scenario: &Value) -> String {
     format!(
@@ -135,7 +160,7 @@ pub fn init_script(scenario: &Value) -> String {
     )
 }
 
-/// One WebKit helper process (`ps` row).
+/// One `WebKit` helper process (`ps` row).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Helper {
     pub pid: u32,
@@ -144,7 +169,7 @@ pub struct Helper {
     pub kind: String,
 }
 
-/// The WebKit helper processes in the output of `ps -ax -o pid=,rss=,comm=`.
+/// The `WebKit` helper processes in the output of `ps -ax -o pid=,rss=,comm=`.
 pub fn parse_helpers(ps: &str) -> Vec<Helper> {
     let mut out = Vec::new();
     for line in ps.lines() {
@@ -181,7 +206,7 @@ fn helpers_now() -> Vec<Helper> {
 
 static HELPERS_BEFORE: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
 
-/// Call once before the web view exists: the WebKit helpers of other apps are not ours.
+/// Call once before the web view exists: the `WebKit` helpers of other apps are not ours.
 pub fn snapshot_helpers() {
     HELPERS_BEFORE.get_or_init(|| helpers_now().iter().map(|h| h.pid).collect());
 }
@@ -242,9 +267,9 @@ pub fn footprint_report(
     (map, cats)
 }
 
-/// Memory of the WebKit helpers that started after `snapshot_helpers` (this app's web view):
+/// Memory of the `WebKit` helpers that started after `snapshot_helpers` (this app's web view):
 /// `{processes: [{pid, kind, footprint_mb, rss_mb, top: [[category, MB]]}], web_content_mb, web_content_rss_mb, gpu_mb,
-/// web_content_count}`. `web_content_mb` is the largest footprint among the new WebContent processes.
+/// web_content_count}`. `web_content_mb` is the largest footprint among the new `WebContent` processes.
 pub fn memory() -> Value {
     let before = HELPERS_BEFORE.get().cloned().unwrap_or_default();
     let ours: Vec<Helper> = helpers_now().into_iter().filter(|h| !before.contains(&h.pid)).collect();

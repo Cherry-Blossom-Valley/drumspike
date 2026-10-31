@@ -230,7 +230,7 @@ fn run_role(case: &str, role: &str, spec: &Spec, band: &Band) {
                     continue;
                 }
                 let d = (h.t - want).abs();
-                if d <= band.tol_s && best.map(|(_, bd)| d < bd).unwrap_or(true) {
+                if d <= band.tol_s && best.is_none_or(|(_, bd)| d < bd) {
                     best = Some((i, d));
                 }
             }
@@ -552,8 +552,7 @@ fn analysis_throughput_within_the_recorded_budget() {
     assert!(
         s_per_min <= SPEED_BUDGET_S_PER_MIN * SPEED_BUDGET_SLACK,
         "the reference render analysed at {s_per_min:.3} s per minute of audio, over the \
-         recorded budget {:.3} s/min +10 % (measured on {host}; the budget is recorded for \
-         the default test profile on the machine named in this test's doc comment)",
-        SPEED_BUDGET_S_PER_MIN
+         recorded budget {SPEED_BUDGET_S_PER_MIN:.3} s/min +10 % (measured on {host}; the budget is recorded for \
+         the default test profile on the machine named in this test's doc comment)"
     );
 }

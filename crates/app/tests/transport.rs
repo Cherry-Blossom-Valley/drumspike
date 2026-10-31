@@ -48,7 +48,7 @@ fn collector() -> (Progress, Log) {
     let l = log.clone();
     let p: Progress = Arc::new(move |v: Value| {
         if v.get("meters").is_none() {
-            l.lock().unwrap().push(v)
+            l.lock().unwrap().push(v);
         }
     });
     (p, log)
@@ -169,7 +169,7 @@ fn transport_play_starts_the_clock_and_sends_the_playhead_on_changes_and_at_4_hz
     let seek_t = msgs[n0..].iter().find(|m| m["epoch"].as_u64() == Some(e)).unwrap()["t_ns"]
         .as_u64()
         .unwrap();
-    let prev_t = msgs[..n0].last().map(|m| m["t_ns"].as_u64().unwrap()).unwrap_or(seek_t);
+    let prev_t = msgs[..n0].last().map_or(seek_t, |m| m["t_ns"].as_u64().unwrap());
     let gap_ms = seek_t.saturating_sub(prev_t) / 1_000_000;
     if look < 0.060 {
         assert!(
@@ -293,7 +293,7 @@ fn transport_seek_stress_every_message_of_a_seek_epoch_shows_that_seek() {
     // The page routes meter messages (`meters`, no epoch) away before it reads the playhead.
     let p: Progress = Arc::new(move |v: Value| {
         if v.get("meters").is_none() {
-            l.lock().unwrap().push(SeekEv::Msg(v))
+            l.lock().unwrap().push(SeekEv::Msg(v));
         }
     });
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -381,7 +381,7 @@ fn transport_seek_stress_every_message_of_a_seek_epoch_shows_that_seek() {
     // as the page sees it
     let (mut seeking, mut min_epoch, mut last) = (false, 0u64, 0.2f64);
     let (mut accepted, mut jumps) = (0, 0);
-    for e in log.iter() {
+    for e in &log {
         match e {
             SeekEv::Ask => seeking = true,
             SeekEv::Answer(a, t) => {
@@ -959,7 +959,7 @@ fn transport_play_sends_the_meters_at_about_25_hz_while_playing() {
             while !pstop.load(std::sync::atomic::Ordering::Relaxed) {
                 std::thread::sleep(PLAYHEAD_POLL);
                 // the sender's own push path: sleep, then the log lock (no push here)
-                let _g = plog.lock().unwrap_or_else(|e| e.into_inner());
+                let _g = plog.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 pwakes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         })
@@ -1419,7 +1419,7 @@ fn window(start: f64, end: Option<f64>, looped: bool, tracks: &[&str]) -> Option
         start: Some(start),
         end,
         looped,
-        tracks: tracks.iter().map(|t| t.to_string()).collect(),
+        tracks: tracks.iter().map(std::string::ToString::to_string).collect(),
         shot: None,
     })
 }

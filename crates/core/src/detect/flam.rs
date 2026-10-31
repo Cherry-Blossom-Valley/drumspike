@@ -16,7 +16,7 @@
 //!    ([`transfer_gains`], the P2-6 calibration). The re-rise is bleed when B's envelope in `[c - 2 ms, c + 1 ms]` plus
 //!    `G` plus `margin_db` (10 dB) reaches the stroke's peak P2. A bleed stroke is not added.
 //!
-//! The parameters are the stage 1 rule R9_m10 ([`FlamParams::default`]). The Python reference is `tools/flam_pairs.py`
+//! The parameters are the stage 1 rule `R9_m10` ([`FlamParams::default`]). The Python reference is `tools/flam_pairs.py`
 //! (`attack_env`, `transfer_gains`, `second_onsets`) as `tools/flam_split.py` runs it; the parity check is
 //! `tests/test_rust_flam.py` and `tools/flam_split.py parity`. The measurements are in
 //! `docs/migration/phase4-report.md`, sections "P4-13 stage 1", "P4-13 stage 2, stage A" and "P4-13 stage B".
@@ -39,7 +39,7 @@ pub const FLAM_RULE_VERSION: u32 = 1;
 /// The block length of the attack envelope (seconds); every block count of the rule is a time over this.
 pub const HOP_S: f64 = 0.000125;
 
-/// The parameters of the rule (the stage 1 choice R9_m10; `tools/flam_pairs.py` `DEFAULTS`).
+/// The parameters of the rule (the stage 1 choice `R9_m10`; `tools/flam_pairs.py` `DEFAULTS`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlamParams {
     /// The high-pass corner of the attack envelope (Hz); 0 = no filter.
@@ -239,7 +239,7 @@ pub fn np_percentile(v: &[f64], q: f64) -> Option<f64> {
         return None;
     }
     let mut s = v.to_vec();
-    s.sort_by(|a, b| a.total_cmp(b));
+    s.sort_by(f64::total_cmp);
     let n = s.len();
     let vi = (n - 1) as f64 * (q / 100.0);
     let lo = (vi.floor().max(0.0) as usize).min(n - 1);
@@ -253,7 +253,7 @@ pub fn np_percentile(v: &[f64], q: f64) -> Option<f64> {
 /// `np.median` of a non-empty slice.
 fn median(v: &[f64]) -> f64 {
     let mut s = v.to_vec();
-    s.sort_by(|a, b| a.total_cmp(b));
+    s.sort_by(f64::total_cmp);
     let n = s.len();
     if n % 2 == 1 {
         s[n / 2]
@@ -359,7 +359,7 @@ pub fn calibrate(env_a: &[f64], env_b: &[f64], peaks: &[usize], own: &[f64], rat
 pub fn transfer_gains(env_a: &[f64], sources: &[&[f64]], own: &[f64], sr: u32, hop: usize) -> Vec<Option<f64>> {
     let rate = sr as f64 / hop as f64;
     let mut own: Vec<f64> = own.to_vec();
-    own.sort_by(|a, b| a.total_cmp(b));
+    own.sort_by(f64::total_cmp);
     sources
         .iter()
         .map(|env_b| {
@@ -384,7 +384,7 @@ pub fn second_onsets(
     let hop = hop_of(sr) as i64;
     let srf = sr as f64;
     let mut times: Vec<f64> = hits.to_vec();
-    times.sort_by(|a, b| a.total_cmp(b));
+    times.sort_by(f64::total_cmp);
     let nb = env.len() as i64;
     let (rise_b, peak_b, min_b, max_b, guard_b) = (
         blocks(p.rise_s),

@@ -38,7 +38,7 @@ pub const RETRY_STEPS: [f64; 4] = [95.0, 113.0, 134.0, 150.0];
 
 /// The lowest base threshold (0.22): the class that reaches [`FLOOR`] at [`MAX`].
 fn base_min() -> f64 {
-    BASE.iter().cloned().fold(f64::INFINITY, f64::min)
+    BASE.iter().copied().fold(f64::INFINITY, f64::min)
 }
 
 /// The mean of the base thresholds (0.26): the inverse mapping reads the mean of a track's thresholds.
@@ -99,12 +99,12 @@ pub fn slider_of_scale(s: f64) -> f64 {
 /// the thresholds, each with its thresholds. Empty at the end of the slider.
 pub fn retry_steps(current: &[f64; N_CLASSES]) -> Vec<(f64, [f64; N_CLASSES])> {
     let now = sensitivity_of(current);
-    let lowest = current.iter().cloned().fold(f64::INFINITY, f64::min);
+    let lowest = current.iter().copied().fold(f64::INFINITY, f64::min);
     RETRY_STEPS
         .iter()
         .filter(|&&v| v > now + 0.5)
         .map(|&v| (v, thresholds_of(v)))
-        .filter(|(_, th)| th.iter().cloned().fold(f64::INFINITY, f64::min) < lowest - 1e-9)
+        .filter(|(_, th)| th.iter().copied().fold(f64::INFINITY, f64::min) < lowest - 1e-9)
         .collect()
 }
 

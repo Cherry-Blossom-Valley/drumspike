@@ -47,7 +47,7 @@ impl Io {
     }
 
     fn say_err(&self, line: &str) {
-        let mut e = self.err.lock().unwrap_or_else(|p| p.into_inner());
+        let mut e = self.err.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _ = writeln!(e, "{line}");
     }
 }
@@ -218,7 +218,7 @@ fn job_failed(v: &Value) -> bool {
 fn progress_to(io: &Io) -> Progress {
     let err = Arc::clone(&io.err);
     Arc::new(move |v: Value| {
-        let mut e = err.lock().unwrap_or_else(|p| p.into_inner());
+        let mut e = err.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _ = writeln!(e, "{}", json!({"progress": v}));
     })
 }
@@ -334,7 +334,7 @@ fn batch(svc: &Service, io: &mut Io) -> i32 {
     let mut sid = String::new();
     let mut l = String::new();
     // one line at a time: an answer is out before the next line is read (a caller may wait for it)
-    while io.input.read_line(&mut l).map(|n| n > 0).unwrap_or(false) {
+    while io.input.read_line(&mut l).is_ok_and(|n| n > 0) {
         let text = std::mem::take(&mut l);
         if text.trim().is_empty() {
             continue;
@@ -450,7 +450,7 @@ fn one_shot(svc: &Service, row: &CommandSpec, rest: &[String], io: &mut Io) -> i
     let mut code = 0;
     let mut saved_err = None;
     if let (Some(sid), Ok(_)) = (&opened, &result) {
-        let dirty = svc.project_get(sid).map(|s| s["dirty"] == true).unwrap_or(false);
+        let dirty = svc.project_get(sid).is_ok_and(|s| s["dirty"] == true);
         if crate::command_policy::changes_project(row, &p.args)
             && p.save
             && dirty
@@ -505,21 +505,23 @@ pub fn run(svc: &Service, args: &[String], io: &mut Io) -> i32 {
             0
         }
         "batch" => batch(svc, io),
-        "run" => match args.get(1) {
-            Some(path) => run_script(svc, path, io),
-            None => {
+        "run" => {
+            if let Some(path) = args.get(1) {
+                run_script(svc, path, io)
+            } else {
                 io.say_err(&error_json(&usage("run needs a script file")).to_string());
                 2
             }
-        },
-        name => match api::agent_commands().find(|c| c.name == name) {
-            Some(row) => one_shot(svc, row, &args[1..], io),
-            None => {
+        }
+        name => {
+            if let Some(row) = api::agent_commands().find(|c| c.name == name) {
+                one_shot(svc, row, &args[1..], io)
+            } else {
                 let e = AppError::not_found(format!("unknown command {name}: try `drumspike help`"));
                 io.say_err(&error_json(&e).to_string());
                 exit_code(&e)
             }
-        },
+        }
     }
 }
 

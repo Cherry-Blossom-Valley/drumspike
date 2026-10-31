@@ -68,7 +68,7 @@ pub fn template_from_hits_multi(
     let mut acc = vec![0f32; crate::detect::features::N_BANDS];
     let mut n = 0usize;
     for (spec, hits) in specs.iter().zip(hit_sets) {
-        for &t in hits.iter() {
+        for &t in *hits {
             if n >= max_hits {
                 break;
             }
@@ -83,11 +83,11 @@ pub fn template_from_hits_multi(
     if n < min_hits {
         return None;
     }
-    let max = acc.iter().cloned().fold(0f32, f32::max);
+    let max = acc.iter().copied().fold(0f32, f32::max);
     if max <= 0.0 {
         return None;
     }
-    for v in acc.iter_mut() {
+    for v in &mut acc {
         *v /= max;
     }
     Some(Template { bands: acc })
@@ -193,7 +193,7 @@ pub fn pick_hits(h: &[f32], p: &NmfdParams) -> Vec<f64> {
     if h.len() < 3 {
         return Vec::new();
     }
-    let max = h.iter().cloned().fold(0f32, f32::max);
+    let max = h.iter().copied().fold(0f32, f32::max);
     if max <= 0.0 {
         return Vec::new();
     }

@@ -5,6 +5,7 @@ Standard library and the gh CLI only. Run from the repository root:
     uv run --no-project python tools/release/cut.py plan
     uv run --no-project python tools/release/cut.py notes
     uv run --no-project python tools/release/cut.py bump
+    uv run --no-project python tools/release/cut.py check-midi
     uv run --no-project python tools/release/cut.py status v0.9.3
 
 `plan` prints the state since the last release tag: the merged PRs, which of them are
@@ -400,6 +401,28 @@ def cmd_status(args):
     return 0
 
 
+# ---------------------------------------------------------------- check-midi
+
+def cmd_check_midi(args):
+    """The full MIDI timing corpus at a cut (#174): all five cases over the full spans.
+    The pytest run keeps only the quick corpus (tests/test_midi_timing.py), so the whole
+    corpus is checked here, before a tag goes out."""
+    root = find_root(args.root)
+    # The child needs the project env (mido is a dependency of the project, #217): the
+    # documented command runs this tool with `uv run --no-project python`, whose interpreter
+    # has no project dependencies, so do not reuse sys.executable for the checker.
+    r = subprocess.run(
+        ["uv", "run", "python", str(root / "tools" / "check_midi_timing.py")],
+        cwd=str(root), capture_output=True, text=True,
+    )
+    tail = (r.stdout[-1500:] + r.stderr[-500:]).strip()
+    if r.returncode != 0:
+        raise CutError(f"check_midi_timing failed (rc={r.returncode}):\n{tail}")
+    last = [ln for ln in r.stdout.splitlines() if "cases pass" in ln]
+    print((last[-1] if last else "check_midi_timing: ok") + " (full corpus, release check)")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="the release cut tool")
     ap.add_argument("--root", help="the repository root (default: git from the working directory)")
@@ -408,11 +431,14 @@ def main(argv=None):
     n = sub.add_parser("notes")
     n.add_argument("--force", action="store_true", help="overwrite an existing draft")
     sub.add_parser("bump")
+    sub.add_parser("check-midi",
+                   help="run the full MIDI timing corpus (the pytest run keeps the quick corpus only)")
     s = sub.add_parser("status")
     s.add_argument("tag")
     args = ap.parse_args(argv)
     try:
-        return {"plan": cmd_plan, "notes": cmd_notes, "bump": cmd_bump, "status": cmd_status}[args.cmd](args)
+        return {"plan": cmd_plan, "notes": cmd_notes, "bump": cmd_bump,
+                "check-midi": cmd_check_midi, "status": cmd_status}[args.cmd](args)
     except CutError as e:
         print(f"cut: {e}", file=sys.stderr)
         return 2

@@ -182,23 +182,21 @@ fn the_bridge_runs_the_import_commands() {
     let svc = service(&root);
     let sdir = session(&root, "Song: Take 2");
     let b = Bridge::new(svc, repo_root().join("static"));
-    let rows = match b
+    let Reply::Json(rows) = b
         .invoke(
             "legacy_list",
             &json!({"folder": root.join("sessions").to_str().unwrap()}),
         )
         .unwrap()
-    {
-        Reply::Json(v) => v,
-        _ => panic!("json expected"),
+    else {
+        panic!("json expected")
     };
     assert_eq!(rows[0]["session_id"], "ab12cd34");
-    let sum = match b
+    let Reply::Json(sum) = b
         .invoke("project_import", &json!({"session_dir": sdir.to_str().unwrap()}))
         .unwrap()
-    {
-        Reply::Json(v) => v,
-        _ => panic!("json expected"),
+    else {
+        panic!("json expected")
     };
     assert_eq!(sum["name"], "Song: Take 2");
     let e = b.invoke("project_import", &json!({})).err().unwrap();

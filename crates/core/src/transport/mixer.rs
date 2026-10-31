@@ -10,7 +10,7 @@
 //! ([`channel_gains`]); at 0 dB and centre both are exactly 1.0, so the output is the
 //! output of P3-5a bit for bit (left and right equal). A mono device gets
 //! `(s_l + s_r) * 0.5`, which is `s` itself when left and right are equal. Tracks sum at unity
-//! like the WebAudio graph of `app.js` (no 1/N scaling). The clicks follow mute and solo, not
+//! like the `WebAudio` graph of `app.js` (no 1/N scaling). The clicks follow mute and solo, not
 //! the volume and pan (they are the metronome). The callback never allocates, locks or does
 //! I/O.
 //!
@@ -258,7 +258,7 @@ impl Engine {
                 }
                 self.seek_tag = tag;
                 // #430: a seek repositions every source; the lag of the old position is void
-                for a in sh.ring_lag.iter() {
+                for a in &sh.ring_lag {
                     a.store(0, Ordering::Release);
                 }
                 self.state = State::Flushing;
@@ -302,7 +302,7 @@ impl Engine {
             let _ = self.click_ret.push(old);
         }
         // P4-7a: a new layer bank, the same way
-        if let Some(Ok(bank)) = self.layer_rx.as_mut().map(|r| r.pop()) {
+        if let Some(Ok(bank)) = self.layer_rx.as_mut().map(rtrb::Consumer::pop) {
             let old = std::mem::replace(&mut self.layers, bank);
             if let Some(ret) = self.layer_ret.as_mut() {
                 let _ = ret.push(old);

@@ -202,8 +202,8 @@ fn a_hat_pairs_evidence_is_recorded_and_the_generic_verdict_fires() {
     // the three bleed arrivals (1 ms after the hat, 15 dB under) are dropped, the real tom
     // hit (louder than the hat in the tom band, ratio +4.9 dB) stays.
     for m in &marks[0][..3] {
-        assert!(m.hat_lead_ms.is_some() && m.hat_ratio_db.is_some(), "{:?}", m);
-        assert!(m.bleed, "{:?}", m);
+        assert!(m.hat_lead_ms.is_some() && m.hat_ratio_db.is_some(), "{m:?}");
+        assert!(m.bleed, "{m:?}");
     }
     assert!(!marks[0][3].bleed, "{:?}", marks[0][3]);
     assert!(marks[0][3].hat_lead_ms.is_some(), "{:?}", marks[0][3]);

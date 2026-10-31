@@ -9,7 +9,7 @@
 //! project.py read it and that view. Paths below the test folder are `{ROOT}`; `created`, `modified` and the
 //! source `mtime` are left out. "App writes, server loads" now means: the app writes the same document as at
 //! the freeze, which the server read as `want`. "Server writes, app loads": the documents are written again
-//! from the frozen ones (the audio is the stdlib tone of cross_load.py, checked against the frozen SHA-256).
+//! from the frozen ones (the audio is the stdlib tone of `cross_load.py`, checked against the frozen SHA-256).
 
 mod common;
 
@@ -40,7 +40,7 @@ fn frozen(key: &str) -> Value {
 }
 
 /// The document without what changes from run to run: the test folder (`.../ds_app_it_<tag>_<pid>`) becomes
-/// `{ROOT}`; `created`, `modified` and `mtime` are left out (cross_load.py `normalize`).
+/// `{ROOT}`; `created`, `modified` and `mtime` are left out (`cross_load.py` `normalize`).
 fn normalize(v: &Value) -> Value {
     match v {
         Value::Object(m) => Value::Object(
@@ -71,7 +71,7 @@ fn saved_document(folder: &Path) -> Value {
     serde_json::from_str(&std::fs::read_to_string(doc).unwrap()).unwrap()
 }
 
-/// cross_load.py `tone`: a mono 16-bit 48 kHz WAV of `int(12000 * sin(2 pi hz i / 48000))`, as Python's
+/// `cross_load.py` `tone`: a mono 16-bit 48 kHz WAV of `int(12000 * sin(2 pi hz i / 48000))`, as Python's
 /// `wave` module writes it.
 fn tone(path: &Path, seconds: f64, hz: f64) {
     let sr = 48_000u32;

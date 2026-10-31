@@ -324,7 +324,7 @@ fn track_velocity_set_with_a_cut_marks_the_quiet_hits_and_they_leave_the_output(
     assert_eq!(midi["n_events"], n_out);
     assert_eq!(svc.export_spikes(&sid, "k in", None).unwrap()["n_events"], n_out);
     let all = svc.export_all(&sid, None).unwrap();
-    assert!(all["errors"].as_array().is_none_or(|e| e.is_empty()), "{all}");
+    assert!(all["errors"].as_array().is_none_or(std::vec::Vec::is_empty), "{all}");
     // a follower does not take the cut hits
     svc.track_set_follow(&sid, "k sub", Some("k in")).unwrap();
     assert_eq!(events(&svc, &sid, "k sub").len(), n_out);

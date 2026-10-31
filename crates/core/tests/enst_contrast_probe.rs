@@ -57,7 +57,7 @@ fn enst_contrast_per_role() -> Result<(), DetectError> {
             let mut n = 0;
             for entry in dir.read_dir().into_iter().flatten().flatten() {
                 let wav = entry.path();
-                if wav.extension().map(|e| e != "wav").unwrap_or(true) {
+                if wav.extension().is_none_or(|e| e != "wav") {
                     continue;
                 }
                 if n >= 6 {
@@ -68,9 +68,8 @@ fn enst_contrast_per_role() -> Result<(), DetectError> {
                 if !name.contains("phrase") {
                     continue;
                 }
-                let (x, info) = match read_wav_mono(&wav, drumspike_core::MixMode::Average) {
-                    Ok(v) => v,
-                    Err(_) => continue,
+                let Ok((x, info)) = read_wav_mono(&wav, drumspike_core::MixMode::Average) else {
+                    continue;
                 };
                 let spec = prepare(&x, info.sample_rate, Chain::Mix)?;
                 let bands = role_bands(if mic == "hi-hat" { "hat" } else { mic });

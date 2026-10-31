@@ -917,12 +917,11 @@ impl Service {
         let out = render_layer(n, &shot, job_onset_exact(&job, &shot), &hits);
         let ch = out.len();
         let inter: Vec<f32> = (0..n).flat_map(|i| out.iter().map(move |c| c[i])).collect();
-        let path = match target {
-            Some(p) => p,
-            None => {
-                std::fs::create_dir_all(&dir).map_err(|e| AppError::internal(format!("{}: {e}", dir.display())))?;
-                dir.join(format!("{name}_layer.wav"))
-            }
+        let path = if let Some(p) = target {
+            p
+        } else {
+            std::fs::create_dir_all(&dir).map_err(|e| AppError::internal(format!("{}: {e}", dir.display())))?;
+            dir.join(format!("{name}_layer.wav"))
         };
         if path.is_dir() && !Self::clear_render_leftover(&path) {
             return Err(folder_error(&path));

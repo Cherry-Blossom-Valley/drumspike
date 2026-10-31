@@ -231,7 +231,7 @@ pub fn relpath(path: &Path, start: &Path) -> String {
         .collect();
     let common = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
     let mut parts: Vec<&str> = vec![".."; b.len() - common];
-    parts.extend(a[common..].iter().map(|s| s.as_str()));
+    parts.extend(a[common..].iter().map(std::string::String::as_str));
     if parts.is_empty() {
         ".".to_string()
     } else {
@@ -322,7 +322,7 @@ pub fn find_document(path: &Path) -> Result<PathBuf, ProjectError> {
         }
         let mut docs: Vec<String> = std::fs::read_dir(&path)
             .map_err(io_err(format!("list {}", path.display())))?
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.ends_with(DOC_EXT))
             .collect();
@@ -403,7 +403,7 @@ pub fn migrate_forward(value: Value) -> Result<Document, ProjectError> {
     migrate_with(value, None)
 }
 
-/// [`migrate_forward`] for a document parsed from `text`. serde_json reads an integer
+/// [`migrate_forward`] for a document parsed from `text`. `serde_json` reads an integer
 /// beyond 64 bits as a float, Python's json as an int: the literal in `text` decides, so
 /// `"format": 100000000000000000000000` is the newer-format error, as in Python, and
 /// `"format": 1e23` stays a bad format field (review round 3, finding m3).
@@ -478,7 +478,7 @@ fn migrate_with(mut value: Value, big: Option<String>) -> Result<Document, Proje
 fn truthy(v: Option<&Value>) -> bool {
     match v {
         None | Some(Value::Null) | Some(Value::Bool(false)) => false,
-        Some(Value::Number(n)) => n.as_f64().map(|f| f != 0.0).unwrap_or(true),
+        Some(Value::Number(n)) => n.as_f64() != Some(0.0),
         Some(Value::String(s)) => !s.is_empty(),
         Some(Value::Array(a)) => !a.is_empty(),
         Some(Value::Object(o)) => !o.is_empty(),
@@ -591,14 +591,11 @@ pub fn legacy_session_document(session_dir: &Path) -> Result<Value, ProjectError
         )));
     }
     let (mut doc, _) = read_json(&mp)?;
-    let root = match doc.as_object_mut() {
-        Some(m) => m,
-        None => {
-            return Err(ProjectError::invalid(format!(
-                "{} is not a session document",
-                mp.display()
-            )));
-        }
+    let Some(root) = doc.as_object_mut() else {
+        return Err(ProjectError::invalid(format!(
+            "{} is not a session document",
+            mp.display()
+        )));
     };
     root.insert("format".into(), Value::from(0));
     let mut events = Map::new();
