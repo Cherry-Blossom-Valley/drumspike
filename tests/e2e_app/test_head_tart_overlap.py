@@ -71,3 +71,40 @@ def test_dragging_the_row_back_restores_the_drawing(app, song):
     drag_border(app, name, -800)
     drag_border(app, name, 400)
     assert app.evaluate(TART_BOX, name) is not None
+
+
+# #241: the hide rule must account for the full height of .tctl (the M/S buttons AND the
+# readouts under them). The rule of #172 used tctl.offsetTop + 8 + size, which ignores
+# tctl.offsetHeight: in a band of row heights the drawing is still shown and overlaps the
+# controls. This test sweeps the row height from tall to short in small steps and asserts at
+# EVERY step that a visible drawing does not intersect the controls; it also saves the three
+# screenshots (tall, the threshold, just below it) for the review.
+def test_the_drawing_stays_clear_of_the_controls_at_every_row_height(app, song):
+    from app_support import shot_dir
+    name = app.evaluate("() => S.order[0]")
+    first_fail = None
+    last_visible = None
+    for h in range(200, 79, -2):
+        app.evaluate("([name, h]) => setRowHeights({ [name]: h / laneHeights().wave })", [name, h])
+        tart = app.evaluate(TART_BOX, name)
+        ctl = app.evaluate(CTL_BOX, name)
+        if tart is not None:
+            if not disjoint(tart, ctl) and first_fail is None:
+                overlap = min(tart[3], ctl[3]) - max(tart[1], ctl[1])
+                first_fail = (h, overlap)
+            last_visible = h
+    assert first_fail is None, (
+        f"the drawing overlaps the controls by {first_fail[1]:.1f}px at the first failing "
+        f"row height {first_fail[0]}px")
+    assert last_visible is not None, "the drawing was never visible in the sweep"
+    # the three heights for the review: tall, the threshold (the last visible), just below it
+    app.evaluate("([name, h]) => setRowHeights({ [name]: h / laneHeights().wave })", [name, 200])
+    app.screenshot(path=str(shot_dir("241-tart-tall-200px.png")))
+    app.evaluate("([name, h]) => setRowHeights({ [name]: h / laneHeights().wave })", [name, last_visible])
+    app.screenshot(path=str(shot_dir(f"241-tart-threshold-{last_visible}px.png")))
+    below = last_visible - 2
+    app.evaluate("([name, h]) => setRowHeights({ [name]: h / laneHeights().wave })", [name, below])
+    app.screenshot(path=str(shot_dir(f"241-tart-just-below-{below}px.png")))
+    # and the drawing is visible again at the default height
+    app.evaluate("() => setRowHeights({})")
+    assert app.evaluate(TART_BOX, name) is not None

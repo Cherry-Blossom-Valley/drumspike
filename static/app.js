@@ -6709,18 +6709,20 @@ function setRowHeights(map) {   // map: track name -> factor of the global wave 
 }
 /* #172: the role drawing (.tart) sits bottom-right in the header (bottom: 8px); when the row is
    dragged short it would overlap the .tctl controls (the M/S buttons and the pan slider). The
-   drawing shows only while the header is tall enough for the drawing and its 8 px margin above
-   the top of the controls. The size is the authored --tart-size, not the live box: a hidden
-   drawing measures 0 px and would unhide itself (an oscillation). Measured here (outside the
-   frame loop), not per frame. */
+   drawing shows only while the header is tall enough for the drawing plus its 8 px margin above
+   the BOTTOM of the controls (#241: the readouts under the M/S buttons are part of .tctl, so
+   the rule measures tctl.offsetHeight too — the old tctl.offsetTop + 8 + size hid the drawing
+   ~2 rows of heights too late and let it clip the readouts). The size is the authored
+   --tart-size, not the live box: a hidden drawing measures 0 px and would unhide itself (an
+   oscillation). Measured here (outside the frame loop), not per frame. */
 function setHeadTartFit(row) {
   const th = row.querySelector(".thead");
   const tctl = th && th.querySelector(".tctl");
   const tart = th && th.querySelector(".tart");
   if (!th || !tctl || !tart) return;
   const size = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--tart-size")) || 54;
-  const needed = tctl.offsetTop + 8 + size;
-  th.classList.toggle("tart-hidden", row.offsetHeight < needed);
+  const needed = tctl.offsetTop + tctl.offsetHeight + 8 + size;
+  th.classList.toggle("tart-hidden", th.offsetHeight < needed);
 }
 function rowHeightsSave() {   // #167: the factor map into the project document (the drag and the double-click land here)
   if (!S.sid || !B.rowHeightsSet) return;
