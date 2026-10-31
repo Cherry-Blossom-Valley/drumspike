@@ -1,0 +1,32 @@
+#!/bin/sh
+# Pre-commit hook prototype, ticket #254: refuse the commit when a staged Rust
+# file is not rustfmt-clean.
+#
+# Why: CI runs `cargo fmt --all -- --check` (G1). A red G1 is found only after a
+# full CI round, which costs about 17 minutes per main push on the self-hosted
+# runners. Checking the staged files takes about a second and moves the finding
+# to before the commit instead of after it.
+#
+# Install (per clone):
+#   git config core.hooksPath tools/hooks
+# Git then runs this file as the pre-commit hook.
+#
+# Prototype scope: checks the staged *.rs paths with `rustfmt --check`, edition
+# 2024 (the workspace edition). It does not parse rust-toolchain.toml and does
+# not fall back to `cargo fmt`; a follow-up ticket can widen it. Without a
+# rustfmt on PATH it exits 0 (a clone without Rust can still commit).
+set -u
+
+command -v rustfmt >/dev/null 2>&1 || exit 0
+
+fail=0
+for f in $(git diff --cached --name-only --diff-filter=ACMR -- '*.rs'); do
+  if [ ! -f "$f" ]; then
+    continue
+  fi
+  if ! rustfmt --edition 2024 --check "$f" >/dev/null 2>&1; then
+    echo "pre-commit: $f is not rustfmt-clean (rustfmt --edition 2024 <file>)" >&2
+    fail=1
+  fi
+done
+exit $fail

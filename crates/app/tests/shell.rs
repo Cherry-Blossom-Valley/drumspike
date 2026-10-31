@@ -105,6 +105,8 @@ fn export_compensate_set_keeps_the_checkbox_and_export_all_uses_it() {
     // the default is on and the field is absent
     let r = svc.export_last_get(&sid).unwrap();
     assert_eq!(r["export_compensate"], true);
+    // the dialog gets no kept choice yet (null): its own default holds
+    assert!(svc.export_existing(&sid).unwrap()["export_compensate"].is_null());
     // off: the field is kept and answered
     assert_eq!(
         svc.export_compensate_set(&sid, false).unwrap()["export_compensate"],
@@ -112,11 +114,12 @@ fn export_compensate_set_keeps_the_checkbox_and_export_all_uses_it() {
     );
     assert_eq!(svc.export_last_get(&sid).unwrap()["export_compensate"], false);
     assert_eq!(svc.export_existing(&sid).unwrap()["export_compensate"], false);
-    // on again removes the field (the default)
+    // on again is kept as a choice (the dialog shows it, also without a calibration)
     assert_eq!(
         svc.export_compensate_set(&sid, true).unwrap()["export_compensate"],
         true
     );
+    assert_eq!(svc.export_existing(&sid).unwrap()["export_compensate"], true);
     // a bad argument is a 400
     use drumspike_app::call::call;
     assert!(matches!(

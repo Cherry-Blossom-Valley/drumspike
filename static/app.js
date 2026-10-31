@@ -3592,8 +3592,10 @@ function buildParamsPanel(div, name, p) {
   div.querySelector(".pRefine").onchange = ev => p.refine = ev.target.checked;
   // #232: the refine window is stored at once (track_params_set, one undo step), so an agent and
   // the app see the same number (tracks_get), and Undo brings the old window back
-  div.querySelector(".pRefineLo").onchange = ev => paramsFieldCommit(name, "refine_lo_ms", Math.round(+ev.target.value || 0));
-  div.querySelector(".pRefineHi").onchange = ev => paramsFieldCommit(name, "refine_hi_ms", Math.round(+ev.target.value || 0));
+  // the fields exist only while Refine to attack is on (a missing field threw here and cut the panel's setup short)
+  const refLo = div.querySelector(".pRefineLo"), refHi = div.querySelector(".pRefineHi");
+  if (refLo) refLo.onchange = ev => paramsFieldCommit(name, "refine_lo_ms", Math.round(+ev.target.value || 0));
+  if (refHi) refHi.onchange = ev => paramsFieldCommit(name, "refine_hi_ms", Math.round(+ev.target.value || 0));
   const flam = div.querySelector(".pFlam");   // P4-13 stage B: snare tracks only; the track param flam_split (absent = on)
   if (flam) { flam.title = "Applies on the next re-analyze"; flam.onchange = ev => p.flam_split = ev.target.checked; }
   div.querySelector(".pShift").onchange = ev => {   // P4-9: the service shifts the hits (track_shift_set); the page shows the result
@@ -5984,7 +5986,7 @@ async function openExport(scope, track) {
   try { info = await B.exportExisting(S.sid, {}); } catch (e) { setMsg(`export failed: ${errText(e)}`, "error"); return; }
   EX.def = info.default_dest; EX.remembered = info.remembered;
   EX.markers = !!info.export_markers;   // P4-40g: the remembered "Markers in MIDI" checkbox
-  if (info.export_compensate !== undefined) EX.comp = !!info.export_compensate;   // #232: the kept "Compensate" checkbox seeds the dialog
+  if (typeof info.export_compensate === "boolean") EX.comp = info.export_compensate;   // #232: a kept "Compensate" choice seeds the dialog; null: the calibration default above
   const last = info.export_last;   // P4-31: the project keeps what its last export wrote with (and every choice, recorded at once)
   if (last) {
     EX.midi = last.formats.includes("midi"); EX.spikes = last.formats.includes("spikes") || last.formats.includes("audio");

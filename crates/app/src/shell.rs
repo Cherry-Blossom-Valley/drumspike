@@ -142,7 +142,9 @@ impl Service {
             json!({"count": files.len(), "files": files, "dest": dir.display().to_string(),
                   "default_dest": default_dir.display().to_string(), "remembered": remembered,
                   "export_markers": crate::export::doc_export_markers_on(&g.project.doc),
-                  "export_compensate": crate::export::doc_export_compensate(&g.project.doc),
+                  // a kept choice only (null before one): the dialog's own default (on when a track has a
+                  // sampler calibration) holds until the user sets the box
+                  "export_compensate": g.project.doc.extra.get(crate::export::EXPORT_COMPENSATE_KEY).cloned().unwrap_or(Value::Null),
                   "export_last": g.project.doc.extra.get(LAST_KEY).cloned().unwrap_or(Value::Null)}),
         )
     }
@@ -217,17 +219,11 @@ impl Service {
     pub fn export_compensate_set(&self, sid: &str, compensate: bool) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let mut g = lock(&op);
-        let before = crate::export::doc_export_compensate(&g.project.doc);
-        let default = crate::command_policy::COMPENSATE_DEFAULT;
-        if before != compensate {
-            if compensate != default {
-                g.project
-                    .doc
-                    .extra
-                    .insert(crate::export::EXPORT_COMPENSATE_KEY.into(), Value::from(compensate));
-            } else {
-                g.project.doc.extra.shift_remove(crate::export::EXPORT_COMPENSATE_KEY);
-            }
+        // the choice is kept as it is, also when it equals the agent default: `export_existing`
+        // answers only a kept choice, so the dialog can tell "the user chose on" from "not chosen"
+        let key = crate::export::EXPORT_COMPENSATE_KEY;
+        if g.project.doc.extra.get(key).and_then(Value::as_bool) != Some(compensate) {
+            g.project.doc.extra.insert(key.into(), Value::from(compensate));
             g.mark_dirty();
         }
         Ok(json!({"export_compensate": compensate}))

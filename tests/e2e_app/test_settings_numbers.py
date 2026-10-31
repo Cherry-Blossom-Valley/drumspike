@@ -90,6 +90,16 @@ def test_the_export_dialog_keeps_the_compensate_choice(app, make_project, tmp_pa
     sid = open_project(app, build(make_project, tmp_path))
     app.evaluate("() => openExport('all')")
     app.wait_for_function("() => EX.open")
+    # no sampler calibration and no kept choice: the dialog's own default, off (test_sampler)
+    expect(app.locator("#exComp")).not_to_be_checked()
+    assert invoke(app, "export_existing", sid=sid)["export_compensate"] is None
+    # a kept "on" beats that default after a reopen
+    app.locator("#exComp").check()
+    wait_until(lambda: invoke(app, "export_existing", sid=sid)["export_compensate"] is True,
+               msg="the kept choice on in the service")
+    app.evaluate("() => exClose()")
+    app.evaluate("() => openExport('all')")
+    app.wait_for_function("() => EX.open")
     expect(app.locator("#exComp")).to_be_checked()
     app.locator("#exComp").uncheck()
     wait_until(lambda: invoke(app, "export_last_get", sid=sid)["export_compensate"] is False,
