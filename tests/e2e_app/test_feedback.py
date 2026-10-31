@@ -114,3 +114,22 @@ def test_the_form_in_the_browser_pane(app, make_project):
     app.wait_for_selector("#fbModal.hidden", state="attached")
     # planted fault: the button would be missing from the top bar
     assert app.locator("#feedbackBtn").count() == 1
+
+
+def test_the_button_says_feedback_and_opens_the_form(app, make_project):
+    """#246: the toolbar button reads "Feedback" (not the old question mark) and a click opens
+    the form. Screenshots of the toolbar at the default width and at the narrowest width go to
+    test-shots/ for the review."""
+    open_project(app, make_project())
+    btn = app.locator("#feedbackBtn")
+    assert btn.text_content().strip() == "Feedback"
+    btn.click()   # the click opens the form
+    app.wait_for_selector("#fbModal:not(.hidden)")
+    assert app.locator("#fbKind").is_visible()
+    app.click("#fbCancel")
+    app.wait_for_selector("#fbModal.hidden", state="attached")
+    app.screenshot(path=str(shot_dir("246-toolbar-default.png")))
+    app.set_viewport_size({"width": 640, "height": 700})   # the narrowest width of the review
+    app.wait_for_timeout(200)
+    assert app.locator("#feedbackBtn").text_content().strip() == "Feedback"
+    app.screenshot(path=str(shot_dir("246-toolbar-narrow-640px.png")))

@@ -93,7 +93,7 @@ async function loadViewSettings() {   // at boot: the saved state of the Inspect
     if (st && typeof st.zoom_toggle_tall === "boolean") setZoomTall(st.zoom_toggle_tall, false);   // P4-27
     if (st && NUDGE_VALUES[st.nudge_value]) setNudgeValue(st.nudge_value, false);   // P3-20a
     for (const k of Object.keys(TM_SETTING)) if (st && typeof st[TM_SETTING[k]] === "boolean") TM.ui[k] = st[TM_SETTING[k]];   // P4-8
-    if (st && typeof st.velocity_lane === "boolean") { VL.on = st.velocity_lane; VL.hint = VL.on; vlApply(); }   // P4-40f; #208: the hint shows on an open lane
+    if (st && typeof st.velocity_lane === "boolean") { VL.on = st.velocity_lane; vlApply(); }   // P4-40f
     if (st && typeof st.velocity_lane_height === "number" && st.velocity_lane_height >= VL_H_MIN && st.velocity_lane_height <= VL_H_MAX) VL.h = Math.round(st.velocity_lane_height);   // #208
     if (st && typeof st.other_mics === "boolean") { MX.on = st.other_mics; mxApply(); }   // #157
     if (st && typeof st.overview === "boolean") setOverview(st.overview, false);   // #169
