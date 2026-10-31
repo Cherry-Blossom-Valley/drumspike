@@ -240,19 +240,22 @@ fn memory_names_the_new_helpers_and_footprints_skip_nothing_when_empty() {
 
 #[test]
 fn the_tracks_scenario_loads_with_its_own_driver_and_counts_four_actions() {
-    unsafe {
-        std::env::set_var("DRUMSPIKE_SELFTEST_DROP", "/tmp/drop");
-    }
-    let v = load_scenario(&Request {
-        scenario: "tracks".into(),
-        out: PathBuf::from("x"),
-    })
+    // #194: the variables come from the argument, not the process env — this test ran green
+    // only when the shell test had left DRUMSPIKE_SELFTEST_DIR set first.
+    let v = load_scenario_from(
+        &Request {
+            scenario: "tracks".into(),
+            out: PathBuf::from("x"),
+        },
+        &[("DRUMSPIKE_SELFTEST_DIR", "/tmp/w"), ("DRUMSPIKE_SELFTEST_DROP", "/tmp/drop")],
+    )
     .unwrap();
     assert_eq!(
         (v["name"].as_str(), v["driver"].as_str()),
         (Some("tracks"), Some("tracks"))
     );
     assert_eq!(v["drop"], "/tmp/drop");
+    assert_eq!(v["work"], "/tmp/w");
     assert!(driver_for(&v) == TRACKS_DRIVER && TRACKS_DRIVER != DRIVER && TRACKS_DRIVER != SHELL_DRIVER);
     assert_eq!(
         v["expect"]["roles"].as_object().unwrap().len() as u64,

@@ -98,19 +98,26 @@ pub fn scenario_path(scenario: &str) -> PathBuf {
     }
 }
 
-/// Replace every string `"$NAME"` in the scenario with the environment variable `NAME`.
-pub fn resolve_env(v: &mut Value) -> Result<(), String> {
+/// Replace every string `"$NAME"` in the scenario with the environment variable `NAME`,
+/// or with what `lookup` answers for it (#194: the test seam).
+fn resolve_env_with(v: &mut Value, lookup: &dyn Fn(&str) -> Option<String>) -> Result<(), String> {
     match v {
         Value::String(s) => {
             if let Some(name) = s.strip_prefix('$') {
-                *s = std::env::var(name).map_err(|_| format!("the scenario needs the environment variable {name}"))?;
+                *s = lookup(name)
+                    .ok_or_else(|| format!("the scenario needs the environment variable {name}"))?;
             }
         }
-        Value::Array(a) => a.iter_mut().try_for_each(resolve_env)?,
-        Value::Object(o) => o.values_mut().try_for_each(resolve_env)?,
+        Value::Array(a) => a.iter_mut().try_for_each(|x| resolve_env_with(x, lookup))?,
+        Value::Object(o) => o.values_mut().try_for_each(|x| resolve_env_with(x, lookup))?,
         _ => {}
     }
     Ok(())
+}
+
+/// Replace every string `"$NAME"` in the scenario with the environment variable `NAME`.
+pub fn resolve_env(v: &mut Value) -> Result<(), String> {
+    resolve_env_with(v, &|name| std::env::var(name).ok())
 }
 
 /// The scenario file as JSON with `$NAME` strings resolved; it must have a `name`.
@@ -122,6 +129,25 @@ pub fn load_scenario(req: &Request) -> Result<Value, String> {
         return Err(format!("scenario {} has no name", path.display()));
     }
     resolve_env(&mut v)?;
+    Ok(v)
+}
+
+/// [`load_scenario`] with the `$NAME` variables taken from `vars` instead of the
+/// process environment (#194): a test loads a scenario without writing process env that
+/// other parallel tests read. Later pairs win on a duplicate name.
+pub fn load_scenario_from(req: &Request, vars: &[(&str, &str)]) -> Result<Value, String> {
+    let path = scenario_path(&req.scenario);
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read scenario {}: {e}", path.display()))?;
+    let mut v: Value = serde_json::from_str(&text).map_err(|e| format!("scenario {}: {e}", path.display()))?;
+    if v.get("name").and_then(Value::as_str).is_none() {
+        return Err(format!("scenario {} has no name", path.display()));
+    }
+    resolve_env_with(&mut v, &|name| {
+        vars.iter()
+            .rev()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| (*v).to_string())
+    })?;
     Ok(v)
 }
 
