@@ -26,7 +26,7 @@ round trip, the stored map at 118, the #466 default map at 92.000) over the firs
 of each hit list. The error the check hunts is a systematic set_tempo truncation, whose
 excess over the gate scales with the span exactly like the gate itself, so a 30 s window
 fails the same code the 6-minute window fails. The full corpus (all five cases over the
-full spans) stays in the release check: `uv run python tools/release/cut.py check-midi`.
+full spans) stays in the release check: `uv run --no-project python tools/release/cut.py check-midi`.
 """
 
 import argparse
@@ -240,7 +240,7 @@ def main():
     ap.add_argument("--keep", action="store_true", help="keep the scratch folder")
     ap.add_argument("--quick", action="store_true",
                     help="the pytest corpus (#174): three representative cases over the first 30 s;"
-                         " the full corpus stays in `tools/release/cut.py check-midi`")
+                         " the full corpus stays in `uv run --no-project python tools/release/cut.py check-midi`")
     args = ap.parse_args()
     bin_path = build_bin(args.bin)
     n = ok = 0
