@@ -816,7 +816,8 @@
       $q("#presetName").value = "Self Test Span";
       $q("#presetAccept").click();
       await until(() => !visible("#presetModal") && S.zoomOwn.length === ownWas.length + 1, "the own preset saved", 5000);
-      need((await T.invoke("selftest_menu_report")).items.some(i => i.id === "zoom_own:0"), "the menu does not list the own preset");
+      // the menu update goes through the async shell_sync, so retry instead of a one-shot need
+      await until(async () => (await T.invoke("selftest_menu_report")).items.some(i => i.id === "zoom_own:0"), "the menu lists the own preset", 5000);
       done.push("zoom_add");
       // Edit > Set Marker at Selection (the playhead; the service stores the list), then the jumps
       const mkWas = MK.list.length;
