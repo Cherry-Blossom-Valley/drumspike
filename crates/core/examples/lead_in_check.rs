@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track};
-use drumspike_core::refine::set_lead_in;
+use drumspike_core::refine::{RefineRule, set_lead_in};
 use drumspike_core::{MixMode, read_wav_mono};
 
 /// The noise floor before a hit: the median of the 1 ms block maxima of `|x|` in the 60 ms to 12 ms before it.
@@ -44,7 +44,12 @@ fn departure(x: &[f32], t: f64, sr: f64) -> Option<i64> {
 }
 
 fn times(x: &[f32], sr: u32, role: &str) -> Vec<f64> {
-    analyze_track(x, sr, role, &AnalyzeParams::default(), Detector::Dsp)
+    // The product's rule: `AnalyzeParams::default()` is the engine reference rule, which has no back-track at all.
+    let params = AnalyzeParams {
+        rule: RefineRule::CURRENT,
+        ..AnalyzeParams::default()
+    };
+    analyze_track(x, sr, role, &params, Detector::Dsp)
         .expect("analysis")
         .events
         .iter()
