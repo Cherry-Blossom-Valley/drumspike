@@ -363,7 +363,7 @@ impl WavInfo {
             (SampleFormat::Pcm, 3) => decode_frames::<3, i32>(
                 d,
                 ch,
-                |b| (((b[2] as i8 as i32) << 16) | ((b[1] as i32) << 8) | b[0] as i32) << 8,
+                |b| ((i32::from(b[2] as i8) << 16) | (i32::from(b[1]) << 8) | i32::from(b[0])) << 8,
                 |f| plan.fold_s32(f),
             ),
             (SampleFormat::Pcm, 4) => decode_frames::<4, i32>(d, ch, |b| i32::from_le_bytes(*b), |f| plan.fold_s32(f)),
@@ -396,7 +396,7 @@ impl WavInfo {
             (SampleFormat::Pcm, 3) => decode_samples_into::<3, i32>(
                 data,
                 out,
-                |b| (((b[2] as i8 as i32) << 16) | ((b[1] as i32) << 8) | b[0] as i32) << 8,
+                |b| ((i32::from(b[2] as i8) << 16) | (i32::from(b[1]) << 8) | i32::from(b[0])) << 8,
                 |x| one.fold_s32(&[x]),
             ),
             (SampleFormat::Pcm, 4) => {
@@ -426,7 +426,7 @@ impl WavInfo {
                 data,
                 ch,
                 out,
-                |b| (((b[2] as i8 as i32) << 16) | ((b[1] as i32) << 8) | b[0] as i32) << 8,
+                |b| ((i32::from(b[2] as i8) << 16) | (i32::from(b[1]) << 8) | i32::from(b[0])) << 8,
                 |f| plan.fold_s32(f),
             ),
             (SampleFormat::Pcm, 4) => {

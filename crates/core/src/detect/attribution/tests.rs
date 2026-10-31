@@ -12,7 +12,7 @@ fn burst(x: &mut [f32], at: usize, amp: f32, freq: f64, decay_s: f64) {
         if k >= x.len() {
             break;
         }
-        let t = i as f64 / SR as f64;
+        let t = i as f64 / f64::from(SR);
         x[k] += amp * ((2.0 * std::f64::consts::PI * freq * t).sin() * (-t / decay_s).exp()) as f32;
     }
 }
@@ -40,9 +40,11 @@ fn noise_burst(x: &mut [f32], at: usize, amp: f32, decay_s: f64, seed: u64) {
         if k >= x.len() {
             break;
         }
-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         let u = ((s >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0;
-        let t = i as f64 / SR as f64;
+        let t = i as f64 / f64::from(SR);
         x[k] += amp * (u * (-t / decay_s).exp()) as f32;
     }
 }
@@ -143,7 +145,7 @@ fn band_peak_db_measures_in_band_and_skips_the_preroll() {
     assert!(h < l - 60.0, "{h} {l}");
     // broadband: exact peak
     let b = band_peak_db(&x, &[], w0, w0, w0 + 480);
-    let m = x[w0..w0 + 480].iter().fold(0.0f32, |m, v| m.max(v.abs())) as f64;
+    let m = f64::from(x[w0..w0 + 480].iter().fold(0.0f32, |m, v| m.max(v.abs())));
     assert!((b - 20.0 * (m + 1e-9).log10()).abs() < 1e-12);
     assert_eq!(band_peak_db(&x, &low, 10, 20, 20), -180.0);
 }

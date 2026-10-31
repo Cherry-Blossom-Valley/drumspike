@@ -84,7 +84,7 @@ pub fn measure_offset(bounce: &[f32], sr: u32, note_on_s: f64) -> Result<Offset,
     Ok(Offset {
         onset,
         sr,
-        offset_samples: onset as f64 - note_on_s * sr as f64,
+        offset_samples: onset as f64 - note_on_s * f64::from(sr),
     })
 }
 
@@ -108,9 +108,9 @@ pub fn median_shape(mic: &[f32], hits: &[i64], pre: usize, len: usize, max_lag: 
                 }
             })
             .collect();
-        let rms = (w.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / total as f64).sqrt();
+        let rms = (w.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / total as f64).sqrt();
         if rms > 1e-9 {
-            wins.push(w.iter().map(|v| (*v as f64 / rms) as f32).collect());
+            wins.push(w.iter().map(|v| (f64::from(*v) / rms) as f32).collect());
         }
     }
     if wins.is_empty() {
@@ -141,7 +141,7 @@ pub fn bounce_polarity(
     p: &AlignParams,
 ) -> Option<(i8, f64)> {
     let (a, pre) = attack_template(bounce, onset, sr, p);
-    let max_lag = (p.max_lag_s * sr as f64).round() as usize;
+    let max_lag = (p.max_lag_s * f64::from(sr)).round() as usize;
     let len = a.len();
     let shape = median_shape(mic, hits, pre, len, max_lag)?;
     let x = xcorr_hit(&shape, (pre + max_lag) as i64, &a, pre, max_lag)?;
@@ -153,8 +153,12 @@ pub fn bounce_polarity(
 /// to the sample, in seconds. A note that would fall before the first sample goes to 0 s (the second
 /// value is true). `sr` is the rate of the track the samples are of.
 pub fn compensate(t: f64, lag_samples: f64, offset_samples: f64, sr: u32) -> (f64, bool) {
-    let s = (t * sr as f64 + lag_samples - offset_samples).round();
-    if s < 0.0 { (0.0, true) } else { (s / sr as f64, false) }
+    let s = (t * f64::from(sr) + lag_samples - offset_samples).round();
+    if s < 0.0 {
+        (0.0, true)
+    } else {
+        (s / f64::from(sr), false)
+    }
 }
 
 #[cfg(test)]

@@ -486,7 +486,7 @@ impl DetectorBackend for ExternalDetector {
             channel_mask: 0,
         };
         crate::io::write_wav(&path, &spec, x, None).map_err(|e| BackendError::Io(e.to_string()))?;
-        let file_len_s = x.len() as f64 / sr as f64;
+        let file_len_s = x.len() as f64 / f64::from(sr);
         let result = self.detect_wav(&path, role, sr, file_len_s);
         let _ = std::fs::remove_file(&path);
         let v = result?;
@@ -592,7 +592,7 @@ mod tests {
     /// Section 5, limits: more than 50 hits per second of audio fails the track.
     #[test]
     fn the_hits_per_second_limit_fails_the_track() {
-        let hits: Vec<ProtocolHit> = (0..51).map(|i| hit(i as f64 * 0.01, "kick", None)).collect();
+        let hits: Vec<ProtocolHit> = (0..51).map(|i| hit(f64::from(i) * 0.01, "kick", None)).collect();
         let e = validate_response(&response(hits), 1.0, 1.0).unwrap_err();
         assert!(matches!(e, BackendError::Limit(_)), "{e}");
     }
@@ -600,7 +600,7 @@ mod tests {
     /// Section 5, limits: more than 400 candidates per second fails the track.
     #[test]
     fn the_candidates_per_second_limit_fails_the_track() {
-        let cands: Vec<ProtocolHit> = (0..401).map(|i| hit(i as f64 * 0.001, "kick", None)).collect();
+        let cands: Vec<ProtocolHit> = (0..401).map(|i| hit(f64::from(i) * 0.001, "kick", None)).collect();
         let mut r = response(vec![]);
         r.candidates = Some(cands);
         let e = validate_response(&r, 1.0, 1.0).unwrap_err();

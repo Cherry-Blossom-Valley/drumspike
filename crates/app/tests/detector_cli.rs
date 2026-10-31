@@ -68,7 +68,7 @@ fn install_plugin(dir: &std::path::Path) {
             "id": "json-hits", "name": "JSON Hits", "version": "1.0.0", "protocol": 1,
             "executable": "json_hits.py",
             "roles": ["kick", "snare", "tom", "hat", "cymbal", "other"],
-            "sample_rates": [44100, 48000, 88200, 96000, 192000],
+            "sample_rates": [44100, 48000, 88200, 96000, 192_000],
             "licence": "MIT", "licence_file": "LICENCE",
         }))
         .unwrap(),

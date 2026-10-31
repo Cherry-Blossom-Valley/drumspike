@@ -8,10 +8,10 @@ fn kick_hit(n: usize, attack_ms: f64) -> Vec<f64> {
     let mut out = Vec::with_capacity(n);
     let mut cum = 0.0;
     for i in 0..n {
-        let t = i as f64 / SR as f64;
+        let t = i as f64 / f64::from(SR);
         let f = 55.0 + 70.0 * (-t / 0.03).exp();
         cum += f;
-        let ph = 2.0 * std::f64::consts::PI * cum / SR as f64;
+        let ph = 2.0 * std::f64::consts::PI * cum / f64::from(SR);
         let env = (t / (attack_ms / 1000.0)).min(1.0) * (-t / 0.12).exp();
         out.push(ph.sin() * env);
     }
@@ -19,10 +19,10 @@ fn kick_hit(n: usize, attack_ms: f64) -> Vec<f64> {
 }
 
 fn track(onsets: &[(f64, f64)], dur: f64) -> Vec<f32> {
-    let mut x = vec![0.0f64; (dur * SR as f64) as usize];
+    let mut x = vec![0.0f64; (dur * f64::from(SR)) as usize];
     for &(t, db) in onsets {
-        let i = (t * SR as f64).round() as usize;
-        let h = kick_hit((0.4 * SR as f64) as usize, 0.5);
+        let i = (t * f64::from(SR)).round() as usize;
+        let h = kick_hit((0.4 * f64::from(SR)) as usize, 0.5);
         let g = 10f64.powf(db / 20.0);
         for (k, v) in h.iter().enumerate() {
             if i + k < x.len() {
@@ -76,7 +76,7 @@ fn hilbert_env_of_a_cosine_is_flat_and_of_silence_is_zero() {
     assert!(hilbert_env(&[]).is_empty());
     // odd length: the h mask covers 1..=(n-1)/2
     let odd: Vec<f64> = (0..101)
-        .map(|i| (2.0 * std::f64::consts::PI * 3.0 * i as f64 / 101.0).cos())
+        .map(|i| (2.0 * std::f64::consts::PI * 3.0 * f64::from(i) / 101.0).cos())
         .collect();
     for v in hilbert_env(&odd) {
         assert!((v - 1.0).abs() < 1e-9, "{v}");
@@ -105,12 +105,12 @@ fn convolve_same_matches_numpy_centering() {
 fn refine_finds_the_attack_of_an_isolated_hit() {
     let x = track(&[(0.5, -3.0)], 1.5);
     let (t, rise) = refine_sr(&x, 0.5 + 0.003, SR, &[], W);
-    let i = (t * SR as f64).round() as i64;
+    let i = (t * f64::from(SR)).round() as i64;
     // the 25 % rule lands inside the 0.5 ms attack ramp of the sine sweep
     assert!((24_000..=24_048).contains(&i), "refined to {i}");
     assert!(rise.unwrap() > 6.0, "{rise:?}");
     // the result is a sample index over sr
-    assert_eq!(t, i as f64 / SR as f64);
+    assert_eq!(t, i as f64 / f64::from(SR));
 }
 
 #[test]
@@ -136,8 +136,8 @@ fn neighbours_clip_the_search_window() {
     assert!((t2 - 0.525).abs() < 0.0005, "{t2}");
     // an empty window (neighbours at the same time on both sides) returns t0
     assert_eq!(
-        refine_sr(&x, 0.5250001, SR, &[0.52500005, 0.52500015], W),
-        (0.5250001, None)
+        refine_sr(&x, 0.525_000_1, SR, &[0.525_000_05, 0.525_000_15], W),
+        (0.525_000_1, None)
     );
     // refine_track passes the previous and the next coarse hit
     let r = refine_track(&x, SR, &[0.502, 0.527], W);
@@ -153,7 +153,7 @@ fn the_window_reaches_an_attack_12_ms_after_t0() {
     let x = track(&[(0.5, -3.0)], 1.5);
     let t0 = 0.488;
     let (t, _) = refine_sr(&x, t0, SR, &[], RefineWindow::DEFAULT);
-    let i = (t * SR as f64).round() as i64;
+    let i = (t * f64::from(SR)).round() as i64;
     assert!((24_000..=24_048).contains(&i), "default window: {i}");
     let (t7, _) = refine_sr(&x, t0, SR, &[], RefineWindow::SYMMETRIC_7);
     assert_eq!(t7, t0, "the phase 1 window finds nothing and gives t0 back");
@@ -201,13 +201,13 @@ fn noisy(x: &[f32], db: f64) -> Vec<f32> {
             s ^= s >> 7;
             s ^= s << 17;
             let u = (s >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0;
-            (v as f64 + g * u) as f32
+            (f64::from(v) + g * u) as f32
         })
         .collect()
 }
 
 fn sample(t: f64) -> i64 {
-    (t * SR as f64).round() as i64
+    (t * f64::from(SR)).round() as i64
 }
 
 #[test]
@@ -320,19 +320,19 @@ fn a_window_that_ends_inside_the_attack_keeps_the_reference() {
     // reference's crossing: the reference stands (not the body, 3 ms later)
     let on = 24_000usize;
     let mut buf = vec![0.0f64; SR as usize];
-    let tone = |k: usize| (2.0 * std::f64::consts::PI * 2000.0 * k as f64 / SR as f64).sin();
+    let tone = |k: usize| (2.0 * std::f64::consts::PI * 2000.0 * k as f64 / f64::from(SR)).sin();
     for k in 0..48 {
         buf[on - 510 + k] += 0.0028 * tone(k); // the ripple, -51 dB, 10.6 ms before the onset
     }
     for k in 0..144 {
         buf[on + k] += 0.02 * tone(k); // the click, -34 dB, 3 ms
     }
-    let body = kick_hit((0.4 * SR as f64) as usize, 0.3);
+    let body = kick_hit((0.4 * f64::from(SR)) as usize, 0.3);
     for (k, v) in body.iter().enumerate() {
         buf[on + 144 + k] += 0.7 * v;
     }
     let x = noisy(&buf.iter().map(|&v| v as f32).collect::<Vec<_>>(), -60.0);
-    let t0 = (on as f64 - 600.0) / SR as f64;
+    let t0 = (on as f64 - 600.0) / f64::from(SR);
     let (t1, rise) = refine_sr(&x, t0, SR, &[], W);
     assert!((sample(t1) - on as i64).abs() <= 12, "the reference: {}", sample(t1));
     let r = refine_reach(&x, t0, SR, &[], W);
@@ -345,7 +345,7 @@ fn a_slow_attack_is_not_a_tail() {
     // the body. The reference's window starts in the swell, its crossing lies before the
     // anchor and falls into a trough: the shape of a tail, but the 5 ms before the window rise
     // (TAIL_RISE_DB). The swell is the tom's own: no coarse time moves the hit later
-    let ms = |v: f64| v * 1e-3 * SR as f64;
+    let ms = |v: f64| v * 1e-3 * f64::from(SR);
     let env = |k: f64| {
         if k < ms(6.0) {
             0.32 * k / ms(6.0)
@@ -359,8 +359,8 @@ fn a_slow_attack_is_not_a_tail() {
     };
     let mut buf = vec![0.0f64; SR as usize];
     for (on, g) in [(14_400usize, 0.05), (19_200, 1.0)] {
-        for k in 0..(0.3 * SR as f64) as usize {
-            let ph = 2.0 * std::f64::consts::PI * 1000.0 * k as f64 / SR as f64;
+        for k in 0..(0.3 * f64::from(SR)) as usize {
+            let ph = 2.0 * std::f64::consts::PI * 1000.0 * k as f64 / f64::from(SR);
             buf[on + k] += g * env(k as f64) * ph.sin();
         }
     }
@@ -368,7 +368,7 @@ fn a_slow_attack_is_not_a_tail() {
     let nb = [0.3];
     // the coarse times whose window holds the attack (earlier ones miss it: the reach's case)
     for k in 0..23 {
-        let t0 = 0.390 + k as f64 * 0.001;
+        let t0 = 0.390 + f64::from(k) * 0.001;
         let r = refine_reach(&x, t0, SR, &nb, W);
         assert_eq!(
             (r.t, r.step),
@@ -383,7 +383,7 @@ fn a_window_past_the_attack_is_no_tail() {
     // a coarse time 8 to 12 ms late: the reference's window starts in the hit's decay, before a
     // dip and a second stroke. The 5 ms before the window are louder than the window (the hit's
     // own attack): no tail, the reference stands (the kit's SoCal Toms#276)
-    let ms = |v: f64| v * 1e-3 * SR as f64;
+    let ms = |v: f64| v * 1e-3 * f64::from(SR);
     let env = |k: f64| {
         if k < ms(0.5) {
             0.9 * k / ms(0.5)
@@ -397,13 +397,13 @@ fn a_window_past_the_attack_is_no_tail() {
     };
     let on = 24_000usize;
     let mut buf = vec![0.0f64; SR as usize];
-    for k in 0..(0.3 * SR as f64) as usize {
-        buf[on + k] += env(k as f64) * (2.0 * std::f64::consts::PI * 1000.0 * k as f64 / SR as f64).sin();
+    for k in 0..(0.3 * f64::from(SR)) as usize {
+        buf[on + k] += env(k as f64) * (2.0 * std::f64::consts::PI * 1000.0 * k as f64 / f64::from(SR)).sin();
     }
     let x = noisy(&buf.iter().map(|&v| v as f32).collect::<Vec<_>>(), -70.0);
     let nb = [0.4];
     for k in 0..5 {
-        let t0 = 0.508 + k as f64 * 0.001;
+        let t0 = 0.508 + f64::from(k) * 0.001;
         let r = refine_reach(&x, t0, SR, &nb, W);
         assert_eq!(
             (r.t, r.step),
@@ -433,13 +433,13 @@ fn the_tail_fix_starts_the_rule_after_the_previous_tail() {
     let mut buf = vec![0.0f64; SR as usize];
     let mut s: u64 = 12345;
     for onset in [0.300, 0.375] {
-        let i0 = (onset * SR as f64) as usize;
-        for k in 0..(0.4 * SR as f64) as usize {
+        let i0 = (onset * f64::from(SR)) as usize;
+        for k in 0..(0.4 * f64::from(SR)) as usize {
             s ^= s << 13;
             s ^= s >> 7;
             s ^= s << 17;
             let u = (s >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0;
-            let t = k as f64 / SR as f64;
+            let t = k as f64 / f64::from(SR);
             let tone = (0.7 + 2.0 * std::f64::consts::PI * 190.0 * t).sin() * (-t / 0.07).exp();
             buf[i0 + k] += 0.4 * tone + 0.5 * u * (-t / 0.11).exp();
         }
@@ -493,7 +493,7 @@ fn the_reach_rule_stays_in_the_signal_everywhere() {
     let x = noisy(&track(&on, 1.0), -30.0);
     let mut steps = std::collections::HashMap::new();
     for i in -5..1010 {
-        let t0 = i as f64 / 1000.0;
+        let t0 = f64::from(i) / 1000.0;
         for nb in [vec![], vec![t0 - 0.03, t0 + 0.03]] {
             let r = refine_reach(&x, t0, SR, &nb, W);
             let (t1, rise1) = refine_sr(&x, t0, SR, &nb, W);
@@ -522,11 +522,11 @@ fn the_reach_rule_stays_in_the_signal_everywhere() {
 /// A hit at `at` (samples): a 180 Hz sine with a linear attack of `ramp` samples (0: a sharp
 /// start at full level, phase 0.7 rad) and a 60 ms decay, peak `amp`.
 fn shot(x: &mut [f32], at: usize, ramp: usize, amp: f64) {
-    for k in 0..(0.3 * SR as f64) as usize {
+    for k in 0..(0.3 * f64::from(SR)) as usize {
         if at + k >= x.len() {
             break;
         }
-        let t = k as f64 / SR as f64;
+        let t = k as f64 / f64::from(SR);
         let env = if ramp == 0 {
             1.0
         } else {
@@ -540,7 +540,7 @@ fn shot(x: &mut [f32], at: usize, ramp: usize, amp: f64) {
 /// A sine of `amp` and `f` Hz in `[from, to)`.
 fn tone(x: &mut [f32], from: usize, to: usize, f: f64, amp: f64) {
     for (k, v) in x[from..to].iter_mut().enumerate() {
-        *v += (amp * (2.0 * std::f64::consts::PI * f * k as f64 / SR as f64).sin()) as f32;
+        *v += (amp * (2.0 * std::f64::consts::PI * f * k as f64 / f64::from(SR)).sin()) as f32;
     }
 }
 
@@ -604,7 +604,7 @@ fn a_sharp_start_stays_also_when_band_limited() {
             for (j, hv) in h.iter().enumerate() {
                 let k = i - (j as i64 - half);
                 if (0..x.len() as i64).contains(&k) {
-                    a += x[k as usize] as f64 * hv / sum;
+                    a += f64::from(x[k as usize]) * hv / sum;
                 }
             }
             a as f32
@@ -621,16 +621,18 @@ fn the_foot_rule_stops_on_the_last_floor_level_sample() {
     // foot is the sample before the first sample that leaves the floor (|x| > A), at each rate.
     const A: f64 = 0.0017;
     for (sr, ramp) in [(44_100u32, 0usize), (48_000, 0), (48_000, 24), (96_000, 48)] {
-        let on = (0.3 * sr as f64) as usize;
+        let on = (0.3 * f64::from(sr)) as usize;
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
         let mut x: Vec<f32> = (0..sr as usize / 2)
             .map(|_| {
-                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
                 (A * ((seed >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0)) as f32
             })
             .collect();
-        for k in 0..(0.1 * sr as f64) as usize {
-            let t = k as f64 / sr as f64;
+        for k in 0..(0.1 * f64::from(sr)) as usize {
+            let t = k as f64 / f64::from(sr);
             let env = if k >= ramp {
                 1.0
             } else {
@@ -644,9 +646,13 @@ fn the_foot_rule_stops_on_the_last_floor_level_sample() {
             .position(|v| f64::from(v.abs()) > A)
             .expect("the hit leaves the floor") as i64
             - 1;
-        let t0 = on as f64 / sr as f64 - 0.006;
+        let t0 = on as f64 / f64::from(sr) - 0.006;
         let r = refine_rule_peak(&x, t0, sr, &[], W, RefineRule::Foot, FM_PEAK_DB);
-        assert_eq!((r.t * sr as f64).round() as i64, truth, "rate {sr}, ramp {ramp}: {r:?}");
+        assert_eq!(
+            (r.t * f64::from(sr)).round() as i64,
+            truth,
+            "rate {sr}, ramp {ramp}: {r:?}"
+        );
         assert_eq!(r.back, BackStep::Moved, "rate {sr}, ramp {ramp}");
     }
 }
@@ -676,7 +682,7 @@ fn the_strict_foot_moves_at_most_the_guard_before_the_version_3_foot() {
         (d, BackStep::Moved)
     );
     assert_eq!(foot_strict(&x, d, s - 480, 0.0), d - 17);
-    assert!(samples(FM_STRICT_MAX_S, SR as f64) < 17);
+    assert!(samples(FM_STRICT_MAX_S, f64::from(SR)) < 17);
     assert_eq!(
         first_motion_mid_rule(&x, s, SR, None, None, FM_PEAK_DB, Some(FootTune::V4)),
         (d, BackStep::Moved),
@@ -737,8 +743,8 @@ fn a_noise_floor_raises_the_threshold() {
     // the floor's median block maximum is about -31 dB: 6 dB over it is about 6 % of the peak
     assert!((0..=24).contains(&(foot - on as i64)), "{foot} against {on}");
     assert!(foot < s - 30, "it moved: {foot}");
-    assert!(floor_before(&x, s, s - 2400, SR as f64) > 0.02);
-    assert_eq!(floor_before(&x, s, s - 90, SR as f64), 0.0, "no full block");
+    assert!(floor_before(&x, s, s - 2400, f64::from(SR)) > 0.02);
+    assert_eq!(floor_before(&x, s, s - 90, f64::from(SR)), 0.0, "no full block");
     // the median of the block maxima, the blocks counted back from 2 ms before the hit: one loud
     // block (a bleed burst) does not move it; with an even count the two middle ones average
     let mut b = vec![0.0f32; 48 * 8];
@@ -746,9 +752,9 @@ fn a_noise_floor_raises_the_threshold() {
         b[48 * k + 7] = *lv;
     }
     let end = 48 * 5 + 96;
-    assert!((floor_before(&b, end as i64, 0, SR as f64) - 0.3).abs() < 1e-6);
+    assert!((floor_before(&b, i64::from(end), 0, f64::from(SR)) - 0.3).abs() < 1e-6);
     assert!(
-        (floor_before(&b, end as i64, 48, SR as f64) - 0.4).abs() < 1e-6,
+        (floor_before(&b, i64::from(end), 48, f64::from(SR)) - 0.4).abs() < 1e-6,
         "0.9, 0.3, 0.2, 0.5"
     );
 }
@@ -796,10 +802,10 @@ fn the_walk_span_is_in_time_at_every_rate() {
     for (len, want) in [(672usize, BackStep::Moved), (1152, BackStep::Busy)] {
         let mut x = vec![0.0f32; 96_000];
         for (k, v) in x[on - len..on].iter_mut().enumerate() {
-            *v = (0.7 * (2.0 * std::f64::consts::PI * 900.0 * k as f64 / sr as f64).sin()) as f32;
+            *v = (0.7 * (2.0 * std::f64::consts::PI * 900.0 * k as f64 / f64::from(sr)).sin()) as f32;
         }
-        for k in 0..(0.3 * sr as f64) as usize {
-            let t = k as f64 / sr as f64;
+        for k in 0..(0.3 * f64::from(sr)) as usize {
+            let t = k as f64 / f64::from(sr);
             x[on + k] += ((-t / 0.06).exp() * (2.0 * std::f64::consts::PI * 180.0 * t + 0.7).sin()) as f32;
         }
         let (foot, step) = first_motion(&x, on as i64, sr, 0.497, None, None);
@@ -825,7 +831,7 @@ fn the_floor_window_ends_at_the_midpoint_to_the_previous_hit() {
     let mut x = vec![0.0f32; 48_000];
     tone(&mut x, on - 2400, on - 1200, 900.0, 0.1);
     shot(&mut x, on, 144, 1.0);
-    let t0 = on as f64 / SR as f64;
+    let t0 = on as f64 / f64::from(SR);
     let (foot, step) = first_motion(&x, on as i64 + 60, SR, t0, Some(t0 - 0.025), None);
     assert_eq!(step, BackStep::Moved);
     assert!((0..=6).contains(&(foot - on as i64)), "{foot}");
@@ -888,7 +894,7 @@ fn the_first_motion_rule_stays_in_the_signal_everywhere() {
     }
     let mut steps = std::collections::HashMap::new();
     for i in -5..1010 {
-        let t0 = i as f64 / 1000.0;
+        let t0 = f64::from(i) / 1000.0;
         for nb in [vec![], vec![t0 - 0.03, t0 + 0.03]] {
             let two = refine_reach(&x, t0, SR, &nb, W);
             let r = refine_first_motion(&x, t0, SR, &nb, W);
@@ -947,8 +953,8 @@ fn the_back_track_with_sample_bounds_equals_the_one_with_hit_times() {
         (Some(0.4995), Some(0.5004)),
         (None, Some(0.5001)),
     ] {
-        let pm = prev.map(|p: f64| ((p + 0.5) / 2.0 * SR as f64) as i64);
-        let nm = next.map(|n: f64| ((0.5 + n) / 2.0 * SR as f64) as i64);
+        let pm = prev.map(|p: f64| ((p + 0.5) / 2.0 * f64::from(SR)) as i64);
+        let nm = next.map(|n: f64| ((0.5 + n) / 2.0 * f64::from(SR)) as i64);
         assert_eq!(
             first_motion(&x, s, SR, 0.5, prev, next),
             first_motion_mid(&x, s, SR, pm, nm)

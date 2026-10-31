@@ -381,8 +381,8 @@ mod tests {
     fn the_added_hits_are_tagged_sorted_and_take_the_tracks_velocity_and_cut() {
         let sr = 48_000;
         let mut x = vec![0.0f32; sr as usize * 2];
-        x[(1.03 * sr as f64) as usize + 10] = 0.5; // -6 dB at the second stroke
-        x[(1.53 * sr as f64) as usize + 10] = 0.001; // -60 dB: under a cut at -50
+        x[(1.03 * f64::from(sr)) as usize + 10] = 0.5; // -6 dB at the second stroke
+        x[(1.53 * f64::from(sr)) as usize + 10] = 0.001; // -60 dB: under a cut at -50
         let mut old = Event::new(1.2, 90);
         old.extra.insert("flam".into(), Value::Bool(true));
         let mut moved = Event::new(1.7, 90);

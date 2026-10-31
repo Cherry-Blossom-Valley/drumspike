@@ -122,7 +122,7 @@ impl From<std::io::Error> for MidiError {
 
 /// Seconds per tick, as `PrettyMIDI.__init__` stores it: `60.0 / (initial_tempo * resolution)`.
 pub fn tick_scale(ppq: u16, tempo: f64) -> f64 {
-    60.0 / (tempo * ppq as f64)
+    60.0 / (tempo * f64::from(ppq))
 }
 
 /// `PrettyMIDI.time_to_tick(t)` on a fresh object: 0 for `t <= 0`, else `round(t / tick_scale)`
@@ -135,7 +135,7 @@ pub fn time_to_tick(t: f64, tick_scale: f64) -> i64 {
 /// microseconds per quarter note, with the same floating-point steps.
 pub fn tempo_meta(ppq: u16, tempo: f64) -> u32 {
     let ts = tick_scale(ppq, tempo);
-    let bpm = 60.0 / (ts * ppq as f64);
+    let bpm = 60.0 / (ts * f64::from(ppq));
     (6e7 / bpm) as u32
 }
 
@@ -557,7 +557,7 @@ fn track1_messages(notes: &[NoteEvent]) -> Vec<Msg> {
         for (tick, vel) in [(n.tick, n.velocity), (n.tick + n.duration, 0)] {
             msgs.push(Msg {
                 tick,
-                score: 10 * 65536 + n.note as i64 * 256 + vel as i64,
+                score: 10 * 65536 + i64::from(n.note) * 256 + i64::from(vel),
                 kind: Kind::NoteOn { key: n.note, vel },
             });
         }

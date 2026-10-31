@@ -157,7 +157,7 @@ fn pcm24_extensible_with_ixml() {
         Some("<BWFXML><IXML_VERSION>1.5</IXML_VERSION></BWFXML>")
     );
     let x = info.decode_mono(&b, MixMode::Average).unwrap();
-    assert_eq!(x, vec![-1.0, 8388607.0 / 8388608.0, 1.0 / 8388608.0]);
+    assert_eq!(x, vec![-1.0, 8_388_607.0 / 8_388_608.0, 1.0 / 8_388_608.0]);
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn pcm32_mono_scales_by_2_pow_31() {
     let info = WavInfo::parse(&b).unwrap();
     assert_eq!(info.bytes_per_sample, 4);
     let x = info.decode_mono(&b, MixMode::Ffmpeg).unwrap();
-    assert_eq!(x, vec![-1.0, i32::MAX as f32 / 2147483648.0, 1.0 / 8388608.0]);
+    assert_eq!(x, vec![-1.0, i32::MAX as f32 / 2_147_483_648.0, 1.0 / 8_388_608.0]);
 }
 
 #[test]

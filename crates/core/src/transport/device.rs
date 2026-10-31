@@ -418,7 +418,7 @@ pub(crate) fn start_null(
         .name("drumspike-null-audio".into())
         .spawn(move || {
             let mut buf = vec![0.0f32; 2 * n];
-            let period = Duration::from_secs_f64(n as f64 / sample_rate as f64);
+            let period = Duration::from_secs_f64(n as f64 / f64::from(sample_rate));
             let start = Instant::now();
             let mut k: u32 = 0;
             while !s2.load(Ordering::Acquire) {

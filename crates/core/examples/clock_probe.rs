@@ -27,8 +27,8 @@ fn write_tone(path: &Path, secs: u32) -> std::io::Result<()> {
     let n = rate * secs;
     let mut data = Vec::with_capacity(n as usize * 2);
     for i in 0..n {
-        let s = (2.0 * std::f64::consts::PI * 220.0 * i as f64 / rate as f64).sin() * 0.2;
-        data.extend_from_slice(&((s * i16::MAX as f64) as i16).to_le_bytes());
+        let s = (2.0 * std::f64::consts::PI * 220.0 * f64::from(i) / f64::from(rate)).sin() * 0.2;
+        data.extend_from_slice(&((s * f64::from(i16::MAX)) as i16).to_le_bytes());
     }
     let mut out = Vec::with_capacity(44 + data.len());
     out.extend_from_slice(b"RIFF");

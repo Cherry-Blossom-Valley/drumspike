@@ -125,7 +125,7 @@ fn sine_at_a_known_bin() {
         let n = 44_100;
         let amp = 0.5f64;
         let x: Vec<f32> = (0..n)
-            .map(|i| (amp * (2.0 * std::f64::consts::PI * f * i as f64 / 44_100.0).sin()) as f32)
+            .map(|i| (amp * (2.0 * std::f64::consts::PI * f * f64::from(i) / 44_100.0).sin()) as f32)
             .collect();
         let spec = features(&x, chain);
         let frame = 50; // fully inside the signal

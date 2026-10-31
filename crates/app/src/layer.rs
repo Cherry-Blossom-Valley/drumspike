@@ -188,7 +188,7 @@ impl Layer {
 
     /// The onset in seconds (of the effective onset, P4-40e).
     pub fn onset_s(&self) -> f64 {
-        self.onset_eff() as f64 / self.sr as f64
+        self.onset_eff() as f64 / f64::from(self.sr)
     }
 
     /// The onset at `sr` in whole samples (the one-shot resampled to `sr` keeps it there).
@@ -201,20 +201,20 @@ impl Layer {
         if sr == self.sr {
             onset
         } else {
-            (onset as f64 * sr as f64 / self.sr as f64).round() as usize
+            (onset as f64 * f64::from(sr) / f64::from(self.sr)).round() as usize
         }
     }
 
     /// The onset at `sr` in samples, not rounded: the render places the one-shot resampled to `sr`
     /// with its attack at this fractional sample (P4-7a fix 7).
     pub fn onset_exact_at(&self, sr: u32) -> f64 {
-        self.onset_eff() as f64 * sr as f64 / self.sr as f64
+        self.onset_eff() as f64 * f64::from(sr) / f64::from(self.sr)
     }
 
     /// The gain of a hit with velocity `v` and polarity `sign` (+1 or -1).
     pub fn gain(&self, v: i64, sign: i8) -> f32 {
         let level = 10f64.powf(self.level_db.clamp(LEVEL_MIN_DB, LEVEL_MAX_DB) / 20.0);
-        (sign as f64 * level * self.curve.gain(v)) as f32
+        (f64::from(sign) * level * self.curve.gain(v)) as f32
     }
 }
 
@@ -468,7 +468,7 @@ impl Service {
         let key = align_key(file, &job.layer, mic, &p);
         let idx: Vec<i64> = hits
             .iter()
-            .map(|h| drumspike_core::pyops::py_round(h.t * sr as f64))
+            .map(|h| drumspike_core::pyops::py_round(h.t * f64::from(sr)))
             .collect();
         let mut missing: Vec<i64> = {
             let c = lock(&self.inner.layers.align);
@@ -484,7 +484,7 @@ impl Service {
             let shot = self.layer_shot(file, Some(sr))?;
             let mono = shot.mono();
             let (a, pre) = attack_template(&mono, job_onset(job, &shot), sr, &p);
-            let max_lag = (p.max_lag_s * sr as f64).round() as usize;
+            let max_lag = (p.max_lag_s * f64::from(sr)).round() as usize;
             for i in missing {
                 fresh.insert(i, xcorr_hit(&decoded.samples, i, &a, pre, max_lag));
             }
@@ -537,7 +537,7 @@ impl Service {
             });
         let onset_s = if job.status == SourceStatus::Changed {
             // the file changed under the layer record: re-measure (samples at the shot's rate)
-            job_onset(job, &shot) as f64 / shot.sr as f64
+            job_onset(job, &shot) as f64 / f64::from(shot.sr)
         } else {
             job.layer.onset_s()
         };
@@ -547,7 +547,7 @@ impl Service {
             .map(|(k, h)| {
                 let lag_s = match (&al, job.layer.align) {
                     // an edge lag is uncertain: do not shift (the true lag may be outside the window)
-                    (Some(a), true) => a.hits[k].map_or(0.0, |x| applied_lag(&x, sign) / a.sr as f64),
+                    (Some(a), true) => a.hits[k].map_or(0.0, |x| applied_lag(&x, sign) / f64::from(a.sr)),
                     _ => 0.0,
                 };
                 (h.t + lag_s - onset_s, job.layer.gain(h.v, sign))
@@ -1183,7 +1183,7 @@ mod tests {
         assert!((l.onset_exact_at(44_100) - 44.1).abs() < 1e-9);
         assert_eq!(l.onset_exact_at(48_000), 48.0);
         let g = l.gain(127, 1);
-        assert!((g as f64 - 10f64.powf(-6.0 / 20.0)).abs() < 1e-6);
+        assert!((f64::from(g) - 10f64.powf(-6.0 / 20.0)).abs() < 1e-6);
         assert_eq!(l.gain(127, -1), -g);
         assert!((l.gain(0, 1)).abs() < 1e-9, "linear curve at velocity 0");
         let loud = Layer {
@@ -1191,7 +1191,7 @@ mod tests {
             ..layer()
         };
         assert!(
-            (loud.gain(127, 1) as f64 - 10f64.powf(12.0 / 20.0)).abs() < 1e-5,
+            (f64::from(loud.gain(127, 1)) - 10f64.powf(12.0 / 20.0)).abs() < 1e-5,
             "clamped"
         );
         for p in [Polarity::Normal, Polarity::Invert, Polarity::Auto] {

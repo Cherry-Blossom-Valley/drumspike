@@ -11,7 +11,7 @@ fn burst(x: &mut [f32], at: usize, amp: f32, freq: f64) {
         if k >= x.len() {
             break;
         }
-        let t = i as f64 / SR as f64;
+        let t = i as f64 / f64::from(SR);
         x[k] += amp * ((2.0 * std::f64::consts::PI * freq * t).sin() * (-t / 0.08).exp()) as f32;
     }
 }
@@ -20,7 +20,9 @@ fn burst(x: &mut [f32], at: usize, amp: f32, freq: f64) {
 fn floor(x: &mut [f32], amp: f32, seed: u64) {
     let mut s = seed;
     for v in x.iter_mut() {
-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         *v += amp * (((s >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0) as f32;
     }
 }
@@ -52,7 +54,7 @@ fn kit_f(
     let mut hits = vec![Vec::new(); k];
     for (d, play) in plays.iter().enumerate() {
         for &(t, a) in play {
-            let at = (t * SR as f64) as usize;
+            let at = (t * f64::from(SR)) as usize;
             for m in 0..k {
                 let (amp, s) = if m == d {
                     (a * gains[m], at)
@@ -122,7 +124,7 @@ fn sources<'a>(k: &'a Kit, which: &[(usize, SourceKind)]) -> Vec<SourceMic<'a>> 
 
 /// The hits of mic `m` that lie 1 ms after a hit of drum `d` (its bleed).
 fn bleed_of(k: &Kit, play: &[(f64, f32)], m: usize) -> Vec<usize> {
-    let at: Vec<i64> = play.iter().map(|&(t, _)| (t * SR as f64) as i64 + 48).collect();
+    let at: Vec<i64> = play.iter().map(|&(t, _)| (t * f64::from(SR)) as i64 + 48).collect();
     (0..k.hits[m].len()).filter(|&j| at.contains(&k.hits[m][j])).collect()
 }
 
@@ -145,7 +147,7 @@ fn version_2_marks_the_snare_and_kick_bleed_and_keeps_the_own_hits() {
     assert!(v2.sources.iter().all(|u| u.unused.is_none()), "{:?}", v2.sources);
     assert_eq!(v2.sources.len(), 6);
     for m in 0..3 {
-        let own: Vec<i64> = plays[m].iter().map(|&(t, _)| (t * SR as f64) as i64).collect();
+        let own: Vec<i64> = plays[m].iter().map(|&(t, _)| (t * f64::from(SR)) as i64).collect();
         for (j, &h) in k.hits[m].iter().enumerate() {
             if own.contains(&h) {
                 assert!(
@@ -200,7 +202,7 @@ fn a_kick_and_tom_unison_keeps_the_tom_hit() {
     let r = tom_bleed_with(toms, &src, SR, &p).unwrap();
     let at: Vec<usize> = unison
         .iter()
-        .map(|&(t, _)| k.hits[0].iter().position(|&h| h == (t * SR as f64) as i64).unwrap())
+        .map(|&(t, _)| k.hits[0].iter().position(|&h| h == (t * f64::from(SR)) as i64).unwrap())
         .collect();
     for &j in &at {
         let e = r.source_excess[0][j][1];
@@ -219,7 +221,7 @@ fn the_source_gain_is_calibrated_where_the_tom_has_no_hit() {
     // (the snare bleed, 0.15, stays under the listing level), so 7 snare hits find tom 1 quiet. G(S->A) must come
     // from those (the snare alone, about -10 dB); from the 5 unison hits it would be about the tom's own level,
     // and the unison hits would be lost
-    let snare: Vec<(f64, f32)> = (0..12).map(|i| (1.4 + 1.5 * i as f64, 0.5)).collect();
+    let snare: Vec<(f64, f32)> = (0..12).map(|i| (1.4 + 1.5 * f64::from(i), 0.5)).collect();
     let mut t1 = part(0.5, 1.5, 12);
     let unison: Vec<(f64, f32)> = snare.iter().step_by(2).take(5).map(|&(t, _)| (t, 0.5)).collect();
     t1.extend(&unison);
@@ -247,7 +249,7 @@ fn the_source_gain_is_calibrated_where_the_tom_has_no_hit() {
     assert_eq!(r.off, None, "rule CD is on, so the marks count");
     let at: Vec<usize> = unison
         .iter()
-        .map(|&(t, _)| k.hits[0].iter().position(|&h| h == (t * SR as f64) as i64).unwrap())
+        .map(|&(t, _)| k.hits[0].iter().position(|&h| h == (t * f64::from(SR)) as i64).unwrap())
         .collect();
     assert_eq!(at.len(), 5);
     for &j in &at {
@@ -288,7 +290,7 @@ fn a_source_is_not_used_without_a_gain_when_the_tom_is_silent_or_in_a_shared_pai
     // silent: tom 1 gated to silence at the snare's hits
     let mut gated = k.x[0].clone();
     for &(t, _) in &plays[3] {
-        let a = (t * SR as f64) as usize;
+        let a = (t * f64::from(SR)) as usize;
         gated[a - 2400..a + 2400].iter_mut().for_each(|v| *v = 0.0);
     }
     let toms_g = [
@@ -313,7 +315,7 @@ fn bleed_of_other_toms_is_marked_and_own_hits_stay() {
     assert_eq!(r.off, None);
     assert!(r.mics.iter().all(|m| m.played && !m.silent), "{:?}", r.mics);
     for (m, play) in plays.iter().enumerate() {
-        let own: Vec<i64> = play.iter().map(|&(t, _)| (t * SR as f64) as i64).collect();
+        let own: Vec<i64> = play.iter().map(|&(t, _)| (t * f64::from(SR)) as i64).collect();
         for (j, &h) in k.hits[m].iter().enumerate() {
             assert_eq!(
                 r.bleed[m][j],
@@ -337,7 +339,7 @@ fn a_bleed_only_mic_takes_no_real_hit_at_any_gain() {
     let leak = |d: usize, m: usize| if m == 2 && d == 1 { 0.001 } else { 0.1 };
     let own: Vec<Vec<i64>> = plays
         .iter()
-        .map(|p| p.iter().map(|&(t, _)| (t * SR as f64) as i64).collect())
+        .map(|p| p.iter().map(|&(t, _)| (t * f64::from(SR)) as i64).collect())
         .collect();
     for g in [1.0f32, 10f32.powf(29.0 / 20.0), 10f32.powf(35.0 / 20.0), 6.0] {
         let k = kit(&plays, &leak, &[1.0, 1.0, g], 0.009);
@@ -403,7 +405,7 @@ fn a_quiet_main_tom_with_a_hot_bleed_only_mic_loses_no_real_hit() {
         let gap = (lv(0) + lv(1)) / 2.0 - lv(2);
         assert!((5.7..6.7).contains(&gap), "the main tom lies {gap} dB under the others");
         for (m, play) in plays.iter().enumerate().take(3) {
-            let own: Vec<i64> = play.iter().map(|&(t, _)| (t * SR as f64) as i64).collect();
+            let own: Vec<i64> = play.iter().map(|&(t, _)| (t * f64::from(SR)) as i64).collect();
             for (j, &h) in k.hits[m].iter().enumerate() {
                 if own.contains(&h) {
                     assert!(
@@ -438,14 +440,17 @@ fn a_bleed_only_mic_8_4_db_or_more_under_keeps_the_direction() {
         .unwrap();
         let lv = |m: usize| r.mics[m].level_db.unwrap();
         let gap = (lv(0) + lv(1)) / 2.0 - lv(3);
-        assert!((gap - db as f64).abs() < 0.5, "mic 3 lies {gap} dB under the others");
+        assert!(
+            (gap - f64::from(db)).abs() < 0.5,
+            "mic 3 lies {gap} dB under the others"
+        );
         assert!(
             r.merged.is_empty() && !r.mics[3].played,
             "{db} dB: {:?} {:?}",
             r.merged,
             r.mics[3]
         );
-        let own2: Vec<i64> = plays[2].iter().map(|&(t, _)| (t * SR as f64) as i64 + 48).collect();
+        let own2: Vec<i64> = plays[2].iter().map(|&(t, _)| (t * f64::from(SR)) as i64 + 48).collect();
         let of_drum2: Vec<bool> = k.hits[3]
             .iter()
             .zip(&r.bleed[3])
@@ -528,8 +533,8 @@ fn merged_pairs_need_a_shared_pair_and_a_weaker_mic_that_passes_the_level_test()
 fn the_quiet_window_picks_the_values_of_the_gain() {
     // drum 1 is struck 5 ms after every second hit of drum 0: there mic 1 is not quiet (its own hit within 30
     // ms), and the gain of 0 -> 1 uses only the other half of drum 0's strong hits
-    let p0: Vec<(f64, f32)> = (0..12).map(|i| (0.5 + i as f64 * 0.9, 0.5)).collect();
-    let p1: Vec<(f64, f32)> = (0..12).step_by(2).map(|i| (0.505 + i as f64 * 0.9, 0.5)).collect();
+    let p0: Vec<(f64, f32)> = (0..12).map(|i| (0.5 + f64::from(i) * 0.9, 0.5)).collect();
+    let p1: Vec<(f64, f32)> = (0..12).step_by(2).map(|i| (0.505 + f64::from(i) * 0.9, 0.5)).collect();
     let k = kit(&[p0, p1], &|_, _| 0.1, &[1.0, 1.0], 1.0);
     // half the hits are struck together: keep the two drums apart (no shared pair) to see the quiet window
     let p = TomBleedParams {
@@ -565,7 +570,7 @@ fn one_played_tom_or_a_silent_mic_turns_the_rule_off() {
     // a gated mic: digital silence between its own hits
     let plays = [part(0.5, 0.9, 20), part(0.8, 0.9, 20), part(1.1, 0.9, 20)];
     let mut k = kit(&plays, &|_, _| 0.1, &[1.0, 1.0, 1.0], 0.009);
-    let own: Vec<usize> = plays[2].iter().map(|&(t, _)| (t * SR as f64) as usize).collect();
+    let own: Vec<usize> = plays[2].iter().map(|&(t, _)| (t * f64::from(SR)) as usize).collect();
     for (i, v) in k.x[2].iter_mut().enumerate() {
         if !own
             .iter()
@@ -1113,7 +1118,7 @@ fn shared_kick_kit() -> (Kit, Vec<Vec<(f64, f32)>>) {
 
 /// The indices of mic `m`'s hits that are its own drum's strokes (not the +1 ms leaks).
 fn own_hits(k: &Kit, plays: &[Vec<(f64, f32)>], d: usize, m: usize) -> Vec<usize> {
-    let at: Vec<i64> = plays[d].iter().map(|&(t, _)| (t * SR as f64) as i64).collect();
+    let at: Vec<i64> = plays[d].iter().map(|&(t, _)| (t * f64::from(SR)) as i64).collect();
     (0..k.hits[m].len()).filter(|&j| at.contains(&k.hits[m][j])).collect()
 }
 
@@ -1209,7 +1214,7 @@ fn a_digitally_silent_mic_takes_no_shared_kick_marks() {
     // tom 3 gated to digital silence at the kick's hits
     let mut gated = k.x[2].clone();
     for &(t, _) in &plays[4] {
-        let a = (t * SR as f64) as usize;
+        let a = (t * f64::from(SR)) as usize;
         gated[a - 2400..a + 2400].iter_mut().for_each(|v| *v = 0.0);
     }
     let mut toms = mics(&k, &["tom1", "tom2", "tom3"]);

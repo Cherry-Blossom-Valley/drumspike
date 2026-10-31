@@ -15,7 +15,7 @@ pub const METER_PERIOD: Duration = Duration::from_millis(40);
 
 /// Round a meter value to 4 decimals for the message.
 fn meter_value(v: f32) -> f64 {
-    ((v as f64) * 1e4).round() / 1e4
+    (f64::from(v) * 1e4).round() / 1e4
 }
 
 /// The meter message of a [`MeterSnapshot`] (see the module docs).

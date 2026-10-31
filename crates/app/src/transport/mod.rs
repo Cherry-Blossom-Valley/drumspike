@@ -201,7 +201,7 @@ impl DeviceKey {
 
 /// A volume in dB from a command or the project, clamped to the fader range ([`MIN_DB`] is off).
 fn clamp_db(db: f64) -> f64 {
-    db.clamp(MIN_DB as f64, MAX_DB as f64)
+    db.clamp(f64::from(MIN_DB), f64::from(MAX_DB))
 }
 
 /// A pan from a command or the project, clamped to -1 to +1.
@@ -548,7 +548,7 @@ fn heard_epoch(st: &HostState, o: &Open, ph: &Playhead) -> u64 {
 /// The position of an open transport in seconds, extrapolated to now.
 fn position_s(t: &Transport) -> f64 {
     let ph = t.playhead();
-    ph.frame_at(host_now_ns()) as f64 / ph.sample_rate as f64
+    ph.frame_at(host_now_ns()) as f64 / f64::from(ph.sample_rate)
 }
 
 /// Reopen on the device the watcher sees: same position, same state.
@@ -1007,7 +1007,7 @@ impl Service {
             "rate": rate,
             "channels": o.key.channels,
             "frames": o.transport.session_frames(),
-            "duration": o.transport.session_frames() as f64 / rate as f64,
+            "duration": o.transport.session_frames() as f64 / f64::from(rate),
             "position": position.unwrap_or_else(|| position_s(&o.transport)),
             "epoch": st.epoch,
             "ready": ready,
@@ -1067,7 +1067,7 @@ impl Service {
             st.open = None;
         }
         json!({"open": !close, "playing": false, "frame": frame, "rate": rate,
-            "pos": if rate > 0 { frame as f64 / rate as f64 } else { 0.0 }, "epoch": epoch})
+            "pos": if rate > 0 { frame as f64 / f64::from(rate) } else { 0.0 }, "epoch": epoch})
     }
 
     /// `transport_seek`: move to `position` seconds, playing or paused. 409 without an open
@@ -1091,13 +1091,13 @@ impl Service {
                 return Err(AppError::conflict("the transport is not open: press play first"));
             };
             let rate = o.transport.sample_rate();
-            let frame = (position * rate as f64).round() as u64;
+            let frame = (position * f64::from(rate)).round() as u64;
             let counter = o.transport.callback_counter();
             seek_tagged(o, frame, epoch);
             (rate, frame, counter, epoch)
         };
         wait_seek_taken(&counter, epoch);
-        Ok(json!({"frame": frame, "rate": rate, "pos": frame as f64 / rate as f64, "epoch": epoch}))
+        Ok(json!({"frame": frame, "rate": rate, "pos": frame as f64 / f64::from(rate), "epoch": epoch}))
     }
 
     /// `transport_mix`: mute and solo as `{track name: bool}` objects (a missing name is
@@ -1264,7 +1264,7 @@ impl Service {
             m.insert("requested".into(), json!(o.transport.is_playing()));
             m.insert("frame".into(), json!(frame));
             m.insert("rate".into(), json!(ph.sample_rate));
-            m.insert("pos".into(), json!(frame as f64 / ph.sample_rate as f64));
+            m.insert("pos".into(), json!(frame as f64 / f64::from(ph.sample_rate)));
             // #166: the tag of the last seek the callback took; with an engine-side loop it does
             // not grow per pass (the old watcher sought back on every wrap)
             m.insert("seek_tag".into(), json!(ph.seek_tag));

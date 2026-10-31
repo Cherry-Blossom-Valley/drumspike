@@ -492,7 +492,7 @@ fn best_period(h: &LagHist, lo: f64, hi: f64, max_teeth: usize) -> Option<(f64, 
 fn refine_period(h: &LagHist, p0: f64, c0: f64, max_teeth: usize) -> (f64, f64) {
     let mut best = (p0, c0);
     for i in -20..=20 {
-        let p = p0 * (1.0 + i as f64 * 0.0001);
+        let p = p0 * (1.0 + f64::from(i) * 0.0001);
         let c = h.comb(p, max_teeth);
         if c > best.1 {
             best = (p, c);
@@ -937,7 +937,7 @@ fn phase_kernel(hits: &[Hit], p: f64, t0: f64, t1: f64, phi: f64) -> f64 {
 fn phase_scored(hits: &[Hit], p: f64, t0: f64, t1: f64) -> (f64, f64) {
     let mut best = (0.0, f64::NEG_INFINITY);
     for k in 0..200 {
-        let phi = k as f64 / 200.0 * p;
+        let phi = f64::from(k) / 200.0 * p;
         let s = phase_kernel(hits, p, t0, t1, phi);
         if s > best.1 {
             best = (phi, s);
@@ -1332,7 +1332,7 @@ fn snap(g: &Grid, kept: &[OnBeat], last_beat: i64) -> (Grid, Vec<f64>) {
         let steps = 200.0;
         let mut best = (0.0f64, score(0.0));
         for k in -200..=200 {
-            let off = k as f64 / steps * p1 / 4.0;
+            let off = f64::from(k) / steps * p1 / 4.0;
             let s = score(off);
             if s > best.1 {
                 best = (off, s);
@@ -1519,7 +1519,7 @@ fn is_simple_ratio(a: f64, b: f64) -> bool {
 fn grid_share(hits: &[Hit], t0: f64, t1: f64, period: f64) -> f64 {
     let mut best = 0.0f64;
     for k in 0..200 {
-        let phi = k as f64 / 200.0 * period;
+        let phi = f64::from(k) / 200.0 * period;
         let (mut w_on, mut w_all) = (0.0, 0.0);
         for h in hits.iter().filter(|h| h.role.is_ks() && h.t >= t0 && h.t < t1) {
             let x = (h.t - phi).rem_euclid(period);
@@ -1613,7 +1613,7 @@ pub fn detect(hits: &[Hit], params: &DetectParams) -> Result<Detection, String> 
             d.excursions = p
                 .steps
                 .iter()
-                .filter(|s| s.bars < params.min_bars as i64)
+                .filter(|s| s.bars < i64::from(params.min_bars))
                 .filter(|s| (s.bpm / at(s.t)).ln().abs() >= (1.0 + params.min_step_pct / 100.0).ln())
                 .map(|s| Excursion {
                     t: s.t,
@@ -1667,7 +1667,7 @@ pub fn refit_bar1(hits: &[Hit], bpm: f64, current_bar1_s: f64) -> Result<Bar1Ref
     let from = current_bar1_s.rem_euclid(p) - 0.25 * p;
     let mut best = (from.rem_euclid(p), f64::NEG_INFINITY);
     for k in 0..=400 {
-        let phi = (from + 0.5 * p * k as f64 / 400.0).rem_euclid(p);
+        let phi = (from + 0.5 * p * f64::from(k) / 400.0).rem_euclid(p);
         let s = phase_kernel(&ks, p, t0, t1 + p, phi);
         if s > best.1 {
             best = (phi, s);
@@ -1733,7 +1733,7 @@ fn track_and_fit(
     place_breaks(&on, &mut breaks, bars.down, bars.bpb);
     breaks.dedup();
     let step = (1.0 + params.min_step_pct / 100.0).ln();
-    let min_beats = params.min_bars as i64 * bars.bpb;
+    let min_beats = i64::from(params.min_bars) * bars.bpb;
     let last_beat = beats.len() as i64 - 1;
     let (fitted, kept) = loop {
         let Some((g, kept)) = fit(&on, &breaks) else {

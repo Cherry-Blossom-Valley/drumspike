@@ -97,7 +97,7 @@ fn fmt_body(spec: &WavSpec) -> Vec<u8> {
     fmt.extend_from_slice(&(if spec.extensible { 0xFFFEu16 } else { spec.format.tag() }).to_le_bytes());
     fmt.extend_from_slice(&spec.channels.to_le_bytes());
     fmt.extend_from_slice(&spec.sample_rate.to_le_bytes());
-    fmt.extend_from_slice(&(spec.sample_rate * block_align as u32).to_le_bytes());
+    fmt.extend_from_slice(&(spec.sample_rate * u32::from(block_align)).to_le_bytes());
     fmt.extend_from_slice(&block_align.to_le_bytes());
     fmt.extend_from_slice(&(8 * bps).to_le_bytes());
     if spec.extensible {
@@ -183,12 +183,12 @@ pub fn encode_samples(format: WavFormat, interleaved: &[f32]) -> Vec<u8> {
     encode_hook_note(interleaved.len());
     let mut buf = Vec::with_capacity(interleaved.len() * format.bytes_per_sample() as usize);
     for &v in interleaved {
-        let c = v.clamp(-1.0, 1.0) as f64;
+        let c = f64::from(v.clamp(-1.0, 1.0));
         match format {
             WavFormat::Float32 => buf.extend_from_slice(&v.to_le_bytes()),
             WavFormat::Pcm16 => buf.extend_from_slice(&((c * 32767.0).round() as i16).to_le_bytes()),
-            WavFormat::Pcm24 => buf.extend_from_slice(&((c * 8388607.0).round() as i32).to_le_bytes()[..3]),
-            WavFormat::Pcm32 => buf.extend_from_slice(&((c * 2147483647.0).round() as i32).to_le_bytes()),
+            WavFormat::Pcm24 => buf.extend_from_slice(&((c * 8_388_607.0).round() as i32).to_le_bytes()[..3]),
+            WavFormat::Pcm32 => buf.extend_from_slice(&((c * 2_147_483_647.0).round() as i32).to_le_bytes()),
         }
     }
     buf
@@ -381,11 +381,11 @@ mod tests {
 
     #[test]
     fn every_format_round_trips_within_one_lsb() {
-        let x = [0.5f32, -1.0, 2.0, 0.123456, -0.000123];
+        let x = [0.5f32, -1.0, 2.0, 0.123_456, -0.000_123];
         for (fmt, lsb) in [
             (WavFormat::Pcm16, 1.0 / 32767.0),
-            (WavFormat::Pcm24, 1.0 / 8388607.0),
-            (WavFormat::Pcm32, 1.0 / 8388608.0),
+            (WavFormat::Pcm24, 1.0 / 8_388_607.0),
+            (WavFormat::Pcm32, 1.0 / 8_388_608.0),
             (WavFormat::Float32, 0.0),
         ] {
             let b = encode_wav(&spec(fmt, 1), &x, None);
@@ -444,9 +444,9 @@ mod tests {
         let times = [
             0.0,
             1.0,
-            (WRITE_BLOCK_FRAMES - 2) as f64 / sr as f64,
-            (WRITE_BLOCK_FRAMES + 3) as f64 / sr as f64,
-            (n - 1) as f64 / sr as f64,
+            (WRITE_BLOCK_FRAMES - 2) as f64 / f64::from(sr),
+            (WRITE_BLOCK_FRAMES + 3) as f64 / f64::from(sr),
+            (n - 1) as f64 / f64::from(sr),
         ];
         let src = Bext::default();
         let out = dir.join("hook.wav");
@@ -497,9 +497,9 @@ mod tests {
         let times = [
             0.0,
             1.0,
-            (block - 2) as f64 / sr as f64,
-            (block + 3) as f64 / sr as f64,
-            (lengths[5] - 1) as f64 / sr as f64,
+            (block - 2) as f64 / f64::from(sr),
+            (block + 3) as f64 / f64::from(sr),
+            (lengths[5] - 1) as f64 / f64::from(sr),
         ];
         let src = Bext {
             time_reference: 123_456,

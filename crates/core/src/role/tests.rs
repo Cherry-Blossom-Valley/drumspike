@@ -41,7 +41,9 @@ fn noise_hit(cut_hz: f64, body_hz: Option<f64>, tau: f64, period: f64, dur: f64,
         let start = secs(t0);
         for (i, slot) in x.iter_mut().enumerate().take(n).skip(start) {
             let t = (i - start) as f64 / f64::from(SR);
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             let noise = (seed >> 33) as i64 as f64 / (1u64 << 31) as f64 - 1.0;
             lp = a * lp + (1.0 - a) * noise;
             let hp = noise - lp; // the high-passed part
@@ -52,7 +54,7 @@ fn noise_hit(cut_hz: f64, body_hz: Option<f64>, tau: f64, period: f64, dur: f64,
                 // The body dominates a real snare mic; the wire noise rides on top.
                 s += 2.5 * (2.0 * PI * bh * t).sin() * env;
             }
-            *slot += (amp as f64 * s) as f32;
+            *slot += (f64::from(amp) * s) as f32;
         }
         t0 += period;
     }
@@ -66,10 +68,12 @@ fn pink_noise(dur: f64, amp: f32) -> Vec<f32> {
     let mut lp = 0.0_f64;
     let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
     for _ in 0..n {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         let noise = (seed >> 33) as i64 as f64 / (1u64 << 31) as f64 - 1.0;
         lp = 0.995 * lp + 0.005 * noise;
-        x.push((amp as f64 * lp * 30.0) as f32);
+        x.push((f64::from(amp) * lp * 30.0) as f32);
     }
     x
 }
