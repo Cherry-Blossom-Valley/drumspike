@@ -840,18 +840,21 @@
       S.sel = null; S.playhead = 0.8;
       await click("set_bar1");
       await until(async () => Math.abs((await stored()).map.bar1_s - 0.8) < 1e-9, "Set Bar 1 at Playhead", 15000);
-      // an undo while the commit chain still stores (tmUndoWaits) is refused: retry until the map is back
-      const undoUntil = async (want, what) => {
-        let sent = 0;   // a retry only after 250 ms: the click needs a tick to set TM.pending
-        await until(async () => {
-          if (!TM.pending && Date.now() - sent > 250 && !(await want())) { sent = Date.now(); await click("undo"); }
+      // an undo while the commit chain still stores (tmUndoWaits) is refused, and the step is pushed
+      // after the service answers: wait for the tempo step on the stack, then retry the undo until the map is back
+      const undoUntil = (want, what, pend = () => TM.pending) => {
+        let sent = 0;   // a retry only after 250 ms: the click needs a tick to set the pending counter
+        return until(async () => {
+          if (!pend() && Date.now() - sent > 250 && !(await want())) { sent = Date.now(); await click("undo"); }
           return await want();
         }, what, 15000);
       };
-      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1");
+      await until(() => S.undo.length > 0 && S.undo[S.undo.length - 1].type === "tempo", "the bar 1 step on the undo stack", 15000);
+      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1", () => TM.pending || S.undo[S.undo.length - 1]?.type !== "tempo");
       await click("set_bar1_audio");
       await until(async () => Math.abs((await stored()).map.bar1_s) < 1e-9, "Set Bar 1 at Audio Start", 15000);
-      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1 at Audio Start");
+      await until(() => S.undo.length > 0 && S.undo[S.undo.length - 1].type === "tempo", "the bar 1 step on the undo stack", 15000);
+      await undoUntil(async () => Math.abs((await stored()).map.bar1_s - bar1Was) < 1e-9, "Undo of Set Bar 1 at Audio Start", () => TM.pending || S.undo[S.undo.length - 1]?.type !== "tempo");
       done.push("set_bar1", "set_bar1_audio");
       // Edit > Undo History: the sheet lists the steps of the tempo map, Done closes it
       await click("undo_history");
@@ -899,8 +902,11 @@
       await click("tracks_remove");
       await answer("remove", "the Remove Track confirm");
       await until(() => !S.order.includes(name), "Remove Track", 15000);
-      await click("undo");
-      await until(() => S.order.includes(name) && (S.events[name] || []).length > 0, "Undo brings the track back", 15000);
+      // trRemove reloads the page before it pushes the step: wait for the trkdel step on the stack, then
+      // undo - a click before that would pop an older step. A refusal (a write on its way) retries while
+      // the trkdel step is still the top of the undo stack.
+      await until(() => !S.order.includes(name) && S.undo.length > 0 && S.undo[S.undo.length - 1].type === "trkdel", "the removal step on the undo stack", 15000);
+      await undoUntil(() => S.order.includes(name) && (S.events[name] || []).length > 0, "Undo brings the track back", () => SH.pending || S.undo[S.undo.length - 1]?.type !== "trkdel");
       done.push("tracks_remove");
       S.zoomOwn = ownWas; saveZoomOwn();   // the menu does not list the own preset any more
       await until(async () => !((await T.invoke("selftest_menu_report")).zoom_own || []).some(id => id.startsWith("zoom_own:")), "the own preset out of the menu", 10000);
