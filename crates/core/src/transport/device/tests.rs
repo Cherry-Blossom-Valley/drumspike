@@ -179,7 +179,7 @@ fn cpu_seconds() -> f64 {
         // SAFETY: getrusage fills a zeroed struct for the calling process.
         let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
         unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) };
-        let tv = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
+        let tv = |t: libc::timeval| t.tv_sec as f64 + f64::from(t.tv_usec) / 1e6;
         tv(ru.ru_utime) + tv(ru.ru_stime)
     }
     #[cfg(not(target_os = "macos"))]
