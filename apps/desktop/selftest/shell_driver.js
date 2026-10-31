@@ -505,6 +505,15 @@
       await click("export");
       await until(() => visible("#exportModal"), "the Export dialog", 15000);
       $q("#exGo").click();
+      // #151: a project without a tempo map asks "No tempo set" before the first export;
+      // answer it the way a user would (Export anyway), then the export runs
+      await until(() => !visible("#confirmModal") || /exported \d+ MIDI and \d+ spike files/.test($q("#stMsg").textContent), "the tempo notice or the export", 15000);
+      if (visible("#confirmModal")) {
+        need($q("#confirmTitle").textContent === "No tempo set", `unexpected confirm "${$q("#confirmTitle").textContent}" before the export`);
+        const anyway = $q("#confirmActions button[data-act='anyway']");
+        need(!!anyway, "the tempo notice has no Export anyway button");
+        anyway.click();
+      }
       await until(() => new RegExp(`exported ${n} MIDI and ${n} spike files?`).test($q("#stMsg").textContent), `Export (stMsg=${JSON.stringify($q("#stMsg").textContent)})`, 60000);
       const have = await T.invoke("export_existing", { sid });
       need(have.count === 2 * n, `Exports/ holds ${have.count} files, expected ${2 * n}`);
