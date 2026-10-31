@@ -119,6 +119,7 @@ pub enum Role {
 impl Role {
     /// The role of a document role name (`kick`, `snare`, `tom`, `cymbal`; anything else is
     /// `Other`).
+    #[must_use]
     pub fn from_name(name: &str) -> Role {
         match name {
             "kick" => Role::Kick,
@@ -156,6 +157,7 @@ pub struct Hit {
 
 impl Hit {
     /// A hit with the default velocity.
+    #[must_use]
     pub fn new(t: f64, role: Role) -> Hit {
         Hit {
             t,
@@ -199,6 +201,12 @@ impl Default for DetectParams {
 
 impl DetectParams {
     /// Check the fields; the message names the fault.
+    ///
+    /// # Errors
+    ///
+    /// A message when `min_bars` is outside 1 to 64, `min_step_pct` is not finite or outside 0.1
+    /// to 50, `bpm_range` is not finite, outside 20 to 400 BPM or narrower than an octave, or
+    /// `duration_s` is set but not a positive finite number.
     pub fn validate(&self) -> Result<(), String> {
         if !(1..=64).contains(&self.min_bars) {
             return Err(format!("min_bars must be 1 to 64, not {}", self.min_bars));
@@ -347,6 +355,7 @@ pub struct Prepared {
 
 /// Sort, drop non-finite and negative times and times after `until`, merge hits of one role
 /// within [`DEDUPE_S`] (the first time, the louder velocity), and leave out isolated hits.
+#[must_use]
 pub fn prepare(hits: &[Hit], until: Option<f64>) -> Prepared {
     let until = until.unwrap_or(f64::INFINITY);
     let mut late = 0;
@@ -486,7 +495,7 @@ fn best_period(h: &LagHist, lo: f64, hi: f64, max_teeth: usize) -> Option<(f64, 
 fn refine_period(h: &LagHist, p0: f64, c0: f64, max_teeth: usize) -> (f64, f64) {
     let mut best = (p0, c0);
     for i in -20..=20 {
-        let p = p0 * (1.0 + i as f64 * 0.0001);
+        let p = p0 * (1.0 + f64::from(i) * 0.0001);
         let c = h.comb(p, max_teeth);
         if c > best.1 {
             best = (p, c);
@@ -511,6 +520,7 @@ const HALF_TIME_MIN_SNARES: f64 = 8.0;
 /// verdict with the sub-beat shares (see [`half_time_backbeat`]). Version 3 adds the
 /// half-time bar 1 of #180 (see `bars`). The detection is read
 /// only: a project analysed before keeps its tempo until it is detected again.
+#[must_use]
 pub fn tempo_rule() -> u32 {
     parse_rule(std::env::var("DRUMSPIKE_TEMPO_RULE").ok().as_deref())
 }
@@ -931,7 +941,7 @@ fn phase_kernel(hits: &[Hit], p: f64, t0: f64, t1: f64, phi: f64) -> f64 {
 fn phase_scored(hits: &[Hit], p: f64, t0: f64, t1: f64) -> (f64, f64) {
     let mut best = (0.0, f64::NEG_INFINITY);
     for k in 0..200 {
-        let phi = k as f64 / 200.0 * p;
+        let phi = f64::from(k) / 200.0 * p;
         let s = phase_kernel(hits, p, t0, t1, phi);
         if s > best.1 {
             best = (phi, s);
@@ -1326,7 +1336,7 @@ fn snap(g: &Grid, kept: &[OnBeat], last_beat: i64) -> (Grid, Vec<f64>) {
         let steps = 200.0;
         let mut best = (0.0f64, score(0.0));
         for k in -200..=200 {
-            let off = k as f64 / steps * p1 / 4.0;
+            let off = f64::from(k) / steps * p1 / 4.0;
             let s = score(off);
             if s > best.1 {
                 best = (off, s);
@@ -1513,7 +1523,7 @@ fn is_simple_ratio(a: f64, b: f64) -> bool {
 fn grid_share(hits: &[Hit], t0: f64, t1: f64, period: f64) -> f64 {
     let mut best = 0.0f64;
     for k in 0..200 {
-        let phi = k as f64 / 200.0 * period;
+        let phi = f64::from(k) / 200.0 * period;
         let (mut w_on, mut w_all) = (0.0, 0.0);
         for h in hits.iter().filter(|h| h.role.is_ks() && h.t >= t0 && h.t < t1) {
             let x = (h.t - phi).rem_euclid(period);
@@ -1582,6 +1592,11 @@ fn round_to(x: f64, q: f64) -> f64 {
 
 /// Suggest a tempo map from the hits. Errors: fewer than [`MIN_HITS`] kick and snare hits, no
 /// regular beat, hits spanning more than [`MAX_SPAN_S`], parameters out of range.
+///
+/// # Errors
+///
+/// A message when `params` fails [`DetectParams::validate`], there are fewer than [`MIN_HITS`]
+/// kick and snare hits, the hits span more than [`MAX_SPAN_S`], or no regular beat is found.
 pub fn detect(hits: &[Hit], params: &DetectParams) -> Result<Detection, String> {
     let mut d = detect_at(hits, params)?;
     if params.min_bars > PROBE_BARS {
@@ -1602,7 +1617,7 @@ pub fn detect(hits: &[Hit], params: &DetectParams) -> Result<Detection, String> 
             d.excursions = p
                 .steps
                 .iter()
-                .filter(|s| s.bars < params.min_bars as i64)
+                .filter(|s| s.bars < i64::from(params.min_bars))
                 .filter(|s| (s.bpm / at(s.t)).ln().abs() >= (1.0 + params.min_step_pct / 100.0).ln())
                 .map(|s| Excursion {
                     t: s.t,
@@ -1635,6 +1650,11 @@ pub struct Bar1Refit {
 /// could be a 16th or an eighth off: this session's 16th "and" carries more hits than the
 /// beats). Errors: a tempo that is not positive and finite, fewer than [`MIN_HITS`] kick and
 /// snare hits.
+///
+/// # Errors
+///
+/// A message when `bpm` is not a positive finite number, or `hits` holds fewer than
+/// [`MIN_HITS`] kick and snare hits.
 pub fn refit_bar1(hits: &[Hit], bpm: f64, current_bar1_s: f64) -> Result<Bar1Refit, String> {
     if !(bpm.is_finite() && bpm > 0.0) {
         return Err(format!("tempo {bpm} BPM: the refit needs a positive tempo"));
@@ -1651,7 +1671,7 @@ pub fn refit_bar1(hits: &[Hit], bpm: f64, current_bar1_s: f64) -> Result<Bar1Ref
     let from = current_bar1_s.rem_euclid(p) - 0.25 * p;
     let mut best = (from.rem_euclid(p), f64::NEG_INFINITY);
     for k in 0..=400 {
-        let phi = (from + 0.5 * p * k as f64 / 400.0).rem_euclid(p);
+        let phi = (from + 0.5 * p * f64::from(k) / 400.0).rem_euclid(p);
         let s = phase_kernel(&ks, p, t0, t1 + p, phi);
         if s > best.1 {
             best = (phi, s);
@@ -1717,7 +1737,7 @@ fn track_and_fit(
     place_breaks(&on, &mut breaks, bars.down, bars.bpb);
     breaks.dedup();
     let step = (1.0 + params.min_step_pct / 100.0).ln();
-    let min_beats = params.min_bars as i64 * bars.bpb;
+    let min_beats = i64::from(params.min_bars) * bars.bpb;
     let last_beat = beats.len() as i64 - 1;
     let (fitted, kept) = loop {
         let Some((g, kept)) = fit(&on, &breaks) else {

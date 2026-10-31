@@ -54,6 +54,7 @@ pub const N_EDGE_BINS: usize = N_BANDS + 2;
 /// Number of frames for `n` samples at 44.1 kHz: `1 + n / 441` for [`Chain::Cli`] (librosa
 /// `center=True`), `ceil(n / 441)` for [`Chain::Madmom`]. They differ by one frame when `n`
 /// is a multiple of 441 (and for `n` = 0: 1 against 0).
+#[must_use]
 pub fn num_frames(n: usize, chain: Chain) -> usize {
     match chain {
         Chain::Cli | Chain::Mix => 1 + n / HOP,
@@ -62,6 +63,7 @@ pub fn num_frames(n: usize, chain: Chain) -> usize {
 }
 
 /// `np.fft.fftfreq(2048, 1 / 44100)[k]`: `k * (1 / (2048 * (1 / 44100)))`.
+#[must_use]
 pub fn bin_frequency(k: usize) -> f64 {
     let val = 1.0 / (FRAME_SIZE as f64 * (1.0 / f64::from(TARGET_RATE)));
     k as f64 * val
@@ -133,6 +135,7 @@ pub fn filterbank_bins(chain: Chain) -> &'static [usize] {
 }
 
 /// The [`N_BANDS`] filter centre bins of the chain's grid (`filterbank_bins(chain)[1..85]`).
+#[must_use]
 pub fn centre_bins(chain: Chain) -> &'static [usize] {
     let b = filterbank_bins(chain);
     &b[1..b.len() - 1]
@@ -281,6 +284,7 @@ fn bands(filters: &[Filter], mag: &[f32], row: &mut [f32]) {
 
 /// Log-filtered spectrogram of a 44.1 kHz mono signal by the chain's recipe (module docs):
 /// row-major `(num_frames(len, chain), 84)` `f32`.
+#[must_use]
 pub fn features(signal_44k: &[f32], chain: Chain) -> Vec<f32> {
     let frames = num_frames(signal_44k.len(), chain);
     let mut out = vec![0f32; frames * N_BANDS];

@@ -100,11 +100,19 @@ fn check_bpm(bpm: f64, what: &str) -> Result<(), String> {
 
 impl TempoMap {
     /// True for the default map (the one the document does not store).
+    #[must_use]
     pub fn is_default(&self) -> bool {
         *self == TempoMap::default()
     }
 
     /// Check every field; the message names the first fault.
+    ///
+    /// # Errors
+    ///
+    /// A message when `bpm` or a step's bpm is outside the BPM range or not finite, the meter is
+    /// not 1 to 64 beats over a power-of-two note value, `bar1_s` is outside 0 to 1,000,000 s,
+    /// there are more than `MAX_ENTRIES` steps or changes, a step is not at least the minimum gap
+    /// after the one before, or a meter change is invalid or not above the bar before it.
     pub fn validate(&self) -> Result<(), String> {
         check_bpm(self.bpm, "bpm")?;
         if !valid_meter(self.meter.0, self.meter.1) {
@@ -149,6 +157,7 @@ impl TempoMap {
     }
 
     /// The map as JSON: `{bpm, steps: [{t, bpm}], meter: [num, den], changes: [{bar, meter: [num, den]}], bar1_s}`.
+    #[must_use]
     pub fn to_json(&self) -> Value {
         json!({
             "bpm": self.bpm,
@@ -162,6 +171,12 @@ impl TempoMap {
     /// Read a map from JSON. Every key is optional (a missing key is the default; `{}` is the
     /// default map); an unknown key, a value of the wrong type or a map that fails
     /// [`TempoMap::validate`] is an error with a message.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the first fault: `v` or a nested value of the wrong type, an unknown key,
+    /// a missing `t`, `bpm`, `bar` or `meter` in a step or change, or a map that fails
+    /// [`TempoMap::validate`].
     pub fn from_json(v: &Value) -> Result<TempoMap, String> {
         Self::parse(v, true)
     }
@@ -169,6 +184,10 @@ impl TempoMap {
     /// Read a map a document stores: like [`TempoMap::from_json`], but an unknown key (a newer
     /// build wrote it) is ignored, so an older build still exports MIDI. The key is not kept
     /// when the map is stored again.
+    ///
+    /// # Errors
+    ///
+    /// The same as [`TempoMap::from_json`], except that an unknown key is not an error.
     pub fn from_json_lenient(v: &Value) -> Result<TempoMap, String> {
         Self::parse(v, false)
     }
@@ -271,6 +290,10 @@ pub struct TickMap {
 }
 
 /// Microseconds per quarter note of a tempo, rounded to a whole number that fits a `set_tempo`.
+///
+/// # Errors
+///
+/// A message when `bpm` is not finite or outside the BPM range.
 pub fn tempo_us(bpm: f64) -> Result<u32, String> {
     check_bpm(bpm, "tempo")?;
     Ok((6e7 / bpm).round() as u32)
@@ -279,6 +302,16 @@ pub fn tempo_us(bpm: f64) -> Result<u32, String> {
 impl TickMap {
     /// The file's form of `map`: step ticks are the ticks nearest to the step times through the
     /// segments before them. Errors when two steps fall on one tick or the map is not valid.
+    ///
+    /// # Errors
+    ///
+    /// A message when `map` fails [`TempoMap::validate`], `ppq` is 0 or above 32767, or a step
+    /// rounds to the same tick as the step (or start) before it.
+    ///
+    /// # Panics
+    ///
+    /// Panics through `expect("one segment")` only if the segment list were empty; it always
+    /// starts with the tempo segment at tick 0, so this cannot happen.
     pub fn new(ppq: u16, map: &TempoMap) -> Result<TickMap, String> {
         map.validate()?;
         if ppq == 0 || ppq > 0x7FFF {
@@ -311,6 +344,12 @@ impl TickMap {
 
     /// The map from the tempo events of a file: `(tick, microseconds per quarter)`, sorted by
     /// tick; none at tick 0 means 500,000 (the MIDI default of 120 BPM).
+    ///
+    /// # Panics
+    ///
+    /// Panics through `expect("one segment")` only if the segment list were empty; it always
+    /// starts with the default segment at tick 0, so this cannot happen.
+    #[must_use]
     pub fn from_events(ppq: u16, events: &[(i64, u32)]) -> TickMap {
         let mut tm = TickMap {
             ppq,
@@ -326,7 +365,7 @@ impl TickMap {
             if tick <= last.tick {
                 let last_mut = tm.segs.last_mut().expect("one segment");
                 last_mut.us = us; // the last event at a tick wins
-                last_mut.exact_us = us as f64;
+                last_mut.exact_us = f64::from(us);
                 continue;
             }
             let start_s = tm.time(tick);
@@ -334,13 +373,14 @@ impl TickMap {
                 tick,
                 start_s,
                 us,
-                exact_us: us as f64,
+                exact_us: f64::from(us),
             });
         }
         tm
     }
 
     /// The tempo events of the file: `(tick, microseconds per quarter)`, the first at tick 0.
+    #[must_use]
     pub fn tempo_events(&self) -> Vec<(i64, u32)> {
         self.segs.iter().map(|s| (s.tick, s.us)).collect()
     }
@@ -351,34 +391,43 @@ impl TickMap {
     }
 
     /// Time in seconds of a tick.
+    #[must_use]
     pub fn time(&self, tick: i64) -> f64 {
         let s = self.seg_at_tick(tick);
-        s.start_s + (tick - s.tick) as f64 * s.exact_us / (self.ppq as f64 * 1e6)
+        s.start_s + (tick - s.tick) as f64 * s.exact_us / (f64::from(self.ppq) * 1e6)
     }
 
     /// The tick nearest to a time (ties to even); 0 for a time at or before 0.
+    #[must_use]
     pub fn tick(&self, t: f64) -> i64 {
         if t <= 0.0 {
             return 0;
         }
         let i = self.segs.partition_point(|s| s.start_s <= t);
         let s = &self.segs[i.saturating_sub(1)];
-        s.tick + py_round((t - s.start_s) * (self.ppq as f64 * 1e6) / s.exact_us)
+        s.tick + py_round((t - s.start_s) * (f64::from(self.ppq) * 1e6) / s.exact_us)
     }
 
     /// Ticks of a bar of `num/den`: `ppq * 4 * num / den`; `None` when that is not a whole number.
+    #[must_use]
     pub fn bar_ticks(&self, num: u8, den: u8) -> Option<i64> {
-        let x = self.ppq as i64 * 4 * num as i64;
-        (x % den as i64 == 0).then_some(x / den as i64)
+        let x = i64::from(self.ppq) * 4 * i64::from(num);
+        (x % i64::from(den) == 0).then_some(x / i64::from(den))
     }
 
     /// The tick of bar 1 for a map: `bar1_s` as a tick.
+    #[must_use]
     pub fn bar1_tick(&self, map: &TempoMap) -> i64 {
         self.tick(map.bar1_s)
     }
 
     /// The time signatures of the file, `(tick, num, den)`: the start meter at tick 0, then a
     /// change at the tick of each bar line counted from bar 1.
+    ///
+    /// # Errors
+    ///
+    /// A message when the meter in force before a change has a bar length that is not a whole
+    /// number of ticks at this map's `ppq`.
     pub fn meter_events(&self, map: &TempoMap) -> Result<Vec<(i64, u8, u8)>, String> {
         let mut out = vec![(0, map.meter.0, map.meter.1)];
         let (mut tick, mut bar, mut cur) = (self.bar1_tick(map), 1u32, map.meter);
@@ -389,7 +438,7 @@ impl TickMap {
                     cur.0, cur.1, self.ppq
                 )
             })?;
-            tick += (c.bar - bar) as i64 * len;
+            tick += i64::from(c.bar - bar) * len;
             bar = c.bar;
             cur = (c.num, c.den);
             out.push((tick, c.num, c.den));
@@ -417,6 +466,12 @@ pub struct Imported {
 /// A tempo event that repeats the tempo before it adds no step. `Bar 1` markers set the time of
 /// bar 1 (the first one counts); a file without one has bar 1 at 0 s. Errors for a file that is
 /// not a standard MIDI file or that counts time in frames.
+///
+/// # Errors
+///
+/// A message when `bytes` is not a parseable MIDI file, the file counts time in frames, a time
+/// signature is not supported, a tempo is outside the BPM range, a bar length does not fit a
+/// whole number of ticks, or the resulting map fails [`TempoMap::validate`].
 pub fn import_midi(bytes: &[u8]) -> Result<Imported, String> {
     use midly::{MetaMessage, Smf, Timing, TrackEventKind};
     let smf = Smf::parse(bytes).map_err(|e| format!("not a MIDI file: {e}"))?;
@@ -430,12 +485,12 @@ pub fn import_midi(bytes: &[u8]) -> Result<Imported, String> {
     for track in &smf.tracks {
         let mut tick = 0i64;
         for e in track {
-            tick += e.delta.as_int() as i64;
+            tick += i64::from(e.delta.as_int());
             if let TrackEventKind::Meta(m) = &e.kind {
                 match m {
                     MetaMessage::Tempo(us) => tempos.push((tick, us.as_int())),
                     MetaMessage::TimeSignature(n, dp, _, _) => {
-                        let den = 1u32.checked_shl(*dp as u32).filter(|d| *d <= 64);
+                        let den = 1u32.checked_shl(u32::from(*dp)).filter(|d| *d <= 64);
                         match den {
                             Some(d) if valid_meter(*n, d as u8) => sigs.push((tick, *n, d as u8)),
                             _ => return Err(format!("time signature {n}/2^{dp} is not supported")),
@@ -453,7 +508,7 @@ pub fn import_midi(bytes: &[u8]) -> Result<Imported, String> {
     sigs.sort_by_key(|e| e.0);
     let (n_tempo, n_sig) = (tempos.len(), sigs.len());
     for &(_, us) in &tempos {
-        let bpm = 6e7 / us.max(1) as f64;
+        let bpm = 6e7 / f64::from(us.max(1));
         if !(BPM_RANGE.0..=BPM_RANGE.1).contains(&bpm) {
             return Err(format!(
                 "a tempo of {us} microseconds per quarter is outside {} to {} BPM",
@@ -463,11 +518,11 @@ pub fn import_midi(bytes: &[u8]) -> Result<Imported, String> {
     }
     let tm = TickMap::from_events(ppq, &tempos);
     let mut map = TempoMap {
-        bpm: 6e7 / tm.segs[0].us as f64,
+        bpm: 6e7 / f64::from(tm.segs[0].us),
         ..TempoMap::default()
     };
     for s in &tm.segs[1..] {
-        let bpm = 6e7 / s.us as f64;
+        let bpm = 6e7 / f64::from(s.us);
         let prev = map.steps.last().map_or(map.bpm, |p| p.bpm);
         if bpm != prev {
             map.steps.push(TempoStep { t: s.start_s, bpm });
@@ -522,6 +577,10 @@ pub fn import_midi(bytes: &[u8]) -> Result<Imported, String> {
 impl Document {
     /// The tempo map of the document: the stored `tempo_map`, the default map when none is
     /// stored. An error with a message when the stored value is not a valid map.
+    ///
+    /// # Errors
+    ///
+    /// The message of [`TempoMap::from_json_lenient`] when the stored value is not a valid map.
     pub fn tempo_map(&self) -> Result<TempoMap, String> {
         match self.extra.get(DOC_KEY) {
             None => Ok(TempoMap::default()),

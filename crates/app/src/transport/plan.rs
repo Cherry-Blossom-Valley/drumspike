@@ -265,7 +265,7 @@ impl Service {
         let tr = g.track(name)?;
         let layer = crate::layer::layer_of(&tr.extra)
             .ok_or_else(|| AppError::conflict(format!("track {name} has no layer")))?;
-        Ok(layer.frames as f64 / layer.sr as f64)
+        Ok(layer.frames as f64 / f64::from(layer.sr))
     }
 
     /// P4-40e: append the preview voice (the one-shot once, its first sample at `at_s`) to the

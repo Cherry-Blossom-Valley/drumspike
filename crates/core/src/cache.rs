@@ -92,6 +92,7 @@ pub struct CacheTile {
 }
 
 /// Encode `peaks.bin` for a track of `n_samples` samples at `sr`.
+#[must_use]
 pub fn encode_peaks_bin(sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) -> Vec<u8> {
     let total: usize = levels.iter().map(|(_, l)| l.n * 3 * 4).sum();
     let mut out = Vec::with_capacity(FIXED_HEADER + levels.len() * 8 + total);
@@ -115,6 +116,10 @@ pub fn encode_peaks_bin(sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) 
 }
 
 /// Write `peaks.bin` atomically (temporary file, then rename).
+///
+/// # Errors
+///
+/// [`CacheError::Io`] when the temporary file cannot be written or renamed over `path`.
 pub fn write_peaks_bin(path: &Path, sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) -> Result<(), CacheError> {
     let bytes = encode_peaks_bin(sr, n_samples, levels);
     let tmp = path.with_extension("bin.tmp");
@@ -163,7 +168,7 @@ fn uint_at<const N: usize>(b: &[u8], i: usize) -> io::Result<u64> {
     // exactly N bytes and the loop below cannot overflow or miss an element.
     let mut v = 0u64;
     for (k, byte) in s.iter().enumerate() {
-        v |= (*byte as u64) << (8 * k);
+        v |= u64::from(*byte) << (8 * k);
     }
     Ok(v)
 }
@@ -174,6 +179,12 @@ fn u32_at(b: &[u8], i: usize) -> io::Result<u32> {
 
 impl PeakCache {
     /// Open `peaks.bin`: read and check the header and the file length.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Io`] when the file cannot be opened or read; [`CacheError::Format`] when
+    /// it is shorter than the header, has a bad magic or version, declares more than 64
+    /// levels, or its level table or level data are cut off.
     pub fn open(path: &Path) -> Result<PeakCache, CacheError> {
         let file = File::open(path)?;
         let len = file.metadata()?.len();
@@ -238,16 +249,19 @@ impl PeakCache {
     }
 
     /// Sample rate of the track.
+    #[must_use]
     pub fn sr(&self) -> u32 {
         self.sr
     }
 
     /// Sample count of the track.
+    #[must_use]
     pub fn n_samples(&self) -> u64 {
         self.n_samples
     }
 
     /// Block size and bin count of every level, in file order.
+    #[must_use]
     pub fn levels(&self) -> &[LevelInfo] {
         &self.levels
     }
@@ -258,6 +272,11 @@ impl PeakCache {
 
     /// Bins `[from, to)` of the level with block size `level`, clamped like
     /// [`crate::Track::peaks`]; `None` when the file has no such level.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Io`] when a positioned read of a column fails (for example a file cut
+    /// short after it was opened).
     pub fn tile(&self, level: usize, from: i64, to: i64) -> Result<Option<CacheTile>, CacheError> {
         let Some(i) = self.index(level) else { return Ok(None) };
         let info = self.levels[i];
@@ -280,6 +299,11 @@ impl PeakCache {
     }
 
     /// One whole level as a [`PeakLevel`] (for tests and tools; the app reads tiles).
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Io`] when a positioned read fails or the file is shorter than its
+    /// header says; [`CacheError::Format`] when the level disappears between lookup and read.
     pub fn read_level(&self, level: usize) -> Result<Option<PeakLevel>, CacheError> {
         let Some(info) = self.index(level).map(|i| self.levels[i]) else {
             return Ok(None);
@@ -299,6 +323,7 @@ impl PeakCache {
 }
 
 /// True when `dir` holds a `peaks.bin` and a `key.json` equal to `key`.
+#[must_use]
 pub fn cache_is_current(dir: &Path, key: &CacheKey) -> bool {
     dir.join(PEAKS_BIN).is_file() && key.matches_file(dir)
 }
@@ -306,6 +331,11 @@ pub fn cache_is_current(dir: &Path, key: &CacheKey) -> bool {
 /// Build `dir/peaks.bin` and `dir/key.json` from decoded mono samples. The folder is
 /// created when missing; other files in it (the server's `peaks.json`) stay. `key.json`
 /// comes last.
+///
+/// # Errors
+///
+/// [`CacheError::Io`] when the folder cannot be created or `peaks.bin` or `key.json` cannot
+/// be written or renamed; [`CacheError::Format`] when the key cannot be serialised.
 pub fn build_cache(dir: &Path, sr: u32, samples: &[f32], key: &CacheKey) -> Result<(), CacheError> {
     fs::create_dir_all(dir)?;
     let levels = compute_peaks(samples);

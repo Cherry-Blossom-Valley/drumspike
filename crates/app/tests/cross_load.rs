@@ -263,7 +263,7 @@ fn server_writes_app_loads(tag: &str, name: &str, mode: &str) {
 fn cross_load_a_planted_event_change_is_seen() {
     let mut doc = frozen("check/xl_app_ref")["document"].clone();
     let before = normalize(&doc);
-    doc["tracks"]["Kick In"]["events"][0]["t"] = json!(0.30000000000000004 + 1e-15);
+    doc["tracks"]["Kick In"]["events"][0]["t"] = json!(0.300_000_000_000_000_04 + 1e-15);
     assert_ne!(normalize(&doc), before);
 }
 

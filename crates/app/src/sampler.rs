@@ -83,6 +83,7 @@ impl Sampler {
     }
 
     /// The JSON object of the sampler.
+    #[must_use]
     pub fn to_json(&self) -> Value {
         json!({
             "offset_samples": self.offset_samples,
@@ -95,18 +96,21 @@ impl Sampler {
     }
 
     /// `normal`, `inverted` or `None`.
+    #[must_use]
     pub fn polarity_name(&self) -> Option<&'static str> {
         self.polarity.map(|s| if s < 0 { "inverted" } else { "normal" })
     }
 
     /// The offset in samples of a track at `sr`.
+    #[must_use]
     pub fn offset_at(&self, sr: u32) -> f64 {
-        self.offset_samples * sr as f64 / self.sr as f64
+        self.offset_samples * f64::from(sr) / f64::from(self.sr)
     }
 
     /// The offset in milliseconds.
+    #[must_use]
     pub fn offset_ms(&self) -> f64 {
-        self.offset_samples / self.sr as f64 * 1000.0
+        self.offset_samples / f64::from(self.sr) * 1000.0
     }
 }
 
@@ -143,12 +147,14 @@ pub struct ShiftInfo {
 
 impl ShiftInfo {
     /// The JSON of the answer.
+    #[must_use]
     pub fn to_json(&self) -> Value {
         json!({"offset_ms": (self.offset_ms * 1e3).round() / 1e3, "aligned": self.aligned,
                "notes": self.notes, "clamped": self.clamped})
     }
 
     /// The warning text of a track with clamped notes.
+    #[must_use]
     pub fn warning(&self, name: &str) -> Option<String> {
         (self.clamped > 0).then(|| {
             format!(
@@ -166,6 +172,9 @@ pub type MidiPlan = (Vec<MidiEvent>, Option<ShiftInfo>);
 /// The MIDI events of `events` (`t` and `v`, a missing `v` is 100) with the sampler shift applied:
 /// each note at the aligned attack minus the offset, on a whole sample. Without a shift the events are
 /// the plain ones.
+///
+/// # Errors
+/// 400 when an entry of `events` has no valid `t` (the error of `export::midi_events`).
 pub fn midi_events_shifted(events: &[Value], shift: Option<&Shift>) -> Result<MidiPlan, AppError> {
     let mut ev = crate::export::midi_events(events)?;
     let Some(s) = shift else { return Ok((ev, None)) };
@@ -177,7 +186,7 @@ pub fn midi_events_shifted(events: &[Value], shift: Option<&Shift>) -> Result<Mi
         clamped += usize::from(c);
     }
     let info = ShiftInfo {
-        offset_ms: s.offset / s.sr as f64 * 1000.0,
+        offset_ms: s.offset / f64::from(s.sr) * 1000.0,
         aligned: s.aligned,
         notes: ev.len(),
         clamped,
@@ -215,7 +224,7 @@ impl Service {
                 .collect();
             if let Ok(al) = self.layer_alignment(sid, name, &job, &hits) {
                 let sign = al.sign_for(job.layer.polarity);
-                let scale = sr as f64 / al.sr as f64;
+                let scale = f64::from(sr) / f64::from(al.sr);
                 for (l, x) in lags.iter_mut().zip(&al.hits) {
                     // an edge or low-match lag is not applied by the render, nor by the MIDI file
                     *l = x.map_or(0.0, |x| applied_lag(&x, sign) * scale);
@@ -234,12 +243,21 @@ impl Service {
     /// `sampler_calibration_midi {sid, name, dest?}`: write `<name>_calibration.mid` into `dest` (else
     /// `Exports/`): one note (the track's note, velocity 100) on the start of bar 2 of the tempo map. Answers
     /// `{path, size, note, t, tick, ppq, text}`; `t` is the note-on time in seconds, `text` says what to do next.
+    ///
+    /// # Errors
+    /// The same as [`Service::sampler_calibration_midi_to`] without a `path`.
     pub fn sampler_calibration_midi(&self, sid: &str, name: &str, dest: Option<&str>) -> Result<Value, AppError> {
         self.sampler_calibration_midi_to(sid, name, dest, None)
     }
 
     /// [`Service::sampler_calibration_midi`] into the file `path` when given (P4-7d: the save dialog's file; it
     /// replaces `dest` and the name `<name>_calibration.mid`; see `save_target` in `layer.rs`).
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project or `name` is not a track; 409 when the project is
+    /// open read-only; an error from `save_target` or `export_dir` for a bad `path` or `dest`; 400
+    /// when the stored tempo map is not valid or has no usable bar 2; 500 when the file cannot be
+    /// written.
     pub fn sampler_calibration_midi_to(
         &self,
         sid: &str,
@@ -278,6 +296,9 @@ impl Service {
 
     /// `track_sampler_get {sid, name}`: `{sampler, offset_ms, polarity, file}`; all null for a track without
     /// a calibration.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project or `name` is not a track.
     pub fn track_sampler_get(&self, sid: &str, name: &str) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         let g = lock(&op);
@@ -291,6 +312,12 @@ impl Service {
     /// `one_shot: true` also sets the bounce as the track's layer one-shot (its polarity, when measured, goes
     /// to the layer). Answers `{sampler, offset_ms, polarity, file, layer}` (`layer`: the answer of
     /// `track_layer_get` after a `one_shot`, else null). 400 for a bounce the app cannot read or a silent one.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project or `name` is not a track; 409 when the project is
+    /// open read-only; 400 when `path` or `one_shot` has the wrong type, the stored tempo map is
+    /// not valid, or the bounce cannot be read or measured; any error of `track_layer_set` after a
+    /// `one_shot`.
     pub fn track_sampler_set(&self, sid: &str, name: &str, args: &Value) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let path = match args.get("path") {
@@ -338,7 +365,7 @@ impl Service {
         {
             let at = shot.resampled(d.sr).mono();
             let onset = one_shot_onset(&at, d.sr);
-            let idx: Vec<i64> = hits.iter().map(|t| py_round(t * d.sr as f64)).collect();
+            let idx: Vec<i64> = hits.iter().map(|t| py_round(t * f64::from(d.sr))).collect();
             polarity = bounce_polarity(&at, onset, &d.samples, &idx, d.sr, &AlignParams::default());
         }
         let s = Sampler {
@@ -370,6 +397,10 @@ impl Service {
     /// bounce `[start, end)` in its own samples — the Layer view draws it with the sampler offset
     /// line. The bytes of `samples_window` (see [`crate::media::wave_bytes`]). 409 without a
     /// calibration or its file.
+    ///
+    /// # Errors
+    /// 404 when `sid` is not an open project or `name` is not a track; 409 when the track has no
+    /// sampler calibration; otherwise whatever reading the calibration file as a one-shot returns.
     pub fn track_sampler_wave(&self, sid: &str, name: &str, start: i64, end: i64) -> Result<Vec<u8>, AppError> {
         let op = self.inner.registry.get(sid)?;
         let file = {
@@ -402,6 +433,7 @@ fn get_json(s: Option<&Sampler>) -> Value {
 
 /// Run a command of the sampler for the bridge, the command line and the MCP server; `None` when `cmd`
 /// is not one of them.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !SAMPLER_COMMANDS.contains(&cmd) {
         return None;

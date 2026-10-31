@@ -24,6 +24,11 @@ pub const SHAPE_HITS: usize = 64;
 
 /// The tick and the time (seconds) of the calibration note: the start of bar 2 (bar 1 of the map
 /// holds the start meter): 2.000 s with the default map. `ppq` is the file's resolution.
+///
+/// # Errors
+///
+/// The message of [`TickMap::new`] when `ppq` or the tempo map is invalid, or a message that the
+/// map's meter does not fit a whole number of ticks per bar at this `ppq`.
 pub fn calibration_time(map: &TempoMap, ppq: u16) -> Result<(i64, f64), String> {
     let tm = TickMap::new(ppq, map)?;
     let bar = tm.bar_ticks(map.meter.0, map.meter.1).ok_or_else(|| {
@@ -39,6 +44,11 @@ pub fn calibration_time(map: &TempoMap, ppq: u16) -> Result<(i64, f64), String> 
 /// The calibration MIDI file: one note `note` (velocity 100) at [`calibration_time`], written
 /// through the map like every export (`legacy_tempo` is used for the default map only). Returns
 /// the bytes and the note's time in seconds.
+///
+/// # Errors
+///
+/// [`MidiError::Map`] when [`calibration_time`] fails; otherwise the errors of
+/// [`midi_bytes_map`] (for example [`MidiError::Note`] when `note` is outside 0..=127).
 pub fn calibration_midi(note: i64, map: &TempoMap, ppq: u16, legacy_tempo: f64) -> Result<(Vec<u8>, f64), MidiError> {
     let (_, t) = calibration_time(map, ppq).map_err(MidiError::Map)?;
     let ev = [MidiEvent {
@@ -61,6 +71,11 @@ pub struct Offset {
 
 /// The delay of the bounce's transient: its onset (the one-shots' rule) minus `note_on_s`. `Err`
 /// for a silent bounce.
+///
+/// # Errors
+///
+/// An error message when `sr` is 0 or every sample of the bounce is exactly zero ("the bounce is
+/// silent").
 pub fn measure_offset(bounce: &[f32], sr: u32, note_on_s: f64) -> Result<Offset, String> {
     if sr == 0 || bounce.iter().all(|v| *v == 0.0) {
         return Err("the bounce is silent".to_string());
@@ -69,7 +84,7 @@ pub fn measure_offset(bounce: &[f32], sr: u32, note_on_s: f64) -> Result<Offset,
     Ok(Offset {
         onset,
         sr,
-        offset_samples: onset as f64 - note_on_s * sr as f64,
+        offset_samples: onset as f64 - note_on_s * f64::from(sr),
     })
 }
 
@@ -77,6 +92,7 @@ pub fn measure_offset(bounce: &[f32], sr: u32, note_on_s: f64) -> Result<Offset,
 /// window from `pre + max_lag` samples before the hit to `len + max_lag` after it, each window
 /// scaled to a root-mean-square of 1 (silent windows are left out). `None` without a usable hit.
 /// The hit sits at index `pre + max_lag` of the result.
+#[must_use]
 pub fn median_shape(mic: &[f32], hits: &[i64], pre: usize, len: usize, max_lag: usize) -> Option<Vec<f32>> {
     let total = pre + len + 2 * max_lag;
     let start = pre + max_lag;
@@ -93,9 +109,9 @@ pub fn median_shape(mic: &[f32], hits: &[i64], pre: usize, len: usize, max_lag: 
                 }
             })
             .collect();
-        let rms = (w.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / total as f64).sqrt();
+        let rms = (w.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / total as f64).sqrt();
         if rms > 1e-9 {
-            wins.push(w.iter().map(|v| (*v as f64 / rms) as f32).collect());
+            wins.push(w.iter().map(|v| (f64::from(*v) / rms) as f32).collect());
         }
     }
     if wins.is_empty() {
@@ -117,6 +133,7 @@ pub fn median_shape(mic: &[f32], hits: &[i64], pre: usize, len: usize, max_lag: 
 /// its attack ([`AlignParams`]) is correlated with the median shape of the mic's hits `hits`
 /// (sample numbers), within the search range of `p`. `None` when no hit has a usable window or the
 /// bounce's attack is silent.
+#[must_use]
 pub fn bounce_polarity(
     bounce: &[f32],
     onset: usize,
@@ -126,7 +143,7 @@ pub fn bounce_polarity(
     p: &AlignParams,
 ) -> Option<(i8, f64)> {
     let (a, pre) = attack_template(bounce, onset, sr, p);
-    let max_lag = (p.max_lag_s * sr as f64).round() as usize;
+    let max_lag = (p.max_lag_s * f64::from(sr)).round() as usize;
     let len = a.len();
     let shape = median_shape(mic, hits, pre, len, max_lag)?;
     let x = xcorr_hit(&shape, (pre + max_lag) as i64, &a, pre, max_lag)?;
@@ -137,9 +154,14 @@ pub fn bounce_polarity(
 /// The MIDI time of a note: the aligned attack `t * sr + lag_samples` minus `offset_samples`, rounded
 /// to the sample, in seconds. A note that would fall before the first sample goes to 0 s (the second
 /// value is true). `sr` is the rate of the track the samples are of.
+#[must_use]
 pub fn compensate(t: f64, lag_samples: f64, offset_samples: f64, sr: u32) -> (f64, bool) {
-    let s = (t * sr as f64 + lag_samples - offset_samples).round();
-    if s < 0.0 { (0.0, true) } else { (s / sr as f64, false) }
+    let s = (t * f64::from(sr) + lag_samples - offset_samples).round();
+    if s < 0.0 {
+        (0.0, true)
+    } else {
+        (s / f64::from(sr), false)
+    }
 }
 
 #[cfg(test)]

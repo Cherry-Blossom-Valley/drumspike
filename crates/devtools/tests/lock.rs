@@ -307,7 +307,7 @@ fn a_refused_save_as_removes_only_what_the_call_made() {
             .is_err()
     );
     assert!(out.join("Third").is_dir() && !out.join("Third").join(LOCK_FILE).exists());
-    app.job_cancel(&sid);
+    let _ = app.job_cancel(&sid);
 }
 
 #[test]

@@ -65,6 +65,11 @@ pub static FRONT_WINDOW: AtomicBool = AtomicBool::new(false);
 
 /// `--self-test <scenario> --out <file>` in `args` (without the program name). `Ok(None)`
 /// when the flag is absent; an error when it is incomplete.
+///
+/// # Errors
+///
+/// When `--self-test` is not followed by a scenario (a value that starts with `--` is none), when
+/// `--out` is missing, or when `--out` is not followed by a file name.
 pub fn parse_args(args: &[String]) -> Result<Option<Request>, String> {
     let Some(i) = args.iter().position(|a| a == "--self-test") else {
         return Ok(None);
@@ -88,6 +93,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<Request>, String> {
 }
 
 /// A name becomes `apps/desktop/selftest/<name>.json` of this checkout; a path stays.
+#[must_use]
 pub fn scenario_path(scenario: &str) -> PathBuf {
     if scenario.contains('/') || scenario.ends_with(".json") {
         PathBuf::from(scenario)
@@ -115,11 +121,20 @@ fn resolve_env_with(v: &mut Value, lookup: &dyn Fn(&str) -> Option<String>) -> R
 }
 
 /// Replace every string `"$NAME"` in the scenario with the environment variable `NAME`.
+///
+/// # Errors
+///
+/// When a `$NAME` string names an environment variable that is not set (or not valid Unicode).
 pub fn resolve_env(v: &mut Value) -> Result<(), String> {
     resolve_env_with(v, &|name| std::env::var(name).ok())
 }
 
 /// The scenario file as JSON with `$NAME` strings resolved; it must have a `name`.
+///
+/// # Errors
+///
+/// When the scenario file cannot be read, is not valid JSON, has no string `name`, or needs an
+/// environment variable that is not set.
 pub fn load_scenario(req: &Request) -> Result<Value, String> {
     let path = scenario_path(&req.scenario);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read scenario {}: {e}", path.display()))?;
@@ -134,6 +149,11 @@ pub fn load_scenario(req: &Request) -> Result<Value, String> {
 /// [`load_scenario`] with the `$NAME` variables taken from `vars` instead of the
 /// process environment (#194): a test loads a scenario without writing process env that
 /// other parallel tests read. Later pairs win on a duplicate name.
+///
+/// # Errors
+///
+/// When the scenario file cannot be read, is not valid JSON, has no string `name`, or needs a
+/// variable that `vars` does not hold.
 pub fn load_scenario_from(req: &Request, vars: &[(&str, &str)]) -> Result<Value, String> {
     let path = scenario_path(&req.scenario);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read scenario {}: {e}", path.display()))?;
@@ -151,6 +171,7 @@ pub fn load_scenario_from(req: &Request, vars: &[(&str, &str)]) -> Result<Value,
 }
 
 /// The script the page runs after `load`: the scenario as `window.__SELFTEST__`, then the driver.
+#[must_use]
 pub fn init_script(scenario: &Value) -> String {
     format!(
         "window.addEventListener('load', () => {{ if (/splash\\.html$/.test(location.pathname)) return; window.__SELFTEST__ = {scenario};\n{PLAY}\n{PLAYHEAD_STEPS}\n{MEMORY}\n{driver}\n}});",
@@ -170,6 +191,7 @@ pub struct Helper {
 }
 
 /// The `WebKit` helper processes in the output of `ps -ax -o pid=,rss=,comm=`.
+#[must_use]
 pub fn parse_helpers(ps: &str) -> Vec<Helper> {
     let mut out = Vec::new();
     for line in ps.lines() {
@@ -212,12 +234,14 @@ pub fn snapshot_helpers() {
 }
 
 /// Physical footprint in bytes of each pid (`footprint --json`); a pid that is gone is missing.
+#[must_use]
 pub fn footprints(pids: &[u32]) -> std::collections::HashMap<u32, u64> {
     footprint_report(pids).0
 }
 
 /// The largest memory categories (dirty bytes, compressed pages included) of a `footprint --json` process entry:
 /// `[["WebKit Malloc", 123.4], ...]` in MB, at most `n` entries.
+#[must_use]
 pub fn top_categories(process: &Value, n: usize) -> Vec<Value> {
     // `dirty` already includes the compressed (swapped) pages; the sum of `dirty` is the footprint
     let mut rows: Vec<(String, f64)> = process["categories"]
@@ -229,11 +253,12 @@ pub fn top_categories(process: &Value, n: usize) -> Vec<Value> {
     rows.sort_by(|a, b| b.1.total_cmp(&a.1));
     rows.into_iter()
         .take(n)
-        .map(|(k, b)| json!([k, (b / 1048576.0 * 10.0).round() / 10.0]))
+        .map(|(k, b)| json!([k, (b / 1_048_576.0 * 10.0).round() / 10.0]))
         .collect()
 }
 
 /// Footprints and the top categories of each pid, from one `footprint --json` call.
+#[must_use]
 pub fn footprint_report(
     pids: &[u32],
 ) -> (
@@ -274,7 +299,7 @@ pub fn memory() -> Value {
     let before = HELPERS_BEFORE.get().cloned().unwrap_or_default();
     let ours: Vec<Helper> = helpers_now().into_iter().filter(|h| !before.contains(&h.pid)).collect();
     let (fp, cats) = footprint_report(&ours.iter().map(|h| h.pid).collect::<Vec<_>>());
-    let mb = |b: u64| (b as f64 / 1048576.0 * 10.0).round() / 10.0;
+    let mb = |b: u64| (b as f64 / 1_048_576.0 * 10.0).round() / 10.0;
     let procs: Vec<Value> = ours
         .iter()
         .map(|h| {
@@ -295,6 +320,7 @@ pub fn memory() -> Value {
 }
 
 /// The facts about this build that go into every report.
+#[must_use]
 pub fn host_info() -> Value {
     json!({
         "os": std::env::consts::OS,
@@ -305,11 +331,16 @@ pub fn host_info() -> Value {
 }
 
 /// A report for a run that did not reach the driver.
+#[must_use]
 pub fn failure_report(scenario: &str, why: &str) -> Value {
     json!({"scenario": scenario, "pass": false, "steps": [], "metrics": {}, "errors": [why]})
 }
 
 /// Add the host facts and the scenario, write the report as pretty JSON; returns whether it passed.
+///
+/// # Errors
+///
+/// When the report cannot be serialized, or the file `out` cannot be written.
 pub fn write_report(out: &Path, mut report: Value, cold_ms: f64) -> Result<bool, String> {
     let pass = report.get("pass").and_then(Value::as_bool).unwrap_or(false);
     if let Some(o) = report.as_object_mut() {

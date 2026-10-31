@@ -52,6 +52,11 @@ pub struct TempFile {
 impl TempFile {
     /// Create the temporary file for writing `dest`. Already-used names are skipped; every
     /// other error (a missing folder, no permission) comes back as it is.
+    ///
+    /// # Errors
+    ///
+    /// An [`io::Error`] of kind `InvalidInput` when `dest` has no file name; `AlreadyExists`
+    /// when 64 attempts all hit an existing name; otherwise the error of opening the file.
     pub fn create(dest: &Path) -> io::Result<Self> {
         let name = dest
             .file_name()
@@ -87,6 +92,7 @@ impl TempFile {
     }
 
     /// The path of the temporary file.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -100,12 +106,21 @@ impl TempFile {
     }
 
     /// Write all of `bytes` to the temporary file.
+    ///
+    /// # Errors
+    ///
+    /// An [`io::Error`] when the temporary file is already closed or the write fails.
     pub fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.file_mut()?.write_all(bytes)
     }
 
     /// Flush and sync the temporary file to disk, close it, rename it onto `dest`, fsync the
     /// destination folder (best effort). On any error the guard removes the temporary file.
+    ///
+    /// # Errors
+    ///
+    /// An [`io::Error`] when the temporary file is already closed, or when the flush, the
+    /// sync or the rename onto `dest` fails.
     pub fn commit(self) -> io::Result<()> {
         self.commit_via(finish_real)
     }
@@ -136,6 +151,11 @@ impl Drop for TempFile {
 /// `path`; the folder is fsynced (best effort). On any error the temporary file is removed
 /// and `path` stays exactly as it was. This is the shared helper behind `io::write_atomic`,
 /// `write_document` and the app's JSON/preset/activation writers (R10).
+///
+/// # Errors
+///
+/// An [`io::Error`] when `path` has no file name, the temporary file cannot be created (a
+/// missing folder, no permission), the write, flush or sync fails, or the rename fails.
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_bytes_atomic_via(path, bytes, std::io::Write::write_all, finish_real)
 }

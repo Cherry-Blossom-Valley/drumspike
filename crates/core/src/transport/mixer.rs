@@ -55,11 +55,12 @@ pub const MIN_DB: f32 = -120.0;
 
 /// Volume in dB to a linear gain: 0 dB is exactly 1.0, [`MIN_DB`] and below (and NaN) is 0.0,
 /// above [`MAX_DB`] is the gain of [`MAX_DB`].
+#[must_use]
 pub fn db_to_gain(db: f32) -> f32 {
     if db.is_nan() || db <= MIN_DB {
         return 0.0;
     }
-    10f64.powf(db.min(MAX_DB) as f64 / 20.0) as f32
+    10f64.powf(f64::from(db.min(MAX_DB)) / 20.0) as f32
 }
 
 /// The pan law: constant power with -3 dB at the centre against a hard pan, normalised so
@@ -67,11 +68,12 @@ pub fn db_to_gain(db: f32) -> f32 {
 /// `theta = (pan + 1) * pi / 4`, left `sqrt(2) cos theta`, right `sqrt(2) sin theta`. The centre is
 /// exactly (1.0, 1.0); a hard pan gives +3 dB on its side and 0.0 on the other. A value outside
 /// -1 to +1 is clamped; NaN is the centre.
+#[must_use]
 pub fn pan_gains(pan: f32) -> (f32, f32) {
     if pan.is_nan() || pan == 0.0 {
         return (1.0, 1.0);
     }
-    let p = pan.clamp(-1.0, 1.0) as f64;
+    let p = f64::from(pan.clamp(-1.0, 1.0));
     let theta = (p + 1.0) * std::f64::consts::FRAC_PI_4;
     // cos(pi / 2) is 6e-17 in f64: a hard pan gives exactly 0.0 on the other side
     let side = |v: f64| {
@@ -86,6 +88,7 @@ pub fn pan_gains(pan: f32) -> (f32, f32) {
 
 /// The left and right gain of a track at `volume_db` and `pan` ([`db_to_gain`] times
 /// [`pan_gains`]); 0 dB at the centre is exactly (1.0, 1.0).
+#[must_use]
 pub fn channel_gains(volume_db: f32, pan: f32) -> (f32, f32) {
     let g = db_to_gain(volume_db);
     let (l, r) = pan_gains(pan);
@@ -106,6 +109,7 @@ fn store_peak(a: &std::sync::atomic::AtomicU32, v: f32) {
 
 /// Mute and solo to per-track gains (`audible()` in `app.js`): with any solo, the soloed
 /// tracks play; otherwise every track that is not muted plays. Missing entries are false.
+#[must_use]
 pub fn audible_gains(n: usize, mute: &[bool], solo: &[bool]) -> Vec<f32> {
     let any_solo = solo.iter().take(n).any(|s| *s);
     (0..n)
@@ -225,7 +229,7 @@ impl Engine {
     /// The session frame (at the device rate) of the next sample the engine renders; at half
     /// speed the output frame divided by 2, rounded down.
     pub fn frame_pos(&self) -> u64 {
-        self.frame_pos / self.speed.slowdown() as u64
+        self.frame_pos / u64::from(self.speed.slowdown())
     }
 
     /// Whether the engine plays from the rings (no seek or refill pending).
@@ -243,7 +247,7 @@ impl Engine {
             if let Some((target, tag, speed, loop_range, end_at)) = sh.seek_request() {
                 self.seen_gen = g;
                 self.speed = speed;
-                let slowdown = speed.slowdown() as u64;
+                let slowdown = u64::from(speed.slowdown());
                 self.frame_pos = target.saturating_mul(slowdown);
                 // #166: the region of the request in output frames at the render rate; a seek
                 // without one ends a running loop. A target at or past the end starts wrapped.
@@ -327,7 +331,7 @@ impl Engine {
         let live = playing && self.state == State::Ready;
         let slowdown = self.speed.slowdown();
         self.clock.publish(
-            self.frame_pos / slowdown as u64,
+            self.frame_pos / u64::from(slowdown),
             host_play_ns,
             live,
             self.seek_tag,

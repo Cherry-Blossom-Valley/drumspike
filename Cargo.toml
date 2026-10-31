@@ -8,7 +8,7 @@ resolver = "2"
 members = ["crates/core", "crates/app", "crates/devtools", "apps/desktop/src-tauri"]
 
 [workspace.package]
-version = "0.9.8"
+version = "0.9.9"
 edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0"
@@ -23,19 +23,15 @@ unwrap_used = "allow" # 4992: 1282/3582/127/1 (warn once burned down; clippy.tom
 # lib + bins + tests, all targets). The burn-down removes one allow at a time; a lint at 0 is deleted here.
 cast_possible_truncation = "allow" # 804: 594/171/33/6
 cast_precision_loss = "allow" # 609: 447/144/17/1
-must_use_candidate = "allow" # 530: 289/199/0/42
 cast_lossless = "allow" # 493: 400/88/5/0
 many_single_char_names = "allow" # 447: 363/58/26/0
 cast_sign_loss = "allow" # 444: 356/78/10/0
-missing_errors_doc = "allow" # 370: 115/174/0/81
 cast_possible_wrap = "allow" # 226: 200/20/6/0
 needless_pass_by_value = "allow" # 124: 4/19/1/100
 assert_is_empty = "allow" # 109: 59/38/0/12
-unreadable_literal = "allow" # 75: 55/17/0/3
 float_cmp = "allow" # 41: 27/14/0/0
 too_many_lines = "allow" # 41: 15/19/4/3
 manual_midpoint = "allow" # 31: 28/3/0/0
-missing_panics_doc = "allow" # 24: 14/9/0/1
 similar_names = "allow" # 21: 15/4/2/0
 match_same_arms = "allow" # 20: 14/6/0/0
 maybe_infinite_iter = "allow" # 11: 10/1/0/0

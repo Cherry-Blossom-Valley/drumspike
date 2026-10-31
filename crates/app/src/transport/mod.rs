@@ -201,7 +201,7 @@ impl DeviceKey {
 
 /// A volume in dB from a command or the project, clamped to the fader range ([`MIN_DB`] is off).
 fn clamp_db(db: f64) -> f64 {
-    db.clamp(MIN_DB as f64, MAX_DB as f64)
+    db.clamp(f64::from(MIN_DB), f64::from(MAX_DB))
 }
 
 /// A pan from a command or the project, clamped to -1 to +1.
@@ -308,6 +308,7 @@ impl Default for TransportHost {
 impl TransportHost {
     /// A host with no transport. The output comes from `DRUMSPIKE_AUDIO`, the master gain
     /// from `DRUMSPIKE_MASTER_GAIN`.
+    #[must_use]
     pub fn new() -> TransportHost {
         TransportHost {
             st: Arc::new(Mutex::new(HostState {
@@ -548,7 +549,7 @@ fn heard_epoch(st: &HostState, o: &Open, ph: &Playhead) -> u64 {
 /// The position of an open transport in seconds, extrapolated to now.
 fn position_s(t: &Transport) -> f64 {
     let ph = t.playhead();
-    ph.frame_at(host_now_ns()) as f64 / ph.sample_rate as f64
+    ph.frame_at(host_now_ns()) as f64 / f64::from(ph.sample_rate)
 }
 
 /// Reopen on the device the watcher sees: same position, same state.
@@ -748,6 +749,9 @@ impl Service {
     /// start_ms, open_ms, master, speed, heard_ms}` once the first playing block is rendered
     /// (`ready`), or after 10 s. `heard_ms` (P3-20b) is the time from the call to the moment the
     /// first sample of that block is heard (the block's playback time; `null` before it). It plays at normal speed ([`Service::transport_play_at`] takes a speed).
+    ///
+    /// # Errors
+    /// The same as [`Service::transport_play_window`] without a window or a speed.
     pub fn transport_play(
         &self,
         sid: &str,
@@ -763,6 +767,9 @@ impl Service {
     /// the running stream, as part of the play's seek (from `position`, else from where it is);
     /// otherwise the transport opens at that speed. `start_ms` is the time from the call to the
     /// first block at that speed.
+    ///
+    /// # Errors
+    /// The same as [`Service::transport_play_window`] without a window.
     pub fn transport_play_at(
         &self,
         sid: &str,
@@ -782,6 +789,18 @@ impl Service {
     /// `shot` (P4-40e) the one-shot of that track plays once as a preview voice at the window start (the Layer view's Play);
     /// without an `end` the window ends at the start plus the one-shot's length, and without `tracks` the shot track is the
     /// only audible one. 409 for a track without a layer or its file.
+    ///
+    /// # Errors
+    /// 400 when `position`, or the `start` or `end` of `win`, is negative or not finite, `end` is
+    /// not after `start`, `loop` has no `end`, `speed` is not 1 or 0.5, or an audition track is not
+    /// a playable track of the project; 409 for a `shot` track without a layer or its file; 404 when
+    /// `sid` is not an open project; any error of building the plan or opening the audio device;
+    /// 500 when the device is gone before the answer is built.
+    ///
+    /// # Panics
+    /// Panics on `expect("open after start")` if the transport is not open right after it was
+    /// opened or reused under the same lock, and on the `unwrap()` of the audition when a `shot`
+    /// is set without one; neither can happen, as both are set just before.
     pub fn transport_play_window(
         &self,
         sid: &str,
@@ -989,7 +1008,7 @@ impl Service {
             "rate": rate,
             "channels": o.key.channels,
             "frames": o.transport.session_frames(),
-            "duration": o.transport.session_frames() as f64 / rate as f64,
+            "duration": o.transport.session_frames() as f64 / f64::from(rate),
             "position": position.unwrap_or_else(|| position_s(&o.transport)),
             "epoch": st.epoch,
             "ready": ready,
@@ -1010,6 +1029,7 @@ impl Service {
     /// `transport_stop`: pause; the position stays. With `close` the transport is released
     /// too (its files and threads). Answers `{open, playing: false, frame, rate, pos, epoch}`;
     /// `pos` is the position at which the callback stopped.
+    #[must_use]
     pub fn transport_stop(&self, close: bool) -> Value {
         let host = self.host();
         {
@@ -1049,12 +1069,15 @@ impl Service {
             st.open = None;
         }
         json!({"open": !close, "playing": false, "frame": frame, "rate": rate,
-            "pos": if rate > 0 { frame as f64 / rate as f64 } else { 0.0 }, "epoch": epoch})
+            "pos": if rate > 0 { frame as f64 / f64::from(rate) } else { 0.0 }, "epoch": epoch})
     }
 
     /// `transport_seek`: move to `position` seconds, playing or paused. 409 without an open
     /// transport. Answers `{frame, rate, pos, epoch}`: the target frame and the epoch the
     /// messages after the seek carry.
+    ///
+    /// # Errors
+    /// 400 when `position` is negative or not finite; 409 when no transport is open.
     pub fn transport_seek(&self, position: f64) -> Result<Value, AppError> {
         if !position.is_finite() || position < 0.0 {
             return Err(AppError::bad("position must be a number of seconds, 0 or more"));
@@ -1070,19 +1093,23 @@ impl Service {
                 return Err(AppError::conflict("the transport is not open: press play first"));
             };
             let rate = o.transport.sample_rate();
-            let frame = (position * rate as f64).round() as u64;
+            let frame = (position * f64::from(rate)).round() as u64;
             let counter = o.transport.callback_counter();
             seek_tagged(o, frame, epoch);
             (rate, frame, counter, epoch)
         };
         wait_seek_taken(&counter, epoch);
-        Ok(json!({"frame": frame, "rate": rate, "pos": frame as f64 / rate as f64, "epoch": epoch}))
+        Ok(json!({"frame": frame, "rate": rate, "pos": frame as f64 / f64::from(rate), "epoch": epoch}))
     }
 
     /// `transport_mix`: mute and solo as `{track name: bool}` objects (a missing name is
     /// false). The state stays when no transport is open and applies at the next open.
     /// Answers `{applied, tracks_audible, latency_ms, t_ns}` (`t_ns`: when the change was made, on the clock of the playhead messages): while the transport plays, `latency_ms`
     /// is the time from this change to the moment the first block with the new gains is heard.
+    ///
+    /// # Errors
+    /// 400 when `mute` or `solo` is neither null nor an object `{track: bool}`; 500 when the open
+    /// transport refuses the new mix.
     pub fn transport_mix(&self, mute: &Value, solo: &Value) -> Result<Value, AppError> {
         let read = |v: &Value, what: &str| -> Result<HashMap<String, bool>, AppError> {
             match v {
@@ -1131,6 +1158,11 @@ impl Service {
     /// `transport_clicks`: the metronome. `enabled`, `volume` (0 to 1) and `pitches`
     /// (`{role: Hz}`) are optional; a missing one stays. Applies to the open transport at
     /// once and to every later open. Answers `{enabled, volume, applied}`.
+    ///
+    /// # Errors
+    /// 400 when `volume` is outside 0 to 1, `pitches` is not an object of `{role: Hz}` with Hz
+    /// above 0; 500 when the open transport still refuses the settings after about 100 ms of
+    /// retries.
     pub fn transport_clicks(
         &self,
         enabled: Option<bool>,
@@ -1234,7 +1266,7 @@ impl Service {
             m.insert("requested".into(), json!(o.transport.is_playing()));
             m.insert("frame".into(), json!(frame));
             m.insert("rate".into(), json!(ph.sample_rate));
-            m.insert("pos".into(), json!(frame as f64 / ph.sample_rate as f64));
+            m.insert("pos".into(), json!(frame as f64 / f64::from(ph.sample_rate)));
             // #166: the tag of the last seek the callback took; with an engine-side loop it does
             // not grow per pass (the old watcher sought back on every wrap)
             m.insert("seek_tag".into(), json!(ph.seek_tag));
@@ -1303,6 +1335,11 @@ impl Service {
     /// [`MAX_DB`]) and pan (-1 to +1) of one track; a missing value stays. Kept in the project
     /// (`volume_db`, `pan`; marks it dirty) and applied to the open transport of this project at
     /// the next callback. Answers `{volume_db, pan, applied}`.
+    ///
+    /// # Errors
+    /// 400 when `volume_db` or `pan` is not a finite number; 404 when `sid` is not an open project
+    /// or `name` is not a track; 409 when the project is open read-only; 500 when the open
+    /// transport refuses the new volume or pan.
     pub fn track_set_mix(
         &self,
         sid: &str,
@@ -1348,6 +1385,10 @@ impl Service {
     /// [`MAX_DB`]), applied to the open transport at once and to every later open, kept in the
     /// app settings. It comes before the master gain of `DRUMSPIKE_MASTER_GAIN`. Answers
     /// `{volume_db, applied}`.
+    ///
+    /// # Errors
+    /// 400 when `volume_db` is not a finite number; otherwise the error of writing the app
+    /// settings file (500 when it cannot be written).
     pub fn transport_master(&self, volume_db: f64) -> Result<Value, AppError> {
         if !volume_db.is_finite() {
             return Err(AppError::bad("volume_db must be a number"));
@@ -1371,6 +1412,7 @@ impl Service {
     /// `current` the device the open transport plays on (`null` when none is open), `note` why
     /// it does not (or, with no open transport, will not) play on the choice. The `CoreAudio` query
     /// runs without the host lock.
+    #[must_use]
     pub fn outputs_list(&self) -> Value {
         self.load_audio_settings();
         let (output, test_list) = {
@@ -1418,6 +1460,10 @@ impl Service {
     /// Kept in the app settings. An open transport reopens on it at the same position and
     /// state; a missing device gives the system default and the `note`. Answers like
     /// [`Service::outputs_list`].
+    ///
+    /// # Errors
+    /// 400 when `device` is an empty or blank name; otherwise the error of writing the app
+    /// settings file (500 when it cannot be written).
     pub fn output_select(&self, device: Option<&str>) -> Result<Value, AppError> {
         if device.is_some_and(|d| d.trim().is_empty()) {
             return Err(AppError::bad("device must be a device name or null"));
@@ -1453,6 +1499,7 @@ impl Service {
 }
 
 /// Whether the watcher thread is active (tests).
+#[must_use]
 pub fn watcher_active(svc: &Service) -> bool {
     lock(&svc.host().st).watcher_started
 }

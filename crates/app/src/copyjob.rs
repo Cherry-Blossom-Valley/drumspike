@@ -91,6 +91,10 @@ pub struct CopyJobs {
 
 impl CopyJobs {
     /// Register a new job of `kind` for `sid`; 409 while another job of that project runs.
+    ///
+    /// # Errors
+    ///
+    /// A 409 [`AppError`] naming the kind of the job when a job of `sid` is still `running`.
     pub fn start(&self, sid: &str, kind: &'static str) -> Result<Arc<JobCtl>, AppError> {
         let mut map = lock(&self.map);
         if let Some(j) = map.get(sid)
@@ -626,6 +630,12 @@ impl Service {
     /// when nothing is referenced the job is `done` at once with `result`
     /// `{consolidated: [], dirty}`. The result of a finished job is `{consolidated: [track
     /// names], dirty}` as in the server.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] for an unknown `sid`; a 409 when the project is open read-only, a referenced track's
+    /// source is offline, or another copy job of the project is running; a 500 when the worker thread cannot
+    /// be spawned. A failure while copying is reported in the job state, not here.
     pub fn project_consolidate(&self, sid: &str, progress: Option<Progress>) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let (items, dir) = {
@@ -709,6 +719,7 @@ impl Service {
     }
 
     /// `job_status {sid}`: the state of the running job or of the last one.
+    #[must_use]
     pub fn job_status(&self, sid: &str) -> Value {
         self.inner.copyjobs.status(sid)
     }
@@ -719,6 +730,7 @@ impl Service {
     /// running analysis of the project is asked to stop instead (answer `{sid, cancelling:
     /// true, kind: "analyze"}`); it ends after the track in its model step, and the tracks that
     /// did not run get the error `analysis cancelled`.
+    #[must_use]
     pub fn job_cancel(&self, sid: &str) -> Value {
         let v = self.inner.copyjobs.cancel(sid);
         if v["cancelling"] == true {

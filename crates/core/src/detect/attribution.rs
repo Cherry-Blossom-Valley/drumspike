@@ -127,6 +127,7 @@ const BAND_HIGH: [BandStage; 1] = [hp(5000.0)];
 
 impl Role {
     /// The role for an app role name (`kick`, `snare`, `tom`, `hat`, `cymbal`, `other`).
+    #[must_use]
     pub fn from_name(name: &str) -> Option<Role> {
         match name {
             "kick" => Some(Role::Kick),
@@ -140,6 +141,7 @@ impl Role {
     }
 
     /// The app role name.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Role::Kick => "kick",
@@ -153,6 +155,7 @@ impl Role {
 
     /// The frequency band in which a track of this role is judged: kick below 150 Hz, tom
     /// 50 to 400 Hz, snare 150 to 2,500 Hz, hat and cymbal above 5 kHz, other broadband.
+    #[must_use]
     pub fn band(self) -> &'static [BandStage] {
         match self {
             Role::Kick => &BAND_KICK,
@@ -175,8 +178,9 @@ pub struct Biquad {
 
 impl Biquad {
     /// RBJ cookbook lowpass or highpass at `freq_hz`, Q = 1/sqrt(2), for rate `sr`.
+    #[must_use]
     pub fn new(kind: FilterKind, freq_hz: f64, sr: u32) -> Biquad {
-        let w = 2.0 * std::f64::consts::PI * freq_hz / sr as f64;
+        let w = 2.0 * std::f64::consts::PI * freq_hz / f64::from(sr);
         let (cw, sw) = (w.cos(), w.sin());
         let alpha = sw / (2.0 * std::f64::consts::FRAC_1_SQRT_2);
         let b = match kind {
@@ -192,6 +196,7 @@ impl Biquad {
 }
 
 /// The sections of a band at rate `sr`: every stage twice, in order.
+#[must_use]
 pub fn band_sections(band: &[BandStage], sr: u32) -> Vec<Biquad> {
     band.iter()
         .flat_map(|s| {
@@ -205,6 +210,7 @@ pub fn band_sections(band: &[BandStage], sr: u32) -> Vec<Biquad> {
 /// `from`, the recursion of `scipy.signal.sosfilt`) and return
 /// `20 log10(max |y| + 1e-9)` over the samples `y[w0..to]`. `from <= w0 <= to <= x.len()`;
 /// an empty window gives -180 dB.
+#[must_use]
 pub fn band_peak_db(x: &[f32], sections: &[Biquad], from: usize, w0: usize, to: usize) -> f64 {
     if w0 >= to {
         return -180.0;
@@ -212,7 +218,7 @@ pub fn band_peak_db(x: &[f32], sections: &[Biquad], from: usize, w0: usize, to: 
     let mut z = vec![[0.0f64; 2]; sections.len()];
     let mut peak = 0.0f64;
     for (i, &v) in x[from..to].iter().enumerate() {
-        let mut y = v as f64;
+        let mut y = f64::from(v);
         for (s, zs) in sections.iter().zip(z.iter_mut()) {
             let out = s.b[0] * y + zs[0];
             zs[0] = s.b[1] * y - s.a[0] * out + zs[1];
@@ -243,14 +249,16 @@ pub fn percentile(v: &[f64], q: f64) -> Option<f64> {
 
 /// Milliseconds to samples: `floor(ms * sr / 1000 + 0.5)` (the same rule in the Python
 /// reference; Python's `round` rounds half to even and would differ).
+#[must_use]
 pub fn ms_to_samples(ms: f64, sr: u32) -> i64 {
-    (ms * sr as f64 / 1000.0 + 0.5).floor() as i64
+    (ms * f64::from(sr) / 1000.0 + 0.5).floor() as i64
 }
 
 /// The calibration of a transfer gain `G(B->A)` from its values (P2-6; P4-14 reuses it): `all` holds the value at
 /// every strong hit of B, `quiet` the values at the strong hits where A has no own hit. The `pct` percentile of
 /// `quiet` when it has at least `min_hits` values, else of `all`; `None` when `all` has fewer than `min_hits` (at
 /// least 1). Returns the gain, the number of values used and whether only quiet values were used.
+#[must_use]
 pub fn calibrate_gain(all: &[f64], quiet: &[f64], pct: f64, min_hits: usize) -> Option<(f64, usize, bool)> {
     let min = min_hits.max(1);
     if all.len() < min {
@@ -357,6 +365,7 @@ impl Default for AttributionParams {
 
 impl AttributionParams {
     /// The defaults with both flags on.
+    #[must_use]
     pub fn enabled() -> Self {
         AttributionParams {
             bleed_enabled: true,
@@ -403,11 +412,13 @@ pub struct HitFlags {
 
 impl HitFlags {
     /// True when any flag is set.
+    #[must_use]
     pub fn is_flagged(&self) -> bool {
         self.bleed.is_some() || self.resonance.is_some()
     }
 
     /// The highest confidence of the set flags, 0 when none is set.
+    #[must_use]
     pub fn confidence(&self) -> f64 {
         let b = self.bleed.map_or(0.0, |f| f.confidence);
         let r = self.resonance.map_or(0.0, |f| f.confidence);
@@ -415,6 +426,7 @@ impl HitFlags {
     }
 
     /// The names of the set flags (`bleed`, `resonance`).
+    #[must_use]
     pub fn names(&self) -> Vec<&'static str> {
         let mut v = Vec::new();
         if self.bleed.is_some() {
@@ -514,6 +526,10 @@ fn has_near(sorted: &[i64], v: i64, tol: i64) -> bool {
 
 /// Compute the flags of every hit of one session (see the module documentation). All
 /// signals are at rate `sr`. With both flags off every [`HitFlags`] is empty.
+///
+/// # Errors
+///
+/// [`AttributionError::ZeroRate`] when `sr` is 0.
 pub fn attribute(tracks: &[TrackInput], sr: u32, p: &AttributionParams) -> Result<Attribution, AttributionError> {
     if sr == 0 {
         return Err(AttributionError::ZeroRate);
@@ -651,13 +667,13 @@ fn bleed(tracks: &[TrackInput], sr: u32, p: &AttributionParams, out: &mut Attrib
                 };
                 let (tb, rise_b) = refine_sr(
                     tracks[b].signal,
-                    sa as f64 / sr as f64,
+                    sa as f64 / f64::from(sr),
                     sr,
                     &[],
                     RefineWindow::SYMMETRIC_7,
                 );
                 let Some(rise_b) = rise_b else { continue };
-                let sb = (tb * sr as f64).round() as i64;
+                let sb = (tb * f64::from(sr)).round() as i64;
                 let lag = sb - sa;
                 if lag < -w || lag > tol || rise_b < p.source_rise_db || !has_near(&sorted[b], sb, mtol) {
                     continue;

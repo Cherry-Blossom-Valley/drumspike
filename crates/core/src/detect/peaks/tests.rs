@@ -252,7 +252,7 @@ fn mix_uses_the_madmom_picker() {
 #[test]
 #[should_panic(expected = "is not (frames, 5)")]
 fn pick_rejects_a_ragged_input() {
-    pick(&[0.0; 7], Chain::Cli);
+    let _ = pick(&[0.0; 7], Chain::Cli);
 }
 
 /// Every counted branch of both pickers is hit by the inputs of the rule tests above.

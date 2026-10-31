@@ -42,6 +42,7 @@ pub enum Lock {
 
 impl Lock {
     /// The text of the open answer's `lock` field: `held` or `unavailable: <why>`.
+    #[must_use]
     pub fn note(&self) -> String {
         match self {
             Lock::Held(_) => "held".to_string(),
@@ -50,6 +51,7 @@ impl Lock {
     }
 
     /// The lock, when held.
+    #[must_use]
     pub fn into_held(self) -> Option<ProjectLock> {
         match self {
             Lock::Held(l) => Some(l),
@@ -101,6 +103,10 @@ impl ProjectLock {
     /// Take the lock of the project folder `dir` for `client` (`app`, `cli`, `mcp`). 409 only when another process
     /// holds it (the message names its client and pid). Any other failure (the file cannot be made, the file system has
     /// no locks) is [`Lock::Unavailable`], not an error: the project opens unlocked.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 409 error when another process holds the lock on `dir`.
     pub fn acquire(dir: &Path, client: &str) -> Result<Lock, AppError> {
         let path = dir.join(LOCK_FILE);
         // A lock file this user cannot write (another user's 0644 file on a shared folder) can still be locked: the
@@ -144,11 +150,13 @@ impl ProjectLock {
     }
 
     /// The pid and client named in the lock file of `dir` (whoever holds it), for tests and messages.
+    #[must_use]
     pub fn holder_of(dir: &Path) -> Option<(u32, String)> {
         holder(&mut File::open(dir.join(LOCK_FILE)).ok()?)
     }
 
     /// The lock file.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }

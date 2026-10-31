@@ -25,6 +25,7 @@ pub const ROLES: [&str; 6] = ["kick", "snare", "tom", "hat", "cymbal", "other"];
 pub const PRESET_DIR: &str = "kit-presets";
 
 /// The MIDI note of a role (`ROLE_DEFAULT_NOTE` in `static/app.js`).
+#[must_use]
 pub fn default_note(role: &str) -> i64 {
     match role {
         "kick" => 36,
@@ -37,6 +38,7 @@ pub fn default_note(role: &str) -> i64 {
 }
 
 /// The lane colour of a role (`ROLE_COLORS` of the server).
+#[must_use]
 pub fn role_color(role: &str) -> &'static str {
     match role {
         "kick" => "#e05555",
@@ -49,6 +51,7 @@ pub fn role_color(role: &str) -> &'static str {
 }
 
 /// True for one of [`ROLES`].
+#[must_use]
 pub fn is_role(role: &str) -> bool {
     ROLES.contains(&role)
 }
@@ -160,12 +163,17 @@ pub fn is_export_name(stem: &str) -> bool {
 /// matches decides (`t1 hh` is a tom). Names like `k samp savior`, `s trigger` or `r far` do
 /// not follow the scheme: they stay `None`. The first word may also be a common abbreviation
 /// (`BD`, `SD`, `Snr Top`, `FT`, `Toms`, `China`; see `first_word_role`).
+#[must_use]
 pub fn guess_role(stem: &str) -> Option<&'static str> {
     guess_role_matched(stem).map(|(role, _)| role)
 }
 
 /// [`guess_role`] with the words of the name that matched (normalised, space-separated; the
 /// hint of the Inspector shows them: `k in = kick`). Two-word matches carry both words.
+///
+/// # Panics
+///
+/// Contains an `unwrap` of the next word that is reached only when that word exists, so it does not panic in practice.
 pub fn guess_role_matched(stem: &str) -> Option<(&'static str, String)> {
     if is_export_name(stem) {
         return None;
@@ -210,6 +218,7 @@ pub fn guess_role_matched(stem: &str) -> Option<(&'static str, String)> {
 /// `ssd...`: `t1 sampl`, `t samp`, `t trigger`, `T1 Smpl`, `Tom1 SSD`, `k samp savior`). Such a track is never a tom
 /// close mic of the bleed rule. Its role stays what the name table gives (`t1 sampl` is a tom of the owner's scheme: it
 /// detects as a tom, it only is no source or target of the rule).
+#[must_use]
 pub fn is_sample_name(stem: &str) -> bool {
     let normal = normalize(stem);
     ["samp", "smpl", "trig"].iter().any(|k| normal.contains(k))
@@ -247,6 +256,7 @@ pub const POSITION_WORDS: [&str; 26] = [
 /// Fix round 4: when the name has a number, the drum is the words up to and including the first number (`Tom 1 Top
 /// 421`, `Tom 1 Bot e604` and `Tom 1 Top DI` give `t 1`; `t4Ri` gives `t 4`; `Floor Tom 1` gives `floor t 1`): what
 /// follows is a mic model, a channel or a take. `None` when nothing is left (`Top`): the name does not tell the drum.
+#[must_use]
 pub fn drum_of(stem: &str) -> Option<String> {
     let mut key: Vec<String> = tokens(&normalize(stem))
         .into_iter()
@@ -272,11 +282,16 @@ pub struct Rule {
 
 impl Rule {
     /// The JSON object of the rule.
+    #[must_use]
     pub fn to_json(&self) -> Value {
         json!({"pattern": self.pattern, "role": self.role, "note": self.note})
     }
 
     /// A rule from JSON; 400 for a pattern without words, an unknown role or a note outside 0 to 127.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for a pattern without words, an unknown role or a note outside 0 to 127.
     pub fn from_json(v: &Value) -> Result<Rule, AppError> {
         let pattern = normalize(v.get("pattern").and_then(Value::as_str).unwrap_or(""));
         if pattern.is_empty() {
@@ -316,6 +331,7 @@ pub enum Source {
 
 impl Source {
     /// The word the page gets.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Source::Preset => "preset",
@@ -341,6 +357,7 @@ pub struct Guess {
 }
 
 /// The role and note of a name: the longest matching rule of `rules`, else the scheme, else `other`.
+#[must_use]
 pub fn guess(stem: &str, rules: &[Rule]) -> Guess {
     let normal = normalize(stem);
     let w = words(&normal);
@@ -408,6 +425,10 @@ impl Service {
     }
 
     /// `kit_presets_list`: `[{name, rules}]` sorted by name. A file that is no preset is skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 409 error when the service has no home folder.
     pub fn kit_presets_list(&self) -> Result<Value, AppError> {
         let dir = self.preset_dir()?;
         let mut out: Vec<(String, usize)> = Vec::new();
@@ -430,6 +451,11 @@ impl Service {
 
     /// `kit_preset_save {name, rules}`: write `<home>/kit-presets/<name>.json` (a preset of the
     /// same name is replaced). Answers `{name, rules, path}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for an empty name, a `rules` value that is not a list, or an invalid rule; a 409 error
+    /// without a home folder; and an internal error when the preset folder or file cannot be written.
     pub fn kit_preset_save(&self, name: &str, rules: &Value) -> Result<Value, AppError> {
         let stem = preset_file_stem(name)?;
         let list = rules
@@ -447,6 +473,11 @@ impl Service {
     }
 
     /// `kit_preset_load {name}`: `{name, rules: [{pattern, role, note}]}`; 404 for an unknown name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 404 error when no preset file has this name, a 400 error for an empty name or a damaged preset
+    /// file, and a 409 error without a home folder.
     pub fn kit_preset_load(&self, name: &str) -> Result<Value, AppError> {
         let (name, rules) = self.load_rules(name)?;
         Ok(json!({"name": name, "rules": rules.iter().map(Rule::to_json).collect::<Vec<_>>()}))

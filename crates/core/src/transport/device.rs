@@ -52,11 +52,13 @@ pub enum Output {
 
 impl Output {
     /// `DRUMSPIKE_AUDIO=null` selects the null device, anything else the default device.
+    #[must_use]
     pub fn from_env() -> Output {
         Output::from_value(std::env::var("DRUMSPIKE_AUDIO").ok().as_deref())
     }
 
     /// The choice for one value of `DRUMSPIKE_AUDIO` (see [`Output::from_env`]).
+    #[must_use]
     pub fn from_value(v: Option<&str>) -> Output {
         match v {
             Some(s) if s.eq_ignore_ascii_case("null") => Output::Null { sample_rate: None },
@@ -68,6 +70,7 @@ impl Output {
 /// The output for a saved choice (`None`: the system default) when the devices `available`
 /// are connected: the named device when it is in the list, else the system default and the
 /// text that says so (P3-16: a missing saved device falls back with a message).
+#[must_use]
 pub fn resolve_choice(choice: Option<&str>, available: &[String]) -> (Output, Option<String>) {
     match choice {
         None => (Output::Default, None),
@@ -103,6 +106,7 @@ fn no_answer(name: &str) -> TransportError {
 }
 
 /// Whether a worker thread of device `name` is still blocked in `CoreAudio`.
+#[must_use]
 pub fn is_blocked(name: &str) -> bool {
     blocked().contains(name)
 }
@@ -146,6 +150,11 @@ fn guarded<T: Send + 'static>(
 }
 
 /// The name of the device an output opens now (`None`: the system default), or the error.
+///
+/// # Errors
+///
+/// With `device` `None`, [`TransportError::Device`] when the host has no default output device.
+/// A given name is returned as is, without a check that the device exists.
 pub fn target_name(device: Option<&str>) -> Result<String, TransportError> {
     match device {
         Some(n) => Ok(n.to_string()),
@@ -209,23 +218,43 @@ fn info_of(dev: &cpal::Device) -> Result<DeviceInfo, TransportError> {
 }
 
 /// The device's current rate and channel count, without opening a stream.
+///
+/// # Errors
+///
+/// [`TransportError::Device`] when there is no default output device or it does not report
+/// its output configuration.
 pub fn default_output_rate() -> Result<(u32, u16), TransportError> {
     output_info(None).map(|i| (i.sample_rate, i.channels))
 }
 
 /// The default output device as the system reports it now: name, current rate, channels. The
 /// app polls it to see a change of the output (P3-5b); it opens no stream.
+///
+/// # Errors
+///
+/// [`TransportError::Device`] when there is no default output device or it does not report
+/// its output configuration.
 pub fn default_output_info() -> Result<DeviceInfo, TransportError> {
     output_info(None)
 }
 
 /// [`default_output_info`] for the device of `name` (`None`: the system default).
+///
+/// # Errors
+///
+/// [`TransportError::Device`] when the host cannot list its output devices, no device of
+/// `name` is connected (or, for `None`, there is no default), or the device does not report
+/// its output configuration.
 pub fn output_info(name: Option<&str>) -> Result<DeviceInfo, TransportError> {
     info_of(&find_device(name)?)
 }
 
 /// Every output device the system lists now, with its current rate and channels (P3-16:
 /// the Settings list). A device that does not answer its configuration is left out.
+///
+/// # Errors
+///
+/// [`TransportError::Device`] when the host cannot enumerate its output devices.
 pub fn output_devices() -> Result<Vec<DeviceInfo>, TransportError> {
     let host = cpal::default_host();
     let devs = host
@@ -256,6 +285,7 @@ pub enum ErrorClass {
 }
 
 /// Sort a cpal error kind into [`ErrorClass`].
+#[must_use]
 pub fn classify_error(kind: cpal::ErrorKind) -> ErrorClass {
     use cpal::ErrorKind as K;
     match kind {
@@ -393,7 +423,7 @@ pub(crate) fn start_null(
         .name("drumspike-null-audio".into())
         .spawn(move || {
             let mut buf = vec![0.0f32; 2 * n];
-            let period = Duration::from_secs_f64(n as f64 / sample_rate as f64);
+            let period = Duration::from_secs_f64(n as f64 / f64::from(sample_rate));
             let start = Instant::now();
             let mut k: u32 = 0;
             while !s2.load(Ordering::Acquire) {

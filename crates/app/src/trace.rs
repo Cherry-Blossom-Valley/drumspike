@@ -181,6 +181,7 @@ pub fn lock_wait(at: &'static std::panic::Location<'static>) -> Span {
 /// took about 6 ms in the debug app, so `selftest/trace_spans.py` calibrates the offset against
 /// the `selftest_clock` spans). False without the feature, when a recording runs already, or
 /// when the file cannot be created.
+#[must_use]
 pub fn init(path: &std::path::Path, offset_ms: f64) -> bool {
     #[cfg(feature = "trace")]
     {
@@ -194,6 +195,7 @@ pub fn init(path: &std::path::Path, offset_ms: f64) -> bool {
 }
 
 /// [`init`] with the file named by `DRUMSPIKE_TRACE`; false when it is not set.
+#[must_use]
 pub fn init_from_env(offset_ms: f64) -> bool {
     match std::env::var_os("DRUMSPIKE_TRACE").filter(|v| !v.is_empty()) {
         Some(p) => init(std::path::Path::new(&p), offset_ms),

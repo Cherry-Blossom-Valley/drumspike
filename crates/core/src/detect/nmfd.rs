@@ -26,6 +26,7 @@ pub struct Template {
 pub const FRAMES_PER_S: f64 = 100.0;
 
 /// Invert the `log10(1 + x)` compression of the spectrogram: the band magnitudes.
+#[must_use]
 pub fn decompress(spec: &[f32]) -> Vec<f32> {
     spec.iter().map(|&s| 10f32.powf(s) - 1.0).collect()
 }
@@ -48,6 +49,7 @@ fn attack_frame(spec: &[f32], t: f64) -> Option<usize> {
 /// The mean attack-frame spectrum of up to `max_hits` hit times, or `None` with fewer than
 /// `min_hits` of them. The attack frame of a hit is the frame in `[t, t + 20 ms]` with the
 /// highest band sum; the template is the mean of the hits' spectra, normalised to its maximum.
+#[must_use]
 pub fn template_from_hits(spec: &[f32], hits: &[f64], min_hits: usize, max_hits: usize) -> Option<Template> {
     template_from_hits_multi(&[spec], &[hits], min_hits, max_hits)
 }
@@ -96,6 +98,7 @@ pub fn template_from_hits_multi(
 /// The activation of every template over the frames: `H` in `V ~= W H`, `W` fixed, by
 /// multiplicative updates on the decompressed magnitudes (Euclidean cost). `iters` updates;
 /// `H` starts uniform. Returns one `Vec<f32>` of `frames` activations per template, in order.
+#[must_use]
 pub fn nmfd_activations(spec: &[f32], templates: &[Template], iters: usize) -> Vec<Vec<f32>> {
     let n_bands = crate::detect::features::N_BANDS;
     let frames = spec.len() / n_bands;
@@ -245,6 +248,7 @@ pub fn pick_hits(h: &[f32], p: &NmfdParams) -> Vec<f64> {
 
 /// The hits of one drum: [`nmfd_activations`] and [`pick_hits`] on its row, against the other
 /// templates so their energy is absorbed there. `mine` is the index in `templates`.
+#[must_use]
 pub fn nmfd_hits(spec: &[f32], templates: &[Template], mine: usize, iters: usize, p: &NmfdParams) -> Vec<f64> {
     if mine >= templates.len() {
         return Vec::new();

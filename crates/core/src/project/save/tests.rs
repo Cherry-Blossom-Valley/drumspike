@@ -44,7 +44,7 @@ fn events() -> Vec<Event> {
     let mut e2 = Event::new(2.675, 127);
     e2.orig = Some(1e-7);
     e2.edited = Some(true);
-    let mut e3 = Event::new(123456.123456789, 64);
+    let mut e3 = Event::new(123_456.123_456_789, 64);
     e3.rise = Some(12.3);
     let mut e1 = Event::new(1.0 / 3.0, 20);
     e1.added = Some(true);
