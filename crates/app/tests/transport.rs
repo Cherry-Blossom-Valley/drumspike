@@ -1329,7 +1329,7 @@ fn transport_play_half_speed_start_latency_of_both_designs() {
     let r = svc.project_new(Some("Latency"), None, None).unwrap();
     let sid = r["sid"].as_str().unwrap().to_string();
     let add = svc
-        .tracks_add(&sid, &[folder.display().to_string()], &[], &[], false, None)
+        .tracks_add(&sid, &[folder.display().to_string()], None, &[], &[], false, None)
         .unwrap();
     assert_eq!(add["added"].as_array().unwrap().len(), 30, "{add}");
     let st0 = svc.transport_play(&sid, Some(10.0), None, None).unwrap();

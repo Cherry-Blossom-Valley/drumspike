@@ -49,6 +49,8 @@ pub fn run(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) -> 
             | "export_drag_take"
             | "export_last_get"
             | "export_last_set"
+            // #164 (part 2 of #153): the feedback gateway (the page previews, this posts)
+            | "feedback_send"
     ) {
         return Some(run_direct(svc, channels, cmd, args));
     }
@@ -210,6 +212,11 @@ fn run_direct(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) 
         | "export_last_set" => {
             json(crate::shell::dispatch(s, cmd, args).unwrap_or_else(|| Err(AppError::bad("export_existing"))))
         }
+        // #164 (part 2 of #153): the page previews the payload, this posts exactly that JSON
+        "feedback_send" => json(s.feedback_send(
+            args.get("payload").unwrap_or(&Value::Null),
+            args.get("url").and_then(Value::as_str),
+        )),
         other => Err(AppError::not_found(format!("unknown command {other}"))),
     }
 }

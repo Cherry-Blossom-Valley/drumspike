@@ -12,6 +12,11 @@ function exportArgs(o) {
   return { dest: (o && o.dest) || null, midi_mode: (o && o.midi_mode) || null, tracks: (o && o.tracks) || null, formats: (o && o.formats) || null,
     compensate: o && typeof o.compensate === "boolean" ? o.compensate : null };   // P4-7c: null is the default (on)
 }
+/* #164: the CBV feedback gateway (the owner's design decision on #153: option b, the CBV site
+   backend, part 1 in Cherry-Blossom-Valley/Cbvsite: POST .../feedback of the
+   make-server-91a5b4f8 edge function). One POST per report, no secret in the app. The default
+   of the app setting `feedback_url` (the page passes it, so it can change without a release). */
+const FEEDBACK_URL = "https://pubtzkqxycnqqhmrfnhn.supabase.co/functions/v1/make-server-91a5b4f8/feedback";
 function ipcBackend(T) {
   const invoke = (cmd, args) => T.core.invoke(cmd, args).catch(e => { throw fail(e); });
   const UNSUPPORTED = "This file is not supported. Drum Spike reads WAV files with 44.1, 48 or 96 kHz. " +
@@ -321,7 +326,7 @@ function shellMethods(invoke, T) {
     aboutInfo: async () => {
       if (!bridge()) return invoke("about_info", {});
       const i = await invoke("app_info", {});
-      return { name: "Drum Spike", version: "test bridge", core_version: i.core_version, notice: i.notice };
+      return { name: "Drum Spike", version: "test bridge", build_sha: "test-bridge", core_version: i.core_version, notice: i.notice };
     },
     aboutThirdParty: () => (bridge() ? Promise.resolve("The third-party list is part of the app bundle.") : invoke("about_third_party", {})),
     /* #18: open one of the fixed About addresses by id (src-tauri/src/about.rs, open_link); the page
@@ -329,6 +334,23 @@ function shellMethods(invoke, T) {
     openLink: async id => {
       if (bridge()) { (window.__DS_OPEN_LINK__ = window.__DS_OPEN_LINK__ || []).push(id); return {}; }
       return invoke("open_link", { id });
+    },
+    /* #164: the CBV feedback gateway (part 2 of #153; the route is part 1, Cbvsite). The page previews
+       the exact payload; the bridge answers the command (records it in window.__DS_FEEDBACK__, or fails
+       once with the text of window.__DS_FEEDBACK_FAIL__), the app posts it (crates/app/src/feedback.rs). */
+    feedbackSend: async (payload, url) => {
+      if (bridge()) {
+        (window.__DS_FEEDBACK__ = window.__DS_FEEDBACK__ || []).push(JSON.parse(JSON.stringify(payload)));
+        if (window.__DS_FEEDBACK_FAIL__) {
+          const text = String(window.__DS_FEEDBACK_FAIL__);
+          delete window.__DS_FEEDBACK_FAIL__;
+          const err = new Error(text.replace(/^\d+:\s*/, ""));
+          err.status = parseInt(text, 10) || 500;
+          throw err;
+        }
+        return { ok: true, issue_url: "https://github.com/Cherry-Blossom-Valley/drumspike/issues/1000" };
+      }
+      return invoke("feedback_send", { payload, url: url || FEEDBACK_URL });
     },
     /* native pickers: the path, or null */
     pickDir: async (title, start) => {

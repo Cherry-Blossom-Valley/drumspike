@@ -37,10 +37,12 @@ pub async fn tracks_scan(
 /// cannot start. An error also comes from adding an accepted file as a track (for example a bad
 /// track name). A file that cannot be probed or copied is reported as rejected, not as an error.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn tracks_add(
     svc: State<'_, Service>,
     sid: String,
     paths: Vec<String>,
+    tracks: Option<Vec<String>>,
     roles: Option<Vec<Value>>,
     notes: Option<Vec<Value>>,
     copy: Option<bool>,
@@ -53,6 +55,7 @@ pub async fn tracks_add(
         s.tracks_add(
             &sid,
             &paths,
+            tracks.as_deref(),
             &roles.unwrap_or_default(),
             &notes.unwrap_or_default(),
             copy.unwrap_or(false),
