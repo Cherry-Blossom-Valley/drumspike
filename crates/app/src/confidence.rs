@@ -80,12 +80,14 @@ pub const WIN_AFTER: usize = 5;
 
 /// The margin of an activation over the threshold of its class: 0 at or under the threshold, 1 at
 /// [`MARGIN_FULL`] or more over it, linear between.
+#[must_use]
 pub fn margin_factor(strength: f64, threshold: f64) -> f64 {
     ((strength - threshold) / MARGIN_FULL).clamp(0.0, 1.0)
 }
 
 /// The level of a hit against the track median: 1 at the median or louder, 0 at [`LEVEL_SPAN_DB`]
 /// or more under it, linear between.
+#[must_use]
 pub fn level_factor(level_db: f64, median_db: f64) -> f64 {
     (1.0 + (level_db - median_db) / LEVEL_SPAN_DB).clamp(0.0, 1.0)
 }
@@ -107,6 +109,7 @@ pub fn median(v: &[f64]) -> Option<f64> {
 
 /// The cap and the reason of a hit that a rule added under the model threshold, `None` for an
 /// untagged hit. The lowest cap wins when a hit has more than one tag.
+#[must_use]
 pub fn tag_cap(e: &Value) -> Option<(f64, &'static str)> {
     const TAGS: [(&str, f64, &str); 5] = [
         ("rescue", 0.3, "kick rescue (no model hit)"),
@@ -137,6 +140,7 @@ pub fn is_edited(e: &Value) -> bool {
 
 /// True for a hit that is not in the output (the loudness cut, the bleed rule, the Learn filter).
 /// R16 (#40): the one predicate is [`crate::policy::is_out`].
+#[must_use]
 pub fn is_out(e: &Value) -> bool {
     crate::policy::is_out(e)
 }
@@ -150,6 +154,7 @@ pub fn is_out(e: &Value) -> bool {
 /// # Panics
 ///
 /// Panics (slice indexing of `act`) when a class in `classes` is not below [`N_CLASSES`].
+#[must_use]
 pub fn hit_strength(act: &[f32], classes: &[usize], t: f64) -> Option<(f64, usize)> {
     let frames = act.len() / N_CLASSES;
     let f = (t * peaks::FPS).round().max(0.0) as usize;
@@ -183,6 +188,7 @@ pub struct Margin {
 /// level, `median_db` the track median (`None`: no level factor), `margin` the model margin
 /// (`None`: no kept activations), `gate` the verdict of the hit's candidate (`None`: no current
 /// candidate list, or no candidate of the hit in it).
+#[must_use]
 pub fn rate(e: &Value, level_db: f64, median_db: Option<f64>, margin: Option<Margin>, gate: Option<Gate>) -> Value {
     let r2 = |x: f64| (x * 1000.0).round() / 1000.0;
     if is_edited(e) {
@@ -319,6 +325,7 @@ fn hit_gates(st: &crate::histogram::TrackState, times: &[f64], shift_s: f64) -> 
 }
 
 /// The commands of this module for the one dispatcher ([`crate::call`]); `None` for another command.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !CONFIDENCE_COMMANDS.contains(&cmd) {
         return None;

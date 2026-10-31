@@ -83,6 +83,7 @@ impl Sampler {
     }
 
     /// The JSON object of the sampler.
+    #[must_use]
     pub fn to_json(&self) -> Value {
         json!({
             "offset_samples": self.offset_samples,
@@ -95,16 +96,19 @@ impl Sampler {
     }
 
     /// `normal`, `inverted` or `None`.
+    #[must_use]
     pub fn polarity_name(&self) -> Option<&'static str> {
         self.polarity.map(|s| if s < 0 { "inverted" } else { "normal" })
     }
 
     /// The offset in samples of a track at `sr`.
+    #[must_use]
     pub fn offset_at(&self, sr: u32) -> f64 {
         self.offset_samples * f64::from(sr) / f64::from(self.sr)
     }
 
     /// The offset in milliseconds.
+    #[must_use]
     pub fn offset_ms(&self) -> f64 {
         self.offset_samples / f64::from(self.sr) * 1000.0
     }
@@ -143,12 +147,14 @@ pub struct ShiftInfo {
 
 impl ShiftInfo {
     /// The JSON of the answer.
+    #[must_use]
     pub fn to_json(&self) -> Value {
         json!({"offset_ms": (self.offset_ms * 1e3).round() / 1e3, "aligned": self.aligned,
                "notes": self.notes, "clamped": self.clamped})
     }
 
     /// The warning text of a track with clamped notes.
+    #[must_use]
     pub fn warning(&self, name: &str) -> Option<String> {
         (self.clamped > 0).then(|| {
             format!(
@@ -427,6 +433,7 @@ fn get_json(s: Option<&Sampler>) -> Value {
 
 /// Run a command of the sampler for the bridge, the command line and the MCP server; `None` when `cmd`
 /// is not one of them.
+#[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !SAMPLER_COMMANDS.contains(&cmd) {
         return None;

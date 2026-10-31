@@ -92,6 +92,7 @@ pub struct CacheTile {
 }
 
 /// Encode `peaks.bin` for a track of `n_samples` samples at `sr`.
+#[must_use]
 pub fn encode_peaks_bin(sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) -> Vec<u8> {
     let total: usize = levels.iter().map(|(_, l)| l.n * 3 * 4).sum();
     let mut out = Vec::with_capacity(FIXED_HEADER + levels.len() * 8 + total);
@@ -248,16 +249,19 @@ impl PeakCache {
     }
 
     /// Sample rate of the track.
+    #[must_use]
     pub fn sr(&self) -> u32 {
         self.sr
     }
 
     /// Sample count of the track.
+    #[must_use]
     pub fn n_samples(&self) -> u64 {
         self.n_samples
     }
 
     /// Block size and bin count of every level, in file order.
+    #[must_use]
     pub fn levels(&self) -> &[LevelInfo] {
         &self.levels
     }
@@ -319,6 +323,7 @@ impl PeakCache {
 }
 
 /// True when `dir` holds a `peaks.bin` and a `key.json` equal to `key`.
+#[must_use]
 pub fn cache_is_current(dir: &Path, key: &CacheKey) -> bool {
     dir.join(PEAKS_BIN).is_file() && key.matches_file(dir)
 }

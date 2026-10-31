@@ -43,6 +43,7 @@ pub const EXPORT_WORKERS: usize = 6;
 
 /// The WAV sample format a spike file takes from its source: the same container width, float
 /// stays float.
+#[must_use]
 pub fn spike_format(format: SampleFormat, bytes_per_sample: usize) -> WavFormat {
     match (format, bytes_per_sample) {
         (SampleFormat::Float, _) => WavFormat::Float32,
@@ -53,6 +54,7 @@ pub fn spike_format(format: SampleFormat, bytes_per_sample: usize) -> WavFormat 
 }
 
 /// The name of a [`WavFormat`] as `drumspike_core.write_spike_wav` takes it.
+#[must_use]
 pub fn format_name(f: WavFormat) -> &'static str {
     match f {
         WavFormat::Pcm16 => "pcm16",
@@ -65,11 +67,13 @@ pub fn format_name(f: WavFormat) -> &'static str {
 /// P4-3: an event taken out of the output: the loudness cut (`"cut": true`; `histogram::mark_cut`), the tom bleed
 /// rule (`"bleed": true`; [`crate::tom_bleed`]) or a hit the old Learn filter had taken out (`"filtered"`, #281 D16).
 /// R16 (#40): the one predicate is [`crate::policy::is_out`]; this wrapper keeps the export name.
+#[must_use]
 pub fn is_cut(e: &Value) -> bool {
     crate::policy::is_out(e)
 }
 
 /// P4-3: the events that go into the output (MIDI, spikes, clicks): every event without the cut or bleed mark.
+#[must_use]
 pub fn uncut(events: &[Value]) -> Vec<Value> {
     events.iter().filter(|e| !is_cut(e)).cloned().collect()
 }
@@ -111,12 +115,14 @@ pub(crate) fn midi_events(events: &[Value]) -> Result<Vec<MidiEvent>, AppError> 
 /// P4-4: the number of hits that have no sample in a file of `n_samples` at `sr`: `round(t * sr)`
 /// before the first or after the last sample. The spike file cannot hold them; the MIDI file
 /// keeps them (a hit at or before 0 s is a note at 0 s). The answers carry the count as `outside`.
+#[must_use]
 pub fn outside_count(times: &[f64], sr: u32, n_samples: usize) -> usize {
     times.iter().filter(|&&t| hit_index(t, sr, n_samples).is_none()).count()
 }
 
 /// P4-4 fix round: the hits before the first sample (`round(t * sr) < 0`), a part of
 /// [`outside_count`]. The MIDI file moves them to 0 s (the frozen rule of the MIDI export).
+#[must_use]
 pub fn before_count(times: &[f64], sr: u32) -> usize {
     times
         .iter()
@@ -146,6 +152,7 @@ pub(crate) fn audio_length(op: &crate::registry::Shared, name: &str) -> Option<(
 /// P4-4: the key under which a disk that ignores case and normalisation (APFS by default) sees a
 /// file name: the canonical caseless form NFD(casefold(NFD(name))) of Unicode (full case
 /// folding: `Straße` and `STRASSE`, `ΟΔΟΣ` and `οδος`; NFD: a precomposed and a decomposed `Ü`).
+#[must_use]
 pub fn file_name_key(name: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
     let folded = caseless::default_case_fold_str(&name.nfd().collect::<String>());
@@ -154,6 +161,7 @@ pub fn file_name_key(name: &str) -> String {
 
 /// P4-4: true when two track names are one file name on such a disk ([`file_name_key`]): `Kick`
 /// and `kick` share the export files and the `Analysis/` folder.
+#[must_use]
 pub fn same_file_name(a: &str, b: &str) -> bool {
     file_name_key(a) == file_name_key(b)
 }
@@ -279,6 +287,7 @@ pub fn doc_export_markers_on(doc: &drumspike_core::Document) -> bool {
 /// The review markers of `doc` for the multi-track MIDI file (P4-40g): the entries with a numeric
 /// `t`, sorted by time (stable), the note carried as it is; `multi_midi_bytes` writes the text or
 /// the `Marker N` fallback.
+#[must_use]
 pub fn doc_export_markers(doc: &drumspike_core::Document) -> Vec<(f64, Option<String>)> {
     let mut ms: Vec<(f64, Option<String>)> = crate::markers::doc_markers(doc)
         .iter()
@@ -464,6 +473,7 @@ pub fn export_dir(g: &OpenProject, dest: Option<&str>) -> Result<PathBuf, AppErr
 
 /// P4-30: the file name of the multi-track MIDI file of a project: `<name>_drums.mid` with the characters a file
 /// name cannot hold replaced by `-`.
+#[must_use]
 pub fn multi_file_name(project_name: &str) -> String {
     let n: String = project_name
         .chars()

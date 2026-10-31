@@ -75,6 +75,7 @@ impl Role {
     pub const ALL: [Role; 6] = [Role::Kick, Role::Snare, Role::Tom, Role::Hat, Role::Cymbal, Role::Other];
 
     /// Parse the app's role name (`kick`, `snare`, `tom`, `hat`, `cymbal`, `other`).
+    #[must_use]
     pub fn parse(s: &str) -> Option<Role> {
         match s {
             "kick" => Some(Role::Kick),
@@ -88,6 +89,7 @@ impl Role {
     }
 
     /// The app's name of the role.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Role::Kick => "kick",
@@ -191,6 +193,7 @@ fn env_f32(name: &str) -> Option<f32> {
 
 impl OnsetParams {
     /// The generic parameters (role `other`): every band, no level gate.
+    #[must_use]
     pub fn generic() -> OnsetParams {
         OnsetParams {
             band_lo_hz: 20.0,
@@ -220,6 +223,7 @@ impl OnsetParams {
     /// Tuned parameters for a role (see `docs/archive/phase2-report.md`, P2-5): tuned
     /// for the F-measure within 1 frame against the R3 onsets of the role's class on the
     /// close-mic tracks of three sessions; the kick values also pass the synthetic corpus.
+    #[must_use]
     pub fn for_role(role: Role) -> OnsetParams {
         let g = OnsetParams::generic();
         let mut p = match role {
@@ -435,6 +439,7 @@ impl From<ResampleError> for OnsetError {
 }
 
 /// Indices of the bands whose centre lies in `[lo_hz, hi_hz]`.
+#[must_use]
 pub fn band_range(lo_hz: f64, hi_hz: f64) -> std::ops::Range<usize> {
     let c = band_centres_hz(Chain::Cli);
     let lo = c.iter().position(|&f| f >= lo_hz).unwrap_or(N_BANDS);
@@ -445,6 +450,7 @@ pub fn band_range(lo_hz: f64, hi_hz: f64) -> std::ops::Range<usize> {
 /// `SuperFlux` onset function of a `(frames, 84)` log spectrogram over the bands `bands`:
 /// the positive differences to the 3-band maximum filter of the previous frame, summed.
 /// The frame before frame 0 is silence.
+#[must_use]
 pub fn superflux(spec: &[f32], bands: std::ops::Range<usize>) -> Vec<f32> {
     let frames = spec.len() / N_BANDS;
     let mut flux = vec![0f32; frames];
@@ -474,6 +480,7 @@ pub fn superflux(spec: &[f32], bands: std::ops::Range<usize>) -> Vec<f32> {
 /// #281 A5 delta-rule version (env `DRUMSPIKE_DELTA_RULE`; unset counts as 1, the A5
 /// product default; `0` pins the shipped absolute `delta` for the frozen references).
 /// Version 1: [`gained_spec`].
+#[must_use]
 pub fn delta_rule() -> u32 {
     match std::env::var("DRUMSPIKE_DELTA_RULE") {
         Ok(v) => v.parse().unwrap_or(1),
@@ -547,6 +554,7 @@ fn s_ref(role: Role) -> f32 {
 /// the bleed, not the drum - the a5 round 1 measurement: lowering the tom delta admits
 /// the bleed peaks and costs 35 to 86 milli-F1) means: run the shipped detector
 /// unchanged.
+#[must_use]
 pub fn gained_spec(spec: &[f32], bands: &std::ops::Range<usize>, role: Role) -> Option<Vec<f32>> {
     if matches!(role, Role::Kick | Role::Tom | Role::Cymbal) {
         return None;
@@ -617,6 +625,7 @@ fn quantile(v: &[f32], q: f32) -> Option<f32> {
 /// second-difference envelope over its median in the 10 ms before (excluding the last
 /// 1 ms), searched from 10 ms before to 20 ms after the frame centre. The second
 /// difference weights a sharp transient far above a low tone or a slow swell.
+#[must_use]
 pub fn attack_db(x44: &[f32], i: usize) -> f32 {
     const WIN: usize = 22;
     let n = x44.len();
@@ -697,6 +706,7 @@ fn moving_median(v: &[f32], pre: usize, post: usize) -> Vec<f32> {
 /// `odf[i] >= median(odf[i - pre_avg ..= i + post_avg]) + delta` that are also the maximum
 /// of the thresholded function over `[i - pre_max, i + post_max]` (zeros outside the
 /// track, scipy `mode='constant'`). Returns ascending frame indices.
+#[must_use]
 pub fn pick_peaks(
     odf: &[f32],
     delta: f32,
@@ -761,6 +771,7 @@ fn spectral_shape(spec: &[f32], i: usize, bands: &std::ops::Range<usize>) -> Vec
 /// peak indices whose candidates coincide with a louder confirmed hit on another track. They take no
 /// part in the loud-hit template — a tom track whose loudest candidates are bleed must not learn the
 /// bleed as its template — but are judged like every other candidate.
+#[must_use]
 pub fn onsets_with_candidates_excluding(
     spec: &[f32],
     x44: &[f32],
@@ -774,6 +785,7 @@ pub fn onsets_with_candidates_excluding(
 /// indices whose candidates coincide with a kick or tom hit within 30 ms (the busy clearance).
 /// Those candidates cannot pass the soft gate ([`Gate::Soft`]); they are judged like every
 /// other candidate otherwise and carry [`Candidate::soft_busy`].
+#[must_use]
 pub fn onsets_with_candidates_soft_excluding(
     spec: &[f32],
     x44: &[f32],
@@ -790,6 +802,7 @@ pub fn onsets_with_candidates_soft_excluding(
 /// gap; the hits are exactly the candidates that [`Candidate::kept`] at the scale 1.0 of
 /// [`repick_candidates`], min-gapped. The third return is the weak-flux limit
 /// (`p.weak_ratio * template median`), which the store keeps for the re-pick.
+#[must_use]
 pub fn onsets_with_candidates(spec: &[f32], x44: &[f32], p: &OnsetParams) -> (Vec<OnsetHit>, Vec<Candidate>, f32) {
     onsets_with_candidates_inner(spec, x44, p, &[], &[])
 }
@@ -1006,6 +1019,7 @@ fn onsets_with_candidates_inner(
 /// hits' times in seconds (the kick and tom tracks' events). The engine re-detects the
 /// snare with these peaks excluded ([`detect_onsets_and_cands_soft_excluding`]); the
 /// re-pick honors the stored [`Candidate::soft_busy`] flag.
+#[must_use]
 pub fn soft_busy_peaks(cands: &[Candidate], p: &OnsetParams, busy: &[f64], clear_ms: f64) -> Vec<usize> {
     if p.soft_sim.is_none() && p.soft_t2.is_none() {
         return Vec::new();
@@ -1039,6 +1053,7 @@ pub struct OverheadSource<'a> {
 /// separate; the common-band form cuts 123 of 142 model-absent false hits and denies none
 /// of the ghosts). No oh hit is required at the time: the hat and cymbal bleed moments are
 /// often below the cymbal detector's gate, and the level test is a property of the audio.
+#[must_use]
 pub fn soft_overhead_peaks(
     cands: &[Candidate],
     p: &OnsetParams,
@@ -1088,6 +1103,7 @@ pub fn soft_overhead_peaks(
 /// stored measurements; the minimum gap is not applied here (the analysis applies it).
 /// `weak_limit` is the detection's weak-flux limit (`p.weak_ratio * template median`,
 /// as [`onsets_with_candidates`] computed it).
+#[must_use]
 pub fn repick_candidates(cands: &[Candidate], p: &OnsetParams, weak_limit: f32, scale: f32) -> Vec<usize> {
     let gate_db = p.gate_db.map(|g| g / scale);
     let sim_gate_db = p.sim_gate_db / scale;
@@ -1118,6 +1134,7 @@ pub fn repick_candidates(cands: &[Candidate], p: &OnsetParams, weak_limit: f32, 
 }
 
 /// Onsets of a 44.1 kHz signal and its log spectrogram with explicit parameters.
+#[must_use]
 pub fn onsets_from_spectrogram(spec: &[f32], x44: &[f32], p: &OnsetParams) -> Vec<OnsetHit> {
     onsets_with_candidates(spec, x44, p).0
 }

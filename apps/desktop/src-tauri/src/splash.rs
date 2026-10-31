@@ -35,6 +35,7 @@ pub enum Due {
 /// reported its first painted frame and `paint_elapsed_ms` counts from that frame; `elapsed_ms`
 /// counts from the opening of the splash. Without a paint report (a page that never painted) the
 /// minimum falls back to the clock of the opening, as before #441.
+#[must_use]
 pub fn due(page_ready: bool, painted: bool, paint_elapsed_ms: u64, elapsed_ms: u64) -> Due {
     if elapsed_ms >= MAX_MS {
         Due::Timeout
@@ -46,6 +47,7 @@ pub fn due(page_ready: bool, painted: bool, paint_elapsed_ms: u64, elapsed_ms: u
 }
 
 /// The status line for a command of the page, with its stage (a status never goes back to an earlier stage).
+#[must_use]
 pub fn status_for_command(cmd: &str) -> Option<(u8, &'static str)> {
     match cmd {
         "project_list" | "project_open" => Some((3, "Opening the project\u{2026}")),
@@ -236,6 +238,7 @@ fn finish<R: Runtime>(app: &AppHandle<R>, reason: &'static str) {
 /// The page says that its first layout is finished and drawn: the main window may be shown. The splash
 /// closes with it, at the earliest [`MIN_MS`] after its first painted frame.
 #[tauri::command]
+#[must_use]
 pub fn app_ready(app: AppHandle) -> Value {
     let visible = app
         .get_webview_window("main")
@@ -260,6 +263,7 @@ pub fn app_ready(app: AppHandle) -> Value {
 /// #441: the splash page reports its first painted frame. The 5 s minimum counts from here.
 /// The first call wins; later ones change nothing.
 #[tauri::command]
+#[must_use]
 pub fn splash_painted(app: AppHandle) -> Value {
     let Some(state) = app.try_state::<SplashState>() else {
         return json!({"ok": false});
@@ -277,6 +281,7 @@ pub fn splash_painted(app: AppHandle) -> Value {
 /// #441: a click or any key on the splash dismisses it early: the main window is shown and the
 /// splash closes at once. The report says `reason: "dismissed"`.
 #[tauri::command]
+#[must_use]
 pub fn splash_dismiss(app: AppHandle) -> Value {
     let Some(state) = app.try_state::<SplashState>() else {
         return json!({"ok": false});
@@ -309,6 +314,7 @@ pub fn report(i: &SplashState) -> Value {
 
 #[cfg(debug_assertions)]
 #[tauri::command]
+#[must_use]
 pub fn splash_report(app: AppHandle) -> Value {
     let main_visible = app
         .get_webview_window("main")

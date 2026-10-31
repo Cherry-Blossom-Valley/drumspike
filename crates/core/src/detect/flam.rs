@@ -89,6 +89,7 @@ impl Default for FlamParams {
 
 /// The roles the rule of `version` runs on. Version 1: the snare (P4-13 stage A measured kick and toms: no stroke
 /// test for them).
+#[must_use]
 pub fn applies(version: u32, role: &str) -> bool {
     version >= 1 && role == "snare"
 }
@@ -126,12 +127,14 @@ fn blocks(s: f64) -> i64 {
 }
 
 /// The block length in samples at rate `sr`: `max(1, int(round(HOP_S * sr)))`.
+#[must_use]
 pub fn hop_of(sr: u32) -> usize {
     py_round(HOP_S * f64::from(sr)).max(1) as usize
 }
 
 /// `x` through the biquad `stages` [(kind, corner Hz)], each twice forward and twice backward: zero phase, the power
 /// response `|H|^4` per stage (`tools/onset_guard.py` `zero_phase`). The backward passes start 0.25 s after the end.
+#[must_use]
 pub fn zero_phase(x: &[f32], sr: u32, stages: &[(FilterKind, f64)]) -> Vec<f64> {
     let n = x.len();
     if stages.is_empty() {
@@ -166,6 +169,7 @@ pub fn zero_phase(x: &[f32], sr: u32, stages: &[(FilterKind, f64)]) -> Vec<f64> 
 
 /// The attack envelope of `x` on the block grid: the maximum of `|high-pass(x)|` per block of [`hop_of`] samples, held
 /// over `hold_s` (the block and the ones before it). Returns the envelope and the block length in samples.
+#[must_use]
 pub fn attack_env(x: &[f32], sr: u32, p: &FlamParams) -> (Vec<f64>, usize) {
     let y = if p.hp_hz != 0.0 {
         zero_phase(x, sr, &[(FilterKind::HighPass, p.hp_hz)])
@@ -211,6 +215,7 @@ fn late_ratios(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamParams) -
 
 /// The late peak `A` of a mic: the median over `hits` of the [`late_ratios`] in dB (`tools/flam_pairs.py`
 /// `late_peak_db`); `None` without a value.
+#[must_use]
 pub fn late_peak_db(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamParams) -> Option<f64> {
     let v: Vec<f64> = late_ratios(env, hits, sr, hop, p)
         .iter()
@@ -221,6 +226,7 @@ pub fn late_peak_db(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamPara
 
 /// The late share `W` of a mic: the share of the same hits whose late peak beats the first (ratio over 1);
 /// `None` without a value (`tools/flam_pairs.py` `late_share`).
+#[must_use]
 pub fn late_share(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamParams) -> Option<f64> {
     let v = late_ratios(env, hits, sr, hop, p);
     (!v.is_empty()).then(|| v.iter().filter(|&&r| r > 1.0).count() as f64 / v.len() as f64)
@@ -228,6 +234,7 @@ pub fn late_share(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamParams
 
 /// True for a late-peaking mic (a snare bottom): the late peak `A` is [`LATE_PEAK_MAX_DB`] or more AND the share `W`
 /// is [`LATE_SHARE_MIN`] or more. `A` alone measures the decay: a ringy undamped top mic has `A` over -3 dB and `W` near 0.
+#[must_use]
 pub fn late_peaking(late_db: Option<f64>, share: Option<f64>) -> bool {
     late_db.is_some_and(|v| v >= LATE_PEAK_MAX_DB) && share.is_some_and(|w| w >= LATE_SHARE_MIN)
 }
@@ -290,6 +297,7 @@ fn max_of(v: &[f64]) -> f64 {
 
 /// The strong hits of a mic B (`tools/onset_guard.py` `strong_peaks`): per block of 50 ms of its envelope (`rate`
 /// blocks per second) the largest block, kept when within 15 dB of the 99.5th percentile of those maxima.
+#[must_use]
 pub fn strong_peaks(env: &[f64], rate: f64) -> Vec<usize> {
     let b = py_int(0.050 * rate).max(1) as usize;
     let nb = env.len() / b;
@@ -315,6 +323,7 @@ pub fn strong_peaks(env: &[f64], rate: f64) -> Vec<usize> {
 /// `G(B->A)` in dB (`tools/onset_guard.py` `calibrate_gain`, P2-6): at B's strong blocks `peaks` the level of A's
 /// envelope minus B's in `[-0.5, +8)` ms; the 10th percentile over those where A has no own hit (`own`, sorted
 /// seconds) within 30 ms when there are 5 of them, else over all; `None` with fewer than 5.
+#[must_use]
 pub fn calibrate(env_a: &[f64], env_b: &[f64], peaks: &[usize], own: &[f64], rate: f64) -> Option<f64> {
     const MIN_HITS: usize = 5;
     if peaks.len() < MIN_HITS {
@@ -488,6 +497,7 @@ pub fn flam_split(
 }
 
 /// The times of the strokes the rule adds: those the bleed gate leaves.
+#[must_use]
 pub fn added(found: &[Second]) -> Vec<f64> {
     found.iter().filter(|s| !s.bleed).map(|s| s.t).collect()
 }

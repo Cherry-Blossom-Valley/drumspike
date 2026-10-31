@@ -43,6 +43,7 @@ const RECORD_V1: usize = 8 + 8 + 4 + 4 + 4 + 4 + 1 + 1;
 /// The key of the candidates of a source, so a relinked source, another downmix, another
 /// build or host makes the file stale. The model data of an old analysis is dropped: main
 /// is model-free (#281 D16), so the DSP candidates are current whatever an old record says.
+#[must_use]
 pub fn candidates_key(source: &CacheKey, mix: &str, _model: &Value) -> Value {
     json!({
         "source": source,
@@ -118,6 +119,7 @@ fn byte_gate(b: u8) -> Option<Gate> {
 
 /// The stored record of `dir` without a key check (the rule re-writes it with the same key):
 /// the detection's parameters and the weak-flux limit, and the key itself.
+#[must_use]
 pub fn read_candidates_meta(dir: &Path) -> Option<(OnsetParams, f32, Value)> {
     let meta: Value = serde_json::from_str(&fs::read_to_string(dir.join(CANDIDATES_KEY)).ok()?).ok()?;
     let params: OnsetParams = serde_json::from_value(meta.get("params")?.clone()).ok()?;
@@ -133,6 +135,7 @@ pub fn read_candidates_meta(dir: &Path) -> Option<(OnsetParams, f32, Value)> {
 /// Panics (slice indexing, `expect` on fixed-size `try_into`) only if a record lies outside the file; the
 /// check that the file length equals header plus `n` records of the version's size rules that out for any
 /// file content.
+#[must_use]
 pub fn read_candidates(dir: &Path, key: &Value) -> Option<(Vec<Candidate>, OnsetParams, f32)> {
     let meta: Value = serde_json::from_str(&fs::read_to_string(dir.join(CANDIDATES_KEY)).ok()?).ok()?;
     if meta.get("key")? != key {

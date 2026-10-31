@@ -308,6 +308,7 @@ impl Default for TransportHost {
 impl TransportHost {
     /// A host with no transport. The output comes from `DRUMSPIKE_AUDIO`, the master gain
     /// from `DRUMSPIKE_MASTER_GAIN`.
+    #[must_use]
     pub fn new() -> TransportHost {
         TransportHost {
             st: Arc::new(Mutex::new(HostState {
@@ -1028,6 +1029,7 @@ impl Service {
     /// `transport_stop`: pause; the position stays. With `close` the transport is released
     /// too (its files and threads). Answers `{open, playing: false, frame, rate, pos, epoch}`;
     /// `pos` is the position at which the callback stopped.
+    #[must_use]
     pub fn transport_stop(&self, close: bool) -> Value {
         let host = self.host();
         {
@@ -1410,6 +1412,7 @@ impl Service {
     /// `current` the device the open transport plays on (`null` when none is open), `note` why
     /// it does not (or, with no open transport, will not) play on the choice. The `CoreAudio` query
     /// runs without the host lock.
+    #[must_use]
     pub fn outputs_list(&self) -> Value {
         self.load_audio_settings();
         let (output, test_list) = {
@@ -1496,6 +1499,7 @@ impl Service {
 }
 
 /// Whether the watcher thread is active (tests).
+#[must_use]
 pub fn watcher_active(svc: &Service) -> bool {
     lock(&svc.host().st).watcher_started
 }

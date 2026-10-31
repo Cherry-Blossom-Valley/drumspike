@@ -23,7 +23,7 @@ unwrap_used = "allow" # 4992: 1282/3582/127/1 (warn once burned down; clippy.tom
 # lib + bins + tests, all targets). The burn-down removes one allow at a time; a lint at 0 is deleted here.
 cast_possible_truncation = "allow" # 804: 594/171/33/6
 cast_precision_loss = "allow" # 609: 447/144/17/1
-must_use_candidate = "allow" # 530: 289/199/0/42
+cast_lossless = "allow" # 493: 400/88/5/0
 many_single_char_names = "allow" # 447: 363/58/26/0
 cast_sign_loss = "allow" # 444: 356/78/10/0
 cast_possible_wrap = "allow" # 226: 200/20/6/0

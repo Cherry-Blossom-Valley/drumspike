@@ -67,6 +67,7 @@ pub const COMMANDS: [&str; 16] = [
 
 /// The answer of `app_info`: core version, detector and chain (main is model-free, #281 D16:
 /// the DSP detector is the only path). The arguments are the legacy signature; both are ignored.
+#[must_use]
 pub fn app_info_value(_dir: &Path, _load: bool) -> Value {
     json!({
         "core_version": drumspike_core::VERSION,
@@ -87,6 +88,7 @@ pub enum ListShape {
 
 impl ListShape {
     /// `ids` gives [`ListShape::Ids`]; anything else, or nothing, [`ListShape::Sessions`].
+    #[must_use]
     pub fn parse(s: Option<&str>) -> ListShape {
         if s == Some("ids") {
             ListShape::Ids
@@ -105,6 +107,7 @@ fn push_f32(out: &mut Vec<u8>, v: &[f32]) {
 }
 
 /// The bytes of a peak tile (layout in the module docs).
+#[must_use]
 pub fn tile_bytes(t: &CacheTile) -> Vec<u8> {
     let n = t.min.len();
     let mut out = Vec::with_capacity(12 + 12 * n);
@@ -135,6 +138,7 @@ impl Service {
     }
 
     /// `app_info`.
+    #[must_use]
     pub fn app_info(&self) -> Value {
         self.app_info_value()
     }
@@ -204,6 +208,7 @@ impl Service {
     }
 
     /// `GET /api/sessions` or `GET /api/project`: the open projects.
+    #[must_use]
     pub fn project_list(&self, shape: ListShape) -> Value {
         let mut rows: Vec<(f64, Value)> = Vec::new();
         for (sid, op) in self.inner.registry.all() {
@@ -463,6 +468,7 @@ impl Service {
     }
 
     /// `GET /api/job/{sid}`: `{state, tracks: {name: {state, stage?, n_events, detector, ...}}}`.
+    #[must_use]
     pub fn analyze_status(&self, sid: &str) -> Value {
         self.inner.jobs.status(sid)
     }

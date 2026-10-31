@@ -14,12 +14,14 @@ use crate::{Service, ServiceConfig, cli, mcp};
 pub const TOOL_NAME: &str = "drumspike";
 
 /// The app's data folder, as Tauri's `app_data_dir` names it (the identifier of `tauri.conf.json`).
+#[must_use]
 pub fn default_home() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
     cfg!(target_os = "macos").then(|| PathBuf::from(home).join("Library/Application Support/com.cbv.drumspike"))
 }
 
 /// A service for an agent mode.
+#[must_use]
 pub fn service(models_dir: &Path, client: &str) -> Service {
     let svc = Service::new(ServiceConfig::from_env(models_dir));
     svc.set_lock_client(client);

@@ -38,6 +38,7 @@ use crate::{Service, ServiceConfig};
 pub const GHOST_GATE: u32 = 1;
 
 /// The version of a new analysis: the configuration's pin, else [`GHOST_GATE`].
+#[must_use]
 pub fn analysis_ghost_gate(cfg: &ServiceConfig) -> u32 {
     cfg.ghost_gate.unwrap_or(GHOST_GATE)
 }

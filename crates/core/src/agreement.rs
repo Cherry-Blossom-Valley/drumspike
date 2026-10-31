@@ -248,6 +248,7 @@ fn xcorr_lag(x: &[f32], base: i64, span: i64, tpl: &[f64]) -> Option<(i64, f64, 
 ///
 /// Never in practice: the `unwrap` calls on the `min` and `max` of the per-hit estimates run
 /// only when at least two estimates exist, so the iterator is never empty.
+#[must_use]
 pub fn agreement_track(x: &[f32], sr: u32, hits: &[f64]) -> Vec<Agreement> {
     let srf = f64::from(sr);
     let tpl = template(x, sr, hits);

@@ -91,6 +91,7 @@ impl Bext {
     /// time (338 bytes), the minimum `project.bext_origination` accepts. A chunk of 338 to
     /// 345 bytes has no time reference and reads 0; a chunk without the version field
     /// reads version 0.
+    #[must_use]
     pub fn parse(c: &[u8]) -> Option<Bext> {
         if c.len() < BEXT_TIME_REFERENCE {
             return None;
@@ -123,6 +124,7 @@ impl Bext {
 
     /// `"<date>T<time>Z"` as `project.bext_origination` writes it into a source record;
     /// `None` when the date is empty.
+    #[must_use]
     pub fn origination(&self) -> Option<String> {
         if self.origination_date.is_empty() {
             None
@@ -330,6 +332,7 @@ impl WavInfo {
     }
 
     /// The `bext` `TimeReference` (first sample's position since midnight, in samples).
+    #[must_use]
     pub fn time_reference(&self) -> Option<u64> {
         self.bext.as_ref().map(|b| b.time_reference)
     }
@@ -543,6 +546,7 @@ impl MappedWav {
         Ok(MappedWav { info, mmap })
     }
     /// The whole file as bytes.
+    #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.mmap
     }

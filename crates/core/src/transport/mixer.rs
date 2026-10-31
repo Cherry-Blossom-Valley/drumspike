@@ -55,6 +55,7 @@ pub const MIN_DB: f32 = -120.0;
 
 /// Volume in dB to a linear gain: 0 dB is exactly 1.0, [`MIN_DB`] and below (and NaN) is 0.0,
 /// above [`MAX_DB`] is the gain of [`MAX_DB`].
+#[must_use]
 pub fn db_to_gain(db: f32) -> f32 {
     if db.is_nan() || db <= MIN_DB {
         return 0.0;
@@ -67,6 +68,7 @@ pub fn db_to_gain(db: f32) -> f32 {
 /// `theta = (pan + 1) * pi / 4`, left `sqrt(2) cos theta`, right `sqrt(2) sin theta`. The centre is
 /// exactly (1.0, 1.0); a hard pan gives +3 dB on its side and 0.0 on the other. A value outside
 /// -1 to +1 is clamped; NaN is the centre.
+#[must_use]
 pub fn pan_gains(pan: f32) -> (f32, f32) {
     if pan.is_nan() || pan == 0.0 {
         return (1.0, 1.0);
@@ -86,6 +88,7 @@ pub fn pan_gains(pan: f32) -> (f32, f32) {
 
 /// The left and right gain of a track at `volume_db` and `pan` ([`db_to_gain`] times
 /// [`pan_gains`]); 0 dB at the centre is exactly (1.0, 1.0).
+#[must_use]
 pub fn channel_gains(volume_db: f32, pan: f32) -> (f32, f32) {
     let g = db_to_gain(volume_db);
     let (l, r) = pan_gains(pan);
@@ -106,6 +109,7 @@ fn store_peak(a: &std::sync::atomic::AtomicU32, v: f32) {
 
 /// Mute and solo to per-track gains (`audible()` in `app.js`): with any solo, the soloed
 /// tracks play; otherwise every track that is not muted plays. Missing entries are false.
+#[must_use]
 pub fn audible_gains(n: usize, mute: &[bool], solo: &[bool]) -> Vec<f32> {
     let any_solo = solo.iter().take(n).any(|s| *s);
     (0..n)

@@ -229,7 +229,7 @@ fn project_save_as_copy_cancel_removes_every_file_and_leaves_the_project_as_it_w
     let p: Progress = Arc::new(move |v: Value| {
         sink(v.clone());
         if v["copy"]["done"] == 3 {
-            s2.job_cancel(&sid2);
+            let _ = s2.job_cancel(&sid2);
         }
     });
     svc.project_save_as(&sid, Some("Song Copy"), Some(out.to_str().unwrap()), true, Some(p))
@@ -443,7 +443,7 @@ fn project_consolidate_cancel_removes_the_copied_files_and_changes_no_record() {
     let p: Progress = Arc::new(move |v: Value| {
         sink(v.clone());
         if v["copy"]["done"] == 4 {
-            s2.job_cancel(&sid2);
+            let _ = s2.job_cancel(&sid2);
         }
     });
     svc.project_consolidate(&sid, Some(p)).unwrap();
@@ -512,7 +512,7 @@ fn tracks_add_copy_cancel_adds_no_track_and_leaves_no_file() {
     let p: Progress = Arc::new(move |v: Value| {
         sink(v.clone());
         if v["add"]["state"] == "running" && v["add"]["done"] == 4 {
-            s2.job_cancel(&sid2);
+            let _ = s2.job_cancel(&sid2);
         }
     });
     let r = svc.tracks_add(&sid, &paths, &[], &[], true, Some(p)).unwrap();
@@ -891,7 +891,7 @@ fn relink_bench_of_the_generated_session() {
     let (s2, sid2) = (svc.clone(), sid.clone());
     let p: Progress = Arc::new(move |v: Value| {
         if v["copy"]["done"] == 5 {
-            s2.job_cancel(&sid2);
+            let _ = s2.job_cancel(&sid2);
         }
     });
     svc.project_save_as(&sid, Some("Cancelled"), Some(out2.to_str().unwrap()), true, Some(p))

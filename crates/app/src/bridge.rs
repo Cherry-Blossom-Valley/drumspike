@@ -288,6 +288,7 @@ pub struct Bridge {
 use crate::command_policy::{CLOSE_DEFAULT, arg_str, opt_i64, transport_args};
 
 /// The MIME type of a static file, by extension.
+#[must_use]
 pub fn mime_of(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "html" => "text/html; charset=utf-8",
@@ -306,6 +307,7 @@ pub fn mime_of(path: &Path) -> &'static str {
 pub const BRIDGE_FLAG: &str = "<script>window.__DS_BRIDGE__ = true;</script>";
 
 /// `index.html` with [`BRIDGE_FLAG`] right after `<head>`.
+#[must_use]
 pub fn inject_flag(html: &str) -> String {
     match html.find("<head>") {
         Some(i) => format!("{}{}{}", &html[..i + 6], BRIDGE_FLAG, &html[i + 6..]),
@@ -339,6 +341,7 @@ impl Bridge {
     }
 
     /// The event log (for tests and for the long poll of `GET /events`).
+    #[must_use]
     pub fn events(&self) -> &Arc<EventLog> {
         &self.events
     }
@@ -365,6 +368,7 @@ impl Bridge {
     }
 
     /// The channels (for tests and for the long poll).
+    #[must_use]
     pub fn channels(&self) -> &Arc<Channels> {
         &self.channels
     }

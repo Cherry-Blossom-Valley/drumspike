@@ -105,6 +105,7 @@ pub enum Speed {
 
 impl Speed {
     /// Output frames per session frame: 1 at normal speed, 2 at half speed.
+    #[must_use]
     pub fn slowdown(self) -> u32 {
         match self {
             Speed::Normal => 1,
@@ -113,22 +114,26 @@ impl Speed {
     }
 
     /// The speed of a slowdown: 2 is half speed, any other value normal speed.
+    #[must_use]
     pub fn from_slowdown(n: u32) -> Speed {
         if n == 2 { Speed::Half } else { Speed::Normal }
     }
 
     /// The rate the reader resamples the tracks to: `device_rate` times the slowdown.
+    #[must_use]
     pub fn render_rate(self, device_rate: u32) -> u32 {
         device_rate * self.slowdown()
     }
 
     /// Session seconds per second of playback: 1.0 or 0.5 (the value of the app's commands and
     /// messages).
+    #[must_use]
     pub fn rate(self) -> f64 {
         1.0 / f64::from(self.slowdown())
     }
 
     /// The speed of a playback rate of [`Speed::rate`] (1.0 or 0.5); `None` for another value.
+    #[must_use]
     pub fn from_rate(rate: f64) -> Option<Speed> {
         if rate == 1.0 {
             Some(Speed::Normal)
@@ -775,11 +780,13 @@ pub struct CallbackCounter {
 
 impl CallbackCounter {
     /// The callbacks so far (the `callbacks` of [`Transport::stats`]).
+    #[must_use]
     pub fn get(&self) -> u64 {
         self.shared.stats.callbacks.load(Ordering::Relaxed)
     }
 
     /// The tag of the last seek the callback has taken (`seek_tag` of [`Transport::playhead`]).
+    #[must_use]
     pub fn seek_taken(&self) -> u64 {
         self.clock.read().seek_tag
     }

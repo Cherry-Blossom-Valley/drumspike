@@ -27,6 +27,7 @@ use std::sync::mpsc::sync_channel;
 /// over the pool (`par_chunks_mut`, bit-identical for any thread count). Measured on arm64-mac
 /// (12 cores, 30 tracks of 5 minutes at 96 kHz, host load under 8 at the start): 4 threads
 /// 38.5 s (the preparation is the slower stage), 8 threads 33.6 s, 12 threads 33.7 s.
+#[must_use]
 pub fn default_threads() -> usize {
     physical_cores().clamp(1, 8)
 }

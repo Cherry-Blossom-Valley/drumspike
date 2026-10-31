@@ -93,6 +93,7 @@ pub fn parse_args(args: &[String]) -> Result<Option<Request>, String> {
 }
 
 /// A name becomes `apps/desktop/selftest/<name>.json` of this checkout; a path stays.
+#[must_use]
 pub fn scenario_path(scenario: &str) -> PathBuf {
     if scenario.contains('/') || scenario.ends_with(".json") {
         PathBuf::from(scenario)
@@ -170,6 +171,7 @@ pub fn load_scenario_from(req: &Request, vars: &[(&str, &str)]) -> Result<Value,
 }
 
 /// The script the page runs after `load`: the scenario as `window.__SELFTEST__`, then the driver.
+#[must_use]
 pub fn init_script(scenario: &Value) -> String {
     format!(
         "window.addEventListener('load', () => {{ if (/splash\\.html$/.test(location.pathname)) return; window.__SELFTEST__ = {scenario};\n{PLAY}\n{PLAYHEAD_STEPS}\n{MEMORY}\n{driver}\n}});",
@@ -189,6 +191,7 @@ pub struct Helper {
 }
 
 /// The `WebKit` helper processes in the output of `ps -ax -o pid=,rss=,comm=`.
+#[must_use]
 pub fn parse_helpers(ps: &str) -> Vec<Helper> {
     let mut out = Vec::new();
     for line in ps.lines() {
@@ -231,12 +234,14 @@ pub fn snapshot_helpers() {
 }
 
 /// Physical footprint in bytes of each pid (`footprint --json`); a pid that is gone is missing.
+#[must_use]
 pub fn footprints(pids: &[u32]) -> std::collections::HashMap<u32, u64> {
     footprint_report(pids).0
 }
 
 /// The largest memory categories (dirty bytes, compressed pages included) of a `footprint --json` process entry:
 /// `[["WebKit Malloc", 123.4], ...]` in MB, at most `n` entries.
+#[must_use]
 pub fn top_categories(process: &Value, n: usize) -> Vec<Value> {
     // `dirty` already includes the compressed (swapped) pages; the sum of `dirty` is the footprint
     let mut rows: Vec<(String, f64)> = process["categories"]
@@ -253,6 +258,7 @@ pub fn top_categories(process: &Value, n: usize) -> Vec<Value> {
 }
 
 /// Footprints and the top categories of each pid, from one `footprint --json` call.
+#[must_use]
 pub fn footprint_report(
     pids: &[u32],
 ) -> (
@@ -314,6 +320,7 @@ pub fn memory() -> Value {
 }
 
 /// The facts about this build that go into every report.
+#[must_use]
 pub fn host_info() -> Value {
     json!({
         "os": std::env::consts::OS,
@@ -324,6 +331,7 @@ pub fn host_info() -> Value {
 }
 
 /// A report for a run that did not reach the driver.
+#[must_use]
 pub fn failure_report(scenario: &str, why: &str) -> Value {
     json!({"scenario": scenario, "pass": false, "steps": [], "metrics": {}, "errors": [why]})
 }
