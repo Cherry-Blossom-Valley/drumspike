@@ -337,14 +337,20 @@
   </div>
 </div>
 
-<div id="helpModal" class="modal sheet hidden">
-  <div class="modal-box">
-    <h3>Keyboard shortcuts</h3>
-    <p class="hint">Every command of the app, by menu. The keys without Cmd, Control or Option work when no text
-    field has the focus; the menu does not show them (it would take them from the text fields).</p>
-    <p class="hint" id="keymapPreset"></p>   <!-- P3-13c: the active key preset -->
-    <table class="keymap" id="keymapTable"></table>   <!-- P3-13b: made from static/keymap.js (DSKeys.renderHelp) -->
-    <div class="modal-actions"><button id="helpDone" class="btn primary">Got it</button></div>
+<div id="helpModal" class="modal sheet hidden">   <!-- #255: the manual (docs/guide, prebuilt in static/help) with the Shortcuts section from static/keymap.js -->
+  <div class="modal-box" id="helpBox">
+    <div class="helpHead">
+      <h3>Drum Spike Help</h3>
+      <div class="helpNav">
+        <button id="helpBack" class="btn" title="Back" disabled>&larr;</button>
+        <button id="helpFwd" class="btn" title="Forward" disabled>&rarr;</button>
+      </div>
+      <button id="helpDone" class="btn primary">Done</button>
+    </div>
+    <div class="helpBody">
+      <nav id="helpChapters" aria-label="Help chapters"></nav>
+      <div id="helpPage"></div>
+    </div>
   </div>
 </div>
 
@@ -439,6 +445,7 @@
 <script src="/backend.js?v=57"></script>
 <script src="/lanes-gl.js?v=52"></script>
 <script src="/keymap.js?v=6"></script>
+<script src="/help.js?v=1"></script>   <!-- #255: the manual (docs/guide prebuilt in static/help) and the Shortcuts section -->
 <script src="/shell.js?v=14"></script>
 <script src="/app.js?v=70"></script>
 </body>

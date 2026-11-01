@@ -286,11 +286,11 @@
       // P3-13a: each check item follows a toolbar click (the NSMenu mark, read back), and the toolbar follows the item
       const mark = async () => { const r = await items(); return { snap: r.snap.checked, click: r.click.checked,
         follow: ["smooth", "page", "off"].filter(m => r[`follow_${m}`].checked),
-        info: r.info_line.checked, counter: ["seconds", "samples"].filter(m => r[`counter_${m}`].checked), inspector: r.inspector.checked,
+        info: r.info_line.checked, counter: ["seconds", "samples", "barsbeats", "timecode"].filter(m => r[`counter_${m}`].checked), inspector: r.inspector.checked,
         height: ["small", "medium", "large"].filter(m => r[`height_${m}`].checked),
         nudge: NUDGE_ORDER.filter(k => r[`nudge_val_${k}`].checked),
         rulers: Object.keys(TMK).filter(k => r[TMK[k]].checked) }; };   // P4-8: View > the three map rulers and the grid
-      const marks = (want, what) => until(async () => JSON.stringify(await mark()) === JSON.stringify(want), what, 10000);
+      const marks = async (want, what) => { try { await until(async () => JSON.stringify(await mark()) === JSON.stringify(want), what, 10000); } catch (e) { throw new Error(`${e.message}; menu ${JSON.stringify(await mark())} vs page ${JSON.stringify(want)}`); } };
       const st = () => ({ snap: S.snap, click: !!SETTINGS().click.enabled, follow: [S.followMode],
         info: !!SETTINGS().ui.infoLine, counter: [SETTINGS().ui.counter], inspector: !!S.inspector, height: [S.trackHeight], nudge: [S.nudgeValue],
         rulers: Object.keys(TMK).filter(k => tmShown(k)) });
@@ -559,6 +559,12 @@
       need(rowsShown.join() === DSKeys.COMMANDS.map(c => c.id).join(), `the help panel lists ${rowsShown.length} of ${DSKeys.COMMANDS.length} commands`);
       report.metrics.help_rows = rowsShown.length;
       $q("#helpDone").click(); done.push("shortcuts");
+      // #255: Help > Drum Spike Help: the manual opens with the first chapter and the chapter nav, Done closes it
+      await click("drumspike_help");
+      await until(() => visible("#helpModal") && $q("#helpModal .helpChapterPage") && document.querySelectorAll("#helpChapters .helpChapter").length > 1, "the manual (Drum Spike Help)", 10000);
+      $q("#helpDone").click();
+      await until(() => !visible("#helpModal"), "the manual to close", 5000);
+      done.push("drumspike_help");
       // File > Rename Project: a dialog; Escape keeps the name
       const old = S.name;
       await click("rename");
