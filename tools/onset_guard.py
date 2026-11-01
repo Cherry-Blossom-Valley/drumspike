@@ -50,6 +50,7 @@ MOVE_MS = 1.0            # the labelled set: hits version 3 moved earlier by mor
 
 FM_PEAK_S = 0.005
 FM_PEAK_DB = 33.0
+BASE_PEAK_DB = 33.0      # the margin that judges a lead-in's bump, whatever margin the walk uses (#271)
 FM_FLOOR_S = 0.050
 FM_FLOOR_SKIP_S = 0.002
 FM_BLOCK_S = 0.001
@@ -59,6 +60,7 @@ FM_SPAN_S = 0.010
 FM_LONG_S = 0.005
 FM_LONG_END_S = 0.0005
 FM_LONG_DB = 6.0
+LEAD_IN_MAX_S = 0.0015
 
 
 def _n(s, sr):
@@ -84,9 +86,41 @@ def two_tap(x):
     return np.abs(x + p) / 2.0
 
 
-def walk(x, s, sr, prev_mid=None, next_mid=None, stop=None, run=1, tt=None):
+def _is_first_bump(x, lead, foot, gap):
+    """`refine.rs` `is_first_bump` (#271): the stretch rises toward `foot` (its first half `gap` samples under 0.8 of the
+    last `gap` samples) and is no Nyquist ripple (the sign changes at most 3 of 4 times from sample to sample)."""
+    w = min(gap, foot - lead)
+    if w <= 0:
+        return False
+    far = float(np.abs(x[lead:lead + max(1, w // 2)]).max())
+    near = float(np.abs(x[foot - w:foot]).max())
+    pairs = foot - lead - 1
+    flips = int(np.count_nonzero(x[lead + 1:foot] * x[lead:foot - 1] < 0.0))
+    return far < near * 0.8 and flips * 4 <= pairs * 3
+
+
+def _lead_in(x, tt, off, foot, judge, lo, fl, thr, gap, sr):
+    """`refine.rs` `lead_in` (#239): from the walk's foot on back over the samples at or above the floor + 6 dB (the
+    same gap rule), at most `LEAD_IN_MAX_S` and never past `lo`; the first sample of that rise, if it is a first bump
+    of the hit (#271), else `foot`."""
+    low = fl * 10 ** (FM_FLOOR_DB / 20)
+    if low <= 0.0 or low >= thr:
+        return foot
+    lo = max(lo, foot - _n(LEAD_IN_MAX_S, sr))
+    lead, i = foot, foot
+    while i > lo:
+        i -= 1
+        if tt[i - off] >= low:
+            lead = i
+        elif lead - i >= gap:
+            return lead if _is_first_bump(x, lead, max(judge, lead), gap) else foot
+    return foot
+
+
+def walk(x, s, sr, prev_mid=None, next_mid=None, stop=None, run=1, tt=None, lead_in=False):
     """The version 3 back-track from sample `s` (`first_motion`), on `x`; `prev_mid`/`next_mid` are the midpoints to
-    the neighbouring hits (samples). With `stop` = (offset, bool array from that sample on): a run of `run` or more stopped samples ends
+    the neighbouring hits (samples). With `lead_in` (the app's rule since #239) the foot goes on back over a rise over
+    the floor, at most 1.5 ms. With `stop` = (offset, bool array from that sample on): a run of `run` or more stopped samples ends
     the walk (candidate A); a stopped sample never becomes the foot. Returns (foot, step) with step one of moved,
     kept, busy, separate, stopped."""
     n = len(x)
@@ -134,6 +168,19 @@ def walk(x, s, sr, prev_mid=None, next_mid=None, stop=None, run=1, tt=None):
         at = float(np.abs(x[s:s + e]).max())
         if held < at * 10 ** (-FM_LONG_DB / 20):
             return s, "separate"
+    if lead_in and how != "stopped":
+        judge = foot
+        if FM_PEAK_DB != BASE_PEAK_DB:   # the bump is judged on the base margin's foot, the same for every margin (#271)
+            thr0 = max(pk * 10 ** (-BASE_PEAK_DB / 20), fl * 10 ** (FM_FLOOR_DB / 20))
+            j, k = s, s
+            while j > lo:
+                j -= 1
+                if tt[j - off] >= thr0:
+                    k = j
+                elif k - j >= gap:
+                    judge = k
+                    break
+        foot = _lead_in(x, tt, off, foot, judge, lo, fl, thr, gap, sr)
     if foot < s:
         return foot, how if how == "stopped" else "moved"
     return s, "kept" if how != "stopped" else "stopped"

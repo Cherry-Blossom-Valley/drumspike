@@ -1010,3 +1010,158 @@ fn a_lower_peak_margin_stops_the_walk_later() {
     assert_eq!(b[0].t, kick.t);
     assert_eq!(b.len(), a.len());
 }
+
+// ---------------------------------------------------------------- #239: a hit sits off its first sample
+
+/// A uniform noise floor of amplitude `a`, `n` samples long.
+fn floor_of(n: usize, a: f64) -> Vec<f32> {
+    let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+    (0..n)
+        .map(|_| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (a * ((seed >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0)) as f32
+        })
+        .collect()
+}
+
+/// Adds a decaying sine of `hz` and peak `amp` from sample `from` with a raised-cosine start of `ramp` samples.
+fn swing(x: &mut [f32], from: usize, ramp: usize, amp: f64, hz: f64) {
+    for k in 0..(0.1 * f64::from(SR)) as usize {
+        let t = k as f64 / f64::from(SR);
+        let env = if k >= ramp {
+            1.0
+        } else {
+            0.5 - 0.5 * (std::f64::consts::PI * k as f64 / ramp as f64).cos()
+        };
+        x[from + k] += (amp * env * (-t / 0.06).exp() * (2.0 * std::f64::consts::PI * hz * t + 0.7).sin()) as f32;
+    }
+}
+
+/// The refined sample of the hit at `on` (the coarse time is 6 ms before it) under the current rule.
+fn refined_sample(x: &[f32], on: usize) -> i64 {
+    let t0 = on as f64 / f64::from(SR) - 0.006;
+    let r = refine_rule_peak(x, t0, SR, &[], W, RefineRule::CURRENT, FM_PEAK_DB);
+    (r.t * f64::from(SR)).round() as i64
+}
+
+#[test]
+fn a_small_first_bump_before_the_main_swing_is_the_hits_start() {
+    // a bump at 6 times the floor, then the main swing 1 ms later: the hit starts at the bump
+    const A: f64 = 0.0017;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    swing(&mut x, on, 24, 0.01, 1000.0);
+    swing(&mut x, on + 48, 0, 0.8, 180.0);
+    let dep = x
+        .iter()
+        .position(|v| f64::from(v.abs()) > 2.0 * A)
+        .expect("the hit leaves the floor") as i64;
+    let off = refined_sample(&x, on) - dep;
+    // the walk reads the two-tap level, which lags a raised-cosine start by a few samples; before the lead-in it was 45
+    assert!(
+        (-1..=3).contains(&off),
+        "{off} samples from the first sample over twice the floor"
+    );
+}
+
+#[test]
+fn a_rise_longer_than_the_lead_in_bound_is_not_joined() {
+    // the same bump 3 ms before the swing (twice the 1.5 ms bound): a separate earlier event, the hit stays at the swing
+    const A: f64 = 0.0017;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    swing(&mut x, on, 24, 0.01, 1000.0);
+    swing(&mut x, on + 144, 0, 0.8, 180.0);
+    let off = refined_sample(&x, on) - on as i64;
+    assert!(off > 100, "{off} samples after the bump");
+}
+
+#[test]
+fn the_trace_shows_the_walk_and_its_lead_in() {
+    const A: f64 = 0.0017;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    swing(&mut x, on, 24, 0.01, 1000.0);
+    swing(&mut x, on + 48, 0, 0.8, 180.0);
+    let tr = first_motion_trace(&x, on as i64 + 60, SR, None, None).expect("a walk");
+    assert!(tr.lead < tr.foot && tr.foot - tr.lead <= 72, "{tr:?}");
+    assert!(tr.floor > 0.0 && tr.thr > tr.floor * 2.0, "{tr:?}");
+    assert_eq!(
+        first_motion_mid(&x, on as i64 + 60, SR, None, None).0,
+        tr.lead,
+        "the trace is the walk"
+    );
+    assert_eq!(first_motion_trace(&vec![0.0; 100], 50, SR, None, None), None);
+}
+
+#[test]
+fn a_hit_is_not_found_before_the_first_sample_over_the_floor() {
+    // a floor that is quiet in the last 3 ms before the hit (a gate closing, a fade), louder before it:
+    // the hit starts at the first sample over the quiet floor, not 0.25 ms or more before it
+    const A: f64 = 0.0017;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    x[on - 144..on].copy_from_slice(&floor_of(144, A / 4.0));
+    swing(&mut x, on, 24, 0.8, 180.0);
+    let dep = (on - 144 + x[on - 144..].iter().position(|v| f64::from(v.abs()) > A / 4.0).unwrap()) as i64;
+    let off = refined_sample(&x, on) - dep;
+    assert!(
+        (-12..=1).contains(&off),
+        "{off} samples from the first sample over the quiet floor"
+    );
+}
+
+#[test]
+fn the_lead_in_switch_is_on_for_the_product() {
+    // the switch is for the measurement example; it is a process-wide flag, so this only sets it on (the default)
+    set_lead_in(true);
+    let (x, on) = lead_in_hit();
+    assert!(refined_sample(&x, on) > 0);
+}
+
+#[test]
+fn a_hard_attack_over_a_noise_floor_is_never_placed_before_its_onset() {
+    // #271: a swing that starts at full level (no ramp), over a noise floor, at whole and at half-sample positions.
+    // A half-sample delay of a band-limited hard start has a sinc pre-ringing: a ripple at nearly the Nyquist
+    // frequency that grows toward the onset. The lead-in must not join it (it did, 14.5 samples early).
+    // The walk alone reads the two-tap level one sample early (a noise floor gives -1 too): that stays.
+    let on = 24_000;
+    for floor in [0.0f64, 4e-5, 1e-3] {
+        for half in [false, true] {
+            let mut x = floor_of(48_000, floor.max(1e-9));
+            let mut hit = vec![0.0f32; 48_000];
+            swing(&mut hit, on, 0, 0.5, 180.0);
+            if half {
+                // the hit delayed by half a sample: a Hann-windowed sinc of 32 samples each side
+                let h: Vec<f64> = (-32..=32)
+                    .map(|j| {
+                        let u = f64::from(j) - 0.5;
+                        let w = 0.5 + 0.5 * (std::f64::consts::PI * f64::from(j) / 33.0).cos();
+                        w * (std::f64::consts::PI * u).sin() / (std::f64::consts::PI * u)
+                    })
+                    .collect();
+                let src = hit.clone();
+                for (n, y) in hit.iter_mut().enumerate().take(on + 100).skip(on - 40) {
+                    *y = h
+                        .iter()
+                        .enumerate()
+                        .map(|(k, c)| c * f64::from(src[(n + 32 - k).min(src.len() - 1)]))
+                        .sum::<f64>() as f32;
+                }
+            }
+            for (a, b) in x.iter_mut().zip(&hit) {
+                *a += *b;
+            }
+            let off = refined_sample(&x, on) - on as i64;
+            // the walk alone (floor 0, no lead-in) reads the sinc ripple 3 samples early; the lead-in adds none
+            let limit = if half { -3 } else { -1 };
+            assert!(
+                off >= limit,
+                "floor {floor} half {half}: placed {} samples before the onset",
+                -off
+            );
+        }
+    }
+}

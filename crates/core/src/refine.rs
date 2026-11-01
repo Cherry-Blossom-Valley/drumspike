@@ -28,6 +28,7 @@ use std::cell::RefCell;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::pyops::py_int;
 use crate::velocity::{VelocityMap, velocity_map};
@@ -809,6 +810,83 @@ fn foot_strict(x: &[f32], d: i64, lo: i64, floor: f64) -> i64 {
     j - 1
 }
 
+static LEAD_IN: AtomicBool = AtomicBool::new(true);
+
+/// Switches the lead-in of the walk (#239) on or off for the whole process. For the before/after measurement
+/// (`examples/lead_in_check.rs`) only: the product leaves it on.
+pub fn set_lead_in(on: bool) {
+    LEAD_IN.store(on, Ordering::Relaxed);
+}
+
+/// The lead-in goes back at most this far (seconds) from the walk's foot: an attack's rise is about a millisecond. A
+/// longer rise over the floor is bleed or an earlier stroke, not the hit.
+pub const LEAD_IN_MAX_S: f64 = 0.0015;
+
+/// What the walk of one hit decided (#239): the floor and threshold it used, the foot of the walk and the foot after
+/// the lead-in (equal when the lead-in did not join a rise).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeadTrace {
+    /// The floor before the hit.
+    pub floor: f64,
+    /// The walk's threshold.
+    pub thr: f64,
+    /// The foot of the walk, in samples.
+    pub foot: i64,
+    /// The foot after the lead-in, in samples.
+    pub lead: i64,
+}
+
+/// The lead-in of a walk (#239). The threshold `thr` follows the peak, so a small first bump before the main swing
+/// (under `thr`, over the floor) ends the walk at the swing. `foot` is the walk's foot: this goes on back from it over
+/// the samples at or above [`FM_FLOOR_DB`] over the `floor` (the same gap rule), at most [`LEAD_IN_MAX_S`] and never
+/// past `lo`, and returns the first sample of that rise. A rise that does not end within that bound, no floor, or a
+/// `thr` that is not above that level: `foot` stays. `judge` is the end of the stretch that decides whether the rise
+/// is a first bump (#271): the foot of the walk at the base margin, the same for every peak margin.
+fn lead_in(x: &[f32], (foot, judge): (i64, i64), lo: i64, floor: f64, thr: f64, gap: i64, srf: f64) -> i64 {
+    if !LEAD_IN.load(Ordering::Relaxed) {
+        return foot;
+    }
+    let low = floor * 10f64.powf(FM_FLOOR_DB / 20.0);
+    if low <= 0.0 || low >= thr {
+        return foot;
+    }
+    let lo = lo.max(foot - samples(LEAD_IN_MAX_S, srf));
+    let mut lead = foot;
+    let mut i = foot;
+    while i > lo {
+        i -= 1;
+        if two_tap(x, i as usize) >= low {
+            lead = i;
+        } else if lead - i >= gap {
+            return if is_first_bump(x, lead, judge.max(lead), gap) {
+                lead
+            } else {
+                foot
+            };
+        }
+    }
+    foot
+}
+
+/// Whether the stretch `lead .. foot` is a first bump of the hit and not something in front of a hard attack (#271):
+/// - it rises toward `foot`: the level in its first half `gap` samples is under 0.8 of the level in the last `gap`
+///   samples (a decaying tail of an earlier stroke is as loud at its far end as at its near end);
+/// - it is no Nyquist ripple: the sign changes at most 3 of 4 times from one sample to the next (the pre-ringing of a
+///   band-limited hard start alternates at nearly every sample; a bump of the hit does not).
+fn is_first_bump(x: &[f32], lead: i64, foot: i64, gap: i64) -> bool {
+    let w = gap.min(foot - lead);
+    if w <= 0 {
+        return false;
+    }
+    let far = f64::from(max_abs(x, lead, lead + (w / 2).max(1)));
+    let near = f64::from(max_abs(x, foot - w, foot));
+    let pairs = foot - lead - 1;
+    let flips = (lead + 1..foot)
+        .filter(|&i| x[i as usize] * x[i as usize - 1] < 0.0)
+        .count() as i64;
+    far < near * 0.8 && flips * 4 <= pairs * 3
+}
+
 /// [`first_motion_mid`] with another peak margin `peak_db` in place of [`FM_PEAK_DB`], and the foot taken
 /// strict ([`foot_strict`], capped by `tune`) when `tune` is `Some`.
 fn first_motion_mid_rule(
@@ -820,10 +898,51 @@ fn first_motion_mid_rule(
     peak_db: f64,
     tune: Option<FootTune>,
 ) -> (i64, BackStep) {
+    first_motion_traced(x, s, sr, prev_mid, next_mid, peak_db, tune).0
+}
+
+/// The walk of [`first_motion_mid`] with its decision (the floor, the threshold, the foot and the foot after the
+/// lead-in) for one hit; `None` where the walk does not reach the lead-in (no signal, a busy or separate stretch).
+#[must_use]
+pub fn first_motion_trace(
+    x: &[f32],
+    s: i64,
+    sr: u32,
+    prev_mid: Option<i64>,
+    next_mid: Option<i64>,
+) -> Option<LeadTrace> {
+    first_motion_traced(x, s, sr, prev_mid, next_mid, FM_PEAK_DB, None).1
+}
+
+/// The foot of the walk back from `s` over the samples at or above `thr` (gaps under `gap` do not end the run), and
+/// whether the walk ended on a gap before `lo`.
+fn walk_foot(x: &[f32], s: i64, lo: i64, thr: f64, gap: i64) -> (i64, bool) {
+    let mut i = s;
+    let mut foot = s;
+    while i > lo {
+        i -= 1;
+        if two_tap(x, i as usize) >= thr {
+            foot = i;
+        } else if foot - i >= gap {
+            return (foot, true);
+        }
+    }
+    (foot, false)
+}
+
+fn first_motion_traced(
+    x: &[f32],
+    s: i64,
+    sr: u32,
+    prev_mid: Option<i64>,
+    next_mid: Option<i64>,
+    peak_db: f64,
+    tune: Option<FootTune>,
+) -> ((i64, BackStep), Option<LeadTrace>) {
     let srf = f64::from(sr);
     let n = x.len() as i64;
     if s <= 0 || s >= n {
-        return (s, BackStep::Kept);
+        return ((s, BackStep::Kept), None);
     }
     let mut pe = (s + samples(FM_PEAK_S, srf)).min(n);
     if let Some(m) = next_mid {
@@ -831,7 +950,7 @@ fn first_motion_mid_rule(
     }
     let pk = f64::from(max_abs(x, s, pe));
     if pk < 1e-4 {
-        return (s, BackStep::Kept);
+        return ((s, BackStep::Kept), None);
     }
     let mut lo = (s - samples(FM_SPAN_S, srf)).max(0);
     let mut from = s - samples(FM_FLOOR_S, srf);
@@ -842,29 +961,37 @@ fn first_motion_mid_rule(
     let floor = floor_before(x, s, from, srf);
     let thr = (pk * 10f64.powf(-peak_db / 20.0)).max(floor * 10f64.powf(FM_FLOOR_DB / 20.0));
     let gap = samples(FM_GAP_S, srf).max(1);
-    let mut i = s;
-    let mut foot = s;
-    let mut ended = false;
-    while i > lo {
-        i -= 1;
-        if two_tap(x, i as usize) >= thr {
-            foot = i;
-        } else if foot - i >= gap {
-            ended = true;
-            break;
-        }
-    }
+    let (foot, ended) = walk_foot(x, s, lo, thr, gap);
     if !ended {
-        return (s, BackStep::Busy);
+        return ((s, BackStep::Busy), None);
     }
     if s - foot > samples(FM_LONG_S, srf) {
         let e = samples(FM_LONG_END_S, srf).max(1);
         let held = f64::from(max_abs(x, foot, (s - e).max(foot + 1)));
         let at = f64::from(max_abs(x, s, s + e));
         if held < at * 10f64.powf(-FM_LONG_DB / 20.0) {
-            return (s, BackStep::Separate);
+            return ((s, BackStep::Separate), None);
         }
     }
+    let walked = foot;
+    // The bump decision is judged on the stretch up to the foot of the walk at the base margin, so that every peak
+    // margin accepts or rejects the same lead-in (#271).
+    let judge = if peak_db == FM_PEAK_DB {
+        foot
+    } else {
+        let thr0 = (pk * 10f64.powf(-FM_PEAK_DB / 20.0)).max(floor * 10f64.powf(FM_FLOOR_DB / 20.0));
+        match walk_foot(x, s, lo, thr0, gap) {
+            (f0, true) => f0,
+            _ => foot,
+        }
+    };
+    let foot = lead_in(x, (foot, judge), lo, floor, thr, gap, srf);
+    let trace = LeadTrace {
+        floor,
+        thr,
+        foot: walked,
+        lead: foot,
+    };
     let foot = match tune {
         None => foot,
         Some(tune) => {
@@ -884,11 +1011,12 @@ fn first_motion_mid_rule(
             }
         }
     };
-    if foot < s {
+    let step = if foot < s {
         (foot, BackStep::Moved)
     } else {
         (s, BackStep::Kept)
-    }
+    };
+    (step, Some(trace))
 }
 
 /// Refinement version 3 (P4-12 stage 2, [`RefineRule::FirstMotion`]): [`refine_reach`], then the
