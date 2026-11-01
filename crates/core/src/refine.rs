@@ -625,9 +625,10 @@ pub const FM_PEAK_S: f64 = 0.005;
 pub const FM_PEAK_DB: f64 = 33.0;
 /// The floor before the hit: the median of the [`FM_BLOCK_S`] block maxima in the
 /// `FM_FLOOR_S` before the hit, ...
-pub const FM_FLOOR_S: f64 = 0.050;
-/// ... without the last `FM_FLOOR_SKIP_S` (the attack's own soft start), ...
-pub const FM_FLOOR_SKIP_S: f64 = 0.002;
+pub const FM_FLOOR_S: f64 = 0.060;
+/// ... without the last `FM_FLOOR_SKIP_S` (the attack's own rise and bleed; the same 60 to 12 ms window as the floor
+/// of `lead_in_check`, #273), ...
+pub const FM_FLOOR_SKIP_S: f64 = 0.012;
 /// ... in blocks of this length (seconds) ...
 pub const FM_BLOCK_S: f64 = 0.001;
 /// ... and the threshold is at least this much (dB) above it: noise and bleed before the hit set
