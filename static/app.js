@@ -6086,7 +6086,8 @@ async function exRun() {
     const out = Object.entries(r.outside || {}).map(([k, c]) => `${k} ${c}`);   // P4-4
     const msg = exSummary(r) + (bad.length ? `; ${bad.length} failed (${bad[0].name}: ${bad[0].message})` : "") +
       (out.length ? `; hits outside the audio file, not in the spike files: ${out.join(", ")} (the MIDI files keep them; a hit before the start sits at 0 s there)` : "") +
-      exSamplerNote(r);
+      exSamplerNote(r) +
+      ((r.also_updated || []).length ? `. Also updated: ${r.also_updated.length} older spike file(s) in this folder` : "");   // #274
     setMsg(msg);
     exportedFollowers(r);
     setMsgDetail(bad.map(e => `${e.name}: ${e.message}` + (e.detail ? `\n  (${e.detail})` : "")).join("\n"));
