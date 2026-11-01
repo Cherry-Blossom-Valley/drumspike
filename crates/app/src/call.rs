@@ -38,6 +38,7 @@ pub fn run(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) -> 
             | "track_sampler_wave"
             | "analyze_start"
             | "analyze_status"
+            | "reanalyze_selection"
             | "export_midi"
             | "export_spikes"
             | "export_all"
@@ -171,6 +172,25 @@ fn run_direct(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) 
             )
         }
         "analyze_status" => Ok(Reply::Json(s.analyze_status(arg_str(args, "sid")?))),
+        // #265: the hits of the range only; the Keep choice of the page arrives as keep_edited
+        "reanalyze_selection" => {
+            let t = |k: &str| {
+                args.get(k)
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| AppError::bad(format!("missing or wrong argument `{k}` (number)")))
+            };
+            json(
+                s.reanalyze_selection(
+                    arg_str(args, "sid")?,
+                    arg_str(args, "name")?,
+                    t("t0")?,
+                    t("t1")?,
+                    args.get("keep_edited")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(policy::PAGE_KEEP_EDITED),
+                ),
+            )
+        }
         "export_midi" => {
             // P4-5: a call without `note` or `events` takes them from the document (`export_midi_stored`)
             let events: Option<Vec<Value>> = args.get("events").and_then(Value::as_array).cloned();

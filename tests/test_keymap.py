@@ -58,7 +58,7 @@ def test_a_menu_key_always_has_a_modifier_and_a_menu_item():
             assert re.search(r"\b(Cmd|Control|Option)\+", r["menu_key"]), r["id"]
             assert r.get("menu"), f"{r['id']}: menu key without a menu item"
 
-@pytest.mark.parametrize("cmd,key", [("ruler_beats", "Shift+B"), ("ruler_markers", "Shift+R"),
+@pytest.mark.parametrize("cmd,key", [("ruler_beats", "Shift+B"), ("ruler_markers", "Option+Shift+R"),
                                      ("height_small", "Option+Cmd+1"), ("height_medium", "Option+Cmd+2"),
                                      ("height_large", "Option+Cmd+3")])
 def test_the_view_toggles_of_439_have_a_key(cmd, key):

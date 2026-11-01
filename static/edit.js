@@ -62,6 +62,7 @@ function undoMeta(op) {
     }
     case "shift": set("Shift Hits", at(op.track, null)); break;
     case "repick": set("Re-pick Hits", at(op.track, null)); break;
+    case "reanalyze": set(`Re-analyze Selection (${op.track}, ${fmt((op.t0), 3)} to ${fmt((op.t1), 3)} s)`, at(op.track, op.t0)); break;   // #265
     case "loud": set("Set Loudness Range", at(op.track, null)); break;
     case "learn": set("Learn Change", at(op.track, null)); break;
     case "trkdel": set(`Remove Track ${op.name}`, at(op.name, null)); break;
@@ -111,6 +112,7 @@ function applyOp(op, reverse) {   // a step of the service (shift, add, del, mov
   if (op.type === "shift") return shiftApplyOp(op, reverse);   // P4-9: the Hitpoint shift
   if (op.type === "params") { hgApplyParamsOp(op, reverse); return; }   // #232: a stored detection setting (the refine window)
   if (op.type === "repick") { hgApplyRepickOp(op, reverse); return; }   // P4-3: a stored re-pick of the Sensitivity histogram
+  if (op.type === "reanalyze") { raApplyOp(op, reverse); return; }   // #265: a Re-analyze Selection (the hits of the range)
   return edApplyOp(op, reverse);   // P4-9 stage 2: add, del, move, setv: events_edit
 }
 /* P4-9 stage 2 (fix round items b and c): a step moves to the other stack after the service applied it, so a refused

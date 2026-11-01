@@ -340,6 +340,34 @@ fn analyze_status(svc: State<'_, Service>, sid: String) -> Value {
     svc.analyze_status(&sid)
 }
 
+/// #265: Re-analyze Selection — the hits of the range only; the Keep choice of the page arrives
+/// as `keep_edited`. Runs in the blocking pool: the detection decodes the track's audio.
+///
+/// # Errors
+///
+/// Errors when the range run fails (unknown project or track, a running analysis or another
+/// write, a bad range or a failed detection).
+#[tauri::command(rename_all = "snake_case")]
+async fn reanalyze_selection(
+    svc: State<'_, Service>,
+    sid: String,
+    name: String,
+    t0: f64,
+    t1: f64,
+    keep_edited: Option<bool>,
+) -> Result<Value, AppError> {
+    blocking(&svc, "reanalyze_selection", move |s| {
+        s.reanalyze_selection(
+            &sid,
+            &name,
+            t0,
+            t1,
+            keep_edited.unwrap_or(drumspike_app::command_policy::PAGE_KEEP_EDITED),
+        )
+    })
+    .await
+}
+
 ///
 /// # Errors
 ///
@@ -700,6 +728,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         samples_window,
         analyze_start,
         analyze_status,
+        reanalyze_selection,
         export_midi,
         export_spikes,
         export_all,
@@ -819,6 +848,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         samples_window,
         analyze_start,
         analyze_status,
+        reanalyze_selection,
         export_midi,
         export_spikes,
         export_all,

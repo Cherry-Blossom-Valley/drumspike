@@ -590,6 +590,25 @@ pub static REGISTRY: &[CommandSpec] = &[
         Quick,
     ),
     cmd(
+        "reanalyze_selection",
+        "Re-analyze only the hits of a time range [t0, t1] on one track (#265)",
+        &[
+            SID,
+            NAME,
+            req("t0", Ty::Num, "Range start in seconds"),
+            req("t1", Ty::Num, "Range end in seconds"),
+            opt(
+                "keep_edited",
+                Ty::Bool,
+                "Keep the hits added or moved by hand inside the range; they win within 20 ms (default true)",
+            ),
+        ],
+        r#"{"type":"object","required":["track","t0","t1","replaced","n_new","events","info"]}"#,
+        Files,
+        Agent,
+        Quick,
+    ),
+    cmd(
         "export_midi",
         "Write Exports/<name>_spike.mid (note and hits default to the track's)",
         &[
