@@ -226,6 +226,11 @@ A faster loop without the browser tests:
 uv run pytest -m "not e2e_app"
 ```
 
+The media tests (explainer scripts, recordings and renders under `tools/media/`) are marked
+`media` and deselected by default (#277); run them on purpose with `uv run pytest -q -m media`
+(or `DRUMSPIKE_MEDIA_TESTS=1`), and only when a fundamental app feature or the media sources
+and tools changed.
+
 Coverage gate: `static/app.js`, `backend.js`, `lanes-gl.js` and `tiles-worker.js` at least 85 % of
 lines each (`DRUMSPIKE_JS_FAIL_UNDER`), measured by Chromium in `tests/e2e_app`. It applies to G2 and
 to G4 (`-m e2e_app` alone). There is no Python coverage gate any more: no product code is Python.

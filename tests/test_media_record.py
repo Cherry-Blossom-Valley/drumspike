@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.media
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "media"))
 import record  # noqa: E402
 

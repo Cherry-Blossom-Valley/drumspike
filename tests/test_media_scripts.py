@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.media
+
 from test_docs_wording import check_docs_wording
 from test_media_guide import menu_titles
 
