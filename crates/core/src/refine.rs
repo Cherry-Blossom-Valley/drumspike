@@ -857,10 +857,29 @@ fn lead_in(x: &[f32], foot: i64, lo: i64, floor: f64, thr: f64, gap: i64, srf: f
         if two_tap(x, i as usize) >= low {
             lead = i;
         } else if lead - i >= gap {
-            return lead;
+            return if is_first_bump(x, lead, foot, gap) { lead } else { foot };
         }
     }
     foot
+}
+
+/// Whether the stretch `lead .. foot` is a first bump of the hit and not something in front of a hard attack (#271):
+/// - it rises toward `foot`: the level in its first half `gap` samples is under 0.8 of the level in the last `gap`
+///   samples (a decaying tail of an earlier stroke is as loud at its far end as at its near end);
+/// - it is no Nyquist ripple: the sign changes at most 3 of 4 times from one sample to the next (the pre-ringing of a
+///   band-limited hard start alternates at nearly every sample; a bump of the hit does not).
+fn is_first_bump(x: &[f32], lead: i64, foot: i64, gap: i64) -> bool {
+    let w = gap.min(foot - lead);
+    if w <= 0 {
+        return false;
+    }
+    let far = f64::from(max_abs(x, lead, lead + (w / 2).max(1)));
+    let near = f64::from(max_abs(x, foot - w, foot));
+    let pairs = foot - lead - 1;
+    let flips = (lead + 1..foot)
+        .filter(|&i| x[i as usize] * x[i as usize - 1] < 0.0)
+        .count() as i64;
+    far < near * 0.8 && flips * 4 <= pairs * 3
 }
 
 /// [`first_motion_mid`] with another peak margin `peak_db` in place of [`FM_PEAK_DB`], and the foot taken

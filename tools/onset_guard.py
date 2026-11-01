@@ -85,9 +85,23 @@ def two_tap(x):
     return np.abs(x + p) / 2.0
 
 
-def _lead_in(tt, off, foot, lo, fl, thr, gap, sr):
+def _is_first_bump(x, lead, foot, gap):
+    """`refine.rs` `is_first_bump` (#271): the stretch rises toward `foot` (its first half `gap` samples under 0.8 of the
+    last `gap` samples) and is no Nyquist ripple (the sign changes at most 3 of 4 times from sample to sample)."""
+    w = min(gap, foot - lead)
+    if w <= 0:
+        return False
+    far = float(np.abs(x[lead:lead + max(1, w // 2)]).max())
+    near = float(np.abs(x[foot - w:foot]).max())
+    pairs = foot - lead - 1
+    flips = int(np.count_nonzero(x[lead + 1:foot] * x[lead:foot - 1] < 0.0))
+    return far < near * 0.8 and flips * 4 <= pairs * 3
+
+
+def _lead_in(x, tt, off, foot, lo, fl, thr, gap, sr):
     """`refine.rs` `lead_in` (#239): from the walk's foot on back over the samples at or above the floor + 6 dB (the
-    same gap rule), at most `LEAD_IN_MAX_S` and never past `lo`; the first sample of that rise, else `foot`."""
+    same gap rule), at most `LEAD_IN_MAX_S` and never past `lo`; the first sample of that rise, if it is a first bump
+    of the hit (#271), else `foot`."""
     low = fl * 10 ** (FM_FLOOR_DB / 20)
     if low <= 0.0 or low >= thr:
         return foot
@@ -98,7 +112,7 @@ def _lead_in(tt, off, foot, lo, fl, thr, gap, sr):
         if tt[i - off] >= low:
             lead = i
         elif lead - i >= gap:
-            return lead
+            return lead if _is_first_bump(x, lead, foot, gap) else foot
     return foot
 
 
@@ -154,7 +168,7 @@ def walk(x, s, sr, prev_mid=None, next_mid=None, stop=None, run=1, tt=None, lead
         if held < at * 10 ** (-FM_LONG_DB / 20):
             return s, "separate"
     if lead_in and how != "stopped":
-        foot = _lead_in(tt, off, foot, lo, fl, thr, gap, sr)
+        foot = _lead_in(x, tt, off, foot, lo, fl, thr, gap, sr)
     if foot < s:
         return foot, how if how == "stopped" else "moved"
     return s, "kept" if how != "stopped" else "stopped"

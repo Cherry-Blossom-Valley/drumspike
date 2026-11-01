@@ -1120,3 +1120,48 @@ fn the_lead_in_switch_is_on_for_the_product() {
     let (x, on) = lead_in_hit();
     assert!(refined_sample(&x, on) > 0);
 }
+
+#[test]
+fn a_hard_attack_over_a_noise_floor_is_never_placed_before_its_onset() {
+    // #271: a swing that starts at full level (no ramp), over a noise floor, at whole and at half-sample positions.
+    // A half-sample delay of a band-limited hard start has a sinc pre-ringing: a ripple at nearly the Nyquist
+    // frequency that grows toward the onset. The lead-in must not join it (it did, 14.5 samples early).
+    // The walk alone reads the two-tap level one sample early (a noise floor gives -1 too): that stays.
+    let on = 24_000;
+    for floor in [0.0f64, 4e-5, 1e-3] {
+        for half in [false, true] {
+            let mut x = floor_of(48_000, floor.max(1e-9));
+            let mut hit = vec![0.0f32; 48_000];
+            swing(&mut hit, on, 0, 0.5, 180.0);
+            if half {
+                // the hit delayed by half a sample: a Hann-windowed sinc of 32 samples each side
+                let h: Vec<f64> = (-32..=32)
+                    .map(|j| {
+                        let u = f64::from(j) - 0.5;
+                        let w = 0.5 + 0.5 * (std::f64::consts::PI * f64::from(j) / 33.0).cos();
+                        w * (std::f64::consts::PI * u).sin() / (std::f64::consts::PI * u)
+                    })
+                    .collect();
+                let src = hit.clone();
+                for (n, y) in hit.iter_mut().enumerate().take(on + 100).skip(on - 40) {
+                    *y = h
+                        .iter()
+                        .enumerate()
+                        .map(|(k, c)| c * f64::from(src[(n + 32 - k).min(src.len() - 1)]))
+                        .sum::<f64>() as f32;
+                }
+            }
+            for (a, b) in x.iter_mut().zip(&hit) {
+                *a += *b;
+            }
+            let off = refined_sample(&x, on) - on as i64;
+            // the walk alone (floor 0, no lead-in) reads the sinc ripple 3 samples early; the lead-in adds none
+            let limit = if half { -3 } else { -1 };
+            assert!(
+                off >= limit,
+                "floor {floor} half {half}: placed {} samples before the onset",
+                -off
+            );
+        }
+    }
+}
