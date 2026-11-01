@@ -745,13 +745,13 @@ fn a_noise_floor_raises_the_threshold() {
     assert!(foot < s - 30, "it moved: {foot}");
     assert!(floor_before(&x, s, s - 2400, f64::from(SR)) > 0.02);
     assert_eq!(floor_before(&x, s, s - 90, f64::from(SR)), 0.0, "no full block");
-    // the median of the block maxima, the blocks counted back from 2 ms before the hit: one loud
+    // the median of the block maxima, the blocks counted back from 12 ms before the hit: one loud
     // block (a bleed burst) does not move it; with an even count the two middle ones average
-    let mut b = vec![0.0f32; 48 * 8];
+    let mut b = vec![0.0f32; 48 * 18];
     for (k, lv) in [0.1f32, 0.9, 0.3, 0.2, 0.5].iter().enumerate() {
         b[48 * k + 7] = *lv;
     }
-    let end = 48 * 5 + 96;
+    let end = 48 * 5 + 576;
     assert!((floor_before(&b, i64::from(end), 0, f64::from(SR)) - 0.3).abs() < 1e-6);
     assert!(
         (floor_before(&b, i64::from(end), 48, f64::from(SR)) - 0.4).abs() < 1e-6,
