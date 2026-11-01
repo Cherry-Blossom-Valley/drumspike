@@ -559,6 +559,12 @@
       need(rowsShown.join() === DSKeys.COMMANDS.map(c => c.id).join(), `the help panel lists ${rowsShown.length} of ${DSKeys.COMMANDS.length} commands`);
       report.metrics.help_rows = rowsShown.length;
       $q("#helpDone").click(); done.push("shortcuts");
+      // #255: Help > Drum Spike Help: the manual opens with the first chapter and the chapter nav, Done closes it
+      await click("drumspike_help");
+      await until(() => visible("#helpModal") && $q("#helpModal .helpChapterPage") && document.querySelectorAll("#helpChapters .helpChapter").length > 1, "the manual (Drum Spike Help)", 10000);
+      $q("#helpDone").click();
+      await until(() => !visible("#helpModal"), "the manual to close", 5000);
+      done.push("drumspike_help");
       // File > Rename Project: a dialog; Escape keeps the name
       const old = S.name;
       await click("rename");

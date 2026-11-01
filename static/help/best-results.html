@@ -1,0 +1,21 @@
+<h1>Get the best results</h1>
+<p>The chapters tell you how each step works. This page collects the settings and the order of work that give the cleanest results: what to load, what to name it, and what to check before you export.</p>
+<h2>Which tracks to load</h2>
+<p>Load every close mic you have. These are the tracks you trigger, and each one is a bleed source for the others:</p>
+<ul><li>kick (in, out, sub), snare (top, bottom), every tom, and the hi-hat. The tom bleed rule and the cross-track rule judge every tom hit against the kick, snare, hi-hat and the other tom mics. The snare ghost-note gate checks its soft hits against the kick and tom hits. A missing source mic means more false hits on the other tracks.</li><li>Overheads, ride and crash are optional, but they help the rules: the flam rule reads every non-snare track as a bleed source, and cymbal hits vote for bar 1 in the tempo detection. The overheads' own hits are less reliable than the close mics.</li><li>Room mics usually stay out. Their role is other, and Add Tracks does not tick them.</li></ul>
+<p>Keep out of the project:</p>
+<ul><li>Sample or trigger tracks. A name with <code>samp</code>, <code>smpl</code>, <code>smp</code>, <code>ssd</code> or <code>trig</code> is a sample or trigger track to Drum Spike: it never acts as a source or a target of the bleed rules.</li><li>Earlier Drum Spike exports. A file named <code>_spike</code>, <code>_audio_spike</code> or <code>_layer</code> is the app's own output; the scan offers it as no drum track.</li><li>Files at another sample rate. Drum Spike reads 44.1, 48 and 96 kHz, and a rule leaves a source mic at another rate out. Convert the file in your DAW.</li></ul>
+<h2>Names</h2>
+<p>Give each track one drum and one position: <code>k in</code>, <code>k out</code>, <code>s top</code>, <code>s bot</code>, <code>t1</code>. Or pick a kit preset in the Add Tracks dialog and let it name the roles. The tom bleed rule reads the drum from the track name. When a name does not tell the drum, the rule is off, and the analysis says why. Two mics of one drum, <code>t1 top</code> and <code>t1 bot</code>, never count as bleed of each other.</p>
+<h2>Analyze all tracks together</h2>
+<p>Run <strong>Hits &gt; Analyze All</strong> over the whole session, not one track at a time. The cross-track rules read the hits and the candidate lists of the other tracks, and those exist only after the tracks are analyzed. Analyze all tracks, so every source mic has its hits when the rules run.</p>
+<h2>Check the roles before the analysis</h2>
+<p>Check the role of every track before you analyze (chapter 2). A wrong role gives wrong rules: the flam rule runs only on snare tracks, and the bleed rules read only kick, snare, tom and hi-hat close mics. To change a role, use the Inspector (chapter 2); the change analyzes the track again.</p>
+<h2>After the analysis</h2>
+<p>Work in this order:</p>
+<ol><li>Check the doubtful hits first (chapter 9): press <code>D</code> and step through the queue, lowest confidence first.</li><li>Set the loudness cut per track in the Inspector (chapter 8). It leaves the quiet bleed out of the exports.</li><li>A doubtful tom hit: press <code>O</code> for <strong>View &gt; Other Mics Under Hit</strong> (chapter 10). The panel shows the other mics at the hit time, so you see whether the hit is bleed.</li></ol>
+<h2>Fix by hand last</h2>
+<p>Your hand edits survive a new analysis: an added, moved or restored hit keeps its place, and the rules never mark it again. So you can fix hits at any time. One order matters: a hand velocity wins over the floor and the ceiling, and Recompute Velocities keeps it. So set the floor and the ceiling first, then set velocities by hand (chapter 8).</p>
+<h2>Tempo</h2>
+<p>Detect the tempo after the kick and snare tracks have hits (chapter 13): <strong>Track &gt; Detect Tempo…</strong> reads the kick and snare hits, and a named cymbal track votes for bar 1. Check bar 1 and the suggested tempo steps before you export the MIDI.</p>
+<p>Next: start with <a class="chapter" href="01-why-sample-exact.html">chapter 1</a>, or go back to the <a class="chapter" href="README.html">guide README</a>.</p>

@@ -497,3 +497,28 @@ input.hgRange:disabled { cursor: default; opacity: .5; }
 #pluginLicenceModal .plText { max-height: 40vh; overflow: auto; font-size: 11px; line-height: 1.4;
   white-space: pre-wrap; background: var(--bg, #16181d); border: 1px solid var(--border, #2a2d33);
   border-radius: 4px; padding: 8px; color: var(--fg, #c8ccd2); }
+/* #255: the manual (Help > Drum Spike Help). A chapter list on the left, the chapter on the right;
+   the Shortcuts section renders the keymap table of the active preset. Light on dark: the guide
+   screenshots sit on the app's own panels. */
+#helpModal .modal-box { width: 860px; max-width: calc(100vw - 40px); height: 78vh; display: flex; flex-direction: column; padding: 14px; }
+#helpModal .helpHead { display: flex; align-items: center; gap: 10px; }
+#helpModal .helpHead h3 { margin: 0; flex: 1; }
+#helpModal .helpNav { display: flex; gap: 4px; }
+#helpModal .helpNav .btn:disabled { opacity: .4; cursor: default; }
+#helpModal .helpBody { display: flex; gap: 12px; flex: 1; min-height: 0; margin-top: 10px; }
+#helpModal #helpChapters { width: 220px; flex: none; overflow: auto; display: flex; flex-direction: column; gap: 1px; }
+#helpModal .helpChapter { text-align: left; font: inherit; font-size: 12px; color: var(--text); background: none;
+  border: 0; border-radius: 4px; padding: 5px 8px; cursor: pointer; }
+#helpModal .helpChapter:hover { background: var(--panel); }
+#helpModal .helpChapter.active { background: var(--accent); color: #fff; }
+#helpModal #helpPage { flex: 1; min-width: 0; overflow: auto; padding: 0 4px 0 12px; font-size: 13px; line-height: 1.5; }
+#helpModal #helpPage h1, #helpModal #helpPage h2, #helpModal #helpPage h3, #helpModal #helpPage h4 { margin: 14px 0 6px; line-height: 1.25; }
+#helpModal #helpPage h1 { font-size: 17px; margin-top: 0; }
+#helpModal #helpPage h2 { font-size: 14px; }
+#helpModal #helpPage p { margin: 6px 0; }
+#helpModal #helpPage li { margin: 3px 0; }
+#helpModal #helpPage img { max-width: 100%; border-radius: 6px; border: 1px solid var(--line); display: block; margin: 8px 0; }
+#helpModal #helpPage pre { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px; font-size: 11px; overflow: auto; }
+#helpModal #helpPage code { font-size: 11px; }
+#helpModal #helpPage a { color: var(--accent); cursor: pointer; }
+#helpModal #helpPage a.ext::after { content: " \\2197"; font-size: 10px; }   /* the arrow says: opens in the browser */

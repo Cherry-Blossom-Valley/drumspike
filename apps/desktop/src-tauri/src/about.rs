@@ -55,6 +55,38 @@ pub fn open_link(id: String) -> Result<Value, AppError> {
     }
 }
 
+/// #255: open an http(s) link of the help in the default browser (`open <url>` on macOS,
+/// `xdg-open` on the Linux dev hosts). Only http and https pass: the page never opens a file
+/// or a scheme from the help.
+///
+/// # Errors
+///
+/// 400 when `url` is not an http(s) address. 500 on macOS when the `open` command cannot be
+/// started (on Linux the same for `xdg-open`).
+#[tauri::command(rename_all = "snake_case")]
+pub fn open_url(url: String) -> Result<Value, AppError> {
+    let ok = url.starts_with("https://") || url.starts_with("http://");
+    if !ok {
+        return Err(AppError::not_found(format!("not an http(s) address: {url}")));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .status()
+            .map_err(|e| AppError::internal(format!("open: {e}")))?;
+        Ok(Value::Null)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .status()
+            .map_err(|e| AppError::internal(format!("xdg-open: {e}")))?;
+        Ok(Value::Null)
+    }
+}
+
 /// The answer of `about_info`: `name`, `version`, `build_sha` and `core_version` (main is
 /// model-free, #281 D16). `build_sha` comes from the build (`DS_BUILD_SHA=...`), else `dev`.
 #[must_use]
@@ -175,7 +207,12 @@ mod tests {
     #[test]
     fn both_commands_are_in_the_two_handler_lists() {
         let lib = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")).unwrap();
-        for name in ["about::about_info", "about::about_third_party", "about::open_link"] {
+        for name in [
+            "about::about_info",
+            "about::about_third_party",
+            "about::open_link",
+            "about::open_url",
+        ] {
             assert_eq!(
                 lib.matches(name).count(),
                 2,

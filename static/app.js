@@ -7283,9 +7283,7 @@ function chooseAudioOutput(name) {
   }).catch(e => setMsg(`audio output failed: ${e.message.replace(/^\d+: /, "")}`, "error"));
 }
 function openShortcuts() {
-  $("#keymapPreset").textContent = `Key preset: ${DSKeys.presetName()} (change it in Drum Spike > Settings).`;
-  DSKeys.renderHelp($("#keymapTable"));
-  showModal("#helpModal");
+  DSHelp.open("shortcuts");   // #255: the Shortcuts section of the manual (static/keymap.js, one source)
 }   // P3-13b: made from static/keymap.js
 
 /* ---------------- global handlers ---------------- */
@@ -7317,7 +7315,8 @@ function setupGlobal() {
   setupMaster();   // P3-16
   $("#tempoDetectBtn").onclick = () => DSShell.menu({id: "detect_tempo"});   // owner 2026-10-14: the same as Track > Detect Tempo
   setupInspector();   // P3-14a
-  $("#helpDone").onclick = () => $("#helpModal").classList.add("hidden");
+  $("#helpDone").onclick = () => $("#helpModal").classList.add("hidden");   // kept for the tests; the manual wires its own buttons in DSHelp.hooks
+  DSHelp.hooks();   // #255: the manual (chapters, back/forward, links out)
   $("#undoHistDone").onclick = () => $("#undoHistModal").classList.add("hidden");   // P4-40a
   $("#importCancel").onclick = () => $("#importModal").classList.add("hidden");
   // global settings bindings

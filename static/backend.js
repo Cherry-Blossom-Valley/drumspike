@@ -338,6 +338,13 @@ function shellMethods(invoke, T) {
       if (bridge()) { (window.__DS_OPEN_LINK__ = window.__DS_OPEN_LINK__ || []).push(id); return {}; }
       return invoke("open_link", { id });
     },
+    /* #255: open an http(s) link of the help in the default browser (src-tauri/src/about.rs, open_url);
+       the page only passes links the prebuilt help ships (class ext). The test bridge has no browser:
+       it records the address in window.__DS_OPEN_URL__ */
+    openUrl: async url => {
+      if (bridge()) { (window.__DS_OPEN_URL__ = window.__DS_OPEN_URL__ || []).push(url); return {}; }
+      return invoke("open_url", { url });
+    },
     /* #164: the CBV feedback gateway (part 2 of #153; the route is part 1, Cbvsite). The page previews
        the exact payload; the bridge answers the command (records it in window.__DS_FEEDBACK__, or fails
        once with the text of window.__DS_FEEDBACK_FAIL__), the app posts it (crates/app/src/feedback.rs). */
