@@ -43,6 +43,7 @@ package = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
+    "media: the media tests (explainer scripts, recordings, renders): deselected by default; run with -m media or DRUMSPIKE_MEDIA_TESTS=1 (#277)",
     "e2e_app: app tests: the page against the ds-bridge debug binary (skip without it; fail with DRUMSPIKE_REQUIRE_APP=1)",
     "js_unit: plain-node module tests over a stubbed B and a minimal document/window, no browser (R17 #55)",
 ]

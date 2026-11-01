@@ -3,12 +3,36 @@
 P3-12: the Python server is gone. The tests check the Rust core and the app against frozen
 references (tests/frozen.py, tests/golden/) and run the page against the app's test bridge
 (tests/e2e_app). The Rust tools they call are in tests/core_tools.py."""
+import os
+
 import pytest
 
 from core_tools import PARITY, SERVICE_TOOL
 from helpers import ROOT, synth_track, write_wav  # noqa: F401  (ROOT puts the repo on sys.path)
 
 pytest_plugins = ["jscov"]   # app.js / backend.js / lanes-gl.js / tiles-worker.js coverage of tests/e2e_app
+
+
+def pytest_collection_modifyitems(config, items):
+    """#277: the media tests are off by default.
+
+    `addopts = "-m 'not media'"` would be wrong: every explicit `-m` overrides addopts.
+    Instead deselect the media items unless the `-m` expression names media, or
+    DRUMSPIKE_MEDIA_TESTS=1 asks for them on purpose.
+    """
+    if os.environ.get("DRUMSPIKE_MEDIA_TESTS") == "1":
+        return
+    markexpr = config.getoption("markexpr") or ""
+    if "media" in markexpr:
+        return
+    selected = []
+    for item in items:
+        if "media" in item.keywords:
+            continue
+        selected.append(item)
+    if len(selected) != len(items):
+        config.hook.pytest_deselected(items=[i for i in items if i not in selected])
+        items[:] = selected
 
 
 @pytest.fixture
