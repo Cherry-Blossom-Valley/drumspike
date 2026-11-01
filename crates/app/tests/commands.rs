@@ -908,6 +908,33 @@ fn export_all_writes_the_audio_spikes_when_the_format_is_chosen() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// #274: an audio-only export leaves no synthetic spike WAV with the old hits next to it.
+#[test]
+fn an_audio_spike_export_rewrites_the_older_synthetic_spike_file() {
+    let (svc, sid, dir, root) = spike_project("export_also");
+    svc.events_set(&sid, "Wide", &json!(hits())).unwrap();
+    let synth = drumspike_app::export::ExportOpts::from_args(&json!({ "formats": ["spikes"] })).unwrap();
+    svc.export_all_opts(&sid, &synth, None).unwrap();
+    let path = dir.join("Exports/Wide_spike.wav");
+    let count = |p: &std::path::Path| {
+        let (x, _) = drumspike_core::read_wav_mono(p, MixMode::Ffmpeg).unwrap();
+        x.iter().filter(|&&v| v != 0.0).count()
+    };
+    let before = count(&path);
+    // delete the 1.5 s hit, then export with the spike type Audio only
+    svc.events_set(&sid, "Wide", &json!([{"t": 0.25, "v": 90}, {"t": 3.499}]))
+        .unwrap();
+    let audio = drumspike_app::export::ExportOpts::from_args(&json!({ "formats": ["audio"] })).unwrap();
+    let r = svc.export_all_opts(&sid, &audio, None).unwrap();
+    let after = count(&path);
+    assert!(
+        after < before,
+        "the synthetic spike file holds the edited hits: {after} < {before}"
+    );
+    assert_eq!(r["also_updated"].as_array().map(Vec::len), Some(2), "{r}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn export_all_goes_on_after_a_track_that_fails_and_lists_its_errors() {
     let (svc, sid, dir, root) = spike_project("export_all_err");

@@ -551,6 +551,8 @@ struct ExportTally {
     errors: Vec<Value>,
     /// P4-4: a track with hits of no sample in its file, mapped to their count.
     outside: serde_json::Map<String, Value>,
+    /// Older spike WAVs of the other type that this export rewrote too (#274).
+    also_updated: Vec<Value>,
     /// The sampler calibration facts per track, as their JSON.
     sampler: serde_json::Map<String, Value>,
     /// The warnings of the reply (the #151 note first, then the sampler ones).
@@ -869,6 +871,7 @@ impl Service {
             "midi": tally.midi,
             "spikes": tally.spikes,
             "audio": tally.audio,
+            "also_updated": tally.also_updated,
             "errors": tally.errors,
             "elapsed_ms": started.elapsed().as_millis() as u64,
             "outside": tally.outside,
@@ -989,6 +992,7 @@ impl Service {
             if opts.audio {
                 plan.push(dir.join(format!("{name}_audio_spike.wav")));
             }
+            plan.extend(older_spike_files(dir, name, opts));
         }
         check_export_plan(&plan, &self.protected_files_everywhere())?;
         Ok(())
@@ -1053,6 +1057,9 @@ impl Service {
             if r.outside > 0 {
                 tally.outside.insert(job.name.clone(), Value::from(r.outside));
             }
+            tally
+                .also_updated
+                .extend(r.also.iter().map(|p| Value::from(p.display().to_string())));
             tally.midi += usize::from(r.midi.is_some());
             tally.spikes += usize::from(r.spike.is_some());
             tally.audio += usize::from(r.audio.is_some());
@@ -1199,11 +1206,27 @@ struct TrackResult {
     spike: Option<PathBuf>,
     /// #209: the audio-spike file of the track.
     audio: Option<PathBuf>,
+    /// #274: the older spike WAV of the other type, rewritten from the same hits.
+    also: Vec<PathBuf>,
     errors: Vec<AppError>,
     /// Hits with no sample in the spike file (P4-4).
     outside: usize,
     /// P4-7c: what the sampler offset did to the per-track MIDI file.
     sampler: Option<ShiftInfo>,
+}
+
+/// #274: the spike WAV of the type this export does not write, when the folder holds one from an
+/// earlier export (`<track>_spike.wav` or `<track>_audio_spike.wav`): it would keep the old hits.
+fn older_spike_files(dir: &Path, name: &str, opts: &ExportOpts) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    if opts.spikes && !opts.audio {
+        v.push(dir.join(format!("{name}_audio_spike.wav")));
+    }
+    if opts.audio && !opts.spikes {
+        v.push(dir.join(format!("{name}_spike.wav")));
+    }
+    v.retain(|p| p.is_file());
+    v
 }
 
 fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
@@ -1212,6 +1235,7 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
         midi: None,
         spike: None,
         audio: None,
+        also: Vec::new(),
         errors: Vec::new(),
         outside: 0,
         sampler: None,
@@ -1263,6 +1287,17 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
         });
         match audio {
             Ok((f, _no_period)) => r.audio = Some(f.path),
+            Err(e) => r.errors.push(e),
+        }
+    }
+    for old in older_spike_files(dir, &job.name, opts) {
+        let done = hit_times(events).and_then(|times| match &job.source {
+            Ok(src) if opts.audio => write_spike_file(src, &old, &times).map(|f| f.path),
+            Ok(src) => write_audio_spike_file(src, &old, &times).map(|(f, _)| f.path),
+            Err(e) => Err(e.clone()),
+        });
+        match done {
+            Ok(p) => r.also.push(p),
             Err(e) => r.errors.push(e),
         }
     }

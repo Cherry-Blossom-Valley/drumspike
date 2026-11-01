@@ -123,7 +123,9 @@ an object result has an `outputSchema` and `structuredContent`. An error is a re
   (`per_track`, the default, or `single`), `tracks` (names or patterns, default all), `roles` (export by role, see the next section) and
   `formats` (`midi` and/or `spikes`, default both). `single` writes one
   type 1 file `<project>_drums.mid` instead of the `<track>_spike.mid` files: the project's tempo map, one MIDI track per exported track named after
-  it, each on its own note (the track's note), the same ticks as the per-track files. The answer adds `dest` and `midi_file`. `export_midi` and
+  it, each on its own note (the track's note), the same ticks as the per-track files. The answer adds `dest` and `midi_file`. A spike export of one
+  type (`spikes` or `audio`) also rewrites the other type's file of the same track (`<track>_audio_spike.wav` or `<track>_spike.wav`) when the folder
+  holds one, from the same hits; the answer lists these files in `also_updated` (#274). `export_midi` and
   `export_spikes` take `dest` too. `export_existing` takes the same options and lists the files that `export_all` would replace (a bad `dest` is
   the same 400 or 404). `export_dest_set {dest}` keeps a folder as the project's export folder (document field `export_dest`; none clears it): the
   Export dialog starts with it. The commands never use the kept folder themselves. A bad `dest` is 400 (relative path, not a folder, not writable)
