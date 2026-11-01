@@ -103,7 +103,7 @@
       {"do": "hold", "s": 1.5},
       {"do": "click", "sel": "#exCancel"},
       {"do": "wait", "cond": "() => document.querySelector('#exportModal').classList.contains('hidden')", "timeout": 15, "err": "the dialog closed"},
-      {"do": "hold", "s": 0.5}
+      {"do": "hold", "s": 1.5}
     ]},
     {"id": "p1-again", "area_sel": "#statusbar", "steps": [
       {"do": "zoom_to", "track": "s_top", "t": 3.125, "span": 0.5},
