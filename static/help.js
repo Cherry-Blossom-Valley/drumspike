@@ -79,8 +79,10 @@
   }
 
   async function open(id) {
+    // Help > Drum Spike Help (no id): the last chapter read, else the first one; never the Shortcuts
+    // section, which has its own menu item (Help > Keyboard Shortcuts opens it by id)
     showModal("#helpModal");
-    await openSection(id || (current && (current === "shortcuts" || manifest?.chapters?.some(c => c.file === current)) ? current : null));
+    await openSection(id || (current && manifest?.chapters?.some(c => c.file === current) ? current : null));
   }
 
   function hooks() {

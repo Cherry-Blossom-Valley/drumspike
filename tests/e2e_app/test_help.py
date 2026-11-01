@@ -103,6 +103,19 @@ def test_the_shortcuts_section_lists_every_keymap_row_and_follows_the_preset(app
     app.evaluate("() => setKeyPreset('default')")
 
 
+
+def test_drum_spike_help_after_the_shortcuts_opens_a_chapter(app):
+    # Help > Keyboard Shortcuts, Done, then Help > Drum Spike Help: the manual shows a chapter,
+    # not the Shortcuts section again (the app self-test shell scenario runs this order)
+    menu(app, "shortcuts")
+    expect(app.locator("#helpShortcuts")).to_be_visible()
+    app.locator("#helpDone").click()
+    expect(app.locator("#helpModal")).to_be_hidden()
+    menu(app, "drumspike_help")
+    expect(app.locator("#helpModal .helpChapterPage")).to_be_visible()
+    expect(app.locator("#helpShortcuts")).to_have_count(0)
+    app.locator("#helpDone").click()
+
 def test_the_screenshots_of_the_help_for_the_coordinator(app):
     menu(app, "drumspike_help")
     app.wait_for_function("() => document.querySelectorAll('#helpChapters .helpChapter').length > 0")
