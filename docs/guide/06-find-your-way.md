@@ -28,7 +28,8 @@ hits over 62.5 s; these keys take you through them fast.
    track row or of its header to give one track its own height; a double-click on the
    border puts it back.
 5. The lane toggles: **View > Velocity Lane** (`V`), **View > Other Mics Under Hit** (`O`),
-   **View > Bars|Beats Ruler** (`Shift+B`) and **View > Markers Ruler** (`Shift+R`).
+   **View > Bars|Beats Ruler** (`Shift+B`) and **View > Markers Ruler** (`Option+Shift+R`; #265
+   moved `Shift+R` to Hits > Re-analyze Selection).
 6. Step through the hits. **Hits > Next Hit** (`Tab`) and **Hits > Previous Hit** (`L`) move on
    the selected track; with no track selected, they move on all tracks.
    **Hits > Next Hit on All Tracks** (`N`) always moves on all tracks.

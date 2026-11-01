@@ -575,6 +575,8 @@ fn every_mcp_answer_validates_against_its_output_schema_and_every_tool_and_batch
         ),
         ("analyze_start", sd(json!({}))),
         ("analyze_status", sd(json!({}))),
+        // #265: the hits of a range only (after analyze_start, so the events are there)
+        ("reanalyze_selection", sd(json!({"name": k, "t0": 0.2, "t1": 0.6}))),
         ("track_histograms", sd(json!({"name": k}))),
         ("track_confidence", sd(json!({"name": k}))),
         ("track_repick", sd(json!({"name": k}))),
