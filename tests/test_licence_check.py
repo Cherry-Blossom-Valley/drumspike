@@ -49,7 +49,7 @@ def test_rows_read_from_the_table():
     )
     assert "static/*.js" in globs
     assert "site/assets/posters/*" in globs
-    assert len(globs) == 10
+    assert len(globs) == 12  # #255: static/help/img/*, static/help/index.json
 
 
 def test_real_tree_is_fully_covered():
