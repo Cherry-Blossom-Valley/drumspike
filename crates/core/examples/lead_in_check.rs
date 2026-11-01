@@ -6,8 +6,8 @@
 //! `label=<kick file>,<snare file>`.
 use std::path::{Path, PathBuf};
 
-use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track};
-use drumspike_core::refine::{RefineRule, first_motion_trace, set_lead_in};
+use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track, detect_hits};
+use drumspike_core::refine::{RefineRule, RefineWindow, first_motion_trace, refine_reach, refine_sr, set_lead_in};
 use drumspike_core::{MixMode, read_wav_mono};
 
 /// The noise floor before a hit: the median of the 1 ms block maxima of `|x|` in the 60 ms to 12 ms before it.
@@ -152,6 +152,63 @@ fn dump(x: &[f32], sr: u32, role: &str, times_s: &[f64]) {
             off(a)
         );
     }
+    println!();
+    println!("Steps before the walk, per asked time (samples relative to the hit after the lead-in, `a`):");
+    println!(
+        "| asked s | coarse | reference | reach (step) | s into walk | 2x floor first | floor dep | floor walk | rule window max |"
+    );
+    println!("|---|---|---|---|---|---|---|---|---|");
+    let coarse = coarse_times(x, sr, role);
+    for &q in times_s {
+        let Some(k) = (0..after.len()).min_by(|&i, &j| (after[i] - q).abs().total_cmp(&(after[j] - q).abs())) else {
+            continue;
+        };
+        let a = after[k];
+        let asf = (a * srf).round() as i64;
+        let rel = |t: f64| format!("{:+}", (t * srf).round() as i64 - asf);
+        let Some(ci) = (0..coarse.len()).min_by(|&i, &j| (coarse[i] - a).abs().total_cmp(&(coarse[j] - a).abs()))
+        else {
+            continue;
+        };
+        let t0 = coarse[ci];
+        let nb: Vec<f64> = [ci.checked_sub(1), Some(ci + 1)]
+            .into_iter()
+            .flatten()
+            .filter_map(|i| coarse.get(i).copied())
+            .collect();
+        let win = RefineWindow::DEFAULT;
+        let (rt, _) = refine_sr(x, t0, sr, &nb, win);
+        let rr = refine_reach(x, t0, sr, &nb, win);
+        let dep = departure(x, a, srf).map_or("-".to_string(), |d| format!("{:+}", d - asf));
+        let fl_dep = floor_before(x, (a * srf).round() as usize, srf);
+        let s = (rr.t * srf).round() as i64;
+        let fl_walk = first_motion_trace(x, s, sr, None, None).map_or(0.0, |t| t.floor);
+        let i0 = ((t0 - 0.0015) * srf).round() as usize;
+        let i1 = (((t0 + 0.010) * srf).round() as usize).min(x.len());
+        let mx = x[i0.min(i1)..i1].iter().fold(0f32, |m, v| m.max(v.abs()));
+        println!(
+            "| {q:.4} | {} | {} | {} ({:?}) | {} | {dep} | {fl_dep:.5} | {fl_walk:.5} | {mx:.5} |",
+            rel(t0),
+            rel(rt),
+            rel(rr.t),
+            rr.step,
+            s - asf
+        );
+    }
+}
+
+/// The coarse hits of a track after the min-gap dedup: what the refinement starts from.
+fn coarse_times(x: &[f32], sr: u32, role: &str) -> Vec<f64> {
+    let params = AnalyzeParams::default();
+    let (mut det, _) = detect_hits(x, sr, role, &params, Detector::Dsp).expect("detection");
+    det.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<f64> = Vec::new();
+    for (t, _) in det {
+        if out.last().is_none_or(|l| t - l >= params.min_gap_ms / 1000.0) {
+            out.push(t);
+        }
+    }
+    out
 }
 
 fn main() {
