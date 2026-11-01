@@ -49,8 +49,16 @@ def render(module, scene, narration, plan, media_dir, quality):
     """Run Manim on one scene class; returns the mp4 path or raises SystemExit with the reason."""
     env = dict(os.environ, DRUMSPIKE_EXPLAINER_NARRATION=str(narration), DRUMSPIKE_EXPLAINER_PLAN=str(plan),
                PYTHONPATH=str(HERE))
-    cmd = ["uv", "run", "--with", "manim", "manim", "render", f"-q{quality}", "--fps", "60",
-           "--media_dir", str(media_dir), str(HERE / module), scene]
+    # DRUMSPIKE_MANIM: a manim executable to render with instead of `uv run --with manim`
+    # (a host whose uv cannot build the manim wheels, e.g. no X11/cairo headers; build one
+    # venv with them and point this at its manim).
+    override = os.environ.get("DRUMSPIKE_MANIM")
+    if override:
+        cmd = [override, "render", f"-q{quality}", "--fps", "60",
+               "--media_dir", str(media_dir), str(HERE / module), scene]
+    else:
+        cmd = ["uv", "run", "--with", "manim", "manim", "render", f"-q{quality}", "--fps", "60",
+               "--media_dir", str(media_dir), str(HERE / module), scene]
     done = subprocess.run(cmd, cwd=HERE, env=env)
     if done.returncode != 0:
         raise SystemExit(f"FAIL: manim exited {done.returncode} for {module} (see its output above)")
