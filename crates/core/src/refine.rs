@@ -840,8 +840,9 @@ pub struct LeadTrace {
 /// (under `thr`, over the floor) ends the walk at the swing. `foot` is the walk's foot: this goes on back from it over
 /// the samples at or above [`FM_FLOOR_DB`] over the `floor` (the same gap rule), at most [`LEAD_IN_MAX_S`] and never
 /// past `lo`, and returns the first sample of that rise. A rise that does not end within that bound, no floor, or a
-/// `thr` that is not above that level: `foot` stays.
-fn lead_in(x: &[f32], foot: i64, lo: i64, floor: f64, thr: f64, gap: i64, srf: f64) -> i64 {
+/// `thr` that is not above that level: `foot` stays. `judge` is the end of the stretch that decides whether the rise
+/// is a first bump (#271): the foot of the walk at the base margin, the same for every peak margin.
+fn lead_in(x: &[f32], (foot, judge): (i64, i64), lo: i64, floor: f64, thr: f64, gap: i64, srf: f64) -> i64 {
     if !LEAD_IN.load(Ordering::Relaxed) {
         return foot;
     }
@@ -857,7 +858,11 @@ fn lead_in(x: &[f32], foot: i64, lo: i64, floor: f64, thr: f64, gap: i64, srf: f
         if two_tap(x, i as usize) >= low {
             lead = i;
         } else if lead - i >= gap {
-            return if is_first_bump(x, lead, foot, gap) { lead } else { foot };
+            return if is_first_bump(x, lead, judge.max(lead), gap) {
+                lead
+            } else {
+                foot
+            };
         }
     }
     foot
@@ -909,6 +914,22 @@ pub fn first_motion_trace(
     first_motion_traced(x, s, sr, prev_mid, next_mid, FM_PEAK_DB, None).1
 }
 
+/// The foot of the walk back from `s` over the samples at or above `thr` (gaps under `gap` do not end the run), and
+/// whether the walk ended on a gap before `lo`.
+fn walk_foot(x: &[f32], s: i64, lo: i64, thr: f64, gap: i64) -> (i64, bool) {
+    let mut i = s;
+    let mut foot = s;
+    while i > lo {
+        i -= 1;
+        if two_tap(x, i as usize) >= thr {
+            foot = i;
+        } else if foot - i >= gap {
+            return (foot, true);
+        }
+    }
+    (foot, false)
+}
+
 fn first_motion_traced(
     x: &[f32],
     s: i64,
@@ -940,18 +961,7 @@ fn first_motion_traced(
     let floor = floor_before(x, s, from, srf);
     let thr = (pk * 10f64.powf(-peak_db / 20.0)).max(floor * 10f64.powf(FM_FLOOR_DB / 20.0));
     let gap = samples(FM_GAP_S, srf).max(1);
-    let mut i = s;
-    let mut foot = s;
-    let mut ended = false;
-    while i > lo {
-        i -= 1;
-        if two_tap(x, i as usize) >= thr {
-            foot = i;
-        } else if foot - i >= gap {
-            ended = true;
-            break;
-        }
-    }
+    let (foot, ended) = walk_foot(x, s, lo, thr, gap);
     if !ended {
         return ((s, BackStep::Busy), None);
     }
@@ -964,7 +974,18 @@ fn first_motion_traced(
         }
     }
     let walked = foot;
-    let foot = lead_in(x, foot, lo, floor, thr, gap, srf);
+    // The bump decision is judged on the stretch up to the foot of the walk at the base margin, so that every peak
+    // margin accepts or rejects the same lead-in (#271).
+    let judge = if peak_db == FM_PEAK_DB {
+        foot
+    } else {
+        let thr0 = (pk * 10f64.powf(-FM_PEAK_DB / 20.0)).max(floor * 10f64.powf(FM_FLOOR_DB / 20.0));
+        match walk_foot(x, s, lo, thr0, gap) {
+            (f0, true) => f0,
+            _ => foot,
+        }
+    };
+    let foot = lead_in(x, (foot, judge), lo, floor, thr, gap, srf);
     let trace = LeadTrace {
         floor,
         thr,

@@ -50,6 +50,7 @@ MOVE_MS = 1.0            # the labelled set: hits version 3 moved earlier by mor
 
 FM_PEAK_S = 0.005
 FM_PEAK_DB = 33.0
+BASE_PEAK_DB = 33.0      # the margin that judges a lead-in's bump, whatever margin the walk uses (#271)
 FM_FLOOR_S = 0.050
 FM_FLOOR_SKIP_S = 0.002
 FM_BLOCK_S = 0.001
@@ -98,7 +99,7 @@ def _is_first_bump(x, lead, foot, gap):
     return far < near * 0.8 and flips * 4 <= pairs * 3
 
 
-def _lead_in(x, tt, off, foot, lo, fl, thr, gap, sr):
+def _lead_in(x, tt, off, foot, judge, lo, fl, thr, gap, sr):
     """`refine.rs` `lead_in` (#239): from the walk's foot on back over the samples at or above the floor + 6 dB (the
     same gap rule), at most `LEAD_IN_MAX_S` and never past `lo`; the first sample of that rise, if it is a first bump
     of the hit (#271), else `foot`."""
@@ -112,7 +113,7 @@ def _lead_in(x, tt, off, foot, lo, fl, thr, gap, sr):
         if tt[i - off] >= low:
             lead = i
         elif lead - i >= gap:
-            return lead if _is_first_bump(x, lead, foot, gap) else foot
+            return lead if _is_first_bump(x, lead, max(judge, lead), gap) else foot
     return foot
 
 
@@ -168,7 +169,18 @@ def walk(x, s, sr, prev_mid=None, next_mid=None, stop=None, run=1, tt=None, lead
         if held < at * 10 ** (-FM_LONG_DB / 20):
             return s, "separate"
     if lead_in and how != "stopped":
-        foot = _lead_in(x, tt, off, foot, lo, fl, thr, gap, sr)
+        judge = foot
+        if FM_PEAK_DB != BASE_PEAK_DB:   # the bump is judged on the base margin's foot, the same for every margin (#271)
+            thr0 = max(pk * 10 ** (-BASE_PEAK_DB / 20), fl * 10 ** (FM_FLOOR_DB / 20))
+            j, k = s, s
+            while j > lo:
+                j -= 1
+                if tt[j - off] >= thr0:
+                    k = j
+                elif k - j >= gap:
+                    judge = k
+                    break
+        foot = _lead_in(x, tt, off, foot, judge, lo, fl, thr, gap, sr)
     if foot < s:
         return foot, how if how == "stopped" else "moved"
     return s, "kept" if how != "stopped" else "stopped"

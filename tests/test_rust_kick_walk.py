@@ -83,6 +83,10 @@ def test_the_python_walk_and_the_rust_walk_agree_at_both_margins(tmp_path, noise
             assert abs(b["t"] - want) < 1e-9, (noise_db, peak_db, i, b, want, how)
     d33, d29 = (rust_refine(tmp_path, wav, hits, 3, p) for p in (33.0, 29.0))
     assert [r["t"] for r in rust_refine(tmp_path, wav, hits, 3)] == [r["t"] for r in d33], "no peak_db is the shipped margin"
+    for peak_db, d in ((33.0, d33), (29.0, d29)):   # #271: no hit is placed before its hard attack, at either margin
+        # (the two loudest tones, 0.02 and 0.04, are a bump of the hit itself: the walk joins their whole 3 ms)
+        early = [(i, round((b["t"] - t) * SR)) for i, (b, t, a) in enumerate(zip(d, onsets, amps)) if a < 0.015 and b["t"] < t - 2.0 / SR]
+        assert not early, (noise_db, peak_db, early)
     moved_later = sum(1 for a, b in zip(d33, d29) if b["t"] > a["t"] + 1e-9)
     assert moved_later >= 3, "the lower margin must move some hits later"
     assert all(b["t"] >= a["t"] - 1e-12 for a, b in zip(d33, d29)), "a lower margin never walks further back"
