@@ -89,7 +89,7 @@
       {"do": "key", "press": "Meta+E"},
       {"do": "visible", "sel": "#exportModal", "timeout": 30, "err": "the Export dialog"},
       {"do": "wait", "cond": "() => document.querySelector('#exModeTrack').checked && document.querySelector('#exMidi').checked && document.querySelector('#exSpikes').checked && document.querySelector('#exSpikeSynth').checked", "timeout": 15, "err": "the defaults: per track, MIDI and spike WAV, Synthetic"},
-      {"do": "hold", "s": 3.0},
+      {"do": "hold", "s": 1.5},
       {"do": "click", "sel": "#exGo"},
       {"do": "wait", "cond": "() => !document.querySelector('#confirmModal').classList.contains('hidden') || (!EX.busy && document.querySelector('#exResult') && !document.querySelector('#exResult').classList.contains('hidden'))", "timeout": 30,
        "err": "the No tempo set notice shows, or the export finished without one (the notice arrives a few IPC round-trips after the click: wait for it to SHOW, never for not-visible-yet)"},
