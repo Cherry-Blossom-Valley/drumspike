@@ -73,7 +73,7 @@
 //! Every value is computed in a fixed order in `f64`; window bounds use [`ms_to_samples`].
 
 use super::attribution::{Biquad, Role, band_peak_db, band_sections, ms_to_samples};
-use crate::refine::{FM_PEAK_DB, RefineRule, RefineWindow, first_motion, refine_track_rule_peak};
+use crate::refine::{FM_PEAK_DB, RefineRule, RefineWindow, first_motion, neighbours, refine_rule_peak};
 
 /// The kind of a close mic of the rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,14 +303,37 @@ pub fn hit_level_full_band(x: &[f32], sr: u32, t: f64, p: &CrossBleedParams) -> 
 /// is 0.06 ms). Refining with the stored rule gives both passes the same times.
 /// `refine = false` returns `ts` unchanged: the candidate times are the motion, as the stored
 /// hits of a refine-off analysis are.
+/// `bounds` (parallel to `ts`) carries each candidate's EXTRA refine bounds: the times of the
+/// source hits that coincide with it (within `coincide_ms`, as the app measures them). The
+/// stored hits' refine bounds the walk at the midpoint to the previous hit; a candidate's
+/// previous candidate can sit far away, so without the source hit the walk runs back over the
+/// snare bleed onto the bleed's edge — the snare's time — and the candidate lands on the
+/// source hit and collapses with, or is judged as, the bleed (#296 verify round 3: loud real
+/// tom hits 2.5 to 5.6 ms from a snare hit gone from the output). The bounds go into the same
+/// neighbour list, so the walk stops at the midpoint between the candidate and the source hit
+/// and the loud stroke keeps its own attack.
 #[must_use]
-pub fn candidate_motion(x: &[f32], sr: u32, ts: &[f64], win: RefineWindow, rule: RefineRule, refine: bool) -> Vec<f64> {
+pub fn candidate_motion(
+    x: &[f32],
+    sr: u32,
+    ts: &[f64],
+    win: RefineWindow,
+    rule: RefineRule,
+    refine: bool,
+    bounds: &[Vec<f64>],
+) -> Vec<f64> {
     if !refine {
         return ts.to_vec();
     }
-    refine_track_rule_peak(x, sr, ts, win, rule, FM_PEAK_DB)
-        .iter()
-        .map(|r| r.t)
+    ts.iter()
+        .enumerate()
+        .map(|(i, &t)| {
+            let mut nb = neighbours(ts, i);
+            if let Some(b) = bounds.get(i) {
+                nb.extend(b.iter().copied());
+            }
+            refine_rule_peak(x, t, sr, &nb, win, rule, FM_PEAK_DB).t
+        })
         .collect()
 }
 

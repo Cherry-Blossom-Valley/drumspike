@@ -407,11 +407,30 @@ fn run_one(
         // than `coincide_ms` before the snare hit, so the coincidence lookup finds nothing and
         // the candidate stays (#296 verify round 2). The pass-1 pairs come in as `prior`
         // (#296): the alignment is decided on the stored hits, not re-measured on the
-        // candidate times (whose |lead| medians move).
+        // candidate times (whose |lead| medians move). The refine bounds (#296 verify round 3):
+        // every source hit within `coincide_ms` of the candidate — without it the walk runs
+        // back over the snare bleed onto the bleed's edge (the snare's time) and a loud real
+        // hit a few ms from a snare hit collapses with, or is judged as, the bleed.
         let params_a = AnalyzeParams {
             rule: crate::jobs::analysis_rule(&svc.inner.config),
             ..AnalyzeParams::default()
         };
+        let src_times: Vec<Vec<f64>> = srcs
+            .iter()
+            .map(|(i, d)| source_motion(&mics[*i], &d.samples, sr))
+            .collect();
+        let bounds: Vec<Vec<f64>> = cands
+            .iter()
+            .map(|c| {
+                let tc = c.time;
+                src_times
+                    .iter()
+                    .flatten()
+                    .filter(|&&ts| (ts - tc).abs() <= p.coincide_ms / 1000.0 + 1e-9)
+                    .copied()
+                    .collect()
+            })
+            .collect();
         let cand_motion = drumspike_core::detect::cross_bleed::candidate_motion(
             &dec_x.samples,
             sr,
@@ -419,6 +438,7 @@ fn run_one(
             params_a.window,
             params_a.rule,
             params_a.refine,
+            &bounds,
         );
         let (marks_t, learned2) =
             cross_bleed_prior(&cross_mics(&dec_x, &srcs, mics, cand_motion), sr, p, Some(&learned));
