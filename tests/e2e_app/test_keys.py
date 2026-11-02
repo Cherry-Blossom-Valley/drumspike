@@ -59,14 +59,14 @@ def test_every_menu_item_has_one_row_and_menu_rs_has_no_keys_of_its_own(app):
     rows = js(app, "() => DSKeys.COMMANDS.filter(c => c.menu).map(c => c.menu)")
     assert rows == spec_ids()                                             # the same 103 items, in the menu's order
     assert js(app, "() => DSKeys.COMMANDS.length") == 119                 # #255: Drum Spike Help; #265: Re-analyze Selection; #242: Toggle Hit Active; #240: Audition on Tab; plus 6 keys without a menu item (#169: Show Overview, Add Current, Organize have rows; #157: Other Mics Under Hit has a menu item; P4-wf10: Suspend Follow when Editing, no key; #436: Stop Returns to Start; #158 gave Set Marker at Selection, Next Marker, Previous Marker, Audition Hit, Zoom Toggle and the track steps menu items; the rest: the nudge x10 aliases, Nudge Value Up/Down, Keep the Zoom, Deselect; #150 and P4-31: 98 items; P4-40f: Velocity Lane; P4-40a: 88 items; P4-39a and P4-39d: 85 items; 74 items since P3-20a, 75 since P3-20b, 81 since P4-8, 85 since P4-6a, 82 since P4-30; #468: Set Bar 1 at Audio Start; #149: Bars|Beats and Timecode (30 fps) have menu items; #175: Tab Skips Deactivated Hits, All Found Hits have rows)
-    assert js(app, "() => DSKeys.menuKeys().length") == 39                 # #169: Show Overview; P3-19: Open Most Recent, Keyboard Shortcuts; P3-20a: Waveform Zoom In, Out, Reset; P4-31: Export Again; #158: Next Marker, Previous Marker; #207: Export Selected Tracks, Undo History
+    assert js(app, "() => DSKeys.menuKeys().length") == 75                 # #300: every item with a key shows it (42 of them with Cmd, Control or Option; the rest are shown by the menu while no text field has the focus); #169: Show Overview; P3-19: Open Most Recent, Keyboard Shortcuts; P3-20a: Waveform Zoom In, Out, Reset; P4-31: Export Again; #158: Next Marker, Previous Marker; #207: Export Selected Tracks, Undo History
     handlers = set(js(app, "() => Object.keys(DSShell.handlers)"))
     assert set(rows) == handlers - {"recent", "recent_clear", "project", "follow", "zoom_own"}   # P3-18: the Follow Hits Of entries; #169: the own zoom presets; #441: Clear Recent
     # menu.rs sets an accelerator only through accel_of (the table); its items carry no key strings
     src = (ROOT / "apps/desktop/src-tauri/src/menu.rs").read_text()
     main = src[:src.index("#[cfg(test)]")]
     assert re.findall(r"\.accelerator\(([^)]*)\)", main) == ["a", "a"]
-    assert main.count("if let Some(a) = accel_of(it.id, current_preset())") == 2
+    assert main.count("if let Some(a) = live_accel(it.id, current_preset(), is_typing())") == 2
     assert not re.search(r'"(CmdOrCtrl|Ctrl|Alt)\+', main)
     assert 'include_str!("../../../../static/keymap.js")' in main
 

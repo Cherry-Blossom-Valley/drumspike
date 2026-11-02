@@ -137,7 +137,7 @@
       for (const c of rows) {
         const it = byId[c.menu];
         if (!it) { differ.push(`${c.menu}: not in the menu`); continue; }
-        const mk = DSKeys.menuKeyOf(c, preset), want = mk ? DSKeys.tauriOf(mk) : null;
+        const mk = DSKeys.shownKeyOf(c, preset), want = mk ? DSKeys.tauriOf(mk) : null;   // #300: the menu shows every key, the plain ones too
         if ((it.accel || null) !== want) differ.push(`${c.menu}: menu ${it.accel}, table ${want}`);
         if (it.label !== c.title) differ.push(`${c.menu}: label ${it.label}, table ${c.title}`);
         if ((it.page_keys || []).join() !== c.page_keys.join()) differ.push(`${c.menu}: page keys ${it.page_keys}, table ${c.page_keys}`);
@@ -195,7 +195,7 @@
         const byId = Object.fromEntries(rep.items.map(i => [i.id, i]));
         const differ = [];
         for (const c of DSKeys.COMMANDS.filter(x => x.menu)) {
-          const k = DSKeys.menuKeyOf(c, preset), want = k ? DSKeys.tauriOf(k) : null;
+          const k = DSKeys.shownKeyOf(c, preset), want = k ? DSKeys.tauriOf(k) : null;
           if (!byId[c.menu] || (byId[c.menu].accel || null) !== want) differ.push(`${c.menu}: menu ${byId[c.menu] && byId[c.menu].accel}, table ${want}`);
         }
         need(differ.length === 0, `${preset}: the live menu and the table differ: ${differ.join("; ")}`);
@@ -211,7 +211,7 @@
       try {
       if (presetWas !== "default") { setKeyPreset("default", false); await DSShell.sync(); }
       pre = await compare("default");
-      need(pre.byId.next_hit.accel === null && pre.byId.next_hit_all.accel === "Ctrl+Tab", "the default preset has Control+Tab for next hit on all tracks");
+      need(pre.byId.next_hit.accel === "Tab" && pre.byId.next_hit_all.accel === "Ctrl+Tab", "the default preset has Tab for next hit and Control+Tab for next hit on all tracks");
       setKeyPreset("cubase", false);
       await DSShell.sync();
       need(DSKeys.preset === "cubase" && DSShell.menuState().keyPreset === "cubase", "the page did not switch to the Cubase preset");
@@ -220,16 +220,44 @@
       need(a("next_hit") === "Alt+N" && a("prev_hit") === "Alt+B", `Cubase hit keys: ${a("next_hit")}, ${a("prev_hit")}`);
       need(a("nudge_earlier") === "CmdOrCtrl+ArrowLeft" && a("nudge_later") === "CmdOrCtrl+ArrowRight", "Cubase nudge keys");
       need(a("zoom_in") === "CmdOrCtrl+]" && a("zoom_out") === "CmdOrCtrl+[", "Cubase zoom keys (the aliases of the gap)");
-      need(a("next_hit_all") === null && a("zoom_project") === null && a("go_start") === null && a("mute_track") === null, "page keys must not be accelerators");
+      need(a("next_hit_all") === "N" && a("zoom_project") === "Shift+F" && a("go_start") === "Enter" && a("mute_track") === "M", "the keys without a modifier are shown by the menu too (#300)");
       need(a("save") === "CmdOrCtrl+S" && a("inspector") === "Alt+I", "rows without a Cubase list keep their accelerator");
       setKeyPreset("default", false);
       await DSShell.sync();
       const back = await compare("default");
-      need(back.byId.next_hit.accel === null && back.byId.prev_hit.accel === "Alt+Tab" && back.byId.nudge_earlier.accel === null, "the default preset is back");
+      need(back.byId.next_hit.accel === "Tab" && back.byId.prev_hit.accel === "Alt+Tab" && back.byId.nudge_earlier.accel === "ArrowLeft", "the default preset is back");
       } finally { setKeyPreset(presetWas, false); await DSShell.sync(); }
       report.metrics.key_preset = { default_accelerators: pre.withAccel, cubase_accelerators: cub.withAccel,
-        cubase_changed: DSKeys.COMMANDS.filter(c => c.menu && DSKeys.menuKeyOf(c, "cubase") !== DSKeys.menuKeyOf(c, "default")).map(c => c.menu) };
+        cubase_changed: DSKeys.COMMANDS.filter(c => c.menu && DSKeys.shownKeyOf(c, "cubase") !== DSKeys.shownKeyOf(c, "default")).map(c => c.menu) };
       return report.metrics.key_preset;
+    });
+
+    await step("menu_typing_plain_keys", async () => {
+      // #300: the menu shows V, Space and Tab as accelerators; while a text field or dialog has the focus (shell_typing) the plain
+      // ones are off the items, so the field gets the key. The real NSMenu is asked: performKeyEquivalent matches V only outside.
+      const accel = async id => ((await T.invoke("selftest_menu_report")).items.find(i => i.id === id) || {}).accel || null;
+      try {
+        need(await accel("velocity_lane") === "V" && await accel("play_stop") === "Space" && await accel("next_hit") === "Tab", "the menu does not show V, Space and Tab");
+        await T.invoke("shell_typing", { on: true });
+        need(await accel("velocity_lane") === null && await accel("play_stop") === null && await accel("next_hit") === null, "typing: the plain keys are still on the menu");
+        need(await accel("save") === "CmdOrCtrl+S" && await accel("next_hit_all") === "Ctrl+Tab", "typing: the keys with a modifier must stay");
+        const off = await T.invoke("selftest_menu_key", { key: "V" });
+        const nsV = (await T.invoke("selftest_ns_menu")).filter(r => r.key.toLowerCase() === "v" && !(r.mask & ((1 << 18) | (1 << 19) | (1 << 20)))).map(r => `${r.menu} > ${r.label} mask ${r.mask} enabled ${r.enabled}`);
+        need(nsV.length === 0 && off.matched !== 1, `typing: the NSMenu still matches V (${JSON.stringify(off)}; items with the key v: ${nsV.join("; ") || "none"})`);
+        await T.invoke("shell_typing", { on: false });
+        need(await accel("velocity_lane") === "V" && await accel("play_stop") === "Space", "the plain keys did not come back");
+        const was = VL.on;
+        const on = await T.invoke("selftest_menu_key", { key: "V" });
+        need(on.matched === 1, `the NSMenu does not match V outside a text field (${JSON.stringify(on)})`);
+        await until(() => VL.on !== was, "V (the menu) to toggle the velocity lane", 5000);
+        await T.invoke("selftest_menu_key", { key: "V" });
+        await until(() => VL.on === was, "V (the menu) to toggle the velocity lane back", 5000);
+      } finally { await T.invoke("shell_typing", { on: false }); }
+      // what the menu bar shows (the NSMenu as macOS has it): the three examples of the ticket
+      const ns = (await T.invoke("selftest_ns_menu")).filter(r => ["Velocity Lane", "Play/Stop", "Next Hit"].includes(r.label)).map(r => `${r.menu} > ${r.label}: key ${JSON.stringify(r.key)} mask ${r.mask}`);
+      need(ns.length === 3, `the NSMenu rows of the examples: ${ns.join("; ")}`);
+      report.metrics.menu_typing = { ns_menu: ns, v_matched_typing: "no", v_matched_outside: "yes" };
+      return report.metrics.menu_typing;
     });
 
     await step("finder_open", async () => {

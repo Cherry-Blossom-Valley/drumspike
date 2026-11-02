@@ -10,8 +10,10 @@
 //! ([`keymap`]) and gives each item the accelerator of its row ([`accel_of`], converted to the Tauri notation).
 //! The page reads the same file (`DSKeys`), so the menu, the page keys and the help panel cannot differ; the tests
 //! below fail when a key is in two commands or an accelerator of the menu differs from the table.
-//! A shortcut (accelerator) is set only for keys with Cmd, Control or Option: the keys without one (Space, Tab,
-//! Return, Delete, letters) stay page keys, so a text field keeps them (`static/app.js` keydown).
+//! #300: every item with a key in the table shows it ([`shown_accel_of`]), also the keys without Cmd, Control or
+//! Option (Space, Tab, Return, Delete, letters). Those plain accelerators are on the menu only while the page has
+//! no text field or dialog in focus: the page tells the shell on every focus change ([`set_typing`]), the shell takes
+//! them off the items and puts them back, so a text field keeps its keys and a key runs once.
 //! An item whose command does not exist yet would stay in the menu, greyed out (`ready: false`); none is.
 
 use std::sync::{LazyLock, Mutex};
@@ -473,6 +475,20 @@ impl KeyCommand {
         }
     }
 
+    /// The key that the menu shows for the command in a preset (#300): the [`menu_key_in`](Self::menu_key_in), else the
+    /// first key of the preset that the menu can show (a Numpad key it cannot: the row's next key). `None` without a
+    /// menu item or a showable key. A key without Cmd, Control or Option is on the menu only while no text field
+    /// has the focus ([`set_typing`]).
+    #[must_use]
+    pub fn shown_key_in(&self, preset: &str) -> Option<String> {
+        self.menu.as_ref()?;
+        self.menu_key_in(preset).or_else(|| {
+            self.keys(preset)
+                .into_iter()
+                .find(|k| parse_key(k).is_some_and(|(_, key)| !key.starts_with("Numpad")))
+        })
+    }
+
     /// The keys of the command in a preset: `default` (the menu key, then the page keys) or `cubase`.
     #[must_use]
     pub fn keys(&self, preset: &str) -> Vec<String> {
@@ -658,6 +674,26 @@ pub fn accel_of(id: &str, preset: &str) -> Option<String> {
         .and_then(|k| tauri_accel(&k))
 }
 
+/// The accelerator that the menu item `id` shows (#300): [`accel_of`], else the first showable key of its row, also
+/// a key without Cmd, Control or Option (Space, Tab, V). Tauri notation.
+#[must_use]
+pub fn shown_accel_of(id: &str, preset: &str) -> Option<String> {
+    key_row(id)
+        .and_then(|c| c.shown_key_in(preset))
+        .and_then(|k| tauri_accel(&k))
+}
+
+/// The accelerator that the live menu gives the item `id`: while `typing` (a text field or a dialog of the page
+/// has the focus) only the keys with Cmd, Control or Option, else every shown key.
+#[must_use]
+pub fn live_accel(id: &str, preset: &str, typing: bool) -> Option<String> {
+    if typing {
+        accel_of(id, preset)
+    } else {
+        shown_accel_of(id, preset)
+    }
+}
+
 /// The key presets of the app (P3-13c): the setting `key_preset` of `<home>/settings.json` holds one of them.
 pub const PRESETS: [&str; 2] = ["default", "cubase"];
 
@@ -674,6 +710,15 @@ static PRESET: Mutex<&'static str> = Mutex::new("default");
 #[must_use]
 pub fn current_preset() -> &'static str {
     *lock(&PRESET)
+}
+
+/// Whether the page has an editable element or a dialog in focus now (the last [`set_typing`]).
+static TYPING: Mutex<bool> = Mutex::new(false);
+
+/// The page is typing now: the live menu has no plain-key accelerators.
+#[must_use]
+pub fn is_typing() -> bool {
+    *lock(&TYPING)
 }
 
 /// One project entry of the Window menu.
@@ -862,7 +907,7 @@ fn no_tracks<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<MenuItem<R>> {
 
 fn make_item<R: Runtime>(app: &AppHandle<R>, it: &Item) -> tauri::Result<MenuItem<R>> {
     let mut b = MenuItemBuilder::with_id(it.id, it.label).enabled(it.ready && !it.needs_project);
-    if let Some(a) = accel_of(it.id, current_preset()) {
+    if let Some(a) = live_accel(it.id, current_preset(), is_typing()) {
         b = b.accelerator(a);
     }
     b.build(app)
@@ -872,7 +917,7 @@ fn make_check<R: Runtime>(app: &AppHandle<R>, it: &Item, on: bool) -> tauri::Res
     let mut b = CheckMenuItemBuilder::with_id(it.id, it.label)
         .checked(on)
         .enabled(it.ready && !it.needs_project);
-    if let Some(a) = accel_of(it.id, current_preset()) {
+    if let Some(a) = live_accel(it.id, current_preset(), is_typing()) {
         b = b.accelerator(a);
     }
     b.build(app)
@@ -1403,19 +1448,116 @@ pub fn set_preset<R: Runtime>(app: &AppHandle<R>, name: &str) -> tauri::Result<(
     if current_preset() == preset {
         return Ok(());
     }
+    apply_accels(app, preset, is_typing())?;
+    *lock(&PRESET) = preset;
+    Ok(())
+}
+
+/// #300: the page says whether an editable element or a dialog has the focus. The menu shows the plain keys (V,
+/// Space, Tab) as accelerators only while it is not so: a text field must get them as text, and a dialog its Return.
+/// Does nothing when the state is the one the menu has.
+///
+/// # Errors
+///
+/// When the windowing library cannot set the accelerator of an item.
+pub fn set_typing<R: Runtime>(app: &AppHandle<R>, on: bool) -> tauri::Result<()> {
+    if is_typing() == on {
+        return Ok(());
+    }
+    apply_accels(app, current_preset(), on)?;
+    *lock(&TYPING) = on;
+    Ok(())
+}
+
+/// Give every item the accelerator of `preset` for the typing state (the plain keys only when not `typing`).
+fn apply_accels<R: Runtime>(app: &AppHandle<R>, preset: &str, typing: bool) -> tauri::Result<()> {
     let Some(menu) = app.menu() else { return Ok(()) };
+    let mut without = std::collections::HashSet::new();
     for it in SPEC {
-        let accel = accel_of(it.id, preset);
+        let accel = live_accel(it.id, preset, typing);
+        if accel.is_none() {
+            without.insert(it.id);
+        }
         match find_item(&menu, it.id) {
             Some(MenuItemKind::MenuItem(m)) => m.set_accelerator(accel)?,
             Some(MenuItemKind::Check(c)) => c.set_accelerator(accel)?,
             _ => {}
         }
     }
-    *lock(&PRESET) = preset;
+    // muda on macOS ignores `None`: the key equivalent of the `NSMenuItem` stays (V would still fire the menu while
+    // a text field has the focus, and a key of the other preset would stay), so the items without a key are cleared here
     #[cfg(target_os = "macos")]
-    fix_shift_equivalents(app);
+    {
+        clear_ns_equivalents(app, item_paths(&menu, &without));
+        fix_shift_equivalents(app);
+    }
     Ok(())
+}
+
+/// The position (menu bar index, then the index in each submenu) of the plain and check items `ids` in the menu: the
+/// path to the same item in the `NSMenu`, which muda builds in the same order.
+#[cfg(target_os = "macos")]
+fn item_paths<R: Runtime>(menu: &Menu<R>, ids: &std::collections::HashSet<&str>) -> Vec<Vec<usize>> {
+    fn walk<R: Runtime>(
+        items: &[MenuItemKind<R>],
+        at: &mut Vec<usize>,
+        ids: &std::collections::HashSet<&str>,
+        out: &mut Vec<Vec<usize>>,
+    ) {
+        for (i, kind) in items.iter().enumerate() {
+            at.push(i);
+            match kind {
+                MenuItemKind::Submenu(s) => {
+                    if let Ok(sub) = s.items() {
+                        walk(&sub, at, ids, out);
+                    }
+                }
+                MenuItemKind::MenuItem(_) | MenuItemKind::Check(_) if ids.contains(kind.id().as_ref()) => {
+                    out.push(at.clone());
+                }
+                _ => {}
+            }
+            at.pop();
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(items) = menu.items() {
+        walk(&items, &mut Vec::new(), ids, &mut out);
+    }
+    out
+}
+
+/// Take the key equivalent off the `NSMenuItem`s at `paths` ([`item_paths`]). Runs on the main thread, after the
+/// accelerators that muda set.
+#[cfg(target_os = "macos")]
+fn clear_ns_equivalents<R: Runtime>(app: &AppHandle<R>, paths: Vec<Vec<usize>>) {
+    let _ = app.run_on_main_thread(move || {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::{NSApplication, NSEventModifierFlags};
+        use objc2_foundation::NSString;
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let Some(bar) = NSApplication::sharedApplication(mtm).mainMenu() else {
+            return;
+        };
+        for path in &paths {
+            let mut menu = bar.clone();
+            for (depth, &i) in path.iter().enumerate() {
+                let Some(it) = menu.itemArray().iter().nth(i) else {
+                    break;
+                };
+                if depth + 1 == path.len() {
+                    it.setKeyEquivalent(&NSString::from_str(""));
+                    it.setKeyEquivalentModifierMask(NSEventModifierFlags(0));
+                } else if let Some(sub) = it.submenu() {
+                    menu = sub;
+                } else {
+                    break;
+                }
+            }
+        }
+    });
 }
 
 /// The Window menu: one check item per open project (the current one checked) before Minimize and Zoom.
@@ -1560,7 +1702,7 @@ pub fn report<R: Runtime>(app: &AppHandle<R>) -> Value {
         };
         let row = key_row(it.id);
         items.push(json!({
-            "id": it.id, "label": it.label, "accel": accel_of(it.id, current_preset()), "ready": it.ready, "card": it.card,
+            "id": it.id, "label": it.label, "accel": live_accel(it.id, current_preset(), is_typing()), "ready": it.ready, "card": it.card,
             "needs_project": it.needs_project, "kind": kind,
             "menu_key": row.and_then(|r| r.menu_key.clone()), "page_keys": row.map(|r| r.page_keys.clone()).unwrap_or_default(),
             "in_menu": live_kind == Some(kind), "enabled": enabled, "checked": checked,

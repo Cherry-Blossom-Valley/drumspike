@@ -22,7 +22,8 @@
   /* The accelerators of the native menu come from the key table (static/keymap.js, P3-13b); menu.rs reads the
      same table. The menu runs these keys, so app.js must not run them again. Redo with Cmd-Y is a page key (the
      menu has Shift-Cmd-Z only), so app.js keeps Cmd-Y. Keys without Cmd, Control or Option (Space, Tab, Return,
-     letters) are page keys: a text field keeps them (P3-13a). */
+     letters) are shown by the menu too (#300), but only while no text field or dialog has the focus (watchTyping
+     below), and a keydown that reaches the page is the page's: a text field keeps them (P3-13a). */
   const menuOwnsKey = ev => DSKeys.menuOwns(ev);
 
   /* ---------------- quit flow (window close button, Cmd-Q, Dock Quit) ---------------- */
@@ -524,9 +525,34 @@
     return syncing;
   }
 
+  /* #300: the menu shows the plain keys (V, Space, Tab) as accelerators. A text field or a dialog must get them as
+     text or as its own keys, so the page tells the shell on every focus change and every dialog change whether one
+     is in focus; the shell then takes the plain-key accelerators off the menu items and puts them back.
+     The same fields as the keydown handler of app.js (a check box or a slider is not one), or a dialog. */
+  const typingNow = () => {
+    const e = document.activeElement;
+    const field = !!e && (e.tagName === "SELECT" || e.tagName === "TEXTAREA" || e.isContentEditable
+      || (e.tagName === "INPUT" && !["checkbox", "radio", "button", "range"].includes(e.type)));
+    return field || modalOpen();
+  };
+  let typingSent = false;
+  function reportTyping() {
+    const on = typingNow();
+    if (on === typingSent || !B.shellTyping) return;
+    typingSent = on;
+    B.shellTyping(on).catch(() => { typingSent = !on; });   // a failed call is tried again at the next change
+  }
+  function watchTyping() {
+    document.addEventListener("focusin", reportTyping, true);
+    document.addEventListener("focusout", () => setTimeout(reportTyping, 0), true);   // activeElement is the new one after the event
+    new MutationObserver(reportTyping).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "hidden"] });
+    reportTyping();
+  }
+
   async function boot() {
     if (!B.listen) return;
     const swallow = () => {};
+    watchTyping();
     try { await B.listen("menu", p => { menu(p || {}); }); } catch (e) { swallow(e); }
     try { await B.listen("open-paths", () => { takeOpenPaths().catch(swallow); }); } catch (e) { swallow(e); }
     booted = true;
@@ -534,7 +560,7 @@
     try { await takeOpenPaths(); } catch (e) { swallow(e); }   // a cold start with `open -a <app> <document>`
   }
 
-  window.DSShell = { menuOwnsKey, menu, log, quitFlow, renameCurrent, renameProject,
+  window.DSShell = { menuOwnsKey, typingNow, menu, log, quitFlow, renameCurrent, renameProject,
     recomputeVelocities, applyVel, about, feedback, nativePick, takeOpenPaths, menuState, sync, boot, hooks, handlers,
     listening: () => booted };
 

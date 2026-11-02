@@ -10,7 +10,8 @@
      menu       the menu item id, or null for a key that has no menu item (handled by the page only)
      path       the menu of the item ("View > Zoom Presets" for a submenu), or null
      title      the menu text (menu.rs checks that its label is the same)
-     menu_key   the native menu accelerator: one key with Cmd, Control or Option, or null
+     menu_key   the native menu accelerator: one key with Cmd, Control or Option, or null. A row without one shows
+                its first page key in the menu (not a Numpad key), as an accelerator while no text field has the focus
      page_keys  the keys that the page handles (app.js); a text field keeps them
      cubase     the keys of the "Cubase" preset (P3-13c), or null when the preset keeps the default keys. A list
                 REPLACES the menu key and the page keys of the row (nothing is added to the default keys).
@@ -73,9 +74,9 @@
     {"id": "zoom_organize", "menu": "zoom_organize", "path": "View > Zoom Presets", "title": "Organize…", "menu_key": null, "page_keys": [], "cubase": null, "note": "#169: renames and removes the own presets"},
     {"id": "height_taller", "menu": "height_taller", "path": "View > Track Height", "title": "Taller", "menu_key": "Cmd+Down", "page_keys": ["Option+Down"], "cubase": ["Cmd+Down"], "note": "the next larger height of every track (small, medium, large)"},
     {"id": "height_shorter", "menu": "height_shorter", "path": "View > Track Height", "title": "Shorter", "menu_key": "Cmd+Up", "page_keys": ["Option+Up"], "cubase": ["Cmd+Up"], "note": "the next smaller height"},
-    {"id": "height_small", "menu": "height_small", "path": "View > Track Height", "title": "Small", "menu_key": null, "page_keys": ["Option+Cmd+1"], "cubase": null, "note": "wave lane 56 px; #439: the key follows the Option+1..5 zoom presets"},
-    {"id": "height_medium", "menu": "height_medium", "path": "View > Track Height", "title": "Medium", "menu_key": null, "page_keys": ["Option+Cmd+2"], "cubase": null, "note": "wave lane 120 px (the default); #439"},
-    {"id": "height_large", "menu": "height_large", "path": "View > Track Height", "title": "Large", "menu_key": null, "page_keys": ["Option+Cmd+3"], "cubase": null, "note": "wave lane 240 px; #439"},
+    {"id": "height_small", "menu": "height_small", "path": "View > Track Height", "title": "Small", "menu_key": "Option+Cmd+1", "page_keys": [], "cubase": null, "note": "wave lane 56 px; #439: the key follows the Option+1..5 zoom presets"},
+    {"id": "height_medium", "menu": "height_medium", "path": "View > Track Height", "title": "Medium", "menu_key": "Option+Cmd+2", "page_keys": [], "cubase": null, "note": "wave lane 120 px (the default); #439"},
+    {"id": "height_large", "menu": "height_large", "path": "View > Track Height", "title": "Large", "menu_key": "Option+Cmd+3", "page_keys": [], "cubase": null, "note": "wave lane 240 px; #439"},
     {"id": "inspector", "menu": "inspector", "path": "View", "title": "Show Inspector", "menu_key": "Option+I", "page_keys": [], "cubase": null, "note": "the left zone: name, source, hit counts, detection parameters, volume and pan of the selected track"},
     {"id": "info_line", "menu": "info_line", "path": "View", "title": "Show Info Line", "menu_key": "Cmd+I", "page_keys": [], "cubase": null, "note": "the selected hit; sample and velocity can be typed (Return applies, Escape cancels)"},
     {"id": "overview", "menu": "overview", "path": "View", "title": "Show Overview", "menu_key": "Option+O", "page_keys": [], "cubase": null, "note": "#169: the overview strip over the lanes; hidden, the lanes take its height; the choice is kept"},
@@ -244,6 +245,13 @@
     if (preset === "cubase" && Array.isArray(c.cubase)) return c.cubase.find(menuMod) || null;
     return c.menu_key || null;
   }
+  /* #300: the key that the menu SHOWS (menu.rs shown_key_in): menuKeyOf, else the first key of the preset that is no
+     Numpad key. The keys without Cmd, Control or Option are accelerators only while no text field or dialog has the
+     focus (shell.js typing, menu.rs set_typing). */
+  function shownKeyOf(c, preset) {
+    if (!c.menu) return null;
+    return menuKeyOf(c, preset) || keysOf(c, preset).find(k => { const p = parse(k); return p && !p.key.startsWith("Numpad"); }) || null;
+  }
 
   /* Everything wrong with a table: a key in two commands (per preset), a key not in the notation, a menu key
      without Cmd, Control or Option, an id twice. [] when the table is good. menu.rs runs the same checks. */
@@ -293,13 +301,16 @@
     return null;
   }
 
-  /* The native menu runs this key (app only): the page must not run it again */
+  /* The native menu runs this key (app only): the page must not run it again. Not a key that the menu only shows
+     (#300: V, Space, Tab): the menu consumes it only while its item is enabled and no text field or dialog has the
+     focus, so a keydown that reaches the page is the page's. */
   function menuOwns(ev) {
     if (!window.__DS_NATIVE_MENU__) return false;
     const k = keyOf(ev), hit = k && table().get(k);
     return !!(hit && hit.menu);
   }
-  const menuKeys = preset => COMMANDS.map(c => menuKeyOf(c, preset || DSKeys.preset)).filter(Boolean);
+  const accelKeys = preset => COMMANDS.map(c => menuKeyOf(c, preset || DSKeys.preset)).filter(Boolean);
+  const menuKeys = preset => COMMANDS.map(c => shownKeyOf(c, preset || DSKeys.preset)).filter(Boolean);   // #300: every key the menu shows
   const presetName = preset => PRESETS[preset || DSKeys.preset];
   /* Switch the preset of the page (the menu follows through DSShell.sync). false when the name is not a preset. */
   function setPreset(p) {
@@ -337,6 +348,6 @@
   }
 
   const DSKeys = { live: {}, COMMANDS, GESTURES, MODS, preset: "default", PRESETS, parse, compose, keyOf, display, tauriOf, keysOf, problems,
-    table, find, menuOwns, menuKeys, menuKeyOf, presetName, setPreset, renderHelp };
+    table, find, menuOwns, menuKeys, accelKeys, menuKeyOf, shownKeyOf, presetName, setPreset, renderHelp };
   window.DSKeys = DSKeys;
 })();

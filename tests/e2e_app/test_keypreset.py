@@ -248,12 +248,18 @@ def test_the_menu_accelerators_follow_the_preset(preset_home, make_project):
     app = preset_home
     sid = open_project(app, make_project(seconds=12.0))
     with_hits(app, sid, {"Kick In": [0.5, 1.5]})
-    default = js(app, "() => DSKeys.menuKeys()")
-    assert len(default) == 39 and "Control+Tab" in default and "Cmd+]" in default and "Option+N" not in default
+    # #300: menuKeys() lists every key the menu shows; the ones with Cmd, Control or Option stay accelerators while a text field has the focus
+    all_default = js(app, "() => DSKeys.menuKeys()")
+    default = js(app, "() => DSKeys.accelKeys()")
+    assert len(all_default) == len(set(all_default)) == 75   # menu/tests.rs: 75 items with a key in the default preset
+    assert len(default) == 42 and "Control+Tab" in default and "Cmd+]" in default and "Option+N" not in default   # #300: Track Height Small, Medium, Large have menu keys
+    assert {"V", "Space", "Tab", "K"} <= set(all_default)
     wait_until(lambda: js(app, "() => window.__DS_MENU_STATE__.keyPreset") == "default", msg="the menu state")
     choose(app, "cubase")
-    cubase = js(app, "() => DSKeys.menuKeys()")
-    assert len(cubase) == 34 and len(set(cubase)) == 34   # #169: Option+O is in both presets; P4-31: Export Again has a key in the default preset only (menu/tests.rs counts 34); #207: Export Selected Tracks and Undo History have keys in both presets
+    all_cubase = js(app, "() => DSKeys.menuKeys()")
+    cubase = js(app, "() => DSKeys.accelKeys()")
+    assert len(all_cubase) == len(set(all_cubase)) == 63   # menu/tests.rs: 63 items with a key in the Cubase preset
+    assert len(cubase) == 37 and len(set(cubase)) == 37   # #169: Option+O is in both presets; P4-31: Export Again has a key in the default preset only (menu/tests.rs counts 37); #207: Export Selected Tracks and Undo History have keys in both presets
     # what changes: Option+N, Option+B, Option+A (Audition Hit, #158), Cmd+Left and Cmd+Right come; Option+Tab, Control+Tab,
     # Control+Option+Tab and Control+Cmd+[ go (the keys of the hits on all tracks and of Zoom to Project have no modifier in the preset)
     assert set(cubase) - set(default) == {"Option+N", "Option+B", "Cmd+Left", "Cmd+Right", "Cmd+W", "Option+A"}   # P3-19: Cmd+W is a page key in the default preset
@@ -263,11 +269,14 @@ def test_the_menu_accelerators_follow_the_preset(preset_home, make_project):
                                           "Option+Cmd+E"}   # P4-31: Export Again, a key in the default preset only
     for k in ("Cmd+]", "Cmd+[", "Cmd+S", "Option+Return", "Control+1", "Option+I"):
         assert k in cubase, k
-    for k in ("N", "B", "H", "G", "M", "S", "Shift+F", "Numpad0", "NumpadPeriod", "Return"):
-        assert k not in cubase, k                                               # keys without a modifier stay page keys
+    for k in ("N", "B", "M", "S", "Shift+F", "Return"):
+        assert k in all_cubase and k not in cubase, k                           # #300: the menu shows the keys without a modifier too
+    for k in ("H", "G", "Numpad0", "NumpadPeriod"):
+        assert k not in all_cubase, k                                           # the row shows Cmd+] / Cmd+[ instead; a Numpad key is not shown
     owned = js(app, "() => ['Option+N', 'Cmd+Left', 'Cmd+]', 'N', 'H', 'Shift+F', 'Return', 'Control+Tab'].map(k => { const h = DSKeys.table().get(k); return h ? [h.cmd.id, h.menu] : null; })")
     assert owned == [["next_hit", True], ["nudge_earlier", True], ["zoom_in", True], ["next_hit_all", False], ["zoom_in", False],
-                     ["zoom_project", False], ["go_start", False], None]
+                     ["zoom_project", False], ["go_start", False], None]   # the keys without a modifier are shown by the menu, not owned by it
+    assert js(app, "() => ['N', 'H', 'Shift+F', 'Return'].map(k => DSKeys.menuKeys().includes(k))") == [True, False, True, True]
     wait_until(lambda: js(app, "() => window.__DS_MENU_STATE__.keyPreset") == "cubase", msg="the menu state")
     # in the app the native menu runs its accelerators and the page stays out; the page keys still run in the page
     app.evaluate("() => { window.__DS_NATIVE_MENU__ = true; S.sel = null; S.playhead = 0; setView(2, 10); }")
@@ -281,7 +290,7 @@ def test_the_menu_accelerators_follow_the_preset(preset_home, make_project):
     app.keyboard.press("Control+Tab")                                           # not an accelerator any more: nothing runs
     assert js(app, "() => S.playhead") == 0
     choose(app, "default")
-    assert js(app, "() => DSKeys.menuKeys()") == default
+    assert js(app, "() => DSKeys.menuKeys()") == all_default
     wait_until(lambda: js(app, "() => window.__DS_MENU_STATE__.keyPreset") == "default", msg="the menu state again")
     app.keyboard.press("Control+Tab")                                           # the menu owns it again (the page stays out)
     assert js(app, "() => S.playhead") == 0

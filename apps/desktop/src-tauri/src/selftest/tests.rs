@@ -187,6 +187,7 @@ fn shell_driver_runs_every_step_of_the_card_and_reports_through_the_quit_path() 
         "step(\"cold_start\"",
         "step(\"menu_table\"",
         "step(\"menu_key_preset\"",
+        "step(\"menu_typing_plain_keys\"", // #300: the plain keys are on the menu, and off it while a text field has the focus
         "step(\"finder_open\"",
         "step(\"menu_open\"",
         "step(\"menu_check_items\"",

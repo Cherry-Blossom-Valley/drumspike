@@ -285,6 +285,12 @@ function shellMethods(invoke, T) {
       if (bridge()) { window.__DS_MENU_STATE__ = state || null; return Promise.resolve(0); }
       return invoke("shell_sync", { has_project: !!hasProject, state: state || null });
     },
+    /* #300: an editable element or a dialog has the focus (on) or lost it: the menu takes its plain-key accelerators
+       off and puts them back. The test bridge keeps the last value in window.__DS_TYPING__. */
+    shellTyping: on => {
+      if (bridge()) { window.__DS_TYPING__ = !!on; return Promise.resolve(); }
+      return invoke("shell_typing", { on: !!on });
+    },
     /* P3-17: the page says that its first layout is finished (app.js, end of boot). The main window starts hidden; the
        shell shows it and closes the splash (command app_ready). One frame is awaited first; a hidden window paints none,
        so the wait ends after 60 ms. The test bridge counts the calls in window.__DS_READY__ and calls window.__DS_ON_READY__. */
