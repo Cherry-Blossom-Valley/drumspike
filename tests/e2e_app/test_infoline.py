@@ -204,7 +204,7 @@ def test_a_sample_and_a_velocity_typed_into_the_info_line_reach_the_project_and_
     expect(vel).to_have_value("64")
     app.keyboard.press("Tab")                                       # the field kept no focus: Tab selects the next hit
     expect(app.locator("#ilIndex")).to_have_text("3/3")
-    app.keyboard.press("Shift+Tab")
+    app.keyboard.press("Alt+Tab")
     expect(app.locator("#ilIndex")).to_have_text("2/3")
     # the project document (Save) and the MIDI export see the edit
     wait_until(lambda: [round(e["t"] * SR) for e in service_events(app, sid)][1] == 40000, msg="the edit reaches the service")

@@ -85,7 +85,7 @@ def test_tab_selects_hits_and_arrow_nudges_one_sample_with_undo(app, make_projec
     app.keyboard.press("Control+z")
     wait_until(lambda: service_samples(app, sid)[1] == IDX[1], msg="the undo reaches the service")
     expect_counts(app, "3 events")
-    app.keyboard.press("Shift+Tab")
+    app.keyboard.press("Alt+Tab")
     expect(app.locator("#stSel")).to_contain_text("1/3")
 
 

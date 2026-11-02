@@ -1,5 +1,5 @@
 """#175: the setting "Tab moves to: active hits only | all found hits" and the visibility of a selected
-deactivated hit. Default: Tab (and Shift+Tab) skip the deactivated hit (3 hits, 1 deactivated: Tab visits
+deactivated hit. Default: Tab (and Option+Tab) skip the deactivated hit (3 hits, 1 deactivated: Tab visits
 2); with "all found hits" Tab visits 3; a selected deactivated hit draws a dashed grey line (pixel check
 against a selected regular hit on the same lane) and the counter and the info line say "deactivated";
 the setting persists across a reload. The status line names the mode when it changes. A cropped screenshot
@@ -61,8 +61,8 @@ def test_tab_skips_the_deactivated_hit_by_default(song):
     assert abs(playhead(song) - 1.0) < 1e-6   # the first hit
     song.keyboard.press("Tab")
     assert abs(playhead(song) - 3.0) < 1e-6   # the deactivated 2.0 is skipped
-    song.keyboard.press("Shift+Tab")
-    assert abs(playhead(song) - 1.0) < 1e-6   # Shift+Tab follows the same rule
+    song.keyboard.press("Alt+Tab")
+    assert abs(playhead(song) - 1.0) < 1e-6   # Option+Tab follows the same rule
     assert sel(song) == {"track": "Kick In", "index": 0}
 
 
@@ -77,7 +77,7 @@ def test_all_found_hits_visits_the_deactivated_hit_too(song):
     assert abs(playhead(song) - 3.0) < 1e-6
     assert menu(song, "tab_active") is True
     assert tab_mode(song) == "active"
-    song.keyboard.press("Shift+Tab")
+    song.keyboard.press("Alt+Tab")
     assert abs(playhead(song) - 1.0) < 1e-6   # active again: 2.0 is skipped backwards
 
 

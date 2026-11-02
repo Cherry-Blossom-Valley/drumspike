@@ -197,7 +197,9 @@ def test_the_menu_keys_run_in_the_web_page_and_stay_out_in_the_app(app, make_pro
     app.keyboard.press("Alt+Tab")                                         # Previous Hit on the selected track
     assert js(app, "() => [S.sel.track, S.playhead]") == ["Snare Top", 1.0]
     app.keyboard.press("Tab")
-    app.keyboard.press("Shift+Tab")
+    app.keyboard.press("Shift+Tab")                                       # #299: no longer Previous Hit
+    assert js(app, "() => [S.sel.track, S.playhead]") == ["Snare Top", 2.0]
+    app.keyboard.press("Alt+Tab")
     assert js(app, "() => S.playhead") == 1.0
     n = app.invokes.count("project_save")
     app.evaluate("() => markDirty('Kick In')")

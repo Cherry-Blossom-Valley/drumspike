@@ -111,7 +111,7 @@ def test_cubase_keys_work_and_the_pro_tools_ones_do_not_and_the_reverse(preset_h
     press("Alt+N")
     press("N")                                                                  # the page alias: next hit on all tracks
     assert sel(app) == ["Snare Top", 0]
-    press("Shift+Tab")                                                          # previous on the selected track
+    press("Alt+Tab")                                                            # previous on the selected track
     app.evaluate("() => { S.sel = {track: 'Kick In', index: 0}; S.playhead = 0.5; setView(2, 10); }")
     press("H")                                                                  # #207: add_hit here: a hit at the playhead on the selected track (the Cubase preset zooms in with H)
     edits_done(app)
