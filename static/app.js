@@ -5415,6 +5415,7 @@ function insRoleSourceText(t) {   // where the role comes from; absent: an older
   if (s === "audio") return "suggested from the audio";
   if (s === "preset") return m ? `from kit preset (${m} = ${t.role})` : "from kit preset";
   if (s === "scheme") return m ? `from the name (${m} = ${t.role})` : "from the name";
+  if (s === "fuzzy") return m ? `guessed from the name (${m} ≈ ${t.role}): check it` : "guessed from the name: check it";   // #285
   if (s === "none" || s === "guess") return "not recognised from the name: choose the role";
   return t.role === "other" ? "not recognised from the name: choose the role" : "from the name";
 }
@@ -5427,16 +5428,7 @@ function insRoleControls(offer) {   // the role select, the source hint and the 
   const srcTxt = insRoleSourceText(t);
   $("#insRoleSrc").textContent = srcTxt;
   $("#insRoleSrc").classList.toggle("lyWarn", srcTxt.startsWith("not recognised"));
-  // #232: the name pattern the role was guessed from. A role of the user or of the audio has none
-  // (the service clears it): the field is disabled there; an edit goes through track_set_role with
-  // the role kept (one undo step, like the role change).
-  const rm = $("#insRoleMatch");
-  if (rm) {
-    rm.value = t.role_match ?? "";
-    const locked = t.role_source === "user" || t.role_source === "audio";
-    rm.disabled = locked;
-    rm.placeholder = locked ? "—" : "";
-  }
+  // #285: the Name pattern field of #232 is gone; the hint above names the matched words.
   const orow = $("#insNoteOfferRow");
   INS.offer = offer && offer.suggest_note != null && offer.note !== offer.suggest_note
     ? { name: INS.name, role: offer.role, note: offer.note, suggest_note: offer.suggest_note, role_source: offer.role_source } : null;
@@ -5656,13 +5648,6 @@ function setupInspector() {   // once, at boot: the name field, the Relink butto
   $("#insNoteOfferBtn").onclick = () => {   // 0.9.1: the note offer of a role change
     const o = INS.offer; if (!o) return;
     setTrackRole(o.name, o.role, { note: o.suggest_note, source: o.role_source });
-  };
-  $("#insRoleMatch").onchange = ev => {   // #232: the name pattern the role was guessed from
-    const name = INS.name, t = S.tracks[name], v = ev.target.value.trim();
-    if (!name || !t || v === (t.role_match ?? "")) return;
-    setTrackRole(name, t.role, { role_match: v || null, source: t.role_source }).then(ok => {
-      if (!ok && INS.name === name) ev.target.value = S.tracks[name] ? (S.tracks[name].role_match ?? "") : ev.target.value;
-    });
   };
   $("#inspectorBtn").onclick = () => toggleInspector();   // P4-25: the toolbar button, the same as View > Show Inspector
   $("#insClose").onclick = () => toggleInspector();   // the × in the title bar: the same as View > Show Inspector (the check item follows)
@@ -6356,6 +6341,7 @@ function askTracks(paths, scan0) {
     scanMixed = scan.files.some(f => isDrum(f.role)) && scan.files.some(f => !isDrum(f.role));
     for (const f of scan.files) {
       const audio = f.guess === "audio";   // #225: the role comes from the audio, the name gave none
+      const fuzzy = f.guess === "fuzzy";   // #285: a typo guess from the name (one edit from a term): marked, check it
       const row = document.createElement("div"); row.className = "urow" + (f.guess === "none" ? " noguess" : "");
       row.dataset.path = f.path; row.dataset.stem = f.stem; row.dataset.guess = f.guess;   // #243: where the scan took the role from
       row.innerHTML = `<input type="checkbox" class="uuse" ${!scanMixed || isDrum(f.role) ? "checked" : ""} title="add this file">
@@ -6363,11 +6349,13 @@ function askTracks(paths, scan0) {
         <select class="urole">${["kick","snare","tom","hat","cymbal","other"].map(r => `<option ${r === f.role ? "selected" : ""}>${r}</option>`).join("")}</select>
         <input class="unote" type="text" value="${nameFromNote(f.note)}" title="MIDI note name">
         ${audio ? '<span class="ufromaudio" title="the role the audio of the file suggests">from audio</span>' : ""}
+        ${fuzzy ? '<span class="ufromaudio" title="the name looks like a typo of a drum name: the role is a guess, check it">guessed</span>' : ""}
         <label class="ufollowWrap hidden" title="P3-18: a sub mic takes the hits of the kick track (sample-exact, velocities from its own signal) instead of its own detection"><input type="checkbox" class="ufollow" checked> <span class="ufollowTxt"></span></label>`;
       const fn = row.querySelector(".fname");
       fn.textContent = `${f.name} (${(f.size / 1e6).toFixed(1)} MB, ${f.sr / 1000} kHz)`;   // textContent: file names are data
       fn.title = f.guess === "none" ? `${f.path}\nno role recognised from the name: it stays "other" unless you pick one`
-        : audio ? `${f.path}\nthe role is the audio's suggestion: change it if it is wrong` : f.path;
+        : audio ? `${f.path}\nthe role is the audio's suggestion: change it if it is wrong`
+        : fuzzy ? `${f.path}\nthe role is a guess from a name that looks like a typo: change it if it is wrong` : f.path;
       row.querySelector(".urole").onchange = ev => {
         row.querySelector(".unote").value = nameFromNote(ROLE_DEFAULT_NOTE[ev.target.value]); row.classList.remove("noguess");
         row.dataset.hand = "1";   // #243: the role is picked by hand now, whatever the scan guessed

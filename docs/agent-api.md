@@ -269,8 +269,9 @@ uses the kept value; an explicit `compensate` argument still wins.
 
 #232: the four settings that the #120 inventory named as gaps are numbers the agent and the app both
 set: `track_params_set`/`track_repick` carry the refine window (`refine_lo_ms`, `refine_hi_ms`, also
-in the Inspector's Detection section), the role's name pattern (`track_set_role {role_match}`) is in
-the Inspector's Track section, `track_layer_set {range}` takes the velocity curve's dB range as a
+in the Inspector's Detection section), the role's name pattern (`track_set_role {role_match}`) stays
+an agent field (#285 removed its Inspector field: the role guess reads a term table per drum, and a
+role set by hand wins), `track_layer_set {range}` takes the velocity curve's dB range as a
 plain number (the curve must be `db`), and the Compensate checkbox is `export_compensate_set`.
 
 ## What the agent cannot do

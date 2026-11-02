@@ -1,7 +1,8 @@
 """#232: the four settings-as-numbers gaps of the #120 inventory (docs/review/120-settings-inventory.md),
 closed: the refine window low/high in the Inspector's Detection section (stored at once, one undo
-step, read back with tracks_get), the role's name pattern in the Track section (track_set_role
-{role_match}, one undo step), the layer's dB range as a plain number (track_layer_set {range}) and
+step, read back with tracks_get), the role's name pattern in the Track section (removed again in
+#285: the field confused users; the test now checks it is gone), the layer's dB range as a plain
+number (track_layer_set {range}) and
 the kept Compensate checkbox of the Export dialog (export_compensate_set, the document field
 export_compensate; the dialog shows it again after a reopen). The coordinator's screenshots of the
 Inspector and the Export dialog go to the shot dir."""
@@ -42,28 +43,19 @@ def test_the_refine_window_fields_show_store_and_undo(app, make_project, tmp_pat
     invoke(app, "project_save", sid=sid)
 
 
-def test_the_role_match_field_shows_stores_and_undo(app, make_project, tmp_path):
+def test_the_inspector_has_no_name_pattern_field_and_a_hand_set_role_stays(app, make_project, tmp_path):
+    """#285: the Name pattern field of #232 is gone; the role hint stays, and a role set by hand
+    wins (it survives a reload of the track list)."""
     sid = open_project(app, build(make_project, tmp_path))
-    inspect_track(app, "Kick In")
-    # a role from the name: the pattern the guess matched, editable (in page, so the undo stack has the step)
-    app.evaluate("() => setTrackRole('Kick In', 'kick', {source: 'scheme', role_match: 'k in'})")
-    wait_until(lambda: js(app, "() => S.tracks['Kick In'].role_match") == "k in", msg="the pattern in the page")
-    ins = app.locator("#inspector")
-    expect(ins.locator("#insRoleMatch")).to_have_value("k in")
-    ins.locator("#insRoleMatch").fill("kick in")
-    ins.locator("#insRoleMatch").blur()
-    wait_until(lambda: invoke(app, "tracks_get", sid=sid)["tracks"]["Kick In"]["role_match"] == "kick in",
-               msg="the pattern in the service")
-    # the page pushes the undo step after its reload of the role change has finished
-    wait_until(lambda: js(app, "() => S.undo.length") >= 1, msg="the undo step")
-    # and Undo restores it
-    app.evaluate("() => undo()")
-    wait_until(lambda: invoke(app, "tracks_get", sid=sid)["tracks"]["Kick In"]["role_match"] == "k in",
-               msg="the pattern undone")
-    # a role you set has no pattern: the field is disabled
+    ins = inspect_track(app, "Kick In")
+    expect(ins.locator("#insRoleMatch")).to_have_count(0)
+    expect(ins.locator("#insRoleSel")).to_be_visible()
     app.evaluate("() => setTrackRole('Kick In', 'snare', {source: 'user'})")
     wait_until(lambda: js(app, "() => S.tracks['Kick In'].role_source") == "user", msg="the user role")
-    expect(app.locator("#insRoleMatch")).to_be_disabled()
+    expect(ins.locator("#insRoleSrc")).to_have_text("set by you")
+    got = invoke(app, "tracks_get", sid=sid)["tracks"]["Kick In"]
+    assert (got["role"], got["role_source"]) == ("snare", "user")
+    assert got.get("role_match") in (None, "")
 
 
 def test_the_layer_range_number_reaches_the_curve(app, make_project, tmp_path):
