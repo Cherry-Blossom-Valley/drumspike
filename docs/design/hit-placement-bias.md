@@ -210,6 +210,36 @@ Version 6 (`RefineRule::Edge`, the analysis default since 0.9.14):
   edge's foot: the first sample of that window whose step to the next sample is half the edge's per-sample
   rise. A slow attack without such an edge keeps the version 3 foot; a hard attack keeps its first sample.
 
+The rule was then fitted on the owner's hand-placed hits (2026-11-02, the reported session: kick hits 1 to 332
+and snare hits 1 to 168 placed by hand in the app, 107 and 89 of them moved; an unmoved hit counts as correct).
+Even hits chose the parameters, odd hits checked them (`tools`-free prototypes, the exact port of `edge_foot`
+in Python). Three things changed against the first build:
+
+- the search starts one rise window (0.1 ms) before the walk's foot: on a steep kick the first sample over the
+  walk's threshold already lies inside the rise, and from there the next window rises too little, so the first
+  build kept the walk's foot, 2 samples after the owner's position;
+- the guard compares the stretch before an edge with the level that edge reaches within 0.5 ms
+  (`EDGE_GUARD_DB`, 12 dB; 9 to 15 dB give the same result), not with the peak of the whole 5 ms, and the search
+  goes on after a rejected edge; the level reaching 12 dB under the peak without an edge ends the search
+  (`EDGE_TOP_DB`): a ripple inside the body of a soft hit is no edge;
+- the foot's walk-back follows the rising level and takes up to `EDGE_TAIL_SAMPLES` (4) more samples while the
+  level rises by more than `EDGE_TAIL_NOISE` (8) times the line noise, so the hit sits on the last sample of the
+  line, as version 5's strict foot did. With 2 times the noise the tail took the slow drift of a kick's line for
+  the hit (1 to 3 samples early).
+
+Against the owner's positions (the app's own analysis of the 0.9.13 build and of this rule; mean of
+|placed - owner| in samples at 48 kHz):
+
+| drum | hits | 0.9.13 (version 5) | version 6 | within 1 sample | within 5 samples |
+|---|---|---|---|---|---|
+| kick | 332 | 0.61 | 0.57 | 89 % to 92 % | 98 % to 99.7 % |
+| snare | 168 | 4.99 | 1.14 | 62 % to 80 % | 67 % to 98 % |
+
+The held-out odd hits score 0.53 (kick) and 1.23 (snare). Of the candidates measured on the same positions, no
+threshold rule (the first sample over K times the noise, or over the peak minus D dB) and no change-point
+picker (the AIC arrival picker of seismology on the raw, the smoothed or the differentiated signal) reached the
+0.9.13 kick score; the edge rule is the only one that improves both drums.
+
 The edge may move a hit later than the version 2 time (`BackStep::Moved` either way). The thresholds were
 chosen on the Python prototype over three sessions and the owner's hits: 18 dB keeps the small sharp first
 step of a snare stroke as the hit and skips a slow drift (which rises under 18 dB per 0.1 ms); the 12 dB
