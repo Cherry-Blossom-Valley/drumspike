@@ -33,7 +33,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use drumspike_core::analyze::{AnalyzeParams, analyze_detected, role_note};
-use drumspike_core::detect::cross_bleed::{CrossBleedParams, CrossMark, CrossMic, XKind, cross_bleed, hit_level};
+use drumspike_core::detect::cross_bleed::{
+    ALIGN_COUNT_MARGINS_DB, CrossBleedParams, CrossMark, CrossMic, PairLearned, XKind, cross_bleed, hit_level,
+};
 use drumspike_core::detect::onset::{self, Gate, OnsetParams, Role};
 use drumspike_core::project::Track;
 use drumspike_core::refine::first_motion;
@@ -46,8 +48,8 @@ use crate::{Service, ServiceConfig};
 
 /// The version a new analysis runs (`detector.cross_bleed.rule`). 1 is #103 step 2: the hat-pair
 /// keys and the nearest-kept-hit evidence match are reporting only — they change no flag, time or
-/// count.
-pub const CROSS_BLEED: u32 = 1;
+/// count. 2 is #296: aligned-session pairs (Auto-Align 2 and the like) judge by level alone.
+pub const CROSS_BLEED: u32 = 2;
 
 /// The version of a new analysis: the configuration's pin, else [`CROSS_BLEED`].
 #[must_use]
@@ -263,6 +265,32 @@ fn set_a6_keys(e: &mut drumspike_core::project::Event, m: CrossMark) {
     }
 }
 
+/// #296: the aligned pairs of a rule run over one target, per source of the combined mic vec
+/// (the target is index 0): the job record's and the detector record's `cross_bleed.aligned`.
+/// Aggregates only: the source's track name, the coincidence count, the median |lead| and the
+/// count of coinciding target hits under each of [`ALIGN_COUNT_MARGINS_DB`].
+fn aligned_json(mics: &[Mic], srcs: &[(usize, Arc<Decoded>)], learned: &[PairLearned]) -> Value {
+    Value::Array(
+        learned
+            .iter()
+            .filter(|l| l.aligned)
+            .map(|l| {
+                let counts: Map<String, Value> = ALIGN_COUNT_MARGINS_DB
+                    .iter()
+                    .zip(l.aligned_counts)
+                    .map(|(m, c)| (m.to_string(), json!(c)))
+                    .collect();
+                json!({
+                    "source": mics[srcs[l.source - 1].0].name,
+                    "coins": l.align_coins,
+                    "med_abs_lead_ms": l.align_med_abs_lead_ms,
+                    "counts_db": counts,
+                })
+            })
+            .collect(),
+    )
+}
+
 fn run_one(
     svc: &Service,
     op: &Shared,
@@ -293,6 +321,7 @@ fn run_one(
     let sr = dec_x.sr;
     // 1. the drop marks on the events
     let mut removed = 0usize;
+    let aligned;
     {
         let mut g = lock(op);
         let tr = g.track_mut(&x_mic.name).ok()?;
@@ -300,8 +329,9 @@ fn run_one(
         if evs.len() != x_mic.times.len() {
             return None; // the hits changed while the rule ran
         }
-        let (marks_t, _) = cross_bleed(&cross_mics(&dec_x, &srcs, mics, x_mic.times.clone()), sr, p);
+        let (marks_t, learned) = cross_bleed(&cross_mics(&dec_x, &srcs, mics, x_mic.times.clone()), sr, p);
         let marks = &marks_t[0];
+        aligned = aligned_json(mics, &srcs, &learned);
         if rule_on {
             for (j, e) in evs.iter_mut().enumerate() {
                 if marks[j].bleed && !x_mic.edited[j] {
@@ -320,7 +350,7 @@ fn run_one(
             // `survive`: the step-1 marks that reach the CD step unless the re-detection below replaces the hits
             det.insert(
                 "cross_bleed".into(),
-                json!({"rule": CROSS_BLEED, "on": true, "removed": removed, "survive": removed}),
+                json!({"rule": CROSS_BLEED, "on": true, "removed": removed, "survive": removed, "aligned": aligned.clone()}),
             );
         }
         g.mark_dirty();
@@ -361,8 +391,9 @@ fn run_one(
         // the drop on the re-detected candidates, with the evidence stored per candidate; the
         // candidate times are walked back to first motion as well (the same refinement)
         let cand_motion = refined_motion(&dec_x.samples, sr, &cands.iter().map(|c| c.time).collect::<Vec<_>>());
-        let (marks_t, _) = cross_bleed(&cross_mics(&dec_x, &srcs, mics, cand_motion), sr, p);
+        let (marks_t, learned2) = cross_bleed(&cross_mics(&dec_x, &srcs, mics, cand_motion), sr, p);
         let marks = &marks_t[0];
+        let aligned2 = aligned_json(mics, &srcs, &learned2);
         let mut dropped: Vec<usize> = Vec::new();
         for (j, c) in cands.iter_mut().enumerate() {
             c.cross_lead_ms = marks[j].lead_ms.map(|l| l as f32);
@@ -385,7 +416,7 @@ fn run_one(
             ..AnalyzeParams::default()
         };
         let Ok(analysis) = analyze_detected(&dec_x.samples, sr, "tom", &kept, &params_a) else {
-            return Some(json!({"removed": removed, "redetected": redetected}));
+            return Some(json!({"removed": removed, "redetected": redetected, "aligned": aligned2}));
         };
         let mut det = lock(op)
             .track(&x_mic.name)
@@ -400,6 +431,7 @@ fn run_one(
                 .collect();
             c["survive"] = json!(0);
             c["dropped"] = json!(dropped_rec);
+            c["aligned"] = aligned2.clone();
         }
         if crate::jobs::store_analysis(svc, op, &x_mic.name, (analysis, None), &det, &dec_x, false, true, None).is_err()
         {
@@ -447,5 +479,5 @@ fn run_one(
         }
     }
     crate::follow::refresh_followers(svc, op, &x_mic.name);
-    Some(json!({"removed": removed, "redetected": redetected}))
+    Some(json!({"removed": removed, "redetected": redetected, "aligned": aligned}))
 }

@@ -210,6 +210,99 @@ fn a_hat_pairs_evidence_is_recorded_and_the_generic_verdict_fires() {
 }
 
 #[test]
+fn an_aligned_pair_judges_by_level_alone() {
+    // #296: a time-aligned session (Auto-Align 2 and the like): the tom's hits sit at the kick's
+    // with a median |lead| of 0.2 ms — the alignment removed the arrival delay, so the lead test
+    // cannot fire. 24 coincidences make the pair aligned: the verdict is the level test alone
+    // (the bleed is quieter in the kick's band), the margin sweep is counted, and a loud real
+    // tom hit away from any kick stays.
+    let n = (2.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.0002, -21.0);
+        kick_motion.push(t);
+        tom_motion.push(t + 0.0002);
+    }
+    tom_hit(&mut tom, 1.5, 0.0);
+    tom_motion.push(1.5);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let (marks, learned) = cross_bleed(&mics, SR, &CrossBleedParams::default());
+    let pl = &learned[0];
+    assert!(pl.aligned, "{pl:?}");
+    assert_eq!(pl.align_coins, 24);
+    assert!(
+        pl.align_med_abs_lead_ms.is_some_and(|m| (m - 0.2).abs() < 0.05),
+        "{pl:?}"
+    );
+    // every bleed hit (the 0.2 ms copies, about 18 dB under) is dropped by level alone
+    for (j, m) in marks[0].iter().enumerate().take(24) {
+        assert!(m.bleed, "hit {j}: {m:?}");
+    }
+    assert!(!marks[0][24].bleed, "{:?}", marks[0][24]);
+    // the margin sweep: all 24 fall under each of -3, 0, +3 and +6 dB
+    assert_eq!(pl.aligned_counts, [24, 24, 24, 24], "{pl:?}");
+}
+
+#[test]
+fn a_pair_with_a_real_lead_keeps_the_two_part_verdict() {
+    // the same geometry with the acoustic 1 ms arrival: the pair is NOT aligned (the median
+    // |lead| sits over the bound) and a quiet tom hit 2 ms BEFORE the kick stays even though a
+    // coinciding kick hit exists (the lead test denies).
+    let n = (2.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.001, -21.0);
+        kick_motion.push(t);
+        tom_motion.push(t + 0.001);
+    }
+    // a quiet real tom hit 2 ms before the last kick
+    tom_hit(&mut tom, 1.348, -20.0);
+    tom_motion.push(1.348);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let (marks, learned) = cross_bleed(&mics, SR, &CrossBleedParams::default());
+    let pl = &learned[0];
+    assert!(!pl.aligned, "{pl:?}");
+    assert_eq!(pl.aligned_counts, [0, 0, 0, 0]);
+    // the leading quiet hit stays (it leads the kick), the 1 ms bleed hits are dropped
+    assert!(!marks[0][24].bleed, "{:?}", marks[0][24]);
+    for m in &marks[0][..24] {
+        assert!(m.bleed, "{m:?}");
+    }
+}
+
+#[test]
 fn an_overhead_mic_is_not_a_tom_pair_source() {
     // #286 A1, measured: the common-band (full-band) no-lead oh test is a SNARE-target form
     // (the soft gate's `soft_overhead_peaks`); in a tom pair the tom's own-band level against

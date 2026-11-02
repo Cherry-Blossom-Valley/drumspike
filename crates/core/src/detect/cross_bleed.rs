@@ -45,6 +45,20 @@
 //! The level window at a hit is the tom-band window of the tom bleed rule (`window_ms`, the filter run
 //! in over `preroll_ms`), per mic in its own [`Role::band`].
 //!
+//! # The aligned session (#296)
+//!
+//! A session whose tracks were time-aligned (Auto-Align 2 or the like) has no bleed arrival delay:
+//! the lead of a source's hits on X sits at 0, so the lead test cannot fire and the bleed stays in
+//! the output. Per pair, the rule measures the |lead| of X's hits that coincide with a hit of S
+//! (nearest hit within `coincide_ms`): with at least `align_min_coins` coincidences and a median
+//! |lead| under `align_med_abs_lead_ms` the pair is **aligned** ([`PairLearned::aligned`]) and the
+//! verdict for the pair is the level test alone (test 2, no lead condition). A pair with a real
+//! lead keeps the two-part verdict, so unaligned sessions are unchanged. The per-pair result
+//! (`aligned`, `align_coins`, `align_med_abs_lead_ms` and the count of coinciding hits whose ratio
+//! falls under each of [`ALIGN_COUNT_MARGINS_DB`] — the ticket's margin sweep) is in
+//! [`PairLearned`]; the app reports it per pair (`cross_bleed.aligned` in the job record and the
+//! detector record).
+//!
 //! # Template validity
 //!
 //! The rule does not fix the detector's template on its own: a tom track whose loudest candidates are
@@ -143,6 +157,14 @@ pub struct CrossBleedParams {
     /// `DRUMSPIKE_A1_OH_MARGIN_DB` overrides the default (2.0: the a1-wake286 measurement cuts
     /// 123 of 142 model-absent false snare hits and denies none of the 109 ghost notes).
     pub overhead_margin_db: f64,
+    /// #296: a pair is aligned (Auto-Align 2 and the like) when at least this many hits of X
+    /// coincide with hits of S.
+    pub align_min_coins: usize,
+    /// #296: and the median |lead| of the coinciding hits is under this (ms). Acoustic bleed
+    /// arrives 0.5 to 3 ms after the source; the ticket's 0.15 ms example left the measured
+    /// session's toms 3 and 4 (signed-lead medians +0.33/+0.23 ms) undetected, so the default
+    /// keeps a 0.1 ms gap to the 0.5 ms bleed floor.
+    pub align_med_abs_lead_ms: f64,
 }
 
 fn env_f64(name: &str) -> Option<f64> {
@@ -161,6 +183,8 @@ impl Default for CrossBleedParams {
             silence_db: -100.0,
             margin_db: env_f64("DRUMSPIKE_A6_MARGIN_DB").unwrap_or(0.0),
             overhead_margin_db: env_f64("DRUMSPIKE_A1_OH_MARGIN_DB").unwrap_or(2.0),
+            align_min_coins: env_f64("DRUMSPIKE_A6_ALIGN_MIN_COINS").unwrap_or(20.0) as usize,
+            align_med_abs_lead_ms: env_f64("DRUMSPIKE_A6_ALIGN_MED_ABS_LEAD").unwrap_or(0.4),
         }
     }
 }
@@ -187,6 +211,10 @@ pub struct CrossMark {
     pub hat_ratio_db: Option<f64>,
 }
 
+/// The level margins (dB) of the aligned-pair count sweep (#296): per aligned pair,
+/// [`PairLearned::aligned_counts`] holds the number of X's hits whose ratio falls under each.
+pub const ALIGN_COUNT_MARGINS_DB: [f64; 4] = [-3.0, 0.0, 3.0, 6.0];
+
 /// The learned bounds of one pair (a tom mic index, a source index): the median lead and ratio of the
 /// clear cases (`None` without at least `min_clear` of them).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -199,6 +227,17 @@ pub struct PairLearned {
     pub lead_ms: Option<f64>,
     /// The median bleed level ratio of the clear cases (dB).
     pub ratio_db: Option<f64>,
+    /// #296: the pair's coinciding hits are centred on 0 — an aligned session (Auto-Align 2 and
+    /// the like removed the bleed's time lead): the verdict for the pair is the level test alone.
+    pub aligned: bool,
+    /// #296: the number of coinciding hits the alignment was measured over.
+    pub align_coins: usize,
+    /// #296: the median |lead| of the coinciding hits (ms); `None` without coincidences.
+    pub align_med_abs_lead_ms: Option<f64>,
+    /// #296: per aligned pair, the number of X's hits with a coinciding hit of S whose ratio
+    /// falls under each of [`ALIGN_COUNT_MARGINS_DB`] (the ticket's margin sweep). All zero when
+    /// the pair is not aligned.
+    pub aligned_counts: [usize; 4],
 }
 
 /// The band level (dBFS) of `x` in `[c + w.0, c + w.1)` with the filter run in over `pre` samples
@@ -310,6 +349,7 @@ pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec
     // tom hits (Session A t1 66 -> 19).
     let srcs: Vec<usize> = (0..mics.len()).filter(|&b| mics[b].kind != XKind::Overhead).collect();
     let mut learned = Vec::new();
+    let mut counts: Vec<Vec<[usize; 4]>> = Vec::new();
     let mut marks: Vec<Vec<CrossMark>> = mics
         .iter()
         .map(|m| {
@@ -335,6 +375,26 @@ pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec
             let s = &mics[b];
             let src_t = oh_lv[b].as_ref(); // the oh's levels in the target's band
             let lv_s = |k: usize| src_t.map_or(lv[b][k], |v| v[k]);
+            // the pair's alignment (#296): the |lead| of X's hits that coincide with a hit of S,
+            // nearest hit first. An aligned session's leads sit at 0 (the tool removed the
+            // bleed's arrival delay); a bleed lead of 0.5 to 3 ms cannot.
+            let mut s_sorted: Vec<f64> = s.motion.clone();
+            s_sorted.sort_by(f64::total_cmp);
+            let mut coins: Vec<f64> = Vec::new();
+            for &tx in &x.motion {
+                let k = s_sorted.partition_point(|&ts| ts < tx);
+                let cands = [s_sorted.get(k.saturating_sub(1)).copied(), s_sorted.get(k).copied()];
+                if let Some(ts) = cands
+                    .into_iter()
+                    .flatten()
+                    .filter(|&ts| (ts - tx).abs() <= coincide + 1e-9)
+                    .min_by(|u, v| (u - tx).abs().total_cmp(&(v - tx).abs()))
+                {
+                    coins.push((tx - ts).abs() * 1000.0);
+                }
+            }
+            let med_abs_lead = median(&mut coins);
+            let aligned = coins.len() >= p.align_min_coins && med_abs_lead.is_some_and(|m| m < p.align_med_abs_lead_ms);
             let mut ratios: Vec<f64> = Vec::new();
             let mut leads: Vec<f64> = Vec::new();
             for (k, &ts) in s.motion.iter().enumerate() {
@@ -386,16 +446,20 @@ pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec
                     source: b,
                     lead_ms: lead_learned,
                     ratio_db: ratio_learned,
+                    aligned,
+                    align_coins: coins.len(),
+                    align_med_abs_lead_ms: med_abs_lead,
+                    aligned_counts: [0; 4],
                 },
             ));
         }
-        learned.extend(pair.iter().map(|(_, l)| *l));
+        counts.push(vec![[0; 4]; pair.len()]);
         // the verdict per hit of X: the loudest coinciding source hit decides the evidence (the lead and
         // the ratio are stored either way); any firing source marks the hit
         for (j, &tx) in x.motion.iter().enumerate() {
             let mut best_level = f64::NEG_INFINITY;
             let mut bleed = false;
-            for &(b, pl) in &pair {
+            for (pi, &(b, pl)) in pair.iter().enumerate() {
                 let s = &mics[b];
                 let lvs = &lv[b];
                 let Some(k) = (0..s.motion.len())
@@ -448,13 +512,33 @@ pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec
                     // median-based margin separates bleed from a real hit. The lead and the
                     // source-louder test do: a real hit is loudest and earliest on its own mic.
                     // The learned ratio stays as stored evidence (the review queue B9).
-                    let lead_min = pl.lead_ms.map_or(p.min_lead_ms, |l| (l * 0.25).max(p.min_lead_ms));
-                    if r < p.margin_db && l > lead_min {
-                        bleed = true;
+                    //
+                    // #296: an ALIGNED pair judges by level alone — the alignment removed the
+                    // bleed's arrival delay, so the lead test cannot fire; the ratio sweep of the
+                    // ticket is counted per margin.
+                    if pl.aligned {
+                        if r < p.margin_db {
+                            bleed = true;
+                        }
+                        for (mi, &m) in ALIGN_COUNT_MARGINS_DB.iter().enumerate() {
+                            if r < m {
+                                counts[a][pi][mi] += 1;
+                            }
+                        }
+                    } else {
+                        let lead_min = pl.lead_ms.map_or(p.min_lead_ms, |l| (l * 0.25).max(p.min_lead_ms));
+                        if r < p.margin_db && l > lead_min {
+                            bleed = true;
+                        }
                     }
                 }
             }
             marks[a][j].bleed = bleed;
+        }
+        let learn_start = learned.len();
+        learned.extend(pair.iter().map(|(_, l)| *l));
+        for (pl, c) in learned[learn_start..].iter_mut().zip(&counts[a]) {
+            pl.aligned_counts = *c;
         }
     }
     (marks, learned)
