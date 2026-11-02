@@ -92,6 +92,17 @@ def repo(tmp_path):
     (r / "apps/desktop/src-tauri/tauri.conf.json").write_text('{\n  "version": "0.9.3",\n  "name": "x"\n}\n')
     (r / "apps/desktop/package.json").write_text('{\n  "name": "x",\n  "version": "0.9.3",\n  "scripts": {}\n}\n')
     (r / "apps/desktop/selftest/shell.json").write_text('{"expect": {"tracks": 3, "version": "0.9.3"}}\n')
+    # the lock files: two workspace members, a registry crate at the same number (has a source
+    # line), and the root entry plus a node module at the same number
+    (r / "Cargo.lock").write_text(
+        'version = 4\n\n[[package]]\nname = "anyhow"\nversion = "0.9.3"\n'
+        'source = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "ab"\n\n'
+        '[[package]]\nname = "drumspike-app"\nversion = "0.9.3"\ndependencies = [\n "drumspike-core",\n]\n\n'
+        '[[package]]\nname = "drumspike-core"\nversion = "0.9.3"\n')
+    (r / "apps/desktop/package-lock.json").write_text(
+        '{\n  "name": "x",\n  "version": "0.9.3",\n  "lockfileVersion": 3,\n  "packages": {\n'
+        '    "": {\n      "name": "x",\n      "version": "0.9.3",\n      "license": "x"\n    },\n'
+        '    "node_modules/left-pad": {\n      "version": "0.9.3",\n      "resolved": "r"\n    }\n  }\n}\n')
     # a ci.yml with the real paths-ignore, so cut.py parses the ignore list from the file
     (r / ".github/workflows").mkdir(parents=True)
     (r / ".github/workflows/ci.yml").write_text(
@@ -229,6 +240,29 @@ def test_bump_sets_the_version_in_all_four_files(repo):
     assert '"version": "0.9.4"' in (r / "apps/desktop/selftest/shell.json").read_text()
     # the diff is printed (the changed lines carry the new version, the removed ones the old)
     assert '"0.9.4"' in p.stdout and '"0.9.3"' in p.stdout
+    # the lock files move with the version: the two workspace members and the root entry's two
+    # fields; a registry crate and a node module at the same number stay
+    lock = (r / "Cargo.lock").read_text()
+    assert lock.count('version = "0.9.4"') == 2
+    assert 'name = "anyhow"\nversion = "0.9.3"\nsource' in lock
+    pl = (r / "apps/desktop/package-lock.json").read_text()
+    assert pl.count('"version": "0.9.4"') == 2
+    assert '"node_modules/left-pad": {\n      "version": "0.9.3"' in pl
+
+
+def test_bump_refuses_a_stale_lock_file_and_plan_says_to_wait(repo):
+    """v0.9.14: Cargo.lock stayed at the old version and release.sh failed at cargo metadata
+    --locked. A lock file behind the version files stops the bump before any file changes."""
+    r = repo[0]
+    lock = r / "Cargo.lock"
+    lock.write_text(lock.read_text().replace('name = "drumspike-core"\nversion = "0.9.3"',
+                                             'name = "drumspike-core"\nversion = "0.9.2"'))
+    subprocess.run(["git", "commit", "-qam", "stale lock"], cwd=r, check=True, capture_output=True)
+    p = run_cut(["bump"], repo)
+    assert p.returncode == 2
+    assert "Cargo.lock: 0.9.2, 0.9.3" in p.stderr
+    assert 'version = "0.9.3"' in (r / "Cargo.toml").read_text()
+    assert "WAIT: lock files not at 0.9.3" in run_cut(["plan"], repo).stdout
 
 
 def test_bump_refuses_a_dirty_tree(repo):
