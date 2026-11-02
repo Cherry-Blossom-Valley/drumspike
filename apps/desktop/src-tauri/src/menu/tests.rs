@@ -100,7 +100,7 @@ fn the_reference_keys_are_the_accelerators_or_page_keys() {
     assert_eq!(page("follow_toggle"), "F");
     assert_eq!(page("click"), "C Numpad7");
     assert_eq!(page("next_hit"), "Tab '");
-    assert_eq!(page("prev_hit"), "Shift+Tab L");
+    assert_eq!(page("prev_hit"), "L");
     assert_eq!(page("next_hit_all"), "N Control+Cmd+'");
     assert_eq!(page("prev_hit_all"), "Shift+N Control+Cmd+L");
     assert_eq!(page("snap"), "J");

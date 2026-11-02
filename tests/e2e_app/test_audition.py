@@ -223,13 +223,13 @@ def test_audition_on_tab_plays_the_hit_that_tab_steps_to(song):
     a = status(app).get("audition") or {"tracks": ["Kick In"], "start": 1.97}
     assert a["tracks"] == ["Kick In"] and a["start"] == pytest.approx(1.970)
     wait_until(lambda: status(app)["requested"] is False and au(app)["on"] is False, msg="the end of the window")
-    # Shift+Tab steps back and plays that hit; at the first hit there is no step and no audition
-    app.keyboard.press("Shift+Tab")
+    # Option+Tab steps back and plays that hit; at the first hit there is no step and no audition
+    app.keyboard.press("Alt+Tab")
     assert app.evaluate("() => S.sel.index") == 0
     wait_until(lambda: msg(app) == "audition Kick In 1.000 s", msg="the previous hit")
     wait_until(lambda: status(app)["requested"] is False, msg="the end of the window")
     app.evaluate("() => setMsg('')")
-    app.keyboard.press("Shift+Tab")
+    app.keyboard.press("Alt+Tab")
     assert msg(app) != "audition Kick In 1.000 s" and app.evaluate("() => S.sel.index") == 0
     # while the page plays, a step is only a step
     app.evaluate("() => { S.playhead = 0.2; }")
