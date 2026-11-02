@@ -56,8 +56,10 @@
 //! lead keeps the two-part verdict, so unaligned sessions are unchanged. The per-pair result
 //! (`aligned`, `align_coins`, `align_med_abs_lead_ms` and the count of coinciding hits whose ratio
 //! falls under each of [`ALIGN_COUNT_MARGINS_DB`] — the ticket's margin sweep) is in
-//! [`PairLearned`]; the app reports it per pair (`cross_bleed.aligned` in the job record and the
-//! detector record).
+//! [`PairLearned`]; the app reports it per pair (`cross_bleed.pairs` in the job record and the
+//! detector record). The alignment is a property of the PAIR, not of one hit list: the app's
+//! re-detection pass hands the pass-1 pairs to [`cross_bleed_prior`], so the verdict does not
+//! re-measure the alignment on the re-detected candidate times (whose |lead| medians move).
 //!
 //! # Template validity
 //!
@@ -310,6 +312,23 @@ fn median(v: &mut [f64]) -> Option<f64> {
 /// learned bounds per pair (tom order, then source order).
 #[must_use]
 pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
+    cross_bleed_prior(mics, sr, p, None)
+}
+
+/// [`cross_bleed`] with the alignment handed in (#296): `prior` holds the pairs of an earlier run
+/// over the SAME mics (the same tom and source indices) — the alignment is a property of the
+/// PAIR, not of one hit list, so the re-detection pass (whose candidate times sit on the
+/// detector's grid before the walk-back) reuses the alignment decided on the stored hits instead
+/// of re-measuring it on a hit list that the alignment itself shaped. When a prior pair exists,
+/// its `aligned`, `align_coins` and `align_med_abs_lead_ms` replace the measured ones (the
+/// recorded evidence stays the pass-1 decision); everything else is measured as usual.
+#[must_use]
+pub fn cross_bleed_prior(
+    mics: &[CrossMic],
+    sr: u32,
+    p: &CrossBleedParams,
+    prior: Option<&[PairLearned]>,
+) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
     let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
     let pre = ms_to_samples(p.preroll_ms, sr);
     let coincide = p.coincide_ms / 1000.0;
@@ -395,6 +414,13 @@ pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec
             }
             let med_abs_lead = median(&mut coins);
             let aligned = coins.len() >= p.align_min_coins && med_abs_lead.is_some_and(|m| m < p.align_med_abs_lead_ms);
+            // #296: the pass-1 decision wins when the caller hands the pairs in (the alignment is
+            // a property of the pair, not of one hit list — see [`cross_bleed_prior`]).
+            let (aligned, coins_n, med_abs_lead) = prior
+                .and_then(|ps| ps.iter().find(|l| l.tom == a && l.source == b))
+                .map_or((aligned, coins.len(), med_abs_lead), |prev| {
+                    (prev.aligned, prev.align_coins, prev.align_med_abs_lead_ms)
+                });
             let mut ratios: Vec<f64> = Vec::new();
             let mut leads: Vec<f64> = Vec::new();
             for (k, &ts) in s.motion.iter().enumerate() {
@@ -447,7 +473,7 @@ pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec
                     lead_ms: lead_learned,
                     ratio_db: ratio_learned,
                     aligned,
-                    align_coins: coins.len(),
+                    align_coins: coins_n,
                     align_med_abs_lead_ms: med_abs_lead,
                     aligned_counts: [0; 4],
                 },

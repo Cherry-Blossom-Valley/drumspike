@@ -1,7 +1,7 @@
 //! Tests of the cross-track bleed rule (#281 A6): a planted kick bleed on a tom track is dropped, a
 //! real tom hit 10 ms after a kick is kept.
 
-use super::{CrossBleedParams, CrossMic, XKind, cross_bleed};
+use super::{CrossBleedParams, CrossMic, PairLearned, XKind, cross_bleed, cross_bleed_prior};
 
 const SR: u32 = 48_000;
 
@@ -340,4 +340,64 @@ fn an_overhead_mic_is_not_a_tom_pair_source() {
     for (j, m) in marks[0].iter().enumerate() {
         assert!(!m.bleed, "hit {j} marked bleed: {m:?}");
     }
+}
+
+#[test]
+fn the_prior_alignment_is_honoured_in_the_re_detection() {
+    // #296 verify fix: the alignment is a property of the PAIR, not of one hit list. The same
+    // geometry as `a_pair_with_a_real_lead_keeps_the_two_part_verdict` (a real 1 ms arrival, the
+    // measured pair NOT aligned) with the PASS-1 pairs handed in: the re-measured alignment
+    // (which moved over the bound, as the re-detection's candidate times do) does not win — the
+    // verdict is the level test alone, the recorded coins/median stay the pass-1 values.
+    let n = (2.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.001, -21.0);
+        kick_motion.push(t);
+        tom_motion.push(t + 0.001);
+    }
+    tom_hit(&mut tom, 1.348, -20.0);
+    tom_motion.push(1.348);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let p = CrossBleedParams::default();
+    let (marks, learned) = cross_bleed(&mics, SR, &p);
+    assert!(!learned[0].aligned, "{learned:?}");
+    // the pass-1 decision: the pair aligned with 30 coins (as on the stored hits)
+    let prior = [PairLearned {
+        tom: 0,
+        source: 1,
+        lead_ms: None,
+        ratio_db: None,
+        aligned: true,
+        align_coins: 30,
+        align_med_abs_lead_ms: Some(0.06),
+        aligned_counts: [0; 4],
+    }];
+    let (marks2, learned2) = cross_bleed_prior(&mics, SR, &p, Some(&prior));
+    assert!(learned2[0].aligned, "{learned2:?}");
+    assert_eq!(learned2[0].align_coins, 30);
+    assert_eq!(learned2[0].align_med_abs_lead_ms, Some(0.06));
+    // level alone: every coinciding hit is bleed, the real hit (quieter than the kick) too
+    for (j, m) in marks2[0].iter().enumerate().take(24) {
+        assert!(m.bleed, "hit {j}: {m:?}");
+    }
+    assert!(marks2[0][24].bleed, "{:?}", marks2[0][24]);
+    // and the two-part verdict of the measured run is different (the fix changes the outcome)
+    assert_ne!(marks[0][24].bleed, marks2[0][24].bleed);
 }
