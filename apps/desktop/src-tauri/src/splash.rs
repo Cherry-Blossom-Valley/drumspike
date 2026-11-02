@@ -67,6 +67,8 @@ struct Inner {
     /// The first painted frame of the splash page (#441): the instant and the ms since it opened.
     painted_at: Option<Instant>,
     painted_ms: Option<u64>,
+    /// What the page said with its paint report (#203): source (`raf` or `timer`), frames run, visibility.
+    paint_info: Value,
     main_visible_at_ready: Option<bool>,
     main_shown_ms: Option<u64>,
     closed_ms: Option<u64>,
@@ -264,7 +266,13 @@ pub fn app_ready(app: AppHandle) -> Value {
 /// The first call wins; later ones change nothing.
 #[tauri::command]
 #[must_use]
-pub fn splash_painted(app: AppHandle) -> Value {
+pub fn splash_painted(
+    app: AppHandle,
+    source: Option<String>,
+    frames: Option<u32>,
+    visible: Option<String>,
+    page_ms: Option<u64>,
+) -> Value {
     let Some(state) = app.try_state::<SplashState>() else {
         return json!({"ok": false});
     };
@@ -274,6 +282,7 @@ pub fn splash_painted(app: AppHandle) -> Value {
     if i.painted_at.is_none() {
         i.painted_at = Some(Instant::now());
         i.painted_ms = Some(i.ms());
+        i.paint_info = json!({"source": source, "frames": frames, "visible": visible, "page_ms": page_ms});
     }
     json!({"ok": true})
 }
@@ -300,6 +309,7 @@ pub fn report(i: &SplashState) -> Value {
         "page_ready": i.page_ready,
         "ready_ms": i.ready_ms,
         "painted_ms": i.painted_ms,
+        "paint_info": i.paint_info,
         "main_visible_at_ready": i.main_visible_at_ready,
         "main_shown_ms": i.main_shown_ms,
         "splash_closed_ms": i.closed_ms,
@@ -397,6 +407,10 @@ mod tests {
         assert_eq!(v["page_ready"], false);
         assert_eq!(v["painted_ms"], Value::Null, "no paint report yet");
         assert_eq!(v["closed_after_paint_ms"], Value::Null);
+        assert!(
+            v.get("paint_info").is_some(),
+            "the report carries what the page said (#203)"
+        );
     }
 
     #[test]
