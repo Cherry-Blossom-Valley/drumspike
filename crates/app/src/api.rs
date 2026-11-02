@@ -864,6 +864,15 @@ pub static REGISTRY: &[CommandSpec] = &[
         Quick,
     ),
     cmd(
+        "shell_typing",
+        "The page says whether a text field or a dialog has the focus (the menu's plain keys, #300)",
+        &[req("on", Ty::Bool, "An editable element or a dialog has the focus")],
+        "{}",
+        App,
+        Window,
+        Quick,
+    ),
+    cmd(
         "open_paths_take",
         "Paths the Finder or a drop queued",
         &[],
