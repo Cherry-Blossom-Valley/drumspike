@@ -885,7 +885,28 @@ pub static REGISTRY: &[CommandSpec] = &[
     cmd(
         "splash_painted",
         "The splash page painted its first frame (the 5 s minimum counts from it)",
-        &[],
+        &[
+            opt(
+                "source",
+                Ty::Str,
+                "#203: how the page saw the paint: `raf` (two animation frames) or `timer` (no frame ran)",
+            ),
+            opt(
+                "frames",
+                Ty::Int,
+                "#203: animation frames the page counted before the report",
+            ),
+            opt(
+                "visible",
+                Ty::Str,
+                "#203: the page's document.visibilityState at the report",
+            ),
+            opt(
+                "page_ms",
+                Ty::Int,
+                "#203: milliseconds from the page load to the report",
+            ),
+        ],
         OBJ,
         App,
         Window,

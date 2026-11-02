@@ -263,8 +263,9 @@ pub fn app_ready(app: AppHandle) -> Value {
 }
 
 /// #441: the splash page reports its first painted frame. The 5 s minimum counts from here.
-/// The first call wins; later ones change nothing.
-#[tauri::command]
+/// The first call wins; later ones change nothing. #203 added the page's view of the paint
+/// (`source`, `frames`, `visible`, `page_ms`); `snake_case` like every multi-word argument of the API.
+#[tauri::command(rename_all = "snake_case")]
 #[must_use]
 pub fn splash_painted(
     app: AppHandle,
