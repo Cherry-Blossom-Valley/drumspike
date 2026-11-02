@@ -1140,15 +1140,16 @@ mod tests {
             sr: 96_000,
             chans: vec![chans],
         };
-        // the foot of the version 6 rule (#293): the first full-scale sample (versions 4 and 5 took the sample before it)
-        assert_eq!(job_onset(&job(SourceStatus::Changed), &shot2), 1000);
+        // the foot of the version 6 rule (#293, fitted on hand-placed hits): the last sample on the line before the
+        // first full-scale sample, as versions 4 and 5 took it
+        assert_eq!(job_onset(&job(SourceStatus::Changed), &shot2), 999);
         // fix 7: the render's onset is not rounded; a re-measured one stays whole
         let shot44 = OneShot {
             sr: 44_100,
             chans: vec![vec![0.0; 44_100]],
         };
         assert!((job_onset_exact(&job(SourceStatus::Ok), &shot44) - 44.1).abs() < 1e-9);
-        assert_eq!(job_onset_exact(&job(SourceStatus::Changed), &shot2), 1000.0);
+        assert_eq!(job_onset_exact(&job(SourceStatus::Changed), &shot2), 999.0);
     }
 
     #[test]
