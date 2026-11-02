@@ -321,7 +321,11 @@ fn run_refine(job_path: &Path) -> Result<(), String> {
                     back: None,
                 }
             }
-            RefineRule::Reach | RefineRule::FirstMotion | RefineRule::Foot | RefineRule::FootCapped => {
+            RefineRule::Reach
+            | RefineRule::FirstMotion
+            | RefineRule::Foot
+            | RefineRule::FootCapped
+            | RefineRule::Edge => {
                 let r = refine_rule_peak(&x, h.t0, sr, &h.neighbors, win, rule, job.peak_db.unwrap_or(FM_PEAK_DB));
                 let step = match r.step {
                     ReachStep::Kept => "kept",
