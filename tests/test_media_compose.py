@@ -236,16 +236,25 @@ def test_the_url_line_is_omitted_while_empty_and_accented_when_set():
     assert lines == ["Drum Spike.", "Licence.", "github.com/x/y"] and accent == 2
 
 
-def test_the_note_overlays_every_frame_of_the_graph():
-    # the coordinator's defect 2: the recording scenes showed no "AI-generated" note; the note
-    # now sits on the whole video, after the global concat, at the shared renderer's constants
-    plan = {"scenes": [{"id": "s", "clips": [{"source": "a.mp4", "start": 0.0, "end": 1.0}]}]}
+def test_the_note_does_not_double_on_source_clips_and_sits_on_the_cards():
+    # the coordinator's verify finding: the explainers carry their own note, the recordings
+    # record.py's identical one — a second overlay would double them. The graph overlays the
+    # shared PNG on no source clip and on every title-card segment.
+    plan = {"scenes": [{"id": "s", "clips": [
+        {"title": ["T"], "seconds": 1.0},
+        {"source": "a.mp4", "start": 0.0, "end": 1.0}]}]}
     sp = compose.scene_plan(plan["scenes"][0]["clips"], 1.0)
-    parts, inputs, last = compose.build_graph(plan, [sp], {}, {}, "note.png")
+    parts, inputs, last = compose.build_graph(plan, [sp], {}, {(0, 0): "card.png"}, "note.png")
     note_idx = next(i for i, e in enumerate(inputs) if e["path"] == "note.png")
-    assert parts[-1] == (f"[vcat][{note_idx}:v]overlay=x=main_w-overlay_w-{record.NOTE_MARGIN_PX}"
-                         f":y=main_h-overlay_h-{record.NOTE_BOTTOM_PX},format=yuv420p[vout]")
     assert last == "[vout]"
+    assert f"[{note_idx}:v]" not in parts[-1]   # no second note after the global concat
+    card_idx = next(i for i, e in enumerate(inputs) if e["path"] == "card.png")
+    card = next(p for p in parts if p.startswith(f"[{card_idx}:v]"))
+    assert card == (f"[{card_idx}:v][{note_idx}:v]overlay=x=main_w-overlay_w-{record.NOTE_MARGIN_PX}"
+                    f":y=main_h-overlay_h-{record.NOTE_BOTTOM_PX},fps=30,format=yuv420p[t0_0]")
+    src_idx = len(inputs) - 1   # the source clip was added last
+    src = next(p for p in parts if p.startswith(f"[{src_idx}:v]trim="))
+    assert f"[{note_idx}:v]" not in src
 
 
 def test_composes_note_png_is_records_shared_render(tmp_path):

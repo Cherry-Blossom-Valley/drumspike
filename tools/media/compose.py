@@ -9,10 +9,10 @@ code. A source clip is {source, start, end, speed} (speed at most 2x, the "2x" b
 record.py over the sped-up span); a title card is {title: [lines], seconds, accent: line} — a
 1920x1080 card PNG of the media plan's dark look, rendered with Playwright like record.py's
 badges (this ffmpeg has no drawtext), and may carry url: the download address as its own
-accent line, omitted while the field is empty (the repo is private for now). The
-"AI-generated" corner note of the explainers sits on every frame: a transparent PNG
-(record.py's shared renderer — the recordings carry the same note; right 28 / bottom 20)
-overlaid after the global concat. The narration comes from tools/media/tts.py's out dir
+accent line, omitted while the field is empty (the repo is private for now). The "AI-generated" corner note: every source clip already carries one baked in — the
+explainers render their own (explainer_common.py's dim DR-corner note) and the recordings
+carry record.py's identical PNG at right 28 / bottom 20 — so the compose overlays the shared
+PNG only on the title cards, which are rendered here and carry none. The narration comes from tools/media/tts.py's out dir
 (--tts-out plus the plan's narration.dir; the TTS API is NEVER called here). Every scene
 lands on its narration: a clip list shorter than the scene holds its last frame, a longer
 one is cut at the scene end. The
@@ -241,8 +241,8 @@ def render_badges(work, factors):
 
 def render_title_card(work, name, lines, accent):
     """A 1920x1080 title card PNG: the media plan's dark card, the lines centred. The
-    "AI-generated" corner note is not baked in here — the global note overlay of the compose
-    puts it on every frame, the cards included."""
+    "AI-generated" corner note is not baked in here — build_graph overlays the shared note
+    PNG on every card segment, so the cards match the sources' baked-in notes."""
     sizes = [TITLE_PX[0] if len(lines) == 1 else TITLE_PX[1]] + [SUB_PX] * (len(lines) - 1)
     rows = []
     for i, (text, size) in enumerate(zip(lines, sizes)):
@@ -290,8 +290,11 @@ def render_note(work):
 def build_graph(plan, scenes_plan, badge_files, cards, note):
     """The -filter_complex: per scene, the clips trimmed and sped onto the 30 fps grid (concat,
     last-frame hold or cut at the scene end, the badge over each sped-up span), then the global
-    concat and the "AI-generated" note over every frame of it. Returns (parts, inputs, last);
-    inputs carries one entry per -i, in order."""
+    concat. Every source clip carries its own baked-in "AI-generated" note (the explainers
+    render theirs, the recordings record.py's identical one), so the shared note PNG goes only
+    on the title-card segments, which are rendered here and carry none. Returns (parts, inputs,
+    last); inputs carries one entry per -i, in order."""
+    rec = _record_module()   # the note's constants: the shared renderer's (record.py burns it too)
     inputs, parts, chains = [], [], []
 
     def add_input(entry):
@@ -306,7 +309,9 @@ def build_graph(plan, scenes_plan, badge_files, cards, note):
             if "title" in cl:
                 i = add_input({"kind": "image", "path": cards[(k, j)],
                                "seconds": float(cl["seconds"])})
-                parts.append(f"[{i}:v]fps={FPS},format=yuv420p[t{k}_{j}]")
+                parts.append(f"[{i}:v][{note_i}:v]overlay=x=main_w-overlay_w-{rec.NOTE_MARGIN_PX}"
+                             f":y=main_h-overlay_h-{rec.NOTE_BOTTOM_PX},fps={FPS},"
+                             f"format=yuv420p[t{k}_{j}]")
                 segs.append(f"[t{k}_{j}]")
             else:
                 i = add_input({"kind": "file", "path": expand(cl["source"])})
@@ -335,10 +340,7 @@ def build_graph(plan, scenes_plan, badge_files, cards, note):
                              f":enable='between(t,{a:.3f},{b:.3f})'[sc{k}b]")
                 cur = f"[sc{k}b]"
         chains.append(cur)
-    parts.append("".join(chains) + f"concat=n={len(chains)}:v=1:a=0[vcat]")
-    rec = _record_module()   # the note's constants: the shared renderer's (record.py burns it too)
-    parts.append(f"[vcat][{note_i}:v]overlay=x=main_w-overlay_w-{rec.NOTE_MARGIN_PX}"
-                 f":y=main_h-overlay_h-{rec.NOTE_BOTTOM_PX},format=yuv420p[vout]")
+    parts.append("".join(chains) + f"concat=n={len(chains)}:v=1:a=0,format=yuv420p[vout]")
     return parts, inputs, "[vout]"
 
 
