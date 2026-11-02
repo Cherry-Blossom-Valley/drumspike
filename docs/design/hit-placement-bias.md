@@ -188,3 +188,78 @@ match; only the times differ):
 | tom | 0.8867 | 0.8867 |
 
 The F1 is not below main. The ENST gate (12 rows) was not run: the ENST dataset is not on this host.
+
+## Version 6 (#293, #294): the steep edge after the foot
+
+The owner's report on 0.9.13 (an own session, 489 kick and 356 snare hits): kick hits sit 3 to 5 samples
+before the first sample that visibly leaves the flat line; many snare hits sit at the start of a slow drift
+or a bleed stretch, 0.3 to 2 ms before the steep rise of the stroke. A before/after of 0.9.6, 0.9.11 and
+0.9.13 on four sessions shows the same placement in all three (same hit counts, median shift 0 ms), so this
+is not a regression of the 0.9.12 changes but the walk's design: it stops at the first sample over its
+threshold (33 dB under the peak, or 6 dB over the floor), and the bleed or drift before an attack lies over
+that threshold. The #239 lead-in made it worse on 22 snare hits (0.25 to 0.8 ms earlier).
+
+Version 6 (`RefineRule::Edge`, the analysis default since 0.9.14):
+
+- the version 3 foot: no strict foot (versions 4 and 5 moved the hit 1 to 3 samples before the first sample
+  over the threshold, the opposite of what the engineer sees), no lead-in (`set_lead_in` stays for the
+  measurement example, default off);
+- then the first steep edge after the foot (`edge_foot`): the first sample `j` in the 5 ms after the foot
+  where the signal rises by `EDGE_RISE_DB` (18 dB) under the hit's peak within `EDGE_RISE_S` (0.1 ms),
+  looked for only while the level is still under `EDGE_TOP_DB` (12 dB) below the peak. The hit moves to the
+  edge's foot: the first sample of that window whose step to the next sample is half the edge's per-sample
+  rise. A slow attack without such an edge keeps the version 3 foot; a hard attack keeps its first sample.
+
+The rule was then fitted on the owner's hand-placed hits (2026-11-02, the reported session: kick hits 1 to 332
+and snare hits 1 to 168 placed by hand in the app, 107 and 89 of them moved; an unmoved hit counts as correct).
+Even hits chose the parameters, odd hits checked them (`tools`-free prototypes, the exact port of `edge_foot`
+in Python). Three things changed against the first build:
+
+- the search starts one rise window (0.1 ms) before the walk's foot: on a steep kick the first sample over the
+  walk's threshold already lies inside the rise, and from there the next window rises too little, so the first
+  build kept the walk's foot, 2 samples after the owner's position;
+- the guard compares the stretch before an edge with the level that edge reaches within 0.5 ms
+  (`EDGE_GUARD_DB`, 12 dB; 9 to 15 dB give the same result), not with the peak of the whole 5 ms, and the search
+  goes on after a rejected edge; the level reaching 12 dB under the peak without an edge ends the search
+  (`EDGE_TOP_DB`): a ripple inside the body of a soft hit is no edge;
+- the foot's walk-back follows the rising level and takes up to `EDGE_TAIL_SAMPLES` (4) more samples while the
+  level rises by more than `EDGE_TAIL_NOISE` (8) times the line noise, so the hit sits on the last sample of the
+  line, as version 5's strict foot did. With 2 times the noise the tail took the slow drift of a kick's line for
+  the hit (1 to 3 samples early).
+
+Against the owner's positions (the app's own analysis of the 0.9.13 build and of this rule; mean of
+|placed - owner| in samples at 48 kHz):
+
+| drum | hits | 0.9.13 (version 5) | version 6 | within 1 sample | within 5 samples |
+|---|---|---|---|---|---|
+| kick | 332 | 0.61 | 0.57 | 89 % to 92 % | 98 % to 99.7 % |
+| snare | 168 | 4.99 | 1.14 | 62 % to 80 % | 67 % to 98 % |
+
+The held-out odd hits score 0.53 (kick) and 1.23 (snare). Of the candidates measured on the same positions, no
+threshold rule (the first sample over K times the noise, or over the peak minus D dB) and no change-point
+picker (the AIC arrival picker of seismology on the raw, the smoothed or the differentiated signal) reached the
+0.9.13 kick score; the edge rule is the only one that improves both drums.
+
+The edge may move a hit later than the version 2 time (`BackStep::Moved` either way). The thresholds were
+chosen on the Python prototype over three sessions and the owner's hits: 18 dB keeps the small sharp first
+step of a snare stroke as the hit and skips a slow drift (which rises under 18 dB per 0.1 ms); the 12 dB
+guard stops the search on soft or slow hits before a later swing is taken for the edge. Measured moves of
+version 6 against version 5 are in the 0.9.14 gate record (PR #293 fix).
+
+Measured, version 6 against 0.9.13 (version 5) with the app's own analysis (the tool's `cli run`: project,
+tracks, analyze, events), hits matched within 5 ms:
+
+| session | role | hits | moved earlier | moved later by 0.25 ms or more | median move |
+|---|---|---|---|---|---|
+| Session E (the report's) | kick | 489 | 0 | 5 | +2 samples |
+| Session E | snare | 356 | 0 | 43 | +2 samples |
+| Session E | tom (4 mics) | 353, 355, 236, 355 | 0 | 93, 107, 21, 27 | +2 samples |
+| Session B | kick | 359 | 0 | 27 | +2 samples |
+| Session B | snare | 267 | 0 | 38 | +4 samples |
+| Session B | hat | 288 | 0 | 16 | +1 sample |
+
+Hit counts are unchanged on every track (one tom of Session B: 41 to 42). The 2-sample median is the strict
+foot that version 5 took before the first sample over the threshold. The report's four kick hits move 4, 4,
+4 and 11 samples onto the visible departure; its three snare hits 8, 16 and 27 samples onto the start of
+the drift. The synthetic hard attack keeps its first sample; a 0.5 ms raised-cosine rise is placed 1 to 4
+samples after its first sample over the floor (`placement_bias`, `test_calib_kit` within its 5-sample limit).

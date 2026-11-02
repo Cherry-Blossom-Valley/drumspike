@@ -55,7 +55,8 @@ def python_walk(x, t2, t0, prev, nxt, peak_db):
     try:
         pm = int((prev + t0) / 2 * SR) if prev is not None else None
         nm = int((t0 + nxt) / 2 * SR) if nxt is not None else None
-        foot, how = og.walk(x.astype(np.float64), int(round(t2 * SR)), SR, pm, nm, lead_in=True)
+        # the lead-in (#239) is off in the app since version 6 (#293, #294); rule 3 of the binary follows the switch
+        foot, how = og.walk(x.astype(np.float64), int(round(t2 * SR)), SR, pm, nm, lead_in=False)
     finally:
         og.FM_PEAK_DB = keep
     return (foot / SR if how == "moved" else t2), how

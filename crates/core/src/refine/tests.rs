@@ -219,9 +219,10 @@ fn rule_versions_and_the_reference_rule() {
             RefineRule::Reach.version(),
             RefineRule::FirstMotion.version(),
             RefineRule::Foot.version(),
-            RefineRule::FootCapped.version()
+            RefineRule::FootCapped.version(),
+            RefineRule::Edge.version()
         ),
-        (1, 2, 3, 4, 5)
+        (1, 2, 3, 4, 5, 6)
     );
     for r in [
         RefineRule::Reference,
@@ -229,12 +230,13 @@ fn rule_versions_and_the_reference_rule() {
         RefineRule::FirstMotion,
         RefineRule::Foot,
         RefineRule::FootCapped,
+        RefineRule::Edge,
     ] {
         assert_eq!(RefineRule::from_version(u64::from(r.version())), Some(r));
     }
     assert_eq!(RefineRule::from_version(0), None);
-    assert_eq!(RefineRule::from_version(6), None);
-    assert_eq!(RefineRule::CURRENT, RefineRule::FootCapped);
+    assert_eq!(RefineRule::from_version(7), None);
+    assert_eq!(RefineRule::CURRENT, RefineRule::Edge);
     // the reference rule is refine_sr, step Kept, on every kind of window
     let x = noisy(&track(&[(0.5, -3.0)], 1.5), -70.0);
     for t0 in [0.486, 0.497, 0.503, 0.65, 2.0] {
@@ -1047,8 +1049,9 @@ fn refined_sample(x: &[f32], on: usize) -> i64 {
 }
 
 #[test]
-fn a_small_first_bump_before_the_main_swing_is_the_hits_start() {
-    // a bump at 6 times the floor, then the main swing 1 ms later: the hit starts at the bump
+fn a_small_first_bump_before_the_main_swing_is_not_the_hits_start() {
+    // a bump at 6 times the floor, then the main swing 1 ms later: version 6 puts the hit at the swing's steep edge
+    // (#293, #294); versions 3 to 5 with the #239 lead-in put it at the bump
     const A: f64 = 0.0017;
     let on = 24_000;
     let mut x = floor_of(48_000, A);
@@ -1058,12 +1061,12 @@ fn a_small_first_bump_before_the_main_swing_is_the_hits_start() {
         .iter()
         .position(|v| f64::from(v.abs()) > 2.0 * A)
         .expect("the hit leaves the floor") as i64;
-    let off = refined_sample(&x, on) - dep;
-    // the walk reads the two-tap level, which lags a raised-cosine start by a few samples; before the lead-in it was 45
     assert!(
-        (-1..=3).contains(&off),
-        "{off} samples from the first sample over twice the floor"
+        dep >= on as i64 && dep < on as i64 + 48,
+        "the bump leaves the floor: {dep}"
     );
+    let off = refined_sample(&x, on) - (on as i64 + 48);
+    assert!((-1..=1).contains(&off), "{off} samples from the swing's hard start");
 }
 
 #[test]
@@ -1086,7 +1089,7 @@ fn the_trace_shows_the_walk_and_its_lead_in() {
     swing(&mut x, on, 24, 0.01, 1000.0);
     swing(&mut x, on + 48, 0, 0.8, 180.0);
     let tr = first_motion_trace(&x, on as i64 + 60, SR, None, None).expect("a walk");
-    assert!(tr.lead < tr.foot && tr.foot - tr.lead <= 72, "{tr:?}");
+    assert_eq!(tr.lead, tr.foot, "the lead-in is off: {tr:?}");
     assert!(tr.floor > 0.0 && tr.thr > tr.floor * 2.0, "{tr:?}");
     assert_eq!(
         first_motion_mid(&x, on as i64 + 60, SR, None, None).0,
@@ -1107,18 +1110,19 @@ fn a_hit_is_not_found_before_the_first_sample_over_the_floor() {
     swing(&mut x, on, 24, 0.8, 180.0);
     let dep = (on - 144 + x[on - 144..].iter().position(|v| f64::from(v.abs()) > A / 4.0).unwrap()) as i64;
     let off = refined_sample(&x, on) - dep;
+    // version 6: the steep edge of the 0.5 ms raised-cosine rise lies a few samples after the first sample over the floor
     assert!(
-        (-12..=1).contains(&off),
+        (-12..=8).contains(&off),
         "{off} samples from the first sample over the quiet floor"
     );
 }
 
 #[test]
-fn the_lead_in_switch_is_on_for_the_product() {
-    // the switch is for the measurement example; it is a process-wide flag, so this only sets it on (the default)
-    set_lead_in(true);
-    let (x, on) = lead_in_hit();
-    assert!(refined_sample(&x, on) > 0);
+fn the_lead_in_is_off_for_the_product() {
+    // #293, #294: the lead-in joined the bleed before snare hits; the switch stays for the measurement example. It is a
+    // process-wide flag, so this test does not touch it: the default is off, and a bump 1 ms before the swing is not
+    // joined (the first bump test above places the hit at the swing)
+    assert!(!LEAD_IN.load(Ordering::Relaxed));
 }
 
 #[test]
@@ -1164,4 +1168,141 @@ fn a_hard_attack_over_a_noise_floor_is_never_placed_before_its_onset() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------- #293, #294: the steep edge (version 6)
+
+/// A slow drift of `amp` over `len` samples from `from` (a straight ramp): the head moving before the stroke.
+fn drift(x: &mut [f32], from: usize, len: usize, amp: f64) {
+    for k in 0..len {
+        x[from + k] += (amp * k as f64 / len as f64) as f32;
+    }
+}
+
+#[test]
+fn a_slow_drift_before_a_snare_attack_is_not_the_hit() {
+    // the owner's #294 shape: a drift to 10 % of the peak over 1 ms, then the hard swing; the hit sits at the swing
+    const A: f64 = 0.0017;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    drift(&mut x, on, 48, -0.06);
+    swing(&mut x, on + 48, 0, 0.6, 180.0);
+    let off = refined_sample(&x, on) - (on as i64 + 48);
+    assert!((-2..=1).contains(&off), "{off} samples from the swing's hard start");
+}
+
+#[test]
+fn bleed_before_a_hit_is_not_the_hit() {
+    // a 900 Hz bleed burst at 3 % for 2 ms, then the attack: the walk reaches into the bleed, the edge is the attack
+    let on = 24_000;
+    let mut x = floor_of(48_000, 0.0005);
+    tone(&mut x, on - 96, on, 900.0, 0.03);
+    swing(&mut x, on, 0, 0.8, 180.0);
+    let off = refined_sample(&x, on) - on as i64;
+    assert!((-2..=1).contains(&off), "{off} samples from the attack");
+}
+
+#[test]
+fn a_slow_attack_without_a_steep_edge_keeps_the_walks_foot() {
+    // a 2 ms raised-cosine rise (no edge before the level passes EDGE_TOP_DB): the version 3 foot stays
+    const A: f64 = 0.0017;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    swing(&mut x, on, 96, 0.5, 120.0);
+    let v3 = refine_rule_peak(
+        &x,
+        on as f64 / f64::from(SR) - 0.006,
+        SR,
+        &[],
+        W,
+        RefineRule::FirstMotion,
+        FM_PEAK_DB,
+    );
+    let v6 = refined_sample(&x, on);
+    assert_eq!(
+        v6,
+        (v3.t * f64::from(SR)).round() as i64,
+        "version 6 keeps the version 3 foot"
+    );
+}
+
+#[test]
+fn a_hard_attack_keeps_its_first_sample_under_version_6() {
+    let on = 24_000;
+    for floor in [1e-9f64, 1e-4, 1e-3] {
+        let mut x = floor_of(48_000, floor);
+        swing(&mut x, on, 0, 0.5, 180.0);
+        let off = refined_sample(&x, on) - on as i64;
+        assert!((-1..=0).contains(&off), "floor {floor}: {off} samples from the onset");
+    }
+}
+
+#[test]
+fn edge_foot_finds_the_first_steep_rise_and_nothing_else() {
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f32; 2_000];
+    // a drift to 0.1 over 200 samples, then a step to 1.0 over 3 samples at 1200
+    drift(&mut x, 1_000, 200, 0.1);
+    for (k, v) in [0.4f32, 0.8, 1.0].iter().enumerate() {
+        x[1_200 + k] = *v;
+    }
+    for v in &mut x[1_203..1_400] {
+        *v = 1.0;
+    }
+    let foot = edge_foot(&x, 1_000, 1_400, srf);
+    assert!((1_198..=1_200).contains(&foot), "the edge's foot: {foot}");
+    // no edge: a straight rise to the peak
+    let mut y = vec![0.0f32; 2_000];
+    drift(&mut y, 1_000, 300, 1.0);
+    assert_eq!(edge_foot(&y, 1_000, 1_400, srf), 1_000);
+    // nothing after the foot: silence
+    assert_eq!(edge_foot(&vec![0.0f32; 100], 10, 90, srf), 10);
+    assert_eq!(edge_foot(&x, 1_399, 1_400, srf), 1_399);
+}
+
+#[test]
+fn a_ripple_inside_a_soft_hit_is_not_its_edge() {
+    // #293 follow-up (the owner's panels 6 and 12): a soft hit that starts as a 2 kHz wobble at 4 % for 2.5 ms, then a
+    // swing at 10 %: the wobble is the hit's body (its level is 8 dB under the swing), so the hit stays at the wobble's
+    // start; a sharp ripple of the wobble is no edge
+    const A: f64 = 0.0005;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    tone(&mut x, on, on + 120, 2000.0, 0.04);
+    swing(&mut x, on + 120, 0, 0.1, 180.0);
+    let off = refined_sample(&x, on) - on as i64;
+    assert!((-2..=3).contains(&off), "{off} samples from the wobble's start");
+}
+
+#[test]
+fn the_edge_foot_sits_on_the_first_sample_off_the_line() {
+    // a kick-like start: 2 samples at a quarter of the rise, then the half-rise steps; the foot is the last sample on
+    // the line before the first quarter step (the owner's kick call: 1 to 2 samples before the half-step foot)
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f32; 2_000];
+    // need = 1.0 * 10^(-18/20) = 0.126 over w = 5 samples: step (half) = 0.0126 per sample, a quarter = 0.0063
+    let ramp = [0.007f32, 0.015, 0.05, 0.12, 0.3, 0.6, 0.9, 1.0];
+    for (k, v) in ramp.iter().enumerate() {
+        x[1_200 + k] = *v;
+    }
+    for v in &mut x[1_208..1_400] {
+        *v = 1.0;
+    }
+    assert_eq!(edge_foot(&x, 1_000, 1_400, srf), 1_199, "the last sample on the line");
+}
+
+#[test]
+fn a_steep_attack_whose_walk_foot_lies_inside_the_rise_sits_on_the_last_line_sample() {
+    // the owner's kick (#293): the line, then 0.05, 0.25, 0.6, 0.8 of the peak in four samples. The walk's first
+    // sample over its threshold is the second rising sample; the edge search starts a window before it and puts the
+    // hit on the last sample of the line
+    const A: f64 = 0.0002;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    for (k, v) in [0.0125f32, 0.0625, 0.15, 0.2].iter().enumerate() {
+        x[on + k] = *v;
+    }
+    swing(&mut x, on + 4, 0, 0.25, 150.0);
+    let off = refined_sample(&x, on) - on as i64;
+    assert!((-1..=0).contains(&off), "{off} samples from the first rising sample");
 }

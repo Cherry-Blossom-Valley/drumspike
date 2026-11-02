@@ -260,11 +260,25 @@ def test_meters_move_while_playing_hold_and_fall_after_the_stop(app, audio_reset
         on = app.evaluate(f"() => document.querySelector('{KICK} .mclip').classList.contains('on')")
         raise AssertionError(f"the clip light did not come on: measured peak {p['hold']:.2f} dBFS "
                              f"(level {p['lvl']:.2f} dBFS, clip {p['clip']}, light {on})") from e
-    n = app.evaluate("() => FR.n.meter")
-    app.click(f"{KICK} .mclip")
-    app.wait_for_function(f"() => !document.querySelector('{KICK} .mclip').classList.contains('on')", timeout=2000)
-    assert app.evaluate("() => FR.n.meter") > n, "the meters are drawn in the frame (F.METER)"
+    # #291: the gain goes back to 0 dB BEFORE the click. With the +12 dB still in, a later kick of the
+    # song (1.5 s, 2.5 s) sets the clip flag again after the click, and on a loaded host (the playhead
+    # late) that landed inside the 2 s wait: the light was never seen off (e2e-arm64 shard, 2 of 3 main
+    # runs). Messages already in flight can still carry the peak, so the click is repeated until the
+    # light stays off; with the gain at 0 dB no new message sets it.
     app.evaluate("() => setTrackMix('Kick In', 0, null)")
+    n = app.evaluate("() => FR.n.meter")
+    light_off = f"() => !document.querySelector('{KICK} .mclip').classList.contains('on')"
+
+    def clicked_off():
+        app.click(f"{KICK} .mclip")
+        try:
+            app.wait_for_function(light_off, timeout=1000)
+        except Exception:
+            return False
+        return True
+
+    wait_until(clicked_off, timeout=15.0, msg="the clip light off after the click")
+    assert app.evaluate("() => FR.n.meter") > n, "the meters are drawn in the frame (F.METER)"
     # stop: no more messages, the levels and the hold lines fall to the floor
     app.click("#playBtn")
     app.wait_for_function("() => S.playing === false")

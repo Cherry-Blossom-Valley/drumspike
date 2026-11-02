@@ -391,7 +391,8 @@ fn export_layer_places_the_onset_on_every_hit_sample() {
         assert_eq!(out[0][i], g * left[onset], "inverted at {t}");
     }
     // a one-shot at 44.1 kHz on a 48 kHz track: resampled once, the onset at the track's rate.
-    // The onset must map to a whole 48 kHz sample (441 -> 480) for the exact-sample check.
+    // The onset must map to a whole 48 kHz sample (441 -> 480) for the exact-sample check: the refine rule puts the
+    // onset on the last sample before the shot's first one (version 5 and the fitted version 6 alike).
     let f2 = root.join("shots").join("low.wav");
     wav(&f2, 44_100, &[shot(44_100, 442, 0.2, 5)], None);
     svc.track_layer_set(

@@ -1140,7 +1140,8 @@ mod tests {
             sr: 96_000,
             chans: vec![chans],
         };
-        // the foot of the version 4 rule (#101): one sample before the first full-scale sample
+        // the foot of the version 6 rule (#293, fitted on hand-placed hits): the last sample on the line before the
+        // first full-scale sample, as versions 4 and 5 took it
         assert_eq!(job_onset(&job(SourceStatus::Changed), &shot2), 999);
         // fix 7: the render's onset is not rounded; a re-measured one stays whole
         let shot44 = OneShot {

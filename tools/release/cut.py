@@ -14,8 +14,10 @@ run. It prints "skip: no user-visible change" when there is nothing to release.
 `notes` writes docs/release-notes/release-notes-<next>.md as a draft, one line per ticket, grouped
 by path (playback, tempo, detection, export, UI, general).
 `bump` sets the version in the four files release.yml checks (Cargo.toml workspace,
-tauri.conf.json, apps/desktop/package.json, apps/desktop/selftest/shell.json) and prints the
-diff. It refuses a dirty tree.
+tauri.conf.json, apps/desktop/package.json, apps/desktop/selftest/shell.json), moves the two
+lock files (the Cargo.lock workspace members, apps/desktop/package-lock.json) with them, and
+prints the diff. It refuses a dirty tree and a lock file that is not at the current version:
+release.sh runs `cargo metadata --locked`, and a stale Cargo.lock failed the v0.9.14 build.
 `status <tag>` prints the release.yml run of the tag with each job's duration and the draft's
 assets with their sha256 against SHA256SUMS.
 
@@ -44,6 +46,18 @@ VERSION_FILES = [
     ("apps/desktop/src-tauri/tauri.conf.json", re.compile(r'(^  "version": ")([^"]+)(",)', re.M)),
     ("apps/desktop/package.json", re.compile(r'(^  "version": ")([^"]+)(",)', re.M)),
     ("apps/desktop/selftest/shell.json", re.compile(r'("expect": \{[^}]*"version": ")([^"]+)(")', re.S)),
+]
+
+# The lock files move with the version (v0.9.14: release.sh runs `cargo metadata --locked`, and a
+# Cargo.lock left at the old version failed the build job). Each pattern takes the version in
+# place of %s; group 2 is the version. Cargo.lock: a [[package]] without a `source` line is a
+# workspace member (a path dependency), so a registry crate at the same number is never touched;
+# count 0 = all members. package-lock.json: the root entry's two fields, the first line at each
+# indent (`packages[""]` is always the first package); count 1 = that line only.
+LOCK_FILES = [
+    ("Cargo.lock", r'(^name = "[^"]+"\nversion = ")%s("\n)(?!source = )', 0),
+    ("apps/desktop/package-lock.json", r'(^  "version": ")%s(",)', 1),
+    ("apps/desktop/package-lock.json", r'(^      "version": ")%s(",)', 1),
 ]
 
 # Groups of the notes, checked against the title and the changed paths; first match wins.
@@ -111,6 +125,38 @@ def current_version(root):
     if not m:
         raise CutError("Cargo.toml has no [workspace.package] version")
     return m.group(2)
+
+
+def lock_versions(root):
+    """The versions each lock file carries at the places LOCK_FILES names, {name: sorted list}."""
+    found = {}
+    for name, pattern, count in LOCK_FILES:
+        rx = re.compile(pattern % r'([^"]+)', re.M)
+        text = (root / name).read_text()
+        hits = rx.finditer(text) if count == 0 else [rx.search(text)]
+        found.setdefault(name, set()).update(m.group(2) for m in hits if m)
+    return {name: sorted(vs) for name, vs in found.items()}
+
+
+def stale_locks(root, version):
+    """The lock files that are not at `version`, one 'name: versions' line each."""
+    return [f"{name}: {', '.join(vs) or 'no version'}" for name, vs in lock_versions(root).items()
+            if vs != [version]]
+
+
+def bump_locks(root, old, new):
+    """Move the lock files from `old` to `new`; returns the changed paths."""
+    changed = []
+    for name, pattern, count in LOCK_FILES:
+        p = root / name
+        rx = re.compile(pattern % re.escape(old), re.M)
+        text, n = rx.subn(lambda m: m.group(1) + new + m.group(2), p.read_text(), count=count)
+        if n == 0:
+            raise CutError(f"{name}: no entry at {old}")
+        p.write_text(text)
+        if name not in changed:
+            changed.append(name)
+    return changed
 
 
 def next_version(version):
@@ -255,6 +301,10 @@ def cmd_plan(args):
     version = current_version(root)
     nxt = next_version(version)
     print(f"current version: {version}   next: {nxt}")
+    stale = stale_locks(root, version)
+    if stale:
+        print(f"WAIT: lock files not at {version} (bump refuses them; run `cargo update --workspace` "
+              f"and `npm install --package-lock-only` in apps/desktop, commit): {'; '.join(stale)}")
     prs = merged_prs(root, tag_time(root, tag)) if tag else []
     if not any(p["visible"] for p in prs):
         print("skip: no user-visible change")
@@ -339,9 +389,14 @@ def cmd_bump(args):
     root = find_root(args.root)
     if sh(["git", "status", "--porcelain"], root).strip():
         raise CutError("the tree is dirty: commit or stash first (bump refuses a dirty tree)")
-    version = next_version(current_version(root))
-    changed = bump_files(root, version)
-    print(f"version {version} in {len(VERSION_FILES)} files ({len(changed)} changed)")
+    old = current_version(root)
+    version = next_version(old)
+    stale = stale_locks(root, old)
+    if stale:
+        raise CutError(f"a lock file is not at the current version {old} (release.sh runs "
+                       f"`cargo metadata --locked`; update and commit it first): {'; '.join(stale)}")
+    changed = bump_files(root, version) + bump_locks(root, old, version)
+    print(f"version {version} in {len(changed)} files: {', '.join(changed)}")
     print(sh(["git", "diff"], root), end="")
     return 0
 
