@@ -61,6 +61,17 @@ pub fn shell_sync(
     Ok(recent.len().min(menu::RECENT_MAX))
 }
 
+/// #300: the page says whether an editable element or a dialog has the focus (`on`). While it has, the menu
+/// keeps only the accelerators with Cmd, Control or Option, so the plain keys (V, Space, Tab) reach the field.
+///
+/// # Errors
+///
+/// 500 when the windowing library cannot set the accelerator of a menu item.
+#[tauri::command]
+pub fn shell_typing(app: AppHandle, on: bool) -> Result<(), AppError> {
+    menu::set_typing(&app, on).map_err(|e| AppError::internal(format!("menu: {e}")))
+}
+
 /// Take the paths that came from the Finder, the Dock or a drop: `{projects, others}`.
 #[tauri::command]
 #[must_use]

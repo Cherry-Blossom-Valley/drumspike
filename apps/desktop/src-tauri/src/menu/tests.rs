@@ -49,7 +49,8 @@ fn shortcuts_are_unique_have_a_modifier_and_are_written_as_tauri_wants() {
         // #158: Next Marker and Previous Marker have a key in both presets, Audition Hit has one in the Cubase preset only
         // #169: Show Overview (Option+O) has a key in both presets, like Show Inspector (Option+I)
         // #207: Export Selected Tracks and Undo History have a key in both presets
-        assert_eq!(seen.len(), if preset == "default" { 39 } else { 34 }, "{preset}");
+        // #300: Track Height Small, Medium and Large moved from the page keys to the menu keys (they have Option+Cmd)
+        assert_eq!(seen.len(), if preset == "default" { 42 } else { 37 }, "{preset}");
     }
 }
 
@@ -78,11 +79,13 @@ fn the_reference_keys_are_the_accelerators_or_page_keys() {
     assert_eq!(acc(&INSPECTOR), "Alt+I");
     assert_eq!(acc(&HEIGHT_TALLER), "CmdOrCtrl+ArrowDown"); // P3-14c, reference 3.2 (Cubase Zoom In Tracks)
     assert_eq!(acc(&HEIGHT_SHORTER), "CmdOrCtrl+ArrowUp");
-    assert!(
-        [HEIGHT_SMALL, HEIGHT_MEDIUM, HEIGHT_LARGE]
-            .iter()
-            .all(|i| accel_of(i.id, "default").is_none() && accel_of(i.id, "cubase").is_none())
-    );
+    for preset in PRESETS {
+        // #300: the keys have Option+Cmd, so they are menu keys (they were listed as page keys)
+        assert_eq!(
+            [HEIGHT_SMALL, HEIGHT_MEDIUM, HEIGHT_LARGE].map(|i| accel_of(i.id, preset).unwrap()),
+            ["CmdOrCtrl+Alt+1", "CmdOrCtrl+Alt+2", "CmdOrCtrl+Alt+3"]
+        );
+    }
     assert_eq!(acc(&GO_END), "Alt+Enter");
     assert_eq!(acc(&PREV_HIT), "Alt+Tab");
     assert_eq!(acc(&NEXT_HIT_ALL), "Ctrl+Tab");
@@ -300,6 +303,94 @@ fn the_menu_key_of_a_row_in_a_preset() {
     );
     assert_eq!(row(None, None, Some(&["Cmd+L"])).menu_key_in("cubase"), None);
     assert_eq!(row(None, None, None).menu_key_in("default"), None);
+}
+
+/// #300: `KeyCommand::shown_key_in` is the menu key, else the first key the menu can show (a Numpad key it cannot).
+#[test]
+fn the_shown_key_of_a_row_is_its_first_key_the_menu_can_show() {
+    let row = |menu: Option<&str>, menu_key: Option<&str>, pages: &[&str], cubase: Option<&[&str]>| KeyCommand {
+        id: "x".into(),
+        menu: menu.map(Into::into),
+        title: "X".into(),
+        menu_key: menu_key.map(Into::into),
+        page_keys: pages.iter().map(ToString::to_string).collect(),
+        cubase: cubase.map(|l| l.iter().map(ToString::to_string).collect()),
+    };
+    let shown = |r: &KeyCommand, p: &str| r.shown_key_in(p);
+    // a menu key wins over the page keys
+    assert_eq!(
+        shown(&row(Some("x"), Some("Cmd+K"), &["Q"], None), "default").as_deref(),
+        Some("Cmd+K")
+    );
+    // no menu key: the first page key; a Numpad key is skipped
+    assert_eq!(
+        shown(&row(Some("x"), None, &["V"], None), "default").as_deref(),
+        Some("V")
+    );
+    assert_eq!(
+        shown(&row(Some("x"), None, &["Numpad7", "C"], None), "default").as_deref(),
+        Some("C")
+    );
+    assert_eq!(shown(&row(Some("x"), None, &["Numpad7"], None), "default"), None);
+    // the Cubase list replaces the keys: a key with a modifier first, else the first showable key of the list
+    let r = row(Some("x"), Some("Cmd+K"), &["Q"], Some(&["H", "Cmd+L"]));
+    assert_eq!(shown(&r, "cubase").as_deref(), Some("Cmd+L"));
+    let r = row(Some("x"), Some("Cmd+K"), &["Q"], Some(&["NumpadPeriod", "Return"]));
+    assert_eq!(shown(&r, "cubase").as_deref(), Some("Return"));
+    assert_eq!(shown(&row(Some("x"), Some("Cmd+K"), &[], Some(&[])), "cubase"), None);
+    // no menu item: nothing to show
+    assert_eq!(shown(&row(None, None, &["V"], None), "default"), None);
+}
+
+/// #300 gate: every menu item with a key in the table shows an accelerator, in both presets, also the keys without
+/// Cmd, Control or Option; the shown keys are unique, and while typing only the keys with a modifier stay.
+#[test]
+fn every_menu_item_with_a_key_shows_an_accelerator() {
+    for preset in PRESETS {
+        let mut with_key = 0;
+        let mut missing = Vec::new();
+        let mut shown = HashSet::new();
+        for it in SPEC {
+            let row = key_row(it.id).unwrap_or_else(|| panic!("{}: no row in the key table", it.id));
+            let showable = row
+                .keys(preset)
+                .iter()
+                .any(|k| parse_key(k).is_some_and(|(_, key)| !key.starts_with("Numpad")));
+            if !showable {
+                continue;
+            }
+            with_key += 1;
+            match shown_accel_of(it.id, preset) {
+                Some(a) => assert!(shown.insert(a.clone()), "{preset} {a} twice"),
+                None => missing.push(it.id),
+            }
+        }
+        println!(
+            "{preset}: {} menu items, {with_key} with a key in the table, {} without an accelerator",
+            SPEC.len(),
+            missing.len()
+        );
+        assert!(missing.is_empty(), "{preset}: no accelerator for {missing:?}");
+        assert_eq!(shown.len(), with_key);
+        // typing: the keys with Cmd, Control or Option stay, the plain ones go
+        let typing: Vec<String> = SPEC.iter().filter_map(|i| live_accel(i.id, preset, true)).collect();
+        assert!(
+            typing
+                .iter()
+                .all(|a| a.contains("CmdOrCtrl") || a.contains("Ctrl") || a.contains("Alt"))
+        );
+        assert_eq!(typing.len(), if preset == "default" { 42 } else { 37 });
+    }
+    // the examples of the ticket
+    assert_eq!(shown_accel_of("velocity_lane", "default").as_deref(), Some("V"));
+    assert_eq!(shown_accel_of("play_stop", "default").as_deref(), Some("Space"));
+    assert_eq!(shown_accel_of("next_hit", "default").as_deref(), Some("Tab"));
+    assert_eq!(live_accel("velocity_lane", "default", true), None);
+    assert_eq!(live_accel("velocity_lane", "default", false).as_deref(), Some("V"));
+    assert_eq!(live_accel("save", "default", true).as_deref(), Some("CmdOrCtrl+S"));
+    // a Numpad key is not shown: the row's next key is (Click: C Numpad7)
+    assert_eq!(shown_accel_of("click", "default").as_deref(), Some("C"));
+    assert_eq!(shown_accel_of("no_such_item", "default"), None);
 }
 
 /// P3-13b done criterion, part 1: no key is in two commands (default and Cubase preset), every key is in the
