@@ -1259,3 +1259,50 @@ fn edge_foot_finds_the_first_steep_rise_and_nothing_else() {
     assert_eq!(edge_foot(&vec![0.0f32; 100], 10, 90, srf), 10);
     assert_eq!(edge_foot(&x, 1_399, 1_400, srf), 1_399);
 }
+
+#[test]
+fn a_ripple_inside_a_soft_hit_is_not_its_edge() {
+    // #293 follow-up (the owner's panels 6 and 12): a soft hit that starts as a 2 kHz wobble at 4 % for 2.5 ms, then a
+    // swing at 10 %: the wobble is the hit's body (its level is 8 dB under the swing), so the hit stays at the wobble's
+    // start; a sharp ripple of the wobble is no edge
+    const A: f64 = 0.0005;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    tone(&mut x, on, on + 120, 2000.0, 0.04);
+    swing(&mut x, on + 120, 0, 0.1, 180.0);
+    let off = refined_sample(&x, on) - on as i64;
+    assert!((-2..=3).contains(&off), "{off} samples from the wobble's start");
+}
+
+#[test]
+fn the_edge_foot_sits_on_the_first_sample_off_the_line() {
+    // a kick-like start: 2 samples at a quarter of the rise, then the half-rise steps; the foot is the last sample on
+    // the line before the first quarter step (the owner's kick call: 1 to 2 samples before the half-step foot)
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f32; 2_000];
+    // need = 1.0 * 10^(-18/20) = 0.126 over w = 5 samples: step (half) = 0.0126 per sample, a quarter = 0.0063
+    let ramp = [0.007f32, 0.015, 0.05, 0.12, 0.3, 0.6, 0.9, 1.0];
+    for (k, v) in ramp.iter().enumerate() {
+        x[1_200 + k] = *v;
+    }
+    for v in &mut x[1_208..1_400] {
+        *v = 1.0;
+    }
+    assert_eq!(edge_foot(&x, 1_000, 1_400, srf), 1_199, "the last sample on the line");
+}
+
+#[test]
+fn a_steep_attack_whose_walk_foot_lies_inside_the_rise_sits_on_the_last_line_sample() {
+    // the owner's kick (#293): the line, then 0.05, 0.25, 0.6, 0.8 of the peak in four samples. The walk's first
+    // sample over its threshold is the second rising sample; the edge search starts a window before it and puts the
+    // hit on the last sample of the line
+    const A: f64 = 0.0002;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    for (k, v) in [0.0125f32, 0.0625, 0.15, 0.2].iter().enumerate() {
+        x[on + k] = *v;
+    }
+    swing(&mut x, on + 4, 0, 0.25, 150.0);
+    let off = refined_sample(&x, on) - on as i64;
+    assert!((-1..=0).contains(&off), "{off} samples from the first rising sample");
+}
