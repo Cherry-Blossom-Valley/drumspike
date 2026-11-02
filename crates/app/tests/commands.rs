@@ -430,7 +430,7 @@ fn analyze_start_runs_the_job_and_stores_events_sr_and_detector() {
     // P4-12: the record carries the version of the refinement rule the analysis ran (5, the capped foot, #127)
     assert_eq!(
         t["detector"],
-        json!({"detector": "rust-dsp", "chain": null, "model": null, "refine": 5})
+        json!({"detector": "rust-dsp", "chain": null, "model": null, "refine": 6})
     );
     assert_eq!(t["n_samples"], 168_000);
     assert_eq!(svc.project_get(&sid).unwrap()["dirty"], true);

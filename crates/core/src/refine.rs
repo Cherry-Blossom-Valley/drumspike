@@ -351,11 +351,15 @@ pub enum RefineRule {
     /// Version 5 (#127): [`RefineRule::Foot`] with the strict foot's move capped at [`FOOT5_MAX_SAMPLES`]
     /// samples before the version 3 foot (the foot moves to the cap).
     FootCapped,
+    /// Version 6 (#293, #294): the version 3 foot (no strict foot, no lead-in), then the first steep edge after it
+    /// ([`edge_foot`]): a hit that the walk put on the bleed or the soft drift before its attack moves to the foot of
+    /// the attack's first steep rise.
+    Edge,
 }
 
 impl RefineRule {
     /// The rule a new analysis runs.
-    pub const CURRENT: RefineRule = RefineRule::FootCapped;
+    pub const CURRENT: RefineRule = RefineRule::Edge;
 
     /// The version number the document stores.
     #[must_use]
@@ -366,6 +370,7 @@ impl RefineRule {
             RefineRule::FirstMotion => 3,
             RefineRule::Foot => 4,
             RefineRule::FootCapped => 5,
+            RefineRule::Edge => 6,
         }
     }
 
@@ -378,6 +383,7 @@ impl RefineRule {
             3 => Some(RefineRule::FirstMotion),
             4 => Some(RefineRule::Foot),
             5 => Some(RefineRule::FootCapped),
+            6 => Some(RefineRule::Edge),
             _ => None,
         }
     }
@@ -761,11 +767,12 @@ pub fn first_motion_peak(
     next: Option<f64>,
     peak_db: f64,
 ) -> (i64, BackStep) {
-    back_track(x, s, sr, t0, (prev, next), peak_db, None)
+    back_track(x, s, sr, t0, (prev, next), peak_db, None, false)
 }
 
 /// The back-track of [`first_motion_peak`]; `tune` takes the foot one step stricter ([`foot_strict`], versions 4
 /// and 5) when it is `Some`. `neighbors` are the previous and the next hit time (`None` at the ends).
+#[allow(clippy::too_many_arguments)]
 fn back_track(
     x: &[f32],
     s: i64,
@@ -774,12 +781,13 @@ fn back_track(
     neighbors: (Option<f64>, Option<f64>),
     peak_db: f64,
     tune: Option<FootTune>,
+    edge: bool,
 ) -> (i64, BackStep) {
     let srf = f64::from(sr);
     let (prev, next) = neighbors;
     let prev_mid = prev.map(|p| py_int(((p + t0) / 2.0) * srf));
     let next_mid = next.map(|nx| py_int(((t0 + nx) / 2.0) * srf));
-    first_motion_mid_rule(x, s, sr, prev_mid, next_mid, peak_db, tune)
+    first_motion_traced(x, s, sr, prev_mid, next_mid, peak_db, tune, edge).0
 }
 
 /// [`first_motion`] with the bounds as samples: `prev_mid` bounds the walk and the floor window (the midpoint to the
@@ -811,10 +819,10 @@ fn foot_strict(x: &[f32], d: i64, lo: i64, floor: f64) -> i64 {
     j - 1
 }
 
-static LEAD_IN: AtomicBool = AtomicBool::new(true);
+static LEAD_IN: AtomicBool = AtomicBool::new(false);
 
-/// Switches the lead-in of the walk (#239) on or off for the whole process. For the before/after measurement
-/// (`examples/lead_in_check.rs`) only: the product leaves it on.
+/// Switches the lead-in of the walk (#239) on or off for the whole process. Off by default since version 6 (#293,
+/// #294: it joined the bleed before snare hits); the before/after measurement (`examples/lead_in_check.rs`) switches it.
 pub fn set_lead_in(on: bool) {
     LEAD_IN.store(on, Ordering::Relaxed);
 }
@@ -888,6 +896,62 @@ fn is_first_bump(x: &[f32], lead: i64, foot: i64, gap: i64) -> bool {
     far < near * 0.8 && flips * 4 <= pairs * 3
 }
 
+/// Version 6 (#293, #294): the rise window of the steep edge (seconds): the signal must rise by [`EDGE_RISE_DB`] under
+/// the peak within it.
+pub const EDGE_RISE_S: f64 = 0.0001;
+/// The rise that makes a steep edge (dB under the peak of the hit, within [`EDGE_RISE_S`]).
+pub const EDGE_RISE_DB: f64 = 18.0;
+/// The guard: an edge counts only while the level is still under this much below the peak. A hit whose level climbs
+/// past it without a steep edge (a slow attack) keeps the walk's foot.
+pub const EDGE_TOP_DB: f64 = 12.0;
+/// How far after the walk's foot the edge is looked for (seconds).
+pub const EDGE_SPAN_S: f64 = 0.005;
+
+/// The foot of the first steep edge after the walk's foot (version 6, #293, #294). The walk stops at the first sample
+/// over its threshold, which lies on the bleed or the soft drift that often precedes a snare or kick attack; the
+/// engineer puts the hit where the waveform visibly starts. The edge is the first sample `j` in `[foot, end)` (`end`
+/// at most [`EDGE_SPAN_S`] after the foot: the peak and the search stay on this hit, not on a louder later swing) where
+/// `|x[j + w] - x[j]|` (w = [`EDGE_RISE_S`]) reaches [`EDGE_RISE_DB`] under the peak of `[foot, end)`, before the level
+/// itself reaches [`EDGE_TOP_DB`] under the peak; its foot is the first sample in that window whose step to the next
+/// sample is half the edge's per-sample rise, walked back while the step before it stays as large (a quarter let the
+/// floor noise through). No edge:
+/// `foot` stays.
+fn edge_foot(x: &[f32], foot: i64, end: i64, srf: f64) -> i64 {
+    let w = samples(EDGE_RISE_S, srf).max(1);
+    let n = x.len() as i64;
+    let end = end.min(n - w).min(foot + samples(EDGE_SPAN_S, srf));
+    if foot < 0 || foot + w >= end {
+        return foot;
+    }
+    let pk = f64::from(max_abs(x, foot, end));
+    if pk <= 0.0 {
+        return foot;
+    }
+    let need = pk * 10f64.powf(-EDGE_RISE_DB / 20.0);
+    let top = pk * 10f64.powf(-EDGE_TOP_DB / 20.0);
+    let at = |i: i64| f64::from(x[i as usize]);
+    let mut j = foot;
+    loop {
+        if j >= end {
+            return foot;
+        }
+        if (at(j + w) - at(j)).abs() >= need {
+            break;
+        }
+        if at(j).abs() >= top {
+            return foot;
+        }
+        j += 1;
+    }
+    // the rise window starts at `j`; the edge's first rising sample lies inside it
+    let step = need / w as f64 / 2.0;
+    let mut k = (j..j + w).find(|&m| (at(m + 1) - at(m)).abs() >= step).unwrap_or(j);
+    while k > foot && (at(k) - at(k - 1)).abs() >= step {
+        k -= 1;
+    }
+    k
+}
+
 /// [`first_motion_mid`] with another peak margin `peak_db` in place of [`FM_PEAK_DB`], and the foot taken
 /// strict ([`foot_strict`], capped by `tune`) when `tune` is `Some`.
 fn first_motion_mid_rule(
@@ -899,7 +963,7 @@ fn first_motion_mid_rule(
     peak_db: f64,
     tune: Option<FootTune>,
 ) -> (i64, BackStep) {
-    first_motion_traced(x, s, sr, prev_mid, next_mid, peak_db, tune).0
+    first_motion_traced(x, s, sr, prev_mid, next_mid, peak_db, tune, false).0
 }
 
 /// The walk of [`first_motion_mid`] with its decision (the floor, the threshold, the foot and the foot after the
@@ -912,7 +976,7 @@ pub fn first_motion_trace(
     prev_mid: Option<i64>,
     next_mid: Option<i64>,
 ) -> Option<LeadTrace> {
-    first_motion_traced(x, s, sr, prev_mid, next_mid, FM_PEAK_DB, None).1
+    first_motion_traced(x, s, sr, prev_mid, next_mid, FM_PEAK_DB, None, false).1
 }
 
 /// The foot of the walk back from `s` over the samples at or above `thr` (gaps under `gap` do not end the run), and
@@ -931,6 +995,7 @@ fn walk_foot(x: &[f32], s: i64, lo: i64, thr: f64, gap: i64) -> (i64, bool) {
     (foot, false)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn first_motion_traced(
     x: &[f32],
     s: i64,
@@ -939,6 +1004,7 @@ fn first_motion_traced(
     next_mid: Option<i64>,
     peak_db: f64,
     tune: Option<FootTune>,
+    edge: bool,
 ) -> ((i64, BackStep), Option<LeadTrace>) {
     let srf = f64::from(sr);
     let n = x.len() as i64;
@@ -1012,7 +1078,9 @@ fn first_motion_traced(
             }
         }
     };
-    let step = if foot < s {
+    // version 6: the first steep edge after the foot; it may lie after `s` (the hit moves later)
+    let foot = if edge { edge_foot(x, foot, pe, srf) } else { foot };
+    let step = if foot < s || (edge && foot != s) {
         (foot, BackStep::Moved)
     } else {
         (s, BackStep::Kept)
@@ -1038,7 +1106,7 @@ pub fn refine_first_motion_peak(
     win: RefineWindow,
     peak_db: f64,
 ) -> Refined {
-    refine_back_peak(x, t0, sr, neighbors, win, peak_db, None)
+    refine_back_peak(x, t0, sr, neighbors, win, peak_db, None, false)
 }
 
 /// [`refine_rule_peak`] with the version 5 foot of another `tune` (the placement measurements of #127).
@@ -1052,11 +1120,12 @@ pub fn refine_foot_tuned(
     peak_db: f64,
     tune: FootTune,
 ) -> Refined {
-    refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(tune))
+    refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(tune), false)
 }
 
 /// [`refine_first_motion_peak`] with the strict foot of `tune` ([`RefineRule::Foot`], [`RefineRule::FootCapped`])
-/// when it is `Some`.
+/// when it is `Some`, and the steep edge after the foot ([`RefineRule::Edge`]) when `edge` is set.
+#[allow(clippy::too_many_arguments)]
 fn refine_back_peak(
     x: &[f32],
     t0: f64,
@@ -1065,6 +1134,7 @@ fn refine_back_peak(
     win: RefineWindow,
     peak_db: f64,
     tune: Option<FootTune>,
+    edge: bool,
 ) -> Refined {
     let r = refine_reach(x, t0, sr, neighbors, win);
     let srf = f64::from(sr);
@@ -1077,7 +1147,7 @@ fn refine_back_peak(
         }
     }
     let s = (r.t * srf).round() as i64;
-    let (foot, back) = back_track(x, s, sr, t0, (prev, next), peak_db, tune);
+    let (foot, back) = back_track(x, s, sr, t0, (prev, next), peak_db, tune, edge);
     Refined {
         t: if back == BackStep::Moved {
             foot as f64 / srf
@@ -1118,8 +1188,9 @@ pub fn refine_rule_peak(
         }
         RefineRule::Reach => refine_reach(x, t0, sr, neighbors, win),
         RefineRule::FirstMotion => refine_first_motion_peak(x, t0, sr, neighbors, win, peak_db),
-        RefineRule::Foot => refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(FootTune::V4)),
-        RefineRule::FootCapped => refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(FootTune::V5)),
+        RefineRule::Foot => refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(FootTune::V4), false),
+        RefineRule::FootCapped => refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(FootTune::V5), false),
+        RefineRule::Edge => refine_back_peak(x, t0, sr, neighbors, win, peak_db, None, true),
     }
 }
 

@@ -391,9 +391,10 @@ fn export_layer_places_the_onset_on_every_hit_sample() {
         assert_eq!(out[0][i], g * left[onset], "inverted at {t}");
     }
     // a one-shot at 44.1 kHz on a 48 kHz track: resampled once, the onset at the track's rate.
-    // The onset must map to a whole 48 kHz sample (441 -> 480) for the exact-sample check.
+    // The onset must map to a whole 48 kHz sample (441 -> 480) for the exact-sample check: refine version 6 puts
+    // the onset on the shot's first sample (version 5 put it one sample before it, so the shot started at 442).
     let f2 = root.join("shots").join("low.wav");
-    wav(&f2, 44_100, &[shot(44_100, 442, 0.2, 5)], None);
+    wav(&f2, 44_100, &[shot(44_100, 441, 0.2, 5)], None);
     svc.track_layer_set(
         &sid,
         "k in",
@@ -410,7 +411,7 @@ fn export_layer_places_the_onset_on_every_hit_sample() {
     let (_, out, _) = read_back(&path);
     let rs = OneShot {
         sr: 44_100,
-        chans: vec![shot(44_100, 442, 0.2, 5)],
+        chans: vec![shot(44_100, 441, 0.2, 5)],
     }
     .resampled(48_000);
     let i = (0.25 * f64::from(sr)).round() as usize;
