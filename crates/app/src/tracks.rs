@@ -376,7 +376,10 @@ impl Service {
                             matched: None,
                         };
                     }
-                    if matches!(g.source, crate::roles::Source::Preset | crate::roles::Source::Scheme) {
+                    if matches!(
+                        g.source,
+                        crate::roles::Source::Preset | crate::roles::Source::Scheme | crate::roles::Source::Fuzzy
+                    ) {
                         guessed += 1;
                     }
                     files.push(json!({

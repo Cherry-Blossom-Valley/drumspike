@@ -61,7 +61,7 @@ pub fn is_role(role: &str) -> bool {
 /// `k in`; `Hi-Hat_03` gives `hi hat`. A `_<digits>` suffix on a bare tom name stays: it is
 /// the drum number (#367 `tom_1`, `tom_2`, `tom_3` are three different drums).
 pub fn normalize(stem: &str) -> String {
-    let mut s = stem.trim().to_lowercase();
+    let mut s = split_glued(stem.trim()).to_lowercase();
     for suffix in [".l", ".r"] {
         if let Some(rest) = s.strip_suffix(suffix) {
             s = rest.to_string();
@@ -95,43 +95,313 @@ fn words(normal: &str) -> Vec<&str> {
     normal.split(' ').filter(|w| !w.is_empty()).collect()
 }
 
-/// A `t1` to `t9`, or `tom`, `tom1`, `tom2` ...
-fn is_tom_word(w: &str) -> bool {
-    let b = w.as_bytes();
-    (b.len() == 2 && b[0] == b't' && b[1].is_ascii_digit() && b[1] != b'0')
-        || w.strip_prefix("tom")
-            .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+/// #285: a space between the glued parts of a name, so the words come apart: at a lower-to-upper
+/// case change (`KickIn` gives `Kick In`), before the last upper-case letter of a run that a
+/// lower-case letter follows (`SNTop` gives `SN Top`). Letter-digit changes stay glued here (`t1`,
+/// `Tom1HH`): [`guess_name`] splits them per word. The caller lowercases and splits at the rest.
+fn split_glued(stem: &str) -> String {
+    let chars: Vec<char> = stem.chars().collect();
+    let mut out = String::with_capacity(stem.len() + 8);
+    for (i, &c) in chars.iter().enumerate() {
+        if i > 0 {
+            let p = chars[i - 1];
+            let case_change = p.is_lowercase() && c.is_uppercase();
+            // a run of three or more capitals before a small letter: `SNTop`, `HHOpen`; a run of two
+            // (`OHs`, `BDs`) is one word with a plural s
+            let run_end = i > 1
+                && chars[i - 2].is_uppercase()
+                && p.is_uppercase()
+                && c.is_uppercase()
+                && chars.get(i + 1).is_some_and(|n| n.is_lowercase());
+            if case_change || run_end {
+                out.push(' ');
+            }
+        }
+        out.push(c);
+    }
+    out
 }
 
-/// The `1` to `9` of the spelling `t 1`.
+/// The `1` to `9` of the spelling `t 1` (after [`split_glued`] also `t1`).
 fn is_tom_number(w: &str) -> bool {
     w.len() == 1 && w.as_bytes()[0].is_ascii_digit() && w != "0"
 }
 
-/// X-6 (P3-9b): common abbreviations of other studios (`BD`, `SD`, `Snr`, `FT`, `Toms`, `China` ...).
-/// They count only as the first word of a name: a room mic is often named after what it hears
-/// (`r  toms soap`, `rev cym`), and such a track must keep no role. `ft`, `ht`, `mt`, `lt` and `tt` may
-/// have a number (`FT2`).
-fn first_word_role(word: &str, next: Option<&str>) -> Option<&'static str> {
-    let base = word.trim_end_matches(|c: char| c.is_ascii_digit());
-    let numbered = base.len() < word.len();
-    if numbered && word[base.len()..].starts_with('0') {
+/// #285: the common terms of each role, as data. A one-word term matches a word of the name, a
+/// two-word term two adjacent words. The owner's scheme (`k in`, `s top`, `hh`, `oh`, `ri`) is in
+/// the table too; the tom numbers (`t 1`, `t1`) are a rule of [`guess_role_matched`]. Order: the
+/// first role whose term matches a word wins, scanning the words of the name from the left.
+pub const ROLE_TERMS: [(&str, &[&str]); 5] = [
+    (
+        "kick",
+        &[
+            "kick",
+            "kik",
+            "kck",
+            "kd",
+            "bd",
+            "bass drum",
+            "bassdrum",
+            "bdrum",
+            "kick drum",
+            "kickdrum",
+            "k in",
+            "k out",
+            "k sub",
+            "kin",
+            "kout",
+            "ksub",
+            "kick in",
+            "kick out",
+            "kick sub",
+            "sub kick",
+            "subkick",
+            "foot",
+        ],
+    ),
+    (
+        "snare",
+        &[
+            "snare",
+            "sn",
+            "snr",
+            "sd",
+            "sna",
+            "s top",
+            "s bot",
+            "s bottom",
+            "snare drum",
+            "snaredrum",
+            "snare top",
+            "snare bottom",
+            "snare bot",
+            "sntop",
+            "snbot",
+            "snrtop",
+            "snrbot",
+            "sdt",
+            "sdb",
+            "side stick",
+            "sidestick",
+            "rimshot",
+        ],
+    ),
+    (
+        "tom",
+        &[
+            "tom",
+            "toms",
+            "tomtom",
+            "tom tom",
+            "ft",
+            "ht",
+            "mt",
+            "lt",
+            "tt",
+            "rack",
+            "floor",
+            "rack tom",
+            "racktom",
+            "floor tom",
+            "floortom",
+            "hi tom",
+            "high tom",
+            "mid tom",
+            "lo tom",
+            "low tom",
+            "hitom",
+            "hightom",
+            "midtom",
+            "lotom",
+            "lowtom",
+        ],
+    ),
+    (
+        "hat",
+        &[
+            "hh",
+            "hat",
+            "hats",
+            "hihat",
+            "hi hat",
+            "hihats",
+            "hi hats",
+            "hhat",
+            "hat open",
+            "hat closed",
+            "hats open",
+            "hats closed",
+            "open hat",
+            "closed hat",
+        ],
+    ),
+    (
+        "cymbal",
+        &[
+            "oh",
+            "ohh",
+            "ohs",
+            "overhead",
+            "overheads",
+            "over head",
+            "over heads",
+            "ride",
+            "ri",
+            "crash",
+            "crashes",
+            "china",
+            "splash",
+            "cym",
+            "cyms",
+            "cymbal",
+            "cymbals",
+            "stack",
+            "ride bell",
+        ],
+    ),
+];
+
+/// #285: a track named after what it hears gets no role from its name: room and ambience mics,
+/// busses, mixes and prints. Anywhere in the name (`Rev Cym`, `Drum Bus`, `Snare Room`).
+pub const EXCLUDED_WORDS: [&str; 16] = [
+    "room",
+    "rm",
+    "amb",
+    "ambient",
+    "rev",
+    "verb",
+    "reverb",
+    "bus",
+    "buss",
+    "mix",
+    "print",
+    "accompaniment",
+    "sum",
+    "master",
+    "talkback",
+    "click",
+];
+
+/// The owner's room mics: `r far`, `ro ks soap`, `r toms soap`. Only as the first word.
+const EXCLUDED_FIRST_WORDS: [&str; 2] = ["r", "ro"];
+
+/// The second half of a glued word (`kickin`, `sntop`, `hatopen`): a mic position, a side or a
+/// number. [`POSITION_WORDS`] plus these.
+const GLUED_SECOND_WORDS: [&str; 18] = [
+    "drum", "l", "r", "c", "lo", "hi", "mid", "low", "high", "sub", "open", "closed", "di", "dyn", "cond", "mono",
+    "st", "trig",
+];
+
+/// Short terms (one or two letters) that count anywhere in the name: the owner's scheme.
+const SHORT_ANYWHERE: [&str; 4] = ["hh", "oh", "ri", "ft"];
+
+/// The role of a one-word term, or `None`. Terms of one or two letters count only as the first
+/// word of a name (`BD`, `SD`, `SN Top`, `FT2`), except the scheme's `hh`, `oh`, `ri`: a room mic is
+/// often named after what it hears, and the first word tells what the track is.
+fn term_role(word: &str, first: bool) -> Option<&'static str> {
+    if word.len() <= 2 && !first && !SHORT_ANYWHERE.contains(&word) {
         return None;
     }
-    match base {
-        "ft" | "ht" | "mt" | "lt" | "tt" => return Some("tom"),
-        _ if numbered => return None,
-        _ => {}
+    ROLE_TERMS
+        .iter()
+        .find(|(_, terms)| terms.iter().any(|t| !t.contains(' ') && *t == word))
+        .map(|(role, _)| *role)
+}
+
+/// The role of a two-word term (`k in`, `bass drum`, `snare top`), or `None`.
+fn pair_role(word: &str, next: &str) -> Option<&'static str> {
+    ROLE_TERMS
+        .iter()
+        .find(|(_, terms)| {
+            terms
+                .iter()
+                .any(|t| t.split_once(' ').is_some_and(|(a, b)| a == word && b == next))
+        })
+        .map(|(role, _)| *role)
+}
+
+/// The role of a glued word `<term><second>` (`kickin`, `sntop`, `hatopen`, `oh2`): the term is a
+/// one-word term of two letters or more, the rest a position, a side or digits. `tomato` is none.
+fn glued_role(word: &str, first: bool) -> Option<(&'static str, String)> {
+    for (role, terms) in &ROLE_TERMS {
+        for t in terms.iter().filter(|t| !t.contains(' ') && t.len() >= 2) {
+            if let Some(rest) = word.strip_prefix(t)
+                && !rest.is_empty()
+                && (t.len() > 2 || first || SHORT_ANYWHERE.contains(t))
+                && (POSITION_WORDS.contains(&rest)
+                    || GLUED_SECOND_WORDS.contains(&rest)
+                    || rest.chars().all(|c| c.is_ascii_digit()))
+            {
+                return Some((role, format!("{t} {rest}")));
+            }
+        }
     }
-    match word {
-        "bd" | "kd" | "kik" | "kck" => Some("kick"),
-        "bass" if next == Some("drum") => Some("kick"),
-        "sd" | "sn" | "snr" | "sna" => Some("snare"),
-        "toms" | "rack" | "floor" | "racktom" | "floortom" => Some("tom"),
-        "hats" | "hhat" => Some("hat"),
-        "china" | "splash" | "cym" | "cyms" | "cymbal" | "cymbals" | "ohs" => Some("cymbal"),
-        _ => None,
+    None
+}
+
+/// The edit distance of two short words: insert, delete, replace, or swap two neighbours, one
+/// each (Damerau-Levenshtein, optimal string alignment), so `snaer` is one edit from `snare`.
+#[allow(clippy::needless_range_loop)]
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let (n, m) = (a.len(), b.len());
+    let mut d = vec![vec![0usize; m + 1]; n + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
     }
+    for j in 0..=m {
+        d[0][j] = j;
+    }
+    for i in 1..=n {
+        for j in 1..=m {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let mut best = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                best = best.min(d[i - 2][j - 2] + 1);
+            }
+            d[i][j] = best;
+        }
+    }
+    d[n][m]
+}
+
+/// The full-word terms a typo is measured against: the glued abbreviations (`sntop`, `kout`) are
+/// left out, or `Stop` would be a snare.
+const FUZZY_TERMS: [(&str, &[&str]); 5] = [
+    ("kick", &["kick", "bassdrum", "kickdrum"]),
+    ("snare", &["snare", "snaredrum"]),
+    ("tom", &["toms", "tomtom", "floortom", "racktom"]),
+    ("hat", &["hihat", "hats", "hihats"]),
+    (
+        "cymbal",
+        &[
+            "overhead",
+            "overheads",
+            "ride",
+            "crash",
+            "crashes",
+            "china",
+            "splash",
+            "cymbal",
+            "cymbals",
+        ],
+    ),
+];
+
+/// A typo of a full-word term (`snaer`, `kcik`, `crahs`): one edit away, both the word and the term
+/// four letters or longer. Shorter words carry too little to guess.
+fn fuzzy_role(word: &str) -> Option<&'static str> {
+    if word.len() < 4 {
+        return None;
+    }
+    FUZZY_TERMS
+        .iter()
+        .find(|(_, terms)| {
+            terms
+                .iter()
+                .any(|t| t.len().abs_diff(word.len()) <= 1 && edit_distance(word, t) <= 1)
+        })
+        .map(|(role, _)| *role)
 }
 
 /// The file-name suffixes of Drum Spike's own exports: the synthetic spike (`<track>_spike.wav`),
@@ -174,41 +444,77 @@ pub fn guess_role(stem: &str) -> Option<&'static str> {
 /// # Panics
 ///
 /// Contains an `unwrap` of the next word that is reached only when that word exists, so it does not panic in practice.
+#[must_use]
 pub fn guess_role_matched(stem: &str) -> Option<(&'static str, String)> {
+    guess_name(stem).map(|g| (g.role, g.matched))
+}
+
+/// A role guessed from a name: the role, the words that matched, and whether the match was a
+/// typo guess (one edit away) rather than a term of the table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameGuess {
+    /// One of [`ROLES`] except `other`.
+    pub role: &'static str,
+    /// The normalised words that matched (`kick in`, `t 1`, `snaer`).
+    pub matched: String,
+    /// True for a Levenshtein guess.
+    pub fuzzy: bool,
+}
+
+/// #285: the role of a name from the term table, else `None`. In order: an export name of #216 and
+/// a name with an excluded word ([`EXCLUDED_WORDS`], a room mic, a bus) give no role; then, word
+/// by word from the left, the first hit decides: a two-word term (`k in`, `bass drum`), `t` plus a
+/// tom number (`t 1`, `t1`), a one-word term (`kick`, `BD` as the first word), a glued word
+/// (`kickin`, `sntop`), and last a typo one edit away from a term of four letters or more
+/// (`snaer`). Names like `k samp savior`, `s trigger`, `Clap` or `tomato` stay `None`.
+#[must_use]
+pub fn guess_name(stem: &str) -> Option<NameGuess> {
     if is_export_name(stem) {
         return None;
     }
     let normal = normalize(stem);
     let w = words(&normal);
+    if w.iter().any(|x| EXCLUDED_WORDS.contains(x)) || w.first().is_some_and(|x| EXCLUDED_FIRST_WORDS.contains(x)) {
+        return None;
+    }
+    let hit = |role: &'static str, matched: String, fuzzy: bool| Some(NameGuess { role, matched, fuzzy });
     for (i, word) in w.iter().enumerate() {
         let next = w.get(i + 1).copied();
-        let role = match *word {
-            "kick" => Some("kick"),
-            "k" if matches!(next, Some("in" | "out" | "sub")) => Some("kick"),
-            "snare" => Some("snare"),
-            "s" if matches!(next, Some("top" | "bot" | "bottom")) => Some("snare"),
-            "hh" | "hat" | "hihat" => Some("hat"),
-            "oh" | "ohh" | "overhead" | "overheads" | "ride" | "ri" | "crash" => Some("cymbal"),
-            "t" if next.is_some_and(is_tom_number) => Some("tom"),
-            w if is_tom_word(w) => Some("tom"),
-            w if i == 0 => first_word_role(w, next),
-            _ => None,
-        };
-        if let Some(role) = role {
-            // the word takes the next one with it when the match needs it (`k in`, `s top`, `t 1`, `bass drum`)
-            let takes_next = match (*word, next) {
-                ("k", Some("in" | "out" | "sub")) | ("s", Some("top" | "bot" | "bottom")) | ("bass", Some("drum")) => {
-                    true
+        let first = i == 0;
+        if let Some(role) = term_role(word, first) {
+            return hit(role, (*word).to_string(), false);
+        }
+        if let Some(n) = next
+            && let Some(role) = pair_role(word, n)
+        {
+            return hit(role, format!("{word} {n}"), false);
+        }
+        if *word == "t" && next.is_some_and(is_tom_number) {
+            return hit("tom", format!("t {}", next.unwrap_or_default()), false);
+        }
+        // a term glued to a number (`t1`, `tom1`, `ft2`, `oh2`, `tom1hh`): the letters before the
+        // number decide. A number with a leading zero (`ft0`, `t01`) is no drum number: no role
+        // from this word.
+        let parts = tokens(word);
+        if parts.len() > 1 {
+            let (head, second) = (parts[0].as_str(), parts[1].as_str());
+            if !second.starts_with('0') {
+                if head == "t" && is_tom_number(second) {
+                    return hit("tom", (*word).to_string(), false);
                 }
-                ("t", Some(n)) => is_tom_number(n),
-                _ => false,
-            };
-            let matched = if takes_next {
-                format!("{word} {}", next.unwrap())
-            } else {
-                (*word).to_string()
-            };
-            return Some((role, matched));
+                if let Some(role) = term_role(head, first) {
+                    return hit(role, (*word).to_string(), false);
+                }
+            }
+            continue;
+        }
+        if let Some((role, matched)) = glued_role(word, first) {
+            return hit(role, matched, false);
+        }
+    }
+    for word in &w {
+        if let Some(role) = fuzzy_role(word) {
+            return hit(role, (*word).to_string(), true);
         }
     }
     None
@@ -327,6 +633,8 @@ pub enum Source {
     None,
     /// #225: the audio suggested the role (the scan of a file whose name gives none).
     Audio,
+    /// #285: a typo guess from the name, one edit away from a term (`snaer`): the page marks it.
+    Fuzzy,
 }
 
 impl Source {
@@ -338,6 +646,7 @@ impl Source {
             Source::Scheme => "scheme",
             Source::None => "none",
             Source::Audio => "audio",
+            Source::Fuzzy => "fuzzy",
         }
     }
 }
@@ -376,12 +685,12 @@ pub fn guess(stem: &str, rules: &[Rule]) -> Guess {
             matched: Some(r.pattern.clone()),
         };
     }
-    match guess_role_matched(stem) {
-        Some((role, matched)) => Guess {
-            role: role.to_string(),
-            note: default_note(role),
-            source: Source::Scheme,
-            matched: Some(matched),
+    match guess_name(stem) {
+        Some(g) => Guess {
+            role: g.role.to_string(),
+            note: default_note(g.role),
+            source: if g.fuzzy { Source::Fuzzy } else { Source::Scheme },
+            matched: Some(g.matched),
         },
         None => Guess {
             role: "other".into(),

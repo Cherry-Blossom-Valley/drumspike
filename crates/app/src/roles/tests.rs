@@ -16,6 +16,211 @@ fn svc(tag: &str) -> (Service, PathBuf) {
     (s, d)
 }
 
+/// #285: the term table, word by word. The owner's scheme, the names of the owner's new session
+/// (glued words with Pro Tools comp and take suffixes), the ENST mic names, common studio names,
+/// typos, and the names that must stay `other`: room and ambience mics, busses, instruments.
+#[test]
+fn the_term_table_gives_every_listed_name_its_role_and_none_to_the_rest() {
+    let table: &[(&str, Option<&str>)] = &[
+        // the owner's scheme
+        ("k in_02", Some("kick")),
+        ("k out_01", Some("kick")),
+        ("k sub_02", Some("kick")),
+        ("s top_02", Some("snare")),
+        ("s bot_01", Some("snare")),
+        ("t1 HH_01", Some("tom")),
+        ("t2_02", Some("tom")),
+        ("t 4_03", Some("tom")),
+        ("t4 Ri_01", Some("tom")),
+        ("hh_03", Some("hat")),
+        ("oh_03.L", Some("cymbal")),
+        ("ohh 5_01", Some("cymbal")),
+        ("ri_03", Some("cymbal")),
+        ("ride_01", Some("cymbal")),
+        ("crash", Some("cymbal")),
+        // the owner's new session: glued words, comp and take suffixes
+        ("KickIn Comp.01_01", Some("kick")),
+        ("KickIn.01_05", Some("kick")),
+        ("KickIn_03", Some("kick")),
+        ("KickIn-AtA2_01-01", Some("kick")),
+        ("KickOut Comp.01_01", Some("kick")),
+        ("KickOut-AtA2_01-02", Some("kick")),
+        ("KickSub Comp.01_01", Some("kick")),
+        ("SNTop Comp.01_01", Some("snare")),
+        ("SNTop.07_12", Some("snare")),
+        ("SNTop-AtA2_01-02", Some("snare")),
+        ("SNBot Comp.01_01", Some("snare")),
+        ("Tom1HH Comp.01_01", Some("tom")),
+        ("Tom1HH-AtA2_01-02", Some("tom")),
+        ("Tom2 Comp.01_01", Some("tom")),
+        ("Tom3.01_05", Some("tom")),
+        ("Tom4Ri Comp.01_01", Some("tom")),
+        ("Tom4Ri_03", Some("tom")),
+        // lower-case glued words
+        ("kickin", Some("kick")),
+        ("kickout_01", Some("kick")),
+        ("sntop", Some("snare")),
+        ("snbot", Some("snare")),
+        ("snaredrum", Some("snare")),
+        ("floortom", Some("tom")),
+        ("hatopen", Some("hat")),
+        ("ohl", Some("cymbal")),
+        ("oh2", Some("cymbal")),
+        // the ENST mic names
+        ("kick", Some("kick")),
+        ("snare", Some("snare")),
+        ("hi-hat", Some("hat")),
+        ("tom_1", Some("tom")),
+        ("tom_2", Some("tom")),
+        ("overhead_L", Some("cymbal")),
+        ("overhead_R", Some("cymbal")),
+        ("accompaniment", None),
+        ("dry_mix", None),
+        ("wet_mix", None),
+        // common studio names
+        ("Kick In", Some("kick")),
+        ("Kick Out", Some("kick")),
+        ("Kick Sub", Some("kick")),
+        ("Kick Drum", Some("kick")),
+        ("Bass Drum", Some("kick")),
+        ("BD", Some("kick")),
+        ("KD", Some("kick")),
+        ("Kik", Some("kick")),
+        ("Sub Kick", Some("kick")),
+        ("Snare Top", Some("snare")),
+        ("Snare Bottom", Some("snare")),
+        ("Snare Bot", Some("snare")),
+        ("SN T", Some("snare")),
+        ("SN Top", Some("snare")),
+        ("Snr Bot", Some("snare")),
+        ("SD", Some("snare")),
+        ("SD Top", Some("snare")),
+        ("Side Stick", Some("snare")),
+        ("Rack 1", Some("tom")),
+        ("Rack Tom", Some("tom")),
+        ("Floor", Some("tom")),
+        ("Floor Tom", Some("tom")),
+        ("Floor Tom 2", Some("tom")),
+        ("FT", Some("tom")),
+        ("FT2", Some("tom")),
+        ("HT", Some("tom")),
+        ("MT", Some("tom")),
+        ("LT", Some("tom")),
+        ("Hi Tom", Some("tom")),
+        ("Low Tom", Some("tom")),
+        ("Toms", Some("tom")),
+        ("Tom Hi", Some("tom")),
+        ("Tom 1 Top", Some("tom")),
+        ("HH", Some("hat")),
+        ("Hat", Some("hat")),
+        ("Hats", Some("hat")),
+        ("HiHat", Some("hat")),
+        ("Hi Hat", Some("hat")),
+        ("Hi-Hat", Some("hat")),
+        ("HH Open", Some("hat")),
+        ("Hat Closed", Some("hat")),
+        ("OH", Some("cymbal")),
+        ("OH L", Some("cymbal")),
+        ("OH R", Some("cymbal")),
+        ("OHs", Some("cymbal")),
+        ("Overhead L", Some("cymbal")),
+        ("Overheads", Some("cymbal")),
+        ("Ride", Some("cymbal")),
+        ("Ride Bell", Some("cymbal")),
+        ("Crash", Some("cymbal")),
+        ("Crash 2", Some("cymbal")),
+        ("China", Some("cymbal")),
+        ("Splash", Some("cymbal")),
+        ("Cym L", Some("cymbal")),
+        ("Cymbals", Some("cymbal")),
+        ("Stack", Some("cymbal")),
+        // typos, one edit away
+        ("Snaer", Some("snare")),
+        ("Kcik", Some("kick")),
+        ("Crahs", Some("cymbal")),
+        ("Overhaed L", Some("cymbal")),
+        // room and ambience mics, busses, mixes: named after what they hear
+        ("Room", None),
+        ("Room L", None),
+        ("Room Snare", None),
+        ("Snare Room", None),
+        ("Kick Room", None),
+        ("Rev Cym", None),
+        ("Tom Verb", None),
+        ("Amb L", None),
+        ("Drum Bus", None),
+        ("Kick Bus", None),
+        ("Drum Mix", None),
+        ("Drums Print", None),
+        ("r far_01", None),
+        ("r mono_01", None),
+        ("ro ks soap_01", None),
+        ("r toms soap", None),
+        ("Click", None),
+        // other instruments and odd names
+        ("Clap_01", None),
+        ("Bass_01", None),
+        ("Bass DI", None),
+        ("GTR 1_01.L", None),
+        ("Keys", None),
+        ("Vox", None),
+        ("bv h1_02.L", None),
+        ("Horns", None),
+        ("Shaker", None),
+        ("Tamb", None),
+        ("Cowbell", None),
+        ("Perc 1", None),
+        ("solo_01", None),
+        ("tomato", None),
+        ("Stop", None),
+        ("t0", None),
+        ("k samp savior_01", None),
+        ("s trigger_01", None),
+        ("t samp_03.L", None),
+        ("s top_02_spike_01", None),
+        ("", None),
+    ];
+    assert!(table.len() >= 140, "{} names", table.len());
+    let wrong: Vec<String> = table
+        .iter()
+        .filter(|(n, r)| guess_role(n) != *r)
+        .map(|(n, r)| format!("{n:?}: {:?}, want {r:?}", guess_role(n)))
+        .collect();
+    assert!(wrong.is_empty(), "{} wrong of {}: {wrong:#?}", wrong.len(), table.len());
+}
+
+/// #285: a typo guess is marked `fuzzy`, a term of the table `scheme`, and the matched words are
+/// the normalised ones.
+#[test]
+fn a_typo_guess_is_marked_fuzzy_and_a_term_scheme() {
+    let g = guess("Snaer Top", &[]);
+    assert_eq!(
+        (g.role.as_str(), g.source, g.matched.as_deref()),
+        ("snare", Source::Fuzzy, Some("snaer"))
+    );
+    let g = guess("KickIn-AtA2_01-01", &[]);
+    assert_eq!(
+        (g.role.as_str(), g.source, g.matched.as_deref()),
+        ("kick", Source::Scheme, Some("kick"))
+    );
+    let g = guess("SNTop Comp.01_01", &[]);
+    assert_eq!(
+        (g.role.as_str(), g.source, g.matched.as_deref()),
+        ("snare", Source::Scheme, Some("sn"))
+    );
+    let g = guess("Tom1HH Comp.01_01", &[]);
+    assert_eq!(
+        (g.role.as_str(), g.source, g.matched.as_deref()),
+        ("tom", Source::Scheme, Some("tom1hh"))
+    );
+    assert_eq!(normalize("KickIn-AtA2_01-01"), "kick in at a2 01 01");
+    assert_eq!(normalize("SNTop Comp.01_01"), "sn top comp 01");
+    assert_eq!(edit_distance("snaer", "snare"), 1);
+    assert_eq!(edit_distance("kcik", "kick"), 1);
+    assert_eq!(edit_distance("clap", "crash"), 3);
+    assert_eq!(edit_distance("stick", "kick"), 2);
+}
+
 #[test]
 fn normalize_drops_the_stereo_and_take_suffix() {
     assert_eq!(normalize("k in_02"), "k in");
