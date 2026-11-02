@@ -1,9 +1,23 @@
 //! Tests of the cross-track bleed rule (#281 A6): a planted kick bleed on a tom track is dropped, a
 //! real tom hit 10 ms after a kick is kept.
 
-use super::{CrossBleedParams, CrossMic, PairLearned, XKind, cross_bleed, cross_bleed_prior};
+use super::{CrossBleedParams, CrossMic, PairLearned, XKind, candidate_motion, cross_bleed, cross_bleed_prior};
+use crate::refine::{RefineRule, RefineWindow, first_motion};
 
 const SR: u32 = 48_000;
+
+/// A stick click (2 ms of noise, fixed sequence) — the broadband attack the version 6 edge
+/// search refines onto, as in the app's own test bursts.
+fn click(x: &mut [f32], at: usize, amp: f32) {
+    let mut s = 99u64;
+    for k in 0..((0.002 * f64::from(SR)) as usize).min(x.len().saturating_sub(at)) {
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let noise = ((s >> 33) as f64 / (1u64 << 31) as f64) * 2.0 - 1.0;
+        x[at + k] += (noise * (k as f64 / f64::from(SR) / 0.002).exp()) as f32 * amp;
+    }
+}
 
 /// A kick-like hit (125 -> 55 Hz sweep, 0.5 ms attack, 0.12 s decay) at `t0` s, `db` dBFS.
 fn kick_hit(x: &mut [f32], t0: f64, db: f64) {
@@ -400,4 +414,113 @@ fn the_prior_alignment_is_honoured_in_the_re_detection() {
     assert!(marks2[0][24].bleed, "{:?}", marks2[0][24]);
     // and the two-part verdict of the measured run is different (the fix changes the outcome)
     assert_ne!(marks[0][24].bleed, marks2[0][24].bleed);
+}
+
+/// The pass-2 motion the app used before the verify fix round 2: the bare [`first_motion`] walk
+/// of the candidate times (app `refined_motion`, no `prev` bound).
+fn walk_motion(x: &[f32], sr: u32, ts: &[f64]) -> Vec<f64> {
+    ts.iter()
+        .map(|&t| {
+            let s = (t * f64::from(sr)).round() as i64;
+            let (foot, _) = first_motion(x, s, sr, t, None, None);
+            foot as f64 / f64::from(sr)
+        })
+        .collect()
+}
+
+#[test]
+fn the_pass_two_candidates_are_refined_with_the_stored_rule_not_the_bare_walk() {
+    // #296 verify round 2: on an aligned session the re-detection's candidate times sit on the
+    // detector's grid, up to a grid step from the true onset. The bare first-motion walk (the
+    // old pass-2 motion) runs back over the slow rise / the previous stroke's decay that merges
+    // into the bleed response — on a bleed it ends at the candidate (BackStep::Busy) or on the
+    // rise — and lands more than `coincide_ms` before the snare hit, so the pass-2 coincidence
+    // lookup finds nothing and the bleed candidate STAYS (the coordinator's record: kept
+    // candidates with no coinciding source hit at all, `dropped` leads of 0.7 to 4.5 ms where
+    // pass 1's median |lead| is 0.06 ms). The stored rule (version 6) refines onto the attack,
+    // so both passes see the same times and the bleed is dropped.
+    let n = (9.0f64 * f64::from(SR)) as usize;
+    let mut snare = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut snare_motion = Vec::new();
+    // 24 snare strokes 0.3 s apart; the tom mic hears each one 18 dB under at the SAME time
+    // (aligned), after a much louder stroke 0.1 s before whose decay merges into the response
+    let mut cands = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.3;
+        kick_hit(&mut snare, t, -3.0);
+        snare_motion.push(t);
+        kick_hit(&mut tom, t - 0.1, -3.0);
+        let on = (t * f64::from(SR)).round() as usize;
+        kick_hit(&mut tom, t, -21.0);
+        click(&mut tom, on, 0.045);
+        // the detector's grid: the candidate sits 11 ms before the response's onset
+        cands.push(t - 0.011);
+    }
+    // one real tom stroke, loud, away from every snare hit
+    tom_hit(&mut tom, 7.5, 0.0);
+    cands.push(7.5 - 0.011);
+    let mics_move = |motion: Vec<f64>| {
+        [
+            CrossMic {
+                kind: XKind::Tom,
+                signal: &tom,
+                motion,
+            },
+            CrossMic {
+                kind: XKind::Snare,
+                signal: &snare,
+                motion: snare_motion.clone(),
+            },
+        ]
+    };
+    // the pass-1 decision: the pair aligned with 24 coins (as on the stored hits)
+    let prior = [PairLearned {
+        tom: 0,
+        source: 1,
+        lead_ms: None,
+        ratio_db: None,
+        aligned: true,
+        align_coins: 24,
+        align_med_abs_lead_ms: Some(0.06),
+        aligned_counts: [0; 4],
+    }];
+    // the OLD pass-2 motion (the bare walk): the bleed candidates land about 11 ms before the
+    // snare hits — outside `coincide_ms` — so no source hit coincides and NOTHING is dropped
+    let walked = walk_motion(&tom, SR, &cands);
+    for (w, &c) in walked.iter().zip(&cands).take(24) {
+        assert!(
+            (w - c).abs() < 1e-9,
+            "the walk keeps the grid candidate (busy): {w} vs {c}"
+        );
+        assert!(
+            snare_motion.iter().all(|&s| (s - w).abs() > 0.010 + 1e-9),
+            "the walked time {w} is more than coincide_ms from every snare hit"
+        );
+    }
+    let (marks_walk, _) = cross_bleed_prior(&mics_move(walked), SR, &CrossBleedParams::default(), Some(&prior));
+    assert!(
+        marks_walk[0].iter().all(|m| !m.bleed),
+        "the old pass-2 motion keeps every bleed candidate: {:?}",
+        marks_walk[0]
+    );
+    // the NEW pass-2 motion (the stored rule): the candidates refine onto the attacks, every
+    // bleed candidate coincides with its snare hit and is dropped by level alone; the real
+    // stroke stays
+    let ruled = candidate_motion(&tom, SR, &cands, RefineWindow::DEFAULT, RefineRule::Edge, true);
+    for (r, &t) in ruled.iter().zip(&snare_motion).take(24) {
+        assert!(
+            (r - t).abs() <= 0.010 + 1e-9,
+            "the ruled time {r} coincides with the snare hit {t}"
+        );
+    }
+    let (marks, _) = cross_bleed_prior(&mics_move(ruled), SR, &CrossBleedParams::default(), Some(&prior));
+    for (j, m) in marks[0].iter().enumerate() {
+        assert_eq!(m.bleed, j < 24, "candidate {j}: {m:?}");
+    }
+    // the fix changes the outcome
+    assert_ne!(
+        marks_walk[0].iter().filter(|m| m.bleed).count(),
+        marks[0].iter().filter(|m| m.bleed).count()
+    );
 }

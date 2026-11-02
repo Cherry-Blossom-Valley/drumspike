@@ -53,7 +53,11 @@ use crate::{Service, ServiceConfig};
 /// 3 is the verify fix on #296: the alignment is decided once on the stored hits (pass 1) and
 /// handed to the re-detection pass (`cross_bleed_prior`), and every pair (aligned or not) is
 /// recorded as `cross_bleed.pairs` in the job and detector records.
-pub const CROSS_BLEED: u32 = 3;
+/// 4 is the verify fix round 2: the pass-2 candidates are refined with the SAME rule the stored
+/// hits use (the analysis rule, not the bare first-motion walk, whose foot on a bleed lands on
+/// the slow rise before the source's attack and misses the coincidence), and the kept
+/// candidates' lead/ratio are recorded (`cross_bleed.kept`) next to `dropped`.
+pub const CROSS_BLEED: u32 = 4;
 
 /// The version of a new analysis: the configuration's pin, else [`CROSS_BLEED`].
 #[must_use]
@@ -397,10 +401,25 @@ fn run_one(
             return Some(json!({"removed": removed, "redetected": redetected}));
         };
         // the drop on the re-detected candidates, with the evidence stored per candidate; the
-        // candidate times are walked back to first motion as well (the same refinement). The
-        // pass-1 pairs come in as `prior` (#296): the alignment is decided on the stored hits,
-        // not re-measured on the candidate times (whose |lead| medians move).
-        let cand_motion = refined_motion(&dec_x.samples, sr, &cands.iter().map(|c| c.time).collect::<Vec<_>>());
+        // candidate times are refined with the SAME rule the stored hits use (the analysis
+        // rule, version 6 today — `candidate_motion`), NOT the bare first-motion walk: on
+        // bleed the walk runs back over the slow rise before the snare's attack and ends more
+        // than `coincide_ms` before the snare hit, so the coincidence lookup finds nothing and
+        // the candidate stays (#296 verify round 2). The pass-1 pairs come in as `prior`
+        // (#296): the alignment is decided on the stored hits, not re-measured on the
+        // candidate times (whose |lead| medians move).
+        let params_a = AnalyzeParams {
+            rule: crate::jobs::analysis_rule(&svc.inner.config),
+            ..AnalyzeParams::default()
+        };
+        let cand_motion = drumspike_core::detect::cross_bleed::candidate_motion(
+            &dec_x.samples,
+            sr,
+            &cands.iter().map(|c| c.time).collect::<Vec<_>>(),
+            params_a.window,
+            params_a.rule,
+            params_a.refine,
+        );
         let (marks_t, learned2) =
             cross_bleed_prior(&cross_mics(&dec_x, &srcs, mics, cand_motion), sr, p, Some(&learned));
         let marks = &marks_t[0];
@@ -422,10 +441,6 @@ fn run_one(
             .filter(|h| !drop_frames.contains(&h.frame))
             .map(|h| (h.time, role_note("tom")))
             .collect();
-        let params_a = AnalyzeParams {
-            rule: crate::jobs::analysis_rule(&svc.inner.config),
-            ..AnalyzeParams::default()
-        };
         let Ok(analysis) = analyze_detected(&dec_x.samples, sr, "tom", &kept, &params_a) else {
             return Some(json!({"removed": removed, "redetected": redetected, "pairs": pairs2}));
         };
@@ -434,15 +449,24 @@ fn run_one(
             .ok()
             .and_then(|t| t.extra.get("detector").cloned())
             .unwrap_or_else(|| json!({"detector": "dsp"}));
-        // #96: the dropped candidates with the lead and level the rule saw; the re-detection replaces the step-1 marks
-        if let Some(c) = det.get_mut("cross_bleed") {
+        // #96: the dropped candidates with the lead and level the rule saw; the re-detection replaces the step-1 marks.
+        // #296 verify round 2: the KEPT candidates' coincidence, lead and ratio are recorded too
+        // (today only `dropped` carries them), so a kept bleed hit is visible in the record.
+        if let Some(cb) = det.get_mut("cross_bleed") {
             let dropped_rec: Vec<Value> = dropped
                 .iter()
                 .map(|&j| json!({"t": cands[j].time, "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db}))
                 .collect();
-            c["survive"] = json!(0);
-            c["dropped"] = json!(dropped_rec);
-            c["pairs"] = pairs2.clone();
+            let kept_rec: Vec<Value> = cands
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.kept)
+                .map(|(j, c)| json!({"t": c.time, "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db}))
+                .collect();
+            cb["survive"] = json!(0);
+            cb["dropped"] = json!(dropped_rec);
+            cb["kept"] = json!(kept_rec);
+            cb["pairs"] = pairs2.clone();
         }
         if crate::jobs::store_analysis(svc, op, &x_mic.name, (analysis, None), &det, &dec_x, false, true, None).is_err()
         {

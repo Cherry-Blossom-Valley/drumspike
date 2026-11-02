@@ -73,7 +73,7 @@
 //! Every value is computed in a fixed order in `f64`; window bounds use [`ms_to_samples`].
 
 use super::attribution::{Biquad, Role, band_peak_db, band_sections, ms_to_samples};
-use crate::refine::first_motion;
+use crate::refine::{FM_PEAK_DB, RefineRule, RefineWindow, first_motion, refine_track_rule_peak};
 
 /// The kind of a close mic of the rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +291,27 @@ pub fn hit_level_full_band(x: &[f32], sr: u32, t: f64, p: &CrossBleedParams) -> 
     let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
     let pre = ms_to_samples(p.preroll_ms, sr);
     level_at(x, &[], (t * f64::from(sr)).round() as i64, w, pre)
+}
+
+/// The motion times of a re-detection's candidates: the SAME refinement the stored hits use
+/// (`rule` — the analysis rule, version 6 today), not the bare [`first_motion`] walk. On bleed
+/// the walk runs back over the slow rise that precedes the source's attack (version 6's whole
+/// reason: the walk foot "lies on the bleed or the soft drift that often precedes a snare or
+/// kick attack") and, with no `prev` bound, can end more than `coincide_ms` before the source
+/// hit — the pass-2 coincidence lookup then finds nothing and the candidate stays (#296 verify
+/// round 2: pass-2 `dropped` records with leads of 0.7 to 4.5 ms where pass 1's median |lead|
+/// is 0.06 ms). Refining with the stored rule gives both passes the same times.
+/// `refine = false` returns `ts` unchanged: the candidate times are the motion, as the stored
+/// hits of a refine-off analysis are.
+#[must_use]
+pub fn candidate_motion(x: &[f32], sr: u32, ts: &[f64], win: RefineWindow, rule: RefineRule, refine: bool) -> Vec<f64> {
+    if !refine {
+        return ts.to_vec();
+    }
+    refine_track_rule_peak(x, sr, ts, win, rule, FM_PEAK_DB)
+        .iter()
+        .map(|r| r.t)
+        .collect()
 }
 
 /// The median of `v` (the mean of the two middle values for an even count); `None` for an empty slice.
