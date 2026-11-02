@@ -21,7 +21,10 @@ key never leaves that Mac's keychain.
 1. `ci` is green on the release commit. The version is set in `Cargo.toml` (workspace),
    `apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/package.json` and
    `apps/desktop/selftest/shell.json`, and `docs/release-notes/release-notes-X.Y.Z.md` exists.
-   `tools/release/cut.py plan`, `notes` and `bump` prepare these steps.
+   The lock files (`Cargo.lock`, `apps/desktop/package-lock.json`) carry the same version:
+   `release.sh` runs `cargo metadata --locked`, and a stale `Cargo.lock` stops the build job.
+   `tools/release/cut.py plan`, `notes` and `bump` prepare these steps (`bump` moves the lock
+   files with the version).
 2. Push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. Job `check` stops early when the tag differs from one of the four versions, the notes file is
    missing, or `ci` is not green on the commit (a docs-only commit has no `ci` run; the check then
