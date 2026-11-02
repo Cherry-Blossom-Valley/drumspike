@@ -40,7 +40,17 @@ pub fn expand(all: &[String], patterns: &[String]) -> Result<Vec<String>, AppErr
 /// `k_in`, the way `safe_name` writes it), so a script can use the file's stem as the pattern.
 #[must_use]
 pub fn matches(name: &str, p: &str) -> bool {
+    if name == p {
+        return true;
+    }
     let (name, p) = (key(name), key(p));
+    // #283: a track's own name always names it. Without this, a plain name with digits on both
+    // sides of a dash (`Tom 1-2`, `Kick 2-1`) was read as a numbered range with two different
+    // prefixes, matched nothing, and the desktop app's Analyze (which sends exact names) failed
+    // with "the pattern ... matches no track".
+    if name == p {
+        return true;
+    }
     if let Some(r) = range(&name, &p) {
         return r;
     }
@@ -175,6 +185,22 @@ mod tests {
             vec!["t2".to_string(), "t3".to_string(), "t4".to_string()]
         );
         assert_eq!(expand(&a, &["t4-t4".into()]).unwrap(), vec!["t4".to_string()]);
+    }
+
+    #[test]
+    fn a_tracks_own_name_always_names_it() {
+        // #283: names with digits around a dash looked like ranges with different prefixes
+        let a: Vec<String> = ["Tom 1-2", "Kick 2-1", "OH L-R", "Snare 10-11 top"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        for n in &a {
+            assert!(matches(n, n), "{n:?} must match itself");
+            assert_eq!(expand(&a, std::slice::from_ref(n)).unwrap(), vec![n.clone()]);
+        }
+        assert_eq!(expand(&a, &a).unwrap(), a);
+        // the key form of the name names it too (a script may send the file's stem)
+        assert!(matches("Tom 1-2", "tom_1-2"));
     }
 
     #[test]
