@@ -19,7 +19,7 @@
   }
   function painted(source) {
     // #203: what the page saw, for the self-test report (frames run so far, visibility, ms since the script began)
-    once("splash_painted", { source: source, frames: frames, visible: document.visibilityState, pageMs: Math.round(performance.now() - t0) });
+    once("splash_painted", { source: source, frames: frames, visible: document.visibilityState, page_ms: Math.round(performance.now() - t0) });
   }
   // two frames: the first one is certainly presented, so the report is at (not before) the first paint
   function frame(next) { requestAnimationFrame(function () { frames++; next(); }); }
