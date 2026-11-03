@@ -1,6 +1,7 @@
 # #180: Detect Tempo bar 1 under a half-time snare
 
-Probe: `crates/core/tests/tempo_detect_bar1_probe.rs` (ignored; `DRUMSPIKE_TEMPO_SAMPLES` set).
+Probe: `crates/core/tests/tempo_detect_bar1_probe.rs` (ignored; `DRUMSPIKE_TEMPO_SAMPLES` set). The probe was
+removed in the refactor (step 1.2); it is in the git history.
 Reference bar 1 is the session's tempo map, 0 s. Offset = `bar1_s` / beat of the detected map.
 Hits are the DSP detector's. Sessions are named A, B, C only.
 

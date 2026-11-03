@@ -44,12 +44,6 @@ workspace = true
 [features]
 audio = ["dep:cpal", "dep:rtrb", "dep:rubato"]
 
-# #471: the device probe uses crate::transport, so it builds only with the feature `audio`
-# (a plain `cargo test` must not compile it).
-[[example]]
-name = "clock_probe"
-required-features = ["audio"]
-
 # P2-3: sysctlbyname("hw.physicalcpu") for the intra-op thread count (already in Cargo.lock).
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "=0.2.190"

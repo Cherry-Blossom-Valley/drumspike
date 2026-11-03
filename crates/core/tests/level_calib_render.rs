@@ -1,5 +1,5 @@
-//! Shared render of the A5 level kit (kick + acoustic snare voices, `level_calib.rs`
-//! and `level_probe.rs`). Keep in sync with `robustness.rs`.
+//! Render of the A5 level kit (kick + acoustic snare voices) for `level_calib.rs`.
+//! Keep in sync with `robustness.rs`.
 
 pub const LOOP_S: f64 = 2.0;
 pub const KICK_TIMES: [f64; 5] = [0.0, 0.5, 1.0, 1.5, 1.75];

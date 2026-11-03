@@ -1,7 +1,8 @@
 # Hit placement bias: measurement (#101, step 1)
 
 Measurement only, no change to the detector. Tool: `crates/core/examples/placement_bias.rs`
-(`cargo run --release -p drumspike-core --example placement_bias`).
+(`cargo run --release -p drumspike-core --example placement_bias`). The tool was removed in the
+refactor (step 1.2); it is in the git history.
 
 ## Setup
 

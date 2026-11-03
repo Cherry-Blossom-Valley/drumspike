@@ -843,7 +843,8 @@ fn foot_strict(x: &[f32], d: i64, lo: i64, floor: f64) -> i64 {
 static LEAD_IN: AtomicBool = AtomicBool::new(false);
 
 /// Switches the lead-in of the walk (#239) on or off for the whole process. Off by default since version 6 (#293,
-/// #294: it joined the bleed before snare hits); the before/after measurement (`examples/lead_in_check.rs`) switches it.
+/// #294: it joined the bleed before snare hits); the before/after measurement `lead_in_check` switched it
+/// (removed in the refactor, see git history).
 pub fn set_lead_in(on: bool) {
     LEAD_IN.store(on, Ordering::Relaxed);
 }
