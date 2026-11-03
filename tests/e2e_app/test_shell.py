@@ -366,9 +366,10 @@ def test_native_menu_keys_run_once_the_menu_owns_them(app, make_project):
     assert app.evaluate("() => DSShell.menuOwnsKey(new KeyboardEvent('keydown', {key: 'n'}))") is False
     # P3-13a: the accelerators with Control or Option; the keys without one stay page keys
     owns = lambda o: app.evaluate("o => DSShell.menuOwnsKey(new KeyboardEvent('keydown', o))", o)
-    assert owns({"key": "Tab", "code": "Tab", "ctrlKey": True}) is True               # Next Hit on All Tracks
-    assert owns({"key": "Tab", "code": "Tab", "ctrlKey": True, "altKey": True}) is True
-    assert owns({"key": "Tab", "code": "Tab", "altKey": True}) is True                # Previous Hit
+    # #317: a Tab key is never the menu's: the web view takes Tab with a modifier as focus traversal before the menu
+    assert owns({"key": "Tab", "code": "Tab", "ctrlKey": True}) is False              # Next Hit on All Tracks
+    assert owns({"key": "Tab", "code": "Tab", "ctrlKey": True, "altKey": True}) is False
+    assert owns({"key": "Tab", "code": "Tab", "altKey": True}) is False               # Previous Hit
     assert owns({"key": "Tab", "code": "Tab"}) is False                               # Next Hit: a page key
     assert owns({"key": "Enter", "code": "Enter", "altKey": True}) is True            # Go to Project End
     assert owns({"key": "Enter", "code": "Enter"}) is False                           # Go to Project Start: a page key
