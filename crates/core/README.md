@@ -29,18 +29,17 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-- `crates/devtools/src/bin/parity.rs`: the binary the parity harnesses call (LAYOUT 2: the tool binaries live in `crates/devtools`).
+- `crates/devtools/src/bin/parity.rs`: the binary `tests/test_golden.py` calls (LAYOUT 2: the tool binaries live in `crates/devtools`).
 - `crates/devtools/src/bin/bench.rs`: the benchmark. `./target/release/bench [--tracks 30] [--seconds 300] [--format pcm24|pcm16|float32] [--runs 5]`.
 - `tests/ffmpeg_downmix.rs`: compares the downmix with ffmpeg's frozen output (no ffmpeg needed).
 - `tests/project_cross_load.rs`: documents written by the retired Python layer (frozen) load in Rust.
-- `tools/parity/` (repository root): the Python harnesses against the frozen references (`make_corpus.py`, `check_parity.py`,
-  `check_refine.py`, `check_midi.py`, `check_spike.py`, `check_analyze.py`). The
-  usage is in each docstring.
+- `tests/test_golden.py` (repository root): the golden regression against the frozen references (decode, peaks,
+  refinement, velocities, MIDI and spike export, the analysis). `tools/parity/make_corpus.py` writes its synthetic corpus.
 
 ## Rules
 
-- The frozen results of the retired Python server are the reference. Every change keeps the parity
-  harnesses and the golden files (`tests/test_golden.py`, `tests/golden/frozen/`) green.
+- The frozen results of the retired Python server are the reference. Every change keeps the golden
+  regression (`tests/test_golden.py`, `tests/golden/frozen/`) green.
 - The reader never writes. Source audio stays unchanged.
 - Dependencies have exact versions. `Cargo.lock` is committed. No C or C++ dependency.
 - `unsafe` appears only in the memory-map layer, with a comment that says why.

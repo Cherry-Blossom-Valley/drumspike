@@ -1,5 +1,5 @@
-//! Parity helper of `tools/parity/check_service.py` (P3-3a): runs the service commands
-//! on project folders that the Python check wrote, and prints JSON.
+//! Service commands without a window (P3-3a): runs the service commands on project folders
+//! and prints JSON (the former `tools/parity/check_service.py` wrote the folders).
 //!
 //! ```text
 //! service_tool analyze <project_dir>...   analyse every track of each project (the params in
@@ -128,7 +128,7 @@ fn export_all(dir: &str) -> Result<(), String> {
 }
 
 /// P3-12, #294: the analysis of the core on a file, for the frozen references of the Python
-/// server (`tools/parity/check_analyze.py`, `tests/test_rust_analyze.py`). One job per entry of
+/// server (`tests/test_golden.py`, the analyze cases). One job per entry of
 /// `<jobs.json>`: `{wav, mix?, role, params?, detected?}` — DSP-only: the DSP detector runs when
 /// no `detected` is given (a non-null `model` key is an error
 /// here); `detected` ([[t, note], ...]) skips the detector and runs only the steps after it

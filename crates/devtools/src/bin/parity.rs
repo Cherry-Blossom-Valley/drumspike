@@ -9,13 +9,13 @@
 //! bucket size like `engine.compute_peaks`), `velocities` (`engine.velocity_map` at the
 //! times of `--t0-file`), `tiles` and `samples` (the tile API at the requested windows).
 //! `--pcm-out` writes the decoded mono signal as raw little-endian f32 so the Python side
-//! can compare every sample with `engine.load_f32`. Used by `tools/parity/check_parity.py`.
+//! can compare every sample with `engine.load_f32`. Used by `tests/test_golden.py`.
 //!
 //! ```text
 //! parity refine <job.json>
 //! ```
 //!
-//! Refinement job (P1-4, `check_refine.py`): `{"wav": path, "mix": "ffmpeg"|"average",
+//! Refinement job (P1-4, `tests/test_golden.py`): `{"wav": path, "mix": "ffmpeg"|"average",
 //! "hits": [{"t0": s, "neighbors": [s, ...]}, ...], "window": [lo_ms, hi_ms]}` (`window`
 //! optional, default `RefineWindow::DEFAULT`, P2-9). Prints `{"sr", "refined": [{"t", "rise"}],
 //! "velocities": [...]}` with `engine._refine_sr` per hit and `engine.velocity_map` at the
@@ -29,7 +29,7 @@
 //! parity spike <job.json> <out.wav>
 //! ```
 //!
-//! MIDI job (P1-5, `check_midi.py`): `{"events": [{"t": s, "v": int}], "note": 36, "ppq":
+//! MIDI job (P1-5, `tests/test_golden.py`): `{"events": [{"t": s, "v": int}], "note": 36, "ppq":
 //! 24000, "tempo": 120.0}` (`v` defaults to 100 like `engine.export_midi`); writes the file
 //! and prints `{"notes": [{"tick", "note", "velocity", "duration"}]}`. Spike job:
 //! `{"source": wav, "times": [s, ...], "format": "pcm16"|"pcm24"|"float32"}`; writes the spike file
@@ -39,7 +39,7 @@
 //! parity resample <in.wav> <out.wav> [--mix ffmpeg|average] [--mono-out mono.wav]
 //! ```
 //!
-//! Resampler (P2-2a, `check_resample.py`): reads the source as mono `f32` with the crate's
+//! Resampler (P2-2a, the former `check_resample.py`): reads the source as mono `f32` with the crate's
 //! reader, resamples it to 44.1 kHz with `detect::resample` (48 and 96 kHz; 44.1 kHz passes
 //! through) and writes a 44.1 kHz float32 WAV. `--mono-out` also writes the unresampled mono
 //! signal at the native rate so the Python side can feed soxr the same samples. Prints
@@ -50,7 +50,7 @@
 //! parity features <wav44|sig.npy> <chain> <out.npy> [--mix ffmpeg|average] [--repeat N]
 //! ```
 //!
-//! Features (P2-2b, `check_features.py`): reads a 44.1 kHz signal (a WAV through the crate's
+//! Features (P2-2b, the former `check_features.py`): reads a 44.1 kHz signal (a WAV through the crate's
 //! reader, default mix ffmpeg, or a 1-D float32 `.npy` such as the reference `sig44.npy`),
 //! computes `detect::features` for the chain (`cli`, `madmom` or `mix`; `mix` = the cli
 //! features) and writes the `(frames, 84)` float32 `.npy`. A WAV at 48 or 96 kHz is resampled
@@ -62,7 +62,7 @@
 //!               [--odf-out odf.f32]
 //! ```
 //!
-//! DSP onset fallback (P2-5, `check_onsets.py`): reads the source as mono `f32` (default
+//! DSP onset fallback (P2-5, the former `check_onsets.py`): reads the source as mono `f32` (default
 //! mix ffmpeg, like the detector input), runs `detect::onset` for the role (`kick`, `snare`,
 //! `tom`, `hat`, `cymbal`, `other`) and writes `{"wav", "role", "sr", "n_samples",
 //! "frames", "params", "seconds": {"read","resample" | "onsets" | "features", "resample", "spectrogram"}, "hits": [{"frame", "time", "rise_db",
@@ -89,7 +89,7 @@
 //! parity attribute <session-manifest.json> <out.json>
 //! ```
 //!
-//! Attribution flags (P2-6, `check_attribution.py`): the manifest is `{"params": {..},
+//! Attribution flags (P2-6, the former `check_attribution.py`): the manifest is `{"params": {..},
 //! "tracks": [{"id", "role", "instrument", "path", "mix", "hits": [{"sample", "rise"}]}]`.
 //! `params` overrides fields of `AttributionParams::enabled()` by name (roles by app name;
 //! both flags are on unless the manifest turns them off). Every track is decoded with the

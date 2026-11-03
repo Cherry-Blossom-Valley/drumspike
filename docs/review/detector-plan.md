@@ -209,9 +209,9 @@ into `confidence.rs` and extend `why` to name the gate; no detection change.
 
 Gate that can fail: a `service_tool`-level test on a generated session asserts the
 `why` string of a soft rescued hit names the soft gate and its `c` is below
-`DOUBT_BELOW` while a loud hit's is not; the parity gate
-`tools/parity/check_analyze.py` must stay byte-identical (no detection change). Fails
-if either assertion fails.
+`DOUBT_BELOW` while a loud hit's is not; the identity snapshot
+(`tools/identity.py compare` against the manifest of the base commit) must show no
+difference (no detection change). Fails if either assertion fails.
 
 ### 5. Role suggestion from audio: score the hint mode on ENST and publish the threshold
 

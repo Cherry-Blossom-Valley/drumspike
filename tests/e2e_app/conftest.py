@@ -248,7 +248,7 @@ def bridge(tmp_path_factory):
     home = tmp_path_factory.mktemp("dshome")
     # P4-12 stage 2: the frozen MIDI and spike references of the export tests are the retired engine's refinement
     # (version 1; the reach rule of version 2 gave the same events here, the first-motion back-track of version 3
-    # does not), so the bridge's analyses run version 1 (as check_service.py and exit_flow.py)
+    # does not), so the bridge's analyses run version 1 (as exit_flow.py)
     env = dict(os.environ, DRUMSPIKE_HOME=str(home), DRUMSPIKE_PROJECTS=str(home / "projects"),
                DRUMSPIKE_AUTOSAVE_SECONDS="1", DRUMSPIKE_AUDIO="null", DRUMSPIKE_MASTER_GAIN="0",
                DRUMSPIKE_REFINE_RULE="1", DRUMSPIKE_ROLL_RULE="0",   # P4-19: the frozen references have no roll fill

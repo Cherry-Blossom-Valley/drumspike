@@ -19,9 +19,8 @@
 //! Every index is computed with Python `int()` truncation ([`crate::pyops`]) and every
 //! early return gives `t0` back unchanged, like the engine. The only place where the two
 //! implementations can differ is the floating-point order inside the FFT (rustfft versus
-//! numpy's pocketfft) and the smoothing sum; the parity harness
-//! (`tools/parity/check_refine.py`) measures that on the corpus and the
-//! `bench/refine_bench.py` scenarios.
+//! numpy's pocketfft) and the smoothing sum; `tests/test_golden.py` (the refine cases)
+//! checks that on the corpus, edge, window and refinement-benchmark scenarios.
 
 use std::cell::RefCell;
 

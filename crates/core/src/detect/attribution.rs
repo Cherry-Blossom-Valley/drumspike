@@ -52,8 +52,8 @@
 //! Band levels: a cascade of RBJ biquads (each stage twice, 24 dB per octave) in `f64`,
 //! direct form II transposed, zero initial state, run over `preroll_ms` before the window
 //! and the window itself; the level is `20 log10(max |y| + 1e-9)` inside the window. The
-//! same recursion as `scipy.signal.sosfilt`, so the Python reference
-//! (`tools/parity/check_attribution.py`) gives the same values.
+//! same recursion as `scipy.signal.sosfilt`, so the Python reference (the former
+//! `tools/parity/check_attribution.py`, removed in refactor 1.5) gave the same values.
 //!
 //! # Resonance
 //!

@@ -12,7 +12,7 @@ rules that coding agents follow in this repository, read `AGENTS.md`.
 | App service | `crates/app/` | Rust crate `drumspike-app`. The commands of the desktop app as plain functions, with no Tauri dependency. It also has the test bridge `ds-bridge` (debug builds only) and `service_tool` (the service commands and `core-analyze` for the parity checks). |
 | Desktop app | `apps/desktop/` | Tauri 2 shell (crate `drumspike-desktop` in `apps/desktop/src-tauri/`). It wraps the UI in `static/`. The scripts for build, test and release are in `apps/desktop/scripts/`. |
 | UI | `static/` | The editor: plain JavaScript (`app.js`, `backend.js`, `lanes-gl.js`, `tiles-worker.js`). It runs in the app (IPC backend) and, for the tests, in Chromium against the test bridge. |
-| Tests | `tests/`, `tools/parity/` | pytest and the parity scripts. An earlier Python reference implementation was retired; its results are frozen in `tests/golden/`. |
+| Tests | `tests/`, `tools/parity/` | pytest (`tests/test_golden.py` is the golden regression) and the corpus and session generators. An earlier Python reference implementation was retired; its results are frozen in `tests/golden/`. |
 | Python tools | `tools/` | Research tools (calibration kit, tom bleed, onset checks, `fix_metric.py`, `firm_fixes.py`) and `tools/check_exports.py`, the independent export checker. They are not part of the app. Each has a user: a test, an import or a documented command. |
 
 ## 2. Prerequisites
@@ -208,7 +208,7 @@ these steps on a tag push and makes a draft release; a maintainer publishes it.
 
 ## 8. Tests
 
-The gates have short names (G1 to G6) that tickets and pull requests use. Run long gates in the
+The gates have short names (G1 to G5) that tickets and pull requests use. Run long gates in the
 background with a log file.
 
 | Gate | Host | Commands |
@@ -218,7 +218,6 @@ background with a log file.
 | G3 app build | arm64-mac only | `(cd apps/desktop && npm ci && npx tauri build --debug --target aarch64-apple-darwin --bundles app)` |
 | G4 app e2e through the bridge | arm64-mac and x86-mac | `cargo build -p drumspike-devtools --bin ds-bridge`, then `DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 uv run pytest -m e2e_app --no-cov` |
 | G5 app self-test in the built app | arm64-mac only | `apps/desktop/scripts/self-test.sh <scenario>` |
-| G6 x86 check | x86-mac | `X86_REPO=~/src/<clone> X86_RUN=~/x86run-<job> ~/x86run.sh` |
 
 A faster loop without the browser tests:
 
@@ -308,8 +307,9 @@ debug app.
 ### Parity and benchmark
 
 The retired Python reference is frozen in `tests/golden/` (`tests/frozen.py` reads and checks the
-values; a reference keyed by changed inputs fails). The parity scripts are in `tools/parity/`, and
-each has its usage in its docstring. The benchmark:
+values; a reference keyed by changed inputs fails). `tests/test_golden.py` runs every frozen case of
+decode, peaks, refinement, velocities, MIDI and spike export and the analysis; each group has a
+planted-fault test. The benchmark:
 
 ```bash
 ./target/release/bench

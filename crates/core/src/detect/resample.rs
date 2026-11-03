@@ -3,8 +3,8 @@
 //! The detector chain (`engine.detector_input` today) hands the reference CLI a 48 kHz file, and
 //! the CLI resamples it with `librosa.load(sr=44100)`, that is soxr 1.1.0 at `soxr_hq`. No
 //! pure-Rust code reproduces soxr bit for bit, so this module is a separate design whose
-//! distance to soxr is measured (`tools/parity/check_resample.py`, target SNR >= 80 dB
-//! per file) rather than assumed.
+//! distance to soxr was measured (the former `tools/parity/check_resample.py`, target SNR
+//! >= 80 dB per file) rather than assumed.
 //!
 //! # Design
 //!
@@ -29,7 +29,7 @@
 //! matched soxr to 73 dB on white noise and failed the 80 dB gate on the hi-hat tracks (69
 //! to 76 dB); the cascade matches soxr's measured kernel to 133 dB (white noise) at both
 //! rates. The six numbers are a least-squares fit of this kernel family to `soxr_hq` 1.1.0's
-//! measured impulse response (`tools/parity/fit_resample_kernel.py`); the response is
+//! measured impulse response (the former `tools/parity/fit_resample_kernel.py`); the response is
 //! -3 dB at 20.96 kHz, -80 dB at 21.92 kHz, below -137 dB from 22.05 kHz on.
 //!
 //! The kernel is symmetric and centred on `t_k`, so the output has zero group delay: output

@@ -102,7 +102,7 @@ fn traced(
 /// - `--app-info`: print the `app_info` answer (the detector and chain) as one JSON line.
 /// - `cli ...` and `mcp` (P4-5): the agent API, see `drumspike_app::agent`
 /// - `--analyze <project_dir>...`: the output of `service_tool analyze` (one JSON line per
-///   folder), for `tools/parity/check_service.py --bin`; exit 0, or 1 on an error.
+///   folder), for a check of the built app; exit 0, or 1 on an error.
 ///
 /// Any other first argument returns `None` and the app starts as usual.
 #[must_use]

@@ -21,7 +21,7 @@
 //! A source rate other than 44.1, 48 or 96 kHz is an error ([`AnalyzeError::Rate`]): the
 //! Python engine decodes such a file with ffmpeg first, the core does not. Parity with
 //! `engine.analyze_track` (identical `t`, `v`, `rise` and order) is checked by
-//! `tools/parity/check_analyze.py`; [`AnalyzeBranches`] counts which step changed
+//! `tests/test_golden.py` (the analyze cases); [`AnalyzeBranches`] counts which step changed
 //! something, so the check can show that every branch ran.
 
 use std::cmp::Ordering;
