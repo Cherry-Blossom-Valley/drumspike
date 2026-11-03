@@ -7416,6 +7416,7 @@ function setupGlobal() {
     const hit = DSKeys.find(ev);
     if (!hit) return;
     if (hit.cmd.id !== "deselect") ev.preventDefault();
+    if (hit.cmd.menu && DSKeys.parse(hit.key).key === "Tab") DSKeys.notePageRun(hit.cmd.menu);   // #317: see DSKeys.menuOwns
     runKey(hit.cmd.id, ev);
   });
 }

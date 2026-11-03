@@ -303,12 +303,23 @@
 
   /* The native menu runs this key (app only): the page must not run it again. Not a key that the menu only shows
      (#300: V, Space, Tab): the menu consumes it only while its item is enabled and no text field or dialog has the
-     focus, so a keydown that reaches the page is the page's. */
+     focus, so a keydown that reaches the page is the page's.
+     #317: never a Tab key. The web view takes Tab with any modifier as focus traversal (Option+Tab walks every
+     button) before the native menu sees the key equivalent, so Option+Tab (Previous Hit), Control+Tab and
+     Control+Option+Tab must run in the page, which also stops the focus move (preventDefault). The shell drops a
+     menu event that repeats a command the page ran for the same key a moment ago (menuRepeat). */
   function menuOwns(ev) {
     if (!window.__DS_NATIVE_MENU__) return false;
     const k = keyOf(ev), hit = k && table().get(k);
+    if (hit && parse(k).key === "Tab") return false;
     return !!(hit && hit.menu);
   }
+  /* #317: the page ran this command for a Tab key (see menuOwns); the shell's menu dispatcher skips a menu event for
+     the same command within REPEAT_MS, so one key press never steps twice if a menu accelerator fires as well. */
+  const REPEAT_MS = 150;
+  let pageRan = null;
+  const notePageRun = id => { pageRan = { id, t: performance.now() }; };
+  const menuRepeat = id => !!pageRan && pageRan.id === id && performance.now() - pageRan.t < REPEAT_MS;
   const accelKeys = preset => COMMANDS.map(c => menuKeyOf(c, preset || DSKeys.preset)).filter(Boolean);
   const menuKeys = preset => COMMANDS.map(c => shownKeyOf(c, preset || DSKeys.preset)).filter(Boolean);   // #300: every key the menu shows
   const presetName = preset => PRESETS[preset || DSKeys.preset];
@@ -348,6 +359,6 @@
   }
 
   const DSKeys = { live: {}, COMMANDS, GESTURES, MODS, preset: "default", PRESETS, parse, compose, keyOf, display, tauriOf, keysOf, problems,
-    table, find, menuOwns, menuKeys, accelKeys, menuKeyOf, shownKeyOf, presetName, setPreset, renderHelp };
+    table, find, menuOwns, notePageRun, menuRepeat, menuKeys, accelKeys, menuKeyOf, shownKeyOf, presetName, setPreset, renderHelp };
   window.DSKeys = DSKeys;
 })();
