@@ -648,3 +648,171 @@ fn a_sparse_pair_on_an_unaligned_session_is_not_inherited() {
     // ... and denies the leading quiet hit
     assert!(!marks[0][25].bleed, "{:?}", marks[0][25]);
 }
+
+#[test]
+fn a_non_sparse_pair_of_an_aligned_session_judges_by_level_alone() {
+    // #309 verify fix: alignment is a property of the SESSION. The kick pair has 25 coincidences
+    // of its own (non-sparse) with a 4 ms median |lead| — it cannot measure its own alignment,
+    // but the snare pair of the same tom is measured aligned, so the kick pair judges by the
+    // level test alone and the quiet bleed 4 ms BEFORE the kick hit (whose negative lead the
+    // two-part verdict would keep — the detector's placement lag, not acoustics) is dropped.
+    let n = (4.0f64 * f64::from(SR)) as usize;
+    let mut snare = vec![0f32; n];
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut tom_motion = Vec::new();
+    let mut snare_motion = Vec::new();
+    // 24 snare strokes; the tom mic hears each at the snare's time (aligned) and 18 dB under
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut snare, t, -3.0);
+        kick_hit(&mut tom, t + 0.0002, -21.0);
+        snare_motion.push(t);
+        tom_motion.push(t + 0.0002);
+    }
+    // 25 kick strokes away from the snare; the tom mic hears each 4 ms BEFORE the kick hit
+    // (the placement lag of the measured session) and 22 dB under
+    for i in 0..25 {
+        let t = 2.0 + f64::from(i) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t - 0.004, -25.0);
+        tom_motion.push(t - 0.004);
+    }
+    // the real tom hit: loud, clear of every other event
+    tom_hit(&mut tom, 3.5, 0.0);
+    tom_motion.push(3.5);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Snare,
+            signal: &snare,
+            motion: snare_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: (0..25).map(|i| 2.0 + f64::from(i) * 0.05).collect(),
+        },
+    ];
+    let (marks, learned) = cross_bleed(&mics, SR, &CrossBleedParams::default());
+    // the snare pair measured its own alignment; the non-sparse kick pair inherited it
+    assert!(learned[0].aligned && !learned[0].align_inherited, "{learned:?}");
+    assert!(learned[1].aligned, "{learned:?}");
+    assert!(learned[1].align_inherited, "{learned:?}");
+    assert_eq!(learned[1].align_coins, 25, "{learned:?}");
+    assert!(learned[1].align_med_abs_lead_ms.is_some_and(|m| m > 1.0), "{learned:?}");
+    // level alone: every kick bleed is dropped (the lead test cannot keep them)
+    for j in 24..49 {
+        assert!(marks[0][j].bleed, "hit {j}: {:?}", marks[0][j]);
+    }
+    // the loud real hit stays
+    assert!(!marks[0][49].bleed, "{:?}", marks[0][49]);
+}
+
+#[test]
+fn a_non_sparse_pair_on_an_unaligned_session_keeps_the_two_part_verdict() {
+    // #309: the same non-sparse kick pair (25 coins, 4 ms median |lead|) on a session with NO
+    // measured-aligned pair (the snare pair's coins carry a real 1 ms arrival): the two-part
+    // verdict stays, so the quiet bleed that leads the kick hit is kept.
+    let n = (4.0f64 * f64::from(SR)) as usize;
+    let mut snare = vec![0f32; n];
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut tom_motion = Vec::new();
+    let mut snare_motion = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut snare, t, -3.0);
+        kick_hit(&mut tom, t + 0.001, -21.0);
+        snare_motion.push(t);
+        tom_motion.push(t + 0.001);
+    }
+    for i in 0..25 {
+        let t = 2.0 + f64::from(i) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t - 0.004, -25.0);
+        tom_motion.push(t - 0.004);
+    }
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Snare,
+            signal: &snare,
+            motion: snare_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: (0..25).map(|i| 2.0 + f64::from(i) * 0.05).collect(),
+        },
+    ];
+    let (marks, learned) = cross_bleed(&mics, SR, &CrossBleedParams::default());
+    assert!(!learned[0].aligned, "{learned:?}");
+    // non-sparse (25 coins) and NOT aligned, inherited or measured
+    assert!(!learned[1].aligned, "{learned:?}");
+    assert!(!learned[1].align_inherited, "{learned:?}");
+    assert_eq!(learned[1].align_coins, 25, "{learned:?}");
+    // the two-part verdict: the bleed leads the source (negative lead) and is kept
+    for j in 24..49 {
+        assert!(!marks[0][j].bleed, "hit {j}: {:?}", marks[0][j]);
+    }
+}
+
+#[test]
+fn the_inherited_alignment_survives_the_prior() {
+    // #309: the pass-1 align_inherited travels with the alignment into the re-detection pass —
+    // the record does not lie about the inheritance (the same geometry as
+    // `the_prior_alignment_is_honoured_in_the_re_detection`, with the pass-1 pair inherited).
+    let n = (2.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.001, -21.0);
+        kick_motion.push(t);
+        tom_motion.push(t + 0.001);
+    }
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let p = CrossBleedParams::default();
+    let prior = [PairLearned {
+        tom: 0,
+        source: 1,
+        lead_ms: None,
+        ratio_db: None,
+        aligned: true,
+        align_coins: 24,
+        align_med_abs_lead_ms: Some(1.0),
+        aligned_counts: [0; 4],
+        align_inherited: true,
+    }];
+    let (marks2, learned2) = cross_bleed_prior(&mics, SR, &p, Some(&prior));
+    assert!(learned2[0].aligned, "{learned2:?}");
+    assert!(learned2[0].align_inherited, "{learned2:?}");
+    assert_eq!(learned2[0].align_coins, 24);
+    // level alone: every coinciding hit is bleed
+    for (j, m) in marks2[0].iter().enumerate() {
+        assert!(m.bleed, "hit {j}: {m:?}");
+    }
+}

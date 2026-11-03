@@ -65,10 +65,10 @@ use crate::{Service, ServiceConfig};
 /// event — only the placement of a candidate whose own verdict found NO coinciding source
 /// (`lead_ms` None) is dropped; a candidate with a coinciding source keeps pass 2's verdict and
 /// an event the analysis added without a candidate is never touched.
-/// 7 is #309: a sparse pair of an aligned session (fewer than `align_min_coins` coincidences of
-/// its own — the kick, the other tom mics) inherits the session's alignment (any other pair of
-/// the target measured aligned) and judges by level alone; the records carry
-/// `align_inherited` per pair.
+/// 7 is #309: a pair of a target with a measured-aligned pair (any other pair of the same tom)
+/// inherits the session's alignment and judges by level alone — sparse or not, the lead of the
+/// other pairs carries no information on an aligned session; the records carry `align_inherited`
+/// per pair, through the re-detection prior as well.
 pub const CROSS_BLEED: u32 = 7;
 
 /// The version of a new analysis: the configuration's pin, else [`CROSS_BLEED`].
