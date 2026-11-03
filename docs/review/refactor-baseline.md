@@ -97,3 +97,7 @@ Variants with an env pin, taken at the same base (`--env KEY=VALUE`; the file na
 | `ac545a8.json` | none (the baseline) |
 | `ac545a8-delta0.json` | `DRUMSPIKE_DELTA_RULE=0` |
 | `ac545a8-tempo1.json`, `ac545a8-tempo2.json`, `ac545a8-tempo3.json` | `DRUMSPIKE_TEMPO_RULE=1`, `2`, `3` |
+
+Checks of the variants against the baseline: `DRUMSPIKE_TEMPO_RULE=3` is identical (rule 3 is the default when the
+variable is unset); rule 1 differs in 13 items (11 ENST, 2 session, golden unchanged); rule 2 in 5 items (4 ENST,
+1 session). So the variants are not copies of the baseline and the snapshot sees the pins.
