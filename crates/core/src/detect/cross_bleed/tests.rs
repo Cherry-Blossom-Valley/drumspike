@@ -708,8 +708,8 @@ fn a_non_sparse_pair_of_an_aligned_session_judges_by_level_alone() {
     assert_eq!(learned[1].align_coins, 25, "{learned:?}");
     assert!(learned[1].align_med_abs_lead_ms.is_some_and(|m| m > 1.0), "{learned:?}");
     // level alone: every kick bleed is dropped (the lead test cannot keep them)
-    for j in 24..49 {
-        assert!(marks[0][j].bleed, "hit {j}: {:?}", marks[0][j]);
+    for (j, m) in marks[0].iter().enumerate().take(49).skip(24) {
+        assert!(m.bleed, "hit {j}: {m:?}");
     }
     // the loud real hit stays
     assert!(!marks[0][49].bleed, "{:?}", marks[0][49]);
@@ -763,8 +763,8 @@ fn a_non_sparse_pair_on_an_unaligned_session_keeps_the_two_part_verdict() {
     assert!(!learned[1].align_inherited, "{learned:?}");
     assert_eq!(learned[1].align_coins, 25, "{learned:?}");
     // the two-part verdict: the bleed leads the source (negative lead) and is kept
-    for j in 24..49 {
-        assert!(!marks[0][j].bleed, "hit {j}: {:?}", marks[0][j]);
+    for (j, m) in marks[0].iter().enumerate().take(49).skip(24) {
+        assert!(!m.bleed, "hit {j}: {m:?}");
     }
 }
 
