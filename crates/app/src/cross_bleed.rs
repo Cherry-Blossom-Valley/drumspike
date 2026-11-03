@@ -69,7 +69,14 @@ use crate::{Service, ServiceConfig};
 /// inherits the session's alignment and judges by level alone — sparse or not, the lead of the
 /// other pairs carries no information on an aligned session; the records carry `align_inherited`
 /// per pair, through the re-detection prior as well.
-pub const CROSS_BLEED: u32 = 7;
+/// 8 is #313: the alignment is a PER-SOURCE session property — a source is aligned on the
+/// session only when it measures aligned on every tom target with at least `align_min_coins`
+/// coincidences and on at least two such targets (the records carry `source_aligned_targets` and
+/// `source_targets` per pair), and the #309 inheritance fires only from a session-aligned
+/// source's measured-aligned pair. The pass-1 inherit rule takes only the marks an ALIGNED pair
+/// made (`aligned_mark`): on a session with no aligned pair the re-detection judges every
+/// candidate on its own, exactly as before #296.
+pub const CROSS_BLEED: u32 = 8;
 
 /// The version of a new analysis: the configuration's pin, else [`CROSS_BLEED`].
 #[must_use]
@@ -290,6 +297,17 @@ fn set_a6_keys(e: &mut drumspike_core::project::Event, m: CrossMark) {
 /// pair is recorded (aligned or not), so the reason is visible: the source's track name, the
 /// alignment verdict, the coincidence count, the median |lead| and the count of coinciding
 /// target hits under each of [`ALIGN_COUNT_MARGINS_DB`] (the sweep counts on an aligned pair).
+/// #313: the pass-1 bleed times that feed the inherit rule — only the marks an ALIGNED pair
+/// made ([`CrossMark::aligned_mark`]), never an edited hit. On a session with no aligned pair
+/// the list is empty and the re-detection judges every candidate on its own, exactly as before
+/// #296 (a two-part mark does not survive the re-detection there).
+fn aligned_pass1_bleed(marks: &[CrossMark], times: &[f64], edited: &[bool]) -> Vec<f64> {
+    (0..marks.len())
+        .filter(|&j| marks[j].bleed && marks[j].aligned_mark && !edited[j])
+        .map(|j| times[j])
+        .collect()
+}
+
 fn pairs_json(mics: &[Mic], srcs: &[(usize, Arc<Decoded>)], learned: &[PairLearned]) -> Value {
     Value::Array(
         learned
@@ -306,6 +324,9 @@ fn pairs_json(mics: &[Mic], srcs: &[(usize, Arc<Decoded>)], learned: &[PairLearn
                     "coins": l.align_coins,
                     "med_abs_lead_ms": l.align_med_abs_lead_ms,
                     "align_inherited": l.align_inherited,
+                    // #313: the source's per-session test (see [`PairLearned::source_aligned_targets`])
+                    "source_aligned_targets": l.source_aligned_targets,
+                    "source_targets": l.source_targets,
                     // #309: the pair's clear-case bleed ratio distribution — a coinciding hit
                     // louder than the max is the tom's own motion, never bleed (aligned pairs)
                     "ratio_med_db": l.ratio_db,
@@ -428,10 +449,7 @@ fn run_one(
         }
         let (marks_t, learned1) = cross_bleed(&cross_mics(&dec_x, &srcs, mics, x_mic.times.clone()), sr, p);
         let marks = &marks_t[0];
-        bleed_pass1 = (0..marks.len())
-            .filter(|&j| marks[j].bleed && !x_mic.edited[j])
-            .map(|j| x_mic.times[j])
-            .collect();
+        bleed_pass1 = aligned_pass1_bleed(marks, &x_mic.times, &x_mic.edited);
         learned = learned1;
         pairs = pairs_json(mics, &srcs, &learned);
         // #309: pass 1's verdict, visible: per track, the hits pass 1 judged bleed with their
@@ -635,9 +653,10 @@ fn run_one(
 #[cfg(test)]
 mod tests {
     use drumspike_core::analyze::Analysis;
+    use drumspike_core::detect::cross_bleed::CrossMark;
     use drumspike_core::refine::Hit;
 
-    use super::inherit_on_placement;
+    use super::{aligned_pass1_bleed, inherit_on_placement};
 
     fn analysis(ts: &[f64]) -> Analysis {
         Analysis {
@@ -738,5 +757,42 @@ mod tests {
         let inherited = inherit_on_placement(&mut a, &[], &[(0.5, None)]);
         assert!(inherited.is_empty());
         assert_eq!(a.events.len(), 3);
+    }
+
+    fn mark(bleed: bool, aligned_mark: bool) -> CrossMark {
+        CrossMark {
+            bleed,
+            lead_ms: Some(1.0),
+            ratio_db: Some(-20.0),
+            hat_lead_ms: None,
+            hat_ratio_db: None,
+            aligned_mark,
+        }
+    }
+
+    /// #313 gate test 5, the mechanism-2 regression (the flip): the pass-1 marks that feed the
+    /// inherit rule are only the ALIGNED pairs' ([`CrossMark::aligned_mark`]). A two-part mark —
+    /// an unaligned pair's verdict — is not handed over, so the re-detection judges its
+    /// candidate on its own and a candidate placed on the marked time is KEPT, exactly as
+    /// before #296: on a session with no aligned pair the inherit rule is a no-op.
+    #[test]
+    fn a_two_part_mark_does_not_feed_the_inherit_rule() {
+        let marked = 1.000_000;
+        let times = vec![marked];
+        let edited = vec![false];
+        // the two-part mark stays out of the inherit list ...
+        assert!(aligned_pass1_bleed(&[mark(true, false)], &times, &edited).is_empty());
+        // ... the aligned mark is handed over ...
+        assert_eq!(aligned_pass1_bleed(&[mark(true, true)], &times, &edited), vec![marked]);
+        // ... and an edited hit is never handed over
+        let edited_hit = vec![true];
+        assert!(aligned_pass1_bleed(&[mark(true, true)], &times, &edited_hit).is_empty());
+        // the flip geometry end to end: with no aligned mark the candidate placed on the
+        // pass-1-marked time is kept (before #296, rule 1's mark died with the re-detection)
+        let mut a = analysis(&[marked]);
+        let inherited = inherit_on_placement(&mut a, &[], &[(marked - 0.004, None)]);
+        assert!(inherited.is_empty(), "the event stays: {inherited:?}");
+        assert_eq!(a.events.len(), 1);
+        assert_eq!(a.events[0].t, marked);
     }
 }
