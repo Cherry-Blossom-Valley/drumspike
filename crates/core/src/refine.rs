@@ -355,11 +355,30 @@ pub enum RefineRule {
     /// ([`edge_foot`]): a hit that the walk put on the bleed or the soft drift before its attack moves to the foot of
     /// the attack's first steep rise.
     Edge,
+    /// Version 7 (#321): [`RefineRule::Edge`] whose last walk-back to the line follows what the engineer sees: back over
+    /// the samples that stand visibly off the line ([`VIS_TAIL_PCT`] of the hit's peak) with the edge's sign, when that
+    /// walk reaches the line within [`VIS_TAIL_MAX_S`] ([`EdgeTail::Visible`]); else version 6's walk. Version 6 judged the tail against the line noise and took at most 4 samples:
+    /// on a nearly silent kick line it walked onto invisible steps (2 to 3 samples early), on a snare line with hi-hat
+    /// bleed it stopped inside the slow drift (2 to 7 samples late).
+    Visible,
+}
+
+/// How the steep edge's foot walks back to the line (#321): [`EdgeTail::Noise`] is version 6, [`EdgeTail::Visible`]
+/// version 7.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EdgeTail {
+    /// Up to [`EDGE_TAIL_SAMPLES`] samples while the level rises by more than [`EDGE_TAIL_NOISE`] times the line noise.
+    Noise,
+    /// Back while the sample stands more than [`VIS_TAIL_PCT`] of the hit's peak off the line, keeps the edge's sign
+    /// and does not grow towards the line by more than [`VIS_TAIL_TOL_PCT`] of the peak. It counts only when it reaches
+    /// the line within [`VIS_TAIL_MAX_S`]; otherwise [`EdgeTail::Noise`] decides (a slow wave or an offset on a tom's
+    /// line is the line itself).
+    Visible,
 }
 
 impl RefineRule {
     /// The rule a new analysis runs.
-    pub const CURRENT: RefineRule = RefineRule::Edge;
+    pub const CURRENT: RefineRule = RefineRule::Visible;
 
     /// The version number the document stores.
     #[must_use]
@@ -371,6 +390,7 @@ impl RefineRule {
             RefineRule::Foot => 4,
             RefineRule::FootCapped => 5,
             RefineRule::Edge => 6,
+            RefineRule::Visible => 7,
         }
     }
 
@@ -384,6 +404,7 @@ impl RefineRule {
             4 => Some(RefineRule::Foot),
             5 => Some(RefineRule::FootCapped),
             6 => Some(RefineRule::Edge),
+            7 => Some(RefineRule::Visible),
             _ => None,
         }
     }
@@ -767,7 +788,7 @@ pub fn first_motion_peak(
     next: Option<f64>,
     peak_db: f64,
 ) -> (i64, BackStep) {
-    back_track(x, s, sr, t0, (prev, next), peak_db, None, false)
+    back_track(x, s, sr, t0, (prev, next), peak_db, None, None)
 }
 
 /// The back-track of [`first_motion_peak`]; `tune` takes the foot one step stricter ([`foot_strict`], versions 4
@@ -781,7 +802,7 @@ fn back_track(
     neighbors: (Option<f64>, Option<f64>),
     peak_db: f64,
     tune: Option<FootTune>,
-    edge: bool,
+    edge: Option<EdgeTail>,
 ) -> (i64, BackStep) {
     let srf = f64::from(sr);
     let (prev, next) = neighbors;
@@ -920,6 +941,18 @@ pub const EDGE_TAIL_SAMPLES: i64 = 4;
 /// [`EDGE_NOISE_S`] before the walk's foot) still belongs to the hit. Fitted on the owner's hand-placed hits (#293):
 /// 2 took the slow drift of a kick's line for the hit (1 to 3 samples early); 8 does not.
 pub const EDGE_TAIL_NOISE: f64 = 8.0;
+/// Version 7 (#321): a sample stands visibly off the line when `|x|` exceeds this share of the hit's peak (percent).
+/// Fitted on the owner's hand-placed hits (kick 1..332, snare 1..168 of one session; even hits chose, odd hits
+/// checked): 2 and 3 give the same held-out result; 2 is the smaller.
+pub const VIS_TAIL_PCT: f64 = 2.0;
+/// Version 7: the walk-back to the line goes on while the sample before is no more than this share of the peak
+/// (percent) larger than the current one: the small wiggles of a snare's drift do not stop it.
+pub const VIS_TAIL_TOL_PCT: f64 = 0.5;
+/// Version 7: the longest walk-back to the line (seconds) from the edge's first rising sample. A drift the engineer
+/// counts as part of the stroke is short: on the owner's hand-placed hits every limit from 6 samples (0.125 ms at
+/// 48 kHz) up keeps the whole gain. A longer stretch off the line is the line itself (a slow wave or an offset of a tom
+/// line, Sessions A and B): with a 1 ms limit the walk followed it down to a zero crossing up to 1 ms before the stroke.
+pub const VIS_TAIL_MAX_S: f64 = 0.000_15;
 /// The stretch before the walk's foot that measures the line noise (seconds).
 pub const EDGE_NOISE_S: f64 = 0.002;
 /// How far after the walk's foot the edge is looked for (seconds).
@@ -938,7 +971,7 @@ pub const EDGE_SPAN_S: f64 = 0.005;
 /// ramp-up) lies [`EDGE_GUARD_DB`] under the peak of the [`EDGE_LOCAL_S`] after its foot; else the search goes on after
 /// the window. An edge raises `|x|` (a falling slope is none), and the search stops where the level itself reaches
 /// [`EDGE_TOP_DB`] under the peak of `[foot, end)`. The first edge that counts is the hit; none: `foot` stays.
-fn edge_foot(x: &[f32], foot: i64, end: i64, srf: f64) -> i64 {
+fn edge_foot(x: &[f32], foot: i64, end: i64, srf: f64, tail_rule: EdgeTail) -> i64 {
     let w = samples(EDGE_RISE_S, srf).max(1);
     let n = x.len() as i64;
     let end = end.min(n - w).min(foot + samples(EDGE_SPAN_S, srf));
@@ -983,22 +1016,51 @@ fn edge_foot(x: &[f32], foot: i64, end: i64, srf: f64) -> i64 {
         // rising level `|x|`: it stops at a zero crossing or a bump's top, never climbs a falling slope
         let rise = |m: i64| at(m + 1).abs() - at(m).abs();
         let mut k = (j..j + w).find(|&m| rise(m) >= step).unwrap_or(j);
+        let k0 = k;
         while k > lo && rise(k - 1) >= step {
             k -= 1;
         }
-        let mut tail = 0;
-        // the tail may pass the walk's foot (the walk stops at the first sample over its threshold, the foot of the
-        // rise lies up to a few samples before it); it takes only samples of the edge's sign (band-limited ringing
-        // before a hard start changes sign at every sample, #271) and the last sample on the line, so that the hit
-        // sits on the sample before the first rise, as version 5's strict foot did
-        while k > lo
-            && tail < EDGE_TAIL_SAMPLES
-            && rise(k - 1) > (EDGE_TAIL_NOISE * noise).max(step / 16.0)
-            && (at(k - 1) * at(k) > 0.0 || at(k - 1).abs() <= EDGE_TAIL_NOISE * noise)
-        {
-            k -= 1;
-            tail += 1;
-        }
+        // version 6's tail: up to EDGE_TAIL_SAMPLES more while the level rises by more than EDGE_TAIL_NOISE times the
+        // line noise. It may pass the walk's foot (the walk stops at the first sample over its threshold, the foot of
+        // the rise lies up to a few samples before it); it takes only samples of the edge's sign (band-limited ringing
+        // before a hard start changes sign at every sample, #271) and the last sample on the line, so that the hit sits
+        // on the sample before the first rise, as version 5's strict foot did
+        let noise_tail = |mut k: i64| {
+            let mut tail = 0;
+            while k > lo
+                && tail < EDGE_TAIL_SAMPLES
+                && rise(k - 1) > (EDGE_TAIL_NOISE * noise).max(step / 16.0)
+                && (at(k - 1) * at(k) > 0.0 || at(k - 1).abs() <= EDGE_TAIL_NOISE * noise)
+            {
+                k -= 1;
+                tail += 1;
+            }
+            k
+        };
+        k = match tail_rule {
+            EdgeTail::Noise => noise_tail(k),
+            // version 7 (#321): the engineer puts the hit on the last sample of the line, judged by eye against the
+            // hit's own size, not against the line noise: back over the samples that stand visibly off the line with
+            // the edge's sign while they do not grow towards the line (a slow drift before a snare stroke is taken
+            // whole, the invisible first steps of a kick on a silent line are not). The walk counts only when it
+            // reaches the line within VIS_TAIL_MAX_S: a tom whose line is a slow wave on the edge's side never reaches
+            // it, and there version 6's tail stays (the walk would stop at its bound, an arbitrary place)
+            EdgeTail::Visible => {
+                let vis = pk * VIS_TAIL_PCT / 100.0;
+                let tol = pk * VIS_TAIL_TOL_PCT / 100.0;
+                let sgn = at(k0 + 1).signum();
+                let lo_v = (k0 - samples(VIS_TAIL_MAX_S, srf)).max(1);
+                let mut kv = k;
+                while kv > lo_v
+                    && at(kv).abs() > vis
+                    && at(kv).signum() == sgn
+                    && at(kv - 1).abs() <= at(kv).abs() + tol
+                {
+                    kv -= 1;
+                }
+                if at(kv).abs() <= vis { kv } else { noise_tail(k) }
+            }
+        };
         let reached = f64::from(max_abs(x, k, (k + local).min(end + w)));
         let before = if k - w > foot {
             f64::from(max_abs(x, foot, k - w))
@@ -1024,7 +1086,7 @@ fn first_motion_mid_rule(
     peak_db: f64,
     tune: Option<FootTune>,
 ) -> (i64, BackStep) {
-    first_motion_traced(x, s, sr, prev_mid, next_mid, peak_db, tune, false).0
+    first_motion_traced(x, s, sr, prev_mid, next_mid, peak_db, tune, None).0
 }
 
 /// The walk of [`first_motion_mid`] with its decision (the floor, the threshold, the foot and the foot after the
@@ -1037,7 +1099,7 @@ pub fn first_motion_trace(
     prev_mid: Option<i64>,
     next_mid: Option<i64>,
 ) -> Option<LeadTrace> {
-    first_motion_traced(x, s, sr, prev_mid, next_mid, FM_PEAK_DB, None, false).1
+    first_motion_traced(x, s, sr, prev_mid, next_mid, FM_PEAK_DB, None, None).1
 }
 
 /// The foot of the walk back from `s` over the samples at or above `thr` (gaps under `gap` do not end the run), and
@@ -1065,7 +1127,7 @@ fn first_motion_traced(
     next_mid: Option<i64>,
     peak_db: f64,
     tune: Option<FootTune>,
-    edge: bool,
+    edge: Option<EdgeTail>,
 ) -> ((i64, BackStep), Option<LeadTrace>) {
     let srf = f64::from(sr);
     let n = x.len() as i64;
@@ -1140,8 +1202,11 @@ fn first_motion_traced(
         }
     };
     // version 6: the first steep edge after the foot; it may lie after `s` (the hit moves later)
-    let foot = if edge { edge_foot(x, foot, pe, srf) } else { foot };
-    let step = if foot < s || (edge && foot != s) {
+    let foot = match edge {
+        Some(tail) => edge_foot(x, foot, pe, srf, tail),
+        None => foot,
+    };
+    let step = if foot < s || (edge.is_some() && foot != s) {
         (foot, BackStep::Moved)
     } else {
         (s, BackStep::Kept)
@@ -1167,7 +1232,7 @@ pub fn refine_first_motion_peak(
     win: RefineWindow,
     peak_db: f64,
 ) -> Refined {
-    refine_back_peak(x, t0, sr, neighbors, win, peak_db, None, false)
+    refine_back_peak(x, t0, sr, neighbors, win, peak_db, None, None)
 }
 
 /// [`refine_rule_peak`] with the version 5 foot of another `tune` (the placement measurements of #127).
@@ -1181,7 +1246,7 @@ pub fn refine_foot_tuned(
     peak_db: f64,
     tune: FootTune,
 ) -> Refined {
-    refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(tune), false)
+    refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(tune), None)
 }
 
 /// [`refine_first_motion_peak`] with the strict foot of `tune` ([`RefineRule::Foot`], [`RefineRule::FootCapped`])
@@ -1195,7 +1260,7 @@ fn refine_back_peak(
     win: RefineWindow,
     peak_db: f64,
     tune: Option<FootTune>,
-    edge: bool,
+    edge: Option<EdgeTail>,
 ) -> Refined {
     let r = refine_reach(x, t0, sr, neighbors, win);
     let srf = f64::from(sr);
@@ -1249,9 +1314,10 @@ pub fn refine_rule_peak(
         }
         RefineRule::Reach => refine_reach(x, t0, sr, neighbors, win),
         RefineRule::FirstMotion => refine_first_motion_peak(x, t0, sr, neighbors, win, peak_db),
-        RefineRule::Foot => refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(FootTune::V4), false),
-        RefineRule::FootCapped => refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(FootTune::V5), false),
-        RefineRule::Edge => refine_back_peak(x, t0, sr, neighbors, win, peak_db, None, true),
+        RefineRule::Foot => refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(FootTune::V4), None),
+        RefineRule::FootCapped => refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(FootTune::V5), None),
+        RefineRule::Edge => refine_back_peak(x, t0, sr, neighbors, win, peak_db, None, Some(EdgeTail::Noise)),
+        RefineRule::Visible => refine_back_peak(x, t0, sr, neighbors, win, peak_db, None, Some(EdgeTail::Visible)),
     }
 }
 
