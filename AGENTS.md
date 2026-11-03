@@ -3,6 +3,8 @@
 Read this file first. Read other documents only for the item you work on. Humans start with
 `README.md` and `CONTRIBUTING.md`; the full developer guide is `docs/DEVELOPING.md`.
 
+The map of the code, its invariants and the glossary are in `ARCHITECTURE.md`.
+
 ## What it is
 
 Drum Spike: close-mic drum hit detection with a spectral onset detector (DSP), refined to the first
