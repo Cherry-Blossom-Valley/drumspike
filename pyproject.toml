@@ -24,7 +24,7 @@ dev = [
 # #458: the media checks. tools/media/check_paths.py OCRs PNGs and mp4 frames with
 # rapidocr-onnxruntime (a pip engine, no system tesseract needed); the planted-sample
 # tests render their PNGs with pillow. Run the OCR tests with:
-#   uv run --extra media pytest tests/test_media_record.py -q
+#   uv run --extra media pytest tests/test_check_paths.py -q
 # Without the extra the OCR tests skip with a reason; the check itself still FAILs
 # loudly when the engine is missing.
 media = [
