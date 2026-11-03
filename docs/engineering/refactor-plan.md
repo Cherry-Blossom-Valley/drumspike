@@ -46,7 +46,7 @@ Rule for this draft: only claims with verdict "confirmed" or "adjust" are in the
 | Martin: functions of 4 to 6 lines, tiny classes | A cohesive DSP pass of 60 to 100 lines is easier to judge in one piece (research.md, "Where authors conflict"). We split only by phase or mechanism. |
 | Martin: four-ring Clean Architecture, many interfaces, mocks | One team, one local app. Follow matklad and Fowler: sociable tests, no ports for `fs` (Authors/Martin "Do NOT follow"). |
 | Fowler: Replace Conditional with Polymorphism for rule versions | The refine versions are layered (v3 to v7 share the FM_* constants). The 7-arm `match` is the clearest dispatch (R5 verdict). |
-| Fowler PoEAA: rich domain model, repositories | No database. Plain structs and functions (Authors/Fowler "Do NOT follow"). |
+| Fowler PoEAA: rich domain objects, repositories | No database. Plain structs and functions (Authors/Fowler "Do NOT follow"). |
 | Evans/Vernon: aggregates, domain events, context maps | Overkill for a single-user app (4). We use the glossary and context names only. |
 | Zed, ripgrep: many small crates | "Fewest elements". A new crate would add build and visibility cost now. Contexts become modules first (research 1, 5). |
 | Beck: TDD for detector tuning | Detector outcomes are known only on real sessions. Use the golden and gate approach (Authors/Beck "Do NOT follow"). |
@@ -206,7 +206,7 @@ Each stage keeps its own tests. The identity snapshot checks the end of stages 8
 | T7 | Delete probes, examples, side tools. | Rust: `enst_contrast_probe`, `enst_scale_probe`, `quiet_gain_probe`, `level_probe`, `false_hit_probe`, `probe412_tempo`, `tempo_detect_bar1_probe`, `speed`; examples `nmfd_eval`, `placement_bias`, `lead_in_check`, `spike_len`, `clock_probe` (+ Cargo.toml `[[example]]`). Python: `eval/nmfd.py`, `eval/enst_soft_report.py` + test, `eval/spike_len.py`, `clock_residuals.py`. Merge `test_eval_enst.py` into `test_eval_enst_gate.py`. | about 10 Rust tests, 1,460 Rust lines; 2 Python tests, about 1,010 Python lines | Keep `dump_tom_map.py`, `role_enst.py`, `enst_tom_fp.py`, `level_calib.rs` + `level_calib_render.rs` (run with `--ignored`; un-ignore if it passes). |
 | T8 | One golden test. | Move check_refine (edges, windows, bench) and check_midi (11 synthetic + corpus) cases and the `test_rust_analyze` corpus-equality, branch-count and rule-option tests into `test_golden.py`. Then delete `test_rust_parity.py`, `test_rust_analyze.py`, the 11 `check_*.py`, `fit_resample_kernel.py`, `x86run.sh`, the justfile `parity` recipe. Inline 2 helpers into `exit_flow.py`. Delete frozen kinds with no reader incl. `analyze.json`. | about 8 Python tests merged, about 1,900 tools lines; golden 13 MB -> about 3.7 MB | Owner decision: `tests/golden/*` is on the "Do not touch" list. The identity snapshot replaces `check_analyze.py` as the "byte-identical" gate named in `detector-plan.md:213` before it goes. |
 | T9 | Media: split, keep the live guards. | Rename `test_media_guide.py` -> `test_guide.py`. Keep `test_media_demo_session.py`. Move 8 `check_paths` tests to `test_check_paths.py`. Delete `test_media_tts`, `test_media_compose`, `test_media_explainers`, `test_media_scripts` and the record scenario tests. Delete `tools/media/compose.py`. | about 146 tests, about 2,120 lines (36 of them run by default) | Keep `record.py`, `audio_spike.py`, `physics.py`, explainer renderers and `tts.py` until the owner accepts frozen landing-page videos. Original claim refuted. |
-| T10 | Docs/site guards merged. | `test_docs_wording` 13 -> about 5 tests (keep planted-fault and #402 tests); fold `test_ui_spike_texts` into it. `test_site`: drop em-dash and model-wording tests (covered by `check_wording.py`), merge link checks, keep hosts, licence, render, build_site; fold `test_help_build` (both tests). Keep `test_r17_interfaces`. | about 13 tests, 250-300 lines | After T9. |
+| T10 | Docs/site guards merged. | `test_docs_wording` 13 -> about 5 tests (keep planted-fault and #402 tests); fold `test_ui_spike_texts` into it. `test_site`: drop the em-dash and banned-wording tests (covered by `check_wording.py`), merge link checks, keep hosts, licence, render, build_site; fold `test_help_build` (both tests). Keep `test_r17_interfaces`. | about 13 tests, 250-300 lines | After T9. |
 
 Totals (Python): about 450 of 1,451 tests and about 9,000 test lines go. e2e: about 117 of 733 tests (16 %). tools/: about 13,000 of 31,004 lines. Rust: about 10 tests go, about 30 characterization tests are added.
 
@@ -396,7 +396,7 @@ Decided:
 - R6 step 3 is a behaviour change and stays out of this release.
 - No detection ticket is open, so the freeze of phases 2-3 costs nothing now.
 
-The original questions, for the record:
+The original open points, for the record:
 
 1. T11 rule text (section 4.3) and the per-file JS floor value.
 2. T8: permission to edit `tests/golden/*` (on the "Do not touch" list).
