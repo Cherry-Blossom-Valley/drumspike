@@ -133,7 +133,7 @@ def test_the_refinement_rule_is_a_job_option(kick_wav):
     src, idx = kick_wav
     det = [[t - 0.017, 35] for t in ONSETS]
     old, one, new, three, bad = core_analyze([{"wav": str(src), "role": "kick", "model": None, "detected": det, "rule": r}
-                                              for r in (None, 1, 2, 3, 7)])
+                                              for r in (None, 1, 2, 3, 99)])   # 99: no such rule (#321 made 7 real)
     assert same(old["events"], one["events"]) and old["branches"]["reach_moved"] == 0
     assert [round(e["t"] * SR) for e in old["events"]] == [round((t - 0.017) * SR) for t in ONSETS]
     assert new["branches"]["reach_moved"] == len(ONSETS), new["branches"]

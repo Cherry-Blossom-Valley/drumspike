@@ -263,3 +263,37 @@ foot that version 5 took before the first sample over the threshold. The report'
 4 and 11 samples onto the visible departure; its three snare hits 8, 16 and 27 samples onto the start of
 the drift. The synthetic hard attack keeps its first sample; a 0.5 ms raised-cosine rise is placed 1 to 4
 samples after its first sample over the floor (`placement_bias`, `test_calib_kit` within its 5-sample limit).
+
+## Version 7 (#321): the walk-back to the line, judged by eye
+
+The owner's report on 0.9.17 (the same session as version 6): kick hits still 2 to 3 samples before the first sample
+that visibly leaves the line, some snare hits 2 to 7 samples after the start of the slow drift before the stroke.
+Against the owner's hand-placed hits (kick 1..332, snare 1..168): kick 24 hits 2 or more samples early, snare 31 hits
+2 or more samples late. Cause: version 6's last step, the walk from the steep edge back to the line, judged each step
+against the line noise (at least 8 times the noise, or a sixteenth of the edge's rise) and took at most 4 samples. On a
+kick line that is almost digital silence the threshold is tiny and the walk took the invisible first steps; on a
+snare line with hi-hat bleed it stopped inside the drift.
+
+Version 7 (`RefineRule::Visible`, `EdgeTail::Visible`, the analysis default since 0.9.18) keeps the edge search and
+replaces that walk: back over the samples that stand more than `VIS_TAIL_PCT` (2 %) of the hit's peak off the line,
+with the edge's sign, while the sample before is no more than `VIS_TAIL_TOL_PCT` (0.5 %) of the peak larger. The walk
+counts only when it reaches the line within `VIS_TAIL_MAX_S` (0.15 ms); otherwise version 6's walk stays. Both bounds
+come from the measurement:
+
+- with a 1 ms limit and no reach condition, tom hits on Sessions A and B whose line is a slow wave or an offset on the
+  stroke's side moved up to 1 ms early (the walk followed the wave to its zero crossing);
+- with the reach condition but a 1 ms limit, the walk still followed such a wave down to a zero crossing;
+- on the owner's hits every limit from 6 samples up keeps the whole gain (a drift the engineer counts is short), so
+  0.15 ms keeps it and leaves the long stretches to version 6.
+
+Even hits chose the share (2 and 3 % give the same held-out result), odd hits checked it. The app's own analysis
+against the owner's hits (mean of |placed - owner| in samples at 48 kHz):
+
+| drum | hits | 0.9.17 (version 6) | version 7 | odd hits, version 6 -> 7 | 2+ samples off, version 6 -> 7 |
+|---|---|---|---|---|---|
+| kick | 332 | 0.57 | 0.26 | 0.53 -> 0.19 | 24 early -> 2 early |
+| snare | 168 | 1.14 | 1.03 | 1.23 -> 1.27 | 31 late -> 25 late |
+
+Other sessions against 0.9.17 (hits matched within 5 ms): hit counts unchanged on every track; no hit moves by
+0.25 ms or more on Sessions A, B, C and the two time-aligned sessions; the moved tom hits (all under 0.15 ms) were
+checked in panels. ENST-Drums part B: the +-10 ms table is identical to 0.9.17 and the standing gate passes.
