@@ -19,6 +19,9 @@ pub const THIRD_PARTY_FILE: &str = "THIRD_PARTY.md";
 pub const LINK_WEBSITE: &str = "https://drumspike.cherry-blossom-valley.com/";
 pub const LINK_SOURCE: &str = "https://github.com/Cherry-Blossom-Valley/drumspike";
 pub const LINK_CBV: &str = "https://cherry-blossom-valley.com/";
+/// #326: the support links, as the repo page and the landing page show them.
+pub const LINK_SPONSORS: &str = "https://github.com/sponsors/wfrank2509";
+pub const LINK_COFFEE: &str = "https://buymeacoffee.com/cherryblossomvalley";
 
 /// The one address of a fixed id; anything else is refused.
 #[must_use]
@@ -27,6 +30,8 @@ pub fn link_address(id: &str) -> Option<&'static str> {
         "website" => Some(LINK_WEBSITE),
         "source" => Some(LINK_SOURCE),
         "cbv" => Some(LINK_CBV),
+        "sponsors" => Some(LINK_SPONSORS),
+        "coffee" => Some(LINK_COFFEE),
         _ => None,
     }
 }
@@ -35,8 +40,8 @@ pub fn link_address(id: &str) -> Option<&'static str> {
 ///
 /// # Errors
 ///
-/// 404 when `id` is none of `website`, `source` and `cbv`. 500 on a platform other than macOS, and
-/// on macOS when the `open` command cannot be started.
+/// 404 when `id` is none of `website`, `source`, `cbv`, `sponsors` and `coffee`. 500 on a platform
+/// other than macOS, and on macOS when the `open` command cannot be started.
 #[tauri::command]
 pub fn open_link(id: String) -> Result<Value, AppError> {
     let addr = link_address(&id).ok_or_else(|| AppError::not_found(format!("unknown link id: {id}")))?;
@@ -183,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn the_three_link_ids_map_to_exactly_the_three_addresses() {
+    fn the_about_link_ids_map_to_exactly_the_five_addresses() {
         assert_eq!(
             link_address("website"),
             Some("https://drumspike.cherry-blossom-valley.com/")
@@ -193,6 +198,11 @@ mod tests {
             Some("https://github.com/Cherry-Blossom-Valley/drumspike")
         );
         assert_eq!(link_address("cbv"), Some("https://cherry-blossom-valley.com/"));
+        assert_eq!(link_address("sponsors"), Some("https://github.com/sponsors/wfrank2509"));
+        assert_eq!(
+            link_address("coffee"),
+            Some("https://buymeacoffee.com/cherryblossomvalley")
+        );
     }
 
     #[test]
