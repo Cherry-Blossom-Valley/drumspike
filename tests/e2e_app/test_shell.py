@@ -252,7 +252,8 @@ def test_about_window_shows_the_summary_and_third_party(app):
 def test_about_shows_the_cbv_logo_licence_and_links_and_opens_them_by_id(app):
     # #18: the logo, the licence line, the two links as short addresses, and every click asks
     # open_link with one fixed id (the page never passes an address). #326: the support line
-    # with the two support links, like the repo page and the landing page.
+    # with the two support links, like the repo page and the landing page. #328: the short
+    # no-warranty line with its Details link.
     menu(app, "about", wait=False)
     expect(app.locator("#aboutModal")).to_be_visible()
     logo = app.locator("#aboutLogo")
@@ -262,6 +263,11 @@ def test_about_shows_the_cbv_logo_licence_and_links_and_opens_them_by_id(app):
     assert "/brand/cbv-logo-white.png" in logo.get_attribute("src")
     expect(app.locator("#aboutLicence")).to_have_text("Drum Spike is free and open source (Apache-2.0).")
     expect(app.locator("#aboutSupport")).to_have_text("Support it: GitHub Sponsors · Buy Me a Coffee")
+    expect(app.locator("#aboutWarranty")).to_contain_text(
+        'Provided "as is", without warranty. Drum Spike never changes your audio files, '
+        "but keep backups: Cherry Blossom Valley is not liable for lost files or work."
+    )
+    expect(app.locator("#aboutLinkWarranty")).to_have_text("Details")
     expect(app.locator("#aboutLinkSponsors")).to_have_text("GitHub Sponsors")
     expect(app.locator("#aboutLinkCoffee")).to_have_text("Buy Me a Coffee")
     expect(app.locator("#aboutLinkWebsite")).to_have_text("drumspike.cherry-blossom-valley.com")
@@ -270,6 +276,7 @@ def test_about_shows_the_cbv_logo_licence_and_links_and_opens_them_by_id(app):
     for el_id, id in [
         ("aboutLinkWebsite", "website"), ("aboutLinkSource", "source"), ("aboutLogo", "cbv"),
         ("aboutLinkSponsors", "sponsors"), ("aboutLinkCoffee", "coffee"),
+        ("aboutLinkWarranty", "warranty"),
     ]:
         app.click(f"#{el_id}")
         wait_until(lambda id=id: id in app.evaluate("() => window.__DS_OPEN_LINK__ || []"), msg=f"open_link {id}")

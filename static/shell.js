@@ -127,11 +127,13 @@
   /* Help > About: the version, what the app does and a button for the third-party list. The version and the
      list come from the shell (B.aboutInfo, B.aboutThirdParty); the plain line is here. Page text goes in with textContent. */
   const ABOUT_SUMMARY = "Drum Spike finds the hits in your close-mic drum tracks and writes MIDI and spike files for them.";
-  /* #18: under the summary line: the CBV logo, the licence line, the support line (#326) and the two
-     links (their short addresses). A click on a link or on the logo asks the shell to open one fixed
-     address by id (open_link); the page never passes an address. The test bridge records the id in
-     window.__DS_OPEN_LINK__. */
+  /* #18: under the summary line: the CBV logo, the licence line, the warranty line (#328), the
+     support line (#326) and the two links (their short addresses). A click on a link or on the
+     logo asks the shell to open one fixed address by id (open_link); the page never passes an
+     address. The test bridge records the id in window.__DS_OPEN_LINK__. */
   const ABOUT_LICENCE = "Drum Spike is free and open source (Apache-2.0).";
+  /* #328: the short no-warranty line; `Details` opens the README section by fixed id. */
+  const ABOUT_WARRANTY = 'Provided "as is", without warranty. Drum Spike never changes your audio files, but keep backups: Cherry Blossom Valley is not liable for lost files or work.';
   const ABOUT_SUPPORT = "Support it:";
   /* #326: the support links, as the repo page and the landing page show them (#324). */
   const SUPPORT_LINKS = [
@@ -166,6 +168,9 @@
       a.onclick = () => { B.openLink(id); };
       return a;
     };
+    const warranty = el("p", "aboutWarranty", "hint");
+    warranty.appendChild(document.createTextNode(`${ABOUT_WARRANTY} `));
+    warranty.appendChild(link("warranty", "aboutLinkWarranty", "Details"));
     const support = el("p", "aboutSupport");
     support.appendChild(document.createTextNode(`${ABOUT_SUPPORT} `));
     SUPPORT_LINKS.forEach(([id, elId, label], i) => {
