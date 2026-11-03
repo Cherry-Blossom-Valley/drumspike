@@ -61,6 +61,22 @@
 //! re-detection pass hands the pass-1 pairs to [`cross_bleed_prior`], so the verdict does not
 //! re-measure the alignment on the re-detected candidate times (whose |lead| medians move).
 //!
+//! # The aligned session, sparse pairs (#309)
+//!
+//! A source that rarely coincides with X — the kick on a tom that plays little over the kick, the
+//! other tom mics — gives a pair too few coincidences to measure its own alignment
+//! (`align_min_coins` not reached), and the few coins it has are the bleed events themselves,
+//! whose residual lead (2 to 5 ms on the measured session) looks like a real lead. Such a pair
+//! keeps the two-part verdict on an aligned session and the lead test lets the kick and other-tom
+//! bleed through. When ANY pair of the same tom target is measured aligned, the SESSION is
+//! aligned (the tool is applied to every track of the session), so a pair with fewer than
+//! `align_min_coins` coincidences inherits the alignment: the verdict for the pair is the level
+//! test alone as well, and [`PairLearned::align_inherited`] records the inheritance (the measured
+//! `align_coins` and `align_med_abs_lead_ms` stay as measured). A pair with enough coincidences
+//! and a median |lead| over the bound keeps the two-part verdict even on an aligned session — its
+//! own measurement found a real lead. An unaligned session has no aligned pair at all, so
+//! nothing changes there.
+//!
 //! # Template validity
 //!
 //! The rule does not fix the detector's template on its own: a tom track whose loudest candidates are
@@ -240,6 +256,11 @@ pub struct PairLearned {
     /// falls under each of [`ALIGN_COUNT_MARGINS_DB`] (the ticket's margin sweep). All zero when
     /// the pair is not aligned.
     pub aligned_counts: [usize; 4],
+    /// #309: the alignment was inherited from the session (any other pair of the target is
+    /// measured aligned) because this pair had fewer than `align_min_coins` coincidences of its
+    /// own — a source that rarely coincides with X. `false` when the alignment is the pair's own
+    /// measurement or the pair is not aligned.
+    pub align_inherited: bool,
 }
 
 /// The band level (dBFS) of `x` in `[c + w.0, c + w.1)` with the filter run in over `pre` samples
@@ -402,14 +423,15 @@ pub fn cross_bleed_prior(
         .collect();
     for &a in &toms {
         let x = &mics[a];
-        let mut pair: Vec<(usize, PairLearned)> = Vec::new();
+        // #309: the alignment of every pair of this target, measured BEFORE the verdict pass —
+        // the session-level alignment needs all pairs of the target (see below). The pass-1
+        // decision replaces the measurement (#296).
+        let mut align_of: Vec<(usize, bool, usize, Option<f64>)> = Vec::new();
         for &b in &srcs {
             if b == a {
                 continue;
             }
             let s = &mics[b];
-            let src_t = oh_lv[b].as_ref(); // the oh's levels in the target's band
-            let lv_s = |k: usize| src_t.map_or(lv[b][k], |v| v[k]);
             // the pair's alignment (#296): the |lead| of X's hits that coincide with a hit of S,
             // nearest hit first. An aligned session's leads sit at 0 (the tool removed the
             // bleed's arrival delay); a bleed lead of 0.5 to 3 ms cannot.
@@ -437,6 +459,30 @@ pub fn cross_bleed_prior(
                 .map_or((aligned, coins.len(), med_abs_lead), |prev| {
                     (prev.aligned, prev.align_coins, prev.align_med_abs_lead_ms)
                 });
+            align_of.push((b, aligned, coins_n, med_abs_lead));
+        }
+        // #309: the SESSION's alignment, judged on the target's own pairs: when any pair is
+        // measured aligned, the tool was applied to the whole session, so a SPARSE pair — fewer
+        // than `align_min_coins` coincidences of its own (the kick, the other tom mics; the few
+        // coins are the bleed events, whose residual lead looks real) — cannot measure its own
+        // alignment and inherits it: the verdict for the pair is the level test alone. A pair
+        // with enough coincidences and a median |lead| over the bound keeps the two-part verdict.
+        let session_aligned = align_of.iter().any(|&(_, al, _, _)| al);
+        let mut pair: Vec<(usize, PairLearned)> = Vec::new();
+        for (&b, &(_, mut aligned, coins_n, med_abs_lead)) in
+            srcs.iter().filter(|&&b| b != a).zip(align_of.iter())
+        {
+            if b == a {
+                continue;
+            }
+            let s = &mics[b];
+            let src_t = oh_lv[b].as_ref(); // the oh's levels in the target's band
+            let lv_s = |k: usize| src_t.map_or(lv[b][k], |v| v[k]);
+            let mut align_inherited = false;
+            if !aligned && coins_n < p.align_min_coins && session_aligned {
+                aligned = true;
+                align_inherited = true;
+            }
             let mut ratios: Vec<f64> = Vec::new();
             let mut leads: Vec<f64> = Vec::new();
             for (k, &ts) in s.motion.iter().enumerate() {
@@ -492,6 +538,7 @@ pub fn cross_bleed_prior(
                     align_coins: coins_n,
                     align_med_abs_lead_ms: med_abs_lead,
                     aligned_counts: [0; 4],
+                    align_inherited,
                 },
             ));
         }
