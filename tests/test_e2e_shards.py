@@ -35,5 +35,6 @@ def test_the_parts_of_rest_split_it_exactly(shard_selects, n):
 
 def test_a_bad_part_is_refused(shard_selects):
     files = sorted(p.name for p in E2E.glob("test_*.py"))
+    first = next(f for f in files if shard_selects(f, "rest", files))   # a file of "rest": the part is checked
     with pytest.raises(ValueError):
-        shard_selects(files[0], "rest@4/3", files)
+        shard_selects(first, "rest@4/3", files)
