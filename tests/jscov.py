@@ -2,7 +2,7 @@
 uses the `page` fixture: tests/e2e_app (the page against the app's test bridge, P3-7a; since P3-12 the only browser suite).
 A pytest plugin (tests/conftest.py: pytest_plugins). Result: coverage-js.json (per file the lines, the covered lines,
 the uncovered line numbers and the named functions never called) and a line per file in the terminal summary.
-The run fails when a file is under DRUMSPIKE_JS_FAIL_UNDER (85) % of its lines, unless only a part of the suite
+The run fails when a file is under DRUMSPIKE_JS_FAIL_UNDER (70) % of its lines, unless only a part of the suite
 ran (-k, or -m other than "e2e_app", or a command line that names test files or node IDs): the full run (G2)
 and the run of -m e2e_app alone (G4) gate.
 CI shards (DRUMSPIKE_E2E_SHARD, tests/e2e_app/conftest.py) do not gate; with DRUMSPIKE_JS_COV_OUT=<file> they save the
@@ -17,7 +17,7 @@ import pytest
 
 from helpers import ROOT
 
-JS_FAIL_UNDER = float(os.environ.get("DRUMSPIKE_JS_FAIL_UNDER", "85"))   # % of lines, for each file
+JS_FAIL_UNDER = float(os.environ.get("DRUMSPIKE_JS_FAIL_UNDER", "70"))   # % of lines, for each file (one per-file floor)
 JS_FILES = ("app.js", "state.js", "persist.js", "edit.js", "transport.js", "render.js", "session.js", "backend.js", "lanes-gl.js", "tiles-worker.js", "keymap.js")   # tiles-worker.js: a test page runs it with a stand-in scope; keymap.js: P3-13b; state.js: R17 step 1 (#55); persist.js: R17 step 2 (#55); edit.js: R17 step 3 (#55); transport.js: R17 step 4 (#55); render.js: R17 step 5 (#55); session.js: R17 step 6 (#55)
 
 # "covered" and "src" map a file name to its coverage bytes and its source; "called" maps

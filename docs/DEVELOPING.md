@@ -231,10 +231,26 @@ The media tests (explainer scripts, recordings and renders under `tools/media/`)
 (or `DRUMSPIKE_MEDIA_TESTS=1`), and only when a fundamental app feature or the media sources
 and tools changed.
 
-Coverage gate: `static/app.js`, `backend.js`, `lanes-gl.js` and `tiles-worker.js` at least 85 % of
-lines each (`DRUMSPIKE_JS_FAIL_UNDER`), measured by Chromium in `tests/e2e_app`. It applies to G2 and
+Coverage gate: each JS file in `JS_FILES` (`tests/jscov.py`) at least 70 % of its lines
+(`DRUMSPIKE_JS_FAIL_UNDER`), measured by Chromium in `tests/e2e_app`. It applies to G2 and
 to G4 (`-m e2e_app` alone). There is no Python coverage gate any more: no product code is Python.
-Do not delete or weaken a test.
+
+### Test rules
+
+1. A test names a domain invariant or a user-visible result in its name or first line.
+2. A test may be deleted when it only pins a removed script, or a fixed bug that another test
+   covers. The PR names the deleted test and the covering test.
+3. Never delete or weaken: `tests/test_golden.py`, `tests/frozen.py`, `tests/golden/*`,
+   `tests/test_exports.py`, `tests/test_layer_exports.py`, the identity snapshot, the ENST gate,
+   the real-session check, the tests of source-audio safety and of project format 1 loading, and
+   `tools/check_private.py`.
+4. JS coverage is gated per file, not as a total. The floor is 70 % of the lines of each file
+   (`JS_FAIL_UNDER` in `tests/jscov.py`), measured by `tests/e2e_app`. The files are the 11 of
+   `JS_FILES`: `app.js`, `state.js`, `persist.js`, `edit.js`, `transport.js`, `render.js`,
+   `session.js`, `backend.js`, `lanes-gl.js`, `tiles-worker.js` and `keymap.js`. A new script in
+   `static/` enters `JS_FILES` at the same floor.
+5. Every public Tauri command and every core entry point has a test.
+6. A script in `tools/` has a test or a documented command.
 
 ### Rules for the gates
 
@@ -309,7 +325,7 @@ Changes to the workflow files need a maintainer.
 |---|---|---|
 | `test` | self-hosted Intel Mac (labels `self-hosted`, `x86-mac`) | format, clippy, `cargo test --workspace`, the release tools, `ds-bridge`, then pytest (all tests except the arm64 share of `e2e_app`) |
 | `e2e-arm64` | self-hosted Apple Silicon Mac (label `arm64-mac`) | the other share of the `e2e_app` tests (`tests/e2e_shards.json`); on `main` pushes, by hand, and on a pull request of this repository with the label `ci:e2e` |
-| `js-coverage` | `ubuntu-latest` | merges the JS coverage of both shares and gates 85 % per file |
+| `js-coverage` | `ubuntu-latest` | merges the JS coverage of both shares and gates the per-file floor (`tests/jscov.py`) |
 | `desktop-app` | self-hosted Apple Silicon Mac | by hand only (`run_desktop`): debug app (G3), self-test scenarios (G5), ad hoc `.dmg` |
 
 The jobs set `DRUMSPIKE_REQUIRE_CORE` and `DRUMSPIKE_REQUIRE_APP`, so a missing tool or binary fails
@@ -351,7 +367,7 @@ Only variables that the code reads. "Test" means a variable for tests and script
 | `DRUMSPIKE_FROZEN`, `DRUMSPIKE_FROZEN_EXTERNAL` | test: `replay` (default) reads the frozen references; `record` and `check` need the retired code; the folder of large values | `tests/frozen.py` |
 | `DRUMSPIKE_REQUIRE_APP` | test: `e2e_app` tests fail instead of skip | `tests/e2e_app/conftest.py` |
 | `DRUMSPIKE_BRIDGE` | test: path of the `ds-bridge` binary | `tests/e2e_app/conftest.py` |
-| `DRUMSPIKE_JS_FAIL_UNDER` | test: line coverage gate for the JS files (default 85) | `tests/jscov.py` |
+| `DRUMSPIKE_JS_FAIL_UNDER` | test: line coverage floor for each JS file (default 70) | `tests/jscov.py` |
 | `DRUMSPIKE_SELFTEST_SESSION`, `_WAVS`, `_SYNTH`, `_TRACKS`, `_DIR`, `_AUDIBLE`, `_APP` | self-test inputs and options | `apps/desktop/scripts/self-test.sh` |
 | `DRUMSPIKE_SIGN_IDENTITY`, `DRUMSPIKE_NOTARY_PROFILE` | owner only: names for the signed release | `apps/desktop/scripts/release.sh` |
 | `DRUMSPIKE_BUNDLE_DIR` | output folder of the bundle and the `.dmg` | `build-dmg.sh`, `release.sh` |

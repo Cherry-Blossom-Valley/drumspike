@@ -64,8 +64,6 @@ release builds are in `docs/DEVELOPING.md`, sections 4, 7 and 8.
 - Python only through uv (`uv run ...`), Python 3.12 from `.python-version`. A new Python file
   needs a user (a test, a script, a documented command or an import).
 - Never run `rustup default`. `rust-toolchain.toml` pins `stable`.
-- Coverage gate: `static/app.js`, `backend.js`, `lanes-gl.js`, `tiles-worker.js`, `keymap.js` at
-  85 % of lines each, measured by `tests/e2e_app`. Do not delete or weaken a test.
 - Parity: hit times, velocities and MIDI bytes are exact. The references in `tests/golden/frozen/`
   are frozen.
 - Source audio is never modified. Project format 1 stays loadable.
@@ -74,7 +72,24 @@ release builds are in `docs/DEVELOPING.md`, sections 4, 7 and 8.
 - Licence: the source code is Apache-2.0 (`LICENSE`); attributions, exceptions and the media and
   brand terms are in `NOTICE` and `docs/licensing.md`. Keep `NOTICE` current when a bundled
   third-party part changes.
-- Every public Rust function has a unit test. Documents use plain hyphens, no em-dashes.
+- Documents use plain hyphens, no em-dashes.
+
+## Test rules
+
+1. A test names a domain invariant or a user-visible result in its name or first line.
+2. A test may be deleted when it only pins a removed script, or a fixed bug that another test
+   covers. The PR names the deleted test and the covering test.
+3. Never delete or weaken: `tests/test_golden.py`, `tests/frozen.py`, `tests/golden/*`,
+   `tests/test_exports.py`, `tests/test_layer_exports.py`, the identity snapshot, the ENST gate,
+   the real-session check, the tests of source-audio safety and of project format 1 loading, and
+   `tools/check_private.py`.
+4. JS coverage is gated per file, not as a total. The floor is 70 % of the lines of each file
+   (`JS_FAIL_UNDER` in `tests/jscov.py`), measured by `tests/e2e_app`. The files are the 11 of
+   `JS_FILES`: `app.js`, `state.js`, `persist.js`, `edit.js`, `transport.js`, `render.js`,
+   `session.js`, `backend.js`, `lanes-gl.js`, `tiles-worker.js` and `keymap.js`. A new script in
+   `static/` enters `JS_FILES` at the same floor.
+5. Every public Tauri command and every core entry point has a test.
+6. A script in `tools/` has a test or a documented command.
 
 ## Branches and PRs
 

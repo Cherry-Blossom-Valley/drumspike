@@ -22,4 +22,4 @@ The other scripts in this folder (`calib_*`, `onset_*`, `kick_onset`, `snare_ons
 behind the detection rules of the Rust core. Each rule (tom bleed, tom pairs, flams, rolls, kick
 walk, kick rescue) was designed and measured here first; the Rust parity tests compare the core
 with these references. `fix_metric.py` is the yardstick: it scores a detection against the hits a
-mixing engineer fixed by hand. Each script has a test in `tests/test_<name>.py`.
+mixing engineer fixed by hand. Each script has a test or a documented command (test rules: `AGENTS.md`).

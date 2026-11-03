@@ -44,7 +44,7 @@ def _no_shard(monkeypatch):
 
 
 def test_a_full_run_still_fails_when_a_file_is_under_the_floor(monkeypatch):
-    monkeypatch.setitem(jscov.JS_COV, "report", {"files": {"app.js": {"percent": 84.0}}})
+    monkeypatch.setitem(jscov.JS_COV, "report", {"files": {"app.js": {"percent": jscov.JS_FAIL_UNDER - 1}}})
     session, lines = _session()
     jscov.pytest_sessionfinish(session, 0)
     assert session.exitstatus == pytest.ExitCode.TESTS_FAILED
