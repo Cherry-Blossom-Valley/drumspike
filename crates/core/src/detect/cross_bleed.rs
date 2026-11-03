@@ -517,16 +517,25 @@ pub fn cross_bleed_prior(
             let s = &mics[b];
             let src_t = oh_lv[b].as_ref(); // the oh's levels in the target's band
             let lv_s = |k: usize| src_t.map_or(lv[b][k], |v| v[k]);
+            // the pass-1 ratio fields, when the caller handed pairs in (see above)
+            let prior_ratios = prior
+                .and_then(|ps| ps.iter().find(|l| l.tom == a && l.source == b))
+                .map(|prev| (prev.ratio_db, prev.ratio_p95_db, prev.ratio_max_db));
             if !aligned && session_aligned {
                 aligned = true;
                 align_inherited = true;
             }
             let mut ratios: Vec<f64> = Vec::new();
+            let mut ratios_clear: Vec<f64> = Vec::new();
             let mut leads: Vec<f64> = Vec::new();
             for (k, &ts) in s.motion.iter().enumerate() {
-                if x_hit_near(ts) {
-                    continue;
-                }
+                // #309 defect 1 (coordinator gate 2026-11-03): `lead_ms` and `ratio_db` are the
+                // OLD set — every source hit, as main — because the unaligned two-part verdict's
+                // `lead_min` moves with the lead median otherwise (Session B changed). The
+                // clear-case exclusion feeds the CEILING only (`ratio_p95_db`, `ratio_max_db`):
+                // a coinciding hit of X is the tom's own motion, and its ratio must not raise
+                // the pair's bleed ceiling and hide the bleed behind it.
+                let clear = !x_hit_near(ts);
                 let lx = level_at(
                     x.signal,
                     &band_sections(XKind::Tom.role().band(), sr),
@@ -539,6 +548,9 @@ pub fn cross_bleed_prior(
                 }
                 let r = lx - lv_s(k);
                 ratios.push(r);
+                if clear {
+                    ratios_clear.push(r);
+                }
                 // the bleed arrival on X: the peak of X's response in [ts, ts + clear_lead_cap_ms],
                 // then the first motion of it (the walk-back); a bleed arrives later, so the search
                 // goes forward from the source hit
@@ -563,7 +575,7 @@ pub fn cross_bleed_prior(
             } else {
                 None
             };
-            let ratio_learned = if ratios.len() >= p.min_clear {
+            let mut ratio_learned = if ratios.len() >= p.min_clear {
                 median(&mut ratios)
             } else {
                 None
@@ -571,20 +583,28 @@ pub fn cross_bleed_prior(
             // #309: the pair's clear-case ratio distribution — median, p95 and max. The max is
             // the loudest bleed the pair itself produces; on an aligned pair a coinciding hit
             // louder than it is the tom's own motion, never bleed (bleed of S on X is never
-            // louder than the bleed this pair produces).
-            let mut sorted = ratios.clone();
+            // louder than the bleed this pair produces). A ceiling needs at least
+            // `align_min_coins` clear cases (the alignment's own bar, no new number): on a pair
+            // where the detector fires on nearly every source hit the clear cases are a handful
+            // and the max is one stray value — the level test alone then.
+            let mut sorted = ratios_clear.clone();
             sorted.sort_by(f64::total_cmp);
-            let p95 = if sorted.len() >= p.min_clear {
+            let mut p95 = if sorted.len() >= p.align_min_coins {
                 let idx = ((sorted.len() - 1) as f64 * 0.95).ceil() as usize;
                 Some(sorted[idx])
             } else {
                 None
             };
-            let max = if sorted.len() >= p.min_clear {
+            let mut max = if sorted.len() >= p.align_min_coins {
                 sorted.last().copied()
             } else {
                 None
             };
+            if let Some((m, p95_p, max_p)) = prior_ratios {
+                ratio_learned = m;
+                p95 = p95_p;
+                max = max_p;
+            }
             pair.push((
                 b,
                 PairLearned {
@@ -673,7 +693,7 @@ pub fn cross_bleed_prior(
                     // (S hits without an X hit) give the pair's bleed ratio distribution, and a
                     // coinciding hit whose ratio is ABOVE the pair's clear-case maximum
                     // (`ratio_max_db`) is the tom's own motion, never bleed. A pair with fewer
-                    // than `min_clear` clear cases keeps the level test alone. Unaligned pairs
+                    // than `align_min_coins` clear cases keeps the level test alone. Unaligned pairs
                     // keep the two-part verdict unchanged.
                     if pl.aligned {
                         if r < p.margin_db && pl.ratio_max_db.is_none_or(|mx| r <= mx) {

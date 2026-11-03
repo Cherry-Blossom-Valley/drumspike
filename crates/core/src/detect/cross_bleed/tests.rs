@@ -833,12 +833,16 @@ fn an_aligned_pair_never_calls_a_hit_louder_than_the_pairs_own_bleed() {
     let mut kick_motion = Vec::new();
     let mut tom_motion = Vec::new();
     // the clear cases: kicks alone; the tom mic hears them 1 ms later at -15 to -40 dB. The
-    // bleed copies are NOT in the tom's hit list (no detector firing on them).
-    for (i, level) in [-19.0, -24.0, -26.0, -27.0, -29.0, -32.0, -37.0, -42.0]
-        .into_iter()
-        .enumerate()
+    // bleed copies are NOT in the tom's hit list (no detector firing on them). 20 of them: a
+    // ceiling needs at least `align_min_coins` clear cases (#309 gate).
+    for (i, level) in [
+        -19.0, -24.0, -26.0, -27.0, -29.0, -32.0, -37.0, -42.0, -45.0, -47.0, -49.0, -51.0, -53.0, -55.0, -57.0, -59.0,
+        -61.0, -63.0, -65.0, -67.0,
+    ]
+    .into_iter()
+    .enumerate()
     {
-        let t = 0.1 + (i as f64) * 0.1;
+        let t = 0.1 + (i as f64) * 0.04;
         kick_hit(&mut kick, t, -3.0);
         kick_hit(&mut tom, t + 0.001, level);
         kick_motion.push(t);
@@ -898,11 +902,14 @@ fn an_unaligned_pair_keeps_the_two_part_verdict_regardless_of_the_ceiling() {
     let mut tom = vec![0f32; n];
     let mut kick_motion = Vec::new();
     let mut tom_motion = Vec::new();
-    for (i, level) in [-19.0, -24.0, -26.0, -27.0, -29.0, -32.0, -37.0, -42.0]
-        .into_iter()
-        .enumerate()
+    for (i, level) in [
+        -19.0, -24.0, -26.0, -27.0, -29.0, -32.0, -37.0, -42.0, -45.0, -47.0, -49.0, -51.0, -53.0, -55.0, -57.0, -59.0,
+        -61.0, -63.0, -65.0, -67.0,
+    ]
+    .into_iter()
+    .enumerate()
     {
-        let t = 0.1 + (i as f64) * 0.1;
+        let t = 0.1 + (i as f64) * 0.04;
         kick_hit(&mut kick, t, -3.0);
         kick_hit(&mut tom, t + 0.001, level);
         kick_motion.push(t);
@@ -938,4 +945,195 @@ fn an_unaligned_pair_keeps_the_two_part_verdict_regardless_of_the_ceiling() {
     // the two-part verdict fires on its own: late AND quieter than the source, the ceiling of
     // the aligned pair does not apply
     assert!(marks[0][22].bleed, "the late quiet hit is bleed: {:?}", marks[0][22]);
+}
+
+/// #309 gate test 4: the PRIOR carries the three ratio fields — the pass-2 re-detection never
+/// re-measures them (its candidate list has the real strokes removed, so a re-measured ceiling
+/// counts a source hit under a real stroke as a clear case and reads far too high).
+#[test]
+fn the_prior_carries_the_three_ratio_fields() {
+    let n = (3.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    for (i, level) in [
+        -19.0, -24.0, -26.0, -27.0, -29.0, -32.0, -37.0, -42.0, -45.0, -47.0, -49.0, -51.0, -53.0, -55.0, -57.0, -59.0,
+        -61.0, -63.0, -65.0, -67.0,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let t = 0.1 + (i as f64) * 0.04;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.001, level);
+        kick_motion.push(t);
+    }
+    // coins: an aligned pair
+    for i in 0..22 {
+        let t = 1.0 + (i as f64) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t, -19.0);
+        kick_motion.push(t);
+        tom_motion.push(t);
+    }
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let p = CrossBleedParams::default();
+    let (_, pass1) = cross_bleed(&mics, SR, &p);
+    let measured = (pass1[0].ratio_db, pass1[0].ratio_p95_db, pass1[0].ratio_max_db);
+    assert!(measured.2.is_some(), "the clear cases teach a ceiling: {pass1:?}");
+    // a prior with DIFFERENT ratio fields (the pass-1 values of the real session)
+    let prior = [PairLearned {
+        tom: 0,
+        source: 1,
+        lead_ms: None,
+        ratio_db: Some(-13.4),
+        ratio_p95_db: Some(-10.0),
+        ratio_max_db: Some(-7.1),
+        aligned: true,
+        align_coins: 22,
+        align_med_abs_lead_ms: Some(0.0),
+        aligned_counts: [0; 4],
+        align_inherited: false,
+    }];
+    let (_, pass2) = cross_bleed_prior(&mics, SR, &p, Some(&prior));
+    assert_eq!(pass2[0].ratio_db, Some(-13.4), "{pass2:?}");
+    assert_eq!(pass2[0].ratio_p95_db, Some(-10.0), "{pass2:?}");
+    assert_eq!(pass2[0].ratio_max_db, Some(-7.1), "{pass2:?}");
+    assert_ne!(pass2[0].ratio_max_db, measured.2, "not re-measured");
+}
+
+/// #309 gate test 5: `lead_ms` and `ratio_db` are the OLD set — every source hit — whether or
+/// not some of them coincide with an X hit (the clear-case exclusion feeds the ceiling only).
+#[test]
+fn lead_and_ratio_median_ignore_the_clear_case_exclusion() {
+    let n = (3.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom_with = vec![0f32; n];
+    let mut tom_without = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion_with = Vec::new();
+    // 21 clear-ish kicks with bleed copies; the copy is a real arrival 1 ms later (unaligned)
+    for (i, level) in [
+        -19.0, -24.0, -26.0, -27.0, -29.0, -32.0, -37.0, -42.0, -45.0, -47.0, -49.0, -51.0, -53.0, -55.0, -57.0, -59.0,
+        -61.0, -63.0, -65.0, -67.0, -69.0,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let t = 0.1 + (i as f64) * 0.1;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom_with, t + 0.001, level);
+        kick_hit(&mut tom_without, t + 0.001, level);
+        kick_motion.push(t);
+    }
+    // a kick WITH a coinciding tom hit (the tom's own stroke, unison) — a time of its own,
+    // not one of the clear-case kicks
+    kick_hit(&mut kick, 1.25, -3.0);
+    kick_hit(&mut tom_with, 1.25, -6.0);
+    kick_hit(&mut tom_without, 1.25 + 0.001, -6.0);
+    kick_motion.push(1.25);
+    tom_motion_with.push(1.25);
+    let mics_with = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom_with,
+            motion: tom_motion_with,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion.clone(),
+        },
+    ];
+    let mics_without = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom_without,
+            motion: Vec::new(),
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let p = CrossBleedParams::default();
+    let (_, with) = cross_bleed(&mics_with, SR, &p);
+    let (_, without) = cross_bleed(&mics_without, SR, &p);
+    // identical medians: the coinciding X hit did not remove its source hit from the set
+    assert_eq!(with[0].ratio_db, without[0].ratio_db, "{with:?} vs {without:?}");
+    assert_eq!(with[0].lead_ms, without[0].lead_ms, "{with:?} vs {without:?}");
+    // while the ceiling DOES see the exclusion: with the unison stroke the pair has one fewer
+    // clear case, so a max under the bar differs from the run without it only by that hit
+    let max_with = with[0].ratio_max_db;
+    let max_without = without[0].ratio_max_db;
+    assert_ne!(max_with, max_without, "{with:?} vs {without:?}");
+}
+
+/// #309 gate test 6: a pair with fewer than `align_min_coins` clear cases has NO ceiling — the
+/// level test alone (the alignment's own bar, no new number).
+#[test]
+fn a_pair_under_align_min_coins_clear_cases_has_no_ceiling() {
+    let n = (3.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    // only 8 clear cases (under the default align_min_coins of 20)
+    for (i, level) in [-19.0, -24.0, -26.0, -27.0, -29.0, -32.0, -37.0, -42.0]
+        .into_iter()
+        .enumerate()
+    {
+        let t = 0.1 + (i as f64) * 0.04;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.001, level);
+        kick_motion.push(t);
+    }
+    // enough coins to align the pair
+    for i in 0..22 {
+        let t = 1.0 + (i as f64) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t, -19.0);
+        kick_motion.push(t);
+        tom_motion.push(t);
+    }
+    // a quiet coinciding hit INSIDE the 8 clear cases' range: with no ceiling, the level test
+    // alone decides and it is bleed
+    kick_hit(&mut kick, 2.2, -3.0);
+    kick_hit(&mut tom, 2.2, -25.0);
+    kick_motion.push(2.2);
+    tom_motion.push(2.2);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let (marks, learned) = cross_bleed(&mics, SR, &CrossBleedParams::default());
+    assert!(learned[0].aligned, "{learned:?}");
+    assert!(learned[0].ratio_max_db.is_none(), "{learned:?}");
+    assert!(learned[0].ratio_p95_db.is_none(), "{learned:?}");
+    assert!(
+        marks[0][22].bleed,
+        "no ceiling: the level test alone: {:?}",
+        marks[0][22]
+    );
 }
