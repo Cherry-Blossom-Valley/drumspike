@@ -60,14 +60,14 @@
 //! re-detection pass hands the pass-1 pairs to [`cross_bleed_prior`], so the verdict does not
 //! re-measure the alignment on the re-detected candidate times (whose |lead| medians move).
 //!
-//! # The aligned session, inherited alignment (#309)
+//! # The aligned session, inherited alignment (#309, the session test of #313)
 //!
 //! A source that rarely coincides with X — the kick on a tom that plays little over the kick, the
 //! other tom mics — gives a pair too few coincidences to measure its own alignment
 //! (`align_min_coins` not reached), and the few coins it has are the bleed events themselves,
 //! whose residual lead (2 to 5 ms on the measured session) looks like a real lead. Alignment is a
-//! property of the SESSION: the tool is applied to every track, so when ANY pair of the same tom
-//! target is measured aligned, EVERY pair of that target judges by the level test alone
+//! property of the SESSION: the tool is applied to every track, so when a pair of the target is
+//! measured aligned, EVERY pair of that target judges by the level test alone
 //! ([`PairLearned::align_inherited`] records the inheritance; the measured `align_coins` and
 //! `align_med_abs_lead_ms` stay as measured) — sparse or not. The lead of the other pairs
 //! carries no information on such a session: on the measured session the kick bleed on a tom mic
@@ -76,6 +76,36 @@
 //! pair stays on the two-part verdict, so unaligned sessions are unchanged. The inheritance
 //! travels through [`cross_bleed_prior`] (the pass-1 `align_inherited` is carried with the
 //! alignment).
+//!
+//! # The per-source session test (#313)
+//!
+//! The #309 inheritance fired from ANY measured-aligned pair of the target, and on a close-miked
+//! unaligned session exactly ONE pair of ONE tom reads aligned (the hi-hat or the snare on the
+//! nearest tom mic, median |lead| 0.05 to 0.39 ms over 26 to 93 coincidences) while the tom's
+//! other pairs — whose own medians read 0.8 to 7.7 ms — inherited it and judged by the level
+//! test alone: the ENST part-B run changed on 53 of 210 items against the build before #296. A
+//! time-alignment tool shifts whole tracks, so a source's bleed lag reads near zero on EVERY tom
+//! target it coincides with; a small lag on one target alone is a close mic. A source is aligned
+//! on the session only when it measures aligned on every tom target that has at least
+//! `align_min_coins` coincidences with it, and on at least two such targets
+//! ([`PairLearned::source_aligned_targets`] of `source_targets`); a session with one tom mic
+//! cannot establish alignment. The target-level inheritance fires only from a session-aligned
+//! source's measured-aligned pair (on the owner's aligned sessions the snare measures aligned on
+//! every tom, so every pair of every tom judges by the level test alone, as before). A pair that
+//! measured aligned on its own but whose source fails the session test keeps the two-part
+//! verdict. The session test is decided ONCE per session (the app's pre-pass over all tom
+//! targets, [`measure_pair_alignment`], hands the verdict to every per-target run as a
+//! [`SessionAlign`]): the app calls the rule ONE tom at a time, so a count over a per-target
+//! call's tom mics can never reach the two-target bar.
+//!
+//! # The pass-1 inherit rule and the session test (#313)
+//!
+//! The pass-1 inherit rule of #296 (a re-detected candidate placed on a pass-1 bleed-marked time
+//! inherits the mark) fired on EVERY pass-1 mark — including the two-part verdict's — and so
+//! altered unaligned items against the build before #296 (38 tom-mic outputs lost 1 to 4 hits,
+//! one item flipped 145 marked events into kept hits). Only a mark made by an ALIGNED pair (the
+//! level test, [`CrossMark::aligned_mark`]) feeds the inherit rule: on a session with no aligned
+//! pair the re-detection judges every candidate on its own, exactly as before #296.
 //!
 //! # The aligned session, the pair's own bleed ceiling (#309)
 //!
@@ -240,6 +270,12 @@ pub struct CrossMark {
     /// The level ratio against the coinciding hat hit (dB, `L_X - L_hat`). See
     /// [`CrossMark::hat_lead_ms`].
     pub hat_ratio_db: Option<f64>,
+    /// #313: the hit was marked bleed by an ALIGNED pair (the level test alone). `false` when
+    /// the marking pair kept the two-part verdict or the hit is not bleed. The app hands only
+    /// these marks to the pass-1 inherit rule: on a session with no aligned pair the
+    /// re-detection keeps the pre-#296 behaviour (a two-part mark does not survive the
+    /// re-detection there — the pass-2 verdict judges the candidate on its own, as before #296).
+    pub aligned_mark: bool,
 }
 
 /// The level margins (dB) of the aligned-pair count sweep (#296): per aligned pair,
@@ -280,6 +316,15 @@ pub struct PairLearned {
     /// measurement. The pair's own `align_coins` and `align_med_abs_lead_ms` stay as measured.
     /// `false` when the alignment is the pair's own measurement or the pair is not aligned.
     pub align_inherited: bool,
+    /// #313: the source's per-session test — the number of tom targets on which the pair
+    /// measured aligned (`source_aligned_targets`) out of the tom targets with at least
+    /// `align_min_coins` coincidences (`source_targets`). A source is aligned on the session
+    /// only when it measures aligned on EVERY target with enough coins, and on at least two
+    /// such targets; a session with one tom mic cannot establish alignment.
+    pub source_aligned_targets: usize,
+    /// #313: the number of tom targets with at least `align_min_coins` coincidences with the
+    /// source (see [`PairLearned::source_aligned_targets`]).
+    pub source_targets: usize,
 }
 
 /// The band level (dBFS) of `x` in `[c + w.0, c + w.1)` with the filter run in over `pre` samples
@@ -368,7 +413,106 @@ pub fn inherits_pass1_bleed(t: f64, pass1_bleed: &[f64]) -> bool {
 /// learned bounds per pair (tom order, then source order).
 #[must_use]
 pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
-    cross_bleed_prior(mics, sr, p, None)
+    cross_bleed_session(mics, sr, p, None)
+}
+
+/// [`cross_bleed`] with the per-source session verdict handed in (#313): `session` holds, per
+/// mic index, the session-wide per-source counts (see [`SessionAlign`]) — the app's per-target
+/// runs each see ONE tom, so the count over the slice's tom mics cannot establish a session
+/// verdict; the caller decides it once per session over all tom targets and hands it in. When
+/// `None`, the in-call count over the slice's tom mics decides (the core's own full-session
+/// runs).
+#[must_use]
+pub fn cross_bleed_session(
+    mics: &[CrossMic],
+    sr: u32,
+    p: &CrossBleedParams,
+    session: Option<&SessionAlign>,
+) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
+    cross_bleed_prior_session(mics, sr, p, None, session)
+}
+
+/// The per-pair alignment measurement of #296: the |lead| of X's hits that coincide with a hit of
+/// S, nearest hit first. An aligned session's leads sit at 0 (the tool removed the bleed's arrival
+/// delay); a bleed lead of 0.5 to 3 ms cannot. Returns (aligned, coins, median |lead| ms).
+fn measure_pair(x: &CrossMic, s: &CrossMic, coincide: f64, p: &CrossBleedParams) -> (bool, usize, Option<f64>) {
+    let mut s_sorted: Vec<f64> = s.motion.clone();
+    s_sorted.sort_by(f64::total_cmp);
+    let mut coins: Vec<f64> = Vec::new();
+    for &tx in &x.motion {
+        let k = s_sorted.partition_point(|&ts| ts < tx);
+        let cands = [s_sorted.get(k.saturating_sub(1)).copied(), s_sorted.get(k).copied()];
+        if let Some(ts) = cands
+            .into_iter()
+            .flatten()
+            .filter(|&ts| (ts - tx).abs() <= coincide + 1e-9)
+            .min_by(|u, v| (u - tx).abs().total_cmp(&(v - tx).abs()))
+        {
+            coins.push((tx - ts).abs() * 1000.0);
+        }
+    }
+    let med_abs_lead = median(&mut coins);
+    let aligned = coins.len() >= p.align_min_coins && med_abs_lead.is_some_and(|m| m < p.align_med_abs_lead_ms);
+    (aligned, coins.len(), med_abs_lead)
+}
+
+/// One measured pair alignment: (tom mic index, source mic index, aligned, coins, median |lead| ms).
+pub type MeasuredAlign = (usize, usize, bool, usize, Option<f64>);
+
+/// The measured rows of one tom: (source, aligned, coins, median |lead| ms), source order.
+type MeasuredRow = Vec<(usize, bool, usize, Option<f64>)>;
+
+/// Measure every (tom, source) pair's alignment over the full mic set — the pre-pass the app
+/// runs ONCE per session (#313): the per-source session test needs every pair's alignment
+/// measured before any verdict, and the app's per-target runs each see ONE tom. The tom mics
+/// are the targets; every non-Overhead mic is a source (the target itself is skipped). The
+/// per-pair rule is [`measure_pair`] (#296) and the thresholds are the params'.
+#[must_use]
+pub fn measure_pair_alignment(mics: &[CrossMic], _sr: u32, p: &CrossBleedParams) -> Vec<MeasuredAlign> {
+    let coincide = p.coincide_ms / 1000.0;
+    let toms: Vec<usize> = mics
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.kind == XKind::Tom)
+        .map(|(i, _)| i)
+        .collect();
+    let srcs: Vec<usize> = (0..mics.len()).filter(|&b| mics[b].kind != XKind::Overhead).collect();
+    let mut out = Vec::new();
+    for &a in &toms {
+        for &b in &srcs {
+            if b == a {
+                continue;
+            }
+            let (aligned, coins, med) = measure_pair(&mics[a], &mics[b], coincide, p);
+            out.push((a, b, aligned, coins, med));
+        }
+    }
+    out
+}
+
+/// The per-source session verdict, decided ONCE per session over all tom targets (#313) and
+/// handed in by the app (whose per-target runs each see ONE tom): per mic index of the
+/// [`CrossMic`] slice, the number of tom targets with at least `align_min_coins` coincidences
+/// with the source (`source_targets`) and how many of those measured aligned
+/// (`source_aligned_targets`). A source is aligned on the session when it measures aligned on
+/// EVERY qualifying target and on at least two of them; a session with one tom mic cannot
+/// establish alignment. Without a handed-in verdict (the core's own full-session runs) the
+/// count over the slice's tom mics decides.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionAlign {
+    /// Per mic index: the tom targets the source measured aligned on (enough coins).
+    pub source_aligned_targets: Vec<usize>,
+    /// Per mic index: the tom targets with at least `align_min_coins` coincidences.
+    pub source_targets: Vec<usize>,
+}
+
+impl SessionAlign {
+    /// Whether the source at `source` is aligned on the session (see the type's documentation).
+    #[must_use]
+    pub fn is_aligned(&self, source: usize) -> bool {
+        let t = self.source_targets.get(source).copied().unwrap_or(0);
+        t >= 2 && self.source_aligned_targets.get(source).copied().unwrap_or(0) == t
+    }
 }
 
 /// [`cross_bleed`] with the alignment handed in (#296): `prior` holds the pairs of an earlier run
@@ -385,6 +529,19 @@ pub fn cross_bleed_prior(
     sr: u32,
     p: &CrossBleedParams,
     prior: Option<&[PairLearned]>,
+) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
+    cross_bleed_prior_session(mics, sr, p, prior, None)
+}
+
+/// [`cross_bleed_prior`] with the per-source session verdict handed in (see
+/// [`cross_bleed_session`] and [`SessionAlign`]).
+#[must_use]
+pub fn cross_bleed_prior_session(
+    mics: &[CrossMic],
+    sr: u32,
+    p: &CrossBleedParams,
+    prior: Option<&[PairLearned]>,
+    session: Option<&SessionAlign>,
 ) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
     let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
     let pre = ms_to_samples(p.preroll_ms, sr);
@@ -422,8 +579,54 @@ pub fn cross_bleed_prior(
     // measurement of the no-lead common-band form is a SNARE-target test — it lives in the
     // soft gate's `soft_overhead_peaks` (crates/app ghost_gate session step), not here. A
     // measured intermediate form (the oh in the tom pairs) dropped about two thirds of the
-    // tom hits (Session A t1 66 -> 19).
-    let srcs: Vec<usize> = (0..mics.len()).filter(|&b| mics[b].kind != XKind::Overhead).collect();
+    // tom hits (Session A t1 66 -> 19). The set itself is measured by
+    // [`measure_pair_alignment`] below (the same filter, per pair).
+    // #313: the per-source session test needs every (tom, source) pair's alignment measured
+    // before any verdict. A time-alignment tool shifts whole tracks, so a source's bleed lag
+    // reads near zero on EVERY tom target it coincides with; a small lag on one target alone
+    // is a close mic. A source is aligned on the session only when it measures aligned on
+    // every tom target that has at least `align_min_coins` coincidences with it, and on at
+    // least two such targets; a session with one tom mic cannot establish alignment.
+    let mut measured: Vec<MeasuredRow> = vec![Vec::new(); mics.len()]; // per tom: (source, aligned, coins, median |lead|)
+    for (a, b, aligned, coins_n, med_abs_lead) in measure_pair_alignment(mics, sr, p) {
+        measured[a].push((b, aligned, coins_n, med_abs_lead));
+    }
+    // per source: the tom targets with at least `align_min_coins` coincidences, and how many
+    // of those the pair measured aligned. With a handed-in session verdict (the app's
+    // per-target runs, one tom per call) the SESSION-WIDE counts win (#313): the in-call count
+    // over the slice's single tom could never reach the two-target bar.
+    let mut source_targets = vec![0usize; mics.len()];
+    let mut source_aligned_targets = vec![0usize; mics.len()];
+    if session.is_none() {
+        for row in &measured {
+            for &(b, aligned, coins_n, _) in row {
+                if coins_n >= p.align_min_coins {
+                    source_targets[b] += 1;
+                    if aligned {
+                        source_aligned_targets[b] += 1;
+                    }
+                }
+            }
+        }
+    }
+    // a source is aligned on the session only when it measured aligned on EVERY qualifying
+    // target, and on at least two of them
+    let session_aligned_of = |b: usize| match session {
+        Some(s) => s.is_aligned(b),
+        None => source_targets[b] >= 2 && source_aligned_targets[b] == source_targets[b],
+    };
+    // #309, bound to the session test by #313: the target-level inheritance fires only from a
+    // SESSION-aligned source's measured-aligned pair — when one exists on the target, the tool
+    // was applied to the whole session, so EVERY pair of the target judges by the level test
+    // alone (the lead of the other pairs carries no information on such a session). On a
+    // session where the only measured-aligned pair's source fails the session test (one
+    // close-miked target reading a small lag — ENST) no pair inherits.
+    let mut target_inherits = vec![false; mics.len()];
+    for (ai, &a) in toms.iter().enumerate() {
+        target_inherits[a] = measured[ai]
+            .iter()
+            .any(|&(b, aligned, _, _)| aligned && session_aligned_of(b));
+    }
     let mut learned = Vec::new();
     let mut counts: Vec<Vec<[usize; 4]>> = Vec::new();
     let mut marks: Vec<Vec<CrossMark>> = mics
@@ -436,64 +639,14 @@ pub fn cross_bleed_prior(
                     ratio_db: None,
                     hat_lead_ms: None,
                     hat_ratio_db: None,
+                    aligned_mark: false,
                 };
                 m.motion.len()
             ]
         })
         .collect();
-    for &a in &toms {
+    for (ai, &a) in toms.iter().enumerate() {
         let x = &mics[a];
-        // #309: the alignment of every pair of this target, measured BEFORE the verdict pass —
-        // the session-level alignment needs all pairs of the target (see below). The pass-1
-        // decision replaces the measurement (#296).
-        let mut align_of: Vec<(usize, bool, usize, Option<f64>, bool)> = Vec::new();
-        for &b in &srcs {
-            if b == a {
-                continue;
-            }
-            let s = &mics[b];
-            // the pair's alignment (#296): the |lead| of X's hits that coincide with a hit of S,
-            // nearest hit first. An aligned session's leads sit at 0 (the tool removed the
-            // bleed's arrival delay); a bleed lead of 0.5 to 3 ms cannot.
-            let mut s_sorted: Vec<f64> = s.motion.clone();
-            s_sorted.sort_by(f64::total_cmp);
-            let mut coins: Vec<f64> = Vec::new();
-            for &tx in &x.motion {
-                let k = s_sorted.partition_point(|&ts| ts < tx);
-                let cands = [s_sorted.get(k.saturating_sub(1)).copied(), s_sorted.get(k).copied()];
-                if let Some(ts) = cands
-                    .into_iter()
-                    .flatten()
-                    .filter(|&ts| (ts - tx).abs() <= coincide + 1e-9)
-                    .min_by(|u, v| (u - tx).abs().total_cmp(&(v - tx).abs()))
-                {
-                    coins.push((tx - ts).abs() * 1000.0);
-                }
-            }
-            let med_abs_lead = median(&mut coins);
-            let aligned = coins.len() >= p.align_min_coins && med_abs_lead.is_some_and(|m| m < p.align_med_abs_lead_ms);
-            // #296: the pass-1 decision wins when the caller hands the pairs in (the alignment is
-            // a property of the pair, not of one hit list — see [`cross_bleed_prior`]). The
-            // pass-1 `align_inherited` travels with the alignment (#309).
-            let (aligned, coins_n, med_abs_lead, inherited) = prior
-                .and_then(|ps| ps.iter().find(|l| l.tom == a && l.source == b))
-                .map_or((aligned, coins.len(), med_abs_lead, false), |prev| {
-                    (
-                        prev.aligned,
-                        prev.align_coins,
-                        prev.align_med_abs_lead_ms,
-                        prev.align_inherited,
-                    )
-                });
-            align_of.push((b, aligned, coins_n, med_abs_lead, inherited));
-        }
-        // #309: the SESSION's alignment, judged on the target's own pairs: when any pair is
-        // measured aligned, the tool was applied to the whole session, so EVERY pair of the
-        // target judges by the level test alone — the lead of the other pairs carries no
-        // information on such a session (the detector places the bleed's verdict time 2 to 5 ms
-        // after the kick hit even on an aligned session). A session without a measured-aligned
-        // pair stays on the two-part verdict.
-        let session_aligned = align_of.iter().any(|&(_, al, _, _, _)| al);
         // #309: X's hit times sorted, for the clear-case test below: a clear case is an S hit
         // WITHOUT an X hit within `coincide_ms` — a coinciding hit of X is the tom's own motion,
         // and its ratio must not enter the pair's bleed distribution (a real stroke's ratio would
@@ -508,23 +661,49 @@ pub fn cross_bleed_prior(
                 .any(|tx| (tx - ts).abs() <= coincide + 1e-9)
         };
         let mut pair: Vec<(usize, PairLearned)> = Vec::new();
-        for (&b, &(_, mut aligned, coins_n, med_abs_lead, mut align_inherited)) in
-            srcs.iter().filter(|&&b| b != a).zip(align_of.iter())
-        {
-            if b == a {
-                continue;
-            }
+        for &(b, measured_aligned, coins_n, med_abs_lead) in &measured[ai] {
             let s = &mics[b];
             let src_t = oh_lv[b].as_ref(); // the oh's levels in the target's band
             let lv_s = |k: usize| src_t.map_or(lv[b][k], |v| v[k]);
+            // #313: the pair judges by the level test alone when the source is aligned on the
+            // session, or when a session-aligned source's pair measured aligned on this target
+            // (the #309 inheritance). A pair that measured aligned on its own but whose source
+            // fails the session test keeps the two-part verdict.
+            let aligned = session_aligned_of(b) || target_inherits[a];
+            let align_inherited = aligned && !measured_aligned;
             // the pass-1 ratio fields, when the caller handed pairs in (see above)
             let prior_ratios = prior
                 .and_then(|ps| ps.iter().find(|l| l.tom == a && l.source == b))
                 .map(|prev| (prev.ratio_db, prev.ratio_p95_db, prev.ratio_max_db));
-            if !aligned && session_aligned {
-                aligned = true;
-                align_inherited = true;
-            }
+            // #296: the pass-1 decision wins when the caller hands the pairs in (the alignment is
+            // a property of the pair, not of one hit list — see [`cross_bleed_prior`]). The
+            // pass-1 per-pair decision already carries the session test and its inheritance
+            // (#313), so it replaces the measurement verbatim.
+            let (aligned, coins_n, med_abs_lead, align_inherited, src_aligned_targets, src_targets) = prior
+                .and_then(|ps| ps.iter().find(|l| l.tom == a && l.source == b))
+                .map_or(
+                    (
+                        aligned,
+                        coins_n,
+                        med_abs_lead,
+                        align_inherited,
+                        // #313: the session-wide counts when the caller handed the verdict in
+                        session.map_or(source_aligned_targets[b], |s| {
+                            s.source_aligned_targets.get(b).copied().unwrap_or(0)
+                        }),
+                        session.map_or(source_targets[b], |s| s.source_targets.get(b).copied().unwrap_or(0)),
+                    ),
+                    |prev| {
+                        (
+                            prev.aligned,
+                            prev.align_coins,
+                            prev.align_med_abs_lead_ms,
+                            prev.align_inherited,
+                            prev.source_aligned_targets,
+                            prev.source_targets,
+                        )
+                    },
+                );
             let mut ratios: Vec<f64> = Vec::new();
             let mut ratios_clear: Vec<f64> = Vec::new();
             let mut leads: Vec<f64> = Vec::new();
@@ -619,6 +798,8 @@ pub fn cross_bleed_prior(
                     align_med_abs_lead_ms: med_abs_lead,
                     aligned_counts: [0; 4],
                     align_inherited,
+                    source_aligned_targets: src_aligned_targets,
+                    source_targets: src_targets,
                 },
             ));
         }
@@ -628,6 +809,7 @@ pub fn cross_bleed_prior(
         for (j, &tx) in x.motion.iter().enumerate() {
             let mut best_level = f64::NEG_INFINITY;
             let mut bleed = false;
+            let mut by_aligned = false;
             for (pi, &(b, pl)) in pair.iter().enumerate() {
                 let s = &mics[b];
                 let lvs = &lv[b];
@@ -698,6 +880,7 @@ pub fn cross_bleed_prior(
                     if pl.aligned {
                         if r < p.margin_db && pl.ratio_max_db.is_none_or(|mx| r <= mx) {
                             bleed = true;
+                            by_aligned = true;
                         }
                         for (mi, &m) in ALIGN_COUNT_MARGINS_DB.iter().enumerate() {
                             if r < m {
@@ -713,6 +896,10 @@ pub fn cross_bleed_prior(
                 }
             }
             marks[a][j].bleed = bleed;
+            // #313: only an aligned pair's mark feeds the pass-1 inherit rule (the app's
+            // `bleed_pass1`); a two-part mark does not survive the re-detection — the pass-2
+            // verdict judges the candidate on its own, as before #296.
+            marks[a][j].aligned_mark = bleed && by_aligned;
         }
         let learn_start = learned.len();
         learned.extend(pair.iter().map(|(_, l)| *l));
