@@ -35,7 +35,7 @@ use std::sync::Arc;
 use drumspike_core::analyze::{AnalyzeParams, analyze_detected, role_note};
 use drumspike_core::detect::cross_bleed::{
     ALIGN_COUNT_MARGINS_DB, CrossBleedParams, CrossMark, CrossMic, PairLearned, XKind, cross_bleed, cross_bleed_prior,
-    hit_level,
+    hit_level, inherits_pass1_bleed,
 };
 use drumspike_core::detect::onset::{self, Gate, OnsetParams, Role};
 use drumspike_core::project::Track;
@@ -53,11 +53,11 @@ use crate::{Service, ServiceConfig};
 /// 3 is the verify fix on #296: the alignment is decided once on the stored hits (pass 1) and
 /// handed to the re-detection pass (`cross_bleed_prior`), and every pair (aligned or not) is
 /// recorded as `cross_bleed.pairs` in the job and detector records.
-/// 4 is the verify fix round 2: the pass-2 candidates are refined with the SAME rule the stored
-/// hits use (the analysis rule, not the bare first-motion walk, whose foot on a bleed lands on
-/// the slow rise before the source's attack and misses the coincidence), and the kept
-/// candidates' lead/ratio are recorded (`cross_bleed.kept`) next to `dropped`.
-pub const CROSS_BLEED: u32 = 4;
+/// 4 is the #296 decision after the round 2-4 regressions: the pass-2 timing is back to the
+/// first-motion walk of 3 (no re-timing of the kept hits), and a pass-2 candidate within 1 ms
+/// of a pass-1 bleed-marked hit inherits the mark and is dropped; the records carry
+/// `t_verdict` and the kept list.
+pub const CROSS_BLEED: u32 = 5;
 
 /// The version of a new analysis: the configuration's pin, else [`CROSS_BLEED`].
 #[must_use]
@@ -330,6 +330,11 @@ fn run_one(
     let sr = dec_x.sr;
     // 1. the drop marks on the events
     let mut removed = 0usize;
+    // the pass-1 bleed marks: the times of the hits pass 1 judged bleed (assigned in the block
+    // below). They are REMOVED from the track, so the re-detection cannot see them and judges
+    // their candidates on their own — the pass-1 verdict is handed to pass 2 as the inherit
+    // rule's band list (#296).
+    let bleed_pass1: Vec<f64>;
     // the pass-1 pairs: the alignment decided here is handed to the re-detection (#296)
     let learned: Vec<PairLearned>;
     let pairs;
@@ -342,6 +347,10 @@ fn run_one(
         }
         let (marks_t, learned1) = cross_bleed(&cross_mics(&dec_x, &srcs, mics, x_mic.times.clone()), sr, p);
         let marks = &marks_t[0];
+        bleed_pass1 = (0..marks.len())
+            .filter(|&j| marks[j].bleed && !x_mic.edited[j])
+            .map(|j| x_mic.times[j])
+            .collect();
         learned = learned1;
         pairs = pairs_json(mics, &srcs, &learned);
         if rule_on {
@@ -401,36 +410,29 @@ fn run_one(
             return Some(json!({"removed": removed, "redetected": redetected}));
         };
         // the drop on the re-detected candidates, with the evidence stored per candidate; the
-        // candidate times are refined with the SAME rule AND the SAME bounds the stored hits
-        // use (the analysis rule, version 6 today — `candidate_motion` with the candidates'
-        // own neighbours, NO extra source bounds), NOT the bare first-motion walk: on bleed
-        // the walk runs back over the slow rise before the snare's attack and ends more
-        // than `coincide_ms` before the snare hit, so the coincidence lookup finds nothing and
-        // the candidate stays (#296 verify round 2). The pass-1 pairs come in as `prior`
-        // (#296): the alignment is decided on the stored hits, not re-measured on the
-        // candidate times (whose |lead| medians move). The round-4 invariant (#296): the
-        // verdict is taken at the SAME time the hit is stored with — the refined times go to
-        // the verdict AND to the analysis below, so the analysis's own refinement cannot move
-        // them (round 3's extra source bounds put the verdict on a time the analysis did not
-        // store, and bleeds were kept with `lead None` at the grid while stored on the snare).
-        let params_a = AnalyzeParams {
-            rule: crate::jobs::analysis_rule(&svc.inner.config),
-            ..AnalyzeParams::default()
-        };
-        let cand_motion = drumspike_core::detect::cross_bleed::candidate_motion(
-            &dec_x.samples,
-            sr,
-            &cands.iter().map(|c| c.time).collect::<Vec<_>>(),
-            params_a.window,
-            params_a.rule,
-            params_a.refine,
-        );
-        let (marks_t, learned2) = cross_bleed_prior(
+        // candidate times are walked back to first motion as well (the same refinement) — the
+        // pass-2 timing is the analysis's own placement and is NOT changed here (the #296
+        // coordinator decision: rounds 2 to 4 re-timed the kept hits and shifted every
+        // re-detected hit of the unaligned sessions 6 to 10 ms late). The pass-1 pairs come in
+        // as `prior` (#296): the alignment is decided on the stored hits, not re-measured on
+        // the candidate times (whose |lead| medians move).
+        let cand_motion = refined_motion(&dec_x.samples, sr, &cands.iter().map(|c| c.time).collect::<Vec<_>>());
+        let (mut marks_t, learned2) = cross_bleed_prior(
             &cross_mics(&dec_x, &srcs, mics, cand_motion.clone()),
             sr,
             p,
             Some(&learned),
         );
+        // the pass-1 inherit rule (#296): a pass-2 candidate whose verdict time is within 1 ms
+        // of a hit that pass 1 marked as bleed inherits the mark and is dropped below, whatever
+        // its own pass-2 verdict. Pass 1 removed the bleed hits from the track, so pass 2
+        // re-detects them and its own verdict — with no coinciding source at the walked time —
+        // would keep them; the pass-1 verdict closes that loop without touching any time.
+        for (m, &t) in marks_t[0].iter_mut().zip(&cand_motion) {
+            if inherits_pass1_bleed(t, &bleed_pass1) {
+                m.bleed = true;
+            }
+        }
         let marks = &marks_t[0];
         let pairs2 = pairs_json(mics, &srcs, &learned2);
         let mut dropped: Vec<usize> = Vec::new();
@@ -445,20 +447,15 @@ fn run_one(
         }
         let drop_frames: Vec<usize> = dropped.iter().map(|&j| cands[j].frame).collect();
         redetected = drop_frames.len();
-        // the verdict's times go to the analysis verbatim (the round-4 invariant): the kept
-        // hit is stored with the time the verdict ran on, so the analysis's refinement has
-        // nothing left to move (it is the same refinement on the same list).
-        let refined_time = |h: &drumspike_core::detect::onset::OnsetHit| -> f64 {
-            cands
-                .iter()
-                .position(|c| c.frame == h.frame)
-                .map_or(h.time, |j| cand_motion[j])
-        };
         let kept: Vec<(f64, u8)> = hits
             .iter()
             .filter(|h| !drop_frames.contains(&h.frame))
-            .map(|h| (refined_time(h), role_note("tom")))
+            .map(|h| (h.time, role_note("tom")))
             .collect();
+        let params_a = AnalyzeParams {
+            rule: crate::jobs::analysis_rule(&svc.inner.config),
+            ..AnalyzeParams::default()
+        };
         let Ok(analysis) = analyze_detected(&dec_x.samples, sr, "tom", &kept, &params_a) else {
             return Some(json!({"removed": removed, "redetected": redetected, "pairs": pairs2}));
         };
@@ -468,9 +465,9 @@ fn run_one(
             .and_then(|t| t.extra.get("detector").cloned())
             .unwrap_or_else(|| json!({"detector": "dsp"}));
         // #96: the dropped candidates with the lead and level the rule saw; the re-detection replaces the step-1 marks.
-        // #296 verify round 2: the KEPT candidates' coincidence, lead and ratio are recorded too
-        // (today only `dropped` carries them), so a kept bleed hit is visible in the record.
-        if let Some(cb) = det.get_mut("cross_bleed") {
+        // #296: the records carry the candidate's verdict time (`t_verdict`, the first-motion
+        // walk of pass 2) next to the grid time, and the KEPT candidates are recorded too.
+        if let Some(c) = det.get_mut("cross_bleed") {
             let dropped_rec: Vec<Value> = dropped
                 .iter()
                 .map(|&j| {
@@ -485,10 +482,10 @@ fn run_one(
                     json!({"t": c.time, "t_verdict": cand_motion[j], "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db})
                 })
                 .collect();
-            cb["survive"] = json!(0);
-            cb["dropped"] = json!(dropped_rec);
-            cb["kept"] = json!(kept_rec);
-            cb["pairs"] = pairs2.clone();
+            c["survive"] = json!(0);
+            c["dropped"] = json!(dropped_rec);
+            c["kept"] = json!(kept_rec);
+            c["pairs"] = pairs2.clone();
         }
         if crate::jobs::store_analysis(svc, op, &x_mic.name, (analysis, None), &det, &dec_x, false, true, None).is_err()
         {
@@ -502,7 +499,7 @@ fn run_one(
                 cands
                     .iter()
                     .position(|c| c.frame == h.frame)
-                    .map(|j| (refined_time(h), marks[j]))
+                    .map(|j| (h.time, marks[j]))
             })
             .collect();
         {

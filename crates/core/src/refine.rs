@@ -1280,7 +1280,7 @@ pub fn refine_track_rule_peak(
 }
 
 /// The previous and the next coarse hit of hit `i`.
-pub(crate) fn neighbours(coarse: &[f64], i: usize) -> Vec<f64> {
+fn neighbours(coarse: &[f64], i: usize) -> Vec<f64> {
     let mut nb = Vec::with_capacity(2);
     if i > 0 {
         nb.push(coarse[i - 1]);

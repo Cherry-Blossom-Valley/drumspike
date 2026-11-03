@@ -73,7 +73,7 @@
 //! Every value is computed in a fixed order in `f64`; window bounds use [`ms_to_samples`].
 
 use super::attribution::{Biquad, Role, band_peak_db, band_sections, ms_to_samples};
-use crate::refine::{FM_PEAK_DB, RefineRule, RefineWindow, first_motion, neighbours, refine_rule_peak};
+use crate::refine::first_motion;
 
 /// The kind of a close mic of the rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,36 +293,6 @@ pub fn hit_level_full_band(x: &[f32], sr: u32, t: f64, p: &CrossBleedParams) -> 
     level_at(x, &[], (t * f64::from(sr)).round() as i64, w, pre)
 }
 
-/// The motion times of a re-detection's candidates: the SAME refinement the stored hits use
-/// (`rule` — the analysis rule, version 6 today) and the SAME bounds (`neighbours` of the
-/// candidate list — the analysis's `refine_track_rule_peak` calls [`refine_rule_peak`] with
-/// exactly this neighbour list), not the bare [`first_motion`] walk and not the round-3
-/// source-hit bounds. On bleed the walk runs back over the slow rise that precedes the
-/// source's attack (version 6's whole reason: the walk foot "lies on the bleed or the soft
-/// drift that often precedes a snare or kick attack") and, with no `prev` bound, can end more
-/// than `coincide_ms` before the source hit — the pass-2 coincidence lookup then finds nothing
-/// and the candidate stays (#296 verify round 2: pass-2 `dropped` records with leads of 0.7 to
-/// 4.5 ms where pass 1's median |lead| is 0.06 ms). Refining with the stored rule gives both
-/// passes the same times.
-/// The invariant of #296 verify round 4: the verdict is taken at the SAME time the hit is
-/// finally stored with. Extra refine bounds (round 3's coinciding source hits) made the
-/// verdict run at a time the final analysis does not store — the analysis refines the kept
-/// candidates again with its own bounds and the stored time moved onto the source hit, so a
-/// bleed was kept (verdict `lead None` at the grid, stored 0.1 ms from the snare hit). The
-/// caller hands the SAME refined times to the analysis, so nothing moves afterwards.
-/// `refine = false` returns `ts` unchanged: the candidate times are the motion, as the stored
-/// hits of a refine-off analysis are.
-#[must_use]
-pub fn candidate_motion(x: &[f32], sr: u32, ts: &[f64], win: RefineWindow, rule: RefineRule, refine: bool) -> Vec<f64> {
-    if !refine {
-        return ts.to_vec();
-    }
-    ts.iter()
-        .enumerate()
-        .map(|(i, &t)| refine_rule_peak(x, t, sr, &neighbours(ts, i), win, rule, FM_PEAK_DB).t)
-        .collect()
-}
-
 /// The median of `v` (the mean of the two middle values for an even count); `None` for an empty slice.
 fn median(v: &mut [f64]) -> Option<f64> {
     if v.is_empty() {
@@ -335,6 +305,21 @@ fn median(v: &mut [f64]) -> Option<f64> {
     } else {
         (v[n / 2 - 1] + v[n / 2]) / 2.0
     })
+}
+
+/// The inherit band of the re-detection: a pass-2 candidate within this of a pass-1
+/// bleed-marked hit inherits the mark (#296).
+pub const PASS1_INHERIT_MS: f64 = 1.0;
+
+/// A pass-2 candidate whose verdict time sits within [`PASS1_INHERIT_MS`] of a hit that pass 1
+/// marked as bleed inherits the mark and is dropped by the caller, whatever its own pass-2
+/// verdict (#296): pass 1 removed the bleed hits from the track, so pass 2 re-detects them and
+/// — with no coinciding source at its walked time — would keep them; the pass-1 verdict closes
+/// that loop without touching any candidate time.
+#[must_use]
+pub fn inherits_pass1_bleed(t: f64, pass1_bleed: &[f64]) -> bool {
+    let band = PASS1_INHERIT_MS / 1000.0 + 1e-9;
+    pass1_bleed.iter().any(|&b| (b - t).abs() <= band)
 }
 
 /// Run the rule over the close mics of one session (see the module documentation). All signals are at
