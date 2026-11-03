@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import firm_fixes as ff  # noqa: E402
 import fix_metric as fm  # noqa: E402
-import kick_onset as ko  # noqa: E402
+import onset_diag as od  # noqa: E402
 import sessions as ss  # noqa: E402
 import snare_onset as so  # noqa: E402
 
@@ -178,7 +178,7 @@ def test_miss_class_takes_silence_before_everything():
 
 def fake_result(errs, replay):
     rows = [{"err": e, "file_err": {"f": e}, "rel_db": 0.0, "jump_db": 40.0, "roll": e > 0.0025,
-             "replay": dict({n: 0.0 for n in ko.WALKS}, **r)} for e, r in zip(errs, replay)]
+             "replay": dict({n: 0.0 for n in od.WALKS}, **r)} for e, r in zip(errs, replay)]
     return {"rows": rows, "fair": {"file": "f", "how": "trigger"}}
 
 
