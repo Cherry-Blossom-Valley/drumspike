@@ -1,7 +1,10 @@
 //! Tests of the cross-track bleed rule (#281 A6): a planted kick bleed on a tom track is dropped, a
 //! real tom hit 10 ms after a kick is kept.
 
-use super::{CrossBleedParams, CrossMic, PairLearned, XKind, cross_bleed, cross_bleed_prior, inherits_pass1_bleed};
+use super::{
+    CrossBleedParams, CrossMic, PairLearned, SessionAlign, XKind, cross_bleed, cross_bleed_prior, cross_bleed_session,
+    inherits_pass1_bleed, measure_pair_alignment,
+};
 use crate::refine::first_motion;
 
 const SR: u32 = 48_000;
@@ -381,6 +384,158 @@ fn a_source_aligned_on_one_tom_and_1ms_on_the_other_aligns_no_pair() {
     }
     for m in &marks[0] {
         assert!(!m.bleed, "{m:?}");
+    }
+}
+
+/// #313 fix test 1: the session verdict handed in decides. The one-tom geometry of
+/// `a_session_with_one_tom_never_aligns` (the kick measures aligned on the single tom, which
+/// alone cannot establish an alignment) WITH the app's pre-pass verdict handed in — the kick
+/// aligned on two targets of the session: the single-tom call reads the pair aligned and
+/// judges by the level test alone; without the verdict it stays unaligned.
+#[test]
+fn the_handed_in_session_verdict_decides_on_a_single_tom_call() {
+    let n = (2.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.0002, -21.0);
+        kick_motion.push(t);
+        tom_motion.push(t + 0.0002);
+    }
+    tom_hit(&mut tom, 1.5, 0.0);
+    tom_motion.push(1.5);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let p = CrossBleedParams::default();
+    let (marks, learned) = cross_bleed(&mics, SR, &p);
+    assert!(!learned[0].aligned, "without the verdict: {learned:?}");
+    // the app's pre-pass verdict: the kick aligned on 2 of 2 qualifying targets of the session
+    let sess = SessionAlign {
+        source_aligned_targets: vec![0, 2],
+        source_targets: vec![0, 2],
+    };
+    let (marks_s, learned_s) = cross_bleed_session(&mics, SR, &p, Some(&sess));
+    assert!(learned_s[0].aligned, "{learned_s:?}");
+    assert!(
+        !learned_s[0].align_inherited,
+        "the pair measured aligned on its own: {learned_s:?}"
+    );
+    assert_eq!(learned_s[0].source_targets, 2, "{learned_s:?}");
+    assert_eq!(learned_s[0].source_aligned_targets, 2, "{learned_s:?}");
+    // level alone: the 0.2 ms copies are bleed and carry the aligned mark; the loud hit stays
+    for (j, m) in marks_s[0].iter().enumerate().take(24) {
+        assert!(m.bleed && m.aligned_mark, "hit {j}: {m:?}");
+    }
+    assert!(!marks_s[0][24].bleed, "{:?}", marks_s[0][24]);
+    // and the two runs differ (the verdict decides)
+    assert_ne!(marks[0][0].bleed, marks_s[0][0].bleed);
+}
+
+/// #313 fix test 1b: the same, but the handed-in verdict denies (the ENST case: the source
+/// aligned on 1 of 2 qualifying targets) — the pair that measured aligned on its own keeps the
+/// two-part verdict through the app path.
+#[test]
+fn a_denying_handed_in_session_verdict_keeps_the_two_part_verdict() {
+    let n = (8.0f64 * f64::from(SR)) as usize;
+    let mut snare = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut snare_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut snare, t, -3.0);
+        kick_hit(&mut tom, t + 0.0002, -21.0);
+        snare_motion.push(t);
+        tom_motion.push(t + 0.0002);
+    }
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Snare,
+            signal: &snare,
+            motion: snare_motion,
+        },
+    ];
+    let p = CrossBleedParams::default();
+    // the session: the snare aligned on only 1 of its 2 qualifying targets
+    let sess = SessionAlign {
+        source_aligned_targets: vec![0, 1],
+        source_targets: vec![0, 2],
+    };
+    let (_, learned) = cross_bleed_session(&mics, SR, &p, Some(&sess));
+    assert!(!learned[0].aligned, "{learned:?}");
+    assert_eq!(learned[0].source_targets, 2, "{learned:?}");
+    assert_eq!(learned[0].source_aligned_targets, 1, "{learned:?}");
+}
+
+/// #313 fix, the pre-pass: `measure_pair_alignment` measures every (tom, source) pair of the
+/// full mic set — the same verdicts the in-rule measurement reaches.
+#[test]
+fn the_pre_pass_measures_every_pair_of_the_session() {
+    let n = (2.0f64 * f64::from(SR)) as usize;
+    let mut snare = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut tom2 = vec![0f32; n];
+    let mut snare_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    let mut tom2_motion = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut snare, t, -3.0);
+        kick_hit(&mut tom, t + 0.0002, -21.0);
+        kick_hit(&mut tom2, t, -21.0);
+        snare_motion.push(t);
+        tom_motion.push(t + 0.0002);
+        tom2_motion.push(t);
+    }
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom2,
+            motion: tom2_motion,
+        },
+        CrossMic {
+            kind: XKind::Snare,
+            signal: &snare,
+            motion: snare_motion,
+        },
+    ];
+    let p = CrossBleedParams::default();
+    let meas = measure_pair_alignment(&mics, SR, &p);
+    // 2 toms x 2 sources each = 4 pairs, with the (a, a) pairs skipped
+    assert_eq!(meas.len(), 4, "{meas:?}");
+    // the snare pair of both toms measured aligned (0.2 ms copies); the tom-tom pair has no
+    // coincidences beyond the copies... (the tom-tom pairs carry the copies too, as coins)
+    for &(a, b, aligned, coins, _) in &meas {
+        assert!(coins >= 24, "pair ({a}, {b}): coins {coins}");
+        // the snare pair of each tom measured aligned; the tom-tom pairs' own verdict is not
+        // asserted here (both toms list the same 0.2 ms copies, so they align as well)
+        if b == 2 {
+            assert!(aligned, "pair ({a}, {b}): aligned {aligned}");
+        }
     }
 }
 

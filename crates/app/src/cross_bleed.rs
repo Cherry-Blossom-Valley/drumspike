@@ -34,8 +34,8 @@ use std::sync::Arc;
 
 use drumspike_core::analyze::{AnalyzeParams, analyze_detected, role_note};
 use drumspike_core::detect::cross_bleed::{
-    ALIGN_COUNT_MARGINS_DB, CrossBleedParams, CrossMark, CrossMic, PairLearned, XKind, cross_bleed, cross_bleed_prior,
-    hit_level, inherits_pass1_bleed,
+    ALIGN_COUNT_MARGINS_DB, CrossBleedParams, CrossMark, CrossMic, PairLearned, SessionAlign, XKind,
+    cross_bleed_prior_session, cross_bleed_session, hit_level, inherits_pass1_bleed, measure_pair_alignment,
 };
 use drumspike_core::detect::onset::{self, Gate, OnsetParams, Role};
 use drumspike_core::project::Track;
@@ -182,7 +182,11 @@ fn source_motion(m: &Mic, sig: &[f32], sr: u32) -> Vec<f64> {
 pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[String]) -> Option<Value> {
     let rule_on = switch("DRUMSPIKE_A6_RULE");
     let tmpl_on = switch("DRUMSPIKE_A6_TMPL");
-    if !rule_on && !tmpl_on {
+    let sw = Switches {
+        rule: rule_on,
+        tmpl: tmpl_on,
+    };
+    if !sw.rule && !sw.tmpl {
         return None; // the ablation's `main` variant: the feature off
     }
     let (mics, tgt): (Vec<Mic>, Vec<usize>) = {
@@ -230,9 +234,24 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[String]) -> Option
         return None;
     }
     let p = CrossBleedParams::default();
+    // #313: the per-source session test is a SESSION property — decide it ONCE over all tom
+    // close mics of the session, before the per-target runs (each run_one sees ONE tom and so
+    // could never count two qualifying targets for a source).
+    let session = session_alignment(svc, &mics, &p);
     let mut tracks = Map::new();
     for &a in &tgt {
-        if let Some(out) = run_one(svc, op, &mics, a, &p, rule_on, tmpl_on) {
+        if let Some(out) = run_one(
+            svc,
+            op,
+            &mics,
+            a,
+            &p,
+            Switches {
+                rule: rule_on,
+                tmpl: tmpl_on,
+            },
+            &session,
+        ) {
             tracks.insert(mics[a].name.clone(), out);
         }
     }
@@ -240,6 +259,81 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[String]) -> Option
         return None;
     }
     Some(json!({"rule": CROSS_BLEED, "tracks": tracks}))
+}
+
+/// #313: the per-source session alignment, decided ONCE per session before the per-target
+/// runs: every tom close mic and every other close mic of the session is decoded (cached) and
+/// every (tom, source) pair's alignment is measured ([`measure_pair_alignment`]). Returns, per
+/// index of `mics`, the number of tom targets with at least `align_min_coins` coincidences
+/// with the source and how many of those measured aligned. A mic that cannot be decoded (or
+/// whose rate excludes the pair) counts no target, so it cannot establish an alignment.
+fn session_alignment(svc: &Service, mics: &[Mic], p: &CrossBleedParams) -> Vec<(usize, usize)> {
+    let decs: Vec<Option<Arc<Decoded>>> = mics
+        .iter()
+        .map(|m| svc.inner.media.decode_cached(&m.path, mix_mode(&m.mix)).ok())
+        .collect();
+    session_alignment_decs(mics, &decs, p)
+}
+
+/// [`session_alignment`] over already-decoded signals (`None` when a mic could not be decoded).
+fn session_alignment_decs(mics: &[Mic], decs: &[Option<Arc<Decoded>>], p: &CrossBleedParams) -> Vec<(usize, usize)> {
+    let mut out = vec![(0usize, 0usize); mics.len()];
+    let is_tom = |m: &Mic| m.kind.is_none();
+    for (a, ma) in mics.iter().enumerate() {
+        if !is_tom(ma) {
+            continue;
+        }
+        let Some(dx) = decs[a].as_ref() else { continue };
+        // the CrossMic set at THIS tom's rate: the other toms and the eligible sources; the
+        // target itself is included (measure_pair_alignment skips the (a, a) pair)
+        let mut pos: Vec<usize> = Vec::new();
+        for (j, mj) in mics.iter().enumerate() {
+            let eligible = is_tom(mj) || mj.kind.is_some();
+            if !eligible {
+                continue;
+            }
+            if let Some(d) = decs[j].as_ref()
+                && d.sr == dx.sr
+            {
+                pos.push(j);
+            }
+        }
+        let cross: Vec<CrossMic> = pos
+            .iter()
+            .map(|&j| {
+                let m = &mics[j];
+                let d = decs[j].as_ref().expect("checked above");
+                let kind = if is_tom(m) {
+                    XKind::Tom
+                } else {
+                    m.kind.expect("checked above")
+                };
+                let motion = if is_tom(m) {
+                    m.times.clone()
+                } else {
+                    source_motion(m, &d.samples, d.sr)
+                };
+                CrossMic {
+                    kind,
+                    signal: &d.samples,
+                    motion,
+                }
+            })
+            .collect();
+        for (ta, sa, aligned, coins, _) in measure_pair_alignment(&cross, dx.sr, p) {
+            // count each pair once, from its own target tom's pass (the set repeats per tom)
+            if pos[ta] != a {
+                continue;
+            }
+            if coins >= p.align_min_coins {
+                out[pos[sa]].1 += 1;
+                if aligned {
+                    out[pos[sa]].0 += 1;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The rule's mics: the tom mic under test with `motion` as its hit times, then the sources.
@@ -402,14 +496,23 @@ fn inherit_on_placement(
     inherited
 }
 
+/// The ablation switches of #285 (see [`switch`]): the drop and the template exclusion.
+#[derive(Debug, Clone, Copy)]
+struct Switches {
+    /// `DRUMSPIKE_A6_RULE`: the drop marks on the events and the re-detected candidates.
+    rule: bool,
+    /// `DRUMSPIKE_A6_TMPL`: the template exclusion in the re-detection.
+    tmpl: bool,
+}
+
 fn run_one(
     svc: &Service,
     op: &Shared,
     mics: &[Mic],
     a: usize,
     p: &CrossBleedParams,
-    rule_on: bool,
-    tmpl_on: bool,
+    sw: Switches,
+    session: &[(usize, usize)],
 ) -> Option<Value> {
     let x_mic = &mics[a];
     // decode the tom mic and the sources (a source that cannot be read or has another rate is out)
@@ -430,6 +533,16 @@ fn run_one(
         return None;
     }
     let sr = dec_x.sr;
+    // #313: the session-wide per-source verdict, handed to both passes (see [`session_alignment`]).
+    // The CrossMic vec is [the target, srcs...]; the target is never queried as a source.
+    let sess = SessionAlign {
+        source_aligned_targets: std::iter::once(0)
+            .chain(srcs.iter().map(|(i, _)| session[*i].0))
+            .collect(),
+        source_targets: std::iter::once(0)
+            .chain(srcs.iter().map(|(i, _)| session[*i].1))
+            .collect(),
+    };
     // 1. the drop marks on the events
     let mut removed = 0usize;
     // the pass-1 bleed marks: the times of the hits pass 1 judged bleed (assigned in the block
@@ -447,7 +560,12 @@ fn run_one(
         if evs.len() != x_mic.times.len() {
             return None; // the hits changed while the rule ran
         }
-        let (marks_t, learned1) = cross_bleed(&cross_mics(&dec_x, &srcs, mics, x_mic.times.clone()), sr, p);
+        let (marks_t, learned1) = cross_bleed_session(
+            &cross_mics(&dec_x, &srcs, mics, x_mic.times.clone()),
+            sr,
+            p,
+            Some(&sess),
+        );
         let marks = &marks_t[0];
         bleed_pass1 = aligned_pass1_bleed(marks, &x_mic.times, &x_mic.edited);
         learned = learned1;
@@ -459,7 +577,7 @@ fn run_one(
             .filter(|&j| marks[j].bleed && !x_mic.edited[j])
             .map(|j| json!({"t": x_mic.times[j], "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db}))
             .collect();
-        if rule_on {
+        if sw.rule {
             for (j, e) in evs.iter_mut().enumerate() {
                 if marks[j].bleed && !x_mic.edited[j] {
                     e.extra.insert("bleed".into(), Value::Bool(true));
@@ -494,7 +612,7 @@ fn run_one(
         let Ok((_, cands_a, _)) = onset::detect_onsets_and_cands(&dec_x.samples, sr, &p_on) else {
             return Some(json!({"removed": removed, "redetected": redetected}));
         };
-        let exclude: Vec<usize> = if tmpl_on {
+        let exclude: Vec<usize> = if sw.tmpl {
             (0..cands_a.len())
                 .filter(|&k| {
                     let tc = cands_a[k].time;
@@ -523,11 +641,12 @@ fn run_one(
         // as `prior` (#296): the alignment is decided on the stored hits, not re-measured on
         // the candidate times (whose |lead| medians move).
         let cand_motion = refined_motion(&dec_x.samples, sr, &cands.iter().map(|c| c.time).collect::<Vec<_>>());
-        let (marks_t, learned2) = cross_bleed_prior(
+        let (marks_t, learned2) = cross_bleed_prior_session(
             &cross_mics(&dec_x, &srcs, mics, cand_motion.clone()),
             sr,
             p,
             Some(&learned),
+            Some(&sess),
         );
         // the pass-1 inherit rule (#296, coordinator refinement): applied per CANDIDATE on the
         // FINAL placement, after `analyze_detected` (see `inherit_on_placement`).
@@ -537,7 +656,7 @@ fn run_one(
         for (j, c) in cands.iter_mut().enumerate() {
             c.cross_lead_ms = marks[j].lead_ms.map(|l| l as f32);
             c.cross_ratio_db = marks[j].ratio_db.map(|r| r as f32);
-            if rule_on && marks[j].bleed && c.kept {
+            if sw.rule && marks[j].bleed && c.kept {
                 c.kept = false;
                 c.gate = Gate::CrossBleed;
                 dropped.push(j);
@@ -652,11 +771,17 @@ fn run_one(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use drumspike_core::analyze::Analysis;
-    use drumspike_core::detect::cross_bleed::CrossMark;
+    use drumspike_core::detect::cross_bleed::{
+        CrossBleedParams, CrossMark, CrossMic, SessionAlign, XKind, cross_bleed, cross_bleed_session,
+    };
     use drumspike_core::refine::Hit;
 
-    use super::{aligned_pass1_bleed, inherit_on_placement};
+    use super::{Mic, aligned_pass1_bleed, inherit_on_placement, session_alignment_decs};
+
+    const SR: u32 = 48_000;
 
     fn analysis(ts: &[f64]) -> Analysis {
         Analysis {
@@ -794,5 +919,204 @@ mod tests {
         assert!(inherited.is_empty(), "the event stays: {inherited:?}");
         assert_eq!(a.events.len(), 1);
         assert_eq!(a.events[0].t, marked);
+    }
+
+    // ---- #313: the session pre-pass and the handed-in verdict (fix tests 2 and 3) ----
+
+    /// A kick-like hit at `t0` s (as the core's kick hit): a 55->125 Hz sweep.
+    fn kick_hit(x: &mut [f32], t0: f64, db: f64) {
+        let i0 = (t0 * f64::from(SR)).round() as usize;
+        let amp = 10f64.powf(db / 20.0);
+        let mut ph = 0.0f64;
+        for k in 0..((0.3 * f64::from(SR)) as usize).min(x.len().saturating_sub(i0)) {
+            let t = k as f64 / f64::from(SR);
+            ph += 2.0 * std::f64::consts::PI * (55.0 + 70.0 * (-t / 0.03).exp()) / f64::from(SR);
+            let env = (t / 0.0005).min(1.0) * (-t / 0.12).exp();
+            x[i0 + k] += (ph.sin() * env * amp) as f32;
+        }
+    }
+
+    fn mic(name: &str, kind: Option<XKind>, times: Vec<f64>) -> Mic {
+        Mic {
+            name: name.into(),
+            kind,
+            path: std::path::PathBuf::new(),
+            mix: "average".into(),
+            edited: vec![false; times.len()],
+            times,
+            cands: None,
+        }
+    }
+
+    fn dec(sig: &[f32]) -> Option<Arc<crate::media::Decoded>> {
+        Some(Arc::new(crate::media::Decoded {
+            sr: SR,
+            samples: sig.to_vec(),
+        }))
+    }
+
+    /// The per-target [`CrossMic`] vec of `run_one` (the target, then the sources) with its handed-in
+    /// session verdict, and the verdict run: the app path on one tom.
+    fn run_target(
+        toms: &[(&str, &[f32], &[f64])],
+        srcs: &[(&str, XKind, &[f32], &[f64])],
+        target: usize,
+        session: &[(usize, usize)],
+        p: &CrossBleedParams,
+    ) -> (Vec<CrossMark>, Vec<drumspike_core::detect::cross_bleed::PairLearned>) {
+        let mut mics_vec = vec![CrossMic {
+            kind: XKind::Tom,
+            signal: toms[target].1,
+            motion: toms[target].2.to_vec(),
+        }];
+        let mut sess = vec![(0usize, 0usize)];
+        for (name, kind, sig, times) in srcs {
+            mics_vec.push(CrossMic {
+                kind: *kind,
+                signal: sig,
+                motion: times.to_vec(),
+            });
+            let idx = toms.iter().position(|(n, _, _)| n == name);
+            match idx {
+                Some(i) => sess.push(session[i]),
+                None => sess.push(session[toms.len() + srcs.iter().position(|(n, _, _, _)| n == name).expect("src")]),
+            }
+        }
+        let (marks_t, learned) = cross_bleed_session(
+            &mics_vec,
+            SR,
+            p,
+            Some(&SessionAlign {
+                source_aligned_targets: sess.iter().map(|s| s.0).collect(),
+                source_targets: sess.iter().map(|s| s.1).collect(),
+            }),
+        );
+        (marks_t[0].clone(), learned)
+    }
+
+    /// #313 fix test 2: two tom tracks of one session analysed as SEPARATE targets get the same
+    /// session verdict (and records) as one call over both. The snare measures aligned on both
+    /// toms (its copies at the snare's times), so the pre-pass reads the snare 2 of 2, and each
+    /// per-target run judges by the level test alone with the session-wide record.
+    #[test]
+    fn two_tom_targets_get_the_same_session_verdict_as_one_call_over_both() {
+        let n = (2.0f64 * f64::from(SR)) as usize;
+        let mut snare = vec![0f32; n];
+        let mut t1 = vec![0f32; n];
+        let mut t2 = vec![0f32; n];
+        let mut snare_motion = Vec::new();
+        let mut t1_motion = Vec::new();
+        let mut t2_motion = Vec::new();
+        for i in 0..24 {
+            let t = 0.2 + f64::from(i) * 0.05;
+            kick_hit(&mut snare, t, -3.0);
+            kick_hit(&mut t1, t + 0.0002, -21.0);
+            kick_hit(&mut t2, t, -21.0);
+            snare_motion.push(t);
+            t1_motion.push(t + 0.0002);
+            t2_motion.push(t);
+        }
+        // the mics of the session, as run_step builds them (the toms first, then the snare)
+        let mics = [
+            mic("t1", None, t1_motion.clone()),
+            mic("t2", None, t2_motion.clone()),
+            mic("snare", Some(XKind::Snare), snare_motion.clone()),
+        ];
+        let decs = [dec(&t1), dec(&t2), dec(&snare)];
+        let p = CrossBleedParams::default();
+        let session = session_alignment_decs(&mics, &decs, &p);
+        // the pre-pass verdict: the snare aligned on 2 of 2 qualifying tom targets
+        assert_eq!(session[2], (2, 2), "{session:?}");
+        let toms: [(&str, &[f32], &[f64]); 2] = [("t1", &t1, &t1_motion), ("t2", &t2, &t2_motion)];
+        let srcs: [(&str, XKind, &[f32], &[f64]); 1] = [("snare", XKind::Snare, &snare, &snare_motion)];
+        let (marks1, learned1) = run_target(&toms, &srcs, 0, &session, &p);
+        let (marks2, learned2) = run_target(&toms, &srcs, 1, &session, &p);
+        // one call over both toms (the core's own full-session run) for comparison
+        let mics_all = [
+            CrossMic {
+                kind: XKind::Tom,
+                signal: &t1,
+                motion: t1_motion.clone(),
+            },
+            CrossMic {
+                kind: XKind::Tom,
+                signal: &t2,
+                motion: t2_motion.clone(),
+            },
+            CrossMic {
+                kind: XKind::Snare,
+                signal: &snare,
+                motion: snare_motion.clone(),
+            },
+        ];
+        let (marks_all, learned_all) = cross_bleed(&mics_all, SR, &p);
+        // learned_all order: t1's (t2, snare) pairs, then t2's (t1, snare) pairs
+        for (lp, la, mp, ma_all) in [
+            (&learned1[0], &learned_all[1], &marks1, &marks_all[0]),
+            (&learned2[0], &learned_all[3], &marks2, &marks_all[1]),
+        ] {
+            // the same session-wide record ...
+            assert_eq!(lp.source_targets, la.source_targets, "{lp:?} vs {la:?}");
+            assert_eq!(lp.source_aligned_targets, la.source_aligned_targets, "{lp:?} vs {la:?}");
+            assert_eq!(lp.aligned, la.aligned, "{lp:?} vs {la:?}");
+            assert_eq!(lp.align_coins, la.align_coins, "{lp:?} vs {la:?}");
+            assert_eq!(lp.align_med_abs_lead_ms, la.align_med_abs_lead_ms, "{lp:?} vs {la:?}");
+            // ... and the same verdict: the level test alone, the copies bleed with the mark
+            for (m, ma) in mp.iter().zip(ma_all.iter()) {
+                assert_eq!(m.bleed, ma.bleed, "{m:?} vs {ma:?}");
+                assert!(m.bleed, "{m:?}");
+            }
+        }
+    }
+
+    /// #313 fix test 3, the ENST-like case through the app path: the snare measures aligned on
+    /// tom 1 (0.2 ms copies) but not on tom 2 (1 ms copies) — the pre-pass reads 1 of 2, and
+    /// NEITHER per-target run judges by the level test alone: the pairs keep the two-part
+    /// verdict, so the 1 ms copies are bleed WITHOUT the aligned mark and the 0.2 ms copies of
+    /// tom 1 stay.
+    #[test]
+    fn the_enst_like_case_stays_unaligned_through_the_app_path() {
+        let n = (8.0f64 * f64::from(SR)) as usize;
+        let mut snare = vec![0f32; n];
+        let mut t1 = vec![0f32; n];
+        let mut t2 = vec![0f32; n];
+        let mut snare_motion = Vec::new();
+        let mut t1_motion = Vec::new();
+        let mut t2_motion = Vec::new();
+        for i in 0..24 {
+            let t = 0.2 + f64::from(i) * 0.05;
+            kick_hit(&mut snare, t, -3.0);
+            kick_hit(&mut t1, t + 0.0002, -21.0);
+            kick_hit(&mut t2, t + 0.001, -21.0);
+            snare_motion.push(t);
+            t1_motion.push(t + 0.0002);
+            t2_motion.push(t + 0.001);
+        }
+        let mics = [
+            mic("t1", None, t1_motion.clone()),
+            mic("t2", None, t2_motion.clone()),
+            mic("snare", Some(XKind::Snare), snare_motion.clone()),
+        ];
+        let decs = [dec(&t1), dec(&t2), dec(&snare)];
+        let p = CrossBleedParams::default();
+        let session = session_alignment_decs(&mics, &decs, &p);
+        // the pre-pass verdict: the snare aligned on only 1 of its 2 qualifying targets
+        assert_eq!(session[2], (1, 2), "{session:?}");
+        let toms: [(&str, &[f32], &[f64]); 2] = [("t1", &t1, &t1_motion), ("t2", &t2, &t2_motion)];
+        let srcs: [(&str, XKind, &[f32], &[f64]); 1] = [("snare", XKind::Snare, &snare, &snare_motion)];
+        let (marks1, learned1) = run_target(&toms, &srcs, 0, &session, &p);
+        let (marks2, learned2) = run_target(&toms, &srcs, 1, &session, &p);
+        for learned in [&learned1, &learned2] {
+            assert!(!learned[0].aligned, "{learned:?}");
+            assert_eq!(learned[0].source_targets, 2, "{learned:?}");
+            assert_eq!(learned[0].source_aligned_targets, 1, "{learned:?}");
+        }
+        // two-part verdict on both toms: the copies are bleed without the aligned mark
+        for m in &marks1 {
+            assert!(!m.bleed && !m.aligned_mark, "{m:?}");
+        }
+        for m in &marks2 {
+            assert!(m.bleed && !m.aligned_mark, "{m:?}");
+        }
     }
 }
