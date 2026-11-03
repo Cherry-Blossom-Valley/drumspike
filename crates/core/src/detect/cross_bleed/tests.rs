@@ -385,6 +385,8 @@ fn the_prior_alignment_is_honoured_in_the_re_detection() {
         source: 1,
         lead_ms: None,
         ratio_db: None,
+        ratio_p95_db: None,
+        ratio_max_db: None,
         aligned: true,
         align_coins: 30,
         align_med_abs_lead_ms: Some(0.06),
@@ -801,6 +803,8 @@ fn the_inherited_alignment_survives_the_prior() {
         source: 1,
         lead_ms: None,
         ratio_db: None,
+        ratio_p95_db: None,
+        ratio_max_db: None,
         aligned: true,
         align_coins: 24,
         align_med_abs_lead_ms: Some(1.0),
@@ -815,4 +819,123 @@ fn the_inherited_alignment_survives_the_prior() {
     for (j, m) in marks2[0].iter().enumerate() {
         assert!(m.bleed, "hit {j}: {m:?}");
     }
+}
+
+/// #309: the pair's own bleed ceiling. The clear cases (kick hits WITHOUT a tom hit within
+/// `coincide_ms`) give the pair's bleed ratio distribution (-40 to -15 dB here); on the ALIGNED
+/// pair a coinciding hit at -5 dB (louder than any bleed the pair produces) is the tom's own
+/// motion and stays, one at -25 dB is bleed.
+#[test]
+fn an_aligned_pair_never_calls_a_hit_louder_than_the_pairs_own_bleed() {
+    let n = (3.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    // the clear cases: kicks alone; the tom mic hears them 1 ms later at -15 to -40 dB. The
+    // bleed copies are NOT in the tom's hit list (no detector firing on them).
+    for (i, level) in [-19.0, -24.0, -26.0, -27.0, -29.0, -32.0, -37.0, -42.0]
+        .into_iter()
+        .enumerate()
+    {
+        let t = 0.1 + (i as f64) * 0.1;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.001, level);
+        kick_motion.push(t);
+    }
+    // the coins: tom hits exactly on the kick times (the aligned session), the copies 15 dB under
+    for i in 0..22 {
+        let t = 1.0 + (i as f64) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t, -19.0);
+        kick_motion.push(t);
+        tom_motion.push(t);
+    }
+    // the two test hits, both coinciding (motion exactly on the kick time):
+    // -5 dB (louder than every clear case) and -25 dB (inside the bleed range)
+    kick_hit(&mut kick, 2.2, -3.0);
+    kick_hit(&mut tom, 2.2, -9.0);
+    kick_motion.push(2.2);
+    tom_motion.push(2.2);
+    kick_hit(&mut kick, 2.6, -3.0);
+    kick_hit(&mut tom, 2.6, -29.0);
+    kick_motion.push(2.6);
+    tom_motion.push(2.6);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let (marks, learned) = cross_bleed(&mics, SR, &CrossBleedParams::default());
+    let pl = &learned[0];
+    assert!(pl.aligned, "{pl:?}");
+    // test 3: the record carries the three ratio fields of the clear cases
+    let max = pl.ratio_max_db.expect("the clear cases teach the maximum");
+    let p95 = pl.ratio_p95_db.expect("the clear cases teach the p95");
+    let med = pl.ratio_db.expect("the clear cases teach the median");
+    assert!((-20.0..=-12.0).contains(&max), "max {max}");
+    assert!(p95 <= max + 1e-9 && p95 >= med, "p95 {p95} vs med {med} max {max}");
+    assert!((-30.0..=-15.0).contains(&med), "median {med}");
+    // the -5 dB hit stays (above the pair's own bleed), the -25 dB hit is bleed
+    assert!(!marks[0][22].bleed, "the -5 dB hit must stay: {:?}", marks[0][22]);
+    assert!(marks[0][23].bleed, "the -25 dB hit must be bleed: {:?}", marks[0][23]);
+}
+
+/// #309: the ceiling is an ALIGNED-pair rule. The same -5 dB hit on an UNALIGNED pair (a real
+/// 1 ms arrival) keeps the two-part verdict: it is late and quiet, so it is bleed although it
+/// sits above the pair's clear-case maximum.
+#[test]
+fn an_unaligned_pair_keeps_the_two_part_verdict_regardless_of_the_ceiling() {
+    let n = (3.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    for (i, level) in [-19.0, -24.0, -26.0, -27.0, -29.0, -32.0, -37.0, -42.0]
+        .into_iter()
+        .enumerate()
+    {
+        let t = 0.1 + (i as f64) * 0.1;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.001, level);
+        kick_motion.push(t);
+    }
+    for i in 0..22 {
+        let t = 1.0 + (i as f64) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.001, -19.0);
+        kick_motion.push(t);
+        tom_motion.push(t + 0.001);
+    }
+    // the same -5 dB hit, now arriving 1 ms after the kick (a real acoustic arrival)
+    kick_hit(&mut kick, 2.2, -3.0);
+    kick_hit(&mut tom, 2.2 + 0.001, -9.0);
+    kick_motion.push(2.2);
+    tom_motion.push(2.2 + 0.001);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let (marks, learned) = cross_bleed(&mics, SR, &CrossBleedParams::default());
+    assert!(!learned[0].aligned, "{learned:?}");
+    let max = learned[0].ratio_max_db.expect("the clear cases teach the maximum");
+    assert!((-20.0..=-12.0).contains(&max), "max {max}");
+    // the two-part verdict fires on its own: late AND quieter than the source, the ceiling of
+    // the aligned pair does not apply
+    assert!(marks[0][22].bleed, "the late quiet hit is bleed: {:?}", marks[0][22]);
 }

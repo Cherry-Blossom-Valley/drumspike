@@ -77,6 +77,19 @@
 //! travels through [`cross_bleed_prior`] (the pass-1 `align_inherited` is carried with the
 //! alignment).
 //!
+//! # The aligned session, the pair's own bleed ceiling (#309)
+//!
+//! The level test alone misjudges on the kick pairs: it compares X's tom-band level with S's
+//! level in S's own band, and the kick-in mic is loud in its band even on a small kick — a
+//! medium tom stroke with a kick under it reads -3 to -5 dB and is called bleed, while the
+//! pair's real bleed reads -15 to -53 dB. The principle: **bleed of S on X is never louder than
+//! the bleed this pair produces.** The pair's clear cases (S hits without an X hit) sample that
+//! bleed; their ratio distribution is recorded per pair (`ratio_med_db` = [`PairLearned::ratio_db`],
+//! [`PairLearned::ratio_p95_db`], [`PairLearned::ratio_max_db`]), and on an ALIGNED pair a
+//! coinciding hit is bleed only when its ratio is under `margin_db` AND not above the pair's
+//! clear-case maximum. Unaligned pairs keep the two-part verdict (the lead still separates
+//! there), and a pair with fewer than `min_clear` clear cases keeps the level test alone.
+//!
 //! # Template validity
 //!
 //! The rule does not fix the detector's template on its own: a tom track whose loudest candidates are
@@ -243,8 +256,14 @@ pub struct PairLearned {
     pub source: usize,
     /// The median bleed lead of the clear cases (ms).
     pub lead_ms: Option<f64>,
-    /// The median bleed level ratio of the clear cases (dB).
+    /// The MEDIAN bleed level ratio of the clear cases (dB) — `ratio_med_db` of the #309 record.
     pub ratio_db: Option<f64>,
+    /// #309: the 95th percentile of the clear cases' bleed level ratios (dB).
+    pub ratio_p95_db: Option<f64>,
+    /// #309: the MAXIMUM of the clear cases' bleed level ratios (dB) — the loudest bleed the
+    /// pair itself produces. On an ALIGNED pair a coinciding hit above this is never bleed:
+    /// bleed of S on X is never louder than the bleed this pair produces.
+    pub ratio_max_db: Option<f64>,
     /// #296: the pair's coinciding hits are centred on 0 — an aligned session (Auto-Align 2 and
     /// the like removed the bleed's time lead): the verdict for the pair is the level test alone.
     pub aligned: bool,
@@ -475,6 +494,19 @@ pub fn cross_bleed_prior(
         // after the kick hit even on an aligned session). A session without a measured-aligned
         // pair stays on the two-part verdict.
         let session_aligned = align_of.iter().any(|&(_, al, _, _, _)| al);
+        // #309: X's hit times sorted, for the clear-case test below: a clear case is an S hit
+        // WITHOUT an X hit within `coincide_ms` — a coinciding hit of X is the tom's own motion,
+        // and its ratio must not enter the pair's bleed distribution (a real stroke's ratio would
+        // raise the ceiling and hide the bleed).
+        let mut x_sorted: Vec<f64> = x.motion.clone();
+        x_sorted.sort_by(f64::total_cmp);
+        let x_hit_near = |ts: f64| {
+            let k = x_sorted.partition_point(|&tx| tx < ts);
+            [x_sorted.get(k.saturating_sub(1)).copied(), x_sorted.get(k).copied()]
+                .into_iter()
+                .flatten()
+                .any(|tx| (tx - ts).abs() <= coincide + 1e-9)
+        };
         let mut pair: Vec<(usize, PairLearned)> = Vec::new();
         for (&b, &(_, mut aligned, coins_n, med_abs_lead, mut align_inherited)) in
             srcs.iter().filter(|&&b| b != a).zip(align_of.iter())
@@ -492,6 +524,9 @@ pub fn cross_bleed_prior(
             let mut ratios: Vec<f64> = Vec::new();
             let mut leads: Vec<f64> = Vec::new();
             for (k, &ts) in s.motion.iter().enumerate() {
+                if x_hit_near(ts) {
+                    continue;
+                }
                 let lx = level_at(
                     x.signal,
                     &band_sections(XKind::Tom.role().band(), sr),
@@ -533,6 +568,23 @@ pub fn cross_bleed_prior(
             } else {
                 None
             };
+            // #309: the pair's clear-case ratio distribution — median, p95 and max. The max is
+            // the loudest bleed the pair itself produces; on an aligned pair a coinciding hit
+            // louder than it is the tom's own motion, never bleed (bleed of S on X is never
+            // louder than the bleed this pair produces).
+            let mut sorted = ratios.clone();
+            sorted.sort_by(f64::total_cmp);
+            let p95 = if sorted.len() >= p.min_clear {
+                let idx = ((sorted.len() - 1) as f64 * 0.95).ceil() as usize;
+                Some(sorted[idx])
+            } else {
+                None
+            };
+            let max = if sorted.len() >= p.min_clear {
+                sorted.last().copied()
+            } else {
+                None
+            };
             pair.push((
                 b,
                 PairLearned {
@@ -540,6 +592,8 @@ pub fn cross_bleed_prior(
                     source: b,
                     lead_ms: lead_learned,
                     ratio_db: ratio_learned,
+                    ratio_p95_db: p95,
+                    ratio_max_db: max,
                     aligned,
                     align_coins: coins_n,
                     align_med_abs_lead_ms: med_abs_lead,
@@ -611,8 +665,18 @@ pub fn cross_bleed_prior(
                     // #296: an ALIGNED pair judges by level alone — the alignment removed the
                     // bleed's arrival delay, so the lead test cannot fire; the ratio sweep of the
                     // ticket is counted per margin.
+                    //
+                    // #309: and the level alone is not enough — the kick-in mic is loud in its
+                    // band even on a small kick, so a medium tom stroke with a kick under it
+                    // reads -3 to -5 dB while the pair's real bleed sits far lower. Bleed of S
+                    // on X is never louder than the bleed this pair produces: the clear cases
+                    // (S hits without an X hit) give the pair's bleed ratio distribution, and a
+                    // coinciding hit whose ratio is ABOVE the pair's clear-case maximum
+                    // (`ratio_max_db`) is the tom's own motion, never bleed. A pair with fewer
+                    // than `min_clear` clear cases keeps the level test alone. Unaligned pairs
+                    // keep the two-part verdict unchanged.
                     if pl.aligned {
-                        if r < p.margin_db {
+                        if r < p.margin_db && pl.ratio_max_db.is_none_or(|mx| r <= mx) {
                             bleed = true;
                         }
                         for (mi, &m) in ALIGN_COUNT_MARGINS_DB.iter().enumerate() {

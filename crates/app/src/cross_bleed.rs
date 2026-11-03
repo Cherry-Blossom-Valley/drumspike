@@ -306,6 +306,11 @@ fn pairs_json(mics: &[Mic], srcs: &[(usize, Arc<Decoded>)], learned: &[PairLearn
                     "coins": l.align_coins,
                     "med_abs_lead_ms": l.align_med_abs_lead_ms,
                     "align_inherited": l.align_inherited,
+                    // #309: the pair's clear-case bleed ratio distribution — a coinciding hit
+                    // louder than the max is the tom's own motion, never bleed (aligned pairs)
+                    "ratio_med_db": l.ratio_db,
+                    "ratio_p95_db": l.ratio_p95_db,
+                    "ratio_max_db": l.ratio_max_db,
                     "counts_db": counts,
                 })
             })
@@ -429,6 +434,13 @@ fn run_one(
             .collect();
         learned = learned1;
         pairs = pairs_json(mics, &srcs, &learned);
+        // #309: pass 1's verdict, visible: per track, the hits pass 1 judged bleed with their
+        // time, lead and ratio (the re-detection record below replaces the step-1 marks, but
+        // this list stays on the detector record).
+        let pass1_removed: Vec<Value> = (0..marks.len())
+            .filter(|&j| marks[j].bleed && !x_mic.edited[j])
+            .map(|j| json!({"t": x_mic.times[j], "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db}))
+            .collect();
         if rule_on {
             for (j, e) in evs.iter_mut().enumerate() {
                 if marks[j].bleed && !x_mic.edited[j] {
@@ -447,7 +459,7 @@ fn run_one(
             // `survive`: the step-1 marks that reach the CD step unless the re-detection below replaces the hits
             det.insert(
                 "cross_bleed".into(),
-                json!({"rule": CROSS_BLEED, "on": true, "removed": removed, "survive": removed, "pairs": pairs.clone()}),
+                json!({"rule": CROSS_BLEED, "on": true, "removed": removed, "survive": removed, "pass1_removed": pass1_removed, "pairs": pairs.clone()}),
             );
         }
         g.mark_dirty();
