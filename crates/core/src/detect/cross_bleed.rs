@@ -294,46 +294,32 @@ pub fn hit_level_full_band(x: &[f32], sr: u32, t: f64, p: &CrossBleedParams) -> 
 }
 
 /// The motion times of a re-detection's candidates: the SAME refinement the stored hits use
-/// (`rule` — the analysis rule, version 6 today), not the bare [`first_motion`] walk. On bleed
-/// the walk runs back over the slow rise that precedes the source's attack (version 6's whole
-/// reason: the walk foot "lies on the bleed or the soft drift that often precedes a snare or
-/// kick attack") and, with no `prev` bound, can end more than `coincide_ms` before the source
-/// hit — the pass-2 coincidence lookup then finds nothing and the candidate stays (#296 verify
-/// round 2: pass-2 `dropped` records with leads of 0.7 to 4.5 ms where pass 1's median |lead|
-/// is 0.06 ms). Refining with the stored rule gives both passes the same times.
+/// (`rule` — the analysis rule, version 6 today) and the SAME bounds (`neighbours` of the
+/// candidate list — the analysis's `refine_track_rule_peak` calls [`refine_rule_peak`] with
+/// exactly this neighbour list), not the bare [`first_motion`] walk and not the round-3
+/// source-hit bounds. On bleed the walk runs back over the slow rise that precedes the
+/// source's attack (version 6's whole reason: the walk foot "lies on the bleed or the soft
+/// drift that often precedes a snare or kick attack") and, with no `prev` bound, can end more
+/// than `coincide_ms` before the source hit — the pass-2 coincidence lookup then finds nothing
+/// and the candidate stays (#296 verify round 2: pass-2 `dropped` records with leads of 0.7 to
+/// 4.5 ms where pass 1's median |lead| is 0.06 ms). Refining with the stored rule gives both
+/// passes the same times.
+/// The invariant of #296 verify round 4: the verdict is taken at the SAME time the hit is
+/// finally stored with. Extra refine bounds (round 3's coinciding source hits) made the
+/// verdict run at a time the final analysis does not store — the analysis refines the kept
+/// candidates again with its own bounds and the stored time moved onto the source hit, so a
+/// bleed was kept (verdict `lead None` at the grid, stored 0.1 ms from the snare hit). The
+/// caller hands the SAME refined times to the analysis, so nothing moves afterwards.
 /// `refine = false` returns `ts` unchanged: the candidate times are the motion, as the stored
 /// hits of a refine-off analysis are.
-/// `bounds` (parallel to `ts`) carries each candidate's EXTRA refine bounds: the times of the
-/// source hits that coincide with it (within `coincide_ms`, as the app measures them). The
-/// stored hits' refine bounds the walk at the midpoint to the previous hit; a candidate's
-/// previous candidate can sit far away, so without the source hit the walk runs back over the
-/// snare bleed onto the bleed's edge — the snare's time — and the candidate lands on the
-/// source hit and collapses with, or is judged as, the bleed (#296 verify round 3: loud real
-/// tom hits 2.5 to 5.6 ms from a snare hit gone from the output). The bounds go into the same
-/// neighbour list, so the walk stops at the midpoint between the candidate and the source hit
-/// and the loud stroke keeps its own attack.
 #[must_use]
-pub fn candidate_motion(
-    x: &[f32],
-    sr: u32,
-    ts: &[f64],
-    win: RefineWindow,
-    rule: RefineRule,
-    refine: bool,
-    bounds: &[Vec<f64>],
-) -> Vec<f64> {
+pub fn candidate_motion(x: &[f32], sr: u32, ts: &[f64], win: RefineWindow, rule: RefineRule, refine: bool) -> Vec<f64> {
     if !refine {
         return ts.to_vec();
     }
     ts.iter()
         .enumerate()
-        .map(|(i, &t)| {
-            let mut nb = neighbours(ts, i);
-            if let Some(b) = bounds.get(i) {
-                nb.extend(b.iter().copied());
-            }
-            refine_rule_peak(x, t, sr, &nb, win, rule, FM_PEAK_DB).t
-        })
+        .map(|(i, &t)| refine_rule_peak(x, t, sr, &neighbours(ts, i), win, rule, FM_PEAK_DB).t)
         .collect()
 }
 

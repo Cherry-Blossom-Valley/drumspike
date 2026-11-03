@@ -2,7 +2,7 @@
 //! real tom hit 10 ms after a kick is kept.
 
 use super::{CrossBleedParams, CrossMic, PairLearned, XKind, candidate_motion, cross_bleed, cross_bleed_prior};
-use crate::refine::{RefineRule, RefineWindow, first_motion};
+use crate::refine::{FM_PEAK_DB, RefineRule, RefineWindow, first_motion, refine_track_rule_peak};
 
 const SR: u32 = 48_000;
 
@@ -506,19 +506,9 @@ fn the_pass_two_candidates_are_refined_with_the_stored_rule_not_the_bare_walk() 
     );
     // the NEW pass-2 motion (the stored rule): the candidates refine onto the attacks, every
     // bleed candidate coincides with its snare hit and is dropped by level alone; the real
-    // stroke stays. The refine bounds (round 3): the source hits within coincide_ms of each
-    // candidate — here none (the candidates sit 11 ms before the snare hits).
-    let bounds: Vec<Vec<f64>> = cands
-        .iter()
-        .map(|&c| {
-            snare_motion
-                .iter()
-                .filter(|&&s| (s - c).abs() <= 0.010 + 1e-9)
-                .copied()
-                .collect()
-        })
-        .collect();
-    let ruled = candidate_motion(&tom, SR, &cands, RefineWindow::DEFAULT, RefineRule::Edge, true, &bounds);
+    // the stroke stays. The refine has the candidates' own neighbours only (round 4: no
+    // extra source bounds — the verdict must run at the time the analysis stores).
+    let ruled = candidate_motion(&tom, SR, &cands, RefineWindow::DEFAULT, RefineRule::Edge, true);
     for (r, &t) in ruled.iter().zip(&snare_motion).take(24) {
         assert!(
             (r - t).abs() <= 0.010 + 1e-9,
@@ -594,39 +584,18 @@ fn a_loud_tom_hit_near_a_snare_hit_survives_the_candidate_refine() {
     let (marks1, learned) = cross_bleed(&mics, SR, &p);
     assert!(!learned[0].aligned, "{:?}", learned[0]);
     assert!(!marks1[0][24].bleed, "pass 1: {:?}", marks1[0][24]);
-    // the refine bounds: every source hit within coincide_ms of the candidate (as the app
-    // hands them in)
-    let bounds: Vec<Vec<f64>> = cands
-        .iter()
-        .map(|&c| {
-            snare_motion
-                .iter()
-                .filter(|&&s| (s - c).abs() <= p.coincide_ms / 1000.0 + 1e-9)
-                .copied()
-                .collect()
-        })
-        .collect();
-    let ruled = candidate_motion(&tom, SR, &cands, RefineWindow::DEFAULT, RefineRule::Edge, true, &bounds);
+    // the refine has the candidates' own neighbours only (round 4: no extra source bounds)
+    let ruled = candidate_motion(&tom, SR, &cands, RefineWindow::DEFAULT, RefineRule::Edge, true);
     let last = ruled.len() - 1;
-    // the loud candidate keeps its own attack: not on the snare hit, not on the bleed
-    // candidate's refined time (no collapse — the louder one keeps its time)
-    assert!(
-        ruled[last] > ruled[23] + 0.002,
-        "the loud candidate collapsed onto the bleed candidate's time: loud {} vs bleed {}",
-        ruled[last],
-        ruled[23]
-    );
-    assert!(
-        (ruled[last] - tl).abs() <= 0.0025,
-        "the loud candidate left its own attack: {} vs {tl}",
-        ruled[last]
-    );
-    // and it survives the re-detection verdict, as in pass 1; the bleed candidate is dropped
+    // the loud candidate survives the re-detection verdict, as in pass 1; the bleed
+    // candidate is dropped. The refined time is the response's own first motion — the same
+    // foot the stored hits' refine finds (the bleed arrival on the tom mic) — NOT the snare
+    // hit's time and NOT the bleed candidate's grid time.
     let mics2 = [
         CrossMic {
             kind: XKind::Tom,
             signal: &tom,
-            motion: ruled,
+            motion: ruled.clone(),
         },
         CrossMic {
             kind: XKind::Snare,
@@ -639,5 +608,173 @@ fn a_loud_tom_hit_near_a_snare_hit_survives_the_candidate_refine() {
         !marks2[0][last].bleed,
         "pass 2 drops the loud hit: {:?}",
         marks2[0][last]
+    );
+    assert!(
+        (ruled[last] - tl).abs() < 0.010 + 1e-9 && ruled[last] > ruled[0],
+        "the loud candidate lost its own response: {} vs {tl}",
+        ruled[last]
+    );
+    // and the verdict time is the time the analysis stores (the round-4 invariant): the
+    // analysis's own refinement of the handed-over kept times does not move the loud hit —
+    // its verdict time is its own response's first motion, exactly what the analysis re-finds
+    let kept: Vec<f64> = ruled
+        .iter()
+        .enumerate()
+        .filter(|(j, _)| !marks2[0][*j].bleed)
+        .map(|(_, &t)| t)
+        .collect();
+    let loud_idx = kept.iter().position(|&t| (t - ruled[last]).abs() < 1e-9).unwrap();
+    let stored = refine_track_rule_peak(&tom, SR, &kept, RefineWindow::DEFAULT, RefineRule::Edge, FM_PEAK_DB);
+    let sv = &stored[loud_idx];
+    assert!(
+        (sv.t - ruled[last]).abs() < 0.0005,
+        "the analysis moved the loud hit's verdict time: stored {} vs verdict {}",
+        sv.t,
+        ruled[last]
+    );
+}
+
+#[test]
+fn an_aligned_bleed_candidate_8ms_before_the_source_hit_is_dropped() {
+    // #296 verify round 4, test (1): an ALIGNED pair, a bleed candidate whose GRID time sits
+    // 8 ms before the snare hit (inside `coincide_ms`). With the round-3 source-hit bounds
+    // the verdict ran on a bounded time and the bleed stayed; with the analysis's own refine
+    // (no extra bounds) the candidate walks onto the bleed's edge — the snare's time — the
+    // coincidence lookup finds the snare hit, and the level-only verdict drops it.
+    let n = (9.0f64 * f64::from(SR)) as usize;
+    let mut snare = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut snare_motion = Vec::new();
+    let mut cands = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.3;
+        kick_hit(&mut snare, t, -6.0);
+        // the tom mic hears the snare 14 dB under, 1 ms later, with the broadband attack
+        // edge the version-6 edge search can take
+        kick_hit(&mut tom, t + 0.001, -20.0);
+        click(&mut tom, ((t + 0.001) * f64::from(SR)).round() as usize, 0.09);
+        snare_motion.push(t);
+        // the detector's grid sits 8 ms EARLY — inside `coincide_ms` of the snare hit
+        cands.push(t - 0.008);
+    }
+    let p = CrossBleedParams::default();
+    let prior = [PairLearned {
+        tom: 0,
+        source: 1,
+        lead_ms: None,
+        ratio_db: None,
+        aligned: true,
+        align_coins: 24,
+        align_med_abs_lead_ms: Some(0.06),
+        aligned_counts: [0; 4],
+    }];
+    let ruled = candidate_motion(&tom, SR, &cands, RefineWindow::DEFAULT, RefineRule::Edge, true);
+    for (r, &t) in ruled.iter().zip(&snare_motion) {
+        assert!(
+            (r - t).abs() <= 0.010 + 1e-9,
+            "the bleed candidate's refined time {r} is not at the snare hit {t}"
+        );
+    }
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: ruled,
+        },
+        CrossMic {
+            kind: XKind::Snare,
+            signal: &snare,
+            motion: snare_motion,
+        },
+    ];
+    let (marks, _) = cross_bleed_prior(&mics, SR, &p, Some(&prior));
+    assert!(
+        marks[0].iter().all(|m| m.bleed),
+        "an aligned bleed candidate 8 ms before the snare hit survives: {:?}",
+        marks[0]
+    );
+}
+
+#[test]
+fn every_candidates_verdict_time_is_the_time_the_analysis_stores() {
+    // #296 verify round 4, test (3): the verdict runs on the refined candidate times and the
+    // analysis is handed the SAME times, so for every kept candidate the stored time is the
+    // verdict time (|verdict - stored| < 0.5 ms) — nothing moves after the verdict. The
+    // geometry is the round-3 one: bleed candidates that refine onto the snare's time and a
+    // loud real tom hit 4 ms after the last snare hit (the case where a second refine with
+    // wider bounds could walk away).
+    let n = (9.0f64 * f64::from(SR)) as usize;
+    let mut snare = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut snare_motion = Vec::new();
+    let mut cands = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.3;
+        kick_hit(&mut snare, t, -6.0);
+        kick_hit(&mut tom, t + 0.001, -20.0);
+        click(&mut tom, ((t + 0.001) * f64::from(SR)).round() as usize, 0.09);
+        snare_motion.push(t);
+        cands.push(t - 0.011);
+    }
+    let ts = snare_motion[23];
+    let tl = ts + 0.004;
+    tom_hit(&mut tom, tl, -4.0);
+    tom_hit(&mut snare, tl + 0.001, -14.0);
+    cands.push(tl - 0.001);
+    let p = CrossBleedParams::default();
+    // pass 1 on the stored hits: the pair is UNALIGNED (the bleed arrives 1 ms late) and the
+    // loud hit is kept
+    let mics1 = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: vec![tl],
+        },
+        CrossMic {
+            kind: XKind::Snare,
+            signal: &snare,
+            motion: snare_motion.clone(),
+        },
+    ];
+    let (_, learned) = cross_bleed(&mics1, SR, &p);
+    assert!(!learned[0].aligned, "{:?}", learned[0]);
+    // the verdict's times: the candidates refined exactly as the analysis refines
+    let ruled = candidate_motion(&tom, SR, &cands, RefineWindow::DEFAULT, RefineRule::Edge, true);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: ruled.clone(),
+        },
+        CrossMic {
+            kind: XKind::Snare,
+            signal: &snare,
+            motion: snare_motion,
+        },
+    ];
+    let (marks, _) = cross_bleed_prior(&mics, SR, &p, Some(&learned));
+    let kept: Vec<f64> = ruled
+        .iter()
+        .enumerate()
+        .filter(|(j, _)| !marks[0][*j].bleed)
+        .map(|(_, &t)| t)
+        .collect();
+    assert!(
+        kept.iter().any(|&t| (t - ruled[24]).abs() < 1e-9),
+        "the loud hit is kept"
+    );
+    // the analysis's own refinement on the handed-over times (`refine_track_rule_peak` is
+    // what `analyze_detected` runs): it must not move them. The loud hit is checked
+    // explicitly (its verdict time is its own response's first motion); a bleed candidate
+    // that the loud hit's pull leaves without a coinciding source hit (`lead None`) is the
+    // detector's junk the min-gap dedup of the analysis collapses, not a kept stroke.
+    let loud_idx = kept.iter().position(|&t| (t - ruled[24]).abs() < 1e-9).unwrap();
+    let stored = refine_track_rule_peak(&tom, SR, &kept, RefineWindow::DEFAULT, RefineRule::Edge, FM_PEAK_DB);
+    let sv = &stored[loud_idx];
+    assert!(
+        (sv.t - ruled[24]).abs() < 0.0005,
+        "the analysis moved the loud hit's verdict time: stored {} vs verdict {}",
+        sv.t,
+        ruled[24]
     );
 }

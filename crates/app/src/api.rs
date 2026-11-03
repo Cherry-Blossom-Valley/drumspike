@@ -864,6 +864,15 @@ pub static REGISTRY: &[CommandSpec] = &[
         Quick,
     ),
     cmd(
+        "shell_typing",
+        "The page tells the menu a text field holds the keys",
+        &[req("on", Ty::Bool, "The plain accelerators are taken off the items")],
+        "{}",
+        App,
+        Window,
+        Quick,
+    ),
+    cmd(
         "open_paths_take",
         "Paths the Finder or a drop queued",
         &[],

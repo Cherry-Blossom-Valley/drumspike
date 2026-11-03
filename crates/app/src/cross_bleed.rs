@@ -401,36 +401,22 @@ fn run_one(
             return Some(json!({"removed": removed, "redetected": redetected}));
         };
         // the drop on the re-detected candidates, with the evidence stored per candidate; the
-        // candidate times are refined with the SAME rule the stored hits use (the analysis
-        // rule, version 6 today — `candidate_motion`), NOT the bare first-motion walk: on
-        // bleed the walk runs back over the slow rise before the snare's attack and ends more
+        // candidate times are refined with the SAME rule AND the SAME bounds the stored hits
+        // use (the analysis rule, version 6 today — `candidate_motion` with the candidates'
+        // own neighbours, NO extra source bounds), NOT the bare first-motion walk: on bleed
+        // the walk runs back over the slow rise before the snare's attack and ends more
         // than `coincide_ms` before the snare hit, so the coincidence lookup finds nothing and
         // the candidate stays (#296 verify round 2). The pass-1 pairs come in as `prior`
         // (#296): the alignment is decided on the stored hits, not re-measured on the
-        // candidate times (whose |lead| medians move). The refine bounds (#296 verify round 3):
-        // every source hit within `coincide_ms` of the candidate — without it the walk runs
-        // back over the snare bleed onto the bleed's edge (the snare's time) and a loud real
-        // hit a few ms from a snare hit collapses with, or is judged as, the bleed.
+        // candidate times (whose |lead| medians move). The round-4 invariant (#296): the
+        // verdict is taken at the SAME time the hit is stored with — the refined times go to
+        // the verdict AND to the analysis below, so the analysis's own refinement cannot move
+        // them (round 3's extra source bounds put the verdict on a time the analysis did not
+        // store, and bleeds were kept with `lead None` at the grid while stored on the snare).
         let params_a = AnalyzeParams {
             rule: crate::jobs::analysis_rule(&svc.inner.config),
             ..AnalyzeParams::default()
         };
-        let src_times: Vec<Vec<f64>> = srcs
-            .iter()
-            .map(|(i, d)| source_motion(&mics[*i], &d.samples, sr))
-            .collect();
-        let bounds: Vec<Vec<f64>> = cands
-            .iter()
-            .map(|c| {
-                let tc = c.time;
-                src_times
-                    .iter()
-                    .flatten()
-                    .filter(|&&ts| (ts - tc).abs() <= p.coincide_ms / 1000.0 + 1e-9)
-                    .copied()
-                    .collect()
-            })
-            .collect();
         let cand_motion = drumspike_core::detect::cross_bleed::candidate_motion(
             &dec_x.samples,
             sr,
@@ -438,10 +424,13 @@ fn run_one(
             params_a.window,
             params_a.rule,
             params_a.refine,
-            &bounds,
         );
-        let (marks_t, learned2) =
-            cross_bleed_prior(&cross_mics(&dec_x, &srcs, mics, cand_motion), sr, p, Some(&learned));
+        let (marks_t, learned2) = cross_bleed_prior(
+            &cross_mics(&dec_x, &srcs, mics, cand_motion.clone()),
+            sr,
+            p,
+            Some(&learned),
+        );
         let marks = &marks_t[0];
         let pairs2 = pairs_json(mics, &srcs, &learned2);
         let mut dropped: Vec<usize> = Vec::new();
@@ -456,10 +445,19 @@ fn run_one(
         }
         let drop_frames: Vec<usize> = dropped.iter().map(|&j| cands[j].frame).collect();
         redetected = drop_frames.len();
+        // the verdict's times go to the analysis verbatim (the round-4 invariant): the kept
+        // hit is stored with the time the verdict ran on, so the analysis's refinement has
+        // nothing left to move (it is the same refinement on the same list).
+        let refined_time = |h: &drumspike_core::detect::onset::OnsetHit| -> f64 {
+            cands
+                .iter()
+                .position(|c| c.frame == h.frame)
+                .map_or(h.time, |j| cand_motion[j])
+        };
         let kept: Vec<(f64, u8)> = hits
             .iter()
             .filter(|h| !drop_frames.contains(&h.frame))
-            .map(|h| (h.time, role_note("tom")))
+            .map(|h| (refined_time(h), role_note("tom")))
             .collect();
         let Ok(analysis) = analyze_detected(&dec_x.samples, sr, "tom", &kept, &params_a) else {
             return Some(json!({"removed": removed, "redetected": redetected, "pairs": pairs2}));
@@ -475,13 +473,17 @@ fn run_one(
         if let Some(cb) = det.get_mut("cross_bleed") {
             let dropped_rec: Vec<Value> = dropped
                 .iter()
-                .map(|&j| json!({"t": cands[j].time, "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db}))
+                .map(|&j| {
+                    json!({"t": cands[j].time, "t_verdict": cand_motion[j], "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db})
+                })
                 .collect();
             let kept_rec: Vec<Value> = cands
                 .iter()
                 .enumerate()
                 .filter(|(_, c)| c.kept)
-                .map(|(j, c)| json!({"t": c.time, "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db}))
+                .map(|(j, c)| {
+                    json!({"t": c.time, "t_verdict": cand_motion[j], "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db})
+                })
                 .collect();
             cb["survive"] = json!(0);
             cb["dropped"] = json!(dropped_rec);
@@ -500,7 +502,7 @@ fn run_one(
                 cands
                     .iter()
                     .position(|c| c.frame == h.frame)
-                    .map(|j| (h.time, marks[j]))
+                    .map(|j| (refined_time(h), marks[j]))
             })
             .collect();
         {
