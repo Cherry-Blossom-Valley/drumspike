@@ -143,6 +143,10 @@ security issues go to [SECURITY.md](SECURITY.md). Everyone taking part follows t
   videos, posters and pictures are © Cherry Blossom Valley and not covered by the Apache License
   ([docs/licensing.md](docs/licensing.md)).
 
+### No warranty
+
+Drum Spike is free software provided "as is", without warranty of any kind. Drum Spike reads your audio files and never changes them. It writes only its own project files, its cache and the exports you choose, and an export can replace a file of the same name. Keep backups of your sessions and recordings. Cherry Blossom Valley is not liable for lost or damaged files, lost work or any other damage from using Drum Spike, to the extent the law permits. The full terms are in sections 7 and 8 of the [Apache License 2.0](LICENSE).
+
 Drum Spike is made by [Cherry Blossom Valley](https://cherry-blossom-valley.com). Pro Tools and
 Cubase are trademarks of their owners; Drum Spike is not affiliated with them.
 

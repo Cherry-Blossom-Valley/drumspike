@@ -22,6 +22,8 @@ pub const LINK_CBV: &str = "https://cherry-blossom-valley.com/";
 /// #326: the support links, as the repo page and the landing page show them.
 pub const LINK_SPONSORS: &str = "https://github.com/sponsors/wfrank2509";
 pub const LINK_COFFEE: &str = "https://buymeacoffee.com/cherryblossomvalley";
+/// #328: the no-warranty section of the README.
+pub const LINK_WARRANTY: &str = "https://github.com/Cherry-Blossom-Valley/drumspike#no-warranty";
 
 /// The one address of a fixed id; anything else is refused.
 #[must_use]
@@ -32,6 +34,7 @@ pub fn link_address(id: &str) -> Option<&'static str> {
         "cbv" => Some(LINK_CBV),
         "sponsors" => Some(LINK_SPONSORS),
         "coffee" => Some(LINK_COFFEE),
+        "warranty" => Some(LINK_WARRANTY),
         _ => None,
     }
 }
@@ -40,8 +43,8 @@ pub fn link_address(id: &str) -> Option<&'static str> {
 ///
 /// # Errors
 ///
-/// 404 when `id` is none of `website`, `source`, `cbv`, `sponsors` and `coffee`. 500 on a platform
-/// other than macOS, and on macOS when the `open` command cannot be started.
+/// 404 when `id` is none of `website`, `source`, `cbv`, `sponsors`, `coffee` and `warranty`. 500
+/// on a platform other than macOS, and on macOS when the `open` command cannot be started.
 #[tauri::command]
 pub fn open_link(id: String) -> Result<Value, AppError> {
     let addr = link_address(&id).ok_or_else(|| AppError::not_found(format!("unknown link id: {id}")))?;
@@ -188,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn the_about_link_ids_map_to_exactly_the_five_addresses() {
+    fn the_about_link_ids_map_to_exactly_the_fixed_addresses() {
         assert_eq!(
             link_address("website"),
             Some("https://drumspike.cherry-blossom-valley.com/")
@@ -202,6 +205,10 @@ mod tests {
         assert_eq!(
             link_address("coffee"),
             Some("https://buymeacoffee.com/cherryblossomvalley")
+        );
+        assert_eq!(
+            link_address("warranty"),
+            Some("https://github.com/Cherry-Blossom-Valley/drumspike#no-warranty")
         );
     }
 
