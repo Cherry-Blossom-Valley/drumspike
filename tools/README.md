@@ -17,9 +17,9 @@ Run a tool with `uv run` (named dependencies are in its docstring, for example
 ## Research references
 
 The other scripts in this folder (`calib_*`, `onset_*`, `kick_onset`, `snare_onset`, `tom_*`,
-`flam_*`, `roll_fill`, `rescue_real`, `miss_causes`, `firm_fixes`, `fix_metric`, `learn_*`,
-`layer_eval`, `audio_spikes`) are the Python reference implementations and measurement tools
+`flam_pairs`, `roll_fill`, `rescue_real`, `miss_causes`, `firm_fixes`, `fix_metric`,
+`learn_eval`) are the Python reference implementations and measurement tools
 behind the detection rules of the Rust core. Each rule (tom bleed, tom pairs, flams, rolls, kick
-walk, kick rescue) was designed and measured here first; the Rust parity tests compare the core
-with these references. `fix_metric.py` is the yardstick: it scores a detection against the hits a
+walk, kick rescue) was designed and measured here first; the Rust unit tests now pin the rules, and
+`tests/test_rust_kick_walk.py` still compares the kick walk with its reference. `fix_metric.py` is the yardstick: it scores a detection against the hits a
 mixing engineer fixed by hand. Each script has a test or a documented command (test rules: `AGENTS.md`).
