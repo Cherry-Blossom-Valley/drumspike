@@ -1,7 +1,8 @@
 //! Tests of the cross-track bleed rule (#281 A6): a planted kick bleed on a tom track is dropped, a
 //! real tom hit 10 ms after a kick is kept.
 
-use super::{CrossBleedParams, CrossMic, XKind, cross_bleed};
+use super::{CrossBleedParams, CrossMic, PairLearned, XKind, cross_bleed, cross_bleed_prior, inherits_pass1_bleed};
+use crate::refine::first_motion;
 
 const SR: u32 = 48_000;
 
@@ -210,6 +211,99 @@ fn a_hat_pairs_evidence_is_recorded_and_the_generic_verdict_fires() {
 }
 
 #[test]
+fn an_aligned_pair_judges_by_level_alone() {
+    // #296: a time-aligned session (Auto-Align 2 and the like): the tom's hits sit at the kick's
+    // with a median |lead| of 0.2 ms — the alignment removed the arrival delay, so the lead test
+    // cannot fire. 24 coincidences make the pair aligned: the verdict is the level test alone
+    // (the bleed is quieter in the kick's band), the margin sweep is counted, and a loud real
+    // tom hit away from any kick stays.
+    let n = (2.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.0002, -21.0);
+        kick_motion.push(t);
+        tom_motion.push(t + 0.0002);
+    }
+    tom_hit(&mut tom, 1.5, 0.0);
+    tom_motion.push(1.5);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let (marks, learned) = cross_bleed(&mics, SR, &CrossBleedParams::default());
+    let pl = &learned[0];
+    assert!(pl.aligned, "{pl:?}");
+    assert_eq!(pl.align_coins, 24);
+    assert!(
+        pl.align_med_abs_lead_ms.is_some_and(|m| (m - 0.2).abs() < 0.05),
+        "{pl:?}"
+    );
+    // every bleed hit (the 0.2 ms copies, about 18 dB under) is dropped by level alone
+    for (j, m) in marks[0].iter().enumerate().take(24) {
+        assert!(m.bleed, "hit {j}: {m:?}");
+    }
+    assert!(!marks[0][24].bleed, "{:?}", marks[0][24]);
+    // the margin sweep: all 24 fall under each of -3, 0, +3 and +6 dB
+    assert_eq!(pl.aligned_counts, [24, 24, 24, 24], "{pl:?}");
+}
+
+#[test]
+fn a_pair_with_a_real_lead_keeps_the_two_part_verdict() {
+    // the same geometry with the acoustic 1 ms arrival: the pair is NOT aligned (the median
+    // |lead| sits over the bound) and a quiet tom hit 2 ms BEFORE the kick stays even though a
+    // coinciding kick hit exists (the lead test denies).
+    let n = (2.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.001, -21.0);
+        kick_motion.push(t);
+        tom_motion.push(t + 0.001);
+    }
+    // a quiet real tom hit 2 ms before the last kick
+    tom_hit(&mut tom, 1.348, -20.0);
+    tom_motion.push(1.348);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let (marks, learned) = cross_bleed(&mics, SR, &CrossBleedParams::default());
+    let pl = &learned[0];
+    assert!(!pl.aligned, "{pl:?}");
+    assert_eq!(pl.aligned_counts, [0, 0, 0, 0]);
+    // the leading quiet hit stays (it leads the kick), the 1 ms bleed hits are dropped
+    assert!(!marks[0][24].bleed, "{:?}", marks[0][24]);
+    for m in &marks[0][..24] {
+        assert!(m.bleed, "{m:?}");
+    }
+}
+
+#[test]
 fn an_overhead_mic_is_not_a_tom_pair_source() {
     // #286 A1, measured: the common-band (full-band) no-lead oh test is a SNARE-target form
     // (the soft gate's `soft_overhead_peaks`); in a tom pair the tom's own-band level against
@@ -247,4 +341,194 @@ fn an_overhead_mic_is_not_a_tom_pair_source() {
     for (j, m) in marks[0].iter().enumerate() {
         assert!(!m.bleed, "hit {j} marked bleed: {m:?}");
     }
+}
+
+#[test]
+fn the_prior_alignment_is_honoured_in_the_re_detection() {
+    // #296 verify fix: the alignment is a property of the PAIR, not of one hit list. The same
+    // geometry as `a_pair_with_a_real_lead_keeps_the_two_part_verdict` (a real 1 ms arrival, the
+    // measured pair NOT aligned) with the PASS-1 pairs handed in: the re-measured alignment
+    // (which moved over the bound, as the re-detection's candidate times do) does not win — the
+    // verdict is the level test alone, the recorded coins/median stay the pass-1 values.
+    let n = (2.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion = Vec::new();
+    let mut tom_motion = Vec::new();
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.05;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.001, -21.0);
+        kick_motion.push(t);
+        tom_motion.push(t + 0.001);
+    }
+    tom_hit(&mut tom, 1.348, -20.0);
+    tom_motion.push(1.348);
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: tom_motion,
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion,
+        },
+    ];
+    let p = CrossBleedParams::default();
+    let (marks, learned) = cross_bleed(&mics, SR, &p);
+    assert!(!learned[0].aligned, "{learned:?}");
+    // the pass-1 decision: the pair aligned with 30 coins (as on the stored hits)
+    let prior = [PairLearned {
+        tom: 0,
+        source: 1,
+        lead_ms: None,
+        ratio_db: None,
+        aligned: true,
+        align_coins: 30,
+        align_med_abs_lead_ms: Some(0.06),
+        aligned_counts: [0; 4],
+    }];
+    let (marks2, learned2) = cross_bleed_prior(&mics, SR, &p, Some(&prior));
+    assert!(learned2[0].aligned, "{learned2:?}");
+    assert_eq!(learned2[0].align_coins, 30);
+    assert_eq!(learned2[0].align_med_abs_lead_ms, Some(0.06));
+    // level alone: every coinciding hit is bleed, the real hit (quieter than the kick) too
+    for (j, m) in marks2[0].iter().enumerate().take(24) {
+        assert!(m.bleed, "hit {j}: {m:?}");
+    }
+    assert!(marks2[0][24].bleed, "{:?}", marks2[0][24]);
+    // and the two-part verdict of the measured run is different (the fix changes the outcome)
+    assert_ne!(marks[0][24].bleed, marks2[0][24].bleed);
+}
+
+/// The pass-2 motion of the app (`refined_motion` in `crates/app/src/cross_bleed.rs`): the bare
+/// [`first_motion`] walk, no bounds. The stored times of the kept hits ARE this walk's times —
+/// the analysis's own placement (#296 decision: no re-timing of the kept hits).
+fn walk_motion(sig: &[f32], ts: &[f64]) -> Vec<f64> {
+    ts.iter()
+        .map(|&t| {
+            let s = (t * f64::from(SR)).round() as i64;
+            let (foot, _) = first_motion(sig, s, SR, t, None, None);
+            foot as f64 / f64::from(SR)
+        })
+        .collect()
+}
+
+#[test]
+fn a_pass_two_candidate_within_1ms_of_a_pass1_bleed_hit_is_dropped_by_inheritance() {
+    // #296 test 1: the pass-2 verdict — no coinciding source at the first-motion time — would
+    // KEEP the candidate, but a pass-1 bleed-marked hit sits within 1 ms of its verdict time,
+    // so the inherit rule drops it. The pass-1 mark list is handed in as the app hands it: the
+    // times of the hits pass 1 judged bleed over the FULL source set (pass 1 may have seen a
+    // source that pass 2's walked time no longer coincides with — the walked time sits on the
+    // bleed's slow rise, more than coincide_ms before the source's attack).
+    let n = (2.0f64 * f64::from(SR)) as usize;
+    let mut snare = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    // a snare hit at 1.5 s (the pair's clear case) and the weak event at 0.5 s (the re-detected
+    // candidate of a hit pass 1 marked bleed)
+    kick_hit(&mut snare, 1.5, -3.0);
+    kick_hit(&mut tom, 1.5 + 0.001, -20.0);
+    tom_hit(&mut tom, 0.5, -20.0);
+    // pass 2: the candidate's verdict time is the bare walk; the only source hit is far away,
+    // so the verdict has nothing to compare against and keeps the candidate on its own
+    let cands = [0.5];
+    let walked = walk_motion(&tom, &cands);
+    let mics_pass2 = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: walked.clone(),
+        },
+        CrossMic {
+            kind: XKind::Snare,
+            signal: &snare,
+            motion: vec![1.5],
+        },
+    ];
+    let (marks_t, _) = cross_bleed_prior(&mics_pass2, SR, &CrossBleedParams::default(), None);
+    assert!(
+        (walked[0] - 1.5).abs() > 0.010 + 1e-9,
+        "no snare hit within coincide_ms of the walked time {}",
+        walked[0]
+    );
+    assert!(!marks_t[0][0].bleed, "the own verdict keeps it: {:?}", marks_t[0][0]);
+    // the inherit rule drops it: the pass-1 bleed hit sits within 1 ms of the verdict time
+    let pass1_bleed = [walked[0] + 0.0005];
+    assert!(
+        inherits_pass1_bleed(walked[0], &pass1_bleed),
+        "the pass-1 bleed hit is within 1 ms of the verdict time {}",
+        walked[0]
+    );
+}
+
+#[test]
+fn a_pass_two_candidate_far_from_every_pass1_bleed_hit_keeps_its_own_verdict() {
+    // #296 test 2: no pass-1-marked hit within 1 ms — the rule does not fire and the candidate
+    // is judged exactly as before the rule (the band is tight: 1.5 ms away is not inherited).
+    let mut x = vec![0f32; SR as usize];
+    tom_hit(&mut x, 0.5, -6.0);
+    let walked = walk_motion(&x, &[0.5]);
+    let near = [walked[0] + 0.0005];
+    let far = [walked[0] + 0.0015];
+    assert!(inherits_pass1_bleed(walked[0], &near), "0.5 ms is inside the band");
+    assert!(!inherits_pass1_bleed(walked[0], &far), "1.5 ms is outside the band");
+    assert!(!inherits_pass1_bleed(walked[0], &[]), "no pass-1 marks: no inheritance");
+}
+
+#[test]
+fn the_kept_hits_stored_times_are_the_analysis_placement_on_the_two_part_geometry() {
+    // #296 test 3: on the two-part-verdict geometry the bare walk does NOT move a loud real hit
+    // onto the snare hit (the round-3 regression came from extra refine bounds; there are none
+    // now) — the stored time is the analysis's own placement, 2.5 to 5.6 ms from the snare.
+    let n = (9.0f64 * f64::from(SR)) as usize;
+    let mut snare = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut snare_motion = Vec::new();
+    let mut cands = Vec::new();
+    // 24 snare strokes 0.3 s apart; the tom mic hears each 1 ms later and 14 dB under; the grid
+    // candidates sit 11 ms early
+    for i in 0..24 {
+        let t = 0.2 + f64::from(i) * 0.3;
+        kick_hit(&mut snare, t, -6.0);
+        kick_hit(&mut tom, t + 0.001, -20.0);
+        snare_motion.push(t);
+        cands.push(t - 0.011);
+    }
+    // the loud real tom hit 4 ms after the last snare hit (the tom mic 2 dB louder than the
+    // snare mic's level at its hit — the level test keeps it); the grid candidate 1 ms early.
+    let tl = snare_motion[23] + 0.004;
+    tom_hit(&mut tom, tl, -4.0);
+    tom_hit(&mut snare, tl + 0.001, -14.0);
+    cands.push(tl - 0.001);
+    // the stored placement of the kept hit is the bare walk of the tom's OWN material — it takes
+    // no source signal and no source hit time at all (the round-3 regression moved the stored
+    // time onto the snare hit with extra refine bounds; the bare walk has none and cannot
+    // collapse onto the source)
+    let walked = walk_motion(&tom, &cands);
+    let last = walked.len() - 1;
+    // and it does not sit ON the snare hit (the round-3 collapse put it 0.1 ms from the source)
+    assert!(
+        (walked[last] - snare_motion[23]).abs() > 0.0005,
+        "the stored time is not moved onto the snare hit ({} vs {})",
+        walked[last],
+        snare_motion[23]
+    );
+    // and the verdict on that placement keeps the loud hit (the two-part verdict)
+    let mics = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: walked,
+        },
+        CrossMic {
+            kind: XKind::Snare,
+            signal: &snare,
+            motion: snare_motion,
+        },
+    ];
+    let (marks, _) = cross_bleed_prior(&mics, SR, &CrossBleedParams::default(), None);
+    assert!(!marks[0][last].bleed, "the loud hit survives: {:?}", marks[0][last]);
 }
