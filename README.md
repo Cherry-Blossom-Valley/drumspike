@@ -145,3 +145,7 @@ security issues go to [SECURITY.md](SECURITY.md). Everyone taking part follows t
 
 Drum Spike is made by [Cherry Blossom Valley](https://cherry-blossom-valley.com). Pro Tools and
 Cubase are trademarks of their owners; Drum Spike is not affiliated with them.
+
+If Drum Spike helps you, you can support it through
+[GitHub Sponsors](https://github.com/sponsors/wfrank2509) or
+[Buy Me a Coffee](https://buymeacoffee.com/cherryblossomvalley).

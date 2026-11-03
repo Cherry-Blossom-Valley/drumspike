@@ -27,7 +27,10 @@ ALLOWED_HOSTS = {
     "cherry-blossom-valley.com",
     "icon-studio.cherry-blossom-valley.com",
     "drumspike.cherry-blossom-valley.com",
+    "buymeacoffee.com",   # #278: the support link in the footer
 }
+# #278: the only GitHub link outside the repository is the owner's Sponsors page
+SPONSORS = "https://github.com/sponsors/wfrank2509"
 MAX_PAGE_WITHOUT_VIDEOS = 450 * 1024   # the page, the logo, the icon and the editor screenshot
 # The built videos the page embeds (site/videos/, gitignored; tools/media/build_site.py copies them).
 VIDEO_NAMES = {"explainer-01", "explainer-03", "explainer-04", "explainer-05", "explainer-08"}
@@ -178,7 +181,7 @@ def test_github_links_point_at_the_planned_repository():
     page = parsed()
     github = [ref for ref in page.links + page.assets if "github.com" in ref]
     assert github, "the page has no GitHub links"
-    wrong = [ref for ref in github if not ref.startswith(REPO)]
+    wrong = [ref for ref in github if not ref.startswith(REPO) and ref != SPONSORS]
     assert not wrong, f"GitHub links outside {REPO}: {wrong}"
 
 
