@@ -292,8 +292,8 @@ def test_the_menu_accelerators_follow_the_preset(preset_home, make_project):
     choose(app, "default")
     assert js(app, "() => DSKeys.menuKeys()") == all_default
     wait_until(lambda: js(app, "() => window.__DS_MENU_STATE__.keyPreset") == "default", msg="the menu state again")
-    app.keyboard.press("Control+Tab")                                           # the menu owns it again (the page stays out)
-    assert js(app, "() => S.playhead") == 0
+    app.keyboard.press("Control+Tab")                                           # #317: an accelerator again, but a Tab key runs in the page
+    assert js(app, "() => S.playhead") == 0.5                                   # (the web view takes Tab keys before the menu): the next hit
     app.evaluate("() => { delete window.__DS_NATIVE_MENU__; }")
     # the check items and the other state keys are still in the same state object
     assert set(js(app, "() => Object.keys(window.__DS_MENU_STATE__)")) >= {"current", "snap", "follow", "click", "inspector", "keyPreset"}
