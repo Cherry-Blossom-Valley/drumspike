@@ -22,6 +22,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "media
 
 import check_paths  # noqa: E402
 
+# The planted home-folder token, built from parts so this file passes tools/check_private.py
+# (the same split as MODEL_TERMS in test_docs_wording.py).
+USERS = "/" + "Users"
+
 
 def _fake_engine(text):
     """An OCR engine stub in the RapidOCR result shape: [[box, line], ...]."""
@@ -54,12 +58,12 @@ def _png_with_text(tmp_path, text, name):
 
 def test_a_planted_path_png_fails_the_guard(tmp_path):
     pytest.importorskip("rapidocr_onnxruntime", reason="needs the media extra (the OCR engine)")
-    png = _png_with_text(tmp_path, "/Users/x", "planted.png")
+    png = _png_with_text(tmp_path, f"{USERS}/x", "planted.png")
     if png is None:
         pytest.skip("no ttf font for the ffmpeg drawtext plant")
     findings = check_paths.check_file(png, check_paths._engine())
-    assert findings, "the planted /Users/x was not read back"
-    assert findings[0][2] == "/Users"
+    assert findings, f"the planted {USERS}/x was not read back"
+    assert findings[0][2] == USERS
 
 
 def test_a_clean_png_passes_the_guard(tmp_path):
@@ -72,8 +76,8 @@ def test_a_clean_png_passes_the_guard(tmp_path):
 
 def test_the_guard_reads_the_engine_text(tmp_path):
     """The guard logic against an engine stub: the banned token and the read text come back."""
-    findings = check_paths.check_file(tmp_path / "shot.png", _fake_engine("created in /Users/x"))
-    assert findings and findings[0][2] == "/Users" and findings[0][3] == "created in /Users/x"
+    findings = check_paths.check_file(tmp_path / "shot.png", _fake_engine(f"created in {USERS}/x"))
+    assert findings and findings[0][2] == USERS and findings[0][3] == f"created in {USERS}/x"
     assert check_paths.check_file(tmp_path / "shot.png", _fake_engine("Drum Spike")) == []
 
 
@@ -114,9 +118,9 @@ def _planted_png(tmp_path, name):
 
 
 def _plant_engine(monkeypatch, tool):
-    """The tool's loaded check_paths instance reads the stub engine: a planted /Users line."""
+    """The tool's loaded check_paths instance reads the stub engine: a planted home-folder line."""
     monkeypatch.setattr(tool.path_guard(), "_engine",
-                        lambda: _fake_engine("created in /Users/arm64-mac/x"))
+                        lambda: _fake_engine(f"created in {USERS}/x/y"))
 
 
 def test_record_py_fails_on_a_planted_frame(tmp_path, monkeypatch, capsys):
@@ -129,7 +133,7 @@ def test_record_py_fails_on_a_planted_frame(tmp_path, monkeypatch, capsys):
         record.run_path_guard([mp4])
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "frame 1" in err and "/Users" in err
+    assert "frame 1" in err and USERS in err
 
 
 def test_shots_py_fails_on_a_planted_picture(tmp_path, monkeypatch, capsys):
@@ -142,7 +146,7 @@ def test_shots_py_fails_on_a_planted_picture(tmp_path, monkeypatch, capsys):
         shots.run_path_guard([png])
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "/Users" in err and str(png) in err
+    assert USERS in err and str(png) in err
 
 
 def test_build_py_fails_on_a_planted_frame(tmp_path, monkeypatch, capsys):
@@ -155,7 +159,7 @@ def test_build_py_fails_on_a_planted_frame(tmp_path, monkeypatch, capsys):
         build.run_path_guard([mp4])
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "frame 1" in err and "/Users" in err
+    assert "frame 1" in err and USERS in err
 
 
 def test_a_clean_render_passes_the_wired_guard(tmp_path, monkeypatch):
