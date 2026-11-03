@@ -220,9 +220,10 @@ fn rule_versions_and_the_reference_rule() {
             RefineRule::FirstMotion.version(),
             RefineRule::Foot.version(),
             RefineRule::FootCapped.version(),
-            RefineRule::Edge.version()
+            RefineRule::Edge.version(),
+            RefineRule::Visible.version()
         ),
-        (1, 2, 3, 4, 5, 6)
+        (1, 2, 3, 4, 5, 6, 7)
     );
     for r in [
         RefineRule::Reference,
@@ -231,12 +232,13 @@ fn rule_versions_and_the_reference_rule() {
         RefineRule::Foot,
         RefineRule::FootCapped,
         RefineRule::Edge,
+        RefineRule::Visible,
     ] {
         assert_eq!(RefineRule::from_version(u64::from(r.version())), Some(r));
     }
     assert_eq!(RefineRule::from_version(0), None);
-    assert_eq!(RefineRule::from_version(7), None);
-    assert_eq!(RefineRule::CURRENT, RefineRule::Edge);
+    assert_eq!(RefineRule::from_version(8), None);
+    assert_eq!(RefineRule::CURRENT, RefineRule::Visible);
     // the reference rule is refine_sr, step Kept, on every kind of window
     let x = noisy(&track(&[(0.5, -3.0)], 1.5), -70.0);
     for t0 in [0.486, 0.497, 0.503, 0.65, 2.0] {
@@ -1249,15 +1251,15 @@ fn edge_foot_finds_the_first_steep_rise_and_nothing_else() {
     for v in &mut x[1_203..1_400] {
         *v = 1.0;
     }
-    let foot = edge_foot(&x, 1_000, 1_400, srf);
+    let foot = edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Noise);
     assert!((1_198..=1_200).contains(&foot), "the edge's foot: {foot}");
     // no edge: a straight rise to the peak
     let mut y = vec![0.0f32; 2_000];
     drift(&mut y, 1_000, 300, 1.0);
-    assert_eq!(edge_foot(&y, 1_000, 1_400, srf), 1_000);
+    assert_eq!(edge_foot(&y, 1_000, 1_400, srf, EdgeTail::Noise), 1_000);
     // nothing after the foot: silence
-    assert_eq!(edge_foot(&vec![0.0f32; 100], 10, 90, srf), 10);
-    assert_eq!(edge_foot(&x, 1_399, 1_400, srf), 1_399);
+    assert_eq!(edge_foot(&vec![0.0f32; 100], 10, 90, srf, EdgeTail::Noise), 10);
+    assert_eq!(edge_foot(&x, 1_399, 1_400, srf, EdgeTail::Noise), 1_399);
 }
 
 #[test]
@@ -1288,7 +1290,11 @@ fn the_edge_foot_sits_on_the_first_sample_off_the_line() {
     for v in &mut x[1_208..1_400] {
         *v = 1.0;
     }
-    assert_eq!(edge_foot(&x, 1_000, 1_400, srf), 1_199, "the last sample on the line");
+    assert_eq!(
+        edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Noise),
+        1_199,
+        "the last sample on the line"
+    );
 }
 
 #[test]
@@ -1305,4 +1311,67 @@ fn a_steep_attack_whose_walk_foot_lies_inside_the_rise_sits_on_the_last_line_sam
     swing(&mut x, on + 4, 0, 0.25, 150.0);
     let off = refined_sample(&x, on) - on as i64;
     assert!((-1..=0).contains(&off), "{off} samples from the first rising sample");
+}
+
+#[test]
+fn version_7_puts_a_kick_on_the_last_visible_line_sample() {
+    // #321: a kick on a digitally silent line whose first two steps stay under 2 % of the peak (0.002 and 0.005), then
+    // the visible rise. Version 6 judged the steps against the line noise (none here) and walked onto them, 2 samples
+    // before the last sample that looks like the line; version 7 judges them against the hit's peak
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f32; 2_000];
+    for (k, v) in [0.002f32, 0.005, 0.05, 0.25, 0.6, 0.8, 1.0].iter().enumerate() {
+        x[1_199 + k] = *v;
+    }
+    for v in &mut x[1_206..1_400] {
+        *v = 1.0;
+    }
+    assert_eq!(
+        edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Noise),
+        1_198,
+        "version 6: on the invisible first step"
+    );
+    assert_eq!(
+        edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Visible),
+        1_200,
+        "version 7: the last sample that looks like the line"
+    );
+}
+
+#[test]
+fn version_7_takes_a_short_drift_and_leaves_a_long_offset_to_version_6() {
+    // #321: a snare-like drift of 5 samples off a flat line before the steep rise is taken whole (the hit sits on the
+    // line before it); a tom line that stands at an offset on the stroke's side for longer than VIS_TAIL_MAX_S never
+    // reaches the line in the walk, and version 6's walk decides (the Sessions A and B toms: a walk to the offset's
+    // zero crossing put them up to 1 ms early)
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f32; 2_000];
+    for (k, v) in [0.03f32, 0.04, 0.045, 0.05, 0.055, 0.3, 0.6, 1.0].iter().enumerate() {
+        x[1_195 + k] = *v;
+    }
+    for v in &mut x[1_203..1_400] {
+        *v = 1.0;
+    }
+    assert_eq!(
+        edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Visible),
+        1_194,
+        "the line sample before the drift"
+    );
+    let mut y = vec![0.0f32; 2_000];
+    for v in &mut y[800..1_200] {
+        *v = 0.05;
+    }
+    for (k, v) in [0.3f32, 0.6, 1.0].iter().enumerate() {
+        y[1_200 + k] = *v;
+    }
+    for v in &mut y[1_203..1_400] {
+        *v = 1.0;
+    }
+    let v6 = edge_foot(&y, 1_195, 1_400, srf, EdgeTail::Noise);
+    assert_eq!(
+        edge_foot(&y, 1_195, 1_400, srf, EdgeTail::Visible),
+        v6,
+        "a long offset: version 6's walk"
+    );
+    assert_eq!(v6, 1_199);
 }
