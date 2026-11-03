@@ -2,7 +2,7 @@
 //! close mic which the other drums' tom close mics explain.
 //!
 //! Measurements and the choice of the rule are in `docs/migration/phase4-report.md`, sections "P4-14 stage 1" to
-//! "P4-14 stage 2". The Python reference is `tools/tom_bleed_cd.py` (`rule_cd`).
+//! "P4-14 stage 2".
 //!
 //! # Input and output
 //!
@@ -49,8 +49,7 @@
 //! pair). The source excess of a hit of A is `L_A - L_S - G(S->A)`, the lowest over the used sources of one kind
 //! ([`TomBleed::source_excess`]). A hit is bleed when rule CD marks it, or its snare excess is under
 //! `snare_threshold_db` (9.2 dB, as the tom sources), or its kick excess is under `kick_threshold_db` (4.0 dB: a tom
-//! played with the kick is a common accent). Nothing is marked when rule CD is off. The Python reference is
-//! `tools/tom_bleed_sk.py` (`sk_excess`, `rule_sk`).
+//! played with the kick is a common accent). Nothing is marked when rule CD is off.
 //!
 //! # Rule version 3: the tom pair rule, winner takes all (P4-21)
 //!
@@ -114,7 +113,7 @@ pub const PAIR_FLOOR_DB: f64 = -3.0;
 /// 3 real sessions: it keeps all 42 lost real strokes and unmarks no bleed merge (a smaller threshold unmarks bleed).
 pub const PAIR_KEEP_RISE_DB: f64 = 10.0;
 
-/// Version 4: the high-pass of the attack rise (Hz, `tools/tom_fixes.py` `HP_HZ`): a tom's ring is low, its stick
+/// Version 4: the high-pass of the attack rise (Hz): a tom's ring is low, its stick
 /// click is not; in a roll the ring of the earlier hit hides the full-band rise, the click over the faster decaying
 /// highs does not.
 pub const PAIR_HP_HZ: f64 = 2000.0;
@@ -842,7 +841,7 @@ pub fn pair_level_db(x: &[f32], sr: u32, t: f64) -> f64 {
 
 /// The own-mic attack rise of a hit (dB): the peak in `[t - 2, t + 10]` ms over the peak in `[t - 30, t - 10]` ms,
 /// the larger of the full band `x` and the 2 kHz high-pass `hp` ([`PAIR_HP_HZ`], [`zero_phase`]). The P4-18 rise test
-/// (`tools/tom_fixes.py` `stroke_rise`, `tools/firm_fixes.py` `rise_db`): a stroke is 10 dB or more over what came
+/// (`tools/firm_fixes.py` `rise_db`): a stroke is 10 dB or more over what came
 /// before; the decay of an earlier hit or noise is about 0. In a roll the ring of the earlier hit hides the
 /// full-band rise, the stick click over the faster decaying highs does not.
 #[must_use]
