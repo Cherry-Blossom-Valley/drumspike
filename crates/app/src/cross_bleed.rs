@@ -61,7 +61,11 @@ use crate::{Service, ServiceConfig};
 /// (after `analyze_detected`, before `store_analysis`) instead of the pass-2 verdict time — a
 /// candidate whose verdict time sits 10 ms clear of a pass-1 bleed hit can still be placed onto
 /// it; the dropped events are recorded as `inherited`.
-pub const CROSS_BLEED: u32 = 5;
+/// 6 is the coordinator's refinement of 5: the inherit rule is per CANDIDATE, not per placed
+/// event — only the placement of a candidate whose own verdict found NO coinciding source
+/// (`lead_ms` None) is dropped; a candidate with a coinciding source keeps pass 2's verdict and
+/// an event the analysis added without a candidate is never touched.
+pub const CROSS_BLEED: u32 = 6;
 
 /// The version of a new analysis: the configuration's pin, else [`CROSS_BLEED`].
 #[must_use]
@@ -304,16 +308,43 @@ fn pairs_json(mics: &[Mic], srcs: &[(usize, Arc<Decoded>)], learned: &[PairLearn
     )
 }
 
-/// #296 verify fix: drop every event of `analysis` whose FINAL time lies within
-/// [`PASS1_INHERIT_MS`] of a pass-1 bleed-marked time (`bleed_pass1`) — the inherit rule on the
-/// analysis's placement, not on the pass-2 verdict time. Returns the dropped events' times. No
-/// time changes; the parallel per-event vectors (`roll`, `learn_out`, `learned`) are filtered
-/// with the events.
-fn inherit_on_placement(analysis: &mut drumspike_core::analyze::Analysis, bleed_pass1: &[f64]) -> Vec<f64> {
+/// #296 verify fix, coordinator refinement: inherit per CANDIDATE, not per placed event. A
+/// placed event is dropped only when (a) it is the placement of a pass-2 candidate whose own
+/// verdict found NO coinciding source (`lead_ms` None — the loophole that kept the bleed on
+/// Session E) and (b) that placement lies within [`PASS1_INHERIT_MS`] of a pass-1 bleed-marked
+/// time (`bleed_pass1`). A candidate that pass 2 judged WITH a coinciding source keeps pass 2's
+/// verdict; an event the analysis added without a candidate is never touched. `kept_cands` are
+/// the kept candidates as `(grid time, lead_ms)`; each maps to its placed event — the nearest
+/// event within the analysis's refine window (-2..+12 ms) of the grid time. No time changes;
+/// the parallel per-event vectors (`roll`, `learn_out`, `learned`) are filtered with the
+/// events. Returns the dropped events' times.
+fn inherit_on_placement(
+    analysis: &mut drumspike_core::analyze::Analysis,
+    bleed_pass1: &[f64],
+    kept_cands: &[(f64, Option<f64>)],
+) -> Vec<f64> {
+    const CAND_PLACE_MS: f64 = 14.0 / 1000.0 + 1e-9; // the -2..+12 ms refine window
+    let mut with_source = vec![false; analysis.events.len()];
+    let mut mapped = vec![false; analysis.events.len()];
+    for &(tc, lead) in kept_cands {
+        let mut best: Option<usize> = None;
+        for (i, e) in analysis.events.iter().enumerate() {
+            let d = (e.t - tc).abs();
+            if d <= CAND_PLACE_MS && best.is_none_or(|b| d < (analysis.events[b].t - tc).abs()) {
+                best = Some(i);
+            }
+        }
+        if let Some(i) = best {
+            if lead.is_some() {
+                with_source[i] = true;
+            }
+            mapped[i] = true;
+        }
+    }
     let mut inherited = Vec::new();
     let mut keep: Vec<usize> = Vec::new();
     for (i, h) in analysis.events.iter().enumerate() {
-        if inherits_pass1_bleed(h.t, bleed_pass1) {
+        if mapped[i] && !with_source[i] && inherits_pass1_bleed(h.t, bleed_pass1) {
             inherited.push(h.t);
         } else {
             keep.push(i);
@@ -457,22 +488,14 @@ fn run_one(
         // as `prior` (#296): the alignment is decided on the stored hits, not re-measured on
         // the candidate times (whose |lead| medians move).
         let cand_motion = refined_motion(&dec_x.samples, sr, &cands.iter().map(|c| c.time).collect::<Vec<_>>());
-        let (mut marks_t, learned2) = cross_bleed_prior(
+        let (marks_t, learned2) = cross_bleed_prior(
             &cross_mics(&dec_x, &srcs, mics, cand_motion.clone()),
             sr,
             p,
             Some(&learned),
         );
-        // the pass-1 inherit rule (#296): a pass-2 candidate whose verdict time is within 1 ms
-        // of a hit that pass 1 marked as bleed inherits the mark and is dropped below, whatever
-        // its own pass-2 verdict. Pass 1 removed the bleed hits from the track, so pass 2
-        // re-detects them and its own verdict — with no coinciding source at the walked time —
-        // would keep them; the pass-1 verdict closes that loop without touching any time.
-        for (m, &t) in marks_t[0].iter_mut().zip(&cand_motion) {
-            if inherits_pass1_bleed(t, &bleed_pass1) {
-                m.bleed = true;
-            }
-        }
+        // the pass-1 inherit rule (#296, coordinator refinement): applied per CANDIDATE on the
+        // FINAL placement, after `analyze_detected` (see `inherit_on_placement`).
         let marks = &marks_t[0];
         let pairs2 = pairs_json(mics, &srcs, &learned2);
         let mut dropped: Vec<usize> = Vec::new();
@@ -499,14 +522,20 @@ fn run_one(
         let Ok(mut analysis) = analyze_detected(&dec_x.samples, sr, "tom", &kept, &params_a) else {
             return Some(json!({"removed": removed, "redetected": redetected, "pairs": pairs2}));
         };
-        // the #296 verify fix: the inherit rule applies on the FINAL placement. The verdict time
-        // (the first-motion walk) can sit milliseconds from where the analysis finally places the
-        // hit, so a candidate whose verdict time is 10 ms clear of a pass-1 bleed hit can still be
-        // placed onto it — the pass-1 verdict is applied to the stored time instead: after
-        // `analyze_detected` has placed the kept candidates and before `store_analysis`, every
-        // event within [`PASS1_INHERIT_MS`] of a pass-1 bleed-marked time is dropped. No time
-        // changes; the verdict path stays as it is.
-        let inherited = inherit_on_placement(&mut analysis, &bleed_pass1);
+        // the #296 verify fix, coordinator refinement: the inherit rule applies per CANDIDATE on
+        // the FINAL placement. Each kept candidate maps to the placed event nearest its grid
+        // time within the refine window; an event is dropped only when it is such a placement of
+        // a candidate whose own verdict found NO coinciding source (`lead_ms` None) and the
+        // placement lies within [`PASS1_INHERIT_MS`] of a pass-1 bleed-marked time. A candidate
+        // with a coinciding source keeps pass 2's verdict; an event the analysis added without
+        // a candidate is never touched. No time changes.
+        let kept_cands: Vec<(f64, Option<f64>)> = cands
+            .iter()
+            .enumerate()
+            .filter(|&(_, c)| c.kept)
+            .map(|(j, c)| (c.time, marks[j].lead_ms))
+            .collect();
+        let inherited = inherit_on_placement(&mut analysis, &bleed_pass1, &kept_cands);
         let mut det = lock(op)
             .track(&x_mic.name)
             .ok()
@@ -603,12 +632,11 @@ mod tests {
         }
     }
 
-    /// #296 verify fix: the inherit rule on the FINAL placement. A candidate whose grid and
-    /// first-motion (verdict) times sit 10 ms before a pass-1 bleed hit but whose analysis
-    /// placement lands within 1 ms of it is dropped from the events that get stored; a real hit
-    /// that pass 1 did not mark — 4 ms from a snare hit, outside the band — stays. No time moves.
+    /// #296, coordinator refinement, test 1: a kept candidate with NO coinciding source
+    /// (`lead_ms` None) whose FINAL placement lands on a pass-1 bleed time is dropped, even
+    /// though its verdict time sat 10 ms clear of the bleed hit.
     #[test]
-    fn the_inherit_rule_drops_on_the_final_placement_not_the_verdict_time() {
+    fn a_lead_none_candidate_placed_on_a_pass1_bleed_time_is_dropped() {
         let pass1_bleed: Vec<f64> = vec![1.000_000];
         // placed ON the pass-1 bleed hit; its grid and verdict times sat 10 ms before it
         let on_bleed = 1.000_400;
@@ -616,20 +644,17 @@ mod tests {
         let verdict_time = pass1_bleed[0] - 0.010;
         assert!(
             (verdict_time - pass1_bleed[0]).abs() > 1e-3,
-            "10 ms is outside the verdict band: the old rule kept it"
+            "10 ms is outside the verdict band"
         );
-        // a real hit pass 1 did not mark, 4 ms from the snare hit: stays
-        let real = pass1_bleed[0] + 0.004;
-        let mut a = analysis(&[verdict_time, on_bleed, real]);
-        a.roll[0] = true;
-        a.learn_out[2] = true;
-        let inherited = inherit_on_placement(&mut a, &pass1_bleed);
+        // the candidate's grid time sits within the refine window of its placement
+        let grid = on_bleed - 0.004;
+        let mut a = analysis(&[on_bleed, verdict_time]);
+        a.roll[1] = true;
+        let inherited = inherit_on_placement(&mut a, &pass1_bleed, &[(grid, None)]);
         assert_eq!(inherited, vec![on_bleed]);
-        assert_eq!(a.events.len(), 2);
+        assert_eq!(a.events.len(), 1);
         assert_eq!(a.events[0].t, verdict_time);
-        assert_eq!(a.events[1].t, real);
         assert!(a.roll[0], "the parallel vectors follow the kept events");
-        assert!(a.learn_out[1], "the parallel vectors follow the kept events");
         assert_eq!(
             a.events.iter().position(|h| h.t == on_bleed),
             None,
@@ -637,11 +662,63 @@ mod tests {
         );
     }
 
+    /// #296, coordinator refinement, test 2: a loud tom hit 5 ms after a snare hit on an
+    /// unaligned pair — its pass-2 candidate HAS a coinciding source (lead about -1.6 ms, any
+    /// ratio) — is KEPT although pass 1 marked its position.
+    #[test]
+    fn a_candidate_with_a_coinciding_source_keeps_pass2s_verdict() {
+        let pass1_bleed: Vec<f64> = vec![1.000_000];
+        let loud = 1.005_000; // 5 ms after the snare hit
+        let grid = loud - 0.003;
+        let mut a = analysis(&[loud]);
+        a.learn_out[0] = true;
+        let inherited = inherit_on_placement(&mut a, &pass1_bleed, &[(grid, Some(-1.6))]);
+        assert!(inherited.is_empty(), "the loud real hit stays: {inherited:?}");
+        assert_eq!(a.events.len(), 1);
+        assert_eq!(a.events[0].t, loud);
+        assert!(a.learn_out[0], "the parallel vectors follow");
+    }
+
+    /// #296, coordinator refinement, test 3: an event the analysis added WITHOUT a candidate, on
+    /// a pass-1 bleed time, is kept — the rule never touches it.
+    #[test]
+    fn an_event_without_a_candidate_is_never_touched() {
+        let pass1_bleed: Vec<f64> = vec![1.000_000];
+        let own = 1.000_400; // on the bleed time, but no candidate maps to it
+        let mut a = analysis(&[own, 0.5]);
+        a.roll[0] = true;
+        a.learn_out[0] = true;
+        let inherited = inherit_on_placement(&mut a, &pass1_bleed, &[(0.5, None)]);
+        assert!(inherited.is_empty());
+        assert_eq!(a.events.len(), 2);
+        assert_eq!(a.events[0].t, own);
+        assert!(a.roll[0]);
+        assert!(a.learn_out[0]);
+    }
+
+    /// #296 verify fix: the inherit rule on the FINAL placement. A candidate whose grid time is
+    /// clear of a pass-1 bleed hit by more than the refine window maps to no placed event — a
+    /// real hit 4 ms from the snare hit, outside the band, stays. No time moves.
+    #[test]
+    fn the_inherit_rule_drops_on_the_final_placement_not_the_verdict_time() {
+        let pass1_bleed: Vec<f64> = vec![1.000_000];
+        let on_bleed = 1.000_400;
+        let verdict_time = pass1_bleed[0] - 0.010;
+        // a candidate whose grid time is 20 ms clear of the placement maps to nothing
+        let far_grid = on_bleed - 0.020;
+        let mut a = analysis(&[verdict_time, on_bleed, pass1_bleed[0] + 0.004]);
+        a.roll[0] = true;
+        let inherited = inherit_on_placement(&mut a, &pass1_bleed, &[(far_grid, None)]);
+        assert!(inherited.is_empty(), "no candidate maps within the window");
+        assert_eq!(a.events.len(), 3);
+        assert!(a.roll[0], "the parallel vectors follow the kept events");
+    }
+
     /// Nothing marked: the events pass through unchanged.
     #[test]
     fn no_pass1_marks_keeps_every_event() {
         let mut a = analysis(&[0.5, 0.501_5, 0.502]);
-        let inherited = inherit_on_placement(&mut a, &[]);
+        let inherited = inherit_on_placement(&mut a, &[], &[(0.5, None)]);
         assert!(inherited.is_empty());
         assert_eq!(a.events.len(), 3);
     }

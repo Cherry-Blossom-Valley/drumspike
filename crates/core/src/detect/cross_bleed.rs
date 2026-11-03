@@ -311,11 +311,12 @@ fn median(v: &mut [f64]) -> Option<f64> {
 /// bleed-marked hit inherits the mark (#296).
 pub const PASS1_INHERIT_MS: f64 = 1.0;
 
-/// A pass-2 candidate whose verdict time sits within [`PASS1_INHERIT_MS`] of a hit that pass 1
-/// marked as bleed inherits the mark and is dropped by the caller, whatever its own pass-2
-/// verdict (#296): pass 1 removed the bleed hits from the track, so pass 2 re-detects them and
-/// — with no coinciding source at its walked time — would keep them; the pass-1 verdict closes
-/// that loop without touching any candidate time.
+/// Whether `t` sits within [`PASS1_INHERIT_MS`] of a hit that pass 1 marked as bleed (#296).
+/// Applied by the caller to the FINAL placement of a pass-2 candidate whose own verdict found
+/// no coinciding source (`lead_ms` None): pass 1 removed the bleed hits from the track, so pass
+/// 2 re-detects them and — with no coinciding source at its walked time — would keep them; the
+/// pass-1 verdict closes that loop without touching any candidate time. A candidate that pass 2
+/// judged WITH a coinciding source keeps pass 2's verdict.
 #[must_use]
 pub fn inherits_pass1_bleed(t: f64, pass1_bleed: &[f64]) -> bool {
     let band = PASS1_INHERIT_MS / 1000.0 + 1e-9;
