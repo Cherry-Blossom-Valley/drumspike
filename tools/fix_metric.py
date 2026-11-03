@@ -85,6 +85,11 @@ SNARE_LAYERS = {"Session A": ["s sampl savior_01", "s sampl sd3_01"], "Session B
 KICK_LAYERS = {"Session A": ["k sampl savior_01", "k sampl sd3_01"], "Session B": ["k samp savior_01", "k samp sd3_01"],
                "Session C": ["k samp 2_02"], "Session G": ["k samp savior_03", "k samp sd3_03"],
                "Session D": ["k samp saviour", "k samp sd3"]}
+# the hat or overhead of each song: one more bleed source (the close mics come from the table above)
+EXTRA_MICS = {"Session A": ["hh_03", "oh_01"], "Session B": ["hh_01", "OH_01", "ride_01"],
+              "Session C": ["hh_03", "oh_03.L", "ri_03"], "Session H": ["hh_04", "oh_03.L"],
+              "Session F": ["hh_01", "oh_01.L", "ri_01"], "Session G": ["hh_10", "oh_01.L", "ri_01"],
+              "Session D": ["hh", "oh HH", "oh Ri", "ri"]}
 WITNESS = {("Session A", "snare"): "s bot_02", ("Session B", "snare"): "s bot_01",
            ("Session C", "snare"): "s bot_02", ("Session H", "snare"): "s bot_01",
            ("Session F", "snare"): "s bot_01", ("Session G", "snare"): "s bot_01",
