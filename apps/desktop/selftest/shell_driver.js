@@ -468,7 +468,7 @@
     });
 
     // #441: the Clear Recent item of the Open Recent submenu empties the stored list and the menu;
-    // the next open starts a new list (the start-screen list is the e2e_app test_clear_recent.py).
+    // the next open starts a new list.
     await step("recent_clear", async () => {
       const had = (await T.invoke("project_recent", {})).length;
       need(had >= 1, `the recent list is empty before the clear: ${had}`);
