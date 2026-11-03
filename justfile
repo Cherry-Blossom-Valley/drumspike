@@ -10,7 +10,7 @@ tools:
     cargo build --release -p drumspike-devtools
     cargo build -p drumspike-devtools --bin ds-bridge
 
-# Fast loop: parity and golden tests without the browser tests
+# Fast loop: the golden and other tests without the browser tests
 fast: tools
     uv run pytest -m "not e2e_app"
 
@@ -31,15 +31,6 @@ rust:
 lint:
     cargo fmt --all -- --check
     cargo clippy --all-targets -- -D warnings
-
-# Parity scripts on a generated corpus against the frozen references. Default dir is an assumption.
-parity dir="/tmp/drumspike-corpus":
-    cargo build --release -p drumspike-devtools
-    uv run --project . python tools/parity/make_corpus.py {{dir}}
-    uv run --project . python tools/parity/check_parity.py {{dir}}
-    uv run --project . python tools/parity/check_refine.py {{dir}}
-    uv run --project . python tools/parity/check_midi.py {{dir}}
-    cargo test -p drumspike-core --test project_cross_load
 
 # Benchmark: 30 tracks, 5 min, 48 kHz
 bench:

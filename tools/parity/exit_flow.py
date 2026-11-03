@@ -36,6 +36,7 @@ import argparse
 import hashlib
 import json
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -59,6 +60,39 @@ def sha256(path):
         for block in iter(lambda: f.read(1 << 22), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def bext_time_reference(path):
+    """TimeReference of the bext chunk, or None when the file has none."""
+    b = Path(path).read_bytes()
+    pos = 12
+    while pos + 8 <= len(b):
+        cid, size = b[pos:pos + 4], struct.unpack("<I", b[pos + 4:pos + 8])[0]
+        if cid == b"bext":
+            return struct.unpack("<Q", b[pos + 8 + 338:pos + 8 + 346])[0]
+        pos += 8 + size + (size % 2)
+    return None
+
+
+def source_format(path):
+    """(format name for write_spike_wav, sample rate, frames) from the `fmt ` and `data` chunks."""
+    b = Path(path).read_bytes()
+    pos, fmt, frames = 12, None, None
+    while pos + 8 <= len(b):
+        cid, size = b[pos:pos + 4], struct.unpack("<I", b[pos + 4:pos + 8])[0]
+        body = b[pos + 8:pos + 8 + size]
+        if cid == b"fmt ":
+            tag, ch, sr, _, block, bits = struct.unpack("<HHIIHH", body[:16])
+            if tag == 0xFFFE:
+                tag = struct.unpack("<H", body[24:26])[0]
+            fmt = (tag, ch, sr, block, bits)
+        elif cid == b"data":
+            frames = min(size, len(b) - pos - 8) // fmt[3]
+            break
+        pos += 8 + size + (size % 2)
+    tag, _, sr, _, bits = fmt
+    name = "float32" if tag == 3 else {16: "pcm16", 24: "pcm24", 32: "pcm32"}[bits]
+    return name, sr, frames
 
 
 def ev_key(events):
@@ -109,9 +143,6 @@ def main():
     ap.add_argument("--bridge", default=str(ROOT / "target" / "debug" / "ds-bridge"))
     ap.add_argument("--json")
     a = ap.parse_args()
-    from check_midi import bext_time_reference
-    from check_spike import source_format
-
     session, work = Path(a.session).resolve(), Path(a.work).resolve()
     if ROOT in work.parents:
         raise SystemExit("the work folder must be outside the repository")
