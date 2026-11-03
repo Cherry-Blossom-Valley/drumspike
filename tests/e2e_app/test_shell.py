@@ -251,7 +251,8 @@ def test_about_window_shows_the_summary_and_third_party(app):
 
 def test_about_shows_the_cbv_logo_licence_and_links_and_opens_them_by_id(app):
     # #18: the logo, the licence line, the two links as short addresses, and every click asks
-    # open_link with one fixed id (the page never passes an address).
+    # open_link with one fixed id (the page never passes an address). #326: the support line
+    # with the two support links, like the repo page and the landing page.
     menu(app, "about", wait=False)
     expect(app.locator("#aboutModal")).to_be_visible()
     logo = app.locator("#aboutLogo")
@@ -260,10 +261,16 @@ def test_about_shows_the_cbv_logo_licence_and_links_and_opens_them_by_id(app):
     app.locator("#aboutModal").screenshot(path=str(shot_dir("18-about-dialog.png")))
     assert "/brand/cbv-logo-white.png" in logo.get_attribute("src")
     expect(app.locator("#aboutLicence")).to_have_text("Drum Spike is free and open source (Apache-2.0).")
+    expect(app.locator("#aboutSupport")).to_have_text("Support it: GitHub Sponsors · Buy Me a Coffee")
+    expect(app.locator("#aboutLinkSponsors")).to_have_text("GitHub Sponsors")
+    expect(app.locator("#aboutLinkCoffee")).to_have_text("Buy Me a Coffee")
     expect(app.locator("#aboutLinkWebsite")).to_have_text("drumspike.cherry-blossom-valley.com")
     expect(app.locator("#aboutLinkSource")).to_have_text("github.com/Cherry-Blossom-Valley/drumspike")
     app.evaluate("() => { window.__DS_OPEN_LINK__ = []; }")
-    for el_id, id in [("aboutLinkWebsite", "website"), ("aboutLinkSource", "source"), ("aboutLogo", "cbv")]:
+    for el_id, id in [
+        ("aboutLinkWebsite", "website"), ("aboutLinkSource", "source"), ("aboutLogo", "cbv"),
+        ("aboutLinkSponsors", "sponsors"), ("aboutLinkCoffee", "coffee"),
+    ]:
         app.click(f"#{el_id}")
         wait_until(lambda id=id: id in app.evaluate("() => window.__DS_OPEN_LINK__ || []"), msg=f"open_link {id}")
     app.click("#aboutActions button[data-act='ok']")
