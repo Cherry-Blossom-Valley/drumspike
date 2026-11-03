@@ -865,8 +865,8 @@ pub static REGISTRY: &[CommandSpec] = &[
     ),
     cmd(
         "shell_typing",
-        "The page tells the menu a text field holds the keys",
-        &[req("on", Ty::Bool, "The plain accelerators are taken off the items")],
+        "The page says whether a text field or a dialog has the focus (the menu's plain keys, #300)",
+        &[req("on", Ty::Bool, "An editable element or a dialog has the focus")],
         "{}",
         App,
         Window,
