@@ -23,15 +23,15 @@ from its reference hit (after the offset). A hit the app flags out of the output
 is not in the output: it counts as deleted already (no fix), and a real hit that the app flagged is a missed hit.
 Also reported: fixes per minute of song and fixes per 100 reference hits.
 
-Configuration (the app's release `service_tool`, `cli run`, default settings, as `tools/tom_bleed_cd.py app`):
+Configuration (the app's release `service_tool`, `cli run`, default settings):
   The app runs its DSP detector (`rust-dsp`).
 
 The offset of a mic is fixed from the run and used for both configurations, so a systematic shift of
 the onsets (version 2 sat late on the foot) shows as moved hits and is not hidden by the offset.
 
 References (P4-16c, P4-23): `score --ref fair|union` (default `fair`). `fair`: the kick and the snare reference of a song is the trigger file
-when the session has one, else the sample file with the lowest jitter in the three-cornered hat (`tools/kick_onset.py`,
-`tools/snare_onset.py`). `union`: the P4-16 reference of `refs.json`. `--kick-ref` and `--snare-ref` set one role alone.
+when the session has one, else the sample file with the lowest jitter in the three-cornered hat (`tools/onset_diag.py`,
+`tools/snare_onset.py`; the files per song: `tools/sessions.py`). `union`: the P4-16 reference of `refs.json`. `--kick-ref` and `--snare-ref` set one role alone.
 
 Sessions: the seven songs in ~/.cache/drumspike/sessions (read only) that have usable references; Session E and
 Session I are left out (see `SKIPPED`). Outputs: `~/.cache/drumspike/fix-metric/`.
@@ -344,7 +344,7 @@ def fair_kick(song, hat_all):
 
 
 def read_hat(path):
-    """{song: {file: jitter}} from a `tracks.json` of `kick_onset.py` or `snare_onset.py`."""
+    """{song: {file: jitter}} from a `tracks.json` of the kick or the snare onset diagnosis (P4-22, P4-23)."""
     return {k: v["hat"] for k, v in json.loads(Path(path).read_text())["songs"].items()}
 
 
@@ -438,7 +438,7 @@ def do_refs(out, log=print):
     old = json.loads(rr.REFS.read_text())
     nw_path = Path.home() / ".cache" / "drumspike" / "tom-bleed" / "new" / "refs.json"
     if not nw_path.is_file():
-        raise SystemExit(f"{nw_path} is missing: run `uv run ... python tools/tom_bleed_new.py refs` first")
+        raise SystemExit(f"{nw_path} is missing: the P4-14 stage 1b tom references (written by the removed tom_bleed_new.py)")
     nw = json.loads(nw_path.read_text())
     refs = {}
     for song, cfg in table.items():
@@ -649,7 +649,7 @@ def do_score(out, log=print, run=None, ref="union", hat=None, hat_snare=None, ki
              configs=None):
     """Score the runs in `run` (default `out`; its `refs.json` and `run/`) into `out`. `ref` "union" is the P4-16 yardstick,
     "fair" the P4-16c / P4-23 reference of kick and snare (trigger file, else the file with the lowest hat jitter; `hat` and
-    `hat_snare`: the `tracks.json` of `kick_onset.py` and `snare_onset.py`); `kick_ref` / `snare_ref` set one role alone.
+    `hat_snare`: the `tracks.json` of the kick and the snare onset diagnosis); `kick_ref` / `snare_ref` set one role alone.
     `midi` (P4-43): a folder `<song>/<mic>.mid` of DRT results; its tables come first (`drt-report.md`), with DRT against
     the `default` run when the runs exist, else alone."""
     out = Path(out)

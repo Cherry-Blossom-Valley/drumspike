@@ -194,7 +194,7 @@ def moved_count(errs, move_s=MOVE_S):
 
 
 def size_sign(errs_s):
-    """{(size, sign): count} of the moved hits: size "1 to 2" / "2 to 5" / "over 5" (`tom_fixes.size_bin`), sign "late"
+    """{(size, sign): count} of the moved hits: size "1 to 2" / "2 to 5" / "over 5" (`size_bin`), sign "late"
     (the app after the reference) or "early". Hits within 1 ms are not counted."""
     out = {}
     for e in errs_s:
@@ -242,7 +242,7 @@ def hat_jitter(series):
 
 def jump_db(x, sr, t, floor=None):
     """How sharp the onset at `t` is: the peak of |x| in the 2.5 ms from `t` over the floor before the hit (dB; the floor is
-    `tom_fixes.floor_db`). A kick's peak comes 6 to 11 ms after the foot, so the tom card's "peak within 1.5 ms" never holds
+    `floor_db`). A kick's peak comes 6 to 11 ms after the foot, so the tom card's "peak within 1.5 ms" never holds
     for it; a sharp kick onset is a high level a few samples after the foot."""
     i0, i1 = max(0, int(t * sr)), min(len(x), int((t + JUMP_S) * sr))
     if i1 <= i0:
@@ -351,7 +351,7 @@ def false_class(layer, witness, snare_near_s, after_matched_s, rise_own, since_r
 
 
 def audio_between(x, sr, t_est, t_ref):
-    """The audio facts of a hit that lies more than 1 ms from its reference, as `tom_fixes.moved_audio`: the level at the
+    """The audio facts of a hit that lies more than 1 ms from its reference, as `moved_audio`: the level at the
     earlier of the two times, the floor before it, the deepest dip of the envelope between the two times (dB)."""
     te, tl = min(t_est, t_ref), max(t_est, t_ref)
     lv = envelope_blocks(x, sr, te - ENV_BLOCK_S, max(tl, te + ENV_BLOCK_S))
@@ -378,7 +378,7 @@ def replay_walk(x, sr, t2, prev_t, next_t, peak_db=None, floor_margin_db=None):
 
 def hit_rows(state, events, x, sr, typical_db, all_times, t_v2=None):
     """One row per matched hit of the kick mic: error (s), level against the typical hit (dB), attack (ms), gaps to the
-    neighbouring hits (s), the app's `v`, the audio at the two times (`tom_fixes.moved_audio`), the class of a moved hit and
+    neighbouring hits (s), the app's `v`, the audio at the two times (`moved_audio`), the class of a moved hit and
     the change of the time (s) under each back-track variant of `WALKS` (`replay`, from the version 2 time `t_v2` when it is known)."""
     est, sh = state["est"], state["shifted"]
     mv = moved_audio(state, x, sr)

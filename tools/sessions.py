@@ -1,12 +1,12 @@
 """The session tables of the real-session yardstick (`tools/fix_metric.py`) and the snare diagnosis
 (`tools/snare_onset.py`).
 
-`NEW_SESSIONS`: the P4-14 stage 1b sessions (moved from `tools/tom_bleed_new.py`): per session the folder under
+`NEW_SESSIONS`: the P4-14 stage 1b sessions (moved from the removed `tom_bleed_new.py`): per session the folder under
 `~/.cache/drumspike/samples`, the mic table (`drum_mics`: name -> (stem, role, label)) and the tom references (`toms_ref`).
-The sessions of P4-6b are `tools/rescue_real.py` `SESSIONS`; `fix_metric.songs()` joins both.
+The other sessions are `tools/rescue_real.py` `SESSIONS`; `fix_metric.songs()` joins both.
 
 `KICK_FILES` and `SNARE_FILES`: the reference files of the same kick and snare strokes of each yardstick song (moved from
-`tools/kick_onset.py` and `tools/snare_onset.py`). `fix_metric.kick_files()` and `snare_files()` read them.
+the removed `kick_onset.py` and from `tools/snare_onset.py`). `fix_metric.kick_files()` and `snare_files()` read them.
 """
 
 TOMS4 = ("t1", "t2", "t3", "t4")
