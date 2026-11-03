@@ -9,7 +9,7 @@ preset that does not react to them. The web page has no native menu, so the keys
 import pytest
 
 from app_support import edits_done, invoke, menu, open_project, wait_until
-from test_keypreset import choose, preset_home  # noqa: F401  (the fixture and the Settings sheet helper)
+from app_support import choose, preset_home  # noqa: F401  (the fixture and the Settings sheet helper)
 from test_menus import select_track, with_hits
 
 SR = 48000

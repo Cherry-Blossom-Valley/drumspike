@@ -186,7 +186,7 @@ def test_hover_names_the_velocity_and_the_stalk_under_the_pointer_is_the_hit(app
 
 
 def test_a_stalk_dragged_to_100_is_100_in_the_events_and_in_the_midi_note_on(app, make_project):
-    from test_infoline import midi_note_ons
+    from app_support import midi_note_ons
     sid = setup(app, make_project)
     x, y = vel_xy(app, "Kick In", 3.0)
     app.mouse.move(x, y)

@@ -510,7 +510,7 @@ def test_a_midi_export_waits_for_a_hit_edit_on_its_way(app, make_project):
     hold_edits(app)
     js(app, "() => { addHitAt('A', 0.1); }")
     export_dialog(app, formats=("midi",), scope="selected", track="A")   # P4-30: the dialog flushes the edit on its way first
-    from test_infoline import midi_note_ons
+    from app_support import midi_note_ons
     assert len(midi_note_ons(folder / "Exports" / "A_spike.mid")) == 6, "the MIDI file was written from the hits before the edit"
 
 

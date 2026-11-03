@@ -12,7 +12,7 @@ from playwright.sync_api import expect
 
 from app_support import edits_done, invoke, menu, open_project, wait_until
 from test_inspector import settings_json
-from test_keypreset import choose, preset_home  # noqa: F401  (the fixture and the Settings sheet helper)
+from app_support import choose, preset_home  # noqa: F401  (the fixture and the Settings sheet helper)
 from test_menus import empty_page, select_track, with_hits
 from test_render import SETTLE
 

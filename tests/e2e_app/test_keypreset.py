@@ -12,7 +12,7 @@ import json
 import pytest
 from playwright.sync_api import expect
 
-from app_support import edits_done, invoke, menu, open_project, wait_until
+from app_support import choose, edits_done, invoke, menu, open_project, preset_home, reload, wait_until  # noqa: F401  (preset_home is a fixture)
 from test_inspector import settings_json
 from test_menus import select_track, with_hits
 
@@ -21,29 +21,6 @@ SR = 48000
 
 def js(page, expr, arg=None):
     return page.evaluate(expr, arg) if arg is not None else page.evaluate(expr)
-
-
-@pytest.fixture
-def preset_home(app):
-    """The bridge's home is shared by the tests: the preset goes back to the default after each test."""
-    yield app
-    invoke(app, "app_settings_set", key="key_preset", value="default")
-    app.evaluate("() => { DSKeys.setPreset('default'); delete window.__DS_NATIVE_MENU__; }")
-
-
-def choose(page, value):
-    """The user's way: the select in the Settings sheet."""
-    menu(page, "settings")
-    page.select_option("#setKeyPreset", value)
-    page.click("#settingsDone")
-    expect(page.locator("#settingsModal")).to_be_hidden()
-    page.evaluate("() => document.activeElement && document.activeElement.blur()")
-    assert js(page, "() => DSKeys.preset") == value
-
-
-def reload(page):
-    page.reload()
-    page.wait_for_function("() => typeof S !== 'undefined' && S.loaded > 0")
 
 
 def sel(page):
