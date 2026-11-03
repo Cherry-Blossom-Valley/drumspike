@@ -237,7 +237,11 @@ def test_static_strings_name_no_model(capsys):
         print(f"checked {len(collected)} strings across {len(per_file)} static/ files ({breakdown})")
 
 
-def test_model_word_is_word_bounded_and_case_insensitive():
+def test_planted_model_word_is_found_in_visible_strings_and_not_in_code(tmp_path):
+    """The static/ extractors on planted sources: the word "model" in a visible string of a
+    .js, .html or .css file is reported; comments, class names, env names and template
+    interpolations are code and pass."""
+    # The word match: word-bounded and case-insensitive.
     assert MODEL_WORD.search("No usable model: fallback detector")
     assert MODEL_WORD.search("model error: x")
     assert MODEL_WORD.search("the Model finds the hits of this track")
@@ -245,13 +249,11 @@ def test_model_word_is_word_bounded_and_case_insensitive():
     assert not MODEL_WORD.search("DRUMSPIKE_" + "MODEL")
     assert not MODEL_WORD.search("models/ad" + "tof.on" + "nx")
 
-
-def test_template_interpolations_are_code_not_visible_text():
+    # Template interpolations are code, not visible text.
     assert not MODEL_WORD.search(strip_template_exprs("detector error: ${b.model.error}"))
     assert MODEL_WORD.search(strip_template_exprs("model: ${x}"))
 
-
-def test_js_comment_stripper_keeps_strings_and_drops_comments():
+    # JS: the comment stripper keeps strings and drops comments.
     source = (
         "// a comment with the model\n"
         'const a = "keep the model"; /* block with the model */\n'
@@ -259,8 +261,7 @@ def test_js_comment_stripper_keeps_strings_and_drops_comments():
     literals = js_string_literals(strip_js_comments(source))
     assert literals == ["keep the model"]
 
-
-def test_html_strings_are_text_nodes_and_user_attrs_only():
+    # HTML: the text nodes and the user attributes only.
     source = (
         "<!-- a comment with the model -->\n"
         '<div class="model-view" title="the model drawer">pick the model</div>\n'
@@ -269,15 +270,13 @@ def test_html_strings_are_text_nodes_and_user_attrs_only():
     hits = model_word_hits(html_visible_strings(source))
     assert len(hits) == 3, hits   # title, text node, placeholder; class and comment are code
 
-
-def test_css_strings_are_checked_comments_are_not():
+    # CSS: strings are checked, comments are not.
     source = '/* a comment with the model */\n.x::after { content: "the model"; }'
     literals = js_string_literals(strip_css_comments(source))
     assert literals == ["the model"]
     assert model_word_hits(literals) == literals
 
-
-def test_temp_app_js_with_the_old_string_is_reported(tmp_path):
+    # A temporary app.js with the old string is reported.
     bad = tmp_path / "app.js"
     bad.write_text(
         'el.count.textContent = "no model: the slider applies on the next re-analyze";\n',
@@ -287,15 +286,14 @@ def test_temp_app_js_with_the_old_string_is_reported(tmp_path):
     assert literals == ["no model: the slider applies on the next re-analyze"]
     assert model_word_hits([strip_template_exprs(l) for l in literals]) == literals
 
-
-def test_temp_html_with_the_old_string_is_reported(tmp_path):
+    # A temporary index.html with the old string is reported.
     bad = tmp_path / "index.html"
     bad.write_text("<div title=\"Own detection: the model finds the hits.\"></div>\n", encoding="utf-8")
     hits = model_word_hits(html_visible_strings(bad.read_text(encoding="utf-8")))
     assert hits == ["Own detection: the model finds the hits."]
 
 
-def test_temp_file_with_model_name_is_reported(tmp_path):
+def test_planted_model_name_and_em_dash_in_a_doc_are_reported(tmp_path):
     bad = tmp_path / "bad-model.md"
     # the forbidden name, split so this checker file carries no model name itself
     bad.write_text("A clean line.\nMentions the " + "AD" + "TOF" + " model here.\n", encoding="utf-8")
@@ -305,10 +303,8 @@ def test_temp_file_with_model_name_is_reported(tmp_path):
     assert hits[0]["line"] == 2
     assert hits[0]["term"] == "ad" + "tof"
 
-
-def test_temp_file_with_em_dash_is_reported(tmp_path):
     bad = tmp_path / "bad-dash.md"
-    bad.write_text("First line.\nA range 1\u20142 and a break \u2014 here.\n", encoding="utf-8")
+    bad.write_text("First line.\nA range 1—2 and a break — here.\n", encoding="utf-8")
     hits = check_docs_wording([bad])
     em_dash_hits = [h for h in hits if h["term"] == "em-dash"]
     assert len(em_dash_hits) == 1
@@ -316,11 +312,22 @@ def test_temp_file_with_em_dash_is_reported(tmp_path):
     assert em_dash_hits[0]["line"] == 2
 
 
-def test_audio_spike_guide_line_says_the_body_not_1_5_cycles():
+# #411: the pre-#378 audio-spike wordings, as static/index.html (the Export dialog) and
+# crates/app/src/api.rs (the export_all command description) said them on main before #411.
+# They describe the old snippet (the attack click's period, capped at 30 ms). Since #378 the
+# snippet covers the body of the hit: about 1.5 cycles of the drum's low tone, ending on a
+# zero crossing, clamped to 2-60 ms.
+STALE_SPIKE_FILES = ("static/index.html", "crates/app/src/api.rs")
+STALE_SPIKE_TEXTS = ("1.5 cycles of the track", "1.5 cycles per hit", "2-30 ms")
+
+
+def test_audio_spike_texts_describe_the_body_rule():
     """#402: the Audio line of the export guide describes what #378 does (the hit's body:
     the smoothed low tone over its first three clear swings, cut at the zero crossing). The
-    old "about 1.5 cycles" line was wrong and must not come back."""
-    page = Path(__file__).resolve().parent.parent / "docs" / "guide" / "05-export.md"
+    old "about 1.5 cycles" line was wrong and must not come back. #411: the UI texts carry
+    no pre-#378 wording either."""
+    root = Path(__file__).resolve().parent.parent
+    page = root / "docs" / "guide" / "05-export.md"
     text = page.read_text(encoding="utf-8")
     assert "1.5 cycles" not in text, (
         f"{page.name} says '1.5 cycles' again; the Audio Spike (#378) covers the hit's body, "
@@ -328,6 +335,14 @@ def test_audio_spike_guide_line_says_the_body_not_1_5_cycles():
     assert "zero crossing" in text and "800 Hz" in text, (
         f"{page.name} lost the Audio Spike rule: the smoothed low tone below 800 Hz, three "
         "clear swings, the cut at the zero crossing")
+
+    hits = [
+        (rel, s)
+        for rel in STALE_SPIKE_FILES
+        for s in STALE_SPIKE_TEXTS
+        if s in (root / rel).read_text(encoding="utf-8")
+    ]
+    assert hits == [], f"stale pre-#378 audio-spike wording: {hits}"
 
 
 def test_demo_kick_length_is_the_measured_value():
