@@ -443,3 +443,49 @@ fn the_walk_does_not_move_a_second_stroke_back_over_a_ring_before_the_dip() {
     assert!(free < bound, "the unbounded walk ends before the bound: {free} {bound}");
     assert!(at >= bound, "the bounded walk does not: {at} {bound} {s:?}");
 }
+
+#[test]
+fn at_44k1_the_flams_are_found_and_hits_at_the_ends_of_the_file_add_nothing() {
+    // ported from tests/test_rust_flam.py::test_44k1_and_the_ends_of_the_file: at 44.1 kHz a block of 6 samples is
+    // not 0.125 ms. 12 single strokes every 0.5 s from 0.5 s, second strokes 3 dB louder 20 ms after hit 2 and 33 ms
+    // after hit 7, a hit 1.5 ms after the start of the file and one 2 ms before its end: exactly the 2 flams.
+    let sr = 44_100u32;
+    let srf = f64::from(sr);
+    let at = |x: &mut [f64], t: f64, amp: f64, n: &mut Noise| {
+        let i0 = (t * srf).round() as usize;
+        for k in 0..(0.06 * srf) as usize {
+            if i0 + k >= x.len() {
+                break;
+            }
+            x[i0 + k] += amp * n.next() * (-(k as f64) / (0.003 * srf)).exp();
+        }
+    };
+    let mut x = vec![0.0f64; (7.0 * srf) as usize];
+    let mut nz = Noise(0x44_100);
+    let mut hits: Vec<f64> = (0..12).map(|i| 0.5 + 0.5 * f64::from(i)).collect();
+    for &t in &hits {
+        at(&mut x, t, 0.5, &mut nz);
+    }
+    let flams = [(hits[2], 0.020), (hits[7], 0.033)];
+    for &(t, gap) in &flams {
+        at(&mut x, t + gap, 0.7, &mut nz);
+    }
+    let a = (0.0015 * srf) as usize;
+    for v in &mut x[a..a + 10] {
+        *v += 0.3;
+    }
+    for v in &mut x {
+        *v += 1e-4 * nz.next();
+    }
+    hits.insert(0, 0.0015);
+    hits.push(x.len() as f64 / srf - 0.002);
+    let (found, gains) = flam_split(&f32s(&x), sr, &hits, &[], &FlamParams::default());
+    assert!(gains.is_empty());
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert_eq!(added(&found).len(), 2, "{found:?}");
+    for (s, &(t, gap)) in found.iter().zip(&flams) {
+        assert_eq!(s.first, t, "{s:?}");
+        assert!((s.t - (t + gap)).abs() < 0.0005, "{s:?}");
+        assert!(!s.bleed, "{s:?}");
+    }
+}
