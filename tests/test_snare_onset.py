@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import firm_fixes as ff  # noqa: E402
 import fix_metric as fm  # noqa: E402
 import kick_onset as ko  # noqa: E402
+import sessions as ss  # noqa: E402
 import snare_onset as so  # noqa: E402
 
 SR = 48000
@@ -70,7 +71,7 @@ def test_the_held_out_sessions_have_three_files_and_two_snare_mics():
 
 def test_files_of_is_what_the_yardstick_reads_for_the_fair_choice(monkeypatch):
     assert fm.ref_files("Session A", "snare") == so.files_of("Session A") == so.FILES["Session A"]["files"]
-    assert fm.ref_files("Session A", "kick") == ko.FILES["Session A"]["files"]
+    assert fm.ref_files("Session A", "kick") == ss.KICK_FILES["Session A"]["files"]
 
 
 # ---------------------------------------------------------------- pure parts

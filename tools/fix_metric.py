@@ -315,17 +315,17 @@ def pick_fair(files, hat):
 
 
 def kick_files(song):
-    """The reference files of the same kick strokes of a song (kick_onset.FILES)."""
+    """The reference files of the same kick strokes of a song (`sessions.KICK_FILES`)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import kick_onset as ko
-    return list(ko.FILES[song]["files"])
+    import sessions as ss
+    return list(ss.KICK_FILES[song]["files"])
 
 
 def snare_files(song):
-    """The reference files of the same snare strokes of a song (snare_onset.FILES)."""
+    """The reference files of the same snare strokes of a song (`sessions.SNARE_FILES`)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import snare_onset as so
-    return list(so.FILES[song]["files"])
+    import sessions as ss
+    return list(ss.SNARE_FILES[song]["files"])
 
 
 def ref_files(song, role):
@@ -390,12 +390,12 @@ def songs():
     role is "toms"; the mics `excluded` are left out (Session A t4)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import rescue_real as rr
-    import tom_bleed_new as tn
+    import sessions as ss
     out = {}
     for name, cfg in rr.SESSIONS.items():
         out[name] = {"dir": cfg["dir"], "excluded": set(cfg["excluded"]),
                      "mics": {m: (v[0], "toms" if v[1] == "tom" else v[1]) for m, v in cfg["mics"].items()}}
-    for name, cfg in tn.SESSIONS.items():
+    for name, cfg in ss.NEW_SESSIONS.items():
         if name in SKIPPED:
             continue
         out[name] = {"dir": cfg["dir"], "excluded": set(),

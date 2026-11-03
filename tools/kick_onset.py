@@ -34,6 +34,7 @@ import fix_metric as fm  # noqa: E402
 import firm_fixes as ff  # noqa: E402
 import miss_causes as mc  # noqa: E402
 import onset_guard as og  # noqa: E402
+import sessions as ss  # noqa: E402
 import tom_fixes as tf  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,18 +46,7 @@ ROLE = "kick"
 MICS = ["k in", "k out", "k sub"]
 MOVE_S = fm.MOVE_S
 
-# the reference files of each song: `yard` is what the yardstick's `refs.json` uses (the union of its onsets within 20 ms,
-# the earliest of a cluster), `files` all the files of the same strokes (a trigger track and sample layers)
-FILES = {
-    "Session A": {"yard": ["k sampl trig_01"], "files": ["k sampl trig_01", "k sampl savior_01", "k sampl sd3_01"]},
-    "Session B": {"yard": ["k trigger_01"], "files": ["k trigger_01", "k samp savior_01", "k samp sd3_01"]},
-    "Session C": {"yard": ["k samp 1_02"], "files": ["k samp 1_02", "k samp 2_02"]},
-    "Session H": {"yard": ["k samp 1_01", "k samp 2_01", "k samp 3_01"], "files": ["k samp 1_01", "k samp 2_01", "k samp 3_01"]},
-    "Session F": {"yard": ["k samp 1_01", "k samp 2_01", "k samp 3_01"],
-                         "files": ["k samp 1_01", "k samp 2_01", "k samp 3_01"]},
-    "Session G": {"yard": ["k triggerr_03"], "files": ["k triggerr_03", "k samp savior_03", "k samp sd3_03"]},
-    "Session D": {"yard": ["k trigger"], "files": ["k trigger", "k samp saviour", "k samp sd3"]},
-}
+FILES = ss.KICK_FILES
 # sessions the yardstick leaves out (`fix_metric.SKIPPED`): their kick mics and reference files, for a held-out check
 HELD = {
     "Session E": {"dir": "Session E", "kick": "k in-AtA2", "out": "k out-AtA2", "sub": "k sub-AtA2",

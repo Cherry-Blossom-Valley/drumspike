@@ -28,6 +28,7 @@ import fix_metric as fm  # noqa: E402
 import firm_fixes as ff  # noqa: E402
 import kick_onset as ko  # noqa: E402
 import miss_causes as mc  # noqa: E402
+import sessions as ss  # noqa: E402
 import tom_fixes as tf  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,18 +39,7 @@ ROLE = "snare"
 MICS = ["s top", "s bot"]
 APP = "s top"               # the label of the app's own mic in the hat
 
-# the reference files of each song: `yard` is what the yardstick's `refs.json` uses (the union of the onsets of all of them within
-# 20 ms, or one file), `files` the files of the same strokes of the session (a trigger track and sample layers), `extra`
-# a file that is another sample (the hat leaves it out; the pair table lists it)
-FILES = {
-    "Session A": {"yard": ["s sampl trig_01"], "files": ["s sampl trig_01", "s sampl savior_01", "s sampl sd3_01"]},
-    "Session B": {"yard": ["s trigger_01"], "files": ["s trigger_01", "s samp savior_01", "s samp sd3_01"]},
-    "Session C": {"yard": ["s samp 1_02"], "files": ["s samp 1_02", "s samp 2_02"], "extra": ["s samp rev_02"]},
-    "Session H": {"yard": ["s samp 1_01", "s samp 2_01", "s samp 3_01"], "files": ["s samp 1_01", "s samp 2_01", "s samp 3_01"]},
-    "Session F": {"yard": ["s samp 1_01", "s samp 2_01", "s samp 3_01"], "files": ["s samp 1_01", "s samp 2_01", "s samp 3_01"]},
-    "Session G": {"yard": ["s trigger_03"], "files": ["s trigger_03", "s samp savior_03", "s samp sd3_03"]},
-    "Session D": {"yard": ["s trigger"], "files": ["s trigger", "s samp saviour", "s samp sd3"]},
-}
+FILES = ss.SNARE_FILES
 # sessions the yardstick leaves out: the snare mics and the files, a held-out check of the file jitter and the rules
 HELD = {
     "Session E": {"dir": "Session E", "top": "s top-AtA2", "bot": "s btm-AtA2",

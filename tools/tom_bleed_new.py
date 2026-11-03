@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import learn_eval as le  # noqa: E402
 import miss_causes as mc  # noqa: E402
 import rescue_real as rr  # noqa: E402
+import sessions as ss  # noqa: E402
 import tom_bleed as tb  # noqa: E402
 
 OUT = tb.OUT / "new"
@@ -53,43 +54,8 @@ LOWPASS = 1500.0
 F0_WINDOW = (0.010, 0.150)
 ISOLATED_S = 0.150
 
-TOMS4 = ("t1", "t2", "t3", "t4")
-
-
-def session(dir_, mics, toms_ref):
-    return {"dir": dir_, "excluded": set(), "mics": mics, "toms_ref": toms_ref}
-
-
-def drum_mics(k, s, t, hh, oh):
-    """The mic table of a session: kick, snare, the four toms, the hat and one or two overheads."""
-    m = {"k in": (k, "kick", "k in"), "s top": (s, "snare", "s top")}
-    m.update({name: (stem, "tom", name) for name, stem in zip(TOMS4, t)})
-    m["hh"] = (hh, "hat", "hh")
-    for i, stem in enumerate(oh):
-        m[f"oh{i + 1}" if len(oh) > 1 else "oh"] = (stem, "cymbal", "oh")
-    return m
-
-
-SESSIONS = {
-    "Session H": session("Session H", drum_mics("k in_01", "s top_01", ["t 1_01", "t 2_01", "t 3_01", "t 4_01"],
-                                                  "hh_04", ["oh_03.L", "oh_03.R"]),
-                       {"combined": ["t samp_01.L", "t samp_01.R"]}),
-    "Session F": session("Session F",
-                                drum_mics("k in_01", "s top_01", ["t 1_01", "t 2_01", "t 3_01", "t 4_01"], "hh_01",
-                                          ["oh_01.L", "oh_01.R"]),
-                                {"per_tom": {t: [f"{t} samp_01.L", f"{t} samp_01.R"] for t in TOMS4}}),
-    "Session G": session("Session G",
-                                        drum_mics("k in_01", "s top_01", ["t1HH_01", "t2_01", "t3_01", "t4Ri_01"],
-                                                  "hh_10", ["oh_01.L", "oh_01.R"]),
-                                        {"combined": ["t trigger_01.L", "t trigger_01.R"]}),
-    "Session E": session("Session E",
-                                drum_mics("k in-AtA2", "s top-AtA2", ["t1 hh-AtA2", "t2-AtA2", "t3-AtA2", "t4 ri-AtA2"],
-                                          "hh-AtA2", ["oh-AtA2.L", "oh-AtA2.R"]),
-                                {"combined": ["t sample sd3_03.L", "t sample sd3_03.R"]}),
-    "Session D": session("Session D",
-                              drum_mics("k in", "s top", ["t1 hh", "t2", "t3", "t4 ri"], "hh", ["oh HH", "oh Ri"]),
-                              {"combined": ["t trigger.L", "t trigger.R"]}),
-}
+TOMS4 = ss.TOMS4
+SESSIONS = ss.NEW_SESSIONS
 
 
 def ref_paths(sess, stems):
