@@ -61,7 +61,7 @@
 //! hit of another drum lies in the window and is that much louder; a marked hit protects no other. Two mics of one drum
 //! never pair. A hit is marked only when its own relative level is also at most `winner_floor_db` ([`PAIR_FLOOR_DB`], -3 dB):
 //! bleed is quiet on its own mic, a real unison stroke is not. The rule needs no bleed between the hits, so it runs when rule CD is off (tom tracks edited to digital
-//! silence). The Python reference is `tools/tom_pairs.py` (`pair_marks`).
+//! silence).
 //!
 //! # Rule version 4: the own-mic attack rise keep guard (#182)
 //!
@@ -106,7 +106,7 @@ use super::flam::zero_phase;
 pub const RULE_VERSION: u32 = 5;
 
 /// Version 3: the level floor of the pair rule (dB against the mic's median): only a hit this far under its own mic's
-/// median can be marked. Chosen on the seven yardstick songs (`tools/tom_pairs.py`).
+/// median can be marked. Chosen on the seven yardstick songs (P4-21).
 pub const PAIR_FLOOR_DB: f64 = -3.0;
 
 /// Version 4: a hit the pair rule would mark stays a hit when its own-mic attack rise ([`stroke_rise_db`]) is this

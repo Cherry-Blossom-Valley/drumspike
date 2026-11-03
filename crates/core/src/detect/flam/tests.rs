@@ -446,7 +446,7 @@ fn the_walk_does_not_move_a_second_stroke_back_over_a_ring_before_the_dip() {
 
 #[test]
 fn at_44k1_the_flams_are_found_and_hits_at_the_ends_of_the_file_add_nothing() {
-    // ported from tests/test_rust_flam.py::test_44k1_and_the_ends_of_the_file: at 44.1 kHz a block of 6 samples is
+    // the 44.1 kHz and file-ends case of the former Python parity test: at 44.1 kHz a block of 6 samples is
     // not 0.125 ms. 12 single strokes every 0.5 s from 0.5 s, second strokes 3 dB louder 20 ms after hit 2 and 33 ms
     // after hit 7, a hit 1.5 ms after the start of the file and one 2 ms before its end: exactly the 2 flams.
     let sr = 44_100u32;

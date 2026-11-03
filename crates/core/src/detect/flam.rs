@@ -17,8 +17,7 @@
 //!    `G` plus `margin_db` (10 dB) reaches the stroke's peak P2. A bleed stroke is not added.
 //!
 //! The parameters are the stage 1 rule `R9_m10` ([`FlamParams::default`]). The Python reference is `tools/flam_pairs.py`
-//! (`attack_env`, `transfer_gains`, `second_onsets`) as `tools/flam_split.py` runs it; the parity check is
-//! `tests/test_rust_flam.py` and `tools/flam_split.py parity`. The measurements are in
+//! (`attack_env`, `transfer_gains`, `second_onsets`). The measurements are in
 //! `docs/migration/phase4-report.md`, sections "P4-13 stage 1", "P4-13 stage 2, stage A" and "P4-13 stage B".
 //!
 //! # Determinism
