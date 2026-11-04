@@ -1,11 +1,15 @@
-# Drum Spike 0.10.0-refactor.1 (Apple silicon test build)
+# Drum Spike 0.9.20-refactored (Apple silicon test build)
 
 A test build of the engineering refactor (branch refactor/structure). It is not a feature release.
 
 ### What is the same
 
 - Detection is unchanged: the same hits, times, velocities and MIDI bytes as 0.9.19 on every reference set we measure.
-- Project files stay compatible with 0.9.x.
+- Project files stay compatible with 0.9.x: a 0.9.19 project opens, saves and opens again in 0.9.19.
+
+### Fixed
+
+- The analysis job reports each track's hit count after the session steps (cross bleed, ghost gate, tom bleed, flam), the count the page shows and `events_get` answers. Before, agents got the count from before those steps (#331).
 
 ### What changed inside
 
