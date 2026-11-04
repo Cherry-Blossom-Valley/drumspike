@@ -30,6 +30,9 @@
 //! even, slice clamping) live in [`pyops`] so every port uses the same helpers.
 
 #![warn(missing_docs)]
+// R8b: the public docs name crate-internal tuning constants and helpers on purpose (they explain the mechanism);
+// `cargo doc --document-private-items` renders those links.
+#![allow(rustdoc::private_intra_doc_links)]
 
 /// Version of the `drumspike-core` crate (the workspace version); the app reports it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -73,21 +76,19 @@ pub use detect::resample::{ResampleError, Resampler, TARGET_RATE, resample_to_44
 pub use io::{Bext, MappedWav, MixMode, SampleFormat, WavError, WavInfo, decode_many, read_wav_bytes, read_wav_mono};
 pub use midi::{
     MidiError, MidiEvent, MidiMarker, MidiTrack, NoteEvent, export_midi, export_midi_map, export_multi_midi,
-    midi_bytes, midi_bytes_map, multi_midi_bytes, note_events,
+    midi_bytes, note_events,
 };
-pub use peaks::{PEAK_LEVELS, PeakLevel, PeakTile, SampleWindow, Track, compute_peaks, compute_peaks_levels};
+pub use peaks::{PeakLevel, PeakTile, SampleWindow, Track, compute_peaks};
 pub use project::{Document, Event, Project, ProjectError, Source, SourceStatus};
 pub use refine::{
-    BackStep, Hit, ReachStep, RefineRule, RefineWindow, Refined, first_motion, hilbert_env, recompute_velocities,
-    refine_first_motion, refine_reach, refine_rule, refine_sr, refine_track, refine_track_rule,
+    BackStep, Hit, ReachStep, RefineRule, RefineWindow, Refined, first_motion, recompute_velocities,
+    refine_first_motion, refine_rule, refine_sr, refine_track, refine_track_rule,
 };
 pub use spike::{
-    AUDIO_BEXT_DESCRIPTION, AUDIO_DEFAULT_S, AUDIO_FADE_S, AUDIO_MAX_S, AUDIO_MIN_S, AUDIO_PERIOD_WINDOW_S,
-    audio_snippet_lengths, audio_spike_bext, audio_spike_signal, export_audio_spikes, export_spikes, period_samples,
-    spike_bext, spike_signal,
+    AUDIO_PERIOD_WINDOW_S, audio_snippet_lengths, export_audio_spikes, export_spikes, period_samples, spike_signal,
 };
 pub use tempo::{TempoMap, TickMap, import_midi};
-pub use velocity::{VelocityMap, peak_in, velocity_map};
+pub use velocity::{VelocityMap, velocity_map};
 
 #[cfg(test)]
 mod version_tests {
