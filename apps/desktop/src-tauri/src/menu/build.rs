@@ -375,7 +375,7 @@ pub fn is_known(id: &str) -> bool {
 /// payload that was sent.
 pub fn dispatch<R: Runtime>(app: &AppHandle<R>, id: &str) -> Value {
     // #206 diagnosis: which menu ids reach the Rust side (selftest_menu_log). The file copy
-    // (DRUMSPIKE_MENU_LOG_FILE) lets the real-event probe on arm64-mac read the ids that a
+    // (DRUMSPIKE_MENU_LOG_FILE) lets the real-event probe on an Apple-silicon Mac read the ids that a
     // physical press via osascript dispatched (the probe cannot call the tauri command).
     // a poisoned lock is unwrapped: the log entries are still pushed (the poison of another
     // thread's panic must not take the menu dispatch down, #206 diagnosis)
