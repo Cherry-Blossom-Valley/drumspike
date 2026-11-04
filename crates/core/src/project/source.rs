@@ -13,7 +13,7 @@ use super::document::{SOURCE_MODES, Source, Track};
 use super::{AUDIO_DIR, Project, ProjectError, abspath, basename, io_err, normpath, relpath};
 
 /// `head_sha1` covers the first MiB of a file.
-pub const HEAD_BYTES: usize = 1024 * 1024;
+pub(crate) const HEAD_BYTES: usize = 1024 * 1024;
 
 /// Result of [`resolve_source`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,7 +70,7 @@ fn hash_head_now(path: &Path) -> Result<String, ProjectError> {
 /// `ctime`. A newer file is hashed every time.
 pub const HEAD_CACHE_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
 /// The most entries the head-hash cache keeps; it is emptied when it is full.
-pub const HEAD_CACHE_MAX: usize = 4096;
+pub(crate) const HEAD_CACHE_MAX: usize = 4096;
 
 /// What identifies an unchanged file: device, inode, size, `mtime` and `ctime` (ns).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -266,7 +266,7 @@ pub fn source_matches(record: &Source, path: &Path) -> bool {
 /// `project.source_candidates`: the resolution order, duplicates removed: the absolute
 /// `path`, `<project>/<relative>` normalised, `<project>/Audio Files/<basename>`.
 #[must_use]
-pub fn source_candidates(record: &Source, project_dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn source_candidates(record: &Source, project_dir: &Path) -> Vec<PathBuf> {
     let project_dir = abspath(project_dir);
     let mut out: Vec<PathBuf> = Vec::new();
     if let Some(p) = record.path.as_deref().filter(|p| !p.is_empty()) {
@@ -390,7 +390,7 @@ pub struct CopyCtl<'a> {
 }
 
 /// Chunk size of [`copy_chunked`]: the cancel and the progress are checked once per chunk.
-pub const COPY_CHUNK: usize = 4 * 1024 * 1024;
+pub(crate) const COPY_CHUNK: usize = 4 * 1024 * 1024;
 
 /// `shutil.copy2` in chunks: the bytes plus the access and modification times. Asks `ctl`
 /// before each chunk; a cancel stops with `ErrorKind::Interrupted` (the caller removes `dst`).
@@ -399,7 +399,7 @@ pub const COPY_CHUNK: usize = 4 * 1024 * 1024;
 ///
 /// An `Interrupted` error when `ctl` reports a cancel; otherwise the I/O error from opening
 /// `src`, creating `dst`, or reading, writing or flushing the data.
-pub fn copy_chunked(src: &Path, dst: &Path, ctl: &CopyCtl<'_>) -> std::io::Result<()> {
+pub(crate) fn copy_chunked(src: &Path, dst: &Path, ctl: &CopyCtl<'_>) -> std::io::Result<()> {
     use std::io::Write;
     let mut input = File::open(src)?;
     let mut out = File::create(dst)?;
@@ -621,7 +621,7 @@ pub struct SearchReport {
 }
 
 /// The walk stops after this many files (a search of a whole disk must end).
-pub const SEARCH_MAX_FILES: usize = 2_000_000;
+pub(crate) const SEARCH_MAX_FILES: usize = 2_000_000;
 
 struct Cand {
     path: PathBuf,

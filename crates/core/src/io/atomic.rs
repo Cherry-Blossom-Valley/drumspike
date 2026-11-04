@@ -156,7 +156,7 @@ impl Drop for TempFile {
 ///
 /// An [`io::Error`] when `path` has no file name, the temporary file cannot be created (a
 /// missing folder, no permission), the write, flush or sync fails, or the rename fails.
-pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_bytes_atomic_via(path, bytes, std::io::Write::write_all, finish_real)
 }
 
