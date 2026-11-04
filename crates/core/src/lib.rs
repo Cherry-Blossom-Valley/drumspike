@@ -61,6 +61,8 @@ pub mod pyops;
 pub mod refine;
 // The one Role type (R1) and #281 item 10: the model-free role suggestion from a track's audio.
 pub mod role;
+// R6: the rule versions and research numbers of one analysis, resolved at the edge.
+pub mod rules;
 pub mod sampler;
 // #293: the Learn similarity, DSP-only (features of a candidate, the score against the examples).
 pub mod similarity;
