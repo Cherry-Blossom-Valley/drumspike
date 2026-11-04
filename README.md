@@ -92,7 +92,7 @@ cargo test --workspace
 DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 DRUMSPIKE_REQUIRE_CORE=1 uv run pytest -q
 ```
 
-The [developer guide](docs/DEVELOPING.md) covers the architecture, the test gates, CI and the
+[ARCHITECTURE.md](ARCHITECTURE.md) is the code map. The [developer guide](docs/DEVELOPING.md) covers the build, the test gates, CI and the
 release build; [RELEASING.md](docs/RELEASING.md) covers signing and notarization.
 
 ## How it works
@@ -117,11 +117,12 @@ and spike lanes with WebGL2 inside a Tauri 2 window; the app has no server and n
 | Path | Content |
 |---|---|
 | `crates/core/` | the Rust core: decoding, detection, refinement, velocities, MIDI, spike files, project format |
-| `crates/app/` | the app commands as plain Rust functions, the agent API, the test bridge |
+| `crates/app/` | the app commands as plain Rust functions and the agent API |
+| `crates/devtools/` | developer binaries: the test bridge, parity, bench |
 | `apps/desktop/` | the Tauri desktop app and its build, test and release scripts |
 | `static/` | the editor UI |
-| `tests/` | pytest: the UI against the test bridge, parity tests against frozen references |
-| `tools/` | export checker, parity checks, release and media tools, research references ([tools/README.md](tools/README.md)) |
+| `tests/` | pytest: the UI against the test bridge, the golden regression against frozen references |
+| `tools/` | export checker, release and media tools, research references ([tools/README.md](tools/README.md)) |
 | `site/` | the [website](https://drumspike.cherry-blossom-valley.com/) |
 | `docs/` | [user guide](docs/guide/README.md), [developer guide](docs/DEVELOPING.md), [releasing](docs/RELEASING.md), [release notes](docs/release-notes/), [design records](docs/adr/), [all docs](docs/README.md) |
 

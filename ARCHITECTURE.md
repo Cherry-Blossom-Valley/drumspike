@@ -190,7 +190,7 @@ checks the end of stages 8, 9, 10 and 11.
 
 These decisions shape the code. The detail is in the code comments and the ADRs.
 
-- The DSP detector is the product. A trained model is an option, never the default. No model
+- The DSP detector is the product. A trained detector is an option, never the default. None
   is bundled, and the product text names none. The decision number is ENST snare recall above
   0.70 at precision 0.95 or higher; `tools/eval/enst_gate.py` compares each aggregate with
   `tools/eval/enst_gate_baseline.json` and fails on a drop of more than 2 percent.

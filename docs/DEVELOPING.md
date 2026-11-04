@@ -24,7 +24,7 @@ Drum Spike builds on macOS, on an Apple Silicon Mac. The desktop app builds for 
 - Rust: install `rustup` only. The file `rust-toolchain.toml` pins the channel `stable`, and
   `cargo` reads it. Never run `rustup default` for this project.
 - `uv` and Python 3.12. `.python-version` holds `3.12`. `uv` downloads that Python when it is missing.
-- Node 22 (the version the builds on arm64-mac use) and `npm`, for the Tauri command line tool. The only npm package is `@tauri-apps/cli`
+- Node 22 (the version the builds on the Apple silicon runner use) and `npm`, for the Tauri command line tool. The only npm package is `@tauri-apps/cli`
   (`apps/desktop/package.json`).
 - No ffmpeg for the app and the tests. Only the media tools in `tools/media/` use it.
 - `just` is optional. The `justfile` wraps the test commands (`just --list`).
@@ -213,11 +213,11 @@ background with a log file.
 
 | Gate | Host | Commands |
 |---|---|---|
-| G1 Rust | arm64-mac and x86-mac | `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace` |
-| G2 pytest | arm64-mac and x86-mac | build the tools (section 3), then `DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 DRUMSPIKE_REQUIRE_CORE=1 uv run pytest -q` |
-| G3 app build | arm64-mac only | `(cd apps/desktop && npm ci && npx tauri build --debug --target aarch64-apple-darwin --bundles app)` |
-| G4 app e2e through the bridge | arm64-mac and x86-mac | `cargo build -p drumspike-devtools --bin ds-bridge`, then `DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 uv run pytest -m e2e_app --no-cov` |
-| G5 app self-test in the built app | arm64-mac only | `apps/desktop/scripts/self-test.sh <scenario>` |
+| G1 Rust | Apple silicon and Intel Mac | `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace` |
+| G2 pytest | Apple silicon and Intel Mac | build the tools (section 3), then `DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 DRUMSPIKE_REQUIRE_CORE=1 uv run pytest -q` |
+| G3 app build | Apple silicon Mac only | `(cd apps/desktop && npm ci && npx tauri build --debug --target aarch64-apple-darwin --bundles app)` |
+| G4 app e2e through the bridge | Apple silicon and Intel Mac | `cargo build -p drumspike-devtools --bin ds-bridge`, then `DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 uv run pytest -m e2e_app --no-cov` |
+| G5 app self-test in the built app | Apple silicon Mac only | `apps/desktop/scripts/self-test.sh <scenario>` |
 
 A faster loop without the browser tests:
 
@@ -326,8 +326,8 @@ Changes to the workflow files need a maintainer.
 
 | Job | Runner | What it does |
 |---|---|---|
-| `test` | self-hosted Intel Mac (labels `self-hosted`, `x86-mac`) | format, clippy, `cargo test --workspace`, the release tools, `ds-bridge`, then pytest (all tests except the arm64 share of `e2e_app`) |
-| `e2e-arm64` | self-hosted Apple Silicon Mac (label `arm64-mac`) | the other share of the `e2e_app` tests (`tests/e2e_shards.json`); on `main` pushes, by hand, and on a pull request of this repository with the label `ci:e2e` |
+| `test` | self-hosted Intel Mac (the runner labels are in `ci.yml`) | format, clippy, `cargo test --workspace`, the release tools, `ds-bridge`, then pytest (all tests except the arm64 share of `e2e_app`) |
+| `e2e-arm64` | self-hosted Apple Silicon Mac (the runner labels are in `ci.yml`) | the other share of the `e2e_app` tests (`tests/e2e_shards.json`); on `main` pushes, by hand, and on a pull request of this repository with the label `ci:e2e` |
 | `js-coverage` | `ubuntu-latest` | merges the JS coverage of both shares and gates the per-file floor (`tests/jscov.py`) |
 | `desktop-app` | self-hosted Apple Silicon Mac | by hand only (`run_desktop`): debug app (G3), self-test scenarios (G5), ad hoc `.dmg` |
 
@@ -346,8 +346,8 @@ the Intel app on the Intel runner and makes a draft release.
 
 ## 10. Self-hosted runners
 
-The macOS jobs run on two self-hosted runners: an Apple Silicon Mac (label `arm64-mac`, also the
-signing Mac of the release) and an Intel Mac (label `x86-mac`). Each runner needs Rust through
+The macOS jobs run on two self-hosted runners: an Apple Silicon Mac (also the
+signing Mac of the release) and an Intel Mac. Each runner needs Rust through
 `rustup`, `uv`, Node 22 and the Xcode command line tools; the jobs put `~/.cargo/bin`,
 `~/.local/bin` and `/usr/local/bin` on their `PATH` themselves. Heavy jobs on a runner that is also
 a development machine wait for a host lock, when the machine has one, so a test run and a local

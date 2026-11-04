@@ -16,7 +16,7 @@ two sides cannot drift.
 | `added` / `orig` | add / move op (edit.rs) | structural: `is_manual` = `added` or `t != orig` |
 | `learned` | Learn Add / Learn sweep / analysis | a Learn example |
 | `flam` | flam.rs (second stroke) | flam stroke |
-| `roll`, `rescue`, `stage8` | the model path; carried in `extra` | carried, no output effect; confidence cap (confidence.rs) |
+| `roll`, `rescue`, `stage8` | older projects; carried in `extra` | carried, no output effect; confidence cap (confidence.rs) |
 | `keep` | Hits > Toggle Hit Active on a deactivated hit (edit.rs `toggle` op, #242) | the user's per-hit override: the hit stays in the output whatever the rules marked |
 | `deactivated` | Hits > Toggle Hit Active on an active hit (edit.rs `toggle` op, #242) | the user's per-hit override: the hit leaves the output |
 

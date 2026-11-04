@@ -176,24 +176,13 @@ or change the live project of the running app (a local socket for that is a poss
   `{op: add, t, snap: true}` (off by default; the page's Option-click sets it) puts the hit on the attack within 10 ms of `t`,
   found by the refinement rule of the track's analysis, with the velocity that `velocities_recompute` gives there (a `v` in the op wins).
   With no attack within 10 ms the hit stays at `t` with velocity 100. The answer lists each snap op as `snaps: [{click, t, v, snapped}]`.
-- Roll fill: an analysis of a snare track adds the soft strokes of a roll (the model's candidates down to 0.05 in a
-  run of 8 or more equally spaced picks, 80 to 400 ms) as normal hits with `roll: true`. The `detector` record names the
-  version (`roll_rule`); a project analysed before keeps its hits until Re-analyze; `DRUMSPIKE_ROLL_RULE=0` turns it off.
-- Kick walk: an analysis of a kick track runs the refinement back-track with a peak margin of 29 dB (the shipped margin is 33 dB):
-  the same hits, onsets a little later where a quiet lead-in lies before the foot. The `detector` record names the version
-  (`kick_walk`); a project analysed before keeps its hits until Re-analyze; `DRUMSPIKE_KICK_WALK=0` turns it off.
+- Roll fill, kick walk and kick rescue are not part of the DSP detector. An old project can carry `roll` and `rescue` marks; they are carried and have no effect on the output.
 - Flams: after an analysis and its bleed rules the second stroke of a flam inside a snare hit's lobe (a 1 kHz
   attack re-rise of 9 dB, 12 to 50 ms after the hit) becomes a normal hit with `flam: true`, unless another track of the
   project (no snare and no sample track) explains it as bleed. The `detector` record names the version (`flam_rule`) and the
   outcome (`flam: {on, reason, added, gated, sources}`); `job_get` has the session's outcome in `flam`. The track param
   `flam_split: false` turns it off for one track; a project analysed before keeps its hits until Re-analyze;
   `DRUMSPIKE_FLAM_RULE=0` turns it off.
-- Kick rescue: after an analysis, its bleed rules and the flam rule, a kick close mic (no sample track) with a
-  model analysis gets the hits of the DSP onset detector that lie 30 ms or more from every model hit, as normal hits with
-  `rescue: true`. An added hit goes again when a tom or snare close mic of the project has a hit within 20 ms and the hit
-  is 8 dB or more under the track's median hit level (bleed). The `detector` record names the version (`kick_rescue`) and
-  the outcome (`rescue: {added, removed, median_db, sources}`); `job_get` has the session's outcome in `rescue`. A project
-  analysed before keeps its hits until Re-analyze; `DRUMSPIKE_KICK_RESCUE=0` turns it off.
 - Tom bleed: after an analysis the tom close mics' hits that the other toms' mics explain carry `bleed: true`. They stay in
   `events_get` but leave MIDI, spikes, `export_all`, the click and a follower, as cut hits do. `{op: restore, index}` takes the mark
   off one hit and sets `edited: true`: a re-pick or Re-analyze with `keep_edited` keeps the hit, and the rule never marks it
@@ -234,7 +223,7 @@ dotted quarters, fit the hits as well as 4/4.
 
 ## Review markers
 
-The project document holds the marker list under the `markers` key — a pass-through key, so a document
+The project document holds the marker list under the `markers` key (a pass-through key), so a document
 written by the page or an agent round-trips unchanged (format 1 stays). One marker is an object with a
 numeric `t` (seconds of the audio) and an optional string `note`; an entry may carry more keys, they are
 kept. `markers_get {sid}` answers `{markers, n}` (oldest first). `markers_set {sid, markers}` replaces
@@ -248,10 +237,9 @@ Option+M and Option+Shift+M.
 `track_confidence {sid, name, events?}` rates each hit of `events` (else the stored hits) and answers
 `{confidence, source, doubt_below}`: one `{c, doubt, why}` per hit, in their order. `c` is 0 to 1, and a
 hit under `doubt_below` (0.5) is doubtful; `why` lists the reasons. The value is computed on each call and
-never stored; the detection results do not change. `source` is `model` (kept activations: the margin of
-the activation over the threshold, and the level), `level` (the level only) or `follows`. A hit that
+never stored; the detection results do not change. `source` is `level` (the level only) or `follows`. A hit that
 the user added or moved, or that is not in the output, is never doubtful. A hit that a rule added under
-the model threshold (rescue, Learn Add, roll fill, flam) gets the cap of its tag times its level. The
+the level threshold (Learn Add, flam) gets the cap of its tag times its level. The
 rules are in `crates/app/src/confidence.rs`. The page steps through the doubtful hits of all tracks
 with D (Hits > Next Doubtful Hit), lowest confidence first; Shift+D steps back.
 
@@ -267,10 +255,10 @@ effective value as `export_compensate`, `export_existing` only a kept choice (`n
 dialog keeps its own default: on when a track has a sampler calibration). An `export_all` without a per-call `compensate`
 uses the kept value; an explicit `compensate` argument still wins.
 
-#232: the four settings that the #120 inventory named as gaps are numbers the agent and the app both
+#232: four settings that were gaps are numbers the agent and the app both
 set: `track_params_set`/`track_repick` carry the refine window (`refine_lo_ms`, `refine_hi_ms`, also
 in the Inspector's Detection section), the role's name pattern (`track_set_role {role_match}`) stays
-an agent field (#285 removed its Inspector field: the role guess reads a term table per drum, and a
+an agent field (#285 removed its Inspector field: the role suggestion reads a term table per drum, and a
 role set by hand wins), `track_layer_set {range}` takes the velocity curve's dB range as a
 plain number (the curve must be `db`), and the Compensate checkbox is `export_compensate_set`.
 

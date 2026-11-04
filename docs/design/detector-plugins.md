@@ -131,7 +131,7 @@ The app validates every response before it uses it:
 - `confidence` is clamped to 0.0 to 1.0;
 - at most 50 hits per second of audio (hits) and 400 candidates per second
   (candidates); over that, the app fails the track with a readable error instead of
-  guessing which hits to keep.
+  choosing which hits to keep.
 
 Limits and timeouts:
 
@@ -179,8 +179,8 @@ hash of the licence text are recorded in the project (section 6).
 
 ## 6. Project format
 
-The detector of a track keeps its current record fields: `detector` (the opaque detector
-string), `chain` and `refine`. A plugin track adds one optional field:
+The detector of a track keeps its current record fields: `detector` (the detector
+string, kept as given), `chain` and `refine`. A plugin track adds one optional field:
 
 - `plugin`: `{"id": "<id>", "version": "<manifest version>", "licence_sha256": "<hex>"}`.
 
@@ -205,7 +205,7 @@ with the built-in detector.
   selects the built-in detector.
 - Example plugin, tests only: `tests/fixtures/plugins/json_hits.py`, a small Python
   script that reads hit times from a JSON file next to it and prints a protocol 1
-  response. No model, no network. It is never bundled with the app.
+  response. No network, no trained detector. It is never bundled with the app.
 
 ## 8. Licence boundary
 

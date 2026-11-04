@@ -20,7 +20,7 @@ changing what the old buttons mean.
 
 ## Rules (the engine side)
 
-These rules answer the edge questions once.
+These rules settle the edge cases once.
 
 1. Scope. The detector runs on the track with a pad of 100 ms on both sides (so the spectral frames and the
    refine-to-attack walk see their context). Only hits whose refined time lies inside `[t0, t1]` are taken.

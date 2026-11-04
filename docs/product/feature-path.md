@@ -17,7 +17,7 @@ Rules for every asset:
   `static/keymap.js`; keys are the default Pro Tools preset unless a chapter says otherwise).
 - Show the demo session (`tools/media/demo_session.py` builds it), never an owner or client session.
 - State the licence where users download: "Drum Spike is free and open source (Apache-2.0)."
-  (owner, 2026-10-24, changed the same day). Name no model licence.
+  (owner, 2026-10-24, changed the same day). Name no trained detector's licence.
 
 ## Part 1: the main job
 
