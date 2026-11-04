@@ -183,7 +183,8 @@
         for (const n of S.order) {
           report.tracks[n] = { hits: S.events[n].length };
           total += S.events[n].length;
-          if (sc.record_events) report.tracks[n].events = S.events[n].map(e => [e.t, e.v]);
+          // the hits the export writes: a hit the tom bleed rule, the loudness cut or Learn took out stays out of the MIDI file
+          if (sc.record_events) report.tracks[n].events = S.events[n].filter(e => !hgIsCut(e)).map(e => [e.t, e.v]);
           report.tracks[n].note = S.tracks[n].note;
         }
         report.metrics.hits_total = total;
@@ -200,19 +201,19 @@
         const spike = $q(`.track[data-name="${name}"] .spike`);
         const r = spike.getBoundingClientRect();
         const ev = (type, extra) => spike.dispatchEvent(new MouseEvent(type, Object.assign({ bubbles: true, clientX: r.left + 40, clientY: r.top + 8 }, extra)));
-        ev("dblclick");
-        need(S.events[name].length === n0 + 1, "double click did not add a hit");
+        ev("dblclick");   // edits run in the page's serial queue (shSerial): wait for the page, not the same tick
+        await until(() => S.events[name].length === n0 + 1, "the double click to add a hit", 5000);
         await until(async () => (await held()) === n0 + 1, "events_set after the add", 5000);
-        window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }));
-        need(S.events[name].length === n0, "undo did not remove the hit");
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", code: "KeyZ", bubbles: true }));   // the page key of Undo (keymap.js)
+        await until(() => S.events[name].length === n0, "the Z key to undo the add", 5000);
         await until(async () => (await held()) === n0, "events_set after the undo", 5000);
         /* P3-14d: 10 hit edits (5 adds, 5 undos, one frame each) redraw the track's hit lines and post no GL draw */
         await until(() => !GLQ.eng || GLQ.eng.stats.drawn >= GLQ.eng.stats.posted, "the GL engine to answer its draws", 10000);
         const g0 = GLQ.eng ? GLQ.eng.stats.posted : 0, f0 = frameCounts();
         layoutReads.reset();
         const at = S.view.t0 + 0.37 * (S.view.t1 - S.view.t0);
-        for (let k = 0; k < 5; k++) { addHitAt(name, snapSample(at + k * 0.01, name)); await frame(); }
-        for (let k = 0; k < 5; k++) { undo(); await frame(); }
+        for (let k = 0; k < 5; k++) { await addHitAt(name, snapSample(at + k * 0.01, name)); await frame(); }
+        for (let k = 0; k < 5; k++) { await undoRedo(true); await frame(); }
         await frame();
         const f1 = frameCounts();
         report.metrics.edit_gl_draws = GLQ.eng ? GLQ.eng.stats.posted - g0 : null;
@@ -235,7 +236,8 @@
         await until(() => !$q("#exportModal").classList.contains("hidden"), "the Export dialog", 15000);
         if ($q("#exSpikes").checked) $q("#exSpikes").click();
         $q("#exGo").click();
-        await until(() => /exported 1 MIDI file to Exports\//.test($q("#stMsg").textContent), "the export message", 15000);
+        // #151: a project on the default tempo asks first (Export anyway / Set Tempo / Cancel): answer Export anyway
+        await until(() => { const b = $q('#confirmActions [data-act="anyway"]'); if (b && !$q("#confirmModal").classList.contains("hidden")) b.click(); return /exported 1 MIDI file to Exports\//.test($q("#stMsg").textContent); }, "the export message", 15000);
         $q("#exCancel").click();
         report.metrics.export_message = $q("#stMsg").textContent;
         const files = {};
