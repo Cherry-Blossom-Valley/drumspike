@@ -3,10 +3,8 @@
 //! keeps, the tempo voice of a role name and the serde form of a role. A change in any of
 //! them changes the exported MIDI bytes or the read of a stored candidates file.
 
-use drumspike_core::analyze::{role_classes, role_note};
-use drumspike_core::backend::class_note;
-use drumspike_core::detect::CLASS_NOTES;
 use drumspike_core::detect::onset::{OnsetParams, Role};
+use drumspike_core::role::{CLASS_NOTES, class_note, role_classes, role_note};
 
 /// The role names of the app plus an unknown name and the empty name.
 const NAMES: [&str; 8] = ["kick", "snare", "tom", "hat", "cymbal", "other", "bass", ""];

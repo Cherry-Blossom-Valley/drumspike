@@ -31,9 +31,8 @@ use resample::ResampleError;
 /// recipes; there is no model on main any more.
 pub const N_CLASSES: usize = 5;
 
-/// The MIDI notes of the five model classes (BD, SD, TT, HH, CY+RD), as the reference detector
-/// writes them (the CLI reference implementation, `LABELS_5`).
-pub const CLASS_NOTES: [u8; N_CLASSES] = [35, 38, 47, 42, 49];
+pub use crate::role::CLASS_NOTES;
+const _: () = assert!(CLASS_NOTES.len() == N_CLASSES);
 
 /// Errors of [`detect`]: the source rate.
 #[derive(Debug, Clone, PartialEq, Eq)]

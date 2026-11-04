@@ -25,8 +25,9 @@
 
 use std::sync::Arc;
 
-use drumspike_core::analyze::{AnalyzeParams, analyze_detected, role_note};
+use drumspike_core::analyze::{AnalyzeParams, analyze_detected};
 use drumspike_core::detect::onset::{self, OverheadSource};
+use drumspike_core::role::role_note;
 use serde_json::{Map, Value, json};
 
 use crate::media::{Decoded, mix_mode};

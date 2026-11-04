@@ -17,11 +17,10 @@
 
 use std::path::Path;
 
-use drumspike_core::analyze::{
-    Analysis, AnalyzeParams, Detector, analyze_detected, analyze_flags, detect_events, role_note,
-};
+use drumspike_core::analyze::{Analysis, AnalyzeParams, Detector, analyze_detected, analyze_flags, detect_events};
 use drumspike_core::detect::onset::{Candidate, OnsetParams};
 use drumspike_core::detect::peaks::FPS;
+use drumspike_core::role::role_note;
 use drumspike_core::similarity::{self, DEFAULT_THRESHOLD, Recipe};
 use drumspike_core::velocity::attack_ms;
 use serde_json::{Map, Value};
@@ -164,7 +163,7 @@ pub fn mark_out(
 /// `analyze::analyze_flags`, applied before the examples look at the hits.
 #[must_use]
 pub fn role_hits(det: &[(f64, u8)], roll: &[bool], role: &str) -> (Vec<(f64, u8)>, Vec<bool>) {
-    let classes = drumspike_core::analyze::role_classes(role);
+    let classes = drumspike_core::role::role_classes(role);
     let keep = |n: u8| role == "other" || classes.contains(&n);
     let mut d = Vec::with_capacity(det.len());
     let mut r = Vec::new();

@@ -31,6 +31,7 @@ use crate::detect::onset::{self, OnsetError, Role, detect_onsets};
 use crate::detect::{DetectError, N_CLASSES};
 use crate::pyops::py_round_digits;
 use crate::refine::{BackStep, FM_PEAK_DB, Hit, ReachStep, RefineRule, RefineWindow, refine_track_rule_peak};
+use crate::role::{class_note, role_classes, role_note};
 use crate::velocity::{VelocityMap, velocity_map};
 
 /// The source rates the core analyses (`engine.DETECT_RATES`, the rates of the resampler).
@@ -275,36 +276,6 @@ impl Analysis {
     }
 }
 
-/// The MIDI notes a role keeps (`engine.ROLE_CLASSES`); an unknown role gets the set of
-/// `other` (every note from 28 to 59).
-#[must_use]
-pub fn role_classes(role: &str) -> &'static [u8] {
-    const OTHER: [u8; 32] = {
-        let mut a = [0u8; 32];
-        let mut i = 0;
-        while i < 32 {
-            a[i] = 28 + i as u8;
-            i += 1;
-        }
-        a
-    };
-    match role {
-        "kick" => &[35],
-        "snare" => &[38],
-        "tom" => &[41, 43, 45, 47, 48, 50],
-        "hat" => &[42, 44, 46],
-        "cymbal" => &[49, 51, 52, 53, 55],
-        _ => &OTHER,
-    }
-}
-
-/// The note of a DSP fallback hit (`engine.ROLE_NOTE`; an unknown role gets 35 like
-/// `other`).
-#[must_use]
-pub fn role_note(role: &str) -> u8 {
-    Role::parse_or_other(role).detector_note()
-}
-
 /// The thresholds as the CLI receives them: `float(f"{t:.3f}")` for each.
 #[cfg(test)]
 #[must_use]
@@ -344,10 +315,7 @@ pub fn detect_events(
         }
         Detector::Backend(backend) => {
             let (hits, _) = backend.detect(x, sr, role)?;
-            Ok(hits
-                .iter()
-                .map(|h| (h.time, crate::backend::class_note(h.class, role)))
-                .collect())
+            Ok(hits.iter().map(|h| (h.time, class_note(h.class, role))).collect())
         }
         Detector::Candidates {
             cands,

@@ -121,6 +121,51 @@ impl Role {
     }
 }
 
+/// The MIDI notes of the five model classes (BD, SD, TT, HH, CY+RD), as the reference detector
+/// writes them (the CLI reference implementation, `LABELS_5`); `detect::N_CLASSES` entries.
+pub const CLASS_NOTES: [u8; 5] = [35, 38, 47, 42, 49];
+
+/// The MIDI notes a role keeps (`engine.ROLE_CLASSES`); an unknown role gets the set of
+/// `other` (every note from 28 to 59).
+#[must_use]
+pub fn role_classes(role: &str) -> &'static [u8] {
+    const OTHER: [u8; 32] = {
+        let mut a = [0u8; 32];
+        let mut i = 0;
+        while i < 32 {
+            a[i] = 28 + i as u8;
+            i += 1;
+        }
+        a
+    };
+    match role {
+        "kick" => &[35],
+        "snare" => &[38],
+        "tom" => &[41, 43, 45, 47, 48, 50],
+        "hat" => &[42, 44, 46],
+        "cymbal" => &[49, 51, 52, 53, 55],
+        _ => &OTHER,
+    }
+}
+
+/// The note of a DSP fallback hit (`engine.ROLE_NOTE`; an unknown role gets 35 like
+/// `other`).
+#[must_use]
+pub fn role_note(role: &str) -> u8 {
+    Role::parse_or_other(role).detector_note()
+}
+
+/// The MIDI note of an internal class index at the track's `role` (the `other` class and an
+/// unknown role take the role's note, as [`role_note`] does).
+#[must_use]
+pub fn class_note(class: u8, role: &str) -> u8 {
+    if (class as usize) < CLASS_NOTES.len() {
+        CLASS_NOTES[class as usize]
+    } else {
+        role_note(role)
+    }
+}
+
 /// The features `role_from_audio` decides on (exposed for the eval report and tests).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RoleFeatures {

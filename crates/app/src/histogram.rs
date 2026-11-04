@@ -28,10 +28,10 @@
 
 use std::path::PathBuf;
 
-use drumspike_core::analyze::role_classes;
 use drumspike_core::detect::CLASS_NOTES;
 use drumspike_core::detect::N_CLASSES;
 use drumspike_core::project::{ANALYSIS_DIR, Event, Track, cache_key};
+use drumspike_core::role::role_classes;
 use drumspike_core::velocity::{peak_db, velocity_of_db};
 use serde_json::{Map, Value, json};
 

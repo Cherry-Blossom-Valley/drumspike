@@ -16,7 +16,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::detect::CLASS_NOTES;
 use crate::detect::onset::{OnsetError, detect_onsets};
 use crate::io::{WavFormat, WavSpec};
 
@@ -27,17 +26,6 @@ pub const CLASSES: [&str; 6] = ["kick", "snare", "tom", "hat", "cymbal", "other"
 #[must_use]
 pub fn class_index(class: &str) -> Option<u8> {
     CLASSES.iter().position(|&c| c == class).map(|i| i as u8)
-}
-
-/// The MIDI note of an internal class index at the track's `role` (the `other` class and an
-/// unknown role take the role's note, as [`crate::analyze::role_note`] does).
-#[must_use]
-pub fn class_note(class: u8, role: &str) -> u8 {
-    if (class as usize) < CLASS_NOTES.len() {
-        CLASS_NOTES[class as usize]
-    } else {
-        crate::analyze::role_note(role)
-    }
 }
 
 /// The limits and timeouts of the design section 5.

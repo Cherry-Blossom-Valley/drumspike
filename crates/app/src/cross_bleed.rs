@@ -32,7 +32,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use drumspike_core::analyze::{AnalyzeParams, analyze_detected, role_note};
+use drumspike_core::analyze::{AnalyzeParams, analyze_detected};
 use drumspike_core::detect::cross_bleed::{
     ALIGN_COUNT_MARGINS_DB, CrossBleedParams, CrossMark, CrossMic, PairLearned, SessionAlign, XKind,
     cross_bleed_prior_session, cross_bleed_session, hit_level, inherits_pass1_bleed, measure_pair_alignment,
@@ -40,6 +40,7 @@ use drumspike_core::detect::cross_bleed::{
 use drumspike_core::detect::onset::{self, Gate, OnsetParams, Role};
 use drumspike_core::project::Track;
 use drumspike_core::refine::first_motion;
+use drumspike_core::role::role_note;
 use serde_json::{Map, Value, json};
 
 use crate::media::{Decoded, mix_mode};
