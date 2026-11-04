@@ -61,11 +61,11 @@ pub(crate) const REFILL_MIN: usize = 8_192;
 /// Resampler block size hint (input frames per call).
 const RESAMPLE_CHUNK: usize = 1_024;
 /// Smallest positioned read of [`Residency::Pread`] (bytes); a larger request reads its own size.
-pub const READ_BLOCK: usize = 256 * 1024;
+pub(crate) const READ_BLOCK: usize = 256 * 1024;
 /// Reader sleep when no ring needs data (P3-15a; the rings hold 2.7 s at 48 kHz).
-pub const IDLE_SLEEP: std::time::Duration = std::time::Duration::from_millis(10);
+pub(crate) const IDLE_SLEEP: std::time::Duration = std::time::Duration::from_millis(10);
 /// Reader sleep while it waits for the callback during a seek handshake.
-pub const SEEK_SLEEP: std::time::Duration = std::time::Duration::from_millis(1);
+pub(crate) const SEEK_SLEEP: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// The bytes `[from, from + len)` of the file, read ahead with one positioned read.
 struct ReadAhead {
@@ -485,7 +485,7 @@ impl TrackSource {
 }
 
 /// The reader: all track sources and the producer side of their rings.
-pub struct Reader {
+pub(crate) struct Reader {
     sources: Vec<TrackSource>,
     producers: Vec<Producer<f32>>,
     scratch: Vec<f32>,
@@ -643,7 +643,7 @@ impl Reader {
 /// P3-15a); macOS then keeps it on a performance core under load. Returns whether the call
 /// succeeded (always false outside macOS).
 #[must_use]
-pub fn set_reader_qos() -> bool {
+pub(crate) fn set_reader_qos() -> bool {
     #[cfg(target_os = "macos")]
     {
         // SAFETY: the call changes only the QoS class of the calling thread.

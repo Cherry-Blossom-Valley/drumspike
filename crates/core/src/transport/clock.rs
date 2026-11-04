@@ -80,7 +80,7 @@ const STAMP_WINDOW: usize = 64;
 /// never less than the true offset; the minimum over the last [`STAMP_WINDOW`] blocks is the
 /// offset with the least delay, and it tracks a slow drift of the device clock.
 #[derive(Debug)]
-pub struct StampMap {
+pub(crate) struct StampMap {
     recent: [i128; STAMP_WINDOW],
     filled: usize,
     next: usize,
@@ -117,7 +117,7 @@ impl StampMap {
 
 /// The shared clock (sequence lock).
 #[derive(Debug)]
-pub struct Clock {
+pub(crate) struct Clock {
     seq: AtomicU64,
     frame: AtomicU64,
     host_ns: AtomicU64,

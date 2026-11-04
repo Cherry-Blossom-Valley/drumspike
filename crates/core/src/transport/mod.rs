@@ -193,7 +193,7 @@ impl Default for TransportConfig {
 
 /// Counters of the running transport.
 #[derive(Debug, Default)]
-pub struct Stats {
+pub(crate) struct Stats {
     pub(crate) callbacks: AtomicU64,
     pub(crate) rendered_frames: AtomicU64,
     pub(crate) frames_min: AtomicU64,
