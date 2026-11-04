@@ -34,20 +34,20 @@ two sides cannot drift.
   and `clear` read and write them on a typed event, a JSON event or its object. A mark is
   on only as `true`; `clear` removes the key and keeps the order of the others. Each call
   site keeps its own predicate around these three.
-- R1 — a kept hit is never cut, bled or filtered. Rust enforces by stripping the marks on
+- R1, a kept hit is never cut, bled or filtered. Rust enforces by stripping the marks on
   edit (edit.rs); the page enforces by the `!isManual` guards. One policy, two mechanisms;
   the truth table proves they agree (a kept hit that still carries a mark is a state no
   document holds, and both mechanisms take it out of the output).
-- R2 — tempo: the plan draft expected tempo to keep `filtered` hits. This tree does not:
+- R2, tempo: the plan draft expected tempo to keep `filtered` hits. This tree does not:
   `tempo::is_cut` has called the shared predicate since 0.9.4, so a cut, bled **or
   filtered** hit is no tempo candidate (`policy::TEMPO_USES_ONE_PREDICATE`). The behaviour
   is unchanged; the table's `tempo` column pins it.
-- R3 — `edited` is the document's reserved flag; `is_manual` is structural
+- R3, `edited` is the document's reserved flag; `is_manual` is structural
   (`added` or `t != orig`); `is_kept = is_manual || edited || keep || deactivated` (the
   flags of R5).
-- R4 — undo/redo restores field presence via `was`; `was` is an op payload, never a stored
+- R4, undo/redo restores field presence via `was`; `was` is an op payload, never a stored
   event flag.
-- R5 (#242) — the user's per-hit overrides: `deactivated` wins over every mark and over
+- R5 (#242), the user's per-hit overrides: `deactivated` wins over every mark and over
   `keep`; `keep` wins over the automatic marks. The marking rules (the loudness cut, the
   tom bleed and cross bleed rules, the Learn filter) never mark a `keep` hit, and the strip
   removes the marks from a kept hit, so the flags stay the single reason a toggled hit is
