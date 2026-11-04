@@ -16,7 +16,7 @@
 
 use drumspike_core::tempo::{TempoMap, import_midi};
 use drumspike_core::tempo_detect::{
-    DEFAULT_VELOCITY, DetectParams, Detection, Hit, ISOLATED_S, Role, detect, refit_bar1,
+    BeatVoice, DEFAULT_VELOCITY, DetectParams, Detection, Hit, ISOLATED_S, detect, refit_bar1,
 };
 use serde_json::{Value, json};
 
@@ -218,7 +218,7 @@ impl Service {
                 if !take {
                     continue;
                 }
-                let r = Role::from_name(role);
+                let r = BeatVoice::from_name(role);
                 let before = hits.len();
                 hits.extend(t.events().iter().filter(|e| !is_cut(e)).map(|e| Hit {
                     t: e.t,
@@ -236,9 +236,9 @@ impl Service {
             duration_s: end,
             ..params
         };
-        let count = |r: Role| hits.iter().filter(|h| h.role == r).count();
+        let count = |r: BeatVoice| hits.iter().filter(|h| h.role == r).count();
         let mut warnings = Vec::new();
-        for (r, what) in [(Role::Kick, "kick"), (Role::Snare, "snare")] {
+        for (r, what) in [(BeatVoice::Kick, "kick"), (BeatVoice::Snare, "snare")] {
             if count(r) < drumspike_core::tempo_detect::MIN_HITS {
                 warnings.push(format!(
                     "fewer than {} {what} hits: half or double the tempo is as likely",
@@ -308,7 +308,7 @@ impl Service {
             if !matches!(role, "kick" | "snare") || t.follows.is_some() {
                 continue;
             }
-            let r = Role::from_name(role);
+            let r = BeatVoice::from_name(role);
             hits.extend(t.events().iter().filter(|e| !is_cut(e)).map(|e| Hit {
                 t: e.t,
                 role: r,

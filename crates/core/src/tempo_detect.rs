@@ -101,9 +101,11 @@ const HALF_TIME_MIN_QUART: f64 = 0.2;
 /// the double counts as the corroborating beat of a half-time backbeat.
 const HALF_TIME_DBL_COMB: f64 = 0.8;
 
-/// The role of a hit; the weight of kick and snare is 1, of other drums 0.5.
+/// The voice of a hit in the beat: the track's role reduced to what the tempo detection
+/// weighs (a hi-hat counts as [`BeatVoice::Other`]); the weight of kick and snare is 1, of
+/// other drums 0.5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
+pub enum BeatVoice {
     /// A kick drum.
     Kick,
     /// A snare drum.
@@ -116,30 +118,30 @@ pub enum Role {
     Other,
 }
 
-impl Role {
+impl BeatVoice {
     /// The role of a document role name (`kick`, `snare`, `tom`, `cymbal`; anything else is
     /// `Other`).
     #[must_use]
-    pub fn from_name(name: &str) -> Role {
+    pub fn from_name(name: &str) -> BeatVoice {
         match name {
-            "kick" => Role::Kick,
-            "snare" => Role::Snare,
-            "tom" => Role::Tom,
-            "cymbal" => Role::Cymbal,
-            _ => Role::Other,
+            "kick" => BeatVoice::Kick,
+            "snare" => BeatVoice::Snare,
+            "tom" => BeatVoice::Tom,
+            "cymbal" => BeatVoice::Cymbal,
+            _ => BeatVoice::Other,
         }
     }
 
     fn weight(self) -> f64 {
         match self {
-            Role::Kick | Role::Snare => 1.0,
-            Role::Tom | Role::Cymbal | Role::Other => 0.5,
+            BeatVoice::Kick | BeatVoice::Snare => 1.0,
+            BeatVoice::Tom | BeatVoice::Cymbal | BeatVoice::Other => 0.5,
         }
     }
 
     /// Kick or snare: the hits the detection needs and the fit quality counts.
     fn is_ks(self) -> bool {
-        matches!(self, Role::Kick | Role::Snare)
+        matches!(self, BeatVoice::Kick | BeatVoice::Snare)
     }
 }
 
@@ -149,7 +151,7 @@ pub struct Hit {
     /// Time in seconds.
     pub t: f64,
     /// The drum.
-    pub role: Role,
+    pub role: BeatVoice,
     /// MIDI velocity 1 to 127 ([`DEFAULT_VELOCITY`] when unknown): weighs the hit in the phase
     /// and the beat tracking, so ghost notes between the beats do not pull the beat.
     pub v: f64,
@@ -158,7 +160,7 @@ pub struct Hit {
 impl Hit {
     /// A hit with the default velocity.
     #[must_use]
-    pub fn new(t: f64, role: Role) -> Hit {
+    pub fn new(t: f64, role: BeatVoice) -> Hit {
         Hit {
             t,
             role,
@@ -360,7 +362,13 @@ pub fn prepare(hits: &[Hit], until: Option<f64>) -> Prepared {
     let until = until.unwrap_or(f64::INFINITY);
     let mut late = 0;
     let mut out: Vec<Hit> = Vec::with_capacity(hits.len());
-    for role in [Role::Kick, Role::Snare, Role::Tom, Role::Cymbal, Role::Other] {
+    for role in [
+        BeatVoice::Kick,
+        BeatVoice::Snare,
+        BeatVoice::Tom,
+        BeatVoice::Cymbal,
+        BeatVoice::Other,
+    ] {
         let mut hs: Vec<Hit> = hits
             .iter()
             .filter(|h| h.role == role && h.t.is_finite() && h.t >= 0.0)
@@ -619,8 +627,8 @@ struct Global {
 
 fn global_period(hits: &[Hit], params: &DetectParams) -> Result<Global, String> {
     let all = LagHist::new(hits, |_| true, LAG_MAX_S);
-    let n_snare = hits.iter().filter(|h| h.role == Role::Snare).count();
-    let snare = LagHist::new(hits, |h| h.role == Role::Snare && n_snare >= MIN_HITS, LAG_MAX_S);
+    let n_snare = hits.iter().filter(|h| h.role == BeatVoice::Snare).count();
+    let snare = LagHist::new(hits, |h| h.role == BeatVoice::Snare && n_snare >= MIN_HITS, LAG_MAX_S);
     let (lo, hi) = (60.0 / params.bpm_range.1, 60.0 / params.bpm_range.0);
     // Local maxima of the comb, best first, at least 3 % apart.
     let mut peaks: Vec<(f64, f64)> = Vec::new();
@@ -1010,7 +1018,7 @@ fn track(hits: &[Hit], pieces: &[Piece], phi_hint: Option<f64>) -> (Vec<f64>, Ve
 struct OnBeat {
     n: i64,
     t: f64,
-    role: Role,
+    role: BeatVoice,
 }
 
 fn assign(hits: &[Hit], beats: &[f64]) -> Vec<OnBeat> {
@@ -1395,9 +1403,9 @@ fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
     for o in on {
         let i = o.n as usize;
         match o.role {
-            Role::Kick => k[i] += 1.0,
-            Role::Snare => s[i] += 1.0,
-            Role::Cymbal => cym[i] += 1.0,
+            BeatVoice::Kick => k[i] += 1.0,
+            BeatVoice::Snare => s[i] += 1.0,
+            BeatVoice::Cymbal => cym[i] += 1.0,
             _ => {}
         }
     }
@@ -1411,17 +1419,17 @@ fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
             continue;
         }
         let f = (h.t - beats[i - 1]) / (beats[i] - beats[i - 1]);
-        if matches!(h.role, Role::Snare | Role::Tom) && h.v >= FILL_VELOCITY {
+        if matches!(h.role, BeatVoice::Snare | BeatVoice::Tom) && h.v >= FILL_VELOCITY {
             busy[i - 1] += 1.0;
         }
         if f > ON_BEAT && f < 1.0 - ON_BEAT {
             match h.role {
-                Role::Kick => koff[i - 1] += 1.0,
-                Role::Snare => soff[i - 1] += 1.0,
+                BeatVoice::Kick => koff[i - 1] += 1.0,
+                BeatVoice::Snare => soff[i - 1] += 1.0,
                 _ => {}
             }
         }
-        if h.role == Role::Kick && (0.4..=0.6).contains(&(1.0 - f)) {
+        if h.role == BeatVoice::Kick && (0.4..=0.6).contains(&(1.0 - f)) {
             push[i] += 1.0;
         }
     }
@@ -1446,7 +1454,7 @@ fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
     let fill_end: Vec<f64> = (0..nb)
         .map(|i| f64::from(u8::from(i > 0 && dense(i - 1) && !dense(i))))
         .collect();
-    let first_kick = on.iter().find(|o| o.role == Role::Kick).map(|o| o.n);
+    let first_kick = on.iter().find(|o| o.role == BeatVoice::Kick).map(|o| o.n);
     let class = |v: &[f64], c: i64| -> f64 {
         v.iter()
             .enumerate()
