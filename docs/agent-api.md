@@ -176,7 +176,7 @@ or change the live project of the running app (a local socket for that is a poss
   `{op: add, t, snap: true}` (off by default; the page's Option-click sets it) puts the hit on the attack within 10 ms of `t`,
   found by the refinement rule of the track's analysis, with the velocity that `velocities_recompute` gives there (a `v` in the op wins).
   With no attack within 10 ms the hit stays at `t` with velocity 100. The answer lists each snap op as `snaps: [{click, t, v, snapped}]`.
-- Roll fill, kick walk and kick rescue are not part of the DSP detector. An old project can carry `roll` and `rescue` marks; they are carried and have no effect on the output.
+- Roll fill, kick walk and kick rescue are not part of the DSP detector. An old project can carry `roll` and `rescue` marks. They stay on the hit and cap its `track_confidence` (0.4 and 0.3); they do not change the export.
 - Flams: after an analysis and its bleed rules the second stroke of a flam inside a snare hit's lobe (a 1 kHz
   attack re-rise of 9 dB, 12 to 50 ms after the hit) becomes a normal hit with `flam: true`, unless another track of the
   project (no snare and no sample track) explains it as bleed. The `detector` record names the version (`flam_rule`) and the
