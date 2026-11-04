@@ -29,7 +29,7 @@
 //! response dies out long before the 0.25 s), different only in the rounding of the last bits.
 
 pub use crate::dsp::np_percentile;
-use crate::dsp::{Biquad, FilterKind};
+use crate::dsp::{Biquad, FilterKind, amp_db_add};
 use crate::pyops::{py_int, py_round};
 use crate::refine::first_motion_mid;
 
@@ -321,8 +321,8 @@ pub fn calibrate(env_a: &[f64], env_b: &[f64], peaks: &[usize], own: &[f64], rat
         if b <= a {
             continue;
         }
-        let la = 20.0 * (max_of(&env_a[a..b]) + 1e-9).log10();
-        let lb = 20.0 * (max_of(&env_b[a..b]) + 1e-9).log10();
+        let la = amp_db_add(max_of(&env_a[a..b]));
+        let lb = amp_db_add(max_of(&env_b[a..b]));
         if lb < -100.0 {
             continue;
         }

@@ -94,7 +94,9 @@
 
 use super::attribution::{AttributionError, AttributionParams, Role, Transfer, calibrate_gain};
 use super::flam::zero_phase;
-use crate::dsp::{FilterKind, band_level_db, band_sections, broadband_peak_db, median, ms_to_samples, percentile};
+use crate::dsp::{
+    FilterKind, amp_db_max, band_level_db, band_sections, broadband_peak_db, median, ms_to_samples, percentile,
+};
 
 /// The version of the rule an analysis records (`detector.bleed_rule`); 0 means no rule, 1 rule CD (tom sources only),
 /// 2 rule CD with the kick and snare close mics as sources ([`tom_bleed_with`]), 3 version 2 plus the tom pair rule
@@ -798,7 +800,7 @@ fn peak_window_db<T: Copy + Into<f64>>(x: &[T], sr: u32, t: f64, before: f64, af
         return -180.0;
     }
     let peak = x[i0..i1].iter().fold(0.0f64, |m, &v| m.max(v.into().abs()));
-    20.0 * peak.max(1e-9).log10()
+    amp_db_max(peak, 1e-9)
 }
 
 /// The level (dBFS) of a hit for the pair rule: the peak of `x` in `[t - 5 ms, t + 30 ms]` (`firm_fixes.peak_db`);

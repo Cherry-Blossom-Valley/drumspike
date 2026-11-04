@@ -27,6 +27,8 @@
 
 use rustfft::{FftPlanner, num_complex::Complex};
 
+use crate::dsp::amp_db_max;
+
 /// A drum role the classifier can suggest. The string is the app's role name
 /// (`crates/app/src/roles.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -381,9 +383,9 @@ fn analyze(samples: &[f32], sr: u32) -> Analysis {
     // Onsets on the frame envelope (dB domain, hop-resolution). A hit shows up as a rise
     // of 6 dB or more over the previous ~46 ms (the frame smoothing of the RMS needs the
     // longer window; a single-frame step would miss overlapping hits).
-    let env_db: Vec<f64> = env.iter().map(|e| 20.0 * e.max(1e-12).log10()).collect();
+    let env_db: Vec<f64> = env.iter().map(|&e| amp_db_max(e, 1e-12)).collect();
     let peak_env = env.iter().copied().fold(0.0, f64::max);
-    let peak_db = 20.0 * peak_env.max(1e-12).log10();
+    let peak_db = amp_db_max(peak_env, 1e-12);
     let gate_db = peak_db - 45.0; // ignore the noise floor
     let rise_frames = (0.046 / hop_s).max(1.0) as usize;
     let mut onsets: Vec<usize> = Vec::new();

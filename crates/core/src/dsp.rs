@@ -83,7 +83,7 @@ pub fn band_peak_db(x: &[f32], sections: &[Biquad], from: usize, w0: usize, to: 
             peak = peak.max(y.abs());
         }
     }
-    20.0 * (peak + 1e-9).log10()
+    amp_db_add(peak)
 }
 
 /// Amplitude to dB with an additive floor: `20 log10(a + 1e-9)`; 0 gives -180 dB. The floor policy

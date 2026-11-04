@@ -29,6 +29,7 @@ use rustfft::{Fft, FftPlanner};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::dsp::amp_db_add;
 use crate::pyops::py_int;
 use crate::velocity::{VelocityMap, velocity_map};
 
@@ -157,10 +158,7 @@ pub fn convolve_same(a: &[f64], v: &[f64]) -> Vec<f64> {
 pub fn log_envelope(seg: &[f64], k_sm: usize) -> Vec<f64> {
     let env = hilbert_env(seg);
     let kernel = vec![1.0 / k_sm as f64; k_sm];
-    convolve_same(&env, &kernel)
-        .into_iter()
-        .map(|v| 20.0 * (v + 1e-9).log10())
-        .collect()
+    convolve_same(&env, &kernel).into_iter().map(amp_db_add).collect()
 }
 
 /// `engine._refine_sr(x, t0, sr, neighbors, lo_ms, hi_ms)`: the refined onset in seconds and
