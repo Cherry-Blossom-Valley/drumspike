@@ -57,6 +57,8 @@ pub mod rowheights;
 pub mod sampler;
 pub mod sensitivity;
 pub mod shell;
+// R2: the fixed session steps of the analysis job.
+pub(crate) mod steps;
 pub mod tempo;
 pub mod tom_bleed;
 pub mod trace;
