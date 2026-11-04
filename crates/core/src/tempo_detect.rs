@@ -44,6 +44,7 @@
 //!    pair per bar) lets the local comb read a period that divides the bar in 3; the tracker took it
 //!    for a few beats, and a piece the fit drops keeps the beat numbers it gave (2 beats short).
 
+use crate::rules::TempoRule;
 use crate::tempo::{TempoMap, TempoStep};
 
 /// Default: a new tempo must hold this many bars to become a step.
@@ -188,6 +189,8 @@ pub struct DetectParams {
     /// The length of the tracks in seconds: hits after it are dropped (counted in
     /// [`Detection::late`]). `None`: no limit but [`MAX_SPAN_S`].
     pub duration_s: Option<f64>,
+    /// The tempo referee (#130, #180; R6: the caller resolves the `DRUMSPIKE_TEMPO_RULE` pin).
+    pub rule: TempoRule,
 }
 
 impl Default for DetectParams {
@@ -197,6 +200,7 @@ impl Default for DetectParams {
             min_step_pct: DEFAULT_MIN_STEP_PCT,
             bpm_range: DEFAULT_BPM_RANGE,
             duration_s: None,
+            rule: TempoRule::CURRENT,
         }
     }
 }
@@ -522,26 +526,12 @@ fn prior(bpm: f64) -> f64 {
 const HALF_TIME_RATIO: f64 = 2.0;
 const HALF_TIME_MIN_SNARES: f64 = 8.0;
 
-/// #130 tempo-referee version (env `DRUMSPIKE_TEMPO_RULE`; unset counts as 3, the #180
-/// product default). Version 1 pins the shipped referee: with a snare, the backbeat alone
-/// picks the octave and the shares stay out of it. Version 2 corroborates the backbeat
-/// verdict with the sub-beat shares (see [`half_time_backbeat`]). Version 3 adds the
-/// half-time bar 1 of #180 (see `bars`). The detection is read
-/// only: a project analysed before keeps its tempo until it is detected again.
-#[must_use]
-pub(crate) fn tempo_rule() -> u32 {
-    parse_rule(std::env::var("DRUMSPIKE_TEMPO_RULE").ok().as_deref())
-}
-
-/// The pin value behind [`tempo_rule`]: `1` and `0` pin the shipped referee, `2` the #130
-/// one, an unset or unparseable value is rule 3. A pure function so its test does not write
-/// the process env, which the parallel detection tests share.
-fn parse_rule(v: Option<&str>) -> u32 {
-    match v {
-        Some(v) => v.parse().unwrap_or(3),
-        None => 3,
-    }
-}
+// The #130 tempo referee is [`DetectParams::rule`] ([`TempoRule`], pin `DRUMSPIKE_TEMPO_RULE`;
+// the #180 product default is version 3). Version 1 pins the shipped referee: with a snare, the
+// backbeat alone picks the octave and the shares stay out of it. Version 2 corroborates the
+// backbeat verdict with the sub-beat shares (see [`half_time_backbeat`]). Version 3 adds the
+// half-time bar 1 of #180 (see `bars`). The detection is read only: a project analysed before
+// keeps its tempo until it is detected again.
 
 /// Backbeat evidence of beat period `p`: snare to snare at 2 beats against 1 and 3 beats, and
 /// against a snare period shorter than 2 beats (2p/3 or 2p/5: then `p` is 3 or 5 true beats,
@@ -687,7 +677,7 @@ fn global_period(hits: &[Hit], params: &DetectParams) -> Result<Global, String> 
         // #130: with a snare the backbeat picks the octave; since rule 2 its verdict is
         // corroborated by the sub-beat shares before it decides (the half-time backbeat),
         // unless DRUMSPIKE_TEMPO_RULE pins the shipped referee.
-        if tempo_rule() < 2 {
+        if params.rule == TempoRule::Shipped {
             vec![false; rows.len()]
         } else {
             rows.iter()
@@ -1397,7 +1387,7 @@ fn sign_test(a: f64, b: f64) -> f64 {
     (0.5 * (a - b) / (a + b + 1.0).sqrt()).tanh()
 }
 
-fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
+fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64], rule: TempoRule) -> Bars {
     let nb = beats.len();
     let (mut k, mut s, mut cym) = (vec![0.0; nb], vec![0.0; nb], vec![0.0; nb]);
     for o in on {
@@ -1485,7 +1475,7 @@ fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
         let sp = i64::from(s1 > s0);
         let (h0, h1) = (class(&s, sp), class(&s, sp + 2));
         let (hi, lo, hc) = if h0 >= h1 { (h0, h1, sp) } else { (h1, h0, sp + 2) };
-        if tempo_rule() >= 3 && s0 != s1 && hi >= HALF_TIME_MIN_SNARES && hi >= HALF_TIME_RATIO * lo {
+        if rule == TempoRule::HalfTime && s0 != s1 && hi >= HALF_TIME_MIN_SNARES && hi >= HALF_TIME_RATIO * lo {
             (hc + 2, hc, backbeat, sign_test(hi, lo))
         } else {
             let (a, b) = (votes(par), votes(par + 2));
@@ -1738,7 +1728,7 @@ fn track_and_fit(
 ) -> Result<TrackFit, String> {
     let (beats, switches) = track(hits, pcs, phi_hint);
     let on_all = assign(hits, &beats);
-    let bars = bars(hits, &on_all, &beats);
+    let bars = bars(hits, &on_all, &beats, params.rule);
     let on = drop_isolated(&on_all);
     let mut breaks: Vec<i64> = switches
         .iter()

@@ -192,6 +192,7 @@ impl Service {
                 None => DetectParams::default().min_bars,
             },
             min_step_pct: min_step_pct.unwrap_or(DetectParams::default().min_step_pct),
+            rule: self.inner.config.rules.tempo,
             ..DetectParams::default()
         };
         params.validate().map_err(AppError::bad)?;

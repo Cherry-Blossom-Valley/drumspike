@@ -28,19 +28,11 @@ fn kick_and_snare_weigh_full_and_every_other_role_name_half() {
     assert_eq!(BeatVoice::from_name("Kick"), BeatVoice::Other);
 }
 
-/// #130: the tempo-referee pin. The parse is a pure function and is tested without
-/// touching the process env: the detection tests run in parallel threads, and edition 2024
-/// makes env writes unsafe for exactly that reason.
+/// #130, #180: a detection without a pin runs the current referee (the pin's parse is tested
+/// in `rules::tests::the_tempo_rule_pin_parses_like_the_old_env_reader`).
 #[test]
-fn the_tempo_rule_pin_parses_and_defaults_to_3() {
-    assert_eq!(parse_rule(None), 3);
-    assert_eq!(parse_rule(Some("1")), 1, "1 pins the shipped referee");
-    assert_eq!(parse_rule(Some("2")), 2, "2 pins the #130 referee");
-    assert_eq!(parse_rule(Some("x")), 3);
-    assert_eq!(parse_rule(Some("0")), 0, "0 pins the shipped referee too");
-    if std::env::var("DRUMSPIKE_TEMPO_RULE").is_err() {
-        assert_eq!(tempo_rule(), 3, "unset is the #180 product default");
-    }
+fn a_detection_runs_the_current_tempo_rule_by_default() {
+    assert_eq!(DetectParams::default().rule, TempoRule::HalfTime);
 }
 
 #[test]
@@ -74,6 +66,7 @@ fn params_are_checked() {
             min_step_pct: pct,
             bpm_range: range,
             duration_s: dur,
+            rule: TempoRule::CURRENT,
         };
         assert!(p.validate().is_err(), "{p:?}");
     }
