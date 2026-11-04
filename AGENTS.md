@@ -74,9 +74,57 @@ release builds are in `docs/DEVELOPING.md`, sections 4, 7 and 8.
   third-party part changes.
 - Documents use plain hyphens, no em-dashes.
 
+## Design rules
+
+The structure and its invariants are in `ARCHITECTURE.md`. Every change keeps them. A change that
+cannot keep one stops and asks the coordinator; it does not add an exception.
+
+Layers and direction:
+
+- Dependencies point inward only: page -> `backend.js` -> shell (Tauri, `ds-bridge`, CLI, MCP) ->
+  `drumspike-app` (`Service`) -> `drumspike-core`. Core names no app type and no Tauri. App names no Tauri.
+- Core is the domain: pure functions of samples and parameters. No environment reads, no I/O
+  beyond `io/` and `project/`, no `serde_json::Value` as a domain type. Do not add a new use of
+  either; the remaining ones are listed as "Target" in `ARCHITECTURE.md`.
+- Configuration is read once at the edge: `ServiceConfig::from_lookup` / `from_env` in the app,
+  `RuleSet` and `ResearchOverrides` in `crates/core/src/rules.rs`. A new `DRUMSPIKE_*` name goes
+  there and is passed down as a typed value.
+
+Where a new thing goes:
+
+- **A command:** one row in `REGISTRY` (`crates/app/src/api.rs`), the handler in its module's
+  `HANDLERS` (one map in `call::run`), one method in `static/backend.js`, and the wrapper in the
+  handler list of `apps/desktop/src-tauri/src/lib.rs`. Gate: `cargo test -p drumspike-app`.
+- **A session rule over several tracks:** a pure function in `crates/core/src/detect/`, an
+  `AnalysisStep` in `crates/app/src/steps.rs`, and a version that the project records.
+- **A per-hit flag:** a `policy::Mark`. Read and write marks only through `is_marked`, `mark` and
+  `clear`. A rule marks a hit; it never deletes one.
+- **A page feature:** its own script in `static/` with a `<feature>Init(deps)` hook wired in
+  `app.js`, a place in the load order of `index.html`, and an entry in `JS_FILES`. It calls the app
+  only through `B` (`backend.js`) and other features only through the hooks.
+- **A menu item or key:** the row in `static/keymap.js` (the shell compiles it in) and the item in
+  `menu/items.rs`. The drift test and the menu snapshot (`menu/snapshot.json`) in `menu/tests.rs`
+  keep them equal.
+
+How to change code:
+
+- One concern per change. Separate a refactoring (behaviour stays) from a behaviour change, in
+  separate commits. Make the change easy first, then make the easy change.
+- Move and rename in small steps that compile and pass. To change a signature that has
+  callers, add the new form, move the callers, then remove the old form (Parallel Change).
+- A refactoring of detection or export code proves "no output change" with the identity snapshot
+  (`tools/identity.py snapshot`, then `compare` against a snapshot of the base commit).
+- A detection change is a new rule version. It needs proof on ENST and the real sessions that
+  accuracy is kept or better, and no tuning of a threshold to named hits.
+- Use the words of the glossary in `ARCHITECTURE.md` in names, comments and tests. One word means
+  one thing.
+- Keep functions short (`tools/fn_lengths.py` reports them) and comments about why, not what.
+
 ## Test rules
 
 1. A test names a domain invariant or a user-visible result in its name or first line.
+   A defect fix starts with a test that fails for the defect, then the fix makes it pass.
+   Test behaviour through the public entry point, not the private steps.
 2. A test may be deleted when it only pins a removed script, or a fixed bug that another test
    covers. The PR names the deleted test and the covering test.
 3. Never delete or weaken: `tests/test_golden.py`, `tests/frozen.py`, `tests/golden/*`,
