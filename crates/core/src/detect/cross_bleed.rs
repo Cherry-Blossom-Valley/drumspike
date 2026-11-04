@@ -378,7 +378,7 @@ pub fn inherits_pass1_bleed(t: f64, pass1_bleed: &[f64]) -> bool {
 /// learned bounds per pair (tom order, then source order).
 #[must_use]
 pub fn cross_bleed(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
-    cross_bleed_session(mics, sr, p, None)
+    cross_bleed_with(mics, &CrossBleedContext::new(sr, p))
 }
 
 /// [`cross_bleed`] with the per-source session verdict handed in (#313): `session` holds, per
@@ -394,7 +394,13 @@ pub fn cross_bleed_session(
     p: &CrossBleedParams,
     session: Option<&SessionAlign>,
 ) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
-    cross_bleed_prior_session(mics, sr, p, None, session)
+    cross_bleed_with(
+        mics,
+        &CrossBleedContext {
+            session,
+            ..CrossBleedContext::new(sr, p)
+        },
+    )
 }
 
 /// The per-pair alignment measurement of #296: the |lead| of X's hits that coincide with a hit of
@@ -517,7 +523,13 @@ pub fn cross_bleed_prior(
     p: &CrossBleedParams,
     prior: Option<&[PairLearned]>,
 ) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
-    cross_bleed_prior_session(mics, sr, p, prior, None)
+    cross_bleed_with(
+        mics,
+        &CrossBleedContext {
+            prior,
+            ..CrossBleedContext::new(sr, p)
+        },
+    )
 }
 
 /// [`cross_bleed_prior`] with the per-source session verdict handed in (see
@@ -530,6 +542,58 @@ pub fn cross_bleed_prior_session(
     prior: Option<&[PairLearned]>,
     session: Option<&SessionAlign>,
 ) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
+    cross_bleed_with(
+        mics,
+        &CrossBleedContext {
+            sr,
+            params: p,
+            prior,
+            session,
+        },
+    )
+}
+
+/// The inputs of one run of the rule besides the mics: the session rate, the parameters, and the
+/// two optional hand-ins of the app's two-pass, per-target runs.
+#[derive(Debug, Clone, Copy)]
+pub struct CrossBleedContext<'a> {
+    /// The rate of every signal of the run.
+    pub sr: u32,
+    /// The rule's parameters.
+    pub params: &'a CrossBleedParams,
+    /// The pairs of an earlier run over the SAME mics (#296, see [`cross_bleed_prior`]); `None`
+    /// measures every pair.
+    pub prior: Option<&'a [PairLearned]>,
+    /// The per-source session verdict (#313, see [`cross_bleed_session`]); `None` counts over the
+    /// slice's tom mics.
+    pub session: Option<&'a SessionAlign>,
+}
+
+impl<'a> CrossBleedContext<'a> {
+    /// A context without a prior and without a handed-in session verdict (the core's own
+    /// full-session run, [`cross_bleed`]).
+    #[must_use]
+    pub fn new(sr: u32, params: &'a CrossBleedParams) -> Self {
+        CrossBleedContext {
+            sr,
+            params,
+            prior: None,
+            session: None,
+        }
+    }
+}
+
+/// Run the rule over the close mics of one session with every input in one [`CrossBleedContext`]
+/// (see the module documentation). [`cross_bleed`], [`cross_bleed_session`],
+/// [`cross_bleed_prior`] and [`cross_bleed_prior_session`] are thin wrappers of it.
+#[must_use]
+pub fn cross_bleed_with(mics: &[CrossMic], ctx: &CrossBleedContext) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
+    let CrossBleedContext {
+        sr,
+        params: p,
+        prior,
+        session,
+    } = *ctx;
     let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
     let pre = ms_to_samples(p.preroll_ms, sr);
     let coincide = p.coincide_ms / 1000.0;
