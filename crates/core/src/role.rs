@@ -69,6 +69,14 @@ impl Role {
         }
     }
 
+    /// The role of a stored or received role name: an unknown name is [`Role::Other`] on
+    /// purpose (every hit kept, no band limit), so a document with a name this version does
+    /// not know still analyses.
+    #[must_use]
+    pub fn parse_or_other(s: &str) -> Role {
+        Role::parse(s).unwrap_or(Role::Other)
+    }
+
     /// The app's name of the role.
     #[must_use]
     pub fn as_str(self) -> &'static str {

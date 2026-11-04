@@ -66,7 +66,7 @@ fn load(cache: &mut Cache, wav: &str, role: &str) -> Result<Arc<Track>, String> 
         return Ok(t.clone());
     }
     let dec = media::decode(Path::new(wav), media::mix_mode("ffmpeg")).map_err(|e| e.message)?;
-    let cparams = OnsetParams::for_role(Role::parse(role).unwrap_or(Role::Other));
+    let cparams = OnsetParams::for_role(Role::parse_or_other(role));
     let (_, cands, weak_limit) = detect_onsets_and_cands(&dec.samples, dec.sr, &cparams).map_err(|e| e.to_string())?;
     let rows = histogram::dsp_detection_candidates(&cands, &cparams, weak_limit, role);
     let t = Arc::new(Track {
@@ -410,7 +410,7 @@ fn xprobe(job: &Value) -> Result<Value, String> {
     let mics = job["mics"].as_array().ok_or("xprobe without mics")?;
     let target = job["target"].as_u64().unwrap_or(0) as usize;
     let basis_role = mics.get(target).and_then(|m| m["role"].as_str()).unwrap_or("other");
-    let bp = OnsetParams::for_role(Role::parse(basis_role).unwrap_or(Role::Other));
+    let bp = OnsetParams::for_role(Role::parse_or_other(basis_role));
     let bands = band_range(bp.band_lo_hz, bp.band_hi_hz);
     let p6 = CrossBleedParams::default();
     let mut out = Vec::new();
@@ -420,7 +420,7 @@ fn xprobe(job: &Value) -> Result<Value, String> {
         let dec = media::decode(Path::new(wav), media::mix_mode("ffmpeg")).map_err(|e| e.message)?;
         let y = resample_to_44100(&dec.samples, dec.sr).map_err(|e| e.to_string())?;
         let spec = features(&y, Chain::Cli);
-        let rp = OnsetParams::for_role(Role::parse(role).unwrap_or(Role::Other));
+        let rp = OnsetParams::for_role(Role::parse_or_other(role));
         let (_, cands, weak_limit) = onsets_with_candidates(&spec, &y, &rp);
         let frames_n = spec.len() / N_BANDS;
         let mut ids: Vec<usize> = Vec::new();

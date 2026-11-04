@@ -137,11 +137,7 @@ impl DetectorBackend for DspBackend {
         sr: u32,
         role: &str,
     ) -> Result<(Vec<DetectedHit>, Option<CandidateList>), BackendError> {
-        let hits = detect_onsets(
-            x,
-            sr,
-            crate::detect::onset::Role::parse(role).unwrap_or(crate::detect::onset::Role::Other),
-        )?;
+        let hits = detect_onsets(x, sr, crate::role::Role::parse_or_other(role))?;
         let class = class_index(role).unwrap_or(5);
         Ok((
             hits.into_iter()

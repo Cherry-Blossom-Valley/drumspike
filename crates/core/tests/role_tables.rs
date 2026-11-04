@@ -84,4 +84,7 @@ fn the_app_role_names_parse_in_the_app_order() {
     assert_eq!(Role::parse("bass"), None);
     assert_eq!(Role::parse(""), None);
     assert_eq!(Role::parse("Kick"), None);
+    let edge: Vec<Role> = NAMES.iter().map(|n| Role::parse_or_other(n)).collect();
+    assert_eq!(edge[..6], Role::ALL);
+    assert_eq!(edge[6..], [Role::Other, Role::Other]);
 }

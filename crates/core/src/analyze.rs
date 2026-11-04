@@ -344,7 +344,7 @@ pub fn detect_events(
     check_rate(sr)?;
     match detector {
         Detector::Dsp => {
-            let hits = detect_onsets(x, sr, Role::parse(role).unwrap_or(Role::Other))?;
+            let hits = detect_onsets(x, sr, Role::parse_or_other(role))?;
             let note = role_note(role);
             Ok(hits.iter().map(|h| (h.time, note)).collect())
         }
@@ -559,7 +559,7 @@ pub fn analyze_track_dsp_cands(
     params: &AnalyzeParams,
 ) -> Result<(Analysis, Vec<onset::Candidate>, onset::OnsetParams, f32), AnalyzeError> {
     check_rate(sr)?;
-    let p = onset::OnsetParams::for_role(Role::parse(role).unwrap_or(Role::Other));
+    let p = onset::OnsetParams::for_role(Role::parse_or_other(role));
     let (hits, cands, weak_limit) = onset::detect_onsets_and_cands(x, sr, &p)?;
     let note = role_note(role);
     let detected: Vec<(f64, u8)> = hits.iter().map(|h| (h.time, note)).collect();
