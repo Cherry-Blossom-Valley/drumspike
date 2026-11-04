@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[test]
 fn ids_are_unique_and_do_not_use_the_entry_prefixes() {
@@ -1164,5 +1164,264 @@ fn the_menu_matches_its_snapshot() {
         path.display(),
         want.lines().count(),
         now.lines().count()
+    );
+}
+
+/// The custom items that `build` places, as `(item id, path)` in source order (`"View > Zoom Presets"`), read from
+/// the source of `menu/build.rs` and the item constants of `menu/items.rs`. The menu bar itself needs an app
+/// handle (the self-test reads the live one), so this reads the builders: one `SubmenuBuilder` chain per submenu,
+/// its `make_item`/`make_check` items, its nested submenus (`.item(&<let name>)`) and the items `build` makes
+/// once and hands to two menus (`.item(add_tracks)`). Dynamic entries (Open Recent, Window, Follow Hits Of) and
+/// the macOS items are not custom items and are left out.
+fn builder_tree() -> Vec<(String, String)> {
+    #[derive(Default)]
+    struct Chain {
+        title: String,
+        entries: Vec<Entry>,
+    }
+    enum Entry {
+        Item(String),
+        Sub(usize),
+        Param(String),
+    }
+    let quoted = |l: &str| -> Option<String> {
+        let parts: Vec<&str> = l.split('"').collect();
+        (parts.len() >= 3).then(|| parts[parts.len() - 2].to_string())
+    };
+    let ident_after = |l: &str, pat: &str| -> Option<String> {
+        let rest = &l[l.find(pat)? + pat.len()..];
+        Some(
+            rest.chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect(),
+        )
+    };
+    let consts: HashMap<String, String> = include_str!("items.rs")
+        .lines()
+        .filter(|l| l.starts_with("pub const ") && l.contains(": Item = "))
+        .filter_map(|l| Some((ident_after(l, "pub const ")?, l.split('"').nth(1)?.to_string())))
+        .collect();
+    let mut chains: Vec<Chain> = Vec::new();
+    let mut roots: Vec<usize> = Vec::new();
+    let mut params: HashMap<String, String> = HashMap::new();
+    let mut subs: HashMap<String, usize> = HashMap::new();
+    let mut current: Option<usize> = None;
+    let mut in_build = false;
+    for raw in include_str!("build.rs").lines() {
+        let l = raw.split("//").next().unwrap_or("").trim();
+        if l.starts_with("fn ") || l.starts_with("pub fn ") || l.starts_with("pub(super) fn ") {
+            in_build = l.contains("fn build<");
+            subs.clear();
+            current = None;
+        }
+        if l.contains("SubmenuBuilder::new(app, ") || l.contains("SubmenuBuilder::with_id(app, ") {
+            chains.push(Chain {
+                title: quoted(l).unwrap_or_default(),
+                ..Chain::default()
+            });
+            let n = chains.len() - 1;
+            match ident_after(l, "let ") {
+                Some(var) if l.starts_with("let ") => {
+                    subs.insert(var, n);
+                }
+                _ => roots.push(n),
+            }
+            current = Some(n);
+        } else if let Some(c) = ident_after(l, "make_item(app, &").or_else(|| ident_after(l, "make_check(app, &")) {
+            match (in_build, ident_after(l, "let ")) {
+                (true, Some(var)) if l.starts_with("let ") => {
+                    params.insert(var, c);
+                }
+                _ => {
+                    if let Some(n) = current {
+                        chains[n].entries.push(Entry::Item(c));
+                    }
+                }
+            }
+        } else if let (Some(n), Some(var)) = (current, ident_after(l, ".item(&")) {
+            if let Some(&s) = subs.get(&var)
+                && l == format!(".item(&{var})")
+            {
+                chains[n].entries.push(Entry::Sub(s));
+            }
+        } else if let (Some(n), Some(var)) = (current, ident_after(l, ".item("))
+            && l == format!(".item({var})")
+        {
+            chains[n].entries.push(Entry::Param(var));
+        }
+        if l.contains(".build()") {
+            current = None;
+        }
+    }
+    fn walk(
+        chains: &[Chain],
+        n: usize,
+        path: &str,
+        consts: &HashMap<String, String>,
+        params: &HashMap<String, String>,
+        out: &mut Vec<(String, String)>,
+    ) {
+        for e in &chains[n].entries {
+            match e {
+                Entry::Item(c) => out.push((consts.get(c).cloned().unwrap_or(format!("?{c}")), path.to_string())),
+                Entry::Param(v) => {
+                    if let Some(c) = params.get(v) {
+                        out.push((consts.get(c).cloned().unwrap_or(format!("?{c}")), path.to_string()));
+                    }
+                }
+                Entry::Sub(s) => {
+                    let p = format!("{path} > {}", chains[*s].title);
+                    walk(chains, *s, &p, consts, params, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for &r in &roots {
+        walk(&chains, r, &chains[r].title, &consts, &params, &mut out);
+    }
+    out
+}
+
+/// What differs between the key table and the menu (R10): a menu row whose `needs_project`, `kind` or `path` is not
+/// the item's (`SPEC` and the place `build` gives it), a row without a menu item that has any of them, an item that
+/// `build` does not place or places without a `SPEC` entry. Empty when the two agree.
+fn menu_drift(rows: &[KeyCommand], tree: &[(String, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (id, _) in tree {
+        if !SPEC.iter().any(|i| i.id == id) {
+            out.push(format!("{id}: placed by build, not in SPEC"));
+        }
+    }
+    for r in rows {
+        let Some(menu) = r.menu.as_deref() else {
+            if !r.path.is_empty() || r.needs_project.is_some() || r.kind.is_some() {
+                out.push(format!("{}: no menu item, but a path, needs_project or kind", r.id));
+            }
+            continue;
+        };
+        let Some(it) = SPEC.iter().find(|i| i.id == menu) else {
+            continue; // every_menu_accelerator_is_the_tables names a row without an item
+        };
+        if r.needs_project != Some(it.needs_project) {
+            out.push(format!(
+                "{menu}: needs_project {:?}, SPEC {}",
+                r.needs_project, it.needs_project
+            ));
+        }
+        if r.kind != Some(it.kind) {
+            out.push(format!("{menu}: kind {:?}, SPEC {:?}", r.kind, it.kind));
+        }
+        let path = r.path.join(" > ");
+        let places: Vec<&str> = tree
+            .iter()
+            .filter(|(id, _)| id == menu)
+            .map(|(_, p)| p.as_str())
+            .collect();
+        if !places.contains(&path.as_str()) {
+            out.push(format!("{menu}: path \"{path}\", build places it in {places:?}"));
+        }
+    }
+    for it in SPEC {
+        if !tree.iter().any(|(id, _)| id == it.id) {
+            out.push(format!("{}: in SPEC, not placed by build", it.id));
+        }
+    }
+    out
+}
+
+/// R10: the key table and the menu agree on every item: `needs_project` and `kind` of each menu row are its
+/// `SPEC` item's, and its `path` is where `build` puts the item (Add Tracks is in File and Track; its row says
+/// File). The reader of the builders can fire: it finds every item, nested submenus included.
+#[test]
+fn the_key_table_rows_match_spec_and_the_builder_tree() {
+    let tree = builder_tree();
+    assert_eq!(
+        tree.len(),
+        SPEC.len() + 1,
+        "every item once, Add Tracks twice: {tree:?}"
+    );
+    let at = |id: &str| -> Vec<&str> { tree.iter().filter(|(i, _)| i == id).map(|(_, p)| p.as_str()).collect() };
+    assert_eq!(at("zoom_full"), ["View > Zoom Presets"]);
+    assert_eq!(at("nudge_val_1ms"), ["Edit > Nudge Value"]);
+    assert_eq!(at("follow_page"), ["Transport > Follow Playhead"]);
+    assert_eq!(at("add_tracks"), ["File", "Track"]);
+    assert_eq!(at("about"), ["Drum Spike"]);
+    assert_eq!(at("open_recent"), ["File"]);
+    assert_eq!(menu_drift(keymap(), &tree), Vec::<String>::new());
+    // planted drift: each kind of difference is named
+    let mut rows = keymap().to_vec();
+    let find = |rows: &mut Vec<KeyCommand>, id: &str| rows.iter().position(|r| r.menu.as_deref() == Some(id)).unwrap();
+    let n = find(&mut rows, "zoom_full");
+    rows[n].path = vec!["View".into()];
+    let n = find(&mut rows, "save");
+    rows[n].needs_project = Some(false);
+    let n = find(&mut rows, "snap");
+    rows[n].kind = Some(Kind::Plain);
+    let n = find(&mut rows, "settings");
+    rows[n].kind = None;
+    let n = rows.iter().position(|r| r.menu.is_none()).unwrap();
+    rows[n].needs_project = Some(true);
+    let mut tree2 = tree.clone();
+    tree2.retain(|(id, _)| id != "grid");
+    tree2.push(("nope".into(), "View".into()));
+    let got = menu_drift(&rows, &tree2);
+    assert_eq!(got.len(), 8, "{got:#?}");
+    for want in [
+        "zoom_full: path \"View\"",
+        "save: needs_project Some(false), SPEC true",
+        "snap: kind Some(Plain), SPEC Check",
+        "settings: kind None",
+        "no menu item, but",
+        "grid: path \"View\", build places it in []",
+        "grid: in SPEC, not placed by build",
+        "nope: placed by build, not in SPEC",
+    ] {
+        assert!(got.iter().any(|g| g.contains(want)), "{want} not in {got:#?}");
+    }
+}
+
+/// R10: `path` splits at " > ", `needs_project` and `kind` are optional and refused with the reason when wrong.
+#[test]
+fn the_path_needs_project_and_kind_of_a_row_parse() {
+    let wrap = |extra: &str| {
+        format!(
+            r#"x = /*KEYMAP-BEGIN*/[{{"id": "a", "menu": "a", "title": "A", "menu_key": null, "page_keys": [], "cubase": null{extra}}}]/*KEYMAP-END*/;"#
+        )
+    };
+    let r = &parse_keymap(&wrap(
+        r#", "path": "View > Zoom Presets", "needs_project": true, "kind": "check""#,
+    ))
+    .unwrap()[0];
+    assert_eq!(
+        (r.path.clone(), r.needs_project, r.kind),
+        (
+            vec!["View".to_string(), "Zoom Presets".into()],
+            Some(true),
+            Some(Kind::Check)
+        )
+    );
+    let r = &parse_keymap(&wrap(r#", "path": null, "needs_project": null, "kind": "plain""#)).unwrap()[0];
+    assert_eq!(
+        (r.path.is_empty(), r.needs_project, r.kind),
+        (true, None, Some(Kind::Plain))
+    );
+    let r = &parse_keymap(&wrap("")).unwrap()[0];
+    assert_eq!((r.path.is_empty(), r.needs_project, r.kind), (true, None, None));
+    assert!(
+        parse_keymap(&wrap(r#", "needs_project": "yes""#))
+            .unwrap_err()
+            .contains("needs_project")
+    );
+    assert!(
+        parse_keymap(&wrap(r#", "kind": "radio""#))
+            .unwrap_err()
+            .contains("\"radio\"")
+    );
+    assert!(parse_keymap(&wrap(r#", "kind": 1"#)).unwrap_err().contains("kind"));
+    assert!(
+        parse_keymap(&wrap(r#", "path": ["View"]"#))
+            .unwrap_err()
+            .contains("path")
     );
 }
