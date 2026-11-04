@@ -203,8 +203,8 @@ that threshold. The #239 lead-in made it worse on 22 snare hits (0.25 to 0.8 ms 
 Version 6 (`RefineRule::Edge`, the analysis default since 0.9.14):
 
 - the version 3 foot: no strict foot (versions 4 and 5 moved the hit 1 to 3 samples before the first sample
-  over the threshold, the opposite of what the engineer sees), no lead-in (`set_lead_in` stays for the
-  measurement example, default off);
+  over the threshold, the opposite of what the engineer sees), no lead-in (the switch stays off; its
+  setter went with the measurement example);
 - then the first steep edge after the foot (`edge_foot`): the first sample `j` in the 5 ms after the foot
   where the signal rises by `EDGE_RISE_DB` (18 dB) under the hit's peak within `EDGE_RISE_S` (0.1 ms),
   looked for only while the level is still under `EDGE_TOP_DB` (12 dB) below the peak. The hit moves to the

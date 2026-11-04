@@ -720,11 +720,6 @@ impl FootTune {
     };
 }
 
-/// P4-31 (candidate A): the version of the kick walk, recorded as `detector.kick_walk`; 0 means the shipped margin.
-pub const KICK_WALK_VERSION: u32 = 1;
-/// Version 1 of the kick walk: the back-track's peak margin on kick tracks (dB). A kick's peak comes 6 to 11 ms after
-/// its foot; at 29 dB the walk stops later than at [`FM_PEAK_DB`] (P4-22: 88 to 78 moved kicks on the seven songs, 37 to 30
-/// on the two held-out sessions).
 /// Seconds to samples, rounded (the back-track's spans are in time, not samples: P4-11b R4).
 fn samples(s: f64, srf: f64) -> i64 {
     (s * srf).round() as i64
@@ -839,14 +834,10 @@ fn foot_strict(x: &[f32], d: i64, lo: i64, floor: f64) -> i64 {
     j - 1
 }
 
+/// The lead-in of the walk (#239), one switch for the whole process. Off since version 6 (#293, #294: it joined the
+/// bleed before snare hits). Its setter went with the before/after measurement `lead_in_check` (removed in the
+/// refactor, see git history); no product path turns it on.
 static LEAD_IN: AtomicBool = AtomicBool::new(false);
-
-/// Switches the lead-in of the walk (#239) on or off for the whole process. Off by default since version 6 (#293,
-/// #294: it joined the bleed before snare hits); the before/after measurement `lead_in_check` switched it
-/// (removed in the refactor, see git history).
-pub fn set_lead_in(on: bool) {
-    LEAD_IN.store(on, Ordering::Relaxed);
-}
 
 /// The lead-in goes back at most this far (seconds) from the walk's foot: an attack's rise is about a millisecond. A
 /// longer rise over the floor is bleed or an earlier stroke, not the hit.
@@ -1233,20 +1224,6 @@ pub fn refine_first_motion_peak(
     peak_db: f64,
 ) -> Refined {
     refine_back_peak(x, t0, sr, neighbors, win, peak_db, None, None)
-}
-
-/// [`refine_rule_peak`] with the version 5 foot of another `tune` (the placement measurements of #127).
-#[must_use]
-pub fn refine_foot_tuned(
-    x: &[f32],
-    t0: f64,
-    sr: u32,
-    neighbors: &[f64],
-    win: RefineWindow,
-    peak_db: f64,
-    tune: FootTune,
-) -> Refined {
-    refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(tune), None)
 }
 
 /// [`refine_first_motion_peak`] with the strict foot of `tune` ([`RefineRule::Foot`], [`RefineRule::FootCapped`])

@@ -1121,7 +1121,7 @@ fn a_hit_is_not_found_before_the_first_sample_over_the_floor() {
 
 #[test]
 fn the_lead_in_is_off_for_the_product() {
-    // #293, #294: the lead-in joined the bleed before snare hits; the switch stays for the measurement example. It is a
+    // #293, #294: the lead-in joined the bleed before snare hits; no product path turns it on. It is a
     // process-wide flag, so this test does not touch it: the default is off, and a bump 1 ms before the swing is not
     // joined (the first bump test above places the hit at the swing)
     assert!(!LEAD_IN.load(Ordering::Relaxed));
