@@ -1,4 +1,4 @@
-/* Drum Spike v2 — persist (R17 step 2, #55 per docs/review/R17-plan.md)
+/* Drum Spike v2 — persist (R17 step 2, #55)
    The debounced event writes and the dirty tracking: saveTimers, _editSeq, eventsBody,
    pushEvents, markDirty, flushEvents, cancelEvents, the refused-write banner (evFailSet,
    evFailShow, #249 R02) and the clean check (P4-40a). Plain script (no build step), loaded

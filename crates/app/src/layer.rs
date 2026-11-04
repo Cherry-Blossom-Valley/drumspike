@@ -878,7 +878,7 @@ impl Service {
         self.export_layer_to(sid, name, None)
     }
 
-    /// The leftover of a failed layer render (campaign 0.9.6 S3, docs/review/test-campaign-0.9.6/117):
+    /// The leftover of a failed layer render (campaign 0.9.6 S3):
     /// a folder named like the target file plus a `<target>.drumspike` sidecar blocked every later
     /// render with 400 "the path is a folder" until the folder was removed by hand. Only the proven
     /// leftover shape is cleared: an empty folder at the target with the `<target>.drumspike`

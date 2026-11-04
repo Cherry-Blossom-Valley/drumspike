@@ -1,4 +1,4 @@
-/* Drum Spike v2 — render (R17 step 5, #55 per docs/review/R17-plan.md)
+/* Drum Spike v2 — render (R17 step 5, #55)
    The frame scheduler (F, FR, invalidate/invalidateHits, onFrame, flushFrame — P3-14d),
    the measured geometry (GEO, measureGeo, geoObserve — read after layout, never in a
    frame) and the compositor playhead (CP, P4-1, #463, #14). Plain script (no build

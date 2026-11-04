@@ -1,4 +1,4 @@
-/* Drum Spike v2 — session (R17 step 6, #55 per docs/review/R17-plan.md)
+/* Drum Spike v2 — session (R17 step 6, #55)
    Project open/switch/close: _gen and loadProject (with loadPeaks and prepareLanes),
    initSessions, renderRecentList/clearRecentProjects, useProject, guardDirty, switchTo,
    openProjectPath and closeProject. Plain script (no build step), loaded after render.js

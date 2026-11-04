@@ -1,4 +1,4 @@
-/* js_unit: the transport.js surfaces (R17 step 4, #55 per docs/review/R17-plan.md).
+/* js_unit: the transport.js surfaces (R17 step 4, #55).
    The plan limits this step's module tests to two things: the serial command queue
    (appCmd — the commands run one after the other, in the order the user made them, and
    a refused command does not stall the queue) and the playhead arithmetic (appPos — the

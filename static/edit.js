@@ -1,4 +1,4 @@
-/* Drum Spike v2 — edit (R17 step 3, #55 per docs/review/R17-plan.md)
+/* Drum Spike v2 — edit (R17 step 3, #55)
    The edit/undo ownership: the undo stacks (S.undo/S.redo stay readable as accessors on S,
    exactly like PH), pushUndo/applyOp/undoStep, the SH serial queue (shSerial/edIdle), EDGEN
    and the events_edit machinery (adoptHits, edReload, edNow, edCall, edApplyOp, edDelete)

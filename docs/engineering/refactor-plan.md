@@ -1,6 +1,10 @@
 # Drum Spike engineering plan: modular code, fewer but better tests, a "refactored" test release
 
-Status: adopted 2026-11-03 on branch `refactor/structure` (base: main 040e863, v0.9.19). Analysis read main at 858c117.
+Status: DONE. The refactoring is finished and merged. The numbers before and after, and the steps
+not done, are in `docs/review/refactor-baseline.md`; `ARCHITECTURE.md` describes the result. This file
+is the record of the plan and is not updated any more.
+
+Was: adopted 2026-11-03 on branch `refactor/structure` (base: main 040e863, v0.9.19). Analysis read main at 858c117.
 Inputs: `research.md` (role models and authors), the four reviews (`core.md`, `app.md`, `frontend.md`, `tests.md`) and 21 verified claims (T1-T11, R1-R10).
 Rule for this draft: only claims with verdict "confirmed" or "adjust" are in the plan. For "adjust" the plan uses the adjusted claim and its keep list. Refuted claims are in Appendix A.
 
@@ -252,7 +256,7 @@ Size: S = 1 PR under 300 changed lines; M = 1 to 3 PRs; L = more than 3 PRs or o
 | 1.2 | T7 Rust probes, examples, side tools; merge `test_eval_enst`. Run `level_calib` with `--ignored` once. | Remove Dead Code | G1, G2, G-ENST setup still works (`dump_tom_map.py`) | M | low |
 | 1.3 | T2 leaf scripts; T1a (port the flam case first, in its own commit). | Remove Dead Code | G1 (`detect/flam` new test), G2 collects without ImportError, `grep` for deleted module names = 0 | M | low |
 | 1.4 | T1b sessions table move, then delete. | Move Function, then Remove Dead Code | G2; `fix_metric score` runs unpatched on the internal host with the same numbers as before | M | medium (silent yardstick break) |
-| 1.5 | T8 golden consolidation in its 7 sub-steps; identity tool replaces `check_analyze.py` in `detector-plan.md`. | Merge tests, Remove Dead Code | G2; the moved cases fail with a planted fault; golden size printed | L | medium |
+| 1.5 | T8 golden consolidation in its 7 sub-steps; identity tool replaces `check_analyze.py` in the detector work packages. | Merge tests, Remove Dead Code | G2; the moved cases fail with a planted fault; golden size printed | L | medium |
 | 1.6 | Measure per-file JS coverage with and without the T3/T4/T6 candidates. | Measure first | coverage table in the PR | S | none |
 | 1.7 | T3 and T4 (moves of `midi_note_ons` and `test_keypreset` helpers first). | Remove Dead Code | G-E2E, coverage at or above the floor | M | low |
 | 1.8 | T5 helper move and the 4 small joins. | Move Function | G-E2E, same test count | M | low |

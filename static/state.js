@@ -1,4 +1,4 @@
-/* Drum Spike v2 — state (R17 step 1, #55 per docs/review/R17-plan.md)
+/* Drum Spike v2 — state (R17 step 1, #55)
    The state object S, the playhead accessor PH (P4-1), the global settings and the
    dirty-state flag. Plain script (no build step), loaded first. The e2e tests and shell.js
    read these as globals; S is on window from day one. The settings functions still call

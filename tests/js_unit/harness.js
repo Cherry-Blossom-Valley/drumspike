@@ -1,4 +1,4 @@
-/* js_unit harness (R17 step 2, #55 per docs/review/R17-plan.md): loads the static/ plain
+/* js_unit harness (R17 step 2, #55): loads the static/ plain
    scripts into a fresh vm context per test — a stubbed B, a minimal document/window, a
    localStorage stand-in and a manual clock. No browser, no full DOM. The modules keep their
    real script order (state.js first, then the module under test); their top-level bindings

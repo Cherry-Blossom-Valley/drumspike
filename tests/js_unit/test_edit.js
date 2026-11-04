@@ -1,4 +1,4 @@
-/* js_unit: the edit.js transitions (R17 step 3, #55 per docs/review/R17-plan.md).
+/* js_unit: the edit.js transitions (R17 step 3, #55).
    Each test gets a fresh context: state.js, persist.js and edit.js in script order, a
    stubbed B (the service) and the page-level helpers edit.js calls at run time. The three
    proofs the plan names for this step: undo/redo of add/del/move/setv against the stubbed

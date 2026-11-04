@@ -1076,7 +1076,7 @@ fn judge_hits(
             } else {
                 // #103 step 2: record the hat pair's own evidence on every hit with a
                 // coinciding hat hit, firing or not (see [`CrossMark::hat_lead_ms`]). The
-                // #103 measured verdict (docs/review/detector-plan.md, package 8) is that no
+                // #103 measured verdict is that no
                 // NEW hat-pair threshold separates (the best pair, level -20 dB and lead
                 // -12 ms, removes 398 of 2927 hat-cause scored FPs — left-share 76.4 % ->
                 // 62.8 %, limit 50 % — and costs 18 real strokes; every tighter pair trades

@@ -2,8 +2,9 @@
 
 This file is the map of Drum Spike for a person who wants to change the code. It says where
 things are and which rules the structure keeps. It does not explain every function. For commands
-and gates read `AGENTS.md`; for the plan that shapes the current refactoring read
-`docs/engineering/refactor-plan.md`.
+and gates read `AGENTS.md`. The structure is the result of the refactoring in
+`docs/engineering/refactor-plan.md`; the numbers before and after are in
+`docs/review/refactor-baseline.md`.
 
 ## Bird's-eye view
 
@@ -85,7 +86,7 @@ The module paths are the API (`drumspike_core::refine::refine_sr`). An item no c
 | `static/` | The editor page, classic scripts. Page modules: `state`, `util`, `persist`, `edit`, `transport`, `render`, `session`, `backend`, `lanes-gl`, `tiles-worker`, `keymap`, `help`, `shell`. Feature scripts, one per editor feature: `export`, `addtracks`, `mixer`, `histograms`, `learn`, `layer`, `velocity`, `followstrip`, `tempomap`, `markers`, `wave` (the glue to `lanes-gl`), `commands`, `files`, `review`, `analysis`, `plugins`, `status`, `inspector`, `tracks`. `app.js` keeps boot, the global handlers and the wiring. `index.html` gives the load order. |
 | `tests/` | pytest: the page against `ds-bridge` (`e2e_app/`), the frozen references (`golden/`) and their regression `test_golden.py`, export tests, the JS coverage gate (`jscov.py`). |
 | `tools/` | Research and check scripts; `identity.py` is the before and after gate of the refactoring. |
-| `docs/` | User guide, developer guide, release notes, ADRs, design notes, engineering plan. |
+| `docs/` | User guide, developer guide, release notes, ADRs, design notes, the finished engineering plan. |
 
 ## Invariants
 
@@ -184,3 +185,28 @@ checks the end of stages 8, 9, 10 and 11.
   marks, times, velocities and exported bytes for the golden corpus, ENST items and the real
   sessions, including a re-pick and a reanalyze case. A refactoring step must show zero difference.
   The manifests live in `~/.cache/drumspike/identity/`, never in git.
+
+## Decisions on record
+
+These decisions shape the code. The detail is in the code comments and the ADRs.
+
+- The DSP detector is the product. A trained model is an option, never the default. No model
+  is bundled, and the product text names none. The decision number is ENST snare recall above
+  0.70 at precision 0.95 or higher; `tools/eval/enst_gate.py` compares each aggregate with
+  `tools/eval/enst_gate_baseline.json` and fails on a drop of more than 2 percent.
+- The app runs on the user's machine. Anything that sends audio or project data away is opt-in
+  and says so.
+- The web page stays the user interface. A native UI or an ARA plug-in was studied and not
+  started: no hot path was near its budget, so the gain would be feel, not speed. A rewrite
+  would replace the whole `static/` set and the e2e suite.
+- Hit placement is refine version 7 (the steep-edge walk with a reach limit, `refine::edge`).
+  It halves the mean placement error on reviewed real kick hits and leaves the other sessions
+  unchanged. Older projects keep the version they were analysed with.
+- Tempo detection uses the half-time rule 3: a snare on beat 3 puts bar 1 two beats before it.
+  `DRUMSPIKE_TEMPO_RULE=2` pins the old rule.
+- Rejected after measurement: per-track self-calibration from flux statistics (no stable
+  statistic), and a learned cut for kick false keeps (it removes few false keeps and pays
+  true keeps). A new hat-pair threshold in cross bleed is also rejected; the generic verdict
+  stays (see the comment in `detect::cross_bleed`).
+- Re-analyze Selection is a separate command, not a mode of the Inspector button
+  (`docs/concepts/reanalyze-selection.md`).
