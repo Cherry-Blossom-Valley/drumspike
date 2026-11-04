@@ -69,6 +69,7 @@ The module paths are the API (`drumspike_core::refine::refine_sr`). An item no c
 | `call`, `command_policy` | Command name to handler; which surface may call what. |
 | `policy` | Event marks and their precedence (`is_marked`, `mark`, `clear`, `is_manual`). |
 | `jobs`, `copyjob` | The analysis job over all tracks, and copy jobs. |
+| `steps` | `AnalysisStep` and the fixed list of session steps the analysis job runs (not the re-pick or Reanalyze selection). |
 | `cross_bleed`, `ghost_gate`, `tom_bleed`, `flam` | Session steps: gather the microphones, call core, apply marks. |
 | `histogram`, `reanalyze`, `learn*` | Re-pick after a sensitivity change, reanalyze a selection, Learn This and Forget This. |
 | `edit`, `export`, `tracks`, `roles`, `lifecycle`, `registry`, `autosave`, `transport`, `layer`, `markers`, `tempo` | Commands on the open project. |
