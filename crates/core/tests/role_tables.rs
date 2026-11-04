@@ -22,6 +22,19 @@ fn the_detector_note_of_each_role_name_is_fixed_and_unknown_names_take_the_kick_
 #[test]
 fn the_class_notes_are_the_five_detector_notes() {
     assert_eq!(CLASS_NOTES, [35, 38, 47, 42, 49]);
+    let drums: Vec<u8> = Role::ALL[..5].iter().map(|r| r.detector_note()).collect();
+    assert_eq!(drums, CLASS_NOTES);
+}
+
+#[test]
+fn the_detector_note_and_the_default_note_are_two_different_tables() {
+    let detector: Vec<u8> = Role::ALL.iter().map(|r| r.detector_note()).collect();
+    let default: Vec<u8> = Role::ALL.iter().map(|r| r.default_note()).collect();
+    assert_eq!(detector, [35, 38, 47, 42, 49, 35]);
+    assert_eq!(default, [36, 38, 48, 42, 49, 36]);
+    for (r, name) in Role::ALL.iter().zip(NAMES) {
+        assert_eq!(r.detector_note(), role_note(name), "{name}");
+    }
 }
 
 #[test]

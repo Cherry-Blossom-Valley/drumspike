@@ -27,14 +27,7 @@ pub const PRESET_DIR: &str = "kit-presets";
 /// The MIDI note of a role (`ROLE_DEFAULT_NOTE` in `static/app.js`).
 #[must_use]
 pub fn default_note(role: &str) -> i64 {
-    match role {
-        "kick" => 36,
-        "snare" => 38,
-        "tom" => 48,
-        "hat" => 42,
-        "cymbal" => 49,
-        _ => 36,
-    }
+    i64::from(drumspike_core::role::Role::parse_or_other(role).default_note())
 }
 
 /// The lane colour of a role (`ROLE_COLORS` of the server).

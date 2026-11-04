@@ -302,13 +302,7 @@ pub fn role_classes(role: &str) -> &'static [u8] {
 /// `other`).
 #[must_use]
 pub fn role_note(role: &str) -> u8 {
-    match role {
-        "snare" => 38,
-        "tom" => 47,
-        "hat" => 42,
-        "cymbal" => 49,
-        _ => 35,
-    }
+    Role::parse_or_other(role).detector_note()
 }
 
 /// The thresholds as the CLI receives them: `float(f"{t:.3f}")` for each.

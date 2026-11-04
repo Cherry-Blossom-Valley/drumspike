@@ -89,6 +89,36 @@ impl Role {
             Role::Other => "other",
         }
     }
+
+    /// The MIDI note the detector writes for a hit of this role (`engine.ROLE_NOTE`, the
+    /// reference detector's `LABELS_5`): 35 kick, 38 snare, 47 tom, 42 hat, 49 cymbal and
+    /// 35 for other. Not the note the user sees ([`Role::default_note`]).
+    #[must_use]
+    pub fn detector_note(self) -> u8 {
+        match self {
+            Role::Kick => 35,
+            Role::Snare => 38,
+            Role::Tom => 47,
+            Role::Hat => 42,
+            Role::Cymbal => 49,
+            Role::Other => 35,
+        }
+    }
+
+    /// The MIDI note a new track of this role gets (`ROLE_DEFAULT_NOTE` in `static/app.js`):
+    /// 36 kick, 38 snare, 48 tom, 42 hat, 49 cymbal and 36 for other. Not the detector's
+    /// note ([`Role::detector_note`]).
+    #[must_use]
+    pub fn default_note(self) -> u8 {
+        match self {
+            Role::Kick => 36,
+            Role::Snare => 38,
+            Role::Tom => 48,
+            Role::Hat => 42,
+            Role::Cymbal => 49,
+            Role::Other => 36,
+        }
+    }
 }
 
 /// The features `role_from_audio` decides on (exposed for the eval report and tests).
