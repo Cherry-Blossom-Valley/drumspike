@@ -9,10 +9,17 @@ Run a tool with `uv run` (named dependencies are in its docstring, for example
 | `check_exports.py` | the independent export checker: reads exported MIDI and spike files without project code and compares them with the session |
 | `check_midi_timing.py` | checks MIDI note times against a tempo map in samples |
 | `check_wording.py` | the wording check of the user-facing texts (guide, release notes, site) |
-| `parity/` | the parity checks of the Rust core against the frozen references in `tests/golden/` |
+| `check_private.py` | the check for private names in a diff or a text file (`AGENTS.md`) |
+| `identity.py` | the identity snapshot: hashes the engine outputs before and after a change (`ARCHITECTURE.md`) |
+| `fn_lengths.py` | lists the long functions of the Rust production code |
+| `build_help.py` | builds the in-app manual `static/help/` from `docs/guide/` |
+| `parity/` | the synthetic corpus and session builders for the golden regression in `tests/golden/`, the bench signals and the exit-flow check |
 | `release/` | `cut.py` (plan, notes, version bump and status of a release) and `licence_check.py` (every asset has its terms in `docs/licensing.md`) |
 | `media/` | the guide pictures (`shots.py`), screen recordings (`record.py`), explainer videos (`explainers/`), narration (`tts.py`), the path guard for rendered media (`check_paths.py`) and the website build (`build_site.py`) |
-| `eval/` | detection evaluation on the public ENST-Drums data set |
+| `eval/` | detection evaluation on the public ENST-Drums data set: `enst_gate.py` and its baseline |
+| `ci/` | `scope.py` (which gates a change needs) and `loaded_repeat.sh` (a gate repeated under load) |
+| `hooks/` | the pre-commit hook for rustfmt |
+| `icons/` | the generator of the document icon |
 
 ## Research references
 

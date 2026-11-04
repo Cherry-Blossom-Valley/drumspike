@@ -1,8 +1,8 @@
 # Design: detector plugins as external processes
 
 Status: implemented. Owner decision 2026-10-25: the detector becomes pluggable,
-with external process plugins. This document is the exact design; the implementation
-tickets at the end follow from it.
+with external process plugins. This document is the design as built; the
+implementation tickets at the end are done.
 
 ## 1. The seam
 
@@ -194,7 +194,7 @@ with the built-in detector.
 
 ## 7. UI and agent API
 
-- Inspector, Detection section (`buildParamsPanel` in `static/app.js`): a Detector
+- Inspector, Detection section (`buildParamsPanel`, now in `static/inspector.js`): a Detector
   select above the Sensitivity row. First entry `Built-in`, then one entry per installed
   plugin that supports the track's role and rate. Changing it applies on the next
   re-analyze, like the other detection settings. A follower track has no Detector

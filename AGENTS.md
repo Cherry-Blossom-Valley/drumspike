@@ -25,7 +25,7 @@ tools, the parity checks of the Rust binaries) and the research tools in `tools/
 | `tests/` | pytest: `e2e_app/` (the page against `ds-bridge`), `jscov.py` (JS coverage gate), `frozen.py`, `golden/` (frozen references) and `test_golden.py` (the golden regression), export tests |
 | `tools/` | `identity.py` (identity snapshot), `fn_lengths.py` (function lengths), `parity/` (corpus and session builders), `check_exports.py` (independent export checker), `release/cut.py` (release cut), `media/` (guide pictures, recordings, explainers), `eval/` and research tools (each has a test or a documented command) |
 | `site/` | the landing page (`index.html`, `assets/`; `tools/media/build_site.py` builds it for a sub-path) |
-| `docs/` | `guide/` (user guide), `DEVELOPING.md`, `RELEASING.md`, `release-notes/`, `adr/`, `design/`, `agent-api.md`, `product/` |
+| `docs/` | `guide/` (user guide, also the source of the in-app help), `DEVELOPING.md`, `RELEASING.md`, `release-notes/`, `adr/`, `design/`, `concepts/`, `engineering/` (the finished refactoring plan), `review/` (its baseline), `agent-api.md`, `event-policy.md`, `licensing.md`, `product/` (feature path, landing copy, media scripts) |
 
 ## Commands (from the repository root)
 

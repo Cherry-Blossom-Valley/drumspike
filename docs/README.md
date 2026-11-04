@@ -8,12 +8,16 @@
 
 ## For developers
 
-- [Developer guide](DEVELOPING.md): architecture, build, tests, CI, environment variables.
+- [Architecture](../ARCHITECTURE.md): the code map, the invariants, the glossary and the decisions on record.
+- [Developer guide](DEVELOPING.md): build, tests, CI, environment variables.
 - [Releasing](RELEASING.md): the signed and notarized release, by tag or by hand.
 - [Agent API](agent-api.md): every app operation as a command for scripts and AI agents.
 - [Detector plug-ins](guide/03b-detector-plugins.md), with the [design](design/detector-plugins.md)
   and the [decision record](adr/0001-detector-plugins.md).
 - [Licensing](licensing.md): the terms of every non-code asset group.
+- [Re-analyze Selection](concepts/reanalyze-selection.md): the rules of the range run.
+- [Refactoring](engineering/refactor-plan.md): the finished plan, with the numbers in
+  [refactor-baseline](review/refactor-baseline.md).
 - [AGENTS.md](../AGENTS.md) and [CONTRIBUTING.md](../CONTRIBUTING.md): the working rules.
 
 ## Product and media

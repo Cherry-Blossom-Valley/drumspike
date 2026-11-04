@@ -112,14 +112,14 @@ an object result has an `outputSchema` and `structuredContent`. An error is a re
 - `export_all`, `tracks_add`, `project_save_as` and `project_consolidate` answer `{job}` at once; poll `job_get {job}` until
   `state` is `done` (`result`) or `error`.
 - `analyze_start` and a stored `track_repick` keep the hits you added or moved by hand (`keep_edited`, default true here).
-- Learn marks (P4-6a): `track_learn_mark` (`kind` this or not, a range `t0` and `t1` or one `hit` time), `track_learn_remove`, `track_learn_forget_at` (Forget This: the examples at one `hit` or inside `t0` to `t1`; none there answers `removed: 0` and changes nothing), `track_learn_flip`,
+- Learn marks: `track_learn_mark` (`kind` this or not, a range `t0` and `t1` or one `hit` time), `track_learn_remove`, `track_learn_forget_at` (Forget This: the examples at one `hit` or inside `t0` to `t1`; none there answers `removed: 0` and changes nothing), `track_learn_flip`,
   `track_learn_forget` and `track_learn_set` keep good and bad examples in the track's `learn` object (`tracks_get` shows it). A range takes its
   hits, else the strongest candidate, else the strongest rise of 6 dB or more; no hit gives `marked: false` with a `reason`. A follower marks its
-  source (`routed: true`). No filter reads the marks yet. `track_learn_scores` (P4-6b) gives the similarity score of each detection candidate
+  source (`routed: true`). No filter reads the marks yet. `track_learn_scores` gives the similarity score of each detection candidate
   and of each example, and the automatic threshold; it writes only the cache `Analysis/<track>/learn.bin`.
 - `track_velocity_set` also writes the new velocities and cut marks to the stored hits (`apply`, default true here; the page sends
   `apply: false` and applies the answer itself). It recomputes every velocity, so it comes before single-hit velocity edits.
-- Export (P4-30): `export_all` takes `dest` (an absolute, existing, writable folder; default `Exports/` in the project folder), `midi_mode`
+- Export: `export_all` takes `dest` (an absolute, existing, writable folder; default `Exports/` in the project folder), `midi_mode`
   (`per_track`, the default, or `single`), `tracks` (names or patterns, default all), `roles` (export by role, see the next section) and
   `formats` (`midi` and/or `spikes`, default both). `single` writes one
   type 1 file `<project>_drums.mid` instead of the `<track>_spike.mid` files: the project's tempo map, one MIDI track per exported track named after
@@ -130,7 +130,7 @@ an object result has an `outputSchema` and `structuredContent`. An error is a re
   the same 400 or 404). `export_dest_set {dest}` keeps a folder as the project's export folder (document field `export_dest`; none clears it): the
   Export dialog starts with it. The commands never use the kept folder themselves. A bad `dest` is 400 (relative path, not a folder, not writable)
   or 404 (missing); `check_dest` writes and removes a probe file `.drumspike-write-test-<pid>` in the folder.
-- Sampler calibration (P4-7c): `sampler_calibration_midi {name, dest?, path?}` writes `<track>_calibration.mid` (or the file `path`, P4-7d: the Layer section's save dialog; a source or a one-shot in use is refused) (one note, the track's note, velocity 100,
+- Sampler calibration: `sampler_calibration_midi {name, dest?, path?}` writes `<track>_calibration.mid` (or the file `path`: the Layer section's save dialog; a source or a one-shot in use is refused) (one note, the track's note, velocity 100,
   on the start of bar 2 of the tempo map: 2.000 s with the default map). Import it in the DAW at the session start, bounce the sampler's kit piece
   for that note from the session start, then `track_sampler_set {name, path, one_shot?}` measures the bounce and keeps `sampler`
   `{offset_samples, sr, polarity, match, measured_at, file}` in the track (an empty `path` removes it; `one_shot: true` also sets the bounce as the
@@ -138,12 +138,12 @@ an object result has an `outputSchema` and `structuredContent`. An error is a re
   note at the aligned attack (the hit, plus the layer's per-hit lag when its `align` is on) minus the offset, rounded to the sample; a note before 0 s
   goes to 0 s. `compensate: false` turns this off (default true). The answers have `sampler` (per track: `offset_ms`, `aligned`, `notes`, `clamped`)
   and `warnings`. A track without a calibration is written as before.
-- One-shot layer (P4-7a): `track_layer_set {name, path?, ...}` sets the layer; `onset` (P4-40e, samples of the one-shot)
+- One-shot layer: `track_layer_set {name, path?, ...}` sets the layer; `onset`
   overrides the measured onset for `export_layer`, the playback and `track_layer_align` (the answer's `layer.onset_set`
   carries it, `layer.onset` stays the measured one); `onset: null` resets to the measured onset, a new `path` clears it.
   `track_layer_wave {name, start?, end?}` and `track_sampler_wave {name, start?, end?}` answer the mono samples of the
   one-shot and of the calibration bounce as the bytes of `samples_window` (`u32 start`, `u32 rate`, then f32).
-- The project zip import and export (`project_export_zip`, `project_import` with `zip_path`) were removed in P4-30; `project_import` takes `session_dir` only.
+- The project zip import and export (`project_export_zip`, `project_import` with `zip_path`) were removed; `project_import` takes `session_dir` only.
 - `tools/list` gives every `Progress` tool the output schema `{job}`; the result of the work is in `job_get`.
 
 ## Locks and read-only
@@ -176,32 +176,32 @@ or change the live project of the running app (a local socket for that is a poss
   `{op: add, t, snap: true}` (off by default; the page's Option-click sets it) puts the hit on the attack within 10 ms of `t`,
   found by the refinement rule of the track's analysis, with the velocity that `velocities_recompute` gives there (a `v` in the op wins).
   With no attack within 10 ms the hit stays at `t` with velocity 100. The answer lists each snap op as `snaps: [{click, t, v, snapped}]`.
-- P4-19, roll fill: an analysis of a snare track adds the soft strokes of a roll (the model's candidates down to 0.05 in a
+- Roll fill: an analysis of a snare track adds the soft strokes of a roll (the model's candidates down to 0.05 in a
   run of 8 or more equally spaced picks, 80 to 400 ms) as normal hits with `roll: true`. The `detector` record names the
   version (`roll_rule`); a project analysed before keeps its hits until Re-analyze; `DRUMSPIKE_ROLL_RULE=0` turns it off.
-- P4-31, kick walk: an analysis of a kick track runs the refinement back-track with a peak margin of 29 dB (the shipped margin is 33 dB):
+- Kick walk: an analysis of a kick track runs the refinement back-track with a peak margin of 29 dB (the shipped margin is 33 dB):
   the same hits, onsets a little later where a quiet lead-in lies before the foot. The `detector` record names the version
   (`kick_walk`); a project analysed before keeps its hits until Re-analyze; `DRUMSPIKE_KICK_WALK=0` turns it off.
-- P4-13 stage B, flams: after an analysis and its bleed rules the second stroke of a flam inside a snare hit's lobe (a 1 kHz
+- Flams: after an analysis and its bleed rules the second stroke of a flam inside a snare hit's lobe (a 1 kHz
   attack re-rise of 9 dB, 12 to 50 ms after the hit) becomes a normal hit with `flam: true`, unless another track of the
   project (no snare and no sample track) explains it as bleed. The `detector` record names the version (`flam_rule`) and the
   outcome (`flam: {on, reason, added, gated, sources}`); `job_get` has the session's outcome in `flam`. The track param
   `flam_split: false` turns it off for one track; a project analysed before keeps its hits until Re-analyze;
   `DRUMSPIKE_FLAM_RULE=0` turns it off.
-- P4-10 stage 5, kick rescue: after an analysis, its bleed rules and the flam rule, a kick close mic (no sample track) with a
+- Kick rescue: after an analysis, its bleed rules and the flam rule, a kick close mic (no sample track) with a
   model analysis gets the hits of the DSP onset detector that lie 30 ms or more from every model hit, as normal hits with
   `rescue: true`. An added hit goes again when a tom or snare close mic of the project has a hit within 20 ms and the hit
   is 8 dB or more under the track's median hit level (bleed). The `detector` record names the version (`kick_rescue`) and
   the outcome (`rescue: {added, removed, median_db, sources}`); `job_get` has the session's outcome in `rescue`. A project
   analysed before keeps its hits until Re-analyze; `DRUMSPIKE_KICK_RESCUE=0` turns it off.
-- P4-14, tom bleed: after an analysis the tom close mics' hits that the other toms' mics explain carry `bleed: true`. They stay in
+- Tom bleed: after an analysis the tom close mics' hits that the other toms' mics explain carry `bleed: true`. They stay in
   `events_get` but leave MIDI, spikes, `export_all`, the click and a follower, as cut hits do. `{op: restore, index}` takes the mark
   off one hit and sets `edited: true`: a re-pick or Re-analyze with `keep_edited` keeps the hit, and the rule never marks it
   again (an edited hit never has the mark). The track's `detector` record names the rule version (`bleed_rule`) and the outcome
   (`bleed: {on, reason, removed, played, shared?, sources?}`; `shared` names tom mic pairs counted as one drum).
-  P4-17, version 2: the kick and snare close mics (role `kick` or `snare`, no sample or trigger name, no follower) are
-  sources too (a tom hit is also bleed under 9.2 dB snare excess or 4.0 dB kick excess); `sources` names them. A
-  P4-21, version 3: the tom pair rule (winner takes all) runs after version 2 on the hits still in the output: of two hits on tom
+  Version 2: the kick and snare close mics (role `kick` or `snare`, no sample or trigger name, no follower) are
+  sources too (a tom hit is also bleed under 9.2 dB snare excess or 4.0 dB kick excess); `sources` names them.
+  Version 3: the tom pair rule (winner takes all) runs after version 2 on the hits still in the output: of two hits on tom
   close mics of different drums within 12 ms, the one 6 dB or more lower (its level against the median level of its mic's output hits)
   carries `bleed: true` too when it is also 3 dB or more under the median level of its own mic (the floor: bleed is quiet on its own mic, a unison stroke is not). It needs no bleed between the hits, so it also runs when rule CD is off (tom tracks edited to digital
   silence); its outcome is `bleed.pairs` (`{on, reason, removed}`; the job answer has it with a `tracks` count). An analysis with version 1
@@ -212,13 +212,13 @@ or change the live project of the running app (a local socket for that is a poss
 - `track_set_note` takes the MIDI number. General MIDI: kick 36, snare 38, closed hat 42, toms 41 to 50 (floor tom 41, low 45,
   mid 47, high 50), crash 49, ride 51. The names follow C1 = 36.
 
-## Tempo and meter map (P4-8)
+## Tempo and meter map
 
 `tempo_map_get` gives the project's map (`{map, default}`), `tempo_map_set {map}` replaces the whole map in one step (the answer has the
 `previous` map, null when the stored value was not a valid map (it is replaced in any case): setting it again is the undo; `{}` or `null` is 120 BPM, 4/4, bar 1 at 0 s), and `tempo_map_import_midi {path}` replaces the map
 with the tempo and time-signature events of a MIDI file from a DAW. The MIDI exports of the project (`export_midi`, `export_all`) then carry the map
 and put each note at its exact time through it; with the default map the files are the same as before. The map format is in
-`docs/migration/project-format.md` ("Tempo and meter map"). Like every change, it needs `project_save`.
+the module comment of `crates/app/src/tempo.rs`. Like every change, it needs `project_save`.
 
 `tempo_map_detect {tracks?, min_bars?, min_step_pct?}` suggests a map from the hits of the kick and snare tracks (analyse them first): the
 start tempo with a confidence and the other tempos it could be (half, double, 3/2), bar 1, the meter (4/4 unless the evidence for 3/4 is
@@ -232,7 +232,7 @@ kick) and an `alternative` two beats later: below about 0.4 bar 1 is a coin flip
 in `tracks` (with the kick and snare tracks) to let its crash hits vote for beat 1. `meter.feel: "two-beat"` means 2/4, or 6/8 in
 dotted quarters, fit the hits as well as 4/4.
 
-## Review markers (P4-40g)
+## Review markers
 
 The project document holds the marker list under the `markers` key — a pass-through key, so a document
 written by the page or an agent round-trips unchanged (format 1 stays). One marker is an object with a
@@ -255,7 +255,7 @@ the model threshold (rescue, Learn Add, roll fill, flam) gets the cap of its tag
 rules are in `crates/app/src/confidence.rs`. The page steps through the doubtful hits of all tracks
 with D (Hits > Next Doubtful Hit), lowest confidence first; Shift+D steps back.
 
-Export (P4-40g): `export_markers_set {sid, on}` keeps the Export dialog's "Markers in MIDI" checkbox in
+Export: `export_markers_set {sid, on}` keeps the Export dialog's "Markers in MIDI" checkbox in
 the document field `export_markers` (absent is off); `export_existing` answers it as `export_markers`.
 With it on, the one multi-track file (`<project>_drums.mid`, `midi_mode: "single"`) holds one marker
 event (FF 06) per review marker at its time through the tempo map, the note as the text or `Marker N`

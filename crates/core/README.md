@@ -1,8 +1,7 @@
 # drumspike-core
 
-The application logic of Drum Spike in Rust, without any UI. The crate reproduced `engine.py`
-and `project.py` of the Python server on the test corpus; the server was retired in P3-12 and its
-results are frozen in `tests/golden/`. The desktop app uses this crate through `crates/app`.
+The application logic of Drum Spike in Rust, without any UI. The crate reproduces the results of the
+retired Python server on the test corpus; those results are frozen in `tests/golden/`. The desktop app uses this crate through `crates/app`.
 
 ## Public API: the module paths
 
@@ -68,4 +67,3 @@ cargo fmt --all -- --check
 - The reader never writes. Source audio stays unchanged.
 - Dependencies have exact versions. `Cargo.lock` is committed. No C or C++ dependency.
 - `unsafe` appears only in the memory-map layer, with a comment that says why.
-- Known differences from Python are listed under Deviations in `docs/archive/phase1-report.md`.
