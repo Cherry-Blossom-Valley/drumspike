@@ -49,6 +49,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::AppError;
 use crate::media::mix_mode;
+use crate::policy::{Mark, clear, is_marked, mark};
 use crate::registry::{Shared, lock};
 use crate::roles::{drum_of, is_sample_name};
 use crate::{Service, ServiceConfig};
@@ -117,7 +118,7 @@ const PAIRS_FROM: u32 = 3;
 const GUARD_FROM: u32 = 4;
 
 /// `{on, reason, removed}` of the pair rule: `reason` names why it is off.
-fn pair_record(pairs: &Option<Result<Vec<Vec<bool>>, String>>, removed: usize) -> Value {
+fn pair_record(pairs: &Pairs, removed: usize) -> Value {
     match pairs {
         Some(Err(r)) => json!({"on": false, "reason": r, "removed": 0}),
         _ => json!({"on": true, "reason": Value::Null, "removed": removed}),
@@ -127,7 +128,7 @@ fn pair_record(pairs: &Option<Result<Vec<Vec<bool>>, String>>, removed: usize) -
 /// True for an event the rule marked (`"bleed": true`).
 #[must_use]
 pub fn is_bleed(e: &Value) -> bool {
-    e.get("bleed") == Some(&Value::Bool(true))
+    is_marked(e, Mark::Bleed)
 }
 
 /// An edited hit (added, moved from `orig`, or restored: `edited: true`, as [`crate::edit::is_kept`]) or one the
@@ -182,51 +183,7 @@ struct Mic {
 /// version and the outcome in their `detector`, refreshes their followers. Returns the session's outcome `{rule, on,
 /// reason, played, tracks: {name: removed}}`, or `None` when no target is a tom close mic.
 pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) -> Option<Value> {
-    let (mics, srcs, tgt) = {
-        let g = lock(op);
-        let mut mics = Vec::new();
-        let mut srcs = Vec::new();
-        for name in g.project.doc.track_order() {
-            let Ok(tr) = g.track(&name) else { continue };
-            let role = tr.role.as_deref();
-            let kind = source_kind(&name, role);
-            if !(is_tom_close_mic(&name, role) || kind.is_some()) || tr.follows.is_some() || tr.events.is_none() {
-                continue;
-            }
-            if g.offline(&name) {
-                continue;
-            }
-            let Ok(path) = g.source(&name) else { continue };
-            let evs: Vec<&drumspike_core::project::Event> = tr.events().iter().collect();
-            let m = Mic {
-                drum: drum_of(&name),
-                kind,
-                times: evs.iter().map(|e| e.t).collect(),
-                cut: evs
-                    .iter()
-                    .map(|e| e.extra.get("cut") == Some(&Value::Bool(true)))
-                    .collect(),
-                bled: evs
-                    .iter()
-                    .map(|e| e.extra.get("bleed") == Some(&Value::Bool(true)))
-                    .collect(),
-                edited: evs.iter().map(|e| edited(e)).collect(),
-                mix: tr.mix_mode_or_default().to_string(),
-                path,
-                name,
-            };
-            if kind.is_some() {
-                srcs.push(m);
-            } else {
-                mics.push(m);
-            }
-        }
-        let tgt: Vec<(usize, u32)> = targets
-            .iter()
-            .filter_map(|(n, v)| mics.iter().position(|m| &m.name == n).map(|i| (i, *v)))
-            .collect();
-        (mics, srcs, tgt)
-    };
+    let (mics, srcs, tgt) = gather(op, targets);
     if tgt.is_empty() {
         return None;
     }
@@ -240,7 +197,83 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
     } else {
         rule(svc, &mics, srcs, &names)
     };
-    // version 3: the pair rule on the hits version 2 left in
+    let pairs = pair_outcome(svc, &mics, &tgt, &outcome);
+    let d = Decision {
+        outcome,
+        shared,
+        used,
+        pairs,
+    };
+    let applied = apply(op, &mics, &tgt, &d);
+    for name in &applied.changed {
+        crate::follow::refresh_followers(svc, op, name);
+    }
+    Some(session_outcome(version, &names, &d, applied))
+}
+
+/// The pair rule's answer per mic, or why it is off; `None` when no target runs version 3 or more.
+type Pairs = Option<Result<Vec<Vec<bool>>, String>>;
+
+/// The rule's answer for one run: rule CD's marks or why it is off, the shared pairs, the sources read and the pairs.
+struct Decision {
+    outcome: Marks,
+    shared: Vec<String>,
+    used: Vec<String>,
+    pairs: Pairs,
+}
+
+/// What [`apply`] wrote: per target the removed hits (all, and by the pair rule alone) and the tracks it changed.
+struct Applied {
+    tracks: Map<String, Value>,
+    pair_tracks: Map<String, Value>,
+    changed: Vec<String>,
+}
+
+/// Under the project lock: the tom close mics and the kick and snare sources of the session with their hits, and the
+/// targets as indexes into the tom close mics with their versions.
+fn gather(op: &Shared, targets: &[(String, u32)]) -> (Vec<Mic>, Vec<Mic>, Vec<(usize, u32)>) {
+    let g = lock(op);
+    let mut mics = Vec::new();
+    let mut srcs = Vec::new();
+    for name in g.project.doc.track_order() {
+        let Ok(tr) = g.track(&name) else { continue };
+        let role = tr.role.as_deref();
+        let kind = source_kind(&name, role);
+        if !(is_tom_close_mic(&name, role) || kind.is_some()) || tr.follows.is_some() || tr.events.is_none() {
+            continue;
+        }
+        if g.offline(&name) {
+            continue;
+        }
+        let Ok(path) = g.source(&name) else { continue };
+        let evs: Vec<&drumspike_core::project::Event> = tr.events().iter().collect();
+        let m = Mic {
+            drum: drum_of(&name),
+            kind,
+            times: evs.iter().map(|e| e.t).collect(),
+            cut: evs.iter().map(|e| is_marked(*e, Mark::Cut)).collect(),
+            bled: evs.iter().map(|e| is_marked(*e, Mark::Bleed)).collect(),
+            edited: evs.iter().map(|e| edited(e)).collect(),
+            mix: tr.mix_mode_or_default().to_string(),
+            path,
+            name,
+        };
+        if kind.is_some() {
+            srcs.push(m);
+        } else {
+            mics.push(m);
+        }
+    }
+    let tgt: Vec<(usize, u32)> = targets
+        .iter()
+        .filter_map(|(n, v)| mics.iter().position(|m| &m.name == n).map(|i| (i, *v)))
+        .collect();
+    (mics, srcs, tgt)
+}
+
+/// Version 3: the pair rule on the hits version 2 left in. Each mic runs its target's version (0 for a mic that is no
+/// target).
+fn pair_outcome(svc: &Service, mics: &[Mic], tgt: &[(usize, u32)], outcome: &Marks) -> Pairs {
     let pair_versions: Vec<u32> = (0..mics.len())
         .map(|i| tgt.iter().find(|&&(t, _)| t == i).map_or(0, |&(_, v)| v))
         .collect();
@@ -250,89 +283,100 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
         .as_ref()
         .ok()
         .map(|(by, _)| by.iter().map(|m| m.iter().map(|h| !h.is_empty()).collect()).collect());
-    let pairs: Option<Result<Vec<Vec<bool>>, String>> =
-        (pair_versions.iter().any(|&v| v >= PAIRS_FROM)).then(|| match &outcome {
-            Err(r) if r.reason.starts_with(PLAYED_OFF) => {
-                Err(format!("the pair rule is off with rule CD: {}", r.reason))
-            }
-            _ => pair_rule(svc, &mics, &pair_versions, v2.as_ref()),
-        });
+    (pair_versions.iter().any(|&v| v >= PAIRS_FROM)).then(|| match outcome {
+        Err(r) if r.reason.starts_with(PLAYED_OFF) => Err(format!("the pair rule is off with rule CD: {}", r.reason)),
+        _ => pair_rule(svc, mics, &pair_versions, v2.as_ref()),
+    })
+}
+
+/// Under the project lock: the marks and the `detector` record on every target whose hits did not change while the
+/// rule ran. The project is marked dirty.
+fn apply(op: &Shared, mics: &[Mic], tgt: &[(usize, u32)], d: &Decision) -> Applied {
+    let (outcome, shared, used, pairs) = (&d.outcome, &d.shared, &d.used, &d.pairs);
     let mut tracks = Map::new();
     let mut pair_tracks = Map::new();
     let mut changed = Vec::new();
-    {
-        let mut g = lock(op);
-        for &(i, v) in &tgt {
-            let Ok(tr) = g.track_mut(&mics[i].name) else { continue };
-            let same = tr.events().len() == mics[i].times.len()
-                && tr.events().iter().zip(&mics[i].times).all(|(e, &t)| e.t == t);
-            if !same {
-                continue; // the hits changed while the rule ran: they keep what they have
-            }
-            let marks = match (&outcome, v) {
-                (Ok((by, _)), 1..) => Some(&by[i]),
-                // version 5: rule CD off for fewer than two played still applies the guarded shared kick marks
-                (Err(off), 5..) => off.kick_by.as_ref().map(|m| &m[i]),
-                _ => None,
-            };
-            let pair_marks = match (&pairs, v >= PAIRS_FROM) {
-                (Some(Ok(pm)), true) => Some(&pm[i]),
-                _ => None,
-            };
-            let mut removed = 0;
-            let mut pair_removed = 0;
-            for (j, e) in tr.events.iter_mut().flatten().enumerate() {
-                let by_pair = pair_marks.is_some_and(|m| m[j]);
-                let mut by: Vec<&str> = marks.map_or_else(Vec::new, |m| m[j].clone());
-                if by_pair {
-                    by.push("pair");
-                }
-                let on = !by.is_empty() && !edited(e);
-                if on {
-                    e.extra.insert("bleed".into(), Value::Bool(true));
-                    e.extra.insert("by".into(), json!(by));
-                    removed += 1;
-                    pair_removed += usize::from(by_pair && marks.is_none_or(|m| m[j].is_empty()));
-                } else {
-                    e.extra.shift_remove("bleed");
-                    e.extra.shift_remove("by");
-                }
-            }
-            if let Some(Value::Object(det)) = tr.extra.get_mut("detector") {
-                if v == 0 {
-                    det.shift_remove("bleed_rule");
-                    det.shift_remove("bleed");
-                } else {
-                    let (on, reason, played) = match &outcome {
-                        Ok((_, played)) => (true, Value::Null, played[i]),
-                        Err(r) => (false, Value::from(r.reason.as_str()), false),
-                    };
-                    det.insert("bleed_rule".into(), json!(v));
-                    let mut rec = json!({"on": on, "reason": reason, "removed": removed, "played": played});
-                    if !shared.is_empty() {
-                        rec["shared"] = json!(shared);
-                    }
-                    if v >= SOURCES_FROM && !used.is_empty() {
-                        rec["sources"] = json!(used);
-                    }
-                    if v >= PAIRS_FROM {
-                        rec["pairs"] = pair_record(&pairs, pair_removed);
-                    }
-                    det.insert("bleed".into(), rec);
-                }
-            }
-            tracks.insert(mics[i].name.clone(), json!(removed));
-            if v >= PAIRS_FROM {
-                pair_tracks.insert(mics[i].name.clone(), json!(pair_removed));
-            }
-            changed.push(mics[i].name.clone());
+    let mut g = lock(op);
+    for &(i, v) in tgt {
+        let Ok(tr) = g.track_mut(&mics[i].name) else { continue };
+        let same =
+            tr.events().len() == mics[i].times.len() && tr.events().iter().zip(&mics[i].times).all(|(e, &t)| e.t == t);
+        if !same {
+            continue; // the hits changed while the rule ran: they keep what they have
         }
-        g.mark_dirty();
+        let marks = match (outcome, v) {
+            (Ok((by, _)), 1..) => Some(&by[i]),
+            // version 5: rule CD off for fewer than two played still applies the guarded shared kick marks
+            (Err(off), 5..) => off.kick_by.as_ref().map(|m| &m[i]),
+            _ => None,
+        };
+        let pair_marks = match (pairs, v >= PAIRS_FROM) {
+            (Some(Ok(pm)), true) => Some(&pm[i]),
+            _ => None,
+        };
+        let mut removed = 0;
+        let mut pair_removed = 0;
+        for (j, e) in tr.events.iter_mut().flatten().enumerate() {
+            let by_pair = pair_marks.is_some_and(|m| m[j]);
+            let mut by: Vec<&str> = marks.map_or_else(Vec::new, |m| m[j].clone());
+            if by_pair {
+                by.push("pair");
+            }
+            let on = !by.is_empty() && !edited(e);
+            if on {
+                mark(e, Mark::Bleed);
+                e.extra.insert("by".into(), json!(by));
+                removed += 1;
+                pair_removed += usize::from(by_pair && marks.is_none_or(|m| m[j].is_empty()));
+            } else {
+                clear(e, Mark::Bleed);
+                e.extra.shift_remove("by");
+            }
+        }
+        if let Some(Value::Object(det)) = tr.extra.get_mut("detector") {
+            if v == 0 {
+                det.shift_remove("bleed_rule");
+                det.shift_remove("bleed");
+            } else {
+                let (on, reason, played) = match outcome {
+                    Ok((_, played)) => (true, Value::Null, played[i]),
+                    Err(r) => (false, Value::from(r.reason.as_str()), false),
+                };
+                det.insert("bleed_rule".into(), json!(v));
+                let mut rec = json!({"on": on, "reason": reason, "removed": removed, "played": played});
+                if !shared.is_empty() {
+                    rec["shared"] = json!(shared);
+                }
+                if v >= SOURCES_FROM && !used.is_empty() {
+                    rec["sources"] = json!(used);
+                }
+                if v >= PAIRS_FROM {
+                    rec["pairs"] = pair_record(pairs, pair_removed);
+                }
+                det.insert("bleed".into(), rec);
+            }
+        }
+        tracks.insert(mics[i].name.clone(), json!(removed));
+        if v >= PAIRS_FROM {
+            pair_tracks.insert(mics[i].name.clone(), json!(pair_removed));
+        }
+        changed.push(mics[i].name.clone());
     }
-    for name in &changed {
-        crate::follow::refresh_followers(svc, op, name);
+    g.mark_dirty();
+    Applied {
+        tracks,
+        pair_tracks,
+        changed,
     }
-    let (on, reason, played) = match &outcome {
+}
+
+/// The session's outcome `{rule, on, reason, played, tracks}` with `shared`, `sources` and `pairs` when present.
+fn session_outcome(version: u32, names: &[String], d: &Decision, applied: Applied) -> Value {
+    let Applied {
+        tracks, pair_tracks, ..
+    } = applied;
+    let (outcome, shared, used, pairs) = (&d.outcome, &d.shared, &d.used, &d.pairs);
+    let (on, reason, played) = match outcome {
         Ok((_, played)) => (
             true,
             Value::Null,
@@ -355,13 +399,13 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
     }
     if pairs.is_some() {
         let mut rec = pair_record(
-            &pairs,
+            pairs,
             pair_tracks.values().filter_map(Value::as_u64).sum::<u64>() as usize,
         );
         rec["tracks"] = Value::Object(pair_tracks);
         out["pairs"] = rec;
     }
-    Some(out)
+    out
 }
 
 /// The targets of the rule after a stored re-pick of `name` (its recorded version `v`): that track and every other
@@ -582,11 +626,8 @@ mod tests {
 
     fn cfg(pin: Option<u32>) -> ServiceConfig {
         ServiceConfig {
-            refine_rule: None,
             bleed_rule: pin,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
+            ..ServiceConfig::default()
         }
     }
 

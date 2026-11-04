@@ -3,7 +3,7 @@
 //! Each train is built bar by bar from a pattern of eighth notes (kick and snare), with a
 //! seeded jitter, dropped hits and swing. The checks name the known tempo, step and bar 1.
 
-use drumspike_core::tempo_detect::{DetectParams, Hit, Role, detect};
+use drumspike_core::tempo_detect::{BeatVoice, DetectParams, Hit, detect};
 
 /// A small deterministic random source (xorshift64*).
 struct Rng(u64);
@@ -83,7 +83,7 @@ fn build(train: &Train, sections: &[Section]) -> (Vec<Hit>, Vec<f64>) {
         let slots = s.kick.len();
         let per_beat = slots / s.beats;
         for _ in 0..s.bars {
-            for (role, pat) in [(Role::Kick, s.kick), (Role::Snare, s.snare)] {
+            for (role, pat) in [(BeatVoice::Kick, s.kick), (BeatVoice::Snare, s.snare)] {
                 for (i, c) in pat.chars().enumerate() {
                     if !matches!(c, 'x' | 'g') || rng.next() < train.drop {
                         continue;
@@ -335,7 +335,7 @@ fn a_waltz_is_three_four_and_a_backbeat_is_four_four() {
 
 #[test]
 fn too_few_hits_and_bad_parameters_are_refused() {
-    let hits: Vec<Hit> = (0..5).map(|i| Hit::new(f64::from(i) * 0.5, Role::Kick)).collect();
+    let hits: Vec<Hit> = (0..5).map(|i| Hit::new(f64::from(i) * 0.5, BeatVoice::Kick)).collect();
     assert!(detect(&hits, &params()).unwrap_err().contains("at least 8"));
     let (hits, _) = build(&Train::default(), &[rock(8, 120.0)]);
     for bad in [
@@ -616,23 +616,26 @@ fn one_and_three(pickup: &str, crash: bool) -> (Vec<Hit>, f64, f64) {
     match pickup {
         "fill" => {
             for i in 0..8 {
-                hits.push(Hit::new(bar1 - 2.0 * beat + f64::from(i) * beat / 4.0, Role::Snare));
+                hits.push(Hit::new(
+                    bar1 - 2.0 * beat + f64::from(i) * beat / 4.0,
+                    BeatVoice::Snare,
+                ));
             }
         }
         "groove" => {
-            hits.push(Hit::new(bar1 - 2.0 * beat, Role::Kick));
-            hits.push(Hit::new(bar1 - beat, Role::Snare));
+            hits.push(Hit::new(bar1 - 2.0 * beat, BeatVoice::Kick));
+            hits.push(Hit::new(bar1 - beat, BeatVoice::Snare));
         }
         _ => {}
     }
     for bar in 0..32 {
         let t = bar1 + f64::from(bar) * 4.0 * beat;
         for b in 0..4 {
-            let role = if b % 2 == 0 { Role::Kick } else { Role::Snare };
+            let role = if b % 2 == 0 { BeatVoice::Kick } else { BeatVoice::Snare };
             hits.push(Hit::new(t + f64::from(b) * beat, role));
         }
         if crash && bar % 4 == 0 {
-            hits.push(Hit::new(t + 0.002, Role::Cymbal));
+            hits.push(Hit::new(t + 0.002, BeatVoice::Cymbal));
         }
     }
     hits.sort_by(|a, b| a.t.total_cmp(&b.t));
@@ -707,7 +710,7 @@ fn groove(seed: u64) -> (Vec<Hit>, f64, f64) {
     let crash = r.next() < 0.3;
     let bar1 = 0.5 + 4.0 * beat;
     let mut hits = Vec::new();
-    let mut add = |t: f64, role: Role, v: f64, r: &mut Rng| {
+    let mut add = |t: f64, role: BeatVoice, v: f64, r: &mut Rng| {
         if r.next() >= drop {
             hits.push(Hit {
                 v,
@@ -724,20 +727,20 @@ fn groove(seed: u64) -> (Vec<Hit>, f64, f64) {
                 continue;
             }
             if fill && i >= 8 {
-                add(t, Role::Snare, 100.0, &mut r);
+                add(t, BeatVoice::Snare, 100.0, &mut r);
                 continue;
             }
             if kp.as_bytes()[i] == b'x' {
-                add(t, Role::Kick, 100.0, &mut r);
+                add(t, BeatVoice::Kick, 100.0, &mut r);
             }
             match sp.as_bytes()[i] {
-                b'x' => add(t, Role::Snare, 100.0, &mut r),
-                b'g' => add(t, Role::Snare, 35.0, &mut r),
+                b'x' => add(t, BeatVoice::Snare, 100.0, &mut r),
+                b'g' => add(t, BeatVoice::Snare, 35.0, &mut r),
                 _ => {}
             }
         }
         if crash && bar >= 0 && bar % 4 == 0 {
-            add(t0, Role::Cymbal, 110.0, &mut r);
+            add(t0, BeatVoice::Cymbal, 110.0, &mut r);
         }
     }
     hits.sort_by(|a, b| a.t.total_cmp(&b.t));
@@ -845,13 +848,13 @@ fn one_isolated_far_hit_does_not_move_the_fit() {
             for (what, stray) in [
                 (
                     "a kick 8 s before the song",
-                    vec![Hit::new(grid(2.0) + off, Role::Kick)],
+                    vec![Hit::new(grid(2.0) + off, BeatVoice::Kick)],
                 ),
                 (
                     "a kick and a snare 20 s after the song",
                     vec![
-                        Hit::new(grid(last + 20.0) + off, Role::Kick),
-                        Hit::new(grid(last + 20.5) + off, Role::Snare),
+                        Hit::new(grid(last + 20.0) + off, BeatVoice::Kick),
+                        Hit::new(grid(last + 20.5) + off, BeatVoice::Snare),
                     ],
                 ),
             ] {
@@ -917,7 +920,7 @@ fn hits_after_the_end_are_dropped_and_a_far_span_is_refused() {
     let (hits, _) = build(&Train::default(), &[rock(48, 120.0)]);
     let base = detect(&hits, &params()).unwrap();
     let mut far = hits.clone();
-    far.push(Hit::new(1e7, Role::Kick));
+    far.push(Hit::new(1e7, BeatVoice::Kick));
     let with_end = DetectParams {
         duration_s: Some(120.0),
         ..params()
@@ -933,7 +936,7 @@ fn hits_after_the_end_are_dropped_and_a_far_span_is_refused() {
     assert!(t.elapsed().as_secs_f64() < 5.0, "{:?}", t.elapsed());
     // two far hits are no isolated hit: the span limit refuses them at once
     let mut two = hits.clone();
-    two.extend([Hit::new(1e5, Role::Kick), Hit::new(1e5 + 0.5, Role::Snare)]);
+    two.extend([Hit::new(1e5, BeatVoice::Kick), Hit::new(1e5 + 0.5, BeatVoice::Snare)]);
     let e = detect(&two, &params()).unwrap_err();
     assert!(e.contains("span"), "{e}");
     assert_eq!(detect(&two, &with_end).unwrap().late, 2);

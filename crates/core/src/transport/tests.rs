@@ -1327,7 +1327,7 @@ const STORED_NORMAL_RENDER_LINUX_ARM64: u64 = 0xb9c1_dfd1_c55b_de64;
 /// P3-20b proof on the generated 30-track session (`DRUMSPIKE_TRACKS_BENCH=<make_session.py folder>`:
 /// 96 kHz files, so the 48 kHz render resamples every track; the hits of `session.json` click): the
 /// normal-speed offline render of 20 s from the start and 10 s from 150 s, hashed. The same test at
-/// `d302d59` (before P3-20b) gives the same hash (`docs/archive/phase3-report.md`, section P3-20b).
+/// `d302d59` (before P3-20b) gives the same hash (P3-20b).
 #[test]
 #[ignore = "proof: needs DRUMSPIKE_TRACKS_BENCH=<make_session.py folder>"]
 fn transport_normal_speed_render_of_the_generated_session_hash() {

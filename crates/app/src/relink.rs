@@ -257,6 +257,11 @@ fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, AppError> {
         .ok_or_else(|| AppError::bad(format!("missing or wrong argument `{key}` (string)")))
 }
 
+/// R3: the handlers of [`RELINK_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 2] = crate::call::routes(RELINK_COMMANDS, |s, ch, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, ch, cmd, args))
+});
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them. The
 /// argument names are those of the Tauri wrappers in `apps/desktop/src-tauri/src/jobs.rs`.
 pub fn dispatch(svc: &Service, _channels: &Arc<Channels>, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
@@ -281,13 +286,7 @@ mod tests {
 
     #[test]
     fn dispatch_ignores_other_commands_and_checks_arguments() {
-        let svc = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = Service::new(crate::ServiceConfig::default());
         let ch = Arc::new(Channels::default());
         assert!(dispatch(&svc, &ch, "project_open", &json!({})).is_none());
         let e = dispatch(&svc, &ch, "relink_search", &json!({"sid": "x"}))

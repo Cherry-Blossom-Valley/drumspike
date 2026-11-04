@@ -1,10 +1,11 @@
 //! Velocities: `engine.peak_in` and `engine.velocity_map`, ported operation by operation.
 
+use crate::dsp::amp_db_max;
 use crate::pyops::{py_round, window};
 
 /// `engine.peak_in(x, t, sr)`: max |x| in `[t - 5 ms, t + 60 ms)`, 0.0 for an empty window.
 #[must_use]
-pub fn peak_in(x: &[f32], t: f64, sr: u32) -> f64 {
+pub(crate) fn peak_in(x: &[f32], t: f64, sr: u32) -> f64 {
     let (i0, i1) = window(x.len(), t, sr, 0.005, 0.060);
     let seg = &x[i0..i1];
     if seg.is_empty() {
@@ -42,7 +43,7 @@ impl Default for VelocityMap {
 /// (P4-3: the loudness histogram; [`velocity_map`] uses the same value).
 #[must_use]
 pub fn peak_db(x: &[f32], t: f64, sr: u32) -> f64 {
-    20.0 * peak_in(x, t, sr).max(1e-9).log10()
+    amp_db_max(peak_in(x, t, sr), 1e-9)
 }
 
 /// #293 (B8): the attack time (ms) of the hit at `t`, in the window of [`peak_in`]: from the first sample that reaches

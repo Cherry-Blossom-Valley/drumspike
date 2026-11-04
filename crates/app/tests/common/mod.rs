@@ -159,13 +159,7 @@ pub fn project(root: &Path, project_name: &str, specs: &[Spec]) -> PathBuf {
 
 /// A service without a model file: the DSP fallback runs.
 pub fn service_dsp() -> Service {
-    Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    })
+    Service::new(ServiceConfig::default())
 }
 
 /// The SHA-256 of a file as lowercase hex (was `detect::model::file_sha256`; the tests hash

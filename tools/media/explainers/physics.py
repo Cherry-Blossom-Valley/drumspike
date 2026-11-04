@@ -1,7 +1,7 @@
 """#246: the numbers and the synthetic signals the explainers show, as plain functions (no Manim).
 
 The signals are synthetic, not recordings: the demo session (#242) is not on main yet. The
-comb-filter numbers are the ones the narration states; tests/test_media_explainers.py checks them.
+comb-filter numbers are the ones the narration states.
 """
 import functools
 import json

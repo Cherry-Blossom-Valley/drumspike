@@ -62,7 +62,7 @@ fn put_field(c: &mut [u8], at: usize, width: usize, s: &str) {
 /// Encode a `bext` chunk body (fixed 602 bytes plus the coding history, NUL-padded to an
 /// even length).
 #[must_use]
-pub fn encode_bext(b: &Bext) -> Vec<u8> {
+pub(crate) fn encode_bext(b: &Bext) -> Vec<u8> {
     let mut c = vec![0u8; BEXT_FIXED_LEN];
     put_field(&mut c, BEXT_DESCRIPTION, 256, &b.description);
     put_field(&mut c, BEXT_ORIGINATOR, 32, &b.originator);
@@ -147,7 +147,7 @@ fn wav_header(spec: &WavSpec, n_frames: usize, bext: Option<&Bext>) -> Vec<u8> {
 
 /// The block size the streaming writer fills and encodes by default: 64 Ki frames (R19
 /// step 2). `export_spikes` writes with it; the block writer takes the size per call.
-pub const WRITE_BLOCK_FRAMES: usize = 64 * 1024;
+pub(crate) const WRITE_BLOCK_FRAMES: usize = 64 * 1024;
 
 // The size hook of the block-writer test (#48): per thread, the length in samples of the
 // largest slice `encode_samples` has encoded since it was armed, `None` while disarmed. A
@@ -226,7 +226,7 @@ pub fn write_wav(path: &Path, spec: &WavSpec, interleaved: &[f32], bext: Option<
 ///
 /// An [`std::io::Error`] when the temporary file cannot be created, written or renamed, or
 /// the error `fill` returns for a block.
-pub fn write_wav_blockwise<F>(
+pub(crate) fn write_wav_blockwise<F>(
     path: &Path,
     spec: &WavSpec,
     n_frames: usize,

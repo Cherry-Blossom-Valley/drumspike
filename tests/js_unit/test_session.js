@@ -1,4 +1,4 @@
-/* js_unit: the session.js late-answer matrix (R17 step 6, #55 per docs/review/R17-plan.md).
+/* js_unit: the session.js late-answer matrix (R17 step 6, #55).
    Each test gets a fresh context: state.js, persist.js and session.js in script order, the
    plan's five hooks wired to test doubles (GLQ, lnReset, auReset, tmLoad, selMem), a stubbed
    B with deferred answers and a manual clock. The four transitions the plan names for this

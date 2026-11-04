@@ -1,4 +1,4 @@
-"""P3-14a: the Inspector (docs/migration/ux-daw-reference.md 3.4, the left zone of the Cubase model). It shows the
+"""P3-14a: the Inspector (UX reference 3.4, the left zone of the Cubase model). It shows the
 selected track: name (editable), colour, role and note, source file and state (Relink when offline), hit counts, the
 detection parameters (the controls of the old params drawer; their round trip is in test_editor.py) and the volume
 and pan of P3-16. View > Show Inspector (check item, Option+I) toggles it; the state is an app setting

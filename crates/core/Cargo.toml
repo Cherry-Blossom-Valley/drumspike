@@ -31,7 +31,7 @@ rustfft = "=6.4.1"
 # P1-5: MIDI export (24,000 PPQ); std only, the parser's rayon feature is not needed.
 midly = { version = "=0.5.3", default-features = false, features = ["std"] }
 # P3-5a: the native transport (crate::transport) behind the feature `audio`. The app turns
-# it on, the PyO3 module does not. cpal and rtrb as in the spike cpal-transport (docs/migration/spikes.md); rubato
+# it on, the PyO3 module does not. cpal and rtrb as in the spike cpal-transport (spike); rubato
 # resamples a track for playback when the device rate differs from the track rate (the app
 # never changes the device rate; controller decision 2026-10-11).
 cpal = { version = "=0.18.2", optional = true }
@@ -43,12 +43,6 @@ workspace = true
 
 [features]
 audio = ["dep:cpal", "dep:rtrb", "dep:rubato"]
-
-# #471: the device probe uses crate::transport, so it builds only with the feature `audio`
-# (a plain `cargo test` must not compile it).
-[[example]]
-name = "clock_probe"
-required-features = ["audio"]
 
 # P2-3: sysctlbyname("hw.physicalcpu") for the intra-op thread count (already in Cargo.lock).
 [target.'cfg(target_os = "macos")'.dependencies]

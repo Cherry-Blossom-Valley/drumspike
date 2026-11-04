@@ -1,4 +1,4 @@
-# cargo-deny policy (R2, engineering review docs/review/engineering-review.md F-2,
+# cargo-deny policy (R2, engineering review F-2,
 # owner go 2026-10-30). Checked by `cargo deny check advisories bans sources licenses`
 # (the CI step is added by the owner push; agents run it locally, gate of #171).
 #

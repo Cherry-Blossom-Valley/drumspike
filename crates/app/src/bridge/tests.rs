@@ -9,16 +9,7 @@ fn bridge() -> Bridge {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("index.html"), "<html><head><title>x</title></head></html>").unwrap();
     std::fs::write(dir.join("a.js"), "1").unwrap();
-    Bridge::new(
-        Service::new(ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        }),
-        dir,
-    )
+    Bridge::new(Service::new(ServiceConfig::default()), dir)
 }
 
 /// The bridge server on a free port, with the test static folder.

@@ -7,7 +7,7 @@
 /// Python `int(f)` for a finite float: truncation toward zero.
 #[inline]
 #[must_use]
-pub fn py_int(f: f64) -> i64 {
+pub(crate) fn py_int(f: f64) -> i64 {
     f as i64
 }
 
@@ -24,7 +24,7 @@ pub fn py_round(f: f64) -> i64 {
 /// 0.2, `round(0.35, 1)` is 0.3 (0.35 is stored below the tie) and `round(-0.04, 1)` is -0.0.
 /// A non-finite value comes back unchanged.
 #[must_use]
-pub fn py_round_digits(f: f64, ndigits: usize) -> f64 {
+pub(crate) fn py_round_digits(f: f64, ndigits: usize) -> f64 {
     if !f.is_finite() {
         return f;
     }

@@ -44,26 +44,27 @@
 //!    pair per bar) lets the local comb read a period that divides the bar in 3; the tracker took it
 //!    for a few beats, and a piece the fit drops keeps the beat numbers it gave (2 beats short).
 
+use crate::rules::TempoRule;
 use crate::tempo::{TempoMap, TempoStep};
 
 /// Default: a new tempo must hold this many bars to become a step.
-pub const DEFAULT_MIN_BARS: u32 = 4;
+pub(crate) const DEFAULT_MIN_BARS: u32 = 4;
 /// Default: smallest tempo step in percent.
-pub const DEFAULT_MIN_STEP_PCT: f64 = 2.0;
+pub(crate) const DEFAULT_MIN_STEP_PCT: f64 = 2.0;
 /// Default tempo range in BPM (P4-8 fix round 2: 240 became 300, so a 250 BPM punk beat is
 /// found as itself and not through a relative).
-pub const DEFAULT_BPM_RANGE: (f64, f64) = (40.0, 300.0);
+pub(crate) const DEFAULT_BPM_RANGE: (f64, f64) = (40.0, 300.0);
 /// Fewest kick and snare hits the detection needs.
 pub const MIN_HITS: usize = 8;
 /// Two hits of the same role closer than this are one hit (two mics of one drum).
-pub const DEDUPE_S: f64 = 0.025;
+pub(crate) const DEDUPE_S: f64 = 0.025;
 /// A hit within this share of a beat of a beat is on the beat.
-pub const ON_BEAT: f64 = 0.125;
+pub(crate) const ON_BEAT: f64 = 0.125;
 /// The velocity of a hit without one (the MIDI export's default).
 pub const DEFAULT_VELOCITY: f64 = 100.0;
 /// Longest span of hits the detection reads (6 hours): a stray time far out is refused, not
 /// tracked beat by beat.
-pub const MAX_SPAN_S: f64 = 6.0 * 3600.0;
+pub(crate) const MAX_SPAN_S: f64 = 6.0 * 3600.0;
 /// A hit with no other hit within this many seconds is left out (isolated).
 pub const ISOLATED_S: f64 = 6.0;
 
@@ -101,9 +102,11 @@ const HALF_TIME_MIN_QUART: f64 = 0.2;
 /// the double counts as the corroborating beat of a half-time backbeat.
 const HALF_TIME_DBL_COMB: f64 = 0.8;
 
-/// The role of a hit; the weight of kick and snare is 1, of other drums 0.5.
+/// The voice of a hit in the beat: the track's role reduced to what the tempo detection
+/// weighs (a hi-hat counts as [`BeatVoice::Other`]); the weight of kick and snare is 1, of
+/// other drums 0.5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
+pub enum BeatVoice {
     /// A kick drum.
     Kick,
     /// A snare drum.
@@ -116,30 +119,30 @@ pub enum Role {
     Other,
 }
 
-impl Role {
+impl BeatVoice {
     /// The role of a document role name (`kick`, `snare`, `tom`, `cymbal`; anything else is
     /// `Other`).
     #[must_use]
-    pub fn from_name(name: &str) -> Role {
+    pub fn from_name(name: &str) -> BeatVoice {
         match name {
-            "kick" => Role::Kick,
-            "snare" => Role::Snare,
-            "tom" => Role::Tom,
-            "cymbal" => Role::Cymbal,
-            _ => Role::Other,
+            "kick" => BeatVoice::Kick,
+            "snare" => BeatVoice::Snare,
+            "tom" => BeatVoice::Tom,
+            "cymbal" => BeatVoice::Cymbal,
+            _ => BeatVoice::Other,
         }
     }
 
     fn weight(self) -> f64 {
         match self {
-            Role::Kick | Role::Snare => 1.0,
-            Role::Tom | Role::Cymbal | Role::Other => 0.5,
+            BeatVoice::Kick | BeatVoice::Snare => 1.0,
+            BeatVoice::Tom | BeatVoice::Cymbal | BeatVoice::Other => 0.5,
         }
     }
 
     /// Kick or snare: the hits the detection needs and the fit quality counts.
     fn is_ks(self) -> bool {
-        matches!(self, Role::Kick | Role::Snare)
+        matches!(self, BeatVoice::Kick | BeatVoice::Snare)
     }
 }
 
@@ -149,7 +152,7 @@ pub struct Hit {
     /// Time in seconds.
     pub t: f64,
     /// The drum.
-    pub role: Role,
+    pub role: BeatVoice,
     /// MIDI velocity 1 to 127 ([`DEFAULT_VELOCITY`] when unknown): weighs the hit in the phase
     /// and the beat tracking, so ghost notes between the beats do not pull the beat.
     pub v: f64,
@@ -158,7 +161,7 @@ pub struct Hit {
 impl Hit {
     /// A hit with the default velocity.
     #[must_use]
-    pub fn new(t: f64, role: Role) -> Hit {
+    pub fn new(t: f64, role: BeatVoice) -> Hit {
         Hit {
             t,
             role,
@@ -186,6 +189,8 @@ pub struct DetectParams {
     /// The length of the tracks in seconds: hits after it are dropped (counted in
     /// [`Detection::late`]). `None`: no limit but [`MAX_SPAN_S`].
     pub duration_s: Option<f64>,
+    /// The tempo referee (#130, #180; R6: the caller resolves the `DRUMSPIKE_TEMPO_RULE` pin).
+    pub rule: TempoRule,
 }
 
 impl Default for DetectParams {
@@ -195,6 +200,7 @@ impl Default for DetectParams {
             min_step_pct: DEFAULT_MIN_STEP_PCT,
             bpm_range: DEFAULT_BPM_RANGE,
             duration_s: None,
+            rule: TempoRule::CURRENT,
         }
     }
 }
@@ -360,7 +366,13 @@ pub fn prepare(hits: &[Hit], until: Option<f64>) -> Prepared {
     let until = until.unwrap_or(f64::INFINITY);
     let mut late = 0;
     let mut out: Vec<Hit> = Vec::with_capacity(hits.len());
-    for role in [Role::Kick, Role::Snare, Role::Tom, Role::Cymbal, Role::Other] {
+    for role in [
+        BeatVoice::Kick,
+        BeatVoice::Snare,
+        BeatVoice::Tom,
+        BeatVoice::Cymbal,
+        BeatVoice::Other,
+    ] {
         let mut hs: Vec<Hit> = hits
             .iter()
             .filter(|h| h.role == role && h.t.is_finite() && h.t >= 0.0)
@@ -514,26 +526,12 @@ fn prior(bpm: f64) -> f64 {
 const HALF_TIME_RATIO: f64 = 2.0;
 const HALF_TIME_MIN_SNARES: f64 = 8.0;
 
-/// #130 tempo-referee version (env `DRUMSPIKE_TEMPO_RULE`; unset counts as 3, the #180
-/// product default). Version 1 pins the shipped referee: with a snare, the backbeat alone
-/// picks the octave and the shares stay out of it. Version 2 corroborates the backbeat
-/// verdict with the sub-beat shares (see [`half_time_backbeat`]). Version 3 adds the
-/// half-time bar 1 of #180 (see `bars`). The detection is read
-/// only: a project analysed before keeps its tempo until it is detected again.
-#[must_use]
-pub fn tempo_rule() -> u32 {
-    parse_rule(std::env::var("DRUMSPIKE_TEMPO_RULE").ok().as_deref())
-}
-
-/// The pin value behind [`tempo_rule`]: `1` and `0` pin the shipped referee, `2` the #130
-/// one, an unset or unparseable value is rule 3. A pure function so its test does not write
-/// the process env, which the parallel detection tests share.
-fn parse_rule(v: Option<&str>) -> u32 {
-    match v {
-        Some(v) => v.parse().unwrap_or(3),
-        None => 3,
-    }
-}
+// The #130 tempo referee is [`DetectParams::rule`] ([`TempoRule`], pin `DRUMSPIKE_TEMPO_RULE`;
+// the #180 product default is version 3). Version 1 pins the shipped referee: with a snare, the
+// backbeat alone picks the octave and the shares stay out of it. Version 2 corroborates the
+// backbeat verdict with the sub-beat shares (see [`half_time_backbeat`]). Version 3 adds the
+// half-time bar 1 of #180 (see `bars`). The detection is read only: a project analysed before
+// keeps its tempo until it is detected again.
 
 /// Backbeat evidence of beat period `p`: snare to snare at 2 beats against 1 and 3 beats, and
 /// against a snare period shorter than 2 beats (2p/3 or 2p/5: then `p` is 3 or 5 true beats,
@@ -619,8 +617,8 @@ struct Global {
 
 fn global_period(hits: &[Hit], params: &DetectParams) -> Result<Global, String> {
     let all = LagHist::new(hits, |_| true, LAG_MAX_S);
-    let n_snare = hits.iter().filter(|h| h.role == Role::Snare).count();
-    let snare = LagHist::new(hits, |h| h.role == Role::Snare && n_snare >= MIN_HITS, LAG_MAX_S);
+    let n_snare = hits.iter().filter(|h| h.role == BeatVoice::Snare).count();
+    let snare = LagHist::new(hits, |h| h.role == BeatVoice::Snare && n_snare >= MIN_HITS, LAG_MAX_S);
     let (lo, hi) = (60.0 / params.bpm_range.1, 60.0 / params.bpm_range.0);
     // Local maxima of the comb, best first, at least 3 % apart.
     let mut peaks: Vec<(f64, f64)> = Vec::new();
@@ -679,7 +677,7 @@ fn global_period(hits: &[Hit], params: &DetectParams) -> Result<Global, String> 
         // #130: with a snare the backbeat picks the octave; since rule 2 its verdict is
         // corroborated by the sub-beat shares before it decides (the half-time backbeat),
         // unless DRUMSPIKE_TEMPO_RULE pins the shipped referee.
-        if tempo_rule() < 2 {
+        if params.rule == TempoRule::Shipped {
             vec![false; rows.len()]
         } else {
             rows.iter()
@@ -1010,7 +1008,7 @@ fn track(hits: &[Hit], pieces: &[Piece], phi_hint: Option<f64>) -> (Vec<f64>, Ve
 struct OnBeat {
     n: i64,
     t: f64,
-    role: Role,
+    role: BeatVoice,
 }
 
 fn assign(hits: &[Hit], beats: &[f64]) -> Vec<OnBeat> {
@@ -1389,15 +1387,15 @@ fn sign_test(a: f64, b: f64) -> f64 {
     (0.5 * (a - b) / (a + b + 1.0).sqrt()).tanh()
 }
 
-fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
+fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64], rule: TempoRule) -> Bars {
     let nb = beats.len();
     let (mut k, mut s, mut cym) = (vec![0.0; nb], vec![0.0; nb], vec![0.0; nb]);
     for o in on {
         let i = o.n as usize;
         match o.role {
-            Role::Kick => k[i] += 1.0,
-            Role::Snare => s[i] += 1.0,
-            Role::Cymbal => cym[i] += 1.0,
+            BeatVoice::Kick => k[i] += 1.0,
+            BeatVoice::Snare => s[i] += 1.0,
+            BeatVoice::Cymbal => cym[i] += 1.0,
             _ => {}
         }
     }
@@ -1411,17 +1409,17 @@ fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
             continue;
         }
         let f = (h.t - beats[i - 1]) / (beats[i] - beats[i - 1]);
-        if matches!(h.role, Role::Snare | Role::Tom) && h.v >= FILL_VELOCITY {
+        if matches!(h.role, BeatVoice::Snare | BeatVoice::Tom) && h.v >= FILL_VELOCITY {
             busy[i - 1] += 1.0;
         }
         if f > ON_BEAT && f < 1.0 - ON_BEAT {
             match h.role {
-                Role::Kick => koff[i - 1] += 1.0,
-                Role::Snare => soff[i - 1] += 1.0,
+                BeatVoice::Kick => koff[i - 1] += 1.0,
+                BeatVoice::Snare => soff[i - 1] += 1.0,
                 _ => {}
             }
         }
-        if h.role == Role::Kick && (0.4..=0.6).contains(&(1.0 - f)) {
+        if h.role == BeatVoice::Kick && (0.4..=0.6).contains(&(1.0 - f)) {
             push[i] += 1.0;
         }
     }
@@ -1446,7 +1444,7 @@ fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
     let fill_end: Vec<f64> = (0..nb)
         .map(|i| f64::from(u8::from(i > 0 && dense(i - 1) && !dense(i))))
         .collect();
-    let first_kick = on.iter().find(|o| o.role == Role::Kick).map(|o| o.n);
+    let first_kick = on.iter().find(|o| o.role == BeatVoice::Kick).map(|o| o.n);
     let class = |v: &[f64], c: i64| -> f64 {
         v.iter()
             .enumerate()
@@ -1477,7 +1475,7 @@ fn bars(hits: &[Hit], on: &[OnBeat], beats: &[f64]) -> Bars {
         let sp = i64::from(s1 > s0);
         let (h0, h1) = (class(&s, sp), class(&s, sp + 2));
         let (hi, lo, hc) = if h0 >= h1 { (h0, h1, sp) } else { (h1, h0, sp + 2) };
-        if tempo_rule() >= 3 && s0 != s1 && hi >= HALF_TIME_MIN_SNARES && hi >= HALF_TIME_RATIO * lo {
+        if rule == TempoRule::HalfTime && s0 != s1 && hi >= HALF_TIME_MIN_SNARES && hi >= HALF_TIME_RATIO * lo {
             (hc + 2, hc, backbeat, sign_test(hi, lo))
         } else {
             let (a, b) = (votes(par), votes(par + 2));
@@ -1730,7 +1728,7 @@ fn track_and_fit(
 ) -> Result<TrackFit, String> {
     let (beats, switches) = track(hits, pcs, phi_hint);
     let on_all = assign(hits, &beats);
-    let bars = bars(hits, &on_all, &beats);
+    let bars = bars(hits, &on_all, &beats, params.rule);
     let on = drop_isolated(&on_all);
     let mut breaks: Vec<i64> = switches
         .iter()

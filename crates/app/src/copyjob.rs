@@ -811,6 +811,11 @@ pub(crate) fn channel_progress(args: &Value, channels: &Arc<Channels>) -> Option
     Some(p)
 }
 
+/// R3: the handlers of [`COPYJOB_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 3] = crate::call::routes(COPYJOB_COMMANDS, |s, ch, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, ch, cmd, args))
+});
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them.
 pub fn dispatch(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     let run = || -> Result<Value, AppError> {
@@ -836,13 +841,7 @@ mod tests {
         let build = d.join("Moved.partial");
         std::fs::create_dir_all(build.join("Audio Files")).unwrap();
         assert!(!build.join(crate::lock::LOCK_FILE).exists());
-        let svc = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = Service::new(crate::ServiceConfig::default());
         svc.set_lock_client("app");
         let mut seen = None;
         svc.clear_stale_partial_with(&build, || {
@@ -857,13 +856,7 @@ mod tests {
         assert!(!build.exists());
         // without a lock client (the tests) it is removed as it is
         std::fs::create_dir_all(&build).unwrap();
-        let plain = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let plain = Service::new(crate::ServiceConfig::default());
         plain.clear_stale_partial(&build).unwrap();
         assert!(!build.exists());
         std::fs::remove_dir_all(&d).unwrap();
@@ -938,13 +931,7 @@ mod tests {
 
     #[test]
     fn dispatch_ignores_other_commands() {
-        let svc = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = Service::new(crate::ServiceConfig::default());
         let ch = Arc::new(Channels::default());
         assert!(dispatch(&svc, &ch, "project_open", &json!({})).is_none());
         assert_eq!(

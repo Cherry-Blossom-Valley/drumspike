@@ -1,6 +1,6 @@
 //! Analysis without a window (P3-11): the `analyze` step of `crates/devtools/src/bin/service_tool.rs`, shared
-//! with the release app's `--analyze` mode, so `tools/parity/check_service.py` can run
-//! the analysis inside a built `.app` (its DSP detector) with `--bin`.
+//! with the release app's `--analyze` mode, so a check can run the analysis inside a built
+//! `.app` (its DSP detector).
 
 use serde_json::{Map, Value, json};
 

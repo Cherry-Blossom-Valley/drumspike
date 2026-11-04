@@ -2,7 +2,7 @@
 //! only). Skips when the folder is absent: `DRUMSPIKE_TEMPO_SAMPLES`, else `~/.cache/drumspike/sessions`.
 //!
 //! The true tempo of each session is the one tempo event of its Pro Tools session file (`.ptx`,
-//! decoded in `docs/migration/phase4-report.md` "P4-8 stage B"); the drum hits of the kick and
+//! decoded in P4-8 stage B); the drum hits of the kick and
 //! snare fall on that grid from 0 s (the session start, bar 1) within a few ms, so the songs were
 //! played to a click at that tempo. The hits come from the DSP analysis of `k in` and `s top`.
 
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track};
 use drumspike_core::tempo::TickMap;
-use drumspike_core::tempo_detect::{DetectParams, Hit, Role, detect};
+use drumspike_core::tempo_detect::{BeatVoice, DetectParams, Hit, detect};
 use drumspike_core::{MixMode, read_wav_mono};
 
 /// Ticks per quarter note of the MIDI export (`export_midi_stored`).
@@ -67,9 +67,13 @@ fn the_real_sessions_give_their_session_tempo_within_half_a_bpm() {
         }
         let mut hits: Vec<Hit> = hit_times(&k, "kick")
             .into_iter()
-            .map(|t| Hit::new(t, Role::Kick))
+            .map(|t| Hit::new(t, BeatVoice::Kick))
             .collect();
-        hits.extend(hit_times(&s, "snare").into_iter().map(|t| Hit::new(t, Role::Snare)));
+        hits.extend(
+            hit_times(&s, "snare")
+                .into_iter()
+                .map(|t| Hit::new(t, BeatVoice::Snare)),
+        );
         let d = detect(&hits, &DetectParams::default()).unwrap();
         println!(
             "{session}: suggested {} BPM (error bar {:.5}), bar 1 confidence {} (backbeat {}, downbeat {}), alternative {:.3} s, meter confidence {} feel {:?}",
@@ -153,9 +157,13 @@ fn tempo_detect_real_bar1() {
         }
         let mut hits: Vec<Hit> = hit_times(&k, "kick")
             .into_iter()
-            .map(|t| Hit::new(t, Role::Kick))
+            .map(|t| Hit::new(t, BeatVoice::Kick))
             .collect();
-        hits.extend(hit_times(&s, "snare").into_iter().map(|t| Hit::new(t, Role::Snare)));
+        hits.extend(
+            hit_times(&s, "snare")
+                .into_iter()
+                .map(|t| Hit::new(t, BeatVoice::Snare)),
+        );
         let d = detect(&hits, &DetectParams::default()).unwrap();
         assert!(
             d.bar1_s < 0.02,
@@ -184,9 +192,13 @@ fn tempo_detect_real_no_false_steps() {
         }
         let mut hits: Vec<Hit> = hit_times(&k, "kick")
             .into_iter()
-            .map(|t| Hit::new(t, Role::Kick))
+            .map(|t| Hit::new(t, BeatVoice::Kick))
             .collect();
-        hits.extend(hit_times(&s, "snare").into_iter().map(|t| Hit::new(t, Role::Snare)));
+        hits.extend(
+            hit_times(&s, "snare")
+                .into_iter()
+                .map(|t| Hit::new(t, BeatVoice::Snare)),
+        );
         let d = detect(&hits, &DetectParams::default()).unwrap();
         assert!(
             d.steps.is_empty(),

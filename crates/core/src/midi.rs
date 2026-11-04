@@ -37,21 +37,21 @@ pub const DEFAULT_PPQ: u16 = 24_000;
 /// Default tempo in BPM (`engine.export_midi(tempo=120.0)`).
 pub const DEFAULT_TEMPO: f64 = 120.0;
 /// Note length in seconds (`end = t + 0.05`).
-pub const NOTE_LENGTH_S: f64 = 0.05;
+pub(crate) const NOTE_LENGTH_S: f64 = 0.05;
 /// Instrument name of the single track.
-pub const TRACK_NAME: &str = "spikes";
+pub(crate) const TRACK_NAME: &str = "spikes";
 /// MIDI channel of a drum instrument (channel 10, zero-based 9).
-pub const DRUM_CHANNEL: u8 = 9;
+pub(crate) const DRUM_CHANNEL: u8 = 9;
 /// Default velocity when an event has none (`e.get("v", 100)`).
 pub const DEFAULT_VELOCITY: i64 = 100;
 /// Largest delta a standard MIDI file can hold (28-bit variable-length quantity): the
 /// limit of the `midly` writer. A longer delta goes through `write_smf`.
-pub const MAX_DELTA: u64 = (1 << 28) - 1;
+pub(crate) const MAX_DELTA: u64 = (1 << 28) - 1;
 /// Largest tick an export accepts (`2^62`): far beyond any session, it keeps the tick
 /// arithmetic inside `i64`. Python has no limit; a time this large is not audio.
-pub const MAX_TICK: i64 = 1 << 62;
+pub(crate) const MAX_TICK: i64 = 1 << 62;
 /// Largest time a map export accepts in seconds (a day): keeps the tick arithmetic exact.
-pub const MAX_SECONDS: f64 = 86_400.0;
+pub(crate) const MAX_SECONDS: f64 = 86_400.0;
 
 /// One event to export: time in seconds and velocity (`{"t": s, "v": int}`).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -122,21 +122,21 @@ impl From<std::io::Error> for MidiError {
 
 /// Seconds per tick, as `PrettyMIDI.__init__` stores it: `60.0 / (initial_tempo * resolution)`.
 #[must_use]
-pub fn tick_scale(ppq: u16, tempo: f64) -> f64 {
+pub(crate) fn tick_scale(ppq: u16, tempo: f64) -> f64 {
     60.0 / (tempo * f64::from(ppq))
 }
 
 /// `PrettyMIDI.time_to_tick(t)` on a fresh object: 0 for `t <= 0`, else `round(t / tick_scale)`
 /// with ties to even.
 #[must_use]
-pub fn time_to_tick(t: f64, tick_scale: f64) -> i64 {
+pub(crate) fn time_to_tick(t: f64, tick_scale: f64) -> i64 {
     if t <= 0.0 { 0 } else { py_round(t / tick_scale) }
 }
 
 /// The `set_tempo` value `pretty_midi` writes: `int(6e7 / (60 / (tick_scale * ppq)))` in
 /// microseconds per quarter note, with the same floating-point steps.
 #[must_use]
-pub fn tempo_meta(ppq: u16, tempo: f64) -> u32 {
+pub(crate) fn tempo_meta(ppq: u16, tempo: f64) -> u32 {
     let ts = tick_scale(ppq, tempo);
     let bpm = 60.0 / (ts * f64::from(ppq));
     (6e7 / bpm) as u32
@@ -207,7 +207,7 @@ enum Kind {
 
 /// An event of the tempo track (track 0).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Meta0 {
+pub(crate) enum Meta0 {
     /// `set_tempo`: microseconds per quarter note.
     Tempo(u32),
     /// `time_signature`: beats and the power of two of the note value (24 clocks, 8 32nds).
@@ -293,7 +293,7 @@ fn write_file(msgs: &[Msg], ppq: u16, track0: &[(u64, Meta0)]) -> Result<Vec<u8>
 /// [`MidiError::Note`] when `note` is outside 0..=127; [`MidiError::Velocity`] when an event
 /// velocity is outside 0..=127; [`MidiError::Tick`] when an event time is not finite or
 /// beyond [`MAX_TICK`].
-pub fn note_events_tm(events: &[MidiEvent], note: i64, tm: &TickMap) -> Result<Vec<NoteEvent>, MidiError> {
+pub(crate) fn note_events_tm(events: &[MidiEvent], note: i64, tm: &TickMap) -> Result<Vec<NoteEvent>, MidiError> {
     let key = u8::try_from(note)
         .ok()
         .filter(|k| *k <= 127)
@@ -349,7 +349,7 @@ fn map_track0(tm: &TickMap, map: &TempoMap) -> Result<Vec<(u64, Meta0)>, MidiErr
 ///
 /// [`MidiError::Map`] when the tempo map, its meter events or `legacy_tempo` are invalid;
 /// otherwise the errors of [`note_events_tm`] and of the file writer ([`MidiError::Tick`]).
-pub fn midi_bytes_map(
+pub(crate) fn midi_bytes_map(
     events: &[MidiEvent],
     note: i64,
     ppq: u16,
@@ -436,7 +436,7 @@ fn marker_events_tm(markers: &[MidiMarker], tm: &TickMap) -> Result<Vec<(u64, Me
 /// [`MidiError::Map`] when the tempo map or `legacy_tempo` is invalid; [`MidiError::Note`],
 /// [`MidiError::Velocity`] or [`MidiError::Tick`] for a track note, velocity or time (or a
 /// marker time) that cannot be encoded.
-pub fn multi_midi_bytes(
+pub(crate) fn multi_midi_bytes(
     tracks: &[MidiTrack],
     markers: &[MidiMarker],
     ppq: u16,
@@ -636,7 +636,7 @@ fn midly_bytes(msgs: &[Msg], ppq: u16, track0: &[(u64, Meta0)]) -> Result<Vec<u8
 
 /// mido's `encode_variable_int`: 7 bits per byte, most significant first, the high bit set
 /// on every byte but the last, no length limit; 0 is one zero byte.
-pub fn push_vlq(out: &mut Vec<u8>, mut v: u64) {
+pub(crate) fn push_vlq(out: &mut Vec<u8>, mut v: u64) {
     let mut b = vec![(v & 0x7F) as u8];
     v >>= 7;
     while v > 0 {

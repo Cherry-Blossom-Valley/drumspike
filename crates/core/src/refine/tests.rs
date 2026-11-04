@@ -1,4 +1,15 @@
+use std::sync::atomic::Ordering;
+
+use super::edge::{EdgeTail, edge_foot};
+use super::reach::refine_reach;
+use super::reference::{convolve_same, hilbert_env, log_envelope};
+use super::track::refine_first_motion_peak;
+use super::walk::{
+    BackTune, FM_SPAN_S, FM_STRICT_MAX_S, FootCap, FootTune, LEAD_IN, Overrun, first_motion_peak, first_motion_traced,
+    floor_before, foot_strict, samples,
+};
 use super::*;
+use crate::velocity::{VelocityMap, velocity_map};
 
 const SR: u32 = 48_000;
 const W: RefineWindow = RefineWindow::DEFAULT;
@@ -661,6 +672,32 @@ fn the_foot_rule_stops_on_the_last_floor_level_sample() {
     }
 }
 
+/// The sample-bound walk with the peak margin `peak_db`, and the foot taken strict ([`foot_strict`], capped by `tune`)
+/// when `tune` is `Some`.
+fn first_motion_mid_rule(
+    x: &[f32],
+    s: i64,
+    sr: u32,
+    prev_mid: Option<i64>,
+    next_mid: Option<i64>,
+    peak_db: f64,
+    tune: Option<FootTune>,
+) -> (i64, BackStep) {
+    first_motion_traced(
+        x,
+        s,
+        sr,
+        prev_mid,
+        next_mid,
+        BackTune {
+            peak_db,
+            tune,
+            edge: None,
+        },
+    )
+    .0
+}
+
 #[test]
 fn the_strict_foot_moves_at_most_the_guard_before_the_version_3_foot() {
     // #101 guard: a shoulder of `len` samples at 0.0112 (between the floor and the threshold) just
@@ -1121,7 +1158,7 @@ fn a_hit_is_not_found_before_the_first_sample_over_the_floor() {
 
 #[test]
 fn the_lead_in_is_off_for_the_product() {
-    // #293, #294: the lead-in joined the bleed before snare hits; the switch stays for the measurement example. It is a
+    // #293, #294: the lead-in joined the bleed before snare hits; no product path turns it on. It is a
     // process-wide flag, so this test does not touch it: the default is off, and a bump 1 ms before the swing is not
     // joined (the first bump test above places the hit at the swing)
     assert!(!LEAD_IN.load(Ordering::Relaxed));

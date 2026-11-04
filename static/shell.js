@@ -1,5 +1,5 @@
 /* Native shell glue (P3-4b, P3-13a). Loaded between backend.js and app.js. In the desktop app the native menu
-   bar (apps/desktop/src-tauri/src/menu.rs) sends the event "menu" {id, path?, sid?}; this file turns it into
+   bar (apps/desktop/src-tauri/src/menu/) sends the event "menu" {id, path?, sid?}; this file turns it into
    the page's own functions (fileNew, saveProjectNow, zoomStep, ...). P3-13a: the menu bar is the only menu;
    the window has no sidebar, no File menu and no ? button. P3-13b: the keys come from static/keymap.js. The page tells the shell the state of the check
    items (snap, follow mode, click, Inspector) and the current project (the Window menu) with every sync.
@@ -19,7 +19,7 @@
     const e = document.activeElement;
     return !!e && (e.tagName === "INPUT" || e.tagName === "TEXTAREA" || e.isContentEditable);
   };
-  /* The accelerators of the native menu come from the key table (static/keymap.js, P3-13b); menu.rs reads the
+  /* The accelerators of the native menu come from the key table (static/keymap.js, P3-13b); menu/keymap.rs reads the
      same table. The menu runs these keys, so app.js must not run them again. Redo with Cmd-Y is a page key (the
      menu has Shift-Cmd-Z only), so app.js keeps Cmd-Y. Keys without Cmd, Control or Option (Space, Tab, Return,
      letters) are shown by the menu too (#300), but only while no text field or dialog has the focus (watchTyping

@@ -1,7 +1,7 @@
 """P4-31: the kick walk of the app (`refine::first_motion_peak`, `parity refine` with `peak_db`) against the Python port of
 the version 3 back-track `tools/onset_guard.py` `walk` with the same peak margin: kick-like hits with a lead-in tone under
 their peak (the margins 33 dB shipped and 29 dB, the kick walk) and with a noise floor, on one track. The walk starts at
-the version 2 time (`rule` 2 of the same binary), as `tools/kick_onset.py` `replay_walk` does."""
+the version 2 time (`rule` 2 of the same binary), as `tools/onset_diag.py` `replay_walk` does."""
 import json
 import subprocess
 import sys

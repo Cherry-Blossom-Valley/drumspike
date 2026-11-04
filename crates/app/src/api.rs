@@ -9,9 +9,9 @@
 //! of the Tauri wrappers (`snake_case` on the wire); the schemas are JSON Schema, draft 2020-12
 //! subset (`type`, `properties`, `required`, `items`, `description`).
 //!
-//! The registry has no behaviour of its own: calling a command stays with the dispatchers of the
-//! modules (`bridge.rs` `invoke`); stage 2 moves them into one `call` function that the bridge,
-//! the command-line tool and the MCP server share.
+//! The registry has no behaviour of its own: calling a command stays with the handlers of the
+//! modules (each module's `HANDLERS`), which `call::run` maps by name (R3); the bridge, the
+//! command-line tool and the MCP server share that one function.
 
 use serde_json::{Value, json};
 
@@ -238,7 +238,7 @@ use Effect::{App, Doc, Files, Read};
 use Run::{Poll, Progress, Quick};
 use Surface::{Agent, Selftest, Window};
 
-/// Every command of the app, in the order of the Tauri handler lists.
+/// Every command of the app, in the order of the Tauri handler list.
 pub static REGISTRY: &[CommandSpec] = &[
     // ---- the app
     cmd(
@@ -1917,13 +1917,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ds_api_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let svc = crate::Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = crate::Service::new(crate::ServiceConfig::default());
         svc.set_home(root.join("home"));
         svc.set_projects_dir(root.join("projects"));
         let b = crate::bridge::Bridge::new(svc, &root);

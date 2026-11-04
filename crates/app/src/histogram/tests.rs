@@ -81,13 +81,7 @@ fn cut_of_event_cut_and_the_marks_follow_the_level_and_spare_edited_hits() {
 
 #[test]
 fn begin_write_holds_the_store_lock_and_refuses_while_another_writes() {
-    let svc = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(crate::ServiceConfig::default());
     let g = svc.begin_write("s").unwrap();
     assert!(svc.inner.jobs.storing("s"), "held while the write runs");
     assert_eq!(
@@ -128,13 +122,7 @@ fn largest_gap_is_the_widest_inner_run_without_a_candidate() {
 
 #[test]
 fn dispatch_ignores_other_commands_and_checks_arguments() {
-    let svc = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(crate::ServiceConfig::default());
     assert!(dispatch(&svc, "project_get", &json!({})).is_none());
     for c in HISTOGRAM_COMMANDS {
         let e = dispatch(&svc, c, &json!({})).unwrap().unwrap_err();

@@ -2,7 +2,7 @@
 //!
 //! The flags only mark hits. Nothing is removed from a hit list: the app shows the flag and
 //! the engineer deletes or keeps the hit. Measurements and the tuning history are in
-//! `docs/archive/phase2-report.md`, section "P2-6 Attribution flags".
+//! (P2-6 Attribution flags).
 //!
 //! # Input and output
 //!
@@ -52,8 +52,8 @@
 //! Band levels: a cascade of RBJ biquads (each stage twice, 24 dB per octave) in `f64`,
 //! direct form II transposed, zero initial state, run over `preroll_ms` before the window
 //! and the window itself; the level is `20 log10(max |y| + 1e-9)` inside the window. The
-//! same recursion as `scipy.signal.sosfilt`, so the Python reference
-//! (`tools/parity/check_attribution.py`) gives the same values.
+//! same recursion as `scipy.signal.sosfilt`, so the Python reference (the former
+//! `tools/parity/check_attribution.py`, removed in refactor 1.5) gave the same values.
 //!
 //! # Resonance
 //!
@@ -71,40 +71,10 @@
 
 use crate::refine::{RefineWindow, refine_sr};
 
-/// The track role as the app names it (`engine.ROLE_CLASSES`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Role {
-    /// Kick drum close mic.
-    Kick,
-    /// Snare close mic.
-    Snare,
-    /// Tom close mic.
-    Tom,
-    /// Hi-hat mic.
-    Hat,
-    /// Overhead or cymbal mic.
-    Cymbal,
-    /// Any other track (no band limit).
-    Other,
-}
-
-/// The kind of one filter stage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FilterKind {
-    /// Second-order lowpass (RBJ cookbook, Q = 1/sqrt(2)).
-    LowPass,
-    /// Second-order highpass (RBJ cookbook, Q = 1/sqrt(2)).
-    HighPass,
-}
-
-/// One stage of a band: the kind and the corner frequency in Hz. Each stage runs twice.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BandStage {
-    /// Lowpass or highpass.
-    pub kind: FilterKind,
-    /// Corner frequency in Hz.
-    pub freq_hz: f64,
-}
+use crate::dsp::broadband_peak_db;
+pub use crate::dsp::{BandStage, FilterKind};
+pub(crate) use crate::dsp::{Biquad, band_peak_db, band_sections, ms_to_samples, percentile};
+use crate::role::Role;
 
 const fn lp(freq_hz: f64) -> BandStage {
     BandStage {
@@ -126,33 +96,6 @@ const BAND_SNARE: [BandStage; 2] = [hp(150.0), lp(2500.0)];
 const BAND_HIGH: [BandStage; 1] = [hp(5000.0)];
 
 impl Role {
-    /// The role for an app role name (`kick`, `snare`, `tom`, `hat`, `cymbal`, `other`).
-    #[must_use]
-    pub fn from_name(name: &str) -> Option<Role> {
-        match name {
-            "kick" => Some(Role::Kick),
-            "snare" => Some(Role::Snare),
-            "tom" => Some(Role::Tom),
-            "hat" => Some(Role::Hat),
-            "cymbal" => Some(Role::Cymbal),
-            "other" => Some(Role::Other),
-            _ => None,
-        }
-    }
-
-    /// The app role name.
-    #[must_use]
-    pub fn name(self) -> &'static str {
-        match self {
-            Role::Kick => "kick",
-            Role::Snare => "snare",
-            Role::Tom => "tom",
-            Role::Hat => "hat",
-            Role::Cymbal => "cymbal",
-            Role::Other => "other",
-        }
-    }
-
     /// The frequency band in which a track of this role is judged: kick below 150 Hz, tom
     /// 50 to 400 Hz, snare 150 to 2,500 Hz, hat and cymbal above 5 kHz, other broadband.
     #[must_use]
@@ -167,99 +110,12 @@ impl Role {
     }
 }
 
-/// Normalised biquad coefficients (`a0` = 1), in the row order of a scipy `sos` section.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Biquad {
-    /// Feed-forward coefficients.
-    pub b: [f64; 3],
-    /// Feedback coefficients `a1`, `a2`.
-    pub a: [f64; 2],
-}
-
-impl Biquad {
-    /// RBJ cookbook lowpass or highpass at `freq_hz`, Q = 1/sqrt(2), for rate `sr`.
-    #[must_use]
-    pub fn new(kind: FilterKind, freq_hz: f64, sr: u32) -> Biquad {
-        let w = 2.0 * std::f64::consts::PI * freq_hz / f64::from(sr);
-        let (cw, sw) = (w.cos(), w.sin());
-        let alpha = sw / (2.0 * std::f64::consts::FRAC_1_SQRT_2);
-        let b = match kind {
-            FilterKind::LowPass => [(1.0 - cw) / 2.0, 1.0 - cw, (1.0 - cw) / 2.0],
-            FilterKind::HighPass => [(1.0 + cw) / 2.0, -(1.0 + cw), (1.0 + cw) / 2.0],
-        };
-        let a0 = 1.0 + alpha;
-        Biquad {
-            b: [b[0] / a0, b[1] / a0, b[2] / a0],
-            a: [-2.0 * cw / a0, (1.0 - alpha) / a0],
-        }
-    }
-}
-
-/// The sections of a band at rate `sr`: every stage twice, in order.
-#[must_use]
-pub fn band_sections(band: &[BandStage], sr: u32) -> Vec<Biquad> {
-    band.iter()
-        .flat_map(|s| {
-            let q = Biquad::new(s.kind, s.freq_hz, sr);
-            [q, q]
-        })
-        .collect()
-}
-
-/// Filter `x[from..to]` through `sections` (direct form II transposed, zero state at
-/// `from`, the recursion of `scipy.signal.sosfilt`) and return
-/// `20 log10(max |y| + 1e-9)` over the samples `y[w0..to]`. `from <= w0 <= to <= x.len()`;
-/// an empty window gives -180 dB.
-#[must_use]
-pub fn band_peak_db(x: &[f32], sections: &[Biquad], from: usize, w0: usize, to: usize) -> f64 {
-    if w0 >= to {
-        return -180.0;
-    }
-    let mut z = vec![[0.0f64; 2]; sections.len()];
-    let mut peak = 0.0f64;
-    for (i, &v) in x[from..to].iter().enumerate() {
-        let mut y = f64::from(v);
-        for (s, zs) in sections.iter().zip(z.iter_mut()) {
-            let out = s.b[0] * y + zs[0];
-            zs[0] = s.b[1] * y - s.a[0] * out + zs[1];
-            zs[1] = s.b[2] * y - s.a[1] * out;
-            y = out;
-        }
-        if from + i >= w0 {
-            peak = peak.max(y.abs());
-        }
-    }
-    20.0 * (peak + 1e-9).log10()
-}
-
-/// The `q`-th percentile (0 to 100) of `v` with numpy's default linear interpolation;
-/// `None` for an empty slice. NaN values are not expected.
-pub fn percentile(v: &[f64], q: f64) -> Option<f64> {
-    if v.is_empty() {
-        return None;
-    }
-    let mut s = v.to_vec();
-    s.sort_by(f64::total_cmp);
-    let pos = q / 100.0 * (s.len() - 1) as f64;
-    let lo = pos.floor() as usize;
-    let hi = (lo + 1).min(s.len() - 1);
-    let frac = pos - lo as f64;
-    Some(s[lo] + (s[hi] - s[lo]) * frac)
-}
-
-/// Milliseconds to samples: `floor(ms * sr / 1000 + 0.5)` (the same rule in the Python
-/// reference; Python's `round` rounds half to even and would differ).
-#[must_use]
-pub fn ms_to_samples(ms: f64, sr: u32) -> i64 {
-    (ms * f64::from(sr) / 1000.0 + 0.5).floor() as i64
-}
-
 /// The calibration of a transfer gain `G(B->A)` from its values (P2-6; P4-14 reuses it): `all` holds the value at
 /// every strong hit of B, `quiet` the values at the strong hits where A has no own hit. The `pct` percentile of
 /// `quiet` when it has at least `min_hits` values, else of `all`; `None` when `all` has fewer than `min_hits` (at
 /// least 1). Returns the gain, the number of values used and whether only quiet values were used.
 #[must_use]
-pub fn calibrate_gain(all: &[f64], quiet: &[f64], pct: f64, min_hits: usize) -> Option<(f64, usize, bool)> {
+pub(crate) fn calibrate_gain(all: &[f64], quiet: &[f64], pct: f64, min_hits: usize) -> Option<(f64, usize, bool)> {
     let min = min_hits.max(1);
     if all.len() < min {
         return None;
@@ -412,6 +268,7 @@ pub struct HitFlags {
 
 impl HitFlags {
     /// True when any flag is set.
+    #[cfg(test)]
     #[must_use]
     pub fn is_flagged(&self) -> bool {
         self.bleed.is_some() || self.resonance.is_some()
@@ -509,13 +366,6 @@ impl Ctx<'_> {
         let ls = self.level(source, target, c, self.own);
         (lt > self.silence && ls > self.silence).then_some(lt - ls)
     }
-}
-
-fn broadband_peak_db(x: &[f32], c: i64, w: (i64, i64)) -> f64 {
-    let n = x.len() as i64;
-    let w0 = (c + w.0).clamp(0, n);
-    let to = (c + w.1).clamp(0, n);
-    band_peak_db(x, &[], w0 as usize, w0 as usize, to as usize)
 }
 
 /// True when `sorted` has a value within `tol` of `v`.

@@ -1,4 +1,4 @@
-# Workspace root for the Rust migration (docs/migration/plan.md, phase 1).
+# Workspace root for the Rust migration (phase 1).
 # Members: crates/core (drumspike-core, the application logic), crates/app (drumspike-app, the
 # service layer and commands, P3-3a), crates/devtools (drumspike-devtools: the parity, bench, cache_tool,
 # service_tool and ds-bridge binaries, LAYOUT 2),
@@ -8,7 +8,7 @@ resolver = "2"
 members = ["crates/core", "crates/app", "crates/devtools", "apps/desktop/src-tauri"]
 
 [workspace.package]
-version = "0.9.19"
+version = "0.9.20-refactored"
 edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0"

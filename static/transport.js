@@ -1,4 +1,4 @@
-/* Drum Spike v2 — transport (R17 step 4, #55 per docs/review/R17-plan.md)
+/* Drum Spike v2 — transport (R17 step 4, #55)
    The native transport clock (AC: sync, slew, seek, play/pause/mix and the playhead and
    meter messages), the hit audition (AU, P4-40d) and the serial command queue (_appQ,
    appCmd) with the playhead arithmetic (appPos). Plain script (no build step), loaded

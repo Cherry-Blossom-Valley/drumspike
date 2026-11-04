@@ -9,11 +9,11 @@ rules that coding agents follow in this repository, read `AGENTS.md`.
 | Part | Path | What it is |
 |---|---|---|
 | Core | `crates/core/` | Rust crate `drumspike-core`. Audio reader, peaks, refinement, velocities, MIDI, spike WAVs, project format, detection. No UI. See `crates/core/README.md`. |
-| App service | `crates/app/` | Rust crate `drumspike-app`. The commands of the desktop app as plain functions, with no Tauri dependency. It also has the test bridge `ds-bridge` (debug builds only) and `service_tool` (the service commands and `core-analyze` for the parity checks). |
+| App service | `crates/app/` | Rust crate `drumspike-app`. The commands of the desktop app as plain functions, with no Tauri dependency. The developer binaries (`ds-bridge`, the test bridge for debug builds; `service_tool`; `parity`; `bench`) are in `crates/devtools/`. |
 | Desktop app | `apps/desktop/` | Tauri 2 shell (crate `drumspike-desktop` in `apps/desktop/src-tauri/`). It wraps the UI in `static/`. The scripts for build, test and release are in `apps/desktop/scripts/`. |
-| UI | `static/` | The editor: plain JavaScript (`app.js`, `backend.js`, `lanes-gl.js`, `tiles-worker.js`). It runs in the app (IPC backend) and, for the tests, in Chromium against the test bridge. |
-| Tests | `tests/`, `tools/parity/` | pytest and the parity scripts. An earlier Python reference implementation was retired; its results are frozen in `tests/golden/`. |
-| Python tools | `tools/` | Research tools (calibration kit, tom bleed, onset checks, `fix_metric.py`, `firm_fixes.py`) and `tools/check_exports.py`, the independent export checker. They are not part of the app. Each has a user: a test, an import or a documented command. |
+| UI | `static/` | The editor: plain JavaScript: `app.js` (boot), the page modules and one script per feature (the list is in `ARCHITECTURE.md`). It runs in the app (IPC backend) and, for the tests, in Chromium against the test bridge. |
+| Tests | `tests/`, `tools/parity/` | pytest (`tests/test_golden.py` is the golden regression) and the corpus and session generators. An earlier Python reference implementation was retired; its results are frozen in `tests/golden/`. |
+| Python tools | `tools/` | Research tools (calibration kit, onset checks, `fix_metric.py`, `firm_fixes.py`), `tools/check_exports.py` (the independent export checker), `tools/identity.py` and the CI scope tool. `tools/README.md` lists them all. They are not part of the app. Each has a user: a test, an import or a documented command. |
 
 ## 2. Prerequisites
 
@@ -24,7 +24,7 @@ Drum Spike builds on macOS, on an Apple Silicon Mac. The desktop app builds for 
 - Rust: install `rustup` only. The file `rust-toolchain.toml` pins the channel `stable`, and
   `cargo` reads it. Never run `rustup default` for this project.
 - `uv` and Python 3.12. `.python-version` holds `3.12`. `uv` downloads that Python when it is missing.
-- Node 22 (the version the builds on arm64-mac use) and `npm`, for the Tauri command line tool. The only npm package is `@tauri-apps/cli`
+- Node 22 (the version the builds on the Apple silicon runner use) and `npm`, for the Tauri command line tool. The only npm package is `@tauri-apps/cli`
   (`apps/desktop/package.json`).
 - No ffmpeg for the app and the tests. Only the media tools in `tools/media/` use it.
 - `just` is optional. The `justfile` wraps the test commands (`just --list`).
@@ -208,17 +208,16 @@ these steps on a tag push and makes a draft release; a maintainer publishes it.
 
 ## 8. Tests
 
-The gates have short names (G1 to G6) that tickets and pull requests use. Run long gates in the
+The gates have short names (G1 to G5) that tickets and pull requests use. Run long gates in the
 background with a log file.
 
 | Gate | Host | Commands |
 |---|---|---|
-| G1 Rust | arm64-mac and x86-mac | `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace` |
-| G2 pytest | arm64-mac and x86-mac | build the tools (section 3), then `DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 DRUMSPIKE_REQUIRE_CORE=1 uv run pytest -q` |
-| G3 app build | arm64-mac only | `(cd apps/desktop && npm ci && npx tauri build --debug --target aarch64-apple-darwin --bundles app)` |
-| G4 app e2e through the bridge | arm64-mac and x86-mac | `cargo build -p drumspike-devtools --bin ds-bridge`, then `DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 uv run pytest -m e2e_app --no-cov` |
-| G5 app self-test in the built app | arm64-mac only | `apps/desktop/scripts/self-test.sh <scenario>` |
-| G6 x86 check | x86-mac | `X86_REPO=~/src/<clone> X86_RUN=~/x86run-<job> ~/x86run.sh` |
+| G1 Rust | Apple silicon and Intel Mac | `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace` |
+| G2 pytest | Apple silicon and Intel Mac | build the tools (section 3), then `DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 DRUMSPIKE_REQUIRE_CORE=1 uv run pytest -q` |
+| G3 app build | Apple silicon Mac only | `(cd apps/desktop && npm ci && npx tauri build --debug --target aarch64-apple-darwin --bundles app)` |
+| G4 app e2e through the bridge | Apple silicon and Intel Mac | `cargo build -p drumspike-devtools --bin ds-bridge`, then `DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 uv run pytest -m e2e_app --no-cov` |
+| G5 app self-test in the built app | Apple silicon Mac only | `apps/desktop/scripts/self-test.sh <scenario>` |
 
 A faster loop without the browser tests:
 
@@ -226,15 +225,34 @@ A faster loop without the browser tests:
 uv run pytest -m "not e2e_app"
 ```
 
-The media tests (explainer scripts, recordings and renders under `tools/media/`) are marked
+The media tests (for example `tests/test_check_paths.py` and `tests/test_media_demo_session.py`) are marked
 `media` and deselected by default (#277); run them on purpose with `uv run pytest -q -m media`
 (or `DRUMSPIKE_MEDIA_TESTS=1`), and only when a fundamental app feature or the media sources
 and tools changed.
 
-Coverage gate: `static/app.js`, `backend.js`, `lanes-gl.js` and `tiles-worker.js` at least 85 % of
-lines each (`DRUMSPIKE_JS_FAIL_UNDER`), measured by Chromium in `tests/e2e_app`. It applies to G2 and
+Coverage gate: each JS file in `JS_FILES` (`tests/jscov.py`) at least 70 % of its lines
+(`DRUMSPIKE_JS_FAIL_UNDER`), measured by Chromium in `tests/e2e_app`. It applies to G2 and
 to G4 (`-m e2e_app` alone). There is no Python coverage gate any more: no product code is Python.
-Do not delete or weaken a test.
+
+### Test rules
+
+1. A test names a domain invariant or a user-visible result in its name or first line.
+2. A test may be deleted when it only pins a removed script, or a fixed bug that another test
+   covers. The PR names the deleted test and the covering test.
+3. Never delete or weaken: `tests/test_golden.py`, `tests/frozen.py`, `tests/golden/*`,
+   `tests/test_exports.py`, `tests/test_layer_exports.py`, the identity snapshot, the ENST gate,
+   the real-session check, the tests of source-audio safety and of project format 1 loading, and
+   `tools/check_private.py`.
+4. JS coverage is gated per file, not as a total. The floor is 70 % of the lines of each file
+   (`JS_FAIL_UNDER` in `tests/jscov.py`), measured by `tests/e2e_app`. The files are the 31 of
+   `JS_FILES`: the boot script `app.js`, the page modules `state.js`, `util.js`, `persist.js`, `edit.js`,
+   `transport.js`, `render.js`, `session.js`, `backend.js`, `lanes-gl.js`, `tiles-worker.js` and
+   `keymap.js`, and the feature scripts `export.js`, `addtracks.js`, `mixer.js`, `histograms.js`,
+   `learn.js`, `layer.js`, `velocity.js`, `followstrip.js`, `tempomap.js`, `markers.js`, `wave.js`,
+   `commands.js`, `files.js`, `review.js`, `analysis.js`, `plugins.js`, `status.js`,
+   `inspector.js` and `tracks.js`. A new script in `static/` enters `JS_FILES` at the same floor.
+5. Every public Tauri command and every core entry point has a test.
+6. A script in `tools/` has a test or a documented command.
 
 ### Rules for the gates
 
@@ -292,8 +310,9 @@ debug app.
 ### Parity and benchmark
 
 The retired Python reference is frozen in `tests/golden/` (`tests/frozen.py` reads and checks the
-values; a reference keyed by changed inputs fails). The parity scripts are in `tools/parity/`, and
-each has its usage in its docstring. The benchmark:
+values; a reference keyed by changed inputs fails). `tests/test_golden.py` runs every frozen case of
+decode, peaks, refinement, velocities, MIDI and spike export and the analysis; each group has a
+planted-fault test. The benchmark:
 
 ```bash
 ./target/release/bench
@@ -307,9 +326,9 @@ Changes to the workflow files need a maintainer.
 
 | Job | Runner | What it does |
 |---|---|---|
-| `test` | self-hosted Intel Mac (labels `self-hosted`, `x86-mac`) | format, clippy, `cargo test --workspace`, the release tools, `ds-bridge`, then pytest (all tests except the arm64 share of `e2e_app`) |
-| `e2e-arm64` | self-hosted Apple Silicon Mac (label `arm64-mac`) | the other share of the `e2e_app` tests (`tests/e2e_shards.json`); on `main` pushes, by hand, and on a pull request of this repository with the label `ci:e2e` |
-| `js-coverage` | `ubuntu-latest` | merges the JS coverage of both shares and gates 85 % per file |
+| `test` | self-hosted Intel Mac (the runner labels are in `ci.yml`) | format, clippy, `cargo test --workspace`, the release tools, `ds-bridge`, then pytest (all tests except the arm64 share of `e2e_app`) |
+| `e2e-arm64` | self-hosted Apple Silicon Mac (the runner labels are in `ci.yml`) | the other share of the `e2e_app` tests (`tests/e2e_shards.json`); on `main` pushes, by hand, and on a pull request of this repository with the label `ci:e2e` |
+| `js-coverage` | `ubuntu-latest` | merges the JS coverage of both shares and gates the per-file floor (`tests/jscov.py`) |
 | `desktop-app` | self-hosted Apple Silicon Mac | by hand only (`run_desktop`): debug app (G3), self-test scenarios (G5), ad hoc `.dmg` |
 
 The jobs set `DRUMSPIKE_REQUIRE_CORE` and `DRUMSPIKE_REQUIRE_APP`, so a missing tool or binary fails
@@ -327,8 +346,8 @@ the Intel app on the Intel runner and makes a draft release.
 
 ## 10. Self-hosted runners
 
-The macOS jobs run on two self-hosted runners: an Apple Silicon Mac (label `arm64-mac`, also the
-signing Mac of the release) and an Intel Mac (label `x86-mac`). Each runner needs Rust through
+The macOS jobs run on two self-hosted runners: an Apple Silicon Mac (also the
+signing Mac of the release) and an Intel Mac. Each runner needs Rust through
 `rustup`, `uv`, Node 22 and the Xcode command line tools; the jobs put `~/.cargo/bin`,
 `~/.local/bin` and `/usr/local/bin` on their `PATH` themselves. Heavy jobs on a runner that is also
 a development machine wait for a host lock, when the machine has one, so a test run and a local
@@ -344,14 +363,14 @@ Only variables that the code reads. "Test" means a variable for tests and script
 | `DRUMSPIKE_PROJECTS` | folder for new projects (default `~/Documents/Drumspike Projects`) | `crates/app/src/lifecycle.rs` |
 | `DRUMSPIKE_AUTOSAVE_SECONDS` | autosave interval (default 120) | `crates/app/src/autosave.rs` |
 | `DRUMSPIKE_AUDIO` | `null` selects the null audio device | `crates/core/src/transport/device.rs` |
-| `DRUMSPIKE_MASTER_GAIN` | master gain after the mix; `0` is silent | `crates/app/src/transport.rs` |
+| `DRUMSPIKE_MASTER_GAIN` | master gain after the mix; `0` is silent | `crates/app/src/transport/mod.rs` |
 | `DRUMSPIKE_STARTUP_LOG` | `1` prints the cold-start time of the app and exits; `info` also prints `app_info` | `apps/desktop/src-tauri/src/lib.rs` |
 | `DRUMSPIKE_OPEN_LOG` | debug builds: file that gets every path the app receives | `apps/desktop/src-tauri/src/open.rs` |
 | `DRUMSPIKE_REQUIRE_CORE` | test: the tests that call `parity` or `service_tool` fail instead of skip when the binary is missing | `tests/core_tools.py`, `tests/test_golden.py` |
 | `DRUMSPIKE_FROZEN`, `DRUMSPIKE_FROZEN_EXTERNAL` | test: `replay` (default) reads the frozen references; `record` and `check` need the retired code; the folder of large values | `tests/frozen.py` |
 | `DRUMSPIKE_REQUIRE_APP` | test: `e2e_app` tests fail instead of skip | `tests/e2e_app/conftest.py` |
 | `DRUMSPIKE_BRIDGE` | test: path of the `ds-bridge` binary | `tests/e2e_app/conftest.py` |
-| `DRUMSPIKE_JS_FAIL_UNDER` | test: line coverage gate for the JS files (default 85) | `tests/jscov.py` |
+| `DRUMSPIKE_JS_FAIL_UNDER` | test: line coverage floor for each JS file (default 70) | `tests/jscov.py` |
 | `DRUMSPIKE_SELFTEST_SESSION`, `_WAVS`, `_SYNTH`, `_TRACKS`, `_DIR`, `_AUDIBLE`, `_APP` | self-test inputs and options | `apps/desktop/scripts/self-test.sh` |
 | `DRUMSPIKE_SIGN_IDENTITY`, `DRUMSPIKE_NOTARY_PROFILE` | owner only: names for the signed release | `apps/desktop/scripts/release.sh` |
 | `DRUMSPIKE_BUNDLE_DIR` | output folder of the bundle and the `.dmg` | `build-dmg.sh`, `release.sh` |

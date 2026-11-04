@@ -1,7 +1,7 @@
 //! P4-6a: Learn marks. The engineer marks good ("this") and bad ("not") hits of a track with a
 //! range or a selected hit; the project keeps the marks in the track's `learn` object. The scorer
 //! is P4-6b ([`crate::learn_score`]), the filter P4-6c ([`crate::learn_filter`];
-//! `docs/migration/concept-learn-mode.md`).
+//! the Learn mode concept).
 //!
 //! P4-6c: the first "not" example of a track whose filter is off turns the filter on, with the
 //! threshold following the examples (`auto`; [`first_not_turns_on`]). K alone never turns it on.
@@ -32,7 +32,7 @@
 //! mark wins. A track holds at most [`MAX_EXAMPLES`] examples of each kind.
 //!
 //! Document: `learn` is a key of the track that the document passes through
-//! (`docs/migration/project-format.md`): `{on, threshold, auto, method, marks: [{id, kind, t0, t1, at}], dropped?}`
+//! (project format 1): `{on, threshold, auto, method, marks: [{id, kind, t0, t1, at}], dropped?}`
 //! (P4-38e: `dropped`, the times of the Learn hits the engineer deleted, before the Hitpoint shift; a Learn change
 //! does not bring them back, [`crate::learn_filter::note_dropped`]).
 
@@ -44,6 +44,7 @@ use crate::commands::{assign_events, events_set_out};
 use crate::error::AppError;
 use crate::export::hit_times;
 use crate::media::mix_mode;
+use crate::policy::{Mark, is_marked};
 use crate::registry::{lock, resolve_shared};
 
 /// The commands of this card, as the route map names them.
@@ -1004,11 +1005,10 @@ impl Service {
                     continue;
                 }
                 let shift = shift_s_of(o);
-                let flag = |e: &drumspike_core::project::Event, k: &str| e.extra.get(k) == Some(&Value::Bool(true));
                 let near: Vec<f64> = o
                     .events()
                     .iter()
-                    .filter(|e| !flag(e, "cut") && !flag(e, "bleed"))
+                    .filter(|e| !is_marked(*e, Mark::Cut) && !is_marked(*e, Mark::Bleed))
                     .map(|e| e.t - shift)
                     .filter(|&h| h >= t0 - BLEED_REACH && h <= t1 + BLEED_REACH)
                     .collect();
@@ -1109,7 +1109,7 @@ impl Service {
         let events = self.track_events(sid, name)?;
         let mut ops = Vec::new();
         for (i, e) in events.iter().enumerate().rev() {
-            if e.get("learned") != Some(&Value::Bool(true)) || e.get("added") != Some(&Value::Bool(true)) {
+            if !is_marked(e, Mark::Learned) || e.get("added") != Some(&Value::Bool(true)) {
                 continue;
             }
             let Some(t) = e.get("t").and_then(Value::as_f64) else {
@@ -1236,11 +1236,13 @@ impl Service {
 /// P4-35: `(hits, out)` of a hit list: the hits the loudness cut and the bleed rules left in play
 /// (`hits`) and, of those, the ones the Learn filter took out (`"filtered": true`).
 fn out_counts(events: &[Value]) -> (usize, usize) {
-    let on = |e: &Value, k: &str| e.get(k) == Some(&Value::Bool(true));
-    let live: Vec<&Value> = events.iter().filter(|e| !on(e, "cut") && !on(e, "bleed")).collect();
+    let live: Vec<&Value> = events
+        .iter()
+        .filter(|e| !is_marked(*e, Mark::Cut) && !is_marked(*e, Mark::Bleed))
+        .collect();
     (
         live.len(),
-        live.iter().filter(|e| on(e, crate::learn_filter::FILTERED)).count(),
+        live.iter().filter(|&&e| is_marked(e, Mark::Filtered)).count(),
     )
 }
 
@@ -1269,6 +1271,11 @@ fn opt_f64(args: &Value, key: &str) -> Result<Option<f64>, AppError> {
             .ok_or_else(|| AppError::bad(format!("wrong argument `{key}` (number)"))),
     }
 }
+
+/// R3: the handlers of [`LEARN_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 7] = crate::call::routes(LEARN_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
 
 /// Run a command of this card for the bridge and `call`; `None` when `cmd` is not one of them.
 #[must_use]

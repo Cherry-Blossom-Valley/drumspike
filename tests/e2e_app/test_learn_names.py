@@ -10,7 +10,7 @@ from app_support import inspect_track, open_project
 from test_learn_filter import NAME, idle, js, lrf, mark_hit  # noqa: F401  (the fixture)
 from test_subtracks import has_model
 
-MENU_RS = "apps/desktop/src-tauri/src/menu.rs"
+MENU_RS = "apps/desktop/src-tauri/src/menu/items.rs"
 
 
 def key_titles(page):

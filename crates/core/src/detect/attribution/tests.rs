@@ -113,9 +113,9 @@ fn inputs<'a>(snare: &'a [f32], tom: &'a [f32], s_hits: &[i64], t_all: &[i64]) -
 #[test]
 fn role_names_round_trip_and_bands_are_fixed() {
     for r in [Role::Kick, Role::Snare, Role::Tom, Role::Hat, Role::Cymbal, Role::Other] {
-        assert_eq!(Role::from_name(r.name()), Some(r));
+        assert_eq!(Role::parse(r.as_str()), Some(r));
     }
-    assert_eq!(Role::from_name("drums"), None);
+    assert_eq!(Role::parse("drums"), None);
     assert_eq!(Role::Tom.band(), &[hp(50.0), lp(400.0)]);
     assert_eq!(Role::Hat.band(), Role::Cymbal.band());
     assert!(Role::Other.band().is_empty());
@@ -148,25 +148,6 @@ fn band_peak_db_measures_in_band_and_skips_the_preroll() {
     let m = f64::from(x[w0..w0 + 480].iter().fold(0.0f32, |m, v| m.max(v.abs())));
     assert!((b - 20.0 * (m + 1e-9).log10()).abs() < 1e-12);
     assert_eq!(band_peak_db(&x, &low, 10, 20, 20), -180.0);
-}
-
-#[test]
-fn percentile_follows_numpy_linear() {
-    let v = [3.0, 1.0, 2.0, 10.0];
-    assert_eq!(percentile(&v, 0.0), Some(1.0));
-    assert_eq!(percentile(&v, 100.0), Some(10.0));
-    assert_eq!(percentile(&v, 50.0), Some(2.5));
-    // numpy.percentile([1, 2, 3, 10], 90) = 7.9
-    assert!((percentile(&v, 90.0).unwrap() - 7.9).abs() < 1e-12);
-    assert_eq!(percentile(&[], 50.0), None);
-}
-
-#[test]
-fn ms_to_samples_rounds_half_up() {
-    assert_eq!(ms_to_samples(5.0, 44_100), 221);
-    assert_eq!(ms_to_samples(0.5, SR), 24);
-    assert_eq!(ms_to_samples(-0.5, SR), -24);
-    assert_eq!(ms_to_samples(0.0, SR), 0);
 }
 
 #[test]
@@ -307,7 +288,7 @@ fn resonance_flags_a_low_rise_on_tom_tracks_only() {
     let mk = |role: Role, rises: &[f64]| TrackInput {
         id: "x".into(),
         role,
-        instrument: role.name().into(),
+        instrument: role.as_str().into(),
         signal: &sig,
         hits: rises
             .iter()

@@ -38,6 +38,7 @@ use drumspike_core::velocity::{peak_db, velocity_of_db};
 use serde_json::{Map, Value, json};
 
 use crate::media::mix_mode;
+use crate::policy::{Mark, is_marked, mark};
 use crate::registry::{Shared, lock};
 use crate::roles::is_sample_name;
 use crate::{Service, ServiceConfig};
@@ -99,7 +100,7 @@ pub fn switched_on(params: Option<&Map<String, Value>>) -> bool {
 /// True for an event the rule added (`"flam": true`).
 #[must_use]
 pub fn is_flam(e: &Event) -> bool {
-    e.extra.get("flam") == Some(&Value::Bool(true))
+    is_marked(e, Mark::Flam)
 }
 
 /// An edited hit (added by hand, moved or restored): the rule never removes it.
@@ -138,9 +139,9 @@ pub fn with_flams(
         }
         let db = peak_db(x, s.t, sr);
         let mut e = Event::new(s.t, velocity_of_db(db, &map));
-        e.extra.insert("flam".into(), Value::Bool(true));
+        mark(&mut e, Mark::Flam);
         if cut.is_some_and(|c| db < c) {
-            e.extra.insert("cut".into(), Value::Bool(true));
+            mark(&mut e, Mark::Cut);
         }
         out.push(e);
         n += 1;
@@ -324,11 +325,8 @@ mod tests {
 
     fn cfg(pin: Option<u32>) -> ServiceConfig {
         ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
             flam_rule: pin,
-            cross_bleed: None,
-            ghost_gate: None,
+            ..ServiceConfig::default()
         }
     }
 

@@ -878,7 +878,7 @@ impl Service {
         self.export_layer_to(sid, name, None)
     }
 
-    /// The leftover of a failed layer render (campaign 0.9.6 S3, docs/review/test-campaign-0.9.6/117):
+    /// The leftover of a failed layer render (campaign 0.9.6 S3):
     /// a folder named like the target file plus a `<target>.drumspike` sidecar blocked every later
     /// render with 400 "the path is a folder" until the folder was removed by hand. Only the proven
     /// leftover shape is cleared: an empty folder at the target with the `<target>.drumspike`
@@ -1057,6 +1057,39 @@ fn get_json(job: Option<&LayerJob>) -> Value {
             })
         }
     }
+}
+
+/// R3: the handlers of [`LAYER_COMMANDS`] and of `track_layer_wave` for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 5] = {
+    let [a, b, c, d] = crate::call::routes(LAYER_COMMANDS, |s, _, cmd, args| {
+        crate::call::json_reply(cmd, dispatch(s, cmd, args))
+    });
+    [
+        a,
+        b,
+        c,
+        d,
+        crate::call::Route {
+            name: "track_layer_wave",
+            run: wave,
+        },
+    ]
+};
+
+/// `track_layer_wave`: the window `start`/`end` defaults to the whole file (0 to `i64::MAX`).
+fn wave(
+    s: &Service,
+    _: &std::sync::Arc<crate::reply::Channels>,
+    _: &str,
+    args: &Value,
+) -> Result<crate::reply::Reply, AppError> {
+    s.track_layer_wave(
+        crate::command_policy::arg_str(args, "sid")?,
+        crate::command_policy::arg_str(args, "name")?,
+        args.get("start").and_then(Value::as_i64).unwrap_or(0),
+        args.get("end").and_then(Value::as_i64).unwrap_or(i64::MAX),
+    )
+    .map(crate::reply::Reply::Bytes)
 }
 
 /// Run a command of the layer for the bridge, the command line and the MCP server; `None` when `cmd`
@@ -1275,13 +1308,7 @@ mod tests {
 
     #[test]
     fn dispatch_knows_its_commands_only() {
-        let s = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let s = Service::new(crate::ServiceConfig::default());
         assert!(dispatch(&s, "nope", &json!({})).is_none());
         assert_eq!(
             dispatch(&s, "track_layer_get", &json!({})).unwrap().unwrap_err().code,

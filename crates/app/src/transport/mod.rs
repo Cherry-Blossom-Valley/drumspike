@@ -48,7 +48,7 @@
 //! `end: true`. Each message is a `webview.eval` in the app (Tauri sends channel messages
 //! under 8 KiB that way). Measured in P3-15a: going from 30 Hz to 4 Hz lowers the `WebKit`
 //! allocator scavenger only from about 3.8 % to 3.3 % of a core; the 60 Hz drawing of the page
-//! keeps it busy (`docs/archive/phase3-report.md`, section P3-15a). The message format:
+//! keeps it busy (P3-15a). The message format:
 //! `{sid, epoch, t_ns, frame, rate, pos, playing, speed, underruns, reopens, end}`.
 //! `pos` (seconds) is the heard position at `t_ns` (the monotonic clock of the process, as
 //! `transport_status` reports it): the callback's playback timestamp, extrapolated. The UI
@@ -89,7 +89,7 @@
 //! changes its speed in the running stream: the change is the seek of the play (the rings drain
 //! and refill at the new rate). No transport open: it opens at that speed. A play without
 //! `speed` is normal speed. Both designs of the card were measured on the 30-track session
-//! (`docs/archive/phase3-report.md`, section P3-20b): the change in the running stream is the faster, a
+//! (P3-20b): the change in the running stream is the faster, a
 //! close and reopen at the new speed pays the device open. A seek keeps the speed; a reopen
 //! after a device change keeps it too.
 //!
@@ -138,12 +138,15 @@ use crate::registry::lock;
 use crate::{Progress, Service};
 
 mod audition;
+mod handlers;
 mod meter;
 mod plan;
 mod playhead;
 
 pub use audition::PlayWindow;
 pub(crate) use audition::{Audition, spawn_audition};
+pub(crate) use handlers::HANDLERS;
+pub use handlers::dispatch;
 pub use meter::METER_PERIOD;
 pub(crate) use meter::{meter_message, next_meter_due};
 #[cfg(test)]

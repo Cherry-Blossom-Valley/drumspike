@@ -5,6 +5,7 @@ The static checks read index.html: every local link and asset exists, every anch
 GitHub links point at the planned repository, no script or host outside the list is loaded, and
 the page weighs under 5 MB. The browser checks render it in Chromium at 375 and 1440 px in both
 themes: no sideways scroll, the theme tokens apply, and screenshots go to SHOTS for the coordinator.
+The help checks: static/help is built from docs/guide and is up to date (#255).
 """
 
 import html.parser
@@ -96,7 +97,10 @@ def parsed():
     return page
 
 
-def test_local_links_and_assets_exist():
+def test_every_link_resolves_and_github_links_point_at_the_planned_repository():
+    """Every local link, asset and anchor of the page resolves; every guide link points into
+    this repository on GitHub and resolves to an existing docs/guide file; every other GitHub
+    link points at the planned repository (or the owner's Sponsors page)."""
     page = parsed()
     missing = []
     for ref in page.links + page.assets:
@@ -112,6 +116,20 @@ def test_local_links_and_assets_exist():
         if not (SITE / urlparse(ref).path).is_file():
             missing.append(ref)
     assert not missing, f"links or assets that do not resolve: {missing}"
+
+    guide = [ref for ref in page.links if "docs/guide" in ref]
+    assert guide, "the page has no guide links"
+    broken = []
+    for ref in guide:
+        prefix = REPO + "/blob/main/"
+        if not ref.startswith(prefix) or not (ROOT / ref[len(prefix):]).is_file():
+            broken.append(ref)
+    assert not broken, f"guide links that do not resolve: {broken}"
+
+    github = [ref for ref in page.links + page.assets if urlparse(ref).hostname == "github.com"]
+    assert github, "the page has no GitHub links"
+    wrong = [ref for ref in github if not ref.startswith(REPO) and ref != SPONSORS]
+    assert not wrong, f"GitHub links outside {REPO}: {wrong}"
 
 
 def test_every_video_has_a_poster_and_an_allowed_source():
@@ -145,44 +163,11 @@ def test_every_video_has_a_poster_and_an_allowed_source():
     assert seen == VIDEO_NAMES, f"the page must embed exactly the built videos, found {sorted(seen)}"
 
 
-def test_guide_links_resolve_to_existing_guide_files():
-    """Every guide link on the page points into this repository on GitHub and resolves to an
-    existing docs/guide file."""
-    page = parsed()
-    guide = [ref for ref in page.links if "docs/guide" in ref]
-    assert guide, "the page has no guide links"
-    broken = []
-    for ref in guide:
-        prefix = REPO + "/blob/main/"
-        if not ref.startswith(prefix) or not (ROOT / ref[len(prefix):]).is_file():
-            broken.append(ref)
-    assert not broken, f"guide links that do not resolve: {broken}"
-
-
 def test_the_licence_line_is_exact():
     """Ticket #398: the licence line is exactly 'Drum Spike is free and open source (Apache-2.0).'"""
     text = INDEX.read_text(encoding="utf-8")
     line = "Drum Spike is free and open source (Apache-2.0)."
     assert line in text, f"the page must carry the exact licence line: {line}"
-
-
-def test_no_em_dash_in_the_page_and_the_guide():
-    """Ticket #400: no em-dash (U+2014) in site/index.html or docs/guide/*.md."""
-    files = [INDEX, *sorted((ROOT / "docs" / "guide").glob("*.md"))]
-    offenders = []
-    for f in files:
-        text = f.read_text(encoding="utf-8")
-        if "\u2014" in text:
-            offenders.append(f.relative_to(ROOT))
-    assert not offenders, f"em-dash (U+2014) found in: {offenders}"
-
-
-def test_github_links_point_at_the_planned_repository():
-    page = parsed()
-    github = [ref for ref in page.links + page.assets if "github.com" in ref]
-    assert github, "the page has no GitHub links"
-    wrong = [ref for ref in github if not ref.startswith(REPO) and ref != SPONSORS]
-    assert not wrong, f"GitHub links outside {REPO}: {wrong}"
 
 
 def test_only_known_hosts_and_no_scripts_from_elsewhere():
@@ -296,3 +281,36 @@ def test_build_site_copies_the_page_its_assets_and_the_videos(tmp_path):
     n, size, missing = build_site.build(tmp_path / "out", vids)
     assert missing == [] and (tmp_path / "out" / "index.html").is_file() and n > len(VIDEO_NAMES)
     assert build_site.build(tmp_path / "out2", None)[2] == []
+
+
+# ---------------- #255: the help is built from docs/guide, the one source of the text ----------------
+# `tools/build_help.py --check` fails when a guide chapter is missing from static/help or a
+# page is stale, so a new chapter (or an edit) cannot ship without the manual. The manifest
+# titles must be the first heading of the chapter.
+
+def build_help():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("build_help", ROOT / "tools" / "build_help.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_every_guide_chapter_is_in_the_help():
+    mod = build_help()
+    chapters = mod.chapters()
+    assert chapters, "docs/guide has no chapters"
+    manifest = __import__("json").loads((ROOT / "static" / "help" / "index.json").read_text())["chapters"]
+    files = [c["file"] for c in manifest]
+    for p in chapters:
+        assert p.stem + ".html" in files, f"guide chapter missing from the help: {p.name}"
+    for c in manifest:
+        assert (ROOT / "static" / "help" / c["file"]).is_file(), f"help page missing: {c['file']}"
+
+
+def test_the_help_build_is_up_to_date():
+    import subprocess
+    import sys
+    r = subprocess.run([sys.executable, str(ROOT / "tools" / "build_help.py"), "--check"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr

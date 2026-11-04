@@ -5,13 +5,7 @@ fn svc(tag: &str) -> (Service, PathBuf) {
     let d = std::env::temp_dir().join(format!("ds_roles_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
-    let s = Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let s = Service::new(ServiceConfig::default());
     s.set_home(&d);
     (s, d)
 }
@@ -541,6 +535,13 @@ fn names_outside_the_scheme_have_no_role() {
 }
 
 #[test]
+fn the_default_note_of_each_role_is_the_user_table_and_unknown_names_take_36() {
+    let names = ["kick", "snare", "tom", "hat", "cymbal", "other", "bass", "", "Kick"];
+    let notes: Vec<i64> = names.iter().map(|r| default_note(r)).collect();
+    assert_eq!(notes, [36, 38, 48, 42, 49, 36, 36, 36, 36]);
+}
+
+#[test]
 fn the_note_table_equals_the_page() {
     let js =
         std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../static/app.js")).unwrap();
@@ -668,13 +669,7 @@ fn presets_are_saved_listed_loaded_and_replaced() {
 
 #[test]
 fn presets_need_a_home_folder() {
-    let s = Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let s = Service::new(ServiceConfig::default());
     // the environment of the test run may set DRUMSPIKE_HOME; only the error path is checked then
     if s.home().is_none() {
         assert_eq!(s.kit_presets_list().unwrap_err().code, 409);

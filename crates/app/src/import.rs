@@ -191,6 +191,11 @@ fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, AppError> {
     opt_str(args, key)?.ok_or_else(|| AppError::bad(format!("missing or wrong argument `{key}` (string)")))
 }
 
+/// R3: the handlers of [`IMPORT_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 2] = crate::call::routes(IMPORT_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them. The
 /// argument names are those of the Tauri wrappers in `apps/desktop/src-tauri/src/import.rs`.
 #[must_use]

@@ -1,0 +1,1488 @@
+app_info {}
+  page: ok {core_version,detector,chain}
+  agent: ok {core_version,detector,chain}
+app_info min
+  page: ok {core_version,detector,chain}
+  agent: ok {core_version,detector,chain}
+app_info null
+  page: ok {core_version,detector,chain}
+  agent: ok {core_version,detector,chain}
+app_info wrong
+  page: ok {core_version,detector,chain}
+  agent: ok {core_version,detector,chain}
+about_info {}
+  page: err 404 unknown command about_info
+  agent: err 404 unknown command about_info
+about_info min
+  page: err 404 unknown command about_info
+  agent: err 404 unknown command about_info
+about_info null
+  page: err 404 unknown command about_info
+  agent: err 404 unknown command about_info
+about_info wrong
+  page: err 404 unknown command about_info
+  agent: err 404 unknown command about_info
+feedback_send {}
+  page: err 400 payload must be a JSON object
+  agent: err 404 unknown command feedback_send
+feedback_send min
+  page: err 400 kind must be bug, improvement or other
+  agent: err 404 unknown command feedback_send
+feedback_send null
+  page: err 400 payload must be a JSON object
+  agent: err 404 unknown command feedback_send
+feedback_send wrong
+  page: err 400 payload must be a JSON object
+  agent: err 404 unknown command feedback_send
+about_third_party {}
+  page: err 404 unknown command about_third_party
+  agent: err 404 unknown command about_third_party
+about_third_party min
+  page: err 404 unknown command about_third_party
+  agent: err 404 unknown command about_third_party
+about_third_party null
+  page: err 404 unknown command about_third_party
+  agent: err 404 unknown command about_third_party
+about_third_party wrong
+  page: err 404 unknown command about_third_party
+  agent: err 404 unknown command about_third_party
+open_link {}
+  page: err 404 unknown command open_link
+  agent: err 404 unknown command open_link
+open_link min
+  page: err 404 unknown command open_link
+  agent: err 404 unknown command open_link
+open_link null
+  page: err 404 unknown command open_link
+  agent: err 404 unknown command open_link
+open_link wrong
+  page: err 404 unknown command open_link
+  agent: err 404 unknown command open_link
+open_url {}
+  page: err 404 unknown command open_url
+  agent: err 404 unknown command open_url
+open_url min
+  page: err 404 unknown command open_url
+  agent: err 404 unknown command open_url
+open_url null
+  page: err 404 unknown command open_url
+  agent: err 404 unknown command open_url
+open_url wrong
+  page: err 404 unknown command open_url
+  agent: err 404 unknown command open_url
+startup_mark {}
+  page: err 404 unknown command startup_mark
+  agent: err 404 unknown command startup_mark
+startup_mark min
+  page: err 404 unknown command startup_mark
+  agent: err 404 unknown command startup_mark
+startup_mark null
+  page: err 404 unknown command startup_mark
+  agent: err 404 unknown command startup_mark
+startup_mark wrong
+  page: err 404 unknown command startup_mark
+  agent: err 404 unknown command startup_mark
+transport_play {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command transport_play
+transport_play min
+  page: err 404 no such project
+  agent: err 404 unknown command transport_play
+transport_play null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command transport_play
+transport_play wrong
+  page: err 400 wrong argument `start` (number)
+  agent: err 404 unknown command transport_play
+transport_stop {}
+  page: ok {open,playing,frame,rate,pos,epoch}
+  agent: err 404 unknown command transport_stop
+transport_stop min
+  page: ok {open,playing,frame,rate,pos,epoch}
+  agent: err 404 unknown command transport_stop
+transport_stop null
+  page: ok {open,playing,frame,rate,pos,epoch}
+  agent: err 404 unknown command transport_stop
+transport_stop wrong
+  page: ok {open,playing,frame,rate,pos,epoch}
+  agent: err 404 unknown command transport_stop
+transport_seek {}
+  page: err 400 missing argument `position` (number)
+  agent: err 404 unknown command transport_seek
+transport_seek min
+  page: err 409 the transport is not open: press play first
+  agent: err 404 unknown command transport_seek
+transport_seek null
+  page: err 400 missing argument `position` (number)
+  agent: err 404 unknown command transport_seek
+transport_seek wrong
+  page: err 400 wrong argument `position` (number)
+  agent: err 404 unknown command transport_seek
+transport_mix {}
+  page: ok {applied,tracks_audible,latency_ms,t_ns}
+  agent: err 404 unknown command transport_mix
+transport_mix min
+  page: ok {applied,tracks_audible,latency_ms,t_ns}
+  agent: err 404 unknown command transport_mix
+transport_mix null
+  page: ok {applied,tracks_audible,latency_ms,t_ns}
+  agent: err 404 unknown command transport_mix
+transport_mix wrong
+  page: err 400 `mute` must be an object {track: bool}
+  agent: err 404 unknown command transport_mix
+transport_clicks {}
+  page: ok {enabled,volume,applied}
+  agent: err 404 unknown command transport_clicks
+transport_clicks min
+  page: ok {enabled,volume,applied}
+  agent: err 404 unknown command transport_clicks
+transport_clicks null
+  page: ok {enabled,volume,applied}
+  agent: err 404 unknown command transport_clicks
+transport_clicks wrong
+  page: err 400 wrong argument `volume` (number)
+  agent: err 404 unknown command transport_clicks
+transport_status {}
+  page: ok {open,epoch,t_ns,master,reopens,lost,last_start_ms,last_reopen,clicks,master_db,choice,note,audition}
+  agent: err 404 unknown command transport_status
+transport_status min
+  page: ok {open,epoch,t_ns,master,reopens,lost,last_start_ms,last_reopen,clicks,master_db,choice,note,audition}
+  agent: err 404 unknown command transport_status
+transport_status null
+  page: ok {open,epoch,t_ns,master,reopens,lost,last_start_ms,last_reopen,clicks,master_db,choice,note,audition}
+  agent: err 404 unknown command transport_status
+transport_status wrong
+  page: ok {open,epoch,t_ns,master,reopens,lost,last_start_ms,last_reopen,clicks,master_db,choice,note,audition}
+  agent: err 404 unknown command transport_status
+track_set_role {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_set_role min
+  page: err 400 `role` must be one of kick, snare, tom, hat, cymbal, other
+  agent: err 400 `role` must be one of kick, snare, tom, hat, cymbal, other
+track_set_role null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_set_role wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_set_mix {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_set_mix min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_set_mix null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_set_mix wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+transport_master {}
+  page: err 400 missing argument `volume_db` (number)
+  agent: err 404 unknown command transport_master
+transport_master min
+  page: ok {volume_db,applied}
+  agent: err 404 unknown command transport_master
+transport_master null
+  page: err 400 missing argument `volume_db` (number)
+  agent: err 404 unknown command transport_master
+transport_master wrong
+  page: err 400 wrong argument `volume_db` (number)
+  agent: err 404 unknown command transport_master
+outputs_list {}
+  page: ok {devices,choice,current,note,null_output,master_db}
+  agent: err 404 unknown command outputs_list
+outputs_list min
+  page: ok {devices,choice,current,note,null_output,master_db}
+  agent: err 404 unknown command outputs_list
+outputs_list null
+  page: ok {devices,choice,current,note,null_output,master_db}
+  agent: err 404 unknown command outputs_list
+outputs_list wrong
+  page: ok {devices,choice,current,note,null_output,master_db}
+  agent: err 404 unknown command outputs_list
+output_select {}
+  page: ok {devices,choice,current,note,null_output,master_db}
+  agent: err 404 unknown command output_select
+output_select min
+  page: ok {devices,choice,current,note,null_output,master_db}
+  agent: err 404 unknown command output_select
+output_select null
+  page: ok {devices,choice,current,note,null_output,master_db}
+  agent: err 404 unknown command output_select
+output_select wrong
+  page: err 400 wrong argument `device` (string or null)
+  agent: err 404 unknown command output_select
+project_open {}
+  page: err 400 missing or wrong argument `path` (string)
+  agent: err 400 missing argument `path` (string)
+project_open min
+  page: err 404 no .drumspike document at <root>/missing
+  agent: err 404 no .drumspike document at <root>/missing
+project_open null
+  page: err 400 missing or wrong argument `path` (string)
+  agent: err 400 missing argument `path` (string)
+project_open wrong
+  page: err 400 missing or wrong argument `path` (string)
+  agent: err 400 wrong argument `path`: expected string
+project_get {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_get min
+  page: err 404 no such project
+  agent: err 404 no such project
+project_get null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_get wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+project_list {}
+  page: ok [0]
+  agent: ok [0]
+project_list min
+  page: ok [0]
+  agent: ok [0]
+project_list null
+  page: ok [0]
+  agent: ok [0]
+project_list wrong
+  page: ok [0]
+  agent: err 400 wrong argument `shape`: expected string
+tracks_get {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tracks_get min
+  page: err 404 no such project
+  agent: err 404 no such project
+tracks_get null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tracks_get wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+events_get {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+events_get min
+  page: err 404 no such project
+  agent: err 404 no such project
+events_get null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+events_get wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+events_set {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+events_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+events_set null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+events_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+peaks_info {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command peaks_info
+peaks_info min
+  page: err 404 no such project
+  agent: err 404 unknown command peaks_info
+peaks_info null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command peaks_info
+peaks_info wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command peaks_info
+peaks_tile {}
+  page: err 400 missing or wrong argument `level` (integer)
+  agent: err 404 unknown command peaks_tile
+peaks_tile min
+  page: err 404 no such project
+  agent: err 404 unknown command peaks_tile
+peaks_tile null
+  page: err 400 missing or wrong argument `level` (integer)
+  agent: err 404 unknown command peaks_tile
+peaks_tile wrong
+  page: err 400 missing or wrong argument `level` (integer)
+  agent: err 404 unknown command peaks_tile
+samples_window {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command samples_window
+samples_window min
+  page: err 404 no such project
+  agent: err 404 unknown command samples_window
+samples_window null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command samples_window
+samples_window wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command samples_window
+analyze_start {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+analyze_start min
+  page: err 404 no such project
+  agent: err 404 no such project
+analyze_start null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+analyze_start wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+analyze_status {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+analyze_status min
+  page: ok {state,tracks}
+  agent: ok {state,tracks}
+analyze_status null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+analyze_status wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+reanalyze_selection {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+reanalyze_selection min
+  page: err 400 the range must be 0 <= t0 < t1 in seconds (got 0 to 0)
+  agent: err 400 the range must be 0 <= t0 < t1 in seconds (got 0 to 0)
+reanalyze_selection null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+reanalyze_selection wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+export_midi {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_midi min
+  page: err 404 no such project
+  agent: err 404 no such project
+export_midi null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_midi wrong
+  page: err 400 `dest` must be a string
+  agent: err 400 wrong argument `sid`: expected string
+export_spikes {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_spikes min
+  page: err 404 no such project
+  agent: err 404 no such project
+export_spikes null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_spikes wrong
+  page: err 400 `events` must be a list
+  agent: err 400 wrong argument `sid`: expected string
+export_all {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_all min
+  page: err 404 no such project
+  agent: err 404 no such project
+export_all null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_all wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+velocities_recompute {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+velocities_recompute min
+  page: err 404 no such project
+  agent: err 404 no such project
+velocities_recompute null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+velocities_recompute wrong
+  page: err 400 `events` must be a list
+  agent: err 400 wrong argument `sid`: expected string
+project_new {}
+  page: ok {sid,name,folder,document,dirty,format,created,modified,settings,order,tracks}
+  agent: ok {sid,name,folder,document,dirty,format,created,modified,settings,order,tracks}
+project_new min
+  page: ok {sid,name,folder,document,dirty,format,created,modified,settings,order,tracks}
+  agent: ok {sid,name,folder,document,dirty,format,created,modified,settings,order,tracks}
+project_new null
+  page: ok {sid,name,folder,document,dirty,format,created,modified,settings,order,tracks}
+  agent: ok {sid,name,folder,document,dirty,format,created,modified,settings,order,tracks}
+project_new wrong
+  page: err 400 wrong argument `name` (string)
+  agent: err 400 wrong argument `name`: expected string
+project_save {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_save min
+  page: err 404 no such project
+  agent: err 404 no such project
+project_save null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_save wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+project_clean_check {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_clean_check min
+  page: err 404 no such project
+  agent: err 404 no such project
+project_clean_check null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_clean_check wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+project_save_as {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_save_as min
+  page: err 400 name required
+  agent: err 400 name required
+project_save_as null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_save_as wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+project_close {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_close min
+  page: err 404 no such project
+  agent: err 404 no such project
+project_close null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_close wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+project_rename {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_rename min
+  page: err 404 no such project
+  agent: err 404 no such project
+project_rename null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_rename wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+tracks_reorder {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tracks_reorder min
+  page: err 404 no such project
+  agent: err 404 no such project
+tracks_reorder null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tracks_reorder wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_set_note {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_set_note min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_set_note null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_set_note wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_set_follow {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_set_follow min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_set_follow null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_set_follow wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_rename {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_rename min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_rename null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_rename wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+app_settings_get {}
+  page: ok {audio_output,master_db}
+  agent: ok {audio_output,master_db}
+app_settings_get min
+  page: ok {audio_output,master_db}
+  agent: ok {audio_output,master_db}
+app_settings_get null
+  page: ok {audio_output,master_db}
+  agent: ok {audio_output,master_db}
+app_settings_get wrong
+  page: ok {audio_output,master_db}
+  agent: ok {audio_output,master_db}
+app_settings_set {}
+  page: err 400 missing or wrong argument `key` (string)
+  agent: err 400 missing argument `key` (string)
+app_settings_set min
+  page: ok {key,value}
+  agent: ok {key,value}
+app_settings_set null
+  page: err 400 missing or wrong argument `key` (string)
+  agent: err 400 missing argument `key` (string)
+app_settings_set wrong
+  page: err 400 missing or wrong argument `key` (string)
+  agent: err 400 wrong argument `key`: expected string
+project_recent {}
+  page: ok [6]
+  agent: ok [6]
+project_recent min
+  page: ok [6]
+  agent: ok [6]
+project_recent null
+  page: ok [6]
+  agent: ok [6]
+project_recent wrong
+  page: ok [6]
+  agent: ok [6]
+project_recent_clear {}
+  page: ok {cleared}
+  agent: ok {cleared}
+project_recent_clear min
+  page: ok {cleared}
+  agent: ok {cleared}
+project_recent_clear null
+  page: ok {cleared}
+  agent: ok {cleared}
+project_recent_clear wrong
+  page: ok {cleared}
+  agent: ok {cleared}
+peaks_build_start {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+peaks_build_start min
+  page: err 404 no such project
+  agent: err 404 no such project
+peaks_build_start null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+peaks_build_start wrong
+  page: err 400 `tracks` must be a list
+  agent: err 400 wrong argument `sid`: expected string
+peaks_build_status {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+peaks_build_status min
+  page: ok {state,tracks}
+  agent: ok {state,tracks}
+peaks_build_status null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+peaks_build_status wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+shell_sync {}
+  page: err 404 unknown command shell_sync
+  agent: err 404 unknown command shell_sync
+shell_sync min
+  page: err 404 unknown command shell_sync
+  agent: err 404 unknown command shell_sync
+shell_sync null
+  page: err 404 unknown command shell_sync
+  agent: err 404 unknown command shell_sync
+shell_sync wrong
+  page: err 404 unknown command shell_sync
+  agent: err 404 unknown command shell_sync
+shell_typing {}
+  page: err 404 unknown command shell_typing
+  agent: err 404 unknown command shell_typing
+shell_typing min
+  page: err 404 unknown command shell_typing
+  agent: err 404 unknown command shell_typing
+shell_typing null
+  page: err 404 unknown command shell_typing
+  agent: err 404 unknown command shell_typing
+shell_typing wrong
+  page: err 404 unknown command shell_typing
+  agent: err 404 unknown command shell_typing
+open_paths_take {}
+  page: err 404 unknown command open_paths_take
+  agent: err 404 unknown command open_paths_take
+open_paths_take min
+  page: err 404 unknown command open_paths_take
+  agent: err 404 unknown command open_paths_take
+open_paths_take null
+  page: err 404 unknown command open_paths_take
+  agent: err 404 unknown command open_paths_take
+open_paths_take wrong
+  page: err 404 unknown command open_paths_take
+  agent: err 404 unknown command open_paths_take
+quit_app {}
+  page: err 404 unknown command quit_app
+  agent: err 404 unknown command quit_app
+quit_app min
+  page: err 404 unknown command quit_app
+  agent: err 404 unknown command quit_app
+quit_app null
+  page: err 404 unknown command quit_app
+  agent: err 404 unknown command quit_app
+quit_app wrong
+  page: err 404 unknown command quit_app
+  agent: err 404 unknown command quit_app
+app_ready {}
+  page: err 404 unknown command app_ready
+  agent: err 404 unknown command app_ready
+app_ready min
+  page: err 404 unknown command app_ready
+  agent: err 404 unknown command app_ready
+app_ready null
+  page: err 404 unknown command app_ready
+  agent: err 404 unknown command app_ready
+app_ready wrong
+  page: err 404 unknown command app_ready
+  agent: err 404 unknown command app_ready
+splash_painted {}
+  page: err 404 unknown command splash_painted
+  agent: err 404 unknown command splash_painted
+splash_painted min
+  page: err 404 unknown command splash_painted
+  agent: err 404 unknown command splash_painted
+splash_painted null
+  page: err 404 unknown command splash_painted
+  agent: err 404 unknown command splash_painted
+splash_painted wrong
+  page: err 404 unknown command splash_painted
+  agent: err 404 unknown command splash_painted
+splash_dismiss {}
+  page: err 404 unknown command splash_dismiss
+  agent: err 404 unknown command splash_dismiss
+splash_dismiss min
+  page: err 404 unknown command splash_dismiss
+  agent: err 404 unknown command splash_dismiss
+splash_dismiss null
+  page: err 404 unknown command splash_dismiss
+  agent: err 404 unknown command splash_dismiss
+splash_dismiss wrong
+  page: err 404 unknown command splash_dismiss
+  agent: err 404 unknown command splash_dismiss
+export_existing {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_existing min
+  page: err 404 no such project
+  agent: err 404 no such project
+export_existing null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_existing wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+export_dest_set {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_dest_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+export_dest_set null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_dest_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+export_markers_set {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_markers_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+export_markers_set null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_markers_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+export_compensate_set {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_compensate_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+export_compensate_set null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_compensate_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+export_last_get {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_last_get min
+  page: err 404 no such project
+  agent: err 404 no such project
+export_last_get null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_last_get wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+export_last_set {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_last_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+export_last_set null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_last_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+export_drag_prepare {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command export_drag_prepare
+export_drag_prepare min
+  page: err 404 no such project
+  agent: err 404 unknown command export_drag_prepare
+export_drag_prepare null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command export_drag_prepare
+export_drag_prepare wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command export_drag_prepare
+export_drag_take {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command export_drag_take
+export_drag_take min
+  page: err 404 no such project
+  agent: err 404 unknown command export_drag_take
+export_drag_take null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command export_drag_take
+export_drag_take wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command export_drag_take
+reveal_path {}
+  page: err 404 unknown command reveal_path
+  agent: err 404 unknown command reveal_path
+reveal_path min
+  page: err 404 unknown command reveal_path
+  agent: err 404 unknown command reveal_path
+reveal_path null
+  page: err 404 unknown command reveal_path
+  agent: err 404 unknown command reveal_path
+reveal_path wrong
+  page: err 404 unknown command reveal_path
+  agent: err 404 unknown command reveal_path
+legacy_list {}
+  page: err 400 missing or wrong argument `folder` (string)
+  agent: err 400 missing argument `folder` (string)
+legacy_list min
+  page: err 404 no such folder: <root>/missing
+  agent: err 404 no such folder: <root>/missing
+legacy_list null
+  page: err 400 missing or wrong argument `folder` (string)
+  agent: err 400 missing argument `folder` (string)
+legacy_list wrong
+  page: err 400 wrong argument `folder` (string)
+  agent: err 400 wrong argument `folder`: expected string
+project_import {}
+  page: err 400 missing or wrong argument `session_dir` (string)
+  agent: err 400 missing argument `session_dir` (string)
+project_import min
+  page: err 404 no such session folder: <root>/missing
+  agent: err 404 no such session folder: <root>/missing
+project_import null
+  page: err 400 missing or wrong argument `session_dir` (string)
+  agent: err 400 missing argument `session_dir` (string)
+project_import wrong
+  page: err 400 wrong argument `session_dir` (string)
+  agent: err 400 wrong argument `session_dir`: expected string
+tracks_scan {}
+  page: ok {files,rejected,guessed,elapsed_ms}
+  agent: err 400 missing argument `paths` (list of strings)
+tracks_scan min
+  page: ok {files,rejected,guessed,elapsed_ms}
+  agent: ok {files,rejected,guessed,elapsed_ms}
+tracks_scan null
+  page: ok {files,rejected,guessed,elapsed_ms}
+  agent: err 400 missing argument `paths` (list of strings)
+tracks_scan wrong
+  page: err 400 `paths` must be a list
+  agent: err 400 wrong argument `paths`: expected list of strings
+tracks_add {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tracks_add min
+  page: err 404 no such project
+  agent: err 404 no such project
+tracks_add null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tracks_add wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+tracks_remove {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tracks_remove min
+  page: err 404 no such project
+  agent: err 404 no such project
+tracks_remove null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tracks_remove wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+tracks_restore {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command tracks_restore
+tracks_restore min
+  page: err 404 no such project
+  agent: err 404 unknown command tracks_restore
+tracks_restore null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command tracks_restore
+tracks_restore wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command tracks_restore
+kit_presets_list {}
+  page: ok [0]
+  agent: ok [0]
+kit_presets_list min
+  page: ok [0]
+  agent: ok [0]
+kit_presets_list null
+  page: ok [0]
+  agent: ok [0]
+kit_presets_list wrong
+  page: ok [0]
+  agent: ok [0]
+kit_preset_save {}
+  page: err 400 missing or wrong argument `name` (string)
+  agent: err 400 missing argument `name` (string)
+kit_preset_save min
+  page: err 400 `rules` must be a list
+  agent: err 400 `rules` must be a list
+kit_preset_save null
+  page: err 400 missing or wrong argument `name` (string)
+  agent: err 400 missing argument `name` (string)
+kit_preset_save wrong
+  page: err 400 missing or wrong argument `name` (string)
+  agent: err 400 wrong argument `name`: expected string
+kit_preset_load {}
+  page: err 400 missing or wrong argument `name` (string)
+  agent: err 400 missing argument `name` (string)
+kit_preset_load min
+  page: err 404 no kit preset named "zz"
+  agent: err 404 no kit preset named "zz"
+kit_preset_load null
+  page: err 400 missing or wrong argument `name` (string)
+  agent: err 400 missing argument `name` (string)
+kit_preset_load wrong
+  page: err 400 missing or wrong argument `name` (string)
+  agent: err 400 wrong argument `name`: expected string
+project_consolidate {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_consolidate min
+  page: err 404 no such project
+  agent: err 404 no such project
+project_consolidate null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_consolidate wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+job_status {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+job_status min
+  page: ok {state}
+  agent: ok {state}
+job_status null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+job_status wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+job_cancel {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+job_cancel min
+  page: ok {sid,cancelling}
+  agent: ok {sid,cancelling}
+job_cancel null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+job_cancel wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+project_relink {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_relink min
+  page: err 404 no such project
+  agent: err 404 no such project
+project_relink null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+project_relink wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+relink_search {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+relink_search min
+  page: err 404 no such project
+  agent: err 404 no such project
+relink_search null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+relink_search wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_histograms {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_histograms min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_histograms null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_histograms wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_repick {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_repick min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_repick null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_repick wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_velocity_set {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_velocity_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_velocity_set null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_velocity_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_params_set {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_params_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_params_set null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_params_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+events_edit {}
+  page: err 400 missing or wrong argument `ops` (list)
+  agent: err 400 missing argument `sid` (string)
+events_edit min
+  page: err 400 `ops` must not be empty
+  agent: err 400 `ops` must not be empty
+events_edit null
+  page: err 400 missing or wrong argument `ops` (list)
+  agent: err 400 missing argument `sid` (string)
+events_edit wrong
+  page: err 400 missing or wrong argument `ops` (list)
+  agent: err 400 wrong argument `sid`: expected string
+track_shift_set {}
+  page: err 400 missing or wrong argument `shift_samples` (integer)
+  agent: err 400 missing argument `sid` (string)
+track_shift_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_shift_set null
+  page: err 400 missing or wrong argument `shift_samples` (integer)
+  agent: err 400 missing argument `sid` (string)
+track_shift_set wrong
+  page: err 400 missing or wrong argument `shift_samples` (integer)
+  agent: err 400 wrong argument `sid`: expected string
+track_learn_mark {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_mark min
+  page: err 400 `kind` must be "this" or "not"
+  agent: err 400 `kind` must be "this" or "not"
+track_learn_mark null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_mark wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_learn_remove {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_remove min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_learn_remove null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_remove wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_learn_forget_at {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_forget_at min
+  page: err 400 give `t0` and `t1`, or `hit`
+  agent: err 400 give `t0` and `t1`, or `hit`
+track_learn_forget_at null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_forget_at wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_learn_flip {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_flip min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_learn_flip null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_flip wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_learn_forget {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_forget min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_learn_forget null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_forget wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_learn_set {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_set min
+  page: err 400 `learn`: `marks` must be a list
+  agent: err 400 `learn`: `marks` must be a list
+track_learn_set null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_learn_scores {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_scores min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_learn_scores null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_scores wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+tempo_map_get {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tempo_map_get min
+  page: err 404 no such project
+  agent: err 404 no such project
+tempo_map_get null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tempo_map_get wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+tempo_map_set {}
+  page: err 400 missing argument `map` (object)
+  agent: err 400 missing argument `sid` (string)
+tempo_map_set min
+  page: err 404 no such project
+  agent: err 400 missing argument `map` (tempo map (object) or null)
+tempo_map_set null
+  page: err 400 missing argument `map` (object)
+  agent: err 400 missing argument `sid` (string)
+tempo_map_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+tempo_map_detect {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tempo_map_detect min
+  page: err 404 no such project
+  agent: err 404 no such project
+tempo_map_detect null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tempo_map_detect wrong
+  page: err 400 wrong argument `tracks` (list of strings)
+  agent: err 400 wrong argument `sid`: expected string
+tempo_map_refit_bar1 {}
+  page: err 400 missing or wrong argument `bpm` (number)
+  agent: err 400 missing argument `sid` (string)
+tempo_map_refit_bar1 min
+  page: err 400 wrong argument `bpm` (0): a positive number of BPM, at most 1000
+  agent: err 400 wrong argument `bpm` (0): a positive number of BPM, at most 1000
+tempo_map_refit_bar1 null
+  page: err 400 missing or wrong argument `bpm` (number)
+  agent: err 400 missing argument `sid` (string)
+tempo_map_refit_bar1 wrong
+  page: err 400 missing or wrong argument `bpm` (number)
+  agent: err 400 wrong argument `sid`: expected string
+tempo_map_import_midi {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tempo_map_import_midi min
+  page: err 404 no such project
+  agent: err 404 no such project
+tempo_map_import_midi null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+tempo_map_import_midi wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+markers_get {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+markers_get min
+  page: err 404 no such project
+  agent: err 404 no such project
+markers_get null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+markers_get wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+markers_set {}
+  page: err 400 missing or wrong argument `markers` (list)
+  agent: err 400 missing argument `sid` (string)
+markers_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+markers_set null
+  page: err 400 missing or wrong argument `markers` (list)
+  agent: err 400 missing argument `sid` (string)
+markers_set wrong
+  page: err 400 missing or wrong argument `markers` (list)
+  agent: err 400 wrong argument `sid`: expected string
+row_heights_get {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+row_heights_get min
+  page: err 404 no such project
+  agent: err 404 no such project
+row_heights_get null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+row_heights_get wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+row_heights_set {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+row_heights_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+row_heights_set null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+row_heights_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_confidence {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_confidence min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_confidence null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_confidence wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_layer_set {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_layer_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_layer_set null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_layer_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_layer_get {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_layer_get min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_layer_get null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_layer_get wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_layer_align {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_layer_align min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_layer_align null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_layer_align wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_layer_wave {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command track_layer_wave
+track_layer_wave min
+  page: err 404 no such project
+  agent: err 404 unknown command track_layer_wave
+track_layer_wave null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command track_layer_wave
+track_layer_wave wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command track_layer_wave
+export_layer {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_layer min
+  page: err 404 no such project
+  agent: err 404 no such project
+export_layer null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+export_layer wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+sampler_calibration_midi {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+sampler_calibration_midi min
+  page: err 404 no such project
+  agent: err 404 no such project
+sampler_calibration_midi null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+sampler_calibration_midi wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_sampler_get {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_sampler_get min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_sampler_get null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_sampler_get wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_sampler_set {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_sampler_set min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_sampler_set null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_sampler_set wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
+track_sampler_wave {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command track_sampler_wave
+track_sampler_wave min
+  page: err 404 no such project
+  agent: err 404 unknown command track_sampler_wave
+track_sampler_wave null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command track_sampler_wave
+track_sampler_wave wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 404 unknown command track_sampler_wave
+selftest_clock {}
+  page: err 404 unknown command selftest_clock
+  agent: err 404 unknown command selftest_clock
+selftest_clock min
+  page: err 404 unknown command selftest_clock
+  agent: err 404 unknown command selftest_clock
+selftest_clock null
+  page: err 404 unknown command selftest_clock
+  agent: err 404 unknown command selftest_clock
+selftest_clock wrong
+  page: err 404 unknown command selftest_clock
+  agent: err 404 unknown command selftest_clock
+selftest_memory {}
+  page: err 404 unknown command selftest_memory
+  agent: err 404 unknown command selftest_memory
+selftest_memory min
+  page: err 404 unknown command selftest_memory
+  agent: err 404 unknown command selftest_memory
+selftest_memory null
+  page: err 404 unknown command selftest_memory
+  agent: err 404 unknown command selftest_memory
+selftest_memory wrong
+  page: err 404 unknown command selftest_memory
+  agent: err 404 unknown command selftest_memory
+selftest_report {}
+  page: err 404 unknown command selftest_report
+  agent: err 404 unknown command selftest_report
+selftest_report min
+  page: err 404 unknown command selftest_report
+  agent: err 404 unknown command selftest_report
+selftest_report null
+  page: err 404 unknown command selftest_report
+  agent: err 404 unknown command selftest_report
+selftest_report wrong
+  page: err 404 unknown command selftest_report
+  agent: err 404 unknown command selftest_report
+splash_report {}
+  page: err 404 unknown command splash_report
+  agent: err 404 unknown command splash_report
+splash_report min
+  page: err 404 unknown command splash_report
+  agent: err 404 unknown command splash_report
+splash_report null
+  page: err 404 unknown command splash_report
+  agent: err 404 unknown command splash_report
+splash_report wrong
+  page: err 404 unknown command splash_report
+  agent: err 404 unknown command splash_report
+selftest_menu {}
+  page: err 400 missing or wrong argument `id` (string)
+  agent: err 404 unknown command selftest_menu
+selftest_menu min
+  page: ok {id}
+  agent: err 404 unknown command selftest_menu
+selftest_menu null
+  page: err 400 missing or wrong argument `id` (string)
+  agent: err 404 unknown command selftest_menu
+selftest_menu wrong
+  page: err 400 missing or wrong argument `id` (string)
+  agent: err 404 unknown command selftest_menu
+selftest_menu_report {}
+  page: err 404 unknown command selftest_menu_report
+  agent: err 404 unknown command selftest_menu_report
+selftest_menu_report min
+  page: err 404 unknown command selftest_menu_report
+  agent: err 404 unknown command selftest_menu_report
+selftest_menu_report null
+  page: err 404 unknown command selftest_menu_report
+  agent: err 404 unknown command selftest_menu_report
+selftest_menu_report wrong
+  page: err 404 unknown command selftest_menu_report
+  agent: err 404 unknown command selftest_menu_report
+selftest_ns_menu {}
+  page: err 404 unknown command selftest_ns_menu
+  agent: err 404 unknown command selftest_ns_menu
+selftest_ns_menu min
+  page: err 404 unknown command selftest_ns_menu
+  agent: err 404 unknown command selftest_ns_menu
+selftest_ns_menu null
+  page: err 404 unknown command selftest_ns_menu
+  agent: err 404 unknown command selftest_ns_menu
+selftest_ns_menu wrong
+  page: err 404 unknown command selftest_ns_menu
+  agent: err 404 unknown command selftest_ns_menu
+selftest_menu_key {}
+  page: err 404 unknown command selftest_menu_key
+  agent: err 404 unknown command selftest_menu_key
+selftest_menu_key min
+  page: err 404 unknown command selftest_menu_key
+  agent: err 404 unknown command selftest_menu_key
+selftest_menu_key null
+  page: err 404 unknown command selftest_menu_key
+  agent: err 404 unknown command selftest_menu_key
+selftest_menu_key wrong
+  page: err 404 unknown command selftest_menu_key
+  agent: err 404 unknown command selftest_menu_key
+selftest_menu_log {}
+  page: err 404 unknown command selftest_menu_log
+  agent: err 404 unknown command selftest_menu_log
+selftest_menu_log min
+  page: err 404 unknown command selftest_menu_log
+  agent: err 404 unknown command selftest_menu_log
+selftest_menu_log null
+  page: err 404 unknown command selftest_menu_log
+  agent: err 404 unknown command selftest_menu_log
+selftest_menu_log wrong
+  page: err 404 unknown command selftest_menu_log
+  agent: err 404 unknown command selftest_menu_log
+selftest_menu_probe {}
+  page: err 404 unknown command selftest_menu_probe
+  agent: err 404 unknown command selftest_menu_probe
+selftest_menu_probe min
+  page: err 404 unknown command selftest_menu_probe
+  agent: err 404 unknown command selftest_menu_probe
+selftest_menu_probe null
+  page: err 404 unknown command selftest_menu_probe
+  agent: err 404 unknown command selftest_menu_probe
+selftest_menu_probe wrong
+  page: err 404 unknown command selftest_menu_probe
+  agent: err 404 unknown command selftest_menu_probe
+selftest_open_paths {}
+  page: err 404 unknown command selftest_open_paths
+  agent: err 404 unknown command selftest_open_paths
+selftest_open_paths min
+  page: err 404 unknown command selftest_open_paths
+  agent: err 404 unknown command selftest_open_paths
+selftest_open_paths null
+  page: err 404 unknown command selftest_open_paths
+  agent: err 404 unknown command selftest_open_paths
+selftest_open_paths wrong
+  page: err 404 unknown command selftest_open_paths
+  agent: err 404 unknown command selftest_open_paths
+selftest_close_window {}
+  page: err 404 unknown command selftest_close_window
+  agent: err 404 unknown command selftest_close_window
+selftest_close_window min
+  page: err 404 unknown command selftest_close_window
+  agent: err 404 unknown command selftest_close_window
+selftest_close_window null
+  page: err 404 unknown command selftest_close_window
+  agent: err 404 unknown command selftest_close_window
+selftest_close_window wrong
+  page: err 404 unknown command selftest_close_window
+  agent: err 404 unknown command selftest_close_window

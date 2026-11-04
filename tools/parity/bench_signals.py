@@ -1,9 +1,9 @@
 """The synthetic kick and snare tracks of the refinement benchmark (bench/refine_bench.py until P3-12).
 
 P3-12: the benchmark compared methods with engine._refine_sr of the retired server and is gone; its
-signal generator stays here, unchanged, because the "bench" cases of check_refine.py are frozen
+signal generator stays here, unchanged, because the "bench" cases of tests/test_golden.py are frozen
 on these signals (tests/golden/frozen/refine.json keeps the SHA-256 of every WAV file). The order of
-the calls matters: one seeded generator (rng) draws every random number, so check_refine.py calls
+the calls matters: one seeded generator (rng) draws every random number, so golden_corpus.py calls
 make_track and rng.uniform in the benchmark's loop order.
 """
 import numpy as np

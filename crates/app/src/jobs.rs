@@ -492,7 +492,7 @@ impl DetectorSlot {
     /// rate, cannot resample, or its run fails.
     pub fn analyze_prepared_cands(
         &self,
-        _cfg: &ServiceConfig,
+        cfg: &ServiceConfig,
         x: &[f32],
         sr: u32,
         role: &str,
@@ -510,8 +510,9 @@ impl DetectorSlot {
         }
 
         // A4: one detection pass for the events and the candidate list.
-        let (a, cands, params, weak_limit) = drumspike_core::analyze::analyze_track_dsp_cands(x, sr, role, &p)
-            .map_err(|e| AppError::bad(e.to_string()))?;
+        let (a, cands, params, weak_limit) =
+            drumspike_core::analyze::analyze_track_dsp_cands(x, sr, role, &p, &cfg.rules, &cfg.research)
+                .map_err(|e| AppError::bad(e.to_string()))?;
         let kept = DspKept {
             cands,
             params,
@@ -781,67 +782,32 @@ fn run_job(svc: &Service, sid: &str, targets: &[String], token: &JobToken, progr
         emit(jobs.finish_cancelled(sid, token, &targets[done..]));
         return;
     }
-    // P4-14: the tom bleed rule over the session's tom close mics, after every track of the job is stored
+    // the session steps over the analysed tracks, after every track of the job is stored, in their fixed order
+    // (cross bleed, ghost gate, tom bleed, flam: see `steps`)
     if let Ok(op) = op.as_ref() {
-        // #281 A6: the cross-track bleed rule first (it re-detects the tom targets; the tom bleed
-        // rule judges the hits it leaves)
-        let v = crate::cross_bleed::analysis_cross_bleed(&svc.inner.config);
-        if v > 0
-            && let Some(cb) = crate::cross_bleed::run_step(svc, op, &analysed.clone())
-        {
-            emit(jobs.update(sid, token, |j| {
-                if let Some(tracks) = cb["tracks"].as_object() {
-                    for (name, out) in tracks {
-                        j["tracks"][name.as_str()]["cross_bleed"] = out.clone();
-                    }
-                }
-                j["cross_bleed"] = cb.clone();
-            }));
+        for step in &crate::steps::ANALYSIS_STEPS {
+            if let Some(out) = step.run(svc, op, &analysed) {
+                emit(jobs.update(sid, token, |j| step.emit(j, &out)));
+            }
         }
-        // #281 A1: the snare ghost-note gate's busy clearance next (it re-detects the snare
-        // targets with the soft rescue denied to the busy candidates; the flam rule and the
-        // snare rescue judge the hits it leaves)
-        let v = crate::ghost_gate::analysis_ghost_gate(&svc.inner.config);
-        if v > 0
-            && let Some(gg) = crate::ghost_gate::run_step(svc, op, &analysed.clone())
-        {
-            emit(jobs.update(sid, token, |j| {
-                if let Some(tracks) = gg["tracks"].as_object() {
-                    for (name, out) in tracks {
-                        j["tracks"][name.as_str()]["ghost_gate"] = out.clone();
-                    }
-                }
-                j["ghost_gate"] = gg.clone();
-            }));
-        }
-        let v = crate::tom_bleed::analysis_bleed_rule(&svc.inner.config);
-        let targets: Vec<(String, u32)> = analysed.iter().map(|n| (n.clone(), v)).collect();
-        if let Some(bleed) = crate::tom_bleed::run_step(svc, op, &targets) {
-            emit(jobs.update(sid, token, |j| {
-                if let Some(tracks) = bleed["tracks"].as_object() {
-                    for (name, removed) in tracks {
-                        j["tracks"][name.as_str()]["bleed"] = json!({"rule": bleed["rule"], "on": bleed["on"],
-                            "reason": bleed["reason"], "removed": removed});
-                    }
-                }
-                j["bleed"] = bleed.clone();
-            }));
-        }
-        // P4-13 stage B: the flam rule on the analysed snare close mics, after the bleed rules
-        let v = crate::flam::analysis_flam_rule(&svc.inner.config);
-        let targets: Vec<(String, u32)> = analysed.iter().map(|n| (n.clone(), v)).collect();
-        if let Some(flam) = crate::flam::run_step(svc, op, &targets) {
-            emit(jobs.update(sid, token, |j| {
-                if let Some(tracks) = flam["tracks"].as_object() {
-                    for (name, added) in tracks {
-                        j["tracks"][name.as_str()]["flam"] = json!({"rule": flam["rule"], "added": added});
-                    }
-                }
-                j["flam"] = flam.clone();
-            }));
-        }
+        // the session steps remove and add hits (cross bleed, flam): a done track's `n_events` is the stored
+        // count after them, the count `events_get` answers and the page shows
+        let counts: Vec<(String, usize)> = analysed
+            .iter()
+            .map(|n| (n.clone(), track_events(op, n).len()))
+            .collect();
+        emit(jobs.update(sid, token, |j| set_done_counts(j, &counts)));
     }
     emit(jobs.update(sid, token, |j| j["state"] = Value::from("done")));
+}
+
+/// Write `n_events` of every done track of the job answer `job` from `counts` (track, stored hit count).
+fn set_done_counts(job: &mut Value, counts: &[(String, usize)]) {
+    for (name, n) in counts {
+        if let Some(entry) = job["tracks"].get_mut(name.as_str()).filter(|e| e["state"] == "done") {
+            entry["n_events"] = Value::from(*n);
+        }
+    }
 }
 
 /// A prepared track (P3-15b): the decode and the parameters (the model-free main, #281 D16).

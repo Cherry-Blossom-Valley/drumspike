@@ -1,5 +1,5 @@
 //! The Tauri commands of the native shell (P3-4b). Each only converts its arguments and calls the
-//! service, `menu.rs`, `open.rs` or `window.rs`. The self-test commands exist in debug builds only.
+//! service, `menu/`, `open.rs` or `window.rs`. The self-test commands exist in debug builds only.
 
 use drumspike_app::{AppError, ListShape, Service};
 use serde_json::Value;

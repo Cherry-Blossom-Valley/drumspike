@@ -1,4 +1,4 @@
-//! P4-6b stage A: the Learn scores of a track's detection candidates (`docs/migration/concept-learn-mode.md`,
+//! P4-6b stage A: the Learn scores of a track's detection candidates (Learn mode concept,
 //! sections 3.1, 3.2 and 3.5). The features come from `drumspike_core::similarity`; this module keeps
 //! them in a cache and scores them against the track's Learn examples. No filter runs here (stage B).
 //!

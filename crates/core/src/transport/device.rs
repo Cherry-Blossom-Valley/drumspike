@@ -86,10 +86,10 @@ pub fn resolve_choice(choice: Option<&str>, available: &[String]) -> (Output, Op
 
 /// How long the build and start of a device stream may take before the device counts as not
 /// answering.
-pub const OPEN_LIMIT: Duration = Duration::from_secs(5);
+pub(crate) const OPEN_LIMIT: Duration = Duration::from_secs(5);
 /// How long the stop and dispose of a device stream may take; after it the stream is left to
 /// its worker thread.
-pub const CLOSE_LIMIT: Duration = Duration::from_secs(2);
+pub(crate) const CLOSE_LIMIT: Duration = Duration::from_secs(2);
 
 /// The devices whose worker thread is blocked in `CoreAudio` now.
 static BLOCKED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
@@ -155,7 +155,7 @@ fn guarded<T: Send + 'static>(
 ///
 /// With `device` `None`, [`TransportError::Device`] when the host has no default output device.
 /// A given name is returned as is, without a check that the device exists.
-pub fn target_name(device: Option<&str>) -> Result<String, TransportError> {
+pub(crate) fn target_name(device: Option<&str>) -> Result<String, TransportError> {
     match device {
         Some(n) => Ok(n.to_string()),
         None => find_device(None).map(|d| device_name(&d)),
@@ -223,7 +223,7 @@ fn info_of(dev: &cpal::Device) -> Result<DeviceInfo, TransportError> {
 ///
 /// [`TransportError::Device`] when there is no default output device or it does not report
 /// its output configuration.
-pub fn default_output_rate() -> Result<(u32, u16), TransportError> {
+pub(crate) fn default_output_rate() -> Result<(u32, u16), TransportError> {
     output_info(None).map(|i| (i.sample_rate, i.channels))
 }
 
@@ -275,7 +275,7 @@ pub fn output_devices() -> Result<Vec<DeviceInfo>, TransportError> {
 
 /// How the transport treats an error of the device stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorClass {
+pub(crate) enum ErrorClass {
     /// The stream cannot go on (device gone, stream invalid, backend error): the app reopens.
     Fatal,
     /// A buffer under- or overrun: a glitch, the stream goes on.
@@ -286,7 +286,7 @@ pub enum ErrorClass {
 
 /// Sort a cpal error kind into [`ErrorClass`].
 #[must_use]
-pub fn classify_error(kind: cpal::ErrorKind) -> ErrorClass {
+pub(crate) fn classify_error(kind: cpal::ErrorKind) -> ErrorClass {
     use cpal::ErrorKind as K;
     match kind {
         K::Xrun => ErrorClass::Xrun,
@@ -296,7 +296,7 @@ pub fn classify_error(kind: cpal::ErrorKind) -> ErrorClass {
 }
 
 /// A running output; dropping it stops the stream or the null thread.
-pub enum Running {
+pub(crate) enum Running {
     /// A cpal stream and its device name; the drop runs on a worker thread with
     /// [`CLOSE_LIMIT`].
     Cpal(Option<cpal::Stream>, String),

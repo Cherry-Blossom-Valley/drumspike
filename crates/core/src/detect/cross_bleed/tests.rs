@@ -170,7 +170,7 @@ fn hat_hit(x: &mut [f32], t0: f64, db: f64) {
 fn a_hat_pairs_evidence_is_recorded_and_the_generic_verdict_fires() {
     // #285: the hi-hat close mic is a source kind. The hat plays alone three times (the clear
     // cases) and once with a real tom hit; the tom mic hears the hat 1 ms later and 18 dB under.
-    // #103 step 2, the measured verdict (docs/review/detector-plan.md package 8): the hat-pair
+    // #103 step 2, the measured verdict: the hat-pair
     // distributions overlap, so no NEW hat threshold is added — the pair's own evidence is
     // recorded on every hit. The GENERIC #285 verdict still fires on hat pairs exactly as on
     // kick and snare pairs: the hat-cause arrivals (later than the hat by more than the pair's

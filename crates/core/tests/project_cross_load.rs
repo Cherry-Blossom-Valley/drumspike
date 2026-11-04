@@ -4,7 +4,7 @@
 //!
 //! P3-12: the fixtures are frozen in `tests/golden/project_fixtures/` (written by
 //! `tools/parity/write_project_fixtures.py --freeze` at the commit named in
-//! `docs/archive/phase3-report.md`, section "P3-12"). `expected.json` holds per fixture the folder,
+//! P3-12). `expected.json` holds per fixture the folder,
 //! the document as `project.load_project` returned it and the IEEE bits of every event time. No audio is
 //! in git: the legacy session's `source.wav` is a `tone()` file that this test writes again (same bytes,
 //! same mtime, checked against the frozen SHA-256), because the legacy import builds a source record from

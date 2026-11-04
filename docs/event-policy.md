@@ -16,7 +16,7 @@ two sides cannot drift.
 | `added` / `orig` | add / move op (edit.rs) | structural: `is_manual` = `added` or `t != orig` |
 | `learned` | Learn Add / Learn sweep / analysis | a Learn example |
 | `flam` | flam.rs (second stroke) | flam stroke |
-| `roll`, `rescue`, `stage8` | the model path; carried in `extra` | carried, no output effect; confidence cap (confidence.rs) |
+| `roll`, `rescue`, `stage8` | older projects; carried in `extra` | carried, no output effect; confidence cap (confidence.rs) |
 | `keep` | Hits > Toggle Hit Active on a deactivated hit (edit.rs `toggle` op, #242) | the user's per-hit override: the hit stays in the output whatever the rules marked |
 | `deactivated` | Hits > Toggle Hit Active on an active hit (edit.rs `toggle` op, #242) | the user's per-hit override: the hit leaves the output |
 
@@ -30,20 +30,24 @@ two sides cannot drift.
   `is_kept`). The duplicates call it: `export::is_cut` (MIDI, spikes, Export All, the click
   in transport.rs), `histogram::event_cut` (flam, loudness), `confidence::is_out`, and
   `tempo::is_cut`.
-- R1 — a kept hit is never cut, bled or filtered. Rust enforces by stripping the marks on
+- The mark keys live in one place too: `policy::Mark` names them, and `is_marked`, `mark`
+  and `clear` read and write them on a typed event, a JSON event or its object. A mark is
+  on only as `true`; `clear` removes the key and keeps the order of the others. Each call
+  site keeps its own predicate around these three.
+- R1, a kept hit is never cut, bled or filtered. Rust enforces by stripping the marks on
   edit (edit.rs); the page enforces by the `!isManual` guards. One policy, two mechanisms;
   the truth table proves they agree (a kept hit that still carries a mark is a state no
   document holds, and both mechanisms take it out of the output).
-- R2 — tempo: the plan draft expected tempo to keep `filtered` hits. This tree does not:
+- R2, tempo: the plan draft expected tempo to keep `filtered` hits. This tree does not:
   `tempo::is_cut` has called the shared predicate since 0.9.4, so a cut, bled **or
   filtered** hit is no tempo candidate (`policy::TEMPO_USES_ONE_PREDICATE`). The behaviour
   is unchanged; the table's `tempo` column pins it.
-- R3 — `edited` is the document's reserved flag; `is_manual` is structural
+- R3, `edited` is the document's reserved flag; `is_manual` is structural
   (`added` or `t != orig`); `is_kept = is_manual || edited || keep || deactivated` (the
   flags of R5).
-- R4 — undo/redo restores field presence via `was`; `was` is an op payload, never a stored
+- R4, undo/redo restores field presence via `was`; `was` is an op payload, never a stored
   event flag.
-- R5 (#242) — the user's per-hit overrides: `deactivated` wins over every mark and over
+- R5 (#242), the user's per-hit overrides: `deactivated` wins over every mark and over
   `keep`; `keep` wins over the automatic marks. The marking rules (the loudness cut, the
   tom bleed and cross bleed rules, the Learn filter) never mark a `keep` hit, and the strip
   removes the marks from a kept hit, so the flags stay the single reason a toggled hit is

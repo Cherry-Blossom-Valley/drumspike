@@ -1,4 +1,4 @@
-"""P3-19: the Pro Tools key commands (docs/migration/ux-daw-reference.md 3.3, Avid Pro Tools Shortcuts Guide 2025.10 = A1).
+"""P3-19: the Pro Tools key commands (UX reference 3.3, Avid Pro Tools Shortcuts Guide 2025.10 = A1).
 
 The default preset "Pro Tools" gets the keys of card P3-19; the preset "Cubase" keeps its keys. One test for each key
 group: track selection (P, ;), hit keys (L, ', Control+Cmd+L and '), undo and redo (Z, Shift+Z), the zoom toggle (E,
@@ -9,7 +9,7 @@ preset that does not react to them. The web page has no native menu, so the keys
 import pytest
 
 from app_support import edits_done, invoke, menu, open_project, wait_until
-from test_keypreset import choose, preset_home  # noqa: F401  (the fixture and the Settings sheet helper)
+from app_support import choose, preset_home  # noqa: F401  (the fixture and the Settings sheet helper)
 from test_menus import select_track, with_hits
 
 SR = 48000

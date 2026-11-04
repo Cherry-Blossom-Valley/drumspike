@@ -73,27 +73,6 @@ fn the_rule_runs_on_the_snare_from_version_1() {
 }
 
 #[test]
-fn the_percentile_is_numpys_linear_one() {
-    // values from numpy 2: np.percentile([3, 1, 4, 1, 5, 9, 2, 6], q)
-    let v = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0];
-    assert_eq!(np_percentile(&v, 10.0), Some(1.0));
-    assert_eq!(np_percentile(&v, 50.0), Some(3.5));
-    assert!((np_percentile(&v, 99.5).unwrap() - 8.895).abs() < 1e-12);
-    assert_eq!(np_percentile(&v, 100.0), Some(9.0));
-    assert_eq!(np_percentile(&v, 0.0), Some(1.0));
-    assert_eq!(np_percentile(&[], 10.0), None);
-    assert_eq!(np_percentile(&[2.5], 99.5), Some(2.5));
-    // the upper branch of numpy's lerp: b - (b - a) * (1 - g) for g >= 0.5
-    let (a, b) = (0.1f64, 0.7f64);
-    let g = 3.0 * 0.9 - 2.0;
-    assert_eq!(
-        np_percentile(&[a, b, 1.0, 2.0], 90.0),
-        Some(2.0 - (2.0 - 1.0) * (1.0 - g))
-    );
-    assert_eq!(np_percentile(&[a, b], 25.0), Some(a + (b - a) * 0.25));
-}
-
-#[test]
 fn the_time_domain_zero_phase_filter_equals_the_frequency_domain_one() {
     // the reference: |H|^4 of the RBJ high-pass applied to the FFT of the padded signal (`onset_guard.zero_phase`)
     let mut nz = Noise(7);
@@ -442,4 +421,50 @@ fn the_walk_does_not_move_a_second_stroke_back_over_a_ring_before_the_dip() {
     let (free, _) = crate::refine::first_motion_mid(&x, (c * f64::from(SR)).round() as i64, SR, None, None);
     assert!(free < bound, "the unbounded walk ends before the bound: {free} {bound}");
     assert!(at >= bound, "the bounded walk does not: {at} {bound} {s:?}");
+}
+
+#[test]
+fn at_44k1_the_flams_are_found_and_hits_at_the_ends_of_the_file_add_nothing() {
+    // the 44.1 kHz and file-ends case of the former Python parity test: at 44.1 kHz a block of 6 samples is
+    // not 0.125 ms. 12 single strokes every 0.5 s from 0.5 s, second strokes 3 dB louder 20 ms after hit 2 and 33 ms
+    // after hit 7, a hit 1.5 ms after the start of the file and one 2 ms before its end: exactly the 2 flams.
+    let sr = 44_100u32;
+    let srf = f64::from(sr);
+    let at = |x: &mut [f64], t: f64, amp: f64, n: &mut Noise| {
+        let i0 = (t * srf).round() as usize;
+        for k in 0..(0.06 * srf) as usize {
+            if i0 + k >= x.len() {
+                break;
+            }
+            x[i0 + k] += amp * n.next() * (-(k as f64) / (0.003 * srf)).exp();
+        }
+    };
+    let mut x = vec![0.0f64; (7.0 * srf) as usize];
+    let mut nz = Noise(0x44_100);
+    let mut hits: Vec<f64> = (0..12).map(|i| 0.5 + 0.5 * f64::from(i)).collect();
+    for &t in &hits {
+        at(&mut x, t, 0.5, &mut nz);
+    }
+    let flams = [(hits[2], 0.020), (hits[7], 0.033)];
+    for &(t, gap) in &flams {
+        at(&mut x, t + gap, 0.7, &mut nz);
+    }
+    let a = (0.0015 * srf) as usize;
+    for v in &mut x[a..a + 10] {
+        *v += 0.3;
+    }
+    for v in &mut x {
+        *v += 1e-4 * nz.next();
+    }
+    hits.insert(0, 0.0015);
+    hits.push(x.len() as f64 / srf - 0.002);
+    let (found, gains) = flam_split(&f32s(&x), sr, &hits, &[], &FlamParams::default());
+    assert!(gains.is_empty());
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert_eq!(added(&found).len(), 2, "{found:?}");
+    for (s, &(t, gap)) in found.iter().zip(&flams) {
+        assert_eq!(s.first, t, "{s:?}");
+        assert!((s.t - (t + gap)).abs() < 0.0005, "{s:?}");
+        assert!(!s.bleed, "{s:?}");
+    }
 }

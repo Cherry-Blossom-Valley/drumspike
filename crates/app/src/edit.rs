@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 use crate::Service;
 use crate::error::AppError;
 use crate::media::mix_mode;
+use crate::policy::{Mark, clear, is_manual_object, is_marked, mark};
 use crate::registry::lock;
 
 /// The edit commands of this card.
@@ -64,29 +65,15 @@ pub fn track_end(tr: &drumspike_core::project::Track) -> Option<f64> {
         })
 }
 
-/// A hand-edited hit: added, or moved away from its detected time.
-fn is_manual(e: &Map<String, Value>) -> bool {
-    if e.get("added").and_then(Value::as_bool) == Some(true) {
-        return true;
-    }
-    match (
-        e.get("orig").and_then(Value::as_f64),
-        e.get("t").and_then(Value::as_f64),
-    ) {
-        (Some(o), Some(t)) => (t - o).abs() > 1e-9,
-        _ => false,
-    }
-}
-
 /// A hit the engineer keeps as it is: a hand-edited hit, one restored from the tom bleed mark (P4-14 fix round:
 /// `edited: true`, the document's reserved edit flag), or one of the user's per-hit overrides of #242
 /// (`keep`/`deactivated` — a re-pick or Re-analyze keeps those too, `merge_edited`). A re-pick or Re-analyze with
 /// `keep_edited` keeps it, and the tom bleed rule never marks it.
 pub fn is_kept(e: &Map<String, Value>) -> bool {
-    is_manual(e)
+    is_manual_object(e)
         || e.get("edited").and_then(Value::as_bool) == Some(true)
-        || e.get("keep").and_then(Value::as_bool) == Some(true)
-        || e.get("deactivated").and_then(Value::as_bool) == Some(true)
+        || is_marked(e, Mark::Keep)
+        || is_marked(e, Mark::Deactivated)
 }
 
 fn hit_index(op: &Map<String, Value>, n: usize) -> Result<usize, AppError> {
@@ -183,8 +170,8 @@ pub fn apply_ops(
                 check_end(t, end)?;
                 let mut hit = json!({"t": t, "v": velocity(o, Some(100))?});
                 // P4-38b: K on a range or the playhead with no hit adds one flagged learned
-                if o.get("learned").and_then(Value::as_bool) == Some(true) {
-                    hit["learned"] = json!(true);
+                if is_marked(o, Mark::Learned) {
+                    mark(&mut hit, Mark::Learned);
                 }
                 // `added: false` puts a hit back as a detected one (the page's undo of a delete), with its `orig`
                 if o.get("added").and_then(Value::as_bool) != Some(false) {
@@ -221,8 +208,8 @@ pub fn apply_ops(
                 if kind == "restore" {
                     // P4-14: the hit goes back into the output (the tom bleed rule had marked it); `edited` keeps it
                     // there through a re-pick or Re-analyze with keep_edited
-                    let bleed = e.shift_remove("bleed").is_some();
-                    if e.shift_remove("filtered").is_some() || bleed {
+                    let bleed = clear(e, Mark::Bleed).is_some();
+                    if clear(e, Mark::Filtered).is_some() || bleed {
                         counts[4] += 1;
                     }
                     e.insert("edited".into(), Value::Bool(true));
@@ -264,15 +251,13 @@ pub fn apply_ops(
                 let e = slot
                     .as_object_mut()
                     .ok_or_else(|| AppError::bad("every event must be an object"))?;
-                for k in ["keep", "deactivated"] {
-                    match o.get(k) {
-                        Some(Value::Bool(true)) => {
-                            e.insert(k.into(), Value::Bool(true));
-                        }
+                for m in [Mark::Keep, Mark::Deactivated] {
+                    match o.get(m.key()) {
+                        Some(Value::Bool(true)) => mark(e, m),
                         Some(Value::Bool(false)) => {
-                            e.shift_remove(k);
+                            clear(e, m);
                         }
-                        _ => return Err(AppError::bad(format!("`{k}` must be a boolean"))),
+                        _ => return Err(AppError::bad(format!("`{}` must be a boolean", m.key()))),
                     }
                 }
                 apply_was(e, o.get("was"));
@@ -291,7 +276,7 @@ pub fn apply_ops(
         t(a).total_cmp(&t(b))
     });
     for e in out.iter_mut().filter_map(Value::as_object_mut) {
-        if is_manual(e) || e.get("keep").and_then(Value::as_bool) == Some(true) {
+        if is_manual_object(e) || is_marked(e, Mark::Keep) {
             e.remove("cut"); // an edited hit is never cut (the page's eventsBody); nor a hit the user keeps (#242)
         }
         if is_kept(e) {
@@ -639,6 +624,11 @@ impl Service {
         )
     }
 }
+
+/// R3: the handlers of [`EDIT_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 2] = crate::call::routes(EDIT_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
 
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them.
 #[must_use]

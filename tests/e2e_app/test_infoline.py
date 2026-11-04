@@ -1,4 +1,4 @@
-"""P3-14b: counters and info line (docs/migration/ux-daw-reference.md 3.4, 3.5 and 5; Cubase and Pro Tools models).
+"""P3-14b: counters and info line (UX reference 3.4, 3.5 and 5; Cubase and Pro Tools models).
 
 Counters: the main counter shows seconds with 6 decimals, the sub counter shows samples at the rate of the selected track
 (else of the first track). View > Main Counter (Seconds, Samples), Exchange Counters (key . until P3-19) and a click on the main
@@ -6,13 +6,12 @@ counter swap them. Info line: the selected hit (track, index of total, time, sam
 and the velocity are fields (Return applies, Escape cancels, one undo step each); View > Show Info Line (Cmd+I) shows and
 hides it, and the state is kept in the app settings. The line has a fixed height and the frames read no layout."""
 import re
-import struct
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
 
-from app_support import edits_done, export_dialog, menu, open_project, wait_until
+from app_support import edits_done, export_dialog, menu, midi_note_ons, open_project, wait_until
 from helpers import SR, synth_track, write_wav
 from test_editor import IDX, ONSETS, build, doc_of, exact_events, service_events
 from test_frames import PROBE, READS, SWEEP, settle
@@ -41,43 +40,6 @@ def two_rates(make_project, tmp_path):
         x, _ = synth_track(ONSETS, 4.0, sr=sr)
         specs.append((name, write_wav(src / f"{name}.wav", x, sr=sr), role, note))
     return Path(make_project.builder.build_project(tmp_path / "projects_rates", "Rates", specs, "copied"))
-
-
-def midi_note_ons(path):
-    """[(tick, velocity)] of the note-on events of a standard MIDI file (every track chunk)."""
-    data = Path(path).read_bytes()
-    assert data[:4] == b"MThd"
-    pos = 8 + struct.unpack(">I", data[4:8])[0]
-    out = []
-    while pos < len(data):
-        assert data[pos:pos + 4] == b"MTrk"
-        end = pos + 8 + struct.unpack(">I", data[pos + 4:pos + 8])[0]
-        p, tick, status = pos + 8, 0, 0
-
-        def varlen():
-            nonlocal p
-            v = 0
-            while True:
-                b = data[p]; p += 1
-                v = (v << 7) | (b & 0x7F)
-                if not b & 0x80:
-                    return v
-        while p < end:
-            tick += varlen()
-            if data[p] == 0xFF:                                    # meta event: 0xFF, type, length, data
-                p += 2; ln = varlen(); p += ln
-                continue
-            if data[p] in (0xF0, 0xF7):
-                p += 1; ln = varlen(); p += ln; continue
-            if data[p] & 0x80:
-                status = data[p]; p += 1
-            kind = status & 0xF0
-            n = 1 if kind in (0xC0, 0xD0) else 2
-            args = data[p:p + n]; p += n
-            if kind == 0x90 and args[1] > 0:
-                out.append((tick, args[1]))
-        pos = end
-    return out
 
 
 # ---------- counters ----------

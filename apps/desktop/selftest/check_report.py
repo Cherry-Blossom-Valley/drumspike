@@ -22,7 +22,7 @@ def midi_reference(scenario, name, events, note):
     """(bytes, source) of the reference MIDI file for these events: the file the retired server wrote
     (engine._py_export_midi, pretty_midi), frozen in tests/golden/frozen/midi.json (P3-12), when the frozen run had
     the same events; else the file of the core's MIDI writer (`target/release/parity midi`), which equals the server's
-    bytes on every frozen event list (tools/parity/check_midi.py)."""
+    bytes on every frozen event list (tests/test_golden.py, the midi cases)."""
     import frozen
     inputs = {"events": events, "note": note, "ppq": 24000, "tempo": 120.0}
     key = f"selftest/{scenario}/{name}/{frozen.digest(inputs)[:16]}"   # one entry per event list

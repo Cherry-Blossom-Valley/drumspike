@@ -142,13 +142,7 @@ fn apply_ops_refuses_bad_ops_and_changes_nothing() {
 
 #[test]
 fn dispatch_knows_its_commands_and_checks_the_arguments() {
-    let svc = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(crate::ServiceConfig::default());
     assert!(dispatch(&svc, "project_list", &json!({})).is_none());
     assert_eq!(
         dispatch(&svc, "events_edit", &json!({"sid": "x", "name": "n"}))
@@ -207,7 +201,7 @@ fn is_kept_follows_the_shared_predicate_table() {
 fn on_grid_rounds_to_the_sample_and_is_manual_reads_the_markers() {
     assert_eq!(on_grid(0.123_456, Some(1000)), 0.123);
     assert_eq!(on_grid(0.123_456, None), 0.123_456);
-    let m = |v: Value| is_manual(v.as_object().unwrap());
+    let m = |v: Value| is_manual_object(v.as_object().unwrap());
     assert!(m(json!({"t": 1.0, "added": true})));
     assert!(m(json!({"t": 1.0, "orig": 0.9})));
     assert!(!m(json!({"t": 1.0, "orig": 1.0})));

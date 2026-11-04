@@ -1,6 +1,6 @@
 //! The project document layer: the port of `project.py` (phase 0, format 1).
 //!
-//! A project is a user-visible folder (`docs/migration/project-format.md`):
+//! A project is a user-visible folder (project format 1):
 //!
 //! ```text
 //! <Name>/
@@ -33,18 +33,17 @@ use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Map, Number, Value};
 
-pub use document::{
-    DEFAULT_MIX_MODE, Document, Event, FORMAT, MIX_MODES, SOURCE_MODES, Settings, Source, Track, empty_document, now,
-};
+pub use document::{DEFAULT_MIX_MODE, Document, Event, FORMAT, Settings, Source, Track, now};
+pub(crate) use document::{MIX_MODES, empty_document};
 pub use save::{
     BACKUPS_KEEP, backup_name, free_name, rotate_backups, save_as, save_project, save_project_into,
     save_project_report, write_document,
 };
 pub use source::{
-    COPY_CHUNK, CacheKey, CopyCtl, CopyOutcome, HEAD_BYTES, HEAD_CACHE_MAX, HEAD_CACHE_SETTLE, HeadCacheCounts,
-    SEARCH_MAX_FILES, SearchHit, SearchReport, SearchResult, SearchTarget, SourceStatus, bext_origination,
-    build_source, cache_key, consolidate, copy_chunked, copy_into_project, copy_into_project_ctl, head_cache_counts,
-    head_sha1, relink_search, relinked_source, resolve_source, source_candidates, source_matches,
+    CacheKey, CopyCtl, CopyOutcome, HEAD_CACHE_SETTLE, HeadCacheCounts, SearchHit, SearchReport, SearchResult,
+    SearchTarget, SourceStatus, bext_origination, build_source, cache_key, consolidate, copy_into_project,
+    copy_into_project_ctl, head_cache_counts, head_sha1, relink_search, relinked_source, resolve_source,
+    source_matches,
 };
 
 /// Document file extension.
@@ -58,7 +57,7 @@ pub const EXPORTS_DIR: &str = "Exports";
 /// Folder of pre-save copies and autosaves.
 pub const BACKUPS_DIR: &str = "Backups";
 /// The folders `ensure_layout` creates.
-pub const SUBDIRS: [&str; 4] = [AUDIO_DIR, ANALYSIS_DIR, EXPORTS_DIR, BACKUPS_DIR];
+pub(crate) const SUBDIRS: [&str; 4] = [AUDIO_DIR, ANALYSIS_DIR, EXPORTS_DIR, BACKUPS_DIR];
 
 /// Any project document problem the caller should show to the user (`project.ProjectError`).
 #[derive(Debug)]
@@ -116,6 +115,7 @@ impl ProjectError {
     }
 
     /// True for the newer-format error (`isinstance(e, ProjectFormatError)`).
+    #[cfg(test)]
     #[must_use]
     pub fn is_format(&self) -> bool {
         matches!(self, ProjectError::Format(_))
@@ -178,7 +178,7 @@ impl Project {
 
 /// `os.path.normpath`: collapse `.`/`..` lexically and repeated separators; no symlink lookup.
 #[must_use]
-pub fn normpath(p: &Path) -> PathBuf {
+pub(crate) fn normpath(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     let mut depth = 0usize;
     for c in p.components() {
@@ -225,7 +225,7 @@ pub fn basename(p: &Path) -> &str {
 
 /// `os.path.relpath(path, start)` with posix separators: both made absolute, the common
 /// prefix dropped, `..` for every remaining component of `start`.
-pub fn relpath(path: &Path, start: &Path) -> String {
+pub(crate) fn relpath(path: &Path, start: &Path) -> String {
     let a: Vec<String> = abspath(path)
         .components()
         .skip(1)
@@ -337,7 +337,7 @@ pub fn check_track_name(name: &str) -> Result<&str, ProjectError> {
 /// [`ProjectError::NoDocument`] when the path is neither a file nor a folder with exactly one
 /// document (and none under the folder's own name); [`ProjectError::Io`] when the folder cannot
 /// be listed.
-pub fn find_document(path: &Path) -> Result<PathBuf, ProjectError> {
+pub(crate) fn find_document(path: &Path) -> Result<PathBuf, ProjectError> {
     let path = abspath(path);
     if path.is_file() {
         return Ok(path);
@@ -454,7 +454,7 @@ pub fn migrate_forward(value: Value) -> Result<Document, ProjectError> {
 /// # Errors
 ///
 /// The same as [`migrate_forward`].
-pub fn migrate_forward_from_text(value: Value, text: &str) -> Result<Document, ProjectError> {
+pub(crate) fn migrate_forward_from_text(value: Value, text: &str) -> Result<Document, ProjectError> {
     let big = match value.get("format") {
         Some(Value::Number(n)) if n.as_f64().is_some_and(|f| f.abs() >= 2f64.powi(63)) => big_int_format(text),
         _ => None,

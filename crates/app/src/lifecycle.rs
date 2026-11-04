@@ -700,6 +700,11 @@ fn channel_progress(args: &Value, channels: &Arc<Channels>) -> Option<Progress> 
     Some(p)
 }
 
+/// R3: the handlers of [`LIFECYCLE_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 16] = crate::call::routes(LIFECYCLE_COMMANDS, |s, ch, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, ch, cmd, args))
+});
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them. The
 /// argument names are those of the Tauri wrappers in `apps/desktop/src-tauri/src/lifecycle.rs`.
 pub fn dispatch(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {

@@ -102,6 +102,11 @@ impl Service {
     }
 }
 
+/// R3: the handlers of [`ROW_HEIGHTS_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 2] = crate::call::routes(ROW_HEIGHTS_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
+
 /// Run a command of this card for the bridge, the command line and the MCP server; `None` when
 /// `cmd` is not one of them.
 #[must_use]

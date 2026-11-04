@@ -1,8 +1,8 @@
 //! The tom bleed rule CD (P4-14 stage 2): a session step after the per-track analysis that marks the hits of a tom
 //! close mic which the other drums' tom close mics explain.
 //!
-//! Measurements and the choice of the rule are in `docs/migration/phase4-report.md`, sections "P4-14 stage 1" to
-//! "P4-14 stage 2". The Python reference is `tools/tom_bleed_cd.py` (`rule_cd`).
+//! Measurements and the choice of the rule are in the Phase 4 report, sections "P4-14 stage 1" to
+//! "P4-14 stage 2".
 //!
 //! # Input and output
 //!
@@ -49,8 +49,7 @@
 //! pair). The source excess of a hit of A is `L_A - L_S - G(S->A)`, the lowest over the used sources of one kind
 //! ([`TomBleed::source_excess`]). A hit is bleed when rule CD marks it, or its snare excess is under
 //! `snare_threshold_db` (9.2 dB, as the tom sources), or its kick excess is under `kick_threshold_db` (4.0 dB: a tom
-//! played with the kick is a common accent). Nothing is marked when rule CD is off. The Python reference is
-//! `tools/tom_bleed_sk.py` (`sk_excess`, `rule_sk`).
+//! played with the kick is a common accent). Nothing is marked when rule CD is off.
 //!
 //! # Rule version 3: the tom pair rule, winner takes all (P4-21)
 //!
@@ -61,12 +60,12 @@
 //! hit of another drum lies in the window and is that much louder; a marked hit protects no other. Two mics of one drum
 //! never pair. A hit is marked only when its own relative level is also at most `winner_floor_db` ([`PAIR_FLOOR_DB`], -3 dB):
 //! bleed is quiet on its own mic, a real unison stroke is not. The rule needs no bleed between the hits, so it runs when rule CD is off (tom tracks edited to digital
-//! silence). The Python reference is `tools/tom_pairs.py` (`pair_marks`).
+//! silence).
 //!
 //! # Rule version 4: the own-mic attack rise keep guard (#182)
 //!
 //! The pair rule lost real strokes: 42 of its 46 merges on the toms of the 3 real sessions were real strokes
-//! (`docs/migration/reports/tom-pair-risk.md`). A marked hit whose own mic has an attack stays: when the rise of
+//! (tom-pair-risk report). A marked hit whose own mic has an attack stays: when the rise of
 //! the hit ([`stroke_rise_db`], the P4-18 rise test) is [`PAIR_KEEP_RISE_DB`] (10 dB) or more, the mic is not
 //! marked. The measured guard keeps all 42 lost real strokes and unmarks no bleed merge. The guard applies per
 //! mic from version 4 ([`PairMic::guarded`]): a recorded version 3 re-pick next to a version 4 target runs the
@@ -77,7 +76,7 @@
 //! On ENST `drummer_3` the floor tom (`tom_3`) sits next to the kick: the kick and the floor tom hear each other
 //! about as loud, so `G(kick->tom_3) + G(tom_3->kick)` lies above [`TomBleedParams::shared_sum_db`] and version 2
 //! rejects the kick source as a shared pair - the kick bleed on the floor tom stays in the output (0.264 F1, 1682
-//! kick false positives; `docs/migration/reports/release-0.9.2-enst.md`). Version 5 keeps a kick source whose gain
+//! kick false positives (release 0.9.2 ENST report)). Version 5 keeps a kick source whose gain
 //! pair is shared, under a guarded rule: a hit is marked when its kick excess is under
 //! [`TomBleedParams::kick_shared_threshold_db`] (8.0 dB, the bleed is louder than the unguarded 4.0 dB threshold
 //! reaches: measured p50 4.8 dB, real strokes p5 24 dB) and the hit has no own 2 kHz attack on the tom mic (the
@@ -93,11 +92,12 @@
 //!
 //! Every value is computed in a fixed order in `f64`; window bounds use [`ms_to_samples`].
 
-use super::attribution::{
-    AttributionError, AttributionParams, Biquad, FilterKind, Role, Transfer, band_peak_db, band_sections,
-    calibrate_gain, ms_to_samples, percentile,
-};
+use super::attribution::{AttributionError, AttributionParams, Transfer, calibrate_gain};
 use super::flam::zero_phase;
+use crate::dsp::{
+    FilterKind, amp_db_max, band_level_db, band_sections, broadband_peak_db, median, ms_to_samples, percentile,
+};
+use crate::role::Role;
 
 /// The version of the rule an analysis records (`detector.bleed_rule`); 0 means no rule, 1 rule CD (tom sources only),
 /// 2 rule CD with the kick and snare close mics as sources ([`tom_bleed_with`]), 3 version 2 plus the tom pair rule
@@ -106,33 +106,33 @@ use super::flam::zero_phase;
 pub const RULE_VERSION: u32 = 5;
 
 /// Version 3: the level floor of the pair rule (dB against the mic's median): only a hit this far under its own mic's
-/// median can be marked. Chosen on the seven yardstick songs (`tools/tom_pairs.py`).
-pub const PAIR_FLOOR_DB: f64 = -3.0;
+/// median can be marked. Chosen on the seven yardstick songs (P4-21).
+pub(crate) const PAIR_FLOOR_DB: f64 = -3.0;
 
 /// Version 4: a hit the pair rule would mark stays a hit when its own-mic attack rise ([`stroke_rise_db`]) is this
 /// many dB or more (the P4-18 rise test, `tools/firm_fixes.py` `RISE_MIN_DB`). Measured in #177 on the toms of the
 /// 3 real sessions: it keeps all 42 lost real strokes and unmarks no bleed merge (a smaller threshold unmarks bleed).
-pub const PAIR_KEEP_RISE_DB: f64 = 10.0;
+pub(crate) const PAIR_KEEP_RISE_DB: f64 = 10.0;
 
-/// Version 4: the high-pass of the attack rise (Hz, `tools/tom_fixes.py` `HP_HZ`): a tom's ring is low, its stick
+/// Version 4: the high-pass of the attack rise (Hz): a tom's ring is low, its stick
 /// click is not; in a roll the ring of the earlier hit hides the full-band rise, the click over the faster decaying
 /// highs does not.
-pub const PAIR_HP_HZ: f64 = 2000.0;
+pub(crate) const PAIR_HP_HZ: f64 = 2000.0;
 
 /// Version 5: the kick excess under which a hit is marked by the guarded shared kick source (dB, #362). Higher than
 /// the unguarded [`TomBleedParams::kick_threshold_db`] (4.0): on ENST `drummer_3` the kick bleed on the floor tom lies
 /// at p50 4.8, p95 9.7 dB, the real strokes at p5 24 dB, so 8.0 catches most of the bleed; the rise guard keeps the
 /// real strokes (1 of 371 lost at this value, 15 without it).
-pub const KICK_SHARED_THRESHOLD_DB: f64 = 8.0;
+pub(crate) const KICK_SHARED_THRESHOLD_DB: f64 = 8.0;
 
 /// Version 5: a hit the guarded shared kick source would mark stays a hit when its own 2 kHz attack rise (the
 /// high-band part of [`stroke_rise_db`]) is this many dB or more (dB, #362). On ENST `drummer_3` the kick-only bleed
 /// sits at p50 13.1, the real strokes (with or without the kick) at p50 30 or more; 15.0 keeps all but 1 of the
 /// real strokes while the unguarded rule loses 15.
-pub const KICK_SHARED_RISE_DB: f64 = 15.0;
+pub(crate) const KICK_SHARED_RISE_DB: f64 = 15.0;
 
 /// The excess of a hit without a played source mic (never bleed).
-pub const NO_SOURCE_DB: f64 = 200.0;
+pub(crate) const NO_SOURCE_DB: f64 = 200.0;
 
 /// Parameters. [`Default`] gives the values of stage 1c and the verifier rounds.
 #[derive(Debug, Clone, PartialEq)]
@@ -367,36 +367,6 @@ impl TomBleed {
     }
 }
 
-/// The tom-band level of `x` in `[c + w.0, c + w.1)` with the filter run in over `pre` samples before the window;
-/// samples outside the signal are zeros (the Python reference pads the same way).
-fn level_db(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64) -> f64 {
-    let start = c + w.0 - pre;
-    let len = (pre + w.1 - w.0).max(0) as usize;
-    if start >= 0 && start as usize + len <= x.len() {
-        let s = start as usize;
-        return band_peak_db(x, sec, s, s + pre as usize, s + len);
-    }
-    let seg: Vec<f32> = (0..len)
-        .map(|i| {
-            let k = start + i as i64;
-            if k >= 0 && (k as usize) < x.len() {
-                x[k as usize]
-            } else {
-                0.0
-            }
-        })
-        .collect();
-    band_peak_db(&seg, sec, 0, pre as usize, len)
-}
-
-/// The broadband peak of `x` in `[c + w.0, c + w.1)`, clipped to the signal (-180 dB when empty).
-fn broad_db(x: &[f32], c: i64, w: (i64, i64)) -> f64 {
-    let n = x.len() as i64;
-    let a = (c + w.0).clamp(0, n);
-    let b = (c + w.1).clamp(0, n);
-    band_peak_db(x, &[], a as usize, a as usize, b as usize)
-}
-
 /// True when `sorted` has a value within `tol` of `v`.
 fn near(sorted: &[i64], v: i64, tol: i64) -> bool {
     let k = sorted.partition_point(|&s| s < v - tol);
@@ -405,8 +375,8 @@ fn near(sorted: &[i64], v: i64, tol: i64) -> bool {
 
 /// The strong hits of a mic (indices into its hits): the P2-6 rule.
 #[must_use]
-pub fn strong_hits(x: &[f32], hits: &[i64], w: (i64, i64), strong_db: f64) -> Vec<usize> {
-    let pk: Vec<f64> = hits.iter().map(|&c| broad_db(x, c, w)).collect();
+pub(crate) fn strong_hits(x: &[f32], hits: &[i64], w: (i64, i64), strong_db: f64) -> Vec<usize> {
+    let pk: Vec<f64> = hits.iter().map(|&c| broadband_peak_db(x, c, w)).collect();
     match percentile(&pk, 90.0) {
         Some(p90) => (0..hits.len()).filter(|&i| pk[i] >= p90 - strong_db).collect(),
         None => Vec::new(),
@@ -442,7 +412,8 @@ pub fn tom_bleed_with(
         v.sort_unstable();
         v
     };
-    let levels = |x: &[f32], at: &[i64]| -> Vec<f64> { at.iter().map(|&c| level_db(x, &sec, c, win, pre)).collect() };
+    let levels =
+        |x: &[f32], at: &[i64]| -> Vec<f64> { at.iter().map(|&c| band_level_db(x, &sec, c, win, pre)).collect() };
     let src_strong: Vec<Vec<i64>> = sources
         .iter()
         .map(|s| {
@@ -596,7 +567,7 @@ pub fn tom_bleed(mics: &[TomMic], sr: u32, p: &TomBleedParams) -> Result<TomBlee
 /// (the lower level) is less than `keep_gap_db` under the other drums without the pair (one level per drum): those
 /// count as one drum. A shared pair whose weaker mic is further under keeps the direction of the levels.
 #[must_use]
-pub fn merged_pairs(r: &TomBleed, group: &[usize], p: &TomBleedParams) -> Vec<(usize, usize)> {
+pub(crate) fn merged_pairs(r: &TomBleed, group: &[usize], p: &TomBleedParams) -> Vec<(usize, usize)> {
     let gain = |s: usize, t: usize| {
         r.transfers
             .iter()
@@ -676,7 +647,7 @@ fn run_pass(mics: &[TomMic], sr: u32, p: &TomBleedParams, group: &[usize]) -> To
                         mics[m]
                             .hits
                             .iter()
-                            .map(|&c| level_db(mics[o].signal, &sec, c, win, pre))
+                            .map(|&c| band_level_db(mics[o].signal, &sec, c, win, pre))
                             .collect()
                     })
                 })
@@ -830,23 +801,23 @@ fn peak_window_db<T: Copy + Into<f64>>(x: &[T], sr: u32, t: f64, before: f64, af
         return -180.0;
     }
     let peak = x[i0..i1].iter().fold(0.0f64, |m, &v| m.max(v.into().abs()));
-    20.0 * peak.max(1e-9).log10()
+    amp_db_max(peak, 1e-9)
 }
 
 /// The level (dBFS) of a hit for the pair rule: the peak of `x` in `[t - 5 ms, t + 30 ms]` (`firm_fixes.peak_db`);
 /// -180 for an empty window.
 #[must_use]
-pub fn pair_level_db(x: &[f32], sr: u32, t: f64) -> f64 {
+pub(crate) fn pair_level_db(x: &[f32], sr: u32, t: f64) -> f64 {
     peak_window_db(x, sr, t, 0.005, 0.030)
 }
 
 /// The own-mic attack rise of a hit (dB): the peak in `[t - 2, t + 10]` ms over the peak in `[t - 30, t - 10]` ms,
 /// the larger of the full band `x` and the 2 kHz high-pass `hp` ([`PAIR_HP_HZ`], [`zero_phase`]). The P4-18 rise test
-/// (`tools/tom_fixes.py` `stroke_rise`, `tools/firm_fixes.py` `rise_db`): a stroke is 10 dB or more over what came
+/// (`tools/firm_fixes.py` `rise_db`): a stroke is 10 dB or more over what came
 /// before; the decay of an earlier hit or noise is about 0. In a roll the ring of the earlier hit hides the
 /// full-band rise, the stick click over the faster decaying highs does not.
 #[must_use]
-pub fn stroke_rise_db(x: &[f32], hp: &[f64], sr: u32, t: f64) -> f64 {
+pub(crate) fn stroke_rise_db(x: &[f32], hp: &[f64], sr: u32, t: f64) -> f64 {
     // the near window is [t - 2, t + 10] ms, the far window [t - 30, t - 10] ms (before the hit)
     let near = (0.002, 0.010);
     let far = (0.030, -0.010);
@@ -859,23 +830,9 @@ pub fn stroke_rise_db(x: &[f32], hp: &[f64], sr: u32, t: f64) -> f64 {
 /// over `[t - 30, t - 10]` ms. Version 5's guard reads this, not the full-band rise: a kick's own transient is an
 /// attack on the tom mic too, only the stick click of a real stroke lives in the high band alone (#362).
 #[must_use]
-pub fn high_rise_db(hp: &[f64], sr: u32, at: i64) -> f64 {
+pub(crate) fn high_rise_db(hp: &[f64], sr: u32, at: i64) -> f64 {
     let t = at as f64 / f64::from(sr);
     peak_window_db(hp, sr, t, 0.002, 0.010) - peak_window_db(hp, sr, t, 0.030, -0.010)
-}
-
-/// The median of `v` (the mean of the two middle values for an even count); `None` for an empty slice.
-fn median(v: &mut [f64]) -> Option<f64> {
-    if v.is_empty() {
-        return None;
-    }
-    v.sort_by(f64::total_cmp);
-    let n = v.len();
-    Some(if n % 2 == 1 {
-        v[n / 2]
-    } else {
-        (v[n / 2 - 1] + v[n / 2]) / 2.0
-    })
 }
 
 /// Version 3, the tom pair rule: per mic the hits it marks (see the module documentation). `mics` must have equal-length

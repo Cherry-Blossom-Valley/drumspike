@@ -10,7 +10,7 @@ keeps the playhead where it is. The setting survives a restart.
 """
 import pytest
 
-from app_support import menu, open_project
+from app_support import invoke, menu, open_project
 
 
 @pytest.fixture(autouse=True)
@@ -106,3 +106,39 @@ def test_the_mode_is_in_the_key_table_and_survives_a_restart(app, make_project):
     assert app.evaluate("() => SETTINGS().ui.stopReturnToStart") is True
     menu(app, "stop_return_mode")
     assert app.evaluate("() => SETTINGS().ui.stopReturnToStart") is False
+
+
+def test_suspend_follow_when_editing_holds_the_view_for_two_seconds_then_turns_the_page(app, make_project):
+    """P4-wf10 (folded from test_suspend_follow.py): with Transport > Suspend Follow when Editing checked, an add
+    during playback holds the view start for 2 s of playback, then the follow resumes at the next page (one turn,
+    the playhead at the follow fraction of the new view). The check state survives a restart; unchecked is the default."""
+    open_project(app, make_project(seconds=30.0))
+    assert app.evaluate("() => SETTINGS().ui.suspendFollowOnEdit") is False
+    menu(app, "suspend_follow")
+    assert app.evaluate("() => SETTINGS().ui.suspendFollowOnEdit") is True
+    app.evaluate("() => { window.__DS_NO_STRIP__ = true; window.__DS_NO_CP__ = true; setFollow('smooth'); }")
+    app.click("#playBtn")
+    app.wait_for_function("() => S.playing && AC.running")
+    app.wait_for_function("() => S.playhead > 3.0")
+    app.evaluate("() => setView(0, 8)")   # a view that can turn a page (the whole-project view has no next page)
+    menu(app, "add_hit")
+    assert app.evaluate("() => S.followHold") is True
+    t0 = app.evaluate("() => S.view.t0")   # read after the edit: the hold has frozen the view
+    app.evaluate("""() => { window.__views = []; const orig = setView;
+        window.setView = (a, b) => { window.__views.push([a, b, PH.v]); return orig(a, b); }; }""")
+    at = app.evaluate("() => S.followResumeAt")
+    assert at is not None and 0 < at - app.evaluate("() => S.playhead") <= 2.0 + 1e-9
+    # the view start does not change for 2 s of playback (checked just before the resume: a small margin)
+    app.wait_for_function("p => S.playhead > p + 1.5", arg=at - 2.0)
+    assert app.evaluate("() => S.view.t0") == t0 and len(app.evaluate("() => window.__views")) == 0
+    app.wait_for_function("() => !S.followHold && S.followResumeAt === null && window.__views.length > 0")
+    a, b, ph = app.evaluate("() => window.__views[window.__views.length - 1]")
+    assert a != t0 and abs(ph - (a + (b - a) * 0.25)) < 1e-6   # FOLLOW_FRAC
+    app.click("#playBtn")
+    wait_stopped(app)
+    invoke(app, "transport_stop", close=True)   # the next tests start without an open transport
+    app.reload()
+    app.wait_for_function("() => window.DSShell && DSShell.listening()")
+    assert app.evaluate("() => SETTINGS().ui.suspendFollowOnEdit") is True
+    menu(app, "suspend_follow")
+    assert app.evaluate("() => SETTINGS().ui.suspendFollowOnEdit") is False

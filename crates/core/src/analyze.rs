@@ -13,7 +13,7 @@
 //!    as neighbours), then a stable sort by time and a second min-gap dedup. With
 //!    `refine` off the coarse times stay and no event has a `rise`. The rule
 //!    ([`AnalyzeParams::rule`], P4-12) is the engine's (version 1, the default here and in the
-//!    parity checks) or the reach rule the app runs ([`crate::refine::refine_reach`]).
+//!    parity checks) or the reach rule the app runs (`refine::reach::refine_reach`).
 //! 5. The global shift (`shift_samples / sr` seconds) and a stable sort by time.
 //! 6. The velocities ([`crate::velocity::velocity_map`]) and `rise` rounded to 1 decimal
 //!    with Python's `round(x, 1)` ([`crate::pyops::py_round_digits`]).
@@ -21,7 +21,7 @@
 //! A source rate other than 44.1, 48 or 96 kHz is an error ([`AnalyzeError::Rate`]): the
 //! Python engine decodes such a file with ffmpeg first, the core does not. Parity with
 //! `engine.analyze_track` (identical `t`, `v`, `rise` and order) is checked by
-//! `tools/parity/check_analyze.py`; [`AnalyzeBranches`] counts which step changed
+//! `tests/test_golden.py` (the analyze cases); [`AnalyzeBranches`] counts which step changed
 //! something, so the check can show that every branch ran.
 
 use std::cmp::Ordering;
@@ -31,10 +31,12 @@ use crate::detect::onset::{self, OnsetError, Role, detect_onsets};
 use crate::detect::{DetectError, N_CLASSES};
 use crate::pyops::py_round_digits;
 use crate::refine::{BackStep, FM_PEAK_DB, Hit, ReachStep, RefineRule, RefineWindow, refine_track_rule_peak};
+use crate::role::{class_note, role_classes, role_note};
+use crate::rules::{ResearchOverrides, RuleSet};
 use crate::velocity::{VelocityMap, velocity_map};
 
 /// The source rates the core analyses (`engine.DETECT_RATES`, the rates of the resampler).
-pub const DETECT_RATES: [u32; 3] = [44_100, 48_000, 96_000];
+pub(crate) const DETECT_RATES: [u32; 3] = [44_100, 48_000, 96_000];
 
 /// The parameters of one analysis (the `params` of a track in the document).
 #[derive(Debug, Clone, PartialEq)]
@@ -58,9 +60,8 @@ pub struct AnalyzeParams {
     /// P4-19: the roll fill version (0 = off). The roll fill moved with the model to the
     /// model branch (#281 A3/D16); the field stays so old documents load.
     pub roll: u32,
-    /// P4-31: the kick walk version (0 = the shipped back-track margin everywhere, the default here and in the parity
-    /// checks; [`crate::refine::kick_walk_applies`] says for which roles). The app sets it per analysis; it is not a
-    /// document param.
+    /// P4-31: the kick walk version. Inert since #281 D16 (the kick walk moved with the model to the model branch):
+    /// every version runs the shipped back-track margin on every role. The app sets 0; it is not a document param.
     pub kick_walk: u32,
 }
 
@@ -257,6 +258,7 @@ pub struct Analysis {
 
 impl Analysis {
     /// True when the roll fill added event `i`.
+    #[cfg(test)]
     #[must_use]
     pub fn is_roll(&self, i: usize) -> bool {
         self.roll.get(i).copied().unwrap_or(false)
@@ -275,45 +277,10 @@ impl Analysis {
     }
 }
 
-/// The MIDI notes a role keeps (`engine.ROLE_CLASSES`); an unknown role gets the set of
-/// `other` (every note from 28 to 59).
-#[must_use]
-pub fn role_classes(role: &str) -> &'static [u8] {
-    const OTHER: [u8; 32] = {
-        let mut a = [0u8; 32];
-        let mut i = 0;
-        while i < 32 {
-            a[i] = 28 + i as u8;
-            i += 1;
-        }
-        a
-    };
-    match role {
-        "kick" => &[35],
-        "snare" => &[38],
-        "tom" => &[41, 43, 45, 47, 48, 50],
-        "hat" => &[42, 44, 46],
-        "cymbal" => &[49, 51, 52, 53, 55],
-        _ => &OTHER,
-    }
-}
-
-/// The note of a DSP fallback hit (`engine.ROLE_NOTE`; an unknown role gets 35 like
-/// `other`).
-#[must_use]
-pub fn role_note(role: &str) -> u8 {
-    match role {
-        "snare" => 38,
-        "tom" => 47,
-        "hat" => 42,
-        "cymbal" => 49,
-        _ => 35,
-    }
-}
-
 /// The thresholds as the CLI receives them: `float(f"{t:.3f}")` for each.
+#[cfg(test)]
 #[must_use]
-pub fn round_thresholds(t: &[f64; N_CLASSES]) -> [f64; N_CLASSES] {
+pub(crate) fn round_thresholds(t: &[f64; N_CLASSES]) -> [f64; N_CLASSES] {
     t.map(|v| py_round_digits(v, 3))
 }
 
@@ -343,16 +310,13 @@ pub fn detect_events(
     check_rate(sr)?;
     match detector {
         Detector::Dsp => {
-            let hits = detect_onsets(x, sr, Role::parse(role).unwrap_or(Role::Other))?;
+            let hits = detect_onsets(x, sr, Role::parse_or_other(role))?;
             let note = role_note(role);
             Ok(hits.iter().map(|h| (h.time, note)).collect())
         }
         Detector::Backend(backend) => {
             let (hits, _) = backend.detect(x, sr, role)?;
-            Ok(hits
-                .iter()
-                .map(|h| (h.time, crate::backend::class_note(h.class, role)))
-                .collect())
+            Ok(hits.iter().map(|h| (h.time, class_note(h.class, role))).collect())
         }
         Detector::Candidates {
             cands,
@@ -545,7 +509,8 @@ pub fn analyze_track(
 /// The DSP fallback with its per-track candidate list (A4): the same analysis as
 /// [`analyze_track`] with [`Detector::Dsp`] (identical events), plus the peak-picked
 /// candidates with their gate verdicts, the detection's parameters and its weak-flux limit
-/// for the store. One resample and one spectrogram for both.
+/// for the store. One resample and one spectrogram for both. `rules` and `research` are the
+/// analysis's resolved delta rule and research numbers (R6).
 ///
 /// # Errors
 ///
@@ -556,10 +521,12 @@ pub fn analyze_track_dsp_cands(
     sr: u32,
     role: &str,
     params: &AnalyzeParams,
+    rules: &RuleSet,
+    research: &ResearchOverrides,
 ) -> Result<(Analysis, Vec<onset::Candidate>, onset::OnsetParams, f32), AnalyzeError> {
     check_rate(sr)?;
-    let p = onset::OnsetParams::for_role(Role::parse(role).unwrap_or(Role::Other));
-    let (hits, cands, weak_limit) = onset::detect_onsets_and_cands(x, sr, &p)?;
+    let p = onset::OnsetParams::for_role_with(Role::parse_or_other(role), research);
+    let (hits, cands, weak_limit) = onset::detect_onsets_and_cands(x, sr, &p, rules, research)?;
     let note = role_note(role);
     let detected: Vec<(f64, u8)> = hits.iter().map(|h| (h.time, note)).collect();
     let a = analyze_flagged(x, sr, role, &detected, &[], &[], params)?;
@@ -567,7 +534,7 @@ pub fn analyze_track_dsp_cands(
 }
 
 /// P4-6c: the detector's hits `(time, note)` and the roll flag per hit ([`detect_hits`]).
-pub type DetectedHits = (Vec<(f64, u8)>, Vec<bool>);
+pub(crate) type DetectedHits = (Vec<(f64, u8)>, Vec<bool>);
 
 /// P4-6c: step 1 of [`analyze_track`], the detector's hits with the pick rules that run on them (P4-19: the roll
 /// fill; its flag per hit, empty when it added none or does not apply). The Learn filter marks these hits and then
@@ -577,7 +544,7 @@ pub type DetectedHits = (Vec<(f64, u8)>, Vec<bool>);
 ///
 /// [`AnalyzeError::Rate`] when `sr` is not 44.1, 48 or 96 kHz; [`AnalyzeError::Onset`] or
 /// [`AnalyzeError::Backend`] when the detector fails.
-pub fn detect_hits(
+pub(crate) fn detect_hits(
     x: &[f32],
     sr: u32,
     role: &str,

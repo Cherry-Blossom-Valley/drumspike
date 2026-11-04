@@ -11,12 +11,12 @@
 //!   suggestion with `tempo_map_set`.
 //!
 //! The map is `{bpm, steps: [{t, bpm}], meter: [num, den], changes: [{bar, meter}], bar1_s}`,
-//! see `docs/migration/project-format.md`. The MIDI export of a project uses it
+//! see project format 1. The MIDI export of a project uses it
 //! (`export::export_midi`, Export All); the default map writes the bytes of the exports before this card.
 
 use drumspike_core::tempo::{TempoMap, import_midi};
 use drumspike_core::tempo_detect::{
-    DEFAULT_VELOCITY, DetectParams, Detection, Hit, ISOLATED_S, Role, detect, refit_bar1,
+    BeatVoice, DEFAULT_VELOCITY, DetectParams, Detection, Hit, ISOLATED_S, detect, refit_bar1,
 };
 use serde_json::{Value, json};
 
@@ -192,6 +192,7 @@ impl Service {
                 None => DetectParams::default().min_bars,
             },
             min_step_pct: min_step_pct.unwrap_or(DetectParams::default().min_step_pct),
+            rule: self.inner.config.rules.tempo,
             ..DetectParams::default()
         };
         params.validate().map_err(AppError::bad)?;
@@ -218,7 +219,7 @@ impl Service {
                 if !take {
                     continue;
                 }
-                let r = Role::from_name(role);
+                let r = BeatVoice::from_name(role);
                 let before = hits.len();
                 hits.extend(t.events().iter().filter(|e| !is_cut(e)).map(|e| Hit {
                     t: e.t,
@@ -236,9 +237,9 @@ impl Service {
             duration_s: end,
             ..params
         };
-        let count = |r: Role| hits.iter().filter(|h| h.role == r).count();
+        let count = |r: BeatVoice| hits.iter().filter(|h| h.role == r).count();
         let mut warnings = Vec::new();
-        for (r, what) in [(Role::Kick, "kick"), (Role::Snare, "snare")] {
+        for (r, what) in [(BeatVoice::Kick, "kick"), (BeatVoice::Snare, "snare")] {
             if count(r) < drumspike_core::tempo_detect::MIN_HITS {
                 warnings.push(format!(
                     "fewer than {} {what} hits: half or double the tempo is as likely",
@@ -308,7 +309,7 @@ impl Service {
             if !matches!(role, "kick" | "snare") || t.follows.is_some() {
                 continue;
             }
-            let r = Role::from_name(role);
+            let r = BeatVoice::from_name(role);
             hits.extend(t.events().iter().filter(|e| !is_cut(e)).map(|e| Hit {
                 t: e.t,
                 role: r,
@@ -328,6 +329,11 @@ impl Service {
         }))
     }
 }
+
+/// R3: the handlers of [`TEMPO_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 5] = crate::call::routes(TEMPO_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
 
 /// Run a command of this card for the dispatcher; `None` when `cmd` is not one of them.
 #[must_use]
@@ -389,13 +395,7 @@ mod tests {
 
     #[test]
     fn dispatch_knows_its_commands_and_checks_the_arguments() {
-        let svc = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = Service::new(crate::ServiceConfig::default());
         assert!(dispatch(&svc, "project_list", &json!({})).is_none());
         for (cmd, args) in [
             ("tempo_map_get", json!({})),

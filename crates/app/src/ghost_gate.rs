@@ -25,8 +25,10 @@
 
 use std::sync::Arc;
 
-use drumspike_core::analyze::{AnalyzeParams, analyze_detected, role_note};
+use drumspike_core::analyze::{AnalyzeParams, analyze_detected};
 use drumspike_core::detect::onset::{self, OverheadSource};
+use drumspike_core::role::role_note;
+use drumspike_core::rules::ResearchOverrides;
 use serde_json::{Map, Value, json};
 
 use crate::media::{Decoded, mix_mode};
@@ -48,13 +50,10 @@ pub const CLEAR_MS: f64 = 30.0;
 
 /// The overhead denial margin (#286 A1): a soft-eligible snare candidate within the clearance
 /// of an oh hit that is louder than the snare mic by more than this (dB, both mics measured
-/// as the full-band peak — the common-band form) keeps no soft rescue. The env
-/// `DRUMSPIKE_A1_OH_MARGIN_DB` overrides the default.
-fn oh_margin_db() -> f64 {
-    std::env::var("DRUMSPIKE_A1_OH_MARGIN_DB")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(2.0)
+/// as the full-band peak — the common-band form) keeps no soft rescue. The research override
+/// `DRUMSPIKE_A1_OH_MARGIN_DB` ([`ResearchOverrides::a1_oh_margin_db`]) replaces the default.
+fn oh_margin_db(research: &ResearchOverrides) -> f64 {
+    research.a1_oh_margin_db.unwrap_or(2.0)
 }
 
 /// A kick or tom close mic of the clearance (the busy sources; no sample or trigger track).
@@ -197,7 +196,7 @@ fn run_one(svc: &Service, op: &Shared, name: &str, mix: &str, busy: &[f64], ohs:
             &params,
             (&dec.samples, dec.sr),
             &oh_sources,
-            oh_margin_db(),
+            oh_margin_db(&svc.inner.config.research),
         ));
         peaks.sort_unstable();
         peaks.dedup();
@@ -205,9 +204,14 @@ fn run_one(svc: &Service, op: &Shared, name: &str, mix: &str, busy: &[f64], ohs:
     if peaks.is_empty() {
         return None;
     }
-    let Ok((hits, mut cands, weak)) =
-        onset::detect_onsets_and_cands_soft_excluding(&dec.samples, dec.sr, &params, &peaks)
-    else {
+    let Ok((hits, mut cands, weak)) = onset::detect_onsets_and_cands_soft_excluding(
+        &dec.samples,
+        dec.sr,
+        &params,
+        &peaks,
+        &svc.inner.config.rules,
+        &svc.inner.config.research,
+    ) else {
         return None;
     };
     let mut dropped = 0usize;

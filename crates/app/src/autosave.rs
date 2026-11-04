@@ -136,13 +136,7 @@ mod tests {
 
     #[test]
     fn the_thread_ends_with_the_service() {
-        let svc = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = Service::new(crate::ServiceConfig::default());
         let weak = Arc::downgrade(&svc.inner);
         drop(svc);
         let end = Instant::now() + Duration::from_secs(5);

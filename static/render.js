@@ -1,4 +1,4 @@
-/* Drum Spike v2 — render (R17 step 5, #55 per docs/review/R17-plan.md)
+/* Drum Spike v2 — render (R17 step 5, #55)
    The frame scheduler (F, FR, invalidate/invalidateHits, onFrame, flushFrame — P3-14d),
    the measured geometry (GEO, measureGeo, geoObserve — read after layout, never in a
    frame) and the compositor playhead (CP, P4-1, #463, #14). Plain script (no build
@@ -178,15 +178,6 @@ function cpRate(e) {   // #463: correct the drift e (song s) through the playbac
   CP.segs.push({ at0: now, pos0: shown, rate: CP.rate, pr: CP.pr, dur: CP.dur, end: Infinity });
   if (CP.segs.length > CP_KEEP) CP.segs.splice(0, CP.segs.length - CP_KEEP);
 }
-/* #14: the test hook that forces a real step of the drawn playhead: the model the page shows (the clock and
-   the live seg with it) jumps by `s` song s at once, so every later drawn position carries the jump until a
-   re-anchor. Only the tests call it (test_playhead_steps.py). */
-window.__DS_STEP_PLAYHEAD = s => {
-  const now = performance.now(), shown = cpPos(now);
-  CP.at0 = now; CP.pos0 = shown + s;
-  const g = CP.segs[CP.segs.length - 1];
-  if (g && g.end === Infinity) { g.at0 = now; g.pos0 = shown + s; }
-};
 function cpEndSeg(t) { const g = CP.segs[CP.segs.length - 1]; if (g && g.end === Infinity) g.end = Math.min(t, g.at0 + g.dur); }
 /* #463: the 2D strip els move per frame from the slewn clock (openDAW, peaks.js, wavesurfer write translateX per
    frame): a compositor animation interpolates between its keyframes and sits on fractional pixels mid-flight, so

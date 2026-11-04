@@ -8,7 +8,7 @@ Scope (coordinator, #458): docs/guide, docs/product/scripts, the CURRENT release
 docs/product/banned-words-allowed.txt (one path per line, repo-relative, a `#` comment per
 entry on why it stays out) - old release notes and internal plans keep their text, the
 guard never rewrites history. FAILs with file:line per hit, exit 1. Wired into
-tests/test_media_guide.py. Reusable: check_wording(paths) returns the hits, so tests can
+tests/test_guide.py. Reusable: check_wording(paths) returns the hits, so tests can
 plant a defect in a temporary file.
 
 The rules come from the list file: one entry per line with a `#` why. A plain word is

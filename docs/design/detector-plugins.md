@@ -1,8 +1,8 @@
 # Design: detector plugins as external processes
 
 Status: implemented. Owner decision 2026-10-25: the detector becomes pluggable,
-with external process plugins. This document is the exact design; the implementation
-tickets at the end follow from it.
+with external process plugins. This document is the design as built; the
+implementation tickets at the end are done.
 
 ## 1. The seam
 
@@ -131,7 +131,7 @@ The app validates every response before it uses it:
 - `confidence` is clamped to 0.0 to 1.0;
 - at most 50 hits per second of audio (hits) and 400 candidates per second
   (candidates); over that, the app fails the track with a readable error instead of
-  guessing which hits to keep.
+  choosing which hits to keep.
 
 Limits and timeouts:
 
@@ -179,8 +179,8 @@ hash of the licence text are recorded in the project (section 6).
 
 ## 6. Project format
 
-The detector of a track keeps its current record fields: `detector` (the opaque detector
-string), `chain` and `refine`. A plugin track adds one optional field:
+The detector of a track keeps its current record fields: `detector` (the detector
+string, kept as given), `chain` and `refine`. A plugin track adds one optional field:
 
 - `plugin`: `{"id": "<id>", "version": "<manifest version>", "licence_sha256": "<hex>"}`.
 
@@ -194,7 +194,7 @@ with the built-in detector.
 
 ## 7. UI and agent API
 
-- Inspector, Detection section (`buildParamsPanel` in `static/app.js`): a Detector
+- Inspector, Detection section (`buildParamsPanel`, now in `static/inspector.js`): a Detector
   select above the Sensitivity row. First entry `Built-in`, then one entry per installed
   plugin that supports the track's role and rate. Changing it applies on the next
   re-analyze, like the other detection settings. A follower track has no Detector
@@ -205,7 +205,7 @@ with the built-in detector.
   selects the built-in detector.
 - Example plugin, tests only: `tests/fixtures/plugins/json_hits.py`, a small Python
   script that reads hit times from a JSON file next to it and prints a protocol 1
-  response. No model, no network. It is never bundled with the app.
+  response. No network, no trained detector. It is never bundled with the app.
 
 ## 8. Licence boundary
 

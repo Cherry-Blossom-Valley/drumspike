@@ -1,4 +1,4 @@
-/* js_unit: the persist.js transitions (R17 step 2, #55 per docs/review/R17-plan.md).
+/* js_unit: the persist.js transitions (R17 step 2, #55).
    Each test gets a fresh context: state.js and persist.js in script order, a stubbed B and
    a manual clock. The four transitions the plan names for this step:
    a mark -> flush -> ack -> dirty-clear cycle, a refused write that stays queued, a late

@@ -2,7 +2,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["numpy", "soundfile"]
 # ///
-"""P4-6b stage A: the Learn evaluation on the real sessions (`docs/migration/concept-learn-mode.md` 4.3).
+"""P4-6b stage A: the Learn evaluation on the real sessions (Learn mode concept 4.3).
 
     uv run --with numpy --with soundfile python tools/learn_eval.py refs|baseline|learn|tune|notthis|filter|all \
         [--samples ~/.cache/drumspike/sessions] [--cache ~/.cache/drumspike/learn-eval] [--tool <service_tool>]

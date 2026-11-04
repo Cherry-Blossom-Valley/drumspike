@@ -1,6 +1,6 @@
 //! Sample-exact native playback of a whole session (feature `audio`, P3-5a).
 //!
-//! The design follows the spike `cpal-transport` (`docs/migration/spikes.md`): one reader thread fills one lock-free ring
+//! The design follows the spike `cpal-transport`: one reader thread fills one lock-free ring
 //! (rtrb) per track; the audio callback pops one block per track, mixes to stereo, adds the
 //! hit clicks at their exact samples and applies the master gain.
 //!
@@ -193,7 +193,7 @@ impl Default for TransportConfig {
 
 /// Counters of the running transport.
 #[derive(Debug, Default)]
-pub struct Stats {
+pub(crate) struct Stats {
     pub(crate) callbacks: AtomicU64,
     pub(crate) rendered_frames: AtomicU64,
     pub(crate) frames_min: AtomicU64,
@@ -1023,6 +1023,7 @@ impl Transport {
     }
 
     /// Move to `seconds` (rounded to the device frame).
+    #[cfg(test)]
     pub fn seek_seconds(&self, seconds: f64) {
         self.seek(self.frame_of(seconds));
     }
@@ -1242,6 +1243,7 @@ impl Offline {
     }
 
     /// Render without servicing the reader (the rings drain; for the underrun counter).
+    #[cfg(test)]
     pub fn render_starved(&mut self, frames: usize) -> Vec<f32> {
         let mut out = vec![0.0f32; 2 * frames];
         self.engine.render(&mut out, 2, 0);
@@ -1331,6 +1333,7 @@ impl Offline {
     }
 
     /// Play or pause.
+    #[cfg(test)]
     pub fn set_playing(&mut self, on: bool) {
         self.ctl.shared.playing.store(on, Ordering::Release);
     }

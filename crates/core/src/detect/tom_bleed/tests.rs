@@ -600,13 +600,13 @@ fn level_db_pads_with_zeros_and_strong_hits_follow_the_peak() {
     // a window that starts before the signal equals the same window on a zero-padded copy
     let mut padded = vec![0.0f32; 2400];
     padded.extend_from_slice(&x);
-    let a = level_db(&x, &sec, 100, (-24, 384), 2400);
-    let b = level_db(&padded, &sec, 2500, (-24, 384), 2400);
+    let a = band_level_db(&x, &sec, 100, (-24, 384), 2400);
+    let b = band_level_db(&padded, &sec, 2500, (-24, 384), 2400);
     assert!((a - b).abs() < 1e-12 && a > -20.0, "{a} {b}");
     // past the end: zeros, not a shorter window
-    let tail = level_db(&x, &sec, 4700, (-24, 384), 2400);
+    let tail = band_level_db(&x, &sec, 4700, (-24, 384), 2400);
     assert!(tail.is_finite());
-    assert!((level_db(&[], &sec, 0, (-24, 384), 2400) + 180.0).abs() < 1e-9);
+    assert!((band_level_db(&[], &sec, 0, (-24, 384), 2400) + 180.0).abs() < 1e-9);
     let mut y = vec![0.0f32; 48_000];
     burst(&mut y, 100, 0.5, 110.0);
     burst(&mut y, 20_000, 0.4, 110.0);
@@ -614,7 +614,7 @@ fn level_db_pads_with_zeros_and_strong_hits_follow_the_peak() {
     assert_eq!(strong_hits(&y, &[100, 20_000, 40_000], (-24, 240), 6.0), vec![0, 1]);
     assert!(strong_hits(&x, &[], (-24, 240), 6.0).is_empty());
     assert!(near(&[10, 20], 25, 5) && !near(&[10, 20], 26, 5) && !near(&[], 0, 5));
-    assert!((broad_db(&x, 100, (-24, 240)) - broad_db(&x, 100, (-24, 240))).abs() < 1e-12);
+    assert!((broadband_peak_db(&x, 100, (-24, 240)) - broadband_peak_db(&x, 100, (-24, 240))).abs() < 1e-12);
 }
 // ---- version 3: the tom pair rule (P4-21)
 

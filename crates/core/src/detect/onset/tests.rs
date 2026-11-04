@@ -24,7 +24,7 @@ fn kick_track(sr: u32, dur_s: f64, onsets: &[(f64, f64)]) -> Vec<f32> {
 #[test]
 fn role_names_round_trip() {
     for r in Role::ALL {
-        assert_eq!(Role::parse(r.name()), Some(r));
+        assert_eq!(Role::parse(r.as_str()), Some(r));
     }
     assert_eq!(Role::parse("bass"), None);
 }
@@ -134,7 +134,7 @@ fn synthetic_kicks_are_found_within_one_frame() {
 fn silence_gives_no_hit_for_any_role() {
     let x = vec![0f32; 48_000 * 3];
     for r in Role::ALL {
-        assert!(detect_onsets(&x, 48_000, r).unwrap().is_empty(), "{}", r.name());
+        assert!(detect_onsets(&x, 48_000, r).unwrap().is_empty(), "{}", r.as_str());
     }
     assert!(detect_onsets(&[], 48_000, Role::Kick).unwrap().is_empty());
 }
@@ -193,7 +193,8 @@ fn candidates_verdict_loud_soft_and_bleed() {
     let mut x = kick_track(sr, 2.0, &[(0.3, 0.0), (0.8, -15.0)]);
     snare_bleed(sr, 1.3, -6.0)(&mut x);
     let p = OnsetParams::for_role(Role::Kick);
-    let (hits, cands, weak_limit) = detect_onsets_and_cands(&x, sr, &p).unwrap();
+    let (hits, cands, weak_limit) =
+        detect_onsets_and_cands(&x, sr, &p, &RuleSet::default(), &ResearchOverrides::default()).unwrap();
     // the detector's hits are exactly the kept candidates, in order
     let kept_frames: Vec<usize> = cands.iter().filter(|c| c.kept).map(|c| c.frame).collect();
     assert_eq!(kept_frames, hits.iter().map(|h| h.frame).collect::<Vec<_>>());
@@ -269,7 +270,8 @@ fn soft_gate_recovers_a_ghost_snare_and_a_busy_kick_bleed_fails() {
     snare_hit(sr, 0.3, 0.0)(&mut x);
     snare_hit(sr, 1.5, 0.0)(&mut x);
     snare_hit(sr, 0.9, -18.0)(&mut x);
-    let (hits, cands, weak_limit) = detect_onsets_and_cands(&x, sr, &p).unwrap();
+    let (hits, cands, weak_limit) =
+        detect_onsets_and_cands(&x, sr, &p, &RuleSet::default(), &ResearchOverrides::default()).unwrap();
     let ghost = cands
         .iter()
         .find(|c| (c.time - 0.9).abs() < 0.02)
@@ -291,7 +293,9 @@ fn soft_gate_recovers_a_ghost_snare_and_a_busy_kick_bleed_fails() {
         peaks.iter().any(|&k| (cands[k].time - 0.9).abs() < 0.02),
         "ghost not busy: {peaks:?}"
     );
-    let (_, cands2, _) = detect_onsets_and_cands_soft_excluding(&x, sr, &p, &peaks).unwrap();
+    let (_, cands2, _) =
+        detect_onsets_and_cands_soft_excluding(&x, sr, &p, &peaks, &RuleSet::default(), &ResearchOverrides::default())
+            .unwrap();
     let ghost2 = cands2
         .iter()
         .find(|c| (c.time - 0.9).abs() < 0.02)
@@ -316,7 +320,8 @@ fn the_overhead_denial_takes_the_bleed_and_keeps_the_ghost() {
     snare_hit(sr, 0.3, 0.0)(&mut x);
     snare_hit(sr, 1.5, 0.0)(&mut x);
     snare_hit(sr, 0.9, -18.0)(&mut x);
-    let (hits, cands, _) = detect_onsets_and_cands(&x, sr, &p).unwrap();
+    let (hits, cands, _) =
+        detect_onsets_and_cands(&x, sr, &p, &RuleSet::default(), &ResearchOverrides::default()).unwrap();
     assert!(hits.iter().any(|h| (h.time - 0.9).abs() < 0.02));
     let gt = cands
         .iter()
@@ -333,7 +338,9 @@ fn the_overhead_denial_takes_the_bleed_and_keeps_the_ghost() {
         peaks.iter().any(|&k| (cands[k].time - 0.9).abs() < 0.02),
         "the bleed ghost not denied: {peaks:?}"
     );
-    let (_, cands2, _) = detect_onsets_and_cands_soft_excluding(&x, sr, &p, &peaks).unwrap();
+    let (_, cands2, _) =
+        detect_onsets_and_cands_soft_excluding(&x, sr, &p, &peaks, &RuleSet::default(), &ResearchOverrides::default())
+            .unwrap();
     let ghost2 = cands2
         .iter()
         .find(|c| (c.time - 0.9).abs() < 0.02)
@@ -367,7 +374,8 @@ fn soft_gate_needs_the_snare_shape() {
     snare_hit(sr, 1.5, 0.0)(&mut x);
     // a soft kick bleed: the kick's low sweep, no noise, no snare band peak
     kick_track_into(&mut x, sr, 0.9, -18.0);
-    let (_, cands, _) = detect_onsets_and_cands(&x, sr, &p).unwrap();
+    let (_, cands, _) =
+        detect_onsets_and_cands(&x, sr, &p, &RuleSet::default(), &ResearchOverrides::default()).unwrap();
     let bleed = cands.iter().find(|c| (c.time - 0.9).abs() < 0.05);
     if let Some(bleed) = bleed {
         assert!(!bleed.kept, "soft kick bleed kept with gate {:?}", bleed.gate);
@@ -393,7 +401,8 @@ fn soft_t2_rescues_a_ghost_the_loud_template_scores_too_low() {
         snare_hit(sr, t, -18.0)(&mut x);
     }
     // without the second template: the plain soft gate decides
-    let (_, cands0, _) = detect_onsets_and_cands(&x, sr, &p).unwrap();
+    let (_, cands0, _) =
+        detect_onsets_and_cands(&x, sr, &p, &RuleSet::default(), &ResearchOverrides::default()).unwrap();
     let ghost0 = cands0.iter().find(|c| (c.time - 2.5).abs() < 0.05);
     if let Some(g) = ghost0 {
         assert!(!g.kept || g.gate != Gate::Soft || g.similarity >= p.soft_sim.unwrap());
@@ -402,7 +411,8 @@ fn soft_t2_rescues_a_ghost_the_loud_template_scores_too_low() {
     let mut p2 = p.clone();
     p2.soft_t2 = Some(0.90);
     p2.soft_attack_max = Some(120.0);
-    let (_, cands, _) = detect_onsets_and_cands(&x, sr, &p2).unwrap();
+    let (_, cands, _) =
+        detect_onsets_and_cands(&x, sr, &p2, &RuleSet::default(), &ResearchOverrides::default()).unwrap();
     let soft: Vec<&Candidate> = cands.iter().filter(|c| c.gate == Gate::Soft).collect();
     assert!(
         !soft.is_empty(),
@@ -453,21 +463,45 @@ fn flat_spec(mag_db: f32) -> Vec<f32> {
 #[test]
 fn gained_spec_leaves_a_nominal_track_unchanged() {
     // scale = q995 of (10^v - 1) over the snare bands: above the reference (23) -> None.
-    assert!(gained_spec(&flat_spec(1.4), &band_range(20.0, 4_000.0), Role::Snare).is_none());
+    assert!(
+        gained_spec(
+            &flat_spec(1.4),
+            &band_range(20.0, 4_000.0),
+            Role::Snare,
+            &ResearchOverrides::default()
+        )
+        .is_none()
+    );
 }
 
 #[test]
 fn gained_spec_skips_a_near_nominal_track() {
     // A5 round 2: a track just barely under the reference scale (gain 23/20 = 1.15, under
     // the quiet bar) stays shipped: a marginal gain admits bleed on real multitracks.
-    assert!(gained_spec(&flat_spec(1.331), &band_range(20.0, 4_000.0), Role::Snare).is_none());
+    assert!(
+        gained_spec(
+            &flat_spec(1.331),
+            &band_range(20.0, 4_000.0),
+            Role::Snare,
+            &ResearchOverrides::default()
+        )
+        .is_none()
+    );
 }
 
 #[test]
 fn gained_spec_never_gains_a_kick() {
     // A5 round 3 (the coordinator's gate: the Session A kick 52 to 55, Session H 7 to 6):
     // the kick never gains, at any scale, like the tom and cymbal.
-    assert!(gained_spec(&flat_spec(0.62), &band_range(20.0, 4_000.0), Role::Kick).is_none());
+    assert!(
+        gained_spec(
+            &flat_spec(0.62),
+            &band_range(20.0, 4_000.0),
+            Role::Kick,
+            &ResearchOverrides::default()
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -475,7 +509,7 @@ fn gained_spec_gains_a_really_quiet_track_to_the_reference() {
     // scale 3.17 -> gain 23/3.17 = 7.3 (over the quiet bar): the snare bands land at the
     // reference scale, the outside bands are untouched.
     let bands = band_range(20.0, 4_000.0);
-    let out = gained_spec(&flat_spec(0.62), &bands, Role::Snare).expect("gained");
+    let out = gained_spec(&flat_spec(0.62), &bands, Role::Snare, &ResearchOverrides::default()).expect("gained");
     let g = 23.0 / (10f32.powf(0.62) - 1.0);
     for i in 0..8 {
         for b in bands.clone() {

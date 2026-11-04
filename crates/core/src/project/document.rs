@@ -1,6 +1,6 @@
 //! The `.drumspike` document (format 1) as serde structs.
 //!
-//! Every struct keeps the fields `docs/migration/project-format.md` names as typed fields
+//! Every struct keeps the fields project format 1 names as typed fields
 //! and everything else in a flattened map, so a document the Python server (or a newer
 //! app) wrote round-trips without losing a key. Numbers go through `serde_json` with
 //! `float_roundtrip`, so a hit time written by Python's `repr` reads back to the same
@@ -31,9 +31,9 @@ pub const FORMAT: i64 = 1;
 /// Default mix mode of a new project (`project.DEFAULT_MIX_MODE`); imported sessions keep `ffmpeg`.
 pub const DEFAULT_MIX_MODE: &str = "average";
 /// The accepted `mix_mode` values.
-pub const MIX_MODES: [&str; 2] = ["ffmpeg", "average"];
+pub(crate) const MIX_MODES: [&str; 2] = ["ffmpeg", "average"];
 /// The accepted source `mode` values.
-pub const SOURCE_MODES: [&str; 2] = ["referenced", "copied"];
+pub(crate) const SOURCE_MODES: [&str; 2] = ["referenced", "copied"];
 
 /// Move `key` out of `map` when its value reads as a `T`. A `null` or a value of another
 /// type stays in `map` (it becomes part of `extra` and is written back as it was).
@@ -522,7 +522,7 @@ impl Serialize for Document {
 /// clock value were not finite; `now()` returns a finite number of seconds, so
 /// this does not happen.
 #[must_use]
-pub fn empty_document(name: &str, mix_mode: &str) -> Document {
+pub(crate) fn empty_document(name: &str, mix_mode: &str) -> Document {
     Document {
         format: FORMAT,
         name: Some(name.to_string()),

@@ -1,6 +1,6 @@
-"""P3-13b: the key command table (static/keymap.js, docs/migration/ux-daw-reference.md 3.3 and 5).
+"""P3-13b: the key command table (static/keymap.js, UX reference 3.3 and 5).
 
-One table holds every command: menu.rs takes its accelerators from it (a Rust test compares each item with its row),
+One table holds every command: menu/ takes its accelerators from it (a Rust test compares each item with its row),
 app.js takes its keys from it, and Help > Keyboard Shortcuts is made from it. These tests check the page side: the
 table has no key in two commands (and the check finds a planted one), every menu item has its row, the help panel
 lists every command, the keys run their commands (the numpad nudge, Shift+arrow, the menu keys in the web page),
@@ -62,13 +62,13 @@ def test_every_menu_item_has_one_row_and_menu_rs_has_no_keys_of_its_own(app):
     assert js(app, "() => DSKeys.menuKeys().length") == 75                 # #300: every item with a key shows it (42 of them with Cmd, Control or Option; the rest are shown by the menu while no text field has the focus); #169: Show Overview; P3-19: Open Most Recent, Keyboard Shortcuts; P3-20a: Waveform Zoom In, Out, Reset; P4-31: Export Again; #158: Next Marker, Previous Marker; #207: Export Selected Tracks, Undo History
     handlers = set(js(app, "() => Object.keys(DSShell.handlers)"))
     assert set(rows) == handlers - {"recent", "recent_clear", "project", "follow", "zoom_own"}   # P3-18: the Follow Hits Of entries; #169: the own zoom presets; #441: Clear Recent
-    # menu.rs sets an accelerator only through accel_of (the table); its items carry no key strings
-    src = (ROOT / "apps/desktop/src-tauri/src/menu.rs").read_text()
-    main = src[:src.index("#[cfg(test)]")]
+    # menu/ sets an accelerator only through accel_of (the table); its items carry no key strings
+    menu = ROOT / "apps/desktop/src-tauri/src/menu"
+    main = "".join((menu / f"{m}.rs").read_text() for m in ("mod", "items", "keymap", "build", "sync", "macos"))
     assert re.findall(r"\.accelerator\(([^)]*)\)", main) == ["a", "a"]
     assert main.count("if let Some(a) = live_accel(it.id, current_preset(), is_typing())") == 2
     assert not re.search(r'"(CmdOrCtrl|Ctrl|Alt)\+', main)
-    assert 'include_str!("../../../../static/keymap.js")' in main
+    assert 'include_str!("../../../../../static/keymap.js")' in main
 
 
 def test_the_help_panel_lists_every_command_of_the_table(app, make_project):

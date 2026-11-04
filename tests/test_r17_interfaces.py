@@ -3,7 +3,7 @@ into another module's state except through the plan's interfaces (this check pri
 
 A module's state is its top-level let/var bindings (saveTimers, _editSeq, _gen, ...);
 everything else it exposes (S, PH, the functions, the hook objects) is the plan's public
-surface (docs/review/R17-plan.md: "the global surface the tests and shell.js use stays on
+surface (the R17 plan: "the global surface the tests and shell.js use stays on
 window"). This check counts bare references from any static/ page script to another
 module's mutable bindings — `canvas._gen` and friends (property accesses) are not state
 reaches. The step-7 commits routed every reach through persist.js's hasPendingWrite /

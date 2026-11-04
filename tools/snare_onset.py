@@ -7,8 +7,8 @@
     uv run --with numpy --with soundfile --with mido python tools/snare_onset.py gate --src RUN --out DST [--db 10]   # P4-31 B on a fix_metric run
     uv run --with numpy --with soundfile --with mido python tools/snare_onset.py gatekit --out DIR [--db 10]   # P4-31 B on the kits
 
-Same method as `tools/kick_onset.py` (P4-22) with the role `snare`; the pure parts (hat, alignment, size and sign, two-sided
-count, walk replay) are the ones of `kick_onset`, imported, not copied. Input: `~/.cache/drumspike/fix-metric-p421b/` (`refs.json`,
+Same method as the P4-22 kick diagnosis with the role `snare`; the pure parts (hat, alignment, size and sign, two-sided
+count, walk replay) are in `tools/onset_diag.py`, imported, not copied. Input: `~/.cache/drumspike/fix-metric-p421b/` (`refs.json`,
 `run/<song>_default.json`; read only) and the sessions in `~/.cache/drumspike/sessions` (read only). Outputs:
 `~/.cache/drumspike/snare-onset/` (`work/` the kept events and activations, `tracks.json`, `report.md`). Nothing under `crates/`,
 `static/` or `apps/` changes. The only app run is `run`: `service_tool cli run` on `s top` (the shipped settings and refinement
@@ -26,30 +26,19 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fix_metric as fm  # noqa: E402
 import firm_fixes as ff  # noqa: E402
-import kick_onset as ko  # noqa: E402
 import miss_causes as mc  # noqa: E402
-import tom_fixes as tf  # noqa: E402
+import onset_diag as od  # noqa: E402
+import sessions  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ko.SRC
+SRC = od.SRC
 OUT = Path.home() / ".cache" / "drumspike" / "snare-onset"
-SONGS = ko.SONGS
+SONGS = od.SONGS
 ROLE = "snare"
 MICS = ["s top", "s bot"]
 APP = "s top"               # the label of the app's own mic in the hat
 
-# the reference files of each song: `yard` is what the yardstick's `refs.json` uses (the union of the onsets of all of them within
-# 20 ms, or one file), `files` the files of the same strokes of the session (a trigger track and sample layers), `extra`
-# a file that is another sample (the hat leaves it out; the pair table lists it)
-FILES = {
-    "Session A": {"yard": ["s sampl trig_01"], "files": ["s sampl trig_01", "s sampl savior_01", "s sampl sd3_01"]},
-    "Session B": {"yard": ["s trigger_01"], "files": ["s trigger_01", "s samp savior_01", "s samp sd3_01"]},
-    "Session C": {"yard": ["s samp 1_02"], "files": ["s samp 1_02", "s samp 2_02"], "extra": ["s samp rev_02"]},
-    "Session H": {"yard": ["s samp 1_01", "s samp 2_01", "s samp 3_01"], "files": ["s samp 1_01", "s samp 2_01", "s samp 3_01"]},
-    "Session F": {"yard": ["s samp 1_01", "s samp 2_01", "s samp 3_01"], "files": ["s samp 1_01", "s samp 2_01", "s samp 3_01"]},
-    "Session G": {"yard": ["s trigger_03"], "files": ["s trigger_03", "s samp savior_03", "s samp sd3_03"]},
-    "Session D": {"yard": ["s trigger"], "files": ["s trigger", "s samp saviour", "s samp sd3"]},
-}
+FILES = sessions.SNARE_FILES
 # sessions the yardstick leaves out: the snare mics and the files, a held-out check of the file jitter and the rules
 HELD = {
     "Session E": {"dir": "Session E", "top": "s top-AtA2", "bot": "s btm-AtA2",
@@ -70,7 +59,7 @@ JUMP_BINS = [("under 25 dB", -1e9, 25.0), ("25 to 35 dB", 25.0, 35.0), ("35 to 4
 LEVEL_BINS = [("under -12 dB", -1e9, -12.0), ("-12 to -6 dB", -12.0, -6.0), ("-6 to -2 dB", -6.0, -2.0), ("-2 to +2 dB", -2.0, 2.0),
               ("+2 dB or more", 2.0, 1e9)]
 MOVE_S = fm.MOVE_S
-tid = ko.tid
+tid = od.tid
 
 
 # ---------------------------------------------------------------- sources (read only)
@@ -107,7 +96,7 @@ def run_one(tool, model, out, i, src, version2=False, log=print):
     if link.is_symlink() or link.exists():
         link.unlink()
     link.symlink_to(src)
-    tf.wait_for_lock(log)
+    od.wait_for_lock(log)
     fm.LOCK.write_text(f"snare_onset run {i}\n")
     keep = os.environ.get("DRUMSPIKE_REFINE_RULE")
     if version2:
@@ -185,7 +174,7 @@ def stage_causes(state, act, role=ROLE):
     return out
 
 
-MISS_CLASSES = ko.MISS_CLASSES
+MISS_CLASSES = od.MISS_CLASSES
 FALSE_CLASSES = ["layer", "witness", "kick_ref", "double", "ring", "no_stroke", "real_stroke"]
 FALSE_TEXT = {
     "layer": "a sample layer of the session has an onset within 3 ms: a real stroke the reference lacks",
@@ -198,13 +187,13 @@ FALSE_TEXT = {
 
 
 def miss_class(rise_own, nearest_false_s, merged, cause, silent=False, rise_min=ff.RISE_MIN_DB):
-    """The class of one missed snare (as `kick_onset.miss_class`; the stage causes of the snare column)."""
-    return ko.miss_class(rise_own, nearest_false_s, merged, cause, silent, rise_min)
+    """The class of one missed snare (as `onset_diag.miss_class`; the stage causes of the snare column)."""
+    return od.miss_class(rise_own, nearest_false_s, merged, cause, silent, rise_min)
 
 
 def false_class(layer, witness, kick_near_s, after_matched_s, rise_own, since_ref_s, **kw):
-    """The class of one false snare, as `kick_onset.false_class` with the other role being the kick."""
-    c = ko.false_class(layer, witness, kick_near_s, after_matched_s, rise_own, since_ref_s, **kw)
+    """The class of one false snare, as `onset_diag.false_class` with the other role being the kick."""
+    c = od.false_class(layer, witness, kick_near_s, after_matched_s, rise_own, since_ref_s, **kw)
     return "kick_ref" if c == "snare_ref" else c
 
 
@@ -294,14 +283,14 @@ def moved_share(rows, pred_bins, key):
 
 
 def subset_walks(results, pred, fit, held, sessions, ref="yard"):
-    """{rule: {group: (moved before, moved after, wrong, right)}} of the back-track variants (`kick_onset.WALKS`) on the rows
+    """{rule: {group: (moved before, moved after, wrong, right)}} of the back-track variants (`onset_diag.WALKS`) on the rows
     that `pred(row)` keeps; a song without such rows is left out (no fit on nothing)."""
     per = {}
     for s, res in results.items():
         sub = dict(res, rows=[r for r in res["rows"] if pred(r)])
         if not sub["rows"]:
             continue
-        r = ko.rule_errors(sub, ref)
+        r = od.rule_errors(sub, ref)
         per[s] = r
     groups = {"fit": [s for s in fit if s in per], "held": [s for s in held if s in per],
               "sessions": [s for s in sessions if s in per], "all": [s for s in per]}
@@ -309,24 +298,24 @@ def subset_walks(results, pred, fit, held, sessions, ref="yard"):
     for rule in [k for k in (per[next(iter(per))] if per else {}) if k != "base"]:
         row = {}
         for g, names in groups.items():
-            b = ko.cat([per[s]["base"] for s in names if rule in per[s]])
-            a = ko.cat([per[s][rule] for s in names if rule in per[s]])
-            row[g] = (ko.moved_count(b), *ko.two_sided(b, a))
+            b = od.cat([per[s]["base"] for s in names if rule in per[s]])
+            a = od.cat([per[s][rule] for s in names if rule in per[s]])
+            row[g] = (od.moved_count(b), *od.two_sided(b, a))
         out[rule] = row
     return out
 
 
 def group_shift(results, pred, fit, held, sessions):
-    """A constant shift for the hits that `pred(row)` keeps, fitted on the fit songs (`kick_onset.best_shift`; the yardstick
+    """A constant shift for the hits that `pred(row)` keeps, fitted on the fit songs (`onset_diag.best_shift`; the yardstick
     errors): (shift ms, {group: (moved before, moved after, right hits made wrong, wrong hits made right)}) for the groups fit
     songs, held-out songs, held-out sessions and the seven songs; the counts are of the chosen hits only."""
     def errs(names):
-        return ko.cat([np.asarray([r["err"] for r in results[s]["rows"] if pred(r)], float) for s in names if s in results])
-    shift, _ = ko.best_shift(errs(fit))
+        return od.cat([np.asarray([r["err"] for r in results[s]["rows"] if pred(r)], float) for s in names if s in results])
+    shift, _ = od.best_shift(errs(fit))
     out = {}
     for g, names in (("fit", fit), ("held", held), ("sessions", sessions), ("seven", list(fit) + list(held))):
         b = errs(names)
-        out[g] = (ko.moved_count(b), *ko.two_sided(b, b + shift / 1000.0))
+        out[g] = (od.moved_count(b), *od.two_sided(b, b + shift / 1000.0))
     return shift, out
 
 
@@ -344,9 +333,9 @@ def fill_variants(act, shifted, events, variants=None):
 # ---------------------------------------------------------------- the analysis (reads audio)
 
 def analyze_one(name, refs_on, events, b_events, mic_events, x, sr, files_on, out, yard=(), log=print):
-    """`kick_onset.analyze_track` on the snare mic, with the roll flag on each row and the app labelled `s top` in the hat, the
+    """`onset_diag.analyze_track` on the snare mic, with the roll flag on each row and the app labelled `s top` in the hat, the
     rise of every output hit on the own mic, the three-way whose-error class and the second mic (`s bot`) of each moved hit."""
-    res = ko.analyze_track(name, refs_on, events, x, sr, files_on, mic_events, b_events, None, out, log)
+    res = od.analyze_track(name, refs_on, events, x, sr, files_on, mic_events, b_events, None, out, log)
     rf = roll_flags(events)
     est = res["state"]["est"]
     bot_t = fm.outputs(mic_events.get("s bot", []))
@@ -370,7 +359,7 @@ def analyze_song(song, refs, run, out, log=print):
     x, sr = fm.read_stem(cfg, stems[APP])
     ev = run["events"][APP]
     mic_events = {"s bot": read_events(out, song, "s bot")}
-    files_on = ko.file_onsets(cfg, files)
+    files_on = od.file_onsets(cfg, files)
     res = analyze_one(song, refs[song]["mics"][APP]["onsets"], ev, read_events(out, song, APP, "_v2"), mic_events, x, sr, files_on, out, yard, log)
     own = read_events(out, song, APP)
     res["events_equal_yardstick"] = same_events(ev, own)
@@ -386,8 +375,8 @@ def extra_pairs(cfg, song, files_on):
     ex = FILES[song].get("extra", [])
     if not ex:
         return {}
-    on = ko.file_onsets(cfg, ex + list(files_on)[:1])
-    return {k: v for k, v in ko.file_pairs(on).items()}
+    on = od.file_onsets(cfg, ex + list(files_on)[:1])
+    return {k: v for k, v in od.file_pairs(on).items()}
 
 
 def analyze_held(name, out, log=print):
@@ -396,8 +385,8 @@ def analyze_held(name, out, log=print):
     ev = read_events(out, name, APP)
     if x is None or not ev:
         return None
-    files_on = ko.file_onsets(cfg, files)
-    ref = ko.union_onsets([files_on[f] for f in yard if f in files_on])
+    files_on = od.file_onsets(cfg, files)
+    ref = od.union_onsets([files_on[f] for f in yard if f in files_on])
     res = analyze_one(name, ref, ev, read_events(out, name, APP, "_v2"), {"s bot": read_events(out, name, "s bot")}, x, sr, files_on, out, yard, log)
     act = mc.read_activation(Path(out) / "work" / tid(name, APP) / "model" / "act.bin")
     res["fill"] = fill_variants(act, res["state"]["shifted"], ev)
@@ -435,8 +424,8 @@ def missed_false(song, res, refs, run, x, sr, cfg, stems, out):
     missed = []
     for i in st["missed"]:
         t = sh[i]
-        silent = ff.peak_db(x, sr, t) < tf.SILENT_DB
-        nf = tf.nearest_abs(false_t, t)
+        silent = ff.peak_db(x, sr, t) < od.SILENT_DB
+        nf = od.nearest_abs(false_t, t)
         merged = any(abs(est[j] - t) <= fm.TOL for j in used)
         cause, peak = causes[i]
         gaps = np.abs(ref_t - t)
@@ -450,18 +439,18 @@ def missed_false(song, res, refs, run, x, sr, cfg, stems, out):
     for j in st["false"]:
         t = est[j]
         fl = fm.stroke_flags([t], layers, x, sr, wx, other=kick)[0]
-        after = tf.after_matched_s(t, matched)
+        after = od.after_matched_s(t, matched)
         since = float(t - ref_t[ref_t < t].max()) if np.any(ref_t < t) else 9.0
         false.append({"t": t, "layer": bool(fl[0]), "witness": bool(fl[1]), "rise_own": ff.rise_db(x, sr, t),
-                      "rel_db": ff.peak_db(x, sr, t) - med, "kick_near_ms": tf.nearest_abs(kick, t) * 1000,
+                      "rel_db": ff.peak_db(x, sr, t) - med, "kick_near_ms": od.nearest_abs(kick, t) * 1000,
                       "after_matched_ms": after * 1000,
-                      "class": false_class(bool(fl[0]), bool(fl[1]), tf.nearest_abs(kick, t), after, ff.rise_db(x, sr, t), since)})
+                      "class": false_class(bool(fl[0]), bool(fl[1]), od.nearest_abs(kick, t), after, ff.rise_db(x, sr, t), since)})
     return {"missed": missed, "false": false}
 
 
 def do_songs(out, src=SRC, log=print):
     out = Path(out)
-    refs, runs, _before = ko.load_inputs(src)
+    refs, runs, _before = od.load_inputs(src)
     allres = {s: analyze_song(s, refs, runs[s], out, log) for s in SONGS}
     held = {}
     for h in HELD:
@@ -474,7 +463,7 @@ def do_songs(out, src=SRC, log=print):
 
 # ---------------------------------------------------------------- reports
 
-md, f2, stats_row = ko.md, ko.f2, ko.stats_row
+md, f2, stats_row = od.md, od.f2, od.stats_row
 
 
 def all_tracks(data):
@@ -533,7 +522,7 @@ def section_moved(data):
     lines = ["### Question 2: the moved snares (yardstick reference, `s top`)", "", "Cells: app later / app earlier than the reference.", ""]
     body, tot = [], {}
     for s, res in songs.items():
-        ss = ko.size_sign([r["err"] for r in res["rows"]])
+        ss = od.size_sign([r["err"] for r in res["rows"]])
         for k, v in ss.items():
             tot[k] = tot.get(k, 0) + v
         body.append([s, res["counts"]["matched"], *[f"{ss.get((b, 'late'), 0)} / {ss.get((b, 'early'), 0)}" for b in ("1 to 2", "2 to 5", "over 5")],
@@ -575,7 +564,7 @@ def section_moved(data):
     lines += ["The second mic: the app on `s bot` (own offset) at each moved hit. `ref`: it agrees with the reference within 1 ms (the `s top` time "
               "is the odd one); `top`: it agrees with the `s top` time (the same answer from other audio); `neither`; `none`: no hit there:", "",
               md(["song", *cls], body), ""]
-    classes = tf.MOVED_CLASSES
+    classes = od.MOVED_CLASSES
     for key, title in (("moved_class", "yardstick reference"), ("fair_class", "fair file")):
         body = []
         for s, res in songs.items():
@@ -589,7 +578,7 @@ def section_moved(data):
     for ref, title in (("yard", "yardstick reference"), ("fair", "fair file")):
         body, allcl = [], []
         for s, res in songs.items():
-            e, _, idx = ko.track_errors(res, ref)
+            e, _, idx = od.track_errors(res, ref)
             ce = [e[i] for i, k in enumerate(idx) if res["rows"][k]["clean"]]
             allcl += ce
             body.append([s, *stats_row(ce)])
@@ -621,22 +610,22 @@ def section_hits(data):
     lines = ["### Question 2: does the error depend on the hit? (`s top`, yardstick reference)", ""]
     for title, bins, key in (("level against the typical hit", LEVEL_BINS, lambda r: r["rel_db"]),
                              ("sharpness of the onset (the audio within 2.5 ms of the app's time over the floor)", JUMP_BINS, lambda r: r["jump_db"]),
-                             ("previous hit", [(n, lo, hi) for n, lo, hi in ko.GAP_BINS], lambda r: r["gap_prev_s"])):
+                             ("previous hit", [(n, lo, hi) for n, lo, hi in od.GAP_BINS], lambda r: r["gap_prev_s"])):
         ms = moved_share(rows, bins, key)
         body = [[n, h, m, f"{100 * m / h:.0f} %" if h else "-"] for n, (h, m) in ms.items()]
         lines += [f"Moved share by {title}:", "", md(["group", "hits", "moved", "share"], body), ""]
-    strong = [r for r in rows if r["rel_db"] >= ko.CLEAN_DB]
-    ms = moved_share(strong, [(n, lo, hi) for n, lo, hi in ko.GAP_BINS], lambda r: r["gap_prev_s"])
+    strong = [r for r in rows if r["rel_db"] >= od.CLEAN_DB]
+    ms = moved_share(strong, [(n, lo, hi) for n, lo, hi in od.GAP_BINS], lambda r: r["gap_prev_s"])
     lines += ["Moved share by previous hit, strong hits only (level -6 dB or more; the spacing without the soft hits that sit between backbeats):", "",
               md(["previous hit", "hits", "moved", "share"], [[n, h, m, f"{100 * m / h:.0f} %" if h else "-"] for n, (h, m) in ms.items()]), ""]
 
     def reason(r):
         out = []
-        if r["gap_prev_s"] < ko.CLEAN_GAP_S or r["gap_next_s"] < ko.CLEAN_GAP_S:
+        if r["gap_prev_s"] < od.CLEAN_GAP_S or r["gap_next_s"] < od.CLEAN_GAP_S:
             out.append("not isolated")
-        if r["rel_db"] < ko.CLEAN_DB:
+        if r["rel_db"] < od.CLEAN_DB:
             out.append("soft")
-        if r["jump_db"] < ko.CLEAN_JUMP_DB:
+        if r["jump_db"] < od.CLEAN_JUMP_DB:
             out.append("not sharp")
         return " + ".join(out) or "clean"
     c, m = {}, {}
@@ -648,10 +637,10 @@ def section_hits(data):
               md(["group", "hits", "moved"], [[k, c[k], m[k]] for k in sorted(c, key=lambda k: -c[k])]), ""]
     body = []
     for s, res in data["songs"].items():
-        e, lv, _ = ko.track_errors(res, "yard")
-        shift, mv = ko.best_shift(e)
-        cl = ko.two_clusters(e, lv)
-        body.append([s, ko.moved_count(e), f"{shift:+.2f} -> {mv}", f"{100 * cl['late_share']:.0f} %", f2(cl["gap_ms"]), f2(cl["corr_level"])])
+        e, lv, _ = od.track_errors(res, "yard")
+        shift, mv = od.best_shift(e)
+        cl = od.two_clusters(e, lv)
+        body.append([s, od.moved_count(e), f"{shift:+.2f} -> {mv}", f"{100 * cl['late_share']:.0f} %", f2(cl["gap_ms"]), f2(cl["corr_level"])])
     lines += ["Per song: moved now, best constant shift (ms) and moved after it, late group (more than 0.4 ms after the median), gap between the "
               "groups, correlation of the error with the level:", "",
               md(["song", "moved", "best shift", "late group", "gap ms", "corr level"], body), ""]
@@ -697,7 +686,7 @@ def section_rules(data):
     sessions = list(data["held"])
     lines = []
     for ref, title in (("yard", "yardstick reference"), ("fair", "fair file")):
-        tbl, par = ko.candidate_rows(results, FIT, HELD_SONGS, sessions, ref)
+        tbl, par = od.candidate_rows(results, FIT, HELD_SONGS, sessions, ref)
         body = [[k, *[f"{v[g][0]} -> {v[g][1]} (+{v[g][2]} -{v[g][3]})" for g in ("fit", "held", "sessions", "seven")]] for k, v in tbl.items()]
         lines += [f"### Question 4: onset rule candidates, moved snares against the {title} (before -> after, right hits made wrong +, wrong hits made right -)", "",
                   md(["rule", "fit songs", "held-out songs", "held-out sessions", "all seven songs"], body), "",

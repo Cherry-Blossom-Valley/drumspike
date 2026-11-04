@@ -23,15 +23,15 @@ from its reference hit (after the offset). A hit the app flags out of the output
 is not in the output: it counts as deleted already (no fix), and a real hit that the app flagged is a missed hit.
 Also reported: fixes per minute of song and fixes per 100 reference hits.
 
-Configuration (the app's release `service_tool`, `cli run`, default settings, as `tools/tom_bleed_cd.py app`):
+Configuration (the app's release `service_tool`, `cli run`, default settings):
   The app runs its DSP detector (`rust-dsp`).
 
 The offset of a mic is fixed from the run and used for both configurations, so a systematic shift of
 the onsets (version 2 sat late on the foot) shows as moved hits and is not hidden by the offset.
 
 References (P4-16c, P4-23): `score --ref fair|union` (default `fair`). `fair`: the kick and the snare reference of a song is the trigger file
-when the session has one, else the sample file with the lowest jitter in the three-cornered hat (`tools/kick_onset.py`,
-`tools/snare_onset.py`). `union`: the P4-16 reference of `refs.json`. `--kick-ref` and `--snare-ref` set one role alone.
+when the session has one, else the sample file with the lowest jitter in the three-cornered hat (`tools/onset_diag.py`,
+`tools/snare_onset.py`; the files per song: `tools/sessions.py`). `union`: the P4-16 reference of `refs.json`. `--kick-ref` and `--snare-ref` set one role alone.
 
 Sessions: the seven songs in ~/.cache/drumspike/sessions (read only) that have usable references; Session E and
 Session I are left out (see `SKIPPED`). Outputs: `~/.cache/drumspike/fix-metric/`.
@@ -85,6 +85,11 @@ SNARE_LAYERS = {"Session A": ["s sampl savior_01", "s sampl sd3_01"], "Session B
 KICK_LAYERS = {"Session A": ["k sampl savior_01", "k sampl sd3_01"], "Session B": ["k samp savior_01", "k samp sd3_01"],
                "Session C": ["k samp 2_02"], "Session G": ["k samp savior_03", "k samp sd3_03"],
                "Session D": ["k samp saviour", "k samp sd3"]}
+# the hat or overhead of each song: one more bleed source (the close mics come from the table above)
+EXTRA_MICS = {"Session A": ["hh_03", "oh_01"], "Session B": ["hh_01", "OH_01", "ride_01"],
+              "Session C": ["hh_03", "oh_03.L", "ri_03"], "Session H": ["hh_04", "oh_03.L"],
+              "Session F": ["hh_01", "oh_01.L", "ri_01"], "Session G": ["hh_10", "oh_01.L", "ri_01"],
+              "Session D": ["hh", "oh HH", "oh Ri", "ri"]}
 WITNESS = {("Session A", "snare"): "s bot_02", ("Session B", "snare"): "s bot_01",
            ("Session C", "snare"): "s bot_02", ("Session H", "snare"): "s bot_01",
            ("Session F", "snare"): "s bot_01", ("Session G", "snare"): "s bot_01",
@@ -134,7 +139,7 @@ def near_any(times_sorted, t, tol):
 
 BLEED_S = 0.012     # a hit this close to a reference hit of the other role (kick or snare) is that drum's bleed, never confirmed
 
-# ---- P4-16f: strokes the owner heard as real (listening list `docs/migration/listening-flam-2026-10-17.md`, 2026-10-18)
+# ---- P4-16f: strokes the owner heard as real (listening list listening list of 2026-10-17, 2026-10-18)
 # (c) listened: an output hit within LISTEN_TOL_S of one of these times is a confirmed stroke. The times are the flam grace
 # strokes of the #58 run on `s top` (events' time base). Only the 8 "real" verdicts; "not" and "unsure" rows are not here.
 LISTEN_TOL_S = 0.002
@@ -310,17 +315,17 @@ def pick_fair(files, hat):
 
 
 def kick_files(song):
-    """The reference files of the same kick strokes of a song (kick_onset.FILES)."""
+    """The reference files of the same kick strokes of a song (`sessions.KICK_FILES`)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import kick_onset as ko
-    return list(ko.FILES[song]["files"])
+    import sessions as ss
+    return list(ss.KICK_FILES[song]["files"])
 
 
 def snare_files(song):
-    """The reference files of the same snare strokes of a song (snare_onset.FILES)."""
+    """The reference files of the same snare strokes of a song (`sessions.SNARE_FILES`)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import snare_onset as so
-    return list(so.FILES[song]["files"])
+    import sessions as ss
+    return list(ss.SNARE_FILES[song]["files"])
 
 
 def ref_files(song, role):
@@ -339,7 +344,7 @@ def fair_kick(song, hat_all):
 
 
 def read_hat(path):
-    """{song: {file: jitter}} from a `tracks.json` of `kick_onset.py` or `snare_onset.py`."""
+    """{song: {file: jitter}} from a `tracks.json` of the kick or the snare onset diagnosis (P4-22, P4-23)."""
     return {k: v["hat"] for k, v in json.loads(Path(path).read_text())["songs"].items()}
 
 
@@ -385,12 +390,12 @@ def songs():
     role is "toms"; the mics `excluded` are left out (Session A t4)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import rescue_real as rr
-    import tom_bleed_new as tn
+    import sessions as ss
     out = {}
     for name, cfg in rr.SESSIONS.items():
         out[name] = {"dir": cfg["dir"], "excluded": set(cfg["excluded"]),
                      "mics": {m: (v[0], "toms" if v[1] == "tom" else v[1]) for m, v in cfg["mics"].items()}}
-    for name, cfg in tn.SESSIONS.items():
+    for name, cfg in ss.NEW_SESSIONS.items():
         if name in SKIPPED:
             continue
         out[name] = {"dir": cfg["dir"], "excluded": set(),
@@ -433,7 +438,7 @@ def do_refs(out, log=print):
     old = json.loads(rr.REFS.read_text())
     nw_path = Path.home() / ".cache" / "drumspike" / "tom-bleed" / "new" / "refs.json"
     if not nw_path.is_file():
-        raise SystemExit(f"{nw_path} is missing: run `uv run ... python tools/tom_bleed_new.py refs` first")
+        raise SystemExit(f"{nw_path} is missing: the P4-14 stage 1b tom references (written by the removed tom_bleed_new.py)")
     nw = json.loads(nw_path.read_text())
     refs = {}
     for song, cfg in table.items():
@@ -644,7 +649,7 @@ def do_score(out, log=print, run=None, ref="union", hat=None, hat_snare=None, ki
              configs=None):
     """Score the runs in `run` (default `out`; its `refs.json` and `run/`) into `out`. `ref` "union" is the P4-16 yardstick,
     "fair" the P4-16c / P4-23 reference of kick and snare (trigger file, else the file with the lowest hat jitter; `hat` and
-    `hat_snare`: the `tracks.json` of `kick_onset.py` and `snare_onset.py`); `kick_ref` / `snare_ref` set one role alone.
+    `hat_snare`: the `tracks.json` of the kick and the snare onset diagnosis); `kick_ref` / `snare_ref` set one role alone.
     `midi` (P4-43): a folder `<song>/<mic>.mid` of DRT results; its tables come first (`drt-report.md`), with DRT against
     the `default` run when the runs exist, else alone."""
     out = Path(out)

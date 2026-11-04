@@ -43,13 +43,7 @@ fn state_from_env_has_an_interval_and_no_open_job() {
 
 #[test]
 fn dispatch_ignores_other_commands() {
-    let svc = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(crate::ServiceConfig::default());
     let ch = Arc::new(Channels::default());
     assert!(dispatch(&svc, &ch, "project_open", &json!({})).is_none());
     assert!(dispatch(&svc, &ch, "project_recent", &json!({})).is_some());
@@ -75,13 +69,7 @@ fn json_writer_is_atomic_and_indented() {
 }
 
 fn service_with_home(root: &Path) -> Service {
-    let svc = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(crate::ServiceConfig::default());
     svc.set_home(root.join("home"));
     svc
 }
@@ -193,13 +181,7 @@ fn app_settings_set_keeps_the_other_keys_and_refuses_the_audio_keys() {
     svc.app_settings_set("inspector", &json!(true)).unwrap();
     assert_eq!(svc.app_settings_get(), json!({"inspector": true}));
     // without a home folder nothing is written and the answer is the same
-    let bare = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let bare = Service::new(crate::ServiceConfig::default());
     assert_eq!(bare.app_settings_set("inspector", &json!(true)).unwrap()["value"], true);
     assert_eq!(bare.app_settings_get(), json!({}));
     std::fs::remove_dir_all(&root).unwrap();
@@ -214,13 +196,7 @@ fn project_open_racing_a_close_of_the_same_project_answers_an_open_session() {
     let root = std::env::temp_dir().join(format!("ds_life_open_race_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let dir = new_project(&root, "Song").unwrap().dir;
-    let svc = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(crate::ServiceConfig::default());
     svc.set_home(root.join("home"));
     let path = dir.display().to_string();
     let first = svc.project_open(&path).unwrap()["sid"].as_str().unwrap().to_string();

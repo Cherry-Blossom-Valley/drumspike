@@ -1,5 +1,6 @@
 use super::*;
-use std::collections::HashSet;
+use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
 
 #[test]
 fn ids_are_unique_and_do_not_use_the_entry_prefixes() {
@@ -285,6 +286,9 @@ fn the_menu_key_of_a_row_in_a_preset() {
     let row = |menu: Option<&str>, menu_key: Option<&str>, cubase: Option<&[&str]>| KeyCommand {
         id: "x".into(),
         menu: menu.map(Into::into),
+        path: Vec::new(),
+        needs_project: None,
+        kind: None,
         title: "X".into(),
         menu_key: menu_key.map(Into::into),
         page_keys: vec!["Q".into()],
@@ -311,6 +315,9 @@ fn the_shown_key_of_a_row_is_its_first_key_the_menu_can_show() {
     let row = |menu: Option<&str>, menu_key: Option<&str>, pages: &[&str], cubase: Option<&[&str]>| KeyCommand {
         id: "x".into(),
         menu: menu.map(Into::into),
+        path: Vec::new(),
+        needs_project: None,
+        kind: None,
         title: "X".into(),
         menu_key: menu_key.map(Into::into),
         page_keys: pages.iter().map(ToString::to_string).collect(),
@@ -986,5 +993,435 @@ fn the_undo_and_redo_titles_take_the_pages_text() {
     assert!(
         SPEC.iter()
             .any(|i| i.id == "undo_history" && i.label == "Undo History\u{2026}" && i.needs_project)
+    );
+}
+
+/// R10 (refactor step 4.4): what [`report`] takes from the code and not from the live menu (id, label, kind,
+/// needs project, ready, card, the keys of the row and the accelerator for every preset and typing state), the key
+/// table as parsed, the radio modes, the page-state check marks, the dynamic entries and the known ids. Pinned
+/// before `menu.rs` was split into modules, so the split shows no change. A planned menu change rewrites the file:
+/// `DRUMSPIKE_MENU_SNAPSHOT_WRITE=1 cargo test -p drumspike-desktop --lib the_menu_matches_its_snapshot`.
+fn menu_snapshot() -> Value {
+    let kind = |k: Kind| match k {
+        Kind::Plain => "plain",
+        Kind::Check => "check",
+    };
+    let items: Vec<Value> = SPEC
+        .iter()
+        .map(|it| {
+            let row = key_row(it.id);
+            let accel: serde_json::Map<String, Value> = PRESETS
+                .iter()
+                .map(|p| {
+                    let v = json!({
+                        "menu": accel_of(it.id, p), "shown": shown_accel_of(it.id, p),
+                        "typing": live_accel(it.id, p, true), "not_typing": live_accel(it.id, p, false),
+                    });
+                    ((*p).to_string(), v)
+                })
+                .collect();
+            json!({
+                "id": it.id, "label": it.label, "kind": kind(it.kind), "needs_project": it.needs_project,
+                "ready": it.ready, "card": it.card, "menu_key": row.and_then(|r| r.menu_key.clone()),
+                "page_keys": row.map(|r| r.page_keys.clone()).unwrap_or_default(),
+                "cubase": row.and_then(|r| r.cubase.clone()), "accel": accel, "known": is_known(it.id),
+            })
+        })
+        .collect();
+    let rows: Vec<Value> = keymap()
+        .iter()
+        .map(|r| {
+            json!({"id": r.id, "menu": r.menu, "title": r.title, "menu_key": r.menu_key,
+                "page_keys": r.page_keys, "cubase": r.cubase})
+        })
+        .collect();
+    let modes: Vec<Value> = [
+        ("follow", &FOLLOW_MODES[..]),
+        ("counter", &COUNTER_MODES[..]),
+        ("tab", &TAB_MODES[..]),
+        ("nudge", &NUDGE_MODES[..]),
+        ("height", &HEIGHT_MODES[..]),
+    ]
+    .iter()
+    .map(|(name, m)| json!({"modes": name, "items": m}))
+    .collect();
+    let states = [
+        json!({}),
+        json!({"snap": true, "click": true, "tempoRuler": true, "meterRuler": true, "beatsRuler": true,
+            "markersRuler": true, "grid": true, "velocityLane": true, "otherMics": true, "suspendFollow": true,
+            "stopReturnMode": true, "auditionTab": true, "inspector": true, "learnFilter": true, "infoLine": true,
+            "overview": true, "counter": "samples", "tabMode": "all", "trackHeight": "large", "nudgeValue": "10ms",
+            "follow": "page"}),
+        json!({"snap": false, "click": false, "tempoRuler": false, "meterRuler": false, "beatsRuler": false,
+            "markersRuler": false, "grid": false, "velocityLane": false, "otherMics": false, "suspendFollow": false,
+            "stopReturnMode": false, "auditionTab": false, "inspector": false, "learnFilter": false,
+            "infoLine": false, "overview": false, "counter": "timecode", "tabMode": "active", "trackHeight": "small",
+            "nudgeValue": "1smp", "follow": "off"}),
+        json!({"snap": 1, "counter": "bogus", "tabMode": 2, "trackHeight": "huge", "nudgeValue": null,
+            "follow": "nope"}),
+    ];
+    let checks: Vec<Value> = states
+        .iter()
+        .map(|s| json!({"state": s, "checks": check_states(s)}))
+        .collect();
+    let ids = [
+        "undo",
+        "recent",
+        "recent:0",
+        "recent:9",
+        "recent:clear",
+        "recent:x",
+        "project:0",
+        "project",
+        "follow:2",
+        "follow",
+        "zoom_own:1",
+        "zoom_own:x",
+        "nope",
+        "",
+    ];
+    let known: Vec<Value> = ids.iter().map(|id| json!([id, is_known(id)])).collect();
+    let entries = vec![
+        json!(
+            window_entries(
+                &json!([{"id": "a", "name": "A"}, {"sid": "b"}, {"name": "no id"}]),
+                Some("b")
+            )
+            .iter()
+            .map(|e| json!([e.sid, e.name, e.current]))
+            .collect::<Vec<_>>()
+        ),
+        json!(
+            follow_entries(&json!({"tracks": ["k in", "s top", "t1"], "selected": "s top", "follows": "t1"}))
+                .iter()
+                .map(|e| json!([e.name, e.current]))
+                .collect::<Vec<_>>()
+        ),
+        json!(follow_entries(&json!({"tracks": ["k in"]})).len()),
+        json!(zoom_own_names(&json!({"zoomOwn": ["Verse", 3, "Fill"]}))),
+    ];
+    let constants = vec![
+        json!([
+            RECENT_ID,
+            RECENT_PREFIX,
+            RECENT_CLEAR_ID,
+            RECENT_CLEAR_PAYLOAD,
+            RECENT_MAX
+        ]),
+        json!([
+            WINDOW_ID,
+            PROJECT_PREFIX,
+            PROJECT_ID,
+            FOLLOW_ID,
+            FOLLOW_PREFIX,
+            FOLLOW_TRACK_ID
+        ]),
+        json!([ZOOM_PRESETS_ID, ZOOM_OWN_PREFIX, ZOOM_OWN_ID]),
+        json!(PRESETS),
+        json!(KEY_MODS),
+        json!(["nope", "cubase", "default"].map(preset_or_default)),
+    ];
+    json!({"items": items, "keymap": rows, "modes": modes, "checks": checks, "known": known,
+        "entries": entries, "constants": constants})
+}
+
+/// The snapshot as text: one array element per line, so a diff names the item that changed.
+fn snapshot_text(v: &Value) -> String {
+    let obj = v.as_object().unwrap();
+    let mut out = String::from("{\n");
+    for (n, (k, val)) in obj.iter().enumerate() {
+        let sep = if n + 1 == obj.len() { "" } else { "," };
+        let a = val.as_array().unwrap();
+        out.push_str(&format!("  {}: [\n", json!(k)));
+        for (i, e) in a.iter().enumerate() {
+            out.push_str(&format!("    {e}{}\n", if i + 1 == a.len() { "" } else { "," }));
+        }
+        out.push_str(&format!("  ]{sep}\n"));
+    }
+    out.push_str("}\n");
+    out
+}
+
+#[test]
+fn the_menu_matches_its_snapshot() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/menu/snapshot.json");
+    let now = snapshot_text(&menu_snapshot());
+    if std::env::var_os("DRUMSPIKE_MENU_SNAPSHOT_WRITE").is_some() {
+        std::fs::write(&path, &now).unwrap();
+    }
+    let want = std::fs::read_to_string(&path).unwrap_or_default();
+    let diff: Vec<(usize, &str, &str)> = want
+        .lines()
+        .zip(now.lines())
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(n, (a, b))| (n + 1, a, b))
+        .take(5)
+        .collect();
+    assert!(
+        want == now,
+        "the menu differs from {} ({} vs {} lines); first differing lines: {diff:#?}",
+        path.display(),
+        want.lines().count(),
+        now.lines().count()
+    );
+}
+
+/// The custom items that `build` places, as `(item id, path)` in source order (`"View > Zoom Presets"`), read from
+/// the source of `menu/build.rs` and the item constants of `menu/items.rs`. The menu bar itself needs an app
+/// handle (the self-test reads the live one), so this reads the builders: one `SubmenuBuilder` chain per submenu,
+/// its `make_item`/`make_check` items, its nested submenus (`.item(&<let name>)`) and the items `build` makes
+/// once and hands to two menus (`.item(add_tracks)`). Dynamic entries (Open Recent, Window, Follow Hits Of) and
+/// the macOS items are not custom items and are left out.
+fn builder_tree() -> Vec<(String, String)> {
+    #[derive(Default)]
+    struct Chain {
+        title: String,
+        entries: Vec<Entry>,
+    }
+    enum Entry {
+        Item(String),
+        Sub(usize),
+        Param(String),
+    }
+    let quoted = |l: &str| -> Option<String> {
+        let parts: Vec<&str> = l.split('"').collect();
+        (parts.len() >= 3).then(|| parts[parts.len() - 2].to_string())
+    };
+    let ident_after = |l: &str, pat: &str| -> Option<String> {
+        let rest = &l[l.find(pat)? + pat.len()..];
+        Some(
+            rest.chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect(),
+        )
+    };
+    let consts: HashMap<String, String> = include_str!("items.rs")
+        .lines()
+        .filter(|l| l.starts_with("pub const ") && l.contains(": Item = "))
+        .filter_map(|l| Some((ident_after(l, "pub const ")?, l.split('"').nth(1)?.to_string())))
+        .collect();
+    let mut chains: Vec<Chain> = Vec::new();
+    let mut roots: Vec<usize> = Vec::new();
+    let mut params: HashMap<String, String> = HashMap::new();
+    let mut subs: HashMap<String, usize> = HashMap::new();
+    let mut current: Option<usize> = None;
+    let mut in_build = false;
+    for raw in include_str!("build.rs").lines() {
+        let l = raw.split("//").next().unwrap_or("").trim();
+        if l.starts_with("fn ") || l.starts_with("pub fn ") || l.starts_with("pub(super) fn ") {
+            in_build = l.contains("fn build<");
+            subs.clear();
+            current = None;
+        }
+        if l.contains("SubmenuBuilder::new(app, ") || l.contains("SubmenuBuilder::with_id(app, ") {
+            chains.push(Chain {
+                title: quoted(l).unwrap_or_default(),
+                ..Chain::default()
+            });
+            let n = chains.len() - 1;
+            match ident_after(l, "let ") {
+                Some(var) if l.starts_with("let ") => {
+                    subs.insert(var, n);
+                }
+                _ => roots.push(n),
+            }
+            current = Some(n);
+        } else if let Some(c) = ident_after(l, "make_item(app, &").or_else(|| ident_after(l, "make_check(app, &")) {
+            match (in_build, ident_after(l, "let ")) {
+                (true, Some(var)) if l.starts_with("let ") => {
+                    params.insert(var, c);
+                }
+                _ => {
+                    if let Some(n) = current {
+                        chains[n].entries.push(Entry::Item(c));
+                    }
+                }
+            }
+        } else if let (Some(n), Some(var)) = (current, ident_after(l, ".item(&")) {
+            if let Some(&s) = subs.get(&var)
+                && l == format!(".item(&{var})")
+            {
+                chains[n].entries.push(Entry::Sub(s));
+            }
+        } else if let (Some(n), Some(var)) = (current, ident_after(l, ".item("))
+            && l == format!(".item({var})")
+        {
+            chains[n].entries.push(Entry::Param(var));
+        }
+        if l.contains(".build()") {
+            current = None;
+        }
+    }
+    fn walk(
+        chains: &[Chain],
+        n: usize,
+        path: &str,
+        consts: &HashMap<String, String>,
+        params: &HashMap<String, String>,
+        out: &mut Vec<(String, String)>,
+    ) {
+        for e in &chains[n].entries {
+            match e {
+                Entry::Item(c) => out.push((consts.get(c).cloned().unwrap_or(format!("?{c}")), path.to_string())),
+                Entry::Param(v) => {
+                    if let Some(c) = params.get(v) {
+                        out.push((consts.get(c).cloned().unwrap_or(format!("?{c}")), path.to_string()));
+                    }
+                }
+                Entry::Sub(s) => {
+                    let p = format!("{path} > {}", chains[*s].title);
+                    walk(chains, *s, &p, consts, params, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for &r in &roots {
+        walk(&chains, r, &chains[r].title, &consts, &params, &mut out);
+    }
+    out
+}
+
+/// What differs between the key table and the menu (R10): a menu row whose `needs_project`, `kind` or `path` is not
+/// the item's (`SPEC` and the place `build` gives it), a row without a menu item that has any of them, an item that
+/// `build` does not place or places without a `SPEC` entry. Empty when the two agree.
+fn menu_drift(rows: &[KeyCommand], tree: &[(String, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (id, _) in tree {
+        if !SPEC.iter().any(|i| i.id == id) {
+            out.push(format!("{id}: placed by build, not in SPEC"));
+        }
+    }
+    for r in rows {
+        let Some(menu) = r.menu.as_deref() else {
+            if !r.path.is_empty() || r.needs_project.is_some() || r.kind.is_some() {
+                out.push(format!("{}: no menu item, but a path, needs_project or kind", r.id));
+            }
+            continue;
+        };
+        let Some(it) = SPEC.iter().find(|i| i.id == menu) else {
+            continue; // every_menu_accelerator_is_the_tables names a row without an item
+        };
+        if r.needs_project != Some(it.needs_project) {
+            out.push(format!(
+                "{menu}: needs_project {:?}, SPEC {}",
+                r.needs_project, it.needs_project
+            ));
+        }
+        if r.kind != Some(it.kind) {
+            out.push(format!("{menu}: kind {:?}, SPEC {:?}", r.kind, it.kind));
+        }
+        let path = r.path.join(" > ");
+        let places: Vec<&str> = tree
+            .iter()
+            .filter(|(id, _)| id == menu)
+            .map(|(_, p)| p.as_str())
+            .collect();
+        if !places.contains(&path.as_str()) {
+            out.push(format!("{menu}: path \"{path}\", build places it in {places:?}"));
+        }
+    }
+    for it in SPEC {
+        if !tree.iter().any(|(id, _)| id == it.id) {
+            out.push(format!("{}: in SPEC, not placed by build", it.id));
+        }
+    }
+    out
+}
+
+/// R10: the key table and the menu agree on every item: `needs_project` and `kind` of each menu row are its
+/// `SPEC` item's, and its `path` is where `build` puts the item (Add Tracks is in File and Track; its row says
+/// File). The reader of the builders can fire: it finds every item, nested submenus included.
+#[test]
+fn the_key_table_rows_match_spec_and_the_builder_tree() {
+    let tree = builder_tree();
+    assert_eq!(
+        tree.len(),
+        SPEC.len() + 1,
+        "every item once, Add Tracks twice: {tree:?}"
+    );
+    let at = |id: &str| -> Vec<&str> { tree.iter().filter(|(i, _)| i == id).map(|(_, p)| p.as_str()).collect() };
+    assert_eq!(at("zoom_full"), ["View > Zoom Presets"]);
+    assert_eq!(at("nudge_val_1ms"), ["Edit > Nudge Value"]);
+    assert_eq!(at("follow_page"), ["Transport > Follow Playhead"]);
+    assert_eq!(at("add_tracks"), ["File", "Track"]);
+    assert_eq!(at("about"), ["Drum Spike"]);
+    assert_eq!(at("open_recent"), ["File"]);
+    assert_eq!(menu_drift(keymap(), &tree), Vec::<String>::new());
+    // planted drift: each kind of difference is named
+    let mut rows = keymap().to_vec();
+    let find = |rows: &mut Vec<KeyCommand>, id: &str| rows.iter().position(|r| r.menu.as_deref() == Some(id)).unwrap();
+    let n = find(&mut rows, "zoom_full");
+    rows[n].path = vec!["View".into()];
+    let n = find(&mut rows, "save");
+    rows[n].needs_project = Some(false);
+    let n = find(&mut rows, "snap");
+    rows[n].kind = Some(Kind::Plain);
+    let n = find(&mut rows, "settings");
+    rows[n].kind = None;
+    let n = rows.iter().position(|r| r.menu.is_none()).unwrap();
+    rows[n].needs_project = Some(true);
+    let mut tree2 = tree.clone();
+    tree2.retain(|(id, _)| id != "grid");
+    tree2.push(("nope".into(), "View".into()));
+    let got = menu_drift(&rows, &tree2);
+    assert_eq!(got.len(), 8, "{got:#?}");
+    for want in [
+        "zoom_full: path \"View\"",
+        "save: needs_project Some(false), SPEC true",
+        "snap: kind Some(Plain), SPEC Check",
+        "settings: kind None",
+        "no menu item, but",
+        "grid: path \"View\", build places it in []",
+        "grid: in SPEC, not placed by build",
+        "nope: placed by build, not in SPEC",
+    ] {
+        assert!(got.iter().any(|g| g.contains(want)), "{want} not in {got:#?}");
+    }
+}
+
+/// R10: `path` splits at " > ", `needs_project` and `kind` are optional and refused with the reason when wrong.
+#[test]
+fn the_path_needs_project_and_kind_of_a_row_parse() {
+    let wrap = |extra: &str| {
+        format!(
+            r#"x = /*KEYMAP-BEGIN*/[{{"id": "a", "menu": "a", "title": "A", "menu_key": null, "page_keys": [], "cubase": null{extra}}}]/*KEYMAP-END*/;"#
+        )
+    };
+    let r = &parse_keymap(&wrap(
+        r#", "path": "View > Zoom Presets", "needs_project": true, "kind": "check""#,
+    ))
+    .unwrap()[0];
+    assert_eq!(
+        (r.path.clone(), r.needs_project, r.kind),
+        (
+            vec!["View".to_string(), "Zoom Presets".into()],
+            Some(true),
+            Some(Kind::Check)
+        )
+    );
+    let r = &parse_keymap(&wrap(r#", "path": null, "needs_project": null, "kind": "plain""#)).unwrap()[0];
+    assert_eq!(
+        (r.path.is_empty(), r.needs_project, r.kind),
+        (true, None, Some(Kind::Plain))
+    );
+    let r = &parse_keymap(&wrap("")).unwrap()[0];
+    assert_eq!((r.path.is_empty(), r.needs_project, r.kind), (true, None, None));
+    assert!(
+        parse_keymap(&wrap(r#", "needs_project": "yes""#))
+            .unwrap_err()
+            .contains("needs_project")
+    );
+    assert!(
+        parse_keymap(&wrap(r#", "kind": "radio""#))
+            .unwrap_err()
+            .contains("\"radio\"")
+    );
+    assert!(parse_keymap(&wrap(r#", "kind": 1"#)).unwrap_err().contains("kind"));
+    assert!(
+        parse_keymap(&wrap(r#", "path": ["View"]"#))
+            .unwrap_err()
+            .contains("path")
     );
 }

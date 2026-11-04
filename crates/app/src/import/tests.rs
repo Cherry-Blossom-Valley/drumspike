@@ -21,13 +21,7 @@ fn folder_name_follows_the_server() {
 
 #[test]
 fn dispatch_ignores_other_commands_and_checks_arguments() {
-    let svc = Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(ServiceConfig::default());
     assert!(dispatch(&svc, "project_open", &json!({})).is_none());
     assert_eq!(
         dispatch(&svc, "legacy_list", &json!({})).unwrap().unwrap_err().code,
@@ -49,13 +43,7 @@ fn dispatch_ignores_other_commands_and_checks_arguments() {
 
 #[test]
 fn project_import_checks_its_folder() {
-    let svc = Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(ServiceConfig::default());
     assert_eq!(svc.project_import("  ").unwrap_err().code, 400);
     assert_eq!(svc.project_import("/nonexistent/session").unwrap_err().code, 404);
 }

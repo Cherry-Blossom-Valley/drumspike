@@ -1,38 +1,43 @@
 use super::*;
 
 fn kick(t: f64) -> Hit {
-    Hit::new(t, Role::Kick)
+    Hit::new(t, BeatVoice::Kick)
 }
 
 #[test]
 fn role_names_map_to_roles() {
-    assert_eq!(Role::from_name("kick"), Role::Kick);
-    assert_eq!(Role::from_name("snare"), Role::Snare);
-    assert_eq!(Role::from_name("tom"), Role::Tom);
-    assert_eq!(Role::from_name("cymbal"), Role::Cymbal);
-    assert_eq!(Role::from_name("hat"), Role::Other);
-    assert_eq!(Role::from_name(""), Role::Other);
-    assert!(Role::Kick.is_ks() && Role::Snare.is_ks() && !Role::Tom.is_ks() && !Role::Cymbal.is_ks());
+    assert_eq!(BeatVoice::from_name("kick"), BeatVoice::Kick);
+    assert_eq!(BeatVoice::from_name("snare"), BeatVoice::Snare);
+    assert_eq!(BeatVoice::from_name("tom"), BeatVoice::Tom);
+    assert_eq!(BeatVoice::from_name("cymbal"), BeatVoice::Cymbal);
+    assert_eq!(BeatVoice::from_name("hat"), BeatVoice::Other);
+    assert_eq!(BeatVoice::from_name(""), BeatVoice::Other);
+    assert!(
+        BeatVoice::Kick.is_ks() && BeatVoice::Snare.is_ks() && !BeatVoice::Tom.is_ks() && !BeatVoice::Cymbal.is_ks()
+    );
 }
 
-/// #130: the tempo-referee pin. The parse is a pure function and is tested without
-/// touching the process env: the detection tests run in parallel threads, and edition 2024
-/// makes env writes unsafe for exactly that reason.
 #[test]
-fn the_tempo_rule_pin_parses_and_defaults_to_3() {
-    assert_eq!(parse_rule(None), 3);
-    assert_eq!(parse_rule(Some("1")), 1, "1 pins the shipped referee");
-    assert_eq!(parse_rule(Some("2")), 2, "2 pins the #130 referee");
-    assert_eq!(parse_rule(Some("x")), 3);
-    assert_eq!(parse_rule(Some("0")), 0, "0 pins the shipped referee too");
-    if std::env::var("DRUMSPIKE_TEMPO_RULE").is_err() {
-        assert_eq!(tempo_rule(), 3, "unset is the #180 product default");
-    }
+fn kick_and_snare_weigh_full_and_every_other_role_name_half() {
+    let names = ["kick", "snare", "tom", "hat", "cymbal", "other", "bass", ""];
+    let weights: Vec<f64> = names.iter().map(|n| BeatVoice::from_name(n).weight()).collect();
+    assert_eq!(weights, [1.0, 1.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]);
+    let ks: Vec<bool> = names.iter().map(|n| BeatVoice::from_name(n).is_ks()).collect();
+    assert_eq!(ks, [true, true, false, false, false, false, false, false]);
+    assert_eq!(BeatVoice::from_name("other"), BeatVoice::Other);
+    assert_eq!(BeatVoice::from_name("Kick"), BeatVoice::Other);
+}
+
+/// #130, #180: a detection without a pin runs the current referee (the pin's parse is tested
+/// in `rules::tests::the_tempo_rule_pin_parses_like_the_old_env_reader`).
+#[test]
+fn a_detection_runs_the_current_tempo_rule_by_default() {
+    assert_eq!(DetectParams::default().rule, TempoRule::HalfTime);
 }
 
 #[test]
 fn a_new_hit_has_the_default_velocity_and_the_velocity_weighs_it() {
-    let h = Hit::new(1.0, Role::Snare);
+    let h = Hit::new(1.0, BeatVoice::Snare);
     assert_eq!(h.v, DEFAULT_VELOCITY);
     let ghost = Hit { v: 35.0, ..h };
     let accent = Hit { v: 110.0, ..h };
@@ -61,6 +66,7 @@ fn params_are_checked() {
             min_step_pct: pct,
             bpm_range: range,
             duration_s: dur,
+            rule: TempoRule::CURRENT,
         };
         assert!(p.validate().is_err(), "{p:?}");
     }
@@ -68,7 +74,7 @@ fn params_are_checked() {
 
 #[test]
 fn prepare_merges_two_mics_of_one_drum_and_drops_bad_late_and_isolated_times() {
-    let snare = Hit::new(1.001, Role::Snare);
+    let snare = Hit::new(1.001, BeatVoice::Snare);
     let got = prepare(
         &[
             kick(1.0),
@@ -94,7 +100,11 @@ fn two_mics_of_one_drum_give_the_detection_of_one() {
     let mut one = Vec::new();
     for i in 0..128 {
         let t = 0.5 + f64::from(i) * 0.5;
-        one.push(if i % 2 == 0 { kick(t) } else { Hit::new(t, Role::Snare) });
+        one.push(if i % 2 == 0 {
+            kick(t)
+        } else {
+            Hit::new(t, BeatVoice::Snare)
+        });
     }
     let mut two = one.clone();
     two.extend(one.iter().map(|h| Hit { t: h.t + 0.001, ..*h }));
@@ -129,7 +139,11 @@ fn the_grid_fit_recovers_two_periods_and_is_continuous_at_the_break() {
         } else {
             11.0 + (n - 20) as f64 * 0.4
         };
-        on.push(OnBeat { n, t, role: Role::Kick });
+        on.push(OnBeat {
+            n,
+            t,
+            role: BeatVoice::Kick,
+        });
     }
     let (g, kept) = fit(&on, &[20]).unwrap();
     assert_eq!(kept.len(), 40);
@@ -149,7 +163,7 @@ fn the_fit_leaves_out_an_outlier_and_a_small_group_of_beats_far_out() {
         .map(|n| OnBeat {
             n,
             t: 1.0 + n as f64 * 0.5 + if n % 2 == 0 { 0.001 } else { -0.001 },
-            role: Role::Kick,
+            role: BeatVoice::Kick,
         })
         .collect();
     on[40].t += 0.03;
@@ -157,7 +171,7 @@ fn the_fit_leaves_out_an_outlier_and_a_small_group_of_beats_far_out() {
         on.push(OnBeat {
             n,
             t: 1.0 + n as f64 * 0.5 + 0.05,
-            role: Role::Snare,
+            role: BeatVoice::Snare,
         });
     }
     let kept = drop_isolated(&on);
@@ -179,7 +193,7 @@ fn the_error_bar_reads_two_standard_errors_or_the_end_jitter() {
         .map(|n| OnBeat {
             n,
             t: n as f64 * 0.5 + if n % 2 == 0 { 0.002 } else { -0.002 },
-            role: Role::Kick,
+            role: BeatVoice::Kick,
         })
         .collect();
     let (g, kept) = fit(&on, &[]).unwrap();
@@ -195,7 +209,7 @@ fn the_suggestion_is_always_a_whole_number_of_bpm_and_the_grid_follows() {
         .map(|n| OnBeat {
             n,
             t: 1.0 + n as f64 * p,
-            role: Role::Kick,
+            role: BeatVoice::Kick,
         })
         .collect();
     let g0 = Grid {
@@ -219,7 +233,7 @@ fn the_suggestion_is_always_a_whole_number_of_bpm_and_the_grid_follows() {
         .map(|n| OnBeat {
             n,
             t: 1.0 + n as f64 * p,
-            role: Role::Kick,
+            role: BeatVoice::Kick,
         })
         .collect();
     let g0 = Grid {
@@ -293,7 +307,7 @@ fn session_e() -> (Vec<Hit>, f64) {
     let mut hits = Vec::new();
     let mut dur: f64 = 0.0;
     for tr in v["tracks"].as_object().unwrap().values() {
-        let role = Role::from_name(tr["role"].as_str().unwrap());
+        let role = BeatVoice::from_name(tr["role"].as_str().unwrap());
         dur = dur.max(tr["duration"].as_f64().unwrap());
         hits.extend(
             tr["hits"]
@@ -397,7 +411,7 @@ fn the_simple_ratio_test_knows_the_guarded_ratios_and_their_tolerance() {
 #[test]
 fn grid_share_reads_on_grid_hits_and_rejects_off_grid_ones() {
     let on: Vec<Hit> = (0..16)
-        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5, Role::Kick))
+        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5, BeatVoice::Kick))
         .collect();
     assert!((grid_share(&on, 10.0, 20.0, 0.5) - 1.0).abs() < 1e-9);
     // The same hits against a 3/4 grid: 0.5/0.375 is 4/3 beats; every third hit still lands
@@ -418,7 +432,7 @@ fn session_d() -> Vec<Hit> {
         .as_array()
         .unwrap()
         .iter()
-        .map(|t| Hit::new(t.as_f64().unwrap(), Role::Kick))
+        .map(|t| Hit::new(t.as_f64().unwrap(), BeatVoice::Kick))
         .collect()
 }
 
@@ -498,7 +512,7 @@ fn the_refit_never_puts_bar_1_before_the_audio_starts() {
     let beat = 60.0 / 92.0;
     let hits: Vec<Hit> = (1..96)
         .map(|k| {
-            let role = if k % 2 == 0 { Role::Snare } else { Role::Kick };
+            let role = if k % 2 == 0 { BeatVoice::Snare } else { BeatVoice::Kick };
             Hit::new(f64::from(k) * beat - 0.001, role)
         })
         .collect();
@@ -512,7 +526,7 @@ fn the_refit_never_puts_bar_1_before_the_audio_starts() {
 fn the_refit_refuses_a_bad_tempo_and_too_few_hits() {
     assert!(refit_bar1(&session_d(), 0.0, 2.555).is_err());
     assert!(refit_bar1(&session_d(), -92.0, 2.555).is_err());
-    let few: Vec<Hit> = (0..4).map(|k| Hit::new(f64::from(k) * 0.5, Role::Kick)).collect();
+    let few: Vec<Hit> = (0..4).map(|k| Hit::new(f64::from(k) * 0.5, BeatVoice::Kick)).collect();
     let e = refit_bar1(&few, 92.0, 0.0).unwrap_err();
     assert!(e.contains("at least 8"), "{e}");
 }
@@ -522,9 +536,9 @@ fn the_refit_refuses_a_bad_tempo_and_too_few_hits() {
 #[test]
 fn the_guard_drops_a_simple_ratio_piece_that_the_old_grid_explains_as_well() {
     let mut hits: Vec<Hit> = (0..20)
-        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5 + 0.01, Role::Kick))
+        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5 + 0.01, BeatVoice::Kick))
         .collect();
-    hits.extend((0..8).map(|k| Hit::new(10.5 + f64::from(k), Role::Snare)));
+    hits.extend((0..8).map(|k| Hit::new(10.5 + f64::from(k), BeatVoice::Snare)));
     let pcs = vec![
         Piece {
             start: 0.0,
@@ -544,9 +558,9 @@ fn the_guard_drops_a_simple_ratio_piece_that_the_old_grid_explains_as_well() {
 #[test]
 fn the_guard_keeps_a_simple_ratio_piece_that_its_own_grid_explains() {
     let mut hits: Vec<Hit> = (0..20)
-        .map(|k| Hit::new(0.0 + f64::from(k) * 0.5, Role::Kick))
+        .map(|k| Hit::new(0.0 + f64::from(k) * 0.5, BeatVoice::Kick))
         .collect();
-    hits.extend((0..24).map(|k| Hit::new(10.0 + f64::from(k) * 0.375, Role::Snare)));
+    hits.extend((0..24).map(|k| Hit::new(10.0 + f64::from(k) * 0.375, BeatVoice::Snare)));
     let pcs = vec![
         Piece {
             start: 0.0,
@@ -566,7 +580,7 @@ fn the_guard_keeps_a_simple_ratio_piece_that_its_own_grid_explains() {
 #[test]
 fn the_guard_leaves_other_ratios_and_very_thin_pieces_alone() {
     let hits: Vec<Hit> = (0..20)
-        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5, Role::Kick))
+        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5, BeatVoice::Kick))
         .collect();
     // 126 over 100: no simple ratio, the piece stays even though the old grid fits better.
     let pcs = vec![
@@ -582,7 +596,7 @@ fn the_guard_leaves_other_ratios_and_very_thin_pieces_alone() {
     assert_eq!(guard_simple_ratio_pieces(&hits, &pcs).len(), 2);
     // A 4/3 piece with 3 hits in its window: below the guard's evidence floor.
     let thin: Vec<Hit> = (0..3)
-        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5, Role::Kick))
+        .map(|k| Hit::new(10.0 + f64::from(k) * 0.5, BeatVoice::Kick))
         .collect();
     let pcs = vec![
         Piece {

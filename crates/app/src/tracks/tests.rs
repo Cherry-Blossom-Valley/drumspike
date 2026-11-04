@@ -23,13 +23,7 @@ fn wav(path: &Path, sr: u32, n: usize) {
 }
 
 fn service() -> Service {
-    Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    })
+    Service::new(ServiceConfig::default())
 }
 
 fn aiff(path: &Path) {

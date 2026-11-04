@@ -5,7 +5,7 @@
 //! (Boeck and Widmer, `DAFx` 2013) on the log-filtered spectrogram of P2-2, with peak picking
 //! on one adaptive threshold, gates against bleed and the phase 1 minimum gap. The
 //! parameters per role are in [`OnsetParams::for_role`]; the report
-//! `docs/archive/phase2-report.md` (section P2-5) has the measurements behind them.
+//! The P2-5 measurements are behind them.
 //!
 //! # Chain
 //!
@@ -49,58 +49,12 @@ use super::cross_bleed::{CrossBleedParams, hit_level_full_band};
 use super::features::{band_centres_hz, features};
 use super::resample::{ResampleError, resample_to_44100};
 use crate::refine::{RefineWindow, refine_track};
+use crate::rules::{DeltaRule, ResearchOverrides, RuleSet};
 
-pub use super::features::{FPS, FRAME_SIZE, HOP, N_BANDS, N_FFT_BINS};
+pub(crate) use super::features::HOP;
+pub use super::features::{FPS, N_BANDS};
 
-/// The role of a track, as the app names it (`engine.ROLE_CLASSES`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
-pub enum Role {
-    /// Kick drum (reference class BD).
-    Kick,
-    /// Snare drum (SD).
-    Snare,
-    /// Toms (TT).
-    Tom,
-    /// Hi-hat (HH).
-    Hat,
-    /// Cymbals and ride (CY+RD).
-    Cymbal,
-    /// Anything else: every hit is kept.
-    #[default]
-    Other,
-}
-
-impl Role {
-    /// Every role, in the app's order.
-    pub const ALL: [Role; 6] = [Role::Kick, Role::Snare, Role::Tom, Role::Hat, Role::Cymbal, Role::Other];
-
-    /// Parse the app's role name (`kick`, `snare`, `tom`, `hat`, `cymbal`, `other`).
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Role> {
-        match s {
-            "kick" => Some(Role::Kick),
-            "snare" => Some(Role::Snare),
-            "tom" => Some(Role::Tom),
-            "hat" => Some(Role::Hat),
-            "cymbal" => Some(Role::Cymbal),
-            "other" => Some(Role::Other),
-            _ => None,
-        }
-    }
-
-    /// The app's name of the role.
-    #[must_use]
-    pub fn name(self) -> &'static str {
-        match self {
-            Role::Kick => "kick",
-            Role::Snare => "snare",
-            Role::Tom => "tom",
-            Role::Hat => "hat",
-            Role::Cymbal => "cymbal",
-            Role::Other => "other",
-        }
-    }
-}
+pub use crate::role::Role;
 
 /// What the shape template compares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -185,11 +139,7 @@ pub struct OnsetParams {
 
 /// Minimum gap of phase 1 (`min_gap_ms` = 20 in `defaultParams` of the app and in
 /// `engine.analyze_track`); the same for every role.
-pub const PHASE1_MIN_GAP_S: f64 = 0.020;
-
-fn env_f32(name: &str) -> Option<f32> {
-    std::env::var(name).ok().and_then(|v| v.parse().ok())
-}
+pub(crate) const PHASE1_MIN_GAP_S: f64 = 0.020;
 
 impl OnsetParams {
     /// The generic parameters (role `other`): every band, no level gate.
@@ -220,11 +170,19 @@ impl OnsetParams {
         }
     }
 
-    /// Tuned parameters for a role (see `docs/archive/phase2-report.md`, P2-5): tuned
-    /// for the F-measure within 1 frame against the R3 onsets of the role's class on the
-    /// close-mic tracks of three sessions; the kick values also pass the synthetic corpus.
+    /// [`OnsetParams::for_role_with`] with the research overrides of the process environment
+    /// (R6 Parallel Change: stays while callers are left).
     #[must_use]
     pub fn for_role(role: Role) -> OnsetParams {
+        OnsetParams::for_role_with(role, &ResearchOverrides::from_env())
+    }
+
+    /// Tuned parameters for a role (P2-5): tuned
+    /// for the F-measure within 1 frame against the R3 onsets of the role's class on the
+    /// close-mic tracks of three sessions; the kick values also pass the synthetic corpus.
+    /// `research` overrides the A1 snare numbers (`None` keeps the tuned value).
+    #[must_use]
+    pub fn for_role_with(role: Role, research: &ResearchOverrides) -> OnsetParams {
         let g = OnsetParams::generic();
         let mut p = match role {
             Role::Kick => OnsetParams {
@@ -255,7 +213,7 @@ impl OnsetParams {
                 // flux threshold (the a1-probe: not one of the 109 ghost notes has a
                 // candidate within 60 ms at 2.0); the gates, the soft rescue included,
                 // do the filtering instead.
-                delta: env_f32("DRUMSPIKE_A1_DELTA").unwrap_or(1.0),
+                delta: research.a1_delta.unwrap_or(1.0),
                 ref_quantile: 0.99,
                 gate_db: Some(12.0),
                 // A1: the soft gate recovers the ghost notes (peak about 1/4 of the matched
@@ -269,15 +227,15 @@ impl OnsetParams {
                 // match at 0.950+, so the cut costs nothing there — the overhead denial
                 // `oh_minus_s >= 2`, the 123/142 cut, is what separates them).
                 soft_sim: {
-                    let s = env_f32("DRUMSPIKE_A1_SOFT_SIM").unwrap_or(0.92);
+                    let s = research.a1_soft_sim.unwrap_or(0.92);
                     (s > 0.0).then_some(s)
                 },
-                soft_gate_db: env_f32("DRUMSPIKE_A1_SOFT_DB").unwrap_or(30.0),
+                soft_gate_db: research.a1_soft_db.unwrap_or(30.0),
                 // The second template and the attack ceiling: off until the a1-probe2
                 // measurement picks their defaults (the wake measures first, then decides
                 // once).
-                soft_t2: env_f32("DRUMSPIKE_A1_SOFT_T2").filter(|s| *s > 0.0),
-                soft_attack_max: env_f32("DRUMSPIKE_A1_SOFT_ATTACK"),
+                soft_t2: research.a1_soft_t2.filter(|s| *s > 0.0),
+                soft_attack_max: research.a1_soft_attack,
                 ..g
             },
             Role::Tom => OnsetParams {
@@ -477,30 +435,17 @@ pub fn superflux(spec: &[f32], bands: std::ops::Range<usize>) -> Vec<f32> {
     flux
 }
 
-/// #281 A5 delta-rule version (env `DRUMSPIKE_DELTA_RULE`; unset counts as 1, the A5
-/// product default; `0` pins the shipped absolute `delta` for the frozen references).
-/// Version 1: [`gained_spec`].
-#[must_use]
-pub fn delta_rule() -> u32 {
-    match std::env::var("DRUMSPIKE_DELTA_RULE") {
-        Ok(v) => v.parse().unwrap_or(1),
-        Err(_) => 1,
-    }
-}
-
-/// A5: the minimum time-domain attack (dB) a gain-dependent admit must show (env
+/// A5: the minimum time-domain attack (dB) a gain-dependent admit must show (override
 /// `DRUMSPIKE_A5_GAIN_ATTACK`; 0 pins the check off). A decay tail that only crosses
 /// `delta` on the gained spectrogram has almost none (the false-hit probe: 2.7 to 3.7 dB
 /// against 116+ for the real strokes); a real stroke keeps its attack at any level.
-fn gain_attack_db() -> f32 {
-    std::env::var("DRUMSPIKE_A5_GAIN_ATTACK")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(10.0)
+/// The delta rule itself is [`DeltaRule`] (`DRUMSPIKE_DELTA_RULE`); version 1 is [`gained_spec`].
+fn gain_attack_db(research: &ResearchOverrides) -> f32 {
+    research.a5_gain_attack.unwrap_or(10.0)
 }
 
-/// A5 round 2: the minimum gain factor for the rule to fire (env
-/// `DRUMSPIKE_A5_QUIET_GAIN` overrides all roles). A track just barely under its
+/// A5 round 2: the minimum gain factor for the rule to fire (the override
+/// `DRUMSPIKE_A5_QUIET_GAIN` applies to all roles). A track just barely under its
 /// reference scale (the coordinator's gate on the owner's real multitracks: a loud
 /// snare top a touch under `s_ref`) gets a marginal gain that admits bleed and
 /// ghost-level peaks; the rule now fires only when the track is *really* quiet.
@@ -510,35 +455,27 @@ fn gain_attack_db() -> f32 {
 /// in the 1.25 to 4 factor band (the round-2 probe `quiet_gain_probe`), and a
 /// sub-1.25 hat gain is within the noise of the shipped tuning. The real-session bar
 /// is measured by the coordinator per round.
-fn quiet_gain(role: Role) -> f32 {
+fn quiet_gain(role: Role, research: &ResearchOverrides) -> f32 {
     let default = match role {
         Role::Snare => 2.0,
         _ => 1.25,
     };
-    std::env::var("DRUMSPIKE_A5_QUIET_GAIN")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+    research.a5_quiet_gain.unwrap_or(default)
 }
 
 /// The A5 reference contrast scale per role: the q90 contrast of a nominal track (the
-/// ENST-Drums phrase items, see `docs/migration/reports/a5-self-calibration.md`). The
+/// ENST-Drums phrase items, A5 self-calibration). The
 /// relative delta keeps the shipped `delta` for a track at this scale; a track with half
-/// the scale gets half the delta. Env `DRUMSPIKE_DELTA_REF_<ROLE>` overrides for a
+/// the scale gets half the delta. The override `DRUMSPIKE_DELTA_REF_<ROLE>` sets it for a
 /// measurement round.
-fn s_ref(role: Role) -> f32 {
-    let (default, name) = match role {
-        Role::Kick => (23.0, "KICK"),
-        Role::Snare => (23.0, "SNARE"),
-        Role::Hat => (1.1, "HAT"),
-        Role::Tom => (5.0, "TOM"),
-        Role::Cymbal => (1.0, "CYMBAL"),
-        Role::Other => (1.0, "OTHER"),
+fn s_ref(role: Role, research: &ResearchOverrides) -> f32 {
+    let default = match role {
+        Role::Kick | Role::Snare => 23.0,
+        Role::Hat => 1.1,
+        Role::Tom => 5.0,
+        Role::Cymbal | Role::Other => 1.0,
     };
-    std::env::var(format!("DRUMSPIKE_DELTA_REF_{name}"))
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+    research.delta_ref.of(role).unwrap_or(default)
 }
 
 /// A5 delta rule 1: the track's own level instead of an absolute flux threshold. A track
@@ -555,7 +492,12 @@ fn s_ref(role: Role) -> f32 {
 /// the bleed peaks and costs 35 to 86 milli-F1) means: run the shipped detector
 /// unchanged.
 #[must_use]
-pub fn gained_spec(spec: &[f32], bands: &std::ops::Range<usize>, role: Role) -> Option<Vec<f32>> {
+pub(crate) fn gained_spec(
+    spec: &[f32],
+    bands: &std::ops::Range<usize>,
+    role: Role,
+    research: &ResearchOverrides,
+) -> Option<Vec<f32>> {
     if matches!(role, Role::Kick | Role::Tom | Role::Cymbal) {
         return None;
     }
@@ -573,7 +515,7 @@ pub fn gained_spec(spec: &[f32], bands: &std::ops::Range<usize>, role: Role) -> 
     if scale <= 0.0 {
         return None;
     }
-    let reference = s_ref(role);
+    let reference = s_ref(role, research);
     if scale >= reference {
         return None;
     }
@@ -581,7 +523,7 @@ pub fn gained_spec(spec: &[f32], bands: &std::ops::Range<usize>, role: Role) -> 
     // A5 round 2: a near-nominal track (a small gain) stays shipped - a marginal gain
     // admits bleed and ghost-level peaks on real multitracks (the coordinator's gate);
     // see [`quiet_gain`].
-    if g < quiet_gain(role) {
+    if g < quiet_gain(role, research) {
         return None;
     }
     let mut out = spec.to_vec();
@@ -707,7 +649,7 @@ fn moving_median(v: &[f32], pre: usize, post: usize) -> Vec<f32> {
 /// of the thresholded function over `[i - pre_max, i + post_max]` (zeros outside the
 /// track, scipy `mode='constant'`). Returns ascending frame indices.
 #[must_use]
-pub fn pick_peaks(
+pub(crate) fn pick_peaks(
     odf: &[f32],
     delta: f32,
     pre_avg: usize,
@@ -772,13 +714,15 @@ fn spectral_shape(spec: &[f32], i: usize, bands: &std::ops::Range<usize>) -> Vec
 /// part in the loud-hit template — a tom track whose loudest candidates are bleed must not learn the
 /// bleed as its template — but are judged like every other candidate.
 #[must_use]
-pub fn onsets_with_candidates_excluding(
+pub(crate) fn onsets_with_candidates_excluding(
     spec: &[f32],
     x44: &[f32],
     p: &OnsetParams,
     exclude: &[usize],
+    rules: &RuleSet,
+    research: &ResearchOverrides,
 ) -> (Vec<OnsetHit>, Vec<Candidate>, f32) {
-    onsets_with_candidates_inner(spec, x44, p, exclude, &[])
+    onsets_with_candidates_inner(spec, x44, p, exclude, &[], rules, research)
 }
 
 /// [`onsets_with_candidates`] with a soft-rescue exclusion (A1): `soft_exclude` holds the peak
@@ -786,13 +730,15 @@ pub fn onsets_with_candidates_excluding(
 /// Those candidates cannot pass the soft gate ([`Gate::Soft`]); they are judged like every
 /// other candidate otherwise and carry [`Candidate::soft_busy`].
 #[must_use]
-pub fn onsets_with_candidates_soft_excluding(
+pub(crate) fn onsets_with_candidates_soft_excluding(
     spec: &[f32],
     x44: &[f32],
     p: &OnsetParams,
     soft_exclude: &[usize],
+    rules: &RuleSet,
+    research: &ResearchOverrides,
 ) -> (Vec<OnsetHit>, Vec<Candidate>, f32) {
-    onsets_with_candidates_inner(spec, x44, p, &[], soft_exclude)
+    onsets_with_candidates_inner(spec, x44, p, &[], soft_exclude, rules, research)
 }
 
 /// Onsets of a 44.1 kHz signal and its log spectrogram with explicit parameters: peak
@@ -801,10 +747,17 @@ pub fn onsets_with_candidates_soft_excluding(
 /// Also returns every peak-picked candidate with its gate verdict (A4), before the minimum
 /// gap; the hits are exactly the candidates that [`Candidate::kept`] at the scale 1.0 of
 /// [`repick_candidates`], min-gapped. The third return is the weak-flux limit
-/// (`p.weak_ratio * template median`), which the store keeps for the re-pick.
+/// (`p.weak_ratio * template median`), which the store keeps for the re-pick. `rules.delta`
+/// picks the delta rule, `research` the A5 numbers.
 #[must_use]
-pub fn onsets_with_candidates(spec: &[f32], x44: &[f32], p: &OnsetParams) -> (Vec<OnsetHit>, Vec<Candidate>, f32) {
-    onsets_with_candidates_inner(spec, x44, p, &[], &[])
+pub fn onsets_with_candidates(
+    spec: &[f32],
+    x44: &[f32],
+    p: &OnsetParams,
+    rules: &RuleSet,
+    research: &ResearchOverrides,
+) -> (Vec<OnsetHit>, Vec<Candidate>, f32) {
+    onsets_with_candidates_inner(spec, x44, p, &[], &[], rules, research)
 }
 
 fn onsets_with_candidates_inner(
@@ -813,16 +766,17 @@ fn onsets_with_candidates_inner(
     p: &OnsetParams,
     exclude: &[usize],
     soft_exclude: &[usize],
+    rules: &RuleSet,
+    research: &ResearchOverrides,
 ) -> (Vec<OnsetHit>, Vec<Candidate>, f32) {
     let bands = band_range(p.band_lo_hz, p.band_hi_hz);
     let frames = spec.len() / N_BANDS;
     if bands.is_empty() || frames == 0 {
         return (Vec::new(), Vec::new(), 0.0);
     }
-    let spec_gained = if delta_rule() >= 1 {
-        gained_spec(spec, &bands, p.role)
-    } else {
-        None
+    let spec_gained = match rules.delta {
+        DeltaRule::Gained => gained_spec(spec, &bands, p.role, research),
+        DeltaRule::Absolute => None,
     };
     // A5: the gain applies only where an absolute constant acts - the flux `delta` of the
     // peak picking (and the weak-flux limit derived from it). Levels, shapes and the
@@ -919,6 +873,7 @@ fn onsets_with_candidates_inner(
     let mut candidates: Vec<Candidate> = Vec::with_capacity(peaks.len());
     let mut last: Option<usize> = None;
     let gap_frames = p.min_gap_s * FPS - 1e-9;
+    let gain_attack = gain_attack_db(research);
     for (k, &i) in peaks.iter().enumerate() {
         let loud = p.gate_db.is_none_or(|g| rel[k] >= -g);
         let attack = attacks[k];
@@ -945,7 +900,7 @@ fn onsets_with_candidates_inner(
         // is not a candidate at all: the store record (the app's binary format) has no
         // A5 field, and a re-pick must not resurrect a peak the detection measured away.
         let gain_dep = spec_gained.is_some() && !peaks_raw.contains(&i);
-        let attack_floor = p.attack_db.max(gain_attack_db());
+        let attack_floor = p.attack_db.max(gain_attack);
         if loud && gain_dep && attack < attack_floor {
             continue;
         }
@@ -1069,7 +1024,7 @@ pub fn soft_overhead_peaks(
     // before its transient): the A6 window plus a hop each way
     let p_x = CrossBleedParams {
         window_ms: (-12.0, 30.0),
-        ..CrossBleedParams::default()
+        ..CrossBleedParams::with_overrides(&ResearchOverrides::default())
     };
     cands
         .iter()
@@ -1104,7 +1059,7 @@ pub fn soft_overhead_peaks(
 /// `weak_limit` is the detection's weak-flux limit (`p.weak_ratio * template median`,
 /// as [`onsets_with_candidates`] computed it).
 #[must_use]
-pub fn repick_candidates(cands: &[Candidate], p: &OnsetParams, weak_limit: f32, scale: f32) -> Vec<usize> {
+pub(crate) fn repick_candidates(cands: &[Candidate], p: &OnsetParams, weak_limit: f32, scale: f32) -> Vec<usize> {
     let gate_db = p.gate_db.map(|g| g / scale);
     let sim_gate_db = p.sim_gate_db / scale;
     let sim_min = p.sim_min.map(|s| 1.0 - (1.0 - s) / scale);
@@ -1134,9 +1089,10 @@ pub fn repick_candidates(cands: &[Candidate], p: &OnsetParams, weak_limit: f32, 
 }
 
 /// Onsets of a 44.1 kHz signal and its log spectrogram with explicit parameters.
+#[cfg(test)]
 #[must_use]
-pub fn onsets_from_spectrogram(spec: &[f32], x44: &[f32], p: &OnsetParams) -> Vec<OnsetHit> {
-    onsets_with_candidates(spec, x44, p).0
+pub(crate) fn onsets_from_spectrogram(spec: &[f32], x44: &[f32], p: &OnsetParams) -> Vec<OnsetHit> {
+    onsets_with_candidates(spec, x44, p, &RuleSet::default(), &ResearchOverrides::default()).0
 }
 
 /// Detect the hits of a mono track at `sr` (44.1, 48 or 96 kHz) for `role` with the tuned
@@ -1157,7 +1113,8 @@ pub fn detect_onsets(x: &[f32], sr: u32, role: Role) -> Result<Vec<OnsetHit>, On
 ///
 /// [`OnsetError::Resample`] when `sr` is not 44.1, 48 or 96 kHz.
 pub fn detect_onsets_with(x: &[f32], sr: u32, p: &OnsetParams) -> Result<Vec<OnsetHit>, OnsetError> {
-    Ok(detect_onsets_and_cands(x, sr, p)?.0)
+    // R6 Parallel Change: the rules of the process environment while callers are left.
+    Ok(detect_onsets_and_cands(x, sr, p, &RuleSet::from_env(), &ResearchOverrides::from_env())?.0)
 }
 
 /// [`detect_onsets_and_cands`] with a template exclusion (A6): `exclude` holds the peak indices whose
@@ -1173,10 +1130,12 @@ pub fn detect_onsets_and_cands_excluding(
     sr: u32,
     p: &OnsetParams,
     exclude: &[usize],
+    rules: &RuleSet,
+    research: &ResearchOverrides,
 ) -> Result<(Vec<OnsetHit>, Vec<Candidate>, f32), OnsetError> {
     let y = resample_to_44100(x, sr)?;
     let spec = features(&y, Chain::Cli);
-    let (mut hits, cands, weak_limit) = onsets_with_candidates_excluding(&spec, &y, p, exclude);
+    let (mut hits, cands, weak_limit) = onsets_with_candidates_excluding(&spec, &y, p, exclude, rules, research);
     let times: Vec<f64> = hits.iter().map(|h| h.time).collect();
     for (h, (_, r)) in hits.iter_mut().zip(refine_track(x, sr, &times, RefineWindow::DEFAULT)) {
         h.rise_db = r;
@@ -1197,10 +1156,13 @@ pub fn detect_onsets_and_cands_soft_excluding(
     sr: u32,
     p: &OnsetParams,
     soft_exclude: &[usize],
+    rules: &RuleSet,
+    research: &ResearchOverrides,
 ) -> Result<(Vec<OnsetHit>, Vec<Candidate>, f32), OnsetError> {
     let y = resample_to_44100(x, sr)?;
     let spec = features(&y, Chain::Cli);
-    let (mut hits, cands, weak_limit) = onsets_with_candidates_soft_excluding(&spec, &y, p, soft_exclude);
+    let (mut hits, cands, weak_limit) =
+        onsets_with_candidates_soft_excluding(&spec, &y, p, soft_exclude, rules, research);
     let times: Vec<f64> = hits.iter().map(|h| h.time).collect();
     for (h, (_, r)) in hits.iter_mut().zip(refine_track(x, sr, &times, RefineWindow::DEFAULT)) {
         h.rise_db = r;
@@ -1211,6 +1173,7 @@ pub fn detect_onsets_and_cands_soft_excluding(
 /// [`detect_onsets_with`] with the peak-picked candidate list and the weak-flux limit of
 /// the detection (A4): the model-free detector keeps every candidate with its gate verdict,
 /// so the Sensitivity slider and `track_repick` pick again without a new detection.
+/// `rules.delta` picks the delta rule, `research` the A5 numbers (R6: resolved by the caller).
 ///
 /// # Errors
 ///
@@ -1219,10 +1182,12 @@ pub fn detect_onsets_and_cands(
     x: &[f32],
     sr: u32,
     p: &OnsetParams,
+    rules: &RuleSet,
+    research: &ResearchOverrides,
 ) -> Result<(Vec<OnsetHit>, Vec<Candidate>, f32), OnsetError> {
     let y = resample_to_44100(x, sr)?;
     let spec = features(&y, Chain::Cli);
-    let (mut hits, cands, weak_limit) = onsets_with_candidates(&spec, &y, p);
+    let (mut hits, cands, weak_limit) = onsets_with_candidates(&spec, &y, p, rules, research);
     let times: Vec<f64> = hits.iter().map(|h| h.time).collect();
     for (h, (_, r)) in hits.iter_mut().zip(refine_track(x, sr, &times, RefineWindow::DEFAULT)) {
         h.rise_db = r;

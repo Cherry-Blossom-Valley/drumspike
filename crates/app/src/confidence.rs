@@ -62,6 +62,7 @@ use crate::Service;
 use crate::error::AppError;
 use crate::export::hit_times;
 use crate::media::mix_mode;
+use crate::policy::{Mark, is_manual, is_marked};
 use crate::registry::resolve_shared;
 
 /// The commands of this card.
@@ -111,31 +112,17 @@ pub fn median(v: &[f64]) -> Option<f64> {
 /// untagged hit. The lowest cap wins when a hit has more than one tag.
 #[must_use]
 pub fn tag_cap(e: &Value) -> Option<(f64, &'static str)> {
-    const TAGS: [(&str, f64, &str); 5] = [
-        ("rescue", 0.3, "kick rescue (no model hit)"),
-        ("learned", 0.4, "Learn Add (under the Sensitivity)"),
-        ("roll", 0.4, "roll fill"),
-        ("flam", 0.5, "flam second stroke"),
-        ("stage8", 0.3, "stage 8: real tom stroke the reference lacks"),
+    const TAGS: [(Mark, f64, &str); 5] = [
+        (Mark::Rescue, 0.3, "kick rescue (no model hit)"),
+        (Mark::Learned, 0.4, "Learn Add (under the Sensitivity)"),
+        (Mark::Roll, 0.4, "roll fill"),
+        (Mark::Flam, 0.5, "flam second stroke"),
+        (Mark::Stage8, 0.3, "stage 8: real tom stroke the reference lacks"),
     ];
     TAGS.iter()
-        .filter(|(k, _, _)| e.get(*k) == Some(&Value::Bool(true)))
+        .filter(|(m, _, _)| is_marked(e, *m))
         .map(|&(_, cap, why)| (cap, why))
         .min_by(|a, b| a.0.total_cmp(&b.0))
-}
-
-/// True for a hit the user added or moved from its detected time.
-pub fn is_edited(e: &Value) -> bool {
-    if e.get("added") == Some(&Value::Bool(true)) {
-        return true;
-    }
-    match (
-        e.get("orig").and_then(Value::as_f64),
-        e.get("t").and_then(Value::as_f64),
-    ) {
-        (Some(o), Some(t)) => (t - o).abs() > 1e-9,
-        _ => false,
-    }
 }
 
 /// True for a hit that is not in the output (the loudness cut, the bleed rule, the Learn filter).
@@ -191,7 +178,7 @@ pub struct Margin {
 #[must_use]
 pub fn rate(e: &Value, level_db: f64, median_db: Option<f64>, margin: Option<Margin>, gate: Option<Gate>) -> Value {
     let r2 = |x: f64| (x * 1000.0).round() / 1000.0;
-    if is_edited(e) {
+    if is_manual(e) {
         return json!({"c": 1.0, "doubt": false, "why": ["edited by hand"]});
     }
     if is_out(e) {
@@ -324,6 +311,11 @@ fn hit_gates(st: &crate::histogram::TrackState, times: &[f64], shift_s: f64) -> 
     out
 }
 
+/// R3: the handlers of [`CONFIDENCE_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 1] = crate::call::routes(CONFIDENCE_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
+
 /// The commands of this module for the one dispatcher ([`crate::call`]); `None` for another command.
 #[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
@@ -395,11 +387,11 @@ mod tests {
     }
 
     #[test]
-    fn is_edited_and_is_out_read_the_marks() {
-        assert!(is_edited(&json!({"t": 1.0, "added": true})));
-        assert!(is_edited(&json!({"t": 1.0, "orig": 0.9})));
-        assert!(!is_edited(&json!({"t": 1.0, "orig": 1.0})));
-        assert!(!is_edited(&json!({"t": 1.0})));
+    fn is_manual_and_is_out_read_the_marks() {
+        assert!(is_manual(&json!({"t": 1.0, "added": true})));
+        assert!(is_manual(&json!({"t": 1.0, "orig": 0.9})));
+        assert!(!is_manual(&json!({"t": 1.0, "orig": 1.0})));
+        assert!(!is_manual(&json!({"t": 1.0})));
         for k in ["cut", "bleed", "filtered"] {
             assert!(is_out(&json!({"t": 1.0, k: true})), "{k}");
             assert!(!is_out(&json!({"t": 1.0, k: false})), "{k}");
@@ -523,13 +515,7 @@ mod tests {
     #[test]
     fn dispatch_answers_only_its_command() {
         assert_eq!(CONFIDENCE_COMMANDS, ["track_confidence"]);
-        let svc = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = Service::new(crate::ServiceConfig::default());
         assert!(dispatch(&svc, "markers_get", &json!({})).is_none());
         assert!(dispatch(&svc, "track_confidence", &json!({})).unwrap().is_err());
         assert!(

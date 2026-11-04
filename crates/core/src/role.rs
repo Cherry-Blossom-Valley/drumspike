@@ -1,4 +1,5 @@
-//! #281 item 10: the model-free role suggestion from a track's audio (`role_from_audio`).
+//! The one [`Role`] type of the crate (R1), and #281 item 10: the model-free role
+//! suggestion from a track's audio (`role_from_audio`).
 //!
 //! Rules on band energy, spectral centroid, decay time and onset rate; no learned
 //! model, no training data. Returns [`Role::Kick`], [`Role::Snare`],
@@ -27,24 +28,56 @@
 
 use rustfft::{FftPlanner, num_complex::Complex};
 
-/// A drum role the classifier can suggest. The string is the app's role name
-/// (`crates/app/src/roles.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use crate::dsp::amp_db_max;
+
+/// The role of a track: the instrument its mic records, as the app names it
+/// (`engine.ROLE_CLASSES`). The one role type of the crate: the detector, the attribution
+/// and the classifier use it. Stored by its variant name (`"Kick"`); a stored value without
+/// a role reads as [`Role::Other`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum Role {
-    /// Kick drum.
+    /// Kick drum (reference class BD).
     Kick,
-    /// Snare drum.
+    /// Snare drum (SD).
     Snare,
-    /// Tom.
+    /// Toms (TT).
     Tom,
-    /// Hi-hat.
+    /// Hi-hat (HH).
     Hat,
-    /// Cymbal (ride, crash, overhead-like).
+    /// Cymbals, ride and overheads (CY+RD).
     Cymbal,
+    /// Anything else: every hit is kept, no band limit. The classifier never suggests it.
+    #[default]
+    Other,
 }
 
 impl Role {
-    /// The app's role name.
+    /// Every role, in the app's order.
+    pub const ALL: [Role; 6] = [Role::Kick, Role::Snare, Role::Tom, Role::Hat, Role::Cymbal, Role::Other];
+
+    /// Parse the app's role name (`kick`, `snare`, `tom`, `hat`, `cymbal`, `other`).
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Role> {
+        match s {
+            "kick" => Some(Role::Kick),
+            "snare" => Some(Role::Snare),
+            "tom" => Some(Role::Tom),
+            "hat" => Some(Role::Hat),
+            "cymbal" => Some(Role::Cymbal),
+            "other" => Some(Role::Other),
+            _ => None,
+        }
+    }
+
+    /// The role of a stored or received role name: an unknown name is [`Role::Other`] on
+    /// purpose (every hit kept, no band limit), so a document with a name this version does
+    /// not know still analyses.
+    #[must_use]
+    pub fn parse_or_other(s: &str) -> Role {
+        Role::parse(s).unwrap_or(Role::Other)
+    }
+
+    /// The app's name of the role.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -53,7 +86,83 @@ impl Role {
             Role::Tom => "tom",
             Role::Hat => "hat",
             Role::Cymbal => "cymbal",
+            Role::Other => "other",
         }
+    }
+
+    /// The MIDI note the detector writes for a hit of this role (`engine.ROLE_NOTE`, the
+    /// reference detector's `LABELS_5`): 35 kick, 38 snare, 47 tom, 42 hat, 49 cymbal and
+    /// 35 for other. Not the note the user sees ([`Role::default_note`]).
+    #[must_use]
+    pub fn detector_note(self) -> u8 {
+        match self {
+            Role::Kick => 35,
+            Role::Snare => 38,
+            Role::Tom => 47,
+            Role::Hat => 42,
+            Role::Cymbal => 49,
+            Role::Other => 35,
+        }
+    }
+
+    /// The MIDI note a new track of this role gets (`ROLE_DEFAULT_NOTE` in `static/app.js`):
+    /// 36 kick, 38 snare, 48 tom, 42 hat, 49 cymbal and 36 for other. Not the detector's
+    /// note ([`Role::detector_note`]).
+    #[must_use]
+    pub fn default_note(self) -> u8 {
+        match self {
+            Role::Kick => 36,
+            Role::Snare => 38,
+            Role::Tom => 48,
+            Role::Hat => 42,
+            Role::Cymbal => 49,
+            Role::Other => 36,
+        }
+    }
+}
+
+/// The MIDI notes of the five model classes (BD, SD, TT, HH, CY+RD), as the reference detector
+/// writes them (the CLI reference implementation, `LABELS_5`); `detect::N_CLASSES` entries.
+pub const CLASS_NOTES: [u8; 5] = [35, 38, 47, 42, 49];
+
+/// The MIDI notes a role keeps (`engine.ROLE_CLASSES`); an unknown role gets the set of
+/// `other` (every note from 28 to 59).
+#[must_use]
+pub fn role_classes(role: &str) -> &'static [u8] {
+    const OTHER: [u8; 32] = {
+        let mut a = [0u8; 32];
+        let mut i = 0;
+        while i < 32 {
+            a[i] = 28 + i as u8;
+            i += 1;
+        }
+        a
+    };
+    match role {
+        "kick" => &[35],
+        "snare" => &[38],
+        "tom" => &[41, 43, 45, 47, 48, 50],
+        "hat" => &[42, 44, 46],
+        "cymbal" => &[49, 51, 52, 53, 55],
+        _ => &OTHER,
+    }
+}
+
+/// The note of a DSP fallback hit (`engine.ROLE_NOTE`; an unknown role gets 35 like
+/// `other`).
+#[must_use]
+pub fn role_note(role: &str) -> u8 {
+    Role::parse_or_other(role).detector_note()
+}
+
+/// The MIDI note of an internal class index at the track's `role` (the `other` class and an
+/// unknown role take the role's note, as [`role_note`] does).
+#[must_use]
+pub fn class_note(class: u8, role: &str) -> u8 {
+    if (class as usize) < CLASS_NOTES.len() {
+        CLASS_NOTES[class as usize]
+    } else {
+        role_note(role)
     }
 }
 
@@ -161,11 +270,11 @@ pub fn role_from_audio(samples: &[f32], sr: u32) -> Option<Role> {
 /// - cymbal: the wash veto never fired on the run (0 suggestions at any threshold);
 ///   no bar.
 #[must_use]
-pub fn role_threshold(role: Role) -> Option<f64> {
+pub(crate) fn role_threshold(role: Role) -> Option<f64> {
     match role {
         Role::Kick => Some(0.05),
         Role::Tom => Some(0.60),
-        Role::Snare | Role::Hat | Role::Cymbal => None,
+        Role::Snare | Role::Hat | Role::Cymbal | Role::Other => None,
     }
 }
 
@@ -381,9 +490,9 @@ fn analyze(samples: &[f32], sr: u32) -> Analysis {
     // Onsets on the frame envelope (dB domain, hop-resolution). A hit shows up as a rise
     // of 6 dB or more over the previous ~46 ms (the frame smoothing of the RMS needs the
     // longer window; a single-frame step would miss overlapping hits).
-    let env_db: Vec<f64> = env.iter().map(|e| 20.0 * e.max(1e-12).log10()).collect();
+    let env_db: Vec<f64> = env.iter().map(|&e| amp_db_max(e, 1e-12)).collect();
     let peak_env = env.iter().copied().fold(0.0, f64::max);
-    let peak_db = 20.0 * peak_env.max(1e-12).log10();
+    let peak_db = amp_db_max(peak_env, 1e-12);
     let gate_db = peak_db - 45.0; // ignore the noise floor
     let rise_frames = (0.046 / hop_s).max(1.0) as usize;
     let mut onsets: Vec<usize> = Vec::new();

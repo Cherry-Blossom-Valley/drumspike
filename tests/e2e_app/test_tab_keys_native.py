@@ -72,3 +72,61 @@ def test_control_tab_runs_in_the_page_with_the_native_menu(app, make_project):
     assert abs(playhead(app) - 1.0) < 1e-6
     app.keyboard.press("Control+Tab")
     assert abs(playhead(app) - 1.5) < 1e-6
+
+
+def test_tab_skips_a_deactivated_hit_unless_all_found_hits_is_set(app, make_project):
+    """#175 (folded from test_tab_deactivated.py): "Tab moves to: active hits only" (the default) makes Tab and
+    Option+Tab skip a deactivated hit; "all found hits" visits it. The status line names the mode, the setting
+    survives a reload, and a selected deactivated hit says "deactivated" in the counter and the info line."""
+    sid = open_project(app, make_project(seconds=6.0))
+    with_hits(app, sid, {"Kick In": [1.0, 2.0, 3.0]})
+    assert app.evaluate("""async sid => {   // the middle hit deactivated (cut), like a ghost note under the threshold
+      const evs = (S.events['Kick In'] || []).map(e => ({ t: e.t, v: e.v, id: e.id }));
+      if (evs.length !== 3) return false;
+      evs[1].cut = true;
+      await B.setEvents(sid, 'Kick In', { events: evs });
+      await loadProject();
+      return (S.events['Kick In'] || []).length === 3;
+    }""", sid)
+    tab_mode = lambda: app.evaluate("() => SETTINGS().ui.tabMode")
+    start = "() => { S.playhead = 0.5; S.sel = null; S.selTrack = null; setView(0, 6); }"
+    app.evaluate(start)
+    assert tab_mode() == "active"
+    app.keyboard.press("Tab")
+    assert abs(playhead(app) - 1.0) < 1e-6
+    app.keyboard.press("Tab")
+    assert abs(playhead(app) - 3.0) < 1e-6   # the deactivated 2.0 is skipped
+    app.keyboard.press("Alt+Tab")
+    assert abs(playhead(app) - 1.0) < 1e-6   # Option+Tab follows the same rule
+    assert app.evaluate("() => S.sel") == {"track": "Kick In", "index": 0}
+    # the counter and the info line say "deactivated" for the selected deactivated hit; a regular hit does not
+    select = "i => { S.sel = { track: 'Kick In', index: i }; updateStatus(); invalidate(F.VIEW | F.NEAR); }"
+    app.evaluate(select, 1)
+    app.wait_for_timeout(150)
+    assert "deactivated" in app.locator("#stSel").text_content()
+    assert "deactivated" in app.evaluate("() => $('#ilIndex').textContent")
+    app.evaluate(select, 0)
+    app.wait_for_timeout(150)
+    assert "deactivated" not in app.locator("#stSel").text_content()
+    # all found hits: Tab visits the deactivated hit; the status line names each mode
+    app.evaluate(start)
+    app.evaluate("() => setMsg('')")
+    assert menu(app, "tab_all") is True
+    assert tab_mode() == "all" and "all found hits" in app.locator("#stMsg").text_content()
+    for t in (1.0, 2.0, 3.0):
+        app.keyboard.press("Tab")
+        assert abs(playhead(app) - t) < 1e-6
+    app.evaluate("() => setMsg('')")
+    assert menu(app, "tab_active") is True
+    assert tab_mode() == "active" and "active hits only" in app.locator("#stMsg").text_content()
+    app.keyboard.press("Alt+Tab")
+    assert abs(playhead(app) - 1.0) < 1e-6   # active again: 2.0 is skipped backwards
+    # the setting survives a reload
+    menu(app, "tab_all")
+    app.reload()
+    app.wait_for_function("() => typeof S !== 'undefined' && S.loaded > 0")
+    assert tab_mode() == "all"
+    menu(app, "tab_active")
+    app.reload()
+    app.wait_for_function("() => typeof S !== 'undefined' && S.loaded > 0")
+    assert tab_mode() == "active"

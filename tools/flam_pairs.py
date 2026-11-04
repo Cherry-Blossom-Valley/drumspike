@@ -62,11 +62,7 @@ KIT_TOL = 0.005         # kit match window (flams of 5 ms)
 DEFAULTS = {"hp_hz": 1000.0, "hold_s": 0.001, "rise_s": 0.002, "rise_db": 9.0, "level_db": 30.0, "floor_db": 12.0,
             "min_gap_s": 0.012, "max_gap_s": 0.050, "guard_s": 0.010, "margin_db": 10.0, "peak_s": 0.012,
             "base": "max", "look_s": 0.003}
-# the hat or overhead of each song: one more bleed source (the close mics come from fix_metric's table)
-EXTRA = {"Session A": ["hh_03", "oh_01"], "Session B": ["hh_01", "OH_01", "ride_01"],
-         "Session C": ["hh_03", "oh_03.L", "ri_03"], "Session H": ["hh_04", "oh_03.L"],
-         "Session F": ["hh_01", "oh_01.L", "ri_01"], "Session G": ["hh_10", "oh_01.L", "ri_01"],
-         "Session D": ["hh", "oh HH", "oh Ri", "ri"]}
+EXTRA = fm.EXTRA_MICS   # the hat or overhead of each song: one more bleed source
 # the snare sample layers that are not the P4-16 reference (an independent look at a second stroke); files with
 # `.L`/`.R` are read as one track
 LAYERS = {"Session A": ["s sampl savior_01", "s sampl sd3_01"], "Session B": ["s samp savior_01", "s samp sd3_01"],

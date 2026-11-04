@@ -11,7 +11,7 @@
    waits for a record of the command.
 
    After setup and every preset change the driver reads the NSMenu of macOS and asserts the AppKit
-   Shift convention that menu.rs `fix_shift_equivalents` applies (a Shift+letter accelerator has
+   Shift convention that menu/macos.rs `fix_shift_equivalents` applies (a Shift+letter accelerator has
    the UPPERCASE letter and no Shift in the mask, a Cmd+letter stays lowercase) — the
    deterministic proof that the fix took effect, per preset: "shift items converted N, wrong 0".
 
@@ -329,7 +329,7 @@
                   const pk = DSKeys.parse(k).key;
                   const chars = { Up: "\u{F700}", Down: "\u{F701}", Left: "\u{F702}", Right: "\u{F703}",
                     Return: "\u{000d}", Tab: "\u{0009}" }[pk];
-                  // #206: the AppKit convention that menu.rs applies: a Shift+Cmd accelerator has the
+                  // #206: the AppKit convention that menu/macos.rs applies: a Shift+Cmd accelerator has the
                   // UPPERCASE letter as the key equivalent and no Shift in the mask
                   const eq = chars ?? (pk.length === 1 ? (k.includes("Shift") ? pk.toUpperCase() : pk.toLowerCase()) : pk);
                   const ns = () => nsLive.filter(r => r.key === eq && (r.label === c.title || r.label.startsWith(c.title)));

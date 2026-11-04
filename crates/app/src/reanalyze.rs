@@ -30,6 +30,7 @@ use serde_json::{Value, json};
 use crate::Service;
 use crate::error::AppError;
 use crate::media::mix_mode;
+use crate::policy::{Mark, mark};
 use crate::registry::lock;
 
 /// The pad on both sides of the range (concept rule 1).
@@ -159,9 +160,9 @@ impl Service {
                 let hit_this = this.iter().any(|&m| (m - at).abs() <= LEARN_REACH + 1e-9);
                 let hit_not = not.iter().any(|&m| (m - at).abs() <= LEARN_REACH + 1e-9);
                 if filter && hit_not {
-                    e.insert("filtered".into(), Value::Bool(true));
+                    mark(e, Mark::Filtered);
                 } else if hit_this {
-                    e.insert("learned".into(), Value::Bool(true));
+                    mark(e, Mark::Learned);
                 }
             }
         }
@@ -245,6 +246,11 @@ fn in_range(e: &Value, t0: f64, t1: f64) -> bool {
 fn fmt_s(t: f64) -> String {
     format!("{t:.3}")
 }
+
+/// R3: the handlers of this module's commands for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 1] = crate::call::routes(["reanalyze_selection"], |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
 
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them.
 #[must_use]

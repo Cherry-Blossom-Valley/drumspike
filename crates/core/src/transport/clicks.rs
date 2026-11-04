@@ -21,7 +21,7 @@ use std::f64::consts::PI;
 use super::Speed;
 
 /// The click pitch per role in Hz (`ROLE_DEFAULT_CLICK` in `static/app.js`).
-pub const ROLE_DEFAULT_CLICK: [(&str, f32); 6] = [
+pub(crate) const ROLE_DEFAULT_CLICK: [(&str, f32); 6] = [
     ("kick", 1000.0),
     ("snare", 2500.0),
     ("tom", 700.0),
@@ -54,7 +54,7 @@ pub fn role_pitch(role: &str) -> f32 {
 /// The click envelope at `t` seconds for `volume` (the two exponential ramps of `app.js`,
 /// then the floor until the stop).
 #[must_use]
-pub fn envelope(t: f64, volume: f32) -> f64 {
+pub(crate) fn envelope(t: f64, volume: f32) -> f64 {
     let v = f64::from(volume);
     if v <= 0.0 || !(0.0..STOP_S).contains(&t) {
         return 0.0;
@@ -71,7 +71,7 @@ pub fn envelope(t: f64, volume: f32) -> f64 {
 /// The click template at `sample_rate`: `round(0.040 * sample_rate)` samples, a
 /// band-limited square at `pitch_hz` in cosine phase times [`envelope`]. Empty when the
 /// volume is 0, the pitch is not positive or the pitch is at or above Nyquist.
-pub fn click_template(pitch_hz: f32, volume: f32, sample_rate: u32) -> Vec<f32> {
+pub(crate) fn click_template(pitch_hz: f32, volume: f32, sample_rate: u32) -> Vec<f32> {
     let sr = f64::from(sample_rate);
     let f = f64::from(pitch_hz);
     if volume <= 0.0 || f <= 0.0 || f >= sr / 2.0 {
@@ -105,7 +105,7 @@ pub fn click_template(pitch_hz: f32, volume: f32, sample_rate: u32) -> Vec<f32> 
 /// Map a hit sample at the track rate to the device sample:
 /// `round(hit * device_rate / track_rate)`, ties to even, in exact integer arithmetic.
 #[must_use]
-pub fn map_hit(hit: u64, track_rate: u32, device_rate: u32) -> u64 {
+pub(crate) fn map_hit(hit: u64, track_rate: u32, device_rate: u32) -> u64 {
     if track_rate == device_rate {
         return hit;
     }

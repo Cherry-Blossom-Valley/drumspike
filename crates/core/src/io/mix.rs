@@ -44,7 +44,7 @@ const C: f32 = std::f32::consts::FRAC_1_SQRT_2;
 /// Verified against ffmpeg 9.0.2 for 1 to 8 channels (default layouts: mono, stereo,
 /// 2.1, 4.0, 5.0, 5.1, 6.1, 7.1).
 #[must_use]
-pub fn ffmpeg_mono_coefs(ch: usize) -> Option<&'static [f32]> {
+pub(crate) fn ffmpeg_mono_coefs(ch: usize) -> Option<&'static [f32]> {
     const T: [&[f32]; 8] = [
         &[1.0],
         &[C, C],

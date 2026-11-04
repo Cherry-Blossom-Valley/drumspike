@@ -292,7 +292,6 @@ def load_song(song, mic):
 
 def analyze_track(song, mic, role, log=print):
     """Every false and missed hit of one track with its features and class. Returns a dict (JSON-able)."""
-    import flam_pairs as fp
     refs, run = load_song(song, mic)
     cfg = fm.songs()[song]
     ref, ev = refs[song]["mics"][mic]["onsets"], run["events"][mic]
@@ -312,7 +311,7 @@ def analyze_track(song, mic, role, log=print):
         if v["role"] == other_role:
             o = fm.track_offset(v["onsets"], run["events"][m])
             other += [r + o for r in v["onsets"]]
-    stems = (fp.LAYERS.get(song, []) if role == "snare" else KICK_LAYERS.get(song, []))
+    stems = (fm.SNARE_LAYERS.get(song, []) if role == "snare" else KICK_LAYERS.get(song, []))
     lay = layer_times(cfg, stems)
     lay_off = {k: layer_offset(ref, v) for k, v in lay.items()}
     lay_each = {k: sorted(t - lay_off[k] + off for t in v) for k, v in lay.items()}   # in the events' time base
@@ -323,7 +322,7 @@ def analyze_track(song, mic, role, log=print):
            "median_peak_db": med, "witness": wit_stem if wx is not None else None, "layers": sorted(lay),
            "missed": [], "false": []}
     extras = []
-    for stem in fp.EXTRA.get(song, []):
+    for stem in fm.EXTRA_MICS.get(song, []):
         ex, esr = read_stem(cfg, stem)
         if ex is not None and esr == sr:
             extras.append(ex)

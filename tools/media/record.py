@@ -50,7 +50,7 @@ the project default, so the app's own summary keeps its neutral "Exports/ in the
 phrase) and keeps it there — the app re-renders the input on every exRender, so each of them
 re-asserts the text; a show_text step rewrites an element the app printed a host path into (the
 status bar's "created Demo in …"). The video is the media plan's 1920x1080 at 2x device scale
-(docs/product/media-plan.md). FAIL (exit 1) when a step's element or event is not found, when a
+(the media plan). FAIL (exit 1) when a step's element or event is not found, when a
 menu title in a caption is not in static/keymap.js, when a scene starts with a modal still open
 (a dialog the scene before it left open), when a scene still drifts more than 100 ms after the
 compression, or when the page shows forbidden text at a scene's start — the guard of shots.py

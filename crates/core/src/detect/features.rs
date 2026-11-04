@@ -39,13 +39,13 @@ use super::Chain;
 use super::resample::TARGET_RATE;
 
 /// Hop size in samples at 44.1 kHz (100 frames per second).
-pub const HOP: usize = 441;
+pub(crate) const HOP: usize = 441;
 /// Frames per second of the spectrogram.
 pub const FPS: f64 = 100.0;
 /// Frame (and FFT) size in samples.
-pub const FRAME_SIZE: usize = 2048;
+pub(crate) const FRAME_SIZE: usize = 2048;
 /// Magnitude bins kept per frame (`|X|[:1024]`, no Nyquist bin).
-pub const N_FFT_BINS: usize = FRAME_SIZE / 2;
+pub(crate) const N_FFT_BINS: usize = FRAME_SIZE / 2;
 /// Bands of the log filterbank (the model's input width).
 pub const N_BANDS: usize = 84;
 /// Unique filter edge and centre bins: [`N_BANDS`] + 2.
@@ -64,7 +64,7 @@ pub fn num_frames(n: usize, chain: Chain) -> usize {
 
 /// `np.fft.fftfreq(2048, 1 / 44100)[k]`: `k * (1 / (2048 * (1 / 44100)))`.
 #[must_use]
-pub fn bin_frequency(k: usize) -> f64 {
+pub(crate) fn bin_frequency(k: usize) -> f64 {
     let val = 1.0 / (FRAME_SIZE as f64 * (1.0 / f64::from(TARGET_RATE)));
     k as f64 * val
 }
@@ -125,7 +125,7 @@ fn madmom_bins() -> Vec<usize> {
 
 /// The [`N_EDGE_BINS`] unique filter edge and centre bins of the chain's grid, ascending.
 /// Filter `b` spans bins `[bins[b], bins[b + 2])` with its peak at `bins[b + 1]`.
-pub fn filterbank_bins(chain: Chain) -> &'static [usize] {
+pub(crate) fn filterbank_bins(chain: Chain) -> &'static [usize] {
     static CLI: OnceLock<Vec<usize>> = OnceLock::new();
     static MADMOM: OnceLock<Vec<usize>> = OnceLock::new();
     match chain {
@@ -136,7 +136,7 @@ pub fn filterbank_bins(chain: Chain) -> &'static [usize] {
 
 /// The [`N_BANDS`] filter centre bins of the chain's grid (`filterbank_bins(chain)[1..85]`).
 #[must_use]
-pub fn centre_bins(chain: Chain) -> &'static [usize] {
+pub(crate) fn centre_bins(chain: Chain) -> &'static [usize] {
     let b = filterbank_bins(chain);
     &b[1..b.len() - 1]
 }
@@ -210,7 +210,7 @@ fn filters(chain: Chain) -> &'static [Filter] {
 }
 
 /// Centre frequency in Hz (`fftfreq` of the centre bin) of each of the [`N_BANDS`] bands.
-pub fn band_centres_hz(chain: Chain) -> &'static [f64] {
+pub(crate) fn band_centres_hz(chain: Chain) -> &'static [f64] {
     static CLI: OnceLock<Vec<f64>> = OnceLock::new();
     static MADMOM: OnceLock<Vec<f64>> = OnceLock::new();
     let make = || centre_bins(chain).iter().map(|&k| bin_frequency(k)).collect();

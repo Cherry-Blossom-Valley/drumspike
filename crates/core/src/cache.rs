@@ -93,7 +93,7 @@ pub struct CacheTile {
 
 /// Encode `peaks.bin` for a track of `n_samples` samples at `sr`.
 #[must_use]
-pub fn encode_peaks_bin(sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) -> Vec<u8> {
+pub(crate) fn encode_peaks_bin(sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) -> Vec<u8> {
     let total: usize = levels.iter().map(|(_, l)| l.n * 3 * 4).sum();
     let mut out = Vec::with_capacity(FIXED_HEADER + levels.len() * 8 + total);
     out.extend_from_slice(&MAGIC);
@@ -120,7 +120,12 @@ pub fn encode_peaks_bin(sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) 
 /// # Errors
 ///
 /// [`CacheError::Io`] when the temporary file cannot be written or renamed over `path`.
-pub fn write_peaks_bin(path: &Path, sr: u32, n_samples: u64, levels: &[(usize, PeakLevel)]) -> Result<(), CacheError> {
+pub(crate) fn write_peaks_bin(
+    path: &Path,
+    sr: u32,
+    n_samples: u64,
+    levels: &[(usize, PeakLevel)],
+) -> Result<(), CacheError> {
     let bytes = encode_peaks_bin(sr, n_samples, levels);
     let tmp = path.with_extension("bin.tmp");
     fs::write(&tmp, &bytes)?;
