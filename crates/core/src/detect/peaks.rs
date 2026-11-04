@@ -353,9 +353,8 @@ pub fn pick(activations: &[f32], chain: Chain) -> Vec<Onset> {
     pick_counted(activations, chain).0
 }
 
-/// [`pick`] with per-class `thresholds` (BD, SD, TT, HH, CY+RD) in place of [`THRESHOLDS`]:
-/// the app's sensitivity control scales them (`static/app.js`, the `thresholds` parameter
-/// that the reference CLI takes as `--thresholds`).
+/// [`pick`] with per-class `thresholds` (BD, SD, TT, HH, CY+RD) in place of [`THRESHOLDS`].
+/// Tests only: they check the per-class thresholds of the picker.
 ///
 /// # Panics
 ///

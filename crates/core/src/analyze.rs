@@ -58,9 +58,8 @@ pub struct AnalyzeParams {
     /// P4-19: the roll fill version (0 = off). The roll fill moved with the model to the
     /// model branch (#281 A3/D16); the field stays so old documents load.
     pub roll: u32,
-    /// P4-31: the kick walk version (0 = the shipped back-track margin everywhere, the default here and in the parity
-    /// checks; [`crate::refine::kick_walk_applies`] says for which roles). The app sets it per analysis; it is not a
-    /// document param.
+    /// P4-31: the kick walk version. Inert since #281 D16 (the kick walk moved with the model to the model branch):
+    /// every version runs the shipped back-track margin on every role. The app sets 0; it is not a document param.
     pub kick_walk: u32,
 }
 

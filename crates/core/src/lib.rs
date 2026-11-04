@@ -29,7 +29,7 @@
 
 #![warn(missing_docs)]
 
-/// Version of the `drumspike-core` crate (the workspace version); the app and the `PyO3` module report it.
+/// Version of the `drumspike-core` crate (the workspace version); the app reports it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod cache;
@@ -60,7 +60,7 @@ pub mod spike;
 pub mod tempo;
 // P4-8 stage B: a suggested tempo map from the kick and snare hits.
 pub mod tempo_detect;
-// P3-5a: native playback (cpal, rtrb, rubato); the app turns the feature on, the PyO3 module does not.
+// P3-5a: native playback (cpal, rtrb, rubato); the app turns the feature on.
 #[cfg(feature = "audio")]
 pub mod transport;
 pub mod velocity;
