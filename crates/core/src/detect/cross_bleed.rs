@@ -586,37 +586,14 @@ impl<'a> CrossBleedContext<'a> {
 /// Run the rule over the close mics of one session with every input in one [`CrossBleedContext`]
 /// (see the module documentation). [`cross_bleed`], [`cross_bleed_session`],
 /// [`cross_bleed_prior`] and [`cross_bleed_prior_session`] are thin wrappers of it.
+///
+/// The phases: the levels of every hit (`Run::new`), the alignment of every (tom, source)
+/// pair (`measured_rows`), the per-source session test (`SourceVerdict::count`), the
+/// target-level inheritance (`target_inherits`), then per tom target the learned pairs
+/// (`learn_pairs`) and the verdict per hit (`judge_hits`).
 #[must_use]
 pub fn cross_bleed_with(mics: &[CrossMic], ctx: &CrossBleedContext) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
-    let CrossBleedContext {
-        sr,
-        params: p,
-        prior,
-        session,
-    } = *ctx;
-    let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
-    let pre = ms_to_samples(p.preroll_ms, sr);
-    let coincide = p.coincide_ms / 1000.0;
-    let lv: Vec<Vec<f64>> = mics.iter().map(|m| levels(m, sr, w, pre)).collect();
-    // the full-band peak levels of the Overhead sources (the #286 A1 common-band test),
-    // per target kind; the targets are tom close mics, so one recomputation covers them.
-    // The overhead is a mix of everything; only a common band compares like with like —
-    // the full-band peak, the same measure on both mics (no filter sections).
-    let oh_lv: Vec<Option<Vec<f64>>> = mics
-        .iter()
-        .map(|m| {
-            if m.kind.in_target_band() {
-                Some(
-                    m.motion
-                        .iter()
-                        .map(|&t| band_level_db(m.signal, &[], (t * f64::from(sr)).round() as i64, w, pre))
-                        .collect(),
-                )
-            } else {
-                None
-            }
-        })
-        .collect();
+    let run = Run::new(mics, ctx);
     let toms: Vec<usize> = mics
         .iter()
         .enumerate()
@@ -638,6 +615,106 @@ pub fn cross_bleed_with(mics: &[CrossMic], ctx: &CrossBleedContext) -> (Vec<Vec<
     // is a close mic. A source is aligned on the session only when it measures aligned on
     // every tom target that has at least `align_min_coins` coincidences with it, and on at
     // least two such targets; a session with one tom mic cannot establish alignment.
+    let measured = measured_rows(mics, run.sr, run.p);
+    let verdict = SourceVerdict::count(&measured, ctx.session, run.p, mics.len());
+    let target_inherits = target_inherits(&toms, &measured, &verdict, mics.len());
+    let mut learned = Vec::new();
+    // per tom (pushed in tom order, read at the mic index `a` as before the phase split: the two
+    // agree when the tom mics lead the slice; otherwise `counts[a]` is out of range)
+    let mut counts: Vec<Vec<[usize; 4]>> = Vec::new();
+    let mut marks: Vec<Vec<CrossMark>> = mics.iter().map(|m| vec![NO_MARK; m.motion.len()]).collect();
+    for (ai, &a) in toms.iter().enumerate() {
+        // `measured` is read at the tom order `ai` (it is filled at the mic index), as before
+        let pair = learn_pairs(&run, &verdict, a, &measured[ai], target_inherits[a]);
+        counts.push(vec![[0; 4]; pair.len()]);
+        judge_hits(&run, a, &pair, &mut marks[a], &mut counts[a]);
+        let learn_start = learned.len();
+        learned.extend(pair.iter().map(|(_, l)| *l));
+        for (pl, c) in learned[learn_start..].iter_mut().zip(&counts[a]) {
+            pl.aligned_counts = *c;
+        }
+    }
+    (marks, learned)
+}
+
+/// The mark of a hit before the verdict: not bleed, no coinciding source.
+const NO_MARK: CrossMark = CrossMark {
+    bleed: false,
+    lead_ms: None,
+    ratio_db: None,
+    hat_lead_ms: None,
+    hat_ratio_db: None,
+    aligned_mark: false,
+};
+
+/// One run's inputs and the levels of every hit, measured once before any pair is judged.
+struct Run<'r> {
+    mics: &'r [CrossMic<'r>],
+    sr: u32,
+    p: &'r CrossBleedParams,
+    prior: Option<&'r [PairLearned]>,
+    /// The level window (samples).
+    w: (i64, i64),
+    /// The filter run-in before a level window (samples).
+    pre: i64,
+    /// The coincidence band (s).
+    coincide: f64,
+    /// Per mic, the level of every motion time in its own band.
+    lv: Vec<Vec<f64>>,
+    /// Per mic, the full-band levels of an Overhead source; `None` for every other kind.
+    oh_lv: Vec<Option<Vec<f64>>>,
+}
+
+impl<'r> Run<'r> {
+    /// The levels phase: every hit of every mic in its own band, and the full-band level of
+    /// every hit of an Overhead source.
+    fn new(mics: &'r [CrossMic<'r>], ctx: &CrossBleedContext<'r>) -> Self {
+        let CrossBleedContext {
+            sr,
+            params: p,
+            prior,
+            session: _,
+        } = *ctx;
+        let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
+        let pre = ms_to_samples(p.preroll_ms, sr);
+        let coincide = p.coincide_ms / 1000.0;
+        let lv: Vec<Vec<f64>> = mics.iter().map(|m| levels(m, sr, w, pre)).collect();
+        // the full-band peak levels of the Overhead sources (the #286 A1 common-band test),
+        // per target kind; the targets are tom close mics, so one recomputation covers them.
+        // The overhead is a mix of everything; only a common band compares like with like —
+        // the full-band peak, the same measure on both mics (no filter sections).
+        let oh_lv: Vec<Option<Vec<f64>>> = mics
+            .iter()
+            .map(|m| {
+                if m.kind.in_target_band() {
+                    Some(
+                        m.motion
+                            .iter()
+                            .map(|&t| band_level_db(m.signal, &[], (t * f64::from(sr)).round() as i64, w, pre))
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Run {
+            mics,
+            sr,
+            p,
+            prior,
+            w,
+            pre,
+            coincide,
+            lv,
+            oh_lv,
+        }
+    }
+}
+
+/// The alignment phase: per mic index, the measured rows of the tom at that index (empty for a
+/// mic that is not a tom), from [`measure_pair_alignment`].
+fn measured_rows(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> Vec<Vec<MeasuredRow>> {
     let mut measured: Vec<Vec<MeasuredRow>> = vec![Vec::new(); mics.len()]; // per tom: the rows, source order
     for (a, b, aligned, coins_n, med_abs_lead) in measure_pair_alignment(mics, sr, p) {
         measured[a].push(MeasuredRow {
@@ -649,327 +726,409 @@ pub fn cross_bleed_with(mics: &[CrossMic], ctx: &CrossBleedContext) -> (Vec<Vec<
             },
         });
     }
-    // per source: the tom targets with at least `align_min_coins` coincidences, and how many
-    // of those the pair measured aligned. With a handed-in session verdict (the app's
-    // per-target runs, one tom per call) the SESSION-WIDE counts win (#313): the in-call count
-    // over the slice's single tom could never reach the two-target bar.
-    let mut source_targets = vec![0usize; mics.len()];
-    let mut source_aligned_targets = vec![0usize; mics.len()];
-    if session.is_none() {
-        for rows in &measured {
-            for row in rows {
-                if row.align.coins >= p.align_min_coins {
-                    source_targets[row.source] += 1;
-                    if row.align.aligned {
-                        source_aligned_targets[row.source] += 1;
+    measured
+}
+
+/// The per-source session test of one run (#313): the handed-in [`SessionAlign`] when the caller
+/// has one, else the count over the slice's tom mics.
+struct SourceVerdict<'r> {
+    session: Option<&'r SessionAlign>,
+    /// Per source: the tom targets with at least `align_min_coins` coincidences (in-call count;
+    /// all zero when a session verdict is handed in).
+    source_targets: Vec<usize>,
+    /// Per source: how many of those the pair measured aligned (in-call count, as above).
+    source_aligned_targets: Vec<usize>,
+}
+
+impl<'r> SourceVerdict<'r> {
+    /// The session phase: per source, the tom targets with at least `align_min_coins`
+    /// coincidences, and how many of those the pair measured aligned. With a handed-in session
+    /// verdict (the app's per-target runs, one tom per call) the SESSION-WIDE counts win (#313):
+    /// the in-call count over the slice's single tom could never reach the two-target bar.
+    fn count(measured: &[Vec<MeasuredRow>], session: Option<&'r SessionAlign>, p: &CrossBleedParams, n: usize) -> Self {
+        let mut source_targets = vec![0usize; n];
+        let mut source_aligned_targets = vec![0usize; n];
+        if session.is_none() {
+            for rows in measured {
+                for row in rows {
+                    if row.align.coins >= p.align_min_coins {
+                        source_targets[row.source] += 1;
+                        if row.align.aligned {
+                            source_aligned_targets[row.source] += 1;
+                        }
                     }
                 }
             }
         }
+        SourceVerdict {
+            session,
+            source_targets,
+            source_aligned_targets,
+        }
     }
-    // a source is aligned on the session only when it measured aligned on EVERY qualifying
-    // target, and on at least two of them
-    let session_aligned_of = |b: usize| match session {
-        Some(s) => s.is_aligned(b),
-        None => source_targets[b] >= 2 && source_aligned_targets[b] == source_targets[b],
-    };
-    // #309, bound to the session test by #313: the target-level inheritance fires only from a
-    // SESSION-aligned source's measured-aligned pair — when one exists on the target, the tool
-    // was applied to the whole session, so EVERY pair of the target judges by the level test
-    // alone (the lead of the other pairs carries no information on such a session). On a
-    // session where the only measured-aligned pair's source fails the session test (one
-    // close-miked target reading a small lag — ENST) no pair inherits.
-    let mut target_inherits = vec![false; mics.len()];
+
+    /// A source is aligned on the session only when it measured aligned on EVERY qualifying
+    /// target, and on at least two of them.
+    fn is_aligned(&self, b: usize) -> bool {
+        match self.session {
+            Some(s) => s.is_aligned(b),
+            None => self.source_targets[b] >= 2 && self.source_aligned_targets[b] == self.source_targets[b],
+        }
+    }
+
+    /// The recorded `source_aligned_targets` of source `b`: the session-wide count when the
+    /// caller handed the verdict in (#313), else the in-call count.
+    fn aligned_targets_of(&self, b: usize) -> usize {
+        self.session.map_or(self.source_aligned_targets[b], |s| {
+            s.source_aligned_targets.get(b).copied().unwrap_or(0)
+        })
+    }
+
+    /// The recorded `source_targets` of source `b` (see [`SourceVerdict::aligned_targets_of`]).
+    fn targets_of(&self, b: usize) -> usize {
+        self.session.map_or(self.source_targets[b], |s| {
+            s.source_targets.get(b).copied().unwrap_or(0)
+        })
+    }
+}
+
+/// The inheritance phase, per mic index. #309, bound to the session test by #313: the
+/// target-level inheritance fires only from a SESSION-aligned source's measured-aligned pair —
+/// when one exists on the target, the tool was applied to the whole session, so EVERY pair of
+/// the target judges by the level test alone (the lead of the other pairs carries no information
+/// on such a session). On a session where the only measured-aligned pair's source fails the
+/// session test (one close-miked target reading a small lag — ENST) no pair inherits.
+fn target_inherits(toms: &[usize], measured: &[Vec<MeasuredRow>], verdict: &SourceVerdict, n: usize) -> Vec<bool> {
+    let mut target_inherits = vec![false; n];
     for (ai, &a) in toms.iter().enumerate() {
         target_inherits[a] = measured[ai]
             .iter()
-            .any(|row| row.align.aligned && session_aligned_of(row.source));
+            .any(|row| row.align.aligned && verdict.is_aligned(row.source));
     }
-    let mut learned = Vec::new();
-    let mut counts: Vec<Vec<[usize; 4]>> = Vec::new();
-    let mut marks: Vec<Vec<CrossMark>> = mics
-        .iter()
-        .map(|m| {
-            vec![
-                CrossMark {
-                    bleed: false,
-                    lead_ms: None,
-                    ratio_db: None,
-                    hat_lead_ms: None,
-                    hat_ratio_db: None,
-                    aligned_mark: false,
-                };
-                m.motion.len()
-            ]
+    target_inherits
+}
+
+/// The learning phase of tom target `a`: per measured row (source order) the source index and
+/// the pair's learned bounds. `aligned_counts` stays zero here; [`judge_hits`] counts it.
+fn learn_pairs(
+    run: &Run,
+    verdict: &SourceVerdict,
+    a: usize,
+    rows: &[MeasuredRow],
+    target_inherits: bool,
+) -> Vec<(usize, PairLearned)> {
+    let x = &run.mics[a];
+    // #309: X's hit times sorted, for the clear-case test below: a clear case is an S hit
+    // WITHOUT an X hit within `coincide_ms` — a coinciding hit of X is the tom's own motion,
+    // and its ratio must not enter the pair's bleed distribution (a real stroke's ratio would
+    // raise the ceiling and hide the bleed).
+    let mut x_sorted: Vec<f64> = x.motion.clone();
+    x_sorted.sort_by(f64::total_cmp);
+    let x_hit_near = |ts: f64| {
+        let k = x_sorted.partition_point(|&tx| tx < ts);
+        [x_sorted.get(k.saturating_sub(1)).copied(), x_sorted.get(k).copied()]
+            .into_iter()
+            .flatten()
+            .any(|tx| (tx - ts).abs() <= run.coincide + 1e-9)
+    };
+    rows.iter()
+        .map(|row| {
+            (
+                row.source,
+                learn_pair(run, verdict, a, row, target_inherits, &x_hit_near),
+            )
         })
-        .collect();
-    for (ai, &a) in toms.iter().enumerate() {
-        let x = &mics[a];
-        // #309: X's hit times sorted, for the clear-case test below: a clear case is an S hit
-        // WITHOUT an X hit within `coincide_ms` — a coinciding hit of X is the tom's own motion,
-        // and its ratio must not enter the pair's bleed distribution (a real stroke's ratio would
-        // raise the ceiling and hide the bleed).
-        let mut x_sorted: Vec<f64> = x.motion.clone();
-        x_sorted.sort_by(f64::total_cmp);
-        let x_hit_near = |ts: f64| {
-            let k = x_sorted.partition_point(|&tx| tx < ts);
-            [x_sorted.get(k.saturating_sub(1)).copied(), x_sorted.get(k).copied()]
-                .into_iter()
-                .flatten()
-                .any(|tx| (tx - ts).abs() <= coincide + 1e-9)
-        };
-        let mut pair: Vec<(usize, PairLearned)> = Vec::new();
-        for row in &measured[ai] {
-            let b = row.source;
-            let measured_aligned = row.align.aligned;
-            let coins_n = row.align.coins;
-            let med_abs_lead = row.align.med_abs_lead_ms;
-            let s = &mics[b];
-            let src_t = oh_lv[b].as_ref(); // the oh's levels in the target's band
-            let lv_s = |k: usize| src_t.map_or(lv[b][k], |v| v[k]);
-            // #313: the pair judges by the level test alone when the source is aligned on the
-            // session, or when a session-aligned source's pair measured aligned on this target
-            // (the #309 inheritance). A pair that measured aligned on its own but whose source
-            // fails the session test keeps the two-part verdict.
-            let aligned = session_aligned_of(b) || target_inherits[a];
-            let align_inherited = aligned && !measured_aligned;
-            // the pass-1 ratio fields, when the caller handed pairs in (see above)
-            let prior_ratios = prior
-                .and_then(|ps| ps.iter().find(|l| l.tom == a && l.source == b))
-                .map(|prev| (prev.ratio_db, prev.ratio_p95_db, prev.ratio_max_db));
-            // #296: the pass-1 decision wins when the caller hands the pairs in (the alignment is
-            // a property of the pair, not of one hit list — see [`cross_bleed_prior`]). The
-            // pass-1 per-pair decision already carries the session test and its inheritance
-            // (#313), so it replaces the measurement verbatim.
-            let (aligned, coins_n, med_abs_lead, align_inherited, src_aligned_targets, src_targets) = prior
-                .and_then(|ps| ps.iter().find(|l| l.tom == a && l.source == b))
-                .map_or(
-                    (
-                        aligned,
-                        coins_n,
-                        med_abs_lead,
-                        align_inherited,
-                        // #313: the session-wide counts when the caller handed the verdict in
-                        session.map_or(source_aligned_targets[b], |s| {
-                            s.source_aligned_targets.get(b).copied().unwrap_or(0)
-                        }),
-                        session.map_or(source_targets[b], |s| s.source_targets.get(b).copied().unwrap_or(0)),
-                    ),
-                    |prev| {
-                        (
-                            prev.aligned,
-                            prev.align_coins,
-                            prev.align_med_abs_lead_ms,
-                            prev.align_inherited,
-                            prev.source_aligned_targets,
-                            prev.source_targets,
-                        )
-                    },
-                );
-            let mut ratios: Vec<f64> = Vec::new();
-            let mut ratios_clear: Vec<f64> = Vec::new();
-            let mut leads: Vec<f64> = Vec::new();
-            for (k, &ts) in s.motion.iter().enumerate() {
-                // #309 defect 1 (coordinator gate 2026-11-03): `lead_ms` and `ratio_db` are the
-                // OLD set — every source hit, as main — because the unaligned two-part verdict's
-                // `lead_min` moves with the lead median otherwise (Session B changed). The
-                // clear-case exclusion feeds the CEILING only (`ratio_p95_db`, `ratio_max_db`):
-                // a coinciding hit of X is the tom's own motion, and its ratio must not raise
-                // the pair's bleed ceiling and hide the bleed behind it.
-                let clear = !x_hit_near(ts);
-                let lx = band_level_db(
-                    x.signal,
-                    &band_sections(XKind::Tom.role().band(), sr),
-                    (ts * f64::from(sr)).round() as i64,
-                    w,
-                    pre,
-                );
-                if lx <= p.silence_db {
-                    continue;
-                }
-                let r = lx - lv_s(k);
-                ratios.push(r);
-                if clear {
-                    ratios_clear.push(r);
-                }
-                // the bleed arrival on X: the peak of X's response in [ts, ts + clear_lead_cap_ms],
-                // then the first motion of it (the walk-back); a bleed arrives later, so the search
-                // goes forward from the source hit
-                let s0 = (ts * f64::from(sr)).round() as i64;
-                let cap = ms_to_samples(p.clear_lead_cap_ms, sr);
-                let a0 = s0.clamp(0, x.signal.len() as i64 - 1) as usize;
-                let a1 = (s0 + cap).clamp(0, x.signal.len() as i64) as usize;
-                let peak = (a0..a1)
-                    .map(|i| (x.signal[i].abs(), i))
-                    .max_by(|u, v| u.0.total_cmp(&v.0))
-                    .map_or(s0, |(_, i)| i as i64);
-                let (foot, _) = first_motion(x.signal, peak, sr, peak as f64 / f64::from(sr), None, None);
-                let lead = (foot as f64 / f64::from(sr) - ts) * 1000.0;
-                #[cfg(test)]
-                eprintln!("DBG clear case ts={ts} lx={lx} lead={lead} foot={foot} peak={peak}");
-                if lead > 0.0 && lead <= p.clear_lead_cap_ms {
-                    leads.push(lead);
-                }
-            }
-            let lead_learned = if leads.len() >= p.min_clear {
-                median(&mut leads)
-            } else {
-                None
-            };
-            let mut ratio_learned = if ratios.len() >= p.min_clear {
-                median(&mut ratios)
-            } else {
-                None
-            };
-            // #309: the pair's clear-case ratio distribution — median, p95 and max. The max is
-            // the loudest bleed the pair itself produces; on an aligned pair a coinciding hit
-            // louder than it is the tom's own motion, never bleed (bleed of S on X is never
-            // louder than the bleed this pair produces). A ceiling needs at least
-            // `align_min_coins` clear cases (the alignment's own bar, no new number): on a pair
-            // where the detector fires on nearly every source hit the clear cases are a handful
-            // and the max is one stray value — the level test alone then.
-            let mut sorted = ratios_clear.clone();
-            sorted.sort_by(f64::total_cmp);
-            let mut p95 = if sorted.len() >= p.align_min_coins {
-                let idx = ((sorted.len() - 1) as f64 * 0.95).ceil() as usize;
-                Some(sorted[idx])
-            } else {
-                None
-            };
-            let mut max = if sorted.len() >= p.align_min_coins {
-                sorted.last().copied()
-            } else {
-                None
-            };
-            if let Some((m, p95_p, max_p)) = prior_ratios {
-                ratio_learned = m;
-                p95 = p95_p;
-                max = max_p;
-            }
-            pair.push((
-                b,
-                PairLearned {
-                    tom: a,
-                    source: b,
-                    lead_ms: lead_learned,
-                    ratio_db: ratio_learned,
-                    ratio_p95_db: p95,
-                    ratio_max_db: max,
-                    aligned,
-                    align_coins: coins_n,
-                    align_med_abs_lead_ms: med_abs_lead,
-                    aligned_counts: [0; 4],
-                    align_inherited,
-                    source_aligned_targets: src_aligned_targets,
-                    source_targets: src_targets,
-                },
-            ));
+        .collect()
+}
+
+/// The learned bounds of one pair: the alignment (measured, inherited or the prior's), the
+/// clear cases' lead and ratio medians and the ratio ceiling.
+fn learn_pair(
+    run: &Run,
+    verdict: &SourceVerdict,
+    a: usize,
+    row: &MeasuredRow,
+    target_inherits: bool,
+    x_hit_near: &impl Fn(f64) -> bool,
+) -> PairLearned {
+    let p = run.p;
+    let prior = run.prior;
+    let b = row.source;
+    let measured_aligned = row.align.aligned;
+    let coins_n = row.align.coins;
+    let med_abs_lead = row.align.med_abs_lead_ms;
+    // #313: the pair judges by the level test alone when the source is aligned on the
+    // session, or when a session-aligned source's pair measured aligned on this target
+    // (the #309 inheritance). A pair that measured aligned on its own but whose source
+    // fails the session test keeps the two-part verdict.
+    let aligned = verdict.is_aligned(b) || target_inherits;
+    let align_inherited = aligned && !measured_aligned;
+    // the pass-1 ratio fields, when the caller handed pairs in (see above)
+    let prior_ratios = prior
+        .and_then(|ps| ps.iter().find(|l| l.tom == a && l.source == b))
+        .map(|prev| (prev.ratio_db, prev.ratio_p95_db, prev.ratio_max_db));
+    // #296: the pass-1 decision wins when the caller hands the pairs in (the alignment is
+    // a property of the pair, not of one hit list — see [`cross_bleed_prior`]). The
+    // pass-1 per-pair decision already carries the session test and its inheritance
+    // (#313), so it replaces the measurement verbatim.
+    let (aligned, coins_n, med_abs_lead, align_inherited, src_aligned_targets, src_targets) = prior
+        .and_then(|ps| ps.iter().find(|l| l.tom == a && l.source == b))
+        .map_or(
+            (
+                aligned,
+                coins_n,
+                med_abs_lead,
+                align_inherited,
+                // #313: the session-wide counts when the caller handed the verdict in
+                verdict.aligned_targets_of(b),
+                verdict.targets_of(b),
+            ),
+            |prev| {
+                (
+                    prev.aligned,
+                    prev.align_coins,
+                    prev.align_med_abs_lead_ms,
+                    prev.align_inherited,
+                    prev.source_aligned_targets,
+                    prev.source_targets,
+                )
+            },
+        );
+    let ClearCases {
+        mut ratios,
+        ratios_clear,
+        mut leads,
+    } = clear_cases(run, a, b, x_hit_near);
+    let lead_learned = if leads.len() >= p.min_clear {
+        median(&mut leads)
+    } else {
+        None
+    };
+    let mut ratio_learned = if ratios.len() >= p.min_clear {
+        median(&mut ratios)
+    } else {
+        None
+    };
+    // #309: the pair's clear-case ratio distribution — median, p95 and max. The max is
+    // the loudest bleed the pair itself produces; on an aligned pair a coinciding hit
+    // louder than it is the tom's own motion, never bleed (bleed of S on X is never
+    // louder than the bleed this pair produces). A ceiling needs at least
+    // `align_min_coins` clear cases (the alignment's own bar, no new number): on a pair
+    // where the detector fires on nearly every source hit the clear cases are a handful
+    // and the max is one stray value — the level test alone then.
+    let mut sorted = ratios_clear.clone();
+    sorted.sort_by(f64::total_cmp);
+    let mut p95 = if sorted.len() >= p.align_min_coins {
+        let idx = ((sorted.len() - 1) as f64 * 0.95).ceil() as usize;
+        Some(sorted[idx])
+    } else {
+        None
+    };
+    let mut max = if sorted.len() >= p.align_min_coins {
+        sorted.last().copied()
+    } else {
+        None
+    };
+    if let Some((m, p95_p, max_p)) = prior_ratios {
+        ratio_learned = m;
+        p95 = p95_p;
+        max = max_p;
+    }
+    PairLearned {
+        tom: a,
+        source: b,
+        lead_ms: lead_learned,
+        ratio_db: ratio_learned,
+        ratio_p95_db: p95,
+        ratio_max_db: max,
+        aligned,
+        align_coins: coins_n,
+        align_med_abs_lead_ms: med_abs_lead,
+        aligned_counts: [0; 4],
+        align_inherited,
+        source_aligned_targets: src_aligned_targets,
+        source_targets: src_targets,
+    }
+}
+
+/// The samples of one pair over every hit of its source: the level ratios (every source hit,
+/// the OLD set), the ratios of the clear cases only, and the bleed leads.
+struct ClearCases {
+    /// `L_X - L_S` per source hit above the silence floor.
+    ratios: Vec<f64>,
+    /// The same ratio, only for the clear cases (no hit of X within the coincidence band).
+    ratios_clear: Vec<f64>,
+    /// The bleed arrival lead (ms) per source hit, inside `(0, clear_lead_cap_ms]`.
+    leads: Vec<f64>,
+}
+
+/// Measure every hit of source `b` on tom target `a` (see [`ClearCases`]).
+fn clear_cases(run: &Run, a: usize, b: usize, x_hit_near: &impl Fn(f64) -> bool) -> ClearCases {
+    let (sr, p, w, pre) = (run.sr, run.p, run.w, run.pre);
+    let x = &run.mics[a];
+    let s = &run.mics[b];
+    let src_t = run.oh_lv[b].as_ref(); // the oh's levels in the target's band
+    let lv_s = |k: usize| src_t.map_or(run.lv[b][k], |v| v[k]);
+    let mut ratios: Vec<f64> = Vec::new();
+    let mut ratios_clear: Vec<f64> = Vec::new();
+    let mut leads: Vec<f64> = Vec::new();
+    for (k, &ts) in s.motion.iter().enumerate() {
+        // #309 defect 1 (coordinator gate 2026-11-03): `lead_ms` and `ratio_db` are the
+        // OLD set — every source hit, as main — because the unaligned two-part verdict's
+        // `lead_min` moves with the lead median otherwise (Session B changed). The
+        // clear-case exclusion feeds the CEILING only (`ratio_p95_db`, `ratio_max_db`):
+        // a coinciding hit of X is the tom's own motion, and its ratio must not raise
+        // the pair's bleed ceiling and hide the bleed behind it.
+        let clear = !x_hit_near(ts);
+        let lx = band_level_db(
+            x.signal,
+            &band_sections(XKind::Tom.role().band(), sr),
+            (ts * f64::from(sr)).round() as i64,
+            w,
+            pre,
+        );
+        if lx <= p.silence_db {
+            continue;
         }
-        counts.push(vec![[0; 4]; pair.len()]);
-        // the verdict per hit of X: the loudest coinciding source hit decides the evidence (the lead and
-        // the ratio are stored either way); any firing source marks the hit
-        for (j, &tx) in x.motion.iter().enumerate() {
-            let mut best_level = f64::NEG_INFINITY;
-            let mut bleed = false;
-            let mut by_aligned = false;
-            for (pi, &(b, pl)) in pair.iter().enumerate() {
-                let s = &mics[b];
-                let lvs = &lv[b];
-                let Some(k) = (0..s.motion.len())
-                    .filter(|&k| s.motion[k] - tx <= coincide + 1e-9 && tx - s.motion[k] <= coincide + 1e-9)
-                    .max_by(|&u, &v| lvs[u].total_cmp(&lvs[v]))
-                else {
-                    continue;
-                };
-                let l = (tx - s.motion[k]) * 1000.0;
-                // an Overhead source's ratio is measured full-band (the #286 A1 common-band
-                // test); every other kind in its own band
-                let s_level = oh_lv[b].as_ref().map_or(lvs[k], |v| v[k]);
-                let r = lv[a][j] - s_level;
-                if lvs[k] > best_level {
-                    best_level = lvs[k];
-                    marks[a][j].lead_ms = Some(l);
-                    marks[a][j].ratio_db = Some(r);
+        let r = lx - lv_s(k);
+        ratios.push(r);
+        if clear {
+            ratios_clear.push(r);
+        }
+        // the bleed arrival on X: the peak of X's response in [ts, ts + clear_lead_cap_ms],
+        // then the first motion of it (the walk-back); a bleed arrives later, so the search
+        // goes forward from the source hit
+        let s0 = (ts * f64::from(sr)).round() as i64;
+        let cap = ms_to_samples(p.clear_lead_cap_ms, sr);
+        let a0 = s0.clamp(0, x.signal.len() as i64 - 1) as usize;
+        let a1 = (s0 + cap).clamp(0, x.signal.len() as i64) as usize;
+        let peak = (a0..a1)
+            .map(|i| (x.signal[i].abs(), i))
+            .max_by(|u, v| u.0.total_cmp(&v.0))
+            .map_or(s0, |(_, i)| i as i64);
+        let (foot, _) = first_motion(x.signal, peak, sr, peak as f64 / f64::from(sr), None, None);
+        let lead = (foot as f64 / f64::from(sr) - ts) * 1000.0;
+        #[cfg(test)]
+        eprintln!("DBG clear case ts={ts} lx={lx} lead={lead} foot={foot} peak={peak}");
+        if lead > 0.0 && lead <= p.clear_lead_cap_ms {
+            leads.push(lead);
+        }
+    }
+    ClearCases {
+        ratios,
+        ratios_clear,
+        leads,
+    }
+}
+
+/// The verdict phase of tom target `a`: per hit of X, the loudest coinciding source hit decides
+/// the evidence (the lead and the ratio are stored either way); any firing source marks the hit.
+/// `marks_a` are X's marks; `counts_a` the aligned-pair margin counts per pair (pair order).
+fn judge_hits(
+    run: &Run,
+    a: usize,
+    pair: &[(usize, PairLearned)],
+    marks_a: &mut [CrossMark],
+    counts_a: &mut [[usize; 4]],
+) {
+    let (p, coincide) = (run.p, run.coincide);
+    let (mics, lv, oh_lv) = (run.mics, &run.lv, &run.oh_lv);
+    let x = &mics[a];
+    for (j, &tx) in x.motion.iter().enumerate() {
+        let mut best_level = f64::NEG_INFINITY;
+        let mut bleed = false;
+        let mut by_aligned = false;
+        for (pi, &(b, pl)) in pair.iter().enumerate() {
+            let s = &mics[b];
+            let lvs = &lv[b];
+            let Some(k) = (0..s.motion.len())
+                .filter(|&k| s.motion[k] - tx <= coincide + 1e-9 && tx - s.motion[k] <= coincide + 1e-9)
+                .max_by(|&u, &v| lvs[u].total_cmp(&lvs[v]))
+            else {
+                continue;
+            };
+            let l = (tx - s.motion[k]) * 1000.0;
+            // an Overhead source's ratio is measured full-band (the #286 A1 common-band
+            // test); every other kind in its own band
+            let s_level = oh_lv[b].as_ref().map_or(lvs[k], |v| v[k]);
+            let r = lv[a][j] - s_level;
+            if lvs[k] > best_level {
+                best_level = lvs[k];
+                marks_a[j].lead_ms = Some(l);
+                marks_a[j].ratio_db = Some(r);
+            }
+            if s.kind.in_target_band() {
+                // the #286 A1 overhead test: both mics in the target's band, the oh louder
+                // than the target by more than the margin is bleed. No lead condition: the
+                // a1-wake286 measurement shows the lead does not separate hat/cymbal bleed
+                // from a ghost note (both classes sit at about 0 ms).
+                if r < -p.overhead_margin_db {
+                    bleed = true;
                 }
-                if s.kind.in_target_band() {
-                    // the #286 A1 overhead test: both mics in the target's band, the oh louder
-                    // than the target by more than the margin is bleed. No lead condition: the
-                    // a1-wake286 measurement shows the lead does not separate hat/cymbal bleed
-                    // from a ghost note (both classes sit at about 0 ms).
-                    if r < -p.overhead_margin_db {
+            } else {
+                // #103 step 2: record the hat pair's own evidence on every hit with a
+                // coinciding hat hit, firing or not (see [`CrossMark::hat_lead_ms`]). The
+                // #103 measured verdict (docs/review/detector-plan.md, package 8) is that no
+                // NEW hat-pair threshold separates (the best pair, level -20 dB and lead
+                // -12 ms, removes 398 of 2927 hat-cause scored FPs — left-share 76.4 % ->
+                // 62.8 %, limit 50 % — and costs 18 real strokes; every tighter pair trades
+                // recall for little; the sweep is recorded in the ticket). The GENERIC
+                // verdict below still fires on hat pairs exactly as on kick and snare
+                // pairs — disabling it (an intermediate commit) kept 521 hat-bleed tom
+                // events that main drops and regressed the tom F1 rows (the 103-tomdiff
+                // measurement). The learned pair medians stay as stored evidence.
+                if s.kind == XKind::Hat {
+                    marks_a[j].hat_lead_ms = Some(l);
+                    marks_a[j].hat_ratio_db = Some(r);
+                }
+                // the verdict (the measured form, #285): the hit is bleed when it arrives later
+                // than the source hit by more than the pair's lead bound AND the level ratio
+                // falls below the margin (`margin_db`: 0.0 = the source strictly louder; the
+                // #285 gated variant sets a positive margin via `DRUMSPIKE_A6_MARGIN_DB`). The
+                // learned median ratio plus a slack cannot do this job: the detected bleed's
+                // ratio spans the whole clear-case range (the detector only fires on the loud
+                // tail of the bleed responses, which the clear cases sample as well), so no
+                // median-based margin separates bleed from a real hit. The lead and the
+                // source-louder test do: a real hit is loudest and earliest on its own mic.
+                // The learned ratio stays as stored evidence (the review queue B9).
+                //
+                // #296: an ALIGNED pair judges by level alone — the alignment removed the
+                // bleed's arrival delay, so the lead test cannot fire; the ratio sweep of the
+                // ticket is counted per margin.
+                //
+                // #309: and the level alone is not enough — the kick-in mic is loud in its
+                // band even on a small kick, so a medium tom stroke with a kick under it
+                // reads -3 to -5 dB while the pair's real bleed sits far lower. Bleed of S
+                // on X is never louder than the bleed this pair produces: the clear cases
+                // (S hits without an X hit) give the pair's bleed ratio distribution, and a
+                // coinciding hit whose ratio is ABOVE the pair's clear-case maximum
+                // (`ratio_max_db`) is the tom's own motion, never bleed. A pair with fewer
+                // than `align_min_coins` clear cases keeps the level test alone. Unaligned pairs
+                // keep the two-part verdict unchanged.
+                if pl.aligned {
+                    if r < p.margin_db && pl.ratio_max_db.is_none_or(|mx| r <= mx) {
                         bleed = true;
+                        by_aligned = true;
+                    }
+                    for (mi, &m) in ALIGN_COUNT_MARGINS_DB.iter().enumerate() {
+                        if r < m {
+                            counts_a[pi][mi] += 1;
+                        }
                     }
                 } else {
-                    // #103 step 2: record the hat pair's own evidence on every hit with a
-                    // coinciding hat hit, firing or not (see [`CrossMark::hat_lead_ms`]). The
-                    // #103 measured verdict (docs/review/detector-plan.md, package 8) is that no
-                    // NEW hat-pair threshold separates (the best pair, level -20 dB and lead
-                    // -12 ms, removes 398 of 2927 hat-cause scored FPs — left-share 76.4 % ->
-                    // 62.8 %, limit 50 % — and costs 18 real strokes; every tighter pair trades
-                    // recall for little; the sweep is recorded in the ticket). The GENERIC
-                    // verdict below still fires on hat pairs exactly as on kick and snare
-                    // pairs — disabling it (an intermediate commit) kept 521 hat-bleed tom
-                    // events that main drops and regressed the tom F1 rows (the 103-tomdiff
-                    // measurement). The learned pair medians stay as stored evidence.
-                    if s.kind == XKind::Hat {
-                        marks[a][j].hat_lead_ms = Some(l);
-                        marks[a][j].hat_ratio_db = Some(r);
-                    }
-                    // the verdict (the measured form, #285): the hit is bleed when it arrives later
-                    // than the source hit by more than the pair's lead bound AND the level ratio
-                    // falls below the margin (`margin_db`: 0.0 = the source strictly louder; the
-                    // #285 gated variant sets a positive margin via `DRUMSPIKE_A6_MARGIN_DB`). The
-                    // learned median ratio plus a slack cannot do this job: the detected bleed's
-                    // ratio spans the whole clear-case range (the detector only fires on the loud
-                    // tail of the bleed responses, which the clear cases sample as well), so no
-                    // median-based margin separates bleed from a real hit. The lead and the
-                    // source-louder test do: a real hit is loudest and earliest on its own mic.
-                    // The learned ratio stays as stored evidence (the review queue B9).
-                    //
-                    // #296: an ALIGNED pair judges by level alone — the alignment removed the
-                    // bleed's arrival delay, so the lead test cannot fire; the ratio sweep of the
-                    // ticket is counted per margin.
-                    //
-                    // #309: and the level alone is not enough — the kick-in mic is loud in its
-                    // band even on a small kick, so a medium tom stroke with a kick under it
-                    // reads -3 to -5 dB while the pair's real bleed sits far lower. Bleed of S
-                    // on X is never louder than the bleed this pair produces: the clear cases
-                    // (S hits without an X hit) give the pair's bleed ratio distribution, and a
-                    // coinciding hit whose ratio is ABOVE the pair's clear-case maximum
-                    // (`ratio_max_db`) is the tom's own motion, never bleed. A pair with fewer
-                    // than `align_min_coins` clear cases keeps the level test alone. Unaligned pairs
-                    // keep the two-part verdict unchanged.
-                    if pl.aligned {
-                        if r < p.margin_db && pl.ratio_max_db.is_none_or(|mx| r <= mx) {
-                            bleed = true;
-                            by_aligned = true;
-                        }
-                        for (mi, &m) in ALIGN_COUNT_MARGINS_DB.iter().enumerate() {
-                            if r < m {
-                                counts[a][pi][mi] += 1;
-                            }
-                        }
-                    } else {
-                        let lead_min = pl.lead_ms.map_or(p.min_lead_ms, |l| (l * 0.25).max(p.min_lead_ms));
-                        if r < p.margin_db && l > lead_min {
-                            bleed = true;
-                        }
+                    let lead_min = pl.lead_ms.map_or(p.min_lead_ms, |l| (l * 0.25).max(p.min_lead_ms));
+                    if r < p.margin_db && l > lead_min {
+                        bleed = true;
                     }
                 }
             }
-            marks[a][j].bleed = bleed;
-            // #313: only an aligned pair's mark feeds the pass-1 inherit rule (the app's
-            // `bleed_pass1`); a two-part mark does not survive the re-detection — the pass-2
-            // verdict judges the candidate on its own, as before #296.
-            marks[a][j].aligned_mark = bleed && by_aligned;
         }
-        let learn_start = learned.len();
-        learned.extend(pair.iter().map(|(_, l)| *l));
-        for (pl, c) in learned[learn_start..].iter_mut().zip(&counts[a]) {
-            pl.aligned_counts = *c;
-        }
+        marks_a[j].bleed = bleed;
+        // #313: only an aligned pair's mark feeds the pass-1 inherit rule (the app's
+        // `bleed_pass1`); a two-part mark does not survive the re-detection — the pass-2
+        // verdict judges the candidate on its own, as before #296.
+        marks_a[j].aligned_mark = bleed && by_aligned;
     }
-    (marks, learned)
 }
 
 #[cfg(test)]
