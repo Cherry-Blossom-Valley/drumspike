@@ -92,11 +92,12 @@
 //!
 //! Every value is computed in a fixed order in `f64`; window bounds use [`ms_to_samples`].
 
-use super::attribution::{AttributionError, AttributionParams, Role, Transfer, calibrate_gain};
+use super::attribution::{AttributionError, AttributionParams, Transfer, calibrate_gain};
 use super::flam::zero_phase;
 use crate::dsp::{
     FilterKind, amp_db_max, band_level_db, band_sections, broadband_peak_db, median, ms_to_samples, percentile,
 };
+use crate::role::Role;
 
 /// The version of the rule an analysis records (`detector.bleed_rule`); 0 means no rule, 1 rule CD (tom sources only),
 /// 2 rule CD with the kick and snare close mics as sources ([`tom_bleed_with`]), 3 version 2 plus the tom pair rule

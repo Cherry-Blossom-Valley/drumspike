@@ -103,7 +103,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use drumspike_core::detect::Chain;
-use drumspike_core::detect::attribution::{AttributionParams, HitInput, Role as AttrRole, TrackInput, attribute};
+use drumspike_core::detect::attribution::{AttributionParams, HitInput, TrackInput, attribute};
 use drumspike_core::detect::features::{N_BANDS, features, num_frames};
 use drumspike_core::detect::onset::{OnsetParams, Role, Shape, band_range, detect_onsets_with, superflux};
 use drumspike_core::detect::resample::{Resampler, TARGET_RATE, resample_to_44100};
@@ -624,10 +624,10 @@ struct AttrJob {
     tracks: Vec<AttrTrack>,
 }
 
-fn roles(names: &[String]) -> Result<Vec<AttrRole>, String> {
+fn roles(names: &[String]) -> Result<Vec<Role>, String> {
     names
         .iter()
-        .map(|n| AttrRole::from_name(n).ok_or_else(|| format!("unknown role {n}")))
+        .map(|n| Role::parse(n).ok_or_else(|| format!("unknown role {n}")))
         .collect()
 }
 
@@ -697,7 +697,7 @@ fn run_attribute(job_path: &Path, out: &Path) -> Result<(), String> {
     for (t, x) in job.tracks.iter().zip(&signals) {
         inputs.push(TrackInput {
             id: t.id.clone(),
-            role: AttrRole::from_name(&t.role).ok_or_else(|| format!("unknown role {}", t.role))?,
+            role: Role::parse(&t.role).ok_or_else(|| format!("unknown role {}", t.role))?,
             instrument: t.instrument.clone().unwrap_or_else(|| t.id.clone()),
             signal: x,
             hits: t
@@ -736,7 +736,7 @@ fn run_attribute(job_path: &Path, out: &Path) -> Result<(), String> {
                     })
                 })
                 .collect();
-            serde_json::json!({"id": t.id, "role": t.role.name(), "hits": hits})
+            serde_json::json!({"id": t.id, "role": t.role.as_str(), "hits": hits})
         })
         .collect();
     let transfers: Vec<serde_json::Value> = res
@@ -747,7 +747,7 @@ fn run_attribute(job_path: &Path, out: &Path) -> Result<(), String> {
                                "hits": g.hits, "quiet_only": g.quiet_only})
         })
         .collect();
-    let role_names = |v: &[AttrRole]| v.iter().map(|r| r.name()).collect::<Vec<_>>();
+    let role_names = |v: &[Role]| v.iter().map(|r| r.as_str()).collect::<Vec<_>>();
     let doc = serde_json::json!({
         "sr": sr,
         "seconds": seconds,

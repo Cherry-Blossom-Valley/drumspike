@@ -73,23 +73,7 @@ use crate::refine::{RefineWindow, refine_sr};
 
 use crate::dsp::broadband_peak_db;
 pub use crate::dsp::{BandStage, Biquad, FilterKind, band_peak_db, band_sections, ms_to_samples, percentile};
-
-/// The track role as the app names it (`engine.ROLE_CLASSES`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Role {
-    /// Kick drum close mic.
-    Kick,
-    /// Snare close mic.
-    Snare,
-    /// Tom close mic.
-    Tom,
-    /// Hi-hat mic.
-    Hat,
-    /// Overhead or cymbal mic.
-    Cymbal,
-    /// Any other track (no band limit).
-    Other,
-}
+use crate::role::Role;
 
 const fn lp(freq_hz: f64) -> BandStage {
     BandStage {
@@ -111,33 +95,6 @@ const BAND_SNARE: [BandStage; 2] = [hp(150.0), lp(2500.0)];
 const BAND_HIGH: [BandStage; 1] = [hp(5000.0)];
 
 impl Role {
-    /// The role for an app role name (`kick`, `snare`, `tom`, `hat`, `cymbal`, `other`).
-    #[must_use]
-    pub fn from_name(name: &str) -> Option<Role> {
-        match name {
-            "kick" => Some(Role::Kick),
-            "snare" => Some(Role::Snare),
-            "tom" => Some(Role::Tom),
-            "hat" => Some(Role::Hat),
-            "cymbal" => Some(Role::Cymbal),
-            "other" => Some(Role::Other),
-            _ => None,
-        }
-    }
-
-    /// The app role name.
-    #[must_use]
-    pub fn name(self) -> &'static str {
-        match self {
-            Role::Kick => "kick",
-            Role::Snare => "snare",
-            Role::Tom => "tom",
-            Role::Hat => "hat",
-            Role::Cymbal => "cymbal",
-            Role::Other => "other",
-        }
-    }
-
     /// The frequency band in which a track of this role is judged: kick below 150 Hz, tom
     /// 50 to 400 Hz, snare 150 to 2,500 Hz, hat and cymbal above 5 kHz, other broadband.
     #[must_use]

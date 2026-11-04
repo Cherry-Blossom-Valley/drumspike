@@ -131,9 +131,9 @@
 //!
 //! Every value is computed in a fixed order in `f64`; window bounds use [`ms_to_samples`].
 
-use super::attribution::Role;
 use crate::dsp::{band_level_db, band_sections, median, ms_to_samples};
 use crate::refine::first_motion;
+use crate::role::Role;
 
 /// The kind of a close mic of the rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

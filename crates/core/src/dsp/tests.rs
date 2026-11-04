@@ -5,7 +5,7 @@ use super::{
     Biquad, amp_db_add, amp_db_max, band_level_db, band_peak_db, band_sections, broadband_peak_db, median,
     ms_to_samples, np_percentile, percentile,
 };
-use crate::detect::attribution::Role;
+use crate::role::Role;
 
 /// A deterministic noise source in [-1, 1) (xorshift).
 struct Noise(u64);
