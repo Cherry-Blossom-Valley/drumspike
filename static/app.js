@@ -6,19 +6,6 @@
 const OWN_ZOOM_NAME_MAX = 40;   // #169: the longest name of an own zoom preset
 const ROLE_DEFAULT_NOTE = { kick:36, snare:38, tom:48, hat:42, cymbal:49, other:36 };
 const ROLE_DEFAULT_CLICK = { kick:1000, snare:2500, tom:700, hat:4000, cymbal:3000, other:1500 };
-const $ = s => document.querySelector(s);
-const fmt = (t, d=3) => t.toFixed(d);
-const dScale = m => m === 1 ? 40 : 1;   // wheel line-mode deltas → px
-
-/* ---------------- note names (octave floor(n/12)-2 → kick 36 = C1) ---------------- */
-const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
-function nameFromNote(n){ return `${NOTE_NAMES[n%12]}${Math.floor(n/12)-2}`; }
-function noteFromName(s){
-  const m = /^([A-Ga-g])(#|b)?(-?\d+)$/.exec(s.trim());
-  if(!m) return null;
-  const base = {C:0,D:2,E:4,F:5,G:7,A:9,B:11}[m[1].toUpperCase()];
-  return base + (m[2]==="#"?1:m[2]==="b"?-1:0) + 12*(parseInt(m[3])+2);
-}
 
 /* ---------------- backend ---------------- */
 /* Every call to the server goes through B (static/backend.js): named operations, no paths here. */
@@ -61,19 +48,6 @@ window.addEventListener("beforeunload", ev => {
   ev.preventDefault(); ev.returnValue = "unsaved changes";   // the browser shows its own prompt
   return ev.returnValue;
 });
-/* ---------------- in-page confirm (replaces window.confirm for project prompts) ---------------- */
-function askConfirm(o) {
-  return new Promise(resolve => {
-    const m = $("#confirmModal"); $("#confirmTitle").textContent = o.title || "Confirm"; $("#confirmMsg").textContent = o.msg || "";
-    const acts = $("#confirmActions"); acts.innerHTML = "";
-    for (const b of o.buttons) {
-      const btn = document.createElement("button"); btn.className = "btn" + (b.cls ? " " + b.cls : ""); btn.textContent = b.label; btn.dataset.act = b.act;
-      btn.onclick = () => { m.classList.add("hidden"); resolve(b.act); };
-      acts.appendChild(btn);
-    }
-    m.classList.remove("hidden");
-  });
-}
 /* ---------------- folder and file picks: the native dialogs (P3-4b) ----------------
    pickFolder({title, name, copy, file, start, hint}) -> {dir, name, copy, file} or null */
 function pickFolder(o) { return DSShell.nativePick(o); }
