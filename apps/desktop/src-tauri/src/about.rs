@@ -222,8 +222,9 @@ mod tests {
     }
 
     #[test]
-    fn both_commands_are_in_the_two_handler_lists() {
+    fn every_about_command_is_in_the_release_and_the_debug_handler() {
         let lib = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")).unwrap();
+        let (release, debug) = crate::tests::handler_lists(&lib);
         for name in [
             "about::about_info",
             "about::about_third_party",
@@ -231,9 +232,14 @@ mod tests {
             "about::open_url",
         ] {
             assert_eq!(
-                lib.matches(name).count(),
-                2,
-                "{name} must be in the release and the debug handler"
+                release.iter().filter(|n| *n == name).count(),
+                1,
+                "{name} in the release handler"
+            );
+            assert_eq!(
+                debug.iter().filter(|n| *n == name).count(),
+                1,
+                "{name} in the debug handler"
             );
         }
     }

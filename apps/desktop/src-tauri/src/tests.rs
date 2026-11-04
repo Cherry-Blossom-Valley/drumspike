@@ -95,6 +95,58 @@ fn the_document_type_has_its_own_icon_in_the_bundle() {
     assert_eq!(&icns[..4], b"icns");
 }
 
+/// The command list of each build as written in `lib.rs` (paths such as `shell::shell_sync`):
+/// (release, debug). The one `generate_handler![...]` list inside the `command_handler!` macro is
+/// common; each `fn handler()` adds the names of its `command_handler![...]` call, and the `cfg`
+/// line above it names the build.
+pub(crate) fn handler_lists(lib: &str) -> (Vec<String>, Vec<String>) {
+    fn names(list: &str) -> Vec<String> {
+        list.split(',')
+            .map(|s| s.trim().to_string())
+            // `$($extra)*` is the macro argument, not a command
+            .filter(|s| !s.is_empty() && !s.starts_with('$'))
+            .collect()
+    }
+    fn list_after<'a>(text: &'a str, open: &str) -> &'a str {
+        let start = text.find(open).unwrap_or_else(|| panic!("no {open}")) + open.len();
+        &text[start..start + text[start..].find(']').unwrap()]
+    }
+    assert_eq!(lib.matches("generate_handler![").count(), 1, "one handler list");
+    let common = names(list_after(lib, "generate_handler!["));
+    let (mut release, mut debug) = (None, None);
+    let mut rest = lib;
+    while let Some(i) = rest.find("fn handler()") {
+        let cfg = rest[..i].trim_end().rsplit('\n').next().unwrap().trim();
+        rest = &rest[i + "fn handler()".len()..];
+        let mut all = common.clone();
+        all.extend(names(list_after(rest, "command_handler![")));
+        let slot = match cfg {
+            "#[cfg(not(debug_assertions))]" => &mut release,
+            "#[cfg(debug_assertions)]" => &mut debug,
+            other => panic!("fn handler() under {other:?}"),
+        };
+        assert!(slot.replace(all).is_none(), "two handlers for one build");
+    }
+    (release.expect("a release handler"), debug.expect("a debug handler"))
+}
+
+/// The parser reads the common list and the extra arguments of each build.
+#[test]
+fn handler_lists_reads_the_common_list_and_the_extras() {
+    let lib = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")).unwrap();
+    let (release, debug) = handler_lists(&lib);
+    assert!(release.iter().any(|n| n == "app_info"));
+    assert!(release.iter().any(|n| n == "shell::shell_sync"));
+    assert!(!release.iter().any(|n| n == "selftest_clock"));
+    assert!(debug.iter().any(|n| n == "selftest_clock"));
+    assert_eq!(
+        debug.len(),
+        release.len() + 12,
+        "the debug build adds the 12 self-test commands"
+    );
+    assert!(release.iter().all(|n| debug.contains(n)));
+}
+
 /// Every `#[tauri::command]` of `shell.rs` is in the handler of the debug build, and (the self-test ones
 /// excepted) in the handler of the release build: a command that is not listed fails only in the app.
 #[test]
@@ -102,24 +154,16 @@ fn every_shell_command_is_in_the_handler_lists() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let shell = std::fs::read_to_string(root.join("shell.rs")).unwrap();
     let lib = std::fs::read_to_string(root.join("lib.rs")).unwrap();
-    let release = &lib[lib.find("#[cfg(not(debug_assertions))]\nfn handler").unwrap()
-        ..lib.find("/// The command handler of a debug build").unwrap()];
-    let debug =
-        &lib[lib.find("/// The command handler of a debug build").unwrap()..lib.find("/// With `--self-test").unwrap()];
+    let (release, debug) = handler_lists(&lib);
     let mut n = 0;
     for chunk in shell.split("#[tauri::command").skip(1) {
         let name = chunk.split("fn ").nth(1).unwrap().split('(').next().unwrap(); // sync and async commands
-        assert!(
-            debug.contains(&format!("shell::{name}")),
-            "{name} is not in the debug handler"
-        );
+        let path = format!("shell::{name}");
+        assert!(debug.contains(&path), "{name} is not in the debug handler");
         if !name.starts_with("selftest_") {
-            assert!(
-                release.contains(&format!("shell::{name}")),
-                "{name} is not in the release handler"
-            );
+            assert!(release.contains(&path), "{name} is not in the release handler");
         } else {
-            assert!(!release.contains(name), "{name} is in the release handler");
+            assert!(!release.contains(&path), "{name} is in the release handler");
         }
         n += 1;
     }
