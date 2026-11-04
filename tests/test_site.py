@@ -126,7 +126,7 @@ def test_every_link_resolves_and_github_links_point_at_the_planned_repository():
             broken.append(ref)
     assert not broken, f"guide links that do not resolve: {broken}"
 
-    github = [ref for ref in page.links + page.assets if "github.com" in ref]
+    github = [ref for ref in page.links + page.assets if urlparse(ref).hostname == "github.com"]
     assert github, "the page has no GitHub links"
     wrong = [ref for ref in github if not ref.startswith(REPO) and ref != SPONSORS]
     assert not wrong, f"GitHub links outside {REPO}: {wrong}"
