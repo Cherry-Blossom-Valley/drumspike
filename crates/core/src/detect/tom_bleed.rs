@@ -107,32 +107,32 @@ pub const RULE_VERSION: u32 = 5;
 
 /// Version 3: the level floor of the pair rule (dB against the mic's median): only a hit this far under its own mic's
 /// median can be marked. Chosen on the seven yardstick songs (P4-21).
-pub const PAIR_FLOOR_DB: f64 = -3.0;
+pub(crate) const PAIR_FLOOR_DB: f64 = -3.0;
 
 /// Version 4: a hit the pair rule would mark stays a hit when its own-mic attack rise ([`stroke_rise_db`]) is this
 /// many dB or more (the P4-18 rise test, `tools/firm_fixes.py` `RISE_MIN_DB`). Measured in #177 on the toms of the
 /// 3 real sessions: it keeps all 42 lost real strokes and unmarks no bleed merge (a smaller threshold unmarks bleed).
-pub const PAIR_KEEP_RISE_DB: f64 = 10.0;
+pub(crate) const PAIR_KEEP_RISE_DB: f64 = 10.0;
 
 /// Version 4: the high-pass of the attack rise (Hz): a tom's ring is low, its stick
 /// click is not; in a roll the ring of the earlier hit hides the full-band rise, the click over the faster decaying
 /// highs does not.
-pub const PAIR_HP_HZ: f64 = 2000.0;
+pub(crate) const PAIR_HP_HZ: f64 = 2000.0;
 
 /// Version 5: the kick excess under which a hit is marked by the guarded shared kick source (dB, #362). Higher than
 /// the unguarded [`TomBleedParams::kick_threshold_db`] (4.0): on ENST `drummer_3` the kick bleed on the floor tom lies
 /// at p50 4.8, p95 9.7 dB, the real strokes at p5 24 dB, so 8.0 catches most of the bleed; the rise guard keeps the
 /// real strokes (1 of 371 lost at this value, 15 without it).
-pub const KICK_SHARED_THRESHOLD_DB: f64 = 8.0;
+pub(crate) const KICK_SHARED_THRESHOLD_DB: f64 = 8.0;
 
 /// Version 5: a hit the guarded shared kick source would mark stays a hit when its own 2 kHz attack rise (the
 /// high-band part of [`stroke_rise_db`]) is this many dB or more (dB, #362). On ENST `drummer_3` the kick-only bleed
 /// sits at p50 13.1, the real strokes (with or without the kick) at p50 30 or more; 15.0 keeps all but 1 of the
 /// real strokes while the unguarded rule loses 15.
-pub const KICK_SHARED_RISE_DB: f64 = 15.0;
+pub(crate) const KICK_SHARED_RISE_DB: f64 = 15.0;
 
 /// The excess of a hit without a played source mic (never bleed).
-pub const NO_SOURCE_DB: f64 = 200.0;
+pub(crate) const NO_SOURCE_DB: f64 = 200.0;
 
 /// Parameters. [`Default`] gives the values of stage 1c and the verifier rounds.
 #[derive(Debug, Clone, PartialEq)]
@@ -375,7 +375,7 @@ fn near(sorted: &[i64], v: i64, tol: i64) -> bool {
 
 /// The strong hits of a mic (indices into its hits): the P2-6 rule.
 #[must_use]
-pub fn strong_hits(x: &[f32], hits: &[i64], w: (i64, i64), strong_db: f64) -> Vec<usize> {
+pub(crate) fn strong_hits(x: &[f32], hits: &[i64], w: (i64, i64), strong_db: f64) -> Vec<usize> {
     let pk: Vec<f64> = hits.iter().map(|&c| broadband_peak_db(x, c, w)).collect();
     match percentile(&pk, 90.0) {
         Some(p90) => (0..hits.len()).filter(|&i| pk[i] >= p90 - strong_db).collect(),
@@ -567,7 +567,7 @@ pub fn tom_bleed(mics: &[TomMic], sr: u32, p: &TomBleedParams) -> Result<TomBlee
 /// (the lower level) is less than `keep_gap_db` under the other drums without the pair (one level per drum): those
 /// count as one drum. A shared pair whose weaker mic is further under keeps the direction of the levels.
 #[must_use]
-pub fn merged_pairs(r: &TomBleed, group: &[usize], p: &TomBleedParams) -> Vec<(usize, usize)> {
+pub(crate) fn merged_pairs(r: &TomBleed, group: &[usize], p: &TomBleedParams) -> Vec<(usize, usize)> {
     let gain = |s: usize, t: usize| {
         r.transfers
             .iter()
@@ -807,7 +807,7 @@ fn peak_window_db<T: Copy + Into<f64>>(x: &[T], sr: u32, t: f64, before: f64, af
 /// The level (dBFS) of a hit for the pair rule: the peak of `x` in `[t - 5 ms, t + 30 ms]` (`firm_fixes.peak_db`);
 /// -180 for an empty window.
 #[must_use]
-pub fn pair_level_db(x: &[f32], sr: u32, t: f64) -> f64 {
+pub(crate) fn pair_level_db(x: &[f32], sr: u32, t: f64) -> f64 {
     peak_window_db(x, sr, t, 0.005, 0.030)
 }
 
@@ -817,7 +817,7 @@ pub fn pair_level_db(x: &[f32], sr: u32, t: f64) -> f64 {
 /// before; the decay of an earlier hit or noise is about 0. In a roll the ring of the earlier hit hides the
 /// full-band rise, the stick click over the faster decaying highs does not.
 #[must_use]
-pub fn stroke_rise_db(x: &[f32], hp: &[f64], sr: u32, t: f64) -> f64 {
+pub(crate) fn stroke_rise_db(x: &[f32], hp: &[f64], sr: u32, t: f64) -> f64 {
     // the near window is [t - 2, t + 10] ms, the far window [t - 30, t - 10] ms (before the hit)
     let near = (0.002, 0.010);
     let far = (0.030, -0.010);
@@ -830,7 +830,7 @@ pub fn stroke_rise_db(x: &[f32], hp: &[f64], sr: u32, t: f64) -> f64 {
 /// over `[t - 30, t - 10]` ms. Version 5's guard reads this, not the full-band rise: a kick's own transient is an
 /// attack on the tom mic too, only the stick click of a real stroke lives in the high band alone (#362).
 #[must_use]
-pub fn high_rise_db(hp: &[f64], sr: u32, at: i64) -> f64 {
+pub(crate) fn high_rise_db(hp: &[f64], sr: u32, at: i64) -> f64 {
     let t = at as f64 / f64::from(sr);
     peak_window_db(hp, sr, t, 0.002, 0.010) - peak_window_db(hp, sr, t, 0.030, -0.010)
 }

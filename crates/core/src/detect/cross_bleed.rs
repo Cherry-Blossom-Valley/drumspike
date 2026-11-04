@@ -351,7 +351,7 @@ pub fn hit_level(x: &[f32], sr: u32, kind: XKind, t: f64, p: &CrossBleedParams) 
 /// level window — the #286 A1 common-band measure: the overhead is a mix of everything; only
 /// a common band compares like with like (no filter sections, the same measure on both mics).
 #[must_use]
-pub fn hit_level_full_band(x: &[f32], sr: u32, t: f64, p: &CrossBleedParams) -> f64 {
+pub(crate) fn hit_level_full_band(x: &[f32], sr: u32, t: f64, p: &CrossBleedParams) -> f64 {
     let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
     let pre = ms_to_samples(p.preroll_ms, sr);
     band_level_db(x, &[], (t * f64::from(sr)).round() as i64, w, pre)
@@ -359,7 +359,7 @@ pub fn hit_level_full_band(x: &[f32], sr: u32, t: f64, p: &CrossBleedParams) -> 
 
 /// The inherit band of the re-detection: a pass-2 candidate within this of a pass-1
 /// bleed-marked hit inherits the mark (#296).
-pub const PASS1_INHERIT_MS: f64 = 1.0;
+pub(crate) const PASS1_INHERIT_MS: f64 = 1.0;
 
 /// Whether `t` sits within [`PASS1_INHERIT_MS`] of a hit that pass 1 marked as bleed (#296).
 /// Applied by the caller to the FINAL placement of a pass-2 candidate whose own verdict found
@@ -443,7 +443,7 @@ struct PairAlignment {
 }
 
 /// One measured pair alignment: (tom mic index, source mic index, aligned, coins, median |lead| ms).
-pub type MeasuredAlign = (usize, usize, bool, usize, Option<f64>);
+pub(crate) type MeasuredAlign = (usize, usize, bool, usize, Option<f64>);
 
 /// One measured row of a tom: the source mic index and the pair's alignment. A tom's rows are in
 /// source order.
@@ -556,7 +556,7 @@ pub fn cross_bleed_prior_session(
 /// The inputs of one run of the rule besides the mics: the session rate, the parameters, and the
 /// two optional hand-ins of the app's two-pass, per-target runs.
 #[derive(Debug, Clone, Copy)]
-pub struct CrossBleedContext<'a> {
+pub(crate) struct CrossBleedContext<'a> {
     /// The rate of every signal of the run.
     pub sr: u32,
     /// The rule's parameters.
@@ -592,7 +592,7 @@ impl<'a> CrossBleedContext<'a> {
 /// target-level inheritance (`target_inherits`), then per tom target the learned pairs
 /// (`learn_pairs`) and the verdict per hit (`judge_hits`).
 #[must_use]
-pub fn cross_bleed_with(mics: &[CrossMic], ctx: &CrossBleedContext) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
+pub(crate) fn cross_bleed_with(mics: &[CrossMic], ctx: &CrossBleedContext) -> (Vec<Vec<CrossMark>>, Vec<PairLearned>) {
     let run = Run::new(mics, ctx);
     let toms: Vec<usize> = mics
         .iter()

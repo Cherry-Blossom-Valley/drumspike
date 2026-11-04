@@ -28,7 +28,7 @@
 //! module runs each stage twice forward and twice backward in the time domain, the same response (the filter's
 //! response dies out long before the 0.25 s), different only in the rounding of the last bits.
 
-pub use crate::dsp::np_percentile;
+pub(crate) use crate::dsp::np_percentile;
 use crate::dsp::{Biquad, FilterKind, amp_db_add};
 use crate::pyops::{py_int, py_round};
 use crate::refine::first_motion_mid;
@@ -37,7 +37,7 @@ use crate::refine::first_motion_mid;
 pub const FLAM_RULE_VERSION: u32 = 1;
 
 /// The block length of the attack envelope (seconds); every block count of the rule is a time over this.
-pub const HOP_S: f64 = 0.000_125;
+pub(crate) const HOP_S: f64 = 0.000_125;
 
 /// The parameters of the rule (the stage 1 choice `R9_m10`; `tools/flam_pairs.py` `DEFAULTS`).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -97,10 +97,10 @@ pub fn applies(version: u32, role: &str) -> bool {
 /// The late-peak gate (P4-13 stage B fix): the rule runs on a track only when its [`late_peak_db`] is under this (dB).
 /// A snare top mic decays inside the first 12 ms (-6.1 to -8.8 dB on 9 sessions), a bottom mic's wires peak after it
 /// (+0.2 to +6.4 dB): the rule would add the wires' second peak as a stroke there.
-pub const LATE_PEAK_MAX_DB: f64 = -3.0;
+pub(crate) const LATE_PEAK_MAX_DB: f64 = -3.0;
 
 /// The window of the late peak: from `peak_s` (the first stroke's peak window) to this many seconds after the hit.
-pub const LATE_PEAK_END_S: f64 = 0.030;
+pub(crate) const LATE_PEAK_END_S: f64 = 0.030;
 
 /// A second stroke the rule found.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -128,14 +128,14 @@ fn blocks(s: f64) -> i64 {
 
 /// The block length in samples at rate `sr`: `max(1, int(round(HOP_S * sr)))`.
 #[must_use]
-pub fn hop_of(sr: u32) -> usize {
+pub(crate) fn hop_of(sr: u32) -> usize {
     py_round(HOP_S * f64::from(sr)).max(1) as usize
 }
 
 /// `x` through the biquad `stages` [(kind, corner Hz)], each twice forward and twice backward: zero phase, the power
 /// response `|H|^4` per stage (`tools/onset_guard.py` `zero_phase`). The backward passes start 0.25 s after the end.
 #[must_use]
-pub fn zero_phase(x: &[f32], sr: u32, stages: &[(FilterKind, f64)]) -> Vec<f64> {
+pub(crate) fn zero_phase(x: &[f32], sr: u32, stages: &[(FilterKind, f64)]) -> Vec<f64> {
     let n = x.len();
     if stages.is_empty() {
         return x.iter().map(|&v| f64::from(v)).collect();
@@ -191,7 +191,7 @@ pub fn attack_env(x: &[f32], sr: u32, p: &FlamParams) -> (Vec<f64>, usize) {
 /// The late-peak gate's second test: the share `W` of the hits whose late peak beats their first peak must be this or more
 /// for a skip. A monotone decay (a ringy top mic) has a late peak under its first one on every hit; wires peak after it.
 /// Real top mics measured W 0.00 to 0.23, bottom mics 0.52 to 0.94, the DRT single-snare files 0.06 to 0.12.
-pub const LATE_SHARE_MIN: f64 = 0.4;
+pub(crate) const LATE_SHARE_MIN: f64 = 0.4;
 
 /// Per hit (s) with a full 30 ms window and a first peak: the largest attack-envelope block in `[hit + peak_s, hit +
 /// 30 ms)` over the largest in `[hit, hit + peak_s)` (a ratio). `env`: the [`attack_env`]; `sr`, `hop`: rate and block.
@@ -280,7 +280,7 @@ fn max_of(v: &[f64]) -> f64 {
 /// The strong hits of a mic B (`tools/onset_guard.py` `strong_peaks`): per block of 50 ms of its envelope (`rate`
 /// blocks per second) the largest block, kept when within 15 dB of the 99.5th percentile of those maxima.
 #[must_use]
-pub fn strong_peaks(env: &[f64], rate: f64) -> Vec<usize> {
+pub(crate) fn strong_peaks(env: &[f64], rate: f64) -> Vec<usize> {
     let b = py_int(0.050 * rate).max(1) as usize;
     let nb = env.len() / b;
     if nb == 0 {

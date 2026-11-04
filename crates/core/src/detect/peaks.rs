@@ -32,21 +32,21 @@ use super::Chain;
 use super::N_CLASSES;
 
 /// Per-class thresholds of the reference detector (BD, SD, TT, HH, CY+RD).
-pub const THRESHOLDS: [f64; N_CLASSES] = [0.22, 0.24, 0.32, 0.22, 0.30];
+pub(crate) const THRESHOLDS: [f64; N_CLASSES] = [0.22, 0.24, 0.32, 0.22, 0.30];
 /// Frames per second of the activations.
 pub const FPS: f64 = 100.0;
 /// Moving average: frames before `t` (`round(0.1 * 100)`).
-pub const PRE_AVG: usize = 10;
+pub(crate) const PRE_AVG: usize = 10;
 /// Moving average: frames after `t` (`round(0.01 * 100)`).
-pub const POST_AVG: usize = 1;
+pub(crate) const POST_AVG: usize = 1;
 /// Local maximum: frames before `t` (`round(0.02 * 100)`).
-pub const PRE_MAX: usize = 2;
+pub(crate) const PRE_MAX: usize = 2;
 /// Local maximum: frames after `t` (`round(0.01 * 100)`).
-pub const POST_MAX: usize = 1;
+pub(crate) const POST_MAX: usize = 1;
 /// Combine window in seconds (2 frames).
-pub const COMBINE_S: f64 = 0.02;
+pub(crate) const COMBINE_S: f64 = 0.02;
 /// Combine window in frames (`max(1, round(0.02 * 100))`, the CLI rule).
-pub const COMBINE_FRAMES: usize = 2;
+pub(crate) const COMBINE_FRAMES: usize = 2;
 
 /// One detected onset.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -133,7 +133,7 @@ impl Branches {
 /// docs: edge padding and the `sdot` sum for [`Chain::Cli`], zero padding and the scipy
 /// running sum for [`Chain::Madmom`]).
 #[must_use]
-pub fn moving_average(x: &[f32], chain: Chain) -> Vec<f32> {
+pub(crate) fn moving_average(x: &[f32], chain: Chain) -> Vec<f32> {
     let n = x.len();
     if n == 0 {
         return Vec::new();
@@ -283,7 +283,7 @@ fn count_pads(peaks: &[usize], n: usize, b: &mut Branches) {
 
 /// The onset frames of one activation column with the chain's picker and `threshold`
 /// (compared in `f32`); `b` counts the rules that decided.
-pub fn pick_column(x: &[f32], threshold: f64, chain: Chain, b: &mut Branches) -> Vec<usize> {
+pub(crate) fn pick_column(x: &[f32], threshold: f64, chain: Chain, b: &mut Branches) -> Vec<usize> {
     let thr = threshold as f32;
     match chain {
         Chain::Cli => pick_cli(x, thr, b),
@@ -314,7 +314,7 @@ pub fn candidates(x: &[f32], floor: f64, chain: Chain) -> Vec<(usize, f32)> {
 ///
 /// When `activations.len()` is not a multiple of [`N_CLASSES`].
 #[must_use]
-pub fn pick_counted(activations: &[f32], chain: Chain) -> (Vec<Onset>, Branches) {
+pub(crate) fn pick_counted(activations: &[f32], chain: Chain) -> (Vec<Onset>, Branches) {
     pick_counted_with(activations, chain, &THRESHOLDS)
 }
 
@@ -361,7 +361,7 @@ pub fn pick(activations: &[f32], chain: Chain) -> Vec<Onset> {
 /// When `activations.len()` is not a multiple of [`N_CLASSES`].
 #[cfg(test)]
 #[must_use]
-pub fn pick_with(activations: &[f32], chain: Chain, thresholds: &[f64; N_CLASSES]) -> Vec<Onset> {
+pub(crate) fn pick_with(activations: &[f32], chain: Chain, thresholds: &[f64; N_CLASSES]) -> Vec<Onset> {
     pick_counted_with(activations, chain, thresholds).0
 }
 

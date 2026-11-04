@@ -72,7 +72,8 @@
 use crate::refine::{RefineWindow, refine_sr};
 
 use crate::dsp::broadband_peak_db;
-pub use crate::dsp::{BandStage, Biquad, FilterKind, band_peak_db, band_sections, ms_to_samples, percentile};
+pub use crate::dsp::{BandStage, FilterKind};
+pub(crate) use crate::dsp::{Biquad, band_peak_db, band_sections, ms_to_samples, percentile};
 use crate::role::Role;
 
 const fn lp(freq_hz: f64) -> BandStage {
@@ -114,7 +115,7 @@ impl Role {
 /// `quiet` when it has at least `min_hits` values, else of `all`; `None` when `all` has fewer than `min_hits` (at
 /// least 1). Returns the gain, the number of values used and whether only quiet values were used.
 #[must_use]
-pub fn calibrate_gain(all: &[f64], quiet: &[f64], pct: f64, min_hits: usize) -> Option<(f64, usize, bool)> {
+pub(crate) fn calibrate_gain(all: &[f64], quiet: &[f64], pct: f64, min_hits: usize) -> Option<(f64, usize, bool)> {
     let min = min_hits.max(1);
     if all.len() < min {
         return None;
