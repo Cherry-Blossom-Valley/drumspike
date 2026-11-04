@@ -541,6 +541,13 @@ fn names_outside_the_scheme_have_no_role() {
 }
 
 #[test]
+fn the_default_note_of_each_role_is_the_user_table_and_unknown_names_take_36() {
+    let names = ["kick", "snare", "tom", "hat", "cymbal", "other", "bass", "", "Kick"];
+    let notes: Vec<i64> = names.iter().map(|r| default_note(r)).collect();
+    assert_eq!(notes, [36, 38, 48, 42, 49, 36, 36, 36, 36]);
+}
+
+#[test]
 fn the_note_table_equals_the_page() {
     let js =
         std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../static/app.js")).unwrap();

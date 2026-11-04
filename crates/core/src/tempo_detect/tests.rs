@@ -15,6 +15,17 @@ fn role_names_map_to_roles() {
     assert!(Role::Kick.is_ks() && Role::Snare.is_ks() && !Role::Tom.is_ks() && !Role::Cymbal.is_ks());
 }
 
+#[test]
+fn kick_and_snare_weigh_full_and_every_other_role_name_half() {
+    let names = ["kick", "snare", "tom", "hat", "cymbal", "other", "bass", ""];
+    let weights: Vec<f64> = names.iter().map(|n| Role::from_name(n).weight()).collect();
+    assert_eq!(weights, [1.0, 1.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]);
+    let ks: Vec<bool> = names.iter().map(|n| Role::from_name(n).is_ks()).collect();
+    assert_eq!(ks, [true, true, false, false, false, false, false, false]);
+    assert_eq!(Role::from_name("other"), Role::Other);
+    assert_eq!(Role::from_name("Kick"), Role::Other);
+}
+
 /// #130: the tempo-referee pin. The parse is a pure function and is tested without
 /// touching the process env: the detection tests run in parallel threads, and edition 2024
 /// makes env writes unsafe for exactly that reason.
