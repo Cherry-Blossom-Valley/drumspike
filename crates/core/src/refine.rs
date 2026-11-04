@@ -1365,4 +1365,6 @@ pub fn recompute_velocities(x: &[f32], sr: u32, hits: &mut [Hit], m: &VelocityMa
 }
 
 #[cfg(test)]
+mod golden_tests;
+#[cfg(test)]
 mod tests;
