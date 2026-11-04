@@ -94,7 +94,7 @@
 
 use super::attribution::{AttributionError, AttributionParams, Role, Transfer, calibrate_gain};
 use super::flam::zero_phase;
-use crate::dsp::{Biquad, FilterKind, band_peak_db, band_sections, ms_to_samples, percentile};
+use crate::dsp::{FilterKind, band_level_db, band_sections, broadband_peak_db, median, ms_to_samples, percentile};
 
 /// The version of the rule an analysis records (`detector.bleed_rule`); 0 means no rule, 1 rule CD (tom sources only),
 /// 2 rule CD with the kick and snare close mics as sources ([`tom_bleed_with`]), 3 version 2 plus the tom pair rule
@@ -364,36 +364,6 @@ impl TomBleed {
     }
 }
 
-/// The tom-band level of `x` in `[c + w.0, c + w.1)` with the filter run in over `pre` samples before the window;
-/// samples outside the signal are zeros (the Python reference pads the same way).
-pub(crate) fn level_db(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64) -> f64 {
-    let start = c + w.0 - pre;
-    let len = (pre + w.1 - w.0).max(0) as usize;
-    if start >= 0 && start as usize + len <= x.len() {
-        let s = start as usize;
-        return band_peak_db(x, sec, s, s + pre as usize, s + len);
-    }
-    let seg: Vec<f32> = (0..len)
-        .map(|i| {
-            let k = start + i as i64;
-            if k >= 0 && (k as usize) < x.len() {
-                x[k as usize]
-            } else {
-                0.0
-            }
-        })
-        .collect();
-    band_peak_db(&seg, sec, 0, pre as usize, len)
-}
-
-/// The broadband peak of `x` in `[c + w.0, c + w.1)`, clipped to the signal (-180 dB when empty).
-pub(crate) fn broad_db(x: &[f32], c: i64, w: (i64, i64)) -> f64 {
-    let n = x.len() as i64;
-    let a = (c + w.0).clamp(0, n);
-    let b = (c + w.1).clamp(0, n);
-    band_peak_db(x, &[], a as usize, a as usize, b as usize)
-}
-
 /// True when `sorted` has a value within `tol` of `v`.
 fn near(sorted: &[i64], v: i64, tol: i64) -> bool {
     let k = sorted.partition_point(|&s| s < v - tol);
@@ -403,7 +373,7 @@ fn near(sorted: &[i64], v: i64, tol: i64) -> bool {
 /// The strong hits of a mic (indices into its hits): the P2-6 rule.
 #[must_use]
 pub fn strong_hits(x: &[f32], hits: &[i64], w: (i64, i64), strong_db: f64) -> Vec<usize> {
-    let pk: Vec<f64> = hits.iter().map(|&c| broad_db(x, c, w)).collect();
+    let pk: Vec<f64> = hits.iter().map(|&c| broadband_peak_db(x, c, w)).collect();
     match percentile(&pk, 90.0) {
         Some(p90) => (0..hits.len()).filter(|&i| pk[i] >= p90 - strong_db).collect(),
         None => Vec::new(),
@@ -439,7 +409,8 @@ pub fn tom_bleed_with(
         v.sort_unstable();
         v
     };
-    let levels = |x: &[f32], at: &[i64]| -> Vec<f64> { at.iter().map(|&c| level_db(x, &sec, c, win, pre)).collect() };
+    let levels =
+        |x: &[f32], at: &[i64]| -> Vec<f64> { at.iter().map(|&c| band_level_db(x, &sec, c, win, pre)).collect() };
     let src_strong: Vec<Vec<i64>> = sources
         .iter()
         .map(|s| {
@@ -673,7 +644,7 @@ fn run_pass(mics: &[TomMic], sr: u32, p: &TomBleedParams, group: &[usize]) -> To
                         mics[m]
                             .hits
                             .iter()
-                            .map(|&c| level_db(mics[o].signal, &sec, c, win, pre))
+                            .map(|&c| band_level_db(mics[o].signal, &sec, c, win, pre))
                             .collect()
                     })
                 })
@@ -859,20 +830,6 @@ pub fn stroke_rise_db(x: &[f32], hp: &[f64], sr: u32, t: f64) -> f64 {
 pub fn high_rise_db(hp: &[f64], sr: u32, at: i64) -> f64 {
     let t = at as f64 / f64::from(sr);
     peak_window_db(hp, sr, t, 0.002, 0.010) - peak_window_db(hp, sr, t, 0.030, -0.010)
-}
-
-/// The median of `v` (the mean of the two middle values for an even count); `None` for an empty slice.
-pub(crate) fn median(v: &mut [f64]) -> Option<f64> {
-    if v.is_empty() {
-        return None;
-    }
-    v.sort_by(f64::total_cmp);
-    let n = v.len();
-    Some(if n % 2 == 1 {
-        v[n / 2]
-    } else {
-        (v[n / 2 - 1] + v[n / 2]) / 2.0
-    })
 }
 
 /// Version 3, the tom pair rule: per mic the hits it marks (see the module documentation). `mics` must have equal-length

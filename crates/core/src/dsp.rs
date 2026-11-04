@@ -86,6 +86,41 @@ pub fn band_peak_db(x: &[f32], sections: &[Biquad], from: usize, w0: usize, to: 
     20.0 * (peak + 1e-9).log10()
 }
 
+/// The band level (dBFS) of `x` in `[c + w.0, c + w.1)` with the filter run in over `pre` samples
+/// before the window: [`band_peak_db`] over a zero-padded copy where the run-in or the window leaves
+/// the signal (the Python reference pads the same way). The tom bleed and the cross bleed rule
+/// measure with it.
+#[must_use]
+pub fn band_level_db(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64) -> f64 {
+    let start = c + w.0 - pre;
+    let len = (pre + w.1 - w.0).max(0) as usize;
+    if start >= 0 && start as usize + len <= x.len() {
+        let s = start as usize;
+        return band_peak_db(x, sec, s, s + pre as usize, s + len);
+    }
+    let seg: Vec<f32> = (0..len)
+        .map(|i| {
+            let k = start + i as i64;
+            if k >= 0 && (k as usize) < x.len() {
+                x[k as usize]
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    band_peak_db(&seg, sec, 0, pre as usize, len)
+}
+
+/// The broadband peak (dBFS) of `x` in `[c + w.0, c + w.1)`, clipped to the signal (-180 dB when
+/// empty): [`band_peak_db`] without sections and without run-in.
+#[must_use]
+pub fn broadband_peak_db(x: &[f32], c: i64, w: (i64, i64)) -> f64 {
+    let n = x.len() as i64;
+    let a = (c + w.0).clamp(0, n);
+    let b = (c + w.1).clamp(0, n);
+    band_peak_db(x, &[], a as usize, a as usize, b as usize)
+}
+
 /// The `q`-th percentile (0 to 100) of `v` with numpy's default linear interpolation;
 /// `None` for an empty slice. NaN values are not expected.
 pub fn percentile(v: &[f64], q: f64) -> Option<f64> {
@@ -124,6 +159,21 @@ pub fn np_percentile(v: &[f64], q: f64) -> Option<f64> {
     let (a, b) = (s[lo], s[hi]);
     let d = b - a;
     Some(if g >= 0.5 { b - d * (1.0 - g) } else { a + d * g })
+}
+
+/// The median of `v` (the mean of the two middle values for an even count), sorting `v` in place;
+/// `None` for an empty slice.
+pub fn median(v: &mut [f64]) -> Option<f64> {
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(f64::total_cmp);
+    let n = v.len();
+    Some(if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    })
 }
 
 #[cfg(test)]

@@ -1,9 +1,11 @@
 //! `to_bits` pins of the shared primitives: a merged helper gives the bits of every former copy, so a
 //! merge cannot move a detection time, a mark or a velocity.
 
-use super::{Biquad, band_peak_db, band_sections, ms_to_samples, np_percentile, percentile};
-use crate::detect::attribution::{self, Role};
-use crate::detect::{cross_bleed, tom_bleed};
+use super::{
+    Biquad, band_level_db, band_peak_db, band_sections, broadband_peak_db, median, ms_to_samples, np_percentile,
+    percentile,
+};
+use crate::detect::attribution::Role;
 
 /// A deterministic noise source in [-1, 1) (xorshift).
 struct Noise(u64);
@@ -121,7 +123,7 @@ fn lists() -> Vec<Vec<f64>> {
 }
 
 #[test]
-fn the_padded_band_level_keeps_the_bits_of_both_former_copies() {
+fn the_padded_band_level_keeps_the_bits_of_the_two_merged_copies() {
     let mut checked = 0;
     for sr in [44_100, 48_000] {
         for band in bands() {
@@ -132,8 +134,7 @@ fn the_padded_band_level_keeps_the_bits_of_both_former_copies() {
                         for pre in PREROLLS {
                             let want = level_ref(&x, &sec, c, w, pre).to_bits();
                             let at = (x.len(), sr, band.len(), c, w, pre);
-                            assert_eq!(cross_bleed::level_at(&x, &sec, c, w, pre).to_bits(), want, "{at:?}");
-                            assert_eq!(tom_bleed::level_db(&x, &sec, c, w, pre).to_bits(), want, "{at:?}");
+                            assert_eq!(band_level_db(&x, &sec, c, w, pre).to_bits(), want, "{at:?}");
                             checked += 1;
                         }
                     }
@@ -145,15 +146,14 @@ fn the_padded_band_level_keeps_the_bits_of_both_former_copies() {
 }
 
 #[test]
-fn the_clipped_broadband_peak_keeps_the_bits_of_both_former_copies() {
+fn the_clipped_broadband_peak_keeps_the_bits_of_the_two_merged_copies() {
     let mut checked = 0;
     for x in signals() {
         for c in CENTRES {
             for w in WINDOWS {
                 let want = broadband_ref(&x, c, w).to_bits();
                 let at = (x.len(), c, w);
-                assert_eq!(tom_bleed::broad_db(&x, c, w).to_bits(), want, "{at:?}");
-                assert_eq!(attribution::broadband_peak_db(&x, c, w).to_bits(), want, "{at:?}");
+                assert_eq!(broadband_peak_db(&x, c, w).to_bits(), want, "{at:?}");
                 checked += 1;
             }
         }
@@ -162,12 +162,11 @@ fn the_clipped_broadband_peak_keeps_the_bits_of_both_former_copies() {
 }
 
 #[test]
-fn the_option_median_keeps_the_bits_of_both_former_copies() {
+fn the_option_median_keeps_the_bits_of_the_two_merged_copies() {
     let all = lists();
     for v in &all {
         let want = median_ref(&mut v.clone()).map(f64::to_bits);
-        assert_eq!(cross_bleed::median(&mut v.clone()).map(f64::to_bits), want, "{v:?}");
-        assert_eq!(tom_bleed::median(&mut v.clone()).map(f64::to_bits), want, "{v:?}");
+        assert_eq!(median(&mut v.clone()).map(f64::to_bits), want, "{v:?}");
     }
     assert_eq!(all.len(), 47);
 }

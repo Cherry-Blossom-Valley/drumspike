@@ -132,7 +132,7 @@
 //! Every value is computed in a fixed order in `f64`; window bounds use [`ms_to_samples`].
 
 use super::attribution::Role;
-use crate::dsp::{Biquad, band_peak_db, band_sections, ms_to_samples};
+use crate::dsp::{band_level_db, band_sections, median, ms_to_samples};
 use crate::refine::first_motion;
 
 /// The kind of a close mic of the rule.
@@ -328,34 +328,12 @@ pub struct PairLearned {
     pub source_targets: usize,
 }
 
-/// The band level (dBFS) of `x` in `[c + w.0, c + w.1)` with the filter run in over `pre` samples
-/// before the window; samples outside the signal are zeros (as the tom bleed rule measures).
-pub(crate) fn level_at(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64) -> f64 {
-    let start = c + w.0 - pre;
-    let len = (pre + w.1 - w.0).max(0) as usize;
-    if start >= 0 && start as usize + len <= x.len() {
-        let s = start as usize;
-        return band_peak_db(x, sec, s, s + pre as usize, s + len);
-    }
-    let seg: Vec<f32> = (0..len)
-        .map(|i| {
-            let k = start + i as i64;
-            if k >= 0 && (k as usize) < x.len() {
-                x[k as usize]
-            } else {
-                0.0
-            }
-        })
-        .collect();
-    band_peak_db(&seg, sec, 0, pre as usize, len)
-}
-
 /// The level of every motion time of `mic` in its own band.
 fn levels(mic: &CrossMic, sr: u32, w: (i64, i64), pre: i64) -> Vec<f64> {
     let sec = band_sections(mic.kind.role().band(), sr);
     mic.motion
         .iter()
-        .map(|&t| level_at(mic.signal, &sec, (t * f64::from(sr)).round() as i64, w, pre))
+        .map(|&t| band_level_db(mic.signal, &sec, (t * f64::from(sr)).round() as i64, w, pre))
         .collect()
 }
 
@@ -366,7 +344,7 @@ pub fn hit_level(x: &[f32], sr: u32, kind: XKind, t: f64, p: &CrossBleedParams) 
     let sec = band_sections(kind.role().band(), sr);
     let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
     let pre = ms_to_samples(p.preroll_ms, sr);
-    level_at(x, &sec, (t * f64::from(sr)).round() as i64, w, pre)
+    band_level_db(x, &sec, (t * f64::from(sr)).round() as i64, w, pre)
 }
 
 /// The FULL-BAND peak level (dBFS) of a hit at time `t` (s) in `x` at rate `sr`, with the rule's
@@ -376,21 +354,7 @@ pub fn hit_level(x: &[f32], sr: u32, kind: XKind, t: f64, p: &CrossBleedParams) 
 pub fn hit_level_full_band(x: &[f32], sr: u32, t: f64, p: &CrossBleedParams) -> f64 {
     let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
     let pre = ms_to_samples(p.preroll_ms, sr);
-    level_at(x, &[], (t * f64::from(sr)).round() as i64, w, pre)
-}
-
-/// The median of `v` (the mean of the two middle values for an even count); `None` for an empty slice.
-pub(crate) fn median(v: &mut [f64]) -> Option<f64> {
-    if v.is_empty() {
-        return None;
-    }
-    v.sort_by(f64::total_cmp);
-    let n = v.len();
-    Some(if n % 2 == 1 {
-        v[n / 2]
-    } else {
-        (v[n / 2 - 1] + v[n / 2]) / 2.0
-    })
+    band_level_db(x, &[], (t * f64::from(sr)).round() as i64, w, pre)
 }
 
 /// The inherit band of the re-detection: a pass-2 candidate within this of a pass-1
@@ -559,7 +523,7 @@ pub fn cross_bleed_prior_session(
                 Some(
                     m.motion
                         .iter()
-                        .map(|&t| level_at(m.signal, &[], (t * f64::from(sr)).round() as i64, w, pre))
+                        .map(|&t| band_level_db(m.signal, &[], (t * f64::from(sr)).round() as i64, w, pre))
                         .collect(),
                 )
             } else {
@@ -716,7 +680,7 @@ pub fn cross_bleed_prior_session(
                 // a coinciding hit of X is the tom's own motion, and its ratio must not raise
                 // the pair's bleed ceiling and hide the bleed behind it.
                 let clear = !x_hit_near(ts);
-                let lx = level_at(
+                let lx = band_level_db(
                     x.signal,
                     &band_sections(XKind::Tom.role().band(), sr),
                     (ts * f64::from(sr)).round() as i64,
