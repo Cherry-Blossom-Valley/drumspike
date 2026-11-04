@@ -1,6 +1,6 @@
 """#439: the key command table (static/keymap.js) is sound without the app.
 
-The same checks the e2e run makes (test_keys.py) and menu.rs runs on the compiled
+The same checks the e2e run makes (test_keys.py) and menu/keymap.rs runs on the compiled
 table, here as a plain pytest: the file parses, no key is in two commands per
 preset (the Cubase fallback keeps the default keys), and no key is a macOS
 standard shortcut (owner rule of 2026-10-21; Cmd+Q and Cmd+, stay, the standard
@@ -18,7 +18,7 @@ RESERVED = ["Cmd+Space", "Control+Space", "Control+Up", "Control+Down", "Control
 ALLOWED = {"Cmd+Q": "quit", "Cmd+,": "settings"}   # the macOS standard keys of exactly those commands
 
 def rows():
-    """One dict per command object of the table (the fields menu.rs parses)."""
+    """One dict per command object of the table (the fields menu/keymap.rs parses)."""
     text = KEYMAP.read_text()
     out = []
     for chunk in text.split('{"id"')[1:]:

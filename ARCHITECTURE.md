@@ -80,7 +80,7 @@ The module paths are the API (`drumspike_core::refine::refine_sr`). An item no c
 | Path | What it holds |
 |---|---|
 | `crates/devtools` | Developer binaries, not shipped: `service_tool` (the app engine from a shell), `parity`, `bench`, `cache_tool`, `ds-bridge` (the test bridge for the page). |
-| `apps/desktop/src-tauri` | The Tauri shell: command wrappers, `menu`, window, open, about, self-test. |
+| `apps/desktop/src-tauri` | The Tauri shell: command wrappers, `menu` (`items`: ids and `SPEC`; `keymap`: the key table of `static/keymap.js`; `build`: the bar and `dispatch`; `sync`: the live menu follows the page; `macos`: `AppKit` parts), window, open, about, self-test. |
 | `static/` | The editor page, classic scripts: `state`, `persist`, `edit`, `transport`, `render`, `session`, `backend`, `lanes-gl`, `tiles-worker`, `keymap`, `help`, `shell`, and `app.js` (feature code and boot). |
 | `tests/` | pytest: the page against `ds-bridge` (`e2e_app/`), the frozen references (`golden/`), parity and export tests, the JS coverage gate. |
 | `tools/` | Research and check scripts; `identity.py` is the before and after gate of the refactoring. |

@@ -1,4 +1,4 @@
-//! The About window data (P3-8a). Help > About (`menu.rs`, item `about`) makes the page open its
+//! The About window data (P3-8a). Help > About (`menu`, item `about`) makes the page open its
 //! About dialog (`static/shell.js`, function `about`). The page holds the plain-language lines (what
 //! the app does, the non-commercial notice). This module gives it the facts of the
 //! build: the version and, on request, the third-party list

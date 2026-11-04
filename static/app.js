@@ -6806,7 +6806,7 @@ function setOverview(on, save) {
 }
 /* #169: View > Zoom Presets > Add Current and Organize: the engineer's own spans, the app setting zoom_presets (a list
    of {name, span}, span in seconds). Each one is an entry of the zoom dropdown after the six presets, and of the menu:
-   the first five with Option+1 to Option+5 (sync_zoom_own in menu.rs reads the names of the page state). */
+   the first five with Option+1 to Option+5 (sync_zoom_own in menu/sync.rs reads the names of the page state). */
 function renderZoomOwn() {   // the dropdown entries of the own presets
   const sel = $("#zoomSel");
   for (const o of sel.querySelectorAll("option[data-own]")) o.remove();

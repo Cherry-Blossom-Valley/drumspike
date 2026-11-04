@@ -109,7 +109,7 @@
     });
 
     // #195: the one enabled-state expectation, shared by menu_table and menu_state_follows_project
-    // (menu.rs sync + sync_checks): open_recent tracks the recent list, export_again also needs an
+    // (menu/sync.rs sync + sync_checks): open_recent tracks the recent list, export_again also needs an
     // export shape, undo/redo are greyed while their stack is empty (#158 rank 9), the five hit
     // items need a hit selection and Re-analyze Selection a range (#265). `S` is the live page
     // state of the running scenario.
@@ -127,7 +127,7 @@
       need(rep.items.length === sc.expect.menu_items, `expected ${sc.expect.menu_items} custom items, got ${rep.items.length}`);
       const missing = rep.items.filter(i => !i.in_menu).map(i => i.id);
       need(missing.length === 0, `items missing in the live menu: ${missing.join(", ")}`);
-      // P3-13b: the live menu (menu.rs, the table compiled in) against the table that the page loaded (static/keymap.js)
+      // P3-13b: the live menu (menu/, the table compiled in) against the table that the page loaded (static/keymap.js)
       const rows = DSKeys.COMMANDS.filter(c => c.menu);
       need(rows.length === rep.items.length, `the key table has ${rows.length} menu commands, the menu ${rep.items.length} items`);
       const differ = [];
@@ -158,7 +158,7 @@
       need(checks.join() === "nudge_val_1smp,nudge_val_10smp,nudge_val_100smp,nudge_val_1ms,nudge_val_10ms,height_small,height_medium,height_large,inspector,info_line,overview,counter_seconds,counter_samples,counter_barsbeats,counter_timecode,tab_active,tab_all,ruler_tempo,ruler_meter,ruler_beats,ruler_markers,grid,velocity_lane,other_mics,stop_return_mode,audition_tab,follow_smooth,follow_page,follow_off,suspend_follow,click,snap,learn_filter", `check items: ${checks}`);   // P4-wf10: Suspend Follow when Editing
       // #195: the document from `open -a` can already be open here (it arrives 6 s in, the splash
       // closes after 5-15 s), so the enabled state is read after menu sync with a project. The
-      // expectation follows menu.rs sync: open_recent tracks the recent list, export_again also
+      // expectation follows menu/sync.rs sync: open_recent tracks the recent list, export_again also
       // needs an export shape, undo/redo are greyed while their stack is empty (#158 rank 9),
       // delete_hit/nudge_earlier/nudge_later/audition need a hit selection (the page sends
       // `selHit` with every sync), everything else is enabled iff it is ready (and, without a
@@ -187,7 +187,7 @@
     });
 
     await step("menu_key_preset", async () => {
-      // P3-13c: the key preset sets the accelerators of the live menu (menu.rs set_preset); the report names the preset
+      // P3-13c: the key preset sets the accelerators of the live menu (menu/sync.rs set_preset); the report names the preset
       // the menu has and the accelerator of every item, which is compared with the page's table (menuKeyOf)
       const compare = async preset => {
         await until(async () => (await T.invoke("selftest_menu_report")).preset === preset, `the menu to have the ${preset} accelerators`, 10000);

@@ -1,6 +1,6 @@
 """P3-13b: the key command table (static/keymap.js, docs/migration/ux-daw-reference.md 3.3 and 5).
 
-One table holds every command: menu.rs takes its accelerators from it (a Rust test compares each item with its row),
+One table holds every command: menu/ takes its accelerators from it (a Rust test compares each item with its row),
 app.js takes its keys from it, and Help > Keyboard Shortcuts is made from it. These tests check the page side: the
 table has no key in two commands (and the check finds a planted one), every menu item has its row, the help panel
 lists every command, the keys run their commands (the numpad nudge, Shift+arrow, the menu keys in the web page),
