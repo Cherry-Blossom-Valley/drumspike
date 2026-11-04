@@ -5,6 +5,7 @@ use std::sync::{LazyLock, Mutex};
 
 use serde_json::Value;
 
+use super::items::Kind;
 use super::lock;
 
 /// `static/keymap.js`, compiled in (P3-13b): the key command table of the app. The page loads the same file.
@@ -50,6 +51,13 @@ pub struct KeyCommand {
     pub id: String,
     /// The menu item id, or `None` for a key that only the page handles.
     pub menu: Option<String>,
+    /// The menu of the item, one title per level (`"View > Zoom Presets"`: `["View", "Zoom Presets"]`); empty
+    /// without a menu item.
+    pub path: Vec<String>,
+    /// The item needs an open project (menu rows; `None` when the row does not say).
+    pub needs_project: Option<bool>,
+    /// Plain or check item (menu rows; `None` when the row does not say).
+    pub kind: Option<Kind>,
     /// The menu text.
     pub title: String,
     /// The menu accelerator in the table's notation (`Shift+Cmd+S`), or `None`.
@@ -101,7 +109,8 @@ impl KeyCommand {
 /// # Errors
 ///
 /// When a marker is missing, the text between them is not strict JSON or not a list, or a row has
-/// no `id`, no `title` or no `cubase` key, or a field of the wrong type. The message names the row.
+/// no `id`, no `title` or no `cubase` key, a field of the wrong type, or a `kind` other than `plain` and
+/// `check`. The message names the row.
 pub fn parse_keymap(src: &str) -> Result<Vec<KeyCommand>, String> {
     let a = src.find(KEYMAP_BEGIN).ok_or("no KEYMAP-BEGIN marker")? + KEYMAP_BEGIN.len();
     let b = a + src[a..].find(KEYMAP_END).ok_or("no KEYMAP-END marker")?;
@@ -129,6 +138,20 @@ pub fn parse_keymap(src: &str) -> Result<Vec<KeyCommand>, String> {
             Ok(KeyCommand {
                 id: text(r, n, "id")?.ok_or_else(|| format!("row {n}: no id"))?,
                 menu: text(r, n, "menu")?,
+                path: text(r, n, "path")?
+                    .map(|p| p.split(" > ").map(str::to_string).collect())
+                    .unwrap_or_default(),
+                needs_project: match r.get("needs_project") {
+                    Some(Value::Bool(b)) => Some(*b),
+                    Some(Value::Null) | None => None,
+                    _ => return Err(format!("row {n}: \"needs_project\" is not true, false or null")),
+                },
+                kind: match text(r, n, "kind")?.as_deref() {
+                    Some("plain") => Some(Kind::Plain),
+                    Some("check") => Some(Kind::Check),
+                    None => None,
+                    Some(k) => return Err(format!("row {n}: \"kind\" is \"{k}\", not \"plain\" or \"check\"")),
+                },
                 title: text(r, n, "title")?.ok_or_else(|| format!("row {n}: no title"))?,
                 menu_key: text(r, n, "menu_key")?,
                 page_keys: list(r.get("page_keys").unwrap_or(&Value::Null), n, "page_keys")?,

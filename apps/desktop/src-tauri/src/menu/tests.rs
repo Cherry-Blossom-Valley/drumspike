@@ -286,6 +286,9 @@ fn the_menu_key_of_a_row_in_a_preset() {
     let row = |menu: Option<&str>, menu_key: Option<&str>, cubase: Option<&[&str]>| KeyCommand {
         id: "x".into(),
         menu: menu.map(Into::into),
+        path: Vec::new(),
+        needs_project: None,
+        kind: None,
         title: "X".into(),
         menu_key: menu_key.map(Into::into),
         page_keys: vec!["Q".into()],
@@ -312,6 +315,9 @@ fn the_shown_key_of_a_row_is_its_first_key_the_menu_can_show() {
     let row = |menu: Option<&str>, menu_key: Option<&str>, pages: &[&str], cubase: Option<&[&str]>| KeyCommand {
         id: "x".into(),
         menu: menu.map(Into::into),
+        path: Vec::new(),
+        needs_project: None,
+        kind: None,
         title: "X".into(),
         menu_key: menu_key.map(Into::into),
         page_keys: pages.iter().map(ToString::to_string).collect(),
