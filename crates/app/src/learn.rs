@@ -44,6 +44,7 @@ use crate::commands::{assign_events, events_set_out};
 use crate::error::AppError;
 use crate::export::hit_times;
 use crate::media::mix_mode;
+use crate::policy::{Mark, is_marked};
 use crate::registry::{lock, resolve_shared};
 
 /// The commands of this card, as the route map names them.
@@ -1004,11 +1005,10 @@ impl Service {
                     continue;
                 }
                 let shift = shift_s_of(o);
-                let flag = |e: &drumspike_core::project::Event, k: &str| e.extra.get(k) == Some(&Value::Bool(true));
                 let near: Vec<f64> = o
                     .events()
                     .iter()
-                    .filter(|e| !flag(e, "cut") && !flag(e, "bleed"))
+                    .filter(|e| !is_marked(*e, Mark::Cut) && !is_marked(*e, Mark::Bleed))
                     .map(|e| e.t - shift)
                     .filter(|&h| h >= t0 - BLEED_REACH && h <= t1 + BLEED_REACH)
                     .collect();
@@ -1109,7 +1109,7 @@ impl Service {
         let events = self.track_events(sid, name)?;
         let mut ops = Vec::new();
         for (i, e) in events.iter().enumerate().rev() {
-            if e.get("learned") != Some(&Value::Bool(true)) || e.get("added") != Some(&Value::Bool(true)) {
+            if !is_marked(e, Mark::Learned) || e.get("added") != Some(&Value::Bool(true)) {
                 continue;
             }
             let Some(t) = e.get("t").and_then(Value::as_f64) else {
@@ -1236,11 +1236,13 @@ impl Service {
 /// P4-35: `(hits, out)` of a hit list: the hits the loudness cut and the bleed rules left in play
 /// (`hits`) and, of those, the ones the Learn filter took out (`"filtered": true`).
 fn out_counts(events: &[Value]) -> (usize, usize) {
-    let on = |e: &Value, k: &str| e.get(k) == Some(&Value::Bool(true));
-    let live: Vec<&Value> = events.iter().filter(|e| !on(e, "cut") && !on(e, "bleed")).collect();
+    let live: Vec<&Value> = events
+        .iter()
+        .filter(|e| !is_marked(*e, Mark::Cut) && !is_marked(*e, Mark::Bleed))
+        .collect();
     (
         live.len(),
-        live.iter().filter(|e| on(e, crate::learn_filter::FILTERED)).count(),
+        live.iter().filter(|&&e| is_marked(e, Mark::Filtered)).count(),
     )
 }
 
