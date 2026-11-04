@@ -207,7 +207,7 @@ fn is_kept_follows_the_shared_predicate_table() {
 fn on_grid_rounds_to_the_sample_and_is_manual_reads_the_markers() {
     assert_eq!(on_grid(0.123_456, Some(1000)), 0.123);
     assert_eq!(on_grid(0.123_456, None), 0.123_456);
-    let m = |v: Value| is_manual(v.as_object().unwrap());
+    let m = |v: Value| is_manual_object(v.as_object().unwrap());
     assert!(m(json!({"t": 1.0, "added": true})));
     assert!(m(json!({"t": 1.0, "orig": 0.9})));
     assert!(!m(json!({"t": 1.0, "orig": 1.0})));
