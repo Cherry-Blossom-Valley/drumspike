@@ -1188,10 +1188,6 @@ function staleSetup() {
 /* ---------------- playback: the native transport (P3-5b) ---------------- */
 function applyMixer() { appMix(); }   // live mute/solo during playback
 function play(returnKey) { return appPlay(undefined, returnKey); }   // #207: returnKey is the play-and-return key that starts the play
-/* P3-20b: Shift+Space (Pro Tools "Half-speed playback"): play from the playhead at half speed, one octave down;
-   Space or Shift+Space stops. The transport resamples to twice the device rate; the playhead, the follow, the
-   meters and the clicks run at the played speed (the messages carry speed 0.5). */
-function halfSpeedPlayStop() { return auStop() ? undefined : S.playing ? pause() : appPlay(0.5); }   // P4-40d: Space and Shift+Space stop an audition first
 function showSpeed(speed) {   // the status bar says "half speed" while the transport plays at half speed
   const el = $("#stSpeed"), half = speed === 0.5;
   if (el.classList.contains("hidden") === half) el.classList.toggle("hidden", !half);
@@ -2847,6 +2843,9 @@ function playStop(key) {   // key: the pressed key in the table's notation (a me
       : pause())
     : play(key === "Option+Space" ? key : null);
 }
+/* P3-20b: Shift+Space (Pro Tools "Half-speed playback"): play from the playhead at half speed, one octave down;
+   Space or Shift+Space stops. The transport resamples to twice the device rate; the playhead, the follow, the
+   meters and the clicks run at the played speed (the messages carry speed 0.5). */
 function halfSpeedPlayStop(key) {   // P4-40d: Space and Shift+Space stop an audition first; key as in playStop (#207)
   return auStop() ? undefined : S.playing
     ? (S.playReturn && (key === "Space" || key === S.playReturn) ? stopAndReturn() : pause())
