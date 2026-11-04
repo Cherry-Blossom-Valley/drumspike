@@ -5,7 +5,7 @@
 //! (Boeck and Widmer, `DAFx` 2013) on the log-filtered spectrogram of P2-2, with peak picking
 //! on one adaptive threshold, gates against bleed and the phase 1 minimum gap. The
 //! parameters per role are in [`OnsetParams::for_role`]; the report
-//! `docs/archive/phase2-report.md` (section P2-5) has the measurements behind them.
+//! The P2-5 measurements are behind them.
 //!
 //! # Chain
 //!
@@ -177,7 +177,7 @@ impl OnsetParams {
         OnsetParams::for_role_with(role, &ResearchOverrides::from_env())
     }
 
-    /// Tuned parameters for a role (see `docs/archive/phase2-report.md`, P2-5): tuned
+    /// Tuned parameters for a role (P2-5): tuned
     /// for the F-measure within 1 frame against the R3 onsets of the role's class on the
     /// close-mic tracks of three sessions; the kick values also pass the synthetic corpus.
     /// `research` overrides the A1 snare numbers (`None` keeps the tuned value).
@@ -464,7 +464,7 @@ fn quiet_gain(role: Role, research: &ResearchOverrides) -> f32 {
 }
 
 /// The A5 reference contrast scale per role: the q90 contrast of a nominal track (the
-/// ENST-Drums phrase items, see `docs/migration/reports/a5-self-calibration.md`). The
+/// ENST-Drums phrase items, A5 self-calibration). The
 /// relative delta keeps the shipped `delta` for a track at this scale; a track with half
 /// the scale gets half the delta. The override `DRUMSPIKE_DELTA_REF_<ROLE>` sets it for a
 /// measurement round.

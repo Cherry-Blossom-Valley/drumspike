@@ -13,7 +13,7 @@ use crate::pyops::py_int;
 /// The steepest-rise search window around the coarse time `t0`, in ms (`lo_ms`, `hi_ms` of
 /// `engine._refine_sr`). The detector reports hits about 6 ms before the attack, so the
 /// default reaches further after `t0` than before it (P2-9,
-/// `docs/archive/phase2-report.md`, section "P2-9 Refinement window").
+/// P2-9, Refinement window).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RefineWindow {
     /// Start of the window relative to `t0` (ms, negative = before `t0`).

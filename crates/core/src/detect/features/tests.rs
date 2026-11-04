@@ -1,6 +1,6 @@
 use super::*;
 
-/// The 84 CLI centre bins (`docs/archive/phase2-report.md`, P2-1c).
+/// The 84 CLI centre bins (P2-1c).
 fn cli_centres() -> Vec<usize> {
     let mut c: Vec<usize> = (2..=22).collect();
     c.extend([

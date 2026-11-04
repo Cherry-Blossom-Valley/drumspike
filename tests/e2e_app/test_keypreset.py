@@ -1,4 +1,4 @@
-"""P3-13c: the key preset "Cubase" (docs/migration/ux-daw-reference.md 3.3, owner decision 2026-10-11).
+"""P3-13c: the key preset "Cubase" (UX reference 3.3, owner decision 2026-10-11).
 
 Drum Spike > Settings has a key preset: "Pro Tools (default)" or "Cubase". The choice is an app setting (key_preset in
 <home>/settings.json, like the Inspector state). With Cubase the page keys and the menu accelerators come from the

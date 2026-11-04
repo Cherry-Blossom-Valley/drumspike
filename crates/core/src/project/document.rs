@@ -1,6 +1,6 @@
 //! The `.drumspike` document (format 1) as serde structs.
 //!
-//! Every struct keeps the fields `docs/migration/project-format.md` names as typed fields
+//! Every struct keeps the fields project format 1 names as typed fields
 //! and everything else in a flattened map, so a document the Python server (or a newer
 //! app) wrote round-trips without losing a key. Numbers go through `serde_json` with
 //! `float_roundtrip`, so a hit time written by Python's `repr` reads back to the same

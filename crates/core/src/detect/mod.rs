@@ -1,4 +1,4 @@
-//! Phase 2: onset detection in Rust (`docs/archive/phase2-detection-prompt.md`).
+//! Phase 2: onset detection in Rust.
 //!
 //! The detector runs on a 44.1 kHz mono signal. The reader gives the native rate, so the
 //! chain starts with [`resample`], then the log-filtered spectrogram ([`features`]) and the
@@ -8,8 +8,8 @@
 //! close mic that the other toms' mics explain; the app takes them out of the output. The flam rule ([`flam`])
 //! adds the second stroke of a flam inside a hit's lobe on a snare mic.
 //!
-//! Two reference chains exist (`docs/archive/phase2-report.md`, section "P2-1c R3 vs CLI
-//! gap"). [`Chain`] selects one of them, or the mix of the CLI features and the madmom peak
+//! Two reference chains exist (P2-1c, R3 vs CLI
+//! gap). [`Chain`] selects one of them, or the mix of the CLI features and the madmom peak
 //! picking (the default), for [`features`] and [`peaks`].
 
 pub mod attribution;
@@ -79,7 +79,7 @@ pub fn prepare(signal: &[f32], sr: u32, chain: Chain) -> Result<Vec<f32>, Detect
 ///   `ceil(len / 441)` frames, and `NotePeakPickingProcessor`), the features the reference
 ///   detector was trained on.
 /// * [`Chain::Mix`] (the default): the CLI features with madmom's peak picking. Card P2-1d
-///   (`docs/archive/phase2-report.md`, section "P2-1d Which chain is more precise") found
+///   (P2-1d, which chain is more precise) found
 ///   the two grids equally precise and madmom's picker closer to the attack in 965 of the
 ///   1,250 frames where the pickers differ; the controller chose this mix as the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

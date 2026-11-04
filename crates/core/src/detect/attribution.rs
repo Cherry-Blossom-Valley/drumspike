@@ -2,7 +2,7 @@
 //!
 //! The flags only mark hits. Nothing is removed from a hit list: the app shows the flag and
 //! the engineer deletes or keeps the hit. Measurements and the tuning history are in
-//! `docs/archive/phase2-report.md`, section "P2-6 Attribution flags".
+//! (P2-6 Attribution flags).
 //!
 //! # Input and output
 //!

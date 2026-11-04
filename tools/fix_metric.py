@@ -139,7 +139,7 @@ def near_any(times_sorted, t, tol):
 
 BLEED_S = 0.012     # a hit this close to a reference hit of the other role (kick or snare) is that drum's bleed, never confirmed
 
-# ---- P4-16f: strokes the owner heard as real (listening list `docs/migration/listening-flam-2026-10-17.md`, 2026-10-18)
+# ---- P4-16f: strokes the owner heard as real (listening list listening list of 2026-10-17, 2026-10-18)
 # (c) listened: an output hit within LISTEN_TOL_S of one of these times is a confirmed stroke. The times are the flam grace
 # strokes of the #58 run on `s top` (events' time base). Only the 8 "real" verdicts; "not" and "unsure" rows are not here.
 LISTEN_TOL_S = 0.002

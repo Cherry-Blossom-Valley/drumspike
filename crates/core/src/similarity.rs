@@ -1,4 +1,4 @@
-//! P4-6b / #293: the Learn similarity, DSP-only (`docs/migration/concept-learn-mode.md`, sections 3.1 and 4.1).
+//! P4-6b / #293: the Learn similarity, DSP-only (Learn mode concept, sections 3.1 and 4.1).
 //!
 //! The model-based version (P4-6b, `patch-1` and `mfcc-1`) had a fourth block, the five class
 //! activations of the model. The model is gone (#281 D16), so the DSP-only recipes `patch-2` and

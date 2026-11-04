@@ -2,7 +2,7 @@
 //! only). Skips when the folder is absent: `DRUMSPIKE_TEMPO_SAMPLES`, else `~/.cache/drumspike/sessions`.
 //!
 //! The true tempo of each session is the one tempo event of its Pro Tools session file (`.ptx`,
-//! decoded in `docs/migration/phase4-report.md` "P4-8 stage B"); the drum hits of the kick and
+//! decoded in P4-8 stage B); the drum hits of the kick and
 //! snare fall on that grid from 0 s (the session start, bar 1) within a few ms, so the songs were
 //! played to a click at that tempo. The hits come from the DSP analysis of `k in` and `s top`.
 

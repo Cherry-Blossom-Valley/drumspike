@@ -1,5 +1,5 @@
 //! P4-6b stage A, DSP-only (#293): `service_tool learn-eval <spec.json>`, the Rust side of
-//! `tools/learn_eval.py` (`docs/migration/concept-learn-mode.md` section 4.3). The spec: `{jobs: [...]}`;
+//! `tools/learn_eval.py` (Learn mode concept, section 4.3). The spec: `{jobs: [...]}`;
 //! each job `{id, wav, role, mode, ...}` prints one JSON line.
 //!
 //! The candidates come from the DSP detector (`detect_onsets_and_cands` with `OnsetParams::for_role`, the

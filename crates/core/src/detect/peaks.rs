@@ -6,7 +6,7 @@
 //! ([`THRESHOLDS`]: BD 0.22, SD 0.24, TT 0.32, HH 0.22, CY+RD 0.30) and the reference timing
 //! (`pre_avg` 0.1 s, `post_avg` 0.01 s, `pre_max` 0.02 s, `post_max` 0.01 s, combine 0.02 s at 100
 //! fps: 10, 1, 2, 1 and 2 frames). [`Chain`] selects the rules ([`Chain::Mix`] uses the
-//! madmom rules; `docs/archive/phase2-report.md`, section "P2-1c R3 vs CLI gap"):
+//! madmom rules; P2-1c, R3 vs CLI gap):
 //!
 //! | Rule | [`Chain::Cli`] (the CLI reference post-processing) | [`Chain::Madmom`] (madmom 27f032e `NotePeakPickingProcessor`) |
 //! |---|---|---|
@@ -20,7 +20,7 @@
 //! Both references compare in `f32` (numpy 1.26 casts the Python threshold to `f32`), so
 //! the thresholds are rounded to `f32` before every comparison. The moving averages copy
 //! the reference arithmetic bit for bit (checked on all 5.9 million values of the 56
-//! reference files of each chain, `docs/archive/phase2-report.md`, section P2-4):
+//! reference files of each chain, P2-4):
 //!
 //! * CLI: `np.convolve` calls the BLAS `sdot` (`OpenBLAS`) for each output: the 12 products
 //!   `x * f32(1/12)` are rounded to `f32` and summed in `f64` in window order, and the sum is

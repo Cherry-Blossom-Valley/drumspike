@@ -11,7 +11,7 @@
 //!   suggestion with `tempo_map_set`.
 //!
 //! The map is `{bpm, steps: [{t, bpm}], meter: [num, den], changes: [{bar, meter}], bar1_s}`,
-//! see `docs/migration/project-format.md`. The MIDI export of a project uses it
+//! see project format 1. The MIDI export of a project uses it
 //! (`export::export_midi`, Export All); the default map writes the bytes of the exports before this card.
 
 use drumspike_core::tempo::{TempoMap, import_midi};

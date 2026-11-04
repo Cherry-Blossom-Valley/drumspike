@@ -1,7 +1,7 @@
 //! #281 A6: the cross-track bleed rule for sparse tracks (kick and snare bleed on a tom close mic).
 //!
 //! On ENST-Drums the tom mics output three to eight times more hits than there are strokes: kick and snare
-//! bleed (`docs/migration/reports/model-vs-dsp.md`, part B). A rarely played tom has bleed as its loudest
+//! bleed (model-vs-dsp report, part B). A rarely played tom has bleed as its loudest
 //! events, so the loud-hit template of the own detector learns the bleed and the app's tom bleed rule
 //! ([`super::tom_bleed`], transfer gains on tom-band levels) does not catch this material. This rule uses
 //! two measurements the transfer-gain rule does not have: the **time of arrival** and the **level across

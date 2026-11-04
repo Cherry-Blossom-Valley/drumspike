@@ -1,6 +1,6 @@
 //! The native menu bar (P3-4b, P3-13a, P3-13b). One table (`SPEC`) holds every custom item of the app: id, label,
 //! kind (plain or check item) and whether the item needs an open project. `build` makes the menu bar of
-//! `docs/migration/ux-daw-reference.md` section 3.2 from the table, `dispatch` turns a click into the event `menu`
+//! section 3.2 of the UX reference from the table, `dispatch` turns a click into the event `menu`
 //! for the page (`static/shell.js` does the work), and `sync`, `sync_checks` and `sync_window` grey the items that
 //! need an open project, refresh Open Recent and the Window menu, and set the check items to the page's state.
 //!

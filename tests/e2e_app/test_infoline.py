@@ -1,4 +1,4 @@
-"""P3-14b: counters and info line (docs/migration/ux-daw-reference.md 3.4, 3.5 and 5; Cubase and Pro Tools models).
+"""P3-14b: counters and info line (UX reference 3.4, 3.5 and 5; Cubase and Pro Tools models).
 
 Counters: the main counter shows seconds with 6 decimals, the sub counter shows samples at the rate of the selected track
 (else of the first track). View > Main Counter (Seconds, Samples), Exchange Counters (key . until P3-19) and a click on the main

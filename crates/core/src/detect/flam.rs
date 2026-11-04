@@ -18,7 +18,7 @@
 //!
 //! The parameters are the stage 1 rule `R9_m10` ([`FlamParams::default`]). The Python reference is `tools/flam_pairs.py`
 //! (`attack_env`, `transfer_gains`, `second_onsets`). The measurements are in
-//! `docs/migration/phase4-report.md`, sections "P4-13 stage 1", "P4-13 stage 2, stage A" and "P4-13 stage B".
+//! Phase 4 report, sections "P4-13 stage 1", "P4-13 stage 2, stage A" and "P4-13 stage B".
 //!
 //! # Determinism
 //!

@@ -1,6 +1,6 @@
 //! Sample-exact native playback of a whole session (feature `audio`, P3-5a).
 //!
-//! The design follows the spike `cpal-transport` (`docs/migration/spikes.md`): one reader thread fills one lock-free ring
+//! The design follows the spike `cpal-transport`: one reader thread fills one lock-free ring
 //! (rtrb) per track; the audio callback pops one block per track, mixes to stereo, adds the
 //! hit clicks at their exact samples and applies the master gain.
 //!

@@ -14,7 +14,7 @@
 # failure. The job "desktop-app" runs on the owner's Apple Silicon Mac (runner label
 # arm64-mac) and only when the owner starts the workflow by hand with the input
 # run_desktop: debug .app (G3), self-test (G5), ad hoc signed .dmg. No signing identity, no
-# notary profile and no secret is used. Setup of that runner: docs/archive/ci-phase3.md.
+# notary profile and no secret is used.
 # The timeout of the job test is 50 minutes (was 40): G4 adds 3 to 4 minutes.
 # CI split (v3.22, owner decision 2026-10-15): the run is faster in four ways.
 #  - Jobs of one push: "test" (x86-mac, x86: all Rust steps, all pytest tests except e2e_app, and the e2e_app

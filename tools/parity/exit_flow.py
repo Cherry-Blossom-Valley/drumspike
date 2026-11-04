@@ -14,7 +14,7 @@ order, status, source modes, a digest of the (t, v, rise) list per track, the SH
 file, the SHA-256 of each spike file of drumspike_core.write_spike_wav), keyed by the SHA-256 of
 the session manifest and the digest of the app's events. Nothing is written into the repository.
 
-Steps and rules (exit table of docs/archive/phase3-desktop-app-prompt.md):
+Steps and rules (exit table of the phase 3 desktop app prompt):
 E2  project_new: the folder holds the document and the 4 subfolders; the server opens it.
 E3  tracks_scan + tracks_add (referenced, with the peak cache): 30 / 30 online, every record
     `referenced`, 30 peaks.bin; the time of tracks_add; the SHA-256 of the 30 sources before

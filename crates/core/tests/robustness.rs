@@ -7,7 +7,7 @@
 //! an empty result where hits exist, recall and false-hit rate inside the band.
 //!
 //! Bands are stated per case in `BANDS` below: a failing case is a finding for
-//! `docs/migration/reports/c14-robustness.md`, not a tuning job here.
+//! the C14 robustness report, not a tuning job here.
 //!
 //! Run: `cargo test -p drumspike-core --test robustness -j 8 -- --nocapture`
 

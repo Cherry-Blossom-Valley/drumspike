@@ -5,7 +5,7 @@
 "use strict";
 
 /* ---------------- P4-3: the Sensitivity and loudness histograms of the Inspector (owner request 2026-10-12) ----------------
-   As in Massey DRT (docs/migration/research-massey-drt.md): each histogram is drawn in its control's own track.
+   As in Massey DRT (research note): each histogram is drawn in its control's own track.
    Sensitivity: every candidate hit of the track's activation (B.histograms, from the activations the analysis keeps in
    Analysis/<track>/activation.bin) at the slider value where it turns on: strong hits at the left, weak ones and bleed
    at the right. Coloured = detected at the slider value, grey = filtered. While the slider moves, the service picks the

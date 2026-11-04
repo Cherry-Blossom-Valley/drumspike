@@ -7,7 +7,7 @@ The checker never imports project code. It reads the project document (format 1,
 hit list, the source WAV with soundfile and its `bext` chunk by hand, the exported
 `Exports/<track>_spike.mid` with mido and `Exports/<track>_spike.wav` with soundfile plus a hand
 parse of its chunks, and derives every expected value from the document and the source alone.
-The rules are the export contract of `docs/migration/phase4-report.md` section "P4-4" (the
+The rules are the export contract of the Phase 4 report section "P4-4" (the
 property list). Per track:
 
   names    E1  one MIDI and one spike file per track, `<track>_spike.mid` / `.wav`; no two tracks

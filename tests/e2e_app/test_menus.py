@@ -1,4 +1,4 @@
-"""P3-13a: the native menu bar of docs/migration/ux-daw-reference.md section 3.2, as far as the page goes, through
+"""P3-13a: the native menu bar of the UX reference section 3.2, as far as the page goes, through
 the bridge. Every item arrives as the event "menu" (the bridge's command selftest_menu, the same payload that a
 click on the native item emits). The check items (Snap, Follow Playhead, Metronome Click) follow the toolbar and the
 keys, and the toolbar follows them; the page keys of decision 2 (Return, Shift+Return, Option+Return) and the new

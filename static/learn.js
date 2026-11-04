@@ -5,7 +5,7 @@
    read the theme tokens (LN_CSS) and set window.DSLearn. */
 "use strict";
 
-/* ---------------- P4-6a: range selection and Learn marks (owner request 2026-10-12, docs/migration/concept-learn-mode.md) ----------------
+/* ---------------- P4-6a: range selection and Learn marks (owner request 2026-10-12) ----------------
    A drag in the wave lane selects a time range on that track (LN.sel; one at a time, a click, K or Escape clears it). K
    (Hits > Learn This) and Shift+K (Forget This) turn the selection, or the selected hit, into a mark: the service resolves the
    examples (track_learn_mark: the active hits, else the strongest candidate, else the strongest rise of 6 dB) and keeps them in

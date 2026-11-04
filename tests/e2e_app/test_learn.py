@@ -1,4 +1,4 @@
-"""P4-6a: range selection and Learn marks (owner request 2026-10-12, docs/migration/concept-learn-mode.md). A drag in the
+"""P4-6a: range selection and Learn marks (owner request 2026-10-12). A drag in the
 wave lane selects a range on that track (a click is still the playhead, the other pan gestures stay); K (Hits > Learn
 This) and Shift+K (Forget This) turn the range or the selected hit into a mark that the service keeps in the track's `learn`
 object; the lanes draw the band, the mark bars and the example ticks; every step is one undo step; a follower marks its

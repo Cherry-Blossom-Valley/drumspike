@@ -1,7 +1,7 @@
 //! P4-6a: Learn marks. The engineer marks good ("this") and bad ("not") hits of a track with a
 //! range or a selected hit; the project keeps the marks in the track's `learn` object. The scorer
 //! is P4-6b ([`crate::learn_score`]), the filter P4-6c ([`crate::learn_filter`];
-//! `docs/migration/concept-learn-mode.md`).
+//! the Learn mode concept).
 //!
 //! P4-6c: the first "not" example of a track whose filter is off turns the filter on, with the
 //! threshold following the examples (`auto`; [`first_not_turns_on`]). K alone never turns it on.
@@ -32,7 +32,7 @@
 //! mark wins. A track holds at most [`MAX_EXAMPLES`] examples of each kind.
 //!
 //! Document: `learn` is a key of the track that the document passes through
-//! (`docs/migration/project-format.md`): `{on, threshold, auto, method, marks: [{id, kind, t0, t1, at}], dropped?}`
+//! (project format 1): `{on, threshold, auto, method, marks: [{id, kind, t0, t1, at}], dropped?}`
 //! (P4-38e: `dropped`, the times of the Learn hits the engineer deleted, before the Hitpoint shift; a Learn change
 //! does not bring them back, [`crate::learn_filter::note_dropped`]).
 

@@ -1,4 +1,4 @@
-"""P3-13b: the key command table (static/keymap.js, docs/migration/ux-daw-reference.md 3.3 and 5).
+"""P3-13b: the key command table (static/keymap.js, UX reference 3.3 and 5).
 
 One table holds every command: menu/ takes its accelerators from it (a Rust test compares each item with its row),
 app.js takes its keys from it, and Help > Keyboard Shortcuts is made from it. These tests check the page side: the

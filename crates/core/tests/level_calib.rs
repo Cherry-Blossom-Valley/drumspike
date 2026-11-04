@@ -4,7 +4,7 @@
 //! constants tuned at one recording level.
 //!
 //! The numbers before the self-calibration (measured 2026-10-26 with the absolute `delta`
-//! constants) are in `docs/migration/reports/a5-self-calibration.md`.
+//! constants) are in the A5 self-calibration report.
 //! The test was an ignored finding test until the relative rule landed; it passed with
 //! --ignored on 2026-11-03 (kick 20/20, snare 8/8 hits) and runs by default since then.
 //!

@@ -9,7 +9,7 @@ file goes into `Audio Files/`). As a script (used by `self-test.sh`):
 
 picks the first N of the standard drum tracks (k in, k out, k sub, s top, s bot, t2, t3,
 oh, hh, r far) from `<session folder>/Audio Files/` and prints the project folder. Only the
-Python standard library is used (P3-12: the writer below follows docs/migration/project-format.md
+Python standard library is used (P3-12: the writer below follows the project format 1
 and writes what the retired server's project.py wrote); the WAV header gives rate and length.
 With `--wavs DIR` instead of `--from`, the first N WAV files of DIR become the tracks (the
 30-lane synthetic session of `tools/parity/make_session.py`, scenario `render`).

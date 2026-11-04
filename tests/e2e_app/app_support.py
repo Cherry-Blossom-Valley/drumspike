@@ -150,7 +150,7 @@ def wait_until(fn, timeout=10.0, msg="condition"):
     raise AssertionError(f"timeout waiting for {msg}")
 
 
-# ---------- project folders (format 1, docs/migration/project-format.md) without the retired server's layer ----------
+# ---------- project folders (format 1) without the retired server's layer ----------
 
 class Project:
     """A project folder read as plain JSON: .dir, .path (the document), .doc, .name."""

@@ -1,4 +1,4 @@
-"""P3-19: the Pro Tools key commands (docs/migration/ux-daw-reference.md 3.3, Avid Pro Tools Shortcuts Guide 2025.10 = A1).
+"""P3-19: the Pro Tools key commands (UX reference 3.3, Avid Pro Tools Shortcuts Guide 2025.10 = A1).
 
 The default preset "Pro Tools" gets the keys of card P3-19; the preset "Cubase" keeps its keys. One test for each key
 group: track selection (P, ;), hit keys (L, ', Control+Cmd+L and '), undo and redo (Z, Shift+Z), the zoom toggle (E,

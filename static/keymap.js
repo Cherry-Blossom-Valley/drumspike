@@ -1,4 +1,4 @@
-/* Key command table (P3-13b, docs/migration/ux-daw-reference.md 3.3). Loaded before shell.js and app.js.
+/* Key command table (P3-13b, UX reference 3.3). Loaded before shell.js and app.js.
    Every command of the app is here once: the native menu (apps/desktop/src-tauri/src/menu/) takes its
    accelerators from this table, the page (app.js keydown) takes its keys from it, and the help panel
    (Help > Keyboard Shortcuts) is made from it.

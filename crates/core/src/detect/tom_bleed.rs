@@ -1,7 +1,7 @@
 //! The tom bleed rule CD (P4-14 stage 2): a session step after the per-track analysis that marks the hits of a tom
 //! close mic which the other drums' tom close mics explain.
 //!
-//! Measurements and the choice of the rule are in `docs/migration/phase4-report.md`, sections "P4-14 stage 1" to
+//! Measurements and the choice of the rule are in the Phase 4 report, sections "P4-14 stage 1" to
 //! "P4-14 stage 2".
 //!
 //! # Input and output
@@ -65,7 +65,7 @@
 //! # Rule version 4: the own-mic attack rise keep guard (#182)
 //!
 //! The pair rule lost real strokes: 42 of its 46 merges on the toms of the 3 real sessions were real strokes
-//! (`docs/migration/reports/tom-pair-risk.md`). A marked hit whose own mic has an attack stays: when the rise of
+//! (tom-pair-risk report). A marked hit whose own mic has an attack stays: when the rise of
 //! the hit ([`stroke_rise_db`], the P4-18 rise test) is [`PAIR_KEEP_RISE_DB`] (10 dB) or more, the mic is not
 //! marked. The measured guard keeps all 42 lost real strokes and unmarks no bleed merge. The guard applies per
 //! mic from version 4 ([`PairMic::guarded`]): a recorded version 3 re-pick next to a version 4 target runs the
@@ -76,7 +76,7 @@
 //! On ENST `drummer_3` the floor tom (`tom_3`) sits next to the kick: the kick and the floor tom hear each other
 //! about as loud, so `G(kick->tom_3) + G(tom_3->kick)` lies above [`TomBleedParams::shared_sum_db`] and version 2
 //! rejects the kick source as a shared pair - the kick bleed on the floor tom stays in the output (0.264 F1, 1682
-//! kick false positives; `docs/migration/reports/release-0.9.2-enst.md`). Version 5 keeps a kick source whose gain
+//! kick false positives (release 0.9.2 ENST report)). Version 5 keeps a kick source whose gain
 //! pair is shared, under a guarded rule: a hit is marked when its kick excess is under
 //! [`TomBleedParams::kick_shared_threshold_db`] (8.0 dB, the bleed is louder than the unguarded 4.0 dB threshold
 //! reaches: measured p50 4.8 dB, real strokes p5 24 dB) and the hit has no own 2 kHz attack on the tom mic (the

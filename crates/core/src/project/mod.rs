@@ -1,6 +1,6 @@
 //! The project document layer: the port of `project.py` (phase 0, format 1).
 //!
-//! A project is a user-visible folder (`docs/migration/project-format.md`):
+//! A project is a user-visible folder (project format 1):
 //!
 //! ```text
 //! <Name>/

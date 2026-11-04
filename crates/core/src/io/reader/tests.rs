@@ -190,8 +190,7 @@ fn valid_bits_below_the_container_decode_as_the_container() {
     // Extensible PCM, 24 valid bits in a 32-bit container (wValidBitsPerSample = 24,
     // 4 bytes per sample): the samples are left-justified, so the 32-bit decode is the
     // 24-bit value. ffmpeg 9.0.2 probes this layout as pcm_f24le and decodes garbage
-    // (NaN, 1e31), so the Python path differs here on purpose (docs/archive/phase1-report.md,
-    // Deviations); this test pins the Rust behaviour.
+    // (NaN, 1e31), so the Python path differs here on purpose; this test pins the Rust behaviour.
     let v24 = [-0x80_0000i32, 0x7F_FFFF, 1, -1, 0x12_3456];
     let mut d = Vec::new();
     for v in v24 {
