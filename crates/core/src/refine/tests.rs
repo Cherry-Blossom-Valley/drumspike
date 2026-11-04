@@ -1,4 +1,9 @@
+use std::sync::atomic::Ordering;
+
+use super::edge::edge_foot;
+use super::walk::{BackTune, LEAD_IN, first_motion_traced, floor_before, foot_strict, samples};
 use super::*;
+use crate::velocity::{VelocityMap, velocity_map};
 
 const SR: u32 = 48_000;
 const W: RefineWindow = RefineWindow::DEFAULT;

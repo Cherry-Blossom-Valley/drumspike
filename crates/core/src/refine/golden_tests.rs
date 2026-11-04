@@ -7,6 +7,7 @@
 use std::process::Command;
 use std::sync::atomic::Ordering;
 
+use super::walk::LEAD_IN;
 use super::*;
 
 /// The lower peak margin of the golden (the margin the app's edit tests use beside [`FM_PEAK_DB`]).
