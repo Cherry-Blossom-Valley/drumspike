@@ -399,8 +399,8 @@ pub fn cross_bleed_session(
 
 /// The per-pair alignment measurement of #296: the |lead| of X's hits that coincide with a hit of
 /// S, nearest hit first. An aligned session's leads sit at 0 (the tool removed the bleed's arrival
-/// delay); a bleed lead of 0.5 to 3 ms cannot. Returns (aligned, coins, median |lead| ms).
-fn measure_pair(x: &CrossMic, s: &CrossMic, coincide: f64, p: &CrossBleedParams) -> (bool, usize, Option<f64>) {
+/// delay); a bleed lead of 0.5 to 3 ms cannot.
+fn measure_pair(x: &CrossMic, s: &CrossMic, coincide: f64, p: &CrossBleedParams) -> PairAlignment {
     let mut s_sorted: Vec<f64> = s.motion.clone();
     s_sorted.sort_by(f64::total_cmp);
     let mut coins: Vec<f64> = Vec::new();
@@ -418,14 +418,36 @@ fn measure_pair(x: &CrossMic, s: &CrossMic, coincide: f64, p: &CrossBleedParams)
     }
     let med_abs_lead = median(&mut coins);
     let aligned = coins.len() >= p.align_min_coins && med_abs_lead.is_some_and(|m| m < p.align_med_abs_lead_ms);
-    (aligned, coins.len(), med_abs_lead)
+    PairAlignment {
+        aligned,
+        coins: coins.len(),
+        med_abs_lead_ms: med_abs_lead,
+    }
+}
+
+/// The alignment measurement of one (tom, source) pair ([`measure_pair`], #296).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PairAlignment {
+    /// The pair's coinciding hits are centred on 0 (enough coins, median |lead| under the bound).
+    aligned: bool,
+    /// The number of X's hits that coincide with a hit of S.
+    coins: usize,
+    /// The median |lead| of the coinciding hits (ms); `None` without coincidences.
+    med_abs_lead_ms: Option<f64>,
 }
 
 /// One measured pair alignment: (tom mic index, source mic index, aligned, coins, median |lead| ms).
 pub type MeasuredAlign = (usize, usize, bool, usize, Option<f64>);
 
-/// The measured rows of one tom: (source, aligned, coins, median |lead| ms), source order.
-type MeasuredRow = Vec<(usize, bool, usize, Option<f64>)>;
+/// One measured row of a tom: the source mic index and the pair's alignment. A tom's rows are in
+/// source order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MeasuredRow {
+    /// The source (input index).
+    source: usize,
+    /// The pair's own alignment measurement.
+    align: PairAlignment,
+}
 
 /// Measure every (tom, source) pair's alignment over the full mic set — the pre-pass the app
 /// runs ONCE per session (#313): the per-source session test needs every pair's alignment
@@ -448,8 +470,8 @@ pub fn measure_pair_alignment(mics: &[CrossMic], _sr: u32, p: &CrossBleedParams)
             if b == a {
                 continue;
             }
-            let (aligned, coins, med) = measure_pair(&mics[a], &mics[b], coincide, p);
-            out.push((a, b, aligned, coins, med));
+            let m = measure_pair(&mics[a], &mics[b], coincide, p);
+            out.push((a, b, m.aligned, m.coins, m.med_abs_lead_ms));
         }
     }
     out
@@ -552,9 +574,16 @@ pub fn cross_bleed_prior_session(
     // is a close mic. A source is aligned on the session only when it measures aligned on
     // every tom target that has at least `align_min_coins` coincidences with it, and on at
     // least two such targets; a session with one tom mic cannot establish alignment.
-    let mut measured: Vec<MeasuredRow> = vec![Vec::new(); mics.len()]; // per tom: (source, aligned, coins, median |lead|)
+    let mut measured: Vec<Vec<MeasuredRow>> = vec![Vec::new(); mics.len()]; // per tom: the rows, source order
     for (a, b, aligned, coins_n, med_abs_lead) in measure_pair_alignment(mics, sr, p) {
-        measured[a].push((b, aligned, coins_n, med_abs_lead));
+        measured[a].push(MeasuredRow {
+            source: b,
+            align: PairAlignment {
+                aligned,
+                coins: coins_n,
+                med_abs_lead_ms: med_abs_lead,
+            },
+        });
     }
     // per source: the tom targets with at least `align_min_coins` coincidences, and how many
     // of those the pair measured aligned. With a handed-in session verdict (the app's
@@ -563,12 +592,12 @@ pub fn cross_bleed_prior_session(
     let mut source_targets = vec![0usize; mics.len()];
     let mut source_aligned_targets = vec![0usize; mics.len()];
     if session.is_none() {
-        for row in &measured {
-            for &(b, aligned, coins_n, _) in row {
-                if coins_n >= p.align_min_coins {
-                    source_targets[b] += 1;
-                    if aligned {
-                        source_aligned_targets[b] += 1;
+        for rows in &measured {
+            for row in rows {
+                if row.align.coins >= p.align_min_coins {
+                    source_targets[row.source] += 1;
+                    if row.align.aligned {
+                        source_aligned_targets[row.source] += 1;
                     }
                 }
             }
@@ -590,7 +619,7 @@ pub fn cross_bleed_prior_session(
     for (ai, &a) in toms.iter().enumerate() {
         target_inherits[a] = measured[ai]
             .iter()
-            .any(|&(b, aligned, _, _)| aligned && session_aligned_of(b));
+            .any(|row| row.align.aligned && session_aligned_of(row.source));
     }
     let mut learned = Vec::new();
     let mut counts: Vec<Vec<[usize; 4]>> = Vec::new();
@@ -626,7 +655,11 @@ pub fn cross_bleed_prior_session(
                 .any(|tx| (tx - ts).abs() <= coincide + 1e-9)
         };
         let mut pair: Vec<(usize, PairLearned)> = Vec::new();
-        for &(b, measured_aligned, coins_n, med_abs_lead) in &measured[ai] {
+        for row in &measured[ai] {
+            let b = row.source;
+            let measured_aligned = row.align.aligned;
+            let coins_n = row.align.coins;
+            let med_abs_lead = row.align.med_abs_lead_ms;
             let s = &mics[b];
             let src_t = oh_lv[b].as_ref(); // the oh's levels in the target's band
             let lv_s = |k: usize| src_t.map_or(lv[b][k], |v| v[k]);
