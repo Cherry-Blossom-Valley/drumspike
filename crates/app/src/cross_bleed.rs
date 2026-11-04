@@ -44,6 +44,7 @@ use drumspike_core::role::role_note;
 use serde_json::{Map, Value, json};
 
 use crate::media::{Decoded, mix_mode};
+use crate::policy::{Mark, clear, mark};
 use crate::registry::{OpenProject, Shared, lock};
 use crate::roles::is_sample_name;
 use crate::{Service, ServiceConfig};
@@ -581,10 +582,10 @@ fn run_one(
         if sw.rule {
             for (j, e) in evs.iter_mut().enumerate() {
                 if marks[j].bleed && !x_mic.edited[j] {
-                    e.extra.insert("bleed".into(), Value::Bool(true));
+                    mark(e, Mark::Bleed);
                     removed += 1;
                 } else {
-                    e.extra.shift_remove("bleed");
+                    clear(e, Mark::Bleed);
                 }
             }
         }
