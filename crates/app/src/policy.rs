@@ -135,23 +135,28 @@ pub fn clear<E: Marked + ?Sized>(e: &mut E, m: Mark) -> Option<Value> {
     e.mark_remove(m.key())
 }
 
-/// The flags that take a hit out of the output: the loudness cut (`"cut": true`;
+/// The marks that take a hit out of the output: the loudness cut (`"cut": true`;
 /// `histogram::mark_cut_events`), the tom bleed rule (`"bleed": true`; [`crate::tom_bleed`])
 /// and the old Learn filter (`"filtered": true`; #281 D16).
-const OUT_KEYS: [&str; 3] = ["cut", "bleed", "filtered"];
+const OUT_MARKS: [Mark; 3] = [Mark::Cut, Mark::Bleed, Mark::Filtered];
 
-/// #242: the per-hit overrides of `Toggle Hit Active`, carried in `extra` like the marks.
-/// `"deactivated": true` takes a hit out of the output whatever the rules say; `"keep": true`
-/// holds a deactivated hit in the output. The user's choice wins over every automatic mark
-/// (the predicates below), survives a re-analyze (it is a kept hit of [`is_kept`], so
-/// `edit::merge_edited` preserves it) and a change of the cut or bleed threshold or of the
-/// Learn (the marking rules never touch the flags, and [`crate::histogram`] skips kept hits).
-const USER_OUT_KEY: &str = "deactivated";
-const USER_KEEP_KEY: &str = "keep";
+// #242: the per-hit overrides of `Toggle Hit Active`, carried in `extra` like the marks.
+// `"deactivated": true` ([`Mark::Deactivated`]) takes a hit out of the output whatever the rules
+// say; `"keep": true` ([`Mark::Keep`]) holds a deactivated hit in the output. The user's choice
+// wins over every automatic mark (the predicates below), survives a re-analyze (it is a kept hit
+// of [`is_kept`], so `edit::merge_edited` preserves it) and a change of the cut or bleed
+// threshold or of the Learn (the marking rules never touch the flags, and [`crate::histogram`]
+// skips kept hits).
 
 /// A hand-edited hit: added, or moved away from its detected time. Structural: it reads only
-/// `added` and `orig`, never the reserved `edited` flag (the page's `isManual`).
+/// `added` and `orig`, never the reserved `edited` flag (the page's `isManual`). A JSON event
+/// that is no object is none.
 pub fn is_manual(e: &Value) -> bool {
+    e.as_object().is_some_and(is_manual_object)
+}
+
+/// [`is_manual`] for the object of a JSON event.
+pub fn is_manual_object(e: &Map<String, Value>) -> bool {
     if e.get("added") == Some(&Value::Bool(true)) {
         return true;
     }
@@ -172,8 +177,8 @@ pub fn is_manual(e: &Value) -> bool {
 pub fn is_kept(e: &Value) -> bool {
     is_manual(e)
         || e.get("edited") == Some(&Value::Bool(true))
-        || e.get(USER_KEEP_KEY) == Some(&Value::Bool(true))
-        || e.get(USER_OUT_KEY) == Some(&Value::Bool(true))
+        || is_marked(e, Mark::Keep)
+        || is_marked(e, Mark::Deactivated)
 }
 
 /// True for a hit out of the output (MIDI, spikes, Export All, the click, Learn scoring).
@@ -182,28 +187,26 @@ pub fn is_kept(e: &Value) -> bool {
 /// `deactivated` wins over everything; the user's `keep` wins over the automatic marks (#242).
 #[must_use]
 pub fn is_out(e: &Value) -> bool {
-    e.get(USER_OUT_KEY) == Some(&Value::Bool(true))
-        || (e.get(USER_KEEP_KEY) != Some(&Value::Bool(true))
-            && OUT_KEYS.iter().any(|k| e.get(k) == Some(&Value::Bool(true))))
+    is_marked(e, Mark::Deactivated) || (!is_marked(e, Mark::Keep) && OUT_MARKS.iter().any(|&m| is_marked(e, m)))
 }
 
 /// [`is_out`] for the typed events of a document (the marks live in `extra`).
 #[must_use]
 pub fn event_out(e: &Event) -> bool {
-    event_user_out(e) || (!event_user_kept(e) && OUT_KEYS.iter().any(|k| e.extra.get(*k) == Some(&Value::Bool(true))))
+    event_user_out(e) || (!event_user_kept(e) && OUT_MARKS.iter().any(|&m| is_marked(e, m)))
 }
 
 /// The user's `keep` of #242 for the typed events: the marking rules read it to leave a kept
 /// hit alone.
 #[must_use]
 pub fn event_user_kept(e: &Event) -> bool {
-    e.extra.get(USER_KEEP_KEY) == Some(&Value::Bool(true))
+    is_marked(e, Mark::Keep)
 }
 
 /// The user's `deactivated` of #242 for the typed events.
 #[must_use]
 pub fn event_user_out(e: &Event) -> bool {
-    e.extra.get(USER_OUT_KEY) == Some(&Value::Bool(true))
+    is_marked(e, Mark::Deactivated)
 }
 
 /// R2 in this tree: tempo detection has no predicate of its own — it calls the same one
@@ -333,7 +336,7 @@ mod tests {
     fn strip_marks_if_kept(e: &Value) -> Value {
         let mut e = e.clone();
         if is_kept(&e) {
-            for k in OUT_KEYS {
+            for k in OUT_MARKS.map(Mark::key) {
                 if e.get(k) == Some(&Value::Bool(true)) {
                     e.as_object_mut().unwrap().insert(k.into(), Value::Bool(false));
                 }
