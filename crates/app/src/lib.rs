@@ -124,30 +124,27 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
-    /// The rule pins and the research numbers from the process environment: the refinement pin
-    /// from `DRUMSPIKE_REFINE_RULE` ([`jobs::parse_rule`]), the session-rule pins, the
-    /// [`RuleSet`] and the [`ResearchOverrides`]. The one place the service reads them (R6).
+    /// [`ServiceConfig::from_lookup`] over the process environment: the one place the service
+    /// reads its rule pins and research numbers (R6).
     #[must_use]
     pub fn from_env(_models_dir: &Path) -> ServiceConfig {
-        let env = |name: &str| std::env::var(name).ok();
+        ServiceConfig::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// The rule pins and the research numbers from a variable source: the refinement pin from
+    /// `DRUMSPIKE_REFINE_RULE` ([`jobs::parse_rule`]), the session-rule pins
+    /// (`DRUMSPIKE_BLEED_RULE`, `DRUMSPIKE_FLAM_RULE`, `DRUMSPIKE_CROSS_BLEED`,
+    /// `DRUMSPIKE_GHOST_GATE`), the [`RuleSet`] and the [`ResearchOverrides`].
+    #[must_use]
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> ServiceConfig {
         ServiceConfig {
-            refine_rule: std::env::var("DRUMSPIKE_REFINE_RULE")
-                .ok()
-                .and_then(|v| jobs::parse_rule(&v)),
-            bleed_rule: std::env::var("DRUMSPIKE_BLEED_RULE")
-                .ok()
-                .and_then(|v| tom_bleed::parse_bleed_rule(&v)),
-            flam_rule: std::env::var("DRUMSPIKE_FLAM_RULE")
-                .ok()
-                .and_then(|v| flam::parse_flam_rule(&v)),
-            cross_bleed: std::env::var("DRUMSPIKE_CROSS_BLEED")
-                .ok()
-                .and_then(|v| v.trim().parse::<u32>().ok()),
-            ghost_gate: std::env::var("DRUMSPIKE_GHOST_GATE")
-                .ok()
-                .and_then(|v| v.trim().parse::<u32>().ok()),
-            rules: RuleSet::from_lookup(env),
-            research: ResearchOverrides::from_lookup(env),
+            refine_rule: get("DRUMSPIKE_REFINE_RULE").and_then(|v| jobs::parse_rule(&v)),
+            bleed_rule: get("DRUMSPIKE_BLEED_RULE").and_then(|v| tom_bleed::parse_bleed_rule(&v)),
+            flam_rule: get("DRUMSPIKE_FLAM_RULE").and_then(|v| flam::parse_flam_rule(&v)),
+            cross_bleed: get("DRUMSPIKE_CROSS_BLEED").and_then(|v| v.trim().parse::<u32>().ok()),
+            ghost_gate: get("DRUMSPIKE_GHOST_GATE").and_then(|v| v.trim().parse::<u32>().ok()),
+            rules: RuleSet::from_lookup(&get),
+            research: ResearchOverrides::from_lookup(&get),
         }
     }
 }
@@ -223,60 +220,47 @@ impl Service {
 mod tests {
     use super::*;
 
+    /// A config from one variable, as `from_env` builds it from the process environment.
+    fn with(name: &str, value: &str) -> ServiceConfig {
+        ServiceConfig::from_lookup(|n| (n == name).then(|| value.to_string()))
+    }
+
     #[test]
-    fn from_env_follows_the_engine_rule() {
-        let dir = std::env::temp_dir().join(format!("ds_app_cfg_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("probe.bin"), b"x").unwrap();
-        // P4-12: the refinement pin (this test owns DRUMSPIKE_REFINE_RULE as well)
-        unsafe {
-            std::env::remove_var("DRUMSPIKE_REFINE_RULE");
-        }
-        assert_eq!(ServiceConfig::from_env(&dir).refine_rule, None);
-        unsafe {
-            std::env::set_var("DRUMSPIKE_REFINE_RULE", "1");
-        }
-        assert_eq!(ServiceConfig::from_env(&dir).refine_rule, Some(RefineRule::Reference));
-        unsafe {
-            std::env::set_var("DRUMSPIKE_REFINE_RULE", "2");
-        }
-        assert_eq!(ServiceConfig::from_env(&dir).refine_rule, Some(RefineRule::Reach));
-        unsafe {
-            std::env::set_var("DRUMSPIKE_REFINE_RULE", "3");
-        }
-        assert_eq!(ServiceConfig::from_env(&dir).refine_rule, Some(RefineRule::FirstMotion));
-        unsafe {
-            std::env::set_var("DRUMSPIKE_REFINE_RULE", "x");
-        }
-        assert_eq!(ServiceConfig::from_env(&dir).refine_rule, None);
-        unsafe {
-            std::env::remove_var("DRUMSPIKE_REFINE_RULE");
-        }
-        // P4-14: the bleed rule pin (this test owns DRUMSPIKE_BLEED_RULE as well)
-        unsafe {
-            std::env::remove_var("DRUMSPIKE_BLEED_RULE");
-        }
-        assert_eq!(ServiceConfig::from_env(&dir).bleed_rule, None);
-        unsafe {
-            std::env::set_var("DRUMSPIKE_BLEED_RULE", "0");
-        }
-        assert_eq!(ServiceConfig::from_env(&dir).bleed_rule, Some(0));
-        unsafe {
-            std::env::set_var("DRUMSPIKE_BLEED_RULE", "1");
-        }
-        assert_eq!(ServiceConfig::from_env(&dir).bleed_rule, Some(1));
-        unsafe {
-            std::env::set_var("DRUMSPIKE_BLEED_RULE", "7");
-        }
+    fn the_config_reads_each_rule_pin_by_its_variable_name() {
+        let none = ServiceConfig::from_lookup(|_| None);
+        assert_eq!(none.refine_rule, None);
+        assert_eq!(none.bleed_rule, None);
+        // P4-12: the refinement pin
         assert_eq!(
-            ServiceConfig::from_env(&dir).bleed_rule,
+            with("DRUMSPIKE_REFINE_RULE", "1").refine_rule,
+            Some(RefineRule::Reference)
+        );
+        assert_eq!(with("DRUMSPIKE_REFINE_RULE", "2").refine_rule, Some(RefineRule::Reach));
+        assert_eq!(
+            with("DRUMSPIKE_REFINE_RULE", "3").refine_rule,
+            Some(RefineRule::FirstMotion)
+        );
+        assert_eq!(with("DRUMSPIKE_REFINE_RULE", "x").refine_rule, None);
+        // P4-14: the bleed rule pin
+        assert_eq!(with("DRUMSPIKE_BLEED_RULE", "0").bleed_rule, Some(0));
+        assert_eq!(with("DRUMSPIKE_BLEED_RULE", "1").bleed_rule, Some(1));
+        assert_eq!(
+            with("DRUMSPIKE_BLEED_RULE", "7").bleed_rule,
             None,
             "a version this build does not know"
         );
-        unsafe {
-            std::env::remove_var("DRUMSPIKE_BLEED_RULE");
-        }
-        std::fs::remove_dir_all(&dir).unwrap();
+        // R6: the delta rule, the tempo referee and a research number
+        assert_eq!(none.rules, RuleSet::default());
+        assert_eq!(none.research, ResearchOverrides::default());
+        assert_eq!(
+            with("DRUMSPIKE_DELTA_RULE", "0").rules.delta,
+            drumspike_core::rules::DeltaRule::Absolute
+        );
+        assert_eq!(
+            with("DRUMSPIKE_TEMPO_RULE", "2").rules.tempo,
+            drumspike_core::rules::TempoRule::Corroborated
+        );
+        assert_eq!(with("DRUMSPIKE_A5_GAIN_ATTACK", "0").research.a5_gain_attack, Some(0.0));
     }
 
     #[test]
