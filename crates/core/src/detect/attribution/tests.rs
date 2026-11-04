@@ -151,25 +151,6 @@ fn band_peak_db_measures_in_band_and_skips_the_preroll() {
 }
 
 #[test]
-fn percentile_follows_numpy_linear() {
-    let v = [3.0, 1.0, 2.0, 10.0];
-    assert_eq!(percentile(&v, 0.0), Some(1.0));
-    assert_eq!(percentile(&v, 100.0), Some(10.0));
-    assert_eq!(percentile(&v, 50.0), Some(2.5));
-    // numpy.percentile([1, 2, 3, 10], 90) = 7.9
-    assert!((percentile(&v, 90.0).unwrap() - 7.9).abs() < 1e-12);
-    assert_eq!(percentile(&[], 50.0), None);
-}
-
-#[test]
-fn ms_to_samples_rounds_half_up() {
-    assert_eq!(ms_to_samples(5.0, 44_100), 221);
-    assert_eq!(ms_to_samples(0.5, SR), 24);
-    assert_eq!(ms_to_samples(-0.5, SR), -24);
-    assert_eq!(ms_to_samples(0.0, SR), 0);
-}
-
-#[test]
 fn hit_flags_report_names_and_confidence() {
     let mut f = HitFlags::default();
     assert!(!f.is_flagged());

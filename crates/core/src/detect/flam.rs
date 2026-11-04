@@ -28,7 +28,8 @@
 //! module runs each stage twice forward and twice backward in the time domain, the same response (the filter's
 //! response dies out long before the 0.25 s), different only in the rounding of the last bits.
 
-use super::attribution::{Biquad, FilterKind};
+pub use crate::dsp::np_percentile;
+use crate::dsp::{Biquad, FilterKind};
 use crate::pyops::{py_int, py_round};
 use crate::refine::first_motion_mid;
 
@@ -236,24 +237,6 @@ pub fn late_share(env: &[f64], hits: &[f64], sr: u32, hop: usize, p: &FlamParams
 #[must_use]
 pub fn late_peaking(late_db: Option<f64>, share: Option<f64>) -> bool {
     late_db.is_some_and(|v| v >= LATE_PEAK_MAX_DB) && share.is_some_and(|w| w >= LATE_SHARE_MIN)
-}
-
-/// `np.percentile(v, q)` with numpy's default linear method, bit for bit: the virtual index `(n - 1) * q / 100` and
-/// numpy's `_lerp` (from the upper value when the fraction is 0.5 or more). `None` for an empty slice.
-pub fn np_percentile(v: &[f64], q: f64) -> Option<f64> {
-    if v.is_empty() {
-        return None;
-    }
-    let mut s = v.to_vec();
-    s.sort_by(f64::total_cmp);
-    let n = s.len();
-    let vi = (n - 1) as f64 * (q / 100.0);
-    let lo = (vi.floor().max(0.0) as usize).min(n - 1);
-    let hi = (lo + 1).min(n - 1);
-    let g = vi - lo as f64;
-    let (a, b) = (s[lo], s[hi]);
-    let d = b - a;
-    Some(if g >= 0.5 { b - d * (1.0 - g) } else { a + d * g })
 }
 
 /// `np.median` of a non-empty slice.

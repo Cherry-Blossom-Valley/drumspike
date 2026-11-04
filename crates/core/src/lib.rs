@@ -22,6 +22,8 @@
 //! * `transport` (feature `audio`): sample-exact native playback of a session (P3-5a).
 //! * [`detect`]: phase 2, onset detection; today the fixed-ratio resampler to 44.1 kHz
 //!   (`detect::resample`, P2-2a), the rest follows card by card.
+//! * [`dsp`]: the shared filter and statistics primitives (RBJ biquads, band levels,
+//!   percentiles, `ms_to_samples`) of the detection rules and the exports.
 //!
 //! Rules: the reader never writes (I3); `unsafe` appears only in the mmap layer with a
 //! comment that says why; Python numeric semantics (`int()` truncation, `round()` ties to

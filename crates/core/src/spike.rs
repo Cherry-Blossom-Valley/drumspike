@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use crate::detect::attribution::{Biquad, FilterKind};
+use crate::dsp::{Biquad, FilterKind};
 use crate::io::{Bext, WRITE_BLOCK_FRAMES, WavFormat, WavSpec, write_wav, write_wav_blockwise};
 use crate::pyops::py_round;
 

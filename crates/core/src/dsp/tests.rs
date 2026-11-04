@@ -1,7 +1,8 @@
 //! `to_bits` pins of the shared primitives: a merged helper gives the bits of every former copy, so a
 //! merge cannot move a detection time, a mark or a velocity.
 
-use crate::detect::attribution::{self, Biquad, Role, band_peak_db, band_sections};
+use super::{Biquad, band_peak_db, band_sections, ms_to_samples, np_percentile, percentile};
+use crate::detect::attribution::{self, Role};
 use crate::detect::{cross_bleed, tom_bleed};
 
 /// A deterministic noise source in [-1, 1) (xorshift).
@@ -45,7 +46,7 @@ const WINDOWS: [(i64, i64); 4] = [(-24, 384), (0, 0), (10, -5), (-100, 100)];
 const PREROLLS: [i64; 3] = [0, 240, 2400];
 
 /// The band levels in the grid: broadband and every role band.
-fn bands() -> Vec<&'static [attribution::BandStage]> {
+fn bands() -> Vec<&'static [super::BandStage]> {
     vec![
         &[],
         Role::Kick.band(),
@@ -179,8 +180,8 @@ fn percentile_and_np_percentile_are_two_rules_and_stay_apart() {
     let mut checked = 0;
     for v in lists() {
         for q in [10.0, 25.0, 50.0, 75.0, 90.0, 99.5] {
-            let a = attribution::percentile(&v, q).map(f64::to_bits);
-            let b = crate::detect::flam::np_percentile(&v, q).map(f64::to_bits);
+            let a = percentile(&v, q).map(f64::to_bits);
+            let b = np_percentile(&v, q).map(f64::to_bits);
             assert_eq!(a.is_some(), b.is_some(), "{v:?} {q}");
             differ += usize::from(a != b);
             checked += 1;
@@ -188,4 +189,44 @@ fn percentile_and_np_percentile_are_two_rules_and_stay_apart() {
     }
     assert_eq!(checked, 47 * 6);
     assert!(differ > 0, "no case tells the two percentile rules apart");
+}
+
+#[test]
+fn percentile_follows_numpy_linear() {
+    let v = [3.0, 1.0, 2.0, 10.0];
+    assert_eq!(percentile(&v, 0.0), Some(1.0));
+    assert_eq!(percentile(&v, 100.0), Some(10.0));
+    assert_eq!(percentile(&v, 50.0), Some(2.5));
+    // numpy.percentile([1, 2, 3, 10], 90) = 7.9
+    assert!((percentile(&v, 90.0).unwrap() - 7.9).abs() < 1e-12);
+    assert_eq!(percentile(&[], 50.0), None);
+}
+
+#[test]
+fn ms_to_samples_rounds_half_up() {
+    assert_eq!(ms_to_samples(5.0, 44_100), 221);
+    assert_eq!(ms_to_samples(0.5, 48_000), 24);
+    assert_eq!(ms_to_samples(-0.5, 48_000), -24);
+    assert_eq!(ms_to_samples(0.0, 48_000), 0);
+}
+
+#[test]
+fn the_percentile_is_numpys_linear_one() {
+    // values from numpy 2: np.percentile([3, 1, 4, 1, 5, 9, 2, 6], q)
+    let v = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0];
+    assert_eq!(np_percentile(&v, 10.0), Some(1.0));
+    assert_eq!(np_percentile(&v, 50.0), Some(3.5));
+    assert!((np_percentile(&v, 99.5).unwrap() - 8.895).abs() < 1e-12);
+    assert_eq!(np_percentile(&v, 100.0), Some(9.0));
+    assert_eq!(np_percentile(&v, 0.0), Some(1.0));
+    assert_eq!(np_percentile(&[], 10.0), None);
+    assert_eq!(np_percentile(&[2.5], 99.5), Some(2.5));
+    // the upper branch of numpy's lerp: b - (b - a) * (1 - g) for g >= 0.5
+    let (a, b) = (0.1f64, 0.7f64);
+    let g = 3.0 * 0.9 - 2.0;
+    assert_eq!(
+        np_percentile(&[a, b, 1.0, 2.0], 90.0),
+        Some(2.0 - (2.0 - 1.0) * (1.0 - g))
+    );
+    assert_eq!(np_percentile(&[a, b], 25.0), Some(a + (b - a) * 0.25));
 }

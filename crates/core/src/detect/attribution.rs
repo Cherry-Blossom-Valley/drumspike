@@ -71,6 +71,8 @@
 
 use crate::refine::{RefineWindow, refine_sr};
 
+pub use crate::dsp::{BandStage, Biquad, FilterKind, band_peak_db, band_sections, ms_to_samples, percentile};
+
 /// The track role as the app names it (`engine.ROLE_CLASSES`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
@@ -86,24 +88,6 @@ pub enum Role {
     Cymbal,
     /// Any other track (no band limit).
     Other,
-}
-
-/// The kind of one filter stage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FilterKind {
-    /// Second-order lowpass (RBJ cookbook, Q = 1/sqrt(2)).
-    LowPass,
-    /// Second-order highpass (RBJ cookbook, Q = 1/sqrt(2)).
-    HighPass,
-}
-
-/// One stage of a band: the kind and the corner frequency in Hz. Each stage runs twice.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BandStage {
-    /// Lowpass or highpass.
-    pub kind: FilterKind,
-    /// Corner frequency in Hz.
-    pub freq_hz: f64,
 }
 
 const fn lp(freq_hz: f64) -> BandStage {
@@ -165,93 +149,6 @@ impl Role {
             Role::Other => &[],
         }
     }
-}
-
-/// Normalised biquad coefficients (`a0` = 1), in the row order of a scipy `sos` section.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Biquad {
-    /// Feed-forward coefficients.
-    pub b: [f64; 3],
-    /// Feedback coefficients `a1`, `a2`.
-    pub a: [f64; 2],
-}
-
-impl Biquad {
-    /// RBJ cookbook lowpass or highpass at `freq_hz`, Q = 1/sqrt(2), for rate `sr`.
-    #[must_use]
-    pub fn new(kind: FilterKind, freq_hz: f64, sr: u32) -> Biquad {
-        let w = 2.0 * std::f64::consts::PI * freq_hz / f64::from(sr);
-        let (cw, sw) = (w.cos(), w.sin());
-        let alpha = sw / (2.0 * std::f64::consts::FRAC_1_SQRT_2);
-        let b = match kind {
-            FilterKind::LowPass => [(1.0 - cw) / 2.0, 1.0 - cw, (1.0 - cw) / 2.0],
-            FilterKind::HighPass => [(1.0 + cw) / 2.0, -(1.0 + cw), (1.0 + cw) / 2.0],
-        };
-        let a0 = 1.0 + alpha;
-        Biquad {
-            b: [b[0] / a0, b[1] / a0, b[2] / a0],
-            a: [-2.0 * cw / a0, (1.0 - alpha) / a0],
-        }
-    }
-}
-
-/// The sections of a band at rate `sr`: every stage twice, in order.
-#[must_use]
-pub fn band_sections(band: &[BandStage], sr: u32) -> Vec<Biquad> {
-    band.iter()
-        .flat_map(|s| {
-            let q = Biquad::new(s.kind, s.freq_hz, sr);
-            [q, q]
-        })
-        .collect()
-}
-
-/// Filter `x[from..to]` through `sections` (direct form II transposed, zero state at
-/// `from`, the recursion of `scipy.signal.sosfilt`) and return
-/// `20 log10(max |y| + 1e-9)` over the samples `y[w0..to]`. `from <= w0 <= to <= x.len()`;
-/// an empty window gives -180 dB.
-#[must_use]
-pub fn band_peak_db(x: &[f32], sections: &[Biquad], from: usize, w0: usize, to: usize) -> f64 {
-    if w0 >= to {
-        return -180.0;
-    }
-    let mut z = vec![[0.0f64; 2]; sections.len()];
-    let mut peak = 0.0f64;
-    for (i, &v) in x[from..to].iter().enumerate() {
-        let mut y = f64::from(v);
-        for (s, zs) in sections.iter().zip(z.iter_mut()) {
-            let out = s.b[0] * y + zs[0];
-            zs[0] = s.b[1] * y - s.a[0] * out + zs[1];
-            zs[1] = s.b[2] * y - s.a[1] * out;
-            y = out;
-        }
-        if from + i >= w0 {
-            peak = peak.max(y.abs());
-        }
-    }
-    20.0 * (peak + 1e-9).log10()
-}
-
-/// The `q`-th percentile (0 to 100) of `v` with numpy's default linear interpolation;
-/// `None` for an empty slice. NaN values are not expected.
-pub fn percentile(v: &[f64], q: f64) -> Option<f64> {
-    if v.is_empty() {
-        return None;
-    }
-    let mut s = v.to_vec();
-    s.sort_by(f64::total_cmp);
-    let pos = q / 100.0 * (s.len() - 1) as f64;
-    let lo = pos.floor() as usize;
-    let hi = (lo + 1).min(s.len() - 1);
-    let frac = pos - lo as f64;
-    Some(s[lo] + (s[hi] - s[lo]) * frac)
-}
-
-/// Milliseconds to samples: `floor(ms * sr / 1000 + 0.5)` (the same rule in the Python
-/// reference; Python's `round` rounds half to even and would differ).
-#[must_use]
-pub fn ms_to_samples(ms: f64, sr: u32) -> i64 {
-    (ms * f64::from(sr) / 1000.0 + 0.5).floor() as i64
 }
 
 /// The calibration of a transfer gain `G(B->A)` from its values (P2-6; P4-14 reuses it): `all` holds the value at

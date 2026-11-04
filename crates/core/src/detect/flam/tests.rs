@@ -73,27 +73,6 @@ fn the_rule_runs_on_the_snare_from_version_1() {
 }
 
 #[test]
-fn the_percentile_is_numpys_linear_one() {
-    // values from numpy 2: np.percentile([3, 1, 4, 1, 5, 9, 2, 6], q)
-    let v = [3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0];
-    assert_eq!(np_percentile(&v, 10.0), Some(1.0));
-    assert_eq!(np_percentile(&v, 50.0), Some(3.5));
-    assert!((np_percentile(&v, 99.5).unwrap() - 8.895).abs() < 1e-12);
-    assert_eq!(np_percentile(&v, 100.0), Some(9.0));
-    assert_eq!(np_percentile(&v, 0.0), Some(1.0));
-    assert_eq!(np_percentile(&[], 10.0), None);
-    assert_eq!(np_percentile(&[2.5], 99.5), Some(2.5));
-    // the upper branch of numpy's lerp: b - (b - a) * (1 - g) for g >= 0.5
-    let (a, b) = (0.1f64, 0.7f64);
-    let g = 3.0 * 0.9 - 2.0;
-    assert_eq!(
-        np_percentile(&[a, b, 1.0, 2.0], 90.0),
-        Some(2.0 - (2.0 - 1.0) * (1.0 - g))
-    );
-    assert_eq!(np_percentile(&[a, b], 25.0), Some(a + (b - a) * 0.25));
-}
-
-#[test]
 fn the_time_domain_zero_phase_filter_equals_the_frequency_domain_one() {
     // the reference: |H|^4 of the RBJ high-pass applied to the FFT of the padded signal (`onset_guard.zero_phase`)
     let mut nz = Noise(7);
