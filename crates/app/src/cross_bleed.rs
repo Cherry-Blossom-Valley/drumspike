@@ -518,8 +518,76 @@ fn run_one(
 ) -> Option<Value> {
     let x_mic = &mics[a];
     // decode the tom mic and the sources (a source that cannot be read or has another rate is out)
+    let (dec_x, srcs) = decode_target(svc, mics, a)?;
+    // #313: the session-wide per-source verdict, handed to both passes (see [`session_alignment`]).
+    // The CrossMic vec is [the target, srcs...]; the target is never queried as a source.
+    let sess = SessionAlign {
+        source_aligned_targets: std::iter::once(0)
+            .chain(srcs.iter().map(|(i, _)| session[*i].0))
+            .collect(),
+        source_targets: std::iter::once(0)
+            .chain(srcs.iter().map(|(i, _)| session[*i].1))
+            .collect(),
+    };
+    let t = Target {
+        svc,
+        op,
+        mics,
+        x_mic,
+        dec_x,
+        srcs,
+        p,
+        sw,
+        sess,
+    };
+    // 1. the drop marks on the events
+    let pass1 = mark_pass1(&t)?;
+    // 2. the template validity: re-detect with the exclusion (the DSP fallback only)
+    let redetected = match redetect(&t, &pass1) {
+        Ok(redetected) => redetected,
+        Err(early) => return Some(early),
+    };
+    crate::follow::refresh_followers(svc, op, &x_mic.name);
+    Some(json!({"removed": pass1.removed, "redetected": redetected, "pairs": pass1.pairs}))
+}
+
+/// The decoded sources of a target: per source its index in the mics and its signal.
+type Sources = Vec<(usize, Arc<Decoded>)>;
+
+/// The rule run over one tom close mic target (`x_mic`): its decode, the decoded sources at its rate and the
+/// session-wide per-source verdict.
+struct Target<'a> {
+    svc: &'a Service,
+    op: &'a Shared,
+    mics: &'a [Mic],
+    x_mic: &'a Mic,
+    dec_x: Arc<Decoded>,
+    srcs: Sources,
+    p: &'a CrossBleedParams,
+    sw: Switches,
+    sess: SessionAlign,
+}
+
+/// What pass 1 decided on the stored hits.
+struct Pass1 {
+    /// The hits pass 1 marked bleed.
+    removed: usize,
+    /// The pass-1 bleed marks: the times of the hits pass 1 judged bleed. They are REMOVED from the track, so the
+    /// re-detection cannot see them and judges their candidates on their own — the pass-1 verdict is handed to pass
+    /// 2 as the inherit rule's band list (#296).
+    bleed_pass1: Vec<f64>,
+    /// The pass-1 pairs: the alignment decided here is handed to the re-detection (#296).
+    learned: Vec<PairLearned>,
+    /// [`pairs_json`] of `learned`.
+    pairs: Value,
+}
+
+/// The tom mic `a` and every other close mic at its rate as a source. `None` when the tom mic cannot be decoded or no
+/// source is left.
+fn decode_target(svc: &Service, mics: &[Mic], a: usize) -> Option<(Arc<Decoded>, Sources)> {
+    let x_mic = &mics[a];
     let dec_x: Arc<Decoded> = svc.inner.media.decode_cached(&x_mic.path, mix_mode(&x_mic.mix)).ok()?;
-    let mut srcs: Vec<(usize, Arc<Decoded>)> = Vec::new();
+    let mut srcs: Sources = Vec::new();
     for (i, m) in mics.iter().enumerate() {
         // every other close mic is a source: kick, snare and the other tom mics
         if !m.kind.is_some() || i == a {
@@ -534,75 +602,75 @@ fn run_one(
     if srcs.is_empty() {
         return None;
     }
-    let sr = dec_x.sr;
-    // #313: the session-wide per-source verdict, handed to both passes (see [`session_alignment`]).
-    // The CrossMic vec is [the target, srcs...]; the target is never queried as a source.
-    let sess = SessionAlign {
-        source_aligned_targets: std::iter::once(0)
-            .chain(srcs.iter().map(|(i, _)| session[*i].0))
-            .collect(),
-        source_targets: std::iter::once(0)
-            .chain(srcs.iter().map(|(i, _)| session[*i].1))
-            .collect(),
-    };
-    // 1. the drop marks on the events
+    Some((dec_x, srcs))
+}
+
+/// Pass 1 under the project lock: the rule on the stored hits, the drop marks (with the switch on), the #96 reporting
+/// keys and the `cross_bleed` record. `None` when the track or its hits are gone or the hits changed while the rule ran.
+fn mark_pass1(t: &Target) -> Option<Pass1> {
+    let (x_mic, mics, srcs, sr) = (t.x_mic, t.mics, &t.srcs, t.dec_x.sr);
     let mut removed = 0usize;
-    // the pass-1 bleed marks: the times of the hits pass 1 judged bleed (assigned in the block
-    // below). They are REMOVED from the track, so the re-detection cannot see them and judges
-    // their candidates on their own — the pass-1 verdict is handed to pass 2 as the inherit
-    // rule's band list (#296).
-    let bleed_pass1: Vec<f64>;
-    // the pass-1 pairs: the alignment decided here is handed to the re-detection (#296)
-    let learned: Vec<PairLearned>;
-    let pairs;
-    {
-        let mut g = lock(op);
-        let tr = g.track_mut(&x_mic.name).ok()?;
-        let evs = tr.events.as_mut()?;
-        if evs.len() != x_mic.times.len() {
-            return None; // the hits changed while the rule ran
-        }
-        let (marks_t, learned1) = cross_bleed_session(
-            &cross_mics(&dec_x, &srcs, mics, x_mic.times.clone()),
-            sr,
-            p,
-            Some(&sess),
-        );
-        let marks = &marks_t[0];
-        bleed_pass1 = aligned_pass1_bleed(marks, &x_mic.times, &x_mic.edited);
-        learned = learned1;
-        pairs = pairs_json(mics, &srcs, &learned);
-        // #309: pass 1's verdict, visible: per track, the hits pass 1 judged bleed with their
-        // time, lead and ratio (the re-detection record below replaces the step-1 marks, but
-        // this list stays on the detector record).
-        let pass1_removed: Vec<Value> = (0..marks.len())
-            .filter(|&j| marks[j].bleed && !x_mic.edited[j])
-            .map(|j| json!({"t": x_mic.times[j], "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db}))
-            .collect();
-        if sw.rule {
-            for (j, e) in evs.iter_mut().enumerate() {
-                if marks[j].bleed && !x_mic.edited[j] {
-                    mark(e, Mark::Bleed);
-                    removed += 1;
-                } else {
-                    clear(e, Mark::Bleed);
-                }
+    let mut g = lock(t.op);
+    let tr = g.track_mut(&x_mic.name).ok()?;
+    let evs = tr.events.as_mut()?;
+    if evs.len() != x_mic.times.len() {
+        return None; // the hits changed while the rule ran
+    }
+    let (marks_t, learned) = cross_bleed_session(
+        &cross_mics(&t.dec_x, srcs, mics, x_mic.times.clone()),
+        sr,
+        t.p,
+        Some(&t.sess),
+    );
+    let marks = &marks_t[0];
+    let bleed_pass1 = aligned_pass1_bleed(marks, &x_mic.times, &x_mic.edited);
+    let pairs = pairs_json(mics, srcs, &learned);
+    // #309: pass 1's verdict, visible: per track, the hits pass 1 judged bleed with their
+    // time, lead and ratio (the re-detection record below replaces the step-1 marks, but
+    // this list stays on the detector record).
+    let pass1_removed: Vec<Value> = (0..marks.len())
+        .filter(|&j| marks[j].bleed && !x_mic.edited[j])
+        .map(|j| json!({"t": x_mic.times[j], "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db}))
+        .collect();
+    if t.sw.rule {
+        for (j, e) in evs.iter_mut().enumerate() {
+            if marks[j].bleed && !x_mic.edited[j] {
+                mark(e, Mark::Bleed);
+                removed += 1;
+            } else {
+                clear(e, Mark::Bleed);
             }
         }
-        // #96 reporting keys: the lead and level the rule saw on every hit it judged (no flag changes)
-        for (j, e) in evs.iter_mut().enumerate() {
-            set_a6_keys(e, marks[j]);
-        }
-        if let Some(Value::Object(det)) = tr.extra.get_mut("detector") {
-            // `survive`: the step-1 marks that reach the CD step unless the re-detection below replaces the hits
-            det.insert(
-                "cross_bleed".into(),
-                json!({"rule": CROSS_BLEED, "on": true, "removed": removed, "survive": removed, "pass1_removed": pass1_removed, "pairs": pairs.clone()}),
-            );
-        }
-        g.mark_dirty();
     }
-    // 2. the template validity: re-detect with the exclusion (the DSP fallback only)
+    // #96 reporting keys: the lead and level the rule saw on every hit it judged (no flag changes)
+    for (j, e) in evs.iter_mut().enumerate() {
+        set_a6_keys(e, marks[j]);
+    }
+    if let Some(Value::Object(det)) = tr.extra.get_mut("detector") {
+        // `survive`: the step-1 marks that reach the CD step unless the re-detection below replaces the hits
+        det.insert(
+            "cross_bleed".into(),
+            json!({"rule": CROSS_BLEED, "on": true, "removed": removed, "survive": removed, "pass1_removed": pass1_removed, "pairs": pairs.clone()}),
+        );
+    }
+    g.mark_dirty();
+    Some(Pass1 {
+        removed,
+        bleed_pass1,
+        learned,
+        pairs,
+    })
+}
+
+/// Pass 2 with a stored candidate list (the DSP fallback): re-detect with the template exclusion, drop the bleed
+/// candidates, store the analysis, put the #96 keys on the kept hits and write the annotated candidate list. `Ok`: the
+/// re-detected count (0 without a stored list); `Err`: the track's outcome of a run that stopped early (its followers
+/// are not refreshed).
+fn redetect(t: &Target, pass1: &Pass1) -> Result<usize, Value> {
+    let (svc, op, x_mic, mics, srcs, p) = (t.svc, t.op, t.x_mic, t.mics, &t.srcs, t.p);
+    let dec_x = &t.dec_x;
+    let sr = dec_x.sr;
+    let removed = pass1.removed;
     let mut redetected = 0usize;
     let dir = lock(op)
         .project
@@ -614,28 +682,17 @@ fn run_one(
         // the exclusion: candidates that coincide with a louder hit of another close mic
         let Ok((_, cands_a, _)) = onset::detect_onsets_and_cands(&dec_x.samples, sr, &p_on, &cfg.rules, &cfg.research)
         else {
-            return Some(json!({"removed": removed, "redetected": redetected}));
+            return Err(json!({"removed": removed, "redetected": redetected}));
         };
-        let exclude: Vec<usize> = if sw.tmpl {
-            (0..cands_a.len())
-                .filter(|&k| {
-                    let tc = cands_a[k].time;
-                    srcs.iter().any(|(i, d)| {
-                        source_motion(&mics[*i], &d.samples, sr).iter().any(|&ts| {
-                            (ts - tc).abs() <= p.coincide_ms / 1000.0 + 1e-9
-                                && hit_level(&d.samples, sr, mics[*i].kind.expect("checked above"), ts, p)
-                                    > hit_level(&dec_x.samples, sr, XKind::Tom, tc, p)
-                        })
-                    })
-                })
-                .collect()
+        let exclude: Vec<usize> = if t.sw.tmpl {
+            template_exclude(t, &cands_a)
         } else {
             Vec::new()
         };
         let Ok((hits, mut cands, weak2)) =
             onset::detect_onsets_and_cands_excluding(&dec_x.samples, sr, &p_on, &exclude, &cfg.rules, &cfg.research)
         else {
-            return Some(json!({"removed": removed, "redetected": redetected}));
+            return Err(json!({"removed": removed, "redetected": redetected}));
         };
         // the drop on the re-detected candidates, with the evidence stored per candidate; the
         // candidate times are walked back to first motion as well (the same refinement) — the
@@ -646,26 +703,17 @@ fn run_one(
         // the candidate times (whose |lead| medians move).
         let cand_motion = refined_motion(&dec_x.samples, sr, &cands.iter().map(|c| c.time).collect::<Vec<_>>());
         let (marks_t, learned2) = cross_bleed_prior_session(
-            &cross_mics(&dec_x, &srcs, mics, cand_motion.clone()),
+            &cross_mics(dec_x, srcs, mics, cand_motion.clone()),
             sr,
             p,
-            Some(&learned),
-            Some(&sess),
+            Some(&pass1.learned),
+            Some(&t.sess),
         );
         // the pass-1 inherit rule (#296, coordinator refinement): applied per CANDIDATE on the
         // FINAL placement, after `analyze_detected` (see `inherit_on_placement`).
         let marks = &marks_t[0];
-        let pairs2 = pairs_json(mics, &srcs, &learned2);
-        let mut dropped: Vec<usize> = Vec::new();
-        for (j, c) in cands.iter_mut().enumerate() {
-            c.cross_lead_ms = marks[j].lead_ms.map(|l| l as f32);
-            c.cross_ratio_db = marks[j].ratio_db.map(|r| r as f32);
-            if sw.rule && marks[j].bleed && c.kept {
-                c.kept = false;
-                c.gate = Gate::CrossBleed;
-                dropped.push(j);
-            }
-        }
+        let pairs2 = pairs_json(mics, srcs, &learned2);
+        let dropped = drop_candidates(&mut cands, marks, t.sw.rule);
         let drop_frames: Vec<usize> = dropped.iter().map(|&j| cands[j].frame).collect();
         redetected = drop_frames.len();
         let kept: Vec<(f64, u8)> = hits
@@ -678,7 +726,7 @@ fn run_one(
             ..AnalyzeParams::default()
         };
         let Ok(mut analysis) = analyze_detected(&dec_x.samples, sr, "tom", &kept, &params_a) else {
-            return Some(json!({"removed": removed, "redetected": redetected, "pairs": pairs2}));
+            return Err(json!({"removed": removed, "redetected": redetected, "pairs": pairs2}));
         };
         // the #296 verify fix, coordinator refinement: the inherit rule applies per CANDIDATE on
         // the FINAL placement. Each kept candidate maps to the placed event nearest its grid
@@ -693,40 +741,19 @@ fn run_one(
             .filter(|&(_, c)| c.kept)
             .map(|(j, c)| (c.time, marks[j].lead_ms))
             .collect();
-        let inherited = inherit_on_placement(&mut analysis, &bleed_pass1, &kept_cands);
+        let inherited = inherit_on_placement(&mut analysis, &pass1.bleed_pass1, &kept_cands);
         let mut det = lock(op)
             .track(&x_mic.name)
             .ok()
             .and_then(|t| t.extra.get("detector").cloned())
             .unwrap_or_else(|| json!({"detector": "dsp"}));
         // #96: the dropped candidates with the lead and level the rule saw; the re-detection replaces the step-1 marks.
-        // #296: the records carry the candidate's verdict time (`t_verdict`, the first-motion
-        // walk of pass 2) next to the grid time, and the KEPT candidates are recorded too.
         if let Some(c) = det.get_mut("cross_bleed") {
-            let dropped_rec: Vec<Value> = dropped
-                .iter()
-                .map(|&j| {
-                    json!({"t": cands[j].time, "t_verdict": cand_motion[j], "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db})
-                })
-                .collect();
-            let kept_rec: Vec<Value> = cands
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| c.kept)
-                .map(|(j, c)| {
-                    json!({"t": c.time, "t_verdict": cand_motion[j], "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db})
-                })
-                .collect();
-            c["survive"] = json!(0);
-            c["dropped"] = json!(dropped_rec);
-            c["kept"] = json!(kept_rec);
-            // #296: the events the inherit rule dropped on the final placement, their stored times.
-            c["inherited"] = json!(inherited);
-            c["pairs"] = pairs2.clone();
+            record_pass2(c, &cands, &cand_motion, marks, &dropped, &inherited, &pairs2);
         }
-        if crate::jobs::store_analysis(svc, op, &x_mic.name, (analysis, None), &det, &dec_x, false, true, None).is_err()
+        if crate::jobs::store_analysis(svc, op, &x_mic.name, (analysis, None), &det, dec_x, false, true, None).is_err()
         {
-            return Some(json!({"removed": removed, "redetected": redetected}));
+            return Err(json!({"removed": removed, "redetected": redetected}));
         }
         // #96: the lead and level of the hits A6 kept, on their re-stored events (matched by the candidate's frame)
         let kept_keys: Vec<(f64, CrossMark)> = hits
@@ -739,38 +766,107 @@ fn run_one(
                     .map(|j| (h.time, marks[j]))
             })
             .collect();
-        {
-            let mut g = lock(op);
-            if let Ok(tr) = g.track_mut(&x_mic.name) {
-                // #103 step 1: the stored events carry the refined times of the analysis, not the
-                // re-detection hit time `h.time`, so the exact-time match missed and the A6
-                // evidence was lost on kept hits (1616 hat FPs with a hat hit inside the A6
-                // window and no keys; package 8 of the detector plan). Nearest kept hit within
-                // 25 ms instead: the refinement shift is a few ms and the detector's grid is
-                // 10 ms, so 25 ms cannot reach the next hit of a dense track.
-                const KEY_MATCH_MS: f64 = 0.025;
-                for e in tr.events.iter_mut().flatten() {
-                    let mut best: Option<(f64, CrossMark)> = None;
-                    for &(t, m) in &kept_keys {
-                        let d = (t - e.t).abs();
-                        if d <= KEY_MATCH_MS && best.is_none_or(|(bd, _)| d < bd) {
-                            best = Some((d, m));
-                        }
-                    }
-                    if let Some((_, m)) = best {
-                        set_a6_keys(e, m);
-                    }
-                }
-            }
-            g.mark_dirty();
-        }
+        set_kept_a6_keys(op, &x_mic.name, &kept_keys);
         // the annotated candidate list back into the analysis dir (the same key)
         if let Err(e) = crate::candidates::write_candidates(&dir, &cands, &params, weak2, &key) {
             eprintln!("candidates not kept for {}: {e}", x_mic.name);
         }
     }
-    crate::follow::refresh_followers(svc, op, &x_mic.name);
-    Some(json!({"removed": removed, "redetected": redetected, "pairs": pairs}))
+    Ok(redetected)
+}
+
+/// The template exclusion: the target's candidates that coincide with a louder hit of another close mic.
+fn template_exclude(t: &Target, cands_a: &[onset::Candidate]) -> Vec<usize> {
+    let (mics, srcs, p, dec_x) = (t.mics, &t.srcs, t.p, &t.dec_x);
+    let sr = dec_x.sr;
+    (0..cands_a.len())
+        .filter(|&k| {
+            let tc = cands_a[k].time;
+            srcs.iter().any(|(i, d)| {
+                source_motion(&mics[*i], &d.samples, sr).iter().any(|&ts| {
+                    (ts - tc).abs() <= p.coincide_ms / 1000.0 + 1e-9
+                        && hit_level(&d.samples, sr, mics[*i].kind.expect("checked above"), ts, p)
+                            > hit_level(&dec_x.samples, sr, XKind::Tom, tc, p)
+                })
+            })
+        })
+        .collect()
+}
+
+/// The pass-2 evidence on every re-detected candidate, and with the switch on the drop of the kept bleed candidates.
+/// Returns the dropped candidates' indexes.
+fn drop_candidates(cands: &mut [onset::Candidate], marks: &[CrossMark], rule: bool) -> Vec<usize> {
+    let mut dropped: Vec<usize> = Vec::new();
+    for (j, c) in cands.iter_mut().enumerate() {
+        c.cross_lead_ms = marks[j].lead_ms.map(|l| l as f32);
+        c.cross_ratio_db = marks[j].ratio_db.map(|r| r as f32);
+        if rule && marks[j].bleed && c.kept {
+            c.kept = false;
+            c.gate = Gate::CrossBleed;
+            dropped.push(j);
+        }
+    }
+    dropped
+}
+
+/// Pass 2's part of the `cross_bleed` record `c`. #296: the records carry the candidate's verdict time (`t_verdict`,
+/// the first-motion walk of pass 2) next to the grid time, and the KEPT candidates are recorded too.
+fn record_pass2(
+    c: &mut Value,
+    cands: &[onset::Candidate],
+    cand_motion: &[f64],
+    marks: &[CrossMark],
+    dropped: &[usize],
+    inherited: &[f64],
+    pairs2: &Value,
+) {
+    let dropped_rec: Vec<Value> = dropped
+        .iter()
+        .map(|&j| {
+            json!({"t": cands[j].time, "t_verdict": cand_motion[j], "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db})
+        })
+        .collect();
+    let kept_rec: Vec<Value> = cands
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.kept)
+        .map(|(j, c)| {
+            json!({"t": c.time, "t_verdict": cand_motion[j], "lead_ms": marks[j].lead_ms, "ratio_db": marks[j].ratio_db})
+        })
+        .collect();
+    c["survive"] = json!(0);
+    c["dropped"] = json!(dropped_rec);
+    c["kept"] = json!(kept_rec);
+    // #296: the events the inherit rule dropped on the final placement, their stored times.
+    c["inherited"] = json!(inherited);
+    c["pairs"] = pairs2.clone();
+}
+
+/// Under the project lock: the #96 keys of the hits A6 kept on the re-stored events of `name`.
+fn set_kept_a6_keys(op: &Shared, name: &str, kept_keys: &[(f64, CrossMark)]) {
+    let mut g = lock(op);
+    if let Ok(tr) = g.track_mut(name) {
+        // #103 step 1: the stored events carry the refined times of the analysis, not the
+        // re-detection hit time `h.time`, so the exact-time match missed and the A6
+        // evidence was lost on kept hits (1616 hat FPs with a hat hit inside the A6
+        // window and no keys; package 8 of the detector plan). Nearest kept hit within
+        // 25 ms instead: the refinement shift is a few ms and the detector's grid is
+        // 10 ms, so 25 ms cannot reach the next hit of a dense track.
+        const KEY_MATCH_MS: f64 = 0.025;
+        for e in tr.events.iter_mut().flatten() {
+            let mut best: Option<(f64, CrossMark)> = None;
+            for &(t, m) in kept_keys {
+                let d = (t - e.t).abs();
+                if d <= KEY_MATCH_MS && best.is_none_or(|(bd, _)| d < bd) {
+                    best = Some((d, m));
+                }
+            }
+            if let Some((_, m)) = best {
+                set_a6_keys(e, m);
+            }
+        }
+    }
+    g.mark_dirty();
 }
 
 #[cfg(test)]
