@@ -238,7 +238,7 @@ use Effect::{App, Doc, Files, Read};
 use Run::{Poll, Progress, Quick};
 use Surface::{Agent, Selftest, Window};
 
-/// Every command of the app, in the order of the Tauri handler lists.
+/// Every command of the app, in the order of the Tauri handler list.
 pub static REGISTRY: &[CommandSpec] = &[
     // ---- the app
     cmd(

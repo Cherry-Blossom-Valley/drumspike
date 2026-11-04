@@ -1,9 +1,10 @@
 //! P4-5 step 1: the command registry (`src/api.rs`) against the Tauri wrappers
 //! (`apps/desktop/src-tauri/src/*.rs`, read as text) and against real answers.
 //!
-//! * every command in a `generate_handler!` list has a row, and every row is in a list (the debug
-//!   list holds the `Selftest` rows, the release list every other row);
-//! * every `#[tauri::command]` function is in a list;
+//! * every command in the handler list has a row, and every row is in the list of a build (the
+//!   release build has every row but the `Selftest` rows, the debug build adds them as the extra
+//!   arguments of the `command_handler!` macro);
+//! * every `#[tauri::command]` function is in the debug list;
 //! * the arguments of a row are the parameters of its wrapper (without `State`, `AppHandle` and the
 //!   `progress` channel), and a wrapper with a multi-word parameter has `rename_all = "snake_case"`
 //!   (the wire names are the registry's);
@@ -24,24 +25,38 @@ fn tauri_src() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/src")
 }
 
-/// The names in the `generate_handler![...]` blocks: (release, debug).
+/// The command list of each build: (release, debug). `lib.rs` has one `generate_handler![...]` list
+/// inside the `command_handler!` macro; each `fn handler()` adds the names of its
+/// `command_handler![...]` call, and the `cfg` line above it names the build.
 fn handler_lists(lib: &str) -> (BTreeSet<String>, BTreeSet<String>) {
-    let mut lists = Vec::new();
-    let mut rest = lib;
-    while let Some(i) = rest.find("generate_handler![") {
-        rest = &rest[i + "generate_handler![".len()..];
-        let end = rest.find(']').unwrap();
-        let names: BTreeSet<String> = rest[..end]
-            .split(',')
+    fn names(list: &str) -> BTreeSet<String> {
+        list.split(',')
             .map(|s| s.trim().rsplit("::").next().unwrap().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        lists.push(names);
-        rest = &rest[end..];
+            // `$($extra)*` is the macro argument, not a command
+            .filter(|s| !s.is_empty() && !s.starts_with('$'))
+            .collect()
     }
-    assert_eq!(lists.len(), 2, "a release and a debug handler list");
-    let (a, b) = (lists.remove(0), lists.remove(0));
-    if b.len() >= a.len() { (a, b) } else { (b, a) }
+    fn list_after<'a>(text: &'a str, open: &str) -> &'a str {
+        let start = text.find(open).unwrap_or_else(|| panic!("no {open}")) + open.len();
+        &text[start..start + text[start..].find(']').unwrap()]
+    }
+    assert_eq!(lib.matches("generate_handler![").count(), 1, "one handler list");
+    let common = names(list_after(lib, "generate_handler!["));
+    let (mut release, mut debug) = (None, None);
+    let mut rest = lib;
+    while let Some(i) = rest.find("fn handler()") {
+        let cfg = rest[..i].trim_end().rsplit('\n').next().unwrap().trim();
+        rest = &rest[i + "fn handler()".len()..];
+        let mut all = common.clone();
+        all.extend(names(list_after(rest, "command_handler![")));
+        let slot = match cfg {
+            "#[cfg(not(debug_assertions))]" => &mut release,
+            "#[cfg(debug_assertions)]" => &mut debug,
+            other => panic!("fn handler() under {other:?}"),
+        };
+        assert!(slot.replace(all).is_none(), "two handlers for one build");
+    }
+    (release.expect("a release handler"), debug.expect("a debug handler"))
 }
 
 /// A wrapper: its parameters (name, type text) and whether the attribute renames to `snake_case`.
@@ -186,8 +201,15 @@ fn the_arguments_of_a_row_are_the_parameters_of_its_wrapper() {
 #[test]
 fn the_check_can_fail() {
     // a handler list without a row and a row without a handler would both show up as a set difference
-    let (r, _) = handler_lists("generate_handler![a, b::c] generate_handler![a, b::c, d]");
-    assert_eq!(r.len(), 2);
+    let lib = "macro_rules! command_handler { ($($extra:tt)*) => { \
+               tauri::generate_handler![a, b::c, $($extra)*] }; }
+#[cfg(not(debug_assertions))]
+fn handler() { command_handler![] }
+#[cfg(debug_assertions)]
+fn handler() { command_handler![d, e::f] }";
+    let (r, d) = handler_lists(lib);
+    assert_eq!(r, ["a", "c"].map(String::from).into());
+    assert_eq!(d, ["a", "c", "d", "f"].map(String::from).into());
     assert_ne!(r, registry_names(false));
     assert!(find("events_edit").is_some() && find("nope").is_none());
     assert!(REGISTRY.iter().any(|c| matches!(c.run, Run::Poll(_))));
