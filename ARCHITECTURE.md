@@ -47,7 +47,7 @@ export step reads the marks.
 | `dsp` | Shared filter and statistics primitives: `Biquad`, `band_sections`, `band_peak_db`, `band_level_db`, `broadband_peak_db`, `percentile`, `np_percentile`, `median`, half-up `ms_to_samples`, the dB floor policies `amp_db_add` and `amp_db_max`. |
 | `detect` | Detection per track: `features` (spectral flux), `onset` (candidates), `peaks` (thresholds), `nmfd`, `resample`. |
 | `detect::attribution`, `tom_bleed`, `cross_bleed`, `flam` | Per-hit ownership and the special-case rules. |
-| `refine` | Moves a coarse onset to the first sample of the attack. `RefineRule` v1 to v7 (v7 is current). |
+| `refine::{reference, reach, walk, edge, track}` | Moves a coarse onset to the first sample of the attack, one module per mechanism. `RefineRule` v1 to v7 (v7 is current). `refine` re-exports every public item. |
 | `analyze`, `backend` | Orchestrate detection for one track; detector backends. |
 | `velocity` | Peak dB to MIDI velocity 1 to 127. |
 | `role` | The instrument a track records and its MIDI notes. |
