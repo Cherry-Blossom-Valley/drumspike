@@ -9,42 +9,42 @@ use crate::pyops::py_int;
 /// How far after the coarse time the reach rule looks for the attack (seconds). The DSP
 /// detector gives the frame before the attack, 6 to 15 ms early (P4-11b verifier notes), and
 /// the reference's rule window ends 10 ms after its anchor.
-pub const REACH_S: f64 = 0.020;
+pub(crate) const REACH_S: f64 = 0.020;
 /// The stretch before the rule window whose maximum is the floor of the reach test (seconds).
-pub const FLOOR_S: f64 = 0.010;
+pub(crate) const FLOOR_S: f64 = 0.010;
 /// The rule window holds no attack when the reach after it is at least this many times louder
 /// than the window's maximum ...
-pub const REACH_GAIN: f32 = 2.0;
+pub(crate) const REACH_GAIN: f32 = 2.0;
 /// ... and the window's maximum (without its last [`EDGE_S`]) is at most this many times the
 /// floor before it (about 10 dB: a real floor varies by 6 to 7 dB between two 10 ms
 /// stretches), or the reference gave the coarse time back, ...
-pub const FLOOR_RATIO: f32 = 3.0;
+pub(crate) const FLOOR_RATIO: f32 = 3.0;
 /// ... or the window's maximum is this many times (about 30 dB) under the attack that follows:
 /// no first motion of that hit. A quieter event 12 to 20 dB under the hit (a grace note,
 /// bleed) stays the hit's onset.
-pub const DEEP_RATIO: f32 = 30.0;
+pub(crate) const DEEP_RATIO: f32 = 30.0;
 /// The end of the rule window that the floor test leaves out (seconds): an attack that starts
 /// there is cut by the window, and its anchor was a ripple of the floor.
-pub const EDGE_S: f64 = 0.001;
+pub(crate) const EDGE_S: f64 = 0.001;
 /// The tail test: the stretch before the rule window that must already hold the 25 % level
 /// for a crossing before the anchor to count as the previous hit's tail (seconds), ...
 pub const TAIL_S: f64 = 0.005;
 /// ... and the previous coarse hit lies at most this far (seconds) before the rule window: the
 /// tail belongs to an earlier hit (sixteenths at 100 BPM), not to the hit's own body ...
-pub const TAIL_PREV_S: f64 = 0.150;
+pub(crate) const TAIL_PREV_S: f64 = 0.150;
 /// ... and does not rise there: the envelope's mean over its second half is at most this much
 /// (dB) above the first half's (a snare tail decays by under 1 dB in 5 ms, a slow attack rises
 /// by several dB), ...
-pub const TAIL_RISE_DB: f64 = 3.0;
+pub(crate) const TAIL_RISE_DB: f64 = 3.0;
 /// ... and the envelope falls by at least this much (dB) from the crossing to its lowest
 /// point before the steepest rise (the trough between the tail and the attack).
-pub const TROUGH_DB: f64 = 0.5;
+pub(crate) const TROUGH_DB: f64 = 0.5;
 /// A reference crossing less than this before the foot of the attack the reach found (seconds)
 /// is that attack's start, cut by the rule window's end: the reference stands.
-pub const REACH_GAP_S: f64 = 0.002;
+pub(crate) const REACH_GAP_S: f64 = 0.002;
 /// The foot of that attack: walking back from its start while the maximum of the last this
 /// many seconds stays above the floor's maximum.
-pub const FOOT_S: f64 = 0.00025;
+pub(crate) const FOOT_S: f64 = 0.00025;
 
 /// What the reach rule did with a hit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,7 +120,7 @@ fn tail_fix(x: &[f32], rs: &RuleState, prev: Option<f64>, srf: f64) -> Option<f6
 /// `t0` stays and the hit is flagged [`ReachStep::Unresolved`]. Everywhere else the result is
 /// the reference's, bit for bit; `rise` is always the reference's.
 #[must_use]
-pub fn refine_reach(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWindow) -> Refined {
+pub(crate) fn refine_reach(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWindow) -> Refined {
     let srf = f64::from(sr);
     let d = refine_detail(x, t0, sr, neighbors, win);
     let kept = Refined {

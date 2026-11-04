@@ -16,7 +16,7 @@ pub enum RefineRule {
     /// Projects analysed before P4-12 carry no version and run this rule.
     #[default]
     Reference,
-    /// Version 2 (P4-12 stage 1): [`refine_reach`], the reference with the reach and the tail fix.
+    /// Version 2 (P4-12 stage 1): [`refine_reach`](super::reach::refine_reach), the reference with the reach and the tail fix.
     Reach,
     /// Version 3 (P4-12 stage 2): [`refine_first_motion`], version 2 and then the back-track to
     /// the first motion of the hit.
@@ -24,9 +24,9 @@ pub enum RefineRule {
     /// Version 4 (#101): [`RefineRule::FirstMotion`] with the foot taken one step stricter. The
     /// back-track's first sample over its threshold is the first sample that leaves the floor, or
     /// later; the foot is the last floor-level sample before it ([`foot_strict`](super::walk::foot_strict)). The strict foot
-    /// moves at most [`FM_STRICT_MAX_S`](super::FM_STRICT_MAX_S) before the version 3 foot, else the version 3 foot stays.
+    /// moves at most [`FM_STRICT_MAX_S`](super::walk::FM_STRICT_MAX_S) before the version 3 foot, else the version 3 foot stays.
     Foot,
-    /// Version 5 (#127): [`RefineRule::Foot`] with the strict foot's move capped at [`FOOT5_MAX_SAMPLES`](super::FOOT5_MAX_SAMPLES)
+    /// Version 5 (#127): [`RefineRule::Foot`] with the strict foot's move capped at [`FOOT5_MAX_SAMPLES`](super::walk::FOOT5_MAX_SAMPLES)
     /// samples before the version 3 foot (the foot moves to the cap).
     FootCapped,
     /// Version 6 (#293, #294): the version 3 foot (no strict foot, no lead-in), then the first steep edge after it
@@ -34,8 +34,8 @@ pub enum RefineRule {
     /// the attack's first steep rise.
     Edge,
     /// Version 7 (#321): [`RefineRule::Edge`] whose last walk-back to the line follows what the engineer sees: back over
-    /// the samples that stand visibly off the line ([`VIS_TAIL_PCT`](super::VIS_TAIL_PCT) of the hit's peak) with the edge's sign, when that
-    /// walk reaches the line within [`VIS_TAIL_MAX_S`](super::VIS_TAIL_MAX_S) ([`EdgeTail::Visible`]); else version 6's walk. Version 6 judged the tail against the line noise and took at most 4 samples:
+    /// the samples that stand visibly off the line ([`VIS_TAIL_PCT`](super::edge::VIS_TAIL_PCT) of the hit's peak) with the edge's sign, when that
+    /// walk reaches the line within [`VIS_TAIL_MAX_S`](super::edge::VIS_TAIL_MAX_S) ([`EdgeTail::Visible`]); else version 6's walk. Version 6 judged the tail against the line noise and took at most 4 samples:
     /// on a nearly silent kick line it walked onto invisible steps (2 to 3 samples early), on a snare line with hi-hat
     /// bleed it stopped inside the slow drift (2 to 7 samples late).
     Visible,
@@ -75,7 +75,7 @@ impl RefineRule {
     }
 }
 
-/// Refinement version 3 (P4-12 stage 2, [`RefineRule::FirstMotion`]): [`refine_reach`], then the
+/// Refinement version 3 (P4-12 stage 2, [`RefineRule::FirstMotion`]): [`refine_reach`](super::reach::refine_reach), then the
 /// back-track [`first_motion`](super::first_motion) from its time. `rise` and the reach step are version 2's; a hit
 /// moves only earlier, and only where the back-track finds the foot of its attack.
 #[must_use]
@@ -85,7 +85,7 @@ pub fn refine_first_motion(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: 
 
 /// [`refine_first_motion`] with another back-track peak margin (P4-31).
 #[must_use]
-pub fn refine_first_motion_peak(
+pub(crate) fn refine_first_motion_peak(
     x: &[f32],
     t0: f64,
     sr: u32,
@@ -123,7 +123,7 @@ fn refine_back_peak(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineW
     }
 }
 
-/// [`refine_reach`] or [`refine_sr`], as `rule` says.
+/// [`refine_reach`](super::reach::refine_reach) or [`refine_sr`], as `rule` says.
 #[must_use]
 pub fn refine_rule(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWindow, rule: RefineRule) -> Refined {
     refine_rule_peak(x, t0, sr, neighbors, win, rule, FM_PEAK_DB)
@@ -170,7 +170,7 @@ pub fn refine_track_rule(x: &[f32], sr: u32, coarse: &[f64], win: RefineWindow, 
 
 /// [`refine_track_rule`] with the back-track peak margin `peak_db` (P4-31).
 #[must_use]
-pub fn refine_track_rule_peak(
+pub(crate) fn refine_track_rule_peak(
     x: &[f32],
     sr: u32,
     coarse: &[f64],

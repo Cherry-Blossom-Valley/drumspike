@@ -1,7 +1,13 @@
 use std::sync::atomic::Ordering;
 
-use super::edge::edge_foot;
-use super::walk::{BackTune, LEAD_IN, first_motion_traced, floor_before, foot_strict, samples};
+use super::edge::{EdgeTail, edge_foot};
+use super::reach::refine_reach;
+use super::reference::{convolve_same, hilbert_env, log_envelope};
+use super::track::refine_first_motion_peak;
+use super::walk::{
+    BackTune, FM_SPAN_S, FM_STRICT_MAX_S, FootCap, FootTune, LEAD_IN, Overrun, first_motion_peak, first_motion_traced,
+    floor_before, foot_strict, samples,
+};
 use super::*;
 use crate::velocity::{VelocityMap, velocity_map};
 

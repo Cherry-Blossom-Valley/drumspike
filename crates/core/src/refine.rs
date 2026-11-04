@@ -4,7 +4,7 @@
 //!
 //! 1. Cut `[t0 + lo - 20 ms, t0 + hi + 20 ms)`: the search window [`RefineWindow`]
 //!    (default `-2..+12` ms, P2-9) plus 20 ms margin on each side.
-//! 2. Hilbert envelope of the cut ([`hilbert_env`]: FFT analytic signal, no approximation),
+//! 2. Hilbert envelope of the cut ([`hilbert_env`](reference::hilbert_env): FFT analytic signal, no approximation),
 //!    smoothed with a 0.2 ms moving average (`np.convolve(..., mode="same")`), in dB.
 //! 3. Rise over 0.5 ms; the anchor `k` is the steepest rise in `[t0 + lo, t0 + hi)`, the
 //!    search window clipped at the midpoints towards the neighbouring coarse hits.
@@ -24,7 +24,8 @@
 //!
 //! One module per mechanism: `reference` (version 1, above), `reach` (version 2), `walk` (the first-motion back-track of
 //! versions 3 to 5), `edge` (the steep edge of versions 6 and 7) and `track` (the [`RefineRule`] record, its dispatch
-//! and the entry points for a track). Every public item keeps its path `refine::<name>`.
+//! and the entry points for a track). The items callers outside the crate use keep their path `refine::<name>`;
+//! the tuning constants and stage helpers are `pub(crate)` and reached through their mechanism module (R8b).
 
 mod edge;
 mod reach;
@@ -32,27 +33,15 @@ mod reference;
 mod track;
 mod walk;
 
-pub use edge::{
-    EDGE_GUARD_DB, EDGE_LOCAL_S, EDGE_NOISE_S, EDGE_RISE_DB, EDGE_RISE_S, EDGE_SPAN_S, EDGE_TAIL_NOISE,
-    EDGE_TAIL_SAMPLES, EDGE_TOP_DB, EdgeTail, VIS_TAIL_MAX_S, VIS_TAIL_PCT, VIS_TAIL_TOL_PCT,
-};
-pub use reach::{
-    DEEP_RATIO, EDGE_S, FLOOR_RATIO, FLOOR_S, FOOT_S, REACH_GAIN, REACH_GAP_S, REACH_S, ReachStep, TAIL_PREV_S,
-    TAIL_RISE_DB, TAIL_S, TROUGH_DB, refine_reach,
-};
-pub use reference::{
-    MARGIN_S, PRE_S, RISE_DB, RISE_S, RULE_POST_S, RULE_PRE_S, RefineWindow, SMOOTH_S, convolve_same, hilbert_env,
-    log_envelope, refine_sr,
-};
+pub use reach::{ReachStep, TAIL_S};
+pub use reference::{RefineWindow, refine_sr};
+pub(crate) use track::refine_track_rule_peak;
 pub use track::{
-    Hit, RefineRule, recompute_velocities, refine_first_motion, refine_first_motion_peak, refine_rule,
-    refine_rule_peak, refine_track, refine_track_rule, refine_track_rule_peak,
+    Hit, RefineRule, recompute_velocities, refine_first_motion, refine_rule, refine_rule_peak, refine_track,
+    refine_track_rule,
 };
-pub use walk::{
-    BackStep, FM_BLOCK_S, FM_FLOOR_DB, FM_FLOOR_S, FM_FLOOR_SKIP_S, FM_GAP_S, FM_LONG_DB, FM_LONG_END_S, FM_LONG_S,
-    FM_PEAK_DB, FM_PEAK_S, FM_SPAN_S, FM_STRICT_MAX_S, FOOT5_MAX_SAMPLES, FootCap, FootTune, LEAD_IN_MAX_S, LeadTrace,
-    Overrun, first_motion, first_motion_mid, first_motion_peak, first_motion_trace,
-};
+pub(crate) use walk::first_motion_mid;
+pub use walk::{BackStep, FM_PEAK_DB, LeadTrace, first_motion, first_motion_trace};
 
 /// A refined hit: the onset (seconds), `rise_db`, what the reach rule did and what the back-track did.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -61,7 +50,7 @@ pub struct Refined {
     pub t: f64,
     /// `rise_db` of the refinement that gave `t`.
     pub rise: Option<f64>,
-    /// The step of [`refine_reach`] ([`ReachStep::Kept`] for the reference rule).
+    /// The step of [`refine_reach`](reach::refine_reach) ([`ReachStep::Kept`] for the reference rule).
     pub step: ReachStep,
     /// The step of the back-track ([`BackStep::Off`] for versions 1 and 2).
     pub back: BackStep,

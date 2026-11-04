@@ -25,44 +25,44 @@ pub enum BackStep {
 }
 
 /// The peak window of the back-track: the attack's peak lies in `s .. s + FM_PEAK_S` (seconds).
-pub const FM_PEAK_S: f64 = 0.005;
+pub(crate) const FM_PEAK_S: f64 = 0.005;
 /// The back-track's threshold under that peak (dB). P4-11 table A8 started at 30 dB; the kit
 /// measured 33 dB closer to the first motion (`aud`) with the same spread in noise and bleed.
 pub const FM_PEAK_DB: f64 = 33.0;
 /// The floor before the hit: the median of the [`FM_BLOCK_S`] block maxima in the
 /// `FM_FLOOR_S` before the hit, ...
-pub const FM_FLOOR_S: f64 = 0.060;
+pub(crate) const FM_FLOOR_S: f64 = 0.060;
 /// ... without the last `FM_FLOOR_SKIP_S` (the attack's own rise and bleed; the same 60 to 12 ms window as the floor
 /// of `lead_in_check`, #273), ...
-pub const FM_FLOOR_SKIP_S: f64 = 0.012;
+pub(crate) const FM_FLOOR_SKIP_S: f64 = 0.012;
 /// ... in blocks of this length (seconds) ...
-pub const FM_BLOCK_S: f64 = 0.001;
+pub(crate) const FM_BLOCK_S: f64 = 0.001;
 /// ... and the threshold is at least this much (dB) above it: noise and bleed before the hit set
 /// the threshold, not only the peak.
-pub const FM_FLOOR_DB: f64 = 6.0;
+pub(crate) const FM_FLOOR_DB: f64 = 6.0;
 /// A run of samples under the threshold this long (seconds) ends the attack; a shorter gap (a
 /// zero crossing) does not.
-pub const FM_GAP_S: f64 = 0.0005;
+pub(crate) const FM_GAP_S: f64 = 0.0005;
 /// The walk never goes further back than this (seconds), nor past the midpoint to the previous
 /// coarse hit.
-pub const FM_SPAN_S: f64 = 0.010;
+pub(crate) const FM_SPAN_S: f64 = 0.010;
 /// A walk longer than this (seconds) ...
-pub const FM_LONG_S: f64 = 0.005;
+pub(crate) const FM_LONG_S: f64 = 0.005;
 /// ... is taken only when the stretch it crosses (without its last `FM_LONG_END_S`) holds a level
 /// within [`FM_LONG_DB`] of the first `FM_LONG_END_S` at the version 2 time: that time sat on the
 /// hit's body. Else the stretch is a separate earlier event.
-pub const FM_LONG_END_S: f64 = 0.0005;
+pub(crate) const FM_LONG_END_S: f64 = 0.0005;
 /// See [`FM_LONG_END_S`] (dB).
-pub const FM_LONG_DB: f64 = 6.0;
+pub(crate) const FM_LONG_DB: f64 = 6.0;
 /// The version 4 guard (#101): the strict foot may move at most this far (seconds) before the
 /// version 3 foot. Further than that, the version 3 foot stays.
-pub const FM_STRICT_MAX_S: f64 = 0.00025;
+pub(crate) const FM_STRICT_MAX_S: f64 = 0.00025;
 /// Version 5 (#127): the strict foot moves at most this many samples before the version 3 foot, at every rate.
-pub const FOOT5_MAX_SAMPLES: i64 = 3;
+pub(crate) const FOOT5_MAX_SAMPLES: i64 = 3;
 
 /// How the strict foot's move before the version 3 foot is capped: the cap and what a move beyond it does.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FootTune {
+pub(crate) struct FootTune {
     /// The largest move before the version 3 foot.
     pub cap: FootCap,
     /// What a move beyond the cap does.
@@ -71,7 +71,7 @@ pub struct FootTune {
 
 /// The cap of [`FootTune`]: a time (version 4) or a count of samples at every rate (version 5).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FootCap {
+pub(crate) enum FootCap {
     /// Seconds, rounded to samples at the rate.
     Seconds(f64),
     /// Samples, at every rate.
@@ -80,7 +80,7 @@ pub enum FootCap {
 
 /// What a strict foot beyond its cap does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Overrun {
+pub(crate) enum Overrun {
     /// The version 3 foot stays (version 4 and the version 5 default).
     Keep,
     /// The foot moves to the cap, the cap's last sample before the version 3 foot.
@@ -176,7 +176,7 @@ pub fn first_motion(x: &[f32], s: i64, sr: u32, t0: f64, prev: Option<f64>, next
 
 /// [`first_motion`] with another peak margin `peak_db` in place of [`FM_PEAK_DB`] (P4-31: kick tracks).
 #[must_use]
-pub fn first_motion_peak(
+pub(crate) fn first_motion_peak(
     x: &[f32],
     s: i64,
     sr: u32,
@@ -209,7 +209,13 @@ pub(super) fn back_track(
 /// previous hit), `next_mid` the peak window (the midpoint to the next hit). P4-13 stage B: the flam rule walks from a
 /// second stroke's re-rise with `prev_mid` at the dip after the first stroke (`tools/onset_guard.py` `walk`).
 #[must_use]
-pub fn first_motion_mid(x: &[f32], s: i64, sr: u32, prev_mid: Option<i64>, next_mid: Option<i64>) -> (i64, BackStep) {
+pub(crate) fn first_motion_mid(
+    x: &[f32],
+    s: i64,
+    sr: u32,
+    prev_mid: Option<i64>,
+    next_mid: Option<i64>,
+) -> (i64, BackStep) {
     first_motion_traced(x, s, sr, prev_mid, next_mid, BackTune::peak(FM_PEAK_DB)).0
 }
 
@@ -241,7 +247,7 @@ pub(super) static LEAD_IN: AtomicBool = AtomicBool::new(false);
 
 /// The lead-in goes back at most this far (seconds) from the walk's foot: an attack's rise is about a millisecond. A
 /// longer rise over the floor is bleed or an earlier stroke, not the hit.
-pub const LEAD_IN_MAX_S: f64 = 0.0015;
+pub(crate) const LEAD_IN_MAX_S: f64 = 0.0015;
 
 /// What the walk of one hit decided (#239): the floor and threshold it used, the foot of the walk and the foot after
 /// the lead-in (equal when the lead-in did not join a rise).

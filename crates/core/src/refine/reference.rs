@@ -43,19 +43,19 @@ impl Default for RefineWindow {
 }
 
 /// Margin on each side of the search window for the envelope (seconds).
-pub const MARGIN_S: f64 = 0.02;
+pub(crate) const MARGIN_S: f64 = 0.02;
 /// Envelope smoothing length (seconds).
-pub const SMOOTH_S: f64 = 0.0002;
+pub(crate) const SMOOTH_S: f64 = 0.0002;
 /// The rise is measured over this span (seconds).
-pub const RISE_S: f64 = 0.0005;
+pub(crate) const RISE_S: f64 = 0.0005;
 /// The walk-back stops where the envelope is within this many dB of the pre-attack level.
-pub const RISE_DB: f64 = 3.0;
+pub(crate) const RISE_DB: f64 = 3.0;
 /// Pre-attack window length before `k - 2 * rise` (seconds).
-pub const PRE_S: f64 = 0.001;
+pub(crate) const PRE_S: f64 = 0.001;
 /// 25 % rule window before the anchor (seconds).
-pub const RULE_PRE_S: f64 = 0.0015;
+pub(crate) const RULE_PRE_S: f64 = 0.0015;
 /// 25 % rule window after the anchor (seconds).
-pub const RULE_POST_S: f64 = 0.010;
+pub(crate) const RULE_POST_S: f64 = 0.010;
 
 thread_local! {
     static PLANNER: RefCell<FftPlanner<f64>> = RefCell::new(FftPlanner::new());
@@ -77,7 +77,7 @@ fn plan(n: usize, inverse: bool) -> Arc<dyn Fft<f64>> {
 /// is scaled by `1/n` like `np.fft.ifft`; the magnitude is `hypot(re, im)` like `np.abs`.
 /// An empty input gives an empty envelope.
 #[must_use]
-pub fn hilbert_env(seg: &[f64]) -> Vec<f64> {
+pub(crate) fn hilbert_env(seg: &[f64]) -> Vec<f64> {
     let n = seg.len();
     if n == 0 {
         return Vec::new();
@@ -108,7 +108,7 @@ pub fn hilbert_env(seg: &[f64]) -> Vec<f64> {
 /// operands when `v` is longer). Products are summed in ascending index of the longer
 /// operand.
 #[must_use]
-pub fn convolve_same(a: &[f64], v: &[f64]) -> Vec<f64> {
+pub(crate) fn convolve_same(a: &[f64], v: &[f64]) -> Vec<f64> {
     let (long, short) = if a.len() >= v.len() { (a, v) } else { (v, a) };
     let (n, k) = (long.len(), short.len());
     if n == 0 || k == 0 {
@@ -132,7 +132,7 @@ pub fn convolve_same(a: &[f64], v: &[f64]) -> Vec<f64> {
 /// The smoothed log envelope of `engine._refine_sr` for one cut: `20 * log10(env + 1e-9)`
 /// after the `k_sm`-point moving average. Exposed for the parity harness and tests.
 #[must_use]
-pub fn log_envelope(seg: &[f64], k_sm: usize) -> Vec<f64> {
+pub(crate) fn log_envelope(seg: &[f64], k_sm: usize) -> Vec<f64> {
     let env = hilbert_env(seg);
     let kernel = vec![1.0 / k_sm as f64; k_sm];
     convolve_same(&env, &kernel).into_iter().map(amp_db_add).collect()
@@ -143,7 +143,7 @@ pub fn log_envelope(seg: &[f64], k_sm: usize) -> Vec<f64> {
 /// search window). `neighbors` are the other coarse hits the caller knows (`analyze_track`
 /// passes the previous and the next one); the nearest below and above `t0` clip the search
 /// window `win` at the midpoints. This is refinement version 1 ([`RefineRule::Reference`](super::RefineRule::Reference)),
-/// pinned to the frozen references; [`refine_reach`](super::refine_reach) builds on it.
+/// pinned to the frozen references; [`refine_reach`](super::reach::refine_reach) builds on it.
 #[must_use]
 pub fn refine_sr(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWindow) -> (f64, Option<f64>) {
     let d = refine_detail(x, t0, sr, neighbors, win);

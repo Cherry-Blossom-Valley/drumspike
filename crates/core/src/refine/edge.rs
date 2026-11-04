@@ -7,7 +7,7 @@ use super::walk::samples;
 /// How the steep edge's foot walks back to the line (#321): [`EdgeTail::Noise`] is version 6, [`EdgeTail::Visible`]
 /// version 7.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EdgeTail {
+pub(crate) enum EdgeTail {
     /// Up to [`EDGE_TAIL_SAMPLES`] samples while the level rises by more than [`EDGE_TAIL_NOISE`] times the line noise.
     Noise,
     /// Back while the sample stands more than [`VIS_TAIL_PCT`] of the hit's peak off the line, keeps the edge's sign
@@ -19,44 +19,44 @@ pub enum EdgeTail {
 
 /// Version 6 (#293, #294): the rise window of the steep edge (seconds): the signal must rise by [`EDGE_RISE_DB`] under
 /// the peak within it.
-pub const EDGE_RISE_S: f64 = 0.0001;
+pub(crate) const EDGE_RISE_S: f64 = 0.0001;
 /// The rise that makes a steep edge (dB under the peak of the hit, within [`EDGE_RISE_S`]).
-pub const EDGE_RISE_DB: f64 = 18.0;
+pub(crate) const EDGE_RISE_DB: f64 = 18.0;
 /// The search stops where the level reaches this much (dB) under the hit's peak: the hit's body began without an
 /// edge that counts, and the walk's foot stays.
-pub const EDGE_TOP_DB: f64 = 12.0;
+pub(crate) const EDGE_TOP_DB: f64 = 12.0;
 /// The guard: the level between the walk's foot and the edge (without the edge's own ramp-up) must stay this much
 /// (dB) under the level the edge reaches within [`EDGE_LOCAL_S`]. A ripple inside the body of a soft hit, or a slow
 /// attack without a clear jump, is no edge: the search goes on. Fitted on the owner's hand-placed hits (#293, kick
 /// 1..332 and snare 1..168 of one session): 9 to 15 dB give the same result; 12 is the middle.
-pub const EDGE_GUARD_DB: f64 = 12.0;
+pub(crate) const EDGE_GUARD_DB: f64 = 12.0;
 /// The window after an edge's foot whose peak the guard compares against (seconds): the level this edge reaches, not
 /// a louder swing later in the hit.
-pub const EDGE_LOCAL_S: f64 = 0.0005;
+pub(crate) const EDGE_LOCAL_S: f64 = 0.0005;
 /// The tail of the foot's walk-back: up to this many samples more while the level still rises by more than
 /// [`EDGE_TAIL_NOISE`] times the line noise, so the hit sits at the foot of the steep rise. Fitted on the owner's
 /// hand-placed hits (#293): 4 and 6 give the same result; 4 is the smaller.
-pub const EDGE_TAIL_SAMPLES: i64 = 4;
+pub(crate) const EDGE_TAIL_SAMPLES: i64 = 4;
 /// The tail's step: a rise of more than this many times the line noise (the median `|x[n] - x[n-1]|` over the
 /// [`EDGE_NOISE_S`] before the walk's foot) still belongs to the hit. Fitted on the owner's hand-placed hits (#293):
 /// 2 took the slow drift of a kick's line for the hit (1 to 3 samples early); 8 does not.
-pub const EDGE_TAIL_NOISE: f64 = 8.0;
+pub(crate) const EDGE_TAIL_NOISE: f64 = 8.0;
 /// Version 7 (#321): a sample stands visibly off the line when `|x|` exceeds this share of the hit's peak (percent).
 /// Fitted on the owner's hand-placed hits (kick 1..332, snare 1..168 of one session; even hits chose, odd hits
 /// checked): 2 and 3 give the same held-out result; 2 is the smaller.
-pub const VIS_TAIL_PCT: f64 = 2.0;
+pub(crate) const VIS_TAIL_PCT: f64 = 2.0;
 /// Version 7: the walk-back to the line goes on while the sample before is no more than this share of the peak
 /// (percent) larger than the current one: the small wiggles of a snare's drift do not stop it.
-pub const VIS_TAIL_TOL_PCT: f64 = 0.5;
+pub(crate) const VIS_TAIL_TOL_PCT: f64 = 0.5;
 /// Version 7: the longest walk-back to the line (seconds) from the edge's first rising sample. A drift the engineer
 /// counts as part of the stroke is short: on the owner's hand-placed hits every limit from 6 samples (0.125 ms at
 /// 48 kHz) up keeps the whole gain. A longer stretch off the line is the line itself (a slow wave or an offset of a tom
 /// line, Sessions A and B): with a 1 ms limit the walk followed it down to a zero crossing up to 1 ms before the stroke.
-pub const VIS_TAIL_MAX_S: f64 = 0.000_15;
+pub(crate) const VIS_TAIL_MAX_S: f64 = 0.000_15;
 /// The stretch before the walk's foot that measures the line noise (seconds).
-pub const EDGE_NOISE_S: f64 = 0.002;
+pub(crate) const EDGE_NOISE_S: f64 = 0.002;
 /// How far after the walk's foot the edge is looked for (seconds).
-pub const EDGE_SPAN_S: f64 = 0.005;
+pub(crate) const EDGE_SPAN_S: f64 = 0.005;
 
 /// The foot of the first steep edge after the walk's foot (version 6, #293, #294). The walk stops at the first sample
 /// over its threshold, which lies on the bleed or the soft drift that often precedes a snare or kick attack; the
