@@ -32,6 +32,7 @@ use crate::learn_score::{
     Centre, candidate_frames, effective_threshold, example_times, frame_values, learn_key, read_learn, score_all,
     solid_frames, write_learn,
 };
+use crate::policy::{Mark, clear, is_marked, mark};
 use crate::registry::{Shared, lock};
 use crate::sensitivity::{scale_of, sensitivity_of};
 
@@ -43,9 +44,6 @@ pub const REACH: f64 = 0.030;
 /// picked one (`edit::merge_edited`), so a picked hit is either replaced by the edited one or
 /// judged by its own score.
 pub const EDITED_REACH: f64 = MERGE_WINDOW;
-
-/// The event key of a hit the filter takes out (`"filtered": true`).
-pub const FILTERED: &str = "filtered";
 
 fn within(t: f64, times: &[f64], reach: f64) -> bool {
     times.iter().any(|&e| (e - t).abs() <= reach + 1e-9)
@@ -486,21 +484,21 @@ pub fn forced_this(det: &[(f64, u8)], cands: &[Value], this: &[f64]) -> Vec<f64>
 #[must_use]
 pub fn refilter_merge(current: &[Value], base: &[Value], forced: &[Value], dropped: &[f64]) -> Vec<Value> {
     let t = |e: &Value| e.get("t").and_then(Value::as_f64).unwrap_or(0.0);
-    let filtered = |e: &Value| e.get(FILTERED) == Some(&Value::Bool(true));
+    let filtered = |e: &Value| is_marked(e, Mark::Filtered);
     let mut out: Vec<Value> = Vec::new();
     for e in current {
         let Some(m) = e.as_object() else { continue };
         let mut e = e.clone();
         if is_kept(m) {
             if let Some(o) = e.as_object_mut() {
-                o.shift_remove(FILTERED);
+                clear(o, Mark::Filtered);
             }
             out.push(e);
             continue;
         }
         // P4-13 stage B: a flam hit has no base hit (the pick has no second stroke): it stays, and follows its first
         // stroke below
-        if e.get("flam") == Some(&Value::Bool(true)) {
+        if is_marked(&e, Mark::Flam) {
             out.push(e);
             continue;
         }
@@ -509,16 +507,14 @@ pub fn refilter_merge(current: &[Value], base: &[Value], forced: &[Value], dropp
         };
         if let Some(o) = e.as_object_mut() {
             if filtered(b) {
-                o.insert(FILTERED.into(), Value::Bool(true));
+                mark(o, Mark::Filtered);
             } else {
-                o.shift_remove(FILTERED);
+                clear(o, Mark::Filtered);
             }
         }
         out.push(e);
     }
-    let learned = base
-        .iter()
-        .filter(|b| b.get("learned") == Some(&Value::Bool(true)) && !filtered(b));
+    let learned = base.iter().filter(|b| is_marked(*b, Mark::Learned) && !filtered(b));
     for f in forced.iter().chain(learned) {
         if within(t(f), dropped, MERGE_WINDOW) {
             continue;
@@ -566,7 +562,7 @@ pub fn note_dropped(learn: &mut Map<String, Value>, old: &[Value], new: &[Value]
         let (Some(m), Some(x)) = (e.as_object(), t(e)) else {
             continue;
         };
-        let learn_hit = m.get("learned") == Some(&Value::Bool(true)) || within(x, &this, REACH);
+        let learn_hit = is_marked(m, Mark::Learned) || within(x, &this, REACH);
         if !learn_hit || within(x, &new_times, MERGE_WINDOW) || within(x, &list, 1e-6) {
             continue;
         }
@@ -608,22 +604,21 @@ const FLAM_REACH: f64 = 0.050;
 /// stroke, the hit before it within [`FLAM_REACH`], is filtered; a flam hit with no first stroke stays in.
 fn follow_first_stroke(hits: &mut [Value]) {
     let t = |e: &Value| e.get("t").and_then(Value::as_f64).unwrap_or(0.0);
-    let on = |e: &Value, k: &str| e.get(k) == Some(&Value::Bool(true));
     for i in 0..hits.len() {
-        if !on(&hits[i], "flam") || hits[i].as_object().is_some_and(is_kept) {
+        if !is_marked(&hits[i], Mark::Flam) || hits[i].as_object().is_some_and(is_kept) {
             continue;
         }
         let first_out = hits[..i]
             .iter()
             .rev()
-            .find(|h| !on(h, "flam"))
+            .find(|h| !is_marked(*h, Mark::Flam))
             .filter(|h| t(&hits[i]) - t(h) <= FLAM_REACH)
-            .is_some_and(|h| on(h, FILTERED));
+            .is_some_and(|h| is_marked(h, Mark::Filtered));
         if let Some(o) = hits[i].as_object_mut() {
             if first_out {
-                o.insert(FILTERED.into(), Value::Bool(true));
+                mark(o, Mark::Filtered);
             } else {
-                o.shift_remove(FILTERED);
+                clear(o, Mark::Filtered);
             }
         }
     }
