@@ -173,6 +173,151 @@ mod tests {
         assert!(tempo_out(&mk(json!({"bleed": true}))));
     }
 
+    /// R4 (refactor 3.2): the serialized events of the pure mark writers, pinned byte for byte
+    /// before the mark keys move behind `Mark`. Key order and absent against `false` are part of
+    /// the output (a `shift_remove` keeps the order of the other keys, an `insert` of a present
+    /// key keeps its place).
+    mod golden {
+        use super::*;
+        use drumspike_core::detect::flam::Second;
+
+        fn lines<T: serde::Serialize>(events: &[T]) -> String {
+            events
+                .iter()
+                .map(|e| serde_json::to_string(e).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        fn event(v: Value) -> Event {
+            serde_json::from_value(v).unwrap()
+        }
+
+        /// sr 1000: a loud burst around 0.1 s (-6 dB), silence everywhere else.
+        fn signal() -> Vec<f32> {
+            let mut x = vec![0.0f32; 2000];
+            for s in &mut x[95..106] {
+                *s = 0.5;
+            }
+            x
+        }
+
+        fn cut_inputs() -> Vec<Value> {
+            vec![
+                json!({"t": 0.1, "v": 90, "bleed": true}),
+                json!({"t": 0.5, "v": 40, "cut": false, "z": 1}),
+                json!({"t": 0.6, "v": 40, "z": 2, "cut": true, "y": 3}),
+                json!({"t": 0.7, "v": 40, "added": true, "cut": true, "w": 0}),
+                json!({"t": 0.8, "v": 40, "cut": true, "keep": true, "q": 1}),
+                json!({"t": 0.9, "v": 40, "orig": 0.85, "cut": true, "filtered": false}),
+                json!({"t": 1.0, "v": 40, "deactivated": true, "cut": "yes"}),
+            ]
+        }
+
+        const CUT_ON: &str = r#"{"t":0.1,"v":90,"bleed":true}
+{"t":0.5,"v":40,"cut":true,"z":1}
+{"t":0.6,"v":40,"z":2,"cut":true,"y":3}
+{"t":0.7,"v":40,"added":true,"w":0}
+{"t":0.8,"v":40,"keep":true,"q":1}
+{"t":0.9,"v":40,"orig":0.85,"filtered":false}
+{"t":1.0,"v":40,"deactivated":true,"cut":true}"#;
+
+        const CUT_OFF: &str = r#"{"t":0.1,"v":90,"bleed":true}
+{"t":0.5,"v":40,"z":1}
+{"t":0.6,"v":40,"z":2,"y":3}
+{"t":0.7,"v":40,"added":true,"w":0}
+{"t":0.8,"v":40,"keep":true,"q":1}
+{"t":0.9,"v":40,"orig":0.85,"filtered":false}
+{"t":1.0,"v":40,"deactivated":true}"#;
+
+        #[test]
+        fn the_loudness_cut_writes_the_same_events() {
+            let x = signal();
+            for (cut, want) in [(Some(-30.0), CUT_ON), (None, CUT_OFF)] {
+                let mut evs: Vec<Event> = cut_inputs().into_iter().map(event).collect();
+                crate::histogram::mark_cut_events(&mut evs, &x, 1000, cut);
+                assert_eq!(lines(&evs), want, "typed events, cut {cut:?}");
+                let mut vals = cut_inputs();
+                crate::histogram::mark_cut_values(&mut vals, &x, 1000, cut).unwrap();
+                assert_eq!(lines(&vals), want, "JSON events, cut {cut:?}");
+            }
+        }
+
+        fn second(t: f64, bleed: bool) -> Second {
+            Second {
+                t,
+                first: t - 0.03,
+                gap_ms: 30.0,
+                rise_db: 12.0,
+                level_db: 0.0,
+                bleed,
+                dip: 0,
+            }
+        }
+
+        const FLAMS: &str = r#"{"t":1.0,"v":100}
+{"t":1.03,"v":127,"flam":true}
+{"t":1.5,"v":100,"flam":false,"z":1}
+{"t":1.53,"v":20,"flam":true,"cut":true}
+{"t":1.7,"v":90,"orig":1.69,"flam":true}
+{"t":1.805,"v":30,"cut":true}"#;
+
+        #[test]
+        fn the_flam_rule_writes_the_same_events() {
+            let sr = 48_000;
+            let mut x = vec![0.0f32; sr as usize * 2];
+            x[(1.03 * f64::from(sr)) as usize + 10] = 0.5;
+            x[(1.53 * f64::from(sr)) as usize + 10] = 0.001;
+            let events = vec![
+                Event::new(1.0, 100),
+                event(json!({"t": 1.2, "v": 90, "flam": true})),
+                event(json!({"t": 1.5, "v": 100, "flam": false, "z": 1})),
+                event(json!({"t": 1.7, "v": 90, "orig": 1.69, "flam": true})),
+                event(json!({"t": 1.805, "v": 30, "cut": true})),
+            ];
+            let found = [
+                second(1.03, false),
+                second(1.53, false),
+                second(1.6, true),
+                second(1.8, false),
+            ];
+            let params = json!({"vel_lo_db": -40.0, "vel_hi_db": -6.0, "vel_cut_db": -50.0});
+            let (out, _) = crate::flam::with_flams(&events, &found, &x, sr, params.as_object(), 0.010);
+            assert_eq!(lines(&out), FLAMS);
+        }
+
+        const REFILTER: &str = r#"{"t":0.5,"orig":0.45,"z":1}
+{"t":1.0,"v":80,"filtered":true,"y":2}
+{"t":1.02,"v":60,"flam":true,"q":3,"filtered":true}
+{"t":2.0,"v":80,"y":4}
+{"t":2.02,"v":60,"flam":true}
+{"t":3.0,"v":70,"learned":true}
+{"t":4.0,"v":70,"forced":true}
+{"t":5.0,"v":50,"flam":true,"keep":true}"#;
+
+        #[test]
+        fn the_learn_refilter_writes_the_same_events() {
+            let current = [
+                json!({"t": 0.5, "orig": 0.45, "filtered": true, "z": 1}),
+                json!({"t": 1.0, "v": 80, "filtered": false, "y": 2}),
+                json!({"t": 1.02, "v": 60, "flam": true, "q": 3}),
+                json!({"t": 2.0, "v": 80, "filtered": true, "y": 4}),
+                json!({"t": 2.02, "v": 60, "flam": true, "filtered": true}),
+                json!({"t": 2.5, "v": 50}),
+                json!({"t": 5.0, "v": 50, "flam": true, "filtered": true, "keep": true}),
+            ];
+            let base = [
+                json!({"t": 1.0, "filtered": true}),
+                json!({"t": 2.0, "filtered": false}),
+                json!({"t": 3.0, "v": 70, "learned": true}),
+                json!({"t": 3.5, "v": 70, "learned": true, "filtered": true}),
+            ];
+            let forced = [json!({"t": 4.0, "v": 70, "forced": true})];
+            let out = crate::learn_filter::refilter_merge(&current, &base, &forced, &[]);
+            assert_eq!(lines(&out), REFILTER);
+        }
+    }
+
     /// #242: the user's overrides win over the automatic marks, `deactivated` over `keep`.
     #[test]
     fn is_out_follows_the_user_override() {
