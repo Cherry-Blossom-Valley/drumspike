@@ -128,7 +128,7 @@ One word means one thing. The code name is the place to look.
 | Hit | A refined time plus velocity plus class. Five stage types exist today. | `refine::Hit`, `backend::DetectedHit`, ... |
 | Event | A hit as stored in the project, with marks in `extra`. | `project::document::Event` |
 | Velocity | Peak dB mapped to MIDI 1..127. | `velocity` |
-| Mark | A per-event key: cut, bleed, filtered, keep, deactivated, flam, learned, roll, rescue, stage8. | `policy` |
+| Mark | A per-event key: cut, bleed, filtered, keep, deactivated, flam, learned, roll, rescue, stage8. | `policy::Mark` |
 | Bleed | Sound of one drum on another drum's mic. | `detect::attribution` |
 | Cross bleed | Session rule: arrival time and level decide which mic owns a kick, snare or tom hit. | `detect::cross_bleed`, app step |
 | Tom bleed | Session rule: transfer gain between tom mics, versions 0-5. | `detect::tom_bleed` |

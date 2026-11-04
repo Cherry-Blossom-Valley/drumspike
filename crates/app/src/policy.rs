@@ -1,6 +1,7 @@
 //! R16 (#40): the event policy in one place. One predicate decides "leaves the output"
-//! (`is_out` / [`event_out`]), one decides "kept" ([`is_kept`]), and the tempo exception is
-//! named ([`TEMPO_KEEPS_FILTERED`]). The duplicates call this module: `export::is_cut`
+//! (`is_out` / [`event_out`]), one decides "kept" ([`is_kept`]), and the tempo rule is
+//! named ([`TEMPO_USES_ONE_PREDICATE`]). R4: [`Mark`] names the mark keys, and [`is_marked`],
+//! [`mark`] and [`clear`] read and write them. The duplicates call this module: `export::is_cut`
 //! (MIDI, spikes, Export All, the click), `histogram::event_cut` (flam, loudness),
 //! `confidence::is_out`, `tempo::is_cut`. The page's copies (`isManual`, `isKept`, `hgIsCut`,
 //! `lnGreyHit` in static/app.js) and the Rust side read one truth table

@@ -30,6 +30,10 @@ two sides cannot drift.
   `is_kept`). The duplicates call it: `export::is_cut` (MIDI, spikes, Export All, the click
   in transport.rs), `histogram::event_cut` (flam, loudness), `confidence::is_out`, and
   `tempo::is_cut`.
+- The mark keys live in one place too: `policy::Mark` names them, and `is_marked`, `mark`
+  and `clear` read and write them on a typed event, a JSON event or its object. A mark is
+  on only as `true`; `clear` removes the key and keeps the order of the others. Each call
+  site keeps its own predicate around these three.
 - R1 — a kept hit is never cut, bled or filtered. Rust enforces by stripping the marks on
   edit (edit.rs); the page enforces by the `!isManual` guards. One policy, two mechanisms;
   the truth table proves they agree (a kept hit that still carries a mark is a state no
