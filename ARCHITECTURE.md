@@ -49,11 +49,12 @@ The module paths are the API (`drumspike_core::refine::refine_sr`). An item no c
 | `pyops` | Python-compatible rounding (half-even `py_round`, `int()` truncation); the frozen engine needs it. |
 | `dsp` | Shared filter and statistics primitives: `Biquad`, `band_sections`, `band_peak_db`, `band_level_db`, `broadband_peak_db`, `percentile`, `np_percentile`, `median`, half-up `ms_to_samples`, the dB floor policies `amp_db_add` and `amp_db_max`. |
 | `detect` | Detection per track: `features` (spectral flux), `onset` (candidates), `peaks` (thresholds), `nmfd`, `resample`. |
-| `detect::attribution`, `tom_bleed`, `cross_bleed`, `flam` | Per-hit ownership and the special-case rules. |
-| `refine::{reference, reach, walk, edge, track}` | Moves a coarse onset to the first sample of the attack, one module per mechanism. `RefineRule` v1 to v7 (v7 is current). `refine` re-exports the items callers outside core use; the tuning constants are crate-internal. |
+| `detect::attribution`, `tom_bleed`, `cross_bleed`, `flam` | Per-hit ownership and the special-case rules. In `cross_bleed`, the crate-internal `cross_bleed_with(mics, &CrossBleedContext)` runs the rule as phase functions (measured rows, session verdict, inheritance, learn, judge); the public entry points wrap it. |
+| `refine::{reference, reach, walk, edge, track}` | Moves a coarse onset to the first sample of the attack, one module per mechanism. `RefineRule` v1 to v7 (v7 is current); `BackTune` (crate-internal) is the parameter object of the back-track. `refine/track.rs` holds the dispatch to a rule; `refine.rs` re-exports the items callers outside core use; the tuning constants are crate-internal. |
+| `rules` | `RuleSet` (the onset `DeltaRule` and the tempo `TempoRule`) and `ResearchOverrides` (the typed A1, A5 and A6 numbers). `from_lookup` holds the `DRUMSPIKE_*` names and their parse; the caller resolves them once and passes them down. |
 | `analyze`, `backend` | Orchestrate detection for one track; detector backends. |
 | `velocity` | Peak dB to MIDI velocity 1 to 127. |
-| `role` | The instrument a track records and its MIDI notes. |
+| `role` | The one `Role` type, its two note tables (`detector_note`, `default_note`), `role_note`, `class_note`, `role_classes`, and the role suggestion from audio. |
 | `similarity`, `agreement` | Learn similarity score; detector and refine agreement. |
 | `project` | The `.drumspike` document: tracks, sources, events, save, relink. Format 1 stays loadable. |
 | `tempo`, `tempo_detect` | Tempo map and the inference of a map from kick and snare hits. |
@@ -67,7 +68,7 @@ The module paths are the API (`drumspike_core::refine::refine_sr`). An item no c
 | `lib` | `Service` and `ServiceConfig`: the composition root and its environment pins. |
 | `api` | `REGISTRY`: one row per command (name, arguments, result, effect, surface). |
 | `call`, `command_policy` | Command name to handler (one map built from each module's `HANDLERS`); which surface may call what. |
-| `policy` | Event marks and their precedence (`is_marked`, `mark`, `clear`, `is_manual`). |
+| `policy` | Event marks and their precedence: `Mark` with `is_marked`, `mark` and `clear`, and `is_manual`. Every mark read or write goes through `Mark`. |
 | `jobs`, `copyjob` | The analysis job over all tracks, and copy jobs. |
 | `steps` | `AnalysisStep` and the fixed list of session steps the analysis job runs (not the re-pick or Reanalyze selection). |
 | `cross_bleed`, `ghost_gate`, `tom_bleed`, `flam` | Session steps: gather the microphones, call core, apply marks. |
@@ -80,9 +81,9 @@ The module paths are the API (`drumspike_core::refine::refine_sr`). An item no c
 | Path | What it holds |
 |---|---|
 | `crates/devtools` | Developer binaries, not shipped: `service_tool` (the app engine from a shell), `parity`, `bench`, `cache_tool`, `ds-bridge` (the test bridge for the page). |
-| `apps/desktop/src-tauri` | The Tauri shell: command wrappers, `menu` (`items`: ids and `SPEC`; `keymap`: the key table of `static/keymap.js`; `build`: the bar and `dispatch`; `sync`: the live menu follows the page; `macos`: `AppKit` parts), window, open, about, self-test. |
-| `static/` | The editor page, classic scripts: `state`, `persist`, `edit`, `transport`, `render`, `session`, `backend`, `lanes-gl`, `tiles-worker`, `keymap`, `help`, `shell`, and `app.js` (feature code and boot). |
-| `tests/` | pytest: the page against `ds-bridge` (`e2e_app/`), the frozen references (`golden/`), parity and export tests, the JS coverage gate. |
+| `apps/desktop/src-tauri` | The Tauri shell: command wrappers (one handler list macro in `lib.rs`; debug builds add the self-test commands), `menu` (`items`: ids and `SPEC`; `keymap`: the key table of `static/keymap.js`; `build`: the bar and `dispatch`; `sync`: the live menu follows the page; `macos`: `AppKit` parts), window, open, about, self-test. |
+| `static/` | The editor page, classic scripts. Page modules: `state`, `util`, `persist`, `edit`, `transport`, `render`, `session`, `backend`, `lanes-gl`, `tiles-worker`, `keymap`, `help`, `shell`. Feature scripts, one per editor feature: `export`, `addtracks`, `mixer`, `histograms`, `learn`, `layer`, `velocity`, `followstrip`, `tempomap`, `markers`, `wave` (the glue to `lanes-gl`), `commands`, `files`, `review`, `analysis`, `plugins`, `status`, `inspector`, `tracks`. `app.js` keeps boot, the global handlers and the wiring. `index.html` gives the load order. |
+| `tests/` | pytest: the page against `ds-bridge` (`e2e_app/`), the frozen references (`golden/`) and their regression `test_golden.py`, export tests, the JS coverage gate (`jscov.py`). |
 | `tools/` | Research and check scripts; `identity.py` is the before and after gate of the refactoring. |
 | `docs/` | User guide, developer guide, release notes, ADRs, design notes, engineering plan. |
 
@@ -96,7 +97,10 @@ rule marked "target" is not true yet; the refactoring plan names the step that m
 - Core code does not take `serde_json::Value` as a domain type. Detection functions take samples
   and parameters and return data. Target (R1, R2): a few uses remain in `backend`, `layer` and `project::source`.
 - Core reads no `DRUMSPIKE_*` detection variable. The environment is read at the edges:
-  `ServiceConfig::from_env` and the devtools binaries. Target (R6): 15 detection names are read in core today.
+  `ServiceConfig::from_env` and the devtools binaries. Partly true since R6 steps 1 and 2: the names and their
+  parse are only in `rules`, and the app passes `RuleSet` and `ResearchOverrides` down. Target: three old entry
+  points (`OnsetParams::for_role`, `detect_onsets`, the `Default` of `CrossBleedParams`) still call
+  `RuleSet::from_env` or `ResearchOverrides::from_env` while they have callers (Parallel Change, contract step open).
 - No module cycle inside core. Holds since R1: `backend` no longer calls `analyze`; the note tables live in `role`.
 - One `Role` type in core (`role::Role`, also `detect::onset::Role`). Holds since R1. The tempo detection keeps its own
   `BeatVoice` (a hi-hat counts as Other there).
@@ -140,8 +144,8 @@ One word means one thing. The code name is the place to look.
 | Re-pick | Recompute cut, tom bleed and flam after a sensitivity change, with the recorded rule versions. | app `histogram` |
 | Reanalyze selection | Detect again inside a time range. Runs no session step. | app `reanalyze` |
 | Learn This / Forget This | Mark a pattern; similar hits are added or removed. | app `learn*`, core `similarity` |
-| Rule version | The version of a rule used for an analysis. Recorded so old projects reproduce. | `RefineRule`, `RULE_VERSION` |
-| Pin | A forced rule version from the environment (tests, research). | `ServiceConfig` fields |
+| Rule version | The version of a rule used for an analysis. Recorded so old projects reproduce. | `RefineRule`, `RULE_VERSION`, `rules::RuleSet` |
+| Pin | A forced rule version from the environment (tests, research). | `ServiceConfig` fields, `rules::RuleSet::from_lookup` |
 | Golden | Frozen reference outputs from the retired Python engine. | `tests/golden/` |
 | Identity snapshot | Before and after hash of all outputs of the engine. | `tools/identity.py` |
 | ENST | Public drum dataset used for the detection decision number. | `tools/eval/enst*.py` |
@@ -172,9 +176,9 @@ checks the end of stages 8, 9, 10 and 11.
 ## Gates that guard the structure
 
 - Unit tests per module (`cargo test --workspace`), the page tests against `ds-bridge`
-  (`tests/e2e_app`), per-file JS coverage of at least 85 percent.
-- The frozen references in `tests/golden/` and the parity binaries prove that detection, velocity
-  and MIDI bytes are exact.
+  (`tests/e2e_app`), JS coverage of at least 70 percent per file of `JS_FILES` (`tests/jscov.py`).
+- The frozen references in `tests/golden/`, checked by `tests/test_golden.py` through the `parity`
+  binary, prove that detection, velocity and MIDI bytes are exact.
 - The ENST gate (`tools/eval/enst_gate.py`) and the real-session check guard the detection rates.
 - The identity snapshot (`tools/identity.py snapshot` and `compare`) hashes events with all
   marks, times, velocities and exported bytes for the golden corpus, ENST items and the real

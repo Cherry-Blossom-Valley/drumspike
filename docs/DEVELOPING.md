@@ -244,10 +244,13 @@ to G4 (`-m e2e_app` alone). There is no Python coverage gate any more: no produc
    the real-session check, the tests of source-audio safety and of project format 1 loading, and
    `tools/check_private.py`.
 4. JS coverage is gated per file, not as a total. The floor is 70 % of the lines of each file
-   (`JS_FAIL_UNDER` in `tests/jscov.py`), measured by `tests/e2e_app`. The files are the 11 of
-   `JS_FILES`: `app.js`, `state.js`, `persist.js`, `edit.js`, `transport.js`, `render.js`,
-   `session.js`, `backend.js`, `lanes-gl.js`, `tiles-worker.js` and `keymap.js`. A new script in
-   `static/` enters `JS_FILES` at the same floor.
+   (`JS_FAIL_UNDER` in `tests/jscov.py`), measured by `tests/e2e_app`. The files are the 31 of
+   `JS_FILES`: the boot script `app.js`, the page modules `state.js`, `util.js`, `persist.js`, `edit.js`,
+   `transport.js`, `render.js`, `session.js`, `backend.js`, `lanes-gl.js`, `tiles-worker.js` and
+   `keymap.js`, and the feature scripts `export.js`, `addtracks.js`, `mixer.js`, `histograms.js`,
+   `learn.js`, `layer.js`, `velocity.js`, `followstrip.js`, `tempomap.js`, `markers.js`, `wave.js`,
+   `commands.js`, `files.js`, `review.js`, `analysis.js`, `plugins.js`, `status.js`,
+   `inspector.js` and `tracks.js`. A new script in `static/` enters `JS_FILES` at the same floor.
 5. Every public Tauri command and every core entry point has a test.
 6. A script in `tools/` has a test or a documented command.
 

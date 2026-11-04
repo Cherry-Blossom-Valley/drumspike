@@ -17,13 +17,13 @@ tools, the parity checks of the Rust binaries) and the research tools in `tools/
 
 | Path | Content |
 |---|---|
-| `static/` | the editor: `app.js` (search it, do not read it whole), `backend.js` (object `B`: one method per app operation), `lanes-gl.js` (WebGL2 wave lanes), `tiles-worker.js` (tile textures; the page holds no PCM), `keymap.js`, `shell.js`, `index.html`, `style.css` |
-| `crates/core/` | `drumspike-core`: audio I/O, peaks, `refine.rs` (attack refinement), `analyze.rs`, `velocity.rs`, `midi/`, `spike.rs`, `project/`, `tempo_detect.rs`, `transport/`, `detect/` (features, onset, attribution, tom bleed, roll, flam, kick rescue) |
-| `crates/app/` | `drumspike-app`: the app commands as plain functions (no Tauri dependency): tracks, analysis jobs, export, transport, Learn, review queue, agent API (`api.rs`, `call.rs`, `cli.rs`, `mcp.rs`; `docs/agent-api.md`), relink, import, autosave |
+| `static/` | the editor, classic scripts in the load order of `index.html`: page modules (`state.js`, `util.js`, `persist.js`, `edit.js`, `transport.js`, `render.js`, `session.js`, `backend.js` (object `B`: one method per app operation), `lanes-gl.js` (WebGL2 wave lanes), `tiles-worker.js` (tile textures; the page holds no PCM), `keymap.js`, `help.js`, `shell.js`), one script per feature (`export.js`, `addtracks.js`, `mixer.js`, `histograms.js`, `learn.js`, `layer.js`, `velocity.js`, `followstrip.js`, `tempomap.js`, `markers.js`, `wave.js`, `commands.js`, `files.js`, `review.js`, `analysis.js`, `plugins.js`, `status.js`, `inspector.js`, `tracks.js`), and `app.js` (boot, global handlers, wiring), `index.html`, `style.css` |
+| `crates/core/` | `drumspike-core`: audio I/O (`io/`), peaks, `dsp.rs` (filter and statistics primitives), `role.rs` (the one `Role`), `rules.rs` (`RuleSet`, `ResearchOverrides`), `refine/` (attack refinement: `reference`, `reach`, `walk`, `edge`, `track`), `analyze.rs`, `backend.rs`, `velocity.rs`, `midi.rs`, `spike.rs`, `project/`, `tempo_detect.rs`, `transport/`, `detect/` (`features`, `onset`, `peaks`, `nmfd`, `resample`, `attribution`, `cross_bleed`, `tom_bleed`, `flam`) |
+| `crates/app/` | `drumspike-app`: the app commands as plain functions (no Tauri dependency): tracks, analysis jobs (`jobs.rs`, session steps in `steps.rs`), event marks (`policy.rs`), export, transport, Learn, review queue, agent API (`api.rs`, `call.rs` with the per-module `HANDLERS`, `cli.rs`, `mcp.rs`; `docs/agent-api.md`), relink, import, autosave |
 | `crates/devtools/` | developer tools, not product code: `parity`, `bench`, `cache_tool`, `service_tool`, `ds-bridge` (test bridge, debug only) |
-| `apps/desktop/` | the Tauri shell (`src-tauri/`: menu, window, open, about, self-test), scripts (`build-dmg.sh`, `release.sh`, `self-test.sh`, `gen_third_party.py`), `THIRD_PARTY.md`, `selftest/` scenarios |
-| `tests/` | pytest: `e2e_app/` (the page against `ds-bridge`), `jscov.py` (JS coverage gate), `frozen.py` and `golden/` (frozen references), parity and export tests |
-| `tools/` | `parity/` checks, `check_exports.py` (independent export checker), `release/cut.py` (release cut), `media/` (guide pictures, recordings, explainers), `eval/` and research tools (each has a test or a documented command) |
+| `apps/desktop/` | the Tauri shell (`src-tauri/`: one handler list macro in `lib.rs`, `menu/` (`items`, `keymap`, `build`, `sync`, `macos`), window, open, about, self-test), scripts (`build-dmg.sh`, `release.sh`, `self-test.sh`, `gen_third_party.py`), `THIRD_PARTY.md`, `selftest/` scenarios |
+| `tests/` | pytest: `e2e_app/` (the page against `ds-bridge`), `jscov.py` (JS coverage gate), `frozen.py`, `golden/` (frozen references) and `test_golden.py` (the golden regression), export tests |
+| `tools/` | `identity.py` (identity snapshot), `fn_lengths.py` (function lengths), `parity/` (corpus and session builders), `check_exports.py` (independent export checker), `release/cut.py` (release cut), `media/` (guide pictures, recordings, explainers), `eval/` and research tools (each has a test or a documented command) |
 | `site/` | the landing page (`index.html`, `assets/`; `tools/media/build_site.py` builds it for a sub-path) |
 | `docs/` | `guide/` (user guide), `DEVELOPING.md`, `RELEASING.md`, `release-notes/`, `adr/`, `design/`, `agent-api.md`, `product/` |
 
@@ -84,10 +84,13 @@ release builds are in `docs/DEVELOPING.md`, sections 4, 7 and 8.
    the real-session check, the tests of source-audio safety and of project format 1 loading, and
    `tools/check_private.py`.
 4. JS coverage is gated per file, not as a total. The floor is 70 % of the lines of each file
-   (`JS_FAIL_UNDER` in `tests/jscov.py`), measured by `tests/e2e_app`. The files are the 11 of
-   `JS_FILES`: `app.js`, `state.js`, `persist.js`, `edit.js`, `transport.js`, `render.js`,
-   `session.js`, `backend.js`, `lanes-gl.js`, `tiles-worker.js` and `keymap.js`. A new script in
-   `static/` enters `JS_FILES` at the same floor.
+   (`JS_FAIL_UNDER` in `tests/jscov.py`), measured by `tests/e2e_app`. The files are the 31 of
+   `JS_FILES`: the boot script `app.js`, the page modules `state.js`, `util.js`, `persist.js`, `edit.js`,
+   `transport.js`, `render.js`, `session.js`, `backend.js`, `lanes-gl.js`, `tiles-worker.js` and
+   `keymap.js`, and the feature scripts `export.js`, `addtracks.js`, `mixer.js`, `histograms.js`,
+   `learn.js`, `layer.js`, `velocity.js`, `followstrip.js`, `tempomap.js`, `markers.js`, `wave.js`,
+   `commands.js`, `files.js`, `review.js`, `analysis.js`, `plugins.js`, `status.js`,
+   `inspector.js` and `tracks.js`. A new script in `static/` enters `JS_FILES` at the same floor.
 5. Every public Tauri command and every core entry point has a test.
 6. A script in `tools/` has a test or a documented command.
 

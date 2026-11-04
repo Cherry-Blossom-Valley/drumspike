@@ -7,7 +7,7 @@ results are frozen in `tests/golden/`. The desktop app uses this crate through `
 ## Public API: the module paths
 
 The module paths are the API. Callers write `drumspike_core::<module>::<item>`, for example
-`drumspike_core::refine::refine_sr` or `drumspike_core::detect::onset::Role`.
+`drumspike_core::refine::refine_sr` or `drumspike_core::role::Role` (also re-exported as `detect::onset::Role`).
 
 - An item that no code outside the crate uses is `pub(crate)` (R8b). "Outside" means `crates/app`,
   `crates/devtools`, `apps/desktop/src-tauri`, and the crate's own `src/bin` and `tests/` targets.
@@ -28,11 +28,12 @@ The module paths are the API. Callers write `drumspike_core::<module>::<item>`, 
 | `peaks` | Min/max/RMS pyramid: `compute_peaks`. `Track` with the tile API `peaks(level, from, to)` and `samples(from, to)` |
 | `cache` | The binary peak cache `Analysis/<track>/peaks.bin`: `PeakCache`, `build_cache`, `cache_is_current` |
 | `velocity` | `velocity_map`, `VelocityMap` (level in dB to MIDI velocity) |
-| `refine` | Onset refinement: `refine_sr`, `refine_track`, `refine_rule`, the rule versions `RefineRule`, the search window `RefineWindow` (default -2..+12 ms around the detector time, P2-9), `recompute_velocities` |
+| `refine` | Onset refinement: `refine_sr`, `refine_track`, `refine_rule`, the rule versions `RefineRule`, the search window `RefineWindow` (default -2..+12 ms around the detector time, P2-9), `recompute_velocities`. `refine.rs` only re-exports; the code is in one private module per mechanism: `reference` (version 1, the search window), `reach` (version 2), `walk` (the first-motion back-track of versions 3 to 7), `edge` (the steep edge of versions 6 and 7), `track` (`RefineRule`, the dispatch to a rule, one hit and a whole track) |
 | `analyze`, `backend` | One track from samples to events: `analyze_track`, `analyze_detected`, `AnalyzeParams`; the detector backends `DspBackend`, `ExternalDetector`, `DetectorBackend` |
-| `detect` | Detection: `detect::{resample, features, peaks, onset, nmfd, attribution, cross_bleed, tom_bleed, flam}`. `resample` (polyphase FIR to 44.1 kHz), `onset` (the DSP detector, `detect_onsets`), `attribution` (bleed and resonance flags), `cross_bleed`, `tom_bleed` and `flam` (the session rules the app steps call) |
+| `detect` | Detection: `detect::{resample, features, peaks, onset, nmfd, attribution, cross_bleed, tom_bleed, flam}`. `resample` (polyphase FIR to 44.1 kHz), `onset` (the DSP detector, `detect_onsets`), `attribution` (bleed and resonance flags), `cross_bleed`, `tom_bleed` and `flam` (the session rules the app steps call; `cross_bleed` runs as phase functions over one crate-internal `CrossBleedContext`) |
 | `dsp` | Filter and statistics primitives; `FilterKind`, `BandStage` and `median` are public, the rest is crate-internal |
-| `role` | The one `Role` type, `role_note`, `class_note`, `role_classes`, and the role suggestion from audio (`role_from_audio`) |
+| `role` | The one `Role` type (`parse_or_other` at the string edge, two note tables: `detector_note` and `default_note`), `role_note`, `class_note`, `role_classes`, and the role suggestion from audio (`role_from_audio`) |
+| `rules` | The rule versions and research numbers of one analysis: `RuleSet` (`DeltaRule`, `TempoRule`) and `ResearchOverrides` (A1, A5, A6). `from_lookup` holds the `DRUMSPIKE_*` names; the caller resolves them once and passes them down |
 | `similarity`, `agreement` | The Learn similarity score (`score`, `filter_detected`, `auto_threshold`); the detector-refine agreement |
 | `midi` | `export_midi`, `midi_bytes`, `note_events` (24,000 PPQ, same bytes as `engine.export_midi`), `export_multi_midi` |
 | `spike` | Spike WAV export: `spike_signal`, `export_spikes` (one full-scale blip per hit), `export_audio_spikes` |
