@@ -988,3 +988,174 @@ fn the_undo_and_redo_titles_take_the_pages_text() {
             .any(|i| i.id == "undo_history" && i.label == "Undo History\u{2026}" && i.needs_project)
     );
 }
+
+/// R10 (refactor step 4.4): what [`report`] takes from the code and not from the live menu (id, label, kind,
+/// needs project, ready, card, the keys of the row and the accelerator for every preset and typing state), the key
+/// table as parsed, the radio modes, the page-state check marks, the dynamic entries and the known ids. Pinned
+/// before `menu.rs` was split into modules, so the split shows no change. A planned menu change rewrites the file:
+/// `DRUMSPIKE_MENU_SNAPSHOT_WRITE=1 cargo test -p drumspike-desktop --lib the_menu_matches_its_snapshot`.
+fn menu_snapshot() -> Value {
+    let kind = |k: Kind| match k {
+        Kind::Plain => "plain",
+        Kind::Check => "check",
+    };
+    let items: Vec<Value> = SPEC
+        .iter()
+        .map(|it| {
+            let row = key_row(it.id);
+            let accel: serde_json::Map<String, Value> = PRESETS
+                .iter()
+                .map(|p| {
+                    let v = json!({
+                        "menu": accel_of(it.id, p), "shown": shown_accel_of(it.id, p),
+                        "typing": live_accel(it.id, p, true), "not_typing": live_accel(it.id, p, false),
+                    });
+                    ((*p).to_string(), v)
+                })
+                .collect();
+            json!({
+                "id": it.id, "label": it.label, "kind": kind(it.kind), "needs_project": it.needs_project,
+                "ready": it.ready, "card": it.card, "menu_key": row.and_then(|r| r.menu_key.clone()),
+                "page_keys": row.map(|r| r.page_keys.clone()).unwrap_or_default(),
+                "cubase": row.and_then(|r| r.cubase.clone()), "accel": accel, "known": is_known(it.id),
+            })
+        })
+        .collect();
+    let rows: Vec<Value> = keymap()
+        .iter()
+        .map(|r| {
+            json!({"id": r.id, "menu": r.menu, "title": r.title, "menu_key": r.menu_key,
+                "page_keys": r.page_keys, "cubase": r.cubase})
+        })
+        .collect();
+    let modes: Vec<Value> = [
+        ("follow", &FOLLOW_MODES[..]),
+        ("counter", &COUNTER_MODES[..]),
+        ("tab", &TAB_MODES[..]),
+        ("nudge", &NUDGE_MODES[..]),
+        ("height", &HEIGHT_MODES[..]),
+    ]
+    .iter()
+    .map(|(name, m)| json!({"modes": name, "items": m}))
+    .collect();
+    let states = [
+        json!({}),
+        json!({"snap": true, "click": true, "tempoRuler": true, "meterRuler": true, "beatsRuler": true,
+            "markersRuler": true, "grid": true, "velocityLane": true, "otherMics": true, "suspendFollow": true,
+            "stopReturnMode": true, "auditionTab": true, "inspector": true, "learnFilter": true, "infoLine": true,
+            "overview": true, "counter": "samples", "tabMode": "all", "trackHeight": "large", "nudgeValue": "10ms",
+            "follow": "page"}),
+        json!({"snap": false, "click": false, "tempoRuler": false, "meterRuler": false, "beatsRuler": false,
+            "markersRuler": false, "grid": false, "velocityLane": false, "otherMics": false, "suspendFollow": false,
+            "stopReturnMode": false, "auditionTab": false, "inspector": false, "learnFilter": false,
+            "infoLine": false, "overview": false, "counter": "timecode", "tabMode": "active", "trackHeight": "small",
+            "nudgeValue": "1smp", "follow": "off"}),
+        json!({"snap": 1, "counter": "bogus", "tabMode": 2, "trackHeight": "huge", "nudgeValue": null,
+            "follow": "nope"}),
+    ];
+    let checks: Vec<Value> = states
+        .iter()
+        .map(|s| json!({"state": s, "checks": check_states(s)}))
+        .collect();
+    let ids = [
+        "undo",
+        "recent",
+        "recent:0",
+        "recent:9",
+        "recent:clear",
+        "recent:x",
+        "project:0",
+        "project",
+        "follow:2",
+        "follow",
+        "zoom_own:1",
+        "zoom_own:x",
+        "nope",
+        "",
+    ];
+    let known: Vec<Value> = ids.iter().map(|id| json!([id, is_known(id)])).collect();
+    let entries = vec![
+        json!(
+            window_entries(
+                &json!([{"id": "a", "name": "A"}, {"sid": "b"}, {"name": "no id"}]),
+                Some("b")
+            )
+            .iter()
+            .map(|e| json!([e.sid, e.name, e.current]))
+            .collect::<Vec<_>>()
+        ),
+        json!(
+            follow_entries(&json!({"tracks": ["k in", "s top", "t1"], "selected": "s top", "follows": "t1"}))
+                .iter()
+                .map(|e| json!([e.name, e.current]))
+                .collect::<Vec<_>>()
+        ),
+        json!(follow_entries(&json!({"tracks": ["k in"]})).len()),
+        json!(zoom_own_names(&json!({"zoomOwn": ["Verse", 3, "Fill"]}))),
+    ];
+    let constants = vec![
+        json!([
+            RECENT_ID,
+            RECENT_PREFIX,
+            RECENT_CLEAR_ID,
+            RECENT_CLEAR_PAYLOAD,
+            RECENT_MAX
+        ]),
+        json!([
+            WINDOW_ID,
+            PROJECT_PREFIX,
+            PROJECT_ID,
+            FOLLOW_ID,
+            FOLLOW_PREFIX,
+            FOLLOW_TRACK_ID
+        ]),
+        json!([ZOOM_PRESETS_ID, ZOOM_OWN_PREFIX, ZOOM_OWN_ID]),
+        json!(PRESETS),
+        json!(KEY_MODS),
+        json!(["nope", "cubase", "default"].map(preset_or_default)),
+    ];
+    json!({"items": items, "keymap": rows, "modes": modes, "checks": checks, "known": known,
+        "entries": entries, "constants": constants})
+}
+
+/// The snapshot as text: one array element per line, so a diff names the item that changed.
+fn snapshot_text(v: &Value) -> String {
+    let obj = v.as_object().unwrap();
+    let mut out = String::from("{\n");
+    for (n, (k, val)) in obj.iter().enumerate() {
+        let sep = if n + 1 == obj.len() { "" } else { "," };
+        let a = val.as_array().unwrap();
+        out.push_str(&format!("  {}: [\n", json!(k)));
+        for (i, e) in a.iter().enumerate() {
+            out.push_str(&format!("    {e}{}\n", if i + 1 == a.len() { "" } else { "," }));
+        }
+        out.push_str(&format!("  ]{sep}\n"));
+    }
+    out.push_str("}\n");
+    out
+}
+
+#[test]
+fn the_menu_matches_its_snapshot() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/menu/snapshot.json");
+    let now = snapshot_text(&menu_snapshot());
+    if std::env::var_os("DRUMSPIKE_MENU_SNAPSHOT_WRITE").is_some() {
+        std::fs::write(&path, &now).unwrap();
+    }
+    let want = std::fs::read_to_string(&path).unwrap_or_default();
+    let diff: Vec<(usize, &str, &str)> = want
+        .lines()
+        .zip(now.lines())
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(n, (a, b))| (n + 1, a, b))
+        .take(5)
+        .collect();
+    assert!(
+        want == now,
+        "the menu differs from {} ({} vs {} lines); first differing lines: {diff:#?}",
+        path.display(),
+        want.lines().count(),
+        now.lines().count()
+    );
+}
