@@ -66,7 +66,7 @@ The module paths are the API (`drumspike_core::refine::refine_sr`). An item no c
 |---|---|
 | `lib` | `Service` and `ServiceConfig`: the composition root and its environment pins. |
 | `api` | `REGISTRY`: one row per command (name, arguments, result, effect, surface). |
-| `call`, `command_policy` | Command name to handler; which surface may call what. |
+| `call`, `command_policy` | Command name to handler (one map built from each module's `HANDLERS`); which surface may call what. |
 | `policy` | Event marks and their precedence (`is_marked`, `mark`, `clear`, `is_manual`). |
 | `jobs`, `copyjob` | The analysis job over all tracks, and copy jobs. |
 | `steps` | `AnalysisStep` and the fixed list of session steps the analysis job runs (not the re-pick or Reanalyze selection). |
