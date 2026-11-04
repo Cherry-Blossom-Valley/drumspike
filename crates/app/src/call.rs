@@ -2,245 +2,106 @@
 //! command-line tool and the MCP server all call it; the Tauri wrappers call the same `Service` methods.
 //!
 //! * [`run`] runs one command by name with JSON arguments (the names and argument names are those of the Tauri
-//!   wrappers); `None` for a name it does not know (the bridge then tries the transport).
+//!   wrappers); `None` for a name it does not know. R3: one name-to-handler map built from the modules'
+//!   `HANDLERS` slices (the transport's too); a registry row has one handler here or, for the rows only the
+//!   desktop shell answers, none (`every_registry_row_has_exactly_one_handler`).
 //! * [`call`] is the agent entry: it checks the name against the registry (`api`), the arguments against the row
 //!   (required, types, no unknown key), fills the agent defaults (`keep_edited` is true), refuses a command that
 //!   changes the project when the project is open read-only, and gives a progress callback to the commands that
 //!   take a `progress` channel.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::{Map, Value};
 
 use crate::api::{self, Surface};
-use crate::command_policy::{self as policy, arg_i64, arg_str, opt_i64};
+use crate::command_policy as policy;
 use crate::reply::{Channels, Reply};
-use crate::{AppError, ListShape, Progress, Service};
+use crate::{AppError, Progress, Service};
+
+/// The handler of one command: the service, the progress channels, the command name and the JSON arguments.
+pub(crate) type Handler = fn(&Service, &Arc<Channels>, &str, &Value) -> Result<Reply, AppError>;
+
+/// R3: one row of a module's `HANDLERS`: a command name and the function that runs it.
+#[derive(Clone, Copy)]
+pub(crate) struct Route {
+    pub(crate) name: &'static str,
+    pub(crate) run: Handler,
+}
+
+/// The routes of `names`, all to `run` (a module whose dispatcher matches on the name).
+#[must_use]
+pub(crate) const fn routes<const N: usize>(names: [&'static str; N], run: Handler) -> [Route; N] {
+    let mut out = [Route { name: "", run }; N];
+    let mut i = 0;
+    while i < N {
+        out[i].name = names[i];
+        i += 1;
+    }
+    out
+}
+
+/// The reply of a module dispatcher that answers JSON and `None` for a name it does not run (which a name of
+/// its `HANDLERS` never is).
+///
+/// # Errors
+///
+/// The error of the command; a 404 when the dispatcher does not run `cmd`.
+pub(crate) fn json_reply(cmd: &str, r: Option<Result<Value, AppError>>) -> Result<Reply, AppError> {
+    r.unwrap_or_else(|| Err(unknown(cmd))).map(Reply::Json)
+}
+
+fn unknown(cmd: &str) -> AppError {
+    AppError::not_found(format!("unknown command {cmd}"))
+}
+
+/// The handlers of every module; a name is in exactly one of them.
+const HANDLERS: [&[Route]; 20] = [
+    &crate::commands::HANDLERS,
+    &crate::transport::HANDLERS,
+    &crate::shell::HANDLERS,
+    &crate::reanalyze::HANDLERS,
+    &crate::feedback::HANDLERS,
+    &crate::lifecycle::HANDLERS,
+    &crate::import::HANDLERS,
+    &crate::plugins::HANDLERS,
+    &crate::tracks::HANDLERS,
+    &crate::copyjob::HANDLERS,
+    &crate::relink::HANDLERS,
+    &crate::histogram::HANDLERS,
+    &crate::edit::HANDLERS,
+    &crate::learn::HANDLERS,
+    &crate::tempo::HANDLERS,
+    &crate::markers::HANDLERS,
+    &crate::rowheights::HANDLERS,
+    &crate::confidence::HANDLERS,
+    &crate::layer::HANDLERS,
+    &crate::sampler::HANDLERS,
+];
+
+/// Every route of [`run`], in the order of the module list.
+pub(crate) fn all_routes() -> impl Iterator<Item = &'static Route> {
+    HANDLERS.iter().flat_map(|h| h.iter())
+}
+
+/// The name-to-handler map of [`run`]. A name has one route (`every_registry_row_has_exactly_one_handler`); the
+/// first one would win.
+fn table() -> &'static HashMap<&'static str, Handler> {
+    static TABLE: OnceLock<HashMap<&'static str, Handler>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut m = HashMap::new();
+        for r in all_routes() {
+            m.entry(r.name).or_insert(r.run);
+        }
+        m
+    })
+}
 
 /// Run one command with JSON arguments; `None` when `cmd` is not one this function runs.
 pub fn run(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) -> Option<Result<Reply, AppError>> {
-    let s = svc;
-    let json = |r: Result<Value, AppError>| r.map(Reply::Json);
-    if matches!(
-        cmd,
-        "track_set_mix"
-            | "app_info"
-            | "project_open"
-            | "project_get"
-            | "project_list"
-            | "tracks_get"
-            | "events_get"
-            | "events_set"
-            | "peaks_info"
-            | "peaks_tile"
-            | "samples_window"
-            | "track_layer_wave"
-            | "track_sampler_wave"
-            | "analyze_start"
-            | "analyze_status"
-            | "reanalyze_selection"
-            | "export_midi"
-            | "export_spikes"
-            | "export_all"
-            | "velocities_recompute"
-            | "export_existing"
-            | "export_dest_set"
-            | "export_markers_set"
-            | "export_compensate_set"
-            | "export_drag_prepare"
-            | "export_drag_take"
-            | "export_last_get"
-            | "export_last_set"
-            // #164 (part 2 of #153): the feedback gateway (the page previews, this posts)
-            | "feedback_send"
-    ) {
-        return Some(run_direct(svc, channels, cmd, args));
-    }
-    let r = crate::lifecycle::dispatch(s, channels, cmd, args)
-        .or_else(|| crate::import::dispatch(s, cmd, args))
-        .or_else(|| crate::plugins::dispatch(s, cmd, args))
-        .or_else(|| crate::tracks::dispatch(s, channels, cmd, args))
-        .or_else(|| crate::copyjob::dispatch(s, channels, cmd, args))
-        .or_else(|| crate::relink::dispatch(s, channels, cmd, args))
-        .or_else(|| crate::histogram::dispatch(s, cmd, args))
-        .or_else(|| crate::edit::dispatch(s, cmd, args))
-        .or_else(|| crate::learn::dispatch(s, cmd, args))
-        .or_else(|| crate::tempo::dispatch(s, cmd, args))
-        .or_else(|| crate::markers::dispatch(s, cmd, args))
-        .or_else(|| crate::rowheights::dispatch(s, cmd, args))
-        .or_else(|| crate::confidence::dispatch(s, cmd, args))
-        .or_else(|| crate::layer::dispatch(s, cmd, args))
-        .or_else(|| crate::sampler::dispatch(s, cmd, args))?;
-    Some(json(r))
-}
-
-fn run_direct(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) -> Result<Reply, AppError> {
-    let s = svc;
-    let json = |r: Result<Value, AppError>| r.map(Reply::Json);
-    match cmd {
-        "app_info" => Ok(Reply::Json(s.app_info())),
-        "project_open" => json(s.project_open_with(
-            arg_str(args, "path")?,
-            args.get("read_only").and_then(Value::as_bool).unwrap_or(false),
-        )),
-        "project_get" => json(s.project_get(arg_str(args, "sid")?)),
-        "project_list" => Ok(Reply::Json(
-            s.project_list(ListShape::parse(args.get("shape").and_then(Value::as_str))),
-        )),
-        "tracks_get" => json(s.tracks_get(arg_str(args, "sid")?)),
-        "events_get" => json(s.events_get(arg_str(args, "sid")?, arg_str(args, "name")?)),
-        "events_set" => {
-            let events = args.get("events").cloned().unwrap_or(Value::Null);
-            json(s.events_set(arg_str(args, "sid")?, arg_str(args, "name")?, &events))
-        }
-        "peaks_info" => json(s.peaks_info(arg_str(args, "sid")?, arg_str(args, "name")?)),
-        "peaks_tile" => {
-            let level = usize::try_from(arg_i64(args, "level")?).map_err(|_| AppError::bad("level out of range"))?;
-            s.peaks_tile(
-                arg_str(args, "sid")?,
-                arg_str(args, "name")?,
-                level,
-                arg_i64(args, "from")?,
-                arg_i64(args, "to")?,
-            )
-            .map(Reply::Bytes)
-        }
-        "samples_window" => s
-            .samples_window(
-                arg_str(args, "sid")?,
-                arg_str(args, "name")?,
-                arg_i64(args, "start")?,
-                arg_i64(args, "end")?,
-            )
-            .map(Reply::Bytes),
-        // P4-40e: the Layer view's waveforms (the one-shot, the sampler bounce)
-        "track_layer_wave" => s
-            .track_layer_wave(
-                arg_str(args, "sid")?,
-                arg_str(args, "name")?,
-                args.get("start").and_then(Value::as_i64).unwrap_or(0),
-                args.get("end").and_then(Value::as_i64).unwrap_or(i64::MAX),
-            )
-            .map(Reply::Bytes),
-        "track_sampler_wave" => s
-            .track_sampler_wave(
-                arg_str(args, "sid")?,
-                arg_str(args, "name")?,
-                args.get("start").and_then(Value::as_i64).unwrap_or(0),
-                args.get("end").and_then(Value::as_i64).unwrap_or(i64::MAX),
-            )
-            .map(Reply::Bytes),
-        "analyze_start" => {
-            let sid = arg_str(args, "sid")?;
-            let tracks = match args.get("tracks") {
-                None | Some(Value::Null) => None,
-                Some(Value::Array(a)) => Some(
-                    a.iter()
-                        .map(|v| {
-                            v.as_str()
-                                .map(str::to_string)
-                                .ok_or_else(|| AppError::bad("`tracks` must hold strings"))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                ),
-                Some(_) => return Err(AppError::bad("`tracks` must be a list")),
-            };
-            let params: Option<&Map<String, Value>> = args.get("params").and_then(Value::as_object);
-            // #388: `--detector <id>`: one detector for every track of the analysis; absent
-            // keeps each track's stored `params.detector` (#387).
-            let detector = args.get("detector").and_then(Value::as_str).map(str::to_string);
-            let progress = args
-                .get("progress")
-                .and_then(|c| c.get("__channel"))
-                .and_then(Value::as_str)
-                .map(|id| {
-                    let (ch, id) = (channels.clone(), id.to_string());
-                    let p: Progress = Arc::new(move |v: Value| ch.push(&id, v));
-                    p
-                });
-            json(
-                s.analyze_start_keep(
-                    sid,
-                    tracks,
-                    params,
-                    detector.as_deref(),
-                    progress,
-                    args.get("keep_edited")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(policy::PAGE_KEEP_EDITED),
-                ),
-            )
-        }
-        "analyze_status" => Ok(Reply::Json(s.analyze_status(arg_str(args, "sid")?))),
-        // #265: the hits of the range only; the Keep choice of the page arrives as keep_edited
-        "reanalyze_selection" => {
-            let t = |k: &str| {
-                args.get(k)
-                    .and_then(Value::as_f64)
-                    .ok_or_else(|| AppError::bad(format!("missing or wrong argument `{k}` (number)")))
-            };
-            json(
-                s.reanalyze_selection(
-                    arg_str(args, "sid")?,
-                    arg_str(args, "name")?,
-                    t("t0")?,
-                    t("t1")?,
-                    args.get("keep_edited")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(policy::PAGE_KEEP_EDITED),
-                ),
-            )
-        }
-        "export_midi" => {
-            // P4-5: a call without `note` or `events` takes them from the document (`export_midi_stored`)
-            let events: Option<Vec<Value>> = args.get("events").and_then(Value::as_array).cloned();
-            let o = crate::export::ExportOpts::from_args(args)?;
-            json(s.export_midi_stored_with(
-                arg_str(args, "sid")?,
-                arg_str(args, "name")?,
-                opt_i64(args, "note")?,
-                events.as_deref(),
-                opt_i64(args, "ppq")?,
-                args.get("tempo").and_then(Value::as_f64),
-                o.dest.as_deref(),
-                o.compensate,
-            ))
-        }
-        "export_spikes" | "export_all" | "velocities_recompute" => {
-            crate::export::bridge_call(s, channels, cmd, args).map(Reply::Json)
-        }
-        "track_set_mix" => {
-            let f = |k: &str| match args.get(k) {
-                None | Some(Value::Null) => Ok(None),
-                Some(v) => v
-                    .as_f64()
-                    .map(Some)
-                    .ok_or_else(|| AppError::bad(format!("wrong argument `{k}` (number)"))),
-            };
-            json(s.track_set_mix(
-                arg_str(args, "sid")?,
-                arg_str(args, "name")?,
-                f("volume_db")?,
-                f("pan")?,
-            ))
-        }
-        "export_existing"
-        | "export_dest_set"
-        | "export_markers_set"
-        | "export_compensate_set"
-        | "export_drag_prepare"
-        | "export_drag_take"
-        | "export_last_get"
-        | "export_last_set" => {
-            json(crate::shell::dispatch(s, cmd, args).unwrap_or_else(|| Err(AppError::bad("export_existing"))))
-        }
-        // #164 (part 2 of #153): the page previews the payload, this posts exactly that JSON
-        "feedback_send" => json(s.feedback_send(
-            args.get("payload").unwrap_or(&Value::Null),
-            args.get("url").and_then(Value::as_str),
-        )),
-        other => Err(AppError::not_found(format!("unknown command {other}"))),
-    }
+    let handler = table().get(cmd)?;
+    Some(handler(svc, channels, cmd, args))
 }
 
 /// Run a command of the agent surface (see the module docs). `progress` gets the messages of a command that
@@ -290,6 +151,10 @@ mod tests {
     fn call_refuses_what_is_not_on_the_agent_surface_and_bad_arguments() {
         let s = svc();
         assert_eq!(call(&s, "transport_play", &json!({}), None).unwrap_err().code, 404);
+        // a window command that `run` answers stays off the agent surface
+        assert!(run(&s, &Arc::new(Channels::default()), "transport_status", &json!({})).is_some());
+        assert_eq!(call(&s, "transport_status", &json!({}), None).unwrap_err().code, 404);
+        assert_eq!(call(&s, "peaks_tile", &json!({}), None).unwrap_err().code, 404);
         assert_eq!(call(&s, "selftest_clock", &json!({}), None).unwrap_err().code, 404);
         assert_eq!(call(&s, "nope", &json!({}), None).unwrap_err().code, 404);
         assert_eq!(call(&s, "project_get", &json!({}), None).unwrap_err().code, 400);
@@ -318,5 +183,69 @@ mod tests {
         }
         assert!(run(&s, &ch, "nope", &json!({})).is_none());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The registry rows that `run` does not answer: the desktop shell runs them (window and self-test commands;
+    /// the test bridge answers `selftest_menu` itself). `tests/api.rs` pins their Tauri commands.
+    const SHELL_ONLY: [&str; 25] = [
+        "about_info",
+        "about_third_party",
+        "open_link",
+        "open_url",
+        "startup_mark",
+        "shell_sync",
+        "shell_typing",
+        "open_paths_take",
+        "quit_app",
+        "app_ready",
+        "splash_painted",
+        "splash_dismiss",
+        "reveal_path",
+        "selftest_clock",
+        "selftest_memory",
+        "selftest_report",
+        "splash_report",
+        "selftest_menu",
+        "selftest_menu_report",
+        "selftest_ns_menu",
+        "selftest_menu_key",
+        "selftest_menu_log",
+        "selftest_menu_probe",
+        "selftest_open_paths",
+        "selftest_close_window",
+    ];
+
+    /// The routes without a registry row: the #387 plug-in commands. Only the test bridge runs them (no Tauri
+    /// command, not on the agent surface); a registry row for them is a behaviour change, not part of R3.
+    const UNREGISTERED: [&str; 2] = ["plugins_list", "plugin_accept"];
+
+    /// R3: every registry row has exactly one handler: one route of `run` (no name twice, no route without a
+    /// row), or the desktop shell for the rows of [`SHELL_ONLY`]. Every agent row has a route.
+    #[test]
+    fn every_registry_row_has_exactly_one_handler() {
+        let mut routes: HashMap<&str, usize> = HashMap::new();
+        for r in all_routes() {
+            *routes.entry(r.name).or_default() += 1;
+        }
+        let twice: Vec<&str> = routes.iter().filter(|(_, n)| **n > 1).map(|(k, _)| *k).collect();
+        assert!(twice.is_empty(), "two handlers: {twice:?}");
+        for name in routes.keys() {
+            let row = api::find(name).is_some();
+            assert!(row != UNREGISTERED.contains(name), "{name}: registry row {row}");
+        }
+        for c in api::REGISTRY {
+            let (routed, shell) = (routes.contains_key(c.name), SHELL_ONLY.contains(&c.name));
+            assert!(routed != shell, "{}: routed {routed}, shell only {shell}", c.name);
+            assert!(
+                routed || c.surface != Surface::Agent,
+                "{}: an agent row without a route",
+                c.name
+            );
+        }
+        assert_eq!(
+            routes.len() + SHELL_ONLY.len(),
+            api::REGISTRY.len() + UNREGISTERED.len()
+        );
+        assert_eq!(table().len(), routes.len());
     }
 }

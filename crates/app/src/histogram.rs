@@ -829,6 +829,11 @@ fn arg_f64(args: &Value, key: &str) -> Result<f64, AppError> {
         .ok_or_else(|| AppError::bad(format!("missing or wrong argument `{key}` (number)")))
 }
 
+/// R3: the handlers of [`HISTOGRAM_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 4] = crate::call::routes(HISTOGRAM_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them. The
 /// argument names are those of the Tauri wrappers.
 #[must_use]

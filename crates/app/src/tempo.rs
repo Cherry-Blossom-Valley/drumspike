@@ -330,6 +330,11 @@ impl Service {
     }
 }
 
+/// R3: the handlers of [`TEMPO_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 5] = crate::call::routes(TEMPO_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
+
 /// Run a command of this card for the dispatcher; `None` when `cmd` is not one of them.
 #[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {

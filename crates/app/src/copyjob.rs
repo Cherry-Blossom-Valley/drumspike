@@ -811,6 +811,11 @@ pub(crate) fn channel_progress(args: &Value, channels: &Arc<Channels>) -> Option
     Some(p)
 }
 
+/// R3: the handlers of [`COPYJOB_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 3] = crate::call::routes(COPYJOB_COMMANDS, |s, ch, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, ch, cmd, args))
+});
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them.
 pub fn dispatch(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     let run = || -> Result<Value, AppError> {

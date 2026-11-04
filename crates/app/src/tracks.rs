@@ -982,6 +982,11 @@ fn string_list(args: &Value, key: &str) -> Result<Vec<String>, AppError> {
     }
 }
 
+/// R3: the handlers of [`TRACKS_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 8] = crate::call::routes(TRACKS_COMMANDS, |s, ch, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, ch, cmd, args))
+});
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them. The
 /// argument names are those of the Tauri wrappers in `apps/desktop/src-tauri/src/tracks.rs`.
 pub fn dispatch(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {

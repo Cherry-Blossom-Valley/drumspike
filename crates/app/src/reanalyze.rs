@@ -247,6 +247,11 @@ fn fmt_s(t: f64) -> String {
     format!("{t:.3}")
 }
 
+/// R3: the handlers of this module's commands for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 1] = crate::call::routes(["reanalyze_selection"], |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them.
 #[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {

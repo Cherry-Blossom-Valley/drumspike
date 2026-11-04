@@ -10,7 +10,7 @@
 //!   purpose: see [`AGENT_DEFAULTS`].
 //! * [`check_args`]: the registry row's arguments (no unknown key, required, types).
 //! * [`changes_project`] and [`read_only_refusal`]: the read-only guard.
-//! * [`transport_args`]: the transport parsing that the bridge and `transport_play` share.
+//! * [`transport_args`]: the transport parsing that `transport::dispatch` and `transport_play` share.
 
 use serde_json::{Map, Value};
 
@@ -182,7 +182,7 @@ pub fn read_only_refusal(svc: &Service, row: &CommandSpec, args: &Map<String, Va
         })
 }
 
-/// The transport parsing that the bridge (`invoke_transport`) and the Tauri wrapper of `transport_play` share.
+/// The transport parsing that `transport::dispatch` and the Tauri wrapper of `transport_play` share.
 pub mod transport_args {
     use serde_json::Value;
 

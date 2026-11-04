@@ -625,6 +625,11 @@ impl Service {
     }
 }
 
+/// R3: the handlers of [`EDIT_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 2] = crate::call::routes(EDIT_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them.
 #[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {

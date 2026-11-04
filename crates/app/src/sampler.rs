@@ -431,6 +431,38 @@ fn get_json(s: Option<&Sampler>) -> Value {
     }
 }
 
+/// R3: the handlers of [`SAMPLER_COMMANDS`] and of `track_sampler_wave` for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 4] = {
+    let [a, b, c] = crate::call::routes(SAMPLER_COMMANDS, |s, _, cmd, args| {
+        crate::call::json_reply(cmd, dispatch(s, cmd, args))
+    });
+    [
+        a,
+        b,
+        c,
+        crate::call::Route {
+            name: "track_sampler_wave",
+            run: wave,
+        },
+    ]
+};
+
+/// `track_sampler_wave`: the window `start`/`end` defaults to the whole file (0 to `i64::MAX`).
+fn wave(
+    s: &Service,
+    _: &std::sync::Arc<crate::reply::Channels>,
+    _: &str,
+    args: &Value,
+) -> Result<crate::reply::Reply, AppError> {
+    s.track_sampler_wave(
+        crate::command_policy::arg_str(args, "sid")?,
+        crate::command_policy::arg_str(args, "name")?,
+        args.get("start").and_then(Value::as_i64).unwrap_or(0),
+        args.get("end").and_then(Value::as_i64).unwrap_or(i64::MAX),
+    )
+    .map(crate::reply::Reply::Bytes)
+}
+
 /// Run a command of the sampler for the bridge, the command line and the MCP server; `None` when `cmd`
 /// is not one of them.
 #[must_use]

@@ -368,6 +368,12 @@ fn plugin_accept(svc: &crate::Service, args: &Value) -> Result<Value, AppError> 
     Ok(json!({"accepted": true, "id": id, "licence": installed.manifest.licence, "sha256": entry["sha256"]}))
 }
 
+/// R3: the handlers of this module's commands for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 2] =
+    crate::call::routes(["plugins_list", "plugin_accept"], |s, _, cmd, args| {
+        crate::call::json_reply(cmd, dispatch(s, cmd, args))
+    });
+
 /// The dispatcher of the plug-in commands (`None` for a name this module does not run).
 #[must_use]
 pub fn dispatch(svc: &crate::Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {

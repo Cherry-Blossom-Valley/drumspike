@@ -1272,6 +1272,11 @@ fn opt_f64(args: &Value, key: &str) -> Result<Option<f64>, AppError> {
     }
 }
 
+/// R3: the handlers of [`LEARN_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 7] = crate::call::routes(LEARN_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
+
 /// Run a command of this card for the bridge and `call`; `None` when `cmd` is not one of them.
 #[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {

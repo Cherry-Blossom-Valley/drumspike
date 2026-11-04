@@ -420,6 +420,11 @@ fn last_from_args(args: &Value) -> Result<Value, AppError> {
     }))
 }
 
+/// R3: the handlers of [`SHELL_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 8] = crate::call::routes(SHELL_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them.
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
     if !SHELL_COMMANDS.contains(&cmd) {

@@ -9,9 +9,9 @@
 //! of the Tauri wrappers (`snake_case` on the wire); the schemas are JSON Schema, draft 2020-12
 //! subset (`type`, `properties`, `required`, `items`, `description`).
 //!
-//! The registry has no behaviour of its own: calling a command stays with the dispatchers of the
-//! modules (`bridge.rs` `invoke`); stage 2 moves them into one `call` function that the bridge,
-//! the command-line tool and the MCP server share.
+//! The registry has no behaviour of its own: calling a command stays with the handlers of the
+//! modules (each module's `HANDLERS`), which `call::run` maps by name (R3); the bridge, the
+//! command-line tool and the MCP server share that one function.
 
 use serde_json::{Value, json};
 

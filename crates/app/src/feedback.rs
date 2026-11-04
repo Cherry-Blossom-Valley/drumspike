@@ -195,6 +195,16 @@ impl super::Service {
     }
 }
 
+/// R3: the handler of `feedback_send` for [`crate::call::run`] (the page previews the payload, this posts exactly
+/// that JSON).
+pub(crate) const HANDLERS: [crate::call::Route; 1] = crate::call::routes(["feedback_send"], |s, _, _, args| {
+    s.feedback_send(
+        args.get("payload").unwrap_or(&Value::Null),
+        args.get("url").and_then(Value::as_str),
+    )
+    .map(crate::reply::Reply::Json)
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

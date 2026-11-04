@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::reply::{Channels, QUEUE_CAP, Reply};
-use crate::{AppError, Progress, Service};
+use crate::{AppError, Service};
 
 /// X-3 (P3-9b): how long a connection may stay idle before the bridge closes it.
 pub const IDLE_READ_TIMEOUT: Duration = Duration::from_secs(2);
@@ -285,7 +285,7 @@ pub struct Bridge {
     static_dir: PathBuf,
 }
 
-use crate::command_policy::{CLOSE_DEFAULT, arg_str, opt_i64, transport_args};
+use crate::command_policy::{arg_str, opt_i64};
 
 /// The MIME type of a static file, by extension.
 #[must_use]
@@ -374,8 +374,8 @@ impl Bridge {
     }
 
     /// Run one command with JSON arguments. The names and argument names are those of the
-    /// Tauri wrappers (`apps/desktop/src-tauri/src/lib.rs`). The commands of the agent surface run
-    /// in [`crate::call::run`]; the bridge adds the test commands and the transport.
+    /// Tauri wrappers (`apps/desktop/src-tauri/src/lib.rs`). The commands of the registry run
+    /// in [`crate::call::run`] (the transport too, R3); the bridge adds the test commands.
     ///
     /// # Errors
     ///
@@ -394,77 +394,16 @@ impl Bridge {
             "selftest_menu" => Ok(Reply::Json(self.menu_event(args)?)),
             other => match crate::call::run(s, &self.channels, other, args) {
                 Some(r) => r,
-                None => self.invoke_transport(other, args),
+                None => self.invoke_test_outputs(other, args),
             },
         }
     }
 
-    /// The transport commands (P3-5b): `transport_play` takes a `progress` channel like
-    /// `analyze_start`; the page fetches the playhead messages with the long poll.
-    fn invoke_transport(&self, cmd: &str, args: &Value) -> Result<Reply, AppError> {
+    /// Tests only (P3-16): `outputs_test_list` sets the output devices a null output lists,
+    /// `[{name, rate, channels}]`; any other name is unknown.
+    fn invoke_test_outputs(&self, cmd: &str, args: &Value) -> Result<Reply, AppError> {
         let s = &self.svc;
-        let opt_f64 = |key: &str| transport_args::opt_f64(args, key);
-        let opt_bool = |key: &str| transport_args::opt_bool(args, key);
         match cmd {
-            "transport_play" => {
-                let progress = args
-                    .get("progress")
-                    .and_then(|c| c.get("__channel"))
-                    .and_then(Value::as_str)
-                    .map(|id| {
-                        let (ch, id) = (self.channels.clone(), id.to_string());
-                        let p: Progress = Arc::new(move |v: Value| ch.push(&id, v));
-                        p
-                    });
-                // P4-40d: an audition window (start, end, loop, tracks); P4-40e: shot (the one-shot preview)
-                let win = transport_args::play_window(
-                    opt_f64("start")?,
-                    opt_f64("end")?,
-                    opt_bool("loop"),
-                    args.get("tracks"),
-                    args.get("shot"),
-                )?;
-                s.transport_play_window(
-                    arg_str(args, "sid")?,
-                    opt_f64("position")?,
-                    args.get("events"),
-                    progress,
-                    opt_f64("speed")?,
-                    win,
-                )
-                .map(Reply::Json)
-            }
-            "transport_stop" => Ok(Reply::Json(
-                s.transport_stop(opt_bool("close").unwrap_or(CLOSE_DEFAULT)),
-            )),
-            "transport_seek" => {
-                let p = opt_f64("position")?.ok_or_else(|| AppError::bad("missing argument `position` (number)"))?;
-                s.transport_seek(p).map(Reply::Json)
-            }
-            "transport_mix" => s
-                .transport_mix(
-                    args.get("mute").unwrap_or(&Value::Null),
-                    args.get("solo").unwrap_or(&Value::Null),
-                )
-                .map(Reply::Json),
-            "transport_clicks" => s
-                .transport_clicks(opt_bool("enabled"), opt_f64("volume")?, args.get("pitches"))
-                .map(Reply::Json),
-            "transport_status" => Ok(Reply::Json(s.transport_status())),
-            "transport_master" => {
-                let db = opt_f64("volume_db")?.ok_or_else(|| AppError::bad("missing argument `volume_db` (number)"))?;
-                s.transport_master(db).map(Reply::Json)
-            }
-            "outputs_list" => Ok(Reply::Json(s.outputs_list())),
-            "output_select" => {
-                let device = match args.get("device") {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(d)) => Some(d.as_str()),
-                    Some(_) => return Err(AppError::bad("wrong argument `device` (string or null)")),
-                };
-                s.output_select(device).map(Reply::Json)
-            }
-            // tests only (P3-16): the output devices a null output lists, `[{name, rate, channels}]`
             "outputs_test_list" => {
                 let list = match args.get("devices") {
                     None | Some(Value::Null) => None,

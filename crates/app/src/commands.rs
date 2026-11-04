@@ -23,16 +23,20 @@
 //! `u32 start`, `u32 sample rate`, then the samples as f32, not rounded (8 bytes of header).
 
 use std::path::Path;
+use std::sync::Arc;
 
 use drumspike_core::cache::CacheTile;
 use drumspike_core::midi::export_midi_map as write_midi;
 use drumspike_core::project::{Event, load_project};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
+use crate::call::{Route, routes};
+use crate::command_policy::{self as policy, arg_i64, arg_str, opt_i64};
 use crate::error::AppError;
 use crate::jobs;
 use crate::media::PeakRequest;
 use crate::registry::{OpenProject, lock};
+use crate::reply::{Channels, Reply};
 use crate::{Progress, Service};
 
 /// The detector family the app uses (the Rust detector in `drumspike-core`).
@@ -630,6 +634,113 @@ pub(crate) fn events_set_out(n: usize, rows: &[(String, Result<usize, AppError>)
         out["followers"] = Value::Array(crate::follow::refreshed_names(rows));
     }
     out
+}
+
+/// R3: the handlers of [`COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [Route; 16] = routes(COMMANDS, handle);
+
+/// Run one of [`COMMANDS`] with JSON arguments (the names and argument names of the Tauri wrappers).
+fn handle(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) -> Result<Reply, AppError> {
+    let s = svc;
+    let json = |r: Result<Value, AppError>| r.map(Reply::Json);
+    match cmd {
+        "app_info" => Ok(Reply::Json(s.app_info())),
+        "project_open" => json(s.project_open_with(
+            arg_str(args, "path")?,
+            args.get("read_only").and_then(Value::as_bool).unwrap_or(false),
+        )),
+        "project_get" => json(s.project_get(arg_str(args, "sid")?)),
+        "project_list" => Ok(Reply::Json(
+            s.project_list(ListShape::parse(args.get("shape").and_then(Value::as_str))),
+        )),
+        "tracks_get" => json(s.tracks_get(arg_str(args, "sid")?)),
+        "events_get" => json(s.events_get(arg_str(args, "sid")?, arg_str(args, "name")?)),
+        "events_set" => {
+            let events = args.get("events").cloned().unwrap_or(Value::Null);
+            json(s.events_set(arg_str(args, "sid")?, arg_str(args, "name")?, &events))
+        }
+        "peaks_info" => json(s.peaks_info(arg_str(args, "sid")?, arg_str(args, "name")?)),
+        "peaks_tile" => {
+            let level = usize::try_from(arg_i64(args, "level")?).map_err(|_| AppError::bad("level out of range"))?;
+            s.peaks_tile(
+                arg_str(args, "sid")?,
+                arg_str(args, "name")?,
+                level,
+                arg_i64(args, "from")?,
+                arg_i64(args, "to")?,
+            )
+            .map(Reply::Bytes)
+        }
+        "samples_window" => s
+            .samples_window(
+                arg_str(args, "sid")?,
+                arg_str(args, "name")?,
+                arg_i64(args, "start")?,
+                arg_i64(args, "end")?,
+            )
+            .map(Reply::Bytes),
+        "analyze_start" => {
+            let sid = arg_str(args, "sid")?;
+            let tracks = match args.get("tracks") {
+                None | Some(Value::Null) => None,
+                Some(Value::Array(a)) => Some(
+                    a.iter()
+                        .map(|v| {
+                            v.as_str()
+                                .map(str::to_string)
+                                .ok_or_else(|| AppError::bad("`tracks` must hold strings"))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+                Some(_) => return Err(AppError::bad("`tracks` must be a list")),
+            };
+            let params: Option<&Map<String, Value>> = args.get("params").and_then(Value::as_object);
+            // #388: `--detector <id>`: one detector for every track of the analysis; absent
+            // keeps each track's stored `params.detector` (#387).
+            let detector = args.get("detector").and_then(Value::as_str).map(str::to_string);
+            let progress = args
+                .get("progress")
+                .and_then(|c| c.get("__channel"))
+                .and_then(Value::as_str)
+                .map(|id| {
+                    let (ch, id) = (channels.clone(), id.to_string());
+                    let p: Progress = Arc::new(move |v: Value| ch.push(&id, v));
+                    p
+                });
+            json(
+                s.analyze_start_keep(
+                    sid,
+                    tracks,
+                    params,
+                    detector.as_deref(),
+                    progress,
+                    args.get("keep_edited")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(policy::PAGE_KEEP_EDITED),
+                ),
+            )
+        }
+        "analyze_status" => Ok(Reply::Json(s.analyze_status(arg_str(args, "sid")?))),
+        "export_midi" => {
+            // P4-5: a call without `note` or `events` takes them from the document (`export_midi_stored`)
+            let events: Option<Vec<Value>> = args.get("events").and_then(Value::as_array).cloned();
+            let o = crate::export::ExportOpts::from_args(args)?;
+            json(s.export_midi_stored_with(
+                arg_str(args, "sid")?,
+                arg_str(args, "name")?,
+                opt_i64(args, "note")?,
+                events.as_deref(),
+                opt_i64(args, "ppq")?,
+                args.get("tempo").and_then(Value::as_f64),
+                o.dest.as_deref(),
+                o.compensate,
+            ))
+        }
+        "export_spikes" | "export_all" | "velocities_recompute" => {
+            crate::export::bridge_call(s, channels, cmd, args).map(Reply::Json)
+        }
+        other => Err(AppError::not_found(format!("unknown command {other}"))),
+    }
 }
 
 #[cfg(test)]

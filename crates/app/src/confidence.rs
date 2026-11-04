@@ -311,6 +311,11 @@ fn hit_gates(st: &crate::histogram::TrackState, times: &[f64], shift_s: f64) -> 
     out
 }
 
+/// R3: the handlers of [`CONFIDENCE_COMMANDS`] for [`crate::call::run`].
+pub(crate) const HANDLERS: [crate::call::Route; 1] = crate::call::routes(CONFIDENCE_COMMANDS, |s, _, cmd, args| {
+    crate::call::json_reply(cmd, dispatch(s, cmd, args))
+});
+
 /// The commands of this module for the one dispatcher ([`crate::call`]); `None` for another command.
 #[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {

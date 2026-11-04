@@ -138,12 +138,15 @@ use crate::registry::lock;
 use crate::{Progress, Service};
 
 mod audition;
+mod handlers;
 mod meter;
 mod plan;
 mod playhead;
 
 pub use audition::PlayWindow;
 pub(crate) use audition::{Audition, spawn_audition};
+pub(crate) use handlers::HANDLERS;
+pub use handlers::dispatch;
 pub use meter::METER_PERIOD;
 pub(crate) use meter::{meter_message, next_meter_due};
 #[cfg(test)]
