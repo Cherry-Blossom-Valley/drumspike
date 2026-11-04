@@ -32,6 +32,7 @@ use crate::detect::{DetectError, N_CLASSES};
 use crate::pyops::py_round_digits;
 use crate::refine::{BackStep, FM_PEAK_DB, Hit, ReachStep, RefineRule, RefineWindow, refine_track_rule_peak};
 use crate::role::{class_note, role_classes, role_note};
+use crate::rules::{ResearchOverrides, RuleSet};
 use crate::velocity::{VelocityMap, velocity_map};
 
 /// The source rates the core analyses (`engine.DETECT_RATES`, the rates of the resampler).
@@ -508,7 +509,8 @@ pub fn analyze_track(
 /// The DSP fallback with its per-track candidate list (A4): the same analysis as
 /// [`analyze_track`] with [`Detector::Dsp`] (identical events), plus the peak-picked
 /// candidates with their gate verdicts, the detection's parameters and its weak-flux limit
-/// for the store. One resample and one spectrogram for both.
+/// for the store. One resample and one spectrogram for both. `rules` and `research` are the
+/// analysis's resolved delta rule and research numbers (R6).
 ///
 /// # Errors
 ///
@@ -519,10 +521,12 @@ pub fn analyze_track_dsp_cands(
     sr: u32,
     role: &str,
     params: &AnalyzeParams,
+    rules: &RuleSet,
+    research: &ResearchOverrides,
 ) -> Result<(Analysis, Vec<onset::Candidate>, onset::OnsetParams, f32), AnalyzeError> {
     check_rate(sr)?;
-    let p = onset::OnsetParams::for_role(Role::parse_or_other(role));
-    let (hits, cands, weak_limit) = onset::detect_onsets_and_cands(x, sr, &p)?;
+    let p = onset::OnsetParams::for_role_with(Role::parse_or_other(role), research);
+    let (hits, cands, weak_limit) = onset::detect_onsets_and_cands(x, sr, &p, rules, research)?;
     let note = role_note(role);
     let detected: Vec<(f64, u8)> = hits.iter().map(|h| (h.time, note)).collect();
     let a = analyze_flagged(x, sr, role, &detected, &[], &[], params)?;

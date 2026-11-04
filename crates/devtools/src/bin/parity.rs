@@ -818,7 +818,7 @@ fn run_onsets(args: &[String]) -> Result<(), String> {
         return Err("usage: parity onsets <wav> <role> <out.json> [--mix ffmpeg|average] [--set key=value]...".into());
     };
     let role = Role::parse(role).ok_or_else(|| format!("unknown role {role}"))?;
-    let mut params = OnsetParams::for_role(role);
+    let mut params = OnsetParams::for_role_with(role, &drumspike_core::rules::ResearchOverrides::from_env());
     let mut mix = MixMode::Ffmpeg;
     let mut odf_out: Option<PathBuf> = None;
     let mut i = 3;

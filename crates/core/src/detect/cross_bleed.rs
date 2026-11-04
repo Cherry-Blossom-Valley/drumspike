@@ -134,6 +134,7 @@
 use crate::dsp::{band_level_db, band_sections, median, ms_to_samples};
 use crate::refine::first_motion;
 use crate::role::Role;
+use crate::rules::ResearchOverrides;
 
 /// The kind of a close mic of the rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,24 +230,31 @@ pub struct CrossBleedParams {
     pub align_med_abs_lead_ms: f64,
 }
 
-fn env_f64(name: &str) -> Option<f64> {
-    std::env::var(name).ok().and_then(|v| v.parse().ok())
+impl Default for CrossBleedParams {
+    /// [`CrossBleedParams::with_overrides`] with the research overrides of the process
+    /// environment (R6 Parallel Change: stays while callers are left).
+    fn default() -> Self {
+        CrossBleedParams::with_overrides(&ResearchOverrides::from_env())
+    }
 }
 
-impl Default for CrossBleedParams {
-    fn default() -> Self {
+impl CrossBleedParams {
+    /// The measured values; `research` overrides the A6 lead and margin, the A1 overhead margin
+    /// and the #296 alignment bounds (`None` keeps the measured value).
+    #[must_use]
+    pub fn with_overrides(research: &ResearchOverrides) -> Self {
         CrossBleedParams {
             coincide_ms: 10.0,
-            min_lead_ms: env_f64("DRUMSPIKE_A6_MIN_LEAD").unwrap_or(0.3),
+            min_lead_ms: research.a6_min_lead.unwrap_or(0.3),
             window_ms: (-0.5, 8.0),
             preroll_ms: 50.0,
             min_clear: 5,
             clear_lead_cap_ms: 3.0,
             silence_db: -100.0,
-            margin_db: env_f64("DRUMSPIKE_A6_MARGIN_DB").unwrap_or(0.0),
-            overhead_margin_db: env_f64("DRUMSPIKE_A1_OH_MARGIN_DB").unwrap_or(2.0),
-            align_min_coins: env_f64("DRUMSPIKE_A6_ALIGN_MIN_COINS").unwrap_or(20.0) as usize,
-            align_med_abs_lead_ms: env_f64("DRUMSPIKE_A6_ALIGN_MED_ABS_LEAD").unwrap_or(0.4),
+            margin_db: research.a6_margin_db.unwrap_or(0.0),
+            overhead_margin_db: research.a1_oh_margin_db.unwrap_or(2.0),
+            align_min_coins: research.a6_align_min_coins.unwrap_or(20.0) as usize,
+            align_med_abs_lead_ms: research.a6_align_med_abs_lead.unwrap_or(0.4),
         }
     }
 }

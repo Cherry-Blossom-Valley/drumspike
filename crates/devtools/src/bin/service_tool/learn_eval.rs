@@ -46,6 +46,7 @@ use drumspike_core::detect::onset::{
 use drumspike_core::detect::peaks::FPS;
 use drumspike_core::detect::resample::resample_to_44100;
 use drumspike_core::role::role_note;
+use drumspike_core::rules::{ResearchOverrides, RuleSet};
 use drumspike_core::similarity::{self, Recipe, Weights};
 use serde_json::{Map, Value, json};
 
@@ -67,8 +68,11 @@ fn load(cache: &mut Cache, wav: &str, role: &str) -> Result<Arc<Track>, String> 
         return Ok(t.clone());
     }
     let dec = media::decode(Path::new(wav), media::mix_mode("ffmpeg")).map_err(|e| e.message)?;
-    let cparams = OnsetParams::for_role(Role::parse_or_other(role));
-    let (_, cands, weak_limit) = detect_onsets_and_cands(&dec.samples, dec.sr, &cparams).map_err(|e| e.to_string())?;
+    // R6: this tool is an edge; the rules and research numbers come from its environment
+    let (rules, research) = (RuleSet::from_env(), ResearchOverrides::from_env());
+    let cparams = OnsetParams::for_role_with(Role::parse_or_other(role), &research);
+    let (_, cands, weak_limit) =
+        detect_onsets_and_cands(&dec.samples, dec.sr, &cparams, &rules, &research).map_err(|e| e.to_string())?;
     let rows = histogram::dsp_detection_candidates(&cands, &cparams, weak_limit, role);
     let t = Arc::new(Track {
         dec: Arc::new(dec),
@@ -411,9 +415,11 @@ fn xprobe(job: &Value) -> Result<Value, String> {
     let mics = job["mics"].as_array().ok_or("xprobe without mics")?;
     let target = job["target"].as_u64().unwrap_or(0) as usize;
     let basis_role = mics.get(target).and_then(|m| m["role"].as_str()).unwrap_or("other");
-    let bp = OnsetParams::for_role(Role::parse_or_other(basis_role));
+    // R6: this tool is an edge; the rules and research numbers come from its environment
+    let (rules, research) = (RuleSet::from_env(), ResearchOverrides::from_env());
+    let bp = OnsetParams::for_role_with(Role::parse_or_other(basis_role), &research);
     let bands = band_range(bp.band_lo_hz, bp.band_hi_hz);
-    let p6 = CrossBleedParams::default();
+    let p6 = CrossBleedParams::with_overrides(&research);
     let mut out = Vec::new();
     for (i, m) in mics.iter().enumerate() {
         let role = m["role"].as_str().unwrap_or("other");
@@ -421,8 +427,8 @@ fn xprobe(job: &Value) -> Result<Value, String> {
         let dec = media::decode(Path::new(wav), media::mix_mode("ffmpeg")).map_err(|e| e.message)?;
         let y = resample_to_44100(&dec.samples, dec.sr).map_err(|e| e.to_string())?;
         let spec = features(&y, Chain::Cli);
-        let rp = OnsetParams::for_role(Role::parse_or_other(role));
-        let (_, cands, weak_limit) = onsets_with_candidates(&spec, &y, &rp);
+        let rp = OnsetParams::for_role_with(Role::parse_or_other(role), &research);
+        let (_, cands, weak_limit) = onsets_with_candidates(&spec, &y, &rp, &rules, &research);
         let frames_n = spec.len() / N_BANDS;
         let mut ids: Vec<usize> = Vec::new();
         for (k, c) in cands.iter().enumerate() {

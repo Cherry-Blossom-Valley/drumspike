@@ -492,7 +492,7 @@ impl DetectorSlot {
     /// rate, cannot resample, or its run fails.
     pub fn analyze_prepared_cands(
         &self,
-        _cfg: &ServiceConfig,
+        cfg: &ServiceConfig,
         x: &[f32],
         sr: u32,
         role: &str,
@@ -510,8 +510,9 @@ impl DetectorSlot {
         }
 
         // A4: one detection pass for the events and the candidate list.
-        let (a, cands, params, weak_limit) = drumspike_core::analyze::analyze_track_dsp_cands(x, sr, role, &p)
-            .map_err(|e| AppError::bad(e.to_string()))?;
+        let (a, cands, params, weak_limit) =
+            drumspike_core::analyze::analyze_track_dsp_cands(x, sr, role, &p, &cfg.rules, &cfg.research)
+                .map_err(|e| AppError::bad(e.to_string()))?;
         let kept = DspKept {
             cands,
             params,

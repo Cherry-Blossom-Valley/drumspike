@@ -67,6 +67,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use drumspike_core::refine::RefineRule;
+use drumspike_core::rules::{ResearchOverrides, RuleSet};
 
 use serde_json::Value;
 
@@ -113,12 +114,22 @@ pub struct ServiceConfig {
     /// #281 A1: a pinned snare ghost-note gate for every analysis (`DRUMSPIKE_GHOST_GATE`,
     /// `0` for no clearance). `None`: a new analysis runs [`ghost_gate::GHOST_GATE`].
     pub ghost_gate: Option<u32>,
+    /// R6: the onset delta rule and the tempo referee of every analysis and tempo detection
+    /// (`DRUMSPIKE_DELTA_RULE`, `DRUMSPIKE_TEMPO_RULE`; unset: the current versions). The project
+    /// records neither yet, so the pin or the current version decides.
+    pub rules: RuleSet,
+    /// R6: the A1, A5 and A6 research numbers (`DRUMSPIKE_A1_*`, `DRUMSPIKE_A5_*`,
+    /// `DRUMSPIKE_A6_*`, `DRUMSPIKE_DELTA_REF_*`); [`Default`] overrides nothing.
+    pub research: ResearchOverrides,
 }
 
 impl ServiceConfig {
-    /// The refinement pin from `DRUMSPIKE_REFINE_RULE` ([`jobs::parse_rule`]).
+    /// The rule pins and the research numbers from the process environment: the refinement pin
+    /// from `DRUMSPIKE_REFINE_RULE` ([`jobs::parse_rule`]), the session-rule pins, the
+    /// [`RuleSet`] and the [`ResearchOverrides`]. The one place the service reads them (R6).
     #[must_use]
     pub fn from_env(_models_dir: &Path) -> ServiceConfig {
+        let env = |name: &str| std::env::var(name).ok();
         ServiceConfig {
             refine_rule: std::env::var("DRUMSPIKE_REFINE_RULE")
                 .ok()
@@ -135,6 +146,8 @@ impl ServiceConfig {
             ghost_gate: std::env::var("DRUMSPIKE_GHOST_GATE")
                 .ok()
                 .and_then(|v| v.trim().parse::<u32>().ok()),
+            rules: RuleSet::from_lookup(env),
+            research: ResearchOverrides::from_lookup(env),
         }
     }
 }

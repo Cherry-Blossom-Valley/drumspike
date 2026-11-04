@@ -235,7 +235,7 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[String]) -> Option
     if tgt.is_empty() {
         return None;
     }
-    let p = CrossBleedParams::default();
+    let p = CrossBleedParams::with_overrides(&svc.inner.config.research);
     // #313: the per-source session test is a SESSION property — decide it ONCE over all tom
     // close mics of the session, before the per-target runs (each run_one sees ONE tom and so
     // could never count two qualifying targets for a source).
@@ -609,9 +609,11 @@ fn run_one(
         .subdir(drumspike_core::project::ANALYSIS_DIR)
         .join(&x_mic.name);
     if let Some((params, _weak_limit, key)) = crate::candidates::read_candidates_meta(&dir) {
-        let p_on = OnsetParams::for_role(Role::Tom);
+        let cfg = &svc.inner.config;
+        let p_on = OnsetParams::for_role_with(Role::Tom, &cfg.research);
         // the exclusion: candidates that coincide with a louder hit of another close mic
-        let Ok((_, cands_a, _)) = onset::detect_onsets_and_cands(&dec_x.samples, sr, &p_on) else {
+        let Ok((_, cands_a, _)) = onset::detect_onsets_and_cands(&dec_x.samples, sr, &p_on, &cfg.rules, &cfg.research)
+        else {
             return Some(json!({"removed": removed, "redetected": redetected}));
         };
         let exclude: Vec<usize> = if sw.tmpl {
@@ -631,7 +633,7 @@ fn run_one(
             Vec::new()
         };
         let Ok((hits, mut cands, weak2)) =
-            onset::detect_onsets_and_cands_excluding(&dec_x.samples, sr, &p_on, &exclude)
+            onset::detect_onsets_and_cands_excluding(&dec_x.samples, sr, &p_on, &exclude, &cfg.rules, &cfg.research)
         else {
             return Some(json!({"removed": removed, "redetected": redetected}));
         };
