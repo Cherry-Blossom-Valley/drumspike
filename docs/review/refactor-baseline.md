@@ -101,3 +101,98 @@ Variants with an env pin, taken at the same base (`--env KEY=VALUE`; the file na
 Checks of the variants against the baseline: `DRUMSPIKE_TEMPO_RULE=3` is identical (rule 3 is the default when the
 variable is unset); rule 1 differs in 13 items (11 ENST, 2 session, golden unchanged); rule 2 in 5 items (4 ENST,
 1 session). So the variants are not copies of the baseline and the snapshot sees the pins.
+
+## After the refactoring (step 6.2)
+
+Measured at commit `8d2c11e` on branch `refactor/structure` (the last code commit is `8e23410`, step 5.2; `8d2c11e`
+changes only documents). Same commands as above, same `PROD` set, run from the repository root. "Target" is the
+column of the plan, section 7.2.
+
+### Size and shape
+
+| Metric | Before (`ac545a8`) | After (`8d2c11e`) | Target | Met |
+|---|---|---|---|---|
+| Source files over 800 lines | 24 | 22 | 12 or fewer | no |
+| Largest file | `static/app.js` 7,523 | `crates/app/src/api.rs` 1,937 (a data file); `static/app.js` is 753 | app.js 400 to 600 | no (753) |
+| Largest Rust files | `menu.rs` 2,001; `api.rs` 1,943; `tempo_detect.rs` 1,922; `export.rs` 1,720; `parity.rs` 1,539 | `api.rs` 1,937; `tempo_detect.rs` 1,920; `export.rs` 1,714; app `transport/mod.rs` 1,511; core `transport/mod.rs` 1,398 | under 1,000 without `api.rs` and `tempo_detect.rs` | no (`export.rs` 1,714) |
+| `refine.rs` | 1,393 lines, 3 `too_many_arguments` allows | `refine.rs` 72 lines plus `reference` 305, `reach` 202, `walk` 438, `edge` 176, `track` 230; 0 allows | 5 modules under 500 each, 0 allows | yes |
+| `menu.rs` | 2,001 lines | `menu/` `mod` 38, `items` 387, `keymap` 342, `build` 421, `sync` 599, `macos` 316 | 5 modules of about 500 or less | yes (`sync` 599) |
+| `too_many_arguments` allows | 23 | 20 | 20 | yes |
+| Role enums | 4 | 1 (`role::Role`; the tempo detection has its own `BeatVoice`) | 1 | yes |
+| `fn median` | 8: 6 in core, 1 in app, 1 in `bench.rs` | 7: 5 in core (`dsp`, `detect::flam`, `detect::onset`, `similarity`, `tempo_detect`), 1 in app, 1 in `bench.rs` | 4 named variants | no |
+| `DRUMSPIKE_*` detection names in core | 15 | 21 with the same command | 0 | no, see the note below |
+| Core `pub` item lines (production source, no `src/bin`) | 640 `pub`, 19 `pub(crate)` | 395 `pub`, 280 `pub(crate)` | under 50 `pub` items with no outside use | not measured |
+| Dispatch: `matches!` and `or_else` in `crates/app/src/call.rs` | 21 | 3 | no `matches!` list, no `or_else` chain | yes |
+
+Commands for the rows that are new in this section:
+
+```
+git ls-files '*.rs' 'static/*.js' | grep -Ev "$PROD" | xargs wc -l | awk '$1>800 && $2!="total"' | wc -l
+wc -l crates/core/src/refine.rs crates/core/src/refine/*.rs apps/desktop/src-tauri/src/menu/*.rs static/app.js
+git grep -n 'fn median\b' <commit> -- 'crates/*.rs'
+git grep -hE '^\s*pub (fn|struct|enum|const|static|type|trait|use) ' <commit> -- 'crates/core/src/*.rs' \
+  ':!crates/core/src/**/tests.rs' ':!crates/core/src/**/*_tests.rs' ':!crates/core/src/bin' | wc -l
+git grep -hE '^\s*pub\(crate\) (fn|struct|enum|const|static|type|trait|use) ' <commit> -- (same paths) | wc -l
+git grep -nE 'matches!\(|or_else' <commit> -- crates/app/src/call.rs | wc -l
+```
+
+The `pub` line count is not the R8 metric "pub items with no outside use"; that word-match scan is not in the
+repository. The line count shows the direction only: 245 `pub` lines fewer, 261 `pub(crate)` lines more.
+
+Note on the `DRUMSPIKE_*` row: the count went up because `rules.rs` now spells out each per-role name
+(`DRUMSPIKE_DELTA_REF_KICK` and so on) where the old code built it from a prefix. What changed is where the names are
+read: the names and their parse are in `rules.rs` only (`RuleSet::from_lookup`, `ResearchOverrides::from_lookup`),
+and the app passes `RuleSet` and `ResearchOverrides` down. The other hits are doc comments in `detect/onset.rs`,
+`detect/cross_bleed.rs` and `tempo_detect.rs`. Core still reads the environment through three old entry points
+(`OnsetParams::for_role`, `detect_onsets`, the `Default` of `CrossBleedParams`), which call `RuleSet::from_env` or
+`ResearchOverrides::from_env`; `DspBackend::detect` and `analyze::detect_events` use `detect_onsets`. The contract step
+of this Parallel Change is open (see "Steps not done" below).
+
+### Function lengths
+
+| Metric | Before | After | Target | Met |
+|---|---|---|---|---|
+| Longest function | `cross_bleed_prior_session` 373 | `transport_play_window` 224 (app `transport`, not in the plan) | under 120 | no |
+| Next longest | `run_one` 263, `transport_play_window` 224, `render` 210, `onsets_with_candidates_inner` 205 | `render` 210 (core `transport::mixer`), `onsets_with_candidates_inner` 207, `reanalyze_selection` 183, `tracks_add` 169 | n/a | n/a |
+| The two split functions | `cross_bleed_prior_session` 373, app `cross_bleed::run_one` 263 | 17 and 43; the longest phase function in core `detect/cross_bleed.rs` is `learn_pair` 107, in app `cross_bleed.rs` it is `redetect` 108 | under 120 | yes |
+| Functions of 100 lines or more, all crates | 45 (app 20, core 19, devtools 4, shell 2) | 40 (app 18, core 19, devtools 3, shell 0) | n/a | n/a |
+| Functions of 100 lines or more, app production | 20 (27 at 80 lines) | 18 (25 at 80 lines) | fewer than 30 (plan method; this script gave 20 before) | yes |
+
+Commands: as in the first table (`tools/fn_lengths.py 100 <prefix> | wc -l`), plus
+`uv run --no-project python tools/fn_lengths.py 1 crates/app/src/cross_bleed.rs crates/core/src/detect/cross_bleed.rs`
+for the two split functions.
+
+### Tests and tools
+
+| Metric | Before | After | Target | Met |
+|---|---|---|---|---|
+| Rust `#[test]` | 1,387 | 1,413 (+26) | about 1,410 | yes |
+| Python `def test_` | 1,451 | 1,065 (-386, 27 %) | about 1,000 | close |
+| of them in `tests/e2e_app` | 733 in 98 files | 629 in 68 files | about 616 in about 62 files | close |
+| `tools/` Python lines | 31,004 | 21,068 (-9,936) | about 18,000 | no |
+| `tests/golden` size | 13 MB in 107 files | 13 MB in 107 files | unchanged (owner decision, plan Appendix C) | yes |
+| `just ci` wall time | not measured | not measured | report the difference | no: `just` is still not installed on this host |
+| JS files under the per-file coverage gate (`JS_FILES` in `tests/jscov.py`) | 11 | 31 | every new `static/` script | yes |
+
+The identity diff of the release head (target 0) and the other final gates are step 6.3. An independent verifier runs
+them on the release head; their result is not in this file.
+
+## Steps not done
+
+The plan steps that have a commit on this branch (`git log --oneline ac545a8..HEAD`, subject prefix
+"Refactor <step>:") are 0.1 to 0.4, 1.1 to 1.5, 1.7, 1.10, 2.1 to 2.7, 3.1, 3.2, 4.1 to 4.4, 5.1, 5.2, 6.1 and 6.2.
+The other steps:
+
+| Step | State | Why |
+|---|---|---|
+| 0.5 | done, no commit | Owner decisions, taken on 2026-11-03 and recorded in the plan, Appendix C. |
+| 1.6 | not done as its own step | It ran together with 1.7 (T3, T4). No per-file coverage table with and without the T3, T4 and T6 candidates was recorded. The per-file floor of 70 % is checked by the whole e2e suite in the final gate (6.3). |
+| 1.8 | skipped | T5 was not in the implementation run. It is layout only and removes no test; it moves e2e tests between files, so it also touches the shard balance in `tests/e2e_shards.json`. Backlog. |
+| 1.9 | skipped | T6 was not in the implementation run. Its size is an estimate (15 to 25 tests), and its precondition, the coverage of `lanes-gl.js`, `tiles-worker.js` and `render.js` per candidate (step 1.6), was not measured. Backlog. |
+| 1.3, optional part | skipped | `calib_hyp` and `roll_fill` are optional in T2 and stay. |
+| 3.1, contract part | not done | The env readers `RuleSet::from_env` and `ResearchOverrides::from_env` still serve three old core entry points (note above). Moving their callers to explicit parameters touches `DspBackend::detect` and `analyze::detect_events`; it is a structure change that needs its own G-ID run with each pin set. |
+| 5.3 | skipped | Not in the implementation run. `shell.js`, `help.js` and `splash.js` are still outside `JS_FILES` without a documented exception. |
+| 6.3 | open | The final gates run on the release head by an independent verifier, after this step. |
+
+Not in this release by plan decision (section 5 and Appendix B): R6 steps 3 and 4, R3 stage C, the R2 re-pick list,
+R9 part B and the Appendix B backlog.
