@@ -16,8 +16,8 @@ SR = 48000
 
 
 def spec_ids():
-    """The custom item ids of menu.rs SPEC (item, keyed, check and check_project constructors)."""
-    src = (ROOT / "apps/desktop/src-tauri/src/menu.rs").read_text()
+    """The custom item ids of menu/items.rs SPEC (item, keyed, check and check_project constructors)."""
+    src = (ROOT / "apps/desktop/src-tauri/src/menu/items.rs").read_text()
     body = src[src.index("// Drum Spike\n"):src.index("/// Every custom item")]
     return re.findall(r'= (?:item|keyed|check|check_project)\(\s*"(\w+)"', body)
 
