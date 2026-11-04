@@ -93,8 +93,9 @@ rule marked "target" is not true yet; the refactoring plan names the step that m
   and parameters and return data. Target (R1, R2): a few uses remain in `backend`, `layer` and `project::source`.
 - Core reads no `DRUMSPIKE_*` detection variable. The environment is read at the edges:
   `ServiceConfig::from_env` and the devtools binaries. Target (R6): 15 detection names are read in core today.
-- No module cycle inside core. Target (R1): `analyze` and `backend` use each other today.
-- One `Role` type in core. Target (R1): four enums exist today.
+- No module cycle inside core. Holds since R1: `backend` no longer calls `analyze`; the note tables live in `role`.
+- One `Role` type in core (`role::Role`, also `detect::onset::Role`). Holds since R1. The tempo detection keeps its own
+  `BeatVoice` (a hi-hat counts as Other there).
 - Detection functions are pure: the same samples and parameters give the same bits. A move or a
   split never reorders a float operation.
 - A rule marks a hit; it does not delete it. An absent mark is not the same as a false mark.
@@ -116,8 +117,8 @@ One word means one thing. The code name is the place to look.
 | Track | One mic recording in a project. | `project::Track` (document), `peaks::Track` (pyramid) |
 | Source | The audio file of a track plus its identity. Never modified. | `project::Source` |
 | Role | The instrument a track records: kick, snare, tom, hat, cymbal, other. Unknown names become Other on purpose. | `role::Role` |
-| Detector note | MIDI note the detector uses per role: 35/38/47/42/49, Other 35. | `Role::detector_note` (target) |
-| Default note | MIDI note the user sees per role: 36/38/48/42/49, Other 36. Equal to `ROLE_DEFAULT_NOTE` in `app.js`. | `Role::default_note` (target) |
+| Detector note | MIDI note the detector uses per role: 35/38/47/42/49, Other 35. | `Role::detector_note`, `role::role_note` |
+| Default note | MIDI note the user sees per role: 36/38/48/42/49, Other 36. Equal to `ROLE_DEFAULT_NOTE` in `app.js`. | `Role::default_note` |
 | Onset (candidate) | A spectral-flux peak at 44.1 kHz with a coarse time. | `detect::onset::Candidate` |
 | Peak pick | Choose candidates above the role thresholds. Sensitivity scales the thresholds. | `detect::peaks` |
 | Refine | Move a coarse onset to the first sample of the attack at the native rate. | `refine`, `RefineRule` v1-v7 |
