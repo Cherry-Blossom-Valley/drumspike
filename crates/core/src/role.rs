@@ -1,4 +1,5 @@
-//! #281 item 10: the model-free role suggestion from a track's audio (`role_from_audio`).
+//! The one [`Role`] type of the crate (R1), and #281 item 10: the model-free role
+//! suggestion from a track's audio (`role_from_audio`).
 //!
 //! Rules on band energy, spectral centroid, decay time and onset rate; no learned
 //! model, no training data. Returns [`Role::Kick`], [`Role::Snare`],
@@ -29,24 +30,46 @@ use rustfft::{FftPlanner, num_complex::Complex};
 
 use crate::dsp::amp_db_max;
 
-/// A drum role the classifier can suggest. The string is the app's role name
-/// (`crates/app/src/roles.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The role of a track: the instrument its mic records, as the app names it
+/// (`engine.ROLE_CLASSES`). The one role type of the crate: the detector, the attribution
+/// and the classifier use it. Stored by its variant name (`"Kick"`); a stored value without
+/// a role reads as [`Role::Other`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum Role {
-    /// Kick drum.
+    /// Kick drum (reference class BD).
     Kick,
-    /// Snare drum.
+    /// Snare drum (SD).
     Snare,
-    /// Tom.
+    /// Toms (TT).
     Tom,
-    /// Hi-hat.
+    /// Hi-hat (HH).
     Hat,
-    /// Cymbal (ride, crash, overhead-like).
+    /// Cymbals, ride and overheads (CY+RD).
     Cymbal,
+    /// Anything else: every hit is kept, no band limit. The classifier never suggests it.
+    #[default]
+    Other,
 }
 
 impl Role {
-    /// The app's role name.
+    /// Every role, in the app's order.
+    pub const ALL: [Role; 6] = [Role::Kick, Role::Snare, Role::Tom, Role::Hat, Role::Cymbal, Role::Other];
+
+    /// Parse the app's role name (`kick`, `snare`, `tom`, `hat`, `cymbal`, `other`).
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Role> {
+        match s {
+            "kick" => Some(Role::Kick),
+            "snare" => Some(Role::Snare),
+            "tom" => Some(Role::Tom),
+            "hat" => Some(Role::Hat),
+            "cymbal" => Some(Role::Cymbal),
+            "other" => Some(Role::Other),
+            _ => None,
+        }
+    }
+
+    /// The app's name of the role.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -55,6 +78,7 @@ impl Role {
             Role::Tom => "tom",
             Role::Hat => "hat",
             Role::Cymbal => "cymbal",
+            Role::Other => "other",
         }
     }
 }
@@ -167,7 +191,7 @@ pub fn role_threshold(role: Role) -> Option<f64> {
     match role {
         Role::Kick => Some(0.05),
         Role::Tom => Some(0.60),
-        Role::Snare | Role::Hat | Role::Cymbal => None,
+        Role::Snare | Role::Hat | Role::Cymbal | Role::Other => None,
     }
 }
 

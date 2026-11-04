@@ -864,7 +864,7 @@ fn run_onsets(args: &[String]) -> Result<(), String> {
     }
     let doc = serde_json::json!({
         "wav": input,
-        "role": role.name(),
+        "role": role.as_str(),
         "sr": info.sample_rate,
         "n_samples": x.len(),
         "frames": num_frames(n44, Chain::Cli),

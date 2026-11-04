@@ -53,7 +53,7 @@ pub mod peaks;
 pub mod project;
 pub mod pyops;
 pub mod refine;
-// #281 item 10: the model-free role suggestion from a track's audio.
+// The one Role type (R1) and #281 item 10: the model-free role suggestion from a track's audio.
 pub mod role;
 pub mod sampler;
 // #293: the Learn similarity, DSP-only (features of a candidate, the score against the examples).

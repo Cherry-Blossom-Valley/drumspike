@@ -24,7 +24,7 @@ fn kick_track(sr: u32, dur_s: f64, onsets: &[(f64, f64)]) -> Vec<f32> {
 #[test]
 fn role_names_round_trip() {
     for r in Role::ALL {
-        assert_eq!(Role::parse(r.name()), Some(r));
+        assert_eq!(Role::parse(r.as_str()), Some(r));
     }
     assert_eq!(Role::parse("bass"), None);
 }
@@ -134,7 +134,7 @@ fn synthetic_kicks_are_found_within_one_frame() {
 fn silence_gives_no_hit_for_any_role() {
     let x = vec![0f32; 48_000 * 3];
     for r in Role::ALL {
-        assert!(detect_onsets(&x, 48_000, r).unwrap().is_empty(), "{}", r.name());
+        assert!(detect_onsets(&x, 48_000, r).unwrap().is_empty(), "{}", r.as_str());
     }
     assert!(detect_onsets(&[], 48_000, Role::Kick).unwrap().is_empty());
 }

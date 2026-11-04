@@ -52,55 +52,7 @@ use crate::refine::{RefineWindow, refine_track};
 
 pub use super::features::{FPS, FRAME_SIZE, HOP, N_BANDS, N_FFT_BINS};
 
-/// The role of a track, as the app names it (`engine.ROLE_CLASSES`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
-pub enum Role {
-    /// Kick drum (reference class BD).
-    Kick,
-    /// Snare drum (SD).
-    Snare,
-    /// Toms (TT).
-    Tom,
-    /// Hi-hat (HH).
-    Hat,
-    /// Cymbals and ride (CY+RD).
-    Cymbal,
-    /// Anything else: every hit is kept.
-    #[default]
-    Other,
-}
-
-impl Role {
-    /// Every role, in the app's order.
-    pub const ALL: [Role; 6] = [Role::Kick, Role::Snare, Role::Tom, Role::Hat, Role::Cymbal, Role::Other];
-
-    /// Parse the app's role name (`kick`, `snare`, `tom`, `hat`, `cymbal`, `other`).
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Role> {
-        match s {
-            "kick" => Some(Role::Kick),
-            "snare" => Some(Role::Snare),
-            "tom" => Some(Role::Tom),
-            "hat" => Some(Role::Hat),
-            "cymbal" => Some(Role::Cymbal),
-            "other" => Some(Role::Other),
-            _ => None,
-        }
-    }
-
-    /// The app's name of the role.
-    #[must_use]
-    pub fn name(self) -> &'static str {
-        match self {
-            Role::Kick => "kick",
-            Role::Snare => "snare",
-            Role::Tom => "tom",
-            Role::Hat => "hat",
-            Role::Cymbal => "cymbal",
-            Role::Other => "other",
-        }
-    }
-}
+pub use crate::role::Role;
 
 /// What the shape template compares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

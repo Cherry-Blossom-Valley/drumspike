@@ -76,7 +76,7 @@ fn a_role_is_stored_by_its_variant_name_and_a_missing_role_reads_as_other() {
 
 #[test]
 fn the_app_role_names_parse_in_the_app_order() {
-    let names: Vec<&str> = Role::ALL.iter().map(|r| r.name()).collect();
+    let names: Vec<&str> = Role::ALL.iter().map(|r| r.as_str()).collect();
     assert_eq!(names, ["kick", "snare", "tom", "hat", "cymbal", "other"]);
     for (i, r) in Role::ALL.iter().enumerate() {
         assert_eq!(Role::parse(NAMES[i]), Some(*r));
