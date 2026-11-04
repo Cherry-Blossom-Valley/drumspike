@@ -158,6 +158,19 @@ def run_cut(args, repo):
 
 # ---------------------------------------------------------------- plan
 
+def test_next_version_bumps_the_patch_and_releases_a_prerelease():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("cut", CUT)
+    cut = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cut)
+    nv = cut.next_version
+    assert nv("0.9.3") == "0.9.4"
+    assert nv("0.9.20-refactored") == "0.9.20"   # semver: the release follows its prerelease
+    for bad in ("0.9", "0.9.x", "-refactored", "0.9-rc.1"):
+        with pytest.raises(cut.CutError):
+            nv(bad)
+
+
 def test_plan_lists_the_user_visible_pr_and_the_next_version(repo):
     p = run_cut(["plan"], repo)
     assert p.returncode == 0, p.stderr
