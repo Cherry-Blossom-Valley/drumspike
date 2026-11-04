@@ -29,6 +29,17 @@ fn begin_store_running_needs_backup_repick_stored_and_analysed_keep_the_rules() 
 }
 
 #[test]
+fn a_done_track_reports_the_stored_count_after_the_session_steps() {
+    // the slice self-test compared the page with the per-track count from before the cross bleed pass
+    let mut job =
+        json!({"tracks": {"s top": {"state": "done", "n_events": 293}, "t3": {"state": "error", "error": "x"}}});
+    set_done_counts(&mut job, &[("s top".into(), 212), ("t3".into(), 5), ("gone".into(), 1)]);
+    assert_eq!(job["tracks"]["s top"]["n_events"], 212);
+    assert!(job["tracks"]["t3"].get("n_events").is_none());
+    assert!(job["tracks"].get("gone").is_none());
+}
+
+#[test]
 fn jobs_start_idle_and_queue_every_target() {
     let j = Jobs::default();
     assert_eq!(j.status("s1"), json!({"state": "idle", "tracks": {}}));

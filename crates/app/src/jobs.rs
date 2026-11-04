@@ -790,8 +790,24 @@ fn run_job(svc: &Service, sid: &str, targets: &[String], token: &JobToken, progr
                 emit(jobs.update(sid, token, |j| step.emit(j, &out)));
             }
         }
+        // the session steps remove and add hits (cross bleed, flam): a done track's `n_events` is the stored
+        // count after them, the count `events_get` answers and the page shows
+        let counts: Vec<(String, usize)> = analysed
+            .iter()
+            .map(|n| (n.clone(), track_events(op, n).len()))
+            .collect();
+        emit(jobs.update(sid, token, |j| set_done_counts(j, &counts)));
     }
     emit(jobs.update(sid, token, |j| j["state"] = Value::from("done")));
+}
+
+/// Write `n_events` of every done track of the job answer `job` from `counts` (track, stored hit count).
+fn set_done_counts(job: &mut Value, counts: &[(String, usize)]) {
+    for (name, n) in counts {
+        if let Some(entry) = job["tracks"].get_mut(name.as_str()).filter(|e| e["state"] == "done") {
+            entry["n_events"] = Value::from(*n);
+        }
+    }
 }
 
 /// A prepared track (P3-15b): the decode and the parameters (the model-free main, #281 D16).

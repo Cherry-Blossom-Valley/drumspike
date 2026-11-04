@@ -176,7 +176,9 @@
         need(failed.length === 0, `tracks not done: ${failed.map(n => n + ": " + (st.tracks[n].error || st.tracks[n].state)).join("; ")}`);
         if (sc.expect.detector) need(detectors.length === 1 && detectors[0] === sc.expect.detector, `detectors ${JSON.stringify(detectors)}, expected ${sc.expect.detector}`);
         // "analysis done" shows before the page has loaded the new events of every track
-        await until(() => S.order.every(n => S.events[n].length === st.tracks[n].n_events), "the page to load the new events", 30000);
+        const loaded = () => S.order.filter(n => S.events[n].length !== st.tracks[n].n_events).map(n => `${n}: page ${S.events[n].length}, job ${st.tracks[n].n_events}`);
+        try { await until(() => loaded().length === 0, "the page to load the new events", 30000); }
+        catch (e) { throw new Error(`${e.message} (${loaded().join("; ")})`); }
         let total = 0;
         for (const n of S.order) {
           report.tracks[n] = { hits: S.events[n].length };
