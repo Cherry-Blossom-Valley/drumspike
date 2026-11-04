@@ -20,24 +20,24 @@ use crate::detect::onset::{OnsetError, detect_onsets};
 use crate::io::{WavFormat, WavSpec};
 
 /// The protocol classes, in the internal class order (`N_CLASSES`), plus `other`.
-pub const CLASSES: [&str; 6] = ["kick", "snare", "tom", "hat", "cymbal", "other"];
+pub(crate) const CLASSES: [&str; 6] = ["kick", "snare", "tom", "hat", "cymbal", "other"];
 
 /// The index of `class` in [`CLASSES`], or `None` for an unknown class (dropped).
 #[must_use]
-pub fn class_index(class: &str) -> Option<u8> {
+pub(crate) fn class_index(class: &str) -> Option<u8> {
     CLASSES.iter().position(|&c| c == class).map(|i| i as u8)
 }
 
 /// The limits and timeouts of the design section 5.
-pub const HITS_PER_S: f64 = 50.0;
+pub(crate) const HITS_PER_S: f64 = 50.0;
 /// The candidates-per-second limit.
-pub const CANDIDATES_PER_S: f64 = 400.0;
+pub(crate) const CANDIDATES_PER_S: f64 = 400.0;
 /// The hits-per-track limit.
-pub const MAX_HITS: usize = 100_000;
+pub(crate) const MAX_HITS: usize = 100_000;
 /// The candidates-per-track limit.
-pub const MAX_CANDIDATES: usize = 1_000_000;
+pub(crate) const MAX_CANDIDATES: usize = 1_000_000;
 /// The response line length limit: 64 MiB.
-pub const MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_LINE_BYTES: usize = 64 * 1024 * 1024;
 /// The default per-track timeout in seconds (a plugin param can lower it, not raise it).
 pub const DEFAULT_TIMEOUT_S: u64 = 120;
 
@@ -142,7 +142,7 @@ impl DetectorBackend for DspBackend {
 
 /// A protocol 1 hit as the plugin writes it.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub struct ProtocolHit {
+pub(crate) struct ProtocolHit {
     /// Seconds from the start of the file.
     pub t: f64,
     /// One of the protocol classes.
@@ -171,7 +171,7 @@ pub struct Request<'a> {
 
 /// The protocol 1 response as it arrives, before validation: a hit set or an error.
 #[derive(Debug, Clone, Deserialize, PartialEq, Default)]
-pub struct PluginResponse {
+pub(crate) struct PluginResponse {
     /// The response's own protocol major, when the plugin names one (absent: 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol: Option<u32>,
@@ -188,7 +188,7 @@ pub struct PluginResponse {
 
 /// The validated response of one track, ready for the pipeline.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Validated {
+pub(crate) struct Validated {
     /// The hits, sorted by time (the validator sorts when the plugin did not).
     pub hits: Vec<DetectedHit>,
     /// The candidate list, when the plugin gave one.
@@ -211,7 +211,7 @@ pub struct Validated {
 /// [`BackendError::Protocol`] when the response names a protocol other than 1;
 /// [`BackendError::Plugin`] when the plugin reported an error; [`BackendError::Limit`] when
 /// the hit or candidate count, or its rate per second, is over the limit.
-pub fn validate_response(
+pub(crate) fn validate_response(
     response: &PluginResponse,
     file_len_s: f64,
     duration_s: f64,

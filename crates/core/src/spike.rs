@@ -16,32 +16,32 @@ use crate::io::{Bext, WRITE_BLOCK_FRAMES, WavFormat, WavSpec, write_wav, write_w
 use crate::pyops::py_round;
 
 /// Blip length in seconds (full-scale sample plus the decay).
-pub const BLIP_S: f64 = 0.001;
+pub(crate) const BLIP_S: f64 = 0.001;
 /// Description written into the `bext` chunk of a spike file.
 pub const BEXT_DESCRIPTION: &str = "Drum Spike spikes";
 /// Description written into the `bext` chunk of an audio-spike file (#209).
-pub const AUDIO_BEXT_DESCRIPTION: &str = "Drum Spike audio spikes";
+pub(crate) const AUDIO_BEXT_DESCRIPTION: &str = "Drum Spike audio spikes";
 /// The audio-spike snippet clamp in seconds: a snippet is at least [`AUDIO_MIN_S`], at most
 /// [`AUDIO_MAX_S`] (#209).
-pub const AUDIO_MIN_S: f64 = 0.002;
+pub(crate) const AUDIO_MIN_S: f64 = 0.002;
 /// The upper clamp of the audio-spike snippet length (#378; was 0.030, too short for a
 /// 40 Hz kick, whose 1.5 cycles are 37.5 ms).
-pub const AUDIO_MAX_S: f64 = 0.060;
+pub(crate) const AUDIO_MAX_S: f64 = 0.060;
 /// The snippet length when no period is found (silence, no crossing in the window) (#209).
-pub const AUDIO_DEFAULT_S: f64 = 0.010;
+pub(crate) const AUDIO_DEFAULT_S: f64 = 0.010;
 /// The fade-out at the end of an audio-spike snippet, at most (#209).
-pub const AUDIO_FADE_S: f64 = 0.001;
+pub(crate) const AUDIO_FADE_S: f64 = 0.001;
 /// The window the period search looks at: the first part of the hit (#209).
 pub const AUDIO_PERIOD_WINDOW_S: f64 = 0.030;
 /// The lowpass corner that isolates the dominant low component of the hit for the snippet
 /// length: the body tone, not the attack click (#378). Two cascaded second-order stages,
 /// 24 dB per octave: a 3 kHz click is far out, a 200 Hz snare body passes with a group
 /// delay of well under a millisecond.
-pub const AUDIO_LOW_HZ: f64 = 800.0;
+pub(crate) const AUDIO_LOW_HZ: f64 = 800.0;
 
 /// The blip shape at `sr`: `n = max(2, round(0.001 * sr))` samples, `1 - i / n`.
 #[must_use]
-pub fn blip(sr: u32) -> Vec<f32> {
+pub(crate) fn blip(sr: u32) -> Vec<f32> {
     let n = ((BLIP_S * f64::from(sr)).round() as usize).max(2);
     (0..n).map(|i| (1.0 - i as f64 / n as f64) as f32).collect()
 }
@@ -79,7 +79,7 @@ pub fn spike_signal(sr: u32, n_samples: usize, times: &[f64]) -> Vec<f32> {
 /// The block generator of the spike signal (R19 step 2): the ascending in-file hit indices
 /// and the blip, so [`Self::fill`] can produce the samples of [`spike_signal`] one block at
 /// a time, without the whole `n_samples` signal in memory.
-pub struct SpikeSignalBlocks {
+pub(crate) struct SpikeSignalBlocks {
     blip: Vec<f32>,
     starts: Vec<usize>,
 }
@@ -129,14 +129,14 @@ impl SpikeSignalBlocks {
 /// originator copied from the source record, the description and coding history of the
 /// spike file itself.
 #[must_use]
-pub fn spike_bext(source: &Bext, sr: u32, format: WavFormat) -> Bext {
+pub(crate) fn spike_bext(source: &Bext, sr: u32, format: WavFormat) -> Bext {
     bext_with_description(source, sr, format, BEXT_DESCRIPTION)
 }
 
 /// The `bext` chunk of an audio-spike file: the source time reference, the audio-spike
 /// description (#209).
 #[must_use]
-pub fn audio_spike_bext(source: &Bext, sr: u32, format: WavFormat) -> Bext {
+pub(crate) fn audio_spike_bext(source: &Bext, sr: u32, format: WavFormat) -> Bext {
     bext_with_description(source, sr, format, AUDIO_BEXT_DESCRIPTION)
 }
 
@@ -428,7 +428,7 @@ fn snippet_ends(source: &[f32], sr: u32, times: &[f64]) -> Vec<(usize, usize, bo
 /// sample is exact zero. Returns the signal and the number of hits that got the default
 /// length (no dominant low component found, #378).
 #[must_use]
-pub fn audio_spike_signal(source: &[f32], sr: u32, times: &[f64]) -> (Vec<f32>, usize) {
+pub(crate) fn audio_spike_signal(source: &[f32], sr: u32, times: &[f64]) -> (Vec<f32>, usize) {
     let mut out = vec![0.0f32; source.len()];
     let mut no_low = 0;
     for (start, end, found) in snippet_ends(source, sr, times) {

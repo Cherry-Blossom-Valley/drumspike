@@ -86,35 +86,35 @@ impl Recipe {
 }
 
 /// Attack frames per candidate.
-pub const ATTACK_FRAMES: usize = 4;
+pub(crate) const ATTACK_FRAMES: usize = 4;
 /// Attack frame length (seconds; 512 samples at 48 kHz).
-pub const ATTACK_WIN_S: f64 = 0.0107;
+pub(crate) const ATTACK_WIN_S: f64 = 0.0107;
 /// Attack frame hop (seconds).
-pub const ATTACK_HOP_S: f64 = 0.005;
+pub(crate) const ATTACK_HOP_S: f64 = 0.005;
 /// The first attack frame starts this far from the anchor (seconds).
-pub const ATTACK_START_S: f64 = -0.002;
+pub(crate) const ATTACK_START_S: f64 = -0.002;
 /// Log bands of an attack frame (option A).
-pub const ATTACK_BANDS: usize = 32;
+pub(crate) const ATTACK_BANDS: usize = 32;
 /// Lowest and highest attack band edge (Hz).
-pub const ATTACK_LO_HZ: f64 = 60.0;
+pub(crate) const ATTACK_LO_HZ: f64 = 60.0;
 /// The highest band edge of every spectral block (Hz; lower when the Nyquist frequency is lower).
-pub const TOP_HZ: f64 = 16_000.0;
+pub(crate) const TOP_HZ: f64 = 16_000.0;
 /// The body window starts this far after the anchor (seconds) ...
-pub const BODY_START_S: f64 = 0.010;
+pub(crate) const BODY_START_S: f64 = 0.010;
 /// ... and is this long (seconds).
-pub const BODY_LEN_S: f64 = 0.060;
+pub(crate) const BODY_LEN_S: f64 = 0.060;
 /// The lowest body band edge (Hz); the bands are 1/6 octave wide.
-pub const BODY_LO_HZ: f64 = 40.0;
+pub(crate) const BODY_LO_HZ: f64 = 40.0;
 /// Envelope steps from the anchor.
-pub const ENV_STEPS: usize = 12;
+pub(crate) const ENV_STEPS: usize = 12;
 /// Envelope step length (seconds).
-pub const ENV_STEP_S: f64 = 0.010;
+pub(crate) const ENV_STEP_S: f64 = 0.010;
 /// The floor of a block under its maximum (dB).
-pub const DB_RANGE: f32 = 80.0;
+pub(crate) const DB_RANGE: f32 = 80.0;
 /// The number of nearest examples a score averages (concept 3.1: `k = min(3, |P|)`).
-pub const K_NEAREST: usize = 3;
+pub(crate) const K_NEAREST: usize = 3;
 /// Mel bands of the option C blocks.
-pub const MEL_BANDS: usize = 40;
+pub(crate) const MEL_BANDS: usize = 40;
 const MFCC_ATTACK: usize = 13;
 const MFCC_BODY: usize = 19;
 
@@ -360,7 +360,7 @@ fn cepstrum(v: &[f32], n: usize) -> Vec<f32> {
 
 /// A block in dB: the floor [`DB_RANGE`] under its maximum (when `db`), the mean removed,
 /// L2-normalised; all zeros when it has no shape (a flat block, silence).
-pub fn normalise(v: &[f32], db: bool) -> Vec<f32> {
+pub(crate) fn normalise(v: &[f32], db: bool) -> Vec<f32> {
     if v.is_empty() {
         return Vec::new();
     }
@@ -402,7 +402,7 @@ impl Blocks {
 /// The anchor of a detector time `t`: the refinement's steepest rise in its window (`-2..+12` ms,
 /// [`RefineWindow::DEFAULT`]) without neighbours, so it does not depend on which neighbours survive.
 #[must_use]
-pub fn anchor(x: &[f32], sr: u32, t: f64) -> f64 {
+pub(crate) fn anchor(x: &[f32], sr: u32, t: f64) -> f64 {
     refine_sr(x, t, sr, &[], RefineWindow::DEFAULT).0
 }
 
@@ -518,14 +518,14 @@ pub fn example_scores(pos: &[&[f32]], neg: &[&[f32]]) -> (Vec<f32>, Vec<f32>) {
 }
 
 /// Bins of the Similarity histogram (concept 3.2).
-pub const HIST_BINS: usize = 50;
+pub(crate) const HIST_BINS: usize = 50;
 /// The automatic threshold ignores scores under this (concept 3.2: the search starts at 0.3).
 pub const AUTO_LO: f32 = 0.3;
 /// The threshold when nothing better is known (concept 3.2, fewer than 4 candidates).
 pub const DEFAULT_THRESHOLD: f32 = 0.5;
 
 /// The automatic threshold looks for the emptiest bins this far on each side of the boundary.
-pub const AUTO_WINDOW: f32 = 0.05;
+pub(crate) const AUTO_WINDOW: f32 = 0.05;
 
 fn median(v: &[f32]) -> f32 {
     let mut s = v.to_vec();
@@ -611,10 +611,10 @@ pub fn auto_threshold(cands: &[f32], this: &[f32], _not: &[f32]) -> f32 {
 /// P4-6c: the suggested threshold with "not" examples only: a candidate goes when its similarity to the
 /// nearest "not" examples is 0.9 or more (score `(1 - sn) / 2` under 0.05), so in practice the marked hit
 /// and its near copies.
-pub const SUGGEST_NOT_ONLY: f32 = 0.05;
+pub(crate) const SUGGEST_NOT_ONLY: f32 = 0.05;
 /// P4-6c: the suggested threshold with both kinds of examples: a candidate goes when its similarity to the
 /// nearest "not" examples exceeds the one to the nearest "this" examples by 0.2 or more (score under 0.4).
-pub const SUGGEST_BOTH: f32 = 0.4;
+pub(crate) const SUGGEST_BOTH: f32 = 0.4;
 
 /// P4-6c: the threshold the Learn filter uses while the track's `learn.auto` is set (concept 3.2: it follows
 /// the examples until the engineer drags it). `cands` are the scores of the candidates that pass the
