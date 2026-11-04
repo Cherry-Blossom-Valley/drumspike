@@ -1134,6 +1134,7 @@ pub fn repick_candidates(cands: &[Candidate], p: &OnsetParams, weak_limit: f32, 
 }
 
 /// Onsets of a 44.1 kHz signal and its log spectrogram with explicit parameters.
+#[cfg(test)]
 #[must_use]
 pub fn onsets_from_spectrogram(spec: &[f32], x44: &[f32], p: &OnsetParams) -> Vec<OnsetHit> {
     onsets_with_candidates(spec, x44, p).0

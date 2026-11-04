@@ -116,6 +116,7 @@ impl ProjectError {
     }
 
     /// True for the newer-format error (`isinstance(e, ProjectFormatError)`).
+    #[cfg(test)]
     #[must_use]
     pub fn is_format(&self) -> bool {
         matches!(self, ProjectError::Format(_))

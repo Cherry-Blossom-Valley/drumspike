@@ -146,6 +146,8 @@ const HALF_LENGTH_S: f64 = T_A + T_B;
 /// A fixed-ratio resampler from 48 or 96 kHz to 44.1 kHz; 44.1 kHz passes through.
 #[derive(Debug, Clone)]
 pub struct Resampler {
+    /// The source rate (read by [`Resampler::source_rate`] in tests only).
+    #[cfg(test)]
     sr_in: u32,
     /// Input samples per 147 output samples: 160 (48 kHz), 320 (96 kHz) or 147 (pass-through).
     m: usize,
@@ -171,6 +173,7 @@ impl Resampler {
         };
         if m == PHASES {
             return Ok(Resampler {
+                #[cfg(test)]
                 sr_in,
                 m,
                 taps: 0,
@@ -215,6 +218,7 @@ impl Resampler {
             }
         }
         Ok(Resampler {
+            #[cfg(test)]
             sr_in,
             m,
             taps,
@@ -247,6 +251,7 @@ impl Resampler {
     }
 
     /// The source rate this table was built for.
+    #[cfg(test)]
     #[must_use]
     pub fn source_rate(&self) -> u32 {
         self.sr_in

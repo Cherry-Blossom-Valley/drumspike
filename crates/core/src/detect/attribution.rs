@@ -412,6 +412,7 @@ pub struct HitFlags {
 
 impl HitFlags {
     /// True when any flag is set.
+    #[cfg(test)]
     #[must_use]
     pub fn is_flagged(&self) -> bool {
         self.bleed.is_some() || self.resonance.is_some()

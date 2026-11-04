@@ -360,6 +360,7 @@ pub fn pick(activations: &[f32], chain: Chain) -> Vec<Onset> {
 /// # Panics
 ///
 /// When `activations.len()` is not a multiple of [`N_CLASSES`].
+#[cfg(test)]
 #[must_use]
 pub fn pick_with(activations: &[f32], chain: Chain, thresholds: &[f64; N_CLASSES]) -> Vec<Onset> {
     pick_counted_with(activations, chain, thresholds).0

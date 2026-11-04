@@ -93,6 +93,7 @@ fn finish_level(raw: &[Raw], bs: usize) -> PeakLevel {
 }
 
 /// One level of the pyramid: `(n // bs) * bs` samples in buckets of `bs`.
+#[cfg(test)]
 #[must_use]
 pub fn peaks_level(x: &[f32], bs: usize) -> PeakLevel {
     finish_level(&raw_level(x, bs), bs)
@@ -218,6 +219,7 @@ impl Track {
     }
 
     /// All samples.
+    #[cfg(test)]
     #[must_use]
     pub fn all_samples(&self) -> &[f32] {
         &self.samples

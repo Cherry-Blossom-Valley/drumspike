@@ -257,6 +257,7 @@ pub struct Analysis {
 
 impl Analysis {
     /// True when the roll fill added event `i`.
+    #[cfg(test)]
     #[must_use]
     pub fn is_roll(&self, i: usize) -> bool {
         self.roll.get(i).copied().unwrap_or(false)
@@ -312,6 +313,7 @@ pub fn role_note(role: &str) -> u8 {
 }
 
 /// The thresholds as the CLI receives them: `float(f"{t:.3f}")` for each.
+#[cfg(test)]
 #[must_use]
 pub fn round_thresholds(t: &[f64; N_CLASSES]) -> [f64; N_CLASSES] {
     t.map(|v| py_round_digits(v, 3))

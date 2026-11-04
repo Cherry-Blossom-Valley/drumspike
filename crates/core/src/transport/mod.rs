@@ -1023,6 +1023,7 @@ impl Transport {
     }
 
     /// Move to `seconds` (rounded to the device frame).
+    #[cfg(test)]
     pub fn seek_seconds(&self, seconds: f64) {
         self.seek(self.frame_of(seconds));
     }
@@ -1242,6 +1243,7 @@ impl Offline {
     }
 
     /// Render without servicing the reader (the rings drain; for the underrun counter).
+    #[cfg(test)]
     pub fn render_starved(&mut self, frames: usize) -> Vec<f32> {
         let mut out = vec![0.0f32; 2 * frames];
         self.engine.render(&mut out, 2, 0);
@@ -1331,6 +1333,7 @@ impl Offline {
     }
 
     /// Play or pause.
+    #[cfg(test)]
     pub fn set_playing(&mut self, on: bool) {
         self.ctl.shared.playing.store(on, Ordering::Release);
     }
