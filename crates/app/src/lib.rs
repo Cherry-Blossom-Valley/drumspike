@@ -90,8 +90,9 @@ pub use transport::{DeviceKey, TRANSPORT_COMMANDS};
 /// `job` is the value `analyze_status` returns. The Tauri wrapper sends it on a `Channel`.
 pub type Progress = Arc<dyn Fn(Value) + Send + Sync>;
 
-/// Where the service finds its files.
-#[derive(Debug, Clone)]
+/// Where the service finds its files. [`Default`] pins nothing (every rule at its current or
+/// recorded version).
+#[derive(Debug, Clone, Default)]
 pub struct ServiceConfig {
     /// P4-12: a pinned refinement rule for every analysis and re-pick (`DRUMSPIKE_REFINE_RULE`,
     /// `1`, `2` or `3`; the parity checks pin the frozen engine's rule 1). `None`: a new analysis runs
@@ -267,13 +268,7 @@ mod tests {
 
     #[test]
     fn a_new_service_has_no_project_and_an_idle_job() {
-        let s = Service::new(ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let s = Service::new(ServiceConfig::default());
         assert_eq!(s.project_list(ListShape::Sessions), serde_json::json!([]));
         assert_eq!(s.analyze_status("x")["state"], "idle");
         assert!(!s.jobs().running("x") && !s.jobs().storing("x"));

@@ -389,13 +389,7 @@ mod tests {
 
     #[test]
     fn dispatch_knows_its_commands_and_checks_the_arguments() {
-        let svc = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = Service::new(crate::ServiceConfig::default());
         assert!(dispatch(&svc, "project_list", &json!({})).is_none());
         for (cmd, args) in [
             ("tempo_map_get", json!({})),

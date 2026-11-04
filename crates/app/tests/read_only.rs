@@ -56,13 +56,7 @@ impl Session {
                 .collect::<Vec<_>>()
         );
         // the DSP detector always: the re-pick preview answers then
-        let cfg = || ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        };
+        let cfg = || ServiceConfig::default();
         let prep = Service::new(cfg());
         let sid = prep.project_open(dir.to_str().unwrap()).unwrap()["sid"]
             .as_str()

@@ -301,13 +301,7 @@ mod tests {
     #[test]
     fn feedback_send_posts_the_payload_and_answers_the_gateway() {
         let (addr, got) = mock_gateway();
-        let s = super::super::Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let s = super::super::Service::new(crate::ServiceConfig::default());
         let payload = json!({
             "kind": "bug",
             "title": "Kick misses on 2 and 4",
@@ -329,13 +323,7 @@ mod tests {
 
     #[test]
     fn feedback_send_refuses_a_private_payload_before_the_network() {
-        let s = super::super::Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let s = super::super::Service::new(crate::ServiceConfig::default());
         let e = s
             .feedback_send(
                 &json!({

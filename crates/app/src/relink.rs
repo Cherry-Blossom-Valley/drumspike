@@ -281,13 +281,7 @@ mod tests {
 
     #[test]
     fn dispatch_ignores_other_commands_and_checks_arguments() {
-        let svc = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = Service::new(crate::ServiceConfig::default());
         let ch = Arc::new(Channels::default());
         assert!(dispatch(&svc, &ch, "project_open", &json!({})).is_none());
         let e = dispatch(&svc, &ch, "relink_search", &json!({"sid": "x"}))

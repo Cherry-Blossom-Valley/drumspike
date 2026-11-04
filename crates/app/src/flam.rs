@@ -325,11 +325,8 @@ mod tests {
 
     fn cfg(pin: Option<u32>) -> ServiceConfig {
         ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
             flam_rule: pin,
-            cross_bleed: None,
-            ghost_gate: None,
+            ..ServiceConfig::default()
         }
     }
 

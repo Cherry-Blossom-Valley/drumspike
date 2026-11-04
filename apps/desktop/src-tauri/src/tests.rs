@@ -151,13 +151,7 @@ fn the_async_runtime_has_four_workers_and_blocking_runs_on_the_pool() {
     });
     let n = ids.lock().unwrap().len();
     assert!((1..=ASYNC_WORKERS).contains(&n), "{n} workers ran the tasks");
-    let svc = Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(ServiceConfig::default());
     let caller = std::thread::current().id();
     let (v, on) = tauri::async_runtime::block_on(blocking(&svc, "project_list", move |s| {
         Ok((s.project_list(ListShape::Ids), std::thread::current().id()))

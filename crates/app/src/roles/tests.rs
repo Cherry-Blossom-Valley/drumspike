@@ -5,13 +5,7 @@ fn svc(tag: &str) -> (Service, PathBuf) {
     let d = std::env::temp_dir().join(format!("ds_roles_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
-    let s = Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let s = Service::new(ServiceConfig::default());
     s.set_home(&d);
     (s, d)
 }
@@ -675,13 +669,7 @@ fn presets_are_saved_listed_loaded_and_replaced() {
 
 #[test]
 fn presets_need_a_home_folder() {
-    let s = Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let s = Service::new(ServiceConfig::default());
     // the environment of the test run may set DRUMSPIKE_HOME; only the error path is checked then
     if s.home().is_none() {
         assert_eq!(s.kit_presets_list().unwrap_err().code, 409);

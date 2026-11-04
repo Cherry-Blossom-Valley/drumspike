@@ -175,13 +175,7 @@ fn service_with_open_plan(tag: &str) -> (Service, Vec<String>) {
         channel_mask: 0,
     };
     write_wav(&path, &spec, &vec![0.0f32; 48_000], None).unwrap();
-    let svc = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(crate::ServiceConfig::default());
     let names = vec!["t".to_string()];
     let plan = Plan {
         sid: "s1".into(),

@@ -142,13 +142,7 @@ fn apply_ops_refuses_bad_ops_and_changes_nothing() {
 
 #[test]
 fn dispatch_knows_its_commands_and_checks_the_arguments() {
-    let svc = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(crate::ServiceConfig::default());
     assert!(dispatch(&svc, "project_list", &json!({})).is_none());
     assert_eq!(
         dispatch(&svc, "events_edit", &json!({"sid": "x", "name": "n"}))

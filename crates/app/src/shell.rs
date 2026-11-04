@@ -468,13 +468,7 @@ mod tests {
 
     #[test]
     fn dispatch_knows_only_its_command_and_checks_the_argument() {
-        let svc = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = Service::new(crate::ServiceConfig::default());
         assert!(dispatch(&svc, "project_open", &json!({})).is_none());
         assert_eq!(
             dispatch(&svc, "export_existing", &json!({})).unwrap().unwrap_err().code,

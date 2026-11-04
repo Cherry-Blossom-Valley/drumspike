@@ -211,13 +211,7 @@ fn a_stale_worker_commits_no_events() {
     let dir = std::env::temp_dir().join(format!("ds_jobs_stale_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let svc = Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(ServiceConfig::default());
     let mut project = new_project(&dir, "Stale").unwrap();
     add_track(&mut project, "kick", None, "kick", 36, None).unwrap();
     let op = svc.inner.registry.register(project);
@@ -270,13 +264,7 @@ fn a_second_analyze_start_is_refused_until_the_project_reopens() {
     let dir = std::env::temp_dir().join(format!("ds_jobs_start2_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let svc = Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(ServiceConfig::default());
     let mut project = new_project(&dir, "Twice").unwrap();
     add_track(&mut project, "kick", None, "kick", 36, None).unwrap();
     let op = svc.inner.registry.register(project);
@@ -301,13 +289,7 @@ fn a_second_analyze_start_is_refused_until_the_project_reopens() {
 #[test]
 fn kind_names_the_dsp_fallback_which_ignores_prepared_features() {
     let slot = DetectorSlot;
-    let cfg = ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    };
+    let cfg = ServiceConfig::default();
     assert_eq!(slot.kind(&cfg).unwrap(), Kind::Dsp);
     let x = vec![0.0f32; 48_000];
     let parsed = parse_params(None).unwrap();
@@ -482,19 +464,10 @@ fn the_rule_of_an_analysis_and_of_a_repick() {
     assert_eq!(parse_rule("7"), Some(RefineRule::Visible));
     assert_eq!(parse_rule("8"), None);
     assert_eq!(parse_rule(""), None);
-    let free = ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    };
+    let free = ServiceConfig::default();
     let pinned = ServiceConfig {
         refine_rule: Some(RefineRule::Reference),
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
+        ..ServiceConfig::default()
     };
     // a new analysis runs the current rule unless pinned
     assert_eq!(analysis_rule(&free), RefineRule::CURRENT);
@@ -542,13 +515,7 @@ fn json_indent_one_matches_python_dump() {
 #[test]
 fn the_dsp_fallback_runs_without_a_model_file() {
     let slot = DetectorSlot;
-    let cfg = ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    };
+    let cfg = ServiceConfig::default();
     let x = vec![0.0f32; 48_000];
     let parsed = parse_params(None).unwrap();
     let (a, det) = slot.analyze_prepared(&cfg, &x, 48_000, "kick", &parsed, None).unwrap();

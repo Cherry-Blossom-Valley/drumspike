@@ -1688,13 +1688,7 @@ mod tests {
 
     #[test]
     fn bridge_call_checks_its_arguments() {
-        let s = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let s = Service::new(crate::ServiceConfig::default());
         let ch = std::sync::Arc::new(Channels::default());
         assert_eq!(bridge_call(&s, &ch, "export_spikes", &json!({})).unwrap_err().code, 400);
         assert_eq!(

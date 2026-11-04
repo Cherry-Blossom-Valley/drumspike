@@ -13,13 +13,7 @@ impl Write for Buf {
 }
 
 fn talk(lines: &[Value]) -> Vec<Value> {
-    let svc = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(crate::ServiceConfig::default());
     let input = lines.iter().map(|l| format!("{l}\n")).collect::<String>();
     let buf = Buf::default();
     serve(&svc, std::io::Cursor::new(input.into_bytes()), Box::new(buf.clone()));
@@ -68,13 +62,7 @@ fn initialize_list_and_call_follow_the_protocol() {
 
 #[test]
 fn bad_input_is_a_json_rpc_error_not_silence() {
-    let svc = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(crate::ServiceConfig::default());
     let buf = Buf::default();
     serve(
         &svc,
@@ -133,13 +121,7 @@ fn tool_descriptions_say_what_the_agent_must_know() {
 fn a_progress_tool_starts_a_job_and_job_get_reports_it() {
     let dir = std::env::temp_dir().join(format!("ds_mcp_job_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let svc = Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(crate::ServiceConfig::default());
     svc.set_home(dir.join("home"));
     let sid = svc
         .project_new(Some("J"), Some(&dir.display().to_string()), None)

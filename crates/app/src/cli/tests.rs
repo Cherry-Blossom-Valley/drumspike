@@ -32,13 +32,7 @@ fn io(input: &str) -> (Io, Buf, Buf) {
 }
 
 fn svc() -> Service {
-    Service::new(crate::ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    })
+    Service::new(crate::ServiceConfig::default())
 }
 
 fn args(s: &str) -> Vec<String> {

@@ -1275,13 +1275,7 @@ mod tests {
 
     #[test]
     fn dispatch_knows_its_commands_only() {
-        let s = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let s = Service::new(crate::ServiceConfig::default());
         assert!(dispatch(&s, "nope", &json!({})).is_none());
         assert_eq!(
             dispatch(&s, "track_layer_get", &json!({})).unwrap().unwrap_err().code,

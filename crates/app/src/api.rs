@@ -1917,13 +1917,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ds_api_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let svc = crate::Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = crate::Service::new(crate::ServiceConfig::default());
         svc.set_home(root.join("home"));
         svc.set_projects_dir(root.join("projects"));
         let b = crate::bridge::Bridge::new(svc, &root);

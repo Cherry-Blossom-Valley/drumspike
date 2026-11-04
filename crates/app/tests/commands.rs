@@ -41,13 +41,7 @@ fn u32_at(b: &[u8], i: usize) -> u32 {
 
 #[test]
 fn app_info_reports_version_detector_chain() {
-    let svc = Service::new(ServiceConfig {
-        refine_rule: None,
-        bleed_rule: None,
-        flam_rule: None,
-        cross_bleed: None,
-        ghost_gate: None,
-    });
+    let svc = Service::new(ServiceConfig::default());
     let v = svc.app_info();
     assert_eq!(v["core_version"], drumspike_core::VERSION);
     assert_eq!(v["detector"], drumspike_app::DETECTOR);

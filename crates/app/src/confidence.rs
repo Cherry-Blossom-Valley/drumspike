@@ -510,13 +510,7 @@ mod tests {
     #[test]
     fn dispatch_answers_only_its_command() {
         assert_eq!(CONFIDENCE_COMMANDS, ["track_confidence"]);
-        let svc = Service::new(crate::ServiceConfig {
-            refine_rule: None,
-            bleed_rule: None,
-            flam_rule: None,
-            cross_bleed: None,
-            ghost_gate: None,
-        });
+        let svc = Service::new(crate::ServiceConfig::default());
         assert!(dispatch(&svc, "markers_get", &json!({})).is_none());
         assert!(dispatch(&svc, "track_confidence", &json!({})).unwrap().is_err());
         assert!(
