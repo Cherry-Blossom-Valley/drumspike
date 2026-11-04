@@ -201,7 +201,7 @@ BANDS = {"kick": [("lp", 150.0)], "tom": [("hp", 50.0), ("lp", 400.0)], "snare":
 
 
 def rbj(kind, f, sr):
-    """RBJ cookbook lowpass or highpass at `f`, Q = 1/sqrt(2) (`attribution::Biquad::new`): (b, a)."""
+    """RBJ cookbook lowpass or highpass at `f`, Q = 1/sqrt(2) (`dsp::Biquad::new`): (b, a)."""
     w = 2 * np.pi * f / sr
     cw, sw = np.cos(w), np.sin(w)
     alpha = sw / (2 * np.sqrt(0.5))

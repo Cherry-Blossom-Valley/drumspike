@@ -43,7 +43,8 @@ export step reads the marks.
 |---|---|
 | `io` | WAV and BWF reader at the native rate, explicit downmix, WAV writer. |
 | `peaks`, `cache` | Min/max/RMS waveform pyramid and its cache; tile reads for the page. |
-| `pyops` | Python-compatible rounding (half-even `py_round`, half-up `ms_to_samples`); the frozen engine needs it. |
+| `pyops` | Python-compatible rounding (half-even `py_round`, `int()` truncation); the frozen engine needs it. |
+| `dsp` | Shared filter and statistics primitives: `Biquad`, `band_sections`, `band_peak_db`, `band_level_db`, `broadband_peak_db`, `percentile`, `np_percentile`, `median`, half-up `ms_to_samples`, the dB floor policies `amp_db_add` and `amp_db_max`. |
 | `detect` | Detection per track: `features` (spectral flux), `onset` (candidates), `peaks` (thresholds), `nmfd`, `resample`. |
 | `detect::attribution`, `tom_bleed`, `cross_bleed`, `flam` | Per-hit ownership and the special-case rules. |
 | `refine` | Moves a coarse onset to the first sample of the attack. `RefineRule` v1 to v7 (v7 is current). |
