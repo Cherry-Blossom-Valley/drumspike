@@ -718,6 +718,29 @@ impl FootTune {
     };
 }
 
+/// What the back-track takes beside the signal and its bounds: the peak margin, the strict foot (versions 4 and 5) and
+/// the steep edge after the foot (versions 6 and 7).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct BackTune {
+    /// The threshold under the peak (dB): [`FM_PEAK_DB`], or another margin (P4-31).
+    peak_db: f64,
+    /// The foot taken one step stricter ([`foot_strict`]) with this cap, when `Some`.
+    tune: Option<FootTune>,
+    /// The first steep edge after the foot ([`edge_foot`]) with this tail rule, when `Some`.
+    edge: Option<EdgeTail>,
+}
+
+impl BackTune {
+    /// The version 3 back-track with the peak margin `peak_db`: no strict foot, no steep edge.
+    const fn peak(peak_db: f64) -> BackTune {
+        BackTune {
+            peak_db,
+            tune: None,
+            edge: None,
+        }
+    }
+}
+
 /// Seconds to samples, rounded (the back-track's spans are in time, not samples: P4-11b R4).
 fn samples(s: f64, srf: f64) -> i64 {
     (s * srf).round() as i64
@@ -780,27 +803,24 @@ pub fn first_motion_peak(
     next: Option<f64>,
     peak_db: f64,
 ) -> (i64, BackStep) {
-    back_track(x, s, sr, t0, (prev, next), peak_db, None, None)
+    back_track(x, s, sr, t0, (prev, next), BackTune::peak(peak_db))
 }
 
-/// The back-track of [`first_motion_peak`]; `tune` takes the foot one step stricter ([`foot_strict`], versions 4
-/// and 5) when it is `Some`. `neighbors` are the previous and the next hit time (`None` at the ends).
-#[allow(clippy::too_many_arguments)]
+/// The back-track of [`first_motion_peak`] with the settings `bt` ([`BackTune`]). `neighbors` are the previous and the
+/// next hit time (`None` at the ends).
 fn back_track(
     x: &[f32],
     s: i64,
     sr: u32,
     t0: f64,
     neighbors: (Option<f64>, Option<f64>),
-    peak_db: f64,
-    tune: Option<FootTune>,
-    edge: Option<EdgeTail>,
+    bt: BackTune,
 ) -> (i64, BackStep) {
     let srf = f64::from(sr);
     let (prev, next) = neighbors;
     let prev_mid = prev.map(|p| py_int(((p + t0) / 2.0) * srf));
     let next_mid = next.map(|nx| py_int(((t0 + nx) / 2.0) * srf));
-    first_motion_traced(x, s, sr, prev_mid, next_mid, peak_db, tune, edge).0
+    first_motion_traced(x, s, sr, prev_mid, next_mid, bt).0
 }
 
 /// [`first_motion`] with the bounds as samples: `prev_mid` bounds the walk and the floor window (the midpoint to the
@@ -808,7 +828,7 @@ fn back_track(
 /// second stroke's re-rise with `prev_mid` at the dip after the first stroke (`tools/onset_guard.py` `walk`).
 #[must_use]
 pub fn first_motion_mid(x: &[f32], s: i64, sr: u32, prev_mid: Option<i64>, next_mid: Option<i64>) -> (i64, BackStep) {
-    first_motion_mid_rule(x, s, sr, prev_mid, next_mid, FM_PEAK_DB, None)
+    first_motion_traced(x, s, sr, prev_mid, next_mid, BackTune::peak(FM_PEAK_DB)).0
 }
 
 /// The strict foot of version 4 (#101). `d` is the walk's first sample over the threshold. Walking back from
@@ -1064,20 +1084,6 @@ fn edge_foot(x: &[f32], foot: i64, end: i64, srf: f64, tail_rule: EdgeTail) -> i
     foot
 }
 
-/// [`first_motion_mid`] with another peak margin `peak_db` in place of [`FM_PEAK_DB`], and the foot taken
-/// strict ([`foot_strict`], capped by `tune`) when `tune` is `Some`.
-fn first_motion_mid_rule(
-    x: &[f32],
-    s: i64,
-    sr: u32,
-    prev_mid: Option<i64>,
-    next_mid: Option<i64>,
-    peak_db: f64,
-    tune: Option<FootTune>,
-) -> (i64, BackStep) {
-    first_motion_traced(x, s, sr, prev_mid, next_mid, peak_db, tune, None).0
-}
-
 /// The walk of [`first_motion_mid`] with its decision (the floor, the threshold, the foot and the foot after the
 /// lead-in) for one hit; `None` where the walk does not reach the lead-in (no signal, a busy or separate stretch).
 #[must_use]
@@ -1088,7 +1094,7 @@ pub fn first_motion_trace(
     prev_mid: Option<i64>,
     next_mid: Option<i64>,
 ) -> Option<LeadTrace> {
-    first_motion_traced(x, s, sr, prev_mid, next_mid, FM_PEAK_DB, None, None).1
+    first_motion_traced(x, s, sr, prev_mid, next_mid, BackTune::peak(FM_PEAK_DB)).1
 }
 
 /// The foot of the walk back from `s` over the samples at or above `thr` (gaps under `gap` do not end the run), and
@@ -1107,17 +1113,15 @@ fn walk_foot(x: &[f32], s: i64, lo: i64, thr: f64, gap: i64) -> (i64, bool) {
     (foot, false)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn first_motion_traced(
     x: &[f32],
     s: i64,
     sr: u32,
     prev_mid: Option<i64>,
     next_mid: Option<i64>,
-    peak_db: f64,
-    tune: Option<FootTune>,
-    edge: Option<EdgeTail>,
+    bt: BackTune,
 ) -> ((i64, BackStep), Option<LeadTrace>) {
+    let BackTune { peak_db, tune, edge } = bt;
     let srf = f64::from(sr);
     let n = x.len() as i64;
     if s <= 0 || s >= n {
@@ -1221,22 +1225,13 @@ pub fn refine_first_motion_peak(
     win: RefineWindow,
     peak_db: f64,
 ) -> Refined {
-    refine_back_peak(x, t0, sr, neighbors, win, peak_db, None, None)
+    refine_back_peak(x, t0, sr, neighbors, win, BackTune::peak(peak_db))
 }
 
-/// [`refine_first_motion_peak`] with the strict foot of `tune` ([`RefineRule::Foot`], [`RefineRule::FootCapped`])
-/// when it is `Some`, and the steep edge after the foot ([`RefineRule::Edge`]) when `edge` is set.
-#[allow(clippy::too_many_arguments)]
-fn refine_back_peak(
-    x: &[f32],
-    t0: f64,
-    sr: u32,
-    neighbors: &[f64],
-    win: RefineWindow,
-    peak_db: f64,
-    tune: Option<FootTune>,
-    edge: Option<EdgeTail>,
-) -> Refined {
+/// [`refine_first_motion_peak`] with the back-track settings `bt`: the strict foot of its `tune` ([`RefineRule::Foot`],
+/// [`RefineRule::FootCapped`]) when it is `Some`, and the steep edge after the foot ([`RefineRule::Edge`],
+/// [`RefineRule::Visible`]) when its `edge` is set.
+fn refine_back_peak(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWindow, bt: BackTune) -> Refined {
     let r = refine_reach(x, t0, sr, neighbors, win);
     let srf = f64::from(sr);
     let (mut prev, mut next): (Option<f64>, Option<f64>) = (None, None);
@@ -1248,7 +1243,7 @@ fn refine_back_peak(
         }
     }
     let s = (r.t * srf).round() as i64;
-    let (foot, back) = back_track(x, s, sr, t0, (prev, next), peak_db, tune, edge);
+    let (foot, back) = back_track(x, s, sr, t0, (prev, next), bt);
     Refined {
         t: if back == BackStep::Moved {
             foot as f64 / srf
@@ -1266,7 +1261,7 @@ pub fn refine_rule(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWi
     refine_rule_peak(x, t0, sr, neighbors, win, rule, FM_PEAK_DB)
 }
 
-/// [`refine_rule`] with the back-track peak margin `peak_db` (it matters for [`RefineRule::FirstMotion`] only).
+/// [`refine_rule`] with the back-track peak margin `peak_db` (it matters for versions 3 to 7, the rules with a back-track).
 #[must_use]
 pub fn refine_rule_peak(
     x: &[f32],
@@ -1277,6 +1272,8 @@ pub fn refine_rule_peak(
     rule: RefineRule,
     peak_db: f64,
 ) -> Refined {
+    // the back-track of versions 4 to 7: the strict foot or the steep edge after it
+    let back = |tune, edge| refine_back_peak(x, t0, sr, neighbors, win, BackTune { peak_db, tune, edge });
     match rule {
         RefineRule::Reference => {
             let (t, rise) = refine_sr(x, t0, sr, neighbors, win);
@@ -1289,10 +1286,10 @@ pub fn refine_rule_peak(
         }
         RefineRule::Reach => refine_reach(x, t0, sr, neighbors, win),
         RefineRule::FirstMotion => refine_first_motion_peak(x, t0, sr, neighbors, win, peak_db),
-        RefineRule::Foot => refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(FootTune::V4), None),
-        RefineRule::FootCapped => refine_back_peak(x, t0, sr, neighbors, win, peak_db, Some(FootTune::V5), None),
-        RefineRule::Edge => refine_back_peak(x, t0, sr, neighbors, win, peak_db, None, Some(EdgeTail::Noise)),
-        RefineRule::Visible => refine_back_peak(x, t0, sr, neighbors, win, peak_db, None, Some(EdgeTail::Visible)),
+        RefineRule::Foot => back(Some(FootTune::V4), None),
+        RefineRule::FootCapped => back(Some(FootTune::V5), None),
+        RefineRule::Edge => back(None, Some(EdgeTail::Noise)),
+        RefineRule::Visible => back(None, Some(EdgeTail::Visible)),
     }
 }
 

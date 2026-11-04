@@ -661,6 +661,32 @@ fn the_foot_rule_stops_on_the_last_floor_level_sample() {
     }
 }
 
+/// The sample-bound walk with the peak margin `peak_db`, and the foot taken strict ([`foot_strict`], capped by `tune`)
+/// when `tune` is `Some`.
+fn first_motion_mid_rule(
+    x: &[f32],
+    s: i64,
+    sr: u32,
+    prev_mid: Option<i64>,
+    next_mid: Option<i64>,
+    peak_db: f64,
+    tune: Option<FootTune>,
+) -> (i64, BackStep) {
+    first_motion_traced(
+        x,
+        s,
+        sr,
+        prev_mid,
+        next_mid,
+        BackTune {
+            peak_db,
+            tune,
+            edge: None,
+        },
+    )
+    .0
+}
+
 #[test]
 fn the_strict_foot_moves_at_most_the_guard_before_the_version_3_foot() {
     // #101 guard: a shoulder of `len` samples at 0.0112 (between the floor and the threshold) just
