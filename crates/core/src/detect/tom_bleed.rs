@@ -368,7 +368,7 @@ impl TomBleed {
 
 /// The tom-band level of `x` in `[c + w.0, c + w.1)` with the filter run in over `pre` samples before the window;
 /// samples outside the signal are zeros (the Python reference pads the same way).
-fn level_db(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64) -> f64 {
+pub(crate) fn level_db(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64) -> f64 {
     let start = c + w.0 - pre;
     let len = (pre + w.1 - w.0).max(0) as usize;
     if start >= 0 && start as usize + len <= x.len() {
@@ -389,7 +389,7 @@ fn level_db(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64) -> f64 {
 }
 
 /// The broadband peak of `x` in `[c + w.0, c + w.1)`, clipped to the signal (-180 dB when empty).
-fn broad_db(x: &[f32], c: i64, w: (i64, i64)) -> f64 {
+pub(crate) fn broad_db(x: &[f32], c: i64, w: (i64, i64)) -> f64 {
     let n = x.len() as i64;
     let a = (c + w.0).clamp(0, n);
     let b = (c + w.1).clamp(0, n);
@@ -864,7 +864,7 @@ pub fn high_rise_db(hp: &[f64], sr: u32, at: i64) -> f64 {
 }
 
 /// The median of `v` (the mean of the two middle values for an even count); `None` for an empty slice.
-fn median(v: &mut [f64]) -> Option<f64> {
+pub(crate) fn median(v: &mut [f64]) -> Option<f64> {
     if v.is_empty() {
         return None;
     }

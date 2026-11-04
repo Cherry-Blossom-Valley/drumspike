@@ -42,6 +42,7 @@ pub use analyze::{Analysis, AnalyzeError, AnalyzeParams, Detector, analyze_detec
 pub use backend::{BackendError, CandidateList, DetectedHit, DetectorBackend, DspBackend, ExternalDetector};
 
 pub mod detect;
+pub mod dsp;
 pub mod io;
 // P4-7a and P4-7b: the one-shot layer of a track (read, onset, resample, alignment, render).
 pub mod layer;

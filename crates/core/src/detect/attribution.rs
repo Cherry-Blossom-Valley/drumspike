@@ -512,7 +512,7 @@ impl Ctx<'_> {
     }
 }
 
-fn broadband_peak_db(x: &[f32], c: i64, w: (i64, i64)) -> f64 {
+pub(crate) fn broadband_peak_db(x: &[f32], c: i64, w: (i64, i64)) -> f64 {
     let n = x.len() as i64;
     let w0 = (c + w.0).clamp(0, n);
     let to = (c + w.1).clamp(0, n);

@@ -329,7 +329,7 @@ pub struct PairLearned {
 
 /// The band level (dBFS) of `x` in `[c + w.0, c + w.1)` with the filter run in over `pre` samples
 /// before the window; samples outside the signal are zeros (as the tom bleed rule measures).
-fn level_at(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64) -> f64 {
+pub(crate) fn level_at(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64) -> f64 {
     let start = c + w.0 - pre;
     let len = (pre + w.1 - w.0).max(0) as usize;
     if start >= 0 && start as usize + len <= x.len() {
@@ -379,7 +379,7 @@ pub fn hit_level_full_band(x: &[f32], sr: u32, t: f64, p: &CrossBleedParams) -> 
 }
 
 /// The median of `v` (the mean of the two middle values for an even count); `None` for an empty slice.
-fn median(v: &mut [f64]) -> Option<f64> {
+pub(crate) fn median(v: &mut [f64]) -> Option<f64> {
     if v.is_empty() {
         return None;
     }
