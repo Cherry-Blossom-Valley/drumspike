@@ -86,6 +86,21 @@ pub fn band_peak_db(x: &[f32], sections: &[Biquad], from: usize, w0: usize, to: 
     20.0 * (peak + 1e-9).log10()
 }
 
+/// Amplitude to dB with an additive floor: `20 log10(a + 1e-9)`; 0 gives -180 dB. The floor policy
+/// of the band levels ([`band_peak_db`]), the refine log envelope and the flam lobe levels.
+#[must_use]
+pub fn amp_db_add(a: f64) -> f64 {
+    20.0 * (a + 1e-9).log10()
+}
+
+/// Amplitude to dB with a clamp floor: `20 log10(max(a, floor))`. The floor policy of the hit peak
+/// levels (`floor` 1e-9, at least -180 dB) and the role envelope (`floor` 1e-12, at least -240 dB).
+/// Not the same value as [`amp_db_add`] near the floor: the two policies stay apart.
+#[must_use]
+pub fn amp_db_max(a: f64, floor: f64) -> f64 {
+    20.0 * a.max(floor).log10()
+}
+
 /// The band level (dBFS) of `x` in `[c + w.0, c + w.1)` with the filter run in over `pre` samples
 /// before the window: [`band_peak_db`] over a zero-padded copy where the run-in or the window leaves
 /// the signal (the Python reference pads the same way). The tom bleed and the cross bleed rule

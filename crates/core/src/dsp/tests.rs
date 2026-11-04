@@ -2,8 +2,8 @@
 //! merge cannot move a detection time, a mark or a velocity.
 
 use super::{
-    Biquad, band_level_db, band_peak_db, band_sections, broadband_peak_db, median, ms_to_samples, np_percentile,
-    percentile,
+    Biquad, amp_db_add, amp_db_max, band_level_db, band_peak_db, band_sections, broadband_peak_db, median,
+    ms_to_samples, np_percentile, percentile,
 };
 use crate::detect::attribution::Role;
 
@@ -228,4 +228,37 @@ fn the_percentile_is_numpys_linear_one() {
         Some(2.0 - (2.0 - 1.0) * (1.0 - g))
     );
     assert_eq!(np_percentile(&[a, b], 25.0), Some(a + (b - a) * 0.25));
+}
+
+/// The amplitudes of the dB grid: zero, signed zero, values around both floors, full scale and above, and 200
+/// noise amplitudes over 12 decades.
+fn amplitudes() -> Vec<f64> {
+    let mut out = vec![
+        0.0, -0.0, 1e-13, 1e-12, 5e-12, 1e-10, 1e-9, 2e-9, 1e-6, 0.5, 1.0, 1.5, 32_768.0,
+    ];
+    let mut nz = Noise(5);
+    for _ in 0..200 {
+        out.push(10f64.powf(-12.0 * (nz.next() + 1.0) / 2.0));
+    }
+    out
+}
+
+#[test]
+fn the_named_db_helpers_keep_the_bits_of_their_inline_formulas() {
+    let all = amplitudes();
+    for &a in &all {
+        assert_eq!(amp_db_add(a).to_bits(), (20.0 * (a + 1e-9).log10()).to_bits(), "{a:e}");
+        for floor in [1e-9, 1e-12] {
+            assert_eq!(
+                amp_db_max(a, floor).to_bits(),
+                (20.0 * a.max(floor).log10()).to_bits(),
+                "{a:e} {floor:e}"
+            );
+        }
+    }
+    assert_eq!(all.len(), 213);
+    assert_eq!(amp_db_add(0.0), -180.0);
+    assert_eq!(amp_db_max(0.0, 1e-9), -180.0);
+    // the two floor policies differ near the floor, so a site never switches from one to the other
+    assert_ne!(amp_db_add(1e-9).to_bits(), amp_db_max(1e-9, 1e-9).to_bits());
 }
