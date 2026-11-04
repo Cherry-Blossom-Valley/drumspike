@@ -13,7 +13,7 @@
 //!    as neighbours), then a stable sort by time and a second min-gap dedup. With
 //!    `refine` off the coarse times stay and no event has a `rise`. The rule
 //!    ([`AnalyzeParams::rule`], P4-12) is the engine's (version 1, the default here and in the
-//!    parity checks) or the reach rule the app runs ([`crate::refine::refine_reach`]).
+//!    parity checks) or the reach rule the app runs (`refine::reach::refine_reach`).
 //! 5. The global shift (`shift_samples / sr` seconds) and a stable sort by time.
 //! 6. The velocities ([`crate::velocity::velocity_map`]) and `rise` rounded to 1 decimal
 //!    with Python's `round(x, 1)` ([`crate::pyops::py_round_digits`]).
@@ -35,7 +35,7 @@ use crate::role::{class_note, role_classes, role_note};
 use crate::velocity::{VelocityMap, velocity_map};
 
 /// The source rates the core analyses (`engine.DETECT_RATES`, the rates of the resampler).
-pub const DETECT_RATES: [u32; 3] = [44_100, 48_000, 96_000];
+pub(crate) const DETECT_RATES: [u32; 3] = [44_100, 48_000, 96_000];
 
 /// The parameters of one analysis (the `params` of a track in the document).
 #[derive(Debug, Clone, PartialEq)]
@@ -279,7 +279,7 @@ impl Analysis {
 /// The thresholds as the CLI receives them: `float(f"{t:.3f}")` for each.
 #[cfg(test)]
 #[must_use]
-pub fn round_thresholds(t: &[f64; N_CLASSES]) -> [f64; N_CLASSES] {
+pub(crate) fn round_thresholds(t: &[f64; N_CLASSES]) -> [f64; N_CLASSES] {
     t.map(|v| py_round_digits(v, 3))
 }
 
@@ -530,7 +530,7 @@ pub fn analyze_track_dsp_cands(
 }
 
 /// P4-6c: the detector's hits `(time, note)` and the roll flag per hit ([`detect_hits`]).
-pub type DetectedHits = (Vec<(f64, u8)>, Vec<bool>);
+pub(crate) type DetectedHits = (Vec<(f64, u8)>, Vec<bool>);
 
 /// P4-6c: step 1 of [`analyze_track`], the detector's hits with the pick rules that run on them (P4-19: the roll
 /// fill; its flag per hit, empty when it added none or does not apply). The Learn filter marks these hits and then
@@ -540,7 +540,7 @@ pub type DetectedHits = (Vec<(f64, u8)>, Vec<bool>);
 ///
 /// [`AnalyzeError::Rate`] when `sr` is not 44.1, 48 or 96 kHz; [`AnalyzeError::Onset`] or
 /// [`AnalyzeError::Backend`] when the detector fails.
-pub fn detect_hits(
+pub(crate) fn detect_hits(
     x: &[f32],
     sr: u32,
     role: &str,

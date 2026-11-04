@@ -23,7 +23,7 @@ pub struct BandStage {
 
 /// Normalised biquad coefficients (`a0` = 1), in the row order of a scipy `sos` section.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Biquad {
+pub(crate) struct Biquad {
     /// Feed-forward coefficients.
     pub b: [f64; 3],
     /// Feedback coefficients `a1`, `a2`.
@@ -51,7 +51,7 @@ impl Biquad {
 
 /// The sections of a band at rate `sr`: every stage twice, in order.
 #[must_use]
-pub fn band_sections(band: &[BandStage], sr: u32) -> Vec<Biquad> {
+pub(crate) fn band_sections(band: &[BandStage], sr: u32) -> Vec<Biquad> {
     band.iter()
         .flat_map(|s| {
             let q = Biquad::new(s.kind, s.freq_hz, sr);
@@ -65,7 +65,7 @@ pub fn band_sections(band: &[BandStage], sr: u32) -> Vec<Biquad> {
 /// `20 log10(max |y| + 1e-9)` over the samples `y[w0..to]`. `from <= w0 <= to <= x.len()`;
 /// an empty window gives -180 dB.
 #[must_use]
-pub fn band_peak_db(x: &[f32], sections: &[Biquad], from: usize, w0: usize, to: usize) -> f64 {
+pub(crate) fn band_peak_db(x: &[f32], sections: &[Biquad], from: usize, w0: usize, to: usize) -> f64 {
     if w0 >= to {
         return -180.0;
     }
@@ -89,7 +89,7 @@ pub fn band_peak_db(x: &[f32], sections: &[Biquad], from: usize, w0: usize, to: 
 /// Amplitude to dB with an additive floor: `20 log10(a + 1e-9)`; 0 gives -180 dB. The floor policy
 /// of the band levels ([`band_peak_db`]), the refine log envelope and the flam lobe levels.
 #[must_use]
-pub fn amp_db_add(a: f64) -> f64 {
+pub(crate) fn amp_db_add(a: f64) -> f64 {
     20.0 * (a + 1e-9).log10()
 }
 
@@ -97,7 +97,7 @@ pub fn amp_db_add(a: f64) -> f64 {
 /// levels (`floor` 1e-9, at least -180 dB) and the role envelope (`floor` 1e-12, at least -240 dB).
 /// Not the same value as [`amp_db_add`] near the floor: the two policies stay apart.
 #[must_use]
-pub fn amp_db_max(a: f64, floor: f64) -> f64 {
+pub(crate) fn amp_db_max(a: f64, floor: f64) -> f64 {
     20.0 * a.max(floor).log10()
 }
 
@@ -106,7 +106,7 @@ pub fn amp_db_max(a: f64, floor: f64) -> f64 {
 /// the signal (the Python reference pads the same way). The tom bleed and the cross bleed rule
 /// measure with it.
 #[must_use]
-pub fn band_level_db(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64) -> f64 {
+pub(crate) fn band_level_db(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64) -> f64 {
     let start = c + w.0 - pre;
     let len = (pre + w.1 - w.0).max(0) as usize;
     if start >= 0 && start as usize + len <= x.len() {
@@ -129,7 +129,7 @@ pub fn band_level_db(x: &[f32], sec: &[Biquad], c: i64, w: (i64, i64), pre: i64)
 /// The broadband peak (dBFS) of `x` in `[c + w.0, c + w.1)`, clipped to the signal (-180 dB when
 /// empty): [`band_peak_db`] without sections and without run-in.
 #[must_use]
-pub fn broadband_peak_db(x: &[f32], c: i64, w: (i64, i64)) -> f64 {
+pub(crate) fn broadband_peak_db(x: &[f32], c: i64, w: (i64, i64)) -> f64 {
     let n = x.len() as i64;
     let a = (c + w.0).clamp(0, n);
     let b = (c + w.1).clamp(0, n);
@@ -138,7 +138,7 @@ pub fn broadband_peak_db(x: &[f32], c: i64, w: (i64, i64)) -> f64 {
 
 /// The `q`-th percentile (0 to 100) of `v` with numpy's default linear interpolation;
 /// `None` for an empty slice. NaN values are not expected.
-pub fn percentile(v: &[f64], q: f64) -> Option<f64> {
+pub(crate) fn percentile(v: &[f64], q: f64) -> Option<f64> {
     if v.is_empty() {
         return None;
     }
@@ -154,13 +154,13 @@ pub fn percentile(v: &[f64], q: f64) -> Option<f64> {
 /// Milliseconds to samples: `floor(ms * sr / 1000 + 0.5)` (the same rule in the Python
 /// reference; Python's `round` rounds half to even and would differ).
 #[must_use]
-pub fn ms_to_samples(ms: f64, sr: u32) -> i64 {
+pub(crate) fn ms_to_samples(ms: f64, sr: u32) -> i64 {
     (ms * f64::from(sr) / 1000.0 + 0.5).floor() as i64
 }
 
 /// `np.percentile(v, q)` with numpy's default linear method, bit for bit: the virtual index `(n - 1) * q / 100` and
 /// numpy's `_lerp` (from the upper value when the fraction is 0.5 or more). `None` for an empty slice.
-pub fn np_percentile(v: &[f64], q: f64) -> Option<f64> {
+pub(crate) fn np_percentile(v: &[f64], q: f64) -> Option<f64> {
     if v.is_empty() {
         return None;
     }

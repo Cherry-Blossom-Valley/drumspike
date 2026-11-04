@@ -28,13 +28,13 @@ use crate::pyops::py_round;
 /// Key of the map in the document.
 pub const DOC_KEY: &str = "tempo_map";
 /// Smallest and largest tempo in BPM (the largest gives a `set_tempo` of 60,000 microseconds).
-pub const BPM_RANGE: (f64, f64) = (4.0, 1000.0);
+pub(crate) const BPM_RANGE: (f64, f64) = (4.0, 1000.0);
 /// Closest two tempo steps may be, in seconds.
-pub const MIN_STEP_GAP_S: f64 = 0.001;
+pub(crate) const MIN_STEP_GAP_S: f64 = 0.001;
 /// Most steps or meter changes a map holds.
-pub const MAX_ENTRIES: usize = 100_000;
+pub(crate) const MAX_ENTRIES: usize = 100_000;
 /// Text of the marker event that holds the position of bar 1.
-pub const BAR1_MARKER: &str = "Bar 1";
+pub(crate) const BAR1_MARKER: &str = "Bar 1";
 
 /// A tempo step: from `t` seconds on the tempo is `bpm`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -294,7 +294,7 @@ pub struct TickMap {
 /// # Errors
 ///
 /// A message when `bpm` is not finite or outside the BPM range.
-pub fn tempo_us(bpm: f64) -> Result<u32, String> {
+pub(crate) fn tempo_us(bpm: f64) -> Result<u32, String> {
     check_bpm(bpm, "tempo")?;
     Ok((6e7 / bpm).round() as u32)
 }

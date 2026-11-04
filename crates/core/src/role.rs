@@ -270,7 +270,7 @@ pub fn role_from_audio(samples: &[f32], sr: u32) -> Option<Role> {
 /// - cymbal: the wash veto never fired on the run (0 suggestions at any threshold);
 ///   no bar.
 #[must_use]
-pub fn role_threshold(role: Role) -> Option<f64> {
+pub(crate) fn role_threshold(role: Role) -> Option<f64> {
     match role {
         Role::Kick => Some(0.05),
         Role::Tom => Some(0.60),

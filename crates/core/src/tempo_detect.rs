@@ -47,23 +47,23 @@
 use crate::tempo::{TempoMap, TempoStep};
 
 /// Default: a new tempo must hold this many bars to become a step.
-pub const DEFAULT_MIN_BARS: u32 = 4;
+pub(crate) const DEFAULT_MIN_BARS: u32 = 4;
 /// Default: smallest tempo step in percent.
-pub const DEFAULT_MIN_STEP_PCT: f64 = 2.0;
+pub(crate) const DEFAULT_MIN_STEP_PCT: f64 = 2.0;
 /// Default tempo range in BPM (P4-8 fix round 2: 240 became 300, so a 250 BPM punk beat is
 /// found as itself and not through a relative).
-pub const DEFAULT_BPM_RANGE: (f64, f64) = (40.0, 300.0);
+pub(crate) const DEFAULT_BPM_RANGE: (f64, f64) = (40.0, 300.0);
 /// Fewest kick and snare hits the detection needs.
 pub const MIN_HITS: usize = 8;
 /// Two hits of the same role closer than this are one hit (two mics of one drum).
-pub const DEDUPE_S: f64 = 0.025;
+pub(crate) const DEDUPE_S: f64 = 0.025;
 /// A hit within this share of a beat of a beat is on the beat.
-pub const ON_BEAT: f64 = 0.125;
+pub(crate) const ON_BEAT: f64 = 0.125;
 /// The velocity of a hit without one (the MIDI export's default).
 pub const DEFAULT_VELOCITY: f64 = 100.0;
 /// Longest span of hits the detection reads (6 hours): a stray time far out is refused, not
 /// tracked beat by beat.
-pub const MAX_SPAN_S: f64 = 6.0 * 3600.0;
+pub(crate) const MAX_SPAN_S: f64 = 6.0 * 3600.0;
 /// A hit with no other hit within this many seconds is left out (isolated).
 pub const ISOLATED_S: f64 = 6.0;
 
@@ -529,7 +529,7 @@ const HALF_TIME_MIN_SNARES: f64 = 8.0;
 /// half-time bar 1 of #180 (see `bars`). The detection is read
 /// only: a project analysed before keeps its tempo until it is detected again.
 #[must_use]
-pub fn tempo_rule() -> u32 {
+pub(crate) fn tempo_rule() -> u32 {
     parse_rule(std::env::var("DRUMSPIKE_TEMPO_RULE").ok().as_deref())
 }
 

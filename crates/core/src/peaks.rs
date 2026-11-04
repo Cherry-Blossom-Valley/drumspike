@@ -22,7 +22,7 @@ pub struct PeakLevel {
 }
 
 /// Bucket sizes of `engine.compute_peaks`'s default levels.
-pub const PEAK_LEVELS: [usize; 3] = [256, 4096, 65536];
+pub(crate) const PEAK_LEVELS: [usize; 3] = [256, 4096, 65536];
 
 /// numpy `np.round(a, 5)` on a float32 array: `rint(a * 1e5) / 1e5` in float32.
 /// Returned as f64 so JSON carries the same value Python's `tolist()` produces.
@@ -95,7 +95,7 @@ fn finish_level(raw: &[Raw], bs: usize) -> PeakLevel {
 /// One level of the pyramid: `(n // bs) * bs` samples in buckets of `bs`.
 #[cfg(test)]
 #[must_use]
-pub fn peaks_level(x: &[f32], bs: usize) -> PeakLevel {
+pub(crate) fn peaks_level(x: &[f32], bs: usize) -> PeakLevel {
     finish_level(&raw_level(x, bs), bs)
 }
 
@@ -113,7 +113,7 @@ pub fn compute_peaks(x: &[f32]) -> Vec<(usize, PeakLevel)> {
 /// multiple of the previous one is aggregated from it, every other level is computed
 /// from the samples.
 #[must_use]
-pub fn compute_peaks_levels(x: &[f32], levels: &[usize]) -> Vec<(usize, PeakLevel)> {
+pub(crate) fn compute_peaks_levels(x: &[f32], levels: &[usize]) -> Vec<(usize, PeakLevel)> {
     let mut out = Vec::with_capacity(levels.len());
     let mut prev: Option<(usize, Vec<Raw>)> = None;
     for &bs in levels {
@@ -153,7 +153,7 @@ pub fn compute_peaks_levels(x: &[f32], levels: &[usize]) -> Vec<(usize, PeakLeve
 /// `e = max(s, min(len, to))`. A window past the end is empty, never an error.
 #[inline]
 #[must_use]
-pub fn clamp_window(len: usize, from: i64, to: i64) -> (usize, usize) {
+pub(crate) fn clamp_window(len: usize, from: i64, to: i64) -> (usize, usize) {
     let s = (from.max(0) as usize).min(len);
     let e = (to.max(0) as usize).min(len).max(s);
     (s, e)

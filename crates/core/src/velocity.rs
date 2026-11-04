@@ -5,7 +5,7 @@ use crate::pyops::{py_round, window};
 
 /// `engine.peak_in(x, t, sr)`: max |x| in `[t - 5 ms, t + 60 ms)`, 0.0 for an empty window.
 #[must_use]
-pub fn peak_in(x: &[f32], t: f64, sr: u32) -> f64 {
+pub(crate) fn peak_in(x: &[f32], t: f64, sr: u32) -> f64 {
     let (i0, i1) = window(x.len(), t, sr, 0.005, 0.060);
     let seg = &x[i0..i1];
     if seg.is_empty() {

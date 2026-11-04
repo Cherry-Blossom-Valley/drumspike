@@ -18,9 +18,9 @@ use crate::midi::{MidiError, MidiEvent, midi_bytes_map};
 use crate::tempo::{TempoMap, TickMap};
 
 /// The velocity of the calibration note.
-pub const CALIBRATION_VELOCITY: i64 = 100;
+pub(crate) const CALIBRATION_VELOCITY: i64 = 100;
 /// The most hits that go into the median shape (spread over the track).
-pub const SHAPE_HITS: usize = 64;
+pub(crate) const SHAPE_HITS: usize = 64;
 
 /// The tick and the time (seconds) of the calibration note: the start of bar 2 (bar 1 of the map
 /// holds the start meter): 2.000 s with the default map. `ppq` is the file's resolution.
@@ -93,7 +93,7 @@ pub fn measure_offset(bounce: &[f32], sr: u32, note_on_s: f64) -> Result<Offset,
 /// scaled to a root-mean-square of 1 (silent windows are left out). `None` without a usable hit.
 /// The hit sits at index `pre + max_lag` of the result.
 #[must_use]
-pub fn median_shape(mic: &[f32], hits: &[i64], pre: usize, len: usize, max_lag: usize) -> Option<Vec<f32>> {
+pub(crate) fn median_shape(mic: &[f32], hits: &[i64], pre: usize, len: usize, max_lag: usize) -> Option<Vec<f32>> {
     let total = pre + len + 2 * max_lag;
     let start = pre + max_lag;
     let step = (hits.len() / SHAPE_HITS).max(1);

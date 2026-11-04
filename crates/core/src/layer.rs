@@ -24,20 +24,20 @@ use crate::io::MappedWav;
 use crate::refine::{RefineRule, RefineWindow, refine_rule};
 
 /// The longest one-shot the app takes (seconds).
-pub const MAX_ONE_SHOT_S: f64 = 20.0;
+pub(crate) const MAX_ONE_SHOT_S: f64 = 20.0;
 /// Zero crossings of the windowed sinc on each side.
-pub const SINC_HALF: usize = 16;
+pub(crate) const SINC_HALF: usize = 16;
 /// The fractional delays of a render are quantised to 1/`FRAC_STEPS` sample.
-pub const FRAC_STEPS: u32 = 64;
+pub(crate) const FRAC_STEPS: u32 = 64;
 /// The default range of the dB velocity curve: velocity 127 is 0 dB, velocity 0 is -24 dB.
-pub const DEFAULT_RANGE_DB: f64 = 24.0;
+pub(crate) const DEFAULT_RANGE_DB: f64 = 24.0;
 /// The detector reports a hit about this long before the attack; the one-shot's coarse time sits
 /// this long before its first sample at 25 % of the peak.
-pub const COARSE_LEAD_S: f64 = 0.006;
+pub(crate) const COARSE_LEAD_S: f64 = 0.006;
 /// The level of the first sample that counts for the coarse time (a share of the peak).
-pub const COARSE_SHARE: f32 = 0.25;
+pub(crate) const COARSE_SHARE: f32 = 0.25;
 /// Silence put in front of a one-shot for the onset rule (its pre-attack level and margins).
-pub const ONSET_PAD_S: f64 = 0.030;
+pub(crate) const ONSET_PAD_S: f64 = 0.030;
 
 /// A one-shot sample: rate and the channels (planar; 1 or 2).
 #[derive(Debug, Clone, PartialEq)]
@@ -151,7 +151,7 @@ pub fn read_one_shot(path: &Path) -> Result<OneShot, String> {
 
 /// The 80-bit IEEE extended number of an AIFF `COMM` chunk (the sample rate).
 #[must_use]
-pub fn ext80_to_f64(b: &[u8]) -> f64 {
+pub(crate) fn ext80_to_f64(b: &[u8]) -> f64 {
     if b.len() < 10 {
         return 0.0;
     }
@@ -311,7 +311,7 @@ fn sinc(t: f64) -> f64 {
 /// of the lower band edge on each side; downwards the cut-off is the new Nyquist). The output is
 /// `round(len * to / from)` long; output sample `m` is the input at `m * from / to`.
 #[must_use]
-pub fn sinc_resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
+pub(crate) fn sinc_resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || from == 0 || to == 0 {
         return x.to_vec();
     }
@@ -338,7 +338,7 @@ pub fn sinc_resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
 /// The result is `len + 2 * SINC_HALF` long and its sample `j` is `x` at `j - SINC_HALF - frac`:
 /// put it [`SINC_HALF`] samples before the whole-sample start.
 #[must_use]
-pub fn frac_delayed(x: &[f32], frac: f64) -> Vec<f32> {
+pub(crate) fn frac_delayed(x: &[f32], frac: f64) -> Vec<f32> {
     let h = SINC_HALF as i64;
     let taps: Vec<f64> = (-h..=h)
         .map(|d| sinc(d as f64 - frac) * blackman((d as f64 - frac) / h as f64))
