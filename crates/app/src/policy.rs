@@ -7,7 +7,133 @@
 //! (tests/fixtures/event-policy/table.json), so the two mechanisms cannot drift.
 
 use drumspike_core::Event;
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+/// R4: a per-event mark. A mark is a key of the event (in `extra` for a typed [`Event`]) that is
+/// on only as `true`: absent, `false` or any other value is off, and absent is not the same as
+/// `false` in the saved bytes. [`is_marked`], [`mark`] and [`clear`] are the one place that
+/// knows the key names; each call site keeps its own predicate around them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    /// The loudness cut (`histogram::mark_cut_events`).
+    Cut,
+    /// The tom bleed and cross bleed rules.
+    Bleed,
+    /// The old Learn filter (#281 D16).
+    Filtered,
+    /// #242: the user holds the hit in the output.
+    Keep,
+    /// #242: the user takes the hit out of the output.
+    Deactivated,
+    /// The second stroke the flam rule added.
+    Flam,
+    /// A hit the Learn Add rule added.
+    Learned,
+    /// A roll fill hit.
+    Roll,
+    /// A kick rescue hit.
+    Rescue,
+    /// A stage 8 tom stroke.
+    Stage8,
+}
+
+impl Mark {
+    /// Every mark, in the order of the enum.
+    pub const ALL: [Mark; 10] = [
+        Mark::Cut,
+        Mark::Bleed,
+        Mark::Filtered,
+        Mark::Keep,
+        Mark::Deactivated,
+        Mark::Flam,
+        Mark::Learned,
+        Mark::Roll,
+        Mark::Rescue,
+        Mark::Stage8,
+    ];
+
+    /// The event key of the mark.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Mark::Cut => "cut",
+            Mark::Bleed => "bleed",
+            Mark::Filtered => "filtered",
+            Mark::Keep => "keep",
+            Mark::Deactivated => "deactivated",
+            Mark::Flam => "flam",
+            Mark::Learned => "learned",
+            Mark::Roll => "roll",
+            Mark::Rescue => "rescue",
+            Mark::Stage8 => "stage8",
+        }
+    }
+}
+
+/// An event that carries marks: a typed [`Event`] (the marks live in `extra`), a JSON event
+/// ([`Value`]) or its object ([`Map`]). The primitives under [`is_marked`], [`mark`], [`clear`].
+pub trait Marked {
+    /// The value under `key`, `None` when absent (a JSON event that is no object has none).
+    fn mark_get(&self, key: &str) -> Option<&Value>;
+    /// Set `key` to `true`: a present key keeps its place, a new one goes last.
+    fn mark_set(&mut self, key: &str);
+    /// Remove `key` and keep the order of the other keys (`shift_remove`); the old value.
+    fn mark_remove(&mut self, key: &str) -> Option<Value>;
+}
+
+impl Marked for Event {
+    fn mark_get(&self, key: &str) -> Option<&Value> {
+        self.extra.get(key)
+    }
+    fn mark_set(&mut self, key: &str) {
+        self.extra.insert(key.into(), Value::Bool(true));
+    }
+    fn mark_remove(&mut self, key: &str) -> Option<Value> {
+        self.extra.shift_remove(key)
+    }
+}
+
+impl Marked for Map<String, Value> {
+    fn mark_get(&self, key: &str) -> Option<&Value> {
+        self.get(key)
+    }
+    fn mark_set(&mut self, key: &str) {
+        self.insert(key.into(), Value::Bool(true));
+    }
+    fn mark_remove(&mut self, key: &str) -> Option<Value> {
+        self.shift_remove(key)
+    }
+}
+
+/// A JSON event. [`mark`] writes as `e[key] = true` does (it panics for a value that is neither
+/// an object nor `null`); [`clear`] does nothing to a value that is no object.
+impl Marked for Value {
+    fn mark_get(&self, key: &str) -> Option<&Value> {
+        self.get(key)
+    }
+    fn mark_set(&mut self, key: &str) {
+        self[key] = Value::Bool(true);
+    }
+    fn mark_remove(&mut self, key: &str) -> Option<Value> {
+        self.as_object_mut().and_then(|o| o.shift_remove(key))
+    }
+}
+
+/// True when `e` carries `m` as `true` (absent, `false` and other values are off).
+#[must_use]
+pub fn is_marked<E: Marked + ?Sized>(e: &E, m: Mark) -> bool {
+    e.mark_get(m.key()) == Some(&Value::Bool(true))
+}
+
+/// Set `m` on `e` to `true` (a present key keeps its place).
+pub fn mark<E: Marked + ?Sized>(e: &mut E, m: Mark) {
+    e.mark_set(m.key());
+}
+
+/// Remove `m` from `e` (`shift_remove`: the other keys keep their order); the old value.
+pub fn clear<E: Marked + ?Sized>(e: &mut E, m: Mark) -> Option<Value> {
+    e.mark_remove(m.key())
+}
 
 /// The flags that take a hit out of the output: the loudness cut (`"cut": true`;
 /// `histogram::mark_cut_events`), the tom bleed rule (`"bleed": true`; [`crate::tom_bleed`])
@@ -107,6 +233,98 @@ mod tests {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/event-policy/table.json");
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// R4: the mark truth table. For every mark and every state of its key (absent, `true`,
+    /// `false`, `null`, a number, a string, an object), on a typed event, a JSON event and its
+    /// object: `is_marked` is on only for `true`, `mark` writes what a raw `insert` writes
+    /// (a present key keeps its place) and `clear` what a raw `shift_remove` writes.
+    #[test]
+    fn the_marks_match_the_raw_key_reads_and_writes() {
+        let keys: Vec<&str> = Mark::ALL.iter().map(|m| m.key()).collect();
+        assert_eq!(
+            keys,
+            [
+                "cut",
+                "bleed",
+                "filtered",
+                "keep",
+                "deactivated",
+                "flam",
+                "learned",
+                "roll",
+                "rescue",
+                "stage8"
+            ]
+        );
+        let states = [
+            None,
+            Some(json!(true)),
+            Some(json!(false)),
+            Some(Value::Null),
+            Some(json!(1)),
+            Some(json!("true")),
+            Some(json!({})),
+        ];
+        let mut rows = 0;
+        for m in Mark::ALL {
+            let k = m.key();
+            for st in &states {
+                let mut obj = Map::new();
+                obj.insert("t".into(), json!(1.0));
+                if let Some(s) = st {
+                    obj.insert(k.into(), s.clone());
+                }
+                obj.insert("y".into(), json!(3));
+                obj.insert("z".into(), json!(2));
+                let on = st.as_ref() == Some(&json!(true));
+                let val = Value::Object(obj.clone());
+                let ev: Event = serde_json::from_value(val.clone()).unwrap();
+                assert_eq!(is_marked(&obj, m), on, "{k} {st:?} map");
+                assert_eq!(is_marked(&val, m), on, "{k} {st:?} value");
+                assert_eq!(is_marked(&ev, m), on, "{k} {st:?} event");
+
+                let mut raw = obj.clone();
+                raw.insert(k.into(), Value::Bool(true));
+                let want = serde_json::to_string(&raw).unwrap();
+                let (mut o, mut v, mut e) = (obj.clone(), val.clone(), ev.clone());
+                mark(&mut o, m);
+                mark(&mut v, m);
+                mark(&mut e, m);
+                assert_eq!(serde_json::to_string(&o).unwrap(), want, "{k} {st:?} mark map");
+                assert_eq!(serde_json::to_string(&v).unwrap(), want, "{k} {st:?} mark value");
+                assert_eq!(serde_json::to_string(&e).unwrap(), want, "{k} {st:?} mark event");
+
+                let mut raw = obj.clone();
+                let old = raw.shift_remove(k);
+                let want = serde_json::to_string(&raw).unwrap();
+                let (mut o, mut v, mut e) = (obj.clone(), val.clone(), ev.clone());
+                assert_eq!(clear(&mut o, m), old, "{k} {st:?} clear map");
+                assert_eq!(clear(&mut v, m), old, "{k} {st:?} clear value");
+                assert_eq!(clear(&mut e, m), old, "{k} {st:?} clear event");
+                assert_eq!(serde_json::to_string(&o).unwrap(), want, "{k} {st:?} clear map");
+                assert_eq!(serde_json::to_string(&v).unwrap(), want, "{k} {st:?} clear value");
+                assert_eq!(serde_json::to_string(&e).unwrap(), want, "{k} {st:?} clear event");
+                rows += 1;
+            }
+        }
+        assert_eq!(rows, 70, "10 marks x 7 states");
+        // the order is part of the bytes: a present key keeps its place, a new one goes last,
+        // a cleared one leaves the others in order
+        let mut e = json!({"t": 1.0, "cut": false, "z": 2});
+        mark(&mut e, Mark::Cut);
+        mark(&mut e, Mark::Bleed);
+        assert_eq!(e.to_string(), r#"{"t":1.0,"cut":true,"z":2,"bleed":true}"#);
+        assert_eq!(clear(&mut e, Mark::Cut), Some(json!(true)));
+        assert_eq!(e.to_string(), r#"{"t":1.0,"z":2,"bleed":true}"#);
+        // a JSON event that is no object carries no mark and clears nothing; `null` becomes one
+        let mut n = json!([1, 2]);
+        assert!(!is_marked(&n, Mark::Cut));
+        assert_eq!(clear(&mut n, Mark::Cut), None);
+        assert_eq!(n, json!([1, 2]));
+        let mut n = Value::Null;
+        mark(&mut n, Mark::Flam);
+        assert_eq!(n, json!({"flam": true}));
     }
 
     /// edit.rs strips the out marks from a kept hit on every edit; the truth table rows for a
