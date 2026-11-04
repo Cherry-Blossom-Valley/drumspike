@@ -30,6 +30,7 @@ use serde_json::{Value, json};
 use crate::Service;
 use crate::error::AppError;
 use crate::media::mix_mode;
+use crate::policy::{Mark, mark};
 use crate::registry::lock;
 
 /// The pad on both sides of the range (concept rule 1).
@@ -159,9 +160,9 @@ impl Service {
                 let hit_this = this.iter().any(|&m| (m - at).abs() <= LEARN_REACH + 1e-9);
                 let hit_not = not.iter().any(|&m| (m - at).abs() <= LEARN_REACH + 1e-9);
                 if filter && hit_not {
-                    e.insert("filtered".into(), Value::Bool(true));
+                    mark(e, Mark::Filtered);
                 } else if hit_this {
-                    e.insert("learned".into(), Value::Bool(true));
+                    mark(e, Mark::Learned);
                 }
             }
         }
