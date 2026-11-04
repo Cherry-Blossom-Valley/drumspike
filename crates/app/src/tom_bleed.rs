@@ -49,6 +49,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::AppError;
 use crate::media::mix_mode;
+use crate::policy::{Mark, clear, is_marked, mark};
 use crate::registry::{Shared, lock};
 use crate::roles::{drum_of, is_sample_name};
 use crate::{Service, ServiceConfig};
@@ -127,7 +128,7 @@ fn pair_record(pairs: &Option<Result<Vec<Vec<bool>>, String>>, removed: usize) -
 /// True for an event the rule marked (`"bleed": true`).
 #[must_use]
 pub fn is_bleed(e: &Value) -> bool {
-    e.get("bleed") == Some(&Value::Bool(true))
+    is_marked(e, Mark::Bleed)
 }
 
 /// An edited hit (added, moved from `orig`, or restored: `edited: true`, as [`crate::edit::is_kept`]) or one the
@@ -202,14 +203,8 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
                 drum: drum_of(&name),
                 kind,
                 times: evs.iter().map(|e| e.t).collect(),
-                cut: evs
-                    .iter()
-                    .map(|e| e.extra.get("cut") == Some(&Value::Bool(true)))
-                    .collect(),
-                bled: evs
-                    .iter()
-                    .map(|e| e.extra.get("bleed") == Some(&Value::Bool(true)))
-                    .collect(),
+                cut: evs.iter().map(|e| is_marked(*e, Mark::Cut)).collect(),
+                bled: evs.iter().map(|e| is_marked(*e, Mark::Bleed)).collect(),
                 edited: evs.iter().map(|e| edited(e)).collect(),
                 mix: tr.mix_mode_or_default().to_string(),
                 path,
@@ -289,12 +284,12 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
                 }
                 let on = !by.is_empty() && !edited(e);
                 if on {
-                    e.extra.insert("bleed".into(), Value::Bool(true));
+                    mark(e, Mark::Bleed);
                     e.extra.insert("by".into(), json!(by));
                     removed += 1;
                     pair_removed += usize::from(by_pair && marks.is_none_or(|m| m[j].is_empty()));
                 } else {
-                    e.extra.shift_remove("bleed");
+                    clear(e, Mark::Bleed);
                     e.extra.shift_remove("by");
                 }
             }
