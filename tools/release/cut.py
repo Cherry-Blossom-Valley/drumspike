@@ -160,7 +160,10 @@ def bump_locks(root, old, new):
 
 
 def next_version(version):
-    """The next patch: 0.9.3 -> 0.9.4."""
+    """The next patch: 0.9.3 -> 0.9.4. A prerelease is followed by its own release: 0.9.20-refactored -> 0.9.20."""
+    core, sep, tag = version.partition("-")
+    if sep and tag and core.count(".") == 2 and all(x.isdigit() for x in core.split(".")):
+        return core
     parts = version.split(".")
     if len(parts) != 3 or not all(p.isdigit() for p in parts):
         raise CutError(f"the version {version!r} is not X.Y.Z")
