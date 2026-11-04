@@ -43,6 +43,7 @@ use crate::follow::velocity_map_of;
 use crate::jobs::{self, parse_params};
 use crate::learn::learn_of_track;
 use crate::media::mix_mode;
+use crate::policy::{Mark, clear, is_marked, mark};
 use crate::registry::{lock, resolve_shared};
 use crate::sensitivity;
 
@@ -76,9 +77,9 @@ pub fn mark_cut_events(events: &mut [Event], x: &[f32], sr: u32, cut: Option<f64
             !edited(e.added == Some(true), e.orig, e.t) && !crate::policy::event_user_kept(e) && peak_db(x, e.t, sr) < c
         });
         if on {
-            e.extra.insert("cut".into(), Value::Bool(true));
+            mark(e, Mark::Cut);
         } else {
-            e.extra.shift_remove("cut");
+            clear(e, Mark::Cut);
         }
     }
 }
@@ -99,11 +100,11 @@ pub fn mark_cut_values(events: &mut [Value], x: &[f32], sr: u32, cut: Option<f64
             .ok_or_else(|| AppError::bad("every event needs a numeric t"))?;
         let added = m.get("added") == Some(&Value::Bool(true));
         let orig = m.get("orig").and_then(Value::as_f64);
-        let kept = m.get("keep") == Some(&Value::Bool(true)); // #242: the user's override wins
+        let kept = is_marked(m, Mark::Keep); // #242: the user's override wins
         if cut.is_some_and(|c| !edited(added, orig, t) && !kept && peak_db(x, t, sr) < c) {
-            m.insert("cut".into(), Value::Bool(true));
+            mark(m, Mark::Cut);
         } else {
-            m.shift_remove("cut");
+            clear(m, Mark::Cut);
         }
     }
     Ok(())
@@ -229,10 +230,10 @@ pub(crate) fn analysis_values(analysis: &drumspike_core::analyze::Analysis) -> V
                 e["rise"] = json!(r);
             }
             if analysis.is_learn_out(i) {
-                e[crate::learn_filter::FILTERED] = json!(true);
+                mark(&mut e, Mark::Filtered);
             }
             if analysis.is_learned(i) {
-                e["learned"] = json!(true); // P4-38b: the Learn Add rule added it
+                mark(&mut e, Mark::Learned); // P4-38b: the Learn Add rule added it
             }
             e
         })
