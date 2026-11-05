@@ -194,15 +194,7 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
                 {
                     kv -= 1;
                 }
-                let res = if off(kv).abs() <= vis { kv } else { noise_tail(k) };
-                if std::env::var_os("DRUMSPIKE_EDGE_TRACE").is_some() {
-                    eprintln!(
-                        "TRACE tail={tail_rule:?} foot={foot} pk={pk:.4} line={line:+.5} vis={vis:.5} j={j} k0={k0} k={k} kv={kv} off_kv={:+.5} reached={} -> {res}",
-                        off(kv),
-                        off(kv).abs() <= vis
-                    );
-                }
-                res
+                if off(kv).abs() <= vis { kv } else { noise_tail(k) }
             }
         };
         let reached = f64::from(max_abs(x, k, (k + local).min(end + w)));
@@ -211,12 +203,6 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
         } else {
             0.0
         };
-        if std::env::var_os("DRUMSPIKE_EDGE_TRACE").is_some() {
-            eprintln!(
-                "TRACE guard k={k} before={before:.5} reached={reached:.5} pass={}",
-                before <= reached * guard
-            );
-        }
         if before <= reached * guard {
             return Some(k);
         }
