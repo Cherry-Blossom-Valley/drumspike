@@ -86,7 +86,8 @@ function ipcBackend(T) {
     tracks: sid => invoke("tracks_get", { sid }),
     setEvents: (sid, name, body) => invoke("events_set", { sid, name, events: body.events }),
     events: (sid, name) => invoke("events_get", { sid, name }),
-    eventsEdit: (sid, name, ops) => invoke("events_edit", { sid, name, ops }),   // P4-9 stage 2: add, delete, move, velocity of single hits
+    eventsEdit: (sid, name, ops, training) => invoke("events_edit", training ? { sid, name, ops, training: true } : { sid, name, ops }),   // P4-9 stage 2: add, delete, move, velocity of single hits; #343: training logs the correction (no new parameter without the mode)
+    trainingStatus: (sid, on) => invoke("training_status", on === undefined ? { sid } : { sid, on }),   // #343: {on, records, path}
     peaks, peaksRaw, samples, job,
     analyze: (sid, tracks, params, keepEdited) => invoke("analyze_start", { sid, tracks, params, keep_edited: !!keepEdited, progress: new T.core.Channel() }),   // P4-9: keep_edited merges the edited hits in the service
     /* #265: re-analyzes only the hits of [t0, t1] on one track; answers {track, t0, t1, replaced, n_new, events, info} */
@@ -122,8 +123,8 @@ function ipcBackend(T) {
     /* P4-6a: Learn marks (crates/app/src/learn.rs). learnMark: {sid, name, kind: this|not, t0, t1 | hit} answers {marked, mark, learn,
        track (the track that holds the marks: the source of a follower), routed, counts, reason?}; the rest answer {learn, ...};
        learnSet stores the whole object (null: none), the undo and redo of a step */
-    learnMark: (sid, name, kind, t0, t1, hit) => invoke("track_learn_mark", { sid, name, kind, t0: t0 === undefined ? null : t0,
-      t1: t1 === undefined ? null : t1, hit: hit === undefined ? null : hit }),
+    learnMark: (sid, name, kind, t0, t1, hit, training) => invoke("track_learn_mark", { sid, name, kind, t0: t0 === undefined ? null : t0,
+      t1: t1 === undefined ? null : t1, hit: hit === undefined ? null : hit, ...(training ? { training: true } : {}) }),   // #343: training logs one record per example
     learnRemove: (sid, name, id, at) => invoke("track_learn_remove", { sid, name, id, at: at === undefined ? null : at }),
     learnForgetAt: (sid, name, t0, t1, hit) => invoke("track_learn_forget_at", { sid, name, t0: t0 === undefined ? null : t0,   // P4-36 Forget This: {removed, learn, track, routed}
       t1: t1 === undefined ? null : t1, hit: hit === undefined ? null : hit }),

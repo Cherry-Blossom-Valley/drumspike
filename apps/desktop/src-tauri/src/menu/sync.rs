@@ -13,7 +13,8 @@ use super::items::{
     GRID, HEIGHT_MODES, INFO_LINE, INSPECTOR, Kind, LEARN_FILTER, NUDGE_EARLIER, NUDGE_LATER, NUDGE_MODES, OPEN_RECENT,
     OTHER_MICS, OVERVIEW, PROJECT_PREFIX, REANALYZE_SELECTION, RECENT_CLEAR_ID, RECENT_ID, RECENT_MAX, RECENT_PREFIX,
     REDO, RULER_BEATS, RULER_MARKERS, RULER_METER, RULER_TEMPO, SNAP, SPEC, STOP_RETURN_MODE, SUSPEND_FOLLOW,
-    TAB_MODES, TOGGLE_HIT_ACTIVE, TRACKS_REMOVE, UNDO, VELOCITY_LANE, WINDOW_ID, ZOOM_OWN_PREFIX, ZOOM_PRESETS_ID,
+    TAB_MODES, TOGGLE_HIT_ACTIVE, TRACKS_REMOVE, TRAINING_MODE, UNDO, VELOCITY_LANE, WINDOW_ID, ZOOM_OWN_PREFIX,
+    ZOOM_PRESETS_ID,
 };
 use super::keymap::{PRESET, TYPING, current_preset, is_typing, key_row, live_accel, preset_or_default, tauri_accel};
 use super::lock;
@@ -77,9 +78,10 @@ pub fn check_states(state: &Value) -> Vec<(&'static str, bool)> {
         ("grid", &GRID),
         ("velocityLane", &VELOCITY_LANE),
         ("otherMics", &OTHER_MICS),
-        ("suspendFollow", &SUSPEND_FOLLOW), // P4-wf10: Transport > Suspend Follow when Editing
+        ("trainingMode", &TRAINING_MODE),      // #343: View > Training Mode
+        ("suspendFollow", &SUSPEND_FOLLOW),    // P4-wf10: Transport > Suspend Follow when Editing
         ("stopReturnMode", &STOP_RETURN_MODE), // #436: Transport > Stop Returns to Start
-        ("auditionTab", &AUDITION_TAB),     // #240: Transport > Audition on Tab
+        ("auditionTab", &AUDITION_TAB),        // #240: Transport > Audition on Tab
     ] {
         if let Some(b) = state.get(key).and_then(Value::as_bool) {
             out.push((item.id, b));

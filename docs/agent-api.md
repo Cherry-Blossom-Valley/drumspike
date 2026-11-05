@@ -243,6 +243,18 @@ the level threshold (Learn Add, flam) gets the cap of its tag times its level. T
 rules are in `crates/app/src/confidence.rs`. The page steps through the doubtful hits of all tracks
 with D (Hits > Next Doubtful Hit), lowest confidence first; Shift+D steps back.
 
+## Training Mode
+
+A tool for the owner who refines the product, off by default (View > Training Mode, a page setting). With
+`training: true` on `events_edit` and `track_learn_mark`, the command appends one JSON line per hit affected
+(op `move`, `add`, `delete`, `learn_this` or `learn_not`) to `<DRUMSPIKE_HOME>/training/<project id>.jsonl`: the
+time, the app version, the detect and refine rule versions, the track, role and rate, `from` and `to` in samples,
+the event as stored before the op, its `confidence` and the track's samples from 40 ms before to 10 ms after
+`from` and `to` (`audio.at_from`, `audio.at_to`). The answer gets `training: {records}` (or `training_error`; the
+edit stands). Without the parameter nothing is written and the answer is unchanged.
+`training_status {sid, on?}` answers `{on, records, path}`. `tools/training_export.py <jsonl...>` prints the
+aggregates per role and op and writes the truth list `[{track, role, from, to, op}]`.
+
 Export: `export_markers_set {sid, on}` keeps the Export dialog's "Markers in MIDI" checkbox in
 the document field `export_markers` (absent is off); `export_existing` answers it as `export_markers`.
 With it on, the one multi-track file (`<project>_drums.mid`, `midi_mode: "single"`) holds one marker

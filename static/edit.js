@@ -210,8 +210,10 @@ async function edNow(name, mk, before) {   // true when the service applied the 
   const pl = mk(S.events[name] || []);
   if (!pl) return false;
   let r;
-  try { r = await B.eventsEdit(sid, name, pl.ops); }
+  const training = trainingOn() && !!pl.step;   // #343: a plan with an undo step is the owner's correction; an undo or redo (no step) is not
+  try { r = await B.eventsEdit(sid, name, pl.ops, training); }
   catch (e) { setMsg(`edit: ${errText(e)}`); await edReload(sid, name); return false; }
+  if (training) trainingNote(r);
   if (sid !== S.sid || !S.tracks[name]) return false;
   if (pl.done) pl.done(r);   // #144: the plan reads the answer (where a snapped hit landed)
   const old = S.events[name] || [], cur = S.sel && S.sel.track === name ? (old[S.sel.index] || {}).id : undefined;

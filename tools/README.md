@@ -10,6 +10,7 @@ Run a tool with `uv run` (named dependencies are in its docstring, for example
 | `check_midi_timing.py` | checks MIDI note times against a tempo map in samples |
 | `check_wording.py` | the wording check of the user-facing texts (guide, release notes, site) |
 | `check_private.py` | the check for private names in a diff or a text file (`AGENTS.md`) |
+| `training_export.py` | the aggregates and the truth list of the Training Mode logs (`View > Training Mode`, #343) |
 | `identity.py` | the identity snapshot: hashes the engine outputs before and after a change (`ARCHITECTURE.md`) |
 | `fn_lengths.py` | lists the long functions of the Rust production code |
 | `build_help.py` | builds the in-app manual `static/help/` from `docs/guide/` |

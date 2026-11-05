@@ -167,6 +167,8 @@ pub const GRID: Item = check("grid", "Show Bar and Beat Grid");
 pub const VELOCITY_LANE: Item = check("velocity_lane", "Velocity Lane");
 /// #157: View > Other Mics Under Hit (the panel of the other tracks in the window of the selected hit).
 pub const OTHER_MICS: Item = check("other_mics", "Other Mics Under Hit");
+/// #343: View > Training Mode (the correction log of the owner's edits; a page setting, off by default).
+pub const TRAINING_MODE: Item = check("training_mode", "Training Mode");
 // Transport
 pub const PLAY_STOP: Item = item("play_stop", "Play/Stop", true);
 /// P3-20b: Shift+Space (a page key: no accelerator without Cmd, Control or Option).
@@ -236,7 +238,7 @@ pub const DRUMSPIKE_HELP: Item = item("drumspike_help", "Drum Spike Help", false
 pub const SHORTCUTS: Item = item("shortcuts", "Keyboard Shortcuts", false);
 
 /// Every custom item (not the Open Recent and Window entries, not the system items Cut, Copy and so on).
-pub const SPEC: [Item; 113] = [
+pub const SPEC: [Item; 114] = [
     ABOUT,
     SETTINGS,
     QUIT,
@@ -304,6 +306,7 @@ pub const SPEC: [Item; 113] = [
     GRID,
     VELOCITY_LANE,
     OTHER_MICS,
+    TRAINING_MODE,
     PLAY_STOP,
     HALF_SPEED,
     STOP_RETURN,

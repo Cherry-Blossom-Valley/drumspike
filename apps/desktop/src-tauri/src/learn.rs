@@ -18,6 +18,7 @@ use crate::blocking;
 /// project or the track is unknown. 409 when the project is open read-only, when a follower's
 /// source track is gone, or when an offline track has audio the rule needs.
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::too_many_arguments)]
 pub async fn track_learn_mark(
     svc: State<'_, Service>,
     sid: String,
@@ -26,6 +27,7 @@ pub async fn track_learn_mark(
     t0: Option<f64>,
     t1: Option<f64>,
     hit: Option<f64>,
+    training: Option<bool>,
 ) -> Result<Value, AppError> {
     blocking(&svc, "track_learn_mark", move |s| {
         let range = match (t0, t1) {
@@ -33,7 +35,7 @@ pub async fn track_learn_mark(
             (None, None) => None,
             _ => return Err(AppError::bad("give both `t0` and `t1`")),
         };
-        s.track_learn_mark(&sid, &name, &kind, range, hit)
+        s.track_learn_mark_training(&sid, &name, &kind, range, hit, training.unwrap_or(false))
     })
     .await
 }
