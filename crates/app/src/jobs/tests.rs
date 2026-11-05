@@ -473,7 +473,9 @@ fn the_rule_of_an_analysis_and_of_a_repick() {
     assert_eq!(parse_rule("6"), Some(RefineRule::Edge));
     assert_eq!(parse_rule("visible"), Some(RefineRule::Visible));
     assert_eq!(parse_rule("7"), Some(RefineRule::Visible));
-    assert_eq!(parse_rule("8"), None);
+    assert_eq!(parse_rule("line"), Some(RefineRule::Line));
+    assert_eq!(parse_rule("8"), Some(RefineRule::Line));
+    assert_eq!(parse_rule("9"), None);
     assert_eq!(parse_rule(""), None);
     let free = ServiceConfig::default();
     let pinned = ServiceConfig {
@@ -482,7 +484,7 @@ fn the_rule_of_an_analysis_and_of_a_repick() {
     };
     // a new analysis runs the current rule unless pinned
     assert_eq!(analysis_rule(&free), RefineRule::CURRENT);
-    assert_eq!(RefineRule::CURRENT, RefineRule::Visible);
+    assert_eq!(RefineRule::CURRENT, RefineRule::Line);
     assert_eq!(analysis_rule(&pinned), RefineRule::Reference);
     // a re-pick keeps the rule its analysis recorded; no record or no version: before P4-12 (1)
     let rec = |v: Value| {

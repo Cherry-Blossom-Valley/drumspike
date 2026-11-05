@@ -291,7 +291,8 @@ fn run_refine(job_path: &Path) -> Result<(), String> {
             | RefineRule::Foot
             | RefineRule::FootCapped
             | RefineRule::Edge
-            | RefineRule::Visible => {
+            | RefineRule::Visible
+            | RefineRule::Line => {
                 let r = refine_rule_peak(&x, h.t0, sr, &h.neighbors, win, rule, job.peak_db.unwrap_or(FM_PEAK_DB));
                 let step = match r.step {
                     ReachStep::Kept => "kept",

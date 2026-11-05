@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::edge::{EdgeTail, edge_foot};
+use super::edge::{EdgeTail, edge_foot_counted};
 use super::max_abs;
 use crate::pyops::py_int;
 
@@ -108,8 +108,12 @@ pub(super) struct BackTune {
     pub(super) peak_db: f64,
     /// The foot taken one step stricter ([`foot_strict`]) with this cap, when `Some`.
     pub(super) tune: Option<FootTune>,
-    /// The first steep edge after the foot ([`edge_foot`]) with this tail rule, when `Some`.
+    /// The first steep edge after the foot ([`edge_foot_counted`]) with this tail rule, when `Some`.
     pub(super) edge: Option<EdgeTail>,
+    /// Version 8 (#338): the strict foot ([`foot_strict`]) of the walk's foot when no edge counts, with this cap, when
+    /// `Some`. The walk reads the 2-tap mean, which halves the first sample of a sharp start and reads it as the line, so
+    /// the walk's foot sits one sample into such an attack; the strict foot is the last floor-level sample before it.
+    pub(super) fallback: Option<FootTune>,
 }
 
 impl BackTune {
@@ -119,6 +123,7 @@ impl BackTune {
             peak_db,
             tune: None,
             edge: None,
+            fallback: None,
         }
     }
 }
@@ -351,7 +356,12 @@ pub(super) fn first_motion_traced(
     next_mid: Option<i64>,
     bt: BackTune,
 ) -> ((i64, BackStep), Option<LeadTrace>) {
-    let BackTune { peak_db, tune, edge } = bt;
+    let BackTune {
+        peak_db,
+        tune,
+        edge,
+        fallback,
+    } = bt;
     let srf = f64::from(sr);
     let n = x.len() as i64;
     if s <= 0 || s >= n {
@@ -405,28 +415,37 @@ pub(super) fn first_motion_traced(
         foot: walked,
         lead: foot,
     };
-    let foot = match tune {
-        None => foot,
-        Some(tune) => {
-            let end = (s - samples(FM_FLOOR_SKIP_S, srf)).min(n);
-            let strict_foot = foot_strict(x, foot, lo, f64::from(max_abs(x, from, end)));
-            let cap = match tune.cap {
-                FootCap::Seconds(t) => samples(t, srf),
-                FootCap::Samples(k) => k,
-            };
-            if foot - strict_foot <= cap {
-                strict_foot
-            } else {
-                match tune.overrun {
-                    Overrun::Keep => foot,
-                    Overrun::Clamp => foot - cap,
-                }
+    // the strict foot of `foot` with its cap (versions 4 and 5 always, version 8 when no edge counts)
+    let strict = |foot: i64, tune: FootTune| {
+        let end = (s - samples(FM_FLOOR_SKIP_S, srf)).min(n);
+        let strict_foot = foot_strict(x, foot, lo, f64::from(max_abs(x, from, end)));
+        let cap = match tune.cap {
+            FootCap::Seconds(t) => samples(t, srf),
+            FootCap::Samples(k) => k,
+        };
+        if foot - strict_foot <= cap {
+            strict_foot
+        } else {
+            match tune.overrun {
+                Overrun::Keep => foot,
+                Overrun::Clamp => foot - cap,
             }
         }
     };
-    // version 6: the first steep edge after the foot; it may lie after `s` (the hit moves later)
+    let foot = match tune {
+        None => foot,
+        Some(tune) => strict(foot, tune),
+    };
+    // versions 6 to 8: the first steep edge after the foot; it may lie after `s` (the hit moves later). No edge that
+    // counts: the walk's foot stays, or (version 8) its strict foot
     let foot = match edge {
-        Some(tail) => edge_foot(x, foot, pe, srf, tail),
+        Some(tail) => match edge_foot_counted(x, foot, pe, srf, tail) {
+            Some(k) => k,
+            None => match fallback {
+                Some(tune) => strict(foot, tune),
+                None => foot,
+            },
+        },
         None => foot,
     };
     let step = if foot < s || (edge.is_some() && foot != s) {
