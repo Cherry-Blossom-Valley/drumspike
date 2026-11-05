@@ -95,7 +95,7 @@ pub const WIN_AFTER: usize = 5;
 /// [`TIMING_CONFIDENCE_SAMPLES`] samples or more apart.
 pub const TRAINING_NO_EDGE: f64 = 0.4;
 /// Training Mode (#344): the factor of a hit whose line before the foot is noisy or sloping.
-pub const TRAINING_NOT_A_LINE: f64 = 0.7;
+pub const TRAINING_NOT_A_LINE: f64 = 0.45;
 /// Training Mode (#344): a line is not a line over this share of the hit's peak.
 pub const LINE_NOISE_MAX: f64 = 0.01;
 /// Training Mode (#344): and not a line over this trend per ms.
@@ -120,7 +120,7 @@ pub fn level_factor(level_db: f64, median_db: f64) -> f64 {
 
 /// The Training Mode factor of one hit's placement evidence and the reasons that name it (#344),
 /// `None` for a clean hit. 0.4 for no counting edge or a spread of
-/// [`TIMING_CONFIDENCE_SAMPLES`] samples or more, 0.7 for a line that is not a line; the lowest
+/// [`TIMING_CONFIDENCE_SAMPLES`] samples or more, 0.45 for a line that is not a line; the lowest
 /// factor applies and `why` names every reason, in the order of the ticket's list.
 #[must_use]
 pub fn training_factor(d: &PlacementDiag, spread: Option<f64>) -> Option<(f64, Vec<String>)> {
@@ -663,7 +663,7 @@ mod tests {
             training_factor(&no_edge, None),
             Some((0.4, vec!["no steep edge, foot fallback".to_string()]))
         );
-        // a noisy line alone: 0.7 and the share of the peak
+        // a noisy line alone: 0.45 and the share of the peak
         let noisy = PlacementDiag {
             edge: true,
             line_noise: 0.018,
@@ -671,7 +671,7 @@ mod tests {
         };
         assert_eq!(
             training_factor(&noisy, None),
-            Some((0.7, vec!["line noise 1.8 % of the peak".to_string()]))
+            Some((0.45, vec!["line noise 1.8 % of the peak".to_string()]))
         );
         // a sloping line: rises or falls by the sign of the trend
         let rising = PlacementDiag {
@@ -681,7 +681,7 @@ mod tests {
         };
         assert_eq!(
             training_factor(&rising, None),
-            Some((0.7, vec!["line rises 0.9 % per ms".to_string()]))
+            Some((0.45, vec!["line rises 0.9 % per ms".to_string()]))
         );
         let falling = PlacementDiag {
             edge: true,
@@ -690,7 +690,7 @@ mod tests {
         };
         assert_eq!(
             training_factor(&falling, None),
-            Some((0.7, vec!["line falls 0.9 % per ms".to_string()]))
+            Some((0.45, vec!["line falls 0.9 % per ms".to_string()]))
         );
         // everything at once: the 0.4 class wins and the why names all reasons in order
         let all = PlacementDiag {
