@@ -39,11 +39,18 @@ pub enum RefineRule {
     /// on a nearly silent kick line it walked onto invisible steps (2 to 3 samples early), on a snare line with hi-hat
     /// bleed it stopped inside the slow drift (2 to 7 samples late).
     Visible,
+    /// Version 8 (#338): [`RefineRule::Visible`] with two corrections. The walk-back to the line measures the distance
+    /// from the line (the median of the 2 ms before the walk's foot, [`EdgeTail::Line`]), not from zero: on a kick line
+    /// that stood at an offset of about the visibility share, version 7 walked down the line, 4 samples before the
+    /// first motion. And when no steep edge counts (a stroke whose attack rises under 18 dB per 0.1 ms), the hit is
+    /// version 5's strict foot of the walk's foot, not the walk's foot itself: the walk reads the 2-tap mean, which
+    /// halves the first sample of a sharp start, so the foot sat one sample into the attack.
+    Line,
 }
 
 impl RefineRule {
     /// The rule a new analysis runs.
-    pub const CURRENT: RefineRule = RefineRule::Visible;
+    pub const CURRENT: RefineRule = RefineRule::Line;
 
     /// The version number the document stores.
     #[must_use]
@@ -56,6 +63,7 @@ impl RefineRule {
             RefineRule::FootCapped => 5,
             RefineRule::Edge => 6,
             RefineRule::Visible => 7,
+            RefineRule::Line => 8,
         }
     }
 
@@ -70,6 +78,7 @@ impl RefineRule {
             5 => Some(RefineRule::FootCapped),
             6 => Some(RefineRule::Edge),
             7 => Some(RefineRule::Visible),
+            8 => Some(RefineRule::Line),
             _ => None,
         }
     }
@@ -129,7 +138,7 @@ pub fn refine_rule(x: &[f32], t0: f64, sr: u32, neighbors: &[f64], win: RefineWi
     refine_rule_peak(x, t0, sr, neighbors, win, rule, FM_PEAK_DB)
 }
 
-/// [`refine_rule`] with the back-track peak margin `peak_db` (it matters for versions 3 to 7, the rules with a back-track).
+/// [`refine_rule`] with the back-track peak margin `peak_db` (it matters for versions 3 to 8, the rules with a back-track).
 #[must_use]
 pub fn refine_rule_peak(
     x: &[f32],
@@ -140,8 +149,23 @@ pub fn refine_rule_peak(
     rule: RefineRule,
     peak_db: f64,
 ) -> Refined {
-    // the back-track of versions 4 to 7: the strict foot or the steep edge after it
-    let back = |tune, edge| refine_back_peak(x, t0, sr, neighbors, win, BackTune { peak_db, tune, edge });
+    // the back-track of versions 4 to 8: the strict foot, or the steep edge after it (and, version 8, the strict foot
+    // when no edge counts)
+    let back = |tune, edge, fallback| {
+        refine_back_peak(
+            x,
+            t0,
+            sr,
+            neighbors,
+            win,
+            BackTune {
+                peak_db,
+                tune,
+                edge,
+                fallback,
+            },
+        )
+    };
     match rule {
         RefineRule::Reference => {
             let (t, rise) = refine_sr(x, t0, sr, neighbors, win);
@@ -154,10 +178,11 @@ pub fn refine_rule_peak(
         }
         RefineRule::Reach => refine_reach(x, t0, sr, neighbors, win),
         RefineRule::FirstMotion => refine_first_motion_peak(x, t0, sr, neighbors, win, peak_db),
-        RefineRule::Foot => back(Some(FootTune::V4), None),
-        RefineRule::FootCapped => back(Some(FootTune::V5), None),
-        RefineRule::Edge => back(None, Some(EdgeTail::Noise)),
-        RefineRule::Visible => back(None, Some(EdgeTail::Visible)),
+        RefineRule::Foot => back(Some(FootTune::V4), None, None),
+        RefineRule::FootCapped => back(Some(FootTune::V5), None, None),
+        RefineRule::Edge => back(None, Some(EdgeTail::Noise), None),
+        RefineRule::Visible => back(None, Some(EdgeTail::Visible), None),
+        RefineRule::Line => back(None, Some(EdgeTail::Line), Some(FootTune::V5)),
     }
 }
 

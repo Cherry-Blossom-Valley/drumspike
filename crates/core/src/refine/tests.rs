@@ -232,9 +232,10 @@ fn rule_versions_and_the_reference_rule() {
             RefineRule::Foot.version(),
             RefineRule::FootCapped.version(),
             RefineRule::Edge.version(),
-            RefineRule::Visible.version()
+            RefineRule::Visible.version(),
+            RefineRule::Line.version()
         ),
-        (1, 2, 3, 4, 5, 6, 7)
+        (1, 2, 3, 4, 5, 6, 7, 8)
     );
     for r in [
         RefineRule::Reference,
@@ -244,12 +245,13 @@ fn rule_versions_and_the_reference_rule() {
         RefineRule::FootCapped,
         RefineRule::Edge,
         RefineRule::Visible,
+        RefineRule::Line,
     ] {
         assert_eq!(RefineRule::from_version(u64::from(r.version())), Some(r));
     }
     assert_eq!(RefineRule::from_version(0), None);
-    assert_eq!(RefineRule::from_version(8), None);
-    assert_eq!(RefineRule::CURRENT, RefineRule::Visible);
+    assert_eq!(RefineRule::from_version(9), None);
+    assert_eq!(RefineRule::CURRENT, RefineRule::Line);
     // the reference rule is refine_sr, step Kept, on every kind of window
     let x = noisy(&track(&[(0.5, -3.0)], 1.5), -70.0);
     for t0 in [0.486, 0.497, 0.503, 0.65, 2.0] {
@@ -693,6 +695,7 @@ fn first_motion_mid_rule(
             peak_db,
             tune,
             edge: None,
+            fallback: None,
         },
     )
     .0
@@ -1243,25 +1246,22 @@ fn bleed_before_a_hit_is_not_the_hit() {
 
 #[test]
 fn a_slow_attack_without_a_steep_edge_keeps_the_walks_foot() {
-    // a 2 ms raised-cosine rise (no edge before the level passes EDGE_TOP_DB): the version 3 foot stays
+    // a 2 ms raised-cosine rise (no edge before the level passes EDGE_TOP_DB): versions 6 and 7 keep the version 3
+    // foot; version 8 (#338) takes its strict foot, at most 3 samples before it (the last floor-level sample, as on a
+    // sharp start the 2-tap walk foot sits one sample into the attack)
     const A: f64 = 0.0017;
     let on = 24_000;
     let mut x = floor_of(48_000, A);
     swing(&mut x, on, 96, 0.5, 120.0);
-    let v3 = refine_rule_peak(
-        &x,
-        on as f64 / f64::from(SR) - 0.006,
-        SR,
-        &[],
-        W,
-        RefineRule::FirstMotion,
-        FM_PEAK_DB,
-    );
-    let v6 = refined_sample(&x, on);
-    assert_eq!(
-        v6,
-        (v3.t * f64::from(SR)).round() as i64,
-        "version 6 keeps the version 3 foot"
+    let t0 = on as f64 / f64::from(SR) - 0.006;
+    let at = |rule| (refine_rule_peak(&x, t0, SR, &[], W, rule, FM_PEAK_DB).t * f64::from(SR)).round() as i64;
+    let v3 = at(RefineRule::FirstMotion);
+    assert_eq!(at(RefineRule::Edge), v3, "version 6 keeps the version 3 foot");
+    assert_eq!(at(RefineRule::Visible), v3, "version 7 keeps the version 3 foot");
+    let v8 = at(RefineRule::Line);
+    assert!(
+        (v3 - 3..v3).contains(&v8),
+        "version 8: the strict foot, up to 3 samples before {v3}: {v8}"
     );
 }
 
@@ -1411,4 +1411,58 @@ fn version_7_takes_a_short_drift_and_leaves_a_long_offset_to_version_6() {
         "a long offset: version 6's walk"
     );
     assert_eq!(v6, 1_199);
+}
+
+#[test]
+fn version_8_measures_visibility_from_the_line_not_from_zero() {
+    // #338: a kick line at 1.95 % of the peak that rises by 0.08 % per sample over the last five samples before the
+    // attack (the slow wave after the previous stroke), then the visible rise. Version 7 reads "off the line" from zero,
+    // so the line samples over 2 % pass as the hit's drift and the walk goes down the line, 4 samples before the first
+    // motion; version 8 reads the distance from the line's level and puts the hit on the last line sample
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f32; 2_000];
+    for v in &mut x[800..1_196] {
+        *v = 0.0195;
+    }
+    for (k, v) in [0.0195f32, 0.0203, 0.0211, 0.0219, 0.0227].iter().enumerate() {
+        x[1_196 + k] = *v;
+    }
+    for (k, v) in [0.05f32, 0.25, 0.6, 0.8, 1.0].iter().enumerate() {
+        x[1_201 + k] = *v;
+    }
+    for v in &mut x[1_206..1_400] {
+        *v = 1.0;
+    }
+    assert_eq!(
+        edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Visible),
+        1_196,
+        "version 7: down the line to the first sample under 2 %"
+    );
+    assert_eq!(
+        edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Line),
+        1_200,
+        "version 8: the last sample on the line"
+    );
+}
+
+#[test]
+fn version_8_puts_a_stroke_without_a_steep_edge_on_the_last_line_sample() {
+    // #338: a snare stroke whose attack rises steadily (under 18 dB per 0.1 ms, so no edge counts) after a first step
+    // of 3 % of the peak. The walk's 2-tap mean halves that first step and reads it as the line, so version 7 sits one
+    // sample into the attack; version 8 takes the strict foot, the last floor-level sample before the attack leaves
+    // the floor
+    const A: f64 = 0.0005;
+    let on = 24_000;
+    let mut x = floor_of(48_000, A);
+    for k in 0..50 {
+        x[on + k] = 0.03 + 0.0194 * k as f32;
+    }
+    for v in &mut x[on + 50..on + 400] {
+        *v = 1.0;
+    }
+    let t0 = on as f64 / f64::from(SR) - 0.006;
+    let at =
+        |rule| (refine_rule_peak(&x, t0, SR, &[], W, rule, FM_PEAK_DB).t * f64::from(SR)).round() as i64 - on as i64;
+    assert_eq!(at(RefineRule::Visible), 1, "version 7: one sample into the attack");
+    assert_eq!(at(RefineRule::Line), -1, "version 8: the last sample on the line");
 }

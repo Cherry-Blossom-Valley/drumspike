@@ -15,6 +15,11 @@ pub(crate) enum EdgeTail {
     /// the line within [`VIS_TAIL_MAX_S`]; otherwise [`EdgeTail::Noise`] decides (a slow wave or an offset on a tom's
     /// line is the line itself).
     Visible,
+    /// Version 8 (#338): [`EdgeTail::Visible`] measured from the line, not from zero. The line's level is the median of
+    /// the signal over [`LINE_LEVEL_S`] before the walk's foot: a line that stands at an offset (the slow wave after the
+    /// previous stroke, about the visibility share of the peak) is the line itself, not a stretch that stands visibly
+    /// off it.
+    Line,
 }
 
 /// Version 6 (#293, #294): the rise window of the steep edge (seconds): the signal must rise by [`EDGE_RISE_DB`] under
@@ -55,6 +60,12 @@ pub(crate) const VIS_TAIL_TOL_PCT: f64 = 0.5;
 pub(crate) const VIS_TAIL_MAX_S: f64 = 0.000_15;
 /// The stretch before the walk's foot that measures the line noise (seconds).
 pub(crate) const EDGE_NOISE_S: f64 = 0.002;
+/// Version 8 (#338): the stretch before the walk's foot whose median is the line's level (seconds). Short, so that it
+/// follows a line that is a slow wave or holds bleed (over 2 ms the median sat 0.5 % of the peak off the line right
+/// before the stroke and the walk went down the wave); longer than the rise window, so that a walk foot that lies two
+/// or three samples inside a steep rise does not tilt the median. On the owner's hand-placed hits 8 to 12 samples give
+/// the same result; 12 is 0.25 ms at 48 kHz.
+pub(crate) const LINE_LEVEL_S: f64 = 0.000_25;
 /// How far after the walk's foot the edge is looked for (seconds).
 pub(crate) const EDGE_SPAN_S: f64 = 0.005;
 
@@ -71,16 +82,23 @@ pub(crate) const EDGE_SPAN_S: f64 = 0.005;
 /// ramp-up) lies [`EDGE_GUARD_DB`] under the peak of the [`EDGE_LOCAL_S`] after its foot; else the search goes on after
 /// the window. An edge raises `|x|` (a falling slope is none), and the search stops where the level itself reaches
 /// [`EDGE_TOP_DB`] under the peak of `[foot, end)`. The first edge that counts is the hit; none: `foot` stays.
+#[cfg(test)]
 pub(super) fn edge_foot(x: &[f32], foot: i64, end: i64, srf: f64, tail_rule: EdgeTail) -> i64 {
+    edge_foot_counted(x, foot, end, srf, tail_rule).unwrap_or(foot)
+}
+
+/// [`edge_foot`] that says when no edge counts: `None` then (version 8 takes the strict foot of the walk's foot in that
+/// case, [`super::walk::first_motion_traced`]).
+pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_rule: EdgeTail) -> Option<i64> {
     let w = samples(EDGE_RISE_S, srf).max(1);
     let n = x.len() as i64;
     let end = end.min(n - w).min(foot + samples(EDGE_SPAN_S, srf));
     if foot < 0 || foot + w >= end {
-        return foot;
+        return None;
     }
     let pk = f64::from(max_abs(x, foot, end));
     if pk <= 0.0 {
-        return foot;
+        return None;
     }
     let need = pk * 10f64.powf(-EDGE_RISE_DB / 20.0);
     let guard = 10f64.powf(-EDGE_GUARD_DB / 20.0);
@@ -98,6 +116,22 @@ pub(super) fn edge_foot(x: &[f32], foot: i64, end: i64, srf: f64, tail_rule: Edg
             *d.select_nth_unstable_by(mid, f64::total_cmp).1
         }
     };
+    // version 8: the line's level, the median of the short stretch before the walk's foot (0 for the older tails: they
+    // read the distance from zero)
+    let line = match tail_rule {
+        EdgeTail::Line => {
+            let from = (foot - samples(LINE_LEVEL_S, srf)).max(0);
+            let mut v: Vec<f64> = (from..foot).map(at).collect();
+            if v.is_empty() {
+                0.0
+            } else {
+                let mid = v.len() / 2;
+                *v.select_nth_unstable_by(mid, f64::total_cmp).1
+            }
+        }
+        EdgeTail::Noise | EdgeTail::Visible => 0.0,
+    };
+    let off = |i: i64| at(i) - line;
     // the search starts one rise window before the walk's foot: on a steep attack the first sample over the walk's
     // threshold already lies inside the rise, and from there the next window rises too little
     let lo = (foot - w - EDGE_TAIL_SAMPLES).max(1);
@@ -107,7 +141,7 @@ pub(super) fn edge_foot(x: &[f32], foot: i64, end: i64, srf: f64, tail_rule: Edg
         if at(j + w).abs() - at(j).abs() < need {
             // the level reached the hit's body without an edge that counts: the walk's foot stays
             if at(j).abs() >= top {
-                return foot;
+                return None;
             }
             j += 1;
             continue;
@@ -145,20 +179,30 @@ pub(super) fn edge_foot(x: &[f32], foot: i64, end: i64, srf: f64, tail_rule: Edg
             // whole, the invisible first steps of a kick on a silent line are not). The walk counts only when it
             // reaches the line within VIS_TAIL_MAX_S: a tom whose line is a slow wave on the edge's side never reaches
             // it, and there version 6's tail stays (the walk would stop at its bound, an arbitrary place)
-            EdgeTail::Visible => {
+            // Version 8 (#338) reads every level from the line, not from zero: a line at an offset of about the
+            // visibility share is the line, not a drift the walk goes down
+            EdgeTail::Visible | EdgeTail::Line => {
                 let vis = pk * VIS_TAIL_PCT / 100.0;
                 let tol = pk * VIS_TAIL_TOL_PCT / 100.0;
-                let sgn = at(k0 + 1).signum();
+                let sgn = off(k0 + 1).signum();
                 let lo_v = (k0 - samples(VIS_TAIL_MAX_S, srf)).max(1);
                 let mut kv = k;
                 while kv > lo_v
-                    && at(kv).abs() > vis
-                    && at(kv).signum() == sgn
-                    && at(kv - 1).abs() <= at(kv).abs() + tol
+                    && off(kv).abs() > vis
+                    && off(kv).signum() == sgn
+                    && off(kv - 1).abs() <= off(kv).abs() + tol
                 {
                     kv -= 1;
                 }
-                if at(kv).abs() <= vis { kv } else { noise_tail(k) }
+                let res = if off(kv).abs() <= vis { kv } else { noise_tail(k) };
+                if std::env::var_os("DRUMSPIKE_EDGE_TRACE").is_some() {
+                    eprintln!(
+                        "TRACE tail={tail_rule:?} foot={foot} pk={pk:.4} line={line:+.5} vis={vis:.5} j={j} k0={k0} k={k} kv={kv} off_kv={:+.5} reached={} -> {res}",
+                        off(kv),
+                        off(kv).abs() <= vis
+                    );
+                }
+                res
             }
         };
         let reached = f64::from(max_abs(x, k, (k + local).min(end + w)));
@@ -167,10 +211,16 @@ pub(super) fn edge_foot(x: &[f32], foot: i64, end: i64, srf: f64, tail_rule: Edg
         } else {
             0.0
         };
+        if std::env::var_os("DRUMSPIKE_EDGE_TRACE").is_some() {
+            eprintln!(
+                "TRACE guard k={k} before={before:.5} reached={reached:.5} pass={}",
+                before <= reached * guard
+            );
+        }
         if before <= reached * guard {
-            return k;
+            return Some(k);
         }
         j += w;
     }
-    foot
+    None
 }
