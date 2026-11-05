@@ -13,6 +13,8 @@ hit with a spectral onset detector, moves the hit to the first sample of its att
 velocity and writes sample-exact MIDI and spike files. The product is a desktop app (Tauri 2).
 The app has no Python. Python is only a test and research tool.
 
+![Drum Spike architecture: editor page, backend.js, four adapters, the app service, the pure core; dependencies point inward](docs/architecture.svg)
+
 Three layers carry the work, from the inside out:
 
 1. **core** (`crates/core`, `drumspike-core`): domain and DSP. It reads audio, detects, refines,
@@ -173,6 +175,24 @@ side branch      tempo_detect  kick/snare hits -> integer BPM suggestion
 Stages 1 to 7 run per track and need only that track. Stage 9 needs all tracks, because one
 drum leaks into the other microphones. Each stage has its own tests. The identity snapshot
 checks the end of stages 8, 9, 10 and 11.
+
+## Where a new thing goes
+
+- **A command:** one row in `REGISTRY` (`crates/app/src/api.rs`), the handler in its module's
+  `HANDLERS` (one map in `call::run`), one method in `static/backend.js`, and the wrapper in the
+  handler list of `apps/desktop/src-tauri/src/lib.rs`. `cargo test -p drumspike-app` checks the four agree.
+- **A session rule over several tracks:** a pure function in `crates/core/src/detect/`, an
+  `AnalysisStep` in `crates/app/src/steps.rs`, and a version that the project records.
+- **A per-hit flag:** a `policy::Mark`. Read and write marks only through `is_marked`, `mark` and
+  `clear`. A rule marks a hit; it never deletes one.
+- **A page feature:** its own script in `static/` with a `<feature>Init(deps)` hook wired in
+  `app.js`, a place in the load order of `index.html`, and an entry in `JS_FILES`. It calls the app
+  only through `B` (`backend.js`) and other features only through the hooks.
+- **A menu item or key:** the row in `static/keymap.js` (the shell compiles it in) and the item in
+  `menu/items.rs`. The drift test and the menu snapshot (`menu/snapshot.json`) in `menu/tests.rs`
+  keep them equal.
+- **A `DRUMSPIKE_*` name:** `ServiceConfig::from_lookup` / `from_env` in the app or `RuleSet` /
+  `ResearchOverrides` in `crates/core/src/rules.rs`, passed down as a typed value.
 
 ## Gates that guard the structure
 
