@@ -65,7 +65,7 @@ fn level_confidence_and_review_order_do_not_follow_the_shift() {
     // plain stored hits (no marks): the level path rates them
     svc.events_set(&sid, "k", &json!([{"t": 0.5}, {"t": 0.65}, {"t": 0.8}]))
         .unwrap();
-    let base = svc.track_confidence(&sid, "k", None).unwrap();
+    let base = svc.track_confidence(&sid, "k", None, false).unwrap();
     assert_eq!(base["source"], "level");
     assert_eq!(
         queue_order(&base),
@@ -75,7 +75,7 @@ fn level_confidence_and_review_order_do_not_follow_the_shift() {
     // 100 ms at 48 kHz, a whole activation frame
     for shift in [4_800i64, -4_800] {
         svc.track_shift_set(&sid, "k", shift).unwrap();
-        let shifted = svc.track_confidence(&sid, "k", None).unwrap();
+        let shifted = svc.track_confidence(&sid, "k", None, false).unwrap();
         assert_eq!(shifted["confidence"], base["confidence"], "shift {shift}");
         assert_eq!(queue_order(&shifted), queue_order(&base), "shift {shift}");
     }
@@ -125,7 +125,7 @@ fn soft_rescued_hit_names_the_soft_gate_and_the_loud_hit_does_not() {
         8,
         "six loud strokes and two soft-rescued ghost notes: {events:?}"
     );
-    let conf = svc.track_confidence(&sid, "s top", None).unwrap();
+    let conf = svc.track_confidence(&sid, "s top", None, false).unwrap();
     assert_eq!(conf["source"], "level");
     let rows = conf["confidence"].as_array().unwrap();
     assert_eq!(rows.len(), events.len());
@@ -155,4 +155,70 @@ fn soft_rescued_hit_names_the_soft_gate_and_the_loud_hit_does_not() {
             );
         }
     }
+}
+
+/// #344: with `training: true` the placement factor of the audio around the stored position
+/// multiplies into `c`. A hit whose stored `timing_confidence` (C16) is 6 samples loses its
+/// factor and the `why` names it; the clean hits on the same fixture keep their old `c` and
+/// `why` (the bursts sit on silence, so their line is clean and their edge counts).
+#[test]
+fn training_doubts_the_hit_with_disagreeing_estimates_and_leaves_the_clean_ones() {
+    let root = tmp("conf_344_training");
+    let x = bursts(&[(0.5, 0.8), (0.65, 0.01), (0.8, 0.2)], 1.2, 48_000);
+    let dir = project(&root, "Song", &[spec("k", 48_000, x)]);
+    let svc = service_dsp();
+    let sid = svc.project_open(&dir.display().to_string()).unwrap()["sid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    svc.events_set(
+        &sid,
+        "k",
+        &json!([{"t": 0.5, "timing_confidence": 6}, {"t": 0.65}, {"t": 0.8}]),
+    )
+    .unwrap();
+    let base = svc.track_confidence(&sid, "k", None, false).unwrap();
+    let trained = svc.track_confidence(&sid, "k", None, true).unwrap();
+    // the spread hit: the factor 0.4, the reason in the why, doubtful again
+    let c0 = base["confidence"][0]["c"].as_f64().unwrap();
+    assert_eq!(base["confidence"][0]["why"], json!([]));
+    assert_eq!(trained["confidence"][0]["c"], json!(c0 * 0.4));
+    assert_eq!(trained["confidence"][0]["doubt"], json!(true));
+    assert_eq!(
+        trained["confidence"][0]["why"],
+        json!(["onset estimates 6 samples apart"])
+    );
+    // the clean hits: the same rating as without the parameter
+    assert_eq!(trained["confidence"][1], base["confidence"][1]);
+    assert_eq!(trained["confidence"][2], base["confidence"][2]);
+}
+
+/// #344: without `training` the response is byte for byte the 0.9.21 one. On the fixture project
+/// the level path pins every row exactly as the formula reads it (the median of the three
+/// levels, the 24 dB span), and an explicit `training: false` is the call without the parameter.
+#[test]
+fn without_training_the_response_is_the_committed_level_one() {
+    let root = tmp("conf_344_plain");
+    let x = bursts(&[(0.5, 0.8), (0.65, 0.01), (0.8, 0.2)], 1.2, 48_000);
+    let dir = project(&root, "Song", &[spec("k", 48_000, x)]);
+    let svc = service_dsp();
+    let sid = svc.project_open(&dir.display().to_string()).unwrap()["sid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    svc.events_set(&sid, "k", &json!([{"t": 0.5}, {"t": 0.65}, {"t": 0.8}]))
+        .unwrap();
+    let plain = svc.track_confidence(&sid, "k", None, false).unwrap();
+    assert_eq!(
+        plain,
+        json!({
+            "confidence": [
+                {"c": 1.0, "doubt": false, "why": []},
+                {"c": 0.0, "doubt": true, "why": ["26 dB under the track median"]},
+                {"c": 1.0, "doubt": false, "why": []},
+            ],
+            "source": "level",
+            "doubt_below": 0.5,
+        })
+    );
 }

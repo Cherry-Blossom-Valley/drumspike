@@ -1567,7 +1567,16 @@ pub static REGISTRY: &[CommandSpec] = &[
     cmd(
         "track_confidence",
         "The confidence of each hit (0..1), doubtful under 0.5, with the reasons: [{c, doubt, why}] in the order of the hits",
-        &[SID, NAME, EVENTS_OPT],
+        &[
+            SID,
+            NAME,
+            EVENTS_OPT,
+            opt(
+                "training",
+                Ty::Bool,
+                "Training Mode (#344): also rate the placement (no steep edge, a noisy or sloping line, onset estimates apart); default off",
+            ),
+        ],
         r#"{"type":"object","required":["confidence","source","doubt_below"]}"#,
         Read,
         Agent,

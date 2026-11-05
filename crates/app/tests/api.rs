@@ -280,7 +280,10 @@ fn result_schemas_name_keys_that_real_answers_have() {
             svc.tempo_map_detect(&sid, None, None, None).unwrap(),
         ),
         // #150: the confidence of each hit
-        ("track_confidence", svc.track_confidence(&sid, "k in", None).unwrap()),
+        (
+            "track_confidence",
+            svc.track_confidence(&sid, "k in", None, false).unwrap(),
+        ),
         // P4-40g: the review markers (set twice: the second answers the first as `previous`)
         ("markers_get", svc.markers_get(&sid).unwrap()),
         (

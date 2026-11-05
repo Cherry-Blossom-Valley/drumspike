@@ -51,10 +51,22 @@
 //! `track_confidence` reads the loudness of the audio: the peak level of every hit at its attack
 //! on the audio timeline (#281 D16: the activation margin of the model path moved to
 //! the model branch; the review queue orders by the level evidence alone).
+//!
+//! # Training Mode (#344)
+//!
+//! `training: true` rates the placement of every hit too, from the audio around its stored
+//! position ([`drumspike_core::refine::placement_diag`], computed on demand, never stored):
+//! no counting edge (the placement fell back to the walk's foot) or onset estimates
+//! ([`TIMING_CONFIDENCE_SAMPLES`] samples or more apart, C16) take the factor
+//! [`TRAINING_NO_EDGE`], a line that is not a line (noise over [`LINE_NOISE_MAX`] of the peak or
+//! a trend over [`LINE_SLOPE_PER_MS_MAX`] per ms) takes [`TRAINING_NOT_A_LINE`]; `c` is the
+//! existing `c` times the factor and `why` names every reason. Without `training` the response is
+//! byte for byte the 0.9.21 one.
 
 use drumspike_core::detect::N_CLASSES;
 use drumspike_core::detect::onset::{Candidate, Gate};
 use drumspike_core::detect::peaks;
+use drumspike_core::refine::{PlacementDiag, placement_diag};
 use drumspike_core::velocity::peak_db;
 use serde_json::{Value, json};
 
@@ -79,6 +91,19 @@ pub const WIN_BEFORE: usize = 2;
 /// Activation frames after the hit frame that the margin reads.
 pub const WIN_AFTER: usize = 5;
 
+/// Training Mode (#344): the factor of a hit with no counting edge, or with onset estimates
+/// [`TIMING_CONFIDENCE_SAMPLES`] samples or more apart.
+pub const TRAINING_NO_EDGE: f64 = 0.4;
+/// Training Mode (#344): the factor of a hit whose line before the foot is noisy or sloping.
+pub const TRAINING_NOT_A_LINE: f64 = 0.7;
+/// Training Mode (#344): a line is not a line over this share of the hit's peak.
+pub const LINE_NOISE_MAX: f64 = 0.01;
+/// Training Mode (#344): and not a line over this trend per ms.
+pub const LINE_SLOPE_PER_MS_MAX: f64 = 0.005;
+/// Training Mode (#344): a spread of the three onset estimates (C16) from this many samples
+/// doubts the placement.
+pub const TIMING_CONFIDENCE_SAMPLES: f64 = 4.0;
+
 /// The margin of an activation over the threshold of its class: 0 at or under the threshold, 1 at
 /// [`MARGIN_FULL`] or more over it, linear between.
 #[must_use]
@@ -91,6 +116,64 @@ pub fn margin_factor(strength: f64, threshold: f64) -> f64 {
 #[must_use]
 pub fn level_factor(level_db: f64, median_db: f64) -> f64 {
     (1.0 + (level_db - median_db) / LEVEL_SPAN_DB).clamp(0.0, 1.0)
+}
+
+/// The Training Mode factor of one hit's placement evidence and the reasons that name it (#344),
+/// `None` for a clean hit. 0.4 for no counting edge or a spread of
+/// [`TIMING_CONFIDENCE_SAMPLES`] samples or more, 0.7 for a line that is not a line; the lowest
+/// factor applies and `why` names every reason, in the order of the ticket's list.
+#[must_use]
+pub fn training_factor(d: &PlacementDiag, spread: Option<f64>) -> Option<(f64, Vec<String>)> {
+    let mut factor = 1.0f64;
+    let mut why: Vec<String> = Vec::new();
+    if !d.edge {
+        factor = factor.min(TRAINING_NO_EDGE);
+        why.push("no steep edge, foot fallback".into());
+    }
+    if d.line_noise > LINE_NOISE_MAX {
+        factor = factor.min(TRAINING_NOT_A_LINE);
+        why.push(format!("line noise {:.1} % of the peak", d.line_noise * 100.0));
+    }
+    if d.line_slope.abs() > LINE_SLOPE_PER_MS_MAX {
+        factor = factor.min(TRAINING_NOT_A_LINE);
+        why.push(format!(
+            "line {} {:.1} % per ms",
+            if d.line_slope.is_sign_negative() {
+                "falls"
+            } else {
+                "rises"
+            },
+            d.line_slope.abs() * 100.0
+        ));
+    }
+    if spread.is_some_and(|s| s >= TIMING_CONFIDENCE_SAMPLES) {
+        let s = spread.unwrap_or_default();
+        factor = factor.min(TRAINING_NO_EDGE);
+        why.push(format!(
+            "onset estimates {} samples apart",
+            if s.fract() == 0.0 {
+                (s as i64).to_string()
+            } else {
+                s.to_string()
+            }
+        ));
+    }
+    (!why.is_empty()).then_some((factor, why))
+}
+
+/// Training Mode (#344): the placement factor times the rated `c` (rounded as [`rate`] rounds it)
+/// and the reasons into `why`; doubtful again under [`DOUBT_BELOW`]. `factor` under 1 comes with
+/// at least one reason, so a doubtful hit never ends without one.
+fn apply_placement(mut r: Value, factor: f64, why: Vec<String>) -> Value {
+    let c = r["c"].as_f64().unwrap_or(1.0) * factor;
+    if let Some(arr) = r["why"].as_array_mut() {
+        for w in why {
+            arr.push(json!(w));
+        }
+    }
+    r["c"] = json!((c * 1000.0).round() / 1000.0);
+    r["doubt"] = json!(c < DOUBT_BELOW);
+    r
 }
 
 /// The median of `v` (the mean of the two middle values for an even count), `None` when empty.
@@ -217,11 +300,13 @@ pub fn rate(e: &Value, level_db: f64, median_db: Option<f64>, margin: Option<Mar
 }
 
 impl Service {
-    /// `track_confidence {sid, name, events?}`: `{confidence, source, doubt_below}`. `confidence`
-    /// has one [`rate`] entry per hit of `events` (the page's list, else the stored one), in their
-    /// order. `source` is `model` (kept activations: margin and level), `level` (no kept
-    /// activations: the level only) or `follows` (a follower: its hits are the source's, none is
-    /// doubtful). 409 for an offline track.
+    /// `track_confidence {sid, name, events?, training?}`: `{confidence, source, doubt_below}`.
+    /// `confidence` has one [`rate`] entry per hit of `events` (the page's list, else the stored
+    /// one), in their order. `source` is `model` (kept activations: margin and level), `level` (no
+    /// kept activations: the level only) or `follows` (a follower: its hits are the source's, none
+    /// is doubtful). 409 for an offline track. `training: true` (Training Mode, #344) multiplies
+    /// the placement factor of every hit into its `c` and names the reasons; without it the
+    /// response is byte for byte the 0.9.21 one.
     ///
     /// The `events` times are the shifted-event coordinate (`track_shift_set` moved the stored
     /// hits, the audio did not move). Every read below converts the time to detector time first:
@@ -233,7 +318,13 @@ impl Service {
     ///
     /// A 404 [`AppError`] for an unknown `sid` or track; a 409 for an offline track (its source cannot be
     /// resolved); a 400 when an event has no numeric `t`; the decode error when the audio cannot be read.
-    pub fn track_confidence(&self, sid: &str, name: &str, events: Option<&[Value]>) -> Result<Value, AppError> {
+    pub fn track_confidence(
+        &self,
+        sid: &str,
+        name: &str,
+        events: Option<&[Value]>,
+        training: bool,
+    ) -> Result<Value, AppError> {
         let op = self.inner.registry.get(sid)?;
         resolve_shared(&op);
         let st = self.track_state(&op, name)?;
@@ -250,14 +341,35 @@ impl Service {
         let d = self.inner.media.decode_cached(&source, mix_mode(&st.mix))?;
         // the hits carry the Hitpoint shift; the audio does not (module coordinates): the
         // recorded shift comes off before the peak level
+        let srf = f64::from(d.sr);
         let dt = st
             .params
             .as_ref()
             .and_then(|p| p.get("shift_samples"))
             .and_then(Value::as_f64)
             .unwrap_or(0.0)
-            / f64::from(d.sr);
+            / srf;
         let levels: Vec<f64> = times.iter().map(|&t| peak_db(&d.samples, t - dt, d.sr)).collect();
+        // Training Mode (#344): the placement factor of every hit from the audio around its
+        // stored position, computed on demand like the other factors (never stored); the shift
+        // comes off first, like for the levels. An edited or out-of-the-output hit keeps its
+        // rating (`rate` gives it): the user decided, or it is not in the output.
+        let placements: Vec<Option<(f64, Vec<String>)>> = if !training {
+            vec![None; times.len()]
+        } else {
+            events
+                .iter()
+                .zip(&times)
+                .map(|(e, &t)| {
+                    if is_manual(e) || is_out(e) {
+                        return None;
+                    }
+                    let spread = e.get("timing_confidence").and_then(Value::as_f64);
+                    let at = ((t - dt) * srf).round() as i64;
+                    training_factor(&placement_diag(&d.samples, d.sr, at), spread)
+                })
+                .collect()
+        };
         let kept: Vec<f64> = events
             .iter()
             .zip(&levels)
@@ -270,7 +382,11 @@ impl Service {
             .iter()
             .zip(times.iter().zip(&levels))
             .zip(&gates)
-            .map(|((e, (_, &l)), g)| rate(e, l, med, None, *g))
+            .zip(&placements)
+            .map(|(((e, (_, &l)), g), p)| match p {
+                Some((f, why)) => apply_placement(rate(e, l, med, None, *g), *f, why.clone()),
+                None => rate(e, l, med, None, *g),
+            })
             .collect();
         let source = "level";
         Ok(json!({"confidence": confidence, "source": source, "doubt_below": DOUBT_BELOW}))
@@ -332,6 +448,7 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
             s("sid")?,
             s("name")?,
             args.get("events").and_then(Value::as_array).map(Vec::as_slice),
+            args.get("training").and_then(Value::as_bool).unwrap_or(false),
         )
     };
     Some(run())
@@ -522,6 +639,103 @@ mod tests {
             dispatch(&svc, "track_confidence", &json!({"sid": "x", "name": "y"}))
                 .unwrap()
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn training_factor_names_every_reason_and_takes_the_lowest_factor() {
+        let clean = PlacementDiag {
+            edge: true,
+            line_noise: 0.0,
+            line_slope: 0.0,
+        };
+        // a clean hit and one under the spread threshold: no factor
+        assert_eq!(training_factor(&clean, None), None);
+        assert_eq!(training_factor(&clean, Some(3.9)), None);
+        // the spread alone: 0.4 and the reason, the count as stored (an integer count of samples)
+        assert_eq!(
+            training_factor(&clean, Some(6.0)),
+            Some((0.4, vec!["onset estimates 6 samples apart".to_string()]))
+        );
+        // no counting edge alone: 0.4
+        let no_edge = PlacementDiag { edge: false, ..clean };
+        assert_eq!(
+            training_factor(&no_edge, None),
+            Some((0.4, vec!["no steep edge, foot fallback".to_string()]))
+        );
+        // a noisy line alone: 0.7 and the share of the peak
+        let noisy = PlacementDiag {
+            edge: true,
+            line_noise: 0.018,
+            line_slope: 0.0,
+        };
+        assert_eq!(
+            training_factor(&noisy, None),
+            Some((0.7, vec!["line noise 1.8 % of the peak".to_string()]))
+        );
+        // a sloping line: rises or falls by the sign of the trend
+        let rising = PlacementDiag {
+            edge: true,
+            line_noise: 0.0,
+            line_slope: 0.009,
+        };
+        assert_eq!(
+            training_factor(&rising, None),
+            Some((0.7, vec!["line rises 0.9 % per ms".to_string()]))
+        );
+        let falling = PlacementDiag {
+            edge: true,
+            line_noise: 0.0,
+            line_slope: -0.009,
+        };
+        assert_eq!(
+            training_factor(&falling, None),
+            Some((0.7, vec!["line falls 0.9 % per ms".to_string()]))
+        );
+        // everything at once: the 0.4 class wins and the why names all reasons in order
+        let all = PlacementDiag {
+            edge: false,
+            line_noise: 0.018,
+            line_slope: 0.009,
+        };
+        assert_eq!(
+            training_factor(&all, Some(6.0)),
+            Some((
+                0.4,
+                vec![
+                    "no steep edge, foot fallback".to_string(),
+                    "line noise 1.8 % of the peak".to_string(),
+                    "line rises 0.9 % per ms".to_string(),
+                    "onset estimates 6 samples apart".to_string(),
+                ]
+            ))
+        );
+    }
+
+    #[test]
+    fn apply_placement_multiplies_c_names_the_reason_and_redraws_doubt() {
+        // a confident hit turns doubtful and keeps the reason
+        let r = apply_placement(
+            json!({"c": 1.0, "doubt": false, "why": []}),
+            0.4,
+            vec!["no steep edge, foot fallback".into()],
+        );
+        assert_eq!(
+            r,
+            json!({"c": 0.4, "doubt": true, "why": ["no steep edge, foot fallback"]})
+        );
+        // c rounds as rate rounds it
+        let r = apply_placement(json!({"c": 0.333, "doubt": false, "why": []}), 0.4, vec!["x".into()]);
+        assert_eq!(r["c"], json!(0.133));
+        // an already doubtful hit keeps its earlier reasons
+        let r = apply_placement(
+            json!({"c": 0.25, "doubt": true, "why": ["18 dB under the track median"]}),
+            0.4,
+            vec!["no steep edge, foot fallback".into()],
+        );
+        assert_eq!(
+            r,
+            json!({"c": 0.1, "doubt": true, "why": ["18 dB under the track median", "no steep edge, foot fallback"]})
         );
     }
 }

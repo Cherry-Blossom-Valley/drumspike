@@ -127,9 +127,10 @@ pub async fn track_confidence(
     sid: String,
     name: String,
     events: Option<Vec<Value>>,
+    training: Option<bool>,
 ) -> Result<Value, AppError> {
     blocking(&svc, "track_confidence", move |s| {
-        s.track_confidence(&sid, &name, events.as_deref())
+        s.track_confidence(&sid, &name, events.as_deref(), training.unwrap_or(false))
     })
     .await
 }
