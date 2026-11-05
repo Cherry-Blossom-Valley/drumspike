@@ -13,6 +13,8 @@ hit with a spectral onset detector, moves the hit to the first sample of its att
 velocity and writes sample-exact MIDI and spike files. The product is a desktop app (Tauri 2).
 The app has no Python. Python is only a test and research tool.
 
+![Drum Spike architecture: editor page, backend.js, four adapters, the app service, the pure core; dependencies point inward](docs/architecture.svg)
+
 Three layers carry the work, from the inside out:
 
 1. **core** (`crates/core`, `drumspike-core`): domain and DSP. It reads audio, detects, refines,

@@ -114,6 +114,10 @@ and spike lanes with WebGL2 inside a Tauri 2 window; the app has no server and n
 
 ## Repository
 
+![Drum Spike architecture: editor page, backend.js, four adapters, the app service, the pure core; dependencies point inward](docs/architecture.svg)
+
+The dependencies point inward only: page, adapters, app, core. `ARCHITECTURE.md` is the map.
+
 | Path | Content |
 |---|---|
 | `crates/core/` | the Rust core: decoding, detection, refinement, velocities, MIDI, spike files, project format |
