@@ -703,6 +703,8 @@ fn every_mcp_answer_validates_against_its_output_schema_and_every_tool_and_batch
         ("row_heights_get", sd(json!({}))),
         ("row_heights_set", sd(json!({"heights": {}}))),
         ("row_heights_get", sd(json!({}))),
+        // #343: the Training Mode state (read, then off again)
+        ("training_status", sd(json!({}))),
         ("project_close", sd(json!({"force": true}))),
     ];
     // every Agent row is in the table (so a new row needs a call here), and `job_get` is in the loop below
