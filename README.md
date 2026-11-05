@@ -44,7 +44,7 @@ Drum Spike is free and open source (Apache-2.0).
   with undo for every edit. A review queue shows the least certain hits first, and names the
   rescue that kept a hit below the level gate.
 - **Bleed and hard cases.** The snare in the tom mic and the kick in the snare mic are recognised
-  and cleaned; flams and rolls are split.
+  and cleaned; the second stroke of a flam becomes a hit of its own.
 - **Learn.** Mark an unwanted pattern and every similar hit goes; show a missed hit and similar
   ones come back.
 - **Followers, layers, tempo.** A sub mic follows the kick; a layer plays your own one-shot at
@@ -99,18 +99,17 @@ release build; [RELEASING.md](docs/RELEASING.md) covers signing and notarization
 
 The Rust core (`crates/core`) runs these steps per track; the app (`crates/app`) runs them as a job:
 
-1. Decode the audio file to mono float32 at its native sample rate (44.1, 48 or 96 kHz). The
-   cache of decoded tracks is bounded by bytes (512 MiB), and a file that several views ask for
-   at the same time is decoded once; a damaged waveform cache file on disk gives a clear error
-   instead of a crash.
+1. Decode the audio file to mono float32 at its native sample rate (44.1, 48 or 96 kHz).
 2. Detect the hits with the DSP onset detector (a log-filtered spectrogram and peak picking).
-3. Keep the hits that match the track's role (kick, snare, tom, hat, cymbal, other), and remove
-   bleed from other drums.
+3. Keep the hits that match the track's role (kick, snare, tom, hat, cymbal, other).
 4. Move each hit to the acoustic attack, sample-exact.
 5. Map the attack levels to MIDI velocities.
 
-A 10-minute 48 kHz track takes about 2 s on an M2 Pro. The editor (`static/`) draws the waveform
-and spike lanes with WebGL2 inside a Tauri 2 window; the app has no server and no Python.
+Then the session rules look across the tracks: bleed of one drum in another drum's mic, ghost
+notes, the second stroke of a flam. A rule marks a hit; it never deletes one, so you can bring a
+hit back. A 10-minute 48 kHz track is analysed in about a second on an Apple silicon Mac. The
+editor (`static/`) draws the waveform and spike lanes with WebGL2 inside a Tauri 2 window; the
+app has no server and no Python.
 
 ## Repository
 
