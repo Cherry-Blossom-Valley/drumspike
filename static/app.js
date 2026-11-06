@@ -181,7 +181,10 @@ function snapSample(t, name) { const sr = S.tracks[name].sr; return Math.round(t
 function trainingView(name) {
   const sr = S.tracks[name] && S.tracks[name].sr, d = viewDur();
   if (!sr || !(d > 0)) return null;
-  return { ms: d * 1000, px_per_sample: laneWidth() / (d * sr) };
+  /* 1e-6 px: viewDur() rounds the span to whole ns, which leaves the exact one-pixel boundary a
+     hair under 1 (0.999999978 ...); precision_of cuts at >= 1, so the rounding keeps that boundary
+     on the sample side (#353). */
+  return { ms: d * 1000, px_per_sample: Math.round(laneWidth() / (d * sr) * 1e6) / 1e6 };
 }
 /* playhead snapping: within 10px on screen AND <= 30 ms of the nearest hit -> land exactly on it */
 function snapPlayhead(t) {

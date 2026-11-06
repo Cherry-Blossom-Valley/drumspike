@@ -28,6 +28,15 @@ def log_lines(app):
     return [json.loads(line) for f in log_files(app) for line in f.read_text().splitlines()]
 
 
+def project_log_lines(app):
+    """The records of the open project's own training file: the training dir keeps other projects'
+    and older runs' files, so the glob is not the project's; training_status answers the path."""
+    path = Path(app.evaluate("async () => (await B.trainingStatus(S.sid)).path"))
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
 def type_sample(app, sample):
     smp = app.locator("#ilSample")
     smp.click(); smp.fill(str(sample)); smp.press("Enter")
@@ -40,7 +49,7 @@ def test_training_mode_logs_a_move_shows_the_count_and_stops_when_turned_off(app
     assert state(app)["trainingMode"] is False                      # off by default
     expect(app.locator("#stTraining")).to_be_hidden()
     assert app.evaluate("() => SETTINGS().ui.training") is False
-    before = len(log_lines(app))
+    before = len(project_log_lines(app))            # the project's own file: the dir keeps other projects' files
     menu(app, "training_mode")                                      # View > Training Mode on
     assert state(app)["trainingMode"] is True
     assert app.evaluate("() => JSON.parse(localStorage.getItem('dsg_settings')).ui.training") is True
@@ -48,7 +57,7 @@ def test_training_mode_logs_a_move_shows_the_count_and_stops_when_turned_off(app
     app.keyboard.press("Tab"); app.keyboard.press("Tab")            # the second hit
     type_sample(app, 40000)                                         # the move
     expect(app.locator("#stTraining")).to_have_text("training: 1 records")
-    recs = log_lines(app)[before:]
+    recs = project_log_lines(app)[before:]
     assert len(recs) == 1
     r = recs[0]
     assert (r["op"], r["from"], r["to"], r["role"], r["track"]) == ("move", IDX[1], 40000, "kick", "Kick In")
@@ -57,21 +66,22 @@ def test_training_mode_logs_a_move_shows_the_count_and_stops_when_turned_off(app
     # the undo is not a new correction
     app.keyboard.press("Control+z")
     edits_done(app)
-    assert len(log_lines(app)) == before + 1
+    assert len(project_log_lines(app)) == before + 1
     # the tool reads the log: aggregates and the truth list
     out = tmp_path / "truth.json"
     p = subprocess.run([sys.executable, "-I", str(ROOT / "tools" / "training_export.py"), *map(str, log_files(app)), "--out", str(out)],
                        capture_output=True, text=True, check=True)
     assert "kick move:" in p.stdout and "to-from (samples):" in p.stdout
     truth = json.loads(out.read_text())
-    assert {"track": "Kick In", "role": "kick", "from": IDX[1], "to": 40000, "op": "move"} in truth
+    assert {"track": "Kick In", "role": "kick", "from": IDX[1], "to": 40000, "op": "move",
+            "precision": "ms"} in truth   # the default zoom: a sample far below a pixel
     # off again: the status text goes, a move writes nothing
     menu(app, "training_mode")
     assert state(app)["trainingMode"] is False
     expect(app.locator("#stTraining")).to_be_hidden()
-    n = len(log_lines(app))
+    n = len(project_log_lines(app))
     type_sample(app, 41000)
-    assert len(log_lines(app)) == n
+    assert len(project_log_lines(app)) == n
     assert app.evaluate("() => SETTINGS().ui.training") is False
 
 
@@ -88,7 +98,7 @@ def test_a_move_at_sample_zoom_records_the_view_and_the_precision(app, make_proj
     app.keyboard.press("Tab"); app.keyboard.press("Tab")            # the second hit (1.5 s)
     type_sample(app, 73000)                                         # the move
     expect(app.locator("#stTraining")).to_have_text("training: 1 records")
-    (r,) = log_lines(app)
+    (r,) = project_log_lines(app)
     assert (r["op"], r["from"], r["to"], r["role"], r["track"]) == ("move", IDX[1], 73000, "kick", "Kick In")
     assert r["precision"] == "sample"
     assert r["view"]["ms"] == pytest.approx(v["ms"])
