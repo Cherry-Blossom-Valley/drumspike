@@ -78,7 +78,11 @@ use crate::{Service, ServiceConfig};
 /// source's measured-aligned pair. The pass-1 inherit rule takes only the marks an ALIGNED pair
 /// made (`aligned_mark`): on a session with no aligned pair the re-detection judges every
 /// candidate on its own, exactly as before #296.
-pub const CROSS_BLEED: u32 = 8;
+/// 9 is #355: the rule judges every hit on the first motion its OWN signal's walk-back
+/// derives ([`drumspike_core::detect::cross_bleed`] `canon_motion`), not on the refined list
+/// position — a sub-millisecond move of a refined position between placement versions (version
+/// 8 to 9 moved a snare hit 0.19 ms earlier) can no longer flip a verdict.
+pub const CROSS_BLEED: u32 = 9;
 
 /// The version of a new analysis: the configuration's pin, else [`CROSS_BLEED`].
 #[must_use]

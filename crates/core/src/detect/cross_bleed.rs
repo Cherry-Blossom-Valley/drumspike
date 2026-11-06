@@ -337,12 +337,38 @@ pub struct PairLearned {
 }
 
 /// The level of every motion time of `mic` in its own band.
-fn levels(mic: &CrossMic, sr: u32, w: (i64, i64), pre: i64) -> Vec<f64> {
-    let sec = band_sections(mic.kind.role().band(), sr);
+fn levels(sig: &[f32], kind: XKind, times: &[f64], sr: u32, w: (i64, i64), pre: i64) -> Vec<f64> {
+    let sec = band_sections(kind.role().band(), sr);
+    times
+        .iter()
+        .map(|&t| band_level_db(sig, &sec, (t * f64::from(sr)).round() as i64, w, pre))
+        .collect()
+}
+
+/// #355: the canonical position of every hit of `mic` — the hit's refined position walked back
+/// to the first motion of the mic's OWN signal, the same bare [`first_motion`] walk the app
+/// gives every source motion (no bounds). The rule must not read a hit's position from the
+/// refined list alone: the refined position of a hit can move by a fraction of a millisecond
+/// between placement versions (version 8 to version 9 moved a snare hit 0.19 ms earlier and a
+/// cross-track verdict then flipped, so a real tom hit vanished), while the hit's own attack
+/// in the signal — its anchor — stays. The walk-back from any refined position near the anchor
+/// crosses the same gap and lands on the same foot, so the derived time — and with it the
+/// verdict — is the same for all of them. A refined position that IS the signal's first motion
+/// is returned unchanged (the walk is idempotent there).
+fn canon_motion(mic: &CrossMic, sr: u32) -> Vec<f64> {
     mic.motion
         .iter()
-        .map(|&t| band_level_db(mic.signal, &sec, (t * f64::from(sr)).round() as i64, w, pre))
+        .map(|&t| {
+            let s = (t * f64::from(sr)).round() as i64;
+            let (foot, _) = first_motion(mic.signal, s, sr, t, None, None);
+            foot as f64 / f64::from(sr)
+        })
         .collect()
+}
+
+/// [`canon_motion`] over every mic of the session.
+fn canon_all(mics: &[CrossMic], sr: u32) -> Vec<Vec<f64>> {
+    mics.iter().map(|m| canon_motion(m, sr)).collect()
 }
 
 /// The band level (dBFS) of a hit of `kind` at time `t` (s) in `x` at rate `sr`, with the rule's
@@ -413,12 +439,14 @@ pub fn cross_bleed_session(
 
 /// The per-pair alignment measurement of #296: the |lead| of X's hits that coincide with a hit of
 /// S, nearest hit first. An aligned session's leads sit at 0 (the tool removed the bleed's arrival
-/// delay); a bleed lead of 0.5 to 3 ms cannot.
-fn measure_pair(x: &CrossMic, s: &CrossMic, coincide: f64, p: &CrossBleedParams) -> PairAlignment {
-    let mut s_sorted: Vec<f64> = s.motion.clone();
+/// delay); a bleed lead of 0.5 to 3 ms cannot. The hits' positions are the canonical ones
+/// ([`canon_motion`], #355): the measurement must not flip on a sub-millisecond move of a
+/// refined position either.
+fn measure_pair(x_t: &[f64], s_t: &[f64], coincide: f64, p: &CrossBleedParams) -> PairAlignment {
+    let mut s_sorted: Vec<f64> = s_t.to_vec();
     s_sorted.sort_by(f64::total_cmp);
     let mut coins: Vec<f64> = Vec::new();
-    for &tx in &x.motion {
+    for &tx in x_t {
         let k = s_sorted.partition_point(|&ts| ts < tx);
         let cands = [s_sorted.get(k.saturating_sub(1)).copied(), s_sorted.get(k).copied()];
         if let Some(ts) = cands
@@ -471,6 +499,13 @@ struct MeasuredRow {
 #[must_use]
 pub fn measure_pair_alignment(mics: &[CrossMic], _sr: u32, p: &CrossBleedParams) -> Vec<MeasuredAlign> {
     let coincide = p.coincide_ms / 1000.0;
+    let canon = canon_all(mics, _sr);
+    measure_pairs(mics, &canon, coincide, p)
+}
+
+/// [`measure_pair_alignment`] over canon positions computed by the caller (the rule's own run
+/// has them already).
+fn measure_pairs(mics: &[CrossMic], canon: &[Vec<f64>], coincide: f64, p: &CrossBleedParams) -> Vec<MeasuredAlign> {
     let toms: Vec<usize> = mics
         .iter()
         .enumerate()
@@ -484,7 +519,7 @@ pub fn measure_pair_alignment(mics: &[CrossMic], _sr: u32, p: &CrossBleedParams)
             if b == a {
                 continue;
             }
-            let m = measure_pair(&mics[a], &mics[b], coincide, p);
+            let m = measure_pair(&canon[a], &canon[b], coincide, p);
             out.push((a, b, m.aligned, m.coins, m.med_abs_lead_ms));
         }
     }
@@ -623,7 +658,7 @@ pub(crate) fn cross_bleed_with(mics: &[CrossMic], ctx: &CrossBleedContext) -> (V
     // is a close mic. A source is aligned on the session only when it measures aligned on
     // every tom target that has at least `align_min_coins` coincidences with it, and on at
     // least two such targets; a session with one tom mic cannot establish alignment.
-    let measured = measured_rows(mics, run.sr, run.p);
+    let measured = measured_rows(mics, &run.cm, run.p);
     let verdict = SourceVerdict::count(&measured, ctx.session, run.p, mics.len());
     let target_inherits = target_inherits(&toms, &measured, &verdict, mics.len());
     let mut learned = Vec::new();
@@ -667,15 +702,19 @@ struct Run<'r> {
     pre: i64,
     /// The coincidence band (s).
     coincide: f64,
-    /// Per mic, the level of every motion time in its own band.
+    /// #355: the canonical position of every hit of every mic (per mic, per hit).
+    cm: Vec<Vec<f64>>,
+    /// Per mic, the level of every CANONICAL hit time in its own band.
     lv: Vec<Vec<f64>>,
-    /// Per mic, the full-band levels of an Overhead source; `None` for every other kind.
+    /// Per mic, the full-band levels of an Overhead source's canonical hit times; `None` for
+    /// every other kind.
     oh_lv: Vec<Option<Vec<f64>>>,
 }
 
 impl<'r> Run<'r> {
-    /// The levels phase: every hit of every mic in its own band, and the full-band level of
-    /// every hit of an Overhead source.
+    /// The canon phase ([`canon_motion`], #355) and the levels phase: every canonical hit of
+    /// every mic in its own band, and the full-band level of every canonical hit of an
+    /// Overhead source.
     fn new(mics: &'r [CrossMic<'r>], ctx: &CrossBleedContext<'r>) -> Self {
         let CrossBleedContext {
             sr,
@@ -686,17 +725,24 @@ impl<'r> Run<'r> {
         let w = (ms_to_samples(p.window_ms.0, sr), ms_to_samples(p.window_ms.1, sr));
         let pre = ms_to_samples(p.preroll_ms, sr);
         let coincide = p.coincide_ms / 1000.0;
-        let lv: Vec<Vec<f64>> = mics.iter().map(|m| levels(m, sr, w, pre)).collect();
+        let cm = canon_all(mics, sr);
+        let lv: Vec<Vec<f64>> = mics
+            .iter()
+            .enumerate()
+            .map(|(i, m)| levels(m.signal, m.kind, &cm[i], sr, w, pre))
+            .collect();
         // the full-band peak levels of the Overhead sources (the #286 A1 common-band test),
         // per target kind; the targets are tom close mics, so one recomputation covers them.
         // The overhead is a mix of everything; only a common band compares like with like —
         // the full-band peak, the same measure on both mics (no filter sections).
         let oh_lv: Vec<Option<Vec<f64>>> = mics
             .iter()
-            .map(|m| {
+            .enumerate()
+            .map(|(i, m)| {
                 if m.kind.in_target_band() {
+                    // the full-band peak (no filter sections) — the #286 A1 common-band measure
                     Some(
-                        m.motion
+                        cm[i]
                             .iter()
                             .map(|&t| band_level_db(m.signal, &[], (t * f64::from(sr)).round() as i64, w, pre))
                             .collect(),
@@ -714,6 +760,7 @@ impl<'r> Run<'r> {
             w,
             pre,
             coincide,
+            cm,
             lv,
             oh_lv,
         }
@@ -722,9 +769,9 @@ impl<'r> Run<'r> {
 
 /// The alignment phase: per mic index, the measured rows of the tom at that index (empty for a
 /// mic that is not a tom), from [`measure_pair_alignment`].
-fn measured_rows(mics: &[CrossMic], sr: u32, p: &CrossBleedParams) -> Vec<Vec<MeasuredRow>> {
+fn measured_rows(mics: &[CrossMic], canon: &[Vec<f64>], p: &CrossBleedParams) -> Vec<Vec<MeasuredRow>> {
     let mut measured: Vec<Vec<MeasuredRow>> = vec![Vec::new(); mics.len()]; // per tom: the rows, source order
-    for (a, b, aligned, coins_n, med_abs_lead) in measure_pair_alignment(mics, sr, p) {
+    for (a, b, aligned, coins_n, med_abs_lead) in measure_pairs(mics, canon, p.coincide_ms / 1000.0, p) {
         measured[a].push(MeasuredRow {
             source: b,
             align: PairAlignment {
@@ -825,12 +872,12 @@ fn learn_pairs(
     rows: &[MeasuredRow],
     target_inherits: bool,
 ) -> Vec<(usize, PairLearned)> {
-    let x = &run.mics[a];
-    // #309: X's hit times sorted, for the clear-case test below: a clear case is an S hit
-    // WITHOUT an X hit within `coincide_ms` — a coinciding hit of X is the tom's own motion,
-    // and its ratio must not enter the pair's bleed distribution (a real stroke's ratio would
-    // raise the ceiling and hide the bleed).
-    let mut x_sorted: Vec<f64> = x.motion.clone();
+    // #309: X's canonical hit times sorted, for the clear-case test below (#355: the canon
+    // positions, not the refined list): a clear case is an S hit WITHOUT an X hit within
+    // `coincide_ms` — a coinciding hit of X is the tom's own motion, and its ratio must not
+    // enter the pair's bleed distribution (a real stroke's ratio would raise the ceiling and
+    // hide the bleed).
+    let mut x_sorted: Vec<f64> = run.cm[a].clone();
     x_sorted.sort_by(f64::total_cmp);
     let x_hit_near = |ts: f64| {
         let k = x_sorted.partition_point(|&tx| tx < ts);
@@ -973,14 +1020,15 @@ struct ClearCases {
 /// Measure every hit of source `b` on tom target `a` (see [`ClearCases`]).
 fn clear_cases(run: &Run, a: usize, b: usize, x_hit_near: &impl Fn(f64) -> bool) -> ClearCases {
     let (sr, p, w, pre) = (run.sr, run.p, run.w, run.pre);
-    let x = &run.mics[a];
-    let s = &run.mics[b];
+    let x = &run.mics[a].signal;
     let src_t = run.oh_lv[b].as_ref(); // the oh's levels in the target's band
     let lv_s = |k: usize| src_t.map_or(run.lv[b][k], |v| v[k]);
     let mut ratios: Vec<f64> = Vec::new();
     let mut ratios_clear: Vec<f64> = Vec::new();
     let mut leads: Vec<f64> = Vec::new();
-    for (k, &ts) in s.motion.iter().enumerate() {
+    // the hits of the source at their CANONICAL positions (#355): the ratios and the arrival
+    // search must not move with a sub-millisecond shift of the refined list.
+    for (k, &ts) in run.cm[b].iter().enumerate() {
         // #309 defect 1 (coordinator gate 2026-11-03): `lead_ms` and `ratio_db` are the
         // OLD set — every source hit, as main — because the unaligned two-part verdict's
         // `lead_min` moves with the lead median otherwise (Session B changed). The
@@ -989,7 +1037,7 @@ fn clear_cases(run: &Run, a: usize, b: usize, x_hit_near: &impl Fn(f64) -> bool)
         // the pair's bleed ceiling and hide the bleed behind it.
         let clear = !x_hit_near(ts);
         let lx = band_level_db(
-            x.signal,
+            x,
             &band_sections(XKind::Tom.role().band(), sr),
             (ts * f64::from(sr)).round() as i64,
             w,
@@ -1008,13 +1056,13 @@ fn clear_cases(run: &Run, a: usize, b: usize, x_hit_near: &impl Fn(f64) -> bool)
         // goes forward from the source hit
         let s0 = (ts * f64::from(sr)).round() as i64;
         let cap = ms_to_samples(p.clear_lead_cap_ms, sr);
-        let a0 = s0.clamp(0, x.signal.len() as i64 - 1) as usize;
-        let a1 = (s0 + cap).clamp(0, x.signal.len() as i64) as usize;
+        let a0 = s0.clamp(0, x.len() as i64 - 1) as usize;
+        let a1 = (s0 + cap).clamp(0, x.len() as i64) as usize;
         let peak = (a0..a1)
-            .map(|i| (x.signal[i].abs(), i))
+            .map(|i| (x[i].abs(), i))
             .max_by(|u, v| u.0.total_cmp(&v.0))
             .map_or(s0, |(_, i)| i as i64);
-        let (foot, _) = first_motion(x.signal, peak, sr, peak as f64 / f64::from(sr), None, None);
+        let (foot, _) = first_motion(x, peak, sr, peak as f64 / f64::from(sr), None, None);
         let lead = (foot as f64 / f64::from(sr) - ts) * 1000.0;
         #[cfg(test)]
         eprintln!("DBG clear case ts={ts} lx={lx} lead={lead} foot={foot} peak={peak}");
@@ -1041,21 +1089,19 @@ fn judge_hits(
 ) {
     let (p, coincide) = (run.p, run.coincide);
     let (mics, lv, oh_lv) = (run.mics, &run.lv, &run.oh_lv);
-    let x = &mics[a];
-    for (j, &tx) in x.motion.iter().enumerate() {
+    for (j, &tx) in run.cm[a].iter().enumerate() {
         let mut best_level = f64::NEG_INFINITY;
         let mut bleed = false;
         let mut by_aligned = false;
         for (pi, &(b, pl)) in pair.iter().enumerate() {
-            let s = &mics[b];
             let lvs = &lv[b];
-            let Some(k) = (0..s.motion.len())
-                .filter(|&k| s.motion[k] - tx <= coincide + 1e-9 && tx - s.motion[k] <= coincide + 1e-9)
+            let Some(k) = (0..run.cm[b].len())
+                .filter(|&k| run.cm[b][k] - tx <= coincide + 1e-9 && tx - run.cm[b][k] <= coincide + 1e-9)
                 .max_by(|&u, &v| lvs[u].total_cmp(&lvs[v]))
             else {
                 continue;
             };
-            let l = (tx - s.motion[k]) * 1000.0;
+            let l = (tx - run.cm[b][k]) * 1000.0;
             // an Overhead source's ratio is measured full-band (the #286 A1 common-band
             // test); every other kind in its own band
             let s_level = oh_lv[b].as_ref().map_or(lvs[k], |v| v[k]);
@@ -1065,7 +1111,7 @@ fn judge_hits(
                 marks_a[j].lead_ms = Some(l);
                 marks_a[j].ratio_db = Some(r);
             }
-            if s.kind.in_target_band() {
+            if mics[b].kind.in_target_band() {
                 // the #286 A1 overhead test: both mics in the target's band, the oh louder
                 // than the target by more than the margin is bleed. No lead condition: the
                 // a1-wake286 measurement shows the lead does not separate hat/cymbal bleed
@@ -1085,7 +1131,7 @@ fn judge_hits(
                 // pairs — disabling it (an intermediate commit) kept 521 hat-bleed tom
                 // events that main drops and regressed the tom F1 rows (the 103-tomdiff
                 // measurement). The learned pair medians stay as stored evidence.
-                if s.kind == XKind::Hat {
+                if mics[b].kind == XKind::Hat {
                     marks_a[j].hat_lead_ms = Some(l);
                     marks_a[j].hat_ratio_db = Some(r);
                 }
