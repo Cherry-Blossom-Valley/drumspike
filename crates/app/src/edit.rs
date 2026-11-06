@@ -350,13 +350,14 @@ impl Service {
     /// for an unknown `sid` or track; a 409 when the project is open read-only, the track is a follower, or another
     /// write or a running analysis holds the project; the decode error when a snap needs audio that cannot be read.
     pub fn events_edit(&self, sid: &str, name: &str, ops: &[Value]) -> Result<Value, AppError> {
-        self.events_edit_as(sid, name, ops, true, false)
+        self.events_edit_as(sid, name, ops, true, false, None)
     }
 
     /// [`Service::events_edit`] with the Training Mode choice (#343): `training: true` appends one record per added,
-    /// deleted and moved hit to the project's training log after the edit applied ([`crate::training`]). The answer
-    /// gets `training: {records}` (or `training_error` when the log failed; the edit stands). `false` is
-    /// [`Service::events_edit`] byte for byte.
+    /// deleted and moved hit to the project's training log after the edit applied ([`crate::training`]). `view` (the
+    /// page's view object `{ms, px_per_sample}`, #353) is written into every record as sent: a `move` or `add` record
+    /// gets its `precision`, a `delete` record carries the view without one. The answer gets `training: {records}`
+    /// (or `training_error` when the log failed; the edit stands). `false` is [`Service::events_edit`] byte for byte.
     ///
     /// # Errors
     ///
@@ -367,8 +368,9 @@ impl Service {
         name: &str,
         ops: &[Value],
         training: bool,
+        view: Option<Value>,
     ) -> Result<Value, AppError> {
-        self.events_edit_as(sid, name, ops, true, training)
+        self.events_edit_as(sid, name, ops, true, training, view)
     }
 
     /// [`Service::events_edit`]; `by_hand: false` for an internal edit (P4-38e: the Learn sweep), whose deletions do
@@ -380,6 +382,7 @@ impl Service {
         ops: &[Value],
         by_hand: bool,
         training: bool,
+        view: Option<Value>,
     ) -> Result<Value, AppError> {
         if ops.is_empty() {
             return Err(AppError::bad("`ops` must not be empty"));
@@ -417,7 +420,7 @@ impl Service {
         }
         if training {
             let examples = self.training_examples(sid, name, &current, &ops, sr);
-            Self::training_note(&mut out, self.training_log(sid, name, &examples));
+            Self::training_note(&mut out, self.training_log(sid, name, &examples, view.as_ref()));
         }
         Ok(out)
     }
@@ -671,7 +674,8 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
                 .and_then(Value::as_array)
                 .ok_or_else(|| AppError::bad("missing or wrong argument `ops` (list)"))?;
             let training = args.get("training").and_then(Value::as_bool).unwrap_or(false);
-            svc.events_edit_training(s("sid")?, s("name")?, ops, training)
+            let view = args.get("view").filter(|v| v.is_object()).cloned();
+            svc.events_edit_training(s("sid")?, s("name")?, ops, training, view)
         } else {
             let n = args
                 .get("shift_samples")

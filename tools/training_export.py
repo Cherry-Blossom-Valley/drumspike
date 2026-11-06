@@ -4,10 +4,11 @@
 
 Reads the correction logs that View > Training Mode writes (`<DRUMSPIKE_HOME>/training/<project id>.jsonl`, one
 record per hit edit or Learn mark). Prints the aggregates per role and op: the count and the histogram of
-`to - from` in samples, and the count per refine rule version. Writes every record as the truth list
-`[{track, role, from, to, op}]` (samples) to `--out` (default `training_truth.json`) for the measurement kit.
-The printout carries no project names and no paths: it is safe to paste into a public ticket. The truth file
-carries the track names; keep it with the logs.
+`to - from` in samples, the count and the histogram per precision (#353: `sample` at a pixel per sample or more,
+`ms` at a coarser zoom, `-` without a view), and the count per refine rule version. Writes every record as the
+truth list `[{track, role, from, to, op, precision}]` (samples) to `--out` (default `training_truth.json`) for the
+measurement kit. The printout carries no project names and no paths: it is safe to paste into a public ticket. The
+truth file carries the track names; keep it with the logs.
 """
 import argparse
 import json
@@ -18,6 +19,15 @@ from pathlib import Path
 # the bins of `to - from` in samples: (label, first, last), the edges inclusive
 BINS = [("<=-100", None, -100), ("-99..-11", -99, -11), ("-10..-2", -10, -2), ("-1", -1, -1), ("0", 0, 0),
         ("+1", 1, 1), ("+2..+10", 2, 10), ("+11..+99", 11, 99), (">=+100", 100, None)]
+
+# the precisions of the printout, in this order; a record without one (an older log, a Learn mark) is `-`
+PRECISIONS = ("sample", "ms", "-")
+
+
+def precision_of(r):
+    """The label of a record's precision (`-` when the record carries none)."""
+    p = r.get("precision")
+    return p if p in PRECISIONS else "-"
 
 
 def read_records(paths):
@@ -48,20 +58,25 @@ def delta_bin(d):
 
 
 def truth_list(records):
-    """`[{track, role, from, to, op}]` of the records."""
-    return [{"track": r.get("track"), "role": r.get("role"), "from": r.get("from"), "to": r.get("to"), "op": r["op"]}
-            for r in records]
+    """`[{track, role, from, to, op, precision}]` of the records."""
+    return [{"track": r.get("track"), "role": r.get("role"), "from": r.get("from"), "to": r.get("to"), "op": r["op"],
+             "precision": r.get("precision")} for r in records]
 
 
 def aggregate(records):
-    """`{role: {op: {"n", "delta": {bin: n}, "refine": {version: n}}}}`: the delta only where both ends exist."""
-    out = defaultdict(lambda: defaultdict(lambda: {"n": 0, "delta": Counter(), "refine": Counter()}))
+    """`{role: {op: {"n", "delta": {bin: n}, "refine": {version: n}, "prec": {label: {"n", "delta"}}}}}`: the deltas
+    only where both ends exist, the per-precision ones under the record's own label."""
+    out = defaultdict(lambda: defaultdict(lambda: {
+        "n": 0, "delta": Counter(), "refine": Counter(), "prec": defaultdict(lambda: {"n": 0, "delta": Counter()})}))
     for r in records:
         a = out[r.get("role") or "-"][r["op"]]
         a["n"] += 1
         a["refine"][str(r.get("refine", "-"))] += 1
+        p = a["prec"][precision_of(r)]
+        p["n"] += 1
         if isinstance(r.get("from"), int) and isinstance(r.get("to"), int):
             a["delta"][delta_bin(r["to"] - r["from"])] += 1
+            p["delta"][delta_bin(r["to"] - r["from"])] += 1
     return out
 
 
@@ -73,6 +88,12 @@ def report(records, bad):
             lines.append(f"{role} {op}: {a['n']}")
             if a["delta"]:
                 lines.append("  to-from (samples): " + ", ".join(f"{label} {a['delta'][label]}" for label, _, _ in BINS if a["delta"][label]))
+            for label in PRECISIONS:
+                p = a["prec"].get(label)
+                if not p:
+                    continue
+                hist = ", ".join(f"{label2} {p['delta'][label2]}" for label2, _, _ in BINS if p["delta"][label2])
+                lines.append(f"  precision {label}: {p['n']}" + (f", to-from: {hist}" if hist else ""))
             lines.append("  refine rule: " + ", ".join(f"{v} x{n}" for v, n in sorted(a["refine"].items())))
     return "\n".join(lines)
 

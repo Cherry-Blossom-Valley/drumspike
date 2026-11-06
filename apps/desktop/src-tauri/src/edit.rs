@@ -22,9 +22,10 @@ pub async fn events_edit(
     name: String,
     ops: Vec<Value>,
     training: Option<bool>,
+    view: Option<Value>,
 ) -> Result<Value, AppError> {
     blocking(&svc, "events_edit", move |s| {
-        s.events_edit_training(&sid, &name, &ops, training.unwrap_or(false))
+        s.events_edit_training(&sid, &name, &ops, training.unwrap_or(false), view)
     })
     .await
 }

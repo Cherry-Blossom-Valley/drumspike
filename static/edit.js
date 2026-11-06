@@ -211,7 +211,8 @@ async function edNow(name, mk, before) {   // true when the service applied the 
   if (!pl) return false;
   let r;
   const training = trainingOn() && !!pl.step;   // #343: a plan with an undo step is the owner's correction; an undo or redo (no step) is not
-  try { r = await B.eventsEdit(sid, name, pl.ops, training); }
+  const view = training ? trainingView(name) : null;   // #353: the view rides with the training flag
+  try { r = await B.eventsEdit(sid, name, pl.ops, training, view); }
   catch (e) { setMsg(`edit: ${errText(e)}`); await edReload(sid, name); return false; }
   if (training) trainingNote(r);
   if (sid !== S.sid || !S.tracks[name]) return false;
