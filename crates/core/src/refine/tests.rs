@@ -1586,6 +1586,35 @@ fn version_9_places_a_stroke_with_a_preswing_on_the_last_line_sample() {
     );
 }
 
+#[test]
+fn version_9_does_not_take_a_flicker_that_is_separated_from_the_edge_as_the_first_motion() {
+    // #351 verify (Session E snare 93 of the staged excerpts): a 2-sample flicker at about 2.6 % of
+    // the peak, then 5 samples within the run's band, then the swing into the edge. The flicker is
+    // no first motion: it does not run into the edge (the run's band separates it). The walk refuses
+    // the run before it and version 8's walk-back decides, on the line right before the swing — not
+    // 5 or more samples early, before the flicker
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f32; 2_000];
+    x[1_200] = -0.06;
+    x[1_201] = -0.055;
+    x[1_202] = -0.015;
+    x[1_203] = -0.005;
+    // 1_204..1_208 stay on the line (the run's band separates flicker and swing)
+    x[1_209] = -0.03;
+    x[1_210] = -0.3;
+    x[1_211] = -1.0;
+    for v in &mut x[1_212..1_400] {
+        *v = -1.0;
+    }
+    let v9 = edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Departure);
+    assert_eq!(
+        v9,
+        edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Line),
+        "version 8 decides"
+    );
+    assert!(v9 > 1_203, "not before the flicker: {v9}");
+}
+
 // ---------------------------------------------------------------- #344: the placement evidence
 
 /// A hit at `at` standing on a line: the samples before `at` hold `line`, plus white noise of

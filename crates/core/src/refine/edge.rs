@@ -122,6 +122,19 @@ pub(crate) const DEPARTURE_STANDS_OUT: f64 = 2.0;
 /// wide swing passes because the swing after it is in the same stretch. Fitted on the same
 /// hits: 2 and 3 give the same held-out result; 3 is the data's floor.
 pub(crate) const SWING_MIN_SAMPLES: i64 = 3;
+/// Version 9 (#351), the bridge fit: between the run of line samples and the edge, at most
+/// this many consecutive samples may stand within the departure band. The stroke's first
+/// motion runs into the edge; a run that is separated from it by a longer stretch of
+/// sub-departure content is the line before an earlier flicker, not the line before the
+/// motion (the flicker itself does not run into the edge). Measured in the loose departure
+/// band, not the run's tighter one: the line's own level wobbles by about half a percent of
+/// the peak between coarse feet, and a flicker that sits at the run band's edge would
+/// otherwise flip with it. Fitted on the same hits: 3 refused the 1-to-2-sample dip before a
+/// Session D snare's wide swing, which the owner counts as the first motion; 5 kept a
+/// 2-sample flicker at 2.6 % of the peak that sits 5 samples before the swing (Session E
+/// snare 93 of the staged excerpts, where the tool's stretch holds 5 such samples); 4 held
+/// on the check half and moved no Session E hit.
+pub(crate) const DEPARTURE_BRIDGE_SAMPLES: i64 = 4;
 /// How far after the walk's foot the edge is looked for (seconds).
 pub(crate) const EDGE_SPAN_S: f64 = 0.005;
 
@@ -335,6 +348,25 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
                         best = best.max(cur);
                     }
                     best >= SWING_MIN_SAMPLES
+                })
+                .filter(|&h| {
+                    // the first motion runs into the edge: between the run and the edge at
+                    // most DEPARTURE_BRIDGE_SAMPLES consecutive samples may stand within the
+                    // departure band. A longer stretch means the run sits before an earlier
+                    // flicker (one that does not run into the edge: sub-departure content
+                    // separates it from the swing): the walk has not reached the line before
+                    // the stroke's motion yet, and version 8's walk-back decides
+                    let mut cur = 0i64;
+                    let mut best = 0i64;
+                    for m in h + 1..=k0 {
+                        if off9(m).abs() <= vis {
+                            cur += 1;
+                            best = best.max(cur);
+                        } else {
+                            cur = 0;
+                        }
+                    }
+                    best <= DEPARTURE_BRIDGE_SAMPLES
                 })
                 .unwrap_or_else(|| line_walk(k, k0))
             }
