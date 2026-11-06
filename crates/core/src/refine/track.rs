@@ -46,11 +46,20 @@ pub enum RefineRule {
     /// version 5's strict foot of the walk's foot, not the walk's foot itself: the walk reads the 2-tap mean, which
     /// halves the first sample of a sharp start, so the foot sat one sample into the attack.
     Line,
+    /// Version 9 (#351): [`RefineRule::Line`] with one principle added: the hit is the last sample of the line before
+    /// the stroke's FIRST MOTION, whatever its sign. The walk-back from the counted edge's foot goes over every
+    /// sample that stands visibly off the line, of either sign, until it meets
+    /// [`LINE_RUN_SAMPLES`](super::edge::LINE_RUN_SAMPLES) consecutive samples within the visibility band, within
+    /// [`DEPARTURE_MAX_S`](super::edge::DEPARTURE_MAX_S) of the edge's first rising sample ([`EdgeTail::Departure`]);
+    /// otherwise version 8's walk-back decides. A stroke often opens with a small swing of the other sign than the
+    /// steep edge (a positive bump before a negative kick edge, a dip and a rise before a negative snare edge) that
+    /// versions 6 to 8 do not follow past the zero crossing between the swing and the edge.
+    Departure,
 }
 
 impl RefineRule {
     /// The rule a new analysis runs.
-    pub const CURRENT: RefineRule = RefineRule::Line;
+    pub const CURRENT: RefineRule = RefineRule::Departure;
 
     /// The version number the document stores.
     #[must_use]
@@ -64,6 +73,7 @@ impl RefineRule {
             RefineRule::Edge => 6,
             RefineRule::Visible => 7,
             RefineRule::Line => 8,
+            RefineRule::Departure => 9,
         }
     }
 
@@ -79,6 +89,7 @@ impl RefineRule {
             6 => Some(RefineRule::Edge),
             7 => Some(RefineRule::Visible),
             8 => Some(RefineRule::Line),
+            9 => Some(RefineRule::Departure),
             _ => None,
         }
     }
@@ -183,6 +194,7 @@ pub fn refine_rule_peak(
         RefineRule::Edge => back(None, Some(EdgeTail::Noise), None),
         RefineRule::Visible => back(None, Some(EdgeTail::Visible), None),
         RefineRule::Line => back(None, Some(EdgeTail::Line), Some(FootTune::V5)),
+        RefineRule::Departure => back(None, Some(EdgeTail::Departure), Some(FootTune::V5)),
     }
 }
 

@@ -20,6 +20,14 @@ pub(crate) enum EdgeTail {
     /// previous stroke, about the visibility share of the peak) is the line itself, not a stretch that stands visibly
     /// off it.
     Line,
+    /// Version 9 (#351): the walk-back from the counted edge's foot goes over every sample that stands visibly off the
+    /// line, of EITHER sign, until it meets [`LINE_RUN_SAMPLES`] consecutive samples within the visibility band. A stroke
+    /// often opens with a small swing of the other sign (a positive bump before a negative kick edge, a dip and a rise
+    /// before a negative snare edge) that runs into the edge; versions 6 to 8 follow the edge's sign only and stop at the
+    /// zero crossing between the swing and the edge. The walk counts only when it meets the run within
+    /// [`DEPARTURE_MAX_S`] of the edge's first rising sample; otherwise version 8's walk-back decides (a slow wave or an
+    /// offset on a tom line is the line itself, as before).
+    Departure,
 }
 
 /// Version 6 (#293, #294): the rise window of the steep edge (seconds): the signal must rise by [`EDGE_RISE_DB`] under
@@ -66,6 +74,15 @@ pub(crate) const EDGE_NOISE_S: f64 = 0.002;
 /// or three samples inside a steep rise does not tilt the median. On the owner's hand-placed hits 8 to 12 samples give
 /// the same result; 12 is 0.25 ms at 48 kHz.
 pub(crate) const LINE_LEVEL_S: f64 = 0.000_25;
+/// Version 9 (#351): the line is reached when this many consecutive samples stand within the visibility band. A
+/// single-sample zero crossing between a pre-swing and the edge is not the line, and neither is the short in-band
+/// stretch of a bleed's or a ripple's own zero crossing: the run has to be as long as those. Starting point pending
+/// the fit on the labelled hits (even hits choose, odd hits check, as [`VIS_TAIL_PCT`] was).
+pub(crate) const LINE_RUN_SAMPLES: i64 = 10;
+/// Version 9 (#351): the longest walk-back to the line (seconds) from the edge's first rising sample. The swing
+/// before a stroke is short; a longer stretch off the line is the line itself (a slow wave or an offset on a tom
+/// line), and there version 8's walk-back decides, as before. Starting point pending the fit on the same hits.
+pub(crate) const DEPARTURE_MAX_S: f64 = 0.000_5;
 /// How far after the walk's foot the edge is looked for (seconds).
 pub(crate) const EDGE_SPAN_S: f64 = 0.005;
 
@@ -116,10 +133,10 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
             *d.select_nth_unstable_by(mid, f64::total_cmp).1
         }
     };
-    // version 8: the line's level, the median of the short stretch before the walk's foot (0 for the older tails: they
-    // read the distance from zero)
+    // the line's level, the median of the short stretch before the walk's foot (versions 8 and 9 measure from it; 0
+    // for the older tails: they read the distance from zero)
     let line = match tail_rule {
-        EdgeTail::Line => {
+        EdgeTail::Line | EdgeTail::Departure => {
             let from = (foot - samples(LINE_LEVEL_S, srf)).max(0);
             let mut v: Vec<f64> = (from..foot).map(at).collect();
             if v.is_empty() {
@@ -171,30 +188,63 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
             }
             k
         };
+        // version 7 (#321): the engineer puts the hit on the last sample of the line, judged by eye against the
+        // hit's own size, not against the line noise: back over the samples that stand visibly off the line with
+        // the edge's sign while they do not grow towards the line (a slow drift before a snare stroke is taken
+        // whole, the invisible first steps of a kick on a silent line are not). The walk counts only when it
+        // reaches the line within VIS_TAIL_MAX_S: a tom whose line is a slow wave on the edge's side never reaches
+        // it, and there version 6's tail stays (the walk would stop at its bound, an arbitrary place)
+        // Version 8 (#338) reads every level from the line, not from zero: a line at an offset of about the
+        // visibility share is the line, not a drift the walk goes down
+        let line_walk = |k: i64, k0: i64| {
+            let vis = pk * VIS_TAIL_PCT / 100.0;
+            let tol = pk * VIS_TAIL_TOL_PCT / 100.0;
+            let sgn = off(k0 + 1).signum();
+            let lo_v = (k0 - samples(VIS_TAIL_MAX_S, srf)).max(1);
+            let mut kv = k;
+            while kv > lo_v
+                && off(kv).abs() > vis
+                && off(kv).signum() == sgn
+                && off(kv - 1).abs() <= off(kv).abs() + tol
+            {
+                kv -= 1;
+            }
+            if off(kv).abs() <= vis { kv } else { noise_tail(k) }
+        };
         k = match tail_rule {
             EdgeTail::Noise => noise_tail(k),
-            // version 7 (#321): the engineer puts the hit on the last sample of the line, judged by eye against the
-            // hit's own size, not against the line noise: back over the samples that stand visibly off the line with
-            // the edge's sign while they do not grow towards the line (a slow drift before a snare stroke is taken
-            // whole, the invisible first steps of a kick on a silent line are not). The walk counts only when it
-            // reaches the line within VIS_TAIL_MAX_S: a tom whose line is a slow wave on the edge's side never reaches
-            // it, and there version 6's tail stays (the walk would stop at its bound, an arbitrary place)
-            // Version 8 (#338) reads every level from the line, not from zero: a line at an offset of about the
-            // visibility share is the line, not a drift the walk goes down
-            EdgeTail::Visible | EdgeTail::Line => {
+            EdgeTail::Visible | EdgeTail::Line => line_walk(k, k0),
+            // version 9 (#351): back over every sample that stands visibly off the line, of either sign, until
+            // LINE_RUN_SAMPLES consecutive samples within the visibility band: the last sample of that run is the
+            // last line sample before the stroke's first motion. A single-sample zero crossing between a pre-swing
+            // and the edge is not the line (the count resets on a sample off the line), and the walk counts only
+            // once it has passed a sample that stands visibly off the line: without a departure there is no first
+            // motion to walk before (the tail of a bleed or of band-limited pre-ringing is not the stroke's). The
+            // walk counts only when it meets the run within DEPARTURE_MAX_S of the edge's first rising sample;
+            // otherwise version 8's walk-back decides (a slow wave or an offset on a tom line is the line itself,
+            // as before)
+            EdgeTail::Departure => {
                 let vis = pk * VIS_TAIL_PCT / 100.0;
-                let tol = pk * VIS_TAIL_TOL_PCT / 100.0;
-                let sgn = off(k0 + 1).signum();
-                let lo_v = (k0 - samples(VIS_TAIL_MAX_S, srf)).max(1);
-                let mut kv = k;
-                while kv > lo_v
-                    && off(kv).abs() > vis
-                    && off(kv).signum() == sgn
-                    && off(kv - 1).abs() <= off(kv).abs() + tol
-                {
-                    kv -= 1;
+                let run = LINE_RUN_SAMPLES.max(1);
+                let lo_d = (k0 - samples(DEPARTURE_MAX_S, srf)).max(1);
+                let mut i = k;
+                let mut in_band = 0i64;
+                let mut departed = false;
+                let mut hit = None;
+                while i >= lo_d {
+                    if off(i).abs() > vis {
+                        in_band = 0;
+                        departed = true;
+                    } else if departed {
+                        in_band += 1;
+                        if in_band >= run {
+                            hit = Some(i + run - 1);
+                            break;
+                        }
+                    }
+                    i -= 1;
                 }
-                if off(kv).abs() <= vis { kv } else { noise_tail(k) }
+                hit.unwrap_or_else(|| line_walk(k, k0))
             }
         };
         let reached = f64::from(max_abs(x, k, (k + local).min(end + w)));
