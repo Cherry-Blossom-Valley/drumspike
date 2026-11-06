@@ -47,6 +47,27 @@ def test_aggregates_the_truth_list_and_a_public_printout(tmp_path):
     assert set(truth[0]) == {"track", "role", "from", "to", "op", "precision"}
 
 
+def test_a_confirm_record_counts_per_role_and_precision_and_stays_in_the_truth_list(tmp_path):
+    """#354: a confirm record (from = to, the hit reviewed right where it is) counts per role, carries its
+    precision when the view was sent, and is kept in the truth list with op confirm."""
+    log = tmp_path / "log.jsonl"
+    write(log, [rec("move", 1000, 1003, precision="sample"),
+                rec("confirm", 48000, 48000, role="snare", precision="sample"),
+                rec("confirm", 72000, 72000, precision=None)])
+    out = tmp_path / "truth.json"
+    p = subprocess.run([sys.executable, "-I", str(TOOL), str(log), "--out", str(out)], capture_output=True, text=True, check=True)
+    assert "records: 3" in p.stdout
+    assert "kick move: 1" in p.stdout
+    assert "snare confirm: 1" in p.stdout and "kick confirm: 1" in p.stdout
+    assert "to-from (samples): 0 1" in p.stdout   # from = to: the bin 0
+    assert "precision sample: 1, to-from: 0 1" in p.stdout
+    assert "precision -: 1" in p.stdout
+    truth = json.loads(out.read_text())
+    assert len(truth) == 3
+    assert {"track": "Secret Track", "role": "snare", "from": 48000, "to": 48000, "op": "confirm", "precision": "sample"} in truth
+    assert truth[2]["op"] == "confirm" and truth[2]["from"] == 72000 and truth[2]["to"] == 72000
+
+
 def test_two_logs_and_the_bins_edges(tmp_path):
     sys.path.insert(0, str(ROOT / "tools"))
     try:

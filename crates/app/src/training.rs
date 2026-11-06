@@ -6,6 +6,8 @@
 //! file is never part of the project. A record is self-contained: it carries the samples around the hit, so the
 //! measurement kit reads it without the session. #353: with the view of the request the record carries it too, and a
 //! `move` or `add` record says its `precision` (`sample` at a pixel per sample or more, `ms` at a coarser zoom).
+//! #354: a `confirm` record is the editor's "reviewed, right where it is" — the op applies nothing to the document,
+//! the record says `from` = `to` = the stored position and carries one audio window.
 //!
 //! * `training_status {sid, on?}`: `{on, records, path}`; `on` (a bool) sets the state the service reports for the
 //!   project (the page sends it when the mode changes), without it the state is read.
@@ -247,7 +249,8 @@ impl Service {
 
     /// The examples of the `add`, `delete` and `move` ops of an `events_edit` call: `current` is the list the ops'
     /// indexes count in (before the call), `sr` the track's rate for the sample grid. A move that leaves the hit where
-    /// it is makes none; velocity, restore and toggle ops make none.
+    /// it is makes none; velocity, restore, toggle and confirm ops make none (the confirm ops have their own
+    /// builder, [`Service::training_confirm_examples`]).
     pub(crate) fn training_examples(
         &self,
         sid: &str,
@@ -336,6 +339,36 @@ impl Service {
                     to: p.to,
                     confidence,
                 }
+            })
+            .collect()
+    }
+
+    /// The examples of the `confirm` ops of an `events_edit` call (#354): one per op, the hit and its confidence as
+    /// stored, `from` = `to` = the hit's stored position (the record's one audio window reads there). The indexes
+    /// count in `current` (the list before the call); `events_edit_as` has validated them.
+    pub(crate) fn training_confirm_examples(
+        &self,
+        sid: &str,
+        name: &str,
+        current: &[Value],
+        ops: &[Value],
+    ) -> Vec<Example> {
+        let rates = self.training_rate(sid, name, current);
+        ops.iter()
+            .filter_map(|o| {
+                let i = o
+                    .get("index")
+                    .and_then(Value::as_u64)
+                    .and_then(|i| usize::try_from(i).ok())?;
+                let e = current.get(i)?;
+                let t = e.get("t").and_then(Value::as_f64);
+                Some(Example {
+                    op: "confirm",
+                    event: Some(e.clone()),
+                    from: t,
+                    to: t,
+                    confidence: rates.get(i).cloned().flatten(),
+                })
             })
             .collect()
     }

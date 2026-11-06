@@ -106,6 +106,136 @@ fn events_edit_with_training_writes_one_record_per_move_add_and_delete() {
 }
 
 #[test]
+fn a_confirm_op_writes_one_record_and_changes_nothing() {
+    let (svc, sid, home) = opened("tr_confirm");
+    let before = svc.events_get(&sid, "k in").unwrap()["events"].clone();
+    let dirty_before = svc.project_get(&sid).unwrap()["dirty"].clone(); // the fixture wrote hits, so it may be set
+    let view = json!({"ms": 5, "px_per_sample": 2});
+    let r = svc
+        .events_edit_training(
+            &sid,
+            "k in",
+            &[json!({"op": "confirm", "index": 1})],
+            true,
+            Some(view.clone()),
+        )
+        .unwrap();
+    // (a) the answer is the usual one: the op applied nothing, the log got one record
+    assert_eq!(r["training"], json!({"records": 1}), "{r}");
+    for k in ["saved", "added", "deleted", "moved", "velocity", "restored", "toggled"] {
+        assert_eq!(r[k], 0, "{r}");
+    }
+    // the document, its `dirty` flag and the undo history (the page's stacks ride on the stored hits) stay as they were
+    assert_eq!(
+        svc.events_get(&sid, "k in").unwrap()["events"],
+        before,
+        "the hits are unchanged"
+    );
+    assert_eq!(
+        svc.project_get(&sid).unwrap()["dirty"],
+        dirty_before,
+        "the dirty flag stays as it was"
+    );
+    // the record: from = to = the stored position, the event, its confidence, one audio window, the view
+    let recs = records(&home);
+    assert_eq!(recs.len(), 1, "{recs:?}");
+    let rec = &recs[0];
+    assert_eq!(rec["op"], "confirm");
+    assert_eq!(rec["from"], rec["to"]);
+    assert_eq!(rec["from"], 48_000, "1.0 s at 48 kHz");
+    assert_eq!(rec["event"]["t"], 1.0);
+    assert_eq!(rec["event"]["v"], 90);
+    assert!(rec["confidence"]["c"].is_number(), "{rec}");
+    assert_eq!(rec["audio"]["at_from"].as_array().unwrap().len(), WINDOW);
+    assert!(rec["audio"].get("at_to").is_none(), "{rec}");
+    assert_eq!(rec["view"], view, "the view as sent");
+    assert_eq!(rec["precision"], "sample", "two pixels per sample");
+    assert_eq!(
+        (rec["track"].clone(), rec["role"].clone()),
+        (json!("k in"), json!("kick"))
+    );
+    assert_eq!(svc.training_status(&sid, None).unwrap()["records"], 1);
+    // a second confirm of the same hit writes one record more, still nothing in the document
+    let r = svc
+        .events_edit_training(&sid, "k in", &[json!({"op": "confirm", "index": 1})], true, None)
+        .unwrap();
+    assert_eq!(r["training"], json!({"records": 1}), "{r}");
+    assert_eq!(records(&home).len(), 2);
+    assert_eq!(svc.events_get(&sid, "k in").unwrap()["events"], before);
+    assert_eq!(svc.project_get(&sid).unwrap()["dirty"], dirty_before);
+    // a bad index refuses the whole call and writes nothing (the ops apply as a whole)
+    let e = svc
+        .events_edit_training(&sid, "k in", &[json!({"op": "confirm", "index": 99})], true, None)
+        .unwrap_err();
+    assert_eq!(e.code, 400, "{}", e.message);
+    assert_eq!(records(&home).len(), 2);
+}
+
+#[test]
+fn a_confirm_without_training_is_refused_and_writes_nothing() {
+    let (svc, sid, home) = opened("tr_confirm_off");
+    let dirty_before = svc.project_get(&sid).unwrap()["dirty"].clone(); // the fixture wrote hits, so it may be set
+    // (b) the op without the mode is refused with an error that names the mode
+    let e = svc
+        .events_edit_training(&sid, "k in", &[json!({"op": "confirm", "index": 0})], false, None)
+        .unwrap_err();
+    assert_eq!(e.code, 400, "{}", e.message);
+    assert!(e.message.contains("Training Mode"), "{}", e.message);
+    // the agent surface behaves the same (the page never sends the op with the mode off)
+    let e = drumspike_app::call::call(
+        &svc,
+        "events_edit",
+        &json!({"sid": sid, "name": "k in", "ops": [{"op": "confirm", "index": 0}]}),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(e.code, 400, "{}", e.message);
+    assert!(e.message.contains("Training Mode"), "{}", e.message);
+    // a mixed call is refused whole: no record, no edit
+    let e = svc
+        .events_edit_training(
+            &sid,
+            "k in",
+            &[
+                json!({"op": "confirm", "index": 0}),
+                json!({"op": "move", "index": 0, "t": 0.6}),
+            ],
+            false,
+            None,
+        )
+        .unwrap_err();
+    assert_eq!(e.code, 400, "{}", e.message);
+    assert!(e.message.contains("Training Mode"), "{}", e.message);
+    let ev = svc.events_get(&sid, "k in").unwrap()["events"].clone();
+    assert_eq!(ev[0]["t"], 0.5, "the move did not apply");
+    assert_eq!(svc.project_get(&sid).unwrap()["dirty"], dirty_before);
+    assert!(records(&home).is_empty(), "{:?}", records(&home));
+    // a good index and the mode on: the same ops log and apply
+    let r = svc
+        .events_edit_training(
+            &sid,
+            "k in",
+            &[
+                json!({"op": "confirm", "index": 0}),
+                json!({"op": "move", "index": 0, "t": 0.6}),
+            ],
+            true,
+            None,
+        )
+        .unwrap();
+    assert_eq!(r["training"], json!({"records": 2}), "{r}");
+    assert_eq!(r["moved"], 1, "{r}");
+    let recs = records(&home);
+    assert_eq!(recs.len(), 2, "{recs:?}");
+    assert_eq!(
+        (recs[0]["op"].clone(), recs[1]["op"].clone()),
+        (json!("move"), json!("confirm"))
+    );
+    assert_eq!(recs[1]["from"], 24_000, "the stored position before the move");
+    assert_eq!(recs[1]["to"], 24_000);
+}
+
+#[test]
 fn the_view_of_the_request_rides_in_the_record_and_derives_the_precision() {
     let (svc, sid, home) = opened("tr_view");
     // #353 (a): the view as sent, the precision from its px_per_sample, a delete carries the view without a precision

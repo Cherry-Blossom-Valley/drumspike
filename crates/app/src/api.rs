@@ -1283,12 +1283,12 @@ pub static REGISTRY: &[CommandSpec] = &[
             req(
                 "ops",
                 Ty::Objs,
-                "[{op: add, t, v?, added?: false, orig?, snap?: true} | {op: delete, index} | {op: move, index, t} | {op: velocity, index, v} | {op: restore, index}]; index counts in events_get before the call; t within the track (0 to its duration); restore takes the tom bleed mark off a hit; snap puts an added hit on the attack within 10 ms of t with the velocity of the audio (the answer's snaps list says where); move, velocity and restore may carry was {..} (the field presence the hit had before the edit: bool flags, orig number or null) for the page's byte-identical undo",
+                "[{op: add, t, v?, added?: false, orig?, snap?: true} | {op: delete, index} | {op: move, index, t} | {op: velocity, index, v} | {op: restore, index} | {op: confirm, index}]; index counts in events_get before the call; t within the track (0 to its duration); restore takes the tom bleed mark off a hit; snap puts an added hit on the attack within 10 ms of t with the velocity of the audio (the answer's snaps list says where); confirm writes the Training Mode log only (refused without training, the document stays as it is); move, velocity and restore may carry was {..} (the field presence the hit had before the edit: bool flags, orig number or null) for the page's byte-identical undo",
             ),
             opt(
                 "training",
                 Ty::Bool,
-                "Training Mode (#343): true appends one record per added, deleted and moved hit to the project's training log (the answer gets training: {records})",
+                "Training Mode (#343): true appends one record per added, deleted, moved or confirmed hit to the project's training log (the answer gets training: {records})",
             ),
             opt(
                 "view",

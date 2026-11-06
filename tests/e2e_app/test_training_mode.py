@@ -103,3 +103,33 @@ def test_a_move_at_sample_zoom_records_the_view_and_the_precision(app, make_proj
     assert r["precision"] == "sample"
     assert r["view"]["ms"] == pytest.approx(v["ms"])
     assert r["view"]["px_per_sample"] == pytest.approx(v["px_per_sample"])
+
+
+def test_confirm_hit_logs_the_review_and_leaves_the_document_clean(app, make_project, tmp_path):
+    """#354 (e): select a hit, Hits > Confirm Hit: the status line reads one record more, the document stays
+    clean (no dirty mark in the title), there is no undo step, and the record says from = to with one window."""
+    folder = build(make_project, tmp_path, events={"Kick In": exact_events()})
+    open_project(app, folder)
+    menu(app, "training_mode")                                      # View > Training Mode on
+    app.keyboard.press("Tab")                                       # the first hit
+    expect(app.locator("#stTraining")).to_have_text("training: 0 records")
+    events_before = app.evaluate("() => S.events[\"Kick In\"].map(e => e.t)")
+    undo_before = app.evaluate("() => S.undo.length")
+    menu(app, "confirm_hit")                                        # Hits > Confirm Hit
+    edits_done(app)
+    expect(app.locator("#stTraining")).to_have_text("training: 1 records")
+    assert state(app)["dirty"] is False                             # no dirty mark in the title
+    assert app.evaluate("() => S.undo.length") == undo_before       # no undo step: nothing to undo
+    assert app.evaluate("() => S.events[\"Kick In\"].map(e => e.t)") == events_before
+    assert app.evaluate("() => S.sel && S.sel.track") == "Kick In"  # the hit stays selected
+    (r,) = project_log_lines(app)
+    assert (r["op"], r["from"], r["to"], r["role"], r["track"]) == ("confirm", IDX[0], IDX[0], "kick", "Kick In")
+    assert r["event"]["t"] == IDX[0] / SR
+    assert 0 <= r["confidence"]["c"] <= 1
+    assert len(r["audio"]["at_from"]) == round(0.05 * SR)
+    assert "at_to" not in r["audio"]
+    assert r["view"]["px_per_sample"] < 1                           # the default zoom: the view rides along
+    # the next edit after the confirm still logs (the mode is unchanged) and dirties the document as usual
+    type_sample(app, 41000)
+    assert len(project_log_lines(app)) == 2
+    assert state(app)["dirty"] is True

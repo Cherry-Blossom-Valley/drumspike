@@ -336,7 +336,8 @@ impl Service {
     /// #144: `snap: true` puts the hit on the attack within [`SNAP_S`] of `t` with the velocity of the audio there), `{op:"delete", index}`, `{op:"move", index, t}` and
     /// `{op:"velocity", index, v, edited?: true}` (a hand velocity marks the hit `edited`, P4-40f), `{op:"restore", index}` (P4-14: the hit loses its tom bleed mark and goes back
     /// into the output) and `{op:"toggle", index, keep, deactivated}` (#242: the user's per-hit state — `true` sets the flag, `false` takes it
-    /// off; the page's undo sends the state before as `was`). R05: `move`, `velocity`, `restore` and `toggle` ops may carry `was` {..}, the field
+    /// off; the page's undo sends the state before as `was`). #354: `{op:"confirm", index}` writes the Training Mode log
+    /// only ([`Service::events_edit_training`]; refused without `training: true`, the document stays as it is). R05: `move`, `velocity`, `restore` and `toggle` ops may carry `was` {..}, the field
     /// presence the hit had before the edit (bool flags, `orig` as a number or null); the page's
     /// undo sends it, so the document comes back byte-identical; `index` is the position in the list `events_get` returned
     /// before the call, `t` seconds (put on the sample grid). The ops apply as a whole: a bad op
@@ -356,7 +357,10 @@ impl Service {
     /// [`Service::events_edit`] with the Training Mode choice (#343): `training: true` appends one record per added,
     /// deleted and moved hit to the project's training log after the edit applied ([`crate::training`]). `view` (the
     /// page's view object `{ms, px_per_sample}`, #353) is written into every record as sent: a `move` or `add` record
-    /// gets its `precision`, a `delete` record carries the view without one. The answer gets `training: {records}`
+    /// gets its `precision`, a `delete` record carries the view without one. #354: a `{op: "confirm", index}` op
+    /// applies nothing — the document, its `dirty` flag and the undo history stay as they were — and writes one
+    /// `confirm` record (`from` = `to` = the hit's stored position, one audio window); without `training: true` it is
+    /// refused with an error that names the mode. The answer gets `training: {records}`
     /// (or `training_error` when the log failed; the edit stands). `false` is [`Service::events_edit`] byte for byte.
     ///
     /// # Errors
@@ -387,11 +391,30 @@ impl Service {
         if ops.is_empty() {
             return Err(AppError::bad("`ops` must not be empty"));
         }
+        // #354: the `confirm` op writes the Training Mode log only, it applies nothing to the document. Without
+        // the mode the op does not exist (the page never sends it then): refused with an error that names the
+        // mode, and nothing is written.
+        let confirms: Vec<Value> = ops
+            .iter()
+            .filter(|o| o.get("op").and_then(Value::as_str) == Some("confirm"))
+            .cloned()
+            .collect();
+        if !confirms.is_empty() && !training {
+            return Err(AppError::bad(
+                "the `confirm` op exists only for the Training Mode log: send `training: true` with it",
+            ));
+        }
+        let edits: Vec<Value> = ops
+            .iter()
+            .filter(|o| o.get("op").and_then(Value::as_str) != Some("confirm"))
+            .cloned()
+            .collect();
         let op = self.inner.registry.get_writable(sid)?;
         // R07: one store guard from the read of the list to the commit. An edit that overlaps
         // another write of the project (a second edit, a re-pick store, a shift) is refused with
         // a retryable 409 instead of silently committing over it. The guard is not the project
-        // lock: the decode of a snap (`snap_ops`) still runs with the project lock free.
+        // lock: the decode of a snap (`snap_ops`) still runs with the project lock free. A
+        // confirm-only call takes the guard too: its records read the hits of the moment.
         let _guard = self.begin_write(sid)?;
         let (sr, end) = {
             let g = lock(&op);
@@ -400,26 +423,44 @@ impl Service {
             (tr.sr, track_end(tr))
         };
         let current = self.track_events(sid, name)?;
-        let (ops, snaps) = self.snap_ops(sid, name, ops, &current)?;
-        let (events, c) = apply_ops(current.clone(), &ops, sr, end)?;
-        let events = Value::Array(events);
-        // P4-38e: a hand edit notes the Learn hits it deleted (`learn.dropped`); the Learn sweep does not
-        let mut out = if by_hand {
-            self.events_set_by_hand_with(&op, name, &events)?
-        } else {
-            self.events_set_with(&op, name, &events)?
-        };
-        out["added"] = c[0].into();
-        out["deleted"] = c[1].into();
-        out["moved"] = c[2].into();
-        out["velocity"] = c[3].into();
-        out["restored"] = c[4].into();
-        out["toggled"] = c[5].into();
-        if !snaps.is_empty() {
-            out["snaps"] = Value::Array(snaps);
+        // #354: the confirm indexes are validated here, so a bad one refuses the whole call before
+        // anything changes (the ops apply as a whole), like a bad index of the other ops would.
+        for c in &confirms {
+            match c.as_object() {
+                Some(o) => {
+                    hit_index(o, current.len())?;
+                }
+                None => return Err(AppError::bad("every op must be an object")),
+            }
         }
+        let (edit_ops, snaps) = self.snap_ops(sid, name, &edits, &current)?;
+        let mut out = if edits.is_empty() {
+            // #354: a confirm writes the log only: the document, its `dirty` flag and the undo history stay as
+            // they were, so no write runs here (a write would mark the project dirty). The answer is the usual one.
+            json!({"saved": 0, "added": 0, "deleted": 0, "moved": 0, "velocity": 0, "restored": 0, "toggled": 0})
+        } else {
+            let (events, c) = apply_ops(current.clone(), &edit_ops, sr, end)?;
+            let events = Value::Array(events);
+            // P4-38e: a hand edit notes the Learn hits it deleted (`learn.dropped`); the Learn sweep does not
+            let mut out = if by_hand {
+                self.events_set_by_hand_with(&op, name, &events)?
+            } else {
+                self.events_set_with(&op, name, &events)?
+            };
+            out["added"] = c[0].into();
+            out["deleted"] = c[1].into();
+            out["moved"] = c[2].into();
+            out["velocity"] = c[3].into();
+            out["restored"] = c[4].into();
+            out["toggled"] = c[5].into();
+            if !snaps.is_empty() {
+                out["snaps"] = Value::Array(snaps);
+            }
+            out
+        };
         if training {
-            let examples = self.training_examples(sid, name, &current, &ops, sr);
+            let mut examples = self.training_examples(sid, name, &current, &edit_ops, sr);
+            examples.extend(self.training_confirm_examples(sid, name, &current, &confirms));
             Self::training_note(&mut out, self.training_log(sid, name, &examples, view.as_ref()));
         }
         Ok(out)
