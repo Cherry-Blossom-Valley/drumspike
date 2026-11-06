@@ -539,6 +539,74 @@ fn the_pre_pass_measures_every_pair_of_the_session() {
     }
 }
 
+/// #355 gate: the rule's verdict on a synthetic pair is the same when the refined position of
+/// the other mic's hit moves by up to 1 ms while its anchor stays.
+#[test]
+fn the_verdict_does_not_flip_on_a_sub_ms_move_of_the_other_mics_refined_position() {
+    // The finding of #351 under placement version 9: a snare hit 1.5 ms before a real tom hit
+    // moved 0.19 ms earlier and the cross-track rule removed the tom hit. The synthetic pair:
+    // well-separated kicks alone (the clear cases, the bleed arrival 2.5 ms late and quiet)
+    // and one quiet tom hit just over the pair's lead bound after the last kick, so it is
+    // bleed. Moving EVERY refined position of the source mic by up to 1 ms (the anchor — the
+    // attacks in the signals — stays) moves the lead across the bound; the verdict must not
+    // see it: the rule judges on the first motion the walk-back derives from the source's own
+    // signal, which is the same for every refined position near the anchor.
+    let n = (4.0f64 * f64::from(SR)) as usize;
+    let mut kick = vec![0f32; n];
+    let mut tom = vec![0f32; n];
+    let mut kick_motion: Vec<f64> = Vec::new();
+    // six clear cases: the tom mic hears each kick 2.5 ms later and 18 dB under; the copies
+    // are NOT in the tom's hit list (the detector does not fire on them)
+    for i in 0..6 {
+        let t = 0.5 + f64::from(i) * 0.5;
+        kick_hit(&mut kick, t, -3.0);
+        kick_hit(&mut tom, t + 0.0025, -21.0);
+        kick_motion.push(t);
+    }
+    // the judged hit: a quiet tom hit 1 ms after the last kick (bleed: later than the pair's
+    // lead bound and quieter in the source's band), plus the kick itself
+    kick_hit(&mut kick, 3.5, -3.0);
+    kick_hit(&mut tom, 3.501, -21.0);
+    kick_motion.push(3.5);
+    let base = [
+        CrossMic {
+            kind: XKind::Tom,
+            signal: &tom,
+            motion: vec![3.501],
+        },
+        CrossMic {
+            kind: XKind::Kick,
+            signal: &kick,
+            motion: kick_motion.clone(),
+        },
+    ];
+    let p = CrossBleedParams::default();
+    let (marks0, _) = cross_bleed(&base, SR, &p);
+    assert!(
+        marks0[0][0].bleed,
+        "the 1 ms late quiet hit is bleed: {:?}",
+        marks0[0][0]
+    );
+    // the refined positions of the source mic move by up to 1 ms, the anchor stays: every
+    // version of the list must give the SAME verdict
+    for shift in [-0.001, -0.0005, 0.0005, 0.001] {
+        let moved = [
+            base[0].clone(),
+            CrossMic {
+                kind: XKind::Kick,
+                signal: &kick,
+                motion: kick_motion.iter().map(|t| t + shift).collect(),
+            },
+        ];
+        let (marks, learned) = cross_bleed(&moved, SR, &p);
+        assert_eq!(
+            marks[0][0].bleed, marks0[0][0].bleed,
+            "shift {shift}: the verdict flipped: {:?} vs {:?} (learned {:?})",
+            marks[0][0], marks0[0][0], learned[0]
+        );
+    }
+}
+
 #[test]
 fn a_pair_with_a_real_lead_keeps_the_two_part_verdict() {
     // the same geometry with the acoustic 1 ms arrival: the pair is NOT aligned (the median
