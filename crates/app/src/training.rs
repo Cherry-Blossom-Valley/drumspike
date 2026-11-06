@@ -4,7 +4,8 @@
 //! `events_edit` and every Learn mark (`track_learn_mark`, kinds `this` and `not`); the command appends one JSON
 //! line per hit affected to `<home>/training/<project id>.jsonl` after the edit applied (`apply_ops` stays pure). The
 //! file is never part of the project. A record is self-contained: it carries the samples around the hit, so the
-//! measurement kit reads it without the session.
+//! measurement kit reads it without the session. #353: with the view of the request the record carries it too, and a
+//! `move` or `add` record says its `precision` (`sample` at a pixel per sample or more, `ms` at a coarser zoom).
 //!
 //! * `training_status {sid, on?}`: `{on, records, path}`; `on` (a bool) sets the state the service reports for the
 //!   project (the page sends it when the mode changes), without it the state is read.
@@ -84,6 +85,16 @@ fn project_key(doc_created: Option<String>, dir_name: &str) -> String {
     h.iter().take(6).map(|b| format!("{b:02x}")).collect()
 }
 
+/// The precision of a placement from the view of the request (#353): `sample` when a sample is its own pixel or
+/// wider (`px_per_sample >= 1`), else `ms`; null without a numeric `px_per_sample` (the view was not sent).
+fn precision_of(view: &Value) -> Value {
+    match view.get("px_per_sample").and_then(Value::as_f64) {
+        Some(px) if px >= 1.0 => json!("sample"),
+        Some(_) => json!("ms"),
+        None => Value::Null,
+    }
+}
+
 fn count_lines(path: &std::path::Path) -> usize {
     std::fs::read_to_string(path).map_or(0, |s| s.lines().count())
 }
@@ -127,8 +138,16 @@ impl Service {
     }
 
     /// The records of `examples` on the track `name` (the audio and the track's facts are read here), appended to the
-    /// project's file. Returns the number written.
-    pub(crate) fn training_log(&self, sid: &str, name: &str, examples: &[Example]) -> Result<usize, AppError> {
+    /// project's file. `view` is the view object of the request (#353, written as sent): a `move` or `add` record gets
+    /// the `precision` derived from it, a `delete` record carries the view without a precision. Returns the number
+    /// written.
+    pub(crate) fn training_log(
+        &self,
+        sid: &str,
+        name: &str,
+        examples: &[Example],
+        view: Option<&Value>,
+    ) -> Result<usize, AppError> {
         if examples.is_empty() {
             return Ok(0);
         }
@@ -177,7 +196,7 @@ impl Service {
             if let Some(t) = ex.to.filter(|t| ex.from.is_none_or(|f| smp(*t) != smp(f))) {
                 a.insert("at_to".into(), audio(t));
             }
-            let rec = json!({
+            let mut rec = json!({
                 "ts": ts,
                 "app": drumspike_core::VERSION,
                 "detect": rule.1,
@@ -195,6 +214,15 @@ impl Service {
                 "window": {"before": n_before, "after": n_after},
                 "audio": a,
             });
+            // #353: the view of the request as sent; a move or add says how precisely the editor saw the hit
+            if let Some(v) = view {
+                rec["view"] = v.clone();
+                if ex.op != "delete" {
+                    rec["precision"] = precision_of(v);
+                }
+            } else if ex.op != "delete" {
+                rec["precision"] = Value::Null;
+            }
             buf.push_str(&serde_json::to_string(&rec).map_err(|e| AppError::internal(e.to_string()))?);
             buf.push('\n');
         }

@@ -1290,6 +1290,11 @@ pub static REGISTRY: &[CommandSpec] = &[
                 Ty::Bool,
                 "Training Mode (#343): true appends one record per added, deleted and moved hit to the project's training log (the answer gets training: {records})",
             ),
+            opt(
+                "view",
+                Ty::Obj,
+                "#353: with training, the view of the edit {ms, px_per_sample} (the visible span in milliseconds, the pixels one sample occupies); the records get it and a precision",
+            ),
         ],
         r#"{"type":"object","required":["saved","added","deleted","moved","velocity","restored"]}"#,
         Doc,

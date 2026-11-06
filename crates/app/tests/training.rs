@@ -54,7 +54,7 @@ fn events_edit_with_training_writes_one_record_per_move_add_and_delete() {
         json!({"op": "delete", "index": 1}),
         json!({"op": "velocity", "index": 2, "v": 64}),
     ];
-    let r = svc.events_edit_training(&sid, "k in", &ops, true).unwrap();
+    let r = svc.events_edit_training(&sid, "k in", &ops, true, None).unwrap();
     assert_eq!(r["training"], json!({"records": 3}), "{r}");
     let recs = records(&home);
     assert_eq!(recs.len(), 3, "{recs:?}");
@@ -92,11 +92,79 @@ fn events_edit_with_training_writes_one_record_per_move_add_and_delete() {
     // a second move of the moved hit starts at its `orig`
     let ev = svc.events_get(&sid, "k in").unwrap()["events"].clone();
     let last = ev.as_array().unwrap().len() - 1;
-    svc.events_edit_training(&sid, "k in", &[json!({"op": "move", "index": last, "t": 1.7})], true)
-        .unwrap();
+    svc.events_edit_training(
+        &sid,
+        "k in",
+        &[json!({"op": "move", "index": last, "t": 1.7})],
+        true,
+        None,
+    )
+    .unwrap();
     let recs = records(&home);
     assert_eq!(recs.last().unwrap()["from"].as_i64(), Some(72_000), "orig 1.5 s");
     assert_eq!(svc.training_status(&sid, None).unwrap()["records"], 4);
+}
+
+#[test]
+fn the_view_of_the_request_rides_in_the_record_and_derives_the_precision() {
+    let (svc, sid, home) = opened("tr_view");
+    // #353 (a): the view as sent, the precision from its px_per_sample, a delete carries the view without a precision
+    let wide = json!({"ms": 2, "px_per_sample": 8});
+    let ops = [
+        json!({"op": "move", "index": 0, "t": 0.6}),
+        json!({"op": "add", "t": 0.25}),
+        json!({"op": "delete", "index": 1}),
+    ];
+    let r = svc
+        .events_edit_training(&sid, "k in", &ops, true, Some(wide.clone()))
+        .unwrap();
+    assert_eq!(r["training"], json!({"records": 3}), "{r}");
+    let recs = records(&home);
+    assert_eq!(recs.len(), 3, "{recs:?}");
+    let by = |op: &str| {
+        recs.iter()
+            .find(|r| r["op"] == op)
+            .unwrap_or_else(|| panic!("no {op}: {recs:?}"))
+            .clone()
+    };
+    let (mv, add, del) = (by("move"), by("add"), by("delete"));
+    assert_eq!(mv["view"], wide, "the view as sent");
+    assert_eq!(mv["precision"], json!("sample"));
+    assert_eq!(add["precision"], json!("sample"));
+    assert_eq!(del["view"], wide, "a delete carries the view too");
+    assert!(del.get("precision").is_none(), "{del}");
+    // a coarser zoom is `ms`
+    let coarse = json!({"ms": 2000, "px_per_sample": 0.2});
+    svc.events_edit_training(
+        &sid,
+        "k in",
+        &[json!({"op": "move", "index": 0, "t": 0.7})],
+        true,
+        Some(coarse.clone()),
+    )
+    .unwrap();
+    let last = records(&home).pop().unwrap();
+    assert_eq!(last["precision"], json!("ms"), "{last}");
+    assert_eq!(last["view"], coarse);
+    // without a view: `precision: null`, no view (also over the agent surface, which reads the parameter)
+    svc.events_edit_training(&sid, "k in", &[json!({"op": "move", "index": 0, "t": 0.8})], true, None)
+        .unwrap();
+    let last = records(&home).pop().unwrap();
+    assert!(last["precision"].is_null() && last.get("view").is_none(), "{last}");
+    let a = drumspike_app::call::call(
+        &svc,
+        "events_edit",
+        &json!({"sid": sid, "name": "k in", "ops": [{"op": "move", "index": 0, "t": 0.9}], "training": true, "view": wide}),
+        None,
+    )
+    .unwrap();
+    let drumspike_app::reply::Reply::Json(a) = a else {
+        panic!("not JSON")
+    };
+    assert_eq!(a["training"], json!({"records": 1}), "{a}");
+    let last = records(&home).pop().unwrap();
+    assert_eq!(last["precision"], json!("sample"), "{last}");
+    assert_eq!(last["view"], wide);
 }
 
 #[test]
@@ -109,7 +177,7 @@ fn the_same_ops_without_training_write_no_file_and_answer_as_before() {
         json!({"op": "delete", "index": 1}),
     ];
     let a = svc.events_edit(&sid, "k in", &ops).unwrap();
-    let b = plain.events_edit_training(&sid2, "k in", &ops, false).unwrap();
+    let b = plain.events_edit_training(&sid2, "k in", &ops, false, None).unwrap();
     assert_eq!(serde_json::to_string(&a).unwrap(), serde_json::to_string(&b).unwrap());
     assert!(a.get("training").is_none() && a.get("training_error").is_none(), "{a}");
     assert!(!home.join("training").exists() && !home2.join("training").exists());
@@ -166,7 +234,7 @@ fn training_status_reports_the_state_the_count_and_the_path() {
     );
     let s = svc.training_status(&sid, Some(true)).unwrap();
     assert_eq!(s["on"], true);
-    svc.events_edit_training(&sid, "k in", &[json!({"op": "add", "t": 0.25})], true)
+    svc.events_edit_training(&sid, "k in", &[json!({"op": "add", "t": 0.25})], true, None)
         .unwrap();
     assert_eq!(svc.training_status(&sid, None).unwrap()["records"], 1);
     assert_eq!(svc.training_status("nope", None).unwrap_err().code, 404);

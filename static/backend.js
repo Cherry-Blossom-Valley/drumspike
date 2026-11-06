@@ -86,7 +86,7 @@ function ipcBackend(T) {
     tracks: sid => invoke("tracks_get", { sid }),
     setEvents: (sid, name, body) => invoke("events_set", { sid, name, events: body.events }),
     events: (sid, name) => invoke("events_get", { sid, name }),
-    eventsEdit: (sid, name, ops, training) => invoke("events_edit", training ? { sid, name, ops, training: true } : { sid, name, ops }),   // P4-9 stage 2: add, delete, move, velocity of single hits; #343: training logs the correction (no new parameter without the mode)
+    eventsEdit: (sid, name, ops, training, view) => invoke("events_edit", training ? { sid, name, ops, training: true, ...(view ? { view } : {}) } : { sid, name, ops }),   // P4-9 stage 2: add, delete, move, velocity of single hits; #343: training logs the correction (no new parameter without the mode); #353: the view of the edit rides with the training flag
     trainingStatus: (sid, on) => invoke("training_status", on === undefined ? { sid } : { sid, on }),   // #343: {on, records, path}
     peaks, peaksRaw, samples, job,
     analyze: (sid, tracks, params, keepEdited) => invoke("analyze_start", { sid, tracks, params, keep_edited: !!keepEdited, progress: new T.core.Channel() }),   // P4-9: keep_edited merges the edited hits in the service

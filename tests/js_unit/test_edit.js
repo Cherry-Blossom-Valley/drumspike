@@ -35,6 +35,7 @@ function freshEditEnv(env) {
     refreshCounts() {},
     updateStatus() {},
     suspendFollowForEdit() {},
+    trainingOn: () => false,   // #343: the mode lives in status.js, which this harness does not load (the edits run with it off)
     hgSerial: (t, f) => f(),
   });
   env.load("state.js");

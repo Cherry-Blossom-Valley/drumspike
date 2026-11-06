@@ -176,6 +176,13 @@ function tToX(t, w) { return (t - S.view.t0) / viewDur() * w; }
 function xToT(x, w) { return S.view.t0 + x / w * viewDur(); }
 function maxDur() { return Math.max(10, ...S.order.map(n => S.tracks[n].duration)); }
 function snapSample(t, name) { const sr = S.tracks[name].sr; return Math.round(t*sr)/sr; }
+/* #353: the view of a hit edit in Training Mode: the visible span of the waveform in milliseconds and the pixels
+   one sample occupies (the waveform canvas width over the samples the span holds on the track). */
+function trainingView(name) {
+  const sr = S.tracks[name] && S.tracks[name].sr, d = viewDur();
+  if (!sr || !(d > 0)) return null;
+  return { ms: d * 1000, px_per_sample: laneWidth() / (d * sr) };
+}
 /* playhead snapping: within 10px on screen AND <= 30 ms of the nearest hit -> land exactly on it */
 function snapPlayhead(t) {
   if (!S.snap) return t;

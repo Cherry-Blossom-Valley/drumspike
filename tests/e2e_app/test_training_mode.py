@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from playwright.sync_api import expect
 
 from app_support import edits_done, menu, open_project
@@ -72,3 +73,23 @@ def test_training_mode_logs_a_move_shows_the_count_and_stops_when_turned_off(app
     type_sample(app, 41000)
     assert len(log_lines(app)) == n
     assert app.evaluate("() => SETTINGS().ui.training") is False
+
+
+def test_a_move_at_sample_zoom_records_the_view_and_the_precision(app, make_project, tmp_path):
+    """#353 (d): with the mode on, the request carries the view {ms, px_per_sample} and a move at sample zoom (a
+    sample is its own pixel or wider) reads back a record with precision: "sample"."""
+    folder = build(make_project, tmp_path, events={"Kick In": exact_events()})
+    open_project(app, folder)
+    menu(app, "training_mode")                                      # View > Training Mode on
+    # sample zoom: the span is half the samples the lane's width shows, so one sample is two pixels
+    app.evaluate("() => { const sr = S.tracks[\"Kick In\"].sr; S.sel = null; setView(1.5 - 0.5 * laneWidth() / sr, 1.5 + 0.5 * laneWidth() / sr); }")
+    v = app.evaluate("() => trainingView(\"Kick In\")")
+    assert v["px_per_sample"] >= 1
+    app.keyboard.press("Tab"); app.keyboard.press("Tab")            # the second hit (1.5 s)
+    type_sample(app, 73000)                                         # the move
+    expect(app.locator("#stTraining")).to_have_text("training: 1 records")
+    (r,) = log_lines(app)
+    assert (r["op"], r["from"], r["to"], r["role"], r["track"]) == ("move", IDX[1], 73000, "kick", "Kick In")
+    assert r["precision"] == "sample"
+    assert r["view"]["ms"] == pytest.approx(v["ms"])
+    assert r["view"]["px_per_sample"] == pytest.approx(v["px_per_sample"])
