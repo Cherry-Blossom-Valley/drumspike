@@ -247,11 +247,14 @@ with D (Hits > Next Doubtful Hit), lowest confidence first; Shift+D steps back.
 
 A tool for the owner who refines the product, off by default (View > Training Mode, a page setting). With
 `training: true` on `events_edit` and `track_learn_mark`, the command appends one JSON line per hit affected
-(op `move`, `add`, `delete`, `learn_this` or `learn_not`) to `<DRUMSPIKE_HOME>/training/<project id>.jsonl`: the
+(op `move`, `add`, `delete`, `confirm`, `learn_this` or `learn_not`) to `<DRUMSPIKE_HOME>/training/<project id>.jsonl`: the
 time, the app version, the detect and refine rule versions, the track, role and rate, `from` and `to` in samples,
 the event as stored before the op, its `confidence` and the track's samples from 40 ms before to 10 ms after
 `from` and `to` (`audio.at_from`, `audio.at_to`). The answer gets `training: {records}` (or `training_error`; the
 edit stands). Without the parameter nothing is written and the answer is unchanged.
+#354: `{op: confirm, index}` (Training Mode only, else refused) logs the hit as reviewed, right where it is:
+the document, its `dirty` flag and the undo history stay as they were, the record says `from` = `to` = the stored
+position and carries one audio window.
 `training_status {sid, on?}` answers `{on, records, path}`. `tools/training_export.py <jsonl...>` prints the
 aggregates per role and op and writes the truth list `[{track, role, from, to, op}]`.
 

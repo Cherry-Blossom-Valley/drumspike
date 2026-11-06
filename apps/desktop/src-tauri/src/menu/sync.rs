@@ -9,12 +9,12 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use super::build::{no_projects, no_tracks};
 use super::items::{
-    AUDITION, AUDITION_TAB, CLICK, COUNTER_MODES, DELETE_HIT, EXPORT_AGAIN, FOLLOW_ID, FOLLOW_MODES, FOLLOW_PREFIX,
-    GRID, HEIGHT_MODES, INFO_LINE, INSPECTOR, Kind, LEARN_FILTER, NUDGE_EARLIER, NUDGE_LATER, NUDGE_MODES, OPEN_RECENT,
-    OTHER_MICS, OVERVIEW, PROJECT_PREFIX, REANALYZE_SELECTION, RECENT_CLEAR_ID, RECENT_ID, RECENT_MAX, RECENT_PREFIX,
-    REDO, RULER_BEATS, RULER_MARKERS, RULER_METER, RULER_TEMPO, SNAP, SPEC, STOP_RETURN_MODE, SUSPEND_FOLLOW,
-    TAB_MODES, TOGGLE_HIT_ACTIVE, TRACKS_REMOVE, TRAINING_MODE, UNDO, VELOCITY_LANE, WINDOW_ID, ZOOM_OWN_PREFIX,
-    ZOOM_PRESETS_ID,
+    AUDITION, AUDITION_TAB, CLICK, CONFIRM_HIT, COUNTER_MODES, DELETE_HIT, EXPORT_AGAIN, FOLLOW_ID, FOLLOW_MODES,
+    FOLLOW_PREFIX, GRID, HEIGHT_MODES, INFO_LINE, INSPECTOR, Kind, LEARN_FILTER, NUDGE_EARLIER, NUDGE_LATER,
+    NUDGE_MODES, OPEN_RECENT, OTHER_MICS, OVERVIEW, PROJECT_PREFIX, REANALYZE_SELECTION, RECENT_CLEAR_ID, RECENT_ID,
+    RECENT_MAX, RECENT_PREFIX, REDO, RULER_BEATS, RULER_MARKERS, RULER_METER, RULER_TEMPO, SNAP, SPEC,
+    STOP_RETURN_MODE, SUSPEND_FOLLOW, TAB_MODES, TOGGLE_HIT_ACTIVE, TRACKS_REMOVE, TRAINING_MODE, UNDO, VELOCITY_LANE,
+    WINDOW_ID, ZOOM_OWN_PREFIX, ZOOM_PRESETS_ID,
 };
 use super::keymap::{PRESET, TYPING, current_preset, is_typing, key_row, live_accel, preset_or_default, tauri_accel};
 use super::lock;
@@ -329,6 +329,10 @@ pub fn sync_checks<R: Runtime>(app: &AppHandle<R>, state: &Value) -> tauri::Resu
     if let Some(on) = state.get("selHit").and_then(Value::as_bool) {
         for it in [DELETE_HIT, NUDGE_EARLIER, NUDGE_LATER, AUDITION, TOGGLE_HIT_ACTIVE] {
             set_enabled(&menu, it.id, on)?;
+        }
+        // #354: Hits > Confirm Hit needs a hit selection AND Training Mode on (greyed while the mode is off)
+        if let Some(tm) = state.get("trainingMode").and_then(Value::as_bool) {
+            set_enabled(&menu, CONFIRM_HIT.id, on && tm)?;
         }
     }
     // #265: Hits > Re-analyze Selection is greyed without a range selection (LN.sel)

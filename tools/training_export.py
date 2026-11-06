@@ -3,9 +3,10 @@
     uv run python tools/training_export.py <training.jsonl>... [--out truth.json]
 
 Reads the correction logs that View > Training Mode writes (`<DRUMSPIKE_HOME>/training/<project id>.jsonl`, one
-record per hit edit or Learn mark). Prints the aggregates per role and op: the count and the histogram of
-`to - from` in samples, the count and the histogram per precision (#353: `sample` at a pixel per sample or more,
-`ms` at a coarser zoom, `-` without a view), and the count per refine rule version. Writes every record as the
+record per hit edit, confirm or Learn mark). Prints the aggregates per role and op: the count and the histogram of
+`to - from` in samples (a #354 `confirm` record says `from` = `to`, so its bin is `0`), the count and the histogram per
+precision (#353: `sample` at a pixel per sample or more, `ms` at a coarser zoom, `-` without a view), and the count per
+refine rule version. Writes every record as the
 truth list `[{track, role, from, to, op, precision}]` (samples) to `--out` (default `training_truth.json`) for the
 measurement kit. The printout carries no project names and no paths: it is safe to paste into a public ticket. The
 truth file carries the track names; keep it with the logs.

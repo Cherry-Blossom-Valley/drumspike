@@ -210,7 +210,7 @@ async function edNow(name, mk, before) {   // true when the service applied the 
   const pl = mk(S.events[name] || []);
   if (!pl) return false;
   let r;
-  const training = trainingOn() && !!pl.step;   // #343: a plan with an undo step is the owner's correction; an undo or redo (no step) is not
+  const training = trainingOn() && (!!pl.step || !!pl.confirm);   // #343: a plan with an undo step is the owner's correction (a confirm too, #354); an undo or redo (no step) is not
   const view = training ? trainingView(name) : null;   // #353: the view rides with the training flag
   try { r = await B.eventsEdit(sid, name, pl.ops, training, view); }
   catch (e) { setMsg(`edit: ${errText(e)}`); await edReload(sid, name); return false; }
@@ -226,8 +226,12 @@ async function edNow(name, mk, before) {   // true when the service applied the 
   const want = pl.sel !== undefined ? pl.sel : cur;
   if (want !== undefined) { const j = want ? fresh.findIndex(x => x.id === want) : -1; S.sel = j >= 0 ? { track: name, index: j } : null; }
   if (pl.step) pushUndo(pl.step);
-  if (!pl.drag) editVoidHitDrag(name);   // the list was replaced: a drag in progress is void (the hook asks the input layer)
-  setDirtyState(true); invalidateHits(name); refreshCounts(name); updateStatus();
+  if (pl.confirm) {   // #354: the document is unchanged: no undo step, no dirty mark, a drag goes on
+    invalidateHits(name); refreshCounts(name); updateStatus();
+  } else {
+    if (!pl.drag) editVoidHitDrag(name);   // the list was replaced: a drag in progress is void (the hook asks the input layer)
+    setDirtyState(true); invalidateHits(name); refreshCounts(name); updateStatus();
+  }
   if (pl.ops && pl.ops.some(op => op.op === "add" || op.op === "delete" || op.op === "move")) suspendFollowForEdit();   // P4-wf10
   if (pl.msg) setMsg(pl.msg);
   reloadFollowers(Array.isArray(r && r.followers) ? r.followers : followersOf(name));
@@ -324,5 +328,20 @@ function edDelete(trk, id) {   // delete the hit with this id (the key, the righ
       return { ops: [{ op: "delete", index: j }], drop: [id], sel: null,
         step: { type: "del", track: trk, id, t: e.t, v: e.v, added: !!e.added, ...(e.orig !== undefined ? { orig: e.orig } : {}), keep: delKeep(raw) } };
     });
+  });
+}
+/* #354: Hits > Confirm Hit (Training Mode): the selected hit is reviewed and right where it is. The request is one
+   `confirm` op, the service applies nothing — the document, its dirty flag and the undo history stay as they were —
+   and logs one record; the status line reads one record more (trainingNote). No undo step: there is nothing to undo. */
+function confirmHit() {
+  if (!S.sel) { setMsg("no hit selected"); return; }
+  const trk = S.sel.track, id = ((S.events[trk] || [])[(S.sel || {}).index] || {}).id;
+  if (followerLocked(trk)) return;   // P3-18
+  if (id === undefined) { setMsg("no hit selected"); return; }
+  return edCall(trk, evs => {
+    const j = edIndex(evs, id);
+    if (j < 0) { setMsg("the hit is not there any more"); return null; }
+    return { ops: [{ op: "confirm", index: j }], confirm: true, sel: id,
+      msg: "hit confirmed: logged as reviewed, right where it is" };
   });
 }

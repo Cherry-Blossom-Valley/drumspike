@@ -203,6 +203,9 @@ pub const REVIEW_PREV: Item = item("review_prev", "Previous Doubtful Hit", true)
 pub const AUDITION: Item = item("audition", "Audition Hit", true);
 /// #242: the selected hit between active and deactivated (X is the page key in both presets).
 pub const TOGGLE_HIT_ACTIVE: Item = item("toggle_hit_active", "Toggle Hit Active", true);
+/// #354: the selected hit logged as reviewed, right where it is (Training Mode; the document is unchanged).
+/// Greyed while Training Mode is off (`sync_checks` reads `trainingMode`) and without a hit selection.
+pub const CONFIRM_HIT: Item = item("confirm_hit", "Confirm Hit", true);
 pub const SNAP: Item = check("snap", "Snap Playhead to Hits");
 pub const ANALYZE_TRACK: Item = item("analyze_track", "Analyze Selected Track", true);
 /// #265: Re-analyze Selection, the hits of the range only (greyed without a range: `sync_checks`
@@ -238,7 +241,7 @@ pub const DRUMSPIKE_HELP: Item = item("drumspike_help", "Drum Spike Help", false
 pub const SHORTCUTS: Item = item("shortcuts", "Keyboard Shortcuts", false);
 
 /// Every custom item (not the Open Recent and Window entries, not the system items Cut, Copy and so on).
-pub const SPEC: [Item; 114] = [
+pub const SPEC: [Item; 115] = [
     ABOUT,
     SETTINGS,
     QUIT,
@@ -331,6 +334,7 @@ pub const SPEC: [Item; 114] = [
     REVIEW_PREV,
     AUDITION,
     TOGGLE_HIT_ACTIVE,
+    CONFIRM_HIT,
     SNAP,
     ANALYZE_TRACK,
     REANALYZE_SELECTION,
