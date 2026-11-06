@@ -60,10 +60,11 @@ function gotoEvent(dir, forceGlobal) {
    for a track whose hits changed since its last answer. The info line shows the reasons of a selected doubtful hit. */
 var RQ = { sig: {}, rate: {}, at: new WeakMap() };   // per track: the signature and the ratings of the last answer; hit -> {key, r}
 function rqKey(e) { return `${e.t}|${e.added ? 1 : 0}|${e.orig}|${e.cut ? 1 : 0}|${e.bleed ? 1 : 0}|${e.filtered ? 1 : 0}`; }
+function rqTraining() { return SETTINGS().training === true; }   // #343: Training Mode; absent = off, so #343 may merge first
 async function rqRatings(n) {
-  const evs = S.events[n] || [], sig = evs.map(rqKey).join(",");
+  const evs = S.events[n] || [], sig = `${rqTraining() ? "t" : ""}:${evs.map(rqKey).join(",")}`;   // #344: the flag in the signature asks again when the setting flips
   if (RQ.sig[n] !== sig) {
-    const r = await B.confidence(S.sid, n, evs);
+    const r = await B.confidence(S.sid, n, evs, rqTraining());
     RQ.sig[n] = sig; RQ.rate[n] = r.confidence;
   }
   evs.forEach((e, i) => RQ.at.set(e, { key: rqKey(e), r: RQ.rate[n][i] }));

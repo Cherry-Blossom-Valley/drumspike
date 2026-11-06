@@ -346,7 +346,7 @@ impl Service {
 
     /// `rate` of one stored or new hit as `track_confidence` gives it, `None` when it cannot be rated.
     pub(crate) fn training_rate(&self, sid: &str, name: &str, events: &[Value]) -> Vec<Option<Value>> {
-        match self.track_confidence(sid, name, Some(events)) {
+        match self.track_confidence(sid, name, Some(events), false) {
             Ok(c) => {
                 let list = c["confidence"].as_array().cloned().unwrap_or_default();
                 (0..events.len()).map(|i| list.get(i).cloned()).collect()

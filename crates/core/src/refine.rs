@@ -33,6 +33,7 @@ mod reference;
 mod track;
 mod walk;
 
+pub use edge::{PlacementDiag, placement_diag};
 pub use reach::{ReachStep, TAIL_S};
 pub use reference::{RefineWindow, refine_sr};
 pub(crate) use track::refine_track_rule_peak;

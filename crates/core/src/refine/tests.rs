@@ -1466,3 +1466,64 @@ fn version_8_puts_a_stroke_without_a_steep_edge_on_the_last_line_sample() {
     assert_eq!(at(RefineRule::Visible), 1, "version 7: one sample into the attack");
     assert_eq!(at(RefineRule::Line), -1, "version 8: the last sample on the line");
 }
+
+// ---------------------------------------------------------------- #344: the placement evidence
+
+/// A hit at `at` standing on a line: the samples before `at` hold `line`, plus white noise of
+/// `noise` amplitude when it is over 0 (one seeded xorshift draw per sample); from `at` the
+/// [`shot`] attack with the rise `ramp` to the peak `amp`.
+fn line_hit(at: usize, line: f64, noise: f64, ramp: usize, amp: f64) -> Vec<f32> {
+    let mut x = vec![0.0f32; 48_000];
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    for v in &mut x[..at] {
+        if noise > 0.0 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            *v = (line + noise * ((seed as f64 / u64::MAX as f64) * 2.0 - 1.0)) as f32;
+        } else {
+            *v = line as f32;
+        }
+    }
+    for k in 0..(0.3 * f64::from(SR)) as usize {
+        if at + k >= x.len() {
+            break;
+        }
+        let t = k as f64 / f64::from(SR);
+        let env = ((k + 1) as f64 / ramp as f64).min(1.0) * (-t / 0.06).exp();
+        x[at + k] += (amp * env * (2.0 * std::f64::consts::PI * 180.0 * t + 0.7).sin()) as f32;
+    }
+    x
+}
+
+#[test]
+fn placement_diag_of_a_clean_line_reports_the_edge_and_no_noise_or_slope() {
+    let at = 24_000;
+    let x = line_hit(at, 0.002, 0.0, 2, 0.5);
+    let d = placement_diag(&x, SR, at as i64);
+    assert!(d.edge, "{d:?}");
+    assert!(d.line_noise < 0.01, "{d:?}");
+    assert!(d.line_slope.abs() < 0.005, "{d:?}");
+}
+
+#[test]
+fn placement_diag_reports_the_noise_of_a_line_that_is_two_percent_noise() {
+    // the noise amplitude is 2 % of the 0.5 peak times sqrt(3): its standard deviation, the
+    // measure of `line_noise`, is the 2 % of the peak
+    let at = 24_000;
+    let x = line_hit(at, 0.002, 0.02 * 0.5 * 3.0f64.sqrt(), 2, 0.5);
+    let d = placement_diag(&x, SR, at as i64);
+    assert!(d.edge, "{d:?}");
+    assert!(d.line_noise > 0.01, "{d:?}");
+    assert!((d.line_noise - 0.02).abs() < 0.005, "{d:?}");
+}
+
+#[test]
+fn placement_diag_reports_no_edge_for_a_slow_attack() {
+    // a 5 ms rise to the peak: under 18 dB per 0.1 ms at every step, so no edge counts and the
+    // placement falls back to the walk's foot
+    let at = 24_000;
+    let x = line_hit(at, 0.002, 0.0, 240, 0.5);
+    let d = placement_diag(&x, SR, at as i64);
+    assert!(!d.edge, "{d:?}");
+}

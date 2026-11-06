@@ -111,8 +111,10 @@ function ipcBackend(T) {
        velocitySet: stores the floor, ceiling and loudness cut (null: off), answers {events} with the new v and the cut
        marks (a follower: stored, {events, follows}) */
     histograms: (sid, name, events) => invoke("track_histograms", { sid, name, events: events || null }),
-    /* #150: the confidence of each hit of `events` for the review queue: {confidence: [{c, doubt, why}], source} */
-    confidence: (sid, name, events) => invoke("track_confidence", { sid, name, events }),
+    /* #150: the confidence of each hit of `events` for the review queue: {confidence: [{c, doubt, why}], source}.
+       #344: training is the page's Training Mode flag (absent = off). */
+    confidence: (sid, name, events, training) => invoke("track_confidence", { sid, name, events,
+      ...(training === true ? { training: true } : {}) }),
     paramsSet: (sid, name, params) => invoke("track_params_set", { sid, name, params }),   // fix round: undo and redo of a re-pick
     pluginsList: (sid) => invoke("plugins_list", sid ? { sid } : {}),   // #387: the installed detector plugins
     pluginAccept: (sid, id) => invoke("plugin_accept", { sid, id }),   // #387: record the licence acceptance in the project

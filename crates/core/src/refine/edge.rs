@@ -2,7 +2,7 @@
 //! line ([`EdgeTail`]).
 
 use super::max_abs;
-use super::walk::samples;
+use super::walk::{FM_PEAK_S, samples};
 
 /// How the steep edge's foot walks back to the line (#321): [`EdgeTail::Noise`] is version 6, [`EdgeTail::Visible`]
 /// version 7.
@@ -209,4 +209,69 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
         j += w;
     }
     None
+}
+
+/// The placement evidence of one hit (#344): whether a steep edge counts at the stored position,
+/// and how the line before it reads. `line_noise` and `line_slope` are shares of the hit's peak
+/// (the slope per ms, signed: positive rises). The review queue's Training Mode reads them per
+/// hit, computed on demand and never stored; no rule of the analysis reads them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlacementDiag {
+    /// A steep edge counts for the hit's peak ([`edge_foot_counted`], the version 8 tail rule):
+    /// `false` when the placement fell back to the walk's foot.
+    pub edge: bool,
+    /// The standard deviation of the 2 ms before the foot, over the peak.
+    pub line_noise: f64,
+    /// The trend of the same 2 ms, per ms, over the peak.
+    pub line_slope: f64,
+}
+
+/// The placement evidence of the hit at `t` samples (the stored position, #344). The edge decision
+/// is the version 8 one for the hit's peak: [`edge_foot_counted`] from `t` over the
+/// [`FM_PEAK_S`] window with the [`EdgeTail::Line`] rule. The line is measured as version 8
+/// measures it: the line level is the median over [`LINE_LEVEL_S`] before the foot, the noise is
+/// the standard deviation of the [`EDGE_NOISE_S`] before the foot over the hit's peak, and the
+/// slope the trend of the same 2 ms per ms over the peak.
+#[must_use]
+pub fn placement_diag(x: &[f32], sr: u32, t: i64) -> PlacementDiag {
+    let srf = f64::from(sr);
+    let n = x.len() as i64;
+    let t = t.clamp(0, n);
+    let end = (t + samples(FM_PEAK_S, srf)).min(n);
+    let peak = f64::from(max_abs(x, t, end));
+    let edge = edge_foot_counted(x, t, end, srf, EdgeTail::Line).is_some();
+    // the line level: the version 8 median over LINE_LEVEL_S before the foot
+    let line = {
+        let from = (t - samples(LINE_LEVEL_S, srf)).max(0);
+        let mut v: Vec<f64> = (from..t).map(|i| f64::from(x[i as usize])).collect();
+        if v.is_empty() {
+            0.0
+        } else {
+            let mid = v.len() / 2;
+            *v.select_nth_unstable_by(mid, f64::total_cmp).1
+        }
+    };
+    // the 2 ms before the foot, read off the line
+    let from = (t - samples(EDGE_NOISE_S, srf)).max(0);
+    let w: Vec<f64> = (from..t).map(|i| f64::from(x[i as usize]) - line).collect();
+    let (noise, slope) = if w.is_empty() || peak <= 0.0 {
+        (0.0, 0.0)
+    } else {
+        let m = w.len() as f64;
+        let mean = w.iter().sum::<f64>() / m;
+        let noise = (w.iter().map(|d| (d - mean) * (d - mean)).sum::<f64>() / m).sqrt() / peak;
+        // the trend: the least squares slope over the window, per ms over the peak
+        let si: f64 = (0..w.len()).map(|i| i as f64).sum();
+        let sii: f64 = (0..w.len()).map(|i| (i * i) as f64).sum();
+        let sd: f64 = w.iter().sum();
+        let sid: f64 = w.iter().enumerate().map(|(i, d)| i as f64 * d).sum();
+        let den = m * sii - si * si;
+        let per_sample = if den == 0.0 { 0.0 } else { (m * sid - si * sd) / den };
+        (noise, per_sample * srf / 1000.0 / peak)
+    };
+    PlacementDiag {
+        edge,
+        line_noise: noise,
+        line_slope: slope,
+    }
 }
