@@ -233,9 +233,10 @@ fn rule_versions_and_the_reference_rule() {
             RefineRule::FootCapped.version(),
             RefineRule::Edge.version(),
             RefineRule::Visible.version(),
-            RefineRule::Line.version()
+            RefineRule::Line.version(),
+            RefineRule::Departure.version()
         ),
-        (1, 2, 3, 4, 5, 6, 7, 8)
+        (1, 2, 3, 4, 5, 6, 7, 8, 9)
     );
     for r in [
         RefineRule::Reference,
@@ -246,12 +247,13 @@ fn rule_versions_and_the_reference_rule() {
         RefineRule::Edge,
         RefineRule::Visible,
         RefineRule::Line,
+        RefineRule::Departure,
     ] {
         assert_eq!(RefineRule::from_version(u64::from(r.version())), Some(r));
     }
     assert_eq!(RefineRule::from_version(0), None);
-    assert_eq!(RefineRule::from_version(9), None);
-    assert_eq!(RefineRule::CURRENT, RefineRule::Line);
+    assert_eq!(RefineRule::from_version(10), None);
+    assert_eq!(RefineRule::CURRENT, RefineRule::Departure);
     // the reference rule is refine_sr, step Kept, on every kind of window
     let x = noisy(&track(&[(0.5, -3.0)], 1.5), -70.0);
     for t0 in [0.486, 0.497, 0.503, 0.65, 2.0] {
@@ -1465,6 +1467,152 @@ fn version_8_puts_a_stroke_without_a_steep_edge_on_the_last_line_sample() {
         |rule| (refine_rule_peak(&x, t0, SR, &[], W, rule, FM_PEAK_DB).t * f64::from(SR)).round() as i64 - on as i64;
     assert_eq!(at(RefineRule::Visible), 1, "version 7: one sample into the attack");
     assert_eq!(at(RefineRule::Line), -1, "version 8: the last sample on the line");
+}
+
+// ---------------------------------------------------------------- #351: placement version 9
+
+#[test]
+fn version_9_walks_back_over_a_swing_of_the_other_sign() {
+    // (a) #351: a snare-like stroke: the line, then a dip of 7 % and a rise of 15 % over 10 samples, a zero
+    // crossing of two samples, then the steep negative edge. Version 8 follows the edge's sign only and stops at
+    // the crossing, after the swing; version 9 walks over the swing of either sign and sits on the last line
+    // sample before the dip
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f32; 2_000];
+    for (k, v) in [-0.03f32, -0.05, -0.06, -0.07, -0.04, 0.0, 0.05, 0.1, 0.15]
+        .iter()
+        .enumerate()
+    {
+        x[1_200 + k] = *v;
+    }
+    // the zero crossing between the swing and the edge: two samples on the line
+    x[1_209] = 0.0;
+    x[1_210] = 0.0;
+    for (k, v) in [-0.3f32, -0.6, -1.0].iter().enumerate() {
+        x[1_211 + k] = *v;
+    }
+    for v in &mut x[1_214..1_400] {
+        *v = -1.0;
+    }
+    let v8 = edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Line);
+    assert!(v8 > 1_203, "version 8: after the swing: {v8}");
+    assert_eq!(
+        edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Departure),
+        1_199,
+        "version 9: the last line sample before the dip"
+    );
+}
+
+#[test]
+fn version_9_walks_back_over_a_positive_half_cycle_before_a_kick_edge() {
+    // (b) #351: a kick-like stroke: the line, then a positive half cycle of 20 % of the peak over 8 samples,
+    // then the steep negative edge. The bump's rise is the first edge the search counts, so version 8 already
+    // sits on the last line sample before the bump; version 9 keeps it there
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f32; 2_000];
+    for (k, v) in [0.05f32, 0.1, 0.15, 0.2, 0.2, 0.15, 0.1, 0.05, 0.0].iter().enumerate() {
+        x[1_200 + k] = *v;
+    }
+    for (k, v) in [-0.3f32, -0.6, -1.0].iter().enumerate() {
+        x[1_209 + k] = *v;
+    }
+    for v in &mut x[1_212..1_400] {
+        *v = -1.0;
+    }
+    assert_eq!(
+        edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Line),
+        1_199,
+        "version 8: its current value, the last line sample before the bump"
+    );
+    assert_eq!(
+        edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Departure),
+        1_199,
+        "version 9: the last line sample before the bump"
+    );
+}
+
+#[test]
+fn version_9_keeps_the_slow_wave_line_of_a_tom() {
+    // (c) #351: a line that is a slow wave of 10 % of the peak at 1 kHz (the Sessions A and B toms): the wave is
+    // the line itself, so version 9 decides as version 8 does, at every phase of the wave against the stroke
+    let srf = f64::from(SR);
+    for shift in [0usize, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44] {
+        let mut x = vec![0.0f32; 4_000];
+        for (i, v) in x.iter_mut().enumerate() {
+            *v = (0.1 * (2.0 * std::f64::consts::PI * 1_000.0 * i as f64 / srf).sin()) as f32;
+        }
+        let on = 2_400 + shift;
+        for (k, v) in [-0.4f32, -0.8, -1.0].iter().enumerate() {
+            x[on + k] = *v;
+        }
+        for v in &mut x[on + 3..3_000] {
+            *v = -1.0;
+        }
+        assert_eq!(
+            edge_foot(&x, 2_000, 2_600, srf, EdgeTail::Departure),
+            edge_foot(&x, 2_000, 2_600, srf, EdgeTail::Line),
+            "the wave is the line itself, phase shift {shift}"
+        );
+    }
+}
+
+#[test]
+fn version_9_places_a_stroke_with_a_preswing_on_the_last_line_sample() {
+    // #351 through the whole rule: the same stroke as the walk-back test above, analysed from a coarse time
+    // 6 ms before it. Version 8 sits after the swing; version 9 on the last line sample before the dip
+    let mut x = vec![0.0f32; 4_000];
+    for (k, v) in [-0.03f32, -0.05, -0.06, -0.07, -0.04, 0.0, 0.05, 0.1, 0.15]
+        .iter()
+        .enumerate()
+    {
+        x[2_400 + k] = *v;
+    }
+    x[2_409] = 0.0;
+    x[2_410] = 0.0;
+    for (k, v) in [-0.3f32, -0.6, -1.0].iter().enumerate() {
+        x[2_411 + k] = *v;
+    }
+    for v in &mut x[2_414..3_000] {
+        *v = -1.0;
+    }
+    let t0 = 2_400_f64 / f64::from(SR) - 0.006;
+    let at = |rule| (refine_rule_peak(&x, t0, SR, &[], W, rule, FM_PEAK_DB).t * f64::from(SR)).round() as i64 - 2_400;
+    let v8 = at(RefineRule::Line);
+    assert!(v8 > 3, "version 8: after the swing: {v8}");
+    assert_eq!(
+        at(RefineRule::Departure),
+        -1,
+        "version 9: the last line sample before the dip"
+    );
+}
+
+#[test]
+fn version_9_does_not_take_a_flicker_that_is_separated_from_the_edge_as_the_first_motion() {
+    // #351 verify (Session E snare 93 of the staged excerpts): a 2-sample flicker at about 2.6 % of
+    // the peak, then 5 samples within the run's band, then the swing into the edge. The flicker is
+    // no first motion: it does not run into the edge (the run's band separates it). The walk refuses
+    // the run before it and version 8's walk-back decides, on the line right before the swing — not
+    // 5 or more samples early, before the flicker
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f32; 2_000];
+    x[1_200] = -0.06;
+    x[1_201] = -0.055;
+    x[1_202] = -0.015;
+    x[1_203] = -0.005;
+    // 1_204..1_208 stay on the line (the run's band separates flicker and swing)
+    x[1_209] = -0.03;
+    x[1_210] = -0.3;
+    x[1_211] = -1.0;
+    for v in &mut x[1_212..1_400] {
+        *v = -1.0;
+    }
+    let v9 = edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Departure);
+    assert_eq!(
+        v9,
+        edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Line),
+        "version 8 decides"
+    );
+    assert!(v9 > 1_203, "not before the flicker: {v9}");
 }
 
 // ---------------------------------------------------------------- #344: the placement evidence
