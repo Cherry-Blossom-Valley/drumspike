@@ -75,7 +75,7 @@ pub(crate) const EDGE_NOISE_S: f64 = 0.002;
 /// the same result; 12 is 0.25 ms at 48 kHz.
 pub(crate) const LINE_LEVEL_S: f64 = 0.000_25;
 /// Version 9 (#351): the line is reached when this many consecutive samples stand within the
-/// departure band. A single-sample zero crossing between a pre-swing and the edge is not the
+/// run's band. A single-sample zero crossing between a pre-swing and the edge is not the
 /// line, and neither is the short in-band stretch of a bleed's or a ripple's own zero crossing:
 /// the run has to be as long as those. Fitted on the labelled hits the coordinator staged for
 /// #351 (Sessions C and D of the 2026-11-06 labels and the owner's hand-placed Session E; even
@@ -96,11 +96,18 @@ pub(crate) const DEPARTURE_MAX_S: f64 = 0.000_8;
 /// smaller.
 pub(crate) const DEPARTURE_LEVEL_S: f64 = 0.000_5;
 /// Version 9 (#351): a sample of the departure walk stands off the line when `|x - line|`
-/// exceeds this share of the hit's peak (percent). Fitted on the same hits: at the version 7
+/// exceeds this share of the hit's peak (percent); the run of line samples is counted in the
+/// tighter [`DEPARTURE_RUN_PCT`] band instead. Fitted on the same hits: at the version 7
 /// [`VIS_TAIL_PCT`] of 2 the swing of a session whose line carries bleed at about that level
 /// never stood clear of it; 2.5 separated the two and 3 began to miss the small dips; 5 and
 /// over lost the swings whole.
 pub(crate) const DEPARTURE_VIS_PCT: f64 = 2.5;
+/// Version 9 (#351), the run's band: once the walk has departed, only samples within this share
+/// of the peak (the version 7 [`VIS_TAIL_PCT`]) count toward the run of line samples. The
+/// looser [`DEPARTURE_VIS_PCT`] decides the departure alone: on the labelled hits the stroke's
+/// first motion sometimes opens at 2 to 2.5 % of the peak, and in the loose band that sample
+/// reads as line — the run then ends one sample late, on the motion's own first sample.
+pub(crate) const DEPARTURE_RUN_PCT: f64 = VIS_TAIL_PCT;
 /// Version 9 (#351), the stands-out fit: the departure counts as the stroke's first motion when
 /// its largest excursion exceeds this multiple of the largest off-line excursion over
 /// [`EDGE_NOISE_S`] before the run of line samples. Bleed at 3 % of the peak before a 3 % swing
@@ -262,6 +269,7 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
             // and tilts its median onto the swing itself
             EdgeTail::Departure => {
                 let vis = pk * DEPARTURE_VIS_PCT / 100.0;
+                let vis_run = pk * DEPARTURE_RUN_PCT / 100.0;
                 let run = LINE_RUN_SAMPLES.max(1);
                 let lo_d = (k0 - samples(DEPARTURE_MAX_S, srf)).max(1);
                 let line9 = {
@@ -280,7 +288,10 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
                 let mut departed = false;
                 let mut hit = None;
                 while i >= lo_d {
-                    if off9(i).abs() > vis {
+                    // the departure is judged in the loose band; once departed, the run counts
+                    // only samples that stand within the tighter run's band (the stroke's first
+                    // motion can open just under the loose band)
+                    if off9(i).abs() > vis || (departed && off9(i).abs() > vis_run) {
                         in_band = 0;
                         departed = true;
                     } else if departed {
@@ -293,11 +304,17 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
                     i -= 1;
                 }
                 hit.filter(|&h| {
-                    // the first motion stands out from the line before it: its largest excursion over the
-                    // largest off-line excursion of the EDGE_NOISE_S before the run of line samples
+                    // the first motion stands out from the line before it: its largest excursion over
+                    // the largest off-line excursion of the EDGE_NOISE_S before the run of line
+                    // samples, floored at the departure band itself — a ripple on a very quiet line
+                    // stands over the line's own excursions yet is no motion (#351 verify: the
+                    // ripples stood 2x over a line under 1 % and passed the unfloored test)
                     let run_start = h - run + 1;
                     let ref_lo = (run_start - samples(EDGE_NOISE_S, srf)).max(0);
-                    let reference = (ref_lo..run_start).map(|m| off9(m).abs()).fold(0.0_f64, f64::max);
+                    let reference = (ref_lo..run_start)
+                        .map(|m| off9(m).abs())
+                        .fold(0.0_f64, f64::max)
+                        .max(vis);
                     let dep_max = (h..=k0).map(|m| off9(m).abs()).fold(0.0_f64, f64::max);
                     dep_max > DEPARTURE_STANDS_OUT * reference
                 })

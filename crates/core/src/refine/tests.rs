@@ -1185,8 +1185,8 @@ fn a_hard_attack_over_a_noise_floor_is_never_placed_before_its_onset() {
                 // the hit delayed by half a sample: a Hann-windowed sinc of 32 samples each side
                 let h: Vec<f64> = (-32..=32)
                     .map(|j| {
-                        let u = j as f64 - 0.5;
-                        let w = 0.5 + 0.5 * (std::f64::consts::PI * j as f64 / 33.0).cos();
+                        let u = f64::from(j) - 0.5;
+                        let w = 0.5 + 0.5 * (std::f64::consts::PI * f64::from(j) / 33.0).cos();
                         w * (std::f64::consts::PI * u).sin() / (std::f64::consts::PI * u)
                     })
                     .collect();
