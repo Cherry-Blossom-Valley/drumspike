@@ -283,6 +283,8 @@ fn compute() -> Golden {
         RefineRule::FootCapped,
         RefineRule::Edge,
         RefineRule::Visible,
+        RefineRule::Line,
+        RefineRule::Departure,
     ];
     let mut reach_seen = [false; 4];
     let mut back_seen = [false; 5];
@@ -357,7 +359,8 @@ fn compute() -> Golden {
 }
 
 /// The golden with the lead-in off (the product): (version, hash at [`FM_PEAK_DB`], hash at [`LOW_MARGIN_DB`]).
-const OFF: [(u32, u64, u64); 7] = [
+/// Versions 8 and 9 recorded on Apple silicon at #351 (#338 left version 8 without an entry).
+const OFF: [(u32, u64, u64); 9] = [
     (1, 0xce84_2a40_9231_a3ef, 0xce84_2a40_9231_a3ef),
     (2, 0x0221_4015_c435_0d16, 0x0221_4015_c435_0d16),
     (3, 0x6d67_d448_07a8_c595, 0x7bd1_e669_8800_3c91),
@@ -365,12 +368,14 @@ const OFF: [(u32, u64, u64); 7] = [
     (5, 0x1664_0503_cbdb_0e28, 0x5600_43ff_7834_30e9),
     (6, 0x841b_06b6_f77a_a3b8, 0x87d9_8aa9_1d81_ac23),
     (7, 0x1d41_975c_bdd7_495b, 0xbb3f_b37a_bb64_67f8),
+    (8, 0x5725_f75d_4f80_4816, 0x0872_c020_d5a0_6be2),
+    (9, 0xedfd_326c_5898_efc3, 0x1b8d_91b9_b44f_612f),
 ];
 const OFF_MID: u64 = 0x8555_f834_1234_4faf;
 const OFF_TRACE: u64 = 0x4a00_4b51_e34f_2c4f;
 
 /// The golden with the lead-in on (#239, no product path turns it on).
-const ON: [(u32, u64, u64); 7] = [
+const ON: [(u32, u64, u64); 9] = [
     (1, 0xce84_2a40_9231_a3ef, 0xce84_2a40_9231_a3ef),
     (2, 0x0221_4015_c435_0d16, 0x0221_4015_c435_0d16),
     (3, 0xb223_7b9c_5549_e49a, 0x3af3_178b_c6b6_e1a0),
@@ -378,11 +383,13 @@ const ON: [(u32, u64, u64); 7] = [
     (5, 0x4078_33ce_e8ee_3b12, 0x6bff_11ce_7cad_78f2),
     (6, 0x4ff8_a688_ac7b_8b33, 0x4621_c0d0_3737_3b5a),
     (7, 0x1301_7400_f0c2_8044, 0x9fd4_68ab_21e1_86e9),
+    (8, 0xbc5f_76ce_f956_2308, 0x1d34_ac3c_580a_2c11),
+    (9, 0xd5af_964c_b503_d8a5, 0x27cb_1e14_d347_a838),
 ];
 const ON_MID: u64 = 0xd010_6fcc_4caa_fa2a;
 const ON_TRACE: u64 = 0x63e1_48f2_a4d8_d425;
 
-fn check(g: &Golden, rules: &[(u32, u64, u64); 7], mid: u64, trace: u64, label: &str) {
+fn check(g: &Golden, rules: &[(u32, u64, u64); 9], mid: u64, trace: u64, label: &str) {
     let table: String = g
         .rules
         .iter()

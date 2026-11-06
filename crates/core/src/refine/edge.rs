@@ -20,6 +20,14 @@ pub(crate) enum EdgeTail {
     /// previous stroke, about the visibility share of the peak) is the line itself, not a stretch that stands visibly
     /// off it.
     Line,
+    /// Version 9 (#351): the walk-back from the counted edge's foot goes over every sample that stands visibly off the
+    /// line, of EITHER sign, until it meets [`LINE_RUN_SAMPLES`] consecutive samples within the visibility band. A stroke
+    /// often opens with a small swing of the other sign (a positive bump before a negative kick edge, a dip and a rise
+    /// before a negative snare edge) that runs into the edge; versions 6 to 8 follow the edge's sign only and stop at the
+    /// zero crossing between the swing and the edge. The walk counts only when it meets the run within
+    /// [`DEPARTURE_MAX_S`] of the edge's first rising sample; otherwise version 8's walk-back decides (a slow wave or an
+    /// offset on a tom line is the line itself, as before).
+    Departure,
 }
 
 /// Version 6 (#293, #294): the rise window of the steep edge (seconds): the signal must rise by [`EDGE_RISE_DB`] under
@@ -66,6 +74,67 @@ pub(crate) const EDGE_NOISE_S: f64 = 0.002;
 /// or three samples inside a steep rise does not tilt the median. On the owner's hand-placed hits 8 to 12 samples give
 /// the same result; 12 is 0.25 ms at 48 kHz.
 pub(crate) const LINE_LEVEL_S: f64 = 0.000_25;
+/// Version 9 (#351): the line is reached when this many consecutive samples stand within the
+/// run's band. A single-sample zero crossing between a pre-swing and the edge is not the
+/// line, and neither is the short in-band stretch of a bleed's or a ripple's own zero crossing:
+/// the run has to be as long as those. Fitted on the labelled hits the coordinator staged for
+/// #351 (Sessions C and D of the 2026-11-06 labels and the owner's hand-placed Session E; even
+/// hits chose, odd hits checked): 6 and 8 lose the run inside the wider swings; 10 held on the
+/// check half.
+pub(crate) const LINE_RUN_SAMPLES: i64 = 10;
+/// Version 9 (#351): the longest walk-back to the line (seconds) from the edge's first rising
+/// sample. The swing before a stroke is short; a longer stretch off the line is the line itself
+/// (a slow wave or an offset on a tom line), and there version 8's walk-back decides, as before.
+/// Fitted on the same hits: 0.6 ms cut the walk short of the run behind a 13-sample swing; from
+/// 0.8 ms up the result held to the 1 ms tried, so the shorter bound is kept.
+pub(crate) const DEPARTURE_MAX_S: f64 = 0.000_8;
+/// Version 9 (#351): the line level for the departure walk is the median over this stretch
+/// (seconds) before the walk's foot, longer than [`LINE_LEVEL_S`]: the pre-swing occupies most
+/// of the short window before the foot and tilts its median onto the swing itself (on the
+/// labelled hits the short window put the line half a swing high and broke the run). Fitted on
+/// the same hits: 12 samples failed, 24 held and 48 gave the same held-out result; 24 is the
+/// smaller.
+pub(crate) const DEPARTURE_LEVEL_S: f64 = 0.000_5;
+/// Version 9 (#351): a sample of the departure walk stands off the line when `|x - line|`
+/// exceeds this share of the hit's peak (percent); the run of line samples is counted in the
+/// tighter [`DEPARTURE_RUN_PCT`] band instead. Fitted on the same hits: at the version 7
+/// [`VIS_TAIL_PCT`] of 2 the swing of a session whose line carries bleed at about that level
+/// never stood clear of it; 2.5 separated the two and 3 began to miss the small dips; 5 and
+/// over lost the swings whole.
+pub(crate) const DEPARTURE_VIS_PCT: f64 = 2.5;
+/// Version 9 (#351), the run's band: once the walk has departed, only samples within this share
+/// of the peak (the version 7 [`VIS_TAIL_PCT`]) count toward the run of line samples. The
+/// looser [`DEPARTURE_VIS_PCT`] decides the departure alone: on the labelled hits the stroke's
+/// first motion sometimes opens at 2 to 2.5 % of the peak, and in the loose band that sample
+/// reads as line — the run then ends one sample late, on the motion's own first sample.
+pub(crate) const DEPARTURE_RUN_PCT: f64 = VIS_TAIL_PCT;
+/// Version 9 (#351), the stands-out fit: the departure counts as the stroke's first motion when
+/// its largest excursion exceeds this multiple of the largest off-line excursion over
+/// [`EDGE_NOISE_S`] before the run of line samples. Bleed at 3 % of the peak before a 3 % swing
+/// does not stand out; the fitted swings stand 2 to 15 times over a line under 1 %. Fitted on
+/// the same hits: 1.5 moved hand-placed hits of Session E that stand, 2.5 began to refuse real
+/// swings; 2 held on the check half.
+pub(crate) const DEPARTURE_STANDS_OUT: f64 = 2.0;
+/// Version 9 (#351), the swing fit: the stretch between the run of line samples and the edge
+/// must contain at least one excursion this many samples wide (a swing, not a flicker). At
+/// 48 kHz 3 is the data's floor: the sinc lobes of #271 are 1 sample wide, every one of them,
+/// so the walk stops there and version 8 decides. The 1-sample dip before a Session D snare's
+/// wide swing passes because the swing after it is in the same stretch. Fitted on the same
+/// hits: 2 and 3 give the same held-out result; 3 is the data's floor.
+pub(crate) const SWING_MIN_SAMPLES: i64 = 3;
+/// Version 9 (#351), the bridge fit: between the run of line samples and the edge, at most
+/// this many consecutive samples may stand within the departure band. The stroke's first
+/// motion runs into the edge; a run that is separated from it by a longer stretch of
+/// sub-departure content is the line before an earlier flicker, not the line before the
+/// motion (the flicker itself does not run into the edge). Measured in the loose departure
+/// band, not the run's tighter one: the line's own level wobbles by about half a percent of
+/// the peak between coarse feet, and a flicker that sits at the run band's edge would
+/// otherwise flip with it. Fitted on the same hits: 3 refused the 1-to-2-sample dip before a
+/// Session D snare's wide swing, which the owner counts as the first motion; 5 kept a
+/// 2-sample flicker at 2.6 % of the peak that sits 5 samples before the swing (Session E
+/// snare 93 of the staged excerpts, where the tool's stretch holds 5 such samples); 4 held
+/// on the check half and moved no Session E hit.
+pub(crate) const DEPARTURE_BRIDGE_SAMPLES: i64 = 4;
 /// How far after the walk's foot the edge is looked for (seconds).
 pub(crate) const EDGE_SPAN_S: f64 = 0.005;
 
@@ -116,10 +185,10 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
             *d.select_nth_unstable_by(mid, f64::total_cmp).1
         }
     };
-    // version 8: the line's level, the median of the short stretch before the walk's foot (0 for the older tails: they
-    // read the distance from zero)
+    // the line's level, the median of the short stretch before the walk's foot (versions 8 and 9 measure from it; 0
+    // for the older tails: they read the distance from zero)
     let line = match tail_rule {
-        EdgeTail::Line => {
+        EdgeTail::Line | EdgeTail::Departure => {
             let from = (foot - samples(LINE_LEVEL_S, srf)).max(0);
             let mut v: Vec<f64> = (from..foot).map(at).collect();
             if v.is_empty() {
@@ -171,30 +240,135 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
             }
             k
         };
+        // version 7 (#321): the engineer puts the hit on the last sample of the line, judged by eye against the
+        // hit's own size, not against the line noise: back over the samples that stand visibly off the line with
+        // the edge's sign while they do not grow towards the line (a slow drift before a snare stroke is taken
+        // whole, the invisible first steps of a kick on a silent line are not). The walk counts only when it
+        // reaches the line within VIS_TAIL_MAX_S: a tom whose line is a slow wave on the edge's side never reaches
+        // it, and there version 6's tail stays (the walk would stop at its bound, an arbitrary place)
+        // Version 8 (#338) reads every level from the line, not from zero: a line at an offset of about the
+        // visibility share is the line, not a drift the walk goes down
+        let line_walk = |k: i64, k0: i64| {
+            let vis = pk * VIS_TAIL_PCT / 100.0;
+            let tol = pk * VIS_TAIL_TOL_PCT / 100.0;
+            let sgn = off(k0 + 1).signum();
+            let lo_v = (k0 - samples(VIS_TAIL_MAX_S, srf)).max(1);
+            let mut kv = k;
+            while kv > lo_v
+                && off(kv).abs() > vis
+                && off(kv).signum() == sgn
+                && off(kv - 1).abs() <= off(kv).abs() + tol
+            {
+                kv -= 1;
+            }
+            if off(kv).abs() <= vis { kv } else { noise_tail(k) }
+        };
         k = match tail_rule {
             EdgeTail::Noise => noise_tail(k),
-            // version 7 (#321): the engineer puts the hit on the last sample of the line, judged by eye against the
-            // hit's own size, not against the line noise: back over the samples that stand visibly off the line with
-            // the edge's sign while they do not grow towards the line (a slow drift before a snare stroke is taken
-            // whole, the invisible first steps of a kick on a silent line are not). The walk counts only when it
-            // reaches the line within VIS_TAIL_MAX_S: a tom whose line is a slow wave on the edge's side never reaches
-            // it, and there version 6's tail stays (the walk would stop at its bound, an arbitrary place)
-            // Version 8 (#338) reads every level from the line, not from zero: a line at an offset of about the
-            // visibility share is the line, not a drift the walk goes down
-            EdgeTail::Visible | EdgeTail::Line => {
-                let vis = pk * VIS_TAIL_PCT / 100.0;
-                let tol = pk * VIS_TAIL_TOL_PCT / 100.0;
-                let sgn = off(k0 + 1).signum();
-                let lo_v = (k0 - samples(VIS_TAIL_MAX_S, srf)).max(1);
-                let mut kv = k;
-                while kv > lo_v
-                    && off(kv).abs() > vis
-                    && off(kv).signum() == sgn
-                    && off(kv - 1).abs() <= off(kv).abs() + tol
-                {
-                    kv -= 1;
+            EdgeTail::Visible | EdgeTail::Line => line_walk(k, k0),
+            // version 9 (#351): back over every sample that stands visibly off the line, of either sign, until
+            // LINE_RUN_SAMPLES consecutive samples within the departure band: the last sample of that run is the
+            // last line sample before the stroke's first motion. A single-sample zero crossing between a pre-swing
+            // and the edge is not the line (the count resets on a sample off the line), and the walk counts only
+            // once it has passed a sample that stands visibly off the line: without a departure there is no first
+            // motion to walk before (the tail of a bleed or of band-limited pre-ringing is not the stroke's). The
+            // walk counts only when it meets the run within DEPARTURE_MAX_S of the edge's first rising sample;
+            // otherwise version 8's walk-back decides (a slow wave or an offset on a tom line is the line itself,
+            // as before). Two fits guard what the walk may take for the first motion: it must STAND OUT from the
+            // line before it (its largest excursion a multiple of the largest off-line excursion over
+            // EDGE_NOISE_S before the run) and be a SWING, not a flicker (the stretch between the run and the
+            // edge contains an excursion SWING_MIN_SAMPLES wide). The line level is measured over the longer
+            // DEPARTURE_LEVEL_S window: the pre-swing occupies most of the LINE_LEVEL_S stretch before the foot
+            // and tilts its median onto the swing itself
+            EdgeTail::Departure => {
+                let vis = pk * DEPARTURE_VIS_PCT / 100.0;
+                let vis_run = pk * DEPARTURE_RUN_PCT / 100.0;
+                let run = LINE_RUN_SAMPLES.max(1);
+                let lo_d = (k0 - samples(DEPARTURE_MAX_S, srf)).max(1);
+                let line9 = {
+                    let from = (foot - samples(DEPARTURE_LEVEL_S, srf)).max(0);
+                    let mut v: Vec<f64> = (from..foot).map(at).collect();
+                    if v.is_empty() {
+                        0.0
+                    } else {
+                        let mid = v.len() / 2;
+                        *v.select_nth_unstable_by(mid, f64::total_cmp).1
+                    }
+                };
+                let off9 = |i: i64| at(i) - line9;
+                let mut i = k;
+                let mut in_band = 0i64;
+                let mut departed = false;
+                let mut hit = None;
+                while i >= lo_d {
+                    // the departure is judged in the loose band; once departed, the run counts
+                    // only samples that stand within the tighter run's band (the stroke's first
+                    // motion can open just under the loose band)
+                    if off9(i).abs() > vis || (departed && off9(i).abs() > vis_run) {
+                        in_band = 0;
+                        departed = true;
+                    } else if departed {
+                        in_band += 1;
+                        if in_band >= run {
+                            hit = Some(i + run - 1);
+                            break;
+                        }
+                    }
+                    i -= 1;
                 }
-                if off(kv).abs() <= vis { kv } else { noise_tail(k) }
+                hit.filter(|&h| {
+                    // the first motion stands out from the line before it: its largest excursion over
+                    // the largest off-line excursion of the EDGE_NOISE_S before the run of line
+                    // samples, floored at the departure band itself — a ripple on a very quiet line
+                    // stands over the line's own excursions yet is no motion (#351 verify: the
+                    // ripples stood 2x over a line under 1 % and passed the unfloored test)
+                    let run_start = h - run + 1;
+                    let ref_lo = (run_start - samples(EDGE_NOISE_S, srf)).max(0);
+                    let reference = (ref_lo..run_start)
+                        .map(|m| off9(m).abs())
+                        .fold(0.0_f64, f64::max)
+                        .max(vis);
+                    let dep_max = (h..=k0).map(|m| off9(m).abs()).fold(0.0_f64, f64::max);
+                    dep_max > DEPARTURE_STANDS_OUT * reference
+                })
+                .filter(|&h| {
+                    // the first motion is a swing, not a flicker: the stretch between the run and the edge
+                    // contains at least one excursion SWING_MIN_SAMPLES wide
+                    let mut best = 0i64;
+                    let mut cur = 0i64;
+                    let mut prev = 0i64;
+                    for m in h + 1..=k0 {
+                        let s = off9(m).signum() as i64;
+                        if s != 0 && s == prev {
+                            cur += 1;
+                        } else {
+                            cur = 1;
+                            prev = s;
+                        }
+                        best = best.max(cur);
+                    }
+                    best >= SWING_MIN_SAMPLES
+                })
+                .filter(|&h| {
+                    // the first motion runs into the edge: between the run and the edge at
+                    // most DEPARTURE_BRIDGE_SAMPLES consecutive samples may stand within the
+                    // departure band. A longer stretch means the run sits before an earlier
+                    // flicker (one that does not run into the edge: sub-departure content
+                    // separates it from the swing): the walk has not reached the line before
+                    // the stroke's motion yet, and version 8's walk-back decides
+                    let mut cur = 0i64;
+                    let mut best = 0i64;
+                    for m in h + 1..=k0 {
+                        if off9(m).abs() <= vis {
+                            cur += 1;
+                            best = best.max(cur);
+                        } else {
+                            cur = 0;
+                        }
+                    }
+                    best <= DEPARTURE_BRIDGE_SAMPLES
+                })
+                .unwrap_or_else(|| line_walk(k, k0))
             }
         };
         let reached = f64::from(max_abs(x, k, (k + local).min(end + w)));
