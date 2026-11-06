@@ -22,9 +22,9 @@ use super::items::{
     RECENT_CLEAR_ID, RECENT_CLEAR_PAYLOAD, RECENT_ID, RECENT_PREFIX, RECOMPUTE, REDO, RENAME, RESET_MIX, REVIEW_NEXT,
     REVIEW_PREV, RULER_BEATS, RULER_MARKERS, RULER_METER, RULER_TEMPO, SAVE, SAVE_AS, SET_BAR1, SET_BAR1_AUDIO,
     SETTINGS, SHORTCUTS, SNAP, SOLO_TRACK, SPEC, STOP_RETURN, STOP_RETURN_MODE, SUSPEND_FOLLOW, TAB_ACTIVE, TAB_ALL,
-    TOGGLE_HIT_ACTIVE, TRACKS_REMOVE, UNDO, UNDO_HISTORY, VELOCITY_LANE, WINDOW_ID, ZOOM_5MS, ZOOM_5S, ZOOM_30S,
-    ZOOM_50MS, ZOOM_500MS, ZOOM_ADD, ZOOM_FULL, ZOOM_IN, ZOOM_ORGANIZE, ZOOM_OUT, ZOOM_OWN_ID, ZOOM_OWN_PREFIX,
-    ZOOM_PRESETS_ID, ZOOM_PROJECT, ZOOM_TOGGLE,
+    TOGGLE_HIT_ACTIVE, TRACKS_REMOVE, TRAINING_MODE, UNDO, UNDO_HISTORY, VELOCITY_LANE, WINDOW_ID, ZOOM_5MS, ZOOM_5S,
+    ZOOM_30S, ZOOM_50MS, ZOOM_500MS, ZOOM_ADD, ZOOM_FULL, ZOOM_IN, ZOOM_ORGANIZE, ZOOM_OUT, ZOOM_OWN_ID,
+    ZOOM_OWN_PREFIX, ZOOM_PRESETS_ID, ZOOM_PROJECT, ZOOM_TOGGLE,
 };
 use super::keymap::{current_preset, is_typing, live_accel};
 use super::lock;
@@ -215,6 +215,7 @@ fn view_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
         .item(&make_check(app, &GRID, true)?)
         .item(&make_check(app, &VELOCITY_LANE, false)?)
         .item(&make_check(app, &OTHER_MICS, false)?)
+        .item(&make_check(app, &TRAINING_MODE, false)?) // #343: View > Training Mode
         .separator()
         .item(&PredefinedMenuItem::fullscreen(app, None)?)
         .build()

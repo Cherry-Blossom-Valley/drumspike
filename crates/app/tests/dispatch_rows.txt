@@ -1234,6 +1234,18 @@ track_confidence null
 track_confidence wrong
   page: err 400 missing or wrong argument `sid` (string)
   agent: err 400 wrong argument `sid`: expected string
+training_status {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+training_status min
+  page: err 404 no such project
+  agent: err 404 no such project
+training_status null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+training_status wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
 track_layer_set {}
   page: err 400 missing or wrong argument `sid` (string)
   agent: err 400 missing argument `sid` (string)

@@ -484,6 +484,7 @@
     grid: () => tmToggleUi("grid"),
     velocity_lane: () => vlToggle(),   // P4-40f: View > Velocity Lane
     other_mics: () => mxToggle(),   // #157: View > Other Mics Under Hit
+    training_mode: () => toggleTraining(),   // #343: View > Training Mode
     suspend_follow: () => toggleSuspendFollow(),   // P4-wf10: Transport > Suspend Follow when Editing
     stop_return_mode: () => toggleStopReturnMode(),   // #436: Transport > Stop Returns to Start
     audition_tab: () => toggleAuditionTab(),   // #240: Transport > Audition on Tab
@@ -525,7 +526,7 @@
     return { current: S.sid || null, snap: !!S.snap, follow: S.followMode || "smooth", click: !!SETTINGS().click.enabled,
       infoLine: !!SETTINGS().ui.infoLine, counter: SETTINGS().ui.counter, inspector: !!S.inspector, trackHeight: S.trackHeight, nudgeValue: S.nudgeValue, ampZoom: S.ampZoom,
       overview: !!S.overviewOn, zoomOwn: (S.zoomOwn || []).map(p => p.name),   // #169: Show Overview; the own zoom presets (names, in order)
-      tempoRuler: tmShown("tempo"), meterRuler: tmShown("meter"), beatsRuler: tmShown("beats"), markersRuler: tmShown("markers"), grid: tmShown("grid"), velocityLane: VL.on, otherMics: MX.on, keyPreset: DSKeys.preset, projectName: S.sid ? S.name : "", dirty: !!(S.sid && S.dirty),   // P4-26: the window title; P4-22 markersRuler; P4-40f: velocityLane
+      tempoRuler: tmShown("tempo"), meterRuler: tmShown("meter"), beatsRuler: tmShown("beats"), markersRuler: tmShown("markers"), grid: tmShown("grid"), velocityLane: VL.on, otherMics: MX.on, trainingMode: trainingOn(), keyPreset: DSKeys.preset, projectName: S.sid ? S.name : "", dirty: !!(S.sid && S.dirty),   // P4-26: the window title; P4-22 markersRuler; P4-40f: velocityLane
       suspendFollow: !!SETTINGS().ui.suspendFollowOnEdit,   // P4-wf10: Transport > Suspend Follow when Editing
       tabMode: SETTINGS().ui.tabMode === "all" ? "all" : "active",   // #175: View > Tab Moves To
       stopReturnMode: !!SETTINGS().ui.stopReturnToStart,   // #436: Transport > Stop Returns to Start

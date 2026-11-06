@@ -63,6 +63,7 @@ pub mod tempo;
 pub mod tom_bleed;
 pub mod trace;
 pub mod tracks;
+pub mod training;
 pub mod transport;
 
 use std::path::Path;
@@ -164,6 +165,8 @@ pub(crate) struct Inner {
     pub(crate) layers: layer::LayerState,
     /// P4-5: the name this process puts in the lock files (`app`, `cli`, `mcp`); `None`: no project lock.
     pub(crate) lock_client: std::sync::Mutex<Option<String>>,
+    /// #343: the Training Mode state per open project (`training.rs`).
+    pub(crate) training: training::State,
 }
 
 /// The state of the app: cheap to clone (one `Arc`), shared by every command and by the
@@ -188,6 +191,7 @@ impl Service {
             transport: transport::TransportHost::new(),
             layers: layer::LayerState::default(),
             lock_client: std::sync::Mutex::new(None),
+            training: training::State::default(),
         });
         autosave::spawn(&inner);
         Service { inner }

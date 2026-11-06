@@ -47,7 +47,7 @@ fn velocity(op: &Map<String, Value>, default: Option<i64>) -> Result<i64, AppErr
 }
 
 /// The sample grid: `t` to the nearest sample of a track with the rate `sr`.
-fn on_grid(t: f64, sr: Option<i64>) -> f64 {
+pub(crate) fn on_grid(t: f64, sr: Option<i64>) -> f64 {
     match sr {
         Some(sr) if sr > 0 => (t * sr as f64).round() / sr as f64,
         _ => t,
@@ -350,7 +350,25 @@ impl Service {
     /// for an unknown `sid` or track; a 409 when the project is open read-only, the track is a follower, or another
     /// write or a running analysis holds the project; the decode error when a snap needs audio that cannot be read.
     pub fn events_edit(&self, sid: &str, name: &str, ops: &[Value]) -> Result<Value, AppError> {
-        self.events_edit_as(sid, name, ops, true)
+        self.events_edit_as(sid, name, ops, true, false)
+    }
+
+    /// [`Service::events_edit`] with the Training Mode choice (#343): `training: true` appends one record per added,
+    /// deleted and moved hit to the project's training log after the edit applied ([`crate::training`]). The answer
+    /// gets `training: {records}` (or `training_error` when the log failed; the edit stands). `false` is
+    /// [`Service::events_edit`] byte for byte.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::events_edit`].
+    pub fn events_edit_training(
+        &self,
+        sid: &str,
+        name: &str,
+        ops: &[Value],
+        training: bool,
+    ) -> Result<Value, AppError> {
+        self.events_edit_as(sid, name, ops, true, training)
     }
 
     /// [`Service::events_edit`]; `by_hand: false` for an internal edit (P4-38e: the Learn sweep), whose deletions do
@@ -361,6 +379,7 @@ impl Service {
         name: &str,
         ops: &[Value],
         by_hand: bool,
+        training: bool,
     ) -> Result<Value, AppError> {
         if ops.is_empty() {
             return Err(AppError::bad("`ops` must not be empty"));
@@ -379,7 +398,7 @@ impl Service {
         };
         let current = self.track_events(sid, name)?;
         let (ops, snaps) = self.snap_ops(sid, name, ops, &current)?;
-        let (events, c) = apply_ops(current, &ops, sr, end)?;
+        let (events, c) = apply_ops(current.clone(), &ops, sr, end)?;
         let events = Value::Array(events);
         // P4-38e: a hand edit notes the Learn hits it deleted (`learn.dropped`); the Learn sweep does not
         let mut out = if by_hand {
@@ -395,6 +414,10 @@ impl Service {
         out["toggled"] = c[5].into();
         if !snaps.is_empty() {
             out["snaps"] = Value::Array(snaps);
+        }
+        if training {
+            let examples = self.training_examples(sid, name, &current, &ops, sr);
+            Self::training_note(&mut out, self.training_log(sid, name, &examples));
         }
         Ok(out)
     }
@@ -647,7 +670,8 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
                 .get("ops")
                 .and_then(Value::as_array)
                 .ok_or_else(|| AppError::bad("missing or wrong argument `ops` (list)"))?;
-            svc.events_edit(s("sid")?, s("name")?, ops)
+            let training = args.get("training").and_then(Value::as_bool).unwrap_or(false);
+            svc.events_edit_training(s("sid")?, s("name")?, ops, training)
         } else {
             let n = args
                 .get("shift_samples")

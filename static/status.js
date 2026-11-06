@@ -37,6 +37,42 @@ function updateStatus() {   // P3-14b: the status bar is short; the info line ha
   lnInspector();   // P4-6a: the Learn row (buttons follow the selection)
   mxRefresh();   // #157: the other mics of the selected hit
   selShellSync();   // #158 (rank 9): the selection-dependent menu items follow the selection
+  trainingSync();   // #343
+}
+
+/* #343: View > Training Mode. A page setting (SETTINGS().ui.training, off by default, saved with saveSettings): with it
+   on, every hit edit and Learn mark request carries training: true and the service logs one record per hit affected.
+   The status bar shows "training: N records" while the mode is on (N from training_status). */
+const TRN = { sid: null, records: 0 };
+function trainingOn() { return !!SETTINGS().ui.training; }
+function drawTraining() {
+  const el = $("#stTraining"), on = trainingOn();
+  el.classList.toggle("hidden", !on);
+  if (on) el.textContent = `training: ${TRN.records} records`;
+}
+function trainingRefresh() {   // the service's count for the open project (it also learns that the mode is on)
+  const sid = S.sid;
+  if (!sid || !trainingOn()) { drawTraining(); return Promise.resolve(); }
+  return B.trainingStatus(sid, true).then(r => { if (sid === S.sid) { TRN.sid = sid; TRN.records = r.records; drawTraining(); } },
+    e => setMsg(`training: ${errText(e)}`, "error"));
+}
+function trainingSync() {   // after a project switch: ask for its count once
+  drawTraining();
+  if (trainingOn() && S.sid && TRN.sid !== S.sid) { TRN.sid = S.sid; trainingRefresh(); }
+}
+function trainingNote(r) {   // the answer of a call that asked for a log
+  if (r && r.training_error) setMsg(`training log failed: ${r.training_error}`, "error");
+  trainingRefresh();
+}
+function setTraining(on) {
+  SETTINGS().ui.training = !!on; saveSettings();
+  if (S.sid) B.trainingStatus(S.sid, !!on).catch(() => {});   // the service reports the state (agents read it)
+  TRN.sid = null; trainingSync();
+  DSShell.sync();
+}
+function toggleTraining() {
+  setTraining(!trainingOn());
+  setMsg(`training mode: ${trainingOn() ? "on - every hit edit and Learn mark is logged with its audio" : "off"}`);
 }
 
 /* ---------------- info line (P3-14b, Cubase model) ----------------

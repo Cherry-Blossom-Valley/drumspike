@@ -1285,6 +1285,11 @@ pub static REGISTRY: &[CommandSpec] = &[
                 Ty::Objs,
                 "[{op: add, t, v?, added?: false, orig?, snap?: true} | {op: delete, index} | {op: move, index, t} | {op: velocity, index, v} | {op: restore, index}]; index counts in events_get before the call; t within the track (0 to its duration); restore takes the tom bleed mark off a hit; snap puts an added hit on the attack within 10 ms of t with the velocity of the audio (the answer's snaps list says where); move, velocity and restore may carry was {..} (the field presence the hit had before the edit: bool flags, orig number or null) for the page's byte-identical undo",
             ),
+            opt(
+                "training",
+                Ty::Bool,
+                "Training Mode (#343): true appends one record per added, deleted and moved hit to the project's training log (the answer gets training: {records})",
+            ),
         ],
         r#"{"type":"object","required":["saved","added","deleted","moved","velocity","restored"]}"#,
         Doc,
@@ -1323,6 +1328,11 @@ pub static REGISTRY: &[CommandSpec] = &[
             opt("t0", Ty::Num, "Range start in seconds (with t1)"),
             opt("t1", Ty::Num, "Range end in seconds"),
             opt("hit", Ty::Num, "The time of one hit or candidate, instead of a range"),
+            opt(
+                "training",
+                Ty::Bool,
+                "Training Mode (#343): true appends one record per example to the project's training log",
+            ),
         ],
         r#"{"type":"object","required":["marked","learn","track","routed","counts"]}"#,
         Doc,
@@ -1559,6 +1569,23 @@ pub static REGISTRY: &[CommandSpec] = &[
         "The confidence of each hit (0..1), doubtful under 0.5, with the reasons: [{c, doubt, why}] in the order of the hits",
         &[SID, NAME, EVENTS_OPT],
         r#"{"type":"object","required":["confidence","source","doubt_below"]}"#,
+        Read,
+        Agent,
+        Quick,
+    ),
+    // ---- #343: Training Mode
+    cmd(
+        "training_status",
+        "The Training Mode state of the project: {on, records, path}; on (bool) sets the state the service reports",
+        &[
+            SID,
+            opt(
+                "on",
+                Ty::Bool,
+                "Set the state (the page sends it when the mode changes)",
+            ),
+        ],
+        r#"{"type":"object","required":["on","records","path"]}"#,
         Read,
         Agent,
         Quick,

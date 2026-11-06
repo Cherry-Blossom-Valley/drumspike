@@ -21,8 +21,22 @@ pub async fn events_edit(
     sid: String,
     name: String,
     ops: Vec<Value>,
+    training: Option<bool>,
 ) -> Result<Value, AppError> {
-    blocking(&svc, "events_edit", move |s| s.events_edit(&sid, &name, &ops)).await
+    blocking(&svc, "events_edit", move |s| {
+        s.events_edit_training(&sid, &name, &ops, training.unwrap_or(false))
+    })
+    .await
+}
+
+/// The Training Mode state of the project `sid` (`{on, records, path}`); `on` sets the state first.
+///
+/// # Errors
+///
+/// 404 when the project is unknown. 500 when the app has no home folder.
+#[tauri::command]
+pub async fn training_status(svc: State<'_, Service>, sid: String, on: Option<bool>) -> Result<Value, AppError> {
+    blocking(&svc, "training_status", move |s| s.training_status(&sid, on)).await
 }
 
 /// Set the Hitpoint shift of the track `name` and move its hits by the difference.

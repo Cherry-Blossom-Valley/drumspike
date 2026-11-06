@@ -780,6 +780,25 @@ impl Service {
         range: Option<(f64, f64)>,
         hit: Option<f64>,
     ) -> Result<Value, AppError> {
+        self.track_learn_mark_training(sid, name, kind, range, hit, false)
+    }
+
+    /// [`Service::track_learn_mark`] with the Training Mode choice (#343): `training: true` appends one record per
+    /// example (`learn_this` or `learn_not`, [`crate::training`]) and adds `training: {records}` to the answer; `false`
+    /// is [`Service::track_learn_mark`] byte for byte.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::track_learn_mark`].
+    pub fn track_learn_mark_training(
+        &self,
+        sid: &str,
+        name: &str,
+        kind: &str,
+        range: Option<(f64, f64)>,
+        hit: Option<f64>,
+        training: bool,
+    ) -> Result<Value, AppError> {
         kind_ok(kind)?;
         let (target, routed) = self.learn_target(sid, name)?;
         let (t0, t1, hit) = match (range, hit) {
@@ -925,6 +944,10 @@ impl Service {
         });
         if let Some(k) = k_rise {
             out["k_rise"] = k;
+        }
+        if training && r.id.is_some() {
+            let examples = self.training_learn_examples(sid, &target, kind, &resolved.at, &events, shift_s);
+            Self::training_note(&mut out, self.training_log(sid, &target, &examples));
         }
         if r.id.is_some() {
             self.learn_refilter(sid, &target, was_on, &mut out);
@@ -1122,7 +1145,7 @@ impl Service {
         let n = ops.len();
         if n > 0 {
             // P4-38e: not a hand delete, so the swept hits do not go in `learn.dropped`
-            self.events_edit_as(sid, name, &ops, false)?;
+            self.events_edit_as(sid, name, &ops, false, false)?;
         }
         Ok(n)
     }
@@ -1290,7 +1313,15 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
                     (None, None) => None,
                     _ => return Err(AppError::bad("give both `t0` and `t1`")),
                 };
-                svc.track_learn_mark(sid, name, arg_str(args, "kind")?, range, opt_f64(args, "hit")?)
+                let training = args.get("training").and_then(Value::as_bool).unwrap_or(false);
+                svc.track_learn_mark_training(
+                    sid,
+                    name,
+                    arg_str(args, "kind")?,
+                    range,
+                    opt_f64(args, "hit")?,
+                    training,
+                )
             }
             "track_learn_remove" => svc.track_learn_remove(sid, name, arg_str(args, "id")?, opt_f64(args, "at")?),
             "track_learn_forget_at" => {

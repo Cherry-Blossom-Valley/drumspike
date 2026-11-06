@@ -247,7 +247,9 @@ function learnMark(kind) {   // Hits > Learn This (K), Forget This (Shift+K)
       if (!e) { setMsg(`${name}: the hit is not there any more`); return; }
       a = { hit: e.t };
     }
-    const r = await B.learnMark(S.sid, name, kind, a.t0, a.t1, a.hit);
+    const training = trainingOn();   // #343
+    const r = await B.learnMark(S.sid, name, kind, a.t0, a.t1, a.hit, training);
+    if (training) trainingNote(r);
     if (!r.marked) { setMsg(r.reason === "already marked" ? `${name}: ${hit === null ? "those hits are" : "that hit is"} already ${kind === "this" ? "learned" : "marked not"}` : `${name}: no hit in the selection`); return; }
     // P4-6c (controller 2026-10-13): the first Shift+K of a track whose filter is off turns the filter on in the
     // service (r.filter_on), with the threshold following the examples; K alone never does. One undo step
