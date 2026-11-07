@@ -147,6 +147,18 @@
       <div class="phint">A plug-in is one folder per plug-in in
       ~/Library/Application Support/Drum Spike/Detectors/. The licence text of every plug-in is shown here before its first use in a project.</div>
     </div>
+    <div class="sbSetGroup" id="setAgentSkill">
+      <div class="ptitle">Agent fine-tune skill</div>
+      <div class="prow">
+        <label id="setSkillStatus">Checking ...</label>
+        <button type="button" id="setSkillInstall" class="btn mini">Install</button>
+      </div>
+      <div class="phint">Lets an AI agent such as Claude Code fine-tune the hits of one song for you, hit by hit. Install copies the skill to ~/.claude/skills/drumspike-finetune. Then run this line once in a terminal:</div>
+      <div class="prow">
+        <code id="setSkillCmd" class="skillCmd"></code>
+        <button type="button" id="setSkillCopy" class="btn mini">Copy</button>
+      </div>
+    </div>
     <div class="modal-actions"><button id="settingsDone" class="btn primary">Done</button></div>
   </div>
 </div>
@@ -443,7 +455,7 @@
 <script src="/transport.js?v=1"></script>
 <script src="/render.js?v=1"></script>
 <script src="/session.js?v=1"></script>
-<script src="/backend.js?v=57"></script>
+<script src="/backend.js?v=58"></script>
 <script src="/lanes-gl.js?v=52"></script>
 <script src="/keymap.js?v=6"></script>
 <script src="/help.js?v=1"></script>   <!-- #255: the manual (docs/guide prebuilt in static/help) and the Shortcuts section -->
@@ -465,6 +477,7 @@
 <script src="/analysis.js?v=1"></script>
 <script src="/plugins.js?v=1"></script>
 <script src="/status.js?v=1"></script>
+<script src="/agent.js?v=1"></script>   <!-- #371: window.DSAgent, the helpers of an agent's hit-by-hit pass -->
 <script src="/inspector.js?v=1"></script>
 <script src="/tracks.js?v=1"></script>
 <script src="/app.js?v=90"></script>

@@ -255,7 +255,9 @@ def bridge(tmp_path_factory):
                DRUMSPIKE_FLAM_RULE="0",   # P4-13 stage B: nor the flam rule
                DRUMSPIKE_KICK_RESCUE="0",   # P4-10 stage 5: nor the kick rescue
                DRUMSPIKE_SNARE_RESCUE="0",   # P4-10 stage 7: nor the snare rescue
-               DRUMSPIKE_DETECTORS_DIR=str(home / "detectors"))  # #387: the tests install their plugins here
+               DRUMSPIKE_DETECTORS_DIR=str(home / "detectors"),  # #387: the tests install their plugins here
+               DRUMSPIKE_SKILL_SOURCE=str(ROOT / "skills" / "drumspike-finetune"),   # #371: the bundle's skill folder, and where the
+               DRUMSPIKE_SKILL_TARGET=str(home / "agent-skill" / "drumspike-finetune"))   # Install button writes it (not ~/.claude)
     proc = start_bridge(exe, env)
     line = proc.stdout.readline()
     m = re.search(r"http://127\.0\.0\.1:\d+", line)

@@ -54,6 +54,9 @@ Drum Spike is free and open source (Apache-2.0).
 - **Automate it.** Every app operation is also a command for a script or an AI agent
   ([agent API](docs/agent-api.md)), and detectors are plug-ins
   ([guide](docs/guide/03b-detector-plugins.md)).
+- **Let an agent fine-tune a song.** One button in Settings installs a skill; then an AI agent
+  such as Claude Code checks the hits of a song one by one at sample zoom, moves the clear ones,
+  and leaves the doubtful ones for you ([guide](docs/guide/15-agent-finetune.md)).
 
 ## Download and install
 

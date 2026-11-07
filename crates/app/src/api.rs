@@ -1604,6 +1604,33 @@ pub static REGISTRY: &[CommandSpec] = &[
         Agent,
         Quick,
     ),
+    // ---- #371: the agent fine-tune skill, bundled and installed by the app
+    cmd(
+        "agent_skill_install",
+        "Install the bundled drumspike-finetune skill for an agent, replacing an older copy: {installed, files, version}",
+        &[opt(
+            "target",
+            Ty::Str,
+            "Skill folder to write (another runtime or path); default ~/.claude/skills/drumspike-finetune",
+        )],
+        r#"{"type":"object","required":["installed","files","version"]}"#,
+        App,
+        Agent,
+        Quick,
+    ),
+    cmd(
+        "agent_skill_status",
+        "Whether the drumspike-finetune skill is installed, its version, the MCP line: {installed, path, version, mcp_command, ...}",
+        &[opt(
+            "target",
+            Ty::Str,
+            "Skill folder to look at; default ~/.claude/skills/drumspike-finetune",
+        )],
+        r#"{"type":"object","required":["installed","path","version","bundled_version","current","binary","mcp_command"]}"#,
+        App,
+        Agent,
+        Quick,
+    ),
     // ---- P4-7a and P4-7b: the one-shot layer of a track
     cmd(
         "track_layer_set",

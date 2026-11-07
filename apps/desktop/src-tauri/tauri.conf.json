@@ -50,7 +50,8 @@
     "resources": {
       "../../../LICENSE": "LICENSE",
       "../../../NOTICE": "NOTICE",
-      "../THIRD_PARTY.md": "THIRD_PARTY.md"
+      "../THIRD_PARTY.md": "THIRD_PARTY.md",
+      "../../../skills/drumspike-finetune": "skills/drumspike-finetune"
     },
     "macOS": {
       "files": {"Resources/document.icns": "icons/document.icns"},

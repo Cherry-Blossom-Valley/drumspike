@@ -13,6 +13,7 @@ use tauri::ipc::{Channel, Response};
 use tauri::{Emitter, Manager, State};
 
 pub mod about;
+pub mod agent_skill;
 pub mod edit;
 pub mod histogram;
 pub mod import;
@@ -852,6 +853,8 @@ macro_rules! command_handler {
             markers::markers_set,
             rowheights::row_heights_get,
             rowheights::row_heights_set,
+            agent_skill::agent_skill_install,
+            agent_skill::agent_skill_status,
             histogram::track_confidence,
             layer::track_layer_set,
             layer::track_layer_get,

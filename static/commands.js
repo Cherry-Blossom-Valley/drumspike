@@ -515,7 +515,7 @@ function showModal(id) {   // Settings and Keyboard Shortcuts: Escape or the but
   document.removeEventListener("keydown", m._esc, true);
   m._esc = esc; document.addEventListener("keydown", esc, true);
 }
-function openSettings() { showModal("#settingsModal"); refreshAudioOutput(); setPluginsFill(); }
+function openSettings() { showModal("#settingsModal"); refreshAudioOutput(); setPluginsFill(); agentSkillFill(); }
 
 function openShortcuts() {
   DSHelp.open("shortcuts");   // #255: the Shortcuts section of the manual (static/keymap.js, one source)
