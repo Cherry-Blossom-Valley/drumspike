@@ -255,8 +255,15 @@ edit stands). Without the parameter nothing is written and the answer is unchang
 #354: `{op: confirm, index}` (Training Mode only, else refused) logs the hit as reviewed, right where it is:
 the document, its `dirty` flag and the undo history stay as they were, the record says `from` = `to` = the stored
 position and carries one audio window.
+#363: a `move`, `add`, `delete` or `confirm` record carries `placement: {edge, line_noise, line_slope,
+onset_spread}`, the measures of the review queue (`placement_diag`) at its `from` (its `to` for an add), computed on
+demand and never stored in the project: `edge` says whether a steep edge counts, `line_noise` and `line_slope` are
+shares of the hit's peak (the slope per ms), `onset_spread` is the hit's `timing_confidence` in samples or null.
+A record is exact when `edge` is true, `line_noise` is at most 0.01 and `onset_spread` is under 4 samples or null;
+else it is approximate. A record without `placement` (an older log, a Learn mark) is unknown.
 `training_status {sid, on?}` answers `{on, records, path}`. `tools/training_export.py <jsonl...>` prints the
-aggregates per role and op and writes the truth list `[{track, role, from, to, op}]`.
+aggregates per role and op, with the count of exact, approximate and unknown records, and writes the truth list
+`[{track, role, from, to, op, precision, exact, edge, line_noise, line_slope, onset_spread}]`.
 
 Export: `export_markers_set {sid, on}` keeps the Export dialog's "Markers in MIDI" checkbox in
 the document field `export_markers` (absent is off); `export_existing` answers it as `export_markers`.
