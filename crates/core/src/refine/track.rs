@@ -59,7 +59,7 @@ pub enum RefineRule {
     /// noise, not by a fixed share of the peak. The visibility band, the run's band and the run length
     /// scale with the spread of the line samples before the stroke (the measure
     /// [`placement_diag`](super::edge::placement_diag) reports as `line_noise`), with the fixed shares only
-    /// as a floor, and the departure walk is anchored at the edge's first rising sample
+    /// as a floor, and version 9's own departure as the floor of the answer
     /// ([`EdgeTail::NoiseDeparture`]): a gentle opening swing of either sign counts on a noisy line, where
     /// version 9's fixed band refuses the whole departure, and a shorter run on a noisier line is the rule,
     /// not a tuning. A line that is a slow wave or an offset stays the line, as before.
