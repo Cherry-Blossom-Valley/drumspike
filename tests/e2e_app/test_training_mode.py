@@ -73,8 +73,10 @@ def test_training_mode_logs_a_move_shows_the_count_and_stops_when_turned_off(app
                        capture_output=True, text=True, check=True)
     assert "kick move:" in p.stdout and "to-from (samples):" in p.stdout
     truth = json.loads(out.read_text())
-    assert {"track": "Kick In", "role": "kick", "from": IDX[1], "to": 40000, "op": "move",
-            "precision": "ms"} in truth   # the default zoom: a sample far below a pixel
+    mine = [t for t in truth if (t["track"], t["role"], t["from"], t["to"], t["op"]) == ("Kick In", "kick", IDX[1], 40000, "move")]
+    assert len(mine) == 1 and mine[0]["precision"] == "ms"   # the default zoom: a sample far below a pixel
+    # #363: the entry carries the line measures and the exact flag of its record
+    assert isinstance(mine[0]["edge"], bool) and isinstance(mine[0]["line_noise"], float) and mine[0]["exact"] in (True, False)
     # off again: the status text goes, a move writes nothing
     menu(app, "training_mode")
     assert state(app)["trainingMode"] is False
