@@ -55,11 +55,20 @@ pub enum RefineRule {
     /// steep edge (a positive bump before a negative kick edge, a dip and a rise before a negative snare edge) that
     /// versions 6 to 8 do not follow past the zero crossing between the swing and the edge.
     Departure,
+    /// Version 10 (#362): [`RefineRule::Departure`] with one principle: the line is measured by its own
+    /// noise, not by a fixed share of the peak. The visibility band, the run's band and the run length
+    /// scale with the spread of the line samples before the stroke (the measure
+    /// [`placement_diag`](super::edge::placement_diag) reports as `line_noise`), with the fixed shares only
+    /// as a floor, and version 9's own departure as the floor of the answer
+    /// ([`EdgeTail::NoiseDeparture`]): a gentle opening swing of either sign counts on a noisy line, where
+    /// version 9's fixed band refuses the whole departure, and a shorter run on a noisier line is the rule,
+    /// not a tuning. A line that is a slow wave or an offset stays the line, as before.
+    NoiseDeparture,
 }
 
 impl RefineRule {
     /// The rule a new analysis runs.
-    pub const CURRENT: RefineRule = RefineRule::Departure;
+    pub const CURRENT: RefineRule = RefineRule::NoiseDeparture;
 
     /// The version number the document stores.
     #[must_use]
@@ -74,6 +83,7 @@ impl RefineRule {
             RefineRule::Visible => 7,
             RefineRule::Line => 8,
             RefineRule::Departure => 9,
+            RefineRule::NoiseDeparture => 10,
         }
     }
 
@@ -90,6 +100,7 @@ impl RefineRule {
             7 => Some(RefineRule::Visible),
             8 => Some(RefineRule::Line),
             9 => Some(RefineRule::Departure),
+            10 => Some(RefineRule::NoiseDeparture),
             _ => None,
         }
     }
@@ -195,6 +206,7 @@ pub fn refine_rule_peak(
         RefineRule::Visible => back(None, Some(EdgeTail::Visible), None),
         RefineRule::Line => back(None, Some(EdgeTail::Line), Some(FootTune::V5)),
         RefineRule::Departure => back(None, Some(EdgeTail::Departure), Some(FootTune::V5)),
+        RefineRule::NoiseDeparture => back(None, Some(EdgeTail::NoiseDeparture), Some(FootTune::V5)),
     }
 }
 

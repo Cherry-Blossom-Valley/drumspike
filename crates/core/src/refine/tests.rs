@@ -234,9 +234,10 @@ fn rule_versions_and_the_reference_rule() {
             RefineRule::Edge.version(),
             RefineRule::Visible.version(),
             RefineRule::Line.version(),
-            RefineRule::Departure.version()
+            RefineRule::Departure.version(),
+            RefineRule::NoiseDeparture.version()
         ),
-        (1, 2, 3, 4, 5, 6, 7, 8, 9)
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
     );
     for r in [
         RefineRule::Reference,
@@ -248,12 +249,13 @@ fn rule_versions_and_the_reference_rule() {
         RefineRule::Visible,
         RefineRule::Line,
         RefineRule::Departure,
+        RefineRule::NoiseDeparture,
     ] {
         assert_eq!(RefineRule::from_version(u64::from(r.version())), Some(r));
     }
     assert_eq!(RefineRule::from_version(0), None);
-    assert_eq!(RefineRule::from_version(10), None);
-    assert_eq!(RefineRule::CURRENT, RefineRule::Departure);
+    assert_eq!(RefineRule::from_version(11), None);
+    assert_eq!(RefineRule::CURRENT, RefineRule::NoiseDeparture);
     // the reference rule is refine_sr, step Kept, on every kind of window
     let x = noisy(&track(&[(0.5, -3.0)], 1.5), -70.0);
     for t0 in [0.486, 0.497, 0.503, 0.65, 2.0] {
@@ -1613,6 +1615,117 @@ fn version_9_does_not_take_a_flicker_that_is_separated_from_the_edge_as_the_firs
         "version 8 decides"
     );
     assert!(v9 > 1_203, "not before the flicker: {v9}");
+}
+
+// ---------------------------------------------------------------- #362: placement version 10
+
+/// A line of `n` samples at `line` plus uniform noise of `amp` (one seeded xorshift draw per
+/// sample), like [`line_hit`]'s.
+fn noisy_line(n: usize, line: f64, amp: f64) -> Vec<f32> {
+    let mut x = vec![0.0f32; n];
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    for v in &mut x[..] {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        *v = (line + amp * ((seed as f64 / u64::MAX as f64) * 2.0 - 1.0)) as f32;
+    }
+    x
+}
+
+#[test]
+fn version_10_counts_a_bump_leading_into_the_edge_on_a_one_percent_noise_line() {
+    // (a) #362: a snare-like stroke on a line whose own noise is 1 % of the peak: a positive bump of
+    // 15 % of the peak over 12 samples leads into the steep negative edge. Version 10 puts the hit on
+    // the last line sample before the bump; version 9 is unchanged from its current value (its fixed
+    // band still counts this large bump)
+    let srf = f64::from(SR);
+    let mut x = noisy_line(2_000, 0.0, 0.017_3);
+    for (k, v) in [0.04f32, 0.09, 0.12, 0.14, 0.15, 0.15, 0.14, 0.12, 0.09, 0.05, 0.02, 0.0]
+        .iter()
+        .enumerate()
+    {
+        x[1_200 + k] = *v;
+    }
+    for (k, v) in [-0.3f32, -0.6, -1.0].iter().enumerate() {
+        x[1_212 + k] = *v;
+    }
+    for v in &mut x[1_215..1_400] {
+        *v = -1.0;
+    }
+    let v9 = edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Departure);
+    let v10 = edge_foot(&x, 1_000, 1_400, srf, EdgeTail::NoiseDeparture);
+    assert_eq!(v10, 1_199, "version 10: the last line sample before the bump");
+    assert_eq!(v9, 1_199, "version 9: unchanged from its current value");
+}
+
+#[test]
+fn version_10_counts_a_small_bump_and_a_slow_rise_on_a_quiet_line() {
+    // (b) #362: a kick-like stroke on a quiet line (0.3 % noise): a bump of 3 % of the peak, then a
+    // slow rise over 20 samples, then the steep edge. Version 10 puts the hit on the last line sample
+    // before the bump; version 9 keeps its current value (its 10-sample run in the tighter band)
+    let srf = f64::from(SR);
+    let mut x = noisy_line(2_000, 0.0, 0.005_2);
+    for (k, v) in [0.02f32, 0.025, 0.03, 0.03, 0.025, 0.02].iter().enumerate() {
+        x[1_200 + k] = *v;
+    }
+    for k in 0..20usize {
+        x[1_206 + k] = 0.02 + 0.005 * k as f32;
+    }
+    for (k, v) in [-0.3f32, -0.6, -1.0].iter().enumerate() {
+        x[1_226 + k] = *v;
+    }
+    for v in &mut x[1_229..1_400] {
+        *v = -1.0;
+    }
+    let v10 = edge_foot(&x, 1_000, 1_400, srf, EdgeTail::NoiseDeparture);
+    assert_eq!(v10, 1_199, "version 10: the last line sample before the bump");
+}
+
+#[test]
+fn version_10_equals_version_9_when_a_flicker_is_separated_from_the_edge() {
+    // (c) #362: a 2 % flicker separated from the edge by 12 line samples is not the start: on a
+    // quiet line the flicker stands under the visibility floor (2.5 % of the peak), so the
+    // noise-scaled band never sees it and version 10 decides as version 9 does
+    let srf = f64::from(SR);
+    let mut x = noisy_line(2_000, 0.0, 0.005_2);
+    x[1_200] = -0.02;
+    x[1_201] = -0.015;
+    for (k, v) in [-0.3f32, -0.6, -1.0].iter().enumerate() {
+        x[1_214 + k] = *v;
+    }
+    for v in &mut x[1_217..1_400] {
+        *v = -1.0;
+    }
+    let v9 = edge_foot(&x, 1_000, 1_400, srf, EdgeTail::Departure);
+    let v10 = edge_foot(&x, 1_000, 1_400, srf, EdgeTail::NoiseDeparture);
+    assert_eq!(v10, v9, "the flicker is not the start");
+    assert!(v9 > 1_201, "not on the flicker: {v9}");
+}
+
+#[test]
+fn version_10_keeps_the_slow_wave_line_of_a_tom() {
+    // (d) #362: version 9's tom test under version 10: a line that is a slow wave of 10 % of the
+    // peak at 1 kHz is the line itself, so version 10 decides as version 8 does, at every phase
+    let srf = f64::from(SR);
+    for shift in [0usize, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44] {
+        let mut x = vec![0.0f32; 4_000];
+        for (i, v) in x.iter_mut().enumerate() {
+            *v = (0.1 * (2.0 * std::f64::consts::PI * 1_000.0 * i as f64 / srf).sin()) as f32;
+        }
+        let on = 2_400 + shift;
+        for (k, v) in [-0.4f32, -0.8, -1.0].iter().enumerate() {
+            x[on + k] = *v;
+        }
+        for v in &mut x[on + 3..3_000] {
+            *v = -1.0;
+        }
+        assert_eq!(
+            edge_foot(&x, 2_000, 2_600, srf, EdgeTail::NoiseDeparture),
+            edge_foot(&x, 2_000, 2_600, srf, EdgeTail::Line),
+            "the wave is the line itself, phase shift {shift}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------- #344: the placement evidence

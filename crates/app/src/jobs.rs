@@ -404,7 +404,7 @@ pub(crate) fn detector_plugin_record(id: &str, version: &str, licence_sha256: &s
 }
 
 /// P4-12: `DRUMSPIKE_REFINE_RULE` as a rule: `1` (or `reference`), `2` (or `reach`), `3` (or
-/// `first-motion`), `4` (or `foot`, #101), `5` (or `foot-capped`, #127), `6` (or `edge`, #293), `7` (or `visible`, #321), `8` (or `line`, #338) and `9` (or `departure`, #351); `None` for anything else.
+/// `first-motion`), `4` (or `foot`, #101), `5` (or `foot-capped`, #127), `6` (or `edge`, #293), `7` (or `visible`, #321), `8` (or `line`, #338), `9` (or `departure`, #351) and `10` (or `noise-departure`, #362); `None` for anything else.
 pub fn parse_rule(v: &str) -> Option<RefineRule> {
     match v.trim().to_ascii_lowercase().as_str() {
         "reference" => Some(RefineRule::Reference),
@@ -416,6 +416,7 @@ pub fn parse_rule(v: &str) -> Option<RefineRule> {
         "visible" => Some(RefineRule::Visible),
         "line" => Some(RefineRule::Line),
         "departure" => Some(RefineRule::Departure),
+        "noise-departure" => Some(RefineRule::NoiseDeparture),
         s => s.parse::<u64>().ok().and_then(RefineRule::from_version),
     }
 }

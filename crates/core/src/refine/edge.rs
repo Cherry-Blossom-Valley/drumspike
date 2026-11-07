@@ -28,6 +28,17 @@ pub(crate) enum EdgeTail {
     /// [`DEPARTURE_MAX_S`] of the edge's first rising sample; otherwise version 8's walk-back decides (a slow wave or an
     /// offset on a tom line is the line itself, as before).
     Departure,
+    /// Version 10 (#362): the departure of version 9 with the line measured by its own noise, not by a fixed
+    /// share of the peak. The visibility band, the run's band and the run length scale with the spread of the
+    /// line samples before the stroke (the measure [`placement_diag`] reports as `line_noise`, the standard
+    /// deviation of the [`EDGE_NOISE_S`] before the walk's foot over the peak), with the fixed shares only as a
+    /// floor. Version 9's departure is the FLOOR: when version 9 accepts a departure, version 10 returns
+    /// exactly version 9's answer, and the noise-scaled walk only adds departures version 9 refused — a
+    /// gentle opening swing of a noisy line counts where version 9's fixed band refuses the whole departure
+    /// (the whole stroke falls back to the version 8 walk), and the run it must meet afterwards shortens
+    /// with the noise (floored at [`SWING_MIN_SAMPLES`], the swing guard). A line that is a slow wave or an
+    /// offset stays the line, as before.
+    NoiseDeparture,
 }
 
 /// Version 6 (#293, #294): the rise window of the steep edge (seconds): the signal must rise by [`EDGE_RISE_DB`] under
@@ -135,6 +146,40 @@ pub(crate) const SWING_MIN_SAMPLES: i64 = 3;
 /// snare 93 of the staged excerpts, where the tool's stretch holds 5 such samples); 4 held
 /// on the check half and moved no Session E hit.
 pub(crate) const DEPARTURE_BRIDGE_SAMPLES: i64 = 4;
+/// Version 10 (#362), the noise-scaled departure: the line is measured by its own noise, not by a fixed
+/// share of the peak — one principle, one rule for all kits, no tuning to named hits. The visibility band
+/// (`[DEPARTURE_VIS_PCT]` floored), the run's band (`[VIS_TAIL_PCT]` floored) and the run length
+/// (`[SWING_MIN_SAMPLES]` floored) scale with the spread of the line samples before the stroke: the
+/// standard deviation of the [`EDGE_NOISE_S`] before the walk's foot over the hit's peak, the measure
+/// [`placement_diag`] reports as `line_noise`. Version 9's departure is the floor of the answer: the
+/// noise-scaled walk runs only where version 9 refused. Refitted on the 2026-11-07 Training Mode labels
+/// of Sessions A to J (7327 windows of 960 samples; even rows chose, odd rows checked; the Python port of
+/// this rule in the #362 fit, aggregates only) over the rows where version 9 declines: the band multiple
+/// 0.5 held; 1.0 and above took the wobble of the wobbliest snares for the stroke's own motion.
+pub(crate) const DEPARTURE10_VIS_MULT: f64 = 0.5;
+/// Version 10 (#362), the run's band multiple over the line noise, with [`VIS_TAIL_PCT`] as the floor.
+/// Refitted on the same rows: 0.5 held; 2.0 let the wobble inside the run's band end the run early, on
+/// the wobbliest lines.
+pub(crate) const DEPARTURE10_RUN_MULT: f64 = 0.5;
+/// Version 10 (#362), the run-length fit: the run of line samples the walk must meet is
+/// `max([SWING_MIN_SAMPLES], round(K / sigma))` with K this constant — a shorter run on a noisier line is
+/// the rule, not a tuning (a 3-sample floor is the swing guard: a run shorter than a swing is a flicker).
+/// Refitted on the rows where version 9 declines (the sequential rule: version 9's arm is the
+/// floor, the noise-scaled arm runs only there): 0.2 held (a 0.5 % line walks a 40-sample run
+/// back, a 1 % line a 20-sample one); every 0.1-and-below grid point either refused the gentle
+/// swings of the noisiest lines or left a session worse than version 9.
+pub(crate) const DEPARTURE10_RUN_K: f64 = 0.2;
+/// Version 10 (#362), the longest walk-back to the line (seconds), anchored at the walked-back rise
+/// start `k0`, as version 9 anchors. The noise-scaled arm runs only where version 9 refused, so its
+/// window may not be narrower than version 9's. Fitted on the labels of Sessions A to J: 1.2 ms held
+/// and 1.6 ms and 2 ms gave the same held-out result, so the shorter bound is kept.
+pub(crate) const DEPARTURE10_MAX_S: f64 = 0.001_2;
+/// Version 10 (#362), the ramp refusal: the departure must leave the line as a motion, not as a
+/// ramp — a slow drift (the owner's #294 shape: a drift to 10 % of the peak over 1 ms before the
+/// swing) crosses the band with a per-sample step under the line's own noise, while a swing's
+/// first step clears it. The threshold is the line noise with this share of the peak as the
+/// floor, because a digitally silent line has no noise of its own.
+pub(crate) const DEPARTURE10_RAMP_PCT: f64 = 0.5;
 /// How far after the walk's foot the edge is looked for (seconds).
 pub(crate) const EDGE_SPAN_S: f64 = 0.005;
 
@@ -188,7 +233,7 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
     // the line's level, the median of the short stretch before the walk's foot (versions 8 and 9 measure from it; 0
     // for the older tails: they read the distance from zero)
     let line = match tail_rule {
-        EdgeTail::Line | EdgeTail::Departure => {
+        EdgeTail::Line | EdgeTail::Departure | EdgeTail::NoiseDeparture => {
             let from = (foot - samples(LINE_LEVEL_S, srf)).max(0);
             let mut v: Vec<f64> = (from..foot).map(at).collect();
             if v.is_empty() {
@@ -280,11 +325,19 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
             // edge contains an excursion SWING_MIN_SAMPLES wide). The line level is measured over the longer
             // DEPARTURE_LEVEL_S window: the pre-swing occupies most of the LINE_LEVEL_S stretch before the foot
             // and tilts its median onto the swing itself
-            EdgeTail::Departure => {
-                let vis = pk * DEPARTURE_VIS_PCT / 100.0;
-                let vis_run = pk * DEPARTURE_RUN_PCT / 100.0;
-                let run = LINE_RUN_SAMPLES.max(1);
-                let lo_d = (k0 - samples(DEPARTURE_MAX_S, srf)).max(1);
+            // version 10 (#362): version 9's departure is the FLOOR, not an alternative. The arm runs
+            // version 9's own walk first — version 9's fixed shares of the peak, its anchor at the
+            // walked-back rise start `k0`, its run of [`LINE_RUN_SAMPLES`]: when version 9 accepts a
+            // departure, version 10 returns exactly version 9's answer, so for every synthetic case of
+            // the version 9 suite the two decide alike and version 10 may only ADD departures that
+            // version 9 refused. Only when version 9's arm refuses does the noise-scaled walk get a
+            // chance: the visibility band, the run's band and the run length scale with sigma (the
+            // standard deviation of the [`EDGE_NOISE_S`] before the walk's foot over the peak, the
+            // measure `placement_diag` reports as `line_noise`), the fixed shares only as a floor. The
+            // ramp refusal (the departure must leave the line as a motion, not as a ramp — the owner's
+            // #294 shape) guards only the noise-scaled arm: it never touches a departure version 9
+            // would have found, because version 9's answer is returned before it is reached.
+            EdgeTail::Departure | EdgeTail::NoiseDeparture => {
                 let line9 = {
                     let from = (foot - samples(DEPARTURE_LEVEL_S, srf)).max(0);
                     let mut v: Vec<f64> = (from..foot).map(at).collect();
@@ -296,78 +349,128 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
                     }
                 };
                 let off9 = |i: i64| at(i) - line9;
-                let mut i = k;
-                let mut in_band = 0i64;
-                let mut departed = false;
-                let mut hit = None;
-                while i >= lo_d {
-                    // the departure is judged in the loose band; once departed, the run counts
-                    // only samples that stand within the tighter run's band (the stroke's first
-                    // motion can open just under the loose band)
-                    if off9(i).abs() > vis || (departed && off9(i).abs() > vis_run) {
-                        in_band = 0;
-                        departed = true;
-                    } else if departed {
-                        in_band += 1;
-                        if in_band >= run {
-                            hit = Some(i + run - 1);
-                            break;
+                // one departure walk, parameterised: walk back over every sample that stands off the
+                // line in the loose band `vis`, then meet `run` consecutive samples within the
+                // tighter run's band `vis_run` no later than `lo_d`; the three filters of version 9
+                // (stands out, swing not flicker, runs into the edge) follow
+                let arm = |vis: f64, vis_run: f64, run: i64, lo_d: i64| -> Option<i64> {
+                    let mut i = k;
+                    let mut in_band = 0i64;
+                    let mut departed = false;
+                    let mut hit = None;
+                    while i >= lo_d {
+                        // the departure is judged in the loose band; once departed, the run counts
+                        // only samples that stand within the tighter run's band (the stroke's first
+                        // motion can open just under the loose band)
+                        if off9(i).abs() > vis || (departed && off9(i).abs() > vis_run) {
+                            in_band = 0;
+                            departed = true;
+                        } else if departed {
+                            in_band += 1;
+                            if in_band >= run {
+                                hit = Some(i + run - 1);
+                                break;
+                            }
                         }
+                        i -= 1;
                     }
-                    i -= 1;
-                }
-                hit.filter(|&h| {
-                    // the first motion stands out from the line before it: its largest excursion over
-                    // the largest off-line excursion of the EDGE_NOISE_S before the run of line
-                    // samples, floored at the departure band itself — a ripple on a very quiet line
-                    // stands over the line's own excursions yet is no motion (#351 verify: the
-                    // ripples stood 2x over a line under 1 % and passed the unfloored test)
-                    let run_start = h - run + 1;
-                    let ref_lo = (run_start - samples(EDGE_NOISE_S, srf)).max(0);
-                    let reference = (ref_lo..run_start)
-                        .map(|m| off9(m).abs())
-                        .fold(0.0_f64, f64::max)
-                        .max(vis);
-                    let dep_max = (h..=k0).map(|m| off9(m).abs()).fold(0.0_f64, f64::max);
-                    dep_max > DEPARTURE_STANDS_OUT * reference
-                })
-                .filter(|&h| {
-                    // the first motion is a swing, not a flicker: the stretch between the run and the edge
-                    // contains at least one excursion SWING_MIN_SAMPLES wide
-                    let mut best = 0i64;
-                    let mut cur = 0i64;
-                    let mut prev = 0i64;
-                    for m in h + 1..=k0 {
-                        let s = off9(m).signum() as i64;
-                        if s != 0 && s == prev {
-                            cur += 1;
-                        } else {
-                            cur = 1;
-                            prev = s;
-                        }
-                        best = best.max(cur);
-                    }
-                    best >= SWING_MIN_SAMPLES
-                })
-                .filter(|&h| {
-                    // the first motion runs into the edge: between the run and the edge at
-                    // most DEPARTURE_BRIDGE_SAMPLES consecutive samples may stand within the
-                    // departure band. A longer stretch means the run sits before an earlier
-                    // flicker (one that does not run into the edge: sub-departure content
-                    // separates it from the swing): the walk has not reached the line before
-                    // the stroke's motion yet, and version 8's walk-back decides
-                    let mut cur = 0i64;
-                    let mut best = 0i64;
-                    for m in h + 1..=k0 {
-                        if off9(m).abs() <= vis {
-                            cur += 1;
+                    hit.filter(|&h| {
+                        // the first motion stands out from the line before it: its largest excursion over
+                        // the largest off-line excursion of the EDGE_NOISE_S before the run of line
+                        // samples, floored at the departure band itself — a ripple on a very quiet line
+                        // stands over the line's own excursions yet is no motion (#351 verify: the
+                        // ripples stood 2x over a line under 1 % and passed the unfloored test)
+                        let run_start = h - run + 1;
+                        let ref_lo = (run_start - samples(EDGE_NOISE_S, srf)).max(0);
+                        let reference = (ref_lo..run_start)
+                            .map(|m| off9(m).abs())
+                            .fold(0.0_f64, f64::max)
+                            .max(vis);
+                        let dep_max = (h..=k0).map(|m| off9(m).abs()).fold(0.0_f64, f64::max);
+                        dep_max > DEPARTURE_STANDS_OUT * reference
+                    })
+                    .filter(|&h| {
+                        // the first motion is a swing, not a flicker: the stretch between the run and the edge
+                        // contains at least one excursion SWING_MIN_SAMPLES wide
+                        let mut best = 0i64;
+                        let mut cur = 0i64;
+                        let mut prev = 0i64;
+                        for m in h + 1..=k0 {
+                            let s = off9(m).signum() as i64;
+                            if s != 0 && s == prev {
+                                cur += 1;
+                            } else {
+                                cur = 1;
+                                prev = s;
+                            }
                             best = best.max(cur);
-                        } else {
-                            cur = 0;
                         }
-                    }
-                    best <= DEPARTURE_BRIDGE_SAMPLES
-                })
+                        best >= SWING_MIN_SAMPLES
+                    })
+                    .filter(|&h| {
+                        // the first motion runs into the edge: between the run and the edge at
+                        // most DEPARTURE_BRIDGE_SAMPLES consecutive samples may stand within the
+                        // departure band. A longer stretch means the run sits before an earlier
+                        // flicker (one that does not run into the edge: sub-departure content
+                        // separates it from the swing): the walk has not reached the line before
+                        // the stroke's motion yet, and version 8's walk-back decides
+                        let mut cur = 0i64;
+                        let mut best = 0i64;
+                        for m in h + 1..=k0 {
+                            if off9(m).abs() <= vis {
+                                cur += 1;
+                                best = best.max(cur);
+                            } else {
+                                cur = 0;
+                            }
+                        }
+                        best <= DEPARTURE_BRIDGE_SAMPLES
+                    })
+                };
+                // version 9's arm, unchanged: the floor every version 10 answer rests on
+                let v9 = arm(
+                    pk * DEPARTURE_VIS_PCT / 100.0,
+                    pk * DEPARTURE_RUN_PCT / 100.0,
+                    LINE_RUN_SAMPLES.max(1),
+                    (k0 - samples(DEPARTURE_MAX_S, srf)).max(1),
+                );
+                if tail_rule == EdgeTail::Departure {
+                    v9
+                } else {
+                    let sigma = {
+                        let from = (foot - samples(EDGE_NOISE_S, srf)).max(0);
+                        let w: Vec<f64> = (from..foot).map(|i| at(i) - line).collect();
+                        if w.is_empty() || pk <= 0.0 {
+                            0.0
+                        } else {
+                            let m = w.len() as f64;
+                            let mean = w.iter().sum::<f64>() / m;
+                            (w.iter().map(|d| (d - mean) * (d - mean)).sum::<f64>() / m).sqrt() / pk
+                        }
+                    };
+                    // the noise-scaled arm runs only where version 9 refused; a shorter run on a
+                    // noisier line is the rule, not a tuning (the run is floored at the swing guard),
+                    // and the ramp refusal guards the departures it adds
+                    v9.or_else(|| {
+                        let vis = (DEPARTURE_VIS_PCT / 100.0).max(DEPARTURE10_VIS_MULT * sigma) * pk;
+                        let vis_run = (VIS_TAIL_PCT / 100.0).max(DEPARTURE10_RUN_MULT * sigma) * pk;
+                        let run = if sigma > 0.0 {
+                            (DEPARTURE10_RUN_K / sigma).round() as i64
+                        } else {
+                            0
+                        }
+                        .max(SWING_MIN_SAMPLES);
+                        arm(vis, vis_run, run, (k0 - samples(DEPARTURE10_MAX_S, srf)).max(1)).filter(|&h| {
+                            // the departure leaves the line as a MOTION, not as a ramp (the
+                            // owner's #294 shape): a slow drift crosses the band with a
+                            // per-sample step under the line's own noise, while a swing's
+                            // first step clears it. The threshold is the line noise with a
+                            // fixed share of the peak as the floor (a digitally silent line
+                            // has none); the line's level cancels in the difference
+                            h + 1 > k0 || (at(h + 1) - at(h)).abs() > sigma.max(DEPARTURE10_RAMP_PCT / 100.0 * pk)
+                        })
+                    })
+                }
                 .unwrap_or_else(|| line_walk(k, k0))
             }
         };
