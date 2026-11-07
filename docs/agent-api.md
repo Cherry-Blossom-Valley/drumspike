@@ -265,6 +265,58 @@ else it is approximate. A record without `placement` (an older log, a Learn mark
 aggregates per role and op, with the count of exact, approximate and unknown records, and writes the truth list
 `[{track, role, from, to, op, precision, exact, edge, line_noise, line_slope, onset_spread}]`.
 
+### Page helpers (`window.DSAgent`)
+
+#371: for a visual hit-by-hit pass the page (`drumspike bridge`, in a browser) loads `static/agent.js`, which exposes
+`window.DSAgent`. The functions are plain and async, draw nothing of their own and do nothing until called. A track is
+named by its track name, a hit by its index in the track's hit list. Every move and confirm runs through the code the
+keyboard uses (`nudgeSelected`, Hits > Confirm Hit), so the record of an agent is byte for byte the record of a person.
+The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse with an error that names the menu command
+`training_mode` while Training Mode is off; turn it on first with that command. The skill `skills/drumspike-finetune` uses them.
+
+- `hits(track)`: the hits as `{index, t, sample, v, added, edited, flam, bleed}`; with Training Mode on each also has
+  `confidence`, `doubt` and `why` (the reasons of the review queue, `track_confidence` with `training: true`).
+- `look(track, index, opts?)`: selects the hit and sets the sample-zoom view (0.9 ms before, 0.6 ms after, the amplitude
+  zoom to the local peak; `opts.before_ms`, `opts.after_ms`, `opts.amp` override; the page never shows less than 2 ms),
+  waits for the draw and answers `{sample, start, hit_at, samples, trainingView, judge, ...}`. `samples` is the window as
+  shares of the local peak and `hit_at` is the place of the hit's own sample in it. `trainingView` is the view the record
+  will carry. `judge` is `{level, spread, first_off, suggest}`: the line before the hit, the first sample off the line
+  and `suggest`, the offset in samples that the placement rule suggests (the hit is the last line sample before the
+  stroke's first motion of either sign), or `null` when the line is not a line (a spread over 3 % of the local peak),
+  nothing leaves it in the window, or the first sample off the line lies more than 12 samples before or 6 after the hit
+  (a pre-bump, bleed or wobble, not the stroke; `judge.why` is then `"departure far from the hit"`). A page in the
+  background gets no animation frames: `look` waits at most 300 ms for the draw and goes on, so a hidden page is slower
+  but never stuck.
+- `wide(track, index)`: the same answer for the 20 ms view on the hit, for deletes and bleed checks.
+- `move(track, index, samples)`: the nudge by whole samples (negative is earlier) with the view at sample zoom, so the
+  record says precision `sample`. Answers `{moved, index, from, to}`.
+- `confirm(track, index)`: Hits > Confirm Hit for a reviewed, unchanged hit. `undo()`: Edit > Undo; an undo writes no record.
+- `plan(track, from, to)`: `look` over the hit indices `from` to `to` without moving; one row per hit with `index`, `id`,
+  `sample`, `suggest`, `spread`, `confidence`, `line_ok`, `why`, `queue_doubt` and `queue_why`. `line_ok` is the judge's
+  verdict (`suggest` is not `null`); `why` says why it is not. `queue_doubt` and `queue_why` are the review queue's doubt:
+  a reason to look, not a block (on some kits the queue doubts most kicks). Use chunks of about 100 hits.
+- `apply(track, list)`: the moves `[{index, samples}]` (a row of `plan` also works, its `suggest` is used); a zero or `null`
+  move is skipped. `save()` writes the project. `status()` answers `{training, records, path}`.
+
+## Agent fine-tune skill
+
+#371: the skill `skills/drumspike-finetune/` (a `SKILL.md` and a `README.md`) ships inside the app bundle as a resource. Two
+commands, both on the agent surface, put it where the agent looks for skills:
+
+- `agent_skill_install {target?}` copies the bundled folder to `target` (default `~/.claude/skills/drumspike-finetune`,
+  Claude Code's user skills; another runtime or path with `target`), replaces an older copy, and writes the absolute path of
+  the running binary into `SKILL.md` for its `<binary>` placeholders, so no symlink is needed. It answers
+  `{installed, files, version}`; `installed` is the path. It refuses (409) a `target` that holds other files and no `SKILL.md`.
+- `agent_skill_status {target?}` answers `{installed, path, version, bundled_version, current, binary, mcp_command}`.
+  `current` is false for an older copy, or one written by another binary; `mcp_command` is the one line that adds the
+  MCP server for this binary.
+
+The window has the same in Settings, the row "Agent fine-tune skill": the status text (not installed, installed with the
+version, older copy), one button (Install, Update for an older copy) and the `claude mcp add` line with a Copy button. The
+owner does two things once: Install, then the `claude mcp add` line. A session starts with: "Fine-tune the drums of
+~/Music/Sessions/Song in Drum Spike." `DRUMSPIKE_SKILL_SOURCE` and `DRUMSPIKE_SKILL_TARGET` name the bundled folder and
+the default target for a test or a packaging step.
+
 Export: `export_markers_set {sid, on}` keeps the Export dialog's "Markers in MIDI" checkbox in
 the document field `export_markers` (absent is off); `export_existing` answers it as `export_markers`.
 With it on, the one multi-track file (`<project>_drums.mid`, `midi_mode: "single"`) holds one marker

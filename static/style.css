@@ -294,6 +294,8 @@ canvas.spike.onHit { cursor: ew-resize; }
 .setWarn { color: #ff6b6b; font-size: 10px; margin: 4px 0 0 152px; }
 #settingsModal .modal-box { width: 420px; }
 #settingsModal .prow { grid-template-columns: 140px 1fr; }
+#setAgentSkill .prow { grid-template-columns: 1fr auto; gap: 8px; }   /* #371: the status text or the command line, then its button */
+#setAgentSkill .skillCmd { font-size: 11px; word-break: break-all; user-select: all; }
 #settingsModal .pctl input[type=range] { width: 100%; min-width: 0; }
 #settingsModal .pctl input[type=number] { width: 100%; max-width: 90px; }
 .hidden { display: none !important; }

@@ -10,6 +10,7 @@
 //! Errors are [`AppError`] with the server's codes (400, 404, 409) and a message.
 
 pub mod agent;
+pub mod agent_skill;
 pub mod api;
 pub mod autosave;
 pub mod bridge;

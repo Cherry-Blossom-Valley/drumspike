@@ -708,6 +708,9 @@ fn every_mcp_answer_validates_against_its_output_schema_and_every_tool_and_batch
         ("row_heights_get", sd(json!({}))),
         // #343: the Training Mode state (read, then off again)
         ("training_status", sd(json!({}))),
+        // #371: the skill folder (the install has no bundle in a test binary, so it may fail; the status answers)
+        ("agent_skill_status", json!({"target": q(&root.join("skill_none"))})),
+        ("agent_skill_install", json!({"target": q(&root.join("skill_none"))})),
         ("project_close", sd(json!({"force": true}))),
     ];
     // every Agent row is in the table (so a new row needs a call here), and `job_get` is in the loop below
@@ -730,6 +733,7 @@ fn every_mcp_answer_validates_against_its_output_schema_and_every_tool_and_batch
         "project_open",
         "project_close",
         "project_import",
+        "agent_skill_install",
     ];
     let (mut id, mut ok_by_tool): (u64, BTreeSet<String>) = (10, BTreeSet::new());
     let mut check = |name: &str, res: &Value, id: u64| {

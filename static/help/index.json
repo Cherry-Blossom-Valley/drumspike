@@ -76,6 +76,11 @@
    "source": "docs/guide/14-automate.md"
   },
   {
+   "file": "15-agent-finetune.html",
+   "title": "15. Let an agent fine-tune a song",
+   "source": "docs/guide/15-agent-finetune.md"
+  },
+  {
    "file": "best-results.html",
    "title": "Get the best results",
    "source": "docs/guide/best-results.md"
