@@ -258,6 +258,35 @@ position and carries one audio window.
 `training_status {sid, on?}` answers `{on, records, path}`. `tools/training_export.py <jsonl...>` prints the
 aggregates per role and op and writes the truth list `[{track, role, from, to, op}]`.
 
+### Page helpers (`window.DSAgent`)
+
+#371: for a visual hit-by-hit pass the page (`drumspike bridge`, in a browser) loads `static/agent.js`, which exposes
+`window.DSAgent`. The functions are plain and async, draw nothing of their own and do nothing until called. A track is
+named by its track name, a hit by its index in the track's hit list. Every move and confirm runs through the code the
+keyboard uses (`nudgeSelected`, Hits > Confirm Hit), so the record of an agent is byte for byte the record of a person.
+The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse with an error that names the menu command
+`training_mode` while Training Mode is off; turn it on first with that command. The skill `skills/drumspike-finetune` uses them.
+
+- `hits(track)`: the hits as `{index, t, sample, v, added, edited, flam, bleed}`; with Training Mode on each also has
+  `confidence`, `doubt` and `why` (the reasons of the review queue, `track_confidence` with `training: true`).
+- `look(track, index, opts?)`: selects the hit and sets the sample-zoom view (0.9 ms before, 0.6 ms after, the amplitude
+  zoom to the local peak; `opts.before_ms`, `opts.after_ms`, `opts.amp` override; the page never shows less than 2 ms),
+  waits for the draw and answers `{sample, start, hit_at, samples, trainingView, judge, ...}`. `samples` is the window as
+  shares of the local peak and `hit_at` is the place of the hit's own sample in it. `trainingView` is the view the record
+  will carry. `judge` is `{level, spread, first_off, suggest}`: the line before the hit, the first sample off the line
+  and `suggest`, the offset in samples that the placement rule suggests (the hit is the last line sample before the
+  stroke's first motion of either sign), or `null` when the line is not a line (a spread over 3 % of the local peak) or
+  nothing leaves it in the window.
+- `wide(track, index)`: the same answer for the 20 ms view on the hit, for deletes and bleed checks.
+- `move(track, index, samples)`: the nudge by whole samples (negative is earlier) with the view at sample zoom, so the
+  record says precision `sample`. Answers `{moved, index, from, to}`.
+- `confirm(track, index)`: Hits > Confirm Hit for a reviewed, unchanged hit. `undo()`: Edit > Undo; an undo writes no record.
+- `plan(track, from, to)`: `look` over the hit indices `from` to `to` without moving; one row per hit with `index`, `id`,
+  `sample`, `suggest`, `spread`, `confidence`, `doubtful` and `why`. A hit is doubtful when its `suggest` is `null` or the
+  review queue doubts it. Use chunks of about 100 hits.
+- `apply(track, list)`: the moves `[{index, samples}]` (a row of `plan` also works, its `suggest` is used); a zero or `null`
+  move is skipped. `save()` writes the project. `status()` answers `{training, records, path}`.
+
 Export: `export_markers_set {sid, on}` keeps the Export dialog's "Markers in MIDI" checkbox in
 the document field `export_markers` (absent is off); `export_existing` answers it as `export_markers`.
 With it on, the one multi-track file (`<project>_drums.mid`, `midi_mode: "single"`) holds one marker
