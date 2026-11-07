@@ -106,7 +106,8 @@ def test_plan_gives_one_row_per_hit_and_marks_the_hit_on_the_noisy_line_doubtful
     rows = call(app, "DSAgent.plan('Kick In', 0, 2)")
     assert [r["index"] for r in rows] == [0, 1, 2]
     assert all("suggest" in r for r in rows)
-    assert [r["doubtful"] for r in rows][2] is True and rows[2]["suggest"] is None
+    assert rows[2]["line_ok"] is False and rows[2]["suggest"] is None and rows[2]["why"]
+    assert all(isinstance(r["queue_doubt"], bool) and isinstance(r["queue_why"], list) for r in rows)
     assert rows[0]["suggest"] is not None and rows[1]["suggest"] is not None
     before = len(project_log_lines(app))
     assert len(project_log_lines(app)) == before                           # a plan moves nothing

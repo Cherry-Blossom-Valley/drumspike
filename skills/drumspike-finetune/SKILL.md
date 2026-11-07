@@ -29,14 +29,16 @@ The app installed this skill for the binary `<binary>`. Use that path as it stan
    motion of either sign. A pre-ripple, bump or dip that leads into the stroke belongs to the stroke.
 6. Apply the clear moves with `DSAgent.apply(track, list)` (or one `DSAgent.move`). Confirm a reviewed hit that is already
    right with `DSAgent.confirm(track, index)`.
-7. Leave the doubtful hits as they are and list them for the owner: track, index, time, the reason.
+7. Leave the hits without a suggestion (`line_ok` false) as they are and list them for the owner: track, index, time, the reason.
 8. `DSAgent.save()`, then export with the MCP tools (`export_all`, `job_get` until `done`).
 9. Report aggregates only: hits seen, moved, confirmed, left doubtful, the spread of the moves in samples.
 
 ## Guardrails
 
 - Never delete a hit without `DSAgent.wide(track, index)` first. Look at the 20 ms view and decide on that.
-- Never move a hit whose `judge.suggest` is `null`. A line that is not a line is a doubtful hit: leave it and list it.
+- Never move a hit whose `judge.suggest` is `null` (`line_ok` false in a plan row; `why` says the reason, for example
+  "departure far from the hit"). Leave it and list it.
+- A `queue_doubt` row with `line_ok` true is a reason to look, not a block.
 - A wobbly line stays doubtful. Do not talk yourself into a move.
 - Never report sample data, file names, session names or song names outside this machine. Use "Session A", "Session B".
 - One chunk per call. Do not plan a whole track in one evaluation; the page stays responsive and a failure costs one chunk.

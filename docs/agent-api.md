@@ -282,15 +282,19 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   shares of the local peak and `hit_at` is the place of the hit's own sample in it. `trainingView` is the view the record
   will carry. `judge` is `{level, spread, first_off, suggest}`: the line before the hit, the first sample off the line
   and `suggest`, the offset in samples that the placement rule suggests (the hit is the last line sample before the
-  stroke's first motion of either sign), or `null` when the line is not a line (a spread over 3 % of the local peak) or
-  nothing leaves it in the window.
+  stroke's first motion of either sign), or `null` when the line is not a line (a spread over 3 % of the local peak),
+  nothing leaves it in the window, or the first sample off the line lies more than 12 samples before or 6 after the hit
+  (a pre-bump, bleed or wobble, not the stroke; `judge.why` is then `"departure far from the hit"`). A page in the
+  background gets no animation frames: `look` waits at most 300 ms for the draw and goes on, so a hidden page is slower
+  but never stuck.
 - `wide(track, index)`: the same answer for the 20 ms view on the hit, for deletes and bleed checks.
 - `move(track, index, samples)`: the nudge by whole samples (negative is earlier) with the view at sample zoom, so the
   record says precision `sample`. Answers `{moved, index, from, to}`.
 - `confirm(track, index)`: Hits > Confirm Hit for a reviewed, unchanged hit. `undo()`: Edit > Undo; an undo writes no record.
 - `plan(track, from, to)`: `look` over the hit indices `from` to `to` without moving; one row per hit with `index`, `id`,
-  `sample`, `suggest`, `spread`, `confidence`, `doubtful` and `why`. A hit is doubtful when its `suggest` is `null` or the
-  review queue doubts it. Use chunks of about 100 hits.
+  `sample`, `suggest`, `spread`, `confidence`, `line_ok`, `why`, `queue_doubt` and `queue_why`. `line_ok` is the judge's
+  verdict (`suggest` is not `null`); `why` says why it is not. `queue_doubt` and `queue_why` are the review queue's doubt:
+  a reason to look, not a block (on some kits the queue doubts most kicks). Use chunks of about 100 hits.
 - `apply(track, list)`: the moves `[{index, samples}]` (a row of `plan` also works, its `suggest` is used); a zero or `null`
   move is skipped. `save()` writes the project. `status()` answers `{training, records, path}`.
 

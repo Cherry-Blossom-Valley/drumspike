@@ -5,6 +5,8 @@
 (function () {
   const SAMPLE_BEFORE_MS = 0.9, SAMPLE_AFTER_MS = 0.6, WIDE_MS = 10;   // the sample-zoom window around a hit; the 20 ms view is 10 ms each side
   const LINE_LEAD = 12, LINE_MAX_SPREAD = 0.03, DEPART_MIN = 0.03;      // samples of the line, its spread limit and the departure level (shares of the local peak)
+  const FRAME_WAIT_MS = 300;                                             // the longest wait for a frame of a hidden page
+  const DEPART_BEFORE = 12, DEPART_AFTER = 6;                            // the stroke of the coordinator's routine starts within 12 samples before to 6 after the hit
 
   function need(track) {
     if (!S.sid) throw new Error("no project is open");
@@ -19,7 +21,11 @@
   function needTraining() {
     if (!trainingOn()) throw new Error("Training Mode is off: turn it on first with the menu command training_mode (View > Training Mode)");
   }
-  const draw = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  /* a page in the background gets no frame: resolve after the frames or after FRAME_WAIT_MS, whichever comes first */
+  const draw = () => new Promise(r => {
+    const t = setTimeout(r, FRAME_WAIT_MS);
+    requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); r(); }));
+  });
   const sampleOf = (track, e) => Math.round(e.t * S.tracks[track].sr);
 
   function select(track, index) {
@@ -40,7 +46,13 @@
     if (!(spread <= LINE_MAX_SPREAD)) return out;                  // not a line
     const thr = Math.max(3 * spread, DEPART_MIN);
     for (let i = n; i < s.length; i++) {
-      if (Math.abs(s[i] - level) > thr) { out.first_off = i - hitAt; out.suggest = i - 1 - hitAt; break; }
+      if (Math.abs(s[i] - level) > thr) {
+        out.first_off = i - hitAt;
+        // a departure far from the hit is a pre-bump, bleed or wobble, not the stroke: no suggestion
+        if (out.first_off < -DEPART_BEFORE || out.first_off > DEPART_AFTER) out.why = "departure far from the hit";
+        else out.suggest = i - 1 - hitAt;
+        break;
+      }
     }
     return out;
   }
@@ -116,10 +128,12 @@
       need(track);
       const evs = S.events[track] || [], rate = trainingOn() ? await ratings(track) : [], rows = [];
       for (let i = Math.max(0, from); i <= Math.min(to, evs.length - 1); i++) {
-        const l = await DSAgent.look(track, i), q = rate[i], why = q && q.doubt ? [...(q.why || [])] : [];
-        if (l.judge.suggest === null) why.push("no clear line before the hit");
-        rows.push({ index: i, id: evs[i].id, t: evs[i].t, sample: l.sample, suggest: l.judge.suggest, spread: l.judge.spread,
-          confidence: q ? q.c : null, doubtful: l.judge.suggest === null || !!(q && q.doubt), why });
+        const l = await DSAgent.look(track, i), q = rate[i], j = l.judge, qd = !!(q && q.doubt);
+        // queue_doubt: the review queue's doubt (a reason to look); line_ok: the judge found a line and a suggestible departure
+        rows.push({ index: i, id: evs[i].id, t: evs[i].t, sample: l.sample, suggest: j.suggest, spread: j.spread,
+          confidence: q ? q.c : null, queue_doubt: qd, queue_why: qd ? [...(q.why || [])] : [],
+          line_ok: j.suggest !== null,
+          why: j.suggest !== null ? null : j.why || "no clear line before the hit" });
       }
       return rows;
     },
