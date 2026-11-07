@@ -373,3 +373,125 @@ fn training_status_reports_the_state_the_count_and_the_path() {
     let c = drumspike_app::call::call(&svc, "training_status", &json!({"sid": sid}), None);
     assert!(c.is_ok());
 }
+
+/// A kick track with a sharp onset at 0.5 s and a line before it: silent, or white noise whose standard deviation is
+/// `noise` of the peak (#363). The hit's peak is 0.5.
+fn line_spec(name: &'static str, noise: f64) -> Spec {
+    let mut x = vec![0.0f32; 48_000 * 2];
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let at = 24_000;
+    for v in &mut x[..at] {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        // uniform noise of amplitude a has the standard deviation a / sqrt(3)
+        let a = noise * 0.5 * 3.0f64.sqrt();
+        *v = (a * ((seed as f64 / u64::MAX as f64) * 2.0 - 1.0)) as f32;
+    }
+    for k in 0..14_400 {
+        let t = k as f64 / 48_000.0;
+        let env = ((k + 1) as f64 / 2.0).min(1.0) * (-t / 0.06).exp();
+        x[at + k] += (0.5 * env * (2.0 * std::f64::consts::PI * 180.0 * t + 0.7).sin()) as f32;
+    }
+    Spec {
+        name,
+        role: "kick",
+        note: 36,
+        x,
+        sr: 48_000,
+    }
+}
+
+fn opened_line(tag: &str, noise: f64) -> (Service, String, PathBuf, PathBuf) {
+    let root = tmp(tag);
+    let dir = project(&root, "Training", &[line_spec("k line", noise)]);
+    let svc = service_dsp();
+    let home = root.join("home");
+    svc.set_home(&home);
+    let sid = svc.project_open(&dir.display().to_string()).unwrap()["sid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    svc.events_set(&sid, "k line", &json!([{"t": 0.5, "v": 90}])).unwrap();
+    (svc, sid, home, dir)
+}
+
+#[test]
+fn a_move_record_carries_the_line_measures_of_a_clean_hit_and_of_a_noisy_one() {
+    let (svc, sid, home, _) = opened_line("tr_pl_clean", 0.0);
+    svc.events_edit_training(
+        &sid,
+        "k line",
+        &[json!({"op": "move", "index": 0, "t": 0.6})],
+        true,
+        None,
+    )
+    .unwrap();
+    let p = &records(&home)[0]["placement"];
+    assert_eq!(p["edge"], true, "{p}");
+    assert!(p["line_noise"].as_f64().unwrap() < 0.01, "{p}");
+    assert!(p["line_slope"].is_number() && p["onset_spread"].is_null(), "{p}");
+
+    let (svc, sid, home, _) = opened_line("tr_pl_noisy", 0.02);
+    svc.events_edit_training(
+        &sid,
+        "k line",
+        &[json!({"op": "move", "index": 0, "t": 0.6})],
+        true,
+        None,
+    )
+    .unwrap();
+    let p = &records(&home)[0]["placement"];
+    assert!(p["line_noise"].as_f64().unwrap() > 0.01, "{p}");
+}
+
+#[test]
+fn every_edit_record_and_a_confirm_record_carry_placement() {
+    let (svc, sid, home, _) = opened_line("tr_pl_all", 0.0);
+    let ops = [
+        json!({"op": "confirm", "index": 0}),
+        json!({"op": "add", "t": 1.0}),
+        json!({"op": "delete", "index": 0}),
+    ];
+    svc.events_edit_training(&sid, "k line", &ops, true, None).unwrap();
+    let recs = records(&home);
+    assert_eq!(recs.len(), 3, "{recs:?}");
+    for r in &recs {
+        let p = &r["placement"];
+        assert!(
+            p["edge"].is_boolean() && p["line_noise"].is_number() && p["line_slope"].is_number(),
+            "{r}"
+        );
+        assert!(p.get("onset_spread").is_some(), "{r}");
+    }
+    let confirm = recs.iter().find(|r| r["op"] == "confirm").unwrap();
+    assert_eq!(confirm["placement"]["edge"], true, "{confirm}");
+    // the add reads at its `to`: silence there, so no edge
+    let add = recs.iter().find(|r| r["op"] == "add").unwrap();
+    assert_eq!(add["placement"]["edge"], false, "{add}");
+}
+
+#[test]
+fn the_mode_off_leaves_the_answer_and_the_project_file_as_they_were() {
+    let (a, sa, ha, da) = opened_line("tr_pl_off_a", 0.0);
+    let (b, sb, hb, db) = opened_line("tr_pl_off_b", 0.0);
+    let ops = [json!({"op": "move", "index": 0, "t": 0.6})];
+    let ra = a.events_edit(&sa, "k line", &ops).unwrap();
+    let rb = b.events_edit_training(&sb, "k line", &ops, false, None).unwrap();
+    assert_eq!(serde_json::to_string(&ra).unwrap(), serde_json::to_string(&rb).unwrap());
+    assert!(!ha.join("training").exists() && !hb.join("training").exists());
+    a.project_save(&sa).unwrap();
+    b.project_save(&sb).unwrap();
+    let text = |d: &PathBuf| {
+        let f = std::fs::read_dir(d)
+            .unwrap()
+            .flatten()
+            .map(|f| f.path())
+            .find(|p| p.extension().is_some_and(|e| e == "drumspike"))
+            .unwrap();
+        std::fs::read_to_string(f).unwrap()
+    };
+    // the log is never part of the project, with the mode on or off
+    let (ta, tb) = (text(&da), text(&db));
+    assert!(!ta.contains("placement") && !tb.contains("placement"));
+}
