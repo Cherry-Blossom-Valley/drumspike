@@ -41,10 +41,14 @@ def test_aggregates_the_truth_list_and_a_public_printout(tmp_path):
     assert "Secret" not in p.stdout and "secret_dir" not in p.stdout and str(tmp_path) not in p.stdout
     truth = json.loads(out.read_text())
     assert len(truth) == 6
-    assert truth[0] == {"track": "Secret Track", "role": "kick", "from": 1000, "to": 1003, "op": "move", "precision": "ms"}
-    assert truth[3] == {"track": "Secret Track", "role": "kick", "from": None, "to": 4000, "op": "add", "precision": "sample"}
+    unknown = {"exact": None, "edge": None, "line_noise": None, "line_slope": None, "onset_spread": None}
+    assert truth[0] == {"track": "Secret Track", "role": "kick", "from": 1000, "to": 1003, "op": "move", "precision": "ms",
+                        **unknown}
+    assert truth[3] == {"track": "Secret Track", "role": "kick", "from": None, "to": 4000, "op": "add",
+                        "precision": "sample", **unknown}
     assert truth[5]["precision"] is None
-    assert set(truth[0]) == {"track", "role", "from", "to", "op", "precision"}
+    assert set(truth[0]) == {"track", "role", "from", "to", "op", "precision", "exact", "edge", "line_noise",
+                             "line_slope", "onset_spread"}
 
 
 def test_a_confirm_record_counts_per_role_and_precision_and_stays_in_the_truth_list(tmp_path):
@@ -64,8 +68,43 @@ def test_a_confirm_record_counts_per_role_and_precision_and_stays_in_the_truth_l
     assert "precision -: 1" in p.stdout
     truth = json.loads(out.read_text())
     assert len(truth) == 3
-    assert {"track": "Secret Track", "role": "snare", "from": 48000, "to": 48000, "op": "confirm", "precision": "sample"} in truth
+    assert any(t["role"] == "snare" and t["op"] == "confirm" and t["from"] == 48000 and t["precision"] == "sample"
+               for t in truth)
     assert truth[2]["op"] == "confirm" and truth[2]["from"] == 72000 and truth[2]["to"] == 72000
+
+
+def test_the_export_separates_exact_from_approximate_records(tmp_path):
+    """#363: a record with a counting edge, a clean line and no onset spread is exact; a noisy line (or a spread of 4
+    samples or more, or no edge) makes it approximate; a record without `placement` is unknown."""
+    def with_placement(edge, noise, spread=None, **kw):
+        r = rec("move", 1000, 1003, **kw)
+        r["placement"] = {"edge": edge, "line_noise": noise, "line_slope": 0.001, "onset_spread": spread}
+        return r
+
+    log = tmp_path / "log.jsonl"
+    write(log, [with_placement(True, 0.004), with_placement(True, 0.02), with_placement(True, 0.004, 4.0),
+                with_placement(False, 0.004), rec("move", 2000, 2001)])
+    out = tmp_path / "truth.json"
+    p = subprocess.run([sys.executable, "-I", str(TOOL), str(log), "--out", str(out)], capture_output=True, text=True, check=True)
+    assert "exact: 1, approximate: 3, unknown: 1" in p.stdout
+    truth = json.loads(out.read_text())
+    assert [t["exact"] for t in truth] == [True, False, False, False, None]
+    assert truth[0]["line_noise"] == 0.004 and truth[0]["edge"] is True and truth[0]["line_slope"] == 0.001
+    assert truth[2]["onset_spread"] == 4.0
+
+
+def test_a_two_record_log_prints_one_exact_and_one_approximate(tmp_path):
+    exact = rec("move", 1000, 1003)
+    exact["placement"] = {"edge": True, "line_noise": 0.002, "line_slope": 0.0, "onset_spread": 1.0}
+    rough = rec("move", 2000, 2002)
+    rough["placement"] = {"edge": True, "line_noise": 0.18, "line_slope": 0.0, "onset_spread": None}
+    log = tmp_path / "log.jsonl"
+    write(log, [exact, rough])
+    out = tmp_path / "truth.json"
+    p = subprocess.run([sys.executable, "-I", str(TOOL), str(log), "--out", str(out)], capture_output=True, text=True, check=True)
+    print(p.stdout)
+    assert "exact: 1, approximate: 1, unknown: 0" in p.stdout
+    assert [t["exact"] for t in json.loads(out.read_text())] == [True, False]
 
 
 def test_two_logs_and_the_bins_edges(tmp_path):

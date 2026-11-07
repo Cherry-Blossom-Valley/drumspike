@@ -6,9 +6,11 @@ Reads the correction logs that View > Training Mode writes (`<DRUMSPIKE_HOME>/tr
 record per hit edit, confirm or Learn mark). Prints the aggregates per role and op: the count and the histogram of
 `to - from` in samples (a #354 `confirm` record says `from` = `to`, so its bin is `0`), the count and the histogram per
 precision (#353: `sample` at a pixel per sample or more, `ms` at a coarser zoom, `-` without a view), and the count per
-refine rule version. Writes every record as the
-truth list `[{track, role, from, to, op, precision}]` (samples) to `--out` (default `training_truth.json`) for the
-measurement kit. The printout carries no project names and no paths: it is safe to paste into a public ticket. The
+refine rule version. #363: a record
+with `placement` is exact (a counting edge, a line noise of at most 1 % of the peak, an onset spread under 4 samples
+or none) or approximate; one without it (an older log) is unknown; the printout counts the three per role and op.
+Writes every record as the truth list `[{track, role, from, to, op, precision, exact, edge, line_noise, line_slope,
+onset_spread}]` (samples) to `--out` (default `training_truth.json`) for the measurement kit. The printout carries no project names and no paths: it is safe to paste into a public ticket. The
 truth file carries the track names; keep it with the logs.
 """
 import argparse
@@ -23,6 +25,13 @@ BINS = [("<=-100", None, -100), ("-99..-11", -99, -11), ("-10..-2", -10, -2), ("
 
 # the precisions of the printout, in this order; a record without one (an older log, a Learn mark) is `-`
 PRECISIONS = ("sample", "ms", "-")
+
+
+# #363: an exact record has a counting edge, a line noise of at most this share of the peak (the review queue's
+# threshold) and an onset spread under this many samples; the measures a record carries under `placement`
+NOISE_MAX = 0.01
+SPREAD_MAX = 4
+MEASURES = ("edge", "line_noise", "line_slope", "onset_spread")
 
 
 def precision_of(r):
@@ -58,20 +67,40 @@ def delta_bin(d):
     raise ValueError(d)
 
 
+def exact_of(r):
+    """#363: `True` for an exact record (a counting edge, a line noise of at most `NOISE_MAX` of the peak, an onset
+    spread under `SPREAD_MAX` samples or none), `False` for an approximate one, `None` for a record without
+    `placement` (an older log, a Learn mark)."""
+    p = r.get("placement")
+    if not isinstance(p, dict):
+        return None
+    noise, spread = p.get("line_noise"), p.get("onset_spread")
+    return bool(p.get("edge") is True and isinstance(noise, (int, float)) and noise <= NOISE_MAX
+                and (spread is None or (isinstance(spread, (int, float)) and spread < SPREAD_MAX)))
+
+
 def truth_list(records):
-    """`[{track, role, from, to, op, precision}]` of the records."""
-    return [{"track": r.get("track"), "role": r.get("role"), "from": r.get("from"), "to": r.get("to"), "op": r["op"],
-             "precision": r.get("precision")} for r in records]
+    """`[{track, role, from, to, op, precision, exact, edge, line_noise, line_slope, onset_spread}]` of the records;
+    `exact` and the four measures are null for a record without `placement`."""
+    out = []
+    for r in records:
+        p = r.get("placement") if isinstance(r.get("placement"), dict) else {}
+        out.append({"track": r.get("track"), "role": r.get("role"), "from": r.get("from"), "to": r.get("to"),
+                    "op": r["op"], "precision": r.get("precision"), "exact": exact_of(r),
+                    **{k: p.get(k) for k in MEASURES}})
+    return out
 
 
 def aggregate(records):
     """`{role: {op: {"n", "delta": {bin: n}, "refine": {version: n}, "prec": {label: {"n", "delta"}}}}}`: the deltas
     only where both ends exist, the per-precision ones under the record's own label."""
     out = defaultdict(lambda: defaultdict(lambda: {
-        "n": 0, "delta": Counter(), "refine": Counter(), "prec": defaultdict(lambda: {"n": 0, "delta": Counter()})}))
+        "n": 0, "delta": Counter(), "refine": Counter(), "exact": Counter(),
+        "prec": defaultdict(lambda: {"n": 0, "delta": Counter()})}))
     for r in records:
         a = out[r.get("role") or "-"][r["op"]]
         a["n"] += 1
+        a["exact"][{True: "exact", False: "approximate"}.get(exact_of(r), "unknown")] += 1
         a["refine"][str(r.get("refine", "-"))] += 1
         p = a["prec"][precision_of(r)]
         p["n"] += 1
@@ -95,6 +124,7 @@ def report(records, bad):
                     continue
                 hist = ", ".join(f"{label2} {p['delta'][label2]}" for label2, _, _ in BINS if p["delta"][label2])
                 lines.append(f"  precision {label}: {p['n']}" + (f", to-from: {hist}" if hist else ""))
+            lines.append("  " + ", ".join(f"{k}: {a['exact'][k]}" for k in ("exact", "approximate", "unknown")))
             lines.append("  refine rule: " + ", ".join(f"{v} x{n}" for v, n in sorted(a["refine"].items())))
     return "\n".join(lines)
 

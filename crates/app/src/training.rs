@@ -6,6 +6,8 @@
 //! file is never part of the project. A record is self-contained: it carries the samples around the hit, so the
 //! measurement kit reads it without the session. #353: with the view of the request the record carries it too, and a
 //! `move` or `add` record says its `precision` (`sample` at a pixel per sample or more, `ms` at a coarser zoom).
+//! #363: a `move`, `add`, `delete` or `confirm` record carries `placement` `{edge, line_noise, line_slope,
+//! onset_spread}`, the measures of `placement_diag` at its `from` (its `to` for an add), computed on demand.
 //! #354: a `confirm` record is the editor's "reviewed, right where it is" — the op applies nothing to the document,
 //! the record says `from` = `to` = the stored position and carries one audio window.
 //!
@@ -21,6 +23,8 @@ use std::sync::Mutex;
 
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
+
+use drumspike_core::refine::placement_diag;
 
 use crate::Service;
 use crate::error::AppError;
@@ -216,6 +220,24 @@ impl Service {
                 "window": {"before": n_before, "after": n_after},
                 "audio": a,
             });
+            // #363: the line measures at the position the record's audio is read at, so a consumer can tell a clear
+            // stroke from a wobbly one; a Learn mark has no placement to judge
+            if !ex.op.starts_with("learn")
+                && let Some(t) = ex.from.or(ex.to)
+            {
+                let pd = placement_diag(&d.samples, d.sr, smp(t - shift / sr));
+                let spread = ex
+                    .event
+                    .as_ref()
+                    .and_then(|e| e.get("timing_confidence"))
+                    .and_then(Value::as_f64);
+                rec["placement"] = json!({
+                    "edge": pd.edge,
+                    "line_noise": pd.line_noise,
+                    "line_slope": pd.line_slope,
+                    "onset_spread": spread,
+                });
+            }
             // #353: the view of the request as sent; a move or add says how precisely the editor saw the hit
             if let Some(v) = view {
                 rec["view"] = v.clone();
