@@ -2,6 +2,7 @@
 //! resources and the commands. Every command only converts its arguments and calls a method
 //! of `drumspike_app::Service` (`crates/app`), which holds the logic and the tests.
 
+use std::io::Write as _;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -113,6 +114,11 @@ pub fn headless(args: &[String]) -> Option<i32> {
 /// [`headless`] with the program name: P4-5 adds `cli` and `mcp` (the command-line tool and the MCP server of
 /// `drumspike_app::agent`), and a binary called `drumspike` (the symlink the user makes) is the command-line tool.
 pub fn headless_as(program: &str, args: &[String]) -> Option<i32> {
+    // #370: the page mode of the shipped app, `drumspike bridge` — also when the binary is named
+    // `drumspike` (then every other argument belongs to the command line).
+    if args.first().is_some_and(|a| a == "bridge") {
+        return Some(page_entry(&args[1..]));
+    }
     let by_name = Path::new(program)
         .file_name()
         .is_some_and(|n| n == drumspike_app::agent::TOOL_NAME);
@@ -141,6 +147,47 @@ pub fn headless_as(program: &str, args: &[String]) -> Option<i32> {
             Some(1)
         }
     }
+}
+
+/// #370 `drumspike bridge [--port N] [--home DIR] [--projects DIR] [--static DIR]`: the page
+/// mode. Serves the page embedded in the binary (the Tauri asset context, `frontendDist`; the
+/// bundle gains no files) and the invoke API of the command registry on 127.0.0.1 only, prints
+/// one URL line and runs until it is stopped. `--static DIR` serves a folder instead (for
+/// development). Exit codes: 0 never reached in normal operation, 1 the home is in use or the
+/// listener fails, 2 a bad argument.
+fn page_entry(argv: &[String]) -> i32 {
+    let args = match drumspike_app::bridge::parse_page_args(argv) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("drumspike bridge: {e}");
+            return 2;
+        }
+    };
+    let source = match &args.static_dir {
+        Some(dir) => drumspike_app::bridge::StaticSource::Dir(dir.clone()),
+        None => embedded_page_assets(),
+    };
+    let mut out = std::io::stdout().lock();
+    match drumspike_app::bridge::run_page_mode(&args, source, &mut out) {
+        Ok(()) => 0,
+        Err(e) => {
+            let _ = out.flush();
+            eprintln!("{e}");
+            1
+        }
+    }
+}
+
+/// The page of the bridge: the assets the Tauri build embeds in this binary
+/// (`tauri.conf.json` `frontendDist`), resolved through the asset context of
+/// `tauri::generate_context!`.
+fn embedded_page_assets() -> drumspike_app::bridge::StaticSource {
+    let ctx: tauri::Context<tauri::Wry> = tauri::generate_context!();
+    let assets = ctx.assets;
+    drumspike_app::bridge::StaticSource::Embedded(Box::new(move |path| {
+        let key = tauri::utils::assets::AssetKey::from(path);
+        assets.get(&key).map(std::borrow::Cow::into_owned)
+    }))
 }
 
 ///
@@ -885,6 +932,21 @@ fn lifecycle_setup(svc: &Service, app: &tauri::AppHandle) {
         && let Ok(dir) = app.path().app_data_dir()
     {
         svc.set_home(dir);
+    }
+    // #370: the window holds the home's advisory flock (`<home>/.drumspike.lock`, the same
+    // `ProjectLock` mechanism the project locks use), so the page mode of the bridge refuses to
+    // start while the window runs on this home. A window that starts while a bridge holds the
+    // home prints this and keeps working: the bridge is a session the owner opens and closes.
+    if let Some(home) = svc.home() {
+        static WINDOW_HOME_LOCK: OnceLock<Option<drumspike_app::lock::ProjectLock>> = OnceLock::new();
+        match drumspike_app::bridge::take_home_lock(&home, "app") {
+            Ok(lock) => {
+                WINDOW_HOME_LOCK.set(lock).ok();
+            }
+            Err(holder) => {
+                eprintln!("drumspike: the home is in use by {holder}: the bridge on this home may still run");
+            }
+        }
     }
     if std::env::var_os("DRUMSPIKE_PROJECTS").is_none_or(|v| v.is_empty())
         && let Ok(dir) = app.path().document_dir()

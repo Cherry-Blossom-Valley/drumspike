@@ -41,6 +41,128 @@ pub fn listen(port: u16) -> std::io::Result<TcpListener> {
     TcpListener::bind(("127.0.0.1", port))
 }
 
+/// One path as the bridge names it (`index.html`, `backend.js`; no leading `/`) and its bytes:
+/// the desktop crate's resolver over the assets embedded in the binary (the Tauri asset
+/// context, `frontendDist`).
+pub type EmbeddedPage = Box<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
+
+/// Where the static files of a bridge come from: a folder (`ds-bridge`, and the `--static`
+/// override of the page mode) or the assets embedded in the binary (the page mode of the
+/// shipped app, `drumspike bridge`; the bundle gains no files).
+pub enum StaticSource {
+    /// The files of one folder.
+    Dir(PathBuf),
+    /// One path as the bridge names it (`index.html`, `backend.js`; no leading `/`).
+    Embedded(EmbeddedPage),
+}
+
+impl From<PathBuf> for StaticSource {
+    fn from(dir: PathBuf) -> StaticSource {
+        StaticSource::Dir(dir)
+    }
+}
+
+/// The advisory flock of the home folder (`<home>/.drumspike.lock`, the same
+/// [`crate::lock::ProjectLock`] the app uses for projects). The window takes it for client
+/// `app` at startup, the page mode for client `bridge`; the page mode refuses to start while
+/// the window runs on the same home. `Ok(None)`: the folder cannot hold a lock (a read-only
+/// volume, a missing folder) and the caller starts unlocked. `Err(holder)`: another process
+/// holds the lock; the text names its client and pid.
+///
+/// # Errors
+///
+/// A `String` naming the holder (`<client> (pid <n>)`) when another process holds the lock.
+pub fn take_home_lock(dir: &Path, client: &str) -> Result<Option<crate::lock::ProjectLock>, String> {
+    let _ = std::fs::create_dir_all(dir);
+    match crate::lock::ProjectLock::acquire(dir, client) {
+        Ok(crate::lock::Lock::Held(l)) => Ok(Some(l)),
+        Ok(crate::lock::Lock::Unavailable(_)) => Ok(None),
+        Err(_) => Err(match crate::lock::ProjectLock::holder_of(dir) {
+            Some((pid, c)) => format!("{c} (pid {pid})"),
+            None => "another process".into(),
+        }),
+    }
+}
+
+/// The arguments of the page mode: `drumspike bridge [--port N] [--home DIR] [--projects DIR] [--static DIR]`.
+/// `port` 0 is a free port. `--static` serves a folder instead of the embedded assets (development).
+pub struct PageArgs {
+    pub port: u16,
+    pub home: Option<PathBuf>,
+    pub projects: Option<PathBuf>,
+    pub static_dir: Option<PathBuf>,
+}
+
+/// Parse the arguments after `bridge`.
+///
+/// # Errors
+///
+/// A `String` naming the bad argument when an option is unknown, needs a value or has a bad value.
+pub fn parse_page_args(argv: &[String]) -> Result<PageArgs, String> {
+    let mut a = PageArgs {
+        port: 0,
+        home: None,
+        projects: None,
+        static_dir: None,
+    };
+    let mut it = argv.iter();
+    while let Some(k) = it.next() {
+        let v = it.next().ok_or_else(|| format!("{k} needs a value"))?;
+        let val = |name: &str| v.parse().map_err(|_| format!("bad {name} {v}"));
+        match k.as_str() {
+            "--port" => a.port = val("port")?,
+            "--home" => a.home = Some(PathBuf::from(v)),
+            "--projects" => a.projects = Some(PathBuf::from(v)),
+            "--static" => a.static_dir = Some(PathBuf::from(v)),
+            other => return Err(format!("unknown option {other}")),
+        }
+    }
+    Ok(a)
+}
+
+/// The one line the page mode prints on stdout when it listens: the URL the agent opens in a browser.
+///
+/// # Errors
+///
+/// The [`std::io::Error`] of writing to `w` (a closed stdout, for example).
+pub fn print_url_line(w: &mut (impl Write + ?Sized), port: u16) -> std::io::Result<()> {
+    writeln!(w, "drumspike bridge: http://127.0.0.1:{port}/")
+}
+
+/// The page mode of the shipped app (#370): a [`Service`] with the app's own home and projects
+/// folders (`--home`/`--projects` override them), the invoke API of the command registry and the
+/// page from `source`, on 127.0.0.1 only, no token (like the development bridge). Refuses to
+/// start when another process holds the home's lock (the window, or a second bridge on the same
+/// home). Prints the one URL line to `out` and serves until the process is stopped (SIGINT) or
+/// the listener fails.
+///
+/// # Errors
+///
+/// A `String` when the home is in use or the port cannot be bound.
+pub fn run_page_mode(args: &PageArgs, source: StaticSource, out: &mut dyn Write) -> Result<(), String> {
+    let svc = crate::agent::service(Path::new(""), "bridge");
+    if let Some(h) = &args.home {
+        svc.set_home(h.clone());
+    }
+    if let Some(p) = &args.projects {
+        svc.set_projects_dir(p.clone());
+    }
+    if let Some(home) = svc.home() {
+        take_home_lock(&home, "bridge").map_err(|holder| {
+            format!(
+                "drumspike bridge: the home is in use by {holder}: close it there, or pass another home with --home"
+            )
+        })?;
+    }
+    let listener = listen(args.port).map_err(|e| format!("drumspike bridge: cannot listen: {e}"))?;
+    let port = listener.local_addr().map_or(args.port, |a| a.port());
+    let bridge = Arc::new(Bridge::with_source(svc, source));
+    let _ = print_url_line(out, port);
+    let _ = out.flush();
+    serve(listener, bridge);
+    Ok(())
+}
+
 /// X-3 (P3-9b): the HTTP/1.1 server of the bridge, one thread per connection.
 ///
 /// Until P3-9b the bridge used `tiny_http` 0.12. Its pool reads each connection on one of its threads
@@ -277,12 +399,12 @@ impl EventLog {
     }
 }
 
-/// The bridge: a [`Service`], the channels and the folder of the static files.
+/// The bridge: a [`Service`], the channels and the source of the static files.
 pub struct Bridge {
     svc: Service,
     channels: Arc<Channels>,
     events: Arc<EventLog>,
-    static_dir: PathBuf,
+    static_source: StaticSource,
 }
 
 use crate::command_policy::{arg_str, opt_i64};
@@ -327,6 +449,13 @@ fn query_value(query: &str, key: &str) -> Option<String> {
 impl Bridge {
     /// A bridge over `svc` that serves the files of `static_dir`.
     pub fn new(svc: Service, static_dir: impl Into<PathBuf>) -> Bridge {
+        Bridge::with_source(svc, StaticSource::Dir(static_dir.into()))
+    }
+
+    /// A bridge over `svc` that serves its static files from `source` (a folder, or the assets
+    /// embedded in the binary — the page mode of the shipped app).
+    #[must_use]
+    pub fn with_source(svc: Service, source: StaticSource) -> Bridge {
         let channels = Arc::new(Channels::default());
         // Events (`project-dirty`) go to the log; the page long-polls `GET /events?after=N`.
         let events = Arc::new(EventLog::default());
@@ -336,7 +465,7 @@ impl Bridge {
             svc,
             channels,
             events,
-            static_dir: static_dir.into(),
+            static_source: source,
         }
     }
 
@@ -384,13 +513,16 @@ impl Bridge {
     pub fn invoke(&self, cmd: &str, args: &Value) -> Result<Reply, AppError> {
         let s = &self.svc;
         match cmd {
-            // tests only (the bridge is a debug binary): a copy job pauses `ms` after each chunk
+            // tests only (the development bridge is a debug binary; the page mode of the shipped
+            // app does not carry them): a copy job pauses `ms` after each chunk
+            #[cfg(debug_assertions)]
             "test_copy_delay" => {
                 s.set_copy_delay(Duration::from_millis(opt_i64(args, "ms")?.unwrap_or(0).max(0) as u64));
                 Ok(Reply::Json(json!({"ms": opt_i64(args, "ms")?.unwrap_or(0)})))
             }
             // P3-13a: the event `menu` as the native menu sends it (the app's debug command of the same name),
             // so the browser tests reach the menu items through the page's own listener
+            #[cfg(debug_assertions)]
             "selftest_menu" => Ok(Reply::Json(self.menu_event(args)?)),
             other => match crate::call::run(s, &self.channels, other, args) {
                 Some(r) => r,
@@ -399,35 +531,42 @@ impl Bridge {
         }
     }
 
-    /// Tests only (P3-16): `outputs_test_list` sets the output devices a null output lists,
-    /// `[{name, rate, channels}]`; any other name is unknown.
+    /// The bridge commands that are not in the registry: the test outputs of P3-16 in debug
+    /// builds; in a release binary (the page mode) every name outside the registry is unknown.
     fn invoke_test_outputs(&self, cmd: &str, args: &Value) -> Result<Reply, AppError> {
-        let s = &self.svc;
-        match cmd {
-            "outputs_test_list" => {
-                let list = match args.get("devices") {
-                    None | Some(Value::Null) => None,
-                    Some(Value::Array(a)) => Some(
-                        a.iter()
-                            .map(|d| {
-                                Ok(crate::DeviceKey {
-                                    name: d
-                                        .get("name")
-                                        .and_then(Value::as_str)
-                                        .ok_or_else(|| AppError::bad("a device needs a `name`"))?
-                                        .to_string(),
-                                    rate: d.get("rate").and_then(Value::as_u64).unwrap_or(48_000) as u32,
-                                    channels: d.get("channels").and_then(Value::as_u64).unwrap_or(2) as u16,
+        #[cfg(not(debug_assertions))]
+        let _ = args;
+        #[cfg(not(debug_assertions))]
+        return Err(AppError::not_found(format!("unknown command {cmd}")));
+        #[cfg(debug_assertions)]
+        {
+            let s = &self.svc;
+            match cmd {
+                "outputs_test_list" => {
+                    let list = match args.get("devices") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::Array(a)) => Some(
+                            a.iter()
+                                .map(|d| {
+                                    Ok(crate::DeviceKey {
+                                        name: d
+                                            .get("name")
+                                            .and_then(Value::as_str)
+                                            .ok_or_else(|| AppError::bad("a device needs a `name`"))?
+                                            .to_string(),
+                                        rate: d.get("rate").and_then(Value::as_u64).unwrap_or(48_000) as u32,
+                                        channels: d.get("channels").and_then(Value::as_u64).unwrap_or(2) as u16,
+                                    })
                                 })
-                            })
-                            .collect::<Result<Vec<_>, AppError>>()?,
-                    ),
-                    Some(_) => return Err(AppError::bad("`devices` must be a list")),
-                };
-                s.set_device_list(list);
-                Ok(Reply::Json(s.outputs_list()))
+                                .collect::<Result<Vec<_>, AppError>>()?,
+                        ),
+                        Some(_) => return Err(AppError::bad("`devices` must be a list")),
+                    };
+                    s.set_device_list(list);
+                    Ok(Reply::Json(s.outputs_list()))
+                }
+                other => Err(AppError::not_found(format!("unknown command {other}"))),
             }
-            other => Err(AppError::not_found(format!("unknown command {other}"))),
         }
     }
 
@@ -481,8 +620,8 @@ impl Bridge {
         self.static_file(path)
     }
 
-    /// A file of the static folder; `/` is `index.html` with the bridge flag. Paths with
-    /// `..` or an absolute part are refused.
+    /// A file of the static source; `/` is `index.html` with the bridge flag. Paths with `..`
+    /// or an absolute part are refused.
     fn static_file(&self, path: &str) -> HttpReply {
         let rel = path.trim_start_matches('/');
         let rel = if rel.is_empty() { "index.html" } else { rel };
@@ -490,19 +629,23 @@ impl Bridge {
         if rel_path.components().any(|c| !matches!(c, Component::Normal(_))) || rel.contains('\\') {
             return HttpReply::text(400, "bad path");
         }
-        let file = self.static_dir.join(rel_path);
-        match std::fs::read(&file) {
-            Ok(bytes) if rel == "index.html" => HttpReply {
+        let bytes = match &self.static_source {
+            StaticSource::Dir(dir) => std::fs::read(dir.join(rel_path)).ok(),
+            StaticSource::Embedded(read) => read(rel),
+        };
+        let mime = mime_of(rel_path);
+        match bytes {
+            Some(bytes) if rel == "index.html" => HttpReply {
                 status: 200,
-                content_type: mime_of(&file),
+                content_type: mime,
                 body: inject_flag(&String::from_utf8_lossy(&bytes)).into_bytes(),
             },
-            Ok(bytes) => HttpReply {
+            Some(bytes) => HttpReply {
                 status: 200,
-                content_type: mime_of(&file),
+                content_type: mime,
                 body: bytes,
             },
-            Err(_) => HttpReply::text(404, "not found"),
+            None => HttpReply::text(404, "not found"),
         }
     }
 }
