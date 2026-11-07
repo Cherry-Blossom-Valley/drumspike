@@ -275,6 +275,8 @@ struct Golden {
 
 fn compute() -> Golden {
     let corpus = corpus();
+    // Version 10 (#362) is NOT in the list: this host is not Apple silicon, so its rows stay
+    // unrecorded (the ticket's item 3). The coordinator records them on the branch after `done`.
     let rules = [
         RefineRule::Reference,
         RefineRule::Reach,

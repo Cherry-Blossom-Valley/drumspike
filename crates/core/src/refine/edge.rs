@@ -28,6 +28,17 @@ pub(crate) enum EdgeTail {
     /// [`DEPARTURE_MAX_S`] of the edge's first rising sample; otherwise version 8's walk-back decides (a slow wave or an
     /// offset on a tom line is the line itself, as before).
     Departure,
+    /// Version 10 (#362): the departure of version 9 with the line measured by its own noise, not by a fixed
+    /// share of the peak. The visibility band, the run's band and the run length scale with the spread of the
+    /// line samples before the stroke (the measure [`placement_diag`] reports as `line_noise`, the standard
+    /// deviation of the [`EDGE_NOISE_S`] before the walk's foot over the peak), with the fixed shares only as a
+    /// floor, and the walk is anchored at the edge's first rising sample. A line whose own noise is above the
+    /// fixed 2.5 % band never sees a departure under version 9 — the whole stroke falls back to the version 8
+    /// walk; with the band at a multiple of the noise the gentle opening swing of a noisy line counts as long
+    /// as it leads into the edge, and the run it must meet afterwards shortens with the noise (floored at
+    /// [`SWING_MIN_SAMPLES`], the swing guard) instead of staying at 10. A line that is a slow wave or an
+    /// offset stays the line, as before.
+    NoiseDeparture,
 }
 
 /// Version 6 (#293, #294): the rise window of the steep edge (seconds): the signal must rise by [`EDGE_RISE_DB`] under
@@ -135,6 +146,37 @@ pub(crate) const SWING_MIN_SAMPLES: i64 = 3;
 /// snare 93 of the staged excerpts, where the tool's stretch holds 5 such samples); 4 held
 /// on the check half and moved no Session E hit.
 pub(crate) const DEPARTURE_BRIDGE_SAMPLES: i64 = 4;
+/// Version 10 (#362), the noise-scaled departure: the line is measured by its own noise, not by a fixed
+/// share of the peak — one principle, one rule for all kits, no tuning to named hits. The visibility band
+/// (`[DEPARTURE_VIS_PCT]` floored), the run's band (`[VIS_TAIL_PCT]` floored) and the run length
+/// (`[SWING_MIN_SAMPLES]` floored) scale with the spread of the line samples before the stroke: the
+/// standard deviation of the [`EDGE_NOISE_S`] before the walk's foot over the hit's peak, the measure
+/// [`placement_diag`] reports as `line_noise`. Fitted on the 2026-11-07 Training Mode labels of Sessions
+/// A to J (7327 windows of 960 samples; even rows chose, odd rows checked; the Python port of this rule in
+/// the #362 fit, aggregates only): the band multiple 2.0 held on the check half; 1.0 took the wobble of the
+/// wobbliest snares for the stroke's own motion.
+pub(crate) const DEPARTURE10_VIS_MULT: f64 = 2.0;
+/// Version 10 (#362), the run's band multiple over the line noise, with [`VIS_TAIL_PCT`] as the floor.
+/// Fitted on the same hits as [`DEPARTURE10_VIS_MULT`]: 2.0 held; 0.5 let the wobble inside the run's band
+/// end the run early, on the wobbliest lines.
+pub(crate) const DEPARTURE10_RUN_MULT: f64 = 2.0;
+/// Version 10 (#362), the run-length fit: the run of line samples the walk must meet is
+/// `max([SWING_MIN_SAMPLES], round(K / sigma))` with K this constant — a shorter run on a noisier line is
+/// the rule, not a tuning (a 3-sample floor is the swing guard: a run shorter than a swing is a flicker).
+/// Fitted on the same hits: 0.02 held (a 0.5 % line walks a 40-sample run back, a 1 % line a 20-sample
+/// one); 0.05 and 0.1 refused the short swings of the noisiest snares.
+pub(crate) const DEPARTURE10_RUN_K: f64 = 0.02;
+/// Version 10 (#362), the longest walk-back to the line (seconds), anchored at the edge's first rising
+/// sample. Fitted on the same hits: 0.8 ms cut the walk short of the run behind the slowest rises of the
+/// new kits (Session G kick); 1.2 ms held and 1.6 ms and 2 ms gave the same held-out result, so the
+/// shorter bound is kept.
+pub(crate) const DEPARTURE10_MAX_S: f64 = 0.001_2;
+/// Version 10 (#362), the ramp refusal: the departure must leave the line as a motion, not as a
+/// ramp — a slow drift (the owner's #294 shape: a drift to 10 % of the peak over 1 ms before the
+/// swing) crosses the band with a per-sample step under the line's own noise, while a swing's
+/// first step clears it. The threshold is the line noise with this share of the peak as the
+/// floor, because a digitally silent line has no noise of its own.
+pub(crate) const DEPARTURE10_RAMP_PCT: f64 = 0.5;
 /// How far after the walk's foot the edge is looked for (seconds).
 pub(crate) const EDGE_SPAN_S: f64 = 0.005;
 
@@ -188,7 +230,7 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
     // the line's level, the median of the short stretch before the walk's foot (versions 8 and 9 measure from it; 0
     // for the older tails: they read the distance from zero)
     let line = match tail_rule {
-        EdgeTail::Line | EdgeTail::Departure => {
+        EdgeTail::Line | EdgeTail::Departure | EdgeTail::NoiseDeparture => {
             let from = (foot - samples(LINE_LEVEL_S, srf)).max(0);
             let mut v: Vec<f64> = (from..foot).map(at).collect();
             if v.is_empty() {
@@ -280,11 +322,46 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
             // edge contains an excursion SWING_MIN_SAMPLES wide). The line level is measured over the longer
             // DEPARTURE_LEVEL_S window: the pre-swing occupies most of the LINE_LEVEL_S stretch before the foot
             // and tilts its median onto the swing itself
-            EdgeTail::Departure => {
-                let vis = pk * DEPARTURE_VIS_PCT / 100.0;
-                let vis_run = pk * DEPARTURE_RUN_PCT / 100.0;
-                let run = LINE_RUN_SAMPLES.max(1);
-                let lo_d = (k0 - samples(DEPARTURE_MAX_S, srf)).max(1);
+            // version 10 (#362): the same walk, with the line measured by its own noise. The visibility
+            // band, the run's band and the run length scale with sigma (the standard deviation of the
+            // EDGE_NOISE_S before the walk's foot over the peak, the measure `placement_diag` reports as
+            // `line_noise`), the fixed shares only as a floor, and the walk is anchored at the edge's
+            // first rising sample `k` (version 9 anchors at the walked-back rise start `k0`). A shorter
+            // run on a noisier line is the rule, not a tuning: the run is max(SWING_MIN_SAMPLES,
+            // round(K / sigma)), floored at the swing guard
+            EdgeTail::Departure | EdgeTail::NoiseDeparture => {
+                let noise_scaled = tail_rule == EdgeTail::NoiseDeparture;
+                let sigma = if noise_scaled {
+                    let from = (foot - samples(EDGE_NOISE_S, srf)).max(0);
+                    let w: Vec<f64> = (from..foot).map(|i| at(i) - line).collect();
+                    if w.is_empty() || pk <= 0.0 {
+                        0.0
+                    } else {
+                        let m = w.len() as f64;
+                        let mean = w.iter().sum::<f64>() / m;
+                        (w.iter().map(|d| (d - mean) * (d - mean)).sum::<f64>() / m).sqrt() / pk
+                    }
+                } else {
+                    0.0
+                };
+                let (vis, vis_run, run, lo_d) = if noise_scaled {
+                    let vis = (DEPARTURE_VIS_PCT / 100.0).max(DEPARTURE10_VIS_MULT * sigma) * pk;
+                    let vis_run = (VIS_TAIL_PCT / 100.0).max(DEPARTURE10_RUN_MULT * sigma) * pk;
+                    let run = if sigma > 0.0 {
+                        (DEPARTURE10_RUN_K / sigma).round() as i64
+                    } else {
+                        0
+                    }
+                    .max(SWING_MIN_SAMPLES);
+                    (vis, vis_run, run, (k - samples(DEPARTURE10_MAX_S, srf)).max(1))
+                } else {
+                    (
+                        pk * DEPARTURE_VIS_PCT / 100.0,
+                        pk * DEPARTURE_RUN_PCT / 100.0,
+                        LINE_RUN_SAMPLES.max(1),
+                        (k0 - samples(DEPARTURE_MAX_S, srf)).max(1),
+                    )
+                };
                 let line9 = {
                     let from = (foot - samples(DEPARTURE_LEVEL_S, srf)).max(0);
                     let mut v: Vec<f64> = (from..foot).map(at).collect();
@@ -367,6 +444,14 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
                         }
                     }
                     best <= DEPARTURE_BRIDGE_SAMPLES
+                })
+                .filter(|&h| {
+                    // the departure leaves the line as a MOTION, not as a ramp (the owner's #294
+                    // shape): a slow drift crosses the band with a per-sample step under the
+                    // line's own noise, while a swing's first step clears it. The threshold is
+                    // the line noise with a fixed share of the peak as the floor (a digitally
+                    // silent line has none); the line's level cancels in the difference
+                    h + 1 > k0 || (at(h + 1) - at(h)).abs() > sigma.max(DEPARTURE10_RAMP_PCT / 100.0 * pk)
                 })
                 .unwrap_or_else(|| line_walk(k, k0))
             }
