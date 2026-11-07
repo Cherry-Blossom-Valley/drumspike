@@ -1246,6 +1246,30 @@ training_status null
 training_status wrong
   page: err 400 missing or wrong argument `sid` (string)
   agent: err 400 wrong argument `sid`: expected string
+agent_skill_install {}
+  page: err 404 the app carries no skill folder
+  agent: err 404 the app carries no skill folder
+agent_skill_install min
+  page: err 404 the app carries no skill folder
+  agent: err 404 the app carries no skill folder
+agent_skill_install null
+  page: err 404 the app carries no skill folder
+  agent: err 404 the app carries no skill folder
+agent_skill_install wrong
+  page: err 400 wrong argument `target` (string)
+  agent: err 400 wrong argument `target`: expected string
+agent_skill_status {}
+  page: ok {installed,path,version,bundled_version,current,binary,mcp_command}
+  agent: ok {installed,path,version,bundled_version,current,binary,mcp_command}
+agent_skill_status min
+  page: ok {installed,path,version,bundled_version,current,binary,mcp_command}
+  agent: ok {installed,path,version,bundled_version,current,binary,mcp_command}
+agent_skill_status null
+  page: ok {installed,path,version,bundled_version,current,binary,mcp_command}
+  agent: ok {installed,path,version,bundled_version,current,binary,mcp_command}
+agent_skill_status wrong
+  page: err 400 wrong argument `target` (string)
+  agent: err 400 wrong argument `target`: expected string
 track_layer_set {}
   page: err 400 missing or wrong argument `sid` (string)
   agent: err 400 missing argument `sid` (string)

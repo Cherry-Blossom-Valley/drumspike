@@ -287,6 +287,25 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
 - `apply(track, list)`: the moves `[{index, samples}]` (a row of `plan` also works, its `suggest` is used); a zero or `null`
   move is skipped. `save()` writes the project. `status()` answers `{training, records, path}`.
 
+## Agent fine-tune skill
+
+#371: the skill `skills/drumspike-finetune/` (a `SKILL.md` and a `README.md`) ships inside the app bundle as a resource. Two
+commands, both on the agent surface, put it where the agent looks for skills:
+
+- `agent_skill_install {target?}` copies the bundled folder to `target` (default `~/.claude/skills/drumspike-finetune`,
+  Claude Code's user skills; another runtime or path with `target`), replaces an older copy, and writes the absolute path of
+  the running binary into `SKILL.md` for its `<binary>` placeholders, so no symlink is needed. It answers
+  `{installed, files, version}`; `installed` is the path. It refuses (409) a `target` that holds other files and no `SKILL.md`.
+- `agent_skill_status {target?}` answers `{installed, path, version, bundled_version, current, binary, mcp_command}`.
+  `current` is false for an older copy, or one written by another binary; `mcp_command` is the one line that adds the
+  MCP server for this binary.
+
+The window has the same in Settings, the row "Agent fine-tune skill": the status text (not installed, installed with the
+version, older copy), one button (Install, Update for an older copy) and the `claude mcp add` line with a Copy button. The
+owner does two things once: Install, then the `claude mcp add` line. A session starts with: "Fine-tune the drums of
+~/Music/Sessions/Song in Drum Spike." `DRUMSPIKE_SKILL_SOURCE` and `DRUMSPIKE_SKILL_TARGET` name the bundled folder and
+the default target for a test or a packaging step.
+
 Export: `export_markers_set {sid, on}` keeps the Export dialog's "Markers in MIDI" checkbox in
 the document field `export_markers` (absent is off); `export_existing` answers it as `export_markers`.
 With it on, the one multi-track file (`<project>_drums.mid`, `midi_mode: "single"`) holds one marker

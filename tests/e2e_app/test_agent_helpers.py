@@ -1,8 +1,12 @@
 """#371: window.DSAgent, the page helpers of an agent's hit-by-hit fine-tune pass (static/agent.js). Every move and confirm
 goes through the page's own path, so the training record is the one a person's nudge writes; with the mode off every
 helper that changes the document refuses."""
+import shutil
+from pathlib import Path
+
 import numpy as np
 import pytest
+from playwright.sync_api import expect
 
 from app_support import edits_done, menu, open_project
 from helpers import SR, synth_track, write_wav
@@ -112,3 +116,36 @@ def test_plan_gives_one_row_per_hit_and_marks_the_hit_on_the_noisy_line_doubtful
     assert len(project_log_lines(app)) == before + 1
     st = call(app, "DSAgent.status()")
     assert st["training"] is True and st["records"] >= 1
+
+
+def test_settings_row_installs_the_bundled_skill_and_shows_the_version_and_the_mcp_line(app, tmp_path):
+    """#371 (h): the Settings row reads "not installed", Install copies the bundled folder to the target (a temp folder
+    through the bridge's environment), bakes the binary path into SKILL.md, and the row then names the version; the Copy
+    button puts the one `claude mcp add` line on the clipboard."""
+    target = Path(app.evaluate("async () => (await B.agentSkillStatus()).path"))
+    shutil.rmtree(target.parent, ignore_errors=True)
+    app.evaluate("() => openSettings()")
+    expect(app.locator("#setSkillStatus")).to_have_text("not installed")
+    expect(app.locator("#setSkillInstall")).to_have_text("Install")
+    line = app.locator("#setSkillCmd").text_content()
+    assert line.startswith('claude mcp add drumspike -- "') and line.endswith('" mcp')
+    app.locator("#setSkillInstall").click()
+    version = app.evaluate("async () => (await B.agentSkillStatus()).bundled_version")
+    expect(app.locator("#setSkillStatus")).to_contain_text(f"installed {version}")
+    skill = (target / "SKILL.md").read_text()
+    binary = line.split('"')[1]
+    assert f'"{binary}" bridge' in skill and "<binary>" not in skill and f"version: {version}" in skill
+    assert (target / "README.md").is_file()
+    app.evaluate("() => { window.__copied = null; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } }); }")
+    app.locator("#setSkillCopy").click()
+    app.wait_for_function("() => window.__copied !== null")
+    assert app.evaluate("() => window.__copied") == line
+    # an older copy reads as such and the button says Update
+    (target / "SKILL.md").write_text(skill.replace(f"version: {version}", "version: 0.0.1"))
+    app.evaluate("() => agentSkillFill()")
+    expect(app.locator("#setSkillStatus")).to_contain_text("older copy installed (0.0.1)")
+    expect(app.locator("#setSkillInstall")).to_have_text("Update")
+    app.locator("#setSkillInstall").click()
+    expect(app.locator("#setSkillStatus")).to_contain_text(f"installed {version}")
+    expect(app.locator("#setSkillInstall")).to_have_text("Install")
+    shutil.rmtree(target.parent, ignore_errors=True)

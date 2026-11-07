@@ -143,3 +143,36 @@
   };
   window.DSAgent = DSAgent;
 })();
+
+/* #371: Settings > Agent fine-tune skill. The status text (not installed / installed <version> / older copy), the Install
+   button (Update when the copy is older) and the one `claude mcp add` line with a Copy button. The app installs the skill
+   through agent_skill_install (crates/app/src/agent_skill.rs); the line carries the path of this app's binary. */
+function agentSkillShow(st, note) {
+  const text = !st.installed ? "not installed"
+    : st.current ? `installed ${st.version}` : `older copy installed (${st.version || "unknown version"}), this app has ${st.bundled_version}`;
+  $("#setSkillStatus").textContent = note ? `${text}. ${note}` : text;
+  $("#setSkillInstall").textContent = st.installed && !st.current ? "Update" : "Install";
+  $("#setSkillCmd").textContent = st.mcp_command;
+}
+async function agentSkillFill() {
+  const el = $("#setSkillStatus");
+  if (!el || !B.agentSkillStatus) return;
+  try { agentSkillShow(await B.agentSkillStatus()); }
+  catch (e) { el.textContent = `agent skill: ${errText(e)}`; }
+}
+async function agentSkillInstall() {
+  try {
+    const r = await B.agentSkillInstall(), st = await B.agentSkillStatus();
+    agentSkillShow(st, `${r.files} files in ${r.installed}`);
+  } catch (e) { $("#setSkillStatus").textContent = `install failed: ${errText(e)}`; }
+}
+async function agentSkillCopy() {
+  const text = $("#setSkillCmd").textContent;
+  try { await navigator.clipboard.writeText(text); setMsg("copied the claude mcp add line"); }
+  catch (e) { setMsg(`copy failed: ${errText(e)}`, "error"); }
+}
+(function () {
+  const install = $("#setSkillInstall"), copy = $("#setSkillCopy");
+  if (install) install.onclick = agentSkillInstall;
+  if (copy) copy.onclick = agentSkillCopy;
+})();

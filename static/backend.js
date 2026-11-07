@@ -154,6 +154,9 @@ function ipcBackend(T) {
        {track: factor}; the wave lane of the row is the global wave height times the factor. */
     rowHeightsGet: sid => invoke("row_heights_get", { sid }),
     rowHeightsSet: (sid, heights) => invoke("row_heights_set", { sid, heights }),
+    /* #371: the agent fine-tune skill (crates/app/src/agent_skill.rs): {installed, path, version, bundled_version, current, binary, mcp_command} and {installed, files, version} */
+    agentSkillStatus: () => invoke("agent_skill_status", {}),
+    agentSkillInstall: () => invoke("agent_skill_install", {}),
     pickTempoFile: async () => {
       const r = await T.dialog.open({ directory: false, multiple: false, title: "Import a tempo map from a MIDI file",
         filters: [{ name: "MIDI file", extensions: ["mid", "midi"] }] });

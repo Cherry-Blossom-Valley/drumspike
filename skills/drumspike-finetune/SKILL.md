@@ -1,6 +1,7 @@
 ---
 name: drumspike-finetune
 description: Fine-tune the drums of one song in Drum Spike. Use when asked to fine-tune, place or review the hits of a session hit by hit, at sample zoom, with Training Mode on.
+version: <version>
 ---
 
 # Fine-tune the drums of one song in Drum Spike
@@ -8,12 +9,13 @@ description: Fine-tune the drums of one song in Drum Spike. Use when asked to fi
 You place the hits of one song the way a person does by hand: one hit at a time, in the app's page at sample zoom, with
 Training Mode on. The page helpers (`window.DSAgent`) do the reading and the nudging; you judge.
 
+The app installed this skill for the binary `<binary>`. Use that path as it stands; no symlink is needed.
+
 ## Set up (once)
 
-1. The command `drumspike` is a link to the app (`docs/agent-api.md`, "Set up"). Add the MCP server:
-   `claude mcp add drumspike -- drumspike mcp`.
-2. Start the page: `drumspike bridge`. Open the address it prints in the browser you control. `window.DSAgent` is there
-   when the page has loaded.
+1. The MCP server (the owner runs this once): `claude mcp add drumspike -- "<binary>" mcp`. Check with `claude mcp list`.
+2. Start the page in the background: `"<binary>" bridge`. Open the address it prints in the browser you control.
+   `window.DSAgent` is there when the page has loaded.
 
 ## Workflow
 

@@ -57,7 +57,7 @@ fn unknown(cmd: &str) -> AppError {
 }
 
 /// The handlers of every module; a name is in exactly one of them.
-const HANDLERS: [&[Route]; 21] = [
+const HANDLERS: [&[Route]; 22] = [
     &crate::commands::HANDLERS,
     &crate::transport::HANDLERS,
     &crate::shell::HANDLERS,
@@ -79,6 +79,7 @@ const HANDLERS: [&[Route]; 21] = [
     &crate::layer::HANDLERS,
     &crate::sampler::HANDLERS,
     &crate::training::HANDLERS,
+    &crate::agent_skill::HANDLERS,
 ];
 
 /// Every route of [`run`], in the order of the module list.

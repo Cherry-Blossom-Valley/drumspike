@@ -23,6 +23,7 @@ The demo session is the example in every chapter: 13 tracks, 62.5 s, 309 hits.
 | 12 | [Follower tracks and layers](12-followers-and-layers.md) | 3, 5 |
 | 13 | [Tempo, bars and beats](13-tempo.md) | 3, 6 |
 | 14 | [Automate it (agent API)](14-automate.md) | all |
+| 15 | [Let an agent fine-tune a song](15-agent-finetune.md) | 4, 9, 14 |
 
 For the settings and the order of work that give the cleanest results, see
 [Get the best results](best-results.md).
@@ -44,5 +45,6 @@ The key names use the Pro Tools preset, the default. Chapter pages:
 12. [Follower tracks and layers](12-followers-and-layers.md)
 13. [Tempo, bars and beats](13-tempo.md)
 14. [Automate it (agent API)](14-automate.md)
+15. [Let an agent fine-tune a song](15-agent-finetune.md)
 
 Next: start with [chapter 1](01-why-sample-exact.md).
