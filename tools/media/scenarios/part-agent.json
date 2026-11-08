@@ -30,7 +30,7 @@
          "lines": [6, 10]},
         {"do": "hold", "s": 2.5},
         {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
-         "lines": [11, 15]},
+         "lines": [11, 16]},
         {"do": "hold", "s": 2.5}
       ]
     },
@@ -115,6 +115,15 @@
         {"do": "agent", "fn": "save", "timeout": 30, "err": "the save"},
         {"do": "text", "sel": "#stMsg", "contains": "project saved"},
         {"do": "hold", "s": 2.5}
+      ]
+    },
+    {
+      "id": "ra-table",
+      "steps": [
+        {"do": "caption", "text": "the counts, per track"},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
+         "lines": [17, 24], "title": "claude -p"},
+        {"do": "hold", "s": 3.0}
       ]
     }
   ]

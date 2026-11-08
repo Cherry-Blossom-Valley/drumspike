@@ -10,14 +10,16 @@ zoom to the action, a visible pointer, keys and menu items on screen, the result
 path, as the shipped app runs: no external detector), like the other recordings on the current
 main.
 
-The story, per the owner's review of 2026-11-08: prompt first, then the agent at work through
-its `drumspike-finetune` skill, and one visible move of a hit by two samples. Training Mode is
-not a topic of the tutorial: no scene, caption or close-up names it; the agent's skill
-switches it on as its own step 2, and the narration says so once. The set up is one short
-scene. The terminal pane types the real agent run of `tools/media/fixtures/agent-run/`
-(ticket #380): the user's prompt from `prompt.txt`, the skill load and the first tool calls
-from `transcript.txt`. No agent text is invented; when #380 lands, the fixture line ranges of
-the two terminal scenes are pinned to the real files.
+The story, per the owner's review of 2026-11-08 and the coordinator's storyboard of a real run
+(Session K, 2026-11-08): prompt first, then the agent at work through its
+`drumspike-finetune` skill, one question back to the user, one visible move of a hit by two
+samples, and the per-track counts at the end. Training Mode is not a topic of the tutorial: no
+scene, caption or close-up names it; the agent's skill switches it on as its own step 2, and
+the narration says so once. The set up is one short scene. The terminal pane types the real
+agent run of `tools/media/fixtures/agent-run/` (ticket #380): the user's prompt from
+`prompt.txt`, the skill load, the tool calls and the question back from `transcript.txt`, the
+final per-track table from the run's aggregate report. No agent text is invented; when #380
+lands, the fixture line ranges of the terminal scenes are pinned to the real files.
 
 The hits the scenes act on are the demo session's own events, checked against `DSAgent.plan`
 on the recording page before the take (probe of 2026-11-08): no s top event carries a non-zero
@@ -44,7 +46,9 @@ are done. The agent works through the Drum Spike page, the same lanes you work i
 
 > Caption: the agent loads the drumspike-finetune skill and works hit by hit. The terminal pane types the run's first tool calls from the fixture; no close-up of any setting.
 
-The agent loads the drumspike-finetune skill and follows it step by step. The skill has it
+The agent loads the drumspike-finetune skill and follows it step by step: it starts the bridge
+and the browser, opens the session, and reads every hit before it touches one. Where the rule
+does not decide for it, it asks you one question and waits for the answer. The skill has it
 prepare the session first, the way you would; that part of the run you never see on screen.
 
 ## ra-setup
@@ -94,3 +98,10 @@ reason.
 When it is done, the agent saves the project and reports the counts: seen, moved, confirmed,
 left for you. Every edit it made is exactly the edit you could have made yourself, one undo
 step at a time.
+
+## ra-table
+
+> Caption: the counts, per track. The terminal pane types the run's final aggregate report from the fixture: hits, moved, confirmed, hand-placed untouched, no suggestion, doubtful.
+
+And at the end, the counts: per track, what the agent saw, moved, confirmed, and left for you,
+with the reasons. Nothing in the saved project but the edits it told you about.

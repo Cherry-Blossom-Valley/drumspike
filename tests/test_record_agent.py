@@ -136,7 +136,7 @@ def test_the_part_agent_scenario_parses():
     scenario = record.parse_scenario(_json.loads(path.read_text(encoding="utf-8")))
     ids = [sc["id"] for sc in scenario["scenes"]]
     assert ids == ["ra-prompt", "ra-skill", "ra-setup", "ra-look", "ra-move", "ra-confirm",
-                   "ra-doubt", "ra-save"]
+                   "ra-doubt", "ra-save", "ra-table"]
     for sc in scenario["scenes"]:
         assert record.standard_problems(sc) == [], sc["id"]
     commands = record.keymap_commands(
