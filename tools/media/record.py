@@ -104,12 +104,14 @@ NOTE_PAD_PX = 6
 NOTE_FONT = "Helvetica, Arial, sans-serif"   # one sans-serif family, like the explainers
 STEP_KINDS = ("caption", "key", "show_key", "hide_key", "click", "select", "menu", "answer_save", "answer_pick",
               "show_dest", "show_text", "lane_click", "drag", "wait", "visible", "text", "hold", "blur", "zoom_to",
-              "shot", "agent")
+              "shot", "agent", "set_training", "terminal")
 # The recording standard (docs/product/recording-standard.md), on for a scenario with "standard": true
-ACTION_KINDS = ("key", "show_key", "click", "lane_click", "drag", "select", "menu", "agent")
+# "terminal" is an action too (#381): the pane's lines are the scene's change, with its own
+# before/after pictures (set_training is silent plumbing, not an action).
+ACTION_KINDS = ("key", "show_key", "click", "lane_click", "drag", "select", "menu", "agent", "terminal")
 POINTER_KINDS = ("click", "lane_click", "drag")   # the overlay pointer glides to these before they act
 GLIDE_MS = 450                  # the pointer glides in 300 to 600 ms
-ZOOM_SPAN_S = (0.5, 5.0)        # a zoom_to span: a preset from 500 ms to 5 s
+ZOOM_SPAN_S = (0.005, 5.0)        # a zoom_to span: 5 ms (the move scene's sample zoom, #381) to 5 s
 RESULT_HOLD_S = 1.5             # an action's result stays on screen this long at the same zoom
 CHANGE_MIN_PCT = 0.5            # the action area must change by this share of its pixels (recording-standard.md: >= 0.5 %)
 CHANGE_LEVEL = 16               # a channel moved by this much (of 255) counts as changed (screenshot noise)
@@ -283,6 +285,17 @@ def parse_scenario(scenario):
                                       f"{', '.join(AGENT_FNS)}")
                 if not isinstance(st.get("args", []), list):
                     raise RecordError(f"{sc['id']}: an agent step's args are a list")
+            if st["do"] == "terminal":
+                # The terminal pane types the fixture transcript of #380 (the real agent run),
+                # never inline text: the step names the fixture file and the 1-based lines.
+                if not isinstance(st.get("file"), str) or st.get("clear") is not True and \
+                        not (isinstance(st.get("lines"), list) and st["lines"]
+                             and all(isinstance(n, int) for n in st["lines"])):
+                    raise RecordError(f"{sc['id']}: a terminal step needs file and lines "
+                                      "(1-based, from the fixture) or clear: true")
+                if st.get("clear") is not True:
+                    if len(st["lines"]) != 2 or st["lines"][0] > st["lines"][1]:
+                        raise RecordError(f"{sc['id']}: a terminal step's lines are [first, last]")
     if scenario.get("standard") is True:
         problems = [p for sc in scenes for p in standard_problems(sc)]
         if problems:
@@ -335,6 +348,101 @@ RING_JS = "([x, y]) => window.__dsPtrRing(x, y)"
 DRAG_LINE_JS = "([x1, x2, y]) => window.__dsPtrDrag(x1, x2, y)"
 DRAG_END_JS = "() => window.__dsPtrDragEnd()"
 PTR_HIDE_JS = "() => window.__dsPtrHide()"
+
+# The tutorial's terminal pane (#381): the user's prompt and the agent's transcript, typed from
+# the fixture files of #380 (the real agent run), never from inline text. The pane is an overlay
+# div created on the first line; the title is set once and stays.
+TERMINAL_JS = """([title, line]) => {
+  let pane = document.getElementById('__term');
+  if (!pane) {
+    if (line === null) return;
+    pane = document.createElement('div'); pane.id = '__term';
+    pane.style.cssText = 'position:fixed;left:24px;bottom:72px;z-index:99998;width:900px;'
+      + 'max-height:430px;overflow:hidden;background:rgba(12,14,16,0.92);border:1px solid #3a3f45;'
+      + 'border-radius:8px;font:15px/1.55 ui-monospace,Menlo,Consolas,monospace;color:#d6dae0;'
+      + 'padding:10px 14px;box-shadow:0 4px 18px rgba(0,0,0,0.5);';
+    const t = document.createElement('div');
+    t.style.cssText = 'color:#8a9099;font-size:13px;margin-bottom:6px;white-space:pre;';
+    pane.appendChild(t); pane.__title = t;
+    pane.__lines = document.createElement('div');
+    pane.appendChild(pane.__lines);
+    document.body.appendChild(pane);
+  }
+  if (title !== null) pane.__title.textContent = title;
+  if (line !== null) {
+    const d = document.createElement('div');
+    d.textContent = line; d.style.whiteSpace = 'pre';
+    pane.__lines.appendChild(d);
+    while (pane.__lines.children.length > 18) pane.__lines.removeChild(pane.__lines.firstChild);
+  }
+}"""
+TERMINAL_CLEAR_JS = "() => { const p = document.getElementById('__term'); if (p) p.remove(); }"
+# The skill's own set-up step (skills/drumspike-finetune SKILL.md step 2): the agent turns
+# Training Mode on through the page's own setTraining before it edits. Plumbing of the recording
+# (Training Mode is not a topic of the tutorial, #381): silent, no caption, no menu close-up.
+SET_TRAINING_JS = "() => setTraining(true)"
+
+# The move scene's view data (#381 gate b): the zoom must stay the same before and after the
+# move, at sample zoom (px_per_sample >= 2), and the marker x must move by exactly N samples.
+VIEW_DATA_JS = """track => {
+  if (typeof trainingView !== 'function' || typeof S === 'undefined' || !S.tracks[track]) return null;
+  const v = trainingView(track);
+  if (!v) return null;
+  return { px_per_sample: v.px_per_sample, window_start: S.view.t0 };
+}"""
+HIT_X_JS = "([track, index]) => GEO.laneX + tToX(S.events[track][index].t, laneWidth())"
+
+
+def move_view_problems(v0, v1, n):
+    """The move scene's view-data problems (#381 gate b): the before and after view must hold the
+    same px_per_sample (>= 2: sample zoom) and window start, and the marker must move by
+    n * px_per_sample within 1 px. None when the page gives no view data (the test stubs)."""
+    if not v0 or not v1:
+        return []
+    problems = []
+    if abs(v0["px_per_sample"] - v1["px_per_sample"]) > 1e-9:
+        problems.append(f"px_per_sample changed {v0['px_per_sample']} -> {v1['px_per_sample']}")
+    if v1["px_per_sample"] < 2:
+        problems.append(f"px_per_sample {v1['px_per_sample']} is under 2: not sample zoom")
+    if abs(v0["window_start"] - v1["window_start"]) > 1e-9:
+        problems.append(f"the window moved: start {v0['window_start']} -> {v1['window_start']}")
+    shift = abs(v1["marker_x"] - v0["marker_x"])
+    want = n * v0["px_per_sample"]
+    if abs(shift - want) > 1.0:
+        problems.append(f"the marker moved {shift:.2f} px, expected {n} samples = {want:.2f} px")
+    return problems
+
+
+def move_diff_problems(a, b):
+    """The frame-diff problems of the move scene's before/after PNGs (#381 gate b, the owner's
+    gate: the move must be visible): the changed pixels must sit in the marker columns only --
+    at most two column runs (the spike and the wave stalk), each at most 4 px wide. a, b are
+    (h, w, 3) uint8 arrays as png_rgb returns."""
+    diff = np.abs(a.astype(np.int16) - b.astype(np.int16)).max(axis=2) > CHANGE_LEVEL
+    cols = np.flatnonzero(diff.any(axis=0))
+    if cols.size == 0:
+        return ["no pixel changed: the move is not visible"]
+    runs, start, prev = [], cols[0], cols[0]
+    for c in cols[1:]:
+        if c > prev + 1:
+            runs.append((start, prev))
+            start = c
+        prev = c
+    runs.append((start, prev))
+    problems = []
+    if len(runs) > 2:
+        problems.append(f"the diff spans {len(runs)} column runs, expected the 2 marker columns")
+    for s, e in runs:
+        if e - s + 1 > 4:
+            problems.append(f"a changed column run is {e - s + 1} px wide (columns {s}..{e})")
+    return problems
+
+
+def move_scenes(scenes):
+    """The scenes with a DSAgent.move step on a named hit (the move gate applies to them)."""
+    return [sc for sc in scenes
+            if any(st["do"] == "agent" and st.get("fn") == "move" and st.get("track")
+                   and "t" in st for st in sc["steps"])]
 
 
 def has_action(sc):
@@ -533,6 +641,17 @@ def expand(path, values):
     for k, v in values.items():
         path = path.replace("{" + k + "}", v)
     return Path(os.path.expanduser(path))
+
+
+def fixture_lines(rel):
+    """A fixture file of the real agent run (#380), repo-relative, as its lines. The terminal
+    pane types only these: the tutorial shows the real run, no invented agent text. A missing
+    fixture is a clear FAIL, not a placeholder."""
+    path = ROOT / rel
+    if not path.is_file():
+        raise RecordError(f"{rel}: the fixture is missing (it lands with #380; the terminal "
+                          "pane types the real run, no placeholder text)")
+    return path.read_text(encoding="utf-8").splitlines()
 
 
 # ---------------- the inputs ----------------
@@ -792,7 +911,38 @@ def run_step(page, st, env):
         if st.get("track") and "t" in st:
             index = page.evaluate(NEAREST_HIT_JS, [st["track"], st["t"]])
             args = [st["track"], index] + args
+        # The move gate (#381 b): the view must hold the same sample zoom and window over the
+        # move, and the marker must step n * px_per_sample. The stub pages of the tests give no
+        # view data (None): the check is silent there.
+        v0 = x0 = index = None
+        if st["fn"] == "move" and st.get("track") and "t" in st:
+            v0 = page.evaluate(VIEW_DATA_JS, st["track"])
+            if v0 and index is not None:
+                x0 = page.evaluate(HIT_X_JS, [st["track"], index])
         page.evaluate(AGENT_JS, [st["fn"], args])
+        if st["fn"] == "move" and v0 and index is not None:
+            v1 = page.evaluate(VIEW_DATA_JS, st["track"])
+            x1 = page.evaluate(HIT_X_JS, [st["track"], index])
+            n = abs(args[-1]) if args and isinstance(args[-1], (int, float)) else 0
+            problems = move_view_problems({**v0, "marker_x": x0}, {**v1, "marker_x": x1}, n)
+            if problems:
+                raise RecordError("the move gate: " + "; ".join(problems))
+    elif kind == "set_training":
+        # The skill's step 2, silent: Training Mode is not a topic of the tutorial (#381).
+        page.evaluate(SET_TRAINING_JS)
+    elif kind == "terminal":
+        # The terminal pane types a fixture file of #380 (the real agent run): no invented
+        # agent text. The lines are read from the file at the run, 1-based, [first, last].
+        if st.get("clear") is True:
+            page.evaluate(TERMINAL_CLEAR_JS)
+        else:
+            first, last = st["lines"]
+            lines = fixture_lines(st["file"])
+            if last > len(lines):
+                raise RecordError(f"{st['file']}: the step asks for lines {first}..{last}, "
+                                  f"the fixture has {len(lines)} lines")
+            for ln in lines[first - 1:last]:
+                page.evaluate(TERMINAL_JS, [st.get("title"), ln])
     elif kind == "blur":
         # Drop the focused element (plumbing, no user action on screen): a scene that follows a
         # slider or a select carries its focus, and the app's key guard (P3-13a) swallows the
@@ -1321,6 +1471,16 @@ def record(root, scenario, items, out, work, keep, check_model=True):
                     changed = change_problems(shots, scenes)
                     if changed:
                         raise RecordError("the action does not show: " + "; ".join(changed))
+                    # The move gate (#381 b): the move scene's frame diff changes pixels only
+                    # in the two marker columns (the stalks of the spike and the wave lane).
+                    for sc in move_scenes(scenes):
+                        a = shots / f"{sc['id']}-before.png"
+                        b = shots / f"{sc['id']}-after.png"
+                        if a.is_file() and b.is_file():
+                            problems = move_diff_problems(png_rgb(a), png_rgb(b))
+                            if problems:
+                                raise RecordError(f"{sc['id']}: the move gate (frame diff): "
+                                                  + "; ".join(problems))
                 pg.evaluate(CAP_JS, "")   # the caption fades before the cut
                 pg.wait_for_timeout(600)
             finally:
