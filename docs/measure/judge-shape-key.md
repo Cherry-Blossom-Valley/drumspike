@@ -56,7 +56,36 @@ Measured: the rise sample's size r (share of peak over the line), the edge's fir
 - Same-shape rows carry both labels: in the r/s 0.2 to 0.28 range 196 are foot, 81 edge.
 
 A rule of the form "one lead sample counts as the stroke when it rises by at least a fixed share of the edge's first step" would
-take about 57 % of the rows to the label's side, not 90 %. The owner's hand and the app's placement disagree on one shape.
+take about 57 % of the rows to the label's side, not 90 %. The labels disagree with each other on one shape (see the next section
+for whose labels).
+
+## Who made the labels, and the owner rows alone
+
+The 4981 gold rows are not all the owner's hand. 497 rows have `owner = 1` (56 moved, 441 kept; all in Session E): the owner's
+own review. The other 4484 are the coordinator's labels from the labelling round of 2026-11-06 (2513 moved, 1971 confirmed). The
+sentence "the owner's hand and the app's placement disagree on one shape" above therefore reads: the coordinator's labels split
+on that shape, which may be the noise of one reviewer. The owner rows alone (Session E; exact / within 1 / summed distance):
+
+| set (Session E, 497 rows) | exact | within 1 | distance | vs before |
+|---|---|---|---|---|
+| before | 382 | 492 | 198 | |
+| try 1 | 437 | 484 | 175 | 28 worse / 80 better |
+| candidate | 439 | 489 | 143 | 26 worse / 80 better |
+
+The coordinator's labels (4484 rows) for comparison: before 2632/3647/5405, try 1 2692/3511/6276 (620 worse / 657 better),
+candidate 2791/3652/5456 (500 worse / 625 better).
+
+The one-rise-sample shape (929 rows with the wider key), split by label side:
+
+| rows | n | foot | edge | neither | candidate worse / better |
+|---|---|---|---|---|---|
+| all | 929 | 532 | 236 | 161 | 284 / 571 |
+| owner = 1 | 101 | 78 | 20 | 3 | 23 / 78 |
+| owner = 0 (coordinator) | 828 | 454 | 216 | 158 | 261 / 493 |
+
+On the owner rows the foot side is 77 % of the shape (78 of 101) and "neither" almost vanishes (3), but 23 of those rows are still
+worse, so the cut is short of the 9 in 10 the refine asked for. Decision rule: neither try 1 nor the candidate has 0 rows worse
+on the owner rows (28 and 26 worse), so the judge stays as on main.
 
 ## Session K (candidate; not shipped)
 

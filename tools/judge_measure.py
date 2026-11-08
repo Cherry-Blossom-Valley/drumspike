@@ -38,7 +38,7 @@ def gold_windows(measure):
         i = int(r["i"])
         s, at = cut(rows[i].astype(float), 480, 48000)   # index 480 is the app's placement at labelling time
         out.append({"set": "gold" + r["session"], "id": i, "role": r["role"], "label_off": int(r["label_off"]),
-                    "samples": s, "hit_at": at})
+                    "owner": r["owner"] == "1", "samples": s, "hit_at": at})
     return out
 
 
