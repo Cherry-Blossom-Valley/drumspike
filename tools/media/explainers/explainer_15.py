@@ -289,16 +289,12 @@ class Explainer15(Explainer):
         panel = Rectangle(width=9.6, height=2.6, color=DIM, stroke_width=1).move_to([0, 0.6, 0])
         text = VGroup(*[Text(ln, font=FONT, font_size=22, color=TEXT).move_to([0, 1.5 - 0.5 * i, 0])
                         for i, ln in enumerate(lines)])
-        title = Text("<home>/training/<project id>.jsonl, one line per affected hit", font=FONT,
+        title = Text("the training log: chapter 16 shows a record in full", font=FONT,
                      font_size=22, color=TEXT).to_edge(UP, buff=0.7)
         self.t_play(Create(panel), FadeIn(title), t=2.0)
-        self.say("With Training Mode on, every move and confirm writes one line to the project's "
-                 "training log.", t=2.0)
-        self.t_play(FadeIn(text), t=2.5)
-        self.say("The op, the position, the precision, and the placement measures of the hit.",
-                 t=2.0)
-        self.say("The record carries the samples around it, forty milliseconds before and ten "
-                 "after, so it can be read without the session.", t=2.0)
+        self.t_play(FadeIn(text), t=2.0)
+        self.say("Training Mode writes every move and confirm to a log with its audio: chapter "
+                 "16 shows that record in full.", t=2.0)
 
     def s06_loop(self):
         """The loop: the agent's and the person's records in one log, the truth list out of it."""
@@ -314,14 +310,12 @@ class Explainer15(Explainer):
                      color=ORANGE, stroke_width=3, max_tip_length_to_length_ratio=0.2)
         arr2 = Arrow([bxs[1].get_center()[0] + 1.6, 0.8, 0], [bxs[2].get_center()[0] - 1.7, 0.8, 0],
                      color=ORANGE, stroke_width=3, max_tip_length_to_length_ratio=0.2)
-        self.t_play(Create(arr1), Create(arr2), t=2.0)
-        export = Text("tools/training_export.py prints the truth list the placement is measured "
-                      "against", font=FONT, font_size=22, color=TEXT).to_edge(DOWN, buff=1.2)
-        self.t_play(FadeIn(export), t=2.5)
-        self.say("The export turns them into the truth list the placement is measured against.",
-                 t=2.0)
-        self.say("The more you correct, the better the measures say what a right hit looks like.",
-                 t=2.0)
+        self.t_play(Create(arr1), Create(arr2), t=1.5)
+        export = Text("the truth list the placement is measured against (chapter 16)", font=FONT,
+                      font_size=22, color=TEXT).to_edge(DOWN, buff=1.2)
+        self.t_play(FadeIn(export), t=2.0)
+        self.say("The log and your corrections become the truth list the placement is measured "
+                 "against; chapter 16 tells that loop from your side.", t=2.0)
 
     def s07_result(self):
         """Counts only; you stay the judge; the doubtful wait in the review queue."""

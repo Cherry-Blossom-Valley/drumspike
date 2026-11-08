@@ -132,6 +132,13 @@ Rules for every asset:
   AI agents open projects, analyze, edit and export.
 - Builds on: all.
 
+### 16. Training Mode
+- View > Training Mode (off by default): every hit move, add, delete, Confirm Hit and Learn mark
+  is written as a record with its audio to the app's training folder; `tools/training_export.py`
+  turns the logs into aggregates and the truth list the placement is measured against
+  (`docs/guide/16-training-mode.md`).
+- Builds on: 4, 9, 15.
+
 ## Asset map
 
 | Chapter | Guide page | Screen recording | 3b1b explainer |
@@ -148,6 +155,7 @@ Rules for every asset:
 | 11 | yes | yes | - |
 | 12-13 | yes | yes (one recording) | - |
 | 14 | yes | - | - |
+| 16 | yes | - | Training Mode |
 
 Part 4 of the recordings shows what is new in 0.9.3 on the demo session (the Audio spike
 export, the detector plug-ins, the Sensitivity re-pick and Keep for edits):
