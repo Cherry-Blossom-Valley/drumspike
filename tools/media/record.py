@@ -413,11 +413,18 @@ def move_view_problems(v0, v1, n):
     return problems
 
 
-def move_diff_problems(a, b):
+def move_diff_problems(a, b, mask_top=0, max_run_px=4, max_span_px=None):
     """The frame-diff problems of the move scene's before/after PNGs (#381 gate b, the owner's
     gate: the move must be visible): the changed pixels must sit in the marker columns only --
-    at most two column runs (the spike and the wave stalk), each at most 4 px wide. a, b are
-    (h, w, 3) uint8 arrays as png_rgb returns."""
+    the old and the new stalk of the spike and the wave lane, so up to four runs, each at most
+    max_run_px wide (the stalk's own width plus the step), and the whole diff within
+    max_span_px columns when given (a stray change or a re-render spreads wider). mask_top
+    ignores the clip's top rows: the app writes the selected hit's own annotation there
+    (the yellow line, the triangle and the `i/n` counter of wave.js, part of the move's own
+    code path, not a defect). a, b are (h, w, 3) uint8 arrays as png_rgb returns."""
+    if mask_top:
+        a = a[mask_top:]
+        b = b[mask_top:]
     diff = np.abs(a.astype(np.int16) - b.astype(np.int16)).max(axis=2) > CHANGE_LEVEL
     cols = np.flatnonzero(diff.any(axis=0))
     if cols.size == 0:
@@ -430,11 +437,16 @@ def move_diff_problems(a, b):
         prev = c
     runs.append((start, prev))
     problems = []
-    if len(runs) > 2:
-        problems.append(f"the diff spans {len(runs)} column runs, expected the 2 marker columns")
+    if len(runs) > 4:
+        problems.append(f"the diff spans {len(runs)} column runs, expected the marker columns "
+                        "of the two lanes (the old and the new stalk)")
     for s, e in runs:
-        if e - s + 1 > 4:
+        if e - s + 1 > max_run_px:
             problems.append(f"a changed column run is {e - s + 1} px wide (columns {s}..{e})")
+    if max_span_px is not None and runs and runs[-1][1] - runs[0][0] + 1 > max_span_px:
+        problems.append(f"the diff spreads {runs[-1][1] - runs[0][0] + 1} px (columns "
+                        f"{runs[0][0]}..{runs[-1][1]}), expected within {max_span_px} px of "
+                        "the marker: a stray change or a re-render")
     return problems
 
 
@@ -548,6 +560,10 @@ def shoot_scene(page, sc, path):
     the element area_selector names. The overlay pointer stays out of it."""
     if zoom_t(sc) is not None and not sc.get("area_sel"):
         page.evaluate(PTR_HIDE_JS)
+        # The pointer's fade (.15 s) and the agent step's ring pulse (the element leaves at
+        # 700 ms) must be out of the frame: a before/after pair caught mid-animation shows
+        # the ring as a changed column run, not the marker (#381 gate b).
+        page.wait_for_timeout(750)
         page.screenshot(path=str(path), clip=window_clip(page, sc))
     else:
         shoot_area(page, area_selector(sc), path)
@@ -1472,12 +1488,26 @@ def record(root, scenario, items, out, work, keep, check_model=True):
                     if changed:
                         raise RecordError("the action does not show: " + "; ".join(changed))
                     # The move gate (#381 b): the move scene's frame diff changes pixels only
-                    # in the two marker columns (the stalks of the spike and the wave lane).
+                    # in the marker columns (the old and the new stalk of the two lanes). The
+                    # clip's top band carries the app's own selection annotation (wave.js), and
+                    # a run is as wide as the step plus the stalk: both come from the view data.
                     for sc in move_scenes(scenes):
                         a = shots / f"{sc['id']}-before.png"
                         b = shots / f"{sc['id']}-after.png"
                         if a.is_file() and b.is_file():
-                            problems = move_diff_problems(png_rgb(a), png_rgb(b))
+                            step = next(
+                                (abs(st["args"][-1]) for st in sc["steps"]
+                                 if st["do"] == "agent" and st["fn"] == "move"
+                                 and st.get("args") and isinstance(st["args"][-1], (int, float))), 0)
+                            v = pg.evaluate(VIEW_DATA_JS, next(
+                                st["track"] for st in sc["steps"]
+                                if st["do"] == "agent" and st["fn"] == "move"))
+                            pps = (v or {}).get("px_per_sample", 2.0)
+                            shift = int(round(step * pps * dsf))
+                            problems = move_diff_problems(png_rgb(a), png_rgb(b),
+                                                          mask_top=12 * dsf,
+                                                          max_run_px=shift + 8,
+                                                          max_span_px=shift + 24)
                             if problems:
                                 raise RecordError(f"{sc['id']}: the move gate (frame diff): "
                                                   + "; ".join(problems))

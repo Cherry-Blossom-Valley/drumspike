@@ -252,18 +252,24 @@ def _frame(width=60, height=20, marker=None):
 
 
 def test_move_diff_problems_want_the_marker_columns_only():
-    """The frame diff of the move scene changes pixels only in the two marker columns: the
-    spike and the wave stalk. A wide or a many-column diff is a visible defect."""
+    """The frame diff of the move scene changes pixels only in the marker columns: the old and
+    the new stalk of the spike and the wave lane. A wide run, a spread beyond the marker or a
+    many-column diff is a visible defect."""
     before, after = _frame(marker=10), _frame(marker=16)
     assert record.move_diff_problems(before, after) == []
     # the stalks smear over 5+ px: not a clean step
     smear = _frame()
     smear[:, 10:17] = 200
     assert any("column run" in p for p in record.move_diff_problems(before, smear))
-    # a stray change elsewhere (the status bar or a re-render): more than the 2 marker columns
+    # a stray change elsewhere (the status bar or a re-render): the diff spreads beyond the
+    # marker's columns
     wide = _frame(marker=16)
     wide[:, 40] = 220
-    assert any("column runs" in p for p in record.move_diff_problems(before, wide))
+    assert any("spreads" in p for p in record.move_diff_problems(before, wide, max_span_px=10))
+    # the app's own selection annotation (the top band of the clip, wave.js) is not a defect
+    noted = _frame(marker=16)
+    noted[:4, 30:40] = 200
+    assert record.move_diff_problems(before, noted, mask_top=4) == []
     # no change at all: the move is not visible
     assert record.move_diff_problems(before, before) == ["no pixel changed: the move is not visible"]
 
