@@ -6,15 +6,22 @@ the hit and, if the hit is not on the last sample before the stroke starts, move
 samples. Hits it is not sure about it leaves alone and lists for you. You stay the judge: every
 move is a normal edit that you can undo.
 
-## Set it up (once)
+## Before you start
 
-1. Open Settings and find the row "Agent fine-tune skill". Press Install. The app copies the
+In this order:
+
+1. Quit the Drum Spike window. The bridge needs the app home; a second home is not a way around it.
+2. Open Settings and find the row "Agent fine-tune skill". Press Install. The app copies the
    skill to `~/.claude/skills/drumspike-finetune` and writes its own location into it, so you
    need no link in `/usr/local/bin`. After an update of Drum Spike the row says "older copy"
    and the button says Update.
-2. Under the button is one line that starts with `claude mcp add drumspike`. Press Copy, paste
-   it into a terminal and run it. This tells Claude Code how to reach Drum Spike. You do this
-   once.
+3. Under the button is one line that starts with `claude mcp add --scope user drumspike`.
+   Press Copy, paste it into a terminal and run it. The `--scope user` registers the server
+   for every folder, not only the one you run it from. This tells Claude Code how to reach
+   Drum Spike. You do this once.
+4. A browser tool the agent can drive (Claude in Chrome, or Playwright MCP), if the agent
+   session has none.
+5. Then start the agent session (the MCP tools load at session start).
 
 ## Start a session
 
@@ -42,7 +49,8 @@ window of about a millisecond around the hit, at sample zoom.
 Because Training Mode is on, every move and confirm of the agent is written to the training log
 exactly as if you had made it, with the view and the precision. You can look at the result in
 the window when the agent is done: undo a move you do not like, or check the doubtful hits with
-the review queue from chapter 9.
+the review queue from chapter 9. After the save the agent asks you once whether to export now
+(MIDI and spike files) or leave it.
 
 Next: the [agent API](../agent-api.md) lists the commands and the page helpers that the agent
 uses, and the [guide README](README.md) lists all chapters.
