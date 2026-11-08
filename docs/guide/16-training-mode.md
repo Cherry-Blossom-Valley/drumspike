@@ -1,9 +1,10 @@
 # 16. Training Mode
 
-Training Mode is the app's memory of your corrections. With it on, every move, add and delete
-of a hit, every Confirm Hit and every Learn This or Forget This mark is written to a training
-log as a record, with the audio around the hit. The log is never part of the project, and it
-never changes a hit on its own: with the mode off, the app behaves exactly as without it.
+Training Mode exists so that Drum Spike can learn to place hits the way you do. With it
+on, every move, add and delete of a hit, every Confirm Hit and every Learn This or Forget
+This mark is written to a training log as a record, with the audio around the hit. The log
+is never part of the project, and it never changes a hit on its own: with the mode off, the
+app behaves exactly as without it.
 
 Your corrections are used twice. While the mode is on, the review queue of chapter 9 also
 doubts a hit's placement: no steep edge at the stored position, a line before it that is noisy
@@ -36,9 +37,9 @@ record. A failed log write never fails the edit.
 The records land in one file per project in the app's data folder
 (`~/Library/Application Support/com.cbv.drumspike/training/` on macOS), named by the project's
 id (the first 12 hex digits built from the project's creation time), so a rename keeps the
-file. A record carries the op, the old and the new position, the rule versions in force, the
-hit's confidence, the line measures of the hit and the samples around it: 40 ms before and
-10 ms after. It can be read without the session.
+file. A record says what you did, the old and the new position, the rule versions in force,
+the hit's confidence, the line measures of the hit and the samples around it: 40 ms before
+and 10 ms after. It can be read without the session.
 
 ## The export
 

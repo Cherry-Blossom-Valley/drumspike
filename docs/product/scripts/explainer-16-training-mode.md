@@ -49,7 +49,7 @@ Facts used (all checked against the code, not from memory):
 
 > One line across the screen: your corrections, the record, the truth list, a better placement. No menu yet, no log yet.
 
-Training Mode is the memory of Drum Spike: it writes down every hit you correct, with the sound around it, readable without your session. Your corrections become the truth the placement is measured against; the review queue puts the doubtful hits in front of you; and an agent writes the same kind of record. The mode never changes a hit on its own, and with it off the app behaves exactly as without it.
+Training Mode exists so that Drum Spike can learn to place hits the way you do. It writes down every hit you correct, with the sound around it, and those corrections become the truth the placement is measured against. It never changes a hit on its own, and when it is off the app behaves exactly as without it.
 
 ## s02-on
 
@@ -61,19 +61,19 @@ Turn it on in the View menu: Training Mode. The switch belongs to the app, not t
 
 > The s top lane of the demo session at sample zoom around one hit, its last line sample marked; on the right, the edits that write a record: Hits > Next Doubtful Hit (D), Edit > Nudge Hit Earlier (Left), Edit > Nudge Hit Later (Right), Edit > Add Hit at Playhead (H), Edit > Delete Hit, Hits > Confirm Hit.
 
-Then work as you always do. The review queue walks you to the doubtful hits; at sample zoom you nudge a hit by whole samples onto its last line sample. Add a hit, delete one, confirm one as reviewed: every one of these writes one record.
+Then work as you always do. The review queue walks you to the doubtful hits; at sample zoom you nudge a hit by whole samples onto its last line sample. Add a hit, delete one, confirm one as reviewed: every one of these writes one record. An agent writes the same kind of record.
 
 ## s04-log
 
-> The record of the recorded tutorial's own move as text: the op, the track, from and to (k in 180008 moved onto 180006), precision sample, the rule versions in force, the placement measures edge, line_noise, line_slope, onset_spread, and the audio window, 40 ms before and 10 ms after; the title names the file: <home>/training/<project id>.jsonl.
+> The record of the recorded tutorial's own move as text: the action, the track, from and to (k in 180008 moved onto 180006), precision sample, and the audio window, 40 ms before and 10 ms after; the title names the file: <home>/training/<project id>.jsonl.
 
-One file per project, in the app's data folder, named by the project's id: a rename keeps the file. A record carries the op, the old and the new position, the rule versions in force, and the sound around the hit, 40 milliseconds before and 10 after, readable without the session.
+One file per project, in the app's data folder, named by the project's id: a rename keeps the file. A record says what you did, the old and the new position, and the sound around the hit.
 
 ## s05-export
 
 > A terminal runs the export over the training logs; the printout counts the records per role and op (Session F: 124 moved, 314 confirmed) and writes the truth list.
 
-One command turns the logs into the truth list: the counts per role and op, and every record with its track, its positions and its measures. The printout names no project and no path, so it is safe to paste; the truth file carries track names, so keep it with the logs.
+From the source checkout, one script turns the logs into the truth list. The printout names no project and no path, so it is safe to paste; the truth file carries track names, so keep it with the logs.
 
 ## s06-measure
 
@@ -85,4 +85,4 @@ The truth list is the yardstick: when the placement rule changes, the new versio
 
 > The loop as four boxes with arrows and one arrow back: your edits, the log, the truth list, the next release. The note at the end: the records stay on your machine until you send them.
 
-That closes the loop: you fix a few hits, and the next release places the rest better. Nothing leaves your machine by itself; the log stays in your data folder, and you decide what to send.
+That closes the loop: the hits you fix are what the next placement rule gets measured against. Nothing leaves your machine by itself; the log stays in your data folder, and you decide what to send.

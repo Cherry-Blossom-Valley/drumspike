@@ -5,7 +5,8 @@ s top close mic at sample zoom, the hit and its last line sample measured at ren
 the agent's judge (static/agent.js) reads them, through explainer_15's readers. The log, export
 and measure scenes draw real shapes: the record of the recorded tutorial's own move (part-agent
 ra-move: k in 180008 -> 180006), Session F's real aggregates (522 seen, 124 moved, 314 confirmed)
-and the field names of crates/app/src/training.rs and tools/training_export.py. The rule numbers
+and the field names of tools/training_export.py; the record's frame names the action in the
+user's words (the log field is op). The rule numbers
 are the script's "Facts used". Render through build.py.
 """
 from explainer_common import (
@@ -43,19 +44,18 @@ class Explainer16(Explainer):
         labels = VGroup(*[Text(name, font=FONT, font_size=20, color=TEXT).move_to(boxes[i])
                           for i, (name, _) in enumerate(names)])
         self.t_play(Create(boxes), FadeIn(labels), t=2.5)
-        self.say("Training Mode is the memory of Drum Spike: it writes down every hit you "
-                 "correct, with the sound around it, readable without your session.", t=2.0)
+        self.say("Training Mode exists so that Drum Spike can learn to place hits the way you "
+                 "do.", t=2.0)
         arrows = VGroup(*[Arrow([names[i][1] + 1.65, 0.9, 0], [names[i + 1][1] - 1.65, 0.9, 0],
                                 color=ORANGE, stroke_width=3, max_tip_length_to_length_ratio=0.25)
                           for i in range(3)])
         self.t_play(Create(arrows), t=2.0)
-        self.say("Your corrections become the truth the placement is measured against; the "
-                 "review queue puts the doubtful hits in front of you; and an agent writes the "
-                 "same kind of record.", t=2.0)
+        self.say("It writes down every hit you correct, with the sound around it, and those "
+                 "corrections become the truth the placement is measured against.", t=2.0)
         off = Text("it never changes a hit on its own; off, the app is exactly as without it",
                    font=FONT, font_size=22, color=ORANGE).move_to([0, -0.9, 0])
         self.t_play(FadeIn(off), t=2.0)
-        self.say("The mode never changes a hit on its own, and with it off the app behaves "
+        self.say("It never changes a hit on its own, and when it is off the app behaves "
                  "exactly as without it.", t=2.0)
 
     def s02_on(self):
@@ -102,14 +102,13 @@ class Explainer16(Explainer):
             self.t_play(FadeIn(nudge_tag), t=2.0)
         self.say("Add a hit, delete one, confirm one as reviewed: every one of these writes one "
                  "record.", t=2.0)
+        self.say("An agent writes the same kind of record.", t=2.0)
 
     def s04_log(self):
         """The log: the file, and one record of it (the recorded tutorial's own move)."""
         lines = [
-            "op: move   track: k_in",
+            "action: move   track: k_in",
             "from: 180008   to: 180006   precision: \"sample\"",
-            "refine, detect: the rule versions in force",
-            "placement: edge, line_noise, line_slope, onset_spread",
             "audio: 40 ms before, 10 ms after",
         ]
         panel = Rectangle(width=10.6, height=3.0, color=DIM, stroke_width=1).move_to([0, 0.5, 0])
@@ -118,15 +117,14 @@ class Explainer16(Explainer):
         self.t_play(Create(panel), FadeIn(title), t=2.0)
         self.say("One file per project, in the app's data folder, named by the project's id: a "
                  "rename keeps the file.", t=2.0)
-        text = VGroup(*[Text(ln, font=FONT, font_size=22, color=TEXT).move_to([0, 1.55 - 0.55 * i, 0])
+        text = VGroup(*[Text(ln, font=FONT, font_size=22, color=TEXT).move_to([0, 1.05 - 0.55 * i, 0])
                         for i, ln in enumerate(lines)])
         self.t_play(FadeIn(text), t=2.5)
-        self.say("A record carries the op, the old and the new position, the rule versions in "
-                 "force, and the sound around the hit, 40 milliseconds before and 10 after, "
-                 "readable without the session.", t=2.0)
+        self.say("A record says what you did, the old and the new position, and the sound "
+                 "around the hit.", t=2.0)
 
     def s05_export(self):
-        """The export: one command over the logs, the printout and the truth list out of it."""
+        """The export: one script from the source checkout, the printout and the truth list."""
         lines = [
             "$ uv run python tools/training_export.py <training log>.jsonl",
             "move: 124 records   confirm: 314 records   per role and op",
@@ -136,8 +134,8 @@ class Explainer16(Explainer):
         text = VGroup(*[Text(ln, font=FONT, font_size=20, color=TEXT).move_to([0, 1.7 - 0.6 * i, 0])
                         for i, ln in enumerate(lines)])
         self.t_play(Create(panel), FadeIn(text), t=2.5)
-        self.say("One command turns the logs into the truth list: the counts per role and op, "
-                 "and every record with its track, its positions and its measures.", t=2.0)
+        self.say("From the source checkout, one script turns the logs into the truth list.",
+                 t=2.0)
         note = Text("the printout names no project and no path", font=FONT, font_size=22,
                     color=ORANGE).move_to([0, -0.9, 0])
         self.t_play(FadeIn(note), t=2.0)
@@ -175,8 +173,8 @@ class Explainer16(Explainer):
         labels = VGroup(*[Text(name, font=FONT, font_size=20, color=TEXT).move_to(boxes[i])
                           for i, (name, _) in enumerate(names)])
         self.t_play(Create(boxes), FadeIn(labels), t=2.5)
-        self.say("That closes the loop: you fix a few hits, and the next release places the rest "
-                 "better.", t=2.0)
+        self.say("That closes the loop: the hits you fix are what the next placement rule gets "
+                 "measured against.", t=2.0)
         arrows = VGroup(*[Arrow([names[i][1] + 1.65, 0.9, 0], [names[i + 1][1] - 1.65, 0.9, 0],
                                 color=ORANGE, stroke_width=3, max_tip_length_to_length_ratio=0.25)
                           for i in range(3)])
