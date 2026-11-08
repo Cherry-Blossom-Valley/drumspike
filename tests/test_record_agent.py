@@ -87,6 +87,32 @@ def test_the_standard_needs_a_hold_after_an_agent_step():
     assert problems and "no hold of 1.5 s" in problems[0]
 
 
+def test_show_text_keeps_the_neutral_text_against_app_rewrites():
+    """The app re-asserts its own text (agentSkillShow writes the real binary path into
+    #setSkillCmd after every status refresh), so show_text installs an observer that
+    re-asserts the shown text, like show_dest's exRender hook."""
+    pg = StubPage()
+    record.run_step(pg, {"do": "show_text", "sel": "#setSkillCmd", "text": "neutral"}, {})
+    js, arg = pg.calls[-1]
+    assert js == record.SHOW_TEXT_JS and arg == ["#setSkillCmd", "neutral"]
+    assert "MutationObserver" in record.SHOW_TEXT_JS
+    assert "textContent" in record.SHOW_TEXT_JS
+
+
+def test_the_part_agent_shows_no_host_path():
+    """The scenario's shown texts are neutral: no absolute host path in any show_text or
+    caption of part-agent.json (the path guard OCRs every frame of the render)."""
+    import json as _json
+    path = Path(__file__).resolve().parents[1] / "tools" / "media" / "scenarios" / "part-agent.json"
+    raw = path.read_text(encoding="utf-8")
+    assert "/home" not in raw and "/Users" not in raw
+    scenario = _json.loads(raw)
+    for sc in scenario["scenes"]:
+        for st in sc["steps"]:
+            shown = st.get("text", "")
+            assert not any(w in shown.lower() for w in ("/home", "/users", "/var/folders")), st
+
+
 def test_the_part_agent_scenario_parses():
     path = Path(__file__).resolve().parents[1] / "tools" / "media" / "scenarios" / "part-agent.json"
     import json as _json

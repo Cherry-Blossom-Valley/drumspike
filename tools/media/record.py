@@ -160,9 +160,27 @@ SHOW_DEST_JS = """t => {
   }
 }"""
 # A path the app printed, shown in its neutral form: the scenario names the element and the text
-# (the status bar keeps "created Demo in <host path>" otherwise).
-SHOW_TEXT_JS = ("([sel, text]) => { const el = document.querySelector(sel);"
-                " if (!el) throw new Error('no element ' + sel); el.textContent = text; }")
+# (the status bar keeps "created Demo in <host path>" otherwise). The app re-asserts its own
+# text after the write — agentSkillShow writes the real `claude mcp add` line (with this
+# host's binary path) into #setSkillCmd on every agentSkillStatus refresh and after the
+# Install click (the 3087f45d gate's part-agent, path-guard FAILs on frames 15-32) — so like
+# show_dest, the shown text is kept in a page global and a MutationObserver re-asserts it
+# against every later app write.
+SHOW_TEXT_JS = """([sel, text]) => {
+  const el = document.querySelector(sel);
+  if (!el) throw new Error('no element ' + sel);
+  window.__dsShownText = window.__dsShownText || {};
+  window.__dsShownText[sel] = text;
+  el.textContent = text;
+  const key = '__dsTextKeep' + sel;
+  if (!window[key]) {
+    window[key] = true;
+    new MutationObserver(() => {
+      const want = window.__dsShownText[sel];
+      if (want !== undefined && el.textContent !== want) el.textContent = want;
+    }).observe(el, { childList: true, characterData: true, subtree: true });
+  }
+}"""
 KEY_HOLD_MS = 1600   # the review wants every pressed key visible for at least 1.5 s
 
 
