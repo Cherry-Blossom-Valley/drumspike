@@ -43,6 +43,7 @@ VIDEOS = {
     "05": ("explainer-05-audio-spike", "explainer_05.py", "Explainer05"),
     "10": ("explainer-10-bleed", "explainer_10.py", "Explainer10"),
     "15": ("explainer-15-agent", "explainer_15.py", "Explainer15"),
+    "16": ("explainer-16-training-mode", "explainer_16.py", "Explainer16"),
 }
 
 
