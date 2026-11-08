@@ -178,7 +178,7 @@ def test_settings_row_installs_the_bundled_skill_and_shows_the_version_and_the_m
     line = app.locator("#setSkillCmd").text_content()
     assert line.startswith('claude mcp add --scope user drumspike -- "') and line.endswith('" mcp')
     hint = app.locator("#setAgentSkill .phint").text_content()
-    assert "Quit the Drum Spike window before the agent starts" in hint, hint
+    assert "Keep the Drum Spike window open with the song in it" in hint and "Quit" not in hint, hint   # #388
     assert "The line is per user" in hint, hint
     app.locator("#setSkillInstall").click()
     version = app.evaluate("async () => (await B.agentSkillStatus()).bundled_version")

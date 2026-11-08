@@ -23,11 +23,32 @@ pub async fn events_edit(
     ops: Vec<Value>,
     training: Option<bool>,
     view: Option<Value>,
+    by: Option<Value>,
 ) -> Result<Value, AppError> {
+    // #389: who made the edit (the page sends "person" or "agent" with the training flag); checked as the bridge does
+    let by = drumspike_app::edit::edit_author(by.as_ref())?.map(str::to_string);
     blocking(&svc, "events_edit", move |s| {
-        s.events_edit_training(&sid, &name, &ops, training.unwrap_or(false), view)
+        s.events_edit_training_by(&sid, &name, &ops, training.unwrap_or(false), view, by.as_deref())
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use drumspike_app::edit::edit_author;
+
+    #[test]
+    fn the_author_of_an_edit_is_person_or_agent_and_nothing_else() {
+        assert_eq!(edit_author(None).unwrap(), None);
+        assert_eq!(edit_author(Some(&json!(null))).unwrap(), None);
+        assert_eq!(edit_author(Some(&json!("agent"))).unwrap(), Some("agent"));
+        assert_eq!(edit_author(Some(&json!("person"))).unwrap(), Some("person"));
+        for bad in [json!("robot"), json!(1), json!(true), json!(["agent"])] {
+            assert_eq!(edit_author(Some(&bad)).unwrap_err().code, 400, "{bad}");
+        }
+    }
 }
 
 /// The Training Mode state of the project `sid` (`{on, records, path}`); `on` sets the state first.
