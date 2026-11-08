@@ -2,7 +2,11 @@
 
 Measured with `tools/judge_measure.py` (test: `tests/test_judge_measure.py`). Aggregates only. No judge change ships: **on the
 one-rise-sample shape the gold rows carry both answers (532 foot, 236 edge, 161 neither), so no rule of size or sign reproduces
-the labels, and the judge stays as on main until the ground truth is sharpened.**
+the labels, and the judge stays as on main until the ground truth is sharpened.** The rows that split are the coordinator's
+labels (4484 of the 4981 gold rows, the labelling round of 2026-11-06); the owner's own 497 rows (`owner = 1`, all Session E)
+are the cleaner set: the candidate takes them from 382 to 439 exact and the summed distance from 198 to 143, with 26 rows worse
+and 80 better, so it still fails "no row worse". The candidate itself is on the branch `crew/claude@x86-mac/385-candidate-judge`
+(no PR; `static/agent.js` only), so it can ship unchanged if the owner accepts the residue.
 
 ## Runs
 
@@ -92,7 +96,33 @@ on the owner rows (28 and 26 worse), so the judge stays as on main.
 Kick 30 moves of 63, snare 9 of 50, tom 0 (before: 31, 10, 0). Hits whose suggestion differs between strokes of one shape key:
 0 after (kick 17 keys, snare 11); not defined before (the old judge has no shape key).
 
-## Open
+## Session K, the case this ticket came from (rule A check)
 
-Whether a confirmed row that kept the app's placement is a sample-exact review or an acceptance goes to the owner. If the gold
-definition narrows to owner-moved rows, a follow-up ticket reruns the tool.
+Rule A: a hit that stands at the foot of the main stroke gets no counter-suggestion. The sets, with who made each (the kick
+track of Session K):
+
+- 5 hand-placed kick hits: the owner's own records from before the run. Judged at the owner's placement.
+- 19 confirmed kick hits: made by the owner's agent under decision A. Judged at the confirmed placement.
+- 18 moved kick hits: made by the owner's agent, each 1 or 2 samples earlier. Judged at the placement before the move
+  ("at from") and at the placement the run chose ("at to").
+
+Suggestions of 0 or none (the rule holds), and for the moves at "from" the suggestions that land on the sample the run moved to:
+
+| set | n | before | try 1 | candidate |
+|---|---|---|---|---|
+| owner hand-placed, 0 or none | 5 | 4 | 4 | 4 |
+| agent confirms, 0 or none | 19 | 4 | 8 | 4 |
+| agent moves at "to", 0 or none | 18 | 15 | 13 | 14 |
+| agent moves at "from", suggestion = the run's move | 18 | 5 | 0 | 2 |
+
+Neither variant closes the case. On the 19 confirmed hits the judge on main counter-suggests 15 (8 times 5 samples earlier,
+7 times 6; the other 4 give 0 or none); the candidate still counter-suggests 15 and try 1 counter-suggests 11. One of the 5
+owner hits gets a counter-suggestion on main (5 samples earlier) and still gets one under try 1 and the candidate (6 samples
+earlier). Of the 18 moves, the judge on main would have suggested the run's own move on 5 and the candidate on 2. The Session K
+kick bump is therefore not removed by the foot walk of the candidate or by the fixed band of try 1; this section does not
+establish why.
+
+## Session K shape keys (candidate; not shipped)
+
+Kick 30 moves of 63, snare 9 of 50, tom 0 (before: 31, 10, 0). Hits whose suggestion differs between strokes of one shape key:
+0 after (kick 17 keys, snare 11); not defined before (the old judge has no shape key).
