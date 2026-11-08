@@ -1,0 +1,125 @@
+{
+  "name": "part-agent",
+  "title": "Screen recording: the agent fine-tune feature (guide chapter 15) (#373)",
+  "script": "docs/product/scripts/rec-agent.md",
+  "standard": true,
+  "viewport": {"width": 1920, "height": 1080},
+  "device_scale_factor": 2,
+  "seed": "demo",
+  "narration": {"tts_out": "~/.cache/drumspike/media/tts-out/rec-agent"},
+  "out": "~/.cache/drumspike/media/rec/part-agent.mp4",
+  "scenes": [
+    {
+      "id": "ra-mode",
+      "area_sel": "#statusbar",
+      "steps": [
+        {"do": "caption", "text": "View > Training Mode"},
+        {"do": "menu", "id": "training_mode"},
+        {"do": "wait", "cond": "() => !document.querySelector('#stTraining').classList.contains('hidden')",
+         "timeout": 10, "err": "the training count visible (the mode is on)"},
+        {"do": "text", "sel": "#stMsg", "contains": "training mode: on"},
+        {"do": "hold", "s": 2.5}
+      ]
+    },
+    {
+      "id": "ra-install",
+      "area_sel": "#setAgentSkill",
+      "steps": [
+        {"do": "caption", "text": "Settings: the Agent fine-tune skill row"},
+        {"do": "menu", "id": "settings"},
+        {"do": "visible", "sel": "#setAgentSkill", "timeout": 10},
+        {"do": "shot"},
+        {"do": "hold", "s": 1.5},
+        {"do": "show_text", "sel": "#setSkillCmd",
+         "text": "claude mcp add drumspike -- \"<the Drum Spike binary>\" mcp"},
+        {"do": "text", "sel": "#setSkillStatus", "contains": "not installed"},
+        {"do": "click", "sel": "#setSkillInstall", "timeout": 30,
+         "err": "the Install click"},
+        {"do": "wait", "cond": "() => document.querySelector('#setSkillStatus').textContent.includes('files in')",
+         "timeout": 30, "err": "the install finished (the status names the file count)"},
+        {"do": "show_text", "sel": "#setSkillStatus",
+         "text": "installed. The skill is in ~/.claude/skills/drumspike-finetune"},
+        {"do": "shot"},
+        {"do": "hold", "s": 1.5},
+        {"do": "click", "sel": "#settingsDone", "timeout": 10, "err": "Done closes the Settings sheet"},
+        {"do": "wait", "cond": "() => document.querySelector('#settingsModal').classList.contains('hidden')",
+         "timeout": 10, "err": "the Settings sheet closed"},
+        {"do": "hold", "s": 1.5}
+      ]
+    },
+    {
+      "id": "ra-mcp",
+      "area_sel": "#setAgentSkill",
+      "steps": [
+        {"do": "caption", "text": "the claude mcp add line"},
+        {"do": "menu", "id": "settings"},
+        {"do": "visible", "sel": "#setAgentSkill", "timeout": 10},
+        {"do": "shot"},
+        {"do": "hold", "s": 1.5},
+        {"do": "show_text", "sel": "#setSkillCmd",
+         "text": "claude mcp add drumspike -- \"<the Drum Spike binary>\" mcp"},
+        {"do": "click", "sel": "#setSkillCopy", "timeout": 10, "err": "the Copy click"},
+        {"do": "text", "sel": "#stMsg", "contains": "copied"},
+        {"do": "shot"},
+        {"do": "hold", "s": 2.0},
+        {"do": "click", "sel": "#settingsDone", "timeout": 10, "err": "Done closes the Settings sheet"},
+        {"do": "wait", "cond": "() => document.querySelector('#settingsModal').classList.contains('hidden')",
+         "timeout": 10, "err": "the Settings sheet closed"},
+        {"do": "hold", "s": 1.5}
+      ]
+    },
+    {
+      "id": "ra-look",
+      "steps": [
+        {"do": "caption", "text": "DSAgent.look"},
+        {"do": "zoom_to", "track": "s_top", "t": 4.375, "span": 0.5},
+        {"do": "agent", "fn": "look", "track": "s_top", "t": 4.375, "timeout": 30,
+         "err": "the look (the lane at sample zoom around the hit)"},
+        {"do": "hold", "s": 3.0}
+      ]
+    },
+    {
+      "id": "ra-move",
+      "steps": [
+        {"do": "caption", "text": "DSAgent.move"},
+        {"do": "zoom_to", "track": "k_in", "t": 3.7501667, "span": 0.5},
+        {"do": "agent", "fn": "move", "track": "k_in", "t": 3.7501667, "args": [-2], "timeout": 30,
+         "err": "the move (the nudge by whole samples; the sign checked against the plan)"},
+        {"do": "hold", "s": 3.0}
+      ]
+    },
+    {
+      "id": "ra-confirm",
+      "area_sel": "#statusbar",
+      "steps": [
+        {"do": "caption", "text": "DSAgent.confirm"},
+        {"do": "zoom_to", "track": "s_top", "t": 5.625, "span": 0.5},
+        {"do": "agent", "fn": "confirm", "track": "s_top", "t": 5.625, "timeout": 30,
+         "err": "the confirm (Hits > Confirm Hit through the page's own code)"},
+        {"do": "text", "sel": "#stMsg", "contains": "hit confirmed"},
+        {"do": "hold", "s": 2.5}
+      ]
+    },
+    {
+      "id": "ra-doubt",
+      "steps": [
+        {"do": "caption", "text": "the doubtful hit stays for you: no clear line before the hit"},
+        {"do": "zoom_to", "track": "s_top", "t": 7.0209375, "span": 0.5},
+        {"do": "agent", "fn": "look", "track": "s_top", "t": 7.0209375, "timeout": 30,
+         "err": "the look at the wobbly hit (the lead is not a line, no move)"},
+        {"do": "hold", "s": 3.5}
+      ]
+    },
+    {
+      "id": "ra-save",
+      "area_sel": "#statusbar",
+      "steps": [
+        {"do": "caption", "text": "DSAgent.save"},
+        {"do": "agent", "fn": "save", "timeout": 30, "err": "the save"},
+        {"do": "text", "sel": "#stMsg", "contains": "project saved"},
+        {"do": "text", "sel": "#stTraining", "contains": "records"},
+        {"do": "hold", "s": 2.5}
+      ]
+    }
+  ]
+}
