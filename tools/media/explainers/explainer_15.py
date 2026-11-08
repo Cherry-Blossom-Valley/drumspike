@@ -216,16 +216,19 @@ class Explainer15(Explainer):
         self.say("An agent does the same three steps through the app's own page: look, move, confirm.",
                  t=2.0)
         self.t_play(FadeIn(steps[1]), FadeIn(steps[2]), t=1.5)
+        # the say swap runs BEFORE the scene line fades in, so no caption is ever fading
+        # under a scene line (the sampled frame of the 96f3956b gate showed exactly that)
+        self.say("Every move and confirm runs through the code your keyboard uses.", t=2.0)
         eq = Text("the record of an agent is byte for byte the record of a person", font=FONT,
                   font_size=22, color=ORANGE).move_to([0, -0.3, 0])
         same = Text("the same code paths as your keyboard: nudgeSelected, Hits > Confirm Hit",
                     font=FONT, font_size=22, color=TEXT).move_to([0, -0.3, 0])
         self.t_play(FadeIn(same), t=2.5)
-        self.say("Every move and confirm runs through the code your keyboard uses.", t=2.0)
-        # #459: one line at a time at the bottom edge — split the fade so both are never visible.
+        # #459: one line at a time at the bottom edge — split the fade so both are never visible,
+        # and the last say swap also runs with no scene line on screen.
         self.t_play(FadeOut(same), t=1.0)
-        self.t_play(FadeIn(eq), t=1.0)
         self.say("So the record of an agent is byte for byte the record of a person.", t=2.0)
+        self.t_play(FadeIn(eq), t=1.0)
 
     def s03_look(self):
         """What the agent sees: the lane picture and the samples as numbers, with the judge's marks."""
@@ -258,15 +261,16 @@ class Explainer15(Explainer):
         self.say("The judgement stops where the line is not a line.", t=2.0)
         rule = Text("no suggestion: the spread over the first 12 samples is judged against "
                     "0.03 of the local peak", font=FONT, font_size=22, color=TEXT).to_edge(DOWN, buff=1.2)
-        self.t_play(FadeIn(rule), t=2.5)
+        # the say swaps run with no scene line on screen (no caption fades under a live line)
         self.say("A wobbly lead, a spread over 0.03 of the local peak over the first 12 samples, "
                  "gets no suggestion.", t=2.0)
+        self.t_play(FadeIn(rule), t=2.5)
+        self.t_play(FadeOut(rule), t=1.0)
+        self.say("The hit lands on the doubtful list with its reason, and stays for you.", t=2.0)
         doubt = Text("doubt: the hit lands on the doubtful list with its reason, and stays for you",
                      font=FONT, font_size=22, color=ORANGE).to_edge(DOWN, buff=1.2)
         # #459: split the fade so the two bottom lines are never visible at once.
-        self.t_play(FadeOut(rule), t=1.0)
         self.t_play(FadeIn(doubt), t=1.0)
-        self.say("The hit lands on the doubtful list with its reason, and stays for you.", t=2.0)
 
     def s05_training(self):
         """The training log line of the move: op, from, to, precision, placement, audio window."""
@@ -331,11 +335,12 @@ class Explainer15(Explainer):
                  "left for you.", t=2.0)
         judge = Text("you stay the judge: every move is a normal edit you can undo", font=FONT,
                      font_size=22, color=TEXT).to_edge(DOWN, buff=1.2)
-        self.t_play(FadeIn(judge), t=2.0)
+        # the say swaps run with no scene line on screen (no caption fades under a live line)
         self.say("You stay the judge: every move is a normal edit you can undo.", t=2.0)
+        self.t_play(FadeIn(judge), t=2.0)
+        self.t_play(FadeOut(judge), t=1.0)
+        self.say("And the doubtful hits wait in the review queue.", t=2.0)
         queue = Text("Hits > Next Doubtful Hit: the doubtful wait in the review queue", font=FONT,
                      font_size=22, color=ORANGE).to_edge(DOWN, buff=1.2)
         # #459: split the fade so the two bottom lines are never visible at once.
-        self.t_play(FadeOut(judge), t=1.0)
         self.t_play(FadeIn(queue), t=1.0)
-        self.say("And the doubtful hits wait in the review queue.", t=2.0)
