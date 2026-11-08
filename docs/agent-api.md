@@ -15,7 +15,10 @@ ln -s "/Applications/Drum Spike.app/Contents/MacOS/drumspike-desktop" /usr/local
 ```
 
 Without the link use the binary itself: `"/Applications/Drum Spike.app/Contents/MacOS/drumspike-desktop" cli <command> ...` and
-`... drumspike-desktop mcp`.
+`... drumspike-desktop mcp`. The binary answers without a window: `drumspike-desktop --help` (also
+`-h` or `help`) prints the modes `bridge`, `cli`, `mcp`, `--app-info` and `--analyze`, and
+`--version` prints the version. Any other flag prints the usage to stderr and exits 2; an
+unknown flag never opens the window.
 
 ## Claude Code
 
