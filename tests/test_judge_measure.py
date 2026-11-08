@@ -35,11 +35,11 @@ def test_gold_distance_and_session_k_moves_are_counted():
         wins.append({"set": "goldE", "id": n, "role": "kick", "label_off": 0, "samples": s, "stroke": s, "hit_at": at})
         wins.append({"set": "K", "id": f"t:{n}", "role": "kick", "samples": s, "stroke": s, "hit_at": at})
     res = judge_measure.measure(src, wins)
-    assert res["gold"]["goldE"] == {"n": 3, "exact": 3, "within1": 3, "moves": 0, "dist": 0}
+    assert res["gold"]["goldE"] == {"n": 3, "exact": 3, "within1": 3, "moves": 0, "dist": 0, "no_answer": 0}
     assert res["k"]["kick"]["moves"] == 0 and res["k"]["kick"]["keys_with_two_answers"] == 0
 
 
-def gate_window(bump=0.02):
+def gate_window(bump=0.02, back_to_line=True):
     """A bump whose local-peak share is over the judge's band and whose stroke-peak share is under the detector's.
 
     Stroke peak 1.0 (over the detector's 5 ms span, reached past the look window); the look window's local peak is the
@@ -47,9 +47,9 @@ def gate_window(bump=0.02):
     stroke: 0.05 one sample after the hit, the rise to 0.25 at the window's end. In local-peak shares a bump of 0.02
     reads 0.04 off the line (0.16 at 0.06), over the 0.03 band, so the judge moves earlier; the detector's band is
     2.5 % of the hit's peak, 0.1 in local-peak shares: a bump of 0.02 stands under it (suggestion 0), one of 0.06
-    leaves it (an earlier move).
+    that runs into the stroke (`back_to_line` False: no line sample between it and the stroke) leaves it (an earlier move).
     """
-    sig = [0.01] * 35 + [bump] * 8 + [0.01]
+    sig = [0.01] * 35 + [bump] * 8 + [0.01 if back_to_line else bump]
     sig += [0.05] + [0.25] * (AFTER - 2)                                     # the look window: 28 samples after the hit
     sig += [min(1.0, 0.25 + 0.05 * k) for k in range(1, 100)] + [1.0] * (SPAN_AFTER - 28 - 99)
     assert len(sig) == BEFORE + 1 + SPAN_AFTER   # the hit plus 43 samples before and 240 after it
@@ -79,16 +79,29 @@ def test_bump_of_2_percent_of_stroke_peak_gets_suggestion_0():
     assert row["suggest"] == 0
 
 
-def test_a_departure_above_the_band_still_moves_earlier():
+def test_a_bump_above_the_band_that_runs_into_the_stroke_still_moves_earlier():
     src = (ROOT / "static" / "agent.js").read_text()
-    res = judge_measure.measure(src, [{"set": "K", "id": "above", "role": "kick", **gate_window(0.06)}])
+    res = judge_measure.measure(src, [{"set": "K", "id": "above", "role": "kick", **gate_window(0.06, back_to_line=False)}])
     assert row_of(res, "above")["suggest"] == -9
 
 
-def test_a_later_move_is_unchanged():
+def test_a_hit_inside_the_band_before_the_foot_stays():
+    # #408: the owner's rows keep such a hit (a later move there cost 55 exact); the foot is read two samples after it
     src = (ROOT / "static" / "agent.js").read_text()
     res = judge_measure.measure(src, [{"set": "K", "id": "later", "role": "kick", **later_window()}])
-    assert row_of(res, "later")["suggest"] == 1
+    assert row_of(res, "later")["suggest"] == 0
+
+
+def test_owner_rows_and_session_k_records_get_their_own_aggregates():
+    src = (ROOT / "static" / "agent.js").read_text()
+    w = gate_window(0.06, back_to_line=False)
+    wins = [{"set": "goldE", "id": 1, "role": "kick", "label_off": -9, "owner": True, **w},
+            {"set": "goldE", "id": 2, "role": "kick", "label_off": 0, "owner": False, **w},
+            {"set": "hand", "id": 3, "role": "kick", "label_off": 0, **gate_window()}]
+    res = judge_measure.measure(src, wins)["gold"]
+    assert res["owner"] == {"n": 1, "exact": 1, "within1": 1, "moves": 1, "dist": 0}
+    assert res["goldE"]["n"] == 2 and res["goldE"]["exact"] == 1
+    assert res["hand"]["exact"] == 1 and res["hand"]["moves"] == 0
 
 
 def test_stroke_span_cut_matches_the_detector():

@@ -38,8 +38,13 @@ for (const w of windows) {
     rows.push({ set: "K", id: w.id, suggest: j.suggest });
   } else {
     const d = Math.abs((j.suggest || 0) - w.label_off);
-    const g = gold[w.set] || (gold[w.set] = { n: 0, exact: 0, within1: 0, moves: 0, dist: 0 });
+    const g = gold[w.set] || (gold[w.set] = { n: 0, exact: 0, within1: 0, moves: 0, dist: 0, no_answer: 0 });
+    if (j.suggest === null) g.no_answer++;                          // #408: exact counts "no answer" as 0; this says how many of them
     g.n++; g.dist += d; if (d === 0) g.exact++; if (d <= 1) g.within1++; if (j.suggest) g.moves++;
+    if (w.owner) {                                                  // #408: the owner's own rows are the Gate's set
+      const o = gold.owner || (gold.owner = { n: 0, exact: 0, within1: 0, moves: 0, dist: 0 });
+      o.n++; o.dist += d; if (d === 0) o.exact++; if (d <= 1) o.within1++; if (j.suggest) o.moves++;
+    }
     rows.push({ set: w.set, id: w.id, d, suggest: j.suggest || 0, label: w.label_off, edge: j.edge === undefined ? null : j.edge, shape: j.shape || null });
   }
 }
