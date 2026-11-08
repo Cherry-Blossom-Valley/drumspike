@@ -153,9 +153,10 @@ def test_guide_links_menu_keys_pictures_wording(capsys):
         print(f"checked {len(pages)} pages, {n_menu_names} menu names, {n_keys} keys, "
               f"{len(shots())} pictures")
 
-    # 16 chapters plus the README and the best-results page (#323); 3b is the detector
-    # plug-in page (#394); 15 is the agent fine-tune page (#371).
-    assert len(pages) == 18, f"expected 18 guide pages, found {len(pages)}"
+    # 17 chapters plus the README and the best-results page (#323); 3b is the detector
+    # plug-in page (#394); 15 is the agent fine-tune page (#371); 16 is the Training Mode
+    # page (#382).
+    assert len(pages) == 19, f"expected 19 guide pages, found {len(pages)}"
     assert n_menu_names > 0, "no menu names checked"
     assert n_keys > 0, "no keys checked"
     assert link_hits == []

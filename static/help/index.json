@@ -81,6 +81,11 @@
    "source": "docs/guide/15-agent-finetune.md"
   },
   {
+   "file": "16-training-mode.html",
+   "title": "16. Training Mode",
+   "source": "docs/guide/16-training-mode.md"
+  },
+  {
    "file": "best-results.html",
    "title": "Get the best results",
    "source": "docs/guide/best-results.md"
