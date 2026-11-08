@@ -16,6 +16,10 @@ move is a normal edit that you can undo.
    it into a terminal and run it. This tells Claude Code how to reach Drum Spike. You do this
    once.
 
+The app's binary answers on its own, without a window: `drumspike-desktop --help` (also `-h` or
+`help`) prints the modes it has, and `--version` prints the version. An agent can read them
+before it starts; an unknown flag never opens a second Drum Spike window.
+
 ## Start a session
 
 Ask your agent, in your own words:

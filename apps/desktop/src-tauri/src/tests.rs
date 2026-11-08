@@ -18,6 +18,30 @@ fn headless_ignores_other_arguments_and_reports_app_info() {
     assert_eq!(headless(&["--analyze".into()]), Some(0));
 }
 
+/// #383: a help or version ask answers and exits 0, an unknown flag exits 2 with the usage on
+/// stderr; the window starts only with no argument or its own `--self-test` (the owner's test:
+/// the agent ran `--help` and a second app instance opened).
+#[test]
+fn headless_answers_help_and_version_and_refuses_unknown_flags() {
+    let a = |s: &[&str]| s.iter().map(std::string::ToString::to_string).collect::<Vec<_>>();
+    for flag in ["--help", "-h", "help", "--version"] {
+        assert_eq!(headless_as("", &a(&[flag])), Some(0), "{flag}");
+    }
+    assert_eq!(headless_as("", &a(&["--bogus"])), Some(2));
+    // the tool name keeps the agent modes: there `help` is the `cli help` text, not the modes
+    assert_eq!(headless_as("/usr/local/bin/drumspike", &a(&["help"])), Some(0));
+    assert_eq!(headless_as("", &[]), None);
+    assert_eq!(headless_as("", &a(&["--self-test", "slice"])), None);
+}
+
+#[test]
+fn the_usage_names_the_windowless_modes_and_the_version_line_the_workspace_version() {
+    for mode in ["bridge", "cli", "mcp", "--app-info", "--analyze"] {
+        assert!(USAGE.contains(mode), "the usage names {mode}");
+    }
+    assert_eq!(version_line(), format!("drumspike-desktop {}", drumspike_core::VERSION));
+}
+
 #[cfg(debug_assertions)]
 #[test]
 fn selftest_clock_counts_from_the_start_of_the_process() {
