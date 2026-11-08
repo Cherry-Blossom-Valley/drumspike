@@ -357,7 +357,7 @@ TERMINAL_JS = """([title, line]) => {
   if (!pane) {
     if (line === null) return;
     pane = document.createElement('div'); pane.id = '__term';
-    pane.style.cssText = 'position:fixed;left:24px;bottom:72px;z-index:99998;width:900px;'
+    pane.style.cssText = 'position:fixed;left:24px;bottom:72px;z-index:99998;width:1040px;'
       + 'max-height:430px;overflow:hidden;background:rgba(12,14,16,0.92);border:1px solid #3a3f45;'
       + 'border-radius:8px;font:15px/1.55 ui-monospace,Menlo,Consolas,monospace;color:#d6dae0;'
       + 'padding:10px 14px;box-shadow:0 4px 18px rgba(0,0,0,0.5);';

@@ -6,66 +6,59 @@ lines are the scenario steps and captions for `tools/media/record.py`, not spoke
 length: about 100 s; it follows the recording standard (`docs/product/recording-standard.md`:
 zoom to the action, a visible pointer, keys and menu items on screen, the result holds, the
 0.5 % floor). The scenario is `tools/media/scenarios/part-agent.json`, on the demo session
-(`seed: "demo"`, the s top close mic). The render runs with the built-in detector (the DSP
+(`seed: "demo"`, the k in close mic). The render runs with the built-in detector (the DSP
 path, as the shipped app runs: no external detector), like the other recordings on the current
 main.
 
-The story, per the owner's review of 2026-11-08 and the coordinator's storyboard of a real run
-(Session K, 2026-11-08): prompt first, then the agent at work through its
-`drumspike-finetune` skill, one question back to the user, one visible move of a hit by two
-samples, and the per-track counts at the end. Training Mode is not a topic of the tutorial: no
-scene, caption or close-up names it; the agent's skill switches it on as its own step 2, and
-the narration says so once. The set up is one short scene. The terminal pane types the real
-agent run of `tools/media/fixtures/agent-run/` (ticket #380): the user's prompt from
-`prompt.txt`, the skill load, the tool calls and the question back from `transcript.txt`, the
-final per-track table from the run's aggregate report. No agent text is invented; when #380
-lands, the fixture line ranges of the terminal scenes are pinned to the real files.
+The story, per the owner's review of 2026-11-08: prompt first, then the agent at work in the
+open window through its `drumspike-finetune` skill, one visible move of a hit by two samples,
+and the per-track counts with the export question at the end. Training Mode gets one sentence
+in the narration (ra-skill) and no scene, caption or close-up. The set up is one short scene.
+The terminal pane types the real agent run of `tools/media/fixtures/agent-run/` (ticket #380):
+the prompt from `prompt.txt`, the skill load, the tool calls and the final per-track table from
+`transcript.txt`. No agent text is invented.
 
-The hits the scenes act on are the demo session's own events, checked against `DSAgent.plan`
-on the recording page before the take (probe of 2026-11-08): no s top event carries a non-zero
-suggest, so the move is the k in close mic's hit at 3.750167 s, whose plan row suggests -2 (the
-stored hit sits two samples after the last line sample; the move applies the suggestion as
-given). The move scene zooms to 10 ms (px_per_sample well over 2) and holds 2 s on each side of
-the move; the before and after pictures share the window, and the frame diff must change
-pixels only in the two marker columns. The doubt is the s top hit at 7.020938 s, whose lead
-spread 0.44 is over the 0.03 limit and whose plan row's why is "no clear line before the hit"
-(the caption names it). The look (4.375 s) and the confirm (5.625 s) stay on the s top close
-mic. The Settings scene rewrites the two texts the app prints with host paths (the install
-target and the `claude mcp add` line's binary) into their neutral forms with `show_text`,
-immediately after the app writes them.
+The hits the scenes act on are k in hits of the same run: the look is hit 0 (1.250167 s), the
+move is hit 5 (3.750167 s, sample 180008 to 180006, plan suggests -2), the confirm is hit 4
+(3.126313 s, plan suggests 0), and the doubt is hit 1 (1.876479 s, lead spread 0.18 over the
+0.03 limit, plan why "no clear line before the hit"). The move scene zooms to 10 ms
+(px_per_sample well over 2) and holds 2 s on each side of the move; the before and after
+pictures share the window, and the frame diff must change pixels only in the two marker
+columns. The Settings scene opens the Agent category first and rewrites the two texts the app
+prints with host paths (the install target and the `claude mcp add` line's binary) into their
+neutral forms with `show_text`, immediately after the app writes them.
 
 ## ra-prompt
 
 > Caption: you ask the agent to fine-tune the song. A terminal pane types the user's prompt from the fixture, line by line.
 
-You write one prompt and hand the song to the agent: fine-tune the kick and the snare, move
-the clear hits onto the line, leave the doubtful ones for me, and tell me the counts when you
-are done. The agent works through the Drum Spike page, the same lanes you work in.
+You open the song in Drum Spike and write your prompt in one sentence: fine-tune the first 20 kick hits, move
+the clear ones onto the line, leave anything doubtful for me, and save it. The agent works in
+the window you have open, on the same lanes you work in.
 
 ## ra-skill
 
 > Caption: the agent loads the drumspike-finetune skill and works hit by hit. The terminal pane types the run's first tool calls from the fixture; no close-up of any setting.
 
-The agent loads the drumspike-finetune skill and follows it step by step: it starts the bridge
-and the browser, opens the session, and reads every hit before it touches one. Where the rule
-does not decide for it, it asks you one question and waits for the answer. The skill has it
-prepare the session first, the way you would; that part of the run you never see on screen.
+The agent loads the drumspike-finetune skill and follows it step by step. It finds the open
+window, turns Training Mode on so that each edit is recorded as the agent's, and reads every
+hit before it touches one. You watch all of it in the window.
 
 ## ra-setup
 
 > Caption: the set up: install the skill, run the one mcp line. The Settings sheet shows the Agent fine-tune skill row: the Install click turns the status to installed, and the Copy click answers copied on the status line.
 
-Once, you set it up. In Settings, the Agent fine-tune skill row: press Install, and the skill
-is copied next to your Claude skills. Under it is the one line that tells Claude Code how to
-reach Drum Spike; press Copy, paste it into a terminal, run it once. That is the whole set up.
+Once, you set it up. In Settings, open the Agent category. In the fine-tune skill row, press
+Install, and the skill is copied next to your Claude skills. Under it is the one line that
+tells Claude Code how to reach Drum Spike; press Copy, paste it into a terminal, run it once.
+That is the whole set up.
 
 ## ra-look
 
 > Caption: the agent looks at every hit before it touches it. The agent's pointer glides to the hit; the lane jumps to sample zoom, 0.9 milliseconds before and 0.6 after the hit.
 
-Now the agent at work, on the page you just installed it for. Its first step on every hit is a
-look: the lane jumps to sample zoom, and the samples come out as numbers, shares of the local
-peak.
+Now the agent at work, in the open window. Its first step on every hit is a look: the lane
+jumps to sample zoom, and the samples come out as numbers, shares of the local peak.
 
 ## ra-move
 
@@ -104,4 +97,5 @@ step at a time.
 > Caption: the counts, per track. The terminal pane types the run's final aggregate report from the fixture: hits, moved, confirmed, hand-placed untouched, no suggestion, doubtful.
 
 And at the end, the counts: per track, what the agent saw, moved, confirmed, and left for you,
-with the reasons. Nothing in the saved project but the edits it told you about.
+with the reasons. Nothing in the saved project but the edits it told you about. Last, it asks
+whether you want the export.
