@@ -883,6 +883,33 @@ pub static REGISTRY: &[CommandSpec] = &[
     ),
     cmd("quit_app", "Quit the app", &[], "{}", App, Window, Quick),
     cmd(
+        "window_call_next",
+        "#388: the page waits for the next helper call of the window endpoint (long poll)",
+        &[opt(
+            "timeout_ms",
+            Ty::Int,
+            "How long to wait for a call, at most 30000; default 25000",
+        )],
+        OBJ,
+        App,
+        Window,
+        Quick,
+    ),
+    cmd(
+        "window_call_result",
+        "#388: the page answers a helper call of the window endpoint",
+        &[
+            req("id", Ty::Int, "The call's id, from window_call_next"),
+            req("ok", Ty::Bool, "The helper returned (true) or threw (false)"),
+            opt("value", Ty::Any, "The helper's return value"),
+            opt("error", Ty::Str, "The helper's error message"),
+        ],
+        "{}",
+        App,
+        Window,
+        Quick,
+    ),
+    cmd(
         "app_ready",
         "The page is ready (ends the splash)",
         &[],
