@@ -26,7 +26,7 @@ Facts used (all checked against the code, not from memory):
   around the hit, 40 ms before and 10 ms after) and a `move`, `add`, `delete` or `confirm`
   record carries `placement` `{edge, line_noise, line_slope, onset_spread}`:
   `crates/app/src/training.rs` (`BEFORE_MS`, `AFTER_MS`, the `placement` note).
-- The judgement stops on a wobbly line: the line check wants a lead spread of 0.03 or less
+- The judgment stops on a wobbly line: the line check wants a lead spread of 0.03 or less
   (shares of the local peak) over the first 12 samples, and a departure far from the hit
   (more than 12 samples before or 6 after it) gets no suggestion: `static/agent.js`
   (`LINE_LEAD`, `LINE_MAX_SPREAD`, `DEPART_BEFORE`, `DEPART_AFTER`, the `why` note).
@@ -60,13 +60,13 @@ What the agent sees is the same picture and the same samples as numbers: the win
 
 > The same numbers for a wobbly hit: the lead spread over the first 12 samples is over the 0.03 limit; the word doubt and the reason stand next to the hit, and the hit does not move.
 
-The judgement stops where the line is not a line. A wobbly lead, a spread over 0.03 of the local peak over the first 12 samples, gets no suggestion. The hit lands on the doubtful list with its reason, and stays for you.
+The judgment stops where the line is not a line. A wobbly lead, a spread over 0.03 of the local peak over the first 12 samples, gets no suggestion. The hit lands on the doubtful list with its reason, and stays for you.
 
 ## s05-training
 
 > The training log line of the move as text: the op, the track, from and to, precision sample, and the placement measures edge, line_noise, line_slope, onset_spread; the audio window is carried in the record.
 
-With Training Mode on, every move and confirm writes one line to the project's training log: the op, the position, the precision, and the placement measures of the hit. The record carries the samples around it, forty milliseconds before and ten after, so it can be read without the session.
+With Training Mode on, every move and confirm writes one line to the project's training log: the op, the position, the precision, and the placement measures of the hit. The record carries the samples around it, 40 milliseconds before and 10 after, so it can be read without the session.
 
 ## s06-loop
 

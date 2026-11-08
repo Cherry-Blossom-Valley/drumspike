@@ -35,7 +35,7 @@ In Settings, the Agent fine-tune skill row: press Install. The app copies the sk
 
 > Caption: the claude mcp add line. The row shows the one line and its Copy button; the Copy click answers copied on the status line.
 
-Under the button is the one line that tells Claude Code how to reach Drum Spike. Press Copy, paste it into a terminal, run it once. That is the whole setup.
+Under the button is the one line that tells Claude Code how to reach Drum Spike. Press Copy, paste it into a terminal, run it once. That is the whole set up.
 
 ## ra-look
 
@@ -57,9 +57,9 @@ A hit the agent has looked at and found right it confirms: Hits > Confirm Hit. T
 
 ## ra-doubt
 
-> Caption: the doubtful hit stays for you. The wobbly hit's window: the lead is not a line, the spread is over the limit, and the hit does not move.
+> Caption: the doubtful hit stays for you. The wobbly hit's window: the lead is not a straight line, the spread is over the limit, and the hit does not move.
 
-And here the judgement stops. This lead is not a line: its spread over the first twelve samples is over the limit. The agent leaves the hit alone and lists it for you, with the reason.
+And here the judgment stops. This lead is not a straight line: its spread over the first 12 samples is over the limit. The agent leaves the hit alone and lists it for you, with the reason.
 
 ## ra-save
 
