@@ -719,6 +719,21 @@ pub(crate) const HANDLERS: [crate::call::Route; 2] = crate::call::routes(EDIT_CO
     crate::call::json_reply(cmd, dispatch(s, cmd, args))
 });
 
+/// #389: who made an edit, as the `by` argument of `events_edit` says it: `"person"` (the page's own paths) or `"agent"`
+/// (the `window.DSAgent` helpers); absent or null is `None` (the record then says person). One function for the bridge
+/// dispatch and the Tauri command of the window, so the two surfaces cannot drift (#388).
+///
+/// # Errors
+///
+/// 400 for any other value.
+pub fn edit_author(by: Option<&Value>) -> Result<Option<&str>, AppError> {
+    match by {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(b)) if b == "person" || b == "agent" => Ok(Some(b.as_str())),
+        Some(_) => Err(AppError::bad("wrong argument `by` (\"person\" or \"agent\")")),
+    }
+}
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them.
 #[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
@@ -738,12 +753,7 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
                 .ok_or_else(|| AppError::bad("missing or wrong argument `ops` (list)"))?;
             let training = args.get("training").and_then(Value::as_bool).unwrap_or(false);
             let view = args.get("view").filter(|v| v.is_object()).cloned();
-            // #389: who made the edit; the page's own paths send "person", the DSAgent helpers "agent"
-            let by = match args.get("by") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(b)) if b == "person" || b == "agent" => Some(b.as_str()),
-                Some(_) => return Err(AppError::bad("wrong argument `by` (\"person\" or \"agent\")")),
-            };
+            let by = edit_author(args.get("by"))?;
             svc.events_edit_training_by(s("sid")?, s("name")?, ops, training, view, by)
         } else {
             let n = args

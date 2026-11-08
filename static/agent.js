@@ -108,6 +108,8 @@
     /* the sample-zoom view on a hit (defaults 0.9 ms before, 0.6 ms after, amplitude to the local peak) */
     look(track, index, opts) {
       const o = opts || {};
+      /* #388: the user watches the window, so each helper names its step in the status line (the skill asks for it) */
+      if (S.events[track] && S.events[track][index]) setMsg(`agent: looking at ${track} hit ${index + 1}/${S.events[track].length}`);
       return view(track, index, o.before_ms === undefined ? SAMPLE_BEFORE_MS : o.before_ms, o.after_ms === undefined ? SAMPLE_AFTER_MS : o.after_ms, o);
     },
     /* the 20 ms view, for deletes and bleed questions */
@@ -122,6 +124,7 @@
         else select(track, index);
         const ok = await nudgeSelected(samples);
         const at = S.sel && S.sel.track === track ? S.sel.index : index;
+        if (ok) setMsg(`agent: moved ${track} hit ${at + 1}/${S.events[track].length} by ${samples} samples`);
         return { moved: !!ok, index: at, from, to: sampleOf(track, S.events[track][at]) };
       });
     },

@@ -1329,6 +1329,11 @@ pub static REGISTRY: &[CommandSpec] = &[
                 Ty::Obj,
                 "#353: with training, the view of the edit {ms, px_per_sample} (the visible span in milliseconds, the pixels one sample occupies); the records get it and a precision",
             ),
+            opt(
+                "by",
+                Ty::Str,
+                "#389: with training, who made the edit, \"person\" (default) or \"agent\"; the records say it",
+            ),
         ],
         r#"{"type":"object","required":["saved","added","deleted","moved","velocity","restored"]}"#,
         Doc,

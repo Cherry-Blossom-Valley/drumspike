@@ -61,13 +61,15 @@ def test_look_move_and_confirm_through_the_endpoint_change_the_window_and_its_st
     assert seen["sample"] == IDX[1]
     line = ask("statusLine")
     assert line["selection"].startswith(f"{TRACK}: hit 2/3"), line
+    assert line["message"] == f"agent: looking at {TRACK} hit 2/3", line   # the user can follow the step in the window
 
     moved = ask("move", TRACK, 1, 3)
     assert moved["moved"] is True and moved["from"] == IDX[1] and moved["to"] == IDX[1] + 3
     assert [h["sample"] for h in ask("hits", TRACK)][1] == IDX[1] + 3   # the hit moved in the window
     assert app.evaluate("() => S.events['Kick In'][1].t * S.tracks['Kick In'].sr") == IDX[1] + 3
     after_move = ask("statusLine")
-    assert after_move["message"] and after_move["training"] == "training: 1 records", after_move
+    assert after_move["message"] == f"agent: moved {TRACK} hit 2/3 by 3 samples", after_move
+    assert after_move["training"] == "training: 1 records", after_move
     edits_done(app)
     (rec,) = project_log_lines(app)[before:]
     assert (rec["op"], rec["by"]) == ("move", "agent"), rec   # #389: a move through the endpoint says who made it

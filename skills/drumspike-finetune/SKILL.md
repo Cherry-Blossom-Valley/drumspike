@@ -20,7 +20,7 @@ that (the MCP tools load at session start).
 Two ways to reach the page helpers. Try the window first:
 
 - **A Drum Spike window is open (the default).** Call the helpers of the window with the MCP tool `agent_call`
-  (`fn` is the helper, `args` its arguments as a list), or from a terminal `"<binary>" agent_call <fn> [arg]...`.
+  (`fn` is the helper, `args` its arguments as a list), or from a terminal `"<binary>" cli agent_call <fn> [arg]...` (on the app binary the word `cli` comes first).
   The user watches the edit right there; you need no browser and the user quits nothing. "The home is in use" then
   means: use the window. Do not pass another home.
 - **No window is open** (`agent_call` answers "no Drum Spike window is open"): start the page with
