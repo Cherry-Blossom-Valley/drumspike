@@ -32,8 +32,11 @@ Fine-tune the drums of ~/Music/Sessions/Song in Drum Spike.
 ```
 
 The agent opens the session, analyses it if needed, turns on Training Mode (View > Training
-Mode), and works through the tracks in chunks of about 100 hits. For each hit it looks at a
-window of about a millisecond around the hit, at sample zoom.
+Mode), and steps through the hits so you can watch, one hit at a time (it plans in chunks of
+about 100 hits). For each hit it looks at a window of about a millisecond around the hit, at
+sample zoom, names each step in the status line and holds briefly after each move. After the
+save it reports a per-track table (hits, moved, confirmed, hand-placed and untouched, no
+suggestion, doubtful, and a total row) and asks you once whether to export now or leave it.
 
 ## What the agent does and does not do
 

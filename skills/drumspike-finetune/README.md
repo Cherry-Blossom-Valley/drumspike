@@ -19,10 +19,11 @@ In this order:
 ## Use
 
 Ask Claude Code: "Fine-tune the drums of `~/Music/Sessions/Song` in Drum Spike." The agent starts the page mode
-(`drumspike bridge`), opens the session, turns Training Mode on, and steps through the hits so you can watch: look
-at the hit at sample zoom, nudge it by whole samples where the rule says so, confirm it, next hit. It names each
-step in the status line and holds briefly after each move. It works in chunks of about 100, leaves the doubtful
-ones for you, and after the save asks you once whether to export now or leave it.
+(`drumspike bridge`), opens the session, turns Training Mode on, and steps through the hits so you can watch, one
+hit at a time: look at the hit at sample zoom, nudge it by whole samples where the rule says so, confirm it, next
+hit. It names each step in the status line and holds briefly after each move (it plans in chunks of about 100, and
+moves a whole chunk in one call only if you asked not to watch). It leaves the doubtful ones for you, reports a
+per-track table after the save, and then asks you once whether to export now or leave it.
 
 Every move and confirm lands in the Training Mode log exactly as if you had made it. Undo works as always. At the
 end you get counts and a list of the hits left for you. Nothing leaves your machine.
