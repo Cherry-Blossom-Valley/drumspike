@@ -371,9 +371,16 @@ TERMINAL_JS = """([title, line]) => {
   if (title !== null) pane.__title.textContent = title;
   if (line !== null) {
     const d = document.createElement('div');
-    d.textContent = line; d.style.whiteSpace = 'pre';
+    d.textContent = line; d.style.whiteSpace = 'pre-wrap'; d.style.overflowWrap = 'anywhere';
     pane.__lines.appendChild(d);
     while (pane.__lines.children.length > 18) pane.__lines.removeChild(pane.__lines.firstChild);
+  }
+  if (pane.__lines.children.length) {
+    // Wrapped lines take more than one row: drop from the top while the content overflows
+    // the pane's max-height, so the last typed line (the export question) stays visible.
+    while (pane.__lines.children.length > 1 && pane.scrollHeight > pane.clientHeight + 1) {
+      pane.__lines.removeChild(pane.__lines.firstChild);
+    }
   }
 }"""
 TERMINAL_CLEAR_JS = "() => { const p = document.getElementById('__term'); if (p) p.remove(); }"

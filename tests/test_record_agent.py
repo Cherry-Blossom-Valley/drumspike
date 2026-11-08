@@ -183,6 +183,33 @@ def test_the_part_agent_opens_with_the_prompt_and_the_skill():
     assert [sc["id"] for sc in scenes if sc["id"] == "ra-setup"] == ["ra-setup"]
 
 
+def test_the_part_agent_pane_wraps_and_leaves_the_six_scenes():
+    """#381 send-back round 2: the pane wraps its lines (the full prompt is visible in the
+    ra-prompt frame), ra-setup clears the pane and keeps it off through ra-look, ra-move,
+    ra-confirm, ra-doubt and ra-save, and ra-table starts on a cleared pane."""
+    scenes = _part_agent_scenarios()
+    # the prompt wraps, so the whole 178-character line is in the frame
+    assert "pre-wrap" in record.TERMINAL_JS and "overflowWrap" in record.TERMINAL_JS
+    # the last typed line stays visible: the pane trims from the top at max-height
+    assert "scrollHeight > pane.clientHeight" in record.TERMINAL_JS
+    by_id = {sc["id"]: sc for sc in scenes}
+    setup = by_id["ra-setup"]["steps"]
+    assert setup[1] == {"do": "terminal",
+                        "file": "tools/media/fixtures/agent-run/transcript.txt",
+                        "clear": True}, setup[:2]
+    assert setup[2] == {"do": "hold", "s": 1.5}   # the recording standard's hold after the clear
+    for sid in ("ra-look", "ra-move", "ra-confirm", "ra-doubt", "ra-save"):
+        terms = [st for st in by_id[sid]["steps"]
+                 if st["do"] == "terminal" and st.get("clear") is not True]
+        assert not terms, (sid, terms)
+    table_terms = [st for st in by_id["ra-table"]["steps"] if st["do"] == "terminal"]
+    assert table_terms[0]["lines"] == [71, 75] and table_terms[1]["lines"] == [87, 87]
+    # the move lands on the spoken words: about 10 s of hold before it in the 26 s scene
+    move_steps = by_id["ra-move"]["steps"]
+    pre = [st["s"] for st in move_steps if st["do"] == "hold"][0]
+    assert pre >= 8.0, move_steps
+
+
 def test_terminal_step_types_the_fixture_file_not_inline_text(tmp_path, monkeypatch):
     """#381 gate (c): the terminal pane text is the fixture transcript, read from the file at
     the run: the step carries the path and the 1-based lines, never the text itself."""

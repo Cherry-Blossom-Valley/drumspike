@@ -39,6 +39,9 @@
       "area_sel": "#setAgentSkill",
       "steps": [
         {"do": "caption", "text": "the set up: install the skill, run the one mcp line"},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
+         "clear": true},
+        {"do": "hold", "s": 1.5},
         {"do": "menu", "id": "settings"},
         {"do": "hold", "s": 1.5},
         {"do": "click", "sel": "#setCat-agent", "timeout": 10,
@@ -82,10 +85,10 @@
       "steps": [
         {"do": "caption", "text": "a clear hit steps two samples onto the last sample of its line"},
         {"do": "zoom_to", "track": "k_in", "t": 3.7501667, "span": 0.01},
-        {"do": "hold", "s": 2.0},
+        {"do": "hold", "s": 10.0},
         {"do": "agent", "fn": "move", "track": "k_in", "t": 3.7501667, "args": [-2], "timeout": 30,
          "err": "the move (the nudge by whole samples; the sign checked against the plan)"},
-        {"do": "hold", "s": 2.5}
+        {"do": "hold", "s": 8.0}
       ]
     },
     {
