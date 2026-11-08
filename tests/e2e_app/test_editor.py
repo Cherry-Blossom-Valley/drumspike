@@ -475,10 +475,12 @@ def test_settings_turn_the_metronome_click_off_and_persist(app, make_project, tm
     sid = open_project(app, build(make_project, tmp_path))
     menu(app, "settings")                                               # P3-13a: Drum Spike > Settings (Cmd+,)
     expect(app.locator("#settingsModal")).to_be_visible()
+    app.click("#setCat-audition")                                       # #387: the Audition and click category
     app.locator("#setClickOn").uncheck()
     assert js(app, "() => $('#clickBtn').classList.contains('on')") is False      # the toolbar button follows
     assert js(app, "() => window.__DS_MENU_STATE__.click") is False                # and the menu's check item
     app.locator("#setClickVol").fill("25")
+    app.click("#setCat-pitches")                                        # #387: the pitches have their own category
     pitch = app.locator("#setPitches input").first
     pitch.fill("20000")
     pitch.blur()                                                        # clamped to 8000 Hz

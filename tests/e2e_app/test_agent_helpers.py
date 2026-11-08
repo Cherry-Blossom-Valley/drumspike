@@ -138,6 +138,7 @@ def test_settings_row_installs_the_bundled_skill_and_shows_the_version_and_the_m
     target = Path(app.evaluate("async () => (await B.agentSkillStatus()).path"))
     shutil.rmtree(target.parent, ignore_errors=True)
     app.evaluate("() => openSettings()")
+    app.click("#setCat-agent")   # #387: the Agent category
     expect(app.locator("#setSkillStatus")).to_have_text("not installed")
     expect(app.locator("#setSkillInstall")).to_have_text("Install")
     line = app.locator("#setSkillCmd").text_content()

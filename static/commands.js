@@ -510,12 +510,44 @@ function analyzeSelected() { const n = needTrack(); if (n) startAnalysis([n]); }
 function exportSelectedTracks() { const n = needTrack(); if (n) return openExport("selected", n); }   // P4-30: Track > Export Selected Tracks…
 function showModal(id) {   // Settings and Keyboard Shortcuts: Escape or the button closes them
   const m = $(id);
+  m._opener = document.activeElement;   // #387: the focus comes back to it on close
   m.classList.remove("hidden");
-  const esc = ev => { if (ev.key === "Escape" && !m.classList.contains("hidden")) { ev.stopPropagation(); m.classList.add("hidden"); } };
+  const esc = ev => { if (ev.key === "Escape" && !m.classList.contains("hidden")) { ev.stopPropagation(); m.classList.add("hidden"); if (m._onclose) m._onclose(); } };
   document.removeEventListener("keydown", m._esc, true);
   m._esc = esc; document.addEventListener("keydown", esc, true);
+  return m;
 }
-function openSettings() { showModal("#settingsModal"); refreshAudioOutput(); setPluginsFill(); agentSkillFill(); }
+/* #387: the Settings dialog is a preferences window: a category list on the left, one category's
+   rows on the right. The last open category is remembered per app home (localStorage). */
+const SET_CATS = ["audio", "keyboard", "view", "audition", "pitches", "plugins", "agent"];
+function settingsShowCat(cat) {
+  if (!SET_CATS.includes(cat)) cat = "audio";
+  document.querySelectorAll("#settingsModal .setCat").forEach(s => s.classList.toggle("active", s.dataset.cat === cat));
+  document.querySelectorAll("#setCats .setCatBtn").forEach(b => {
+    const on = b.dataset.cat === cat;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  const page = $("#setPage"); if (page) page.scrollTop = 0;
+  return cat;
+}
+function settingsOpenCat() {
+  const saved = localStorage.getItem("dsg_setcat");
+  return SET_CATS.includes(saved) ? saved : "audio";
+}
+function settingsClose() {
+  const m = $("#settingsModal");
+  if (m.classList.contains("hidden")) return;
+  m.classList.add("hidden");
+  if (m._onclose) m._onclose();
+}
+function openSettings() {
+  const m = showModal("#settingsModal");
+  settingsShowCat(settingsOpenCat());
+  const btn = document.querySelector("#setCats .setCatBtn.active"); if (btn) btn.focus();   // the focus moves into the dialog
+  m._onclose = () => { if (m._opener && m._opener.focus) m._opener.focus(); };
+  refreshAudioOutput(); setPluginsFill(); agentSkillFill();
+}
 
 function openShortcuts() {
   DSHelp.open("shortcuts");   // #255: the Shortcuts section of the manual (static/keymap.js, one source)

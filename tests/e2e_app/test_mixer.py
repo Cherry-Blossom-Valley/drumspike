@@ -8,7 +8,7 @@ import time
 import pytest
 from playwright.sync_api import expect
 
-from app_support import invoke, load_project, menu, open_project, wait_until
+from app_support import invoke, load_project, menu, open_project, settings_cat, wait_until
 
 DEVICES = [{"name": "Speakers", "rate": 48000, "channels": 2}, {"name": "AirPods", "rate": 44100, "channels": 2}]
 
@@ -57,6 +57,7 @@ def settings_key(page, key, want):
 def test_settings_lists_the_outputs_and_keeps_the_choice(app, audio_reset, make_project):
     invoke(app, "outputs_test_list", devices=DEVICES)
     menu(app, "settings")
+    settings_cat(app, "audio")
     app.wait_for_function("() => document.querySelectorAll('#setOutput option').length === 3")
     opts = app.eval_on_selector_all("#setOutput option", "os => os.map(o => [o.value, o.textContent])")
     assert opts == [["", "System default (Speakers)"], ["Speakers", "Speakers, 48 kHz, 2 ch"],
@@ -73,6 +74,7 @@ def test_settings_lists_the_outputs_and_keeps_the_choice(app, audio_reset, make_
     invoke(app, "outputs_test_list", devices=DEVICES[:1])
     app.click("#settingsDone")
     menu(app, "settings")
+    settings_cat(app, "audio")
     app.wait_for_function("() => !document.querySelector('#setOutputNote').classList.contains('hidden')")
     assert app.input_value("#setOutput") == "AirPods"
     assert app.eval_on_selector("#setOutput", "s => s.selectedOptions[0].textContent") == "AirPods (not connected)"
@@ -87,6 +89,7 @@ def test_settings_lists_the_outputs_and_keeps_the_choice(app, audio_reset, make_
     assert st["choice"] == "AirPods" and "not connected" in st["note"]
     assert "not connected" in app.text_content("#stMsg")
     menu(app, "settings")
+    settings_cat(app, "audio")
     app.wait_for_function("() => document.querySelector('#setOutputNow').textContent.startsWith('Plays on: null')")
     # back to the system default: the transport reopens on it, the message goes away
     app.select_option("#setOutput", "")
@@ -99,6 +102,7 @@ def test_settings_lists_the_outputs_and_keeps_the_choice(app, audio_reset, make_
 
 def test_a_failed_output_choice_says_why(app, audio_reset):
     menu(app, "settings")
+    settings_cat(app, "audio")
     app.wait_for_function("() => document.querySelectorAll('#setOutput option').length >= 1")
     app.evaluate("() => { B._audioOutput = B.audioOutput; B.audioOutput = () => Promise.reject(new Error('500: boom')); }")
     try:
