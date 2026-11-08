@@ -1,8 +1,13 @@
-"""#385: tools/judge_measure.py counts the judge's answers on windows; a bump under the departure band gets no move."""
+"""#385: tools/judge_measure.py counts the judge's answers on windows; a bump under the departure band gets no move.
+#394: the rule's bands stay shares of the local peak, as on main; the hit's peak (the detector's reference) feeds a
+guard: when the judge would move the hit earlier over a stretch that stands within the detector's own band
+(DEPARTURE_VIS_PCT = 2.5 % of the hit's peak) of the line level, the answer is suggestion 0 with
+why "under the detector's band". A real departure above the band still moves earlier, a later move is unchanged."""
 import shutil
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -10,6 +15,10 @@ sys.path.insert(0, str(ROOT / "tools"))
 import judge_measure  # noqa: E402
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is not available")
+
+BEFORE = 43   # the cut at 48 kHz: 0.9 ms before the hit (floor)
+AFTER = 29    # 0.6 ms after (ceil); the look window is BEFORE + AFTER samples around the hit
+SPAN_AFTER = 240   # the detector's 5 ms stroke span after the hit
 
 
 def window(bump):
@@ -23,8 +32,69 @@ def test_gold_distance_and_session_k_moves_are_counted():
     wins = []
     for n, bump in enumerate((0.016, 0.02, 0.0245)):
         s, at = window(bump)
-        wins.append({"set": "goldE", "id": n, "role": "kick", "label_off": 0, "samples": s, "hit_at": at})
-        wins.append({"set": "K", "id": f"t:{n}", "role": "kick", "samples": s, "hit_at": at})
+        wins.append({"set": "goldE", "id": n, "role": "kick", "label_off": 0, "samples": s, "stroke": s, "hit_at": at})
+        wins.append({"set": "K", "id": f"t:{n}", "role": "kick", "samples": s, "stroke": s, "hit_at": at})
     res = judge_measure.measure(src, wins)
     assert res["gold"]["goldE"] == {"n": 3, "exact": 3, "within1": 3, "moves": 0, "dist": 0}
     assert res["k"]["kick"]["moves"] == 0 and res["k"]["kick"]["keys_with_two_answers"] == 0
+
+
+def gate_window(bump=0.02):
+    """A bump whose local-peak share is over the judge's band and whose stroke-peak share is under the detector's.
+
+    Stroke peak 1.0 (over the detector's 5 ms span, reached past the look window); the look window's local peak is the
+    stroke's early rise, 0.25. Line 0.01, a lead `bump` (8 samples ending one before the hit at index 43), then the
+    stroke: 0.05 one sample after the hit, the rise to 0.25 at the window's end. In local-peak shares a bump of 0.02
+    reads 0.04 off the line (0.16 at 0.06), over the 0.03 band, so the judge moves earlier; the detector's band is
+    2.5 % of the hit's peak, 0.1 in local-peak shares: a bump of 0.02 stands under it (suggestion 0), one of 0.06
+    leaves it (an earlier move).
+    """
+    sig = [0.01] * 35 + [bump] * 8 + [0.01]
+    sig += [0.05] + [0.25] * (AFTER - 2)                                     # the look window: 28 samples after the hit
+    sig += [min(1.0, 0.25 + 0.05 * k) for k in range(1, 100)] + [1.0] * (SPAN_AFTER - 28 - 99)
+    assert len(sig) == BEFORE + 1 + SPAN_AFTER   # the hit plus 43 samples before and 240 after it
+    return {"samples": sig[:BEFORE + AFTER], "stroke": sig, "hit_at": BEFORE}
+
+
+def later_window():
+    """A departure after the hit: the line runs one sample past the hit, the stroke starts two after it (suggest 1)."""
+    sig = [0.01] * (BEFORE + 2) + [0.05] + [0.25] * (AFTER - 3)
+    sig += [0.05] + [min(1.0, 0.25 + 0.05 * k) for k in range(1, 100)]
+    sig += [1.0] * (BEFORE + 1 + SPAN_AFTER - len(sig))
+    assert len(sig) == BEFORE + 1 + SPAN_AFTER
+    return {"samples": sig[:BEFORE + AFTER], "stroke": sig, "hit_at": BEFORE}
+
+
+def row_of(res, wid):
+    return [r for r in res["rows"] if r["id"] == wid][0]
+
+
+def test_bump_of_2_percent_of_stroke_peak_gets_suggestion_0():
+    src = (ROOT / "static" / "agent.js").read_text()
+    w = gate_window()
+    assert max(abs(v) for v in w["samples"]) == 0.25         # the look window's local peak
+    assert max(abs(v) for v in w["stroke"][w["hit_at"]:]) == 1.0   # the hit's peak over the detector's span
+    res = judge_measure.measure(src, [{"set": "K", "id": "gate", "role": "kick", **w}])
+    row = row_of(res, "gate")
+    assert row["suggest"] == 0
+
+
+def test_a_departure_above_the_band_still_moves_earlier():
+    src = (ROOT / "static" / "agent.js").read_text()
+    res = judge_measure.measure(src, [{"set": "K", "id": "above", "role": "kick", **gate_window(0.06)}])
+    assert row_of(res, "above")["suggest"] == -9
+
+
+def test_a_later_move_is_unchanged():
+    src = (ROOT / "static" / "agent.js").read_text()
+    res = judge_measure.measure(src, [{"set": "K", "id": "later", "role": "kick", **later_window()}])
+    assert row_of(res, "later")["suggest"] == 1
+
+
+def test_stroke_span_cut_matches_the_detector():
+    data = np.zeros(1000)
+    data[520 + 200] = 1.0
+    s, at = judge_measure.cut(data, 520, 48000)
+    assert (at, len(s)) == (520 - 476, 549 - 476)   # 0.9 ms before (floor), 0.6 ms after (ceil)
+    st = judge_measure.stroke_span(data, 520, 48000)
+    assert (len(st), st.index(1.0)) == (760 - 476, at + 200)   # the 5 ms span after the hit
