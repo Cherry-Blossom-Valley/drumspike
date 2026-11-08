@@ -16,6 +16,13 @@ script: one `##` per scene, its `>` lines are the steps and captions). The recor
   (static/shell.js) runs the real item; the Import scene's DAW MIDI (tempo.mid: 87 BPM 4/4,
   100 BPM and 3/4 from bar 5) and the Layer scene's one-shot (one-shot.wav, the first 1.5 s of
   the demo sub mic — a layer one-shot is at most 20 s) are written into the work dir,
+- an "agent" step (#373) calls the page's own `window.DSAgent` helper (static/agent.js): `fn`
+  is the helper, `args` its further arguments, and `track` with `t` name the hit — its index
+  is resolved in the page (the nearest hit to `t`) and passed as the second argument. The
+  overlay pointer glides to the hit's lane position first, so the page shows the real action
+  under the recording standard's rules (zoom to the hit, the pointer, the result holds). The
+  helpers that change the document refuse while Training Mode is off, so a scenario turns it
+  on with the `training_mode` menu command first,
 - starts ds-bridge with the DSP detector (the video shows what ships), drives the page with
   Playwright and the real keys, under the key/caption
   overlay of the coordinator's prototype (rec_demo-prototype.py),
@@ -96,9 +103,9 @@ NOTE_PAD_PX = 6
 NOTE_FONT = "Helvetica, Arial, sans-serif"   # one sans-serif family, like the explainers
 STEP_KINDS = ("caption", "key", "show_key", "hide_key", "click", "select", "menu", "answer_save", "answer_pick",
               "show_dest", "show_text", "lane_click", "drag", "wait", "visible", "text", "hold", "blur", "zoom_to",
-              "shot")
+              "shot", "agent")
 # The recording standard (docs/product/recording-standard.md), on for a scenario with "standard": true
-ACTION_KINDS = ("key", "show_key", "click", "lane_click", "drag", "select", "menu")
+ACTION_KINDS = ("key", "show_key", "click", "lane_click", "drag", "select", "menu", "agent")
 POINTER_KINDS = ("click", "lane_click", "drag")   # the overlay pointer glides to these before they act
 GLIDE_MS = 450                  # the pointer glides in 300 to 600 ms
 ZOOM_SPAN_S = (0.5, 5.0)        # a zoom_to span: a preset from 500 ms to 5 s
@@ -202,6 +209,12 @@ def parse_scenario(scenario):
                                           or not ZOOM_SPAN_S[0] <= st["span"] <= ZOOM_SPAN_S[1]):
                 raise RecordError(f"{sc['id']}: a zoom_to step needs the track, the time t and a span "
                                   f"from {ZOOM_SPAN_S[0]} to {ZOOM_SPAN_S[1]} s")
+            if st["do"] == "agent":
+                if st.get("fn") not in AGENT_FNS:
+                    raise RecordError(f"{sc['id']}: an agent step needs fn, one of "
+                                      f"{', '.join(AGENT_FNS)}")
+                if not isinstance(st.get("args", []), list):
+                    raise RecordError(f"{sc['id']}: an agent step's args are a list")
     if scenario.get("standard") is True:
         problems = [p for sc in scenes for p in standard_problems(sc)]
         if problems:
@@ -213,6 +226,20 @@ def parse_scenario(scenario):
         raise RecordError("plugins must be true (the example plugin installs before the video)")
     return {**scenario, "scenes": scenes}
 
+
+# The agent's step (#373): the page's own window.DSAgent helper. `track` and `t` name the hit
+# the step acts on; the index is resolved in the page (the nearest hit to `t` in the track's
+# event list) and passed as the second argument, so a scenario stays readable while the real
+# event list answers. The other helpers take `args` verbatim.
+AGENT_FNS = ("hits", "look", "wide", "move", "confirm", "undo", "plan", "apply", "save", "status")
+NEAREST_HIT_JS = """([track, t]) => {
+  const evs = S.events[track] || [];
+  if (!evs.length) throw new Error('no hits on ' + track);
+  let best = 0;
+  for (let i = 1; i < evs.length; i++) if (Math.abs(evs[i].t - t) < Math.abs(evs[best].t - t)) best = i;
+  return best;
+}"""
+AGENT_JS = "async ([fn, args]) => { if (!window.DSAgent) throw new Error('no window.DSAgent on the page'); return await window.DSAgent[fn](...args); }"
 
 # The recording standard (docs/product/recording-standard.md). zoom_to centres the view on the
 # step's time with the span (setView, the app's own view call) and moves the track's row into the
@@ -685,6 +712,19 @@ def run_step(page, st, env):
         page.evaluate(DRAG_END_JS)
         if st.get("wait_sel"):
             page.wait_for_function("() => DSLearn.state().sel !== null", timeout=timeout)
+    elif kind == "agent":
+        # The agent's action through the page's own helper (static/agent.js): the pointer
+        # glides to the hit's lane position first (the recording standard), then the real
+        # DSAgent call runs the same code the keyboard uses.
+        if st.get("track") and "t" in st:
+            x, y = lane_point(page, st["track"], st.get("lane", "spike"), st["t"])
+            glide(page, x, y)
+            page.evaluate(RING_JS, [x, y])
+        args = list(st.get("args", []))
+        if st.get("track") and "t" in st:
+            index = page.evaluate(NEAREST_HIT_JS, [st["track"], st["t"]])
+            args = [st["track"], index] + args
+        page.evaluate(AGENT_JS, [st["fn"], args])
     elif kind == "blur":
         # Drop the focused element (plumbing, no user action on screen): a scene that follows a
         # slider or a select carries its focus, and the app's key guard (P3-13a) swallows the
@@ -1172,6 +1212,12 @@ def record(root, scenario, items, out, work, keep, check_model=True):
                                  record_video_dir=str(work / "raw"),
                                  record_video_size={"width": vp_w, "height": vp_h})
             t_video0 = time.monotonic()   # the video starts with the page
+            # the Settings scene's Copy button writes the clipboard (agent.js's
+            # navigator.clipboard.writeText): headless Chromium needs the grant.
+            try:
+                ctx.grant_permissions(["clipboard-read", "clipboard-write"])
+            except Exception:
+                pass
             pg = ctx.new_page()
             vid = pg.video
             # #403: the app's one native dialog is the re-analyze overwrite confirm
