@@ -31,6 +31,20 @@ stretch ending nearest the foot, not the 12 samples before it (a ramp of motion 
 whose steepest step near the hit is under the band holds no edge the detector reads, so the hit stands (its stroke rises past the
 view). A later move for a hit inside the band was tried and costs 55 exact on the owner rows (441 to 386), so it stays out.
 
+### What the owner rows can and cannot show (coordinator check, 2026-11-08)
+
+The Gate of #408 on the owner rows does not test this fix. A judge that never moves anything scores 441 / 491 / 130 there, against 441 / 493 / 125 for the shape judge, because 441 of the 497 rows need no move and only 3 of the 56 owner-moved rows have the hit sample over the band.
+
+The rows that test it are those with the hit sample over the detector's band. These are mostly coordinator labels, so read them as a direction and not as truth:
+
+| rows, hit sample over the band | n | main exact | shape exact | main distance | shape distance |
+|---|---|---|---|---|---|
+| label 2 or more samples earlier | 341 | 71 | 121 | 1617 | 1024 |
+| label 1 sample earlier | 114 | 0 | 101 | 116 | 31 |
+| label 0 | 38 | 32 | 10 | 50 | 96 |
+
+A null answer falls from 1054 of the 4981 rows to 74. A hit whose own sample is inside the band now stands. That costs the 23 owner rows labelled later, 20 of which main answered exactly. Neither judge answers the 29 owner rows labelled one sample earlier. Every later Gate of the judge names the never-move baseline and a slice that contains the failure being fixed.
+
 ## The earlier rounds (#385, #394; before the shape judge)
 
 Measured with `tools/judge_measure.py` (test: `tests/test_judge_measure.py`). Aggregates only. No judge change ships: **on the
