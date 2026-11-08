@@ -407,9 +407,9 @@ pub struct Bridge {
     static_source: StaticSource,
 }
 
+use crate::command_policy::arg_str;
 #[cfg(debug_assertions)]
 use crate::command_policy::opt_i64;
-use crate::command_policy::arg_str;
 
 /// The MIME type of a static file, by extension.
 #[must_use]
