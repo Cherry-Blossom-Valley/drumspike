@@ -364,7 +364,9 @@ drumspike bridge: http://127.0.0.1:<port>/
   (`app (pid N)`). A window started while a bridge holds the home prints a warning and keeps working; end
   the bridge session before opening the window on that home.
 - In the page, the agent helpers of the sibling ticket drive the editor; Training Mode (View > Training
-  Mode) writes a record per hit edit as everywhere else.
+  Mode) writes a record per hit edit as everywhere else. The shipped page mode has no native menu: the
+  agent turns Training Mode on from the page itself with `setTraining(true)` (or `toggleTraining()`);
+  the `training_mode` menu event exists only in the debug bridge.
 - Development: `ds-bridge` keeps serving `static/` for the tests, and `drumspike bridge --static DIR`
   serves a folder instead of the embedded assets.
 

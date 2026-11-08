@@ -179,11 +179,19 @@ fn page_entry(argv: &[String]) -> i32 {
     }
 }
 
+/// The Tauri context of the app. `tauri::generate_context!` must expand only once per crate
+/// (in a release build it embeds the Info.plist as a link section, so a second expansion
+/// duplicates `_EMBED_INFO_PLIST` and the release link fails); both call sites take the
+/// context from this one expansion.
+fn tauri_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 /// The page of the bridge: the assets the Tauri build embeds in this binary
 /// (`tauri.conf.json` `frontendDist`), resolved through the asset context of
 /// `tauri::generate_context!`.
 fn embedded_page_assets() -> drumspike_app::bridge::StaticSource {
-    let ctx: tauri::Context<tauri::Wry> = tauri::generate_context!();
+    let ctx = tauri_context();
     let assets = ctx.assets;
     drumspike_app::bridge::StaticSource::Embedded(Box::new(move |path| {
         let key = tauri::utils::assets::AssetKey::from(path);
@@ -1029,7 +1037,7 @@ pub fn run() {
         builder = self_test_setup(builder);
     }
     builder
-        .build(tauri::generate_context!())
+        .build(tauri_context())
         .expect("error while building the Drum Spike app")
         .run(|app, event| match event {
             tauri::RunEvent::ExitRequested { api, code, .. } => {
