@@ -82,6 +82,17 @@
     return r.confidence || [];
   }
 
+  /* #389: the edits of the helpers say by: agent; the keyboard path stays person. A depth counter, not a flag:
+     two overlapping helper calls must both log as agent, so the last one to end resets the author only when the
+     depth is back to 0. */
+  let _agentDepth = 0;
+  async function asAgent(fn) {
+    const first = _agentDepth === 0;
+    _agentDepth++;
+    if (first) setEditBy("agent");
+    try { return await fn(); } finally { _agentDepth--; if (_agentDepth === 0) setEditBy("person"); }
+  }
+
   const DSAgent = {
     /* the hits of a track; with Training Mode on, the confidence and the doubt reasons of the review queue */
     async hits(track) {
@@ -105,19 +116,23 @@
     async move(track, index, samples) {
       needTraining(); needHit(track, index);
       if (!Number.isInteger(samples)) throw new Error("move: samples must be a whole number");
-      const from = sampleOf(track, S.events[track][index]);
-      if (!trainingView(track) || trainingView(track).px_per_sample < 1) await DSAgent.look(track, index);
-      else select(track, index);
-      const ok = await nudgeSelected(samples);
-      const at = S.sel && S.sel.track === track ? S.sel.index : index;
-      return { moved: !!ok, index: at, from, to: sampleOf(track, S.events[track][at]) };
+      return asAgent(async () => {
+        const from = sampleOf(track, S.events[track][index]);
+        if (!trainingView(track) || trainingView(track).px_per_sample < 1) await DSAgent.look(track, index);
+        else select(track, index);
+        const ok = await nudgeSelected(samples);
+        const at = S.sel && S.sel.track === track ? S.sel.index : index;
+        return { moved: !!ok, index: at, from, to: sampleOf(track, S.events[track][at]) };
+      });
     },
     /* Hits > Confirm Hit: the hit is reviewed and right where it is */
     async confirm(track, index) {
       needTraining(); needHit(track, index);
-      if (!trainingView(track) || trainingView(track).px_per_sample < 1) await DSAgent.look(track, index);
-      else select(track, index);
-      return { confirmed: !!(await confirmHit()), index };
+      return asAgent(async () => {
+        if (!trainingView(track) || trainingView(track).px_per_sample < 1) await DSAgent.look(track, index);
+        else select(track, index);
+        return { confirmed: !!(await confirmHit()), index };
+      });
     },
     async undo() {
       needTraining();

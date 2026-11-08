@@ -86,7 +86,7 @@ function ipcBackend(T) {
     tracks: sid => invoke("tracks_get", { sid }),
     setEvents: (sid, name, body) => invoke("events_set", { sid, name, events: body.events }),
     events: (sid, name) => invoke("events_get", { sid, name }),
-    eventsEdit: (sid, name, ops, training, view) => invoke("events_edit", training ? { sid, name, ops, training: true, ...(view ? { view } : {}) } : { sid, name, ops }),   // P4-9 stage 2: add, delete, move, velocity of single hits; #343: training logs the correction (no new parameter without the mode); #353: the view of the edit rides with the training flag
+    eventsEdit: (sid, name, ops, training, view, by) => invoke("events_edit", training ? { sid, name, ops, training: true, ...(view ? { view } : {}), ...(by ? { by } : {}) } : { sid, name, ops }),   // P4-9 stage 2: add, delete, move, velocity of single hits; #343: training logs the correction (no new parameter without the mode); #353: the view of the edit rides with the training flag; #389: so does who made it (person or agent)
     windowCallNext: (ms, poller) => invoke("window_call_next", { timeout_ms: ms, poller }),   // #388: the page long-polls for the next helper call of the window endpoint
     windowCallResult: (id, ok, value, error) => invoke("window_call_result", ok ? { id, ok, value: value === undefined ? null : value } : { id, ok, error }),   // #388: and answers it
     trainingStatus: (sid, on) => invoke("training_status", on === undefined ? { sid } : { sid, on }),   // #343: {on, records, path}
