@@ -10,8 +10,8 @@ build.py.
 import numpy as np
 
 from explainer_common import (
-    CAPTION_SIZE, COBALT, DIM, DOWN, ORANGE, TEXT, UP, Arrow, Create, Dot, Explainer, FadeIn,
-    FadeOut, FONT, Line, Rectangle, Text, VGroup, wave,
+    CAPTION_SIZE, COBALT, DIM, DOWN, LEFT, ORANGE, TEXT, UP, Arrow, Create, Dot, Explainer,
+    FadeIn, FadeOut, FONT, Line, Rectangle, Text, VGroup, wave,
 )
 from explainer_10 import PLOT_W, SR, kit_hits, read_seg, truth  # the demo session's readers
 
@@ -110,6 +110,30 @@ def samples_window(s, hit_at, x0, x1, yc, half=0.55):
     return wave(s, x0, x1, yc, half, COBALT), x0 + (x1 - x0) * hit_at / max(1, len(s) - 1)
 
 
+def numbers_grid(s, hit_at, xc, yc):
+    """The window as the digits it is: the shares of the local peak, 8 per row, the hit's own
+    sample marked (the s03 right panel; the wave drew the same picture twice)."""
+    n_cols = 8
+    n_rows = (len(s) + n_cols - 1) // n_cols
+    cell_w, row_h = 0.72, 0.38
+    rows = []
+    for r in range(n_rows):
+        vals = s[r * n_cols:(r + 1) * n_cols]
+        t = Text("  ".join(f"{v:.2f}" for v in vals), font=FONT, font_size=18, color=TEXT)
+        if t.width > n_cols * cell_w:
+            t.scale_to_fit_width(n_cols * cell_w)
+        t.move_to([xc, yc + (n_rows - 1) * row_h / 2 - r * row_h, 0])
+        rows.append(t)
+    grid = VGroup(*rows)
+    r_i, c_i = hit_at // n_cols, hit_at % n_cols
+    cell = rows[0].width / n_cols   # the digits are tabular, so the cell bounds hold
+    hx = rows[r_i].get_critical_point(LEFT)[0] + (c_i + 0.5) * cell
+    hit_mark = sample_stalk(hx, rows[r_i].get_center()[1], ORANGE, half=0.22, width=2)
+    hit_tag = Text("hit_at", font=FONT, font_size=18, color=ORANGE)
+    hit_tag.move_to([hx, grid.get_critical_point(DOWN)[1] - 0.35, 0])
+    return grid, hit_mark, hit_tag
+
+
 def sample_stalk(x, yc, color=ORANGE, half=0.75, width=3):
     return Line([x, yc - half, 0], [x, yc + half, 0], color=color, stroke_width=width)
 
@@ -182,19 +206,22 @@ class Explainer15(Explainer):
         t, s, hit_at, j = clean
         pic, hx = samples_window(s, hit_at, -PLOT_W / 2, PLOT_W / 2, HIT_Y)
         self.t_play(Create(pic), t=2.0)
+        # #459: the three labels above the plot (they crossed the line when stacked over it),
+        # and the scene's own lines clear of the caption band, so a say swap never fades
+        # a caption under them.
         steps = VGroup(*[Text(f"DSAgent.{name}", font=FONT, font_size=24, color=TEXT)
-                         .move_to([0, 2.6 - 0.75 * i, 0])
+                         .move_to([0, 3.2 - 0.55 * i, 0])
                          for i, name in enumerate(("look", "move", "confirm"))])
         self.t_play(FadeIn(steps[0]), t=1.5)
         self.say("An agent does the same three steps through the app's own page: look, move, confirm.",
                  t=2.0)
         self.t_play(FadeIn(steps[1]), FadeIn(steps[2]), t=1.5)
+        eq = Text("the record of an agent is byte for byte the record of a person", font=FONT,
+                  font_size=22, color=ORANGE).move_to([0, -0.3, 0])
         same = Text("the same code paths as your keyboard: nudgeSelected, Hits > Confirm Hit",
-                    font=FONT, font_size=22, color=TEXT).to_edge(DOWN, buff=1.2)
+                    font=FONT, font_size=22, color=TEXT).move_to([0, -0.3, 0])
         self.t_play(FadeIn(same), t=2.5)
         self.say("Every move and confirm runs through the code your keyboard uses.", t=2.0)
-        eq = Text("the record of an agent is byte for byte the record of a person", font=FONT,
-                  font_size=22, color=ORANGE).to_edge(DOWN, buff=1.2)
         # #459: one line at a time at the bottom edge — split the fade so both are never visible.
         self.t_play(FadeOut(same), t=1.0)
         self.t_play(FadeIn(eq), t=1.0)
@@ -207,13 +234,11 @@ class Explainer15(Explainer):
         pic, _ = samples_window(s, hit_at, -7.0, -1.0, 1.4)
         tag = Text("the lane picture", font=FONT, font_size=20, color=TEXT).next_to(pic, UP, buff=0.3)
         self.t_play(Create(pic), FadeIn(tag), t=2.5)
-        # the same window as numbers, on the right: shares of the local peak, hit_at marked
-        nums, _ = samples_window(s, hit_at, 1.2, 6.8, 1.4, half=0.55)
-        ntag = Text("the same samples as numbers", font=FONT, font_size=20, color=TEXT).next_to(nums, UP, buff=0.3)
-        hx = 1.2 + (6.8 - 1.2) * hit_at / (len(s) - 1)
-        hit_mark = sample_stalk(hx, 1.4, ORANGE, half=0.8)
-        hit_tag = Text("hit_at", font=FONT, font_size=20, color=ORANGE).next_to([hx, 0.55, 0], DOWN, buff=0.25)
-        self.t_play(Create(nums), FadeIn(ntag), Create(hit_mark), FadeIn(hit_tag), t=2.5)
+        # the same window as numbers, on the right: the shares as digits, hit_at marked
+        grid, hit_mark, hit_tag = numbers_grid(s, hit_at, 4.0, 0.8)
+        ntag = Text("the same samples as numbers", font=FONT, font_size=20,
+                    color=TEXT).next_to(grid, UP, buff=0.25)
+        self.t_play(FadeIn(grid), FadeIn(ntag), Create(hit_mark), FadeIn(hit_tag), t=2.5)
         self.say("The window is 0.9 milliseconds before and 0.6 after the hit; the samples are "
                  "shares of the local peak, and hit_at points at the hit's own sample.", t=2.0)
         info = Text(f"the judge: level {j['level']:.2f}, spread {j['spread']:.3f}, "
@@ -245,11 +270,14 @@ class Explainer15(Explainer):
 
     def s05_training(self):
         """The training log line of the move: op, from, to, precision, placement, audio window."""
-        clean, _ = pick_hits()
-        t, s, hit_at, j = clean
+        # The recorded tutorial's own move (part-agent ra-move): the k in event at sample
+        # 180008 sits two samples after the last line sample; the app's plan row for it
+        # suggests -2 and DSAgent.move applies the suggestion as given (probe of 2026-11-08,
+        # DSAgent.plan on the recording page). No s top event carries a non-zero suggest, so
+        # the record shown is the move the tutorial records, not a re-measured one.
         lines = [
-            "op: move   track: s_top",
-            f"from: {t}   to: {t + j['suggest']}   precision: \"sample\"",
+            "op: move   track: k_in",
+            "from: 180008   to: 180006   precision: \"sample\"",
             "placement: edge, line_noise,",
             "            line_slope, onset_spread",
             "audio: 40 ms before, 10 ms after",
@@ -293,8 +321,11 @@ class Explainer15(Explainer):
 
     def s07_result(self):
         """Counts only; you stay the judge; the doubtful wait in the review queue."""
-        counts = VGroup(*[Text(ln, font=FONT, font_size=26, color=TEXT).move_to([0, 1.8 - 0.7 * i, 0])
-                          for i, ln in enumerate(["saw: 412", "moved: 39", "confirmed: 121", "left for you: 14"])])
+        # Session F: the coordinator's aggregates of one real internal run on 0.9.26, not
+        # invented counts (public text carries aggregates of a real run).
+        counts = VGroup(*[Text(ln, font=FONT, font_size=26, color=TEXT).move_to([0, 1.8 - 0.62 * i, 0])
+                          for i, ln in enumerate(["Session F", "saw: 522", "moved: 124",
+                                                  "confirmed: 314", "left for the owner: 84"])])
         self.t_play(FadeIn(counts), t=2.5)
         self.say("The agent reports counts only: how many hits it saw, moved, confirmed and "
                  "left for you.", t=2.0)

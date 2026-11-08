@@ -10,12 +10,14 @@ and menu items on screen, the result holds, the 0.5 % floor). The scenario is
 close mic). The render runs with the built-in detector (the DSP path, as the shipped app
 runs: no external detector), like the other recordings on the current main.
 
-The hits the agent works on are the demo session's snare hits, read from the generated
-session's truth (`t / 48000`): the wobbly lead at 1.875 s (the doubtful one), 3.125 s (the
-move), 4.375 s (the look), 5.625 s (the confirm). The move's sign and size are checked
-against `DSAgent.plan('s top', ...)` on the recording page before the take: the recorded move
-is the suggestion the judge makes for that hit, so the picture never shows a move the agent's
-own rule would refuse. The Settings scenes rewrite the two texts the app prints with host
+The hits the scenes act on are the demo session's own events, checked against
+`DSAgent.plan` on the recording page before the take (probe of 2026-11-08): no s top event
+carries a non-zero suggest, so the move is the k in close mic's hit at 3.750167 s, whose plan
+row suggests -2 (the stored hit sits two samples after the last line sample; the move applies
+the suggestion as given). The doubt is the s top hit at 7.020938 s, whose lead spread 0.44 is
+over the 0.03 limit and whose plan row's why is "no clear line before the hit" (the caption
+names it). The look (4.375 s) and the confirm (5.625 s) stay on the s top close mic. The
+Settings scenes rewrite the two texts the app prints with host
 paths (the install target and the `claude mcp add` line's binary) into their neutral forms
 with `show_text`, immediately after the app writes them.
 
@@ -45,7 +47,7 @@ Now the agent at work, on the page you just installed it for. Its first step on 
 
 ## ra-move
 
-> Caption: DSAgent.move. The hit's stalk steps one sample onto the last sample of the line; the status line names the edit.
+> Caption: DSAgent.move. The kick lane's hit stalk steps two samples onto the last sample of the line; the status line names the edit.
 
 If the hit is not on the last sample of the line before the stroke, the agent moves it there by whole samples. The move runs through the same nudge your keyboard uses, so it is one normal, undoable edit.
 
@@ -57,7 +59,7 @@ A hit the agent has looked at and found right it confirms: Hits > Confirm Hit. T
 
 ## ra-doubt
 
-> Caption: the doubtful hit stays for you. The wobbly hit's window: the lead is not a straight line, the spread is over the limit, and the hit does not move.
+> Caption: the doubtful hit stays for you: no clear line before the hit (the plan row's why). The wobbly hit's window: the lead is not a straight line, the spread is over the limit, and the hit does not move.
 
 And here the judgment stops. This lead is not a straight line: its spread over the first 12 samples is over the limit. The agent leaves the hit alone and lists it for you, with the reason.
 

@@ -52,7 +52,7 @@ An agent does the same three steps through the app's own page. It looks at the h
 
 ## s03-look
 
-> The lane picture on the left; on the right, the same window as numbers: shares of the local peak, one column per sample, the hit's own sample marked as hit_at, the judge's level line and first departure marked.
+> The lane picture on the left; on the right, the same window as numbers: the shares of the local peak as digits, eight per row, the hit's own sample marked as hit_at, the judge's level line and first departure marked.
 
 What the agent sees is the same picture and the same samples as numbers: the window is 0.9 milliseconds before and 0.6 after the hit, the samples are shares of the local peak, and hit_at points at the hit's own sample. From these the judge reads the line's level and its spread, and where the stroke departs.
 
@@ -64,7 +64,7 @@ The judgment stops where the line is not a line. A wobbly lead, a spread over 0.
 
 ## s05-training
 
-> The training log line of the move as text: the op, the track, from and to, precision sample, and the placement measures edge, line_noise, line_slope, onset_spread; the audio window is carried in the record.
+> The training log line of the move as text: the op, the track, from and to (the recorded tutorial's own move: the k_in hit 180008 moved onto the last line sample 180006), precision sample, and the placement measures edge, line_noise, line_slope, onset_spread; the audio window is carried in the record.
 
 With Training Mode on, every move and confirm writes one line to the project's training log: the op, the position, the precision, and the placement measures of the hit. The record carries the samples around it, 40 milliseconds before and 10 after, so it can be read without the session.
 
@@ -76,6 +76,6 @@ That log is the loop. The agent's records and your corrections in the review que
 
 ## s07-result
 
-> The s top lane, zoomed back out: the moved hits on their first-line samples, the confirmed ones marked, the doubtful ones still standing in the review queue.
+> The counts of one real run, Session F (the coordinator's check of 0.9.26 on one internal session): 522 hits seen, 124 moved, 314 confirmed, 84 left for the owner.
 
 The agent reports counts only: how many hits it saw, moved, confirmed and left for you. You stay the judge: every move is a normal edit you can undo, and the doubtful hits wait in the review queue.

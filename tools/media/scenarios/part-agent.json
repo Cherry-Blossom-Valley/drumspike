@@ -82,8 +82,8 @@
       "id": "ra-move",
       "steps": [
         {"do": "caption", "text": "DSAgent.move"},
-        {"do": "zoom_to", "track": "s_top", "t": 3.125, "span": 0.5},
-        {"do": "agent", "fn": "move", "track": "s_top", "t": 3.125, "args": [1], "timeout": 30,
+        {"do": "zoom_to", "track": "k_in", "t": 3.7501667, "span": 0.5},
+        {"do": "agent", "fn": "move", "track": "k_in", "t": 3.7501667, "args": [-2], "timeout": 30,
          "err": "the move (the nudge by whole samples; the sign checked against the plan)"},
         {"do": "hold", "s": 3.0}
       ]
@@ -103,9 +103,9 @@
     {
       "id": "ra-doubt",
       "steps": [
-        {"do": "caption", "text": "the doubtful hit stays for you"},
-        {"do": "zoom_to", "track": "s_top", "t": 1.875, "span": 0.5},
-        {"do": "agent", "fn": "look", "track": "s_top", "t": 1.875, "timeout": 30,
+        {"do": "caption", "text": "the doubtful hit stays for you: no clear line before the hit"},
+        {"do": "zoom_to", "track": "s_top", "t": 7.0209375, "span": 0.5},
+        {"do": "agent", "fn": "look", "track": "s_top", "t": 7.0209375, "timeout": 30,
          "err": "the look at the wobbly hit (the lead is not a line, no move)"},
         {"do": "hold", "s": 3.5}
       ]
