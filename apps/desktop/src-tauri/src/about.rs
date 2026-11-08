@@ -249,10 +249,11 @@ mod tests {
         let conf = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json")).unwrap();
         let v: Value = serde_json::from_str(&conf).unwrap();
         let res = v["bundle"]["resources"].as_object().unwrap();
-        for name in ["THIRD_PARTY.md", "LICENSE", "NOTICE"] {
+        // #371: the agent fine-tune skill folder rides in the bundle next to the notices
+        for name in ["THIRD_PARTY.md", "LICENSE", "NOTICE", "skills/drumspike-finetune"] {
             assert!(res.values().any(|t| t == name), "resource {name} missing");
         }
-        assert_eq!(res.len(), 3);
+        assert_eq!(res.len(), 4);
         assert!(!serde_json::to_string(&res).unwrap().contains(concat!("onn", "x"))); // spelled out: the source scan must stay clean
         assert_eq!(v["bundle"]["macOS"]["hardenedRuntime"], true);
         // P3-8b: the entitlements file exists, has no key (no sandbox, no exception).
