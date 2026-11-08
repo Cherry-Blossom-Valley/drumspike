@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "media"))
+import check_paths  # noqa: E402
 import record  # noqa: E402
 
 
@@ -122,12 +123,13 @@ def test_the_part_agent_shows_no_host_path():
     import json as _json
     path = Path(__file__).resolve().parents[1] / "tools" / "media" / "scenarios" / "part-agent.json"
     raw = path.read_text(encoding="utf-8")
-    assert "/home" not in raw and "/Users" not in raw
+    banned = [w for w in check_paths.BANNED_BASE if w.startswith("/")]
+    assert banned and not any(w in raw for w in banned)
     scenario = _json.loads(raw)
     for sc in scenario["scenes"]:
         for st in sc["steps"]:
             shown = st.get("text", "")
-            assert not any(w in shown.lower() for w in ("/home", "/users", "/var/folders")), st
+            assert not any(w.lower() in shown.lower() for w in banned), st
 
 
 def test_the_part_agent_scenario_parses():

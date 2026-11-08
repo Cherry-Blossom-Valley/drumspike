@@ -66,7 +66,7 @@ The judgment stops where the line is not a line. A wobbly lead, a spread over 0.
 
 > The training log line of the move as text: the op, the track, from and to (the recorded tutorial's own move: the k_in hit 180008 moved onto the last line sample 180006), precision sample, and the placement measures; the title points to chapter 16.
 
-Training Mode writes every move and confirm to a log with its audio: chapter 16 shows that record in full.
+Each move and confirm also goes to the Training Mode log with its audio, and chapter 16 shows that record in full.
 
 ## s06-loop
 
