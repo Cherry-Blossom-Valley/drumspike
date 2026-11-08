@@ -190,11 +190,13 @@
       const ctx = c.getContext("2d"), mid = height / 2;
       ctx.fillStyle = "#14171c"; ctx.fillRect(0, 0, width, height);
       ctx.strokeStyle = "#2a2f38"; ctx.beginPath(); ctx.moveTo(0, mid + 0.5); ctx.lineTo(width, mid + 0.5); ctx.stroke();
-      ctx.fillStyle = "#8a94a6";   // the wave: the window as shares of the local peak, as the lane draws it
+      ctx.fillStyle = "#8a94a6";   // the wave: the signed window as shares of the local peak, as the lane draws it: a line at sample zoom
+      ctx.strokeStyle = "#8a94a6"; ctx.beginPath();
       for (let i = 0; i < v.samples.length; i++) {
-        const h = Math.max(1, Math.round(Math.abs(v.samples[i]) * (height / 2 - 8)));
-        ctx.fillRect(i * px, mid - h, px, 2 * h);
+        const y = mid - Math.round(v.samples[i] * (height / 2 - 8));
+        if (i === 0) ctx.moveTo(i * px, y); else ctx.lineTo(i * px, y);
       }
+      ctx.stroke();
       ctx.fillStyle = "#e5484d";   // the hit: the line the page draws at the hit's own sample
       ctx.fillRect(v.hit_at * px, 0, Math.max(1, px), height);
       return { track, index, sample: v.sample, width, height, format: "image/png", image: c.toDataURL("image/png") };

@@ -174,6 +174,30 @@ def test_render_answers_a_non_empty_picture_of_the_view(app, make_project, tmp_p
     assert r["format"] == "image/png" and r["height"] == 320 and r["width"] > 0
     assert r["image"].startswith("data:image/png;base64,") and len(r["image"]) > 1000
     assert app.evaluate("() => S.sel.index") == 1
+    # the wave is drawn as the lane draws it: a signed line, not rectified bars. At a clearly negative
+    # sample the wave colour sits below the middle line and nowhere well above it (a rectified picture
+    # would mirror the bar above the line).
+    sides = app.evaluate("""async () => {
+      // the kick's first half-cycle is positive, so the pixel check opens a wider window that holds the
+      // descending half of the sweep
+      const r = await DSAgent.render('Kick In', 1, { after_ms: 6 });
+      const l = await DSAgent.look('Kick In', 1, { after_ms: 6 });
+      if (!l.samples.some(s => s < -0.05)) return { negative: false };
+      const img = new Image(); img.src = r.image; await img.decode();
+      const c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
+      const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      const wave = i => Math.abs(d[i] - 138) <= 30 && Math.abs(d[i + 1] - 148) <= 30 && Math.abs(d[i + 2] - 166) <= 30;
+      const mid = c.height / 2, above = [], below = [];
+      for (let i = 0; i < l.samples.length; i++) {
+        if (l.samples[i] >= -0.05) continue;
+        for (const x of [i * r.width / l.samples.length, Math.min(c.width - 1, i + 1)]) {
+          for (let y = 0; y < c.height; y++) if (wave(((y * c.width) + Math.round(x)) * 4)) (y < mid - 2 ? above : below).push(y);
+        }
+      }
+      return { negative: true, above: above.length, below: below.length };
+    }""")
+    assert sides["negative"] is True and sides["below"] > 0 and sides["above"] == 0
 
 
 def test_backups_names_the_backup_that_holds_the_state_before_the_session(app, make_project, tmp_path):
