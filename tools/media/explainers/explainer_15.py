@@ -195,7 +195,9 @@ class Explainer15(Explainer):
         self.say("Every move and confirm runs through the code your keyboard uses.", t=2.0)
         eq = Text("the record of an agent is byte for byte the record of a person", font=FONT,
                   font_size=22, color=ORANGE).to_edge(DOWN, buff=1.2)
-        self.t_play(FadeOut(same), FadeIn(eq), t=2.0)
+        # #459: one line at a time at the bottom edge — split the fade so both are never visible.
+        self.t_play(FadeOut(same), t=1.0)
+        self.t_play(FadeIn(eq), t=1.0)
         self.say("So the record of an agent is byte for byte the record of a person.", t=2.0)
 
     def s03_look(self):
@@ -236,7 +238,9 @@ class Explainer15(Explainer):
                  "gets no suggestion.", t=2.0)
         doubt = Text("doubt: the hit lands on the doubtful list with its reason, and stays for you",
                      font=FONT, font_size=22, color=ORANGE).to_edge(DOWN, buff=1.2)
-        self.t_play(FadeOut(rule), FadeIn(doubt), t=2.0)
+        # #459: split the fade so the two bottom lines are never visible at once.
+        self.t_play(FadeOut(rule), t=1.0)
+        self.t_play(FadeIn(doubt), t=1.0)
         self.say("The hit lands on the doubtful list with its reason, and stays for you.", t=2.0)
 
     def s05_training(self):
@@ -300,5 +304,7 @@ class Explainer15(Explainer):
         self.say("You stay the judge: every move is a normal edit you can undo.", t=2.0)
         queue = Text("Hits > Next Doubtful Hit: the doubtful wait in the review queue", font=FONT,
                      font_size=22, color=ORANGE).to_edge(DOWN, buff=1.2)
-        self.t_play(FadeOut(judge), FadeIn(queue), t=2.0)
+        # #459: split the fade so the two bottom lines are never visible at once.
+        self.t_play(FadeOut(judge), t=1.0)
+        self.t_play(FadeIn(queue), t=1.0)
         self.say("And the doubtful hits wait in the review queue.", t=2.0)
