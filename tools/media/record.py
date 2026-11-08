@@ -181,6 +181,55 @@ SHOW_TEXT_JS = """([sel, text]) => {
     }).observe(el, { childList: true, characterData: true, subtree: true });
   }
 }"""
+# The neutral text must hold from the app's FIRST write, not only from the scenario's show_text
+# step on: in the gate 6 run (6384f2f3) the Settings sheet opened mid-scene and agentSkillFill's
+# agentSkillShow wrote the real `claude mcp add` line into #setSkillCmd seconds before the
+# show_text step ran, and the path guard FAILed on those frames. So after the page is ready the
+# recorder pre-seeds the mcp-line element (#setSkillCmd, the one the app re-asserts with the
+# host path) and wraps the app's writer (static/agent.js's agentSkillShow, the only code that
+# writes it) so that every app write re-asserts the shown text. The other show_text elements are
+# left alone: #setSkillStatus must show the app's real states ("not installed", the install
+# result) until the scenario's own show_text step rewrites it.
+SKILL_CMD_SEL = "#setSkillCmd"
+
+
+def neutral_texts(scenes):
+    """The show_text texts for the mcp-line element, keyed by the selector: the pre-seed of
+    NEUTRAL_JS (the other show_text elements are not pre-seeded, see the note above)."""
+    out = {}
+    for sc in scenes:
+        for st in sc["steps"]:
+            if st["do"] == "show_text" and st["sel"] == SKILL_CMD_SEL:
+                out[st["sel"]] = st["text"]
+    return out
+
+
+NEUTRAL_JS = """m => {
+  window.__dsShownText = window.__dsShownText || {};
+  for (const [sel, text] of Object.entries(m)) {
+    window.__dsShownText[sel] = text;
+    const el = document.querySelector(sel);
+    if (el) {
+      el.textContent = text;
+      window['__dsTextKeep' + sel] = true;   // the observer is in: SHOW_TEXT_JS adds no second one
+      new MutationObserver(() => {
+        const want = window.__dsShownText[sel];
+        if (want !== undefined && el.isConnected && el.textContent !== want) el.textContent = want;
+      }).observe(el, { childList: true, characterData: true, subtree: true });
+    }
+  }
+  if (typeof window.agentSkillShow === 'function') {
+    const orig = window.agentSkillShow;
+    window.agentSkillShow = function () {
+      const r = orig.apply(this, arguments);
+      for (const [sel, want] of Object.entries(window.__dsShownText)) {
+        const el = document.querySelector(sel);
+        if (el && el.textContent !== want) el.textContent = want;
+      }
+      return r;
+    };
+  }
+}"""
 KEY_HOLD_MS = 1600   # the review wants every pressed key visible for at least 1.5 s
 
 
@@ -1255,6 +1304,11 @@ def record(root, scenario, items, out, work, keep, check_model=True):
             pg.goto(url + "/")
             pg.wait_for_function(READY, timeout=60000)
             pg.wait_for_timeout(500)   # the empty state paints before scene 1
+            # The mcp line's neutral text in place before the first scene opens the Settings
+            # sheet: agentSkillFill writes the real path on that open (the NEUTRAL_JS note).
+            neutral = neutral_texts(scenes)
+            if neutral:
+                pg.evaluate(NEUTRAL_JS, neutral)
             lead = time.monotonic() - t_video0   # the video's head before scene 1: the narration shifts by it
             try:
                 shots = None

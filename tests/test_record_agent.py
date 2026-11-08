@@ -99,6 +99,23 @@ def test_show_text_keeps_the_neutral_text_against_app_rewrites():
     assert "textContent" in record.SHOW_TEXT_JS
 
 
+def test_the_mcp_line_is_neutral_from_the_apps_first_write():
+    """The pre-seed (NEUTRAL_JS) runs before the scenes, so agentSkillFill's write on the
+    Settings sheet's first open (seconds before the show_text step) is neutralized too."""
+    import json as _json
+    path = Path(__file__).resolve().parents[1] / "tools" / "media" / "scenarios" / "part-agent.json"
+    scenes = record.parse_scenario(_json.loads(path.read_text(encoding="utf-8")))["scenes"]
+    neutral = record.neutral_texts(scenes)
+    assert neutral == {"#setSkillCmd": 'claude mcp add drumspike -- "<the Drum Spike binary>" mcp'}
+    # the pre-seed keeps the shown text against app writes and marks the observer in, so the
+    # later show_text step adds no second one
+    assert "agentSkillShow" in record.NEUTRAL_JS and "MutationObserver" in record.NEUTRAL_JS
+    assert "__dsTextKeep' + sel" in record.NEUTRAL_JS
+    # only the mcp line is pre-seeded: the status element keeps the app's real states
+    assert list(record.neutral_texts([{"id": "s", "steps": [
+        {"do": "show_text", "sel": "#setSkillStatus", "text": "installed"}]}])) == []
+
+
 def test_the_part_agent_shows_no_host_path():
     """The scenario's shown texts are neutral: no absolute host path in any show_text or
     caption of part-agent.json (the path guard OCRs every frame of the render)."""
