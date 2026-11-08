@@ -209,13 +209,15 @@ fn connection(stream: TcpStream, bridge: &Bridge) {
 }
 
 /// One HTTP request as the bridge reads it: the method, the request target (path and query, as sent),
-/// the body, and `close` when the client asked to close the connection after the answer.
+/// the body, `close` when the client asked to close the connection after the answer, and the value of the
+/// `Authorization` header as sent (#388: the window endpoint's token; the bridge itself ignores it).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpRequest {
     pub method: String,
     pub url: String,
     pub body: Vec<u8>,
     pub close: bool,
+    pub authorization: Option<String>,
 }
 
 fn idle(e: &std::io::Error) -> bool {
@@ -271,6 +273,7 @@ pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>
     }
     let mut close = version == "HTTP/1.0";
     let mut length = 0usize;
+    let mut authorization = None;
     for _ in 0..100 {
         let h = read_line(r)?.ok_or_else(|| bad("the head ends early"))?;
         if h.is_empty() {
@@ -281,11 +284,13 @@ pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>
                 url: url.to_string(),
                 body,
                 close,
+                authorization,
             }));
         }
-        let (k, v) = h.split_once(':').ok_or_else(|| bad("bad header"))?;
-        let (k, v) = (k.trim().to_ascii_lowercase(), v.trim().to_ascii_lowercase());
+        let (k, raw) = h.split_once(':').ok_or_else(|| bad("bad header"))?;
+        let (k, v) = (k.trim().to_ascii_lowercase(), raw.trim().to_ascii_lowercase());
         match k.as_str() {
+            "authorization" => authorization = Some(raw.trim().to_string()),
             "content-length" => {
                 length = v.parse().map_err(|_| bad("bad Content-Length"))?;
                 if length > MAX_BODY {
@@ -310,9 +315,11 @@ pub fn write_reply(w: &mut impl Write, reply: &HttpReply, close: bool) -> std::i
     let reason = match reply.status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
         404 => "Not Found",
         409 => "Conflict",
         500 => "Internal Server Error",
+        504 => "Gateway Timeout",
         _ => "Status",
     };
     let head = format!(
@@ -336,7 +343,9 @@ pub struct HttpReply {
 }
 
 impl HttpReply {
-    fn json(status: u16, v: &Value) -> HttpReply {
+    /// A JSON answer with `status`.
+    #[must_use]
+    pub fn json(status: u16, v: &Value) -> HttpReply {
         HttpReply {
             status,
             content_type: "application/json",
@@ -344,7 +353,9 @@ impl HttpReply {
         }
     }
 
-    fn text(status: u16, msg: &str) -> HttpReply {
+    /// A plain-text answer with `status`.
+    #[must_use]
+    pub fn text(status: u16, msg: &str) -> HttpReply {
         HttpReply {
             status,
             content_type: "text/plain; charset=utf-8",

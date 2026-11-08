@@ -66,6 +66,8 @@ pub mod trace;
 pub mod tracks;
 pub mod training;
 pub mod transport;
+// #388: the agent drives the running window through a token-protected local endpoint.
+pub mod window_relay;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -168,6 +170,8 @@ pub(crate) struct Inner {
     pub(crate) lock_client: std::sync::Mutex<Option<String>>,
     /// #343: the Training Mode state per open project (`training.rs`).
     pub(crate) training: training::State,
+    /// #388: the queue between the window endpoint and the page's helpers.
+    pub(crate) window: window_relay::WindowRelay,
 }
 
 /// The state of the app: cheap to clone (one `Arc`), shared by every command and by the
@@ -193,6 +197,7 @@ impl Service {
             layers: layer::LayerState::default(),
             lock_client: std::sync::Mutex::new(None),
             training: training::State::default(),
+            window: window_relay::WindowRelay::default(),
         });
         autosave::spawn(&inner);
         Service { inner }
@@ -214,6 +219,12 @@ impl Service {
     #[must_use]
     pub fn config(&self) -> &ServiceConfig {
         &self.inner.config
+    }
+
+    /// #388: the queue between the window endpoint and the page.
+    #[must_use]
+    pub fn window_relay(&self) -> &window_relay::WindowRelay {
+        &self.inner.window
     }
 
     /// The analysis jobs and the re-pick stores (P4-3 fix round: the tests mark a store).
