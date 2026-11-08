@@ -31,6 +31,9 @@ fn headless_answers_help_and_version_and_refuses_unknown_flags() {
     // the tool name keeps the agent modes: there `help` is the `cli help` text, not the modes
     assert_eq!(headless_as("/usr/local/bin/drumspike", &a(&["help"])), Some(0));
     assert_eq!(headless_as("", &[]), None);
+    // macOS hands a Finder launch of a downloaded app a process serial number: not a mode,
+    // the window starts, the same as with no argument.
+    assert_eq!(headless_as("", &a(&["-psn_0_12345"])), None);
     assert_eq!(headless_as("", &a(&["--self-test", "slice"])), None);
 }
 

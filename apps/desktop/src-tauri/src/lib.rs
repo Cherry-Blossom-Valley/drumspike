@@ -111,8 +111,8 @@ fn traced(
 ///
 /// #383: `--help`, `-h` and `help` print [`USAGE`] and exit 0, `--version` prints the version.
 /// Any other first argument prints the usage to stderr and exits 2: the window starts only with
-/// no argument at all, or with `--self-test ...`, which the window parses itself
-/// (`selftest::parse_args`).
+/// no argument at all, with a macOS `-psn_` process serial argument, or with `--self-test ...`,
+/// which the window parses itself (`selftest::parse_args`).
 #[must_use]
 pub fn headless(args: &[String]) -> Option<i32> {
     headless_as("", args)
@@ -131,6 +131,12 @@ pub fn headless_as(program: &str, args: &[String]) -> Option<i32> {
         .is_some_and(|n| n == drumspike_app::agent::TOOL_NAME);
     if by_name || matches!(args.first().map(String::as_str), Some("cli" | "mcp")) {
         return drumspike_app::agent::entry(program, args, Path::new(""));
+    }
+    // macOS hands a launched app a process serial number as the first argument
+    // (`-psn_0_12345`, Finder, the first launch of a downloaded app): not a mode, so the
+    // window starts, the same as with no argument at all.
+    if args.first().is_some_and(|a| a.starts_with("-psn_")) {
+        return None;
     }
     let mode = args.first()?.as_str();
     match mode {
