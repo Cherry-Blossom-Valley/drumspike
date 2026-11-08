@@ -293,6 +293,10 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   background gets no animation frames: `look` waits at most 300 ms for the draw and goes on, so a hidden page is slower
   but never stuck.
 - `wide(track, index)`: the same answer for the 20 ms view on the hit, for deletes and bleed checks.
+- `render(track, index, opts?)`: a picture of the view as the user sees it: the sample-zoom window of the hit
+  (the `look` defaults; `opts.before_ms`, `opts.after_ms`, `opts.amp` override), drawn from the same samples and
+  amplitude zoom the page draws, with the hit marked. Answers `{track, index, sample, width, height, format,
+  image}`; `image` is a PNG data URL.
 - `move(track, index, samples)`: the nudge by whole samples (negative is earlier) with the view at sample zoom, so the
   record says precision `sample`. Answers `{moved, index, from, to}`.
 - `confirm(track, index)`: Hits > Confirm Hit for a reviewed, unchanged hit. `undo()`: Edit > Undo; an undo writes no record.
@@ -301,7 +305,10 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   verdict (`suggest` is not `null`); `why` says why it is not. `queue_doubt` and `queue_why` are the review queue's doubt:
   a reason to look, not a block (on some kits the queue doubts most kicks). Use chunks of about 100 hits.
 - `apply(track, list)`: the moves `[{index, samples}]` (a row of `plan` also works, its `suggest` is used); a zero or `null`
-  move is skipped. `save()` writes the project. `status()` answers `{training, records, path}`.
+  move is skipped. `save()` writes the project. `backups()` answers `{rule, before}`: a backup is named with the time of
+  the save that replaced it, but holds the state as it was just BEFORE that save - `before` names the backup that holds
+  the state before this session (the one the session's first save wrote; `null` until the session saves). `status()`
+  answers `{training, records, path}`.
 - `statusLine()`: what the window shows, `{message, selection, training}` (the status message, the selection field and the
   Training Mode counter, `null` while the mode is off). `setTraining(on)`: the window's Training Mode switch, answers `{training}`.
 
@@ -313,9 +320,9 @@ writes `<home>/window-endpoint.json` (`{port, token, pid}`, mode 0600, removed a
 can call.
 
 - `POST http://127.0.0.1:<port>/call` with `Authorization: Bearer <token>` and the body `{"fn": "move", "args": ["Kick In", 1, 3],
-  "timeout_ms": 60000?}`. `fn` is one of `project`, `hits`, `look`, `wide`, `move`, `confirm`, `undo`, `plan`, `apply`, `save`,
-  `status`, `statusLine`, `setTraining`; any other name is refused with 400 before it reaches the page. The answer is
-  `{"ok": true, "value": <what the helper returned>}`.
+  "timeout_ms": 60000?}`. `fn` is one of `project`, `hits`, `look`, `wide`, `render`, `move`, `confirm`, `undo`, `plan`,
+  `apply`, `save`, `backups`, `status`, `statusLine`, `setTraining`; any other name is refused with 400 before it reaches the
+  page. The answer is `{"ok": true, "value": <what the helper returned>}`.
 - Errors: 401 without the token (or a wrong one); 409 when no page listens or the helper refused (its message is the page's,
   for example "Training Mode is off"); 504 when the page did not answer within `timeout_ms` (default 60 s, at most 600 s).
 - `GET /status` (same token) answers `{listening, helpers}`.

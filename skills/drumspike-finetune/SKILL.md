@@ -51,17 +51,25 @@ the page with the bridge.
    stands above the detector's departure band and leads into the stroke belongs to the stroke. A bump, dip or
    ripple under the detector's departure band is not the stroke's first motion: the hit stays at the foot of the
    main stroke. Only a departure the detector's rule recognises moves a hit.
+   `null` or `stands` is not a verdict: when the judge answers `null` or `stands`, look at the hit yourself
+   (`DSAgent.look`) and decide. Move the hit when the verdict is `late`. Leave it only when no quiet stretch
+   exists before it (`no_quiet_line`) - and list it as "no quiet stretch", never as "not looked at". Do not
+   invent thresholds: use the verdict and the documented bands. After the moves, re-read every moved hit
+   (`DSAgent.look`) and check the verdict against the new position.
 6. One hit at a time is the default while the user watches. Only when the user asked not to watch, apply the clear
    moves of a chunk in one call: `DSAgent.apply(track, list)`.
-7. Leave the hits without a suggestion (`line_ok` false) as they are and list them for the owner: track, index, time,
-   the reason. Write the review list next to the project file, for example `<session>/agent/left-for-review.tsv`.
-   Make no own safety copy of the session: the app's `Backups/` folder keeps the versions.
-8. `DSAgent.save()`. A lock file that still names a stopped bridge does not block: the app or the next bridge takes
+7. List the hits you left: track, index, time and the verdict's name. Write the review list next to the project
+   file, for example `<session>/agent/left-for-review.tsv`. Make no own safety copy of the session: the app's
+   `Backups/` folder keeps the versions (`DSAgent.backups()` names the backup that holds the state before this
+   session; a backup is named with the time of the save that replaced it, and holds the state before that save).
+8. Before `DSAgent.save()`, run `DSAgent.audit(track)` on every track. The remaining late hits must be zero; if
+   one stays, list it one by one with the reason, and say so in the report.
+9. `DSAgent.save()`. A lock file that still names a stopped bridge does not block: the app or the next bridge takes
    it. Do not delete it and do not mention it.
-9. After the save, report the per-track table before anything else: one row per track with the track's name, its
-   hits, the moved, the confirmed, the hand-placed and untouched, the ones without a suggestion and the doubtful
-   ones, then a total row.
-10. Then ask the user one question: export now (MIDI and spike files through the MCP tools, `export_all` and
+10. After the save, report the per-track table before anything else: one row per track with the track's name, its
+    hits, the moved, the confirmed, the hand-placed, "looked at, right" and "no quiet stretch" (the two parts of
+    not moved), and "not looked at" - that column must be zero - then a total row.
+11. Then ask the user one question: export now (MIDI and spike files through the MCP tools, `export_all` and
     `job_get` until `done`) or leave it.
 
 ## Guardrails
@@ -71,10 +79,7 @@ the page with the bridge.
   `by` is `person` or absent is hand-placed. Leave those as they are, and ask the user only when the log is empty
   or unreadable.
 - Never delete a hit without `DSAgent.wide(track, index)` first. Look at the 20 ms view and decide on that.
-- Never move a hit whose `judge.suggest` is `null` (`line_ok` false in a plan row; `why` says the reason, for example
-  "departure far from the hit"). Leave it and list it.
-- A `queue_doubt` row with `line_ok` true is a reason to look, not a block.
-- A wobbly line stays doubtful. Do not talk yourself into a move.
+- A `queue_doubt` row is a reason to look, not a block.
 - Never report sample data, file names, session names or song names outside this machine. Use "Session A", "Session B".
 - One chunk per call. Do not plan a whole track in one evaluation; the page stays responsive and a failure costs one chunk.
 - The helpers refuse while Training Mode is off. Turn it on; do not work around the refusal.

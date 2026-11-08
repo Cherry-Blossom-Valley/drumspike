@@ -1,6 +1,7 @@
 """#371: window.DSAgent, the page helpers of an agent's hit-by-hit fine-tune pass (static/agent.js). Every move and confirm
 goes through the page's own path, so the training record is the one a person's nudge writes; with the mode off every
 helper that changes the document refuses."""
+import json
 import shutil
 from pathlib import Path
 
@@ -163,6 +164,35 @@ def test_plan_gives_one_row_per_hit_and_marks_the_hit_on_the_noisy_line_doubtful
     assert len(project_log_lines(app)) == before + 1
     st = call(app, "DSAgent.status()")
     assert st["training"] is True and st["records"] >= 1
+
+
+def test_render_answers_a_non_empty_picture_of_the_view(app, make_project, tmp_path):
+    """#409: render is a picture of the view as the user sees it: the sample-zoom window of the hit, the hit marked."""
+    opened(app, make_project, tmp_path)
+    r = call(app, "DSAgent.render('Kick In', 1)")
+    assert r["sample"] == IDX[1] and r["index"] == 1 and r["track"] == TRACK
+    assert r["format"] == "image/png" and r["height"] == 320 and r["width"] > 0
+    assert r["image"].startswith("data:image/png;base64,") and len(r["image"]) > 1000
+    assert app.evaluate("() => S.sel.index") == 1
+
+
+def test_backups_names_the_backup_that_holds_the_state_before_the_session(app, make_project, tmp_path):
+    """#409: a backup is named with the time of the save that replaced it but holds the state BEFORE that save;
+    backups() names the one that holds the state before this session (the session's first save wrote it)."""
+    folder = build(make_project, tmp_path, events={TRACK: exact_events()})
+    open_project(app, folder)
+    assert call(app, "DSAgent.backups()")["before"] is None   # no save of this session yet
+    training_on(app)
+    call(app, "DSAgent.move('Kick In', 1, 2)")
+    edits_done(app)
+    assert call(app, "DSAgent.save()")["saved"] is True
+    b = call(app, "DSAgent.backups()")
+    assert b["rule"] and b["before"] and b["before"].endswith(".drumspike") and b["before"].startswith("Song")
+    assert b["before"] in [p.name for p in (folder / "Backups").iterdir()]
+    # the named backup holds the state before the session: the hit still at its old place
+    doc = json.loads((folder / "Backups" / b["before"]).read_text())
+    samples = [round(e["t"] * SR) for e in doc["tracks"]["Kick In"]["events"]]
+    assert samples == IDX
 
 
 def test_settings_row_installs_the_bundled_skill_and_shows_the_version_and_the_mcp_line(app, tmp_path):

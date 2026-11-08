@@ -28,6 +28,17 @@
   });
   const sampleOf = (track, e) => Math.round(e.t * S.tracks[track].sr);
 
+  /* #409: the name of a pre-save backup in the page, the way `project.backup_name` (crates/core/src/project/save.rs)
+     writes it: `<name> YYYY-MM-DD HH-MM-SS.drumspike` in local time, `/`, `\`, `:` and NUL as `-`. `secs` is Unix
+     seconds, as the document's `modified` field carries it. */
+  function backupName(name, secs) {
+    const d = new Date(secs * 1000), p = n => String(n).padStart(2, "0");
+    const safe = Array.from(name, c => (c === "/" || c === "\\" || c === ":" || c === "\0") ? "-" : c).join("");
+    return `${safe} ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}.drumspike`;
+  }
+  /* the name of the backup that holds the state before this session; set by this session's first save */
+  let _beforeBackup = null;
+
   function select(track, index) {
     if (S.selTrack !== track) setSelTrack(track);
     S.sel = { track, index };
@@ -137,6 +148,29 @@
         return { confirmed: !!(await confirmHit()), index };
       });
     },
+    /* #409: a picture of the view as the user sees it: the sample-zoom window of the hit, drawn from the same
+       samples and amplitude zoom the page draws, with the hit marked. Answers {track, index, sample, width,
+       height, format, image}; `image` is a PNG data URL. */
+    async render(track, index, opts) {
+      const o = opts || {};
+      if (S.events[track] && S.events[track][index]) setMsg(`agent: rendering ${track} hit ${index + 1}/${S.events[track].length}`);
+      const v = await view(track, index, o.before_ms === undefined ? SAMPLE_BEFORE_MS : o.before_ms,
+        o.after_ms === undefined ? SAMPLE_AFTER_MS : o.after_ms, o);
+      const px = Math.max(1, Math.min(32, Math.round((v.trainingView && v.trainingView.px_per_sample) || 1)));
+      const width = Math.min(4096, v.samples.length * px), height = 320;
+      const c = document.createElement("canvas"); c.width = width; c.height = height;
+      const ctx = c.getContext("2d"), mid = height / 2;
+      ctx.fillStyle = "#14171c"; ctx.fillRect(0, 0, width, height);
+      ctx.strokeStyle = "#2a2f38"; ctx.beginPath(); ctx.moveTo(0, mid + 0.5); ctx.lineTo(width, mid + 0.5); ctx.stroke();
+      ctx.fillStyle = "#8a94a6";   // the wave: the window as shares of the local peak, as the lane draws it
+      for (let i = 0; i < v.samples.length; i++) {
+        const h = Math.max(1, Math.round(Math.abs(v.samples[i]) * (height / 2 - 8)));
+        ctx.fillRect(i * px, mid - h, px, 2 * h);
+      }
+      ctx.fillStyle = "#e5484d";   // the hit: the line the page draws at the hit's own sample
+      ctx.fillRect(v.hit_at * px, 0, Math.max(1, px), height);
+      return { track, index, sample: v.sample, width, height, format: "image/png", image: c.toDataURL("image/png") };
+    },
     async undo() {
       needTraining();
       return { undone: !!(await undoRedo(true)) };
@@ -167,7 +201,29 @@
       }
       return out;
     },
-    async save() { await saveProjectNow(); return { saved: !S.dirty }; },
+    /* #409: the save writes a pre-save backup whose NAME is the time of the save but whose file holds the state
+       BEFORE that save. This session's first save therefore writes the backup that holds the state before the
+       session: its name is the save's own stamp, which the document's `modified` carries (stamped in the same
+       save call, just before the backup is written). */
+    async save() {
+      const first = _beforeBackup === null;
+      await saveProjectNow();
+      if (first) {
+        try {
+          const s = await B.projectGet(S.sid);
+          if (s && s.modified) _beforeBackup = backupName(s.name, s.modified);
+        } catch (e) { /* backups() answers before: null and says so honestly */ }
+      }
+      return { saved: !S.dirty };
+    },
+    /* #409: the backups of the project, named the way the save names them: a backup named <time> holds the state
+       as it was just BEFORE the save at <time> (the time of the save that replaced it). `before` names the backup
+       that holds the state before this session - the one this session's first save wrote; null until then. */
+    async backups() {
+      if (!S.sid) throw new Error("no project is open");
+      return { rule: "a backup named <time> holds the state as it was just before the save at <time>",
+        before: _beforeBackup };
+    },
     /* #388: the project the window has open (its summary and track names), so an agent that calls the window knows what it edits */
     async project() {
       if (!S.sid) throw new Error("no project is open");
