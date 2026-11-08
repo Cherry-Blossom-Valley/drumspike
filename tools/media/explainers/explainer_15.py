@@ -293,8 +293,8 @@ class Explainer15(Explainer):
                      font_size=22, color=TEXT).to_edge(UP, buff=0.7)
         self.t_play(Create(panel), FadeIn(title), t=2.0)
         self.t_play(FadeIn(text), t=2.0)
-        self.say("Training Mode writes every move and confirm to a log with its audio: chapter "
-                 "16 shows that record in full.", t=2.0)
+        self.say("Each move and confirm also goes to the Training Mode log with its audio, and "
+                 "chapter 16 shows that record in full.", t=2.0)
 
     def s06_loop(self):
         """The loop: the agent's and the person's records in one log, the truth list out of it."""
@@ -304,8 +304,8 @@ class Explainer15(Explainer):
         labels = VGroup(*[Text(name, font=FONT, font_size=22, color=TEXT).move_to(bxs[i])
                           for i, (name, _) in enumerate(boxes)])
         self.t_play(Create(bxs), FadeIn(labels), t=2.5)
-        self.say("That log is the loop: the agent's records and your corrections land in the "
-                 "same file.", t=2.0)
+        self.say("The log and your corrections become the truth list the placement is measured "
+                 "against; chapter 16 tells that loop from your side.", t=2.0)
         arr1 = Arrow([bxs[1].get_center()[0] - 1.6, 0.8, 0], [bxs[0].get_center()[0] + 1.7, 0.8, 0],
                      color=ORANGE, stroke_width=3, max_tip_length_to_length_ratio=0.2)
         arr2 = Arrow([bxs[1].get_center()[0] + 1.6, 0.8, 0], [bxs[2].get_center()[0] - 1.7, 0.8, 0],
