@@ -7,6 +7,7 @@
   const LINE_LEAD = 12, LINE_MAX_SPREAD = 0.03, DEPART_MIN = 0.03;      // samples of the line, its spread limit and the departure level (shares of the local peak)
   const FRAME_WAIT_MS = 300;                                             // the longest wait for a frame of a hidden page
   const DEPART_BEFORE = 12, DEPART_AFTER = 6;                            // the stroke of the coordinator's routine starts within 12 samples before to 6 after the hit
+  const EDGE_SPAN_MS = 5;                                                // #394: the detector's own peak span after the hit (edge.rs EDGE_SPAN_S)
 
   function need(track) {
     if (!S.sid) throw new Error("no project is open");
@@ -36,17 +37,23 @@
   }
 
   /* the owner's convention (#351): the hit is the last line sample before the stroke's first motion of either sign; a
-     pre-ripple, bump or dip that leads into the stroke belongs to the stroke. `s` is the window as shares of the local peak. */
-  function judge(s, hitAt) {
-    const n = Math.min(LINE_LEAD, s.length);
-    const lead = s.slice(0, n).sort((a, b) => a - b), level = lead[n >> 1];
+     pre-ripple, bump or dip that leads into the stroke belongs to the stroke. `s` is the window as shares of the local
+     peak; `ref` (#394) is the local peak over the hit's peak, so the rule's bands apply to shares of the hit's peak, the
+     detector's own reference (edge.rs EDGE_SPAN_S): a lead bump reads as the share of the stroke it leads into, not of
+     the look window's early rise. Without a readable reference the judge suggests nothing and says why. */
+  function judge(s, hitAt, ref) {
+    const readable = typeof ref === "number" && Number.isFinite(ref) && ref > 0;
+    const t = readable ? Array.from(s, v => v * ref) : s;
+    const n = Math.min(LINE_LEAD, t.length);
+    const lead = t.slice(0, n).sort((a, b) => a - b), level = lead[n >> 1];
     let spread = 0;
-    for (let i = 0; i < n; i++) spread = Math.max(spread, Math.abs(s[i] - level));
+    for (let i = 0; i < n; i++) spread = Math.max(spread, Math.abs(t[i] - level));
     const out = { level, spread, first_off: null, suggest: null };
+    if (!readable) { out.why = "the stroke peak is not readable"; return out; }
     if (!(spread <= LINE_MAX_SPREAD)) return out;                  // not a line
     const thr = Math.max(3 * spread, DEPART_MIN);
-    for (let i = n; i < s.length; i++) {
-      if (Math.abs(s[i] - level) > thr) {
+    for (let i = n; i < t.length; i++) {
+      if (Math.abs(t[i] - level) > thr) {
         out.first_off = i - hitAt;
         // a departure far from the hit is a pre-bump, bleed or wobble, not the stroke: no suggestion
         if (out.first_off < -DEPART_BEFORE || out.first_off > DEPART_AFTER) out.why = "departure far from the hit";
@@ -72,9 +79,21 @@
     setAmpZoom(amp, false);
     await draw();
     const hit = sampleOf(track, e), hitAt = hit - r.start;
+    // #394: the judge measures against the hit's peak, as the detector does: the largest sample from the hit over the
+    // detector's own span (edge.rs EDGE_SPAN_S, 5 ms after the hit), not the look window's peak. `samples` stay shares
+    // of the local peak; the judge gets the two peaks' ratio and `look` answers `stroke_peak` in raw samples.
+    const spanEnd = Math.ceil(hit + EDGE_SPAN_MS * sr / 1000);
+    let strokePeak = null;
+    if (spanEnd <= r.start + r.data.length) {
+      strokePeak = Math.max(0, ...r.data.slice(Math.max(0, hitAt)).map(v => Math.abs(v)));
+    } else {
+      const rs = await B.samples(S.sid, track, r.start, spanEnd);
+      if (rs && rs.data && rs.data.length) strokePeak = Math.max(0, ...rs.data.slice(Math.max(0, hit - rs.start)).map(v => Math.abs(v)));
+    }
+    const ref = peak > 0 && strokePeak > 0 ? peak / strokePeak : null;
     const shares = Array.from(r.data, v => (peak > 0 ? v / peak : 0));
-    return { track, index, sample: hit, start: r.start, hit_at: hitAt, samples: shares, local_peak: peak, amp,
-      trainingView: trainingView(track), judge: judge(shares, hitAt) };
+    return { track, index, sample: hit, start: r.start, hit_at: hitAt, samples: shares, local_peak: peak, stroke_peak: strokePeak, amp,
+      trainingView: trainingView(track), judge: judge(shares, hitAt, ref) };
   }
 
   async function ratings(track) {

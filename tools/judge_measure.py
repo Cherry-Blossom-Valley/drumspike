@@ -21,12 +21,18 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 BEFORE_MS, AFTER_MS = 0.9, 0.6   # the page's sample-zoom window (static/agent.js)
+STROKE_AFTER_MS = 5.0            # #394: the detector's own peak span after the hit (edge.rs EDGE_SPAN_S); the stroke-peak reference
 
 
-def cut(data, hit, sr):
+def cut(data, hit, sr, after_ms=AFTER_MS):
     """The window the page cuts around `hit`: (samples, index of the hit in it)."""
-    a, b = int(np.floor(hit - BEFORE_MS * sr / 1000)), int(np.ceil(hit + AFTER_MS * sr / 1000))
+    a, b = int(np.floor(hit - BEFORE_MS * sr / 1000)), int(np.ceil(hit + after_ms * sr / 1000))
     return data[max(a, 0):b].tolist(), hit - max(a, 0)
+
+
+def stroke_span(data, hit, sr):
+    """The detector's span around `hit` (samples only): its tail from the hit holds the hit's peak (#394)."""
+    return cut(data, hit, sr, STROKE_AFTER_MS)[0]
 
 
 def gold_windows(measure):
@@ -38,7 +44,8 @@ def gold_windows(measure):
         i = int(r["i"])
         s, at = cut(rows[i].astype(float), 480, 48000)   # index 480 is the app's placement at labelling time
         out.append({"set": "gold" + r["session"], "id": i, "role": r["role"], "label_off": int(r["label_off"]),
-                    "owner": r["owner"] == "1", "samples": s, "hit_at": at})
+                    "owner": r["owner"] == "1", "samples": s, "stroke": stroke_span(rows[i].astype(float), 480, 48000),
+                    "hit_at": at})
     return out
 
 
@@ -52,7 +59,8 @@ def session_k_windows(measure):
         data = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(float) / 32768
         for n, e in enumerate(proj["tracks"][track]["events"]):
             s, at = cut(data, round(e["t"] * sr), sr)
-            out.append({"set": "K", "id": f"{track}:{n}", "role": proj["tracks"][track]["role"], "samples": s, "hit_at": at})
+            out.append({"set": "K", "id": f"{track}:{n}", "role": proj["tracks"][track]["role"], "samples": s,
+                        "stroke": stroke_span(data, round(e["t"] * sr), sr), "hit_at": at})
     return out
 
 
