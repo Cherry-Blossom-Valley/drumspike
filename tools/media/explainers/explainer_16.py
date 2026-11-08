@@ -107,7 +107,7 @@ class Explainer16(Explainer):
     def s04_log(self):
         """The log: the file, and one record of it (the recorded tutorial's own move)."""
         lines = [
-            "action: move   track: k_in",
+            "action: move   track: k_in   by: \"person\"",
             "from: 180008   to: 180006   precision: \"sample\"",
             "audio: 40 ms before, 10 ms after",
         ]
@@ -129,9 +129,10 @@ class Explainer16(Explainer):
             "$ uv run python tools/training_export.py <training log>.jsonl",
             "move: 124 records   confirm: 314 records   per role and op",
             "truth list: 438 entries -> training_truth.json",
+            "only your own records (--by person)",
         ]
         panel = Rectangle(width=11.2, height=2.2, color=DIM, stroke_width=1).move_to([0, 1.1, 0])
-        text = VGroup(*[Text(ln, font=FONT, font_size=20, color=TEXT).move_to([0, 1.7 - 0.6 * i, 0])
+        text = VGroup(*[Text(ln, font=FONT, font_size=20, color=TEXT).move_to([0, 1.85 - 0.5 * i, 0])
                         for i, ln in enumerate(lines)])
         self.t_play(Create(panel), FadeIn(text), t=2.5)
         self.say("From the source checkout, one script turns the logs into the truth list.",

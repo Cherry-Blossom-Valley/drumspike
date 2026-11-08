@@ -39,7 +39,8 @@ The records land in one file per project in the app's data folder
 id (the first 12 hex digits built from the project's creation time), so a rename keeps the
 file. A record says what you did, the old and the new position, the rule versions in force,
 the hit's confidence, the line measures of the hit and the samples around it: 40 ms before
-and 10 ms after. It can be read without the session.
+and 10 ms after. A record also says who made it: `by` is person or agent. It can be read
+without the session.
 
 ## The export
 
@@ -48,7 +49,8 @@ and 10 ms after. It can be read without the session.
 prints the counts per role and op and writes the truth list (`training_truth.json`): every
 record with its track, its positions, its precision and its line measures. The printout names
 no project and no path, so you can paste it into a ticket. The truth file carries the track
-names, so keep it with the logs.
+names, so keep it with the logs. By default the export takes only your own records
+(`--by person`); `--by agent` takes the agent's, `--by all` takes every record.
 
 The records stay on your machine until you send them: the log is written when you edit, and
 nothing is sent by itself.

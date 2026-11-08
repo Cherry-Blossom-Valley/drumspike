@@ -65,13 +65,13 @@ Then work as you always do. The review queue walks you to the doubtful hits; at 
 
 ## s04-log
 
-> The record of the recorded tutorial's own move as text: the action, the track, from and to (k in 180008 moved onto 180006), precision sample, and the audio window, 40 ms before and 10 ms after; the title names the file: <home>/training/<project id>.jsonl.
+> The record of the recorded tutorial's own move as text: the action, the track, by person, from and to (k in 180008 moved onto 180006), precision sample, and the audio window, 40 ms before and 10 ms after; the title names the file: <home>/training/<project id>.jsonl.
 
 One file per project, in the app's data folder, named by the project's id: a rename keeps the file. A record says what you did, the old and the new position, and the sound around the hit.
 
 ## s05-export
 
-> A terminal runs the export over the training logs; the printout counts the records per role and op (Session F: 124 moved, 314 confirmed) and writes the truth list.
+> A terminal runs the export over the training logs; the export takes only your own records by default (--by person); the printout counts the records per role and op (Session F: 124 moved, 314 confirmed) and writes the truth list.
 
 From the source checkout, one script turns the logs into the truth list. The printout names no project and no path, so it is safe to paste; the truth file carries track names, so keep it with the logs.
 
