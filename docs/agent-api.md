@@ -23,7 +23,7 @@ unknown flag never opens the window.
 ## Claude Code
 
 ```bash
-claude mcp add drumspike -- drumspike mcp
+claude mcp add --scope user drumspike -- drumspike mcp
 ```
 
 Then ask: "Open ~/Music/Sessions/Song, analyse it, fix the kick, save, and export all." The server lists one tool per command.
@@ -253,7 +253,9 @@ A tool for the owner who refines the product, off by default (View > Training Mo
 (op `move`, `add`, `delete`, `confirm`, `learn_this` or `learn_not`) to `<DRUMSPIKE_HOME>/training/<project id>.jsonl`: the
 time, the app version, the detect and refine rule versions, the track, role and rate, `from` and `to` in samples,
 the event as stored before the op, its `confidence` and the track's samples from 40 ms before to 10 ms after
-`from` and `to` (`audio.at_from`, `audio.at_to`). The answer gets `training: {records}` (or `training_error`; the
+`from` and `to` (`audio.at_from`, `audio.at_to`). #389: every record also says who made the edit, `by: "person"`
+(the keyboard, the menu, the mouse, a Learn mark) or `by: "agent"` (a `DSAgent` helper); a record of an older log
+carries no `by`. The answer gets `training: {records}` (or `training_error`; the
 edit stands). Without the parameter nothing is written and the answer is unchanged.
 #354: `{op: confirm, index}` (Training Mode only, else refused) logs the hit as reviewed, right where it is:
 the document, its `dirty` flag and the undo history stay as they were, the record says `from` = `to` = the stored
@@ -265,8 +267,11 @@ shares of the hit's peak (the slope per ms), `onset_spread` is the hit's `timing
 A record is exact when `edge` is true, `line_noise` is at most 0.01 and `onset_spread` is under 4 samples or null;
 else it is approximate. A record without `placement` (an older log, a Learn mark) is unknown.
 `training_status {sid, on?}` answers `{on, records, path}`. `tools/training_export.py <jsonl...>` prints the
-aggregates per role and op, with the count of exact, approximate and unknown records, and writes the truth list
-`[{track, role, from, to, op, precision, exact, edge, line_noise, line_slope, onset_spread}]`.
+aggregates per role and op, with the count of exact, approximate and unknown records and the split of who made
+the edits (`by person: x, agent: y, unknown: z`), and writes the truth list
+`[{track, role, from, to, op, precision, by, exact, edge, line_noise, line_slope, onset_spread}]`. `--by` selects
+whose edits the truth list keeps: `person` (the default), `agent`, `unknown` (the records without a `by`) or
+`all` (every record).
 
 ### Page helpers (`window.DSAgent`)
 
