@@ -165,6 +165,11 @@
       return out;
     },
     async save() { await saveProjectNow(); return { saved: !S.dirty }; },
+    /* #388: the project the window has open (its summary and track names), so an agent that calls the window knows what it edits */
+    async project() {
+      if (!S.sid) throw new Error("no project is open");
+      return { ...(await B.projectGet(S.sid)), tracks: Object.keys(S.tracks) };
+    },
     /* #388: what the window shows in its status line and its selection field, and the Training Mode switch of the window */
     statusLine() { return { message: $("#stMsg").textContent, selection: $("#stSel").textContent, training: $("#stTraining").classList.contains("hidden") ? null : $("#stTraining").textContent }; },
     setTraining(on) { setTraining(!!on); return { training: trainingOn() }; },

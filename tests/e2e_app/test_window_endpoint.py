@@ -6,7 +6,9 @@ import json
 import urllib.error
 import urllib.request
 
+from app_support import edits_done
 from test_agent_helpers import TRACK, opened
+from test_training_mode import project_log_lines
 from test_editor import IDX
 
 
@@ -51,6 +53,9 @@ def test_look_move_and_confirm_through_the_endpoint_change_the_window_and_its_st
     status, body = post(base, token, "move", [TRACK, 1, 3])
     assert status == 409 and "Training Mode is off" in body["message"]   # the page's own refusal comes back
     assert ask("setTraining", True)["training"] is True
+    before = len(project_log_lines(app))
+    proj = ask("project")
+    assert proj["tracks"] == [TRACK] or TRACK in proj["tracks"], proj
 
     seen = ask("look", TRACK, 1)
     assert seen["sample"] == IDX[1]
@@ -63,6 +68,9 @@ def test_look_move_and_confirm_through_the_endpoint_change_the_window_and_its_st
     assert app.evaluate("() => S.events['Kick In'][1].t * S.tracks['Kick In'].sr") == IDX[1] + 3
     after_move = ask("statusLine")
     assert after_move["message"] and after_move["training"] == "training: 1 records", after_move
+    edits_done(app)
+    (rec,) = project_log_lines(app)[before:]
+    assert (rec["op"], rec["by"]) == ("move", "agent"), rec   # #389: a move through the endpoint says who made it
 
     confirmed = ask("confirm", TRACK, 2)
     assert confirmed == {"confirmed": True, "index": 2}

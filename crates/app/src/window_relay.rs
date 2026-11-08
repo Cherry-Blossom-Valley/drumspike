@@ -402,5 +402,93 @@ pub fn handle(svc: &Service, token: &str, req: &HttpRequest) -> HttpReply {
     }
 }
 
+/// The one call of an agent (`agent_call` as MCP tool, `cli agent_call fn args...`): read `<home>/window-endpoint.json`,
+/// `POST /call` and answer the helper's value. The agent does not read the token or speak HTTP itself.
+///
+/// # Errors
+///
+/// 409 with a plain message when no window is open (no endpoint file, or its port refuses: a dead app left the file) or
+/// the helper refused; 400 for a helper outside [`FUNCTIONS`]; 504 when the page did not answer; 500 for a broken reply.
+pub fn agent_call(home: Option<&Path>, fun: &str, args: &Value, timeout_ms: Option<u64>) -> Result<Value, AppError> {
+    use std::io::Write as _;
+    let no_window = || {
+        AppError::conflict(
+            "no Drum Spike window is open (or it has no open page): open the app, or start the bridge with a browser tool",
+        )
+    };
+    let home = home.ok_or_else(no_window)?;
+    let file: Value = std::fs::read(home.join(ENDPOINT_FILE))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .ok_or_else(no_window)?;
+    let (Some(port), Some(token)) = (
+        file["port"].as_u64().and_then(|p| u16::try_from(p).ok()),
+        file["token"].as_str(),
+    ) else {
+        return Err(no_window());
+    };
+    let wait = timeout_ms.map_or(DEFAULT_WAIT, |ms| Duration::from_millis(ms).min(MAX_WAIT));
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).map_err(|_| no_window())?;
+    // the endpoint answers when the page has, or after `wait`: allow a little more for the 504
+    let _ = stream.set_read_timeout(Some(wait + Duration::from_secs(10)));
+    let body = json!({"fn": fun, "args": args, "timeout_ms": wait.as_millis() as u64}).to_string();
+    write!(
+        stream,
+        "POST /call HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .map_err(|e| AppError::internal(format!("the window endpoint: {e}")))?;
+    let mut raw = Vec::new();
+    stream
+        .read_to_end(&mut raw)
+        .map_err(|e| AppError::internal(format!("the window endpoint did not answer: {e}")))?;
+    let raw = String::from_utf8_lossy(&raw);
+    let code = raw
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse::<u16>().ok())
+        .ok_or_else(|| AppError::internal("the window endpoint sent no HTTP status"))?;
+    let reply: Value = raw
+        .split_once("\r\n\r\n")
+        .and_then(|(_, b)| serde_json::from_str(b).ok())
+        .unwrap_or(Value::Null);
+    if code == 200 {
+        return Ok(reply["value"].clone());
+    }
+    Err(AppError {
+        code,
+        message: reply["message"]
+            .as_str()
+            .unwrap_or("the window endpoint refused the call")
+            .to_string(),
+    })
+}
+
+/// The `agent_call` arguments of a tool call: `{fn, args?, timeout_ms?}`.
+///
+/// # Errors
+///
+/// 400 for a missing `fn`, or `args` or `timeout_ms` of the wrong type; otherwise those of [`agent_call`].
+pub fn agent_call_args(home: Option<&Path>, a: &Value) -> Result<Value, AppError> {
+    let fun = a
+        .get("fn")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::bad("missing argument `fn` (string): the helper to call"))?;
+    let args = match a.get("args") {
+        None | Some(Value::Null) => json!([]),
+        Some(v) if v.is_array() => v.clone(),
+        Some(_) => return Err(AppError::bad("`args` must be a list")),
+    };
+    let ms = match a.get("timeout_ms") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_u64()
+                .ok_or_else(|| AppError::bad("`timeout_ms` must be a whole number"))?,
+        ),
+    };
+    agent_call(home, fun, &args, ms)
+}
+
 #[cfg(test)]
 mod tests;

@@ -257,7 +257,7 @@ pub fn help_text(command: Option<&str>) -> Result<String, AppError> {
         for c in api::agent_commands() {
             s.push_str(&format!("  {:w$}  {}\n", c.name, c.about));
         }
-        s.push_str("\nAlso: help <command>, commands, batch, run <script.json>, mcp\n      bridge [--port N] [--home DIR] [--projects DIR]  the page mode: the app's page and the invoke API on 127.0.0.1 (docs/agent-api.md, \"Page mode\")\n");
+        s.push_str("\nAlso: help <command>, commands, batch, run <script.json>, mcp\n      agent_call <fn> [arg]...  call a page helper of the open Drum Spike window (docs/agent-api.md)\n      bridge [--port N] [--home DIR] [--projects DIR]  the page mode: the app's page and the invoke API on 127.0.0.1 (docs/agent-api.md, \"Page mode\")\n");
         return Ok(s);
     };
     let c = api::agent_commands()
@@ -499,6 +499,31 @@ fn one_shot(svc: &Service, row: &CommandSpec, rest: &[String], io: &mut Io) -> i
     code
 }
 
+/// `agent_call <fn> [arg]...`: one call to a page helper of the open window (#388). Each `arg` is JSON when it parses
+/// (`3`, `true`, `'{"t":1.5}'`), else a string; the answer is the helper's value.
+fn agent_call(svc: &Service, rest: &[String], io: &mut Io) -> i32 {
+    let result = match rest.split_first() {
+        None => Err(usage("agent_call needs a helper name: agent_call <fn> [arg]...")),
+        Some((fun, a)) => {
+            let args: Vec<Value> = a
+                .iter()
+                .map(|s| serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.clone())))
+                .collect();
+            crate::window_relay::agent_call(svc.home().as_deref(), fun, &Value::Array(args), None)
+        }
+    };
+    match result {
+        Ok(v) => {
+            print_json(io, &v, false);
+            0
+        }
+        Err(e) => {
+            io.say_err(&error_json(&e).to_string());
+            exit_code(&e)
+        }
+    }
+}
+
 /// Run the command line `args` (after the program name and the `cli` word). Returns the exit code.
 pub fn run(svc: &Service, args: &[String], io: &mut Io) -> i32 {
     let Some(first) = args.first().map(String::as_str) else {
@@ -521,6 +546,7 @@ pub fn run(svc: &Service, args: &[String], io: &mut Io) -> i32 {
             0
         }
         "batch" => batch(svc, io),
+        "agent_call" => agent_call(svc, &args[1..], io),
         "run" => {
             if let Some(path) = args.get(1) {
                 run_script(svc, path, io)

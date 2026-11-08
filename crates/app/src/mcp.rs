@@ -32,6 +32,9 @@ pub const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// The extra tool for the jobs of `Progress` rows.
 const JOB_GET: &str = "job_get";
 
+/// The extra tool for the open window (#388): one call to a page helper over the window endpoint.
+pub const AGENT_CALL: &str = "agent_call";
+
 const INSTRUCTIONS: &str = "Drum Spike: close-mic drum hit detection with sample-exact MIDI and spike files. Typical order: \
 project_open (or project_new, tracks_add), track_params_set, analyze_start then poll analyze_status until state is done, \
 track_velocity_set (it recomputes every velocity and stores them with the cut, so do it before single-hit edits), \
@@ -153,6 +156,19 @@ pub fn tool(c: &CommandSpec) -> Value {
 pub fn tools() -> Vec<Value> {
     let mut v: Vec<Value> = api::agent_commands().map(tool).collect();
     v.push(json!({
+        "name": AGENT_CALL,
+        "description": "Call a page helper of the Drum Spike window that is open now (#388): the user watches the edit there, \
+                        no browser and no quit needed. fn is one of the helpers (project, hits, look, wide, move, confirm, undo, \
+                        plan, apply, save, status, statusLine, setTraining), args its arguments as a list; answers the helper's \
+                        value. Without an open window it answers an error: then start the bridge with a browser tool.",
+        "inputSchema": {"type": "object", "properties": {
+            "fn": {"type": "string", "enum": crate::window_relay::FUNCTIONS, "description": "The helper of window.DSAgent"},
+            "args": {"type": "array", "description": "The helper's arguments, in order (default none)"},
+            "timeout_ms": {"type": "integer", "description": "How long to wait for the page (default 60000)"}},
+            "required": ["fn"], "additionalProperties": false},
+        "annotations": {"readOnlyHint": false, "destructiveHint": false},
+    }));
+    v.push(json!({
         "name": JOB_GET,
         "description": "State of a job that a tool started (export_all, tracks_add, project_save_as, project_consolidate): \
                         {job, state: running | done | error, progress, result?, error?}.",
@@ -201,6 +217,9 @@ fn run_tool(svc: &Service, jobs: &Jobs, name: &str, args: &Value) -> Result<Valu
         return jobs
             .get(id)
             .ok_or_else(|| AppError::not_found(format!("no such job {id}")));
+    }
+    if name == AGENT_CALL {
+        return crate::window_relay::agent_call_args(svc.home().as_deref(), args);
     }
     let row = api::agent_commands()
         .find(|c| c.name == name)
@@ -268,7 +287,7 @@ fn handle(svc: &Service, jobs: &Jobs, out: &Out, msg: &Value, workers: &mut Vec<
                 send(out, &rpc_error(&id, -32602, "tools/call needs a tool name"));
                 return;
             };
-            if name != JOB_GET && !api::agent_commands().any(|c| c.name == name) {
+            if name != JOB_GET && name != AGENT_CALL && !api::agent_commands().any(|c| c.name == name) {
                 send(out, &rpc_error(&id, -32602, &format!("Unknown tool: {name}")));
                 return;
             }

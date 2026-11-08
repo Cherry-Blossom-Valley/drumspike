@@ -319,6 +319,11 @@ can call.
 - Errors: 401 without the token (or a wrong one); 409 when no page listens or the helper refused (its message is the page's,
   for example "Training Mode is off"); 504 when the page did not answer within `timeout_ms` (default 60 s, at most 600 s).
 - `GET /status` (same token) answers `{listening, helpers}`.
+- The one call: an agent does not read the token file or speak HTTP itself. The MCP tool `agent_call {fn, args?, timeout_ms?}`
+  and the command line `drumspike agent_call <fn> [arg]...` (each `arg` is JSON when it parses, else a string) read
+  `<home>/window-endpoint.json`, post the call and answer the helper's value. With no window open (no file, or a dead port)
+  they answer a 409 "no Drum Spike window is open" (exit code 4 on the command line): then start the bridge with a browser tool.
+- `project()` answers the project the window has open (its summary and the track names).
 - The page polls the commands `window_call_next` and `window_call_result` (window surface only). A newer page ends the poll of
   an older one, so a closed window never swallows a call. `DRUMSPIKE_WINDOW_ENDPOINT=1` opens the same endpoint in the test
   bridge (`ds-bridge`), with the file in `DRUMSPIKE_HOME`.

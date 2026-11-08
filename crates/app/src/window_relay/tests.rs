@@ -290,3 +290,151 @@ fn two_tokens_differ_and_compare_exactly() {
     assert!(!same_token("abc", "abd"));
     assert!(!same_token("abc", "abcd"));
 }
+
+type Page = (Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<()>);
+
+/// A service with a window endpoint in its own home folder and a stand-in page that echoes `[fn, args]`.
+fn open_window(tag: &str) -> (Service, PathBuf, Endpoint, Page) {
+    let s = svc();
+    let home = std::env::temp_dir().join(format!("ds_agent_call_{tag}_{}", std::process::id()));
+    s.set_home(&home);
+    let ep = start(&s, &home).unwrap();
+    let p = page(&s, |f, a| {
+        if f == "undo" {
+            Err("Training Mode is off".into())
+        } else {
+            Ok(json!([f, a]))
+        }
+    });
+    (s, home, ep, p)
+}
+
+#[derive(Clone, Default)]
+struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+impl Write for Sink {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl Sink {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+#[test]
+fn agent_call_reads_the_endpoint_file_and_answers_the_helpers_value_or_a_plain_error() {
+    let (s, home, ep, p) = open_window("direct");
+    let v = agent_call(s.home().as_deref(), "hits", &json!(["Kick", 1]), Some(5000)).unwrap();
+    assert_eq!(v, json!(["hits", ["Kick", 1]]));
+    let e = agent_call(s.home().as_deref(), "undo", &json!([]), Some(5000)).unwrap_err();
+    assert_eq!((e.code, e.message.as_str()), (409, "Training Mode is off"));
+    assert_eq!(
+        agent_call(s.home().as_deref(), "eval", &json!([]), None)
+            .unwrap_err()
+            .code,
+        400
+    );
+    assert_eq!(
+        agent_call_args(s.home().as_deref(), &json!({"args": []}))
+            .unwrap_err()
+            .code,
+        400,
+        "fn is required"
+    );
+    stop(p);
+    // the app is gone (file removed) or died (file left, port closed): the same plain error
+    ep.remove_file();
+    let e = agent_call(Some(&home), "hits", &json!([]), None).unwrap_err();
+    assert_eq!(e.code, 409);
+    assert!(e.message.contains("no Drum Spike window is open"), "{}", e.message);
+    assert_eq!(agent_call(None, "hits", &json!([]), None).unwrap_err().code, 409);
+    std::fs::write(home.join(ENDPOINT_FILE), r#"{"port":1,"token":"x"}"#).unwrap();
+    assert_eq!(agent_call(Some(&home), "hits", &json!([]), None).unwrap_err().code, 409);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+fn mcp_text(s: &Service, lines: &[Value]) -> Vec<Value> {
+    let input = lines.iter().map(|l| format!("{l}\n")).collect::<String>();
+    let out = Sink::default();
+    crate::mcp::serve(s, std::io::Cursor::new(input.into_bytes()), Box::new(out.clone()));
+    out.text().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+}
+
+#[test]
+fn the_mcp_tool_agent_call_reaches_the_window_and_says_so_when_none_is_open() {
+    let (s, home, ep, p) = open_window("mcp");
+    let call = |id: i64, args: Value| json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "agent_call", "arguments": args}});
+    let msgs = mcp_text(
+        &s,
+        &[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+            call(2, json!({"fn": "move", "args": ["Snare", 3, 0.5]})),
+            call(3, json!({"fn": "undo"})),
+        ],
+    );
+    let by = |id: i64| msgs.iter().find(|m| m["id"] == id).unwrap();
+    assert!(
+        by(1)["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "agent_call")
+    );
+    assert_eq!(by(2)["result"]["isError"], false);
+    assert_eq!(
+        by(2)["result"]["content"][0]["text"],
+        json!(["move", ["Snare", 3, 0.5]]).to_string()
+    );
+    assert_eq!(by(3)["result"]["isError"], true);
+    assert!(
+        by(3)["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Training Mode is off")
+    );
+    stop(p);
+    ep.remove_file();
+    let msgs = mcp_text(&s, &[call(4, json!({"fn": "hits"}))]);
+    assert_eq!(msgs[0]["result"]["isError"], true);
+    assert!(
+        msgs[0]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("no Drum Spike window is open")
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn cli_agent_call_prints_the_helpers_value_and_exits_4_without_a_window() {
+    let (s, home, ep, p) = open_window("cli");
+    let run = |a: &[&str]| {
+        let (out, err) = (Sink::default(), Sink::default());
+        let mut io = crate::cli::Io {
+            input: Box::new(std::io::Cursor::new(Vec::new())),
+            out: Box::new(out.clone()),
+            err: Arc::new(std::sync::Mutex::new(Box::new(err.clone()))),
+        };
+        let args: Vec<String> = a.iter().map(ToString::to_string).collect();
+        let code = crate::cli::run(&s, &args, &mut io);
+        (code, out.text(), err.text())
+    };
+    let (code, out, _) = run(&["agent_call", "hits", "Kick", "2", r#"{"t":1.5}"#]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        serde_json::from_str::<Value>(&out).unwrap(),
+        json!(["hits", ["Kick", 2, {"t": 1.5}]])
+    );
+    assert_eq!(run(&["agent_call"]).0, 2);
+    stop(p);
+    ep.remove_file();
+    let (code, _, err) = run(&["agent_call", "hits"]);
+    assert_eq!(code, 4);
+    assert!(err.contains("no Drum Spike window is open"), "{err}");
+    let _ = std::fs::remove_dir_all(&home);
+}

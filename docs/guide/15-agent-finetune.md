@@ -10,7 +10,9 @@ move is a normal edit that you can undo.
 
 In this order:
 
-1. Quit the Drum Spike window. The bridge needs the app home; a second home is not a way around it.
+1. Keep the Drum Spike window open with the song in it. The agent works in that window and you
+   watch it there: you quit nothing and the agent needs no browser. Only when no window is open
+   does the agent start the page mode (`drumspike bridge`) in a browser.
 2. Open Settings and find the row "Agent fine-tune skill". Press Install. The app copies the
    skill to `~/.claude/skills/drumspike-finetune` and writes its own location into it, so you
    need no link in `/usr/local/bin`. After an update of Drum Spike the row says "older copy"
@@ -19,9 +21,8 @@ In this order:
    Press Copy, paste it into a terminal and run it. The `--scope user` registers the server
    for every folder, not only the one you run it from. This tells Claude Code how to reach
    Drum Spike. You do this once.
-4. A browser tool the agent can drive (Claude in Chrome, or Playwright MCP), if the agent
-   session has none.
-5. Then start the agent session (the MCP tools load at session start).
+4. Then start the agent session (the MCP tools load at session start). A browser tool (Claude
+   in Chrome, or Playwright MCP) is needed only when no window is open.
 
 ## Start a session
 
@@ -31,7 +32,7 @@ Ask your agent, in your own words:
 Fine-tune the drums of ~/Music/Sessions/Song in Drum Spike.
 ```
 
-The agent opens the session, analyses it if needed, turns on Training Mode (View > Training
+The agent works on the song that is open in the window, turns on Training Mode (View > Training
 Mode), and steps through the hits so you can watch, one hit at a time (it plans in chunks of
 about 100 hits). For each hit it looks at a window of about a millisecond around the hit, at
 sample zoom, names each step in the status line and holds briefly after each move. After the
