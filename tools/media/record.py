@@ -88,6 +88,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 CACHE = Path.home() / ".cache" / "drumspike" / "media"
+SKILL_NAME = "drumspike-finetune"   # the #371 agent skill the install scenes install
 DRIFT_LIMIT_S = 0.1
 MAX_WAIT_SPEED = 3.0     # a scene that needs more than 3x FAILs: a slow host must show up
 BADGE_X_S = 28           # the badge sits in the top-right corner, clear of the status bar
@@ -1195,6 +1196,13 @@ def record(root, scenario, items, out, work, keep, check_model=True):
     video = None
     bridge_env = {"DRUMSPIKE_HOME": env["home"], "DRUMSPIKE_PROJECTS": env["projects"],
                   "DRUMSPIKE_AUDIO": "null", "DRUMSPIKE_MASTER_GAIN": "0"}
+    # The #371 skill scenes: the dev bridge has no Tauri resource folder, so point
+    # agent_skill_install at the repo's skill folder and at the recording home —
+    # the install must never touch the real ~/.claude of the operator.
+    skill_src = root / "skills" / SKILL_NAME
+    if skill_src.is_dir():
+        bridge_env["DRUMSPIKE_SKILL_SOURCE"] = str(skill_src)
+        bridge_env["DRUMSPIKE_SKILL_TARGET"] = str(home / ".claude" / "skills" / SKILL_NAME)
     if scenario.get("plugins"):
         # The Detector plug-in scenes: the example plugin in the recording home's Detectors
         # folder, and the bridge runs with that home, so the dialogs show the neutral
