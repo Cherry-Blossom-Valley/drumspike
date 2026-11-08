@@ -25,6 +25,18 @@ def training_on(app):
     assert app.evaluate("() => DSShell.menuState().trainingMode") is True
 
 
+def test_training_mode_turns_on_from_the_page_globals(app, make_project, tmp_path):
+    """#370: the shipped page mode has no native menu and the bridge's `training_mode` is debug-only:
+    the agent turns the mode on with the page's own globals and the helpers follow."""
+    opened(app, make_project, tmp_path)
+    assert call(app, "DSAgent.status()")["training"] is False
+    app.evaluate("() => setTraining(true)")
+    st = call(app, "DSAgent.status()")
+    assert st["training"] is True
+    call(app, "DSAgent.confirm('Kick In', 0)")   # the writing helpers accept it
+    assert app.evaluate("() => DSShell.menuState().trainingMode") is True
+
+
 def opened(app, make_project, tmp_path):
     open_project(app, build(make_project, tmp_path, events={TRACK: exact_events()}))
 
@@ -87,7 +99,7 @@ def test_with_the_mode_off_every_writing_helper_refuses_and_the_log_stays(app, m
     for js in ("DSAgent.move('Kick In', 1, 2)", "DSAgent.confirm('Kick In', 0)", "DSAgent.undo()",
                "DSAgent.apply('Kick In', [{index: 1, samples: 2}])"):
         msg = app.evaluate(f"async () => {{ try {{ await {js}; return ''; }} catch (e) {{ return e.message; }} }}")
-        assert "Training Mode is off" in msg and "training_mode" in msg, js
+        assert "Training Mode is off" in msg and "setTraining(true)" in msg, js
     assert len(project_log_lines(app)) == before
     assert call(app, "DSAgent.status()")["training"] is False
     assert app.evaluate("() => S.events['Kick In'].map(e => Math.round(e.t * S.tracks['Kick In'].sr))") == IDX

@@ -344,3 +344,153 @@ fn mime_of_knows_the_page_files() {
     assert_eq!(mime_of(Path::new("a.bin")), "application/octet-stream");
     assert_eq!(mime_of(Path::new("a")), "application/octet-stream");
 }
+
+// --- the page mode of the shipped app (#370) ---
+
+// The files of the repo's `static/` folder for the page-mode tests.
+fn static_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../static")
+}
+
+fn page_args(home: &Path) -> (PageArgs, StaticSource) {
+    (
+        PageArgs {
+            port: 0,
+            home: Some(home.to_path_buf()),
+            projects: None,
+            static_dir: None,
+        },
+        StaticSource::Dir(static_root()),
+    )
+}
+
+/// One raw HTTP exchange against the bridge on `port`; the body after the head.
+fn http(port: u16, request: &[u8]) -> String {
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    c.set_read_timeout(Some(IDLE_READ_TIMEOUT * 3)).unwrap();
+    c.write_all(request).unwrap();
+    let mut out = String::new();
+    c.read_to_string(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn the_page_mode_serves_the_page_and_the_invoke_api_on_localhost() {
+    let home = std::env::temp_dir().join(format!("ds_page_mode_{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let (args, source) = page_args(&home);
+    let svc = crate::agent::service(Path::new(""), "bridge");
+    svc.set_home(home.to_path_buf());
+    let lock = take_home_lock(&home, "bridge").unwrap().expect("held");
+    let listener = listen(args.port).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut line = Vec::new();
+    print_url_line(&mut line, port).unwrap();
+    assert!(
+        String::from_utf8_lossy(&line).contains(&format!("drumspike bridge: http://127.0.0.1:{port}/")),
+        "{:?}",
+        String::from_utf8_lossy(&line)
+    );
+    let b = Arc::new(Bridge::with_source(svc, source));
+    std::thread::spawn(move || serve(listener, b));
+    let out = http(
+        port,
+        b"POST /invoke/app_info HTTP/1.1\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+    );
+    let body = out.split_once("\r\n\r\n").unwrap().1;
+    let v: Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v["core_version"], drumspike_core::VERSION, "{out}");
+    let out = http(port, b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(out.starts_with("HTTP/1.1 200 OK"));
+    let body = out.split_once("\r\n\r\n").unwrap().1;
+    assert!(body.contains("__DS_BRIDGE__") && body.contains("<html"), "{out}");
+    // a name outside the registry is not part of the page mode's API
+    let out = http(
+        port,
+        b"POST /invoke/no_such_command HTTP/1.1\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+    );
+    assert!(out.contains("unknown command"), "{out}");
+    drop(lock);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn the_page_mode_holds_the_home_lock_while_serving() {
+    let home = std::env::temp_dir().join(format!("ds_page_holds_{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let (args, source) = page_args(&home);
+    // A writer that reports the URL line over a channel when `run_page_mode` flushes it
+    // (only once the listener is up and the home lock is taken).
+    struct UrlLine {
+        buf: Vec<u8>,
+        tx: std::sync::mpsc::Sender<String>,
+    }
+    impl std::io::Write for UrlLine {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.buf.extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            let s = String::from_utf8_lossy(&self.buf).to_string();
+            if s.contains("drumspike bridge: http://127.0.0.1:") {
+                let _ = self.tx.send(s);
+            }
+            Ok(())
+        }
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let out = std::sync::Mutex::new(UrlLine {
+        buf: Vec::new(),
+        tx: tx.clone(),
+    });
+    let handle = std::thread::spawn(move || {
+        let mut out = out.lock().unwrap();
+        let r = run_page_mode(&args, source, &mut *out);
+        // The lock of the home is dropped here, on return; the test has asserted before that.
+        r
+    });
+    let line = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap_or_else(|_| panic!("the page mode did not print its URL line within 30 s"));
+    assert!(line.contains("drumspike bridge: http://127.0.0.1:"), "{line}");
+    let e = take_home_lock(&home, "bridge").unwrap_err();
+    assert!(e.contains("bridge (pid"), "{e}");
+    // The serving thread runs until the process ends; it keeps the lock (and the port) held
+    // for the rest of the test process, which is the behaviour under test. Do not join it.
+    let _ = handle;
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn the_page_mode_refuses_when_the_home_is_in_use() {
+    let home = std::env::temp_dir().join(format!("ds_page_refuse_{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let held = crate::lock::ProjectLock::acquire(&home, "app")
+        .unwrap()
+        .into_held()
+        .expect("held");
+    let (args, source) = page_args(&home);
+    let mut out = Vec::new();
+    let e = run_page_mode(&args, source, &mut out).unwrap_err();
+    assert!(e.contains("app (pid"), "{e}");
+    assert!(e.contains("--home"), "{e}");
+    assert!(out.is_empty(), "{out:?}");
+    drop(held);
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn parse_page_args_reads_the_options_and_refuses_the_rest() {
+    let s = |v: &[&str]| v.iter().map(std::string::ToString::to_string).collect::<Vec<_>>();
+    let a = parse_page_args(&s(&["--port", "9", "--home", "/h", "--projects", "/p"])).unwrap();
+    assert_eq!(a.port, 9);
+    assert_eq!(a.home, Some(PathBuf::from("/h")));
+    assert_eq!(a.projects, Some(PathBuf::from("/p")));
+    assert_eq!(a.static_dir, None);
+    let a = parse_page_args(&s(&["--static", "/s"])).unwrap();
+    assert_eq!(a.static_dir, Some(PathBuf::from("/s")));
+    assert_eq!(parse_page_args(&s(&[])).unwrap().port, 0);
+    assert!(parse_page_args(&s(&["--port"])).is_err());
+    assert!(parse_page_args(&s(&["--port", "x"])).is_err());
+    assert!(parse_page_args(&s(&["--what", "1"])).is_err());
+}
