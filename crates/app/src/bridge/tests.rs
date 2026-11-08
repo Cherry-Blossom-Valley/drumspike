@@ -415,6 +415,53 @@ fn the_page_mode_serves_the_page_and_the_invoke_api_on_localhost() {
 }
 
 #[test]
+fn the_page_mode_holds_the_home_lock_while_serving() {
+    let home = std::env::temp_dir().join(format!("ds_page_holds_{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let (args, source) = page_args(&home);
+    // A writer that reports the URL line over a channel when `run_page_mode` flushes it
+    // (only once the listener is up and the home lock is taken).
+    struct UrlLine {
+        buf: Vec<u8>,
+        tx: std::sync::mpsc::Sender<String>,
+    }
+    impl std::io::Write for UrlLine {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.buf.extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            let s = String::from_utf8_lossy(&self.buf).to_string();
+            if s.contains("drumspike bridge: http://127.0.0.1:") {
+                let _ = self.tx.send(s);
+            }
+            Ok(())
+        }
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let out = std::sync::Mutex::new(UrlLine {
+        buf: Vec::new(),
+        tx: tx.clone(),
+    });
+    let handle = std::thread::spawn(move || {
+        let mut out = out.lock().unwrap();
+        let r = run_page_mode(&args, source, &mut *out);
+        // The lock of the home is dropped here, on return; the test has asserted before that.
+        r
+    });
+    let line = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap_or_else(|_| panic!("the page mode did not print its URL line within 30 s"));
+    assert!(line.contains("drumspike bridge: http://127.0.0.1:"), "{line}");
+    let e = take_home_lock(&home, "bridge").unwrap_err();
+    assert!(e.contains("bridge (pid"), "{e}");
+    // The serving thread runs until the process ends; it keeps the lock (and the port) held
+    // for the rest of the test process, which is the behaviour under test. Do not join it.
+    let _ = handle;
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[test]
 fn the_page_mode_refuses_when_the_home_is_in_use() {
     let home = std::env::temp_dir().join(format!("ds_page_refuse_{}", std::process::id()));
     std::fs::create_dir_all(&home).unwrap();

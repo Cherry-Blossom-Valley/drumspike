@@ -147,13 +147,17 @@ pub fn run_page_mode(args: &PageArgs, source: StaticSource, out: &mut dyn Write)
     if let Some(p) = &args.projects {
         svc.set_projects_dir(p.clone());
     }
+    let mut held_home_lock = None;
     if let Some(home) = svc.home() {
-        take_home_lock(&home, "bridge").map_err(|holder| {
+        // Held for the life of the server: the value is bound here, so the flock is not released
+        // at the `?;` (a dropped temporary would free the home for a second bridge or the window).
+        held_home_lock = Some(take_home_lock(&home, "bridge").map_err(|holder| {
             format!(
                 "drumspike bridge: the home is in use by {holder}: close it there, or pass another home with --home"
             )
-        })?;
+        })?);
     }
+    let _home_lock = held_home_lock;
     let listener = listen(args.port).map_err(|e| format!("drumspike bridge: cannot listen: {e}"))?;
     let port = listener.local_addr().map_or(args.port, |a| a.port());
     let bridge = Arc::new(Bridge::with_source(svc, source));
