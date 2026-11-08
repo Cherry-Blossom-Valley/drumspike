@@ -106,7 +106,7 @@ def test_the_mcp_line_is_neutral_from_the_apps_first_write():
     path = Path(__file__).resolve().parents[1] / "tools" / "media" / "scenarios" / "part-agent.json"
     scenes = record.parse_scenario(_json.loads(path.read_text(encoding="utf-8")))["scenes"]
     neutral = record.neutral_texts(scenes)
-    assert neutral == {"#setSkillCmd": 'claude mcp add drumspike -- "<the Drum Spike binary>" mcp'}
+    assert neutral == {"#setSkillCmd": 'claude mcp add --scope user drumspike -- "<the Drum Spike binary>" mcp'}
     # the pre-seed keeps the shown text against app writes and marks the observer in, so the
     # later show_text step adds no second one
     assert "agentSkillShow" in record.NEUTRAL_JS and "MutationObserver" in record.NEUTRAL_JS

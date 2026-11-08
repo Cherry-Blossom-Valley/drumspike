@@ -646,6 +646,30 @@ quit_app null
 quit_app wrong
   page: err 404 unknown command quit_app
   agent: err 404 unknown command quit_app
+window_call_next {}
+  page: ok {enabled,call}
+  agent: err 404 unknown command window_call_next
+window_call_next min
+  page: ok {enabled,call}
+  agent: err 404 unknown command window_call_next
+window_call_next null
+  page: ok {enabled,call}
+  agent: err 404 unknown command window_call_next
+window_call_next wrong
+  page: err 400 `timeout_ms` must be a whole number
+  agent: err 404 unknown command window_call_next
+window_call_result {}
+  page: err 400 missing argument `id` (whole number)
+  agent: err 404 unknown command window_call_result
+window_call_result min
+  page: err 404 no call 0 waits for an answer
+  agent: err 404 unknown command window_call_result
+window_call_result null
+  page: err 400 missing argument `id` (whole number)
+  agent: err 404 unknown command window_call_result
+window_call_result wrong
+  page: err 400 missing argument `id` (whole number)
+  agent: err 404 unknown command window_call_result
 app_ready {}
   page: err 404 unknown command app_ready
   agent: err 404 unknown command app_ready

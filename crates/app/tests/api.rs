@@ -405,7 +405,7 @@ fn result_schemas_name_keys_that_real_answers_have() {
 }
 
 /// P4-5 done criterion: every command of the agent surface has a command-line subcommand and an MCP tool, and
-/// nothing else is on either list (the extra MCP tool is `job_get`).
+/// nothing else is on either list (the extra MCP tools are `job_get` and, for the open window (#388), `agent_call`).
 #[test]
 fn every_agent_row_has_a_cli_subcommand_and_an_mcp_tool() {
     use drumspike_app::{cli, mcp};
@@ -428,6 +428,7 @@ fn every_agent_row_has_a_cli_subcommand_and_an_mcp_tool() {
     assert_eq!(listed, want, "`drumspike commands`");
     let mut with_job = want.clone();
     with_job.insert("job_get".into());
+    with_job.insert(mcp::AGENT_CALL.into());
     assert_eq!(tools, with_job, "MCP tools");
     let svc = service_dsp();
     for name in &agent {

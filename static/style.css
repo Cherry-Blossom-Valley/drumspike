@@ -292,8 +292,20 @@ canvas.spike.onHit { cursor: ew-resize; }
 #setOutput { width: 100%; }
 #setOutputNow { margin: 2px 0 0 152px; }
 .setWarn { color: #ff6b6b; font-size: 10px; margin: 4px 0 0 152px; }
-#settingsModal .modal-box { width: 420px; }
+#settingsModal .modal-box { width: 860px; max-width: calc(100vw - 40px); height: 78vh; display: flex; flex-direction: column; padding: 14px; }
+#settingsModal .setHead { display: flex; align-items: center; }
+#settingsModal .setHead h3 { margin: 0; flex: 1; }
+#settingsModal .setBody { display: flex; gap: 12px; flex: 1; min-height: 0; margin-top: 10px; }
+#settingsModal #setCats { width: 220px; flex: none; overflow: auto; display: flex; flex-direction: column; gap: 1px; }
+#settingsModal .setCatBtn { text-align: left; font: inherit; font-size: 12px; color: var(--text); background: none;
+  border: 0; border-radius: 4px; padding: 5px 8px; cursor: pointer; }
+#settingsModal .setCatBtn:hover { background: var(--panel); }
+#settingsModal .setCatBtn.active { background: var(--accent); color: #fff; }
+#settingsModal #setPage { flex: 1; min-width: 0; overflow: auto; padding: 0 4px 0 12px; }
+#settingsModal .setCat { display: none; }
+#settingsModal .setCat.active { display: block; }
 #settingsModal .prow { grid-template-columns: 140px 1fr; }
+#settingsModal .setWarnSlot { min-height: 18px; }   /* #387: the warning's fixed slot, so nothing shifts */
 #setAgentSkill .prow { grid-template-columns: 1fr auto; gap: 8px; }   /* #371: the status text or the command line, then its button */
 #setAgentSkill .skillCmd { font-size: 11px; word-break: break-all; user-select: all; }
 #settingsModal .pctl input[type=range] { width: 100%; min-width: 0; }

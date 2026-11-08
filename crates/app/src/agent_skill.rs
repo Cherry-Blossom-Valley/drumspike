@@ -66,7 +66,7 @@ fn binary_path() -> Result<PathBuf, AppError> {
 /// The one line that adds the MCP server for `binary`.
 #[must_use]
 pub fn mcp_command(binary: &Path) -> String {
-    format!("claude mcp add drumspike -- \"{}\" mcp", binary.display())
+    format!("claude mcp add --scope user drumspike -- \"{}\" mcp", binary.display())
 }
 
 /// The `version:` value of a `SKILL.md` text (`None` when it has none or still the placeholder).

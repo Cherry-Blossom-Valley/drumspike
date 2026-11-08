@@ -14,7 +14,7 @@ chapter is the overview; the full reference with every command and its arguments
   command. To use it from Claude Code:
 
 ```bash
-claude mcp add drumspike -- drumspike mcp
+claude mcp add --scope user drumspike -- drumspike mcp
 ```
 
 Then ask: "Open ~/Music/Sessions/Song, analyse it, fix the kick, save, and export all."

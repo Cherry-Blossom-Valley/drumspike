@@ -75,10 +75,44 @@ def test_move_writes_one_move_record_at_sample_precision_and_undo_writes_none(ap
     assert out["moved"] and out["to"] - out["from"] == 2
     (r,) = project_log_lines(app)[before:]
     assert (r["op"], r["to"] - r["from"], r["precision"]) == ("move", 2, "sample")
+    assert r["by"] == "agent", r   # #389: a nudge through DSAgent.move says who made it
     assert call(app, "DSAgent.undo()")["undone"] is True
     edits_done(app)
     assert len(project_log_lines(app)) == before + 1
     assert app.evaluate("() => S.events['Kick In'].map(e => Math.round(e.t * S.tracks['Kick In'].sr))") == IDX
+
+
+def test_the_keyboard_nudge_records_person_and_the_agent_move_records_agent(app, make_project, tmp_path):
+    """#389: the same nudge through the two paths of the page: nudgeSelected (the keyboard path) writes by
+    person, DSAgent.move writes by agent."""
+    opened(app, make_project, tmp_path)
+    training_on(app)
+    before = len(project_log_lines(app))
+    app.evaluate("() => { setSelTrack('Kick In'); S.sel = { track: 'Kick In', index: 1 }; }")
+    app.evaluate("() => nudgeSelected(2)")   # the keyboard path: the hit selected, the nudge by samples
+    edits_done(app)
+    (r,) = project_log_lines(app)[before:]
+    assert (r["op"], r["by"]) == ("move", "person"), r
+    out = call(app, "DSAgent.move('Kick In', 1, -1)")
+    edits_done(app)
+    assert out["moved"] is True
+    (r,) = project_log_lines(app)[before + 1:]
+    assert (r["op"], r["by"]) == ("move", "agent"), r
+
+
+def test_two_overlapping_agent_moves_both_record_agent(app, make_project, tmp_path):
+    """#389: the agent author is a depth counter, not a flag: when two helper calls overlap, the first one to
+    end must not reset the author while the second's edit is still queued - both records say agent."""
+    opened(app, make_project, tmp_path)
+    training_on(app)
+    before = len(project_log_lines(app))
+    p1 = call(app, "DSAgent.move('Kick In', 1, 2)")
+    p2 = call(app, "DSAgent.move('Kick In', 2, 2)")
+    assert p1["moved"] is True and p2["moved"] is True
+    edits_done(app)
+    recs = project_log_lines(app)[before:]
+    assert [r["op"] for r in recs] == ["move", "move"], recs
+    assert all(r["by"] == "agent" for r in recs), recs
 
 
 def test_confirm_writes_one_confirm_record_and_changes_no_event(app, make_project, tmp_path):
@@ -138,10 +172,14 @@ def test_settings_row_installs_the_bundled_skill_and_shows_the_version_and_the_m
     target = Path(app.evaluate("async () => (await B.agentSkillStatus()).path"))
     shutil.rmtree(target.parent, ignore_errors=True)
     app.evaluate("() => openSettings()")
+    app.click("#setCat-agent")   # #387: the Agent category
     expect(app.locator("#setSkillStatus")).to_have_text("not installed")
     expect(app.locator("#setSkillInstall")).to_have_text("Install")
     line = app.locator("#setSkillCmd").text_content()
-    assert line.startswith('claude mcp add drumspike -- "') and line.endswith('" mcp')
+    assert line.startswith('claude mcp add --scope user drumspike -- "') and line.endswith('" mcp')
+    hint = app.locator("#setAgentSkill .phint").text_content()
+    assert "Keep the Drum Spike window open with the song in it" in hint and "Quit" not in hint, hint   # #388
+    assert "The line is per user" in hint, hint
     app.locator("#setSkillInstall").click()
     version = app.evaluate("async () => (await B.agentSkillStatus()).bundled_version")
     expect(app.locator("#setSkillStatus")).to_contain_text(f"installed {version}")

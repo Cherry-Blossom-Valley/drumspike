@@ -20,7 +20,7 @@ Without the link use the binary itself: `"/Applications/Drum Spike.app/Contents/
 ## Claude Code
 
 ```bash
-claude mcp add drumspike -- drumspike mcp
+claude mcp add --scope user drumspike -- drumspike mcp
 ```
 
 Then ask: "Open ~/Music/Sessions/Song, analyse it, fix the kick, save, and export all." The server lists one tool per command.
@@ -250,7 +250,9 @@ A tool for the owner who refines the product, off by default (View > Training Mo
 (op `move`, `add`, `delete`, `confirm`, `learn_this` or `learn_not`) to `<DRUMSPIKE_HOME>/training/<project id>.jsonl`: the
 time, the app version, the detect and refine rule versions, the track, role and rate, `from` and `to` in samples,
 the event as stored before the op, its `confidence` and the track's samples from 40 ms before to 10 ms after
-`from` and `to` (`audio.at_from`, `audio.at_to`). The answer gets `training: {records}` (or `training_error`; the
+`from` and `to` (`audio.at_from`, `audio.at_to`). #389: every record also says who made the edit, `by: "person"`
+(the keyboard, the menu, the mouse, a Learn mark) or `by: "agent"` (a `DSAgent` helper); a record of an older log
+carries no `by`. The answer gets `training: {records}` (or `training_error`; the
 edit stands). Without the parameter nothing is written and the answer is unchanged.
 #354: `{op: confirm, index}` (Training Mode only, else refused) logs the hit as reviewed, right where it is:
 the document, its `dirty` flag and the undo history stay as they were, the record says `from` = `to` = the stored
@@ -262,8 +264,11 @@ shares of the hit's peak (the slope per ms), `onset_spread` is the hit's `timing
 A record is exact when `edge` is true, `line_noise` is at most 0.01 and `onset_spread` is under 4 samples or null;
 else it is approximate. A record without `placement` (an older log, a Learn mark) is unknown.
 `training_status {sid, on?}` answers `{on, records, path}`. `tools/training_export.py <jsonl...>` prints the
-aggregates per role and op, with the count of exact, approximate and unknown records, and writes the truth list
-`[{track, role, from, to, op, precision, exact, edge, line_noise, line_slope, onset_spread}]`.
+aggregates per role and op, with the count of exact, approximate and unknown records and the split of who made
+the edits (`by person: x, agent: y, unknown: z`), and writes the truth list
+`[{track, role, from, to, op, precision, by, exact, edge, line_noise, line_slope, onset_spread}]`. `--by` selects
+whose edits the truth list keeps: `person` (the default), `agent`, `unknown` (the records without a `by`) or
+`all` (every record).
 
 ### Page helpers (`window.DSAgent`)
 
@@ -297,6 +302,31 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   a reason to look, not a block (on some kits the queue doubts most kicks). Use chunks of about 100 hits.
 - `apply(track, list)`: the moves `[{index, samples}]` (a row of `plan` also works, its `suggest` is used); a zero or `null`
   move is skipped. `save()` writes the project. `status()` answers `{training, records, path}`.
+- `statusLine()`: what the window shows, `{message, selection, training}` (the status message, the selection field and the
+  Training Mode counter, `null` while the mode is off). `setTraining(on)`: the window's Training Mode switch, answers `{training}`.
+
+### The running window (#388)
+
+The page helpers run in the page of the window, so the app opens a local endpoint that passes a call to that page: no
+browser, no second process on the project, no quit. The window you see is the project the agent edits. At start the app
+writes `<home>/window-endpoint.json` (`{port, token, pid}`, mode 0600, removed at exit); only a process that can read that file
+can call.
+
+- `POST http://127.0.0.1:<port>/call` with `Authorization: Bearer <token>` and the body `{"fn": "move", "args": ["Kick In", 1, 3],
+  "timeout_ms": 60000?}`. `fn` is one of `project`, `hits`, `look`, `wide`, `move`, `confirm`, `undo`, `plan`, `apply`, `save`,
+  `status`, `statusLine`, `setTraining`; any other name is refused with 400 before it reaches the page. The answer is
+  `{"ok": true, "value": <what the helper returned>}`.
+- Errors: 401 without the token (or a wrong one); 409 when no page listens or the helper refused (its message is the page's,
+  for example "Training Mode is off"); 504 when the page did not answer within `timeout_ms` (default 60 s, at most 600 s).
+- `GET /status` (same token) answers `{listening, helpers}`.
+- The one call: an agent does not read the token file or speak HTTP itself. The MCP tool `agent_call {fn, args?, timeout_ms?}`
+  and the command line `drumspike agent_call <fn> [arg]...` (on the app binary: `<binary> cli agent_call <fn> [arg]...`; each `arg` is JSON when it parses, else a string) read
+  `<home>/window-endpoint.json`, post the call and answer the helper's value. With no window open (no file, or a dead port)
+  they answer a 409 "no Drum Spike window is open" (exit code 4 on the command line): then start the bridge with a browser tool.
+- `project()` answers the project the window has open (its summary and the track names).
+- The page polls the commands `window_call_next` and `window_call_result` (window surface only). A newer page ends the poll of
+  an older one, so a closed window never swallows a call. `DRUMSPIKE_WINDOW_ENDPOINT=1` opens the same endpoint in the test
+  bridge (`ds-bridge`), with the file in `DRUMSPIKE_HOME`.
 
 ## Agent fine-tune skill
 

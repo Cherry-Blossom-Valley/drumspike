@@ -12,7 +12,7 @@ import json
 import pytest
 from playwright.sync_api import expect
 
-from app_support import choose, edits_done, invoke, menu, open_project, preset_home, reload, wait_until  # noqa: F401  (preset_home is a fixture)
+from app_support import choose, edits_done, invoke, menu, open_project, preset_home, reload, settings_cat, wait_until  # noqa: F401  (preset_home is a fixture)
 from test_inspector import settings_json
 from test_menus import select_track, with_hits
 
@@ -39,6 +39,7 @@ def hit_sample(page, track, index):
 def test_the_settings_sheet_offers_two_presets_and_the_choice_is_saved(preset_home):
     app = preset_home
     menu(app, "settings")
+    settings_cat(app, "keyboard")
     expect(app.locator("#setKeyPreset")).to_be_visible()
     assert js(app, "() => [...document.querySelectorAll('#setKeyPreset option')].map(o => [o.value, o.textContent])") == \
         [["default", "Pro Tools (default)"], ["cubase", "Cubase"]]
@@ -55,6 +56,7 @@ def test_the_settings_sheet_offers_two_presets_and_the_choice_is_saved(preset_ho
     assert js(app, "() => DSKeys.preset") == "cubase"
     wait_until(lambda: js(app, "() => window.__DS_MENU_STATE__.keyPreset") == "cubase", msg="the menu is told after the reload")
     menu(app, "settings")
+    settings_cat(app, "keyboard")
     assert app.input_value("#setKeyPreset") == "cubase"
     app.select_option("#setKeyPreset", "default")
     wait_until(lambda: settings_json(app).get("key_preset") == "default", msg="back to the default")

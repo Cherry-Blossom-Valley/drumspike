@@ -351,7 +351,7 @@ impl Service {
     /// for an unknown `sid` or track; a 409 when the project is open read-only, the track is a follower, or another
     /// write or a running analysis holds the project; the decode error when a snap needs audio that cannot be read.
     pub fn events_edit(&self, sid: &str, name: &str, ops: &[Value]) -> Result<Value, AppError> {
-        self.events_edit_as(sid, name, ops, true, false, None)
+        self.events_edit_as(sid, name, ops, true, false, None, None)
     }
 
     /// [`Service::events_edit`] with the Training Mode choice (#343): `training: true` appends one record per added,
@@ -362,6 +362,8 @@ impl Service {
     /// `confirm` record (`from` = `to` = the hit's stored position, one audio window); without `training: true` it is
     /// refused with an error that names the mode. The answer gets `training: {records}`
     /// (or `training_error` when the log failed; the edit stands). `false` is [`Service::events_edit`] byte for byte.
+    /// The edit is the person's (#389): the record says `by: "person"`. [`Service::events_edit_training_by`] names
+    /// another author.
     ///
     /// # Errors
     ///
@@ -374,11 +376,30 @@ impl Service {
         training: bool,
         view: Option<Value>,
     ) -> Result<Value, AppError> {
-        self.events_edit_as(sid, name, ops, true, training, view)
+        self.events_edit_training_by(sid, name, ops, training, view, None)
+    }
+
+    /// [`Service::events_edit_training`] with the author of the edit (#389): `by` is `"person"` (the keyboard, the
+    /// menu, the mouse) or `"agent"` (a `window.DSAgent` helper) and rides into every record; `None` is `person`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Service::events_edit`].
+    pub fn events_edit_training_by(
+        &self,
+        sid: &str,
+        name: &str,
+        ops: &[Value],
+        training: bool,
+        view: Option<Value>,
+        by: Option<&str>,
+    ) -> Result<Value, AppError> {
+        self.events_edit_as(sid, name, ops, true, training, view, by)
     }
 
     /// [`Service::events_edit`]; `by_hand: false` for an internal edit (P4-38e: the Learn sweep), whose deletions do
     /// not go in `learn.dropped`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn events_edit_as(
         &self,
         sid: &str,
@@ -387,6 +408,7 @@ impl Service {
         by_hand: bool,
         training: bool,
         view: Option<Value>,
+        by: Option<&str>,
     ) -> Result<Value, AppError> {
         if ops.is_empty() {
             return Err(AppError::bad("`ops` must not be empty"));
@@ -461,7 +483,7 @@ impl Service {
         if training {
             let mut examples = self.training_examples(sid, name, &current, &edit_ops, sr);
             examples.extend(self.training_confirm_examples(sid, name, &current, &confirms));
-            Self::training_note(&mut out, self.training_log(sid, name, &examples, view.as_ref()));
+            Self::training_note(&mut out, self.training_log(sid, name, &examples, view.as_ref(), by.or(Some("person"))));
         }
         Ok(out)
     }
@@ -697,6 +719,21 @@ pub(crate) const HANDLERS: [crate::call::Route; 2] = crate::call::routes(EDIT_CO
     crate::call::json_reply(cmd, dispatch(s, cmd, args))
 });
 
+/// #389: who made an edit, as the `by` argument of `events_edit` says it: `"person"` (the page's own paths) or `"agent"`
+/// (the `window.DSAgent` helpers); absent or null is `None` (the record then says person). One function for the bridge
+/// dispatch and the Tauri command of the window, so the two surfaces cannot drift (#388).
+///
+/// # Errors
+///
+/// 400 for any other value.
+pub fn edit_author(by: Option<&Value>) -> Result<Option<&str>, AppError> {
+    match by {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(b)) if b == "person" || b == "agent" => Ok(Some(b.as_str())),
+        Some(_) => Err(AppError::bad("wrong argument `by` (\"person\" or \"agent\")")),
+    }
+}
+
 /// Run a command of this card for the bridge; `None` when `cmd` is not one of them.
 #[must_use]
 pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, AppError>> {
@@ -716,7 +753,8 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
                 .ok_or_else(|| AppError::bad("missing or wrong argument `ops` (list)"))?;
             let training = args.get("training").and_then(Value::as_bool).unwrap_or(false);
             let view = args.get("view").filter(|v| v.is_object()).cloned();
-            svc.events_edit_training(s("sid")?, s("name")?, ops, training, view)
+            let by = edit_author(args.get("by"))?;
+            svc.events_edit_training_by(s("sid")?, s("name")?, ops, training, view, by)
         } else {
             let n = args
                 .get("shift_samples")
