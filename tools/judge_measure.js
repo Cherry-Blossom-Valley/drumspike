@@ -11,9 +11,9 @@ const win = {};
 const src = agent.replace("window.DSAgent = DSAgent;", "DSAgent.judge = DSAgent.judge || judge; window.DSAgent = DSAgent;");
 vm.runInNewContext(src, { window: win, $: () => null, document: {}, console });
 const judge = win.DSAgent.judge;
-// #394: the stroke-peak judge takes the reference (declared length 3); the window then carries `stroke`, the raw samples
-// of the detector's span (0.9 ms before to 5 ms after the hit, same start as `samples`), whose tail from hit_at holds
-// the hit's peak. An older judge (the "before" run) keeps the look window's peak as its reference.
+// #394: the judge takes the reference (declared length 3): the local peak over the hit's peak, for the guard. The
+// window then carries `stroke`, the raw samples of the detector's span (0.9 ms before to 5 ms after the hit, same
+// start as `samples`), whose tail from hit_at holds the hit's peak. An older judge (the "before" run) is 2-arg.
 const withRef = judge.length >= 3;
 
 const gold = {}, k = {}, rows = [];
