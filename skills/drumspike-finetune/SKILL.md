@@ -63,9 +63,10 @@ for the project path if the prompt has none. The user watches only; say so once 
 
 ## Guardrails
 
-- Never move or confirm a hit the user placed by hand. `DSAgent.hits` returns no field that marks a hand-placed
-  hit (its `edited` flag marks a hand velocity edit or a restore, not a hand move): ask the user which hits are
-  theirs before you work a track, and leave those as they are.
+- Never move or confirm a hit the user placed by hand. Read the project's training log (the `path` of
+  `DSAgent.status()`'s `training_status`, `training_status {sid}`): a hit with a move, add or confirm record whose
+  `by` is `person` or absent is hand-placed. Leave those as they are, and ask the user only when the log is empty
+  or unreadable.
 - Never delete a hit without `DSAgent.wide(track, index)` first. Look at the 20 ms view and decide on that.
 - Never move a hit whose `judge.suggest` is `null` (`line_ok` false in a plan row; `why` says the reason, for example
   "departure far from the hit"). Leave it and list it.
