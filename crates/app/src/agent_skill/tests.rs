@@ -61,7 +61,7 @@ fn a_second_install_replaces_an_older_copy_and_status_tells_the_versions() {
     assert_eq!(s["bundled_version"], "0.9.26");
     assert_eq!(
         s["mcp_command"],
-        "claude mcp add drumspike -- \"/opt/ds/drumspike-desktop\" mcp"
+        "claude mcp add --scope user drumspike -- \"/opt/ds/drumspike-desktop\" mcp"
     );
     install(&src, &target, bin, "0.9.26").unwrap();
     assert!(
@@ -76,6 +76,14 @@ fn a_second_install_replaces_an_older_copy_and_status_tells_the_versions() {
     // the same version from another binary path is not current: the baked path is the old one
     assert_eq!(status(&target, Path::new("/other/bin"), "0.9.26")["current"], false);
     let _ = std::fs::remove_dir_all(&r);
+}
+
+#[test]
+fn mcp_command_names_the_user_scope_so_the_server_works_from_every_folder() {
+    let line = mcp_command(Path::new("/opt/ds/drumspike-desktop"));
+    assert!(line.contains("--scope user"), "{line}");
+    assert!(line.starts_with("claude mcp add --scope user drumspike -- \""), "{line}");
+    assert!(line.ends_with("\" mcp"), "{line}");
 }
 
 #[test]
