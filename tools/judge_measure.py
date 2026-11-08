@@ -64,6 +64,28 @@ def session_k_windows(measure):
     return out
 
 
+def session_k_records(measure):
+    """#408: the Session K kick hits the rule-A check names, from the Training Mode records: the 5 hand-placed hits (a move
+    record without precision, judged at its `to`) and the 19 confirmed hits (a confirm record). Sets "hand" and "confirmed",
+    label 0: exact = the judge leaves the hit alone."""
+    k = measure / "session-k"
+    w = wave.open(str(k / "01 Kick.wav"))
+    sr = w.getframerate()
+    data = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(float) / 32768
+    out = []
+    for n, line in enumerate(open(next((k / "training").glob("*.jsonl")))):
+        r = json.loads(line)
+        if r["track"] != "01_Kick":
+            continue
+        name = "confirmed" if r["op"] == "confirm" else "hand" if r["op"] == "move" and r.get("precision") is None else None
+        if name is None:
+            continue
+        s, at = cut(data, r["to"], sr)
+        out.append({"set": name, "id": n, "role": "kick", "label_off": 0, "samples": s,
+                    "stroke": stroke_span(data, r["to"], sr), "hit_at": at})
+    return out
+
+
 def measure(agent_src, windows):
     """The aggregates of the judge in `agent_src` over `windows`."""
     r = subprocess.run(["node", str(ROOT / "tools" / "judge_measure.js")], input=json.dumps({"agent": agent_src, "windows": windows}),
@@ -81,11 +103,12 @@ def main():
     measure_dir = Path(a.measure_dir)
     src = (subprocess.run(["git", "show", f"{a.ref}:static/agent.js"], capture_output=True, text=True, check=True, cwd=ROOT).stdout
            if a.ref else (ROOT / "static" / "agent.js").read_text())
-    res = measure(src, gold_windows(measure_dir) + session_k_windows(measure_dir))
-    dist = {f"{r['set']}:{r['id']}": r["d"] for r in res["rows"] if r["set"] != "K"}
+    res = measure(src, gold_windows(measure_dir) + session_k_windows(measure_dir) + session_k_records(measure_dir))
+    dist = {f"{r['set']}:{r['id']}": r["d"] for r in res["rows"] if r["set"].startswith("gold")}
     gold = res["gold"]
-    tot = {"n": sum(g["n"] for g in gold.values()), "exact": sum(g["exact"] for g in gold.values()),
-           "within1": sum(g["within1"] for g in gold.values()), "dist": sum(g["dist"] for g in gold.values())}
+    sets = [g for name, g in gold.items() if name.startswith("gold")]   # "owner" is a subset of Session E; "hand" and "confirmed" are Session K
+    tot = {"n": sum(g["n"] for g in sets), "exact": sum(g["exact"] for g in sets),
+           "within1": sum(g["within1"] for g in sets), "dist": sum(g["dist"] for g in sets)}
     out = {"gold_total": tot, "gold": gold, "session_k": res["k"]}
     if a.rows:
         Path(a.rows).write_text(json.dumps(dist))

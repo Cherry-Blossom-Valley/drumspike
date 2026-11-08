@@ -1,5 +1,38 @@
 # Judge: a lead bump by shape (#385)
 
+## The shape judge (#408, shipped)
+
+Measured 2026-11-08 with `tools/judge_measure.py` on the same rows as below (aggregates only). The judge of `static/agent.js`
+now measures the line directly before the stroke: the steepest step within 12 samples before to 6 after the hit, walked back
+to its foot (the walk stops where a step falls under `FOOT_STEP_SHARE` = 25 % of the steepest), the line from the 12 quietest
+samples ending nearest the foot, the samples above the detector's band (2.5 % of the hit's peak over 5 ms) between that line
+and the foot walked over, and the hit sample in the guard. `judge` answers `foot_off`, `rise`, `quiet_ratio` and `verdict`
+(`late`, `at_foot`, `no_quiet_line`; a line needs `quiet_ratio` of at least `QUIET_MIN` = 3); `DSAgent.audit` lists the `late` hits.
+
+| set (exact / within 1 / summed distance) | main | shape judge |
+|---|---|---|
+| owner rows, 497 (Session E) | 371 / 492 / 206 | **441 / 493 / 125** |
+| Gate | >= 382 / >= 492 / <= 198 | met |
+| Session K hand-placed kick hits, left alone | 5 of 5 | 5 of 5 |
+| Session K confirmed kick hits, answered 0 | 19 of 19 | 19 of 19 |
+| all 4981 gold rows | 2658 / 3982 / 5926 | 2608 / 3719 / 8341 |
+
+The 4484 coordinator rows are not the Gate and get worse in distance: against main 650 rows worse, 614 better, 3717 equal; the
+summed distance grows in Sessions C and D (890 to 1965, 1243 to 2968), where the main judge moved on 221 and 242 rows and the
+shape judge on 69 and 128 (the others get `no_quiet_line` or stand within the band). The Gate is the owner's rows; the
+coordinator's labels there are the noise the sections below describe.
+
+Constants and how they were chosen: `FOOT_STEP_SHARE` 0.25 (the value the owner's session proposed) and `QUIET_MIN` were swept
+over 0.15 to 0.5 and 1 to 6 on the gold rows. The owner rows do not separate them (441 exact for every pair, within 1 between 490
+and 493, distance 120 to 132), so the proposed 0.25 stays and `QUIET_MIN` is the value that keeps the ring case (steepest step under
+3 times the largest quiet step) out of the line; 1.5 would have given 120 instead of 125 on the owner rows. No constant was tuned to
+a named hit. Two shape rules came from rows the first version got wrong, both stated by principle: the line is the quietest
+stretch ending nearest the foot, not the 12 samples before it (a ramp of motion there pulled the median off the line), and a view
+whose steepest step near the hit is under the band holds no edge the detector reads, so the hit stands (its stroke rises past the
+view). A later move for a hit inside the band was tried and costs 55 exact on the owner rows (441 to 386), so it stays out.
+
+## The earlier rounds (#385, #394; before the shape judge)
+
 Measured with `tools/judge_measure.py` (test: `tests/test_judge_measure.py`). Aggregates only. No judge change ships: **on the
 one-rise-sample shape the gold rows carry both answers (532 foot, 236 edge, 161 neither), so no rule of size or sign reproduces
 the labels, and the judge stays as on main until the ground truth is sharpened.** The rows that split are the coordinator's
