@@ -1,0 +1,87 @@
+> Skill drumspike-finetune
+> ToolSearch select:mcp__drumspike__agent_call,mcp__drumspike__training_status,mcp__drumspike__tracks_get
+> agent_call project
+> agent_call setTraining true
+> agent_call status
+> agent_call hits k_in
+> agent_call plan k_in 0 19
+> agent_call look k_in 0
+  The signal is flat until sample 43, so the last line sample is 42. That is 2 samples before
+  the hit, which matches the suggestion of -2.
+> agent_call move k_in 0 -2   moved 60008 to 60006
+> agent_call confirm k_in 0
+  Hit 0 is moved and confirmed. Next I'll look at hits 2 to 5.
+> agent_call look k_in 2
+> agent_call look k_in 3
+> agent_call look k_in 4
+> agent_call look k_in 5
+> agent_call move k_in 2 -2   moved 105008 to 105006
+> agent_call move k_in 3 -2   moved 120008 to 120006
+> agent_call move k_in 5 -2   moved 180008 to 180006
+> agent_call confirm k_in 2
+> agent_call confirm k_in 3
+> agent_call confirm k_in 4
+> agent_call confirm k_in 5
+  Next I'll look at hits 6 to 12.
+> agent_call look k_in 6
+> agent_call look k_in 7
+> agent_call look k_in 8
+> agent_call look k_in 9
+> agent_call look k_in 10
+> agent_call look k_in 11
+> agent_call look k_in 12
+  Hits 6, 9 and 12 match hit 4, so they need only a confirm. Hits 7, 8, 10 and 11 match hit 2,
+  so they move -2 and are confirmed.
+> agent_call move k_in 7 -2   moved 225008 to 225006
+> agent_call move k_in 8 -2   moved 240008 to 240006
+> agent_call move k_in 10 -2   moved 285008 to 285006
+> agent_call move k_in 11 -2   moved 300008 to 300006
+> agent_call confirm k_in 6
+> agent_call confirm k_in 7
+> agent_call confirm k_in 8
+> agent_call confirm k_in 9
+> agent_call confirm k_in 10
+> agent_call confirm k_in 11
+> agent_call confirm k_in 12
+  Next I'll look at hits 13 to 19.
+> agent_call look k_in 13
+> agent_call look k_in 14
+> agent_call look k_in 15
+> agent_call look k_in 16
+> agent_call look k_in 17
+> agent_call look k_in 18
+> agent_call look k_in 19
+> agent_call move k_in 13 -2   moved 345008 to 345006
+> agent_call move k_in 14 -2   moved 360008 to 360006
+> agent_call move k_in 17 -2   moved 420008 to 420006
+> agent_call move k_in 19 -2   moved 465008 to 465006
+> agent_call confirm k_in 13
+> agent_call confirm k_in 14
+> agent_call confirm k_in 15
+> agent_call confirm k_in 17
+> agent_call confirm k_in 18
+> agent_call confirm k_in 19
+  Now I'll write the review list next to the project file, then save.
+> Write <home>/projects/Demo/agent/left-for-review.tsv
+> agent_call save
+  I fine-tuned the first 20 kick hits (indices 0–19) on `k_in` and saved the project. Two hits
+  are left for you. Of the other 18, 12 moved onto the line and 6 were already on it. All 18 are
+  confirmed.
+
+  | Track | Hits reviewed | Moved | Confirmed | Hand-placed, untouched | No suggestion | Doubtful, left |
+  |---|---|---|---|---|---|---|
+  | k_in | 20 | 12 | 18 | 0 | 1 | 1 |
+  | s_top | 0 | 0 | 0 | 0 | 0 | 0 |
+  | **Total** | 20 | 12 | 18 | 0 | 1 | 1 |
+
+  - **Moved:** the 12 hits moved 2 samples earlier, onto the last flat sample before the stroke
+  starts (hits 0, 2, 3, 5, 7, 8, 10, 11, 13, 14, 17 and 19).
+  - **Already on the line:** hits 4, 6, 9, 12, 15 and 18 needed no move, only a confirm.
+  - **Left for you:** hit 1 (1.88 s) has no clear line before the hit, so the app offers no
+  suggestion. Hit 16 (8.60 s) has a clean line, but it is 30 dB under the track median with
+  confidence 0, so I'm not sure it is a real hit. Neither was changed or confirmed.
+
+  The training log was empty, so I moved nothing you had placed by hand. I did not touch
+  `s_top`. The review list is at `<home>/projects/Demo/agent/left-for-review.tsv`.
+
+  Do you want to export the MIDI and spike files now, or leave it?
