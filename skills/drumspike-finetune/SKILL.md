@@ -52,8 +52,11 @@ the page with the bridge.
    ripple under the detector's departure band is not the stroke's first motion: the hit stays at the foot of the
    main stroke. Only a departure the detector's rule recognises moves a hit.
    `null` or `stands` is not a verdict: when the judge answers `null` or `stands`, look at the hit yourself
-   (`DSAgent.look`) and decide. Move the hit when the verdict is `late`. Leave it only when no quiet stretch
-   exists before it (`no_quiet_line`) - and list it as "no quiet stretch", never as "not looked at". Do not
+   (`DSAgent.look`) and decide. Move the hit when the verdict is `late`, by `judge.foot_off` samples (a whole
+   number; negative is earlier). A late hit can carry a `null` `suggest` when its foot is far from the hit:
+   look at those yourself too, and if you do not move one, list it with the reason. Leave a hit only when no
+   quiet stretch exists before it (`no_quiet_line`) - and list it as "no quiet stretch", never as "not looked
+   at". Do not
    invent thresholds: use the verdict and the documented bands. After the moves, re-read every moved hit
    (`DSAgent.look`) and check the verdict against the new position.
 6. One hit at a time is the default while the user watches. Only when the user asked not to watch, apply the clear
@@ -62,7 +65,8 @@ the page with the bridge.
    file, for example `<session>/agent/left-for-review.tsv`. Make no own safety copy of the session: the app's
    `Backups/` folder keeps the versions (`DSAgent.backups()` names the backup that holds the state before this
    session; a backup is named with the time of the save that replaced it, and holds the state before that save).
-8. Before `DSAgent.save()`, run `DSAgent.audit(track)` on every track. The remaining late hits must be zero; if
+8. Before `DSAgent.save()`, run `DSAgent.audit(track)` on every track (it looks at every hit of the track, so give
+   it a longer `timeout_ms`, for example 600000; the default is 60 s). The remaining late hits must be zero; if
    one stays, list it one by one with the reason, and say so in the report.
 9. `DSAgent.save()`. A lock file that still names a stopped bridge does not block: the app or the next bridge takes
    it. Do not delete it and do not mention it.

@@ -4,7 +4,8 @@
    byte for byte the record of a person. The helpers that change the document refuse while Training Mode is off. */
 (function () {
   const SAMPLE_BEFORE_MS = 0.9, SAMPLE_AFTER_MS = 0.6, WIDE_MS = 10;   // the sample-zoom window around a hit; the 20 ms view is 10 ms each side
-  const LINE_LEAD = 12, LINE_MAX_SPREAD = 0.03, DEPART_MIN = 0.03;       // samples of the line, its spread limit and the departure level (shares of the local peak)
+  const LINE_LEAD = 12, LINE_MIN = 4, DEPART_MIN = 0.03;                 // samples of the line before the foot, the fewest that make a line, the band without a readable hit's peak (share of the local peak)
+  const FOOT_STEP_SHARE = 0.25, QUIET_MIN = 3, QUIET_CAP = 1000;                          // #408: the foot walk stops under this share of the steepest step; a line needs steepest / largest quiet step of at least this
   const DEPARTURE_VIS_PCT = 0.025;                                       // #394 guard: the detector's own band, a share of the hit's peak (edge.rs DEPARTURE_VIS_PCT)
   const FRAME_WAIT_MS = 300;                                             // the longest wait for a frame of a hidden page
   const DEPART_BEFORE = 12, DEPART_AFTER = 6;                            // the stroke of the coordinator's routine starts within 12 samples before to 6 after the hit
@@ -50,37 +51,61 @@
 
   /* the owner's convention (#351): the hit is the last line sample before the stroke's first motion of either sign; a
      pre-ripple, bump or dip that leads into the stroke belongs to the stroke. `s` is the window as shares of the local
-     peak; `ref` (#394) is the local peak over the hit's peak (edge.rs EDGE_SPAN_S), used only by the guard: the rule's
-     bands stay shares of the local peak, as on main, but when the judge would move the hit earlier (`suggest` < 0) over
-     a stretch that stands within the detector's own band (DEPARTURE_VIS_PCT of the hit's peak) of the line level, the
-     bump is under the band and is not the stroke's first motion: the hit stands. Without a readable hit's peak the
-     guard does not apply and main's answer stands. */
+     peak; `ref` (#394) is the local peak over the hit's peak (edge.rs EDGE_SPAN_S): it turns the detector's band
+     (DEPARTURE_VIS_PCT of the hit's peak) into a share of the local peak. Without a readable hit's peak the band is
+     DEPART_MIN.
+     #408: the judge measures the line directly before the stroke, not the far left of the view. It finds the steepest step
+     near the hit, walks back to its foot (stopping where the step falls under FOOT_STEP_SHARE of the steepest, so a slow
+     wave is line) and over the samples above the band that lead into it, and takes the line from the LINE_LEAD quietest
+     samples ending nearest the foot. The answer is a shape verdict: `foot_off` (the foot against the hit), `rise` (the
+     hit sample's distance from the line), `quiet_ratio` (steepest step / largest step of the line) and `verdict`:
+     `late` (the hit stands up the rise, its own sample over the band), `at_foot`, or `no_quiet_line` (no quiet stretch
+     exists: nothing to measure from, `suggest` null). A hit whose own sample is within the band stands (suggest 0), and so
+     does a hit in a view with no step over the band (the stroke rises past the view). */
   function judge(s, hitAt, ref) {
-    const n = Math.min(LINE_LEAD, s.length);
-    const lead = s.slice(0, n).sort((a, b) => a - b), level = lead[n >> 1];
-    let spread = 0;
-    for (let i = 0; i < n; i++) spread = Math.max(spread, Math.abs(s[i] - level));
-    const out = { level, spread, first_off: null, suggest: null };
-    if (!(spread <= LINE_MAX_SPREAD)) return out;                  // not a line
-    const thr = Math.max(3 * spread, DEPART_MIN);
-    for (let i = n; i < s.length; i++) {
-      if (Math.abs(s[i] - level) > thr) {
-        out.first_off = i - hitAt;
-        // a departure far from the hit is a pre-bump, bleed or wobble, not the stroke: no suggestion
-        if (out.first_off < -DEPART_BEFORE || out.first_off > DEPART_AFTER) out.why = "departure far from the hit";
-        else {
-          out.suggest = i - 1 - hitAt;
-          // #394 guard (owner rule A): a move earlier over a stretch the detector itself reads as line is no move.
-          if (out.suggest < 0 && typeof ref === "number" && Number.isFinite(ref) && ref > 0) {
-            const band = DEPARTURE_VIS_PCT / ref;                  // the hit's peak as a share of the local peak
-            let under = true;
-            for (let k = i; k < hitAt; k++) if (Math.abs(s[k] - level) > band) { under = false; break; }
-            if (under) { out.suggest = 0; out.why = "under the detector's band"; }
-          }
-        }
-        break;
-      }
+    const out = { level: null, spread: null, first_off: null, suggest: null, foot_off: null, rise: null, quiet_ratio: null, verdict: "no_quiet_line" };
+    const band = typeof ref === "number" && Number.isFinite(ref) && ref > 0 ? DEPARTURE_VIS_PCT / ref : DEPART_MIN;   // the hit's peak as a share of the local peak
+    // the steepest step near the hit: the stroke's edge (a step j is s[j] to s[j+1])
+    let p = -1, steep = 0;
+    for (let j = Math.max(0, hitAt - DEPART_BEFORE); j <= Math.min(s.length - 2, hitAt + DEPART_AFTER); j++) {
+      const d = Math.abs(s[j + 1] - s[j]);
+      if (d > steep) { steep = d; p = j; }
     }
+    if (p < 0 || !(steep > 0)) return out;
+    // the view holds no edge the detector would read (a stroke that rises past the view): nothing to move to, the hit stands
+    if (steep <= band) { out.suggest = 0; out.verdict = "at_foot"; out.why = "no step above the band near the hit"; return out; }
+    // the foot: walk back from the edge while the steps are still a share of the steepest one; a slow wave under that share is line
+    let f = p;
+    while (f > 0 && Math.abs(s[f] - s[f - 1]) >= FOOT_STEP_SHARE * steep) f--;
+    // The line is the LINE_LEAD samples that end nearest the foot with the smallest largest step: directly before the foot
+    // when that stretch is quiet, else the quiet stretch further back. The samples above the band between it and the foot are
+    // the stroke's first motion, so the foot moves back over them (owner rule A: a dip or ripple under the band is line).
+    let end = -1, quiet = Infinity;
+    for (let e = f; e >= Math.max(LINE_MIN, Math.min(LINE_LEAD, f)); e--) {
+      let q = 0;
+      for (let i = Math.max(1, e - LINE_LEAD + 1); i < e; i++) q = Math.max(q, Math.abs(s[i] - s[i - 1]));
+      if (q < quiet) { quiet = q; end = e; }
+    }
+    if (end < 0) return out;
+    const from = Math.max(0, end - LINE_LEAD), lead = s.slice(from, end).sort((a, b) => a - b), level = lead[lead.length >> 1];
+    while (f >= end && Math.abs(s[f] - level) > band) f--;           // the line ends at end - 1
+    let spread = 0;
+    for (let i = from; i < end; i++) spread = Math.max(spread, Math.abs(s[i] - level));
+    out.level = level; out.spread = spread;
+    out.quiet_ratio = Math.min(QUIET_CAP, quiet > 0 ? steep / quiet : QUIET_CAP);   // finite, so the answer stays JSON
+    out.foot_off = f - hitAt;
+    out.rise = Math.abs(s[Math.min(Math.max(hitAt, 0), s.length - 1)] - level);
+    if (out.quiet_ratio < QUIET_MIN) return out;                   // a ring or an uneven stretch: no line to measure from
+    out.first_off = f + 1 - hitAt;
+    // owner rule A: the hit stands when its own sample (the guard includes it) is within the detector's band of the line;
+    // else a hit up the rise is late. The verdict does not depend on the suggestion's range, so a late hit far from its foot
+    // is still listed by `audit`.
+    const standing = out.rise <= band;
+    out.verdict = out.foot_off < 0 && !standing ? "late" : "at_foot";
+    // a foot far from the hit is a pre-bump, bleed or wobble, not the stroke: no suggestion
+    if (out.foot_off < -DEPART_BEFORE || out.foot_off > DEPART_AFTER) { out.why = "departure far from the hit"; return out; }
+    out.suggest = standing ? 0 : out.foot_off;                     // a hit within the band stands, also before the foot: measured on the owner rows, a later move there costs 55 exact
+    if (standing && out.foot_off !== 0) out.why = "under the detector's band";
     return out;
   }
 
@@ -112,7 +137,9 @@
     }
     const ref = peak > 0 && strokePeak > 0 ? peak / strokePeak : null;
     const shares = Array.from(r.data, v => (peak > 0 ? v / peak : 0));
-    return { track, index, sample: hit, start: r.start, hit_at: hitAt, samples: shares, local_peak: peak, stroke_peak: strokePeak, amp,
+    // #408: the band the judge reads against, stated in the unit of the detector: 2.5 % of the hit's peak over 5 ms
+    const band = { pct: DEPARTURE_VIS_PCT, of: "the hit's peak", span_ms: EDGE_SPAN_MS, share_of_local_peak: ref ? DEPARTURE_VIS_PCT / ref : DEPART_MIN };
+    return { track, index, sample: hit, start: r.start, hit_at: hitAt, samples: shares, local_peak: peak, stroke_peak: strokePeak, amp, band,
       trainingView: trainingView(track), judge: judge(shares, hitAt, ref) };
   }
 
@@ -212,12 +239,23 @@
       for (let i = Math.max(0, from); i <= Math.min(to, evs.length - 1); i++) {
         const l = await DSAgent.look(track, i), q = rate[i], j = l.judge, qd = !!(q && q.doubt);
         // queue_doubt: the review queue's doubt (a reason to look); line_ok: the judge found a line and a suggestible departure
-        rows.push({ index: i, id: evs[i].id, t: evs[i].t, sample: l.sample, suggest: j.suggest, spread: j.spread,
+        rows.push({ index: i, id: evs[i].id, t: evs[i].t, sample: l.sample, suggest: j.suggest, spread: j.spread, verdict: j.verdict,
           confidence: q ? q.c : null, queue_doubt: qd, queue_why: qd ? [...(q.why || [])] : [],
           line_ok: j.suggest !== null,
           why: j.suggest !== null ? null : j.why || "no clear line before the hit" });
       }
       return rows;
+    },
+    /* #408: every hit of the track whose shape verdict is `late`: the hit stands up the rise, over the band. It reads the shape
+       measures of `look` and never `judge.suggest` or a plan row, so a wrong suggestion cannot hide a late hit. */
+    async audit(track) {
+      need(track);
+      const evs = S.events[track] || [], late = [];
+      for (let i = 0; i < evs.length; i++) {
+        const j = (await DSAgent.look(track, i)).judge;
+        if (j.verdict === "late") late.push({ index: i, id: evs[i].id, t: evs[i].t, foot_off: j.foot_off, rise: j.rise, quiet_ratio: j.quiet_ratio });
+      }
+      return late;
     },
     /* the moves of a plan: [{index, samples}] (or a row of plan: its suggest); a zero or null move is skipped */
     async apply(track, list) {

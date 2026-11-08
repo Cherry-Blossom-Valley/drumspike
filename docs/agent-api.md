@@ -290,15 +290,25 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   shares of the local peak and `hit_at` is the place of the hit's own sample in it. `stroke_peak` (#394) is the hit's peak
   in raw samples, the largest sample from the hit over the detector's own span (`EDGE_SPAN_S`, 5 ms); `null` when it
   cannot be read. `trainingView` is the view the record
-  will carry. `judge` is `{level, spread, first_off, suggest}`: the line before the hit, the first sample off the line
-  and `suggest`, the offset in samples that the placement rule suggests (the hit is the last line sample before the
-  stroke's first motion of either sign), or `null` when the line is not a line (a spread over 3 % of the local peak),
-  nothing leaves it in the window, or the first sample off the line lies more than 12 samples before or 6 after the hit
-  (a pre-bump, bleed or wobble, not the stroke; `judge.why` is then `"departure far from the hit"`). #394 adds a guard:
-  when the judge would move the hit earlier (`suggest` < 0) over a stretch that stands within the detector's own band
-  (`DEPARTURE_VIS_PCT`, 2.5 % of the hit's peak) of the line level, the bump is under the band and not the stroke's
-  first motion: `suggest` is 0 and `judge.why` is `"under the detector's band"`. Without a readable `stroke_peak` the
-  guard does not apply and the answer is main's. A page in the
+  will carry. `band` (#408) states the unit of the judge: `{pct: 0.025, of: "the hit's peak", span_ms: 5,
+  share_of_local_peak}` (`DEPARTURE_VIS_PCT` over `EDGE_SPAN_MS`, as a share of the local peak that `samples` uses).
+  `judge` is `{level, spread, first_off, suggest, foot_off, rise, quiet_ratio, verdict}`. It measures the line directly
+  before the stroke: the steepest step near the hit, walked back to its foot (the walk stops where a step falls under 25 %
+  of the steepest, so a slow wave is line, and goes back over the samples above the band that lead into the foot), and the
+  line from the 12 quietest samples ending nearest the foot. `foot_off` is the foot against the hit (negative: the foot is
+  earlier), `rise` the hit sample's distance from the line (a share of the local peak), `quiet_ratio` the steepest step over
+  the largest step of the line, and `verdict`: `late` (the hit stands up the rise: its own sample is over the band and the foot
+  is earlier), `at_foot`, or `no_quiet_line` (no quiet stretch exists, as after a previous stroke's ring; `foot_off` may
+  be set, `suggest` is `null`). `suggest` is the offset in samples that the placement rule suggests (the hit is the last
+  line sample before the stroke's first motion), 0 for a hit whose own sample is within the band (`judge.why` is then
+  `"under the detector's band"` when the foot is earlier) or when no step near the hit is over the band (the stroke rises
+  past the view; `judge.why` is `"no step above the band near the hit"`), and `null` when the verdict is
+  `no_quiet_line` or the foot lies more than 12 samples before or 6 after the hit (a pre-bump, bleed or wobble,
+  not the stroke; `judge.why` is then `"departure far from the hit"`, the verdict is still `late` or `at_foot`). When
+  the verdict is `late`, move the hit by `judge.foot_off` samples (a whole number; negative is earlier); a late hit can
+  carry a `null` `suggest` when its foot is far from the hit - look at those yourself, and list one you do not move
+  with the reason. Without a
+  readable `stroke_peak` the band is 3 % of the local peak. A page in the
   background gets no animation frames: `look` waits at most 300 ms for the draw and goes on, so a hidden page is slower
   but never stuck.
 - `wide(track, index)`: the same answer for the 20 ms view on the hit, for deletes and bleed checks.
@@ -310,9 +320,12 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   record says precision `sample`. Answers `{moved, index, from, to}`.
 - `confirm(track, index)`: Hits > Confirm Hit for a reviewed, unchanged hit. `undo()`: Edit > Undo; an undo writes no record.
 - `plan(track, from, to)`: `look` over the hit indices `from` to `to` without moving; one row per hit with `index`, `id`,
-  `sample`, `suggest`, `spread`, `confidence`, `line_ok`, `why`, `queue_doubt` and `queue_why`. `line_ok` is the judge's
-  verdict (`suggest` is not `null`); `why` says why it is not. `queue_doubt` and `queue_why` are the review queue's doubt:
+  `sample`, `suggest`, `spread`, `verdict`, `confidence`, `line_ok`, `why`, `queue_doubt` and `queue_why`. `line_ok` is the
+  judge's verdict (`suggest` is not `null`); `why` says why it is not. `queue_doubt` and `queue_why` are the review queue's doubt:
   a reason to look, not a block (on some kits the queue doubts most kicks). Use chunks of about 100 hits.
+- `audit(track)` (#408): every hit of the track whose shape `verdict` is `late`, as `[{index, id, t, foot_off, rise,
+  quiet_ratio}]`. It reads the shape measures of `look` and never `judge.suggest` or a `plan` row, so a wrong suggestion
+  cannot hide a late hit. One `look` per hit: run it on a track you have not finished, not in a loop.
 - `apply(track, list)`: the moves `[{index, samples}]` (a row of `plan` also works, its `suggest` is used); a zero or `null`
   move is skipped. `save()` writes the project. `backups()` answers `{rule, before}`: a backup is named with the time of
   the save that replaced it, but holds the state as it was just BEFORE that save - `before` names the backup that holds
@@ -330,8 +343,8 @@ can call.
 
 - `POST http://127.0.0.1:<port>/call` with `Authorization: Bearer <token>` and the body `{"fn": "move", "args": ["Kick In", 1, 3],
   "timeout_ms": 60000?}`. `fn` is one of `project`, `hits`, `look`, `wide`, `render`, `move`, `confirm`, `undo`, `plan`,
-  `apply`, `save`, `backups`, `status`, `statusLine`, `setTraining`; any other name is refused with 400 before it reaches the
-  page. The answer is `{"ok": true, "value": <what the helper returned>}`.
+  `audit`, `apply`, `save`, `backups`, `status`, `statusLine`, `setTraining`; any other name is refused with 400 before it
+  reaches the page. The answer is `{"ok": true, "value": <what the helper returned>}`.
 - Errors: 401 without the token (or a wrong one); 409 when no page listens or the helper refused (its message is the page's,
   for example "Training Mode is off"); 504 when the page did not answer within `timeout_ms` (default 60 s, at most 600 s).
 - `GET /status` (same token) answers `{listening, helpers}`.
