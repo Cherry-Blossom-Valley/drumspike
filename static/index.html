@@ -83,80 +83,89 @@
 
 <div id="settingsModal" class="modal sheet hidden">
   <div class="modal-box">
-    <h3>Settings</h3>
-    <div class="sbSetGroup" id="setAudio">
-      <div class="ptitle">Audio output</div>
-      <div class="prow">
-        <label for="setOutput">Output device</label>
-        <div class="pctl pctlWide"><select id="setOutput" title="Where Drum Spike plays. System default follows the macOS Sound setting."></select></div>
+    <div class="setHead"><h3>Settings</h3></div>
+    <div class="setBody">
+      <div class="setCats" id="setCats" role="tablist" aria-label="Settings categories">
+        <button type="button" class="setCatBtn" id="setCat-audio" data-cat="audio" role="tab">Audio</button>
+        <button type="button" class="setCatBtn" id="setCat-keyboard" data-cat="keyboard" role="tab">Keyboard</button>
+        <button type="button" class="setCatBtn" id="setCat-view" data-cat="view" role="tab">View</button>
+        <button type="button" class="setCatBtn" id="setCat-audition" data-cat="audition" role="tab">Audition and click</button>
+        <button type="button" class="setCatBtn" id="setCat-pitches" data-cat="pitches" role="tab">Pitches</button>
+        <button type="button" class="setCatBtn" id="setCat-plugins" data-cat="plugins" role="tab">Detector plug-ins</button>
+        <button type="button" class="setCatBtn" id="setCat-agent" data-cat="agent" role="tab">Agent</button>
       </div>
-      <div class="phint" id="setOutputNow"></div>
-      <div class="phint setWarn hidden" id="setOutputNote"></div>
-    </div>
-    <div class="sbSetGroup" id="setKeys">
-      <div class="ptitle">Keys</div>
-      <div class="prow">
-        <label for="setKeyPreset">Key preset</label>
-        <div class="pctl pctlWide"><select id="setKeyPreset" title="Which key set the page and the menu use. Help > Keyboard Shortcuts lists the keys of the active preset."></select></div>
-      </div>
-      <div class="phint">Pro Tools is the default set. Cubase changes the keys of the hits, the zoom, the nudge, mute, solo and the transport (Help > Keyboard Shortcuts lists them).</div>
-    </div>
-    <div class="sbSetGroup" id="setView">
-      <div class="ptitle">View</div>
-      <div class="prow">
-        <label for="setZoomTall">Zoom Toggle expands track height</label>
-        <div class="pctl"><input type="checkbox" id="setZoomTall"></div>
-      </div>
-      <div class="phint">E zooms to the selected range (or hit). When this is on, E also doubles the height of the track that holds it; E again puts the zoom, the scroll position and the heights back.</div>
-    </div>
-    <div class="sbSetGroup">
-      <div class="ptitle">Tab navigation</div>
-      <div class="prow">
-        <label for="setTabMode">Tab moves to</label>
-        <div class="pctl pctlWide"><select id="setTabMode" title="Which hits the Tab and Option+Tab keys step to. Active hits only skips the deactivated (grey) hits; all found hits visits them too."><option value="active">active hits only</option><option value="all">all found hits</option></select></div>
-      </div>
-      <div class="phint">A deactivated hit (cut, bleed, filtered) keeps its grey state when it is selected: a dashed grey line with the selection ring, and the counter and the info line say "deactivated".</div>
-    </div>
-    <div class="sbSetGroup" id="setAudition">
-      <div class="ptitle">Audition</div>
-      <div class="prow">
-        <label for="setAuditionTab">Audition on Tab</label>
-        <div class="pctl"><input type="checkbox" id="setAuditionTab"></div>
-      </div>
-      <div class="phint">A plays the selected hit on its track alone (30 ms before to 250 ms after); Shift+A loops until Escape or Space; a range selection loops the range. When this is on, Tab and the other keys that step to a hit also play it.</div>
-    </div>
-    <div class="sbSetGroup">
-      <div class="ptitle">Metronome click</div>
-      <div class="prow">
-        <label for="setClickOn">Click on every hit</label>
-        <div class="pctl"><input type="checkbox" id="setClickOn"></div>
-      </div>
-      <div class="prow">
-        <label for="setClickVol">Click volume</label>
-        <div class="pctl pctlWide"><input type="range" id="setClickVol" min="0" max="100" value="22"></div>
-      </div>
-      <div class="phint">Plays a short beep on every hit of audible tracks during playback. The pitch is set per role below, so you can hear which lane plays.</div>
-    </div>
-    <div class="sbSetGroup">
-      <div class="ptitle">Click pitches (Hz)</div>
-      <div id="setPitches"></div>
-    </div>
-    <div class="sbSetGroup">
-      <div class="ptitle">Detector plug-ins</div>
-      <div id="setPlugins"><span class="phint">No detector plug-ins installed.</span></div>
-      <div class="phint">A plug-in is one folder per plug-in in
-      ~/Library/Application Support/Drum Spike/Detectors/. The licence text of every plug-in is shown here before its first use in a project.</div>
-    </div>
-    <div class="sbSetGroup" id="setAgentSkill">
-      <div class="ptitle">Agent fine-tune skill</div>
-      <div class="prow">
-        <label id="setSkillStatus">Checking ...</label>
-        <button type="button" id="setSkillInstall" class="btn mini">Install</button>
-      </div>
-      <div class="phint">Lets an AI agent such as Claude Code fine-tune the hits of one song for you, hit by hit. Install copies the skill to ~/.claude/skills/drumspike-finetune. Then run this line once in a terminal:</div>
-      <div class="prow">
-        <code id="setSkillCmd" class="skillCmd"></code>
-        <button type="button" id="setSkillCopy" class="btn mini">Copy</button>
+      <div class="setPage" id="setPage">
+        <div class="setCat" id="setAudio" data-cat="audio">
+          <div class="ptitle">Audio output</div>
+          <div class="prow">
+            <label for="setOutput">Output device</label>
+            <div class="pctl pctlWide"><select id="setOutput" title="Where Drum Spike plays. System default follows the macOS Sound setting."></select></div>
+          </div>
+          <div class="phint" id="setOutputNow"></div>
+          <div class="setWarnSlot"><div class="phint setWarn hidden" id="setOutputNote"></div></div>
+        </div>
+        <div class="setCat" id="setKeys" data-cat="keyboard">
+          <div class="ptitle">Keys</div>
+          <div class="prow">
+            <label for="setKeyPreset">Key preset</label>
+            <div class="pctl pctlWide"><select id="setKeyPreset" title="Which key set the page and the menu use. Help > Keyboard Shortcuts lists the keys of the active preset."></select></div>
+          </div>
+          <div class="phint">Pro Tools is the default set. Cubase changes the keys of the hits, the zoom, the nudge, mute, solo and the transport (Help > Keyboard Shortcuts lists them).</div>
+        </div>
+        <div class="setCat" id="setView" data-cat="view">
+          <div class="ptitle">View</div>
+          <div class="prow">
+            <label for="setZoomTall">Zoom Toggle expands track height</label>
+            <div class="pctl"><input type="checkbox" id="setZoomTall"></div>
+          </div>
+          <div class="phint">E zooms to the selected range (or hit). When this is on, E also doubles the height of the track that holds it; E again puts the zoom, the scroll position and the heights back.</div>
+          <div class="ptitle">Tab navigation</div>
+          <div class="prow">
+            <label for="setTabMode">Tab moves to</label>
+            <div class="pctl pctlWide"><select id="setTabMode" title="Which hits the Tab and Option+Tab keys step to. Active hits only skips the deactivated (grey) hits; all found hits visits them too."><option value="active">active hits only</option><option value="all">all found hits</option></select></div>
+          </div>
+          <div class="phint">A deactivated hit (cut, bleed, filtered) keeps its grey state when it is selected: a dashed grey line with the selection ring, and the counter and the info line say "deactivated".</div>
+        </div>
+        <div class="setCat" id="setAudition" data-cat="audition">
+          <div class="ptitle">Audition</div>
+          <div class="prow">
+            <label for="setAuditionTab">Audition on Tab</label>
+            <div class="pctl"><input type="checkbox" id="setAuditionTab"></div>
+          </div>
+          <div class="phint">A plays the selected hit on its track alone (30 ms before to 250 ms after); Shift+A loops until Escape or Space; a range selection loops the range. When this is on, Tab and the other keys that step to a hit also play it.</div>
+          <div class="ptitle">Metronome click</div>
+          <div class="prow">
+            <label for="setClickOn">Click on every hit</label>
+            <div class="pctl"><input type="checkbox" id="setClickOn"></div>
+          </div>
+          <div class="prow">
+            <label for="setClickVol">Click volume</label>
+            <div class="pctl pctlWide"><input type="range" id="setClickVol" min="0" max="100" value="22"></div>
+          </div>
+          <div class="phint">Plays a short beep on every hit of audible tracks during playback. The pitch is set per role in the Pitches category, so you can hear which lane plays.</div>
+        </div>
+        <div class="setCat" id="setPitchCat" data-cat="pitches">
+          <div class="ptitle">Click pitches (Hz)</div>
+          <div id="setPitches"></div>
+        </div>
+        <div class="setCat" id="setPluginsCat" data-cat="plugins">
+          <div class="ptitle">Detector plug-ins</div>
+          <div id="setPlugins"><span class="phint">No detector plug-ins installed.</span></div>
+          <div class="phint">A plug-in is one folder per plug-in in
+          ~/Library/Application Support/Drum Spike/Detectors/. The licence text of every plug-in is shown here before its first use in a project.</div>
+        </div>
+        <div class="setCat" id="setAgentSkill" data-cat="agent">
+          <div class="ptitle">Agent fine-tune skill</div>
+          <div class="prow">
+            <label id="setSkillStatus">Checking ...</label>
+            <button type="button" id="setSkillInstall" class="btn mini">Install</button>
+          </div>
+          <div class="phint">Lets an AI agent such as Claude Code fine-tune the hits of one song for you, hit by hit. Install copies the skill to ~/.claude/skills/drumspike-finetune. Then run this line once in a terminal. Quit the Drum Spike window before the agent starts (the bridge needs the app home). The line is per user: it registers the server for every folder.</div>
+          <div class="prow">
+            <code id="setSkillCmd" class="skillCmd"></code>
+            <button type="button" id="setSkillCopy" class="btn mini">Copy</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="modal-actions"><button id="settingsDone" class="btn primary">Done</button></div>

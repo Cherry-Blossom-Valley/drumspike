@@ -20,7 +20,7 @@ Without the link use the binary itself: `"/Applications/Drum Spike.app/Contents/
 ## Claude Code
 
 ```bash
-claude mcp add drumspike -- drumspike mcp
+claude mcp add --scope user drumspike -- drumspike mcp
 ```
 
 Then ask: "Open ~/Music/Sessions/Song, analyse it, fix the kick, save, and export all." The server lists one tool per command.

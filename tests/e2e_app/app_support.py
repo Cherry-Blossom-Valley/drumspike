@@ -341,9 +341,15 @@ def preset_home(app):
     app.evaluate("() => { DSKeys.setPreset('default'); delete window.__DS_NATIVE_MENU__; }")
 
 
+def settings_cat(page, cat):
+    """#387: the Settings dialog is a preferences window with a category list; open one."""
+    page.click(f"#setCat-{cat}")
+
+
 def choose(page, value):
     """The user's way: the select in the Settings sheet."""
     menu(page, "settings")
+    settings_cat(page, "keyboard")
     page.select_option("#setKeyPreset", value)
     page.click("#settingsDone")
     expect(page.locator("#settingsModal")).to_be_hidden()
