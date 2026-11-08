@@ -1,6 +1,6 @@
 {
   "name": "part-agent",
-  "title": "Screen recording: the agent fine-tune feature (guide chapter 15) (#373)",
+  "title": "Screen recording: the agent fine-tune feature (guide chapter 15) (#373, re-take #381)",
   "script": "docs/product/scripts/rec-agent.md",
   "standard": true,
   "viewport": {"width": 1920, "height": 1080},
@@ -10,23 +10,42 @@
   "out": "~/.cache/drumspike/media/rec/part-agent.mp4",
   "scenes": [
     {
-      "id": "ra-mode",
-      "area_sel": "#statusbar",
+      "id": "ra-prompt",
       "steps": [
-        {"do": "caption", "text": "View > Training Mode"},
-        {"do": "menu", "id": "training_mode"},
-        {"do": "wait", "cond": "() => !document.querySelector('#stTraining').classList.contains('hidden')",
-         "timeout": 10, "err": "the training count visible (the mode is on)"},
-        {"do": "text", "sel": "#stMsg", "contains": "training mode: on"},
+        {"do": "caption", "text": "you ask the agent to fine-tune the song"},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/prompt.txt",
+         "lines": [1, 1], "title": "claude -p"},
         {"do": "hold", "s": 2.5}
       ]
     },
     {
-      "id": "ra-install",
+      "id": "ra-skill",
+      "steps": [
+        {"do": "caption", "text": "the agent loads the drumspike-finetune skill and works hit by hit"},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
+         "lines": [1, 1], "title": "claude -p"},
+        {"do": "hold", "s": 2.5},
+        {"do": "set_training"},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
+         "lines": [3, 7]},
+        {"do": "hold", "s": 2.5},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
+         "lines": [8, 13]},
+        {"do": "hold", "s": 2.5}
+      ]
+    },
+    {
+      "id": "ra-setup",
       "area_sel": "#setAgentSkill",
       "steps": [
-        {"do": "caption", "text": "Settings: the Agent fine-tune skill row"},
+        {"do": "caption", "text": "the set up: install the skill, run the one mcp line"},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
+         "clear": true},
+        {"do": "hold", "s": 1.5},
         {"do": "menu", "id": "settings"},
+        {"do": "hold", "s": 1.5},
+        {"do": "click", "sel": "#setCat-agent", "timeout": 10,
+         "err": "the Agent category of the Settings sheet"},
         {"do": "visible", "sel": "#setAgentSkill", "timeout": 10},
         {"do": "shot"},
         {"do": "hold", "s": 1.5},
@@ -41,27 +60,10 @@
          "text": "installed. The skill is in ~/.claude/skills/drumspike-finetune"},
         {"do": "shot"},
         {"do": "hold", "s": 1.5},
-        {"do": "click", "sel": "#settingsDone", "timeout": 10, "err": "Done closes the Settings sheet"},
-        {"do": "wait", "cond": "() => document.querySelector('#settingsModal').classList.contains('hidden')",
-         "timeout": 10, "err": "the Settings sheet closed"},
-        {"do": "hold", "s": 1.5}
-      ]
-    },
-    {
-      "id": "ra-mcp",
-      "area_sel": "#setAgentSkill",
-      "steps": [
-        {"do": "caption", "text": "the claude mcp add line"},
-        {"do": "menu", "id": "settings"},
-        {"do": "visible", "sel": "#setAgentSkill", "timeout": 10},
-        {"do": "shot"},
-        {"do": "hold", "s": 1.5},
-        {"do": "show_text", "sel": "#setSkillCmd",
-         "text": "claude mcp add --scope user drumspike -- \"<the Drum Spike binary>\" mcp"},
         {"do": "click", "sel": "#setSkillCopy", "timeout": 10, "err": "the Copy click"},
         {"do": "text", "sel": "#stMsg", "contains": "copied"},
         {"do": "shot"},
-        {"do": "hold", "s": 2.0},
+        {"do": "hold", "s": 1.5},
         {"do": "click", "sel": "#settingsDone", "timeout": 10, "err": "Done closes the Settings sheet"},
         {"do": "wait", "cond": "() => document.querySelector('#settingsModal').classList.contains('hidden')",
          "timeout": 10, "err": "the Settings sheet closed"},
@@ -71,9 +73,9 @@
     {
       "id": "ra-look",
       "steps": [
-        {"do": "caption", "text": "DSAgent.look"},
-        {"do": "zoom_to", "track": "s_top", "t": 4.375, "span": 0.5},
-        {"do": "agent", "fn": "look", "track": "s_top", "t": 4.375, "timeout": 30,
+        {"do": "caption", "text": "the agent looks at every hit before it touches it"},
+        {"do": "zoom_to", "track": "k_in", "t": 1.2501667, "span": 0.5},
+        {"do": "agent", "fn": "look", "track": "k_in", "t": 1.2501667, "timeout": 30,
          "err": "the look (the lane at sample zoom around the hit)"},
         {"do": "hold", "s": 3.0}
       ]
@@ -81,20 +83,21 @@
     {
       "id": "ra-move",
       "steps": [
-        {"do": "caption", "text": "DSAgent.move"},
-        {"do": "zoom_to", "track": "k_in", "t": 3.7501667, "span": 0.5},
+        {"do": "caption", "text": "a clear hit steps two samples onto the last sample of its line"},
+        {"do": "zoom_to", "track": "k_in", "t": 3.7501667, "span": 0.01},
+        {"do": "hold", "s": 10.0},
         {"do": "agent", "fn": "move", "track": "k_in", "t": 3.7501667, "args": [-2], "timeout": 30,
          "err": "the move (the nudge by whole samples; the sign checked against the plan)"},
-        {"do": "hold", "s": 3.0}
+        {"do": "hold", "s": 8.0}
       ]
     },
     {
       "id": "ra-confirm",
       "area_sel": "#statusbar",
       "steps": [
-        {"do": "caption", "text": "DSAgent.confirm"},
-        {"do": "zoom_to", "track": "s_top", "t": 5.625, "span": 0.5},
-        {"do": "agent", "fn": "confirm", "track": "s_top", "t": 5.625, "timeout": 30,
+        {"do": "caption", "text": "a hit the agent finds right it confirms"},
+        {"do": "zoom_to", "track": "k_in", "t": 3.1263125, "span": 0.5},
+        {"do": "agent", "fn": "confirm", "track": "k_in", "t": 3.1263125, "timeout": 30,
          "err": "the confirm (Hits > Confirm Hit through the page's own code)"},
         {"do": "text", "sel": "#stMsg", "contains": "hit confirmed"},
         {"do": "hold", "s": 2.5}
@@ -104,8 +107,8 @@
       "id": "ra-doubt",
       "steps": [
         {"do": "caption", "text": "the doubtful hit stays for you: no clear line before the hit"},
-        {"do": "zoom_to", "track": "s_top", "t": 7.0209375, "span": 0.5},
-        {"do": "agent", "fn": "look", "track": "s_top", "t": 7.0209375, "timeout": 30,
+        {"do": "zoom_to", "track": "k_in", "t": 1.8764792, "span": 0.5},
+        {"do": "agent", "fn": "look", "track": "k_in", "t": 1.8764792, "timeout": 30,
          "err": "the look at the wobbly hit (the lead is not a line, no move)"},
         {"do": "hold", "s": 3.5}
       ]
@@ -114,10 +117,21 @@
       "id": "ra-save",
       "area_sel": "#statusbar",
       "steps": [
-        {"do": "caption", "text": "DSAgent.save"},
+        {"do": "caption", "text": "the project is saved"},
         {"do": "agent", "fn": "save", "timeout": 30, "err": "the save"},
         {"do": "text", "sel": "#stMsg", "contains": "project saved"},
-        {"do": "text", "sel": "#stTraining", "contains": "records"},
+        {"do": "hold", "s": 2.5}
+      ]
+    },
+    {
+      "id": "ra-table",
+      "steps": [
+        {"do": "caption", "text": "the counts, per track"},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
+         "lines": [71, 75], "title": "claude -p"},
+        {"do": "hold", "s": 3.0},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
+         "lines": [87, 87], "title": "claude -p"},
         {"do": "hold", "s": 2.5}
       ]
     }
