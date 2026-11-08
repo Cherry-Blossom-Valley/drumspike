@@ -178,6 +178,13 @@ async function edIdle() { while (SH.pending) await SH.chain; }   // outside the 
    makes no step. The 400 ms write (markDirty) stays for the other steps (velocity map, re-pick undo, Learn); an edit sends
    those writes first (settleEvents), a save, an export and a re-pick wait for the edits (flushEvents, edIdle).
    A hit drag shows the hit at the pointer on the page's copy and commits one move on release. */
+/* #389: who makes the hit edits: "person" (the keyboard, the menu, the mouse) or "agent" (a window.DSAgent helper).
+   The training record of the edit says it (`by`). The DSAgent helpers set it around their await; a queued edit that
+   runs inside that window is the agent's. */
+let _editBy = "person";
+function setEditBy(by) { _editBy = by; }
+function editBy() { return _editBy; }
+
 const EDGEN = {};   // track -> counter: the page's list of a track was replaced by the stored hits (a drag in progress is void then)
 function adoptHits(raw, old, drop, make) {   // the stored hits with page ids: the hits the call did not touch keep theirs (undo steps)
   const gone = new Set(drop || []), pool = new Map();
@@ -212,7 +219,8 @@ async function edNow(name, mk, before) {   // true when the service applied the 
   let r;
   const training = trainingOn() && (!!pl.step || !!pl.confirm);   // #343: a plan with an undo step is the owner's correction (a confirm too, #354); an undo or redo (no step) is not
   const view = training ? trainingView(name) : null;   // #353: the view rides with the training flag
-  try { r = await B.eventsEdit(sid, name, pl.ops, training, view); }
+  const by = training ? editBy() : null;   // #389: person or agent, read when the call runs
+  try { r = await B.eventsEdit(sid, name, pl.ops, training, view, by); }
   catch (e) { setMsg(`edit: ${errText(e)}`); await edReload(sid, name); return false; }
   if (training) trainingNote(r);
   if (sid !== S.sid || !S.tracks[name]) return false;
