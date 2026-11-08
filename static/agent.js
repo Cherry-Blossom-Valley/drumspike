@@ -108,6 +108,8 @@
     /* the sample-zoom view on a hit (defaults 0.9 ms before, 0.6 ms after, amplitude to the local peak) */
     look(track, index, opts) {
       const o = opts || {};
+      /* #388: the user watches the window, so each helper names its step in the status line (the skill asks for it) */
+      if (S.events[track] && S.events[track][index]) setMsg(`agent: looking at ${track} hit ${index + 1}/${S.events[track].length}`);
       return view(track, index, o.before_ms === undefined ? SAMPLE_BEFORE_MS : o.before_ms, o.after_ms === undefined ? SAMPLE_AFTER_MS : o.after_ms, o);
     },
     /* the 20 ms view, for deletes and bleed questions */
@@ -122,6 +124,7 @@
         else select(track, index);
         const ok = await nudgeSelected(samples);
         const at = S.sel && S.sel.track === track ? S.sel.index : index;
+        if (ok) setMsg(`agent: moved ${track} hit ${at + 1}/${S.events[track].length} by ${samples} samples`);
         return { moved: !!ok, index: at, from, to: sampleOf(track, S.events[track][at]) };
       });
     },
@@ -165,12 +168,45 @@
       return out;
     },
     async save() { await saveProjectNow(); return { saved: !S.dirty }; },
+    /* #388: the project the window has open (its summary and track names), so an agent that calls the window knows what it edits */
+    async project() {
+      if (!S.sid) throw new Error("no project is open");
+      return { ...(await B.projectGet(S.sid)), tracks: Object.keys(S.tracks) };
+    },
+    /* #388: what the window shows in its status line and its selection field, and the Training Mode switch of the window */
+    statusLine() { return { message: $("#stMsg").textContent, selection: $("#stSel").textContent, training: $("#stTraining").classList.contains("hidden") ? null : $("#stTraining").textContent }; },
+    setTraining(on) { setTraining(!!on); return { training: trainingOn() }; },
     async status() {
       const on = trainingOn(), st = S.sid && on ? await B.trainingStatus(S.sid) : null;
       return { training: on, records: st ? st.records : 0, path: st ? st.path : null };
     },
   };
   window.DSAgent = DSAgent;
+
+  /* #388: the window endpoint (crates/app/src/window_relay.rs). The page long-polls window_call_next, runs the named helper of
+     DSAgent and answers with window_call_result. Only DSAgent's own functions run (never a name the object lacks), so the
+     endpoint reaches nothing else in the page. The loop ends when the service says the endpoint is closed, and starts again
+     after a failed poll. */
+  async function relayLoop() {
+    const poller = Math.random().toString(36).slice(2);   // a poll of this page ends the hanging polls of an earlier page
+    for (;;) {
+      let r;
+      try { r = await B.windowCallNext(25000, poller); } catch (e) { await new Promise(t => setTimeout(t, 2000)); continue; }
+      if (!r.enabled) return;
+      const c = r.call;
+      if (!c) continue;
+      try {
+        const f = Object.prototype.hasOwnProperty.call(DSAgent, c.fn) ? DSAgent[c.fn] : null;
+        if (typeof f !== "function") throw new Error(`no helper ${c.fn}`);
+        const v = await f.apply(DSAgent, c.args || []);
+        await B.windowCallResult(c.id, true, v);
+      } catch (e) {
+        await B.windowCallResult(c.id, false, undefined, String(e && e.message !== undefined ? e.message : e)).catch(() => {});
+      }
+    }
+  }
+  window.DSAgentRelay = { start: relayLoop };
+  if (typeof B !== "undefined" && B.windowCallNext) relayLoop();
 })();
 
 /* #371: Settings > Agent fine-tune skill. The status text (not installed / installed <version> / older copy), the Install

@@ -32,11 +32,14 @@ pub mod splash;
 pub mod tempo;
 pub mod tracks;
 pub mod window;
+pub mod window_relay;
 
 pub use drumspike_app::{CHAIN, DETECTOR, app_info_value};
 
 /// Start of the process, for the optional cold-start log.
 static START: OnceLock<Instant> = OnceLock::new();
+/// #388: the window endpoint, kept so that its file can be removed at exit.
+static WINDOW_ENDPOINT: OnceLock<drumspike_app::window_relay::Endpoint> = OnceLock::new();
 
 /// P3-15c: the workers of the async runtime. Every command that reads or writes files runs its
 /// body on the blocking pool ([`blocking`]), so the workers only start and finish commands.
@@ -906,6 +909,8 @@ macro_rules! command_handler {
             rowheights::row_heights_set,
             agent_skill::agent_skill_install,
             agent_skill::agent_skill_status,
+            window_relay::window_call_next,
+            window_relay::window_call_result,
             histogram::track_confidence,
             layer::track_layer_set,
             layer::track_layer_get,
@@ -1002,6 +1007,16 @@ fn lifecycle_setup(svc: &Service, app: &tauri::AppHandle) {
             }
         }
     }
+    // #388: the agent drives this window through a token-protected endpoint on 127.0.0.1 (port and token in
+    // `<home>/window-endpoint.json`, mode 0600); the file goes away at exit (`remove_window_endpoint`).
+    if let Some(home) = svc.home() {
+        match drumspike_app::window_relay::start(svc, &home) {
+            Ok(ep) => {
+                WINDOW_ENDPOINT.set(ep).ok();
+            }
+            Err(e) => eprintln!("drumspike: the window endpoint did not open: {e}"),
+        }
+    }
     if std::env::var_os("DRUMSPIKE_PROJECTS").is_none_or(|v| v.is_empty())
         && let Ok(dir) = app.path().document_dir()
     {
@@ -1090,7 +1105,12 @@ pub fn run() {
             }
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Opened { urls } => open::push(app, open::paths_of_urls(&urls)),
-            tauri::RunEvent::Exit => drumspike_app::trace::finish(),
+            tauri::RunEvent::Exit => {
+                if let Some(ep) = WINDOW_ENDPOINT.get() {
+                    ep.remove_file();
+                }
+                drumspike_app::trace::finish();
+            }
             _ => {}
         });
 }

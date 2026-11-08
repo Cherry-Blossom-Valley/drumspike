@@ -66,6 +66,17 @@ fn main() {
     };
     let port = listener.local_addr().map_or(args.port, |a| a.port());
     let svc = Service::new(ServiceConfig::from_env(&PathBuf::new()));
+    // #388: with DRUMSPIKE_WINDOW_ENDPOINT=1 the bridge opens the window endpoint like the app does (token file in the home)
+    if std::env::var_os("DRUMSPIKE_WINDOW_ENDPOINT").is_some_and(|v| v == "1") {
+        let Some(home) = svc.home() else {
+            eprintln!("ds-bridge: DRUMSPIKE_WINDOW_ENDPOINT=1 needs DRUMSPIKE_HOME");
+            std::process::exit(2);
+        };
+        if let Err(e) = drumspike_app::window_relay::start(&svc, &home) {
+            eprintln!("ds-bridge: cannot open the window endpoint: {e}");
+            std::process::exit(1);
+        }
+    }
     let bridge = Arc::new(Bridge::new(svc, args.static_dir));
     println!("ds-bridge listening on http://127.0.0.1:{port}/");
     let _ = std::io::stdout().flush();

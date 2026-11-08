@@ -13,30 +13,33 @@ The app installed this skill for the binary `<binary>`. Use that path as it stan
 
 ## Before you start
 
-In this order, before any session:
+The MCP server (the owner runs this once): `claude mcp add --scope user drumspike -- "<binary>" mcp`. The
+`--scope user` registers the server for every folder. Check with `claude mcp list`. Start the agent session after
+that (the MCP tools load at session start).
 
-1. Quit the Drum Spike window. The bridge needs the app home; a second home is not a way around it.
-2. The MCP server (the owner runs this once): `claude mcp add --scope user drumspike -- "<binary>" mcp`.
-   The `--scope user` registers the server for every folder. Check with `claude mcp list`.
-3. A browser tool the agent can drive, if the agent session has none: Claude in Chrome, or Playwright MCP.
-4. Start the agent session (the MCP tools load at session start).
+Two ways to reach the page helpers. Try the window first:
 
-If the bridge refuses with "the home is in use by app", ask the user to quit the Drum Spike window. Do not pass
-another home. If the session has no browser tool, ask for one. Do not script a browser yourself.
+- **A Drum Spike window is open (the default).** Call the helpers of the window with the MCP tool `agent_call`
+  (`fn` is the helper, `args` its arguments as a list), or from a terminal `"<binary>" cli agent_call <fn> [arg]...` (on the app binary the word `cli` comes first).
+  The user watches the edit right there; you need no browser and the user quits nothing. "The home is in use" then
+  means: use the window. Do not pass another home.
+- **No window is open** (`agent_call` answers "no Drum Spike window is open"): start the page with
+  `"<binary>" bridge` and drive it with a browser tool (Claude in Chrome, or Playwright MCP). If the session has
+  none, ask for one. Do not script a browser yourself. Open a visible browser window on the page by default
+  (headless only if the user asks). `window.DSAgent` is there when the page has loaded.
 
-The workflow is visible: open a visible browser window on the page by default (headless only if the user asks). Ask
-for the project path if the prompt has none. The user watches only; say so once at the start.
+Ask for the project path if the prompt has none. The user watches only; say so once at the start.
 
-## Set up (once)
-
-1. Start the page in the background: `"<binary>" bridge`. Open the address it prints in the browser you control.
-   `window.DSAgent` is there when the page has loaded.
+In the rest of this skill `DSAgent.x(...)` means the helper `x`: `agent_call` with `fn: "x"` in the window, a call in
+the page with the bridge.
 
 ## Workflow
 
-1. Open or import the session with the MCP tools (`project_open`, or `project_import`), then `analyze_start` and
-   `analyze_status` until `done`. Open the same project in the page.
-2. Turn Training Mode on: `setTraining(true)` in the page (in the window: View > Training Mode).
+1. In the window, `DSAgent.project()` says which project is open; if it is not the one asked for, ask the user to open
+   it there. With the bridge, open or import the session with the MCP tools (`project_open`, or `project_import`),
+   then `analyze_start` and `analyze_status` until `done`, and open the same project in the page. Do not call
+   `project_open` on a project the window holds: the app has it locked.
+2. Turn Training Mode on: `DSAgent.setTraining(true)` (in the window: View > Training Mode).
    Check `DSAgent.status()`.
 3. Per track: read `DSAgent.hits(track)`. Note the count and the doubtful hits.
 4. Work in chunks of about 100 hits, one chunk per call: `plan = await DSAgent.plan(track, from, to)`.
