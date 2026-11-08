@@ -63,6 +63,7 @@ def pick_hit(page, track, index):
 
 def set_audition_tab(page, on):
     page.evaluate("() => openSettings()")
+    page.click("#setCat-audition")   # #387: the Audition and click category
     page.locator("#setAuditionTab").set_checked(on)
     page.locator("#settingsDone").click()
     page.evaluate("() => document.activeElement && document.activeElement.blur()")

@@ -528,7 +528,11 @@ function setupGlobal() {
   $("#relinkClose").onclick = () => $("#relinkModal").classList.add("hidden");
   $("#relinkAgain").onclick = findMovedAudio;
   // P3-13a: the sidebar, the File menu and the ? button are gone; the native menu (shell.js) runs their actions
-  $("#settingsDone").onclick = () => $("#settingsModal").classList.add("hidden");
+  $("#settingsDone").onclick = () => settingsClose();   // #387: the focus goes back to the opener
+  document.querySelectorAll("#setCats .setCatBtn").forEach(b => b.onclick = () => {   // #387: the category list
+    settingsShowCat(b.dataset.cat);
+    localStorage.setItem("dsg_setcat", b.dataset.cat);   // the last open category, remembered per app home
+  });
   plHooks();   // #387: the licence and missing-plugin dialogs of the detector plugins
   pmHooks();
   $("#setOutput").onchange = ev => chooseAudioOutput(ev.target.value);
