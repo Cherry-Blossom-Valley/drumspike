@@ -77,6 +77,17 @@ def test_every_preexisting_control_id_still_exists_and_is_visible_in_its_categor
     app.click("#settingsDone")
 
 
+def test_every_input_and_select_in_the_dialog_has_a_bound_label_or_aria_label(app):
+    menu(app, "settings")
+    empty = app.evaluate("""() => [...document.querySelectorAll('#settingsModal input, #settingsModal select')]
+        .filter(c => c.type !== 'hidden')
+        .filter(c => { const l = c.labels && c.labels.length > 0; const a = c.hasAttribute('aria-label') || c.getAttribute('aria-labelledby');
+            return !l && !a; })
+        .map(c => c.id || c.name || c.type)""")
+    assert empty == [], empty
+    app.keyboard.press("Escape")
+
+
 def test_esc_closes_and_the_last_category_is_restored_after_reopen(app):
     menu(app, "settings")
     settings_cat(app, "agent")
