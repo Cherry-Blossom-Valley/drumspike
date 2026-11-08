@@ -15,7 +15,10 @@ ln -s "/Applications/Drum Spike.app/Contents/MacOS/drumspike-desktop" /usr/local
 ```
 
 Without the link use the binary itself: `"/Applications/Drum Spike.app/Contents/MacOS/drumspike-desktop" cli <command> ...` and
-`... drumspike-desktop mcp`.
+`... drumspike-desktop mcp`. The binary answers without a window: `drumspike-desktop --help` (also
+`-h` or `help`) prints the modes `bridge`, `cli`, `mcp`, `--app-info` and `--analyze`, and
+`--version` prints the version. Any other flag prints the usage to stderr and exits 2; an
+unknown flag never opens the window.
 
 ## Claude Code
 
@@ -284,12 +287,18 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
 - `look(track, index, opts?)`: selects the hit and sets the sample-zoom view (0.9 ms before, 0.6 ms after, the amplitude
   zoom to the local peak; `opts.before_ms`, `opts.after_ms`, `opts.amp` override; the page never shows less than 2 ms),
   waits for the draw and answers `{sample, start, hit_at, samples, trainingView, judge, ...}`. `samples` is the window as
-  shares of the local peak and `hit_at` is the place of the hit's own sample in it. `trainingView` is the view the record
+  shares of the local peak and `hit_at` is the place of the hit's own sample in it. `stroke_peak` (#394) is the hit's peak
+  in raw samples, the largest sample from the hit over the detector's own span (`EDGE_SPAN_S`, 5 ms); `null` when it
+  cannot be read. `trainingView` is the view the record
   will carry. `judge` is `{level, spread, first_off, suggest}`: the line before the hit, the first sample off the line
   and `suggest`, the offset in samples that the placement rule suggests (the hit is the last line sample before the
   stroke's first motion of either sign), or `null` when the line is not a line (a spread over 3 % of the local peak),
   nothing leaves it in the window, or the first sample off the line lies more than 12 samples before or 6 after the hit
-  (a pre-bump, bleed or wobble, not the stroke; `judge.why` is then `"departure far from the hit"`). A page in the
+  (a pre-bump, bleed or wobble, not the stroke; `judge.why` is then `"departure far from the hit"`). #394 adds a guard:
+  when the judge would move the hit earlier (`suggest` < 0) over a stretch that stands within the detector's own band
+  (`DEPARTURE_VIS_PCT`, 2.5 % of the hit's peak) of the line level, the bump is under the band and not the stroke's
+  first motion: `suggest` is 0 and `judge.why` is `"under the detector's band"`. Without a readable `stroke_peak` the
+  guard does not apply and the answer is main's. A page in the
   background gets no animation frames: `look` waits at most 300 ms for the draw and goes on, so a hidden page is slower
   but never stuck.
 - `wide(track, index)`: the same answer for the 20 ms view on the hit, for deletes and bleed checks.

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "media"))
+import check_paths  # noqa: E402
 import record  # noqa: E402
 
 
@@ -122,12 +123,13 @@ def test_the_part_agent_shows_no_host_path():
     import json as _json
     path = Path(__file__).resolve().parents[1] / "tools" / "media" / "scenarios" / "part-agent.json"
     raw = path.read_text(encoding="utf-8")
-    assert "/home" not in raw and "/Users" not in raw
+    banned = [w for w in check_paths.BANNED_BASE if w.startswith("/")]
+    assert banned and not any(w in raw for w in banned)
     scenario = _json.loads(raw)
     for sc in scenario["scenes"]:
         for st in sc["steps"]:
             shown = st.get("text", "")
-            assert not any(w in shown.lower() for w in ("/home", "/users", "/var/folders")), st
+            assert not any(w.lower() in shown.lower() for w in banned), st
 
 
 def test_the_part_agent_scenario_parses():
@@ -135,10 +137,186 @@ def test_the_part_agent_scenario_parses():
     import json as _json
     scenario = record.parse_scenario(_json.loads(path.read_text(encoding="utf-8")))
     ids = [sc["id"] for sc in scenario["scenes"]]
-    assert ids == ["ra-mode", "ra-install", "ra-mcp", "ra-look", "ra-move", "ra-confirm",
-                   "ra-doubt", "ra-save"]
+    assert ids == ["ra-prompt", "ra-skill", "ra-setup", "ra-look", "ra-move", "ra-confirm",
+                   "ra-doubt", "ra-save", "ra-table"]
     for sc in scenario["scenes"]:
         assert record.standard_problems(sc) == [], sc["id"]
     commands = record.keymap_commands(
         (Path(__file__).resolve().parents[1] / "static" / "keymap.js").read_text(encoding="utf-8"))
     assert record.caption_problems(scenario["scenes"], commands) == []
+
+
+# ---------------- the #381 re-take: prompt first, one visible move, no Training Mode ----------------
+
+def _part_agent_scenarios():
+    import json as _json
+    path = (Path(__file__).resolve().parents[1] / "tools" / "media" / "scenarios"
+            / "part-agent.json")
+    return record.parse_scenario(_json.loads(path.read_text(encoding="utf-8")))["scenes"]
+
+
+def test_the_part_agent_has_no_training_mode_topic():
+    """#381 gate (a): Training Mode is not a topic of the tutorial: no menu training_mode
+    step, no caption with Training, no step on the training count. The agent's skill turns it
+    on as its own step 2 (the silent set_training plumbing), narration says so once."""
+    import json as _json
+    for sc in _part_agent_scenarios():
+        for st in sc["steps"]:
+            assert st.get("id") != "training_mode", st
+            if st["do"] == "caption":
+                assert "training" not in st["text"].lower(), st
+            assert "#stTraining" not in _json.dumps(st), st
+    # the plumbing is there and silent: setTraining(true) through the page's own function
+    assert "setTraining(true)" in record.SET_TRAINING_JS
+
+
+def test_the_part_agent_opens_with_the_prompt_and_the_skill():
+    """The user's prompt and the skill load open the tutorial, typed from the #380 fixture
+    files (not inline), and the set up is one short scene."""
+    scenes = _part_agent_scenarios()
+    assert scenes[0]["id"] == "ra-prompt" and scenes[1]["id"] == "ra-skill"
+    for sc in (scenes[0], scenes[1]):
+        terms = [st for st in sc["steps"] if st["do"] == "terminal"]
+        assert terms, sc["id"]
+        for st in terms:
+            assert st["file"].startswith("tools/media/fixtures/agent-run/"), st
+            assert Path(st["file"]).name in ("prompt.txt", "transcript.txt")
+            assert "text" not in st and "equals" not in st   # no inline agent text
+    assert [sc["id"] for sc in scenes if sc["id"] == "ra-setup"] == ["ra-setup"]
+
+
+def test_the_part_agent_pane_wraps_and_leaves_the_six_scenes():
+    """#381 send-back round 2: the pane wraps its lines (the full prompt is visible in the
+    ra-prompt frame), ra-setup clears the pane and keeps it off through ra-look, ra-move,
+    ra-confirm, ra-doubt and ra-save, and ra-table starts on a cleared pane."""
+    scenes = _part_agent_scenarios()
+    # the prompt wraps, so the whole 178-character line is in the frame
+    assert "pre-wrap" in record.TERMINAL_JS and "overflowWrap" in record.TERMINAL_JS
+    # the last typed line stays visible: the pane trims from the top at max-height
+    assert "scrollHeight > pane.clientHeight" in record.TERMINAL_JS
+    by_id = {sc["id"]: sc for sc in scenes}
+    setup = by_id["ra-setup"]["steps"]
+    assert setup[1] == {"do": "terminal",
+                        "file": "tools/media/fixtures/agent-run/transcript.txt",
+                        "clear": True}, setup[:2]
+    assert setup[2] == {"do": "hold", "s": 1.5}   # the recording standard's hold after the clear
+    for sid in ("ra-look", "ra-move", "ra-confirm", "ra-doubt", "ra-save"):
+        terms = [st for st in by_id[sid]["steps"]
+                 if st["do"] == "terminal" and st.get("clear") is not True]
+        assert not terms, (sid, terms)
+    table_terms = [st for st in by_id["ra-table"]["steps"] if st["do"] == "terminal"]
+    assert table_terms[0]["lines"] == [71, 75] and table_terms[1]["lines"] == [87, 87]
+    # the move lands on the spoken words: about 10 s of hold before it in the 26 s scene
+    move_steps = by_id["ra-move"]["steps"]
+    pre = [st["s"] for st in move_steps if st["do"] == "hold"][0]
+    assert pre >= 8.0, move_steps
+
+
+def test_terminal_step_types_the_fixture_file_not_inline_text(tmp_path, monkeypatch):
+    """#381 gate (c): the terminal pane text is the fixture transcript, read from the file at
+    the run: the step carries the path and the 1-based lines, never the text itself."""
+    (tmp_path / "fixtures" / "agent-run").mkdir(parents=True)
+    fx = tmp_path / "fixtures" / "agent-run" / "transcript.txt"
+    fx.write_text("first line\nsecond line\nthird line\n", encoding="utf-8")
+    monkeypatch.setattr(record, "ROOT", tmp_path)
+    pg = StubPage()
+    record.run_step(pg, {"do": "terminal", "file": "fixtures/agent-run/transcript.txt",
+                         "lines": [2, 3], "title": "claude -p"}, {})
+    typed = [arg for js, arg in pg.calls if js == record.TERMINAL_JS]
+    assert typed == [["claude -p", "second line"], ["claude -p", "third line"]]
+    # the fixture is read from the file, so a later fixture edit changes the pane: the same
+    # step typed against an edited file types the edited line
+    fx.write_text("first line\nedited line\nthird line\n", encoding="utf-8")
+    pg2 = StubPage()
+    record.run_step(pg2, {"do": "terminal", "file": "fixtures/agent-run/transcript.txt",
+                          "lines": [2, 2]}, {})
+    assert [arg for js, arg in pg2.calls if js == record.TERMINAL_JS] == [[None, "edited line"]]
+    # a missing fixture is a clear FAIL, never a placeholder
+    with pytest.raises(record.RecordError, match="the fixture is missing"):
+        record.run_step(StubPage(), {"do": "terminal",
+                                     "file": "fixtures/agent-run/absent.txt",
+                                     "lines": [1, 1]}, {})
+    # out-of-range lines FAIL with the count
+    with pytest.raises(record.RecordError, match="the fixture has 3 lines"):
+        record.run_step(pg, {"do": "terminal", "file": "fixtures/agent-run/transcript.txt",
+                             "lines": [1, 9]}, {})
+
+
+def test_terminal_clear_and_parse_rules():
+    pg = StubPage()
+    record.run_step(pg, {"do": "terminal", "clear": True}, {})
+    assert pg.calls[-1][0] == record.TERMINAL_CLEAR_JS
+    with pytest.raises(record.RecordError, match="needs file and lines"):
+        record.parse_scenario({"scenes": [scene([{"do": "terminal", "text": "invented"}])]})
+    with pytest.raises(record.RecordError, match="lines are \\[first, last\\]"):
+        record.parse_scenario({"scenes": [scene([{"do": "terminal", "file": "f.txt",
+                                                  "lines": [5, 2]}])]})
+
+
+def _view(pps, start=100.0, mx=400.0):
+    return {"px_per_sample": pps, "window_start": start, "marker_x": mx}
+
+
+def test_move_view_problems_holds_the_sample_zoom_gate():
+    """#381 gate (b): the same px_per_sample (>= 2) and window start over the move, the marker
+    shifts by exactly N samples within 1 px."""
+    good0, good1 = _view(3.0, mx=400.0), _view(3.0, mx=406.0)
+    assert record.move_view_problems(good0, good1, 2) == []
+    # the window moved: a re-zoom between the shots
+    assert "the window moved" in record.move_view_problems(good0, _view(3.0, start=99.0, mx=406.0), 2)[0]
+    # not sample zoom
+    assert "not sample zoom" in record.move_view_problems(_view(0.4), _view(0.4, mx=400.8), 2)[0]
+    # the marker did not step N samples
+    assert "expected 2 samples" in record.move_view_problems(good0, _view(3.0, mx=401.0), 2)[0]
+    # no view data (the test stubs): silent
+    assert record.move_view_problems(None, None, 2) == []
+
+
+def _frame(width=60, height=20, marker=None):
+    import numpy as _np
+    a = _np.full((height, width, 3), 30, _np.uint8)
+    if marker is not None:
+        a[:, marker] = 200
+    return a
+
+
+def test_move_diff_problems_want_the_marker_columns_only():
+    """The frame diff of the move scene changes pixels only in the marker columns: the old and
+    the new stalk of the spike and the wave lane. A wide run, a spread beyond the marker or a
+    many-column diff is a visible defect."""
+    before, after = _frame(marker=10), _frame(marker=16)
+    assert record.move_diff_problems(before, after) == []
+    # the stalks smear over 5+ px: not a clean step
+    smear = _frame()
+    smear[:, 10:17] = 200
+    assert any("column run" in p for p in record.move_diff_problems(before, smear))
+    # a stray change elsewhere (the status bar or a re-render): the diff spreads beyond the
+    # marker's columns
+    wide = _frame(marker=16)
+    wide[:, 40] = 220
+    assert any("spreads" in p for p in record.move_diff_problems(before, wide, max_span_px=10))
+    # the app's own selection annotation (the top band of the clip, wave.js) is not a defect
+    noted = _frame(marker=16)
+    noted[:4, 30:40] = 200
+    assert record.move_diff_problems(before, noted, mask_top=4) == []
+    # no change at all: the move is not visible
+    assert record.move_diff_problems(before, before) == ["no pixel changed: the move is not visible"]
+
+
+def test_the_move_scene_is_at_sample_zoom_and_holds_each_side():
+    """The move scene zooms to sample zoom (a 10 ms span: px_per_sample well over 2 on the
+    1920 viewport) and holds 2 s or more on each side of the move."""
+    scenes = _part_agent_scenarios()
+    moves = record.move_scenes(scenes)
+    assert [sc["id"] for sc in moves] == ["ra-move"]
+    steps = moves[0]["steps"]
+    zoom = next(st for st in steps if st["do"] == "zoom_to")
+    assert zoom["span"] <= 0.02   # 10 ms: 480 samples over a >960 px lane -> px_per_sample >= 2
+    mi = next(i for i, st in enumerate(steps)
+              if st["do"] == "agent" and st.get("fn") == "move")
+    before = next(st["s"] for st in steps[:mi] if st["do"] == "hold")
+    after = next(st["s"] for st in steps[mi + 1:] if st["do"] == "hold")
+    assert before >= 2.0 and after >= 2.0
+    assert abs(steps[mi]["args"][-1]) >= 2
+    # the recorder enforces the gate on the live page: the view data before and after the move
+    assert "px_per_sample" in record.VIEW_DATA_JS and "tToX" in record.HIT_X_JS

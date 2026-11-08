@@ -380,7 +380,10 @@ fn learn_this_and_learn_not_write_one_record_per_example() {
     assert!(recs[0]["confidence"]["c"].is_number());
     assert_eq!(recs[1]["audio"]["at_from"].as_array().unwrap().len(), WINDOW);
     // #389: a person's Learn mark is the person's record
-    assert_eq!((recs[0]["by"].clone(), recs[1]["by"].clone()), (json!("person"), json!("person")));
+    assert_eq!(
+        (recs[0]["by"].clone(), recs[1]["by"].clone()),
+        (json!("person"), json!("person"))
+    );
     // without the mode: no record, no new field
     let r = svc.track_learn_mark(&sid, "k in", "this", None, Some(1.5)).unwrap();
     assert!(r.get("training").is_none());

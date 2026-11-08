@@ -64,15 +64,15 @@ The judgment stops where the line is not a line. A wobbly lead, a spread over 0.
 
 ## s05-training
 
-> The training log line of the move as text: the op, the track, from and to (the recorded tutorial's own move: the k_in hit 180008 moved onto the last line sample 180006), precision sample, and the placement measures edge, line_noise, line_slope, onset_spread; the audio window is carried in the record.
+> The training log line of the move as text: the op, the track, from and to (the recorded tutorial's own move: the k_in hit 180008 moved onto the last line sample 180006), precision sample, and the placement measures; the title points to chapter 16.
 
-With Training Mode on, every move and confirm writes one line to the project's training log: the op, the position, the precision, and the placement measures of the hit. The record carries the samples around it, 40 milliseconds before and 10 after, so it can be read without the session.
+Each move and confirm also goes to the Training Mode log with its audio, and chapter 16 shows that record in full.
 
 ## s06-loop
 
-> The loop as three boxes: the agent's moves and confirms, the log, and your corrections in the review queue feeding the same log; training_export prints the truth list the placement is measured against.
+> The loop as three boxes: the agent's moves and confirms, the log, and your corrections in the review queue feeding the same log; the truth list points to chapter 16.
 
-That log is the loop. The agent's records and your corrections in the review queue land in the same file, and the export turns them into the truth list the placement is measured against. The more you correct, the better the measures say what a right hit looks like.
+The log and your corrections become the truth list the placement is measured against; chapter 16 tells that loop from your side.
 
 ## s07-result
 

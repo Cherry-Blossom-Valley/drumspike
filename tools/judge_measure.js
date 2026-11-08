@@ -11,11 +11,22 @@ const win = {};
 const src = agent.replace("window.DSAgent = DSAgent;", "DSAgent.judge = DSAgent.judge || judge; window.DSAgent = DSAgent;");
 vm.runInNewContext(src, { window: win, $: () => null, document: {}, console });
 const judge = win.DSAgent.judge;
+// #394: the judge takes the reference (declared length 3): the local peak over the hit's peak, for the guard. The
+// window then carries `stroke`, the raw samples of the detector's span (0.9 ms before to 5 ms after the hit, same
+// start as `samples`), whose tail from hit_at holds the hit's peak. An older judge (the "before" run) is 2-arg.
+const withRef = judge.length >= 3;
 
 const gold = {}, k = {}, rows = [];
 for (const w of windows) {
   const peak = Math.max(0, ...w.samples.map(Math.abs));
-  const j = judge(w.samples.map(v => (peak > 0 ? v / peak : 0)), w.hit_at);
+  let j;
+  if (withRef) {
+    if (!w.stroke) throw new Error(`window ${w.id} has no stroke span`);
+    const sp = Math.max(0, ...w.stroke.slice(w.hit_at).map(Math.abs));
+    j = judge(w.samples.map(v => (peak > 0 ? v / peak : 0)), w.hit_at, peak > 0 && sp > 0 ? peak / sp : null);
+  } else {
+    j = judge(w.samples.map(v => (peak > 0 ? v / peak : 0)), w.hit_at);
+  }
   if (w.set === "K") {
     const r = k[w.role] || (k[w.role] = { n: 0, moves: 0, by_move: {}, shapes: {} });
     r.n++;

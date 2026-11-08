@@ -947,7 +947,10 @@ impl Service {
         }
         if training && r.id.is_some() {
             let examples = self.training_learn_examples(sid, &target, kind, &resolved.at, &events, shift_s);
-            Self::training_note(&mut out, self.training_log(sid, &target, &examples, None, Some("person")));
+            Self::training_note(
+                &mut out,
+                self.training_log(sid, &target, &examples, None, Some("person")),
+            );
         }
         if r.id.is_some() {
             self.learn_refilter(sid, &target, was_on, &mut out);

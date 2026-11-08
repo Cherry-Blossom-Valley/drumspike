@@ -483,7 +483,10 @@ impl Service {
         if training {
             let mut examples = self.training_examples(sid, name, &current, &edit_ops, sr);
             examples.extend(self.training_confirm_examples(sid, name, &current, &confirms));
-            Self::training_note(&mut out, self.training_log(sid, name, &examples, view.as_ref(), by.or(Some("person"))));
+            Self::training_note(
+                &mut out,
+                self.training_log(sid, name, &examples, view.as_ref(), by.or(Some("person"))),
+            );
         }
         Ok(out)
     }

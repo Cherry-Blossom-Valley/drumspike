@@ -109,7 +109,10 @@ fn traced(
 /// - `--analyze <project_dir>...`: the output of `service_tool analyze` (one JSON line per
 ///   folder), for a check of the built app; exit 0, or 1 on an error.
 ///
-/// Any other first argument returns `None` and the app starts as usual.
+/// #383: `--help`, `-h` and `help` print [`USAGE`] and exit 0, `--version` prints the version.
+/// Any other first argument prints the usage to stderr and exits 2: the window starts only with
+/// no argument at all, with a macOS `-psn_` process serial argument, or with `--self-test ...`,
+/// which the window parses itself (`selftest::parse_args`).
 #[must_use]
 pub fn headless(args: &[String]) -> Option<i32> {
     headless_as("", args)
@@ -129,28 +132,74 @@ pub fn headless_as(program: &str, args: &[String]) -> Option<i32> {
     if by_name || matches!(args.first().map(String::as_str), Some("cli" | "mcp")) {
         return drumspike_app::agent::entry(program, args, Path::new(""));
     }
-    let mode = args.first()?.as_str();
-    if mode != "--app-info" && mode != "--analyze" {
+    // macOS hands a launched app a process serial number as the first argument
+    // (`-psn_0_12345`, Finder, the first launch of a downloaded app): not a mode, so the
+    // window starts, the same as with no argument at all.
+    if args.first().is_some_and(|a| a.starts_with("-psn_")) {
         return None;
     }
-    if mode == "--app-info" {
-        let v = app_info_value(Path::new(""), true);
-        println!("{v}");
-        return Some(0);
-    }
-    let svc = Service::new(ServiceConfig::from_env(Path::new("")));
-    match drumspike_app::headless::analyze_projects(&svc, &args[1..]) {
-        Ok(rows) => {
-            for v in rows {
-                println!("{v}");
-            }
+    let mode = args.first()?.as_str();
+    match mode {
+        // #383: a help or version ask never starts the window (the owner's test: the agent ran
+        // `--help` and a second app instance opened).
+        "help" | "-h" | "--help" => {
+            println!("{USAGE}");
             Some(0)
         }
-        Err(e) => {
-            eprintln!("drumspike-desktop --analyze: {e}");
-            Some(1)
+        "--version" => {
+            println!("{}", version_line());
+            Some(0)
+        }
+        "--app-info" => {
+            let v = app_info_value(Path::new(""), true);
+            println!("{v}");
+            Some(0)
+        }
+        "--analyze" => {
+            let svc = Service::new(ServiceConfig::from_env(Path::new("")));
+            match drumspike_app::headless::analyze_projects(&svc, &args[1..]) {
+                Ok(rows) => {
+                    for v in rows {
+                        println!("{v}");
+                    }
+                    Some(0)
+                }
+                Err(e) => {
+                    eprintln!("drumspike-desktop --analyze: {e}");
+                    Some(1)
+                }
+            }
+        }
+        // The window's own argument today: the self-test runs inside the window and the report
+        // command reads the process arguments again (`selftest::parse_args`).
+        "--self-test" => None,
+        other => {
+            eprintln!("drumspike-desktop: unknown argument `{other}`, the usage follows");
+            eprint!("{USAGE}");
+            Some(2)
         }
     }
+}
+
+/// The usage that `--help`, `-h` and `help` print (#383): one line per mode without a window.
+/// The `bridge` row is the line of `drumspike_app::cli::help_text`; `cli` and `mcp` the wording
+/// of `drumspike_app::agent`.
+const USAGE: &str = "\
+drumspike-desktop <mode>
+
+  bridge [--port N] [--home DIR] [--projects DIR] [--static DIR]  the page mode: the app's page and the invoke API on 127.0.0.1 (docs/agent-api.md, \"Page mode\")
+  cli <command> [--name value]...  the command-line tool: `drumspike help` lists the commands
+  mcp  the MCP server of the agent API
+  --app-info  the detector and the chain as one JSON line
+  --analyze <project_dir>...  one JSON line per folder, for a check of the built app
+
+  help, -h, --help  this usage;  --version  the version
+";
+
+/// The `--version` line (#383).
+#[must_use]
+pub fn version_line() -> String {
+    format!("drumspike-desktop {}", drumspike_core::VERSION)
 }
 
 /// #370 `drumspike bridge [--port N] [--home DIR] [--projects DIR] [--static DIR]`: the page
