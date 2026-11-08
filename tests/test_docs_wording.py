@@ -321,6 +321,18 @@ STALE_SPIKE_FILES = ("static/index.html", "crates/app/src/api.rs")
 STALE_SPIKE_TEXTS = ("1.5 cycles of the track", "1.5 cycles per hit", "2-30 ms")
 
 
+def test_finetune_skill_treats_null_as_no_verdict():
+    """#409: the skill no longer leaves a hit unseen because the judge answered null, and no longer
+    keeps a wobbly line doubtful on its own words: null or stands is not a verdict."""
+    skill = Path(__file__).resolve().parent.parent / "skills" / "drumspike-finetune" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+    assert "Never move a hit whose" not in text
+    assert "A wobbly line stays doubtful" not in text
+    assert "not a verdict" in text
+    assert "no_quiet_line" in text and "looked at, right" in text and "not looked at" in text
+    assert "DSAgent.audit" in text and "DSAgent.backups" in text
+
+
 def test_audio_spike_texts_describe_the_body_rule():
     """#402: the Audio line of the export guide describes what #378 does (the hit's body:
     the smoothed low tone over its first three clear swings, cut at the zero crossing). The

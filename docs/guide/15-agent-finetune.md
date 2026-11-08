@@ -40,8 +40,9 @@ The agent works on the song that is open in the window, turns on Training Mode (
 Mode), and steps through the hits so you can watch, one hit at a time (it plans in chunks of
 about 100 hits). For each hit it looks at a window of about a millisecond around the hit, at
 sample zoom, names each step in the status line and holds briefly after each move. After the
-save it reports a per-track table (hits, moved, confirmed, hand-placed and untouched, no
-suggestion, doubtful, and a total row) and asks you once whether to export now or leave it.
+save it reports a per-track table (hits, moved, confirmed, hand-placed, looked at and right, no
+quiet stretch, not looked at, and a total row) and asks you once whether to export now or leave
+it.
 
 ## What the agent does and does not do
 
@@ -50,9 +51,16 @@ suggestion, doubtful, and a total row) and asks you once whether to export now o
 - It confirms a hit it has looked at and found right (Hits > Confirm Hit), so the Training Mode
   log says "reviewed" for that hit.
 - It never deletes a hit without first looking at a 20 ms view of it.
-- It leaves a wobbly line, a hit with a noisy lead-in and every other doubtful hit as it is, and
-  lists them at the end: the track, the hit number, the time and the reason.
-- It reports counts only: how many hits it saw, moved, confirmed and left for you.
+- It looks at every hit. An answer of "the judge cannot tell" is not a verdict: the agent looks
+  at the hit itself and moves it when the stroke starts late. It leaves a hit as it is only
+  when no quiet stretch lies before it, and lists those at the end: the track, the hit number,
+  the time and the verdict.
+- After the moves it reads every moved hit again, and before the save it checks every track once
+  more: a hit that is still late is listed one by one, with the reason.
+- Its report after the save splits the untouched hits into "looked at, right" and "no quiet
+  stretch", and its "not looked at" column is zero.
+- It reports counts only: how many hits it saw, moved, confirmed and left for you. The save keeps
+  a backup of the state before the session, and the agent can name it.
 
 Because Training Mode is on, every move and confirm of the agent is written to the training log
 exactly as if you had made it, with the view and the precision, and the log says who made each

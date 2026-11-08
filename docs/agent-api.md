@@ -304,11 +304,18 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   `"under the detector's band"` when the foot is earlier) or when no step near the hit is over the band (the stroke rises
   past the view; `judge.why` is `"no step above the band near the hit"`), and `null` when the verdict is
   `no_quiet_line` or the foot lies more than 12 samples before or 6 after the hit (a pre-bump, bleed or wobble,
-  not the stroke; `judge.why` is then `"departure far from the hit"`, the verdict is still `late` or `at_foot`). Without a
+  not the stroke; `judge.why` is then `"departure far from the hit"`, the verdict is still `late` or `at_foot`). When
+  the verdict is `late`, move the hit by `judge.foot_off` samples (a whole number; negative is earlier); a late hit can
+  carry a `null` `suggest` when its foot is far from the hit - look at those yourself, and list one you do not move
+  with the reason. Without a
   readable `stroke_peak` the band is 3 % of the local peak. A page in the
   background gets no animation frames: `look` waits at most 300 ms for the draw and goes on, so a hidden page is slower
   but never stuck.
 - `wide(track, index)`: the same answer for the 20 ms view on the hit, for deletes and bleed checks.
+- `render(track, index, opts?)`: a picture of the view as the user sees it: the sample-zoom window of the hit
+  (the `look` defaults; `opts.before_ms`, `opts.after_ms`, `opts.amp` override), drawn from the same samples and
+  amplitude zoom the page draws, with the hit marked. Answers `{track, index, sample, width, height, format,
+  image}`; `image` is a PNG data URL.
 - `move(track, index, samples)`: the nudge by whole samples (negative is earlier) with the view at sample zoom, so the
   record says precision `sample`. Answers `{moved, index, from, to}`.
 - `confirm(track, index)`: Hits > Confirm Hit for a reviewed, unchanged hit. `undo()`: Edit > Undo; an undo writes no record.
@@ -320,7 +327,10 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   quiet_ratio}]`. It reads the shape measures of `look` and never `judge.suggest` or a `plan` row, so a wrong suggestion
   cannot hide a late hit. One `look` per hit: run it on a track you have not finished, not in a loop.
 - `apply(track, list)`: the moves `[{index, samples}]` (a row of `plan` also works, its `suggest` is used); a zero or `null`
-  move is skipped. `save()` writes the project. `status()` answers `{training, records, path}`.
+  move is skipped. `save()` writes the project. `backups()` answers `{rule, before}`: a backup is named with the time of
+  the save that replaced it, but holds the state as it was just BEFORE that save - `before` names the backup that holds
+  the state before this session (the one the session's first save wrote; `null` until the session saves). `status()`
+  answers `{training, records, path}`.
 - `statusLine()`: what the window shows, `{message, selection, training}` (the status message, the selection field and the
   Training Mode counter, `null` while the mode is off). `setTraining(on)`: the window's Training Mode switch, answers `{training}`.
 
@@ -332,9 +342,9 @@ writes `<home>/window-endpoint.json` (`{port, token, pid}`, mode 0600, removed a
 can call.
 
 - `POST http://127.0.0.1:<port>/call` with `Authorization: Bearer <token>` and the body `{"fn": "move", "args": ["Kick In", 1, 3],
-  "timeout_ms": 60000?}`. `fn` is one of `project`, `hits`, `look`, `wide`, `move`, `confirm`, `undo`, `plan`, `audit`, `apply`, `save`,
-  `status`, `statusLine`, `setTraining`; any other name is refused with 400 before it reaches the page. The answer is
-  `{"ok": true, "value": <what the helper returned>}`.
+  "timeout_ms": 60000?}`. `fn` is one of `project`, `hits`, `look`, `wide`, `render`, `move`, `confirm`, `undo`, `plan`,
+  `audit`, `apply`, `save`, `backups`, `status`, `statusLine`, `setTraining`; any other name is refused with 400 before it
+  reaches the page. The answer is `{"ok": true, "value": <what the helper returned>}`.
 - Errors: 401 without the token (or a wrong one); 409 when no page listens or the helper refused (its message is the page's,
   for example "Training Mode is off"); 504 when the page did not answer within `timeout_ms` (default 60 s, at most 600 s).
 - `GET /status` (same token) answers `{listening, helpers}`.
