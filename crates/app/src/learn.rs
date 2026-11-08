@@ -947,7 +947,7 @@ impl Service {
         }
         if training && r.id.is_some() {
             let examples = self.training_learn_examples(sid, &target, kind, &resolved.at, &events, shift_s);
-            Self::training_note(&mut out, self.training_log(sid, &target, &examples, None));
+            Self::training_note(&mut out, self.training_log(sid, &target, &examples, None, None));
         }
         if r.id.is_some() {
             self.learn_refilter(sid, &target, was_on, &mut out);
@@ -1145,7 +1145,7 @@ impl Service {
         let n = ops.len();
         if n > 0 {
             // P4-38e: not a hand delete, so the swept hits do not go in `learn.dropped`
-            self.events_edit_as(sid, name, &ops, false, false, None)?;
+            self.events_edit_as(sid, name, &ops, false, false, None, None)?;
         }
         Ok(n)
     }

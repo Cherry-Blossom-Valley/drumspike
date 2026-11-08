@@ -26,6 +26,15 @@ BINS = [("<=-100", None, -100), ("-99..-11", -99, -11), ("-10..-2", -10, -2), ("
 # the precisions of the printout, in this order; a record without one (an older log, a Learn mark) is `-`
 PRECISIONS = ("sample", "ms", "-")
 
+# #389: who made the edit; a record without `by` (an older log, a Learn mark) is `unknown`
+BY_LABELS = ("person", "agent", "unknown")
+
+
+def by_of(r):
+    """The label of a record's `by` (`unknown` when the record carries none)."""
+    b = r.get("by")
+    return b if b in ("person", "agent") else "unknown"
+
 
 # #363: an exact record has a counting edge, a line noise of at most this share of the peak (the review queue's
 # threshold) and an onset spread under this many samples; the measures a record carries under `placement`
@@ -80,15 +89,25 @@ def exact_of(r):
 
 
 def truth_list(records):
-    """`[{track, role, from, to, op, precision, exact, edge, line_noise, line_slope, onset_spread}]` of the records;
-    `exact` and the four measures are null for a record without `placement`."""
+    """`[{track, role, from, to, op, precision, by, exact, edge, line_noise, line_slope, onset_spread}]` of the records;
+    `exact` and the four measures are null for a record without `placement`, `by` is null without a `by` (#389)."""
     out = []
     for r in records:
         p = r.get("placement") if isinstance(r.get("placement"), dict) else {}
+        b = r.get("by")
         out.append({"track": r.get("track"), "role": r.get("role"), "from": r.get("from"), "to": r.get("to"),
-                    "op": r["op"], "precision": r.get("precision"), "exact": exact_of(r),
+                    "op": r["op"], "precision": r.get("precision"), "by": b if b in ("person", "agent") else None,
+                    "exact": exact_of(r),
                     **{k: p.get(k) for k in MEASURES}})
     return out
+
+
+def by_filter(records, by):
+    """The records the export keeps (#389): `person` (the default) drops the agent rows, `all` keeps every record
+    with a `by` (person and agent); a record without `by` (an older log) is `unknown` and the report shows it."""
+    if by == "all":
+        return [r for r in records if by_of(r) != "unknown"]
+    return [r for r in records if by_of(r) == by]
 
 
 def aggregate(records):
@@ -113,6 +132,8 @@ def aggregate(records):
 def report(records, bad):
     """The text of the aggregates."""
     lines = [f"records: {len(records)}" + (f" ({bad} unreadable lines skipped)" if bad else "")]
+    split = Counter(by_of(r) for r in records)
+    lines.append("by " + ", ".join(f"{k}: {split[k]}" for k in BY_LABELS if split[k]))
     for role, ops in sorted(aggregate(records).items()):
         for op, a in sorted(ops.items()):
             lines.append(f"{role} {op}: {a['n']}")
@@ -133,11 +154,14 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("logs", nargs="+", help="training .jsonl files")
     ap.add_argument("--out", default="training_truth.json", help="the truth list to write")
+    ap.add_argument("--by", choices=("person", "agent", "all"), default="person",
+                    help="#389: who made the edits to export; person (the default) drops the agent rows, all keeps person and agent")
     args = ap.parse_args(argv)
     records, bad = read_records(args.logs)
     print(report(records, bad))
-    Path(args.out).write_text(json.dumps(truth_list(records), indent=1) + "\n", encoding="utf-8")
-    print(f"truth list: {len(records)} entries")
+    kept = by_filter(records, args.by)
+    Path(args.out).write_text(json.dumps(truth_list(kept), indent=1) + "\n", encoding="utf-8")
+    print(f"truth list: {len(kept)} entries")
     return 0
 
 

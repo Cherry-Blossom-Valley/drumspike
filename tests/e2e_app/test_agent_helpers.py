@@ -75,10 +75,29 @@ def test_move_writes_one_move_record_at_sample_precision_and_undo_writes_none(ap
     assert out["moved"] and out["to"] - out["from"] == 2
     (r,) = project_log_lines(app)[before:]
     assert (r["op"], r["to"] - r["from"], r["precision"]) == ("move", 2, "sample")
+    assert r["by"] == "agent", r   # #389: a nudge through DSAgent.move says who made it
     assert call(app, "DSAgent.undo()")["undone"] is True
     edits_done(app)
     assert len(project_log_lines(app)) == before + 1
     assert app.evaluate("() => S.events['Kick In'].map(e => Math.round(e.t * S.tracks['Kick In'].sr))") == IDX
+
+
+def test_the_keyboard_nudge_records_person_and_the_agent_move_records_agent(app, make_project, tmp_path):
+    """#389: the same nudge through the two paths of the page: nudgeSelected (the keyboard path) writes by
+    person, DSAgent.move writes by agent."""
+    opened(app, make_project, tmp_path)
+    training_on(app)
+    before = len(project_log_lines(app))
+    app.evaluate("() => { setSelTrack('Kick In'); S.sel = { track: 'Kick In', index: 1 }; }")
+    app.evaluate("() => nudgeSelected(2)")   # the keyboard path: the hit selected, the nudge by samples
+    edits_done(app)
+    (r,) = project_log_lines(app)[before:]
+    assert (r["op"], r["by"]) == ("move", "person"), r
+    out = call(app, "DSAgent.move('Kick In', 1, -1)")
+    edits_done(app)
+    assert out["moved"] is True
+    (r,) = project_log_lines(app)[before + 1:]
+    assert (r["op"], r["by"]) == ("move", "agent"), r
 
 
 def test_confirm_writes_one_confirm_record_and_changes_no_event(app, make_project, tmp_path):

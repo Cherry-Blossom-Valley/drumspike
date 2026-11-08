@@ -146,13 +146,15 @@ impl Service {
     /// The records of `examples` on the track `name` (the audio and the track's facts are read here), appended to the
     /// project's file. `view` is the view object of the request (#353, written as sent): a `move` or `add` record gets
     /// the `precision` derived from it, a `delete` record carries the view without a precision. Returns the number
-    /// written.
+    /// written. `by` (#389) is who made the edit (`"person"` or `"agent"`); a record carries it when `by` is `Some`
+    /// (the Learn marks of the sweep carry none, an older log has no field).
     pub(crate) fn training_log(
         &self,
         sid: &str,
         name: &str,
         examples: &[Example],
         view: Option<&Value>,
+        by: Option<&str>,
     ) -> Result<usize, AppError> {
         if examples.is_empty() {
             return Ok(0);
@@ -237,6 +239,10 @@ impl Service {
                     "line_slope": pd.line_slope,
                     "onset_spread": spread,
                 });
+            }
+            // #389: who made the edit, written when the caller says so
+            if let Some(b) = by {
+                rec["by"] = json!(b);
             }
             // #353: the view of the request as sent; a move or add says how precisely the editor saw the hit
             if let Some(v) = view {

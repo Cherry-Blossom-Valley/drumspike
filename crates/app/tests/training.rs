@@ -43,6 +43,40 @@ fn records(home: &std::path::Path) -> Vec<Value> {
 }
 
 #[test]
+fn a_nudge_by_the_keyboard_path_records_person_and_one_by_the_agent_records_agent() {
+    // #389: the same nudge through the two paths of the page: `nudgeSelected` (the keyboard) sends no `by`
+    // (person), a `DSAgent.move` sends `by: "agent"`; the record says which.
+    let (svc, sid, home) = opened("tr_by");
+    svc.training_status(&sid, Some(true)).unwrap();
+    svc.events_edit_training(&sid, "k in", &[json!({"op": "move", "index": 0, "t": 0.6})], true, None)
+        .unwrap();
+    svc.events_edit_training_by(
+        &sid,
+        "k in",
+        &[json!({"op": "move", "index": 0, "t": 0.7})],
+        true,
+        None,
+        Some("agent"),
+    )
+    .unwrap();
+    let recs = records(&home);
+    assert_eq!(recs.len(), 2, "{recs:?}");
+    assert_eq!(recs[0]["by"], json!("person"), "{}", recs[0]);
+    assert_eq!(recs[1]["by"], json!("agent"), "{}", recs[1]);
+    // a wrong `by` is refused; the dispatch of `events_edit` validates it
+    let e = drumspike_app::call::call(
+        &svc,
+        "events_edit",
+        &json!({"sid": sid, "name": "k in", "ops": [{"op": "move", "index": 0, "t": 0.8}],
+                "training": true, "by": "robot"}),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(e.code, 400, "{}", e.message);
+    assert!(e.message.contains("by"), "{}", e.message);
+}
+
+#[test]
 fn events_edit_with_training_writes_one_record_per_move_add_and_delete() {
     let (svc, sid, home) = opened("tr_a");
     // a hit moved before: its `orig` is the `from` of the next move
