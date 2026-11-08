@@ -212,7 +212,7 @@ class Explainer15(Explainer):
         ntag = Text("the same samples as numbers", font=FONT, font_size=20, color=TEXT).next_to(nums, UP, buff=0.3)
         hx = 1.2 + (6.8 - 1.2) * hit_at / (len(s) - 1)
         hit_mark = sample_stalk(hx, 1.4, ORANGE, half=0.8)
-        hit_tag = Text("hit_at", font=FONT, font_size=20, color=ORANGE).next_to([hx, 2.3, 0], UP, buff=0.1)
+        hit_tag = Text("hit_at", font=FONT, font_size=20, color=ORANGE).next_to([hx, 0.55, 0], DOWN, buff=0.25)
         self.t_play(Create(nums), FadeIn(ntag), Create(hit_mark), FadeIn(hit_tag), t=2.5)
         self.say("The window is 0.9 milliseconds before and 0.6 after the hit; the samples are "
                  "shares of the local peak, and hit_at points at the hit's own sample.", t=2.0)
