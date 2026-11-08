@@ -336,6 +336,40 @@ an agent field (#285 removed its Inspector field: the role suggestion reads a te
 role set by hand wins), `track_layer_set {range}` takes the velocity curve's dB range as a
 plain number (the curve must be `db`), and the Compensate checkbox is `export_compensate_set`.
 
+## Page mode (`drumspike bridge`)
+
+For a visual pass (hit by hit at sample zoom in the app's own page), the shipped binary serves the page and
+the invoke API on localhost:
+
+```bash
+"/Applications/Drum Spike.app/Contents/MacOS/drumspike bridge"          # or: drumspike bridge
+drumspike bridge --port 7777 --home ~/Library/Application\ Support/com.cbv.drumspike
+```
+
+It prints one line when it listens — open that URL in a browser:
+
+```
+drumspike bridge: http://127.0.0.1:<port>/
+```
+
+- The page is the one bundled in the binary (the Tauri asset context, `frontendDist`); the app bundle gains
+  no files. The API is the same command registry the window and the command line use (`POST
+  /invoke/<command>`, `GET /channel/<id>`, `GET /events?after=N`), on 127.0.0.1 only, no token — nothing
+  here is a security boundary, like the development bridge.
+- `--home DIR` and `--projects DIR` default to the app's own folders (the same as the window), so a project
+  the owner opened in the window is the one the agent sees. `--port 0` (the default) picks a free port.
+- The window and the bridge do not share one home at the same time. Both hold an advisory flock on the
+  home folder (`<home>/.drumspike.lock`, the mechanism the project locks use): the bridge refuses to start
+  while the window runs on that home — close the window, or pass `--home DIR` — and names the holder
+  (`app (pid N)`). A window started while a bridge holds the home prints a warning and keeps working; end
+  the bridge session before opening the window on that home.
+- In the page, the agent helpers of the sibling ticket drive the editor; Training Mode (View > Training
+  Mode) writes a record per hit edit as everywhere else. The shipped page mode has no native menu: the
+  agent turns Training Mode on from the page itself with `setTraining(true)` (or `toggleTraining()`);
+  the `training_mode` menu event exists only in the debug bridge.
+- Development: `ds-bridge` keeps serving `static/` for the tests, and `drumspike bridge --static DIR`
+  serves a folder instead of the embedded assets.
+
 ## What the agent cannot do
 
 Play back (the transport needs the window and a sound device), draw or read waveform tiles, undo (close the project without

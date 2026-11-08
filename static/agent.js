@@ -19,7 +19,7 @@
     return e;
   }
   function needTraining() {
-    if (!trainingOn()) throw new Error("Training Mode is off: turn it on first with the menu command training_mode (View > Training Mode)");
+    if (!trainingOn()) throw new Error("Training Mode is off: turn it on first with setTraining(true) in the page (in the window: View > Training Mode)");
   }
   /* a page in the background gets no frame: resolve after the frames or after FRAME_WAIT_MS, whichever comes first */
   const draw = () => new Promise(r => {

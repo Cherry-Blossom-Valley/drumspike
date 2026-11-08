@@ -257,7 +257,7 @@ pub fn help_text(command: Option<&str>) -> Result<String, AppError> {
         for c in api::agent_commands() {
             s.push_str(&format!("  {:w$}  {}\n", c.name, c.about));
         }
-        s.push_str("\nAlso: help <command>, commands, batch, run <script.json>, mcp\n");
+        s.push_str("\nAlso: help <command>, commands, batch, run <script.json>, mcp\n      bridge [--port N] [--home DIR] [--projects DIR]  the page mode: the app's page and the invoke API on 127.0.0.1 (docs/agent-api.md, \"Page mode\")\n");
         return Ok(s);
     };
     let c = api::agent_commands()

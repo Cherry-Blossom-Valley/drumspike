@@ -21,7 +21,8 @@ The app installed this skill for the binary `<binary>`. Use that path as it stan
 
 1. Open or import the session with the MCP tools (`project_open`, or `project_import`), then `analyze_start` and
    `analyze_status` until `done`. Open the same project in the page.
-2. Turn Training Mode on with the menu command `training_mode` (View > Training Mode). Check `DSAgent.status()`.
+2. Turn Training Mode on: `setTraining(true)` in the page (in the window: View > Training Mode).
+   Check `DSAgent.status()`.
 3. Per track: read `DSAgent.hits(track)`. Note the count and the doubtful hits.
 4. Work in chunks of about 100 hits, one chunk per call: `plan = await DSAgent.plan(track, from, to)`.
 5. Look at every suggested move and every doubtful row with `DSAgent.look(track, index)`. Read the samples around the
