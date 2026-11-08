@@ -64,6 +64,8 @@ struct State {
     inflight: HashSet<u64>,
     done: HashMap<u64, Result<Value, String>>,
     pollers: usize,
+    /// The page that polled last; the polls of any other page end at once.
+    current_poller: String,
     last_poll: Option<Instant>,
 }
 
@@ -147,12 +149,20 @@ impl WindowRelay {
         }
     }
 
-    /// The page asks for its next call; waits up to `wait` (at most [`MAX_POLL`]). `None`: nothing came.
-    pub fn next(&self, wait: Duration) -> Option<Value> {
+    /// The page `poller` asks for its next call; waits up to `wait` (at most [`MAX_POLL`]). `None`: nothing came, or a
+    /// newer page took over (a poll of a closed page can hang on after its window is gone and must not swallow a call).
+    pub fn next(&self, poller: &str, wait: Duration) -> Option<Value> {
         let end = Instant::now() + wait.min(MAX_POLL);
         let mut g = lock(&self.state);
+        if g.current_poller != poller {
+            g.current_poller = poller.to_string();
+            self.cv.notify_all();
+        }
         g.pollers += 1;
         let out = loop {
+            if g.current_poller != poller {
+                break None;
+            }
             if let Some((id, call)) = g.queue.pop_front() {
                 g.inflight.insert(id);
                 break Some(call);
@@ -204,7 +214,8 @@ pub fn window_call_next(svc: &Service, args: &Value) -> Result<Value, AppError> 
     if !relay.enabled() {
         return Ok(json!({"enabled": false, "call": null}));
     }
-    Ok(json!({"enabled": true, "call": relay.next(Duration::from_millis(ms))}))
+    let poller = args.get("poller").and_then(Value::as_str).unwrap_or("");
+    Ok(json!({"enabled": true, "call": relay.next(poller, Duration::from_millis(ms))}))
 }
 
 /// `window_call_result {id, ok, value?, error?}`: the page's answer to call `id`.
@@ -281,7 +292,11 @@ fn write_endpoint_file(home: &Path, port: u16, token: &str) -> std::io::Result<P
         opts.mode(0o600);
     }
     let mut f = opts.open(&tmp)?;
-    f.write_all(json!({"port": port, "token": token, "pid": std::process::id()}).to_string().as_bytes())?;
+    f.write_all(
+        json!({"port": port, "token": token, "pid": std::process::id()})
+            .to_string()
+            .as_bytes(),
+    )?;
     f.flush()?;
     drop(f);
     std::fs::rename(&tmp, &file)?;

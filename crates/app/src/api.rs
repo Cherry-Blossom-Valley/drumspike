@@ -885,11 +885,18 @@ pub static REGISTRY: &[CommandSpec] = &[
     cmd(
         "window_call_next",
         "#388: the page waits for the next helper call of the window endpoint (long poll)",
-        &[opt(
-            "timeout_ms",
-            Ty::Int,
-            "How long to wait for a call, at most 30000; default 25000",
-        )],
+        &[
+            opt(
+                "timeout_ms",
+                Ty::Int,
+                "How long to wait for a call, at most 30000; default 25000",
+            ),
+            opt(
+                "poller",
+                Ty::Str,
+                "The page's own id; a poll of another id ends the polls of the earlier page",
+            ),
+        ],
         OBJ,
         App,
         Window,

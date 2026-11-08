@@ -34,6 +34,12 @@ fn page(
             window_call_result(&s, &body).unwrap();
         }
     });
+    // a call before the first poll is rightly refused ("no page is listening"), so hand back only a listening page
+    let t0 = Instant::now();
+    while !svc.window_relay().listening() {
+        assert!(t0.elapsed() < Duration::from_secs(5), "the stand-in page never polled");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     (stop, h)
 }
 
@@ -76,7 +82,11 @@ fn a_call_without_the_token_or_with_a_wrong_one_is_refused_before_it_reaches_the
     bare.authorization = Some("secret".into()); // the token without the scheme is no bearer token
     assert_eq!(handle(&s, "secret", &bare).status, 401);
     assert_eq!(handle(&s, "secret", &request(None, "GET", "/status", "")).status, 401);
-    assert_eq!(seen.load(std::sync::atomic::Ordering::Relaxed), 0, "the page saw no call");
+    assert_eq!(
+        seen.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "the page saw no call"
+    );
     let ok = handle(&s, "secret", &request(Some("secret"), "POST", "/call", call));
     assert_eq!(ok.status, 200, "{}", String::from_utf8_lossy(&ok.body));
     assert_eq!(seen.load(std::sync::atomic::Ordering::Relaxed), 1);
@@ -87,7 +97,8 @@ fn a_call_without_the_token_or_with_a_wrong_one_is_refused_before_it_reaches_the
 fn hits_through_the_endpoint_equal_the_pages_own_answer() {
     let s = svc();
     s.window_relay().enable();
-    let hits = json!([{"index": 0, "t": 0.5, "sample": 24000, "v": 100}, {"index": 1, "t": 1.5, "sample": 72000, "v": 90}]);
+    let hits =
+        json!([{"index": 0, "t": 0.5, "sample": 24000, "v": 100}, {"index": 1, "t": 1.5, "sample": 72000, "v": 90}]);
     let own = hits.clone();
     let p = page(&s, move |f, a| {
         assert_eq!((f, a), ("hits", &json!(["Kick In"])));
@@ -116,7 +127,12 @@ fn the_page_error_comes_back_as_a_409_with_its_message() {
         &request(Some("t"), "POST", "/call", r#"{"fn":"move","args":["Kick In",1,2]}"#),
     );
     assert_eq!(r.status, 409);
-    assert!(body_of(&r)["message"].as_str().unwrap().contains("Training Mode is off"));
+    assert!(
+        body_of(&r)["message"]
+            .as_str()
+            .unwrap()
+            .contains("Training Mode is off")
+    );
     stop(p);
 }
 
@@ -127,8 +143,16 @@ fn only_the_named_helpers_pass_and_a_missing_page_or_a_silent_one_is_an_error() 
     // no endpoint open, no page: nothing to call
     assert_eq!(h(r#"{"fn":"hits","args":[]}"#).status, 409);
     s.window_relay().enable();
-    assert_eq!(h(r#"{"fn":"hits","args":[]}"#).status, 409, "enabled, but no page has polled");
-    assert_eq!(h(r#"{"fn":"eval","args":["1"]}"#).status, 400, "a name outside the helper list");
+    assert_eq!(
+        h(r#"{"fn":"hits","args":[]}"#).status,
+        409,
+        "enabled, but no page has polled"
+    );
+    assert_eq!(
+        h(r#"{"fn":"eval","args":["1"]}"#).status,
+        400,
+        "a name outside the helper list"
+    );
     assert_eq!(h(r#"{"fn":"hits","args":"x"}"#).status, 400);
     assert_eq!(h(r#"{"args":[]}"#).status, 400);
     assert_eq!(h("not json").status, 400);
@@ -174,6 +198,34 @@ fn the_pages_commands_check_their_arguments_and_a_closed_endpoint_asks_the_page_
     }
 }
 
+#[test]
+fn a_newer_page_ends_the_hanging_poll_of_a_closed_one_so_it_swallows_no_call() {
+    let s = svc();
+    s.window_relay().enable();
+    let old = {
+        let s = s.clone();
+        std::thread::spawn(move || s.window_relay().next("old", Duration::from_secs(10)))
+    };
+    let t0 = Instant::now();
+    while !s.window_relay().listening() {
+        assert!(t0.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let new = {
+        let s = s.clone();
+        std::thread::spawn(move || s.window_relay().next("new", Duration::from_secs(10)))
+    };
+    assert!(
+        old.join().unwrap().is_none(),
+        "the old poll ended when the new page polled"
+    );
+    let s2 = s.clone();
+    let caller = std::thread::spawn(move || s2.window_relay().call("status", &json!([]), Duration::from_secs(5)));
+    let got = new.join().unwrap().expect("the new page got the call");
+    window_call_result(&s, &json!({"id": got["id"], "ok": true, "value": 7})).unwrap();
+    assert_eq!(caller.join().unwrap().unwrap(), json!(7));
+}
+
 fn http(port: u16, token: Option<&str>, method: &str, path: &str, body: &str) -> (u16, Value) {
     let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
     let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
@@ -186,9 +238,9 @@ fn http(port: u16, token: Option<&str>, method: &str, path: &str, body: &str) ->
     let mut raw = String::new();
     c.read_to_string(&mut raw).unwrap();
     let status = raw.split_whitespace().nth(1).unwrap().parse().unwrap();
-    let json = raw.split_once("\r\n\r\n").map_or(Value::Null, |(_, b)| {
-        serde_json::from_str(b).unwrap_or(Value::Null)
-    });
+    let json = raw
+        .split_once("\r\n\r\n")
+        .map_or(Value::Null, |(_, b)| serde_json::from_str(b).unwrap_or(Value::Null));
     (status, json)
 }
 
@@ -205,7 +257,10 @@ fn the_endpoint_listens_on_loopback_names_itself_in_a_private_file_and_needs_its
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        let mode = std::fs::metadata(home.join(ENDPOINT_FILE)).unwrap().permissions().mode();
+        let mode = std::fs::metadata(home.join(ENDPOINT_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, 0o600, "only the owner reads the token");
     }
     let call = r#"{"fn":"status","args":[],"timeout_ms":2000}"#;
@@ -218,7 +273,10 @@ fn the_endpoint_listens_on_loopback_names_itself_in_a_private_file_and_needs_its
     let (code, out) = http(ep.port, Some(&ep.token), "POST", "/call", call);
     assert_eq!(code, 200, "{out}");
     assert_eq!(out, json!({"ok": true, "value": {"training": true, "records": 0}}));
-    assert_eq!(http(ep.port, Some(&ep.token), "GET", "/status", "").1["listening"], true);
+    assert_eq!(
+        http(ep.port, Some(&ep.token), "GET", "/status", "").1["listening"],
+        true
+    );
     stop(p);
     ep.remove_file();
     assert!(!home.join(ENDPOINT_FILE).exists());

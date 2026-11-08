@@ -297,6 +297,26 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   a reason to look, not a block (on some kits the queue doubts most kicks). Use chunks of about 100 hits.
 - `apply(track, list)`: the moves `[{index, samples}]` (a row of `plan` also works, its `suggest` is used); a zero or `null`
   move is skipped. `save()` writes the project. `status()` answers `{training, records, path}`.
+- `statusLine()`: what the window shows, `{message, selection, training}` (the status message, the selection field and the
+  Training Mode counter, `null` while the mode is off). `setTraining(on)`: the window's Training Mode switch, answers `{training}`.
+
+### The running window (#388)
+
+The page helpers run in the page of the window, so the app opens a local endpoint that passes a call to that page: no
+browser, no second process on the project, no quit. The window you see is the project the agent edits. At start the app
+writes `<home>/window-endpoint.json` (`{port, token, pid}`, mode 0600, removed at exit); only a process that can read that file
+can call.
+
+- `POST http://127.0.0.1:<port>/call` with `Authorization: Bearer <token>` and the body `{"fn": "move", "args": ["Kick In", 1, 3],
+  "timeout_ms": 60000?}`. `fn` is one of `project`, `hits`, `look`, `wide`, `move`, `confirm`, `undo`, `plan`, `apply`, `save`,
+  `status`, `statusLine`, `setTraining`; any other name is refused with 400 before it reaches the page. The answer is
+  `{"ok": true, "value": <what the helper returned>}`.
+- Errors: 401 without the token (or a wrong one); 409 when no page listens or the helper refused (its message is the page's,
+  for example "Training Mode is off"); 504 when the page did not answer within `timeout_ms` (default 60 s, at most 600 s).
+- `GET /status` (same token) answers `{listening, helpers}`.
+- The page polls the commands `window_call_next` and `window_call_result` (window surface only). A newer page ends the poll of
+  an older one, so a closed window never swallows a call. `DRUMSPIKE_WINDOW_ENDPOINT=1` opens the same endpoint in the test
+  bridge (`ds-bridge`), with the file in `DRUMSPIKE_HOME`.
 
 ## Agent fine-tune skill
 
