@@ -103,10 +103,10 @@ def truth_list(records):
 
 
 def by_filter(records, by):
-    """The records the export keeps (#389): `person` (the default) drops the agent rows, `all` keeps every record
-    with a `by` (person and agent); a record without `by` (an older log) is `unknown` and the report shows it."""
+    """The records the export keeps (#389): `person` (the default) keeps the person rows, `agent` the agent rows,
+    `unknown` the rows without a `by` (an older log, a Learn mark), `all` keeps every record."""
     if by == "all":
-        return [r for r in records if by_of(r) != "unknown"]
+        return records
     return [r for r in records if by_of(r) == by]
 
 
@@ -154,8 +154,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("logs", nargs="+", help="training .jsonl files")
     ap.add_argument("--out", default="training_truth.json", help="the truth list to write")
-    ap.add_argument("--by", choices=("person", "agent", "all"), default="person",
-                    help="#389: who made the edits to export; person (the default) drops the agent rows, all keeps person and agent")
+    ap.add_argument("--by", choices=("person", "agent", "unknown", "all"), default="person",
+                    help="#389: who made the edits to export; person (the default) keeps the person rows, all keeps every record")
     args = ap.parse_args(argv)
     records, bad = read_records(args.logs)
     print(report(records, bad))

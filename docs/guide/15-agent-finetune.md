@@ -50,7 +50,8 @@ suggestion, doubtful, and a total row) and asks you once whether to export now o
 - It reports counts only: how many hits it saw, moved, confirmed and left for you.
 
 Because Training Mode is on, every move and confirm of the agent is written to the training log
-exactly as if you had made it, with the view and the precision. You can look at the result in
+exactly as if you had made it, with the view and the precision, and the log says who made each
+edit: you or the agent. You can look at the result in
 the window when the agent is done: undo a move you do not like, or check the doubtful hits with
 the review queue from chapter 9. After the save the agent asks you once whether to export now
 (MIDI and spike files) or leave it.

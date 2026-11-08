@@ -146,8 +146,8 @@ impl Service {
     /// The records of `examples` on the track `name` (the audio and the track's facts are read here), appended to the
     /// project's file. `view` is the view object of the request (#353, written as sent): a `move` or `add` record gets
     /// the `precision` derived from it, a `delete` record carries the view without a precision. Returns the number
-    /// written. `by` (#389) is who made the edit (`"person"` or `"agent"`); a record carries it when `by` is `Some`
-    /// (the Learn marks of the sweep carry none, an older log has no field).
+    /// written. `by` (#389) is who made the edit (`"person"` or `"agent"`); the page's own paths and the Learn
+    /// marks send `"person"`, the `DSAgent` helpers `"agent"`.
     pub(crate) fn training_log(
         &self,
         sid: &str,

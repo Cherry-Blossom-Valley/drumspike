@@ -100,6 +100,21 @@ def test_the_keyboard_nudge_records_person_and_the_agent_move_records_agent(app,
     assert (r["op"], r["by"]) == ("move", "agent"), r
 
 
+def test_two_overlapping_agent_moves_both_record_agent(app, make_project, tmp_path):
+    """#389: the agent author is a depth counter, not a flag: when two helper calls overlap, the first one to
+    end must not reset the author while the second's edit is still queued - both records say agent."""
+    opened(app, make_project, tmp_path)
+    training_on(app)
+    before = len(project_log_lines(app))
+    p1 = call(app, "DSAgent.move('Kick In', 1, 2)")
+    p2 = call(app, "DSAgent.move('Kick In', 2, 2)")
+    assert p1["moved"] is True and p2["moved"] is True
+    edits_done(app)
+    recs = project_log_lines(app)[before:]
+    assert [r["op"] for r in recs] == ["move", "move"], recs
+    assert all(r["by"] == "agent" for r in recs), recs
+
+
 def test_confirm_writes_one_confirm_record_and_changes_no_event(app, make_project, tmp_path):
     opened(app, make_project, tmp_path)
     training_on(app)

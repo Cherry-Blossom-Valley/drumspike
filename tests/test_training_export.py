@@ -131,9 +131,9 @@ def test_two_logs_and_the_bins_edges(tmp_path):
     assert te.precision_of({"precision": "px"}) == "-" and te.precision_of({}) == "-"
 
 
-def test_the_default_export_drops_agent_rows_and_all_keeps_both_and_the_report_says_unknown(tmp_path):
+def test_the_default_export_keeps_person_all_keeps_every_row_and_the_report_says_unknown(tmp_path):
     """#389: the log says who made each edit; the default export keeps the person rows only, `--by all` keeps
-    person and agent, and the report shows a record without `by` (an older log) as `unknown`."""
+    every record, and the report shows a record without `by` (an older log) as `unknown`."""
     log = tmp_path / "log.jsonl"
     write(log, [rec("move", 1000, 1003, by="person"), rec("move", 2000, 2001, by="agent"),
                 rec("move", 3000, 3002, by=None)])
@@ -144,10 +144,15 @@ def test_the_default_export_drops_agent_rows_and_all_keeps_both_and_the_report_s
     assert "by person: 1, agent: 1, unknown: 1" in p.stdout
     assert "unknown" in p.stdout
     kept = json.loads(out.read_text())
-    assert len(kept) == 1 and kept[0]["by"] == "person"   # the default drops the agent rows
+    assert len(kept) == 1 and kept[0]["by"] == "person"   # the default keeps the person rows
     out2 = tmp_path / "all.json"
     p = subprocess.run([sys.executable, "-I", str(TOOL), str(log), "--out", str(out2), "--by", "all"],
                        capture_output=True, text=True, check=True)
     kept = json.loads(out2.read_text())
-    assert len(kept) == 2 and [t["by"] for t in kept] == ["person", "agent"]
-    assert "truth list: 2 entries" in p.stdout
+    assert len(kept) == 3 and [t["by"] for t in kept] == ["person", "agent", None]   # all keeps every record
+    assert "truth list: 3 entries" in p.stdout
+    out3 = tmp_path / "unknown.json"
+    p = subprocess.run([sys.executable, "-I", str(TOOL), str(log), "--out", str(out3), "--by", "unknown"],
+                       capture_output=True, text=True, check=True)
+    kept = json.loads(out3.read_text())
+    assert len(kept) == 1 and kept[0]["by"] is None   # the old record, exported under --by unknown

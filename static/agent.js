@@ -82,11 +82,15 @@
     return r.confidence || [];
   }
 
-  /* #389: the edits of the helpers say by: agent; the keyboard path stays person. The flag is set around the await,
-     so the edit call (queued or not) reads it when it runs. */
+  /* #389: the edits of the helpers say by: agent; the keyboard path stays person. A depth counter, not a flag:
+     two overlapping helper calls must both log as agent, so the last one to end resets the author only when the
+     depth is back to 0. */
+  let _agentDepth = 0;
   async function asAgent(fn) {
-    setEditBy("agent");
-    try { return await fn(); } finally { setEditBy("person"); }
+    const first = _agentDepth === 0;
+    _agentDepth++;
+    if (first) setEditBy("agent");
+    try { return await fn(); } finally { _agentDepth--; if (_agentDepth === 0) setEditBy("person"); }
   }
 
   const DSAgent = {
