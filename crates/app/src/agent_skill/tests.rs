@@ -82,7 +82,10 @@ fn a_second_install_replaces_an_older_copy_and_status_tells_the_versions() {
 fn mcp_command_names_the_user_scope_so_the_server_works_from_every_folder() {
     let line = mcp_command(Path::new("/opt/ds/drumspike-desktop"));
     assert!(line.contains("--scope user"), "{line}");
-    assert!(line.starts_with("claude mcp add --scope user drumspike -- \""), "{line}");
+    assert!(
+        line.starts_with("claude mcp add --scope user drumspike -- \""),
+        "{line}"
+    );
     assert!(line.ends_with("\" mcp"), "{line}");
 }
 
