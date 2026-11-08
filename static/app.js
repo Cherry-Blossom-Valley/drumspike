@@ -563,7 +563,8 @@ function setupGlobal() {
     const row = document.createElement("div"); row.className = "prow";
     const lab = document.createElement("label"); lab.textContent = role[0].toUpperCase()+role.slice(1);
     const ctl = document.createElement("div"); ctl.className = "pctl";
-    const inp = document.createElement("input"); inp.type = "number"; inp.value = st.click.pitches[role] || 1500; inp.step = 100; inp.style.width = "90px";
+    const inp = document.createElement("input"); inp.type = "number"; inp.id = `setPitch-${role}`; inp.value = st.click.pitches[role] || 1500; inp.step = 100; inp.style.width = "90px";
+    lab.htmlFor = inp.id;
     inp.onchange = () => { st.click.pitches[role] = Math.max(50, Math.min(8000, +inp.value||1500)); saveSettings(); };
     const unit = document.createElement("span"); unit.className = "punit"; unit.textContent = "Hz";
     ctl.append(inp, unit); row.append(lab, ctl); pitchBox.appendChild(row);
