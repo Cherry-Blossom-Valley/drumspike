@@ -134,6 +134,33 @@ const tests = {
     assert.equal(j.suggest, -3);
   },
 
+  async a_slow_stroke_whose_every_step_is_under_the_band_is_still_measured_and_the_late_hit_moves() {
+    const { s, hitAt, ref } = win(a => { for (let i = 37; i < LEN; i++) a[i] = 0.01 + 0.02 * (i - 36); });   // 0.02 a sample: under the 0.025 band
+    const j = judge()(s, hitAt, ref);
+    assert.equal(j.verdict, "late");
+    assert.equal(j.foot_off, -7);
+    assert.equal(j.suggest, -7);
+  },
+
+  async a_hit_in_a_dip_after_the_stroke_passed_the_band_is_late() {
+    const { s, hitAt, ref } = win(a => {
+      a[37] = 0.06; a[38] = 0.12; a[39] = 0.06;                             // the stroke's first motion, over the band
+      for (let i = 44; i < LEN; i++) a[i] = 0.01 + 0.03 * (i - 43);         // the hit sits on the line again, in the dip before the main rise
+    });
+    const j = judge()(s, hitAt, ref);
+    assert.equal(j.rise, 0, "the hit's own sample is on the line");
+    assert.equal(j.verdict, "late");
+    assert.equal(j.suggest, -7);
+  },
+
+  async a_view_whose_level_stays_within_the_band_near_the_hit_stands() {
+    const { s, hitAt, ref } = win(a => { a[42] = 0.012; for (let i = 60; i < LEN; i++) a[i] = 0.6; });   // a ripple near the hit; the stroke rises past the 6 samples after it
+    const j = judge()(s, hitAt, ref);
+    assert.equal(j.verdict, "at_foot");
+    assert.equal(j.suggest, 0);
+    assert.equal(j.why, "no motion above the band near the hit");
+  },
+
   async audit_lists_every_late_hit_from_the_shape_measure_whatever_the_suggestion_says(env) {
     const late = win(a => { stroke(a, 40, [0.15, 0.35, 0.5]); });
     const standing = win(a => { stroke(a, 43, [0.3, 0.5, 0.55]); });

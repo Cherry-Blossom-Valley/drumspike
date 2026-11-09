@@ -61,7 +61,8 @@
      hit sample's distance from the line), `quiet_ratio` (steepest step / largest step of the line) and `verdict`:
      `late` (the hit stands up the rise, its own sample over the band), `at_foot`, or `no_quiet_line` (no quiet stretch
      exists: nothing to measure from, `suggest` null). A hit whose own sample is within the band stands (suggest 0), and so
-     does a hit in a view with no step over the band (the stroke rises past the view). */
+     does a hit in a view whose level stays within the band near the hit. The band is a level: a slow stroke passes it
+     while every single step stays under it, and a hit in a dip after the stroke passed the band is still late. */
   function judge(s, hitAt, ref) {
     const out = { level: null, spread: null, first_off: null, suggest: null, foot_off: null, rise: null, quiet_ratio: null, verdict: "no_quiet_line" };
     const band = typeof ref === "number" && Number.isFinite(ref) && ref > 0 ? DEPARTURE_VIS_PCT / ref : DEPART_MIN;   // the hit's peak as a share of the local peak
@@ -72,8 +73,10 @@
       if (d > steep) { steep = d; p = j; }
     }
     if (p < 0 || !(steep > 0)) return out;
-    // the view holds no edge the detector would read (a stroke that rises past the view): nothing to move to, the hit stands
-    if (steep <= band) { out.suggest = 0; out.verdict = "at_foot"; out.why = "no step above the band near the hit"; return out; }
+    // the view holds no motion the detector would read: nothing to move to, the hit stands. The band is a level, so the
+    // test is the level's range near the hit: a slow stroke passes the band while every single step stays under it.
+    const near = s.slice(Math.max(0, hitAt - DEPART_BEFORE), Math.min(s.length, hitAt + DEPART_AFTER + 1));
+    if (Math.max(...near) - Math.min(...near) <= band) { out.suggest = 0; out.verdict = "at_foot"; out.why = "no motion above the band near the hit"; return out; }
     // the foot: walk back from the edge while the steps are still a share of the steepest one; a slow wave under that share is line
     let f = p;
     while (f > 0 && Math.abs(s[f] - s[f - 1]) >= FOOT_STEP_SHARE * steep) f--;
@@ -100,7 +103,9 @@
     // owner rule A: the hit stands when its own sample (the guard includes it) is within the detector's band of the line;
     // else a hit up the rise is late. The verdict does not depend on the suggestion's range, so a late hit far from its foot
     // is still listed by `audit`.
-    const standing = out.rise <= band;
+    let reach = out.rise;                                          // a stroke that passed the band before the hit: a hit in a later dip is still late
+    for (let i = Math.max(0, f + 1); i < Math.min(hitAt, s.length); i++) reach = Math.max(reach, Math.abs(s[i] - level));
+    const standing = reach <= band;
     out.verdict = out.foot_off < 0 && !standing ? "late" : "at_foot";
     // a foot far from the hit is a pre-bump, bleed or wobble, not the stroke: no suggestion
     if (out.foot_off < -DEPART_BEFORE || out.foot_off > DEPART_AFTER) { out.why = "departure far from the hit"; return out; }

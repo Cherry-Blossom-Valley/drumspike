@@ -45,6 +45,27 @@ The rows that test it are those with the hit sample over the detector's band. Th
 
 A null answer falls from 1054 of the 4981 rows to 74. A hit whose own sample is inside the band now stands. That costs the 23 owner rows labelled later, 20 of which main answered exactly. Neither judge answers the 29 owner rows labelled one sample earlier. Every later Gate of the judge names the never-move baseline and a slice that contains the failure being fixed.
 
+## The band is a level (0.9.29)
+
+A real agent run on Session K showed a blind spot of the shape judge. It compared one sample's step with the detector's band.
+The band is a level, so a slow stroke passed the band while every step stayed under it. The judge then left early with
+"at the foot": 62 of 63 kick hits of Session K took that exit. A test that shifted 20 of those hits 2 to 8 samples late found
+none of them. Two changes close it: the early exit reads the level's range near the hit, and a hit stands only when nothing
+between the foot and the hit passed the band (a hit in a dip after the first motion is late).
+
+Measured on the 4981 gold rows, against a judge that never moves anything (exact / within 1 / summed distance):
+
+| set | never move | 0.9.28 | now |
+|---|---|---|---|
+| all gold rows | 2412 / 3547 / 9682 | 2608 / 3719 / 8341 | 2802 / 4003 / 5422 |
+| kick | 1613 / 2391 / 2704 | 1733 / 2474 / 2371 | 1809 / 2584 / 1805 |
+| label 0 (should not move) | 2412 / 2412 / 0 | 2384 / 2400 / 96 | 2380 / 2396 / 128 |
+| owner rows | 441 / 491 / 130 | 441 / 493 / 125 | 441 / 493 / 125 |
+
+484 rows are better and 23 worse than 0.9.28. The 20 shifted hits: summed distance 90 before, 31 now, 17 of them `late`. The
+owner rows hold few late hits, so they cannot show this gain; they show that the change costs them nothing. A third change was
+measured and dropped: taking the foot from the first band crossing after the line cost owner rows (441 to 438 exact).
+
 ## The earlier rounds (#385, #394; before the shape judge)
 
 Measured with `tools/judge_measure.py` (test: `tests/test_judge_measure.py`). Aggregates only. No judge change ships: **on the
