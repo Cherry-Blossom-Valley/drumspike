@@ -1270,6 +1270,18 @@ training_status null
 training_status wrong
   page: err 400 missing or wrong argument `sid` (string)
   agent: err 400 wrong argument `sid`: expected string
+training_hand_placed {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+training_hand_placed min
+  page: err 404 no such project
+  agent: err 404 no such project
+training_hand_placed null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+training_hand_placed wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
 agent_skill_install {}
   page: err 404 the app carries no skill folder
   agent: err 404 the app carries no skill folder

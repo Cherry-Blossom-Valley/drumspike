@@ -333,6 +333,18 @@ def test_finetune_skill_treats_null_as_no_verdict():
     assert "DSAgent.audit" in text and "DSAgent.backups" in text
 
 
+def test_finetune_skill_names_hand_placed_hits_through_the_helper():
+    """#418: the skill names the hand-placed hits through DSAgent.handPlaced - the training log is far
+    too large to read - and states both rules of the per-hit pass: a hit counts as looked at only after
+    `DSAgent.look` on that hit, and a foot beyond the departure band is a look and a listing, never a move."""
+    skill = Path(__file__).resolve().parent.parent / "skills" / "drumspike-finetune" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+    assert "DSAgent.handPlaced" in text
+    assert "Read the project's training log" not in text
+    assert "only after `DSAgent.look` on that hit" in text
+    assert "never a move by that number" in text
+
+
 def test_audio_spike_texts_describe_the_body_rule():
     """#402: the Audio line of the export guide describes what #378 does (the hit's body:
     the smoothed low tone over its first three clear swings, cut at the zero crossing). The

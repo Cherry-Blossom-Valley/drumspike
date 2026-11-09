@@ -44,5 +44,44 @@ fn dispatch_needs_a_sid_and_knows_only_its_own_command() {
         dispatch(&svc, "training_status", &json!({})).unwrap().unwrap_err().code,
         400
     );
-    assert_eq!(TRAINING_COMMANDS, ["training_status"]);
+    assert_eq!(TRAINING_COMMANDS, ["training_status", "training_hand_placed"]);
+}
+
+#[test]
+fn hand_placed_records_keep_the_person_rows_only() {
+    let log = concat!(
+        r#"{"op":"move","by":"person","track":"Kick","event":{"id":"h2"},"to":9600}"#,
+        "\n",
+        r#"{"op":"move","by":"agent","track":"Kick","event":{"id":"h3"},"to":14400}"#,
+        "\n",
+        r#"{"op":"confirm","by":"person","track":"Snare","event":{"id":"h1"},"from":4800,"to":4800}"#,
+        "\n",
+        r#"{"op":"move","track":"Kick","event":{"id":"h4"},"to":19200}"#,
+        "\n",
+        r#"{"op":"delete","by":"person","track":"Kick","event":{"id":"h2"},"from":9600}"#,
+        "\n",
+        r#"{"op":"learn_this","by":"person","track":"Kick","event":{"id":"h2"},"to":1234}"#,
+        "\n",
+        r#"{"op":"add","by":"person","track":"Kick","to":555}"#,
+        "\n",
+        "not json\n",
+    );
+    assert_eq!(
+        hand_placed_records(log, None),
+        vec![
+            json!({"track": "Kick", "op": "move", "by": "person", "id": "h2", "sample": 9600}),
+            json!({"track": "Snare", "op": "confirm", "by": "person", "id": "h1", "sample": 4800}),
+            json!({"track": "Kick", "op": "move", "by": Value::Null, "id": "h4", "sample": 19200}),
+            json!({"track": "Kick", "op": "add", "by": "person", "id": Value::Null, "sample": 555}),
+        ]
+    );
+    assert_eq!(
+        hand_placed_records(log, Some("Kick")),
+        vec![
+            json!({"track": "Kick", "op": "move", "by": "person", "id": "h2", "sample": 9600}),
+            json!({"track": "Kick", "op": "move", "by": Value::Null, "id": "h4", "sample": 19200}),
+            json!({"track": "Kick", "op": "add", "by": "person", "id": Value::Null, "sample": 555}),
+        ]
+    );
+    assert!(hand_placed_records("", None).is_empty());
 }

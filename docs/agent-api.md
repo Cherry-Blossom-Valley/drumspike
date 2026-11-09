@@ -266,7 +266,10 @@ demand and never stored in the project: `edge` says whether a steep edge counts,
 shares of the hit's peak (the slope per ms), `onset_spread` is the hit's `timing_confidence` in samples or null.
 A record is exact when `edge` is true, `line_noise` is at most 0.01 and `onset_spread` is under 4 samples or null;
 else it is approximate. A record without `placement` (an older log, a Learn mark) is unknown.
-`training_status {sid, on?}` answers `{on, records, path}`. `tools/training_export.py <jsonl...>` prints the
+`training_status {sid, on?}` answers `{on, records, path}`. `training_hand_placed {sid, track?}` (#418) reads
+the same log and answers `{records, path}` with one trimmed row `{track, op, by, id, sample}` per `move`,
+`add` or `confirm` record whose `by` is `person` or absent - the audio windows stay unread, so the agent
+names the hand-placed hits without reading the log itself. `tools/training_export.py <jsonl...>` prints the
 aggregates per role and op, with the count of exact, approximate and unknown records and the split of who made
 the edits (`by person: x, agent: y, unknown: z`), and writes the truth list
 `[{track, role, from, to, op, precision, by, exact, edge, line_noise, line_slope, onset_spread}]`. `--by` selects
@@ -326,6 +329,11 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
 - `audit(track)` (#408): every hit of the track whose shape `verdict` is `late`, as `[{index, id, t, foot_off, rise,
   quiet_ratio}]`. It reads the shape measures of `look` and never `judge.suggest` or a `plan` row, so a wrong suggestion
   cannot hide a late hit. One `look` per hit: run it on a track you have not finished, not in a loop.
+- `handPlaced(track)` (#418): the hits the user placed by hand, as `[{index, id, t, sample, ops}]` - one row per
+  hit that carries a person's move, add or confirm record in the project's training log (`by` `person` or
+  absent; an agent's record never counts). The service reads the log - it is far too large to read - and answers
+  trimmed rows; the helper folds them into the hits by the records' event id, else by their sample, and drops a
+  record no stored hit matches. Call it on every track before you work on it, and leave those hits as they are.
 - `apply(track, list)`: the moves `[{index, samples}]` (a row of `plan` also works, its `suggest` is used); a zero or `null`
   move is skipped. `save()` writes the project. `backups()` answers `{rule, before}`: a backup is named with the time of
   the save that replaced it, but holds the state as it was just BEFORE that save - `before` names the backup that holds
@@ -343,7 +351,7 @@ can call.
 
 - `POST http://127.0.0.1:<port>/call` with `Authorization: Bearer <token>` and the body `{"fn": "move", "args": ["Kick In", 1, 3],
   "timeout_ms": 60000?}`. `fn` is one of `project`, `hits`, `look`, `wide`, `render`, `move`, `confirm`, `undo`, `plan`,
-  `audit`, `apply`, `save`, `backups`, `status`, `statusLine`, `setTraining`; any other name is refused with 400 before it
+  `audit`, `handPlaced`, `apply`, `save`, `backups`, `status`, `statusLine`, `setTraining`; any other name is refused with 400 before it
   reaches the page. The answer is `{"ok": true, "value": <what the helper returned>}`.
 - Errors: 401 without the token (or a wrong one); 409 when no page listens or the helper refused (its message is the page's,
   for example "Training Mode is off"); 504 when the page did not answer within `timeout_ms` (default 60 s, at most 600 s).

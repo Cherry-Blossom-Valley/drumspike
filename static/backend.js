@@ -90,6 +90,7 @@ function ipcBackend(T) {
     windowCallNext: (ms, poller) => invoke("window_call_next", { timeout_ms: ms, poller }),   // #388: the page long-polls for the next helper call of the window endpoint
     windowCallResult: (id, ok, value, error) => invoke("window_call_result", ok ? { id, ok, value: value === undefined ? null : value } : { id, ok, error }),   // #388: and answers it
     trainingStatus: (sid, on) => invoke("training_status", on === undefined ? { sid } : { sid, on }),   // #343: {on, records, path}
+    trainingHandPlaced: (sid, track) => invoke("training_hand_placed", track === undefined ? { sid } : { sid, track }),   // #418: [{track, op, id, sample}]
     peaks, peaksRaw, samples, job,
     analyze: (sid, tracks, params, keepEdited) => invoke("analyze_start", { sid, tracks, params, keep_edited: !!keepEdited, progress: new T.core.Channel() }),   // P4-9: keep_edited merges the edited hits in the service
     /* #265: re-analyzes only the hits of [t0, t1] on one track; answers {track, t0, t1, replaced, n_new, events, info} */

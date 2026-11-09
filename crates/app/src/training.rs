@@ -32,7 +32,41 @@ use crate::media::mix_mode;
 use crate::registry::lock;
 
 /// The commands of this module.
-pub const TRAINING_COMMANDS: [&str; 1] = ["training_status"];
+pub const TRAINING_COMMANDS: [&str; 2] = ["training_status", "training_hand_placed"];
+
+/// The person-placed rows of one training-log line (#418): a `move`, `add` or `confirm` record whose `by`
+/// is `person` or absent (an older log carries no `by`). `sample` is the record's `to` (its `from` for a
+/// delete-free op without a `to`). Everything else on the line - the audio windows, the placement - stays
+/// unread: the log is far too large to read whole.
+fn hand_placed_records(text: &str, track: Option<&str>) -> Vec<Value> {
+    text.lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|rec| {
+            matches!(rec.get("op").and_then(Value::as_str), Some("move" | "add" | "confirm"))
+                && match rec.get("by") {
+                    None | Some(Value::Null) => true,
+                    Some(b) => b.as_str() == Some("person"),
+                }
+        })
+        .filter(|rec| {
+            let name = rec.get("track").and_then(Value::as_str).unwrap_or("");
+            track.is_none_or(|t| name == t)
+        })
+        .map(|rec| {
+            let sample = rec
+                .get("to")
+                .and_then(Value::as_i64)
+                .or_else(|| rec.get("from").and_then(Value::as_i64));
+            json!({
+                "track": rec.get("track").and_then(Value::as_str).unwrap_or(""),
+                "op": rec.get("op").and_then(Value::as_str).unwrap_or(""),
+                "by": rec.get("by").cloned().unwrap_or(Value::Null),
+                "id": rec.pointer("/event/id").cloned().unwrap_or(Value::Null),
+                "sample": sample,
+            })
+        })
+        .collect()
+}
 
 /// The audio window of a record: this long before the position (milliseconds) ...
 pub const BEFORE_MS: f64 = 40.0;
@@ -141,6 +175,21 @@ impl Service {
         }
         let records = *e.records.get_or_insert_with(|| count_lines(&path));
         Ok(json!({"on": e.on, "records": records, "path": path.display().to_string()}))
+    }
+
+    /// `training_hand_placed {sid, track?}` (#418): the hits the training log names as placed by a person,
+    /// as `[{track, op, id, sample}]` plus `path` - one row per record, without the audio windows, so the
+    /// agent never reads the log itself. A `by` of `agent` is never on the list.
+    ///
+    /// # Errors
+    ///
+    /// A 404 [`AppError`] for an unknown `sid`; an internal error when the service has no home folder.
+    pub fn training_hand_placed(&self, sid: &str, track: Option<&str>) -> Result<Value, AppError> {
+        let (path, _) = self.training_path(sid)?;
+        let records = std::fs::read_to_string(&path)
+            .map(|t| hand_placed_records(&t, track))
+            .unwrap_or_default();
+        Ok(json!({"records": records, "path": path.display().to_string()}))
     }
 
     /// The records of `examples` on the track `name` (the audio and the track's facts are read here), appended to the
@@ -454,7 +503,7 @@ impl Service {
 }
 
 /// R3: the handlers of [`TRAINING_COMMANDS`] for [`crate::call::run`].
-pub(crate) const HANDLERS: [crate::call::Route; 1] = crate::call::routes(TRAINING_COMMANDS, |s, _, cmd, args| {
+pub(crate) const HANDLERS: [crate::call::Route; 2] = crate::call::routes(TRAINING_COMMANDS, |s, _, cmd, args| {
     crate::call::json_reply(cmd, dispatch(s, cmd, args))
 });
 
@@ -469,6 +518,9 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
             .get("sid")
             .and_then(Value::as_str)
             .ok_or_else(|| AppError::bad("missing or wrong argument `sid` (string)"))?;
+        if cmd == "training_hand_placed" {
+            return svc.training_hand_placed(sid, args.get("track").and_then(Value::as_str));
+        }
         svc.training_status(sid, args.get("on").and_then(Value::as_bool))
     })())
 }
