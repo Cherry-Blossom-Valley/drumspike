@@ -46,14 +46,18 @@ the page with the bridge.
 5. Step through the hits so the user can watch, one hit at a time: look at the hit at sample zoom
    (`DSAgent.look(track, index)`), nudge it by whole samples where the rule says so, confirm it
    (`DSAgent.confirm(track, index)`), next hit. Name each step in the status line and hold briefly after each move
-   so a person can follow. Read the samples around the hit as shares of the local peak. The placement rule: the
+   so a person can follow. A hit counts as looked at only after `DSAgent.look` on that hit: a row of `plan`
+   or `audit` is a listing, never a look, and never a move by a number it carries. Read the samples around the
+   hit as shares of the local peak. The placement rule: the
    hit is the last line sample before the stroke's first motion of either sign. A pre-ripple, bump or dip that
    stands above the detector's departure band and leads into the stroke belongs to the stroke. A bump, dip or
    ripple under the detector's departure band is not the stroke's first motion: the hit stays at the foot of the
    main stroke. Only a departure the detector's rule recognises moves a hit.
    `null` or `stands` is not a verdict: when the judge answers `null` or `stands`, look at the hit yourself
    (`DSAgent.look`) and decide. Move the hit when the verdict is `late`, by `judge.foot_off` samples (a whole
-   number; negative is earlier). A late hit can carry a `null` `suggest` when its foot is far from the hit:
+   number; negative is earlier). A hit whose foot lies more than 12 samples before or 6 after it has no
+   suggestion (`suggest` is `null`): such a hit is a look and a listing, never a move by that number. A late hit
+   can carry a `null` `suggest` when its foot is far from the hit:
    look at those yourself too, and if you do not move one, list it with the reason. Leave a hit only when no
    quiet stretch exists before it (`no_quiet_line`) - and list it as "no quiet stretch", never as "not looked
    at". Do not
@@ -72,16 +76,18 @@ the page with the bridge.
    it. Do not delete it and do not mention it.
 10. After the save, report the per-track table before anything else: one row per track with the track's name, its
     hits, the moved, the confirmed, the hand-placed, "looked at, right" and "no quiet stretch" (the two parts of
-    not moved), and "not looked at" - that column must be zero - then a total row.
+    not moved), and "not looked at" - that column must be zero, and a hit counts as looked at only after
+    `DSAgent.look` on that hit - then a total row.
 11. Then ask the user one question: export now (MIDI and spike files through the MCP tools, `export_all` and
     `job_get` until `done`) or leave it.
 
 ## Guardrails
 
-- Never move or confirm a hit the user placed by hand. Read the project's training log (the `path` of
-  `DSAgent.status()`'s `training_status`, `training_status {sid}`): a hit with a move, add or confirm record whose
-  `by` is `person` or absent is hand-placed. Leave those as they are, and ask the user only when the log is empty
-  or unreadable.
+- Never move or confirm a hit the user placed by hand. Name those hits with `DSAgent.handPlaced(track)` on
+  every track before you work on it (the training log is far too large to read: the helper answers one row
+  `{index, id, t, sample, ops}` per hit that carries a person's move, add or confirm record). Leave those
+  hits as they are, and ask the user only when the helper answers an empty list on every track and
+  `DSAgent.status()` shows no records.
 - Never delete a hit without `DSAgent.wide(track, index)` first. Look at the 20 ms view and decide on that.
 - A `queue_doubt` row is a reason to look, not a block.
 - Never report sample data, file names, session names or song names outside this machine. Use "Session A", "Session B".

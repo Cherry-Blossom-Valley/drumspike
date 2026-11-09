@@ -61,6 +61,23 @@ pub async fn training_status(svc: State<'_, Service>, sid: String, on: Option<bo
     blocking(&svc, "training_status", move |s| s.training_status(&sid, on)).await
 }
 
+/// The hits the project's training log names as placed by a person (#418), `track` limiting the list.
+///
+/// # Errors
+///
+/// 404 when the project is unknown. 500 when the app has no home folder.
+#[tauri::command]
+pub async fn training_hand_placed(
+    svc: State<'_, Service>,
+    sid: String,
+    track: Option<String>,
+) -> Result<Value, AppError> {
+    blocking(&svc, "training_hand_placed", move |s| {
+        s.training_hand_placed(&sid, track.as_deref())
+    })
+    .await
+}
+
 /// Set the Hitpoint shift of the track `name` and move its hits by the difference.
 ///
 /// # Errors

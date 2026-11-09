@@ -896,6 +896,7 @@ macro_rules! command_handler {
             histogram::track_params_set,
             edit::events_edit,
             edit::training_status,
+            edit::training_hand_placed,
             edit::track_shift_set,
             learn::track_learn_mark,
             learn::track_learn_remove,

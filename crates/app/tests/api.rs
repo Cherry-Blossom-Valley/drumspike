@@ -709,6 +709,8 @@ fn every_mcp_answer_validates_against_its_output_schema_and_every_tool_and_batch
         ("row_heights_get", sd(json!({}))),
         // #343: the Training Mode state (read, then off again)
         ("training_status", sd(json!({}))),
+        // #418: the person-placed hits, named without the log (404 without a project)
+        ("training_hand_placed", sd(json!({}))),
         // #371: the skill folder (the install has no bundle in a test binary, so it may fail; the status answers)
         ("agent_skill_status", json!({"target": q(&root.join("skill_none"))})),
         ("agent_skill_install", json!({"target": q(&root.join("skill_none"))})),

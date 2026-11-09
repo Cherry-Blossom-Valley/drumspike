@@ -1643,6 +1643,16 @@ pub static REGISTRY: &[CommandSpec] = &[
         Agent,
         Quick,
     ),
+    // ---- #418: the hand-placed hits, named without the log's audio windows
+    cmd(
+        "training_hand_placed",
+        "The hits the project's training log names as placed by a person: [{track, op, id, sample}] plus path; track (str) limits the list",
+        &[SID, opt("track", Ty::Str, "Only this track")],
+        r#"{"type":"object","required":["records","path"]}"#,
+        Read,
+        Agent,
+        Quick,
+    ),
     // ---- #371: the agent fine-tune skill, bundled and installed by the app
     cmd(
         "agent_skill_install",

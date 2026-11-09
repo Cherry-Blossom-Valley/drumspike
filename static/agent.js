@@ -262,6 +262,30 @@
       }
       return late;
     },
+    /* #418: the hand-placed hits of a track: the hits with a move, add or confirm record whose `by` is `person`
+       or absent (an older log has no `by`). The service reads the training log - it is far too large to read -
+       and answers one trimmed row per record: {track, op, by, id, sample}. This helper keeps the person rows and
+       folds them into the hits: [{index, id, t, sample, ops}]. A row is matched by the record's event id, else by
+       its sample; a record no stored hit matches is dropped. */
+    async handPlaced(track) {
+      need(track);
+      const evs = S.events[track] || [];
+      const r = await B.trainingHandPlaced(S.sid, track);
+      const rows = new Map();
+      for (const rec of (r && r.records) || []) {
+        if (!(rec.op === "move" || rec.op === "add" || rec.op === "confirm")) continue;
+        if (rec.by != null && rec.by !== "person") continue;
+        let index = rec.id != null ? evs.findIndex(e => e.id === rec.id) : -1;
+        if (index < 0 && Number.isInteger(rec.sample)) index = evs.findIndex(e => sampleOf(track, e) === rec.sample);
+        if (index < 0) continue;
+        if (!rows.has(index)) {
+          const e = evs[index];
+          rows.set(index, { index, id: e.id, t: e.t, sample: sampleOf(track, e), ops: [] });
+        }
+        rows.get(index).ops.push(rec.op);
+      }
+      return [...rows.values()].sort((a, b) => a.index - b.index);
+    },
     /* the moves of a plan: [{index, samples}] (or a row of plan: its suggest); a zero or null move is skipped */
     async apply(track, list) {
       needTraining(); need(track);
