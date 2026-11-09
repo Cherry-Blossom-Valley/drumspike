@@ -302,7 +302,7 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   be set, `suggest` is `null`). `suggest` is the offset in samples that the placement rule suggests (the hit is the last
   line sample before the stroke's first motion), 0 for a hit whose own sample is within the band (`judge.why` is then
   `"under the detector's band"` when the foot is earlier) or when no step near the hit is over the band (the stroke rises
-  past the view; `judge.why` is `"no step above the band near the hit"`), and `null` when the verdict is
+  past the view; `judge.why` is `"no motion above the band near the hit"`), and `null` when the verdict is
   `no_quiet_line` or the foot lies more than 12 samples before or 6 after the hit (a pre-bump, bleed or wobble,
   not the stroke; `judge.why` is then `"departure far from the hit"`, the verdict is still `late` or `at_foot`). When
   the verdict is `late`, move the hit by `judge.foot_off` samples (a whole number; negative is earlier); a late hit can
