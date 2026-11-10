@@ -30,8 +30,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use drumspike_core::project::{
-    ANALYSIS_DIR, DEFAULT_MIX_MODE, Settings, abspath, check_name, check_track_name, document_path, new_project,
-    save_as, save_project_report, write_document,
+    ANALYSIS_DIR, DEFAULT_MIX_MODE, Document, Project, Settings, abspath, check_name, check_track_name, document_path,
+    new_project, save_as, save_project_report, write_document,
 };
 use serde_json::{Value, json};
 
@@ -39,7 +39,7 @@ use crate::autosave;
 use crate::error::AppError;
 use crate::jobs::to_json_indent1;
 use crate::lanes::LaneJobs;
-use crate::registry::{Emitter, lock};
+use crate::registry::{Emitter, OpenProject, lock};
 use crate::reply::Channels;
 use crate::{Progress, Service};
 
@@ -333,6 +333,9 @@ impl Service {
         let (dir, name) = (saved.dir.clone(), saved.name());
         let dirty = {
             let mut g = lock(&op);
+            // the folders of the tracks the written document no longer holds go now (the save that
+            // wrote it is the one `tracks_remove` waits for); a failure of one folder keeps it pending
+            drop_pending_analysis(&mut g, &saved);
             if g.project == before {
                 g.project = saved;
                 g.mark_clean();
@@ -415,6 +418,9 @@ impl Service {
             // an error drops `new_folder`: the lock file this call made goes, then the lock, then an empty new folder
             let newp = save_as(&g.project, &dir, name, false)?;
             g.project = newp;
+            // the pending folders belong to the old folder (its document on disk still names the
+            // tracks); the new project is written without them and keeps none pending
+            g.pending_delete.clear();
             g.switch_lock(new_folder.and_then(NewFolder::into_lock));
             g.mark_clean();
             g.restamp(); // #121
@@ -659,6 +665,33 @@ impl Service {
         }
         Ok(json!({"key": key, "value": value}))
     }
+}
+
+/// The folders of the tracks that a save made unpinned go now (`tracks_remove` put their names on
+/// `pending_delete`; the save wrote the document without them). A name that the written document
+/// still claims keeps its entry: the folder belongs to the state on disk until a save without the
+/// track comes. A name that a track of the open project claims (the track was removed, then added
+/// again with the same or a case-different name) loses its entry: the folder is the new track's,
+/// and its files stay. A folder that cannot be deleted stays pending; the next save tries again.
+fn drop_pending_analysis(g: &mut OpenProject, written: &Project) {
+    if g.pending_delete.is_empty() {
+        return;
+    }
+    let holds = |doc: &Document, name: &str| doc.tracks().any(|(n, _)| crate::export::same_file_name(n, name));
+    let adir = written.subdir(ANALYSIS_DIR);
+    g.pending_delete.retain(|name| {
+        if holds(&written.doc, name) {
+            return true;
+        }
+        if holds(&g.project.doc, name) {
+            return false;
+        }
+        let dir = adir.join(name);
+        if check_track_name(name).is_ok() && dir.is_dir() {
+            return std::fs::remove_dir_all(&dir).is_err();
+        }
+        false
+    });
 }
 
 /// The entries of `recent.json`; a missing or damaged file is an empty list.
