@@ -55,6 +55,7 @@ fn request(token: Option<&str>, method: &str, url: &str, body: &str) -> HttpRequ
         body: body.as_bytes().to_vec(),
         close: true,
         authorization: token.map(|t| format!("Bearer {t}")),
+        ..HttpRequest::default()
     }
 }
 
