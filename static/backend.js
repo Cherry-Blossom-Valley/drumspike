@@ -231,6 +231,7 @@ function ipcBackend(T) {
    (crates/app/src/lifecycle.rs, lanes.rs).
    Save As with copyAudio is a job since P3-4d: jobMethods below replaces saveAs. */
 function lifecycleMethods(invoke, T) {
+  const STATUS_TRIES = 3;   // failed peaks_build_status calls in a row before the build promise rejects
   return {
     recentProjects: () => invoke("project_recent", {}),
     recentClear: () => invoke("project_recent_clear", {}),   // #441 Clear Recent: empties recent.json
@@ -263,8 +264,9 @@ function lifecycleMethods(invoke, T) {
        every change ({state, total, tracks: {name: {state, stage?, error?}}}); resolves when the job is done */
     prepareLanes: (sid, onProgress) => new Promise((resolve, reject) => {
       const ch = new T.core.Channel();
-      let over = false, timer = null;
+      let over = false, timer = null, lost = 0;
       const finish = () => { if (!over) { over = true; clearInterval(timer); resolve(); } };
+      const fail = e => { if (!over) { over = true; clearInterval(timer); reject(e); } };
       ch.onmessage = m => {
         if (!m || !m.job) return;
         try { if (onProgress) onProgress(m.job); } catch (e) { /* a broken callback must not stop the build */ }
@@ -273,7 +275,8 @@ function lifecycleMethods(invoke, T) {
       invoke("peaks_build_start", { sid, tracks: null, progress: ch }).then(r => {
         if (!r.started.length) { finish(); return; }
         timer = setInterval(async () => {   // the status ends the wait when a message got lost
-          try { if ((await invoke("peaks_build_status", { sid })).state === "done") finish(); } catch (e) { finish(); }
+          try { if ((await invoke("peaks_build_status", { sid })).state === "done") finish(); lost = 0; }
+          catch (e) { if (++lost >= STATUS_TRIES) fail(e); }   // a lost call is no "done": a few tries, then the caller shows the error
         }, 300);
       }).catch(e => { over = true; reject(e); });
     }),

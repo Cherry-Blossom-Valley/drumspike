@@ -22,6 +22,24 @@ function setMsgLvl(m, lvl, bg) {
 }
 function setMsg(m, lvl) { setMsgLvl(m, lvl || "info", false); }   // direct (user action): replaces everything
 function setMsgBg(m, lvl) { setMsgLvl(m, lvl || "info", true); }   // background writer: yields to a held error
+/* A rejected promise or a thrown error that no handler caught would end in the console only: the user clicks and sees
+   nothing. One message to the status line, the full error to the console. A failure inside the report is not reported
+   again (the flag), so the handler cannot loop. */
+var _reporting = false;
+function reportPageError(err) {
+  if (_reporting) return;
+  _reporting = true;
+  try {
+    console.error("drumspike: unhandled", err);
+    setMsg(`unexpected error: ${errText(err)}`, "error");
+  } catch (e) { /* the console line above is all that is left */ }
+  finally { _reporting = false; }
+}
+window.addEventListener("error", ev => {
+  if (!ev.error && /^ResizeObserver loop/.test(ev.message || "")) return;   // the browser's harmless layout notice, no error of the page
+  reportPageError(ev.error || ev.message);
+});
+window.addEventListener("unhandledrejection", ev => reportPageError(ev.reason));
 let selSynced = null;   // the last selHit that the menu saw (sync only when it flips, not on every drag mousemove)
 function selShellSync() {   // #158 (rank 9): Delete, the nudge items and Audition Hit are greyed without a hit or range selection
   const sel = !!(S.sel || LN.sel);
