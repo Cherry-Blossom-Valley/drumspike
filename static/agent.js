@@ -9,6 +9,12 @@
   const DEPARTURE_VIS_PCT = 0.025;                                       // #394 guard: the detector's own band, a share of the hit's peak (edge.rs DEPARTURE_VIS_PCT)
   const FRAME_WAIT_MS = 300;                                             // the longest wait for a frame of a hidden page
   const DEPART_BEFORE = 12, DEPART_AFTER = 6;                            // the stroke of the coordinator's routine starts within 12 samples before to 6 after the hit
+  // #447: the pattern of a track, built from its own clear hits. All spans are times, so they scale with the rate.
+  const PAT_PRE_MS = 1 / 3, PAT_POST_MS = 1 / 6, PAT_SEARCH_MS = 14 / 48;    // the foot window (16 before, 8 after at 48 kHz) and the search range (14 samples)
+  const PAT_LINE_MS = 2, PAT_PEAK_MS = 5, PAT_CLEAR_PCT = 1;               // a clear hit: the 2 ms line before it stays within 1 % of the peak of the 5 ms after it
+  const PAT_MIN_HITS = 40, PAT_MIN_CLEAR = 15, PAT_ROUNDS = 3;             // fewer hits: no pattern; the fewest hits a pattern is built from; re-alignment rounds
+  const PAT_CONFIRM = 1, PAT_DIFFER = 2;                                   // a move is confirmed within 1 sample; 2 or more apart is a difference
+  const PAT_MIN_MATCH = 0.5;                                               // a correlation under 0.5 explains less than a quarter of the hit's foot: no opinion
   const EDGE_SPAN_MS = 5;                                                // #394: the detector's own peak span after the hit (edge.rs EDGE_SPAN_S)
 
   function need(track) {
@@ -143,6 +149,108 @@
     return out;
   }
 
+  /* #447: the pattern of a track. An engineer knows how the clear hits of a track look and places an unclear hit by that.
+     `rows` are the hits of one track, each `{x, at}`: samples around the hit and the hit's index in them (2 ms before to
+     5 ms after is enough). A clear hit has a quiet line before it. The pattern is the median foot of the clear hits (a short
+     window around the hit, each scaled to its own peak), re-aligned three times to itself. A hit that stands up its rise has
+     no quiet line, so the clear hits are the ones at the foot and the pattern takes its position from them. No label and
+     no session value is used. Answers null when the track
+     has too few hits. */
+  const patSpans = sr => ({ pre: Math.round(sr * PAT_PRE_MS / 1000), post: Math.round(sr * PAT_POST_MS / 1000), search: Math.round(sr * PAT_SEARCH_MS / 1000),
+    line: Math.round(sr * PAT_LINE_MS / 1000), peak: Math.round(sr * PAT_PEAK_MS / 1000) });
+  const median = a => { const b = Array.from(a).sort((p, q) => p - q), n = b.length; return n ? (n % 2 ? b[n >> 1] : (b[n / 2 - 1] + b[n / 2]) / 2) : 0; };
+  function zeroMeanUnit(a) {
+    let m = 0;
+    for (const v of a) m += v;
+    m /= a.length || 1;
+    let n = 0;
+    const o = a.map(v => { const d = v - m; n += d * d; return d; });
+    n = Math.sqrt(n);
+    return n > 0 ? o.map(v => v / n) : o;
+  }
+  /* the line excursion of a hit in percent of its peak; null when the samples do not cover the spans */
+  function patternExcursion(x, at, sp) {
+    if (at - sp.line < 0 || at + sp.peak > x.length) return null;
+    const pre = Array.from(x.slice(at - sp.line, at)), level = median(pre);
+    let exc = 0, pk = 0;
+    for (const v of pre) exc = Math.max(exc, Math.abs(v - level));
+    for (let i = at; i < at + sp.peak; i++) pk = Math.max(pk, Math.abs(x[i]));
+    return pk > 0 ? exc / pk * 100 : null;
+  }
+  /* where the pattern matches the samples best near `at`: {off, score}; off < 0 is earlier. null when the samples do not
+     cover the search, and null when the hit does not look like the pattern: the best match lies at the end of the search
+     range (the match still grows there, so it is no peak) or it is under PAT_MIN_MATCH (a stroke of the other polarity, a
+     stroke inside a ring). */
+  function patternOffset(x, at, pat) {
+    if (!pat) return null;
+    const L = pat.pre + pat.post;
+    if (at - pat.pre - pat.search < 0 || at - pat.pre + pat.search + L > x.length) return null;
+    let best = -2, off = 0;
+    for (let d = -pat.search; d <= pat.search; d++) {
+      const a = at - pat.pre + d, w = zeroMeanUnit(Array.from(x.slice(a, a + L)));
+      let c = 0;
+      for (let i = 0; i < L; i++) c += w[i] * pat.t[i];
+      if (c > best) { best = c; off = d; }
+    }
+    if (!(best >= PAT_MIN_MATCH) || Math.abs(off) === pat.search) return null;
+    return { off, score: best };
+  }
+  function patternBuild(rows, sr) {
+    const sp = patSpans(sr), L = sp.pre + sp.post;
+    const usable = rows.map(r => ({ ...r, exc: patternExcursion(r.x, r.at, sp) })).filter(r => r.exc !== null);
+    if (usable.length < PAT_MIN_HITS) return null;
+    let clear = usable.filter(r => r.exc < PAT_CLEAR_PCT);
+    if (clear.length < PAT_MIN_CLEAR) clear = [...usable].sort((a, b) => a.exc - b.exc).slice(0, Math.max(PAT_MIN_CLEAR, usable.length >> 2));   // a track without quiet lines: its quietest quarter
+    const pat = { t: null, pre: sp.pre, post: sp.post, search: sp.search, hits: usable.length, clear: clear.length };
+    const lag = clear.map(() => 0);
+    for (let round = 0; round < PAT_ROUNDS; round++) {
+      const segs = clear.map((r, k) => {
+        const a = r.at - sp.pre + lag[k], seg = Array.from(r.x.slice(a, a + L));
+        let pk = 0;
+        for (const v of seg) pk = Math.max(pk, Math.abs(v));
+        return pk > 0 ? seg.map(v => v / pk) : seg;
+      });
+      const t = [];
+      for (let i = 0; i < L; i++) t.push(median(segs.map(sg => sg[i])));
+      pat.t = zeroMeanUnit(t);
+      clear.forEach((r, k) => { const o = patternOffset(r.x, r.at, pat); lag[k] = o ? o.off : 0; });
+    }
+    return pat;
+  }
+  /* #447: the second opinion. `j` is the judge's answer from the line before the hit, `p` the pattern's ({off, score} or
+     null). The judge moves a hit only when the pattern confirms the move within one sample. A hit the judge would leave
+     while the pattern puts its start 2 or more samples away gets no answer. Both go on the list for the user, with both
+     positions in `why`. `pattern_off` and `pattern_agrees` are always in the answer; `line_suggest` keeps the judge's own
+     suggestion when the pattern took it back. Measured on the labelled rows: wrong moves fall to about a quarter. */
+  function second(j, p) {
+    const out = { ...j, pattern_off: p ? p.off : null, pattern_agrees: null };
+    if (!p || j.suggest === null) return out;
+    const d = Math.abs(j.suggest - p.off), at = n => (n === 0 ? "at the hit" : `${Math.abs(n)} sample${Math.abs(n) === 1 ? "" : "s"} ${n < 0 ? "earlier" : "later"}`);
+    out.pattern_agrees = d <= PAT_CONFIRM;
+    if (j.suggest !== 0 ? d > PAT_CONFIRM : d >= PAT_DIFFER) {
+      out.line_suggest = j.suggest; out.suggest = null;
+      out.why = `two opinions differ: the line before the hit puts the start ${at(j.suggest)}, the track's clear hits put it ${at(p.off)}`;
+    }
+    return out;
+  }
+  /* the pattern of a track in the page: built once from the samples around every hit, kept until the count of hits changes */
+  const _pattern = {};
+  async function patternOf(track) {
+    const evs = S.events[track] || [], sr = S.tracks[track].sr, key = `${S.sid}:${evs.length}`;
+    if (_pattern[track] && _pattern[track].key === key) return _pattern[track].pat;
+    const sp = patSpans(sr), rows = [];
+    if (evs.length >= PAT_MIN_HITS) {
+      setMsg(`agent: learning the pattern of ${track} from its clear hits`);
+      for (const e of evs) {
+        const hit = sampleOf(track, e), r = await B.samples(S.sid, track, Math.max(0, hit - sp.line), hit + sp.peak);
+        if (r && r.data) rows.push({ x: r.data, at: hit - r.start });
+      }
+    }
+    const pat = rows.length ? patternBuild(rows, sr) : null;
+    _pattern[track] = { key, pat };
+    return pat;
+  }
+
   async function view(track, index, beforeMs, afterMs, opts) {
     const e = needHit(track, index), sr = S.tracks[track].sr;
     select(track, index);
@@ -173,8 +281,11 @@
     const shares = Array.from(r.data, v => (peak > 0 ? v / peak : 0));
     // #408: the band the judge reads against, stated in the unit of the detector: 2.5 % of the hit's peak over 5 ms
     const band = { pct: DEPARTURE_VIS_PCT, of: "the hit's peak", span_ms: EDGE_SPAN_MS, share_of_local_peak: ref ? DEPARTURE_VIS_PCT / ref : DEPART_MIN };
+    // #447: the pattern's opinion on this hit, from the samples of the view (a view too short for the search gives none)
+    const pat = await patternOf(track), po = pat ? patternOffset(r.data, hitAt, pat) : null;
     return { track, index, sample: hit, start: r.start, hit_at: hitAt, samples: shares, local_peak: peak, stroke_peak: strokePeak, amp, band,
-      trainingView: trainingView(track), judge: judge(shares, hitAt, ref) };
+      trainingView: trainingView(track), judge: second(judge(shares, hitAt, ref), po),
+      pattern: pat ? { hits: pat.hits, clear: pat.clear, off: po ? po.off : null, score: po ? po.score : null } : null };
   }
 
   async function ratings(track) {
@@ -275,21 +386,26 @@
         // queue_doubt: the review queue's doubt (a reason to look); line_ok: the judge found a line and a suggestible departure
         rows.push({ index: i, id: evs[i].id, t: evs[i].t, sample: l.sample, suggest: j.suggest, spread: j.spread, verdict: j.verdict,
           confidence: q ? q.c : null, queue_doubt: qd, queue_why: qd ? [...(q.why || [])] : [],
-          line_ok: j.suggest !== null,
+          line_ok: j.suggest !== null, pattern_off: j.pattern_off, pattern_agrees: j.pattern_agrees,
           why: j.suggest !== null ? null : j.why || "no clear line before the hit" });
       }
       return rows;
     },
     /* #408: every hit of the track whose shape verdict is `late`: the hit stands up the rise, over the band. It reads the shape
-       measures of `look` and never `judge.suggest` or a plan row, so a wrong suggestion cannot hide a late hit. */
+       measures of `look` and never `judge.suggest` or a plan row, so a wrong suggestion cannot hide a late hit.
+       #447: each row says its `reason`. `late`: move it by `suggest` when that is a number. `opinions differ`: the line
+       before the hit and the track's clear hits put the start 2 or more samples apart (a late hit whose move the pattern
+       did not confirm, or a standing hit the pattern puts elsewhere): never a move, a hit for the user's list. */
     async audit(track) {
       need(track);
-      const evs = S.events[track] || [], late = [];
+      const evs = S.events[track] || [], out = [];
       for (let i = 0; i < evs.length; i++) {
-        const j = (await DSAgent.look(track, i)).judge;
-        if (j.verdict === "late") late.push({ index: i, id: evs[i].id, t: evs[i].t, foot_off: j.foot_off, rise: j.rise, quiet_ratio: j.quiet_ratio });
+        const j = (await DSAgent.look(track, i)).judge, differ = j.line_suggest !== undefined;
+        if (j.verdict !== "late" && !differ) continue;
+        out.push({ index: i, id: evs[i].id, t: evs[i].t, reason: differ ? "opinions differ" : "late", suggest: j.suggest, foot_off: j.foot_off, rise: j.rise,
+          quiet_ratio: j.quiet_ratio, pattern_off: j.pattern_off === undefined ? null : j.pattern_off, why: j.why || null });
       }
-      return late;
+      return out;
     },
     /* #418: the hand-placed hits of a track: the hits with a move, add or confirm record whose `by` is `person`
        or absent (an older log has no `by`). The service reads the training log - it is far too large to read -

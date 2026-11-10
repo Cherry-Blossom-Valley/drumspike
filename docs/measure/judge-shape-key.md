@@ -100,6 +100,52 @@ are unchanged (3 moves of 63, the 19 confirmed hits stand); the snare gets 7 mov
 kick hit shifted the same four ways, 2 of 252 read "at the foot" without a reason before and 0 now (both are dips and are
 listed).
 
+## The pattern of the track as a second opinion (#447)
+
+The owner's observation: an engineer knows how the clear hits of a track look and places an unclear hit by that. The judge
+looks at one hit at a time. It now has that second opinion.
+
+Per track the page builds a pattern from the track's own clear hits. A hit is clear when the 2 ms before it stay within 1 %
+of the peak of the 5 ms after it; a hit that stands up its rise is therefore never clear. The pattern is the median of the
+clear hits' feet (1/3 ms before the hit to 1/6 ms after it, each scaled to its own peak), re-aligned to itself three times.
+Each hit then gets the offset where its own samples match the pattern best (zero-mean normalised correlation, 14 samples
+each way at 48 kHz). No label and no value of a session is used; all spans are times and follow the rate. A match of the
+whole attack was measured first and dropped: the body of a snare stroke differs from hit to hit, the first motion does not.
+
+The rule: the judge moves a hit only when the pattern confirms the move within one sample. A hit the judge would move
+while the pattern does not confirm it, and a hit the judge would leave while the pattern puts its start 2 or more samples
+away, gets no suggestion and a reason that names both positions. The agent lists it for the user. A track with fewer
+than 40 hits has no pattern. The pattern has no opinion on a hit it does not match: when the best match lies at the end of
+the search range, or when the correlation is under 0.5 (less than a quarter of the hit's foot is explained). Without
+this rule the table reads 22 wrong moves and 445 listed hits: the rule gives 2 wrong moves back and takes 18 hits off the
+list. It is there because an opinion from a match of 0.1 is no opinion, and because it kept a right move in the page run
+(a kick of the other slope than the rest of its track). Higher floors were measured and bring more wrong moves back.
+
+Measured with `tools/judge_measure.py --at-current`: every labelled hit at the position of the current placement rule,
+which is the case of a fine-tune run on a fresh analysis (4912 gold rows; 69 have no current position).
+
+| measure | judge alone | with the pattern |
+|---|---|---|
+| wrong moves (the hit ends further from the label) | 84 | 24 |
+| hits 2 or more samples off, left with an answer of 0 | 547 | 423 |
+| hits listed for the user (no suggestion) | 141 | 427 |
+| exact / within 1 | 2920 / 4147 | 2920 / 4150 |
+| owner rows: exact / within 1 | 440 / 493 | 439 / 492 |
+| owner rows: wrong / left 2 or more off / listed | 2 / 3 / 5 | 2 / 1 / 10 |
+| injected hits flagged as late, of 9872 | 9762 | 9762 |
+| injected hits left without a reason | 5 | 3 |
+| injected hits left with a reason, not listed | 73 | 1 |
+| injected late hits whose move the pattern took back | - | 205, of which 49 would have landed on the label |
+
+Reading: the pattern does not make the judge more exact. It makes it safer: seven of ten wrong moves go, and almost every
+planted late hit the judge left with a reason is now on the list. The price is a longer list, mostly on snare tracks, and
+one owner row whose right move is now a listed hit. At the labelling-time positions (the tool's default run) the list is
+longer still (161 to 876) and the exact count falls (2864 to 2661): those positions came from an older placement rule that
+left almost half of the snare hits 2 or more samples off, so fewer hits are clear and fewer right moves are confirmed.
+
+Limits: 4484 of the gold rows are labels from an agent with an older judge, so they favour the judge alone; the owner's 497
+rows are the fair part. Toms have no labels. All 20 labelled tracks got a pattern.
+
 ## The earlier rounds (#385, #394; before the shape judge)
 
 Measured with `tools/judge_measure.py` (test: `tests/test_judge_measure.py`). Aggregates only. No judge change ships: **on the

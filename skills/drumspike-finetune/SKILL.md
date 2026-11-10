@@ -58,7 +58,13 @@ the page with the bridge.
    number; negative is earlier). A hit whose foot lies more than 12 samples before or 6 after it has no
    suggestion (`suggest` is `null`): such a hit is a look and a listing, never a move by that number. A late hit
    can carry a `null` `suggest` when its foot is far from the hit:
-   look at those yourself too, and if you do not move one, list it with the reason. Leave a hit only when no
+   look at those yourself too, and if you do not move one, list it with the reason.
+   The judge has a second opinion: the pattern of the track, which is how the track's own clear hits start
+   (`judge.pattern_off` is where the pattern puts this hit's start, in samples from the hit). A move stands only
+   when the pattern confirms it within one sample. When the two differ by 2 or more samples, `suggest` is `null`
+   and `judge.why` starts with `two opinions differ`: never move such a hit, also when its verdict is `late`.
+   Look at it and list it for the user with both positions (`judge.line_suggest` and `judge.pattern_off`). A
+   track with fewer than 40 hits has no pattern (`pattern` is `null`) and the judge answers alone. Leave a hit only when no
    quiet stretch exists before it (`no_quiet_line`) - and list it as "no quiet stretch", never as "not looked
    at". Do not
    invent thresholds: use the verdict and the documented bands. After the moves, re-read every moved hit
@@ -70,8 +76,9 @@ the page with the bridge.
    `Backups/` folder keeps the versions (`DSAgent.backups()` names the backup that holds the state before this
    session; a backup is named with the time of the save that replaced it, and holds the state before that save).
 8. Before `DSAgent.save()`, run `DSAgent.audit(track)` on every track (it looks at every hit of the track, so give
-   it a longer `timeout_ms`, for example 600000; the default is 60 s). The remaining late hits must be zero; if
-   one stays, list it one by one with the reason, and say so in the report.
+   it a longer `timeout_ms`, for example 600000; the default is 60 s). Each row has a `reason`. The rows with
+   reason `late` must be zero; if one stays, list it one by one with the reason, and say so in the report. A row
+   with reason `opinions differ` is a hit for the user's list (its `why` names both positions), never a move.
 9. `DSAgent.save()`. A lock file that still names a stopped bridge does not block: the app or the next bridge takes
    it. Do not delete it and do not mention it.
 10. After the save, report the per-track table before anything else: one row per track with the track's name, its

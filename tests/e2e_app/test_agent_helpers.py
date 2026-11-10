@@ -254,3 +254,48 @@ def test_settings_row_installs_the_bundled_skill_and_shows_the_version_and_the_m
     expect(app.locator("#setSkillStatus")).to_contain_text(f"installed {version}")
     expect(app.locator("#setSkillInstall")).to_have_text("Install")
     shutil.rmtree(target.parent, ignore_errors=True)
+
+
+def test_a_track_of_41_hits_gets_a_pattern_and_a_late_hit_the_judge_leaves_is_listed(app, make_project, tmp_path):
+    """#447: the judge's second opinion in the page. The pattern is built from the track's own clear hits (one read per
+    hit); `look` answers it, the judge carries its position, `plan` and `audit` rows carry it too. The strokes of the
+    generated track start slowly: a hit placed 3 samples late still stands within the detector's band, so the line
+    measure leaves it. The pattern reads the true 3. The two differ, so the hit is listed with both positions."""
+    onsets = [0.5 + 0.5 * k for k in range(41)]                            # half a second apart: every stroke starts from a quiet line
+    idx = [int(round(t * SR)) for t in onsets]
+    x, _ = synth_track(onsets, 21.5)
+    src = tmp_path / "many"
+    src.mkdir()
+    wav = write_wav(src / f"{TRACK}.wav", x)
+    events = [{"t": (i + (3 if k == 20 else 0)) / SR, "v": 100} for k, i in enumerate(idx)]   # hit 20 stands 3 samples late
+    open_project(app, make_project.builder.build_project(tmp_path / "many_projects", "Many", [(TRACK, wav, "kick", 36, events)], "copied"))
+    at_foot = call(app, "DSAgent.look('Kick In', 5)")
+    assert at_foot["pattern"]["hits"] == 41 and at_foot["pattern"]["clear"] >= 15, at_foot["pattern"]
+    assert at_foot["pattern"]["off"] == 0 and at_foot["judge"]["pattern_off"] == 0 and at_foot["judge"]["pattern_agrees"] is True
+    assert at_foot["judge"]["suggest"] == 0
+    late = call(app, "DSAgent.look('Kick In', 20)")["judge"]
+    assert late["pattern_off"] == -3, "the pattern finds the true start"
+    assert late["verdict"] == "at_foot" and late["line_suggest"] == 0 and late["suggest"] is None and late["pattern_agrees"] is False, late
+    assert late["why"] == ("two opinions differ: the line before the hit puts the start at the hit, "
+                           "the track's clear hits put it 3 samples earlier")
+    rows = call(app, "DSAgent.plan('Kick In', 19, 21)")
+    assert [r["pattern_off"] for r in rows] == [0, -3, 0]
+    assert [r["pattern_agrees"] for r in rows] == [True, False, True]
+    assert [r["suggest"] for r in rows] == [0, None, 0] and rows[1]["line_ok"] is False and rows[1]["why"] == late["why"]
+    training_on(app)
+    done = call(app, "DSAgent.apply('Kick In', a[0])", rows)                 # a plan row without a suggestion moves nothing
+    assert [d["moved"] for d in done] == [False, False, False]
+    audit = call(app, "DSAgent.audit('Kick In')")
+    assert [(r["index"], r["reason"], r["suggest"], r["pattern_off"]) for r in audit] == [(20, "opinions differ", None, -3)]
+    assert audit[0]["why"] == late["why"]
+    # the pattern is read once per track: a later look reads the view, not the 41 hits again
+    app.evaluate("() => { window.__reads = 0; const f = B.samples; B.samples = (...a) => { window.__reads++; return f(...a); }; }")
+    call(app, "DSAgent.look('Kick In', 6)")
+    assert 1 <= app.evaluate("() => window.__reads") < 10                  # the view's own reads, far under one per hit
+
+
+def test_a_short_track_has_no_pattern_and_the_judge_answers_alone(app, make_project, tmp_path):
+    opened(app, make_project, tmp_path)
+    r = call(app, "DSAgent.look('Kick In', 1)")
+    assert r["pattern"] is None
+    assert r["judge"]["pattern_off"] is None and r["judge"]["pattern_agrees"] is None
