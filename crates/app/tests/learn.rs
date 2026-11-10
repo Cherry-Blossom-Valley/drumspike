@@ -1315,3 +1315,142 @@ fn overlapping_hand_edits_keep_learn_matching_the_events() {
         );
     }
 }
+
+// ---------- #439: an added hit goes through the placement rule ----------
+
+/// The sample of a hit time.
+fn sample_of(t: f64) -> i64 {
+    (t * 48_000.0).round() as i64
+}
+
+/// A kick track whose ghost kicks (-18 dB) the detector drops, analysed with `shift` samples of Hitpoint shift.
+fn ghost_session(tag: &str, ghosts: &[f64], shift: i64) -> (Service, String) {
+    let root = tmp(tag);
+    let svc = service_dsp();
+    svc.set_home(root.join("home"));
+    let dur = 3.5;
+    let loud = kick_signal(&ONSETS, dur, 48_000);
+    let soft = kick_signal(ghosts, dur, 48_000);
+    let g = 10f32.powf(-18.0 / 20.0);
+    let x: Vec<f32> = loud.iter().zip(&soft).map(|(a, b)| a + g * b).collect();
+    let spec = Spec {
+        name: "k in",
+        role: "kick",
+        note: 36,
+        x,
+        sr: 48_000,
+    };
+    let dir = project(&root, "Placed", &[spec]);
+    let sid = svc.project_open(&dir.display().to_string()).unwrap()["sid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // the track keeps its Hitpoint shift as the Inspector stores it, then the analysis runs with it
+    let params = json!({"shift_samples": shift});
+    svc.track_params_set(&sid, "k in", params.as_object().unwrap()).unwrap();
+    svc.analyze_start(&sid, None, params.as_object(), None).unwrap();
+    wait_done(&svc, &sid);
+    (svc, sid)
+}
+
+/// The samples the analysis gives the ghosts when it detects them: a re-pick preview at a lower threshold.
+fn analysis_samples(svc: &Service, sid: &str, ghosts: &[f64], shift: i64) -> Vec<i64> {
+    let params = json!({"sensitivity": 150, "shift_samples": shift});
+    let r = svc.track_repick(sid, "k in", params.as_object(), false).unwrap();
+    let hits = times(r["events"].as_array().unwrap());
+    ghosts
+        .iter()
+        .map(|g| {
+            let h = hits
+                .iter()
+                .find(|h| (**h - g - shift as f64 / 48_000.0).abs() < 0.02)
+                .unwrap_or_else(|| panic!("the lower threshold detects the ghost at {g}: {hits:?}"));
+            sample_of(*h)
+        })
+        .collect()
+}
+
+/// Learn This on each ghost range; the samples of the hits it added, in order.
+fn learn_ghosts(svc: &Service, sid: &str, ghosts: &[f64]) -> Vec<i64> {
+    let mut added = Vec::new();
+    for g in ghosts {
+        let r = svc
+            .track_learn_mark(sid, "k in", "this", Some((g - 0.05, g + 0.05)), None)
+            .unwrap();
+        assert_eq!(r["from"], "candidate", "premise: the ghost is a candidate: {r}");
+        assert_eq!(r["placement"]["refined"], true, "{r}");
+        added.push(sample_of(r["added_hit"].as_f64().unwrap_or_else(|| panic!("{r}"))));
+    }
+    added
+}
+
+fn assert_same_samples(what: &str, analysis: &[i64], learned: &[i64]) {
+    eprintln!("#439 {what}: compared {} hits", analysis.len());
+    assert!(!analysis.is_empty(), "{what}: no hit compared");
+    assert_eq!(
+        learned, analysis,
+        "{what}: Learn This puts each hit on its analysis sample"
+    );
+}
+
+#[test]
+fn learn_this_on_a_missed_stroke_stores_the_analysis_sample() {
+    let ghosts = [1.0];
+    let (svc, sid) = ghost_session("learn_place", &ghosts, 0);
+    let want = analysis_samples(&svc, &sid, &ghosts, 0);
+    assert_same_samples("shift 0", &want, &learn_ghosts(&svc, &sid, &ghosts));
+}
+
+#[test]
+fn learn_this_places_the_hit_with_the_hitpoint_shift() {
+    let ghosts = [1.0];
+    let (svc, sid) = ghost_session("learn_place_shift", &ghosts, 240);
+    let want = analysis_samples(&svc, &sid, &ghosts, 240);
+    assert_same_samples("shift 240", &want, &learn_ghosts(&svc, &sid, &ghosts));
+}
+
+#[test]
+fn the_next_pick_holds_one_hit_for_the_learned_stroke_on_its_sample() {
+    let ghosts = [1.0];
+    let (svc, sid) = ghost_session("learn_place_pick", &ghosts, 0);
+    let want = analysis_samples(&svc, &sid, &ghosts, 0);
+    let added = learn_ghosts(&svc, &sid, &ghosts);
+    // the next pick: the stored re-pick at the lower threshold, which detects the ghost itself
+    let params = json!({"sensitivity": 150});
+    svc.track_repick_keep(&sid, "k in", params.as_object(), true, true)
+        .unwrap();
+    let now: Vec<i64> = times(&events(&svc, &sid))
+        .into_iter()
+        .filter(|t| (t - ghosts[0]).abs() < 0.02)
+        .map(sample_of)
+        .collect();
+    eprintln!("#439 next pick: compared {} hits", now.len());
+    assert_eq!(now.len(), 1, "one hit for the stroke: {now:?}");
+    assert_eq!(now, want);
+    assert_eq!(now, added);
+}
+
+#[test]
+fn learn_this_on_several_missed_strokes_places_each_on_its_analysis_sample() {
+    let ghosts = [1.0, 2.0, 3.0];
+    let (svc, sid) = ghost_session("learn_place_many", &ghosts, 0);
+    let want = analysis_samples(&svc, &sid, &ghosts, 0);
+    // the first K adds its hit; the Learn filter then keeps the like strokes (the other ghosts) as hits, each on the
+    // sample the analysis gives it
+    let added = learn_ghosts(&svc, &sid, &ghosts[..1]);
+    assert_eq!(added, want[..1]);
+    let hits = times(&events(&svc, &sid));
+    let now: Vec<i64> = ghosts
+        .iter()
+        .map(|g| {
+            let near: Vec<i64> = hits
+                .iter()
+                .filter(|t| (**t - g).abs() < 0.02)
+                .map(|t| sample_of(*t))
+                .collect();
+            assert_eq!(near.len(), 1, "one hit for the stroke at {g}: {near:?}");
+            near[0]
+        })
+        .collect();
+    assert_same_samples("three strokes", &want, &now);
+}
