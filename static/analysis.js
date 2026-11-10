@@ -133,8 +133,10 @@ function startAnalysisGo(tracks) {
   if (withEvents.length) {
     const keptTotal = withEvents.reduce((a,n) => a + (S.events[n]||[]).filter(isKept).length, 0);
     if (keptTotal === 0) {
-      if (!confirm(`Re-analyzing ${withEvents.length} track(s) overwrites their events (a backup is kept). Continue?`)) return;
-      runAnalysis(list, false);
+      askConfirm({ title: "Re-analyze",
+        msg: `Re-analyzing ${withEvents.length} track(s) overwrites their events (a backup is kept). Continue?`,
+        buttons: [{ act: "go", label: "Re-analyze", cls: "primary" }, { act: "cancel", label: "Cancel" }] })
+        .then(a => { if (a === "go") runAnalysis(list, false); else setMsg("re-analyze cancelled"); });
     } else {
       $("#reanalyzeMsg").innerHTML = "";
       const p = $("#reanalyzeMsg");

@@ -99,7 +99,7 @@ async function closeProject(sid, name) {
   const post = body => B.closeProject(sid, !!body.force);
   let dirty = sid === S.sid ? S.dirty : false;
   if (!dirty && sid !== S.sid) { try { dirty = (await B.projectGet(sid)).dirty; } catch(e) {} }
-  const prompt = async () => {
+  const askClose = async () => {
     let a = await askConfirm({ title: "Close project",
       msg: `"${name}" has unsaved changes. Save before closing? "Discard" closes it and drops the unsaved edits (the last autosave stays in Backups/).`,
       buttons: [{act:"save", label:"Save and close", cls:"primary"}, {act:"discard", label:"Discard changes"}, {act:"cancel", label:"Cancel"}] });
@@ -115,10 +115,10 @@ async function closeProject(sid, name) {
   };
   try {
     let r;
-    if (dirty) r = await prompt();
+    if (dirty) r = await askClose();
     else {
       try { r = await post({}); }
-      catch(e) { if (!/^409/.test(e.message)) throw e; r = await prompt(); }   // the server knows better
+      catch(e) { if (!/^409/.test(e.message)) throw e; r = await askClose(); }   // the server knows better
     }
     if (r === "reloaded") return false;   // the project stays open with the file from disk
     if (!r) { setMsg("close cancelled"); return false; }
@@ -213,6 +213,6 @@ async function prepareLanes(sid) {
       showProgress(Math.round(100 * finished / Math.max(1, ts.length)),
         `building waveforms: ${Math.min(finished + 1, ts.length)} of ${ts.length}${cur ? ` (${cur[0]})` : ""}`);
     });
-  } catch (e) { /* the lanes below show the error of each track */ }
+  } catch (e) { setMsg(`waveform build failed: ${errText(e)}`, "error"); }   // the lanes below show the error of each track
   finally { live = false; if (shown) hideProgress(); }
 }
