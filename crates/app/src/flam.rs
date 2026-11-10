@@ -131,6 +131,13 @@ pub fn with_flams(
     let mut out: Vec<Event> = events.iter().filter(|e| !is_flam(e) || edited(e)).cloned().collect();
     let map = crate::follow::velocity_map_of(params);
     let cut = crate::histogram::cut_of(params);
+    // #438: the track's Hitpoint shift — a second stroke is stored like every other hit of
+    // the track, at the detected time plus `shift_samples` over the rate.
+    let shift_s = params
+        .and_then(|m| m.get("shift_samples"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        / f64::from(sr);
     let held: Vec<f64> = out.iter().filter(|e| out_of_output(e)).map(|e| e.t).collect();
     let mut n = 0;
     for s in found.iter().filter(|s| !s.bleed) {
@@ -138,7 +145,7 @@ pub fn with_flams(
             continue;
         }
         let db = peak_db(x, s.t, sr);
-        let mut e = Event::new(s.t, velocity_of_db(db, &map));
+        let mut e = Event::new(s.t + shift_s, velocity_of_db(db, &map));
         mark(&mut e, Mark::Flam);
         if cut.is_some_and(|c| db < c) {
             mark(&mut e, Mark::Cut);

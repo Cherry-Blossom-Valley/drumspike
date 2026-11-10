@@ -151,7 +151,7 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[String]) -> Option
 /// The clearance on one snare close mic. Returns the outcome, `None` when the track keeps
 /// its events as they are.
 fn run_one(svc: &Service, op: &Shared, name: &str, mix: &str, busy: &[f64], ohs: &[(String, String)]) -> Option<Value> {
-    let (det, dir, params, key, cands) = {
+    let (det, dir, track_params, params, key, cands) = {
         let g = lock(op);
         let tr = g.track(name).ok()?;
         let det = tr.extra.get("detector")?.clone();
@@ -159,10 +159,11 @@ fn run_one(svc: &Service, op: &Shared, name: &str, mix: &str, busy: &[f64], ohs:
             return None;
         }
         let dir = g.project.subdir(drumspike_core::project::ANALYSIS_DIR).join(name);
+        let track_params = tr.params.clone();
         let (params, _weak, key) = crate::candidates::read_candidates_meta(&dir)?;
         params.soft_sim?; // another detector build: no soft gate to clear
         let cands = crate::candidates::read_candidates(&dir, &key)?.0;
-        (det, dir, params, key, cands)
+        (det, dir, track_params, params, key, cands)
     };
     let path = lock(op).source(name).ok()?;
     let dec: Arc<Decoded> = svc.inner.media.decode_cached(&path, mix_mode(mix)).ok()?;
@@ -224,9 +225,19 @@ fn run_one(svc: &Service, op: &Shared, name: &str, mix: &str, busy: &[f64], ohs:
         c.soft_busy = peaks.contains(&j);
     }
     let kept: Vec<(f64, u8)> = hits.iter().map(|h| (h.time, role_note("snare"))).collect();
-    let params_a = AnalyzeParams {
-        rule: crate::jobs::analysis_rule(&svc.inner.config),
-        ..AnalyzeParams::default()
+    // #438: the parameters the track's analysis used (the same parse as the analysis job,
+    // from the stored parameter object) with the rule of a new analysis; on a parse error the
+    // struct defaults run (the track is left as it is only when the step cannot run at all).
+    let rule = crate::jobs::analysis_rule(&svc.inner.config);
+    let params_a = match crate::jobs::parse_params(track_params.as_ref()) {
+        Ok(mut parsed) => {
+            parsed.params.rule = rule;
+            parsed.params
+        }
+        Err(_) => AnalyzeParams {
+            rule,
+            ..AnalyzeParams::default()
+        },
     };
     let analysis = analyze_detected(&dec.samples, dec.sr, "snare", &kept, &params_a).ok()?;
     crate::jobs::store_analysis(svc, op, name, (analysis, None), &det, &dec, false, true, None).ok()?;
