@@ -122,6 +122,11 @@ pub struct CommandSpec {
     /// The JSON Schema of the result, as text (parsed by [`CommandSpec::result_schema`]).
     pub result: &'static str,
     pub effect: Effect,
+    /// The MCP `destructiveHint` (#425): true when the command removes or overwrites project data
+    /// or files on disk, so an MCP client asks its user first. A command that only adds, or only
+    /// changes memory that Undo restores (or that the app keeps a backup of, as `project_save`
+    /// keeps ten backups), is not. Set by [`cmd`] from [`DESTRUCTIVE`].
+    pub destructive: bool,
     pub surface: Surface,
     pub run: Run,
     /// The answer is bytes (`peaks_tile`, `samples_window`), not JSON.
@@ -213,6 +218,47 @@ const EVENTS_OPT: Arg = opt(
 const OBJ: &str = r#"{"type":"object"}"#;
 const SUMMARY: &str = r#"{"type":"object","required":["sid","name","folder","dirty","order","tracks"]}"#;
 
+/// The commands of [`REGISTRY`] that remove or overwrite project data or files on disk: the rule of
+/// `CommandSpec::destructive`. Everything else only adds (refusing what is there), or changes
+/// memory that Undo restores, or overwrites what the app keeps a backup of.
+const DESTRUCTIVE: &[&str] = &[
+    // overwrites the stored hits of a track with the list the caller sends
+    "events_set",
+    // removes tracks, their events and their files
+    "tracks_remove",
+    // writes the exports into the destination, replacing the files that are already there
+    "export_all",
+    // writes the one export file over what the destination already holds
+    "export_midi",
+    "export_spikes",
+    "export_layer",
+    "sampler_calibration_midi",
+];
+
+const fn is_destructive(name: &str) -> bool {
+    let b = name.as_bytes();
+    let mut i = 0;
+    while i < DESTRUCTIVE.len() {
+        let d = DESTRUCTIVE[i].as_bytes();
+        if d.len() == b.len() {
+            let mut j = 0;
+            let mut same = true;
+            while j < d.len() {
+                if d[j] != b[j] {
+                    same = false;
+                    break;
+                }
+                j += 1;
+            }
+            if same {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 const fn cmd(
     name: &'static str,
     about: &'static str,
@@ -228,6 +274,7 @@ const fn cmd(
         args,
         result,
         effect,
+        destructive: is_destructive(name),
         surface,
         run,
         binary: false,
@@ -1987,6 +2034,24 @@ mod tests {
                 c.name
             );
         }
+    }
+
+    #[test]
+    fn every_row_carries_the_destructive_rule_of_425() {
+        let mut n = 0;
+        for c in REGISTRY {
+            if c.destructive {
+                n += 1;
+                assert!(c.writes_project(), "{}: a destructive command writes", c.name);
+            }
+            if c.effect == Effect::Read {
+                assert!(!c.destructive, "{}: a read command is not destructive", c.name);
+            }
+        }
+        for name in ["tracks_remove", "export_all", "events_set"] {
+            assert!(find(name).unwrap().destructive, "{name} is destructive");
+        }
+        assert!(n > 0, "no destructive command in the registry");
     }
 
     #[test]
