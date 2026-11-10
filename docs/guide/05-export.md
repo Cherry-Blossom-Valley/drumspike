@@ -34,10 +34,10 @@ cut at the zero crossing, at most 60 ms. A kick lands around 15 to 25 ms, a snar
 
 The MIDI file carries every hit at its sample. The export picks the ticks per quarter note
 from the track's sample rate and the tempo: one tick is one sample where the standard's 15
-bits allow it, and the answer states the bound (`worst_error_samples`, with the chosen
-`ticks_per_quarter`) where they do not. The spike file is sample exact at every tempo and
-rate. A DAW that takes its tempo from the file's tempo event instead of its own session
-tempo can drift by about 1.9 samples in five minutes; set the session tempo and import the
-notes without the tempo.
+bits allow it. Where they do not, the export message states the bound that the tick grid
+leaves, in samples, when it is over half a sample. The spike file is sample exact at every
+tempo and rate. A DAW that takes its tempo from the file's tempo event instead of its own
+session tempo can drift by about 1.9 samples in five minutes; set the session tempo and
+import the notes without the tempo.
 
 Next: [find your way](06-find-your-way.md), the first chapter of part 2.

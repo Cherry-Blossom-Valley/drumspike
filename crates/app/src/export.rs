@@ -818,7 +818,8 @@ impl Service {
     }
 
     /// `export_all {sid, progress}`: for every track, `Exports/<name>_spike.mid` (the track's
-    /// note, 24,000 PPQ, 120 BPM) and `Exports/<name>_spike.wav`, from the events in the
+    /// note; the ticks per quarter note by the #441 rule at the track's rate) and
+    /// `Exports/<name>_spike.wav`, from the events in the
     /// document. The tracks run on up to [`EXPORT_WORKERS`] threads. A track that fails (an
     /// offline file, an unsupported format) does not stop the others: its error is in
     /// `errors`. `progress` gets `{"sid", "export": {state, done, total, track}}` after each

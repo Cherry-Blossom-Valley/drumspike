@@ -520,18 +520,19 @@ impl Service {
         tempo: f64,
         dest: Option<&str>,
     ) -> Result<Value, AppError> {
-        self.export_midi_with(sid, name, note, events, ppq, tempo, dest, true)
+        self.export_midi_with(sid, name, note, events, Some(ppq), tempo, dest, true)
     }
 
     /// P4-7c: [`Service::export_midi_to`] with the choice to compensate the track's sampler offset (the notes
     /// at the aligned attack minus the offset; `sampler` and `warnings` in the answer say what moved). A track
-    /// without a calibration is written as before.
+    /// without a calibration is written as before. #441: an explicit `ppq` decides the grid; a call without
+    /// one takes the rule's value, the same ticks per quarter note Export All writes for the track.
     ///
     /// # Errors
     ///
     /// A 404 [`AppError`] for an unknown `sid` or track; a 409 when the project is open read-only, the track's
-    /// files are another track's, or a stale follower cannot be derived; a 400 when `ppq` does not fit a
-    /// `u16`, `dest` is not an allowed folder, or the tempo map or sampler offset is invalid; an error when
+    /// files are another track's, or a stale follower cannot be derived; a 400 when an explicit `ppq` does not
+    /// fit a `u16`, `dest` is not an allowed folder, or the tempo map or sampler offset is invalid; an error when
     /// the target is a protected file or the `.mid` file cannot be written.
     #[allow(clippy::too_many_arguments)]
     pub fn export_midi_with(
@@ -540,7 +541,7 @@ impl Service {
         name: &str,
         note: i64,
         events: &[Value],
-        ppq: i64,
+        ppq: Option<i64>,
         tempo: f64,
         dest: Option<&str>,
         compensate: bool,
@@ -556,7 +557,9 @@ impl Service {
                 crate::tempo::doc_map(&g.project.doc)?,
             )
         };
-        let ppq = u16::try_from(ppq).map_err(|_| AppError::bad(format!("ppq out of range: {ppq}")))?;
+        let ppq = ppq
+            .map(|p| u16::try_from(p).map_err(|_| AppError::bad(format!("ppq out of range: {p}"))))
+            .transpose()?;
         // R10: a second export to the same folder serializes behind this one
         let _dest_guard = crate::export::export_dest_acquire(&dir);
         let refreshed = if follower {
@@ -583,10 +586,12 @@ impl Service {
         // R01: the MIDI file must not be a protected file either (a source, one-shot or bounce
         // of any open project)
         crate::export::check_export_plan(std::slice::from_ref(&out), &self.protected_files_everywhere())?;
-        // #441: the note-ons anchor at the track's source rate (48,000 when it is unknown);
-        // the caller's explicit `ppq` decides the grid.
+        // #441: the note-ons anchor at the track's source rate (48,000 when it is unknown); an
+        // explicit `ppq` decides the grid, a call without one takes the rule's value (the one
+        // Export All writes at this rate and map)
         let audio = crate::export::audio_length(&op, name);
         let rate = audio.map_or(48_000, |(sr, _)| sr);
+        let ppq = ppq.unwrap_or_else(|| drumspike_core::midi::export_ppq(rate, &map, tempo));
         write_midi(&ev, note, &out, ppq, &map, tempo, rate)?;
         let size = std::fs::metadata(&out).map_or(0, |m| m.len());
         let times: Vec<f64> = ev.iter().map(|e| e.t).collect();
