@@ -5,18 +5,36 @@
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-const { agent, windows } = JSON.parse(fs.readFileSync(0, "utf8"));
+const { agent, windows, pattern_rows } = JSON.parse(fs.readFileSync(0, "utf8"));
 const win = {};
 // DSAgent.judge is the pure decision; an older copy of the file (the "before" run) exposes it through the same hook
-const src = agent.replace("window.DSAgent = DSAgent;", "DSAgent.judge = DSAgent.judge || judge; window.DSAgent = DSAgent;");
+// #447: the pattern of a track and the second opinion come through the same hook; a file without them (the "before" run) measures the judge alone
+const src = agent.replace("window.DSAgent = DSAgent;",
+  "DSAgent.judge = DSAgent.judge || judge; DSAgent._pat = typeof patternBuild === 'function' ? { patternBuild, patternOffset, second } : null; window.DSAgent = DSAgent;");
 vm.runInNewContext(src, { window: win, $: () => null, document: {}, console });
-const judge = win.DSAgent.judge;
+const judge = win.DSAgent.judge, P = win.DSAgent._pat || null;
+// #447: one pattern per track, built from the rows the caller names for it ({track: {sr, rows: [{x, at}]}}): the hits of
+// the track at the positions the tool gave them. `pattern` counts the tracks and how many got a pattern.
+const patterns = {}, pattern = { supported: !!P, tracks: 0, built: 0 };
+for (const [track, t] of Object.entries(pattern_rows || {})) {
+  pattern.tracks++;
+  if (!P) continue;
+  patterns[track] = P.patternBuild(t.rows, t.sr);
+  if (patterns[track]) pattern.built++;
+}
+// the same step the page takes in `view`: the pattern's opinion from the samples of the look window
+const withPattern = (j, w) => (P && w.track && patterns[w.track] ? P.second(j, P.patternOffset(w.samples, w.hit_at, patterns[w.track])) : j);
 // #394: the judge takes the reference (declared length 3): the local peak over the hit's peak, for the guard. The
 // window then carries `stroke`, the raw samples of the detector's span (0.9 ms before to 5 ms after the hit, same
 // start as `samples`), whose tail from hit_at holds the hit's peak. An older judge (the "before" run) is 2-arg.
 const withRef = judge.length >= 3;
 
 const gold = {}, k = {}, rows = [], inject = {};
+// #447: what the second opinion is for. Per gold set: `wrong` (the move ends further from the label than the hit was),
+// `silent` (a hit 2 or more samples off, left in place with an answer of 0) and `listed` (no answer: a hit for the user).
+// For the injected hits: `taken_back` (a late verdict whose move the pattern did not confirm) and how many of those
+// moves would have landed on the label.
+const second = { gold: {}, inject: { taken_back: 0, taken_back_on_label: 0 } };
 for (const w of windows) {
   const peak = Math.max(0, ...w.samples.map(Math.abs));
   let j;
@@ -27,12 +45,14 @@ for (const w of windows) {
   } else {
     j = judge(w.samples.map(v => (peak > 0 ? v / peak : 0)), w.hit_at);
   }
+  j = withPattern(j, w);
   if (w.set === "inject") {
     // #421: a labelled hit shifted `shift` samples late. flagged: the verdict is `late` (fixed: the suggestion lands on the
     // label, within1: one off); listed: no answer with a reason, or no line; explained: left with a reason; else unexplained.
     const r = inject[w.shift] || (inject[w.shift] = { n: 0, flagged: 0, fixed: 0, within1: 0, listed: 0, explained: 0, unexplained: 0 });
     const land = j.suggest === null ? null : j.suggest + w.shift;
     r.n++;
+    if (j.verdict === "late" && j.line_suggest !== undefined) { second.inject.taken_back++; if (j.line_suggest + w.shift === 0) second.inject.taken_back_on_label++; }
     if (j.verdict === "late") { r.flagged++; if (land === 0) r.fixed++; if (land !== null && Math.abs(land) <= 1) r.within1++; }
     else if (j.verdict === "no_quiet_line" || j.suggest === null) r.listed++;
     else if (j.why) r.explained++;
@@ -53,6 +73,10 @@ for (const w of windows) {
     const g = gold[w.set] || (gold[w.set] = { n: 0, exact: 0, within1: 0, moves: 0, dist: 0, no_answer: 0 });
     if (j.suggest === null) g.no_answer++;                          // #408: exact counts "no answer" as 0; this says how many of them
     g.n++; g.dist += d; if (d === 0) g.exact++; if (d <= 1) g.within1++; if (j.suggest) g.moves++;
+    for (const name of w.owner ? [w.set, "owner"] : [w.set]) {
+      const q = second.gold[name] || (second.gold[name] = { n: 0, wrong: 0, silent: 0, listed: 0 });
+      q.n++; if (d > Math.abs(w.label_off)) q.wrong++; if (j.suggest === 0 && Math.abs(w.label_off) >= 2) q.silent++; if (j.suggest === null) q.listed++;
+    }
     if (w.owner) {                                                  // #408: the owner's own rows are the Gate's set
       const o = gold.owner || (gold.owner = { n: 0, exact: 0, within1: 0, moves: 0, dist: 0 });
       o.n++; o.dist += d; if (d === 0) o.exact++; if (d <= 1) o.within1++; if (j.suggest) o.moves++;
@@ -66,4 +90,4 @@ for (const r of Object.values(k)) {
   r.keys_with_two_answers = keys.filter(s => s.size > 1).length;
   delete r.shapes;
 }
-console.log(JSON.stringify({ gold, k, rows, inject }));
+console.log(JSON.stringify({ gold, k, rows, inject, second, pattern }));
