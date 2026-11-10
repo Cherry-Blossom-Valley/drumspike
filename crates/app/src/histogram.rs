@@ -789,8 +789,10 @@ impl Service {
         AppError::conflict("another write of the project is in progress: try again")
     }
 
-    /// `track_params_set {sid, name, params}`: store the page's params of a track as they are
-    /// (the object `analyze_start` takes). The undo and redo of a stored re-pick send the
+    /// `track_params_set {sid, name, params}`: merge `params` into the track's stored params
+    /// (#442): a key in the call replaces that key, a key with `null` removes it, a key that is
+    /// absent keeps its stored value. The page sends the whole object, so its behaviour does not
+    /// change. The undo and redo of a stored re-pick send the
     /// slider's params back, so a Save writes the params of the hits it shows. 409 while an
     /// analysis or a re-pick store runs.
     ///
@@ -809,10 +811,30 @@ impl Service {
         {
             params.insert("thresholds".into(), json!(sensitivity::thresholds_of(v)));
         }
+        // #442: merge instead of replace, so one field (a `sensitivity`, say) does not delete
+        // the stored shift and window while the hits keep them
+        let stored = g.track(name)?.params.clone();
+        let params = merge_params(stored.as_ref(), &params);
         g.track_mut(name)?.params = Some(params.clone());
         g.mark_dirty();
         Ok(json!({"params": params}))
     }
+}
+
+/// #442: the params of `track_params_set` and of the `params` argument of `analyze_start` merge
+/// into the track's stored object: a key in the call replaces that key, a key with `null`
+/// removes it, a key that is absent keeps its stored value. The page sends the whole object, so
+/// the page's behaviour does not change.
+pub(crate) fn merge_params(stored: Option<&Map<String, Value>>, call: &Map<String, Value>) -> Map<String, Value> {
+    let mut merged = stored.cloned().unwrap_or_default();
+    for (k, v) in call {
+        if v.is_null() {
+            merged.remove(k);
+        } else {
+            merged.insert(k.clone(), v.clone());
+        }
+    }
+    merged
 }
 
 /// A string argument.

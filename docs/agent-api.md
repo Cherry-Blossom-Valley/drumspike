@@ -201,6 +201,10 @@ or change the live project of the running app (a local socket for that is a poss
   A version 1 analysis keeps its hits until Re-analyze; `job_get` after `analyze_start` has the session's outcome in `bleed` (the reason when the
   rule is off: fewer than two played tom mics, or tom tracks edited to digital silence).
 - `sensitivity` (0 to 150, the Inspector slider; 50 is the default) can replace `thresholds` in `params`.
+- `track_params_set {sid, name, params}` and the `params` of `analyze_start` merge into the track's
+  stored params (#442): a key in the call replaces that key, a key with `null` removes it, a key
+  that is absent keeps its stored value (the page sends the whole object, so its behaviour does
+  not change). A `sensitivity` without `thresholds` stores the thresholds of that sensitivity.
 - `track_set_note` takes the MIDI number. General MIDI: kick 36, snare 38, closed hat 42, toms 41 to 50 (floor tom 41, low 45,
   mid 47, high 50), crash 49, ride 51. The names follow C1 = 36.
 
