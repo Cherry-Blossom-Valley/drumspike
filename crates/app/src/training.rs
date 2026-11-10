@@ -17,7 +17,7 @@
 //! A failed log never fails the edit: the answer of the command gets `training_error` instead of `training`.
 
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -37,10 +37,27 @@ pub const TRAINING_COMMANDS: [&str; 2] = ["training_status", "training_hand_plac
 /// The person-placed rows of one training-log line (#418): a `move`, `add` or `confirm` record whose `by`
 /// is `person` or absent (an older log carries no `by`). `sample` is the record's `to` (its `from` for a
 /// delete-free op without a `to`). Everything else on the line - the audio windows, the placement - stays
-/// unread: the log is far too large to read whole.
+/// unread: the log is far too large to read whole. Test-only since #428: the command reads the file line
+/// by line ([`hand_placed_from_path`]), the text variant pins the same rows in the tests.
+#[cfg(test)]
 fn hand_placed_records(text: &str, track: Option<&str>) -> Vec<Value> {
-    text.lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+    hand_placed_from_lines(text.lines().map(ToOwned::to_owned), track)
+}
+
+/// The same rows, read line by line from the log (#428): the records carry the audio around a hit, so a
+/// real log reaches hundreds of MB and never fits the memory. A line that is not valid JSON is skipped
+/// (as on `main`, where the whole-text `filter_map` dropped it); a last line without a newline is
+/// read like any other (`BufRead::lines` yields it, as `str::lines` did).
+fn hand_placed_from_path(path: &std::path::Path, track: Option<&str>) -> Vec<Value> {
+    match std::fs::File::open(path) {
+        Ok(f) => hand_placed_from_lines(std::io::BufReader::new(f).lines().map_while(Result::ok), track),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn hand_placed_from_lines<I: Iterator<Item = String>>(lines: I, track: Option<&str>) -> Vec<Value> {
+    lines
+        .filter_map(|l| serde_json::from_str::<Value>(&l).ok())
         .filter(|rec| {
             matches!(rec.get("op").and_then(Value::as_str), Some("move" | "add" | "confirm"))
                 && match rec.get("by") {
@@ -136,7 +153,32 @@ fn precision_of(view: &Value) -> Value {
 }
 
 fn count_lines(path: &std::path::Path) -> usize {
-    std::fs::read_to_string(path).map_or(0, |s| s.lines().count())
+    // #428: line by line - the records carry audio, so the log never fits the memory. A last line
+    // without a newline counts (BufRead::lines yields it, as str::lines did); an invalid-UTF8 line
+    // is dropped, as the whole-text read on `main` dropped the file when it was all one.
+    match std::fs::File::open(path) {
+        Ok(f) => std::io::BufReader::new(f).lines().map_while(Result::ok).count(),
+        Err(_) => 0,
+    }
+}
+
+/// Open the log for an append (#428): created with mode 0600 on Unix, like the window endpoint
+/// file, and an existing log with a wider mode is tightened to 0600 at this append.
+fn open_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    let f = opts.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(f)
 }
 
 impl Service {
@@ -186,9 +228,7 @@ impl Service {
     /// A 404 [`AppError`] for an unknown `sid`; an internal error when the service has no home folder.
     pub fn training_hand_placed(&self, sid: &str, track: Option<&str>) -> Result<Value, AppError> {
         let (path, _) = self.training_path(sid)?;
-        let records = std::fs::read_to_string(&path)
-            .map(|t| hand_placed_records(&t, track))
-            .unwrap_or_default();
+        let records = hand_placed_from_path(&path, track);
         Ok(json!({"records": records, "path": path.display().to_string()}))
     }
 
@@ -308,11 +348,7 @@ impl Service {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| AppError::internal(format!("{}: {e}", parent.display())))?;
         }
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|e| AppError::internal(format!("{}: {e}", path.display())))?;
+        let mut f = open_log(&path).map_err(|e| AppError::internal(format!("{}: {e}", path.display())))?;
         f.write_all(buf.as_bytes())
             .map_err(|e| AppError::internal(format!("{}: {e}", path.display())))?;
         let mut map = lock(&self.inner.training.per_sid);

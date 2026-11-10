@@ -37,6 +37,51 @@ fn count_lines_counts_records_and_a_missing_file_has_none() {
 }
 
 #[test]
+fn count_lines_counts_a_last_line_without_a_newline() {
+    let p = std::env::temp_dir().join(format!("ds_training_count_last_{}.jsonl", std::process::id()));
+    std::fs::write(&p, "{}\n{}").unwrap();
+    assert_eq!(count_lines(&p), 2);
+    let _ = std::fs::remove_file(&p);
+}
+
+#[test]
+fn hand_placed_reads_the_fixture_log_line_by_line_like_the_text() {
+    // the same log through the file path and through the text: the same rows (#428)
+    let p = std::env::temp_dir().join(format!("ds_training_fixture_{}.jsonl", std::process::id()));
+    let good1 = r#"{"op":"move","by":"person","track":"Kick","event":{"id":"h2"},"to":9600}"#;
+    let good2 = r#"{"op":"add","by":"person","track":"Kick","to":555}"#;
+    let log = format!("{good1}\nnot json\n{good2}\n");
+    std::fs::write(&p, &log).unwrap();
+    assert_eq!(hand_placed_from_path(&p, None), hand_placed_records(&log, None));
+    assert_eq!(hand_placed_from_path(&p, None).len(), 2);
+    // and a last line without a newline is read like any other
+    let log_no_nl = format!("{good1}\nnot json\n{good2}");
+    std::fs::write(&p, &log_no_nl).unwrap();
+    assert_eq!(hand_placed_from_path(&p, None), hand_placed_records(&log_no_nl, None));
+    let _ = std::fs::remove_file(&p);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_new_log_has_mode_0600_and_a_wider_log_is_tightened_at_the_append() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = std::env::temp_dir().join(format!("ds_training_mode_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("log.jsonl");
+
+    drop(open_log(&p).unwrap());
+    let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "a new log is owner-only");
+
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+    drop(open_log(&p).unwrap());
+    let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "the next append tightens the mode");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn dispatch_needs_a_sid_and_knows_only_its_own_command() {
     let svc = Service::new(crate::ServiceConfig::default());
     assert!(dispatch(&svc, "events_get", &json!({})).is_none());
