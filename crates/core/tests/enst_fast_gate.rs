@@ -4,6 +4,8 @@
 //! default (needs `ENST_ROOT`); the final numbers come from `tools/eval/enst_gate.py`.
 //!
 //! Run: `ENST_ROOT=~/.cache/drumspike/datasets/ENST-drums-public cargo test -p drumspike-core --test enst_fast_gate -j 8 -- --nocapture --ignored`
+//! The tom map comes from `ENST_TOM_MAP`, or from `a5_tom_map.json` next to `ENST_ROOT`
+//! (make it with `tools/eval/dump_tom_map.py`).
 
 use drumspike_core::analyze::{AnalyzeParams, Detector, analyze_track};
 use drumspike_core::io::{MixMode, read_wav_mono};
@@ -81,15 +83,27 @@ struct Cell {
     est: Vec<f64>,
 }
 
+/// The tom map text: from `ENST_TOM_MAP`, or from `a5_tom_map.json` next to `ENST_ROOT`
+/// (which `tools/eval/dump_tom_map.py` writes). No absolute home path is baked in.
+fn tom_map_text(root: &Path) -> String {
+    if let Ok(p) = std::env::var("ENST_TOM_MAP") {
+        return std::fs::read_to_string(&p).expect("ENST_TOM_MAP");
+    }
+    let next_to_root = root.join("a5_tom_map.json");
+    if next_to_root.is_file() {
+        return std::fs::read_to_string(&next_to_root).expect("a5_tom_map.json next to ENST_ROOT");
+    }
+    panic!(
+        "no tom map: set ENST_TOM_MAP, or run tools/eval/dump_tom_map.py to write a5_tom_map.json next to ENST_ROOT"
+    );
+}
+
 #[test]
 #[ignore = "A5 probe: needs ENST_ROOT, run with --ignored"]
 fn enst_fast_gate() {
     let root = PathBuf::from(std::env::var("ENST_ROOT").expect("ENST_ROOT"));
-    let tom_map: BTreeMap<String, BTreeMap<String, String>> = serde_json::from_str(
-        &std::fs::read_to_string("/home/linux-arm64/.cache/drumspike/a5_tom_map.json")
-            .expect("a5_tom_map.json (tools/eval/dump_tom_map.py)"),
-    )
-    .expect("tom map json");
+    let tom_map: BTreeMap<String, BTreeMap<String, String>> =
+        serde_json::from_str(&tom_map_text(&root)).expect("tom map json");
     let limit: usize = std::env::var("ENST_LIMIT")
         .ok()
         .and_then(|v| v.parse().ok())
