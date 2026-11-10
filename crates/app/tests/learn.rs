@@ -1376,7 +1376,8 @@ fn ghost_session_floor(
         .to_string();
     // the track keeps its Hitpoint shift as the Inspector stores it, then the analysis runs with it
     let params = json!({"shift_samples": shift});
-    svc.track_params_set(&sid, "k in", params.as_object().unwrap()).unwrap();
+    svc.track_params_set(&sid, "k in", params.as_object().unwrap(), false)
+        .unwrap();
     svc.analyze_start(&sid, None, params.as_object(), None).unwrap();
     wait_done(&svc, &sid);
     (svc, sid)
@@ -1496,7 +1497,8 @@ fn learn_this_with_refine_off_adds_the_candidate_time_plus_the_shift() {
     let ghosts = [1.0];
     let (svc, sid) = ghost_session("learn_place_off", &ghosts, 240);
     let params = json!({"refine": false, "shift_samples": 240});
-    svc.track_params_set(&sid, "k in", params.as_object().unwrap()).unwrap();
+    svc.track_params_set(&sid, "k in", params.as_object().unwrap(), false)
+        .unwrap();
     let r = svc
         .track_learn_mark(&sid, "k in", "this", Some((0.95, 1.05)), None)
         .unwrap();
