@@ -161,6 +161,56 @@ const tests = {
     assert.equal(j.why, "no motion above the band near the hit");
   },
 
+  /* #421: a sample within the band is the foot only when the line leads to it. Three shape classes of the fault-injection
+     run, and the guard that keeps a wobbling line a line. */
+  async a_hit_on_a_zero_crossing_of_the_strokes_first_ripple_is_late() {
+    const { s, hitAt, ref } = win(a => {
+      a[38] = 0.045; a[39] = 0.04;                                          // the first half-wave, over the band
+      a[40] = 0.015; a[41] = -0.02; a[42] = -0.03;                          // through the line to the other side, over the band
+      a[43] = 0.015;                                                        // the hit: on the line's level again, on the way up
+      stroke(a, 43, [0.3, 0.5, 0.55]);
+    });
+    const j = judge()(s, hitAt, ref);
+    assert.equal(j.verdict, "late", "a crossing is not the line");
+    assert.equal(j.foot_off, -6, "the foot is the last line sample before the first half-wave");
+    assert.equal(j.suggest, -6);
+  },
+
+  async a_ripple_under_the_band_before_the_foot_leaves_the_hit_and_says_so() {
+    const { s, hitAt, ref } = win(a => {
+      a[41] = 0.03; a[42] = 0.025;                                          // 0.02 over the line: under the 0.025 band
+      for (let i = 44; i < LEN; i++) a[i] = [-0.3, -0.5][i - 44] ?? -0.55;  // the stroke goes the other way
+    });
+    const j = judge()(s, hitAt, ref);
+    assert.equal(j.verdict, "at_foot");
+    assert.equal(j.suggest, 0, "owner rule A: a bump under the band is not the first motion");
+    assert.equal(j.why, "a motion under the detector's band leads in");
+  },
+
+  async a_hit_in_a_dip_of_a_slow_rise_over_the_band_gets_no_answer() {
+    const { s, hitAt, ref } = win(a => {
+      a[36] = 0.03; a[37] = 0.05; a[38] = 0.07; a[39] = 0.07;               // a slow rise, over the band
+      a[40] = 0.06; a[41] = 0.05; a[42] = 0.04; a[43] = 0.03;               // the dip: the hit is within the band again
+      stroke(a, 43, [0.3, 0.5, 0.55]);
+    });
+    const j = judge()(s, hitAt, ref);
+    assert.equal(j.verdict, "at_foot");
+    assert.equal(j.suggest, null, "the foot is not clear: no move, the hit is listed");
+    assert.equal(j.why, "a dip after a rise over the band: the foot is not clear");
+  },
+
+  async a_slow_return_to_the_line_in_steps_no_larger_than_the_lines_own_is_no_pass() {
+    const { s, hitAt, ref } = win(a => {
+      for (let i = 0; i < 38; i++) a[i] = i % 2 ? 0.017 : 0.01;             // the line's own steps are 0.007
+      a[38] = -0.02;                                                        // a wobble over the band on the far side
+      for (let i = 39; i <= 43; i++) a[i] = -0.02 + 0.006 * (i - 38);       // back to the line in steps of 0.006: under the line's own
+      stroke(a, 43, [0.3, 0.5, 0.55]);
+    });
+    const j = judge()(s, hitAt, ref);
+    assert.equal(j.verdict, "at_foot", "a slow wave before the stroke is line (#408)");
+    assert.equal(j.suggest, 0);
+  },
+
   async audit_lists_every_late_hit_from_the_shape_measure_whatever_the_suggestion_says(env) {
     const late = win(a => { stroke(a, 40, [0.15, 0.35, 0.5]); });
     const standing = win(a => { stroke(a, 43, [0.3, 0.5, 0.55]); });

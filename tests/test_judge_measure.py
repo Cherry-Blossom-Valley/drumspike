@@ -39,6 +39,18 @@ def test_gold_distance_and_session_k_moves_are_counted():
     assert res["k"]["kick"]["moves"] == 0 and res["k"]["kick"]["keys_with_two_answers"] == 0
 
 
+def test_the_injection_run_counts_flagged_fixed_and_explained_hits():
+    """#421: a hit 3 samples up a clean edge is flagged and its suggestion lands on the label; a hit in a view without
+    motion over the band is left with a reason; neither counts as unexplained."""
+    src = (ROOT / "static" / "agent.js").read_text()
+    edge = [0.01] * (BEFORE - 2) + [0.15, 0.35] + [0.5] * (AFTER + SPAN_AFTER)    # the foot 3 before the hit
+    flat = [0.01] * (BEFORE - 1) + [0.0101] + [0.01] * AFTER + [1.0] * SPAN_AFTER   # a ripple far under the band; the stroke rises past the look window
+    wins = [{"set": "inject", "id": n, "shift": 3, "role": "kick", "samples": sig[:BEFORE + AFTER], "stroke": sig, "hit_at": BEFORE}
+            for n, sig in enumerate((edge, flat))]
+    res = judge_measure.measure(src, wins)
+    assert res["inject"] == {"3": {"n": 2, "flagged": 1, "fixed": 1, "within1": 1, "listed": 0, "explained": 1, "unexplained": 0}}
+
+
 def gate_window(bump=0.02, back_to_line=True):
     """A bump whose local-peak share is over the judge's band and whose stroke-peak share is under the detector's.
 
