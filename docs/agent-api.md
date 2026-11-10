@@ -307,7 +307,12 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   `"under the detector's band"` when the foot is earlier) or when no step near the hit is over the band (the stroke rises
   past the view; `judge.why` is `"no motion above the band near the hit"`), and `null` when the verdict is
   `no_quiet_line` or the foot lies more than 12 samples before or 6 after the hit (a pre-bump, bleed or wobble,
-  not the stroke; `judge.why` is then `"departure far from the hit"`, the verdict is still `late` or `at_foot`). When
+  not the stroke; `judge.why` is then `"departure far from the hit"`, the verdict is still `late` or `at_foot`).
+  A sample within the band is the foot only when the line leads to it: a foot that the level reached in one run from
+  beyond the band on the other side is a zero crossing of the stroke's first ripple, and the foot is then before that
+  ripple (the verdict is `late`). When the ripple stays under the band the hit stands and `judge.why` is
+  `"a motion under the detector's band leads in"`. A foot in a dip of a rise over the band on the stroke's own side is
+  not clear: `suggest` is `null` and `judge.why` is `"a dip after a rise over the band: the foot is not clear"`. When
   the verdict is `late`, move the hit by `judge.foot_off` samples (a whole number; negative is earlier); a late hit can
   carry a `null` `suggest` when its foot is far from the hit - look at those yourself, and list one you do not move
   with the reason. Without a

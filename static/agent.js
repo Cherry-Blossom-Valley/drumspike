@@ -62,7 +62,11 @@
      `late` (the hit stands up the rise, its own sample over the band), `at_foot`, or `no_quiet_line` (no quiet stretch
      exists: nothing to measure from, `suggest` null). A hit whose own sample is within the band stands (suggest 0), and so
      does a hit in a view whose level stays within the band near the hit. The band is a level: a slow stroke passes it
-     while every single step stays under it, and a hit in a dip after the stroke passed the band is still late. */
+     while every single step stays under it, and a hit in a dip after the stroke passed the band is still late.
+     #421: a sample within the band is the foot only when the line leads to it. A foot that the level reached in one run
+     from beyond the band on the other side is a zero crossing of the stroke's first ripple: the foot moves back before
+     that ripple. A step no larger than the line's own largest step ends the run, so a slow wave stays line. A foot in a
+     dip of a rise over the band on the stroke's own side is not clear: no answer (`suggest` null, with `why`). */
   function judge(s, hitAt, ref) {
     const out = { level: null, spread: null, first_off: null, suggest: null, foot_off: null, rise: null, quiet_ratio: null, verdict: "no_quiet_line" };
     const band = typeof ref === "number" && Number.isFinite(ref) && ref > 0 ? DEPARTURE_VIS_PCT / ref : DEPART_MIN;   // the hit's peak as a share of the local peak
@@ -92,6 +96,29 @@
     if (end < 0) return out;
     const from = Math.max(0, end - LINE_LEAD), lead = s.slice(from, end).sort((a, b) => a - b), level = lead[lead.length >> 1];
     while (f >= end && Math.abs(s[f] - level) > band) f--;           // the line ends at end - 1
+    // a crossing is not line: a foot within the band that the level reached in one run from beyond the band on the other
+    // side is the stroke passing through the line. The foot moves back to the far end of that run and over its samples
+    // above the band. A run whose far end stays within the band is a bump under the band (owner rule A): the foot stays.
+    let lead_in = false;
+    for (;;) {
+      if (f < end || f + 1 >= s.length) break;
+      const side = Math.sign(s[f + 1] - level);
+      let g = f;
+      while (g > end && (s[g] - s[g - 1]) * side > quiet) g--;       // a step no larger than the line's own largest step is line
+      const far = (s[g] - level) * -side;                           // how far beyond the line on the other side the run began
+      if (g === f || !(far > band)) { lead_in = g < f && far > 0; break; }
+      f = g;
+      while (f >= end && Math.abs(s[f] - level) > band) f--;
+    }
+    // a dip is not a clear foot: the level came to the foot in one run from beyond the band on the stroke's own side (a
+    // slow rise that dips before the edge). The owner's rows hold such a foot both ways, so the judge gives no answer.
+    let dip = false;
+    if (f > end) {
+      const dir = Math.sign(s[f] - s[f - 1]);
+      let g = f;
+      while (g > end && (s[g] - s[g - 1]) * dir > quiet) g--;
+      dip = g < f && Math.abs(s[g] - level) > band;
+    }
     let spread = 0;
     for (let i = from; i < end; i++) spread = Math.max(spread, Math.abs(s[i] - level));
     out.level = level; out.spread = spread;
@@ -111,6 +138,8 @@
     if (out.foot_off < -DEPART_BEFORE || out.foot_off > DEPART_AFTER) { out.why = "departure far from the hit"; return out; }
     out.suggest = standing ? 0 : out.foot_off;                     // a hit within the band stands, also before the foot: measured on the owner rows, a later move there costs 55 exact
     if (standing && out.foot_off !== 0) out.why = "under the detector's band";
+    if (out.verdict === "at_foot" && dip) { out.suggest = null; out.why = "a dip after a rise over the band: the foot is not clear"; }
+    else if (out.verdict === "at_foot" && lead_in && !out.why) out.why = "a motion under the detector's band leads in";
     return out;
   }
 
