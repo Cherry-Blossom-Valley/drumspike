@@ -50,7 +50,7 @@ fn a_request_is_answered_while_many_connections_stay_idle() {
     let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     c.set_read_timeout(Some(IDLE_READ_TIMEOUT * 3)).unwrap();
     let t0 = Instant::now();
-    c.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    c.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
         .unwrap();
     let mut out = String::new();
     let r = c.read_to_string(&mut out);
@@ -67,7 +67,7 @@ fn one_connection_carries_several_requests_and_a_bad_one_gets_400() {
     let port = serve_bridge();
     let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     c.set_read_timeout(Some(IDLE_READ_TIMEOUT * 3)).unwrap();
-    c.write_all(b"GET /a.js HTTP/1.1\r\nHost: x\r\n\r\nPOST /invoke/project_list HTTP/1.1\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+    c.write_all(b"GET /a.js HTTP/1.1\r\nHost: localhost\r\n\r\nPOST /invoke/project_list HTTP/1.1\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
         .unwrap();
     let mut out = String::new();
     c.read_to_string(&mut out).unwrap();
@@ -400,7 +400,7 @@ fn the_page_mode_serves_the_page_and_the_invoke_api_on_localhost() {
     let body = out.split_once("\r\n\r\n").unwrap().1;
     let v: Value = serde_json::from_str(body).unwrap();
     assert_eq!(v["core_version"], drumspike_core::VERSION, "{out}");
-    let out = http(port, b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    let out = http(port, b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
     assert!(out.starts_with("HTTP/1.1 200 OK"));
     let body = out.split_once("\r\n\r\n").unwrap().1;
     assert!(body.contains("__DS_BRIDGE__") && body.contains("<html"), "{out}");
@@ -493,4 +493,78 @@ fn parse_page_args_reads_the_options_and_refuses_the_rest() {
     assert!(parse_page_args(&s(&["--port"])).is_err());
     assert!(parse_page_args(&s(&["--port", "x"])).is_err());
     assert!(parse_page_args(&s(&["--what", "1"])).is_err());
+}
+
+fn req(host: Option<&str>, origin: Option<&str>, site: Option<&str>) -> HttpRequest {
+    HttpRequest {
+        method: "POST".into(),
+        url: "/invoke/app_info".into(),
+        host: host.map(str::to_string),
+        origin: origin.map(str::to_string),
+        fetch_site: site.map(str::to_string),
+        ..HttpRequest::default()
+    }
+}
+
+#[test]
+fn same_site_passes_the_own_page_and_local_tools_and_refuses_other_sites() {
+    // the own page and a local tool without browser headers
+    assert!(same_site(&req(None, None, None), 8787));
+    assert!(same_site(&req(Some("127.0.0.1:8787"), None, None), 8787));
+    assert!(same_site(
+        &req(
+            Some("localhost:8787"),
+            Some("http://localhost:8787"),
+            Some("same-origin")
+        ),
+        8787
+    ));
+    assert!(same_site(&req(Some("127.0.0.1"), None, Some("none")), 8787));
+    // a DNS name rebound to 127.0.0.1, or another port's page
+    assert!(!same_site(&req(Some("evil.example:8787"), None, None), 8787));
+    assert!(!same_site(&req(Some("127.0.0.1:9999"), None, None), 8787));
+    // a cross-site fetch or form: the browser names the other origin
+    assert!(!same_site(
+        &req(Some("127.0.0.1:8787"), Some("https://evil.example"), None),
+        8787
+    ));
+    assert!(!same_site(
+        &req(Some("127.0.0.1:8787"), Some("http://127.0.0.1:9999"), None),
+        8787
+    ));
+    assert!(!same_site(&req(Some("127.0.0.1:8787"), Some("null"), None), 8787));
+    assert!(!same_site(&req(Some("127.0.0.1:8787"), None, Some("cross-site")), 8787));
+    assert!(!same_site(&req(Some("127.0.0.1:8787"), None, Some("same-site")), 8787));
+}
+
+#[test]
+fn the_server_answers_403_to_another_site_before_any_command_runs() {
+    let port = serve_bridge();
+    let post = |extra: &str| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.write_all(
+            format!("POST /invoke/app_info HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{extra}Content-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}")
+                .as_bytes(),
+        )
+        .unwrap();
+        let mut out = String::new();
+        c.read_to_string(&mut out).unwrap();
+        out
+    };
+    assert!(post("").starts_with("HTTP/1.1 200 OK"), "a local tool");
+    assert!(
+        post(&format!(
+            "Origin: http://127.0.0.1:{port}\r\nSec-Fetch-Site: same-origin\r\n"
+        ))
+        .starts_with("HTTP/1.1 200 OK")
+    );
+    let cross = post("Origin: https://evil.example\r\nSec-Fetch-Site: cross-site\r\n");
+    assert!(cross.starts_with("HTTP/1.1 403 Forbidden"), "{cross}");
+    assert!(!cross.contains("core_version"), "the command did not run: {cross}");
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    c.write_all(b"GET / HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n")
+        .unwrap();
+    let mut out = String::new();
+    c.read_to_string(&mut out).unwrap();
+    assert!(out.starts_with("HTTP/1.1 403 Forbidden"), "{out}");
 }

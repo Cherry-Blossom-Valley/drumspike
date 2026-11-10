@@ -185,6 +185,7 @@ pub fn serve(listener: TcpListener, bridge: Arc<Bridge>) {
 }
 
 fn connection(stream: TcpStream, bridge: &Bridge) {
+    let port = stream.local_addr().map_or(0, |a| a.port());
     let _ = stream.set_read_timeout(Some(IDLE_READ_TIMEOUT));
     let _ = stream.set_nodelay(true);
     let Ok(read_half) = stream.try_clone() else { return };
@@ -193,7 +194,11 @@ fn connection(stream: TcpStream, bridge: &Bridge) {
     loop {
         match read_request(&mut reader) {
             Ok(Some(req)) => {
-                let reply = bridge.handle(&req.method, &req.url, &req.body);
+                let reply = if same_site(&req, port) {
+                    bridge.handle(&req.method, &req.url, &req.body)
+                } else {
+                    HttpReply::text(403, "this address answers only its own page")
+                };
                 if write_reply(&mut writer, &reply, req.close).is_err() || req.close {
                     break;
                 }
@@ -210,14 +215,44 @@ fn connection(stream: TcpStream, bridge: &Bridge) {
 
 /// One HTTP request as the bridge reads it: the method, the request target (path and query, as sent),
 /// the body, `close` when the client asked to close the connection after the answer, and the value of the
-/// `Authorization` header as sent (#388: the window endpoint's token; the bridge itself ignores it).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `Authorization` header as sent (#388: the window endpoint's token; the bridge itself ignores it). `host`,
+/// `origin` and `fetch_site` are the `Host`, `Origin` and `Sec-Fetch-Site` headers in lower case, for
+/// [`same_site`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HttpRequest {
     pub method: String,
     pub url: String,
     pub body: Vec<u8>,
     pub close: bool,
     pub authorization: Option<String>,
+    pub host: Option<String>,
+    pub origin: Option<String>,
+    pub fetch_site: Option<String>,
+}
+
+/// Whether a request to the bridge on `port` comes from the bridge's own page or from a local tool, not from
+/// another web site. The bridge listens on 127.0.0.1 and has no token, so the browser's own headers are the
+/// guard: a `Host` that is not this bridge (a DNS name that was rebound to 127.0.0.1), an `Origin` that is not
+/// this bridge's (a cross-site `fetch` or form) and a `Sec-Fetch-Site` other than `same-origin` or `none` are
+/// refused. A request without these headers is a local tool (curl, a test client) and passes: such a caller
+/// already runs as the user.
+#[must_use]
+pub fn same_site(req: &HttpRequest, port: u16) -> bool {
+    let own = |authority: &str| {
+        let (name, p) = authority
+            .rsplit_once(':')
+            .map_or((authority, None), |(n, p)| (n, Some(p)));
+        matches!(name, "127.0.0.1" | "localhost") && p.is_none_or(|p| p == port.to_string())
+    };
+    req.host.as_deref().is_none_or(own)
+        && req
+            .origin
+            .as_deref()
+            .is_none_or(|o| o.strip_prefix("http://").is_some_and(own))
+        && req
+            .fetch_site
+            .as_deref()
+            .is_none_or(|s| matches!(s, "same-origin" | "none"))
 }
 
 fn idle(e: &std::io::Error) -> bool {
@@ -274,6 +309,7 @@ pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>
     let mut close = version == "HTTP/1.0";
     let mut length = 0usize;
     let mut authorization = None;
+    let (mut host, mut origin, mut fetch_site) = (None, None, None);
     for _ in 0..100 {
         let h = read_line(r)?.ok_or_else(|| bad("the head ends early"))?;
         if h.is_empty() {
@@ -285,12 +321,18 @@ pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>
                 body,
                 close,
                 authorization,
+                host,
+                origin,
+                fetch_site,
             }));
         }
         let (k, raw) = h.split_once(':').ok_or_else(|| bad("bad header"))?;
         let (k, v) = (k.trim().to_ascii_lowercase(), raw.trim().to_ascii_lowercase());
         match k.as_str() {
             "authorization" => authorization = Some(raw.trim().to_string()),
+            "host" => host = Some(v),
+            "origin" => origin = Some(v),
+            "sec-fetch-site" => fetch_site = Some(v),
             "content-length" => {
                 length = v.parse().map_err(|_| bad("bad Content-Length"))?;
                 if length > MAX_BODY {
@@ -316,6 +358,7 @@ pub fn write_reply(w: &mut impl Write, reply: &HttpReply, close: bool) -> std::i
         200 => "OK",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
         500 => "Internal Server Error",
