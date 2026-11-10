@@ -50,11 +50,12 @@ fn track_params_set_keeps_the_stored_shift_and_window() {
         json!({"shift_samples": 240, "refine_lo_ms": -5.0, "refine_hi_ms": 10.0})
             .as_object()
             .unwrap(),
+        false,
     )
     .unwrap();
     // an agent sends one field: the shift and the window survive
     let r = svc
-        .track_params_set(&sid, "Kick_In", json!({"sensitivity": 60}).as_object().unwrap())
+        .track_params_set(&sid, "Kick_In", json!({"sensitivity": 60}).as_object().unwrap(), false)
         .unwrap();
     let p = &r["params"];
     assert_eq!(p["shift_samples"], 240, "the stored shift survives a one-field call");
@@ -91,6 +92,7 @@ fn analyze_start_params_merge_into_the_stored_params() {
         json!({"shift_samples": 240, "refine_lo_ms": -5.0, "refine_hi_ms": 10.0})
             .as_object()
             .unwrap(),
+        false,
     )
     .unwrap();
     svc.analyze_start(
@@ -117,10 +119,16 @@ fn a_null_key_removes_the_stored_key() {
         &sid,
         "Kick_In",
         json!({"shift_samples": 240, "min_gap_ms": 30}).as_object().unwrap(),
+        false,
     )
     .unwrap();
     let r = svc
-        .track_params_set(&sid, "Kick_In", json!({"shift_samples": null}).as_object().unwrap())
+        .track_params_set(
+            &sid,
+            "Kick_In",
+            json!({"shift_samples": null}).as_object().unwrap(),
+            false,
+        )
         .unwrap();
     let p = &r["params"];
     assert!(p.get("shift_samples").is_none(), "null removes the key: {p}");
@@ -133,20 +141,82 @@ fn a_null_key_removes_the_stored_key() {
 fn an_absent_call_keeps_every_stored_key_and_a_fresh_track_gets_the_call() {
     let (svc, sid, root) = opened("pm4");
     seed(&svc, &sid, "Kick_In");
-    svc.track_params_set(&sid, "Kick_In", json!({"min_gap_ms": 30}).as_object().unwrap())
+    svc.track_params_set(&sid, "Kick_In", json!({"min_gap_ms": 30}).as_object().unwrap(), false)
         .unwrap();
     // a call without the key keeps it
-    svc.track_params_set(&sid, "Kick_In", json!({"refine": false}).as_object().unwrap())
+    svc.track_params_set(&sid, "Kick_In", json!({"refine": false}).as_object().unwrap(), false)
         .unwrap();
     let p = stored_params(&svc, &sid);
     assert_eq!(p["min_gap_ms"], 30.0);
     assert_eq!(p["refine"], false);
     // a track with no stored params gets the call's object as it is
-    svc.track_params_set(&sid, "Snare_Top", json!({"min_gap_ms": 25}).as_object().unwrap())
+    svc.track_params_set(&sid, "Snare_Top", json!({"min_gap_ms": 25}).as_object().unwrap(), false)
         .unwrap();
     assert_eq!(
         svc.tracks_get(&sid).unwrap()["tracks"]["Snare_Top"]["params"],
         json!({"min_gap_ms": 25})
     );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn track_params_set_replace_stores_exactly_the_sent_object() {
+    let (svc, sid, root) = opened("pm5");
+    seed(&svc, &sid, "Kick_In");
+    // a stored object with a sensitivity and a shift
+    svc.track_params_set(
+        &sid,
+        "Kick_In",
+        json!({"thresholds": [0.1, 0.2, 0.3, 0.4, 0.5], "sensitivity": 60, "shift_samples": 240})
+            .as_object()
+            .unwrap(),
+        false,
+    )
+    .unwrap();
+    // the page's undo of a re-pick: the whole before object, without the sensitivity
+    let sent = json!({"thresholds": [0.2, 0.3, 0.4, 0.5, 0.6], "shift_samples": 480});
+    let r = svc
+        .track_params_set(&sid, "Kick_In", sent.as_object().unwrap(), true)
+        .unwrap();
+    assert_eq!(r["params"], sent, "replace: true stores exactly the sent object");
+    assert_eq!(
+        stored_params(&svc, &sid),
+        sent,
+        "no sensitivity leaks through a replace"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn analyze_start_replace_stores_exactly_the_sent_params() {
+    let (svc, sid, root) = opened("pm6");
+    seed(&svc, &sid, "Kick_In");
+    svc.track_params_set(
+        &sid,
+        "Kick_In",
+        json!({"thresholds": [0.1, 0.2, 0.3, 0.4, 0.5], "sensitivity": 60, "shift_samples": 240})
+            .as_object()
+            .unwrap(),
+        false,
+    )
+    .unwrap();
+    let sent = json!({"Kick_In": {"thresholds": [0.3, 0.4, 0.5, 0.6, 0.7], "shift_samples": 120}});
+    svc.analyze_start_keep(
+        &sid,
+        Some(vec!["Kick_In".into()]),
+        sent.as_object(),
+        None,
+        None,
+        false,
+        true,
+    )
+    .unwrap();
+    let p = stored_params(&svc, &sid);
+    assert_eq!(
+        p,
+        json!({"thresholds": [0.3, 0.4, 0.5, 0.6, 0.7], "shift_samples": 120}),
+        "replace: true stores exactly the sent object: {p}"
+    );
+    assert!(p.get("sensitivity").is_none());
     std::fs::remove_dir_all(&root).unwrap();
 }

@@ -365,14 +365,14 @@ fn track_params_set_stores_the_page_params_and_waits_for_a_store() {
     svc.set_home(root.join("home"));
     let sid = session(&svc, &root);
     let p = params_at(70.0, &json!({"min_gap_ms": 33}));
-    let r = svc.track_params_set(&sid, "k in", &p).unwrap();
+    let r = svc.track_params_set(&sid, "k in", &p, false).unwrap();
     assert_eq!(r["params"]["sensitivity"], 70.0);
     let rec = &svc.tracks_get(&sid).unwrap()["tracks"]["k in"]["params"];
     assert_eq!(rec["sensitivity"], 70.0);
     assert_eq!(rec["min_gap_ms"], 33);
-    assert_eq!(svc.track_params_set(&sid, "nope", &p).unwrap_err().code, 400);
+    assert_eq!(svc.track_params_set(&sid, "nope", &p, false).unwrap_err().code, 400);
     let g = svc.jobs().begin_store(&sid).unwrap();
-    assert_eq!(svc.track_params_set(&sid, "k in", &p).unwrap_err().code, 409);
+    assert_eq!(svc.track_params_set(&sid, "k in", &p, false).unwrap_err().code, 409);
     drop(g);
 }
 

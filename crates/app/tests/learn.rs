@@ -71,7 +71,7 @@ fn a_range_takes_its_active_hits_and_a_tight_range_takes_one() {
 #[test]
 fn the_hitpoint_shift_comes_off_the_example_times() {
     let (svc, sid, _) = session("learn_shift", &[0.5]);
-    svc.track_params_set(&sid, "k in", json!({"shift_samples": 480}).as_object().unwrap())
+    svc.track_params_set(&sid, "k in", json!({"shift_samples": 480}).as_object().unwrap(), false)
         .unwrap();
     let r = svc
         .track_learn_mark(&sid, "k in", "this", Some((0.4, 0.6)), None)
@@ -375,7 +375,7 @@ fn the_commands_list_matches_the_dispatcher() {
 #[test]
 fn a_single_hit_mark_takes_the_hitpoint_shift_off_and_a_mark_makes_the_project_dirty() {
     let (svc, sid, _) = session("learn_hit_shift", &[0.5]);
-    svc.track_params_set(&sid, "k in", json!({"shift_samples": 480}).as_object().unwrap())
+    svc.track_params_set(&sid, "k in", json!({"shift_samples": 480}).as_object().unwrap(), false)
         .unwrap();
     svc.project_save(&sid).unwrap();
     assert_eq!(svc.tracks_get(&sid).unwrap()["dirty"], false);

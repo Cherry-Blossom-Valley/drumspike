@@ -835,7 +835,12 @@ pub static REGISTRY: &[CommandSpec] = &[
             opt(
                 "params",
                 Ty::Obj,
-                "Params per track name: {track: {sensitivity | thresholds, min_gap_ms, refine, shift_samples, vel_lo_db, vel_hi_db}}; each given key replaces that key in the track's stored params, a key with null removes it, an absent key keeps the stored value (#442)",
+                "Params per track name: {track: {sensitivity | thresholds, min_gap_ms, refine, shift_samples, vel_lo_db, vel_hi_db}}; each given key replaces that key in the track's stored params, a key with null removes it, an absent key keeps the stored value; replace: true stores the sent object instead (#442)",
+            ),
+            opt(
+                "replace",
+                Ty::Bool,
+                "For every track with a params entry: store exactly the sent object instead of merging into the stored params (default false)",
             ),
             opt(
                 "detector",
@@ -1564,8 +1569,17 @@ pub static REGISTRY: &[CommandSpec] = &[
     ),
     cmd(
         "track_params_set",
-        "Store the detection params of a track (a sensitivity gives the thresholds); merges into the stored params (#442)",
-        &[SID, NAME, req("params", Ty::Obj, "Params object")],
+        "Store a track's detection params (a sensitivity gives the thresholds); merges, replace: true stores the sent object (#442)",
+        &[
+            SID,
+            NAME,
+            req("params", Ty::Obj, "Params object"),
+            opt(
+                "replace",
+                Ty::Bool,
+                "Store exactly the sent object instead of merging into the stored params (default false)",
+            ),
+        ],
         r#"{"type":"object","required":["params"]}"#,
         Doc,
         Agent,

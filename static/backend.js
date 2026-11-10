@@ -92,7 +92,7 @@ function ipcBackend(T) {
     trainingStatus: (sid, on) => invoke("training_status", on === undefined ? { sid } : { sid, on }),   // #343: {on, records, path}
     trainingHandPlaced: (sid, track) => invoke("training_hand_placed", track === undefined ? { sid } : { sid, track }),   // #418: [{track, op, id, sample}]
     peaks, peaksRaw, samples, job,
-    analyze: (sid, tracks, params, keepEdited) => invoke("analyze_start", { sid, tracks, params, keep_edited: !!keepEdited, progress: new T.core.Channel() }),   // P4-9: keep_edited merges the edited hits in the service
+    analyze: (sid, tracks, params, keepEdited) => invoke("analyze_start", { sid, tracks, params, replace: true, keep_edited: !!keepEdited, progress: new T.core.Channel() }),   // P4-9: keep_edited merges the edited hits in the service; #442: whole objects, so replace
     /* #265: re-analyzes only the hits of [t0, t1] on one track; answers {track, t0, t1, replaced, n_new, events, info} */
     reanalyzeSelection: (sid, name, t0, t1, keepEdited) => invoke("reanalyze_selection", { sid, name, t0, t1, keep_edited: !!keepEdited }),
     /* writes Exports/<name>_spike.mid in the project folder; answers {path, size, n_events} */
@@ -118,7 +118,7 @@ function ipcBackend(T) {
        #344: training is the page's Training Mode flag (absent = off). */
     confidence: (sid, name, events, training) => invoke("track_confidence", { sid, name, events,
       ...(training === true ? { training: true } : {}) }),
-    paramsSet: (sid, name, params) => invoke("track_params_set", { sid, name, params }),   // fix round: undo and redo of a re-pick
+    paramsSet: (sid, name, params) => invoke("track_params_set", { sid, name, params, replace: true }),   // fix round: undo and redo of a re-pick; #442: whole objects, so replace
     pluginsList: (sid) => invoke("plugins_list", sid ? { sid } : {}),   // #387: the installed detector plugins
     pluginAccept: (sid, id) => invoke("plugin_accept", { sid, id }),   // #387: record the licence acceptance in the project
     repick: (sid, name, params, store) => invoke("track_repick", { sid, name, params, store: !!store, keep_edited: true }),   // P4-9: the edited hits stay (Rust merge_edited)

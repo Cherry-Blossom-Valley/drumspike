@@ -221,7 +221,9 @@ fn export_midi_stored_takes_the_note_and_the_hits_from_the_document() {
 fn track_params_set_maps_a_sensitivity_to_thresholds() {
     let (svc, sid, _) = opened("ps1");
     let params = json!({"sensitivity": 100, "min_gap_ms": 20});
-    let r = svc.track_params_set(&sid, "k in", params.as_object().unwrap()).unwrap();
+    let r = svc
+        .track_params_set(&sid, "k in", params.as_object().unwrap(), false)
+        .unwrap();
     let th = r["params"]["thresholds"].as_array().unwrap();
     assert_eq!(th.len(), 5);
     assert!((th[0].as_f64().unwrap() - 0.088).abs() < 1e-9, "{th:?}");
@@ -249,7 +251,7 @@ fn analyze_start_keep_edited_keeps_the_hand_edits_and_the_default_replaces_them(
             .all(|e| e.get("added").is_none() && e.get("orig").is_none())
     );
     svc.events_edit(&sid, "k in", &ops).unwrap();
-    svc.analyze_start_keep(&sid, Some(vec!["k in".into()]), None, None, None, true)
+    svc.analyze_start_keep(&sid, Some(vec!["k in".into()]), None, None, None, true, false)
         .unwrap();
     wait_done(&svc, &sid);
     let kept = hits(&svc, &sid, "k in");

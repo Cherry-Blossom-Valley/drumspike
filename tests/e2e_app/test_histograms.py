@@ -599,3 +599,44 @@ def test_track_repick_picks_from_the_kept_candidates_without_the_model(app, make
     assert service_tv(app, sid) == [{"t": e["t"], "v": e["v"]} for e in stored["events"]]
     p = invoke(app, "tracks_get", sid=sid)["tracks"]["Kick In"]["params"]
     assert p["sensitivity"] == 150 and p["thresholds"] == js(app, "v => sensThresholds(v)", 150)
+
+
+# ---------- fix round 3 (#442 review: the page sends whole objects, so the store must replace) ----------
+
+def reopen(app, sid):
+    """Save is the caller's; reload the page with the session pinned and wait for the tracks."""
+    app.evaluate("sid => localStorage.setItem('dsg_sid', sid)", sid)
+    app.reload()
+    app.wait_for_function("sid => typeof S !== 'undefined' && S.sid === sid && S.tracks['Kick In']", arg=sid)
+
+
+def test_undo_of_a_stored_re_pick_stores_no_sensitivity_the_before_state_did_not_have(app, hist):
+    sid, ins = hist
+    before = invoke(app, "tracks_get", sid=sid)["tracks"]["Kick In"]["params"]
+    assert "sensitivity" not in before, before                      # the analysis stored thresholds only
+    ins.locator(".pSens").fill("120")                               # the after state has the sensitivity
+    settled(app)
+    js(app, "() => undo()")                                         # the undo sends the before object
+    js(app, "async () => { await HG.queue['Kick In']; }")
+    settled(app)
+    invoke(app, "project_save", sid=sid)
+    reopen(app, sid)
+    p = invoke(app, "tracks_get", sid=sid)["tracks"]["Kick In"]["params"]
+    assert "sensitivity" not in p, f"the undo stored a sensitivity the before state did not have: {p}"
+    ins = inspect_track(app, "Kick In")                             # the slider belongs to the thresholds
+    expect(ins.locator(".pSens")).not_to_have_value("120")
+    expect(ins.locator(".pSens")).to_have_value(str(js(app, "() => Math.round(sensOf(S.tracks['Kick In'].params.thresholds))")))
+
+
+def test_setting_the_sensitivity_drops_the_stored_weak_signal_note(app, hist):
+    sid, _ = hist
+    # a weak-signal note of a 0-hit retry (an agent call stores it; the default merges)
+    invoke(app, "track_params_set", sid=sid, name="Kick In", params={"weak_signal": {"from": 50, "to": 100}})
+    assert invoke(app, "tracks_get", sid=sid)["tracks"]["Kick In"]["params"]["weak_signal"]["to"] == 100
+    reopen(app, sid)
+    js(app, "() => { const s = document.querySelector('#insParams .pSens'); s.value = 120;"
+       "s.dispatchEvent(new Event('input')); }")
+    js(app, "() => document.querySelector('#insParams .pSens').dispatchEvent(new Event('change'))")
+    settled(app)
+    p = invoke(app, "tracks_get", sid=sid)["tracks"]["Kick In"]["params"]
+    assert "weak_signal" not in p, f"the stale note survived the store: {p}"
