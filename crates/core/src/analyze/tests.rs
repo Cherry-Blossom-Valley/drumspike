@@ -40,10 +40,11 @@ fn reference(x: &[f32], sr: u32, role: &str, detected: &[(f64, u8)], p: &Analyze
         ev.retain(|(_, n)| role_classes(role).contains(n));
     }
     ev.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
-    let mingap = p.min_gap_ms / 1000.0;
+    let min_gap = (p.min_gap_ms * f64::from(sr) / 1000.0).round();
     let (mut dedup, mut last) = (vec![], -9e9);
     for (t, _) in ev {
-        if t - last >= mingap {
+        let gap = ((t - last) * f64::from(sr)).round();
+        if gap >= min_gap {
             dedup.push(t);
             last = t;
         }
@@ -64,7 +65,8 @@ fn reference(x: &[f32], sr: u32, role: &str, detected: &[(f64, u8)], p: &Analyze
         pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         let (mut fin, mut last) = (vec![], -9e9);
         for (t, r) in pairs {
-            if t - last >= mingap {
+            let gap = ((t - last) * f64::from(sr)).round();
+            if gap >= min_gap {
                 fin.push((t, r));
                 last = t;
             }
@@ -165,9 +167,29 @@ fn analyze_detected_equals_the_step_by_step_reference_in_every_branch() {
     det.push((0.75 - 0.006 + 0.005, 35)); // 5 ms after a kick: dropped by the first dedup
     det.reverse(); // the detector's order does not matter
     let cases = [
-        ("kick", AnalyzeParams::default()),
-        ("other", AnalyzeParams::default()),
-        ("bass", AnalyzeParams::default()),
+        // #440: `reference` models the version 1 rule (`refine_sr`), so the cases that compare
+        // against it name version 1; the default is `RefineRule::CURRENT`.
+        (
+            "kick",
+            AnalyzeParams {
+                rule: RefineRule::Reference,
+                ..AnalyzeParams::default()
+            },
+        ),
+        (
+            "other",
+            AnalyzeParams {
+                rule: RefineRule::Reference,
+                ..AnalyzeParams::default()
+            },
+        ),
+        (
+            "bass",
+            AnalyzeParams {
+                rule: RefineRule::Reference,
+                ..AnalyzeParams::default()
+            },
+        ),
         (
             "kick",
             AnalyzeParams {
@@ -186,6 +208,7 @@ fn analyze_detected_equals_the_step_by_step_reference_in_every_branch() {
                     hi_db: -3.0,
                     ..VelocityMap::default()
                 },
+                rule: RefineRule::Reference,
                 ..AnalyzeParams::default()
             },
         ),
@@ -193,6 +216,7 @@ fn analyze_detected_equals_the_step_by_step_reference_in_every_branch() {
             "snare",
             AnalyzeParams {
                 shift_samples: 480,
+                rule: RefineRule::Reference,
                 ..AnalyzeParams::default()
             },
         ),
@@ -261,7 +285,17 @@ fn the_reach_rule_moves_only_the_hits_whose_window_missed_the_attack() {
         .enumerate()
         .map(|(i, &t)| (if i % 2 == 0 { t - 0.017 } else { t - 0.006 }, 35))
         .collect();
-    let old = analyze_detected(&x, SR, "kick", &det, &AnalyzeParams::default()).unwrap();
+    let old = analyze_detected(
+        &x,
+        SR,
+        "kick",
+        &det,
+        &AnalyzeParams {
+            rule: RefineRule::Reference,
+            ..AnalyzeParams::default()
+        },
+    )
+    .unwrap();
     let reach = AnalyzeParams {
         rule: RefineRule::Reach,
         ..AnalyzeParams::default()
@@ -411,4 +445,61 @@ fn the_kick_walk_version_no_longer_changes_anything() {
     assert_eq!(s0.events, s1.events);
     assert_eq!(s0.events[0].t, k0.events[0].t, "the same shipped walk everywhere");
     assert_eq!(AnalyzeParams::default().kick_walk, 0);
+}
+
+/// #440: the first minimum-gap filter compares in whole samples, so the same pair of candidates
+/// at the minimum gap keeps one hit or two by its distance, never by its position in the file.
+#[test]
+fn the_minimum_gap_keeps_the_same_count_at_every_position() {
+    // the pair sits exactly at the minimum gap (20 ms = 960 frames at 48 kHz); only its
+    // position in the file moves
+    let n = 50;
+    let counts: Vec<usize> = (0..n)
+        .map(|i| {
+            let base = 0.05 + f64::from(i) * 0.02;
+            let det = [(base, 35u8), (base + 0.02, 35)];
+            let a = analyze_detected(
+                &kicks(SR),
+                SR,
+                "kick",
+                &det,
+                &AnalyzeParams {
+                    refine: false,
+                    ..AnalyzeParams::default()
+                },
+            )
+            .unwrap();
+            a.events.len()
+        })
+        .collect();
+    println!("minimum gap at 50 positions: compared {} positions", counts.len());
+    assert!(
+        counts.iter().all(|&c| c == counts[0]),
+        "position changed the count: {counts:?}"
+    );
+    assert_eq!(counts[0], 2, "a pair at the minimum gap keeps both hits");
+}
+
+/// #440: a caller that forgets the rule gets the current one, not silently version 1.
+#[test]
+fn the_default_rule_is_the_current_one() {
+    assert_eq!(AnalyzeParams::default().rule, RefineRule::CURRENT);
+}
+
+/// #440: the architecture text names the current rule version — it fails when the text and
+/// `RefineRule::CURRENT` drift apart.
+#[test]
+fn the_architecture_text_names_the_current_refine_rule() {
+    const ARCHITECTURE: &str = include_str!("../../../../ARCHITECTURE.md");
+    let v = RefineRule::CURRENT.version();
+    assert!(
+        ARCHITECTURE.contains(&format!("v{v} is current")),
+        "ARCHITECTURE.md must say that v{v} is current"
+    );
+    for w in 1..v {
+        assert!(
+            !ARCHITECTURE.contains(&format!("v{w} is current")),
+            "ARCHITECTURE.md still calls v{w} current"
+        );
+    }
 }

@@ -56,7 +56,19 @@ fn base_signal(role: &str) -> &'static Vec<f32> {
 
 /// Run the analysis path for one signal.
 fn analyze(role: &str, x: &[f32]) -> Analysis {
-    analyze_track(x, SR, role, &AnalyzeParams::default(), Detector::Dsp).expect("analyze_track must not fail")
+    // #440: the suite tests the detector's invariance, not the refine rule, so it names the
+    // version 1 rule it was written under instead of following the `AnalyzeParams` default.
+    analyze_track(
+        x,
+        SR,
+        role,
+        &AnalyzeParams {
+            rule: drumspike_core::refine::RefineRule::Reference,
+            ..AnalyzeParams::default()
+        },
+        Detector::Dsp,
+    )
+    .expect("analyze_track must not fail")
 }
 
 /// The hit times of an analysis, in whole samples.
