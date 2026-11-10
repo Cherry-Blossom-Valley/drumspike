@@ -122,6 +122,10 @@ def test_bounds_and_a_line_with_0_hits_fail(tmp_path, capsys):
     bounds = {"window": {"DC offset 1% of peak": {"kick": {"moved1": 0.0}}}}
     assert inv.over_bounds(window, {}, bounds) == [("DC offset 1% of peak kick", "moved1", 100.0, 0.0)]
     assert inv.over_bounds(window, {}, {"window": {}}) == []
+    # 'exact' is a floor: a run under it is over the bound, a run above it is fine
+    delay = {"delay 1 sample": {"kick": {"n": 3, "exact": 90.0, "off1": 0.0, "off2": 0.0, "off5": 0.0, "lost": 0.0}}}
+    assert inv.over_bounds(window, delay, {"delay": {"delay 1 sample": {"kick": {"exact": 98.0}}}}) == [("delay 1 sample kick", "exact", 90.0, 98.0)]
+    assert inv.over_bounds(window, delay, {"delay": {"delay 1 sample": {"kick": {"exact": 90.0}}}}) == []
     assert inv.print_report({}, {}, out=sys.stderr) == 1
     assert inv.print_report(window, {"delay 1 sample": {"kick": {"n": 3, "exact": 100.0, "off1": 0.0,
                                                                  "off2": 0.0, "off5": 0.0, "lost": 0.0}}},

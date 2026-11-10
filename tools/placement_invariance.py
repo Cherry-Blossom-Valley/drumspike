@@ -270,7 +270,9 @@ def over_bounds(window, delay, bounds):
                 for key, val in m.items():
                     if key == "n" or key not in lb:
                         continue
-                    if val > lb[key]:
+                    # 'exact' is a floor (the hits must move by exactly the delay); everything
+                    # else is a ceiling.
+                    if (val < lb[key]) if key == "exact" else (val > lb[key]):
                         hits.append((f"{line} {role}", key, val, lb[key]))
     return hits
 
