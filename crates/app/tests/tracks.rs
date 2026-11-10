@@ -10,9 +10,11 @@ use std::time::Instant;
 use common::*;
 use drumspike_app::roles::guess_role;
 use drumspike_app::{Progress, Service, TRACKS_COMMANDS};
-use drumspike_core::project::{SourceStatus, load_project};
+use drumspike_core::cache::cache_is_current;
+use drumspike_core::project::{SourceStatus, cache_key, load_project};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 
 fn service(root: &Path) -> Service {
     let svc = service_dsp();
@@ -760,15 +762,24 @@ fn tracks_remove_takes_the_record_the_hits_the_order_and_the_analysis_folder() {
         "the answer lists the tracks that are left"
     );
     assert!(r.get("snapshot").is_none(), "no snapshot unless asked for");
-    assert!(!dir.join("Analysis/s top").exists(), "the track's folder is deleted");
+    assert!(
+        dir.join("Analysis/s top/candidates.bin").is_file(),
+        "the folder stays until the save (with its files)"
+    );
+    assert!(
+        dir.join("Analysis/k in/candidates.bin").is_file(),
+        "the other folders are untouched"
+    );
+    assert_eq!(svc.events_get(&sid, "s top").unwrap_err().code, 400);
+    assert_eq!(svc.tracks_get(&sid).unwrap()["dirty"], true);
+    // the save that writes the document without the track deletes the pending folder
+    svc.project_save(&sid).unwrap();
+    assert!(!dir.join("Analysis/s top").exists(), "the save deletes the folder");
     assert!(
         dir.join("Analysis/k in/candidates.bin").is_file(),
         "the other folders stay"
     );
-    assert_eq!(svc.events_get(&sid, "s top").unwrap_err().code, 400);
-    assert_eq!(svc.tracks_get(&sid).unwrap()["dirty"], true);
     // saved, the document has no trace of the track (record, hits, Learn, params, order)
-    svc.project_save(&sid).unwrap();
     let doc = std::fs::read_dir(&dir)
         .unwrap()
         .flatten()
@@ -787,6 +798,13 @@ fn tracks_remove_can_take_several_tracks_and_ignores_a_name_given_twice() {
     let r = svc.tracks_remove(&sid, &names, false).unwrap();
     assert_eq!(r["removed"], json!(["t1", "k sub"]));
     assert_eq!(order_of(&svc, &sid), ["k in", "s top"]);
+    assert!(
+        dir.join("Analysis/t1").is_dir() && dir.join("Analysis/k sub").is_dir(),
+        "both folders stay until the save"
+    );
+    assert!(dir.join("Analysis/s top").is_dir());
+    // one save deletes every pending folder at once
+    svc.project_save(&sid).unwrap();
     assert!(!dir.join("Analysis/t1").exists() && !dir.join("Analysis/k sub").exists());
     assert!(dir.join("Analysis/s top").is_dir());
 }
@@ -805,6 +823,189 @@ fn tracks_remove_refuses_an_unknown_name_or_an_empty_list_and_removes_nothing() 
     );
     assert_eq!(order_of(&svc, &sid).len(), 4);
     assert!(dir.join("Analysis/k in").is_dir(), "a refused call deletes no folder");
+}
+
+/// The files of `dir` with the hash of each, sorted by path: the state of an analysis folder.
+fn folder_state(dir: &Path) -> Vec<(String, String)> {
+    let mut rows: Vec<(String, String)> = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                rows.push((
+                    p.strip_prefix(dir).unwrap().display().to_string(),
+                    file_sha256(&p).unwrap(),
+                ));
+            }
+        }
+    }
+    rows.sort();
+    rows
+}
+
+/// #427, the first gate test: a removal without a save changes nothing on disk. Reopened, the
+/// project has the track, its events and its analysis folder, byte-identical. Prints the count
+/// of the compared files and fails on 0 (the removal deleted the folder at once before).
+#[test]
+fn tracks_remove_without_a_save_leaves_track_events_and_folder_as_before_on_disk() {
+    let (svc, sid, dir) = four_tracks("rm_nosave");
+    let hits = svc.events_get(&sid, "s top").unwrap()["events"].clone();
+    let adir = dir.join("Analysis").join("s top");
+    std::fs::write(adir.join("activations.bin"), b"old activations").unwrap();
+    std::fs::write(adir.join("learn.json"), b"{\"old\": 1}").unwrap();
+    let before = folder_state(&adir);
+    println!("compared {} files before the removal", before.len());
+    assert!(!before.is_empty(), "the fixture has files to compare");
+    let r = svc.tracks_remove(&sid, &["s top".to_string()], false).unwrap();
+    assert_eq!(r["removed"], json!(["s top"]));
+    assert_eq!(
+        folder_state(&adir),
+        before,
+        "the folder is untouched while the project is open"
+    );
+    // close without save and reopen from disk: the project on disk is as before the removal
+    svc.project_close(&sid, true).unwrap();
+    let svc2 = service_dsp();
+    let sid2 = svc2.project_open(&dir.display().to_string()).unwrap()["sid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        order_of(&svc2, &sid2),
+        ["k in", "k sub", "s top", "t1"],
+        "the track is back"
+    );
+    assert_eq!(
+        svc2.events_get(&sid2, "s top").unwrap()["events"],
+        hits,
+        "the events too"
+    );
+    let after = folder_state(&adir);
+    println!("compared {} files after the reopen", after.len());
+    assert!(!after.is_empty(), "the analysis folder is there after the reopen");
+    assert_eq!(after, before, "the folder is byte-identical");
+}
+
+/// #427: remove, undo (the restore), save: the folder is there, byte-identical. The peaks of the
+/// fixture are built first, so the restore has nothing to make again in the folder.
+#[test]
+fn tracks_remove_undo_save_keeps_the_folder_byte_identical() {
+    let (svc, sid, dir) = four_tracks("rm_undo_folder");
+    svc.peaks_build_start(&sid, None, None).unwrap();
+    let end = Instant::now() + Duration::from_secs(60);
+    loop {
+        if svc.peaks_build_status(&sid)["state"] == "done" {
+            break;
+        }
+        assert!(Instant::now() < end, "the peaks did not build");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let adir = dir.join("Analysis").join("s top");
+    std::fs::write(adir.join("activations.bin"), b"old activations").unwrap();
+    let before = folder_state(&adir);
+    assert!(!before.is_empty());
+    let r = svc.tracks_remove(&sid, &["s top".to_string()], true).unwrap();
+    assert_eq!(folder_state(&adir), before, "the removal keeps the folder");
+    svc.tracks_restore(&sid, &r["snapshot"]).unwrap();
+    svc.project_save(&sid).unwrap();
+    let after = folder_state(&adir);
+    println!("compared {} files", after.len());
+    assert_eq!(after, before, "the save of the undo keeps the folder byte-identical");
+}
+
+/// #427: remove a track, add a new track with the same name before the save. The new track does
+/// not read the old folder (the key in the folder is the new source's) and the save leaves the
+/// new track's analysis in place. The track is `t1` because a name of an added track folds out
+/// of the file stem (`safe_name`): `s top` would come back as `s_top`, `t1` takes the name again.
+#[test]
+fn tracks_remove_then_a_new_track_of_the_same_name_keeps_its_own_analysis() {
+    let (svc, sid, dir) = four_tracks("rm_same_name");
+    let old_key = cache_key(load_project(&dir).unwrap().doc.track("t1").unwrap());
+    let r = svc.tracks_remove(&sid, &["t1".to_string()], false).unwrap();
+    assert_eq!(r["removed"], json!(["t1"]));
+    // another source (noise at 44.1 kHz), outside `daw/` so the old file of the removed track
+    // stays where its record points
+    let root = dir.parent().unwrap();
+    let wav = root.join("new").join("t1.wav");
+    write_wav(&wav, 44_100, &noise_signal(2.0, 44_100));
+    svc.tracks_add(&sid, &[wav.display().to_string()], None, &[], &[], false, None)
+        .unwrap();
+    let adir = dir.join("Analysis").join("t1");
+    let new_key = {
+        // the key of the source the folder was built from: save first, then read the document
+        svc.project_save(&sid).unwrap();
+        let saved = load_project(&dir).unwrap();
+        assert_eq!(
+            order_of(&svc, &sid),
+            ["k in", "k sub", "s top", "t1"],
+            "the name is taken again"
+        );
+        cache_key(saved.doc.track("t1").unwrap())
+    };
+    assert_ne!(new_key, old_key, "another source, another key");
+    assert!(
+        cache_is_current(&adir, &new_key),
+        "the folder holds the new track's cache"
+    );
+    assert!(!old_key.matches_file(&adir), "nothing of the old track is read");
+    assert!(dir.join("Analysis/t1/peaks.bin").is_file());
+    // and the save (again, the project changed since) leaves the new track's analysis in place
+    svc.project_save(&sid).unwrap();
+    assert!(dir.join("Analysis/t1").is_dir());
+    assert!(cache_is_current(&adir, &new_key), "the new analysis is still there");
+}
+
+/// #427: Save As and Consolidate copy no pending folder. The new project is written without the
+/// pending folder and the old folder keeps it (its document on disk still names the track).
+#[test]
+fn tracks_remove_save_as_and_consolidate_copy_no_pending_folder() {
+    let (svc, sid, dir) = four_tracks("rm_saveas");
+    svc.tracks_remove(&sid, &["s top".to_string()], false).unwrap();
+    assert!(dir.join("Analysis/s top/candidates.bin").is_file(), "pending");
+    let new_root = tmp("rm_saveas_new");
+    let new_root = new_root.display().to_string();
+    svc.project_save_as(&sid, Some("Copy"), Some(new_root.as_str()), false, None)
+        .unwrap();
+    let new_dir = PathBuf::from(new_root).join("Copy");
+    assert!(
+        !new_dir.join("Analysis/s top").exists(),
+        "the pending folder is not copied to the new project"
+    );
+    assert!(
+        dir.join("Analysis/s top/candidates.bin").is_file(),
+        "the old folder keeps it: its document on disk still names the track"
+    );
+    // Consolidate of the new project: the removed track is no record, so nothing of it is copied
+    svc.project_consolidate(&sid, None).unwrap();
+    let end = Instant::now() + Duration::from_secs(60);
+    loop {
+        let st = svc.job_status(&sid);
+        if st["state"] != "running" {
+            assert_eq!(st["state"], "done", "the consolidate: {st}");
+            break;
+        }
+        assert!(Instant::now() < end, "the consolidate did not finish: {st}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let copied: Vec<String> = std::fs::read_dir(new_dir.join("Audio Files"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !copied.iter().any(|n| n.contains("s top")),
+        "no audio of the pending track: {copied:?}"
+    );
+    // a save of the new project touches nothing in the old folder
+    svc.project_save(&sid).unwrap();
+    assert!(
+        dir.join("Analysis/s top/candidates.bin").is_file(),
+        "the old folder is untouched"
+    );
 }
 
 #[test]
