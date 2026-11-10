@@ -121,6 +121,70 @@ fn read_request_parses_the_head_and_the_body_and_refuses_the_rest() {
 }
 
 #[test]
+fn a_body_over_the_cap_is_refused_with_413_from_its_header_before_it_is_read() {
+    let port = serve_bridge();
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    c.set_read_timeout(Some(IDLE_READ_TIMEOUT * 3)).unwrap();
+    let t0 = Instant::now();
+    // headers only: the announced body never arrives, so an answer at all means the head alone decided
+    c.write_all(
+        format!(
+            "POST /invoke/app_info HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            MAX_BODY + 1
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let mut out = String::new();
+    c.read_to_string(&mut out).unwrap();
+    assert!(out.starts_with("HTTP/1.1 413 Payload Too Large\r\n"), "{out}");
+    assert!(t0.elapsed() < IDLE_READ_TIMEOUT, "{:?}", t0.elapsed());
+}
+
+#[test]
+fn a_request_refused_from_its_head_closes_the_connection_before_its_body() {
+    let port = serve_bridge();
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    c.set_read_timeout(Some(IDLE_READ_TIMEOUT * 3)).unwrap();
+    // a cross-site POST whose body is a complete inner request: without Connection: close, the
+    // unread body must not be parsed as the next request
+    let inner = "POST /invoke/app_info HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    c.write_all(
+        format!(
+            "POST /invoke/app_info HTTP/1.1\r\nHost: evil.example\r\nOrigin: https://evil.example\r\nSec-Fetch-Site: cross-site\r\nContent-Length: {}\r\n\r\n{}",
+            inner.len(),
+            inner
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let mut out = String::new();
+    c.read_to_string(&mut out).unwrap();
+    assert_eq!(out.matches("HTTP/1.1").count(), 1, "exactly one answer: {out}");
+    assert!(out.starts_with("HTTP/1.1 403 Forbidden\r\n"), "{out}");
+    assert!(!out.contains("core_version"), "the inner command ran: {out}");
+}
+
+#[test]
+fn read_head_takes_the_head_without_the_body_and_read_body_fills_it() {
+    let mut r = std::io::Cursor::new(b"POST /invoke/x HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc".to_vec());
+    let head = read_head(&mut r).unwrap().unwrap();
+    assert_eq!(
+        (
+            head.method.as_str(),
+            head.url.as_str(),
+            head.body.len(),
+            head.content_length
+        ),
+        ("POST", "/invoke/x", 0, 3)
+    );
+    assert_eq!(read_body(&mut r, &head).unwrap(), b"abc");
+    let big = format!("POST / HTTP/1.1\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1);
+    let e = read_request(&mut std::io::Cursor::new(big.into_bytes())).unwrap_err();
+    assert!(e.to_string().contains("body too large"), "{e}");
+}
+
+#[test]
 fn write_reply_sends_the_length_and_the_connection_header() {
     let mut out = Vec::new();
     write_reply(&mut out, &HttpReply::text(404, "no"), true).unwrap();

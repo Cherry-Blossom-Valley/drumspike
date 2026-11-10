@@ -31,6 +31,9 @@ caseless = "=0.2.2"
 unicode-normalization = "=0.1.25"
 # #387: the SHA-256 of the accepted licence text goes into the project record (MIT OR Apache-2.0)
 sha2 = { version = "=0.11.0", default-features = false }
+# #424: the pid liveness check of the window endpoint file is `kill(pid, 0)` (works on macOS and
+# Linux; a /proc lookup would not). Already in Cargo.lock via the system crates. MIT OR Apache-2.0.
+libc = "=0.2.190"
 
 # P3-7a: the test bridge (bin ds-bridge, in crates/devtools since LAYOUT 2) serves static/ and the commands over HTTP on 127.0.0.1.
 # X-3 (P3-9b): its HTTP/1.1 server is in src/bridge.rs (std only); tiny_http 0.12 is removed.
