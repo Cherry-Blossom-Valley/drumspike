@@ -439,6 +439,32 @@ fn agent_call_sends_no_token_to_a_port_whose_pid_is_dead_and_takes_the_file_away
 }
 
 #[test]
+fn the_endpoint_closes_the_connection_when_it_refuses_from_the_head() {
+    let s = svc();
+    let home = std::env::temp_dir().join(format!("ds_ep_close_{}", std::process::id()));
+    let ep = start(&s, &home).unwrap();
+    // a wrong token, and its body a complete request with the right one: the unread body must not
+    // be parsed as the next request of the same connection
+    let inner = format!(
+        "POST /call HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+        ep.token
+    );
+    let out = raw_request(
+        ep.port,
+        &format!(
+            "POST /call HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer wrong\r\nContent-Length: {}\r\n\r\n{}",
+            inner.len(),
+            inner
+        ),
+    );
+    assert_eq!(out.matches("HTTP/1.1").count(), 1, "exactly one answer: {out}");
+    assert!(out.starts_with("HTTP/1.1 401"), "{out}");
+    assert!(!out.contains("\"ok\""), "the inner call ran: {out}");
+    ep.remove_file();
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
 fn start_removes_a_leftover_endpoint_file_before_it_writes_its_own() {
     let s = svc();
     let home = std::env::temp_dir().join(format!("ds_ep_leftover_{}", std::process::id()));

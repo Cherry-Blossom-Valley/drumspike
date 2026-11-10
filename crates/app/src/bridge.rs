@@ -29,9 +29,11 @@ use crate::{AppError, Service};
 /// X-3 (P3-9b): how long a connection may stay idle before the bridge closes it.
 pub const IDLE_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// The largest request body the bridge reads. The page's largest posts are the hit rows of an
-/// `events_set` on a dense track (a few MB of JSON); 16 MB leaves a wide margin over that. A body
-/// over the cap is refused from its `Content-Length` header, before a byte of it is read.
+/// The largest request body the bridge reads. Measured (#424): the largest real post is an
+/// `events_set` on a dense track — 6000 hits over 5 minutes (20 hits/s) serialize to 327,679 bytes;
+/// an implausible ten times denser track (60,000 hits) is 3,336,414 bytes. 16 MB leaves a wide
+/// margin over that. A body over the cap is refused from its `Content-Length` header, before a
+/// byte of it is read, and the connection closes.
 pub const MAX_BODY: usize = 16 << 20;
 
 /// The listening socket of `ds-bridge` on 127.0.0.1 (`port` 0: a free port).
@@ -196,28 +198,39 @@ fn connection(stream: TcpStream, bridge: &Bridge) {
     loop {
         match read_head(&mut reader) {
             Ok(Some(req)) => {
-                // refused from the headers, before the body is read: a foreign site, or a body over the cap
-                let reply = if !same_site(&req, port) {
-                    HttpReply::text(403, "this address answers only its own page")
-                } else if req.content_length > MAX_BODY {
-                    HttpReply::text(413, "body too large")
-                } else {
-                    match read_body(&mut reader, &req) {
-                        Ok(body) => {
-                            let req = HttpRequest { body, ..req };
-                            bridge.handle(&req.method, &req.url, &req.body)
-                        }
-                        Err(e) => HttpReply::text(400, &format!("bad request: {e}")),
+                // refused from the headers, before the body is read: a foreign site, or a body over
+                // the cap. The connection ends here: the body was never read, and a body left on a
+                // keep-alive connection would be parsed as the next request.
+                let refused = !same_site(&req, port) || req.content_length > MAX_BODY;
+                if refused {
+                    let reply = if !same_site(&req, port) {
+                        HttpReply::text(403, "this address answers only its own page")
+                    } else {
+                        HttpReply::text(413, "body too large")
+                    };
+                    if write_reply(&mut writer, &reply, true).is_err() {
+                        break;
                     }
-                };
-                if write_reply(&mut writer, &reply, req.close).is_err() || req.close {
-                    break;
+                    let _ = writer.shutdown(std::net::Shutdown::Both);
+                    return;
+                }
+                match read_body(&mut reader, &req) {
+                    Ok(body) => {
+                        let req = HttpRequest { body, ..req };
+                        let reply = bridge.handle(&req.method, &req.url, &req.body);
+                        if write_reply(&mut writer, &reply, req.close).is_err() || req.close {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = write_reply(&mut writer, &HttpReply::text(400, &format!("bad request: {e}")), true);
+                        break;
+                    }
                 }
             }
             Ok(None) => break,
             Err(e) => {
-                let code = if is_body_too_large(&e) { 413 } else { 400 };
-                let _ = write_reply(&mut writer, &HttpReply::text(code, &format!("bad request: {e}")), true);
+                let _ = write_reply(&mut writer, &HttpReply::text(400, &format!("bad request: {e}")), true);
                 break;
             }
         }
@@ -360,12 +373,6 @@ pub fn read_head(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>> {
         }
     }
     Err(bad("too many headers"))
-}
-
-/// Whether `e` is the error of a body over [`MAX_BODY`] (an HTTP 413; the body never arrives).
-#[must_use]
-pub fn is_body_too_large(e: &std::io::Error) -> bool {
-    e.kind() == ErrorKind::InvalidData && e.to_string().contains("body too large")
 }
 
 /// Read the body that the head of `req` announced. Call it only for a request that passed the checks

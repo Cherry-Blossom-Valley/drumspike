@@ -341,23 +341,30 @@ fn connection(stream: TcpStream, svc: &Service, token: &str) {
     loop {
         match read_head(&mut reader) {
             Ok(Some(req)) => {
-                let reply = match refused_from_the_head(token, &req) {
-                    // the token, the path, the method and the size are checked before the body:
-                    // a refused request is answered without a byte of it being read
-                    Some(reply) => reply,
-                    None => match read_body(&mut reader, &req) {
-                        Ok(body) => handle(svc, token, &HttpRequest { body, ..req.clone() }),
-                        Err(e) => HttpReply::text(400, &format!("bad request: {e}")),
-                    },
-                };
-                if write_reply(&mut writer, &reply, req.close).is_err() || req.close {
-                    break;
+                // the token, the path, the method and the size are checked before the body. A refused
+                // request ends the connection here: its body was never read, and a body left on a
+                // keep-alive connection would be parsed as the next request.
+                if let Some(reply) = refused_from_the_head(token, &req) {
+                    let _ = write_reply(&mut writer, &reply, true);
+                    let _ = writer.shutdown(std::net::Shutdown::Both);
+                    return;
+                }
+                match read_body(&mut reader, &req) {
+                    Ok(body) => {
+                        let reply = handle(svc, token, &HttpRequest { body, ..req.clone() });
+                        if write_reply(&mut writer, &reply, req.close).is_err() || req.close {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = write_reply(&mut writer, &HttpReply::text(400, &format!("bad request: {e}")), true);
+                        break;
+                    }
                 }
             }
             Ok(None) => break,
             Err(e) => {
-                let code = if crate::bridge::is_body_too_large(&e) { 413 } else { 400 };
-                let _ = write_reply(&mut writer, &HttpReply::text(code, &format!("bad request: {e}")), true);
+                let _ = write_reply(&mut writer, &HttpReply::text(400, &format!("bad request: {e}")), true);
                 break;
             }
         }
@@ -446,15 +453,18 @@ pub fn handle(svc: &Service, token: &str, req: &HttpRequest) -> HttpReply {
     }
 }
 
-/// Whether `pid` names a live process. A best-effort check against a stale endpoint file (Linux
-/// `/proc`); where there is no `/proc` a pid is assumed alive. It does not cover pid reuse: a
-/// dead Drum Spike whose pid another process took in the meantime passes the check.
+/// Whether `pid` names a live process: `kill(pid, 0)`, which works on macOS and Linux alike.
+/// ESRCH means the process is gone; EPERM means it is alive but owned by another user. A best-effort
+/// check against a stale endpoint file. It does not cover pid reuse: a dead Drum Spike whose pid
+/// another process took in the meantime passes the check.
 fn pid_alive(pid: u32) -> bool {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
-        std::path::Path::new(&format!("/proc/{pid}")).exists()
+        // SAFETY: `kill` with signal 0 only probes the process; it sends nothing.
+        let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
         let _ = pid;
         true
