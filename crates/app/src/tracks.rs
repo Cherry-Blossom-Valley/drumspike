@@ -27,9 +27,7 @@ use std::time::Instant;
 
 use drumspike_core::SourceStatus;
 use drumspike_core::io::{MappedWav, MixMode};
-use drumspike_core::project::{
-    ANALYSIS_DIR, AUDIO_DIR, Track, add_track, build_source, check_track_name, copy_into_project_ctl,
-};
+use drumspike_core::project::{AUDIO_DIR, Track, add_track, build_source, check_track_name, copy_into_project_ctl};
 use serde_json::{Value, json};
 
 use crate::command_policy::opt_i64;
@@ -793,19 +791,20 @@ impl Service {
     }
 
     /// `tracks_remove {sid, names, snapshot?}` (P4-39a): take the tracks out of the project document (the record with its
-    /// hits, params, Learn examples, layer and every other key; the place in `order`) and delete the folder
-    /// `Analysis/<name>/` (peak cache, activations, Learn scores) of each. A follower of a removed track that stays becomes
-    /// a normal track (it loses `follows`, its hits stay as they are). The audio files are not touched. The project is
-    /// dirty. 400 for an empty list or an unknown name (nothing is removed then), 409 while an analysis, a lane build or a
-    /// copy job of the project runs. Answers `{sid, removed, unfollowed, order, tracks}` (`order` and `tracks` as
-    /// `tracks_get` has them for the tracks that are left); with `snapshot` also `snapshot`: one `{name, index,
-    /// order_index, track, followers}` per removed track, the input of [`Service::tracks_restore`].
+    /// hits, params, Learn examples, layer and every other key; the place in `order`). The folder `Analysis/<name>/`
+    /// (peak cache, activations, Learn scores) of each stays until the save that writes the document without the track
+    /// deletes it: a quit without save, or a crash, leaves a project whose tracks still have their analysis. A follower
+    /// of a removed track that stays becomes a normal track (it loses `follows`, its hits stay as they are). The audio
+    /// files are not touched. The project is dirty. 400 for an empty list or an unknown name (nothing is removed then),
+    /// 409 while an analysis, a lane build or a copy job of the project runs. Answers `{sid, removed, unfollowed, order,
+    /// tracks}` (`order` and `tracks` as `tracks_get` has them for the tracks that are left); with `snapshot` also
+    /// `snapshot`: one `{name, index, order_index, track, followers}` per removed track, the input of
+    /// [`Service::tracks_restore`].
     ///
     /// # Errors
     /// 404 when `sid` is not an open project or a name is not a track; 409 when the project is
     /// open read-only or an analysis, lane build or copy job runs; 400 when `names` is empty;
-    /// 500 when an `Analysis/<name>/` folder cannot be deleted or a track record cannot be
-    /// serialized.
+    /// 500 when a track record cannot be serialized.
     pub fn tracks_remove(&self, sid: &str, names: &[String], snapshot: bool) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let mut want: Vec<String> = Vec::new();
@@ -853,12 +852,11 @@ impl Service {
                 json!({"name": n, "index": index, "order_index": order_index, "track": track, "followers": followers}),
             );
         }
-        // the folders first: a failure leaves the document as it is (the caches are made again by the lane job)
-        let adir = g.project.subdir(ANALYSIS_DIR);
+        // the folders stay on disk until the save writes the document without the tracks (the
+        // caches are made again by the lane job when the undo does not bring them back)
         for n in &want {
-            let dir = adir.join(n);
-            if check_track_name(n).is_ok() && dir.is_dir() {
-                std::fs::remove_dir_all(&dir).map_err(|e| AppError::internal(format!("{}: {e}", dir.display())))?;
+            if !g.pending_delete.contains(n) {
+                g.pending_delete.push(n.clone());
             }
         }
         let mut unfollowed = Vec::new();
@@ -894,8 +892,9 @@ impl Service {
 
     /// `tracks_restore {sid, tracks}` (P4-39a, the undo of `tracks_remove`): put the tracks of a `snapshot` back at their
     /// places with every key they had (hits, params, extra fields), link the followers that followed them again, resolve
-    /// the sources and build the peak caches that the removal deleted. 400 for a snapshot that is no list or holds a bad
-    /// record, 409 when a track of that name exists. The activations and Learn scores of the deleted folders come back with
+    /// the sources and build the peak caches of the restored tracks (the folders a save already deleted are made again;
+    /// the ones the removal left on disk are kept as they are). 400 for a snapshot that is no list or holds a bad
+    /// record, 409 when a track of that name exists. The activations and Learn scores of deleted folders come back with
     /// the next analysis. Marks the project dirty. Answers `{restored, order}`.
     ///
     /// # Errors
@@ -950,6 +949,8 @@ impl Service {
                     }
                 }
             }
+            // the undo of a removal: the folders are not pending any more (a save after the undo keeps them)
+            g.pending_delete.retain(|n| !restored.contains(n));
             g.mark_dirty();
             g.project.doc.track_order()
         };

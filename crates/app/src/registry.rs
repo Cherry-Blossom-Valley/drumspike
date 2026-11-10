@@ -127,6 +127,10 @@ pub struct OpenProject {
     /// #228: why the last autosave failed; `None` after a good autosave or a save. It is the `autosave_error` key of the
     /// summary, and `autosave-failed` goes to the page once per failure streak.
     pub autosave_error: Option<String>,
+    /// The analysis folders that `tracks_remove` keeps until the save: the names of the removed tracks whose
+    /// `Analysis/<name>/` is still on disk. The save that writes the document without a name deletes its folder;
+    /// `tracks_restore` (the undo) takes a name off, a close without save drops the list with the project.
+    pub pending_delete: Vec<String>,
 }
 
 impl OpenProject {
@@ -151,6 +155,7 @@ impl OpenProject {
             disk,
             stale_noted: None,
             autosave_error: None,
+            pending_delete: Vec::new(),
         };
         op.resolve();
         op

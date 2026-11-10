@@ -65,7 +65,7 @@ def test_the_menu_item_asks_and_remove_takes_the_track_out_everywhere(app, make_
     assert app.evaluate("() => DSShell.menuState().tracks") == ["A", "C"]  # the follow menus
     got = doc_tracks(app, sid)
     assert got["order"] == ["A", "C"] and list(got["tracks"]) == ["A", "C"] and got["dirty"] is True
-    assert not (folder / "Analysis" / "B").exists() and (folder / "Analysis" / "A").is_dir()
+    assert (folder / "Analysis" / "B").is_dir() and (folder / "Analysis" / "A").is_dir()  # kept until the save
     assert invoke(app, "events_get", sid=sid, name="B")["code"] == 400
     assert app.evaluate("() => S.undo.length") == 1 and app.evaluate("() => S.undo[0].type") == "trkdel"
 
@@ -196,7 +196,7 @@ def test_the_agent_command_and_the_page_remove_the_same_things(app, make_project
     page_side, agent_side = doc_tracks(app, s1), doc_tracks(app, s2)
     assert page_side["order"] == agent_side["order"] == ["A", "C"]
     assert json.dumps(page_side["tracks"], sort_keys=True) == json.dumps(agent_side["tracks"], sort_keys=True) == json.dumps(r["tracks"], sort_keys=True)
-    assert sorted(p.name for p in (f1 / "Analysis").iterdir()) == sorted(p.name for p in (f2 / "Analysis").iterdir()) == ["A", "C"]
+    assert sorted(p.name for p in (f1 / "Analysis").iterdir()) == sorted(p.name for p in (f2 / "Analysis").iterdir()) == ["A", "B", "C"]  # the pending folders stay
     menu(app, "undo")
     app.wait_for_function("() => S.order.length === 3")
     back = invoke(app, "tracks_restore", sid=s2, tracks=r["snapshot"])
