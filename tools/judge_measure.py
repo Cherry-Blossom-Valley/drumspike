@@ -8,6 +8,11 @@ aggregates only: per gold set the share exact, within one sample and the summed 
 (no move counts as 0), and for Session K the moves and how many shape keys got more than one answer. The gold rows are
 `confirmed = 1 OR label_off != 0 OR owner = 1`. With --rows FILE the per-row distances are written next to it, to compare
 two runs row by row (`--compare FILE` prints how many gold rows are worse, equal, better than that earlier run).
+
+--inject is the fault-injection run (#421): every row with a placed truth (`confirmed = 1 OR owner = 1`) is judged with its
+hit shifted 2, 3, 5 and 8 samples late of the label. Per shift it prints how many the judge flagged as late (and how many
+suggestions land on the label, or one off), listed without an answer, left with a reason, and left without one
+("unexplained": the misses). It needs only `v10/`. A run that injected 0 hits FAILs.
 """
 import argparse
 import csv
@@ -46,6 +51,24 @@ def gold_windows(measure):
         out.append({"set": "gold" + r["session"], "id": i, "role": r["role"], "label_off": int(r["label_off"]),
                     "owner": r["owner"] == "1", "samples": s, "stroke": stroke_span(rows[i].astype(float), 480, 48000),
                     "hit_at": at})
+    return out
+
+
+INJECT_SHIFTS = (2, 3, 5, 8)
+
+
+def inject_windows(measure):
+    """#421: the rows with a placed truth, the hit moved `shift` samples late of the label."""
+    rows = np.fromfile(measure / "v10" / "fit_v10.f32", dtype="<f4").reshape(-1, 960)
+    out = []
+    for r in csv.DictReader(open(measure / "v10" / "fit_v10.csv")):
+        if not (r["confirmed"] == "1" or r["owner"] == "1"):
+            continue
+        d, true = rows[int(r["i"])].astype(float), 480 + int(r["label_off"])
+        for shift in INJECT_SHIFTS:
+            s, at = cut(d, true + shift, 48000)
+            out.append({"set": "inject", "id": int(r["i"]), "shift": shift, "role": r["role"], "samples": s,
+                        "stroke": stroke_span(d, true + shift, 48000), "hit_at": at})
     return out
 
 
@@ -99,10 +122,19 @@ def main():
     ap.add_argument("--ref", help="measure static/agent.js at this git ref instead of the working tree")
     ap.add_argument("--rows", help="write the per-row gold distances here")
     ap.add_argument("--compare", help="per-row file of an earlier run: count the gold rows worse, equal and better")
+    ap.add_argument("--inject", action="store_true", help="the fault-injection run: labelled hits shifted late (needs only v10/)")
     a = ap.parse_args()
     measure_dir = Path(a.measure_dir)
     src = (subprocess.run(["git", "show", f"{a.ref}:static/agent.js"], capture_output=True, text=True, check=True, cwd=ROOT).stdout
            if a.ref else (ROOT / "static" / "agent.js").read_text())
+    if a.inject:
+        by_shift = measure(src, inject_windows(measure_dir))["inject"]
+        total = {k: sum(v[k] for v in by_shift.values()) for k in ("n", "flagged", "fixed", "within1", "listed", "explained", "unexplained")}
+        json.dump({"inject_total": total, "inject_by_shift": by_shift}, sys.stdout, indent=1)
+        print()
+        if total["n"] == 0:
+            sys.exit("FAIL: the run injected 0 hits")
+        return
     res = measure(src, gold_windows(measure_dir) + session_k_windows(measure_dir) + session_k_records(measure_dir))
     dist = {f"{r['set']}:{r['id']}": r["d"] for r in res["rows"] if r["set"].startswith("gold")}
     gold = res["gold"]

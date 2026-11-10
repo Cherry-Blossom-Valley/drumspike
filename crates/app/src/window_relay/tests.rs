@@ -359,6 +359,125 @@ fn agent_call_reads_the_endpoint_file_and_answers_the_helpers_value_or_a_plain_e
     let _ = std::fs::remove_dir_all(&home);
 }
 
+fn raw_request(port: u16, head: &str) -> String {
+    let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    c.write_all(head.as_bytes()).unwrap();
+    let mut out = String::new();
+    c.read_to_string(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn a_wrong_token_is_answered_within_a_second_and_the_huge_body_is_never_read() {
+    let s = svc();
+    let home = std::env::temp_dir().join(format!("ds_ep_fast_{}", std::process::id()));
+    let ep = start(&s, &home).unwrap();
+    // headers only: the announced body never arrives, so an answer within 1 s means the head alone decided
+    let t0 = Instant::now();
+    let out = raw_request(
+        ep.port,
+        &format!(
+            "POST /call HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer wrong\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            200 << 20
+        ),
+    );
+    let waited = t0.elapsed();
+    assert!(out.starts_with("HTTP/1.1 401"), "{out}");
+    assert!(waited < Duration::from_secs(1), "{waited:?}");
+    ep.remove_file();
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn a_body_over_the_cap_gets_413_from_its_header_alone() {
+    let s = svc();
+    let home = std::env::temp_dir().join(format!("ds_ep_cap_{}", std::process::id()));
+    let ep = start(&s, &home).unwrap();
+    for (method, path) in [("POST", "/call"), ("GET", "/status")] {
+        let out = raw_request(
+            ep.port,
+            &format!(
+                "{method} {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                ep.token,
+                MAX_BODY + 1
+            ),
+        );
+        assert!(out.starts_with("HTTP/1.1 413"), "{out}");
+    }
+    ep.remove_file();
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn agent_call_sends_no_token_to_a_port_whose_pid_is_dead_and_takes_the_file_away() {
+    let home = std::env::temp_dir().join(format!("ds_ep_stale_{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    // a listener owns the port but accepts nothing: a connect would hand it the token
+    let listener = crate::bridge::listen(0).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let dead = {
+        let mut c = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .unwrap();
+        let pid = c.id();
+        c.wait().unwrap();
+        pid
+    };
+    let file = format!(r#"{{"port": {port}, "token": "secret", "pid": {dead}}}"#);
+    std::fs::write(home.join(ENDPOINT_FILE), &file).unwrap();
+    let e = agent_call(Some(&home), "hits", &json!([]), Some(500)).unwrap_err();
+    assert_eq!(e.code, 409);
+    assert!(e.message.contains("no Drum Spike window is open"), "{}", e.message);
+    assert!(!home.join(ENDPOINT_FILE).exists(), "the stale file is gone");
+    // the connection never reached the port
+    listener.set_nonblocking(true).unwrap();
+    assert!(listener.accept().is_err(), "the listener got a connection");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn the_endpoint_closes_the_connection_when_it_refuses_from_the_head() {
+    let s = svc();
+    let home = std::env::temp_dir().join(format!("ds_ep_close_{}", std::process::id()));
+    let ep = start(&s, &home).unwrap();
+    // a wrong token, and its body a complete request with the right one: the unread body must not
+    // be parsed as the next request of the same connection
+    let inner = format!(
+        "POST /call HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+        ep.token
+    );
+    let out = raw_request(
+        ep.port,
+        &format!(
+            "POST /call HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer wrong\r\nContent-Length: {}\r\n\r\n{}",
+            inner.len(),
+            inner
+        ),
+    );
+    assert_eq!(out.matches("HTTP/1.1").count(), 1, "exactly one answer: {out}");
+    assert!(out.starts_with("HTTP/1.1 401"), "{out}");
+    assert!(!out.contains("\"ok\""), "the inner call ran: {out}");
+    ep.remove_file();
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn start_removes_a_leftover_endpoint_file_before_it_writes_its_own() {
+    let s = svc();
+    let home = std::env::temp_dir().join(format!("ds_ep_leftover_{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join(ENDPOINT_FILE), r#"{"port": 1, "token": "x", "pid": 1}"#).unwrap();
+    let ep = start(&s, &home).unwrap();
+    let file: Value = serde_json::from_slice(&std::fs::read(home.join(ENDPOINT_FILE)).unwrap()).unwrap();
+    assert_eq!(file["pid"], u64::from(std::process::id()));
+    assert_ne!(file["token"], json!("x"));
+    ep.remove_file();
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 fn mcp_text(s: &Service, lines: &[Value]) -> Vec<Value> {
     let input = lines.iter().map(|l| format!("{l}\n")).collect::<String>();
     let out = Sink::default();

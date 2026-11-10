@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use crate::bridge::{HttpReply, HttpRequest, IDLE_READ_TIMEOUT, read_request, write_reply};
+use crate::bridge::{HttpReply, HttpRequest, IDLE_READ_TIMEOUT, MAX_BODY, read_body, read_head, write_reply};
 use crate::{AppError, Service};
 
 /// The helpers of `window.DSAgent` that the endpoint passes on; any other name is refused before it reaches the page.
@@ -308,7 +308,9 @@ fn write_endpoint_file(home: &Path, port: u16, token: &str) -> std::io::Result<P
 }
 
 /// Open the window endpoint for `svc`: a listener on 127.0.0.1 (a free port), a fresh token and the endpoint file in
-/// `home`; the relay starts taking calls. The listener runs on its own threads until the process ends.
+/// `home`; the relay starts taking calls. The listener runs on its own threads until the process ends. A file left
+/// by a crashed app is removed before the new one is written (the home lock keeps one app per home, so a file
+/// found here is always stale).
 ///
 /// # Errors
 ///
@@ -317,6 +319,7 @@ pub fn start(svc: &Service, home: &Path) -> std::io::Result<Endpoint> {
     let token = new_token()?;
     let listener = crate::bridge::listen(0)?;
     let port = listener.local_addr()?.port();
+    let _ = std::fs::remove_file(home.join(ENDPOINT_FILE));
     let file = write_endpoint_file(home, port, &token)?;
     svc.window_relay().enable();
     let (svc2, token2) = (svc.clone(), token.clone());
@@ -336,11 +339,27 @@ fn connection(stream: TcpStream, svc: &Service, token: &str) {
     let mut reader = BufReader::new(read_half);
     let mut writer = stream;
     loop {
-        match read_request(&mut reader) {
+        match read_head(&mut reader) {
             Ok(Some(req)) => {
-                let reply = handle(svc, token, &req);
-                if write_reply(&mut writer, &reply, req.close).is_err() || req.close {
-                    break;
+                // the token, the path, the method and the size are checked before the body. A refused
+                // request ends the connection here: its body was never read, and a body left on a
+                // keep-alive connection would be parsed as the next request.
+                if let Some(reply) = refused_from_the_head(token, &req) {
+                    let _ = write_reply(&mut writer, &reply, true);
+                    let _ = writer.shutdown(std::net::Shutdown::Both);
+                    return;
+                }
+                match read_body(&mut reader, &req) {
+                    Ok(body) => {
+                        let reply = handle(svc, token, &HttpRequest { body, ..req.clone() });
+                        if write_reply(&mut writer, &reply, req.close).is_err() || req.close {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = write_reply(&mut writer, &HttpReply::text(400, &format!("bad request: {e}")), true);
+                        break;
+                    }
                 }
             }
             Ok(None) => break,
@@ -351,6 +370,38 @@ fn connection(stream: TcpStream, svc: &Service, token: &str) {
         }
     }
     let _ = writer.shutdown(std::net::Shutdown::Both);
+}
+
+/// The answer to a request that its head alone refuses: a body over the cap (413), a wrong or missing
+/// token (401), or a path or method the endpoint does not serve (404). `None`: the request may go on
+/// to its body.
+fn refused_from_the_head(token: &str, req: &HttpRequest) -> Option<HttpReply> {
+    if !authorized(req, token) {
+        return Some(error_reply(&AppError {
+            code: 401,
+            message: format!("a call needs the token of {ENDPOINT_FILE} in the header `Authorization: Bearer <token>`"),
+        }));
+    }
+    let path = req.url.split('?').next().unwrap_or("");
+    if !matches!((req.method.as_str(), path), ("POST", "/call") | ("GET", "/status")) {
+        return Some(HttpReply::text(404, "POST /call or GET /status"));
+    }
+    if req.content_length > MAX_BODY {
+        return Some(HttpReply::json(
+            413,
+            &json!({"code": 413, "message": "the body is over the cap"}),
+        ));
+    }
+    None
+}
+
+/// Whether `req` carries the endpoint's token as a bearer token.
+fn authorized(req: &HttpRequest, token: &str) -> bool {
+    let given = req
+        .authorization
+        .as_deref()
+        .and_then(|a| a.strip_prefix("Bearer ").or_else(|| a.strip_prefix("bearer ")));
+    given.is_some_and(|g| same_token(g.trim(), token))
 }
 
 /// Compare two tokens without stopping at the first difference.
@@ -365,11 +416,7 @@ fn error_reply(e: &AppError) -> HttpReply {
 /// One request of the endpoint: `POST /call` and `GET /status`, both with `Authorization: Bearer <token>`.
 #[must_use]
 pub fn handle(svc: &Service, token: &str, req: &HttpRequest) -> HttpReply {
-    let given = req
-        .authorization
-        .as_deref()
-        .and_then(|a| a.strip_prefix("Bearer ").or_else(|| a.strip_prefix("bearer ")));
-    if !given.is_some_and(|g| same_token(g.trim(), token)) {
+    if !authorized(req, token) {
         return error_reply(&AppError {
             code: 401,
             message: format!("a call needs the token of {ENDPOINT_FILE} in the header `Authorization: Bearer <token>`"),
@@ -406,12 +453,34 @@ pub fn handle(svc: &Service, token: &str, req: &HttpRequest) -> HttpReply {
     }
 }
 
+/// Whether `pid` names a live process: `kill(pid, 0)`, which works on macOS and Linux alike.
+/// ESRCH means the process is gone; EPERM means it is alive but owned by another user. A best-effort
+/// check against a stale endpoint file. It does not cover pid reuse: a dead Drum Spike whose pid
+/// another process took in the meantime passes the check.
+fn pid_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: `kill` with signal 0 only probes the process; it sends nothing.
+        let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
 /// The one call of an agent (`agent_call` as MCP tool, `cli agent_call fn args...`): read `<home>/window-endpoint.json`,
 /// `POST /call` and answer the helper's value. The agent does not read the token or speak HTTP itself.
 ///
+/// The pid in the file is checked before the connect: after a crash the file stays, and the token must not go to
+/// whatever process owns that port now. A file whose process is gone is removed and answered with the usual
+/// "no window" error.
+///
 /// # Errors
 ///
-/// 409 with a plain message when no window is open (no endpoint file, or its port refuses: a dead app left the file) or
+/// 409 with a plain message when no window is open (no endpoint file, its port refuses, or its process is gone) or
 /// the helper refused; 400 for a helper outside [`FUNCTIONS`]; 504 when the page did not answer; 500 for a broken reply.
 pub fn agent_call(home: Option<&Path>, fun: &str, args: &Value, timeout_ms: Option<u64>) -> Result<Value, AppError> {
     use std::io::Write as _;
@@ -425,12 +494,18 @@ pub fn agent_call(home: Option<&Path>, fun: &str, args: &Value, timeout_ms: Opti
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .ok_or_else(no_window)?;
-    let (Some(port), Some(token)) = (
+    let (Some(port), Some(token), pid) = (
         file["port"].as_u64().and_then(|p| u16::try_from(p).ok()),
         file["token"].as_str(),
+        file["pid"].as_u64().and_then(|p| u32::try_from(p).ok()),
     ) else {
         return Err(no_window());
     };
+    if pid.is_none_or(|p| !pid_alive(p)) {
+        // a leftover file of a dead app: take it away, so no token goes to the port's new owner
+        let _ = std::fs::remove_file(home.join(ENDPOINT_FILE));
+        return Err(no_window());
+    }
     let wait = timeout_ms.map_or(DEFAULT_WAIT, |ms| Duration::from_millis(ms).min(MAX_WAIT));
     let mut stream = TcpStream::connect(("127.0.0.1", port)).map_err(|_| no_window())?;
     // the endpoint answers when the page has, or after `wait`: allow a little more for the 504

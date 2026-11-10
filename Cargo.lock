@@ -878,6 +878,7 @@ version = "0.9.31"
 dependencies = [
  "caseless",
  "drumspike-core",
+ "libc",
  "midly",
  "rayon",
  "serde",

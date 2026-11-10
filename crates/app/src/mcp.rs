@@ -136,7 +136,7 @@ pub fn tool(c: &CommandSpec) -> Value {
         "inputSchema": c.args_schema(),
         "annotations": {
             "readOnlyHint": !c.writes_project() && c.effect == api::Effect::Read,
-            "destructiveHint": false,
+            "destructiveHint": c.destructive,
         },
     });
     if c.run == Run::Progress {

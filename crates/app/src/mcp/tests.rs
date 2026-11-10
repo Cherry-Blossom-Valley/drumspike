@@ -118,6 +118,37 @@ fn tool_descriptions_say_what_the_agent_must_know() {
 }
 
 #[test]
+fn the_hints_follow_the_registry_and_the_table_is_printed() {
+    let mut destructive = 0usize;
+    println!("| tool | readOnlyHint | destructiveHint |");
+    println!("|---|---|---|");
+    for t in tools() {
+        let name = t["name"].as_str().unwrap();
+        let a = &t["annotations"];
+        let ro = a["readOnlyHint"].as_bool().unwrap();
+        let d = a["destructiveHint"].as_bool().unwrap();
+        println!("| {name} | {ro} | {d} |");
+        if let Some(c) = api::find(name) {
+            assert_eq!(d, c.destructive, "{name}: the hint follows the registry");
+            if c.effect == api::Effect::Read {
+                assert!(ro, "{name}: a read tool is read-only");
+                assert!(!d, "{name}: a read tool is not destructive");
+            }
+        }
+        if d {
+            destructive += 1;
+        }
+    }
+    for name in ["tracks_remove", "export_all", "events_set"] {
+        let a = tool(api::find(name).unwrap())["annotations"].clone();
+        assert_eq!(a["destructiveHint"], true, "{name} is destructive");
+        assert_eq!(a["readOnlyHint"], false, "{name}");
+    }
+    assert!(destructive > 0, "no destructive tool");
+    println!("destructive tools: {destructive}");
+}
+
+#[test]
 fn a_progress_tool_starts_a_job_and_job_get_reports_it() {
     let dir = std::env::temp_dir().join(format!("ds_mcp_job_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
