@@ -1318,6 +1318,12 @@ fn overlapping_hand_edits_keep_learn_matching_the_events() {
 
 // ---------- #439: an added hit goes through the placement rule ----------
 
+/// A ghost no threshold detects and the detector offers no candidate for: its rise is 6 dB or more over silence
+/// (`RISE_DB`), or only 2 to 6 dB over a steady hum (`WEAK_DB` over `HUM_DB`).
+const RISE_DB: f32 = -60.0;
+const WEAK_DB: f32 = -58.0;
+const HUM_DB: f32 = -62.0;
+
 /// The sample of a hit time.
 fn sample_of(t: f64) -> i64 {
     (t * 48_000.0).round() as i64
@@ -1325,14 +1331,37 @@ fn sample_of(t: f64) -> i64 {
 
 /// A kick track whose ghost kicks (-18 dB) the detector drops, analysed with `shift` samples of Hitpoint shift.
 fn ghost_session(tag: &str, ghosts: &[f64], shift: i64) -> (Service, String) {
+    ghost_session_db(tag, &ONSETS, ghosts, shift, -18.0)
+}
+
+/// [`ghost_session`] with the loud kicks at `loud` and the ghosts at `db` dB.
+fn ghost_session_db(tag: &str, loud: &[f64], ghosts: &[f64], shift: i64, db: f32) -> (Service, String) {
+    ghost_session_floor(tag, loud, ghosts, shift, db, None)
+}
+
+/// [`ghost_session_db`] over a steady hum of `floor_db` dB: a ghost that is no more than a weak rise over it.
+fn ghost_session_floor(
+    tag: &str,
+    loud: &[f64],
+    ghosts: &[f64],
+    shift: i64,
+    db: f32,
+    floor_db: Option<f32>,
+) -> (Service, String) {
     let root = tmp(tag);
     let svc = service_dsp();
     svc.set_home(root.join("home"));
     let dur = 3.5;
-    let loud = kick_signal(&ONSETS, dur, 48_000);
+    let loud = kick_signal(loud, dur, 48_000);
     let soft = kick_signal(ghosts, dur, 48_000);
-    let g = 10f32.powf(-18.0 / 20.0);
-    let x: Vec<f32> = loud.iter().zip(&soft).map(|(a, b)| a + g * b).collect();
+    let g = 10f32.powf(db / 20.0);
+    let hum = floor_db.map_or(0.0, |d| 10f32.powf(d / 20.0));
+    let x: Vec<f32> = loud
+        .iter()
+        .zip(&soft)
+        .enumerate()
+        .map(|(i, (a, b))| a + g * b + hum * (2.0 * std::f32::consts::PI * 300.0 * i as f32 / 48_000.0).sin())
+        .collect();
     let spec = Spec {
         name: "k in",
         role: "kick",
@@ -1370,18 +1399,25 @@ fn analysis_samples(svc: &Service, sid: &str, ghosts: &[f64], shift: i64) -> Vec
         .collect()
 }
 
-/// Learn This on each ghost range; the samples of the hits it added, in order.
-fn learn_ghosts(svc: &Service, sid: &str, ghosts: &[f64]) -> Vec<i64> {
+/// Learn This on each ghost range; the samples of the hits it added, in order. `from` is the premise of how the
+/// range found its time: "candidate", "rise", or "hand" for a weak rise.
+fn learn_ghosts_from(svc: &Service, sid: &str, ghosts: &[f64], from: &str) -> Vec<i64> {
     let mut added = Vec::new();
     for g in ghosts {
         let r = svc
             .track_learn_mark(sid, "k in", "this", Some((g - 0.05, g + 0.05)), None)
             .unwrap();
-        assert_eq!(r["from"], "candidate", "premise: the ghost is a candidate: {r}");
-        assert_eq!(r["placement"]["refined"], true, "{r}");
+        assert_eq!(r["from"], from, "premise: how the range found the ghost: {r}");
+        if from == "hand" {
+            assert_eq!(r["k_rise"]["at"], "rise", "premise: a weak rise, not the centre: {r}");
+        }
         added.push(sample_of(r["added_hit"].as_f64().unwrap_or_else(|| panic!("{r}"))));
     }
     added
+}
+
+fn learn_ghosts(svc: &Service, sid: &str, ghosts: &[f64]) -> Vec<i64> {
+    learn_ghosts_from(svc, sid, ghosts, "candidate")
 }
 
 fn assert_same_samples(what: &str, analysis: &[i64], learned: &[i64]) {
@@ -1399,6 +1435,79 @@ fn learn_this_on_a_missed_stroke_stores_the_analysis_sample() {
     let (svc, sid) = ghost_session("learn_place", &ghosts, 0);
     let want = analysis_samples(&svc, &sid, &ghosts, 0);
     assert_same_samples("shift 0", &want, &learn_ghosts(&svc, &sid, &ghosts));
+}
+
+#[test]
+fn learn_this_on_a_candidate_says_it_was_placed_by_the_rule() {
+    let ghosts = [1.0];
+    let (svc, sid) = ghost_session("learn_place_flag", &ghosts, 0);
+    let r = svc
+        .track_learn_mark(&sid, "k in", "this", Some((0.95, 1.05)), None)
+        .unwrap();
+    assert_eq!(r["placement"]["refined"], true, "{r}");
+}
+
+/// A missed stroke that is no candidate but a rise of 6 dB or more (`from: "rise"`), and one that is only a weak
+/// rise (`from: "hand"` at the steepest soft rise): Learn This stores the sample the analysis gives the stroke.
+#[test]
+fn learn_this_on_a_rise_stores_the_analysis_sample() {
+    for (shift, tag) in [(0, "learn_rise_0"), (240, "learn_rise_240")] {
+        let (svc, sid) = ghost_session_floor(tag, &[0.25], &[2.0], shift, RISE_DB, None);
+        let want = loud_stroke_samples(&format!("{tag}_ref"), shift, None);
+        let got = learn_ghosts_from(&svc, &sid, &[2.0], "rise");
+        assert_same_samples(&format!("rise, shift {shift}"), &want, &got);
+    }
+}
+
+/// A stroke that is only a weak rise over a hum has no detectable twin to compare with: the placement rule gives it
+/// its own sample. It is the same stroke at any Hitpoint shift, so the stored sample moves by the shift exactly, and
+/// the answer says the rule placed it.
+#[test]
+fn learn_this_on_a_weak_rise_goes_through_the_rule_and_carries_the_shift() {
+    let mut stored = Vec::new();
+    for (shift, tag) in [(0, "learn_weak_0"), (240, "learn_weak_240")] {
+        let (svc, sid) = ghost_session_floor(tag, &[0.25], &[2.0], shift, WEAK_DB, Some(HUM_DB));
+        let r = svc
+            .track_learn_mark(&sid, "k in", "this", Some((1.95, 2.05)), None)
+            .unwrap();
+        assert_eq!(r["from"], "hand", "{r}");
+        assert_eq!(r["k_rise"]["at"], "rise", "premise: a weak rise: {r}");
+        assert_eq!(r["placement"]["refined"], true, "{r}");
+        stored.push(sample_of(r["added_hit"].as_f64().unwrap()));
+    }
+    eprintln!("#439 weak rise: shift 0 -> {}, shift 240 -> {}", stored[0], stored[1]);
+    assert_eq!(stored[1], stored[0] + 240, "{stored:?}");
+}
+
+/// The sample the analysis gives the stroke at 2.0 s when the same stroke is loud enough to be detected (-30 dB): the
+/// stroke of the soft sessions is this one at a lower level, which no threshold detects.
+fn loud_stroke_samples(tag: &str, shift: i64, floor_db: Option<f32>) -> Vec<i64> {
+    let (svc, sid) = ghost_session_floor(tag, &[0.25], &[2.0], shift, -30.0, floor_db);
+    let hit = times(&events(&svc, &sid))
+        .into_iter()
+        .find(|t| (t - 2.0 - shift as f64 / 48_000.0).abs() < 0.03)
+        .unwrap_or_else(|| panic!("premise: the analysis detects the loud stroke"));
+    vec![sample_of(hit)]
+}
+
+/// `refine` off: the analysis stores the coarse time plus the Hitpoint shift, so does Learn This.
+#[test]
+fn learn_this_with_refine_off_adds_the_candidate_time_plus_the_shift() {
+    let ghosts = [1.0];
+    let (svc, sid) = ghost_session("learn_place_off", &ghosts, 240);
+    let params = json!({"refine": false, "shift_samples": 240});
+    svc.track_params_set(&sid, "k in", params.as_object().unwrap()).unwrap();
+    let r = svc
+        .track_learn_mark(&sid, "k in", "this", Some((0.95, 1.05)), None)
+        .unwrap();
+    assert_eq!(r["from"], "candidate", "{r}");
+    assert_eq!(r["placement"]["refined"], false, "{r}");
+    let coarse = r["placement"]["coarse"].as_f64().unwrap();
+    assert_eq!(
+        sample_of(r["added_hit"].as_f64().unwrap()),
+        sample_of(coarse) + 240,
+        "{r}"
+    );
 }
 
 #[test]

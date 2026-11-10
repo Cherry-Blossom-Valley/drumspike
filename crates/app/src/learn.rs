@@ -897,14 +897,15 @@ impl Service {
         let mut placement: Option<Value> = None;
         if kind == "this" && !matches!(resolved.from, "hits" | "hit") {
             let t = resolved.at.first().copied().unwrap_or(t0);
-            // #439: a candidate time is the detector's coarse time: it goes through the placement rule like every
-            // hit of the track. A rise is a refined onset already, a hand time is the engineer's own.
-            let t = if resolved.from == "candidate" {
-                let placed = self.placed_time(sid, &target, t, &events)?;
-                placement = Some(json!({"refined": placed.is_some(), "coarse": t}));
-                placed.unwrap_or(t)
-            } else {
+            // #439: a candidate, a rise or the range time of a K on a range is a time found in the audio: it goes
+            // through the placement rule like every hit of the track (a rise is a version 1 anchor, not the rule's
+            // stroke time). Only the playhead time of a K without hit is the engineer's own.
+            let t = if hit.is_some() && resolved.from == "hand" {
                 t
+            } else {
+                let (placed, refined) = self.placed_time(sid, &target, t, &events)?;
+                placement = Some(json!({"refined": refined, "coarse": t}));
+                placed
             };
             let t = (t * 1e6).round() / 1e6;
             let er = self.events_edit(sid, &target, &[json!({"op": "add", "t": t, "learned": true})])?;
@@ -1011,11 +1012,12 @@ impl Service {
         }
     }
 
-    /// #439: the stored time of a hit that Learn This adds at the coarse detector time `t` (before the Hitpoint
+    /// #439: the stored time of a hit that Learn This adds at the audio time `t` found for it (before the Hitpoint
     /// shift): the time the analysis gives the stroke, i.e. `t` refined with the track's recorded rule and refine
     /// window, plus the Hitpoint shift. The other hits of the track are the neighbours that clip the search, as in
-    /// the analysis. `None` when the track refines nothing (`refine` off) or the refine finds no stroke near `t`.
-    fn placed_time(&self, sid: &str, name: &str, t: f64, events: &[Value]) -> Result<Option<f64>, AppError> {
+    /// the analysis. With `refine` off, or when the rule finds no stroke near `t`, the time is `t` plus the shift
+    /// (the analysis stores the coarse time with the shift too) and the flag is false.
+    fn placed_time(&self, sid: &str, name: &str, t: f64, events: &[Value]) -> Result<(f64, bool), AppError> {
         let op = self.inner.registry.get(sid)?;
         let (source, mix, params, rule) = {
             let g = lock(&op);
@@ -1033,15 +1035,18 @@ impl Service {
             )
         };
         let parsed = crate::jobs::parse_params(params.as_ref()).map_err(AppError::bad)?;
-        if !parsed.params.refine {
-            return Ok(None);
-        }
         let d = self.inner.media.decode_cached(&source?, mix_mode(&mix))?;
         let dt = parsed.params.shift_samples as f64 / f64::from(d.sr);
+        if !parsed.params.refine {
+            return Ok((t + dt, false));
+        }
         // the hits carry the Hitpoint shift; the audio does not
         let neighbours: Vec<f64> = hit_times(events)?.into_iter().map(|h| h - dt).collect();
         let r = refine_rule_peak(&d.samples, t, d.sr, &neighbours, parsed.params.window, rule, FM_PEAK_DB);
-        Ok(r.rise.map(|_| r.t + dt))
+        Ok(match r.rise {
+            Some(_) => (r.t + dt, true),
+            None => (t + dt, false),
+        })
     }
 
     /// The strongest envelope rise of the range in the audio of `name` ([`rise_example`]).
