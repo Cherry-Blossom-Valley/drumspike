@@ -1,0 +1,25 @@
+{
+  "_comment": "#443: one bound per line and role. A share over its bound (for 'exact': under) exits non-zero. Window bounds from the 2026-11-10 host run (--per 40, this host holds no tom stems), rounded up to 0.1; delay 'exact' floors rounded down. Tom rows from the analysis of 2026-11-10 (only the shares it measured). The coordinator re-runs on the full stem set.",
+  "window": {
+    "gain -12 dB": {"kick": {"moved1": 0.0, "moved2": 0.0, "moved5": 0.0}, "snare": {"moved1": 0.0, "moved2": 0.0, "moved5": 0.0}},
+    "gain +6 dB": {"kick": {"moved1": 0.0, "moved2": 0.0, "moved5": 0.0}, "snare": {"moved1": 0.0, "moved2": 0.0, "moved5": 0.0}},
+    "polarity flip": {"kick": {"moved1": 0.9, "moved2": 0.0, "moved5": 0.0}, "snare": {"moved1": 6.7, "moved2": 1.7, "moved5": 0.0}, "tom": {"moved1": 5.5, "moved2": 1.5}},
+    "DC offset 1% of peak": {"kick": {"moved1": 26.7, "moved2": 12.5, "moved5": 0.9}, "snare": {"moved1": 20.0, "moved2": 8.4, "moved5": 5.9}, "tom": {"moved1": 16.2, "moved2": 10.2}},
+    "50 Hz hum 2% of peak": {"kick": {"moved1": 15.0, "moved2": 5.0, "moved5": 3.4}, "snare": {"moved1": 16.7, "moved2": 7.5, "moved5": 5.0}, "tom": {"moved1": 12.4, "moved2": 8.0}},
+    "white noise 50 dB under peak": {"kick": {"moved1": 14.2, "moved2": 4.2, "moved5": 1.7}, "snare": {"moved1": 12.5, "moved2": 3.4, "moved5": 1.7}, "tom": {"moved1": 22.0, "moved2": 9.0}},
+    "coarse time -3 ms": {"kick": {"moved1": 0.0, "moved2": 0.0, "moved5": 0.2}, "snare": {"moved1": 0.9, "moved2": 0.9, "moved5": 2.2}, "tom": {"moved5": 6.8}},
+    "coarse time -1 ms": {"kick": {"moved1": 0.0, "moved2": 0.0, "moved5": 0.0}, "snare": {"moved1": 0.9, "moved2": 0.0, "moved5": 0.0}, "tom": {"moved5": 1.6}},
+    "coarse time +1 ms": {"kick": {"moved1": 0.0, "moved2": 0.0, "moved5": 0.0}, "snare": {"moved1": 0.0, "moved2": 0.0, "moved5": 0.0}},
+    "coarse time +3 ms": {"kick": {"moved1": 16.7, "moved2": 16.7, "moved5": 16.7}, "snare": {"moved1": 23.4, "moved2": 23.4, "moved5": 22.5}},
+    "96 kHz resample": {"kick": {"moved1": 5.0, "moved2": 5.0, "moved5": 0.9}, "snare": {"moved1": 16.7, "moved2": 12.5, "moved5": 8.4}, "tom": {"moved1": 11.2, "moved2": 8.2}}
+  },
+  "delay": {
+    "delay 1 sample": {"kick": {"exact": 100.0, "off5": 0.0, "lost": 0.0}, "snare": {"exact": 100.0, "off5": 0.0, "lost": 0.0}},
+    "delay 2 samples": {"kick": {"exact": 99.0, "off5": 1.0, "lost": 0.0}, "snare": {"exact": 100.0, "off5": 0.0, "lost": 0.0}},
+    "delay 3 samples": {"kick": {"exact": 99.0, "off5": 1.0, "lost": 0.0}, "snare": {"exact": 98.6, "off5": 1.4, "lost": 0.0}},
+    "delay 4 samples": {"kick": {"exact": 99.0, "off5": 1.0, "lost": 0.0}, "snare": {"exact": 98.6, "off5": 1.4, "lost": 0.0}},
+    "delay 5 samples": {"kick": {"exact": 99.0, "off5": 1.0, "lost": 0.0}, "snare": {"exact": 98.6, "off5": 1.4, "lost": 0.0}},
+    "delay 6 samples": {"kick": {"exact": 98.0, "off5": 1.0, "lost": 0.0}, "snare": {"exact": 98.6, "off5": 1.4, "lost": 0.0}},
+    "delay 7 samples": {"kick": {"exact": 98.0, "off5": 1.0, "lost": 0.0}, "snare": {"exact": 98.6, "off5": 1.4, "lost": 0.0}}
+  }
+}
