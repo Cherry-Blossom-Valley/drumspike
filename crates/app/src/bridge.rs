@@ -29,8 +29,10 @@ use crate::{AppError, Service};
 /// X-3 (P3-9b): how long a connection may stay idle before the bridge closes it.
 pub const IDLE_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// The largest request body the bridge reads (the page posts JSON of a few MB at most).
-pub const MAX_BODY: usize = 256 << 20;
+/// The largest request body the bridge reads. The page's largest posts are the hit rows of an
+/// `events_set` on a dense track (a few MB of JSON); 16 MB leaves a wide margin over that. A body
+/// over the cap is refused from its `Content-Length` header, before a byte of it is read.
+pub const MAX_BODY: usize = 16 << 20;
 
 /// The listening socket of `ds-bridge` on 127.0.0.1 (`port` 0: a free port).
 ///
@@ -192,12 +194,21 @@ fn connection(stream: TcpStream, bridge: &Bridge) {
     let mut reader = BufReader::new(read_half);
     let mut writer = stream;
     loop {
-        match read_request(&mut reader) {
+        match read_head(&mut reader) {
             Ok(Some(req)) => {
-                let reply = if same_site(&req, port) {
-                    bridge.handle(&req.method, &req.url, &req.body)
-                } else {
+                // refused from the headers, before the body is read: a foreign site, or a body over the cap
+                let reply = if !same_site(&req, port) {
                     HttpReply::text(403, "this address answers only its own page")
+                } else if req.content_length > MAX_BODY {
+                    HttpReply::text(413, "body too large")
+                } else {
+                    match read_body(&mut reader, &req) {
+                        Ok(body) => {
+                            let req = HttpRequest { body, ..req };
+                            bridge.handle(&req.method, &req.url, &req.body)
+                        }
+                        Err(e) => HttpReply::text(400, &format!("bad request: {e}")),
+                    }
                 };
                 if write_reply(&mut writer, &reply, req.close).is_err() || req.close {
                     break;
@@ -205,7 +216,8 @@ fn connection(stream: TcpStream, bridge: &Bridge) {
             }
             Ok(None) => break,
             Err(e) => {
-                let _ = write_reply(&mut writer, &HttpReply::text(400, &format!("bad request: {e}")), true);
+                let code = if is_body_too_large(&e) { 413 } else { 400 };
+                let _ = write_reply(&mut writer, &HttpReply::text(code, &format!("bad request: {e}")), true);
                 break;
             }
         }
@@ -214,7 +226,8 @@ fn connection(stream: TcpStream, bridge: &Bridge) {
 }
 
 /// One HTTP request as the bridge reads it: the method, the request target (path and query, as sent),
-/// the body, `close` when the client asked to close the connection after the answer, and the value of the
+/// the body (empty until [`read_body`] fills it), `close` when the client asked to close the connection
+/// after the answer, the body length that the `Content-Length` header announced, and the value of the
 /// `Authorization` header as sent (#388: the window endpoint's token; the bridge itself ignores it). `host`,
 /// `origin` and `fetch_site` are the `Host`, `Origin` and `Sec-Fetch-Site` headers in lower case, for
 /// [`same_site`].
@@ -224,6 +237,8 @@ pub struct HttpRequest {
     pub url: String,
     pub body: Vec<u8>,
     pub close: bool,
+    /// The body length of the `Content-Length` header (0 when there was none).
+    pub content_length: usize,
     pub authorization: Option<String>,
     pub host: Option<String>,
     pub origin: Option<String>,
@@ -281,17 +296,20 @@ fn read_line(r: &mut impl BufRead) -> std::io::Result<Option<String>> {
         .map_err(|_| bad("the head is not UTF-8"))
 }
 
-/// Read the next request of a connection. `Ok(None)`: the client closed the connection, or it stayed
-/// idle for the read timeout before the first byte of a request. A body needs `Content-Length`
-/// (the page's `fetch` always sends it); a chunked body is refused.
+/// Read the head of the next request of a connection: the request line and the headers, but not the
+/// body. The body comes with [`read_body`], so the caller can refuse from the headers — the token, the
+/// path, the method, the size — before a byte of the body is read. `Ok(None)`: the client closed the
+/// connection, or it stayed idle for the read timeout before the first byte of a request. A body needs
+/// `Content-Length` (the page's `fetch` always sends it); a chunked body is refused.
 ///
 /// # Errors
 ///
 /// An [`std::io::Error`] of kind `InvalidData` for a request line that is not `METHOD URL HTTP/1.x`, a line over
-/// 16 KB or not UTF-8, a header without `:`, a bad or over-[`MAX_BODY`] `Content-Length`, a chunked body, more
-/// than 100 headers, or a head that ends early; any other read error of `r`, including an end of input inside
-/// the body. A read timeout before the first byte is `Ok(None)`, not an error.
-pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>> {
+/// 16 KB or not UTF-8, a header without `:`, a bad `Content-Length`, a chunked body, more than 100 headers, or a
+/// head that ends early; any other read error of `r`. A read
+/// timeout before the first byte is `Ok(None)`, not an error. A `Content-Length` over [`MAX_BODY`] is not an error
+/// here: the head carries it, and the caller refuses (413) or [`read_request`] errors.
+pub fn read_head(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>> {
     let line = match read_line(r) {
         Ok(Some(l)) => l,
         Ok(None) => return Ok(None),
@@ -313,13 +331,12 @@ pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>
     for _ in 0..100 {
         let h = read_line(r)?.ok_or_else(|| bad("the head ends early"))?;
         if h.is_empty() {
-            let mut body = vec![0u8; length];
-            r.read_exact(&mut body)?;
             return Ok(Some(HttpRequest {
                 method: method.to_string(),
                 url: url.to_string(),
-                body,
+                body: Vec::new(),
                 close,
+                content_length: length,
                 authorization,
                 host,
                 origin,
@@ -335,9 +352,6 @@ pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>
             "sec-fetch-site" => fetch_site = Some(v),
             "content-length" => {
                 length = v.parse().map_err(|_| bad("bad Content-Length"))?;
-                if length > MAX_BODY {
-                    return Err(bad("body too large"));
-                }
             }
             "transfer-encoding" if v != "identity" => return Err(bad("chunked bodies are not supported")),
             "connection" if v.contains("close") => close = true,
@@ -346,6 +360,42 @@ pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>
         }
     }
     Err(bad("too many headers"))
+}
+
+/// Whether `e` is the error of a body over [`MAX_BODY`] (an HTTP 413; the body never arrives).
+#[must_use]
+pub fn is_body_too_large(e: &std::io::Error) -> bool {
+    e.kind() == ErrorKind::InvalidData && e.to_string().contains("body too large")
+}
+
+/// Read the body that the head of `req` announced. Call it only for a request that passed the checks
+/// of its head: the body of a refused request is never read.
+///
+/// # Errors
+///
+/// Any read error of `r`, including an end of input inside the body.
+pub fn read_body(r: &mut impl BufRead, req: &HttpRequest) -> std::io::Result<Vec<u8>> {
+    let mut body = vec![0u8; req.content_length];
+    r.read_exact(&mut body)?;
+    Ok(body)
+}
+
+/// Read one whole request: the head ([`read_head`]) and its body ([`read_body`]).
+///
+/// # Errors
+///
+/// Those of [`read_head`] and [`read_body`].
+pub fn read_request(r: &mut impl BufRead) -> std::io::Result<Option<HttpRequest>> {
+    match read_head(r)? {
+        None => Ok(None),
+        Some(mut req) => {
+            if req.content_length > MAX_BODY {
+                return Err(bad("body too large"));
+            }
+            req.body = read_body(r, &req)?;
+            Ok(Some(req))
+        }
+    }
 }
 
 /// Write one answer with its length (and `Connection: close` when the connection ends after it).
@@ -361,6 +411,7 @@ pub fn write_reply(w: &mut impl Write, reply: &HttpReply, close: bool) -> std::i
         403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
+        413 => "Payload Too Large",
         500 => "Internal Server Error",
         504 => "Gateway Timeout",
         _ => "Status",
