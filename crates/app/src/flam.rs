@@ -131,14 +131,21 @@ pub fn with_flams(
     let mut out: Vec<Event> = events.iter().filter(|e| !is_flam(e) || edited(e)).cloned().collect();
     let map = crate::follow::velocity_map_of(params);
     let cut = crate::histogram::cut_of(params);
+    // #438: the track's Hitpoint shift — a second stroke is stored like every other hit of
+    // the track, at the detected time plus `shift_samples` over the rate.
+    let shift_s = params
+        .and_then(|m| m.get("shift_samples"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        / f64::from(sr);
     let held: Vec<f64> = out.iter().filter(|e| out_of_output(e)).map(|e| e.t).collect();
     let mut n = 0;
     for s in found.iter().filter(|s| !s.bleed) {
-        if held.iter().any(|&t| (t - s.t).abs() <= guard_s) {
+        if held.iter().any(|&t| (t - (s.t + shift_s)).abs() <= guard_s) {
             continue;
         }
         let db = peak_db(x, s.t, sr);
-        let mut e = Event::new(s.t, velocity_of_db(db, &map));
+        let mut e = Event::new(s.t + shift_s, velocity_of_db(db, &map));
         mark(&mut e, Mark::Flam);
         if cut.is_some_and(|c| db < c) {
             mark(&mut e, Mark::Cut);
@@ -239,7 +246,20 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
                 ),
                 Ok(d) => {
                     let base: Vec<&Event> = t.events.iter().filter(|e| !is_flam(e) || edited(e)).collect();
-                    let hits: Vec<f64> = base.iter().filter(|e| !out_of_output(e)).map(|e| e.t).collect();
+                    // #438: the stored events carry the Hitpoint shift, the audio does not —
+                    // the detector sees positions in the audio, so the shift comes off
+                    let shift_s = t
+                        .params
+                        .as_ref()
+                        .and_then(|m| m.get("shift_samples"))
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0)
+                        / f64::from(d.sr);
+                    let hits: Vec<f64> = base
+                        .iter()
+                        .filter(|e| !out_of_output(e))
+                        .map(|e| e.t - shift_s)
+                        .collect();
                     let (env, hop) = attack_env(&d.samples, d.sr, &p);
                     let same_rate: Vec<&(String, u32, Vec<f64>)> =
                         src_env.iter().filter(|(_, sr, _)| *sr == d.sr).collect();
