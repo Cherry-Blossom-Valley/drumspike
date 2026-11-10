@@ -66,6 +66,40 @@ Measured on the 4981 gold rows, against a judge that never moves anything (exact
 owner rows hold few late hits, so they cannot show this gain; they show that the change costs them nothing. A third change was
 measured and dropped: taking the foot from the first band crossing after the line cost owner rows (441 to 438 exact).
 
+## A foot the line leads to (#421)
+
+The test with 20 shifted hits left 3 unmoved. To find the shape classes, the test became a tool: `tools/judge_measure.py
+--inject` judges every row with a placed truth (2468 rows, confirmed or owner) with its hit shifted 2, 3, 5 and 8 samples
+late of the label, 9872 injected hits. On the 0.9.29 judge 98 of them read "at the foot" without a reason. Two classes:
+
+- **A zero crossing.** The stroke starts with a small ripple: a half-wave to one side, through the line, a half-wave to the
+  other side, then the edge. A late hit on the crossing stands on the line's level, so the judge called it the foot. Most
+  of these are snare hits of Session J. Rule: a sample within the band is the foot only when the line leads to it. A foot
+  that the level reached in one run from beyond the band on the other side is a crossing, and the foot goes back before
+  the ripple. A step no larger than the line's own largest step ends the run, so a slow wave before the stroke stays line
+  (#408). When the ripple stays under the band the hit stands (owner rule A) and the judge says so.
+- **A dip.** A slow rise passes the band, dips back into it and then the edge comes; the kick hits of Session K that the
+  20-hit test missed are of this class. The owner rows hold such a foot both ways: on one of them the dip is the labelled
+  hit. A rule that moves these hits was measured and costs that row (441 to 440 exact, distance 125 to 131). The judge
+  therefore gives no answer for a dip (`suggest` null, with the reason), so the agent leaves the hit and lists it.
+
+No constant was added: the rule uses the detector's band and the line's own largest step.
+
+| measure | 0.9.29 to 0.9.31 | now |
+|---|---|---|
+| all gold rows (exact / within 1 / summed distance) | 2802 / 4003 / 5422 | 2864 / 4152 / 5183 |
+| owner rows | 441 / 493 / 125 | 441 / 493 / 125 |
+| injected hits flagged as late, of 9872 | 9686 | 9762 |
+| injected hits left without a reason | 98 | 5 |
+| the same, by shift 2 / 3 / 5 / 8 | 38 / 52 / 3 / 5 | 4 / 0 / 1 / 0 |
+
+202 gold rows are better and 71 worse. The largest group of worse rows are late hits whose foot is now read further back,
+past the 12-sample range: the judge lists them as late without a suggestion where it suggested a partial move before.
+Letting the suggestion follow such a foot was measured and dropped (summed distance 5357). On Session K the kick answers
+are unchanged (3 moves of 63, the 19 confirmed hits stand); the snare gets 7 moves of 50, before 4. With every Session K
+kick hit shifted the same four ways, 2 of 252 read "at the foot" without a reason before and 0 now (both are dips and are
+listed).
+
 ## The earlier rounds (#385, #394; before the shape judge)
 
 Measured with `tools/judge_measure.py` (test: `tests/test_judge_measure.py`). Aggregates only. No judge change ships: **on the

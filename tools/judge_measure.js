@@ -16,7 +16,7 @@ const judge = win.DSAgent.judge;
 // start as `samples`), whose tail from hit_at holds the hit's peak. An older judge (the "before" run) is 2-arg.
 const withRef = judge.length >= 3;
 
-const gold = {}, k = {}, rows = [];
+const gold = {}, k = {}, rows = [], inject = {};
 for (const w of windows) {
   const peak = Math.max(0, ...w.samples.map(Math.abs));
   let j;
@@ -26,6 +26,18 @@ for (const w of windows) {
     j = judge(w.samples.map(v => (peak > 0 ? v / peak : 0)), w.hit_at, peak > 0 && sp > 0 ? peak / sp : null);
   } else {
     j = judge(w.samples.map(v => (peak > 0 ? v / peak : 0)), w.hit_at);
+  }
+  if (w.set === "inject") {
+    // #421: a labelled hit shifted `shift` samples late. flagged: the verdict is `late` (fixed: the suggestion lands on the
+    // label, within1: one off); listed: no answer with a reason, or no line; explained: left with a reason; else unexplained.
+    const r = inject[w.shift] || (inject[w.shift] = { n: 0, flagged: 0, fixed: 0, within1: 0, listed: 0, explained: 0, unexplained: 0 });
+    const land = j.suggest === null ? null : j.suggest + w.shift;
+    r.n++;
+    if (j.verdict === "late") { r.flagged++; if (land === 0) r.fixed++; if (land !== null && Math.abs(land) <= 1) r.within1++; }
+    else if (j.verdict === "no_quiet_line" || j.suggest === null) r.listed++;
+    else if (j.why) r.explained++;
+    else r.unexplained++;
+    continue;
   }
   if (w.set === "K") {
     const r = k[w.role] || (k[w.role] = { n: 0, moves: 0, by_move: {}, shapes: {} });
@@ -54,4 +66,4 @@ for (const r of Object.values(k)) {
   r.keys_with_two_answers = keys.filter(s => s.size > 1).length;
   delete r.shapes;
 }
-console.log(JSON.stringify({ gold, k, rows }));
+console.log(JSON.stringify({ gold, k, rows, inject }));
