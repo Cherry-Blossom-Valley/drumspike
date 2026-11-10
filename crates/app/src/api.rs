@@ -122,6 +122,11 @@ pub struct CommandSpec {
     /// The JSON Schema of the result, as text (parsed by [`CommandSpec::result_schema`]).
     pub result: &'static str,
     pub effect: Effect,
+    /// The MCP `destructiveHint` (#425): true when the command replaces or removes project data or
+    /// files on disk - in memory as much as on disk, because a client of the MCP server has no
+    /// Undo. Set by [`cmd`] from [`CLASSES`], which gives every writing command its class with a
+    /// reason; the registry test requires that entry.
+    pub destructive: bool,
     pub surface: Surface,
     pub run: Run,
     /// The answer is bytes (`peaks_tile`, `samples_window`), not JSON.
@@ -213,6 +218,264 @@ const EVENTS_OPT: Arg = opt(
 const OBJ: &str = r#"{"type":"object"}"#;
 const SUMMARY: &str = r#"{"type":"object","required":["sid","name","folder","dirty","order","tracks"]}"#;
 
+/// The class of every writing command of [`REGISTRY`] (#425), each with its reason. One rule for a
+/// client of the MCP server, which has no Undo: a command is destructive when it replaces or
+/// removes project data or files on disk - in memory as much as on disk. A command that only adds
+/// (refusing what is there), only sets a value that the same command can set back, only restores
+/// what the app keeps a backup or snapshot of, or only touches state outside the project (playback,
+/// UI, the pass-through keys) is not. A row is destructive exactly when it is listed here with
+/// `true`; the registry test fails for a writing command without an entry, so a new command cannot
+/// ship with a hint nobody chose.
+const CLASSES: &[(&str, bool, &str)] = &[
+    // ---- the agent surface
+    (
+        "events_set",
+        true,
+        "replaces the stored hits of a track with the caller's list",
+    ),
+    ("events_edit", true, "its ops can delete hits"),
+    (
+        "analyze_start",
+        true,
+        "replaces a track's events (the page asks before Re-analyze)",
+    ),
+    ("reanalyze_selection", true, "replaces the events of a range"),
+    ("track_repick", true, "replaces the track's events with the repick"),
+    ("track_learn_remove", true, "removes the learn mark and its examples"),
+    ("track_learn_forget", true, "drops the examples it takes"),
+    (
+        "track_learn_forget_at",
+        true,
+        "drops the examples of one hit or a range",
+    ),
+    ("tracks_remove", true, "removes tracks, their events and their files"),
+    (
+        "export_midi",
+        true,
+        "writes the export file over what the destination already holds",
+    ),
+    (
+        "export_spikes",
+        true,
+        "writes the export files over what the destination already holds",
+    ),
+    (
+        "export_all",
+        true,
+        "writes the exports over the files that are already there",
+    ),
+    (
+        "export_layer",
+        true,
+        "writes the render over what the destination already holds",
+    ),
+    (
+        "sampler_calibration_midi",
+        true,
+        "writes the MIDI file over what the destination already holds",
+    ),
+    (
+        "kit_preset_save",
+        true,
+        "replaces the preset of the same name (write_json_atomic on the same path)",
+    ),
+    (
+        "agent_skill_install",
+        true,
+        "removes the existing skill folder first (remove_dir_all)",
+    ),
+    ("markers_set", true, "replaces the document markers wholesale"),
+    ("tempo_map_set", true, "replaces the whole map"),
+    ("tempo_map_import_midi", true, "replaces the whole map from the file"),
+    (
+        "track_velocity_set",
+        true,
+        "replaces the stored velocities of the track's hits",
+    ),
+    ("track_set_role", false, "restores the events of the undo state exactly"),
+    (
+        "track_set_mix",
+        false,
+        "sets volume and pan; the same command sets them back",
+    ),
+    ("project_save", false, "writes the document but keeps ten backups"),
+    ("project_new", false, "creates a project; refuses a taken name"),
+    ("project_save_as", false, "creates a project; refuses a taken folder"),
+    (
+        "project_rename",
+        false,
+        "sets the display name; the same command sets it back",
+    ),
+    (
+        "tracks_reorder",
+        false,
+        "stores the order; the inverse permutation sets it back",
+    ),
+    ("track_set_note", false, "sets the note; the same command sets it back"),
+    (
+        "track_set_follow",
+        false,
+        "sets or clears the follow; the same command sets it back",
+    ),
+    ("track_rename", false, "sets the name; the same command sets it back"),
+    (
+        "app_settings_set",
+        false,
+        "sets one key and keeps the others; the same command sets it back",
+    ),
+    (
+        "project_recent_clear",
+        false,
+        "clears the app's convenience list, not project data",
+    ),
+    (
+        "peaks_build_start",
+        false,
+        "rebuilds the peak caches, which are derived data",
+    ),
+    (
+        "export_dest_set",
+        false,
+        "pass-through UI key; the same command sets it back",
+    ),
+    (
+        "export_markers_set",
+        false,
+        "pass-through UI key; the same command sets it back",
+    ),
+    (
+        "export_compensate_set",
+        false,
+        "pass-through UI key; the same command sets it back",
+    ),
+    (
+        "export_last_set",
+        false,
+        "pass-through UI key; the same command sets it back",
+    ),
+    (
+        "project_import",
+        false,
+        "copies audio into the project and leaves the session alone",
+    ),
+    (
+        "tracks_add",
+        false,
+        "adds tracks; makes names unique and leaves the files unchanged",
+    ),
+    (
+        "project_consolidate",
+        false,
+        "copies sources into the project and leaves the originals",
+    ),
+    (
+        "project_relink",
+        false,
+        "points the record at the moved file; refuses another",
+    ),
+    ("relink_search", false, "the search itself changes nothing"),
+    (
+        "track_params_set",
+        false,
+        "sets the track params; the same command sets them back",
+    ),
+    (
+        "track_shift_set",
+        false,
+        "moves the hits by a difference; the inverse shift sets them back",
+    ),
+    ("track_learn_mark", false, "only adds a mark or an example"),
+    (
+        "track_learn_flip",
+        false,
+        "changes the kind of a mark; flipping sets it back",
+    ),
+    (
+        "track_learn_set",
+        false,
+        "sets the filter config; the same command sets it back",
+    ),
+    (
+        "row_heights_set",
+        false,
+        "pass-through UI key; the same command sets it back",
+    ),
+    ("agent_skill_status", false, "answers the state and writes nothing"),
+    (
+        "track_layer_set",
+        false,
+        "stores the db curve; the same command sets it back",
+    ),
+    (
+        "track_sampler_set",
+        false,
+        "sets the sampler config; the same command sets it back",
+    ),
+    // ---- the window surface (no MCP tool)
+    ("feedback_send", false, "posts a report outside the project"),
+    ("open_link", false, "opens a browser address"),
+    ("open_url", false, "opens a browser address"),
+    ("transport_play", false, "playback state"),
+    ("transport_stop", false, "playback state"),
+    ("transport_seek", false, "playback state"),
+    ("transport_mix", false, "playback state"),
+    ("transport_clicks", false, "playback state"),
+    ("transport_master", false, "playback state"),
+    ("output_select", false, "playback state"),
+    ("shell_sync", false, "window UI state"),
+    ("shell_typing", false, "window UI state"),
+    ("window_call_next", false, "the page's long poll; changes nothing"),
+    ("window_call_result", false, "the page's answer; changes nothing"),
+    ("app_ready", false, "window UI state"),
+    ("splash_painted", false, "window UI state"),
+    ("splash_dismiss", false, "window UI state"),
+    (
+        "export_drag_prepare",
+        false,
+        "stages the export; writes nothing of the project",
+    ),
+    ("export_drag_take", true, "writes the export files of the staged drag"),
+    ("reveal_path", false, "opens a folder in the file manager"),
+    ("quit_app", false, "quits the app; changes no project data"),
+    (
+        "tracks_restore",
+        true,
+        "replaces the current tracks with the named snapshot",
+    ),
+    ("selftest_report", false, "the self-test's own probe"),
+    ("selftest_menu", false, "the self-test's own probe"),
+    ("selftest_menu_key", false, "the self-test's own probe"),
+    ("selftest_menu_probe", false, "the self-test's own probe"),
+    ("selftest_open_paths", false, "the self-test's own probe"),
+    ("selftest_close_window", false, "the self-test's own probe"),
+];
+
+/// Whether the row named `name` is destructive, from [`CLASSES`] (false when it is not listed -
+/// a read command; the registry test requires an entry for every writing command).
+const fn is_destructive(name: &str) -> bool {
+    let b = name.as_bytes();
+    let mut i = 0;
+    while i < CLASSES.len() {
+        let d = CLASSES[i].0.as_bytes();
+        if d.len() == b.len() {
+            let mut j = 0;
+            let mut same = true;
+            while j < d.len() {
+                if d[j] != b[j] {
+                    same = false;
+                    break;
+                }
+                j += 1;
+            }
+            if same {
+                return CLASSES[i].1;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 const fn cmd(
     name: &'static str,
     about: &'static str,
@@ -228,6 +491,7 @@ const fn cmd(
         args,
         result,
         effect,
+        destructive: is_destructive(name),
         surface,
         run,
         binary: false,
@@ -1987,6 +2251,35 @@ mod tests {
                 c.name
             );
         }
+    }
+
+    #[test]
+    fn every_row_carries_the_destructive_rule_of_425() {
+        let mut n = 0;
+        for c in REGISTRY {
+            if c.effect == Effect::Read {
+                assert!(!c.destructive, "{}: a read command is not destructive", c.name);
+                continue;
+            }
+            // every writing command states its class in CLASSES, with a reason
+            let entry = CLASSES.iter().find(|(name, _, _)| name == &c.name);
+            let (_, flag, reason) = entry.unwrap_or_else(|| panic!("{}: no class in CLASSES", c.name));
+            assert_eq!(c.destructive, *flag, "{}: the row and CLASSES disagree", c.name);
+            assert!(!reason.is_empty(), "{}: the class needs a reason", c.name);
+            if *flag {
+                n += 1;
+            }
+        }
+        for name in [
+            "tracks_remove",
+            "export_all",
+            "events_set",
+            "kit_preset_save",
+            "agent_skill_install",
+        ] {
+            assert!(find(name).unwrap().destructive, "{name} is destructive");
+        }
+        assert!(n > 0, "no destructive command in the registry");
     }
 
     #[test]
