@@ -166,15 +166,24 @@ fn tom_session(svc: &Service, root: &std::path::Path) -> String {
 }
 
 /// The flam session of `tests/flam.rs`: a snare with close pairs (a short stroke and the main
-/// stroke 30 ms later) that the flam rule splits.
-fn flam_session(svc: &Service, root: &std::path::Path) -> String {
+/// stroke 30 ms later) that the flam rule splits. With `cut_stroke` an extra stroke 8 dB under
+/// the mains sits on the second stroke of the pair at 3.03 s: with a `vel_cut_db` of -12 it is
+/// detected (loud) and cut (out of the output), so the guard must hold that second stroke.
+fn flam_session(svc: &Service, root: &std::path::Path, cut_stroke: bool) -> String {
     let mut rng = Normal(3);
     let mut x = vec![0.0f32; 12 * SR as usize];
     for i in 0..10 {
         let t = 1.0 + f64::from(i);
         if i % 3 == 2 {
             place(&mut x, &snare(&mut rng, 0.008), t, -8.0);
-            place(&mut x, &snare(&mut rng, 0.06), t + 0.03, -6.0);
+            if cut_stroke && i == 2 {
+                // a single stroke 45 ms after the first one, 6 dB under that main: the
+                // detector keeps it and `vel_cut_db` -20 cuts it (out of the output), so the
+                // guard must hold the second stroke there
+                place(&mut x, &snare(&mut rng, 0.06), t + 0.045, -14.0);
+            } else {
+                place(&mut x, &snare(&mut rng, 0.06), t + 0.03, -6.0);
+            }
         } else {
             place(&mut x, &snare(&mut rng, 0.06), t, -6.0);
         }
@@ -258,7 +267,7 @@ fn cross_bleed_pass2_keeps_the_tracks_params_and_hitpoint_shift() {
 fn a_flam_second_stroke_gets_the_tracks_hitpoint_shift() {
     let root = tmp("flam_shift");
     let svc = service_dsp();
-    let sid = flam_session(&svc, &root);
+    let sid = flam_session(&svc, &root, false);
     analyze(&svc, &sid, &["s top"], None);
     let flam_of = |svc: &Service, sid: &str| -> Vec<f64> {
         svc.events_get(sid, "s top").unwrap()["events"]
@@ -328,4 +337,85 @@ fn the_ghost_gate_second_pass_gets_the_refine_window_and_the_min_gap() {
         d - c > 0.0005,
         "the refine window did not reach the second pass: grid {c} vs refined {d}"
     );
+}
+
+/// The flam search works on positions in the audio: with a shift of 2400 samples (50 ms) or
+/// -2400 the rule still finds the same second strokes as with shift 0, and each is stored
+/// exactly the shift away from its stroke of the shift-0 run.
+#[test]
+fn a_flam_second_stroke_follows_large_shifts_either_way() {
+    let root = tmp("flam_shift_large");
+    let svc = service_dsp();
+    let sid = flam_session(&svc, &root, false);
+    let flam_of = |svc: &Service, sid: &str| -> Vec<f64> {
+        svc.events_get(sid, "s top").unwrap()["events"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter(|e| e["flam"] == true)
+            .map(|e| e["t"].as_f64().unwrap())
+            .collect()
+    };
+    analyze(&svc, &sid, &["s top"], None);
+    let zero = flam_of(&svc, &sid);
+    for v in [2400.0, -2400.0] {
+        let p = shift_params(v);
+        let mut all = Map::new();
+        all.insert("s top".into(), Value::Object(p));
+        analyze(&svc, &sid, &["s top"], Some(&all));
+        let shifted = flam_of(&svc, &sid);
+        assert_eq!(shifted.len(), zero.len(), "shift {v}: the runs found different strokes");
+        println!("flam strokes at shift {v}: compared {} hits", zero.len());
+        assert!(!zero.is_empty(), "shift {v}: no strokes to compare");
+        let dt = v / f64::from(SR);
+        for (a, b) in zero.iter().zip(&shifted) {
+            assert!((b - a - dt).abs() < 1e-6, "shift {v}: {b} - {a} is not {dt} s");
+        }
+    }
+}
+
+/// A cut hit (out of the output) within the guard of a second stroke holds the stroke: with a
+/// shift of 2400 samples the cut event carries the shift and the guard still matches, so the
+/// shifted run adds the same strokes as the shift-0 run (none at 3.03 s).
+#[test]
+fn a_cut_hit_within_the_guard_holds_the_second_stroke_despite_the_shift() {
+    let root = tmp("flam_shift_cut");
+    let svc = service_dsp();
+    let sid = flam_session(&svc, &root, true);
+    let mut p = shift_params(0.0);
+    p.insert("vel_cut_db".into(), json!(-20.0));
+    let mut all = Map::new();
+    all.insert("s top".into(), Value::Object(p.clone()));
+    analyze(&svc, &sid, &["s top"], Some(&all));
+    let flam_of = |svc: &Service, sid: &str| -> Vec<f64> {
+        svc.events_get(sid, "s top").unwrap()["events"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter(|e| e["flam"] == true)
+            .map(|e| e["t"].as_f64().unwrap())
+            .collect()
+    };
+    let zero = flam_of(&svc, &sid);
+    println!("flam strokes at shift 0 with the cut stroke: {}", zero.len());
+    assert!(
+        !zero.iter().any(|t| (t - 3.045).abs() < 0.005),
+        "the guard must hold the second stroke at 3.045 s: {zero:?}"
+    );
+    p.insert("shift_samples".into(), json!(2400.0));
+    all.insert("s top".into(), Value::Object(p));
+    analyze(&svc, &sid, &["s top"], Some(&all));
+    let shifted = flam_of(&svc, &sid);
+    println!("flam strokes at shift 2400 with the cut stroke: {}", shifted.len());
+    assert_eq!(
+        shifted.len(),
+        zero.len(),
+        "the cut stroke must hold the second stroke at the shift too: {shifted:?} vs {zero:?}"
+    );
+    let dt = 2400.0 / f64::from(SR);
+    for (a, b) in zero.iter().zip(&shifted) {
+        assert!((b - a - dt).abs() < 1e-6, "shift 2400: {b} - {a} is not {dt} s");
+    }
 }
