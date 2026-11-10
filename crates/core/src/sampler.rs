@@ -55,7 +55,9 @@ pub fn calibration_midi(note: i64, map: &TempoMap, ppq: u16, legacy_tempo: f64) 
         t,
         v: CALIBRATION_VELOCITY,
     }];
-    Ok((midi_bytes_map(&ev, note, ppq, map, legacy_tempo)?, t))
+    // no sample anchor for the calibration note (rate 0): it sits on the bar 2 of the map, the
+    // grid position `calibration_time` names, not on a hit's sample
+    Ok((midi_bytes_map(&ev, note, ppq, map, legacy_tempo, 0)?, t))
 }
 
 /// What the bounce says about the sampler's delay.

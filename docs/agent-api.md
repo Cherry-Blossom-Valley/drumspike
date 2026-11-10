@@ -126,15 +126,20 @@ an object result has an `outputSchema` and `structuredContent`. An error is a re
   (`per_track`, the default, or `single`), `tracks` (names or patterns, default all), `roles` (export by role, see the next section) and
   `formats` (`midi` and/or `spikes`, default both). `single` writes one
   type 1 file `<project>_drums.mid` instead of the `<track>_spike.mid` files: the project's tempo map, one MIDI track per exported track named after
-  it, each on its own note (the track's note), the same ticks as the per-track files. The answer adds `dest` and `midi_file`. A spike export of one
+  it, each on its own note (the track's note), the same ticks as the per-track files. The answer adds `dest` and `midi_file`. The MIDI files pick
+  their ticks per quarter note from the track's source rate and the tempo map: one tick is one sample where the standard's 15 bits allow it (the
+  answer's `ticks_per_quarter` is the value at the highest staged track's rate), else 32767, and every note-on is anchored at its hit's sample. The
+  answer's `worst_error_samples` states the bound that the grid leaves, in samples (null without MIDI); the dialog shows the bound when it is over
+  half a sample. The MIDI file is exact where the tick grid allows it, else within that bound; the spike file is sample exact at every tempo and
+  rate. A spike export of one
   type (`spikes` or `audio`) also rewrites the other type's file of the same track (`<track>_audio_spike.wav` or `<track>_spike.wav`) when the folder
   holds one, from the same hits; the answer lists these files in `also_updated` (#274). `export_midi` and
-  `export_spikes` take `dest` too. `export_existing` takes the same options and lists the files that `export_all` would replace (a bad `dest` is
+  `export_spikes` take `dest` too; `export_midi` keeps the caller's `ppq` and answers `ticks_per_quarter` and `worst_error_samples` with it. `export_existing` takes the same options and lists the files that `export_all` would replace (a bad `dest` is
   the same 400 or 404). `export_dest_set {dest}` keeps a folder as the project's export folder (document field `export_dest`; none clears it): the
   Export dialog starts with it. The commands never use the kept folder themselves. A bad `dest` is 400 (relative path, not a folder, not writable)
   or 404 (missing); `check_dest` writes and removes a probe file `.drumspike-write-test-<pid>` in the folder.
 - Sampler calibration: `sampler_calibration_midi {name, dest?, path?}` writes `<track>_calibration.mid` (or the file `path`: the Layer section's save dialog; a source or a one-shot in use is refused) (one note, the track's note, velocity 100,
-  on the start of bar 2 of the tempo map: 2.000 s with the default map). Import it in the DAW at the session start, bounce the sampler's kit piece
+  on the start of bar 2 of the tempo map: 2.000 s with the default map; the ticks per quarter note of the export of the same project, #441). Import it in the DAW at the session start, bounce the sampler's kit piece
   for that note from the session start, then `track_sampler_set {name, path, one_shot?}` measures the bounce and keeps `sampler`
   `{offset_samples, sr, polarity, match, measured_at, file}` in the track (an empty `path` removes it; `one_shot: true` also sets the bounce as the
   layer, with its polarity); `track_sampler_get` reads it. `export_midi`, `export_all` (also `midi_mode: single`) and the drag files then put each

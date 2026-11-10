@@ -583,17 +583,23 @@ impl Service {
         // R01: the MIDI file must not be a protected file either (a source, one-shot or bounce
         // of any open project)
         crate::export::check_export_plan(std::slice::from_ref(&out), &self.protected_files_everywhere())?;
-        write_midi(&ev, note, &out, ppq, &map, tempo)?;
+        // #441: the note-ons anchor at the track's source rate (48,000 when it is unknown);
+        // the caller's explicit `ppq` decides the grid.
+        let audio = crate::export::audio_length(&op, name);
+        let rate = audio.map_or(48_000, |(sr, _)| sr);
+        write_midi(&ev, note, &out, ppq, &map, tempo, rate)?;
         let size = std::fs::metadata(&out).map_or(0, |m| m.len());
         let times: Vec<f64> = ev.iter().map(|e| e.t).collect();
-        let (outside, before) = crate::export::audio_length(&op, name).map_or((Value::Null, Value::Null), |(sr, n)| {
+        let (outside, before) = audio.map_or((Value::Null, Value::Null), |(sr, n)| {
             (
                 Value::from(crate::export::outside_count(&times, sr, n)),
                 Value::from(crate::export::before_count(&times, sr)),
             )
         });
+        let worst = audio.and_then(|(sr, _)| drumspike_core::midi::worst_error_samples(&ev, ppq, &map, tempo, sr).ok());
         let mut r = json!({"path": out.display().to_string(), "size": size, "n_events": ev.len(),
-                           "outside": outside, "before": before});
+                           "outside": outside, "before": before,
+                           "ticks_per_quarter": ppq, "worst_error_samples": worst});
         if refreshed {
             r["followers"] = json!([name]);
         }
