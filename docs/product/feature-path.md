@@ -90,6 +90,7 @@ Rules for every asset:
 ### 9. Doubtful hits first (review queue)
 - Hits > Next Doubtful Hit (D) and Previous (Shift+D) step through the hits the app is least sure
   of, lowest first; the info line says why a hit is doubtful.
+- Asset: 3b1b explainer "Doubtful hits first".
 - Builds on: 6-7.
 
 ## Part 3: let the app do more
@@ -150,7 +151,7 @@ Rules for every asset:
 | 5 | yes | yes | The body of the hit |
 | 6-7 | yes | yes (one recording) | - |
 | 8 | yes | yes | From waveform to velocity |
-| 9 | yes | yes | - |
+| 9 | yes | yes | Doubtful hits first |
 | 10 | yes | yes | Is it a hit or is it bleed? |
 | 11 | yes | yes | Learn: teach by example |
 | 12-13 | yes | yes (one recording) | - |

@@ -659,3 +659,152 @@ def test_explainer_11_keymap_facts_are_read_from_their_rows():
     assert add_default(learn_js) == 0.85
     assert rust_pub_const(LEARN_RS, "MAX_EXAMPLES") == 64.0
     assert rust_pub_const(LEARN_RS, "RISE_MIN_DB") == 6.0
+
+# ---- #485: the facts of Explainer 9 (doubtful hits first) against the code of the review queue ----
+
+CONFIDENCE_RS = ROOT / "crates" / "app" / "src" / "confidence.rs"
+REVIEW_JS = ROOT / "static" / "review.js"
+KEYMAP_JS = ROOT / "static" / "keymap.js"
+EXPLAINER_9 = "explainer-09-doubtful-hits.md"
+MAX_WORDS_9, MAX_NUMBERS_9 = 230, 12
+SCENES_9 = ("s01-problem", "s02-confidence", "s03-queue", "s04-why", "s05-decide", "s06-result")
+
+
+def squeeze(text):
+    """The text with every run of white space as one space: a fact that the header wraps over two lines."""
+    return re.sub(r"\s+", " ", text)
+
+
+def confidence_constants():
+    """The numeric `pub const NAME: f64 = value;` of the confidence module: name -> value."""
+    out = {}
+    for name, value in re.findall(r"const (\w+): f64 = ([0-9.]+);", CONFIDENCE_RS.read_text(encoding="utf-8")):
+        out[name] = float(value)
+    return out
+
+
+def page_keys():
+    """The page keys of every command of the keymap: id -> [key]."""
+    text = KEYMAP_JS.read_text(encoding="utf-8")
+    return {m.group(1): re.findall(r'"([^"]+)"', m.group(2))
+            for m in re.finditer(r'\{"id": "(\w+)".*?"page_keys": \[([^\]]*)\]', text)}
+
+
+def check_header_keys(text, keys):
+    """The hits for a `Key` (`command_id`) pair of the header: the keymap must give that command that key."""
+    hits = []
+    for key, command in re.findall(r"`([A-Za-z+]+)` \(`([a-z_]+)`\)", header_of(text)):
+        if command not in keys:
+            hits.append(f"the header names the command {command}, which the keymap does not have")
+        elif key not in keys[command]:
+            hits.append(f"the header says {key} is {command}, the keymap has {keys[command]}")
+    return hits
+
+
+def check_header_phrases(text, sources):
+    """The hits for a quoted phrase of the header (two words or more, no digit, no path) that none of the
+    source texts holds: the status lines and the reasons of the info line, as the code writes them."""
+    haystack = squeeze(" ".join(sources))
+    hits = []
+    for phrase in re.findall(r"`([^`]+)`", squeeze(header_of(text))):
+        if " " in phrase and not re.search(r"[0-9/(]", phrase) and phrase not in haystack:
+            hits.append(f"the header says `{phrase}`, which the code does not write")
+    return hits
+
+
+def check_header_identifiers(text, sources):
+    """The hits for a snake_case or camelCase name of the header (a command, a function) that no source has."""
+    haystack = " ".join(sources)
+    names = set(re.findall(r"`([a-z]+(?:_[a-z]+)+|rq[A-Z]\w+|reviewStep)`", header_of(text)))
+    return [f"the header names {n}, which no source has" for n in sorted(names) if n not in haystack]
+
+
+def check_script_9(text, constants, keys, sources, builder_source):
+    """Every hit of the facts gate of Explainer 9: constants, keys, phrases, names, the scenes, the numbers."""
+    hits = check_header_constants(text, constants)
+    hits += check_header_keys(text, keys)
+    hits += check_header_phrases(text, sources)
+    hits += check_header_identifiers(text, sources)
+    scenes = scenes_of(text)
+    if [sid for sid, _, _ in scenes] != list(SCENES_9):
+        hits.append(f"the scenes are {[sid for sid, _, _ in scenes]}, not {list(SCENES_9)}")
+    for sid, notes, spoken in scenes:
+        if not notes or not spoken:
+            hits.append(f"scene {sid} has no visual note or no spoken text")
+        if ":" in spoken:
+            hits.append(f"scene {sid} speaks a colon: the speech engine reads a 'Phrase: sentence' wrongly")
+    hits += check_numbers_in_header(text)
+    hits += check_labels_in_header(text, builder_source)
+    words = len(" ".join(s for _, _, s in scenes).split())
+    if words > MAX_WORDS_9:
+        hits.append(f"the narration has {words} words, {MAX_WORDS_9} at most")
+    numbers = re.findall(r"\d+(?:\.\d+)?", " ".join(s for _, _, s in scenes))
+    if len(numbers) > MAX_NUMBERS_9:
+        hits.append(f"the narration speaks {len(numbers)} numbers, {MAX_NUMBERS_9} at most")
+    return hits
+
+
+def explainer_9_inputs():
+    sources = [CONFIDENCE_RS.read_text(encoding="utf-8"), REVIEW_JS.read_text(encoding="utf-8"),
+               KEYMAP_JS.read_text(encoding="utf-8")]
+    builder = (EXPLAINERS / "explainer_09.py").read_text(encoding="utf-8")
+    return script_text(EXPLAINER_9), confidence_constants(), page_keys(), sources, builder
+
+
+def test_explainer_9_facts_match_the_code():
+    assert check_script_9(*explainer_9_inputs()) == []
+
+
+def test_explainer_9_header_reads_enough_from_the_code():
+    """The gate must see the facts: constants, keys and phrases of the header, each one read from its source."""
+    text, constants, keys, sources, _ = explainer_9_inputs()
+    assert {"DOUBT_BELOW", "LEVEL_SPAN_DB"} <= set(re.findall(r"`([A-Z][A-Z0-9_]+)` = ", header_of(text)))
+    assert len(re.findall(r"`([A-Za-z+]+)` \(`([a-z_]+)`\)", header_of(text))) >= 5
+    assert constants["DOUBT_BELOW"] == 0.5 and constants["LEVEL_SPAN_DB"] == 24.0
+    assert keys["review_next"] == ["D"] and keys["review_prev"] == ["Shift+D"]
+    assert "A" in keys["audition"] and "Delete" in keys["delete_hit"]
+    phrases = [p for p in re.findall(r"`([^`]+)`", squeeze(header_of(text))) if " " in p and not re.search(r"[0-9/(]", p)]
+    assert len(phrases) >= 5, phrases
+
+
+def test_planted_differences_of_explainer_9_are_reported():
+    """A test of the test: one planted fact that differs from its source turns the gate red, each kind alone."""
+    text, constants, keys, sources, builder = explainer_9_inputs()
+    plants = {
+        "doubt limit": text.replace("`DOUBT_BELOW` = 0.5", "`DOUBT_BELOW` = 0.4"),
+        "level span": text.replace("`LEVEL_SPAN_DB` = 24", "`LEVEL_SPAN_DB` = 20"),
+        "next key": text.replace("`D` (`review_next`)", "`N` (`review_next`)"),
+        "previous key": text.replace("`Shift+D` (`review_prev`)", "`Shift+P` (`review_prev`)"),
+        "unknown command": text.replace("`delete_hit`", "`remove_hit`"),
+        "status line": text.replace("`no more doubtful hits`", "`no hits left`"),
+        "reason": text.replace("`shape rescue below the level gate`", "`shape rescue under the gate`"),
+        "function": text.replace("`rqQueue`", "`rqQueueAll`"),
+    }
+    for what, planted in plants.items():
+        assert planted != text, f"the plant {what} changed nothing"
+        assert check_script_9(planted, constants, keys, sources, builder), f"the gate missed the planted {what}"
+
+
+def test_planted_narration_defects_of_explainer_9_are_reported():
+    text, constants, keys, sources, builder = explainer_9_inputs()
+    long = text.replace("A song has hundreds of hits.", "A song has hundreds of hits. " + "More words. " * 80)
+    assert any("words" in h for h in check_script_9(long, constants, keys, sources, builder))
+    colon = text.replace("Press D for Next Doubtful Hit.", "Queue: press D for Next Doubtful Hit.")
+    assert any("colon" in h for h in check_script_9(colon, constants, keys, sources, builder))
+    many = " ".join(str(n) for n in range(30, 45))
+    seven = text.replace("down to zero at 24 decibels under", f"down to zero at 24 decibels under, {many}")
+    assert any("number" in h for h in check_script_9(seven, constants, keys, sources, builder))
+    screen = builder + '\nText("a rise of 31 dB")\n'
+    assert any("31" in h for h in check_script_9(text, constants, keys, sources, screen))
+    shorter = text.replace("## s06-result", "## s07-result")
+    assert any("scenes are" in h for h in check_script_9(shorter, constants, keys, sources, builder))
+
+
+def test_builder_carries_explainer_9():
+    """build.py renders the id 09 from the module and the scene class of the new explainer, and the scene
+    ids of the class are the script's."""
+    build = (EXPLAINERS / "build.py").read_text(encoding="utf-8")
+    assert re.search(r'"09":\s*\("explainer-09-doubtful-hits",\s*"explainer_09\.py",\s*"Explainer09"\)', build)
+    source = (EXPLAINERS / "explainer_09.py").read_text(encoding="utf-8")
+    ids = re.search(r"script_ids = \(([^)]*)\)", source).group(1)
+    assert tuple(re.findall(r'"(s\d\d-[\w-]+)"', ids)) == SCENES_9
