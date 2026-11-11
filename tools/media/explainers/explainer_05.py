@@ -192,7 +192,7 @@ class Explainer05(Explainer):
         len_ms = (end - K0) / A.RATE * 1000.0
         limits = Text("at most 60 ms", font=FONT, font_size=28, color=TEXT).shift(UP * 2.75)
         # above the cut line (top y = 2.0), so the line does not run through the text
-        measured = Text(f"this demo kick: {len_ms:.1f} ms; a kick 15 to 25 ms, a snare 5 to 10 ms",
+        measured = Text(f"this kick: {len_ms:.1f} ms; a kick 15 to 25 ms, a snare 5 to 10 ms",
                         font=FONT, font_size=24, color=TEXT).shift(UP * 2.25)
         self.t_play(FadeIn(limits), FadeIn(measured), t=2)
         self.say("The cut sits on a zero crossing, at most 60 milliseconds.", t=2)

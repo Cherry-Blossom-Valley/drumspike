@@ -399,3 +399,83 @@ def test_planted_missing_constant_and_stale_claim_are_reported():
         "the script names the constant LINE_MAX_SPREAD, which the code does not define"]
     assert len(check_no_stale_phrase("so the record of an agent is byte for byte the record of a person")) == 1
     assert check_no_stale_phrase("the record is the same kind, marked as made by an agent") == []
+
+
+# ---- #481: a viewer hears and reads no word of our test material ----
+
+EXPLAINERS = ROOT / "tools" / "media" / "explainers"
+SCENARIOS = ROOT / "tools" / "media" / "scenarios"
+TEST_MATERIAL_WORDS = re.compile(
+    r"\bdemos?\b|fixture|test session|test data|sample data|kit check|dummy|placeholder", re.IGNORECASE)
+
+
+def spoken_lines(text):
+    """The spoken lines of a script: the text under a `##` heading; `>` notes and the header are not heard."""
+    return [line for _, _, spoken in scenes_of(text) for line in [spoken] if line]
+
+
+def screen_strings(source):
+    """The text that a builder puts on screen: the string parts of the arguments of every `Text(...)` and
+    `say(...)` call (an f-string counts by its literal parts); docstrings, comments and the rest do not."""
+    import ast
+    out = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            if name in ("Text", "say"):
+                for arg in node.args:
+                    out += [n.value for n in ast.walk(arg) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    return out
+
+
+def _walk_steps(node):
+    """Every dict nested in a parsed scenario: the steps sit at no fixed depth."""
+    if isinstance(node, dict):
+        yield node
+        for v in node.values():
+            yield from _walk_steps(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _walk_steps(v)
+
+
+def check_test_material_words(texts, where):
+    """The hits for a heard or read text that names our test material."""
+    return [f"{where}: {t!r} says {m.group(0)!r}" for t in texts for m in [TEST_MATERIAL_WORDS.search(t)] if m]
+
+
+def viewer_texts():
+    """(where, texts) of everything a viewer hears or reads, over every script, builder and scenario."""
+    import json
+    found = []
+    for path in sorted(SCRIPTS.glob("explainer-*.md")) + sorted(SCRIPTS.glob("rec-*.md")):
+        found.append((path.name + " (spoken)", spoken_lines(path.read_text(encoding="utf-8"))))
+    for path in sorted(EXPLAINERS.glob("explainer_*.py")):
+        found.append((path.name + " (on screen)", screen_strings(path.read_text(encoding="utf-8"))))
+    for path in sorted(SCENARIOS.glob("*.json")):
+        found.append((path.name + " (caption)",
+                      [s["text"] for s in _walk_steps(json.loads(path.read_text(encoding="utf-8")))
+                       if s.get("do") == "caption" and "text" in s]))
+    return found
+
+
+def test_videos_name_no_test_material_to_the_viewer():
+    """Explainer 3 and Explainer 5 once said "the demo session"; no video says our test material in its
+    narration, on its screen or in a caption."""
+    found = viewer_texts()
+    checked = sum(len(texts) for _, texts in found)
+    print(f"checked {checked} spoken lines, on-screen strings and captions in {len(found)} files")
+    assert checked > 0
+    hits = [h for where, texts in found for h in check_test_material_words(texts, where)]
+    assert hits == [], "\n".join(hits)
+
+
+def test_planted_spoken_and_on_screen_test_material_are_reported():
+    script = "Header names the demo session.\n\n## s01-x\n\n> the demo session's mic\n\nOn the demo session's snare mic.\n"
+    assert len(check_test_material_words(spoken_lines(script), "script")) == 1
+    assert check_test_material_words(spoken_lines(script.replace("demo session's snare", "snare close")), "script") == []
+    source = 'class S:\n    """The demo session."""\n    def f(self):\n        # a demo\n        Text(f"the demo snare track: {n} hits")\n'
+    assert len(check_test_material_words(screen_strings(source), "builder")) == 1
+    assert screen_strings(source.replace("the demo snare", "the snare")) == ["the snare track: ", " hits"]
+    assert check_test_material_words(screen_strings(source.replace("demo ", "")), "builder") == []
