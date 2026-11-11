@@ -152,7 +152,7 @@ Rules for every asset:
 | 8 | yes | yes | From waveform to velocity |
 | 9 | yes | yes | - |
 | 10 | yes | yes | Is it a hit or is it bleed? |
-| 11 | yes | yes | - |
+| 11 | yes | yes | Learn: teach by example |
 | 12-13 | yes | yes (one recording) | - |
 | 14 | yes | - | - |
 | 15 | yes | yes (the agent tutorial) | Let an agent fine-tune a song |

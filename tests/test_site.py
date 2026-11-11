@@ -35,7 +35,7 @@ SPONSORS = "https://github.com/sponsors/wfrank2509"
 MAX_PAGE_WITHOUT_VIDEOS = 450 * 1024   # the page, the logo, the icon and the editor screenshot
 # The built videos the page embeds (site/videos/, gitignored; tools/media/build_site.py copies them).
 VIDEO_NAMES = {"explainer-01", "explainer-03", "explainer-04", "explainer-05", "explainer-08", "explainer-10",
-               "explainer-15", "explainer-16", "tutorial-agent"}
+               "explainer-11", "explainer-15", "explainer-16", "tutorial-agent"}
 WIDTHS = [375, 1440]
 THEME_BACKGROUND = {"light": "rgb(255, 255, 255)", "dark": "rgb(11, 13, 18)"}
 # Ticket #345: under load the Chromium screenshot can die with a transient
