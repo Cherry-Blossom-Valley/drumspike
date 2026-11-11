@@ -35,7 +35,7 @@ const JOB_GET: &str = "job_get";
 /// The extra tool for the open window (#388): one call to a page helper over the window endpoint.
 pub const AGENT_CALL: &str = "agent_call";
 
-const INSTRUCTIONS: &str = "Drum Spike: close-mic drum hit detection with sample-exact MIDI and spike files. Typical order: \
+const INSTRUCTIONS: &str = "Drum Spike: close-mic drum hit detection with sample-exact spike files and MIDI that is exact where the tick grid allows it, else within the stated bound (worst_error_samples in the export answers), at every tempo and rate. Typical order: \
 project_open (or project_new, tracks_add), track_params_set, analyze_start then poll analyze_status until state is done, \
 track_velocity_set (it recomputes every velocity and stores them with the cut, so do it before single-hit edits), \
 events_get and events_edit, project_save, export_all then poll job_get. A project the Drum Spike app has open for \

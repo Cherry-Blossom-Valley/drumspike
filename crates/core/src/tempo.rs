@@ -7,7 +7,8 @@
 //! [`TempoMap`] is the model with its JSON form and its checks. [`TickMap`] is the map as a
 //! MIDI file holds it: tempo events at whole ticks with whole microseconds per quarter note.
 //! The MIDI export computes every note through the `TickMap`, so a note sits within half a
-//! tick of its hit through the file's own events. [`import_midi`] reads the events of a MIDI
+//! tick of its hit's sample through the file's own events (#441: the note-on is anchored at
+//! the sample the spike file places the hit at). [`import_midi`] reads the events of a MIDI
 //! file back into a map.
 //!
 //! Rules of the file (decided in P4-8 stage A):

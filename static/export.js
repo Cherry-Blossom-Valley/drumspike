@@ -208,7 +208,11 @@ function exSummary(r) {   // "exported 2 MIDI and 2 spike files to Exports/ in t
   const last = r.audio ? r.audio : r.spikes ? r.spikes : r.midi_file ? 1 : (r.midi || 0);   // the noun agrees with the last part: "1 MIDI and 1 spike file", "2 MIDI and 2 audio spike files"
   const what = parts.length ? parts.join(" and ") + (last === 1 ? " file" : " files") : "0 files";
   const where = EX.def && r.dest === EX.def ? "Exports/ in the project folder" : r.dest;   // P4-31: export again runs with the dialog closed (EX.def may be empty)
-  return `exported ${what} to ${where} (${(r.elapsed_ms / 1000).toFixed(1)} s)`;
+  /* #441: the stated bound of the MIDI files, when the tick grid is coarser than a sample */
+  const bound = typeof r.worst_error_samples === "number" && r.worst_error_samples > 0.5
+    ? `; MIDI is within ${Math.ceil(r.worst_error_samples * 100) / 100} samples at this tempo and rate; the spike file is sample exact`
+    : "";
+  return `exported ${what} to ${where} (${(r.elapsed_ms / 1000).toFixed(1)} s)` + bound;
 }
 /* #151: the default-tempo notice, shared by the Export dialog and File > Export Again: a MIDI export of a
    project whose tempo map is the default map would use 120 BPM. "anyway" lets the export write; "set_tempo"

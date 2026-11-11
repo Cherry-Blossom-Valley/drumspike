@@ -194,10 +194,8 @@ fn a_map_changes_the_ticks_of_the_single_and_the_all_export_and_imports_back() {
         .unwrap();
     let path = r["path"].as_str().unwrap().to_string();
     assert_eq!(note_ticks(&path), want, "single export; the tempo argument is not used");
-    let all = svc.export_all(&sid, None).unwrap();
-    assert_eq!(all["errors"], json!([]));
-    assert_eq!(note_ticks(&path.replace("k in", "s top")), want, "Export All");
     // the file's map comes back through the import command, in a project with another map
+    // (#441: before Export All overwrites the per-track file with its own ppq's ticks)
     let (svc2, sid2, _) = opened("tm5b");
     svc2.tempo_map_set(&sid2, &json!({"bpm": 77.0})).unwrap();
     let imp = svc2.tempo_map_import_midi(&sid2, &path).unwrap();
@@ -208,6 +206,16 @@ fn a_map_changes_the_ticks_of_the_single_and_the_all_export_and_imports_back() {
         (json!(24_000), json!(3), json!(0))
     );
     assert!(svc2.project_get(&sid2).unwrap()["dirty"].as_bool().unwrap());
+    let all = svc.export_all(&sid, None).unwrap();
+    assert_eq!(all["errors"], json!([]));
+    // #441: Export All picks its ppq by the rule: the map's three ideals differ (24000, 28800,
+    // 19200 at 48 kHz), so the grid is 32767 and the ticks are the sample-anchored hits through
+    // it (0.25/0.75 s at 120 BPM, 1.25/1.75 s at 100, 2.25/2.75 s at 150).
+    assert_eq!(
+        note_ticks(&path.replace("k in", "s top")),
+        vec![16_384, 49_150, 79_187, 106_493, 140_625, 181_584],
+        "Export All"
+    );
 }
 
 #[test]
@@ -352,12 +360,13 @@ fn detect_suggests_the_map_of_the_hits_and_changes_nothing() {
         .to_string();
     let ticks = note_ticks(&path);
     assert_eq!(ticks.len(), 64);
-    let bar1 = 24_000u64; // 0.6 s at 100 BPM is one quarter
+    // the detected map has two tempos, so the #441 rule takes MAX_PPQ: one quarter is 32767 ticks
+    let bar1 = 32_767u64; // 0.6 s at 100 BPM is one quarter
     for (i, t) in ticks.iter().enumerate() {
         let rel = t - bar1;
-        assert!(rel % 48_000 <= 1 || rel % 48_000 >= 47_999, "kick {i} at tick {t}");
+        assert!(rel % 65_534 <= 1 || rel % 65_534 >= 65_533, "kick {i} at tick {t}");
     }
-    assert_eq!(ticks[32] - bar1, 16 * 96_000, "bar 17 beat 1");
+    assert_eq!(ticks[32] - bar1, 16 * 131_068, "bar 17 beat 1");
 }
 
 #[test]

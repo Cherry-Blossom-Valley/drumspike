@@ -13,8 +13,12 @@
 //!   tick), `end_of_track` one tick after the last event; running status as mido writes it.
 //!
 //! Ticks follow `PrettyMIDI.time_to_tick` on a fresh object: `tick_scale = 60 / (tempo * ppq)`,
-//! `tick = round(t / tick_scale)` with Python's ties-to-even, 0 for `t <= 0`. At 24,000 PPQ
-//! and 120 BPM one tick is one sample at 48 kHz.
+//! `tick = round(t / tick_scale)` with Python's ties-to-even, 0 for `t <= 0`. #441: the exports
+//! choose their `ppq` with [`export_ppq`] from the sample rate and the tempo map, so one tick is
+//! one sample at that rate and tempo when the standard's 15 bits allow it; and each note-on is
+//! anchored at its sample ([`sample_time`]), so it sits on the sample the spike file places the
+//! hit at wherever the tick grid is one sample or finer. [`worst_error_samples`] measures the
+//! distance the grid leaves.
 //!
 //! A standard MIDI file stores the time between two events as a variable-length quantity
 //! of at most 28 bits (`midly`'s `u28`); mido writes longer quantities without a limit. A
@@ -131,6 +135,33 @@ pub(crate) fn tick_scale(ppq: u16, tempo: f64) -> f64 {
 #[must_use]
 pub(crate) fn time_to_tick(t: f64, tick_scale: f64) -> i64 {
     if t <= 0.0 { 0 } else { py_round(t / tick_scale) }
+}
+
+/// The largest ticks per quarter note a standard MIDI file allows (15 bits).
+pub const MAX_PPQ: u16 = 0x7FFF;
+
+/// The ticks per quarter note of a MIDI export at `rate` through `map` (#441): the value that
+/// makes one tick one sample when that is a whole number of [`MAX_PPQ`] or less, else
+/// [`MAX_PPQ`]. The ideal comes from the map's exact tempo (the user's number, the grid the
+/// ticks follow): one tick is one sample at `60 * rate / bpm` ticks per quarter note. A map
+/// with several tempos takes [`MAX_PPQ`] (the worst error `0.5 * ideal / ppq` falls as `ppq`
+/// grows), unless every segment shares one whole ideal. The default map's effective tempo is
+/// `legacy_tempo`, the tempo its file writes, as [`midi_bytes_map`] builds it.
+#[must_use]
+pub fn export_ppq(rate: u32, map: &TempoMap, legacy_tempo: f64) -> u16 {
+    let mut tempos = vec![if map.is_default() { legacy_tempo } else { map.bpm }];
+    tempos.extend(map.steps.iter().map(|s| s.bpm));
+    let ideals: Vec<f64> = tempos.iter().map(|&bpm| f64::from(rate) * (6e7 / bpm) / 1e6).collect();
+    let first = ideals[0];
+    let whole = first.round();
+    if ideals.iter().all(|&i| i == first)
+        && whole >= 1.0
+        && whole <= f64::from(MAX_PPQ)
+        && (first - whole).abs() < 1.0e-6
+    {
+        return whole as u16;
+    }
+    MAX_PPQ
 }
 
 /// The `set_tempo` value `pretty_midi` writes: `int(6e7 / (60 / (tick_scale * ppq)))` in
@@ -285,15 +316,71 @@ fn write_file(msgs: &[Msg], ppq: u16, track0: &[(u64, Meta0)]) -> Result<Vec<u8>
     }
 }
 
-/// The note tuples of an export through a tempo map: like [`note_events`], with the ticks of
-/// `tm` (the file's own tempo events) instead of one tempo.
+/// The hit's time anchored at its sample (#441): `round(t * rate) / rate`, the sample the spike
+/// file places the hit at, as a time. A hit at or before 0 s is a note at 0 s (the file's rule).
+/// A time that is not finite passes through (the tick check refuses it); `rate` 0 keeps the
+/// plain time.
+fn sample_time(t: f64, rate: u32) -> f64 {
+    if rate == 0 {
+        return t;
+    }
+    let s = py_round(t * f64::from(rate)).max(0);
+    s as f64 / f64::from(rate)
+}
+
+/// The worst note-on error of an export, in samples (#441): for every finite event after 0 s the
+/// distance between the tick the file gives the note-on (the sample-anchored tick at this `ppq`)
+/// and the hit's intended sample `round(t * rate)`, converted back through the exact tempo of
+/// the map. The same `ppq`, `map` and `legacy_tempo` as [`midi_bytes_map`], so a test that reads
+/// the written file back measures exactly this. A hit at or before 0 s sits at 0 by the file's
+/// rule and is not measured (its distance is the `before` count's business, not the grid's).
+/// `rate` 0 measures the plain times, so the result is then in seconds.
 ///
 /// # Errors
 ///
-/// [`MidiError::Note`] when `note` is outside 0..=127; [`MidiError::Velocity`] when an event
-/// velocity is outside 0..=127; [`MidiError::Tick`] when an event time is not finite or
+/// [`MidiError::Map`] when `map` or `legacy_tempo` cannot build the tick map.
+pub fn worst_error_samples(
+    events: &[MidiEvent],
+    ppq: u16,
+    map: &TempoMap,
+    legacy_tempo: f64,
+    rate: u32,
+) -> Result<f64, MidiError> {
+    let tm = if map.is_default() {
+        single_tick_map(ppq, legacy_tempo)?
+    } else {
+        TickMap::new(ppq, map).map_err(MidiError::Map)?
+    };
+    Ok(events
+        .iter()
+        .filter(|e| e.t.is_finite() && e.t > 0.0)
+        .map(|e| {
+            let s = if rate == 0 {
+                e.t
+            } else {
+                py_round(e.t * f64::from(rate)) as f64
+            };
+            let on = tm.tick(sample_time(e.t, rate));
+            (tm.time(on) * f64::from(rate) - s).abs()
+        })
+        .fold(0.0_f64, f64::max))
+}
+
+/// The note tuples of an export through a tempo map: like [`note_events`], with the ticks of
+/// `tm` (the file's own tempo events) instead of one tempo. #441: the note-on is anchored at
+/// the hit's sample (`rate`, see [`sample_time`]); the note-off keeps the plain time.
+///
+/// # Errors
+///
+/// [`MidiError::Note`] when `note` is outside 0..=127; [`MidiError::Velocity`] when an
+/// event velocity is outside 0..=127; [`MidiError::Tick`] when an event time is not finite or
 /// beyond [`MAX_TICK`].
-pub(crate) fn note_events_tm(events: &[MidiEvent], note: i64, tm: &TickMap) -> Result<Vec<NoteEvent>, MidiError> {
+pub(crate) fn note_events_tm(
+    events: &[MidiEvent],
+    note: i64,
+    tm: &TickMap,
+    rate: u32,
+) -> Result<Vec<NoteEvent>, MidiError> {
     let key = u8::try_from(note)
         .ok()
         .filter(|k| *k <= 127)
@@ -306,7 +393,7 @@ pub(crate) fn note_events_tm(events: &[MidiEvent], note: i64, tm: &TickMap) -> R
                 .filter(|v| *v <= 127)
                 .ok_or(MidiError::Velocity(e.v))?;
             // a NaN or infinite t, or a tick that saturates i64, has no place in the file
-            let on = tm.tick(e.t);
+            let on = tm.tick(sample_time(e.t, rate));
             let off = tm.tick(e.t + NOTE_LENGTH_S);
             if !e.t.is_finite() || off > MAX_TICK || on > MAX_TICK {
                 return Err(MidiError::Tick(e.t));
@@ -355,15 +442,16 @@ pub(crate) fn midi_bytes_map(
     ppq: u16,
     map: &TempoMap,
     legacy_tempo: f64,
+    rate: u32,
 ) -> Result<Vec<u8>, MidiError> {
     if map.is_default() {
         let tm = single_tick_map(ppq, legacy_tempo)?;
-        let notes = note_events_tm(events, note, &tm)?;
+        let notes = note_events_tm(events, note, &tm, rate)?;
         let us = tempo_us(legacy_tempo).map_err(MidiError::Map)?;
         return write_file(&track1_messages(&notes), ppq, &default_track0(us));
     }
     let tm = TickMap::new(ppq, map).map_err(MidiError::Map)?;
-    let notes = note_events_tm(events, note, &tm)?;
+    let notes = note_events_tm(events, note, &tm, rate)?;
     let track0 = map_track0(&tm, map)?;
     write_file(&track1_messages(&notes), ppq, &track0)
 }
@@ -380,18 +468,22 @@ pub fn export_midi_map(
     ppq: u16,
     map: &TempoMap,
     legacy_tempo: f64,
+    rate: u32,
 ) -> Result<(), MidiError> {
-    crate::io::write_atomic(path, &midi_bytes_map(events, note, ppq, map, legacy_tempo)?)?;
+    crate::io::write_atomic(path, &midi_bytes_map(events, note, ppq, map, legacy_tempo, rate)?)?;
     Ok(())
 }
 
-/// One drum track of a multi-track file (P4-30): its name, its note and its hits.
+/// One drum track of a multi-track file (P4-30): its name, its note and its hits. #441: `rate`
+/// is the track's source rate, the rate its note-ons are anchored at.
 #[derive(Debug, Clone, Copy)]
 pub struct MidiTrack<'a> {
     /// The MIDI track name (the drum track's name).
     pub name: &'a str,
     /// The note of every hit of this track.
     pub note: i64,
+    /// The source rate of the track's hits (the sample the note-on sits on).
+    pub rate: u32,
     /// The hits.
     pub events: &'a [MidiEvent],
 }
@@ -448,7 +540,7 @@ pub(crate) fn multi_midi_bytes(
         let us = tempo_us(legacy_tempo).map_err(MidiError::Map)?;
         let notes = tracks
             .iter()
-            .map(|t| note_events_tm(t.events, t.note, &tm))
+            .map(|t| note_events_tm(t.events, t.note, &tm, t.rate))
             .collect::<Result<Vec<_>, _>>()?;
         let mut t0 = default_track0(us);
         t0.extend(marker_events_tm(markers, &tm)?);
@@ -457,7 +549,7 @@ pub(crate) fn multi_midi_bytes(
         let tm = TickMap::new(ppq, map).map_err(MidiError::Map)?;
         let notes = tracks
             .iter()
-            .map(|t| note_events_tm(t.events, t.note, &tm))
+            .map(|t| note_events_tm(t.events, t.note, &tm, t.rate))
             .collect::<Result<Vec<_>, _>>()?;
         let mut t0 = map_track0(&tm, map)?;
         t0.extend(marker_events_tm(markers, &tm)?);

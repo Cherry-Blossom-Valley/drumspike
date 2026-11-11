@@ -636,7 +636,9 @@ impl Service {
 
     /// `export_midi` with the values the page passes taken from the document when the call has
     /// none: `note` is the track's note (36 without one), `events` the track's stored hits,
-    /// `ppq` 24000, `tempo` 120. The Tauri command and the test bridge call this.
+    /// `tempo` 120. #441: a call without `ppq` takes the rule's ticks per quarter note (the one
+    /// Export All writes for the track), an explicit `ppq` decides. The Tauri command and the
+    /// test bridge call this.
     ///
     /// # Errors
     ///
@@ -704,16 +706,7 @@ impl Service {
             stored = self.track_events(sid, name)?;
             &stored[..]
         };
-        self.export_midi_with(
-            sid,
-            name,
-            note,
-            events,
-            ppq.unwrap_or(24000),
-            tempo.unwrap_or(120.0),
-            dest,
-            compensate,
-        )
+        self.export_midi_with(sid, name, note, events, ppq, tempo.unwrap_or(120.0), dest, compensate)
     }
 }
 

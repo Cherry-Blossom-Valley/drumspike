@@ -209,6 +209,7 @@ fn the_multi_track_file_writes_the_review_markers_at_their_ticks() {
     let tr = [MidiTrack {
         name: "Kick",
         note: 36,
+        rate: 48_000,
         events: &a,
     }];
     let markers = [
@@ -259,6 +260,7 @@ fn the_multi_track_file_holds_no_review_markers_when_the_export_has_none() {
     let tr = [MidiTrack {
         name: "Kick",
         note: 36,
+        rate: 48_000,
         events: &a,
     }];
     let none: [MidiMarker; 0] = [];
@@ -352,12 +354,12 @@ fn worst_error_ticks(bytes: &[u8], hits: &[f64]) -> (f64, usize) {
 #[test]
 fn the_default_map_writes_the_bytes_of_the_old_export() {
     let evs = [ev(0.5, 90), ev(0.52, 100), ev(0.0, 1)];
-    let b = midi_bytes_map(&evs, 36, DEFAULT_PPQ, &TempoMap::default(), DEFAULT_TEMPO).unwrap();
+    let b = midi_bytes_map(&evs, 36, DEFAULT_PPQ, &TempoMap::default(), DEFAULT_TEMPO, 48_000).unwrap();
     assert_eq!(b, unhex(PYTHON_FILE));
     // a legacy tempo and ppq: the ticks and the written tempo are the same tempo (#434). The
     // tempo 90 BPM does not come out in whole microseconds (666666.67), so the file holds the
     // rounded 666667 and the notes sit on the ticks of that tempo, not of the exact 90.
-    let b = midi_bytes_map(&evs, 36, 480, &TempoMap::default(), 90.0).unwrap();
+    let b = midi_bytes_map(&evs, 36, 480, &TempoMap::default(), 90.0, 48_000).unwrap();
     let smf = Smf::parse(&b).unwrap();
     let mut tempos = smf.tracks[0].iter().scan(0u32, |t, e| {
         *t += e.delta.as_int();
@@ -378,7 +380,7 @@ fn the_default_map_writes_the_bytes_of_the_old_export() {
     );
     let long = [ev(0.5, 90), ev(123_456.123_456_789, 50), ev(0.52, 100)];
     assert_eq!(
-        midi_bytes_map(&long, 36, DEFAULT_PPQ, &TempoMap::default(), DEFAULT_TEMPO).unwrap(),
+        midi_bytes_map(&long, 36, DEFAULT_PPQ, &TempoMap::default(), DEFAULT_TEMPO, 48_000).unwrap(),
         unhex(PYTHON_LONG_GAP)
     );
 }
@@ -395,11 +397,11 @@ fn a_single_tempo_export_round_trips_through_its_own_events_and_holds_the_user_t
     let ppq = 24_000;
     let hits: Vec<f64> = (0..600).map(|i| 2.025 + f64::from(i) * (60.0 / 118.0)).collect(); // 2 s to 6 min
     let evs: Vec<MidiEvent> = hits.iter().map(|&t| ev(t, 90)).collect();
-    let b = midi_bytes_map(&evs, 36, ppq, &TempoMap::default(), 118.0).unwrap();
+    let b = midi_bytes_map(&evs, 36, ppq, &TempoMap::default(), 118.0, 48_000).unwrap();
     let (worst, n) = worst_error_ticks(&b, &hits);
     assert_eq!(n, 600);
     assert!(
-        worst <= integer_tempo_round_trip_ticks(118.0, ppq, 307.0, 0),
+        worst <= integer_tempo_round_trip_ticks(118.0, ppq, 307.0, 0, 48_000),
         "round trip through the file's own events: {worst} ticks"
     );
     let daw = worst_daw_error_s(&b, 118.0, &hits);
@@ -409,17 +411,18 @@ fn a_single_tempo_export_round_trips_through_its_own_events_and_holds_the_user_t
         bpm: 118.0,
         ..TempoMap::default()
     };
-    let b = midi_bytes_map(&evs, 36, ppq, &map, 120.0).unwrap();
-    assert!(worst_error_ticks(&b, &hits).0 <= integer_tempo_round_trip_ticks(118.0, ppq, 307.0, 0));
+    let b = midi_bytes_map(&evs, 36, ppq, &map, 120.0, 48_000).unwrap();
+    assert!(worst_error_ticks(&b, &hits).0 <= integer_tempo_round_trip_ticks(118.0, ppq, 307.0, 0, 48_000));
     assert!(worst_daw_error_s(&b, 118.0, &hits) <= 1.0e-3);
     // the multi-track file with the caller tempo too
     let tracks = [MidiTrack {
         name: "spikes",
         note: 36,
+        rate: 48_000,
         events: &evs,
     }];
     let b = multi_midi_bytes(&tracks, &[], ppq, &TempoMap::default(), 118.0).unwrap();
-    assert!(worst_error_ticks(&b, &hits).0 <= integer_tempo_round_trip_ticks(118.0, ppq, 307.0, 0));
+    assert!(worst_error_ticks(&b, &hits).0 <= integer_tempo_round_trip_ticks(118.0, ppq, 307.0, 0, 48_000));
     assert!(worst_daw_error_s(&b, 118.0, &hits) <= 1.0e-3);
 }
 
@@ -427,11 +430,15 @@ fn a_single_tempo_export_round_trips_through_its_own_events_and_holds_the_user_t
 /// than the rounding of those integers against the exact tempos: half a tick per segment
 /// boundary (`boundaries` steps after the first, each step tick within half a tick of the
 /// exact step time) plus half a tick of note rounding plus `t_max` seconds of the relative
-/// mismatch of the worst tempo `bpm`, in ticks of the written tempo.
-fn integer_tempo_round_trip_ticks(bpm: f64, ppq: u16, t_max: f64, boundaries: usize) -> f64 {
+/// mismatch of the worst tempo `bpm`, in ticks of the written tempo. #441: the note-on is
+/// anchored at its sample, up to half a sample from the hit, so the bound carries that half
+/// sample in ticks of the written tempo too.
+fn integer_tempo_round_trip_ticks(bpm: f64, ppq: u16, t_max: f64, boundaries: usize, rate: u32) -> f64 {
     let exact = 6e7 / bpm;
     let us = f64::from(tempo_us(bpm).expect("in range"));
-    (boundaries as f64 + 1.0) * 0.5 + t_max * (us - exact).abs() / exact * (f64::from(ppq) * 1e6) / us
+    (boundaries as f64 + 1.0) * 0.5
+        + t_max * (us - exact).abs() / exact * (f64::from(ppq) * 1e6) / us
+        + (f64::from(ppq) * 1e6) / (2.0 * f64::from(rate) * us)
 }
 
 /// The worst error of the notes against a DAW that ignores the file's tempo events and applies
@@ -466,10 +473,12 @@ fn three_tempo_steps_and_a_meter_change_round_trip_with_every_note_within_half_a
     let map = map3();
     let hits: Vec<f64> = (0..400).map(|i| 0.013 + f64::from(i) * 0.1111).collect(); // 0.013 s to 44.4 s
     let evs: Vec<MidiEvent> = hits.iter().map(|&t| ev(t, 90)).collect();
-    let b = midi_bytes_map(&evs, 38, DEFAULT_PPQ, &map, DEFAULT_TEMPO).unwrap();
+    let b = midi_bytes_map(&evs, 38, DEFAULT_PPQ, &map, DEFAULT_TEMPO, 48_000).unwrap();
     let (worst, n) = worst_error_ticks(&b, &hits);
     assert_eq!(n, 400);
-    assert!(worst <= 0.5 + 1e-6, "worst note error {worst} ticks");
+    // #441: the note-on sits on its hit's sample, up to half a sample from the hit itself; at
+    // 150 BPM (the fastest of the map, 60,000 ticks per second) that is 0.625 ticks.
+    assert!(worst <= 0.5 + 0.625 + 1e-6, "worst note error {worst} ticks");
     let got = import_midi(&b).unwrap();
     assert_eq!(got.map, map, "the map comes back as it went in");
     assert_eq!(
@@ -477,7 +486,10 @@ fn three_tempo_steps_and_a_meter_change_round_trip_with_every_note_within_half_a
         (24_000, 4, 3, 0)
     );
     // the second leg: export the imported map again, the bytes are the same
-    assert_eq!(midi_bytes_map(&evs, 38, DEFAULT_PPQ, &got.map, 120.0).unwrap(), b);
+    assert_eq!(
+        midi_bytes_map(&evs, 38, DEFAULT_PPQ, &got.map, 120.0, 48_000).unwrap(),
+        b
+    );
 }
 
 #[test]
@@ -497,10 +509,10 @@ fn a_step_off_the_tick_grid_comes_back_within_half_a_tick() {
     };
     let hits = [0.5, 7.0, 7.123_456, 7.2, 19.0, 19.000_001, 30.0];
     let evs: Vec<MidiEvent> = hits.iter().map(|&t| ev(t, 80)).collect();
-    let b = midi_bytes_map(&evs, 36, DEFAULT_PPQ, &map, 120.0).unwrap();
+    let b = midi_bytes_map(&evs, 36, DEFAULT_PPQ, &map, 120.0, 48_000).unwrap();
     // #466: the ticks sit on the exact tempos of the steps; the round trip through the file's
     // own integer set_tempo carries the rounding mismatch of those integers (worst at 90 BPM).
-    assert!(worst_error_ticks(&b, &hits).0 <= integer_tempo_round_trip_ticks(90.0, DEFAULT_PPQ, 30.0, 2));
+    assert!(worst_error_ticks(&b, &hits).0 <= integer_tempo_round_trip_ticks(90.0, DEFAULT_PPQ, 30.0, 2, 48_000));
     let got = import_midi(&b).unwrap().map;
     assert_eq!(got.steps.len(), 2);
     for (a, b) in got.steps.iter().zip(&map.steps) {
@@ -527,7 +539,7 @@ fn a_song_whose_bar_1_is_not_at_0_s_keeps_it_through_a_marker() {
         bar1_s: 3.5,
         ..TempoMap::default()
     };
-    let b = midi_bytes_map(&[ev(4.0, 100)], 36, DEFAULT_PPQ, &map, 120.0).unwrap();
+    let b = midi_bytes_map(&[ev(4.0, 100)], 36, DEFAULT_PPQ, &map, 120.0, 48_000).unwrap();
     let smf = Smf::parse(&b).unwrap();
     let marker = smf.tracks[0]
         .iter()
@@ -555,6 +567,7 @@ fn a_song_whose_bar_1_is_not_at_0_s_keeps_it_through_a_marker() {
             ..TempoMap::default()
         },
         120.0,
+        48_000,
     )
     .unwrap();
     assert!(!plain.windows(5).any(|w| w == b"Bar 1"));
@@ -570,7 +583,7 @@ fn a_hit_before_bar_1_and_a_hit_before_0_s_keep_their_place() {
     // 1.0 s and 3.0 s are before bar 1 (the second also after the step); -0.25 s is before the audio
     let hits = [1.0, 3.0, 5.0];
     let evs = [ev(-0.25, 100), ev(1.0, 100), ev(3.0, 100), ev(5.0, 100)];
-    let b = midi_bytes_map(&evs, 36, DEFAULT_PPQ, &map, 120.0).unwrap();
+    let b = midi_bytes_map(&evs, 36, DEFAULT_PPQ, &map, 120.0, 48_000).unwrap();
     let notes = {
         let smf = Smf::parse(&b).unwrap();
         let mut at = 0u64;
@@ -602,7 +615,7 @@ fn a_map_that_cannot_be_written_is_refused() {
         ..TempoMap::default()
     };
     assert!(matches!(
-        midi_bytes_map(&[], 36, DEFAULT_PPQ, &bad, 120.0),
+        midi_bytes_map(&[], 36, DEFAULT_PPQ, &bad, 120.0, 48_000),
         Err(MidiError::Map(_))
     ));
     assert!(matches!(
@@ -615,7 +628,8 @@ fn a_map_that_cannot_be_written_is_refused() {
                 bpm: 100.0,
                 ..TempoMap::default()
             },
-            120.0
+            120.0,
+            48_000
         ),
         Err(MidiError::Tick(_))
     ));
@@ -646,15 +660,15 @@ fn export_midi_map_writes_the_bytes_of_midi_bytes_map() {
     let p = dir.join("map.mid");
     let evs = [ev(0.5, 90), ev(9.0, 70)];
     let map = map3();
-    export_midi_map(&evs, 36, &p, DEFAULT_PPQ, &map, 120.0).unwrap();
+    export_midi_map(&evs, 36, &p, DEFAULT_PPQ, &map, 120.0, 48_000).unwrap();
     assert_eq!(
         std::fs::read(&p).unwrap(),
-        midi_bytes_map(&evs, 36, DEFAULT_PPQ, &map, 120.0).unwrap()
+        midi_bytes_map(&evs, 36, DEFAULT_PPQ, &map, 120.0, 48_000).unwrap()
     );
-    let notes = note_events_tm(&evs, 36, &TickMap::new(DEFAULT_PPQ, &map).unwrap()).unwrap();
+    let notes = note_events_tm(&evs, 36, &TickMap::new(DEFAULT_PPQ, &map).unwrap(), 48_000).unwrap();
     assert_eq!((notes[0].tick, notes[1].tick), (24_000, 384_000 + 40_000));
     assert_eq!(
-        note_events_tm(&evs, 200, &TickMap::new(DEFAULT_PPQ, &map).unwrap()),
+        note_events_tm(&evs, 200, &TickMap::new(DEFAULT_PPQ, &map).unwrap(), 48_000),
         Err(MidiError::Note(200))
     );
     std::fs::remove_dir_all(&dir).unwrap();
@@ -696,11 +710,13 @@ fn a_multi_track_file_has_one_track_per_drum_on_its_own_note_and_the_default_tem
         MidiTrack {
             name: "Kick In",
             note: 36,
+            rate: 48_000,
             events: &a,
         },
         MidiTrack {
             name: "Snare",
             note: 38,
+            rate: 48_000,
             events: &b,
         },
     ];
@@ -724,6 +740,7 @@ fn a_multi_track_file_takes_the_tempo_events_and_ticks_of_the_map() {
     let tr = [MidiTrack {
         name: "Kick",
         note: 36,
+        rate: 48_000,
         events: &a,
     }];
     let map = map3();
@@ -732,7 +749,7 @@ fn a_multi_track_file_takes_the_tempo_events_and_ticks_of_the_map() {
     assert_eq!(tempos[0], 500_000);
     assert_eq!((tracks[0].1[0].0, tracks[0].1[1].0), (24_000, 384_000 + 40_000));
     // the same ticks as the per-track file
-    let one = note_events_tm(&a, 36, &TickMap::new(DEFAULT_PPQ, &map).unwrap()).unwrap();
+    let one = note_events_tm(&a, 36, &TickMap::new(DEFAULT_PPQ, &map).unwrap(), 48_000).unwrap();
     assert_eq!(one[1].tick, tracks[0].1[1].0);
 }
 
@@ -742,6 +759,7 @@ fn a_multi_track_file_refuses_a_bad_note_a_bad_velocity_and_writes_the_path() {
     let bad = [MidiTrack {
         name: "x",
         note: 200,
+        rate: 48_000,
         events: &a,
     }];
     assert_eq!(
@@ -752,6 +770,7 @@ fn a_multi_track_file_refuses_a_bad_note_a_bad_velocity_and_writes_the_path() {
     let bad = [MidiTrack {
         name: "x",
         note: 36,
+        rate: 48_000,
         events: &loud,
     }];
     assert_eq!(
