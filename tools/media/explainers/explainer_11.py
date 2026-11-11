@@ -116,8 +116,8 @@ class Explainer11(Explainer):
         missed = Text("no hit here", font=FONT, font_size=20, color=DIM)
         missed.move_to([overview_x(GHOST_MISS), 0.95, 0])  # review 6396207826 #4: off the lane's wave
         self.t_play(Create(ring), FadeIn(missed), t=2.5)
-        self.say("The rules keep the ghost notes on this track, and missed the softest one.", t=2.0)
-        self.say("The Sensitivity would touch the whole track; Learn teaches this one track.", t=2.0)
+        self.say("Here is a ghost note you do not want, and a soft hit you do want that the detector never found.", t=2.0)
+        self.say("The Sensitivity slider would change the whole track; Learn works from your examples.", t=2.0)
 
     def s02_forget(self):
         """Forget This on the unwanted ghost: it and its near copy go grey, the backbeats stay."""
@@ -239,6 +239,7 @@ class Explainer11(Explainer):
         undo_t = Text("Undo", font=FONT, font_size=18, color=TEXT).move_to(undo)
         dialog = VGroup(box, dtitle, dmsg, keep, keep_t, undo, undo_t)
         self.t_play(FadeIn(dialog), t=2.5)
+        self.say("And you stay safe.", t=1.5)
         self.say("A hit the filter takes out goes grey; it is not deleted.", t=1.8)
         self.say("An edited hit is never filtered, so your hand edits win.", t=1.8)
         self.say("And when one step adds or takes out a lot, Drum Spike asks first: Keep, or Undo.", t=1.8)
@@ -288,4 +289,4 @@ class Explainer11(Explainer):
                       font=FONT, font_size=20, color=TEXT).to_edge(DOWN, buff=1.2)
         self.t_play(FadeIn(counts), t=1.5)
         self.say("The ghosts you do not want are out of the exports, the missed hits play again.", t=1.8)
-        self.say("Learn taught this track in three keystrokes.", t=1.4)
+        self.say("You taught it in three keystrokes.", t=1.4)

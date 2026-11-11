@@ -40,7 +40,7 @@ Facts used (checked against the code at release 0.9.33, not against a commit; `s
 
 > The snare track of the song over its whole length: every hit the rules keep as an orange stalk, the ghost notes among them. One ghost is ringed; at a quieter spot there is no stalk at all.
 
-Your rules cleaned this song, and the snare track is still not right. The ghost notes stayed, and you do not want them. And the softest one, the detector never found. The Sensitivity would touch the whole track. Learn teaches this one track.
+The rules cleaned this song, but the snare track is still not right. Here is a ghost note you do not want. And over there is a soft hit you do want, which the detector never found. The Sensitivity slider would change the whole track. Learn works from your examples.
 
 ## s02-forget
 
@@ -70,7 +70,7 @@ The same Forget This reaches further now. Your example told the filter the diffe
 
 > The lane: a grey hit stays in the lane, Tab skips it. A hand velocity edit turns a grey hit orange again. A dialog with Keep and Undo.
 
-Careful what stays safe. A hit the filter takes out goes grey; it is not deleted. Your hand edits win: an edited hit is never filtered. And when one step adds or takes out more than 10 hits, or a quarter of the track, Drum Spike asks you first: Keep, or Undo.
+And you stay safe. A hit the filter takes out goes grey; it is not deleted. Your hand edits win: an edited hit is never filtered. And when one step adds or takes out more than 10 hits, or a quarter of the track, Drum Spike asks you first: Keep, or Undo.
 
 ## s07-project
 
@@ -82,4 +82,4 @@ The marks are kept in the project. Open the song tomorrow, and they are still th
 
 > The snare track before and after: the unwanted ghosts and the bleed copy grey, the missed hits in as learned hits, the counts line under the lanes.
 
-The result on this song: the ghosts you do not want are out of the exports, the missed hits play again, and the rest of the track is untouched. Learn taught it in three keystrokes.
+The result on this song: the ghosts you do not want are out of the exports, the missed hits play again, and the rest of the track is untouched. You taught it in three keystrokes.
