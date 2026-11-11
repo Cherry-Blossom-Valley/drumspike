@@ -123,3 +123,44 @@ def test_stroke_span_cut_matches_the_detector():
     assert (at, len(s)) == (520 - 476, 549 - 476)   # 0.9 ms before (floor), 0.6 ms after (ceil)
     st = judge_measure.stroke_span(data, 520, 48000)
     assert (len(st), st.index(1.0)) == (760 - 476, at + 200)   # the 5 ms span after the hit
+
+
+def pattern_track(n, late=()):
+    """#447: `n` strokes of one generated track as pattern rows and look windows; the hits named in `late` stand that many
+    samples up their rise. Every stroke has its own level; the foot is the same shape."""
+    rows, wins = [], []
+    for k in range(n):
+        level = 0.4 + 0.5 * ((k * 37) % 17) / 17
+        rise = [0.04, 0.12, 0.3, 0.55, 0.8, 0.95]
+        x = [0.002 * level * np.sin(i * 1.7 + k) for i in range(96)] + [0.0] + [level * v for v in rise] + [level] * 260
+        hit = 96 + dict(late).get(k, 0)
+        rows.append({"x": x, "at": hit})
+        wins.append({"set": "goldE", "id": k, "role": "kick", "label_off": 96 - hit, "owner": False, "track": "E:kick",
+                     "samples": x[hit - BEFORE:hit + AFTER], "stroke": x[hit - BEFORE:hit + SPAN_AFTER], "hit_at": BEFORE})
+    return rows, wins
+
+
+def test_the_pattern_run_counts_the_tracks_and_takes_back_a_move_it_does_not_confirm():
+    """#447: the tool builds one pattern per track and hands each window its track's pattern. A track of 41 equal strokes
+    gets a pattern; the judge's answers on hits at the foot stay. A window whose track has no rows is judged alone."""
+    src = (ROOT / "static" / "agent.js").read_text()
+    rows, wins = pattern_track(41, late=((20, 3),))
+    res = judge_measure.measure(src, wins, {"E:kick": {"sr": 48000, "rows": rows}})
+    assert res["pattern"] == {"supported": True, "tracks": 1, "built": 1}
+    assert res["gold"]["goldE"]["n"] == 41 and res["gold"]["goldE"]["exact"] == 41, res["gold"]["goldE"]   # the late hit moves 3 back, confirmed
+    assert res["second"]["gold"]["goldE"] == {"n": 41, "wrong": 0, "silent": 0, "listed": 0}
+    # the same windows against a pattern that stands 3 samples off: every answer of the judge is taken back and listed
+    off = [{"x": r["x"], "at": r["at"] + 3} for r in rows if r["at"] == 96]
+    res = judge_measure.measure(src, wins, {"E:kick": {"sr": 48000, "rows": off}})
+    assert res["pattern"]["built"] == 1
+    assert res["second"]["gold"]["goldE"]["listed"] == 41, res["second"]["gold"]["goldE"]   # 40 standing hits the pattern puts 3 later, and the late hit's move it does not confirm
+    alone = judge_measure.measure(src, wins, {})
+    assert alone["pattern"] == {"supported": True, "tracks": 0, "built": 0}
+    assert alone["second"]["gold"]["goldE"]["listed"] == 0
+
+
+def test_a_run_that_builds_no_pattern_fails_and_an_older_agent_file_is_measured_alone():
+    with pytest.raises(SystemExit, match="built 0 patterns from 2 tracks"):
+        judge_measure.check_patterns({"supported": True, "tracks": 2, "built": 0})
+    judge_measure.check_patterns({"supported": False, "tracks": 2, "built": 0})   # the "before" run: no pattern in the file
+    judge_measure.check_patterns({"supported": True, "tracks": 2, "built": 1})
