@@ -159,7 +159,7 @@ class Explainer04(Explainer):
         comb = VGroup(*[
             Line(LEFT * 1.5 + RIGHT * 3.0 * i / 9, LEFT * 1.5 + RIGHT * 3.0 * i / 9 + UP * 0.6, color=ORANGE)
             for i in range(10)
-        ]).shift(UP * 2.4 + RIGHT * 4.2)
+        ]).shift(UP * 1.7 + RIGHT * 4.2)
         v = Lead(self.x, self.p - 30, self.p + 90, self.peak, -0.3, 1.5, zoom=1.0)
         title = Text("Explainer 1: a trigger must fire on the first sample", font=FONT, font_size=30, color=TEXT)
         self.t_play(Create(v.curve()), FadeIn(v.dots(v.a, v.b)), t=3)
@@ -193,7 +193,7 @@ class Explainer04(Explainer):
         label2 = Text("searched in the 5 ms after the foot", font=FONT, font_size=28, color=DIM).move_to([0, 2.4, 0])
         self.t_play(Create(v.curve()), FadeIn(v.dots(v.a, v.b)), t=2.5)
         self.t_play(FadeIn(edge), FadeIn(label), FadeIn(label2), t=2.5)
-        self.say("A steep edge: the signal climbs almost to the peak at once.", t=2)
+        self.say("A steep edge: the signal jumps by a clear part of the hit's height within a few samples.", t=2)
         self.t_wait(1)
 
     def s04_line(self):

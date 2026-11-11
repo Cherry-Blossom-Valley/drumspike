@@ -250,6 +250,24 @@ def test_explainer_4_picture_shows_the_numbers_the_narration_leaves_out():
     assert len(numbers_of(" ".join(s for _, _, s in scenes_of(text)))) <= MAX_SPOKEN_NUMBERS
 
 
+OVERSTATED_EDGE = re.compile(r"almost to the (peak|full height)", re.IGNORECASE)
+
+
+def test_explainer_4_does_not_say_the_edge_reaches_the_peak():
+    """The steep edge is a jump of about one eighth of the peak inside 0.1 ms (EDGE_RISE_DB 18 under the peak),
+    not a climb almost to the peak: neither the narration nor a caption of the builder may say so."""
+    text = script_text("explainer-04-first-sample.md")
+    source = (ROOT / "tools" / "media" / "explainers" / "explainer_04.py").read_text(encoding="utf-8")
+    assert not OVERSTATED_EDGE.search(text), "the narration says the edge climbs almost to the peak"
+    assert not OVERSTATED_EDGE.search(source), "a caption of the builder says the edge climbs almost to the peak"
+
+
+def test_planted_overstated_edge_is_matched():
+    assert OVERSTATED_EDGE.search("A steep edge: the signal climbs almost to the peak at once.")
+    assert OVERSTATED_EDGE.search("climbs almost to the full height")
+    assert not OVERSTATED_EDGE.search("the signal jumps by a clear part of the hit's height")
+
+
 def test_planted_label_number_and_spoken_overload_are_reported():
     header = "Facts. 18 dB.\n\n## s01-x\n\n> a\n\nSpoken.\n"
     assert check_labels_in_header(header, 'Text("a rise of 18 dB in 7 ms")') == [
