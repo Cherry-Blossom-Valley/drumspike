@@ -41,6 +41,7 @@ VIDEOS = {
     "04": ("explainer-04-first-sample", "explainer_04.py", "Explainer04"),
     "08": ("explainer-08-velocity", "explainer_08.py", "Explainer08"),
     "05": ("explainer-05-audio-spike", "explainer_05.py", "Explainer05"),
+    "09": ("explainer-09-doubtful-hits", "explainer_09.py", "Explainer09"),
     "10": ("explainer-10-bleed", "explainer_10.py", "Explainer10"),
     "15": ("explainer-15-agent", "explainer_15.py", "Explainer15"),
     "16": ("explainer-16-training-mode", "explainer_16.py", "Explainer16"),
