@@ -166,6 +166,31 @@ def test_dragging_the_sensitivity_repicks_the_lane_live_and_stores_on_release(ap
     assert len(page_events(app)) == stored["n_events"]
 
 
+def test_re_analyze_after_the_slider_keeps_the_hits_of_the_stored_sensitivity(app, hist):
+    """#454: move the slider, let go, Re-analyze: the hits after the analysis are the hits before it."""
+    sid, ins = hist
+    sens = ins.locator(".pSens")
+    sens.scroll_into_view_if_needed()
+    x0, y = thumb_x(app, 50)
+    app.mouse.move(x0, y)
+    app.mouse.down()
+    x1, _ = thumb_x(app, 150)
+    app.mouse.move(x1 + 20, y, steps=8)
+    app.mouse.up()
+    expect(sens).to_have_value("150")
+    settled(app)
+    before = service_tv(app, sid)
+    default = len(invoke(app, "track_repick", sid=sid, name="Kick In", params=params_at(app, 50), store=False)["events"])
+    assert len(before) > default, (len(before), default)               # the slider is off the default: more hits
+    ins.locator(".bReanalyze").click()
+    app.wait_for_function("() => !analysisRunning")
+    expect(app.locator("#progressText")).to_have_text("analysis done", timeout=90000)
+    after = service_tv(app, sid)
+    print(f"hits before the re-analysis: {len(before)}, after: {len(after)}")
+    assert len(after) == len(before), (before, after)
+    assert invoke(app, "tracks_get", sid=sid)["tracks"]["Kick In"]["params"]["sensitivity"] == 150
+
+
 def test_set_in_gap_puts_the_slider_in_the_largest_gap_and_never_on_its_own(app, hist):
     sid, ins = hist
     gap = state(app)["sens"]["gap"]

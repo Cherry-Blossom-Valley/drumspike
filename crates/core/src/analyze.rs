@@ -50,8 +50,10 @@ pub struct AnalyzeParams {
     pub refine: bool,
     /// The refinement's search window (`refine_lo_ms`, `refine_hi_ms`).
     pub window: RefineWindow,
-    /// The refinement rule (P4-12): the engine's ([`RefineRule::Reference`], the default) or
-    /// the reach rule. The app sets it per analysis; it is not a document param.
+    /// The refinement's rule (P4-12): the engine's ([`RefineRule::Reference`]) or the reach
+    /// rule. The default is [`RefineRule::CURRENT`] (#440: a caller that forgets the rule runs
+    /// the current one, not silently version 1); tests that need version 1 name it. The app
+    /// sets it per analysis; it is not a document param.
     pub rule: RefineRule,
     /// Global shift of every hit in samples (`shift_samples`, positive = later).
     pub shift_samples: i64,
@@ -72,7 +74,7 @@ impl Default for AnalyzeParams {
             min_gap_ms: 20.0,
             refine: true,
             window: RefineWindow::DEFAULT,
-            rule: RefineRule::Reference,
+            rule: RefineRule::CURRENT,
             shift_samples: 0,
             velocity: VelocityMap::default(),
             roll: 0,
@@ -403,14 +405,18 @@ fn analyze_flagged(
         br.filter_runs = 1;
         br.filtered_out = detected.len() - ev.len();
     }
-    let mingap = params.min_gap_ms / 1000.0;
+    // #440: the minimum gap compares in whole samples. `0.15 - 0.13 >= 0.02` is false and
+    // `1.01 - 0.99 >= 0.02` is true, so the same pair of strokes kept one hit or two by its
+    // position in the file; the gap measured in whole samples does not move with the position.
+    let min_gap = (params.min_gap_ms * f64::from(sr) / 1000.0).round();
     // ev.sort(): the (t, note) tuples
     ev.sort_by(|a, b| by_time(a.0, b.0).then(a.1.cmp(&b.1)));
     let mut dedup: Vec<f64> = Vec::with_capacity(ev.len());
     let mut flags: Vec<u8> = Vec::with_capacity(ev.len());
     let mut last = -9e9;
     for &(t, _, r) in &ev {
-        if t - last >= mingap {
+        let gap = ((t - last) * f64::from(sr)).round();
+        if gap >= min_gap {
             dedup.push(t);
             flags.push(r);
             last = t;
@@ -436,7 +442,8 @@ fn analyze_flagged(
         let n = pairs.len();
         let mut last = -9e9;
         pairs.retain(|&(t, _, _)| {
-            if t - last >= mingap {
+            let gap = ((t - last) * f64::from(sr)).round();
+            if gap >= min_gap {
                 last = t;
                 true
             } else {

@@ -152,3 +152,23 @@ def test_load_hits_reads_the_layout_from_the_arguments(tmp_path):
                                   "02_X": {"role": "kick", "events": [{"t": 0.5}] * 3}}))
     hs2, _ = inv.load_hits(tmp_path, tmp_path, per=40, seed=7)
     assert hs2 == []
+
+
+def test_the_delay_line_names_the_rule_in_its_job(tmp_path):
+    """#444: `service_tool core-analyze` runs rule version 1 when a job names no rule, so the delay
+    line must name the rule it measures. A stand-in tool records the job it was given."""
+    seen = tmp_path / "seen.json"
+    tool = tmp_path / "service_tool"
+    tool.write_text(
+        "#!/bin/sh\n"
+        f"cp \"$2\" '{seen}'\n"
+        "echo '{\"events\": [{\"t\": 0.5}]}'\n"
+    )
+    tool.chmod(0o755)
+    x = np.zeros(SR, dtype=np.float32)
+    out = inv.analyze_with_service_tool([(x, SR, "kick")], tool, tmp_path, 10)
+    assert [round(float(v)) for v in out[0]] == [SR // 2]
+    job = json.loads(seen.read_text())
+    assert job[0]["rule"] == 10 and job[0]["role"] == "kick", job
+    inv.analyze_with_service_tool([(x, SR, "snare")], tool, tmp_path)
+    assert json.loads(seen.read_text())[0]["rule"] == inv.RULE == 10

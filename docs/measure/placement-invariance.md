@@ -38,7 +38,11 @@ Version 10 removes the polarity line and halves the snare's rate line: its numbe
 | white noise 50 dB under the peak | ~5 / ~7 / ~8 % | ~2 / ~3 / ~2 % |
 | coarse time -3 / -1 / +1 / +3 ms | 0 to ~7 % (tom the worst) | see the tool |
 | 96 kHz resample | ~7 / ~17 / ~11 % | ~3 / ~13 / ~8 % |
-| whole excerpt delayed 1 to 7 samples, full track | 90 to 99.7 % placed exactly | tom the worst |
+| whole excerpt delayed 1 to 7 samples, full track (measured with rule version 1, see the note) | 96 to 100 % placed exactly | tom the worst |
+
+Note on the delay line: `service_tool core-analyze` runs rule version 1 when a job names no rule, and until #444's
+follow-up the tool named none. The delay line now runs the rule of `--rule` (default: the current one); the current
+numbers are in [placement-v10.md](placement-v10.md).
 
 Read: level and sign changes are safe; additive offsets and hum are not (the rule's line reads relative to zero, an
 offset moves it); the coarse time should not matter and mostly does not, tom being the exception; a resample moves a
