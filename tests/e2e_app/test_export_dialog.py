@@ -678,6 +678,7 @@ def test_the_drag_midi_tile_warns_and_asks_on_the_default_map(app, make_project)
     app.wait_for_timeout(300)
     assert app.evaluate("() => window.__DS_DRAG__ || []") == []              # Cancel starts no drag
     assert exports(folder) == []                                             # and no file is written
+    expect(app.locator("#exDragMidi")).to_have_attribute("data-state", "ready")   # #478: the cancelled notice leaves the tile alive
     drag_tile(app, app.locator("#exDragMidi"))
     expect(app.locator("#confirmModal")).to_be_visible()                     # the answer was Cancel: it asks again
     app.locator('#confirmActions [data-act="anyway"]').click()
@@ -699,3 +700,79 @@ def test_the_drag_midi_tile_warns_and_asks_on_the_default_map(app, make_project)
     wait_until(lambda: len(app.evaluate("() => window.__DS_DRAG__ || []")) == 2, msg="the drag on the set map")
     app.wait_for_timeout(300)
     expect(app.locator("#confirmModal")).to_be_hidden()                      # no notice: the drag went straight through
+
+
+# ---------- #478: the Export button alive after every exit of the tempo notice ----------
+
+def hold_tiles(app):
+    """#478: hold exportDragPrepare until the test releases it: the render of the tiles' answer
+    (the drag files are there, exRender runs) then lands at the moment the test chooses — the
+    load race of the flake, held in the test's hand instead of the host's. The clear of the
+    close passes through unheld."""
+    app.evaluate("""() => { const o = B.exportDragPrepare.bind(B);
+        B.exportDragPrepare = async (...a) => { if (a[1] && a[1].clear) return o(...a);
+            await new Promise(r => { window.__releaseTiles = r; });
+            return o(...a); }; }""")
+
+
+def test_a_render_during_the_notice_cannot_leave_the_export_button_disabled_after_cancel(app, make_project):
+    # #478: exRun sets EX.busy before the notice; a render that lands while the notice is up (the
+    # drag tiles' exportDragPrepare answer on the loaded runner) disables #exGo, and the Cancel
+    # exit took busy back without a render — the button stayed dead until the dialog was reopened.
+    sid, folder = project_with_hits(app, make_project)
+    hold_tiles(app)
+    menu(app, "export")
+    app.click("#exGo")
+    expect(app.locator("#confirmModal")).to_be_visible()                     # the notice holds EX.busy
+    app.keyboard.press("Escape")
+    expect(app.locator("#exportModal")).to_be_visible()                      # Escape is refused while the notice asks
+    app.wait_for_function("() => typeof window.__releaseTiles === 'function'")
+    app.evaluate("() => window.__releaseTiles()")                            # the held answer arrives during the notice
+    expect(app.locator("#exDragMidi")).to_have_attribute("data-state", "ready", timeout=60000)
+    expect(app.locator("#exGo")).to_be_disabled()                            # the render disabled it while busy held
+    app.locator('#confirmActions [data-act="cancel"]').click()
+    expect(app.locator("#confirmModal")).to_be_hidden()
+    expect(app.locator("#exGo")).to_be_enabled()                             # #478: alive again after Cancel
+    assert exports(folder) == []                                             # Cancel writes no file
+    app.keyboard.press("Escape")
+    expect(app.locator("#exportModal")).to_be_hidden()                       # the Escape exit works again after the answer
+
+
+def test_the_set_tempo_exit_takes_the_export_button_back(app, make_project):
+    # #478, the Set Tempo… exit: busy is taken back while the Export dialog stays open under
+    # Detect Tempo; without the render the button stayed dead there too (the same held render).
+    folder = make_project(seconds=62.0)
+    sid = open_project(app, folder)
+    kick, snare = hit_train()                                                # enough hits for the detector
+    set_hits(app, sid, "Kick In", kick)
+    set_hits(app, sid, "Snare Top", snare)
+    app.evaluate("async () => { await loadProject(); }")
+    app.wait_for_function("() => S.events['Kick In'] && S.events['Kick In'].length === 48")
+    hold_tiles(app)
+    menu(app, "export")
+    app.click("#exGo")
+    expect(app.locator("#confirmModal")).to_be_visible()
+    app.wait_for_function("() => typeof window.__releaseTiles === 'function'")
+    app.evaluate("() => window.__releaseTiles()")
+    expect(app.locator("#exDragMidi")).to_have_attribute("data-state", "ready", timeout=60000)
+    expect(app.locator("#exGo")).to_be_disabled()
+    app.locator('#confirmActions [data-act="set_tempo"]').click()
+    expect(app.locator("#confirmModal")).to_be_hidden()
+    app.wait_for_function("() => !document.querySelector('#tempoModal').classList.contains('hidden')",
+                          timeout=60000)                                     # Track > Detect Tempo opens
+    app.click("#tempoCancel")
+    expect(app.locator("#exGo")).to_be_enabled()                             # #478: alive again after Set Tempo…
+    assert exports(folder) == []                                             # no file was written
+
+
+def test_a_failed_export_takes_the_busy_flag_back_and_the_button_alive(app, make_project):
+    # #478, the failed-export exit: the dialog stays open after a failed export; the finally
+    # clause already takes busy back with a render — the check can fail when someone drops it.
+    sid, folder = project_with_hits(app, make_project)
+    app.evaluate("() => { B.exportAll = async () => { throw new Error('the planted export fault'); }; }")
+    menu(app, "export")
+    app.click("#exGo")
+    ex_confirm_tempo(app)                                                    # the notice: Export anyway
+    expect(app.locator("#stMsg")).to_contain_text("export failed")
+    expect(app.locator("#exGo")).to_be_enabled()                             # busy taken back, the button alive
+    assert exports(folder) == []
