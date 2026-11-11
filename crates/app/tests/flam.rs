@@ -7,7 +7,7 @@ mod common;
 use common::*;
 use drumspike_app::flam::FLAM_RULE;
 use drumspike_app::{Service, ServiceConfig};
-use drumspike_core::detect::flam::{FlamParams, flam_split};
+use drumspike_core::detect::flam::{FlamParams, Placement, flam_split};
 use drumspike_core::refine::RefineRule;
 use serde_json::{Map, Value, json};
 
@@ -393,7 +393,17 @@ fn a_repick_places_the_flam_second_stroke_by_the_recorded_refine_rule() {
         .map(|e| e["t"].as_f64().unwrap())
         .collect();
     let p = FlamParams::default();
-    let (d5, _) = flam_split(&x, SR, &mains, &[], &p, 2, RefineRule::FootCapped);
+    let (d5, _) = flam_split(
+        &x,
+        SR,
+        &mains,
+        &[],
+        &p,
+        Placement {
+            version: 2,
+            rule: RefineRule::FootCapped,
+        },
+    );
     let t5 = at_samples(&d5.iter().filter(|s| !s.bleed).map(|s| s.t).collect::<Vec<_>>());
     assert_eq!(
         t5, frs,

@@ -377,11 +377,20 @@ pub fn transfer_gains(env_a: &[f64], sources: &[&[f64]], own: &[f64], sr: u32, h
         .collect()
 }
 
+/// The version and rule a flam step places with (see [`second_onsets`]): `version` 1 places with the version 3 walk,
+/// 2 and later place with the `rule` of the track.
+pub struct Placement {
+    /// The refine version that runs: 1 places with the version 3 walk; 2 and later place with `rule`.
+    pub version: u32,
+    /// The rule 2 and later place with: the track's analysis's rule, or on a re-pick the recorded one.
+    pub rule: RefineRule,
+}
+
 /// The second strokes inside the lobes of the output hits `hits` (s) of the own mic `x` (`tools/flam_pairs.py`
 /// `second_onsets`). `env`: the own [`attack_env`]; `gains`: the sources' envelopes with their gains (sources without
-/// a gain left out). `version`: the rule version that runs (1: the version 3 walk, as main placed; 2 and later: the
-/// `rule` of the track's analysis, bounded on both sides of the re-rise). One [`Second`] per re-rise, the bleed ones
-/// included.
+/// a gain left out). `placement`: the [`Placement`] that runs (its `version` 1: the version 3 walk, as main placed; 2
+/// and later: its `rule` of the track's analysis, bounded on both sides of the re-rise). One [`Second`] per re-rise,
+/// the bleed ones included.
 pub fn second_onsets(
     x: &[f32],
     sr: u32,
@@ -389,9 +398,9 @@ pub fn second_onsets(
     p: &FlamParams,
     env: &[f64],
     gains: &[(&[f64], f64)],
-    version: u32,
-    rule: RefineRule,
+    placement: Placement,
 ) -> Vec<Second> {
+    let Placement { version, rule } = placement;
     let hop = hop_of(sr) as i64;
     let srf = f64::from(sr);
     let mut times: Vec<f64> = hits.to_vec();
@@ -503,15 +512,14 @@ pub fn second_onsets(
 
 /// The rule on one mic: [`attack_env`] of `x` and of every source (a source of another length is compared over the
 /// common length), [`transfer_gains`], [`second_onsets`]. Returns the strokes (bleed ones included) and per source
-/// its gain. `version` and `rule` are the placement's (see [`second_onsets`]).
+/// its gain. `placement` is the version and rule the strokes are placed with (see [`second_onsets`]).
 pub fn flam_split(
     x: &[f32],
     sr: u32,
     hits: &[f64],
     sources: &[&[f32]],
     p: &FlamParams,
-    version: u32,
-    rule: RefineRule,
+    placement: Placement,
 ) -> (Vec<Second>, Vec<Option<f64>>) {
     let (env, hop) = attack_env(x, sr, p);
     let envs: Vec<Vec<f64>> = sources.iter().map(|s| attack_env(s, sr, p).0).collect();
@@ -522,7 +530,7 @@ pub fn flam_split(
         .zip(&gains)
         .filter_map(|(e, g)| g.map(|g| (&e[..e.len().min(env.len())], g)))
         .collect();
-    (second_onsets(x, sr, hits, p, &env, &used, version, rule), gains)
+    (second_onsets(x, sr, hits, p, &env, &used, placement), gains)
 }
 
 /// The times of the strokes the rule adds: those the bleed gate leaves.

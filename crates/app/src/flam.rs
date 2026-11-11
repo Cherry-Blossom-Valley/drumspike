@@ -32,8 +32,8 @@
 use std::path::PathBuf;
 
 use drumspike_core::detect::flam::{
-    FLAM_RULE_VERSION, FlamParams, Second, applies, attack_env, late_peak_db, late_peaking, late_share, second_onsets,
-    transfer_gains,
+    FLAM_RULE_VERSION, FlamParams, Placement, Second, applies, attack_env, late_peak_db, late_peaking, late_share,
+    second_onsets, transfer_gains,
 };
 use drumspike_core::project::Event;
 use drumspike_core::refine::RefineRule;
@@ -304,7 +304,18 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, FlamTarge
                                    "late_share": share, "added": 0, "gated": 0}),
                         )
                     } else {
-                        let found = second_onsets(&d.samples, d.sr, &hits, &p, &env, &used, t.version, t.rule);
+                        let found = second_onsets(
+                            &d.samples,
+                            d.sr,
+                            &hits,
+                            &p,
+                            &env,
+                            &used,
+                            Placement {
+                                version: t.version,
+                                rule: t.rule,
+                            },
+                        );
                         let (events, n) = with_flams(&t.events, &found, &d.samples, d.sr, t.params.as_ref(), p.guard_s);
                         let gated = found.iter().filter(|s| s.bleed).count();
                         // #445: the strokes the span bound placed with the version 1 walk (the

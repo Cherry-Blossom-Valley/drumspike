@@ -202,8 +202,10 @@ fn a_flam_gets_its_second_stroke_and_single_strokes_get_none() {
         &hits,
         &[],
         &FlamParams::default(),
-        FLAM_RULE_VERSION,
-        RefineRule::CURRENT,
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
     );
     assert!(gains.is_empty());
     let add = added(&found);
@@ -222,12 +224,38 @@ fn the_window_limits_hold() {
     // a main stroke 8 ms after the grace (under the 12 ms minimum) and one 60 ms after (past 50 ms) are no second stroke
     let (x, hits) = snare(10, &[(2.0, 0.008), (3.0, 0.060)], -70.0);
     let (env, _) = attack_env(&x, SR, &p);
-    assert!(second_onsets(&x, SR, &hits, &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT).is_empty());
+    assert!(
+        second_onsets(
+            &x,
+            SR,
+            &hits,
+            &p,
+            &env,
+            &[],
+            Placement {
+                version: FLAM_RULE_VERSION,
+                rule: RefineRule::CURRENT
+            }
+        )
+        .is_empty()
+    );
     // the rise: with rise_db 80 (the main stroke lies about 65 dB over the grace's decayed tail) the flam is not found
     let (x, hits) = snare(10, &[(2.0, 0.025)], -70.0);
     let (env, _) = attack_env(&x, SR, &p);
     assert_eq!(
-        second_onsets(&x, SR, &hits, &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT).len(),
+        second_onsets(
+            &x,
+            SR,
+            &hits,
+            &p,
+            &env,
+            &[],
+            Placement {
+                version: FLAM_RULE_VERSION,
+                rule: RefineRule::CURRENT
+            }
+        )
+        .len(),
         1
     );
     let strict = FlamParams { rise_db: 80.0, ..p };
@@ -239,19 +267,49 @@ fn the_window_limits_hold() {
             &strict,
             &env,
             &[],
-            FLAM_RULE_VERSION,
-            RefineRule::CURRENT
+            Placement {
+                version: FLAM_RULE_VERSION,
+                rule: RefineRule::CURRENT
+            },
         )
         .is_empty()
     );
     // the guard: a next output hit 20 ms after the grace ends the search before the main stroke
     let mut close = hits.clone();
     close.push(2.03);
-    assert!(second_onsets(&x, SR, &close, &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT).is_empty());
+    assert!(
+        second_onsets(
+            &x,
+            SR,
+            &close,
+            &p,
+            &env,
+            &[],
+            Placement {
+                version: FLAM_RULE_VERSION,
+                rule: RefineRule::CURRENT
+            }
+        )
+        .is_empty()
+    );
     // the floor: a re-rise that is not 12 dB over the noise before the hit is none
     let (x, hits) = snare(10, &[(2.0, 0.025)], -6.0);
     let (env, _) = attack_env(&x, SR, &p);
-    assert!(second_onsets(&x, SR, &hits, &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT).is_empty());
+    assert!(
+        second_onsets(
+            &x,
+            SR,
+            &hits,
+            &p,
+            &env,
+            &[],
+            Placement {
+                version: FLAM_RULE_VERSION,
+                rule: RefineRule::CURRENT
+            }
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -263,8 +321,10 @@ fn a_re_rise_another_mic_explains_is_bleed() {
         &hits,
         &[&src],
         &FlamParams::default(),
-        FLAM_RULE_VERSION,
-        RefineRule::CURRENT,
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
     );
     let g = gains[0].expect("a gain");
     assert!((g + 20.0).abs() < 3.0, "{g}");
@@ -277,8 +337,10 @@ fn a_re_rise_another_mic_explains_is_bleed() {
         &hits,
         &[],
         &FlamParams::default(),
-        FLAM_RULE_VERSION,
-        RefineRule::CURRENT,
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
     );
     assert_eq!(added(&alone).len(), 4);
 }
@@ -325,7 +387,18 @@ fn a_second_stroke_on_the_first_strokes_ring_never_starts_before_the_dips_next_b
     }
     let x = f32s(&x);
     let (env, hop) = attack_env(&x, SR, &p);
-    let found = second_onsets(&x, SR, &hits, &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT);
+    let found = second_onsets(
+        &x,
+        SR,
+        &hits,
+        &p,
+        &env,
+        &[],
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
+    );
     assert_eq!(found.len(), 2, "{found:?}");
     for (s, main) in found.iter().zip([2.025, 4.025]) {
         let at = (s.t * f64::from(SR)).round() as i64;
@@ -480,7 +553,18 @@ fn the_walk_does_not_move_a_second_stroke_back_over_a_ring_before_the_dip() {
     tone(&mut x, c, 1.0, 0.003, 0.02);
     let x = f32s(&x);
     let (env, hop) = attack_env(&x, SR, &p);
-    let found = second_onsets(&x, SR, &[0.5], &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT);
+    let found = second_onsets(
+        &x,
+        SR,
+        &[0.5],
+        &p,
+        &env,
+        &[],
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
+    );
     assert_eq!(found.len(), 1, "{found:?}");
     let s = &found[0];
     let at = (s.t * f64::from(SR)).round() as i64;
@@ -499,8 +583,10 @@ fn at_44k1_the_flams_are_found_and_hits_at_the_ends_of_the_file_add_nothing() {
         &hits,
         &[],
         &FlamParams::default(),
-        FLAM_RULE_VERSION,
-        RefineRule::CURRENT,
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
     );
     assert!(gains.is_empty());
     assert_eq!(found.len(), 2, "{found:?}");
@@ -572,7 +658,17 @@ fn a_second_stroke_gets_the_same_offset_from_its_true_first_sample_as_a_single_s
     }
     let x = f32s(&x);
     let refined = refine_track_rule(&x, SR, &[1.0, 3.0], RefineWindow::DEFAULT, RefineRule::CURRENT);
-    let (found, _) = flam_split(&x, SR, &[1.0, 3.0], &[], &p, FLAM_RULE_VERSION, RefineRule::CURRENT);
+    let (found, _) = flam_split(
+        &x,
+        SR,
+        &[1.0, 3.0],
+        &[],
+        &p,
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
+    );
     assert_eq!(found.len(), 1, "{found:?}");
     let off_single = (refined[0].t * srf).round() as i64 - i_single as i64;
     let off_second = (found[0].t * srf).round() as i64 - i_main as i64;
@@ -614,7 +710,17 @@ fn the_second_stroke_is_never_placed_before_the_dip() {
             *v += 1e-5 * nz.next();
         }
         let x = f32s(&x);
-        let (found, _) = flam_split(&x, SR, &[1.0], &[], &p, FLAM_RULE_VERSION, RefineRule::CURRENT);
+        let (found, _) = flam_split(
+            &x,
+            SR,
+            &[1.0],
+            &[],
+            &p,
+            Placement {
+                version: FLAM_RULE_VERSION,
+                rule: RefineRule::CURRENT,
+            },
+        );
         assert_eq!(found.len(), 1, "gap {gap} grace {g_amp}/{g_tau}: {found:?}");
         let s = &found[0];
         let at = (s.t * srf).round() as i64;
@@ -634,18 +740,62 @@ fn the_count_of_detected_flams_on_the_existing_fixtures_does_not_change() {
     // a_flam_gets_its_second_stroke_and_single_strokes_get_none: 2 flams, both added
     let flams = [(2.0, 0.025), (4.0, 0.040)];
     let (x, hits) = snare(16, &flams, -70.0);
-    let (found, _) = flam_split(&x, SR, &hits, &[], &p, FLAM_RULE_VERSION, RefineRule::CURRENT);
+    let (found, _) = flam_split(
+        &x,
+        SR,
+        &hits,
+        &[],
+        &p,
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
+    );
     assert_eq!(added(&found).len(), 2, "{found:?}");
     // the_window_limits_hold: no second stroke under the 12 ms minimum or past 50 ms
     let (x, hits) = snare(10, &[(2.0, 0.008), (3.0, 0.060)], -70.0);
     let (env, _) = attack_env(&x, SR, &p);
-    assert!(second_onsets(&x, SR, &hits, &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT).is_empty());
+    assert!(
+        second_onsets(
+            &x,
+            SR,
+            &hits,
+            &p,
+            &env,
+            &[],
+            Placement {
+                version: FLAM_RULE_VERSION,
+                rule: RefineRule::CURRENT
+            }
+        )
+        .is_empty()
+    );
     // a_re_rise_another_mic_explains_is_bleed: 4 re-rises, all gated, 4 added without the source
     let (x, src, hits) = bleed_fixture();
-    let (found, _) = flam_split(&x, SR, &hits, &[&src], &p, FLAM_RULE_VERSION, RefineRule::CURRENT);
+    let (found, _) = flam_split(
+        &x,
+        SR,
+        &hits,
+        &[&src],
+        &p,
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
+    );
     assert_eq!(found.len(), 4, "{found:?}");
     assert!(added(&found).is_empty());
-    let (alone, _) = flam_split(&x, SR, &hits, &[], &p, FLAM_RULE_VERSION, RefineRule::CURRENT);
+    let (alone, _) = flam_split(
+        &x,
+        SR,
+        &hits,
+        &[],
+        &p,
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
+    );
     assert_eq!(added(&alone).len(), 4);
     // a_second_stroke_on_the_first_strokes_ring...: 2 flams on the ring fixture
     let mut x = vec![0.0f64; (0.5 * 12.0 * f64::from(SR)) as usize];
@@ -660,11 +810,31 @@ fn the_count_of_detected_flams_on_the_existing_fixtures_does_not_change() {
     for v in &mut x {
         *v += 1e-5 * nz.next();
     }
-    let (found, _) = flam_split(&f32s(&x), SR, &hits, &[], &p, FLAM_RULE_VERSION, RefineRule::CURRENT);
+    let (found, _) = flam_split(
+        &f32s(&x),
+        SR,
+        &hits,
+        &[],
+        &p,
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
+    );
     assert_eq!(added(&found).len(), 2, "{found:?}");
     // at_44k1_...: 2 flams at 44.1 kHz
     let (sr, x, hits, _) = at_44k1_fixture();
-    let (found, _) = flam_split(&x, sr, &hits, &[], &p, FLAM_RULE_VERSION, RefineRule::CURRENT);
+    let (found, _) = flam_split(
+        &x,
+        sr,
+        &hits,
+        &[],
+        &p,
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
+    );
     assert_eq!(added(&found).len(), 2, "{found:?}");
 }
 
@@ -689,11 +859,33 @@ fn version_1_places_the_stroke_where_main_placed_it() {
     }
     let x = f32s(&x);
     let (env, _) = attack_env(&x, SR, &p);
-    let v1 = second_onsets(&x, SR, &[3.0], &p, &env, &[], 1, RefineRule::Departure);
+    let v1 = second_onsets(
+        &x,
+        SR,
+        &[3.0],
+        &p,
+        &env,
+        &[],
+        Placement {
+            version: 1,
+            rule: RefineRule::Departure,
+        },
+    );
     assert_eq!(v1.len(), 1, "{v1:?}");
     let off_v1 = (v1[0].t * srf).round() as i64 - i_main as i64;
     assert_eq!(off_v1, -6, "main's placement of this fixture: {v1:?}");
-    let v1b = second_onsets(&x, SR, &[3.0], &p, &env, &[], 1, RefineRule::Symmetric);
+    let v1b = second_onsets(
+        &x,
+        SR,
+        &[3.0],
+        &p,
+        &env,
+        &[],
+        Placement {
+            version: 1,
+            rule: RefineRule::Symmetric,
+        },
+    );
     assert_eq!(
         (v1b[0].t * srf).round() as i64,
         (v1[0].t * srf).round() as i64,
@@ -729,12 +921,34 @@ fn a_louder_swing_after_the_stroke_does_not_move_it_off_its_own_first_sample() {
     };
     let (x, _) = fixture(false);
     let (env, _) = attack_env(&x, SR, &p);
-    let plain = second_onsets(&x, SR, &[3.0], &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT);
+    let plain = second_onsets(
+        &x,
+        SR,
+        &[3.0],
+        &p,
+        &env,
+        &[],
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
+    );
     assert_eq!(plain.len(), 1, "{plain:?}");
     let at_plain = (plain[0].t * srf).round() as i64;
     let (xs, i_main) = fixture(true);
     let (env, _) = attack_env(&xs, SR, &p);
-    let swung = second_onsets(&xs, SR, &[3.0], &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT);
+    let swung = second_onsets(
+        &xs,
+        SR,
+        &[3.0],
+        &p,
+        &env,
+        &[],
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
+    );
     assert_eq!(swung.len(), 1, "{swung:?}");
     let at = (swung[0].t * srf).round() as i64;
     assert!(
@@ -783,7 +997,17 @@ fn no_second_stroke_is_placed_after_the_end_of_its_re_rise_block() {
             *v += 1e-5 * nz.next();
         }
         let x = f32s(&x);
-        let (found, _) = flam_split(&x, SR, &[1.0], &[], &p, FLAM_RULE_VERSION, RefineRule::CURRENT);
+        let (found, _) = flam_split(
+            &x,
+            SR,
+            &[1.0],
+            &[],
+            &p,
+            Placement {
+                version: FLAM_RULE_VERSION,
+                rule: RefineRule::CURRENT,
+            },
+        );
         assert_eq!(found.len(), 1, "gap {gap} grace {g_amp}/{g_tau}: {found:?}");
         let s = &found[0];
         let at = (s.t * srf).round() as i64;
@@ -808,7 +1032,18 @@ fn no_second_stroke_is_placed_after_the_end_of_its_re_rise_block() {
     }
     let x = f32s(&x);
     let (env, _) = attack_env(&x, SR, &p);
-    let found = second_onsets(&x, SR, &[3.0], &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT);
+    let found = second_onsets(
+        &x,
+        SR,
+        &[3.0],
+        &p,
+        &env,
+        &[],
+        Placement {
+            version: FLAM_RULE_VERSION,
+            rule: RefineRule::CURRENT,
+        },
+    );
     assert_eq!(found.len(), 1, "{found:?}");
     let at = (found[0].t * srf).round() as i64;
     assert!(
@@ -852,7 +1087,7 @@ fn the_second_stroke_follows_the_rule_of_the_track() {
     let times: Vec<f64> = (0..6).map(|k| 1.025 + 0.12 * k as f64).collect();
     let build = |flip: bool| {
         let mut x = vec![0.0f64; (3.0 * srf) as usize];
-        let mut nz = Noise(0x444_000_000_000_0001);
+        let mut nz = Noise(0x4440_0000_0000_0001);
         for &te in &times {
             let grace = burst(&mut nz, 0.02, 0.003, 0.5);
             add_at(&mut x, &grace, te - 0.025);
@@ -888,7 +1123,20 @@ fn the_second_stroke_follows_the_rule_of_the_track() {
     // the hits are the graces, 25 ms before their #444-shape bodies (the bodies are the rule's
     // second strokes)
     let hits: Vec<f64> = times.iter().map(|te| te - 0.025).collect();
-    let run = |x: &[f32], rule: RefineRule| second_onsets(x, SR, &hits, &p, &env, &[], FLAM_RULE_VERSION, rule);
+    let run = |x: &[f32], rule: RefineRule| {
+        second_onsets(
+            x,
+            SR,
+            &hits,
+            &p,
+            &env,
+            &[],
+            Placement {
+                version: FLAM_RULE_VERSION,
+                rule,
+            },
+        )
+    };
     for rule in [RefineRule::Departure, RefineRule::Symmetric] {
         let found = run(&x, rule);
         assert_eq!(found.len(), 6, "{rule:?}: {found:?}");
@@ -918,7 +1166,7 @@ fn the_second_stroke_follows_the_rule_of_the_track() {
     };
     assert_eq!(same(RefineRule::Symmetric), 0, "version 10 moves a flipped copy");
     // and version 1 ignores the rule: the walk places the stroke
-    let run1 = |x: &[f32], rule: RefineRule| second_onsets(x, SR, &hits, &p, &env, &[], 1, rule);
+    let run1 = |x: &[f32], rule: RefineRule| second_onsets(x, SR, &hits, &p, &env, &[], Placement { version: 1, rule });
     for (a, b) in run1(&x, RefineRule::Departure)
         .iter()
         .zip(run1(&x, RefineRule::Symmetric))
