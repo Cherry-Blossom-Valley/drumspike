@@ -321,7 +321,20 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   not clear: `suggest` is `null` and `judge.why` is `"a dip after a rise over the band: the foot is not clear"`. When
   the verdict is `late`, move the hit by `judge.foot_off` samples (a whole number; negative is earlier); a late hit can
   carry a `null` `suggest` when its foot is far from the hit - look at those yourself, and list one you do not move
-  with the reason. Without a
+  with the reason.
+  The judge has a second opinion (#447), the pattern of the track: the median foot of the track's own clear hits (a hit
+  is clear when the 2 ms before it stay within 1 % of the peak of the 5 ms after it; the foot is 1/3 ms before the hit to
+  1/6 ms after it; three rounds of re-alignment; no label and no session value). `look` answers `pattern`: `{hits, clear,
+  off, score}` - the hits and the clear hits the pattern was built from, where it matches this hit best (`off`, in
+  samples from the hit, negative is earlier; `null` when the view is too short for the search or the hit does not look
+  like the pattern: the best match at the end of the search range, or a correlation under 0.5) and the match - or `null`
+  for a track with fewer than 40 hits. `judge` then carries `pattern_off` and `pattern_agrees`. A move stands only when
+  the pattern confirms it within one sample. When the judge would move the hit and the pattern puts the start more than
+  one sample from that move, or the judge would leave the hit and the pattern puts the start 2 or more samples away,
+  `suggest` is `null`, `judge.line_suggest` keeps the judge's own number and `judge.why` is `"two opinions differ: the
+  line before the hit puts the start ..., the track's clear hits put it ..."`. The `verdict` stays the judge's. Such a
+  hit is never a move: list it for the user. The pattern is built once per track (one read per hit) and kept until the
+  count of hits changes. Without a
   readable `stroke_peak` the band is 3 % of the local peak. A page in the
   background gets no animation frames: `look` waits at most 300 ms for the draw and goes on, so a hidden page is slower
   but never stuck.
@@ -334,12 +347,13 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   record says precision `sample`. Answers `{moved, index, from, to}`.
 - `confirm(track, index)`: Hits > Confirm Hit for a reviewed, unchanged hit. `undo()`: Edit > Undo; an undo writes no record.
 - `plan(track, from, to)`: `look` over the hit indices `from` to `to` without moving; one row per hit with `index`, `id`,
-  `sample`, `suggest`, `spread`, `verdict`, `confidence`, `line_ok`, `why`, `queue_doubt` and `queue_why`. `line_ok` is the
+  `sample`, `suggest`, `spread`, `verdict`, `confidence`, `line_ok`, `pattern_off`, `pattern_agrees`, `why`, `queue_doubt` and `queue_why`. `line_ok` is the
   judge's verdict (`suggest` is not `null`); `why` says why it is not. `queue_doubt` and `queue_why` are the review queue's doubt:
   a reason to look, not a block (on some kits the queue doubts most kicks). Use chunks of about 100 hits.
-- `audit(track)` (#408): every hit of the track whose shape `verdict` is `late`, as `[{index, id, t, foot_off, rise,
-  quiet_ratio}]`. It reads the shape measures of `look` and never `judge.suggest` or a `plan` row, so a wrong suggestion
-  cannot hide a late hit. One `look` per hit: run it on a track you have not finished, not in a loop.
+- `audit(track)` (#408, #447): every hit of the track whose shape `verdict` is `late`, and every hit whose two opinions
+  differ, as `[{index, id, t, reason, suggest, foot_off, rise, quiet_ratio, pattern_off, why}]`. `reason` is `late` (move
+  it by `suggest` when that is a number) or `opinions differ` (never a move: a hit for the user's list, `why` names both
+  positions). It reads the shape measures of `look` and never a `plan` row, so a wrong suggestion cannot hide a late hit. One `look` per hit: run it on a track you have not finished, not in a loop.
 - `handPlaced(track)` (#418): the hits the user placed by hand, as `[{index, id, t, sample, ops}]` - one row per
   hit that carries a person's move, add or confirm record in the project's training log (`by` `person` or
   absent; an agent's record never counts). The service reads the log - it is far too large to read - and answers

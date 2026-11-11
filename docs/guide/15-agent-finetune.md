@@ -48,6 +48,9 @@ it.
 
 - It moves a hit only when the line before the stroke is clean, and then to the last sample of
   that line, as in chapter 4.
+- It asks for a second opinion before a move: how the clear hits of the same track start. When
+  the two opinions do not agree, it does not move the hit. It lists the hit for you with both
+  positions.
 - It confirms a hit it has looked at and found right (Hits > Confirm Hit), so the Training Mode
   log says "reviewed" for that hit.
 - It never deletes a hit without first looking at a 20 ms view of it.
