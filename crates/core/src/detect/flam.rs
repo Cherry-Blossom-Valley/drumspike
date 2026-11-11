@@ -10,14 +10,15 @@
 //!    and `guard_s` (10 ms) before the next output hit, whose level is `rise_db` (9 dB) or more over the loudest block of
 //!    the `look_s` (3 ms) before it (the hold and 0.25 ms excluded), within `level_db` of P1, and `floor_db` over the
 //!    floor before the hit (the median block 50 to 2 ms before it). One second stroke per hit.
-//! 4. Its onset: the version 3 first-motion walk ([`crate::refine::first_motion_mid`]) from c, bounded by the dip before
-//!    it (the lowest block of the 2 ms before c).
+//! 4. Its onset: the track's current rule ([`crate::refine::refine_rule`], [`RefineRule::CURRENT`]) from c, bounded by
+//!    the dip before it (the lowest block of the 2 ms before c): the walk cannot pass the block after the dip.
 //! 5. The bleed gate: for every other mic B of the session the transfer gain `G(B->A)` in the attack band
 //!    ([`transfer_gains`], the P2-6 calibration). The re-rise is bleed when B's envelope in `[c - 2 ms, c + 1 ms]` plus
 //!    `G` plus `margin_db` (10 dB) reaches the stroke's peak P2. A bleed stroke is not added.
 //!
 //! The parameters are the stage 1 rule `R9_m10` ([`FlamParams::default`]). The Python reference is `tools/flam_pairs.py`
-//! (`attack_env`, `transfer_gains`, `second_onsets`). The measurements are in
+//! (`attack_env`, `transfer_gains`, `second_onsets`); its `second_onsets` places the stroke with the version 3 walk,
+//! this rule with the track's current rule, the dip bound kept. The measurements are in
 //! Phase 4 report, sections "P4-13 stage 1", "P4-13 stage 2, stage A" and "P4-13 stage B".
 //!
 //! # Determinism
@@ -31,7 +32,7 @@
 pub(crate) use crate::dsp::np_percentile;
 use crate::dsp::{Biquad, FilterKind, amp_db_add};
 use crate::pyops::{py_int, py_round};
-use crate::refine::first_motion_mid;
+use crate::refine::{RefineRule, RefineWindow, refine_rule};
 
 /// The version of the rule an analysis records (`detector.flam_rule`); 0 means no rule.
 pub const FLAM_RULE_VERSION: u32 = 1;
@@ -434,15 +435,26 @@ pub fn second_onsets(
         let d = d0 + argmin(&env[d0 as usize..c as usize]) as i64;
         let p2 = max_of(&env[c as usize..(c + peak_b).min(nb) as usize]);
         let sc = c * hop;
-        let (foot, _) = first_motion_mid(x, sc, sr, Some((d + 1) * hop), None);
-        // the walk never passes its bound, the block after the dip (an old clamp to one block before it was dead)
-        debug_assert!(foot >= (d + 1) * hop, "the walk stops at the dip");
+        // Placed like every hit of the track: the current rule, from the re-rise as its coarse time. The dip bounds
+        // it: as the midpoint to a synthetic previous hit, the rule window and the walk cannot pass the block after
+        // the dip (the old bound); the clamp holds it when the 25 % crossing lands on the first stroke's body.
+        let bound = ((d + 1) * hop) as f64 / srf;
+        let t0 = sc as f64 / srf;
+        let placed = refine_rule(
+            x,
+            t0,
+            sr,
+            &[2.0 * bound - t0],
+            RefineWindow::DEFAULT,
+            RefineRule::CURRENT,
+        )
+        .t;
+        let ts = placed.max(bound);
         let bleed = gains.iter().zip(&gate_k).any(|(&(env_b, _), &gk)| {
             let lo_b = (c - b2).max(0);
             let hi_b = (c + b1 + 1).min(env_b.len() as i64);
             hi_b > lo_b && max_of(&env_b[lo_b as usize..hi_b as usize]) * gk >= p2
         });
-        let ts = foot as f64 / srf;
         out.push(Second {
             t: ts,
             first: t,

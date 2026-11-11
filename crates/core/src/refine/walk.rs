@@ -211,9 +211,9 @@ pub(super) fn back_track(
 }
 
 /// [`first_motion`] with the bounds as samples: `prev_mid` bounds the walk and the floor window (the midpoint to the
-/// previous hit), `next_mid` the peak window (the midpoint to the next hit). P4-13 stage B: the flam rule walks from a
-/// second stroke's re-rise with `prev_mid` at the dip after the first stroke (`tools/onset_guard.py` `walk`).
-#[must_use]
+/// previous hit), `next_mid` the peak window (the midpoint to the next hit). Test-only: the golden corpus and the flam
+/// rule's ring comparison walk from a sample with the bounds as samples (`tools/onset_guard.py` `walk`).
+#[cfg(test)]
 pub(crate) fn first_motion_mid(
     x: &[f32],
     s: i64,
@@ -319,7 +319,7 @@ fn is_first_bump(x: &[f32], lead: i64, foot: i64, gap: i64) -> bool {
     far < near * 0.8 && flips * 4 <= pairs * 3
 }
 
-/// The walk of [`first_motion_mid`] with its decision (the floor, the threshold, the foot and the foot after the
+/// The walk from `s` with its decision (the floor, the threshold, the foot and the foot after the
 /// lead-in) for one hit; `None` where the walk does not reach the lead-in (no signal, a busy or separate stretch).
 #[must_use]
 pub fn first_motion_trace(
