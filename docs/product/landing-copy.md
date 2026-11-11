@@ -70,8 +70,9 @@ Step 1 does the whole job. The other steps are there when you need them.
    line and MCP server. Let an AI agent fine-tune a song hit by hit, at sample zoom: one click
    in Settings installs the skill. A hit moves only when two opinions agree, the agent's read
    of the stroke and how the track's clear hits start; when they differ, the agent leaves the
-   hit and lists it for you. The session runs in Training Mode, which writes every move to a
-   log so the placement can learn from your corrections. Guide: agent fine-tune; Guide: part 4.
+   hit and lists it for you. The session runs in Training Mode: every move of the agent is
+   written to a training log that stays on your Mac, and your corrections become the truth
+   that the placement rule is measured against. Guide: agent fine-tune; Guide: part 4.
 
 Below the steps: the editor screenshot (one lane per close mic, every detected hit as a spike
 above the waveform, the Inspector for the selected track) and the videos: Explainer 8, "From
@@ -87,12 +88,12 @@ fine-tune a song"; the tutorial, "An agent fine-tunes a song"; Explainer 16, "Tr
   View the code, Releases, Report an issue, Developer guide. Build block:
   `apps/desktop/scripts/build-dmg.sh`, for Intel add `--arch x86_64`.
 - Points:
-  - Check how it works. The detection, the threshold and the walk back are in the code, with
-    tests. No black box between your tracks and your triggers.
+  - Check how it works. The detection and the placement are in the code, with tests. No black
+    box between your tracks and your triggers.
   - Your audio stays on your Mac. No account, no tracking. The audio and the project never
     leave your Mac; the analysis runs locally. A feedback report holds only what you wrote in
-    the form, plus the app version and the OS, and it goes out only when you send it, after a
-    preview.
+    the form, plus the app version, the OS and the processor type, and it goes out only when
+    you send it, after a preview.
   - Make it better. Report a session that trips it up, propose a fix, or add a kit preset.
     Pull requests are welcome.
 
