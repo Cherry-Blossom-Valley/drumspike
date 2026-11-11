@@ -416,6 +416,7 @@ pub fn parse_rule(v: &str) -> Option<RefineRule> {
         "visible" => Some(RefineRule::Visible),
         "line" => Some(RefineRule::Line),
         "departure" => Some(RefineRule::Departure),
+        "symmetric" => Some(RefineRule::Symmetric),
         s => s.parse::<u64>().ok().and_then(RefineRule::from_version),
     }
 }
