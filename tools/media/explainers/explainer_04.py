@@ -295,5 +295,5 @@ class Explainer04(Explainer):
         spike = VGroup(*[Line([px(s), -1.6, 0], [px(s), -2.0, 0], color=ORANGE, stroke_width=2) for s in placed])
         self.t_play(Create(track), t=3)
         self.t_play(FadeIn(ticks), FadeIn(midi), FadeIn(spike), t=3)
-        self.say("Every hit sits on the last line sample before its first motion.", t=2)
+        self.say("Every hit sits on the last sample of the line before its first motion.", t=2)
         self.t_wait(1)

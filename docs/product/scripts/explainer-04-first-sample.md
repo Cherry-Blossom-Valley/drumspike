@@ -63,7 +63,7 @@ Before the stroke lies the line. Its level is the middle value of the samples ju
 
 ## s05-first-motion
 
-> The same hit with an added ripple before the stroke, labelled "ripple of 8 percent of the peak", drawn once with a positive and once with a negative sign; a marker walks back from the edge over the ripple and stops on the last line sample; the run of 10 dots inside the band is marked and labelled "a run of 10 line samples, 0.2 ms".
+> The same hit with an added ripple before the stroke, labelled "ripple of 8 percent of the peak", drawn once with a positive and once with a negative sign; a marker walks back from the edge over the ripple and stops on the last sample of the line; the run of 10 dots inside the band is marked and labelled "a run of 10 line samples, 0.2 ms".
 
 From the edge, Drum Spike walks back over every sample that stands off the line, of either sign. A small swing before the edge is the drum already moving, so it belongs to the stroke. The walk stops when the signal is back on the line for a short run. The hit goes on the last sample of that run.
 
@@ -81,9 +81,9 @@ Now we flip the polarity of the same stroke. The hit lands on the same sample, b
 
 ## s08-soft-hit
 
-> The same steps on a ghost note from the demo session: a lower peak, its own band; the marker ends on the last line sample before its first motion.
+> The same steps on a ghost note from the demo session: a lower peak, its own band; the marker ends on the last sample of the line before its first motion.
 
-A soft ghost note works the same way, measured against its own peak. The marker sits on the last line sample before its first motion.
+A soft ghost note works the same way, measured against its own peak. The marker sits on the last sample of the line before its first motion.
 
 ## s09-limits
 
