@@ -6,7 +6,6 @@
   "drift_limit_ms": 10,
   "viewport": {"width": 1920, "height": 1080},
   "device_scale_factor": 2,
-  "skip": ["p1-role"],
   "seed": "demo",
   "narration": {"tts_out": "~/.cache/drumspike/media/tts-out/rec-part1"},
   "out": "~/.cache/drumspike/media/rec/part1.mp4",
@@ -50,24 +49,6 @@
       {"do": "hold", "s": 1.5,
        "err": "the p1c run overran the narration by 153 ms; the holds are pinned at the 1.5 s standard minimum"}
     ]},
-    {"id": "p1-role", "area_sel": "#inspector", "steps": [
-      {"do": "click", "sel": ".track[data-name=\"new take\"] .thead .tname"},
-      {"do": "hold", "s": 1.5},
-      {"do": "show_key", "press": "Alt+I", "sel": "#inspector", "timeout": 10, "err": "the Inspector"},
-      {"do": "hold", "s": 1.5},
-      {"do": "click", "sel": ".insSec[data-sec=\"track\"] .insSecHead"},
-      {"do": "wait", "cond": "() => document.querySelector('#insRoleSel') && document.querySelector('#insRoleSel').value === 'kick'", "timeout": 30, "err": "the Inspector shows the role kick of new take"},
-      {"do": "text", "sel": "#insRoleSrc", "equals": "suggested from the audio", "timeout": 15, "err": "the role hint 'suggested from the audio'"},
-      {"do": "hold", "s": 2.0},
-      {"do": "select", "sel": "#insRoleSel", "value": "tom"},
-      {"do": "wait", "cond": "() => S.tracks['new_take'] && S.tracks['new_take'].role === 'tom'", "timeout": 30, "err": "the role changed to tom"},
-      {"do": "wait", "cond": "() => !analysisRunning", "timeout": 120, "err": "the re-analysis of the track finished"},
-      {"do": "hold", "s": 1.5},
-      {"do": "key", "press": "Meta+Z"},
-      {"do": "wait", "cond": "() => S.tracks['new_take'].role === 'kick'", "timeout": 30, "err": "undo brought the role kick back"},
-      {"do": "text", "sel": "#insRoleSrc", "equals": "suggested from the audio", "timeout": 15, "err": "the hint is back with the role"},
-      {"do": "hold", "s": 1.5}
-    ]},
     {"id": "p1-zoom", "area_sel": "#editor", "steps": [
       {"do": "zoom_to", "track": "s_top", "t": 8.5938, "span": 5},
       {"do": "click", "sel": ".track[data-name=\"s_top\"] .thead .tname"},
@@ -81,7 +62,7 @@
       {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms zoom"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-export", "steps": [
+    {"id": "p1-export", "area_sel": "#exportModal", "steps": [
       {"do": "caption", "text": "File > Export…"},
       {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "show_dest", "text": "~/Music/Drum Spike/Exports",
@@ -90,6 +71,7 @@
       {"do": "visible", "sel": "#exportModal", "timeout": 30, "err": "the Export dialog"},
       {"do": "wait", "cond": "() => document.querySelector('#exModeTrack').checked && document.querySelector('#exMidi').checked && document.querySelector('#exSpikes').checked && document.querySelector('#exSpikeSynth').checked", "timeout": 15, "err": "the defaults: per track, MIDI and spike WAV, Synthetic"},
       {"do": "hold", "s": 1.5},
+      {"do": "shot", "err": "before: the Export dialog with the defaults"},
       {"do": "click", "sel": "#exGo"},
       {"do": "wait", "cond": "() => !document.querySelector('#confirmModal').classList.contains('hidden') || (!EX.busy && document.querySelector('#exResult') && !document.querySelector('#exResult').classList.contains('hidden'))", "timeout": 30,
        "err": "the No tempo set notice shows, or the export finished without one (the notice arrives a few IPC round-trips after the click: wait for it to SHOW, never for not-visible-yet)"},
@@ -101,6 +83,7 @@
       {"do": "show_dest", "text": "~/Music/Drum Spike/Exports", "err": "the destination again (every exRender of the app re-asserts it; this re-patches if the hook missed)"},
       {"do": "visible", "sel": "#exResult", "timeout": 15, "err": "the summary lists the files"},
       {"do": "hold", "s": 1.5},
+      {"do": "shot", "err": "after: the summary lists the files"},
       {"do": "click", "sel": "#exCancel"},
       {"do": "wait", "cond": "() => document.querySelector('#exportModal').classList.contains('hidden')", "timeout": 15, "err": "the dialog closed"},
       {"do": "hold", "s": 1.5}
@@ -118,9 +101,8 @@
       {"do": "wait", "cond": "() => document.querySelector('#stSel').textContent === 'no selection'", "timeout": 15, "err": "the selection cleared (the edit is in the status bar; edDelete writes no #stMsg message, the 0.00 % p123b pair was the stale export summary twice)"},
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Alt+Meta+E"},
-      {"do": "wait", "cond": "() => !EX.busy && EX.done > 0", "timeout": 120,
-       "err": "the second export finished (EX.done > d0 races a fast export; the summary wait below asserts it)"},
-      {"do": "wait", "cond": "() => document.querySelector('#stMsg').textContent.startsWith('exported')", "timeout": 15, "err": "the summary shows the files again"},
+      {"do": "wait", "cond": "n => !EX.busy && EX.done > n", "arg": "EX.done", "timeout": 120,
+       "err": "the second export finished (the baseline is read when the wait starts: EX.done is already > 0 from the first export, so a plain EX.done > 0 passes before the export again runs; the p1-new show_text keeps the status line on the neutral created-Slate text, so the app's summary can never show there)"},
       {"do": "hold", "s": 1.5},
       {"do": "shot"}
     ]},

@@ -99,8 +99,7 @@
       {"do": "shot"},
       {"do": "key", "press": "Delete"},
       {"do": "hold", "s": 1.5},
-      {"do": "shot"},
-      {"do": "hold", "s": 1.5}
+      {"do": "shot"}
     ]},
     {"id": "p2-nudge", "steps": [
       {"do": "caption", "text": "Edit > Nudge Value > 1 Sample"},

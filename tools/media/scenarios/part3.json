@@ -34,6 +34,10 @@
        "err": "the sub mic is back on its own detection (setTrackFollow writes .follows; the backend keeps the stale followed copies until the re-analyze - track_set_follow returns n_events without derive_one)"},
       {"do": "hold", "s": 1.5},
       {"do": "click", "sel": "#analyzeAllBtn", "timeout": 15, "err": "the re-analyze the app's own message asks for"},
+      {"do": "hold", "s": 1.5,
+       "err": "the Re-analyze question is new on screen: the pointer and the question hold before the answer (the standard: the action, the pointer, the result)"},
+      {"do": "click", "sel": "#confirmActions button[data-act='go']", "timeout": 15,
+       "err": "the Re-analyze confirm: the re-analyze overwrites the events of tracks with hits, so the app asks before it writes"},
       {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the re-analyze started"},
       {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the sub mic detected its own hits"},
       {"do": "hold", "s": 1.5},
@@ -78,7 +82,7 @@
       {"do": "hold", "s": 1.5},
       {"do": "menu", "id": "set_bar1", "timeout": 15, "err": "Track > Set Bar 1 at Playhead"},
       {"do": "wait", "cond": "() => TM.map && Math.abs((TM.map.bar1_s || 0) - S.playhead) < 0.001", "timeout": 15, "err": "bar 1 at the playhead"},
-      {"do": "hold", "s": 2.0}
+      {"do": "hold", "s": 1.5, "err": "the result at the standard hold (the 2.0 hold overran the 6.2 s narration by 147 ms, run4: the scene has only 0.03 s of wait to compress)"}
     ]},
     {"id": "p3-import", "area_sel": "#mapRulers", "steps": [
       {"do": "caption", "text": "File > Import Tempo Map…"},

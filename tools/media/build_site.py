@@ -7,7 +7,13 @@ The page (site/index.html) uses relative links only, so the folder works at any 
 public copy lives at https://drumspike.cherry-blossom-valley.com/ (the Cherry Blossom Valley
 website serves the folder under /tools/drum-spike/, and that subdomain shows it). The videos never go into git: --videos names the folder with
 the rendered explainers (default ~/.cache/drumspike/media/explainers, the output of
-tools/media/explainers/). Every local link and asset of the page must exist in the output;
+tools/media/explainers/). The recorded agent tutorial renders to
+~/.cache/drumspike/media/rec/part-agent.mp4 and reaches the site under its site name
+videos/tutorial-agent.mp4: copy the render into the --videos folder under that name before
+the build (cp ~/.cache/drumspike/media/rec/part-agent.mp4 <videos>/tutorial-agent.mp4) —
+the build copies every videos/ reference of the page from that folder by file name, and the
+site's poster assets/posters/tutorial-agent.jpg expects the video beside the explainers.
+Every local link and asset of the page must exist in the output;
 a missing file is a FAIL (exit 1), unless --no-videos leaves the videos out on purpose.
 Prints the file count and the total size.
 """
