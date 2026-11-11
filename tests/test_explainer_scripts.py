@@ -629,3 +629,203 @@ def test_builder_carries_explainer_9():
     source = (EXPLAINERS / "explainer_09.py").read_text(encoding="utf-8")
     ids = re.search(r"script_ids = \(([^)]*)\)", source).group(1)
     assert tuple(re.findall(r'"(s\d\d-[\w-]+)"', ids)) == SCENES_9
+
+
+# ---- #486: the facts of Explainer 13 (tempo, bars and beats) against the tempo code and the page ----
+
+TEMPO_DETECT_RS = ROOT / "crates" / "core" / "src" / "tempo_detect.rs"
+TEMPOMAP_JS = ROOT / "static" / "tempomap.js"
+INDEX_HTML = ROOT / "static" / "index.html"
+EXPLAINER_13 = "explainer-13-tempo.md"
+MAX_WORDS_13, MAX_NUMBERS_13 = 300, 12
+SCENES_13 = ("s01-problem", "s02-detect", "s03-bar1", "s04-steps", "s05-grid", "s06-result")
+
+
+def tempo_constants():
+    """The numeric consts of the tempo detection (`const NAME: type = value;`): name -> value."""
+    return {name: float(value.replace("_", ""))
+            for name, value in re.findall(r"const (\w+): [\w<>]+ = ([0-9_.]+);", TEMPO_DETECT_RS.read_text(encoding="utf-8"))}
+
+
+def keymap_commands():
+    """The commands of the keymap: id -> (menu path, title)."""
+    text = KEYMAP_JS.read_text(encoding="utf-8")
+    return {m.group(1): (m.group(2), m.group(3))
+            for m in re.finditer(r'\{"id": "(\w+)".*?"path": "([^"]+)".*?"title": "([^"]+)"', text)}
+
+
+def dialog_limits(js):
+    """What the page decides: (the half tempo must be above, the grid's 8th line above px, its 16th above px,
+    the most other tempos the dialog lists)."""
+    half = re.search(r"half > (\d+)", js)
+    grid = re.search(r"x1 - x0 > (\d+) \? 4 : x1 - x0 > (\d+) \? 2", js)
+    alts = re.search(r"\.slice\(0, (\d+)\)\.map\(a => whole", js)
+    return int(half.group(1)), int(grid.group(2)), int(grid.group(1)), int(alts.group(1))
+
+
+def check_header_titles(text, commands):
+    """The hits for a command of the header (`command_id`) whose menu path and title the header writes differently."""
+    head = squeeze(header_of(text))
+    hits = []
+    for cid in sorted(set(re.findall(r"`([a-z]+(?:_[a-z0-9]+)+|grid)`", head))):
+        if cid in commands and f"{commands[cid][0]} > {commands[cid][1]}" not in head:
+            hits.append(f"the header names {cid} but not as {commands[cid][0]} > {commands[cid][1]}")
+    return hits
+
+
+def check_header_page_phrases(text, sources):
+    """The hits for a quoted phrase of two words or more (digits allowed) that no source writes: the dialog's lines."""
+    haystack = squeeze(" ".join(sources))
+    return [f"the header says `{p}`, which the page does not write"
+            for p in re.findall(r"`([^`]+)`", squeeze(header_of(text)))
+            if " " in p and not re.search(r"[/(=]", p) and p not in haystack]
+
+
+def check_header_limits(text, js):
+    """The hits for the dialog's and the grid's limits of the header (40 BPM, 24 and 48 px, 3 tempos) that the page differs in."""
+    half, eighth, sixteenth, alts = dialog_limits(js)
+    head = squeeze(header_of(text))
+    wanted = {
+        "the Half time limit": f"is above {half} BPM",
+        "the 8th line width": f"wider than {eighth} px also gets its 8th line",
+        "the 16th line width": f"above {sixteenth} px its 16th lines",
+        "the number of other tempos": f"lists up to {alts} other whole BPM",
+    }
+    return [f"{what}: the page has {want!r}, the header does not say so" for what, want in wanted.items() if want not in head]
+
+
+def check_header_functions(text, sources):
+    """The hits for a function of the page that the header names (`tmDetectDialog`, `drawGridLines`) and no source has."""
+    haystack = " ".join(sources)
+    names = set(re.findall(r"`(tm[A-Z]\w+|drawGridLines)`", header_of(text)))
+    return [f"the header names {n}, which no source has" for n in sorted(names) if n not in haystack]
+
+
+def check_builder_limits(builder_source, js):
+    """The hits for a limit of the builder (the Half time limit, the most other tempos) that the page differs in."""
+    half, _, _, alts = dialog_limits(js)
+    hits = []
+    got = re.search(r"HALF_MIN_BPM = ([0-9.]+)", builder_source)
+    if not got or float(got.group(1)) != half:
+        hits.append(f"the builder's HALF_MIN_BPM is {got and got.group(1)}, the page has {half}")
+    got = re.search(r"MAX_ALTERNATIVES = (\d+)", builder_source)
+    if not got or int(got.group(1)) != alts:
+        hits.append(f"the builder's MAX_ALTERNATIVES is {got and got.group(1)}, the page has {alts}")
+    return hits
+
+
+def check_script_13(text, constants, keys, commands, js, sources, builder_source):
+    """Every hit of the facts gate of Explainer 13: constants, keys, command titles, the page's limits and
+    lines, the scenes, the numbers."""
+    hits = check_header_constants(text, constants)
+    hits += check_header_keys(text, keys)
+    hits += check_header_titles(text, commands)
+    hits += check_header_limits(text, js)
+    hits += check_header_page_phrases(text, sources)
+    hits += check_header_identifiers(text, sources)
+    hits += check_header_functions(text, sources)
+    hits += check_builder_limits(builder_source, js)
+    scenes = scenes_of(text)
+    if [sid for sid, _, _ in scenes] != list(SCENES_13):
+        hits.append(f"the scenes are {[sid for sid, _, _ in scenes]}, not {list(SCENES_13)}")
+    for sid, notes, spoken in scenes:
+        if not notes or not spoken:
+            hits.append(f"scene {sid} has no visual note or no spoken text")
+        if ":" in spoken:
+            hits.append(f"scene {sid} speaks a colon: the speech engine reads a 'Phrase: sentence' wrongly")
+    hits += check_numbers_in_header(text)
+    hits += check_labels_in_header(text, builder_source)
+    words = len(" ".join(s for _, _, s in scenes).split())
+    if words > MAX_WORDS_13:
+        hits.append(f"the narration has {words} words, {MAX_WORDS_13} at most")
+    numbers = re.findall(r"\d+(?:\.\d+)?", " ".join(s for _, _, s in scenes))
+    if len(numbers) > MAX_NUMBERS_13:
+        hits.append(f"the narration speaks {len(numbers)} numbers, {MAX_NUMBERS_13} at most")
+    return hits
+
+
+def explainer_13_inputs():
+    js = TEMPOMAP_JS.read_text(encoding="utf-8")
+    core = ROOT / "crates" / "core" / "src"
+    sources = [js, INDEX_HTML.read_text(encoding="utf-8"), KEYMAP_JS.read_text(encoding="utf-8"),
+               TEMPO_DETECT_RS.read_text(encoding="utf-8"), (core / "tempo.rs").read_text(encoding="utf-8"),
+               (ROOT / "crates" / "app" / "src" / "tempo.rs").read_text(encoding="utf-8"),
+               (ROOT / "crates" / "app" / "src" / "api.rs").read_text(encoding="utf-8")]
+    builder = (EXPLAINERS / "explainer_13.py").read_text(encoding="utf-8")
+    return script_text(EXPLAINER_13), tempo_constants(), page_keys(), keymap_commands(), js, sources, builder
+
+
+def test_explainer_13_facts_match_the_code():
+    assert check_script_13(*explainer_13_inputs()) == []
+
+
+def test_explainer_13_header_reads_enough_from_the_code():
+    """The gate must see the facts: constants, a key, command titles, the page's limits and lines."""
+    text, constants, keys, commands, js, sources, _ = explainer_13_inputs()
+    assert {"MIN_HITS", "DEFAULT_MIN_BARS", "DEFAULT_MIN_STEP_PCT"} <= set(re.findall(r"`([A-Z][A-Z0-9_]+)` = ", header_of(text)))
+    assert constants["MIN_HITS"] == 8 and constants["DEFAULT_MIN_BARS"] == 4 and constants["DEFAULT_MIN_STEP_PCT"] == 2
+    assert keys["grid"] == ["G"]
+    assert dialog_limits(js) == (40, 24, 48, 3)
+    named = re.findall(r"`([a-z]+(?:_[a-z0-9]+)+|grid)`", squeeze(header_of(text)))
+    assert len([c for c in named if c in commands]) >= 6
+    assert commands["set_bar1_audio"] == ("Track", "Set Bar 1 at Audio Start")
+    assert len([p for p in re.findall(r"`([^`]+)`", squeeze(header_of(text))) if " " in p and not re.search(r"[/(=]", p)]) >= 2
+
+
+def test_planted_differences_of_explainer_13_are_reported():
+    """A test of the test: one planted fact that differs from its source turns the gate red, each kind alone."""
+    text, constants, keys, commands, js, sources, builder = explainer_13_inputs()
+    plants = {
+        "step length": text.replace("`DEFAULT_MIN_BARS` = 4", "`DEFAULT_MIN_BARS` = 8"),
+        "step size": text.replace("`DEFAULT_MIN_STEP_PCT` = 2", "`DEFAULT_MIN_STEP_PCT` = 5"),
+        "minimum hits": text.replace("`MIN_HITS` = 8", "`MIN_HITS` = 4"),
+        "half time limit": text.replace("is above 40 BPM", "is above 50 BPM"),
+        "8th line width": text.replace("wider than 24 px", "wider than 30 px"),
+        "16th line width": text.replace("above 48 px", "above 60 px"),
+        "other tempos": text.replace("lists up to 3 other", "lists up to 5 other"),
+        "grid key": text.replace("`G` (`grid`)", "`H` (`grid`)"),
+        "command title": text.replace("Track > Detect Tempo…", "Track > Find Tempo…"),
+        "dialog line": text.replace("`The beat could also be:`", "`The beat may also be:`"),
+        "own tempo button": text.replace("`Use own tempo`", "`Type a tempo`"),
+        "low confidence line": text.replace("`The bar 1 confidence is low`", "`The bar 1 guess is weak`"),
+        "function": text.replace("`tmDetectDialog`", "`tmDetectTempoDialog`"),
+    }
+    for what, planted in plants.items():
+        assert planted != text, f"the plant {what} changed nothing"
+        assert check_script_13(planted, constants, keys, commands, js, sources, builder), f"the gate missed the planted {what}"
+
+
+def test_planted_page_changes_are_reported_for_explainer_13():
+    """The other direction: the page's limit moves, the unchanged script is red."""
+    text, constants, keys, commands, js, sources, builder = explainer_13_inputs()
+    moved = js.replace("half > 40", "half > 30")
+    assert any("Half time" in h for h in check_script_13(text, constants, keys, commands, moved, sources, builder))
+    wider = js.replace("x1 - x0 > 24 ? 2", "x1 - x0 > 28 ? 2")
+    assert any("8th" in h for h in check_script_13(text, constants, keys, commands, wider, sources, builder))
+    drift = builder.replace("HALF_MIN_BPM = 40.0", "HALF_MIN_BPM = 45.0")
+    assert any("HALF_MIN_BPM" in h for h in check_script_13(text, constants, keys, commands, js, sources, drift))
+
+
+def test_planted_narration_defects_of_explainer_13_are_reported():
+    text, constants, keys, commands, js, sources, builder = explainer_13_inputs()
+    args = (constants, keys, commands, js, sources, builder)
+    long = text.replace("Your drums are recorded", "Your drums are recorded. " + "More words. " * 120)
+    assert any("words" in h for h in check_script_13(long, *args))
+    colon = text.replace("Choose Detect Tempo.", "Tempo: choose Detect Tempo.")
+    assert any("colon" in h for h in check_script_13(colon, *args))
+    many = " ".join(str(n) for n in range(30, 45))
+    numbers = text.replace("Press G and", f"Press G, {many} and")
+    assert any("number" in h for h in check_script_13(numbers, *args))
+    screen = builder + '\nText("a tempo of 131 BPM")\n'
+    assert any("131" in h for h in check_script_13(text, constants, keys, commands, js, sources, screen))
+    shorter = text.replace("## s06-result", "## s07-result")
+    assert any("scenes are" in h for h in check_script_13(shorter, *args))
+
+
+def test_builder_carries_explainer_13():
+    """build.py renders the id 13 from the module and the scene class, and the scene ids of the class are the script's."""
+    build = (EXPLAINERS / "build.py").read_text(encoding="utf-8")
+    assert re.search(r'"13":\s*\("explainer-13-tempo",\s*"explainer_13\.py",\s*"Explainer13"\)', build)
+    source = (EXPLAINERS / "explainer_13.py").read_text(encoding="utf-8")
+    ids = re.search(r"script_ids = \(([^)]*)\)", source).group(1)
+    assert tuple(re.findall(r'"(s\d\d-[\w-]+)"', ids)) == SCENES_13

@@ -124,6 +124,7 @@ Rules for every asset:
 - Track > Detect Tempo… suggests a tempo map from the kick and snare hits; Set Bar 1 at Playhead;
   File > Import Tempo Map…; View > Show Bar and Beat Grid (G), the Tempo, Meter and Bars|Beats
   rulers, Metronome Click.
+- Asset: 3b1b explainer "Tempo, bars and beats".
 - Builds on: 3, 6.
 
 ## Part 4: for power users
@@ -154,7 +155,7 @@ Rules for every asset:
 | 9 | yes | yes | Doubtful hits first |
 | 10 | yes | yes | Is it a hit or is it bleed? |
 | 11 | yes | yes | - |
-| 12-13 | yes | yes (one recording) | - |
+| 12-13 | yes | yes (one recording) | Tempo, bars and beats (13) |
 | 14 | yes | - | - |
 | 15 | yes | yes (the agent tutorial) | Let an agent fine-tune a song |
 | 16 | yes | - | Training Mode |
