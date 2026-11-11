@@ -6,6 +6,7 @@ import pytest
 from playwright.sync_api import expect
 
 from app_support import menu, settings_cat
+from test_plugins import install_plugin
 
 CATS = ["audio", "keyboard", "view", "audition", "pitches", "plugins", "agent"]
 # every pre-existing #set* control id and the category that holds it (the ids the tests, the
@@ -117,4 +118,39 @@ def test_the_rows_stay_label_left_control_right_at_both_viewports(app, vw, vh):
         const l = r.querySelector('label').getBoundingClientRect();
         const c = r.querySelector('.pctl').getBoundingClientRect(); return [l.right, c.left]; }""")
     assert row[1] >= row[0], row
+    app.keyboard.press("Escape")
+
+
+# The name of one plug-in row and its geometry: the name text of the label (its first non-blank
+# text node), the count of the line boxes it spans (a Range over the text yields one rect per
+# line box), the Licence button's width and the right edges of the row and the button.
+ROW_GEOMETRY = """() => {
+  const row = document.querySelector('#setPlugins .prow');
+  if (!row) return null;
+  const nameNode = [...row.querySelector('label').childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
+  const rng = document.createRange();
+  rng.selectNodeContents(nameNode);
+  const rowBox = row.getBoundingClientRect();
+  const btnBox = row.querySelector('button').getBoundingClientRect();
+  return { name: nameNode.textContent.trim(), nameLines: rng.getClientRects().length,
+           btnW: btnBox.width, rowRight: rowBox.right, btnRight: btnBox.right };
+}"""
+
+
+@pytest.mark.parametrize("vw,vh", [(1280, 800), (1920, 1080)])
+def test_a_plugin_row_reads_as_one_row_at_both_viewports(app, vw, vh):
+    """#479: with the example plug-in installed, a Detector plug-ins row is one row at the small
+    and the large viewport: the name on one line box, the Licence button at its own width (not
+    stretched over the row) and flush with the row's right edge."""
+    install_plugin(app.home, {"kick": [0.5]})
+    app.set_viewport_size({"width": vw, "height": vh})
+    menu(app, "settings")
+    settings_cat(app, "plugins")
+    row = app.locator("#setPlugins .prow")
+    row.wait_for(state="visible", timeout=15000)
+    m = app.evaluate(ROW_GEOMETRY)
+    assert m is not None, "no plug-in row in #setPlugins"
+    assert m["nameLines"] == 1, m
+    assert m["btnW"] <= 160, m
+    assert abs(m["rowRight"] - m["btnRight"]) < 0.5, m
     app.keyboard.press("Escape")
