@@ -10,15 +10,22 @@
 //!    and `guard_s` (10 ms) before the next output hit, whose level is `rise_db` (9 dB) or more over the loudest block of
 //!    the `look_s` (3 ms) before it (the hold and 0.25 ms excluded), within `level_db` of P1, and `floor_db` over the
 //!    floor before the hit (the median block 50 to 2 ms before it). One second stroke per hit.
-//! 4. Its onset: the track's current rule ([`crate::refine::refine_rule`], [`RefineRule::CURRENT`]) from c, bounded by
-//!    the dip before it (the lowest block of the 2 ms before c): the walk cannot pass the block after the dip.
+//! 4. Its onset: version 1 places it with the version 3 first-motion walk ([`crate::refine::first_motion_mid`]) from
+//!    c, bounded by the dip before it (the lowest block of the 2 ms before c). Version 2 (#445) places it with the
+//!    rule of the track's analysis ([`crate::refine::refine_rule`], the `rule` argument: the analysis's rule, or on a
+//!    re-pick the recorded one), from c as its coarse time, bounded on both sides: the dip side by the synthetic
+//!    previous hit, and the answer must lie between the block after the dip and the end of the re-rise block (one hop
+//!    after `c * hop`; the hold of the envelope reaches back from c, so the first sample lies up to the hold before
+//!    `c * hop`, never past the end of block c) — a later answer is a later swing of the ringing drum, not the
+//!    stroke; outside the span the version 1 walk from c places the stroke and the outcome counts the case
+//!    (`fallback`).
 //! 5. The bleed gate: for every other mic B of the session the transfer gain `G(B->A)` in the attack band
 //!    ([`transfer_gains`], the P2-6 calibration). The re-rise is bleed when B's envelope in `[c - 2 ms, c + 1 ms]` plus
 //!    `G` plus `margin_db` (10 dB) reaches the stroke's peak P2. A bleed stroke is not added.
 //!
 //! The parameters are the stage 1 rule `R9_m10` ([`FlamParams::default`]). The Python reference is `tools/flam_pairs.py`
 //! (`attack_env`, `transfer_gains`, `second_onsets`); its `second_onsets` places the stroke with the version 3 walk,
-//! this rule with the track's current rule, the dip bound kept. The measurements are in
+//! version 1 here; version 2 places it with the rule of the track. The measurements are in
 //! Phase 4 report, sections "P4-13 stage 1", "P4-13 stage 2, stage A" and "P4-13 stage B".
 //!
 //! # Determinism
@@ -32,10 +39,12 @@
 pub(crate) use crate::dsp::np_percentile;
 use crate::dsp::{Biquad, FilterKind, amp_db_add};
 use crate::pyops::{py_int, py_round};
-use crate::refine::{RefineRule, RefineWindow, refine_rule};
+use crate::refine::{RefineRule, RefineWindow, first_motion_mid, refine_rule};
 
-/// The version of the rule an analysis records (`detector.flam_rule`); 0 means no rule.
-pub const FLAM_RULE_VERSION: u32 = 1;
+/// The version of the rule an analysis records (`detector.flam_rule`); 0 means no rule. Version 1 (P4-13 stage B)
+/// places the second stroke with the version 3 walk; version 2 (#445) places it with the rule of the track's
+/// analysis, bounded on both sides of the re-rise.
+pub const FLAM_RULE_VERSION: u32 = 2;
 
 /// The block length of the attack envelope (seconds); every block count of the rule is a time over this.
 pub(crate) const HOP_S: f64 = 0.000_125;
@@ -120,6 +129,12 @@ pub struct Second {
     pub bleed: bool,
     /// The block of the dip before the stroke's rise (the walk's bound is the block after it).
     pub dip: i64,
+    /// The re-rise block `c`: the first block over the threshold. The version 2 span ends one hop
+    /// after `c * hop`.
+    pub rise_block: i64,
+    /// Version 2 only: the rule's answer was outside the span (after the end of the re-rise
+    /// block), so the version 1 walk from c placed the stroke. The outcome counts these.
+    pub fallback: bool,
 }
 
 /// A time in blocks: `int(round(s / HOP_S))`.
@@ -364,7 +379,9 @@ pub fn transfer_gains(env_a: &[f64], sources: &[&[f64]], own: &[f64], sr: u32, h
 
 /// The second strokes inside the lobes of the output hits `hits` (s) of the own mic `x` (`tools/flam_pairs.py`
 /// `second_onsets`). `env`: the own [`attack_env`]; `gains`: the sources' envelopes with their gains (sources without
-/// a gain left out). One [`Second`] per re-rise, the bleed ones included.
+/// a gain left out). `version`: the rule version that runs (1: the version 3 walk, as main placed; 2 and later: the
+/// `rule` of the track's analysis, bounded on both sides of the re-rise). One [`Second`] per re-rise, the bleed ones
+/// included.
 pub fn second_onsets(
     x: &[f32],
     sr: u32,
@@ -372,6 +389,8 @@ pub fn second_onsets(
     p: &FlamParams,
     env: &[f64],
     gains: &[(&[f64], f64)],
+    version: u32,
+    rule: RefineRule,
 ) -> Vec<Second> {
     let hop = hop_of(sr) as i64;
     let srf = f64::from(sr);
@@ -435,21 +454,31 @@ pub fn second_onsets(
         let d = d0 + argmin(&env[d0 as usize..c as usize]) as i64;
         let p2 = max_of(&env[c as usize..(c + peak_b).min(nb) as usize]);
         let sc = c * hop;
-        // Placed like every hit of the track: the current rule, from the re-rise as its coarse time. The dip bounds
-        // it: as the midpoint to a synthetic previous hit, the rule window and the walk cannot pass the block after
-        // the dip (the old bound); the clamp holds it when the 25 % crossing lands on the first stroke's body.
-        let bound = ((d + 1) * hop) as f64 / srf;
-        let t0 = sc as f64 / srf;
-        let placed = refine_rule(
-            x,
-            t0,
-            sr,
-            &[2.0 * bound - t0],
-            RefineWindow::DEFAULT,
-            RefineRule::CURRENT,
-        )
-        .t;
-        let ts = placed.max(bound);
+        // Version 1 places as main did: the version 3 walk from c, the dip as its bound (the walk
+        // never passes the block after the dip; an old clamp to one block before it was dead).
+        // Version 2 places with the rule of the track, from the re-rise as its coarse time, and
+        // bounds the answer on both sides: the dip side by the synthetic previous hit, and the
+        // span from the block after the dip to the end of the re-rise block (one hop after
+        // `c * hop`) — the stroke's first sample lies between the block after the dip and the end
+        // of block c, so a later answer is a later swing of the ringing drum, not the stroke.
+        // Outside the span, the version 1 walk from c places the stroke (`fallback`, counted in
+        // the outcome).
+        let (ts, fallback) = if version <= 1 {
+            let (foot, _) = first_motion_mid(x, sc, sr, Some((d + 1) * hop), None);
+            debug_assert!(foot >= (d + 1) * hop, "the walk stops at the dip");
+            (foot as f64 / srf, false)
+        } else {
+            let lo = ((d + 1) * hop) as f64 / srf;
+            let hi = ((c + 1) * hop) as f64 / srf;
+            let t0 = sc as f64 / srf;
+            let placed = refine_rule(x, t0, sr, &[2.0 * lo - t0], RefineWindow::DEFAULT, rule).t;
+            if placed >= lo && placed <= hi {
+                (placed, false)
+            } else {
+                let (foot, _) = first_motion_mid(x, sc, sr, Some((d + 1) * hop), None);
+                (foot as f64 / srf, true)
+            }
+        };
         let bleed = gains.iter().zip(&gate_k).any(|(&(env_b, _), &gk)| {
             let lo_b = (c - b2).max(0);
             let hi_b = (c + b1 + 1).min(env_b.len() as i64);
@@ -463,6 +492,8 @@ pub fn second_onsets(
             level_db: 20.0 * (p2 / p1).log10(),
             bleed,
             dip: d,
+            rise_block: c,
+            fallback,
         });
     }
     out
@@ -470,13 +501,15 @@ pub fn second_onsets(
 
 /// The rule on one mic: [`attack_env`] of `x` and of every source (a source of another length is compared over the
 /// common length), [`transfer_gains`], [`second_onsets`]. Returns the strokes (bleed ones included) and per source
-/// its gain.
+/// its gain. `version` and `rule` are the placement's (see [`second_onsets`]).
 pub fn flam_split(
     x: &[f32],
     sr: u32,
     hits: &[f64],
     sources: &[&[f32]],
     p: &FlamParams,
+    version: u32,
+    rule: RefineRule,
 ) -> (Vec<Second>, Vec<Option<f64>>) {
     let (env, hop) = attack_env(x, sr, p);
     let envs: Vec<Vec<f64>> = sources.iter().map(|s| attack_env(s, sr, p).0).collect();
@@ -487,7 +520,7 @@ pub fn flam_split(
         .zip(&gains)
         .filter_map(|(e, g)| g.map(|g| (&e[..e.len().min(env.len())], g)))
         .collect();
-    (second_onsets(x, sr, hits, p, &env, &used), gains)
+    (second_onsets(x, sr, hits, p, &env, &used, version, rule), gains)
 }
 
 /// The times of the strokes the rule adds: those the bleed gate leaves.

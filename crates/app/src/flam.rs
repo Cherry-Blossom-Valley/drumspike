@@ -22,8 +22,10 @@
 //! `on: false` and the reason [`LATE_REASON`]. `sources` names only the mics with a gain.
 //!
 //! The version goes into the track's `detector` record (`flam_rule`) with the outcome (`flam`: `{on, reason, added,
-//! gated, sources}`). A project analysed before P4-13 stage B has no `flam_rule` (version 0, no rule): its hits stay
-//! until Re-analyze, and a re-pick runs the version its analysis recorded. `DRUMSPIKE_FLAM_RULE` pins the version
+//! fallback, gated, sources}`). A project analysed before P4-13 stage B has no `flam_rule` (version 0, no rule): its hits stay
+//! until Re-analyze, and a re-pick runs the version its analysis recorded. #445: the second stroke is placed by the
+//! track's refine rule (the analysis's rule, or on a re-pick the recorded one); `fallback` counts the strokes the
+//! re-rise span placed with the version 1 walk. `DRUMSPIKE_FLAM_RULE` pins the version
 //! (`0`: no rule). The track param `flam_split` (`false`: the Inspector's "Split flams" off) turns the rule off for one
 //! track; it applies on the next re-analyze or re-pick.
 
@@ -34,6 +36,7 @@ use drumspike_core::detect::flam::{
     transfer_gains,
 };
 use drumspike_core::project::Event;
+use drumspike_core::refine::RefineRule;
 use drumspike_core::velocity::{peak_db, velocity_of_db};
 use serde_json::{Map, Value, json};
 
@@ -42,6 +45,16 @@ use crate::policy::{Mark, is_marked, mark};
 use crate::registry::{Shared, lock};
 use crate::roles::is_sample_name;
 use crate::{Service, ServiceConfig};
+
+/// One target of [`run_step`]: the flam version the track runs and the refine rule its
+/// placement follows (the job: the analysis's rule; a re-pick: the recorded one, #445).
+#[derive(Clone, Copy)]
+pub(crate) struct FlamTarget {
+    /// The flam rule version (`detector.flam_rule`).
+    pub(crate) flam: u32,
+    /// The refine rule the second stroke is placed with.
+    pub(crate) rule: RefineRule,
+}
 
 /// The version a new analysis runs (`detector.flam_rule`).
 pub const FLAM_RULE: u32 = FLAM_RULE_VERSION;
@@ -166,16 +179,18 @@ struct Mic {
 struct Target {
     mic: Mic,
     version: u32,
+    rule: RefineRule,
     on: bool,
     events: Vec<Event>,
     params: Option<Map<String, Value>>,
 }
 
-/// Run the rule after an analysis: `targets` are the analysed tracks with the version each gets (the job: the
-/// analysis version; a re-pick: the recorded one). Adds the second strokes to the targets that are snare close mics,
-/// records the version and the outcome in their `detector`, refreshes their followers. Returns `{rule, tracks: {name:
-/// added}, sources}`, or `None` when no target is a snare close mic or every target has version 0.
-pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) -> Option<Value> {
+/// Run the rule after an analysis: `targets` are the analysed tracks with the flam version and the refine rule each
+/// gets (the job: the analysis version and the analysis's rule; a re-pick: the recorded ones). Adds the second strokes
+/// to the targets that are snare close mics, records the version and the outcome in their `detector`, refreshes their
+/// followers. Returns `{rule, tracks: {name: added}, sources}`, or `None` when no target is a snare close mic or
+/// every target has version 0.
+pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, FlamTarget)]) -> Option<Value> {
     let (tgt, srcs) = {
         let g = lock(op);
         let mut tgt = Vec::new();
@@ -192,12 +207,13 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
                 path,
                 mix: tr.mix_mode_or_default().to_string(),
             };
-            let version = targets.iter().find(|(n, _)| *n == name).map(|&(_, v)| v);
+            let ft_of = targets.iter().find(|(n, _)| *n == name).map(|(_, ft)| ft);
             if is_snare_close_mic(&name, role) {
-                if let (Some(version), None, Some(events)) = (version, &tr.follows, &tr.events) {
+                if let (Some(ft), None, Some(events)) = (ft_of, &tr.follows, &tr.events) {
                     tgt.push(Target {
                         mic,
-                        version,
+                        version: ft.flam,
+                        rule: ft.rule,
                         on: switched_on(tr.params.as_ref()),
                         events: events.clone(),
                         params: tr.params.clone(),
@@ -288,9 +304,12 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
                                    "late_share": share, "added": 0, "gated": 0}),
                         )
                     } else {
-                        let found = second_onsets(&d.samples, d.sr, &hits, &p, &env, &used);
+                        let found = second_onsets(&d.samples, d.sr, &hits, &p, &env, &used, t.version, t.rule);
                         let (events, n) = with_flams(&t.events, &found, &d.samples, d.sr, t.params.as_ref(), p.guard_s);
                         let gated = found.iter().filter(|s| s.bleed).count();
+                        // #445: the strokes the span bound placed with the version 1 walk (the
+                        // rule's answer was outside the re-rise block)
+                        let fallback = found.iter().filter(|s| s.fallback).count();
                         for nm in &names {
                             if !used_all.contains(nm) {
                                 used_all.push(nm.clone());
@@ -299,7 +318,7 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, u32)]) ->
                         (
                             Some(events),
                             json!({"on": true, "reason": Value::Null, "late_peak_db": late, "late_share": share,
-                                   "added": n,
+                                   "added": n, "fallback": fallback,
                                    "gated": gated, "sources": names}),
                         )
                     }
@@ -354,7 +373,8 @@ mod tests {
     fn versions_of_an_analysis_and_of_a_repick() {
         assert_eq!(parse_flam_rule(" 1 "), Some(1));
         assert_eq!(parse_flam_rule("0"), Some(0));
-        assert_eq!(parse_flam_rule("2"), None);
+        assert_eq!(parse_flam_rule("2"), Some(2), "the current version");
+        assert_eq!(parse_flam_rule("3"), None);
         assert_eq!(parse_flam_rule("on"), None);
         assert_eq!(analysis_flam_rule(&cfg(None)), FLAM_RULE);
         assert_eq!(analysis_flam_rule(&cfg(Some(0))), 0);
@@ -400,6 +420,8 @@ mod tests {
             level_db: 0.0,
             bleed,
             dip: 0,
+            rise_block: 0,
+            fallback: false,
         }
     }
 

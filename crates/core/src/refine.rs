@@ -41,7 +41,6 @@ pub use track::{
     Hit, RefineRule, recompute_velocities, refine_first_motion, refine_rule, refine_rule_peak, refine_track,
     refine_track_rule,
 };
-#[cfg(test)]
 pub(crate) use walk::first_motion_mid;
 pub use walk::{BackStep, FM_PEAK_DB, LeadTrace, first_motion, first_motion_trace};
 

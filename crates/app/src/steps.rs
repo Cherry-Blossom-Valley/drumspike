@@ -10,16 +10,22 @@
 //! This list is for the analysis job only. The re-pick (`histogram.rs`) runs its own explicit tom bleed and flam
 //! calls with the recorded versions, and Reanalyze selection runs no session step.
 
+use drumspike_core::refine::RefineRule;
 use serde_json::{Value, json};
 
+use crate::flam::FlamTarget;
 use crate::registry::Shared;
 use crate::{Service, ServiceConfig};
 
 /// A step over track names (`run_step` of the cross-track bleed rule and the ghost gate).
 type RunNames = fn(&Service, &Shared, &[String]) -> Option<Value>;
 
-/// A step over track names with a version each (`run_step` of the tom bleed rule and the flam rule).
+/// A step over track names with a version each (`run_step` of the tom bleed rule).
 type RunVersioned = fn(&Service, &Shared, &[(String, u32)]) -> Option<Value>;
+
+/// A step over track names with a version and a refine rule each (`run_step` of the flam rule,
+/// #445: the second stroke follows the rule of the track's analysis).
+type RunFlam = fn(&Service, &Shared, &[(String, FlamTarget)]) -> Option<Value>;
 
 /// How a step takes the analysed tracks.
 #[derive(Clone, Copy)]
@@ -28,6 +34,8 @@ enum Run {
     Names(RunNames),
     /// Each track name with the analysis version; the step runs for every version (version 0 clears its record).
     Versioned(RunVersioned),
+    /// Each track name with the flam version and the refine rule of a new analysis.
+    Flam(RunFlam, fn(&ServiceConfig) -> RefineRule),
 }
 
 /// One session step of the analysis job.
@@ -55,6 +63,14 @@ impl AnalysisStep {
             }
             Run::Versioned(run) => {
                 let targets: Vec<(String, u32)> = analysed.iter().map(|n| (n.clone(), v)).collect();
+                run(svc, op, &targets)
+            }
+            Run::Flam(run, rule_of) => {
+                let rule = rule_of(&svc.inner.config);
+                let targets: Vec<(String, FlamTarget)> = analysed
+                    .iter()
+                    .map(|n| (n.clone(), FlamTarget { flam: v, rule }))
+                    .collect();
                 run(svc, op, &targets)
             }
         }
@@ -110,7 +126,7 @@ pub(crate) const ANALYSIS_STEPS: [AnalysisStep; 4] = [
     AnalysisStep {
         id: "flam",
         analysis_version: crate::flam::analysis_flam_rule,
-        run: Run::Versioned(crate::flam::run_step),
+        run: Run::Flam(crate::flam::run_step, crate::jobs::analysis_rule),
         track_entry: flam_entry,
     },
 ];

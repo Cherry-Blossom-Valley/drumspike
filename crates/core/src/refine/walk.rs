@@ -218,9 +218,9 @@ pub(super) fn back_track(
 }
 
 /// [`first_motion`] with the bounds as samples: `prev_mid` bounds the walk and the floor window (the midpoint to the
-/// previous hit), `next_mid` the peak window (the midpoint to the next hit). Test-only: the golden corpus and the flam
-/// rule's ring comparison walk from a sample with the bounds as samples (`tools/onset_guard.py` `walk`).
-#[cfg(test)]
+/// previous hit), `next_mid` the peak window (the midpoint to the next hit). The flam rule's version 1 places its
+/// second stroke with it (bounded by the block after the dip, `prev_mid`), as do the golden corpus and the flam
+/// rule's ring comparison (`tools/onset_guard.py` `walk`).
 pub(crate) fn first_motion_mid(
     x: &[f32],
     s: i64,

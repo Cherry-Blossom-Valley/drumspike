@@ -5,8 +5,10 @@
 mod common;
 
 use common::*;
-use drumspike_app::Service;
 use drumspike_app::flam::FLAM_RULE;
+use drumspike_app::{Service, ServiceConfig};
+use drumspike_core::detect::flam::{FlamParams, flam_split};
+use drumspike_core::refine::RefineRule;
 use serde_json::{Map, Value, json};
 
 const SR: u32 = 48_000;
@@ -234,5 +236,161 @@ fn a_flam_gets_its_main_stroke_and_the_switch_turns_it_off() {
         (det["flam_rule"].clone(), det["flam"]["on"].clone()),
         (json!(FLAM_RULE), json!(false)),
         "{det}"
+    );
+}
+
+/// A deterministic noise source in [-1, 1) (the same source as the core flam tests).
+struct W444(u64);
+
+impl W444 {
+    fn next(&mut self) -> f64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+    }
+}
+
+/// A noise burst of `len_s` seconds with the decay `tau` (s) and the amplitude `amp`, drawn from `n`.
+fn burst444(n: &mut W444, len_s: f64, tau: f64, amp: f64) -> Vec<f64> {
+    let len = (len_s * f64::from(SR)) as usize;
+    (0..len)
+        .map(|k| amp * n.next() * (-(k as f64) / (tau * f64::from(SR))).exp())
+        .collect()
+}
+
+/// `s` added at `at` seconds; returns the stroke's first sample.
+fn add_at48(x: &mut [f64], s: &[f64], at: f64) -> usize {
+    let i0 = (at * f64::from(SR)).round() as usize;
+    for (k, &v) in s.iter().enumerate() {
+        if i0 + k < x.len() {
+            x[i0 + k] += v;
+        }
+    }
+    i0
+}
+
+fn f32s48(x: &[f64]) -> Vec<f32> {
+    x.iter().map(|&v| v as f32).collect()
+}
+
+/// The #444-shape stroke body (the core test `the_second_stroke_follows_the_rule_of_the_track`'s
+/// `stroke_at`): a line with a slow wobble, a pre-swing, a fast edge and a ring. The shape where
+/// refine versions 9 and 10 place differently at 48 kHz (version 10's true line median).
+fn stroke_body(t: f64, dip: f64, gap: f64, width: f64, rise: f64, hz: f64) -> f64 {
+    use std::f64::consts::PI;
+    let line = 0.05 + 0.003 * (2.0 * PI * 180.0 * t + 0.4).sin() + 0.001_5 * (2.0 * PI * 2_300.0 * t + 1.1).sin();
+    let swing = if t > -gap - width && t < -gap {
+        let u = (t + gap + width) / width;
+        -dip * (0.5 - 0.5 * (2.0 * PI * u).cos())
+    } else {
+        0.0
+    };
+    let body = if t <= 0.0 {
+        0.0
+    } else if t < rise {
+        0.5 - 0.5 * (PI * t / rise).cos()
+    } else {
+        let u = t - rise;
+        (-u / 0.03).exp() * (2.0 * PI * hz * u).cos()
+    };
+    -(line + swing + body)
+}
+
+/// Six #444-shape flams: a grace burst 30 ms before each body, the flams 80 ms apart. The model
+/// keeps the grace (the first stroke of the pair); the body is the second stroke the rule adds.
+/// The 30 ms gap keeps the body out of the late-peak window (the 30 ms end is excluded) and
+/// inside the re-rise search (12 to 50 ms, 10 ms before the next hit).
+fn flam444_fixture() -> Vec<f32> {
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f64; (3.0 * srf) as usize];
+    let mut nz = W444(0x4455_6677_8899_0011);
+    for k in 0..6 {
+        let te = 1.0 + 0.080 * f64::from(k);
+        let grace = burst444(&mut nz, 0.02, 0.003, 0.5);
+        add_at48(&mut x, &grace, te - 0.030);
+        let i0 = (te * srf).round() as usize;
+        for j in 0..(0.06 * srf) as usize {
+            let v = stroke_body(
+                j as f64 / srf,
+                [0.03, 0.045, 0.06, 0.08, 0.045, 0.06][j % 6],
+                [0.0, 40e-6, 80e-6, 110e-6, 150e-6, 180e-6][j % 6],
+                [150e-6, 212.5e-6, 275e-6, 337.5e-6, 400e-6, 250e-6][j % 6],
+                [60e-6, 80e-6, 100e-6, 60e-6, 80e-6, 100e-6][j % 6],
+                [180.0, 215.0, 250.0, 285.0, 320.0, 355.0][j % 6],
+            );
+            if i0 + j < x.len() {
+                x[i0 + j] += v;
+            }
+        }
+    }
+    for v in &mut x {
+        *v += 1e-5 * nz.next();
+    }
+    f32s48(&x)
+}
+
+fn at_samples(ts: &[f64]) -> Vec<i64> {
+    ts.iter().map(|t| (t * f64::from(SR)).round() as i64).collect()
+}
+
+/// #445 (2): the re-pick of a stored project places the flam second stroke by the refine rule the
+/// analysis recorded, not by the current rule. The analysis runs pinned to version 9; the strokes
+/// are #444-shape, where versions 9 and 10 place differently at 48 kHz. The re-pick under a
+/// version-10 service keeps the version-9 placement, and a fresh analysis under it moves the
+/// strokes: the test would catch a re-pick that ran the current rule.
+#[test]
+fn a_repick_places_the_flam_second_stroke_by_the_recorded_refine_rule() {
+    let root = tmp("flam_rule_repick9");
+    let x = flam444_fixture();
+    let dir = project(&root, "Repick9", &[spec("s top", "snare", x.clone())]);
+    // the analysis pinned to version 9: the record carries 9, and the six bodies are added
+    let svc9 = Service::new(ServiceConfig {
+        refine_rule: Some(RefineRule::Departure),
+        ..ServiceConfig::default()
+    });
+    let sid = open(&svc9, &dir);
+    svc9.analyze_start(&sid, None, None, None).unwrap();
+    let st = wait_done(&svc9, &sid);
+    let f9 = flams(&svc9, &sid, "s top");
+    assert_eq!(f9.len(), 6, "the six bodies are found and added: {st}");
+    assert_eq!(detector(&svc9, &sid, "s top")["refine"], json!(9));
+    let f9s = at_samples(&f9);
+    svc9.project_close(&sid, false).unwrap();
+    // the re-pick under a version-10 service: the recorded rule 9 places the second strokes
+    let svc10 = service_dsp();
+    let sid10 = open(&svc10, &dir);
+    svc10
+        .track_repick(&sid10, "s top", Some(&params(&svc10, &sid10, "s top")), true)
+        .unwrap();
+    let frs = at_samples(&flams(&svc10, &sid10, "s top"));
+    assert_eq!(
+        frs, f9s,
+        "the re-pick moved the second strokes off the recorded rule 9: {frs} against {f9s}"
+    );
+    // the placement is the recorded rule's own answer on the stored hits, and the fixture
+    // discriminates: version 10 places the same bodies differently
+    let mains: Vec<f64> = events(&svc10, &sid10, "s top")
+        .iter()
+        .filter(|e| e["flam"] != true)
+        .map(|e| e["t"].as_f64().unwrap())
+        .collect();
+    let p = FlamParams::default();
+    let (d9, _) = flam_split(&x, SR, &mains, &[], &p, 2, RefineRule::Departure);
+    let (d10, _) = flam_split(&x, SR, &mains, &[], &p, 2, RefineRule::Symmetric);
+    let t9 = at_samples(&d9.iter().filter(|s| !s.bleed).map(|s| s.t).collect::<Vec<_>>());
+    let t10 = at_samples(&d10.iter().filter(|s| !s.bleed).map(|s| s.t).collect::<Vec<_>>());
+    assert_eq!(
+        t9, frs,
+        "the re-pick's placement is not the recorded rule's answer: {t9} against {frs}"
+    );
+    assert_ne!(t9, t10, "the fixture does not discriminate version 9 from 10: {t9}");
+    // a fresh analysis under the version-10 service moves the second strokes
+    svc10.analyze_start(&sid10, None, None, None).unwrap();
+    wait_done(&svc10, &sid10);
+    let f10s = at_samples(&flams(&svc10, &sid10, "s top"));
+    assert_ne!(
+        f10s, f9s,
+        "a fresh analysis under version 10 places as 9: {f10s} against {f9s}"
     );
 }
