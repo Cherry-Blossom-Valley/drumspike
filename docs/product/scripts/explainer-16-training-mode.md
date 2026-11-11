@@ -26,23 +26,24 @@ Facts used (all checked against the code, not from memory):
   at a coarser zoom) and, for a move, add, delete or confirm, the `placement` measures `edge`,
   `line_noise`, `line_slope`, `onset_spread`, computed on demand, so it can be read without the
   session: `crates/app/src/training.rs` (`BEFORE_MS`, `AFTER_MS`, `training_log`, the module
-  docs), the release notes (the view, the placement measures).
+  docs), the release notes 0.9.23 (the view), 0.9.25 (the placement measures).
 - The record shown is the recorded tutorial's own move (part-agent ra-move): the k in hit at
   sample 180008 moved onto the last line sample 180006 (probed on the recording page, 2026-11-08).
 - With Training Mode on, the review queue also doubts the placement of a hit: no steep edge at
   the stored position, a line before it that is noisy or sloping, or onset estimates that
-  disagree by 4 samples or more: the release notes (#344), `docs/guide/09-doubtful-hits.md`.
+  disagree by 4 samples or more: the release notes 0.9.22 (#344), `docs/guide/09-doubtful-hits.md`.
 - `tools/training_export.py` prints the aggregates per role and op (the `to - from` histogram,
   the precisions, the count per refine rule version, exact and approximate records) and writes
   the truth list `[{track, role, from, to, op, precision, exact, edge, line_noise, line_slope,
   onset_spread}]` in samples; the printout carries no project names and no paths, the truth
   file carries the track names: `tools/training_export.py` (the module docs).
 - The truth list is what the placement is measured against, and the measures let a fit weight a
-  clear stroke over a wobbly one: `tools/training_export.py` (#363 note), the release notes.
-- The counts shown are Session F's real aggregates (the coordinator's check on one
+  clear stroke over a wobbly one: `tools/training_export.py` (#363 note), the release notes
+  0.9.25.
+- The counts shown are Session F's real aggregates (the coordinator's check of 0.9.26 on one
   internal session): 522 hits seen, 124 moved, 314 confirmed - the same counts explainer 15
   shows.
-- Off, nothing changes: no new field, no new file, the same responses: the release notes.
+- Off, nothing changes: no new field, no new file, the same responses: the release notes 0.9.22.
 
 ## s01-why
 
@@ -60,7 +61,7 @@ Turn it on in the View menu: Training Mode. The switch belongs to the app, not t
 
 > The s top lane of the demo session at sample zoom around one hit, its last line sample marked; on the right, the edits that write a record: Hits > Next Doubtful Hit (D), Edit > Nudge Hit Earlier (Left), Edit > Nudge Hit Later (Right), Edit > Add Hit at Playhead (H), Edit > Delete Hit, Hits > Confirm Hit.
 
-Then work as you always do. The review queue walks you to the doubtful hits; at sample zoom you nudge a hit by whole samples onto the last sample of its line. Add a hit, delete one, confirm one as reviewed: every one of these writes one record. An agent writes the same kind of record, and each record says whether a person or an agent made it.
+Then work as you always do. The review queue walks you to the doubtful hits; at sample zoom you nudge a hit by whole samples onto its last line sample. Add a hit, delete one, confirm one as reviewed: every one of these writes one record. An agent writes the same kind of record.
 
 ## s04-log
 

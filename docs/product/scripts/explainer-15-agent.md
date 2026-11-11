@@ -19,24 +19,17 @@ Facts used (all checked against the code, not from memory):
 - `confirm(track, index)` is Hits > Confirm Hit: the op applies nothing, the record says
   `from` = `to` = the stored position: `docs/agent-api.md`, `crates/app/src/training.rs`.
 - Every move and confirm runs through the code the keyboard uses (`nudgeSelected`,
-  `confirmHit`), so the steps and the kind of record are the same; the record says who made it:
-  `by` is `person` or `agent`, and `tools/training_export.py` takes `--by person` by default:
-  `static/agent.js` (the edits of the helpers say `by: agent`), `docs/guide/16-training-mode.md`.
-- The agent works in the open Drum Spike window, where the user watches each look, move and
-  confirm: `docs/guide/15-agent-finetune.md`.
+  `confirmHit`), so the training record of an agent is byte for byte the record of a person:
+  `static/agent.js` header, `docs/guide/15-agent-finetune.md`.
 - With Training Mode on, one JSON line per affected hit goes to
   `<DRUMSPIKE_HOME>/training/<project id>.jsonl`; a record is self-contained (the samples
   around the hit, 40 ms before and 10 ms after) and a `move`, `add`, `delete` or `confirm`
   record carries `placement` `{edge, line_noise, line_slope, onset_spread}`:
   `crates/app/src/training.rs` (`BEFORE_MS`, `AFTER_MS`, the `placement` note).
-- The judge has two opinions (`static/agent.js`). The line of the hit (`judge`): the level of the
-  line is the median of the quietest stretch of `LINE_LEAD` samples that ends nearest the foot; a departure more than
-  `DEPART_BEFORE` samples before or `DEPART_AFTER` after the hit gets no suggestion. The pattern
-  of the track (`patternBuild`, #447): built from the track's own clear hits, a clear hit has a
-  2 ms line (`PAT_LINE_MS`) within `PAT_CLEAR_PCT` percent of the peak of the 5 ms after it
-  (`PAT_PEAK_MS`); a track with fewer than `PAT_MIN_HITS` hits has no pattern. The hit moves only
-  when the pattern confirms the move within `PAT_CONFIRM` sample; a hit whose opinions are
-  `PAT_DIFFER` or more samples apart gets no move and is listed with both positions in `why`.
+- The judgment stops on a wobbly line: the line check wants a lead spread of 0.03 or less
+  (shares of the local peak) over the first 12 samples, and a departure far from the hit
+  (more than 12 samples before or 6 after it) gets no suggestion: `static/agent.js`
+  (`LINE_LEAD`, `LINE_MAX_SPREAD`, `DEPART_BEFORE`, `DEPART_AFTER`, the `why` note).
 - `plan(track, from, to)` looks over a range of hits without moving; its rows carry the judge's
   `doubt` and `why` (the reasons of the review queue, `track_confidence` with `training: true`);
   the agent works in chunks of about 100 hits: `docs/agent-api.md` (Page helpers),
@@ -55,7 +48,7 @@ This is what you do by hand. Zoom to a hit until one sample is a pixel: a flat l
 
 > The same hit, the same window. A second pointer, the agent's, does the same three steps, drawn as `DSAgent.look`, `DSAgent.move`, `DSAgent.confirm`. The status line is the same.
 
-An agent does the same three steps through the app's own page, in the open Drum Spike window, where you watch each look, move and confirm. Every move and confirm runs through the code your keyboard uses, so the record is the same kind as yours, marked as made by an agent.
+An agent does the same three steps through the app's own page. It looks at the hit, moves it by whole samples, and confirms it. Every move and confirm runs through the code your keyboard uses, so the record of an agent is byte for byte the record of a person.
 
 ## s03-look
 
@@ -65,9 +58,9 @@ What the agent sees is the same picture and the same samples as numbers: the win
 
 ## s04-judge
 
-> The same hit with two markers: the line of the hit says where the first motion starts, the pattern of the track's clear hits says it too; when both are within one sample the hit moves. An example in which the pattern is three samples away: the hit is listed with both positions and does not move.
+> The same numbers for a wobbly hit: the lead spread over the first 12 samples is over the 0.03 limit; the word doubt and the reason stand next to the hit, and the hit does not move.
 
-The judge has two opinions. One reads the line of the hit, the other the pattern of the track's own clear hits. The hit moves only when both agree within one sample. Otherwise it is listed with both positions, and stays for you.
+The judgment stops where the line is not a line. A wobbly lead, a spread over 0.03 of the local peak over the first 12 samples, gets no suggestion. The hit lands on the doubtful list with its reason, and stays for you.
 
 ## s05-training
 
@@ -83,6 +76,6 @@ The log and your corrections become the truth list the placement is measured aga
 
 ## s07-result
 
-> The counts of one real run, Session F (the coordinator's check on one internal session): 522 hits seen, 124 moved, 314 confirmed, 84 left for the owner.
+> The counts of one real run, Session F (the coordinator's check of 0.9.26 on one internal session): 522 hits seen, 124 moved, 314 confirmed, 84 left for the owner.
 
 The agent reports counts only: how many hits it saw, moved, confirmed and left for you. You stay the judge: every move is a normal edit you can undo, and the doubtful hits wait in the review queue.

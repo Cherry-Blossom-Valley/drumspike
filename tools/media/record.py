@@ -1304,7 +1304,9 @@ def compress_video(raw, out, segs, factors, work):
 # anything but the app window.
 
 GLITCH_MEAN_DIFF = 40.0   # the mean luma gap between a glitch frame and its neighbours
-GLITCH_MAX_RUN = 4        # a repaint glitch is a few frames; a scene change is longer
+GLITCH_MAX_RUN = 4        # the longest run the repair may replace: a repaint glitch is a
+                          # few frames at 25 fps; a real scene change is longer and the
+                          # frames after it do not come back
 
 
 def frame_means(video, work):
@@ -1645,7 +1647,8 @@ def record(root, scenario, items, out, work, keep, check_model=True):
         total = ffprobe_seconds(raw)
     raw, glitches = patch_glitches(raw, work)
     if glitches:
-        print("repaint glitches repaired at frames: "
+        n = sum(b - a + 1 for a, b in glitches)
+        print(f"repaint glitches repaired in {Path(raw).name}: {n} frames at "
               + ", ".join(f"{a}-{b}" if a != b else str(a) for a, b in glitches))
     build_narration(items, marks, total, work / "narration.wav", lead, starts)
     mux(raw, work / "narration.wav", out, total, note=render_note(work))
