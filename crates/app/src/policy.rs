@@ -474,6 +474,8 @@ mod tests {
                 level_db: 0.0,
                 bleed,
                 dip: 0,
+                rise_block: 0,
+                fallback: false,
             }
         }
 
