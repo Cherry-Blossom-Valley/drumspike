@@ -8,14 +8,19 @@ The rules run on the analysed tracks, in this order:
 
 - A tom hit that another close mic explains is bleed: a tom hit that a kick, snare or
   hi-hat close mic hears louder and earlier, and a tom hit on a different drum's mic within
-  12 ms that plays 6 dB or more quieter. The hit keeps its place, but the app marks it and
+  12 ms that plays 6 dB or more quieter. On a session you time-aligned with a tool like
+  Auto-Align 2, the bleed arrives with no delay, so there is no "earlier": the app measures
+  per mic pair whether the session is aligned, and an aligned pair judges by level alone.
+  The hit keeps its place, but the app marks it and
   leaves it out of the output: grey in the lane, and no MIDI, spike or click.
 - A quiet snare hit stays only when its spectral shape matches the snare template and no
   kick or tom hit lies within 30 ms of it. This keeps the ghost notes and drops the kick and
   tom bleed on the snare mic.
 - The second stroke of a flam becomes a hit of its own, with the tag flam. This runs on
   snare close mics whose Split flams check is on, and it is on by default; another mic that
-  explains the second stroke as bleed wins. The flam hit plays in the exports like any hit.
+  explains the second stroke as bleed wins. The app places the second stroke with the same
+  rule it uses for every hit of the track, inside the span where it found the re-rise. The
+  flam hit plays in the exports like any hit.
 
 ## Steps
 

@@ -43,7 +43,10 @@ track (chapter 12) has no marks of its own: a mark on it goes to its source trac
 ![The Inspector's Learn section of the snare with the Similarity histogram, the Match and Add lines and the counts line under it; the marked ghost and its near copies grey in the lane and the missed hit added.](img/11-learn.png)
 
 5. Learn This on a hit the detection missed adds the hit at once, flagged as learned, and
-   stores the example. From then on the Add rule brings in the candidates that sit below
+   stores the example. A time the step found in the audio goes through the placement rule
+   first, like every hit of the track (chapter 4); only a time you set yourself at the
+   playhead, where the detection has neither hit nor candidate, is kept as it is. From then
+   on the Add rule brings in the candidates that sit below
    the Sensitivity but look like the example; a Forget example or an existing hit nearby
    keeps a candidate out. The added hits run through the same analysis as every hit and
    play in the exports like any hit. Learn This never removes a detected hit and never

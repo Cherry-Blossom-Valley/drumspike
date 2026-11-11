@@ -2,7 +2,9 @@
 
 An agent or a script can use Drum Spike without the window: open or import a project, analyse, set detection and velocity
 parameters, edit hits, make a track follow another, and export. Two front ends share one list of commands: the command-line
-tool `drumspike` and the MCP server `drumspike mcp` (stdio). There is no network listener. The list of commands is
+tool `drumspike` and the MCP server `drumspike mcp` (stdio). With a window open, the MCP tool `agent_call` and the
+command line `drumspike agent_call` drive that window too: the open window serves a local endpoint on 127.0.0.1 with
+a token ("The running window" below). The list of commands is
 `crates/app/src/api.rs` (the registry); `drumspike help` and the MCP `tools/list` print it.
 
 ## Set up (once)
@@ -108,7 +110,9 @@ the DAW's own map) before the exports when the map should differ from the defaul
 
 `drumspike mcp` speaks JSON-RPC 2.0, one message per line on stdin and stdout (protocol versions 2025-06-18, 2025-03-26 and
 2024-11-05; `initialize`, `ping`, `tools/list`, `tools/call`). Every tool has the argument schema of its command; a tool with
-an object result has an `outputSchema` and `structuredContent`. An error is a result with `isError: true`.
+an object result has an `outputSchema` and `structuredContent`. An error is a result with `isError: true`. Each tool's
+`annotations.destructiveHint` says whether its command replaces or removes project data or files on disk (one table
+in the command registry decides; a command that only adds, only sets a value back, or restores from a backup, is not).
 
 - Nothing is saved unless you call `project_save`. The description of each tool that changes the project in memory says so.
 - `analyze_start` and `peaks_build_start` answer at once; poll `analyze_status` and `peaks_build_status`.
@@ -118,7 +122,11 @@ an object result has an `outputSchema` and `structuredContent`. An error is a re
 - Learn marks: `track_learn_mark` (`kind` this or not, a range `t0` and `t1` or one `hit` time), `track_learn_remove`, `track_learn_forget_at` (Forget This: the examples at one `hit` or inside `t0` to `t1`; none there answers `removed: 0` and changes nothing), `track_learn_flip`,
   `track_learn_forget` and `track_learn_set` keep good and bad examples in the track's `learn` object (`tracks_get` shows it). A range takes its
   hits, else the strongest candidate, else the strongest rise of 6 dB or more; no hit gives `marked: false` with a `reason`. A follower marks its
-  source (`routed: true`). No filter reads the marks yet. `track_learn_scores` gives the similarity score of each detection candidate
+  source (`routed: true`). The Learn filter and the Add rule read the marks (guide chapter 11): the filter takes the hits
+  that are unlike the examples out of the output, and the Add rule brings in the candidates that sit below the
+  Sensitivity and look like a Learn This example. A Learn This that adds a hit found in the audio runs it through the
+  placement rule like every hit of the track and answers `placement` (`refined`, `coarse`); a time set at the playhead
+  stays as it is. `track_learn_scores` gives the similarity score of each detection candidate
   and of each example, and the automatic threshold; it writes only the cache `Analysis/<track>/learn.bin`.
 - `track_velocity_set` also writes the new velocities and cut marks to the stored hits (`apply`, default true here; the page sends
   `apply: false` and applies the answer itself). It recomputes every velocity, so it comes before single-hit velocity edits.
@@ -164,8 +172,9 @@ or ends (a crash frees it). The app takes the same lock. A second process gets e
 read, `track_repick` without `store`, and `project_save_as` (the way to a writable copy: the project then is
 the copy). A folder or volume that cannot hold a lock (read-only folder, no `flock`) does not refuse the project: it opens
 unlocked and the answer says so (`lock: "unavailable: ..."`; `lock: "held"` otherwise). Only another holder gives 409. To switch from read-only to
-writing, close the project and open it again. The agent works on projects the app does not hold for writing; it does not see
-or change the live project of the running app (a local socket for that is a possible later option).
+writing, close the project and open it again. The agent works on projects the app does not hold for writing. The live
+project of the open window is the exception: through the window's local endpoint (`agent_call`, "The running window"
+below) an agent sees and edits exactly what the window shows.
 
 ## Hits and notes
 
@@ -211,7 +220,9 @@ or change the live project of the running app (a local socket for that is a poss
   `replace`) merge into the track's stored params (#442): a key in the call replaces that key, a
   key with `null` removes it, a key that is absent keeps its stored value. With `replace: true`
   the stored object becomes the sent object (the page sends whole objects). A `sensitivity`
-  without `thresholds` stores the thresholds of that sensitivity.
+  without `thresholds` stores the thresholds of that sensitivity. An analysis uses the track's
+  stored params: the sensitivity the engineer set in the Inspector stays in force until a call
+  changes it, and the `params` of an `analyze_start` merge over it.
 - `track_set_note` takes the MIDI number. General MIDI: kick 36, snare 38, closed hat 42, toms 41 to 50 (floor tom 41, low 45,
   mid 47, high 50), crash 49, ride 51. The names follow C1 = 36.
 
@@ -229,7 +240,8 @@ clear) and tempo steps where a new tempo holds at least `min_bars` bars (default
 changes nothing: to accept, pass its `suggestion` to `tempo_map_set`. A low confidence or a `warnings` entry means: check the tempo (an
 octave error, half or double, is the usual fault). Example: `drumspike tempo_map_detect --project ~/Song --pretty`.
 Each hit counts with its velocity (ghost notes weigh little); hits after the end of the tracks are left out with a warning. The
-suggested tempo is a whole BPM (or 0.5, 0.1) when that lies within the fit's `start.error_bar`. `bar1` has a `confidence` (the snare
+suggested tempo and every tempo step are a whole BPM (#472: the nearest whole BPM the fit supports, the grid follows it;
+the fit's own values stay in `start` and `start.error_bar` as diagnostics). `bar1` has a `confidence` (the snare
 `backbeat` measure times the `downbeat` measure: kicks on 1 against 3, crash hits of a named cymbal track, fill endings, the first
 kick) and an `alternative` two beats later: below about 0.4 bar 1 is a coin flip, so ask the user. Name a cymbal or overhead track
 in `tracks` (with the kick and snare tracks) to let its crash hits vote for beat 1. `meter.feel: "two-beat"` means 2/4, or 6/8 in
@@ -248,12 +260,15 @@ Option+M and Option+Shift+M.
 
 ## Review queue
 
-`track_confidence {sid, name, events?}` rates each hit of `events` (else the stored hits) and answers
+`track_confidence {sid, name, events?, training?}` rates each hit of `events` (else the stored hits) and answers
 `{confidence, source, doubt_below}`: one `{c, doubt, why}` per hit, in their order. `c` is 0 to 1, and a
 hit under `doubt_below` (0.5) is doubtful; `why` lists the reasons. The value is computed on each call and
 never stored; the detection results do not change. `source` is `level` (the level only) or `follows`. A hit that
 the user added or moved, or that is not in the output, is never doubtful. A hit that a rule added under
-the level threshold (Learn Add, flam) gets the cap of its tag times its level. The
+the level threshold (Learn Add, flam) gets the cap of its tag times its level. With `training: true`
+(Training Mode, guide chapter 16) the call also rates the placement of every hit from the audio around its
+stored position: a hit with no steep edge at its position, a noisy or sloping line before it, or onset
+estimates that disagree, is doubtful with a lower `c`, and `why` names the placement reasons. The
 rules are in `crates/app/src/confidence.rs`. The page steps through the doubtful hits of all tracks
 with D (Hits > Next Doubtful Hit), lowest confidence first; Shift+D steps back.
 
@@ -289,10 +304,13 @@ whose edits the truth list keeps: `person` (the default), `agent`, `unknown` (th
 
 ### Page helpers (`window.DSAgent`)
 
-#371: for a visual hit-by-hit pass the page (`drumspike bridge`, in a browser) loads `static/agent.js`, which exposes
-`window.DSAgent`. The functions are plain and async, draw nothing of their own and do nothing until called. A track is
+#371: for a visual hit-by-hit pass the agent helpers run in the app's own page. The open window is the default
+path: it loads `static/agent.js`, which exposes `window.DSAgent`, and `agent_call` reaches it ("The running
+window" below). `drumspike bridge` in a browser is the fallback when no window is open. The functions are plain
+and async, draw nothing of their own and do nothing until called. A track is
 named by its track name, a hit by its index in the track's hit list. Every move and confirm runs through the code the
-keyboard uses (`nudgeSelected`, Hits > Confirm Hit), so the record of an agent is byte for byte the record of a person.
+keyboard uses (`nudgeSelected`, Hits > Confirm Hit), so the record of an agent is the same kind of record as a
+person's, marked as made by an agent (the record carries `by`).
 The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse with an error that names the menu command
 `training_mode` while Training Mode is off; turn it on first with that command. The skill `skills/drumspike-finetune` uses them.
 
@@ -386,6 +404,11 @@ can call.
 - Errors: 401 without the token (or a wrong one); 409 when no page listens or the helper refused (its message is the page's,
   for example "Training Mode is off"); 504 when the page did not answer within `timeout_ms` (default 60 s, at most 600 s).
 - `GET /status` (same token) answers `{listening, helpers}`.
+- The endpoint checks a request from its head, before it reads the body, and closes the connection on a
+  refusal: a wrong or missing token (401), a body over the same 16 MB cap (413, refused from the
+  `Content-Length` header), or a path or method it does not serve (404). A stale endpoint file of a process
+  that no longer runs gives no token: the pid of the file is checked before the connect, and the call answers
+  409 when that process is gone.
 - The one call: an agent does not read the token file or speak HTTP itself. The MCP tool `agent_call {fn, args?, timeout_ms?}`
   and the command line `drumspike agent_call <fn> [arg]...` (on the app binary: `<binary> cli agent_call <fn> [arg]...`; each `arg` is JSON when it parses, else a string) read
   `<home>/window-endpoint.json`, post the call and answer the helper's value. With no window open (no file, or a dead port)
@@ -451,8 +474,11 @@ drumspike bridge: http://127.0.0.1:<port>/
 
 - The page is the one bundled in the binary (the Tauri asset context, `frontendDist`); the app bundle gains
   no files. The API is the same command registry the window and the command line use (`POST
-  /invoke/<command>`, `GET /channel/<id>`, `GET /events?after=N`), on 127.0.0.1 only, no token — nothing
-  here is a security boundary, like the development bridge.
+  /invoke/<command>`, `GET /channel/<id>`, `GET /events?after=N`), on 127.0.0.1 only, no token. The browser's
+  own headers are the guard: a request whose `Host` or `Origin` names another site, or whose `Sec-Fetch-Site`
+  is neither `same-origin` nor `none`, is refused before any command runs and the connection closes. A body
+  over the 16 MB cap is refused the same way, from its `Content-Length` header, before a byte of it is read.
+  A request without these headers is a local tool (curl, a test client) and passes.
 - `--home DIR` and `--projects DIR` default to the app's own folders (the same as the window), so a project
   the owner opened in the window is the one the agent sees. `--port 0` (the default) picks a free port.
 - The window and the bridge do not share one home at the same time. Both hold an advisory flock on the
@@ -460,7 +486,8 @@ drumspike bridge: http://127.0.0.1:<port>/
   while the window runs on that home — close the window, or pass `--home DIR` — and names the holder
   (`app (pid N)`). A window started while a bridge holds the home prints a warning and keeps working; end
   the bridge session before opening the window on that home.
-- In the page, the agent helpers of the sibling ticket drive the editor; Training Mode (View > Training
+- In the page, the agent helpers drive the editor (the window is the default path for them; the bridge is
+  the fallback when no window is open); Training Mode (View > Training
   Mode) writes a record per hit edit as everywhere else. The shipped page mode has no native menu: the
   agent turns Training Mode on from the page itself with `setTraining(true)` (or `toggleTraining()`);
   the `training_mode` menu event exists only in the debug bridge.

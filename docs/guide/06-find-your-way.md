@@ -22,24 +22,36 @@ hits over 62.5 s; these keys take you through them fast.
 3. Zoom with the number keys. The six presets of **View > Zoom Presets > Full** (`1`), **30 s**
    (`2`), **5 s** (`3`), **500 ms** (`4`), **50 ms** (`5`) and **5 ms** (`6`) set the span of the
    lanes. **View > Zoom In** (`T`) and **View > Zoom Out** (`R`) zoom around the playhead.
-4. Change the track height with `Option+Up` and `Option+Down`
+   **View > Zoom to Project** (`Option+A`) shows the whole session, **View > Zoom Toggle**
+   (`E`) fills the lane width with the selected range, or 5 ms around the selected hit, and
+   returns to the zoom before. **View > Zoom Presets > Add Current…** saves the span of the
+   view under a name; **Organize…** renames and removes your own presets.
+4. The main counter in the transport bar at the top, next to the play and stop buttons, shows
+   the position: **View > Main Counter > Seconds**,
+   **Samples**, **Bars|Beats** and **Timecode** (30 fps) switch the format; **Exchange
+   Counters** (a click on the counter) swaps the main and the sub counter.
+5. Change the track height with `Option+Up` and `Option+Down`
    (**View > Track Height > Shorter**, **Taller**), or set it directly with `Option+Cmd+1`,
    `Option+Cmd+2` and `Option+Cmd+3` (Small, Medium, Large). Drag the lower border of a
    track row or of its header to give one track its own height; a double-click on the
    border puts it back.
-5. The lane toggles: **View > Velocity Lane** (`V`), **View > Other Mics Under Hit** (`O`),
-   **View > Bars|Beats Ruler** (`Shift+B`) and **View > Markers Ruler** (`Option+Shift+R`; #265
-   moved `Shift+R` to Hits > Re-analyze Selection).
-6. Step through the hits. **Hits > Next Hit** (`Tab`) and **Hits > Previous Hit** (`L`) move on
-   the selected track; with no track selected, they move on all tracks.
-   **Hits > Next Hit on All Tracks** (`N`) always moves on all tracks.
-7. Press `Option+O` for **View > Show Overview**: the whole session in one strip over the lanes.
+6. The lane toggles: **View > Velocity Lane** (`V`), **View > Other Mics Under Hit** (`O`),
+   **View > Bars|Beats Ruler** (`Shift+B`) and **View > Markers Ruler** (`Option+Shift+R`).
+7. Step through the hits. **Hits > Next Hit** (`Tab`) and **Hits > Previous Hit**
+   (`Option+Tab` in the menu, `L` on the page) move on the selected track; with no track
+   selected, they move on all tracks. **Hits > Next Hit on All Tracks** (`Control+Tab` in
+   the menu, `N` on the page) and **Hits > Previous Hit on All Tracks** (`Control+Option+Tab`)
+   always move on all tracks. Tab and Option+Tab skip the deactivated hits by default;
+   **View > Tab Moves To > All Found Hits** visits them too.
+8. Press `Option+O` for **View > Show Overview**: the whole session in one strip over the lanes.
    Click it to move fast over a long session.
-8. Press `M` for **Edit > Set Marker at Selection** to drop a marker at the selected hit or at
+9. Press `M` for **Edit > Set Marker at Selection** to drop a marker at the selected hit or at
    the playhead. **Transport > Next Marker** (`Option+M`) comes back to it later.
 
 The keys of this chapter are the Pro Tools preset, the default. Drum Spike also has a Cubase
-preset: **Drum Spike > Settings…** (`Cmd+,`) switches. **Help > Keyboard Shortcuts** lists all
+preset: **Drum Spike > Settings…** (`Cmd+,`) opens the Settings window; pick the category
+Keyboard and set the row Key preset. The Settings categories are Audio, Keyboard, View,
+Audition and click, Pitches, Detector plug-ins and Agent. **Help > Keyboard Shortcuts** lists all
 keys of the current preset. **Drum Spike > About Drum Spike** shows the Cherry Blossom Valley logo,
 the licence line and links to the website and the source code.
 

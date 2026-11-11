@@ -164,7 +164,9 @@ uv run --no-project --python 3.12 apps/desktop/scripts/gen_third_party.py --chec
 ### 7a. Signed and notarized release, and publishing
 
 Only the owner does this, on the Mac with the Developer ID certificate in its keychain.
-Agents and CI never sign, never notarize and never publish. The script reads no password and no
+Agents never sign, notarize or publish. The release workflow signs and notarizes on the signing
+runner when a tag is pushed and makes a draft release; a person publishes the draft
+(`docs/RELEASING.md`, "Release by tag"). The script reads no password and no
 key. It handles only two names:
 
 ```bash
@@ -258,8 +260,9 @@ binary than `target/debug/ds-bridge`.
 ### The app self-test
 
 `apps/desktop/scripts/self-test.sh <scenario>` runs a scenario in the debug `.app` (build it first,
-gate G3) and checks the report. Scenarios are in `apps/desktop/selftest/`: `slice`, `shell`, `tracks`,
-`render`, `play`, `memory`. Run two of them:
+gate G3) and checks the report. Scenarios are the `*.json` files in `apps/desktop/selftest/`:
+`slice`, `shell`, `tracks`, `render`, `play`, `memory`, `lifecycle`, `playhead_steps`,
+`playhead_steps_zoom`, `probe`, `keys`, `exit`. Run two of them:
 
 ```bash
 apps/desktop/scripts/self-test.sh slice
@@ -305,12 +308,14 @@ planted-fault test. The benchmark:
 
 ## 9. CI
 
-`.github/workflows/ci.yml` runs on every push to `main` and `feat/**` (a push that changes only
-`docs/` or the root Markdown files starts no run) and by hand (Actions > ci > Run workflow).
-Changes to the workflow files need a maintainer.
+`.github/workflows/ci.yml` runs on every push to `main` and `feat/**` and by hand (Actions > ci >
+Run workflow). A push that changes only `docs/**` or one of the root files `AGENTS.md`,
+`CLAUDE.md`, `README.md`, `.crewboard.toml`, `AUTHORITY.md` starts no run (the `paths-ignore`
+list of the push trigger). Changes to the workflow files need a maintainer.
 
 | Job | Runner | What it does |
 |---|---|---|
+| `scope` | `ubuntu-latest` | decides the mode with `tools/ci/scope.py` (the diff against the nearest first-parent ancestor with a green run): `none` (docs, root text files, version-only edits) skips every other job and stays green, `py` runs pytest without `tests/e2e_app`, no Rust step, no e2e job, no JS coverage; `full` runs everything. By-hand runs and pull requests are always full. |
 | `test` | self-hosted Intel Mac (the runner labels are in `ci.yml`) | format, clippy, `cargo test --workspace`, the release tools, `ds-bridge`, then pytest (all tests except the arm64 share of `e2e_app`) |
 | `e2e-arm64` | self-hosted Apple Silicon Mac (the runner labels are in `ci.yml`) | the other share of the `e2e_app` tests (`tests/e2e_shards.json`); on `main` pushes, by hand, and on a pull request of this repository with the label `ci:e2e` |
 | `js-coverage` | `ubuntu-latest` | merges the JS coverage of both shares and gates the per-file floor (`tests/jscov.py`) |
@@ -357,9 +362,9 @@ Only variables that the code reads. "Test" means a variable for tests and script
 | `DRUMSPIKE_BRIDGE` | test: path of the `ds-bridge` binary | `tests/e2e_app/conftest.py` |
 | `DRUMSPIKE_JS_FAIL_UNDER` | test: line coverage floor for each JS file (default 70) | `tests/jscov.py` |
 | `DRUMSPIKE_SELFTEST_SESSION`, `_WAVS`, `_SYNTH`, `_TRACKS`, `_DIR`, `_AUDIBLE`, `_APP` | self-test inputs and options | `apps/desktop/scripts/self-test.sh` |
-| `DRUMSPIKE_SIGN_IDENTITY`, `DRUMSPIKE_NOTARY_PROFILE` | owner only: names for the signed release | `apps/desktop/scripts/release.sh` |
+| `DRUMSPIKE_SIGN_IDENTITY`, `DRUMSPIKE_NOTARY_PROFILE` | owner only: names for the signed release. `DRUMSPIKE_SIGN_IDENTITY` is a repository variable (Settings, Actions, Variables) that the release workflow reads and refuses when it is not a Developer ID Application identity; a manual run exports both names | `.github/workflows/release.yml`, `apps/desktop/scripts/release.sh` |
 | `DRUMSPIKE_BUNDLE_DIR` | output folder of the bundle and the `.dmg` | `build-dmg.sh`, `release.sh` |
-| `DRUMSPIKE_RELEASE_LOG` | notary log file of `release.sh` (default `target/release-notary.log`) | `apps/desktop/scripts/release.sh` |
+| `DRUMSPIKE_RELEASE_LOG` | notary log base file of `release.sh` (default `target/release-notary.log`): one log per architecture and step, `<base without .log>-<arch>-<app\|dmg>.log` | `apps/desktop/scripts/release.sh` |
 | `DS_CODESIGN_IDENTITY`, `DS_CODESIGN_TIMESTAMP` | set by `release.sh` for `build-dmg.sh`; do not set by hand | `apps/desktop/scripts/build-dmg.sh` |
 
 More test-only variables exist for diagnostics and benchmarks (`DRUMSPIKE_TRACKS_BENCH`,
@@ -382,7 +387,7 @@ Only problems that the project reports record.
 | `build-dmg.sh` stops at the third-party check | `THIRD_PARTY.md` is stale. Run `gen_third_party.py` (section 7) and commit the result. |
 | `release.sh`: `identity not found in the keychain` | Run `security find-identity -v -p codesigning` and copy the name exactly. |
 | `release.sh`: `notary profile not usable` | The profile is missing, belongs to another Mac or user, or Apple refused it. Run the check command that the script prints. Make it once with `xcrun notarytool store-credentials <profile>`. |
-| Other notarization errors | Read `docs/RELEASING.md`, section "Errors". The submission ID is in `target/release-notary.log`. |
+| Other notarization errors | Read `docs/RELEASING.md`, section "Errors". The submission ID is in `target/release-notary-<arch>-<app\|dmg>.log` (the log of the step that failed). |
 | Self-test: `no animation frames` or a timeout | The screen is locked or asleep. Keep it awake and run again. |
 | The ad hoc `.dmg` shows a Gatekeeper warning on another Mac | This is expected. Only the notarized release runs there without a warning. |
 | A timing test fails once on a busy host | Two timing tests failed once each on a loaded Intel Mac and passed on rerun. Run it again before you look for a bug. |

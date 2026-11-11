@@ -29,6 +29,6 @@ Notes:
   not in the repository (they render into a local cache); the posters above
   stand in for them in the site and carry the AI-generated note.
 - `site/` has no web fonts and no vendored JavaScript: the page uses system
-  fonts and one inline SVG figure (site/index.html, line 16).
+  fonts, and its figures are inline SVG in `site/index.html`.
 - Trademark lines (Pro Tools, Cubase, macOS) are in NOTICE section 3 and
   apply to every asset group above.

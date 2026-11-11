@@ -69,7 +69,10 @@ Work in this order:
 
 Your hand edits survive a new analysis: an added, moved or restored hit keeps
 its place, and the rules never mark it again. So you can fix hits at any
-time. One order matters: a hand velocity wins over the floor and the
+time. A hit you only want out of the exports: select it and press `X` for
+**Hits > Toggle Hit Active**. The choice wins over the rules and survives a
+new analysis, a threshold change and a Learn change (chapter 7). One order
+matters: a hand velocity wins over the floor and the
 ceiling, and Recompute Velocities keeps it. So set the floor and the ceiling
 first, then set velocities by hand (chapter 8).
 
