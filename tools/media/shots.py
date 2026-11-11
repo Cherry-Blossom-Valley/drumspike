@@ -294,6 +294,9 @@ def app_pictures(page, work, out, wanted):
     menu(page, "analyze_all", wait=False)
     page.wait_for_function("() => document.querySelector('#progressText')?.textContent === 'analysis done'",
                            timeout=900000)
+    # the "analysis queued..." line of the start is stale once the job is done; no picture of
+    # this session carries it (#468)
+    page.evaluate("() => setMsg('')")
     inspect_track(page, SNARE, sections=("track", "hits", "detection"))
     page.wait_for_function("n => (S.events[n] || []).length > 0", arg=SNARE, timeout=60000)
     shoot("img/03-detection.png")
@@ -405,6 +408,7 @@ def guide_pictures(page, work, out, wanted):
     menu(page, "analyze_all", wait=False)
     page.wait_for_function("() => document.querySelector('#progressText')?.textContent === 'analysis done'",
                            timeout=900000)
+    page.evaluate("() => setMsg('')")   # the stale "analysis queued..." line (#468)
     inspect_track(page, SNARE, sections=("track", "hits"))
     page.wait_for_function("n => (S.events[n] || []).length > 0", arg=SNARE, timeout=60000)
 
