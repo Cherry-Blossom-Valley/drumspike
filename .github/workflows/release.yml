@@ -37,7 +37,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: never
-  DRUMSPIKE_SIGN_IDENTITY: "Developer ID Application: Wolfgang Frank (2NZX5Q2ESG)"
+  # The signing identity is a repository variable (Settings, Actions, Variables), not a line of this file.
+  DRUMSPIKE_SIGN_IDENTITY: ${{ vars.DRUMSPIKE_SIGN_IDENTITY }}
   DRUMSPIKE_NOTARY_PROFILE: drumspike-notary
 
 jobs:
@@ -191,6 +192,11 @@ jobs:
       - name: Signing key is usable
         run: |
           set -u
+          # A missing or wrong repository variable stops here with its own message, not as a keychain error.
+          case "${DRUMSPIKE_SIGN_IDENTITY:-}" in
+            "Developer ID Application: "*) ;;
+            *) echo "::error::the repository variable DRUMSPIKE_SIGN_IDENTITY does not hold a Developer ID Application identity. Set it under Settings, Actions, Variables, then run this workflow again."; exit 1 ;;
+          esac
           t=$(mktemp -d)
           cp /usr/bin/true "$t/probe"
           if ! perl -e 'alarm 60; exec @ARGV' codesign --force --sign "$DRUMSPIKE_SIGN_IDENTITY" "$t/probe" >"$t/out" 2>&1; then
