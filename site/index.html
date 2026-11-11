@@ -279,7 +279,7 @@ footer .here { color: #fff; }
       <div class="card">
         <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
         <h3>Exports MIDI and spike files</h3>
-        <p>Per track, on your session's time. Spike type Audio writes a short piece of the track's own audio at each hit: the body of the hit, not a click.</p>
+        <p>Per track, on your session's time. Each MIDI note sits on the sample of its hit: one tick is one sample where the MIDI standard allows it. Spike type Audio writes a short piece of the track's own audio at each hit: the body of the hit, not a click.</p>
       </div>
     </div>
     <!-- The product tour (issue #11) takes this video slot later. -->
@@ -328,7 +328,7 @@ footer .here { color: #fff; }
       <div class="eyebrow">How it works</div>
       <h2>The spectrum finds the hits. The waveform gives the sample.</h2>
       <p style="margin-top:16px">Drum Spike watches each close mic for a sudden rise of energy in its drum's own frequency bands, and keeps a hit only when it sounds like that drum.</p>
-      <p>Then Drum Spike walks back from the attack's peak, sample by sample, to the first motion of the attack. The threshold sits 33&nbsp;dB under the peak and stays over the noise before the hit.</p>
+      <p>Drum Spike finds the steep edge of the stroke and goes back to the last quiet sample before the stroke's first motion. A polarity flip does not move the hit.</p>
       <p>The result is the start of the attack, not the moment a level is crossed.</p>
     </div>
   </div>
@@ -365,7 +365,7 @@ footer .here { color: #fff; }
       <li class="pstep">
         <span class="pnum">4</span>
         <h3>Automate it</h3>
-        <p>Run Drum Spike from scripts or AI agents with its command line and MCP server. Let an AI agent fine-tune a song hit by hit, at sample zoom: one click in Settings installs the skill, the agent moves the clear hits, confirms the right ones and leaves the doubtful ones for you. <a href="https://github.com/Cherry-Blossom-Valley/drumspike/blob/main/docs/guide/15-agent-finetune.md">Guide: agent fine-tune</a></p>
+        <p>Run Drum Spike from scripts or AI agents with its command line and MCP server. Let an AI agent fine-tune a song hit by hit, at sample zoom: one click in Settings installs the skill. A hit moves only when two opinions agree, the agent's read of the stroke and how the track's clear hits start; when they differ, the agent leaves the hit and lists it for you. The session runs in Training Mode: every move of the agent is written to a training log that stays on your Mac, and your corrections become the truth that the placement rule is measured against. <a href="https://github.com/Cherry-Blossom-Valley/drumspike/blob/main/docs/guide/15-agent-finetune.md">Guide: agent fine-tune</a></p>
         <span class="ptime">for power users</span>
         <span class="pguide"><a href="https://github.com/Cherry-Blossom-Valley/drumspike/blob/main/docs/guide/14-automate.md">Guide: part 4</a></span>
       </li>
@@ -443,11 +443,11 @@ apps/desktop/scripts/build-dmg.sh
         <div class="points">
           <div class="point">
             <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></div>
-            <div><h3>Check how it works</h3><p>The detection, the threshold and the walk back are in the code, with tests. No black box between your tracks and your triggers.</p></div>
+            <div><h3>Check how it works</h3><p>The detection and the placement are in the code, with tests. No black box between your tracks and your triggers.</p></div>
           </div>
           <div class="point">
             <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0"/></svg></div>
-            <div><h3>Your audio stays on your Mac</h3><p>No account, no upload, no tracking. The analysis runs locally.</p></div>
+            <div><h3>Your audio stays on your Mac</h3><p>No account, no tracking. The audio and the project never leave your Mac; the analysis runs locally. A feedback report holds only what you wrote in the form, plus the app version, the OS and the processor type, and it goes out only when you send it, after a preview.</p></div>
           </div>
           <div class="point">
             <div class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg></div>
