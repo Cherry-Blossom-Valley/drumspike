@@ -196,6 +196,89 @@ fn track_repick_picks_from_the_kept_candidates_without_the_model() {
     assert_eq!(again["n_events"], json!(counts[2] as u64), "{again}");
 }
 
+/// The hits `track_repick` (no store) gives at slider value `v` on an analysed track.
+fn repick_events(svc: &Service, sid: &str, v: f64) -> Vec<Value> {
+    svc.track_repick(sid, "k in", Some(&params_at(v, &json!({}))), false)
+        .unwrap()["events"]
+        .as_array()
+        .cloned()
+        .unwrap()
+}
+
+const SENSITIVITIES: [f64; 3] = [5.0, 50.0, 150.0];
+
+/// #454: `track_params_set`, then `analyze_start`: the hits are the pick at the stored sensitivity,
+/// the hits `track_repick` gives at that value.
+#[test]
+fn analyze_start_after_track_params_set_picks_at_the_stored_sensitivity() {
+    let root = tmp("hist_stored_sens");
+    let svc = service_dsp();
+    svc.set_home(root.join("home"));
+    let sid = session(&svc, &root);
+    let mut counts = Vec::new();
+    for v in SENSITIVITIES {
+        svc.track_params_set(&sid, "k in", &params_at(v, &json!({}))).unwrap();
+        svc.analyze_start(&sid, Some(vec!["k in".into()]), None, None).unwrap();
+        let st = wait_done(&svc, &sid);
+        assert_eq!(st["tracks"]["k in"]["state"], "done", "{st}");
+        let analysed = events(&svc, &sid, "k in");
+        assert_eq!(analysed, repick_events(&svc, &sid, v), "analysis and re-pick at {v}");
+        counts.push(analysed.len());
+    }
+    println!("hits at sensitivity {SENSITIVITIES:?}: {counts:?}");
+    assert!(
+        counts[0] <= counts[1] && counts[1] < counts[2],
+        "a looser sensitivity gives more hits: {counts:?}"
+    );
+}
+
+/// #454: at the default sensitivity the analysis is as it was: the stored events do not depend on the
+/// route (no params, the stored default, the default in `params`).
+#[test]
+fn analyze_at_the_default_sensitivity_keeps_its_events() {
+    let root = tmp("hist_default_sens");
+    let svc = service_dsp();
+    svc.set_home(root.join("home"));
+    let sid = session(&svc, &root);
+    svc.analyze_start(&sid, Some(vec!["k in".into()]), None, None).unwrap();
+    wait_done(&svc, &sid);
+    let plain = events(&svc, &sid, "k in");
+    assert_eq!(plain.len(), ONSETS.len(), "the loud hits only: {plain:?}");
+    svc.track_params_set(&sid, "k in", &params_at(50.0, &json!({})))
+        .unwrap();
+    svc.analyze_start(&sid, Some(vec!["k in".into()]), None, None).unwrap();
+    wait_done(&svc, &sid);
+    assert_eq!(
+        serde_json::to_string(&events(&svc, &sid, "k in")).unwrap(),
+        serde_json::to_string(&plain).unwrap()
+    );
+    let (with_params, _) = reanalyze(&svc, &sid, "k in", &params_at(50.0, &json!({})));
+    assert_eq!(
+        serde_json::to_string(&with_params).unwrap(),
+        serde_json::to_string(&plain).unwrap()
+    );
+}
+
+/// #454: `analyze_start` with `params` picks at that sensitivity too.
+#[test]
+fn analyze_start_with_params_picks_at_their_sensitivity() {
+    let root = tmp("hist_params_sens");
+    let svc = service_dsp();
+    svc.set_home(root.join("home"));
+    let sid = session(&svc, &root);
+    let mut counts = Vec::new();
+    for v in SENSITIVITIES {
+        let (analysed, _) = reanalyze(&svc, &sid, "k in", &params_at(v, &json!({})));
+        assert_eq!(analysed, repick_events(&svc, &sid, v), "analysis and re-pick at {v}");
+        counts.push(analysed.len());
+    }
+    println!("hits at sensitivity {SENSITIVITIES:?}: {counts:?}");
+    assert!(
+        counts[0] <= counts[1] && counts[1] < counts[2],
+        "a looser sensitivity gives more hits: {counts:?}"
+    );
+}
+
 #[test]
 fn track_histograms_of_a_follower_show_its_own_levels_only() {
     let root = tmp("hist_follow");
