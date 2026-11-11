@@ -230,6 +230,8 @@ class Explainer11(Explainer):
         dtitle = Text("Learn adds many hits", font=FONT, font_size=20, color=TEXT)
         dtitle.move_to([2.4, -1.15, 0])
         dmsg = Text("more than 10 hits, or a quarter of the track", font=FONT, font_size=18, color=DIM)
+        if dmsg.width > 4.3:
+            dmsg.scale_to_fit_width(4.3)  # the guard sees text on text; the box border is on me
         dmsg.move_to([2.4, -1.6, 0])
         keep = Rectangle(width=1.2, height=0.5, color=TEXT, stroke_width=1).move_to([1.7, -2.15, 0])
         keep_t = Text("Keep", font=FONT, font_size=18, color=TEXT).move_to(keep)
