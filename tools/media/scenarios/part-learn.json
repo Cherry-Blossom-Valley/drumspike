@@ -121,7 +121,7 @@
     {
       "id": "pl-end",
       "steps": [
-        {"do": "caption", "text": "Drum Spike 0.9.33"},
+        {"do": "caption", "text": "Drum Spike"},
         {"do": "hold", "s": 4.0}
       ]
     }

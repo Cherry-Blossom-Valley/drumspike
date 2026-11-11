@@ -1,6 +1,6 @@
 {
   "name": "part4",
-  "title": "Screen recording, part 4: what is new in 0.9.33 (#403)",
+  "title": "Screen recording, part 4: exports, imports, the plug-in detector, the sensitivity re-pick and Keep (#403)",
   "script": "docs/product/scripts/rec-part4.md",
   "standard": true,
   "drift_limit_ms": 10,
@@ -89,7 +89,7 @@
       {"do": "hold", "s": 1.5,
        "err": "the Re-analyze question is new on screen: the pointer and the question hold before the answer"},
       {"do": "click", "sel": "#confirmActions button[data-act='go']", "timeout": 15,
-       "err": "the Re-analyze confirm: k_in has unedited events, so startAnalysisGo asks before it overwrites (0.9.33)"},
+       "err": "the Re-analyze confirm: k_in has unedited events, so startAnalysisGo asks before it overwrites"},
       {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the re-analyze started"},
       {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the re-analyze with the plug-in finished"},
       {"do": "wait", "cond": "() => (S.events['k_in'] || []).length === 21", "timeout": 30, "err": "the plug-in's 21 hits (every third kick of the demo session), refined to the attack"},
@@ -139,7 +139,7 @@
       {"do": "hold", "s": 1.5}
     ]},
     {"id": "p4-end", "steps": [
-      {"do": "caption", "text": "Drum Spike 0.9.33"},
+      {"do": "caption", "text": "Drum Spike"},
       {"do": "hold", "s": 4.0}
     ]}
   ]

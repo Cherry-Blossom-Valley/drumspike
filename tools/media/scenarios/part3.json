@@ -37,7 +37,7 @@
       {"do": "hold", "s": 1.5,
        "err": "the Re-analyze question is new on screen: the pointer and the question hold before the answer (the standard: the action, the pointer, the result)"},
       {"do": "click", "sel": "#confirmActions button[data-act='go']", "timeout": 15,
-       "err": "the Re-analyze confirm: the re-analyze overwrites the events of tracks with hits, so the app asks before it writes (0.9.33)"},
+       "err": "the Re-analyze confirm: the re-analyze overwrites the events of tracks with hits, so the app asks before it writes"},
       {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the re-analyze started"},
       {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the sub mic detected its own hits"},
       {"do": "hold", "s": 1.5},

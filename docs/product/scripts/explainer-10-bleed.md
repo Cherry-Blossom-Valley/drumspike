@@ -4,7 +4,7 @@ Chapter 10 of `docs/product/feature-path.md`. Narration for `tools/media/tts.py`
 per scene; lines that start with `>` are visual notes and are not spoken. Target length: about
 3 minutes. Use the demo session (it has bleed, a flam and a tom fill).
 
-Facts used (checked against the code at release 0.9.33, not against a commit; the constant or
+Facts used (checked against the code, not against a commit; the constant or
 field behind each number is named; module docs of `crates/core/src/detect/tom_bleed.rs`,
 `cross_bleed.rs`, `flam.rs`, `crates/app/src/tom_bleed.rs`, `cross_bleed.rs`, `flam.rs` and
 `ghost_gate.rs`; the detection on main is spectral onset detection with gates and cross-mic rules):

@@ -83,6 +83,6 @@ The log and your corrections become the truth list the placement is measured aga
 
 ## s07-result
 
-> The counts of one real run, Session F (the coordinator's check of 0.9.26 on one internal session): 522 hits seen, 124 moved, 314 confirmed, 84 left for the owner.
+> The counts of one real run, Session F (the coordinator's check on one internal session): 522 hits seen, 124 moved, 314 confirmed, 84 left for the owner.
 
 The agent reports counts only: how many hits it saw, moved, confirmed and left for you. You stay the judge: every move is a normal edit you can undo, and the doubtful hits wait in the review queue.

@@ -22,12 +22,6 @@ Now add the tracks. Press Shift Command I and pick the session's audio folder. D
 
 The analysis starts at once. For each track, the detector listens for that track's drum only. The hits appear as spikes under each waveform.
 
-## p1-role
-
-> In the Add Tracks list (before Add), the row "new take" shows "from audio" with the role kick. After the analysis: Option+I opens the Inspector, select "new take"; section Track shows the role and its hint "suggested from the audio". Change it to "tom", then press Cmd+Z: the role and the hits come back.
-
-One file has a name that says nothing: new take. Drum Spike listened to it and suggests kick. The Inspector shows where every role came from. Change a role if it is wrong; the track is analyzed again. Undo brings everything back.
-
 ## p1-zoom
 
 > Click the wave lane just before a hit (the playhead), then Tab selects the hit; press 6 (5 ms zoom); the spike sits on the first motion of the attack; the sample counter in the info line.
