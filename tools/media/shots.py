@@ -144,7 +144,10 @@ def start_bridge(home):
     env = dict(os.environ, HOME=str(home), DRUMSPIKE_HOME=str(home), DRUMSPIKE_PROJECTS=str(home / "projects"),
                DRUMSPIKE_AUTOSAVE_SECONDS="1", DRUMSPIKE_AUDIO="null", DRUMSPIKE_MASTER_GAIN="0",
                DRUMSPIKE_DETECTORS_DIR=str(home / "Library" / "Application Support" / "Drum Spike" / "Detectors"))
-    proc = subprocess.Popen([str(BRIDGE)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    # #479: the checkout's own static folder, not the one baked into a shared binary: a bridge
+    # built in another checkout would otherwise serve that checkout's page (an old style.css).
+    proc = subprocess.Popen([str(BRIDGE), "--static", str(ROOT / "static")], cwd=ROOT,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     line = proc.stdout.readline()
     m = re.search(r"http://127\.0\.0\.1:\d+", line)
     if not m:
