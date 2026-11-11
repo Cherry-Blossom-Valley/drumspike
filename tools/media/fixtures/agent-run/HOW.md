@@ -3,7 +3,7 @@
 One real run of Claude Code on the demo session, driving a real Drum Spike window through the
 skill and the `agent_call` tool. Nothing in `transcript.txt` was written by hand.
 
-The run used main at a45f1c07 and a Mac with a window server. `<A>` is an empty scratch folder and `<H>` is the folder `home` inside it.
+The run used main at 79a6e05 (0.9.33) and a Mac with a window server. `<A>` is an empty scratch folder and `<H>` is the folder `home` inside it.
 
 1. Build the binary and put it in an ad-hoc signed app bundle, so that macOS sends the app its
    open-document event. The bundle needs an `Info.plist` with `CFBundleDocumentTypes` for
@@ -14,7 +14,9 @@ The run used main at a45f1c07 and a Mac with a window server. `<A>` is an empty 
        lsregister -f <bundle>
 
 2. Make the project from two demo stems in `<A>/stems` (`k in.wav` and `s top.wav`, the demo session of
-   `tools/media/record.py`, seed `demo`). Roles are kick and snare.
+   `tools/media/record.py`, seed `demo`). Roles are kick and snare. The script also places one
+   hit by hand before the run: kick hit 3, moved 0.5 ms by `events_edit` with `by "person"` and
+   Training Mode on, the app's own edit path. The run's `handPlaced` call finds it.
 
        uv run --no-project python tools/media/fixtures/agent-run/prep_demo.py <A> <binary>
 
@@ -44,15 +46,26 @@ The run used main at a45f1c07 and a Mac with a window server. `<A>` is an empty 
        uv run --no-project python tools/media/fixtures/agent-run/build_fixture.py \
          <A>/out.jsonl <A> tools/media/fixtures/agent-run
 
-The run took 60 s. No tool call was denied.
+The run took 82 s and 81 turns. 1 tool call was denied: a Bash command that made the folder
+`agent` and the file `left-for-review.tsv` in it (the run allows no Bash except `sleep`). The agent
+then wrote the list with the Write tool, and the file exists. The denied call and the Write call
+stay in the transcript as they happened. A user's own agent meets the same question there.
+
+The track and the range meet what the tutorial shows: the hand-placed kick hit 3 is named and
+left alone, 11 kick hits move 2 samples, and snare hit 0 is left for the user with a reason that
+starts with `two opinions differ`.
 
 ## What was changed in the transcript
 
-- 4 path strings were replaced by `<home>`.
-- 55 tool names were shortened: the prefix `mcp__drumspike__` is dropped.
+- 3 path strings were replaced by `<project folder>` (the project's folder; two in the denied
+  Bash command, one in the Write call). The line of the Bash command is cut at 80 characters.
+- 75 tool names were shortened: the prefix `mcp__drumspike__` is dropped.
 - Long lines of the agent's text are wrapped at 94 characters. Table lines are not wrapped.
 - 0 lines were removed.
 - `move` lines carry the from and to positions of the tool's answer. The other answers (the
   samples of a look, the hit lists) are not shown.
 
-`actions.jsonl` holds the 12 moves and 18 confirms from the tool answers.
+`actions.jsonl` holds the 11 moves and 25 confirms from the tool answers, and one `left` row:
+a hit of the asked range that the run neither moved nor confirmed, that is not hand-placed, and
+that the audit answer holds back with a reason starting `two opinions differ` (snare hit 0). The
+reason is the audit's text, not the agent's.
