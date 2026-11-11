@@ -20,13 +20,13 @@ survives the kit check on the t2 track); hand-off to explainer 4
 
 > The demo session's snare close mic (s top) around the kit check; a level meter curve under it; the snare hit and the kick's copy both push the meter up.
 
-A level meter only knows loud. On the demo session's snare mic, the hits are loud. But the kick bleeds into the same mic, and its copy is loud too. And a hit stays loud while it decays. Loudness alone cannot find a hit.
+A level meter only knows loud. On a snare close mic, the hits are loud. But the kick bleeds into the same mic, and the kick's copy is loud too. And a hit stays loud while it decays. Loudness alone cannot find a hit.
 
 ## s02-spectrogram
 
 > The detector's own log spectrogram of the demo snare track: time left to right, frequency bottom to top; the hits stand up as stripes.
 
-So Drum Spike reads the spectrum over time. This is the detector's own spectrogram of the demo snare track. Each stripe is one hit: energy rising in many bands at once.
+So Drum Spike reads the spectrum over time. This is the detector's own spectrogram of a snare track. Each stripe is one hit: energy rising in many bands at once.
 
 ## s03-flux
 
@@ -44,7 +44,7 @@ The peaks of the flux are the candidate hits. A peak counts when it stands over 
 
 > The demo session's tom mic (t2) around the kit check, 1.6 s wide: the tom hit carries an orange hit mark; the kick's copy and the snare's copy carry none; the text: loud enough for the tom's reference level, and a shape that fits the tom template.
 
-Then the gates, on the demo session's tom mic. A candidate must be loud enough against the track's own reference level, and its shape must fit the template of the track's loud hits. The tom hit passes. The kick's copy and the snare's copy have the wrong shape. No hit.
+Then the gates, here on a tom mic. A candidate must be loud enough against the track's own reference level, and its shape must fit the template of the track's loud hits. The tom hit passes. The kick's copy and the snare's copy have the wrong shape. No hit.
 
 ## s06-handoff
 

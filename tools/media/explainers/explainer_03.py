@@ -270,7 +270,7 @@ class Explainer03(Explainer):
         step = 4
         pic = wave([float(v) for v in x[::step]], -PLOT_W / 2, PLOT_W / 2, 0.8, 1.6, COBALT)
         lane = Line([-PLOT_W / 2, 0.8, 0], [PLOT_W / 2, 0.8, 0], color=DIM)
-        name = Text("the demo session's tom mic (t2)", font=FONT, font_size=20, color=TEXT)
+        name = Text("tom close mic", font=FONT, font_size=20, color=TEXT)
         name.to_edge(UP, buff=0.25)
         self.t_play(Create(lane), Create(pic), FadeIn(name), t=3.0)
         hits, _, _ = core_data("t2", "tom")
@@ -302,7 +302,7 @@ class Explainer03(Explainer):
                  [-PLOT_W / 2 + PLOT_W * h["time"] / dur, 0.3, 0], color=ORANGE, stroke_width=2)
             for h in core_data()[0]["hits"]
         ])
-        label = Text(f"the demo snare track: {len(core_data()[0]['hits'])} hits kept", font=FONT,
+        label = Text(f"the snare track: {len(core_data()[0]['hits'])} hits kept", font=FONT,
                      font_size=22, color=TEXT).to_edge(UP, buff=0.7)
         self.t_play(Create(lane), Create(stalks), FadeIn(label), t=3.0)
         nxt = Text("now: where exactly does the hit start?", font=FONT, font_size=26, color=TEXT)
