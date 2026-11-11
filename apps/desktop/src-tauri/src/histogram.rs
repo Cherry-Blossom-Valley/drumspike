@@ -71,9 +71,10 @@ pub async fn track_params_set(
     sid: String,
     name: String,
     params: Map<String, Value>,
+    replace: Option<bool>,
 ) -> Result<Value, AppError> {
     blocking(&svc, "track_params_set", move |s| {
-        s.track_params_set(&sid, &name, &params)
+        s.track_params_set(&sid, &name, &params, replace.unwrap_or(false))
     })
     .await
 }

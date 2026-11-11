@@ -732,7 +732,7 @@ fn four_tracks(tag: &str) -> (Service, String, PathBuf) {
         std::fs::write(a.join("candidates.bin"), b"marker").unwrap();
     }
     let params = json!({"min_gap_ms": 33.0});
-    svc.track_params_set(&sid, "s top", params.as_object().unwrap())
+    svc.track_params_set(&sid, "s top", params.as_object().unwrap(), false)
         .unwrap();
     svc.track_set_follow(&sid, "k sub", Some("k in")).unwrap();
     svc.project_save(&sid).unwrap();

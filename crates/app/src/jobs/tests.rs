@@ -283,14 +283,14 @@ fn a_second_analyze_start_is_refused_until_the_project_reopens() {
     // the first job is queued (as `start` does before the worker spawns)
     svc.inner.jobs.queue(&sid, &["kick".to_string()]);
     let e = svc
-        .analyze_start_keep(&sid, Some(vec!["kick".into()]), None, None, None, false)
+        .analyze_start_keep(&sid, Some(vec!["kick".into()]), None, None, None, false, false)
         .unwrap_err();
     assert_eq!(e.code, 409);
     assert!(e.message.contains("already queued or running"), "{}", e.message);
     // after the close (and a reopen) a start works again: the real path, a fresh generation
     svc.inner.jobs.clear(&sid);
     assert_eq!(
-        svc.analyze_start_keep(&sid, Some(vec!["kick".into()]), None, None, None, false)
+        svc.analyze_start_keep(&sid, Some(vec!["kick".into()]), None, None, None, false, false)
             .unwrap(),
         json!({"started": ["kick"]})
     );

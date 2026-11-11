@@ -385,7 +385,8 @@ fn a_restored_hit_stays_unmarked_through_a_repick_and_a_reanalyze_with_keep() {
     assert_eq!(r["bleed"]["rule"], BLEED_RULE, "{r}");
     kept(&svc, "after the re-pick");
     // Re-analyze with keep edited
-    svc.analyze_start_keep(&sid, None, None, None, None, true).unwrap();
+    svc.analyze_start_keep(&sid, None, None, None, None, true, false)
+        .unwrap();
     wait_done(&svc, &sid);
     kept(&svc, "after Re-analyze with keep");
     assert!(

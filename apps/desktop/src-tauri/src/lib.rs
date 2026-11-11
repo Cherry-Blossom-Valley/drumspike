@@ -421,6 +421,7 @@ async fn track_sampler_wave(
 ///
 /// Errors when the analysis cannot be started for the project.
 #[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::too_many_arguments)] // the surface of one call (#442 added the replace flag)
 fn analyze_start(
     svc: State<'_, Service>,
     sid: String,
@@ -428,6 +429,7 @@ fn analyze_start(
     params: Option<Map<String, Value>>,
     detector: Option<String>,
     keep_edited: Option<bool>,
+    replace: Option<bool>,
     progress: Channel<Value>,
 ) -> Result<Value, AppError> {
     let progress: Progress = Arc::new(move |v: Value| {
@@ -440,6 +442,7 @@ fn analyze_start(
         detector.as_deref(),
         Some(progress),
         keep_edited.unwrap_or(drumspike_app::command_policy::PAGE_KEEP_EDITED),
+        replace.unwrap_or(false),
     )
 }
 

@@ -260,7 +260,7 @@ fn result_schemas_name_keys_that_real_answers_have() {
         ),
         (
             "track_params_set",
-            svc.track_params_set(&sid, "k in", json!({"min_gap_ms": 20}).as_object().unwrap())
+            svc.track_params_set(&sid, "k in", json!({"min_gap_ms": 20}).as_object().unwrap(), false)
                 .unwrap(),
         ),
         (
