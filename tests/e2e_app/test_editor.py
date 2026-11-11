@@ -403,7 +403,7 @@ def test_params_in_the_inspector_set_note_and_analysis_params(app, make_project,
     assert params["min_gap_ms"] == 35 and params["refine"] is False
     assert max(params["thresholds"]) < 0.32                             # higher sensitivity, lower thresholds
     ins.locator(".bReanalyze").click()
-    expect(ins.locator("#insDetected")).to_have_text("3", timeout=60000)   # P3-14c: the header shows no counts; the Inspector does
+    expect(ins.locator("#insDetected")).to_have_text("6", timeout=60000)   # P3-14c: the Inspector shows the counts; #454: the pick at the stored sensitivity 100 (3 at the default)
     invoke(app, "project_save", sid=sid)
     saved = doc_of(folder)["tracks"]["Kick In"]["params"]
     assert saved["min_gap_ms"] == 35 and saved["refine"] is False
