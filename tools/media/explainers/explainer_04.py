@@ -189,10 +189,11 @@ class Explainer04(Explainer):
         j = next(i for i in range(v.a, v.b - w) if abs(self.x[i + w]) - abs(self.x[i]) >= need)
         edge = VGroup(*[Line([v.px(i), v.py(self.x[i]), 0], [v.px(i + 1), v.py(self.x[i + 1]), 0],
                              color=ORANGE, stroke_width=6) for i in range(j, j + w)])
-        label = Text("18 dB in 0.1 ms", font=FONT, font_size=28, color=ORANGE).move_to([v.px(j) + 2.2, 1.9, 0])
+        label = Text("a rise of 18 dB under the peak within 0.1 ms", font=FONT, font_size=28, color=ORANGE).move_to([0, 2.9, 0])
+        label2 = Text("searched in the 5 ms after the foot", font=FONT, font_size=28, color=DIM).move_to([0, 2.4, 0])
         self.t_play(Create(v.curve()), FadeIn(v.dots(v.a, v.b)), t=2.5)
-        self.t_play(FadeIn(edge), FadeIn(label), t=2.5)
-        self.say("A steep edge: 18 dB in 0.1 ms, within 5 ms of the foot.", t=2)
+        self.t_play(FadeIn(edge), FadeIn(label), FadeIn(label2), t=2.5)
+        self.say("A steep edge: the signal climbs almost to the peak at once.", t=2)
         self.t_wait(1)
 
     def s04_line(self):
@@ -202,10 +203,12 @@ class Explainer04(Explainer):
                           stroke_width=0).move_to([v.px(self.p - 12), 0, 0])
         mid = DashedLine([-PLOT_W / 2, v.py(lvl), 0], [PLOT_W / 2, v.py(lvl), 0], color=ORANGE)
         zoom = Text("vertical zoom 10x", font=FONT, font_size=26, color=DIM).to_corner(UP + RIGHT, buff=0.6)
+        span = Text("the line: median of the 0.5 ms before the foot", font=FONT, font_size=28, color=ORANGE).move_to(
+            [-1.5, 2.6, 0])
         self.t_play(Create(v.curve()), FadeIn(v.dots(v.a, v.b)), FadeIn(zoom), t=2.5)
-        self.t_play(FadeIn(shade), Create(mid), t=2.5)
+        self.t_play(FadeIn(shade), Create(mid), FadeIn(span), t=2.5)
         self.t_play(FadeIn(v.band(lvl)), t=1.5)
-        self.say("The line: its median, and a band of 2.5 percent of the peak.", t=2)
+        self.say("The line: its middle value, and a band of 2.5 percent of the peak.", t=2)
         self.t_wait(1)
 
     def swing_pair(self, share, width):
@@ -222,20 +225,26 @@ class Explainer04(Explainer):
         bottom = self.lead(neg, yc=-1.0, half=0.95, before=30, after=12)
         run_top = top.dots(p_pos - 9, p_pos, color=ORANGE, radius=0.07)
         run_bottom = bottom.dots(p_neg - 9, p_neg, color=ORANGE, radius=0.07)
-        self.t_play(Create(top.curve()), Create(bottom.curve()), t=2.5)
+        ripple = Text("ripple of 8 percent of the peak, either sign", font=FONT, font_size=28, color=ORANGE).move_to(
+            [-1.5, 2.8, 0])
+        run = Text("a run of 10 line samples, 0.2 ms", font=FONT, font_size=28, color=ORANGE).move_to([-3.0, -2.35, 0])
+        self.t_play(Create(top.curve()), Create(bottom.curve()), FadeIn(ripple), t=2.5)
         self.t_play(FadeIn(top.dots(top.a, top.b)), FadeIn(bottom.dots(bottom.a, bottom.b)), t=1.5)
-        self.t_play(FadeIn(run_top), FadeIn(run_bottom), t=2)
+        self.t_play(FadeIn(run_top), FadeIn(run_bottom), FadeIn(run), t=2)
         self.t_play(FadeIn(top.marker(p_pos)), FadeIn(bottom.marker(p_neg)), t=2.5)
-        self.say("A ripple of either sign before the stroke is its first motion.", t=2)
+        self.say("A swing before the edge is the drum already moving.", t=2)
         self.t_wait(1)
 
     def s06_small_bump(self):
         bump, p_bump = self.swing_pair(BUMP_PCT, BUMP_WIDTH)[0]
         v = self.lead(bump, before=30, after=12)
         lvl = line_level(bump, self.p)
-        note = Text("inside the band: no first motion", font=FONT, font_size=28, color=ORANGE).move_to([-1.0, 2.6, 0])
+        note = Text("bump of 1 percent of the peak: inside the band, no first motion", font=FONT, font_size=28,
+                    color=ORANGE).move_to([0, 2.9, 0])
+        rule = Text("a motion must stand out: 2 times the line's wobble over the 2 ms before it", font=FONT,
+                    font_size=28, color=DIM).move_to([0, 2.4, 0])
         self.t_play(Create(v.curve()), FadeIn(v.dots(v.a, v.b)), FadeIn(v.band(lvl)), t=3)
-        self.t_play(FadeIn(v.marker(p_bump)), FadeIn(note), t=2.5)
+        self.t_play(FadeIn(v.marker(p_bump)), FadeIn(note), FadeIn(rule), t=2.5)
         self.say("A bump that stays inside the band does not move the hit.", t=2)
         self.t_wait(1)
 
@@ -262,12 +271,13 @@ class Explainer04(Explainer):
         self.t_wait(1)
 
     def s09_limits(self):
-        notes = ["Back at most 0.8 ms from the edge.", "A swing at least 0.06 ms wide.",
-                 "No steep edge: the strict foot, at most 0.06 ms.", "96 kHz: the same times, twice the samples."]
-        rows = [Text(t, font=FONT, font_size=34, color=TEXT).shift(UP * (2.2 - 1.0 * i)) for i, t in enumerate(notes)]
+        notes = ["Back at most 0.8 ms from the edge.", "A swing at least 0.06 ms wide: a flicker is no motion.",
+                 "No steep edge: the strict foot, at most 0.06 ms from the first foot.",
+                 "96 kHz: the same times, twice the samples."]
+        rows = [Text(t, font=FONT, font_size=26, color=TEXT).shift(UP * (2.2 - 1.0 * i)) for i, t in enumerate(notes)]
         for row in rows:
             self.t_play(FadeIn(row), t=2.2)
-        self.say("The limits the rule has today.", t=2)
+        self.say("The limits of the rule, in time, not in samples.", t=2)
         self.t_wait(1)
 
     def s10_result(self):

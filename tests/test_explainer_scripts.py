@@ -183,6 +183,39 @@ def check_numbers_in_header(text):
     return [f"the narration says {n}, which the facts header does not carry" for n in sorted(spoken - header)]
 
 
+MAX_SPOKEN_NUMBERS = 5  # the idea carries a scene; a listener keeps two or three numbers, the rest is on screen
+
+
+def check_spoken_number_count(text):
+    """The hits for a narration that speaks more numbers than a listener keeps (numbers go on screen)."""
+    spoken = re.findall(r"\d+(?:\.\d+)?", " ".join(s for _, _, s in scenes_of(text)))
+    if len(spoken) > MAX_SPOKEN_NUMBERS:
+        return [f"the narration speaks {len(spoken)} numbers, {MAX_SPOKEN_NUMBERS} at most: {spoken}"]
+    return []
+
+
+def builder_labels(source):
+    """The text that a builder puts on screen: every string of the module but its docstrings and the
+    scene ids (`s01-recap`)."""
+    import ast
+    tree = ast.parse(source)
+    skip = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef)) and node.body \
+                and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant):
+            skip.add(id(node.body[0].value))
+    return [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in skip
+            and not re.fullmatch(r"s\d\d-[\w-]+", n.value)]
+
+
+def check_labels_in_header(text, source):
+    """The hits for a number on the builder's screen that the facts header does not carry."""
+    header = numbers_of(header_of(text))
+    shown = numbers_of(" ".join(builder_labels(source)))
+    return [f"the picture shows {n}, which the facts header does not carry" for n in sorted(shown - header)]
+
+
 def test_rule_version_is_read_from_the_code():
     assert current_rule_version() == 10
 
@@ -201,6 +234,29 @@ def test_explainer_4_facts_match_the_code():
     assert check_header_constants(text, rust_constants()) == []
     assert check_no_kick_threshold(text) == []
     assert check_numbers_in_header(text) == []
+    assert check_spoken_number_count(text) == []
+    source = (ROOT / "tools" / "media" / "explainers" / "explainer_04.py").read_text(encoding="utf-8")
+    assert check_labels_in_header(text, source) == []
+
+
+def test_explainer_4_picture_shows_the_numbers_the_narration_leaves_out():
+    """The idea is spoken, the numbers are on screen: each number of the facts header that the narration
+    leaves out is in a label of the builder."""
+    text = script_text("explainer-04-first-sample.md")
+    source = (ROOT / "tools" / "media" / "explainers" / "explainer_04.py").read_text(encoding="utf-8")
+    shown = numbers_of(" ".join(builder_labels(source)))
+    for n in ("18", "0.1", "5", "0.5", "8", "10", "0.2", "1", "2", "0.06", "0.8", "96"):
+        assert n in shown, f"the number {n} is on no label of the picture"
+    assert len(numbers_of(" ".join(s for _, _, s in scenes_of(text)))) <= MAX_SPOKEN_NUMBERS
+
+
+def test_planted_label_number_and_spoken_overload_are_reported():
+    header = "Facts. 18 dB.\n\n## s01-x\n\n> a\n\nSpoken.\n"
+    assert check_labels_in_header(header, 'Text("a rise of 18 dB in 7 ms")') == [
+        "the picture shows 7, which the facts header does not carry"]
+    assert check_labels_in_header(header, 'def f():\n    """A docstring of 99."""\n    return "s01-recap"') == []
+    many = "Facts.\n\n## s01-x\n\n> a\n\n" + " ".join(str(n) for n in range(1, 8)) + " words.\n"
+    assert len(check_spoken_number_count(many)) == 1
 
 
 def test_explainer_4_facts_list_is_not_empty():
