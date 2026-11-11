@@ -305,6 +305,10 @@ canvas.spike.onHit { cursor: ew-resize; }
 #settingsModal .setCat { display: none; }
 #settingsModal .setCat.active { display: block; }
 #settingsModal .prow { grid-template-columns: 140px 1fr; }
+/* #479: the plug-in rows read as one row: the name and its hint take the row's width and the
+   Licence button keeps its own width at the row's right edge (the label/control template above
+   wraps the name in 140 px and stretches the button over the whole row). */
+#settingsModal #setPlugins .prow { grid-template-columns: 1fr auto; }
 #settingsModal .setWarnSlot { min-height: 18px; }   /* #387: the warning's fixed slot, so nothing shifts */
 #setAgentSkill .prow { grid-template-columns: 1fr auto; gap: 8px; }   /* #371: the status text or the command line, then its button */
 #setAgentSkill .skillCmd { font-size: 11px; word-break: break-all; user-select: all; }
