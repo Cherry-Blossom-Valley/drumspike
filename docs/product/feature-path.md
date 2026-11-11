@@ -155,7 +155,7 @@ Rules for every asset:
 | 11 | yes | yes | - |
 | 12-13 | yes | yes (one recording) | - |
 | 14 | yes | - | - |
-| 15 | yes | - | Let an agent fine-tune a song |
+| 15 | yes | yes (the agent tutorial) | Let an agent fine-tune a song |
 | 16 | yes | - | Training Mode |
 
 Part 4 of the recordings shows the current workflow on the demo session (the Audio spike

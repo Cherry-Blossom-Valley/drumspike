@@ -47,7 +47,7 @@ The snippet ends on a zero crossing, at most 60 milliseconds. A kick fills about
 
 > A kick hit and a snare hit from the demo session, each the whole hit (silence before the onset, attack, decay), raw with its snippet range shaded.
 
-Two real hits from the demo session. The kick breathes longer, the snare is short and crisp. Each snippet covers its own body, nothing more.
+Two real hits, a kick and a snare. The kick breathes longer, the snare is short and crisp. Each snippet covers its own body, nothing more.
 
 ## s06-click-versus-audio
 
