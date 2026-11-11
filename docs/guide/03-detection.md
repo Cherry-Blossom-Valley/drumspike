@@ -31,9 +31,9 @@ own mic, and the overhead mics deny hi-hat and cymbal bleed.
    The gap is in milliseconds, 20 by default; the field is in the Inspector, section
    Detection.
 
-The demo session holds 309 hits. That number counts the strokes of the demo kit; the hit
-count per track is higher where a stroke also reaches another microphone, because the same
-stroke is a hit on each mic that hears it. Chapter 4 shows where each one lands.
+The demo session holds 309 hits. That number counts the strokes of the demo kit: a drum with
+more than one close-mic track has its hits on each of its tracks, so the counts of the tracks
+add up to more than 309. Chapter 4 shows where each one lands.
 
 ![A snare track after the analysis; hits are marked on the wave lane and the hat bleed is left out.](img/03-detection.png)
 

@@ -26,7 +26,8 @@ hits over 62.5 s; these keys take you through them fast.
    (`E`) fills the lane width with the selected range, or 5 ms around the selected hit, and
    returns to the zoom before. **View > Zoom Presets > Add Current…** saves the span of the
    view under a name; **Organize…** renames and removes your own presets.
-4. The main counter under the lanes shows the position: **View > Main Counter > Seconds**,
+4. The main counter in the transport bar at the top, next to the play and stop buttons, shows
+   the position: **View > Main Counter > Seconds**,
    **Samples**, **Bars|Beats** and **Timecode** (30 fps) switch the format; **Exchange
    Counters** (a click on the counter) swaps the main and the sub counter.
 5. Change the track height with `Option+Up` and `Option+Down`
