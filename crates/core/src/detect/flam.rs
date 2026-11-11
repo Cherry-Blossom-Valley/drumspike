@@ -469,7 +469,9 @@ pub fn second_onsets(
             (foot as f64 / srf, false)
         } else {
             let lo = ((d + 1) * hop) as f64 / srf;
-            let hi = ((c + 1) * hop) as f64 / srf;
+            // the span ends one hop and the hold after c * hop: the held envelope crosses the 9 dB
+            // up to the hold before the raw attack, so the attack itself lies past the block end
+            let hi = ((c + 1 + blocks(p.hold_s).max(1)) * hop) as f64 / srf;
             let t0 = sc as f64 / srf;
             let placed = refine_rule(x, t0, sr, &[2.0 * lo - t0], RefineWindow::DEFAULT, rule).t;
             if placed >= lo && placed <= hi {

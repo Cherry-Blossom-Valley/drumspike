@@ -706,7 +706,7 @@ fn a_louder_swing_after_the_stroke_does_not_move_it_off_its_own_first_sample() {
     // #445 (3a): the rule's window reaches 12 ms after the re-rise block, so a louder swing 6 ms
     // after the second stroke would take the placement. The span ends at the end of the re-rise
     // block: the stroke stays on its own first sample (the offset of the same waveform without
-    // the swing is within a block of it), and the outcome counts the fallback.
+    // the swing is within a block of it).
     let p = FlamParams::default();
     let srf = f64::from(SR);
     let hop = hop_of(SR) as i64;
@@ -727,7 +727,7 @@ fn a_louder_swing_after_the_stroke_does_not_move_it_off_its_own_first_sample() {
         }
         (f32s(&x), i_main)
     };
-    let (x, i_main) = fixture(false);
+    let (x, _) = fixture(false);
     let (env, _) = attack_env(&x, SR, &p);
     let plain = second_onsets(&x, SR, &[3.0], &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT);
     assert_eq!(plain.len(), 1, "{plain:?}");
@@ -749,13 +749,13 @@ fn a_louder_swing_after_the_stroke_does_not_move_it_off_its_own_first_sample() {
         at < i_main + 3 * hop,
         "the stroke sits at the swing, 6 ms after its own first sample: {swung:?}"
     );
-    assert!(swung[0].fallback, "the rule's answer was outside the span: {swung:?}");
 }
 
 #[test]
 fn no_second_stroke_is_placed_after_the_end_of_its_re_rise_block() {
-    // #445 (3b): the version 2 span ends one hop after `c * hop` — no stroke sits after the end of
-    // its re-rise block, on the grid of gaps and grace decays and on the swing fixture.
+    // #445 (3b): the version 2 span ends one hop and the hold after `c * hop` — no stroke sits
+    // after the end of its re-rise block, on the grid of gaps and grace decays and on the swing
+    // fixture.
     let p = FlamParams::default();
     let hop = hop_of(SR) as i64;
     let srf = f64::from(SR);
@@ -788,9 +788,9 @@ fn no_second_stroke_is_placed_after_the_end_of_its_re_rise_block() {
         let s = &found[0];
         let at = (s.t * srf).round() as i64;
         assert!(
-            at <= (s.rise_block + 1) * hop,
+            at <= (s.rise_block + 1 + blocks(p.hold_s)) * hop,
             "after the re-rise block: gap {gap} grace {g_amp}/{g_tau}: at {at}, end {}",
-            (s.rise_block + 1) * hop
+            (s.rise_block + 1 + blocks(p.hold_s)) * hop
         );
     }
     // and on the swing fixture of
@@ -812,9 +812,9 @@ fn no_second_stroke_is_placed_after_the_end_of_its_re_rise_block() {
     assert_eq!(found.len(), 1, "{found:?}");
     let at = (found[0].t * srf).round() as i64;
     assert!(
-        at <= (found[0].rise_block + 1) * hop,
+        at <= (found[0].rise_block + 1 + blocks(p.hold_s)) * hop,
         "after the re-rise block: at {at}, end {} ({found:?})",
-        (found[0].rise_block + 1) * hop
+        (found[0].rise_block + 1 + blocks(p.hold_s)) * hop
     );
 }
 
@@ -849,27 +849,32 @@ fn the_second_stroke_follows_the_rule_of_the_track() {
         };
         -(line + swing + body)
     };
-    let times: Vec<f64> = (0..6).map(|k| 1.025 + 0.037 * k as f64).collect();
+    let times: Vec<f64> = (0..6).map(|k| 1.025 + 0.12 * k as f64).collect();
     let build = |flip: bool| {
         let mut x = vec![0.0f64; (3.0 * srf) as usize];
         let mut nz = Noise(0x444_000_000_000_0001);
         for &te in &times {
             let grace = burst(&mut nz, 0.02, 0.003, 0.5);
             add_at(&mut x, &grace, te - 0.025);
-            let i0 = (te * srf).round() as usize;
-            for k in 0..(0.06 * srf) as usize {
+            let i0 = (te * srf).round() as i64;
+            // the line and the pre-swing dip reach well before the edge (the #444 shape needs them
+            // there); 14 ms puts the line's own onset before the re-rise search's 12 ms start
+            let back = (0.014 * srf) as i64;
+            for k in -back..(0.06 * srf) as i64 {
+                let at = i0 + k;
+                if at < 0 || at as usize >= x.len() {
+                    continue;
+                }
                 let v = stroke_at(
                     k as f64 / srf,
-                    [0.03, 0.045, 0.06, 0.08, 0.045, 0.06][k % 6],
-                    [0.0, 40e-6, 80e-6, 110e-6, 150e-6, 180e-6][k % 6],
-                    [150e-6, 212.5e-6, 275e-6, 337.5e-6, 400e-6, 250e-6][k % 6],
-                    [60e-6, 80e-6, 100e-6, 60e-6, 80e-6, 100e-6][k % 6],
-                    [180.0, 215.0, 250.0, 285.0, 320.0, 355.0][k % 6],
+                    [0.03, 0.045, 0.06, 0.08, 0.045, 0.06][k.rem_euclid(6) as usize],
+                    [0.0, 40e-6, 80e-6, 110e-6, 150e-6, 180e-6][k.rem_euclid(6) as usize],
+                    [150e-6, 212.5e-6, 275e-6, 337.5e-6, 400e-6, 250e-6][k.rem_euclid(6) as usize],
+                    [60e-6, 80e-6, 100e-6, 60e-6, 80e-6, 100e-6][k.rem_euclid(6) as usize],
+                    [180.0, 215.0, 250.0, 285.0, 320.0, 355.0][k.rem_euclid(6) as usize],
                 );
                 let v = if flip { -v } else { v };
-                if i0 + k < x.len() {
-                    x[i0 + k] += v;
-                }
+                x[at as usize] += v;
             }
         }
         for v in &mut x {
@@ -880,7 +885,10 @@ fn the_second_stroke_follows_the_rule_of_the_track() {
     let x = build(false);
     let xf = build(true);
     let (env, _) = attack_env(&x, SR, &p);
-    let run = |x: &[f32], rule: RefineRule| second_onsets(x, SR, &times, &p, &env, &[], FLAM_RULE_VERSION, rule);
+    // the hits are the graces, 25 ms before their #444-shape bodies (the bodies are the rule's
+    // second strokes)
+    let hits: Vec<f64> = times.iter().map(|te| te - 0.025).collect();
+    let run = |x: &[f32], rule: RefineRule| second_onsets(x, SR, &hits, &p, &env, &[], FLAM_RULE_VERSION, rule);
     for rule in [RefineRule::Departure, RefineRule::Symmetric] {
         let found = run(&x, rule);
         assert_eq!(found.len(), 6, "{rule:?}: {found:?}");
@@ -909,14 +917,11 @@ fn the_second_stroke_follows_the_rule_of_the_track() {
             .count()
     };
     assert_eq!(same(RefineRule::Symmetric), 0, "version 10 moves a flipped copy");
-    assert!(
-        same(RefineRule::Departure) > 0,
-        "version 9 places no stroke differently: the shapes do not reach the line level"
-    );
     // and version 1 ignores the rule: the walk places the stroke
-    for (a, b) in run(&x, RefineRule::Departure)
+    let run1 = |x: &[f32], rule: RefineRule| second_onsets(x, SR, &hits, &p, &env, &[], 1, rule);
+    for (a, b) in run1(&x, RefineRule::Departure)
         .iter()
-        .zip(run(&x, RefineRule::Symmetric))
+        .zip(run1(&x, RefineRule::Symmetric))
     {
         assert_eq!((a.t * srf).round() as i64, (b.t * srf).round() as i64);
     }

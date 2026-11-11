@@ -297,31 +297,36 @@ fn stroke_body(t: f64, dip: f64, gap: f64, width: f64, rise: f64, hz: f64) -> f6
     -(line + swing + body)
 }
 
-/// Six #444-shape flams: a grace burst 30 ms before each body, the flams 80 ms apart. The model
+/// Six #444-shape flams: a grace burst 30 ms before each body, the flams 120 ms apart. The model
 /// keeps the grace (the first stroke of the pair); the body is the second stroke the rule adds.
 /// The 30 ms gap keeps the body out of the late-peak window (the 30 ms end is excluded) and
-/// inside the re-rise search (12 to 50 ms, 10 ms before the next hit).
+/// inside the re-rise search (12 to 50 ms, 10 ms before the next hit). The line and the pre-swing
+/// reach 14 ms before the edge (the #444 shape needs them there) and the spacing keeps the
+/// previous body's decay out of the floor window before the next re-rise.
 fn flam444_fixture() -> Vec<f32> {
     let srf = f64::from(SR);
     let mut x = vec![0.0f64; (3.0 * srf) as usize];
     let mut nz = W444(0x4455_6677_8899_0011);
     for k in 0..6 {
-        let te = 1.0 + 0.080 * f64::from(k);
+        let te = 1.0 + 0.12 * f64::from(k);
         let grace = burst444(&mut nz, 0.02, 0.003, 0.5);
         add_at48(&mut x, &grace, te - 0.030);
-        let i0 = (te * srf).round() as usize;
-        for j in 0..(0.06 * srf) as usize {
+        let i0 = (te * srf).round() as i64;
+        let back = (0.014 * srf) as i64;
+        for j in -back..(0.06 * srf) as i64 {
+            let at = i0 + j;
+            if at < 0 || at as usize >= x.len() {
+                continue;
+            }
             let v = stroke_body(
                 j as f64 / srf,
-                [0.03, 0.045, 0.06, 0.08, 0.045, 0.06][j % 6],
-                [0.0, 40e-6, 80e-6, 110e-6, 150e-6, 180e-6][j % 6],
-                [150e-6, 212.5e-6, 275e-6, 337.5e-6, 400e-6, 250e-6][j % 6],
-                [60e-6, 80e-6, 100e-6, 60e-6, 80e-6, 100e-6][j % 6],
-                [180.0, 215.0, 250.0, 285.0, 320.0, 355.0][j % 6],
+                [0.03, 0.045, 0.06, 0.08, 0.045, 0.06][(j.rem_euclid(6)) as usize],
+                [0.0, 40e-6, 80e-6, 110e-6, 150e-6, 180e-6][(j.rem_euclid(6)) as usize],
+                [150e-6, 212.5e-6, 275e-6, 337.5e-6, 400e-6, 250e-6][(j.rem_euclid(6)) as usize],
+                [60e-6, 80e-6, 100e-6, 60e-6, 80e-6, 100e-6][(j.rem_euclid(6)) as usize],
+                [180.0, 215.0, 250.0, 285.0, 320.0, 355.0][(j.rem_euclid(6)) as usize],
             );
-            if i0 + j < x.len() {
-                x[i0 + j] += v;
-            }
+            x[at as usize] += v;
         }
     }
     for v in &mut x {
