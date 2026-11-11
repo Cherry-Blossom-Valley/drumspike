@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 from explainer_common import (
-    COBALT, DIM, DOWN, ORANGE, TEXT, UP, Create, DashedLine, Explainer, FadeIn, FadeOut, FONT, Line,
+    CLEAR_SECONDS, COBALT, DIM, DOWN, ORANGE, TEXT, UP, Create, DashedLine, Explainer, FadeIn, FadeOut, FONT, Line,
     Rectangle, Text, VGroup,
 )
 from explainer_10 import SR, demo_dir, lane_wave, truth
@@ -128,6 +128,10 @@ def label_rows(xs, gap=0.4):
 
 class Explainer09(Explainer):
     script_ids = ("s01-problem", "s02-confidence", "s03-queue", "s04-why", "s05-decide", "s06-result")
+    # The seconds that each scene's steps take at pace 1 (the sum of its t= values). A scene whose narration is
+    # longer slows its steps down (never speeds them up), so the holds sit between the steps, not at the end.
+    # The last scene keeps pace 1: its result frame is the poster, taken at the middle of the scene.
+    PLAN = {"s01-problem": 7.5, "s02-confidence": 11.0, "s03-queue": 10.0, "s04-why": 9.5, "s05-decide": 11.2}
 
     def setup(self):
         super().setup()
@@ -135,6 +139,22 @@ class Explainer09(Explainer):
         self.dur = truth()["duration_samples"] / SR
         self.queue = queue_of(self.rated)
         assert self.queue, "the session has no doubtful hit: the picture has nothing to show"
+        self.pace = 1.0
+
+    def begin(self, sid):
+        super().begin(sid)
+        plan = self.PLAN.get(sid)
+        self.pace = max(1.0, (self.narration[sid] - CLEAR_SECONDS - 0.3) / plan) if plan else 1.0
+
+    def end(self):
+        self.pace = 1.0   # the closing fade and the pad to the narration run at their own length
+        super().end()
+
+    def t_play(self, *anims, t=2.0):
+        super().t_play(*anims, t=t * self.pace)
+
+    def t_wait(self, t):
+        super().t_wait(t * self.pace)
 
     # ---- the lanes ----
 
@@ -189,6 +209,13 @@ class Explainer09(Explainer):
         y = BASE[item["track"]]
         return Line([x, y - 0.05, 0], [x, y + HEIGHT + 0.1, 0], color=TEXT, stroke_width=4)
 
+    def check_mark(self, item):
+        """A check mark over the stalk of a checked hit, above the full-height stalks around it."""
+        x = x_of(item["t"], self.dur)
+        y = BASE[item["track"]] + HEIGHT * 0.8 + 0.15
+        return VGroup(Line([x - 0.12, y + 0.14, 0], [x, y, 0], color=ORANGE, stroke_width=4),
+                      Line([x, y, 0], [x + 0.2, y + 0.34, 0], color=ORANGE, stroke_width=4))
+
     def hit_count(self):
         return sum(len(v) for v in self.rated.values())
 
@@ -196,7 +223,7 @@ class Explainer09(Explainer):
 
     def s01_problem(self):
         """Two snare tracks of one song, every hit a stalk."""
-        title = Text(f"two tracks of one song: {self.hit_count()} hits", font=FONT, font_size=26, color=TEXT)
+        title = Text(f"two of the tracks of one song: {self.hit_count()} hits", font=FONT, font_size=26, color=TEXT)
         self.t_play(Create(self.lane_frame()), t=2.0)
         self.t_play(FadeIn(self.stalks(False, mark_doubtful=False)), FadeIn(title.to_edge(UP, buff=0.9)), t=3.5)
         self.say("Most hits are clear. A few are less sure.", t=2.0)
@@ -222,7 +249,8 @@ class Explainer09(Explainer):
         n = len(self.queue)
         head = self.playhead(self.queue[0])
         status = Text(f"doubtful hit 1 of {n}", font=FONT, font_size=26, color=ORANGE).next_to(key, DOWN, buff=0.3)
-        self.t_play(FadeIn(head), FadeIn(status), t=1.5)
+        scope = Text("the queue of these two snare tracks", font=FONT, font_size=20, color=DIM).next_to(status, DOWN, buff=0.2)
+        self.t_play(FadeIn(head), FadeIn(status), FadeIn(scope), t=1.5)
         nxt = self.queue[1] if n > 1 else self.queue[0]
         status2 = Text(f"doubtful hit {2 if n > 1 else 1} of {n}", font=FONT, font_size=26, color=ORANGE).move_to(status)
         target = self.playhead(nxt)
@@ -263,13 +291,15 @@ class Explainer09(Explainer):
         self.say("The queue only points. It changes no hit.", t=2.0)
 
     def s06_result(self):
-        """The same hits as before; the few doubtful ones marked; Export."""
+        """The same hits as before; the short list checked off one by one, then Export. The steps end before the
+        middle of the scene, so the result is on screen for the rest of it (and for the poster)."""
         n = len(self.queue)
         total = self.hit_count()
-        counts = Text(f"{n} doubtful hits to check, the other {total - n} stay as they are", font=FONT, font_size=28,
-                      color=TEXT).to_edge(UP, buff=0.9)
-        self.t_play(Create(self.lane_frame()), FadeIn(self.stalks(False)), t=3.0)
-        self.t_play(FadeIn(counts), t=2.0)
+        counts = Text(f"these two tracks: {n} doubtful hits to check, the other {total - n} stay as they are",
+                      font=FONT, font_size=26, color=TEXT).to_edge(UP, buff=0.9)
+        self.t_play(Create(self.lane_frame()), FadeIn(self.stalks(False)), t=1.5)
+        self.t_play(FadeIn(counts), t=1.0)
+        for item in self.queue:   # in the order of the queue
+            self.t_play(Create(self.check_mark(item)), t=0.4)
         export = Text("then Export", font=FONT, font_size=32, color=ORANGE).next_to(counts, DOWN, buff=0.3)
-        self.t_play(FadeIn(export), t=2.0)
-        self.t_wait(1.0)
+        self.t_play(FadeIn(export), t=1.0)
