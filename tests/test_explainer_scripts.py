@@ -100,6 +100,140 @@ def test_builder_carries_explainer_16():
     assert m, "build.py has no entry for explainer 16"
 
 
+# ---- #464: the facts of an explainer script against the code (the placement rule) ----
+
+REFINE = ROOT / "crates" / "core" / "src" / "refine"
+
+
+def current_rule_version():
+    """The version of `RefineRule::CURRENT`, read from `refine/track.rs`: the variant that CURRENT names and
+    the number that `version()` gives that variant."""
+    src = (REFINE / "track.rs").read_text(encoding="utf-8")
+    variant = re.search(r"pub const CURRENT: RefineRule = RefineRule::(\w+);", src).group(1)
+    return int(re.search(rf"RefineRule::{variant} => (\d+),", src).group(1))
+
+
+def rust_constants():
+    """The numeric constants of the refine module: name -> value; one alias to another constant is resolved."""
+    raw = {}
+    for path in REFINE.glob("*.rs"):
+        for name, value in re.findall(r"const (\w+): [\w<>]+ = ([^;]+);", path.read_text(encoding="utf-8")):
+            raw[name] = value.strip()
+    out = {}
+    for name, value in raw.items():
+        value = raw.get(value, value)
+        try:
+            out[name] = float(value.replace("_", ""))
+        except ValueError:
+            continue
+    return out
+
+
+def header_of(text):
+    """The meta text before the first scene: the facts used."""
+    return text.split("\n## ", 1)[0]
+
+
+def header_rule_version(text):
+    """The first rule version that the header names ("version 10"), or None."""
+    m = re.search(r"version (\d+)", header_of(text))
+    return int(m.group(1)) if m else None
+
+
+def check_rule_version(text, current):
+    """The hits for a script whose header names a rule version: it must be the code's current one."""
+    named = header_rule_version(text)
+    if named is None:
+        return []
+    if named != current:
+        return [f"the header names rule version {named}, the code runs version {current}"]
+    return []
+
+
+def check_header_constants(text, constants):
+    """The hits for the facts lines (`NAME` = value): the constant must exist and hold the stated value."""
+    hits = []
+    for name, value in re.findall(r"`([A-Z][A-Z0-9_]+)` = ([0-9.]+)", header_of(text)):
+        if name not in constants:
+            hits.append(f"the header names the constant {name}, which no refine module defines")
+        elif abs(constants[name] - float(value)) > 1e-12:
+            hits.append(f"the header says {name} = {value}, the code has {constants[name]:g}")
+    return hits
+
+
+def check_no_kick_threshold(text):
+    """The hits for a sentence of the script that gives the kick its own threshold: the analysis has one
+    peak margin for every track (`analyze.rs`)."""
+    hits = []
+    for sentence in re.split(r"(?<=[.!?])\s+|\n", text):
+        low = sentence.lower()
+        if "kick" in low and re.search(r"threshold|\bdb\b|decibel", low):
+            hits.append(f"a kick-specific threshold: {sentence.strip()!r}")
+    return hits
+
+
+def numbers_of(text):
+    return set(re.findall(r"\d+(?:\.\d+)?", text))
+
+
+def check_numbers_in_header(text):
+    """The hits for a number that the narration speaks and the facts header does not carry."""
+    header = numbers_of(header_of(text))
+    spoken = numbers_of(" ".join(s for _, _, s in scenes_of(text)))
+    return [f"the narration says {n}, which the facts header does not carry" for n in sorted(spoken - header)]
+
+
+def test_rule_version_is_read_from_the_code():
+    assert current_rule_version() == 10
+
+
+def test_explainer_scripts_name_the_current_rule_version():
+    """Every script whose header names a placement rule version names the code's current one; Explainer 4 names one."""
+    current = current_rule_version()
+    assert header_rule_version(script_text("explainer-04-first-sample.md")) is not None, \
+        "Explainer 4's header names no rule version"
+    for name in ("explainer-04-first-sample.md", "explainer-15-agent.md"):
+        assert check_rule_version(script_text(name), current) == [], name
+
+
+def test_explainer_4_facts_match_the_code():
+    text = script_text("explainer-04-first-sample.md")
+    assert check_header_constants(text, rust_constants()) == []
+    assert check_no_kick_threshold(text) == []
+    assert check_numbers_in_header(text) == []
+
+
+def test_explainer_4_facts_list_is_not_empty():
+    """The constants check must see the facts: a header whose lines the pattern misses passes it for nothing."""
+    names = re.findall(r"`([A-Z][A-Z0-9_]+)` = ([0-9.]+)", header_of(script_text("explainer-04-first-sample.md")))
+    assert len(names) >= 12, names
+
+
+def test_planted_stale_version_is_reported():
+    text = 'Facts used (version 3 "first motion", the shipped rule).\n\n## s01-x\n\n> a\n\nSpoken.\n'
+    assert check_rule_version(text, 10) == ["the header names rule version 3, the code runs version 10"]
+    assert check_rule_version(text.replace("version 3", "version 10"), 10) == []
+
+
+def test_planted_kick_threshold_is_reported():
+    text = "Header.\n\n## s01-x\n\n> a\n\nA kick drum is special, so its threshold is 29 decibels under the peak.\n"
+    assert len(check_no_kick_threshold(text)) == 1
+    assert check_no_kick_threshold(text.replace("kick", "snare")) == []
+
+
+def test_planted_wrong_constant_is_reported():
+    consts = rust_constants()
+    good = "Facts.\n- `EDGE_RISE_DB` = 18 dB.\n\n## s01-x\n\n> a\n\nSpoken.\n"
+    assert check_header_constants(good, consts) == []
+    assert len(check_header_constants(good.replace("= 18", "= 17"), consts)) == 1
+    assert len(check_header_constants(good.replace("EDGE_RISE_DB", "NO_SUCH_CONSTANT"), consts)) == 1
+
+
+def test_planted_number_missing_from_the_header_is_reported():
+    text = "Facts. 18 dB.\n\n## s01-x\n\n> a\n\nA rise of 18 decibels in 7 milliseconds.\n"
+    assert check_numbers_in_header(text) == ["the narration says 7, which the facts header does not carry"]
+
+
 def test_planted_wrong_scene_order_is_reported(tmp_path):
     bad = tmp_path / "bad-order.md"
     body = "\n\n".join(f"## {sid}\n\n> a note\n\nSome narration here.\n"
