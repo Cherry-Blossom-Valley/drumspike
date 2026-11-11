@@ -481,6 +481,185 @@ def test_planted_spoken_and_on_screen_test_material_are_reported():
     assert check_test_material_words(screen_strings(source.replace("demo ", "")), "builder") == []
 
 
+# ---- #484: the facts of Explainer 11 (Learn) against the code ----
+
+LEARN_RS = ROOT / "crates" / "app" / "src" / "learn.rs"
+LEARN_FILTER_RS = ROOT / "crates" / "app" / "src" / "learn_filter.rs"
+KEYMAP_JS = ROOT / "static" / "keymap.js"
+LEARN_JS = ROOT / "static" / "learn.js"
+EXPLAINER_11 = "explainer-11-learn.md"
+EXPLAINER_11_BUILDER = ROOT / "tools" / "media" / "explainers" / "explainer_11.py"
+MAX_SPOKEN_WORDS_11 = 380   # the ticket: at most 380 spoken words
+MAX_SPOKEN_NUMBERS_11 = 12  # the ticket: at most 12 numbers in the whole narration
+
+
+def rust_pub_const(path, name):
+    """The value of `pub const NAME: <type> = <number>;` of a Rust file, as float."""
+    m = re.search(rf"pub const {name}: \w+ = ([0-9.]+);", path.read_text(encoding="utf-8"))
+    return float(m.group(1)) if m else None
+
+
+def keymap_page_keys(js, row_id):
+    """The page_keys list of one row of keymap.js (the rows are one JSON object per line)."""
+    m = re.search(rf'\{{"id": "{row_id}"[^\n]*?"page_keys": \[([^\n]*?)\]', js)
+    return re.findall(r'"([^"]+)"', m.group(1)) if m else []
+
+
+def guard_numbers(js):
+    """The (minimum, fraction) of the Learn guard, read from lnGuardLimit of learn.js."""
+    m = re.search(r"function lnGuardLimit\(liveBefore\) \{ return Math\.max\(([0-9.]+), ([0-9.]+) \* liveBefore\);", js)
+    return (float(m.group(1)), float(m.group(2))) if m else None
+
+
+def add_default(js):
+    """The default of the Add line, read from lnAddOf of learn.js."""
+    m = re.search(r'lnAddOf\(name\) \{[^\n]*?l\.add : ([0-9.]+); \}', js)
+    return float(m.group(1)) if m else None
+
+
+def _source_text(x):
+    """A source as text: a str passes through, a Path is read."""
+    return x if isinstance(x, str) else x.read_text(encoding="utf-8")
+
+
+def check_explainer_11_facts(text, learn_rs=LEARN_RS, keymap_js=KEYMAP_JS, learn_js=LEARN_JS):
+    """The hits of the #484 gate over the script: the Learn facts of the header against their
+    sources — the mark limit and the rise of the strongest-rise search (learn.rs), the two key
+    commands and Remove Example (keymap.js), the guard and the Add default (learn.js)."""
+    hits = []
+    header = header_of(text)
+    for name in ("MAX_EXAMPLES", "RISE_MIN_DB"):
+        m = re.search(rf"`{name}` = ([0-9.]+)", header)
+        if m is None:
+            hits.append(f"the header does not state {name}")
+            continue
+        value = rust_pub_const(learn_rs, name)
+        if value is None:
+            hits.append(f"{name} is no pub const of learn.rs")
+        elif abs(value - float(m.group(1))) > 1e-12:
+            hits.append(f"the header says {name} = {m.group(1)}, learn.rs has {value:g}")
+    for row_id, key in (("learn_this", "K"), ("learn_not", "Shift+K"), ("learn_forget_this", "Option+K")):
+        if key not in keymap_page_keys(_source_text(keymap_js), row_id):
+            hits.append(f"the keymap row {row_id} has lost the {key} page key")
+        elif key not in header:
+            hits.append(f"the header does not name the {key} command")
+    guard = guard_numbers(_source_text(learn_js))
+    if guard is None:
+        hits.append("lnGuardLimit of learn.js is not of the max(min, fraction) form any more")
+    else:
+        low, fraction = guard
+        if f"{low:g}" not in header:
+            hits.append(f"the header does not name the guard minimum {low:g}")
+        if fraction == 0.25 and "a quarter" not in header:
+            hits.append("the header does not say the guard fraction as a quarter")
+    add = add_default(_source_text(learn_js))
+    if add is None:
+        hits.append("lnAddOf of learn.js names no numeric default")
+    elif f"{add:g}" not in header:
+        hits.append(f"the header does not state the Add default {add:g}")
+    return hits
+
+
+def check_picture_numbers_in_header(text, source):
+    """The hits for a number that the builder puts on screen (the literal parts of its Text and
+    say arguments) while the facts header does not carry it."""
+    header = numbers_of(header_of(text))
+    shown = numbers_of(" ".join(screen_strings(_source_text(source))))
+    return [f"the picture shows {n}, which the facts header does not carry" for n in sorted(shown - header)]
+
+
+def builder_script_ids(source):
+    """The script_ids tuple of the builder's Scene class, read from its source."""
+    m = re.search(r"script_ids = \(([^)]*)\)", source, re.S)
+    return re.findall(r'"(s\d\d-[\w-]+)"', m.group(1)) if m else []
+
+
+def test_explainer_11_facts_match_the_code():
+    text = script_text(EXPLAINER_11)
+    assert check_explainer_11_facts(text) == []
+    defined = constants_defined(LEARN_RS, LEARN_FILTER_RS, LEARN_JS, KEYMAP_JS)
+    assert check_constants_exist(text, defined) == []
+
+
+def test_explainer_11_scenes_match_the_builder():
+    """The scenes of the script are the ones the builder renders, in order."""
+    source = EXPLAINER_11_BUILDER.read_text(encoding="utf-8")
+    assert builder_script_ids(source) == [sid for sid, _, _ in scenes_of(script_text(EXPLAINER_11))]
+
+
+def test_explainer_11_stays_within_the_word_and_number_budget():
+    """The ticket: at most 380 spoken words, at most 12 numbers, every number in the header."""
+    text = script_text(EXPLAINER_11)
+    spoken = " ".join(s for _, _, s in scenes_of(text))
+    assert len(spoken.split()) <= MAX_SPOKEN_WORDS_11
+    assert len(re.findall(r"\d+(?:\.\d+)?", spoken)) <= MAX_SPOKEN_NUMBERS_11
+    assert check_numbers_in_header(text) == []
+
+
+def test_explainer_11_picture_numbers_are_in_the_header():
+    source = EXPLAINER_11_BUILDER.read_text(encoding="utf-8")
+    text = script_text(EXPLAINER_11)
+    assert check_picture_numbers_in_header(text, source) == []
+    shown = numbers_of(" ".join(screen_strings(source)))
+    for n in ("6", "64", "10", "0.80", "0.85"):
+        assert n in shown, f"the number {n} is on no label of the picture"
+
+
+def test_explainer_11_names_no_test_material():
+    text = script_text(EXPLAINER_11)
+    source = EXPLAINER_11_BUILDER.read_text(encoding="utf-8")
+    assert check_test_material_words(spoken_lines(text), "script") == []
+    assert check_test_material_words(screen_strings(source), "builder") == []
+
+
+def test_builder_carries_explainer_11():
+    """build.py renders the id 11 from the module and the scene class of the new explainer."""
+    text = (ROOT / "tools" / "media" / "explainers" / "build.py").read_text(encoding="utf-8")
+    m = re.search(r'"11":\s*\("explainer-11-learn",\s*"explainer_11\.py",\s*"Explainer11"\)', text)
+    assert m, "build.py has no entry for explainer 11"
+
+
+def test_planted_explainer_11_facts_are_reported():
+    """A planted difference is red: a wrong value in the header, a missing key in the header,
+    and a source that moved (a test of the test)."""
+    good = script_text(EXPLAINER_11)
+    assert check_explainer_11_facts(good) == []
+    assert check_explainer_11_facts(good.replace("MAX_EXAMPLES` = 64", "MAX_EXAMPLES` = 63")) == [
+        "the header says MAX_EXAMPLES = 63, learn.rs has 64"]
+    planted = check_explainer_11_facts(good.replace("RISE_MIN_DB` = 6 dB", "RISE_MIN_DB` = 5.0 dB"))
+    assert planted == ["the header says RISE_MIN_DB = 5.0, learn.rs has 6"]
+    assert check_explainer_11_facts(good.replace("Shift+K", "Shift+L")) == [
+        "the header does not name the Shift+K command"]
+    js = LEARN_JS.read_text(encoding="utf-8").replace("Math.max(10, 0.25 * liveBefore)",
+                                                      "Math.max(12, 0.25 * liveBefore)")
+    assert check_explainer_11_facts(good, learn_js=js) == [
+        "the header does not name the guard minimum 12"]
+    keymap = KEYMAP_JS.read_text(encoding="utf-8").replace('"page_keys": ["Shift+K"]', '"page_keys": []', 1)
+    assert check_explainer_11_facts(good, keymap_js=keymap) == [
+        "the keymap row learn_not has lost the Shift+K page key"]
+
+
+def test_planted_builder_label_number_is_reported():
+    text = script_text(EXPLAINER_11)
+    source = EXPLAINER_11_BUILDER.read_text(encoding="utf-8")
+    assert check_picture_numbers_in_header(text, source) == []
+    planted = source.replace('"the strongest rise of 6 dB or more"', '"the strongest rise of 7 dB or more"')
+    assert check_picture_numbers_in_header(text, planted) == [
+        "the picture shows 7, which the facts header does not carry"]
+
+
+def test_explainer_11_keymap_facts_are_read_from_their_rows():
+    """The checker really reads the keymap rows: the three Learn rows carry the three keys."""
+    js = KEYMAP_JS.read_text(encoding="utf-8")
+    assert keymap_page_keys(js, "learn_this") == ["K"]
+    assert keymap_page_keys(js, "learn_not") == ["Shift+K"]
+    assert keymap_page_keys(js, "learn_forget_this") == ["Option+K"]
+    learn_js = LEARN_JS.read_text(encoding="utf-8")
+    assert guard_numbers(learn_js) == (10.0, 0.25)
+    assert add_default(learn_js) == 0.85
+    assert rust_pub_const(LEARN_RS, "MAX_EXAMPLES") == 64.0
+    assert rust_pub_const(LEARN_RS, "RISE_MIN_DB") == 6.0
+
 # ---- #485: the facts of Explainer 9 (doubtful hits first) against the code of the review queue ----
 
 CONFIDENCE_RS = ROOT / "crates" / "app" / "src" / "confidence.rs"
