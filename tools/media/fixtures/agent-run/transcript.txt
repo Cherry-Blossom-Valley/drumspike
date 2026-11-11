@@ -1,28 +1,17 @@
 > Skill drumspike-finetune
-> ToolSearch select:mcp__drumspike__agent_call,mcp__drumspike__training_status,mcp__drumspike__tracks_get
+> ToolSearch select:mcp__drumspike__agent_call
 > agent_call project
 > agent_call setTraining true
 > agent_call status
-> agent_call hits k_in
-> agent_call plan k_in 0 19
+> agent_call handPlaced k_in
+> agent_call handPlaced s_top
+> agent_call plan k_in 0 20
+> agent_call plan s_top 0 10
 > agent_call look k_in 0
-  The signal is flat until sample 43, so the last line sample is 42. That is 2 samples before
-  the hit, which matches the suggestion of -2.
-> agent_call move k_in 0 -2   moved 60008 to 60006
-> agent_call confirm k_in 0
-  Hit 0 is moved and confirmed. Next I'll look at hits 2 to 5.
+> agent_call look k_in 1
 > agent_call look k_in 2
-> agent_call look k_in 3
 > agent_call look k_in 4
 > agent_call look k_in 5
-> agent_call move k_in 2 -2   moved 105008 to 105006
-> agent_call move k_in 3 -2   moved 120008 to 120006
-> agent_call move k_in 5 -2   moved 180008 to 180006
-> agent_call confirm k_in 2
-> agent_call confirm k_in 3
-> agent_call confirm k_in 4
-> agent_call confirm k_in 5
-  Next I'll look at hits 6 to 12.
 > agent_call look k_in 6
 > agent_call look k_in 7
 > agent_call look k_in 8
@@ -30,20 +19,6 @@
 > agent_call look k_in 10
 > agent_call look k_in 11
 > agent_call look k_in 12
-  Hits 6, 9 and 12 match hit 4, so they need only a confirm. Hits 7, 8, 10 and 11 match hit 2,
-  so they move -2 and are confirmed.
-> agent_call move k_in 7 -2   moved 225008 to 225006
-> agent_call move k_in 8 -2   moved 240008 to 240006
-> agent_call move k_in 10 -2   moved 285008 to 285006
-> agent_call move k_in 11 -2   moved 300008 to 300006
-> agent_call confirm k_in 6
-> agent_call confirm k_in 7
-> agent_call confirm k_in 8
-> agent_call confirm k_in 9
-> agent_call confirm k_in 10
-> agent_call confirm k_in 11
-> agent_call confirm k_in 12
-  Next I'll look at hits 13 to 19.
 > agent_call look k_in 13
 > agent_call look k_in 14
 > agent_call look k_in 15
@@ -51,37 +26,85 @@
 > agent_call look k_in 17
 > agent_call look k_in 18
 > agent_call look k_in 19
+> agent_call look s_top 0
+> agent_call look s_top 1
+> agent_call look s_top 2
+> agent_call look s_top 3
+> agent_call look s_top 4
+> agent_call look s_top 5
+> agent_call look s_top 6
+> agent_call look s_top 7
+> agent_call look s_top 8
+> agent_call look s_top 9
+  Status: all 30 hits are looked at. I'm now applying the clear kick moves (11 hits, 2 samples
+  earlier each), one at a time.
+> agent_call move k_in 0 -2   moved 60008 to 60006
+> agent_call move k_in 2 -2   moved 105008 to 105006
+> agent_call move k_in 5 -2   moved 180008 to 180006
+> agent_call move k_in 7 -2   moved 225008 to 225006
+> agent_call move k_in 8 -2   moved 240008 to 240006
+> agent_call move k_in 10 -2   moved 285008 to 285006
+> agent_call move k_in 11 -2   moved 300008 to 300006
 > agent_call move k_in 13 -2   moved 345008 to 345006
 > agent_call move k_in 14 -2   moved 360008 to 360006
 > agent_call move k_in 17 -2   moved 420008 to 420006
 > agent_call move k_in 19 -2   moved 465008 to 465006
+> agent_call audit k_in
+> agent_call audit s_top
+> agent_call confirm k_in 0
+> agent_call confirm k_in 2
+> agent_call confirm k_in 4
+> agent_call confirm k_in 5
+> agent_call confirm k_in 6
+> agent_call confirm k_in 7
+> agent_call confirm k_in 8
+> agent_call confirm k_in 9
+> agent_call confirm k_in 10
+> agent_call confirm k_in 11
+> agent_call confirm k_in 12
 > agent_call confirm k_in 13
 > agent_call confirm k_in 14
 > agent_call confirm k_in 15
+> agent_call confirm k_in 16
 > agent_call confirm k_in 17
 > agent_call confirm k_in 18
 > agent_call confirm k_in 19
-  Now I'll write the review list next to the project file, then save.
-> Write <home>/projects/Demo/agent/left-for-review.tsv
+> agent_call confirm s_top 1
+> agent_call confirm s_top 2
+> agent_call confirm s_top 3
+> agent_call confirm s_top 4
+> agent_call confirm s_top 6
+> agent_call confirm s_top 7
+> agent_call confirm s_top 9
+  Now I'll save and write the review list.
 > agent_call save
-  I fine-tuned the first 20 kick hits (indices 0–19) on `k_in` and saved the project. Two hits
-  are left for you. Of the other 18, 12 moved onto the line and 6 were already on it. All 18 are
-  confirmed.
-
-  | Track | Hits reviewed | Moved | Confirmed | Hand-placed, untouched | No suggestion | Doubtful, left |
-  |---|---|---|---|---|---|---|
-  | k_in | 20 | 12 | 18 | 0 | 1 | 1 |
-  | s_top | 0 | 0 | 0 | 0 | 0 | 0 |
-  | **Total** | 20 | 12 | 18 | 0 | 1 | 1 |
-
-  - **Moved:** the 12 hits moved 2 samples earlier, onto the last flat sample before the stroke
-  starts (hits 0, 2, 3, 5, 7, 8, 10, 11, 13, 14, 17 and 19).
-  - **Already on the line:** hits 4, 6, 9, 12, 15 and 18 needed no move, only a confirm.
-  - **Left for you:** hit 1 (1.88 s) has no clear line before the hit, so the app offers no
-  suggestion. Hit 16 (8.60 s) has a clean line, but it is 30 dB under the track median with
-  confidence 0, so I'm not sure it is a real hit. Neither was changed or confirmed.
-
-  The training log was empty, so I moved nothing you had placed by hand. I did not touch
-  `s_top`. The review list is at `<home>/projects/Demo/agent/left-for-review.tsv`.
-
-  Do you want to export the MIDI and spike files now, or leave it?
+> Bash {"command": "mkdir -p <project folder>/agent && printf 'track\\tindex\\ttime_s\\
+> Write <project folder>/agent/left-for-review.tsv
+  I fine-tuned the first 20 kick hits and the first 10 snare hits, and saved the project. This
+  covers only those hits, not the rest of the song.
+  
+  | Track | Hits | Moved | Confirmed | Hand-placed | Looked at, right | No quiet stretch | Not looked at |
+  |---|---|---|---|---|---|---|---|
+  | k_in (kick, 1–20) | 20 | 11 | 18 | 1 | 8 | 0 | 0 |
+  | s_top (snare, 1–10) | 10 | 0 | 7 | 0 | 10 | 0 | 0 |
+  | **Total** | 30 | 11 | 25 | 1 | 18 | 0 | 0 |
+  
+  - **Moves:** each of the 11 kick hits moved 2 samples earlier, onto the last quiet sample
+  before the stroke. Kick hits 1, 3, 6, 8, 9, 11, 12, 14, 15, 18 and 20 were moved (kick 3 and 4
+  numbers below use the app's 0-based index: 0, 2, 5, 7, 8, 10, 11, 13, 14, 17, 19). The audit
+  no longer lists any of them as late.
+  - **Hand-placed:** the kick hit at index 3 (2.4997 s) is yours. I didn't touch or confirm it.
+  It also shows up as "opinions differ" in the audit (line says at the hit, the track's pattern
+  says 3 samples later).
+  - **Left for you:** these are in `agent/left-for-review.tsv` next to the project file.
+    - **Kick index 1 (1.8765 s):** the judge says 8 samples early and the pattern agrees, but
+  the hit is 14 dB under the median and sits in a noisy line.
+    - **Snare index 0 (1.8751 s):** the line puts the start at the hit, the pattern puts it 3
+  samples later.
+    - **Snare indexes 5 and 8 (7.0209 s and 9.5209 s):** noisy ghost notes. I looked at them,
+  they stay where they are, and I didn't confirm them.
+  - **Full-track audit:** it also lists about 60 later kick hits (index 20 onward) as late or
+  "opinions differ", plus 8 snare rows (indexes 23, 30, 32, 41, 53, 62, 65 beyond the first 10).
+  I left all of those alone, since they are outside the range you asked for.
+  
+  Do you want to export now (MIDI and spike files), or leave it?
