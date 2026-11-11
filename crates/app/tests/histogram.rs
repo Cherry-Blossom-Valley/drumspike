@@ -217,7 +217,8 @@ fn analyze_start_after_track_params_set_picks_at_the_stored_sensitivity() {
     let sid = session(&svc, &root);
     let mut counts = Vec::new();
     for v in SENSITIVITIES {
-        svc.track_params_set(&sid, "k in", &params_at(v, &json!({}))).unwrap();
+        svc.track_params_set(&sid, "k in", &params_at(v, &json!({})), false)
+            .unwrap();
         svc.analyze_start(&sid, Some(vec!["k in".into()]), None, None).unwrap();
         let st = wait_done(&svc, &sid);
         assert_eq!(st["tracks"]["k in"]["state"], "done", "{st}");
@@ -244,7 +245,7 @@ fn analyze_at_the_default_sensitivity_keeps_its_events() {
     wait_done(&svc, &sid);
     let plain = events(&svc, &sid, "k in");
     assert_eq!(plain.len(), ONSETS.len(), "the loud hits only: {plain:?}");
-    svc.track_params_set(&sid, "k in", &params_at(50.0, &json!({})))
+    svc.track_params_set(&sid, "k in", &params_at(50.0, &json!({})), false)
         .unwrap();
     svc.analyze_start(&sid, Some(vec!["k in".into()]), None, None).unwrap();
     wait_done(&svc, &sid);
