@@ -217,7 +217,8 @@ fn analyze_start_after_track_params_set_picks_at_the_stored_sensitivity() {
     let sid = session(&svc, &root);
     let mut counts = Vec::new();
     for v in SENSITIVITIES {
-        svc.track_params_set(&sid, "k in", &params_at(v, &json!({}))).unwrap();
+        svc.track_params_set(&sid, "k in", &params_at(v, &json!({})), false)
+            .unwrap();
         svc.analyze_start(&sid, Some(vec!["k in".into()]), None, None).unwrap();
         let st = wait_done(&svc, &sid);
         assert_eq!(st["tracks"]["k in"]["state"], "done", "{st}");
@@ -244,7 +245,7 @@ fn analyze_at_the_default_sensitivity_keeps_its_events() {
     wait_done(&svc, &sid);
     let plain = events(&svc, &sid, "k in");
     assert_eq!(plain.len(), ONSETS.len(), "the loud hits only: {plain:?}");
-    svc.track_params_set(&sid, "k in", &params_at(50.0, &json!({})))
+    svc.track_params_set(&sid, "k in", &params_at(50.0, &json!({})), false)
         .unwrap();
     svc.analyze_start(&sid, Some(vec!["k in".into()]), None, None).unwrap();
     wait_done(&svc, &sid);
@@ -448,14 +449,14 @@ fn track_params_set_stores_the_page_params_and_waits_for_a_store() {
     svc.set_home(root.join("home"));
     let sid = session(&svc, &root);
     let p = params_at(70.0, &json!({"min_gap_ms": 33}));
-    let r = svc.track_params_set(&sid, "k in", &p).unwrap();
+    let r = svc.track_params_set(&sid, "k in", &p, false).unwrap();
     assert_eq!(r["params"]["sensitivity"], 70.0);
     let rec = &svc.tracks_get(&sid).unwrap()["tracks"]["k in"]["params"];
     assert_eq!(rec["sensitivity"], 70.0);
     assert_eq!(rec["min_gap_ms"], 33);
-    assert_eq!(svc.track_params_set(&sid, "nope", &p).unwrap_err().code, 400);
+    assert_eq!(svc.track_params_set(&sid, "nope", &p, false).unwrap_err().code, 400);
     let g = svc.jobs().begin_store(&sid).unwrap();
-    assert_eq!(svc.track_params_set(&sid, "k in", &p).unwrap_err().code, 409);
+    assert_eq!(svc.track_params_set(&sid, "k in", &p, false).unwrap_err().code, 409);
     drop(g);
 }
 

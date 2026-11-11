@@ -65,7 +65,8 @@ impl Session {
         prep.events_set(&sid, KICK, &hits).unwrap();
         prep.events_set(&sid, SNARE, &hits).unwrap();
         // a stored analysis, so the re-pick preview (a read) answers on the read-only session
-        prep.analyze_start_keep(&sid, None, None, None, None, true).unwrap();
+        prep.analyze_start_keep(&sid, None, None, None, None, true, false)
+            .unwrap();
         // one analyze_status call per iteration: a job that moves queued -> running between
         // two calls in one condition exits with the state still `running` (combined gate
         // run-70 on main 597dd418 asserted `done` and got `running`)

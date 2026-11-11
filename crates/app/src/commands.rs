@@ -397,17 +397,20 @@ impl Service {
         params: Option<&serde_json::Map<String, Value>>,
         progress: Option<Progress>,
     ) -> Result<Value, AppError> {
-        self.analyze_start_keep(sid, tracks, params, None, progress, false)
+        self.analyze_start_keep(sid, tracks, params, None, progress, false, false)
     }
 
     /// [`Service::analyze_start`] with `keep_edited` (P4-5 step 2b): the hits the engineer added or
     /// moved stay in the new events and win within 20 ms over the detected ones. The page sends
     /// `keep_edited` for Re-analyze > Keep (P4-9); the agent surface (`call`) defaults it to true.
+    /// `replace` (#442): with `true` the sent per-track `params` object becomes the track's
+    /// stored params; the default merges instead.
     ///
     /// # Errors
     ///
     /// A 404 [`AppError`] for an unknown `sid`; a 409 when the project is open read-only, an analysis is
     /// already queued or running, or a re-pick is being stored; a 400 when a name in `tracks` is not a track.
+    #[allow(clippy::too_many_arguments)] // the surface of one call (#442 added the replace flag)
     pub fn analyze_start_keep(
         &self,
         sid: &str,
@@ -416,6 +419,7 @@ impl Service {
         detector: Option<&str>,
         progress: Option<Progress>,
         keep_edited: bool,
+        replace: bool,
     ) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         // R08: a duplicate start is refused: one analysis per project at a time. Cancel the
@@ -454,7 +458,24 @@ impl Service {
                     if let Some(id) = detector {
                         map.insert("detector".to_string(), Value::from(id));
                     }
-                    tr.params = Some(map);
+                    // P4-5: a `sensitivity` without `thresholds` (an agent) stores the thresholds
+                    // the page's slider would — derived from the call, before the merge, so it
+                    // replaces a stored `thresholds`
+                    if !map.contains_key("thresholds")
+                        && let Some(v) = map.get("sensitivity").and_then(Value::as_f64)
+                    {
+                        map.insert("thresholds".into(), json!(crate::sensitivity::thresholds_of(v)));
+                    }
+                    // #442: merge into the stored params instead of replacing them, so one
+                    // field does not delete the stored shift while the hits keep it;
+                    // `replace: true` (the page sends whole objects) stores exactly the sent
+                    // object
+                    tr.params = Some(if replace {
+                        map
+                    } else {
+                        let stored = tr.params.clone();
+                        crate::histogram::merge_params(stored.as_ref(), &map)
+                    });
                     g.mark_dirty();
                 }
             }
@@ -728,6 +749,7 @@ fn handle(svc: &Service, channels: &Arc<Channels>, cmd: &str, args: &Value) -> R
                     args.get("keep_edited")
                         .and_then(Value::as_bool)
                         .unwrap_or(policy::PAGE_KEEP_EDITED),
+                    args.get("replace").and_then(Value::as_bool).unwrap_or(false),
                 ),
             )
         }

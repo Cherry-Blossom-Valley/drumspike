@@ -789,8 +789,10 @@ impl Service {
         AppError::conflict("another write of the project is in progress: try again")
     }
 
-    /// `track_params_set {sid, name, params}`: store the page's params of a track as they are
-    /// (the object `analyze_start` takes). The undo and redo of a stored re-pick send the
+    /// `track_params_set {sid, name, params, replace?}`: merge `params` into the track's stored
+    /// params (#442): a key in the call replaces that key, a key with `null` removes it, a key
+    /// that is absent keeps its stored value. With `replace: true` the stored object becomes the
+    /// sent object (the page sends whole objects). The undo and redo of a stored re-pick send the
     /// slider's params back, so a Save writes the params of the hits it shows. 409 while an
     /// analysis or a re-pick store runs.
     ///
@@ -798,7 +800,13 @@ impl Service {
     ///
     /// A 409 `AppError` while an analysis or another write runs; an error for an unknown or read-only session or an
     /// unknown track.
-    pub fn track_params_set(&self, sid: &str, name: &str, params: &Map<String, Value>) -> Result<Value, AppError> {
+    pub fn track_params_set(
+        &self,
+        sid: &str,
+        name: &str,
+        params: &Map<String, Value>,
+        replace: bool,
+    ) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
         let _guard = self.begin_write(sid)?;
         let mut g = lock(&op);
@@ -809,10 +817,35 @@ impl Service {
         {
             params.insert("thresholds".into(), json!(sensitivity::thresholds_of(v)));
         }
+        // #442: merge into the stored params instead of replacing them, so one field (a
+        // `sensitivity`, say) does not delete the stored shift and window while the hits keep
+        // them; `replace: true` (the page sends whole objects) stores exactly the sent object
+        let params = if replace {
+            params.clone()
+        } else {
+            let stored = g.track(name)?.params.clone();
+            merge_params(stored.as_ref(), &params)
+        };
         g.track_mut(name)?.params = Some(params.clone());
         g.mark_dirty();
         Ok(json!({"params": params}))
     }
+}
+
+/// #442: the params of `track_params_set` and of the `params` argument of `analyze_start` merge
+/// into the track's stored object: a key in the call replaces that key, a key with `null`
+/// removes it, a key that is absent keeps its stored value. `replace: true` stores exactly the
+/// sent object (the page sends whole objects).
+pub(crate) fn merge_params(stored: Option<&Map<String, Value>>, call: &Map<String, Value>) -> Map<String, Value> {
+    let mut merged = stored.cloned().unwrap_or_default();
+    for (k, v) in call {
+        if v.is_null() {
+            merged.remove(k);
+        } else {
+            merged.insert(k.clone(), v.clone());
+        }
+    }
+    merged
 }
 
 /// A string argument.
@@ -870,6 +903,7 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
                 args.get("params")
                     .and_then(Value::as_object)
                     .ok_or_else(|| AppError::bad("missing or wrong argument `params` (object)"))?,
+                args.get("replace").and_then(Value::as_bool).unwrap_or(false),
             ),
             _ => Err(AppError::not_found(format!("unknown command {cmd}"))),
         }
