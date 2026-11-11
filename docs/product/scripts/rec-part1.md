@@ -44,7 +44,7 @@ Now export. Press Command E. Choose MIDI and spike files per track, and the spik
 
 > Option+Cmd+E; the summary shows the same files again.
 
-After the next edit, Option Command E exports again with the same settings.
+After the next edit, Option Command E exports again with the same settings. The summary lists the same files.
 
 ## p1-end
 

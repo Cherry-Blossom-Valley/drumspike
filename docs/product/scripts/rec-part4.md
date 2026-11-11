@@ -20,7 +20,7 @@ The export has a new spike type, and it is called Audio. An audio spike holds th
 > File > Add Tracks… on the export folder: the two spike WAVs, checked, Add. Caption: File > Add Tracks…
 > Select the kick, Tab, 5 (50 ms zoom), then select the audio spike track: its lane sits next to the click spike.
 
-The exports can come back in. Add Tracks from the export folder: the two spike WAVs of the kick, checked. The 5 ms preset at a hit shows the spike against the wave.
+The exports can come back in. Add Tracks from the export folder: the two spike WAVs of the kick, checked. Select the kick, press Tab for a hit and 5 for the 50 millisecond zoom. Then select the audio spike track: its lane sits next to the click spike, and you see each spike against the wave.
 
 ## p4-detector
 
