@@ -4,27 +4,31 @@ Chapter 10 of `docs/product/feature-path.md`. Narration for `tools/media/tts.py`
 per scene; lines that start with `>` are visual notes and are not spoken. Target length: about
 3 minutes. Use the demo session (it has bleed, a flam and a tom fill).
 
-Facts used (all checked against commit 498f4c0; module docs of
-`crates/core/src/detect/tom_bleed.rs`, `crates/core/src/detect/cross_bleed.rs`,
-`crates/core/src/detect/flam.rs`, `crates/app/src/tom_bleed.rs`, `crates/app/src/cross_bleed.rs`
-and `crates/app/src/ghost_gate.rs`; the detection on main is spectral onset detection with gates
-and cross-mic rules):
-- Tom band 50 to 400 Hz, the level window [-0.5, +8) ms at a hit, transfer gains calibrated from
-  the strong hits, two mics of one drum never explain each other, the kick and snare close mics as
-  sources (snare excess under 9.2 dB, kick excess under 4.0 dB): `crates/core/src/detect/tom_bleed.rs`,
-  the rule description and version 2.
-- Tom pair rule: two hits on mics of different drums within 12 ms, the one 6 dB or more under the
-  other is bleed; a hit with an own-mic attack rise of 10 dB or more stays (version 4 guard):
-  `crates/core/src/detect/tom_bleed.rs`, versions 3 and 4.
-- Cross-track rule: a tom hit that coincides within 10 ms with a hit of a kick, snare or hi-hat
-  close mic, starts later than it and is quieter in that mic's own band is bleed:
-  `crates/core/src/detect/cross_bleed.rs` (coincide_ms 10.0) and `crates/app/src/cross_bleed.rs`.
+Facts used (checked against the code at release 0.9.33, not against a commit; the constant or
+field behind each number is named; module docs of `crates/core/src/detect/tom_bleed.rs`,
+`cross_bleed.rs`, `flam.rs`, `crates/app/src/tom_bleed.rs`, `cross_bleed.rs`, `flam.rs` and
+`ghost_gate.rs`; the detection on main is spectral onset detection with gates and cross-mic rules):
+- Tom band 50 to 400 Hz (`Role::band`), the level window [-0.5, +8) ms at a hit (`window_ms`),
+  transfer gains calibrated from the strong hits, two mics of one drum never explain each other, the
+  kick and snare close mics as sources (`snare_threshold_db` 9.2, `kick_threshold_db` 4.0); a kick
+  source that hears a tom about as loud as the tom hears it still counts, under a guard
+  (`kick_shared_threshold_db` 8.0, and the hit has no own 2 kHz attack rise of `kick_shared_rise_db`
+  15.0 or more), rule version 5 (`RULE_VERSION`): `crates/core/src/detect/tom_bleed.rs`.
+- Tom pair rule: two hits on mics of different drums within `winner_window_ms` 12, the one
+  `winner_margin_db` 6 dB or more under the other is bleed, when its own level is at most
+  `PAIR_FLOOR_DB` -3 dB; a hit with an own-mic attack rise of `PAIR_KEEP_RISE_DB` 10 dB or more
+  stays: `crates/core/src/detect/tom_bleed.rs`, versions 3 and 4.
+- Cross-track rule: a tom hit that coincides within `coincide_ms` 10 with a hit of a kick, snare or
+  hi-hat close mic, starts later than it and is quieter in that mic's own band is bleed:
+  `crates/core/src/detect/cross_bleed.rs` and `crates/app/src/cross_bleed.rs`.
 - Ghost-note gate: a soft snare candidate passes when its spectral shape matches the snare template
-  (cosine 0.92 or more) and no kick or tom hit lies within 30 ms (`CLEAR_MS`):
+  (`soft_sim` 0.92 or more) and no kick or tom hit lies within `CLEAR_MS` 30:
   `crates/app/src/ghost_gate.rs`.
-- Flam: a second attack 12 to 50 ms after the hit that rises 9 dB or more, through a 1 kHz high
-  pass; the bleed gate with the other mics' transfer gains; a late-peaking mic (a snare bottom) is
-  skipped: `crates/core/src/detect/flam.rs` and `crates/app/src/flam.rs` (LATE_REASON).
+- Flam: a second attack `min_gap_s` 12 to `max_gap_s` 50 ms after the hit that rises `rise_db` 9 dB or
+  more, through a `hp_hz` 1000 Hz high pass; the bleed gate with the other mics' transfer gains
+  (`margin_db` 10); a late-peaking mic (a snare bottom) is skipped (`LATE_REASON`). The second stroke
+  is placed by the placement rule of its track (flam rule version 2, `FLAM_RULE_VERSION`):
+  `crates/core/src/detect/flam.rs` and `crates/app/src/flam.rs`.
 - A marked hit stays in the project, shows grey and leaves the output; `restore` takes the mark
   off; an edited hit never carries it: `crates/app/src/tom_bleed.rs`, `crates/app/src/edit.rs`.
 - Every close mic of the session is a source for the others: `crates/app/src/cross_bleed.rs`
@@ -46,7 +50,7 @@ The rules run over the whole session, after the per-track analysis. Every close 
 
 > For one tom mic hit: the tom-band level (50 to 400 Hz) on every mic; arrows from the other drums' mics with their transfer gains; the sum explains the level, so the hit turns grey.
 
-For every tom hit, Drum Spike looks at the low band where toms live, 50 to 400 hertz, in a small window around the hit. It knows how much of each drum normally arrives at each mic. It calibrated that from the strong hits of the session. If another drum explains the level on this mic, the hit is bleed. Two mics of one drum never explain each other. The kick and snare close mics are sources too.
+For every tom hit, Drum Spike looks at the low band where toms live, 50 to 400 hertz, in a small window around the hit. It knows how much of each drum normally arrives at each mic. It calibrated that from the strong hits of the session. If another drum explains the level on this mic, the hit is bleed. Two mics of one drum never explain each other. The kick and snare close mics are sources too, and a kick that sits close to a tom still counts when the tom hit has no sharp stick click of its own.
 
 ## s04-cross
 
@@ -70,7 +74,7 @@ A quiet snare hit stays when its spectral shape matches the snare template, and 
 
 > A flam on the snare at 5 ms zoom: the one kept hit; the attack envelope shows a second rise 20 ms later; a marker appears with the label flam.
 
-A flam is two strokes very close together. Drum Spike looks inside that one hit for a second attack, on the snare mic itself: 12 to 50 ms after the hit, and rising 9 dB or more. If the other mics do not explain it as bleed, it becomes its own hit, on its own first sample. A snare bottom mic peaks too late for this; the rule skips it.
+A flam is two strokes very close together. Drum Spike looks inside that one hit for a second attack, on the snare mic itself: 12 to 50 ms after the hit, and rising 9 dB or more. If the other mics do not explain it as bleed, it becomes its own hit, on its own first sample. The second stroke is placed by the same placement rule as the hits of its track. A snare bottom mic peaks too late for this; the rule skips it.
 
 ## s08-control
 
