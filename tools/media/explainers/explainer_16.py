@@ -79,7 +79,7 @@ class Explainer16(Explainer):
 
     def s03_work(self):
         """Work as usual: the review queue, the nudge at sample zoom, the edits that write a record."""
-        (t, s, hit_at, j), _ = pick_hits()
+        t, s, hit_at, j = pick_hits()
         pic, hx = samples_window(s, hit_at, LANE_X0, LANE_X1, LANE_Y)
         tag = Text("s top, sample zoom", font=FONT, font_size=20, color=TEXT).next_to(pic, UP, buff=0.25)
         self.t_play(Create(pic), FadeIn(tag), t=2.5)
@@ -102,7 +102,7 @@ class Explainer16(Explainer):
             self.t_play(FadeIn(nudge_tag), t=2.0)
         self.say("Add a hit, delete one, confirm one as reviewed: every one of these writes one "
                  "record.", t=2.0)
-        self.say("An agent writes the same kind of record.", t=2.0)
+        self.say("An agent writes the same kind of record; it says person or agent.", t=2.0)
 
     def s04_log(self):
         """The log: the file, and one record of it (the recorded tutorial's own move)."""

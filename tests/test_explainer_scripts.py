@@ -138,3 +138,56 @@ def test_planted_scene_without_visual_note_is_reported(tmp_path):
     hits = check_training_script(bad.read_text(encoding="utf-8"))
     assert len(hits) == len(TRAINING_SCENES), hits
     assert all("no visual note" in h for h in hits), hits
+
+
+# ---- #465: the facts of Explainers 10, 15 and 16 against the code and the product's words ----
+
+AGENT_JS = ROOT / "static" / "agent.js"
+TRAINING_RS = ROOT / "crates" / "app" / "src" / "training.rs"
+
+
+def constants_defined(*paths):
+    """The names that the files define as a constant: `const NAME: ...` of Rust, and every `NAME = ...` of a JS
+    `const A = 1, B = 2;` list."""
+    names = set()
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        names |= set(re.findall(r"\bconst\s+([A-Z][A-Z0-9_]+)\s*:", text))
+        names |= set(re.findall(r"\b([A-Z][A-Z0-9_]{3,})\s*=[^=>]", text))
+    return names
+
+
+def check_constants_exist(text, defined):
+    """The hits for a backticked CONSTANT_NAME of the script that none of the named source files defines."""
+    named = set(re.findall(r"`([A-Z][A-Z0-9_]{3,})`", text))
+    return [f"the script names the constant {n}, which the code does not define" for n in sorted(named - defined)]
+
+
+def check_no_stale_phrase(text):
+    """The hits for the claim that an agent's record is byte for byte a person's (every record carries `by`)."""
+    if "byte for byte the record" in text:
+        return ["the script says the record of an agent is byte for byte the record of a person"]
+    return []
+
+
+def test_explainer_15_names_no_constant_absent_from_the_code():
+    defined = constants_defined(AGENT_JS, TRAINING_RS)
+    assert check_constants_exist(script_text("explainer-15-agent.md"), defined) == []
+
+
+def test_no_script_says_the_agent_record_is_byte_for_byte_a_persons():
+    for path in sorted(SCRIPTS.glob("*.md")):
+        assert check_no_stale_phrase(path.read_text(encoding="utf-8")) == [], path.name
+
+
+def test_no_script_names_a_commit_as_its_source():
+    """A facts header checks against the code of a release, not against a commit that moves on."""
+    for path in sorted(SCRIPTS.glob("explainer-*.md")):
+        assert not re.search(r"commit [0-9a-f]{7,}", path.read_text(encoding="utf-8")), path.name
+
+
+def test_planted_missing_constant_and_stale_claim_are_reported():
+    assert check_constants_exist("Facts: `LINE_MAX_SPREAD` and `LINE_LEAD`.", {"LINE_LEAD"}) == [
+        "the script names the constant LINE_MAX_SPREAD, which the code does not define"]
+    assert len(check_no_stale_phrase("so the record of an agent is byte for byte the record of a person")) == 1
+    assert check_no_stale_phrase("the record is the same kind, marked as made by an agent") == []

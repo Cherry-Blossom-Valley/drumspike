@@ -16,11 +16,11 @@ from explainer_common import (
 from explainer_10 import PLOT_W, SR, kit_hits, read_seg, truth  # the demo session's readers
 
 # The agent's own window and rule (static/agent.js): 0.9 ms before and 0.6 ms after the hit,
-# the line judged over the first 12 samples with a spread limit of 0.03 (shares of the local
-# peak), the departure looked for up to 12 samples before and 6 after the hit.
+# the line read over 12 samples (LINE_LEAD), the departure looked for up to 12 samples before
+# and 6 after the hit (DEPART_BEFORE, DEPART_AFTER). The picture's judge is a short mirror of
+# the line opinion; the app's judge (`judge` in agent.js) and the pattern opinion decide.
 WINDOW_MS = (0.9, 0.6)
 LINE_LEAD = 12
-LINE_MAX_SPREAD = 0.03
 DEPART_BEFORE, DEPART_AFTER = 12, 6
 DEPART_MIN = 0.03
 HIT_Y = 1.2
@@ -43,9 +43,6 @@ def judge(s, hit_at):
     level = lead[n >> 1]
     spread = max(abs(s[i] - level) for i in range(n))
     out = {"level": level, "spread": spread, "first_off": None, "suggest": None, "why": None}
-    if not spread <= LINE_MAX_SPREAD:
-        out["why"] = "the lead is not a line"
-        return out
     thr = max(3 * spread, DEPART_MIN)
     for i in range(n, len(s)):
         if abs(s[i] - level) > thr:
@@ -71,8 +68,6 @@ def measure_stored(t_truth):
     n = min(LINE_LEAD, len(s))
     level = sorted(s[:n])[n >> 1]
     spread = max(abs(s[i] - level) for i in range(n))
-    if not spread <= LINE_MAX_SPREAD:
-        return None
     thr = max(3 * spread, DEPART_MIN)
     for i in range(n, len(s)):
         if abs(s[i] - level) > thr:
@@ -81,28 +76,17 @@ def measure_stored(t_truth):
 
 
 def pick_hits():
-    """One hit already on its last line sample (the confirm story) and one wobbly hit (the
-    doubt story), measured over the snare hits of the demo session."""
-    clean = wobbly = None
+    """One hit already on its last line sample (the confirm story), measured over the snare hits
+    of the demo session: (stored sample, window, hit_at, the line opinion)."""
     for h in truth()["hits"]:
         if h["drum"] != "snare":
             continue
         stored = measure_stored(h["t"])
         if stored is None:
-            if wobbly is None:
-                wobbly = h["t"]
             continue
-        if clean is None:
-            clean = stored
-        if wobbly is not None and clean is not None:
-            break
-    if clean is None or wobbly is None:
-        raise SystemExit("the demo session has no clean and no wobbly snare for the scenes")
-    out = []
-    for t in (clean, wobbly):
-        s, hit_at = window_samples("s top", t, 72)
-        out.append((t, s, hit_at, judge(s, hit_at)))
-    return out[0], out[1]
+        s, hit_at = window_samples("s top", stored, 72)
+        return stored, s, hit_at, judge(s, hit_at)
+    raise SystemExit("the demo session has no snare with a measurable departure for the scenes")
 
 
 def samples_window(s, hit_at, x0, x1, yc, half=0.55):
@@ -167,7 +151,7 @@ class Explainer15(Explainer):
 
     def s01_hand(self):
         """What the owner does by hand: sample zoom, the last line sample, the nudge, Confirm Hit."""
-        clean, _ = pick_hits()
+        clean = pick_hits()
         t, s, hit_at, j = clean
         pic, hx = samples_window(s, hit_at, -PLOT_W / 2, PLOT_W / 2, HIT_Y)
         label = Text("s top, sample zoom (0.9 ms before, 0.6 ms after the hit)", font=FONT,
@@ -202,7 +186,7 @@ class Explainer15(Explainer):
 
     def s02_agent(self):
         """The agent does the same three steps through the app's own page and the same code paths."""
-        clean, _ = pick_hits()
+        clean = pick_hits()
         t, s, hit_at, j = clean
         pic, hx = samples_window(s, hit_at, -PLOT_W / 2, PLOT_W / 2, HIT_Y)
         self.t_play(Create(pic), t=2.0)
@@ -219,7 +203,7 @@ class Explainer15(Explainer):
         # the say swap runs BEFORE the scene line fades in, so no caption is ever fading
         # under a scene line (the sampled frame of the 96f3956b gate showed exactly that)
         self.say("Every move and confirm runs through the code your keyboard uses.", t=2.0)
-        eq = Text("the record of an agent is byte for byte the record of a person", font=FONT,
+        eq = Text("the same kind of record, marked by: agent", font=FONT,
                   font_size=22, color=ORANGE).move_to([0, -0.3, 0])
         same = Text("the same code paths as your keyboard: nudgeSelected, Hits > Confirm Hit",
                     font=FONT, font_size=22, color=TEXT).move_to([0, -0.3, 0])
@@ -227,12 +211,12 @@ class Explainer15(Explainer):
         # #459: one line at a time at the bottom edge — split the fade so both are never visible,
         # and the last say swap also runs with no scene line on screen.
         self.t_play(FadeOut(same), t=1.0)
-        self.say("So the record of an agent is byte for byte the record of a person.", t=2.0)
+        self.say("The record is the same kind as a person's, marked as made by an agent.", t=2.0)
         self.t_play(FadeIn(eq), t=1.0)
 
     def s03_look(self):
         """What the agent sees: the lane picture and the samples as numbers, with the judge's marks."""
-        clean, _ = pick_hits()
+        clean = pick_hits()
         t, s, hit_at, j = clean
         pic, _ = samples_window(s, hit_at, -7.0, -1.0, 1.4)
         tag = Text("the lane picture", font=FONT, font_size=20, color=TEXT).next_to(pic, UP, buff=0.3)
@@ -252,25 +236,36 @@ class Explainer15(Explainer):
                  "stroke departs.", t=2.0)
 
     def s04_judge(self):
-        """Where the judgement stops: a wobbly lead gets no suggestion, the hit stays for the person."""
-        _, wobbly = pick_hits()
-        t, s, hit_at, j = wobbly
-        parts = number_lane(s, hit_at, j, HIT_Y,
-                            f"a wobbly lead: the spread {j['spread']:.3f} is over the 0.03 limit")
-        self.t_play(Create(parts[0]), FadeIn(parts[-1]), t=3.0)
-        self.say("The judgement stops where the line is not a line.", t=2.0)
-        rule = Text("no suggestion: the spread over the first 12 samples is judged against "
-                    "0.03 of the local peak", font=FONT, font_size=22, color=TEXT).to_edge(DOWN, buff=1.2)
-        # the say swaps run with no scene line on screen (no caption fades under a live line)
-        self.say("A wobbly lead, a spread over 0.03 of the local peak over the first 12 samples, "
-                 "gets no suggestion.", t=2.0)
-        self.t_play(FadeIn(rule), t=2.5)
-        self.t_play(FadeOut(rule), t=1.0)
-        self.say("The hit lands on the doubtful list with its reason, and stays for you.", t=2.0)
-        doubt = Text("doubt: the hit lands on the doubtful list with its reason, and stays for you",
-                     font=FONT, font_size=22, color=ORANGE).to_edge(DOWN, buff=1.2)
-        # #459: split the fade so the two bottom lines are never visible at once.
-        self.t_play(FadeIn(doubt), t=1.0)
+        """The two opinions: the line of the hit and the pattern of the track's clear hits; a move only when they agree."""
+        t, s, hit_at, j = pick_hits()
+        sug = j["suggest"] if j["suggest"] is not None else 0
+        pic, hx = samples_window(s, hit_at, -PLOT_W / 2, PLOT_W / 2, 1.5)
+
+        def x_of(off):
+            return -PLOT_W / 2 + PLOT_W * (hit_at + off) / (len(s) - 1)
+
+        line_mark = sample_stalk(x_of(sug), 1.5, ORANGE, half=0.9, width=3)
+        self.t_play(Create(pic), t=2.5)
+        line_tag = Text(f"the line of the hit says {sug:+d}", font=FONT, font_size=22, color=ORANGE).move_to([0, -0.2, 0])
+        self.t_play(Create(line_mark), FadeIn(line_tag), t=2.5)
+        pat_mark = sample_stalk(x_of(sug), 1.5, TEXT, half=0.6, width=2)
+        pat_tag = Text(f"the pattern of the track's clear hits says {sug:+d}", font=FONT, font_size=22,
+                       color=TEXT).move_to([0, -0.8, 0])
+        self.say("Two opinions: the line of the hit, and the pattern of the track's own clear hits.", t=2.0)
+        self.t_play(Create(pat_mark), FadeIn(pat_tag), t=2.5)
+        agree = Text("both agree within one sample: the hit moves", font=FONT, font_size=22,
+                     color=ORANGE).move_to([0, -1.5, 0])
+        self.t_play(FadeIn(agree), t=2.0)
+        self.t_play(FadeOut(agree), FadeOut(pat_tag), FadeOut(pat_mark), t=1.0)
+        # an example of the other case, drawn as such: the pattern two or more samples away
+        far = sug + 3
+        pat_far = sample_stalk(x_of(far), 1.5, TEXT, half=0.6, width=2)
+        far_tag = Text(f"example: the pattern says {far:+d}", font=FONT, font_size=22, color=TEXT).move_to([0, -0.8, 0])
+        listed = Text("the opinions differ: the hit is listed with both positions, not moved", font=FONT,
+                      font_size=22, color=ORANGE).move_to([0, -1.5, 0])
+        self.t_play(Create(pat_far), FadeIn(far_tag), t=2.0)
+        self.t_play(FadeIn(listed), t=2.0)
+        self.say("The hit moves only when both agree within one sample; otherwise it is listed.", t=2.0)
 
     def s05_training(self):
         """The training log line of the move: op, from, to, precision, placement, audio window."""
