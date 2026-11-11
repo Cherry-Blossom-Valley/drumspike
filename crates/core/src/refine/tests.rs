@@ -234,9 +234,10 @@ fn rule_versions_and_the_reference_rule() {
             RefineRule::Edge.version(),
             RefineRule::Visible.version(),
             RefineRule::Line.version(),
-            RefineRule::Departure.version()
+            RefineRule::Departure.version(),
+            RefineRule::Symmetric.version()
         ),
-        (1, 2, 3, 4, 5, 6, 7, 8, 9)
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
     );
     for r in [
         RefineRule::Reference,
@@ -248,12 +249,13 @@ fn rule_versions_and_the_reference_rule() {
         RefineRule::Visible,
         RefineRule::Line,
         RefineRule::Departure,
+        RefineRule::Symmetric,
     ] {
         assert_eq!(RefineRule::from_version(u64::from(r.version())), Some(r));
     }
     assert_eq!(RefineRule::from_version(0), None);
-    assert_eq!(RefineRule::from_version(10), None);
-    assert_eq!(RefineRule::CURRENT, RefineRule::Departure);
+    assert_eq!(RefineRule::from_version(11), None);
+    assert_eq!(RefineRule::CURRENT, RefineRule::Symmetric);
     // the reference rule is refine_sr, step Kept, on every kind of window
     let x = noisy(&track(&[(0.5, -3.0)], 1.5), -70.0);
     for t0 in [0.486, 0.497, 0.503, 0.65, 2.0] {
@@ -1674,4 +1676,187 @@ fn placement_diag_reports_no_edge_for_a_slow_attack() {
     let x = line_hit(at, 0.002, 0.0, 240, 0.5);
     let d = placement_diag(&x, SR, at as i64);
     assert!(!d.edge, "{d:?}");
+}
+
+// ---------------------------------------------------------------- #444: placement version 10
+
+/// One generated stroke of #444 as a function of time (seconds from the edge's start): a line with a slow wobble, a
+/// pre-swing of `dip` (a share of the peak, one raised-cosine lobe `width` long that ends `gap` before the edge), the
+/// edge (a raised-cosine rise over `rise`) and a decaying body. The same function is sampled at every rate.
+#[derive(Clone, Copy)]
+struct Stroke {
+    sign: f64,
+    dip: f64,
+    width: f64,
+    gap: f64,
+    rise: f64,
+    hz: f64,
+}
+
+impl Stroke {
+    fn at(&self, t: f64) -> f64 {
+        use std::f64::consts::PI;
+        let line = 0.003 * (2.0 * PI * 180.0 * t + 0.4).sin() + 0.001_5 * (2.0 * PI * 2_300.0 * t + 1.1).sin();
+        let swing = if t > -self.gap - self.width && t < -self.gap {
+            let u = (t + self.gap + self.width) / self.width;
+            -self.dip * (0.5 - 0.5 * (2.0 * PI * u).cos())
+        } else {
+            0.0
+        };
+        let body = if t <= 0.0 {
+            0.0
+        } else if t < self.rise {
+            0.5 - 0.5 * (PI * t / self.rise).cos()
+        } else {
+            let u = t - self.rise;
+            (-u / 0.03).exp() * (2.0 * PI * self.hz * u).cos()
+        };
+        self.sign * (line + swing + body)
+    }
+}
+
+/// The strokes of the #444 tests: both signs, pre-swings of 3 to 8 % of the peak, 150 to 400 us wide, 0 to 180 us
+/// before the edge.
+fn strokes_444() -> Vec<Stroke> {
+    let mut v = Vec::new();
+    for (n, &gap) in [0.0, 40e-6, 80e-6, 110e-6, 150e-6, 180e-6].iter().enumerate() {
+        for (m, &dip) in [0.03, 0.045, 0.06, 0.08].iter().enumerate() {
+            v.push(Stroke {
+                sign: if (n + m) % 2 == 0 { 1.0 } else { -1.0 },
+                dip,
+                width: 150e-6 + 62.5e-6 * ((n * 4 + m) % 5) as f64,
+                gap,
+                rise: 60e-6 + 20e-6 * (m as f64),
+                hz: 180.0 + 35.0 * n as f64,
+            });
+        }
+    }
+    v
+}
+
+/// The strokes sampled at `sr`, one every 0.25 s from 0.2 s (the edge starts at a time that is a whole sample at
+/// 48 and 96 kHz), and the edge times.
+fn sampled_444(sr: u32) -> (Vec<f32>, Vec<f64>) {
+    let strokes = strokes_444();
+    let srf = f64::from(sr);
+    let n = ((0.2 + 0.25 * strokes.len() as f64 + 0.2) * srf) as usize;
+    let mut x = vec![0.0f32; n];
+    let mut on = Vec::new();
+    for (k, s) in strokes.iter().enumerate() {
+        let te = 0.2 + 0.25 * k as f64;
+        on.push(te);
+        let a = ((te - 0.1) * srf) as usize;
+        let b = ((te + 0.14) * srf) as usize;
+        for (i, v) in x.iter_mut().enumerate().take(b).skip(a) {
+            *v = s.at(i as f64 / srf - te) as f32;
+        }
+    }
+    (x, on)
+}
+
+/// The refined times of the strokes under `rule` (the coarse time is 3 ms before the edge).
+fn placed_444(x: &[f32], on: &[f64], sr: u32, rule: RefineRule) -> Vec<f64> {
+    on.iter()
+        .map(|&te| refine_rule(x, te - 0.003, sr, &[], W, rule).t)
+        .collect()
+}
+
+/// 240 strokes on a noisy line whose pre-swing opens near the visibility band (1.8 to 4.2 % of the peak), one every
+/// 50 ms: the strokes where the line's level decides, and the edge times.
+fn near_band_444() -> (Vec<f32>, Vec<f64>) {
+    let srf = f64::from(SR);
+    let count = 240usize;
+    let mut x = vec![0.0f32; ((0.4 + 0.05 * count as f64) * srf) as usize];
+    let mut on = Vec::new();
+    for k in 0..count {
+        let s = Stroke {
+            sign: if k % 2 == 0 { 1.0 } else { -1.0 },
+            dip: 0.018 + 0.000_1 * k as f64,
+            width: 200e-6 + 20e-6 * (k % 9) as f64,
+            gap: 20e-6 * (k % 4) as f64,
+            rise: 60e-6 + 20e-6 * (k % 3) as f64,
+            hz: 200.0,
+        };
+        let te = 0.2 + 0.05 * k as f64;
+        on.push(te);
+        let a = ((te - 0.02) * srf) as usize;
+        let b = ((te + 0.028) * srf) as usize;
+        for (i, v) in x.iter_mut().enumerate().take(b).skip(a) {
+            *v = s.at(i as f64 / srf - te) as f32;
+        }
+    }
+    (noisy(&x, -46.0), on)
+}
+
+/// How many strokes of [`near_band_444`] land on another sample when the audio is flipped.
+fn flip_moves_444(rule: RefineRule) -> usize {
+    let (x, on) = near_band_444();
+    let flipped: Vec<f32> = x.iter().map(|v| -v).collect();
+    let a = placed_444(&x, &on, SR, rule);
+    let b = placed_444(&flipped, &on, SR, rule);
+    a.iter().zip(&b).filter(|(u, v)| u != v).count()
+}
+
+/// The strokes of [`strokes_444`] whose 48 and 96 kHz positions differ by more than one 48 kHz sample.
+fn rate_moves_444(rule: RefineRule) -> Vec<f64> {
+    let (x48, on) = sampled_444(48_000);
+    let (x96, _) = sampled_444(96_000);
+    let a = placed_444(&x48, &on, 48_000, rule);
+    let b = placed_444(&x96, &on, 96_000, rule);
+    a.iter()
+        .zip(&b)
+        .map(|(u, v)| (u - v) * 48_000.0)
+        .filter(|d| d.abs() > 1.0)
+        .collect()
+}
+
+#[test]
+fn a_stroke_and_its_flipped_copy_land_on_the_same_sample() {
+    // #444 (1): the line's level is the true median, so `x` and `-x` place every stroke alike. The same strokes
+    // under version 9 (the upper median of an even count) prove that the test can fail
+    assert_eq!(flip_moves_444(RefineRule::CURRENT), 0);
+    assert!(
+        flip_moves_444(RefineRule::Departure) > 0,
+        "the strokes do not reach the line level"
+    );
+}
+
+#[test]
+fn a_stroke_lands_on_the_same_time_at_48_and_96_khz() {
+    // #444 (2): the counts of samples follow the rate, so the same stroke sampled at 96 kHz lands within one
+    // 48 kHz sample of its 48 kHz position. Version 9 counted 96 kHz samples with the 48 kHz numbers: a stretch of
+    // line between a pre-swing and the edge was long enough there and too short at 48 kHz
+    let moved = rate_moves_444(RefineRule::CURRENT);
+    assert!(moved.is_empty(), "48 against 96 kHz, in 48 kHz samples: {moved:?}");
+    assert!(
+        !rate_moves_444(RefineRule::Departure).is_empty(),
+        "the strokes do not reach the counts"
+    );
+    // some of the strokes are placed before their pre-swing: the walk-back, not only the edge, is under test
+    let (x48, on) = sampled_444(48_000);
+    let early = placed_444(&x48, &on, 48_000, RefineRule::CURRENT)
+        .iter()
+        .zip(&on)
+        .filter(|(t, te)| (*te - *t) * 48_000.0 > 5.0)
+        .count();
+    assert!(early > 0, "no stroke is placed before its pre-swing");
+}
+
+#[test]
+fn version_9_stays_reachable_and_is_not_the_current_rule() {
+    // #444 (3): a project analysed with version 9 re-picks with version 9 (the record's number), with the old
+    // line level and the old counts: its results on the #351 strokes stay pinned by the tests above and by the
+    // golden's row 9, and the two defects that version 10 removes are still there
+    assert_eq!(RefineRule::from_version(9), Some(RefineRule::Departure));
+    assert_eq!(RefineRule::Departure.version(), 9);
+    assert_ne!(RefineRule::CURRENT, RefineRule::Departure);
+    assert!(flip_moves_444(RefineRule::Departure) > 0);
+    assert!(!rate_moves_444(RefineRule::Departure).is_empty());
+    // at 48 kHz the counts of version 10 are the counts of version 9
+    for n in [1, 3, 4, 10] {
+        assert_eq!(super::edge::at_rate(n, 48_000.0), n);
+        assert_eq!(super::edge::at_rate(n, 96_000.0), 2 * n);
+    }
+    assert_eq!(super::edge::at_rate(3, 44_100.0), 3);
+    assert_eq!(super::edge::at_rate(1, 8_000.0), 1, "never under one sample");
 }

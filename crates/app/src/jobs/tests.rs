@@ -477,7 +477,9 @@ fn the_rule_of_an_analysis_and_of_a_repick() {
     assert_eq!(parse_rule("8"), Some(RefineRule::Line));
     assert_eq!(parse_rule("departure"), Some(RefineRule::Departure));
     assert_eq!(parse_rule("9"), Some(RefineRule::Departure));
-    assert_eq!(parse_rule("10"), None);
+    assert_eq!(parse_rule("symmetric"), Some(RefineRule::Symmetric));
+    assert_eq!(parse_rule("10"), Some(RefineRule::Symmetric));
+    assert_eq!(parse_rule("11"), None);
     assert_eq!(parse_rule(""), None);
     let free = ServiceConfig::default();
     let pinned = ServiceConfig {
@@ -486,7 +488,7 @@ fn the_rule_of_an_analysis_and_of_a_repick() {
     };
     // a new analysis runs the current rule unless pinned
     assert_eq!(analysis_rule(&free), RefineRule::CURRENT);
-    assert_eq!(RefineRule::CURRENT, RefineRule::Departure);
+    assert_eq!(RefineRule::CURRENT, RefineRule::Symmetric);
     assert_eq!(analysis_rule(&pinned), RefineRule::Reference);
     // a re-pick keeps the rule its analysis recorded; no record or no version: before P4-12 (1)
     let rec = |v: Value| {
@@ -507,6 +509,12 @@ fn the_rule_of_an_analysis_and_of_a_repick() {
     assert_eq!(recorded_rule(&free, rec(json!(3)).as_ref()), RefineRule::FirstMotion);
     assert_eq!(
         recorded_rule(&free, rec(json!(9)).as_ref()),
+        RefineRule::Departure,
+        "#444: a project analysed with version 9 re-picks with version 9"
+    );
+    assert_eq!(recorded_rule(&free, rec(json!(10)).as_ref()), RefineRule::CURRENT);
+    assert_eq!(
+        recorded_rule(&free, rec(json!(99)).as_ref()),
         RefineRule::CURRENT,
         "a newer version"
     );
