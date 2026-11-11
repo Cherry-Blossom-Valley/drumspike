@@ -24,6 +24,8 @@ In this order:
 4. Then start the agent session (the MCP tools load at session start). A browser tool (Claude
    in Chrome, or Playwright MCP) is needed only when no window is open.
 
+![The Settings window with the category Agent selected: the Agent fine-tune skill row with its Install button and the MCP command line under it.](img/15-agent-finetune.png)
+
 The app's binary answers on its own, without a window: `drumspike-desktop --help` (also `-h` or
 `help`) prints the modes it has, and `--version` prints the version. An agent can read them
 before it starts; an unknown flag never opens a second Drum Spike window.

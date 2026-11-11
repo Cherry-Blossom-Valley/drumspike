@@ -10,7 +10,9 @@ use the example plugin (tests/fixtures/plugins/json_hits.py), installed into the
 Detectors folder.
 
 Chapters 6 to 13 (#497) are a second session on the same bridge (guide_pictures): the zoom and the
-nudge, the velocity lane, the review queue, the bleed panel, a follower with a layer, the tempo rulers.
+nudge, the velocity lane, the review queue, the bleed panel, a follower with a layer, the tempo
+rulers. Chapters 15 and 16 (#468) ride on that session too: the Settings window with the category
+Agent, and the status line with Training Mode on.
 
 Needs the demo session (tools/media/demo_session.py --out ~/.cache/drumspike/media/demo) and the
 debug bridge (cargo build -p drumspike-devtools --bin ds-bridge). Before every screenshot a guard
@@ -292,9 +294,25 @@ def app_pictures(page, work, out, wanted):
     menu(page, "analyze_all", wait=False)
     page.wait_for_function("() => document.querySelector('#progressText')?.textContent === 'analysis done'",
                            timeout=900000)
+    # the "analysis queued..." line of the start is stale once the job is done; no picture of
+    # this session carries it (#468)
+    page.evaluate("() => setMsg('')")
     inspect_track(page, SNARE, sections=("track", "hits", "detection"))
     page.wait_for_function("n => (S.events[n] || []).length > 0", arg=SNARE, timeout=60000)
     shoot("img/03-detection.png")
+
+    # 04 before the Learn block (#468): the Learn steps leave "added 1 hit ... and learned it" in
+    # the status line and "LEARN sim ..." in the info line, and chapter 4 does not explain Learn.
+    # The 5 ms zoom around the fourth hit of the snare: the hit line on the first motion of its attack
+    t = page.evaluate("n => S.events[n][3].t", SNARE)
+    page.evaluate("([n, t]) => { S.snap = false; S.selTrack = n; S.sel = { track: n, index: 3 }; "
+                  "setView(t - 0.001, t + 0.004); }", [SNARE, t])
+    page.wait_for_timeout(1500)   # the zoom tiles are drawn after the view moves: a shot at once shows the whole song
+    shoot("img/04-first-sample.png")
+    # back to the span of the Learn examples (the ghost 16.0938, the missed hit 18.4438-18.7438):
+    # the lane gestures below need the lane points inside the view
+    page.evaluate("() => setView(15, 20)")
+    page.wait_for_timeout(1500)
 
     # 11 (#428): the Inspector's Learn section at the pl-histogram state of the recording
     # (the ghost forgotten, the missed hit added): the Similarity histogram with the Match
@@ -360,14 +378,7 @@ def app_pictures(page, work, out, wanted):
     page.click("#settingsDone")
     page.wait_for_function("() => document.querySelector('#settingsModal').classList.contains('hidden')")
 
-    # the 5 ms zoom around the fourth hit of the snare: the hit line on the first motion of its attack
-    t = page.evaluate("n => S.events[n][3].t", SNARE)
-    page.evaluate("([n, t]) => { S.snap = false; S.selTrack = n; S.sel = { track: n, index: 3 }; "
-                  "setView(t - 0.001, t + 0.004); }", [SNARE, t])
-    page.wait_for_timeout(1500)   # the zoom tiles are drawn after the view moves: a shot at once shows the whole song
-    shoot("img/04-first-sample.png")
-
-    EXPORTS.mkdir(parents=True, exist_ok=True)
+    # the export dialog of chapter 5 (the per-track MIDI and spike files, the destination folder)
     invoke(page, "export_dest_set", sid=page.evaluate("() => S.sid"), dest=str(EXPORTS))
     menu(page, "export", wait=False)
     page.wait_for_selector("#exportModal:not(.hidden)")
@@ -397,6 +408,7 @@ def guide_pictures(page, work, out, wanted):
     menu(page, "analyze_all", wait=False)
     page.wait_for_function("() => document.querySelector('#progressText')?.textContent === 'analysis done'",
                            timeout=900000)
+    page.evaluate("() => setMsg('')")   # the stale "analysis queued..." line (#468)
     inspect_track(page, SNARE, sections=("track", "hits"))
     page.wait_for_function("n => (S.events[n] || []).length > 0", arg=SNARE, timeout=60000)
 
@@ -453,6 +465,9 @@ def guide_pictures(page, work, out, wanted):
     page.evaluate("([n, i, t]) => { S.snap = false; S.selTrack = n; S.sel = { track: n, index: i }; "
                   "setView(t - 0.6, t + 0.6); }", [name, i, t])
     page.evaluate("() => { if (!MX.on) mxToggle(); }")
+    # the tom lane with the grey hit must be in the picture (#468): 13 rows scroll, the selected
+    # row is not always in view
+    page.locator(f'.track[data-name="{name}"]').scroll_into_view_if_needed()
     page.wait_for_timeout(1500)
     # the editor alone (lanes, rulers, the Other Mics panel): the full window is over the 400 KB cap
     shoot("img/10-bleed.png", element=page.locator("#editor"))
@@ -461,6 +476,11 @@ def guide_pictures(page, work, out, wanted):
     # 12: the sub mic follows the kick in; the Layer section holds a one-shot with its onset line
     invoke(page, "track_set_follow", sid=sid, name="k out", source="k in")
     invoke(page, "track_layer_set", sid=sid, name="k out", path=str(make_one_shot(work / "kick-layer.wav")))
+    # the row must show the follow, not only the service state (#468): the agent commands
+    # change the service state; refreshTrackMeta pulls it into the rows and the Inspector
+    page.evaluate("async () => { await refreshTrackMeta(); }")
+    page.wait_for_function("""() => { const el = document.querySelector('.track[data-name="k out"] .tfollow');
+                                     return el && el.textContent.includes('follows k in'); }""", timeout=30000)
     inspect_track(page, "k out", sections=("track", "layer"))
     page.wait_for_timeout(1500)
     shoot("img/12-followers-and-layers.png")
@@ -471,6 +491,29 @@ def guide_pictures(page, work, out, wanted):
     page.wait_for_function("() => !FR.raf && FR.flags === 0", timeout=30000)
     page.wait_for_timeout(1000)
     shoot("img/13-tempo.png")
+
+    # 15 (#468): the Settings window with the category Agent: the fine-tune skill row and the MCP line
+    menu(page, "settings", wait=False)
+    page.wait_for_selector("#settingsModal:not(.hidden)")
+    page.click("#setCat-agent")
+    page.wait_for_selector("#setAgentSkill.active")
+    page.wait_for_function("() => !document.querySelector('#setSkillStatus').textContent.includes('Checking')",
+                           timeout=60000)
+    # the command line names the running binary: the shot shows the home-relative form, as the
+    # export dialog shows its destination (no host path in a picture)
+    page.evaluate("""() => { const el = document.querySelector('#setSkillCmd');
+        el.textContent = 'claude mcp add --scope user drumspike -- "~/Applications/Drum Spike/drumspike-desktop" mcp'; }""")
+    shoot("img/15-agent-finetune.png", element=page.locator("#settingsModal .modal-box"))
+    page.click("#settingsDone")
+    page.wait_for_function("() => document.querySelector('#settingsModal').classList.contains('hidden')")
+
+    # 16 (#468): the status line with Training Mode on: the counter with the records of the open project
+    menu(page, "training_mode", wait=False)
+    page.wait_for_function("() => !document.querySelector('#stTraining').classList.contains('hidden')",
+                           timeout=30000)
+    page.wait_for_function("() => /training: \\d+ records?/.test(document.querySelector('#stTraining').textContent)",
+                           timeout=30000)
+    shoot("img/16-training-mode.png", element=page.locator("#statusbar"))
     return written, checked[0]
 
 

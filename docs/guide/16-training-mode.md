@@ -20,6 +20,8 @@ same kind of record as you.
 2. While it is on, the status line counts the records of the open project, for example
    `training: 12 records`.
 
+![The status line with Training Mode on: the counter with the training records of the open project.](img/16-training-mode.png)
+
 ## Work as usual
 
 Nothing about editing changes. The review queue (**Hits > Next Doubtful Hit**, `D`) walks you
