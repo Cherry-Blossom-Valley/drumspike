@@ -1,7 +1,7 @@
 #!/bin/sh
 # P3-8b, P3-10, P3-11 (arm64-mac, run by the OWNER): signed and notarized "Drum Spike" .dmg files, one per
 # architecture, and optionally the GitHub Release.
-#   DRUMSPIKE_SIGN_IDENTITY="Developer ID Application: Wolfgang Frank (2NZX5Q2ESG)" \
+#   DRUMSPIKE_SIGN_IDENTITY="Developer ID Application: <name> (<team id>)" \
 #   DRUMSPIKE_NOTARY_PROFILE=drumspike-notary \
 #   apps/desktop/scripts/release.sh [--dry-run] [--arch arm64|x86_64|both] [--publish | --publish-only] [--draft] [--replace]
 # --arch: default both (arm64 = Apple silicon, x86_64 = Intel; build-dmg.sh --arch).
