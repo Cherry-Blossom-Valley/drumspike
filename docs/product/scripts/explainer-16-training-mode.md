@@ -61,7 +61,7 @@ Turn it on in the View menu: Training Mode. The switch belongs to the app, not t
 
 > The s top lane of the demo session at sample zoom around one hit, its last line sample marked; on the right, the edits that write a record: Hits > Next Doubtful Hit (D), Edit > Nudge Hit Earlier (Left), Edit > Nudge Hit Later (Right), Edit > Add Hit at Playhead (H), Edit > Delete Hit, Hits > Confirm Hit.
 
-Then work as you always do. The review queue walks you to the doubtful hits; at sample zoom you nudge a hit by whole samples onto its last line sample. Add a hit, delete one, confirm one as reviewed: every one of these writes one record. An agent writes the same kind of record, and each record says whether a person or an agent made it.
+Then work as you always do. The review queue walks you to the doubtful hits; at sample zoom you nudge a hit by whole samples onto the last sample of its line. Add a hit, delete one, confirm one as reviewed: every one of these writes one record. An agent writes the same kind of record, and each record says whether a person or an agent made it.
 
 ## s04-log
 

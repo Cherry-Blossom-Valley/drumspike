@@ -88,7 +88,7 @@ class Explainer16(Explainer):
                         for i, ln in enumerate(edit_rows())])
         self.t_play(FadeIn(rows), t=2.0)
         self.say("The review queue walks you to the doubtful hits; at sample zoom you nudge a "
-                 "hit by whole samples onto its last line sample.", t=2.0)
+                 "hit by whole samples onto the last sample of its line.", t=2.0)
         if j["suggest"]:
             last_x = LANE_X0 + (LANE_X1 - LANE_X0) * (hit_at + j["suggest"]) / (len(s) - 1)
             nudge = Arrow([hx, LANE_Y + 0.25, 0], [last_x, LANE_Y + 0.25, 0], color=ORANGE,
