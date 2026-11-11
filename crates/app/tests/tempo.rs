@@ -360,12 +360,13 @@ fn detect_suggests_the_map_of_the_hits_and_changes_nothing() {
         .to_string();
     let ticks = note_ticks(&path);
     assert_eq!(ticks.len(), 64);
-    let bar1 = 24_000u64; // 0.6 s at 100 BPM is one quarter
+    // the detected map has two tempos, so the #441 rule takes MAX_PPQ: one quarter is 32767 ticks
+    let bar1 = 32_767u64; // 0.6 s at 100 BPM is one quarter
     for (i, t) in ticks.iter().enumerate() {
         let rel = t - bar1;
-        assert!(rel % 48_000 <= 1 || rel % 48_000 >= 47_999, "kick {i} at tick {t}");
+        assert!(rel % 65_534 <= 1 || rel % 65_534 >= 65_533, "kick {i} at tick {t}");
     }
-    assert_eq!(ticks[32] - bar1, 16 * 96_000, "bar 17 beat 1");
+    assert_eq!(ticks[32] - bar1, 16 * 131_068, "bar 17 beat 1");
 }
 
 #[test]
