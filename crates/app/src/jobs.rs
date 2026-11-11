@@ -516,6 +516,21 @@ impl DetectorSlot {
         let (a, cands, params, weak_limit) =
             drumspike_core::analyze::analyze_track_dsp_cands(x, sr, role, &p, &cfg.rules, &cfg.research)
                 .map_err(|e| AppError::bad(e.to_string()))?;
+        // #454: the hits are the pick at the track's stored sensitivity, the same as `track_repick`
+        // gives at that value; at the default scale the detection's own pick stands unchanged.
+        let scale = sensitivity::scale_of(sensitivity::sensitivity_of(&parsed.params.thresholds)) as f32;
+        let a = if parsed.params.thresholds == AnalyzeParams::default().thresholds {
+            a
+        } else {
+            let detector = drumspike_core::analyze::Detector::Candidates {
+                cands: &cands,
+                params: &params,
+                weak_limit,
+                scale,
+            };
+            drumspike_core::analyze::analyze_track(x, sr, role, &p, detector)
+                .map_err(|e| AppError::bad(e.to_string()))?
+        };
         let kept = DspKept {
             cands,
             params,
@@ -974,7 +989,8 @@ fn finish_one(
         }
     }
     // P3-18: no hit at this sensitivity: the picking again with lower thresholds; the DSP
-    // detection ignores the thresholds (the model path lived on the kept activations, #281 D16)
+    // detection ignores the thresholds (the model path lived on the kept activations, #281 D16);
+    // the pick from its candidates runs at the stored sensitivity (#454)
     let (analysis, weak) = weak_retry(
         analysis,
         &parsed.params.thresholds,
