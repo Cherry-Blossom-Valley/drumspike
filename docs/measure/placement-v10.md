@@ -33,11 +33,23 @@ The polarity line is 0 by design now, and its bound is 0. The rate line is bette
 the parts of the rule that are already in time (the resampled audio is not the same audio sample by sample) and from
 the tom line, which the counts do not reach. The bounds file holds today's values for both.
 
-The delay line (the same audio cut some samples earlier, through the full track analysis) is unchanged for 1 to 7
-samples: 96 to 100 % of the hits move by exactly the delay. New in the bounds file are the delays 100, 240 and 331:
-there 74 to 84 % move exactly, 12 to 17 % land 5 or more samples off, and up to 9 % of the tom hits are lost. That is
-the detector's frame grid (the hit list changes with the cut), not the placement rule. The bounds record the state of
-today, so a later fix of the detector shows as a better line.
+The delay line (the same audio cut some samples earlier, through the full track analysis, the hit must move by exactly
+that count), with rule version 10 named in the job:
+
+| cut earlier by | kick, placed exactly | snare | tom |
+|---|---|---|---|
+| 1 to 7 samples | 100 % | 100 % | 99.2 to 99.6 % |
+| 100, 240, 331 samples | 99.1 to 99.7 % | 95.2 to 98.0 % | 79.3 to 84.5 % |
+
+At the long cuts the tom line loses 6.4 to 8.8 % of its hits and places 8.0 to 11.2 % five or more samples off; the
+snare line loses 1.6 to 2.4 %. That is the detector's frame grid (the hit list and the coarse time change with the cut),
+and toms are where it shows. The bounds file records today's values, so a later fix of the detector shows as a better
+line.
+
+Correction (2026-11-11): the first version of this page gave lower numbers for the delay line (74 to 84 % exact at the
+long cuts for every role). Those were measured with rule version 1: `service_tool core-analyze` runs version 1 when a
+job names no rule, and the tool's delay line named none. The tool now names the rule in the job, a test holds that, and
+the bounds file holds the version 10 values. With version 1 the same run gives the old numbers again.
 
 ## Against the labels
 

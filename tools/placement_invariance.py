@@ -22,7 +22,7 @@ bound. All data comes from the arguments, never from a path in the code.
 
 The rule runs through the repo's devtools binaries: `parity refine` for the window lines
 (the current rule version, or --rule N; one batched job per line) and `service_tool core-analyze`
-(DSP detector + the current rule) for the delay line. No second copy of the core is built.
+(DSP detector + the same rule version, named in the job) for the delay line. No second copy of the core is built.
 """
 import argparse
 import json
@@ -84,8 +84,9 @@ def write_float_wav(path, x, sr):
         f.write(b"data" + struct.pack("<I", len(data)) + data)
 
 
-def analyze_with_service_tool(records, service_tool, tmp):
-    """`service_tool core-analyze` (DSP detector + the current rule) on whole tracks.
+def analyze_with_service_tool(records, service_tool, tmp, rule=RULE):
+    """`service_tool core-analyze` (DSP detector + rule version `rule`) on whole tracks. The job names the rule:
+    a job without one runs rule version 1, the frozen reference of the golden answers.
 
     records are (x, sr, role); returns per record the hit positions in buffer samples."""
     jobs, paths = [], []
@@ -93,7 +94,7 @@ def analyze_with_service_tool(records, service_tool, tmp):
         p = tmp / f"track{n}.wav"
         write_float_wav(p, x, sr)
         paths.append(p)
-        jobs.append({"wav": str(p), "role": role})
+        jobs.append({"wav": str(p), "role": role, "rule": rule})
     jf = tmp / "jobs.json"
     jf.write_text(json.dumps(jobs))
     r = subprocess.run([str(service_tool), "core-analyze", str(jf)], capture_output=True, text=True)
@@ -329,7 +330,7 @@ def main(argv=None):
     ap.add_argument("--excerpts", type=int, default=0, help="cap the delay line's excerpt count")
     ap.add_argument("--skip-delay", action="store_true", help="skip the full-track delay line")
     ap.add_argument("--rule", type=int, default=RULE,
-                    help="the rule version of the window lines (the delay line always runs the current rule)")
+                    help="the rule version of every line (window lines and the delay line)")
     a = ap.parse_args(argv)
     parity, service_tool = Path(a.parity), Path(a.service_tool)
     if not parity.is_file():
@@ -349,7 +350,7 @@ def main(argv=None):
             print(f"delay-line excerpts {len(excerpts)}")
             if excerpts:
                 delays = [int(d) for d in a.delays.split(",")]
-                analyze = lambda recs: analyze_with_service_tool(recs, service_tool, tmp)  # noqa: E731
+                analyze = lambda recs: analyze_with_service_tool(recs, service_tool, tmp, a.rule)  # noqa: E731
                 delay = measure_delay_line(excerpts, analyze, delays)
     code = print_report(window, delay)
     if a.bounds:
