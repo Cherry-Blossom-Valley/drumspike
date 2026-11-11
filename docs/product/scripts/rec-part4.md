@@ -1,6 +1,6 @@
-# Screen recording, part 4: what is new in 0.9.3
+# Screen recording, part 4: what is new in 0.9.33
 
-The new features of 0.9.3 on the demo session. Narration for `tools/media/tts.py` (one `##`
+The new features of 0.9.33 on the demo session. Narration for `tools/media/tts.py` (one `##`
 per scene; `>` lines are the scenario steps and captions for `tools/media/record.py`, not
 spoken). Target length: 60 to 90 s. Keys shown in the key overlay. The recording home has the
 example plugin installed (`tests/fixtures/plugins/json_hits.py`, the scenario sets
@@ -43,6 +43,6 @@ Your edits survive a re-analyze. Set a velocity by hand. Press Tab to select a h
 
 ## p4-end
 
-> Caption: Drum Spike 0.9.3
+> Caption: Drum Spike 0.9.33
 
 That is what is new. The audio spike, the detector plug-ins, the sensitivity re-pick, and Keep for your edits.

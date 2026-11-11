@@ -118,9 +118,8 @@
       {"do": "wait", "cond": "() => document.querySelector('#stSel').textContent === 'no selection'", "timeout": 15, "err": "the selection cleared (the edit is in the status bar; edDelete writes no #stMsg message, the 0.00 % p123b pair was the stale export summary twice)"},
       {"do": "hold", "s": 1.5},
       {"do": "key", "press": "Alt+Meta+E"},
-      {"do": "wait", "cond": "() => !EX.busy && EX.done > 0", "timeout": 120,
-       "err": "the second export finished (EX.done > d0 races a fast export; the summary wait below asserts it)"},
-      {"do": "wait", "cond": "() => document.querySelector('#stMsg').textContent.startsWith('exported')", "timeout": 15, "err": "the summary shows the files again"},
+      {"do": "wait", "cond": "n => !EX.busy && EX.done > n", "arg": "EX.done", "timeout": 120,
+       "err": "the second export finished (the baseline is read when the wait starts: EX.done is already > 0 from the first export, so a plain EX.done > 0 passes before the export again runs; the p1-new show_text keeps the status line on the neutral created-Slate text, so the app's summary can never show there)"},
       {"do": "hold", "s": 1.5},
       {"do": "shot"}
     ]},

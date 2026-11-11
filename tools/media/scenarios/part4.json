@@ -1,6 +1,6 @@
 {
   "name": "part4",
-  "title": "Screen recording, part 4: what is new in 0.9.3 (#403)",
+  "title": "Screen recording, part 4: what is new in 0.9.33 (#403)",
   "script": "docs/product/scripts/rec-part4.md",
   "standard": true,
   "drift_limit_ms": 10,
@@ -134,7 +134,7 @@
       {"do": "hold", "s": 1.5}
     ]},
     {"id": "p4-end", "steps": [
-      {"do": "caption", "text": "Drum Spike 0.9.3"},
+      {"do": "caption", "text": "Drum Spike 0.9.33"},
       {"do": "hold", "s": 4.0}
     ]}
   ]

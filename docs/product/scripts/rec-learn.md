@@ -3,7 +3,7 @@
 The Learn chapter of the guide on the demo session. Narration for `tools/media/tts.py` (one
 `##` per scene; `>` lines are the scenario steps and captions for `tools/media/record.py`, not
 spoken). Target length: 60 to 90 s. Keys shown in the key overlay. The render runs model-free
-(`DRUMSPIKE_MODEL=none`, the built-in detector, as the 0.9.3 app runs). The TTS comes from the
+(`DRUMSPIKE_MODEL=none`, the built-in detector, as the 0.9.33 app runs). The TTS comes from the
 shared folder (`/Users/Shared/drumspike-media/tts-out/rec-learn`, the coordinator's mbp route). No
 path is shown in any scene, so there is nothing to neutralize. The wording keeps the guide's
 claims: Forget This removes the marked hit and its near copies; nothing is greyed out on a
@@ -41,6 +41,6 @@ Option+K is Remove Example. It takes the example back, and the added hits of the
 
 ## pl-end
 
-> Caption: Drum Spike 0.9.3
+> Caption: Drum Spike 0.9.33
 
 That is Learn. Forget This for the hits you do not want, Learn This for the hits the detection missed, and the track follows your examples.

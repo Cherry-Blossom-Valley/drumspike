@@ -34,6 +34,8 @@
        "err": "the sub mic is back on its own detection (setTrackFollow writes .follows; the backend keeps the stale followed copies until the re-analyze - track_set_follow returns n_events without derive_one)"},
       {"do": "hold", "s": 1.5},
       {"do": "click", "sel": "#analyzeAllBtn", "timeout": 15, "err": "the re-analyze the app's own message asks for"},
+      {"do": "click", "sel": "#confirmActions button[data-act='go']", "timeout": 15,
+       "err": "the Re-analyze confirm: the re-analyze overwrites the events of tracks with hits, so the app asks before it writes (0.9.33)"},
       {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the re-analyze started"},
       {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the sub mic detected its own hits"},
       {"do": "hold", "s": 1.5},
