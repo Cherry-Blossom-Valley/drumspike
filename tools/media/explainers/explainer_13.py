@@ -154,6 +154,7 @@ class Explainer13(Explainer):
                 if t <= span:
                     x = x_of(t, span)
                     out.add(Line([x, BASE[n], 0], [x, BASE[n] + HEIGHT * 0.8, 0], color=color, stroke_width=2))
+        out.set_z_index(5)   # above the bar and beat lines, so a hit on a downbeat stays visible
         return out
 
     def hit_count(self):
