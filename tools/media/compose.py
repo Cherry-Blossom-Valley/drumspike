@@ -18,8 +18,9 @@ lands on its narration: a clip list shorter than the scene holds its last frame,
 one is cut at the scene end. The
 video is the media plan's 1920x1080, h264 + aac; the scene audio sits at the scene starts of
 the 30 fps frame grid, so the drift per scene is the frame rounding only (FAIL over 100 ms).
-FAIL also on a missing clip file, a clip beyond its file's end, a speed over 2x, or a scene id
-without narration. The clip audio is dropped: the narration is the only audio (no music).
+FAIL also on a missing clip file, a clip beyond its file's end, a speed over 2x, a scene id
+without narration, or an explainer clip source that is not the current build (its sha256 must
+match tools/media/clip-sources.json, #494). The clip audio is dropped: the narration is the only audio (no music).
 Heavy: run under the host lock (crewboard lock run ...).
 """
 import argparse
@@ -35,6 +36,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CACHE = Path.home() / ".cache" / "drumspike" / "media"
+CLIP_SOURCES = ROOT / "tools" / "media" / "clip-sources.json"
 OUT_W, OUT_H = 1920, 1080     # the media plan: 1920x1080
 FPS = 30
 DRIFT_LIMIT_S = 0.1
@@ -199,6 +201,29 @@ def check_clip_ends(plan):
                                    f"but the file is {dur:.3f} s")
 
 
+def check_sources_current(plan):
+    """#494: the check against old clip sources. Every explainer a scene cuts from must be the
+    current build: its sha256 is in tools/media/clip-sources.json and matches the file. A media
+    cache that still holds an old explainer (a replaced build) FAILs here instead of slipping
+    stale footage into the video. Recordings are not listed (they are re-recorded per version)."""
+    import hashlib
+    manifest = json.loads(CLIP_SOURCES.read_text(encoding="utf-8"))["explainers"]
+    for sc in plan["scenes"]:
+        for cl in sc["clips"]:
+            if "title" in cl:
+                continue
+            src = expand(cl["source"])
+            if not src.name.startswith("explainer-"):
+                continue
+            if src.name not in manifest:
+                raise ComposeError(f"{sc['id']}: {src.name} is not in {CLIP_SOURCES.name} "
+                                   f"(an old or unknown build: stage the current one, then list it)")
+            digest = hashlib.sha256(src.read_bytes()).hexdigest()
+            if digest != manifest[src.name]:
+                raise ComposeError(f"{sc['id']}: {src.name} is an old build (sha256 {digest[:16]}... "
+                                   f"against {manifest[src.name][:16]}... in {CLIP_SOURCES.name})")
+
+
 def build_narration(items, starts, total_s, path):
     """One narration WAV: every scene's audio at its scene's video start (the frame grid), so
     the audio never drifts against the video by more than the scene's own rounding."""
@@ -351,6 +376,7 @@ def compose(plan, tts_dir, out, work, keep=False):
     plan = parse_plan(plan)
     items = load_narration(tts_dir, [sc["id"] for sc in plan["scenes"]])
     check_clip_ends(plan)
+    check_sources_current(plan)
     scenes_plan = [scene_plan(sc["clips"], narr_s)
                    for sc, (_, _, narr_s) in zip(plan["scenes"], items)]
     for sc, sp, (_, _, narr_s) in zip(plan["scenes"], scenes_plan, items):

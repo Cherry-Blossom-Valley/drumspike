@@ -1,0 +1,8 @@
+{
+  "comment": "#494: the sha256 of the current build of every explainer the product video cuts from (tools/media/compose.py refuses an explainer clip source whose sha256 is not this — an old build on the media cache would slip stale footage into the video). The coordinator stages a new build: update the hash here in the same change.",
+  "explainers": {
+    "explainer-01.mp4": "17a459981ef45fda9b0b3a7c08dc195cdb5a27ca60f36dfdc53918310350d9d0",
+    "explainer-04.mp4": "06819782598570787e018946ee60060bac2f1b721be041dc843e4178a2cdfa4e",
+    "explainer-10.mp4": "7f6c4a30132cc169353f0f28bfe98b1c528ec1b26c307b41aa66d3c666782593"
+  }
+}
