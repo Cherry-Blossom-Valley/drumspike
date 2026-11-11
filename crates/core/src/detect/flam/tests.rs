@@ -716,7 +716,7 @@ fn a_louder_swing_after_the_stroke_does_not_move_it_off_its_own_first_sample() {
         let grace = burst(&mut nz, 0.02, 0.003, 0.25);
         let mut x = vec![0.0f64; (5.0 * srf) as usize];
         add_at(&mut x, &grace, 3.0);
-        let i_main = add_at(&mut x, &main, 3.025);
+        let i_main = add_at(&mut x, &main, 3.025) as i64;
         if swing {
             // a swing of the ringing drum: louder and sharper than the stroke, 6 ms after it
             let loud = burst(&mut nz, 0.02, 0.001, 2.0);
@@ -731,7 +731,7 @@ fn a_louder_swing_after_the_stroke_does_not_move_it_off_its_own_first_sample() {
     let (env, _) = attack_env(&x, SR, &p);
     let plain = second_onsets(&x, SR, &[3.0], &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT);
     assert_eq!(plain.len(), 1, "{plain:?}");
-    let off_plain = (plain[0].t * srf).round() as i64 - i_main as i64;
+    let at_plain = (plain[0].t * srf).round() as i64;
     let (xs, i_main) = fixture(true);
     let (env, _) = attack_env(&xs, SR, &p);
     let swung = second_onsets(&xs, SR, &[3.0], &p, &env, &[], FLAM_RULE_VERSION, RefineRule::CURRENT);
@@ -742,11 +742,14 @@ fn a_louder_swing_after_the_stroke_does_not_move_it_off_its_own_first_sample() {
         "the swing moved the stroke: at {at}, first sample {i_main} ({swung:?})"
     );
     assert!(
+        (at - at_plain).abs() <= hop,
+        "the swing moved the stroke off the plain run's placement: {at} against {at_plain} ({swung:?})"
+    );
+    assert!(
         at < i_main + 3 * hop,
         "the stroke sits at the swing, 6 ms after its own first sample: {swung:?}"
     );
     assert!(swung[0].fallback, "the rule's answer was outside the span: {swung:?}");
-    let _ = off_plain;
 }
 
 #[test]

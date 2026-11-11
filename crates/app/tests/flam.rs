@@ -366,7 +366,7 @@ fn a_repick_places_the_flam_second_stroke_by_the_recorded_refine_rule() {
     let frs = at_samples(&flams(&svc10, &sid10, "s top"));
     assert_eq!(
         frs, f9s,
-        "the re-pick moved the second strokes off the recorded rule 9: {frs} against {f9s}"
+        "the re-pick moved the second strokes off the recorded rule 9: {frs:?} against {f9s:?}"
     );
     // the placement is the recorded rule's own answer on the stored hits, and the fixture
     // discriminates: version 10 places the same bodies differently
@@ -382,15 +382,15 @@ fn a_repick_places_the_flam_second_stroke_by_the_recorded_refine_rule() {
     let t10 = at_samples(&d10.iter().filter(|s| !s.bleed).map(|s| s.t).collect::<Vec<_>>());
     assert_eq!(
         t9, frs,
-        "the re-pick's placement is not the recorded rule's answer: {t9} against {frs}"
+        "the re-pick's placement is not the recorded rule's answer: {t9:?} against {frs:?}"
     );
-    assert_ne!(t9, t10, "the fixture does not discriminate version 9 from 10: {t9}");
+    assert_ne!(t9, t10, "the fixture does not discriminate version 9 from 10: {t9:?}");
     // a fresh analysis under the version-10 service moves the second strokes
     svc10.analyze_start(&sid10, None, None, None).unwrap();
     wait_done(&svc10, &sid10);
     let f10s = at_samples(&flams(&svc10, &sid10, "s top"));
     assert_ne!(
         f10s, f9s,
-        "a fresh analysis under version 10 places as 9: {f10s} against {f9s}"
+        "a fresh analysis under version 10 places as 9: {f10s:?} against {f9s:?}"
     );
 }
