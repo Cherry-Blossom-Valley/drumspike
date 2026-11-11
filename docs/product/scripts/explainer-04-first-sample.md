@@ -53,7 +53,7 @@ First, the detector says a snare hit is near here, but far too coarsely for a tr
 
 > From the foot, the steepest rise lights up, with the label "18 dB under the peak in 0.1 ms, searched in the 5 ms after the foot".
 
-Next it looks for the steep edge of the stroke: the signal climbs from the quiet line almost to the full height of the hit within a few samples. The edge tells where the stroke surely is, not where it began.
+Next it looks for the steep edge of the stroke. There the signal jumps by a clear part of the hit's height within a few samples. The edge tells where the stroke surely is, not where it began.
 
 ## s04-line
 
@@ -89,7 +89,7 @@ A soft ghost note works the same way, measured against its own peak. The marker 
 
 > Three short notes appear one after the other: "back at most 0.8 ms from the edge", "a swing at least 0.06 ms wide: a flicker is no motion", "no steep edge: the strict foot, at most 0.06 ms from the first foot"; a last line "96 kHz: the same times, twice the samples".
 
-The rule has limits. The walk never goes far back from the edge, at most 0.8 milliseconds. A flicker of one or two samples is no motion. Without a steep edge, the hit stays at the first foot. At a higher sample rate the rule covers the same times.
+The rule has limits. The walk never goes far back from the edge, at most 0.8 milliseconds. A flicker of one or two samples is no motion. Without a steep edge, the hit stays close to the first foot. At a higher sample rate the rule covers the same times.
 
 ## s10-result
 
