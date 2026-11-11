@@ -71,6 +71,6 @@ Press G and the bars and beats appear under your hits. It is a guide. Nothing sn
 
 ## s06-result
 
-> The hits on their bars and beats; then the word Export and "the same bars in your DAW".
+> The hits under the bar lines of the app; below them the same bars in a DAW-style lane with the tempo from the file, in whole BPM. No hit moves between the two.
 
-Export the MIDI, and the file carries the tempo map. Open it in your DAW, and the bars are the same bars. Your drums sit on the beat, where you counted them.
+Export the MIDI, and the file carries the tempo map. Open it in your DAW, and the bars are the same bars. Every hit sits in its bar, exactly where it was played.

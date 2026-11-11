@@ -105,7 +105,7 @@ class Explainer13(Explainer):
     # The seconds that each scene's steps take at pace 1 (the sum of its t= values). A scene whose narration is
     # longer slows its steps down (never speeds them up), so the holds sit between the steps, not at the end.
     # The last scene keeps pace 1: its result frame is the poster, taken at the middle of the scene.
-    PLAN = {"s01-problem": 8.0, "s02-detect": 12.0, "s03-bar1": 9.5, "s04-steps": 10.0, "s05-grid": 9.0}
+    PLAN = {"s01-problem": 8.0, "s02-detect": 12.0, "s03-bar1": 9.3, "s04-steps": 10.0, "s05-grid": 9.0}
 
     def setup(self):
         super().setup()
@@ -216,12 +216,11 @@ class Explainer13(Explainer):
         use = self.button(f"Use {whole(self.bpm)} BPM", -3.3)
         half = self.button(f"Half time: {whole(half_of(d))} BPM", 0.0)
         own = self.button("Use own tempo", 3.3)
-        usual = Text("half time is the usual mistake", font=FONT, font_size=24, color=ORANGE).move_to([0, -1.8, 0])
         self.t_play(Create(panel), FadeIn(head), t=1.5)
         self.t_play(FadeIn(start), t=2.0)
         self.t_play(FadeIn(also), t=2.0)
         self.t_play(FadeIn(use), FadeIn(half), FadeIn(own), t=2.0)
-        self.t_play(FadeIn(usual), half[0].animate.set_color(ORANGE), t=1.5)
+        self.t_play(half[0].animate.set_color(ORANGE), t=1.5)
         self.t_wait(1.0)
         self.say("One click for half time.", t=2.0)
 
@@ -241,10 +240,10 @@ class Explainer13(Explainer):
         self.t_play(Create(self.lane_frame()), FadeIn(self.stalks(WINDOW_S)), t=2.0)
         self.t_play(FadeIn(cmd), FadeIn(playhead), t=1.5)
         self.t_play(FadeIn(ruler), FadeIn(marker), t=2.0)
-        self.t_wait(1.5)
+        self.t_wait(0.8)
         self.t_play(FadeOut(ruler), FadeOut(marker), FadeOut(playhead), FadeOut(cmd), t=0.5)
         self.t_play(FadeIn(cmd2), FadeIn(ruler2), FadeIn(marker2), t=2.0)
-        self.t_wait(1.0)
+        self.t_wait(0.5)
 
     def s04_steps(self):
         """A tempo step where the song changes speed (drawn: the beats come closer after it), and the import."""
@@ -301,7 +300,7 @@ class Explainer13(Explainer):
             daw_bars.add(Line([x, daw_y - 0.5, 0], [x, daw_y + 0.5, 0], color=TEXT if beat == 1 else DIM,
                               stroke_width=3 if beat == 1 else 1))
         daw_name = Text("your DAW", font=FONT, font_size=22, color=TEXT).move_to([-6.3, daw_y, 0])
-        same = Text("the same bars", font=FONT, font_size=32, color=ORANGE).move_to([0, -3.4, 0])
+        same = Text(f"tempo from the file: {whole(self.bpm)} BPM", font=FONT, font_size=28, color=ORANGE).move_to([0, -3.4, 0])
         self.t_play(Create(self.lane_frame()), FadeIn(self.stalks(WINDOW_S)), FadeIn(self.ruler(self.bar1)),
                     Create(self.grid_lines(self.bar1)), t=1.5)
         self.t_play(FadeIn(title), t=1.0)
