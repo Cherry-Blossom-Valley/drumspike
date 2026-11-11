@@ -1,7 +1,8 @@
 /* #371: window.DSAgent, the page-side helpers of an agent that fine-tunes the hits of a song hit by hit with Training Mode
    on (skills/drumspike-finetune, docs/agent-api.md "Page helpers"). Plain functions, no UI, inert unless called. Every move
    and confirm runs through the code the keyboard uses (nudgeSelected, confirmHit), so the training record of an agent is
-   byte for byte the record of a person. The helpers that change the document refuse while Training Mode is off. */
+   the same kind of record as a person's, marked as made by an agent (the record carries `by`). The helpers that change
+   the document refuse while Training Mode is off. */
 (function () {
   const SAMPLE_BEFORE_MS = 0.9, SAMPLE_AFTER_MS = 0.6, WIDE_MS = 10;   // the sample-zoom window around a hit; the 20 ms view is 10 ms each side
   const LINE_LEAD = 12, LINE_MIN = 4, DEPART_MIN = 0.03;                 // samples of the line before the foot, the fewest that make a line, the band without a readable hit's peak (share of the local peak)

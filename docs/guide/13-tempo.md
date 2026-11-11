@@ -9,10 +9,13 @@ the lanes, and a metronome. The MIDI exports carry the map, so your DAW sees the
 1. Analyse the kick and snare tracks first (**Hits > Analyze All**): the detection reads the
    hits of these tracks to find the beat.
 2. Select **Track > Detect Tempo…**. The dialog shows the start tempo in whole BPM with
-   its confidence and the other tempos it could be (half, double, 3/2), the position of bar 1,
+   its confidence, the other whole BPM numbers the beat could also be, the position of bar 1,
    the meter, and the tempo steps with their bars. A tempo step is a place where the song
-   changes speed. If the confidence of bar 1 is low, the dialog offers the other candidate
-   (two beats later in 4/4); try it. **Accept** sets the map as one undo step. An octave
+   changes speed. The dialog answers with three buttons: **Use 92 BPM** takes the detected
+   tempo, **Half time: 46 BPM** takes the half of it (the button shows when the half tempo is
+   above 40 BPM), and **Use own tempo** takes the number you type into the field beside it.
+   Each sets the map as one undo step. If the confidence of bar 1 is low, the dialog offers the other candidate
+   (two beats later in 4/4); try it. An octave
    error, half or double, is the usual fault: check the tempo by ear.
 3. Put bar 1 right: select **Track > Set Bar 1 at Playhead**, or select a hit first and the
    command moves bar 1 to it. **Track > Set Bar 1 at Audio Start** puts bar 1 at 0 s, the DAW
@@ -32,8 +35,17 @@ the lanes, and a metronome. The MIDI exports carry the map, so your DAW sees the
    shows bar numbers and beat ticks; a click puts the playhead there.
 7. Press `C` for **Transport > Metronome Click** and play: the click sounds at the hits of
    the tracks, each with the pitch of its role.
+8. The counters show the playhead in the shape you work in. **View > Main Counter >
+   Bars|Beats** shows bar, beat and tick of the map, 960 ticks per beat; **View > Main
+   Counter > Seconds** shows seconds with 6 decimals, **View > Main Counter > Samples** the
+   sample at the rate of the selected track, and **View > Main Counter > Timecode (30 fps)**
+   the timecode. A click on the counter exchanges it with the small one.
 
 The map is part of the project, so it saves with it and the exports use it (chapter 5).
+A MIDI export of a project whose map is still the default asks before it writes: the file
+would carry 120 BPM. **Set Tempo...** in the question opens **Track > Detect Tempo…**, and
+**Export anyway** writes the file with the default. The MIDI files pick their ticks per
+quarter note from the track's sample rate and the map (chapter 5).
 
 ![A session with a tempo map; the Bars|Beats ruler and the Tempo ruler sit over the lanes and the bar and beat grid runs under the hit lines.](img/13-tempo.png)
 
