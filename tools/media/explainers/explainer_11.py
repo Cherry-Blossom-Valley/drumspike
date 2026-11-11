@@ -98,6 +98,25 @@ def copy_stalk(lane, color=DIM, half=0.35, width=3):
     return stalk(lane, KIT_KICK + int(bleed_delay() / 1000 * SR), color, half, width)
 
 
+def strip_x(t, w0, w1):
+    """The x of a sample time on a stretch drawn from w0 to w1 across the plot width."""
+    return -PLOT_W / 2 + PLOT_W * (t - w0) / (w1 - w0)
+
+
+def cross(x, yc, half=0.09):
+    """A cross over a hit, in the app's Forget colour (static/learn.js draws one per Forget mark)."""
+    return VGroup(Line([x - half, yc + half, 0], [x + half, yc - half, 0],
+                       color=NOT_COLOR, stroke_width=2.5),
+                  Line([x - half, yc - half, 0], [x + half, yc + half, 0],
+                       color=NOT_COLOR, stroke_width=2.5))
+
+
+def legend_entry(stalk_color, mark, label):
+    """One legend row: a mini stalk with its mark over it, then the word."""
+    row = VGroup(Line([0, 0.16, 0], [0, -0.16, 0], color=stalk_color, stroke_width=3), mark)
+    return VGroup(row, Text(label, font=FONT, font_size=18, color=TEXT).next_to(row, RIGHT, buff=0.18))
+
+
 class Explainer11(Explainer):
     script_ids = (
         "s01-track", "s02-forget", "s03-learn", "s04-add",
@@ -131,7 +150,8 @@ class Explainer11(Explainer):
         self.t_play(FadeIn(bar), t=1.5)
         grey = VGroup(*[stalk(lane, t, color=DIM) for t in (GHOST_WANT, GHOST_NEAR)])
         keep = Text("the loud hits stay", font=FONT, font_size=20, color=TEXT)
-        keep.move_to([lane.x(GHOST_NEAR) + 2.2, lane.yc + 1.0, 0])  # review #4: above the lane, off the wave
+        # review 6806569693: the label was cut by the frame edge; it sits inside the plot width now
+        keep.move_to([PLOT_W / 2 - 0.3 - keep.width / 2, lane.yc + 1.0, 0])
         self.t_play(FadeIn(grey), FadeIn(keep), t=1.5)
         self.say("Select the unwanted hit, Shift+K: the hit and its near copies turn grey at once.", t=1.8)
         self.say("Grey is not deleted: the wave keeps the hit, the exports leave it out.", t=1.8)
@@ -206,7 +226,7 @@ class Explainer11(Explainer):
         self.t_play(Create(lane.group), FadeIn(title), t=2.5)
         delay = bleed_delay()
         copy = copy_stalk(lane)
-        tag = Text(f"the kick's copy, {delay:.1f} ms later", font=FONT, font_size=20, color=TEXT)
+        tag = Text(f"the kick's copy, {delay:.1f} ms after the kick", font=FONT, font_size=20, color=TEXT)
         tag.move_to([lane.x(KIT_KICK), lane.yc - 1.05, 0])  # under the lane, off the wave
         self.t_play(Create(copy), FadeIn(tag), t=2.0)
         grey = copy_stalk(lane)
@@ -264,29 +284,53 @@ class Explainer11(Explainer):
         self.say("Every step is one undo step.", t=1.4)
 
     def s08_result(self):
-        """The snare track before and after: the unwanted grey, the missed in, counts on screen."""
-        before_line = VGroup(lane_line(1.6), lane_label(MIC, 1.6))
-        after_line = VGroup(lane_line(-0.9), lane_label(MIC, -0.9))
+        """The snare track before and after: the unwanted grey, the missed in, counts on screen,
+        and the two stretches that hold the changes drawn larger with the marks and the legend."""
+        before_line = VGroup(lane_line(2.4), lane_label(MIC, 2.4))
+        after_line = VGroup(lane_line(1.1), lane_label(MIC, 1.1))
         hits = snare_hits()
         out = (GHOST_WANT, GHOST_NEAR)
         copy_at = KIT_KICK + int(bleed_delay() / 1000 * SR)
-        before = VGroup(*[Line([overview_x(t), 1.8, 0], [overview_x(t), 1.4, 0],
+        before = VGroup(*[Line([overview_x(t), 2.6, 0], [overview_x(t), 2.2, 0],
                                color=ORANGE, stroke_width=2) for t in hits],
-                        Line([overview_x(copy_at), 1.8, 0], [overview_x(copy_at), 1.4, 0],
+                        Line([overview_x(copy_at), 2.6, 0], [overview_x(copy_at), 2.2, 0],
                              color=ORANGE, stroke_width=2))
-        after = VGroup(*[Line([overview_x(t), -0.7, 0], [overview_x(t), -1.1, 0],
+        after = VGroup(*[Line([overview_x(t), 1.3, 0], [overview_x(t), 0.9, 0],
                               color=DIM if t in out else ORANGE, stroke_width=2) for t in hits],
-                       Line([overview_x(copy_at), -0.7, 0], [overview_x(copy_at), -1.1, 0],
+                       Line([overview_x(copy_at), 1.3, 0], [overview_x(copy_at), 0.9, 0],
                             color=DIM, stroke_width=2),
-                       *[Line([overview_x(t), -0.7, 0], [overview_x(t), -1.1, 0],
-                              color=ORANGE, stroke_width=2) for t in GHOST_ADDS])
-        label_b = Text("before", font=FONT, font_size=20, color=TEXT).move_to([5.4, 2.35, 0])
-        label_a = Text("after", font=FONT, font_size=20, color=TEXT).move_to([5.4, -0.15, 0])
+                       *[Line([overview_x(t), 1.3, 0], [overview_x(t), 0.9, 0],
+                              color=THIS_COLOR, stroke_width=2) for t in GHOST_ADDS])
+        label_b = Text("before", font=FONT, font_size=20, color=TEXT).move_to([5.4, 2.95, 0])
+        label_a = Text("after", font=FONT, font_size=20, color=TEXT).move_to([5.4, 1.65, 0])
+        # review 6806569693: at full length the changed hits are a few thin stalks (the added
+        # ones 0.055 units apart), so the two stretches that hold them are drawn larger under
+        # the lanes, with a cross over each hit that went out, a ring over each added one.
+        w0, w1 = GHOST_WANT - int(0.75 * SR), copy_at + int(2.0 * SR)
+        strip_a = VGroup(lane_line(-0.3),
+                         *[Line([strip_x(t, w0, w1), -0.05, 0], [strip_x(t, w0, w1), -0.55, 0],
+                                color=DIM if t in out else ORANGE, stroke_width=2)
+                           for t in hits if w0 <= t <= w1],
+                         Line([strip_x(copy_at, w0, w1), -0.05, 0],
+                              [strip_x(copy_at, w0, w1), -0.55, 0], color=DIM, stroke_width=2))
+        crosses = VGroup(*[cross(strip_x(t, w0, w1), -0.3) for t in out],
+                         cross(strip_x(copy_at, w0, w1), -0.3))
+        w2, w3 = GHOST_ADDS[0] - int(0.75 * SR), GHOST_ADDS[2] + int(0.5 * SR)
+        strip_b = VGroup(lane_line(-1.5),
+                         *[Line([strip_x(t, w2, w3), -1.25, 0], [strip_x(t, w2, w3), -1.75, 0],
+                                color=THIS_COLOR if t in GHOST_ADDS else ORANGE, stroke_width=2)
+                           for t in hits if w2 <= t <= w3])
+        rings = VGroup(*[Circle(radius=0.13, color=THIS_COLOR, stroke_width=2.5)
+                         .move_to([strip_x(t, w2, w3), -1.5, 0]) for t in GHOST_ADDS])
+        legend = VGroup(legend_entry(DIM, cross(0.0, 0.0), "out"),
+                        legend_entry(THIS_COLOR,
+                                     Circle(radius=0.12, color=THIS_COLOR, stroke_width=2.5),
+                                     "added")).arrange(RIGHT, buff=0.8).move_to([0.0, -2.2, 0])
         self.t_play(Create(before_line), Create(before), Create(after_line), Create(after),
-                    FadeIn(label_b), FadeIn(label_a), t=3.0)
+                    Create(strip_a), Create(strip_b), FadeIn(label_b), FadeIn(label_a), t=3.0)
         n_out, n_in = 3, len(GHOST_ADDS)
         counts = Text(f"the snare track: {n_out} hits out, {n_in} added, the rest untouched",
                       font=FONT, font_size=20, color=TEXT).to_edge(DOWN, buff=1.2)
-        self.t_play(FadeIn(counts), t=1.5)
+        self.t_play(Create(crosses), Create(rings), FadeIn(legend), FadeIn(counts), t=1.5)
         self.say("The ghosts you do not want are out of the exports, the missed hits play again.", t=1.8)
         self.say("You taught it in three keystrokes.", t=1.4)
