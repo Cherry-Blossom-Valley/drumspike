@@ -35,9 +35,10 @@ into their neutral forms with `show_text`, immediately after the app writes them
 
 > Caption: you ask the agent to fine-tune the song. A terminal pane types the user's prompt from the fixture, line by line.
 
-You open the song in Drum Spike and write your prompt in one sentence: fine-tune the first 20 kick hits, move
-the clear ones onto the line, leave anything doubtful for me, and save it. The agent works in
-the window you have open, on the same lanes you work in.
+You open the song in Drum Spike and write your prompt in plain words: fine-tune the first twenty
+kick hits and the first ten snare hits, move the clear ones onto the line, leave anything
+doubtful for me, do not touch the hits I placed by hand, and save it. The agent works in the
+window you have open, on the same lanes you work in.
 
 ## ra-skill
 
@@ -83,8 +84,9 @@ says the hit is logged as reviewed, right where it is.
 
 > Caption: the doubtful hit stays for you: 14 dB under the median, in a noisy line (the audit's reason). The wobbly hit's window: the hit sits in a noisy line, well under the median, and the hit does not move.
 
-And here the judgment stops. This hit is fourteen decibels under the median, and it sits in a
-noisy line. The agent leaves the hit alone and lists it for you, with the reason.
+And here the agent stops. This hit is fourteen decibels quieter than the typical hit of its
+track, and the line before it is noisy. The agent leaves the hit alone and lists it for you,
+with the reason.
 
 ## ra-hand
 
@@ -95,11 +97,11 @@ it is, and says so in its report.
 
 ## ra-opinions
 
-> Caption: two opinions differ on this hit: the agent leaves it for you. The snare hit's window; the reason from the report is readable on screen, and the hit does not move.
+> Caption: two ways to find the start disagree on this hit: the agent leaves it for you. The snare hit's window; the reason from the report is readable on screen, and the hit does not move.
 
-On this snare hit the two opinions differ: the line before the hit puts the start at the hit,
-and the track's clear hits put it three samples later. The agent leaves it for you, with the
-reason.
+The agent has two ways to find where a hit starts: the line before the hit, and the pattern of
+the track's clear hits. On this snare hit they disagree by three samples. So the agent does not
+move it. It leaves the hit for you, with the reason.
 
 ## ra-save
 

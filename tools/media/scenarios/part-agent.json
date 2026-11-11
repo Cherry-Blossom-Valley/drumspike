@@ -15,7 +15,7 @@
         {"do": "caption", "text": "you ask the agent to fine-tune the song"},
         {"do": "terminal", "file": "tools/media/fixtures/agent-run/prompt.txt",
          "lines": [1, 1], "title": "claude -p"},
-        {"do": "hold", "s": 2.5}
+        {"do": "hold", "s": 21.0}
       ]
     },
     {
@@ -106,8 +106,8 @@
         {"do": "caption", "text": "the doubtful hit stays for you: 14 dB under the median, in a noisy line"},
         {"do": "zoom_to", "track": "k_in", "t": 1.8764792, "span": 0.5},
         {"do": "agent", "fn": "look", "track": "k_in", "t": 1.8764792, "timeout": 30,
-         "err": "the look at the wobbly hit (14 dB under the median, no move)"},
-        {"do": "hold", "s": 3.5}
+         "err": "the look at the wobbly hit (14 dB under the typical hit, no move)"},
+        {"do": "hold", "s": 10.0}
       ]
     },
     {
@@ -126,7 +126,7 @@
     {
       "id": "ra-opinions",
       "steps": [
-        {"do": "caption", "text": "two opinions differ on this hit: the agent leaves it for you"},
+        {"do": "caption", "text": "two ways to find the start disagree on this hit: the agent leaves it for you"},
         {"do": "zoom_to", "track": "s_top", "t": 1.875083, "span": 0.5},
         {"do": "agent", "fn": "look", "track": "s_top", "t": 1.875083, "timeout": 30,
          "err": "the look at the snare hit with two opinions (no move, no confirm)"},
