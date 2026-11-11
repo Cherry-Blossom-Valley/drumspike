@@ -77,7 +77,9 @@ The module paths are the API (`drumspike_core::refine::refine_sr`). An item no c
 | `cross_bleed`, `ghost_gate`, `tom_bleed`, `flam` | Session steps: gather the microphones, call core, apply marks. |
 | `histogram`, `reanalyze`, `learn*` | Re-pick after a sensitivity change, reanalyze a selection, Learn This and Forget This. |
 | `edit`, `export`, `tracks`, `roles`, `lifecycle`, `registry`, `autosave`, `transport`, `layer`, `markers`, `tempo` | Commands on the open project. |
-| `bridge`, `cli`, `mcp`, `headless`, `agent` | Adapters that drive `call`: test bridge, command line, MCP server, batch use. |
+| `bridge`, `cli`, `mcp`, `headless`, `agent`, `window_relay` | Adapters that drive `call`: test bridge, command line, MCP server, batch use; `window_relay` is the open window's local endpoint, the path of `agent_call`. |
+| `agent_skill`, `training`, `feedback` | The agent surface around the commands: install and status of the bundled fine-tune skill, the Training Mode log, the feedback command (POSTs the page's preview to the gateway). |
+| `plugins` | Detector plug-ins: the manifest and licence checks and the request parameters. |
 
 ### Other crates and folders
 
@@ -85,7 +87,7 @@ The module paths are the API (`drumspike_core::refine::refine_sr`). An item no c
 |---|---|
 | `crates/devtools` | Developer binaries, not shipped: `service_tool` (the app engine from a shell), `parity`, `bench`, `cache_tool`, `ds-bridge` (the test bridge for the page). |
 | `apps/desktop/src-tauri` | The Tauri shell: command wrappers (one handler list macro in `lib.rs`; debug builds add the self-test commands), `menu` (`items`: ids and `SPEC`; `keymap`: the key table of `static/keymap.js`; `build`: the bar and `dispatch`; `sync`: the live menu follows the page; `macos`: `AppKit` parts), window, open, about, self-test. |
-| `static/` | The editor page, classic scripts. Page modules: `state`, `util`, `persist`, `edit`, `transport`, `render`, `session`, `backend`, `lanes-gl`, `tiles-worker`, `keymap`, `help`, `shell`. Feature scripts, one per editor feature: `export`, `addtracks`, `mixer`, `histograms`, `learn`, `layer`, `velocity`, `followstrip`, `tempomap`, `markers`, `wave` (the glue to `lanes-gl`), `commands`, `files`, `review`, `analysis`, `plugins`, `status`, `inspector`, `tracks`. `app.js` keeps boot, the global handlers and the wiring. `index.html` gives the load order. |
+| `static/` | The editor page, classic scripts. Page modules: `state`, `util`, `persist`, `edit`, `transport`, `render`, `session`, `backend`, `lanes-gl`, `tiles-worker`, `keymap`, `help`, `shell`. Feature scripts, one per editor feature: `export`, `addtracks`, `mixer`, `histograms`, `learn`, `layer`, `velocity`, `followstrip`, `tempomap`, `markers`, `wave` (the glue to `lanes-gl`), `commands`, `files`, `review`, `analysis`, `plugins`, `status`, `inspector`, `tracks`. `agent` is the page-side helper object of an agent (`window.DSAgent`). `app.js` keeps boot, the global handlers and the wiring. `index.html` gives the load order. `splash.html`, `splash.css` and `splash.js` are the splash page; the shell writes its status line, no other script loads there. |
 | `tests/` | pytest: the page against `ds-bridge` (`e2e_app/`), the frozen references (`golden/`) and their regression `test_golden.py`, export tests, the JS coverage gate (`jscov.py`). |
 | `tools/` | Research and check scripts; `identity.py` is the before and after gate of the refactoring. |
 | `docs/` | User guide, developer guide, release notes, ADRs, design notes, the finished engineering plan. |

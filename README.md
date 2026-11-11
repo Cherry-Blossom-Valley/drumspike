@@ -71,8 +71,8 @@ Download the `.dmg` for your Mac from the
 Open the `.dmg`, drag Drum Spike to Applications, and start it. Both files are signed with a
 Developer ID and notarized by Apple. Check a download with `shasum -a 256 -c SHA256SUMS`.
 
-Then read the [user guide](docs/guide/README.md): it walks from adding tracks to the export in
-fourteen short chapters, and [Get the best results](docs/guide/best-results.md) collects the tips.
+Then read the [user guide](docs/guide/README.md): it walks from adding tracks to Training Mode,
+and [Get the best results](docs/guide/best-results.md) collects the tips.
 
 ## Build from source
 
