@@ -5,7 +5,8 @@
 //! Usage: `export-midi-case <job.json>` with
 //! `{"kind": "single"|"multi", "events": [{"t", "v"}...], "note": int, "ppq": int,
 //!   "map": <TempoMap JSON or null for the default map>, "legacy_tempo": float,
-//!   "markers": [{"t", "note"}...] (multi only), "tracks": [{"name", "note", "events"}] (multi only),
+//!   "rate": int (the source rate for the #441 sample anchor, default 48000),
+//!   "markers": [{"t", "note"}...] (multi only), "tracks": [{"name", "note", "rate"?, "events"}] (multi only),
 //!   "path": "..."}`
 //! and it writes the file at `path`, printing nothing on success.
 
@@ -44,6 +45,10 @@ fn main() {
         v => TempoMap::from_json(v).expect("map"),
     };
     let path = Path::new(job["path"].as_str().expect("path"));
+    let rate = job
+        .get("rate")
+        .and_then(serde_json::Value::as_u64)
+        .map_or(48_000, |r| r as u32);
     let r = if job["kind"] == "multi" {
         let tracks: Vec<MidiTrack> = job["tracks"]
             .as_array()
@@ -52,6 +57,10 @@ fn main() {
             .map(|t| MidiTrack {
                 name: t["name"].as_str().expect("name"),
                 note: t["note"].as_i64().expect("note"),
+                rate: t
+                    .get("rate")
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or(rate, |r| r as u32),
                 events: Box::leak(events(&t["events"]).into_boxed_slice()),
             })
             .collect();
@@ -69,7 +78,7 @@ fn main() {
             .unwrap_or_default();
         export_multi_midi(&tracks, &markers, path, ppq, &map, legacy_tempo)
     } else {
-        export_midi_map(&events(&job["events"]), note, path, ppq, &map, legacy_tempo)
+        export_midi_map(&events(&job["events"]), note, path, ppq, &map, legacy_tempo, rate)
     };
     if let Err(e) = r {
         eprintln!("{e}");

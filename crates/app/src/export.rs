@@ -18,7 +18,9 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Instant;
 
 use drumspike_core::io::{MappedWav, MixMode, SampleFormat, WavFormat};
-use drumspike_core::midi::{MidiEvent, MidiTrack, export_midi_map as write_midi, export_multi_midi};
+use drumspike_core::midi::{
+    MidiEvent, MidiTrack, export_midi_map as write_midi, export_multi_midi, export_ppq, worst_error_samples,
+};
 use drumspike_core::project::EXPORTS_DIR;
 use drumspike_core::spike::{export_audio_spikes, export_spikes as write_spikes, hit_index};
 use drumspike_core::tempo::TempoMap;
@@ -32,8 +34,10 @@ use crate::reply::Channels;
 use crate::sampler::{MidiPlan, ShiftInfo, midi_events_shifted};
 use crate::{Progress, Service};
 
-/// MIDI ticks per quarter note and tempo of the MIDI files that Export all writes (the page's
-/// values for Export MIDI).
+/// The page's value for Export MIDI (route 33's default `ppq`) and the pre-#441 fixed value of
+/// the exports: the exports choose their ticks per quarter note with
+/// [`drumspike_core::midi::export_ppq`] now, but the owner's DAW check of the new files can
+/// still reach the old value by this one constant.
 pub const EXPORT_PPQ: u16 = 24_000;
 /// Tempo in BPM of those files.
 pub const EXPORT_TEMPO: f64 = 120.0;
@@ -147,6 +151,26 @@ pub(crate) fn audio_length(op: &crate::registry::Shared, name: &str) -> Option<(
         .and_then(|p| MappedWav::open(&p).ok())
         .map(|w| (w.info.sample_rate, w.info.n_frames))
         .or(doc)
+}
+
+/// #441: the sample rate a track's MIDI export anchors its notes and picks its ticks per
+/// quarter note at: the source's header when the file is there (no sample is read), else the
+/// document's `sr`, else 48,000 (the product's canonical rate; a track without audio has no
+/// samples to be exact against). The rate-only form of [`audio_length`] for a caller that
+/// already holds the project lock.
+pub(crate) fn track_rate(g: &OpenProject, name: &str) -> u32 {
+    let from_doc = || {
+        g.track(name)
+            .ok()
+            .and_then(|tr| tr.sr)
+            .and_then(|s| u32::try_from(s).ok())
+    };
+    g.source(name)
+        .ok()
+        .and_then(|p| MappedWav::open(&p).ok())
+        .map(|w| w.info.sample_rate)
+        .or_else(from_doc)
+        .unwrap_or(48_000)
 }
 
 /// P4-4: the key under which a disk that ignores case and normalisation (APFS by default) sees a
@@ -529,6 +553,9 @@ struct Job {
     note: i64,
     /// The project's tempo map (P4-8): the default map writes the exports as before.
     map: TempoMap,
+    /// #441: the track's source rate, the rate the MIDI file anchors its notes at and picks its
+    /// ticks per quarter note from.
+    rate: u32,
     /// P4-7c: the MIDI events of the track (the sampler offset applied) and what that did; `None` when the
     /// export writes no MIDI or the track's hits could not be read.
     midi: Option<Result<MidiPlan, AppError>>,
@@ -555,8 +582,15 @@ struct ExportTally {
     also_updated: Vec<Value>,
     /// The sampler calibration facts per track, as their JSON.
     sampler: serde_json::Map<String, Value>,
-    /// The warnings of the reply (the #151 note first, then the sampler ones).
+    /// The warnings of the reply (the #151 default-map note first, then the sampler ones).
     warnings: Vec<String>,
+    /// #441: the ticks per quarter note of the export's MIDI files (the rule's value at the
+    /// highest staged track's rate; a per-track file whose source has a lower rate gets its own
+    /// value by the same rule). `None` when no MIDI was staged.
+    ticks_per_quarter: Option<u16>,
+    /// #441: the worst note-on error over the written MIDI files, in samples; `None` when no
+    /// MIDI was written.
+    worst_error_samples: Option<f64>,
 }
 
 /// The facts of a written spike file.
@@ -784,7 +818,8 @@ impl Service {
     }
 
     /// `export_all {sid, progress}`: for every track, `Exports/<name>_spike.mid` (the track's
-    /// note, 24,000 PPQ, 120 BPM) and `Exports/<name>_spike.wav`, from the events in the
+    /// note; the ticks per quarter note by the #441 rule at the track's rate) and
+    /// `Exports/<name>_spike.wav`, from the events in the
     /// document. The tracks run on up to [`EXPORT_WORKERS`] threads. A track that fails (an
     /// offline file, an unsupported format) does not stop the others: its error is in
     /// `errors`. `progress` gets `{"sid", "export": {state, done, total, track}}` after each
@@ -878,6 +913,8 @@ impl Service {
             "followers": refreshed,
             "sampler": tally.sampler,
             "warnings": tally.warnings,
+            "ticks_per_quarter": tally.ticks_per_quarter,
+            "worst_error_samples": tally.worst_error_samples,
         });
         say(json!({"state": "done", "done": total, "total": total, "result": out}));
         Ok(out)
@@ -937,6 +974,7 @@ impl Service {
                 events,
                 note,
                 map: map.clone(),
+                rate: track_rate(&g, &name),
                 midi: None,
                 name,
             });
@@ -1049,10 +1087,20 @@ impl Service {
             warnings,
             ..Default::default()
         };
+        // #441: the export's ticks per quarter note, the rule's value at the highest staged
+        // track's rate (the single file's value; the per-track files at lower rates get their
+        // own value by the same rule, written into their own answer below).
+        let staged: Vec<&Job> = jobs.iter().filter(|j| matches!(j.midi, Some(Ok(_)))).collect();
+        if let (Some(fastest), Some(job)) = (staged.iter().map(|j| j.rate).max(), staged.first()) {
+            tally.ticks_per_quarter = Some(export_ppq(fastest, &job.map, EXPORT_TEMPO));
+        }
         for (job, r) in jobs.iter().zip(results.iter()) {
             let Some(r) = r else { continue };
             for p in [&r.midi, &r.spike, &r.audio].into_iter().flatten() {
                 tally.files.push(Value::from(p.display().to_string()));
+            }
+            if let Some(w) = r.worst_error {
+                tally.worst_error_samples = Some(tally.worst_error_samples.map_or(w, |m| m.max(w)));
             }
             if r.outside > 0 {
                 tally.outside.insert(job.name.clone(), Value::from(r.outside));
@@ -1096,7 +1144,7 @@ impl Service {
                         tally.sampler.insert(job.name.clone(), i.to_json());
                         tally.warnings.extend(i.warning(&job.name));
                     }
-                    staged.push((job.name.as_str(), job.note, e.clone()));
+                    staged.push((job.name.as_str(), job.note, job.rate, e.clone()));
                 }
                 Some(Err(e)) => tally
                     .errors
@@ -1106,9 +1154,10 @@ impl Service {
         }
         let tracks: Vec<MidiTrack> = staged
             .iter()
-            .map(|(n, note, e)| MidiTrack {
+            .map(|(n, note, rate, e)| MidiTrack {
                 name: n,
                 note: *note,
+                rate: *rate,
                 events: e,
             })
             .collect();
@@ -1123,6 +1172,15 @@ impl Service {
             };
             (map, markers)
         };
+        // #441: the one multi-track file uses the ticks per quarter note of the highest staged
+        // track's rate (the single-rate assumption); its worst note-on error is the worst over
+        // the staged tracks, each measured at its own rate.
+        let ppq = jobs
+            .iter()
+            .filter(|j| matches!(j.midi, Some(Ok(_))))
+            .map(|j| j.rate)
+            .max()
+            .map_or(EXPORT_PPQ, |rate| export_ppq(rate, &map, EXPORT_TEMPO));
         let markers: Vec<drumspike_core::midi::MidiMarker> = midi_markers
             .iter()
             .map(|(t, note)| drumspike_core::midi::MidiMarker {
@@ -1130,10 +1188,17 @@ impl Service {
                 note: note.as_deref(),
             })
             .collect();
-        match export_multi_midi(&tracks, &markers, &out, EXPORT_PPQ, &map, EXPORT_TEMPO) {
+        // the worst note-on error of the file: the worst over the staged tracks, each at its own rate
+        let worst = jobs.iter().filter_map(|j| match &j.midi {
+            Some(Ok((ev, _))) => worst_error_samples(ev, ppq, &map, EXPORT_TEMPO, j.rate).ok(),
+            _ => None,
+        });
+        match export_multi_midi(&tracks, &markers, &out, ppq, &map, EXPORT_TEMPO) {
             Ok(()) => {
                 tally.files.push(Value::from(out.display().to_string()));
                 tally.midi = 1;
+                tally.ticks_per_quarter = Some(ppq);
+                tally.worst_error_samples = worst.fold(None, |m: Option<f64>, w| Some(m.map_or(w, |x| x.max(w))));
                 Ok(Value::from(out.display().to_string()))
             }
             Err(e) => {
@@ -1213,6 +1278,8 @@ struct TrackResult {
     outside: usize,
     /// P4-7c: what the sampler offset did to the per-track MIDI file.
     sampler: Option<ShiftInfo>,
+    /// #441: the worst note-on error of the written per-track MIDI file, in samples.
+    worst_error: Option<f64>,
 }
 
 /// #274: the spike WAV of the type this export does not write, when the folder holds one from an
@@ -1239,6 +1306,7 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
         errors: Vec::new(),
         outside: 0,
         sampler: None,
+        worst_error: None,
     };
     let events = match &job.events {
         Ok(e) => e,
@@ -1251,10 +1319,16 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
         match &job.midi {
             Some(Ok((ev, info))) => {
                 let out = dir.join(format!("{}_spike.mid", job.name));
-                match write_midi(ev, job.note, &out, EXPORT_PPQ, &job.map, EXPORT_TEMPO) {
+                // #441: the ticks per quarter note from the track's source rate and the map
+                let ppq = export_ppq(job.rate, &job.map, EXPORT_TEMPO);
+                match write_midi(ev, job.note, &out, ppq, &job.map, EXPORT_TEMPO, job.rate) {
                     Ok(()) => {
                         r.midi = Some(out);
                         r.sampler = info.clone();
+                        match worst_error_samples(ev, ppq, &job.map, EXPORT_TEMPO, job.rate) {
+                            Ok(w) => r.worst_error = Some(w),
+                            Err(e) => r.errors.push(AppError::from(e)),
+                        }
                     }
                     Err(e) => r.errors.push(AppError::from(e)),
                 }

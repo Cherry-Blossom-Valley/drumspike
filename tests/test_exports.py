@@ -178,11 +178,18 @@ def test_matrix_exports_have_no_difference(matrix):
     assert t["Tom"]["wav"]["subtype"] == "FLOAT" and t["Tom"]["wav"]["time_reference"] == 12_345_678
     assert t["Snare"]["wav"]["channels"] == 1 and t["Snare"]["wav"]["subtype"] == "PCM_32"
     assert t["Empty"]["hits"] == 0 and t["Empty"]["wav"]["blips"] == 0 and t["Empty"]["midi"]["notes"] == 0
-    for name in ("Kick In", "Kick Sub", "Hat", "Ride", "Empty"):                # 44.1 and 48 kHz: on the sample
+    # #441: the note-on is anchored at the hit's sample, so every note-on rounds back to it
+    for name in ("Kick In", "Kick Sub", "Snare", "Tom", "Hat", "Ride", "Empty"):
         assert t[name]["midi"]["rounded_sample_off"] == 0, name
-    # 96 kHz: one tick is two samples, so an odd sample is one sample off, within half a tick (P4-8)
-    assert t["Snare"]["midi"]["err_max_samples"] == pytest.approx(1.0) == t["Snare"]["midi"]["half_tick_samples"]
-    assert t["Snare"]["midi"]["rounded_sample_off"] == 5
+    # 44.1 and 48 kHz: the rule's ppq makes one tick one sample, so every note-on sits on it
+    for name in ("Kick In", "Kick Sub", "Hat", "Ride", "Empty"):
+        assert t[name]["midi"]["err_max_samples"] == 0, name
+    # 96 and 88.2 kHz: the ideal ppq (48,000 / 44,100) does not fit the standard's 15 bits, so
+    # the file has the cap 32,767; one tick is about 1.46 / 1.35 samples and the notes stay
+    # within half a tick of their sample (P4-8, #441)
+    assert t["Snare"]["midi"]["ppq"] == 32_767 and t["Tom"]["midi"]["ppq"] == 32_767
+    assert t["Snare"]["midi"]["err_max_samples"] == pytest.approx(48000 / 32767 - 1)
+    assert t["Snare"]["midi"]["err_max_samples"] < t["Snare"]["midi"]["half_tick_samples"]
 
 
 def test_hits_outside_the_file_are_counted_in_the_answer(matrix):
@@ -204,8 +211,11 @@ def test_a_single_track_export_writes_the_bytes_of_export_all(matrix):
     steps = [{"cmd": "project_open", "args": {"path": str(pdir)}}]
     for name in doc["order"]:
         tr = doc["tracks"][name]
+        # the page's call: no `ppq` and no `tempo` (P4-8: the tempo map decides the tempo; #441:
+        # the grid is the rule's value, so the bytes are Export All's — the old explicit 24000
+        # wrote a different file than Export All from 96 kHz on)
         steps += [{"cmd": "export_midi", "args": {"sid": "$sid", "name": name, "note": tr["note"],
-                                                  "events": tr["events"], "ppq": 24000, "tempo": 120}},
+                                                  "events": tr["events"]}},
                   {"cmd": "export_spikes", "args": {"sid": "$sid", "name": name, "events": tr["events"]}}]
     rows = run_steps(steps, tmp)
     assert all("answer" in r for r in rows), rows
@@ -692,9 +702,13 @@ def test_a_song_whose_bar_1_is_not_at_0_s_and_a_hit_before_bar_1(tmp_path):
     rep = check_exports.check_project(pdir, res)
     assert problems(rep) == []
     ppq, tempos, meta, notes, _ = check_exports.midi_notes(pdir / "Exports" / "Kick In_spike.mid")
-    assert meta["markers"] == [(130_000, "Bar 1")]                       # 3.25 s at 100 BPM, 24,000 PPQ
+    # #441: the rule's ppq at 100 BPM and 48 kHz is 28,800 (one tick is one sample), so the bar
+    # 1 marker sits at 3.25 s * 100/60 quarters = 156,000 ticks and the hit's note-on on its
+    # sample's tick (the old 24,000 grid had 130,000 and 647.5)
+    assert ppq == 28_800
+    assert meta["markers"] == [(156_000, "Bar 1")]                       # 3.25 s at 100 BPM, 28,800 PPQ
     assert meta["sigs"] == [(0, 6, 8)] and tempos == [(0, 600_000)]
-    assert notes[0]["on_tick"] == 0 and notes[1]["on_tick"] in (647, 648)         # 777 samples = 647.5 ticks
+    assert notes[0]["on_tick"] == 0 and notes[1]["on_tick"] == 777       # one tick is one sample
 
 
 def test_the_default_map_writes_the_bytes_of_before(tmp_path):

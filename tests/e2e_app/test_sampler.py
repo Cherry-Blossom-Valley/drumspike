@@ -81,7 +81,7 @@ def test_calibration_midi_writes_one_note_on_a_bar_line_and_says_what_to_do(app,
     save_to(app, f)
     sec.locator(".smCal").click()
     wait_until(lambda: note_ticks(f) != [(96000, 36, 100)], msg="the file with the new map")
-    assert note_ticks(f) == [(36000 + 96000, 36, 100)]               # bar 1 at 1 s = tick 36,000 at 90 BPM; one bar is 96,000 ticks
+    assert note_ticks(f) == [(48000 + 128000, 36, 100)]              # #441: at 90 BPM the calibration file's ppq is 32000 (48,000 ticks/s): bar 1 at 1 s = 48,000; one bar is 128,000
 
 
 def test_load_bounce_shows_the_offset_and_the_polarity_and_keeps_them(app, layered):
