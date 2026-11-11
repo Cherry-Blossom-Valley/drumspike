@@ -299,7 +299,7 @@ class Explainer13(Explainer):
             x = x_of(t, WINDOW_S)
             daw_bars.add(Line([x, daw_y - 0.5, 0], [x, daw_y + 0.5, 0], color=TEXT if beat == 1 else DIM,
                               stroke_width=3 if beat == 1 else 1))
-        daw_name = Text("your DAW", font=FONT, font_size=22, color=TEXT).move_to([-6.3, daw_y, 0])
+        daw_name = Text("DAW", font=FONT, font_size=22, color=TEXT).move_to([-6.3, daw_y, 0])
         same = Text(f"tempo from the file: {whole(self.bpm)} BPM", font=FONT, font_size=28, color=ORANGE).move_to([0, -3.4, 0])
         self.t_play(Create(self.lane_frame()), FadeIn(self.stalks(WINDOW_S)), FadeIn(self.ruler(self.bar1)),
                     Create(self.grid_lines(self.bar1)), t=1.5)
