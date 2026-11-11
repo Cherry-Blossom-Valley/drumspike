@@ -1,6 +1,6 @@
-# Screen recording, part 4: what is new in 0.9.3
+# Screen recording, part 4: exports, imports, the plug-in detector, the sensitivity re-pick and Keep
 
-The new features of 0.9.3 on the demo session. Narration for `tools/media/tts.py` (one `##`
+The new features on the demo session. Narration for `tools/media/tts.py` (one `##`
 per scene; `>` lines are the scenario steps and captions for `tools/media/record.py`, not
 spoken). Target length: 60 to 90 s. Keys shown in the key overlay. The recording home has the
 example plugin installed (`tests/fixtures/plugins/json_hits.py`, the scenario sets
@@ -20,7 +20,7 @@ The export has a new spike type, and it is called Audio. An audio spike holds th
 > File > Add Tracks… on the export folder: the two spike WAVs, checked, Add. Caption: File > Add Tracks…
 > Select the kick, Tab, 5 (50 ms zoom), then select the audio spike track: its lane sits next to the click spike.
 
-The exports can come back in. Add Tracks from the export folder: the two spike WAVs of the kick, checked. The 5 ms preset at a hit shows the spike against the wave.
+The exports can come back in. Add Tracks from the export folder: the two spike WAVs of the kick, checked. Select the kick, press Tab for a hit and 5 for the 50 millisecond zoom. Then select the audio spike track: its lane sits next to the click spike, and you see each spike against the wave.
 
 ## p4-detector
 
@@ -43,6 +43,6 @@ Your edits survive a re-analyze. Set a velocity by hand. Press Tab to select a h
 
 ## p4-end
 
-> Caption: Drum Spike 0.9.3
+> Caption: Drum Spike
 
-That is what is new. The audio spike, the detector plug-ins, the sensitivity re-pick, and Keep for your edits.
+That is part 4. The audio spike, the detector plug-ins, the sensitivity re-pick, and Keep for your edits.

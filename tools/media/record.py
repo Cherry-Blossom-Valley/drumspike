@@ -1295,6 +1295,99 @@ def compress_video(raw, out, segs, factors, work):
     subprocess.run(cmd, check=True, capture_output=True)
 
 
+# ---------------- the repaint glitches ----------------
+# Playwright's video recorder runs off the compositor: while the page repaints the lanes
+# (a lane click, a zoom, a re-filter), one captured frame can hold the new canvas layer with
+# the rest of the page not yet composited — a grey frame with a small wave picture in a
+# corner. Such a frame is isolated: the frames before and after it match each other. The
+# repair replaces every such run with the frame before it, so no frame of a recording shows
+# anything but the app window.
+
+GLITCH_MEAN_DIFF = 40.0   # the mean luma gap between a glitch frame and its neighbours
+GLITCH_MAX_RUN = 4        # the longest run the repair may replace: a repaint glitch is a
+                          # few frames at 25 fps; a real scene change is longer and the
+                          # frames after it do not come back
+
+
+def frame_means(video, work):
+    """The mean luma of every frame of the video, read through a downscaled rawvideo pipe."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RecordError("no ffmpeg on PATH")
+    cmd = [ffmpeg, "-v", "error", "-i", str(video), "-vf", "scale=160:90",
+           "-f", "rawvideo", "-pix_fmt", "gray", "-"]
+    r = subprocess.run(cmd, capture_output=True)
+    if r.returncode != 0 or not r.stdout:
+        raise RecordError(f"the glitch scan could not read {video.name}: {r.stderr.decode()[:200]}")
+    frame = 160 * 90
+    if len(r.stdout) % frame:
+        raise RecordError(f"the glitch scan read {len(r.stdout)} bytes, not a multiple of {frame}")
+    return [sum(block) / frame for block in (r.stdout[i:i + frame]
+                                             for i in range(0, len(r.stdout), frame))]
+
+
+def glitch_runs(video, work):
+    """The 0-based frame-index runs of the isolated repaint glitches: the mean luma jumps by
+    GLITCH_MEAN_DIFF or more at the run's first frame and back within GLITCH_MAX_RUN frames,
+    and the frames after the run match the frames before it (a scene change does not come back)."""
+    means = frame_means(video, work)
+    runs = []
+    a = 1
+    while a < len(means) - 2:
+        if abs(means[a] - means[a - 1]) > GLITCH_MEAN_DIFF:
+            n = 1
+            while (n < GLITCH_MAX_RUN and a + n + 1 < len(means)
+                   and abs(means[a + n] - means[a + n - 1]) <= GLITCH_MEAN_DIFF):
+                n += 1
+            if a + n < len(means):
+                before = sum(means[max(0, a - n):a]) / n
+                after = sum(means[a + n:a + 2 * n]) / n
+                inside = sum(means[a:a + n]) / n
+                if (abs(means[a + n - 1] - means[a + n]) > GLITCH_MEAN_DIFF
+                        and abs(inside - before) > GLITCH_MEAN_DIFF
+                        and abs(inside - after) > GLITCH_MEAN_DIFF
+                        and abs(before - after) <= GLITCH_MEAN_DIFF / 2):
+                    runs.append((a, a + n - 1))
+                    a = a + n + 1
+                    continue
+        a += 1
+    return runs
+
+
+def patch_glitches(video, work):
+    """Replace every glitch run with the frame before it (an in-place re-encode only when a
+    glitch was found; the frame indices are the video's own, so the timing does not move)."""
+    video, work = Path(video), Path(work)
+    runs = glitch_runs(video, work)
+    if not runs:
+        return video, []
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RecordError("no ffmpeg on PATH")
+    frames = []
+    for a, _ in runs:
+        png = work / f"glitch-{a}.png"
+        subprocess.run([ffmpeg, "-y", "-v", "error", "-i", str(video),
+                        "-vf", f"select=eq(n\\,{a - 1})", "-frames:v", "1", str(png)],
+                       check=True, capture_output=True)
+        frames.append(png)
+    fc, last = [], "0:v"
+    for k, ((a, b), png) in enumerate(zip(runs, frames)):
+        out = f"v{k}"
+        fc.append(f"[{last}][{k + 1}:v]overlay=enable='between(n\\,{a}\\,{b})'[{out}]")
+        last = out
+    fixed = video.with_name(video.stem + "-glitchfix.mp4")
+    cmd = [ffmpeg, "-y", "-v", "error", "-i", str(video)]
+    for png in frames:
+        cmd += ["-i", str(png)]
+    cmd += ["-filter_complex", ";".join(fc), "-map", f"[{last}]", "-an",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+            str(fixed)]
+    subprocess.run(cmd, check=True, capture_output=True)
+    os.replace(fixed, video)
+    return video, runs
+
+
 # ---------------- the mux ----------------
 
 def ffprobe_seconds(path):
@@ -1552,6 +1645,11 @@ def record(root, scenario, items, out, work, keep, check_model=True):
         compress_video(raw, repaired, segs, factors, work)
         os.replace(repaired, raw)
         total = ffprobe_seconds(raw)
+    raw, glitches = patch_glitches(raw, work)
+    if glitches:
+        n = sum(b - a + 1 for a, b in glitches)
+        print(f"repaint glitches repaired in {Path(raw).name}: {n} frames at "
+              + ", ".join(f"{a}-{b}" if a != b else str(a) for a, b in glitches))
     build_narration(items, marks, total, work / "narration.wav", lead, starts)
     mux(raw, work / "narration.wav", out, total, note=render_note(work))
     if not keep:

@@ -38,6 +38,15 @@ A scene lists its steps in `tools/media/scenarios/<name>.json`:
   a scene with neither measures the row of its first track.
 - A `hold` of 1.5 s or more after each action step.
 
+## The site
+
+`tools/media/build_site.py` builds the website into one folder and copies into it every
+`videos/…` file the page references, taken from the `--videos` folder (default
+`~/.cache/drumspike/media/explainers`). The recorded agent tutorial renders as
+`~/.cache/drumspike/media/rec/part-agent.mp4` and reaches the site under its site name
+`videos/tutorial-agent.mp4`: copy the render into the `--videos` folder under that name
+before the build. The page's poster `assets/posters/tutorial-agent.jpg` ships with the site.
+
 ## The check
 
 Each run prints the share of changed pixels per action scene, for example

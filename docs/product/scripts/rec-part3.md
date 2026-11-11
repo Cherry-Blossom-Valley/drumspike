@@ -14,7 +14,7 @@ A sub mic hears the same hits as the kick in, but softer. Leave the follow check
 
 > Select the sub mic; Track > Follow Hits Of > Kick In; Track > Own Detection. Caption: Track > Own Detection
 
-Follow Hits Of sets it later. A follower is read-only: edit the source, and the follower takes the change at once. Own Detection switches it back.
+The command Follow Hits Of sets it later. A follower is read-only: edit the source, and the follower takes the change at once. Own Detection switches it back. That runs the analysis again and replaces the hits, so the app asks first. Confirm, and the track has its own hits again.
 
 ## p3-layer
 
