@@ -2,7 +2,7 @@
 
 ## For users
 
-- [User guide](guide/README.md): fourteen short chapters, from adding tracks to the export, and
+- [User guide](guide/README.md): the chapters from adding tracks to Training Mode, and
   [Get the best results](guide/best-results.md).
 - [Release notes](release-notes/): what changed in each version.
 

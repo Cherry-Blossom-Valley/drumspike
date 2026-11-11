@@ -16,7 +16,17 @@ signing identity and the notary profile); they never read a password, a certific
 ## Release by tag (the normal way)
 
 `.github/workflows/release.yml` runs on the self-hosted signing runner (label `arm64-mac`). The
-key never leaves that Mac's keychain.
+key never leaves that Mac's keychain. The workflow reads the signing identity from the
+repository variable `DRUMSPIKE_SIGN_IDENTITY` (Settings, Actions, Variables); it holds the name
+of the "Developer ID Application" certificate, never a secret. Job `check` stops before any
+build when the variable does not hold a Developer ID Application identity:
+
+```
+::error::the repository variable DRUMSPIKE_SIGN_IDENTITY does not hold a Developer ID
+Application identity. Set it under Settings, Actions, Variables, then run this workflow again.
+```
+
+Set the variable or fix its value, then run the workflow again.
 
 1. `ci` is green on the release commit. The version is set in `Cargo.toml` (workspace),
    `apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/package.json` and
@@ -50,11 +60,15 @@ the key: choose "Always Allow".
 
 1. The keychain holds a "Developer ID Application" certificate with its private key:
    `security find-identity -v -p codesigning`.
-2. The keychain holds a notary profile: `xcrun notarytool store-credentials <profile>` asks for the
+2. The repository variable `DRUMSPIKE_SIGN_IDENTITY` (Settings, Actions, Variables) holds the
+   name of that certificate; the release workflow reads it from there and refuses anything that
+   is not a Developer ID Application identity. A manual run instead exports the name (section
+   "Manual procedure").
+3. The keychain holds a notary profile: `xcrun notarytool store-credentials <profile>` asks for the
    Apple ID, the team ID and an app-specific password. Type them into the tool, never into a file.
-3. The Xcode command line tools (`xcrun --find notarytool`) and the Intel Rust target
+4. The Xcode command line tools (`xcrun --find notarytool`) and the Intel Rust target
    (`rustup target add x86_64-apple-darwin`) are installed.
-4. `gh auth status` shows a maintainer login.
+5. `gh auth status` shows a maintainer login.
 
 ## Manual procedure (fallback when the runner is down)
 
@@ -137,6 +151,7 @@ The script prints it when a submission is not accepted. The submission ID is in
 | Message | Cause | Action |
 |---|---|---|
 | `errSecInternalComponent` from the runner's probe step (release.yml) | The runner service runs in its own security session (`SessionCreate` true in its plist) and cannot use the login keychain | Set `SessionCreate` to false in the runner's launchd plist, restart the runner service (`./svc.sh stop && ./svc.sh start`), run the workflow again. |
+| `the repository variable DRUMSPIKE_SIGN_IDENTITY does not hold a Developer ID Application identity` (release.yml, job `check`) | The variable is unset, or it does not start with `Developer ID Application: ` | Set it under Settings, Actions, Variables to the name of the certificate, and run the workflow again. |
 | `identity not found in the keychain` | Name differs from the certificate, or the certificate expired or has no private key | Run `security find-identity -v -p codesigning`. Copy the name exactly. Install the certificate again if it is missing. |
 | `notary profile not usable` | Profile never made, made on another Mac or another user, or Apple refused the sign-in (run the check command it prints to see the reason) | Run `xcrun notarytool store-credentials drumspike-notary`. |
 | `HTTP status code: 401` or "Invalid credentials" | App-specific password revoked, or Apple ID or team ID wrong | Make a new app-specific password at appleid.apple.com. Run `store-credentials` again. |

@@ -18,7 +18,7 @@ agent API in `docs/agent-api.md`. Read other documents only for the item you wor
 - Kill only processes you started, by PID. Never `pkill` by name: the owner's installed app and
   sessions run on the same Macs.
 - Documents use plain hyphens, no em-dashes (`tests/test_docs_wording.py` fails on one).
-- No `[skip ci]` in a PR title or a commit. Docs-only pushes start no run by path.
+- No `[skip ci]` in a PR title or a commit. A push that changes only `docs/**` or the root files `AGENTS.md`, `CLAUDE.md`, `README.md`, `.crewboard.toml`, `AUTHORITY.md` starts no run by path; any other root Markdown file starts one.
 - Keep `NOTICE` current when a bundled third-party part changes.
 
 ## Which gates when

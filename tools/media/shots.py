@@ -351,10 +351,12 @@ def app_pictures(page, work, out, wanted):
     page.click("#plCancel")
     menu(page, "settings", wait=False)
     page.wait_for_selector("#settingsModal:not(.hidden)")
+    # the Settings window with the Detector plug-ins category selected (#462): the category
+    # list on the left and the plug-in entries on the right
+    page.click("#setCat-plugins")
+    page.wait_for_selector("#setPluginsCat.active")
     page.wait_for_selector("#setPlugins .prow")
-    # the Detector plug-ins group alone: the full sheet is over the 400 KB cap
-    shoot("img/03b-plugin-settings.png",
-          element=page.locator(".sbSetGroup").filter(has=page.locator("#setPlugins")))
+    shoot("img/03b-plugin-settings.png", element=page.locator("#settingsModal .modal-box"))
     page.click("#settingsDone")
     page.wait_for_function("() => document.querySelector('#settingsModal').classList.contains('hidden')")
 
