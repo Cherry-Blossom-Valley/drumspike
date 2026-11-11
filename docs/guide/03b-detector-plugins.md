@@ -17,11 +17,11 @@ The manifest names the id, the name the app shows, the version, the roles the pl
 supports (kick, snare, tom, hat, cymbal, other), the sample rates it accepts, the licence
 and the executable. A folder without a valid manifest or executable stays invisible.
 
-To see what is installed, open **Drum Spike > Settings…** and scroll to the Detector
-plug-ins group. Each entry shows the id, the version, the roles, the licence and a
-Licence button.
+To see what is installed, open **Drum Spike > Settings…** and pick the category
+Detector plug-ins in the list on the left of the window. Each entry shows the id, the
+version, the roles, the licence and a Licence button.
 
-![The Settings sheet with the installed detector plug-ins: the example plug-in with its id, version, roles and licence.](img/03b-plugin-settings.png)
+![The Settings window with the category Detector plug-ins selected: the example plug-in with its id, version, roles and licence.](img/03b-plugin-settings.png)
 
 ## The licence dialog
 
@@ -44,7 +44,10 @@ built-in detector's candidates only, and the app says so under the select. A fol
 track has no Detector select, because it has no detection of its own.
 
 If the sample rate of the track is not in the plug-in's list, Drum Spike resamples the
-track for the plug-in. The hit times are in seconds, so nothing else changes.
+track for the plug-in when it can: the file's own rate is passed when the plug-in lists
+it, and otherwise the plug-in's first listed rate when that is 44.1 kHz and the track is
+48 or 96 kHz. Any other rate fails the track with a readable error; the other tracks and
+the app continue. The hit times are in seconds, so a resample changes nothing else.
 
 ## When a plug-in is missing
 

@@ -33,11 +33,28 @@ cut at the zero crossing, at most 60 ms. A kick lands around 15 to 25 ms, a snar
 10 ms. The click spike stays available: it is the synthetic option in the same dialog.
 
 The MIDI file carries every hit at its sample. The export picks the ticks per quarter note
-from the track's sample rate and the tempo: one tick is one sample where the standard's 15
-bits allow it. Where they do not, the export message states the bound that the tick grid
-leaves, in samples, when it is over half a sample. The spike file is sample exact at every
-tempo and rate. A DAW that takes its tempo from the file's tempo event instead of its own
-session tempo can drift by about 1.9 samples in five minutes; set the session tempo and
-import the notes without the tempo.
+from the track's sample rate and the tempo: one tick is one sample when the session has one
+tempo and 60 x rate / BPM is a whole number of 32767 or less; otherwise the export message
+states the bound that the tick grid leaves, in samples, when it is over half a sample. The
+spike file is sample exact at every tempo and rate. A DAW that takes its tempo from the
+file's tempo event instead of its own session tempo can drift by about 1.9 samples in five
+minutes; set the session tempo and import the notes without the tempo.
+
+More in the Export dialog:
+
+- **Markers in MIDI** writes one marker event per review marker into the one multi-track
+  file; **Compensate sampler offset** moves the MIDI notes of calibrated tracks by their
+  measured sampler offset. The project remembers both checkboxes.
+- The result line has a **Show in Finder** button, and the Drag MIDI and Drag Spikes tiles
+  drag the exported files straight into your DAW. Dragging MIDI out of a project without a
+  tempo asks the same question first.
+- A MIDI export of a project without a tempo asks first: the notice names the three ways to
+  set the tempo (Track > Detect Tempo, File > Import Tempo Map, the Tempo ruler) and offers
+  Set Tempo…, Export anyway and Cancel.
+- An export of one spike type also rewrites the older spike file of the other type in the
+  same folder, from the same hits.
+
+To export the selected track only, use **Track > Export Selected Tracks…** (`Shift+Cmd+E`);
+it opens the Export dialog with that track.
 
 Next: [find your way](06-find-your-way.md), the first chapter of part 2.
