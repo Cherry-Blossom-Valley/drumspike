@@ -4,7 +4,7 @@
   "img/02-add-tracks.png": {"chapter": 2, "show": "The Add Tracks dialog with a session folder selected; the 13 tracks are listed with their roles."},
   "img/02-inspector-role.png": {"chapter": 2, "show": "The Inspector, section Track, with the role and the hint that says where the role came from."},
   "img/03-detection.png": {"chapter": 3, "show": "A snare track after the analysis; hits are marked on the wave lane and the hat bleed is left out."},
-  "img/03b-plugin-settings.png": {"chapter": 3, "show": "The Settings sheet, Detector plug-ins group: the example plug-in with id, version, roles, licence and a Licence button."},
+  "img/03b-plugin-settings.png": {"chapter": 3, "show": "The Settings window with the category Detector plug-ins selected in the list on the left: the example plug-in with id, version, roles, licence and a Licence button."},
   "img/03b-plugin-licence.png": {"chapter": 3, "show": "The licence dialog before the first use: plug-in name, executable path, licence name and the full licence text."},
   "img/04-first-sample.png": {"chapter": 4, "show": "A hit at the 5 ms zoom; the hit line sits on the first motion of the attack in the waveform."},
   "img/05-export.png": {"chapter": 5, "show": "The Export dialog with the per-track MIDI and spike WAV files and the destination folder."},

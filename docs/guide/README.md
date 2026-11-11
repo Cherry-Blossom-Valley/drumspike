@@ -29,6 +29,11 @@ The demo session is the example in every chapter: 13 tracks, 62.5 s, 309 hits.
 For the settings and the order of work that give the cleanest results, see
 [Get the best results](best-results.md).
 
+The guide is also inside the app: **Help > Drum Spike Help** opens it, with the same chapters
+and pictures, and **Help > Keyboard Shortcuts** is its shortcuts section. The Feedback button
+in the toolbar sends a bug report or an improvement to Cherry Blossom Valley; the form shows
+a preview of exactly what is sent.
+
 The key names use the Pro Tools preset, the default. Chapter pages:
 
 1. [Why sample-exact matters](01-why-sample-exact.md)
