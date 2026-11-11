@@ -232,7 +232,7 @@ async function exRun() {
   /* #151: a MIDI export with no tempo set uses the default 120 BPM: ask before the first export writes */
   if (EX.midi && !EX.tempoAck) {
     const a = await askDefaultTempo();
-    if (a !== "anyway") { EX.busy = false; setMsg("export cancelled"); if (a === "set_tempo") detectTempo(); return; }   // no file is written
+    if (a !== "anyway") { EX.busy = false; setMsg("export cancelled"); if (a === "set_tempo") detectTempo(); if (EX.open) exRender(); return; }   // no file is written; #478: the render takes the Export button back — a render that landed while the notice held busy disabled it (line 79) and only a render takes that back
     EX.tempoAck = true;   // the answer holds for this project: the next export does not ask again
   }
   const o = exOpts(true), n = o.tracks.length;
