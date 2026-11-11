@@ -82,7 +82,7 @@
       {"do": "hold", "s": 1.5},
       {"do": "menu", "id": "set_bar1", "timeout": 15, "err": "Track > Set Bar 1 at Playhead"},
       {"do": "wait", "cond": "() => TM.map && Math.abs((TM.map.bar1_s || 0) - S.playhead) < 0.001", "timeout": 15, "err": "bar 1 at the playhead"},
-      {"do": "hold", "s": 2.0}
+      {"do": "hold", "s": 1.5, "err": "the result at the standard hold (the 2.0 hold overran the 6.2 s narration by 147 ms, run4: the scene has only 0.03 s of wait to compress)"}
     ]},
     {"id": "p3-import", "area_sel": "#mapRulers", "steps": [
       {"do": "caption", "text": "File > Import Tempo Map…"},

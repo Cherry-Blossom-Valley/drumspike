@@ -26,19 +26,19 @@ Tab moves to the next hit, L moves back. N steps through the hits of all tracks.
 
 > Move the playhead to the gap; press H. Caption: Edit > Add Hit at Playhead
 
-The detector missed one hit. Put the playhead in the gap and press H. The new hit sits on the playhead.
+The detector missed one hit. Select the track, put the playhead in the gap and press H. The new hit sits on the playhead.
 
 ## p2-delete
 
 > Playhead on the hit; 6 (5 ms); Tab; Delete. Caption: Edit > Delete Hit
 
-One hit too many? Select the hit and press Delete. The spike line goes, the audio stays. Right-click works too.
+One hit too many? Zoom in on it, select the hit with Tab and press Delete. The spike line goes, the audio stays. Right-click works too, and undo brings the hit back.
 
 ## p2-nudge
 
 > Playhead on the hit; 6 (5 ms); Edit > Nudge Value > 1 Sample; Tab; Right. Caption: Edit > Nudge Value > 1 Sample
 
-A hit a sample off? Nudge. Set the value to one sample and press Right. The hit moves one sample closer to the attack.
+Is a hit one sample off? Nudge it. Set the nudge value to one sample and press the Right arrow. The hit moves one sample closer to the attack.
 
 ## p2-undo
 

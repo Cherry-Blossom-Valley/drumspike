@@ -37,7 +37,7 @@ The Inspector's Learn section shows the Similarity histogram. It holds the track
 
 > Option+K, Hits > Remove Example: the example goes, and the added hits of the example go with it. One undo step. Caption: Hits > Remove Example
 
-Option+K is Remove Example. It takes the example back, and the added hits of the example go with it.
+Option+K is Remove Example. It takes the example back, and the added hits of the example go with it. The track filters its hits again, which takes a moment. All of it is one undo step.
 
 ## pl-end
 
