@@ -108,6 +108,9 @@ fn analyze_start_params_merge_into_the_stored_params() {
     assert_eq!(p["refine_hi_ms"], 10.0);
     assert_eq!(p["sensitivity"], 60.0);
     assert!(p["thresholds"].is_array());
+    // the analysis runs in the background: wait for it before the folder goes (a job that still
+    // writes made the removal fail on a slow host)
+    wait_done(&svc, &sid);
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -218,5 +221,7 @@ fn analyze_start_replace_stores_exactly_the_sent_params() {
         "replace: true stores exactly the sent object: {p}"
     );
     assert!(p.get("sensitivity").is_none());
+    // the analysis runs in the background: wait for it before the folder goes
+    wait_done(&svc, &sid);
     std::fs::remove_dir_all(&root).unwrap();
 }
