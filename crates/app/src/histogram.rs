@@ -628,7 +628,17 @@ impl Service {
             if let Some(bleed) = crate::tom_bleed::run_step(self, &op, &targets) {
                 out["bleed"] = bleed;
             }
-            if let Some(flam) = crate::flam::run_step(self, &op, &[(name.to_string(), flam_rule)]) {
+            if let Some(flam) = crate::flam::run_step(
+                self,
+                &op,
+                &[(
+                    name.to_string(),
+                    crate::flam::FlamTarget {
+                        flam: flam_rule,
+                        rule: parsed.params.rule,
+                    },
+                )],
+            ) {
                 out["flam"] = flam;
             }
             // round 2: marked only after the store, so a failed backup is written by the next re-pick

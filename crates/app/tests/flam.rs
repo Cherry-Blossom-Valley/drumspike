@@ -5,8 +5,10 @@
 mod common;
 
 use common::*;
-use drumspike_app::Service;
 use drumspike_app::flam::FLAM_RULE;
+use drumspike_app::{Service, ServiceConfig};
+use drumspike_core::detect::flam::{FlamParams, Placement, flam_split};
+use drumspike_core::refine::RefineRule;
 use serde_json::{Map, Value, json};
 
 const SR: u32 = 48_000;
@@ -234,5 +236,205 @@ fn a_flam_gets_its_main_stroke_and_the_switch_turns_it_off() {
         (det["flam_rule"].clone(), det["flam"]["on"].clone()),
         (json!(FLAM_RULE), json!(false)),
         "{det}"
+    );
+}
+
+/// A deterministic noise source in [-1, 1) (the same source as the core flam tests).
+struct W444(u64);
+
+impl W444 {
+    fn next(&mut self) -> f64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+    }
+}
+
+/// A noise burst of `len_s` seconds with the decay `tau` (s) and the amplitude `amp`, drawn from `n`.
+fn burst444(n: &mut W444, len_s: f64, tau: f64, amp: f64) -> Vec<f64> {
+    let len = (len_s * f64::from(SR)) as usize;
+    (0..len)
+        .map(|k| amp * n.next() * (-(k as f64) / (tau * f64::from(SR))).exp())
+        .collect()
+}
+
+/// `s` added at `at` seconds; returns the stroke's first sample.
+fn add_at48(x: &mut [f64], s: &[f64], at: f64) -> usize {
+    let i0 = (at * f64::from(SR)).round() as usize;
+    for (k, &v) in s.iter().enumerate() {
+        if i0 + k < x.len() {
+            x[i0 + k] += v;
+        }
+    }
+    i0
+}
+
+fn f32s48(x: &[f64]) -> Vec<f32> {
+    x.iter().map(|&v| v as f32).collect()
+}
+
+/// The #444-shape stroke body (the core test `the_second_stroke_follows_the_rule_of_the_track`'s
+/// `stroke_at`): a line with a slow wobble, a pre-swing, a fast edge and a ring (the shape of the
+/// #444 rule change: version 10's true line median).
+fn stroke_body(t: f64, dip: f64, gap: f64, width: f64, rise: f64, hz: f64) -> f64 {
+    use std::f64::consts::PI;
+    let line = 0.05 + 0.003 * (2.0 * PI * 180.0 * t + 0.4).sin() + 0.001_5 * (2.0 * PI * 2_300.0 * t + 1.1).sin();
+    let swing = if t > -gap - width && t < -gap {
+        let u = (t + gap + width) / width;
+        -dip * (0.5 - 0.5 * (2.0 * PI * u).cos())
+    } else {
+        0.0
+    };
+    let body = if t <= 0.0 {
+        0.0
+    } else if t < rise {
+        0.5 - 0.5 * (PI * t / rise).cos()
+    } else {
+        let u = t - rise;
+        (-u / 0.03).exp() * (2.0 * PI * hz * u).cos()
+    };
+    -(line + swing + body)
+}
+
+/// Six #444-shape flams: a grace burst 16 ms before each body, the flams 120 ms apart. The model
+/// keeps the grace (the first stroke of the pair); the body is the second stroke the rule adds.
+/// The 16 ms gap sits above the re-rise search's 12 ms floor, inside the lobe (about 30 ms) and
+/// inside the detector's 20 ms minimum gap, so the detector reports the grace alone and the rule
+/// adds the body. The body's attack stands in the late-peak window [hit+12 ms, hit+30 ms), and
+/// the grace peak (3.0) sits about 6 dB over it: the gate's ratio (the late window over the
+/// first 12 ms) stays under -3 dB (measured -7.6, share 0.14) (the coordinator's call on #445:
+/// change the fixture, not the rule). The line and the pre-swing reach 14 ms before the edge
+/// (the #444 shape needs them there) and the spacing keeps the previous body's decay out of the
+/// floor window before the next re-rise.
+fn flam444_fixture() -> Vec<f32> {
+    let srf = f64::from(SR);
+    let mut x = vec![0.0f64; (3.0 * srf) as usize];
+    let mut nz = W444(0x4455_6677_8899_0011);
+    for k in 0..6 {
+        let te = 1.0 + 0.12 * f64::from(k);
+        let grace = burst444(&mut nz, 0.012, 0.003, 3.0);
+        add_at48(&mut x, &grace, te - 0.016);
+        let i0 = (te * srf).round() as i64;
+        let back = (0.014 * srf) as i64;
+        for j in -back..(0.06 * srf) as i64 {
+            let at = i0 + j;
+            if at < 0 || at as usize >= x.len() {
+                continue;
+            }
+            let v = stroke_body(
+                j as f64 / srf,
+                [0.03, 0.045, 0.06, 0.08, 0.045, 0.06][(j.rem_euclid(6)) as usize],
+                [0.0, 40e-6, 80e-6, 110e-6, 150e-6, 180e-6][(j.rem_euclid(6)) as usize],
+                [150e-6, 212.5e-6, 275e-6, 337.5e-6, 400e-6, 250e-6][(j.rem_euclid(6)) as usize],
+                [60e-6, 80e-6, 100e-6, 60e-6, 80e-6, 100e-6][(j.rem_euclid(6)) as usize],
+                [180.0, 215.0, 250.0, 285.0, 320.0, 355.0][(j.rem_euclid(6)) as usize],
+            );
+            x[at as usize] += v;
+        }
+    }
+    for v in &mut x {
+        *v += 1e-5 * nz.next();
+    }
+    f32s48(&x)
+}
+
+fn at_samples(ts: &[f64]) -> Vec<i64> {
+    ts.iter().map(|t| (t * f64::from(SR)).round() as i64).collect()
+}
+
+/// #445 (2): the re-pick of a stored project places the flam second stroke by the refine rule the
+/// analysis recorded, not by the current rule. The analysis runs pinned to version 5
+/// (`FootCapped`); the re-pick under a version-10 service keeps the version-5 placement, and that
+/// placement is the recorded rule's own answer on the stored hits: the test would catch a re-pick
+/// that ran the current rule.
+/// The fixture cannot also prove that the recorded and the current rule place differently: its
+/// fast edge is rule-independent — all ten refine versions walk to the same six samples here (the
+/// #445 probe: identical placements, no fallbacks, for every version 1 to 10) — so a
+/// discrimination between the two rules, and a move by a fresh analysis, cannot be asserted on
+/// audio. That proof is the value check below (the #445 coordinator call: the proof does not need
+/// audio). The fixture's refine answers land inside the re-rise span, so it cannot show the
+/// fallback; the outcome counts it.
+#[test]
+fn a_repick_places_the_flam_second_stroke_by_the_recorded_refine_rule() {
+    let root = tmp("flam_rule_repick5");
+    let x = flam444_fixture();
+    let dir = project(&root, "Repick5", &[spec("s top", "snare", x.clone())]);
+    // the analysis pinned to version 5: the record carries 5, and the six bodies are added
+    let svc5 = Service::new(ServiceConfig {
+        refine_rule: Some(RefineRule::FootCapped),
+        ..ServiceConfig::default()
+    });
+    let sid = open(&svc5, &dir);
+    svc5.analyze_start(&sid, None, None, None).unwrap();
+    let st = wait_done(&svc5, &sid);
+    let f5 = flams(&svc5, &sid, "s top");
+    assert_eq!(f5.len(), 6, "the six bodies are found and added: {st}");
+    assert_eq!(detector(&svc5, &sid, "s top")["refine"], json!(5));
+    let f5s = at_samples(&f5);
+    // the re-pick runs on the stored project: the analysis's hits and records must be on disk
+    svc5.project_save(&sid).unwrap();
+    svc5.project_close(&sid, false).unwrap();
+    // the re-pick under a version-10 service: the recorded rule 5 places the second strokes
+    let svc10 = service_dsp();
+    let sid10 = open(&svc10, &dir);
+    svc10
+        .track_repick(&sid10, "s top", Some(&params(&svc10, &sid10, "s top")), true)
+        .unwrap();
+    let frs = at_samples(&flams(&svc10, &sid10, "s top"));
+    assert_eq!(
+        frs, f5s,
+        "the re-pick moved the second strokes off the recorded rule 5: {frs:?} against {f5s:?}"
+    );
+    // the placement is the recorded rule's own answer on the stored hits
+    let mains: Vec<f64> = events(&svc10, &sid10, "s top")
+        .iter()
+        .filter(|e| e["flam"] != true)
+        .map(|e| e["t"].as_f64().unwrap())
+        .collect();
+    let p = FlamParams::default();
+    let (d5, _) = flam_split(
+        &x,
+        SR,
+        &mains,
+        &[],
+        &p,
+        Placement {
+            version: 2,
+            rule: RefineRule::FootCapped,
+        },
+    );
+    let t5 = at_samples(&d5.iter().filter(|s| !s.bleed).map(|s| s.t).collect::<Vec<_>>());
+    assert_eq!(
+        t5, frs,
+        "the re-pick's placement is not the recorded rule's answer: {t5:?} against {frs:?}"
+    );
+}
+
+/// #445 (3): the rule the flam step is given, on the value itself. The two call sites put these
+/// answers into the `rule` field of the `FlamTarget` they hand `run_step` (the re-pick in
+/// `crates/app/src/histogram.rs`, a new analysis in `crates/app/src/steps.rs`): a re-pick of a
+/// track whose record says refine 5 hands version 5's rule to the flam step under a version-10
+/// service; a new analysis hands the analysis rule. The pickers are the reachable proof (the
+/// `FlamTarget` itself is `pub(crate)`); the placements cannot carry it (the audio test above).
+#[test]
+fn the_flam_step_is_handed_the_tracks_rule_as_a_value() {
+    // a version-10 service: no pin, the current rule (the audio test's re-pick service)
+    let cfg = ServiceConfig::default();
+    assert_eq!(RefineRule::CURRENT, RefineRule::Symmetric);
+    assert_eq!(RefineRule::CURRENT.version(), 10);
+    assert_eq!(RefineRule::FootCapped.version(), 5);
+    // the record the version-5 analysis of the audio test wrote: the re-pick hands 5's rule
+    let det5 = json!({"detector": "rust-dsp", "refine": 5});
+    assert_eq!(
+        drumspike_app::jobs::recorded_rule(&cfg, Some(&det5)),
+        RefineRule::FootCapped,
+        "a re-pick hands the recorded rule 5 to the flam step, not the current rule"
+    );
+    // a new analysis hands the analysis rule (the current rule of the version-10 service)
+    assert_eq!(
+        drumspike_app::jobs::analysis_rule(&cfg),
+        RefineRule::CURRENT,
+        "a new analysis hands the analysis rule to the flam step"
     );
 }
