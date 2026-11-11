@@ -297,20 +297,23 @@ fn stroke_body(t: f64, dip: f64, gap: f64, width: f64, rise: f64, hz: f64) -> f6
     -(line + swing + body)
 }
 
-/// Six #444-shape flams: a grace burst 30 ms before each body, the flams 120 ms apart. The model
+/// Six #444-shape flams: a grace burst 24 ms before each body, the flams 120 ms apart. The model
 /// keeps the grace (the first stroke of the pair); the body is the second stroke the rule adds.
-/// The 30 ms gap keeps the body out of the late-peak window (the 30 ms end is excluded) and
-/// inside the re-rise search (12 to 50 ms, 10 ms before the next hit). The line and the pre-swing
-/// reach 14 ms before the edge (the #444 shape needs them there) and the spacing keeps the
-/// previous body's decay out of the floor window before the next re-rise.
+/// The body's attack stands in the late-peak window [hit+12 ms, hit+30 ms) whatever the gap (the
+/// 30 ms end is the lobe), so the grace peak sits about 5 dB over it: the gate's ratio (the
+/// late window over the first 12 ms) stays under -3 dB, median -4.6, share 0 (the coordinator's
+/// call on #445: change the fixture, not the rule). The 24 ms gap sits inside the lobe (about
+/// 30 ms) and above the re-rise search's 12 ms floor. The line and the pre-swing reach 14 ms
+/// before the edge (the #444 shape needs them there) and the spacing keeps the previous body's
+/// decay out of the floor window before the next re-rise.
 fn flam444_fixture() -> Vec<f32> {
     let srf = f64::from(SR);
     let mut x = vec![0.0f64; (3.0 * srf) as usize];
     let mut nz = W444(0x4455_6677_8899_0011);
     for k in 0..6 {
         let te = 1.0 + 0.12 * f64::from(k);
-        let grace = burst444(&mut nz, 0.02, 0.003, 0.5);
-        add_at48(&mut x, &grace, te - 0.030);
+        let grace = burst444(&mut nz, 0.02, 0.003, 2.0);
+        add_at48(&mut x, &grace, te - 0.024);
         let i0 = (te * srf).round() as i64;
         let back = (0.014 * srf) as i64;
         for j in -back..(0.06 * srf) as i64 {
@@ -344,6 +347,8 @@ fn at_samples(ts: &[f64]) -> Vec<i64> {
 /// are #444-shape, where versions 9 and 10 place differently at 48 kHz. The re-pick under a
 /// version-10 service keeps the version-9 placement, and a fresh analysis under it moves the
 /// strokes: the test would catch a re-pick that ran the current rule.
+/// The fixture's refine answers land inside the re-rise span, so it cannot show the fallback;
+/// the outcome counts it (#445 coordinator call).
 #[test]
 fn a_repick_places_the_flam_second_stroke_by_the_recorded_refine_rule() {
     let root = tmp("flam_rule_repick9");
