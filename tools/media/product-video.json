@@ -20,8 +20,9 @@
       {"source": "~/.cache/drumspike/media/rec/part1.mp4", "start": 41.65, "end": 45.68}
     ]},
     {"id": "pv-fix", "clips": [
-      {"source": "~/.cache/drumspike/media/explainers/explainer-10.mp4", "start": 155.5, "end": 158.8},
-      {"source": "~/.cache/drumspike/media/rec/part2.mp4", "start": 79.0, "end": 82.311}
+      {"source": "~/.cache/drumspike/media/explainers/explainer-10.mp4", "start": 155.5, "end": 157.7},
+      {"source": "~/.cache/drumspike/media/rec/part2.mp4", "start": 79.0, "end": 81.2},
+      {"source": "~/.cache/drumspike/media/rec/part-learn.mp4", "start": 27.0, "end": 29.211}
     ]},
     {"id": "pv-out", "clips": [
       {"source": "~/.cache/drumspike/media/rec/part1.mp4", "start": 45.84, "end": 53.531}

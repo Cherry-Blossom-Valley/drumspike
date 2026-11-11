@@ -30,7 +30,7 @@ Then it walks back to the first motion of each attack. Soft and loud hits land o
 
 ## pv-fix
 
-> Explainer 10, the marked hit and the other mics under it (155.5-158.8 s), then recording part 2, the velocity lane (79.0-82.31 s).
+> Explainer 10, the marked hit and the other mics under it (155.5-157.7 s), then recording part 2, the velocity lane (79.0-81.2 s), then recording part-learn, scene pl-grey with the marked hit and its near copies grey (27.0-29.21 s).
 
 Check the doubtful hits first, shape the velocities, and teach it by example.
 
