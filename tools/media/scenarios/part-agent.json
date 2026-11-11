@@ -23,14 +23,11 @@
       "steps": [
         {"do": "caption", "text": "the agent loads the drumspike-finetune skill and works hit by hit"},
         {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
-         "lines": [1, 1], "title": "claude -p"},
+         "lines": [1, 2], "title": "claude -p"},
         {"do": "hold", "s": 2.5},
         {"do": "set_training"},
         {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
-         "lines": [3, 7]},
-        {"do": "hold", "s": 2.5},
-        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
-         "lines": [8, 13]},
+         "lines": [3, 9]},
         {"do": "hold", "s": 2.5}
       ]
     },
@@ -106,11 +103,37 @@
     {
       "id": "ra-doubt",
       "steps": [
-        {"do": "caption", "text": "the doubtful hit stays for you: no clear line before the hit"},
+        {"do": "caption", "text": "the doubtful hit stays for you: 14 dB under the median, in a noisy line"},
         {"do": "zoom_to", "track": "k_in", "t": 1.8764792, "span": 0.5},
         {"do": "agent", "fn": "look", "track": "k_in", "t": 1.8764792, "timeout": 30,
-         "err": "the look at the wobbly hit (the lead is not a line, no move)"},
+         "err": "the look at the wobbly hit (14 dB under the median, no move)"},
         {"do": "hold", "s": 3.5}
+      ]
+    },
+    {
+      "id": "ra-hand",
+      "steps": [
+        {"do": "caption", "text": "the hit you placed by hand stays right where it is"},
+        {"do": "zoom_to", "track": "k_in", "t": 2.4997, "span": 0.5},
+        {"do": "agent", "fn": "look", "track": "k_in", "t": 2.4997, "timeout": 30,
+         "err": "the look at the hand-placed hit (the lane at the hit, nothing moves)"},
+        {"do": "hold", "s": 2.0},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
+         "lines": [96, 96], "title": "claude -p"},
+        {"do": "hold", "s": 3.0}
+      ]
+    },
+    {
+      "id": "ra-opinions",
+      "steps": [
+        {"do": "caption", "text": "two opinions differ on this hit: the agent leaves it for you"},
+        {"do": "zoom_to", "track": "s_top", "t": 1.875083, "span": 0.5},
+        {"do": "agent", "fn": "look", "track": "s_top", "t": 1.875083, "timeout": 30,
+         "err": "the look at the snare hit with two opinions (no move, no confirm)"},
+        {"do": "hold", "s": 2.0},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
+         "lines": [102, 103], "title": "claude -p"},
+        {"do": "hold", "s": 3.0}
       ]
     },
     {
@@ -128,10 +151,13 @@
       "steps": [
         {"do": "caption", "text": "the counts, per track"},
         {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
-         "lines": [71, 75], "title": "claude -p"},
+         "lines": [83, 84], "title": "claude -p"},
         {"do": "hold", "s": 3.0},
         {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
-         "lines": [87, 87], "title": "claude -p"},
+         "lines": [86, 90], "title": "claude -p"},
+        {"do": "hold", "s": 3.0},
+        {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
+         "lines": [110, 110], "title": "claude -p"},
         {"do": "hold", "s": 2.5}
       ]
     }

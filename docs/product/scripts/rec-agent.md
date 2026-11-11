@@ -14,19 +14,22 @@ The story, per the owner's review of 2026-11-08: prompt first, then the agent at
 open window through its `drumspike-finetune` skill, one visible move of a hit by two samples,
 and the per-track counts with the export question at the end. Training Mode gets one sentence
 in the narration (ra-skill) and no scene, caption or close-up. The set up is one short scene.
-The terminal pane types the real agent run of `tools/media/fixtures/agent-run/` (ticket #380):
-the prompt from `prompt.txt`, the skill load, the tool calls and the final per-track table from
-`transcript.txt`. No agent text is invented.
+The terminal pane types the real agent run of `tools/media/fixtures/agent-run/` (the 0.9.33 run,
+#482): the prompt from `prompt.txt`, the skill load, the first tool calls and the final report
+from `transcript.txt`. No agent text is invented.
 
 The hits the scenes act on are k in hits of the same run: the look is hit 0 (1.250167 s), the
 move is hit 5 (3.750167 s, sample 180008 to 180006, plan suggests -2), the confirm is hit 4
-(3.126313 s, plan suggests 0), and the doubt is hit 1 (1.876479 s, lead spread 0.18 over the
-0.03 limit, plan why "no clear line before the hit"). The move scene zooms to 10 ms
-(px_per_sample well over 2) and holds 2 s on each side of the move; the before and after
-pictures share the window, and the frame diff must change pixels only in the two marker
-columns. The Settings scene opens the Agent category first and rewrites the two texts the app
-prints with host paths (the install target and the `claude mcp add` line's binary) into their
-neutral forms with `show_text`, immediately after the app writes them.
+(3.126313 s, plan suggests 0), and the doubt is hit 1 (1.876479 s, 14 dB under the median and
+in a noisy line, the audit's left reason). Two scenes show what the run leaves alone: the
+hand-placed kick hit 3 (2.4997 s) stays where it is and the report line names it; snare hit 0
+(1.875083 s) has two opinions that differ (the line before the hit puts the start at the hit,
+the track's clear hits put it 3 samples later) and its reason is on screen. The move scene
+zooms to 10 ms (px_per_sample well over 2) and holds 2 s on each side of the move; the before
+and after pictures share the window, and the frame diff must change pixels only in the two
+marker columns. The Settings scene opens the Agent category first and rewrites the two texts
+the app prints with host paths (the install target and the `claude mcp add` line's binary)
+into their neutral forms with `show_text`, immediately after the app writes them.
 
 ## ra-prompt
 
@@ -38,7 +41,7 @@ the window you have open, on the same lanes you work in.
 
 ## ra-skill
 
-> Caption: the agent loads the drumspike-finetune skill and works hit by hit. The terminal pane types the run's first tool calls from the fixture; no close-up of any setting.
+> Caption: the agent loads the drumspike-finetune skill and works hit by hit. The terminal pane types the run's skill load and its first tool calls from the fixture; no close-up of any setting.
 
 The agent loads the drumspike-finetune skill and follows it step by step. It finds the open
 window, turns Training Mode on so that each edit is recorded as the agent's, and reads every
@@ -78,10 +81,24 @@ says the hit is logged as reviewed, right where it is.
 
 ## ra-doubt
 
-> Caption: the doubtful hit stays for you: no clear line before the hit (the plan row's why). The wobbly hit's window: the lead is not a straight line, the spread is over the limit, and the hit does not move.
+> Caption: the doubtful hit stays for you: 14 dB under the median, in a noisy line (the audit's reason). The wobbly hit's window: the hit sits in a noisy line, well under the median, and the hit does not move.
 
-And here the judgment stops. This lead is not a straight line: its spread over the first 12
-samples is over the limit. The agent leaves the hit alone and lists it for you, with the
+And here the judgment stops. This hit is fourteen decibels under the median, and it sits in a
+noisy line. The agent leaves the hit alone and lists it for you, with the reason.
+
+## ra-hand
+
+> Caption: the hit you placed by hand stays right where it is. The lane at the hand-placed hit; the report line from the fixture names it, and nothing moves.
+
+One of these hits is yours: you placed it by hand. The agent sees that, leaves it exactly where
+it is, and says so in its report.
+
+## ra-opinions
+
+> Caption: two opinions differ on this hit: the agent leaves it for you. The snare hit's window; the reason from the report is readable on screen, and the hit does not move.
+
+On this snare hit the two opinions differ: the line before the hit puts the start at the hit,
+and the track's clear hits put it three samples later. The agent leaves it for you, with the
 reason.
 
 ## ra-save
@@ -94,7 +111,7 @@ step at a time.
 
 ## ra-table
 
-> Caption: the counts, per track. The terminal pane types the run's final aggregate report from the fixture: hits, moved, confirmed, hand-placed untouched, no suggestion, doubtful.
+> Caption: the counts, per track. The terminal pane types the run's final report from the fixture: the summary, the per-track table, and the export question.
 
 And at the end, the counts: per track, what the agent saw, moved, confirmed, and left for you,
 with the reasons. Nothing in the saved project but the edits it told you about. Last, it asks
