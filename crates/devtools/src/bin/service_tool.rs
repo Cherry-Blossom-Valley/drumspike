@@ -133,7 +133,7 @@ fn export_all(dir: &str) -> Result<(), String> {
 /// no `detected` is given (a non-null `model` key is an error
 /// here); `detected` ([[t, note], ...]) skips the detector and runs only the steps after it
 /// (`analyze_detected`). The params are read as the app reads a track's `params`
-/// (`jobs::parse_params`). P4-12: `rule` (`1`, `2`; default 1, the frozen engine's) is the
+/// (`jobs::parse_params`). P4-12: `rule` (a version; default 1, the frozen engine's, not the app's current) is the
 /// refinement rule. Prints one JSON line per job: `{events, branches, detected, detector, sr}`
 /// or `{error}`.
 fn core_analyze(jobs_file: &str) -> Result<(), String> {
@@ -156,12 +156,15 @@ fn core_analyze_one(j: &Value) -> Result<Value, String> {
     let role = j["role"].as_str().unwrap_or("other");
     let parsed = jobs::parse_params(j["params"].as_object())?;
     let mut params = parsed.params.clone();
-    if let Some(r) = j.get("rule").filter(|r| !r.is_null()) {
-        params.rule = r
+    // A job without a `rule` means the frozen reference: the golden answers are rule version 1
+    // answers, and `parse_params` now defaults to the current rule (#440).
+    params.rule = match j.get("rule").filter(|r| !r.is_null()) {
+        None => drumspike_core::refine::RefineRule::Reference,
+        Some(r) => r
             .as_u64()
             .and_then(drumspike_core::refine::RefineRule::from_version)
-            .ok_or_else(|| format!("unknown rule {r}"))?;
-    }
+            .ok_or_else(|| format!("unknown rule {r}"))?,
+    };
     let detected: Vec<(f64, u8)> = if let Some(list) = j.get("detected").and_then(Value::as_array) {
         list.iter()
             .map(|p| (p[0].as_f64().unwrap_or(f64::NAN), p[1].as_u64().unwrap_or(0) as u8))

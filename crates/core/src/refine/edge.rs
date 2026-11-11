@@ -28,6 +28,34 @@ pub(crate) enum EdgeTail {
     /// [`DEPARTURE_MAX_S`] of the edge's first rising sample; otherwise version 8's walk-back decides (a slow wave or an
     /// offset on a tom line is the line itself, as before).
     Departure,
+    /// Version 10 (#444): [`EdgeTail::Departure`] with two measured defects removed. The line's level is the true
+    /// median ([`line_level`]): versions 8 and 9 take the upper of the two middle values of an even count, so the same
+    /// stroke with flipped polarity gets another level and, for 2 to 5 % of hits, another sample. And the counts of
+    /// samples that were fitted at 48 kHz ([`LINE_RUN_SAMPLES`], [`EDGE_TAIL_SAMPLES`], [`SWING_MIN_SAMPLES`],
+    /// [`DEPARTURE_BRIDGE_SAMPLES`]) cover the same time at every rate ([`at_rate`]): at 96 kHz they covered half of it.
+    Symmetric,
+}
+
+/// The level of a line stretch: its median. `symmetric` (version 10) is the true median, the mean of the two middle
+/// values of an even count; without it the upper of the two (versions 8 and 9, kept for their stored placements).
+/// An empty stretch is 0.
+fn line_level(v: &mut [f64], symmetric: bool) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    let mid = v.len() / 2;
+    if symmetric && v.len().is_multiple_of(2) {
+        v.sort_unstable_by(f64::total_cmp);
+        (v[mid - 1] + v[mid]) / 2.0
+    } else {
+        *v.select_nth_unstable_by(mid, f64::total_cmp).1
+    }
+}
+
+/// Version 10 (#444): a count of samples that was fitted at 48 kHz, as the count that covers the same time at the
+/// rate `srf` (at least 1).
+pub(crate) fn at_rate(n: i64, srf: f64) -> i64 {
+    ((n as f64) * srf / 48_000.0).round().max(1.0) as i64
 }
 
 /// Version 6 (#293, #294): the rise window of the steep edge (seconds): the signal must rise by [`EDGE_RISE_DB`] under
@@ -187,23 +215,21 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
     };
     // the line's level, the median of the short stretch before the walk's foot (versions 8 and 9 measure from it; 0
     // for the older tails: they read the distance from zero)
+    // version 10: the true median and the counts of samples at the rate
+    let v10 = tail_rule == EdgeTail::Symmetric;
+    let count = |n: i64| if v10 { at_rate(n, srf) } else { n };
     let line = match tail_rule {
-        EdgeTail::Line | EdgeTail::Departure => {
+        EdgeTail::Line | EdgeTail::Departure | EdgeTail::Symmetric => {
             let from = (foot - samples(LINE_LEVEL_S, srf)).max(0);
             let mut v: Vec<f64> = (from..foot).map(at).collect();
-            if v.is_empty() {
-                0.0
-            } else {
-                let mid = v.len() / 2;
-                *v.select_nth_unstable_by(mid, f64::total_cmp).1
-            }
+            line_level(&mut v, v10)
         }
         EdgeTail::Noise | EdgeTail::Visible => 0.0,
     };
     let off = |i: i64| at(i) - line;
     // the search starts one rise window before the walk's foot: on a steep attack the first sample over the walk's
     // threshold already lies inside the rise, and from there the next window rises too little
-    let lo = (foot - w - EDGE_TAIL_SAMPLES).max(1);
+    let lo = (foot - w - count(EDGE_TAIL_SAMPLES)).max(1);
     let mut j = (foot - w).max(1);
     while j < end {
         // an edge raises the level away from the line (a falling slope after a first bump is none)
@@ -231,7 +257,7 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
         let noise_tail = |mut k: i64| {
             let mut tail = 0;
             while k > lo
-                && tail < EDGE_TAIL_SAMPLES
+                && tail < count(EDGE_TAIL_SAMPLES)
                 && rise(k - 1) > (EDGE_TAIL_NOISE * noise).max(step / 16.0)
                 && (at(k - 1) * at(k) > 0.0 || at(k - 1).abs() <= EDGE_TAIL_NOISE * noise)
             {
@@ -280,20 +306,15 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
             // edge contains an excursion SWING_MIN_SAMPLES wide). The line level is measured over the longer
             // DEPARTURE_LEVEL_S window: the pre-swing occupies most of the LINE_LEVEL_S stretch before the foot
             // and tilts its median onto the swing itself
-            EdgeTail::Departure => {
+            EdgeTail::Departure | EdgeTail::Symmetric => {
                 let vis = pk * DEPARTURE_VIS_PCT / 100.0;
                 let vis_run = pk * DEPARTURE_RUN_PCT / 100.0;
-                let run = LINE_RUN_SAMPLES.max(1);
+                let run = count(LINE_RUN_SAMPLES).max(1);
                 let lo_d = (k0 - samples(DEPARTURE_MAX_S, srf)).max(1);
                 let line9 = {
                     let from = (foot - samples(DEPARTURE_LEVEL_S, srf)).max(0);
                     let mut v: Vec<f64> = (from..foot).map(at).collect();
-                    if v.is_empty() {
-                        0.0
-                    } else {
-                        let mid = v.len() / 2;
-                        *v.select_nth_unstable_by(mid, f64::total_cmp).1
-                    }
+                    line_level(&mut v, v10)
                 };
                 let off9 = |i: i64| at(i) - line9;
                 let mut i = k;
@@ -347,7 +368,7 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
                         }
                         best = best.max(cur);
                     }
-                    best >= SWING_MIN_SAMPLES
+                    best >= count(SWING_MIN_SAMPLES)
                 })
                 .filter(|&h| {
                     // the first motion runs into the edge: between the run and the edge at
@@ -366,7 +387,7 @@ pub(super) fn edge_foot_counted(x: &[f32], foot: i64, end: i64, srf: f64, tail_r
                             cur = 0;
                         }
                     }
-                    best <= DEPARTURE_BRIDGE_SAMPLES
+                    best <= count(DEPARTURE_BRIDGE_SAMPLES)
                 })
                 .unwrap_or_else(|| line_walk(k, k0))
             }

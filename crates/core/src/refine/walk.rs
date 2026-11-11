@@ -76,6 +76,8 @@ pub(crate) enum FootCap {
     Seconds(f64),
     /// Samples, at every rate.
     Samples(i64),
+    /// Version 10 (#444): a count of samples at 48 kHz, as the count that covers the same time at the rate.
+    At48k(i64),
 }
 
 /// What a strict foot beyond its cap does.
@@ -96,6 +98,11 @@ impl FootTune {
     /// The version 5 foot: a move of at most [`FOOT5_MAX_SAMPLES`], else the foot moves to the cap.
     pub const V5: FootTune = FootTune {
         cap: FootCap::Samples(FOOT5_MAX_SAMPLES),
+        overrun: Overrun::Clamp,
+    };
+    /// The version 10 foot (#444): [`FootTune::V5`] whose cap covers the same time at every rate.
+    pub const V10: FootTune = FootTune {
+        cap: FootCap::At48k(FOOT5_MAX_SAMPLES),
         overrun: Overrun::Clamp,
     };
 }
@@ -422,6 +429,7 @@ pub(super) fn first_motion_traced(
         let cap = match tune.cap {
             FootCap::Seconds(t) => samples(t, srf),
             FootCap::Samples(k) => k,
+            FootCap::At48k(k) => super::edge::at_rate(k, srf),
         };
         if foot - strict_foot <= cap {
             strict_foot

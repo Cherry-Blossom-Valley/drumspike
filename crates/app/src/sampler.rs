@@ -36,7 +36,7 @@ use serde_json::{Map, Value, json};
 
 use crate::Service;
 use crate::error::AppError;
-use crate::export::{EXPORT_PPQ, EXPORT_TEMPO, export_dir};
+use crate::export::{EXPORT_TEMPO, export_dir};
 use crate::layer::{LayerHit, Polarity, applied_lag, layer_job, opt_path, protected_files, save_target};
 use crate::media::mix_mode;
 use crate::registry::lock;
@@ -266,17 +266,21 @@ impl Service {
         path: Option<&str>,
     ) -> Result<Value, AppError> {
         let op = self.inner.registry.get_writable(sid)?;
-        let (note, map, out) = {
+        let (note, map, out, rate) = {
             let g = lock(&op);
             let note = g.track(name)?.note.unwrap_or(36);
             let out = match path {
                 Some(p) => save_target(p, &protected_files(&g))?,
                 None => export_dir(&g, dest)?.join(format!("{name}_calibration.mid")),
             };
-            (note, crate::tempo::doc_map(&g.project.doc)?, out)
+            let rate = crate::export::track_rate(&g, name);
+            (note, crate::tempo::doc_map(&g.project.doc)?, out, rate)
         };
-        let (bytes, t) = calibration_midi(note, &map, EXPORT_PPQ, EXPORT_TEMPO)?;
-        let (tick, _) = calibration_time(&map, EXPORT_PPQ).map_err(AppError::bad)?;
+        // #441: the calibration file takes the ticks per quarter note of the export of the same
+        // project: the rule at the track's source rate.
+        let ppq = drumspike_core::midi::export_ppq(rate, &map, EXPORT_TEMPO);
+        let (bytes, t) = calibration_midi(note, &map, ppq, EXPORT_TEMPO)?;
+        let (tick, _) = calibration_time(&map, ppq).map_err(AppError::bad)?;
         let path = out;
         drumspike_core::io::write_atomic(&path, &bytes)
             .map_err(|e| AppError::internal(format!("{}: {e}", path.display())))?;
@@ -286,7 +290,7 @@ impl Service {
             "note": note,
             "t": t,
             "tick": tick,
-            "ppq": EXPORT_PPQ,
+            "ppq": ppq,
             "text": format!(
                 "Import {} at the session start, bounce the sampler's kit piece for note {note} from the session start, then load the bounce here.",
                 path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
@@ -345,7 +349,9 @@ impl Service {
             let g = lock(&op);
             g.track(name)?;
             let map = crate::tempo::doc_map(&g.project.doc)?;
-            let (_, t) = calibration_time(&map, EXPORT_PPQ).map_err(AppError::bad)?;
+            // #441: the file's own ticks per quarter note (the calibration answer's `ppq`)
+            let ppq = drumspike_core::midi::export_ppq(crate::export::track_rate(&g, name), &map, EXPORT_TEMPO);
+            let (_, t) = calibration_time(&map, ppq).map_err(AppError::bad)?;
             let tr = g.track(name)?;
             let hits: Vec<f64> = tr
                 .events()

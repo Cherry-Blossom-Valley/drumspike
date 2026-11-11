@@ -725,9 +725,20 @@ fn redetect(t: &Target, pass1: &Pass1) -> Result<usize, Value> {
             .filter(|h| !drop_frames.contains(&h.frame))
             .map(|h| (h.time, role_note("tom")))
             .collect();
-        let params_a = AnalyzeParams {
-            rule: crate::jobs::analysis_rule(&svc.inner.config),
-            ..AnalyzeParams::default()
+        let rule = crate::jobs::analysis_rule(&svc.inner.config);
+        // #438: the parameters the track's analysis used (the same parse as the analysis
+        // job, from the stored parameter object) with the rule of a new analysis; on a
+        // parse error the struct defaults run.
+        let track_params = lock(op).track(&x_mic.name).ok().and_then(|tr| tr.params.clone());
+        let params_a = match crate::jobs::parse_params(track_params.as_ref()) {
+            Ok(mut parsed) => {
+                parsed.params.rule = rule;
+                parsed.params
+            }
+            Err(_) => AnalyzeParams {
+                rule,
+                ..AnalyzeParams::default()
+            },
         };
         let Ok(mut analysis) = analyze_detected(&dec_x.samples, sr, "tom", &kept, &params_a) else {
             return Err(json!({"removed": removed, "redetected": redetected, "pairs": pairs2}));

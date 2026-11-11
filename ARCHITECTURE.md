@@ -53,7 +53,7 @@ The module paths are the API (`drumspike_core::refine::refine_sr`). An item no c
 | `dsp` | Shared filter and statistics primitives: `Biquad`, `band_sections`, `band_peak_db`, `band_level_db`, `broadband_peak_db`, `percentile`, `np_percentile`, `median`, half-up `ms_to_samples`, the dB floor policies `amp_db_add` and `amp_db_max`. |
 | `detect` | Detection per track: `features` (spectral flux), `onset` (candidates), `peaks` (thresholds), `nmfd`, `resample`. |
 | `detect::attribution`, `tom_bleed`, `cross_bleed`, `flam` | Per-hit ownership and the special-case rules. In `cross_bleed`, the crate-internal `cross_bleed_with(mics, &CrossBleedContext)` runs the rule as phase functions (measured rows, session verdict, inheritance, learn, judge); the public entry points wrap it. |
-| `refine::{reference, reach, walk, edge, track}` | Moves a coarse onset to the first sample of the attack, one module per mechanism. `RefineRule` v1 to v9 (v9 is current); `BackTune` (crate-internal) is the parameter object of the back-track. `refine/track.rs` holds the dispatch to a rule; `refine.rs` re-exports the items callers outside core use; the tuning constants are crate-internal. |
+| `refine::{reference, reach, walk, edge, track}` | Moves a coarse onset to the first sample of the attack, one module per mechanism. `RefineRule` v1 to v10 (v10 is current); `BackTune` (crate-internal) is the parameter object of the back-track. `refine/track.rs` holds the dispatch to a rule; `refine.rs` re-exports the items callers outside core use; the tuning constants are crate-internal. |
 | `rules` | `RuleSet` (the onset `DeltaRule` and the tempo `TempoRule`) and `ResearchOverrides` (the typed A1, A5 and A6 numbers). `from_lookup` holds the `DRUMSPIKE_*` names and their parse; the caller resolves them once and passes them down. |
 | `analyze`, `backend` | Orchestrate detection for one track; detector backends. |
 | `velocity` | Peak dB to MIDI velocity 1 to 127. |
@@ -132,7 +132,7 @@ One word means one thing. The code name is the place to look.
 | Default note | MIDI note the user sees per role: 36/38/48/42/49, Other 36. Equal to `ROLE_DEFAULT_NOTE` in `app.js`. | `Role::default_note` |
 | Onset (candidate) | A spectral-flux peak at 44.1 kHz with a coarse time. | `detect::onset::Candidate` |
 | Peak pick | Choose candidates above the role thresholds. Sensitivity scales the thresholds. | `detect::peaks` |
-| Refine | Move a coarse onset to the first sample of the attack at the native rate. | `refine`, `RefineRule` v1-v9 (v9 is current) |
+| Refine | Move a coarse onset to the first sample of the attack at the native rate. | `refine`, `RefineRule` v1-v10 |
 | Hit | A refined time plus velocity plus class. Five stage types exist today. | `refine::Hit`, `backend::DetectedHit`, ... |
 | Event | A hit as stored in the project, with marks in `extra`. | `project::document::Event` |
 | Velocity | Peak dB mapped to MIDI 1..127. | `velocity` |
@@ -219,9 +219,11 @@ These decisions shape the code. The detail is in the code comments and the ADRs.
 - The web page stays the user interface. A native UI or an ARA plug-in was studied and not
   started: no hot path was near its budget, so the gain would be feel, not speed. A rewrite
   would replace the whole `static/` set and the e2e suite.
-- Hit placement is refine version 9, `RefineRule::Departure` (v9 is current, in `refine::edge`).
-  Version 7 was the steep-edge walk with a reach limit; #351 added the walk-back to the line's
-  last sample before the first motion. Older projects keep the version they were analysed with.
+- Hit placement is refine version 10 (`refine::edge`): the steep edge of the stroke, then back
+  to the last sample of the line before the stroke's first motion. Since version 10 the answer
+  does not depend on the polarity of the audio, and the rule's counts of samples follow the
+  sample rate (`docs/measure/placement-v10.md`). Older projects keep the version they were
+  analysed with.
 - Tempo detection uses the half-time rule 3: a snare on beat 3 puts bar 1 two beats before it.
   `DRUMSPIKE_TEMPO_RULE=2` pins the old rule.
 - Rejected after measurement: per-track self-calibration from flux statistics (no stable

@@ -36,7 +36,7 @@
 //! (P4-38e: `dropped`, the times of the Learn hits the engineer deleted, before the Hitpoint shift; a Learn change
 //! does not bring them back, [`crate::learn_filter::note_dropped`]).
 
-use drumspike_core::refine::{RefineWindow, refine_sr};
+use drumspike_core::refine::{FM_PEAK_DB, RefineWindow, refine_rule_peak, refine_sr};
 use serde_json::{Map, Value, json};
 
 use crate::Service;
@@ -894,8 +894,19 @@ impl Service {
         // on the next picks (its example scores it at or over the Add threshold).
         let mut added_hit: Option<f64> = None;
         let mut added_followers: Option<Value> = None;
+        let mut placement: Option<Value> = None;
         if kind == "this" && !matches!(resolved.from, "hits" | "hit") {
             let t = resolved.at.first().copied().unwrap_or(t0);
+            // #439: a candidate, a rise or the range time of a K on a range is a time found in the audio: it goes
+            // through the placement rule like every hit of the track (a rise is a version 1 anchor, not the rule's
+            // stroke time). Only the playhead time of a K without hit is the engineer's own.
+            let t = if hit.is_some() && resolved.from == "hand" {
+                t
+            } else {
+                let (placed, refined) = self.placed_time(sid, &target, t, &events)?;
+                placement = Some(json!({"refined": refined, "coarse": t}));
+                placed
+            };
             let t = (t * 1e6).round() / 1e6;
             let er = self.events_edit(sid, &target, &[json!({"op": "add", "t": t, "learned": true})])?;
             added_followers = er.get("followers").cloned();
@@ -944,6 +955,9 @@ impl Service {
         });
         if let Some(k) = k_rise {
             out["k_rise"] = k;
+        }
+        if let Some(p) = placement {
+            out["placement"] = p;
         }
         if training && r.id.is_some() {
             let examples = self.training_learn_examples(sid, &target, kind, &resolved.at, &events, shift_s);
@@ -996,6 +1010,43 @@ impl Service {
                 out["filter_error"] = json!(e.message);
             }
         }
+    }
+
+    /// #439: the stored time of a hit that Learn This adds at the audio time `t` found for it (before the Hitpoint
+    /// shift): the time the analysis gives the stroke, i.e. `t` refined with the track's recorded rule and refine
+    /// window, plus the Hitpoint shift. The other hits of the track are the neighbours that clip the search, as in
+    /// the analysis. With `refine` off, or when the rule finds no stroke near `t`, the time is `t` plus the shift
+    /// (the analysis stores the coarse time with the shift too) and the flag is false.
+    fn placed_time(&self, sid: &str, name: &str, t: f64, events: &[Value]) -> Result<(f64, bool), AppError> {
+        let op = self.inner.registry.get(sid)?;
+        let (source, mix, params, rule) = {
+            let g = lock(&op);
+            let tr = g.track(name)?;
+            let det = tr.extra.get("detector").filter(|d| !d.is_null());
+            let rule = match det {
+                Some(_) => crate::jobs::recorded_rule(&self.inner.config, det),
+                None => crate::jobs::analysis_rule(&self.inner.config),
+            };
+            (
+                g.source(name),
+                tr.mix_mode_or_default().to_string(),
+                tr.params.clone(),
+                rule,
+            )
+        };
+        let parsed = crate::jobs::parse_params(params.as_ref()).map_err(AppError::bad)?;
+        let d = self.inner.media.decode_cached(&source?, mix_mode(&mix))?;
+        let dt = parsed.params.shift_samples as f64 / f64::from(d.sr);
+        if !parsed.params.refine {
+            return Ok((t + dt, false));
+        }
+        // the hits carry the Hitpoint shift; the audio does not
+        let neighbours: Vec<f64> = hit_times(events)?.into_iter().map(|h| h - dt).collect();
+        let r = refine_rule_peak(&d.samples, t, d.sr, &neighbours, parsed.params.window, rule, FM_PEAK_DB);
+        Ok(match r.rise {
+            Some(_) => (r.t + dt, true),
+            None => (t + dt, false),
+        })
     }
 
     /// The strongest envelope rise of the range in the audio of `name` ([`rise_example`]).
