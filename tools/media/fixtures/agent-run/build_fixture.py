@@ -18,16 +18,21 @@ TOOL_PREFIX = "mcp__drumspike__"
 def main(stream, run, out):
     run = str(Path(run))
     home = str(Path(run) / "home")
+    folder = str(Path(home) / "projects" / "Demo")
     counts = {"paths": 0, "tool names": 0}
 
     def clean(text):
-        counts["paths"] += text.count(home) + text.count(run)
-        return text.replace(home, "<home>").replace(run, "<run folder>")
+        # The project folder first: it lies inside home, which lies inside the run folder.
+        for path, name in ((folder, "<project folder>"), (home, "<home>"), (run, "<run folder>")):
+            counts["paths"] += text.count(path)
+            text = text.replace(path, name)
+        return text
 
     lines, actions, pending, sample = [], [], {}, {}
+    hand, planned, audited = set(), set(), []
     for raw in Path(stream).read_text().splitlines():
         row = json.loads(raw)
-        if not isinstance(row, dict) or "message" not in row:
+        if not isinstance(row, dict) or not isinstance(row.get("message"), dict):
             continue
         content = row["message"]["content"]
         if isinstance(content, str):
@@ -67,8 +72,14 @@ def main(stream, run, out):
                     body = "".join(part.get("text", "") for part in body)
                 result = json.loads(body)
                 fn, a = call["fn"], call.get("args", [])
-                if fn == "hits":
+                if fn in ("hits", "plan"):
                     sample.update({(a[0], h["index"]): h["sample"] for h in result})
+                    if fn == "plan":
+                        planned.update((a[0], h["index"]) for h in result)
+                elif fn == "handPlaced":
+                    hand.update((a[0], h["index"]) for h in result)
+                elif fn == "audit":
+                    audited.extend((a[0], h) for h in result)
                 elif fn == "move":
                     assert result["moved"], result
                     track, index = a[0], a[1]
@@ -82,6 +93,17 @@ def main(stream, run, out):
                     at_sample = sample[(track, index)]
                     actions.append({"fn": "confirm", "track": track, "index": index,
                                     "from": at_sample, "to": at_sample})
+
+    # A hit of the asked range that the run neither moved nor confirmed and that the audit
+    # holds back with two opinions: the hit the agent leaves for the user. Hand-placed hits are
+    # left alone by rule and are not listed.
+    handled = {(r["track"], r["index"]) for r in actions}
+    for track, h in audited:
+        key = (track, h["index"])
+        if key in planned and key not in handled and key not in hand \
+                and str(h.get("why")).startswith("two opinions differ"):
+            actions.append({"fn": "left", "track": track, "index": h["index"],
+                            "reason": h["why"]})
 
     out = Path(out)
     (out / "transcript.txt").write_text("\n".join(lines) + "\n")
