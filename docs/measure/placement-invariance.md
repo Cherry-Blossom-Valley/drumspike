@@ -2,7 +2,8 @@
 
 Two tools judge every later change of the placement rule by measurement instead of by argument. Both read their data from
 arguments, print the count of hits per line, and fail loudly on 0 hits. The rule itself runs through the repo's devtools
-binaries (`parity refine`, rule version 9; `service_tool core-analyze` for the full track) - no second copy of the core.
+binaries (`parity refine` with the current rule version, `--rule N` for another one; `service_tool core-analyze` for the
+full track) - no second copy of the core.
 
     uv run --no-project --with numpy,soundfile python tools/placement_invariance.py MEASURE_DIR SAMPLES_ROOT \
         --bounds tools/placement_invariance.bounds.json
@@ -24,7 +25,9 @@ full track analysis, where the hit must move by exactly that count. The window r
 delay. `--bounds` (one bound per line and role, JSON) exits non-zero when a share is over its bound; the first bounds
 are the measured values rounded up.
 
-The measured shares on the internal stems (aggregates only; a difference counts from half a sample):
+The measured shares of rule version 9 on the internal stems (aggregates only; a difference counts from half a sample).
+Version 10 removes the polarity line and halves the snare's rate line: its numbers and the bounds of today are in
+[placement-v10.md](placement-v10.md).
 
 | change | moved, kick / snare / tom | moved by 2+, kick / snare / tom |
 |---|---|---|

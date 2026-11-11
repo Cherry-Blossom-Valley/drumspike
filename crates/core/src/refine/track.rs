@@ -1,4 +1,4 @@
-//! The refinement rule of an analysis ([`RefineRule`], versions 1 to 7), the dispatch to its rule, and the entry
+//! The refinement rule of an analysis ([`RefineRule`], versions 1 to 10), the dispatch to its rule, and the entry
 //! points for one hit and for a whole track.
 
 use super::Refined;
@@ -55,11 +55,16 @@ pub enum RefineRule {
     /// steep edge (a positive bump before a negative kick edge, a dip and a rise before a negative snare edge) that
     /// versions 6 to 8 do not follow past the zero crossing between the swing and the edge.
     Departure,
+    /// Version 10 (#444): [`RefineRule::Departure`] made symmetric and rate-true. The line's level is the true median,
+    /// so a stroke and its polarity-flipped copy land on the same sample (version 9 moved 2 to 5 % of hits). The counts
+    /// of samples that were fitted at 48 kHz cover the same time at every rate ([`EdgeTail::Symmetric`],
+    /// [`FootTune::V10`]): at 96 kHz version 9 judged half the time. At 48 kHz only the median changes.
+    Symmetric,
 }
 
 impl RefineRule {
     /// The rule a new analysis runs.
-    pub const CURRENT: RefineRule = RefineRule::Departure;
+    pub const CURRENT: RefineRule = RefineRule::Symmetric;
 
     /// The version number the document stores.
     #[must_use]
@@ -74,6 +79,7 @@ impl RefineRule {
             RefineRule::Visible => 7,
             RefineRule::Line => 8,
             RefineRule::Departure => 9,
+            RefineRule::Symmetric => 10,
         }
     }
 
@@ -90,6 +96,7 @@ impl RefineRule {
             7 => Some(RefineRule::Visible),
             8 => Some(RefineRule::Line),
             9 => Some(RefineRule::Departure),
+            10 => Some(RefineRule::Symmetric),
             _ => None,
         }
     }
@@ -195,6 +202,7 @@ pub fn refine_rule_peak(
         RefineRule::Visible => back(None, Some(EdgeTail::Visible), None),
         RefineRule::Line => back(None, Some(EdgeTail::Line), Some(FootTune::V5)),
         RefineRule::Departure => back(None, Some(EdgeTail::Departure), Some(FootTune::V5)),
+        RefineRule::Symmetric => back(None, Some(EdgeTail::Symmetric), Some(FootTune::V10)),
     }
 }
 
