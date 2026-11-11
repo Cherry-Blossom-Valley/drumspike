@@ -472,7 +472,9 @@ def guide_pictures(page, work, out, wanted):
     # 12: the sub mic follows the kick in; the Layer section holds a one-shot with its onset line
     invoke(page, "track_set_follow", sid=sid, name="k out", source="k in")
     invoke(page, "track_layer_set", sid=sid, name="k out", path=str(make_one_shot(work / "kick-layer.wav")))
-    # the row must show the follow, not only the service state (#468)
+    # the row must show the follow, not only the service state (#468): the agent commands
+    # change the service state; refreshTrackMeta pulls it into the rows and the Inspector
+    page.evaluate("async () => { await refreshTrackMeta(); }")
     page.wait_for_function("""() => { const el = document.querySelector('.track[data-name="k out"] .tfollow');
                                      return el && el.textContent.includes('follows k in'); }""", timeout=30000)
     inspect_track(page, "k out", sections=("track", "layer"))
