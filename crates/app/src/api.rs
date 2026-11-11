@@ -894,7 +894,11 @@ pub static REGISTRY: &[CommandSpec] = &[
             NAME,
             opt("note", Ty::Int, "MIDI note"),
             EVENTS_OPT,
-            opt("ppq", Ty::Int, "Ticks per quarter, default 24000"),
+            opt(
+                "ppq",
+                Ty::Int,
+                "Ticks per quarter (default: the rule of #441, from the rate and the tempo)",
+            ),
             opt("tempo", Ty::Num, "BPM, default 120"),
             DEST_OPT,
             COMPENSATE_OPT,

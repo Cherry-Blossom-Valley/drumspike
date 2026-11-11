@@ -3,7 +3,7 @@
     uv run --no-project --with numpy,soundfile python tools/placement_invariance.py MEASURE_DIR SAMPLES_ROOT \
         [--bounds tools/placement_invariance.bounds.json] [--per 40] [--seed 7] \
         [--parity target/release/parity] [--service-tool target/release/service_tool] \
-        [--delays 1,2,3,4,5,6,7] [--len 20] [--skip-delay]
+        [--delays 1,2,3,4,5,6,7] [--len 20] [--skip-delay] [--rule 10]
 
 MEASURE_DIR holds the stored tool runs (`*before.json`); SAMPLES_ROOT holds
 `<session name>/Audio Files/*.wav`. For each hit of each kick, snare and tom track the tool cuts an
@@ -21,7 +21,7 @@ With --bounds FILE (one bound per line and role) the tool exits non-zero when a 
 bound. All data comes from the arguments, never from a path in the code.
 
 The rule runs through the repo's devtools binaries: `parity refine` for the window lines
-(rule version 9 = the current rule, one batched job per line) and `service_tool core-analyze`
+(the current rule version, or --rule N; one batched job per line) and `service_tool core-analyze`
 (DSP detector + the current rule) for the delay line. No second copy of the core is built.
 """
 import argparse
@@ -43,11 +43,12 @@ SR = 48000
 GAINS = {"gain -12 dB": 10 ** (-12 / 20), "gain +6 dB": 10 ** (6 / 20)}
 NOISE_DB = -50                    # white noise under the hit's peak
 HEAD_GUARD = 512 + 8              # samples of head room for the delay line (>= max delay)
+RULE = 10                         # the current rule version (`parity refine` takes the number)
 
 
 # ---------------------------------------------------------------- the placer interface
 
-def place_with_parity(records, parity, tmp):
+def place_with_parity(records, parity, tmp, rule=RULE):
     """`parity refine`: records are (x, sr, t0); returns the refined position in buffer samples.
 
     All excerpts are batched into one float wav, silence-guarded, so one job runs per line."""
@@ -65,7 +66,7 @@ def place_with_parity(records, parity, tmp):
     wav = tmp / "batch.wav"
     write_float_wav(wav, np.concatenate(chunks), sr)
     job = tmp / "refine.json"
-    job.write_text(json.dumps({"wav": str(wav), "rule": 9,
+    job.write_text(json.dumps({"wav": str(wav), "rule": rule,
                                "hits": [{"t0": float(h / sr)} for h in hits]}))
     r = subprocess.run([str(parity), "refine", str(job)], capture_output=True, text=True)
     if r.returncode != 0:
@@ -327,6 +328,8 @@ def main(argv=None):
     ap.add_argument("--len", type=float, default=20.0, help="seconds per delay-line excerpt")
     ap.add_argument("--excerpts", type=int, default=0, help="cap the delay line's excerpt count")
     ap.add_argument("--skip-delay", action="store_true", help="skip the full-track delay line")
+    ap.add_argument("--rule", type=int, default=RULE,
+                    help="the rule version of the window lines (the delay line always runs the current rule)")
     a = ap.parse_args(argv)
     parity, service_tool = Path(a.parity), Path(a.service_tool)
     if not parity.is_file():
@@ -338,7 +341,7 @@ def main(argv=None):
         sys.exit("FAIL: 0 hits collected")
     with tempfile.TemporaryDirectory(prefix="placement-inv-") as td:
         tmp = Path(td)
-        place = lambda records: place_with_parity(records, parity, tmp)  # noqa: E731
+        place = lambda records: place_with_parity(records, parity, tmp, a.rule)  # noqa: E731
         window = measure_window_lines(hits, place, rng)["lines"]
         delay = {}
         if not a.skip_delay:

@@ -16,16 +16,18 @@ property list). Per track:
                round(t * sr) is not a sample of the source (< 0 or >= frames)
   MIDI     M1  format 1, PPQ and tempo read from the file (all set_tempo events); one note per
                hit (outside hits too: the MIDI file has no length; t <= 0 is tick 0), in time order
-           M2  note-on time within half a tick of the hit (the error is reported in samples;
-               at 44.1 and 48 kHz that is 0 samples after rounding). P4-8: through the file's own
-               tempo events, so any tempo map; half a tick is that of the tempo at the note.
-               #466/#479: the file holds whole-microsecond set_tempo events while the notes sit
-               on the map's EXACT tempos, so the note time is checked against the round-trip
+           M2  note-on time within half a tick of the hit's sample (the error is reported in
+               samples; at 44.1 and 48 kHz that is 0 samples after rounding). P4-8: through the
+               file's own tempo events, so any tempo map; half a tick is that of the tempo at the
+               note. #466/#479: the file holds whole-microsecond set_tempo events while the notes
+               sit on the map's EXACT tempos, so the note time is checked against the round-trip
                bound of integer_tempo_round_trip_ticks in crates/core/src/midi/tests.rs: half a
                tick of note rounding plus half a tick per segment boundary before the note (each
                boundary tick is the nearest tick to the step time) plus the elapsed time times
                the worst relative mismatch of the written tempos against the map's exact ones.
-               A whole-microsecond tempo with no steps keeps the strict half a tick.
+               A whole-microsecond tempo with no steps keeps the strict half a tick. #441: the
+               note-on is anchored at the hit's sample (round(t * sr) of the source's rate), so
+               it is judged against that sample, not the plain hit time.
            M4  P4-8: the tempo track holds the document's `tempo_map` (default: one set_tempo of
                500000 and 4/4, no marker): the start tempo, one set_tempo per step within half a
                tick of its time, the start meter at tick 0, a time signature at the tick of each
@@ -356,16 +358,19 @@ def check_midi(path, hits, sr, note, r, tmap=None):
     errs, rounded_off, worst, err_ticks = [], 0, None, []
     bound_ticks, bound_samples = [], []
     for n, (t, v) in zip(notes, hits):
-        want = Fraction(t) if t > 0 else Fraction(0)     # a hit at t <= 0 is tick 0
+        # #441: the note-on is anchored at the hit's sample (round(t * sr) of the source's rate;
+        # a hit at or before 0 s is a note at 0 s), so M2 judges it against that sample. The
+        # note-off keeps the plain time and is checked against t + 50 ms below.
+        want = Fraction(max(0, round(t * sr)), sr)
         # M2: the note time through the file's own integer set_tempo events (n["on_s"]) against
-        # the hit, within the round-trip bound of the note's segment (#466/#479)
+        # the hit's sample, within the round-trip bound of the note's segment (#466/#479)
         j = file_seg(tempos, n["on_tick"])
         us_j = tempos[j][1]
         tick_j = Fraction(us_j, 1_000_000) / ppq
         err = abs(n["on_s"] - want)
         errs.append(float(err * sr))
         err_ticks.append(float(err / tick_j))
-        bound = rt_bound_ticks(ppq, tempos, exact, j, float(t))
+        bound = rt_bound_ticks(ppq, tempos, exact, j, float(want))
         bound_ticks.append(bound)
         bound_samples.append(float(bound * tick_j * sr))
         if err > bound * tick_j:
@@ -392,8 +397,8 @@ def check_midi(path, hits, sr, note, r, tmap=None):
                                  f"after the hit at t={t} (more than the integer limit "
                                  f"{bound_f:.3f} ticks)")
     if worst is not None:
-        r["problems"].append(f"MIDI: note-on {float(worst[0] * sr):+.3f} samples from the hit at "
-                             f"t={worst[1]} (more than the integer round-trip limit)")
+        r["problems"].append(f"MIDI: note-on {float(worst[0] * sr):+.3f} samples from the hit's "
+                             f"sample at t={worst[1]} (more than the integer round-trip limit)")
     overlaps = sum(1 for a, b in zip(notes, notes[1:]) if b["on_tick"] < a["off_tick"])
     r["midi"].update({"err_max_samples": max((abs(e) for e in errs), default=0.0),
                       "err_max_ticks": max(err_ticks, default=0.0),

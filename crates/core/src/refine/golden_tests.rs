@@ -1,5 +1,5 @@
 //! The refine golden (refactor step 2.4, R5): the exact bits of every refined hit on a fixed synthetic corpus, for the
-//! 7 rules, two back-track peak margins and the lead-in switch off and on, plus the sample-bound walk
+//! 10 rules, two back-track peak margins and the lead-in switch off and on, plus the sample-bound walk
 //! (`first_motion_mid`) and its trace (`first_motion_trace`). A move or a parameter object in `refine` must not change
 //! one bit. The values are taken on an Apple-silicon Mac: the FFT of the reference rule may round differently with
 //! another SIMD path, and the corpus uses the platform's `sin` and `exp`, so other targets skip the comparison.
@@ -285,6 +285,7 @@ fn compute() -> Golden {
         RefineRule::Visible,
         RefineRule::Line,
         RefineRule::Departure,
+        RefineRule::Symmetric,
     ];
     let mut reach_seen = [false; 4];
     let mut back_seen = [false; 5];
@@ -360,7 +361,8 @@ fn compute() -> Golden {
 
 /// The golden with the lead-in off (the product): (version, hash at [`FM_PEAK_DB`], hash at [`LOW_MARGIN_DB`]).
 /// Versions 8 and 9 recorded on Apple silicon at #351 (#338 left version 8 without an entry).
-const OFF: [(u32, u64, u64); 9] = [
+/// Version 10 recorded on Apple silicon at #444; the rows of the older versions did not change.
+const OFF: [(u32, u64, u64); 10] = [
     (1, 0xce84_2a40_9231_a3ef, 0xce84_2a40_9231_a3ef),
     (2, 0x0221_4015_c435_0d16, 0x0221_4015_c435_0d16),
     (3, 0x6d67_d448_07a8_c595, 0x7bd1_e669_8800_3c91),
@@ -370,12 +372,13 @@ const OFF: [(u32, u64, u64); 9] = [
     (7, 0x1d41_975c_bdd7_495b, 0xbb3f_b37a_bb64_67f8),
     (8, 0x5725_f75d_4f80_4816, 0x0872_c020_d5a0_6be2),
     (9, 0xedfd_326c_5898_efc3, 0x1b8d_91b9_b44f_612f),
+    (10, 0x7d83_6f80_1e25_a770, 0xb02c_5ad4_d4fa_a5ff),
 ];
 const OFF_MID: u64 = 0x8555_f834_1234_4faf;
 const OFF_TRACE: u64 = 0x4a00_4b51_e34f_2c4f;
 
 /// The golden with the lead-in on (#239, no product path turns it on).
-const ON: [(u32, u64, u64); 9] = [
+const ON: [(u32, u64, u64); 10] = [
     (1, 0xce84_2a40_9231_a3ef, 0xce84_2a40_9231_a3ef),
     (2, 0x0221_4015_c435_0d16, 0x0221_4015_c435_0d16),
     (3, 0xb223_7b9c_5549_e49a, 0x3af3_178b_c6b6_e1a0),
@@ -385,11 +388,12 @@ const ON: [(u32, u64, u64); 9] = [
     (7, 0x1301_7400_f0c2_8044, 0x9fd4_68ab_21e1_86e9),
     (8, 0xbc5f_76ce_f956_2308, 0x1d34_ac3c_580a_2c11),
     (9, 0xd5af_964c_b503_d8a5, 0x27cb_1e14_d347_a838),
+    (10, 0xdf85_45b0_38ce_3b25, 0x73b8_db35_feb7_a200),
 ];
 const ON_MID: u64 = 0xd010_6fcc_4caa_fa2a;
 const ON_TRACE: u64 = 0x63e1_48f2_a4d8_d425;
 
-fn check(g: &Golden, rules: &[(u32, u64, u64); 9], mid: u64, trace: u64, label: &str) {
+fn check(g: &Golden, rules: &[(u32, u64, u64); 10], mid: u64, trace: u64, label: &str) {
     let table: String = g
         .rules
         .iter()
