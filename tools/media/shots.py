@@ -495,6 +495,10 @@ def guide_pictures(page, work, out, wanted):
     page.wait_for_selector("#setAgentSkill.active")
     page.wait_for_function("() => !document.querySelector('#setSkillStatus').textContent.includes('Checking')",
                            timeout=60000)
+    # the command line names the running binary: the shot shows the home-relative form, as the
+    # export dialog shows its destination (no host path in a picture)
+    page.evaluate("""() => { const el = document.querySelector('#setSkillCmd');
+        el.textContent = 'claude mcp add --scope user drumspike -- "~/Applications/Drum Spike/drumspike-desktop" mcp'; }""")
     shoot("img/15-agent-finetune.png", element=page.locator("#settingsModal .modal-box"))
     page.click("#settingsDone")
     page.wait_for_function("() => document.querySelector('#settingsModal').classList.contains('hidden')")
