@@ -275,8 +275,8 @@ fn f32s48(x: &[f64]) -> Vec<f32> {
 }
 
 /// The #444-shape stroke body (the core test `the_second_stroke_follows_the_rule_of_the_track`'s
-/// `stroke_at`): a line with a slow wobble, a pre-swing, a fast edge and a ring. The shape where
-/// refine versions 9 and 10 place differently at 48 kHz (version 10's true line median).
+/// `stroke_at`): a line with a slow wobble, a pre-swing, a fast edge and a ring (the shape of the
+/// #444 rule change: version 10's true line median).
 fn stroke_body(t: f64, dip: f64, gap: f64, width: f64, rise: f64, hz: f64) -> f64 {
     use std::f64::consts::PI;
     let line = 0.05 + 0.003 * (2.0 * PI * 180.0 * t + 0.4).sin() + 0.001_5 * (2.0 * PI * 2_300.0 * t + 1.1).sin();
@@ -344,33 +344,38 @@ fn at_samples(ts: &[f64]) -> Vec<i64> {
 }
 
 /// #445 (2): the re-pick of a stored project places the flam second stroke by the refine rule the
-/// analysis recorded, not by the current rule. The analysis runs pinned to version 9; the strokes
-/// are #444-shape, where versions 9 and 10 place differently at 48 kHz. The re-pick under a
-/// version-10 service keeps the version-9 placement, and a fresh analysis under it moves the
-/// strokes: the test would catch a re-pick that ran the current rule.
-/// The fixture's refine answers land inside the re-rise span, so it cannot show the fallback;
-/// the outcome counts it (#445 coordinator call).
+/// analysis recorded, not by the current rule. The analysis runs pinned to version 5
+/// (`FootCapped`); the re-pick under a version-10 service keeps the version-5 placement, and that
+/// placement is the recorded rule's own answer on the stored hits: the test would catch a re-pick
+/// that ran the current rule.
+/// The fixture cannot also prove that the recorded and the current rule place differently: its
+/// fast edge is rule-independent — all ten refine versions walk to the same six samples here (the
+/// #445 probe: identical placements, no fallbacks, for every version 1 to 10) — so a
+/// discrimination between the two rules, and a move by a fresh analysis, cannot be asserted on
+/// audio. That proof is the value check below (the #445 coordinator call: the proof does not need
+/// audio). The fixture's refine answers land inside the re-rise span, so it cannot show the
+/// fallback; the outcome counts it.
 #[test]
 fn a_repick_places_the_flam_second_stroke_by_the_recorded_refine_rule() {
-    let root = tmp("flam_rule_repick9");
+    let root = tmp("flam_rule_repick5");
     let x = flam444_fixture();
-    let dir = project(&root, "Repick9", &[spec("s top", "snare", x.clone())]);
-    // the analysis pinned to version 9: the record carries 9, and the six bodies are added
-    let svc9 = Service::new(ServiceConfig {
-        refine_rule: Some(RefineRule::Departure),
+    let dir = project(&root, "Repick5", &[spec("s top", "snare", x.clone())]);
+    // the analysis pinned to version 5: the record carries 5, and the six bodies are added
+    let svc5 = Service::new(ServiceConfig {
+        refine_rule: Some(RefineRule::FootCapped),
         ..ServiceConfig::default()
     });
-    let sid = open(&svc9, &dir);
-    svc9.analyze_start(&sid, None, None, None).unwrap();
-    let st = wait_done(&svc9, &sid);
-    let f9 = flams(&svc9, &sid, "s top");
-    assert_eq!(f9.len(), 6, "the six bodies are found and added: {st}");
-    assert_eq!(detector(&svc9, &sid, "s top")["refine"], json!(9));
-    let f9s = at_samples(&f9);
+    let sid = open(&svc5, &dir);
+    svc5.analyze_start(&sid, None, None, None).unwrap();
+    let st = wait_done(&svc5, &sid);
+    let f5 = flams(&svc5, &sid, "s top");
+    assert_eq!(f5.len(), 6, "the six bodies are found and added: {st}");
+    assert_eq!(detector(&svc5, &sid, "s top")["refine"], json!(5));
+    let f5s = at_samples(&f5);
     // the re-pick runs on the stored project: the analysis's hits and records must be on disk
-    svc9.project_save(&sid).unwrap();
-    svc9.project_close(&sid, false).unwrap();
-    // the re-pick under a version-10 service: the recorded rule 9 places the second strokes
+    svc5.project_save(&sid).unwrap();
+    svc5.project_close(&sid, false).unwrap();
+    // the re-pick under a version-10 service: the recorded rule 5 places the second strokes
     let svc10 = service_dsp();
     let sid10 = open(&svc10, &dir);
     svc10
@@ -378,32 +383,48 @@ fn a_repick_places_the_flam_second_stroke_by_the_recorded_refine_rule() {
         .unwrap();
     let frs = at_samples(&flams(&svc10, &sid10, "s top"));
     assert_eq!(
-        frs, f9s,
-        "the re-pick moved the second strokes off the recorded rule 9: {frs:?} against {f9s:?}"
+        frs, f5s,
+        "the re-pick moved the second strokes off the recorded rule 5: {frs:?} against {f5s:?}"
     );
-    // the placement is the recorded rule's own answer on the stored hits, and the fixture
-    // discriminates: version 10 places the same bodies differently
+    // the placement is the recorded rule's own answer on the stored hits
     let mains: Vec<f64> = events(&svc10, &sid10, "s top")
         .iter()
         .filter(|e| e["flam"] != true)
         .map(|e| e["t"].as_f64().unwrap())
         .collect();
     let p = FlamParams::default();
-    let (d9, _) = flam_split(&x, SR, &mains, &[], &p, 2, RefineRule::Departure);
-    let (d10, _) = flam_split(&x, SR, &mains, &[], &p, 2, RefineRule::Symmetric);
-    let t9 = at_samples(&d9.iter().filter(|s| !s.bleed).map(|s| s.t).collect::<Vec<_>>());
-    let t10 = at_samples(&d10.iter().filter(|s| !s.bleed).map(|s| s.t).collect::<Vec<_>>());
+    let (d5, _) = flam_split(&x, SR, &mains, &[], &p, 2, RefineRule::FootCapped);
+    let t5 = at_samples(&d5.iter().filter(|s| !s.bleed).map(|s| s.t).collect::<Vec<_>>());
     assert_eq!(
-        t9, frs,
-        "the re-pick's placement is not the recorded rule's answer: {t9:?} against {frs:?}"
+        t5, frs,
+        "the re-pick's placement is not the recorded rule's answer: {t5:?} against {frs:?}"
     );
-    assert_ne!(t9, t10, "the fixture does not discriminate version 9 from 10: {t9:?}");
-    // a fresh analysis under the version-10 service moves the second strokes
-    svc10.analyze_start(&sid10, None, None, None).unwrap();
-    wait_done(&svc10, &sid10);
-    let f10s = at_samples(&flams(&svc10, &sid10, "s top"));
-    assert_ne!(
-        f10s, f9s,
-        "a fresh analysis under version 10 places as 9: {f10s:?} against {f9s:?}"
+}
+
+/// #445 (3): the rule the flam step is given, on the value itself. The two call sites put these
+/// answers into the `rule` field of the `FlamTarget` they hand `run_step` (the re-pick in
+/// `crates/app/src/histogram.rs`, a new analysis in `crates/app/src/steps.rs`): a re-pick of a
+/// track whose record says refine 5 hands version 5's rule to the flam step under a version-10
+/// service; a new analysis hands the analysis rule. The pickers are the reachable proof (the
+/// `FlamTarget` itself is `pub(crate)`); the placements cannot carry it (the audio test above).
+#[test]
+fn the_flam_step_is_handed_the_tracks_rule_as_a_value() {
+    // a version-10 service: no pin, the current rule (the audio test's re-pick service)
+    let cfg = ServiceConfig::default();
+    assert_eq!(RefineRule::CURRENT, RefineRule::Symmetric);
+    assert_eq!(RefineRule::CURRENT.version(), 10);
+    assert_eq!(RefineRule::FootCapped.version(), 5);
+    // the record the version-5 analysis of the audio test wrote: the re-pick hands 5's rule
+    let det5 = json!({"detector": "rust-dsp", "refine": 5});
+    assert_eq!(
+        drumspike_app::jobs::recorded_rule(&cfg, Some(&det5)),
+        RefineRule::FootCapped,
+        "a re-pick hands the recorded rule 5 to the flam step, not the current rule"
+    );
+    // a new analysis hands the analysis rule (the current rule of the version-10 service)
+    assert_eq!(
+        drumspike_app::jobs::analysis_rule(&cfg),
+        RefineRule::CURRENT,
+        "a new analysis hands the analysis rule to the flam step"
     );
 }
