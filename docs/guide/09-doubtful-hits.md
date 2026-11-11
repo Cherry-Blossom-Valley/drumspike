@@ -8,6 +8,10 @@ the median of its track: a hit as loud as the median gets 1, a hit 24 dB under t
 gets 0. A hit that you added or moved keeps confidence 1, and a hit that is grey does not
 count. A hit under 0.5 is doubtful.
 
+With Training Mode on (chapter 16), the queue also lists a hit whose placement is in doubt:
+no steep edge at the stored position, a noisy or sloping line before the stroke, or onset
+estimates that disagree.
+
 ## Steps
 
 1. Press `D` for **Hits > Next Doubtful Hit**. The queue holds the doubtful hits of all

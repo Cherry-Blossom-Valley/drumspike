@@ -26,7 +26,8 @@ the kick in, sample-exact, with velocities from its own signal.
    at every hit of the track, with its onset on the hit.
 6. Shape the layer with the controls of the section: **Play** on or off during playback, the
    **Level** in dB, the **Polarity** (normal, inverted, or auto), and the **Velocity curve**
-   (dB, linear, or fixed). **Align** places each hit's one-shot where its attack matches the
+   (dB, linear, or fixed). The dB curve takes a range: the field beside it sets how far the
+   quieter velocities fall, up to 96 dB. **Align** places each hit's one-shot where its attack matches the
    close mic best; **Measure** shows the match of every hit.
 7. The Onset view shows the first 200 ms of the one-shot. Drag the line to set the moment
    the one-shot sounds on each hit; **Reset onset** goes back to the measured one.
@@ -35,7 +36,8 @@ the kick in, sample-exact, with velocities from its own signal.
 9. If your sampler is late, use the sampler calibration at the bottom of the section: save
    the **Calibration MIDI…**, import it in your DAW at the session start, bounce the kit
    piece, and load the bounce with **Load bounce...**. The MIDI exports then put each note
-   on the aligned attack minus the offset of your sampler.
+   on the aligned attack minus the offset of your sampler. **Use as one-shot** sets the
+   loaded bounce as the track's one-shot, with its polarity.
 
 The layer and the sampler calibration also work from the agent API (chapter 14).
 
