@@ -543,10 +543,11 @@ fn the_dsp_fallback_runs_without_a_model_file() {
     let parsed = parse_params(None).unwrap();
     let (a, det) = slot.analyze_prepared(&cfg, &x, 48_000, "kick", &parsed, None).unwrap();
     assert!(a.events.is_empty());
-    // P4-12: the record names the refinement rule; parse_params alone keeps the engine's (1)
+    // P4-12: the record names the refinement rule; parse_params alone keeps the default
+    // (#440: `RefineRule::CURRENT`)
     assert_eq!(
         det,
-        json!({"detector": "rust-dsp", "chain": null, "model": null, "refine": 1})
+        json!({"detector": "rust-dsp", "chain": null, "model": null, "refine": RefineRule::CURRENT.version()})
     );
     let mut reach = parse_params(None).unwrap();
     reach.params.rule = RefineRule::Reach;
