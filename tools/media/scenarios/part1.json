@@ -81,7 +81,7 @@
       {"do": "wait", "cond": "() => S.view && (S.view.t1 - S.view.t0) <= 0.006", "timeout": 15, "err": "the 5 ms zoom"},
       {"do": "hold", "s": 1.5}
     ]},
-    {"id": "p1-export", "steps": [
+    {"id": "p1-export", "area_sel": "#exportModal", "steps": [
       {"do": "caption", "text": "File > Export…"},
       {"do": "zoom_to", "track": "s_top", "t": 16.0938, "span": 5},
       {"do": "show_dest", "text": "~/Music/Drum Spike/Exports",
@@ -90,6 +90,7 @@
       {"do": "visible", "sel": "#exportModal", "timeout": 30, "err": "the Export dialog"},
       {"do": "wait", "cond": "() => document.querySelector('#exModeTrack').checked && document.querySelector('#exMidi').checked && document.querySelector('#exSpikes').checked && document.querySelector('#exSpikeSynth').checked", "timeout": 15, "err": "the defaults: per track, MIDI and spike WAV, Synthetic"},
       {"do": "hold", "s": 1.5},
+      {"do": "shot", "err": "before: the Export dialog with the defaults"},
       {"do": "click", "sel": "#exGo"},
       {"do": "wait", "cond": "() => !document.querySelector('#confirmModal').classList.contains('hidden') || (!EX.busy && document.querySelector('#exResult') && !document.querySelector('#exResult').classList.contains('hidden'))", "timeout": 30,
        "err": "the No tempo set notice shows, or the export finished without one (the notice arrives a few IPC round-trips after the click: wait for it to SHOW, never for not-visible-yet)"},
@@ -101,6 +102,7 @@
       {"do": "show_dest", "text": "~/Music/Drum Spike/Exports", "err": "the destination again (every exRender of the app re-asserts it; this re-patches if the hook missed)"},
       {"do": "visible", "sel": "#exResult", "timeout": 15, "err": "the summary lists the files"},
       {"do": "hold", "s": 1.5},
+      {"do": "shot", "err": "after: the summary lists the files"},
       {"do": "click", "sel": "#exCancel"},
       {"do": "wait", "cond": "() => document.querySelector('#exportModal').classList.contains('hidden')", "timeout": 15, "err": "the dialog closed"},
       {"do": "hold", "s": 1.5}

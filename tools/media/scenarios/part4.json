@@ -86,6 +86,11 @@
       {"do": "text", "sel": "#stMsg", "contains": "licence accepted", "timeout": 15, "err": "the status line: licence accepted, the plug-in runs on the next re-analyze"},
       {"do": "hold", "s": 1.5},
       {"do": "click", "sel": "#insParams .bReanalyze", "timeout": 15, "err": "Re-analyze with the plug-in"},
+      {"do": "hold", "s": 1.5,
+       "err": "the Re-analyze question is new on screen: the pointer and the question hold before the answer"},
+      {"do": "click", "sel": "#confirmActions button[data-act='go']", "timeout": 15,
+       "err": "the Re-analyze confirm: k_in has unedited events, so startAnalysisGo asks before it overwrites (0.9.33)"},
+      {"do": "wait", "cond": "() => analysisRunning", "timeout": 30, "err": "the re-analyze started"},
       {"do": "wait", "cond": "() => !analysisRunning", "timeout": 180, "err": "the re-analyze with the plug-in finished"},
       {"do": "wait", "cond": "() => (S.events['k_in'] || []).length === 21", "timeout": 30, "err": "the plug-in's 21 hits (every third kick of the demo session), refined to the attack"},
       {"do": "hold", "s": 2.0}
