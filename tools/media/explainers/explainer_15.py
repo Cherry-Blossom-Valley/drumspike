@@ -175,8 +175,10 @@ class Explainer15(Explainer):
             nudge_tag.move_to([(hx + last_x) / 2, HIT_Y + 0.75, 0])
             self.t_play(Create(nudge), FadeIn(nudge_tag), t=2.0)
         else:
+            # #497: the last-line stalk reaches HIT_Y + 0.9, so the tag sits above its reach;
+            # at HIT_Y + 0.75 the stalk at last_x ran straight through the text.
             nudge_tag = Text("this hit is already on the last line sample", font=FONT,
-                             font_size=22, color=ORANGE).move_to([0.0, HIT_Y + 0.75, 0])
+                             font_size=22, color=ORANGE).move_to([0.0, HIT_Y + 1.15, 0])
             self.t_play(FadeIn(nudge_tag), t=2.0)
         self.say("The nudge moves it there by whole samples.", t=2.0)
         confirm = Text("Hits > Confirm Hit: reviewed, right where it is", font=FONT,
