@@ -149,8 +149,11 @@ class Explainer05(Explainer):
                  color=DIM, stroke_width=2),
             Line([-PLOT_W / 2, -0.25 * 1.8, 0], [PLOT_W / 2, -0.25 * 1.8, 0],
                  color=DIM, stroke_width=2))
+        # at the right end of the band line, above the last swing: the 0.4 swing's peak is at
+        # 0.72 and the text's box is 0.85 up, but next_to(band[0], UP) alone sits on the +0.8
+        # swing's curve (#497)
         mark = Text("a quarter of the largest (P)", font=FONT, font_size=22,
-                    color=DIM).next_to(band[0], UP)
+                    color=DIM).next_to(band[0], UP, buff=0.4).align_to(band[0], RIGHT)
         tag = Text("illustration", font=FONT, font_size=22, color=DIM).shift(
             UP * 2.4 + LEFT * 4.6)  # top-left: clear of the '3' above the last hump
         self.t_play(Create(band), FadeIn(mark), FadeIn(tag), t=1.5)
@@ -211,9 +214,11 @@ class Explainer05(Explainer):
                             (kend - onset_k) // WHOLE_DECIMATE, 1.5, 1.1)
         sband = shaded_band(len(sr_), (S0 - onset_s) // WHOLE_DECIMATE,
                             (send - onset_s) // WHOLE_DECIMATE, -1.5, 1.1)
+        # left of the line start: the wave runs from -PLOT_W / 2 through the words at
+        # LEFT * 5.6 (#497)
         names = VGroup(
-            Text("kick", font=FONT, font_size=26, color=DIM).shift(LEFT * 5.6 + UP * 1.5),
-            Text("snare", font=FONT, font_size=26, color=DIM).shift(LEFT * 5.6 + DOWN * 1.5))
+            Text("kick", font=FONT, font_size=26, color=DIM).shift(LEFT * 6.3 + UP * 1.5),
+            Text("snare", font=FONT, font_size=26, color=DIM).shift(LEFT * 6.3 + DOWN * 1.5))
         self.t_play(Create(top), Create(bottom), FadeIn(names), t=3)
         self.t_play(FadeIn(kband), FadeIn(sband), t=2)
         self.say("Two real hits: the kick breathes longer, the snare is short and crisp.", t=3)
