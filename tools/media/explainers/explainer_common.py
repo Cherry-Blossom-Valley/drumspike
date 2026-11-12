@@ -92,6 +92,65 @@ def assert_no_text_overlap(scene, sid=""):
                     f"{sid}: two visible texts overlap: {_label(boxes[i][0])} and {_label(boxes[j][0])}")
 
 
+# ---------------- #497: a text never lies on a drawn line ----------------
+
+class TextOnLineError(Exception):
+    """A visible stroked data line passes through the bounding box of a visible text."""
+
+
+def visible_data_lines(scene):
+    """Every visible data line of the scene: a VMobject drawn with a stroke — a wave line, a
+    threshold, a cut, a spike. Filled-only shapes (the shaded snippet band) are no lines, and
+    neither are texts: a text's glyphs are fills, and #459 owns the texts."""
+    from manim import MarkupText, Text, VMobject
+    text_parts = set()
+    for t in visible_texts(scene):
+        text_parts.update(id(sub) for sub in t.get_family())
+    out = []
+    for m in scene.mobjects:
+        for sub in m.get_family():
+            if id(sub) in text_parts or not isinstance(sub, VMobject):
+                continue
+            if getattr(sub, "stroke_width", 0) > 0 and getattr(sub, "stroke_opacity", 1) > 0 and len(sub.points):
+                out.append(sub)
+    return out
+
+
+def _segments_enter_box(ax, ay, dx, dy, x0, y0, x1, y1):
+    """Whether any of the segments A -> A + (dx, dy) enters the open box (a Liang-Barsky slab
+    test; the box is already shrunk by eps, so a line only touching an edge is no hit)."""
+    t0 = np.zeros(len(ax))
+    t1 = np.ones(len(ax))
+    dead = np.zeros(len(ax), dtype=bool)
+    for p, q in ((-dx, ax - x0), (dx, x1 - ax), (-dy, ay - y0), (dy, y1 - ay)):
+        parallel = p == 0
+        dead |= parallel & (q < 0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = q / p
+        t0 = np.where(~parallel & (p < 0), np.maximum(t0, t), t0)
+        t1 = np.where(~parallel & (p > 0), np.minimum(t1, t), t1)
+    return bool((~dead & (t0 <= t1)).any())
+
+
+def assert_no_text_on_line(scene, sid=""):
+    """FAIL (TextOnLineError, named with the scene and the text) when a visible data line passes
+    through the bounding box of a visible text. The box is the glyphs' axis-aligned box; a line
+    that only touches the box's edge is no overlap, like in the #459 check."""
+    from manim import DOWN, LEFT, RIGHT, UP
+    lines = visible_data_lines(scene)
+    if not lines:
+        return
+    eps = 1e-6
+    for t in visible_texts(scene):
+        x0, x1 = t.get_critical_point(LEFT)[0], t.get_critical_point(RIGHT)[0]
+        y0, y1 = t.get_critical_point(DOWN)[1], t.get_critical_point(UP)[1]
+        for line in lines:
+            pts = np.asarray(line.points, dtype=float).reshape(-1, 3)
+            if _segments_enter_box(pts[:-1, 0], pts[:-1, 1], pts[1:, 0] - pts[:-1, 0],
+                                   pts[1:, 1] - pts[:-1, 1], x0 + eps, y0 + eps, x1 - eps, y1 - eps):
+                raise TextOnLineError(f"{sid}: a data line runs through the text {_label(t)}")
+
+
 class Explainer(Scene):
     """Base of an explainer. Subclasses define a method per scene, named after its id (`s01-hook` is `s01_hook`)."""
 
@@ -114,8 +173,11 @@ class Explainer(Scene):
         self.note.add_updater(lambda m: self.guard_overlap())
 
     def guard_overlap(self):
-        """The overlap guard of this frame: OverlapError (named with the scene) on an overlap."""
-        assert_no_text_overlap(self, sid=self.sid or "scene")
+        """The overlap guards of this frame: #459 (two texts on top of each other) and #497 (a
+        text on a drawn line), each an error named with the scene."""
+        sid = self.sid or "scene"
+        assert_no_text_overlap(self, sid=sid)
+        assert_no_text_on_line(self, sid=sid)
 
     def construct(self):
         for sid in self.script_ids:

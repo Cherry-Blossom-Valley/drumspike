@@ -49,8 +49,9 @@ def hit_labels(picks, dur):
 
 
 def map_xy(db, v):
-    """Where a dot's label sits on the s04 map: up and to the right of the dot."""
-    return x_db(db) + 0.4, y_v(v) + 0.3
+    """Where a dot's label sits on the s04 map: up and to the left of the dot. The map's
+    diagonal rises to the right through every dot, so up-right met it (#497 sweep)."""
+    return x_db(db) - 0.4, y_v(v) + 0.3
 
 
 def _boxes_meet(a, b):
@@ -191,8 +192,11 @@ class Explainer08(Explainer):
         rows = {name: {"level_db": db} for name, _, db in picks}
         mapped = dict(map_points([row["level_db"] for row in rows.values()]))
         velocities = {name: mapped[row["level_db"]] for name, row in rows.items()}
+        # the map's diagonal leaves the floor corner up-right: an up-right label met it
+        # (#497 check-overlap sweep), so the floor's velocity sits left of the corner, over
+        # the incoming floor segment
         labels = VGroup(Text("20", font=FONT, font_size=24, color=TEXT)
-                        .move_to([x_db(-40.0) + 0.4, y_v(20) + 0.3, 0]),
+                        .move_to([x_db(-40.0) - 0.4, y_v(20) + 0.3, 0]),
                         *map_labels(rows, velocities, map_xy))
         self.t_play(Create(app_map), FadeIn(axes), t=3)
         self.t_play(FadeIn(dots, labels), t=2)

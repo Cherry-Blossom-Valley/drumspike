@@ -900,11 +900,16 @@ def run_step(page, st, env):
         page.click(st["sel"], timeout=timeout)
     elif kind == "lane_click":
         # A real mouse click at a lane position: the ghost-note selection of the Learn scenes
-        # clicks a hit's spike, which no element selector addresses.
+        # clicks a hit's spike, which no element selector addresses. With "dbl": true it is a
+        # real double-click: the app's own hand-place edit (#483, the spike lane's dblclick
+        # -> addHitAt: the hit lands on the snapped sample, magenta, origin added).
         x, y = lane_point(page, st["track"], st.get("lane", "spike"), st["t"])
         glide(page, x, y)
         page.evaluate(RING_JS, [x, y])
-        page.mouse.click(x, y)
+        if st.get("dbl") is True:
+            page.mouse.dblclick(x, y)
+        else:
+            page.mouse.click(x, y)
     elif kind == "drag":
         # A real mouse drag in a lane: the wave lane's range select (the Learn add range).
         # wait_sel waits for the selection the gesture leaves (DSLearn.state().sel).
