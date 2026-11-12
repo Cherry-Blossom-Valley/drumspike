@@ -123,10 +123,10 @@
         {"do": "hold", "s": 1.5},
         {"do": "agent", "fn": "look", "track": "k_in", "t": 2.4997, "timeout": 30,
          "err": "the look at the hand-placed hit (the lane at the hit, nothing moves)"},
-        {"do": "hold", "s": 2.0},
+        {"do": "hold", "s": 1.5},
         {"do": "terminal", "file": "tools/media/fixtures/agent-run/transcript.txt",
          "lines": [96, 96], "title": "claude -p"},
-        {"do": "hold", "s": 3.0}
+        {"do": "hold", "s": 1.5}
       ]
     },
     {
