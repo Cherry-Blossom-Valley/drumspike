@@ -126,6 +126,25 @@ def label_rows(xs, gap=0.4):
     return rows
 
 
+def rank_positions(queue, dur):
+    """The (rank, track, x, y) of every rank label of the queue: under its lane's baseline, one row
+    down when two labels are close in x. When two items share a t (the same hit seen in both
+    tracks; equal to within 1e-3), the playhead's jump between them runs down that column and would
+    cross a label under the baseline, so such a label sits beside its stalk, 0.3 left of it: #497."""
+    columns = {}
+    for p in queue:
+        x = round(x_of(p["t"], dur), 3)
+        columns[x] = columns.get(x, 0) + 1
+    out = []
+    for n in TRACKS:
+        items = [(rank, p) for rank, p in enumerate(queue, start=1) if p["track"] == n]
+        items.sort(key=lambda rp: rp[1]["t"])
+        xs = [x_of(p["t"], dur) for _, p in items]
+        for (rank, p), x, row in zip(items, xs, label_rows(xs)):
+            out.append((rank, n, x - 0.3 if columns[round(x, 3)] > 1 else x, BASE[n] - 0.3 - 0.35 * row))
+    return out
+
+
 class Explainer09(Explainer):
     script_ids = ("s01-problem", "s02-confidence", "s03-queue", "s04-why", "s05-decide", "s06-result")
     # The seconds that each scene's steps take at pace 1 (the sum of its t= values). A scene whose narration is
@@ -194,14 +213,10 @@ class Explainer09(Explainer):
         return out
 
     def rank_numbers(self):
-        """The place of each doubtful hit in the queue, under its lane's baseline (rows when two are close)."""
+        """The rank labels of the queue, at rank_positions."""
         out = VGroup()
-        for n in TRACKS:
-            items = [(rank, p) for rank, p in enumerate(self.queue, start=1) if p["track"] == n]
-            items.sort(key=lambda rp: rp[1]["t"])
-            xs = [x_of(p["t"], self.dur) for _, p in items]
-            for (rank, p), x, row in zip(items, xs, label_rows(xs)):
-                out.add(Text(str(rank), font=FONT, font_size=20, color=ORANGE).move_to([x, BASE[n] - 0.3 - 0.35 * row, 0]))
+        for rank, n, x, y in rank_positions(self.queue, self.dur):
+            out.add(Text(str(rank), font=FONT, font_size=20, color=ORANGE).move_to([x, y, 0]))
         return out
 
     def playhead(self, item):
