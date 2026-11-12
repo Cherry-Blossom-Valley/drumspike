@@ -309,15 +309,15 @@ def test_scan_lists_a_removed_hit_and_nothing_there_before_it(app, make_project,
     folder = build(make_project, tmp_path, events={TRACK: exact_events()})
     open_project(app, folder)
     analyse(app)                                   # the candidate list comes from the kept detection
-    before = call(app, "DSAgent.scan(TRACK)")
+    before = call(app, f"DSAgent.scan('{TRACK}')")
     assert before["limit"]
     assert all(abs(c["time"] - ONSETS[1]) > 0.001 for c in before["candidates"]), before
     app.evaluate("() => { S.events['Kick In'].splice(1, 1); return flushEvents(); }")
     edits_done(app)
-    r = call(app, "DSAgent.scan(TRACK)")
-    there = [c for c in r["candidates"] if abs(c["time"] - ONSETS[1]) <= 0.001]
-    assert len(there) == 1, r
-    assert there[0]["sample"] == round(ONSETS[1] * SR)
+    r = call(app, f"DSAgent.scan('{TRACK}')")
+    there = [c for c in r["candidates"] if abs(c["time"] - ONSETS[1]) <= 0.02]
+    assert len(there) == 1, (r, app.evaluate("() => S.events['Kick In']"))
+    assert abs(there[0]["sample"] - ONSETS[1] * SR) <= 0.013 * SR   # the coarse candidate time, within the refine window
     assert "no hit is stored" in there[0]["reason"], there[0]
 
 
@@ -331,7 +331,7 @@ def test_scan_lists_no_existing_hit_and_changes_nothing(app, make_project, tmp_p
     log = Path(app.evaluate("async () => (await B.trainingStatus(S.sid)).path"))
     log_before = log.read_bytes() if log.exists() else b""
     events_before = invoke(app, "events_get", sid=sid, name=TRACK)["events"]
-    r = call(app, "DSAgent.scan(TRACK)")
+    r = call(app, f"DSAgent.scan('{TRACK}')")
     assert isinstance(r["candidates"], list) and r["limit"]
     for e in events_before:
         assert all(abs(c["time"] - e["t"]) > 0.01 for c in r["candidates"]), (e, r["candidates"])
@@ -349,7 +349,7 @@ def test_scan_answers_with_the_mode_off_and_writes_nothing(app, make_project, tm
     events_before = invoke(app, "events_get", sid=sid, name=TRACK)["events"]
     log = Path(app.evaluate("async () => (await B.trainingStatus(S.sid)).path"))
     log_before = log.read_bytes() if log.exists() else b""
-    r = call(app, "DSAgent.scan(TRACK)")
+    r = call(app, f"DSAgent.scan('{TRACK}')")
     assert isinstance(r["candidates"], list) and r["limit"]
     assert invoke(app, "events_get", sid=sid, name=TRACK)["events"] == events_before
     assert (log.read_bytes() if log.exists() else b"") == log_before

@@ -421,13 +421,15 @@
       const evs = S.events[track] || [], p = S.tracks[track].params || {};
       const sens = Number.isFinite(p.sensitivity) ? Math.round(p.sensitivity) : 50;
       const half = (Number.isFinite(p.min_gap_ms) ? p.min_gap_ms : 20) / 2000;
+      const lo = (Number.isFinite(p.refine_lo_ms) ? p.refine_lo_ms : -2) / 1000,
+            hi = (Number.isFinite(p.refine_hi_ms) ? p.refine_hi_ms : 12) / 1000;
       const BLIND = "the scan reads only the detector's own candidate list: a stroke with no candidate there - one that bleed or a louder neighbour masks, or that the chain smooths away - is not found, and a cut candidate under the quietest kept hit is not listed";
       const h = await B.histograms(S.sid, track, evs);
       const det = h.detection || {};
       if (det.state !== "ok")
         return { candidates: [], limit: `no candidate list of ${track} (state ${det.state || "none"}): analyze the track once, then scan again. ${BLIND}.` };
       const sr = S.tracks[track].sr;
-      const near = t => evs.some(e => Math.abs(e.t - t) <= half);
+      const near = t => evs.some(e => e.t - t >= lo - half && e.t - t <= hi + half);   // a stored hit sits in the refine window around its coarse candidate (lo..hi), plus the minimum gap on both sides
       const out = [];
       for (const c of det.candidates) {
         if (c[3] <= sens) {                       // kept by the detection at the track's sensitivity
