@@ -24,13 +24,13 @@ Add your tracks. Drum Spike reads the roles from your file names, and its detect
 
 ## pv-exact
 
-> Explainer 4, scene s05-walk-back (73.0-77.46 s), then recording part 1, the 5 ms zoom of p1-zoom (41.65-45.68 s).
+> Explainer 4, scene s05-first-motion (73.0-77.46 s), then recording part 1, the 5 ms zoom of p1-zoom (41.65-45.68 s).
 
 Then it walks back to the first motion of each attack. Soft and loud hits land on the same point.
 
 ## pv-fix
 
-> Explainer 10, the marked hit and the other mics under it (155.5-157.7 s), then recording part 2, the velocity lane (79.0-81.2 s), then recording part-learn, scene pl-grey with the marked hit and its near copies grey (27.0-29.21 s).
+> Explainer 10, scene s08-control (173.5-175.7 s): the marked hit and the other mics under it, then recording part 2, the velocity lane (79.0-81.2 s), then recording part-learn, scene pl-grey with the marked hit and its near copies grey (27.0-29.21 s).
 
 Check the doubtful hits first, shape the velocities, and teach it by example.
 
