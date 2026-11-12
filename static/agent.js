@@ -408,6 +408,59 @@
       }
       return out;
     },
+    /* #412: the strokes the detector computed that carry no hit, read-only. It reads the detector's own
+       candidate list (the kept detection, the way the Sensitivity histogram reads it) and the hits, and
+       changes nothing: no event, no mark, no record, and it answers with Training Mode off too. A
+       candidate within the minimum gap of an existing hit is never listed. A candidate the sensitivity
+       keeps but that has no hit is listed (the hit was removed or merged away). A candidate the
+       sensitivity cuts is listed when its peak level, measured the way the loudness histogram measures a
+       hit (5 ms before to 60 ms after the time), is louder than the quietest hit the track keeps: the
+       detector's own measures, no second detector. `limit` says what the scan cannot see. */
+    async scan(track) {
+      need(track);
+      const evs = S.events[track] || [], p = S.tracks[track].params || {};
+      const sens = Number.isFinite(p.sensitivity) ? Math.round(p.sensitivity) : 50;
+      const half = (Number.isFinite(p.min_gap_ms) ? p.min_gap_ms : 20) / 2000;
+      const BLIND = "the scan reads only the detector's own candidate list: a stroke with no candidate there - one that bleed or a louder neighbour masks, or that the chain smooths away - is not found, and a cut candidate under the quietest kept hit is not listed";
+      const h = await B.histograms(S.sid, track, evs);
+      const det = h.detection || {};
+      if (det.state !== "ok")
+        return { candidates: [], limit: `no candidate list of ${track} (state ${det.state || "none"}): analyze the track once, then scan again. ${BLIND}.` };
+      const sr = S.tracks[track].sr;
+      const near = t => evs.some(e => Math.abs(e.t - t) <= half);
+      const out = [];
+      for (const c of det.candidates) {
+        if (c[3] <= sens) {                       // kept by the detection at the track's sensitivity
+          if (!near(c[0])) out.push({ time: c[0], sample: Math.round(c[0] * sr), reason: "kept by the detection but no hit is stored (removed or merged away)" });
+        }
+      }
+      const levels = h.loudness && Array.isArray(h.loudness.levels) ? h.loudness.levels : [];
+      const quietest = levels.length ? Math.min(...levels) : null;   // dBFS of the quietest hit the track keeps
+      if (quietest !== null) {
+        const SPAN_BEFORE = 0.005, SPAN_AFTER = 0.060, cut = det.candidates.filter(c => c[3] > sens && !near(c[0]));
+        const spans = cut.map(c => [Math.max(0, Math.floor((c[0] - SPAN_BEFORE) * sr)), Math.ceil((c[0] + SPAN_AFTER) * sr)]).sort((a, b) => a[0] - b[0]);
+        const merged = [];
+        for (const s of spans) { const last = merged[merged.length - 1]; if (last && s[0] <= last[1]) last[1] = Math.max(last[1], s[1]); else merged.push([...s]); }
+        const dbOf = new Map();
+        for (const [a, b] of merged) {
+          const r = await B.samples(S.sid, track, a, b);
+          if (!r || !r.data) continue;
+          for (const c of cut) {
+            const i0 = Math.round(c[0] * sr) - Math.round(SPAN_BEFORE * sr) - r.start, i1 = i0 + Math.round((SPAN_BEFORE + SPAN_AFTER) * sr);
+            if (i0 < 0 || i1 > r.data.length) continue;
+            let pk = 0;
+            for (let i = i0; i < i1; i++) pk = Math.max(pk, Math.abs(r.data[i]));
+            dbOf.set(c[0], 20 * Math.log10(Math.max(pk, 1e-9)));
+          }
+        }
+        for (const c of cut) {
+          const db = dbOf.get(c[0]);
+          if (db !== undefined && db > quietest) out.push({ time: c[0], sample: Math.round(c[0] * sr), reason: `cut by the sensitivity (the slider would need ${c[3]}) but louder than the quietest hit the track keeps` });
+        }
+      }
+      out.sort((a, b) => a.time - b.time);
+      return { candidates: out, limit: `${BLIND}.` };
+    },
     /* #418: the hand-placed hits of a track: the hits with a move, add or confirm record whose `by` is `person`
        or absent (an older log has no `by`). The service reads the training log - it is far too large to read -
        and answers one trimmed row per record: {track, op, by, id, sample}. This helper keeps the person rows and

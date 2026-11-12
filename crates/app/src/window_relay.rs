@@ -23,7 +23,7 @@ use crate::bridge::{HttpReply, HttpRequest, IDLE_READ_TIMEOUT, MAX_BODY, read_bo
 use crate::{AppError, Service};
 
 /// The helpers of `window.DSAgent` that the endpoint passes on; any other name is refused before it reaches the page.
-pub const FUNCTIONS: [&str; 17] = [
+pub const FUNCTIONS: [&str; 18] = [
     "project",
     "hits",
     "look",
@@ -34,6 +34,7 @@ pub const FUNCTIONS: [&str; 17] = [
     "undo",
     "plan",
     "audit",
+    "scan",
     "handPlaced",
     "apply",
     "save",

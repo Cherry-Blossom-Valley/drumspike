@@ -64,6 +64,9 @@ it.
   more: a hit that is still late is listed one by one, with the reason.
 - Its report after the save splits the untouched hits into "looked at, right" and "no quiet
   stretch", and its "not looked at" column is zero.
+- It scans every track once for strokes the detector computed but that carry no hit, and lists them
+  for you with the reason the detector made no hit there (and what the scan cannot see). It adds
+  none of them on its own.
 - It reports counts only: how many hits it saw, moved, confirmed and left for you. The save keeps
   a backup of the state before the session, and the agent can name it.
 
