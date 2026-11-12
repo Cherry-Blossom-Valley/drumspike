@@ -18,8 +18,15 @@ lands on its narration: a clip list shorter than the scene holds its last frame,
 one is cut at the scene end. The
 video is the media plan's 1920x1080, h264 + aac; the scene audio sits at the scene starts of
 the 30 fps frame grid, so the drift per scene is the frame rounding only (FAIL over 100 ms).
-FAIL also on a missing clip file, a clip beyond its file's end, a speed over 2x, or a scene id
-without narration. The clip audio is dropped: the narration is the only audio (no music).
+FAIL also on a missing clip file, a clip beyond its file's end, a speed over 2x, a scene id
+without narration, or an explainer clip source that is not the build that
+tools/media/clip-sources.json names (#494: the manifest holds the sha256 of every listed
+explainer's file, of its script (docs/product/scripts/explainer-NN-*.md) and of its builder
+(tools/media/explainers/explainer_NN.py), so a rebuild of an explainer on any host turns the
+plain pytest in tests/test_media_compose_sources.py red until the manifest is updated).
+The output is written to a temporary file and moved to the output path only on success: a
+failed run leaves the previous output exactly as it was. The clip audio is dropped: the
+narration is the only audio (no music).
 Heavy: run under the host lock (crewboard lock run ...).
 """
 import argparse
@@ -35,6 +42,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CACHE = Path.home() / ".cache" / "drumspike" / "media"
+CLIP_SOURCES = ROOT / "tools" / "media" / "clip-sources.json"
 OUT_W, OUT_H = 1920, 1080     # the media plan: 1920x1080
 FPS = 30
 DRIFT_LIMIT_S = 0.1
@@ -199,6 +207,61 @@ def check_clip_ends(plan):
                                    f"but the file is {dur:.3f} s")
 
 
+def check_sources_current(plan):
+    """#494: the check against old clip sources. Every explainer a scene cuts from must be the
+    current build: its sha256 is in tools/media/clip-sources.json and matches the file. A media
+    cache that still holds an old explainer (a replaced build) FAILs here instead of slipping
+    stale footage into the video. Recordings are not listed (they are re-recorded per version)."""
+    import hashlib
+    manifest = json.loads(CLIP_SOURCES.read_text(encoding="utf-8"))["explainers"]
+    for sc in plan["scenes"]:
+        for cl in sc["clips"]:
+            if "title" in cl:
+                continue
+            src = expand(cl["source"])
+            if not src.name.startswith("explainer-"):
+                continue
+            if src.name not in manifest:
+                raise ComposeError(f"{sc['id']}: {src.name} is not in {CLIP_SOURCES.name} "
+                                   f"(an old or unknown build: stage the current one, then list it)")
+            digest = hashlib.sha256(src.read_bytes()).hexdigest()
+            if digest != manifest[src.name]["file"]:
+                raise ComposeError(f"{sc['id']}: {src.name} is not the build that "
+                                   f"{CLIP_SOURCES.name} names (sha256 {digest[:16]}... against "
+                                   f"{manifest[src.name]['file'][:16]}...): pick the clips of this "
+                                   f"scene again, then update the manifest")
+
+
+def manifest_mismatches(root=ROOT, manifest=None):
+    """#494: the manifest is tied to the checkout. For every listed explainer the manifest also
+    holds the sha256 of its script (docs/product/scripts/explainer-NN-*.md) and of its builder
+    (tools/media/explainers/explainer_NN.py). Returns one message per mismatch, each naming the
+    explainer file and the differing path, so a change of the script or the builder turns CI red
+    until the manifest gets the new build (a plain pytest, no media needed)."""
+    import hashlib
+    if manifest is None:
+        manifest = json.loads((root / CLIP_SOURCES.relative_to(ROOT)).read_text(encoding="utf-8"))
+    bad = []
+    for name, entry in sorted(manifest["explainers"].items()):
+        for kind in ("script", "builder"):
+            rel, expected = entry[kind]["path"], entry[kind]["sha256"]
+            actual = hashlib.sha256((root / rel).read_bytes()).hexdigest()
+            if actual != expected:
+                bad.append(f"{name}: {rel} is not the build that the manifest names "
+                           f"(sha256 {actual[:16]}... against {expected[:16]}...): "
+                           f"update the manifest")
+    return bad
+
+
+def finalize_output(result, tmp, out):
+    """The output lands atomically: ffmpeg writes a temporary file and it moves to the output
+    path only on success — a failed run leaves the old output exactly as it was."""
+    if result.returncode:
+        Path(tmp).unlink(missing_ok=True)
+        raise ComposeError(f"ffmpeg failed: {result.stderr.strip()[-800:]}")
+    os.replace(str(tmp), str(out))
+
+
 def build_narration(items, starts, total_s, path):
     """One narration WAV: every scene's audio at its scene's video start (the frame grid), so
     the audio never drifts against the video by more than the scene's own rounding."""
@@ -351,6 +414,7 @@ def compose(plan, tts_dir, out, work, keep=False):
     plan = parse_plan(plan)
     items = load_narration(tts_dir, [sc["id"] for sc in plan["scenes"]])
     check_clip_ends(plan)
+    check_sources_current(plan)
     scenes_plan = [scene_plan(sc["clips"], narr_s)
                    for sc, (_, _, narr_s) in zip(plan["scenes"], items)]
     for sc, sp, (_, _, narr_s) in zip(plan["scenes"], scenes_plan, items):
@@ -373,6 +437,7 @@ def compose(plan, tts_dir, out, work, keep=False):
                 cards[(k, j)] = render_title_card(work, f"{k}-{j}", lines, accent)
     parts, inputs, last = build_graph(plan, scenes_plan, badge_files, cards, render_note(work))
     narration_idx = len(inputs)
+    tmp = out.parent / (out.name + ".partial.mp4")
     cmd = ["ffmpeg", "-y", "-v", "error"]
     for entry in inputs:
         if entry["kind"] == "lavfi":
@@ -385,10 +450,8 @@ def compose(plan, tts_dir, out, work, keep=False):
             "-map", last, "-map", f"{narration_idx}:a",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", "-t", f"{total:.6f}",
-            str(out)]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode:
-        raise ComposeError(f"ffmpeg failed: {r.stderr.strip()[-800:]}")
+            str(tmp)]
+    finalize_output(subprocess.run(cmd, capture_output=True, text=True), tmp, out)
     if not keep:
         shutil.rmtree(work, ignore_errors=True)
     return scenes_plan, items, total

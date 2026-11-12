@@ -1,0 +1,20 @@
+{
+  "comment": "#494: for every explainer the product video cuts from, the sha256 of its current build (file), of its script (docs/product/scripts/explainer-NN-*.md) and of its builder (tools/media/explainers/explainer_NN.py). tools/media/compose.py refuses an explainer clip source whose file digest is not the one named here, and the plain pytest in tests/test_media_compose_sources.py goes red, naming the file, when a listed script or builder differs from the manifest — an explainer rebuilt on any host turns CI red until the manifest gets the new build (pick the clips of the scene again, then update the manifest).",
+  "explainers": {
+    "explainer-01.mp4": {
+      "file": "17a459981ef45fda9b0b3a7c08dc195cdb5a27ca60f36dfdc53918310350d9d0",
+      "script": {"path": "docs/product/scripts/explainer-01-why-one-ms.md", "sha256": "b08f6de10b9ab8b4d759cd043504536d2bfd08518108b4be12ac429ff82ea468"},
+      "builder": {"path": "tools/media/explainers/explainer_01.py", "sha256": "61ebd1741891e5e80f375b69132f1038a7e9c56a17c2cd717a490166fe443385"}
+    },
+    "explainer-04.mp4": {
+      "file": "06819782598570787e018946ee60060bac2f1b721be041dc843e4178a2cdfa4e",
+      "script": {"path": "docs/product/scripts/explainer-04-first-sample.md", "sha256": "b19b5cf70daee22ae301037fefd5806268bf48df4036750f2cf8dc31a5e8c7c2"},
+      "builder": {"path": "tools/media/explainers/explainer_04.py", "sha256": "4e4f723e7cc09b806840ef12ec01e5959a14db2301592ac951529dea2d59d90a"}
+    },
+    "explainer-10.mp4": {
+      "file": "7f6c4a30132cc169353f0f28bfe98b1c528ec1b26c307b41aa66d3c666782593",
+      "script": {"path": "docs/product/scripts/explainer-10-bleed.md", "sha256": "da204b63393bbec3fa3956c58ff62c8f0db9c2fc60af7e4bdc731fd545bd193e"},
+      "builder": {"path": "tools/media/explainers/explainer_10.py", "sha256": "e65aed788fbecfc92305b8bf62c2bf39c5c1256ca3dfd3bcd90c8647fe7d9523"}
+    }
+  }
+}
