@@ -234,19 +234,28 @@ def test_the_part_agent_pane_wraps_and_leaves_the_six_scenes():
     assert pre >= 8.0, move_steps
 
 
-def test_the_part_agent_hand_places_the_hit_before_ra_hand_looks():
-    """#483 send-back: the picture said the hit was not hand-placed (ORIGIN detected). Now the
-    scenario hand-places the hit on screen before the agent's part: a double-click on the
-    k_in spike lane at the report's time (the app's own addHitAt: the hit sits at the time
-    the report line names and the header shows the hand origin). Red on 3bf80bbb."""
+def test_the_part_agent_moves_the_hit_by_hand_before_ra_hand_looks():
+    """#483 send-back: the double-click added a second hit on the stroke (two k_in marks, a
+    double trigger in the export) and the detected hit stayed 22 samples late. Now the
+    scenario moves the detected hit 4/112 by hand before the agent's part: the hit mark is
+    dragged in the spike lane to 2.4997083 s (the app's own user edit, one events_edit move
+    on release; the header's rounding 2.4997), and no step of the scene adds a hit.
+    Red on 74c2b282."""
     by_id = {sc["id"]: sc for sc in _part_agent_scenarios()}
     steps = by_id["ra-hand"]["steps"]
     li = next(i for i, st in enumerate(steps)
               if st["do"] == "agent" and st.get("fn") == "look")
-    places = [st for st in steps[:li]
-              if st["do"] == "lane_click" and st.get("dbl") is True
-              and st["track"] == "k_in" and abs(st["t"] - 2.4997) < 0.001]
-    assert places, steps
+    pre = steps[:li]
+    assert not [st for st in pre
+                if st["do"] == "lane_click" and st.get("dbl") is True], pre
+    assert not [st for st in pre if st["do"] == "lane_click"], pre
+    drags = [st for st in pre if st["do"] == "drag" and st["track"] == "k_in"
+             and st.get("lane", "wave") == "spike"
+             and abs(st["to"] - 2.4997083) < 0.0001]
+    assert drags, pre   # the hit mark dragged to the report's time before the look
+    waits = [st for st in pre if st["do"] == "wait" and "added" in st.get("cond", "")
+             and "2.4997083" in st.get("cond", "")]
+    assert waits, pre   # the moved hit is pinned, no hit added
     assert record.standard_problems(by_id["ra-hand"]) == [], "ra-hand"
 
 
