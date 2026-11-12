@@ -182,7 +182,9 @@ def probe(mp4):
 
 def overlap_probes():
     """The #459 guard against a planted scene: two overlapping texts must FAIL (named with both
-    texts), the same two apart must pass, and a Text nested in a VGroup is seen. Returns 0 or 1."""
+    texts), the same two apart must pass, and a Text nested in a VGroup is seen. The #497 guard:
+    a text on a drawn line must FAIL (named with the scene and the text), the same text beside
+    the line must pass. Returns 0 or 1."""
     from types import SimpleNamespace
     import explainer_common as ec
 
@@ -204,12 +206,32 @@ def overlap_probes():
         print(f"FAIL: the guard fired on separated texts: {e}", file=sys.stderr)
         return 1
     print("overlap probe: apart texts and a nested label pass")
+
+    line = ec.Line(ec.LEFT * 3, ec.RIGHT * 3, color=ec.COBALT, stroke_width=2)
+    on_it = ec.Text("the cut sits on a zero crossing", font=ec.FONT, font_size=ec.CAPTION_SIZE)
+    on_it.move_to(ec.ORIGIN)
+    try:
+        ec.assert_no_text_on_line(SimpleNamespace(mobjects=[line, on_it]), sid="probe")
+    except ec.TextOnLineError as e:
+        print(f"line probe: the guard failed as expected: {e}")
+    else:
+        print("FAIL: the line probe did not catch a text on a line", file=sys.stderr)
+        return 1
+    aside = ec.Text("the cut sits on a zero crossing", font=ec.FONT, font_size=ec.CAPTION_SIZE)
+    aside.next_to(line, ec.UP, buff=0.5)
+    try:
+        ec.assert_no_text_on_line(SimpleNamespace(mobjects=[line, aside]), sid="probe-beside")
+    except ec.TextOnLineError as e:
+        print(f"FAIL: the guard fired on a text beside the line: {e}", file=sys.stderr)
+        return 1
+    print("line probe: a text beside the line passes")
     return 0
 
 
 def check_overlap(quality, tts_out):
-    """--check-overlap: the planted-scene probes, then every explainer through a guarded render
-    (the guard runs on every frame; an overlap FAILs the manim run). Returns 0 or 1."""
+    """--check-overlap: the planted-scene probes (#459 texts, #497 text on a line), then every
+    explainer through a guarded render (the guard runs on every frame; a violation FAILs the
+    manim run). Returns 0 or 1."""
     import explainer_common  # noqa: F401  (needs manim; fail loudly without it)
     status = overlap_probes()
     for vid in sorted(VIDEOS):
@@ -281,8 +303,8 @@ def main(argv=None):
     ap.add_argument("--quality", default="h", choices=["l", "m", "h"],
                     help="manim quality flag: h = 1080p (the release), l = 480p scratch check (default %(default)s)")
     ap.add_argument("--check-overlap", action="store_true",
-                    help="the #459 overlap guard: planted-scene probes, then every explainer "
-                         "through a guarded render (no mux, no output video)")
+                    help="the #459 text overlap guard and the #497 text-on-line guard: planted-scene "
+                         "probes, then every explainer through a guarded render (no mux, no output video)")
     args = ap.parse_args(argv)
     if args.check_overlap:
         return check_overlap(args.quality, args.tts_out)
