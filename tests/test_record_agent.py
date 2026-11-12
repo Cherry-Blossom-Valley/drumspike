@@ -17,6 +17,27 @@ class StubPage:
     def __init__(self, nearest=7):
         self.nearest = nearest
         self.calls = []
+        self.mouse = self._Mouse()
+
+    class _Mouse:
+        def __init__(self):
+            self.clicked = False
+            self.dblclicked = False
+
+        def click(self, x, y):
+            self.clicked = True
+
+        def dblclick(self, x, y):
+            self.dblclicked = True
+
+        def move(self, x, y, steps=1):
+            pass
+
+        def down(self):
+            pass
+
+        def up(self):
+            pass
 
     def evaluate(self, js, arg=None):
         self.calls.append((js, arg))
@@ -211,6 +232,54 @@ def test_the_part_agent_pane_wraps_and_leaves_the_six_scenes():
     move_steps = by_id["ra-move"]["steps"]
     pre = [st["s"] for st in move_steps if st["do"] == "hold"][0]
     assert pre >= 8.0, move_steps
+
+
+def test_the_part_agent_hand_places_the_hit_before_ra_hand_looks():
+    """#483 send-back: the picture said the hit was not hand-placed (ORIGIN detected). Now the
+    scenario hand-places the hit on screen before the agent's part: a double-click on the
+    k_in spike lane at the report's time (the app's own addHitAt: the hit sits at the time
+    the report line names and the header shows the hand origin). Red on 3bf80bbb."""
+    by_id = {sc["id"]: sc for sc in _part_agent_scenarios()}
+    steps = by_id["ra-hand"]["steps"]
+    li = next(i for i, st in enumerate(steps)
+              if st["do"] == "agent" and st.get("fn") == "look")
+    places = [st for st in steps[:li]
+              if st["do"] == "lane_click" and st.get("dbl") is True
+              and st["track"] == "k_in" and abs(st["t"] - 2.4997) < 0.001]
+    assert places, steps
+    assert record.standard_problems(by_id["ra-hand"]) == [], "ra-hand"
+
+
+def test_the_part_agent_sets_the_second_position_in_ra_opinions():
+    """#483 send-back: only one position was on screen. Now the second half of the scene sets
+    the second position (the pattern's start, 3 samples after the hit): a spike-lane click
+    stands the playhead there while the hit's mark stays, so the two marks 3 samples apart
+    are in the s_top lane at the same zoom (sample zoom, like the move scene).
+    Red on 3bf80bbb."""
+    by_id = {sc["id"]: sc for sc in _part_agent_scenarios()}
+    steps = by_id["ra-opinions"]["steps"]
+    ai = next(i for i, st in enumerate(steps)
+              if st["do"] == "agent" and st.get("fn") == "look")
+    second = [st for st in steps[ai + 1:]
+              if st["do"] == "lane_click" and st.get("lane", "spike") == "spike"
+              and st["track"] == "s_top"]
+    assert second, steps
+    assert abs(second[0]["t"] - 1.8751255) < 0.001, second[0]   # 3 samples after 1.875083
+    zoom = next(st for st in steps if st["do"] == "zoom_to")
+    assert zoom["span"] <= 0.02, zoom   # 3 samples resolve: sample zoom over the whole scene
+    assert record.standard_problems(by_id["ra-opinions"]) == [], "ra-opinions"
+
+
+def test_lane_click_double_click_dispatches_the_apps_hand_place_edit():
+    """The recorder's dbl lane_click is a real mouse double-click: the spike lane's dblclick
+    handler (addHitAt) is the app's own hand-place edit."""
+    pg = StubPage()
+    record.run_step(pg, {"do": "lane_click", "track": "k_in", "lane": "spike",
+                         "t": 2.4997, "dbl": True}, {})
+    assert hasattr(pg, "mouse") and pg.mouse.dblclicked, "the double-click ran"
+    pg2 = StubPage()
+    record.run_step(pg2, {"do": "lane_click", "track": "k_in", "lane": "spike", "t": 2.5}, {})
+    assert pg2.mouse.clicked and not pg2.mouse.dblclicked
 
 
 def _fixture_left_row():
