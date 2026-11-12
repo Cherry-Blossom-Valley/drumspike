@@ -17,6 +17,27 @@ class StubPage:
     def __init__(self, nearest=7):
         self.nearest = nearest
         self.calls = []
+        self.mouse = self._Mouse()
+
+    class _Mouse:
+        def __init__(self):
+            self.clicked = False
+            self.dblclicked = False
+
+        def click(self, x, y):
+            self.clicked = True
+
+        def dblclick(self, x, y):
+            self.dblclicked = True
+
+        def move(self, x, y, steps=1):
+            pass
+
+        def down(self):
+            pass
+
+        def up(self):
+            pass
 
     def evaluate(self, js, arg=None):
         self.calls.append((js, arg))
@@ -138,7 +159,7 @@ def test_the_part_agent_scenario_parses():
     scenario = record.parse_scenario(_json.loads(path.read_text(encoding="utf-8")))
     ids = [sc["id"] for sc in scenario["scenes"]]
     assert ids == ["ra-prompt", "ra-skill", "ra-setup", "ra-look", "ra-move", "ra-confirm",
-                   "ra-doubt", "ra-save", "ra-table"]
+                   "ra-doubt", "ra-hand", "ra-opinions", "ra-save", "ra-table"]
     for sc in scenario["scenes"]:
         assert record.standard_problems(sc) == [], sc["id"]
     commands = record.keymap_commands(
@@ -205,11 +226,124 @@ def test_the_part_agent_pane_wraps_and_leaves_the_six_scenes():
                  if st["do"] == "terminal" and st.get("clear") is not True]
         assert not terms, (sid, terms)
     table_terms = [st for st in by_id["ra-table"]["steps"] if st["do"] == "terminal"]
-    assert table_terms[0]["lines"] == [71, 75] and table_terms[1]["lines"] == [87, 87]
+    assert table_terms[0]["lines"] == [83, 84] and table_terms[1]["lines"] == [86, 90]
+    assert table_terms[2]["lines"] == [110, 110]   # the export question closes the report
     # the move lands on the spoken words: about 10 s of hold before it in the 26 s scene
     move_steps = by_id["ra-move"]["steps"]
     pre = [st["s"] for st in move_steps if st["do"] == "hold"][0]
     assert pre >= 8.0, move_steps
+
+
+def test_the_part_agent_moves_the_hit_by_hand_before_ra_hand_looks():
+    """#483 send-back: the double-click added a second hit on the stroke (two k_in marks, a
+    double trigger in the export) and the detected hit stayed 22 samples late. Now the
+    scenario moves the detected hit 4/112 by hand before the agent's part: the hit mark is
+    dragged in the spike lane to 2.4997083 s (the app's own user edit, one events_edit move
+    on release; the header's rounding 2.4997), and no step of the scene adds a hit.
+    Red on 74c2b282."""
+    by_id = {sc["id"]: sc for sc in _part_agent_scenarios()}
+    steps = by_id["ra-hand"]["steps"]
+    li = next(i for i, st in enumerate(steps)
+              if st["do"] == "agent" and st.get("fn") == "look")
+    pre = steps[:li]
+    assert not [st for st in pre
+                if st["do"] == "lane_click" and st.get("dbl") is True], pre
+    assert not [st for st in pre if st["do"] == "lane_click"], pre
+    drags = [st for st in pre if st["do"] == "drag" and st["track"] == "k_in"
+             and st.get("lane", "wave") == "spike"
+             and abs(st["to"] - 2.4997083) < 0.0001]
+    assert drags, pre   # the hit mark dragged to the report's time before the look
+    waits = [st for st in pre if st["do"] == "wait" and "added" in st.get("cond", "")
+             and "2.4997083" in st.get("cond", "")]
+    assert waits, pre   # the moved hit is pinned, no hit added
+    assert record.standard_problems(by_id["ra-hand"]) == [], "ra-hand"
+
+
+def test_the_part_agent_sets_the_second_position_in_ra_opinions():
+    """#483 send-back: only one position was on screen. Now the second half of the scene sets
+    the second position (the pattern's start, 3 samples after the hit): a spike-lane click
+    stands the playhead there while the hit's mark stays, so the two marks 3 samples apart
+    are in the s_top lane at the same zoom (sample zoom, like the move scene).
+    Red on 3bf80bbb."""
+    by_id = {sc["id"]: sc for sc in _part_agent_scenarios()}
+    steps = by_id["ra-opinions"]["steps"]
+    ai = next(i for i, st in enumerate(steps)
+              if st["do"] == "agent" and st.get("fn") == "look")
+    second = [st for st in steps[ai + 1:]
+              if st["do"] == "lane_click" and st.get("lane", "spike") == "spike"
+              and st["track"] == "s_top"]
+    assert second, steps
+    assert abs(second[0]["t"] - 1.8751255) < 0.001, second[0]   # 3 samples after 1.875083
+    zoom = next(st for st in steps if st["do"] == "zoom_to")
+    assert zoom["span"] <= 0.02, zoom   # 3 samples resolve: sample zoom over the whole scene
+    assert record.standard_problems(by_id["ra-opinions"]) == [], "ra-opinions"
+
+
+def test_lane_click_double_click_dispatches_the_apps_hand_place_edit():
+    """The recorder's dbl lane_click is a real mouse double-click: the spike lane's dblclick
+    handler (addHitAt) is the app's own hand-place edit."""
+    pg = StubPage()
+    record.run_step(pg, {"do": "lane_click", "track": "k_in", "lane": "spike",
+                         "t": 2.4997, "dbl": True}, {})
+    assert hasattr(pg, "mouse") and pg.mouse.dblclicked, "the double-click ran"
+    pg2 = StubPage()
+    record.run_step(pg2, {"do": "lane_click", "track": "k_in", "lane": "spike", "t": 2.5}, {})
+    assert pg2.mouse.clicked and not pg2.mouse.dblclicked
+
+
+def _fixture_left_row():
+    import json as _json
+    path = (Path(__file__).resolve().parents[1] / "tools" / "media" / "fixtures"
+            / "agent-run" / "actions.jsonl")
+    rows = [_json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    return next(row for row in rows if row.get("fn") == "left")
+
+
+def test_the_part_agent_shows_the_hand_placed_hit_untouched():
+    """#483 gate: a scene of its own for the hand-placed hit: the agent looks at it and the
+    report line from the fixture (transcript line 96) names it; the scenario never moves or
+    confirms a hit at the hand-placed time. Red on the pre-#483 scenario (no such scene)."""
+    scenes = _part_agent_scenarios()
+    by_id = {sc["id"]: sc for sc in scenes}
+    sc = by_id["ra-hand"]
+    looks = [st for st in sc["steps"] if st["do"] == "agent" and st.get("fn") == "look"]
+    assert looks and looks[0]["track"] == "k_in" and abs(looks[0]["t"] - 2.4997) < 0.001, sc
+    terms = [st for st in sc["steps"] if st["do"] == "terminal"]
+    assert terms and terms[0]["file"].endswith("transcript.txt") and terms[0]["lines"] == [96, 96], sc
+    assert record.standard_problems(sc) == [], sc["id"]
+    for other in scenes:
+        for st in other["steps"]:
+            if st["do"] == "agent" and st.get("fn") in ("move", "confirm"):
+                assert abs(st.get("t", 0.0) - 2.4997) > 0.01, (other["id"], st)
+
+
+def test_the_part_agent_shows_the_two_opinions_hit_and_its_reason():
+    """#483 gate: a scene of its own for the hit where the two opinions differ: the agent
+    looks at the s_top hit at 1.875083 s and the reason (the fixture's left row, transcript
+    lines 102-103) is readable on screen for 2 s or more. Red on the pre-#483 scenario."""
+    scenes = _part_agent_scenarios()
+    by_id = {sc["id"]: sc for sc in scenes}
+    sc = by_id["ra-opinions"]
+    looks = [st for st in sc["steps"] if st["do"] == "agent" and st.get("fn") == "look"]
+    assert looks and looks[0]["track"] == "s_top" and abs(looks[0]["t"] - 1.875083) < 0.001, sc
+    terms = [st for st in sc["steps"] if st["do"] == "terminal"]
+    assert terms and terms[0]["lines"] == [102, 103], sc
+    ti = next(i for i, st in enumerate(sc["steps"]) if st["do"] == "terminal")
+    after = next(st["s"] for st in sc["steps"][ti + 1:] if st["do"] == "hold")
+    assert after >= 2.0, sc["steps"]
+    # the on-screen reason is the fixture's left row: two opinions differ
+    assert _fixture_left_row()["track"] == "s_top" and _fixture_left_row()["index"] == 0
+    assert _fixture_left_row()["reason"].startswith("two opinions differ")
+    assert record.standard_problems(sc) == [], sc["id"]
+
+
+def test_the_part_agent_doubt_caption_carries_the_runs_reason():
+    """#483: the doubt scene's reason is the 0.9.33 run's (14 dB under the median, a noisy
+    line), not the old plan row's why."""
+    by_id = {sc["id"]: sc for sc in _part_agent_scenarios()}
+    caption = next(st["text"] for st in by_id["ra-doubt"]["steps"] if st["do"] == "caption")
+    assert "14 dB under the median" in caption and "noisy line" in caption, caption
+    assert "no clear line before the hit" not in caption
 
 
 def test_terminal_step_types_the_fixture_file_not_inline_text(tmp_path, monkeypatch):
