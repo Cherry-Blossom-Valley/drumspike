@@ -112,9 +112,18 @@ def numbers_grid(s, hit_at, xc, yc):
     r_i, c_i = hit_at // n_cols, hit_at % n_cols
     cell = rows[0].width / n_cols   # the digits are tabular, so the cell bounds hold
     hx = rows[r_i].get_critical_point(LEFT)[0] + (c_i + 0.5) * cell
-    hit_mark = sample_stalk(hx, rows[r_i].get_center()[1], ORANGE, half=0.22, width=2)
     hit_tag = Text("hit_at", font=FONT, font_size=18, color=ORANGE)
     hit_tag.move_to([hx, grid.get_critical_point(DOWN)[1] - 0.35, 0])
+    # #497: the mark may not run through the row's digits (the guard's TextOnLineError on
+    # s03-look: the stalk at the row centre crossed the hit row's glyph box). It underlines
+    # the cell out of the inter-row gap below it, ~0.1 clear of both glyph boxes; on the
+    # last row the gap runs to the hit_at tag instead of a next row.
+    gap_top = rows[r_i].get_critical_point(DOWN)[1]
+    gap_bot = (rows[r_i + 1].get_critical_point(UP)[1] if r_i + 1 < n_rows
+               else hit_tag.get_critical_point(UP)[1])
+    ul_y = (gap_top + gap_bot) / 2
+    hit_mark = Line([hx - 0.35 * cell, ul_y, 0], [hx + 0.35 * cell, ul_y, 0],
+                    color=ORANGE, stroke_width=2)
     return grid, hit_mark, hit_tag
 
 
