@@ -408,6 +408,75 @@
       }
       return out;
     },
+    /* #412: the strokes the detector computed that carry no hit, read-only. It reads the detector's own
+       candidate list (the kept detection, the way the Sensitivity histogram reads it) and the hits, and
+       changes nothing: no event, no mark, no record, and it answers with Training Mode off too. Each
+       stored hit claims at most one candidate - the nearest in its refine window (lo..hi, plus half the
+       minimum gap on both sides) - so a kept candidate that no hit claims is listed (the hit was removed
+       or merged away; a flam partner cannot cover a neighbour's candidate). A hit that the flam step
+       added claims no candidate: the flam partner stands that close to a real stroke that it would
+       otherwise claim the neighbour's candidate. A cut candidate is listed unless it is bleed: at the
+       time of a hit on another track of the project (within half the minimum gap; bleed is not
+       separated from a real stroke by its level, the detector's own bleed
+       answer is not reachable read-only here, so the coincidence with the other tracks' hits decides).
+       Each candidate carries `need`, the slider value it needs, and the list is sorted by it, nearest
+       to the slider first; `by_need` counts the listed candidates by how far the slider must move
+       (`kept`: kept by the detection but no hit; `+10`, `+30`, `+50`, `more`: need minus the track's
+       sensitivity up to 10, up to 30, up to 50, over 50). `left_out` counts
+       the cut candidates the bleed rule left out; `limit` says what the scan cannot see. */
+    async scan(track) {
+      need(track);
+      const evs = S.events[track] || [], p = S.tracks[track].params || {};
+      const sens = Number.isFinite(p.sensitivity) ? Math.round(p.sensitivity) : 50;
+      const half = (Number.isFinite(p.min_gap_ms) ? p.min_gap_ms : 20) / 2000;
+      const lo = (Number.isFinite(p.refine_lo_ms) ? p.refine_lo_ms : -2) / 1000,
+            hi = (Number.isFinite(p.refine_hi_ms) ? p.refine_hi_ms : 12) / 1000;
+      const BLIND = "the scan reads only the detector's own candidate list: a stroke with no candidate there - one that bleed or a louder neighbour masks, or that the chain smooths away - is not found, and a stroke that the flam step adds has no candidate at all: the scan cannot find it";
+      const h = await B.histograms(S.sid, track, evs);
+      const det = h.detection || {};
+      if (det.state !== "ok")
+        return { candidates: [], by_need: { kept: 0, "+10": 0, "+30": 0, "+50": 0, more: 0 }, left_out: { bleed: 0 }, limit: `no candidate list of ${track} (state ${det.state || "none"}): analyze the track once, then scan again. ${BLIND}.` };
+      const sr = S.tracks[track].sr, cands = det.candidates;
+      // each stored hit claims at most one candidate, the nearest in its refine window: the pairs by
+      // distance, then the closest pair first (a flam partner must not cover a neighbour's candidate).
+      // A hit that the flam step added claims no candidate (point 3): it stands that close to a real
+      // stroke that it would otherwise claim the neighbour's candidate.
+      const pairs = [];
+      cands.forEach((c, ci) => evs.forEach((e, ei) => {
+        if (e.flam) return;
+        const d = e.t - c[0];
+        if (d >= lo - half && d <= hi + half) pairs.push([Math.abs(d), ei, ci]);
+      }));
+      pairs.sort((a, b) => a[0] - b[0]);
+      const claimedC = new Set(), claimedE = new Set();
+      for (const [, ei, ci] of pairs) if (!claimedE.has(ei) && !claimedC.has(ci)) { claimedE.add(ei); claimedC.add(ci); }
+      // the hits of the other tracks of the project: a candidate at their time is bleed (rule a)
+      const others = [];
+      for (const name of Object.keys(S.tracks)) if (name !== track)
+        for (const e of S.events[name] || []) others.push(e.t);
+      const out = [];
+      let nBleed = 0;
+      const by_need = { kept: 0, "+10": 0, "+30": 0, "+50": 0, more: 0 };
+      for (let ci = 0; ci < cands.length; ci++) {
+        const c = cands[ci];
+        if (claimedC.has(ci)) continue;                     // a hit owns this candidate: nothing missing there
+        if (c[3] <= sens) {                                 // kept by the detection at the track's sensitivity
+          by_need.kept++;
+          out.push({ time: c[0], sample: Math.round(c[0] * sr), need: c[3],
+            reason: "kept by the detection but no hit is stored (removed or merged away)" });
+        } else if (others.some(t => Math.abs(c[0] - t) <= half)) {
+          nBleed++;                                         // bleed of another track's hit
+        } else {                                            // listed, sorted by the needed sensitivity
+          const d = c[3] - sens;
+          by_need[d <= 10 ? "+10" : d <= 30 ? "+30" : d <= 50 ? "+50" : "more"]++;
+          out.push({ time: c[0], sample: Math.round(c[0] * sr), need: c[3],
+            reason: `cut by the sensitivity (the slider would need ${c[3]})` });
+        }
+      }
+      out.sort((a, b) => a.need - b.need || a.time - b.time);
+      return { candidates: out, by_need, left_out: { bleed: nBleed },
+        limit: `${BLIND}. A real stroke at the time of a hit on another track is left out as bleed and counted in left_out.bleed. by_need counts the listed candidates by how far the slider must move: kept, +10, +30, +50, more.` };
+    },
     /* #418: the hand-placed hits of a track: the hits with a move, add or confirm record whose `by` is `person`
        or absent (an older log has no `by`). The service reads the training log - it is far too large to read -
        and answers one trimmed row per record: {track, op, by, id, sample}. This helper keeps the person rows and

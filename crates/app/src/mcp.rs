@@ -159,7 +159,7 @@ pub fn tools() -> Vec<Value> {
         "name": AGENT_CALL,
         "description": "Call a page helper of the Drum Spike window that is open now (#388): the user watches the edit there, \
                         no browser and no quit needed. fn is one of the helpers (project, hits, look, wide, move, confirm, undo, \
-                        plan, apply, save, status, statusLine, setTraining), args its arguments as a list; answers the helper's \
+                        plan, audit, scan, apply, save, status, statusLine, setTraining), args its arguments as a list; answers the helper's \
                         value. Without an open window it answers an error: then start the bridge with a browser tool.",
         "inputSchema": {"type": "object", "properties": {
             "fn": {"type": "string", "enum": crate::window_relay::FUNCTIONS, "description": "The helper of window.DSAgent"},

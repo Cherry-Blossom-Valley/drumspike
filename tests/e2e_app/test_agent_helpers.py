@@ -9,9 +9,10 @@ import numpy as np
 import pytest
 from playwright.sync_api import expect
 
-from app_support import edits_done, menu, open_project
+from app_support import edits_done, invoke, menu, open_project
 from helpers import SR, synth_track, write_wav
 from test_editor import IDX, ONSETS, build, exact_events
+from test_subtracks import analyse
 from test_training_mode import project_log_lines
 
 TRACK = "Kick In"
@@ -299,3 +300,56 @@ def test_a_short_track_has_no_pattern_and_the_judge_answers_alone(app, make_proj
     r = call(app, "DSAgent.look('Kick In', 1)")
     assert r["pattern"] is None
     assert r["judge"]["pattern_off"] is None and r["judge"]["pattern_agrees"] is None
+
+
+def test_scan_lists_a_removed_hit_and_nothing_there_before_it(app, make_project, tmp_path):
+    """#412: `scan` lists the strokes the detector computed that carry no hit. The hit is written away with
+    `events_set` (the page's own write path), so it is in no edit history and carries no mark. Before the
+    removal the same call lists no candidate at the hit (the assert is false before the action)."""
+    folder = build(make_project, tmp_path, events={TRACK: exact_events()})
+    open_project(app, folder)
+    analyse(app)                                   # the candidate list comes from the kept detection
+    before = call(app, f"DSAgent.scan('{TRACK}')")
+    assert before["limit"]
+    assert all(abs(c["time"] - ONSETS[1]) > 0.001 for c in before["candidates"]), before
+    app.evaluate("() => { S.events['Kick In'].splice(1, 1); return flushEvents(); }")
+    edits_done(app)
+    r = call(app, f"DSAgent.scan('{TRACK}')")
+    there = [c for c in r["candidates"] if abs(c["time"] - ONSETS[1]) <= 0.02]
+    assert len(there) == 1, (r, app.evaluate("() => S.events['Kick In']"))
+    assert abs(there[0]["sample"] - ONSETS[1] * SR) <= 0.013 * SR   # the coarse candidate time, within the refine window
+    assert "no hit is stored" in there[0]["reason"], there[0]
+
+
+def test_scan_lists_no_existing_hit_and_changes_nothing(app, make_project, tmp_path):
+    """#412: on a track with no removed hit, no candidate at an existing hit is listed, and the call is
+    read-only: the event list and the training log are byte-identical before and after."""
+    folder = build(make_project, tmp_path, events={TRACK: exact_events()})
+    sid = open_project(app, folder)
+    analyse(app)
+    menu(app, "training_mode")                     # the log exists and the scan must not touch it
+    log = Path(app.evaluate("async () => (await B.trainingStatus(S.sid)).path"))
+    log_before = log.read_bytes() if log.exists() else b""
+    events_before = invoke(app, "events_get", sid=sid, name=TRACK)["events"]
+    r = call(app, f"DSAgent.scan('{TRACK}')")
+    assert isinstance(r["candidates"], list) and r["limit"]
+    for e in events_before:
+        assert all(abs(c["time"] - e["t"]) > 0.01 for c in r["candidates"]), (e, r["candidates"])
+    assert invoke(app, "events_get", sid=sid, name=TRACK)["events"] == events_before
+    assert (log.read_bytes() if log.exists() else b"") == log_before
+
+
+def test_scan_answers_with_the_mode_off_and_writes_nothing(app, make_project, tmp_path):
+    """#412: the choice for the read-only helper: with Training Mode off `scan` still answers (it writes
+    nothing, so it does not refuse like `move` and `confirm`); docs/agent-api.md states the choice."""
+    folder = build(make_project, tmp_path, events={TRACK: exact_events()})
+    sid = open_project(app, folder)
+    analyse(app)
+    assert call(app, "DSAgent.status()")["training"] is False
+    events_before = invoke(app, "events_get", sid=sid, name=TRACK)["events"]
+    log = Path(app.evaluate("async () => (await B.trainingStatus(S.sid)).path"))
+    log_before = log.read_bytes() if log.exists() else b""
+    r = call(app, f"DSAgent.scan('{TRACK}')")
+    assert isinstance(r["candidates"], list) and r["limit"]
+    assert invoke(app, "events_get", sid=sid, name=TRACK)["events"] == events_before
+    assert (log.read_bytes() if log.exists() else b"") == log_before

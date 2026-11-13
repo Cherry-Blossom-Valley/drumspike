@@ -79,13 +79,22 @@ the page with the bridge.
    it a longer `timeout_ms`, for example 600000; the default is 60 s). Each row has a `reason`. The rows with
    reason `late` must be zero; if one stays, list it one by one with the reason, and say so in the report. A row
    with reason `opinions differ` is a hit for the user's list (its `why` names both positions), never a move.
-9. `DSAgent.save()`. A lock file that still names a stopped bridge does not block: the app or the next bridge takes
-   it. Do not delete it and do not mention it.
-10. After the save, report the per-track table before anything else: one row per track with the track's name, its
+9. After the audit, run `DSAgent.scan(track)` on every track (read-only, it writes nothing). It lists the strokes
+   the detector computed that carry no hit: `candidates` (each with `time`, `sample`, `need` and the `reason` the
+   detector made no hit there), `by_need` (the counts of the listed candidates by how far the slider must move)
+   and `limit`, which states what the scan cannot see. List for the user, with their times, the `kept` candidates
+   and the cut candidates of the bands `+10` and `+30`; give `+50` and `more` as counts only, and say that a
+   candidate that far above the slider is most likely no stroke. Add none of them on your own; they are a list for
+   the user, never a placement.
+10. `DSAgent.save()`. A lock file that still names a stopped bridge does not block: the app or the next bridge takes
+    it. Do not delete it and do not mention it.
+11. After the save, report the per-track table before anything else: one row per track with the track's name, its
     hits, the moved, the confirmed, the hand-placed, "looked at, right" and "no quiet stretch" (the two parts of
-    not moved), and "not looked at" - that column must be zero, and a hit counts as looked at only after
-    `DSAgent.look` on that hit - then a total row.
-11. Then ask the user one question: export now (MIDI and spike files through the MCP tools, `export_all` and
+    not moved), "not looked at" - that column must be zero, and a hit counts as looked at only after
+    `DSAgent.look` on that hit - and the candidates of `DSAgent.scan` (the strokes without a hit, listed as
+    step 9 says: the `kept` ones and the `+10` and `+30` bands with their times, `+50` and `more` as counts
+    only), then a total row.
+12. Then ask the user one question: export now (MIDI and spike files through the MCP tools, `export_all` and
     `job_get` until `done`) or leave it.
 
 ## Guardrails

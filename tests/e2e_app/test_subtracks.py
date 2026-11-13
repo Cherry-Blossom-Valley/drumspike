@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from playwright.sync_api import expect
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from app_support import inspect_track, invoke, menu, open_project, track_menu, wait_until
 from helpers import SR, synth_track, write_wav
@@ -58,6 +59,10 @@ def has_model(page):
 
 def analyse(page):
     page.click("#analyzeAllBtn")
+    try:   # a project that already carries events asks before the re-analyze (#412 scan tests)
+        page.locator("#confirmActions button[data-act='go']").click(timeout=3000)
+    except PlaywrightTimeoutError:
+        pass
     expect(page.locator("#progressText")).to_have_text("analysis done", timeout=90000)
     page.wait_for_function("() => !analysisRunning")
 
