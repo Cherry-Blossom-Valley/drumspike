@@ -377,19 +377,26 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   differ, as `[{index, id, t, reason, suggest, foot_off, rise, quiet_ratio, pattern_off, why}]`. `reason` is `late` (move
   it by `suggest` when that is a number) or `opinions differ` (never a move: a hit for the user's list, `why` names both
   positions). It reads the shape measures of `look` and never a `plan` row, so a wrong suggestion cannot hide a late hit. One `look` per hit: run it on a track you have not finished, not in a loop.
-- `scan(track)` (#412): the strokes the detector computed that carry no hit, as `{candidates: [{time, sample, reason}], limit}`.
+- `scan(track)` (#412): the strokes the detector computed that carry no hit, as `{candidates: [{time, sample, reason}], left_out: {bleed, tail}, limit}`.
   It is read-only: it changes no event, no mark and no record, and it answers with Training Mode off too (it writes
   nothing, so it does not refuse like `move` and `confirm`). It reads the detector's own candidate list (the kept
-  detection, the way the Sensitivity histogram reads it) - no second detector. A candidate within the minimum gap of
-  an existing hit is never listed. A candidate the sensitivity keeps but that has no hit is listed with reason
-  `kept by the detection but no hit is stored (removed or merged away)`; a candidate the sensitivity cuts is listed
-  with reason `cut by the sensitivity (the slider would need <v>) but louder than the quietest hit the track keeps`
-  when its peak level, measured the way the loudness histogram measures a hit (5 ms before to 60 ms after the time),
-  is over the quietest kept hit's. `limit` states what the scan cannot see: a stroke with no candidate there (one
-  that bleed or a louder neighbour masks, or that the chain smooths away) is not found, and a cut candidate under
-  the quietest kept hit is not listed. Without a candidate list (the track was never analyzed) `candidates` is
-  empty and `limit` says to analyze the track once. Add none of the candidates on your own: they are a list for
-  the user.
+  detection, the way the Sensitivity histogram reads it) - no second detector, and no samples: the rules read the
+  candidate times and the hits only. Each stored hit claims at most one candidate, the nearest in its refine window
+  (`refine_lo_ms`..`refine_hi_ms` plus half the `min_gap_ms` on both sides), matched one to one - so a kept candidate
+  that no hit claims is listed with reason `kept by the detection but no hit is stored (removed or merged away)`,
+  and the flam partner of a hit cannot cover a neighbour's candidate. A cut candidate is listed with reason
+  `cut by the sensitivity (the slider would need <v>)` - the list is sorted by that needed sensitivity, nearest to
+  the slider first - unless it is left out as
+  - bleed: the candidate stands at the time of a hit on another track of the project (within half the `min_gap_ms`;
+    a level cannot separate bleed from a real stroke, and the detector's own bleed answer is not reachable read-only
+    here, so the coincidence with the other tracks' hits decides);
+  - tail: the candidate stands inside the decay of an own hit, the 60 ms after the hit that the loudness measure
+    uses.
+  `left_out` counts the cut candidates each rule left out. `limit` states what the scan cannot see: a stroke with no
+  candidate there (one that bleed or a louder neighbour masks, or that the chain smooths away) is not found, and a
+  stroke that the flam step adds has no candidate at all - the scan cannot find it. Without a candidate list (the
+  track was never analyzed) `candidates` is empty and `limit` says to analyze the track once. Add none of the
+  candidates on your own: they are a list for the user.
 - `handPlaced(track)` (#418): the hits the user placed by hand, as `[{index, id, t, sample, ops}]` - one row per
   hit that carries a person's move, add or confirm record in the project's training log (`by` `person` or
   absent; an agent's record never counts). The service reads the log - it is far too large to read - and answers

@@ -410,12 +410,16 @@
     },
     /* #412: the strokes the detector computed that carry no hit, read-only. It reads the detector's own
        candidate list (the kept detection, the way the Sensitivity histogram reads it) and the hits, and
-       changes nothing: no event, no mark, no record, and it answers with Training Mode off too. A
-       candidate within the minimum gap of an existing hit is never listed. A candidate the sensitivity
-       keeps but that has no hit is listed (the hit was removed or merged away). A candidate the
-       sensitivity cuts is listed when its peak level, measured the way the loudness histogram measures a
-       hit (5 ms before to 60 ms after the time), is louder than the quietest hit the track keeps: the
-       detector's own measures, no second detector. `limit` says what the scan cannot see. */
+       changes nothing: no event, no mark, no record, and it answers with Training Mode off too. Each
+       stored hit claims at most one candidate - the nearest in its refine window (lo..hi, plus half the
+       minimum gap on both sides) - so a kept candidate that no hit claims is listed (the hit was removed
+       or merged away; a flam partner cannot cover a neighbour's candidate). A cut candidate is listed
+       unless it is bleed or tail: at the time of a hit on another track of the project (within half the
+       minimum gap; bleed is not separated from a real stroke by its level, the detector's own bleed
+       answer is not reachable read-only here, so the coincidence with the other tracks' hits decides),
+       or inside the decay of an own hit (the 60 ms after the hit that the loudness measure uses). The
+       rest is listed sorted by the needed sensitivity, nearest to the slider first. `left_out` counts
+       the cut candidates the bleed and tail rules left out; `limit` says what the scan cannot see. */
     async scan(track) {
       need(track);
       const evs = S.events[track] || [], p = S.tracks[track].params || {};
@@ -423,45 +427,47 @@
       const half = (Number.isFinite(p.min_gap_ms) ? p.min_gap_ms : 20) / 2000;
       const lo = (Number.isFinite(p.refine_lo_ms) ? p.refine_lo_ms : -2) / 1000,
             hi = (Number.isFinite(p.refine_hi_ms) ? p.refine_hi_ms : 12) / 1000;
-      const BLIND = "the scan reads only the detector's own candidate list: a stroke with no candidate there - one that bleed or a louder neighbour masks, or that the chain smooths away - is not found, and a cut candidate under the quietest kept hit is not listed";
+      const TAIL_AFTER = 0.060;   // the decay: the 60 ms after a hit that the loudness measure uses
+      const BLIND = "the scan reads only the detector's own candidate list: a stroke with no candidate there - one that bleed or a louder neighbour masks, or that the chain smooths away - is not found, and a stroke that the flam step adds has no candidate at all: the scan cannot find it";
       const h = await B.histograms(S.sid, track, evs);
       const det = h.detection || {};
       if (det.state !== "ok")
-        return { candidates: [], limit: `no candidate list of ${track} (state ${det.state || "none"}): analyze the track once, then scan again. ${BLIND}.` };
-      const sr = S.tracks[track].sr;
-      const near = t => evs.some(e => e.t - t >= lo - half && e.t - t <= hi + half);   // a stored hit sits in the refine window around its coarse candidate (lo..hi), plus the minimum gap on both sides
+        return { candidates: [], left_out: { bleed: 0, tail: 0 }, limit: `no candidate list of ${track} (state ${det.state || "none"}): analyze the track once, then scan again. ${BLIND}.` };
+      const sr = S.tracks[track].sr, cands = det.candidates;
+      // each stored hit claims at most one candidate, the nearest in its refine window: the pairs by
+      // distance, then the closest pair first (a flam partner must not cover a neighbour's candidate)
+      const pairs = [];
+      cands.forEach((c, ci) => evs.forEach((e, ei) => {
+        const d = e.t - c[0];
+        if (d >= lo - half && d <= hi + half) pairs.push([Math.abs(d), ei, ci]);
+      }));
+      pairs.sort((a, b) => a[0] - b[0]);
+      const claimedC = new Set(), claimedE = new Set();
+      for (const [, ei, ci] of pairs) if (!claimedE.has(ei) && !claimedC.has(ci)) { claimedE.add(ei); claimedC.add(ci); }
+      // the hits of the other tracks of the project: a candidate at their time is bleed (rule a)
+      const others = [];
+      for (const name of Object.keys(S.tracks)) if (name !== track)
+        for (const e of S.events[name] || []) others.push(e.t);
       const out = [];
-      for (const c of det.candidates) {
-        if (c[3] <= sens) {                       // kept by the detection at the track's sensitivity
-          if (!near(c[0])) out.push({ time: c[0], sample: Math.round(c[0] * sr), reason: "kept by the detection but no hit is stored (removed or merged away)" });
+      let nBleed = 0, nTail = 0;
+      for (let ci = 0; ci < cands.length; ci++) {
+        const c = cands[ci];
+        if (claimedC.has(ci)) continue;                     // a hit owns this candidate: nothing missing there
+        if (c[3] <= sens) {                                 // kept by the detection at the track's sensitivity
+          out.push({ time: c[0], sample: Math.round(c[0] * sr), need: c[3],
+            reason: "kept by the detection but no hit is stored (removed or merged away)" });
+        } else if (others.some(t => Math.abs(c[0] - t) <= half)) {
+          nBleed++;                                         // rule a: bleed of another track's hit
+        } else if (evs.some(e => c[0] > e.t && c[0] - e.t <= TAIL_AFTER)) {
+          nTail++;                                          // rule b: the decay of an own hit
+        } else {                                            // rule c: listed, sorted by the needed sensitivity
+          out.push({ time: c[0], sample: Math.round(c[0] * sr), need: c[3],
+            reason: `cut by the sensitivity (the slider would need ${c[3]})` });
         }
       }
-      const levels = h.loudness && Array.isArray(h.loudness.levels) ? h.loudness.levels : [];
-      const quietest = levels.length ? Math.min(...levels) : null;   // dBFS of the quietest hit the track keeps
-      if (quietest !== null) {
-        const SPAN_BEFORE = 0.005, SPAN_AFTER = 0.060, cut = det.candidates.filter(c => c[3] > sens && !near(c[0]));
-        const spans = cut.map(c => [Math.max(0, Math.floor((c[0] - SPAN_BEFORE) * sr)), Math.ceil((c[0] + SPAN_AFTER) * sr)]).sort((a, b) => a[0] - b[0]);
-        const merged = [];
-        for (const s of spans) { const last = merged[merged.length - 1]; if (last && s[0] <= last[1]) last[1] = Math.max(last[1], s[1]); else merged.push([...s]); }
-        const dbOf = new Map();
-        for (const [a, b] of merged) {
-          const r = await B.samples(S.sid, track, a, b);
-          if (!r || !r.data) continue;
-          for (const c of cut) {
-            const i0 = Math.round(c[0] * sr) - Math.round(SPAN_BEFORE * sr) - r.start, i1 = i0 + Math.round((SPAN_BEFORE + SPAN_AFTER) * sr);
-            if (i0 < 0 || i1 > r.data.length) continue;
-            let pk = 0;
-            for (let i = i0; i < i1; i++) pk = Math.max(pk, Math.abs(r.data[i]));
-            dbOf.set(c[0], 20 * Math.log10(Math.max(pk, 1e-9)));
-          }
-        }
-        for (const c of cut) {
-          const db = dbOf.get(c[0]);
-          if (db !== undefined && db > quietest) out.push({ time: c[0], sample: Math.round(c[0] * sr), reason: `cut by the sensitivity (the slider would need ${c[3]}) but louder than the quietest hit the track keeps` });
-        }
-      }
-      out.sort((a, b) => a.time - b.time);
-      return { candidates: out, limit: `${BLIND}.` };
+      out.sort((a, b) => a.need - b.need || a.time - b.time);
+      for (const c of out) delete c.need;
+      return { candidates: out, left_out: { bleed: nBleed, tail: nTail }, limit: `${BLIND}. The cut candidates the rules leave out are counted in left_out (bleed: at the time of a hit on another track; tail: inside the 60 ms decay of an own hit).` };
     },
     /* #418: the hand-placed hits of a track: the hits with a move, add or confirm record whose `by` is `person`
        or absent (an older log has no `by`). The service reads the training log - it is far too large to read -
