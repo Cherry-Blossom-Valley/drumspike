@@ -377,22 +377,25 @@ The helpers that change the document (`move`, `confirm`, `undo`, `apply`) refuse
   differ, as `[{index, id, t, reason, suggest, foot_off, rise, quiet_ratio, pattern_off, why}]`. `reason` is `late` (move
   it by `suggest` when that is a number) or `opinions differ` (never a move: a hit for the user's list, `why` names both
   positions). It reads the shape measures of `look` and never a `plan` row, so a wrong suggestion cannot hide a late hit. One `look` per hit: run it on a track you have not finished, not in a loop.
-- `scan(track)` (#412): the strokes the detector computed that carry no hit, as `{candidates: [{time, sample, reason}], left_out: {bleed, tail}, limit}`.
+- `scan(track)` (#412): the strokes the detector computed that carry no hit, as `{candidates: [{time, sample, need, reason}], by_need, left_out: {bleed}, limit}`.
   It is read-only: it changes no event, no mark and no record, and it answers with Training Mode off too (it writes
   nothing, so it does not refuse like `move` and `confirm`). It reads the detector's own candidate list (the kept
   detection, the way the Sensitivity histogram reads it) - no second detector, and no samples: the rules read the
   candidate times and the hits only. Each stored hit claims at most one candidate, the nearest in its refine window
   (`refine_lo_ms`..`refine_hi_ms` plus half the `min_gap_ms` on both sides), matched one to one - so a kept candidate
   that no hit claims is listed with reason `kept by the detection but no hit is stored (removed or merged away)`,
-  and the flam partner of a hit cannot cover a neighbour's candidate. A cut candidate is listed with reason
-  `cut by the sensitivity (the slider would need <v>)` - the list is sorted by that needed sensitivity, nearest to
-  the slider first - unless it is left out as
+  and the flam partner of a hit cannot cover a neighbour's candidate. A hit that the flam step added claims no
+  candidate: it stands that close to a real stroke that it would otherwise claim the neighbour's candidate. A cut
+  candidate is listed with reason `cut by the sensitivity (the slider would need <v>)` - the list is sorted by that
+  needed sensitivity, nearest to the slider first, and each candidate carries its `need` - unless it is left out as
   - bleed: the candidate stands at the time of a hit on another track of the project (within half the `min_gap_ms`;
     a level cannot separate bleed from a real stroke, and the detector's own bleed answer is not reachable read-only
-    here, so the coincidence with the other tracks' hits decides);
-  - tail: the candidate stands inside the decay of an own hit, the 60 ms after the hit that the loudness measure
-    uses.
-  `left_out` counts the cut candidates each rule left out. `limit` states what the scan cannot see: a stroke with no
+    here, so the coincidence with the other tracks' hits decides). A real stroke at the same time as a hit on another
+    track is left out as bleed and counted in `left_out.bleed`.
+  `by_need` counts the listed candidates by how far the slider must move: `kept` (kept by the detection but no hit),
+  `+10`, `+30`, `+50` and `more` (need minus the track's sensitivity up to 10, up to 30, up to 50, over 50) - reading
+  bands, not a filter; no cut-off hides a candidate inside the scan. `limit` states what the scan cannot see: a stroke
+  with no
   candidate there (one that bleed or a louder neighbour masks, or that the chain smooths away) is not found, and a
   stroke that the flam step adds has no candidate at all - the scan cannot find it. Without a candidate list (the
   track was never analyzed) `candidates` is empty and `limit` says to analyze the track once. Add none of the

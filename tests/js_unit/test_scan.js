@@ -1,11 +1,12 @@
 /* js_unit: DSAgent.scan (#412). The helper reads the detector's own candidate list (B.histograms) and
    the hits of the page and answers {candidates, left_out, limit}: each stored hit claims at most one
-   candidate (the nearest in its refine window, a flam partner cannot cover a neighbour's), a kept
-   candidate that no hit claims is listed (removed or merged away), and a cut candidate is listed
-   sorted by the needed sensitivity unless it is bleed (at the time of a hit on another track, within
-   half the minimum gap) or tail (inside the 60 ms decay of an own hit) - the rules read no samples,
-   so B.samples is never called. Without a candidate list the candidates are empty and the limit says
-   to analyze the track once. static/agent.js loads alone in a vm, the way test_hand_placed.js does. */
+   candidate (the nearest in its refine window, a flam partner cannot cover a neighbour's, a flam-marked
+   hit claims none), a kept candidate that no hit claims is listed (removed or merged away), and a cut
+   candidate is listed sorted by the needed sensitivity unless it is bleed (at the time of a hit on
+   another track, within half the minimum gap) - the rules read no samples, so B.samples is never
+   called. Each candidate carries `need` and the answer carries `by_need`, the counts of the listed
+   candidates by how far the slider must move. Without a candidate list the candidates are empty and
+   the limit says to analyze the track once. static/agent.js loads alone in a vm, the way test_hand_placed.js does. */
 "use strict";
 
 const assert = require("node:assert/strict");
@@ -83,22 +84,45 @@ const tests = {
     const e = env([[0.3, 0, 0.4, 120]], "ok", [0.295]);   // 5 ms from the snare hit: inside half the gap
     const r = await e.DSAgent.scan("kick");
     assert.deepEqual(plain(r.candidates), []);
-    assert.deepEqual(plain(r.left_out), { bleed: 1, tail: 0 });
-    assert.match(r.limit, /left_out/);
+    assert.deepEqual(plain(r.left_out), { bleed: 1 });
+    assert.match(r.limit, /left_out.bleed/);
   },
 
-  async a_cut_candidate_inside_the_decay_of_an_own_hit_is_its_tail_and_not_listed() {
-    const e = env([[0.25, 0, 0.4, 120]]);                 // 50 ms after the hit at 0.2: inside the 60 ms
+  async a_cut_candidate_inside_the_decay_of_an_own_hit_is_listed_the_tail_rule_is_withdrawn() {
+    /* Finding 2: the tail rule is withdrawn - the minimum gap of the matching already covers "too
+       close to be a second stroke", and on the untouched snare tracks the rule left out 0 candidates,
+       so it only hid real strokes (a fast double stroke). The candidate 50 ms after the hit is listed. */
+    const e = env([[0.25, 0, 0.4, 120]]);                 // 50 ms after the hit at 0.2: outside the window
     const r = await e.DSAgent.scan("kick");
-    assert.deepEqual(plain(r.candidates), []);
-    assert.deepEqual(plain(r.left_out), { bleed: 0, tail: 1 });
+    assert.deepEqual(plain(r.candidates.map(c => c.time)), [0.25]);
+    assert.deepEqual(plain(r.left_out), { bleed: 0 });
+  },
+
+  async a_flam_marked_hit_claims_no_candidate_and_the_candidate_is_listed() {
+    /* Finding 3: a flam-marked hit 21 ms after the candidate (just inside the 22 ms window, and with
+       no candidate of its own) must not claim it: the removed hit's candidate is listed. */
+    const e = env([[0.3, 0, 0.4, 120]]);
+    const S = e.S; S.events.kick = [{ id: "f1", t: 0.321, flam: true }];
+    const r = await e.DSAgent.scan("kick");
+    assert.deepEqual(plain(r.candidates.map(c => c.time)), [0.3]);
+  },
+
+  async the_answer_carries_need_and_by_need_the_counts_of_the_listed_candidates() {
+    /* Finding 1: the 10 percent rule is withdrawn - the scan stays complete and the presentation
+       changes: each candidate keeps `need`, `by_need` counts the listed candidates by how far the
+       slider must move (kept; +10, +30, +50, more). No cut-off inside the scan. */
+    const e = env([[0.5, 0, 0.4, 45], [0.3, 0, 0.4, 60], [0.35, 0, 0.4, 80], [0.4, 0, 0.4, 100], [0.45, 0, 0.4, 130]]);
+    const r = await e.DSAgent.scan("kick");               // sens 50
+    assert.deepEqual(plain(r.candidates.map(c => c.need)), [45, 60, 80, 100, 130]);  // nearest to the slider first
+    assert.deepEqual(plain(r.by_need), { kept: 1, "+10": 1, "+30": 1, "+50": 1, more: 1 });
+    assert.match(r.limit, /by_need/);
   },
 
   async a_cut_candidate_after_the_decay_and_far_from_the_other_tracks_hits_is_listed() {
     const e = env([[0.35, 0, 0.4, 120]], "ok", [0.3]);    // 150 ms after the hit, 50 ms from the snare hit
     const r = await e.DSAgent.scan("kick");
     assert.deepEqual(plain(r.candidates.map(c => c.time)), [0.35]);
-    assert.deepEqual(plain(r.left_out), { bleed: 0, tail: 0 });
+    assert.deepEqual(plain(r.left_out), { bleed: 0 });
   },
 
   async a_candidate_within_the_refine_window_of_a_hit_is_claimed_and_never_listed() {
@@ -112,7 +136,8 @@ const tests = {
     const r = await e.DSAgent.scan("kick");
     assert.deepEqual(plain(r.candidates), []);
     assert.match(r.limit, /analyze the track once/);
-    assert.deepEqual(plain(r.left_out), { bleed: 0, tail: 0 });
+    assert.deepEqual(plain(r.left_out), { bleed: 0 });
+    assert.deepEqual(plain(r.by_need), { kept: 0, "+10": 0, "+30": 0, "+50": 0, more: 0 });
     assert.deepEqual(e.asked, [["histograms", "proj-1", "kick", [0.1, 0.2]]]);
   },
 };
