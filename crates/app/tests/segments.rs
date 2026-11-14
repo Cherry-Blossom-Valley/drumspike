@@ -710,7 +710,7 @@ fn analyze_with_first_segment(tag: &str, field: &str, value: Value) -> Value {
             name: "k in",
             role: "kick",
             x,
-            segs: vec![(0.0, 0.0, 1.0)],
+            segs: vec![(0.0, 0.5, 1.0)],
         }],
     );
     patch_doc(&dir, "Seg", |v| {
