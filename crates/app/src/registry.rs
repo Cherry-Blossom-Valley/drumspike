@@ -331,12 +331,33 @@ impl OpenProject {
     /// its segments) is offline.
     pub fn track_audio(&self, name: &str) -> Result<crate::media::TrackAudio, AppError> {
         let tr = self.track(name)?;
+        // A `segments` key that did not read as a segment list stays in `extra` (the document
+        // keeps it as it is); the track must not silently analyse as a plain track or show as
+        // offline — that would hide the fault.
+        if tr.extra.contains_key("segments") {
+            return Err(AppError::bad(format!("track {name}: segments are malformed")));
+        }
         let segs = tr.segments();
         if segs.is_empty() {
             return Ok(crate::media::TrackAudio::File(self.source(name)?));
         }
         let mut out = Vec::with_capacity(segs.len());
         for (i, s) in segs.iter().enumerate() {
+            // The numbers are checked before the decode: a bad one would panic the timeline
+            // slice (a negative `length` gives `i1 < i0`) or corrupt the range.
+            if !s.start.is_finite() || !s.offset.is_finite() || !s.length.is_finite() {
+                return Err(AppError::bad(format!(
+                    "track {name} segment {i}: start, offset and length must be finite numbers"
+                )));
+            }
+            if s.start < 0.0 || s.offset < 0.0 {
+                return Err(AppError::bad(format!(
+                    "track {name} segment {i}: start and offset must be >= 0"
+                )));
+            }
+            if s.length <= 0.0 {
+                return Err(AppError::bad(format!("track {name} segment {i}: length must be > 0")));
+            }
             let (p, st) = resolve_source(s.source_ref(), &self.project.dir);
             if st != SourceStatus::Ok {
                 return Err(AppError::conflict(format!(
