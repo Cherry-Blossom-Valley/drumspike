@@ -72,8 +72,14 @@ fn env_path(name: &str) -> Option<PathBuf> {
 ///
 /// The error of the command; the caught-panic error when the boundary caught one.
 pub fn service_call(svc: &Service, name: &str, args: &serde_json::Value) -> Result<Reply, AppError> {
-    guard("service_call", move || Some(drumspike_app::call::call(svc, name, args, None)))
-        .unwrap_or_else(|| Err(AppError::bad(format!("service-spike: caught panic in service_call ({name})"))))
+    guard("service_call", move || {
+        Some(drumspike_app::call::call(svc, name, args, None))
+    })
+    .unwrap_or_else(|| {
+        Err(AppError::bad(format!(
+            "service-spike: caught panic in service_call ({name})"
+        )))
+    })
 }
 
 static ANALYSIS_STARTED: AtomicBool = AtomicBool::new(false);
@@ -90,37 +96,39 @@ fn start_service_job() {
         return;
     }
     let meta = env_path("DS_SERVICE_SPIKE_META");
-    let spawn = std::thread::Builder::new().name("service-spike-analysis".into()).spawn(move || {
-        let started = std::time::Instant::now();
-        // the service as a normal crate: the models dir is unused (the detector is DSP-only)
-        let svc = Service::new(ServiceConfig::from_env(std::path::Path::new("/")));
-        let dirs = vec![project.display().to_string()];
-        let answer = drumspike_app::headless::analyze_projects(&svc, &dirs);
-        let analysis_ms = started.elapsed().as_millis() as u64;
-        let mut tmp = out.clone().into_os_string();
-        tmp.push(".tmp");
-        let error = match answer.ok().and_then(|one| one.into_iter().next()) {
-            Some(result) => {
-                match std::fs::write(&tmp, serde_json::to_string(&result["events"]).unwrap_or_default()) {
-                    Ok(()) => None,
-                    Err(_) => Some("the event list could not be written".to_string()),
+    let spawn = std::thread::Builder::new()
+        .name("service-spike-analysis".into())
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            // the service as a normal crate: the models dir is unused (the detector is DSP-only)
+            let svc = Service::new(ServiceConfig::from_env(std::path::Path::new("/")));
+            let dirs = vec![project.display().to_string()];
+            let answer = drumspike_app::headless::analyze_projects(&svc, &dirs);
+            let analysis_ms = started.elapsed().as_millis() as u64;
+            let mut tmp = out.clone().into_os_string();
+            tmp.push(".tmp");
+            let error = match answer.ok().and_then(|one| one.into_iter().next()) {
+                Some(result) => {
+                    match std::fs::write(&tmp, serde_json::to_string(&result["events"]).unwrap_or_default()) {
+                        Ok(()) => None,
+                        Err(_) => Some("the event list could not be written".to_string()),
+                    }
                 }
-            }
-            None => Some("the analysis of the fixture failed".to_string()),
-        };
-        // the meta first, the event list last: the rename is the completion signal, and a
-        // reader that sees the event list must also see the finished meta
-        if let Some(m) = meta {
-            let body = match &error {
-                Some(e) => format!("{{\"analysis_ms\":{analysis_ms},\"error\":{e:?}}}"),
-                None => format!("{{\"analysis_ms\":{analysis_ms}}}"),
+                None => Some("the analysis of the fixture failed".to_string()),
             };
-            let _ = std::fs::write(&m, body);
-        }
-        if error.is_none() {
-            let _ = std::fs::rename(&tmp, &out);
-        }
-    });
+            // the meta first, the event list last: the rename is the completion signal, and a
+            // reader that sees the event list must also see the finished meta
+            if let Some(m) = meta {
+                let body = match &error {
+                    Some(e) => format!("{{\"analysis_ms\":{analysis_ms},\"error\":{e:?}}}"),
+                    None => format!("{{\"analysis_ms\":{analysis_ms}}}"),
+                };
+                let _ = std::fs::write(&m, body);
+            }
+            if error.is_none() {
+                let _ = std::fs::rename(&tmp, &out);
+            }
+        });
     if let Err(e) = spawn {
         eprintln!("service-spike: the analysis thread did not start: {e}");
     }
@@ -154,12 +162,21 @@ unsafe extern "C" fn ports_count(_p: *const clap_plugin, _is_input: bool) -> u32
     guard("ports_count", move || 1u32)
 }
 
-unsafe extern "C" fn ports_get(_p: *const clap_plugin, index: u32, is_input: bool, info: *mut clap_audio_port_info) -> bool {
+unsafe extern "C" fn ports_get(
+    _p: *const clap_plugin,
+    index: u32,
+    is_input: bool,
+    info: *mut clap_audio_port_info,
+) -> bool {
     guard("ports_get", move || {
         if index != 0 {
             return false;
         }
-        let (id, name, pair) = if is_input { (0u32, "Input", 1u32) } else { (1u32, "Output", 0u32) };
+        let (id, name, pair) = if is_input {
+            (0u32, "Input", 1u32)
+        } else {
+            (1u32, "Output", 0u32)
+        };
         let mut nm = [0 as c_char; 256];
         for (i, b) in name.bytes().enumerate() {
             nm[i] = b as c_char;
@@ -176,7 +193,10 @@ unsafe extern "C" fn ports_get(_p: *const clap_plugin, index: u32, is_input: boo
     })
 }
 
-static AUDIO_PORTS: clap_plugin_audio_ports = clap_plugin_audio_ports { count: Some(ports_count), get: Some(ports_get) };
+static AUDIO_PORTS: clap_plugin_audio_ports = clap_plugin_audio_ports {
+    count: Some(ports_count),
+    get: Some(ports_get),
+};
 
 unsafe extern "C" fn p_init(_p: *const clap_plugin) -> bool {
     guard("init", move || {
@@ -214,7 +234,11 @@ unsafe extern "C" fn p_process(_p: *const clap_plugin, process: *const clap_proc
         let frames = pr.frames_count as usize;
         if pr.audio_outputs_count > 0 {
             let out = &*pr.audio_outputs;
-            let input = if pr.audio_inputs_count > 0 { &*pr.audio_inputs } else { std::ptr::null() };
+            let input = if pr.audio_inputs_count > 0 {
+                &*pr.audio_inputs
+            } else {
+                std::ptr::null()
+            };
             for c in 0..out.channel_count as usize {
                 let dst = *out.data32.add(c);
                 if dst.is_null() {
@@ -252,9 +276,17 @@ unsafe extern "C" fn f_count(_f: *const clap_plugin_factory) -> u32 {
     1
 }
 unsafe extern "C" fn f_desc(_f: *const clap_plugin_factory, i: u32) -> *const clap_plugin_descriptor {
-    if i == 0 { &DESCRIPTOR } else { std::ptr::null() }
+    if i == 0 {
+        &DESCRIPTOR
+    } else {
+        std::ptr::null()
+    }
 }
-unsafe extern "C" fn f_create(_f: *const clap_plugin_factory, _host: *const clap_host, id: *const c_char) -> *const clap_plugin {
+unsafe extern "C" fn f_create(
+    _f: *const clap_plugin_factory,
+    _host: *const clap_host,
+    id: *const c_char,
+) -> *const clap_plugin {
     if CStr::from_ptr(id) != CStr::from_ptr(PLUGIN_ID) {
         return std::ptr::null();
     }
@@ -279,8 +311,11 @@ unsafe extern "C" fn f_create(_f: *const clap_plugin_factory, _host: *const clap
     &(*p).clap
 }
 
-static PLUGIN_FACTORY: clap_plugin_factory =
-    clap_plugin_factory { get_plugin_count: Some(f_count), get_plugin_descriptor: Some(f_desc), create_plugin: Some(f_create) };
+static PLUGIN_FACTORY: clap_plugin_factory = clap_plugin_factory {
+    get_plugin_count: Some(f_count),
+    get_plugin_descriptor: Some(f_desc),
+    create_plugin: Some(f_create),
+};
 
 unsafe extern "C" fn e_init(_path: *const c_char) -> bool {
     guard("entry init", move || true)
@@ -297,4 +332,9 @@ unsafe extern "C" fn e_get_factory(id: *const c_char) -> *const std::ffi::c_void
 /// The CLAP entry the loader looks for (the bundle carries it in its binary).
 #[no_mangle]
 #[used]
-pub static clap_entry: clap_plugin_entry = clap_plugin_entry { clap_version: CLAP_VERSION, init: Some(e_init), deinit: Some(e_deinit), get_factory: Some(e_get_factory) };
+pub static clap_entry: clap_plugin_entry = clap_plugin_entry {
+    clap_version: CLAP_VERSION,
+    init: Some(e_init),
+    deinit: Some(e_deinit),
+    get_factory: Some(e_get_factory),
+};

@@ -45,10 +45,16 @@ static HOST: clap_host = clap_host {
 unsafe extern "C" fn in_events_size(_list: *const clap_sys::events::clap_input_events) -> u32 {
     0
 }
-unsafe extern "C" fn in_events_get(_list: *const clap_sys::events::clap_input_events, _index: u32) -> *const clap_sys::events::clap_event_header {
+unsafe extern "C" fn in_events_get(
+    _list: *const clap_sys::events::clap_input_events,
+    _index: u32,
+) -> *const clap_sys::events::clap_event_header {
     std::ptr::null()
 }
-unsafe extern "C" fn out_events_try_push(_list: *const clap_sys::events::clap_output_events, _event: *const clap_sys::events::clap_event_header) -> bool {
+unsafe extern "C" fn out_events_try_push(
+    _list: *const clap_sys::events::clap_output_events,
+    _event: *const clap_sys::events::clap_event_header,
+) -> bool {
     false
 }
 
@@ -72,7 +78,10 @@ fn bundle_of(path: &str) -> String {
     if p.is_dir() {
         return p.display().to_string();
     }
-    p.ancestors().nth(2).map(|a| a.display().to_string()).unwrap_or_else(|| p.display().to_string())
+    p.ancestors()
+        .nth(2)
+        .map(|a| a.display().to_string())
+        .unwrap_or_else(|| p.display().to_string())
 }
 
 fn arg_value(args: &[String], name: &str, default: usize) -> usize {
@@ -128,7 +137,8 @@ fn main() {
             eprintln!("service-spike-host: clap_entry.init refused");
             std::process::exit(2);
         }
-        let factory = ((*entry).get_factory).expect("clap_entry.get_factory")(factory_id.as_ptr()) as *const clap_plugin_factory;
+        let factory =
+            ((*entry).get_factory).expect("clap_entry.get_factory")(factory_id.as_ptr()) as *const clap_plugin_factory;
         if factory.is_null() {
             eprintln!("service-spike-host: no plugin factory");
             std::process::exit(2);
@@ -182,7 +192,11 @@ fn main() {
         let budget = Duration::from_secs_f64(frames as f64 / SAMPLE_RATE);
         let (mut blocks, mut overruns, mut worst) = (0usize, 0usize, Duration::ZERO);
         let mut statuses: std::collections::HashMap<clap_process_status, usize> = std::collections::HashMap::new();
-        let mut saw_event_file = wait_file.as_deref().map(std::path::Path::new).map(std::path::Path::exists).unwrap_or(true);
+        let mut saw_event_file = wait_file
+            .as_deref()
+            .map(std::path::Path::new)
+            .map(std::path::Path::exists)
+            .unwrap_or(true);
         while blocks < max_blocks {
             let process = clap_process {
                 steady_time: blocks as i64,

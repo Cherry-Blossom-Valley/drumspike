@@ -48,7 +48,10 @@ unsafe fn create_plugin() -> *const clap_plugin {
     plugin
 }
 
-unsafe fn one_block_process(plugin: *const clap_plugin, frames: usize) -> (clap_sys::process::clap_process_status, Vec<f32>, Vec<f32>) {
+unsafe fn one_block_process(
+    plugin: *const clap_plugin,
+    frames: usize,
+) -> (clap_sys::process::clap_process_status, Vec<f32>, Vec<f32>) {
     let mut input = vec![0.0f32; frames];
     for (i, s) in input.iter_mut().enumerate() {
         *s = ((i % 97) as f32 / 97.0) - 0.5;
@@ -86,11 +89,18 @@ unsafe fn one_block_process(plugin: *const clap_plugin, frames: usize) -> (clap_
 #[test]
 fn service_call_through_the_plugin_answers_the_same_json_as_the_direct_call() {
     let svc = Service::new(ServiceConfig::default());
-    let cases = [("app_info", json!({})), ("project_list", json!({})), ("nope", json!({}))];
+    let cases = [
+        ("app_info", json!({})),
+        ("project_list", json!({})),
+        ("nope", json!({})),
+    ];
     for (name, args) in cases {
         let through = ds_service_spike::service_call(&svc, name, &args);
         let direct = drumspike_app::call::call(&svc, name, &args, None);
-        assert_eq!(through, direct, "{name}: the plugin's service answers another JSON than the app");
+        assert_eq!(
+            through, direct,
+            "{name}: the plugin's service answers another JSON than the app"
+        );
     }
 }
 
@@ -100,21 +110,36 @@ fn the_entry_points_survive_a_forced_panic_and_a_block_passes_through() {
         // 1. the panic phases: the guarded entry points answer their default, the process lives
         std::env::set_var("DS_SERVICE_SPIKE_PANIC", "init");
         let plugin = create_plugin();
-        assert!(!((*plugin).init.expect("init"))(plugin), "init survived the panic as false");
+        assert!(
+            !((*plugin).init.expect("init"))(plugin),
+            "init survived the panic as false"
+        );
 
         std::env::set_var("DS_SERVICE_SPIKE_PANIC", "process");
-        assert!(((*plugin).activate.expect("activate"))(plugin, 48000.0, 64, 4096), "activate survived");
+        assert!(
+            ((*plugin).activate.expect("activate"))(plugin, 48000.0, 64, 4096),
+            "activate survived"
+        );
         let (status, _, _) = one_block_process(plugin, 64);
-        assert_eq!(status, CLAP_PROCESS_ERROR, "the caught panic answers the process error status");
+        assert_eq!(
+            status, CLAP_PROCESS_ERROR,
+            "the caught panic answers the process error status"
+        );
         // the process lives: the test goes on (an uncaught panic here would abort the runner)
-        assert!(((*plugin).start_processing.expect("start_processing"))(plugin), "start_processing survived");
+        assert!(
+            ((*plugin).start_processing.expect("start_processing"))(plugin),
+            "start_processing survived"
+        );
         ((*plugin).destroy.expect("destroy"))(plugin);
 
         // 2. without the switch: the block passes through unchanged
         std::env::remove_var("DS_SERVICE_SPIKE_PANIC");
         let plugin = create_plugin();
         assert!(((*plugin).init.expect("init"))(plugin), "init");
-        assert!(((*plugin).activate.expect("activate"))(plugin, 48000.0, 64, 4096), "activate");
+        assert!(
+            ((*plugin).activate.expect("activate"))(plugin, 48000.0, 64, 4096),
+            "activate"
+        );
         let (status, input, output) = one_block_process(plugin, 512);
         assert_eq!(status, CLAP_PROCESS_CONTINUE, "the block processes");
         assert_eq!(output, input, "the block passed through unchanged");
