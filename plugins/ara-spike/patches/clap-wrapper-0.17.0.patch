@@ -1,0 +1,14 @@
+diff --git a/src/wrapasvst3.cpp b/src/wrapasvst3.cpp
+index 6a00130..b6f6163 100644
+--- a/src/wrapasvst3.cpp
++++ b/src/wrapasvst3.cpp
+@@ -149,7 +149,8 @@ void utf8_to_utf16l(const char *utf8string, uint16_t *target, size_t targetsize)
+ tresult PLUGIN_API ClapAsVst3::initialize(FUnknown *context)
+ {
+   auto result = super::initialize(context);
+-  context->queryInterface(Vst::IHostApplication::iid, (void **)&vst3HostApplication);
++  if (context)  // spike: the ARA test host passes nullptr
++    context->queryInterface(Vst::IHostApplication::iid, (void **)&vst3HostApplication);
+   if (result == kResultOk)
+   {
+     if (!_plugin)
