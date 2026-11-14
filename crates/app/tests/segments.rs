@@ -454,10 +454,13 @@ fn own_hits(d: usize) -> Vec<(usize, f32)> {
         .collect()
 }
 
+/// The signals, the own hits and the bleed hits per mic.
+type Toms = (Vec<Vec<f32>>, Vec<Vec<usize>>, Vec<Vec<usize>>);
+
 /// Three tom close mics: each hears the other drums 20 dB down and 1 ms later; a noise floor
 /// keeps every mic out of digital silence. Returns the signals and, per mic, the own and the
 /// bleed hit samples.
-fn toms3() -> (Vec<Vec<f32>>, Vec<Vec<usize>>, Vec<Vec<usize>>) {
+fn toms3() -> Toms {
     let n = (12.0 * f64::from(SR)) as usize;
     let freqs = [140.0, 110.0, 85.0];
     let mut x = vec![vec![0.0f32; n]; 3];
