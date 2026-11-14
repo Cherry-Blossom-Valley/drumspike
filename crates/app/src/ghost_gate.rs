@@ -165,16 +165,16 @@ fn run_one(svc: &Service, op: &Shared, name: &str, mix: &str, busy: &[f64], ohs:
         let cands = crate::candidates::read_candidates(&dir, &key)?.0;
         (det, dir, track_params, params, key, cands)
     };
-    let path = lock(op).source(name).ok()?;
-    let dec: Arc<Decoded> = svc.inner.media.decode_cached(&path, mix_mode(mix)).ok()?;
+    let audio = lock(op).track_audio(name).ok()?;
+    let dec: Arc<Decoded> = audio.decode(&svc.inner.media, mix_mode(mix)).ok()?;
     // the oh sources (#286 A1): decoded signals; the denial is a property of the audio (the
     // oh level against the snare mic at the candidate's time), no oh hits are needed
     let mut keep_alive: Vec<Arc<Decoded>> = Vec::new();
     for (oname, omix) in ohs {
-        let Some(opath) = lock(op).source(oname).ok() else {
+        let Some(oaudio) = lock(op).track_audio(oname).ok() else {
             continue;
         };
-        let Some(odec) = svc.inner.media.decode_cached(&opath, mix_mode(omix)).ok() else {
+        let Some(odec) = oaudio.decode(&svc.inner.media, mix_mode(omix)).ok() else {
             continue;
         };
         if odec.sr != dec.sr {

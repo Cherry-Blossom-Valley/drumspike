@@ -33,7 +33,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Map, Number, Value};
 
-pub use document::{DEFAULT_MIX_MODE, Document, Event, FORMAT, Settings, Source, Track, now};
+pub use document::{DEFAULT_MIX_MODE, Document, Event, FORMAT, Segment, Settings, Source, Track, now};
 pub(crate) use document::{MIX_MODES, empty_document};
 pub use save::{
     BACKUPS_KEEP, backup_name, free_name, rotate_backups, save_as, save_project, save_project_into,
