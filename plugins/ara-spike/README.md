@@ -4,7 +4,11 @@ Throwaway spike code of 2026-11-14, copied as it ran. It is the start for spike 
 It is not a member of the Cargo workspace and no build or release of the Drum Spike app uses it.
 
 Question: does ARA 2 work from a CLAP plugin written in Rust, and does `clap-wrapper` carry it into a VST3?
-Answer: yes. `./spike.sh` exits 0 and prints `SPIKE: PASS (CLAP and wrapped VST3)`.
+Answer: yes. `./spike.sh all` is the one command: it fetches the third-party parts, builds the
+test host, the CLAP and the wrapped VST3 for the architecture of this machine, and runs
+`./check_s1.sh` (the gate of ticket #504) and the seed check; it prints `S1 CHECK: PASS ...`
+and `SPIKE: PASS (CLAP and wrapped VST3)`. The parts land in `.deps/` (or the folder that
+`DS_ARA_DEPS` names); `./spike.sh deps`, `build` and `check` run the steps one by one.
 
 ## What is here
 
@@ -27,12 +31,26 @@ The detector of the spike is a threshold on channel 0. It is not the Drum Spike 
 
 ## Build notes
 
-These are the commands of the first run, on Apple silicon with the command line tools and no Xcode. No script does them yet: that is work of the ticket. `spike.sh` expects the built parts in `.deps/` (or in the folder that `DS_ARA_DEPS` names).
+`./spike.sh all` does all of this (one command, native to the machine it runs on, Intel or
+Apple silicon). The steps it takes, for reference:
 
-- ARA SDK: release 2.3.0 with its submodules; its scripts fetch the CLAP and VST3 SDKs. Apply `patches/ara-examples-2.3.0.patch` in `ARA_Examples`.
-- Test host: `cmake -S ARA_SDK/ARA_Examples -B build-examples -DARA_SETUP_DEBUGGING=OFF -DCMAKE_BUILD_TYPE=Debug -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT=<versioned macOS SDK path> -DXCODE_VERSION=16.0`, with `XCODE_VERSION=16.0` and `SDKROOT` also in the environment. Always pass `-DARA_SETUP_DEBUGGING=OFF`: the default writes symlinks into the user's plugin folder.
-- Plugin: `ARA_API_DIR=<ARA_SDK>/ARA_API LIBCLANG_PATH=<command line tools>/usr/lib cargo build`, then put the library into the bundle.
-- VST3: `clap-wrapper` 0.17.0 with `patches/clap-wrapper-0.17.0.patch`, `-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 -DCLAP_WRAPPER_DOWNLOAD_DEPENDENCIES=TRUE -DCLAP_WRAPPER_OUTPUT_NAME="DrumSpikeAraSpike"`. The wrapper finds the CLAP through `CLAP_PATH`.
+- ARA SDK: release 2.3.0 with its submodules into `.deps/ARA_SDK`; its scripts fetch the CLAP
+  and VST3 SDKs. `patches/ara-examples-2.3.0.patch` is applied in `ARA_Examples`.
+- Test host: `cmake -S ARA_SDK/ARA_Examples -B build-examples -DARA_SETUP_DEBUGGING=OFF
+  -DCMAKE_BUILD_TYPE=Debug -DCMAKE_OSX_ARCHITECTURES=<arch> -DCMAKE_OSX_SYSROOT=<versioned
+  macOS SDK path> -DXCODE_VERSION=16.0`, with `XCODE_VERSION=16.0` and `SDKROOT` also in the
+  environment. Always pass `-DARA_SETUP_DEBUGGING=OFF`: the default writes symlinks into the
+  user's plugin folder.
+- Plugin: `ARA_API_DIR=<ARA_SDK>/ARA_API LIBCLANG_PATH=<command line tools>/usr/lib cargo
+  build`, then the library goes into the bundle (`DrumSpikeAraSpike.clap/Contents/MacOS/
+  DrumSpikeAraSpike`).
+- VST3: `clap-wrapper` 0.17.0 with `patches/clap-wrapper-0.17.0.patch`,
+  `-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 -DCLAP_WRAPPER_DOWNLOAD_DEPENDENCIES=TRUE
+  -DCLAP_WRAPPER_OUTPUT_NAME="DrumSpikeAraSpike"`. The wrapper finds the CLAP through
+  `CLAP_PATH` at run time.
+- Validators: `pluginval` 1.0.4 (its release zip, SHA-256 pinned in `spike.sh`) runs on the
+  wrapped VST3; `clap-validator` 0.4.1 runs on the CLAP, because pluginval 1.0.4 has no CLAP
+  support.
 
 ## Findings
 
