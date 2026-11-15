@@ -35,6 +35,23 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
                  DS_ARA_RESTORE_FAULT=decode makes that proof fail), no absolute path is
                  stored, and a stored archive fixture from the repo loads (with its
                  version field)
+  doc-service    M1b1 line 1: two analysis requests in one document, the services made are
+                 1 and dropped with the controller (fault: a service per job)
+  doc-tracks     M1b1 line 2: four sources in two requests, four tracks in the project, the
+                 events of the first two byte for byte as before the second request (fault:
+                 the second request forgets the earlier tracks)
+  doc-two        M1b1 line 3: two document controllers in one process, own folders, events
+                 byte for byte the reference of each document alone, no file of the first
+                 folder changes while the second works (fault: one shared folder)
+  doc-archive    M1b1 line 4: the archive stores the document id; a restore in a new
+                 process uses the same folder, opens the project with the stored events and
+                 decodes nothing; an archive of M1a restores into a fresh id (fault: another
+                 folder, no stored events)
+  doc-destroy    M1b1 line 5: one of three sources is destroyed; the track leaves the
+                 project and the plugin's source list (fault: the source stays)
+  doc-home       M1b1 line 6: with HOME below out/, 0 files are written below the home
+                 outside the cache folder, the service home is inside it (fault: the
+                 service home below the user's home)
   threads        audio blocks during the analysis have no overrun, the block count has a
                  lower limit, and the thread of the analysis is not the thread of the
                  request call; with DS_ARA_FAULT=in-process the analysis runs inside
@@ -384,13 +401,17 @@ def build_reference_project() -> bool:
 # ---------------------------------------------------------------- the host runs
 
 
-def host_run(label: str, bundle: Path, args: list, cache: str, fault: bool = False, extra: dict | None = None) -> tuple[int, str, list]:
-    """One ara-host run with a fresh cache and report file. Returns (rc, text, json lines)."""
+def host_run(
+    label: str, bundle: Path, args: list, cache: str, fault: bool = False, extra: dict | None = None, keep_cache: bool = False,
+) -> tuple[int, str, list]:
+    """One ara-host run with a fresh cache and report file (`keep_cache`: the cache folder
+    of an earlier run stays, for a run in a NEW process on the same cache). Returns
+    (rc, text, json lines)."""
     out_file = OUT / f"report-{label}.jsonl"
     if out_file.exists():
         out_file.unlink()
     cache_dir = OUT / cache
-    if cache_dir.exists():
+    if cache_dir.exists() and not keep_cache:
         shutil.rmtree(cache_dir)
     env = {**no_switch(), "DS_ARA_CACHE": str(cache_dir), "DS_ARA_OUT": str(out_file)}
     if fault:
@@ -508,9 +529,25 @@ def stage_identity(label: str, bundle: Path) -> bool:
     return ok
 
 
+def project_docs(cache: str) -> list[Path]:
+    """The project documents of one run's cache folder: one per ARA document,
+    `documents/<document id>/project/*.drumspike`."""
+    root = OUT / cache / "documents"
+    return sorted(root.glob("*/project/*.drumspike")) if root.is_dir() else []
+
+
+def doc_of_run(cache: str) -> Path:
+    """The one project document of a run with one ARA document (the M1a runs). The M1a
+    layout (`session/session.drumspike`) is the fallback, so a stage can run on a base build."""
+    docs = project_docs(cache)
+    if len(docs) == 1:
+        return docs[0]
+    return OUT / cache / "session" / "session.drumspike"
+
+
 def doc_segments(cache: str) -> list | None:
     """The segments of the plugin's document in one run's cache folder (every track)."""
-    path = OUT / cache / "session" / "session.drumspike"
+    path = doc_of_run(cache)
     if not path.exists():
         return None
     doc = json.loads(path.read_text())
@@ -537,7 +574,7 @@ def stage_regions() -> bool:
 
     # the reference: a copy of the plugin's own document (the segments the plugin made
     # from the ARA regions) with the source records pointed back at the fixture file
-    doc_path = OUT / "cache-regions" / "session" / "session.drumspike"
+    doc_path = doc_of_run("cache-regions")
     if not doc_path.exists():
         return pass_fail("regions", False, f"the plugin wrote no document at {doc_path}")
     doc = json.loads(doc_path.read_text())
@@ -634,8 +671,9 @@ def restore_decode_evidence(label: str, cache: str) -> tuple[list, list]:
     read_rows: list[str] = []
     if report.exists():
         read_rows = [ln for ln in report.read_text().splitlines() if '"event":"read"' in ln]
-    audio = OUT / cache / "audio"
-    wavs = sorted(audio.glob("*.wav")) if audio.is_dir() else []
+    # every WAV below the cache folder (the audio of a document lives in its own folder)
+    root = OUT / cache
+    wavs = sorted(root.rglob("*.wav")) if root.is_dir() else []
     return read_rows, wavs
 
 
@@ -878,6 +916,504 @@ def stage_threads() -> bool:
         "the off-request measurement fires on the deliberate violation",
     ) and ok
     return ok
+
+
+# ---------------------------------------------------------------- M1b1: one service and one project per ARA document
+#
+# The ara-host modes `grow` (the sources arrive in batches, one source can be destroyed at
+# the end) and `docs` (two document controllers in one process) drive these stages. The
+# plugin reports `job` rows (one per analysis round of a document: its id, folder, the
+# tracks of the project, the events as the bytes the service gave), a `services` row (the
+# services made and dropped), `doc_restored` rows and `source_destroyed` rows. Every check
+# is a function that returns (ok, evidence); its fault run (a switch of the plugin that
+# breaks exactly that line) must make the same function return False.
+
+_GROW: dict[str, tuple[int, list]] = {}
+HOST_WAIT = "30"  # seconds the host waits for one analysis: a broken plugin fails, it does not hang
+
+
+def job_rows(label: str) -> list:
+    return [r for r in report_rows(label) if r.get("event") == "job"]
+
+
+def event_rows(label: str, event: str) -> list:
+    return [r for r in report_rows(label) if r.get("event") == event]
+
+
+def services_row(label: str) -> dict:
+    rows = event_rows(label, "services")
+    return rows[-1] if rows else {}
+
+
+def track_names(files: list) -> list:
+    return [safe_name(stem_of(f)) for f in files]
+
+
+def fixture_args(files: list) -> list:
+    return [str(FIXTURES / f) for f in files]
+
+
+def grow_run(label: str, files: list, batch: int, destroy: int | None = None, extra: dict | None = None) -> tuple[int, list]:
+    """One `grow` run of the host (memoised: two stages read one run)."""
+    if label not in _GROW:
+        args = ["grow", "--files", *fixture_args(files), "--batch", str(batch), "--wait", HOST_WAIT]
+        if destroy is not None:
+            args += ["--destroy", str(destroy)]
+        rc, _text, lines = host_run(label, CLAP, args, f"cache-{label}", extra=extra)
+        _GROW[label] = (rc, lines)
+    return _GROW[label]
+
+
+def host_notes_of(lines: list, phase: str) -> dict:
+    return {r["name"]: r["samples"] for r in lines if r.get("event") == "host_notes" and r.get("phase") == phase}
+
+
+def tracks_of_doc(path: Path) -> dict:
+    return json.loads(path.read_text()).get("tracks") or {}
+
+
+def file_state(root: Path) -> dict:
+    """path -> (size, mtime_ns) of every file below `root`."""
+    out = {}
+    if root.is_dir():
+        for p in root.rglob("*"):
+            if p.is_file():
+                st = p.stat()
+                out[str(p)] = (st.st_size, st.st_mtime_ns)
+    return out
+
+
+# ---- gate line 1: one service per document
+
+SERVICE_FILES = FILES  # four sources, two requests of two
+
+
+def check_services(label: str) -> tuple[bool, str]:
+    jobs = job_rows(label)
+    sv = services_row(label)
+    docs = {j.get("doc") for j in jobs}
+    made, dropped = sv.get("made"), sv.get("dropped")
+    ok = made == 1 and dropped == 1 and len(jobs) == 2 and len(docs) == 1
+    return ok, (
+        f"{len(jobs)} analysis requests in {len(docs)} document(s): {made} service(s) made, {dropped} dropped "
+        "with the document controller (want 1 and 1)"
+    )
+
+
+def stage_doc_service() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-service", False, "no host or no CLAP: run check.sh build first")
+    rc, _lines = grow_run("doc-grow", SERVICE_FILES, 2)
+    if rc != 0:
+        return pass_fail("doc-service", False, f"ara-host grow rc={rc} (out/host-doc-grow.log)")
+    ok, evidence = check_services("doc-grow")
+    return pass_fail("doc-service", ok, evidence)
+
+
+def stage_doc_service_fault() -> bool:
+    """The fault run: the plugin makes a new service for every job (the M1a way)."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-service-fault", False, "no host or no CLAP: run check.sh build first")
+    rc, _lines = grow_run("doc-grow-service-fault", SERVICE_FILES, 2, extra={"DS_ARA_SERVICE_FAULT": "per-job"})
+    ok, evidence = check_services("doc-grow-service-fault")
+    return pass_fail(
+        "doc-service-fault",
+        rc == 0 and not ok and services_row("doc-grow-service-fault").get("made", 0) >= 2,
+        f"the fault switch made a service per job and the check refused it: {evidence}",
+    )
+
+
+# ---- gate line 2: the tracks stay
+
+def check_tracks(label: str, cache: str, lines: list, files: list) -> tuple[bool, str]:
+    jobs = job_rows(label)
+    docs0 = project_docs(cache)
+    on_disk0 = len(tracks_of_doc(docs0[0])) if len(docs0) == 1 else len(tracks_of_doc(doc_of_run(cache))) if doc_of_run(cache).exists() else 0
+    if len(jobs) != 2:
+        return False, f"{len(jobs)} job rows, want 2 (one per request); the document on disk has {on_disk0} tracks, want {len(files)}"
+    first, second = jobs
+    t1, t2 = first.get("track_json") or {}, second.get("track_json") or {}
+    kept = [n for n in t1 if t2.get(n) == t1[n]]  # the strings are the service's bytes
+    docs = project_docs(cache)
+    doc_tracks = tracks_of_doc(docs[0]) if len(docs) == 1 else {}
+    n_tracks = len(second.get("project_tracks") or [])
+    events = sum(len(json.loads(v)) for v in t2.values())
+    in_doc = bool(t2) and all(n in doc_tracks and doc_tracks[n].get("events") == json.loads(t2[n]) for n in t2)
+    notes1, notes2 = host_notes_of(lines, "round-1"), host_notes_of(lines, "final")
+    notes_same = bool(notes1) and all(notes2.get(n) == v for n, v in notes1.items())
+    ok = (
+        n_tracks == len(files)
+        and len(doc_tracks) == len(files)
+        and list(t2) == track_names(files)
+        and len(t1) == 2
+        and kept == list(t1)
+        and events > 0
+        and in_doc
+        and notes_same
+    )
+    return ok, (
+        f"{n_tracks} tracks and {events} events in the project after the second request; "
+        f"{len(kept)} of {len(t1)} earlier tracks keep their events byte for byte; "
+        f"the document on disk has {len(doc_tracks)} tracks (events equal: {in_doc}); "
+        f"the host reads the same notes for the first sources: {notes_same}"
+    )
+
+
+def stage_doc_tracks() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-tracks", False, "no host or no CLAP: run check.sh build first")
+    rc, lines = grow_run("doc-grow", SERVICE_FILES, 2)
+    if rc != 0:
+        return pass_fail("doc-tracks", False, f"ara-host grow rc={rc} (out/host-doc-grow.log)")
+    ok, evidence = check_tracks("doc-grow", "cache-doc-grow", lines, SERVICE_FILES)
+    return pass_fail("doc-tracks", ok, evidence)
+
+
+def stage_doc_tracks_fault() -> bool:
+    """The fault run: the second request forgets the earlier tracks (the M1a way)."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-tracks-fault", False, "no host or no CLAP: run check.sh build first")
+    rc, lines = grow_run("doc-grow-tracks-fault", SERVICE_FILES, 2, extra={"DS_ARA_TRACKS_FAULT": "forget"})
+    ok, evidence = check_tracks("doc-grow-tracks-fault", "cache-doc-grow-tracks-fault", lines, SERVICE_FILES)
+    return pass_fail(
+        "doc-tracks-fault",
+        rc == 0 and not ok,
+        f"the fault switch dropped the earlier tracks and the check refused it: {evidence}",
+    )
+
+
+# ---- gate line 3: two documents in one process
+
+DOC_A, DOC_B = FILES[:2], FILES[2:]
+
+
+def reference_alone(name: str, files: list) -> bytes | None:
+    """`service_tool analyze` on a project of these files alone: the raw events object."""
+    ref = OUT / name
+    if ref.exists():
+        shutil.rmtree(ref)
+    script = OUT / f"run-{name}.json"
+    script.write_text(
+        json.dumps(
+            [
+                {"cmd": "project_new", "args": {"name": name, "dir": str(OUT)}},
+                {"cmd": "tracks_add", "args": {"sid": "$sid", "paths": fixture_args(files), "copy": True}},
+                {"cmd": "project_save", "args": {"sid": "$sid", "force": True}},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    rc, _text = run([str(SERVICE_TOOL), "run", str(script)], env=no_switch(), log=f"{name}-build.log")
+    if rc != 0:
+        return None
+    ok, events, n = service_tool_events(ref, name)
+    return events if ok else None
+
+
+def check_two(label: str, cache: str, lines: list, refs: list) -> tuple[bool, str]:
+    by_doc: dict = {}
+    for j in job_rows(label):
+        by_doc.setdefault(j.get("doc"), []).append(j)
+    if len(by_doc) != 2:
+        return False, f"{len(by_doc)} document(s) in the report, want 2"
+    rows = [r[-1] for r in by_doc.values()]
+    folders = [Path(r.get("folder", "")) for r in rows]
+    root = OUT / cache / "documents"
+    own = len({str(f) for f in folders}) == 2 and all(f.parent == root and f.is_dir() for f in folders)
+    same = [r.get("events_json", "").encode() == ref for r, ref in zip(rows, refs)]
+    events = sum(len(v) for r in rows for v in (json.loads(x) for x in (r.get("track_json") or {}).values()))
+    start = next((r["unix_ns"] for r in lines if r.get("event") == "host_phase" and r.get("phase") == "start"), 0)
+    state_a = file_state(folders[0]) if own else {}
+    quiet = bool(state_a) and start > 0 and all(mt <= start for _size, mt in state_a.values())
+    docs = project_docs(cache)
+    two_tracks = len(docs) == 2 and all(len(tracks_of_doc(d)) == 2 for d in docs)
+    audio = [sorted(p.name[:3] for p in (f / "audio").glob("*.wav")) for f in folders] if own else []
+    own_numbering = audio == [["000", "001"], ["000", "001"]]
+    ok = own and all(same) and events > 0 and quiet and two_tracks and own_numbering
+    return ok, (
+        f"two documents, {events} events: own folders {own}, events byte for byte the reference of each document "
+        f"alone {same}, no file of the first folder changed while the second worked ({len(state_a)} files, quiet {quiet}), "
+        f"each project holds its 2 tracks {two_tracks}, own source numbering {own_numbering}"
+    )
+
+
+def doc_two_run(label: str, extra: dict | None = None) -> tuple[int, list]:
+    rc, _text, lines = host_run(
+        label, CLAP, ["docs", "--files", *fixture_args(DOC_A), "--files2", *fixture_args(DOC_B), "--wait", HOST_WAIT], f"cache-{label}", extra=extra
+    )
+    return rc, lines
+
+
+def stage_doc_two() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-two", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref_a, ref_b = reference_alone("m1b1-ref-a", DOC_A), reference_alone("m1b1-ref-b", DOC_B)
+    if ref_a is None or ref_b is None:
+        return pass_fail("doc-two", False, "the reference of one document alone failed")
+    rc, lines = doc_two_run("doc-two")
+    if rc != 0:
+        return pass_fail("doc-two", False, f"ara-host docs rc={rc} (out/host-doc-two.log)")
+    ok, evidence = check_two("doc-two", "cache-doc-two", lines, [ref_a, ref_b])
+    return pass_fail("doc-two", ok, evidence)
+
+
+def stage_doc_two_fault() -> bool:
+    """The fault run: both documents use one folder (the M1a way)."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-two-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref_a, ref_b = reference_alone("m1b1-ref-a", DOC_A), reference_alone("m1b1-ref-b", DOC_B)
+    if ref_a is None or ref_b is None:
+        return pass_fail("doc-two-fault", False, "the reference of one document alone failed")
+    rc, lines = doc_two_run("doc-two-fault", extra={"DS_ARA_FOLDER_FAULT": "shared"})
+    ok, evidence = check_two("doc-two-fault", "cache-doc-two-fault", lines, [ref_a, ref_b])
+    return pass_fail(
+        "doc-two-fault", not ok, f"the fault switch put both documents in one folder and the check refused it (rc={rc}): {evidence}"
+    )
+
+
+# ---- gate line 4: the id in the archive, the same folder after a restore
+
+_ARCHIVE_STORE: dict[str, Path] = {}
+
+
+def archive_store() -> tuple[bool, Path, str]:
+    """Store the four-source session once (memoised): the archive, the cache folder stays."""
+    archive = OUT / "doc-archive.araarchive"
+    if "archive" not in _ARCHIVE_STORE:
+        rc, _text, _lines = host_run(
+            "doc-archive-store", CLAP, ["store", "--files", *fixture_args(FILES), "--archive", str(archive)], "cache-doc-archive"
+        )
+        if rc != 0 or not archive.exists():
+            return False, archive, f"ara-host store rc={rc} (out/host-doc-archive-store.log)"
+        _ARCHIVE_STORE["archive"] = archive
+    return True, archive, ""
+
+
+def check_archive(archive: Path, restore_label: str, cache: str, audio_before: dict) -> tuple[bool, str]:
+    blob = json.loads(archive.read_text())
+    doc_id = blob.get("doc_id")
+    stored = job_rows("doc-archive-store")
+    if not isinstance(doc_id, str) or not doc_id or not stored:
+        return False, f"the archive stores no document id ({doc_id!r}) or the store run has no job row"
+    want = stored[-1]
+    rows = [r for r in event_rows(restore_label, "doc_restored")]
+    if len(rows) != 1:
+        return False, f"{len(rows)} doc_restored rows, want 1"
+    row = rows[0]
+    same_folder = row.get("doc") == doc_id and row.get("folder") == want.get("folder")
+    events_same = row.get("events_json") == want.get("events_json") and bool(row.get("events_json"))
+    n_events = sum(len(v) for v in json.loads(row.get("events_json") or "{}").values())
+    names = row.get("project_tracks") == want.get("project_tracks") and len(row.get("project_tracks") or []) == len(FILES)
+    reads = [r for r in report_rows(restore_label) if r.get("event") == "read"]
+    decodes = row.get("decodes")
+    audio_after = {k: v for k, v in file_state(OUT / cache).items() if k.endswith(".wav")}
+    no_decode = not reads and decodes == 0 and audio_after == audio_before and bool(audio_before)
+    docs = project_docs(cache)
+    on_disk = len(docs) == 1 and all(
+        t.get("events") == json.loads(want["track_json"][n]) for n, t in tracks_of_doc(docs[0]).items()
+    )
+    ok = same_folder and events_same and n_events > 0 and names and no_decode and on_disk
+    return ok, (
+        f"restored in a new process: the stored document id gives the same folder {same_folder}, "
+        f"the project opens with the stored events byte for byte {events_same} ({n_events} events, "
+        f"{len(row.get('project_tracks') or [])} tracks), no decode: {len(reads)} read row(s), decode counter {decodes}, "
+        f"{len(audio_before)} cache WAV(s) unchanged {audio_after == audio_before}, document on disk equal {on_disk}"
+    )
+
+
+def restore_run(label: str, archive: Path, cache: str, extra: dict | None = None) -> tuple[int, dict]:
+    before = {k: v for k, v in file_state(OUT / cache).items() if k.endswith(".wav")}
+    rc, _text, _lines = host_run(
+        label, CLAP, ["restore", "--files", *fixture_args(FILES), "--archive", str(archive)], cache, extra=extra, keep_cache=True
+    )
+    return rc, before
+
+
+def stage_doc_archive() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-archive", False, "no host or no CLAP: run check.sh build first")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("doc-archive", False, why)
+    rc, before = restore_run("doc-archive-restore", archive, "cache-doc-archive")
+    if rc != 0:
+        return pass_fail("doc-archive", False, f"ara-host restore rc={rc} (out/host-doc-archive-restore.log)")
+    ok, evidence = check_archive(archive, "doc-archive-restore", "cache-doc-archive", before)
+    ok = pass_fail("doc-archive", ok, evidence)
+    # an archive of M1a (version 1, no document id): the restore makes a fresh id and
+    # opens the project with the stored events, and decodes nothing
+    if not ARCHIVE_FIXTURE.exists():
+        return pass_fail("doc-archive-v1", False, f"no stored archive fixture at {ARCHIVE_FIXTURE}")
+    rc, _text, _lines = host_run(
+        "doc-archive-v1",
+        CLAP,
+        ["restore", "--files", *fixture_args(FILES), "--archive", str(ARCHIVE_FIXTURE)],
+        "cache-doc-archive-v1",
+    )
+    rows = event_rows("doc-archive-v1", "doc_restored")
+    fixture = json.loads(ARCHIVE_FIXTURE.read_text())
+    row = rows[0] if len(rows) == 1 else {}
+    events = json.loads(row.get("events_json") or "{}")
+    reads = [r for r in report_rows("doc-archive-v1") if r.get("event") == "read"]
+    v1_ok = (
+        rc == 0
+        and fixture.get("version") == 1
+        and "doc_id" not in fixture
+        and bool(row.get("doc"))
+        and events == fixture.get("events")
+        and sum(len(v) for v in events.values()) > 0
+        and row.get("decodes") == 0
+        and not reads
+    )
+    return pass_fail(
+        "doc-archive-v1",
+        v1_ok,
+        f"the committed version-1 archive (no document id) restores into the fresh id {row.get('doc')} with "
+        f"{sum(len(v) for v in events.values())} stored events, {len(reads)} read row(s), decode counter {row.get('decodes')}",
+    ) and ok
+
+
+def stage_doc_archive_fault() -> bool:
+    """Two fault runs of the restore: another folder than the stored id gives, and a
+    project without the stored events. The check must refuse both."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-archive-fault", False, "no host or no CLAP: run check.sh build first")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("doc-archive-fault", False, why)
+    refused = {}
+    for fault in ("newid", "empty"):
+        rc, before = restore_run(f"doc-archive-restore-{fault}", archive, "cache-doc-archive", extra={"DS_ARA_RESTORE_FAULT": fault})
+        ok, evidence = check_archive(archive, f"doc-archive-restore-{fault}", "cache-doc-archive", before)
+        refused[fault] = (rc == 0 and not ok, evidence)
+    return pass_fail(
+        "doc-archive-fault",
+        all(v[0] for v in refused.values()),
+        "the fault switches (another folder, no stored events) were refused by the check: "
+        + "; ".join(f"{k}: {v[0]}" for k, v in refused.items()),
+    )
+
+
+# ---- gate line 5: a destroyed source leaves the project
+
+DESTROY_FILES = [FILES[0], FILES[1], FILES[2]]  # kick, snare, tom; the snare goes
+
+
+def check_destroy(label: str, cache: str, lines: list) -> tuple[bool, str]:
+    jobs = job_rows(label)
+    docs0 = project_docs(cache)
+    on_disk0 = len(tracks_of_doc(docs0[0])) if len(docs0) == 1 else len(tracks_of_doc(doc_of_run(cache))) if doc_of_run(cache).exists() else 0
+    if len(jobs) != 1:
+        return False, f"{len(jobs)} job rows, want 1; the document on disk has {on_disk0} tracks after the destroy, want 2"
+    before = jobs[0].get("track_json") or {}
+    names = track_names(DESTROY_FILES)
+    gone, left = names[1], [names[0], names[2]]
+    docs = project_docs(cache)
+    doc_tracks = tracks_of_doc(docs[0]) if len(docs) == 1 else {}
+    destroyed = event_rows(label, "source_destroyed")
+    row = destroyed[-1] if destroyed else {}
+    events_same = bool(left) and all(
+        n in doc_tracks and doc_tracks[n].get("events") == json.loads(before.get(n, "null")) for n in left
+    )
+    wavs = sorted(p.name[:3] for d in (OUT / cache / "documents").glob("*/audio") for p in d.glob("*.wav"))
+    notes_after = host_notes_of(lines, "after-destroy")
+    notes_final = host_notes_of(lines, "final")
+    notes_same = len(notes_after) == 2 and all(notes_final.get(n) == v for n, v in notes_after.items())
+    ok = (
+        len(before) == 3
+        and list(doc_tracks) == left
+        and gone not in doc_tracks
+        and len(destroyed) == 1
+        and row.get("sources_left") == 2
+        and row.get("project_tracks") == left
+        and events_same
+        and wavs == ["000", "002"]
+        and notes_same
+    )
+    return ok, (
+        f"3 sources analysed, 1 destroyed: the plugin's source list holds {row.get('sources_left')}, the project "
+        f"{row.get('project_tracks')}, the document on disk {list(doc_tracks)} (the destroyed track gone: "
+        f"{gone not in doc_tracks}), the events of the others byte for byte as before {events_same}, "
+        f"cache audio of the destroyed source gone {wavs == ['000', '002']}"
+    )
+
+
+def stage_doc_destroy() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-destroy", False, "no host or no CLAP: run check.sh build first")
+    rc, lines = grow_run("doc-destroy", DESTROY_FILES, 3, destroy=1)
+    if rc != 0:
+        return pass_fail("doc-destroy", False, f"ara-host grow rc={rc} (out/host-doc-destroy.log)")
+    ok, evidence = check_destroy("doc-destroy", "cache-doc-destroy", lines)
+    return pass_fail("doc-destroy", ok, evidence)
+
+
+def stage_doc_destroy_fault() -> bool:
+    """The fault run: the plugin keeps the destroyed source (the M1a way)."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-destroy-fault", False, "no host or no CLAP: run check.sh build first")
+    rc, lines = grow_run("doc-destroy-fault", DESTROY_FILES, 3, destroy=1, extra={"DS_ARA_DESTROY_FAULT": "keep"})
+    ok, evidence = check_destroy("doc-destroy-fault", "cache-doc-destroy-fault", lines)
+    return pass_fail(
+        "doc-destroy-fault", rc == 0 and not ok, f"the fault switch kept the destroyed source and the check refused it: {evidence}"
+    )
+
+
+# ---- gate line 6: the service home is inside the cache folder, nothing else below the user's home
+
+HOME_FILES = FILES[:2]
+
+
+def check_home(label: str, home: Path, cache: Path) -> tuple[bool, str]:
+    """The files written below `home` outside `cache`: 0. The files inside the cache and
+    the service home inside it (with its recent list) make the check non-vacuous."""
+    below = [p for p in home.rglob("*") if p.is_file()] if home.is_dir() else []
+    outside = [p for p in below if cache not in p.parents]
+    inside = [p for p in below if cache in p.parents]
+    jobs = job_rows(label)
+    svc_home = Path(jobs[-1].get("service_home", "")) if jobs else Path("")
+    home_in_cache = bool(jobs) and cache in svc_home.parents and (svc_home / "recent.json").is_file()
+    ok = not outside and len(inside) > 0 and home_in_cache
+    listed = [str(p.relative_to(home)) for p in outside[:3]]
+    return ok, (
+        f"{len(outside)} file(s) written below the user's home outside the cache folder{': ' + str(listed) if listed else ''}, "
+        f"{len(inside)} inside it; the service home is inside the cache folder with its recent list: {home_in_cache}"
+    )
+
+
+def home_run(label: str, extra: dict | None = None) -> tuple[int, Path, Path]:
+    """A run with HOME pointed at a folder below out/ (the real home is never written) and
+    the cache folder where the README puts it below that home."""
+    home = OUT / f"home-{label}"
+    if home.exists():
+        shutil.rmtree(home)
+    home.mkdir(parents=True)
+    cache_rel = f"home-{label}/Library/Caches/DrumSpike/ARA"
+    rc, _text, _lines = host_run(
+        label, CLAP, ["session", "--files", *fixture_args(HOME_FILES)], cache_rel, extra={"HOME": str(home), **(extra or {})}
+    )
+    return rc, home, OUT / cache_rel
+
+
+def stage_doc_home() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-home", False, "no host or no CLAP: run check.sh build first")
+    rc, home, cache = home_run("doc-home")
+    if rc != 0:
+        return pass_fail("doc-home", False, f"ara-host session rc={rc} (out/host-doc-home.log)")
+    ok, evidence = check_home("doc-home", home, cache)
+    return pass_fail("doc-home", ok, evidence)
+
+
+def stage_doc_home_fault() -> bool:
+    """The fault run: the service home is a folder below the user's home, outside the cache."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-home-fault", False, "no host or no CLAP: run check.sh build first")
+    rc, home, cache = home_run("doc-home-fault", extra={"DS_ARA_HOME_FAULT": "1"})
+    ok, evidence = check_home("doc-home-fault", home, cache)
+    return pass_fail(
+        "doc-home-fault", rc == 0 and not ok, f"the fault switch put the service home below the user's home and the check refused it: {evidence}"
+    )
 
 
 def stage_conformance() -> bool:
@@ -1147,6 +1683,18 @@ STAGES = {
     "archive-paths-fault": stage_archive_paths_fault,
     "archive-restore-pathname": stage_archive_restore_pathname,
     "threads": stage_threads,
+    "doc-service": stage_doc_service,
+    "doc-service-fault": stage_doc_service_fault,
+    "doc-tracks": stage_doc_tracks,
+    "doc-tracks-fault": stage_doc_tracks_fault,
+    "doc-two": stage_doc_two,
+    "doc-two-fault": stage_doc_two_fault,
+    "doc-archive": stage_doc_archive,
+    "doc-archive-fault": stage_doc_archive_fault,
+    "doc-destroy": stage_doc_destroy,
+    "doc-destroy-fault": stage_doc_destroy_fault,
+    "doc-home": stage_doc_home,
+    "doc-home-fault": stage_doc_home_fault,
     "conformance": stage_conformance,
     "files": stage_files,
     "pluginval": stage_pluginval,
@@ -1160,7 +1708,9 @@ STAGES = {
 ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
     "archive-paths-fault", "archive-restore-pathname",
-    "threads", "conformance", "files", "pluginval", "validate", "universal", "standalone",
+    "threads", "doc-service", "doc-service-fault", "doc-tracks", "doc-tracks-fault", "doc-two", "doc-two-fault",
+    "doc-archive", "doc-archive-fault", "doc-destroy", "doc-destroy-fault", "doc-home", "doc-home-fault",
+    "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",
 ]
 
@@ -1184,7 +1734,7 @@ def main() -> int:
     if FAILURES:
         print(f"M1A CHECK: FAIL ({', '.join(FAILURES)})")
         return 1
-    print("M1A CHECK: PASS (tables, tables-fault, identity, regions, archive, notes, threads, conformance, files, pluginval, clap-validator, universal, standalone, crate, workspace)")
+    print("M1A CHECK: PASS (tables, tables-fault, identity, regions, archive, notes, threads, document service, tracks, two documents, archive id, destroy, home, conformance, files, pluginval, clap-validator, universal, standalone, crate, workspace)")
     return 0
 
 

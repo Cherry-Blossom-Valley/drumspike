@@ -1,10 +1,13 @@
-# Drum Spike ARA plugin (M1a, #525)
+# Drum Spike ARA plugin (M1a, #525; M1b1, #537)
 
 The Drum Spike plugin for DAWs, without an editor: one CLAP plugin in Rust with ARA 2,
 wrapped as one self-contained VST3 (the CLAP inside the bundle). The plugin takes the
 audio sources and playback regions of the host, analyses them with the Drum Spike service
 (`drumspike-app`, the same detection as the desktop app), gives the hits back to the host
 as ARA notes, and keeps its state in the ARA archive of the session.
+
+Since M1b1 the plugin holds one Drum Spike service and one project for each ARA document,
+for the life of the document controller (see "The session" below).
 
 The crate is outside the Cargo workspace members (the workspace builds without the ARA
 SDK); it uses `drumspike-app` as a path dependency. The ARA 2 C API is generated with
@@ -34,11 +37,37 @@ The plugin writes only below one cache folder:
 
     ~/Library/Caches/DrumSpike/ARA
 
-(`DS_ARA_CACHE` overrides it in the check.) Inside it: `audio/<n>-<stem>.wav`, the source
-audio the host delivers through the ARA audio access controller, one file per ARA audio
-source, and `session/`, the Drum Spike project the analysis runs on (one track per audio
-source; the host's playback regions are the segments of the track). The plugin never
-writes into an audio file of the session.
+(`DS_ARA_CACHE` overrides it in the check.) Inside it, one folder for each ARA document:
+
+    documents/<id>/audio/<n>-<stem>.wav   the source audio the host delivers through the
+                                          ARA audio access controller, one file per ARA
+                                          audio source of this document
+    documents/<id>/project/               the Drum Spike project of the document (one track
+                                          per audio source; the host's playback regions
+                                          are the segments of the track)
+    documents/<id>/home/                  the home folder of the service (its recent list)
+
+The plugin never writes into an audio file of the session, and nothing below the user's
+home outside this folder.
+
+## The session
+
+One document controller owns one `drumspike_app::Service` (made with the controller,
+dropped with it) and one project folder. The id of the folder is made by the plugin once per
+document and stored in the ARA archive, so a restore in a new process finds the same folder.
+
+- A request to analyse sources adds them as tracks to the open project and analyses those
+  tracks only. A later request adds more; the tracks of the earlier ones stay, with their
+  events byte for byte. The project is saved after every round.
+- `destroyAudioSource` removes the source from the controller's list at once; its track
+  leaves the project (and its cached audio the cache) on the worker thread.
+- A restore from the archive writes the project document with the stored events and opens
+  it. It decodes no audio file. An archive of M1a (version 1, no document id) restores into a
+  fresh id; the archive version stays 1 (the two new fields are optional).
+- Two document controllers in one process have their own service, folder, source numbering
+  and file names.
+- All of this runs on the plugin's worker thread. Nothing runs on the audio thread, and the
+  host's main thread only reads and writes the state it needs for the ARA calls.
 
 ## The check
 
@@ -48,7 +77,12 @@ against `service_tool analyze` on the CLAP and on the plugin inside the VST3, th
 fixture (two regions, one trimmed; the track is made from segments), the archive store /
 restore with the decode counter at 0 and the committed fixture `fixtures/archive-v1.ara`,
 the audio-thread check with its fault run, the file probe, pluginval (strictness 5) and
-clap-validator, the standalone rule, and the crate and workspace trios. The ticket's "in
+clap-validator, the standalone rule, and the crate and workspace trios. The M1b1 stages
+(`doc-*`, each with a fault run) drive the host modes `grow` (sources arrive in batches, one
+can be destroyed) and `docs` (two document controllers in one process): one service per
+document, the tracks stay, two documents apart, the document id in the archive, a destroyed
+source leaves the project, and the home of the service (a run with `HOME` below `out/`
+lists the files below it outside the cache folder: 0). The ticket's "in
 the ARA test host" is two hosts: the plugin's own `ara-host` drives the stages above, and
 the `ARATestHost` of the ARA SDK examples - built from the S1 pattern with the S1 patch -
 runs its own tests (ContentReading, PropertyUpdates, Archiving, PlaybackRendering,

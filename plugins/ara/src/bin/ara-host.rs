@@ -12,6 +12,13 @@
 //! ara-host <bundle> restore  ... --no-persistent-id               sources without a persistent ID
 //! ara-host <bundle> blocks   --files <wav>... [--frames N]        the audio-thread check
 //! ara-host <bundle> tables                                        the interface-table walk
+//! ara-host <bundle> grow     --files <wav>... [--batch N] [--destroy I]
+//!                             the sources arrive in batches of N: each batch is added,
+//!                             analysed and waited for before the next one; then source I
+//!                             (an index) is destroyed (M1b1: one service and one project
+//!                             for the whole document)
+//! ara-host <bundle> docs     --files <wav>... --files2 <wav>...   two document controllers
+//!                             in one process: the first document works, then the second
 //! ```
 //!
 //! Region spec: `<startInModificationTime>,<durationInModificationTime>,<startInPlaybackTime>`
@@ -53,6 +60,10 @@ const FRAMES: usize = 512;
 /// ID, as a host that has none does. A restore then has only the name to match on, and the
 /// name is the host's own (here the file path), not the reduced name the archive stores.
 static NO_PERSISTENT_ID: AtomicBool = AtomicBool::new(false);
+
+/// How long `analyse` waits for the plugin (seconds; `--wait N` changes it, the check gives
+/// the new document modes a short bound so a broken plugin fails fast).
+static WAIT_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(300);
 const SAMPLE_RATE: f64 = 48_000.0;
 
 /// One audio source of the host: the samples per channel, loaded from the WAV.
@@ -272,7 +283,9 @@ fn factory() -> &'static ARAFactory {
     unsafe { &*(*ARA_FACTORY.0.lock().unwrap()) }
 }
 
-static HOST_INSTANCE: SyncPtr<Mutex<Option<ARADocumentControllerHostInstance>>> = SyncPtr(Mutex::new(None));
+/// `initializeARAWithConfiguration` runs once per process, however many document
+/// controllers the host makes.
+static ARA_INITIALISED: AtomicBool = AtomicBool::new(false);
 
 /// The host instance: the two mandatory interfaces, the optional ones stay null (the
 /// plugin must check before calling them).
@@ -441,10 +454,13 @@ unsafe fn make_controller(_loaded: &Loaded, state: *mut HostState) -> Result<Ins
         desiredApiGeneration: kARAAPIGeneration_2_0_Final as ARAAPIGeneration,
         assertFunctionAddress: std::ptr::null_mut(),
     };
-    (f.initializeARAWithConfiguration
-        .expect("initializeARAWithConfiguration"))(&config);
-    *HOST_INSTANCE.0.lock().unwrap() = Some(host_instance(state));
-    let host = HOST_INSTANCE.0.lock().unwrap().as_ref().unwrap() as *const ARADocumentControllerHostInstance;
+    if !ARA_INITIALISED.swap(true, Ordering::SeqCst) {
+        (f.initializeARAWithConfiguration
+            .expect("initializeARAWithConfiguration"))(&config);
+    }
+    // one host instance per document controller (the plugin keeps the pointer for the
+    // life of the controller; the host never frees it before the process ends)
+    let host = Box::leak(Box::new(host_instance(state))) as *const ARADocumentControllerHostInstance;
     let dc = (f
         .createDocumentControllerWithDocument
         .expect("createDocumentControllerWithDocument"))(host, std::ptr::null());
@@ -463,7 +479,11 @@ unsafe fn add_sources(
     let dc = iface_of(inst);
     let dc_ref = dc_ref_of(inst);
     let mut pairs = Vec::new();
-    for (i, file) in files.iter().enumerate() {
+    // the host ref of a source is its index in `state.sources`: a later batch of the same
+    // document continues the numbering
+    let base = (*state).sources.len();
+    for (k, file) in files.iter().enumerate() {
+        let i = base + k;
         let (rate, channels) = load_wav(file)?;
         let name = CString::new(file.clone()).unwrap();
         let pid = if NO_PERSISTENT_ID.load(Ordering::SeqCst) {
@@ -578,7 +598,8 @@ unsafe fn analyse(inst: Inst, pairs: &[(ARAAudioSourceRef, ARAAudioModificationR
         (dc.requestAudioSourceContentAnalysis
             .expect("requestAudioSourceContentAnalysis"))(dc_ref, *src, types.len(), types.as_ptr());
     }
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let wait = WAIT_SECS.load(Ordering::SeqCst);
+    let deadline = Instant::now() + Duration::from_secs(wait);
     loop {
         let incomplete = pairs.iter().any(|(s, _)| {
             (dc.isAudioSourceContentAnalysisIncomplete
@@ -590,7 +611,7 @@ unsafe fn analyse(inst: Inst, pairs: &[(ARAAudioSourceRef, ARAAudioModificationR
             return Ok(());
         }
         if Instant::now() > deadline {
-            return Err("the analysis did not finish in 300 s".into());
+            return Err(format!("the analysis did not finish in {wait} s"));
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -598,9 +619,23 @@ unsafe fn analyse(inst: Inst, pairs: &[(ARAAudioSourceRef, ARAAudioModificationR
 
 /// The notes of every source through the content readers, one JSON line per source.
 unsafe fn print_notes(inst: Inst, state: &HostState, pairs: &[(ARAAudioSourceRef, ARAAudioModificationRef)]) {
+    print_notes_at(inst, state, pairs, 0, None);
+}
+
+/// [`print_notes`] for the sources `base..` of the host state; a `phase` puts a label on
+/// the rows (the modes with more than one round print the notes of a source more than once).
+unsafe fn print_notes_at(
+    inst: Inst,
+    state: &HostState,
+    pairs: &[(ARAAudioSourceRef, ARAAudioModificationRef)],
+    base: usize,
+    phase: Option<&str>,
+) {
     let dc = iface_of(inst);
     let dc_ref = dc_ref_of(inst);
-    for (i, (s, _)) in pairs.iter().enumerate() {
+    let label = phase.map_or(String::new(), |p| format!("\"phase\":{p:?},"));
+    for (k, (s, _)) in pairs.iter().enumerate() {
+        let i = base + k;
         let reader = (dc
             .createAudioSourceContentReader
             .expect("createAudioSourceContentReader"))(
@@ -627,7 +662,7 @@ unsafe fn print_notes(inst: Inst, state: &HostState, pairs: &[(ARAAudioSourceRef
             .map(|[pos, _]| (pos * f64::from(src.rate)).round())
             .collect();
         println!(
-            "{{\"event\":\"host_notes\",\"name\":{:?},\"rate\":{},\"count\":{},\"samples\":{:?}}}",
+            "{{\"event\":\"host_notes\",{label}\"name\":{:?},\"rate\":{},\"count\":{},\"samples\":{:?}}}",
             src.name.to_string_lossy(),
             src.rate,
             notes.len(),
@@ -873,6 +908,9 @@ fn main() {
     let mode = args.get(1).cloned().unwrap_or_default();
     let rest: Vec<String> = args[2.min(args.len())..].to_vec();
     NO_PERSISTENT_ID.store(rest.iter().any(|a| a == "--no-persistent-id"), Ordering::SeqCst);
+    if let Some(w) = args_value(&rest, "--wait").and_then(|v| v.parse::<u64>().ok()) {
+        WAIT_SECS.store(w, Ordering::SeqCst);
+    }
     let mut files = args_list(&rest, "--files");
     if files.is_empty() {
         files = args_value(&rest, "--file").into_iter().collect();
@@ -884,6 +922,8 @@ fn main() {
         "restore" => run_restore(bundle, &files, args_value(&rest, "--archive")),
         "blocks" => run_blocks(bundle, &files, &rest),
         "tables" => run_tables(bundle),
+        "grow" => run_grow(bundle, &files, &rest),
+        "docs" => run_docs(bundle, &files, &args_list(&rest, "--files2")),
         other => {
             eprintln!("unknown mode {other:?}");
             64
@@ -1012,6 +1052,179 @@ fn run_regions(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         Ok(())
     });
     match rc {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// The unix time in nanoseconds (the phase markers of `docs`: the check compares them with
+/// the modification times of the files).
+fn unix_ns() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos())
+}
+
+/// One host document: its state, its controller instance and its sources.
+struct HostDoc {
+    state: *mut HostState,
+    inst: Inst,
+    pairs: Vec<(ARAAudioSourceRef, ARAAudioModificationRef)>,
+}
+
+impl HostDoc {
+    unsafe fn new(loaded: &Loaded) -> Result<HostDoc, String> {
+        let state = Box::into_raw(Box::new(HostState {
+            sources: Vec::new(),
+            writers: Vec::new(),
+            loaded: Vec::new(),
+            regions: Vec::new(),
+        }));
+        let inst = make_controller(loaded, state)?;
+        Ok(HostDoc {
+            state,
+            inst,
+            pairs: Vec::new(),
+        })
+    }
+
+    /// One batch: add the sources with one full-length region each (inside the edit
+    /// cycle), then ask for the analysis and wait for it. Prints the notes of the batch
+    /// through the content readers under `phase`.
+    unsafe fn add_and_analyse(&mut self, files: &[String], phase: &str) -> Result<(), String> {
+        let dc = iface_of(self.inst);
+        let dc_ref = dc_ref_of(self.inst);
+        let base = (*self.state).sources.len();
+        if let Some(f) = dc.beginEditing {
+            f(dc_ref);
+        }
+        let pairs = add_sources(self.inst, self.state, files)?;
+        for (k, (_, modification)) in pairs.iter().enumerate() {
+            add_regions(
+                self.inst,
+                self.state,
+                *modification,
+                &full_regions(&*self.state, base + k),
+            );
+        }
+        if let Some(f) = dc.endEditing {
+            f(dc_ref);
+        }
+        analyse(self.inst, &pairs)?;
+        print_notes_at(self.inst, &*self.state, &pairs, base, Some(phase));
+        self.pairs.extend(pairs);
+        Ok(())
+    }
+
+    /// The notes of every source of the document that was not destroyed.
+    unsafe fn print_all_notes(&self, phase: &str, skip: Option<usize>) {
+        for (i, pair) in self.pairs.iter().enumerate() {
+            if Some(i) == skip {
+                continue;
+            }
+            print_notes_at(self.inst, &*self.state, std::slice::from_ref(pair), i, Some(phase));
+        }
+    }
+
+    /// The ARA destroy order for one source: samples access off, its playback region, its
+    /// modification, then the source.
+    unsafe fn destroy_source(&self, i: usize) -> Result<(), String> {
+        let dc = iface_of(self.inst);
+        let dc_ref = dc_ref_of(self.inst);
+        let (src, modification) = *self
+            .pairs
+            .get(i)
+            .ok_or_else(|| format!("--destroy {i}: no such source"))?;
+        let st = &*self.state;
+        let region = *st.regions.get(i).ok_or_else(|| format!("--destroy {i}: no region"))?;
+        (dc.enableAudioSourceSamplesAccess
+            .expect("enableAudioSourceSamplesAccess"))(dc_ref, src, 0);
+        (dc.destroyPlaybackRegion.expect("destroyPlaybackRegion"))(dc_ref, region);
+        (dc.destroyAudioModification.expect("destroyAudioModification"))(dc_ref, modification);
+        (dc.destroyAudioSource.expect("destroyAudioSource"))(dc_ref, src);
+        println!(
+            "{{\"event\":\"host_destroyed\",\"index\":{i},\"name\":{:?}}}",
+            st.sources[i].name.to_string_lossy()
+        );
+        Ok(())
+    }
+
+    unsafe fn close(&self) {
+        let dc = iface_of(self.inst);
+        (dc.destroyDocumentController.expect("destroyDocumentController"))(dc_ref_of(self.inst));
+    }
+}
+
+/// `grow`: the sources of one document arrive in batches (`--batch`, default all at once);
+/// every batch is analysed and waited for before the next one. `--destroy I` destroys the
+/// I-th source at the end.
+fn run_grow(bundle: &str, files: &[String], rest: &[String]) -> i32 {
+    if files.is_empty() {
+        eprintln!("grow: no --files");
+        return 64;
+    }
+    let batch = args_value(rest, "--batch")
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|b| *b > 0)
+        .unwrap_or(files.len());
+    let destroy = args_value(rest, "--destroy").and_then(|v| v.parse::<usize>().ok());
+    let result = (|| -> Result<(), String> {
+        unsafe {
+            let loaded = load(bundle)?;
+            let mut doc = HostDoc::new(&loaded)?;
+            for (round, chunk) in files.chunks(batch).enumerate() {
+                doc.add_and_analyse(chunk, &format!("round-{}", round + 1))?;
+            }
+            doc.print_all_notes("final", None);
+            if let Some(i) = destroy {
+                doc.destroy_source(i)?;
+                doc.print_all_notes("after-destroy", Some(i));
+            }
+            doc.close();
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// `docs`: two document controllers in one process. Both exist before the first one
+/// works; the first document is analysed and waited for, a phase marker is printed with
+/// the time, then the second one works.
+fn run_docs(bundle: &str, first: &[String], second: &[String]) -> i32 {
+    if first.is_empty() || second.is_empty() {
+        eprintln!("docs: want --files <wav>... --files2 <wav>...");
+        return 64;
+    }
+    let result = (|| -> Result<(), String> {
+        unsafe {
+            let loaded = load(bundle)?;
+            let mut a = HostDoc::new(&loaded)?;
+            let mut b = HostDoc::new(&loaded)?;
+            a.add_and_analyse(first, "doc-a")?;
+            println!(
+                "{{\"event\":\"host_phase\",\"doc\":\"b\",\"phase\":\"start\",\"unix_ns\":{}}}",
+                unix_ns()
+            );
+            b.add_and_analyse(second, "doc-b")?;
+            println!(
+                "{{\"event\":\"host_phase\",\"doc\":\"b\",\"phase\":\"done\",\"unix_ns\":{}}}",
+                unix_ns()
+            );
+            a.close();
+            b.close();
+        }
+        Ok(())
+    })();
+    match result {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("{e}");
