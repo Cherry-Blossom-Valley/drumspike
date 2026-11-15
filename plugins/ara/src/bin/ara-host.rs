@@ -9,6 +9,7 @@
 //!                             [--update-region <i>:<a>,<d>,<p>] [--destroy-region <i>]
 //! ara-host <bundle> store    --files <wav>... --archive <file>    store the ARA archive
 //! ara-host <bundle> restore  --archive <file> --files <wav>...    restore in a NEW process
+//! ara-host <bundle> restore  ... --no-persistent-id               sources without a persistent ID
 //! ara-host <bundle> blocks   --files <wav>... [--frames N]        the audio-thread check
 //! ara-host <bundle> tables                                        the interface-table walk
 //! ```
@@ -30,6 +31,7 @@ use drumspike_ara::ara::*;
 use drumspike_ara::ClapEntry;
 use libloading::os::unix::{Library, Symbol};
 use std::ffi::{c_char, c_void, CString};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -46,6 +48,11 @@ unsafe impl<T> Send for SyncPtr<T> {}
 const PLUGIN_CLAP_ID: &[u8] = b"com.cherryblossomvalley.drumspike.ara\0";
 const ARA_PLUGIN_EXT_ID: &[u8] = b"org.ara-audio.ara.pluginextension/2\0";
 const FRAMES: usize = 512;
+
+/// `--no-persistent-id`: the host gives every source and modification an empty persistent
+/// ID, as a host that has none does. A restore then has only the name to match on, and the
+/// name is the host's own (here the file path), not the reduced name the archive stores.
+static NO_PERSISTENT_ID: AtomicBool = AtomicBool::new(false);
 const SAMPLE_RATE: f64 = 48_000.0;
 
 /// One audio source of the host: the samples per channel, loaded from the WAV.
@@ -459,7 +466,11 @@ unsafe fn add_sources(
     for (i, file) in files.iter().enumerate() {
         let (rate, channels) = load_wav(file)?;
         let name = CString::new(file.clone()).unwrap();
-        let pid = CString::new(format!("ara-host-source-{i}")).unwrap();
+        let pid = if NO_PERSISTENT_ID.load(Ordering::SeqCst) {
+            CString::default()
+        } else {
+            CString::new(format!("ara-host-source-{i}")).unwrap()
+        };
         let props = ARAAudioSourceProperties {
             structSize: std::mem::size_of::<ARAAudioSourceProperties>(),
             name: name.as_ptr(),
@@ -861,6 +872,7 @@ fn main() {
     };
     let mode = args.get(1).cloned().unwrap_or_default();
     let rest: Vec<String> = args[2.min(args.len())..].to_vec();
+    NO_PERSISTENT_ID.store(rest.iter().any(|a| a == "--no-persistent-id"), Ordering::SeqCst);
     let mut files = args_list(&rest, "--files");
     if files.is_empty() {
         files = args_value(&rest, "--file").into_iter().collect();

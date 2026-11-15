@@ -1255,6 +1255,21 @@ fn archive_name_of(name: &str) -> String {
     }
 }
 
+/// The archived source of a host source: the persistent ID first, then the name. The
+/// archive stores the reduced name (`archive_name_of`), so the host's own name (it may be
+/// a path, with no persistent ID) is reduced the same way before the compare.
+fn find_archived<'a>(
+    sources: &'a [state::ArchiveSource],
+    persistent_id: &str,
+    name: &str,
+) -> Option<&'a state::ArchiveSource> {
+    let reduced = archive_name_of(name);
+    sources
+        .iter()
+        .find(|a| !a.persistent_id.is_empty() && a.persistent_id == persistent_id)
+        .or_else(|| sources.iter().find(|a| a.name == reduced))
+}
+
 /// The upper bound for an archive the host hands over: a hostile or broken host value
 /// must not become an unbounded allocation.
 const MAX_ARCHIVE_BYTES: usize = 256 * 1024 * 1024;
@@ -1341,11 +1356,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
         if let Ok(list) = ctl.sources.lock() {
             for src in list.iter() {
                 let p = src.props();
-                let found = st
-                    .sources
-                    .iter()
-                    .find(|a| !a.persistent_id.is_empty() && a.persistent_id == p.persistent_id)
-                    .or_else(|| st.sources.iter().find(|a| a.name == p.name));
+                let found = find_archived(&st.sources, &p.persistent_id, &p.name);
                 if let Some(a) = found {
                     if let Ok(mut n) = src.notes.lock() {
                         *n = a.notes.clone();
@@ -1808,3 +1819,38 @@ pub static clap_entry: ClapEntry = ClapEntry {
     deinit: Some(e_deinit),
     get_factory: Some(e_get_factory),
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: &str, name: &str) -> state::ArchiveSource {
+        state::ArchiveSource {
+            persistent_id: id.into(),
+            name: name.into(),
+            sample_rate: 48_000.0,
+            notes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_path_name_with_no_persistent_id_finds_its_archived_source() {
+        let stored = [entry("a", "kick.wav"), entry("b", "snare.wav")];
+        let found = find_archived(&stored, "", "/some/folder/snare.wav").expect("matched by name");
+        assert_eq!(found.name, "snare.wav");
+        assert!(find_archived(&stored, "", "/some/folder/tom.wav").is_none());
+    }
+
+    #[test]
+    fn the_persistent_id_wins_over_the_name() {
+        let stored = [entry("a", "kick.wav"), entry("b", "snare.wav")];
+        let found = find_archived(&stored, "a", "/x/snare.wav").expect("matched by id");
+        assert_eq!(found.name, "kick.wav");
+    }
+
+    #[test]
+    fn a_clean_name_still_matches() {
+        let stored = [entry("", "kick.wav")];
+        assert!(find_archived(&stored, "", "kick.wav").is_some());
+    }
+}

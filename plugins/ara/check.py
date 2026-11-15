@@ -70,6 +70,7 @@ from $DS_SPIKE_TOOLS (default ../../target/release); the plugin builds into its 
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import os
@@ -194,9 +195,9 @@ def no_switch() -> dict:
 EXPECTED_TABLE_SLOTS = 65
 
 
-def no_absolute_paths(label: str, blob) -> bool:
-    """Fail on a string in the stored archive that looks like an absolute path (the
-    archive must stay portable: it carries names, never host folders)."""
+def absolute_paths_in(blob) -> list[str]:
+    """Every string of the stored archive, dict keys included, that looks like an
+    absolute path (the archive must stay portable: it carries names, never host folders)."""
     bad: list[str] = []
 
     def walk(node) -> None:
@@ -204,17 +205,25 @@ def no_absolute_paths(label: str, blob) -> bool:
             if node.startswith("/") or (len(node) > 2 and node[1] == ":" and node[2] == "\\"):
                 bad.append(node)
         elif isinstance(node, dict):
-            for v in node.values():
+            # the keys too: the events object is keyed by track name
+            for k, v in node.items():
+                walk(k)
                 walk(v)
         elif isinstance(node, list):
             for v in node:
                 walk(v)
 
     walk(blob)
+    return bad
+
+
+def no_absolute_paths(label: str, blob) -> bool:
+    """Fail on an absolute path anywhere in the stored archive, keys and values."""
+    bad = absolute_paths_in(blob)
     return pass_fail(
         label,
         not bad,
-        f"no absolute path stored in the archive"
+        "no absolute path stored in the archive"
         if not bad
         else f"{len(bad)} absolute path(s) stored in the archive: {bad[:4]}",
     )
@@ -710,6 +719,98 @@ def stage_archive() -> bool:
     return ok
 
 
+def stage_archive_paths_fault() -> bool:
+    """The fault run of the archive path check: an archive blob made from the real stored
+    one, with an absolute source name and, in a second blob, an absolute track key, must
+    make the check report a failure (the check can fail). The deliberate failure is not
+    added to the global list; only a check that stays silent is."""
+    archive = OUT / "session.araarchive"
+    if not archive.exists():
+        return pass_fail("archive-paths-fault", False, "no stored archive: run the archive stage first")
+    real = json.loads(archive.read_text())
+    if not real.get("sources") or not real.get("events"):
+        return pass_fail("archive-paths-fault", False, "the stored archive has no sources or no events")
+    if absolute_paths_in(real):
+        return pass_fail("archive-paths-fault", False, "the real stored archive already holds an absolute path")
+    in_value = json.loads(json.dumps(real))
+    in_value["sources"][0]["name"] = str(FIXTURES / FILES[0])
+    in_key = json.loads(json.dumps(real))
+    first = next(iter(in_key["events"]))
+    in_key["events"][str(FIXTURES / first)] = in_key["events"].pop(first)
+    marker = len(FAILURES)
+    saved_stdout = sys.stdout
+    sys.stdout = io.StringIO()  # the two deliberate FAIL lines are no result of the run
+    try:
+        ok_value = no_absolute_paths("archive-paths-fault-value", in_value)
+        ok_key = no_absolute_paths("archive-paths-fault-key", in_key)
+    finally:
+        sys.stdout = saved_stdout
+    del FAILURES[marker:]
+    return pass_fail(
+        "archive-paths-fault",
+        not ok_value and not ok_key,
+        f"an absolute source name was reported: {not ok_value}, an absolute track key was reported: "
+        f"{not ok_key} - the path check can fail",
+    )
+
+
+def stage_archive_restore_pathname() -> bool:
+    """A host that names an audio source by its path and gives no persistent ID: the
+    archive stores the reduced name (the file name), so the restore must match on the
+    reduced form of the host's name. The notes of the restore must be the stored ones."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("archive-restore-pathname", False, "no host or no CLAP: run check.sh build first")
+    if not (OUT / "events-reference.json").exists():
+        return pass_fail("archive-restore-pathname", False, "no reference events: run the reference stage first")
+    files = [str(FIXTURES / f) for f in FILES]
+    archive = OUT / "pathname.araarchive"
+    rc, text, store_lines = host_run(
+        "pathname-store", CLAP, ["store", "--files", *files, "--archive", str(archive)], "cache-pathname-store"
+    )
+    if rc != 0 or not archive.exists():
+        return pass_fail("archive-restore-pathname", False, f"ara-host store rc={rc} (out/host-pathname-store.log)")
+    ok_store, events_store = plugin_service_row("pathname-store")
+    if not ok_store:
+        return False
+    rc, text, lines = host_run(
+        "pathname-restore",
+        CLAP,
+        ["restore", "--files", *files, "--archive", str(archive), "--no-persistent-id"],
+        "cache-pathname-restore",
+    )
+    if rc != 0:
+        return pass_fail("archive-restore-pathname", False, f"ara-host restore rc={rc} (out/host-pathname-restore.log)")
+    names = [r.get("name", "") for r in lines if r.get("event") == "host_notes"]
+    absolute = [n for n in names if n.startswith("/")]
+    ok = pass_fail(
+        "archive-restore-pathname-names",
+        bool(names) and len(absolute) == len(names),
+        f"the host named {len(absolute)} of {len(names)} source(s) by an absolute path, with no persistent ID",
+    )
+    ok_r, events_restore = plugin_service_row("pathname-restore")
+    if not ok_r:
+        return False
+    ok = compare_events("archive-restore-pathname", events_restore, events_store) and ok
+    # the restored notes are the stored ones: the host reads them through the content
+    # readers, and a source that found no archive entry gives none (the case of the defect)
+    stored = {r.get("name"): r.get("samples") for r in store_lines if r.get("event") == "host_notes"}
+    total, mismatched = 0, []
+    for r in lines:
+        if r.get("event") != "host_notes":
+            continue
+        total += r.get("count", 0)
+        if r.get("samples") != stored.get(r.get("name")) or not r.get("samples"):
+            mismatched.append(stem_of(r.get("name", "")))
+    ok = pass_fail(
+        "archive-restore-pathname-notes",
+        total > 0 and not mismatched,
+        f"{total} restored note(s) equal the stored ones"
+        if total > 0 and not mismatched
+        else f"{total} restored note(s); source(s) without the stored notes: {mismatched}",
+    ) and ok
+    return check_notes("archive-restore-pathname", lines, events_store, rates_of()) and ok
+
+
 MIN_BLOCKS = 16
 
 
@@ -1043,6 +1144,8 @@ STAGES = {
     "identity-vst3": lambda: stage_identity("vst3", EMBEDDED_CLAP),
     "regions": stage_regions,
     "archive": stage_archive,
+    "archive-paths-fault": stage_archive_paths_fault,
+    "archive-restore-pathname": stage_archive_restore_pathname,
     "threads": stage_threads,
     "conformance": stage_conformance,
     "files": stage_files,
@@ -1056,6 +1159,7 @@ STAGES = {
 }
 ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
+    "archive-paths-fault", "archive-restore-pathname",
     "threads", "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",
 ]

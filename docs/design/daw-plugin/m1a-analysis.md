@@ -30,8 +30,8 @@ One chain: host -> CLAP -> ARA document controller in Rust -> the app service ->
   document archive ID, the events object of the last analysis and the notes of every
   source (`persistent_id`, name, sample rate, one note per event at the exact sample with
   its volume). `storeObjectsToArchive` writes it through the host's archive controller,
-  `restoreObjectsFromArchive` reads it, matches the sources by persistent ID (name as the
-  fallback) and sets the notes without running the service again - no file is decoded a
+  `restoreObjectsFromArchive` reads it, matches the sources by persistent ID (the name, reduced the same way as on
+  store, as the fallback) and sets the notes without running the service again - no file is decoded a
   second time. The names it stores are never absolute paths: a source name that carries a
   path is reduced to its file name, so the archive stays portable (the host may name a
   source by its path). The committed fixture `fixtures/archive-v1.ara` loads in the
@@ -136,7 +136,10 @@ app's `THIRD_PARTY.md` does it - an open item of M1c, not of this ticket.
 ## Result table
 
 The table below is the gate run of 2026-11-15 on the head ad85259e that carries the
-review fixes (a docs-only commit on top).
+review fixes (a docs-only commit on top). The rows `archive-paths-fault`,
+`archive-restore-pathname-names`, `compare-archive-restore-pathname`,
+`archive-restore-pathname-notes` and `notes-archive-restore-pathname` come from a later
+run of the stages on the change that adds them (#525 round 2), not from that head.
 
 | Gate line | Result | Evidence |
 | --- | --- | --- |
@@ -168,6 +171,11 @@ review fixes (a docs-only commit on top).
 | `compare-archive-restore` | ok | byte for byte the reference events (733 bytes) |
 | `notes-archive-restore` | ok | kick 5, snare 3, tom 7, hat 4 - at the exact samples |
 | `archive-decodes-fault` | ok | the fault switch decoded one source during the restore: 1 read row(s), 1 cache WAV(s) - the no-decode proof fires |
+| `archive-paths-fault` | ok | an absolute source name was reported: True, an absolute track key was reported: True - the path check can fail |
+| `archive-restore-pathname-names` | ok | the host named 4 of 4 source(s) by an absolute path, with no persistent ID |
+| `compare-archive-restore-pathname` | ok | byte for byte the reference events (733 bytes) |
+| `archive-restore-pathname-notes` | ok | 19 restored note(s) equal the stored ones |
+| `notes-archive-restore-pathname` | ok | kick 5, snare 3, tom 7, hat 4 - at the exact samples |
 | `archive-fixture-paths` | ok | no absolute path stored in the archive |
 | `archive-fixture-version` | ok | the fixture carries version 1 |
 | `compare-archive-fixture` | ok | byte for byte the reference events (733 bytes) |
