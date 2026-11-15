@@ -1,0 +1,8 @@
+target/
+.deps/
+out/
+fixtures/*.wav
+fixtures/*.jsonl
+fixtures/*.json
+*.pyc
+__pycache__/

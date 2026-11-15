@@ -1,0 +1,57 @@
+# Drum Spike ARA plugin (M1a, #525)
+
+The Drum Spike plugin for DAWs, without an editor: one CLAP plugin in Rust with ARA 2,
+wrapped as one self-contained VST3 (the CLAP inside the bundle). The plugin takes the
+audio sources and playback regions of the host, analyses them with the Drum Spike service
+(`drumspike-app`, the same detection as the desktop app), gives the hits back to the host
+as ARA notes, and keeps its state in the ARA archive of the session.
+
+The crate is outside the Cargo workspace members (the workspace builds without the ARA
+SDK); it uses `drumspike-app` as a path dependency. The ARA 2 C API is generated with
+bindgen from `$ARA_API_DIR/ARAInterface.h` (the ARA SDK 2.3.0; `check.sh deps` fetches it
+into `.deps`).
+
+## Build
+
+One command builds the CLAP (universal: arm64 + x86_64, joined with lipo; the build fails
+when `lipo -info` does not name both) and one self-contained VST3 bundle with the CLAP
+inside (`.deps/build-wrapper/DrumSpikeAra.vst3/Contents/PlugIns/DrumSpikeAra.clap`; the
+wrapper searches its own bundle's `PlugIns` first, so no `CLAP_PATH` is needed):
+
+    ./check.sh all        # deps, build, check
+    ./check.sh build      # the two bundles, the test host, service_tool
+    ./check.sh check      # the gate: check.py all
+
+`./check.sh deps` fetches the third-party parts into `.deps` (or `$DS_ARA_DEPS`): the ARA
+SDK 2.3.0 API headers, clap-wrapper 0.17.0 with the patch of `patches/`, pluginval 1.0.4
+(pinned SHA-256) and clap-validator 0.4.1, and both macOS Rust targets. Heavy: run it
+under the host lock.
+
+## Cache folder
+
+The plugin writes only below one cache folder:
+
+    ~/Library/Caches/DrumSpike/ARA
+
+(`DS_ARA_CACHE` overrides it in the check.) Inside it: `audio/<n>-<stem>.wav`, the source
+audio the host delivers through the ARA audio access controller, one file per ARA audio
+source, and `session/`, the Drum Spike project the analysis runs on (one track per audio
+source; the host's playback regions are the segments of the track). The plugin never
+writes into an audio file of the session.
+
+## The check
+
+`plugins/ara/check.sh check` (-> `check.py all`) runs every gate line of the ticket: the
+fixture session (four tracks with bleed, roles from the names), the byte-for-byte compare
+against `service_tool analyze` on the CLAP and on the plugin inside the VST3, the regions
+fixture (two regions, one trimmed; the track is made from segments), the archive store /
+restore with the decode counter at 0 and the committed fixture `fixtures/archive-v1.ara`,
+the audio-thread check with its fault run, the file probe, pluginval (strictness 5) and
+clap-validator, the standalone rule, and the crate and workspace trios.
+
+## Test switches of the check
+
+A real host sets none of these: `DS_ARA_CACHE` (the cache folder), `DS_ARA_OUT` (where the
+plugin writes its report, one JSON object per line) and `DS_ARA_FAULT=in-process` (the
+fault switch: the analysis runs inside `process` on purpose, so the overrun check of the
+host can fail).

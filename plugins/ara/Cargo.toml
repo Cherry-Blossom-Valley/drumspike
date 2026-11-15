@@ -1,0 +1,40 @@
+# Drum Spike ARA plugin (M1a, #525): the plugin analyses the host's tracks with the Drum
+# Spike service (ARA, no editor). Own folder outside the workspace members: the root
+# `cargo metadata --no-deps` must not name it, and the workspace must build without the
+# ARA SDK (the bindgen in build.rs reads $ARA_API_DIR, fetched by check.sh).
+[package]
+name = "drumspike-ara"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+name = "drumspike_ara"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+clap-sys = "0.5"
+# the app service and the project document layer, used as normal crates (the same path
+# the workspace members take)
+drumspike-app = { path = "../../crates/app" }
+drumspike-core = { path = "../../crates/core" }
+serde = { version = "=1.0.229", features = ["derive"] }
+# float_roundtrip + preserve_order: the event lists go out byte for byte as the service
+# wrote them (the same features the app pins)
+serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
+
+# the test host of check.sh (src/bin/ara-host.rs): loads the CLAP bundle with dlopen
+libloading = "0.8"
+
+[[bin]]
+name = "ara-host"
+path = "src/bin/ara-host.rs"
+
+[build-dependencies]
+bindgen = "0.72"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "allow"
