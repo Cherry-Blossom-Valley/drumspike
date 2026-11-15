@@ -34,8 +34,10 @@ The detector of the spike is a threshold on channel 0. It is not the Drum Spike 
 `./spike.sh all` does all of this (one command, native to the machine it runs on, Intel or
 Apple silicon). The steps it takes, for reference:
 
-- ARA SDK: release 2.3.0 with its submodules into `.deps/ARA_SDK`; its scripts fetch the CLAP
-  and VST3 SDKs. `patches/ara-examples-2.3.0.patch` is applied in `ARA_Examples`.
+- ARA SDK: release 2.3.0 with its submodules into `.deps/ARA_SDK`; `spike.sh deps` fetches
+  the CLAP SDK 1.1.9 (the version the ARA installer pins) and the VST3 SDK v3.8.0_build_66
+  (the tag the clap-wrapper fetches) beside it. `patches/ara-examples-2.3.0.patch` is
+  applied in `ARA_Examples`.
 - Test host: `cmake -S ARA_SDK/ARA_Examples -B build-examples -DARA_SETUP_DEBUGGING=OFF
   -DCMAKE_BUILD_TYPE=Debug -DCMAKE_OSX_ARCHITECTURES=<arch> -DCMAKE_OSX_SYSROOT=<versioned
   macOS SDK path> -DXCODE_VERSION=16.0`, with `XCODE_VERSION=16.0` and `SDKROOT` also in the
@@ -67,4 +69,4 @@ A web view in the plugin window, the app service inside the plugin, a real DAW, 
 
 ## Licences
 
-Our code here: Apache 2.0, as the repo. ARA SDK: Apache 2.0. `clap-wrapper`, CLAP, `clap-sys`: MIT. VST3 SDK: MIT. The patches change files of the ARA examples and of `clap-wrapper` and keep their licences.
+Our code here: Apache 2.0, as the repo. ARA SDK: Apache 2.0. `clap-wrapper`, CLAP, `clap-sys`: MIT. VST3 SDK 3.8.0: MIT. The patches change files of the ARA examples and of `clap-wrapper` and keep their licences.

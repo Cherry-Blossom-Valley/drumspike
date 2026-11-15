@@ -9,9 +9,10 @@
 # seed check of the README. It is not part of the Cargo workspace and not part of a release.
 #
 #     ./spike.sh deps    fetch ARA SDK 2.3.0 (with its submodules), the CLAP SDK 1.1.9
-#                        headers and the VST3 SDK v3.7.11_build_10 (the versions the ARA
-#                        SDK's own installer pins; the host needs both loaders), the
-#                        clap-wrapper 0.17.0, pluginval 1.0.4 (pinned SHA-256) and
+#                        headers (the version the ARA SDK's own installer pins) and the
+#                        VST3 SDK v3.8.0_build_66 (the tag the clap-wrapper fetches; the
+#                        VST3 SDK is MIT only from 3.8.0) - the host needs both loaders -,
+#                        the clap-wrapper 0.17.0, pluginval 1.0.4 (pinned SHA-256) and
 #                        clap-validator 0.4.1 into .deps, and apply the patches of patches/
 #     ./spike.sh build   build ARATestHost, DrumSpikeAraSpike.clap and DrumSpikeAraSpike.vst3
 #                        (the plugin crate builds alone into its own ./target)
@@ -53,10 +54,11 @@ deps() {
   fi
   # the VST3 SDK: the gate also runs the test host on the wrapped VST3, and the host's
   # VST3 loader (ExamplesCommon/PlugInHosting/VST3Loader.cpp) only compiles with
-  # ARA_ENABLE_VST3. Same clone as the ARA SDK's own install_vst3sdk.cmake (v3.7.11_build_10,
-  # the submodules the examples use).
+  # ARA_ENABLE_VST3. v3.8.0_build_66 is the tag the clap-wrapper fetches, and the VST3 SDK
+  # is MIT only from 3.8.0 (the ARA SDK's own install_vst3sdk.cmake pins v3.7.11_build_10:
+  # Steinberg VST3 License or GPL v3). The submodules are the ones the examples use.
   if [[ ! -d $DEPS/ARA_SDK/vst3sdk/pluginterfaces ]]; then
-    git clone --depth 1 --shallow-submodules --single-branch --no-tags --branch v3.7.11_build_10 https://github.com/steinbergmedia/vst3sdk.git $DEPS/ARA_SDK/vst3sdk || return 1
+    git clone --depth 1 --shallow-submodules --single-branch --no-tags --branch v3.8.0_build_66 https://github.com/steinbergmedia/vst3sdk.git $DEPS/ARA_SDK/vst3sdk || return 1
     git -C $DEPS/ARA_SDK/vst3sdk submodule update --init --depth=1 --single-branch -- base cmake pluginterfaces public.sdk || return 1
   fi
   local ex=$DEPS/ARA_SDK/ARA_Examples

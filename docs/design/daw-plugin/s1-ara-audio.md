@@ -63,9 +63,11 @@ on the host's calling thread).
 - Our code in `plugins/ara-spike/`: Apache 2.0, as the repo.
 - ARA SDK 2.3.0 (API, examples, test host): Apache 2.0.
 - CLAP, `clap-sys`, `clap-wrapper` 0.17.0: MIT.
-- CLAP SDK 1.1.9 and VST3 SDK v3.7.11_build_10 (the loaders of the test host; the versions
-  the ARA SDK's own installer pins): MIT. The wrapper vendors its own clap 1.2.10 and
-  vst3sdk 3.8.0: MIT.
+- CLAP SDK 1.1.9 (the version the ARA SDK's own installer pins) and VST3 SDK
+  v3.8.0_build_66 (the tag the wrapper fetches): the loaders of the test host, both MIT.
+  The VST3 SDK is MIT only from 3.8.0 — the installer's own pin, v3.7.11_build_10, is
+  Steinberg VST3 License or GPL v3, so the host takes the wrapper's tag instead. The
+  wrapper vendors its own clap 1.2.10 and vst3sdk 3.8.0: MIT.
 - `clap-validator` 0.4.1: MIT (test tool only).
 - `pluginval` 1.0.4: GPL-3.0 (test tool only, not linked into the plugin; its release zip is
   SHA-256 pinned in `spike.sh`).
