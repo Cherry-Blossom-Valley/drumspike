@@ -16,9 +16,12 @@ use std::path::PathBuf;
 
 const SR: u32 = 48_000;
 
+/// One track of the session: name, role, signal and segments (`(start, offset, length)`).
+type SegTrack<'a> = (&'a str, &'a str, Vec<f32>, Vec<(f64, f64, f64)>);
+
 /// A project folder with the given segmented tracks (like `segments.rs`): the WAV files go
 /// to `<root>/daw/<name>.wav`, the segments share the file's record.
-fn project_segments(root: &std::path::Path, project_name: &str, tracks: &[(&str, &str, Vec<f32>, Vec<(f64, f64, f64)>)]) -> PathBuf {
+fn project_segments(root: &std::path::Path, project_name: &str, tracks: &[SegTrack]) -> PathBuf {
     let mut p = new_project(root, project_name).unwrap();
     for (name, role, x, segs) in tracks {
         let wav = root.join("daw").join(format!("{name}.wav"));
@@ -144,7 +147,11 @@ fn a_null_segments_key_with_a_source_is_a_plain_track() {
         v.as_object_mut().unwrap().remove("modified");
         v
     };
-    assert_eq!(strip(&before), strip(&after), "the document changed through load + save");
+    assert_eq!(
+        strip(&before),
+        strip(&after),
+        "the document changed through load + save"
+    );
     // the events are byte-identical to the same track without the key
     let dir_plain = project(&root_plain, "Plain", &[kick_spec("k in", "kick", 36)]);
     let svc = service_dsp();
@@ -203,7 +210,10 @@ fn a_changed_segment_file_is_read_again_by_the_next_analysis() {
     let second = times(&events(&svc, &sid2, "k in"));
     assert_eq!(
         at_samples(&second),
-        at_samples(&first).iter().map(|t| t + (0.5 * f64::from(SR)) as i64).collect::<Vec<_>>(),
+        at_samples(&first)
+            .iter()
+            .map(|t| t + (0.5 * f64::from(SR)) as i64)
+            .collect::<Vec<_>>(),
         "the second analysis did not read the new timeline"
     );
     std::fs::remove_dir_all(&root).unwrap();
@@ -244,7 +254,10 @@ fn a_moved_segment_is_assembled_again_by_the_next_analysis() {
     let second = times(&events(&svc, &sid2, "k in"));
     assert_eq!(
         at_samples(&second),
-        at_samples(&first).iter().map(|t| t + (2.0 * f64::from(SR)) as i64).collect::<Vec<_>>(),
+        at_samples(&first)
+            .iter()
+            .map(|t| t + (2.0 * f64::from(SR)) as i64)
+            .collect::<Vec<_>>(),
         "the second analysis did not read the new timeline"
     );
     std::fs::remove_dir_all(&root).unwrap();
