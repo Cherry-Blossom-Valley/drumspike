@@ -9,8 +9,9 @@
 # seed check of the README. It is not part of the Cargo workspace and not part of a release.
 #
 #     ./spike.sh deps    fetch ARA SDK 2.3.0 (with its submodules), clap-wrapper 0.17.0,
-#                        pluginval 1.0.4 (pinned SHA-256) and clap-validator 0.4.1 into .deps,
-#                        and apply the patches of patches/
+#                        pluginval 1.0.4 (pinned SHA-256), clap-validator 0.4.1 and the
+#                        CLAP SDK 1.1.9 headers (the version the ARA SDK installer pins)
+#                        into .deps, and apply the patches of patches/
 #     ./spike.sh build   build ARATestHost, DrumSpikeAraSpike.clap and DrumSpikeAraSpike.vst3
 #                        (the plugin crate builds alone into its own ./target)
 #     ./spike.sh check   ./check_s1.sh, then the seed check (check.py: four sources, render,
@@ -42,6 +43,12 @@ deps() {
   mkdir -p $DEPS || return 1
   if [[ ! -d $DEPS/ARA_SDK ]]; then
     git clone --depth 1 --branch releases/2.3.0 --recursive https://github.com/Celemony/ARA_SDK $DEPS/ARA_SDK || return 1
+  fi
+  # the CLAP SDK headers: ARA_Examples/CMakeLists requires one companion API SDK and
+  # fatal-errors without one; the test host's CLAP loader needs the CLAP headers. 1.1.9 is
+  # the version the ARA SDK's own install_CLAP.cmake pins.
+  if [[ ! -d $DEPS/ARA_SDK/clap/include/clap ]]; then
+    git clone --depth 1 --branch 1.1.9 https://github.com/free-audio/clap $DEPS/ARA_SDK/clap || return 1
   fi
   local ex=$DEPS/ARA_SDK/ARA_Examples
   if git -C $ex apply --check $PWD/patches/ara-examples-2.3.0.patch 2>/dev/null; then
