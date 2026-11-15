@@ -24,6 +24,13 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   threads        audio blocks during the analysis have no overrun; with
                  DS_ARA_FAULT=in-process the analysis runs inside `process` and the host
                  reports the overrun (the check can fail)
+  conformance    the independent host: the ARATestHost of the ARA SDK examples (built by
+                 check.sh from the S1 pattern) runs its own tests on the plugin, on the
+                 CLAP and on the wrapped VST3 - ContentReading, PropertyUpdates,
+                 Archiving, PlaybackRendering, EditorView - each must exit 0 (the review
+                 note on #525; the plugin has no editor GUI, but it implements the
+                 EditorView role interface and its playback renderer passes audio
+                 through, so no test is skipped)
   files          the plugin wrote only below its cache folder: no file in the repo changed
                  since the fixture stage and no fixture audio file changed
   pluginval      pluginval 1.0.4 at strictness 5 on the wrapped VST3 (no CLAP_PATH: the
@@ -41,6 +48,8 @@ Paths: the built parts live in .deps/ (see check.sh); the workspace release bina
 from $DS_SPIKE_TOOLS (default ../../target/release); the plugin builds into its own
 ./target. The cache folder of the plugin is overridden with DS_ARA_CACHE into out/ per run.
 """
+
+from __future__ import annotations
 
 import hashlib
 import json
@@ -70,6 +79,7 @@ HOST = HERE / "target" / "release" / "ara-host"
 SERVICE_TOOL = TOOLS / "service_tool"
 PLUGINVAL = DEPS / "pluginval.app" / "Contents" / "MacOS" / "pluginval"
 CLAP_VALIDATOR = DEPS / "clap-validator-src" / "target" / "release" / "clap-validator"
+TESTHOST = Path(os.environ.get("DS_ARA_TESTHOST", DEPS / "build-examples" / "bin" / "Debug" / "ARATestHost"))
 FIXTURES = OUT / "fixtures"
 ARCHIVE_FIXTURE = HERE / "fixtures" / "archive-v1.ara"
 
@@ -553,6 +563,45 @@ def stage_threads() -> bool:
     return ok
 
 
+def stage_conformance() -> bool:
+    """The independent ARA conformance run (review note on #525): the ARATestHost of the
+    ARA SDK examples - a second author, built by check.sh from the S1 pattern - runs its
+    own tests on this plugin, on the CLAP and on the wrapped VST3. Each test must exit 0.
+    The gate's own ara-host stays the host of the identity, regions, archive, notes and
+    threads stages (gate lines 2 to 7); this run sits beside it. No test is skipped: the
+    plugin implements the EditorView role interface (no editor GUI, the handlers are
+    no-ops) and its playback renderer passes audio through."""
+    if not TESTHOST.exists():
+        return pass_fail("conformance", False, f"no ARATestHost at {TESTHOST} (run check.sh build first)")
+    files_of = {
+        "ContentReading": FILES,
+        "PropertyUpdates": ["m1a_kick_48k_mono.wav"],
+        "Archiving": ["m1a_kick_48k_mono.wav"],
+        "PlaybackRendering": ["m1a_kick_48k_mono.wav", "m1a_hat_48k_mono.wav"],
+        "EditorView": ["m1a_kick_48k_mono.wav"],
+    }
+    ok = True
+    for kind, bundle in (("clap", CLAP), ("vst3", VST3)):
+        if not bundle.exists():
+            return pass_fail("conformance", False, f"no {kind} bundle at {bundle} (run check.sh build first)")
+        for test, names in files_of.items():
+            # no CLAP_PATH: the wrapped VST3 must find the CLAP inside its own bundle, and
+            # the runs must not reach another plugin by accident; stray writes go to out/
+            env = {**no_switch(), "CLAP_PATH": None}
+            rc, _text = run(
+                [str(TESTHOST), f"-{kind}", str(bundle), "-file", *[str(FIXTURES / name) for name in names], "-test", test],
+                env=env,
+                log=f"conformance-{kind}-{test}.log",
+                cwd=OUT,
+            )
+            ok = pass_fail(
+                f"conformance-{kind}-{test}",
+                rc == 0,
+                f"ARATestHost {test} on the {kind}: rc={rc} (out/conformance-{kind}-{test}.log)",
+            ) and ok
+    return ok
+
+
 # ---------------------------------------------------------------- validators
 
 
@@ -706,6 +755,7 @@ STAGES = {
     "regions": stage_regions,
     "archive": stage_archive,
     "threads": stage_threads,
+    "conformance": stage_conformance,
     "files": stage_files,
     "pluginval": stage_pluginval,
     "validate": stage_validate,
@@ -717,7 +767,8 @@ STAGES = {
 }
 ORDER = [
     "fixture", "reference", "identity-clap", "identity-vst3", "regions", "archive",
-    "threads", "files", "pluginval", "validate", "universal", "standalone", "crate", "workspace",
+    "threads", "conformance", "files", "pluginval", "validate", "universal", "standalone",
+    "crate", "workspace",
 ]
 
 
@@ -740,7 +791,7 @@ def main() -> int:
     if FAILURES:
         print(f"M1A CHECK: FAIL ({', '.join(FAILURES)})")
         return 1
-    print("M1A CHECK: PASS (identity, regions, archive, notes, threads, files, pluginval, clap-validator, universal, standalone, crate, workspace)")
+    print("M1A CHECK: PASS (identity, regions, archive, notes, threads, conformance, files, pluginval, clap-validator, universal, standalone, crate, workspace)")
     return 0
 
 

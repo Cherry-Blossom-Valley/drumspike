@@ -57,6 +57,15 @@ segments. pluginval 1.0.4 (strictness 5) runs on the wrapped VST3 and clap-valid
 0.4.1 on the CLAP, both pinned; no `CLAP_PATH` is set anywhere, so the VST3 proves it
 finds the CLAP inside its own bundle.
 
+Two hosts read the ticket's "in the ARA test host": the plugin's own `ara-host` drives
+the fixture session, the regions, the archive round trip, the notes and the thread
+checks (it is the only host that can build these), and the `ARATestHost` of the ARA SDK
+examples - built from the S1 pattern with the S1 patch - runs its own tests beside it:
+ContentReading, PropertyUpdates, Archiving, PlaybackRendering and EditorView, on the
+CLAP and on the wrapped VST3, each must exit 0. The plugin has no editor GUI, but it
+implements the EditorView role interface and its playback renderer passes audio
+through, so no test is skipped.
+
 ## Result table
 
 PENDING - filled by the gate run (the wake in progress).

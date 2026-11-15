@@ -3,18 +3,21 @@
 # Drum Spike service, ARA, no editor). One self-contained script:
 #
 #   ./check.sh deps    fetch the third-party parts into .deps (the ARA SDK 2.3.0 API
-#                      headers for bindgen, clap-wrapper 0.17.0 + the patch of patches/,
-#                      pluginval 1.0.4 with a pinned SHA-256, clap-validator 0.4.1) and
-#                      both macOS Rust targets. DS_ARA_DEPS overrides the folder.
+#                      headers for bindgen, the ARA examples with their companion SDKs
+#                      for the independent test host, clap-wrapper 0.17.0 + the patches
+#                      of patches/, pluginval 1.0.4 with a pinned SHA-256,
+#                      clap-validator 0.4.1) and both macOS Rust targets. DS_ARA_DEPS
+#                      overrides the folder.
 #   ./check.sh build   the universal CLAP (arm64 + x86_64, joined with lipo - the script
 #                      fails when lipo -info does not name both), the self-contained
 #                      wrapped VST3 (the CLAP is copied inside the bundle, the wrapper
-#                      finds it there without CLAP_PATH), the test host ara-host and the
+#                      finds it there without CLAP_PATH), the test host ara-host, the
+#                      ARATestHost of the ARA SDK examples (native arch) and the
 #                      workspace service_tool for the compare.
 #   ./check.sh check   the gate: ./check.py all (fixture, reference, identity on the CLAP
 #                      and on the plugin inside the VST3, regions, archive, notes,
-#                      threads, files, pluginval, clap-validator, universal, standalone,
-#                      crate trio, workspace trio).
+#                      threads, conformance in the ARATestHost, files, pluginval,
+#                      clap-validator, universal, standalone, crate trio, workspace trio).
 #   ./check.sh all     deps, build, check
 #
 # The cache folder the plugin writes below is named in README.md
@@ -43,8 +46,8 @@ deps() {
   rustup target add aarch64-apple-darwin x86_64-apple-darwin || return 1
   # the ARA 2.3.0 API headers for bindgen ($ARA_API_DIR/ARAInterface.h). ARA_API is a
   # submodule of the ARA_SDK repo (releases/2.3.0), not a folder of the main repo:
-  # check out the pinned ARA_API after the clone; the examples and library submodules
-  # are not needed here.
+  # check out the pinned ARA_API after the clone (the examples and library submodules
+  # follow below, for the independent test host).
   if [[ ! -f $DEPS/ARA_SDK/ARA_API/ARAInterface.h ]]; then
     rm -rf "$DEPS/ARA_SDK"
     git clone --depth 1 --branch releases/2.3.0 https://github.com/Celemony/ARA_SDK "$DEPS/ARA_SDK" || return 1
@@ -52,6 +55,32 @@ deps() {
   fi
   if [[ ! -f $DEPS/ARA_SDK/ARA_API/ARAInterface.h ]]; then
     echo "ARA_SDK: no ARA_API/ARAInterface.h after the clone"; return 1
+  fi
+  # the examples of the ARA SDK for the independent conformance run (the S1 pattern of
+  # plugins/ara-spike, do not change that folder): ARA_Examples and ARA_Library are
+  # further submodules of the SDK and the examples import ARA_Library unconditionally;
+  # the companion API SDK goes next to them - the CLAP 1.1.9 headers (the version the
+  # ARA SDK's own installer pins) and the VST3 SDK v3.8.0_build_66 (the loader of the
+  # host needs ARA_ENABLE_VST3; 3.8.0 is the tag clap-wrapper fetches, and the VST3 SDK
+  # is MIT only from 3.8.0). The patch of patches/ is the S1 one, applied to the clone.
+  if [[ ! -d $DEPS/ARA_SDK/ARA_Examples ]]; then
+    git -C "$DEPS/ARA_SDK" submodule update --init --depth 1 --recursive ARA_Examples || return 1
+  fi
+  if [[ ! -d $DEPS/ARA_SDK/ARA_Library ]]; then
+    git -C "$DEPS/ARA_SDK" submodule update --init --depth 1 --recursive ARA_Library || return 1
+  fi
+  if [[ ! -d $DEPS/ARA_SDK/clap/include/clap ]]; then
+    git clone --depth 1 --branch 1.1.9 https://github.com/free-audio/clap "$DEPS/ARA_SDK/clap" || return 1
+  fi
+  if [[ ! -d $DEPS/ARA_SDK/vst3sdk/pluginterfaces ]]; then
+    git clone --depth 1 --shallow-submodules --single-branch --no-tags --branch v3.8.0_build_66 https://github.com/steinbergmedia/vst3sdk.git "$DEPS/ARA_SDK/vst3sdk" || return 1
+    git -C "$DEPS/ARA_SDK/vst3sdk" submodule update --init --depth=1 --single-branch -- base cmake pluginterfaces public.sdk || return 1
+  fi
+  local ex=$DEPS/ARA_SDK/ARA_Examples
+  if git -C $ex apply --check $PWD/patches/ara-examples-2.3.0.patch 2>/dev/null; then
+    git -C $ex apply $PWD/patches/ara-examples-2.3.0.patch || return 1
+  elif ! grep -q 'spike:' $ex/CMakeLists.txt; then
+    echo "ARA_Examples: the patch is neither applicable nor applied"; return 1
   fi
   if [[ ! -d $DEPS/clap-wrapper ]]; then
     git clone --depth 1 --branch v0.17.0 https://github.com/free-audio/clap-wrapper $DEPS/clap-wrapper || return 1
@@ -108,11 +137,24 @@ build() {
   rm -rf $VST3/Contents/PlugIns
   mkdir -p $VST3/Contents/PlugIns
   cp -R $CLAP $VST3/Contents/PlugIns/DrumSpikeAra.clap || return 1
-  echo "build: ok ($CLAP, $VST3 with the CLAP inside, $PWD/target/release/ara-host)"
+  # the independent test host of the ARA SDK examples (the S1 build, plugins/ara-spike):
+  # native to this machine, Debug, with the versioned SDK. XCODE_VERSION/SDKROOT also as
+  # env: the SDK's CMake probes xcodebuild unless the env var is set, and this host has
+  # only the command line tools, no Xcode.
+  local host_arch host_sdk
+  host_arch=$(uname -m)
+  host_sdk=$(/usr/bin/xcrun -sdk macosx --show-sdk-path)
+  host_sdk=${host_sdk:A}
+  SDKROOT=$host_sdk XCODE_VERSION=16.0 cmake -S $DEPS/ARA_SDK/ARA_Examples -B $DEPS/build-examples \
+    -DARA_SETUP_DEBUGGING=OFF -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_OSX_ARCHITECTURES=$host_arch -DCMAKE_OSX_SYSROOT=$host_sdk -DXCODE_VERSION=16.0 || return 1
+  SDKROOT=$host_sdk XCODE_VERSION=16.0 cmake --build $DEPS/build-examples --config Debug --target ARATestHost --parallel || return 1
+  [[ -x $DEPS/build-examples/bin/Debug/ARATestHost ]] || { echo "no ARATestHost in $DEPS/build-examples"; return 1; }
+  echo "build: ok ($CLAP, $VST3 with the CLAP inside, $PWD/target/release/ara-host, $DEPS/build-examples/bin/Debug/ARATestHost)"
 }
 
 check() {
-  ARA_API_DIR=$DEPS/ARA_SDK/ARA_API LIBCLANG_PATH=$CLT/usr/lib /usr/bin/python3 -I check.py all || return 1
+  DS_ARA_TESTHOST=$DEPS/build-examples/bin/Debug/ARATestHost ARA_API_DIR=$DEPS/ARA_SDK/ARA_API LIBCLANG_PATH=$CLT/usr/lib /usr/bin/python3 -I check.py all || return 1
 }
 
 case ${1:-all} in

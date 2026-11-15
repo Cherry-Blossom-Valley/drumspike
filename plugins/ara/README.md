@@ -19,13 +19,14 @@ inside (`.deps/build-wrapper/DrumSpikeAra.vst3/Contents/PlugIns/DrumSpikeAra.cla
 wrapper searches its own bundle's `PlugIns` first, so no `CLAP_PATH` is needed):
 
     ./check.sh all        # deps, build, check
-    ./check.sh build      # the two bundles, the test host, service_tool
+    ./check.sh build      # the two bundles, both test hosts, service_tool
     ./check.sh check      # the gate: check.py all
 
 `./check.sh deps` fetches the third-party parts into `.deps` (or `$DS_ARA_DEPS`): the ARA
-SDK 2.3.0 API headers, clap-wrapper 0.17.0 with the patch of `patches/`, pluginval 1.0.4
-(pinned SHA-256) and clap-validator 0.4.1, and both macOS Rust targets. Heavy: run it
-under the host lock.
+SDK 2.3.0 API headers, the ARA examples (with `ARA_Library` and the CLAP 1.1.9 and
+VST3 SDK v3.8.0_build_66 companions, patched like S1, for the independent conformance
+host), clap-wrapper 0.17.0 with the patch of `patches/`, pluginval 1.0.4 (pinned SHA-256)
+and clap-validator 0.4.1, and both macOS Rust targets. Heavy: run it under the host lock.
 
 ## Cache folder
 
@@ -47,7 +48,13 @@ against `service_tool analyze` on the CLAP and on the plugin inside the VST3, th
 fixture (two regions, one trimmed; the track is made from segments), the archive store /
 restore with the decode counter at 0 and the committed fixture `fixtures/archive-v1.ara`,
 the audio-thread check with its fault run, the file probe, pluginval (strictness 5) and
-clap-validator, the standalone rule, and the crate and workspace trios.
+clap-validator, the standalone rule, and the crate and workspace trios. The ticket's "in
+the ARA test host" is two hosts: the plugin's own `ara-host` drives the stages above, and
+the `ARATestHost` of the ARA SDK examples - built from the S1 pattern with the S1 patch -
+runs its own tests (ContentReading, PropertyUpdates, Archiving, PlaybackRendering,
+EditorView) on the CLAP and on the wrapped VST3, each must exit 0. The plugin has no
+editor GUI, but it implements the EditorView role interface and its playback renderer
+passes audio through, so no test is skipped.
 
 ## Test switches of the check
 
