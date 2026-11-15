@@ -321,6 +321,36 @@ impl OpenProject {
             .ok_or_else(|| AppError::conflict(format!("track {name} is offline (missing): relink it first")))
     }
 
+    /// True when the track is made of segments (a timeline, #508): the readers without a
+    /// timeline answer check this before they read `source`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for an unknown track.
+    pub fn has_segments(&self, name: &str) -> Result<bool, AppError> {
+        Ok(!self.track(name)?.segments().is_empty())
+    }
+
+    /// The 400 of a reader that has no answer for a segmented track: plain words, never
+    /// "offline (missing)", which would hide the reason (#528).
+    #[must_use]
+    pub fn not_available_error(name: &str) -> AppError {
+        AppError::bad(format!("track {name}: not available for a track made of segments"))
+    }
+
+    /// The source for the readers that cannot read a segmented track's timeline: a plain
+    /// track is `source`, a segmented track is the 400 of [`OpenProject::not_available_error`].
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`OpenProject::source`] for a plain track; a 400 for a segmented track.
+    pub fn source_no_segments(&self, name: &str) -> Result<PathBuf, AppError> {
+        if self.has_segments(name)? {
+            return Err(Self::not_available_error(name));
+        }
+        self.source(name)
+    }
+
     /// The audio of the track's analysis and the session steps (#508): the plain source
     /// file, or the timeline of the track's segments. A segment whose source is missing or
     /// changed is a 409 like an offline track.

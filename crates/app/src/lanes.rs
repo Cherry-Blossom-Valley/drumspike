@@ -110,7 +110,7 @@ impl Service {
             let mut needed = Vec::new();
             for name in names {
                 let req = PeakRequest::of(&g, &name)?;
-                if !cache_is_current(&req.dir, &req.key) && req.source.is_ok() {
+                if !cache_is_current(&req.dir, &req.key) && req.audio.is_ok() {
                     needed.push(name);
                 }
             }

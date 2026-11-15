@@ -529,7 +529,7 @@ impl Service {
                 .round();
             let peak_db = drumspike_core::refine::FM_PEAK_DB;
             (
-                g.source(name)?,
+                g.source_no_segments(name)?,
                 mix_mode(tr.mix_mode_or_default()),
                 tr.sr,
                 rule,

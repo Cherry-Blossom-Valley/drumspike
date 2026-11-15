@@ -378,7 +378,10 @@ impl Service {
         let (src, mix) = {
             let g = lock(&op);
             let tr = g.track(name)?;
-            (g.source(name)?, crate::media::mix_mode(tr.mix_mode_or_default()))
+            (
+                g.source_no_segments(name)?,
+                crate::media::mix_mode(tr.mix_mode_or_default()),
+            )
         };
         self.inner.media.window_bytes(&src, mix, start, end, MAX_WINDOW_SAMPLES)
     }

@@ -145,7 +145,7 @@ pub(crate) fn audio_length(op: &crate::registry::Shared, name: &str) -> Option<(
             .sr
             .and_then(|s| u32::try_from(s).ok())
             .zip(tr.n_samples.and_then(|n| usize::try_from(n).ok()));
-        (g.source(name).ok(), doc)
+        (g.source_no_segments(name).ok(), doc)
     };
     source
         .and_then(|p| MappedWav::open(&p).ok())
@@ -165,7 +165,7 @@ pub(crate) fn track_rate(g: &OpenProject, name: &str) -> u32 {
             .and_then(|tr| tr.sr)
             .and_then(|s| u32::try_from(s).ok())
     };
-    g.source(name)
+    g.source_no_segments(name)
         .ok()
         .and_then(|p| MappedWav::open(&p).ok())
         .map(|w| w.info.sample_rate)
@@ -795,7 +795,11 @@ impl Service {
             g.track(name)?;
             check_file_owner(&g, name)?;
             g.resolve(); // a file that went away since the open is a 409
-            (g.source(name)?, export_dir(&g, dest)?, g.track(name)?.follows.is_some())
+            (
+                g.source_no_segments(name)?,
+                export_dir(&g, dest)?,
+                g.track(name)?.follows.is_some(),
+            )
         };
         // R10: a second export to the same folder serializes behind this one
         let _dest_guard = export_dest_acquire(&dir);
@@ -970,7 +974,7 @@ impl Service {
                     .map_or_else(Vec::new, |a| uncut(a))
             });
             jobs.push(Job {
-                source: g.source(&name),
+                source: g.source_no_segments(&name),
                 events,
                 note,
                 map: map.clone(),
@@ -1238,14 +1242,14 @@ impl Service {
                 hi_db: p("vel_hi_db", -6.0),
                 ..VelocityMap::default()
             };
-            (g.source(name)?, mix_mode(tr.mix_mode_or_default()), map)
+            (g.track_audio(name)?, mix_mode(tr.mix_mode_or_default()), map)
         };
         let events = match events {
             Some(e) => e.to_vec(),
             None => self.track_events(sid, name)?,
         };
         let times = hit_times(&events)?;
-        let d = self.inner.media.decode_cached(&source, mix)?;
+        let d = source.decode(&self.inner.media, mix)?;
         let vels = velocity_map(&d.samples, d.sr, &times, &map);
         let mut out = Vec::with_capacity(events.len());
         for (e, v) in events.into_iter().zip(vels) {

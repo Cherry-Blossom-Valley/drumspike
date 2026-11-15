@@ -225,12 +225,47 @@ type TimelineKey = (
 pub struct PeakRequest {
     /// `Analysis/<track>/`.
     pub dir: PathBuf,
-    /// The key the cache must carry (the source record's identity).
+    /// The key the cache must carry (the source record's identity, or the segments' for a
+    /// segmented track, #528).
     pub key: CacheKey,
-    /// The source file, or the 409 of an offline track.
-    pub source: Result<PathBuf, AppError>,
+    /// The track's audio: the source file, or the timeline of its segments (#528). The 409
+    /// of an offline track (or the 400 of a malformed segment list) is kept here.
+    pub audio: Result<TrackAudio, AppError>,
     /// The track's downmix.
     pub mix: MixMode,
+}
+
+/// The cache-key `head_sha1` of a segmented track: the segments in document order (path,
+/// start, offset, length) with the size and mtime of every file, so a moved or re-cut
+/// segment or a replaced file is another key and the next peak build gives the new
+/// timeline (#528). A plain string in the `head_sha1` slot, so `key.json` keeps its shape
+/// and the plain-track and old-project keys are untouched.
+fn segments_cache_key(segs: &[SegmentAudio]) -> CacheKey {
+    let mut text = String::new();
+    for s in segs {
+        let (size, mtime) = match std::fs::metadata(&s.path) {
+            Ok(m) => (
+                m.len(),
+                m.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs()),
+            ),
+            Err(_) => (0, None),
+        };
+        text.push_str(&format!(
+            "{}|{:e}|{:e}|{:e}|{size}|{mtime:?};",
+            s.path.display(),
+            s.start,
+            s.offset,
+            s.length
+        ));
+    }
+    CacheKey {
+        size: None,
+        mtime: None,
+        head_sha1: Some(text),
+    }
 }
 
 impl PeakRequest {
@@ -239,13 +274,20 @@ impl PeakRequest {
     /// # Errors
     ///
     /// Returns a 400 error when the project has no track of this name. An offline track is not an error here: its
-    /// 409 is kept in the `source` field.
+    /// 409 is kept in the `audio` field.
     pub fn of(op: &OpenProject, name: &str) -> Result<PeakRequest, AppError> {
         let tr = op.track(name)?;
+        let audio = op.track_audio(name);
+        let key = match &audio {
+            Ok(TrackAudio::Timeline(segs)) => segments_cache_key(segs),
+            // a plain track (and an errored audio, whose 400 or 409 surfaces at the build)
+            // keeps the source record's identity
+            _ => cache_key(tr),
+        };
         Ok(PeakRequest {
             dir: op.project.subdir(ANALYSIS_DIR).join(name),
-            key: cache_key(tr),
-            source: op.source(name),
+            key,
+            audio,
             mix: mix_mode(tr.mix_mode_or_default()),
         })
     }
@@ -422,8 +464,13 @@ impl Media {
             key: key.clone(),
         };
         let d = Arc::new(decode(path, mode)?);
-        self.decode_runs.fetch_add(1, Ordering::Relaxed);
-        *lock(&self.decode_counts).entry(path.to_path_buf()).or_insert(0) += 1;
+        // a test counter (the decode runs it counts are asserted by the tests, #519): it
+        // does not run in a release build of the app
+        #[cfg(debug_assertions)]
+        {
+            self.decode_runs.fetch_add(1, Ordering::Relaxed);
+            *lock(&self.decode_counts).entry(path.to_path_buf()).or_insert(0) += 1;
+        }
         *g = Some(Arc::clone(&d));
         drop(g);
         // the cache entry goes in before the inflight key is removed: a request that
@@ -500,8 +547,21 @@ impl Media {
             mix == MixMode::Average,
             files_meta,
         );
-        if let Some((_, d)) = lock(&self.timelines).iter().rev().find(|(k, _)| *k == key) {
-            return Ok(Arc::clone(d));
+        // the hit is read under one lock and the LRU move under a second one: the `if let`
+        // scrutinee's guard would otherwise live for the whole block and the re-lock would
+        // deadlock (#528)
+        let hit = {
+            let cache = lock(&self.timelines);
+            cache.iter().rev().find(|(k, _)| *k == key).map(|(_, d)| Arc::clone(d))
+        };
+        if let Some(d) = hit {
+            // least recently used, not oldest inserted: the hit moves to the back (#528)
+            let mut cache = lock(&self.timelines);
+            if let Some(i) = cache.iter().position(|(k, _)| *k == key) {
+                let (_, d) = cache.remove(i);
+                cache.push((key, d));
+            }
+            return Ok(d);
         }
         let mut files: Vec<(PathBuf, Arc<Decoded>)> = Vec::new();
         let mut sr = 0u32;
@@ -640,8 +700,13 @@ impl Media {
         let guard = self.folder_lock(&req.dir);
         let _g = lock(&guard);
         if !cache_is_current(&req.dir, &req.key) {
-            let src = req.source.clone()?;
-            let d = decode(&src, req.mix)?;
+            // a segmented track builds its peaks from the timeline (#528): the gap is
+            // silence, each segment's part is its file's part, exact to the sample
+            let d = match &req.audio {
+                Ok(TrackAudio::File(p)) => decode(p, req.mix)?,
+                Ok(TrackAudio::Timeline(segs)) => decode_timeline(segs, req.mix)?,
+                Err(e) => return Err(e.clone()),
+            };
             build_cache(&req.dir, d.sr, &d.samples, &req.key)?;
         }
         Ok(PeakCache::open(&req.dir.join(PEAKS_BIN))?)

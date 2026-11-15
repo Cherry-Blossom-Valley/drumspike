@@ -292,11 +292,16 @@ pub(crate) fn layer_job(g: &OpenProject, name: &str) -> Result<Option<LayerJob>,
     let Some(layer) = layer_of(&tr.extra) else {
         return Ok(None);
     };
+    // a segmented track has no plain source for the layer's mic path: a clear 400, not a
+    // silent None that would hide the reason (#528)
+    if g.has_segments(name)? {
+        return Err(crate::registry::OpenProject::not_available_error(name));
+    }
     let (file, status) = resolve_source(Some(&layer.source), &g.project.dir);
     Ok(Some(LayerJob {
         file,
         status,
-        mic: g.source(name).ok(),
+        mic: g.source_no_segments(name).ok(),
         mode: mix_mode(tr.mix_mode_or_default()),
         role: tr.role.clone().unwrap_or_else(|| "other".into()),
         hits: doc_hits(g, name)?,
@@ -309,7 +314,7 @@ pub(crate) fn layer_job(g: &OpenProject, name: &str) -> Result<Option<LayerJob>,
 pub(crate) fn protected_files(g: &OpenProject) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for name in g.project.doc.tracks.iter().flat_map(|t| t.keys()) {
-        out.extend(g.source(name).ok());
+        out.extend(g.source_no_segments(name).ok());
         if let Ok(Some(job)) = layer_job(g, name) {
             out.extend(job.file);
         }

@@ -265,7 +265,7 @@ impl Service {
         let g = lock(op);
         let tr = g.track(name)?;
         Ok(TrackState {
-            source: g.source(name),
+            source: g.source_no_segments(name),
             mix: tr.mix_mode_or_default().to_string(),
             role: tr.role.clone().unwrap_or_else(|| "other".into()),
             follows: tr.follows.clone(),
