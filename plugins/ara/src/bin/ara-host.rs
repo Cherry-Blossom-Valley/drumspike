@@ -9,6 +9,7 @@
 //! ara-host <bundle> store    --files <wav>... --archive <file>    store the ARA archive
 //! ara-host <bundle> restore  --archive <file> --files <wav>...    restore in a NEW process
 //! ara-host <bundle> blocks   --files <wav>... [--frames N]        the audio-thread check
+//! ara-host <bundle> tables                                        the interface-table walk
 //! ```
 //!
 //! Region spec: `<startInModificationTime>,<durationInModificationTime>,<startInPlaybackTime>`
@@ -19,13 +20,14 @@
 //!
 //! usage: ara-host <path-to-.clap-bundle> <mode> [options]
 
-use drumspike_ara::ara::*;
-use libloading::os::unix::{Library, Symbol};
-use clap_sys::entry::clap_plugin_entry;
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
 use clap_sys::host::clap_host;
+use clap_sys::plugin::clap_plugin;
 use clap_sys::process::clap_process;
 use clap_sys::version::CLAP_VERSION;
+use drumspike_ara::ara::*;
+use drumspike_ara::ClapEntry;
+use libloading::os::unix::{Library, Symbol};
 use std::ffi::{c_char, c_void, CString};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -41,6 +43,7 @@ unsafe impl<T> Sync for SyncPtr<T> {}
 unsafe impl<T> Send for SyncPtr<T> {}
 
 const PLUGIN_CLAP_ID: &[u8] = b"com.cherryblossomvalley.drumspike.ara\0";
+const ARA_PLUGIN_EXT_ID: &[u8] = b"org.ara-audio.ara.pluginextension/2\0";
 const FRAMES: usize = 512;
 const SAMPLE_RATE: f64 = 48_000.0;
 
@@ -65,7 +68,10 @@ fn binary_of(path: &str) -> std::path::PathBuf {
     let p = std::path::Path::new(path);
     if p.is_dir() {
         let macos = p.join("Contents").join("MacOS");
-        let bin = std::fs::read_dir(&macos).ok().and_then(|d| d.flatten().next()).map(|e| e.path());
+        let bin = std::fs::read_dir(&macos)
+            .ok()
+            .and_then(|d| d.flatten().next())
+            .map(|e| e.path());
         return bin.unwrap_or_else(|| p.to_path_buf());
     }
     p.to_path_buf()
@@ -77,7 +83,10 @@ fn bundle_of(path: &str) -> String {
     if p.is_dir() {
         return p.display().to_string();
     }
-    p.ancestors().nth(2).map(|a| a.display().to_string()).unwrap_or_else(|| p.display().to_string())
+    p.ancestors()
+        .nth(2)
+        .map(|a| a.display().to_string())
+        .unwrap_or_else(|| p.display().to_string())
 }
 
 // ---------------------------------------------------------------- the WAV loader
@@ -95,7 +104,9 @@ fn load_wav(path: &str) -> Result<(u32, Vec<Vec<f32>>), String> {
     while i + 8 <= raw.len() {
         let id = &raw[i..i + 4];
         let size = u32::from_le_bytes(raw[i + 4..i + 8].try_into().unwrap()) as usize;
-        let body = raw.get(i + 8..i + 8 + size).ok_or_else(|| format!("{path}: truncated {id:?} chunk"))?;
+        let body = raw
+            .get(i + 8..i + 8 + size)
+            .ok_or_else(|| format!("{path}: truncated {id:?} chunk"))?;
         match id {
             b"fmt " => {
                 tag = u16::from_le_bytes(body[0..2].try_into().unwrap());
@@ -116,14 +127,12 @@ fn load_wav(path: &str) -> Result<(u32, Vec<Vec<f32>>), String> {
     let bytes_per = usize::from(bits / 8);
     let frames = data.len() / (bytes_per * usize::from(channels));
     let mut out: Vec<Vec<f32>> = vec![Vec::with_capacity(frames); usize::from(channels)];
-    for f in 0..frames {
-        for c in 0..usize::from(channels) {
+    for (c, out_c) in out.iter_mut().enumerate().take(usize::from(channels)) {
+        for f in 0..frames {
             let at = f * bytes_per * usize::from(channels) + c * bytes_per;
             let v = match (tag, bits) {
                 (3, 32) => f32::from_le_bytes(data[at..at + 4].try_into().unwrap()),
-                (1, 16) => {
-                    (i16::from_le_bytes(data[at..at + 2].try_into().unwrap()) as f32) / 32768.0
-                }
+                (1, 16) => (i16::from_le_bytes(data[at..at + 2].try_into().unwrap()) as f32) / 32768.0,
                 (1, 24) => {
                     let b = [data[at], data[at + 1], data[at + 2], 0];
                     let x = i32::from_le_bytes(b) >> 8;
@@ -132,7 +141,7 @@ fn load_wav(path: &str) -> Result<(u32, Vec<Vec<f32>>), String> {
                 (1, 32) => (i32::from_le_bytes(data[at..at + 4].try_into().unwrap()) as f32) / 2_147_483_648.0,
                 _ => return Err(format!("{path}: unsupported format tag {tag} with {bits} bits")),
             };
-            out[c].push(v);
+            out_c.push(v);
         }
     }
     Ok((rate, out))
@@ -149,7 +158,9 @@ static AUDIO_ACCESS: SyncPtr<ARAAudioAccessControllerInterface> = SyncPtr(ARAAud
 
 /// The reader ref carries the index of the source.
 unsafe extern "C" fn aa_create_reader(
-    _ctl: ARAAudioAccessControllerHostRef, source: ARAAudioSourceHostRef, _all: ARABool,
+    _ctl: ARAAudioAccessControllerHostRef,
+    source: ARAAudioSourceHostRef,
+    _all: ARABool,
 ) -> ARAAudioReaderHostRef {
     Box::into_raw(Box::new(source as usize)) as ARAAudioReaderHostRef
 }
@@ -161,8 +172,11 @@ unsafe extern "C" fn aa_destroy_reader(_ctl: ARAAudioAccessControllerHostRef, re
 /// The block read: the samples of `samplesToRead` frames from `samplePosition`, one
 /// buffer per channel.
 unsafe extern "C" fn aa_read(
-    _ctl: ARAAudioAccessControllerHostRef, reader: ARAAudioReaderHostRef, sample_position: ARASamplePosition,
-    samples_to_read: ARASampleCount, buffers: *const *mut c_void,
+    _ctl: ARAAudioAccessControllerHostRef,
+    reader: ARAAudioReaderHostRef,
+    sample_position: ARASamplePosition,
+    samples_to_read: ARASampleCount,
+    buffers: *const *mut c_void,
 ) -> ARABool {
     let idx = *(reader as *mut usize);
     let state = &*(_ctl as *const HostState);
@@ -197,21 +211,27 @@ unsafe extern "C" fn ar_size(_ctl: ARAArchivingControllerHostRef, _reader: ARAAr
 }
 
 unsafe extern "C" fn ar_read(
-    _ctl: ARAArchivingControllerHostRef, _reader: ARAArchiveReaderHostRef, position: ARASize, length: ARASize,
+    _ctl: ARAArchivingControllerHostRef,
+    _reader: ARAArchiveReaderHostRef,
+    position: ARASize,
+    length: ARASize,
     buffer: *mut u8,
 ) -> ARABool {
     let state = &*(_ctl as *const HostState);
-    let start = position as usize;
-    let end = start + length as usize;
+    let start = position;
+    let end = start + length;
     if end > state.loaded.len() {
         return 0;
     }
-    std::ptr::copy_nonoverlapping(state.loaded[start..end].as_ptr(), buffer, length as usize);
+    std::ptr::copy_nonoverlapping(state.loaded[start..end].as_ptr(), buffer, length);
     1
 }
 
 unsafe extern "C" fn ar_write(
-    _ctl: ARAArchivingControllerHostRef, writer: ARAArchiveWriterHostRef, position: ARASize, length: ARASize,
+    _ctl: ARAArchivingControllerHostRef,
+    writer: ARAArchiveWriterHostRef,
+    position: ARASize,
+    length: ARASize,
     buffer: *const u8,
 ) -> ARABool {
     let state = &mut *(_ctl as *mut HostState);
@@ -220,20 +240,18 @@ unsafe extern "C" fn ar_write(
         state.writers.resize(idx + 1, Vec::new());
     }
     let blob = &mut state.writers[idx];
-    let end = position as usize + length as usize;
+    let end = position + length;
     if blob.len() < end {
         blob.resize(end, 0);
     }
-    blob[position as usize..end].copy_from_slice(std::slice::from_raw_parts(buffer, length as usize));
+    blob[position..end].copy_from_slice(std::slice::from_raw_parts(buffer, length));
     1
 }
 
 unsafe extern "C" fn ar_progress(_ctl: ARAArchivingControllerHostRef, _value: f32) {}
 
 /// The document archive ID of the factory (the plugin reads its own ID back).
-unsafe extern "C" fn ar_id(
-    _ctl: ARAArchivingControllerHostRef, _reader: ARAArchiveReaderHostRef,
-) -> ARAPersistentID {
+unsafe extern "C" fn ar_id(_ctl: ARAArchivingControllerHostRef, _reader: ARAArchiveReaderHostRef) -> ARAPersistentID {
     factory().documentArchiveID
 }
 
@@ -243,8 +261,7 @@ fn factory() -> &'static ARAFactory {
     unsafe { &*(*ARA_FACTORY.0.lock().unwrap()) }
 }
 
-static HOST_INSTANCE: SyncPtr<Mutex<Option<ARADocumentControllerHostInstance>>> =
-    SyncPtr(Mutex::new(None));
+static HOST_INSTANCE: SyncPtr<Mutex<Option<ARADocumentControllerHostInstance>>> = SyncPtr(Mutex::new(None));
 
 /// The host instance: the two mandatory interfaces, the optional ones stay null (the
 /// plugin must check before calling them).
@@ -275,7 +292,9 @@ fn parse_region(spec: &str) -> Result<(f64, f64, f64), String> {
 }
 
 fn args_value(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1).cloned())
 }
 
 fn args_list(args: &[String], name: &str) -> Vec<String> {
@@ -295,11 +314,84 @@ fn args_list(args: &[String], name: &str) -> Vec<String> {
     out
 }
 
+// ---------------------------------------------------------------- the interface walk
+
+/// The function slots of an ARA interface table as (name, offset). The walk reads every
+/// slot up to the structSize the plugin declares: ARA marks optional parts by structSize
+/// (see ARAInterface.h, Versioned_Structs_) — a table may end early, but every slot
+/// inside its declared size must carry a function. The hosts of the SDK call the slots
+/// unchecked (ARA_Library/Dispatch/ARAHostDispatch.cpp), so an empty slot inside the
+/// declared size is a crash on a real host, not a harmless gap.
+macro_rules! fn_slots {
+    ($t:ty: $($m:ident),+ $(,)?) => {
+        &[$((stringify!($m), ::std::mem::offset_of!($t, $m))),+]
+    };
+}
+
+/// The function pointers of the ARA factory.
+static FACTORY_SLOTS: &[(&str, usize)] = fn_slots!(ARAFactory:
+    initializeARAWithConfiguration, uninitializeARA, createDocumentControllerWithDocument);
+
+/// The slots of the document controller interface (the full ARA 2.0-final table, 440
+/// bytes = structSize + 54 slots).
+static DC_SLOTS: &[(&str, usize)] = fn_slots!(ARADocumentControllerInterface:
+    destroyDocumentController, getFactory, beginEditing, endEditing, notifyModelUpdates,
+    beginRestoringDocumentFromArchive, endRestoringDocumentFromArchive, storeDocumentToArchive,
+    updateDocumentProperties, createMusicalContext, updateMusicalContextProperties,
+    updateMusicalContextContent, destroyMusicalContext, createAudioSource,
+    updateAudioSourceProperties, updateAudioSourceContent, enableAudioSourceSamplesAccess,
+    deactivateAudioSourceForUndoHistory, destroyAudioSource, createAudioModification,
+    cloneAudioModification, updateAudioModificationProperties,
+    deactivateAudioModificationForUndoHistory, destroyAudioModification, createPlaybackRegion,
+    updatePlaybackRegionProperties, destroyPlaybackRegion, isAudioSourceContentAvailable,
+    isAudioSourceContentAnalysisIncomplete, requestAudioSourceContentAnalysis,
+    getAudioSourceContentGrade, createAudioSourceContentReader,
+    isAudioModificationContentAvailable, getAudioModificationContentGrade,
+    createAudioModificationContentReader, isPlaybackRegionContentAvailable,
+    getPlaybackRegionContentGrade, createPlaybackRegionContentReader,
+    getContentReaderEventCount, getContentReaderDataForEvent, destroyContentReader,
+    createRegionSequence, updateRegionSequenceProperties, destroyRegionSequence,
+    getPlaybackRegionHeadAndTailTime, restoreObjectsFromArchive, storeObjectsToArchive,
+    getProcessingAlgorithmsCount, getProcessingAlgorithmProperties,
+    getProcessingAlgorithmForAudioSource, requestProcessingAlgorithmForAudioSource,
+    isLicensedForCapabilities, storeAudioSourceToAudioFileChunk,
+    isAudioModificationPreservingAudioSourceSignal);
+
+/// The slots of the role tables the plug-in extension carries (ARA 2.0-final).
+static PR_SLOTS: &[(&str, usize)] = fn_slots!(ARAPlaybackRendererInterface: addPlaybackRegion, removePlaybackRegion);
+static ER_SLOTS: &[(&str, usize)] = fn_slots!(ARAEditorRendererInterface:
+    addPlaybackRegion, removePlaybackRegion, addRegionSequence, removeRegionSequence);
+static EV_SLOTS: &[(&str, usize)] = fn_slots!(ARAEditorViewInterface: notifySelection, notifyHideRegionSequences);
+
+/// Walk one interface table: count the slots inside the declared structSize and fail on
+/// the first empty one. A structSize that ends before a slot skips it (the ARA rule).
+unsafe fn walk_table(
+    name: &str,
+    iface: *const c_void,
+    declared: usize,
+    slots: &[(&str, usize)],
+) -> Result<usize, String> {
+    let mut checked = 0usize;
+    for (slot, off) in slots {
+        if off + std::mem::size_of::<*const ()>() > declared {
+            continue;
+        }
+        checked += 1;
+        let f = (iface as *const u8).add(*off) as *const *const ();
+        if f.read_unaligned().is_null() {
+            return Err(format!(
+                "{name}: slot {slot} (offset {off}) is empty inside the declared structSize of {declared} bytes"
+            ));
+        }
+    }
+    Ok(checked)
+}
+
 /// The loaded plugin: the library keeps the code alive, the entry and the ARA factory
 /// are stored.
 struct Loaded {
     _lib: Library,
-    entry: *const clap_plugin_entry,
+    entry: *const ClapEntry,
 }
 
 /// dlopen the bundle, run the CLAP entry init, and take the ARA factory.
@@ -307,12 +399,10 @@ unsafe fn load(bundle: &str) -> Result<Loaded, String> {
     let bin = binary_of(bundle);
     let lib = Library::new(&bin).map_err(|e| format!("dlopen {bin:?}: {e}"))?;
     let sym: Symbol<*mut c_void> = lib.get(b"clap_entry").map_err(|e| format!("no clap_entry: {e}"))?;
-    let entry = sym.into_raw() as *const clap_plugin_entry;
+    let entry = sym.into_raw() as *const ClapEntry;
     let path = CString::new(bundle_of(bundle)).unwrap();
     let factory_id = CString::new(CLAP_PLUGIN_FACTORY_ID.to_bytes()).unwrap();
-    let init: unsafe extern "C" fn(*const c_char, *const c_char) -> bool =
-        std::mem::transmute((*entry).init.expect("entry.init"));
-    if !init(path.as_ptr(), factory_id.as_ptr()) {
+    if !((*entry).init.expect("entry.init"))(path.as_ptr(), factory_id.as_ptr()) {
         return Err("clap_entry.init refused".into());
     }
     let ext_id = CString::new(b"org.ara-audio.ara.factory/2".to_vec()).unwrap();
@@ -334,34 +424,34 @@ unsafe fn load(bundle: &str) -> Result<Loaded, String> {
 }
 
 /// `initializeARAWithConfiguration` and one document controller over the host state.
-unsafe fn make_controller(
-    _loaded: &Loaded, state: *mut HostState,
-) -> Result<ARADocumentControllerRef, String> {
+unsafe fn make_controller(_loaded: &Loaded, state: *mut HostState) -> Result<Inst, String> {
     let f = factory();
     let config = ARAInterfaceConfiguration {
         structSize: std::mem::size_of::<ARAInterfaceConfiguration>(),
         desiredApiGeneration: kARAAPIGeneration_2_0_Final as ARAAPIGeneration,
         assertFunctionAddress: std::ptr::null_mut(),
     };
-    ((*f).initializeARAWithConfiguration.expect("initializeARAWithConfiguration"))(&config);
+    (f.initializeARAWithConfiguration
+        .expect("initializeARAWithConfiguration"))(&config);
     *HOST_INSTANCE.0.lock().unwrap() = Some(host_instance(state));
-    let host =
-        HOST_INSTANCE.0.lock().unwrap().as_ref().unwrap() as *const ARADocumentControllerHostInstance;
-    let dc = ((*f).createDocumentControllerWithDocument.expect("createDocumentControllerWithDocument"))(
-        host,
-        std::ptr::null(),
-    );
+    let host = HOST_INSTANCE.0.lock().unwrap().as_ref().unwrap() as *const ARADocumentControllerHostInstance;
+    let dc = (f
+        .createDocumentControllerWithDocument
+        .expect("createDocumentControllerWithDocument"))(host, std::ptr::null());
     if dc.is_null() {
         return Err("createDocumentControllerWithDocument returned null".into());
     }
-    Ok((*dc).documentControllerRef)
+    Ok(dc)
 }
 
 /// One source and one modification per file, registered in `state`.
 unsafe fn add_sources(
-    dc_ref: ARADocumentControllerRef, state: *mut HostState, files: &[String],
+    inst: Inst,
+    state: *mut HostState,
+    files: &[String],
 ) -> Result<Vec<(ARAAudioSourceRef, ARAAudioModificationRef)>, String> {
-    let dc = iface_of(dc_ref);
+    let dc = iface_of(inst);
+    let dc_ref = dc_ref_of(inst);
     let mut pairs = Vec::new();
     for (i, file) in files.iter().enumerate() {
         let (rate, channels) = load_wav(file)?;
@@ -398,31 +488,33 @@ unsafe fn add_sources(
         }
         pairs.push((src, modification));
         let state = &mut *state;
-        state.sources.push(HostSource {
-            name,
-            rate,
-            channels,
-        });
+        state.sources.push(HostSource { name, rate, channels });
     }
     Ok(pairs)
 }
 
-/// The instance struct behind a document controller ref (the host keeps the layout).
-unsafe fn document_controller_of(dc_ref: ARADocumentControllerRef) -> *const ARADocumentControllerInstance {
-    dc_ref as *const ARADocumentControllerInstance
+/// The instance struct the host got from `createDocumentControllerWithDocument`. The
+/// ARA rule: the host holds the instance and reads the interface out of it, while the
+/// calls into the plugin carry the instance's `documentControllerRef` — never the
+/// instance pointer itself.
+type Inst = *const ARADocumentControllerInstance;
+
+/// The document controller ref of an instance (the handle the plugin's own functions
+/// take).
+unsafe fn dc_ref_of(inst: Inst) -> ARADocumentControllerRef {
+    std::ptr::addr_of!((*inst).documentControllerRef).read_unaligned()
 }
 
 /// The interface the host calls: the plugin's document controller interface, out of the
 /// instance struct (the ARA rule — the instance carries the ref and the interface).
-unsafe fn iface_of(dc_ref: ARADocumentControllerRef) -> &'static ARADocumentControllerInterface {
-    &*(*document_controller_of(dc_ref)).documentControllerInterface
+unsafe fn iface_of(inst: Inst) -> &'static ARADocumentControllerInterface {
+    &*std::ptr::addr_of!((*inst).documentControllerInterface).read_unaligned()
 }
 
 /// The playback regions of one modification, inside the edit cycle.
-unsafe fn add_regions(
-    dc_ref: ARADocumentControllerRef, modification: ARAAudioModificationRef, specs: &[(f64, f64, f64)],
-) {
-    let dc = iface_of(dc_ref);
+unsafe fn add_regions(inst: Inst, modification: ARAAudioModificationRef, specs: &[(f64, f64, f64)]) {
+    let dc = iface_of(inst);
+    let dc_ref = dc_ref_of(inst);
     for (a, d, p) in specs {
         let props = ARAPlaybackRegionProperties {
             structSize: std::mem::size_of::<ARAPlaybackRegionProperties>(),
@@ -450,27 +542,22 @@ unsafe fn add_regions(
 
 /// Samples access on (the reader is created on this thread, the reads run on the
 /// plugin's threads), then the analysis request, then the wait.
-unsafe fn analyse(
-    dc_ref: ARADocumentControllerRef, pairs: &[(ARAAudioSourceRef, ARAAudioModificationRef)],
-) -> Result<(), String> {
-    let dc = iface_of(dc_ref);
+unsafe fn analyse(inst: Inst, pairs: &[(ARAAudioSourceRef, ARAAudioModificationRef)]) -> Result<(), String> {
+    let dc = iface_of(inst);
+    let dc_ref = dc_ref_of(inst);
     let types = [kARAContentTypeNotes as ARAContentType];
     for (src, _) in pairs {
-        (dc.enableAudioSourceSamplesAccess.expect("enableAudioSourceSamplesAccess"))(dc_ref, *src, 1);
-        (dc.requestAudioSourceContentAnalysis.expect("requestAudioSourceContentAnalysis"))(
-            dc_ref,
-            *src,
-            types.len(),
-            types.as_ptr(),
-        );
+        (dc.enableAudioSourceSamplesAccess
+            .expect("enableAudioSourceSamplesAccess"))(dc_ref, *src, 1);
+        (dc.requestAudioSourceContentAnalysis
+            .expect("requestAudioSourceContentAnalysis"))(dc_ref, *src, types.len(), types.as_ptr());
     }
     let deadline = Instant::now() + Duration::from_secs(300);
     loop {
         let incomplete = pairs.iter().any(|(s, _)| {
-            (dc.isAudioSourceContentAnalysisIncomplete.expect("isAudioSourceContentAnalysisIncomplete"))(
-                dc_ref,
-                *s,
-                kARAContentTypeNotes as ARAContentType,
+            (dc.isAudioSourceContentAnalysisIncomplete
+                .expect("isAudioSourceContentAnalysisIncomplete"))(
+                dc_ref, *s, kARAContentTypeNotes as ARAContentType
             ) != 0
         });
         if !incomplete {
@@ -484,12 +571,13 @@ unsafe fn analyse(
 }
 
 /// The notes of every source through the content readers, one JSON line per source.
-unsafe fn print_notes(
-    dc_ref: ARADocumentControllerRef, state: &HostState, pairs: &[(ARAAudioSourceRef, ARAAudioModificationRef)],
-) {
-    let dc = iface_of(dc_ref);
+unsafe fn print_notes(inst: Inst, state: &HostState, pairs: &[(ARAAudioSourceRef, ARAAudioModificationRef)]) {
+    let dc = iface_of(inst);
+    let dc_ref = dc_ref_of(inst);
     for (i, (s, _)) in pairs.iter().enumerate() {
-        let reader = (dc.createAudioSourceContentReader.expect("createAudioSourceContentReader"))(
+        let reader = (dc
+            .createAudioSourceContentReader
+            .expect("createAudioSourceContentReader"))(
             dc_ref,
             *s,
             kARAContentTypeNotes as ARAContentType,
@@ -508,7 +596,10 @@ unsafe fn print_notes(
         }
         (dc.destroyContentReader.expect("destroyContentReader"))(dc_ref, reader);
         let src = &state.sources[i];
-        let exact: Vec<f64> = notes.iter().map(|[pos, _]| (pos * f64::from(src.rate)).round()).collect();
+        let exact: Vec<f64> = notes
+            .iter()
+            .map(|[pos, _]| (pos * f64::from(src.rate)).round())
+            .collect();
         println!(
             "{{\"event\":\"host_notes\",\"name\":{:?},\"rate\":{},\"count\":{},\"samples\":{:?}}}",
             src.name.to_string_lossy(),
@@ -519,11 +610,12 @@ unsafe fn print_notes(
     }
 }
 
+/// The regions spec callback and the mode step of the shared document builder.
+type RegionsOf<'a> = &'a dyn Fn(&HostState, usize) -> Vec<(f64, f64, f64)>;
+type ModeStep<'a> = &'a dyn Fn(Inst, &HostState, &[(ARAAudioSourceRef, ARAAudioModificationRef)]) -> Result<(), String>;
+
 /// Build the document of `files` and run `step` on it; every mode shares this.
-fn with_document(
-    bundle: &str, files: &[String], regions_of: &dyn Fn(&HostState, usize) -> Vec<(f64, f64, f64)>,
-    step: &dyn Fn(ARADocumentControllerRef, &HostState, &[(ARAAudioSourceRef, ARAAudioModificationRef)]) -> Result<(), String>,
-) -> Result<(), String> {
+fn with_document(bundle: &str, files: &[String], regions_of: RegionsOf<'_>, step: ModeStep<'_>) -> Result<(), String> {
     let state = Box::into_raw(Box::new(HostState {
         sources: Vec::new(),
         writers: Vec::new(),
@@ -531,18 +623,194 @@ fn with_document(
     }));
     unsafe {
         let loaded = load(bundle)?;
-        let dc_ref = make_controller(&loaded, state)?;
-        let dc = iface_of(dc_ref);
-        (dc.beginEditing.expect("beginEditing"))(dc_ref);
-        let pairs = add_sources(dc_ref, state, files)?;
+        let inst = make_controller(&loaded, state)?;
+        let dc = iface_of(inst);
+        let dc_ref = dc_ref_of(inst);
+        // the ARA rule: the optional interface members may be None, the host checks
+        if let Some(f) = dc.beginEditing {
+            f(dc_ref);
+        }
+        let pairs = add_sources(inst, state, files)?;
         for (i, (_, modification)) in pairs.iter().enumerate() {
             let specs = regions_of(&*state, i);
-            add_regions(dc_ref, *modification, &specs);
+            add_regions(inst, *modification, &specs);
         }
-        (dc.endEditing.expect("endEditing"))(dc_ref);
-        let result = step(dc_ref, &*state, &pairs);
+        if let Some(f) = dc.endEditing {
+            f(dc_ref);
+        }
+        let result = step(inst, &*state, &pairs);
         (dc.destroyDocumentController.expect("destroyDocumentController"))(dc_ref);
         result
+    }
+}
+
+/// The CLAP plugin instance of the bundle: create + init. The modes that need the
+/// companion-API instance (blocks, tables) share this.
+unsafe fn clap_plugin_of(loaded: &Loaded) -> Result<*const clap_plugin, String> {
+    let entry = loaded.entry;
+    let factory_id = CString::new(CLAP_PLUGIN_FACTORY_ID.to_bytes()).unwrap();
+    let clap_factory =
+        ((*entry).get_factory.expect("entry.get_factory"))(factory_id.as_ptr()) as *const clap_plugin_factory;
+    if clap_factory.is_null() {
+        return Err("no CLAP plugin factory".into());
+    }
+    let id = CString::new(&PLUGIN_CLAP_ID[..PLUGIN_CLAP_ID.len() - 1]).unwrap();
+    let host = clap_host {
+        clap_version: CLAP_VERSION,
+        host_data: std::ptr::null_mut(),
+        name: cs!("ara-host"),
+        vendor: cs!("Cherry Blossom Valley"),
+        url: cs!("https://github.com/Cherry-Blossom-Valley/drumspike"),
+        version: cs!("0.1.0"),
+        get_extension: None,
+        request_restart: None,
+        request_process: None,
+        request_callback: None,
+    };
+    let plugin = ((*clap_factory).create_plugin.expect("create_plugin"))(clap_factory, &host, id.as_ptr());
+    if plugin.is_null() {
+        return Err("create_plugin returned null".into());
+    }
+    if !((*plugin).init.expect("init"))(plugin) {
+        return Err("plugin init refused".into());
+    }
+    Ok(plugin)
+}
+
+/// `tables`: walk every ARA interface table the plugin exposes, up to the structSize it
+/// declares, and fail on an empty slot or on 0 slots checked (the gate line for the
+/// empty-slot class: ARA hosts call the slots inside the declared size unchecked). The
+/// factory comes from the ARA factory extension, the document controller interface from
+/// the instance the host holds, and the role tables from the plugin extension bound for
+/// all three roles — an assigned role with a null interface is a failure on its own.
+fn run_tables(bundle: &str) -> i32 {
+    let state = Box::into_raw(Box::new(HostState {
+        sources: Vec::new(),
+        writers: Vec::new(),
+        loaded: Vec::new(),
+    }));
+    unsafe {
+        let loaded = match load(bundle) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("{e}");
+                return 2;
+            }
+        };
+        let inst = match make_controller(&loaded, state) {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("{e}");
+                return 2;
+            }
+        };
+        let mut slots = 0usize;
+        let mut tables: Vec<(String, usize)> = Vec::new();
+
+        // 1. the ARA factory (its three function pointers)
+        let f = factory();
+        let f_declared = std::ptr::addr_of!(f.structSize).read_unaligned();
+        let n = match walk_table(
+            "ARAFactory",
+            f as *const ARAFactory as *const c_void,
+            f_declared,
+            FACTORY_SLOTS,
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("{e}");
+                return 2;
+            }
+        };
+        slots += n;
+        tables.push(("ARAFactory".into(), n));
+
+        // 2. the document controller interface, out of the instance the host holds
+        let dc_ptr = iface_of(inst) as *const ARADocumentControllerInterface;
+        let dc_ref = dc_ref_of(inst);
+        let dc_declared = std::ptr::addr_of!((*dc_ptr).structSize).read_unaligned();
+        let n = match walk_table("document controller", dc_ptr as *const c_void, dc_declared, DC_SLOTS) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("{e}");
+                return 2;
+            }
+        };
+        slots += n;
+        tables.push(("documentController".into(), n));
+
+        // 3. the plug-in extension: bind all three roles, the tables it returns must be
+        //    complete (an assigned role with a null interface is a failure on its own)
+        let plugin = match clap_plugin_of(&loaded) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("{e}");
+                return 2;
+            }
+        };
+        let ext_id = CString::new(&ARA_PLUGIN_EXT_ID[..ARA_PLUGIN_EXT_ID.len() - 1]).unwrap();
+        let ext = ((*plugin).get_extension.expect("get_extension"))(plugin, ext_id.as_ptr());
+        if ext.is_null() {
+            eprintln!("the plugin exposes no ARA plugin extension");
+            return 2;
+        }
+        let aext = ext as *const drumspike_ara::clap_ara_plugin_extension;
+        let bind = (*aext)
+            .bind_to_document_controller
+            .expect("bind_to_document_controller");
+        let roles: ARAPlugInInstanceRoleFlags =
+            (kARAPlaybackRendererRole | kARAEditorRendererRole | kARAEditorViewRole) as ARAPlugInInstanceRoleFlags;
+        let pext = bind(plugin, dc_ref, roles, roles);
+        if pext.is_null() {
+            eprintln!("bind_to_document_controller returned null");
+            return 2;
+        }
+        for (label, iface, slot_list) in [
+            (
+                "playbackRenderer",
+                std::ptr::addr_of!((*pext).playbackRendererInterface).read_unaligned() as *const c_void,
+                PR_SLOTS,
+            ),
+            (
+                "editorRenderer",
+                std::ptr::addr_of!((*pext).editorRendererInterface).read_unaligned() as *const c_void,
+                ER_SLOTS,
+            ),
+            (
+                "editorView",
+                std::ptr::addr_of!((*pext).editorViewInterface).read_unaligned() as *const c_void,
+                EV_SLOTS,
+            ),
+        ] {
+            if iface.is_null() {
+                eprintln!("the plugin bound no {label} interface for the assigned role");
+                return 2;
+            }
+            // structSize is the first member of every ARA table (an ARASize)
+            let declared = (iface as *const ARASize).read_unaligned();
+            let n = match walk_table(label, iface, declared, slot_list) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return 2;
+                }
+            };
+            slots += n;
+            tables.push((label.into(), n));
+        }
+        ((*plugin).destroy.expect("destroy"))(plugin);
+        ((*loaded.entry).deinit.expect("deinit"))();
+        ((iface_of(inst).destroyDocumentController).expect("destroyDocumentController"))(dc_ref);
+        if slots == 0 {
+            eprintln!("tables: no slot was inside any declared structSize");
+            return 2;
+        }
+        let list: Vec<String> = tables.iter().map(|(t, n)| format!("\"{t}\":{n}")).collect();
+        println!(
+            "{{\"event\":\"tables\",\"slots\":{slots},\"tables\":{{{}}}}}",
+            list.join(",")
+        );
+        0
     }
 }
 
@@ -564,6 +832,7 @@ fn main() {
         "store" => run_store(bundle, &files, args_value(&rest, "--archive")),
         "restore" => run_restore(bundle, &files, args_value(&rest, "--archive")),
         "blocks" => run_blocks(bundle, &files, &rest),
+        "tables" => run_tables(bundle),
         other => {
             eprintln!("unknown mode {other:?}");
             64
@@ -578,8 +847,7 @@ fn full_regions(state: &HostState, i: usize) -> Vec<(f64, f64, f64)> {
     for s in state.sources.iter().take(i) {
         position += s.channels.first().map_or(0.0, |c| c.len() as f64) / f64::from(s.rate);
     }
-    let duration = state.sources[i].channels.first().map_or(0.0, |c| c.len() as f64)
-        / f64::from(state.sources[i].rate);
+    let duration = state.sources[i].channels.first().map_or(0.0, |c| c.len() as f64) / f64::from(state.sources[i].rate);
     vec![(0.0, duration, position)]
 }
 
@@ -589,9 +857,9 @@ fn run_session(bundle: &str, files: &[String]) -> i32 {
         eprintln!("session: no --files");
         return 64;
     }
-    let rc = with_document(bundle, files, &full_regions, &|dc_ref, state, pairs| {
-        unsafe { analyse(dc_ref, pairs)? };
-        unsafe { print_notes(dc_ref, state, pairs) };
+    let rc = with_document(bundle, files, &full_regions, &|inst, state, pairs| {
+        unsafe { analyse(inst, pairs)? };
+        unsafe { print_notes(inst, state, pairs) };
         Ok(())
     });
     match rc {
@@ -624,9 +892,9 @@ fn run_regions(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         return 64;
     }
     let regions_of = |_state: &HostState, i: usize| if i == 0 { specs.clone() } else { Vec::new() };
-    let rc = with_document(bundle, files, &regions_of, &|dc_ref, state, pairs| {
-        unsafe { analyse(dc_ref, pairs)? };
-        unsafe { print_notes(dc_ref, state, pairs) };
+    let rc = with_document(bundle, files, &regions_of, &|inst, state, pairs| {
+        unsafe { analyse(inst, pairs)? };
+        unsafe { print_notes(inst, state, pairs) };
         Ok(())
     });
     match rc {
@@ -644,12 +912,17 @@ fn run_store(bundle: &str, files: &[String], archive: Option<String>) -> i32 {
         eprintln!("store: no --archive");
         return 64;
     };
-    let rc = with_document(bundle, files, &full_regions, &|dc_ref, state, pairs| unsafe {
-        analyse(dc_ref, pairs)?;
-        print_notes(dc_ref, state, pairs);
+    let rc = with_document(bundle, files, &full_regions, &|inst, state, pairs| unsafe {
+        analyse(inst, pairs)?;
+        print_notes(inst, state, pairs);
         // one writer; the plugin writes its state blob through the archive controller
-        let dc = iface_of(dc_ref);
-        let ok = (dc.storeObjectsToArchive.expect("storeObjectsToArchive"))(dc_ref, 0 as ARAArchiveWriterHostRef, std::ptr::null());
+        let dc = iface_of(inst);
+        let dc_ref = dc_ref_of(inst);
+        let ok = (dc.storeObjectsToArchive.expect("storeObjectsToArchive"))(
+            dc_ref,
+            0 as ARAArchiveWriterHostRef,
+            std::ptr::null(),
+        );
         if ok == 0 {
             return Err("storeObjectsToArchive refused".into());
         }
@@ -689,14 +962,19 @@ fn run_restore(bundle: &str, files: &[String], archive: Option<String>) -> i32 {
         eprintln!("restore: no --files");
         return 64;
     }
-    let rc = with_document(bundle, files, &full_regions, &|dc_ref, state, pairs| unsafe {
-        let dc = iface_of(dc_ref);
+    let rc = with_document(bundle, files, &full_regions, &|inst, state, pairs| unsafe {
+        let dc = iface_of(inst);
+        let dc_ref = dc_ref_of(inst);
         // the loaded archive feeds the readers; no request, no analysis, no decode
-        let ok = (dc.restoreObjectsFromArchive.expect("restoreObjectsFromArchive"))(dc_ref, 0 as ARAArchiveReaderHostRef, std::ptr::null());
+        let ok = (dc.restoreObjectsFromArchive.expect("restoreObjectsFromArchive"))(
+            dc_ref,
+            0 as ARAArchiveReaderHostRef,
+            std::ptr::null(),
+        );
         if ok == 0 {
             return Err("restoreObjectsFromArchive refused".into());
         }
-        print_notes(dc_ref, state, pairs);
+        print_notes(inst, state, pairs);
         Ok(())
     });
     match rc {
@@ -718,8 +996,12 @@ fn run_blocks(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         eprintln!("blocks: no --files");
         return 64;
     }
-    let frames = args_value(rest, "--frames").and_then(|v| v.parse::<usize>().ok()).unwrap_or(FRAMES);
-    let max_blocks = args_value(rest, "--blocks").and_then(|v| v.parse::<usize>().ok()).unwrap_or(200_000);
+    let frames = args_value(rest, "--frames")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(FRAMES);
+    let max_blocks = args_value(rest, "--blocks")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(200_000);
     let wait_file = std::env::var("DS_ARA_OUT").ok().filter(|s| !s.is_empty());
 
     let state = Box::into_raw(Box::new(HostState {
@@ -737,16 +1019,19 @@ fn run_blocks(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         };
         // the document and the analysis request first: the job runs on the plugin's own
         // threads while the blocks are processed below
-        let dc_ref = match make_controller(&lib, state) {
+        let inst = match make_controller(&lib, state) {
             Ok(dc) => dc,
             Err(e) => {
                 eprintln!("{e}");
                 return 2;
             }
         };
-        let dc = iface_of(dc_ref);
-        (dc.beginEditing.expect("beginEditing"))(dc_ref);
-        let pairs = match add_sources(dc_ref, state, files) {
+        let dc = iface_of(inst);
+        let dc_ref = dc_ref_of(inst);
+        if let Some(f) = dc.beginEditing {
+            f(dc_ref);
+        }
+        let pairs = match add_sources(inst, state, files) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("{e}");
@@ -754,51 +1039,28 @@ fn run_blocks(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             }
         };
         for (i, (_, modification)) in pairs.iter().enumerate() {
-            add_regions(dc_ref, *modification, &full_regions(&*state, i));
+            add_regions(inst, *modification, &full_regions(&*state, i));
         }
-        (dc.endEditing.expect("endEditing"))(dc_ref);
+        if let Some(f) = dc.endEditing {
+            f(dc_ref);
+        }
         let types = [kARAContentTypeNotes as ARAContentType];
         for (src, _) in &pairs {
-            (dc.enableAudioSourceSamplesAccess.expect("enableAudioSourceSamplesAccess"))(dc_ref, *src, 1);
-            (dc.requestAudioSourceContentAnalysis.expect("requestAudioSourceContentAnalysis"))(
-                dc_ref,
-                *src,
-                types.len(),
-                types.as_ptr(),
-            );
+            (dc.enableAudioSourceSamplesAccess
+                .expect("enableAudioSourceSamplesAccess"))(dc_ref, *src, 1);
+            (dc.requestAudioSourceContentAnalysis
+                .expect("requestAudioSourceContentAnalysis"))(dc_ref, *src, types.len(), types.as_ptr());
         }
 
         // the CLAP plugin instance for the audio blocks
-        let entry = lib.entry;
-        let factory_id = CString::new(CLAP_PLUGIN_FACTORY_ID.to_bytes()).unwrap();
-        let clap_factory =
-            ((*entry).get_factory.expect("entry.get_factory"))(factory_id.as_ptr()) as *const clap_plugin_factory;
-        if clap_factory.is_null() {
-            eprintln!("no CLAP plugin factory");
-            return 2;
-        }
-        let id = CString::new(&PLUGIN_CLAP_ID[..PLUGIN_CLAP_ID.len() - 1]).unwrap();
-        let host = clap_host {
-            clap_version: CLAP_VERSION,
-            host_data: std::ptr::null_mut(),
-            name: cs!("ara-host"),
-            vendor: cs!("Cherry Blossom Valley"),
-            url: cs!("https://github.com/Cherry-Blossom-Valley/drumspike"),
-            version: cs!("0.1.0"),
-            get_extension: None,
-            request_restart: None,
-            request_process: None,
-            request_callback: None,
+        let plugin = match clap_plugin_of(&lib) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("{e}");
+                return 2;
+            }
         };
-        let plugin = ((*clap_factory).create_plugin.expect("create_plugin"))(clap_factory, &host, id.as_ptr());
-        if plugin.is_null() {
-            eprintln!("create_plugin returned null");
-            return 2;
-        }
-        if !((*plugin).init.expect("init"))(plugin) {
-            eprintln!("plugin init refused");
-            return 2;
-        }
+        let entry = lib.entry;
         if !((*plugin).activate.expect("activate"))(plugin, SAMPLE_RATE, 64, 4096) {
             eprintln!("activate refused");
             return 2;
@@ -834,7 +1096,11 @@ fn run_blocks(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         };
         let budget = Duration::from_secs_f64(frames as f64 / SAMPLE_RATE);
         let (mut blocks, mut overruns, mut worst) = (0usize, 0usize, Duration::ZERO);
-        let mut saw_event_file = wait_file.as_deref().map(std::path::Path::new).map(|p| p.exists()).unwrap_or(true);
+        let mut saw_event_file = wait_file
+            .as_deref()
+            .map(std::path::Path::new)
+            .map(|p| p.exists())
+            .unwrap_or(true);
         while blocks < max_blocks {
             let process = clap_process {
                 steady_time: blocks as i64,
@@ -887,12 +1153,14 @@ unsafe extern "C" fn in_events_size(_list: *const clap_sys::events::clap_input_e
     0
 }
 unsafe extern "C" fn in_events_get(
-    _list: *const clap_sys::events::clap_input_events, _index: u32,
+    _list: *const clap_sys::events::clap_input_events,
+    _index: u32,
 ) -> *const clap_sys::events::clap_event_header {
     std::ptr::null()
 }
 unsafe extern "C" fn out_events_try_push(
-    _list: *const clap_sys::events::clap_output_events, _event: *const clap_sys::events::clap_event_header,
+    _list: *const clap_sys::events::clap_output_events,
+    _event: *const clap_sys::events::clap_event_header,
 ) -> bool {
     false
 }

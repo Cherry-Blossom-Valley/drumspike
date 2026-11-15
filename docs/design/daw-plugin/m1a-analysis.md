@@ -62,9 +62,34 @@ the fixture session, the regions, the archive round trip, the notes and the thre
 checks (it is the only host that can build these), and the `ARATestHost` of the ARA SDK
 examples - built from the S1 pattern with the S1 patch - runs its own tests beside it:
 ContentReading, PropertyUpdates, Archiving, PlaybackRendering and EditorView, on the
-CLAP and on the wrapped VST3, each must exit 0. The plugin has no editor GUI, but it
-implements the EditorView role interface and its playback renderer passes audio
-through, so no test is skipped.
+CLAP and on the wrapped VST3, each must exit 0 within its 120 s limit (a hung test is a
+FAIL with its name). The plugin has no editor GUI, but it implements the EditorView role
+interface and its playback renderer passes audio through, so no test is skipped.
+
+The `tables` stage walks the empty-slot class (the crash of this ticket): `ara-host
+tables` loads the plugin, binds all three roles and reads every ARA interface table up
+to the structSize the plugin declares - the factory, the document controller and the
+playback renderer, editor renderer and editor view tables. ARA marks optional parts by
+structSize (`ARAInterface.h`), so every slot inside the declared size must carry a
+function; the SDK hosts call the slots unchecked (`ARAHostDispatch.cpp`). The stage
+fails on the first empty slot, on an assigned role without an interface, and on 0 slots
+checked, and prints the number of slots it walked.
+
+### What each stage calls
+
+A stage proves the calls it names: the plugin's report rows (`DS_ARA_OUT`) exist only
+because a host made the call, so a host that calls nothing cannot pass a stage below.
+
+| Stage | Host calls the stage depends on |
+| --- | --- |
+| tables | `createDocumentControllerWithDocument`; the ARA plugin extension `bind_to_document_controller` with playback renderer, editor renderer and editor view roles; a read of every slot of the factory, the document controller and the three role tables |
+| identity-clap, identity-vst3 | the CLAP entry (`init`, `get_factory`), `create_plugin`, `init`; ARA: `initializeARAWithConfiguration`, `createDocumentControllerWithDocument`, `beginEditing`, `endEditing`, `createAudioSource`, `createAudioModification`, `createPlaybackRegion`, `enableAudioSourceSamplesAccess`, `requestAudioSourceContentAnalysis`, `isAudioSourceContentAnalysisIncomplete`, `createAudioSourceContentReader`, `getContentReaderEventCount`, `getContentReaderDataForEvent`, `destroyContentReader`, `destroyDocumentController` |
+| regions | the identity set, with `createPlaybackRegion` carrying the two region specs |
+| archive | the identity set, plus `storeObjectsToArchive` and `restoreObjectsFromArchive` in a second process |
+| threads | the identity set, plus the CLAP `process` loop on the audio thread while the analysis runs |
+| conformance | the `ARATestHost` calls of its own test set (a second author's host; its sources are in the checked-out ARA_SDK) |
+| fixture, reference, files | no plugin calls (fixture and reference build the compare base; files diffs the repo tree) |
+| pluginval, validate, universal, standalone, crate, workspace | no ARA calls (validators, lipo, cargo, git) |
 
 ## Result table
 

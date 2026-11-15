@@ -9,6 +9,12 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   reference      the event list of `service_tool analyze` on a project with the same audio
                  and the same roles (tracks_add from the fixture names), as raw JSON bytes;
                  the stage states the event count and fails on 0
+  tables         every ARA interface table the plugin declares, walked up to its
+                 structSize by a small mode of ara-host (factory, document controller,
+                 playback renderer, editor renderer, editor view): every slot inside the
+                 declared size must carry a function - the stage fails on the first
+                 empty slot, on an assigned role without an interface, and on 0 slots
+                 checked, and prints the number of slots it walked
   identity-clap  the plugin (the .clap bundle) analyses the four-track session in the ARA
                  test host; the events are byte for byte the reference's, and the notes of
                  every source sit at the exact samples of the events
@@ -27,9 +33,10 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   conformance    the independent host: the ARATestHost of the ARA SDK examples (built by
                  check.sh from the S1 pattern) runs its own tests on the plugin, on the
                  CLAP and on the wrapped VST3 - ContentReading, PropertyUpdates,
-                 Archiving, PlaybackRendering, EditorView - each must exit 0 (the review
-                 note on #525; the plugin has no editor GUI, but it implements the
-                 EditorView role interface and its playback renderer passes audio
+                 Archiving, PlaybackRendering, EditorView - each must exit 0 within its
+                 120 s limit (a hung test is a FAIL with its name, not a 5 h gate; the
+                 review note on #525; the plugin has no editor GUI, but it implements
+                 the EditorView role interface and its playback renderer passes audio
                  through, so no test is skipped)
   files          the plugin wrote only below its cache folder: no file in the repo changed
                  since the fixture stage and no fixture audio file changed
@@ -111,8 +118,11 @@ ABSENT = [1.5, 2.6]
 FILES = [name for name, *_ in SPEC]
 
 
-def run(cmd: list, env: dict | None = None, log: str | None = None, cwd: Path | None = None) -> tuple[int, str]:
-    """One command with the env overlay (None removes the key), captured to out/<log>."""
+def run(
+    cmd: list, env: dict | None = None, log: str | None = None, cwd: Path | None = None, timeout: int = 1800,
+) -> tuple[int, str]:
+    """One command with the env overlay (None removes the key), captured to out/<log>.
+    A timeout kills the child and reports rc 124 (the caller turns it into a FAIL)."""
     e = dict(os.environ)
     if env:
         for k, v in env.items():
@@ -120,7 +130,13 @@ def run(cmd: list, env: dict | None = None, log: str | None = None, cwd: Path | 
                 e.pop(k, None)
             else:
                 e[k] = v
-    p = subprocess.run(cmd, capture_output=True, text=True, env=e, timeout=1800, cwd=cwd)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, env=e, timeout=timeout, cwd=cwd)
+    except subprocess.TimeoutExpired:
+        text = f"timeout after {timeout}s: {' '.join(str(c) for c in cmd)}"
+        if log:
+            (OUT / log).write_text(text, encoding="utf-8")
+        return 124, text
     text = (p.stdout or "") + (p.stderr or "")
     if log:
         (OUT / log).write_text(text, encoding="utf-8")
@@ -587,22 +603,61 @@ def stage_conformance() -> bool:
         for test, names in files_of.items():
             # no CLAP_PATH: the wrapped VST3 must find the CLAP inside its own bundle, and
             # the runs must not reach another plugin by accident; stray writes go to out/
+            # 120 s per test: a hung test is a FAIL with its name, not a 5 h gate (the
+            # hang of the ARATestHost on the old head cost the 1800 s default per test)
             env = {**no_switch(), "CLAP_PATH": None}
             rc, _text = run(
                 [str(TESTHOST), f"-{kind}", str(bundle), "-file", *[str(FIXTURES / name) for name in names], "-test", test],
                 env=env,
                 log=f"conformance-{kind}-{test}.log",
                 cwd=OUT,
+                timeout=120,
             )
-            ok = pass_fail(
-                f"conformance-{kind}-{test}",
-                rc == 0,
-                f"ARATestHost {test} on the {kind}: rc={rc} (out/conformance-{kind}-{test}.log)",
-            ) and ok
+            evidence = f"ARATestHost {test} on the {kind}: rc={rc} (out/conformance-{kind}-{test}.log)"
+            if rc == 124:
+                evidence = (
+                    f"ARATestHost {test} on the {kind}: TIMEOUT after 120 s, killed as a FAIL"
+                    f" (out/conformance-{kind}-{test}.log)"
+                )
+            ok = pass_fail(f"conformance-{kind}-{test}", rc == 0, evidence) and ok
     return ok
 
 
 # ---------------------------------------------------------------- validators
+
+
+def stage_tables() -> bool:
+    """The interface-table walk (the empty-slot finding on #525): ara-host tables loads
+    the plugin, binds all three roles and walks every ARA interface table up to the
+    structSize the plugin declares - the ARA factory, the document controller and the
+    playback renderer, editor renderer and editor view tables. ARA marks optional parts
+    by structSize (ARAInterface.h), so every slot inside the declared size must carry a
+    function; the SDK hosts call them unchecked (ARAHostDispatch.cpp). The stage fails
+    on the first empty slot, on an assigned role without an interface, and on 0 slots
+    checked. It prints the number of slots it walked."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("tables", False, "no host or no CLAP: run check.sh build first")
+    rc, text = run([str(HOST), str(CLAP), "tables"], env=no_switch(), log="tables.log")
+    if rc != 0:
+        return pass_fail("tables", False, f"ara-host tables rc={rc} (out/tables.log)")
+    row = None
+    for line in reversed((text or "").strip().splitlines()):
+        try:
+            candidate = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(candidate, dict) and candidate.get("event") == "tables":
+            row = candidate
+            break
+    if row is None:
+        return pass_fail("tables", False, "ara-host tables printed no report line (out/tables.log)")
+    n = row.get("slots", 0)
+    walked = ", ".join(f"{k}={v}" for k, v in row.get("tables", {}).items())
+    return pass_fail(
+        "tables",
+        n > 0,
+        f"{n} slots walked up to the declared structSizes ({walked}); the stage fails on an empty slot or on 0",
+    )
 
 
 def stage_pluginval() -> bool:
@@ -750,6 +805,7 @@ def stage_reference() -> bool:
 STAGES = {
     "fixture": stage_fixture,
     "reference": stage_reference,
+    "tables": stage_tables,
     "identity-clap": lambda: stage_identity("clap", CLAP),
     "identity-vst3": lambda: stage_identity("vst3", EMBEDDED_CLAP),
     "regions": stage_regions,
@@ -766,7 +822,7 @@ STAGES = {
     "make-fixture": stage_make_fixture,
 }
 ORDER = [
-    "fixture", "reference", "identity-clap", "identity-vst3", "regions", "archive",
+    "fixture", "reference", "tables", "identity-clap", "identity-vst3", "regions", "archive",
     "threads", "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",
 ]
@@ -791,7 +847,7 @@ def main() -> int:
     if FAILURES:
         print(f"M1A CHECK: FAIL ({', '.join(FAILURES)})")
         return 1
-    print("M1A CHECK: PASS (identity, regions, archive, notes, threads, conformance, files, pluginval, clap-validator, universal, standalone, crate, workspace)")
+    print("M1A CHECK: PASS (tables, identity, regions, archive, notes, threads, conformance, files, pluginval, clap-validator, universal, standalone, crate, workspace)")
     return 0
 
 

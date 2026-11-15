@@ -85,7 +85,10 @@ mod tests {
         };
         let bytes = encode(&state);
         let text = String::from_utf8(bytes.clone()).unwrap();
-        assert!(text.contains("\"version\":1"), "the archive carries a version field: {text}");
+        assert!(
+            text.contains("\"version\":1"),
+            "the archive carries a version field: {text}"
+        );
         let back = decode(&bytes).unwrap();
         assert_eq!(back, state);
     }

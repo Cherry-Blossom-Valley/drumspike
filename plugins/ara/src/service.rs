@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 
 use drumspike_app::roles::{default_note, guess_role};
 use drumspike_app::tracks::safe_name;
-use drumspike_core::project::{Document, Segment, Source, Track, FORMAT, build_source, write_document};
-use serde_json::{Value, json};
+use drumspike_core::project::{build_source, write_document, Document, Segment, Source, Track, FORMAT};
+use serde_json::{json, Value};
 
 /// One playback region of a source, as the document controller recorded it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,9 +84,7 @@ pub fn stem_of(name: &str) -> String {
 /// (a hit in a gap or a trimmed-away part does not exist).
 #[must_use]
 pub fn source_sample(t: f64, regions: &[RegionRec], rate: f64) -> Option<i64> {
-    let in_a_region = regions
-        .iter()
-        .any(|r| t >= r.start_mod && t < r.start_mod + r.dur_mod);
+    let in_a_region = regions.iter().any(|r| t >= r.start_mod && t < r.start_mod + r.dur_mod);
     if !regions.is_empty() && !in_a_region {
         return None;
     }
@@ -108,7 +106,10 @@ pub fn run(sources: &[SourceSnapshot], cache: &Path) -> Result<JobResult, String
 
     let mut doc = Document {
         format: FORMAT,
-        name: Some(dir.file_name().map_or_else(|| "ara".into(), |s| s.to_string_lossy().into_owned())),
+        name: Some(
+            dir.file_name()
+                .map_or_else(|| "ara".into(), |s| s.to_string_lossy().into_owned()),
+        ),
         created: None,
         modified: None,
         settings: None,
@@ -161,9 +162,11 @@ pub fn run(sources: &[SourceSnapshot], cache: &Path) -> Result<JobResult, String
 
     let svc = drumspike_app::Service::new(drumspike_app::ServiceConfig::from_env(Path::new("/")));
     let dirs = vec![dir.display().to_string()];
-    let answer = drumspike_app::headless::analyze_projects(&svc, &dirs).map_err(|e| e)?;
+    let answer = drumspike_app::headless::analyze_projects(&svc, &dirs)?;
     let analysis_ms = started.elapsed().as_millis() as u64;
-    let first = answer.first().ok_or_else(|| "the service returned no answer".to_string())?;
+    let first = answer
+        .first()
+        .ok_or_else(|| "the service returned no answer".to_string())?;
     let events = first
         .get("events")
         .and_then(Value::as_object)
@@ -174,7 +177,11 @@ pub fn run(sources: &[SourceSnapshot], cache: &Path) -> Result<JobResult, String
     let mut notes: HashMap<usize, Vec<[f64; 2]>> = HashMap::new();
     for s in sources {
         let track_name = &track_of[&s.seq];
-        let list = events.get(track_name).and_then(Value::as_array).cloned().unwrap_or_default();
+        let list = events
+            .get(track_name)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         let mut per_source: Vec<[f64; 2]> = Vec::with_capacity(list.len());
         for ev in &list {
             let t = ev.get("t").and_then(Value::as_f64).unwrap_or(f64::NAN);
