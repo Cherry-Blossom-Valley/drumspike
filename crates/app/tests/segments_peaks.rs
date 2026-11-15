@@ -98,8 +98,10 @@ fn project_segments(root: &std::path::Path, project_name: &str, tracks: &[SegSpe
 /// Sets the file's mtime to `UNIX_EPOCH + secs` (sub-second, for the whole-second key test).
 fn set_mtime(path: &std::path::Path, secs: f64) {
     let f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
-    f.set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(secs)))
-        .unwrap();
+    f.set_times(
+        std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(secs)),
+    )
+    .unwrap();
 }
 
 fn open(svc: &Service, dir: &std::path::Path) -> String {

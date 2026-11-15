@@ -15,7 +15,7 @@ mod common;
 use common::*;
 use drumspike_app::Service;
 use drumspike_core::project::{Segment, add_track, build_source, new_project, save_project};
-use serde_json::{Value, json};
+use serde_json::json;
 
 const SR: u32 = 48_000;
 
@@ -75,10 +75,12 @@ fn window(bytes: &[u8]) -> (u32, u32, &[u8]) {
     (start, rate, &bytes[8..])
 }
 
+type Segs = Vec<(f64, f64, f64)>;
+
 /// The two-segment timeline of the reader tests: `xa` plays at timeline 0 for 1.0 s, the
 /// gap is 1.0 s, `xb` plays from timeline 2.0 for its full length. Returns the files and
 /// the segment rows.
-fn two_segments() -> (Vec<f32>, Vec<f32>, Vec<(f64, f64, f64)>) {
+fn two_segments() -> (Vec<f32>, Vec<f32>, Segs) {
     let xa = kick_signal(&[0.25, 0.5], 1.0, SR);
     let xb = kick_signal(&[0.25, 0.5], 1.0, SR);
     let dur_a = xa.len() as f64 / f64::from(SR);
@@ -156,7 +158,7 @@ fn a_full_file_segment_gives_windows_byte_identical_to_the_plain_track() {
     let (root_plain, root_seg) = (tmp("p6_window_plain"), tmp("p6_window_full"));
     let x = kick_signal(&ONSETS, 3.5, SR);
     let dur = x.len() as f64 / f64::from(SR);
-    let dir_plain = track_project(&root_plain, "Plain", "k", "kick", &[x.clone()], &[]);
+    let dir_plain = track_project(&root_plain, "Plain", "k", "kick", std::slice::from_ref(&x), &[]);
     let dir_seg = track_project(&root_seg, "Seg", "k", "kick", &[x], &[(0.0, 0.0, dur)]);
     let svc = service_dsp();
     let sid_plain = open(&svc, &dir_plain);
@@ -182,7 +184,7 @@ fn an_edit_with_snap_lands_on_the_timeline_stroke_and_the_gap_keeps_its_time() {
     // the file: strokes at 0.25 and 0.75; the segment plays the file's [0.5, 2.5) part at
     // timeline 2.0, so the file stroke at 0.75 is a timeline stroke at 2.25
     let x = kick_signal(&[0.25, 0.75], 2.5, SR);
-    let plain_dir = track_project(&root_plain, "Plain", "k", "kick", &[x.clone()], &[]);
+    let plain_dir = track_project(&root_plain, "Plain", "k", "kick", std::slice::from_ref(&x), &[]);
     let seg_dir = track_project(&root_seg, "Seg", "s", "kick", &[x], &[(0.0, 0.0, 0.5), (2.0, 0.5, 2.0)]);
     let svc = service_dsp();
     let sid_plain = open(&svc, &plain_dir);
@@ -247,7 +249,7 @@ fn a_role_change_repicks_a_segmented_track_on_the_timeline_positions() {
     // the file: strokes at 0.25, 0.75, 1.25; the segment plays the file's [1.0, 2.5) part
     // at timeline 2.0, so the file strokes at 1.25 are timeline strokes at 2.25
     let x = kick_signal(&[0.25, 0.75, 1.25], 2.5, SR);
-    let plain_dir = track_project(&root_plain, "Plain", "k", "kick", &[x.clone()], &[]);
+    let plain_dir = track_project(&root_plain, "Plain", "k", "kick", std::slice::from_ref(&x), &[]);
     let seg_dir = track_project(&root_seg, "Seg", "s", "kick", &[x], &[(0.0, 0.0, 1.0), (2.0, 1.0, 1.5)]);
     let svc = service_dsp();
     let sid_plain = open(&svc, &plain_dir);
