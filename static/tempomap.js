@@ -67,7 +67,11 @@ function tmInit() {   // at boot: the canvases and the events of the rulers
 async function tmLoad() {   // with the project: the copy of its map, then the rulers and the grid as the settings say
   tmEditEnd(false); TM.sel = null; TM.grid = null; TM.mk = {};
   TM.map = null; TM.isDefault = true;
-  if (S.sid && B.tempoMapGet) {
+  if (hostMode()) {   // #509: the host owns the tempo; the map comes from the host transport
+    const host = B.hostTransport;
+    try { if (host && typeof host.tempoMap === "function") { const m = await host.tempoMap(); if (m) { TM.map = m; TM.isDefault = false; } } }
+    catch (e) { /* no map from the host: nothing is drawn */ }
+  } else if (S.sid && B.tempoMapGet) {
     try { const r = await B.tempoMapGet(S.sid); TM.map = r.map; TM.isDefault = !!r.default; } catch (e) { /* no map: nothing is drawn */ }
   }
   await mkLoad();   // P4-40g: the marker list (also without a map)
@@ -79,6 +83,7 @@ function tmApplyUi(resize) {   // the rulers and the grid as tmShown says; draws
   TM.gridOn = tmShown("grid");
   $("#mapRulers").classList.toggle("hidden", !TM_KINDS.some(k => TM.vis[k]));
   for (const row of document.querySelectorAll("#mapRulers .mrow")) row.classList.toggle("hidden", !TM.vis[row.dataset.ruler]);
+  $("#tempoDetectBtn").classList.toggle("hidden", hostMode());   // #509: Detect Tempo is absent in host mode (the id stays)
   spLeave("map");
   invalidate((resize ? F.SIZE : 0) | F.VIEW);
   DSShell.sync();
@@ -518,6 +523,7 @@ function tmApplyOp(op, reverse) {   // undo and redo: the stored map goes back t
 
 /* File > Import Tempo Map: the tempo and time-signature events of a MIDI file from the DAW replace the map (one undo step). */
 async function importTempoMap() {
+  if (hostMode()) { setMsg("the host owns the tempo"); return null; }   // #509: the tempo import is absent in host mode
   if (!needProject()) return null;
   const path = await B.pickTempoFile();
   if (!path) { setMsg("import cancelled"); return null; }
@@ -538,6 +544,7 @@ async function importTempoMap() {
 /* Track > Detect Tempo: the suggestion of tempo_map_detect with its confidence and warnings; Accept is one undo step. */
 let tmDetecting = false;
 async function detectTempo() {
+  if (hostMode()) { setMsg("the host owns the tempo"); return null; }   // #509: Detect Tempo is absent in host mode
   if (!needProject() || tmDetecting) return null;
   if (!$("#tempoModal").classList.contains("hidden")) { setMsg("answer the Detect Tempo dialog first"); return null; }
   tmDetecting = true; setMsg("detecting the tempo from the kick and snare hits…");

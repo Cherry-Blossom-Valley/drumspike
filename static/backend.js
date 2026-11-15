@@ -590,3 +590,8 @@ function bridgeTransport() {
 }
 
 const B = ipcBackend(window.__TAURI__ && window.__TAURI__.core ? window.__TAURI__ : bridgeTransport());
+
+/* Host mode (DAW plugin P2, #509): the plugin shell sets window.__DS_HOST_MODE__ before the
+   page loads (the desktop app never does, so the flag is false and the app is unchanged).
+   One flag on the transport backend; state.js hostMode() is the one place that reads it. */
+B.hostMode = !!window.__DS_HOST_MODE__;

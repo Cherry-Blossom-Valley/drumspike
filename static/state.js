@@ -107,6 +107,18 @@ async function loadViewSettings() {   // at boot: the saved state of the Inspect
   } catch (e) { /* no settings */ }
 }
 
+/* ---------------- host mode (DAW plugin P2, #509) ----------------
+   In a DAW the host owns the files, the transport and the tempo. The plugin shell sets
+   window.__DS_HOST_MODE__ before the page loads; backend.js turns it into the one flag
+   B.hostMode on the transport backend, and hostMode() is the one place that reads it. The
+   desktop app never sets the flag, so the mode is off and the standalone page is unchanged
+   (owner rule 2026-11-14). While the mode is on, the commands the host owns are absent from
+   the menus (shell.js) and the keys (keymap.js), and the play, stop and locate of the page
+   go to the host transport (B.hostTransport, static/transport.js). */
+const HOST_OWNED = ["new", "open", "open_recent", "recent_clear", "close", "save", "save_as", "add_tracks", "import_old", "consolidate", "import_tempo_map", "detect_tempo"];
+function hostMode() { return typeof B !== "undefined" && !!B.hostMode; }   // B is a top-level const: no window.B
+function hostOwned(id) { return hostMode() && HOST_OWNED.includes(id); }
+
 /* ---------------- the public names on window ----------------
    The e2e tests (page.evaluate) and shell.js read S, PH and the settings functions by name;
    S is on window from day one (R17 plan). The function declarations above are already
