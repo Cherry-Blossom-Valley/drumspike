@@ -161,6 +161,7 @@ function askTracks(paths, scan0) {
 }
 async function addTracksFlow(paths) {
   if (!paths || !paths.length) return;
+  if (hostMode()) { setMsg("the host owns the files"); return; }   // #509: the host adds the tracks
   if (addingTracks || !$("#tracksModal").classList.contains("hidden")) { setMsg("answer the open dialog first"); return; }
   addingTracks = true;
   try {

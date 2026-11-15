@@ -22,6 +22,7 @@ function pickFolder(o) { return DSShell.nativePick(o); }
 function joinPath(a, b) { return a.endsWith("/") ? a + b : a + "/" + b; }
 /* ---------------- File menu (native, shell.js) ---------------- */
 async function fileNew() {   // the current project stays open (and dirty) in the list: no prompt
+  if (hostMode()) { setMsg("the host owns the files"); return; }   // #509: the host creates and opens
   const pick = await B.pickSave("New project", "Untitled project");   // the native save dialog (P3-4a)
   if (!pick) return;
   try {
@@ -30,6 +31,7 @@ async function fileNew() {   // the current project stays open (and dirty) in th
   } catch(e) { setMsg(`new project failed: ${e.message}`, "error"); }
 }
 async function fileOpen() {
+  if (hostMode()) { setMsg("the host owns the files"); return; }   // #509: the host opens
   const dir = await B.pickProject();   // the native open dialog (P3-3b)
   if (dir) await openProjectPath(dir);
 }
@@ -129,6 +131,7 @@ async function importOldApp() {   // File > Import Old Session: the folder of ol
 }
 /* ---------------- relink (offline tracks, P0-4) ---------------- */
 async function relinkTrack(name) {
+  if (hostMode()) { setMsg("the host owns the files"); return; }   // #509: the host relinks
   const t = S.tracks[name];
   let start = "";   // begin where the file was last seen
   try { const src = (await B.projectGet(S.sid)).tracks[name].source; if (src && src.path) start = src.path.replace(/\/[^/]*$/, ""); } catch(e) {}
@@ -162,13 +165,14 @@ const offlineNames = () => S.order.filter(n => S.tracks[n] && (S.tracks[n].offli
 let relinkHidden = null;   // the project whose bar the user hid with "Not now"
 function refreshRelinkBar() {
   const bar = $("#relinkBar"), off = S.sid ? offlineNames() : [];
-  if (!off.length || relinkHidden === S.sid) { bar.classList.add("hidden"); return; }
+  if (hostMode() || !off.length || relinkHidden === S.sid) { bar.classList.add("hidden"); return; }   // #509: the host relinks
   const n = off.length, t = S.order.length;
   $("#relinkText").textContent = n === 1 ? `1 of ${t} tracks is offline: its audio was moved, renamed or changed.`
     : `${n} of ${t} tracks are offline: their audio was moved, renamed or changed.`;
   bar.classList.remove("hidden");
 }
 async function findMovedAudio() {
+  if (hostMode()) { setMsg("the host owns the files"); return; }   // #509: the host relinks
   if (!S.sid) return;
   const off = offlineNames();
   if (!off.length) { setMsg("no track is offline"); return; }

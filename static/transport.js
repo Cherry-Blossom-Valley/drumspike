@@ -73,6 +73,12 @@ function appSync() {
 }
 function appSeekNow() {
   const target = AC.pending; AC.pending = null; AC.seeking = true; AC.seekAt = performance.now(); AC.errI = 0;   // #463: the seek re-anchors
+  if (hostMode()) {   // #509: locate goes to the host; its next position message re-anchors the page
+    const host = B.hostTransport;
+    if (host && typeof host.locate === "function") host.locate(target);
+    AC.seeking = false;
+    return;
+  }
   appCmd(() => B.transportSeek(target)).then(r => { AC.minEpoch = r.epoch; })
     .catch(e => setMsg(`seek failed: ${e.message}`, "error")).finally(() => { AC.seeking = false; });
 }
@@ -101,6 +107,17 @@ async function appPlay(speed, returnKey) {   // speed: 0.5 is half speed (P3-20b
     S.playStartPos = S.playhead; PH.user = false;   // P4-1: a move from here on seeks
     S.playReturn = returnKey || null;   // #207: play-and-return, cleared by every play that the plain keys start
     const pos0 = S.playhead, tok = ++AC.tok;   // messages of an earlier play (its channel) are dropped by the token
+    if (hostMode()) {   // #509: the host plays: the page asks the host transport and follows the positions it sends
+      const host = B.hostTransport;
+      if (!host || typeof host.play !== "function") throw new Error("the host transport is missing");
+      host.onPosition = m => { if (tok === AC.tok) appOnPlayhead(m); };   // the host pushes {sid, epoch, t_ns, pos, playing} like the app channel
+      await host.play(pos0, speed);
+      AC.running = true;   // the extrapolation runs until the first position of the host re-anchors it
+      S.playing = true; S.followHold = false; S.followResumeAt = null; $("#playBtn").textContent = "⏸";
+      showSpeed(AC.speed);
+      tick();
+      return;   // the app transport (mix, clicks, play, the clock sync) never runs in host mode
+    }
     const r = await appCmd(async () => {
       await B.transportMix(S.muted, S.solo);
       await B.transportClicks(click.enabled, click.volume, click.pitches);
@@ -126,6 +143,13 @@ function appPause() {
   S.playing = false; AC.stopping = true; AC.active = false; clearInterval(AC.syncTimer); cpStop(); spLeave("pause");
   $("#playBtn").textContent = "▶"; showSpeed(1);
   S.playhead = p;
+  if (hostMode()) {   // #509: the host stops; its last position message has already re-anchored the page
+    const host = B.hostTransport;
+    if (host && typeof host.stop === "function") host.stop(p);
+    AC.stopping = false;
+    invalidate(F.HEAD);
+    return;
+  }
   appCmd(() => B.transportStop(false)).then(r => {
     // the transport stopped within a block of our estimate: take its position if nothing moved the playhead since
     if (S.playhead === p && !S.playing && r && typeof r.pos === "number" && r.rate > 0) { S.playhead = Math.min(r.pos, maxDur()); invalidate(F.HEAD); updateStatus(); }
