@@ -2,7 +2,8 @@
 //! plugin's service job on through the environment, and processes audio blocks while the
 //! analysis runs. Each block is measured against its own duration
 //! (`frames / sample_rate`): one block over its budget is an overrun and fails the run
-//! (no analysis may run on the audio thread). With `DS_SERVICE_SPIKE_PANIC=process` the
+//! (no analysis may run on the audio thread). The report carries the worst block of all
+//! blocks, overruns or not. With `DS_SERVICE_SPIKE_PANIC=process` the
 //! plugin panics in every `process` call; the host proves the process lives by finishing
 //! its blocks and exiting 0. The report is the last line on stdout (JSON).
 //!
@@ -213,11 +214,11 @@ fn main() {
             let status = ((*plugin).process.expect("process"))(plugin, &process);
             let took = t0.elapsed();
             *statuses.entry(status).or_default() += 1;
+            if took > worst {
+                worst = took;
+            }
             if took > budget {
                 overruns += 1;
-                if took > worst {
-                    worst = took;
-                }
             }
             blocks += 1;
             if panic_mode && blocks >= 128 {

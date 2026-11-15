@@ -5,10 +5,14 @@ Stages (each prints PASS/FAIL and one line of evidence; `all` exits 0 when every
 
   fixture     the synthetic fixture: a 3 s 48 kHz mono WAV and a project built from it
               (service_tool: project_new, tracks_add with copy, project_save)
-  service     the event list of `service_tool analyze` on the fixture, as raw JSON bytes
+  service     the event list of `service_tool analyze` on the fixture, as raw JSON bytes;
+              the stage states the number of events and fails on 0 (the fixture has 5 hits)
   clap        the test host loads the CLAP: audio blocks run while the analysis runs; one
               block over its own duration is an overrun and fails; the event list the plugin
               wrote is compared byte for byte with the one of `service_tool`
+  fault       the audio-thread proof: with `DS_SERVICE_SPIKE_FAULT=in-process` the analysis
+              runs inside `process`; the stage passes only when the host reports an overrun
+              (proof that the overrun check can fail)
   panic       the host run with a forced panic in `process`: the process lives and the guard
               catches the panic
   vst3        pluginval at strictness 5 on the wrapped VST3 (with the switch on, so the
@@ -83,7 +87,16 @@ def switch(project: Path, out_file: Path, meta: Optional[Path] = None) -> dict:
 
 
 def no_switch() -> dict:
-    return {k: None for k in ("DS_SERVICE_SPIKE_PROJECT", "DS_SERVICE_SPIKE_OUT", "DS_SERVICE_SPIKE_META", "DS_SERVICE_SPIKE_PANIC")}
+    return {
+        k: None
+        for k in (
+            "DS_SERVICE_SPIKE_PROJECT",
+            "DS_SERVICE_SPIKE_OUT",
+            "DS_SERVICE_SPIKE_META",
+            "DS_SERVICE_SPIKE_PANIC",
+            "DS_SERVICE_SPIKE_FAULT",
+        )
+    }
 
 
 # ---------------------------------------------------------------- fixture
@@ -154,11 +167,15 @@ def stage_service() -> tuple[bool, bytes]:
     try:
         parsed = json.loads(events)
         n_tracks = len(parsed)
-    except ValueError:
+        n_events = sum(len(v) for v in parsed.values()) if isinstance(parsed, dict) else n_tracks
+    except (ValueError, TypeError):
         return pass_fail("service", False, "the events object is not JSON"), b""
+    if n_events == 0:
+        # two empty event lists would also compare byte for byte: the count is the proof
+        return pass_fail("service", False, f"the event list has {n_events} events (the fixture has 5 hits)"), b""
     (OUT / "events-service_tool.json").write_bytes(events)
     return (
-        pass_fail("service", True, f"{n_tracks} track(s), {len(events)} bytes, out/events-service_tool.json"),
+        pass_fail("service", True, f"{n_events} event(s) on {n_tracks} track(s), {len(events)} bytes, out/events-service_tool.json"),
         events,
     )
 
@@ -166,8 +183,9 @@ def stage_service() -> tuple[bool, bytes]:
 # ---------------------------------------------------------------- the host runs
 
 
-def host_run(label: str, env: dict) -> tuple[bool, dict]:
-    """One test-host run: its JSON report is the last stdout line."""
+def host_run(label: str, env: dict, want_overruns: bool = False) -> tuple[bool, dict]:
+    """One test-host run: its JSON report is the last stdout line. With `want_overruns`
+    the run is the fault round and passes only when the host reports an overrun."""
     for f in (env.get("DS_SERVICE_SPIKE_OUT"), env.get("DS_SERVICE_SPIKE_META")):
         if f and Path(f).exists():
             Path(f).unlink()
@@ -177,9 +195,27 @@ def host_run(label: str, env: dict) -> tuple[bool, dict]:
         if ln.startswith("{"):
             report = json.loads(ln)
             break
-    ok = rc == 0 and report.get("overruns") == 0 and report.get("event_file") is True
-    evidence = f"rc={rc}, {report.get('blocks')} blocks, overruns={report.get('overruns')}, worst={report.get('worst_block_us')}us of {report.get('budget_us')}us"
+    if want_overruns:
+        ok = rc != 0 and report.get("overruns", 0) >= 1 and report.get("event_file") is True
+        evidence = (
+            f"rc={rc}, the fault switch ran the analysis inside process: {report.get('overruns')} "
+            f"block(s) over the {report.get('budget_us')}us budget (worst {report.get('worst_block_us')}us), "
+            f"event_file={report.get('event_file')}"
+        )
+    else:
+        ok = rc == 0 and report.get("overruns") == 0 and report.get("event_file") is True
+        evidence = f"rc={rc}, {report.get('blocks')} blocks, overruns={report.get('overruns')}, worst={report.get('worst_block_us')}us of {report.get('budget_us')}us"
     return pass_fail(f"host-{label}", ok, evidence), report
+
+
+def stage_fault(events: bytes) -> bool:
+    """The proof that the audio-thread check can fail: the fault switch runs the analysis
+    inside `process`, so the host must report the overrun."""
+    if not HOST.exists() or not CLAP_BUNDLE.exists():
+        return pass_fail("host-fault", False, "no host or no CLAP bundle: run spike.sh build first")
+    out = OUT / "events-plugin-fault.json"
+    ok, _ = host_run("fault", {**no_switch(), **switch(OUT / "fixture", out), "DS_SERVICE_SPIKE_FAULT": "in-process"}, want_overruns=True)
+    return ok
 
 
 def compare_events(label: str, events: bytes, path: Path) -> bool:
@@ -282,6 +318,7 @@ def stage_standalone(events: bytes) -> bool:
 STAGES = {
     "fixture": stage_fixture,
     "clap": stage_clap,
+    "fault": stage_fault,
     "panic": stage_panic,
     "vst3": stage_vst3,
     "validate": stage_validate,
@@ -293,7 +330,7 @@ STAGES = {
 def main() -> int:
     stages = sys.argv[1:] or ["all"]
     if stages == ["all"]:
-        stages = ["fixture", "service", "clap", "panic", "vst3", "validate", "universal", "standalone"]
+        stages = ["fixture", "service", "clap", "fault", "panic", "vst3", "validate", "universal", "standalone"]
     OUT.mkdir(parents=True, exist_ok=True)
     events = b""
     for s in stages:

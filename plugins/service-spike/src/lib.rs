@@ -10,9 +10,15 @@
 //! - `DS_SERVICE_SPIKE_OUT`: where the plugin writes the event list (one JSON object).
 //! - `DS_SERVICE_SPIKE_META`: where the plugin writes `{"analysis_ms": ...}`.
 //! - `DS_SERVICE_SPIKE_PANIC`: `init` or `process`: a forced panic in that entry point.
+//! - `DS_SERVICE_SPIKE_FAULT`: `in-process`: the fault switch. The service job gets no
+//!   thread; the analysis runs synchronously inside `process` (the audio thread). The
+//!   host run with the switch on must report overruns: the proof that the overrun check
+//!   of the test host can fail.
 //!
 //! No analysis runs on the audio thread: the job runs on its own thread; `process` only
-//! passes audio through. Every CLAP entry point runs inside [`guard`], so a panic of the
+//! passes audio through (the `DS_SERVICE_SPIKE_FAULT` switch is the deliberate
+//! exception that proves the host overrun check can fail). Every CLAP entry point runs
+//! inside [`guard`], so a panic of the
 //! service is caught at the boundary and the process lives.
 #![allow(non_upper_case_globals, dead_code)]
 
@@ -84,11 +90,21 @@ pub fn service_call(svc: &Service, name: &str, args: &serde_json::Value) -> Resu
 
 static ANALYSIS_STARTED: AtomicBool = AtomicBool::new(false);
 
-/// The service job: `drumspike_app::headless::analyze_projects` on the fixture project, on its
-/// own thread. The event list (the `events` object of the answer, exactly the bytes
-/// `service_tool` prints) is written to `$DS_SERVICE_SPIKE_OUT` under a temp name, then renamed,
-/// so a reader never sees half a file. One job per process: later instances find the flag set.
+/// The fault switch: `DS_SERVICE_SPIKE_FAULT=in-process` runs the service job on the audio
+/// thread (see the module doc).
+fn fault_in_process() -> bool {
+    std::env::var("DS_SERVICE_SPIKE_FAULT").as_deref() == Ok("in-process")
+}
+
+/// The service job: `drumspike_app::headless::analyze_projects` on the fixture project,
+/// normally on its own thread (with the fault switch: inside `process`). The event list
+/// (the `events` object of the answer, exactly the bytes `service_tool` prints) is
+/// written to `$DS_SERVICE_SPIKE_OUT` under a temp name, then renamed, so a reader never
+/// sees half a file. One job per process: later instances find the flag set.
 fn start_service_job() {
+    if fault_in_process() {
+        return; // the fault switch runs the job inside process instead
+    }
     let (Some(project), Some(out)) = (env_path("DS_SERVICE_SPIKE_PROJECT"), env_path("DS_SERVICE_SPIKE_OUT")) else {
         return;
     };
@@ -98,39 +114,54 @@ fn start_service_job() {
     let meta = env_path("DS_SERVICE_SPIKE_META");
     let spawn = std::thread::Builder::new()
         .name("service-spike-analysis".into())
-        .spawn(move || {
-            let started = std::time::Instant::now();
-            // the service as a normal crate: the models dir is unused (the detector is DSP-only)
-            let svc = Service::new(ServiceConfig::from_env(std::path::Path::new("/")));
-            let dirs = vec![project.display().to_string()];
-            let answer = drumspike_app::headless::analyze_projects(&svc, &dirs);
-            let analysis_ms = started.elapsed().as_millis() as u64;
-            let mut tmp = out.clone().into_os_string();
-            tmp.push(".tmp");
-            let error = match answer.ok().and_then(|one| one.into_iter().next()) {
-                Some(result) => {
-                    match std::fs::write(&tmp, serde_json::to_string(&result["events"]).unwrap_or_default()) {
-                        Ok(()) => None,
-                        Err(_) => Some("the event list could not be written".to_string()),
-                    }
-                }
-                None => Some("the analysis of the fixture failed".to_string()),
-            };
-            // the meta first, the event list last: the rename is the completion signal, and a
-            // reader that sees the event list must also see the finished meta
-            if let Some(m) = meta {
-                let body = match &error {
-                    Some(e) => format!("{{\"analysis_ms\":{analysis_ms},\"error\":{e:?}}}"),
-                    None => format!("{{\"analysis_ms\":{analysis_ms}}}"),
-                };
-                let _ = std::fs::write(&m, body);
-            }
-            if error.is_none() {
-                let _ = std::fs::rename(&tmp, &out);
-            }
-        });
+        .spawn(move || run_service_job(project, out, meta));
     if let Err(e) = spawn {
         eprintln!("service-spike: the analysis thread did not start: {e}");
+    }
+}
+
+/// The fault path: one analysis, synchronously, on the thread that runs `process`.
+fn run_fault_analysis_in_process() {
+    if !fault_in_process() {
+        return;
+    }
+    let (Some(project), Some(out)) = (env_path("DS_SERVICE_SPIKE_PROJECT"), env_path("DS_SERVICE_SPIKE_OUT")) else {
+        return;
+    };
+    if ANALYSIS_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    run_service_job(project, out, env_path("DS_SERVICE_SPIKE_META"));
+}
+
+/// The body of the service job: the fixture analysis and the event list write.
+fn run_service_job(project: PathBuf, out: PathBuf, meta: Option<PathBuf>) {
+    let started = std::time::Instant::now();
+    // the service as a normal crate: the models dir is unused (the detector is DSP-only)
+    let svc = Service::new(ServiceConfig::from_env(std::path::Path::new("/")));
+    let dirs = vec![project.display().to_string()];
+    let answer = drumspike_app::headless::analyze_projects(&svc, &dirs);
+    let analysis_ms = started.elapsed().as_millis() as u64;
+    let mut tmp = out.clone().into_os_string();
+    tmp.push(".tmp");
+    let error = match answer.ok().and_then(|one| one.into_iter().next()) {
+        Some(result) => match std::fs::write(&tmp, serde_json::to_string(&result["events"]).unwrap_or_default()) {
+            Ok(()) => None,
+            Err(_) => Some("the event list could not be written".to_string()),
+        },
+        None => Some("the analysis of the fixture failed".to_string()),
+    };
+    // the meta first, the event list last: the rename is the completion signal, and a
+    // reader that sees the event list must also see the finished meta
+    if let Some(m) = meta {
+        let body = match &error {
+            Some(e) => format!("{{\"analysis_ms\":{analysis_ms},\"error\":{e:?}}}"),
+            None => format!("{{\"analysis_ms\":{analysis_ms}}}"),
+        };
+        let _ = std::fs::write(&m, body);
+    }
+    if error.is_none() {
+        let _ = std::fs::rename(&tmp, &out);
     }
 }
 
@@ -226,10 +257,12 @@ unsafe extern "C" fn p_stop(_p: *const clap_plugin) {}
 unsafe extern "C" fn p_reset(_p: *const clap_plugin) {}
 
 /// The audio thread: pass the first mono pair through (silence without an input), nothing else.
-/// The service runs on its own thread and is never touched here.
+/// The service runs on its own thread and is never touched here - except under the fault
+/// switch, which runs the analysis inside `process` on purpose (the overrun proof).
 unsafe extern "C" fn p_process(_p: *const clap_plugin, process: *const clap_process) -> clap_process_status {
     guard("process", move || {
         forced_panic("process");
+        run_fault_analysis_in_process();
         let pr = &*process;
         let frames = pr.frames_count as usize;
         if pr.audio_outputs_count > 0 {
