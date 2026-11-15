@@ -1,0 +1,31 @@
+# Spike S2 (#505): the editor page of Drum Spike (static/) in the window of a plugin.
+# Throwaway spike code. Not a member of the Cargo workspace and no build or release
+# of the Drum Spike app uses it (the root `cargo metadata --no-deps` must not name it).
+[package]
+name = "ds-webview-spike"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+name = "ds_webview_spike"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+clap-sys = "0.5"
+# the web view. wry and what it brings are macOS-first here: the objc2 crates, the winit
+# dpi types and raw-window-handle. The licence list of all of them is in the report
+# (docs/design/daw-plugin/s2-page-in-plugin.md). No default features: the Linux backends
+# (webkit2gtk) must not enter the build.
+wry = { version = "=0.57.0", default-features = false }
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+# the test host of `spike.sh check` (src/bin/host.rs): loads the CLAP bundle with dlopen
+libloading = "0.8"
+
+[[bin]]
+name = "webview-spike-host"
+path = "src/bin/host.rs"
