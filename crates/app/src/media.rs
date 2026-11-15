@@ -547,8 +547,14 @@ impl Media {
             mix == MixMode::Average,
             files_meta,
         );
-        if let Some((_, d)) = lock(&self.timelines).iter().rev().find(|(k, _)| *k == key) {
-            let d = Arc::clone(d);
+        // the hit is read under one lock and the LRU move under a second one: the `if let`
+        // scrutinee's guard would otherwise live for the whole block and the re-lock would
+        // deadlock (#528)
+        let hit = {
+            let cache = lock(&self.timelines);
+            cache.iter().rev().find(|(k, _)| *k == key).map(|(_, d)| Arc::clone(d))
+        };
+        if let Some(d) = hit {
             // least recently used, not oldest inserted: the hit moves to the back (#528)
             let mut cache = lock(&self.timelines);
             if let Some(i) = cache.iter().position(|(k, _)| *k == key) {
