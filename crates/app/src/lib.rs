@@ -203,6 +203,13 @@ impl Service {
         Service { inner }
     }
 
+    /// The decodes per file since the start (for the tests, #519: one decode per distinct
+    /// segment file for a whole analysis job).
+    #[must_use]
+    pub fn decode_counts(&self) -> std::collections::HashMap<std::path::PathBuf, usize> {
+        self.inner.media.decode_counts()
+    }
+
     /// P4-5: lock every project this service opens for writing (`lock::ProjectLock`) and name this process
     /// `client` in the lock files. The app, the command-line tool and the MCP server call it; the tests do not.
     pub fn set_lock_client(&self, client: &str) {
