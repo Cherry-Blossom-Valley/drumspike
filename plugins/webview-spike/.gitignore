@@ -1,0 +1,4 @@
+# build and run artifacts of the spike (the repo carries only the sources)
+target/
+.deps/
+out/
