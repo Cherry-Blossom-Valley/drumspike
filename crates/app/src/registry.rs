@@ -333,8 +333,9 @@ impl OpenProject {
         let tr = self.track(name)?;
         // A `segments` key that did not read as a segment list stays in `extra` (the document
         // keeps it as it is); the track must not silently analyse as a plain track or show as
-        // offline — that would hide the fault.
-        if tr.extra.contains_key("segments") {
+        // offline — that would hide the fault. #519: `null` is a value that reads as "no
+        // segments" (a plain track), not a fault.
+        if tr.extra.get("segments").is_some_and(|v| !v.is_null()) {
             return Err(AppError::bad(format!("track {name}: segments are malformed")));
         }
         let segs = tr.segments();

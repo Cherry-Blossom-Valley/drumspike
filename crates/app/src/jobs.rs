@@ -764,7 +764,7 @@ fn run_job(svc: &Service, sid: &str, targets: &[String], token: &JobToken, progr
             j["tracks"][name.as_str()] = json!({"state": "running", "stage": "decoding"});
         }));
         let op = op.as_ref().map_err(|e| e.message.clone())?;
-        prepare_one(op, name, kind)
+        prepare_one(op, &svc.inner.media, name, kind)
     };
     let mut analysed: Vec<String> = Vec::new(); // P4-14: the tracks the bleed rule may mark
     let mut consume = |name: &String, prepared: Result<Prepared, String>| {
@@ -884,7 +884,7 @@ pub fn retry_without_hits(
 /// The preparation of one track (P3-15b): the project's record, the parameters, the decode
 /// and downmix, and for the model detector the resample and the features. Runs on the
 /// preparation pool. The error is the text the page shows.
-fn prepare_one(op: &Shared, name: &str, _kind: Option<Kind>) -> Result<Prepared, String> {
+fn prepare_one(op: &Shared, media: &crate::media::Media, name: &str, _kind: Option<Kind>) -> Result<Prepared, String> {
     let (audio, role, mix, params, follows, dir, source_key, mix_name) = {
         let g = lock(op);
         if g.offline(name) {
@@ -906,10 +906,19 @@ fn prepare_one(op: &Shared, name: &str, _kind: Option<Kind>) -> Result<Prepared,
     let parsed = parse_params(params.as_ref())?;
     let span = crate::trace::stage("analyze:decode");
     // #508: the plain source file, or the timeline of the track's segments (the gaps stay
-    // silence, so the hit times of the detection are the timeline positions).
+    // silence, so the hit times of the detection are the timeline positions). #519: the
+    // timeline is assembled one time per analysis run and cached in `media` — the session
+    // steps share the same assembled signal instead of re-decoding every file.
     let dec = match &audio {
         crate::media::TrackAudio::File(p) => decode(p, mix).map_err(|e| e.message)?,
-        crate::media::TrackAudio::Timeline(segs) => crate::media::decode_timeline(segs, mix).map_err(|e| e.message)?,
+        crate::media::TrackAudio::Timeline(segs) => {
+            let d = media.decode_timeline_cached(segs, mix).map_err(|e| e.message)?;
+            // `Prepared` owns its samples; the cached timeline stays in `media`
+            Decoded {
+                sr: d.sr,
+                samples: d.samples.clone(),
+            }
+        }
     };
     drop(span);
     Ok(Prepared {

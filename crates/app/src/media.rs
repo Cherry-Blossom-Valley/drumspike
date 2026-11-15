@@ -141,25 +141,21 @@ impl TrackAudio {
     pub fn decode(&self, media: &Media, mix: MixMode) -> Result<Arc<Decoded>, AppError> {
         match self {
             TrackAudio::File(p) => media.decode_cached(p, mix),
-            TrackAudio::Timeline(segs) => Ok(Arc::new(decode_timeline(segs, mix)?)),
+            TrackAudio::Timeline(segs) => media.decode_timeline_cached(segs, mix),
         }
     }
 }
 
 /// The timeline signal of a segmented track (#508): every segment file decoded (each path
 /// once), trimmed to `[offset, offset + length)` and placed at `start`, exact to the sample;
-/// the gaps stay silence, so a hit in a gap or a trimmed part does not exist.
+/// the gaps stay silence, so a hit in a gap or a trimmed part does not exist. The analysis
+/// path uses [`Media::decode_timeline_cached`] instead (#519), which shares and caches the
+/// file decodes and the assembled timeline.
 ///
 /// # Errors
 ///
 /// The errors of [`decode`] per segment file, and a 400 error when two segments decode at
 /// different sample rates (the timeline has one rate).
-///
-/// # Panics
-///
-/// Panics through `expect("every segment path was decoded above")` if a segment's path were
-/// not in `files`, which the first loop decoded for every distinct path, so this does not
-/// happen.
 pub fn decode_timeline(segs: &[SegmentAudio], mix: MixMode) -> Result<Decoded, AppError> {
     let mut files: Vec<(PathBuf, Decoded)> = Vec::new();
     let mut sr = 0u32;
@@ -179,6 +175,21 @@ pub fn decode_timeline(segs: &[SegmentAudio], mix: MixMode) -> Result<Decoded, A
         }
         files.push((s.path.clone(), d));
     }
+    let shared: Vec<(PathBuf, Arc<Decoded>)> = files.into_iter().map(|(p, d)| (p, Arc::new(d))).collect();
+    assemble_timeline(segs, &shared, sr)
+}
+
+/// Places the already decoded files on the timeline ([`decode_timeline`] and
+/// [`Media::decode_timeline_cached`] share it): every segment trimmed to
+/// `[offset, offset + length)` and written at `start`, exact to the sample; the gaps stay
+/// silence, so a hit in a gap or a trimmed part does not exist.
+///
+/// # Panics
+///
+/// Panics through `expect("every segment path was decoded above")` if a segment's path were
+/// not in `files`, which the caller decoded for every distinct path, so this does not
+/// happen.
+fn assemble_timeline(segs: &[SegmentAudio], files: &[(PathBuf, Arc<Decoded>)], sr: u32) -> Result<Decoded, AppError> {
     let end = segs.iter().map(|s| s.start + s.length).fold(0.0_f64, f64::max);
     let n = (end * f64::from(sr)).round().max(0.0) as usize;
     let mut out = vec![0.0_f32; n];
@@ -197,6 +208,16 @@ pub fn decode_timeline(segs: &[SegmentAudio], mix: MixMode) -> Result<Decoded, A
     }
     Ok(Decoded { sr, samples: out })
 }
+
+/// One assembled timeline in the cache: the segments in document order (path, start,
+/// offset, length), the mix mode, and the metadata (size, mtime) of every distinct file.
+/// A change of any of these — a moved or re-cut segment, a replaced file — is another key,
+/// so the cache never serves a stale timeline.
+type TimelineKey = (
+    Vec<(PathBuf, f64, f64, f64)>,
+    bool,
+    Vec<(PathBuf, u64, Option<SystemTime>)>,
+);
 
 /// What the peak cache of one track needs, taken from the project while its lock is held,
 /// so the (slow) build runs without the lock.
@@ -315,6 +336,12 @@ pub struct Media {
     inflight: Mutex<HashMap<DecodeKey, InflightSlot>>,
     /// How many decodes ran to the end (for the tests).
     decode_runs: AtomicUsize,
+    /// How many decodes ran to the end, per file (for the tests, #519).
+    decode_counts: Mutex<HashMap<PathBuf, usize>>,
+    /// The assembled timelines of segmented tracks (LRU, same limits as `decoded`), keyed
+    /// by the segments, the mix mode and the files' metadata (#519): assembled one time,
+    /// shared by the analysis and the session steps.
+    timelines: Mutex<Vec<(TimelineKey, Arc<Decoded>)>>,
     /// The byte budget of the decode cache; `None` reads the env var, else the const.
     budget: Option<usize>,
 }
@@ -396,6 +423,7 @@ impl Media {
         };
         let d = Arc::new(decode(path, mode)?);
         self.decode_runs.fetch_add(1, Ordering::Relaxed);
+        *lock(&self.decode_counts).entry(path.to_path_buf()).or_insert(0) += 1;
         *g = Some(Arc::clone(&d));
         drop(g);
         // the cache entry goes in before the inflight key is removed: a request that
@@ -436,6 +464,75 @@ impl Media {
     /// How many decodes ran to the end since the start (for the tests).
     pub fn decode_runs(&self) -> usize {
         self.decode_runs.load(Ordering::Relaxed)
+    }
+
+    /// How many decodes ran to the end, per file, since the start (for the tests, #519).
+    #[must_use]
+    pub fn decode_counts(&self) -> HashMap<PathBuf, usize> {
+        lock(&self.decode_counts).clone()
+    }
+
+    /// The assembled timeline of `segs` from the cache, else assembled once and kept (LRU,
+    /// the same length and byte budget as the decode cache). The key is the segments in
+    /// order, the mix mode and each distinct file's size and mtime, so a moved or re-cut
+    /// segment, a changed mix mode or a replaced file assembles again (no stale audio).
+    /// Every distinct file is decoded through [`Media::decode_cached`], so the file decodes
+    /// are shared and counted once per real decode.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`decode`] per segment file, and the 400 of [`decode_timeline`] when
+    /// two segments decode at different sample rates.
+    pub fn decode_timeline_cached(&self, segs: &[SegmentAudio], mix: MixMode) -> Result<Arc<Decoded>, AppError> {
+        let mut files_meta: Vec<(PathBuf, u64, Option<SystemTime>)> = Vec::new();
+        for s in segs {
+            if files_meta.iter().any(|(p, _, _)| p == &s.path) {
+                continue;
+            }
+            let meta =
+                std::fs::metadata(&s.path).map_err(|e| AppError::internal(format!("{}: {e}", s.path.display())))?;
+            files_meta.push((s.path.clone(), meta.len(), meta.modified().ok()));
+        }
+        let key: TimelineKey = (
+            segs.iter()
+                .map(|s| (s.path.clone(), s.start, s.offset, s.length))
+                .collect(),
+            mix == MixMode::Average,
+            files_meta,
+        );
+        if let Some((_, d)) = lock(&self.timelines).iter().rev().find(|(k, _)| *k == key) {
+            return Ok(Arc::clone(d));
+        }
+        let mut files: Vec<(PathBuf, Arc<Decoded>)> = Vec::new();
+        let mut sr = 0u32;
+        for s in segs {
+            if files.iter().any(|(p, _)| p == &s.path) {
+                continue;
+            }
+            let d = self.decode_cached(&s.path, mix)?;
+            if sr == 0 {
+                sr = d.sr;
+            } else if d.sr != sr {
+                return Err(AppError::bad(format!(
+                    "segments of {} decode at {} Hz, an earlier one at {sr} Hz",
+                    s.path.display(),
+                    d.sr
+                )));
+            }
+            files.push((s.path.clone(), d));
+        }
+        let assembled = Arc::new(assemble_timeline(segs, &files, sr)?);
+        let budget = self.budget();
+        if decode_bytes(&assembled) <= budget {
+            let mut cache = lock(&self.timelines);
+            cache.push((key, Arc::clone(&assembled)));
+            let mut held: usize = cache.iter().map(|(_, d)| decode_bytes(d)).sum();
+            while (held > budget || cache.len() > DECODE_CACHE_LEN) && cache.len() > 1 {
+                let (_, old) = cache.remove(0);
+                held -= decode_bytes(&old);
+            }
+        }
+        Ok(assembled)
     }
 
     /// The opened source of `path` in `mode` for the window reader: from the cache when the
