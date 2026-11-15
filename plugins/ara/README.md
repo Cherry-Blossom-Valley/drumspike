@@ -56,18 +56,34 @@ One document controller owns one `drumspike_app::Service` (made with the control
 dropped with it) and one project folder. The id of the folder is made by the plugin once per
 document and stored in the ARA archive, so a restore in a new process finds the same folder.
 
-- A request to analyse sources adds them as tracks to the open project and analyses those
-  tracks only. A later request adds more; the tracks of the earlier ones stay, with their
-  events byte for byte. The project is saved after every round.
+- A request to analyse sources adds them as tracks to the open project. The rule: whenever
+  the set of analysed tracks of a document changes (a request adds sources, a source is
+  destroyed), the result of ALL tracks is the result of one analysis of all those tracks
+  together, as the service gives it (the session steps cross bleed, ghost gate, tom bleed and
+  flam run over the tracks of one job, so a job over the new tracks alone would never let a
+  track see the other microphones). Requests that arrive within 250 ms of each other (at
+  most 2 s in all) are one round; the report names the number of rounds. The project is saved
+  after every round.
+- The notes of an earlier source can change in a later round (a bleed hit leaves the output).
+  The plugin then tells the host: in `notifyModelUpdates` it calls the host's
+  `notifyAudioSourceContentChanged` for exactly those sources, and serves the new notes.
 - `destroyAudioSource` removes the source from the controller's list at once; its track
-  leaves the project (and its cached audio the cache) on the worker thread.
+  leaves the project (and its cached audio the cache) on the worker thread, and the tracks
+  that are left are analysed together again.
 - A restore from the archive writes the project document with the stored events and opens
-  it. It decodes no audio file. An archive of M1a (version 1, no document id) restores into a
-  fresh id; the archive version stays 1 (the two new fields are optional).
+  it. It decodes no audio file. A restored track's source points at the cache path where the
+  reader would write the audio; that file does not exist until the host gives the audio
+  again. `project_open` and `events_get` work without it; a call that needs the audio gets
+  the app's own offline answer (a crate test), and a later round skips such a track and keeps
+  its stored events. An archive of M1a (version 1, no document id) restores into a fresh id;
+  the archive version stays 1 (the two new fields are optional).
 - Two document controllers in one process have their own service, folder, source numbering
   and file names.
 - All of this runs on the plugin's worker thread. Nothing runs on the audio thread, and the
   host's main thread only reads and writes the state it needs for the ARA calls.
+  `destroyDocumentController` cancels a running analysis and returns within half a second in
+  every case; the worker owns the document through shared ownership and finishes the save on
+  its own.
 
 ## The check
 
@@ -80,8 +96,10 @@ the audio-thread check with its fault run, the file probe, pluginval (strictness
 clap-validator, the standalone rule, and the crate and workspace trios. The M1b1 stages
 (`doc-*`, each with a fault run) drive the host modes `grow` (sources arrive in batches, one
 can be destroyed) and `docs` (two document controllers in one process): one service per
-document, the tracks stay, two documents apart, the document id in the archive, a destroyed
-source leaves the project, and the home of the service (a run with `HOME` below `out/`
+document, all tracks analysed together (a fixture whose split result differs), one round for
+requests that arrive close together, the host told about changed notes, two documents apart, the document id in the archive, a destroyed
+source leaves the project, the destroy of a controller during an analysis returns in under
+1 s, and the home of the service (a run with `HOME` below `out/`
 lists the files below it outside the cache folder: 0). The ticket's "in
 the ARA test host" is two hosts: the plugin's own `ara-host` drives the stages above, and
 the `ARATestHost` of the ARA SDK examples - built from the S1 pattern with the S1 patch -

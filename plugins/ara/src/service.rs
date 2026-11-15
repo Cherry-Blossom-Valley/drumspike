@@ -133,15 +133,17 @@ pub struct JobResult {
     pub decode_counts: HashMap<PathBuf, usize>,
     /// The analysis wall time of the round.
     pub analysis_ms: u64,
-    /// The notes per source of the round: `(sample in the source, volume)` per event.
+    /// The notes of every source of the project: `(sample in the source, volume)` per hit.
     pub notes: HashMap<usize, Vec<[f64; 2]>>,
-    /// The track name of every source of the round.
+    /// The track name of every source added by the round.
     pub track_of: HashMap<usize, String>,
     /// The tracks the round added, in order.
     pub added: Vec<String>,
+    /// The tracks the round analysed (together: every track whose audio is here).
+    pub analysed: Vec<String>,
     /// The tracks of the project after the round.
     pub project_tracks: Vec<String>,
-    /// Tracks of earlier rounds whose events differ after this one (the gate: 0).
+    /// Tracks that were not analysed in this round and whose events differ (the gate: 0).
     pub earlier_changed: usize,
 }
 
@@ -176,9 +178,11 @@ pub struct DocService {
     sid: Option<String>,
     /// The tracks of the project in order: the track name and the creation index of its source.
     tracks: Vec<(String, usize)>,
-    /// The events of every track as of the last round (to prove that a later round leaves
-    /// them alone).
+    /// The events of every track as of the last round.
     events: Map<String, Value>,
+    /// The source of every track by creation index (its regions and rate map the events
+    /// back into the source).
+    snaps: HashMap<usize, SourceSnapshot>,
     canceller: Canceller,
 }
 
@@ -246,6 +250,7 @@ impl DocService {
             sid: None,
             tracks: Vec::new(),
             events: Map::new(),
+            snaps: HashMap::new(),
             canceller: Canceller::default(),
         }
     }
@@ -350,9 +355,18 @@ impl DocService {
         out
     }
 
-    /// One analysis round: add the sources as tracks of the open project, analyse those
-    /// tracks only, read the events of every track, save the project. A track of an
-    /// earlier round is not analysed again and its events stay as they are.
+    /// One analysis round: add the sources as tracks of the open project, then analyse ALL
+    /// the tracks of the project together, read the events of every track, save the project.
+    ///
+    /// The rule: whenever the set of analysed tracks of a document changes, the result of all
+    /// tracks is the result of one analysis of all those tracks together (the service
+    /// reference). The session steps of the service (cross bleed, ghost gate, tom bleed,
+    /// flam) run over the tracks of one job only, so a job over the new tracks alone would
+    /// never let a track see the other microphones. The decode is cached by the service.
+    ///
+    /// A track whose cached audio is missing (a track restored from the archive, whose
+    /// source the host has not delivered again) is not analysed: it keeps its stored events.
+    /// With no source and no track the round does nothing (an empty answer).
     ///
     /// # Errors
     ///
@@ -381,19 +395,40 @@ impl DocService {
             .zip(&names)
             .map(|(s, name)| json!({"name": name, "track": serde_json::to_value(make_track(s, &dir)).unwrap_or(Value::Null)}))
             .collect();
-        svc.tracks_restore(&sid, &Value::Array(rows)).map_err(err)?;
+        if !rows.is_empty() {
+            svc.tracks_restore(&sid, &Value::Array(rows)).map_err(err)?;
+        }
         let mut track_of = HashMap::new();
         for (s, name) in sources.iter().zip(&names) {
             self.tracks.push((name.clone(), s.seq));
+            self.snaps.insert(s.seq, s.clone());
             track_of.insert(s.seq, name.clone());
         }
-        svc.analyze_start(&sid, Some(names.clone()), None, None).map_err(err)?;
-        loop {
-            let st = svc.analyze_status(&sid);
-            match st["state"].as_str() {
-                Some("done") => break,
-                Some("cancelled" | "cancelling") => return Err("the analysis was cancelled".into()),
-                _ => std::thread::sleep(std::time::Duration::from_millis(5)),
+        // the tracks of the round: every track whose audio is here (the fault run brings
+        // back the M1a way: the new tracks only)
+        let only_new = switch("DS_ARA_ROUND_FAULT").as_deref() == Some("new-only");
+        let analysed: Vec<String> = self
+            .tracks
+            .iter()
+            .filter(|(n, seq)| {
+                if only_new {
+                    names.contains(n)
+                } else {
+                    self.snaps.get(seq).is_some_and(|s| s.wav.is_file())
+                }
+            })
+            .map(|(n, _)| n.clone())
+            .collect();
+        if !analysed.is_empty() {
+            svc.analyze_start(&sid, Some(analysed.clone()), None, None)
+                .map_err(err)?;
+            loop {
+                let st = svc.analyze_status(&sid);
+                match st["state"].as_str() {
+                    Some("done") => break,
+                    Some("cancelled" | "cancelling") => return Err("the analysis was cancelled".into()),
+                    _ => std::thread::sleep(std::time::Duration::from_millis(5)),
+                }
             }
         }
         let mut all = Map::new();
@@ -401,33 +436,17 @@ impl DocService {
             let ev = svc.events_get(&sid, name).map_err(err)?;
             all.insert(name.clone(), ev["events"].clone());
         }
+        // tracks that were not analysed again (the fault run, a track without audio) must
+        // not change; an analysed track may change when the set of tracks changed
         let earlier_changed = self
             .events
             .iter()
-            .filter(|(n, v)| all.get(n.as_str()) != Some(*v))
+            .filter(|(n, v)| !analysed.contains(n) && all.get(n.as_str()) != Some(*v))
             .count();
         self.events = all.clone();
         svc.project_save(&sid).map_err(err)?;
         let analysis_ms = started.elapsed().as_millis() as u64;
-
-        // the notes: the events of the track per source, mapped back into the source
-        let mut notes: HashMap<usize, Vec<[f64; 2]>> = HashMap::new();
-        for s in sources {
-            let list = all
-                .get(&track_of[&s.seq])
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let mut per_source: Vec<[f64; 2]> = Vec::with_capacity(list.len());
-            for ev in &list {
-                let t = ev.get("t").and_then(Value::as_f64).unwrap_or(f64::NAN);
-                let v = ev.get("v").and_then(Value::as_i64).unwrap_or(100);
-                if let Some(sample) = source_sample(t, &s.regions, s.sample_rate) {
-                    per_source.push([sample as f64, (v.clamp(0, 127) as f64) / 127.0]);
-                }
-            }
-            notes.insert(s.seq, per_source);
-        }
+        let notes = self.notes_of(&all);
         Ok(JobResult {
             events: all,
             decode_counts: svc.decode_counts(),
@@ -435,9 +454,30 @@ impl DocService {
             notes,
             track_of,
             added: names,
+            analysed,
             project_tracks: self.track_names(),
             earlier_changed,
         })
+    }
+
+    /// The notes of every source of the project from the events: the hits that are not out
+    /// of the output (a hit the bleed rules marked is no note), mapped back into the source.
+    fn notes_of(&self, events: &Map<String, Value>) -> HashMap<usize, Vec<[f64; 2]>> {
+        let mut notes: HashMap<usize, Vec<[f64; 2]>> = HashMap::new();
+        for (name, seq) in &self.tracks {
+            let Some(s) = self.snaps.get(seq) else { continue };
+            let list = events.get(name).and_then(Value::as_array).cloned().unwrap_or_default();
+            let mut per_source: Vec<[f64; 2]> = Vec::with_capacity(list.len());
+            for ev in list.iter().filter(|e| !drumspike_app::policy::is_out(e)) {
+                let t = ev.get("t").and_then(Value::as_f64).unwrap_or(f64::NAN);
+                let v = ev.get("v").and_then(Value::as_i64).unwrap_or(100);
+                if let Some(sample) = source_sample(t, &s.regions, s.sample_rate) {
+                    per_source.push([sample as f64, (v.clamp(0, 127) as f64) / 127.0]);
+                }
+            }
+            notes.insert(*seq, per_source);
+        }
+        notes
     }
 
     /// The track of a destroyed source leaves the project (and the project is saved).
@@ -456,6 +496,7 @@ impl DocService {
             svc.project_save(sid).map_err(err)?;
         }
         self.tracks.retain(|(n, _)| *n != name);
+        self.snaps.remove(&seq);
         self.events.shift_remove(&name);
         Ok(self.track_names())
     }
@@ -487,6 +528,7 @@ impl DocService {
         let sid = self.ensure_open()?;
         let svc = self.service()?;
         self.tracks = tracks.iter().map(|t| (t.track.clone(), t.snapshot.seq)).collect();
+        self.snaps = tracks.iter().map(|t| (t.snapshot.seq, t.snapshot.clone())).collect();
         let mut events = Map::new();
         for (name, _) in &self.tracks {
             let ev = svc.events_get(&sid, name).map_err(err)?;
@@ -696,30 +738,66 @@ mod tests {
     }
 
     #[test]
-    fn a_later_round_adds_tracks_and_leaves_the_events_of_the_earlier_ones() {
+    fn a_later_round_analyses_all_tracks_together_and_a_removal_analyses_the_rest_again() {
         let cache = scratch("rounds");
         let id = new_doc_id();
         let mut doc = DocService::new(cache.clone(), id.clone());
         let first = doc.analyse(&[snapshot_of(&cache, &id, 0, "kick.wav")]).unwrap();
         assert_eq!(first.project_tracks, ["kick"]);
-        let before = first.events["kick"].to_string();
+        assert_eq!(first.analysed, ["kick"]);
         assert!(
             first.events["kick"].as_array().is_some_and(|e| !e.is_empty()),
             "the detector found hits"
         );
         let second = doc.analyse(&[snapshot_of(&cache, &id, 1, "snare.wav")]).unwrap();
         assert_eq!(second.project_tracks, ["kick", "snare"]);
+        assert_eq!(
+            second.analysed,
+            ["kick", "snare"],
+            "the earlier track is analysed with the new one"
+        );
         assert_eq!(second.earlier_changed, 0);
-        assert_eq!(second.events["kick"].to_string(), before, "byte for byte");
+        assert!(second.notes.contains_key(&0) && second.notes.contains_key(&1));
+        // the result of the two rounds is the result of one analysis of both together
+        let cache2 = scratch("rounds-ref");
+        let id2 = new_doc_id();
+        let mut one = DocService::new(cache2.clone(), id2.clone());
+        let together = one
+            .analyse(&[
+                snapshot_of(&cache2, &id2, 0, "kick.wav"),
+                snapshot_of(&cache2, &id2, 1, "snare.wav"),
+            ])
+            .unwrap();
+        assert_eq!(
+            serde_json::to_string(&second.events).unwrap(),
+            serde_json::to_string(&together.events).unwrap(),
+            "byte for byte"
+        );
         // the document on disk holds both tracks
         let text = std::fs::read_to_string(document_path(&doc.project_dir())).unwrap();
         let on_disk: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(on_disk["tracks"].as_object().unwrap().len(), 2);
-        // a destroyed source leaves the project and the document
+        // a destroyed source leaves the project and the document; the rest is analysed again
         assert_eq!(doc.remove(0).unwrap(), ["snare"]);
+        let rest = doc.analyse(&[]).unwrap();
+        assert_eq!(rest.analysed, ["snare"]);
+        assert!(rest.added.is_empty());
         let text = std::fs::read_to_string(document_path(&doc.project_dir())).unwrap();
         let on_disk: Value = serde_json::from_str(&text).unwrap();
         assert!(on_disk["tracks"].get("kick").is_none() && on_disk["tracks"].get("snare").is_some());
+        doc.shutdown();
+        one.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+        let _ = std::fs::remove_dir_all(&cache2);
+    }
+
+    #[test]
+    fn a_round_without_tracks_does_nothing() {
+        let cache = scratch("empty");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id);
+        let r = doc.analyse(&[]).unwrap();
+        assert!(r.analysed.is_empty() && r.events.is_empty());
         doc.shutdown();
         let _ = std::fs::remove_dir_all(&cache);
     }
@@ -763,6 +841,56 @@ mod tests {
         assert_eq!(restored.events["kick"].to_string(), stored.events["kick"].to_string());
         assert!(restored.decode_counts.is_empty(), "{:?}", restored.decode_counts);
         assert_eq!(restored.project_tracks, ["kick"]);
+        again.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_restored_track_without_audio_answers_the_offline_error_not_a_panic() {
+        let cache = scratch("offline");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let snap = snapshot_of(&cache, &id, 0, "kick.wav");
+        let stored = doc.analyse(std::slice::from_ref(&snap)).unwrap();
+        doc.shutdown();
+        std::fs::remove_file(&snap.wav).unwrap(); // the new process has no audio yet
+        let mut again = DocService::new(cache.clone(), id);
+        again
+            .restore(&[RestoredTrack {
+                snapshot: snap,
+                track: "kick".into(),
+                events: stored.events["kick"].clone(),
+            }])
+            .unwrap();
+        // the project opens and answers the events without audio
+        let svc = again.svc.clone().unwrap();
+        let sid = again.sid.clone().unwrap();
+        assert_eq!(
+            svc.events_get(&sid, "kick").unwrap()["events"].to_string(),
+            stored.events["kick"].to_string()
+        );
+        // a call that needs the audio answers the app's error, it does not panic
+        let started = svc.analyze_start(&sid, Some(vec!["kick".into()]), None, None);
+        let answer = match started {
+            Err(e) => e.message,
+            Ok(_) => loop {
+                let st = svc.analyze_status(&sid);
+                if st["state"] == "done" {
+                    break st["tracks"]["kick"]["error"].as_str().unwrap_or("no error").to_string();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            },
+        };
+        assert!(
+            answer.to_lowercase().contains("offline")
+                || answer.to_lowercase().contains("not found")
+                || answer.to_lowercase().contains("no such"),
+            "the app's own error: {answer}"
+        );
+        // the round of the plugin skips a track without audio and keeps its stored events
+        let round = again.analyse(&[]).unwrap();
+        assert!(round.analysed.is_empty());
+        assert_eq!(round.events["kick"].to_string(), stored.events["kick"].to_string());
         again.shutdown();
         let _ = std::fs::remove_dir_all(&cache);
     }

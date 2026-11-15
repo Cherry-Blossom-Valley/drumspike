@@ -37,9 +37,14 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
                  version field)
   doc-service    M1b1 line 1: two analysis requests in one document, the services made are
                  1 and dropped with the controller (fault: a service per job)
-  doc-tracks     M1b1 line 2: four sources in two requests, four tracks in the project, the
-                 events of the first two byte for byte as before the second request (fault:
-                 the second request forgets the earlier tracks)
+  doc-tracks     M1b1 line 2: four sources in two requests; the result of all four tracks is
+                 byte for byte the result of one analysis of all four together (a fixture
+                 whose split result differs: the snare in a tom); the host is told for each
+                 earlier source whose notes changed (faults: the second request forgets the
+                 earlier tracks; only the new tracks are analysed)
+  doc-rounds     requests 40 ms apart are one round (fault: no settle time)
+  doc-close      the destroy of a controller while its analysis runs returns in under 1 s
+                 (fault: the long wait)
   doc-two        M1b1 line 3: two document controllers in one process, own folders, events
                  byte for byte the reference of each document alone, no file of the first
                  folder changes while the second works (fault: one shared folder)
@@ -993,9 +998,10 @@ def check_services(label: str) -> tuple[bool, str]:
     sv = services_row(label)
     docs = {j.get("doc") for j in jobs}
     made, dropped = sv.get("made"), sv.get("dropped")
-    ok = made == 1 and dropped == 1 and len(jobs) == 2 and len(docs) == 1
+    rounds = sv.get("rounds")
+    ok = made == 1 and dropped == 1 and len(jobs) == 2 and rounds == 2 and len(docs) == 1
     return ok, (
-        f"{len(jobs)} analysis requests in {len(docs)} document(s): {made} service(s) made, {dropped} dropped "
+        f"{len(jobs)} analysis requests in {len(docs)} document(s), {rounds} rounds: {made} service(s) made, {dropped} dropped "
         "with the document controller (want 1 and 1)"
     )
 
@@ -1023,63 +1029,170 @@ def stage_doc_service_fault() -> bool:
     )
 
 
-# ---- gate line 2: the tracks stay
+# ---- gate line 2: all tracks of a document are analysed together
 
-def check_tracks(label: str, cache: str, lines: list, files: list) -> tuple[bool, str]:
+# The fixture whose split result differs from the result of all tracks together: two toms that
+# hear the snare (a quieter copy 2 and 3 ms after each of its 8 hits). The tom bleed rule
+# marks those hits (`bleed: true`, out of the output, so no ARA note) when the snare is
+# analysed together with the toms, and cannot when it is not.
+TOM1_FILE, TOM2_FILE, SNARE8_FILE = "tom1_m1b1_bleed.wav", "tom2_m1b1.wav", "snare_m1b1_8hits.wav"
+SNARE8_HITS = [0.2, 0.5, 0.8, 1.1, 1.4, 1.7, 2.0, 2.3]
+BLEED_FILES = [TOM1_FILE, TOM2_FILE, SNARE8_FILE, FILES[0]]  # two toms, then the snare and the kick: two requests of two
+
+
+def ensure_bleed_fixture() -> None:
+    FIXTURES.mkdir(parents=True, exist_ok=True)
+    made = {
+        SNARE8_FILE: ([(t, 200.0, 0.85) for t in SNARE8_HITS], []),
+        TOM1_FILE: (
+            [(0.35, 120.0, 0.9), (0.95, 120.0, 0.85), (1.55, 120.0, 0.9), (2.15, 120.0, 0.85)],
+            [(t + 0.002, 200.0, 0.3) for t in SNARE8_HITS],
+        ),
+        TOM2_FILE: (
+            [(0.65, 100.0, 0.9), (1.25, 100.0, 0.85), (1.85, 100.0, 0.9), (2.45, 100.0, 0.85)],
+            [(t + 0.003, 200.0, 0.24) for t in SNARE8_HITS],
+        ),
+    }
+    for name, (hits, bleed) in made.items():
+        if not (FIXTURES / name).exists():
+            make_wav(FIXTURES / name, 48000, 1, 3.0, hits, bleed)
+
+
+def events_diff(a_json: str, b_json: str) -> tuple[int, int]:
+    """(events that differ, events in all) between two events objects, track by track."""
+    a, b = json.loads(a_json or "{}"), json.loads(b_json or "{}")
+    differ, total = 0, 0
+    for name in set(a) | set(b):
+        ea, eb = a.get(name) or [], b.get(name) or []
+        total += max(len(ea), len(eb))
+        differ += sum(1 for x, y in zip(ea, eb) if x != y) + abs(len(ea) - len(eb))
+    return differ, total
+
+
+def notes_changed(lines: list, before: str, after: str) -> set:
+    """The sources whose notes the host reads differently in the phase `after` than in `before`."""
+    b, a = host_notes_of(lines, before), host_notes_of(lines, after)
+    return {n for n in b if n in a and a[n] != b[n]}
+
+
+def notified(lines: list, phase: str) -> set:
+    return {r["name"] for r in lines if r.get("event") == "host_content_changed" and r.get("phase") == phase}
+
+
+def check_tracks(label: str, cache: str, lines: list, files: list, ref: bytes) -> tuple[bool, str]:
     jobs = job_rows(label)
     docs0 = project_docs(cache)
-    on_disk0 = len(tracks_of_doc(docs0[0])) if len(docs0) == 1 else len(tracks_of_doc(doc_of_run(cache))) if doc_of_run(cache).exists() else 0
+    on_disk0 = len(tracks_of_doc(docs0[0])) if len(docs0) == 1 else 0
     if len(jobs) != 2:
         return False, f"{len(jobs)} job rows, want 2 (one per request); the document on disk has {on_disk0} tracks, want {len(files)}"
-    first, second = jobs
-    t1, t2 = first.get("track_json") or {}, second.get("track_json") or {}
-    kept = [n for n in t1 if t2.get(n) == t1[n]]  # the strings are the service's bytes
+    second = jobs[1]
+    t2 = second.get("track_json") or {}
     docs = project_docs(cache)
     doc_tracks = tracks_of_doc(docs[0]) if len(docs) == 1 else {}
-    n_tracks = len(second.get("project_tracks") or [])
     events = sum(len(json.loads(v)) for v in t2.values())
+    same = second.get("events_json", "").encode() == ref
+    differ, total = events_diff(second.get("events_json", ""), ref.decode())
     in_doc = bool(t2) and all(n in doc_tracks and doc_tracks[n].get("events") == json.loads(t2[n]) for n in t2)
-    notes1, notes2 = host_notes_of(lines, "round-1"), host_notes_of(lines, "final")
-    notes_same = bool(notes1) and all(notes2.get(n) == v for n, v in notes1.items())
+    expected = notes_changed(lines, "round-1", "final")
+    told = notified(lines, "round-2")
     ok = (
-        n_tracks == len(files)
-        and len(doc_tracks) == len(files)
+        same
         and list(t2) == track_names(files)
-        and len(t1) == 2
-        and kept == list(t1)
+        and len(doc_tracks) == len(files)
+        and len(second.get("analysed") or []) == len(files)
         and events > 0
         and in_doc
-        and notes_same
+        and bool(expected)
+        and told == expected
+        and services_row(label).get("rounds") == 2
     )
     return ok, (
-        f"{n_tracks} tracks and {events} events in the project after the second request; "
-        f"{len(kept)} of {len(t1)} earlier tracks keep their events byte for byte; "
-        f"the document on disk has {len(doc_tracks)} tracks (events equal: {in_doc}); "
-        f"the host reads the same notes for the first sources: {notes_same}"
+        f"{len(t2)} tracks and {events} events after the second request, byte for byte the reference of all four together: "
+        f"{same} ({differ} of {total} events differ); round 2 analysed {len(second.get('analysed') or [])} tracks; "
+        f"the document on disk has {len(doc_tracks)} tracks (events equal: {in_doc}); {services_row(label).get('rounds')} rounds; "
+        f"sources whose notes changed {sorted(Path(n).stem for n in expected)}, told to the host {sorted(Path(n).stem for n in told)}"
     )
+
+
+def bleed_reference() -> bytes | None:
+    ensure_bleed_fixture()
+    return reference_alone("m1b1-ref-bleed", BLEED_FILES)
 
 
 def stage_doc_tracks() -> bool:
-    if not HOST.exists() or not CLAP.exists():
-        return pass_fail("doc-tracks", False, "no host or no CLAP: run check.sh build first")
-    rc, lines = grow_run("doc-grow", SERVICE_FILES, 2)
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-tracks", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = bleed_reference()
+    if ref is None:
+        return pass_fail("doc-tracks", False, "the reference of the four tracks together failed")
+    rc, lines = grow_run("doc-grow-bleed", BLEED_FILES, 2)
     if rc != 0:
-        return pass_fail("doc-tracks", False, f"ara-host grow rc={rc} (out/host-doc-grow.log)")
-    ok, evidence = check_tracks("doc-grow", "cache-doc-grow", lines, SERVICE_FILES)
+        return pass_fail("doc-tracks", False, f"ara-host grow rc={rc} (out/host-doc-grow-bleed.log)")
+    ok, evidence = check_tracks("doc-grow-bleed", "cache-doc-grow-bleed", lines, BLEED_FILES, ref)
     return pass_fail("doc-tracks", ok, evidence)
 
 
 def stage_doc_tracks_fault() -> bool:
-    """The fault run: the second request forgets the earlier tracks (the M1a way)."""
-    if not HOST.exists() or not CLAP.exists():
-        return pass_fail("doc-tracks-fault", False, "no host or no CLAP: run check.sh build first")
-    rc, lines = grow_run("doc-grow-tracks-fault", SERVICE_FILES, 2, extra={"DS_ARA_TRACKS_FAULT": "forget"})
-    ok, evidence = check_tracks("doc-grow-tracks-fault", "cache-doc-grow-tracks-fault", lines, SERVICE_FILES)
+    """Two fault runs: the second request forgets the earlier tracks (the M1a way), and
+    the round analyses only the new tracks again (the first version of M1b1). Both must be
+    refused; the second one is the case the bleed fixture is made for."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-tracks-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = bleed_reference()
+    if ref is None:
+        return pass_fail("doc-tracks-fault", False, "the reference of the four tracks together failed")
+    out = {}
+    for name, env in (("forget", {"DS_ARA_TRACKS_FAULT": "forget"}), ("new-only", {"DS_ARA_ROUND_FAULT": "new-only"})):
+        rc, lines = grow_run(f"doc-grow-bleed-{name}", BLEED_FILES, 2, extra=env)
+        ok, evidence = check_tracks(f"doc-grow-bleed-{name}", f"cache-doc-grow-bleed-{name}", lines, BLEED_FILES, ref)
+        out[name] = (rc == 0 and not ok, evidence)
     return pass_fail(
         "doc-tracks-fault",
-        rc == 0 and not ok,
-        f"the fault switch dropped the earlier tracks and the check refused it: {evidence}",
+        all(v[0] for v in out.values()),
+        " | ".join(f"{k} switch refused: {v[0]}: {v[1]}" for k, v in out.items()),
     )
+
+
+# ---- gate line 2b: requests that arrive close together are one round
+
+def check_rounds(label: str, ref: bytes) -> tuple[bool, str]:
+    jobs = job_rows(label)
+    rounds = services_row(label).get("rounds")
+    same = len(jobs) == 1 and jobs[0].get("events_json", "").encode() == ref
+    return rounds == 1 and same, (
+        f"{len(FILES)} requests 40 ms apart: {rounds} round(s) (want 1), {len(jobs)} job row(s), "
+        f"events byte for byte the reference of all together: {same}"
+    )
+
+
+def stage_doc_rounds() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not (OUT / "events-reference.json").exists():
+        return pass_fail("doc-rounds", False, "no host, no CLAP or no reference events: run check.sh build and the reference stage first")
+    rc, _text, _lines = host_run(
+        "doc-rounds",
+        CLAP,
+        ["grow", "--files", *fixture_args(FILES), "--batch", "1", "--gap-ms", "40", "--wait", HOST_WAIT],
+        "cache-doc-rounds",
+    )
+    if rc != 0:
+        return pass_fail("doc-rounds", False, f"ara-host grow rc={rc} (out/host-doc-rounds.log)")
+    ok, evidence = check_rounds("doc-rounds", (OUT / "events-reference.json").read_bytes())
+    return pass_fail("doc-rounds", ok, evidence)
+
+
+def stage_doc_rounds_fault() -> bool:
+    """The fault run: no settle time, every request starts a round."""
+    if not HOST.exists() or not CLAP.exists() or not (OUT / "events-reference.json").exists():
+        return pass_fail("doc-rounds-fault", False, "no host, no CLAP or no reference events")
+    rc, _text, _lines = host_run(
+        "doc-rounds-fault",
+        CLAP,
+        ["grow", "--files", *fixture_args(FILES), "--batch", "1", "--gap-ms", "40", "--wait", HOST_WAIT],
+        "cache-doc-rounds-fault",
+        extra={"DS_ARA_SETTLE_FAULT": "none"},
+    )
+    ok, evidence = check_rounds("doc-rounds-fault", (OUT / "events-reference.json").read_bytes())
+    return pass_fail("doc-rounds-fault", rc == 0 and not ok, f"the fault switch gave every request its own round and the check refused it: {evidence}")
 
 
 # ---- gate line 3: two documents in one process
@@ -1294,69 +1407,163 @@ def stage_doc_archive_fault() -> bool:
     )
 
 
-# ---- gate line 5: a destroyed source leaves the project
+# ---- gate line 5: a destroyed source leaves the project, the rest is analysed together again
 
-DESTROY_FILES = [FILES[0], FILES[1], FILES[2]]  # kick, snare, tom; the snare goes
+DESTROY_FILES = [TOM1_FILE, TOM2_FILE, SNARE8_FILE]  # two toms and the snare they hear; the snare goes
+DESTROY_REST = [TOM1_FILE, TOM2_FILE]
 
 
-def check_destroy(label: str, cache: str, lines: list) -> tuple[bool, str]:
+def check_destroy(label: str, cache: str, lines: list, ref_all: bytes, ref_rest: bytes) -> tuple[bool, str]:
     jobs = job_rows(label)
     docs0 = project_docs(cache)
-    on_disk0 = len(tracks_of_doc(docs0[0])) if len(docs0) == 1 else len(tracks_of_doc(doc_of_run(cache))) if doc_of_run(cache).exists() else 0
-    if len(jobs) != 1:
-        return False, f"{len(jobs)} job rows, want 1; the document on disk has {on_disk0} tracks after the destroy, want 2"
-    before = jobs[0].get("track_json") or {}
+    on_disk0 = len(tracks_of_doc(docs0[0])) if len(docs0) == 1 else 0
+    first = [j for j in jobs if j.get("reason") == "request"]
+    after = [j for j in jobs if j.get("reason") == "removal"]
+    if len(first) != 1 or len(after) != 1:
+        return False, (
+            f"{len(first)} request round(s) and {len(after)} round(s) after the removal, want 1 and 1; "
+            f"the document on disk has {on_disk0} tracks after the destroy, want 2"
+        )
     names = track_names(DESTROY_FILES)
-    gone, left = names[1], [names[0], names[2]]
+    left = [names[0], names[1]]
     docs = project_docs(cache)
     doc_tracks = tracks_of_doc(docs[0]) if len(docs) == 1 else {}
     destroyed = event_rows(label, "source_destroyed")
     row = destroyed[-1] if destroyed else {}
-    events_same = bool(left) and all(
-        n in doc_tracks and doc_tracks[n].get("events") == json.loads(before.get(n, "null")) for n in left
+    rest = after[0]
+    before_ok = first[0].get("events_json", "").encode() == ref_all
+    rest_ok = rest.get("events_json", "").encode() == ref_rest
+    differ, total = events_diff(first[0].get("events_json", ""), rest.get("events_json", ""))
+    in_doc = bool(left) and all(
+        n in doc_tracks and doc_tracks[n].get("events") == json.loads((rest.get("track_json") or {}).get(n, "null")) for n in left
     )
     wavs = sorted(p.name[:3] for d in (OUT / cache / "documents").glob("*/audio") for p in d.glob("*.wav"))
-    notes_after = host_notes_of(lines, "after-destroy")
-    notes_final = host_notes_of(lines, "final")
-    notes_same = len(notes_after) == 2 and all(notes_final.get(n) == v for n, v in notes_after.items())
+    expected = notes_changed(lines, "final", "after-destroy")
+    told = notified(lines, "destroy")
     ok = (
-        len(before) == 3
-        and list(doc_tracks) == left
-        and gone not in doc_tracks
+        list(doc_tracks) == left
         and len(destroyed) == 1
         and row.get("sources_left") == 2
         and row.get("project_tracks") == left
-        and events_same
-        and wavs == ["000", "002"]
-        and notes_same
+        and before_ok
+        and rest_ok
+        and len(rest.get("analysed") or []) == 2
+        and differ > 0
+        and in_doc
+        and wavs == ["000", "001"]
+        and bool(expected)
+        and told == expected
     )
     return ok, (
-        f"3 sources analysed, 1 destroyed: the plugin's source list holds {row.get('sources_left')}, the project "
-        f"{row.get('project_tracks')}, the document on disk {list(doc_tracks)} (the destroyed track gone: "
-        f"{gone not in doc_tracks}), the events of the others byte for byte as before {events_same}, "
-        f"cache audio of the destroyed source gone {wavs == ['000', '002']}"
+        f"3 sources analysed together (byte for byte the reference: {before_ok}), 1 destroyed: the plugin's source list holds "
+        f"{row.get('sources_left')}, the project {row.get('project_tracks')}, the document on disk {list(doc_tracks)}; "
+        f"the {len(rest.get('analysed') or [])} tracks that are left were analysed together again, byte for byte the reference of "
+        f"the remaining set: {rest_ok} ({differ} of {total} events differ from before the destroy); document events equal {in_doc}; "
+        f"cache audio of the destroyed source gone {wavs == ['000', '001']}; notes changed {sorted(Path(n).stem for n in expected)}, "
+        f"told to the host {sorted(Path(n).stem for n in told)}"
     )
+
+
+def destroy_refs() -> tuple[bytes, bytes] | None:
+    ensure_bleed_fixture()
+    all_, rest = reference_alone("m1b1-ref-three", DESTROY_FILES), reference_alone("m1b1-ref-rest", DESTROY_REST)
+    return (all_, rest) if all_ is not None and rest is not None else None
+
+
+def destroy_run(label: str, extra: dict | None = None) -> tuple[int, list]:
+    if label not in _GROW:
+        rc, _text, lines = host_run(
+            label,
+            CLAP,
+            ["grow", "--files", *fixture_args(DESTROY_FILES), "--batch", "3", "--destroy", "2", "--pump-ms", "3000", "--wait", HOST_WAIT],
+            f"cache-{label}",
+            extra=extra,
+        )
+        _GROW[label] = (rc, lines)
+    return _GROW[label]
 
 
 def stage_doc_destroy() -> bool:
-    if not HOST.exists() or not CLAP.exists():
-        return pass_fail("doc-destroy", False, "no host or no CLAP: run check.sh build first")
-    rc, lines = grow_run("doc-destroy", DESTROY_FILES, 3, destroy=1)
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-destroy", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    refs = destroy_refs()
+    if refs is None:
+        return pass_fail("doc-destroy", False, "a reference run failed")
+    rc, lines = destroy_run("doc-destroy")
     if rc != 0:
         return pass_fail("doc-destroy", False, f"ara-host grow rc={rc} (out/host-doc-destroy.log)")
-    ok, evidence = check_destroy("doc-destroy", "cache-doc-destroy", lines)
+    ok, evidence = check_destroy("doc-destroy", "cache-doc-destroy", lines, *refs)
     return pass_fail("doc-destroy", ok, evidence)
 
 
 def stage_doc_destroy_fault() -> bool:
-    """The fault run: the plugin keeps the destroyed source (the M1a way)."""
-    if not HOST.exists() or not CLAP.exists():
-        return pass_fail("doc-destroy-fault", False, "no host or no CLAP: run check.sh build first")
-    rc, lines = grow_run("doc-destroy-fault", DESTROY_FILES, 3, destroy=1, extra={"DS_ARA_DESTROY_FAULT": "keep"})
-    ok, evidence = check_destroy("doc-destroy-fault", "cache-doc-destroy-fault", lines)
+    """Two fault runs: the plugin keeps the destroyed source (the M1a way), and it does not
+    analyse the tracks that are left again. Both must be refused."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-destroy-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    refs = destroy_refs()
+    if refs is None:
+        return pass_fail("doc-destroy-fault", False, "a reference run failed")
+    out = {}
+    for name, env in (("keep", {"DS_ARA_DESTROY_FAULT": "keep"}), ("no-reanalysis", {"DS_ARA_ROUND_FAULT": "new-only"})):
+        rc, lines = destroy_run(f"doc-destroy-fault-{name}", env)
+        ok, evidence = check_destroy(f"doc-destroy-fault-{name}", f"cache-doc-destroy-fault-{name}", lines, *refs)
+        out[name] = (rc == 0 and not ok, evidence)
     return pass_fail(
-        "doc-destroy-fault", rc == 0 and not ok, f"the fault switch kept the destroyed source and the check refused it: {evidence}"
+        "doc-destroy-fault",
+        all(v[0] for v in out.values()),
+        " | ".join(f"{k} switch refused: {v[0]}: {v[1]}" for k, v in out.items()),
     )
+
+
+# ---- finding 2: the destroy of a controller while its analysis runs is short
+
+CLOSE_FILES = ["synth:600"]  # one dense source of ten minutes: one track is not cancelled in the middle, so the analysis takes about five seconds
+CLOSE_LIMIT_MS = 1000.0
+
+
+def check_close(label: str, cache: str, rc: int, lines: list, text: str) -> tuple[bool, str]:
+    close = next((r for r in lines if r.get("event") == "host_close"), {})
+    ms = close.get("ms")
+    rows = report_rows(label)
+    finished = [r for r in rows if r.get("event") == "job"]
+    time.sleep(1.5)  # a late write of the worker would show now
+    root = OUT / cache
+    outside = [
+        p for p in root.rglob("*") if p.is_file() and "documents" not in p.relative_to(root).parts
+    ] if root.is_dir() else []
+    clean = rc == 0 and "panicked" not in text
+    shutil.rmtree(root, ignore_errors=True)  # the long synthetic audio is not kept
+    ok = clean and ms is not None and ms < CLOSE_LIMIT_MS and not finished and not outside
+    return ok, (
+        f"destroy of the controller with the analysis running: {ms} ms (limit {CLOSE_LIMIT_MS:.0f} ms), "
+        f"{len(finished)} round(s) finished before it (want 0: the analysis was still running), "
+        f"process rc={rc} without a panic: {clean}, {len(outside)} file(s) in the cache folder outside the documents folder"
+    )
+
+
+def close_run(label: str, extra: dict | None = None) -> tuple[int, list, str]:
+    rc, text, lines = host_run(
+        label, CLAP, ["close-busy", "--files", *CLOSE_FILES, "--lead-ms", "700"], f"cache-{label}", extra=extra
+    )
+    return rc, lines, text
+
+
+def stage_doc_close() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-close", False, "no host or no CLAP: run check.sh build first")
+    rc, lines, text = close_run("doc-close")
+    ok, evidence = check_close("doc-close", "cache-doc-close", rc, lines, text)
+    return pass_fail("doc-close", ok, evidence)
+
+
+def stage_doc_close_fault() -> bool:
+    """The fault run: the destroy waits for the job (the first version of M1b1: up to 20 s)."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-close-fault", False, "no host or no CLAP: run check.sh build first")
+    rc, lines, text = close_run("doc-close-fault", {"DS_ARA_CLOSE_FAULT": "wait"})
+    ok, evidence = check_close("doc-close-fault", "cache-doc-close-fault", rc, lines, text)
+    return pass_fail("doc-close-fault", not ok, f"the fault switch brought back the long wait and the check refused it: {evidence}")
 
 
 # ---- gate line 6: the service home is inside the cache folder, nothing else below the user's home
@@ -1687,12 +1894,16 @@ STAGES = {
     "doc-service-fault": stage_doc_service_fault,
     "doc-tracks": stage_doc_tracks,
     "doc-tracks-fault": stage_doc_tracks_fault,
+    "doc-rounds": stage_doc_rounds,
+    "doc-rounds-fault": stage_doc_rounds_fault,
     "doc-two": stage_doc_two,
     "doc-two-fault": stage_doc_two_fault,
     "doc-archive": stage_doc_archive,
     "doc-archive-fault": stage_doc_archive_fault,
     "doc-destroy": stage_doc_destroy,
     "doc-destroy-fault": stage_doc_destroy_fault,
+    "doc-close": stage_doc_close,
+    "doc-close-fault": stage_doc_close_fault,
     "doc-home": stage_doc_home,
     "doc-home-fault": stage_doc_home_fault,
     "conformance": stage_conformance,
@@ -1708,8 +1919,8 @@ STAGES = {
 ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
     "archive-paths-fault", "archive-restore-pathname",
-    "threads", "doc-service", "doc-service-fault", "doc-tracks", "doc-tracks-fault", "doc-two", "doc-two-fault",
-    "doc-archive", "doc-archive-fault", "doc-destroy", "doc-destroy-fault", "doc-home", "doc-home-fault",
+    "threads", "doc-service", "doc-service-fault", "doc-tracks", "doc-tracks-fault", "doc-rounds", "doc-rounds-fault", "doc-two", "doc-two-fault",
+    "doc-archive", "doc-archive-fault", "doc-destroy", "doc-destroy-fault", "doc-close", "doc-close-fault", "doc-home", "doc-home-fault",
     "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",
 ]

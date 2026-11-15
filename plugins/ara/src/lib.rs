@@ -216,6 +216,10 @@ struct DocShared {
     rounds: AtomicUsize,
     /// The controller is being destroyed: no new job starts.
     closing: AtomicBool,
+    /// The sources of the document (the worker maps the events of a round back to them).
+    members: Mutex<Vec<std::sync::Weak<SourceState>>>,
+    /// Sources whose notes changed in a later round: the host is told in `notifyModelUpdates`.
+    pending: Mutex<Vec<Arc<SourceState>>>,
 }
 
 impl DocShared {
@@ -232,6 +236,8 @@ impl DocShared {
             next_seq: AtomicUsize::new(0),
             rounds: AtomicUsize::new(0),
             closing: AtomicBool::new(false),
+            members: Mutex::new(Vec::new()),
+            pending: Mutex::new(Vec::new()),
         })
     }
 
@@ -323,13 +329,23 @@ fn session() -> &'static Session {
     })
 }
 
+/// The analysis rounds run in this process (the report names the number: requests that
+/// arrive close together are one round).
+static ROUNDS: AtomicUsize = AtomicUsize::new(0);
+
+/// How long the worker waits for another request before it starts a round (a DAW sets the
+/// plugin on one track after the other), and the longest it keeps collecting.
+const SETTLE_QUIET: std::time::Duration = std::time::Duration::from_millis(250);
+const SETTLE_MAX: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// The report row of the services made and dropped in this process (written before the
 /// last service row, so that row stays the last line).
 fn services_row() -> String {
     format!(
-        "{{\"event\":\"services\",\"made\":{},\"dropped\":{}}}",
+        "{{\"event\":\"services\",\"made\":{},\"dropped\":{},\"rounds\":{}}}",
         service::SERVICES_MADE.load(Ordering::SeqCst),
-        service::SERVICES_DROPPED.load(Ordering::SeqCst)
+        service::SERVICES_DROPPED.load(Ordering::SeqCst),
+        ROUNDS.load(Ordering::SeqCst)
     )
 }
 
@@ -344,6 +360,29 @@ fn groups(requested: &[Arc<SourceState>]) -> Vec<(Arc<DocShared>, Vec<Arc<Source
         }
     }
     out
+}
+
+/// The documents the worker can run a round for: every document whose requested sources
+/// all have their WAV (or failed), and every document that lost a source and has no
+/// request waiting for its audio.
+fn ready_documents(
+    requested: &[Arc<SourceState>],
+    stale: &[Arc<DocShared>],
+) -> Vec<(Arc<DocShared>, Vec<Arc<SourceState>>)> {
+    let mut ready: Vec<(Arc<DocShared>, Vec<Arc<SourceState>>)> = groups(requested)
+        .into_iter()
+        .filter(|(_, list)| {
+            list.iter()
+                .all(|s| s.wav.lock().map(|w| w.is_some()).unwrap_or(false) || s.failed.load(Ordering::SeqCst))
+        })
+        .collect();
+    for doc in stale {
+        let waiting = requested.iter().any(|s| Arc::ptr_eq(&s.doc, doc));
+        if !waiting {
+            ready.push((doc.clone(), Vec::new()));
+        }
+    }
+    ready
 }
 
 impl Session {
@@ -375,48 +414,79 @@ impl Session {
     }
 
     /// The worker loop. A document is ready when every source of it that asked for the
-    /// analysis has its WAV (or its read failed): then one round runs over those sources.
-    /// The ARA test host enables the samples access of one source after the other, so a
-    /// burst of requests is one round; a later request is another round, and the tracks of
-    /// the earlier ones stay in the project. Removals, restores and closes of a document
-    /// run on this thread in the order they arrive, so they never overlap a round.
+    /// analysis has its WAV (or its read failed); a document that lost a source is ready
+    /// at once. Ready documents wait for a short quiet time (a DAW adds the sources one
+    /// after the other, so eight requests are one round, not eight), then one round runs
+    /// over the document: ALL its tracks are analysed together. Removals, restores and
+    /// closes of a document run on this thread in the order they arrive, so they never
+    /// overlap a round.
     fn worker_loop(&'static self, rx: Receiver<Msg>) {
         let mut requested: Vec<Arc<SourceState>> = Vec::new();
+        let mut stale: Vec<Arc<DocShared>> = Vec::new();
         loop {
             match rx.recv() {
-                Ok(msg) => self.absorb(msg, &mut requested),
+                Ok(msg) => self.absorb(msg, &mut requested, &mut stale),
                 Err(_) => return,
             }
+            let mut settled = false;
             loop {
                 while let Ok(msg) = rx.try_recv() {
-                    self.absorb(msg, &mut requested);
+                    self.absorb(msg, &mut requested, &mut stale);
                 }
-                let ready: Vec<(Arc<DocShared>, Vec<Arc<SourceState>>)> = groups(&requested)
-                    .into_iter()
-                    .filter(|(_, list)| {
-                        list.iter().all(|s| {
-                            s.wav.lock().map(|w| w.is_some()).unwrap_or(false) || s.failed.load(Ordering::SeqCst)
-                        })
-                    })
-                    .collect();
+                let ready = ready_documents(&requested, &stale);
                 if ready.is_empty() {
                     break;
                 }
+                if !settled {
+                    if self.settle(&rx, &mut requested, &mut stale) {
+                        return;
+                    }
+                    settled = true;
+                    continue;
+                }
                 for (doc, list) in ready {
                     requested.retain(|s| !Arc::ptr_eq(&s.doc, &doc));
+                    stale.retain(|d| !Arc::ptr_eq(d, &doc));
                     let targets: Vec<Arc<SourceState>> = list
                         .into_iter()
                         .filter(|s| !s.has_events.load(Ordering::SeqCst) && !s.removed.load(Ordering::SeqCst))
                         .collect();
-                    if !targets.is_empty() && !doc.closing.load(Ordering::SeqCst) {
+                    if !doc.closing.load(Ordering::SeqCst) {
                         self.run_job(&doc, &targets);
                     }
                 }
+                settled = false;
             }
         }
     }
 
-    fn absorb(&'static self, msg: Msg, requested: &mut Vec<Arc<SourceState>>) {
+    /// Wait until no message came for [`SETTLE_QUIET`] (at most [`SETTLE_MAX`] in all).
+    /// True when the channel is closed.
+    fn settle(
+        &'static self,
+        rx: &Receiver<Msg>,
+        requested: &mut Vec<Arc<SourceState>>,
+        stale: &mut Vec<Arc<DocShared>>,
+    ) -> bool {
+        // the fault run: no settle time, every request starts a round of its own
+        if std::env::var("DS_ARA_SETTLE_FAULT").as_deref() == Ok("none") {
+            return false;
+        }
+        let deadline = std::time::Instant::now() + SETTLE_MAX;
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            match rx.recv_timeout(SETTLE_QUIET.min(left)) {
+                Ok(msg) => self.absorb(msg, requested, stale),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return false,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return true,
+            }
+        }
+    }
+
+    fn absorb(&'static self, msg: Msg, requested: &mut Vec<Arc<SourceState>>, stale: &mut Vec<Arc<DocShared>>) {
         match msg {
             Msg::Request(s) => {
                 if !requested.iter().any(|r| Arc::ptr_eq(r, &s)) {
@@ -427,18 +497,28 @@ impl Session {
             Msg::Remove { src, sources_left } => {
                 requested.retain(|r| !Arc::ptr_eq(r, &src));
                 self.remove_track(&src, sources_left);
+                // the tracks that are left are analysed together again
+                if !src.doc.closing.load(Ordering::SeqCst)
+                    && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("new-only")
+                    && !stale.iter().any(|d| Arc::ptr_eq(d, &src.doc))
+                {
+                    stale.push(src.doc.clone());
+                }
             }
             Msg::Restore { doc, id, tracks } => self.restore_project(&doc, id, tracks),
             Msg::Close { doc, ack } => {
                 requested.retain(|r| !Arc::ptr_eq(&r.doc, &doc));
+                stale.retain(|d| !Arc::ptr_eq(d, &doc));
                 self.close_document(&doc);
                 let _ = ack.send(());
             }
         }
     }
 
-    /// One analysis round of a document over `targets`, then the report rows.
+    /// One analysis round of a document over `targets` (the sources that asked; none after
+    /// a removal), then the report rows. Every track of the project is analysed.
     fn run_job(&'static self, doc: &Arc<DocShared>, targets: &[Arc<SourceState>]) {
+        let after_removal = targets.is_empty();
         // a source whose read failed has no audio: its analysis is complete without content
         let (usable, failed): (Vec<_>, Vec<_>) = targets
             .iter()
@@ -447,7 +527,7 @@ impl Session {
         for s in &failed {
             s.has_events.store(true, Ordering::SeqCst);
         }
-        if usable.is_empty() {
+        if usable.is_empty() && !after_removal {
             return;
         }
         let snaps: Vec<service::SourceSnapshot> = usable.iter().map(|s| s.snapshot()).collect();
@@ -465,21 +545,49 @@ impl Session {
                 return;
             }
         };
-        for (seq, notes) in &result.notes {
-            if let Some(s) = usable.iter().find(|s| s.seq == *seq) {
-                if let Ok(mut n) = s.notes.lock() {
-                    *n = notes.clone();
-                }
-                if let (Ok(mut t), Some(name)) = (s.track.lock(), result.track_of.get(seq)) {
-                    *t = Some(name.clone());
-                }
-                s.has_events.store(true, Ordering::SeqCst);
+        if result.analysed.is_empty() && after_removal {
+            if let Ok(mut m) = doc.events.lock() {
+                *m = result.events.clone();
             }
+            return; // nothing is left to analyse
+        }
+        // the notes of every source of the document; a source that was complete before and
+        // whose notes changed is told to the host in `notifyModelUpdates`
+        let members: Vec<Arc<SourceState>> = doc
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let mut changed: Vec<String> = Vec::new();
+        for (seq, notes) in &result.notes {
+            let Some(s) = members.iter().find(|s| s.seq == *seq) else {
+                continue;
+            };
+            let was_complete = s.has_events.load(Ordering::SeqCst);
+            let differs = s.notes.lock().map(|n| *n != *notes).unwrap_or(false);
+            if let Ok(mut n) = s.notes.lock() {
+                *n = notes.clone();
+            }
+            if let (Ok(mut t), Some(name)) = (s.track.lock(), result.track_of.get(seq)) {
+                *t = Some(name.clone());
+            }
+            if was_complete && differs && !s.removed.load(Ordering::SeqCst) {
+                changed.push(s.props().name);
+                if let Ok(mut p) = doc.pending.lock() {
+                    if !p.iter().any(|x| Arc::ptr_eq(x, s)) {
+                        p.push(s.clone());
+                    }
+                }
+            }
+        }
+        for s in &usable {
+            s.has_events.store(true, Ordering::SeqCst);
         }
         if let Ok(mut m) = doc.events.lock() {
             *m = result.events.clone();
         }
         let round = doc.rounds.fetch_add(1, Ordering::SeqCst) + 1;
+        ROUNDS.fetch_add(1, Ordering::SeqCst);
         let counts: serde_json::Map<String, Value> = result
             .decode_counts
             .iter()
@@ -498,7 +606,10 @@ impl Session {
                 "doc": id,
                 "folder": folder.display().to_string(),
                 "round": round,
+                "reason": if after_removal { "removal" } else { "request" },
                 "added": result.added,
+                "analysed": result.analysed,
+                "changed_notes": changed,
                 "project_tracks": result.project_tracks,
                 "earlier_changed": result.earlier_changed,
                 "decodes": result.decode_counts.values().sum::<usize>(),
@@ -777,8 +888,17 @@ unsafe extern "C" fn dc_destroyDocumentController(controllerRef: ARADocumentCont
         // messages, so every removal before this call is done first). The worker lives for
         // the process.
         let s = session();
+        // no reader of this controller may run once the host takes the controller away
+        let sources: Vec<Arc<SourceState>> = ctl.sources.lock().map(|l| l.clone()).unwrap_or_default();
+        for src in &sources {
+            stop_worker(src);
+        }
+        let started = std::time::Instant::now();
+        let long_wait = std::env::var("DS_ARA_CLOSE_FAULT").as_deref() == Ok("wait");
         ctl.doc.closing.store(true, Ordering::SeqCst);
-        ctl.doc.canceller.cancel();
+        if !long_wait {
+            ctl.doc.canceller.cancel();
+        }
         let (ack, done) = channel::<()>();
         if send(
             s,
@@ -787,9 +907,17 @@ unsafe extern "C" fn dc_destroyDocumentController(controllerRef: ARADocumentCont
                 ack,
             },
         ) {
-            // bounded: a host must never hang on a stuck job
-            let _ = done.recv_timeout(std::time::Duration::from_secs(20));
+            // bounded and short, on the host's main thread: the worker owns the document
+            // through shared ownership and finishes the save (or drops it) on its own. The
+            // fault run brings back the long wait of the first version.
+            let limit = if long_wait {
+                std::time::Duration::from_secs(20)
+            } else {
+                std::time::Duration::from_millis(500).saturating_sub(started.elapsed())
+            };
+            let _ = done.recv_timeout(limit);
         } else {
+            // no worker: nothing runs, the document closes here
             ctl.doc.lock_svc().shutdown();
             s.write_out();
         }
@@ -820,8 +948,48 @@ unsafe extern "C" fn dc_beginEditing(_c: ARADocumentControllerRef) {
 unsafe extern "C" fn dc_endEditing(_c: ARADocumentControllerRef) {
     guard("endEditing", (), move || {})
 }
-unsafe extern "C" fn dc_notifyModelUpdates(_c: ARADocumentControllerRef) {
-    guard("notifyModelUpdates", (), move || {})
+/// The host asks for the pending model updates (the only call in which the plugin may call
+/// back into the host's model update controller): every source whose notes changed in a
+/// later round is reported as changed, so the host reads the notes again.
+unsafe extern "C" fn dc_notifyModelUpdates(c: ARADocumentControllerRef) {
+    guard("notifyModelUpdates", (), move || {
+        let ctl = controller_of(c);
+        let pending: Vec<Arc<SourceState>> = match ctl.doc.pending.lock() {
+            Ok(mut p) => std::mem::take(&mut *p),
+            Err(_) => return,
+        };
+        if pending.is_empty() || ctl.host.is_null() {
+            return;
+        }
+        let host = ctl.host;
+        // the optional interface: the struct of the host must reach it, and carry a function
+        let declared = std::ptr::addr_of!((*host).structSize).read_unaligned();
+        let end = std::mem::offset_of!(ARADocumentControllerHostInstance, modelUpdateControllerInterface)
+            + std::mem::size_of::<usize>();
+        if declared < end {
+            return;
+        }
+        let iface = std::ptr::addr_of!((*host).modelUpdateControllerInterface).read_unaligned();
+        let host_ref = std::ptr::addr_of!((*host).modelUpdateControllerHostRef).read_unaligned();
+        if iface.is_null() {
+            return;
+        }
+        let Some(changed) = (*iface).notifyAudioSourceContentChanged else {
+            return;
+        };
+        for s in pending {
+            if s.removed.load(Ordering::SeqCst) {
+                continue;
+            }
+            // the notes changed, the signal did not: a null range is the whole source
+            changed(
+                host_ref,
+                s.host_ref.0,
+                std::ptr::null(),
+                kARAContentUpdateSignalScopeRemainsUnchanged as ARAContentUpdateFlags,
+            );
+        }
+    })
 }
 unsafe extern "C" fn dc_beginRestoringDocumentFromArchive(
     _c: ARADocumentControllerRef,
@@ -1107,6 +1275,9 @@ unsafe extern "C" fn dc_createAudioSource(
                 requested: AtomicBool::new(false),
             });
             list.push(src.clone());
+            if let Ok(mut m) = ctl.doc.members.lock() {
+                m.push(Arc::downgrade(&src));
+            }
             src
         };
         Box::into_raw(Box::new(SyncPtr(src))) as ARAAudioSourceRef
