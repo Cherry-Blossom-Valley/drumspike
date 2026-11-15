@@ -1,0 +1,89 @@
+"""#518: the page follows the host transport at any time (DAW plugin P3).
+
+In a DAW the user starts and stops playback in the DAW: the page must follow the host
+transport with no Play in the page. The same stub as in test_host_mode.py records the
+calls and pushes playhead messages with send(m); here nothing ever calls play(), so any
+following is the page's own.
+
+On main these tests fail: the page registers for host positions only inside its own Play
+(appPlay), so with no Play nothing follows (the red proof is in the PR)."""
+import pytest
+
+from app_support import open_project
+
+STUB = """() => {
+  B.hostMode = true;
+  B.hostTransport = {
+    calls: [],
+    play: function (position, speed) { this.calls.push(["play", position, speed === undefined ? null : speed]); return Promise.resolve(); },
+    stop: function (position) { this.calls.push(["stop", position]); return Promise.resolve(); },
+    locate: function (position) { this.calls.push(["locate", position]); return Promise.resolve(); },
+    send: function (m) { if (this.onPosition) this.onPosition(m); },
+  };
+  return B.hostMode;
+}"""
+
+
+def set_host_mode(app):
+    assert app.evaluate(STUB) is True
+
+
+def send(app, pos, playing):
+    app.evaluate("([pos, playing]) => B.hostTransport.send({ sid: S.sid, epoch: (B.hostTransport._ep = (B.hostTransport._ep || 0) + 1), t_ns: performance.now() * 1e6, pos, playing })", [pos, playing])
+
+
+@pytest.fixture(autouse=True)
+def canvas_2d_lanes(app):
+    """As in test_playback.py: these tests measure the page and the calls, not the WebGL2 lanes."""
+    assert app.evaluate("() => setLanesGL(false)") is False
+    yield
+    app.evaluate("() => setLanesGL(true)")
+
+
+def test_the_page_follows_the_host_playing_with_no_play_in_the_page(app, make_project):
+    open_project(app, make_project(seconds=30.0))
+    set_host_mode(app)
+    # the listener is the page's own: bound without any Play (the plugin shell may inject the transport late)
+    app.wait_for_function("() => !!(B.hostTransport && B.hostTransport.onPosition)")
+    send(app, 3.0, True)
+    app.wait_for_function("() => S.playing === true")
+    assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "⏸"
+    # the playhead and the position line follow the positions the host sends
+    app.wait_for_function("() => PH.v > 3.0 && PH.v < 4.0")
+    assert app.locator("#timeDisplay").inner_text().startswith("3."), app.locator("#timeDisplay").inner_text()
+    send(app, 4.0, True)
+    app.wait_for_function("() => PH.v > 4.0 && PH.v < 5.0")
+    assert app.locator("#timeDisplay").inner_text().startswith("4."), app.locator("#timeDisplay").inner_text()
+    # the host plays: the page asked the host for nothing
+    assert app.evaluate("() => B.hostTransport.calls") == [], app.evaluate("() => B.hostTransport.calls")
+
+
+def test_the_host_stopping_shows_the_stopped_state_at_its_position(app, make_project):
+    open_project(app, make_project(seconds=30.0))
+    set_host_mode(app)
+    app.wait_for_function("() => !!(B.hostTransport && B.hostTransport.onPosition)")
+    send(app, 3.0, True)
+    app.wait_for_function("() => S.playing === true")
+    n = app.evaluate("() => B.hostTransport.calls.length")
+    send(app, 5.25, False)
+    app.wait_for_function("() => S.playing === false")
+    assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "▶"
+    assert app.evaluate("() => PH.v") == pytest.approx(5.25, abs=1e-9)
+    assert app.locator("#timeDisplay").inner_text().startswith("5.2"), app.locator("#timeDisplay").inner_text()
+    # the page asked the host for nothing: the DAW stopped, not the page
+    assert app.evaluate("() => B.hostTransport.calls") == [], app.evaluate("() => B.hostTransport.calls")
+    assert n == 0
+
+
+def test_a_locate_in_the_daw_moves_the_playhead_while_stopped(app, make_project):
+    open_project(app, make_project(seconds=30.0))
+    set_host_mode(app)
+    app.wait_for_function("() => !!(B.hostTransport && B.hostTransport.onPosition)")
+    send(app, 2.0, False)   # the host is stopped at 2 s
+    app.wait_for_function("() => !S.playing && Math.abs(PH.v - 2.0) < 1e-9")
+    # a locate in the DAW: another stopped position moves the playhead and the position line
+    send(app, 8.5, False)
+    app.wait_for_function("() => Math.abs(PH.v - 8.5) < 1e-9")
+    assert app.locator("#timeDisplay").inner_text().startswith("8.5"), app.locator("#timeDisplay").inner_text()
+    # and the page asked the host for nothing (no stop, no locate, no play)
+    assert app.evaluate("() => B.hostTransport.calls") == [], app.evaluate("() => B.hostTransport.calls")

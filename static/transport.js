@@ -43,7 +43,19 @@ function appSlew(m) {   // #471: the shared slew/anchor of one sample (4 Hz play
   if (typeof m.speed === "number" && m.speed > 0) AC.speed = m.speed;
 }
 function appOnPlayhead(m) {
-  if (!AC.active || !m || m.sid !== S.sid) return;
+  if (!m) return;
+  if (!AC.active) {   // #518: the DAW starts playback in the DAW, not in the plugin window: the page follows
+    if (!hostMode() || m.sid !== S.sid || AC.starting) return;   // the host's guest, or a Play of the page is starting (its own branch takes over)
+    Object.assign(AC, { active: true, off: Infinity, minEpoch: 0, pending: null, seeking: false, running: false, errI: 0,
+      epoch: null, pos: m.pos, at: performance.now(), drawn: m.pos, stopping: false, last: null, sent: null, speed: 1 });
+    if (m.playing && !S.playing) {   // the host plays: the page shows the playing state and follows, with no play call
+      PH.user = false;   // a host message is not a user seek (loadProject and the like leave PH.user set)
+      S.playing = true; S.followHold = false; S.followResumeAt = null; $("#playBtn").textContent = "⏸";
+      showSpeed(AC.speed);
+      tick();
+    }
+  }
+  if (m.sid !== S.sid) return;
   if (m.error && !m.end) { setMsg(`audio: ${m.error} (trying again)`); AC.running = false; return; }
   if (m.epoch < AC.minEpoch || AC.seeking || AC.pending !== null) return;   // older than our last seek
   const metered = !!m.meters;   // #471: the meter message (25 Hz) carries the playhead fields too
@@ -53,7 +65,24 @@ function appOnPlayhead(m) {
   if (metered) return;   // the meter message has no underruns, reopens or end fields
   AC.last = m;
   AC.underruns = m.underruns; AC.reopens = m.reopens;
+  if (hostMode() && !m.playing) {   // #518: the DAW stopped (or located while stopped): the host's position is the truth
+    if (S.playing) { S.playing = false; $("#playBtn").textContent = "▶"; showSpeed(1); cpStop(); spLeave("pause"); }
+    AC.pos = m.pos; AC.errI = 0;   // a stopped message never slews: the next play re-anchors hard anyway
+    PH.v = Math.max(0, Math.min(m.pos, maxDur()));
+    invalidate(F.HEAD); updateStatus();
+  }
   if (m.end && S.playing && !AC.starting && !AC.stopping) pause();   // the transport ended on its own (project closed)
+}
+/* #518: the one host listener. The plugin shell may inject the host transport before or after the page
+   loads, so the registration re-runs until it is bound (app.js boot calls this once and then on a slow
+   timer while the mode is on; appPlay calls it before its play). The stub of the tests records the calls
+   and pushes with send(m); the page's handler is appOnPlayhead. */
+function appHostFollow() {
+  const host = typeof B !== "undefined" && B.hostTransport;
+  if (!host) return false;
+  if (!host._appFollow) host._appFollow = m => appOnPlayhead(m);
+  if (host.onPosition !== host._appFollow) host.onPosition = host._appFollow;
+  return true;
 }
 /* Clock sync: the channel may deliver every message late (in the app, by about 25 ms), so the min-delay offset
    is wrong by that delay. A command answers within a millisecond: transport_status carries t_ns, and the
@@ -110,7 +139,7 @@ async function appPlay(speed, returnKey) {   // speed: 0.5 is half speed (P3-20b
     if (hostMode()) {   // #509: the host plays: the page asks the host transport and follows the positions it sends
       const host = B.hostTransport;
       if (!host || typeof host.play !== "function") throw new Error("the host transport is missing");
-      host.onPosition = m => { if (tok === AC.tok) appOnPlayhead(m); };   // the host pushes {sid, epoch, t_ns, pos, playing} like the app channel
+      appHostFollow();   // #518: the listener is the page's own, registered once (not per play)
       await host.play(pos0, speed);
       AC.running = true;   // the extrapolation runs until the first position of the host re-anchors it
       S.playing = true; S.followHold = false; S.followResumeAt = null; $("#playBtn").textContent = "⏸";
