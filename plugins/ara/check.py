@@ -423,7 +423,7 @@ def stage_identity(label: str, bundle: Path) -> bool:
     """Gate items 2 and 5 on one bundle: the four-track session, byte compare, notes."""
     if not HOST.exists() or not bundle.exists():
         return pass_fail(f"identity-{label}", False, f"no host or no bundle at {bundle}")
-    rc, text, lines = host_run(f"identity-{label}", bundle, ["session", "--files", *FILES], f"cache-identity-{label}")
+    rc, text, lines = host_run(f"identity-{label}", bundle, ["session", "--files", *[str(FIXTURES / f) for f in FILES]], f"cache-identity-{label}")
     if rc != 0:
         return pass_fail(f"identity-{label}", False, f"ara-host session rc={rc} (out/host-identity-{label}.log)")
     ok, events = plugin_service_row(f"identity-{label}")
@@ -501,7 +501,7 @@ def stage_archive() -> bool:
         return pass_fail("archive", False, "no host or no CLAP: run check.sh build first")
     archive = OUT / "session.araarchive"
     rc, text, lines = host_run(
-        "archive-store", CLAP, ["store", "--files", *FILES, "--archive", str(archive)], "cache-archive-store"
+        "archive-store", CLAP, ["store", "--files", *[str(FIXTURES / f) for f in FILES], "--archive", str(archive)], "cache-archive-store"
     )
     if rc != 0 or not archive.exists():
         return pass_fail("archive-store", False, f"ara-host store rc={rc} (out/host-archive-store.log)")
@@ -509,11 +509,11 @@ def stage_archive() -> bool:
     if not ok_store:
         return False
     want = (OUT / "events-reference.json").read_bytes()
-    ok = compare_events("archive-store", events_store, want) and ok
+    ok = compare_events("archive-store", events_store, want)
 
     # the restore in a NEW process: no analysis, no decode, the notes from the blob
     rc, text, lines = host_run(
-        "archive-restore", CLAP, ["restore", "--files", *FILES, "--archive", str(archive)], "cache-archive-restore"
+        "archive-restore", CLAP, ["restore", "--files", *[str(FIXTURES / f) for f in FILES], "--archive", str(archive)], "cache-archive-restore"
     )
     if rc != 0:
         return pass_fail("archive-restore", False, f"ara-host restore rc={rc} (out/host-archive-restore.log)")
@@ -542,7 +542,7 @@ def stage_archive() -> bool:
         f"the fixture carries version {blob.get('version')}",
     )
     rc, text, lines = host_run(
-        "archive-fixture", CLAP, ["restore", "--files", *FILES, "--archive", str(ARCHIVE_FIXTURE)], "cache-archive-fixture"
+        "archive-fixture", CLAP, ["restore", "--files", *[str(FIXTURES / f) for f in FILES], "--archive", str(ARCHIVE_FIXTURE)], "cache-archive-fixture"
     )
     if rc != 0:
         return pass_fail("archive-fixture", False, f"the fixture restore rc={rc} (out/host-archive-fixture.log)")
@@ -558,7 +558,7 @@ def stage_threads() -> bool:
     analysis inside `process`) makes the check fail."""
     if not HOST.exists() or not CLAP.exists():
         return pass_fail("threads", False, "no host or no CLAP: run check.sh build first")
-    rc, text, lines = host_run("blocks", CLAP, ["blocks", "--files", *FILES, "--frames", "512"], "cache-blocks")
+    rc, text, lines = host_run("blocks", CLAP, ["blocks", "--files", *[str(FIXTURES / f) for f in FILES], "--frames", "512"], "cache-blocks")
     report = next((r for r in reversed(lines) if r.get("event") == "blocks"), {})
     ok = pass_fail(
         "threads",
@@ -567,7 +567,7 @@ def stage_threads() -> bool:
         f"worst {report.get('worst_block_us')}us of {report.get('budget_us')}us per block",
     )
     rc, text, lines = host_run(
-        "blocks-fault", CLAP, ["blocks", "--files", *FILES, "--frames", "512"], "cache-blocks-fault", fault=True
+        "blocks-fault", CLAP, ["blocks", "--files", *[str(FIXTURES / f) for f in FILES], "--frames", "512"], "cache-blocks-fault", fault=True
     )
     report = next((r for r in reversed(lines) if r.get("event") == "blocks"), {})
     ok = pass_fail(
@@ -777,7 +777,7 @@ def stage_make_fixture() -> bool:
         return pass_fail("make-fixture", False, "no host or no CLAP: run check.sh build first")
     archive = OUT / "fixture-store.araarchive"
     rc, text, lines = host_run(
-        "fixture-store", CLAP, ["store", "--files", *FILES, "--archive", str(archive)], "cache-fixture-store"
+        "fixture-store", CLAP, ["store", "--files", *[str(FIXTURES / f) for f in FILES], "--archive", str(archive)], "cache-fixture-store"
     )
     if rc != 0 or not archive.exists():
         return pass_fail("make-fixture", False, f"ara-host store rc={rc} (out/host-fixture-store.log)")

@@ -615,11 +615,17 @@ type RegionsOf<'a> = &'a dyn Fn(&HostState, usize) -> Vec<(f64, f64, f64)>;
 type ModeStep<'a> = &'a dyn Fn(Inst, &HostState, &[(ARAAudioSourceRef, ARAAudioModificationRef)]) -> Result<(), String>;
 
 /// Build the document of `files` and run `step` on it; every mode shares this.
-fn with_document(bundle: &str, files: &[String], regions_of: RegionsOf<'_>, step: ModeStep<'_>) -> Result<(), String> {
+fn with_document(
+    bundle: &str,
+    files: &[String],
+    regions_of: RegionsOf<'_>,
+    loaded: Vec<u8>,
+    step: ModeStep<'_>,
+) -> Result<(), String> {
     let state = Box::into_raw(Box::new(HostState {
         sources: Vec::new(),
         writers: Vec::new(),
-        loaded: Vec::new(),
+        loaded,
     }));
     unsafe {
         let loaded = load(bundle)?;
@@ -857,9 +863,13 @@ fn run_session(bundle: &str, files: &[String]) -> i32 {
         eprintln!("session: no --files");
         return 64;
     }
-    let rc = with_document(bundle, files, &full_regions, &|inst, state, pairs| {
-        unsafe { analyse(inst, pairs)? };
-        unsafe { print_notes(inst, state, pairs) };
+    let rc = with_document(bundle, files, &full_regions, Vec::new(), &|inst, state, pairs| {
+        unsafe {
+            analyse(inst, pairs)?;
+        }
+        unsafe {
+            print_notes(inst, state, pairs);
+        }
         Ok(())
     });
     match rc {
@@ -892,9 +902,13 @@ fn run_regions(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         return 64;
     }
     let regions_of = |_state: &HostState, i: usize| if i == 0 { specs.clone() } else { Vec::new() };
-    let rc = with_document(bundle, files, &regions_of, &|inst, state, pairs| {
-        unsafe { analyse(inst, pairs)? };
-        unsafe { print_notes(inst, state, pairs) };
+    let rc = with_document(bundle, files, &regions_of, Vec::new(), &|inst, state, pairs| {
+        unsafe {
+            analyse(inst, pairs)?;
+        }
+        unsafe {
+            print_notes(inst, state, pairs);
+        }
         Ok(())
     });
     match rc {
@@ -912,7 +926,7 @@ fn run_store(bundle: &str, files: &[String], archive: Option<String>) -> i32 {
         eprintln!("store: no --archive");
         return 64;
     };
-    let rc = with_document(bundle, files, &full_regions, &|inst, state, pairs| unsafe {
+    let rc = with_document(bundle, files, &full_regions, Vec::new(), &|inst, state, pairs| unsafe {
         analyse(inst, pairs)?;
         print_notes(inst, state, pairs);
         // one writer; the plugin writes its state blob through the archive controller
@@ -962,21 +976,28 @@ fn run_restore(bundle: &str, files: &[String], archive: Option<String>) -> i32 {
         eprintln!("restore: no --files");
         return 64;
     }
-    let rc = with_document(bundle, files, &full_regions, &|inst, state, pairs| unsafe {
-        let dc = iface_of(inst);
-        let dc_ref = dc_ref_of(inst);
-        // the loaded archive feeds the readers; no request, no analysis, no decode
-        let ok = (dc.restoreObjectsFromArchive.expect("restoreObjectsFromArchive"))(
-            dc_ref,
-            0 as ARAArchiveReaderHostRef,
-            std::ptr::null(),
-        );
-        if ok == 0 {
-            return Err("restoreObjectsFromArchive refused".into());
-        }
-        print_notes(inst, state, pairs);
-        Ok(())
-    });
+    let rc = with_document(
+        bundle,
+        files,
+        &full_regions,
+        bytes.clone(),
+        &|inst, state, pairs| unsafe {
+            let dc = iface_of(inst);
+            let dc_ref = dc_ref_of(inst);
+            // the loaded archive reaches the plugin through the archiving controller
+            // callbacks, which read the host state; no request, no analysis, no decode
+            let ok = (dc.restoreObjectsFromArchive.expect("restoreObjectsFromArchive"))(
+                dc_ref,
+                0 as ARAArchiveReaderHostRef,
+                std::ptr::null(),
+            );
+            if ok == 0 {
+                return Err("restoreObjectsFromArchive refused".into());
+            }
+            print_notes(inst, state, pairs);
+            Ok(())
+        },
+    );
     match rc {
         Ok(()) => {
             let _ = bytes;
@@ -1001,7 +1022,10 @@ fn run_blocks(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         .unwrap_or(FRAMES);
     let max_blocks = args_value(rest, "--blocks")
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(200_000);
+        // the event file is the normal end of the loop (the report of the finished
+        // analysis); the cap is only the belt: the loop runs far faster than real time,
+        // so a cap in blocks would cut the run before the analysis is done
+        .unwrap_or(20_000_000);
     let wait_file = std::env::var("DS_ARA_OUT").ok().filter(|s| !s.is_empty());
 
     let state = Box::into_raw(Box::new(HostState {
@@ -1101,6 +1125,8 @@ fn run_blocks(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             .map(std::path::Path::new)
             .map(|p| p.exists())
             .unwrap_or(true);
+        // the wall-clock bound: a hung analysis must end the loop with rc 2, not spin
+        let deadline = Instant::now() + Duration::from_secs(120);
         while blocks < max_blocks {
             let process = clap_process {
                 steady_time: blocks as i64,
@@ -1129,6 +1155,9 @@ fn run_blocks(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     break;
                 }
             } else if blocks >= 4096 {
+                break;
+            }
+            if Instant::now() > deadline {
                 break;
             }
         }
