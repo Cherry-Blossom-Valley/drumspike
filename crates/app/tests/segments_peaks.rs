@@ -95,6 +95,13 @@ fn project_segments(root: &std::path::Path, project_name: &str, tracks: &[SegSpe
     p.dir
 }
 
+/// Sets the file's mtime to `UNIX_EPOCH + secs` (sub-second, for the whole-second key test).
+fn set_mtime(path: &std::path::Path, secs: f64) {
+    let f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    f.set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(secs)))
+        .unwrap();
+}
+
 fn open(svc: &Service, dir: &std::path::Path) -> String {
     svc.project_open(&dir.display().to_string()).unwrap()["sid"]
         .as_str()
@@ -276,6 +283,88 @@ fn a_changed_segment_rebuilds_the_peaks() {
     assert_ne!(after_move, after_file, "a re-filed segment rebuilds the peaks");
 }
 
+/// Gate (also in this ticket, #531): a changed offset alone and a changed length alone
+/// are each another peak key — the next peak build gives the new timeline.
+#[test]
+fn a_changed_offset_or_length_alone_rebuilds_the_peaks() {
+    let root = tmp("p6_stale_off_len");
+    let (xa, xb) = (kick_signal(&ONSETS, 2.0, SR), kick_signal(&[0.5, 1.0], 1.5, SR));
+    let dur_a = xa.len() as f64 / f64::from(SR);
+    let dir = project_segments(
+        &root,
+        "Seg",
+        &[SegSpec::segmented(
+            "s",
+            "kick",
+            vec![xa, xb.clone()],
+            vec![(0.0, 0.0, dur_a), (3.0, 0.0, 1.0)],
+        )],
+    );
+    let svc = service_dsp();
+    let sid = open(&svc, &dir);
+    let _ = smallest_level(&svc, &sid, "s");
+    let before = peaks_bin(&dir, "s");
+    svc.project_close(&sid, true).unwrap();
+
+    // the offset alone changes: the second segment plays another part of its file
+    let mut p = load_project(&dir).unwrap();
+    p.doc.track_mut("s").unwrap().segments.as_mut().unwrap()[1].offset = 0.25;
+    save_project(&mut p).unwrap();
+    let sid2 = open(&svc, &dir);
+    let _ = smallest_level(&svc, &sid2, "s");
+    let after_offset = peaks_bin(&dir, "s");
+    assert_ne!(before, after_offset, "a changed offset alone rebuilds the peaks");
+    svc.project_close(&sid2, true).unwrap();
+
+    // the length alone changes: the second segment is shorter
+    let mut p = load_project(&dir).unwrap();
+    p.doc.track_mut("s").unwrap().segments.as_mut().unwrap()[1].length = 0.5;
+    save_project(&mut p).unwrap();
+    let sid3 = open(&svc, &dir);
+    let _ = smallest_level(&svc, &sid3, "s");
+    let after_length = peaks_bin(&dir, "s");
+    assert_ne!(after_offset, after_length, "a changed length alone rebuilds the peaks");
+    let _ = xb;
+}
+
+/// Gate (also in this ticket, #531): the peak key of a segmented track reads the file time
+/// in full, not whole seconds — a file touched within one second is another key, like the
+/// timeline cache's key. (A replaced file is caught by the source record's head hash, so
+/// the key is checked on a same-content touch, via the written `key.json`.)
+#[test]
+fn a_file_touched_within_one_second_is_another_peak_key() {
+    let root = tmp("p6_mtime");
+    let (xa, xb) = (kick_signal(&ONSETS, 2.0, SR), kick_signal(&[0.5], 1.5, SR));
+    let dur_a = xa.len() as f64 / f64::from(SR);
+    let dir = project_segments(
+        &root,
+        "Seg",
+        &[SegSpec::segmented(
+            "s",
+            "kick",
+            vec![xa, xb],
+            vec![(0.0, 0.0, dur_a), (3.0, 0.0, 1.5)],
+        )],
+    );
+    // the same content and a mtime within one second: only the full time tells them apart
+    let bwav = root.join("daw").join("s_1.wav");
+    set_mtime(&bwav, 1_000_000.4);
+    let svc = service_dsp();
+    let sid = open(&svc, &dir);
+    let _ = smallest_level(&svc, &sid, "s");
+    let key1 = std::fs::read_to_string(dir.join("Analysis").join("s").join("key.json")).unwrap();
+    svc.project_close(&sid, true).unwrap();
+
+    set_mtime(&bwav, 1_000_000.7);
+    let sid2 = open(&svc, &dir);
+    let _ = smallest_level(&svc, &sid2, "s");
+    let key2 = std::fs::read_to_string(dir.join("Analysis").join("s").join("key.json")).unwrap();
+    assert_ne!(
+        key1, key2,
+        "a file touched within one second is another peak key (the key reads the full mtime)"
+    );
+}
+
 /// The segmented fixture of the reader table: a project with a plain track `k` and a
 /// segmented track `s` (two segments of one file with a gap) that carries a layer and a
 /// sampler calibration, so every reader that would touch their audio reaches its source
@@ -328,18 +417,6 @@ fn assert_not_available(row: &str, e: drumspike_app::AppError) {
 fn the_readers_without_a_timeline_answer_not_available() {
     let (svc, sid, _dir) = segmented_with_extras();
     let mut checked = 0usize;
-
-    // the sample window (the zoomed sample view)
-    checked += 1;
-    assert_not_available("sample window", svc.samples_window(&sid, "s", 0, 128).unwrap_err());
-
-    // an edit with a snap (the snap reads the audio)
-    checked += 1;
-    assert_not_available(
-        "edit with snap",
-        svc.events_edit(&sid, "s", &[json!({"op": "add", "t": 0.5, "snap": true})])
-            .unwrap_err(),
-    );
 
     // a follower of the segmented track derives its hits from the track's audio
     checked += 1;
@@ -401,17 +478,11 @@ fn the_readers_without_a_timeline_answer_not_available() {
             .unwrap_err(),
     );
 
-    // the role re-pick skips (a clear `reanalyzed: false`, no error, no 409)
-    checked += 1;
-    let role = svc.track_set_role(&sid, "s", "snare", None, None, None, None).unwrap();
-    assert_eq!(
-        role["reanalyzed"],
-        json!(false),
-        "the re-pick is skipped, not failed: {role}"
-    );
+    // the role re-pick reads the timeline now (P6a, `segments_timeline.rs`); the sample
+    // window and an edit with snap moved there too
 
     println!("checked {checked} readers without a timeline answer");
-    assert!(checked >= 13, "the test checked {checked} readers and fails on 0");
+    assert!(checked >= 10, "the test checked {checked} readers and fails on 0");
 }
 
 /// Gate 4 (timeline rows): the velocity recompute reads the timeline — a hit of a segment

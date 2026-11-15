@@ -243,14 +243,10 @@ pub struct PeakRequest {
 fn segments_cache_key(segs: &[SegmentAudio]) -> CacheKey {
     let mut text = String::new();
     for s in segs {
+        // the full mtime, not whole seconds: a file replaced within one second must be
+        // another key, like the timeline cache's key (#531)
         let (size, mtime) = match std::fs::metadata(&s.path) {
-            Ok(m) => (
-                m.len(),
-                m.modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs()),
-            ),
+            Ok(m) => (m.len(), m.modified().ok()),
             Err(_) => (0, None),
         };
         text.push_str(&format!(
@@ -673,6 +669,37 @@ impl Media {
         out.extend_from_slice(&(s as u32).to_le_bytes());
         out.extend_from_slice(&info.sample_rate.to_le_bytes());
         out.extend_from_slice(&encode_samples(WavFormat::Float32, &x));
+        Ok(out)
+    }
+
+    /// The bytes of `samples_window` for a segmented track's timeline (P6a): the same shape
+    /// as [`Media::window_bytes`] — `u32 start`, `u32 sample rate`, then the mono samples
+    /// `[start, end)` as f32. The timeline is assembled once and cached; a window inside a
+    /// segment holds exactly that part of the file's samples, a window in a gap is silence,
+    /// a window across an edge the file samples up to the edge and silence after it.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`decode_timeline_cached`] (a segment file that cannot be read, or
+    /// segments of different sample rates).
+    pub fn window_bytes_timeline(
+        &self,
+        segs: &[SegmentAudio],
+        mix: MixMode,
+        start: i64,
+        end: i64,
+        max: i64,
+    ) -> Result<Vec<u8>, AppError> {
+        let d = self.decode_timeline_cached(segs, mix)?;
+        let len = d.samples.len() as i64;
+        let start = start.max(0);
+        let count = (end - start).clamp(0, max.max(0));
+        let (s, e) = (start.min(len) as usize, (start + count).min(len) as usize);
+        let x = &d.samples[s..e];
+        let mut out = Vec::with_capacity(8 + 4 * x.len());
+        out.extend_from_slice(&(s as u32).to_le_bytes());
+        out.extend_from_slice(&d.sr.to_le_bytes());
+        out.extend_from_slice(&encode_samples(WavFormat::Float32, x));
         Ok(out)
     }
 
