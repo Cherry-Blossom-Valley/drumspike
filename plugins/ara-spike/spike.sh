@@ -89,7 +89,9 @@ deps() {
 
 build() {
   # the test host of the ARA examples -> build-examples/bin/Debug/ARATestHost
-  cmake -S $DEPS/ARA_SDK/ARA_Examples -B $DEPS/build-examples \
+  # XCODE_VERSION/SDKROOT also as env: SMTG_DetectPlatform.cmake probes xcodebuild
+  # unless the env var is set, and this host has only the command line tools, no Xcode.
+  SDKROOT=$SDK XCODE_VERSION=16.0 cmake -S $DEPS/ARA_SDK/ARA_Examples -B $DEPS/build-examples \
     -DARA_SETUP_DEBUGGING=OFF -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_OSX_ARCHITECTURES=$ARCH -DCMAKE_OSX_SYSROOT=$SDK -DXCODE_VERSION=16.0 || return 1
   SDKROOT=$SDK XCODE_VERSION=16.0 cmake --build $DEPS/build-examples --config Debug --target ARATestHost --parallel || return 1

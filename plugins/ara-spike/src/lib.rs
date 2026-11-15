@@ -58,7 +58,9 @@ static FACTORY: SyncPtr<ARAFactory> = SyncPtr(ARAFactory {
 });
 
 unsafe extern "C" fn ara_init(config: *const ARAInterfaceConfiguration) {
-    log(&format!("{{\"event\":\"ara_init\",\"api_generation\":{}}}", (*config).desiredApiGeneration));
+    // the ARA interface structs are packed: copy the field out, never reference it
+    let api_generation = (*config).desiredApiGeneration;
+    log(&format!("{{\"event\":\"ara_init\",\"api_generation\":{}}}", api_generation));
 }
 unsafe extern "C" fn ara_uninit() {
     log("{\"event\":\"ara_uninit\"}");
