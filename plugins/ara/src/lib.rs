@@ -1549,33 +1549,24 @@ static PLUGIN_FACTORY: clap_plugin_factory = clap_plugin_factory {
     create_plugin: Some(f_create),
 };
 
-/// The CLAP entry in the layout of the CLAP 1.x spec (`clap/entry.h`). `clap-sys` 0.5.0
-/// ships a draft `clap_plugin_entry` (no name/vendor/... strings, `init` without the
-/// factory id, the function pointers at the wrong offsets), so the struct is defined
-/// here; the export must carry it so that any spec-conforming host can load the bundle.
+/// The CLAP entry of the CLAP 1.x spec (`clap/entry.h`): the version, then `init`,
+/// `deinit` and `get_factory`. No name/vendor/... strings: the spec has none - not in
+/// clap-sys 0.5.0, not in the CLAP 1.1.9 headers, not on free-audio/clap main. A draft
+/// with strings sat here and sent every spec-conforming host (clap-validator, the
+/// wrapped VST3, the ARATestHost) into a string constant: SIGSEGV before the first log
+/// line, while ara-host only worked because it read the same wrong struct.
 #[repr(C)]
 pub struct ClapEntry {
     pub clap_version: clap_sys::version::clap_version,
-    pub name: *const c_char,
-    pub vendor: *const c_char,
-    pub url: *const c_char,
-    pub manual_url: *const c_char,
-    pub version: *const c_char,
-    pub description: *const c_char,
-    pub clap_version_supported: Option<unsafe extern "C" fn(version: *const clap_sys::version::clap_version) -> bool>,
-    pub get_factory: Option<unsafe extern "C" fn(factory_id: *const c_char) -> *const c_void>,
-    pub init: Option<unsafe extern "C" fn(plugin_path: *const c_char, factory_id: *const c_char) -> bool>,
+    pub init: Option<unsafe extern "C" fn(plugin_path: *const c_char) -> bool>,
     pub deinit: Option<unsafe extern "C" fn()>,
+    pub get_factory: Option<unsafe extern "C" fn(factory_id: *const c_char) -> *const c_void>,
 }
-// the strings point at literals with the process lifetime, the functions are reentrant
+// the host may call the entry from any thread
 unsafe impl Send for ClapEntry {}
 unsafe impl Sync for ClapEntry {}
 
-unsafe extern "C" fn e_version_supported(version: *const clap_sys::version::clap_version) -> bool {
-    !version.is_null() && (*version).major == CLAP_VERSION.major
-}
-
-unsafe extern "C" fn e_init(_path: *const c_char, _factory_id: *const c_char) -> bool {
+unsafe extern "C" fn e_init(_plugin_path: *const c_char) -> bool {
     guard("entry init", true, move || true)
 }
 unsafe extern "C" fn e_deinit() {}
@@ -1595,14 +1586,7 @@ unsafe extern "C" fn e_get_factory(id: *const c_char) -> *const c_void {
 #[used]
 pub static clap_entry: ClapEntry = ClapEntry {
     clap_version: CLAP_VERSION,
-    name: cs!("Drum Spike ARA"),
-    vendor: cs!("Cherry Blossom Valley"),
-    url: cs!("https://github.com/Cherry-Blossom-Valley/drumspike"),
-    manual_url: cs!(""),
-    version: cs!("0.1.0"),
-    description: cs!("The Drum Spike service on the host's tracks (ARA, no editor)"),
-    clap_version_supported: Some(e_version_supported),
-    get_factory: Some(e_get_factory),
     init: Some(e_init),
     deinit: Some(e_deinit),
+    get_factory: Some(e_get_factory),
 };

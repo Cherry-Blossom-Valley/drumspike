@@ -67,8 +67,11 @@ import struct
 import subprocess
 import sys
 import time
-import wave
 from pathlib import Path
+
+# the trailing iXML chunk of the fixtures (the S1 pattern): even length, keeps the
+# ARATestHost's audio loader from spinning at EOF (see make_wav)
+IXML_CHUNK = b"<BWFXML><IXML_VERSION>1.5</IXML_VERSION></BWFXML> "
 
 HERE = Path(__file__).resolve().parent
 DEPS = Path(os.environ.get("DS_ARA_DEPS", HERE / ".deps"))
@@ -177,7 +180,10 @@ def no_switch() -> dict:
 
 def make_wav(path: Path, rate: int, channels: int, secs: float, hits: list, bleed: list) -> None:
     """Deterministic drum figure: decaying sine bursts on a low noise floor, plus quiet
-    copies of a neighbour's hits (the bleed)."""
+    copies of a neighbour's hits (the bleed). Written by hand (the layout of the `wave`
+    module, canonical PCM 16) plus a trailing iXML chunk: the ARATestHost's audio loader
+    (ICST AudioFile.cpp GotoChunk) spins forever on a file that ends after the data
+    chunk - the S1 fixtures carry the same chunk for the same reason."""
     n = int(rate * secs)
     data = [[0.0] * n for _ in range(channels)]
     lcg = 12345
@@ -197,11 +203,14 @@ def make_wav(path: Path, rate: int, channels: int, secs: float, hits: list, blee
     for i in range(n):
         for c in range(channels):
             frames += struct.pack("<h", data[c][i])
-    with wave.open(str(path), "wb") as w:
-        w.setnchannels(channels)
-        w.setsampwidth(2)
-        w.setframerate(rate)
-        w.writeframes(bytes(frames))
+    fmt = struct.pack("<HHIIHH", 1, channels, rate, rate * channels * 2, channels * 2, 16)
+    body = (
+        b"WAVE"
+        + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+        + b"data" + struct.pack("<I", len(frames)) + bytes(frames)
+        + b"iXML" + struct.pack("<I", len(IXML_CHUNK)) + IXML_CHUNK
+    )
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
 
 
 def stage_fixture() -> bool:
@@ -212,6 +221,12 @@ def stage_fixture() -> bool:
     T0 = time.time()
     (OUT / "t0").write_text(str(T0), encoding="utf-8")
     snapshot().write_text(json.dumps(walk_tree()), encoding="utf-8")
+    # the fixtures sit in out/, which walk_tree skips: their hashes go into their own
+    # record, written here, right after the wavs are made (stage_files compares it)
+    (OUT / "fixture-sha256.json").write_text(
+        json.dumps({name: hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest() for name, *_ in SPEC}),
+        encoding="utf-8",
+    )
     n = sum(len(h) for _, _, _, _, h, _ in SPEC)
     return pass_fail(
         "fixture",
@@ -251,18 +266,17 @@ def stage_files() -> bool:
     ok = True
     before = json.loads(snapshot().read_text())
     after = walk_tree()
-    changed = [p for p in after if p not in before or before[p] != after[p]]
+    changed = [p for p in after if p not in before or tuple(before[p]) != after[p]]
     ok = pass_fail(
         "files-repo",
         not changed,
         f"no file of the repo changed during the runs ({len(changed)} changed)"
         + (f": {changed[:5]}" if changed else ""),
     ) and ok
+    recorded = json.loads((OUT / "fixture-sha256.json").read_text())
     for name, *_ in SPEC:
-        p = FIXTURES / name
-        h = hashlib.sha256(p.read_bytes()).hexdigest()
-        st = before.get(str(p))
-        ok = pass_fail("files-fixtures", st is not None and h == st[0], f"{name}: sha256 unchanged") and ok
+        h = hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest()
+        ok = pass_fail("files-fixtures", recorded.get(name) == h, f"{name}: sha256 unchanged") and ok
     return ok
 
 
@@ -663,10 +677,7 @@ def stage_tables() -> bool:
 def stage_pluginval() -> bool:
     if not PLUGINVAL.exists() or not VST3.exists():
         return pass_fail("pluginval", False, f"no pluginval or no VST3 ({PLUGINVAL}, {VST3})")
-    out_file = OUT / "report-pluginval.jsonl"
-    if out_file.exists():
-        out_file.unlink()
-    env = {**no_switch(), "DS_ARA_CACHE": str(OUT / "cache-pluginval"), "DS_ARA_OUT": str(out_file)}
+    env = {**no_switch(), "DS_ARA_CACHE": str(OUT / "cache-pluginval")}
     rc, text = run(
         [str(PLUGINVAL), "--strictness-level", "5", "--timeout-ms", "120000", str(VST3)],
         env=env,
@@ -675,13 +686,12 @@ def stage_pluginval() -> bool:
     ok = pass_fail("pluginval", rc == 0, f"strictness 5 on the wrapped VST3, rc={rc} (out/pluginval.log)")
     if not ok:
         return False
-    if not out_file.exists():
-        return pass_fail("pluginval", False, "pluginval passed but the plugin wrote no report (is the CLAP inside?)")
-    ok_ev, events = plugin_service_row("pluginval")
-    if not ok_ev:
-        return pass_fail("pluginval-events", False, "pluginval ran the plugin but no analysis was requested")
-    want = (OUT / "events-reference.json").read_bytes()
-    return compare_events("pluginval", events, want)
+    # pluginval is no ARA host: no document controller, so the plugin never runs an
+    # analysis here and writes no report. The proof that the scan drove THIS plugin is
+    # the log: the wrapper's plugin comes from the CLAP descriptor (the inner CLAP).
+    if "Drum Spike ARA" not in text:
+        return pass_fail("pluginval", False, "pluginval passed but its log does not name the plugin (is the CLAP inside?)")
+    return True
 
 
 def stage_validate() -> bool:

@@ -401,8 +401,7 @@ unsafe fn load(bundle: &str) -> Result<Loaded, String> {
     let sym: Symbol<*mut c_void> = lib.get(b"clap_entry").map_err(|e| format!("no clap_entry: {e}"))?;
     let entry = sym.into_raw() as *const ClapEntry;
     let path = CString::new(bundle_of(bundle)).unwrap();
-    let factory_id = CString::new(CLAP_PLUGIN_FACTORY_ID.to_bytes()).unwrap();
-    if !((*entry).init.expect("entry.init"))(path.as_ptr(), factory_id.as_ptr()) {
+    if !((*entry).init.expect("entry.init"))(path.as_ptr()) {
         return Err("clap_entry.init refused".into());
     }
     let ext_id = CString::new(b"org.ara-audio.ara.factory/2".to_vec()).unwrap();
