@@ -15,11 +15,16 @@ signing identity and the notary profile); they never read a password, a certific
 
 ## Release by tag (the normal way)
 
-`.github/workflows/release.yml` runs on the self-hosted signing runner (label `arm64-mac`). The
-key never leaves that Mac's keychain. The workflow reads the signing identity from the
-repository variable `DRUMSPIKE_SIGN_IDENTITY` (Settings, Actions, Variables); it holds the name
-of the "Developer ID Application" certificate, never a secret. Job `check` stops before any
-build when the variable does not hold a Developer ID Application identity:
+`.github/workflows/release.yml` runs on the self-hosted signing runner that the repository
+variable `DRUMSPIKE_RELEASE_RUNNER` selects (Settings, Actions, Variables). With the variable
+unset, the jobs `check`, `build` and `publish` run on the default signing runner (label
+`arm64-mac`). With the variable set to another self-hosted runner label (for example
+`studio-mac`), those three jobs run there. The job `intel-check` always runs on the Intel runner
+(label `x86-mac`). The key never leaves the signing Mac's keychain. The workflow reads the
+signing identity from the repository variable `DRUMSPIKE_SIGN_IDENTITY` (Settings, Actions,
+Variables); it holds the name of the "Developer ID Application" certificate, never a secret. Job
+`check` stops before any build when the variable does not hold a Developer ID Application
+identity:
 
 ```
 ::error::the repository variable DRUMSPIKE_SIGN_IDENTITY does not hold a Developer ID
@@ -55,6 +60,31 @@ The signing runner needs: the login keychain unlocked, `gh` logged in as a maint
 made with that login), and the runner service in the login security session (see "Errors",
 `errSecInternalComponent`). The first signature from the runner may ask once to let `codesign` use
 the key: choose "Always Allow".
+
+## What a signing host needs
+
+Every Mac that acts as the signing runner (the default one or a second one) needs:
+
+1. A "Developer ID Application" certificate **with its private key** in the login keychain:
+   `security find-identity -v -p codesigning`.
+2. The notary profile `drumspike-notary` (`xcrun notarytool store-credentials drumspike-notary`).
+3. `gh` logged in as a maintainer (`gh auth status`) — the draft release is made with that login.
+4. The runner service with `SessionCreate` set to **false** in its launchd plist, so it can use
+   the login keychain (see "Errors", `errSecInternalComponent`).
+5. Both Rust targets: `rustup target add aarch64-apple-darwin x86_64-apple-darwin` (the signing
+   host builds both architectures).
+
+## Switch the signing host for one release
+
+1. On the second host: install the runner, then work through the list above ("What a signing
+   host needs").
+2. Set the repository variable `DRUMSPIKE_RELEASE_RUNNER` (Settings, Actions, Variables) to the
+   label of that runner, for example `studio-mac`. The next release run (tag push or
+   workflow_dispatch) runs `check`, `build` and `publish` there; `intel-check` stays on
+   `x86-mac`.
+3. Switch back: set the variable back to the default host's label, or delete the variable —
+   unset, the workflow uses the default signing runner (`arm64-mac`). No file changes are needed
+   for either direction.
 
 ## Before the first manual run (once)
 
