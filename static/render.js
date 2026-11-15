@@ -28,6 +28,18 @@ const F = { VIEW: 1, HEAD: 2, PH: 4, GL: 8, SIZE: 16, NEAR: 32, METER: 64 };
 const FR = { flags: 0, tracks: new Set(), raf: 0, inFrame: false, sel: "", sized: "", head: ["", "", "", ""],
   last: 0, n: { frames: 0, view: 0, tracks: 0, head: 0, gl: 0, size: 0, meter: 0, skipped: 0 } };   // counters: the tests and the self-test read them
 function requestFrame() { if (!FR.raf) FR.raf = requestAnimationFrame(onFrame); }
+/* #540 test switch: hold every requestAnimationFrame callback for N milliseconds, to simulate a
+   loaded host where the frame draw lags one or more frames behind the page state. Default 0:
+   the page is unchanged (the pixel tests stay green). Only tests/e2e_app sets it, per test,
+   and back to 0 afterwards. */
+window.__DS_TEST_RAF_DELAY_MS = 0;
+{
+  const __dsRaf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = function (cb) {
+    const ms = window.__DS_TEST_RAF_DELAY_MS;
+    return ms > 0 ? setTimeout(function () { __dsRaf(cb); }, ms) : __dsRaf(cb);
+  };
+}
 function invalidate(flags) { FR.flags |= flags; requestFrame(); }
 function invalidateHits(track) {   // no track: every track (new events from an analysis, velocities)
   for (const n of track ? [track] : S.order) FR.tracks.add(n);
