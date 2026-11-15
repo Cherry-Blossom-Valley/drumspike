@@ -264,7 +264,7 @@ impl Service {
                 .round();
             let detect = det.and_then(|d| d.get("detector")).cloned().unwrap_or(Value::Null);
             (
-                g.source_no_segments(name)?,
+                g.track_audio(name)?,
                 mix_mode(tr.mix_mode_or_default()),
                 tr.role.clone(),
                 shift,
@@ -272,7 +272,7 @@ impl Service {
                 g.project.name(),
             )
         };
-        let d = self.inner.media.decode_cached(&source, mix)?;
+        let d = source.decode(&self.inner.media, mix)?;
         let sr = f64::from(d.sr);
         let n_before = (BEFORE_MS / 1000.0 * sr).round() as usize;
         let n_after = (AFTER_MS / 1000.0 * sr).round() as usize;

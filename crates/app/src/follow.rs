@@ -92,7 +92,7 @@ fn store(g: &mut OpenProject, name: &str, events: Vec<Event>, dec: &Decoded) -> 
 /// A 400 `AppError` when `name` follows no track; the lookup error for an unknown track; a 409 when the follower's
 /// audio is offline; the decode error when its audio cannot be read.
 pub fn derive_one(svc: &Service, op: &Shared, name: &str) -> Result<usize, AppError> {
-    let (src_events, path, mix, map, cut) = {
+    let (src_events, audio, mix, map, cut) = {
         let mut g = lock(op);
         let tr = g.track(name)?;
         let Some(src) = tr.follows.clone() else {
@@ -107,16 +107,16 @@ pub fn derive_one(svc: &Service, op: &Shared, name: &str) -> Result<usize, AppEr
             return Ok(0);
         };
         let src_events = source.events().to_vec();
-        let path = g.source_no_segments(name)?;
+        let audio = g.track_audio(name)?;
         (
             src_events,
-            path,
+            audio,
             mix_mode(tr.mix_mode_or_default()),
             velocity_map_of(tr.params.as_ref()),
             crate::histogram::cut_of(tr.params.as_ref()),
         )
     };
-    let dec = svc.inner.media.decode_cached(&path, mix)?;
+    let dec = audio.decode(&svc.inner.media, mix)?;
     // P4-3: the hits the source's loudness cut took out are not followed; the follower's own cut marks its quiet ones
     let src_events: Vec<Event> = src_events
         .into_iter()

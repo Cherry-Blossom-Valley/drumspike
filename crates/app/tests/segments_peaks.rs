@@ -420,34 +420,6 @@ fn the_readers_without_a_timeline_answer_not_available() {
     let (svc, sid, _dir) = segmented_with_extras();
     let mut checked = 0usize;
 
-    // a follower of the segmented track derives its hits from the track's audio
-    checked += 1;
-    assert_not_available("follow", svc.track_set_follow(&sid, "s", Some("k")).unwrap_err());
-
-    // histograms and detection read the audio
-    checked += 1;
-    assert_not_available("histograms", svc.track_histograms(&sid, "s", None).unwrap_err());
-
-    // confidence and its training variant read the audio
-    checked += 1;
-    assert_not_available("confidence", svc.track_confidence(&sid, "s", None, true).unwrap_err());
-
-    // a Learn mark resolves its time in the audio
-    checked += 1;
-    assert_not_available(
-        "learn mark",
-        svc.track_learn_mark(&sid, "s", "this", Some((0.0, 1.0)), None)
-            .unwrap_err(),
-    );
-
-    // the Learn scores: without the audio the endpoint answers its `missing` state —
-    // never an offline note about a file the track does not have
-    checked += 1;
-    let scores = svc.track_learn_scores(&sid, "s").unwrap();
-    let text = serde_json::to_string(&scores).unwrap();
-    assert!(text.contains("missing"), "the scores answer their state: {text}");
-    assert!(!text.contains("offline"), "the scores answer says offline: {text}");
-
     // the layer view's mic path
     checked += 1;
     assert_not_available("layer", svc.track_layer_get(&sid, "s").unwrap_err());
@@ -481,10 +453,12 @@ fn the_readers_without_a_timeline_answer_not_available() {
     );
 
     // the role re-pick reads the timeline now (P6a, `segments_timeline.rs`); the sample
-    // window and an edit with snap moved there too
+    // window and an edit with snap moved there too. The review helpers — confidence, the
+    // histograms, the Learn scores, a Learn mark and a follower — read the timeline now
+    // as well (#532, `segments_readers.rs`).
 
     println!("checked {checked} readers without a timeline answer");
-    assert!(checked >= 10, "the test checked {checked} readers and fails on 0");
+    assert!(checked >= 5, "the test checked {checked} readers and fails on 0");
 }
 
 /// Gate 4 (timeline rows): the velocity recompute reads the timeline — a hit of a segment
