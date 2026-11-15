@@ -90,8 +90,8 @@ licence strings from the crates themselves:
 | build-only: proc-macro2, quote, syn 3.0.10, unicode-ident, synstructure, displaydoc, cc, shlex, find-msvc-tools, version_check | | MIT OR Apache-2.0 (synstructure, block2, objc2: MIT; unicode-ident adds Unicode-3.0) |
 
 The wrapper brings, fetched by CPM at build time: CLAP SDK 1.2.10 (MIT),
-VST3 SDK v3.8.0_build_66 with its submodules (MIT since 3.7.x - the S3 spike
-reports the same), clap-wrapper v0.17.0 itself (MIT). The wrapped VST3 loads
+VST3 SDK v3.8.0_build_66 with its submodules (MIT; the VST3 SDK is MIT only
+from 3.8.0), clap-wrapper v0.17.0 itself (MIT). The wrapped VST3 loads
 the CLAP at run time through `CLAP_PATH`; the wrapper is not a second copy of
 the spike.
 
