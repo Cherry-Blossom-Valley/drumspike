@@ -285,10 +285,15 @@
   const tables = {};
   function table(preset) {
     const p = preset || DSKeys.preset;
-    if (tables[p]) return tables[p];
+    const host = hostMode();   // #509: the host-owned commands have no keys while the host owns them
+    const cacheKey = p + (host ? "|host" : "");
+    if (tables[cacheKey]) return tables[cacheKey];
     const t = new Map();
-    for (const c of COMMANDS) for (const k of keysOf(c, p)) if (!t.has(k)) t.set(k, { cmd: c, menu: k === menuKeyOf(c, p) });
-    return (tables[p] = t);
+    for (const c of COMMANDS) {
+      if (host && hostOwned(c.id)) continue;
+      for (const k of keysOf(c, p)) if (!t.has(k)) t.set(k, { cmd: c, menu: k === menuKeyOf(c, p) });
+    }
+    return (tables[cacheKey] = t);
   }
 
   /* The command of a keydown event: the key itself, then a numpad key as its main key (numpad 1 = 1), then
@@ -349,6 +354,7 @@
     };
     let group = undefined, n = 0;
     for (const c of COMMANDS) {
+      if (hostOwned(c.id)) continue;   // #509: absent from the keys, absent from the panel
       const g = c.path ? c.path.split(" > ")[0] : "Keys without a menu item";
       if (g !== group) { group = g; row("kmGroup", null, g); }
       const keys = keysOf(c, DSKeys.preset).map(display).join(", ");

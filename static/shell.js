@@ -504,6 +504,7 @@
     try {
       const h = handlers[p.id];
       if (!h) return false;
+      if (hostOwned(p.id)) return false;   // #509: the host owns this command; the item is absent in host mode
       if (DSKeys.menuRepeat(p.id)) { ok = true; return true; }   // #317: the page already ran this Tab key's command
       if (modalOpen()) { setMsg("answer the open dialog first"); return false; }
       ok = true;

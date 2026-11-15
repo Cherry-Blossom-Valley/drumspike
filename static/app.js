@@ -406,7 +406,8 @@ function openUndoHistory() {
 }
 function needProject() {   // S3-3: the page can show no project at all
   if (S.sid) return true;
-  setMsg("no project is open: use New, Open or Open Recent"); return false;
+  setMsg(hostMode() ? "no project is open: the host opens the project" : "no project is open: use New, Open or Open Recent");   // #509: the host owns the files
+  return false;
 }
 
 /* ---------------- playback: the native transport (P3-5b) ---------------- */
