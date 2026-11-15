@@ -252,8 +252,8 @@ pub(crate) struct PickInputs {
 
 pub(crate) struct TrackState {
     pub(crate) source: Result<PathBuf, AppError>,
-    /// The track's audio (the plain file or the timeline, #508): the re-pick reads it, the
-    /// readers without a timeline answer keep their `source` (P6b).
+    /// The track's audio (the plain file or the timeline, #508): the re-pick and every reader
+    /// read it; only the velocity set of a non-follower reads `source` (P6b).
     pub(crate) audio: Result<crate::media::TrackAudio, AppError>,
     pub(crate) mix: String,
     pub(crate) role: String,

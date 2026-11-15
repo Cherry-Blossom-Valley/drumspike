@@ -100,11 +100,20 @@ fn stable(v: &Value) -> Value {
     }
 }
 
-/// The file of the reader tests: strokes at 0.25, 0.75 and 1.25 s. The two-segment
-/// timeline plays its first half at timeline 0 and its `[0.5, 1.5)` part at timeline 2.0,
-/// so the file strokes 0.75 and 1.25 are timeline strokes at 2.25 and 2.75.
+/// The file of the reader tests: strokes at 0.25, 0.75 and 1.25 s, silent around the cuts of
+/// the two-segment timeline (file 0.5, 1.0 and 1.5): a stroke tail that would reach across a
+/// cut goes to zero before it, so the cut is a hard onset of neither track. The two-segment
+/// timeline plays its first half at timeline 0 and its `[0.5, 1.5)` part at timeline 2.0, so
+/// the file strokes 0.75 and 1.25 are timeline strokes at 2.25 and 2.75.
 fn reader_file() -> Vec<f32> {
-    kick_signal(&[0.25, 0.75, 1.25], 2.0, SR)
+    let mut x = kick_signal(&[0.25, 0.75, 1.25], 2.0, SR);
+    let srf = f64::from(SR);
+    // silent from just before each cut of the two-segment timeline (file 0.5, 1.0, 1.5) up to
+    // the next stroke, so a cut is a hard onset of neither track and no tail resumes after it
+    for (a, b) in [(0.45f64, 0.70), (0.95, 1.20), (1.45, 2.0)] {
+        x[(a * srf) as usize..(b * srf) as usize].fill(0.0);
+    }
+    x
 }
 
 /// The two-segment timeline of the reader tests: the first segment is the file's first
@@ -273,6 +282,38 @@ fn the_readers_give_the_timeline_positions() {
     );
     compared += 1;
 
+    // the Learn scores: the candidates of the second segment sit at the timeline positions
+    let cands = |sid: &str, lo: f64, hi: f64| -> Vec<f64> {
+        let out = svc.track_learn_scores(sid, "s").unwrap();
+        assert_eq!(out["state"], json!("ok"), "{out}");
+        out["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r[0].as_f64())
+            .filter(|&t| t >= lo && t <= hi)
+            .collect()
+    };
+    let seg_ts = cands(&sid_seg, 2.0 + 0.1, 3.0 - 0.1);
+    let plain_ts = cands(&sid_plain, 0.5 + 0.1, 1.5 - 0.1);
+    assert!(
+        !seg_ts.is_empty(),
+        "learn scores: no candidate of the second segment to compare (seg {seg_ts:?} plain {plain_ts:?})"
+    );
+    assert_eq!(
+        seg_ts.len(),
+        plain_ts.len(),
+        "learn scores: a different candidate count for the file part: seg {seg_ts:?} plain {plain_ts:?}"
+    );
+    for (s, p) in seg_ts.iter().zip(&plain_ts) {
+        let diff = ((s - (p - 0.5 + 2.0)) * f64::from(SR)).round() as i64;
+        assert_eq!(
+            diff, 0,
+            "learn scores: the candidate is {diff} samples off the timeline position"
+        );
+        compared += 1;
+    }
+
     // a Learn mark stores the hit's timeline position
     let mark = |sid: &str, range: (f64, f64)| {
         svc.track_learn_mark(sid, "s", "this", Some(range), None).unwrap()["mark"]["at"]
@@ -314,13 +355,18 @@ fn the_readers_give_the_timeline_positions() {
         compared += 1;
     }
 
-    println!("compared {compared} times on the timeline positions (histograms, confidence, learn mark, follow)");
+    println!(
+        "compared {compared} times on the timeline positions (histograms, confidence, learn scores, learn mark, follow)"
+    );
     assert!(compared > 0, "the test compared {compared} times and fails on 0");
 }
 
 /// Gate 3: Learn This and Forget This on a hit of the second segment act on the same hits
-/// as on a plain track of that file part: the same count of added examples and of removed
-/// ones, and the same count of hits the filter takes out.
+/// as on a plain track of that file part: the same count of examples Learn This adds, at
+/// the same times, the same count of hits the Learn filter takes out, and the same count
+/// of examples Forget This removes (with the hits its sweep takes, none here: the range
+/// resolves to hits). The hit lists compare away from the segment edges (the fixture keeps
+/// them silent anyway); the test prints how many hits it compared and fails on 0.
 #[test]
 fn learn_this_and_forget_this_act_on_the_same_hits_as_the_plain_track() {
     let x = reader_file();
@@ -335,24 +381,66 @@ fn learn_this_and_forget_this_act_on_the_same_hits_as_the_plain_track() {
         wait_done(&svc, sid);
     }
 
-    // Learn This on the second segment's hit (timeline 2.75 = file 1.25 - 0.5 + 2.0):
-    // one example on each track, and the same hit count the filter takes out
+    // The stored hits of the second segment, mapped to file times (timeline - 2.0 + 0.5),
+    // against the plain track's hits in the same file part. Hits within 0.1 s of the segment
+    // edges (timeline 2.0 and 3.0; the file's 0.5 and 1.5) are dropped.
+    let hits = |sid: &str| -> Vec<f64> { events(&svc, sid, "s").into_iter().map(|(t, _)| t).collect() };
+    let compare = |what: &str| {
+        let mut seg: Vec<f64> = hits(&sid_seg)
+            .into_iter()
+            .filter(|&t| t >= 2.1 && t <= 2.9)
+            .map(|t| t - 1.5)
+            .collect();
+        let mut plain: Vec<f64> = hits(&sid_plain).into_iter().filter(|&t| t >= 0.6 && t <= 1.4).collect();
+        seg.sort_by(f64::total_cmp);
+        plain.sort_by(f64::total_cmp);
+        assert!(
+            !seg.is_empty(),
+            "{what}: no hit away from the segment edges to compare (seg {seg:?} plain {plain:?})"
+        );
+        assert_eq!(
+            seg.len(),
+            plain.len(),
+            "{what}: a different hit count: seg {seg:?} plain {plain:?}"
+        );
+        for (s, p) in seg.iter().zip(&plain) {
+            let diff = ((s - p) * f64::from(SR)).round() as i64;
+            assert_eq!(
+                diff, 0,
+                "{what}: the hit is {diff} samples off the plain track's ({s} vs {p})"
+            );
+        }
+        println!("{what}: compared {} hits away from the segment edges", seg.len());
+    };
+
+    // Learn This on the second segment's hit (timeline 2.75 = file 1.25 - 0.5 + 2.0): one
+    // example on each track at the same hit, the same count of hits the filter takes out
     let seg = svc
-        .track_learn_mark(&sid_seg, "s", "not", Some((2.7, 2.9)), None)
+        .track_learn_mark(&sid_seg, "s", "this", Some((2.7, 2.9)), None)
         .unwrap();
     let plain = svc
-        .track_learn_mark(&sid_plain, "s", "not", Some((1.2, 1.3)), None)
+        .track_learn_mark(&sid_plain, "s", "this", Some((1.2, 1.3)), None)
         .unwrap();
-    let examples = |out: &Value| out["mark"]["at"].as_array().map_or(0, Vec::len);
-    assert!(
-        examples(&seg) > 0 && examples(&seg) == examples(&plain),
-        "{seg} vs {plain}"
+    assert_eq!(seg["added"], json!(1), "{seg}");
+    assert_eq!(plain["added"], json!(1), "{plain}");
+    let seg_at = seg["mark"]["at"].as_array().cloned().unwrap();
+    let plain_at = plain["mark"]["at"].as_array().cloned().unwrap();
+    assert_eq!(seg_at.len(), plain_at.len(), "{seg} vs {plain}");
+    for (s, p) in seg_at.iter().zip(&plain_at) {
+        let (s, p) = (s.as_f64().unwrap(), p.as_f64().unwrap());
+        let diff = ((s - (p - 0.5 + 2.0)) * f64::from(SR)).round() as i64;
+        assert_eq!(
+            diff, 0,
+            "Learn This adds the example {diff} samples off the plain track's"
+        );
+    }
+    assert_eq!(
+        seg["learn_out_after"], plain["learn_out_after"],
+        "a different count of hits the Learn filter takes out: {seg} vs {plain}"
     );
-    // (the hits the filter takes out are not compared: a hard cut at a segment edge is an
-    // onset of the timeline — the open point of the #531 review — so the two tracks do
-    // not hold the same hit list to begin with)
+    compare("after Learn This");
 
-    // Forget This over the same hit removes the example again on both tracks
+    // Forget This over the same hit removes the example and the hit it supported on both tracks
     let seg = svc
         .track_learn_forget_at(&sid_seg, "s", Some((2.7, 2.9)), None)
         .unwrap();
@@ -361,6 +449,26 @@ fn learn_this_and_forget_this_act_on_the_same_hits_as_the_plain_track() {
         .unwrap();
     assert_eq!(seg["removed"], plain["removed"], "{seg} vs {plain}");
     assert_eq!(seg["removed"], json!(1), "forget removed {} examples", seg["removed"]);
+    assert_eq!(seg["swept"], plain["swept"], "{seg} vs {plain}");
+    compare("after Forget This");
+
+    // A Learn This with no hit in the range (a K-add) places its hit at the same position of
+    // the file part's audio: the seg track's timeline and the plain track's file agree to the
+    // sample. (Main refuses the read: the hit comes from the track's audio.)
+    let seg = svc
+        .track_learn_mark(&sid_seg, "s", "this", Some((2.05, 2.2)), None)
+        .unwrap();
+    let plain = svc
+        .track_learn_mark(&sid_plain, "s", "this", Some((0.55, 0.7)), None)
+        .unwrap();
+    assert_eq!(seg["added_hit"].is_null(), false, "{seg}");
+    let seg_hit = seg["added_hit"].as_f64().unwrap();
+    let plain_hit = plain["added_hit"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("no added hit: {plain}"));
+    let diff = ((seg_hit - (plain_hit - 0.5 + 2.0)) * f64::from(SR)).round() as i64;
+    assert_eq!(diff, 0, "the K-add places its hit {diff} samples off the plain track's");
+    compare("after the K-add");
 }
 
 /// Gate 4: a follower of a segmented track derives its hits from the timeline — a
@@ -419,4 +527,136 @@ fn a_follower_of_a_segmented_track_derives_its_hits_from_the_timeline() {
         v_of("s"),
         "the segmented follower's velocities differ from the source's"
     );
+}
+
+/// Gate 5: a training record of a second-segment hit carries the audio of the timeline
+/// position: the window of the record holds the stroke at timeline 2.75 (file 1.25 - 0.5
+/// + 2.0), loud and with its peak at the stroke — not the zeros past the file's end, which
+/// the file position would read.
+#[test]
+fn a_training_record_of_a_second_segment_hit_carries_the_timeline_audio() {
+    let x = reader_file();
+    let segs = two_segments();
+    let root = tmp("p6b_training_seg");
+    let dir = track_project(&root, "Seg", &[("s", "kick", one(&x), &segs)]);
+    let svc = service_dsp();
+    svc.set_home(&root.join("home"));
+    let sid = open(&svc, &dir);
+    svc.training_status(&sid, Some(true)).unwrap();
+    svc.analyze_start(&sid, Some(vec!["s".into()]), None, None).unwrap();
+    wait_done(&svc, &sid);
+
+    let r = svc
+        .track_learn_mark_training(&sid, "s", "this", Some((2.7, 2.9)), None, true)
+        .unwrap();
+    assert_eq!(r["marked"], json!(true), "{r}");
+
+    // 40 ms before and 10 ms after at 48 kHz (the record's window of training.rs)
+    let (n_before, n_after) = (1920usize, 480usize);
+    let dir = root.join("home").join("training");
+    let mut lines = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("no training log at {}: {e}", dir.display()))
+        .flatten()
+        .flat_map(|f| {
+            std::fs::read_to_string(f.path())
+                .unwrap()
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        });
+    let line = lines.next().unwrap_or_else(|| panic!("no training record"));
+    let rec: Value = serde_json::from_str(&line).unwrap();
+    let win = rec["audio"]["at_from"].as_array().cloned().unwrap_or_default();
+    assert_eq!(win.len(), n_before + n_after, "the record's audio window: {rec}");
+    let peak = win
+        .iter()
+        .map(|v| v.as_f64().unwrap_or(0.0).abs())
+        .fold(0.0f64, f64::max);
+    assert!(peak > 0.05, "the record's audio window is silent ({peak}): {rec}");
+    let at = win
+        .iter()
+        .enumerate()
+        .max_by(|a, b| {
+            a.1.as_f64()
+                .unwrap_or(0.0)
+                .abs()
+                .total_cmp(&b.1.as_f64().unwrap_or(0.0).abs())
+        })
+        .map_or(usize::MAX, |(i, _)| i);
+    assert!(
+        (n_before - 240..=n_before + 240).contains(&at),
+        "the window's peak sits {at} samples from the stroke (expected near {n_before}): {rec}"
+    );
+}
+
+/// Gate 6: a Learn mark with a second analysed close mic that is segmented reads that mic's
+/// timeline: the loud snare hit at timeline 1.75 (file 1.25 - 0.5 + 1.0) is the bleed of the
+/// kick's weak rise (a 2 to 6 dB rise over the hum, no candidate, no 6 dB rise) — the log
+/// names the bleed at the snare's timeline hit and K never places its hit on the bled rise;
+/// the snare's plain file at the timeline time would not rule the rise out. The timeline
+/// here has no gap, so the hum never steps at a join.
+#[test]
+fn a_learn_mark_reads_the_timeline_of_a_second_segmented_close_mic() {
+    // no gap: the second segment follows the first at once (timeline 1.0 = file 0.5), both
+    // cuts land on a zero crossing of the 300 Hz hum
+    let segs = [(0.0, 0.0, 1.0), (1.0, 0.5, 1.0)];
+    // the kick's ghost: a soft stroke at file 1.25 (timeline 1.75), 4 dB over a steady hum
+    let srf = f64::from(SR);
+    let ghost = kick_signal(&[1.25], 2.0, SR);
+    let g = 10f32.powf(-58.0 / 20.0);
+    let hum = 10f32.powf(-62.0 / 20.0);
+    let kick: Vec<f32> = ghost
+        .iter()
+        .enumerate()
+        .map(|(i, b)| g * b + hum * (2.0 * std::f32::consts::PI * 300.0 * i as f32 / srf as f32).sin())
+        .collect();
+    // the snare: one loud hit at the same place
+    let snare = kick_signal(&[1.25], 2.0, SR);
+    let dir = track_project(
+        &tmp("p6b_bleed_seg"),
+        "Seg",
+        &[("s", "kick", one(&kick), &segs), ("o", "snare", one(&snare), &segs)],
+    );
+    let svc = service_dsp();
+    let sid = open(&svc, &dir);
+    svc.analyze_start(&sid, None, None, None).unwrap();
+    wait_done(&svc, &sid);
+    // premise: the snare holds the hit at the timeline position
+    let o: Vec<f64> = events(&svc, &sid, "o").into_iter().map(|(t, _)| t).collect();
+    assert!(
+        o.iter().any(|t| (t - 1.75).abs() < 0.02),
+        "premise: no snare hit at 1.75: {o:?}"
+    );
+
+    let r = svc.track_learn_mark(&sid, "s", "this", Some((1.7, 1.9)), None).unwrap();
+    assert_eq!(
+        r["from"],
+        json!("hand"),
+        "premise: a weak rise, not a hit or candidate: {r}"
+    );
+    // the snare's timeline hit rules its rise out: the log names the bleed at 1.75 (with the
+    // snare's level over the rise's own), and K never places the hit on the bled rise
+    let log = r["k_rise"]["pieces"].as_array().cloned().unwrap_or_default();
+    let bled = log
+        .iter()
+        .find(|p| p["why"] == json!("bleed"))
+        .unwrap_or_else(|| panic!("the rise log names no bleed: {log:?}"));
+    let bleed_t = bled["bleed_t"].as_f64().unwrap();
+    assert!(
+        (bleed_t - 1.75).abs() <= drumspike_app::learn::BLEED_REACH,
+        "the bleed is not at the snare's timeline hit: {bled}"
+    );
+    assert!(
+        bled["bleed_level"].as_f64().unwrap() > bled["level"].as_f64().unwrap(),
+        "the bleed is not the louder hit: {bled}"
+    );
+    for p in &log {
+        if matches!(p["why"].as_str(), Some("taken")) {
+            let t = p["t"].as_f64().unwrap_or(0.0);
+            assert!(
+                (t - 1.75).abs() > drumspike_app::learn::BLEED_REACH,
+                "K took the bled rise at {t}: {log:?}"
+            );
+        }
+    }
 }
