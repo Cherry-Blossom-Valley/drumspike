@@ -264,7 +264,7 @@ impl Service {
                 .round();
             let detect = det.and_then(|d| d.get("detector")).cloned().unwrap_or(Value::Null);
             (
-                g.source(name)?,
+                g.source_no_segments(name)?,
                 mix_mode(tr.mix_mode_or_default()),
                 tr.role.clone(),
                 shift,
