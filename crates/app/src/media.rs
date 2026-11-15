@@ -107,6 +107,97 @@ pub fn decode(path: &Path, mode: MixMode) -> Result<Decoded, AppError> {
     })
 }
 
+/// One resolved segment of a track's timeline (#508): the file and its place on the timeline.
+#[derive(Debug, Clone)]
+pub struct SegmentAudio {
+    /// The segment's audio file.
+    pub path: PathBuf,
+    /// Timeline start in seconds.
+    pub start: f64,
+    /// Offset into the file in seconds.
+    pub offset: f64,
+    /// Length in seconds.
+    pub length: f64,
+}
+
+/// The audio a track's analysis or a session step reads (#508): the plain source file, or the
+/// timeline of the track's segments.
+#[derive(Debug, Clone)]
+pub enum TrackAudio {
+    /// One source file from its first sample (a track without segments).
+    File(PathBuf),
+    /// The timeline of the segments: each decoded, trimmed and placed; the gaps stay silence.
+    Timeline(Vec<SegmentAudio>),
+}
+
+impl TrackAudio {
+    /// The signal: the cached decode of the file, or the assembled timeline (assembled on
+    /// every call; the timeline of a segmented track is not cached).
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`decode`] (a segment file that cannot be read, or segments of
+    /// different sample rates).
+    pub fn decode(&self, media: &Media, mix: MixMode) -> Result<Arc<Decoded>, AppError> {
+        match self {
+            TrackAudio::File(p) => media.decode_cached(p, mix),
+            TrackAudio::Timeline(segs) => Ok(Arc::new(decode_timeline(segs, mix)?)),
+        }
+    }
+}
+
+/// The timeline signal of a segmented track (#508): every segment file decoded (each path
+/// once), trimmed to `[offset, offset + length)` and placed at `start`, exact to the sample;
+/// the gaps stay silence, so a hit in a gap or a trimmed part does not exist.
+///
+/// # Errors
+///
+/// The errors of [`decode`] per segment file, and a 400 error when two segments decode at
+/// different sample rates (the timeline has one rate).
+///
+/// # Panics
+///
+/// Panics through `expect("every segment path was decoded above")` if a segment's path were
+/// not in `files`, which the first loop decoded for every distinct path, so this does not
+/// happen.
+pub fn decode_timeline(segs: &[SegmentAudio], mix: MixMode) -> Result<Decoded, AppError> {
+    let mut files: Vec<(PathBuf, Decoded)> = Vec::new();
+    let mut sr = 0u32;
+    for s in segs {
+        if files.iter().any(|(p, _)| p == &s.path) {
+            continue;
+        }
+        let d = decode(&s.path, mix)?;
+        if sr == 0 {
+            sr = d.sr;
+        } else if d.sr != sr {
+            return Err(AppError::bad(format!(
+                "segments of {} decode at {} Hz, an earlier one at {sr} Hz",
+                s.path.display(),
+                d.sr
+            )));
+        }
+        files.push((s.path.clone(), d));
+    }
+    let end = segs.iter().map(|s| s.start + s.length).fold(0.0_f64, f64::max);
+    let n = (end * f64::from(sr)).round().max(0.0) as usize;
+    let mut out = vec![0.0_f32; n];
+    for s in segs {
+        let d = &files
+            .iter()
+            .find(|(p, _)| p == &s.path)
+            .expect("every segment path was decoded above")
+            .1;
+        let i0 = (s.offset * f64::from(sr)).round().max(0.0) as usize;
+        let i1 = ((s.offset + s.length) * f64::from(sr)).round().max(0.0) as usize;
+        let o0 = (s.start * f64::from(sr)).round().max(0.0) as usize;
+        let src = &d.samples[i0.min(d.samples.len())..i1.min(d.samples.len())];
+        let take = src.len().min(out.len().saturating_sub(o0));
+        out[o0..o0 + take].copy_from_slice(&src[..take]);
+    }
+    Ok(Decoded { sr, samples: out })
+}
+
 /// What the peak cache of one track needs, taken from the project while its lock is held,
 /// so the (slow) build runs without the lock.
 #[derive(Debug, Clone)]

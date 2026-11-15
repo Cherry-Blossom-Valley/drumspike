@@ -29,7 +29,6 @@
 //! redetected}`) and the job answer (`cross_bleed`). A mic that cannot be read or has another rate
 //! is left out; a track without the stored candidate list gets the drop marks only.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use drumspike_core::analyze::{AnalyzeParams, analyze_detected};
@@ -116,8 +115,8 @@ fn source_kind(name: &str, role: Option<&str>) -> Option<XKind> {
 struct Mic {
     name: String,
     kind: Option<XKind>,
-    /// The track's source path.
-    path: PathBuf,
+    /// The track's audio: its source file, or the timeline of its segments (#508).
+    audio: crate::media::TrackAudio,
     mix: String,
     /// The event times (the refine back-track: the first motion of every hit).
     times: Vec<f64>,
@@ -209,13 +208,13 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[String]) -> Option
             {
                 continue;
             }
-            let Ok(path) = g.source(&name) else { continue };
+            let Ok(audio) = g.track_audio(&name) else { continue };
             let evs = tr.events();
             let cands = candidate_times(&g, &name, tr);
             mics.push(Mic {
                 name,
                 kind,
-                path,
+                audio,
                 mix: tr.mix_mode_or_default().to_string(),
                 times: evs.iter().map(|e| e.t).collect(),
                 cands,
@@ -276,7 +275,7 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[String]) -> Option
 fn session_alignment(svc: &Service, mics: &[Mic], p: &CrossBleedParams) -> Vec<(usize, usize)> {
     let decs: Vec<Option<Arc<Decoded>>> = mics
         .iter()
-        .map(|m| svc.inner.media.decode_cached(&m.path, mix_mode(&m.mix)).ok())
+        .map(|m| m.audio.decode(&svc.inner.media, mix_mode(&m.mix)).ok())
         .collect();
     session_alignment_decs(mics, &decs, p)
 }
@@ -590,14 +589,14 @@ struct Pass1 {
 /// source is left.
 fn decode_target(svc: &Service, mics: &[Mic], a: usize) -> Option<(Arc<Decoded>, Sources)> {
     let x_mic = &mics[a];
-    let dec_x: Arc<Decoded> = svc.inner.media.decode_cached(&x_mic.path, mix_mode(&x_mic.mix)).ok()?;
+    let dec_x: Arc<Decoded> = x_mic.audio.decode(&svc.inner.media, mix_mode(&x_mic.mix)).ok()?;
     let mut srcs: Sources = Vec::new();
     for (i, m) in mics.iter().enumerate() {
         // every other close mic is a source: kick, snare and the other tom mics
         if !m.kind.is_some() || i == a {
             continue;
         }
-        if let Ok(d) = svc.inner.media.decode_cached(&m.path, mix_mode(&m.mix))
+        if let Ok(d) = m.audio.decode(&svc.inner.media, mix_mode(&m.mix))
             && d.sr == dec_x.sr
         {
             srcs.push((i, d));
@@ -1055,7 +1054,7 @@ mod tests {
         Mic {
             name: name.into(),
             kind,
-            path: std::path::PathBuf::new(),
+            audio: crate::media::TrackAudio::File(std::path::PathBuf::new()),
             mix: "average".into(),
             edited: vec![false; times.len()],
             times,

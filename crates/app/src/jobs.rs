@@ -885,15 +885,15 @@ pub fn retry_without_hits(
 /// and downmix, and for the model detector the resample and the features. Runs on the
 /// preparation pool. The error is the text the page shows.
 fn prepare_one(op: &Shared, name: &str, _kind: Option<Kind>) -> Result<Prepared, String> {
-    let (path, role, mix, params, follows, dir, source_key, mix_name) = {
+    let (audio, role, mix, params, follows, dir, source_key, mix_name) = {
         let g = lock(op);
         if g.offline(name) {
             return Err(format!("track is offline ({}): relink it first", g.status_str(name)));
         }
         let tr = g.track(name).map_err(|e| e.message)?;
-        let path = g.source(name).map_err(|e| e.message)?;
+        let audio = g.track_audio(name).map_err(|e| e.message)?;
         (
-            path,
+            audio,
             tr.role.clone().unwrap_or_else(|| "other".into()),
             mix_mode(tr.mix_mode_or_default()),
             tr.params.clone(),
@@ -905,7 +905,12 @@ fn prepare_one(op: &Shared, name: &str, _kind: Option<Kind>) -> Result<Prepared,
     };
     let parsed = parse_params(params.as_ref())?;
     let span = crate::trace::stage("analyze:decode");
-    let dec = decode(&path, mix).map_err(|e| e.message)?;
+    // #508: the plain source file, or the timeline of the track's segments (the gaps stay
+    // silence, so the hit times of the detection are the timeline positions).
+    let dec = match &audio {
+        crate::media::TrackAudio::File(p) => decode(p, mix).map_err(|e| e.message)?,
+        crate::media::TrackAudio::Timeline(segs) => crate::media::decode_timeline(segs, mix).map_err(|e| e.message)?,
+    };
     drop(span);
     Ok(Prepared {
         dec,
