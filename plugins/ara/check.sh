@@ -63,10 +63,12 @@ deps() {
   # ARA SDK's own installer pins) and the VST3 SDK v3.8.0_build_66 (the loader of the
   # host needs ARA_ENABLE_VST3; 3.8.0 is the tag clap-wrapper fetches, and the VST3 SDK
   # is MIT only from 3.8.0). The patch of patches/ is the S1 one, applied to the clone.
-  if [[ ! -d $DEPS/ARA_SDK/ARA_Examples ]]; then
+  if [[ ! -f $DEPS/ARA_SDK/ARA_Examples/CMakeLists.txt ]]; then
+    # the guard is on a file, not the dir: a fresh clone of the SDK leaves the submodule
+    # dirs behind as empty placeholders, and an empty dir is no checkout
     git -C "$DEPS/ARA_SDK" submodule update --init --depth 1 --recursive ARA_Examples || return 1
   fi
-  if [[ ! -d $DEPS/ARA_SDK/ARA_Library ]]; then
+  if [[ ! -f $DEPS/ARA_SDK/ARA_Library/README.md ]]; then
     git -C "$DEPS/ARA_SDK" submodule update --init --depth 1 --recursive ARA_Library || return 1
   fi
   if [[ ! -d $DEPS/ARA_SDK/clap/include/clap ]]; then
@@ -79,9 +81,10 @@ deps() {
   local ex=$DEPS/ARA_SDK/ARA_Examples
   if git -C $ex apply --check $PWD/patches/ara-examples-2.3.0.patch 2>/dev/null; then
     git -C $ex apply $PWD/patches/ara-examples-2.3.0.patch || return 1
-  elif ! grep -q 'spike:' $ex/CMakeLists.txt; then
-    echo "ARA_Examples: the patch is neither applicable nor applied"; return 1
   fi
+  # the hard check after the apply: git apply --check skips preimage files that do not
+  # exist (exit 0 on an empty tree), so the marker is the proof, fresh or already applied
+  grep -q 'spike:' $ex/CMakeLists.txt || { echo "ARA_Examples: the patch is neither applicable nor applied"; return 1; }
   if [[ ! -d $DEPS/clap-wrapper ]]; then
     git clone --depth 1 --branch v0.17.0 https://github.com/free-audio/clap-wrapper $DEPS/clap-wrapper || return 1
   fi
