@@ -8,10 +8,11 @@
 # this machine, and runs the whole check: ./check_s1.sh (the gate of the ticket) and the
 # seed check of the README. It is not part of the Cargo workspace and not part of a release.
 #
-#     ./spike.sh deps    fetch ARA SDK 2.3.0 (with its submodules), clap-wrapper 0.17.0,
-#                        pluginval 1.0.4 (pinned SHA-256), clap-validator 0.4.1 and the
-#                        CLAP SDK 1.1.9 headers (the version the ARA SDK installer pins)
-#                        into .deps, and apply the patches of patches/
+#     ./spike.sh deps    fetch ARA SDK 2.3.0 (with its submodules), the CLAP SDK 1.1.9
+#                        headers and the VST3 SDK v3.7.11_build_10 (the versions the ARA
+#                        SDK's own installer pins; the host needs both loaders), the
+#                        clap-wrapper 0.17.0, pluginval 1.0.4 (pinned SHA-256) and
+#                        clap-validator 0.4.1 into .deps, and apply the patches of patches/
 #     ./spike.sh build   build ARATestHost, DrumSpikeAraSpike.clap and DrumSpikeAraSpike.vst3
 #                        (the plugin crate builds alone into its own ./target)
 #     ./spike.sh check   ./check_s1.sh, then the seed check (check.py: four sources, render,
@@ -49,6 +50,14 @@ deps() {
   # the version the ARA SDK's own install_CLAP.cmake pins.
   if [[ ! -d $DEPS/ARA_SDK/clap/include/clap ]]; then
     git clone --depth 1 --branch 1.1.9 https://github.com/free-audio/clap $DEPS/ARA_SDK/clap || return 1
+  fi
+  # the VST3 SDK: the gate also runs the test host on the wrapped VST3, and the host's
+  # VST3 loader (ExamplesCommon/PlugInHosting/VST3Loader.cpp) only compiles with
+  # ARA_ENABLE_VST3. Same clone as the ARA SDK's own install_vst3sdk.cmake (v3.7.11_build_10,
+  # the submodules the examples use).
+  if [[ ! -d $DEPS/ARA_SDK/vst3sdk/pluginterfaces ]]; then
+    git clone --depth 1 --shallow-submodules --single-branch --no-tags --branch v3.7.11_build_10 https://github.com/steinbergmedia/vst3sdk.git $DEPS/ARA_SDK/vst3sdk || return 1
+    git -C $DEPS/ARA_SDK/vst3sdk submodule update --init --depth=1 --single-branch -- base cmake pluginterfaces public.sdk || return 1
   fi
   local ex=$DEPS/ARA_SDK/ARA_Examples
   if git -C $ex apply --check $PWD/patches/ara-examples-2.3.0.patch 2>/dev/null; then
