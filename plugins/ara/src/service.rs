@@ -10,7 +10,7 @@
 //! ```text
 //! <cache>/documents/<id>/audio/<seq>-<stem>.wav   the source audio of this document
 //! <cache>/documents/<id>/project/                 the project folder (the document, the Analysis cache)
-//! <cache>/documents/<id>/home/                    the home folder of the service (its recent list)
+//! <cache>/documents/<id>/service/                 the home folder of the service (its recent list)
 //! ```
 //!
 //! `<id>` is made by the plugin once per document and stored in the ARA archive, so a
@@ -192,7 +192,7 @@ fn home_of(cache: &Path, id: &str) -> PathBuf {
             .join("Application Support")
             .join("DrumSpike")
     } else {
-        folder_of(cache, id).join("home")
+        folder_of(cache, id).join("service")
     }
 }
 
@@ -280,7 +280,7 @@ impl DocService {
         self.svc
             .as_ref()
             .and_then(Service::home)
-            .unwrap_or_else(|| self.folder().join("home"))
+            .unwrap_or_else(|| self.folder().join("service"))
     }
 
     /// The tracks of the project, in order.
@@ -736,7 +736,7 @@ mod tests {
         assert!(wav_of(&cache, &ida, 0, "kick.wav").is_file() && wav_of(&cache, &idb, 0, "kick.wav").is_file());
         // the same audio in two documents gives the same events: nothing is shared
         assert_eq!(ra.events["kick"], rb.events["kick"]);
-        assert_eq!(a.home(), a.folder().join("home"));
+        assert_eq!(a.home(), a.folder().join("service"));
         a.shutdown();
         b.shutdown();
         let _ = std::fs::remove_dir_all(&cache);

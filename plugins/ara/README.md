@@ -45,7 +45,7 @@ The plugin writes only below one cache folder:
     documents/<id>/project/               the Drum Spike project of the document (one track
                                           per audio source; the host's playback regions
                                           are the segments of the track)
-    documents/<id>/home/                  the home folder of the service (its recent list)
+    documents/<id>/service/               the home folder of the service (its recent list)
 
 The plugin never writes into an audio file of the session, and nothing below the user's
 home outside this folder.
