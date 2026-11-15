@@ -17,7 +17,8 @@
 //! readers are created and destroyed on the main thread (the ARA rule), the reads and
 //! the service job run on their own threads, and `process` only passes audio through —
 //! except under the fault switch, which is the deliberate exception that proves the
-//! overrun check of the host can fail. Every CLAP entry point runs inside a panic guard.
+//! overrun check of the host can fail. Every CLAP entry point and every ARA callback of
+//! the plugin runs inside a panic guard.
 #![allow(
     non_upper_case_globals,
     non_camel_case_types,
@@ -44,7 +45,7 @@ use clap_sys::version::CLAP_VERSION;
 use serde_json::{json, Value};
 use std::ffi::{c_char, c_void, CStr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -61,8 +62,10 @@ macro_rules! cs {
 /// The boundary guard: every entry point runs its body inside `catch_unwind`. A panic
 /// that reached the C ABI would abort the host; caught here, the entry point answers its
 /// default. The default is explicit (`Result` and the CLAP status carry no `Default`).
-fn guard<T>(where_: &'static str, default: T, body: impl FnOnce() -> T + std::panic::UnwindSafe) -> T {
-    match std::panic::catch_unwind(body) {
+/// `AssertUnwindSafe`: the bodies work on raw ARA handles and plugin state the unwind
+/// cannot corrupt beyond what the default answer already covers.
+fn guard<T>(where_: &'static str, default: T, body: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(v) => v,
         Err(_) => {
             eprintln!("drumspike-ara: caught panic in {where_}");
@@ -109,8 +112,9 @@ struct SourceState {
     wav: Mutex<Option<PathBuf>>,
     /// The read failed.
     failed: AtomicBool,
-    /// The playback regions of the source (the segments of the project).
-    regions: Mutex<Vec<service::RegionRec>>,
+    /// The playback regions of the source, each with its own id (the ARA update and
+    /// destroy calls name the region, not a position in a list).
+    regions: Mutex<Vec<RegionSlot>>,
     /// The notes of the source: `(sample, volume)` per event.
     notes: Mutex<Vec<[f64; 2]>>,
     /// A job covered this source (its content is available).
@@ -138,7 +142,11 @@ impl SourceState {
                 .lock()
                 .map(|w| w.clone().unwrap_or_default())
                 .unwrap_or_default(),
-            regions: self.regions.lock().map(|r| r.clone()).unwrap_or_default(),
+            regions: self
+                .regions
+                .lock()
+                .map(|r| r.iter().map(|slot| slot.rec).collect())
+                .unwrap_or_default(),
         }
     }
 }
@@ -147,6 +155,24 @@ impl SourceState {
 /// to sources through their modifications).
 struct Modification {
     seq: usize,
+}
+
+/// One playback region record of a source: its id (the handle the update and destroy
+/// calls carry) and the times the service builds the segments from.
+#[derive(Debug, Clone, Copy)]
+struct RegionSlot {
+    id: u64,
+    rec: service::RegionRec,
+}
+
+/// The next region id (unique per process, so a destroyed region's record cannot be
+/// confused with a later one).
+static NEXT_REGION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// One playback region the host holds: its source's creation index and its record id.
+struct PlaybackRegion {
+    seq: usize,
+    id: u64,
 }
 
 /// One content reader handed to the host.
@@ -326,8 +352,10 @@ impl Session {
             .collect();
         let tracks = result.track_of.values().cloned().collect::<Vec<_>>().join(", ");
         let row = format!(
-            "{{\"event\":\"service\",\"analysis_ms\":{},\"tracks\":\"{}\",\"decode_counts\":{},\"events\":{}}}",
+            "{{\"event\":\"service\",\"analysis_ms\":{},\"analysis_thread\":\"{:?}\",\"tracks\":\"{}\",\"decode_counts\":{},\"events\":{}}}",
             result.analysis_ms,
+            // the thread the job ran on: the gate proves it is not the request caller's
+            std::thread::current().id(),
             tracks,
             serde_json::to_string(&counts).unwrap_or_else(|_| "{}".into()),
             service::events_line(&result.events)
@@ -433,13 +461,17 @@ static FACTORY: SyncPtr<ARAFactory> = SyncPtr(ARAFactory {
 });
 
 unsafe extern "C" fn ara_init(config: *const ARAInterfaceConfiguration) {
-    // the ARA interface structs are packed: copy the field out, never reference it
-    let api_generation = (*config).desiredApiGeneration;
-    session().log(format!(
-        "{{\"event\":\"ara_init\",\"api_generation\":{api_generation}}}"
-    ));
+    guard("ara_init", (), move || {
+        // the ARA interface structs are packed: copy the field out, never reference it
+        let api_generation = (*config).desiredApiGeneration;
+        session().log(format!(
+            "{{\"event\":\"ara_init\",\"api_generation\":{api_generation}}}"
+        ));
+    })
 }
-unsafe extern "C" fn ara_uninit() {}
+unsafe extern "C" fn ara_uninit() {
+    guard("ara_uninit", (), move || {})
+}
 
 // ---------------------------------------------------------------- document controller
 
@@ -452,25 +484,39 @@ struct Controller {
     sources: Mutex<Vec<Arc<SourceState>>>,
 }
 
+/// The document controller interface the instance carries. Under `DS_ARA_TABLES_FAULT`
+/// the plugin serves a copy with one emptied slot inside its declared structSize — the
+/// deliberate bug that proves the host's table walk can fail.
+fn dc_interface_of_instance() -> *const ARADocumentControllerInterface {
+    if std::env::var("DS_ARA_TABLES_FAULT").as_deref() != Ok("1") {
+        return &DC_INTERFACE.0;
+    }
+    let mut incomplete: ARADocumentControllerInterface = unsafe { std::ptr::read(&DC_INTERFACE.0) };
+    incomplete.beginEditing = None;
+    Box::into_raw(Box::new(incomplete))
+}
+
 unsafe extern "C" fn create_document_controller(
     host: *const ARADocumentControllerHostInstance,
     _properties: *const ARADocumentProperties,
 ) -> *const ARADocumentControllerInstance {
-    let s = session();
-    start_worker(s);
-    let c = Box::into_raw(Box::new(Controller {
-        host,
-        instance: std::mem::zeroed(),
-        sources: Mutex::new(Vec::new()),
-    }));
-    (*c).instance = ARADocumentControllerInstance {
-        structSize: std::mem::size_of::<ARADocumentControllerInstance>(),
-        documentControllerRef: c as ARADocumentControllerRef,
-        documentControllerInterface: &DC_INTERFACE.0,
-    };
-    current_store(c);
-    s.log("{\"event\":\"create_document_controller\"}".into());
-    &(*c).instance
+    guard("create_document_controller", std::ptr::null(), move || {
+        let s = session();
+        start_worker(s);
+        let c = Box::into_raw(Box::new(Controller {
+            host,
+            instance: std::mem::zeroed(),
+            sources: Mutex::new(Vec::new()),
+        }));
+        (*c).instance = ARADocumentControllerInstance {
+            structSize: std::mem::size_of::<ARADocumentControllerInstance>(),
+            documentControllerRef: c as ARADocumentControllerRef,
+            documentControllerInterface: dc_interface_of_instance(),
+        };
+        current_store(c);
+        s.log("{\"event\":\"create_document_controller\"}".into());
+        &(*c).instance
+    })
 }
 
 unsafe fn controller_of(controllerRef: ARADocumentControllerRef) -> &'static Controller {
@@ -478,12 +524,14 @@ unsafe fn controller_of(controllerRef: ARADocumentControllerRef) -> &'static Con
 }
 
 unsafe extern "C" fn dc_destroyDocumentController(controllerRef: ARADocumentControllerRef) {
-    // the sources die with the controller box; the worker lives for the process
-    drop(Box::from_raw(controllerRef as *mut Controller));
+    guard("destroyDocumentController", (), move || {
+        // the sources die with the controller box; the worker lives for the process
+        drop(Box::from_raw(controllerRef as *mut Controller));
+    })
 }
 
 unsafe extern "C" fn dc_getFactory(_c: ARADocumentControllerRef) -> *const ARAFactory {
-    &FACTORY.0
+    guard("getFactory", std::ptr::null(), move || &FACTORY.0)
 }
 
 unsafe extern "C" fn dc_isLicensedForCapabilities(
@@ -493,43 +541,54 @@ unsafe extern "C" fn dc_isLicensedForCapabilities(
     _t: *const ARAContentType,
     _f: ARAPlaybackTransformationFlags,
 ) -> ARABool {
-    1
+    guard("isLicensedForCapabilities", 0, move || 1)
 }
 
 // The no-op stubs for the members M1a does not implement: the ARA test host of the SDK
 // examples calls them without a check (the same stub set the S1 spike passes with, see
-// plugins/ara-spike/src/stubs.rs).
-unsafe extern "C" fn dc_beginEditing(_c: ARADocumentControllerRef) {}
-unsafe extern "C" fn dc_endEditing(_c: ARADocumentControllerRef) {}
-unsafe extern "C" fn dc_notifyModelUpdates(_c: ARADocumentControllerRef) {}
+// plugins/ara-spike/src/stubs.rs). Every one runs inside the boundary guard.
+unsafe extern "C" fn dc_beginEditing(_c: ARADocumentControllerRef) {
+    guard("beginEditing", (), move || {})
+}
+unsafe extern "C" fn dc_endEditing(_c: ARADocumentControllerRef) {
+    guard("endEditing", (), move || {})
+}
+unsafe extern "C" fn dc_notifyModelUpdates(_c: ARADocumentControllerRef) {
+    guard("notifyModelUpdates", (), move || {})
+}
 unsafe extern "C" fn dc_beginRestoringDocumentFromArchive(
     _c: ARADocumentControllerRef,
     _r: ARAArchiveReaderHostRef,
 ) -> ARABool {
-    0
+    guard("beginRestoringDocumentFromArchive", 0, move || 0)
 }
 unsafe extern "C" fn dc_endRestoringDocumentFromArchive(
     _c: ARADocumentControllerRef,
     _r: ARAArchiveReaderHostRef,
 ) -> ARABool {
-    0
+    guard("endRestoringDocumentFromArchive", 0, move || 0)
 }
 unsafe extern "C" fn dc_storeDocumentToArchive(_c: ARADocumentControllerRef, _w: ARAArchiveWriterHostRef) -> ARABool {
-    0
+    guard("storeDocumentToArchive", 0, move || 0)
 }
-unsafe extern "C" fn dc_updateDocumentProperties(_c: ARADocumentControllerRef, _p: *const ARADocumentProperties) {}
+unsafe extern "C" fn dc_updateDocumentProperties(_c: ARADocumentControllerRef, _p: *const ARADocumentProperties) {
+    guard("updateDocumentProperties", (), move || {})
+}
 unsafe extern "C" fn dc_createMusicalContext(
     _c: ARADocumentControllerRef,
     _h: ARAMusicalContextHostRef,
     _p: *const ARAMusicalContextProperties,
 ) -> ARAMusicalContextRef {
-    Box::into_raw(Box::new(0u64)) as ARAMusicalContextRef
+    guard("createMusicalContext", std::ptr::null_mut(), move || {
+        Box::into_raw(Box::new(0u64)) as ARAMusicalContextRef
+    })
 }
 unsafe extern "C" fn dc_updateMusicalContextProperties(
     _c: ARADocumentControllerRef,
     _m: ARAMusicalContextRef,
     _p: *const ARAMusicalContextProperties,
 ) {
+    guard("updateMusicalContextProperties", (), move || {})
 }
 unsafe extern "C" fn dc_updateMusicalContextContent(
     _c: ARADocumentControllerRef,
@@ -537,46 +596,53 @@ unsafe extern "C" fn dc_updateMusicalContextContent(
     _r: *const ARAContentTimeRange,
     _f: ARAContentUpdateFlags,
 ) {
+    guard("updateMusicalContextContent", (), move || {})
 }
-unsafe extern "C" fn dc_destroyMusicalContext(_c: ARADocumentControllerRef, _m: ARAMusicalContextRef) {}
+unsafe extern "C" fn dc_destroyMusicalContext(_c: ARADocumentControllerRef, _m: ARAMusicalContextRef) {
+    guard("destroyMusicalContext", (), move || {})
+}
 unsafe extern "C" fn dc_updateAudioSourceContent(
     _c: ARADocumentControllerRef,
     _s: ARAAudioSourceRef,
     _r: *const ARAContentTimeRange,
     _f: ARAContentUpdateFlags,
 ) {
+    guard("updateAudioSourceContent", (), move || {})
 }
 unsafe extern "C" fn dc_deactivateAudioSourceForUndoHistory(
     _c: ARADocumentControllerRef,
     _s: ARAAudioSourceRef,
     _d: ARABool,
 ) {
+    guard("deactivateAudioSourceForUndoHistory", (), move || {})
 }
 unsafe extern "C" fn dc_updateAudioModificationProperties(
     _c: ARADocumentControllerRef,
     _m: ARAAudioModificationRef,
     _p: *const ARAAudioModificationProperties,
 ) {
+    guard("updateAudioModificationProperties", (), move || {})
 }
 unsafe extern "C" fn dc_deactivateAudioModificationForUndoHistory(
     _c: ARADocumentControllerRef,
     _m: ARAAudioModificationRef,
     _d: ARABool,
 ) {
+    guard("deactivateAudioModificationForUndoHistory", (), move || {})
 }
 unsafe extern "C" fn dc_isAudioModificationContentAvailable(
     _c: ARADocumentControllerRef,
     _m: ARAAudioModificationRef,
     _t: ARAContentType,
 ) -> ARABool {
-    0
+    guard("isAudioModificationContentAvailable", 0, move || 0)
 }
 unsafe extern "C" fn dc_getAudioModificationContentGrade(
     _c: ARADocumentControllerRef,
     _m: ARAAudioModificationRef,
     _t: ARAContentType,
 ) -> ARAContentGrade {
-    0
+    guard("getAudioModificationContentGrade", 0, move || 0)
 }
 unsafe extern "C" fn dc_createAudioModificationContentReader(
     _c: ARADocumentControllerRef,
@@ -584,21 +650,25 @@ unsafe extern "C" fn dc_createAudioModificationContentReader(
     _t: ARAContentType,
     _r: *const ARAContentTimeRange,
 ) -> ARAContentReaderRef {
-    Box::into_raw(Box::new(Reader { notes: Vec::new() })) as ARAContentReaderRef
+    guard(
+        "createAudioModificationContentReader",
+        std::ptr::null_mut(),
+        move || Box::into_raw(Box::new(Reader { notes: Vec::new() })) as ARAContentReaderRef,
+    )
 }
 unsafe extern "C" fn dc_isPlaybackRegionContentAvailable(
     _c: ARADocumentControllerRef,
     _r: ARAPlaybackRegionRef,
     _t: ARAContentType,
 ) -> ARABool {
-    0
+    guard("isPlaybackRegionContentAvailable", 0, move || 0)
 }
 unsafe extern "C" fn dc_getPlaybackRegionContentGrade(
     _c: ARADocumentControllerRef,
     _r: ARAPlaybackRegionRef,
     _t: ARAContentType,
 ) -> ARAContentGrade {
-    0
+    guard("getPlaybackRegionContentGrade", 0, move || 0)
 }
 unsafe extern "C" fn dc_createPlaybackRegionContentReader(
     _c: ARADocumentControllerRef,
@@ -606,49 +676,58 @@ unsafe extern "C" fn dc_createPlaybackRegionContentReader(
     _t: ARAContentType,
     _range: *const ARAContentTimeRange,
 ) -> ARAContentReaderRef {
-    Box::into_raw(Box::new(Reader { notes: Vec::new() })) as ARAContentReaderRef
+    guard("createPlaybackRegionContentReader", std::ptr::null_mut(), move || {
+        Box::into_raw(Box::new(Reader { notes: Vec::new() })) as ARAContentReaderRef
+    })
 }
 unsafe extern "C" fn dc_createRegionSequence(
     _c: ARADocumentControllerRef,
     _h: ARARegionSequenceHostRef,
     _p: *const ARARegionSequenceProperties,
 ) -> ARARegionSequenceRef {
-    Box::into_raw(Box::new(0u64)) as ARARegionSequenceRef
+    guard("createRegionSequence", std::ptr::null_mut(), move || {
+        Box::into_raw(Box::new(0u64)) as ARARegionSequenceRef
+    })
 }
 unsafe extern "C" fn dc_updateRegionSequenceProperties(
     _c: ARADocumentControllerRef,
     _r: ARARegionSequenceRef,
     _p: *const ARARegionSequenceProperties,
 ) {
+    guard("updateRegionSequenceProperties", (), move || {})
 }
-unsafe extern "C" fn dc_destroyRegionSequence(_c: ARADocumentControllerRef, _r: ARARegionSequenceRef) {}
+unsafe extern "C" fn dc_destroyRegionSequence(_c: ARADocumentControllerRef, _r: ARARegionSequenceRef) {
+    guard("destroyRegionSequence", (), move || {})
+}
 unsafe extern "C" fn dc_getPlaybackRegionHeadAndTailTime(
     _c: ARADocumentControllerRef,
     _r: ARAPlaybackRegionRef,
     _head: *mut ARATimeDuration,
     _tail: *mut ARATimeDuration,
 ) {
+    guard("getPlaybackRegionHeadAndTailTime", (), move || {})
 }
 unsafe extern "C" fn dc_getProcessingAlgorithmsCount(_c: ARADocumentControllerRef) -> ARAInt32 {
-    0
+    guard("getProcessingAlgorithmsCount", 0, move || 0)
 }
 unsafe extern "C" fn dc_getProcessingAlgorithmProperties(
     _c: ARADocumentControllerRef,
     _i: ARAInt32,
 ) -> *const ARAProcessingAlgorithmProperties {
-    std::ptr::null()
+    guard("getProcessingAlgorithmProperties", std::ptr::null(), std::ptr::null)
 }
 unsafe extern "C" fn dc_getProcessingAlgorithmForAudioSource(
     _c: ARADocumentControllerRef,
     _s: ARAAudioSourceRef,
 ) -> ARAInt32 {
-    0
+    guard("getProcessingAlgorithmForAudioSource", 0, move || 0)
 }
 unsafe extern "C" fn dc_requestProcessingAlgorithmForAudioSource(
     _c: ARADocumentControllerRef,
     _s: ARAAudioSourceRef,
     _i: ARAInt32,
 ) {
+    guard("requestProcessingAlgorithmForAudioSource", (), move || {})
 }
 unsafe extern "C" fn dc_storeAudioSourceToAudioFileChunk(
     _c: ARADocumentControllerRef,
@@ -657,13 +736,13 @@ unsafe extern "C" fn dc_storeAudioSourceToAudioFileChunk(
     _id: *mut ARAPersistentID,
     _open: *mut ARABool,
 ) -> ARABool {
-    0
+    guard("storeAudioSourceToAudioFileChunk", 0, move || 0)
 }
 unsafe extern "C" fn dc_isAudioModificationPreservingAudioSourceSignal(
     _c: ARADocumentControllerRef,
     _m: ARAAudioModificationRef,
 ) -> ARABool {
-    0
+    guard("isAudioModificationPreservingAudioSourceSignal", 0, move || 0)
 }
 
 /// The document controller interface: the M1a surface (sources, content, archiving); the
@@ -731,35 +810,37 @@ unsafe extern "C" fn dc_createAudioSource(
     hostRef: ARAAudioSourceHostRef,
     properties: *const ARAAudioSourceProperties,
 ) -> ARAAudioSourceRef {
-    let ctl = controller_of(c);
-    let src = {
-        let mut list = ctl.sources.lock().unwrap_or_else(|e| e.into_inner());
-        let seq = list.len();
-        let src = Arc::new(SourceState {
-            seq,
-            props: Mutex::new(SourceProps {
-                name: text((*properties).name),
-                persistent_id: text((*properties).persistentID),
-                sample_count: (*properties).sampleCount,
-                sample_rate: (*properties).sampleRate,
-                channels: (*properties).channelCount,
-            }),
-            host: SyncPtr(ctl.host),
-            host_ref: SyncPtr(hostRef),
-            reader: Mutex::new(SyncPtr(std::ptr::null_mut())),
-            worker: Mutex::new(None),
-            cancel: AtomicBool::new(false),
-            wav: Mutex::new(None),
-            failed: AtomicBool::new(false),
-            regions: Mutex::new(Vec::new()),
-            notes: Mutex::new(Vec::new()),
-            has_events: AtomicBool::new(false),
-            requested: AtomicBool::new(false),
-        });
-        list.push(src.clone());
-        src
-    };
-    Box::into_raw(Box::new(SyncPtr(src))) as ARAAudioSourceRef
+    guard("createAudioSource", std::ptr::null_mut(), move || {
+        let ctl = controller_of(c);
+        let src = {
+            let mut list = ctl.sources.lock().unwrap_or_else(|e| e.into_inner());
+            let seq = list.len();
+            let src = Arc::new(SourceState {
+                seq,
+                props: Mutex::new(SourceProps {
+                    name: text((*properties).name),
+                    persistent_id: text((*properties).persistentID),
+                    sample_count: (*properties).sampleCount,
+                    sample_rate: (*properties).sampleRate,
+                    channels: (*properties).channelCount,
+                }),
+                host: SyncPtr(ctl.host),
+                host_ref: SyncPtr(hostRef),
+                reader: Mutex::new(SyncPtr(std::ptr::null_mut())),
+                worker: Mutex::new(None),
+                cancel: AtomicBool::new(false),
+                wav: Mutex::new(None),
+                failed: AtomicBool::new(false),
+                regions: Mutex::new(Vec::new()),
+                notes: Mutex::new(Vec::new()),
+                has_events: AtomicBool::new(false),
+                requested: AtomicBool::new(false),
+            });
+            list.push(src.clone());
+            src
+        };
+        Box::into_raw(Box::new(SyncPtr(src))) as ARAAudioSourceRef
+    })
 }
 
 unsafe extern "C" fn dc_updateAudioSourceProperties(
@@ -767,14 +848,16 @@ unsafe extern "C" fn dc_updateAudioSourceProperties(
     audioSourceRef: ARAAudioSourceRef,
     properties: *const ARAAudioSourceProperties,
 ) {
-    let Some(src) = state_of(audioSourceRef) else { return };
-    if let Ok(mut p) = src.props.lock() {
-        p.name = text((*properties).name);
-        p.persistent_id = text((*properties).persistentID);
-        p.sample_count = (*properties).sampleCount;
-        p.sample_rate = (*properties).sampleRate;
-        p.channels = (*properties).channelCount;
-    };
+    guard("updateAudioSourceProperties", (), move || {
+        let Some(src) = state_of(audioSourceRef) else { return };
+        if let Ok(mut p) = src.props.lock() {
+            p.name = text((*properties).name);
+            p.persistent_id = text((*properties).persistentID);
+            p.sample_count = (*properties).sampleCount;
+            p.sample_rate = (*properties).sampleRate;
+            p.channels = (*properties).channelCount;
+        };
+    })
 }
 
 unsafe fn state_of(audioSourceRef: ARAAudioSourceRef) -> Option<Arc<SourceState>> {
@@ -805,9 +888,11 @@ unsafe fn destroy_reader(src: &Arc<SourceState>) {
 }
 
 unsafe extern "C" fn dc_destroyAudioSource(_c: ARADocumentControllerRef, audioSourceRef: ARAAudioSourceRef) {
-    let ptr = audioSourceRef as *mut SyncPtr<Arc<SourceState>>;
-    let src = Box::from_raw(ptr);
-    stop_worker(&src.0);
+    guard("destroyAudioSource", (), move || {
+        let ptr = audioSourceRef as *mut SyncPtr<Arc<SourceState>>;
+        let src = Box::from_raw(ptr);
+        stop_worker(&src.0);
+    })
 }
 
 unsafe extern "C" fn dc_enableAudioSourceSamplesAccess(
@@ -815,27 +900,35 @@ unsafe extern "C" fn dc_enableAudioSourceSamplesAccess(
     audioSourceRef: ARAAudioSourceRef,
     enable: ARABool,
 ) {
-    let Some(src) = state_of(audioSourceRef) else { return };
-    if enable != 0 {
-        // the reader is created on the host's main thread; the reads run on the worker
-        if src.host.0.is_null() {
-            return;
+    guard("enableAudioSourceSamplesAccess", (), move || {
+        let Some(src) = state_of(audioSourceRef) else { return };
+        if enable != 0 {
+            // the reader is created on the host's main thread; the reads run on the worker
+            start_read(&src);
+        } else {
+            // no read may run after this call returns
+            stop_worker(&src);
         }
-        let iface = &*(*src.host.0).audioAccessControllerInterface;
-        let reader =
-            (iface.createAudioReaderForSource.unwrap())((*src.host.0).audioAccessControllerHostRef, src.host_ref.0, 0);
-        *src.reader.lock().unwrap_or_else(|e| e.into_inner()) = SyncPtr(reader);
-        let s = session();
-        let worker_src = src.clone();
-        let spawned = std::thread::Builder::new()
-            .name(format!("drumspike-ara-read-{}", src.seq))
-            .spawn(move || read_source(worker_src, s));
-        if let Ok(mut w) = src.worker.lock() {
-            *w = spawned.ok();
-        }
-    } else {
-        // no read may run after this call returns
-        stop_worker(&src);
+    })
+}
+
+/// The reader is created on the calling (the host's main) thread and the reads run on
+/// their own thread (the ARA rule).
+unsafe fn start_read(src: &Arc<SourceState>) {
+    if src.host.0.is_null() {
+        return;
+    }
+    let iface = &*(*src.host.0).audioAccessControllerInterface;
+    let reader =
+        (iface.createAudioReaderForSource.unwrap())((*src.host.0).audioAccessControllerHostRef, src.host_ref.0, 0);
+    *src.reader.lock().unwrap_or_else(|e| e.into_inner()) = SyncPtr(reader);
+    let s = session();
+    let worker_src = src.clone();
+    let spawned = std::thread::Builder::new()
+        .name(format!("drumspike-ara-read-{}", src.seq))
+        .spawn(move || read_source(worker_src, s));
+    if let Ok(mut w) = src.worker.lock() {
+        *w = spawned.ok();
     }
 }
 
@@ -926,13 +1019,23 @@ unsafe extern "C" fn dc_requestAudioSourceContentAnalysis(
     _n: ARASize,
     _types: *const ARAContentType,
 ) {
-    let Some(src) = state_of(audioSourceRef) else { return };
-    src.requested.store(true, Ordering::SeqCst);
-    let s = session();
-    if s.fault {
-        return; // the fault switch runs the job inside process instead
-    }
-    send(s, Msg::Request(src));
+    guard("requestAudioSourceContentAnalysis", (), move || {
+        let s = session();
+        // the caller thread goes into the report: the gate proves that the analysis does
+        // not run on it (finding 4 of the review)
+        let name = state_of(audioSourceRef).map(|src| src.props().name).unwrap_or_default();
+        s.log(format!(
+            "{{\"event\":\"request\",\"name\":{:?},\"thread\":\"{:?}\"}}",
+            name,
+            std::thread::current().id()
+        ));
+        let Some(src) = state_of(audioSourceRef) else { return };
+        src.requested.store(true, Ordering::SeqCst);
+        if s.fault {
+            return; // the fault switch runs the job inside process instead
+        }
+        send(s, Msg::Request(src));
+    })
 }
 
 unsafe extern "C" fn dc_isAudioSourceContentAnalysisIncomplete(
@@ -940,8 +1043,10 @@ unsafe extern "C" fn dc_isAudioSourceContentAnalysisIncomplete(
     audioSourceRef: ARAAudioSourceRef,
     _t: ARAContentType,
 ) -> ARABool {
-    let Some(src) = state_of(audioSourceRef) else { return 1 };
-    (!src.has_events.load(Ordering::SeqCst)) as ARABool
+    guard("isAudioSourceContentAnalysisIncomplete", 1, move || {
+        let Some(src) = state_of(audioSourceRef) else { return 1 };
+        (!src.has_events.load(Ordering::SeqCst)) as ARABool
+    })
 }
 
 unsafe extern "C" fn dc_isAudioSourceContentAvailable(
@@ -949,8 +1054,10 @@ unsafe extern "C" fn dc_isAudioSourceContentAvailable(
     audioSourceRef: ARAAudioSourceRef,
     t: ARAContentType,
 ) -> ARABool {
-    let Some(src) = state_of(audioSourceRef) else { return 0 };
-    (t == kARAContentTypeNotes as ARAContentType && src.has_events.load(Ordering::SeqCst)) as ARABool
+    guard("isAudioSourceContentAvailable", 0, move || {
+        let Some(src) = state_of(audioSourceRef) else { return 0 };
+        (t == kARAContentTypeNotes as ARAContentType && src.has_events.load(Ordering::SeqCst)) as ARABool
+    })
 }
 
 unsafe extern "C" fn dc_getAudioSourceContentGrade(
@@ -958,7 +1065,9 @@ unsafe extern "C" fn dc_getAudioSourceContentGrade(
     _s: ARAAudioSourceRef,
     _t: ARAContentType,
 ) -> ARAContentGrade {
-    kARAContentGradeDetected as ARAContentGrade
+    guard("getAudioSourceContentGrade", 0, move || {
+        kARAContentGradeDetected as ARAContentGrade
+    })
 }
 
 fn note_of(sample: f64, volume: f64, rate: f64) -> ARAContentNote {
@@ -979,31 +1088,35 @@ unsafe extern "C" fn dc_createAudioSourceContentReader(
     _t: ARAContentType,
     _range: *const ARAContentTimeRange,
 ) -> ARAContentReaderRef {
-    let Some(src) = state_of(audioSourceRef) else {
-        return Box::into_raw(Box::new(Reader { notes: Vec::new() })) as ARAContentReaderRef;
-    };
-    let rate = src.props().sample_rate;
-    let notes: Vec<ARAContentNote> = src
-        .notes
-        .lock()
-        .map(|n| {
-            n.iter()
-                .map(|[sample, volume]| note_of(*sample, *volume, rate))
-                .collect()
-        })
-        .unwrap_or_default();
-    let s = session();
-    s.log(format!(
-        "{{\"event\":\"notes\",\"name\":{:?},\"count\":{}}}",
-        src.props().name,
-        notes.len()
-    ));
-    Box::into_raw(Box::new(Reader { notes })) as ARAContentReaderRef
+    guard("createAudioSourceContentReader", std::ptr::null_mut(), move || {
+        let Some(src) = state_of(audioSourceRef) else {
+            return Box::into_raw(Box::new(Reader { notes: Vec::new() })) as ARAContentReaderRef;
+        };
+        let rate = src.props().sample_rate;
+        let notes: Vec<ARAContentNote> = src
+            .notes
+            .lock()
+            .map(|n| {
+                n.iter()
+                    .map(|[sample, volume]| note_of(*sample, *volume, rate))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let s = session();
+        s.log(format!(
+            "{{\"event\":\"notes\",\"name\":{:?},\"count\":{}}}",
+            src.props().name,
+            notes.len()
+        ));
+        Box::into_raw(Box::new(Reader { notes })) as ARAContentReaderRef
+    })
 }
 
 unsafe extern "C" fn dc_getContentReaderEventCount(_c: ARADocumentControllerRef, r: ARAContentReaderRef) -> ARAInt32 {
-    let reader: &Reader = &*(r as *mut Reader);
-    reader.notes.len() as ARAInt32
+    guard("getContentReaderEventCount", 0, move || {
+        let reader: &Reader = &*(r as *mut Reader);
+        reader.notes.len() as ARAInt32
+    })
 }
 
 unsafe extern "C" fn dc_getContentReaderDataForEvent(
@@ -1011,12 +1124,16 @@ unsafe extern "C" fn dc_getContentReaderDataForEvent(
     r: ARAContentReaderRef,
     i: ARAInt32,
 ) -> *const c_void {
-    let reader: &Reader = &*(r as *mut Reader);
-    &reader.notes[i as usize] as *const ARAContentNote as *const c_void
+    guard("getContentReaderDataForEvent", std::ptr::null(), move || {
+        let reader: &Reader = &*(r as *mut Reader);
+        &reader.notes[i as usize] as *const ARAContentNote as *const c_void
+    })
 }
 
 unsafe extern "C" fn dc_destroyContentReader(_c: ARADocumentControllerRef, r: ARAContentReaderRef) {
-    drop(Box::from_raw(r as *mut Reader));
+    guard("destroyContentReader", (), move || {
+        drop(Box::from_raw(r as *mut Reader));
+    })
 }
 
 unsafe extern "C" fn dc_createAudioModification(
@@ -1025,8 +1142,10 @@ unsafe extern "C" fn dc_createAudioModification(
     _h: ARAAudioModificationHostRef,
     _p: *const ARAAudioModificationProperties,
 ) -> ARAAudioModificationRef {
-    let seq = state_of(audioSourceRef).map(|s| s.seq).unwrap_or(usize::MAX);
-    Box::into_raw(Box::new(Modification { seq })) as ARAAudioModificationRef
+    guard("createAudioModification", std::ptr::null_mut(), move || {
+        let seq = state_of(audioSourceRef).map(|s| s.seq).unwrap_or(usize::MAX);
+        Box::into_raw(Box::new(Modification { seq })) as ARAAudioModificationRef
+    })
 }
 
 unsafe extern "C" fn dc_cloneAudioModification(
@@ -1035,12 +1154,16 @@ unsafe extern "C" fn dc_cloneAudioModification(
     _h: ARAAudioModificationHostRef,
     _p: *const ARAAudioModificationProperties,
 ) -> ARAAudioModificationRef {
-    let seq = (*(m as *mut Modification)).seq;
-    Box::into_raw(Box::new(Modification { seq })) as ARAAudioModificationRef
+    guard("cloneAudioModification", std::ptr::null_mut(), move || {
+        let seq = (*(m as *mut Modification)).seq;
+        Box::into_raw(Box::new(Modification { seq })) as ARAAudioModificationRef
+    })
 }
 
 unsafe extern "C" fn dc_destroyAudioModification(_c: ARADocumentControllerRef, m: ARAAudioModificationRef) {
-    drop(Box::from_raw(m as *mut Modification));
+    guard("destroyAudioModification", (), move || {
+        drop(Box::from_raw(m as *mut Modification));
+    })
 }
 
 unsafe fn region_times(p: *const ARAPlaybackRegionProperties) -> service::RegionRec {
@@ -1057,17 +1180,20 @@ unsafe extern "C" fn dc_createPlaybackRegion(
     _h: ARAPlaybackRegionHostRef,
     p: *const ARAPlaybackRegionProperties,
 ) -> ARAPlaybackRegionRef {
-    let seq = (*(m as *mut Modification)).seq;
-    let rec = region_times(p);
-    let ctl = controller_of(c);
-    if let Ok(list) = ctl.sources.lock() {
-        if let Some(src) = list.iter().find(|s| s.seq == seq) {
-            if let Ok(mut rl) = src.regions.lock() {
-                rl.push(rec);
+    guard("createPlaybackRegion", std::ptr::null_mut(), move || {
+        let seq = (*(m as *mut Modification)).seq;
+        let rec = region_times(p);
+        let id = NEXT_REGION_ID.fetch_add(1, Ordering::SeqCst);
+        let ctl = controller_of(c);
+        if let Ok(list) = ctl.sources.lock() {
+            if let Some(src) = list.iter().find(|s| s.seq == seq) {
+                if let Ok(mut rl) = src.regions.lock() {
+                    rl.push(RegionSlot { id, rec });
+                }
             }
         }
-    }
-    Box::into_raw(Box::new(Modification { seq })) as ARAPlaybackRegionRef
+        Box::into_raw(Box::new(PlaybackRegion { seq, id })) as ARAPlaybackRegionRef
+    })
 }
 
 unsafe extern "C" fn dc_updatePlaybackRegionProperties(
@@ -1075,23 +1201,39 @@ unsafe extern "C" fn dc_updatePlaybackRegionProperties(
     r: ARAPlaybackRegionRef,
     p: *const ARAPlaybackRegionProperties,
 ) {
-    let seq = (*(r as *mut Modification)).seq;
-    let rec = region_times(p);
-    let ctl = controller_of(c);
-    if let Ok(list) = ctl.sources.lock() {
-        if let Some(src) = list.iter().find(|s| s.seq == seq) {
-            // an update rewrites the region's times: the last one wins
-            if let Ok(mut rl) = src.regions.lock() {
-                if let Some(first) = rl.first_mut() {
-                    *first = rec;
+    guard("updatePlaybackRegionProperties", (), move || {
+        // the update names its region: the record with the region's id is rewritten, the
+        // other regions of the source keep their times
+        let region: &PlaybackRegion = &*(r as *const PlaybackRegion);
+        let rec = region_times(p);
+        let ctl = controller_of(c);
+        if let Ok(list) = ctl.sources.lock() {
+            if let Some(src) = list.iter().find(|s| s.seq == region.seq) {
+                if let Ok(mut rl) = src.regions.lock() {
+                    if let Some(slot) = rl.iter_mut().find(|slot| slot.id == region.id) {
+                        slot.rec = rec;
+                    }
                 }
             }
         }
-    }
+    })
 }
 
-unsafe extern "C" fn dc_destroyPlaybackRegion(_c: ARADocumentControllerRef, r: ARAPlaybackRegionRef) {
-    drop(Box::from_raw(r as *mut Modification));
+unsafe extern "C" fn dc_destroyPlaybackRegion(c: ARADocumentControllerRef, r: ARAPlaybackRegionRef) {
+    guard("destroyPlaybackRegion", (), move || {
+        // the region record leaves the source with the ref (the destroyed region is no
+        // longer part of the document)
+        let region = Box::from_raw(r as *mut PlaybackRegion);
+        let ctl = controller_of(c);
+        if let Ok(list) = ctl.sources.lock() {
+            if let Some(src) = list.iter().find(|s| s.seq == region.seq) {
+                if let Ok(mut rl) = src.regions.lock() {
+                    rl.retain(|slot| slot.id != region.id);
+                }
+            }
+        }
+        drop(region);
+    })
 }
 
 // ---------------------------------------------------------------- archiving
@@ -1099,46 +1241,69 @@ unsafe extern "C" fn dc_destroyPlaybackRegion(_c: ARADocumentControllerRef, r: A
 /// The document archive ID of this plugin's factory.
 const ARCHIVE_ID: &str = "com.cherryblossomvalley.drumspike.ara.archive.v1";
 
+/// The name the archive stores: never an absolute path. The ARA name of a source may be
+/// the host's file path; a stored absolute path would carry the host's folders into the
+/// archive (and the committed fixture). A name with a path separator is reduced to its
+/// final component; a clean name is kept as it is.
+fn archive_name_of(name: &str) -> String {
+    if name.starts_with('/') || name.contains('\\') || name.contains('/') {
+        std::path::Path::new(name)
+            .file_name()
+            .map_or_else(|| name.to_string(), |s| s.to_string_lossy().into_owned())
+    } else {
+        name.to_string()
+    }
+}
+
+/// The upper bound for an archive the host hands over: a hostile or broken host value
+/// must not become an unbounded allocation.
+const MAX_ARCHIVE_BYTES: usize = 256 * 1024 * 1024;
+
 unsafe extern "C" fn dc_storeObjectsToArchive(
     _c: ARADocumentControllerRef,
     writer: ARAArchiveWriterHostRef,
     _filter: *const ARAStoreObjectsFilter,
 ) -> ARABool {
-    let s = session();
-    let sources: Vec<state::ArchiveSource> = {
+    guard("storeObjectsToArchive", 0, move || {
+        let s = session();
+        let sources: Vec<state::ArchiveSource> = {
+            let ctl = controller_of(_c);
+            let Ok(list) = ctl.sources.lock() else { return 0 };
+            list.iter()
+                .map(|src| {
+                    let p = src.props();
+                    state::ArchiveSource {
+                        persistent_id: p.persistent_id,
+                        name: archive_name_of(&p.name),
+                        sample_rate: p.sample_rate,
+                        notes: src.notes.lock().map(|n| n.clone()).unwrap_or_default(),
+                    }
+                })
+                .collect()
+        };
+        let events = s
+            .service_row
+            .lock()
+            .ok()
+            .and_then(|r| r.as_ref().and_then(|row| extract_events(row)));
+        let blob = state::encode(&state::ArchiveState {
+            version: state::ARCHIVE_VERSION,
+            archive_id: ARCHIVE_ID.into(),
+            events: events.unwrap_or_default(),
+            sources,
+        });
         let ctl = controller_of(_c);
-        let Ok(list) = ctl.sources.lock() else { return 0 };
-        list.iter()
-            .map(|src| {
-                let p = src.props();
-                state::ArchiveSource {
-                    persistent_id: p.persistent_id,
-                    name: p.name,
-                    sample_rate: p.sample_rate,
-                    notes: src.notes.lock().map(|n| n.clone()).unwrap_or_default(),
-                }
-            })
-            .collect()
-    };
-    let events = s
-        .service_row
-        .lock()
-        .ok()
-        .and_then(|r| r.as_ref().and_then(|row| extract_events(row)));
-    let blob = state::encode(&state::ArchiveState {
-        version: state::ARCHIVE_VERSION,
-        archive_id: ARCHIVE_ID.into(),
-        events: events.unwrap_or_default(),
-        sources,
-    });
-    let ctl = controller_of(_c);
-    if ctl.host.is_null() {
-        return 0;
-    }
-    let a = &*(*ctl.host).archivingControllerInterface;
-    let host_ref = (*ctl.host).archivingControllerHostRef;
-    let ok = (a.writeBytesToArchive.unwrap())(host_ref, writer, 0, blob.len(), blob.as_ptr());
-    ok as ARABool
+        if ctl.host.is_null() {
+            return 0;
+        }
+        let a = &*(*ctl.host).archivingControllerInterface;
+        let Some(write_bytes) = a.writeBytesToArchive else {
+            return 0;
+        };
+        let host_ref = (*ctl.host).archivingControllerHostRef;
+        let ok = write_bytes(host_ref, writer, 0, blob.len(), blob.as_ptr());
+        ok as ARABool
+    })
 }
 
 /// The events object of a service row (the last JSON key of the line).
@@ -1152,53 +1317,71 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
     reader: ARAArchiveReaderHostRef,
     _filter: *const ARARestoreObjectsFilter,
 ) -> ARABool {
-    let s = session();
-    let ctl = controller_of(c);
-    if ctl.host.is_null() {
-        return 0;
-    }
-    let a = &*(*ctl.host).archivingControllerInterface;
-    let host_ref = (*ctl.host).archivingControllerHostRef;
-    let size = (a.getArchiveSize.unwrap())(host_ref, reader);
-    let mut bytes = vec![0u8; size];
-    if (a.readBytesFromArchive.unwrap())(host_ref, reader, 0, size, bytes.as_mut_ptr()) == 0 {
-        return 0;
-    }
-    let Ok(st) = state::decode(&bytes) else { return 0 };
-    // a fresh service counts its own decodes: the restore must not have decoded a file
-    let svc = drumspike_app::Service::new(drumspike_app::ServiceConfig::from_env(std::path::Path::new("/")));
-    let decode_counts: serde_json::Map<String, Value> = svc
-        .decode_counts()
-        .into_iter()
-        .map(|(p, n)| (p.display().to_string(), json!(n)))
-        .collect();
-    if let Ok(list) = ctl.sources.lock() {
-        for src in list.iter() {
-            let p = src.props();
-            let found = st
-                .sources
-                .iter()
-                .find(|a| !a.persistent_id.is_empty() && a.persistent_id == p.persistent_id)
-                .or_else(|| st.sources.iter().find(|a| a.name == p.name));
-            if let Some(a) = found {
-                if let Ok(mut n) = src.notes.lock() {
-                    *n = a.notes.clone();
+    guard("restoreObjectsFromArchive", 0, move || {
+        let s = session();
+        let ctl = controller_of(c);
+        if ctl.host.is_null() {
+            return 0;
+        }
+        let a = &*(*ctl.host).archivingControllerInterface;
+        let Some(get_size) = a.getArchiveSize else { return 0 };
+        let Some(read_bytes) = a.readBytesFromArchive else {
+            return 0;
+        };
+        let host_ref = (*ctl.host).archivingControllerHostRef;
+        let size = get_size(host_ref, reader);
+        if size == 0 || size > MAX_ARCHIVE_BYTES {
+            return 0;
+        }
+        let mut bytes = vec![0u8; size];
+        if read_bytes(host_ref, reader, 0, size, bytes.as_mut_ptr()) == 0 {
+            return 0;
+        }
+        let Ok(st) = state::decode(&bytes) else { return 0 };
+        if let Ok(list) = ctl.sources.lock() {
+            for src in list.iter() {
+                let p = src.props();
+                let found = st
+                    .sources
+                    .iter()
+                    .find(|a| !a.persistent_id.is_empty() && a.persistent_id == p.persistent_id)
+                    .or_else(|| st.sources.iter().find(|a| a.name == p.name));
+                if let Some(a) = found {
+                    if let Ok(mut n) = src.notes.lock() {
+                        *n = a.notes.clone();
+                    }
+                    src.has_events.store(true, Ordering::SeqCst);
                 }
-                src.has_events.store(true, Ordering::SeqCst);
             }
         }
-    }
-    let row = format!(
-        "{{\"event\":\"service\",\"restored\":true,\"version\":{},\"decode_counts\":{},\"events\":{}}}",
-        st.version,
-        serde_json::to_string(&decode_counts).unwrap_or_else(|_| "{}".into()),
-        serde_json::to_string(&st.events).unwrap_or_else(|_| "{}".into()),
-    );
-    if let Ok(mut sr) = s.service_row.lock() {
-        *sr = Some(row);
-    }
-    s.write_out();
-    1
+        // the fault switch of the no-decode check: decode one source during the restore
+        // on purpose, so the gate's "no read row, no cache WAV" proof can fail
+        if std::env::var("DS_ARA_RESTORE_FAULT").as_deref() == Ok("decode") {
+            let first = ctl.sources.lock().ok().and_then(|l| l.first().cloned());
+            if let Some(src) = first {
+                unsafe { start_read(&src) };
+                loop {
+                    let done =
+                        src.wav.lock().map(|w| w.is_some()).unwrap_or(false) || src.failed.load(Ordering::SeqCst);
+                    if done {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                unsafe { stop_worker(&src) };
+            }
+        }
+        let row = format!(
+            "{{\"event\":\"service\",\"restored\":true,\"version\":{},\"events\":{}}}",
+            st.version,
+            serde_json::to_string(&st.events).unwrap_or_else(|_| "{}".into()),
+        );
+        if let Ok(mut sr) = s.service_row.lock() {
+            *sr = Some(row);
+        }
+        s.write_out();
+        1
+    })
 }
 
 // ---------------------------------------------------------------- the CLAP plugin
@@ -1252,21 +1435,25 @@ pub struct clap_ara_plugin_extension {
 }
 
 unsafe extern "C" fn araf_count(_f: *const clap_ara_factory) -> u32 {
-    1
+    guard("ara_factory_count", 0, move || 1)
 }
 unsafe extern "C" fn araf_get(_f: *const clap_ara_factory, i: u32) -> *const ARAFactory {
-    if i == 0 {
-        &FACTORY.0
-    } else {
-        std::ptr::null()
-    }
+    guard("ara_factory_get", std::ptr::null(), move || {
+        if i == 0 {
+            &FACTORY.0
+        } else {
+            std::ptr::null()
+        }
+    })
 }
 unsafe extern "C" fn araf_id(_f: *const clap_ara_factory, i: u32) -> *const c_char {
-    if i == 0 {
-        PLUGIN_ID
-    } else {
-        std::ptr::null()
-    }
+    guard("ara_factory_id", std::ptr::null(), move || {
+        if i == 0 {
+            PLUGIN_ID
+        } else {
+            std::ptr::null()
+        }
+    })
 }
 static ARA_FACTORY_EXT: clap_ara_factory = clap_ara_factory {
     get_factory_count: Some(araf_count),
@@ -1281,7 +1468,7 @@ struct Plugin {
 }
 
 unsafe extern "C" fn pext_factory(_p: *const clap_plugin) -> *const ARAFactory {
-    &FACTORY.0
+    guard("pext_factory", std::ptr::null(), move || &FACTORY.0)
 }
 unsafe extern "C" fn pext_bind(
     p: *const clap_plugin,
@@ -1289,48 +1476,50 @@ unsafe extern "C" fn pext_bind(
     known: ARAPlugInInstanceRoleFlags,
     assigned: ARAPlugInInstanceRoleFlags,
 ) -> *const ARAPlugInExtensionInstance {
-    let plugin = (*p).plugin_data as *mut Plugin;
-    let me = plugin as *mut c_void;
-    let has = |role: u32| assigned & role as i32 != 0;
-    (*plugin).ext = ARAPlugInExtensionInstance {
-        structSize: std::mem::size_of::<ARAPlugInExtensionInstance>(),
-        plugInExtensionRef: std::ptr::null_mut(),
-        plugInExtensionInterface: std::ptr::null(),
-        playbackRendererRef: if has(kARAPlaybackRendererRole) {
-            me as _
-        } else {
-            std::ptr::null_mut()
-        },
-        playbackRendererInterface: if has(kARAPlaybackRendererRole) {
-            &PR_INTERFACE.0
-        } else {
-            std::ptr::null()
-        },
-        editorRendererRef: if has(kARAEditorRendererRole) {
-            me as _
-        } else {
-            std::ptr::null_mut()
-        },
-        editorRendererInterface: if has(kARAEditorRendererRole) {
-            &ER_INTERFACE.0
-        } else {
-            std::ptr::null()
-        },
-        editorViewRef: if has(kARAEditorViewRole) {
-            me as _
-        } else {
-            std::ptr::null_mut()
-        },
-        editorViewInterface: if has(kARAEditorViewRole) {
-            &EV_INTERFACE.0
-        } else {
-            std::ptr::null()
-        },
-    };
-    session().log(format!(
-        "{{\"event\":\"bind_to_document_controller\",\"known_roles\":{known},\"assigned_roles\":{assigned}}}"
-    ));
-    &(*plugin).ext
+    guard("bind_to_document_controller", std::ptr::null(), move || {
+        let plugin = (*p).plugin_data as *mut Plugin;
+        let me = plugin as *mut c_void;
+        let has = |role: u32| assigned & role as i32 != 0;
+        (*plugin).ext = ARAPlugInExtensionInstance {
+            structSize: std::mem::size_of::<ARAPlugInExtensionInstance>(),
+            plugInExtensionRef: std::ptr::null_mut(),
+            plugInExtensionInterface: std::ptr::null(),
+            playbackRendererRef: if has(kARAPlaybackRendererRole) {
+                me as _
+            } else {
+                std::ptr::null_mut()
+            },
+            playbackRendererInterface: if has(kARAPlaybackRendererRole) {
+                &PR_INTERFACE.0
+            } else {
+                std::ptr::null()
+            },
+            editorRendererRef: if has(kARAEditorRendererRole) {
+                me as _
+            } else {
+                std::ptr::null_mut()
+            },
+            editorRendererInterface: if has(kARAEditorRendererRole) {
+                &ER_INTERFACE.0
+            } else {
+                std::ptr::null()
+            },
+            editorViewRef: if has(kARAEditorViewRole) {
+                me as _
+            } else {
+                std::ptr::null_mut()
+            },
+            editorViewInterface: if has(kARAEditorViewRole) {
+                &EV_INTERFACE.0
+            } else {
+                std::ptr::null()
+            },
+        };
+        session().log(format!(
+            "{{\"event\":\"bind_to_document_controller\",\"known_roles\":{known},\"assigned_roles\":{assigned}}}"
+        ));
+        &(*plugin).ext
+    })
 }
 static ARA_PLUGIN_EXT: clap_ara_plugin_extension = clap_ara_plugin_extension {
     get_factory: Some(pext_factory),
@@ -1380,7 +1569,9 @@ unsafe extern "C" fn p_init(_p: *const clap_plugin) -> bool {
 }
 
 unsafe extern "C" fn p_destroy(p: *const clap_plugin) {
-    drop(Box::from_raw((*p).plugin_data as *mut Plugin));
+    guard("destroy", (), move || {
+        drop(Box::from_raw((*p).plugin_data as *mut Plugin));
+    })
 }
 
 unsafe extern "C" fn p_activate(p: *const clap_plugin, sr: f64, _min: u32, _max: u32) -> bool {
@@ -1391,12 +1582,18 @@ unsafe extern "C" fn p_activate(p: *const clap_plugin, sr: f64, _min: u32, _max:
     })
 }
 
-unsafe extern "C" fn p_deactivate(_p: *const clap_plugin) {}
+unsafe extern "C" fn p_deactivate(_p: *const clap_plugin) {
+    guard("deactivate", (), move || {})
+}
 unsafe extern "C" fn p_start(_p: *const clap_plugin) -> bool {
     guard("start_processing", true, move || true)
 }
-unsafe extern "C" fn p_stop(_p: *const clap_plugin) {}
-unsafe extern "C" fn p_reset(_p: *const clap_plugin) {}
+unsafe extern "C" fn p_stop(_p: *const clap_plugin) {
+    guard("stop_processing", (), move || {})
+}
+unsafe extern "C" fn p_reset(_p: *const clap_plugin) {
+    guard("reset", (), move || {})
+}
 
 /// The audio thread: pass the first mono pair through (silence without an input), touch
 /// nothing else. The analysis runs on its own threads and is never reached here — except
@@ -1450,12 +1647,18 @@ unsafe extern "C" fn p_get_extension(_p: *const clap_plugin, id: *const c_char) 
     })
 }
 
-unsafe extern "C" fn p_on_main_thread(_p: *const clap_plugin) {}
+unsafe extern "C" fn p_on_main_thread(_p: *const clap_plugin) {
+    guard("on_main_thread", (), move || {})
+}
 
 // the playback renderer of M1a passes audio through (the notes reach the host through
 // the content readers; the timeline render of the notes arrives with the editor part)
-unsafe extern "C" fn pr_addPlaybackRegion(_rendererRef: ARAPlaybackRendererRef, _r: ARAPlaybackRegionRef) {}
-unsafe extern "C" fn pr_removePlaybackRegion(_rendererRef: ARAPlaybackRendererRef, _r: ARAPlaybackRegionRef) {}
+unsafe extern "C" fn pr_addPlaybackRegion(_rendererRef: ARAPlaybackRendererRef, _r: ARAPlaybackRegionRef) {
+    guard("addPlaybackRegion", (), move || {})
+}
+unsafe extern "C" fn pr_removePlaybackRegion(_rendererRef: ARAPlaybackRendererRef, _r: ARAPlaybackRegionRef) {
+    guard("removePlaybackRegion", (), move || {})
+}
 static PR_INTERFACE: SyncPtr<ARAPlaybackRendererInterface> = SyncPtr(ARAPlaybackRendererInterface {
     structSize: std::mem::size_of::<ARAPlaybackRendererInterface>(),
     addPlaybackRegion: Some(pr_addPlaybackRegion),
@@ -1466,21 +1669,25 @@ unsafe extern "C" fn er_addPlaybackRegion(
     _editorRendererRef: ARAEditorRendererRef,
     _playbackRegionRef: ARAPlaybackRegionRef,
 ) {
+    guard("er_addPlaybackRegion", (), move || {})
 }
 unsafe extern "C" fn er_removePlaybackRegion(
     _editorRendererRef: ARAEditorRendererRef,
     _playbackRegionRef: ARAPlaybackRegionRef,
 ) {
+    guard("er_removePlaybackRegion", (), move || {})
 }
 unsafe extern "C" fn er_addRegionSequence(
     _editorRendererRef: ARAEditorRendererRef,
     _regionSequenceRef: ARARegionSequenceRef,
 ) {
+    guard("er_addRegionSequence", (), move || {})
 }
 unsafe extern "C" fn er_removeRegionSequence(
     _editorRendererRef: ARAEditorRendererRef,
     _regionSequenceRef: ARARegionSequenceRef,
 ) {
+    guard("er_removeRegionSequence", (), move || {})
 }
 static ER_INTERFACE: SyncPtr<ARAEditorRendererInterface> = SyncPtr(ARAEditorRendererInterface {
     structSize: std::mem::size_of::<ARAEditorRendererInterface>(),
@@ -1490,12 +1697,15 @@ static ER_INTERFACE: SyncPtr<ARAEditorRendererInterface> = SyncPtr(ARAEditorRend
     removeRegionSequence: Some(er_removeRegionSequence),
 });
 
-unsafe extern "C" fn ev_notifySelection(_editorViewRef: ARAEditorViewRef, _selection: *const ARAViewSelection) {}
+unsafe extern "C" fn ev_notifySelection(_editorViewRef: ARAEditorViewRef, _selection: *const ARAViewSelection) {
+    guard("notifySelection", (), move || {})
+}
 unsafe extern "C" fn ev_notifyHideRegionSequences(
     _editorViewRef: ARAEditorViewRef,
     _regionSequenceRefsCount: ARASize,
     _regionSequenceRefs: *const ARARegionSequenceRef,
 ) {
+    guard("notifyHideRegionSequences", (), move || {})
 }
 static EV_INTERFACE: SyncPtr<ARAEditorViewInterface> = SyncPtr(ARAEditorViewInterface {
     structSize: std::mem::size_of::<ARAEditorViewInterface>(),
@@ -1504,43 +1714,47 @@ static EV_INTERFACE: SyncPtr<ARAEditorViewInterface> = SyncPtr(ARAEditorViewInte
 });
 
 unsafe extern "C" fn f_count(_f: *const clap_plugin_factory) -> u32 {
-    1
+    guard("plugin_factory_count", 0, move || 1)
 }
 unsafe extern "C" fn f_desc(_f: *const clap_plugin_factory, i: u32) -> *const clap_plugin_descriptor {
-    if i == 0 {
-        &DESCRIPTOR
-    } else {
-        std::ptr::null()
-    }
+    guard("plugin_factory_descriptor", std::ptr::null(), move || {
+        if i == 0 {
+            &DESCRIPTOR
+        } else {
+            std::ptr::null()
+        }
+    })
 }
 unsafe extern "C" fn f_create(
     _f: *const clap_plugin_factory,
     _host: *const clap_host,
     id: *const c_char,
 ) -> *const clap_plugin {
-    if CStr::from_ptr(id) != CStr::from_ptr(PLUGIN_ID) {
-        return std::ptr::null();
-    }
-    let p = Box::into_raw(Box::new(Plugin {
-        clap: clap_plugin {
-            desc: &DESCRIPTOR,
-            plugin_data: std::ptr::null_mut(),
-            init: Some(p_init),
-            destroy: Some(p_destroy),
-            activate: Some(p_activate),
-            deactivate: Some(p_deactivate),
-            start_processing: Some(p_start),
-            stop_processing: Some(p_stop),
-            reset: Some(p_reset),
-            process: Some(p_process),
-            get_extension: Some(p_get_extension),
-            on_main_thread: Some(p_on_main_thread),
-        },
-        ext: std::mem::zeroed(),
-        sample_rate: Mutex::new(0.0),
-    }));
-    (*p).clap.plugin_data = p as *mut c_void;
-    &(*p).clap
+    guard("create_plugin", std::ptr::null(), move || {
+        if CStr::from_ptr(id) != CStr::from_ptr(PLUGIN_ID) {
+            return std::ptr::null();
+        }
+        let p = Box::into_raw(Box::new(Plugin {
+            clap: clap_plugin {
+                desc: &DESCRIPTOR,
+                plugin_data: std::ptr::null_mut(),
+                init: Some(p_init),
+                destroy: Some(p_destroy),
+                activate: Some(p_activate),
+                deactivate: Some(p_deactivate),
+                start_processing: Some(p_start),
+                stop_processing: Some(p_stop),
+                reset: Some(p_reset),
+                process: Some(p_process),
+                get_extension: Some(p_get_extension),
+                on_main_thread: Some(p_on_main_thread),
+            },
+            ext: std::mem::zeroed(),
+            sample_rate: Mutex::new(0.0),
+        }));
+        (*p).clap.plugin_data = p as *mut c_void;
+        &(*p).clap
+    })
 }
 
 static PLUGIN_FACTORY: clap_plugin_factory = clap_plugin_factory {
@@ -1569,16 +1783,20 @@ unsafe impl Sync for ClapEntry {}
 unsafe extern "C" fn e_init(_plugin_path: *const c_char) -> bool {
     guard("entry init", true, move || true)
 }
-unsafe extern "C" fn e_deinit() {}
+unsafe extern "C" fn e_deinit() {
+    guard("entry deinit", (), move || {})
+}
 unsafe extern "C" fn e_get_factory(id: *const c_char) -> *const c_void {
-    let id = CStr::from_ptr(id).to_bytes();
-    if id == CLAP_PLUGIN_FACTORY_ID.to_bytes() {
-        return &PLUGIN_FACTORY as *const _ as *const c_void;
-    }
-    if id == EXT_ARA_FACTORY || id == EXT_ARA_FACTORY_DRAFT {
-        return &ARA_FACTORY_EXT as *const _ as *const c_void;
-    }
-    std::ptr::null()
+    guard("entry get_factory", std::ptr::null(), move || {
+        let id = CStr::from_ptr(id).to_bytes();
+        if id == CLAP_PLUGIN_FACTORY_ID.to_bytes() {
+            return &PLUGIN_FACTORY as *const _ as *const c_void;
+        }
+        if id == EXT_ARA_FACTORY || id == EXT_ARA_FACTORY_DRAFT {
+            return &ARA_FACTORY_EXT as *const _ as *const c_void;
+        }
+        std::ptr::null()
+    })
 }
 
 /// The CLAP entry the loader looks for (the bundle carries it in its binary).

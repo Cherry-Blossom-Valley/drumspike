@@ -32,17 +32,31 @@ One chain: host -> CLAP -> ARA document controller in Rust -> the app service ->
   its volume). `storeObjectsToArchive` writes it through the host's archive controller,
   `restoreObjectsFromArchive` reads it, matches the sources by persistent ID (name as the
   fallback) and sets the notes without running the service again - no file is decoded a
-  second time. The committed fixture `fixtures/archive-v1.ara` loads in the check.
+  second time. The names it stores are never absolute paths: a source name that carries a
+  path is reduced to its file name, so the archive stays portable (the host may name a
+  source by its path). The committed fixture `fixtures/archive-v1.ara` loads in the
+  check; the check fails on an absolute path in a stored archive and measures the
+  restore itself: the restore run writes no `read` row and no cache WAV (the fault
+  switch `DS_ARA_RESTORE_FAULT=decode` decodes one source on purpose and makes that
+  proof fail). A restore refuses an archive bigger than 256 MiB and an archive
+  controller that misses a function it needs.
 - **Threads.** No analysis on the audio thread and none on the host's main thread: the
   reads and the service job run on their own threads; `process` only passes audio
   through. The S3 block check is used again: audio blocks during the analysis have no
-  overrun, and the fault switch (`DS_ARA_FAULT=in-process`) runs the analysis inside
-  `process` once and makes the overrun check fail - the proof that the check can fail.
-- **The boundary.** Every CLAP entry point and the service job run inside a panic guard;
-  a caught panic answers the entry point's default (the S3 rule).
+  overrun, the block count has a lower limit, and the report carries the thread of the
+  request call and the thread of the analysis job - the check fails when they are equal
+  (a synchronous analysis inside the request call would pass an overrun check alone).
+  The fault switch (`DS_ARA_FAULT=in-process`) runs the analysis inside `process` once,
+  on the request caller's thread, and makes both checks fire - the proof that the check
+  can fail.
+- **The boundary.** Every CLAP entry point and every ARA callback of the plugin (the
+  factory, the document controller, the role interfaces, the plugin lifecycle) and the
+  service job run inside a panic guard; a caught panic answers the entry point's
+  default (the S3 rule).
 - **Test switches** (a real host sets none): `DS_ARA_CACHE` (the cache folder,
   default `~/Library/Caches/DrumSpike/ARA`), `DS_ARA_OUT` (the report, one JSON object
-  per line) and `DS_ARA_FAULT`.
+  per line), `DS_ARA_FAULT` (the analysis inside `process`), `DS_ARA_TABLES_FAULT` (a
+  table with one emptied slot) and `DS_ARA_RESTORE_FAULT` (a decode during the restore).
 
 ## The check
 
@@ -69,11 +83,19 @@ interface and its playback renderer passes audio through, so no test is skipped.
 The `tables` stage walks the empty-slot class (the crash of this ticket): `ara-host
 tables` loads the plugin, binds all three roles and reads every ARA interface table up
 to the structSize the plugin declares - the factory, the document controller and the
-playback renderer, editor renderer and editor view tables. ARA marks optional parts by
-structSize (`ARAInterface.h`), so every slot inside the declared size must carry a
-function; the SDK hosts call the slots unchecked (`ARAHostDispatch.cpp`). The stage
-fails on the first empty slot, on an assigned role without an interface, and on 0 slots
-checked, and prints the number of slots it walked.
+playback renderer, editor renderer and editor view tables, 65 slots in total. ARA marks
+optional parts by structSize (`ARAInterface.h`), so every slot inside the declared size
+must carry a function; the SDK hosts call the slots unchecked (`ARAHostDispatch.cpp`).
+The stage fails on the first empty slot, on an assigned role without an interface, on 0
+slots checked, and on a count other than the expected 65. Its fault run
+(`DS_ARA_TABLES_FAULT`) has the plugin serve a document controller table with one
+emptied slot, and the walk must refuse it - the proof that the check can fail.
+
+The regions stage also covers the update and destroy of a playback region: the
+properties of the second of the two regions are rewritten (the first keeps its times -
+an update lands on the named region, not on the first record of the source) and the
+second region is then removed (no record is left in the document; the events of the
+mutated document are the one-region events).
 
 ### What each stage calls
 
@@ -91,11 +113,31 @@ because a host made the call, so a host that calls nothing cannot pass a stage b
 | fixture, reference, files | no plugin calls (fixture and reference build the compare base; files diffs the repo tree) |
 | pluginval, validate, universal, standalone, crate, workspace | no ARA calls (validators, lipo, cargo, git) |
 
+## Licences
+
+The third-party parts of the plugin and of the check, one row each (the versions are the
+ones `.deps` fetches; the same table with the usage notes is in `plugins/ara/README.md`):
+
+| Part | Version | Licence |
+| --- | --- | --- |
+| ARA SDK (ARA_API, ARA_Library, ARA_Examples, Celemony) | 2.3.0 | Apache-2.0 (its bundled examples: cpp-base64 zlib, pugixml MIT, ICST AudioFile BSD-2-Clause) |
+| CLAP | 1.1.9 | MIT |
+| clap-wrapper | 0.17.0 | MIT |
+| VST3 SDK | 3.8.0_build_66 | MIT |
+| pluginval | 1.0.4 | GPL-3.0 (Tracktion) |
+| clap-validator | 0.4.1 | MIT (Robbert van der Helm) |
+| Rust crates of the plugin | `Cargo.lock` | 150 crates, all permissive (MIT, Apache-2.0, BSD-2/3-Clause, Zlib, ISC, Unlicense, Unicode-3.0, 0BSD); no copyleft |
+
+pluginval and clap-validator are check-time tools and never ship. The parts that end
+inside a delivered bundle (the wrapper and the VST3 SDK module it compiles, the plugin's
+crates) must be listed in `NOTICE` before any delivery of a bundle (M1c), the way the
+app's `THIRD_PARTY.md` does it - an open item of M1c, not of this ticket.
+
 ## Result table
 
-Gate run of 2026-11-15 on the PR head 754e61cc: `plugins/ara/check.sh` rc=0, every stage
-below ok (the run's `files` stage: no file of the repo changed, so the code the gate ran
-is exactly 754e61cc; the commit that adds this table changes docs only).
+The table below is the gate run of 2026-11-15 on the then head 754e61cc (docs-only
+27e8f268 on top); it is refilled from the gate run on the head that carries the review
+fixes before the next `done`.
 
 | Gate line | Result | Evidence |
 | --- | --- | --- |

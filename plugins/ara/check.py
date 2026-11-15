@@ -13,8 +13,10 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
                  structSize by a small mode of ara-host (factory, document controller,
                  playback renderer, editor renderer, editor view): every slot inside the
                  declared size must carry a function - the stage fails on the first
-                 empty slot, on an assigned role without an interface, and on 0 slots
-                 checked, and prints the number of slots it walked
+                 empty slot, on an assigned role without an interface, on 0 slots
+                 checked, and on a slot count other than the expected 65 (3 + 54 + 2 +
+                 4 + 2). The fault run (DS_ARA_TABLES_FAULT, the plugin serves one table
+                 with an emptied slot) must be refused by the walk.
   identity-clap  the plugin (the .clap bundle) analyses the four-track session in the ARA
                  test host; the events are byte for byte the reference's, and the notes of
                  every source sit at the exact samples of the events
@@ -23,13 +25,21 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   regions        one source, two playback regions at different timeline positions, one of
                  them trimmed; the plugin makes the track from segments; the events are
                  byte for byte the service's on a project with the same segments, and the
-                 hits of the gap and of the trimmed-away part are absent
+                 hits of the gap and of the trimmed-away part are absent. The update and
+                 destroy case: the properties of the SECOND region are rewritten (the
+                 first keeps its times) and the second region is removed (no record is
+                 left behind).
   archive        analyse, store the ARA archive, restore it in a NEW process: the event
-                 lists are byte-identical, the decode counter of the service stays at 0,
-                 and a stored archive fixture from the repo loads (with its version field)
-  threads        audio blocks during the analysis have no overrun; with
-                 DS_ARA_FAULT=in-process the analysis runs inside `process` and the host
-                 reports the overrun (the check can fail)
+                 lists are byte-identical, the restore decodes no file (no read row and
+                 no cache WAV written by the restore run; the fault run with
+                 DS_ARA_RESTORE_FAULT=decode makes that proof fail), no absolute path is
+                 stored, and a stored archive fixture from the repo loads (with its
+                 version field)
+  threads        audio blocks during the analysis have no overrun, the block count has a
+                 lower limit, and the thread of the analysis is not the thread of the
+                 request call; with DS_ARA_FAULT=in-process the analysis runs inside
+                 `process` on the request caller's thread and both checks fire (the
+                 check can fail)
   conformance    the independent host: the ARATestHost of the ARA SDK examples (built by
                  check.sh from the S1 pattern) runs its own tests on the plugin, on the
                  CLAP and on the wrapped VST3 - ContentReading, PropertyUpdates,
@@ -37,7 +47,8 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
                  120 s limit (a hung test is a FAIL with its name, not a 5 h gate; the
                  review note on #525; the plugin has no editor GUI, but it implements
                  the EditorView role interface and its playback renderer passes audio
-                 through, so no test is skipped)
+                 through, so no test is skipped). Every run keeps the DS_ARA_CACHE
+                 override, so the plugin writes only below out/.
   files          the plugin wrote only below its cache folder: no file in the repo changed
                  since the fixture stage and no fixture audio file changed
   pluginval      pluginval 1.0.4 at strictness 5 on the wrapped VST3 (no CLAP_PATH: the
@@ -116,6 +127,9 @@ SPEC = [
 # positions, one of them trimmed): the tom, regions [0.0, 1.2) and [1.8, 2.3).
 REGIONS_FILE = "m1a_tom_96k_mono.wav"
 REGIONS = [(0.0, 1.2, 0.0), (1.8, 0.5, 2.5)]
+# The new times of the second region in the update and destroy case (the update must
+# land on that region, not on the first of the source).
+REGIONS_UPDATE = (0.0, 0.9, 1.0)
 # Hits that must be absent: 1.5 s is in the gap between the regions, 2.6 s behind both.
 ABSENT = [1.5, 2.6]
 FILES = [name for name, *_ in SPEC]
@@ -173,6 +187,37 @@ def stem_of(path: str) -> str:
 
 def no_switch() -> dict:
     return {k: None for k in ("DS_ARA_CACHE", "DS_ARA_OUT", "DS_ARA_FAULT")}
+
+
+# The expected slot count of the tables walk: ARAFactory 3, document controller 54,
+# playback renderer 2, editor renderer 4, editor view 2.
+EXPECTED_TABLE_SLOTS = 65
+
+
+def no_absolute_paths(label: str, blob) -> bool:
+    """Fail on a string in the stored archive that looks like an absolute path (the
+    archive must stay portable: it carries names, never host folders)."""
+    bad: list[str] = []
+
+    def walk(node) -> None:
+        if isinstance(node, str):
+            if node.startswith("/") or (len(node) > 2 and node[1] == ":" and node[2] == "\\"):
+                bad.append(node)
+        elif isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(blob)
+    return pass_fail(
+        label,
+        not bad,
+        f"no absolute path stored in the archive"
+        if not bad
+        else f"{len(bad)} absolute path(s) stored in the archive: {bad[:4]}",
+    )
 
 
 # ---------------------------------------------------------------- fixture
@@ -267,10 +312,11 @@ def stage_files() -> bool:
     before = json.loads(snapshot().read_text())
     after = walk_tree()
     changed = [p for p in after if p not in before or tuple(before[p]) != after[p]]
+    walked = len(after)
     ok = pass_fail(
         "files-repo",
-        not changed,
-        f"no file of the repo changed during the runs ({len(changed)} changed)"
+        not changed and walked > 0,
+        f"{walked} files of the repo walked, {len(changed)} changed during the runs"
         + (f": {changed[:5]}" if changed else ""),
     ) and ok
     recorded = json.loads((OUT / "fixture-sha256.json").read_text())
@@ -329,7 +375,7 @@ def build_reference_project() -> bool:
 # ---------------------------------------------------------------- the host runs
 
 
-def host_run(label: str, bundle: Path, args: list, cache: str, fault: bool = False) -> tuple[int, str, list]:
+def host_run(label: str, bundle: Path, args: list, cache: str, fault: bool = False, extra: dict | None = None) -> tuple[int, str, list]:
     """One ara-host run with a fresh cache and report file. Returns (rc, text, json lines)."""
     out_file = OUT / f"report-{label}.jsonl"
     if out_file.exists():
@@ -340,6 +386,8 @@ def host_run(label: str, bundle: Path, args: list, cache: str, fault: bool = Fal
     env = {**no_switch(), "DS_ARA_CACHE": str(cache_dir), "DS_ARA_OUT": str(out_file)}
     if fault:
         env["DS_ARA_FAULT"] = "in-process"
+    if extra:
+        env.update(extra)
     rc, text = run([str(HOST), str(bundle), *args], env=env, log=f"host-{label}.log")
     lines = []
     for ln in text.strip().splitlines():
@@ -451,6 +499,18 @@ def stage_identity(label: str, bundle: Path) -> bool:
     return ok
 
 
+def doc_segments(cache: str) -> list | None:
+    """The segments of the plugin's document in one run's cache folder (every track)."""
+    path = OUT / cache / "session" / "session.drumspike"
+    if not path.exists():
+        return None
+    doc = json.loads(path.read_text())
+    segs: list = []
+    for track in (doc.get("tracks") or {}).values():
+        segs.extend(track.get("segments") or [])
+    return segs
+
+
 def stage_regions() -> bool:
     """Gate item 3: one source, two regions (one trimmed); the track is made from
     segments; the events are the service's on a project with the same segments."""
@@ -505,7 +565,69 @@ def stage_regions() -> bool:
         else f"events at {bad} exist but their audio is trimmed away",
     )
     ok = check_notes("regions", lines, ref_events, rates_of()) and ok
+
+    # the update and destroy case: the properties of the SECOND region are rewritten and
+    # the region is removed. A host region ref names its region, so the first region of
+    # the source keeps its times and no record of the second is left in the document.
+    base = ["regions", "--file", str(FIXTURES / REGIONS_FILE)]
+    for a, d, p in REGIONS:
+        base += ["--region", f"{a},{d},{p}"]
+
+    rc, _text, _lines = host_run("regions-update", CLAP, [*base, "--update-region", f"1:{REGIONS_UPDATE[0]},{REGIONS_UPDATE[1]},{REGIONS_UPDATE[2]}"], "cache-regions-update")
+    segs = doc_segments("cache-regions-update")
+    landed = (
+        segs is not None
+        and len(segs) == 2
+        and abs(segs[0]["start"] - REGIONS[0][0]) < 1e-9
+        and abs(segs[0]["length"] - REGIONS[0][1]) < 1e-9
+        and abs(segs[1]["start"] - REGIONS_UPDATE[0]) < 1e-9
+        and abs(segs[1]["length"] - REGIONS_UPDATE[1]) < 1e-9
+    )
+    ok = pass_fail(
+        "regions-update-record",
+        rc == 0 and landed,
+        f"after the update of the second region the document carries {len(segs or [])} segment(s), "
+        f"first {segs[0]['start'] if segs else None}..{segs[0]['length'] if segs else None}, "
+        f"second {segs[1]['start'] if segs and len(segs) > 1 else None}..{segs[1]['length'] if segs and len(segs) > 1 else None}",
+    ) and ok
+
+    rc, _text, _lines_d = host_run(
+        "regions-destroy", CLAP, [*base, "--update-region", f"1:{REGIONS_UPDATE[0]},{REGIONS_UPDATE[1]},{REGIONS_UPDATE[2]}", "--destroy-region", "1"], "cache-regions-destroy"
+    )
+    segs = doc_segments("cache-regions-destroy")
+    gone = (
+        segs is not None
+        and len(segs) == 1
+        and abs(segs[0]["start"] - REGIONS[0][0]) < 1e-9
+        and abs(segs[0]["length"] - REGIONS[0][1]) < 1e-9
+    )
+    ok = pass_fail(
+        "regions-destroy-record",
+        rc == 0 and gone,
+        f"after the destroy of the second region the document carries {len(segs or [])} segment(s) "
+        f"(the first region's times, no record of the removed region)",
+    ) and ok
+    rc, _text, lines_one = host_run("regions-one", CLAP, ["regions", "--file", str(FIXTURES / REGIONS_FILE), "--region", f"{REGIONS[0][0]},{REGIONS[0][1]},{REGIONS[0][2]}"], "cache-regions-one")
+    ok_one, events_one = plugin_service_row("regions-one")
+    ok = pass_fail("regions-one", rc == 0 and ok_one, f"the one-region reference run rc={rc}") and ok
+    ok_destroy, events_destroy = plugin_service_row("regions-destroy")
+    ok = pass_fail("regions-destroy-events", ok_destroy, "the destroy run wrote a service row") and ok
+    if ok_one and ok_destroy:
+        # the events of the mutated document are the one-region events: the removed
+        # region contributes nothing and the surviving region kept its times
+        ok = compare_events("regions-destroy", events_destroy, events_one) and ok
     return ok
+
+
+def restore_decode_evidence(label: str, cache: str) -> tuple[list, list]:
+    """The decode evidence of one restore run: its read rows and its cache WAVs."""
+    report = OUT / f"report-{label}.jsonl"
+    read_rows: list[str] = []
+    if report.exists():
+        read_rows = [ln for ln in report.read_text().splitlines() if '"event":"read"' in ln]
+    audio = OUT / cache / "audio"
+    wavs = sorted(audio.glob("*.wav")) if audio.is_dir() else []
+    return read_rows, wavs
 
 
 def stage_archive() -> bool:
@@ -524,6 +646,7 @@ def stage_archive() -> bool:
         return False
     want = (OUT / "events-reference.json").read_bytes()
     ok = compare_events("archive-store", events_store, want)
+    ok = no_absolute_paths("archive-paths", json.loads(archive.read_text())) and ok
 
     # the restore in a NEW process: no analysis, no decode, the notes from the blob
     rc, text, lines = host_run(
@@ -534,15 +657,34 @@ def stage_archive() -> bool:
     ok_r, events_restore = plugin_service_row("archive-restore")
     if not ok_r:
         return False
-    row = [json.loads(ln) for ln in (OUT / "report-archive-restore.jsonl").read_text().splitlines() if '"event":"service"' in ln][-1]
-    counts = row.get("decode_counts", {"_": 1})
+    # the restore decodes no file: no read row in its report and no cache WAV in its
+    # cache folder (the decode counter of a fresh service is always empty, so the
+    # restore itself is measured - review finding 3 on #525)
+    read_rows, wavs = restore_decode_evidence("archive-restore", "cache-archive-restore")
     ok = pass_fail(
         "archive-decodes",
-        counts == {},
-        f"the decode counter of the restore stays at 0: {json.dumps(row.get('decode_counts'))}",
+        not read_rows and not wavs,
+        f"the restore decoded no file: {len(read_rows)} read row(s) in its report, {len(wavs)} cache WAV(s)",
     )
     ok = compare_events("archive-restore", events_restore, events_store) and ok
     ok = check_notes("archive-restore", lines, events_store, rates_of()) and ok
+
+    # the fault run: the plugin decodes one source during the restore on purpose, so the
+    # no-decode proof fires (the check can fail, as the threads fault run does)
+    rc, text, lines = host_run(
+        "archive-restore-fault",
+        CLAP,
+        ["restore", "--files", *[str(FIXTURES / f) for f in FILES], "--archive", str(archive)],
+        "cache-archive-restore-fault",
+        extra={"DS_ARA_RESTORE_FAULT": "decode"},
+    )
+    read_rows, wavs = restore_decode_evidence("archive-restore-fault", "cache-archive-restore-fault")
+    ok = pass_fail(
+        "archive-decodes-fault",
+        bool(read_rows) or bool(wavs),
+        f"the fault switch decoded one source during the restore: {len(read_rows)} read row(s), "
+        f"{len(wavs)} cache WAV(s) - the no-decode proof fires",
+    ) and ok
 
     # the stored archive fixture of the repo loads, and it carries the version field
     if not ARCHIVE_FIXTURE.exists():
@@ -550,6 +692,7 @@ def stage_archive() -> bool:
             "archive-fixture", False, f"no stored archive fixture at {ARCHIVE_FIXTURE} (check.py make-fixture)"
         )
     blob = json.loads(ARCHIVE_FIXTURE.read_text())
+    ok = no_absolute_paths("archive-fixture-paths", blob) and ok
     ok = pass_fail(
         "archive-fixture-version",
         blob.get("version") == 1,
@@ -567,19 +710,54 @@ def stage_archive() -> bool:
     return ok
 
 
+MIN_BLOCKS = 16
+
+
+def report_rows(label: str) -> list:
+    """The JSON rows of the plugin's report of one run (DS_ARA_OUT)."""
+    path = OUT / f"report-{label}.jsonl"
+    if not path.exists():
+        return []
+    rows = []
+    for ln in path.read_text().splitlines():
+        if ln.strip():
+            try:
+                rows.append(json.loads(ln))
+            except ValueError:
+                pass
+    return rows
+
+
 def stage_threads() -> bool:
-    """Gate item 6: audio blocks during the analysis have no overrun; the fault run (the
-    analysis inside `process`) makes the check fail."""
+    """Gate item 6: audio blocks during the analysis have no overrun, the block count has
+    a lower limit, and the analysis does not run on the request caller's thread; the
+    fault run (the analysis inside `process`) makes both checks fire."""
     if not HOST.exists() or not CLAP.exists():
         return pass_fail("threads", False, "no host or no CLAP: run check.sh build first")
     rc, text, lines = host_run("blocks", CLAP, ["blocks", "--files", *[str(FIXTURES / f) for f in FILES], "--frames", "512"], "cache-blocks")
     report = next((r for r in reversed(lines) if r.get("event") == "blocks"), {})
+    rows = report_rows("blocks")
+    requests = [r for r in rows if r.get("event") == "request"]
+    service = next((r for r in rows if r.get("event") == "service"), {})
+    on_request_thread = [r for r in requests if r.get("thread") == service.get("analysis_thread")]
     ok = pass_fail(
         "threads",
         rc == 0 and report.get("overruns") == 0 and report.get("event_file") is True,
         f"rc={rc}, {report.get('blocks')} blocks while the analysis ran, overruns={report.get('overruns')}, "
         f"worst {report.get('worst_block_us')}us of {report.get('budget_us')}us per block",
     )
+    ok = pass_fail(
+        "threads-blocks",
+        rc == 0 and report.get("blocks", 0) >= MIN_BLOCKS,
+        f"{report.get('blocks')} blocks ran while the analysis was in flight (lower limit {MIN_BLOCKS}; "
+        "a synchronous analysis inside the request call would end the loop at the first block)",
+    ) and ok
+    ok = pass_fail(
+        "threads-off-request",
+        bool(requests) and not on_request_thread,
+        f"{len(requests)} request call(s) on thread {[r.get('thread') for r in requests]}, "
+        f"the analysis ran on {service.get('analysis_thread')} - not the caller's thread",
+    ) and ok
     rc, text, lines = host_run(
         "blocks-fault", CLAP, ["blocks", "--files", *[str(FIXTURES / f) for f in FILES], "--frames", "512"], "cache-blocks-fault", fault=True
     )
@@ -589,6 +767,14 @@ def stage_threads() -> bool:
         rc != 0 and report.get("overruns", 0) >= 1,
         f"the fault switch ran the analysis inside process: rc={rc}, {report.get('overruns')} block(s) over budget "
         f"(worst {report.get('worst_block_us')}us), event_file={report.get('event_file')}",
+    ) and ok
+    requests = [r for r in report_rows("blocks-fault") if r.get("event") == "request"]
+    service = next((r for r in report_rows("blocks-fault") if r.get("event") == "service"), {})
+    ok = pass_fail(
+        "threads-fault-thread",
+        bool(requests) and service.get("analysis_thread") in [r.get("thread") for r in requests],
+        f"the fault job ran on the request caller's thread ({service.get('analysis_thread')}): "
+        "the off-request measurement fires on the deliberate violation",
     ) and ok
     return ok
 
@@ -616,10 +802,15 @@ def stage_conformance() -> bool:
             return pass_fail("conformance", False, f"no {kind} bundle at {bundle} (run check.sh build first)")
         for test, names in files_of.items():
             # no CLAP_PATH: the wrapped VST3 must find the CLAP inside its own bundle, and
-            # the runs must not reach another plugin by accident; stray writes go to out/
-            # 120 s per test: a hung test is a FAIL with its name, not a 5 h gate (the
-            # hang of the ARATestHost on the old head cost the 1800 s default per test)
-            env = {**no_switch(), "CLAP_PATH": None}
+            # the runs must not reach another plugin by accident. The DS_ARA_CACHE
+            # override stays: without it the plugin wrote audio/ and session/ into the
+            # real cache folder the README names (review finding 5 on #525); now every
+            # stray write lands below out/.
+            env = {
+                **no_switch(),
+                "CLAP_PATH": None,
+                "DS_ARA_CACHE": str(OUT / f"cache-conformance-{kind}-{test}"),
+            }
             rc, _text = run(
                 [str(TESTHOST), f"-{kind}", str(bundle), "-file", *[str(FIXTURES / name) for name in names], "-test", test],
                 env=env,
@@ -646,12 +837,12 @@ def stage_tables() -> bool:
     structSize the plugin declares - the ARA factory, the document controller and the
     playback renderer, editor renderer and editor view tables. ARA marks optional parts
     by structSize (ARAInterface.h), so every slot inside the declared size must carry a
-    function; the SDK hosts call them unchecked (ARAHostDispatch.cpp). The stage fails
-    on the first empty slot, on an assigned role without an interface, and on 0 slots
-    checked. It prints the number of slots it walked."""
+    function; the SDK hosts call the slots unchecked (ARAHostDispatch.cpp). The stage
+    fails on the first empty slot, on an assigned role without an interface, on 0 slots
+    checked, and on a slot count other than the expected 65."""
     if not HOST.exists() or not CLAP.exists():
         return pass_fail("tables", False, "no host or no CLAP: run check.sh build first")
-    rc, text = run([str(HOST), str(CLAP), "tables"], env=no_switch(), log="tables.log")
+    rc, text = run([str(HOST), str(CLAP), "tables"], env={**no_switch(), "DS_ARA_CACHE": str(OUT / "cache-tables")}, log="tables.log")
     if rc != 0:
         return pass_fail("tables", False, f"ara-host tables rc={rc} (out/tables.log)")
     row = None
@@ -669,8 +860,37 @@ def stage_tables() -> bool:
     walked = ", ".join(f"{k}={v}" for k, v in row.get("tables", {}).items())
     return pass_fail(
         "tables",
-        n > 0,
-        f"{n} slots walked up to the declared structSizes ({walked}); the stage fails on an empty slot or on 0",
+        n == EXPECTED_TABLE_SLOTS,
+        f"{n} of {EXPECTED_TABLE_SLOTS} slots walked up to the declared structSizes ({walked}); "
+        "the stage fails on an empty slot, on 0, and on a count other than the expected 65",
+    )
+
+
+def stage_tables_fault() -> bool:
+    """The fault run of the tables stage: the plugin serves a document controller table
+    with one emptied slot (DS_ARA_TABLES_FAULT), and the walk must refuse it - the proof
+    that the empty-slot check can fail (as the threads fault run does)."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("tables-fault", False, "no host or no CLAP: run check.sh build first")
+    rc, text = run(
+        [str(HOST), str(CLAP), "tables"],
+        env={**no_switch(), "DS_ARA_CACHE": str(OUT / "cache-tables-fault"), "DS_ARA_TABLES_FAULT": "1"},
+        log="tables-fault.log",
+    )
+    row = None
+    for line in reversed((text or "").strip().splitlines()):
+        try:
+            candidate = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(candidate, dict) and candidate.get("event") == "tables-fault":
+            row = candidate
+            break
+    return pass_fail(
+        "tables-fault",
+        rc == 0 and row is not None and row.get("detected") is True,
+        f"the walk refused the emptied slot: rc={rc}, detected={row.get('detected') if row else None}, "
+        f"error={row.get('error') if row else None} (out/tables-fault.log)",
     )
 
 
@@ -697,7 +917,8 @@ def stage_pluginval() -> bool:
 def stage_validate() -> bool:
     if not CLAP_VALIDATOR.exists() or not CLAP.exists():
         return pass_fail("validate", False, f"no clap-validator or no CLAP ({CLAP_VALIDATOR}, {CLAP})")
-    rc, _ = run([str(CLAP_VALIDATOR), "validate", str(CLAP)], env=no_switch(), log="clap-validator.log")
+    env = {**no_switch(), "DS_ARA_CACHE": str(OUT / "cache-validate")}
+    rc, _ = run([str(CLAP_VALIDATOR), "validate", str(CLAP)], env=env, log="clap-validator.log")
     return pass_fail("validate", rc == 0, f"clap-validator on the CLAP bundle, rc={rc} (out/clap-validator.log)")
 
 
@@ -793,11 +1014,12 @@ def stage_make_fixture() -> bool:
         return pass_fail("make-fixture", False, f"ara-host store rc={rc} (out/host-fixture-store.log)")
     blob = json.loads(archive.read_text())
     blob["note"] = "Stored by plugins/ara check.py make-fixture; regenerate when the fixtures change."
+    ok_paths = no_absolute_paths("make-fixture-paths", blob)
     ARCHIVE_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
     ARCHIVE_FIXTURE.write_text(json.dumps(blob), encoding="utf-8")
     return pass_fail(
         "make-fixture",
-        blob.get("version") == 1 and len(blob.get("sources", [])) == len(FILES),
+        ok_paths and blob.get("version") == 1 and len(blob.get("sources", [])) == len(FILES),
         f"{ARCHIVE_FIXTURE} written (version {blob.get('version')}, {len(blob.get('sources', []))} sources)",
     )
 
@@ -816,6 +1038,7 @@ STAGES = {
     "fixture": stage_fixture,
     "reference": stage_reference,
     "tables": stage_tables,
+    "tables-fault": stage_tables_fault,
     "identity-clap": lambda: stage_identity("clap", CLAP),
     "identity-vst3": lambda: stage_identity("vst3", EMBEDDED_CLAP),
     "regions": stage_regions,
@@ -832,7 +1055,7 @@ STAGES = {
     "make-fixture": stage_make_fixture,
 }
 ORDER = [
-    "fixture", "reference", "tables", "identity-clap", "identity-vst3", "regions", "archive",
+    "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
     "threads", "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",
 ]
@@ -857,7 +1080,7 @@ def main() -> int:
     if FAILURES:
         print(f"M1A CHECK: FAIL ({', '.join(FAILURES)})")
         return 1
-    print("M1A CHECK: PASS (tables, identity, regions, archive, notes, threads, conformance, files, pluginval, clap-validator, universal, standalone, crate, workspace)")
+    print("M1A CHECK: PASS (tables, tables-fault, identity, regions, archive, notes, threads, conformance, files, pluginval, clap-validator, universal, standalone, crate, workspace)")
     return 0
 
 

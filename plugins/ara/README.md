@@ -59,6 +59,29 @@ passes audio through, so no test is skipped.
 ## Test switches of the check
 
 A real host sets none of these: `DS_ARA_CACHE` (the cache folder), `DS_ARA_OUT` (where the
-plugin writes its report, one JSON object per line) and `DS_ARA_FAULT=in-process` (the
-fault switch: the analysis runs inside `process` on purpose, so the overrun check of the
-host can fail).
+plugin writes its report, one JSON object per line), `DS_ARA_FAULT=in-process` (the fault
+switch: the analysis runs inside `process` on purpose, so the overrun check of the host
+can fail), `DS_ARA_TABLES_FAULT=1` (the plugin serves a document controller table with
+one emptied slot, so the table walk of the check can fail) and
+`DS_ARA_RESTORE_FAULT=decode` (the restore decodes one source on purpose, so the
+no-decode proof of the archive check can fail).
+
+## Licences
+
+The third-party parts of the plugin and of the check, one row each (the versions are the
+ones `.deps` fetches):
+
+| Part | Version | Licence | Where it is used |
+| --- | --- | --- | --- |
+| ARA SDK (ARA_API, ARA_Library, ARA_Examples, Celemony) | 2.3.0 | Apache-2.0 (its bundled examples: cpp-base64 zlib, pugixml MIT, ICST AudioFile BSD-2-Clause) | `ARA_API` headers feed the bindgen bindings; the examples build the independent `ARATestHost` of the conformance run. Nothing of it is linked into the plugin. |
+| CLAP | 1.1.9 | MIT | The entry/factory ABI the plugin implements (headers only). |
+| clap-wrapper | 0.17.0 | MIT | Compiled into the wrapped VST3 bundle. |
+| VST3 SDK | 3.8.0_build_66 | MIT | Compiled into the wrapped VST3 bundle (the wrapper's module and `pluginterfaces`). |
+| pluginval | 1.0.4 | GPL-3.0 (Tracktion) | Check-time tool only; never part of a bundle. |
+| clap-validator | 0.4.1 | MIT (Robbert van der Helm) | Check-time tool only; never part of a bundle. |
+| Rust crates of the plugin | `Cargo.lock` | 150 crates, all permissive (MIT, Apache-2.0, BSD-2/3-Clause, Zlib, ISC, Unlicense, Unicode-3.0, 0BSD); no copyleft | Compiled into the plugin binaries. `drumspike-app` and `drumspike-core` are this repository's own crates (Apache-2.0). |
+
+The crate itself is repository code under the repo licence (Apache-2.0, see `NOTICE` at
+the repository root). Before any delivery of a bundle (M1c), `NOTICE` must list the parts
+that end inside it (the wrapper and the VST3 SDK module, the plugin's crates and their
+notices) the way the app's `THIRD_PARTY.md` does.

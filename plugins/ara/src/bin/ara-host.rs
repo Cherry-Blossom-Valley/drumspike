@@ -6,6 +6,7 @@
 //! ```text
 //! ara-host <bundle> session  --files <wav>...                     analyse whole files
 //! ara-host <bundle> regions  --file <wav> --region <a>,<d>,<p>... the regions fixture
+//!                             [--update-region <i>:<a>,<d>,<p>] [--destroy-region <i>]
 //! ara-host <bundle> store    --files <wav>... --archive <file>    store the ARA archive
 //! ara-host <bundle> restore  --archive <file> --files <wav>...    restore in a NEW process
 //! ara-host <bundle> blocks   --files <wav>... [--frames N]        the audio-thread check
@@ -61,6 +62,9 @@ struct HostState {
     writers: Vec<Vec<u8>>,
     /// The bytes of the loaded archive (the readers read it).
     loaded: Vec<u8>,
+    /// The playback regions in creation order (the update and destroy calls of the
+    /// regions mode address them by index).
+    regions: Vec<ARAPlaybackRegionRef>,
 }
 
 /// The bundle binary of a `.clap` bundle path.
@@ -181,14 +185,14 @@ unsafe extern "C" fn aa_read(
     let idx = *(reader as *mut usize);
     let state = &*(_ctl as *const HostState);
     let Some(src) = state.sources.get(idx) else { return 0 };
-    for c in 0..src.channels.len() {
+    for (c, chan) in src.channels.iter().enumerate() {
         let buf = *buffers.add(c) as *mut f32;
         if buf.is_null() {
             continue;
         }
         for i in 0..samples_to_read.max(0) as usize {
             let at = sample_position.max(0) as usize + i;
-            let v = src.channels[c].get(at).copied().unwrap_or(0.0);
+            let v = chan.get(at).copied().unwrap_or(0.0);
             *buf.add(i) = v;
         }
     }
@@ -510,23 +514,34 @@ unsafe fn iface_of(inst: Inst) -> &'static ARADocumentControllerInterface {
     &*std::ptr::addr_of!((*inst).documentControllerInterface).read_unaligned()
 }
 
-/// The playback regions of one modification, inside the edit cycle.
-unsafe fn add_regions(inst: Inst, modification: ARAAudioModificationRef, specs: &[(f64, f64, f64)]) {
+/// The properties of one playback region spec (shared by the create and the update call).
+fn playback_props(a: f64, d: f64, p: f64) -> ARAPlaybackRegionProperties {
+    ARAPlaybackRegionProperties {
+        structSize: std::mem::size_of::<ARAPlaybackRegionProperties>(),
+        transformationFlags: kARAPlaybackTransformationNoChanges as i32,
+        startInModificationTime: a,
+        durationInModificationTime: d,
+        startInPlaybackTime: p,
+        durationInPlaybackTime: d,
+        musicalContextRef: std::ptr::null_mut(),
+        regionSequenceRef: std::ptr::null_mut(),
+        name: std::ptr::null(),
+        color: unsafe { std::mem::zeroed() },
+    }
+}
+
+/// The playback regions of one modification, inside the edit cycle; the refs land in
+/// `state` (the regions mode updates and destroys them by index afterwards).
+unsafe fn add_regions(
+    inst: Inst,
+    state: *mut HostState,
+    modification: ARAAudioModificationRef,
+    specs: &[(f64, f64, f64)],
+) {
     let dc = iface_of(inst);
     let dc_ref = dc_ref_of(inst);
     for (a, d, p) in specs {
-        let props = ARAPlaybackRegionProperties {
-            structSize: std::mem::size_of::<ARAPlaybackRegionProperties>(),
-            transformationFlags: kARAPlaybackTransformationNoChanges as i32,
-            startInModificationTime: *a,
-            durationInModificationTime: *d,
-            startInPlaybackTime: *p,
-            durationInPlaybackTime: *d,
-            musicalContextRef: std::ptr::null_mut(),
-            regionSequenceRef: std::ptr::null_mut(),
-            name: std::ptr::null(),
-            color: std::mem::zeroed(),
-        };
+        let props = playback_props(*a, *d, *p);
         let r = (dc.createPlaybackRegion.expect("createPlaybackRegion"))(
             dc_ref,
             modification,
@@ -536,6 +551,7 @@ unsafe fn add_regions(inst: Inst, modification: ARAAudioModificationRef, specs: 
         if r.is_null() {
             eprintln!("createPlaybackRegion failed");
         }
+        (*state).regions.push(r);
     }
 }
 
@@ -625,6 +641,7 @@ fn with_document(
         sources: Vec::new(),
         writers: Vec::new(),
         loaded,
+        regions: Vec::new(),
     }));
     unsafe {
         let loaded = load(bundle)?;
@@ -638,7 +655,7 @@ fn with_document(
         let pairs = add_sources(inst, state, files)?;
         for (i, (_, modification)) in pairs.iter().enumerate() {
             let specs = regions_of(&*state, i);
-            add_regions(inst, *modification, &specs);
+            add_regions(inst, state, *modification, &specs);
         }
         if let Some(f) = dc.endEditing {
             f(dc_ref);
@@ -693,6 +710,7 @@ fn run_tables(bundle: &str) -> i32 {
         sources: Vec::new(),
         writers: Vec::new(),
         loaded: Vec::new(),
+        regions: Vec::new(),
     }));
     unsafe {
         let loaded = match load(bundle) {
@@ -730,11 +748,26 @@ fn run_tables(bundle: &str) -> i32 {
         slots += n;
         tables.push(("ARAFactory".into(), n));
 
-        // 2. the document controller interface, out of the instance the host holds
+        // 2. the document controller interface, out of the instance the host holds.
+        //    Under DS_ARA_TABLES_FAULT the plugin serves a table with one emptied slot:
+        //    the walk must refuse it (the proof that this check can fail).
+        let fault = std::env::var("DS_ARA_TABLES_FAULT").as_deref() == Ok("1");
         let dc_ptr = iface_of(inst) as *const ARADocumentControllerInterface;
-        let dc_ref = dc_ref_of(inst);
         let dc_declared = std::ptr::addr_of!((*dc_ptr).structSize).read_unaligned();
-        let n = match walk_table("document controller", dc_ptr as *const c_void, dc_declared, DC_SLOTS) {
+        let walked_dc = walk_table("document controller", dc_ptr as *const c_void, dc_declared, DC_SLOTS);
+        if fault {
+            match walked_dc {
+                Ok(_) => {
+                    eprintln!("tables-fault: the walk passed despite the emptied slot");
+                    return 2;
+                }
+                Err(e) => {
+                    println!("{{\"event\":\"tables-fault\",\"detected\":true,\"error\":{:?}}}", e);
+                    return 0;
+                }
+            }
+        }
+        let n = match walked_dc {
             Ok(n) => n,
             Err(e) => {
                 eprintln!("{e}");
@@ -743,6 +776,7 @@ fn run_tables(bundle: &str) -> i32 {
         };
         slots += n;
         tables.push(("documentController".into(), n));
+        let dc_ref = dc_ref_of(inst);
 
         // 3. the plug-in extension: bind all three roles, the tables it returns must be
         //    complete (an assigned role with a null interface is a failure on its own)
@@ -880,7 +914,9 @@ fn run_session(bundle: &str, files: &[String]) -> i32 {
     }
 }
 
-/// `regions`: one file, the regions of the CLI specs.
+/// `regions`: one file, the regions of the CLI specs. `--update-region <i>:<a>,<d>,<p>`
+/// rewrites the properties of the i-th created region (the ARA update call lands on that
+/// region, not on the first of the source) and `--destroy-region <i>` destroys it.
 fn run_regions(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     if files.len() != 1 {
         eprintln!("regions: exactly one --file");
@@ -900,9 +936,62 @@ fn run_regions(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         eprintln!("regions: no --region");
         return 64;
     }
+    let mut updates: Vec<(usize, (f64, f64, f64))> = Vec::new();
+    for spec in args_list(rest, "--update-region") {
+        let Some((idx, region)) = spec.split_once(':') else {
+            eprintln!("bad --update-region {spec:?}: want <index>:<start>,<length>,<playback>");
+            return 64;
+        };
+        let Ok(i) = idx.parse::<usize>() else {
+            eprintln!("bad --update-region index {idx:?}");
+            return 64;
+        };
+        match parse_region(region) {
+            Ok(r) => updates.push((i, r)),
+            Err(e) => {
+                eprintln!("{e}");
+                return 64;
+            }
+        }
+    }
+    let mut destroys: Vec<usize> = Vec::new();
+    for spec in args_list(rest, "--destroy-region") {
+        match spec.parse::<usize>() {
+            Ok(i) => destroys.push(i),
+            Err(_) => {
+                eprintln!("bad --destroy-region {spec:?}");
+                return 64;
+            }
+        }
+    }
     let regions_of = |_state: &HostState, i: usize| if i == 0 { specs.clone() } else { Vec::new() };
     let rc = with_document(bundle, files, &regions_of, Vec::new(), &|inst, state, pairs| {
         unsafe {
+            // the ARA update and destroy calls on the created regions, by index
+            let dc = iface_of(inst);
+            let dc_ref = dc_ref_of(inst);
+            for (i, (a, d, p)) in &updates {
+                let Some(r) = state.regions.get(*i) else {
+                    return Err(format!("--update-region {i}: no region with that index"));
+                };
+                let props = playback_props(*a, *d, *p);
+                (dc.updatePlaybackRegionProperties
+                    .expect("updatePlaybackRegionProperties"))(dc_ref, *r, &props);
+            }
+            for i in &destroys {
+                let Some(r) = state.regions.get(*i) else {
+                    return Err(format!("--destroy-region {i}: no region with that index"));
+                };
+                (dc.destroyPlaybackRegion.expect("destroyPlaybackRegion"))(dc_ref, *r);
+            }
+            if !updates.is_empty() || !destroys.is_empty() {
+                println!(
+                    "{{\"event\":\"regions_mutated\",\"regions\":{},\"updated\":{:?},\"destroyed\":{:?}}}",
+                    state.regions.len(),
+                    updates.iter().map(|(i, _)| i).collect::<Vec<_>>(),
+                    destroys,
+                );
+            }
             analyse(inst, pairs)?;
         }
         unsafe {
@@ -1031,6 +1120,7 @@ fn run_blocks(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         sources: Vec::new(),
         writers: Vec::new(),
         loaded: Vec::new(),
+        regions: Vec::new(),
     }));
     unsafe {
         let lib = match load(bundle) {
@@ -1062,7 +1152,7 @@ fn run_blocks(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             }
         };
         for (i, (_, modification)) in pairs.iter().enumerate() {
-            add_regions(inst, *modification, &full_regions(&*state, i));
+            add_regions(inst, state, *modification, &full_regions(&*state, i));
         }
         if let Some(f) = dc.endEditing {
             f(dc_ref);
