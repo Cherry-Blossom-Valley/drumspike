@@ -1028,7 +1028,7 @@ impl Service {
                 None => crate::jobs::analysis_rule(&self.inner.config),
             };
             (
-                g.source(name),
+                g.source_no_segments(name),
                 tr.mix_mode_or_default().to_string(),
                 tr.params.clone(),
                 rule,
@@ -1054,7 +1054,10 @@ impl Service {
         let op = self.inner.registry.get(sid)?;
         let (source, mix) = {
             let g = lock(&op);
-            (g.source(name), g.track(name)?.mix_mode_or_default().to_string())
+            (
+                g.source_no_segments(name),
+                g.track(name)?.mix_mode_or_default().to_string(),
+            )
         };
         let d = self.inner.media.decode_cached(&source?, mix_mode(&mix))?;
         Ok(rise_example(&d.samples, d.sr, t0, t1))
@@ -1089,11 +1092,11 @@ impl Service {
                     .map(|e| e.t - shift)
                     .filter(|&h| h >= t0 - BLEED_REACH && h <= t1 + BLEED_REACH)
                     .collect();
-                if let (false, Ok(src)) = (near.is_empty(), g.source(&n)) {
+                if let (false, Ok(src)) = (near.is_empty(), g.source_no_segments(&n)) {
                     others.push((src, o.mix_mode_or_default().to_string(), near));
                 }
             }
-            (g.source(name), tr.mix_mode_or_default().to_string(), others)
+            (g.source_no_segments(name), tr.mix_mode_or_default().to_string(), others)
         };
         let d = self.inner.media.decode_cached(&source?, mix_mode(&mix))?;
         let mut hits: Vec<(f64, f32)> = Vec::new();

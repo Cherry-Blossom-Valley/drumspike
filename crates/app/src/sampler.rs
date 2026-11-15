@@ -207,7 +207,7 @@ impl Service {
             let Some(s) = sampler_of(&tr.extra) else {
                 return Ok(None);
             };
-            (s, layer_job(&g, name)?, g.source(name).ok())
+            (s, layer_job(&g, name)?, g.source_no_segments(name).ok())
         };
         let sr = source
             .and_then(|p| MappedWav::open(&p).ok())
@@ -359,7 +359,12 @@ impl Service {
                 .filter(|e| !crate::histogram::event_cut(e))
                 .map(|e| e.t)
                 .collect();
-            (t, g.source(name).ok(), mix_mode(tr.mix_mode_or_default()), hits)
+            (
+                t,
+                g.source_no_segments(name).ok(),
+                mix_mode(tr.mix_mode_or_default()),
+                hits,
+            )
         };
         let shot = read_one_shot(&path).map_err(AppError::bad)?;
         let mono = shot.mono();

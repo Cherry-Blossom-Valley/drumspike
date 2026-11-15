@@ -322,7 +322,7 @@ impl Service {
             names
                 .iter()
                 .filter_map(|n| crate::media::PeakRequest::of(&g, n).ok())
-                .filter(|r| r.source.is_ok() && !drumspike_core::cache::cache_is_current(&r.dir, &r.key))
+                .filter(|r| r.audio.is_ok() && !drumspike_core::cache::cache_is_current(&r.dir, &r.key))
                 .collect()
         };
         if reqs.is_empty() {

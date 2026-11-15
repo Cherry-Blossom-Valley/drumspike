@@ -107,7 +107,7 @@ pub fn derive_one(svc: &Service, op: &Shared, name: &str) -> Result<usize, AppEr
             return Ok(0);
         };
         let src_events = source.events().to_vec();
-        let path = g.source(name)?;
+        let path = g.source_no_segments(name)?;
         (
             src_events,
             path,

@@ -175,6 +175,9 @@ impl Service {
             let mut rows = Vec::new();
             for name in g.project.doc.track_order() {
                 let Ok(tr) = g.track(&name) else { continue };
+                if g.has_segments(&name)? {
+                    return Err(crate::registry::OpenProject::not_available_error(&name));
+                }
                 let Ok(path) = g.source(&name) else { continue };
                 let times = match events.and_then(|e| e.get(&name)) {
                     Some(list) => times_of(list),

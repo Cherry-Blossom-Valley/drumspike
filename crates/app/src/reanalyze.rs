@@ -93,7 +93,7 @@ impl Service {
         // the detection on the padded slice of the track's audio (the project lock is free for
         // the decode, as in the snap of an edit)
         crate::registry::resolve_shared(&op);
-        let (source, mix, mut parsed, det) = {
+        let (audio, mix, mut parsed, det) = {
             let g = lock(&op);
             let tr = g.track(name)?;
             if g.offline(name) {
@@ -104,13 +104,13 @@ impl Service {
             }
             let det = tr.extra.get("detector").filter(|d| !d.is_null()).cloned();
             (
-                g.source(name)?,
+                g.track_audio(name)?,
                 mix_mode(tr.mix_mode_or_default()),
                 crate::jobs::parse_params(params.as_ref()).map_err(AppError::bad)?,
                 det,
             )
         };
-        let d = self.inner.media.decode_cached(&source, mix)?;
+        let d = audio.decode(&self.inner.media, mix)?;
         let sr = f64::from(d.sr);
         let a = ((t0 - PAD_S).max(0.0) * sr).floor().max(0.0) as usize;
         let b = (((t1 + PAD_S) * sr).ceil() as usize).min(d.samples.len());
