@@ -1,0 +1,27 @@
+# Spike S3 (#506): the app service inside a CLAP plugin, wrapped as VST3.
+# Throwaway spike code. Not a member of the Cargo workspace and no build or release
+# of the Drum Spike app uses it (the root `cargo metadata --no-deps` must not name it).
+[package]
+name = "ds-service-spike"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+name = "ds_service_spike"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+clap-sys = "0.5"
+# the app service, used as a normal crate: the same path the workspace members take
+drumspike-app = { path = "../../crates/app" }
+serde_json = { version = "=1.0.151", features = ["float_roundtrip", "preserve_order"] }
+
+# the test host of `spike.sh check` (src/bin/host.rs): loads the CLAP bundle with dlopen
+libloading = "0.8"
+
+[[bin]]
+name = "service-spike-host"
+path = "src/bin/host.rs"
