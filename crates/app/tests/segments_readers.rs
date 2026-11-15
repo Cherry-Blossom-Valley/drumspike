@@ -388,10 +388,10 @@ fn learn_this_and_forget_this_act_on_the_same_hits_as_the_plain_track() {
     let compare = |what: &str| {
         let mut seg: Vec<f64> = hits(&sid_seg)
             .into_iter()
-            .filter(|&t| t >= 2.1 && t <= 2.9)
+            .filter(|&t| (2.1..=2.9).contains(&t))
             .map(|t| t - 1.5)
             .collect();
-        let mut plain: Vec<f64> = hits(&sid_plain).into_iter().filter(|&t| t >= 0.6 && t <= 1.4).collect();
+        let mut plain: Vec<f64> = hits(&sid_plain).into_iter().filter(|&t| (0.6..=1.4).contains(&t)).collect();
         seg.sort_by(f64::total_cmp);
         plain.sort_by(f64::total_cmp);
         assert!(
@@ -461,7 +461,7 @@ fn learn_this_and_forget_this_act_on_the_same_hits_as_the_plain_track() {
     let plain = svc
         .track_learn_mark(&sid_plain, "s", "this", Some((0.55, 0.7)), None)
         .unwrap();
-    assert_eq!(seg["added_hit"].is_null(), false, "{seg}");
+    assert!(!seg["added_hit"].is_null(), "{seg}");
     let seg_hit = seg["added_hit"].as_f64().unwrap();
     let plain_hit = plain["added_hit"]
         .as_f64()
@@ -532,7 +532,7 @@ fn a_follower_of_a_segmented_track_derives_its_hits_from_the_timeline() {
 /// Gate 5: a training record of a second-segment hit carries the audio of the timeline
 /// position: the window of the record holds the stroke at timeline 2.75 (file 1.25 - 0.5
 /// + 2.0), loud and with its peak at the stroke — not the zeros past the file's end, which
-/// the file position would read.
+///   the file position would read.
 #[test]
 fn a_training_record_of_a_second_segment_hit_carries_the_timeline_audio() {
     let x = reader_file();
@@ -540,7 +540,7 @@ fn a_training_record_of_a_second_segment_hit_carries_the_timeline_audio() {
     let root = tmp("p6b_training_seg");
     let dir = track_project(&root, "Seg", &[("s", "kick", one(&x), &segs)]);
     let svc = service_dsp();
-    svc.set_home(&root.join("home"));
+    svc.set_home(root.join("home"));
     let sid = open(&svc, &dir);
     svc.training_status(&sid, Some(true)).unwrap();
     svc.analyze_start(&sid, Some(vec!["s".into()]), None, None).unwrap();
