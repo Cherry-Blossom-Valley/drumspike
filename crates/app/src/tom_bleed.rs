@@ -40,8 +40,6 @@
 //! keeps all 42 and unmarks no bleed merge. The guard applies to a mic from version 4: a recorded version 3 re-pick
 //! next to a version 4 target runs the version 3 pair rule on its hits.
 
-use std::path::PathBuf;
-
 use drumspike_core::detect::tom_bleed::{
     Off, PairMic, RULE_VERSION, SourceKind, SourceMic, TomBleedParams, TomMic, tom_bleed_with, tom_pairs,
 };
@@ -167,7 +165,8 @@ struct Mic {
     drum: Option<String>,
     /// Version 2: a kick or snare close mic (a source only); `None` for a tom close mic.
     kind: Option<SourceKind>,
-    path: PathBuf,
+    /// The track's audio: its source file, or the timeline of its segments (#508).
+    audio: crate::media::TrackAudio,
     mix: String,
     times: Vec<f64>,
     /// Version 3: per hit, the loudness cut took it out of the output.
@@ -245,7 +244,7 @@ fn gather(op: &Shared, targets: &[(String, u32)]) -> (Vec<Mic>, Vec<Mic>, Vec<(u
         if g.offline(&name) {
             continue;
         }
-        let Ok(path) = g.source(&name) else { continue };
+        let Ok(audio) = g.track_audio(&name) else { continue };
         let evs: Vec<&drumspike_core::project::Event> = tr.events().iter().collect();
         let m = Mic {
             drum: drum_of(&name),
@@ -255,7 +254,7 @@ fn gather(op: &Shared, targets: &[(String, u32)]) -> (Vec<Mic>, Vec<Mic>, Vec<(u
             bled: evs.iter().map(|e| is_marked(*e, Mark::Bleed)).collect(),
             edited: evs.iter().map(|e| edited(e)).collect(),
             mix: tr.mix_mode_or_default().to_string(),
-            path,
+            audio,
             name,
         };
         if kind.is_some() {
@@ -462,10 +461,9 @@ fn pair_rule(
     }
     let mut decoded = Vec::with_capacity(mics.len());
     for m in mics {
-        let d = svc
-            .inner
-            .media
-            .decode_cached(&m.path, mix_mode(&m.mix))
+        let d = m
+            .audio
+            .decode(&svc.inner.media, mix_mode(&m.mix))
             .map_err(|e| format!("{} cannot be read: {}", m.name, e.message))?;
         decoded.push(d);
     }
@@ -566,10 +564,9 @@ fn rule_marks(
     }
     let mut decoded = Vec::with_capacity(mics.len());
     for m in mics {
-        let d = svc
-            .inner
-            .media
-            .decode_cached(&m.path, mix_mode(&m.mix))
+        let d = m
+            .audio
+            .decode(&svc.inner.media, mix_mode(&m.mix))
             .map_err(|e| OffRule::plain(format!("{} cannot be read: {}", m.name, e.message)))?;
         decoded.push(d);
     }
@@ -589,7 +586,7 @@ fn rule_marks(
     // version 2: a source that cannot be read or has another rate is left out
     let mut src_dec = Vec::with_capacity(srcs.len());
     for m in srcs {
-        if let Ok(d) = svc.inner.media.decode_cached(&m.path, mix_mode(&m.mix))
+        if let Ok(d) = m.audio.decode(&svc.inner.media, mix_mode(&m.mix))
             && d.sr == sr
         {
             src_dec.push((m, d));

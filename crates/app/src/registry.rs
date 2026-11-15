@@ -236,7 +236,7 @@ impl OpenProject {
         let mut paths = HashMap::new();
         let mut status = HashMap::new();
         for (name, tr) in self.project.doc.tracks() {
-            let (p, s) = resolve_source(tr.source_ref(), &self.project.dir);
+            let (p, s) = resolve_track(tr, &self.project.dir);
             paths.insert(name.clone(), p);
             status.insert(name.clone(), s);
         }
@@ -244,14 +244,22 @@ impl OpenProject {
         self.status = status;
     }
 
-    /// The folder and the source record of every track (what [`OpenProject::resolve`] reads).
+    /// The folder and the source record of every track (what [`OpenProject::resolve`] reads):
+    /// the track's record and the records of its timeline segments (#508, empty for a plain
+    /// track).
     #[must_use]
-    pub fn records(&self) -> (PathBuf, Vec<(String, Option<Source>)>) {
+    pub fn records(&self) -> (PathBuf, Vec<TrackRecords>) {
         let recs = self
             .project
             .doc
             .tracks()
-            .map(|(n, tr)| (n.clone(), tr.source_ref().cloned()))
+            .map(|(n, tr)| {
+                (
+                    n.clone(),
+                    tr.source_ref().cloned(),
+                    tr.segments().iter().map(|s| s.source_ref().cloned()).collect(),
+                )
+            })
             .collect();
         (self.project.dir.clone(), recs)
     }
@@ -311,6 +319,65 @@ impl OpenProject {
             .cloned()
             .flatten()
             .ok_or_else(|| AppError::conflict(format!("track {name} is offline (missing): relink it first")))
+    }
+
+    /// The audio of the track's analysis and the session steps (#508): the plain source
+    /// file, or the timeline of the track's segments. A segment whose source is missing or
+    /// changed is a 409 like an offline track.
+    ///
+    /// # Errors
+    ///
+    /// Returns a 400 error for an unknown track and a 409 error when the track (or one of
+    /// its segments) is offline.
+    pub fn track_audio(&self, name: &str) -> Result<crate::media::TrackAudio, AppError> {
+        let tr = self.track(name)?;
+        // A `segments` key that did not read as a segment list stays in `extra` (the document
+        // keeps it as it is); the track must not silently analyse as a plain track or show as
+        // offline — that would hide the fault.
+        if tr.extra.contains_key("segments") {
+            return Err(AppError::bad(format!("track {name}: segments are malformed")));
+        }
+        let segs = tr.segments();
+        if segs.is_empty() {
+            return Ok(crate::media::TrackAudio::File(self.source(name)?));
+        }
+        let mut out = Vec::with_capacity(segs.len());
+        for (i, s) in segs.iter().enumerate() {
+            // The numbers are checked before the decode: a bad one would panic the timeline
+            // slice (a negative `length` gives `i1 < i0`) or corrupt the range.
+            if !s.start.is_finite() || !s.offset.is_finite() || !s.length.is_finite() {
+                return Err(AppError::bad(format!(
+                    "track {name} segment {i}: start, offset and length must be finite numbers"
+                )));
+            }
+            if s.start < 0.0 || s.offset < 0.0 {
+                return Err(AppError::bad(format!(
+                    "track {name} segment {i}: start and offset must be >= 0"
+                )));
+            }
+            if s.length <= 0.0 {
+                return Err(AppError::bad(format!("track {name} segment {i}: length must be > 0")));
+            }
+            let (p, st) = resolve_source(s.source_ref(), &self.project.dir);
+            if st != SourceStatus::Ok {
+                return Err(AppError::conflict(format!(
+                    "track {name} segment {i} is offline ({}): relink it first",
+                    st.as_str()
+                )));
+            }
+            let p = p.ok_or_else(|| {
+                AppError::conflict(format!(
+                    "track {name} segment {i} is offline (missing): relink it first"
+                ))
+            })?;
+            out.push(crate::media::SegmentAudio {
+                path: p,
+                start: s.start,
+                offset: s.offset,
+                length: s.length,
+            });
+        }
+        Ok(crate::media::TrackAudio::Timeline(out))
     }
 
     /// `mark_dirty`: sets the flag; the change from clean to dirty starts the autosave
@@ -505,6 +572,7 @@ pub fn track_object_light(tr: &Track) -> Result<Map<String, Value>, AppError> {
         follows,
         role_source,
         role_match,
+        segments: _,
         extra,
     } = tr;
     let light = Track {
@@ -518,6 +586,7 @@ pub fn track_object_light(tr: &Track) -> Result<Map<String, Value>, AppError> {
         mix_mode: mix_mode.clone(),
         source: None,
         events: None,
+        segments: None,
         volume_db: *volume_db,
         pan: *pan,
         follows: follows.clone(),
@@ -564,6 +633,28 @@ pub fn doc_head_value(doc: &Document) -> Value {
     serde_json::to_value(&light).unwrap_or(Value::Null)
 }
 
+/// One track's records as [`OpenProject::records`] carries them: the track's source record
+/// and the records of its timeline segments (#508).
+pub type TrackRecords = (String, Option<Source>, Vec<Option<Source>>);
+
+/// The resolution of a track's audio: the plain source record, or — with timeline segments
+/// (#508) — no single path and `Ok` only when every segment resolves.
+fn resolve_track(tr: &Track, dir: &Path) -> (Option<PathBuf>, SourceStatus) {
+    let segs = tr.segments();
+    if segs.is_empty() {
+        return resolve_source(tr.source_ref(), dir);
+    }
+    let mut status = SourceStatus::Ok;
+    for s in segs {
+        let (_, st) = resolve_source(s.source_ref(), dir);
+        if st != SourceStatus::Ok {
+            status = st;
+            break;
+        }
+    }
+    (None, status)
+}
+
 /// [`OpenProject::resolve`] without holding the project lock while the files are read
 /// (P3-15c): the records are copied under the lock, resolved outside it, and stored when no
 /// record and not the folder changed in the meantime; else the project resolves again under
@@ -572,13 +663,32 @@ pub fn resolve_shared(op: &Shared) {
     let (dir, records) = lock(op).records();
     let resolved: Vec<(Option<PathBuf>, SourceStatus)> = {
         let _span = crate::trace::stage("resolve:unlocked");
-        records.iter().map(|(_, r)| resolve_source(r.as_ref(), &dir)).collect()
+        records
+            .iter()
+            .map(|(_, r, segs)| {
+                // #508: a segmented track has no single path; its status is the worst of its
+                // segments' resolutions
+                if segs.is_empty() {
+                    resolve_source(r.as_ref(), &dir)
+                } else {
+                    let mut status = SourceStatus::Ok;
+                    for s in segs {
+                        let (_, st) = resolve_source(s.as_ref(), &dir);
+                        if st != SourceStatus::Ok {
+                            status = st;
+                            break;
+                        }
+                    }
+                    (None, status)
+                }
+            })
+            .collect()
     };
     let mut g = lock(op);
     if g.records() == (dir, records.clone()) {
         let mut paths = HashMap::new();
         let mut status = HashMap::new();
-        for ((name, _), (p, s)) in records.into_iter().zip(resolved) {
+        for ((name, _, _), (p, s)) in records.into_iter().zip(resolved) {
             paths.insert(name.clone(), p);
             status.insert(name, s);
         }

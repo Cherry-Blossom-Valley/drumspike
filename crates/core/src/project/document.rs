@@ -164,6 +164,32 @@ impl Source {
     }
 }
 
+/// One segment of a track's timeline (#508, DAW plugin P1): a piece of a source file placed
+/// at a position of the timeline. A track with `segments` is the list; a hit of the segment's
+/// audio at `h` seconds into the segment sits at `start + h` on the timeline. Audio outside
+/// the segments (a gap or a trimmed part) does not exist for the analysis.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Segment {
+    /// Timeline start in seconds.
+    pub start: f64,
+    /// Offset into the source file in seconds.
+    pub offset: f64,
+    /// Length in seconds.
+    pub length: f64,
+    /// The source record of the segment's audio; `Some(None)` is the document's `null`.
+    pub source: Option<Option<Source>>,
+    /// Every other key, and a typed key that is `null` or of another type.
+    pub extra: Map<String, Value>,
+}
+
+impl Segment {
+    /// The source record when one is attached.
+    #[must_use]
+    pub fn source_ref(&self) -> Option<&Source> {
+        self.source.as_ref().and_then(|s| s.as_ref())
+    }
+}
+
 /// One track of the document.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Track {
@@ -202,6 +228,9 @@ pub struct Track {
     /// 0.9.1: the words of the name that matched (`k in`); the Inspector's hint shows them.
     /// Absent with a role the user or the audio set, and in older projects.
     pub role_match: Option<String>,
+    /// #508: the track as segments on a timeline (a DAW clip list). `None` in older
+    /// documents and for a plain track (one source file from its first sample).
+    pub segments: Option<Vec<Segment>>,
     /// Every other key, and a typed key that is `null` or of another type.
     pub extra: Map<String, Value>,
 }
@@ -217,6 +246,12 @@ impl Track {
     #[must_use]
     pub fn events(&self) -> &[Event] {
         self.events.as_deref().unwrap_or(&[])
+    }
+
+    /// The timeline segments (empty when the key is absent: a plain track).
+    #[must_use]
+    pub fn segments(&self) -> &[Segment] {
+        self.segments.as_deref().unwrap_or(&[])
     }
 
     /// The track's mix mode, `ffmpeg` when absent (what the server assumes).
@@ -436,6 +471,7 @@ impl<'de> Deserialize<'de> for Track {
             follows: take(&mut m, "follows"),
             role_source: take(&mut m, "role_source"),
             role_match: take(&mut m, "role_match"),
+            segments: take(&mut m, "segments"),
             extra: m,
         })
     }
@@ -459,6 +495,31 @@ impl Serialize for Track {
         w.field("follows", self.follows.as_ref())?;
         w.field("role_source", self.role_source.as_ref())?;
         w.field("role_match", self.role_match.as_ref())?;
+        w.field("segments", self.segments.as_ref())?;
+        w.finish(&self.extra)
+    }
+}
+
+impl<'de> Deserialize<'de> for Segment {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut m = Map::deserialize(d)?;
+        Ok(Segment {
+            start: take(&mut m, "start").ok_or_else(|| D::Error::custom("segment without a numeric `start`"))?,
+            offset: take(&mut m, "offset").ok_or_else(|| D::Error::custom("segment without a numeric `offset`"))?,
+            length: take(&mut m, "length").ok_or_else(|| D::Error::custom("segment without a numeric `length`"))?,
+            source: take_tri(&mut m, "source"),
+            extra: m,
+        })
+    }
+}
+
+impl Serialize for Segment {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut w = ObjectWriter::start(s)?;
+        w.field("start", Some(&self.start))?;
+        w.field("offset", Some(&self.offset))?;
+        w.field("length", Some(&self.length))?;
+        w.field("source", self.source.as_ref())?;
         w.finish(&self.extra)
     }
 }

@@ -29,8 +29,6 @@
 //! (`0`: no rule). The track param `flam_split` (`false`: the Inspector's "Split flams" off) turns the rule off for one
 //! track; it applies on the next re-analyze or re-pick.
 
-use std::path::PathBuf;
-
 use drumspike_core::detect::flam::{
     FLAM_RULE_VERSION, FlamParams, Placement, Second, applies, attack_env, late_peak_db, late_peaking, late_share,
     second_onsets, transfer_gains,
@@ -172,7 +170,8 @@ pub fn with_flams(
 
 struct Mic {
     name: String,
-    path: PathBuf,
+    /// The track's audio: its source file, or the timeline of its segments (#508).
+    audio: crate::media::TrackAudio,
     mix: String,
 }
 
@@ -201,10 +200,10 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, FlamTarge
             if g.offline(&name) {
                 continue;
             }
-            let Ok(path) = g.source(&name) else { continue };
+            let Ok(audio) = g.track_audio(&name) else { continue };
             let mic = Mic {
                 name: name.clone(),
-                path,
+                audio,
                 mix: tr.mix_mode_or_default().to_string(),
             };
             let ft_of = targets.iter().find(|(n, _)| *n == name).map(|(_, ft)| ft);
@@ -235,7 +234,7 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, FlamTarge
     let mut src_env: Vec<(String, u32, Vec<f64>)> = Vec::new();
     if run_any {
         for m in &srcs {
-            if let Ok(d) = svc.inner.media.decode_cached(&m.path, mix_mode(&m.mix)) {
+            if let Ok(d) = m.audio.decode(&svc.inner.media, mix_mode(&m.mix)) {
                 src_env.push((m.name.clone(), d.sr, attack_env(&d.samples, d.sr, &p).0));
             }
         }
@@ -254,7 +253,7 @@ pub(crate) fn run_step(svc: &Service, op: &Shared, targets: &[(String, FlamTarge
                 json!({"on": false, "reason": "Split flams is off for this track", "added": 0, "gated": 0}),
             )
         } else {
-            match svc.inner.media.decode_cached(&t.mic.path, mix_mode(&t.mic.mix)) {
+            match t.mic.audio.decode(&svc.inner.media, mix_mode(&t.mic.mix)) {
                 Err(e) => (
                     None,
                     json!({"on": false, "reason": format!("{} cannot be read: {}", t.mic.name, e.message),
