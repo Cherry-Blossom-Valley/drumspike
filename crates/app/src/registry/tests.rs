@@ -189,7 +189,13 @@ fn resolve_shared_finds_the_sources_like_resolve_and_records_lists_them() {
     let op = reg.register(p);
     let (d, recs) = lock(&op).records();
     assert_eq!(d, lock(&op).project.dir);
-    assert_eq!(recs, vec![("kick".to_string(), Some(rec)), ("snare".to_string(), None)]);
+    assert_eq!(
+        recs,
+        vec![
+            ("kick".to_string(), Some(rec), Vec::new()),
+            ("snare".to_string(), None, Vec::new())
+        ]
+    );
     resolve_shared(&op);
     assert_eq!(lock(&op).status_str("kick"), "ok");
     assert_eq!(lock(&op).status_str("snare"), "missing");
