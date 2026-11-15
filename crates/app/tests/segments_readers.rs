@@ -391,7 +391,10 @@ fn learn_this_and_forget_this_act_on_the_same_hits_as_the_plain_track() {
             .filter(|&t| (2.1..=2.9).contains(&t))
             .map(|t| t - 1.5)
             .collect();
-        let mut plain: Vec<f64> = hits(&sid_plain).into_iter().filter(|&t| (0.6..=1.4).contains(&t)).collect();
+        let mut plain: Vec<f64> = hits(&sid_plain)
+            .into_iter()
+            .filter(|&t| (0.6..=1.4).contains(&t))
+            .collect();
         seg.sort_by(f64::total_cmp);
         plain.sort_by(f64::total_cmp);
         assert!(
