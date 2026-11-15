@@ -44,7 +44,7 @@ run_guarded() {  # run_guarded <logfile> <seconds> <cmd...> : one command with a
 }
 
 # ---- 1. the fixtures -------------------------------------------------------------
-rm -f $OUT/s1-clap.jsonl $OUT/s1-vst3.jsonl $OUT/s1-compared-*.txt
+rm -f $OUT/s1-clap.jsonl $OUT/s1-vst3.jsonl $OUT/s1-compared-*.txt(N)
 /usr/bin/python3 - $F <<'PYMAKE' || exit 2
 import os, struct, sys
 fix = sys.argv[1]

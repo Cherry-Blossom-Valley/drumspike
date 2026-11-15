@@ -13,11 +13,18 @@ it can run; the coordinator fills the LUNA row after the merge.
 
 | Question | Test host (ARA examples, script run) | Reaper | LUNA | Pro Tools |
 |---|---|---|---|---|
-| Does one instance see all tracks? | pending: filled from the check on this host | not on this host (no Reaper on x86-mac) | coordinator fills after the merge | n/a until Avid admits the plugin |
-| How is the plugin added (track, event, take)? | pending | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
-| Are the playback regions correct after a clip is cut and moved? | pending | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
-| Is the tempo map filled? | pending | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
-| Is the audio readable before the first playback? | pending | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
+| Does one instance see all tracks? | yes: one instance read all 3 sources of the document in full on the CLAP and the wrapped VST3 (144000 + 48000 + 192000 samples, FNV-1a equal to the WAV read; 6 source loads compared) | not on this host (no Reaper on x86-mac) | coordinator fills after the merge | n/a until Avid admits the plugin |
+| How is the plugin added (track, event, take)? | the test host has no track/event/take model: it creates the ARA document controller and binds one plugin instance to the document; the DAW workflow is what the LUNA row shows | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
+| Are the playback regions correct after a clip is cut and moved? | not covered by check_s1.sh (the host runs no edit test; see "Not covered") | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
+| Is the tempo map filled? | not covered by check_s1.sh (the host runs no musical timeline here) | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
+| Is the audio readable before the first playback? | yes: `-test ContentReading` runs with no playback; every read completed (read_ok) and ran on a background thread (caller ThreadId(1), readers 2/3/4) | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
+
+Script result on this host (2026-11-15, Intel, AppleClang 17, command line tools only):
+`S1 CHECK: PASS (6 source loads compared across the CLAP and the wrapped VST3, pluginval,
+clap-validator, standalone rule)`; the seed check passed after it (`SPIKE: PASS (CLAP and
+wrapped VST3)`): 4 sources with the hits returned as notes at the exact samples, the render
+back to back (all 7 clicks at 0 samples difference, no other non-zero samples), and
+EditorView, PropertyUpdates, Archiving on both paths.
 
 ## What the script proves
 
@@ -56,7 +63,9 @@ on the host's calling thread).
 - Our code in `plugins/ara-spike/`: Apache 2.0, as the repo.
 - ARA SDK 2.3.0 (API, examples, test host): Apache 2.0.
 - CLAP, `clap-sys`, `clap-wrapper` 0.17.0: MIT.
-- VST3 SDK (fetched by the wrapper and the ARA examples): MIT.
+- CLAP SDK 1.1.9 and VST3 SDK v3.7.11_build_10 (the loaders of the test host; the versions
+  the ARA SDK's own installer pins): MIT. The wrapper vendors its own clap 1.2.10 and
+  vst3sdk 3.8.0: MIT.
 - `clap-validator` 0.4.1: MIT (test tool only).
 - `pluginval` 1.0.4: GPL-3.0 (test tool only, not linked into the plugin; its release zip is
   SHA-256 pinned in `spike.sh`).
