@@ -93,7 +93,46 @@ because a host made the call, so a host that calls nothing cannot pass a stage b
 
 ## Result table
 
-PENDING - filled by the gate run (the wake in progress).
+Gate run of 2026-11-15 on the PR head 754e61cc: `plugins/ara/check.sh` rc=0, every stage
+below ok (the run's `files` stage: no file of the repo changed, so the code the gate ran
+is exactly 754e61cc; the commit that adds this table changes docs only).
 
 | Gate line | Result | Evidence |
 | --- | --- | --- |
+| `deps` | ok | ARA_SDK 2.3.0 with the pinned ARA_API submodule, clap-wrapper 0.17.0 (+ patch), CLAP 1.1.9, VST3 SDK v3.8.0_build_66, pluginval 1.0.4, clap-validator 0.4.1 |
+| `build` | ok | `DrumSpikeAra.clap` (universal), `DrumSpikeAra.vst3` with the CLAP inside, `ara-host`, `ARATestHost` |
+| `fixture` | ok | 4 tracks with bleed between them (16 lead hits), `out/fixtures/` |
+| `reference-project` | ok | project at `out/m1a-ref` with the copied audio (service_tool run rc=0) |
+| `service-reference` | ok | 19 event(s) on 4 track(s), 733 bytes |
+| `tables` | ok | 65 slots walked up to the declared structSizes (ARAFactory=3, documentController=54, playbackRenderer=2, editorRenderer=4, editorView=2); fails on an empty slot or on 0 |
+| `identity-clap` | ok | 19 events on 4 tracks (analysis 628 ms) |
+| `compare-clap-session` | ok | byte for byte the reference events (733 bytes) |
+| `notes-clap-session` | ok | kick 5, snare 3, tom 7, hat 4 - at the exact samples |
+| `identity-vst3` | ok | 19 events on 4 tracks (analysis 619 ms) |
+| `compare-vst3-session` | ok | byte for byte the reference events (733 bytes) |
+| `notes-vst3-session` | ok | kick 5, snare 3, tom 7, hat 4 - at the exact samples |
+| `service-regions` | ok | 4 event(s) on 1 track(s), 156 bytes (analysis 251 ms) |
+| `compare-regions` | ok | byte for byte the reference events (156 bytes) |
+| `regions-trim` | ok | no event at the gap hit (1.5 s) or behind the regions (2.6 s); 4 events on the covered slices |
+| `notes-regions` | ok | m1a_tom_96k_mono: 4 notes at the exact samples |
+| `compare-archive-store` | ok | byte for byte the reference events (733 bytes) (analysis 612 ms) |
+| `archive-decodes` | ok | the decode counter of the restore stays at 0 (analysis None ms: the restore decodes no file) |
+| `compare-archive-restore` | ok | byte for byte the reference events (733 bytes) |
+| `notes-archive-restore` | ok | kick 5, snare 3, tom 7, hat 4 - at the exact samples |
+| `archive-fixture-version` | ok | the fixture carries version 1 |
+| `compare-archive-fixture` | ok | byte for byte the reference events (733 bytes) |
+| `threads` | ok | rc=0, 356283 blocks while the analysis ran, overruns=0, worst 23 µs of 10667 µs per block |
+| `threads-fault` | ok | the fault switch ran the analysis inside `process`: rc=2, 1 block(s) over budget (worst 620981 µs), event_file=True |
+| `conformance-clap-ContentReading` ... `conformance-clap-EditorView` | ok | ARATestHost ContentReading, PropertyUpdates, Archiving, PlaybackRendering, EditorView on the CLAP: all five rc=0 |
+| `conformance-vst3-ContentReading` ... `conformance-vst3-EditorView` | ok | the same five on the wrapped VST3: all five rc=0 |
+| `files-repo` | ok | no file of the repo changed during the runs (0 changed) |
+| `files-fixtures` | ok | the four fixture WAVs: sha256 unchanged |
+| `pluginval` | ok | strictness 5 on the wrapped VST3, rc=0 |
+| `validate` | ok | clap-validator on the CLAP bundle, rc=0 |
+| `universal` | ok | lipo -info: x86_64 arm64 (CLAP and VST3) |
+| `standalone-tree` | ok | cargo tree -p drumspike-desktop names neither the plugin crate nor a plugin SDK crate (0 hits) |
+| `standalone-metadata` | ok | cargo metadata --no-deps at the repo root does not name the plugin crate |
+| `standalone-diff` | ok | the diff touches only plugins/ara/ and docs/design/daw-plugin/ (0 files outside) |
+| `crate-fmt`, `crate-clippy`, `crate-test` | ok | rc=0 each (fmt, clippy, test of the plugin crate) |
+| `workspace-fmt`, `workspace-clippy`, `workspace-test` | ok | rc=0 each (workspace without the ARA SDK) |
+| total | PASS | M1A CHECK: PASS (tables, identity, regions, archive, notes, threads, conformance, files, pluginval, clap-validator, universal, standalone, crate, workspace) |
