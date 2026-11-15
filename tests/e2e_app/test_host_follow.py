@@ -25,7 +25,9 @@ STUB = """() => {
 
 
 def set_host_mode(app):
+    """Install the stub, then call appHostFollow() — the same step a plugin shell does."""
     assert app.evaluate(STUB) is True
+    assert app.evaluate("() => appHostFollow()") is True
 
 
 def send(app, pos, playing):
@@ -43,8 +45,8 @@ def canvas_2d_lanes(app):
 def test_the_page_follows_the_host_playing_with_no_play_in_the_page(app, make_project):
     open_project(app, make_project(seconds=30.0))
     set_host_mode(app)
-    # the listener is the page's own: bound without any Play (the plugin shell may inject the transport late)
-    app.wait_for_function("() => !!(B.hostTransport && B.hostTransport.onPosition)")
+    # the listener is the page's own: bound by the appHostFollow() call above, as a shell does it
+    assert app.evaluate("() => !!(B.hostTransport && B.hostTransport.onPosition)") is True
     send(app, 3.0, True)
     app.wait_for_function("() => S.playing === true")
     assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "⏸"
@@ -61,7 +63,7 @@ def test_the_page_follows_the_host_playing_with_no_play_in_the_page(app, make_pr
 def test_the_host_stopping_shows_the_stopped_state_at_its_position(app, make_project):
     open_project(app, make_project(seconds=30.0))
     set_host_mode(app)
-    app.wait_for_function("() => !!(B.hostTransport && B.hostTransport.onPosition)")
+    assert app.evaluate("() => !!(B.hostTransport && B.hostTransport.onPosition)") is True
     send(app, 3.0, True)
     app.wait_for_function("() => S.playing === true")
     n = app.evaluate("() => B.hostTransport.calls.length")
@@ -78,7 +80,7 @@ def test_the_host_stopping_shows_the_stopped_state_at_its_position(app, make_pro
 def test_a_locate_in_the_daw_moves_the_playhead_while_stopped(app, make_project):
     open_project(app, make_project(seconds=30.0))
     set_host_mode(app)
-    app.wait_for_function("() => !!(B.hostTransport && B.hostTransport.onPosition)")
+    assert app.evaluate("() => !!(B.hostTransport && B.hostTransport.onPosition)") is True
     send(app, 2.0, False)   # the host is stopped at 2 s
     app.wait_for_function("() => !S.playing && Math.abs(PH.v - 2.0) < 1e-9")
     # a locate in the DAW: another stopped position moves the playhead and the position line
@@ -87,3 +89,30 @@ def test_a_locate_in_the_daw_moves_the_playhead_while_stopped(app, make_project)
     assert app.locator("#timeDisplay").inner_text().startswith("8.5"), app.locator("#timeDisplay").inner_text()
     # and the page asked the host for nothing (no stop, no locate, no play)
     assert app.evaluate("() => B.hostTransport.calls") == [], app.evaluate("() => B.hostTransport.calls")
+
+
+def test_no_following_when_host_mode_is_off(app, make_project):
+    """The standalone rule: with the mode off the page binds no host listener at all.
+
+    A shell only sets window.__DS_HOST_MODE__ and B.hostTransport when the host is
+    there; the boot calls appHostFollow() once and only when hostMode() is true. A
+    transport object that appears later with the mode off gets no onPosition, and a
+    position message through it changes nothing. This test fails on 0966eade, where
+    a setInterval re-ran appHostFollow every 250 ms regardless of the mode."""
+    open_project(app, make_project(seconds=30.0))
+    # the plain page: the mode flag is absent, exactly as the standalone app boots
+    assert app.evaluate("() => B.hostMode") is False
+    # a transport injected after the boot while the mode is off: no listener is bound
+    app.evaluate(
+        "() => (B.hostTransport = { send: function (m) { if (this.onPosition) this.onPosition(m); } }, true)"
+    )
+    # outwait the old head's 250 ms re-registration timer: even after it, nothing is bound
+    app.wait_for_timeout(400)
+    assert app.evaluate("() => !!(B.hostTransport && B.hostTransport.onPosition)") is False
+    # a position message through it: nothing changes (playhead and Play button stay)
+    app.evaluate(
+        "() => B.hostTransport.send({ sid: S.sid, epoch: 1, t_ns: performance.now() * 1e6, pos: 9.0, playing: false })"
+    )
+    assert app.evaluate("() => S.playing") is False
+    assert app.evaluate("() => PH.v") == pytest.approx(0.0, abs=1e-9)
+    assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "▶"

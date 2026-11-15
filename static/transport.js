@@ -73,11 +73,14 @@ function appOnPlayhead(m) {
   }
   if (m.end && S.playing && !AC.starting && !AC.stopping) pause();   // the transport ended on its own (project closed)
 }
-/* #518: the one host listener. The plugin shell may inject the host transport before or after the page
-   loads, so the registration re-runs until it is bound (app.js boot calls this once and then on a slow
-   timer while the mode is on; appPlay calls it before its play). The stub of the tests records the calls
-   and pushes with send(m); the page's handler is appOnPlayhead. */
+/* #518: the one host listener. The plugin shell sets window.__DS_HOST_MODE__ and B.hostTransport
+   before the boot of the page, so app.js boot calls this one time and only when the mode is on.
+   A shell that injects the transport later calls appHostFollow() itself (appPlay keeps its call
+   for its own play). With the mode off this returns false and binds nothing: the standalone app
+   runs no host listener of any kind (no timer re-runs it). The stub of the tests records the
+   calls and pushes with send(m); the page's handler is appOnPlayhead. */
 function appHostFollow() {
+  if (!hostMode()) return false;
   const host = typeof B !== "undefined" && B.hostTransport;
   if (!host) return false;
   if (!host._appFollow) host._appFollow = m => appOnPlayhead(m);

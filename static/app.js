@@ -747,8 +747,10 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
   editInit({ pushEvents, voidHitDrag: name => { if (hitDrag && hitDrag.track === name) hitDrag = null; } });   // R17 step 3: edit.js flushes the writes of other steps through the injected hook; voidHitDrag is the input layer's (a replaced hit list voids an in-flight drag)
   sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; }, exTempoReset: () => { EX.tempoAck = false; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks; #151: the default-tempo answer is per project
   tmInit(); measureGeo(); geoObserve();   // P4-8: the map rulers; P3-14d: the geometry once now, then from the ResizeObserver
-  appHostFollow();   // #518: the one host listener — bound whenever the host transport is there (the plugin shell may inject it before or after the page; the mode may also be switched at run time)
-  setInterval(appHostFollow, 250);
+  // #518: the one host listener — the shell sets window.__DS_HOST_MODE__ and B.hostTransport
+  // before the boot of the page; boot calls appHostFollow() once and only when the mode is on.
+  // A shell that injects the transport later calls appHostFollow() itself; appPlay keeps its call.
+  if (hostMode()) appHostFollow();
   setupUpload(); setupGlobal(); setupInfoLine(); staleSetup();
   if (B.onDirty) {   // P3-4a: the service tells when a project becomes dirty or clean
     let listTimer = null;
