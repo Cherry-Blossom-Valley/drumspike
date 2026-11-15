@@ -529,7 +529,7 @@ impl Service {
                 .round();
             let peak_db = drumspike_core::refine::FM_PEAK_DB;
             (
-                g.source_no_segments(name)?,
+                g.track_audio(name)?,
                 mix_mode(tr.mix_mode_or_default()),
                 tr.sr,
                 rule,
@@ -537,7 +537,9 @@ impl Service {
                 shift,
             )
         };
-        let d = self.inner.media.decode_cached(&source, mix)?;
+        // the timeline of a segmented track places its hits at the timeline positions, so the
+        // snap reads the same signal the stored times live on (P6a)
+        let d = source.decode(&self.inner.media, mix)?;
         // the hits carry the Hitpoint shift; the audio does not
         let dt = shift / f64::from(d.sr);
         let neighbors: Vec<f64> = current
