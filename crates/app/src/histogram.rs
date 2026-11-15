@@ -252,6 +252,9 @@ pub(crate) struct PickInputs {
 
 pub(crate) struct TrackState {
     pub(crate) source: Result<PathBuf, AppError>,
+    /// The track's audio (the plain file or the timeline, #508): the re-pick reads it, the
+    /// readers without a timeline answer keep their `source` (P6b).
+    pub(crate) audio: Result<crate::media::TrackAudio, AppError>,
     pub(crate) mix: String,
     pub(crate) role: String,
     pub(crate) follows: Option<String>,
@@ -266,6 +269,7 @@ impl Service {
         let tr = g.track(name)?;
         Ok(TrackState {
             source: g.source_no_segments(name),
+            audio: g.track_audio(name),
             mix: tr.mix_mode_or_default().to_string(),
             role: tr.role.clone().unwrap_or_else(|| "other".into()),
             follows: tr.follows.clone(),
@@ -411,8 +415,13 @@ impl Service {
                 "no kept detection for {name}: re-analyze it once"
             )));
         };
-        let source = st.source.clone()?;
-        let dec = self.inner.media.decode_cached(&source, mix_mode(&st.mix))?;
+        // P6a: the re-pick reads the track's audio — the plain file, or the timeline of its
+        // segments (whose hit times are the timeline positions)
+        let dec = st
+            .audio
+            .as_ref()
+            .map_err(Clone::clone)?
+            .decode(&self.inner.media, mix_mode(&st.mix))?;
         Ok(PickInputs {
             op,
             st,

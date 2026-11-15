@@ -371,19 +371,24 @@ impl Service {
     ///
     /// # Errors
     ///
-    /// A 404 [`AppError`] for an unknown `sid` or track; the error of resolving the track's source or
-    /// reading its audio file.
+    /// A 404 [`AppError`] for an unknown `sid` or track; the error of resolving the track's audio or
+    /// reading its audio file. A segmented track answers from its timeline (P6a): a window inside
+    /// a segment is that part of the file, a window in a gap is silence.
     pub fn samples_window(&self, sid: &str, name: &str, start: i64, end: i64) -> Result<Vec<u8>, AppError> {
         let op = self.inner.registry.get(sid)?;
-        let (src, mix) = {
+        let (audio, mix) = {
             let g = lock(&op);
             let tr = g.track(name)?;
-            (
-                g.source_no_segments(name)?,
-                crate::media::mix_mode(tr.mix_mode_or_default()),
-            )
+            (g.track_audio(name)?, crate::media::mix_mode(tr.mix_mode_or_default()))
         };
-        self.inner.media.window_bytes(&src, mix, start, end, MAX_WINDOW_SAMPLES)
+        match &audio {
+            crate::media::TrackAudio::File(p) => self.inner.media.window_bytes(p, mix, start, end, MAX_WINDOW_SAMPLES),
+            crate::media::TrackAudio::Timeline(segs) => {
+                self.inner
+                    .media
+                    .window_bytes_timeline(segs, mix, start, end, MAX_WINDOW_SAMPLES)
+            }
+        }
     }
 
     /// `POST /api/analyze/{sid}`: store `params` per track, then start the job on a worker

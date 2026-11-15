@@ -784,7 +784,7 @@ impl Service {
     fn repick_skip(&self, op: &crate::registry::Shared, name: &str) -> Result<bool, AppError> {
         crate::registry::resolve_shared(op);
         let st = self.track_state(op, name)?;
-        if st.follows.is_some() || st.source.is_err() {
+        if st.follows.is_some() || st.audio.is_err() {
             return Ok(true);
         }
         Ok(self.kept_detection(&st)?.is_err())
