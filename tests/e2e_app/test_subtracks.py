@@ -4,6 +4,7 @@ by the service in steps (95, 113, 134, 150) and says so, and a track can follow 
 Track > Follow Hits Of, Own Detection): the same sample positions, velocities from its own signal, read-only lanes,
 exports of the derived hits, the follow saved in the document. The Add Tracks list suggests the follow for a sub mic."""
 import json
+import os
 import wave
 from pathlib import Path
 
@@ -22,6 +23,66 @@ OLD_AT_100 = [0.088, 0.096, 0.128, 0.088, 0.12]   # the end of the slider before
 
 def js(page, expr, arg=None):
     return page.evaluate(expr, arg)
+
+
+# #524: the ways the Add Tracks list can keep the rows of an earlier drop after a new drop. The
+# wait below reports the way on its next failure (the proof: one planted fault per way, see the PR).
+#   a  the drop is refused by the "answer the open dialog first" guard (addingTracks or an open
+#      dialog): shows in #stMsg, the modal stays open, no tracks_scan runs.
+#   b  the tracks_scan of the new drop answers late or with an error: shows in #stMsg ("add tracks
+#      failed: …") and in the recorded invoke (status error).
+#   c  the tracks_scan answers with no files ("no audio files in the dropped items"): shows in
+#      #stMsg, the modal never opens, the old rows stay.
+#   d  the scan answers but the list renders from a stale scan: the rows of the first drop reappear
+#      with their old follow text (the seen failure: 3 rows, `follow k in_02` in row 2).
+def _524_state(app):
+    return app.evaluate("""() => ({stMsg: document.querySelector('#stMsg').textContent,
+        modalHidden: document.querySelector('#tracksModal').classList.contains('hidden'),
+        scans: window.__524scans || [],
+        stems: [...document.querySelectorAll('#tracksRows .urow')].map(r => r.dataset.stem)})""")
+
+
+def _524_way(app):
+    s = _524_state(app)
+    scans = s["scans"]
+    raw = (f"n_scans={len(scans)} " +
+           "; ".join(f"[{x['status']} {x['ms']} ms files={x['nFiles']}]" for x in scans) +
+           f" #stMsg={s['stMsg']!r} #tracksModal hidden={s['modalHidden']} rows={s['stems']}")
+    last = scans[-1] if scans else {}
+    if "answer the open dialog first" in s["stMsg"]:
+        way = "way a: the drop was refused by the 'answer the open dialog first' guard"
+    elif not scans:
+        way = "way ?: the second drop ran no tracks_scan at all (addTracksFlow never passed the guards)"
+    elif last["status"] == "error":
+        way = "way b: the second drop's tracks_scan answered with an error"
+    elif last["nFiles"] == 0:
+        way = "way c: the second drop's tracks_scan answered with no files ('no audio files in the dropped items')"
+    elif "k sub_03" not in s["stems"]:
+        way = "way d: the tracks_scan answered but the list kept the rows of the first drop (stale render)"
+    else:
+        way = "the k sub_03 row exists; the follow text or checkbox did not settle"
+    return f"#524 {way} | tracks_scan after the second drop: {raw}"
+
+
+def _524_expect(app, locator_, matcher):
+    try:
+        matcher(expect(locator_))
+    except AssertionError:
+        raise AssertionError(_524_way(app)) from None
+
+
+def _524_plant(app):
+    """The #524 proof (PLANT_524=a|b|c|d): one planted fault per way, each makes the wait fail and
+    the failure message name that way. Unset in the normal run."""
+    p = os.environ.get("PLANT_524", "")
+    if p == "a":
+        app.evaluate("() => document.querySelector('#tracksModal').classList.remove('hidden')")
+    elif p == "b":
+        app.evaluate("() => { B.__524realScan = async () => { throw new Error('planted: the scan failed'); }; }")
+    elif p == "c":
+        app.evaluate("() => { B.__524realScan = async () => ({files: [], rejected: []}); }")
+    elif p == "d":
+        app.evaluate("() => { const stale = window.__524scan; B.__524realScan = async () => stale; }")
 
 
 def doc_of(folder):
@@ -214,6 +275,16 @@ def test_the_inspector_follow_option_derives_the_hits_and_locks_the_lanes(app, m
 
 
 def test_the_add_tracks_list_suggests_the_follow_for_a_sub_mic(app, tmp_path, make_project):
+    # #524: record every tracks_scan from the start (the second drop's is the one that matters):
+    # count, status, duration and the file count of the answer, kept for the stale-render plant.
+    app.evaluate("""() => { if (B.__524realScan) return; B.__524realScan = B.tracksScan;
+        window.__524scans = []; window.__524scan = null;
+        B.tracksScan = (paths, preset) => { const t0 = performance.now();
+            return B.__524realScan(paths, preset).then(
+                r => { const e = {status: "ok", ms: Math.round(performance.now() - t0), nFiles: r.files.length};
+                       window.__524scans.push(e); window.__524scan = r; return r; },
+                e => { window.__524scans.push({status: "error", ms: Math.round(performance.now() - t0), nFiles: null});
+                       throw e; }); }; }""")
     empty_page(app)
     folder = tmp_path / "sub session"                                        # not "drop": test_tracks expects that project name
     folder.mkdir()
@@ -243,12 +314,18 @@ def test_the_add_tracks_list_suggests_the_follow_for_a_sub_mic(app, tmp_path, ma
     assert invoke(app, "tracks_get", sid=sid)["tracks"]["k_sub_02"]["follows"] == "k_in_02"
     # into an open project with a kick track: the existing track is the source; unchecked, no follow is set
     sid = open_project(app, make_project())
+    _524_plant(app)                                          # the #524 proof: unset in the normal run
     folder2 = tmp_path / "sub session 2"
     folder2.mkdir()
     x, _ = synth_track([0.5, 1.5, 2.5], 3.0)
     write_wav(folder2 / "k sub_03.wav", x)
     drop(app, folder2)
-    expect(app.locator('#tracksRows .urow .ufollowTxt')).to_have_text("follow Kick In")
+    # #524: the wait is false before its action. The stale list of the first drop has no k sub_03
+    # row, so this line waits for the SECOND drop's scan to be the list's content; the follow-text
+    # expect below would otherwise also match a stale row of the first drop ("follow k in_02").
+    # On failure the message names the way the old rows survived (see _524_way).
+    _524_expect(app, app.locator('#tracksRows .urow[data-stem="k sub_03"]'), lambda l: l.to_have_count(1))
+    _524_expect(app, app.locator('#tracksRows .urow .ufollowTxt'), lambda l: l.to_have_text("follow Kick In"))
     expect(app.locator('#tracksRows .urow .ufollow')).to_be_checked()
     app.locator('#tracksRows .urow .ufollow').uncheck()
     app.click("#tracksAdd")
