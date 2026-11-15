@@ -248,6 +248,10 @@ def test_the_add_tracks_list_suggests_the_follow_for_a_sub_mic(app, tmp_path, ma
     x, _ = synth_track([0.5, 1.5, 2.5], 3.0)
     write_wav(folder2 / "k sub_03.wav", x)
     drop(app, folder2)
+    # #524: the wait is false before its action. The stale list of the first drop has no k sub_03
+    # row, so this line waits for the SECOND drop's scan to be the list's content; the follow-text
+    # expect below would otherwise also match a stale row of the first drop ("follow k in_02").
+    expect(app.locator('#tracksRows .urow[data-stem="k sub_03"]')).to_have_count(1)
     expect(app.locator('#tracksRows .urow .ufollowTxt')).to_have_text("follow Kick In")
     expect(app.locator('#tracksRows .urow .ufollow')).to_be_checked()
     app.locator('#tracksRows .urow .ufollow').uncheck()
