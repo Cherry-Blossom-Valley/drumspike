@@ -337,8 +337,7 @@ impl Service {
             return Ok(json!({"confidence": vec![one; events.len()], "source": "follows", "doubt_below": DOUBT_BELOW}));
         }
         let times = hit_times(&events)?;
-        let source = st.source.clone()?;
-        let d = self.inner.media.decode_cached(&source, mix_mode(&st.mix))?;
+        let d = st.audio.clone()?.decode(&self.inner.media, mix_mode(&st.mix))?;
         // the hits carry the Hitpoint shift; the audio does not (module coordinates): the
         // recorded shift comes off before the peak level
         let srf = f64::from(d.sr);

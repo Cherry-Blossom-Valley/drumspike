@@ -328,8 +328,7 @@ impl Service {
             None => self.events_of(sid, name)?,
         };
         let times = hit_times(&events)?;
-        let source = st.source.clone()?;
-        let d = self.inner.media.decode_cached(&source, mix_mode(&st.mix))?;
+        let d = st.audio.clone()?.decode(&self.inner.media, mix_mode(&st.mix))?;
         let levels: Vec<f64> = times.iter().map(|&t| peak_db(&d.samples, t, d.sr)).collect();
         let detection = if let Some(src) = &st.follows {
             json!({"state": "follows", "source": src})

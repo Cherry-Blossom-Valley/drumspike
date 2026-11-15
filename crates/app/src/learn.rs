@@ -1028,14 +1028,14 @@ impl Service {
                 None => crate::jobs::analysis_rule(&self.inner.config),
             };
             (
-                g.source_no_segments(name),
+                g.track_audio(name),
                 tr.mix_mode_or_default().to_string(),
                 tr.params.clone(),
                 rule,
             )
         };
         let parsed = crate::jobs::parse_params(params.as_ref()).map_err(AppError::bad)?;
-        let d = self.inner.media.decode_cached(&source?, mix_mode(&mix))?;
+        let d = source?.decode(&self.inner.media, mix_mode(&mix))?;
         let dt = parsed.params.shift_samples as f64 / f64::from(d.sr);
         if !parsed.params.refine {
             return Ok((t + dt, false));
@@ -1054,12 +1054,9 @@ impl Service {
         let op = self.inner.registry.get(sid)?;
         let (source, mix) = {
             let g = lock(&op);
-            (
-                g.source_no_segments(name),
-                g.track(name)?.mix_mode_or_default().to_string(),
-            )
+            (g.track_audio(name), g.track(name)?.mix_mode_or_default().to_string())
         };
-        let d = self.inner.media.decode_cached(&source?, mix_mode(&mix))?;
+        let d = source?.decode(&self.inner.media, mix_mode(&mix))?;
         Ok(rise_example(&d.samples, d.sr, t0, t1))
     }
 
@@ -1092,16 +1089,16 @@ impl Service {
                     .map(|e| e.t - shift)
                     .filter(|&h| h >= t0 - BLEED_REACH && h <= t1 + BLEED_REACH)
                     .collect();
-                if let (false, Ok(src)) = (near.is_empty(), g.source_no_segments(&n)) {
+                if let (false, Ok(src)) = (near.is_empty(), g.track_audio(&n)) {
                     others.push((src, o.mix_mode_or_default().to_string(), near));
                 }
             }
-            (g.source_no_segments(name), tr.mix_mode_or_default().to_string(), others)
+            (g.track_audio(name), tr.mix_mode_or_default().to_string(), others)
         };
-        let d = self.inner.media.decode_cached(&source?, mix_mode(&mix))?;
+        let d = source?.decode(&self.inner.media, mix_mode(&mix))?;
         let mut hits: Vec<(f64, f32)> = Vec::new();
         for (src, m, near) in others {
-            let Ok(o) = self.inner.media.decode_cached(&src, mix_mode(&m)) else {
+            let Ok(o) = src.decode(&self.inner.media, mix_mode(&m)) else {
                 continue;
             };
             hits.extend(near.into_iter().map(|h| (h, peak_after(&o.samples, o.sr, h))));

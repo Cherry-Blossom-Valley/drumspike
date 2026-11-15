@@ -567,13 +567,13 @@ impl Service {
         };
         let frames = candidate_frames(&cands);
         let key = learn_key(&json!({"source": st.key, "mix": st.mix}), &frames, &method);
-        let source = st.source.clone()?;
+        let audio = st.audio.clone();
         let decoded = std::cell::OnceCell::new();
         let decode = || -> Result<std::sync::Arc<crate::media::Decoded>, AppError> {
             if let Some(d) = decoded.get() {
                 return Ok(std::sync::Arc::clone(d));
             }
-            let d = self.inner.media.decode_cached(&source, mix_mode(&st.mix))?;
+            let d = audio.clone()?.decode(&self.inner.media, mix_mode(&st.mix))?;
             let _ = decoded.set(std::sync::Arc::clone(&d));
             Ok(d)
         };
