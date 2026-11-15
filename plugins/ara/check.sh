@@ -157,7 +157,11 @@ build() {
 }
 
 check() {
-  DS_ARA_TESTHOST=$DEPS/build-examples/bin/Debug/ARATestHost ARA_API_DIR=$DEPS/ARA_SDK/ARA_API LIBCLANG_PATH=$CLT/usr/lib /usr/bin/python3 -I check.py all || return 1
+  # TOOLS and WS_TARGET pass through: check.py must see the workspace release dir even
+  # though the exported CARGO_TARGET_DIR above points the plugin at its own ./target.
+  DS_SPIKE_TOOLS=$TOOLS WS_CARGO_TARGET_DIR=$WS_TARGET \
+    DS_ARA_TESTHOST=$DEPS/build-examples/bin/Debug/ARATestHost ARA_API_DIR=$DEPS/ARA_SDK/ARA_API \
+    LIBCLANG_PATH=$CLT/usr/lib /usr/bin/python3 -I check.py all || return 1
 }
 
 case ${1:-all} in
