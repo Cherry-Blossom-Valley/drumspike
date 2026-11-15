@@ -41,10 +41,17 @@ rc=0
 deps() {
   mkdir -p $DEPS || return 1
   rustup target add aarch64-apple-darwin x86_64-apple-darwin || return 1
-  # the ARA 2.3.0 API headers for bindgen ($ARA_API_DIR/ARAInterface.h). ARA_API is part
-  # of the main repo, the submodules (examples, loaders) are not needed here.
+  # the ARA 2.3.0 API headers for bindgen ($ARA_API_DIR/ARAInterface.h). ARA_API is a
+  # submodule of the ARA_SDK repo (releases/2.3.0), not a folder of the main repo:
+  # check out the pinned ARA_API after the clone; the examples and library submodules
+  # are not needed here.
   if [[ ! -f $DEPS/ARA_SDK/ARA_API/ARAInterface.h ]]; then
-    git clone --depth 1 --branch releases/2.3.0 https://github.com/Celemony/ARA_SDK $DEPS/ARA_SDK || return 1
+    rm -rf "$DEPS/ARA_SDK"
+    git clone --depth 1 --branch releases/2.3.0 https://github.com/Celemony/ARA_SDK "$DEPS/ARA_SDK" || return 1
+    git -C "$DEPS/ARA_SDK" submodule update --init --depth 1 ARA_API || return 1
+  fi
+  if [[ ! -f $DEPS/ARA_SDK/ARA_API/ARAInterface.h ]]; then
+    echo "ARA_SDK: no ARA_API/ARAInterface.h after the clone"; return 1
   fi
   if [[ ! -d $DEPS/clap-wrapper ]]; then
     git clone --depth 1 --branch v0.17.0 https://github.com/free-audio/clap-wrapper $DEPS/clap-wrapper || return 1
