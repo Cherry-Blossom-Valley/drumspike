@@ -842,7 +842,8 @@ impl Session {
                         st.current.clear();
                         continue;
                     }
-                    let allow = since.elapsed() < std::time::Duration::from_secs(600);
+                    let allow = since.elapsed() < std::time::Duration::from_secs(600)
+                        && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-page-wait");
                     if self.run_job(&doc, &targets, why, force, allow) {
                         // R4: the 409 after the short retry goes back to the queue like a job of the page
                         defer_msg(Msg::Defer {
