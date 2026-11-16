@@ -86,14 +86,15 @@ document and stored in the ARA archive, so a restore in a new process finds the 
   `partial`. If that track never had events, it has none and no notes. If it had events from
   an earlier round, they STAY in the document, in the archive and as notes, and the `job` row
   names the track in `stale`: they are the events of an earlier round, never the result of
-  this one. Its source ends without a new result (complete for the host, retried at the next
+  this one. The archive stores the mark per track (an archive without it loads as not stale); a
+  restored stale track needs analysis, so the next round with audio analyses it again. Its source ends without a new result (complete for the host, retried at the next
   request). A track whose audio is not here (a track restored from
   the archive, or a cached file that is not the one the reader wrote: the plugin checks the
   size against the samples it wrote) is named in `skipped`, keeps its stored events, and
   marks the round `partial` too. A source whose audio does not come is waited for 30 s after
   its request; then the round goes on without it, the `job` row names it in `late`, a
-  `source_late` row is written and the round is `partial`; a later request for it starts a round
-  again. The `job` row lists the tracks that took part. A move of a region in playback time
+  `source_late` row is written and the round is `partial`. When the audio of that source comes
+  later, a round takes it at once (the host need not ask again); a later request does the same. The `job` row lists the tracks that took part. A move of a region in playback time
   alone (not its modification range) is no change and starts no round.
 - The notes of an earlier source can change in a later round (a bleed hit leaves the output).
   The plugin then tells the host: in `notifyModelUpdates` it calls the host's
@@ -194,7 +195,7 @@ delivery ticket M1c.
 | `DS_ARA_FOLDER_FAULT` | fault | shared | every document uses one folder |
 | `DS_ARA_DESTROY_FAULT` | fault | keep | a destroyed source stays in the list and the project |
 | `DS_ARA_HOME_FAULT` | fault | 1 | the service home is below the user's home, outside the cache folder |
-| `DS_ARA_ROUND_FAULT` | fault | new-only, always, no-deadline | a round analyses only the new tracks, a request for a complete source starts a full round, or a request waits for ever for audio that does not come |
+| `DS_ARA_ROUND_FAULT` | fault | new-only, always, no-deadline, no-late-round | a round analyses only the new tracks, a request for a complete source starts a full round, a request waits for ever for audio that does not come, or audio that comes after the deadline starts no round |
 | `DS_ARA_SETTLE_FAULT` | fault | none | no settle time: every request is a round |
 | `DS_ARA_CLOSE_FAULT` | fault | wait, nocancel | the destroy of a controller waits for the round, or does not cancel it |
 | `DS_ARA_ID_FAULT` | fault | trust | the plugin trusts the document id and the track names of an archive, and the names of the host sources |

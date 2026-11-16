@@ -76,6 +76,8 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   doc-region-move  a region moved in playback time only starts no round (fault: it does)
   doc-late-audio a source whose samples access never comes does not block the document: the
                  round goes on without it, names it and is partial (fault: wait for ever)
+  doc-late-audio-arrives  the audio of the late source comes after the first round: a second
+                 round runs, equal to the reference of both tracks (fault: no round)
   switches       one list (switches.json) of the DS_ARA_* variables: the source, check.sh
                  and the README use no other and the README table is made from it; a normal
                  run clears all of them; check.sh refuses one in the caller's environment
@@ -2503,6 +2505,63 @@ def stage_doc_late_audio() -> bool:
     return pass_fail("doc-late-audio", all(parts.values()), evidence)
 
 
+def late_arrives_parts(label: str, rc: int, lines: list, ref_all: bytes, ref_kick: bytes) -> tuple[dict, str]:
+    jobs = job_rows(label)
+    after = host_notes_of(lines, "after-late")
+    told = notified(lines, "late")
+    parts = {
+        "rc": rc == 0,
+        "two_rounds": len(jobs) == 2,
+        "first_without": len(jobs) >= 1 and jobs[0].get("events_json", "").encode() == ref_kick and jobs[0].get("partial") is True,
+        "second_both": len(jobs) == 2 and jobs[1].get("events_json", "").encode() == ref_all and jobs[1].get("partial") is False,
+        "notes": len(after) == len(DOC_A) and all(after.values()),
+        "told": any(Path(n).stem == Path(DOC_A[1]).stem for n in told),
+    }
+    return parts, (
+        f"the audio of the late source came after the first round: {len(jobs)} round(s); the first without it (partial "
+        f"{jobs[0].get('partial') if jobs else None}), the second with both tracks byte for byte the reference of the two together "
+        f"{parts['second_both']}; notes of both sources after it {[len(v) for v in after.values()]}; the host was told for the late source {parts['told']}"
+    )
+
+
+def late_arrives_run(label: str, extra: dict | None = None) -> tuple[int, list]:
+    rc, _text, lines = host_run(
+        label,
+        CLAP,
+        ["grow", "--files", *fixture_args(DOC_A), "--batch", "2", "--no-access", "1", "--enable-late", "1", "--wait", PANIC_WAIT],
+        f"cache-{label}",
+        extra={"DS_ARA_SCENARIO": "audio-deadline-ms:1500", **(extra or {})},
+    )
+    return rc, lines
+
+
+def stage_doc_late_audio_arrives() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-late-audio-arrives", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref_all, ref_kick = reference_alone("m1b1-ref-a", DOC_A), reference_alone("m1b1-ref-kick", [DOC_A[0]])
+    if ref_all is None or ref_kick is None:
+        return pass_fail("doc-late-audio-arrives", False, "a reference failed")
+    rc, lines = late_arrives_run("doc-late-audio-arrives")
+    parts, evidence = late_arrives_parts("doc-late-audio-arrives", rc, lines, ref_all, ref_kick)
+    return pass_fail("doc-late-audio-arrives", all(parts.values()), evidence)
+
+
+def stage_doc_late_audio_arrives_fault() -> bool:
+    """The fault run: audio that comes after the deadline starts no round (the first version)."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-late-audio-arrives-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref_all, ref_kick = reference_alone("m1b1-ref-a", DOC_A), reference_alone("m1b1-ref-kick", [DOC_A[0]])
+    if ref_all is None or ref_kick is None:
+        return pass_fail("doc-late-audio-arrives-fault", False, "a reference failed")
+    rc, lines = late_arrives_run("doc-late-audio-arrives-fault", {"DS_ARA_ROUND_FAULT": "no-late-round"})
+    parts, evidence = late_arrives_parts("doc-late-audio-arrives-fault", rc, lines, ref_all, ref_kick)
+    return pass_fail(
+        "doc-late-audio-arrives-fault",
+        rc == 0 and parts["first_without"] and parts["two_rounds"] is False and parts["second_both"] is False,
+        f"the fault switch started no round for the late audio and the check refused it: {evidence}",
+    )
+
+
 def stage_doc_late_audio_fault() -> bool:
     """The fault run: a request waits for ever for audio (the first version): the host times out."""
     if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
@@ -2987,6 +3046,8 @@ STAGES = {
     "doc-region-move-fault": stage_doc_region_move_fault,
     "doc-late-audio": stage_doc_late_audio,
     "doc-late-audio-fault": stage_doc_late_audio_fault,
+    "doc-late-audio-arrives": stage_doc_late_audio_arrives,
+    "doc-late-audio-arrives-fault": stage_doc_late_audio_arrives_fault,
     "doc-panic-fault": stage_doc_panic_fault,
     "switches": stage_switches,
     "switches-fault": stage_switches_fault,
@@ -3012,7 +3073,7 @@ ORDER = [
     "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault",
     "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",
-    "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault",
+    "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault", "doc-late-audio-arrives", "doc-late-audio-arrives-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",

@@ -1443,6 +1443,20 @@ fn run_grow(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 wait_for(doc.inst, &pairs)?;
                 doc.print_all_notes("after-rerequest", None);
             }
+            if let Some(k) = args_value(rest, "--enable-late").and_then(|v| v.parse::<usize>().ok()) {
+                // the samples access of a source that had none comes now, after the first round
+                set_phase("late");
+                let dc = iface_of(doc.inst);
+                let src = doc.pairs.get(k).ok_or_else(|| format!("--enable-late {k}: no such source"))?.0;
+                (dc.enableAudioSourceSamplesAccess.expect("enableAudioSourceSamplesAccess"))(dc_ref_of(doc.inst), src, 1);
+                let until = Instant::now() + Duration::from_millis(pump_ms.max(3000));
+                while Instant::now() < until {
+                    pump(doc.inst);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                pump(doc.inst);
+                doc.print_all_notes("after-late", None);
+            }
             if let Some(i) = destroy {
                 set_phase("destroy");
                 doc.destroy_source(i)?;

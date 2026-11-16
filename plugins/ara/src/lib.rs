@@ -142,6 +142,9 @@ struct SourceState {
     analysis_failed: AtomicBool,
     /// The size of the committed WAV.
     wav_len: AtomicU64,
+    /// The events of the track are from an earlier round (its last round had an error); the
+    /// archive stores the mark and a restore keeps the track "needs analysis".
+    stale: AtomicBool,
     /// When the worker took the request that still waits for the audio of this source.
     requested_at: Mutex<Option<std::time::Instant>>,
 }
@@ -500,6 +503,18 @@ fn deadline_left(s: &Arc<SourceState>) -> Option<std::time::Duration> {
     Some(limit.saturating_sub(at.elapsed()))
 }
 
+/// How long the worker may wait for a message: the shortest time until a request that still
+/// waits becomes late. A request that is late already (left is zero) is not waited for: its
+/// document is ready as soon as the other requests of it have their audio, and a wait of zero
+/// would make the worker spin until then.
+fn wait_left(requested: &[Arc<SourceState>]) -> Option<std::time::Duration> {
+    requested
+        .iter()
+        .filter_map(deadline_left)
+        .filter(|d| !d.is_zero())
+        .min()
+}
+
 fn has_wav(s: &Arc<SourceState>) -> bool {
     s.wav.lock().map(|w| w.is_some()).unwrap_or(false)
 }
@@ -620,10 +635,14 @@ impl Session {
     fn worker_loop(&'static self, rx: &Receiver<Msg>, st: &mut WorkerState) {
         loop {
             // a request that waits for audio has a deadline: the wait for a message ends then
-            let next = st.requested.iter().filter_map(deadline_left).min();
-            let got = match next {
-                Some(left) => rx.recv_timeout(left),
-                None => rx.recv().map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected),
+            // (a document that is ready now, for example one with a late source, runs first)
+            let got = if !ready_documents(st).is_empty() {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            } else {
+                match wait_left(&st.requested) {
+                    Some(left) => rx.recv_timeout(left),
+                    None => rx.recv().map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected),
+                }
             };
             match got {
                 Ok(msg) => {
@@ -670,7 +689,10 @@ impl Session {
                     } else {
                         "request"
                     };
-                    self.run_job(&doc, &targets, why, false);
+                    // a source that needs analysis starts a round even when the service sees no
+                    // change (a stale track after a restore: its snapshot did not change)
+                    let force = !targets.is_empty();
+                    self.run_job(&doc, &targets, why, force);
                     st.current.clear();
                 }
                 settled = false;
@@ -721,7 +743,22 @@ impl Session {
                     st.requested.push(s);
                 }
             }
-            Msg::Ready(_) | Msg::Failed(_) => {}
+            Msg::Failed(_) => {}
+            Msg::Ready(s) => {
+                // The audio of a source that has no result (left out as late, a failed round,
+                // a stale track after a restore) is here now: a round takes it, the host need
+                // not ask again. (`DS_ARA_ROUND_FAULT=no-late-round` brings back the first
+                // version: nothing happens.)
+                if std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-late-round")
+                    && !s.removed.load(Ordering::SeqCst)
+                    && s.analysis_failed.load(Ordering::SeqCst)
+                    && !s.doc.closing.load(Ordering::SeqCst)
+                    && !st.requested.iter().any(|r| Arc::ptr_eq(r, &s))
+                {
+                    *s.requested_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+                    st.requested.push(s);
+                }
+            }
             Msg::Remove { src, sources_left } => {
                 st.requested.retain(|r| !Arc::ptr_eq(r, &src));
                 self.remove_track(&src, sources_left);
@@ -853,10 +890,12 @@ impl Session {
                 if !stale {
                     s.has_events.store(false, Ordering::SeqCst);
                 }
+                s.stale.store(stale, Ordering::SeqCst);
                 s.analysis_failed.store(true, Ordering::SeqCst);
             } else if result.analysed.iter().any(|n| seq_of(n) == Some(*seq)) {
                 s.has_events.store(true, Ordering::SeqCst);
                 s.analysis_failed.store(false, Ordering::SeqCst);
+                s.stale.store(false, Ordering::SeqCst);
             }
             // a complete source whose notes changed, or one that had no result and has one
             // now, is told to the host
@@ -1662,6 +1701,7 @@ unsafe extern "C" fn dc_createAudioSource(
                 requested: AtomicBool::new(false),
                 analysis_failed: AtomicBool::new(false),
                 wav_len: AtomicU64::new(0),
+                stale: AtomicBool::new(false),
                 requested_at: Mutex::new(None),
             });
             list.push(src.clone());
@@ -2266,6 +2306,7 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
                         sample_rate: p.sample_rate,
                         notes: src.notes.lock().map(|n| n.clone()).unwrap_or_default(),
                         track: src.track.lock().ok().and_then(|t| t.clone()).unwrap_or_default(),
+                        stale: src.stale.load(Ordering::SeqCst),
                     }
                 })
                 .collect()
@@ -2375,6 +2416,9 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                         *n = a.notes.clone();
                     }
                     src.has_events.store(true, Ordering::SeqCst);
+                    // a stale track needs a new analysis: the next round with audio takes it
+                    src.stale.store(a.stale, Ordering::SeqCst);
+                    src.analysis_failed.store(a.stale, Ordering::SeqCst);
                     // the track of the source: stored (M1b1), else derived from the stored
                     // name the way the analysis named it (an archive of M1a); a stored name
                     // that is a path is not trusted
@@ -2897,6 +2941,7 @@ mod tests {
             sample_rate: 48_000.0,
             notes: Vec::new(),
             track: String::new(),
+            stale: false,
         }
     }
 
@@ -2948,6 +2993,64 @@ mod tests {
         release_id(&a);
         assert!(claim_id(&b, &a));
         release_id(&a);
+    }
+
+    fn bare_source(doc: &Arc<DocShared>, seq: usize) -> Arc<SourceState> {
+        Arc::new(SourceState {
+            seq,
+            doc: doc.clone(),
+            track: Mutex::new(None),
+            removed: AtomicBool::new(false),
+            props: Mutex::new(SourceProps::default()),
+            host: SyncPtr(std::ptr::null()),
+            host_ref: SyncPtr(std::ptr::null_mut()),
+            reader: Mutex::new(SyncPtr(std::ptr::null_mut())),
+            worker: Mutex::new(None),
+            cancel: AtomicBool::new(false),
+            wav: Mutex::new(None),
+            failed: AtomicBool::new(false),
+            regions: Mutex::new(Vec::new()),
+            notes: Mutex::new(Vec::new()),
+            has_events: AtomicBool::new(false),
+            requested: AtomicBool::new(true),
+            analysis_failed: AtomicBool::new(false),
+            wav_len: AtomicU64::new(0),
+            stale: AtomicBool::new(false),
+            requested_at: Mutex::new(None),
+        })
+    }
+
+    #[test]
+    fn a_source_past_its_deadline_does_not_make_the_worker_spin() {
+        let doc = DocShared::new();
+        let late = bare_source(&doc, 0);
+        let reading = bare_source(&doc, 1);
+        let now = std::time::Instant::now();
+        *late.requested_at.lock().unwrap() = now.checked_sub(std::time::Duration::from_secs(40));
+        *reading.requested_at.lock().unwrap() = Some(now);
+        assert_eq!(
+            deadline_left(&late),
+            Some(std::time::Duration::ZERO),
+            "past its deadline"
+        );
+        let wait = wait_left(&[late.clone(), reading.clone()]).expect("the other source still waits");
+        assert!(
+            !wait.is_zero() && wait <= std::time::Duration::from_secs(30),
+            "{wait:?}"
+        );
+        // the document is not ready while the other source reads; with only the late one it is
+        let st = WorkerState {
+            requested: vec![late.clone(), reading],
+            ..WorkerState::default()
+        };
+        assert!(ready_documents(&st).is_empty());
+        assert_eq!(wait_left(std::slice::from_ref(&late)), None, "nothing to wait for");
+        let st = WorkerState {
+            requested: vec![late],
+            ..WorkerState::default()
+        };
+        assert_eq!(ready_documents(&st).len(), 1);
+        release_id(&doc.id());
     }
 
     #[test]

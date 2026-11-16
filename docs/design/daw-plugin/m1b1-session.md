@@ -126,8 +126,8 @@ How:
 - **Late audio.** A request waits for the audio of its source at most 30 s (counted from the
   request, not from the end of the settle time; the scenario `audio-deadline-ms:<n>` changes it
   for a stage). After that the round goes on without the source: a `source_late` row, the name
-  in `late` in the `job` row, `partial`. The source ends without a result and a later request
-  starts a round again. A reader that cannot be made also sends the failure message now.
+  in `late` in the `job` row, `partial`. The source ends without a result. When its audio comes
+  later, a round takes it at once; a later request does the same. A reader that cannot be made also sends the failure message now.
 - **A failed or cancelled round.** The tracks stay. The sources of the round get no result,
   are complete for the host, and the next request for them starts a round again (the
   `job_failed` row names the error). `isAudioSourceContentAnalysisIncomplete` is false for a
@@ -140,7 +140,8 @@ How:
 - **Host strings and paths.** No string from the host becomes part of a path unchecked. The
   name of the cached WAV is `<number>-<stem>.wav` where `stem_of` gives one safe component for
   every input (a name that ends in `..`, an absolute path, an empty name, control characters);
-  the track name goes through the app's `safe_name`. The persistent id of a source is only
+  a track name made from a host name goes through the app's `safe_name`, and a track name read
+  from an archive passes `valid_track_name`. The persistent id of a source is only
   compared.
 - **Limits of the design.** (a) The registry of the ids holds for one process. Two processes
   that open the same session file share `documents/<id>`, with no lock; a host must not do
@@ -261,7 +262,7 @@ behaviour back for the stages.
 
 | # | Finding | Fix | Test, stage and fault run |
 | --- | --- | --- | --- |
-| 1 | A host source name that ends in `..` (`a/..`) gave `Path::file_stem` `None`; the old `stem_of` then used the whole name, so `audio/NNN-<name>.wav` could leave the cache folder (created, written and deleted there) | `stem_of` gives one safe component for every input; the other host strings (persistent id, track name) were checked: the id is only compared, the track name goes through `safe_name` | unit test `a_host_source_name_never_makes_a_path_out_of_the_audio_folder` (`../../x/..`, `a/..`, `..`, an absolute path, an empty name, a name with a NUL and with a backslash); stage `doc-source-names` (4 hostile names, one source destroyed: 0 files outside `documents/<id>/`); fault `DS_ARA_ID_FAULT=trust`: the folder `escape-name` appears next to the cache |
+| 1 | A host source name that ends in `..` (`a/..`) gave `Path::file_stem` `None`; the old `stem_of` then used the whole name, so `audio/NNN-<name>.wav` could leave the cache folder (created, written and deleted there) | `stem_of` gives one safe component for every input; the other host strings were checked: the persistent id is only compared, a track name made from a host name goes through `safe_name`, an archived track name passes `valid_track_name` | unit test `a_host_source_name_never_makes_a_path_out_of_the_audio_folder` (`../../x/..`, `a/..`, `..`, an absolute path, an empty name, a name with a NUL and with a backslash); stage `doc-source-names` (4 hostile names, one source destroyed: 0 files outside `documents/<id>/`); fault `DS_ARA_ID_FAULT=trust`: the folder `escape-name` appears next to the cache |
 | 2 | A move of a region in playback time alone started a round | only the modification range is compared; the update skips the touch | unit test `a_move_in_playback_time_alone_is_no_change`; stage `doc-region-move` (1 round, notes unchanged); fault `DS_ARA_TOUCH_FAULT=playback-time` (2 rounds) |
 | 3 | A changed source without audio lost its change | its old snapshot stays until a round with audio | unit test `a_change_of_a_source_without_audio_is_not_lost` |
 | 4 | One requested source without audio blocked the document for ever; `start_read` set `failed` without the message | a deadline of 30 s after the request; the late source is left out, named in `late`, the round is `partial`; the failure message is sent | stage `doc-late-audio` (the samples access of one source never comes: a round for the other source, byte for byte its reference, `late` names the source); fault `DS_ARA_ROUND_FAULT=no-deadline` (host timeout, no round) |
@@ -272,6 +273,14 @@ behaviour back for the stages.
 | 9 | Limits not stated | stated in "The design" (limits of the design) and in the README | text |
 | 10 | Dead match arms, a poll loop that can run for ever, `LIVE_DOCS` grows | the arms stay with a comment (the service may get such a state); the poll loop stops after 10 s of `idle`; `LIVE_DOCS` is pruned at the destroy | text and the existing stages |
 
+### Round 5 (short)
+
+| # | Finding | Fix | Test, stage and fault run |
+| --- | --- | --- | --- |
+| 1 | The worker spun at full load while one source was past its deadline and another still read (`recv_timeout(0)`) | the wait is the minimum over the requests that still wait with time left; a document that is ready runs before the worker waits | unit test `a_source_past_its_deadline_does_not_make_the_worker_spin` (the case gives a wait above 0 and the document is not ready) |
+| 2 | A late source whose audio came after the deadline was never analysed | `Msg::Ready` for a source without a result queues a round for its document; the host is told when the notes arrive | stage `doc-late-audio-arrives` (2 rounds: the second equals the reference of both tracks together, the host is told for the late source); fault `DS_ARA_ROUND_FAULT=no-late-round` (1 round, the late source has 0 notes) |
+| 3 | Stale events were stored without a mark and looked fresh after a restore | the archive stores `stale` per track (old archives load as not stale); a restored stale track keeps "needs analysis" and forces a round at the next request or at the arrival of its audio | unit tests in `state.rs` (store and restore of the mark, an archive without it); the restore path itself in `lib.rs` has no stage of its own (open point) |
+
 Timing limits of the close stages and the values measured: the destroy call must return in
 under 1000 ms (measured 420 to 510 ms in the runs of rounds 3 and 4: it is the 500 ms wait,
 because the worker does not acknowledge sooner), and the round must end as cancelled within
@@ -281,8 +290,8 @@ takes effect between two tracks, and a loaded host makes both values longer. The
 
 ## The result (the full run on the PR head)
 
-`./check.sh all`: exit 0, `M1A CHECK: PASS`, 133 `ok` lines, 0 `FAIL` (89 of round 2, 36 of
-round 3, 8 of round 4: the new stages, their fault runs and the reference lines they print). The log is
+`./check.sh all`: exit 0, `M1A CHECK: PASS`, 139 `ok` lines, 0 `FAIL` (89 of round 2, 36 of
+round 3, 8 of round 4, 6 of round 5: the new stages, their fault runs and the reference lines they print). The log is
 `out/final-check.log` (not committed). The values below are from that run.
 
 | Stage | Result | Measured value | Fault switch that makes it fail, and the failure line |
@@ -354,5 +363,7 @@ From the review of round 2 (not done):
 - The plugin never removes a document folder (rule in the README). A clean-up rule needs to
   know which folders an archive still names, which only the host knows. Candidates: remove
   the folder of a document that was never stored; remove a folder after a configured age.
+- The restore of the `stale` mark (a restored stale track needs analysis) is covered by the
+  archive unit tests only; a host-mode stage for it is open.
 - A worker that is still inside one long track at the unload stays behind (see "The worker
   thread and the unload of the library").

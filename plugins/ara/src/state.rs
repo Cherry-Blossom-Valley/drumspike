@@ -32,6 +32,11 @@ pub struct ArchiveSource {
     /// in an archive of M1a: the restore then derives it from the name).
     #[serde(default)]
     pub track: String,
+    /// The events of the track are STALE: its last round ended with an error and the events
+    /// are from an earlier round. After a restore the track needs a new analysis (an archive
+    /// without the field loads as not stale).
+    #[serde(default)]
+    pub stale: bool,
 }
 
 /// The blob.
@@ -98,6 +103,7 @@ mod tests {
                 sample_rate: 48_000.0,
                 notes: vec![[12_000.0, 0.78], [72_000.0, 0.7]],
                 track: "kick".into(),
+                stale: true,
             }],
         };
         let bytes = encode(&state);
@@ -108,6 +114,10 @@ mod tests {
         );
         let back = decode(&bytes).unwrap();
         assert_eq!(back, state);
+        assert!(
+            back.sources[0].stale,
+            "the stale mark of a track survives store and restore"
+        );
     }
 
     #[test]
@@ -117,6 +127,7 @@ mod tests {
         let st = decode(bytes).unwrap();
         assert_eq!(st.doc_id, "");
         assert_eq!(st.sources[0].track, "");
+        assert!(!st.sources[0].stale, "an archive without the mark loads as not stale");
         assert_eq!(st.sources[0].notes, vec![[4800.0, 0.7]]);
     }
 
@@ -154,6 +165,7 @@ mod tests {
                 sample_rate: 48_000.0,
                 notes: Vec::new(),
                 track: "kick".into(),
+                stale: false,
             }],
         };
         let old: OldState = serde_json::from_slice(&encode(&state)).unwrap();
