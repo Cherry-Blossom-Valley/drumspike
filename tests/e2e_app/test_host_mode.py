@@ -85,6 +85,8 @@ def test_play_stop_and_locate_call_the_host_transport_and_never_the_app_transpor
     # the position line follows a position that the stub sends
     app.evaluate("() => B.hostTransport.send({ sid: S.sid, epoch: 1, t_ns: performance.now() * 1e6, pos: 3.25, playing: true })")
     app.wait_for_function("() => S.playhead > 3.2 && S.playhead < 4.2")
+    # the text is written in the frame draw, one frame after the state (#540): wait for the text
+    app.wait_for_function("() => document.querySelector('#timeDisplay').textContent.startsWith('3.')")
     assert app.locator("#timeDisplay").inner_text().startswith("3."), app.locator("#timeDisplay").inner_text()
     # locate: a moved playhead seeks the host, never the app transport
     app.evaluate("() => { S.playhead = 5.5; }")

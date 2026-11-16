@@ -40,6 +40,16 @@ def canvas_2d_lanes(app):
     assert app.evaluate("() => setLanesGL(false)") is False
     yield
     app.evaluate("() => setLanesGL(true)")
+    app.evaluate("() => { window.__DS_TEST_RAF_DELAY_MS = 0; }")
+
+
+def wait_for_time_display(app, prefix):
+    """#540: the frame draw writes #timeDisplay one frame after the state (drawHead, render.js).
+    A test that asserts the text waits for the text — a wait that is false before the action —
+    instead of reading it right after a wait on the state alone."""
+    app.wait_for_function(
+        "(p) => document.querySelector('#timeDisplay').textContent.startsWith(p)", arg=prefix
+    )
 
 
 def test_the_page_follows_the_host_playing_with_no_play_in_the_page(app, make_project):
@@ -52,9 +62,11 @@ def test_the_page_follows_the_host_playing_with_no_play_in_the_page(app, make_pr
     assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "⏸"
     # the playhead and the position line follow the positions the host sends
     app.wait_for_function("() => PH.v > 3.0 && PH.v < 4.0")
+    wait_for_time_display(app, "3.")
     assert app.locator("#timeDisplay").inner_text().startswith("3."), app.locator("#timeDisplay").inner_text()
     send(app, 4.0, True)
     app.wait_for_function("() => PH.v > 4.0 && PH.v < 5.0")
+    wait_for_time_display(app, "4.")
     assert app.locator("#timeDisplay").inner_text().startswith("4."), app.locator("#timeDisplay").inner_text()
     # the host plays: the page asked the host for nothing
     assert app.evaluate("() => B.hostTransport.calls") == [], app.evaluate("() => B.hostTransport.calls")
@@ -71,6 +83,7 @@ def test_the_host_stopping_shows_the_stopped_state_at_its_position(app, make_pro
     app.wait_for_function("() => S.playing === false")
     assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "▶"
     assert app.evaluate("() => PH.v") == pytest.approx(5.25, abs=1e-9)
+    wait_for_time_display(app, "5.2")
     assert app.locator("#timeDisplay").inner_text().startswith("5.2"), app.locator("#timeDisplay").inner_text()
     # the page asked the host for nothing: the DAW stopped, not the page
     assert app.evaluate("() => B.hostTransport.calls") == [], app.evaluate("() => B.hostTransport.calls")
@@ -86,9 +99,26 @@ def test_a_locate_in_the_daw_moves_the_playhead_while_stopped(app, make_project)
     # a locate in the DAW: another stopped position moves the playhead and the position line
     send(app, 8.5, False)
     app.wait_for_function("() => Math.abs(PH.v - 8.5) < 1e-9")
+    wait_for_time_display(app, "8.5")
     assert app.locator("#timeDisplay").inner_text().startswith("8.5"), app.locator("#timeDisplay").inner_text()
     # and the page asked the host for nothing (no stop, no locate, no play)
     assert app.evaluate("() => B.hostTransport.calls") == [], app.evaluate("() => B.hostTransport.calls")
+
+
+def test_the_time_display_wait_survives_a_delayed_frame_draw(app, make_project):
+    """#540 fault run, kept: with the frame draw held back (the render.js test switch), the state
+    is true one frame before the text. The old test (wait on PH.v, then read the text at once)
+    fails here; the wait on the text passes."""
+    open_project(app, make_project(seconds=30.0))
+    set_host_mode(app)
+    assert app.evaluate("() => !!(B.hostTransport && B.hostTransport.onPosition)") is True
+    send(app, 2.0, False)
+    app.wait_for_function("() => !S.playing && Math.abs(PH.v - 2.0) < 1e-9")
+    assert app.evaluate("() => { window.__DS_TEST_RAF_DELAY_MS = 300; return window.__DS_TEST_RAF_DELAY_MS; }") == 300
+    send(app, 8.5, False)
+    app.wait_for_function("() => Math.abs(PH.v - 8.5) < 1e-9")
+    wait_for_time_display(app, "8.5")
+    assert app.locator("#timeDisplay").inner_text().startswith("8.5"), app.locator("#timeDisplay").inner_text()
 
 
 def test_no_following_when_host_mode_is_off(app, make_project):
