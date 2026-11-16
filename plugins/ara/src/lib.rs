@@ -842,8 +842,19 @@ impl Session {
                         st.current.clear();
                         continue;
                     }
+                    let allow = since.elapsed() < std::time::Duration::from_secs(600);
+                    if self.run_job(&doc, &targets, why, force, allow) {
+                        // R4: the 409 after the short retry goes back to the queue like a job of the page
+                        defer_msg(Msg::Defer {
+                            doc: doc.clone(),
+                            targets: targets.clone(),
+                            reason: why,
+                            since,
+                        });
+                        st.current.clear();
+                        continue;
+                    }
                     st.deferred_since.remove(&doc.id());
-                    self.run_job(&doc, &targets, why, force);
                     st.current.clear();
                 }
                 settled = false;
@@ -994,7 +1005,14 @@ impl Session {
     /// here is analysed, with a fresh snapshot of every source (so a change of the regions or
     /// of the properties of an earlier source is seen). `force` runs the round even when
     /// nothing changed (the fault run of the check).
-    fn run_job(&'static self, doc: &Arc<DocShared>, targets: &[Arc<SourceState>], reason: &'static str, force: bool) {
+    fn run_job(
+        &'static self,
+        doc: &Arc<DocShared>,
+        targets: &[Arc<SourceState>],
+        reason: &'static str,
+        force: bool,
+        allow_defer: bool,
+    ) -> bool {
         // a target whose read failed has no audio: its analysis ended without a result (the
         // host does not wait for it; a new request reads it again)
         let (usable, unread): (Vec<_>, Vec<_>) = targets.iter().cloned().partition(has_wav);
@@ -1033,6 +1051,12 @@ impl Session {
         });
         let (result, id, folder, home) = match outcome {
             Ok(r) => r,
+            Err(e) if allow_defer && e.starts_with("409") => {
+                // R4: a job of the page started after the check: the round goes back to the queue
+                self.log(json!({"event": "round_deferred", "doc": id_before, "reason": e}).to_string());
+                self.write_out();
+                return true;
+            }
             Err(e) => {
                 // the round ended without a result: the sources of the round are complete
                 // for the host (it must not wait for ever) and are tried again at the next
@@ -1047,7 +1071,7 @@ impl Session {
                 );
                 self.log(json!({"event": "job_failed", "doc": id_before, "error": e}).to_string());
                 self.write_out();
-                return;
+                return false;
             }
         };
         if !result.ran {
@@ -1056,11 +1080,12 @@ impl Session {
                     .to_string(),
             );
             self.write_out();
-            return; // nothing had changed
+            return false; // nothing had changed
         }
         if let Ok(mut rr) = doc.round_regions.lock() {
-            for (seq, regions, rate) in snap_regions {
-                rr.insert(seq, (regions, rate));
+            // the regions of the snapshots the notes were made with (R6), not of the live ones
+            for (seq, r) in &result.regions {
+                rr.insert(*seq, r.clone());
             }
         }
         let seq_of = |name: &str| result.tracks.iter().find(|(n, _)| n == name).map(|(_, s)| *s);
@@ -1126,7 +1151,7 @@ impl Session {
                     .to_string(),
             );
             self.write_out();
-            return;
+            return false;
         }
         let round = doc.rounds.fetch_add(1, Ordering::SeqCst) + 1;
         ROUNDS.fetch_add(1, Ordering::SeqCst);
@@ -1198,6 +1223,7 @@ impl Session {
         self.write_out();
         // the page reloads its project: it holds the tracks and events of this round (F1, F8)
         doc.announce_reload();
+        false
     }
 
     /// The page changed the project (an edit): the events of the tracks are read again, the
@@ -1209,7 +1235,13 @@ impl Session {
             worker_doc.lock_svc().sync_page_edits()
         });
         match outcome {
-            Ok(Some((events, notes))) => {
+            Ok((None, saved)) => {
+                // R3: the events were already in the document (the request thread recorded them);
+                // the worker saved the project
+                self.log(json!({"event": "page_sync", "doc": doc.id(), "saved": saved, "changed_notes": [], "unix_ns": now_ns().to_string()}).to_string());
+                self.write_out();
+            }
+            Ok((Some((events, notes)), saved)) => {
                 let members: Vec<Arc<SourceState>> = doc
                     .members
                     .lock()
@@ -1246,13 +1278,12 @@ impl Session {
                     *m = events;
                 }
                 self.log(
-                    json!({"event": "page_sync", "doc": doc.id(), "changed_notes": changed,
+                    json!({"event": "page_sync", "doc": doc.id(), "saved": saved, "changed_notes": changed,
                         "events_json": line, "unix_ns": now_ns().to_string()})
                     .to_string(),
                 );
                 self.write_out();
             }
-            Ok(None) => {}
             Err(e) => {
                 self.log(json!({"event": "page_sync_failed", "doc": doc.id(), "error": e}).to_string());
                 self.write_out();
@@ -1294,6 +1325,11 @@ impl Session {
             }
         }
         let tracks_left = removed.clone().unwrap_or_default();
+        if removed.is_ok() {
+            if let Ok(mut rr) = doc.round_regions.lock() {
+                rr.remove(&src.seq);
+            }
+        }
         if let Some(wav) = src.wav.lock().ok().and_then(|w| w.clone()) {
             let _ = std::fs::remove_file(wav);
         }
@@ -1387,7 +1423,7 @@ impl Session {
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        self.run_job(&doc, &targets, "request", false);
+        self.run_job(&doc, &targets, "request", false, false);
     }
 }
 

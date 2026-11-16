@@ -298,7 +298,8 @@ Stage `editor-regions-keep` (fault `drop-track-data`).
   left") and is tried again. The ghost track leaves the project when the job has ended. Stage
   `editor-race-destroy` (fault: `no-page-wait`).
 - A job of the page may start between the check and the call: the calls that the job blocks
-  (`tracks_remove`, `analyze_start_keep`) are tried again for up to 10 s on a 409 (S1).
+  (`tracks_remove`, `analyze_start_keep`) are tried again for at most 1 s on a 409 (S1, R4); a 409 after
+  that goes back to the queue like a job of the page.
 
 ### The edit stage (M2)
 
@@ -338,6 +339,41 @@ round picks a deleted hit again, and a round of the plugin is silent. The plugin
 workaround. Open points for the owner, two options: (a) the app writes a delete as a
 `deactivated` mark that the next analysis keeps (a change in `crates/`), or (b) the plugin
 re-applies the deletes after a round (it would have to remember them per track).
+
+## Round 4 (third review of the coordinator)
+
+- **Follow links survive a region change (R1).** The plugin passes the app's whole snapshot row
+  (`name`, `index`, `order_index`, `track`, `followers`) to `tracks_restore` and replaces only the
+  `track`, so the followers of the removed track are linked again and a new field of the app's
+  snapshot is carried too. Stage `editor-regions-keep` now sets a follow link in the page (fault
+  `drop-track-data` loses it).
+- **A refused restore (R2).** When the restore of the new record is refused, the OLD record is put
+  back and the round reports it; when that fails too, the track leaves the plugin's list (the
+  source is a new track at the next round), so later rounds do not fail with a 404. A removal of a
+  track the project does not have (the app answers 400 "unknown track") counts as removed: no
+  retries for a ghost. Unit tests with a test hook (`fail_restores`).
+- **The worker's sync (R3).** `editor-edit-sync` runs the edit WITHOUT the delay scenario and waits for
+  the row `page_sync`: the worker saved the project (`saved`), the moved hit is on disk, and the host
+  was told that the notes of the source changed (`host_content_changed`). The row is now written for
+  every sync (the request thread has usually recorded the events already, so `changed_notes` is
+  empty then; the notification of the host comes from the record).
+- **What the worker waits for (R4).** Nothing for longer than 1 s. A call that a page job blocks
+  (`tracks_remove`, `analyze_start_keep`) is tried again for at most 1 s under the document lock;
+  a 409 after that sends the round (`round_deferred`) or the removal back through the queue, like
+  a job of the page: it comes again after 100 ms, for about 10 minutes at most. Other documents are
+  served meanwhile; a destroy of another document waits at most for that 1 s retry of the call in
+  flight.
+- **The reload drops writes (R5).** `cancelEvents` drops page writes that were not sent yet: the
+  400 ms debounce of an edit, and an edit that got a 409 during a round. The user sees such an
+  edit vanish at the reload (open point for #539: a note in the page). The script no longer waits
+  for the page's edit queue (`edIdleHook`): a queued operation is index-based and would be applied
+  to the new list. The page parts the script uses (four functions, the globals `S` and `F`, `S.view`
+  and the element `lanesScroll`) are checked in the bundled page by `editor-shell-functions`; the
+  stage `editor-shell-report` runs the report path end to end (a missing function gives the row
+  `page_shell_report`).
+- **Regions of a round (R6).** The notes of a page edit use the regions of the snapshot the round
+  kept (the service returns them with the result), so `record_page_edit` and `notes_of` agree also
+  for a changed source without audio; the entry of a destroyed source is removed.
 
 ## Findings
 

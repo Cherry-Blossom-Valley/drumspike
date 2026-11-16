@@ -116,12 +116,15 @@
     try { await window.__TAURI__.event.listen("project-dirty", function (e) { dirty.push(e.payload); }); } catch (e) { /* no events */ }
     var name = names[0], before = await raw("events_get", { sid: S.sid, name: name });
     var evs = JSON.parse(before.text).events, idx = Math.min(1, evs.length - 1), from = evs[idx].t, to = from + 0.01;
-    var res = null, err = null, role = null;
+    var res = null, err = null, role = null, follower = null;
     try { res = await B.eventsEdit(S.sid, name, [{ op: "move", index: idx, t: to }]); } catch (e) { err = String(e && e.message || e); }
     if (withRole) { try { await window.__TAURI__.core.invoke("track_set_role", { sid: S.sid, name: name, role: "cymbal" }); role = "cymbal"; } catch (e) { err = String(e && e.message || e); } }
+    if (withRole && names.length > 1) {   // R1: the second track follows the first one
+      try { await window.__TAURI__.core.invoke("track_set_follow", { sid: S.sid, name: names[1], source: name }); follower = names[1]; } catch (e) { err = String(e && e.message || e); }
+    }
     var after = await raw("events_get", { sid: S.sid, name: name });
     // the report goes at once: the host may store the archive the moment it sees it
-    post({ kind: "edit", name: name, index: idx, from: from, to: to, error: err, role: role, before_raw: before.text, after_raw: after.text });
+    post({ kind: "edit", name: name, index: idx, from: from, to: to, error: err, role: role, follower: follower, before_raw: before.text, after_raw: after.text });
     await new Promise(function (r) { setTimeout(r, 1500); });   // the event of the service comes by long poll
     post({ kind: "edit-events", dirty_events: dirty });
   }
@@ -174,9 +177,9 @@
     var names = [], page = {}, rawEv = {};
     try { names = S.order.slice(); names.forEach(function (n) { page[n] = (S.events[n] || []).map(function (e) { return { t: e.t, v: e.v }; }); }); } catch (e) { /* none */ }
     for (var i = 0; i < names.length; i++) rawEv[names[i]] = (await raw("events_get", { sid: S.sid, name: names[i] })).text;
-    var roles = {};
-    try { names.forEach(function (n) { roles[n] = S.tracks[n] && S.tracks[n].role; }); } catch (e) { /* none */ }
-    post({ kind: "follow", ok: ok, roles: roles, reloads: reloads, tracks: names, page_events: page, raw_events: rawEv, sid: S.sid, ms: Math.round(performance.now() - t0) });
+    var roles = {}, follows = {};
+    try { names.forEach(function (n) { roles[n] = S.tracks[n] && S.tracks[n].role; follows[n] = S.tracks[n] && S.tracks[n].follows; }); } catch (e) { /* none */ }
+    post({ kind: "follow", ok: ok, roles: roles, follows: follows, reloads: reloads, tracks: names, page_events: page, raw_events: rawEv, sid: S.sid, ms: Math.round(performance.now() - t0) });
   }
   async function refuse(names) {   // F3: the page cannot change the track set
     var sid = S.sid, name = names[0], out = {};

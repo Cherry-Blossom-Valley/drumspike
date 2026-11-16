@@ -3657,6 +3657,41 @@ def stage_editor_vst3_view_fault() -> bool:
                       "a page that never reports ready")
 
 
+def edit_sync_parts(label: str, rc: int, rows: list, cache: str) -> dict:
+    """R3: without the delay scenario the worker's own sync runs: its row says it saved the project,
+    the events are on disk, and the host heard that the notes of the source changed."""
+    reps = page_reports(rows, "edit")
+    syncs = [r for r in rows if r.get("event") == "page_sync"]
+    if not reps:
+        return {"editor-edit-sync": (False, f"no edit report (rc={rc})")}
+    r = reps[0]
+    disk = disk_events(cache, r["name"])
+    on_disk = disk is not None and any(abs(h["t"] - r["to"]) < 1e-9 for h in disk)
+    log = (OUT / f"host-{label}.log").read_text(errors="replace") if (OUT / f"host-{label}.log").exists() else ""
+    told = [ln for ln in log.splitlines() if '"host_content_changed"' in ln and r["name"] in ln]
+    return {"editor-edit-sync": (
+        rc == 0 and bool(syncs) and any(x.get("saved") for x in syncs) and on_disk and bool(told),
+        f"with no delay the worker's page_sync ran ({len(syncs)} row(s), saved {[x.get('saved') for x in syncs]}), the moved hit is in the project on disk ({on_disk}), "
+        f"and the host was told that the notes of {r['name']} changed ({len(told)} notification(s))")}
+
+
+def edit_sync_run(label: str, env: dict | None = None) -> dict:
+    rc, summary, rows = run_phase(label, "edit", CLAP, env, ["--wait-sync"])
+    return edit_sync_parts(label, rc, rows, f"cache-{label}")
+
+
+def stage_editor_edit_sync() -> bool:
+    if _reference() is None or not HOST.exists():
+        return pass_fail("editor-edit-sync", False, "no reference or host")
+    return print_parts("", edit_sync_run("editor-edit-sync"))
+
+
+def stage_editor_edit_sync_fault() -> bool:
+    # the worker never hears about the change: no sync row, no save by the worker
+    return fault_part("editor-edit-sync-fault", edit_sync_run("editor-fault-edit-sync", {"DS_ARA_EDITOR_FAULT": "no-sync"}), "editor-edit-sync",
+                      "the worker does not hear about the change")
+
+
 def disk_events(cache: str, name: str) -> list | None:
     docs = project_docs(cache)
     if not docs:
@@ -3729,11 +3764,13 @@ def regions_keep_parts(rc: int, rows: list, ref: bytes) -> dict:
     changed_round = len(jobs) >= 2 and jobs[-1].get("reason") in ("change", "request")
     outside = [h["t"] for h in evs if h["t"] >= 1.0]   # the region was trimmed to the first second
     refobj = json.loads(ref)
-    others_same = all(json.loads(f["raw_events"][n])["events"] == refobj[n] for n in f["tracks"] if n != name and n in refobj)
+    follower = e.get("follower")
+    others_same = all(json.loads(f["raw_events"][n])["events"] == refobj[n] for n in f["tracks"] if n not in (name, follower) and n in refobj)
+    still_follows = bool(follower) and (f.get("follows") or {}).get(follower) == name   # R1: the follow link of the track survives the trim
     return {"editor-regions-keep": (
-        rc == 0 and f.get("ok") is True and moved and role == "cymbal" and changed_round and others_same,
+        rc == 0 and f.get("ok") is True and moved and role == "cymbal" and changed_round and others_same and still_follows,
         f"after a hit moved and a role set in the page, the host trimmed the region of {name}: {len(jobs)} rounds, "
-        f"the moved hit is still in the events ({moved}), the role is {role!r} (set: 'cymbal'), the other tracks equal the reference ({others_same}), "
+        f"the moved hit is still in the events ({moved}), the role is {role!r} (set: 'cymbal'), the other tracks equal the reference ({others_same}), {follower!r} still follows it ({still_follows}), "
         f"{len(outside)} hit(s) outside the new region stay in the list")}
 
 
@@ -3793,13 +3830,25 @@ def stage_editor_race_destroy_fault() -> bool:
 
 
 def shell_function_parts(page: Path) -> tuple[bool, str]:
-    """S4: every function of the page that the shell script uses exists in the bundled page."""
+    """S4, R5: every function, global and element of the page that the shell script uses exists in the bundled page."""
     src = (HERE / "src" / "editor" / "shell.js").read_text(encoding="utf-8")
-    m = re.search(r"var PAGE_FUNCTIONS = \[([^\]]*)\]", src)
-    names = re.findall(r'"([A-Za-z_]+)"', m.group(1)) if m else []
+
+    def listed(name: str) -> list:
+        m = re.search(rf"var {name} = \[([^\]]*)\]", src)
+        return re.findall(r'"([A-Za-z_]+)"', m.group(1)) if m else []
+
+    funcs, globs, ids = listed("PAGE_FUNCTIONS"), listed("PAGE_GLOBALS"), listed("PAGE_IDS")
     text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in sorted(page.glob("*.js")))
-    missing = [n for n in names if not re.search(rf"(function\s+{n}\s*\(|(const|let|var)\s+{n}\b)", text)]
-    return (bool(names) and not missing, f"the shell script uses {len(names)} functions of the page ({', '.join(names)}); {len(missing)} missing in the bundled page {missing}")
+    html = (page / "index.html").read_text(encoding="utf-8", errors="replace")
+    missing = [n for n in funcs if not re.search(rf"function\s+{n}\s*\(", text)]
+    missing += [n for n in globs if not re.search(rf"(const|let|var)\s+{n}\b", text)]
+    missing += ["#" + n for n in ids if f'id="{n}"' not in html]
+    # S.view is the page's own object: its two keys are in the state
+    if not re.search(r"view:\s*\{\s*t0", text):
+        missing.append("S.view")
+    total = len(funcs) + len(globs) + len(ids) + 1
+    return (bool(funcs and globs and ids) and not missing,
+            f"the shell script uses {total} parts of the page (functions {funcs}, globals {globs} and S.view, element {ids}); {len(missing)} missing in the bundled page {missing}")
 
 
 def stage_editor_shell_functions() -> bool:
@@ -3816,6 +3865,36 @@ def stage_editor_shell_functions_fault() -> bool:
     p.write_text(p.read_text().replace("async function loadProject(", "async function loadProjectRenamed("))
     ok, ev = shell_function_parts(tmp)
     return pass_fail("editor-shell-functions-fault", not ok, f"a renamed function of the page is found: {ev}")
+
+
+def shell_report_parts(rc: int, rows: list, expect: bool) -> dict:
+    """R5 (d): the shell's report of a missing function reaches the plugin: a row `page_shell_report`."""
+    reports = [r for r in rows if r.get("event") == "page_shell_report"]
+    names = [n for r in reports for n in (r.get("what") or {}).get("missing_page_functions", [])]
+    reloaded = bool(page_reports(rows, "follow"))
+    if expect:
+        return {"editor-shell-report": (rc == 0 and reloaded and "renamedLoadProject" in names,
+                f"a function the shell needs is missing in the page: the shell's report reached the plugin as a row ({names})")}
+    return {"editor-shell-report": (rc == 0 and reloaded and not reports,
+            f"the page has every part the shell uses: a reload ran and the plugin got no missing-function report ({len(reports)} rows)")}
+
+
+def shell_report_run(label: str, env: dict | None = None, expect: bool = True) -> dict:
+    rc, summary, rows = run_phase(label, "edit-round", CLAP, env, ["--late-files", EXTRA_SYNTH, "--arg", str(len(FILES) + 1)])
+    return shell_report_parts(rc, rows, expect)
+
+
+def stage_editor_shell_report() -> bool:
+    ok = print_parts("", shell_report_run("editor-shell-report", None, False))
+    return ok
+
+
+def stage_editor_shell_report_fault() -> bool:
+    # the injected missing function must reach the plugin as a row; the quiet check of the normal run refuses that run
+    parts = shell_report_run("editor-fault-shell-report", {"DS_ARA_EDITOR_FAULT": "missing-function"}, False)
+    ok = fault_part("editor-shell-report-fault", parts, "editor-shell-report", "a function of the page is missing")
+    parts = shell_report_run("editor-fault-shell-report2", {"DS_ARA_EDITOR_FAULT": "missing-function"}, True)
+    return print_parts("", parts) and ok
 
 
 
@@ -3904,12 +3983,16 @@ STAGES = {
     "editor-page-copy-fault": stage_editor_page_copy_fault,
     "editor-vst3-view": stage_editor_vst3_view,
     "editor-vst3-view-fault": stage_editor_vst3_view_fault,
+    "editor-edit-sync": stage_editor_edit_sync,
+    "editor-edit-sync-fault": stage_editor_edit_sync_fault,
     "editor-edit-destroy": stage_editor_edit_destroy,
     "editor-edit-destroy-fault": stage_editor_edit_destroy_fault,
     "editor-regions-keep": stage_editor_regions_keep,
     "editor-regions-keep-fault": stage_editor_regions_keep_fault,
     "editor-race-destroy": stage_editor_race_destroy,
     "editor-race-destroy-fault": stage_editor_race_destroy_fault,
+    "editor-shell-report": stage_editor_shell_report,
+    "editor-shell-report-fault": stage_editor_shell_report_fault,
     "editor-shell-functions": stage_editor_shell_functions,
     "editor-shell-functions-fault": stage_editor_shell_functions_fault,
 }
@@ -3925,7 +4008,7 @@ ORDER = [
     "editor-open", "editor-fault", "editor-gui", "editor-gui-fault", "editor-shell", "editor-shell-fault",
     "editor-edit", "editor-edit-fault", "editor-threads", "editor-threads-fault",
     "editor-follow", "editor-follow-fault", "editor-refuse", "editor-refuse-fault", "editor-race", "editor-race-fault", "editor-page-copy", "editor-page-copy-fault", "editor-vst3-view", "editor-vst3-view-fault",
-    "editor-edit-destroy", "editor-edit-destroy-fault", "editor-regions-keep", "editor-regions-keep-fault", "editor-race-destroy", "editor-race-destroy-fault", "editor-shell-functions", "editor-shell-functions-fault",  
+    "editor-edit-sync", "editor-edit-sync-fault", "editor-edit-destroy", "editor-edit-destroy-fault", "editor-regions-keep", "editor-regions-keep-fault", "editor-race-destroy", "editor-race-destroy-fault", "editor-shell-functions", "editor-shell-functions-fault", "editor-shell-report", "editor-shell-report-fault",  
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",

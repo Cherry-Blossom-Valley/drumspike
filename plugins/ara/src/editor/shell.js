@@ -73,22 +73,34 @@
   // The plugin tells the page when it changed the data behind the page's back (a round of the
   // plugin ended, an archive was restored): the page loads its project again. The page's pending
   // writes are DROPPED, not flushed: they hold the page's older list and would be written over
-  // the data of the round (S3). A burst of events is one reload. The view (zoom and scroll of
-  // the lanes) is kept across the reload; the undo history is not (open point of #539).
-  // PAGE_FUNCTIONS are the functions of the page that this script uses: a rename in static/
-  // must not make the reload do less in silence (S4): a missing one is reported at once.
-  var PAGE_FUNCTIONS = ["edIdleHook", "cancelEvents", "initSessions", "loadProject", "invalidate"];
-  function missingPageFunctions() {
-    return PAGE_FUNCTIONS.filter(function (n) {
+  // the data of the round (S3). The page's edit queue is NOT waited for either (R5): a queued
+  // operation is index-based and would be applied to the new list. A burst of events is one
+  // reload. The view (zoom and scroll of the lanes) is kept across the reload; the undo history
+  // is not (open point of #539).
+  // What this script uses of the page: functions, two globals and one element. A rename in
+  // static/ must not make the reload do less in silence (S4): a missing one is reported at once
+  // (console error, shell command plugin_report), and a stage checks the bundled page for them.
+  var PAGE_FUNCTIONS = ["cancelEvents", "initSessions", "loadProject", "invalidate"];
+  var PAGE_GLOBALS = ["S", "F"];
+  var PAGE_IDS = ["lanesScroll"];
+  function missingPageParts() {
+    var names = PAGE_FUNCTIONS.slice();
+    if (window.__DS_TEST__ && window.__DS_TEST__.fault === "missing-function") names.push("renamedLoadProject");   // the check's fault run
+    var out = names.filter(function (n) {
       try { return typeof (0, eval)(n) !== "function"; } catch (e) { return true; }
     });
+    PAGE_GLOBALS.forEach(function (n) {
+      try { if (typeof (0, eval)(n) !== "object") out.push(n); } catch (e) { out.push(n); }
+    });
+    PAGE_IDS.forEach(function (n) { if (!document.getElementById(n)) out.push("#" + n); });
+    return out;
   }
   var reloading = false, again = false;
   async function reloadProject() {
     if (reloading) { again = true; return; }
     reloading = true;
     try {
-      var missing = missingPageFunctions();
+      var missing = missingPageParts();
       if (missing.length) {
         console.error("drumspike plugin: the page has no " + missing.join(", ") + "; the reload does less");
         try { await invoke("plugin_report", { missing_page_functions: missing }); } catch (e) { /* no plugin */ }
@@ -96,8 +108,7 @@
       do {
         again = false;
         var view = null, scroll = 0;
-        try { view = { t0: S.view.t0, t1: S.view.t1 }; scroll = document.querySelector("#lanesScroll").scrollTop; } catch (e) { /* no view yet */ }
-        try { if (typeof edIdleHook === "function") await edIdleHook(); } catch (e) { /* the page's own queue */ }
+        try { view = { t0: S.view.t0, t1: S.view.t1 }; scroll = document.getElementById("lanesScroll").scrollTop; } catch (e) { /* no view yet */ }
         try { if (typeof cancelEvents === "function" && S.sid) cancelEvents(S.sid); } catch (e) { /* none */ }
         if (typeof initSessions === "function") await initSessions();
         if (typeof loadProject === "function") await loadProject();
@@ -105,7 +116,7 @@
           if (view && S.order && S.order.length && view.t1 > view.t0) {
             S.view = { t0: view.t0, t1: view.t1 };
             if (typeof invalidate === "function" && typeof F !== "undefined") invalidate(F.VIEW);
-            document.querySelector("#lanesScroll").scrollTop = scroll;
+            document.getElementById("lanesScroll").scrollTop = scroll;
           }
         } catch (e) { /* the page keeps its full view */ }
       } while (again);

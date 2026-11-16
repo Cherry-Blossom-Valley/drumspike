@@ -9,7 +9,7 @@
 //! ara-host <bundle> editor --files <wav>... --editor-mode ready|keys|focus|resize|measure|edit|shell|analyse|net
 //!                          |edit-round|open-first|refuse|bigpost
 //!                          [--cycles N] [--archive <file>] [--arg <text>] [--no-ara]
-//!                          [--late-files <wav>...] [--no-sync-wait]
+//!                          [--late-files <wav>...] [--wait-sync]
 //! `--store-at-edit <file>`: the archive is stored the moment the page's edit report arrives
 //! (modes `edit`, `edit-destroy`, `edit-region`); `edit-destroy` then closes the editor and the
 //! document at once. `edit-region`: after the edit the host trims the region of the edited
@@ -18,8 +18,8 @@
 //! `--late-files` are added to the document (and analysed) while the editor is open: in
 //! `open-first` when the page has booted (the files then are `--late-files` only), in
 //! `edit-round` and `refuse` after the page's report, in `analyse-race` when the page's own
-//! analysis has started. `--no-sync-wait`: the archive is stored at once after the page's
-//! edit, without waiting for the plugin's worker.
+//! analysis has started. `--wait-sync` (mode `edit`): after the edit the host waits for the row
+//! `page_sync` of the plugin's worker (without the scenario `sync-delay`).
 //! ```
 //! Keys and clicks are real `NSEvent`s through `[NSApp sendEvent:]` (the S2 finding: the
 //! window server path needs the accessibility trust).
@@ -171,7 +171,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     let archive = args_value(rest, "--archive");
     let no_ara = arg_flag(rest, "--no-ara");
     let late_files = args_list(rest, "--late-files");
-    let no_sync_wait = arg_flag(rest, "--no-sync-wait");
+    let wait_sync = arg_flag(rest, "--wait-sync");
     let store_at_edit = args_value(rest, "--store-at-edit");
     let region_spec = args_value(rest, "--region").and_then(|v| parse_region(&v).ok());
     let destroy_late: Option<usize> = args_value(rest, "--destroy-late").and_then(|v| v.parse().ok());
@@ -573,10 +573,17 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 }
                 rss_open = rss_mb();
             }
-            if got && mode == "edit-sync-wait" && !no_sync_wait {
+            if got && mode == "edit" && wait_sync {
                 // the plugin reads the events again on its worker; wait for its row
                 let t = Instant::now();
                 while t.elapsed() < Duration::from_secs(15) && count_rows("page_sync", None) == 0 {
+                    pump(&app);
+                    doc_pump(&doc);
+                }
+                // the host asks for the plugin's model updates a few times (the notification of
+                // a source whose notes changed comes in `notifyModelUpdates`)
+                let t = Instant::now();
+                while t.elapsed() < Duration::from_millis(500) {
                     pump(&app);
                     doc_pump(&doc);
                 }
