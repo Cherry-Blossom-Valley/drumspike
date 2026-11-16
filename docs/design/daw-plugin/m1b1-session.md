@@ -273,9 +273,9 @@ behaviour back for the stages.
 | 10 | Dead match arms, a poll loop that can run for ever, `LIVE_DOCS` grows | the arms stay with a comment (the service may get such a state); the poll loop stops after 10 s of `idle`; `LIVE_DOCS` is pruned at the destroy | text and the existing stages |
 
 Timing limits of the close stages and the values measured: the destroy call must return in
-under 1000 ms (measured 477 to 510 ms in the runs of rounds 3 and 4: it is the 500 ms wait,
+under 1000 ms (measured 420 to 510 ms in the runs of rounds 3 and 4: it is the 500 ms wait,
 because the worker does not acknowledge sooner), and the round must end as cancelled within
-3500 ms after the destroy (measured 455 to 724 ms). Both limits are wide on purpose: a cancel
+3500 ms after the destroy (measured 400 to 724 ms). Both limits are wide on purpose: a cancel
 takes effect between two tracks, and a loaded host makes both values longer. The fault run
 `wait` measures 4572 ms for the destroy.
 
