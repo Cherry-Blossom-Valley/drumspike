@@ -50,6 +50,13 @@ The plugin writes only below one cache folder:
 The plugin never writes into an audio file of the session, and nothing below the user's
 home outside this folder.
 
+The plugin never removes a document folder. It cannot know whether an archive of the host
+still names it. The size of a folder is about the size of the audio of its sources as 32-bit
+float: 4 bytes for each sample and channel (a mono source at 48 kHz: about 11.5 MB for each
+minute), plus the project (small). A user can delete a folder of a session that is gone; the
+next restore of an archive that names it then starts from the stored events and the host's
+audio again. An automatic clean-up rule is an open point (see the session note).
+
 ## The session
 
 One document controller owns one `drumspike_app::Service` (made with the controller,
@@ -58,20 +65,39 @@ document and stored in the ARA archive, so a restore in a new process finds the 
 
 - A request to analyse sources adds them as tracks to the open project. The rule: whenever
   the set of analysed tracks of a document changes (a request adds sources, a source is
-  destroyed), the result of ALL tracks is the result of one analysis of all those tracks
-  together, as the service gives it (the session steps cross bleed, ghost gate, tom bleed and
-  flam run over the tracks of one job, so a job over the new tracks alone would never let a
-  track see the other microphones). Requests that arrive within 250 ms of each other (at
-  most 2 s in all) are one round; the report names the number of rounds. The project is saved
-  after every round.
+  destroyed, the regions or the properties of a source change), the result of ALL tracks is
+  the result of one analysis of all those tracks together, as the service gives it (the
+  session steps cross bleed, ghost gate, tom bleed and flam run over the tracks of one job,
+  so a job over the new tracks alone would never let a track see the other microphones).
+  Every round takes a fresh snapshot of every source. Requests that arrive within 250 ms of
+  each other (at most 2 s in all) are one round; the report names the number of rounds. The
+  project is saved after every round. A request for a source that already has its result
+  changes nothing and starts no round.
+- A source is one track for its life (the key is its creation index). A round that fails or
+  is cancelled leaves the tracks; the sources of that round are complete for the host (it
+  must not wait for ever) and have no notes, and the next request for them runs a round
+  again. The service answers a result for every track: a track it could not analyse (a WAV
+  that cannot be read) is named in the `errors` of the `job` row, has no events and no notes,
+  and the round is marked `partial`. A track whose audio is not here (a track restored from
+  the archive, or a cached file that is not the one the reader wrote: the plugin checks the
+  size against the samples it wrote) is named in `skipped`, keeps its stored events, and
+  marks the round `partial` too. The `job` row lists the tracks that took part.
 - The notes of an earlier source can change in a later round (a bleed hit leaves the output).
   The plugin then tells the host: in `notifyModelUpdates` it calls the host's
   `notifyAudioSourceContentChanged` for exactly those sources, and serves the new notes.
 - `destroyAudioSource` removes the source from the controller's list at once; its track
   leaves the project (and its cached audio the cache) on the worker thread, and the tracks
   that are left are analysed together again.
-- A restore from the archive writes the project document with the stored events and opens
-  it. It decodes no audio file. A restored track's source points at the cache path where the
+- A restore from the archive sets the events of the document and the notes of the sources
+  on the calling thread, then sends the project part to the worker: the worker may be busy
+  for minutes with another document, and an archive stored in that time must carry the
+  events. The worker writes the project document with the stored events and opens it. It
+  decodes no audio file. The archive comes from a file the user may have edited: the stored
+  document id is taken only in the form the plugin makes (16 lowercase hex digits), a track
+  name only without a path separator and without `..`; anything else is replaced (a fresh id,
+  a name from the source name) and the report says so. An id that another live document of
+  the process holds (a session file that was copied, or opened twice) is not taken either:
+  the second document keeps its own fresh id and its folder starts from the archive data. A restored track's source points at the cache path where the
   reader would write the audio; that file does not exist until the host gives the audio
   again. `project_open` and `events_get` work without it; a call that needs the audio gets
   the app's own offline answer (a crate test), and a later round skips such a track and keeps
@@ -82,8 +108,17 @@ document and stored in the ARA archive, so a restore in a new process finds the 
 - All of this runs on the plugin's worker thread. Nothing runs on the audio thread, and the
   host's main thread only reads and writes the state it needs for the ARA calls.
   `destroyDocumentController` cancels a running analysis and returns within half a second in
-  every case; the worker owns the document through shared ownership and finishes the save on
-  its own.
+  every case (a cancel that arrives before the analysis starts ends the round without running
+  it); the worker owns the document through shared ownership and finishes the save on its
+  own. When the host unloads the plugin library (`clap_entry.deinit`), the plugin cancels
+  every running round, tells the worker to end and waits for it at most 1.5 s; the cancel
+  takes effect between two tracks. A worker that is still inside one track after that stays
+  behind (a thread cannot be stopped from outside), and the report says `ended: false`. A
+  host that loads the library again in the same process gets a new worker.
+- The reader threads and the worker thread run inside the panic guard. A panic in a reader
+  ends that read as a failure and tells the worker; a panic in the worker ends the round it
+  happened in (its sources end without a result) and the worker starts again. No function
+  pointer of the host is unwrapped in the plugin code (the host tables are optional input).
 
 ## The check
 
@@ -100,7 +135,10 @@ document, all tracks analysed together (a fixture whose split result differs), o
 requests that arrive close together, the host told about changed notes, two documents apart, the document id in the archive, a destroyed
 source leaves the project, the destroy of a controller during an analysis returns in under
 1 s, and the home of the service (a run with `HOME` below `out/`
-lists the files below it outside the cache folder: 0). The ticket's "in
+lists the files below it outside the cache folder: 0). The stages of the review round
+(`doc-id-hostile`, `doc-same-id`, `doc-restore-busy`, `doc-retry`, `doc-rerequest`,
+`doc-errors`, `doc-regions-change`, `doc-close`, `doc-panic`, `switches`, `no-unwrap`) are in
+`docs/design/daw-plugin/m1b1-session.md`, each with its fault run. The ticket's "in
 the ARA test host" is two hosts: the plugin's own `ara-host` drives the stages above, and
 the `ARATestHost` of the ARA SDK examples - built from the S1 pattern with the S1 patch -
 runs its own tests (ContentReading, PropertyUpdates, Archiving, PlaybackRendering,
