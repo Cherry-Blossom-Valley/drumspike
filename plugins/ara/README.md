@@ -110,13 +110,45 @@ passes audio through, so no test is skipped.
 
 ## Test switches of the check
 
-A real host sets none of these: `DS_ARA_CACHE` (the cache folder), `DS_ARA_OUT` (where the
-plugin writes its report, one JSON object per line), `DS_ARA_FAULT=in-process` (the fault
-switch: the analysis runs inside `process` on purpose, so the overrun check of the host
-can fail), `DS_ARA_TABLES_FAULT=1` (the plugin serves a document controller table with
-one emptied slot, so the table walk of the check can fail) and
-`DS_ARA_RESTORE_FAULT=decode` (the restore decodes one source on purpose, so the
-no-decode proof of the archive check can fail).
+A real host sets none of these. The list is `switches.json`: the table below is made from
+it (`check.py write-readme`), the stage `switches` fails when the source uses a variable that
+is not listed, when a listed variable is not used, or when this table was edited by hand, and
+`check.sh` fails at the start when a fault or scenario switch is set in the caller's
+environment. A normal run of the check clears every variable of the list for the programs it
+starts.
+
+<!-- switches:begin (made from switches.json by `check.py write-readme`) -->
+
+| Variable | Kind | Values | What it does |
+| --- | --- | --- | --- |
+| `DS_ARA_CACHE` | config | a folder | the cache folder the plugin writes below (default ~/Library/Caches/DrumSpike/ARA) |
+| `DS_ARA_OUT` | config | a file | where the plugin writes its report, one JSON object per line |
+| `DS_ARA_DEPS` | check | a folder | check.sh only: the folder of the third-party parts (default .deps) |
+| `DS_ARA_TESTHOST` | check | a file | check.sh only: the ARATestHost binary of the conformance stage |
+| `DS_ARA_FAULT` | fault | in-process | the analysis runs inside process on purpose, so the overrun check can fail |
+| `DS_ARA_TABLES_FAULT` | fault | 1 | the plugin serves a document controller table with one emptied slot |
+| `DS_ARA_RESTORE_FAULT` | fault | decode, newid, empty, late-events | the restore decodes one source, ignores the stored id, drops the stored events, or sets the events of the document on the worker thread |
+| `DS_ARA_SERVICE_FAULT` | fault | per-job | a new service for every job (the M1a way) |
+| `DS_ARA_TRACKS_FAULT` | fault | forget | a later request forgets the earlier tracks |
+| `DS_ARA_FOLDER_FAULT` | fault | shared | every document uses one folder |
+| `DS_ARA_DESTROY_FAULT` | fault | keep | a destroyed source stays in the list and the project |
+| `DS_ARA_HOME_FAULT` | fault | 1 | the service home is below the user's home, outside the cache folder |
+| `DS_ARA_ROUND_FAULT` | fault | new-only, always | a round analyses only the new tracks, or a request for a complete source starts a full round |
+| `DS_ARA_SETTLE_FAULT` | fault | none | no settle time: every request is a round |
+| `DS_ARA_CLOSE_FAULT` | fault | wait, nocancel | the destroy of a controller waits for the round, or does not cancel it |
+| `DS_ARA_ID_FAULT` | fault | trust | the plugin trusts the document id and the track names of an archive |
+| `DS_ARA_REGISTRY_FAULT` | fault | off | no registry of the document ids in use: two live documents may share one |
+| `DS_ARA_ERRORS_FAULT` | fault | swallow | the error of a single track is not read |
+| `DS_ARA_RETRY_FAULT` | fault | duplicate | a retried source makes a second track |
+| `DS_ARA_TOUCH_FAULT` | fault | ignore | a change of the regions or the properties of a source is not seen |
+| `DS_ARA_GUARD_FAULT` | fault | off | the reader thread and the worker thread run without the panic guard |
+| `DS_ARA_UNLOAD_FAULT` | fault | skip | the unload of the library does not stop the worker |
+| `DS_ARA_PANIC_TEST` | scenario | reader, worker | the reader thread or the worker thread panics once |
+| `DS_ARA_SCENARIO` | scenario | corrupt-wav:<n>, fail-first-round, slow-setup | the WAV of source n is damaged after the read, the first round fails once, or every round waits 1.5 s before its analysis starts |
+
+Kinds: **config**: The plugin reads it (the check sets it for every run). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. **scenario**: Scenario switch: sets up a case for a stage (not a fault).
+
+<!-- switches:end -->
 
 ## Licences
 

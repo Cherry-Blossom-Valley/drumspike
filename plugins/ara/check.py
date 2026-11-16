@@ -43,8 +43,38 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
                  earlier source whose notes changed (faults: the second request forgets the
                  earlier tracks; only the new tracks are analysed)
   doc-rounds     requests 40 ms apart are one round (fault: no settle time)
-  doc-close      the destroy of a controller while its analysis runs returns in under 1 s
-                 (fault: the long wait)
+  doc-close      the destroy of a controller while its analysis runs: the call returns in
+                 under 1 s, the round was running at the destroy (a round_start row before
+                 it), it ends as cancelled within a stated time and writes no job row,
+                 nothing is written after the document closed, the worker ends at the
+                 unload of the library, the document on disk is consistent and a new
+                 analysis in its folder works; a cancel that arrives before the analysis
+                 starts ends the round without running it (doc-close-early) (faults: the
+                 long wait, no cancel, no stop of the worker at the unload)
+  doc-id-hostile an archive with an id that is no path-safe id (`../x`, an absolute path,
+                 empty, other forms) or with track names that are paths: no file appears
+                 outside documents/<valid id>/ (fault: the plugin trusts the archive)
+  doc-same-id    the same archive restored into two controllers of one process: two ids,
+                 two folders, both results equal to the reference (fault: no id registry)
+  doc-restore-busy  restore, then store at once while the worker is busy with another
+                 document: the second archive has every event (fault: the events are set on
+                 the worker thread)
+  doc-retry      a round that fails once, then a new request: one track per source, the
+                 reference result (fault: a second track for every retried source)
+  doc-rerequest  a request for sources that are complete starts no round (fault: a full
+                 round with the reason removal)
+  doc-errors     three tracks, one WAV damaged: the two good tracks equal the reference of
+                 the two together, the bad one is reported with its error and has no notes,
+                 the round is marked partial (fault: the error is not read)
+  doc-regions-change  analyse, then change the second region: the events and the notes are
+                 those of the reference for the new regions (fault: the change is not seen)
+  doc-panic      a panic in the reader thread, and one in the worker thread: reported, the
+                 worker goes on, a new request gives the reference result (fault: threads
+                 without the guard)
+  switches       one list (switches.json) of the DS_ARA_* variables: the source, check.sh
+                 and the README use no other and the README table is made from it; a normal
+                 run clears all of them; check.sh refuses one in the caller's environment
+  no-unwrap      no unwrap and no expect in the non-test code of the plugin
   doc-two        M1b1 line 3: two document controllers in one process, own folders, events
                  byte for byte the reference of each document alone, no file of the first
                  folder changes while the second works (fault: one shared folder)
@@ -96,6 +126,7 @@ import io
 import json
 import math
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -208,8 +239,16 @@ def stem_of(path: str) -> str:
     return Path(path).stem
 
 
+def load_switches() -> list[dict]:
+    """switches.json: the one list of the DS_ARA_* variables (the README block, no_switch and
+    the guard of check.sh are made from it)."""
+    return json.loads((HERE / "switches.json").read_text(encoding="utf-8"))
+
+
 def no_switch() -> dict:
-    return {k: None for k in ("DS_ARA_CACHE", "DS_ARA_OUT", "DS_ARA_FAULT")}
+    """The overlay that clears every DS_ARA_* variable the plugin reads (config, fault and
+    scenario), so a normal run never inherits one."""
+    return {e["name"]: None for e in load_switches() if e["kind"] != "check"}
 
 
 # The expected slot count of the tables walk: ARAFactory 3, document controller 54,
@@ -1223,12 +1262,13 @@ def reference_alone(name: str, files: list) -> bytes | None:
     return events if ok else None
 
 
-def check_two(label: str, cache: str, lines: list, refs: list) -> tuple[bool, str]:
+def check_two_parts(label: str, cache: str, lines: list, refs: list) -> tuple[dict, str]:
+    """The lines of gate line 3, each on its own (the fault run must fail the line it breaks)."""
     by_doc: dict = {}
     for j in job_rows(label):
         by_doc.setdefault(j.get("doc"), []).append(j)
     if len(by_doc) != 2:
-        return False, f"{len(by_doc)} document(s) in the report, want 2"
+        return {"two": False}, f"{len(by_doc)} document(s) in the report, want 2"
     rows = [r[-1] for r in by_doc.values()]
     folders = [Path(r.get("folder", "")) for r in rows]
     root = OUT / cache / "documents"
@@ -1242,12 +1282,25 @@ def check_two(label: str, cache: str, lines: list, refs: list) -> tuple[bool, st
     two_tracks = len(docs) == 2 and all(len(tracks_of_doc(d)) == 2 for d in docs)
     audio = [sorted(p.name[:3] for p in (f / "audio").glob("*.wav")) for f in folders] if own else []
     own_numbering = audio == [["000", "001"], ["000", "001"]]
-    ok = own and all(same) and events > 0 and quiet and two_tracks and own_numbering
-    return ok, (
+    parts = {
+        "two": True,
+        "own": own,
+        "same": all(same),
+        "events": events > 0,
+        "quiet": quiet,
+        "two_tracks": two_tracks,
+        "numbering": own_numbering,
+    }
+    return parts, (
         f"two documents, {events} events: own folders {own}, events byte for byte the reference of each document "
         f"alone {same}, no file of the first folder changed while the second worked ({len(state_a)} files, quiet {quiet}), "
         f"each project holds its 2 tracks {two_tracks}, own source numbering {own_numbering}"
     )
+
+
+def check_two(label: str, cache: str, lines: list, refs: list) -> tuple[bool, str]:
+    parts, evidence = check_two_parts(label, cache, lines, refs)
+    return all(parts.values()), evidence
 
 
 def doc_two_run(label: str, extra: dict | None = None) -> tuple[int, list]:
@@ -1278,9 +1331,13 @@ def stage_doc_two_fault() -> bool:
     if ref_a is None or ref_b is None:
         return pass_fail("doc-two-fault", False, "the reference of one document alone failed")
     rc, lines = doc_two_run("doc-two-fault", extra={"DS_ARA_FOLDER_FAULT": "shared"})
-    ok, evidence = check_two("doc-two-fault", "cache-doc-two-fault", lines, [ref_a, ref_b])
+    parts, evidence = check_two_parts("doc-two-fault", "cache-doc-two-fault", lines, [ref_a, ref_b])
+    # the expected failure line: the own-folders line (not any failure, such as a crash)
+    refused = rc == 0 and parts.get("two") is True and parts.get("own") is False
     return pass_fail(
-        "doc-two-fault", not ok, f"the fault switch put both documents in one folder and the check refused it (rc={rc}): {evidence}"
+        "doc-two-fault",
+        refused,
+        f"the fault switch put both documents in one folder and the check refused it on the own-folders line (rc={rc}): {evidence}",
     )
 
 
@@ -1516,54 +1573,129 @@ def stage_doc_destroy_fault() -> bool:
     )
 
 
-# ---- finding 2: the destroy of a controller while its analysis runs is short
+# ---- finding 2 and review item 7: the destroy of a controller while its analysis runs
 
-CLOSE_FILES = ["synth:600"]  # one dense source of ten minutes: one track is not cancelled in the middle, so the analysis takes about five seconds
-CLOSE_LIMIT_MS = 1000.0
+# Five dense sources of two minutes each: the analysis takes several seconds and a cancel
+# takes effect between two tracks, so the round can end as cancelled soon after the destroy.
+CLOSE_FILES = ["synth:120"] * 5
+CLOSE_LIMIT_MS = 1000.0  # the destroy call on the host's main thread
+CANCEL_LIMIT_MS = 3500.0  # from the destroy to the end of the round (one track is not cancelled in the middle)
+CLOSE_AFTER_MS = 5000  # the host stays alive after the destroy: a late write would show now
 
 
-def check_close(label: str, cache: str, rc: int, lines: list, text: str) -> tuple[bool, str]:
+def ns_of(row: dict) -> int:
+    return int(row.get("unix_ns", 0))
+
+
+def check_close(
+    label: str, cache: str, rc: int, lines: list, text: str, deinit: bool = True, disk: bool = False
+) -> tuple[dict, str]:
+    """The lines of the close proof, each its own part (a fault run must fail the line it breaks):
+    the destroy call is short; the analysis was running at the destroy (a round_start row before
+    it, no end before it); the cancel took effect (the round ended as cancelled within the limit,
+    no job row); nothing was written after the document closed; the worker ended at the unload;
+    the document on disk is consistent and a new analysis in its folder works."""
     close = next((r for r in lines if r.get("event") == "host_close"), {})
-    ms = close.get("ms")
+    ms, at = close.get("ms"), ns_of(close)
     rows = report_rows(label)
-    finished = [r for r in rows if r.get("event") == "job"]
-    time.sleep(1.5)  # a late write of the worker would show now
+    starts = [r for r in rows if r.get("event") == "round_start"]
+    ends = [r for r in rows if r.get("event") == "round_end"]
+    jobs = [r for r in rows if r.get("event") == "job"]
+    closed = [r for r in rows if r.get("event") == "doc_closed"]
+    unloaded = [r for r in rows if r.get("event") == "worker_unloaded"]
+    running = bool(starts) and at > 0 and ns_of(starts[0]) < at and not [e for e in ends if ns_of(e) < at]
+    cancelled_ends = [e for e in ends if e.get("outcome") == "cancelled" and ns_of(e) >= at]
+    cancel_ms = (ns_of(cancelled_ends[0]) - at) / 1e6 if cancelled_ends else None
+    cancelled = cancel_ms is not None and cancel_ms <= CANCEL_LIMIT_MS and not jobs
     root = OUT / cache
-    outside = [
-        p for p in root.rglob("*") if p.is_file() and "documents" not in p.relative_to(root).parts
-    ] if root.is_dir() else []
-    clean = rc == 0 and "panicked" not in text
+    time.sleep(0.2)
+    files = [p for p in root.rglob("*") if p.is_file()] if root.is_dir() else []
+    outside = [p for p in files if "documents" not in p.relative_to(root).parts]
+    # nothing is written after the document closed: no file is newer than the doc_closed row
+    late = [p.name for p in files if closed and p.stat().st_mtime_ns > ns_of(closed[-1]) + 5_000_000]
+    quiet = bool(closed) and not late and not outside
+    docs = project_docs(cache)
+    consistent, reanalysed = False, "no project document"
+    if not disk:
+        consistent, reanalysed = True, "not measured in this run"
+    elif len(docs) == 1:
+        try:
+            tracks = tracks_of_doc(docs[0])
+            consistent = len(tracks) == len(CLOSE_FILES)
+            ok_again, _events, n = service_tool_events(docs[0].parent, f"{label}-again")
+            reanalysed = f"{n} events on a new analysis in the folder"
+            consistent = consistent and ok_again
+        except (ValueError, OSError) as e:
+            reanalysed = f"the document is not readable: {e}"
+    parts = {
+        "short": ms is not None and ms < CLOSE_LIMIT_MS,
+        "running": running,
+        "cancelled": cancelled,
+        "quiet": quiet,
+        "clean": rc == 0 and "panicked" not in text,
+        "unloaded": (not deinit) or any(r.get("ended") is True for r in unloaded),
+        "consistent": consistent,
+    }
     shutil.rmtree(root, ignore_errors=True)  # the long synthetic audio is not kept
-    ok = clean and ms is not None and ms < CLOSE_LIMIT_MS and not finished and not outside
-    return ok, (
-        f"destroy of the controller with the analysis running: {ms} ms (limit {CLOSE_LIMIT_MS:.0f} ms), "
-        f"{len(finished)} round(s) finished before it (want 0: the analysis was still running), "
-        f"process rc={rc} without a panic: {clean}, {len(outside)} file(s) in the cache folder outside the documents folder"
+    return parts, (
+        f"destroy of the controller {ms} ms (limit {CLOSE_LIMIT_MS:.0f}); the round was running at the destroy {running} "
+        f"({len(starts)} round_start row(s) before it); it ended as cancelled {cancel_ms} ms after it (limit {CANCEL_LIMIT_MS:.0f}), "
+        f"{len(jobs)} job row(s); {len(late)} file(s) written after the document closed, {len(outside)} outside the documents folder; "
+        f"worker ended at the unload {parts['unloaded']}; document on disk consistent {consistent} ({reanalysed}); "
+        f"rc={rc} without a panic: {parts['clean']}"
     )
 
 
-def close_run(label: str, extra: dict | None = None) -> tuple[int, list, str]:
-    rc, text, lines = host_run(
-        label, CLAP, ["close-busy", "--files", *CLOSE_FILES, "--lead-ms", "700"], f"cache-{label}", extra=extra
-    )
+def close_run(label: str, extra: dict | None = None, early: bool = False, deinit: bool = True) -> tuple[int, list, str]:
+    args = ["close-busy", "--files", *CLOSE_FILES, "--lead-ms", "900", "--after-ms", str(CLOSE_AFTER_MS)]
+    if early:
+        args = ["close-busy", "--files", *CLOSE_FILES[:3], "--lead-ms", "1300", "--after-ms", "3000"]
+    if deinit:
+        args.append("--deinit")
+    rc, text, lines = host_run(label, CLAP, args, f"cache-{label}", extra=extra)
     return rc, lines, text
 
 
 def stage_doc_close() -> bool:
-    if not HOST.exists() or not CLAP.exists():
-        return pass_fail("doc-close", False, "no host or no CLAP: run check.sh build first")
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-close", False, "no host, no CLAP or no service_tool: run check.sh build first")
     rc, lines, text = close_run("doc-close")
-    ok, evidence = check_close("doc-close", "cache-doc-close", rc, lines, text)
-    return pass_fail("doc-close", ok, evidence)
+    parts, evidence = check_close("doc-close", "cache-doc-close", rc, lines, text, disk=True)
+    ok = pass_fail("doc-close", all(parts.values()), evidence)
+    # a cancel that arrives after the round started its setup and before `analyze_start`: the
+    # scenario `slow-setup` holds every round 1.5 s there; the round must end as cancelled
+    # without running its analysis (no job row)
+    rc, lines, text = close_run("doc-close-early", {"DS_ARA_SCENARIO": "slow-setup"}, early=True)
+    parts, evidence = check_close("doc-close-early", "cache-doc-close-early", rc, lines, text)
+    failed = [r for r in report_rows("doc-close-early") if r.get("event") == "job_failed"]
+    never_started = len(failed) == 1 and "before it started" in str(failed[0].get("error"))
+    early_ok = all(parts.values()) and never_started
+    evidence += f"; the round ended with: {failed[0].get('error') if failed else None!r} (never started its analysis: {never_started})"
+    return pass_fail("doc-close-early", early_ok, evidence) and ok
 
 
 def stage_doc_close_fault() -> bool:
-    """The fault run: the destroy waits for the job (the first version of M1b1: up to 20 s)."""
-    if not HOST.exists() or not CLAP.exists():
-        return pass_fail("doc-close-fault", False, "no host or no CLAP: run check.sh build first")
-    rc, lines, text = close_run("doc-close-fault", {"DS_ARA_CLOSE_FAULT": "wait"})
-    ok, evidence = check_close("doc-close-fault", "cache-doc-close-fault", rc, lines, text)
-    return pass_fail("doc-close-fault", not ok, f"the fault switch brought back the long wait and the check refused it: {evidence}")
+    """Three fault runs, each refused on its own line: the destroy waits for the round (the
+    first version: the call is long), the destroy does not cancel the round (it runs on to its
+    end behind the close: no cancelled end, a job row after the destroy), and the unload of
+    the library leaves the worker running."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-close-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    out = {}
+    # (the unload cancels every round too, so the run that proves "no cancel" has no unload)
+    for name, env, line, deinit in (
+        ("wait", {"DS_ARA_CLOSE_FAULT": "wait"}, "short", True),
+        ("nocancel", {"DS_ARA_CLOSE_FAULT": "nocancel"}, "cancelled", False),
+        ("unload", {"DS_ARA_UNLOAD_FAULT": "skip"}, "unloaded", True),
+    ):
+        rc, lines, text = close_run(f"doc-close-fault-{name}", env, deinit=deinit)
+        parts, evidence = check_close(f"doc-close-fault-{name}", f"cache-doc-close-fault-{name}", rc, lines, text, deinit=deinit)
+        out[name] = (parts.get(line) is False, f"{line} line: {evidence}")
+    return pass_fail(
+        "doc-close-fault",
+        all(v[0] for v in out.values()),
+        " | ".join(f"{k} switch refused on its line: {v[0]}: {v[1]}" for k, v in out.items()),
+    )
 
 
 # ---- gate line 6: the service home is inside the cache folder, nothing else below the user's home
@@ -1621,6 +1753,729 @@ def stage_doc_home_fault() -> bool:
     return pass_fail(
         "doc-home-fault", rc == 0 and not ok, f"the fault switch put the service home below the user's home and the check refused it: {evidence}"
     )
+
+
+# ---- review round 2, item 1: a hostile or damaged archive never makes the plugin write outside its folder
+
+HEX_ID = re.compile(r"^[0-9a-f]{16}$")
+HOSTILE_IDS = ["../x", "../../escape-rel", "ABSOLUTE", "", "0123456789ABCDEF"]
+# the variants that must reach outside when the plugin trusts the id
+ESCAPING_IDS = ["../../escape-rel", "ABSOLUTE"]
+
+
+def hostile_blob(base: dict, variant: str, root: Path) -> dict:
+    """A copy of a real stored archive with a bad document id (or bad track names)."""
+    blob = json.loads(json.dumps(base))
+    if variant == "tracks":
+        first = blob["sources"][0]
+        blob["events"]["../../escape-evkey"] = []
+        first["track"] = "../../escape-track"
+        return blob
+    blob["doc_id"] = str(root / "escape-abs") if variant == "ABSOLUTE" else variant
+    return blob
+
+
+def hostile_run(label: str, base: dict, variant: str, extra: dict | None = None) -> tuple[dict, str]:
+    """One restore of a hostile archive. The cache folder sits one level down in a folder of its
+    own, so a path that leaves `documents/<id>/` lands in that folder and is listed. Returns the
+    parts (each must hold) and the evidence."""
+    root = OUT / f"hostile-{label}"
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True)
+    archive = OUT / f"hostile-{label}.araarchive"
+    archive.write_text(json.dumps(hostile_blob(base, variant, root)), encoding="utf-8")
+    rc, _text, _lines = host_run(
+        label, CLAP, ["restore", "--files", *fixture_args(FILES), "--archive", str(archive)], f"hostile-{label}/cache", extra=extra
+    )
+    cache = root / "cache"
+    outside = sorted(p.name for p in root.iterdir() if p.name != "cache")
+    docs = sorted(d.name for d in (cache / "documents").iterdir()) if (cache / "documents").is_dir() else []
+    rows = event_rows(label, "doc_restored")
+    row = rows[0] if len(rows) == 1 else {}
+    folder = Path(row.get("folder", ""))
+    tracks = row.get("project_tracks") or []
+    parts = {
+        "rc": rc == 0 and len(rows) == 1,
+        "own_id": bool(HEX_ID.match(str(row.get("doc", "")))),
+        "no_escape": not outside,
+        "documents": bool(docs) and all(HEX_ID.match(d) for d in docs),
+        "folder": folder.parent == cache / "documents" and folder.name == row.get("doc"),
+        "tracks": len(tracks) == len(FILES) and all("/" not in t and ".." not in t for t in tracks),
+        "events": sum(len(v) for v in json.loads(row.get("events_json") or "{}").values()) > 0,
+    }
+    refused = [r.get("event") for r in report_rows(label) if r.get("event", "").endswith(("_refused", "_taken"))]
+    return parts, (
+        f"{variant!r}: rc={rc}, restored into {row.get('doc')!r}, outside the cache folder: {outside}, "
+        f"documents {docs}, tracks {tracks[:2]}, report rows {refused}"
+    )
+
+
+def stage_doc_id_hostile() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-id-hostile", False, "no host or no CLAP: run check.sh build first")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("doc-id-hostile", False, why)
+    base = json.loads(archive.read_text())
+    ok, notes = True, []
+    for k, variant in enumerate([*HOSTILE_IDS, "tracks"]):
+        parts, evidence = hostile_run(f"doc-id-{k}", base, variant)
+        if variant == "tracks" and not [r for r in report_rows(f"doc-id-{k}") if r.get("event") == "restore_refused"]:
+            parts["refused_row"] = False
+        good = all(parts.values())
+        ok = ok and good
+        notes.append(f"{'ok' if good else 'BAD ' + str([n for n, v in parts.items() if not v])} {evidence}")
+    return pass_fail("doc-id-hostile", ok, "; ".join(notes))
+
+
+def stage_doc_id_hostile_fault() -> bool:
+    """The fault run: the plugin trusts the id and the names of the archive. The check must see
+    a file outside `documents/<valid id>/` for the ids that leave it."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-id-hostile-fault", False, "no host or no CLAP: run check.sh build first")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("doc-id-hostile-fault", False, why)
+    base = json.loads(archive.read_text())
+    seen = {}
+    for k, variant in enumerate(ESCAPING_IDS):
+        parts, evidence = hostile_run(f"doc-id-fault-{k}", base, variant, extra={"DS_ARA_ID_FAULT": "trust"})
+        seen[variant] = (parts["no_escape"] is False, evidence)
+    return pass_fail(
+        "doc-id-hostile-fault",
+        all(v[0] for v in seen.values()),
+        "the fault switch trusted the id and the check saw the file outside the folder: "
+        + " | ".join(f"{k}: {v[0]}: {v[1]}" for k, v in seen.items()),
+    )
+
+
+# ---- review round 2, item 2: two live documents never share an id, so never a folder
+
+
+def same_id_parts(label: str, cache: str, archive: Path) -> tuple[dict, str]:
+    blob = json.loads(archive.read_text())
+    want = (OUT / "events-reference.json").read_bytes().decode()
+    rows = event_rows(label, "doc_restored")
+    docs = {r.get("doc") for r in rows}
+    folders = {r.get("folder") for r in rows}
+    on_disk = project_docs(cache)
+    parts = {
+        "two_rows": len(rows) == 2,
+        "own_folders": len(docs) == 2 and len(folders) == 2 and len(on_disk) == 2,
+        "first_keeps_id": bool(rows) and rows[0].get("doc") == blob.get("doc_id"),
+        "taken_row": any(r.get("event") == "doc_id_taken" for r in report_rows(label)),
+        "both_equal_reference": len(rows) == 2 and all(r.get("events_json") == want for r in rows),
+    }
+    return parts, (
+        f"the same archive restored into two controllers of one process: {len(rows)} restore row(s), {len(docs)} document id(s), "
+        f"{len(folders)} folder(s), {len(on_disk)} project(s) on disk; the first kept the stored id {parts['first_keeps_id']}; "
+        f"the second was told the id is taken {parts['taken_row']}; both results byte for byte the reference {parts['both_equal_reference']}"
+    )
+
+
+def same_id_run(label: str, archive: Path, extra: dict | None = None) -> int:
+    rc, _text, _lines = host_run(
+        label, CLAP, ["restore2", "--files", *fixture_args(FILES), "--archive", str(archive)], f"cache-{label}", extra=extra
+    )
+    return rc
+
+
+def stage_doc_same_id() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not (OUT / "events-reference.json").exists():
+        return pass_fail("doc-same-id", False, "no host, no CLAP or no reference events")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("doc-same-id", False, why)
+    rc = same_id_run("doc-same-id", archive)
+    if rc != 0:
+        return pass_fail("doc-same-id", False, f"ara-host restore2 rc={rc} (out/host-doc-same-id.log)")
+    parts, evidence = same_id_parts("doc-same-id", "cache-doc-same-id", archive)
+    return pass_fail("doc-same-id", all(parts.values()), evidence)
+
+
+def stage_doc_same_id_fault() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not (OUT / "events-reference.json").exists():
+        return pass_fail("doc-same-id-fault", False, "no host, no CLAP or no reference events")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("doc-same-id-fault", False, why)
+    rc = same_id_run("doc-same-id-fault", archive, {"DS_ARA_REGISTRY_FAULT": "off"})
+    parts, evidence = same_id_parts("doc-same-id-fault", "cache-doc-same-id-fault", archive)
+    return pass_fail(
+        "doc-same-id-fault",
+        rc == 0 and parts["own_folders"] is False,
+        f"the fault switch (no registry of the ids in use) gave both documents one folder and the check refused it: {evidence}",
+    )
+
+
+# ---- review round 2, item 3: an archive stored right after a restore, while the worker is busy
+
+
+def restore_busy_parts(label: str, rc: int, lines: list, archive_in: Path, archive_out: Path) -> tuple[dict, str]:
+    first = json.loads(archive_in.read_text())
+    got = json.loads(archive_out.read_text()) if archive_out.exists() else {}
+    rows = report_rows(label)
+    restore = next((r for r in lines if r.get("event") == "host_restore"), {})
+    start = next((r for r in rows if r.get("event") == "round_start"), {})
+    ends_before = [r for r in rows if r.get("event") == "round_end" and ns_of(r) < ns_of(restore)]
+    n_first = sum(len(v) for v in (first.get("events") or {}).values())
+    n_got = sum(len(v) for v in (got.get("events") or {}).values())
+    parts = {
+        "rc": rc == 0 and bool(got),
+        "busy": bool(start) and ns_of(start) < ns_of(restore) and not ends_before,
+        "events": n_got > 0 and got.get("events") == first.get("events"),
+        "id": got.get("doc_id") == first.get("doc_id"),
+        "notes": [s.get("notes") for s in got.get("sources", [])] == [s.get("notes") for s in first.get("sources", [])],
+    }
+    return parts, (
+        f"restore, then store at once, while another document's round runs on the worker (round started "
+        f"{(ns_of(restore) - ns_of(start)) / 1e6:.0f} ms before the restore, {len(ends_before)} round end(s) before it): "
+        f"the second archive holds {n_got} events (the first {n_first}), equal {parts['events']}, same document id {parts['id']}, same notes {parts['notes']}"
+    )
+
+
+def restore_busy_run(label: str, archive: Path, extra: dict | None = None) -> tuple[int, list, Path]:
+    out = OUT / f"{label}.araarchive"
+    if out.exists():
+        out.unlink()
+    rc, _text, lines = host_run(
+        label,
+        CLAP,
+        ["restore-busy", "--files", *fixture_args(FILES), "--archive", str(archive), "--out", str(out), "--busy", *["synth:200"] * 3],
+        f"cache-{label}",
+        extra=extra,
+    )
+    return rc, lines, out
+
+
+def stage_doc_restore_busy() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not (OUT / "events-reference.json").exists():
+        return pass_fail("doc-restore-busy", False, "no host, no CLAP or no reference events")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("doc-restore-busy", False, why)
+    rc, lines, out = restore_busy_run("doc-restore-busy", archive)
+    parts, evidence = restore_busy_parts("doc-restore-busy", rc, lines, archive, out)
+    ok = pass_fail("doc-restore-busy", all(parts.values()), evidence)
+    # the second archive restores in a NEW process: every track, byte for byte
+    if out.exists():
+        rc2, _text, _lines = host_run(
+            "doc-restore-busy-again", CLAP, ["restore", "--files", *fixture_args(FILES), "--archive", str(out)], "cache-doc-restore-busy-again"
+        )
+        rows = event_rows("doc-restore-busy-again", "doc_restored")
+        row = rows[0] if len(rows) == 1 else {}
+        want = (OUT / "events-reference.json").read_bytes().decode()
+        again = rc2 == 0 and row.get("events_json") == want and len(row.get("project_tracks") or []) == len(FILES)
+    else:
+        again = False
+    return pass_fail("doc-restore-busy-again", again, "the second archive restored in a new process: every track and every event, byte for byte the reference") and ok
+
+
+def stage_doc_restore_busy_fault() -> bool:
+    """The fault run: the events of the document are set by the worker (the first version). The
+    archive stored in the window carries none."""
+    if not HOST.exists() or not CLAP.exists() or not (OUT / "events-reference.json").exists():
+        return pass_fail("doc-restore-busy-fault", False, "no host, no CLAP or no reference events")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("doc-restore-busy-fault", False, why)
+    rc, lines, out = restore_busy_run("doc-restore-busy-fault", archive, {"DS_ARA_RESTORE_FAULT": "late-events"})
+    parts, evidence = restore_busy_parts("doc-restore-busy-fault", rc, lines, archive, out)
+    return pass_fail(
+        "doc-restore-busy-fault",
+        parts["rc"] and parts["busy"] and parts["events"] is False,
+        f"the fault switch set the events on the worker thread and the archive stored in the window lost them: {evidence}",
+    )
+
+
+# ---- review round 2, items 4 and 10: a failed round and a request for a complete source
+
+
+def retry_run(label: str, files: list, extra: dict | None = None, wait: str = HOST_WAIT) -> tuple[int, list]:
+    rc, _text, lines = host_run(
+        label,
+        CLAP,
+        ["grow", "--files", *fixture_args(files), "--batch", str(len(files)), "--rerequest", "--pump-ms", "1500", "--wait", wait],
+        f"cache-{label}",
+        extra=extra,
+    )
+    return rc, lines
+
+
+def retry_parts(label: str, cache: str, rc: int, lines: list, ref: bytes, files: list) -> tuple[dict, str]:
+    jobs = job_rows(label)
+    failed = event_rows(label, "job_failed")
+    docs = project_docs(cache)
+    on_disk = list(tracks_of_doc(docs[0])) if len(docs) == 1 else []
+    after = host_notes_of(lines, "after-rerequest")
+    parts = {
+        "rc": rc == 0,
+        "failed_once": len(failed) == 1,
+        "one_result": len(jobs) == 1 and jobs[0].get("events_json", "").encode() == ref,
+        "one_track_per_source": on_disk == track_names(files) and (jobs[-1].get("project_tracks") if jobs else None) == track_names(files),
+        "notes": len(after) == len(files) and all(after.values()),
+    }
+    return parts, (
+        f"the first round failed ({len(failed)} job_failed row), the host asked again: {len(jobs)} result round(s), "
+        f"events byte for byte the reference {parts['one_result']}; the document on disk holds {on_disk} (want {track_names(files)}); "
+        f"notes after the retry {[len(v) for v in after.values()]}; rc={rc}"
+    )
+
+
+def stage_doc_retry() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-retry", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b1-ref-a", DOC_A)
+    if ref is None:
+        return pass_fail("doc-retry", False, "the reference failed")
+    rc, lines = retry_run("doc-retry", DOC_A, {"DS_ARA_SCENARIO": "fail-first-round"})
+    parts, evidence = retry_parts("doc-retry", "cache-doc-retry", rc, lines, ref, DOC_A)
+    return pass_fail("doc-retry", all(parts.values()), evidence)
+
+
+def stage_doc_retry_fault() -> bool:
+    """The fault run: a retry adds the tracks again (the first version: `name_2`)."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-retry-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b1-ref-a", DOC_A)
+    if ref is None:
+        return pass_fail("doc-retry-fault", False, "the reference failed")
+    rc, lines = retry_run(
+        "doc-retry-fault", DOC_A, {"DS_ARA_SCENARIO": "fail-first-round", "DS_ARA_RETRY_FAULT": "duplicate"}
+    )
+    parts, evidence = retry_parts("doc-retry-fault", "cache-doc-retry-fault", rc, lines, ref, DOC_A)
+    return pass_fail(
+        "doc-retry-fault",
+        rc == 0 and parts["failed_once"] and parts["one_track_per_source"] is False and not parts["one_result"],
+        f"the fault switch made a second track for each retried source and the check refused it: {evidence}",
+    )
+
+
+def rerequest_parts(label: str, rc: int, ref: bytes) -> tuple[dict, str]:
+    jobs = job_rows(label)
+    starts = event_rows(label, "round_start")
+    parts = {
+        "rc": rc == 0,
+        "one_round": len(starts) == 1 and len(jobs) == 1 and services_row(label).get("rounds") == 1,
+        "result": len(jobs) == 1 and jobs[0].get("events_json", "").encode() == ref,
+        "no_removal": all(r.get("reason") != "removal" for r in starts),
+    }
+    return parts, (
+        f"the host asked again for sources that are complete: {len(starts)} round(s) started in all (want 1, the first), "
+        f"reasons {[r.get('reason') for r in starts]}, events byte for byte the reference {parts['result']}"
+    )
+
+
+def stage_doc_rerequest() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-rerequest", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b1-ref-a", DOC_A)
+    if ref is None:
+        return pass_fail("doc-rerequest", False, "the reference failed")
+    rc, _lines = retry_run("doc-rerequest", DOC_A)
+    parts, evidence = rerequest_parts("doc-rerequest", rc, ref)
+    return pass_fail("doc-rerequest", all(parts.values()), evidence)
+
+
+def stage_doc_rerequest_fault() -> bool:
+    """The fault run: a request for a complete source starts a full round with the reason `removal`."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-rerequest-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b1-ref-a", DOC_A)
+    if ref is None:
+        return pass_fail("doc-rerequest-fault", False, "the reference failed")
+    rc, _lines = retry_run("doc-rerequest-fault", DOC_A, {"DS_ARA_ROUND_FAULT": "always"})
+    parts, evidence = rerequest_parts("doc-rerequest-fault", rc, ref)
+    return pass_fail(
+        "doc-rerequest-fault",
+        rc == 0 and parts["one_round"] is False and parts["no_removal"] is False,
+        f"the fault switch started a round for the complete sources and the check refused it: {evidence}",
+    )
+
+
+# ---- review round 2, item 5: the error of a single track
+
+
+ERROR_FILES = [FILES[0], FILES[1], FILES[2]]  # kick, snare, tom: the snare (index 1) is damaged
+ERROR_GOOD = [FILES[0], FILES[2]]
+
+
+def errors_parts(label: str, rc: int, lines: list, ref_good: bytes) -> tuple[dict, str]:
+    jobs = job_rows(label)
+    job = jobs[-1] if jobs else {}
+    bad_track = safe_name(stem_of(ERROR_FILES[1]))
+    good_tracks = track_names(ERROR_GOOD)
+    t = job.get("track_json") or {}
+    rebuilt = "{" + ",".join(f'"{n}":{t[n]}' for n in good_tracks if n in t) + "}"
+    errs = job.get("errors") or []
+    final = host_notes_of(lines, "final")
+    parts = {
+        "rc": rc == 0,
+        "good_equal_reference": rebuilt.encode() == ref_good,
+        "error_reported": [e.get("track") for e in errs] == [bad_track] and bool(errs and errs[0].get("error")),
+        "no_events": t.get(bad_track) in ("[]", None),
+        "partial": job.get("partial") is True,
+        "no_notes": all(
+            (len(v) == 0) == (Path(n).stem == Path(ERROR_FILES[1]).stem) for n, v in final.items()
+        ) and len(final) == len(ERROR_FILES),
+    }
+    return parts, (
+        f"three tracks, one WAV damaged: the two good tracks byte for byte the reference of the two together {parts['good_equal_reference']}; "
+        f"the bad track {bad_track} is reported with an error {errs[:1]} and has events {t.get(bad_track)}; round marked partial "
+        f"{job.get('partial')}; host notes {[(Path(n).stem, len(v)) for n, v in final.items()]}; ara-host rc={rc} (design: 0, the ARA "
+        "protocol has no error channel, the host sees the analysis as complete without content and the report carries the error)"
+    )
+
+
+def errors_run(label: str, extra: dict | None = None) -> tuple[int, list]:
+    rc, _text, lines = host_run(
+        label,
+        CLAP,
+        ["grow", "--files", *fixture_args(ERROR_FILES), "--batch", "3", "--wait", HOST_WAIT],
+        f"cache-{label}",
+        extra={"DS_ARA_SCENARIO": "corrupt-wav:1", **(extra or {})},
+    )
+    return rc, lines
+
+
+def stage_doc_errors() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-errors", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b1-ref-two-good", ERROR_GOOD)
+    if ref is None:
+        return pass_fail("doc-errors", False, "the reference of the two good tracks failed")
+    rc, lines = errors_run("doc-errors")
+    parts, evidence = errors_parts("doc-errors", rc, lines, ref)
+    return pass_fail("doc-errors", all(parts.values()), evidence)
+
+
+def stage_doc_errors_fault() -> bool:
+    """The fault run: the error of a single track is not read (the first version)."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-errors-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b1-ref-two-good", ERROR_GOOD)
+    if ref is None:
+        return pass_fail("doc-errors-fault", False, "the reference of the two good tracks failed")
+    rc, lines = errors_run("doc-errors-fault", {"DS_ARA_ERRORS_FAULT": "swallow"})
+    parts, evidence = errors_parts("doc-errors-fault", rc, lines, ref)
+    return pass_fail(
+        "doc-errors-fault",
+        rc == 0 and parts["error_reported"] is False and parts["partial"] is False,
+        f"the fault switch did not read the error of the track and the check refused it: {evidence}",
+    )
+
+
+# ---- review round 2, item 6: the regions of an earlier source change after the analysis
+
+REGIONS_CHANGED = [(0.0, 1.2, 0.0), (1.4, 0.9, 1.4)]  # the second region of REGIONS, longer and earlier: the hit at 1.5 s is in it now
+REGIONS_CHANGE_SPEC = "1:1.4,0.9,1.4"
+
+
+def regions_args(regions: list) -> list:
+    args = ["regions", "--file", str(FIXTURES / REGIONS_FILE)]
+    for a, d, p in regions:
+        args += ["--region", f"{a},{d},{p}"]
+    return args
+
+
+def service_reference_of_plugin_doc(cache: str, name: str) -> bytes | None:
+    """The events the service gives on a copy of the plugin's own document (the segments the
+    plugin made from the regions) with the source records pointed back at the fixture file."""
+    doc_path = doc_of_run(cache)
+    if not doc_path.exists():
+        return None
+    doc = json.loads(doc_path.read_text())
+    fixture = FIXTURES / REGIONS_FILE
+    st = fixture.stat()
+    ref_dir = OUT / f"ref-{name}"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "mode": "referenced",
+        "path": str(fixture),
+        "relative": os.path.relpath(fixture, ref_dir).replace(os.sep, "/"),
+        "size": st.st_size,
+        "mtime": int(st.st_mtime),
+        "head_sha1": hashlib.sha1(fixture.read_bytes()[: 1 << 20]).hexdigest(),
+    }
+    for track in (doc.get("tracks") or {}).values():
+        for seg in track.get("segments") or []:
+            seg["source"] = rec
+    (ref_dir / f"ref-{name}.drumspike").write_text(json.dumps(doc), encoding="utf-8")
+    ok, events, _n = service_tool_events(ref_dir, name)
+    return events if ok else None
+
+
+def regions_change_parts(label: str, cache: str, lines: list, ref_events: bytes, ref_notes: list) -> tuple[dict, str]:
+    jobs = job_rows(label)
+    last = jobs[-1] if jobs else {}
+    first = jobs[0] if jobs else {}
+    after = [r for r in lines if r.get("event") == "host_notes" and r.get("phase") == "after-update"]
+    before = [r for r in lines if r.get("event") == "host_notes" and r.get("phase") == "before-update"]
+    segs = doc_segments(cache) or []
+    track_events = next(iter(json.loads(ref_events).values()), [])
+    parts = {
+        "new_round": len(jobs) == 2 and [j.get("reason") for j in jobs] == ["request", "change"],
+        "events": last.get("events_json", "").encode() == ref_events,
+        "notes": bool(after) and after[0].get("samples") == (ref_notes[0].get("samples") if ref_notes else None),
+        "changed": bool(first) and first.get("events_json") != last.get("events_json"),
+        "segments": len(segs) == 2 and abs(segs[1]["start"] - REGIONS_CHANGED[1][0]) < 1e-9 and abs(segs[1]["length"] - REGIONS_CHANGED[1][1]) < 1e-9,
+        "new_hit": any(abs(ev["t"] - 1.5) < 0.05 for ev in track_events),
+    }
+    return parts, (
+        f"analysed, then the second region changed: {len(jobs)} round(s) with reasons {[j.get('reason') for j in jobs]}; the events of the "
+        f"last round are byte for byte the service reference of the new regions {parts['events']} ({len(track_events)} events, the hit at 1.5 s now in: "
+        f"{parts['new_hit']}); notes after the change equal the reference run's {parts['notes']} ({len(after[0].get('samples', [])) if after else None} vs "
+        f"{len(before[0].get('samples', [])) if before else None} before); the document holds the new segment {parts['segments']}"
+    )
+
+
+def regions_change_run(label: str, extra: dict | None = None) -> tuple[int, list]:
+    rc, _text, lines = host_run(
+        label,
+        CLAP,
+        [*regions_args(REGIONS), "--update-region", REGIONS_CHANGE_SPEC, "--update-after", "--pump-ms", "3500"],
+        f"cache-{label}",
+        extra=extra,
+    )
+    return rc, lines
+
+
+def regions_change_reference() -> tuple[bytes, list] | None:
+    """A plain run with the new regions from the start: its events equal the service reference of
+    its own document."""
+    rc, _text, lines = host_run("regions-new", CLAP, regions_args(REGIONS_CHANGED), "cache-regions-new")
+    ref = service_reference_of_plugin_doc("cache-regions-new", "regions-new")
+    if rc != 0 or ref is None:
+        return None
+    notes = [r for r in lines if r.get("event") == "host_notes"]
+    ok, events = plugin_service_row("regions-new")
+    return (ref, notes) if ok and events == ref else None
+
+
+def stage_doc_regions_change() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-regions-change", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    reference = regions_change_reference()
+    if reference is None:
+        return pass_fail("doc-regions-change", False, "the reference run with the new regions failed or differs from the service")
+    rc, lines = regions_change_run("doc-regions-change")
+    parts, evidence = regions_change_parts("doc-regions-change", "cache-doc-regions-change", lines, *reference)
+    return pass_fail("doc-regions-change", rc == 0 and all(parts.values()), evidence)
+
+
+def stage_doc_regions_change_fault() -> bool:
+    """The fault run: a change of the regions is not seen (the first version)."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-regions-change-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    reference = regions_change_reference()
+    if reference is None:
+        return pass_fail("doc-regions-change-fault", False, "the reference run with the new regions failed or differs from the service")
+    rc, lines = regions_change_run("doc-regions-change-fault", {"DS_ARA_TOUCH_FAULT": "ignore"})
+    parts, evidence = regions_change_parts("doc-regions-change-fault", "cache-doc-regions-change-fault", lines, *reference)
+    return pass_fail(
+        "doc-regions-change-fault",
+        rc == 0 and parts["new_round"] is False and parts["events"] is False,
+        f"the fault switch did not see the change and the check refused it: {evidence}",
+    )
+
+
+# ---- review round 2, item 9: a panic in the reader thread or in the worker thread
+
+PANIC_WAIT = "8"
+
+
+def panic_parts(label: str, rc: int, ref: bytes, kind: str) -> tuple[dict, str]:
+    rows = report_rows(label)
+    jobs = job_rows(label)
+    marker = "worker_restarted" if kind == "worker" else "reader_panic"
+    parts = {
+        "rc": rc == 0,
+        "reported": any(r.get("event") == marker for r in rows),
+        "result": bool(jobs) and jobs[-1].get("events_json", "").encode() == ref,
+    }
+    return parts, (
+        f"a panic in the {kind} thread: rc={rc}, report row {marker} {parts['reported']}, after the host asked again the last round's events are "
+        f"byte for byte the reference {parts['result']} ({len(jobs)} result round(s))"
+    )
+
+
+def stage_doc_panic() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-panic", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b1-ref-a", DOC_A)
+    if ref is None:
+        return pass_fail("doc-panic", False, "the reference failed")
+    ok = True
+    for kind in ("worker", "reader"):
+        rc, _lines = retry_run(f"doc-panic-{kind}", DOC_A, {"DS_ARA_PANIC_TEST": kind}, wait=PANIC_WAIT)
+        parts, evidence = panic_parts(f"doc-panic-{kind}", rc, ref, kind)
+        ok = pass_fail(f"doc-panic-{kind}", all(parts.values()), evidence) and ok
+    return ok
+
+
+def stage_doc_panic_fault() -> bool:
+    """The fault run: the threads run without the guard. A panic ends the thread without a
+    message: the round never starts (reader) or the worker is gone for ever (worker)."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-panic-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b1-ref-a", DOC_A)
+    if ref is None:
+        return pass_fail("doc-panic-fault", False, "the reference failed")
+    out = {}
+    for kind in ("worker", "reader"):
+        rc, _lines = retry_run(
+            f"doc-panic-fault-{kind}", DOC_A, {"DS_ARA_PANIC_TEST": kind, "DS_ARA_GUARD_FAULT": "off"}, wait=PANIC_WAIT
+        )
+        parts, evidence = panic_parts(f"doc-panic-fault-{kind}", rc, ref, kind)
+        out[kind] = (parts["reported"] is False and parts["result"] is False, evidence)
+    return pass_fail(
+        "doc-panic-fault",
+        all(v[0] for v in out.values()),
+        " | ".join(f"{k}: refused {v[0]}: {v[1]}" for k, v in out.items()),
+    )
+
+
+# ---- review round 2, item 8: one list of the DS_ARA_* variables
+
+README = HERE / "README.md"
+README_BEGIN, README_END = "<!-- switches:begin (made from switches.json by `check.py write-readme`) -->", "<!-- switches:end -->"
+SOURCE_GLOBS = ["src/*.rs", "src/bin/*.rs", "check.sh", "build.rs"]  # what the plugin and the script read, not the stages
+
+
+def readme_block() -> str:
+    kinds = {
+        "config": "The plugin reads it (the check sets it for every run).",
+        "check": "Read by the check only.",
+        "fault": "Fault switch: breaks one line of the gate on purpose, so the check of that line can fail.",
+        "scenario": "Scenario switch: sets up a case for a stage (not a fault).",
+    }
+    lines = [README_BEGIN, "", "| Variable | Kind | Values | What it does |", "| --- | --- | --- | --- |"]
+    for e in load_switches():
+        lines.append(f"| `{e['name']}` | {e['kind']} | {e['values']} | {e['meaning']} |")
+    lines += ["", "Kinds: " + " ".join(f"**{k}**: {v}" for k, v in kinds.items()), "", README_END]
+    return "\n".join(lines)
+
+
+def write_readme() -> None:
+    text = README.read_text(encoding="utf-8")
+    a, b = text.index(README_BEGIN), text.index(README_END) + len(README_END)
+    README.write_text(text[:a] + readme_block() + text[b:], encoding="utf-8")
+
+
+def names_in_text(text: str) -> set:
+    return set(re.findall(r"DS_ARA_[A-Z0-9_]+", text))
+
+
+def switches_problems(listed: set, source_text: str, readme_text: str) -> list[str]:
+    """What is wrong with the list: a variable in the source or the README that the list does not
+    name, a listed variable no source uses, or a README block that is not made from the list."""
+    problems = []
+    used = names_in_text(source_text)
+    problems += [f"{n} is used but not listed" for n in sorted(used - listed)]
+    problems += [f"{n} is listed but not used" for n in sorted(listed - used)]
+    problems += [f"{n} is in the README but not listed" for n in sorted(names_in_text(readme_text) - listed)]
+    if README_BEGIN not in readme_text or readme_block() not in readme_text:
+        problems.append("the README block is not the one made from switches.json")
+    return problems
+
+
+def stage_switches() -> bool:
+    if not (HERE / "switches.json").exists():
+        return pass_fail("switches", False, "no switches.json")
+    listed = {e["name"] for e in load_switches()}
+    source = "\n".join(p.read_text(encoding="utf-8") for g in SOURCE_GLOBS for p in sorted(HERE.glob(g)))
+    problems = switches_problems(listed, source, README.read_text(encoding="utf-8"))
+    ok = pass_fail("switches-list", not problems, f"{len(listed)} variables; the source, the README and check.sh use no other; the README block is made from the list" if not problems else "; ".join(problems))
+    # a normal run clears every one of them, even when the caller's environment holds them all
+    saved = {k: os.environ.get(k) for k in listed}
+    try:
+        for k in listed:
+            os.environ[k] = "x"
+        cleared = no_switch()
+        run_env = dict(os.environ)
+        for k, v in cleared.items():
+            if v is None:
+                run_env.pop(k, None)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    left = sorted(k for k in listed if k in run_env and next(e for e in load_switches() if e["name"] == k)["kind"] != "check")
+    ok = pass_fail("switches-clear", not left, f"a normal run clears all {len(cleared)} plugin variables even when all {len(listed)} are set" if not left else f"left set: {left}") and ok
+    # check.sh refuses a fault or test variable in the caller's environment, at the start
+    guard = HERE / "check.sh"
+    rc_bad, text_bad = run([str(guard), "guard"], env={"DS_ARA_ROUND_FAULT": "new-only"})
+    rc_ok, _text = run([str(guard), "guard"], env={k: None for k in listed})
+    ok = pass_fail(
+        "switches-guard",
+        rc_bad != 0 and "DS_ARA_ROUND_FAULT" in text_bad and rc_ok == 0,
+        f"check.sh guard: rc={rc_bad} naming the variable with DS_ARA_ROUND_FAULT set, rc={rc_ok} without",
+    ) and ok
+    return ok
+
+
+def stage_switches_fault() -> bool:
+    """The check can fail: an unlisted variable in the source, a listed one nobody uses, and a
+    README that was edited by hand are all reported."""
+    listed = {e["name"] for e in load_switches()}
+    source = "\n".join(p.read_text(encoding="utf-8") for g in SOURCE_GLOBS for p in sorted(HERE.glob(g)))
+    readme = README.read_text(encoding="utf-8")
+    unlisted = switches_problems(listed, source + '\nstd::env::var("DS_ARA_NEW_FAULT")', readme)
+    unused = switches_problems(listed | {"DS_ARA_GHOST"}, source, readme)
+    edited = switches_problems(listed, source, readme.replace("| `DS_ARA_CACHE` |", "| `DS_ARA_CACHE_X` |"))
+    ok = (
+        any("DS_ARA_NEW_FAULT is used but not listed" in p for p in unlisted)
+        and any("DS_ARA_GHOST is listed but not used" in p for p in unused)
+        and any("README" in p for p in edited)
+    )
+    return pass_fail("switches-fault", ok, f"an unlisted variable: {bool(unlisted)}, a listed variable nobody uses: {bool(unused)}, a README edited by hand: {bool(edited)} - each reported")
+
+
+# ---- review round 2, item 9: no unwrap and no expect in the non-test code of the plugin
+
+UNWRAP_FILES = ["src/lib.rs", "src/service.rs", "src/state.rs", "src/wav.rs"]
+UNWRAP_PATTERN = re.compile(r"\.(unwrap|expect)\s*\(|\.unwrap_unchecked\s*\(")
+
+
+def unwraps_in(text: str) -> list[tuple[int, str]]:
+    """The lines of the non-test code that unwrap or expect: the code up to the first `#[cfg(test)]`,
+    without comment lines (the host tables are optional input; no panic on a missing function)."""
+    found = []
+    for n, line in enumerate(text.splitlines(), 1):
+        if line.strip().startswith("#[cfg(test)]"):
+            break
+        if line.strip().startswith("//"):
+            continue
+        code = line.split("//", 1)[0]
+        if UNWRAP_PATTERN.search(code):
+            found.append((n, line.strip()))
+    return found
+
+
+def stage_no_unwrap() -> bool:
+    bad = {f: unwraps_in((HERE / f).read_text(encoding="utf-8")) for f in UNWRAP_FILES}
+    n = sum(len(v) for v in bad.values())
+    return pass_fail(
+        "no-unwrap",
+        n == 0,
+        f"0 unwrap or expect calls in the non-test code of {len(UNWRAP_FILES)} files"
+        if n == 0
+        else "; ".join(f"{f}:{ln}: {t}" for f, v in bad.items() for ln, t in v[:3]),
+    )
+
+
+def stage_no_unwrap_fault() -> bool:
+    """The check can fail: a host-table unwrap and an expect in non-test code are found, and the
+    same calls after `#[cfg(test)]` and in comments are not."""
+    sample = (
+        "fn a() {\n    let f = iface.createAudioReaderForSource.unwrap();\n    // x.unwrap() in a comment\n"
+        "    let y = z.expect(\"no\");\n    let ok = w.unwrap_or(1);\n}\n#[cfg(test)]\nmod t { fn b() { x.unwrap(); } }\n"
+    )
+    found = unwraps_in(sample)
+    return pass_fail("no-unwrap-fault", [n for n, _ in found] == [2, 4], f"found the unwrap and the expect on lines {[n for n, _ in found]} of the sample, not the comment, unwrap_or or the test code")
 
 
 def stage_conformance() -> bool:
@@ -1904,6 +2759,26 @@ STAGES = {
     "doc-destroy-fault": stage_doc_destroy_fault,
     "doc-close": stage_doc_close,
     "doc-close-fault": stage_doc_close_fault,
+    "doc-id-hostile": stage_doc_id_hostile,
+    "doc-id-hostile-fault": stage_doc_id_hostile_fault,
+    "doc-same-id": stage_doc_same_id,
+    "doc-same-id-fault": stage_doc_same_id_fault,
+    "doc-restore-busy": stage_doc_restore_busy,
+    "doc-restore-busy-fault": stage_doc_restore_busy_fault,
+    "doc-retry": stage_doc_retry,
+    "doc-retry-fault": stage_doc_retry_fault,
+    "doc-rerequest": stage_doc_rerequest,
+    "doc-rerequest-fault": stage_doc_rerequest_fault,
+    "doc-errors": stage_doc_errors,
+    "doc-errors-fault": stage_doc_errors_fault,
+    "doc-regions-change": stage_doc_regions_change,
+    "doc-regions-change-fault": stage_doc_regions_change_fault,
+    "doc-panic": stage_doc_panic,
+    "doc-panic-fault": stage_doc_panic_fault,
+    "switches": stage_switches,
+    "switches-fault": stage_switches_fault,
+    "no-unwrap": stage_no_unwrap,
+    "no-unwrap-fault": stage_no_unwrap_fault,
     "doc-home": stage_doc_home,
     "doc-home-fault": stage_doc_home_fault,
     "conformance": stage_conformance,
@@ -1921,6 +2796,10 @@ ORDER = [
     "archive-paths-fault", "archive-restore-pathname",
     "threads", "doc-service", "doc-service-fault", "doc-tracks", "doc-tracks-fault", "doc-rounds", "doc-rounds-fault", "doc-two", "doc-two-fault",
     "doc-archive", "doc-archive-fault", "doc-destroy", "doc-destroy-fault", "doc-close", "doc-close-fault", "doc-home", "doc-home-fault",
+    "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault",
+    "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
+    "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",
+    "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",
 ]
@@ -1928,6 +2807,10 @@ ORDER = [
 
 def main() -> int:
     stages = sys.argv[1:] or ["all"]
+    if stages == ["write-readme"]:
+        write_readme()
+        print("README.md: the switches block is made from switches.json")
+        return 0
     if stages == ["all"]:
         stages = ORDER
     OUT.mkdir(parents=True, exist_ok=True)

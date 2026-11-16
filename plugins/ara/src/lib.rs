@@ -136,6 +136,12 @@ struct SourceState {
     has_events: AtomicBool,
     /// The host asked for the analysis of this source.
     requested: AtomicBool,
+    /// The analysis of this source ended without a result (its read failed, its round failed
+    /// or the service could not analyse its track). The host sees the analysis as complete
+    /// (it must not wait for ever), and a new request tries again.
+    analysis_failed: AtomicBool,
+    /// The size of the committed WAV.
+    wav_len: AtomicU64,
 }
 
 impl SourceState {
@@ -152,11 +158,16 @@ impl SourceState {
             persistent_id: p.persistent_id,
             sample_rate: p.sample_rate,
             sample_count: p.sample_count,
+            // the WAV of this process; without one (a restored source) the path where the
+            // reader will write it, marked not ready
             wav: self
                 .wav
                 .lock()
-                .map(|w| w.clone().unwrap_or_default())
-                .unwrap_or_default(),
+                .ok()
+                .and_then(|w| w.clone())
+                .unwrap_or_else(|| self.doc.wav_path(self.seq, &self.props().name)),
+            ready: self.wav.lock().map(|w| w.is_some()).unwrap_or(false),
+            wav_len: self.wav_len.load(Ordering::SeqCst),
             regions: self
                 .regions
                 .lock()
@@ -208,7 +219,9 @@ struct DocShared {
     svc: Mutex<service::DocService>,
     /// Cancels the running job of the project from another thread.
     canceller: service::Canceller,
-    /// The events of every track as of the last round.
+    /// The events of every track as of the last round. A restore sets them on the calling
+    /// thread (the worker may be busy for minutes with another document), so an archive
+    /// stored right after a restore carries them.
     events: Mutex<serde_json::Map<String, Value>>,
     /// The next source creation index (per document; a destroyed source's index is not reused).
     next_seq: AtomicUsize,
@@ -222,12 +235,83 @@ struct DocShared {
     pending: Mutex<Vec<Arc<SourceState>>>,
 }
 
+/// The document ids in use in this process. Two live documents never share an id, so never
+/// a folder: a session file that was copied, or opened twice, restores the same id.
+static IDS_IN_USE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// The live documents of this process (the unload of the library cancels their rounds).
+static LIVE_DOCS: Mutex<Vec<std::sync::Weak<DocShared>>> = Mutex::new(Vec::new());
+
+/// The worker thread runs (it ends on `Msg::Quit`, at the unload of the library).
+static WORKER_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Make an id that no live document of this process has, and take it.
+fn fresh_id() -> String {
+    loop {
+        let id = service::new_doc_id();
+        let mut used = IDS_IN_USE.lock().unwrap_or_else(|e| e.into_inner());
+        if !used.contains(&id) {
+            used.push(id.clone());
+            return id;
+        }
+    }
+}
+
+/// Take the id `want` (a stored id) for a document that has `old`: true when nobody else
+/// has it. `DS_ARA_REGISTRY_FAULT=off` (the check's fault run) takes it without looking.
+fn claim_id(old: &str, want: &str) -> bool {
+    let mut used = IDS_IN_USE.lock().unwrap_or_else(|e| e.into_inner());
+    let off = std::env::var("DS_ARA_REGISTRY_FAULT").as_deref() == Ok("off");
+    if !off && used.iter().any(|u| u == want) && old != want {
+        return false;
+    }
+    used.retain(|u| u != old);
+    if !used.iter().any(|u| u == want) {
+        used.push(want.to_string());
+    }
+    true
+}
+
+fn release_id(id: &str) {
+    IDS_IN_USE.lock().unwrap_or_else(|e| e.into_inner()).retain(|u| u != id);
+}
+
+/// The unix time in nanoseconds (report rows that the check orders against the host's clock).
+fn now_ns() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos())
+}
+
+/// `DS_ARA_PANIC_TEST` (the check's scenario switch): `reader` or `worker`.
+fn panic_test() -> Option<String> {
+    std::env::var("DS_ARA_PANIC_TEST").ok().filter(|v| !v.is_empty())
+}
+
+static PANIC_READER_DONE: AtomicBool = AtomicBool::new(false);
+static PANIC_WORKER_DONE: AtomicBool = AtomicBool::new(false);
+
+/// The scenario of the check: panic once in the thread `kind` (`reader` or `worker`).
+fn test_panic(kind: &str) {
+    if panic_test().as_deref() != Some(kind) {
+        return;
+    }
+    let done = if kind == "reader" {
+        &PANIC_READER_DONE
+    } else {
+        &PANIC_WORKER_DONE
+    };
+    if !done.swap(true, Ordering::SeqCst) {
+        panic!("test panic in the {kind} thread");
+    }
+}
+
 impl DocShared {
     fn new() -> Arc<DocShared> {
         let cache = session().cache.clone();
-        let id = service::new_doc_id();
+        let id = fresh_id();
         let svc = service::DocService::new(cache.clone(), id.clone());
-        Arc::new(DocShared {
+        let doc = Arc::new(DocShared {
             cache,
             canceller: svc.canceller(),
             id: Mutex::new(id),
@@ -238,7 +322,12 @@ impl DocShared {
             closing: AtomicBool::new(false),
             members: Mutex::new(Vec::new()),
             pending: Mutex::new(Vec::new()),
-        })
+        });
+        LIVE_DOCS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Arc::downgrade(&doc));
+        doc
     }
 
     fn id(&self) -> String {
@@ -265,6 +354,10 @@ enum Msg {
     Failed(Arc<SourceState>),
     /// The host destroyed a source: its track leaves the project.
     Remove { src: Arc<SourceState>, sources_left: usize },
+    /// The regions or the properties of a source changed: the document needs a round.
+    Touch(Arc<DocShared>),
+    /// The plugin library is being unloaded: the worker ends.
+    Quit,
     /// An archive was restored: the project opens with the stored events.
     Restore {
         doc: Arc<DocShared>,
@@ -289,6 +382,8 @@ struct Session {
     service_row: Mutex<Option<String>>,
     /// To the worker.
     tx: Mutex<Option<Sender<Msg>>>,
+    /// The worker thread (the unload of the library waits for it, a short time).
+    worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     /// The fault job ran (the fault switch runs the analysis inside `process` once).
     fault_ran: AtomicBool,
     /// The fault switch (`DS_ARA_FAULT=in-process`).
@@ -324,6 +419,7 @@ fn session() -> &'static Session {
         rows: Mutex::new(Vec::new()),
         service_row: Mutex::new(None),
         tx: Mutex::new(None),
+        worker: Mutex::new(None),
         fault_ran: AtomicBool::new(false),
         fault: std::env::var("DS_ARA_FAULT").as_deref() == Ok("in-process"),
     })
@@ -338,6 +434,9 @@ static ROUNDS: AtomicUsize = AtomicUsize::new(0);
 const SETTLE_QUIET: std::time::Duration = std::time::Duration::from_millis(250);
 const SETTLE_MAX: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// The longest the unload of the library waits for the worker.
+const UNLOAD_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+
 /// The report row of the services made and dropped in this process (written before the
 /// last service row, so that row stays the last line).
 fn services_row() -> String {
@@ -347,6 +446,37 @@ fn services_row() -> String {
         service::SERVICES_DROPPED.load(Ordering::SeqCst),
         ROUNDS.load(Ordering::SeqCst)
     )
+}
+
+/// What the worker holds between two messages.
+#[derive(Default)]
+struct WorkerState {
+    /// Sources that asked for the analysis and still need it.
+    requested: Vec<Arc<SourceState>>,
+    /// Documents that need a round without a new request, with the reason (`removal`: a
+    /// source was destroyed; `change`: the regions or the properties of a source changed).
+    stale: Vec<(Arc<DocShared>, &'static str)>,
+    /// The sources of the round that runs now (a panic in the worker ends them as failed,
+    /// so the host never waits for ever).
+    current: Vec<Arc<SourceState>>,
+}
+
+/// A source whose analysis is still to do: no result yet, or the last round ended without
+/// one. A request for any other source changes nothing and starts no round.
+fn needs_analysis(s: &Arc<SourceState>) -> bool {
+    !s.removed.load(Ordering::SeqCst)
+        && (!s.has_events.load(Ordering::SeqCst) || s.analysis_failed.load(Ordering::SeqCst))
+}
+
+fn has_wav(s: &Arc<SourceState>) -> bool {
+    s.wav.lock().map(|w| w.is_some()).unwrap_or(false)
+}
+
+/// A source takes part in the rounds of its document once it was requested (its audio is
+/// here) or was restored with a result. Never one that was only created.
+fn takes_part(s: &Arc<SourceState>) -> bool {
+    !s.removed.load(Ordering::SeqCst)
+        && (s.has_events.load(Ordering::SeqCst) || (s.requested.load(Ordering::SeqCst) && has_wav(s)))
 }
 
 /// The sources of a document that the worker still has to analyse, grouped per document in
@@ -363,21 +493,15 @@ fn groups(requested: &[Arc<SourceState>]) -> Vec<(Arc<DocShared>, Vec<Arc<Source
 }
 
 /// The documents the worker can run a round for: every document whose requested sources
-/// all have their WAV (or failed), and every document that lost a source and has no
+/// all have their WAV (or failed), and every document that needs a round and has no
 /// request waiting for its audio.
-fn ready_documents(
-    requested: &[Arc<SourceState>],
-    stale: &[Arc<DocShared>],
-) -> Vec<(Arc<DocShared>, Vec<Arc<SourceState>>)> {
-    let mut ready: Vec<(Arc<DocShared>, Vec<Arc<SourceState>>)> = groups(requested)
+fn ready_documents(st: &WorkerState) -> Vec<(Arc<DocShared>, Vec<Arc<SourceState>>)> {
+    let mut ready: Vec<(Arc<DocShared>, Vec<Arc<SourceState>>)> = groups(&st.requested)
         .into_iter()
-        .filter(|(_, list)| {
-            list.iter()
-                .all(|s| s.wav.lock().map(|w| w.is_some()).unwrap_or(false) || s.failed.load(Ordering::SeqCst))
-        })
+        .filter(|(_, list)| list.iter().all(|s| has_wav(s) || s.failed.load(Ordering::SeqCst)))
         .collect();
-    for doc in stale {
-        let waiting = requested.iter().any(|s| Arc::ptr_eq(&s.doc, doc));
+    for (doc, _) in &st.stale {
+        let waiting = st.requested.iter().any(|s| Arc::ptr_eq(&s.doc, doc));
         if !waiting {
             ready.push((doc.clone(), Vec::new()));
         }
@@ -413,47 +537,96 @@ impl Session {
         }
     }
 
+    /// The thread of the worker: [`Session::worker_loop`] inside a panic guard. A panic
+    /// ends the round it happened in (its sources end as failed, so the host does not wait
+    /// for them, and a later request tries again) and the loop starts again: the worker is
+    /// shared by every document of the process and must not end. `DS_ARA_GUARD_FAULT=off`
+    /// (the check's fault run) takes the guard away.
+    fn worker_main(&'static self, rx: Receiver<Msg>) {
+        let mut st = WorkerState::default();
+        let unguarded = std::env::var("DS_ARA_GUARD_FAULT").as_deref() == Ok("off");
+        loop {
+            let run = std::panic::AssertUnwindSafe(|| self.worker_loop(&rx, &mut st));
+            if unguarded {
+                self.worker_loop(&rx, &mut st);
+                break;
+            }
+            match std::panic::catch_unwind(run) {
+                Ok(()) => break,
+                Err(_) => {
+                    eprintln!("drumspike-ara: caught panic in the worker thread, the worker starts again");
+                    let lost: Vec<Arc<SourceState>> = st.requested.drain(..).chain(st.current.drain(..)).collect();
+                    for s in &lost {
+                        s.analysis_failed.store(true, Ordering::SeqCst);
+                    }
+                    st.stale.clear();
+                    self.log(format!(
+                        "{{\"event\":\"worker_restarted\",\"sources_failed\":{}}}",
+                        lost.len()
+                    ));
+                    self.write_out();
+                }
+            }
+        }
+        WORKER_RUNNING.store(false, Ordering::SeqCst);
+    }
+
     /// The worker loop. A document is ready when every source of it that asked for the
-    /// analysis has its WAV (or its read failed); a document that lost a source is ready
-    /// at once. Ready documents wait for a short quiet time (a DAW adds the sources one
-    /// after the other, so eight requests are one round, not eight), then one round runs
-    /// over the document: ALL its tracks are analysed together. Removals, restores and
-    /// closes of a document run on this thread in the order they arrive, so they never
-    /// overlap a round.
-    fn worker_loop(&'static self, rx: Receiver<Msg>) {
-        let mut requested: Vec<Arc<SourceState>> = Vec::new();
-        let mut stale: Vec<Arc<DocShared>> = Vec::new();
+    /// analysis has its WAV (or its read failed); a document that lost a source or whose
+    /// regions changed is ready at once. Ready documents wait for a short quiet time (a DAW
+    /// adds the sources one after the other, so eight requests are one round, not eight),
+    /// then one round runs over the document: ALL its tracks are analysed together.
+    /// Removals, restores and closes of a document run on this thread in the order they
+    /// arrive, so they never overlap a round. Returns when the channel is closed or on
+    /// `Msg::Quit`.
+    fn worker_loop(&'static self, rx: &Receiver<Msg>, st: &mut WorkerState) {
         loop {
             match rx.recv() {
-                Ok(msg) => self.absorb(msg, &mut requested, &mut stale),
+                Ok(msg) => {
+                    if self.absorb(msg, st) {
+                        return;
+                    }
+                }
                 Err(_) => return,
             }
             let mut settled = false;
             loop {
                 while let Ok(msg) = rx.try_recv() {
-                    self.absorb(msg, &mut requested, &mut stale);
+                    if self.absorb(msg, st) {
+                        return;
+                    }
                 }
-                let ready = ready_documents(&requested, &stale);
+                let ready = ready_documents(st);
                 if ready.is_empty() {
                     break;
                 }
                 if !settled {
-                    if self.settle(&rx, &mut requested, &mut stale) {
+                    if self.settle(rx, st) {
                         return;
                     }
                     settled = true;
                     continue;
                 }
                 for (doc, list) in ready {
-                    requested.retain(|s| !Arc::ptr_eq(&s.doc, &doc));
-                    stale.retain(|d| !Arc::ptr_eq(d, &doc));
-                    let targets: Vec<Arc<SourceState>> = list
-                        .into_iter()
-                        .filter(|s| !s.has_events.load(Ordering::SeqCst) && !s.removed.load(Ordering::SeqCst))
-                        .collect();
-                    if !doc.closing.load(Ordering::SeqCst) {
-                        self.run_job(&doc, &targets);
+                    st.requested.retain(|s| !Arc::ptr_eq(&s.doc, &doc));
+                    let reason = st
+                        .stale
+                        .iter()
+                        .position(|(d, _)| Arc::ptr_eq(d, &doc))
+                        .map(|i| st.stale.remove(i).1);
+                    let targets: Vec<Arc<SourceState>> = list.into_iter().filter(needs_analysis).collect();
+                    if doc.closing.load(Ordering::SeqCst) || (targets.is_empty() && reason.is_none()) {
+                        continue; // nothing changed: no round
                     }
+                    st.current = targets.clone();
+                    test_panic("worker");
+                    let why = if targets.is_empty() {
+                        reason.unwrap_or("change")
+                    } else {
+                        "request"
+                    };
+                    self.run_job(&doc, &targets, why, false);
+                    st.current.clear();
                 }
                 settled = false;
             }
@@ -461,13 +634,8 @@ impl Session {
     }
 
     /// Wait until no message came for [`SETTLE_QUIET`] (at most [`SETTLE_MAX`] in all).
-    /// True when the channel is closed.
-    fn settle(
-        &'static self,
-        rx: &Receiver<Msg>,
-        requested: &mut Vec<Arc<SourceState>>,
-        stale: &mut Vec<Arc<DocShared>>,
-    ) -> bool {
+    /// True when the worker must end (the channel is closed, or `Msg::Quit` came).
+    fn settle(&'static self, rx: &Receiver<Msg>, st: &mut WorkerState) -> bool {
         // the fault run: no settle time, every request starts a round of its own
         if std::env::var("DS_ARA_SETTLE_FAULT").as_deref() == Ok("none") {
             return false;
@@ -479,99 +647,163 @@ impl Session {
                 return false;
             }
             match rx.recv_timeout(SETTLE_QUIET.min(left)) {
-                Ok(msg) => self.absorb(msg, requested, stale),
+                Ok(msg) => {
+                    if self.absorb(msg, st) {
+                        return true;
+                    }
+                }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return false,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return true,
             }
         }
     }
 
-    fn absorb(&'static self, msg: Msg, requested: &mut Vec<Arc<SourceState>>, stale: &mut Vec<Arc<DocShared>>) {
+    /// Take one message. True for `Msg::Quit`.
+    fn absorb(&'static self, msg: Msg, st: &mut WorkerState) -> bool {
         match msg {
             Msg::Request(s) => {
-                if !requested.iter().any(|r| Arc::ptr_eq(r, &s)) {
-                    requested.push(s);
+                // the fault run brings back the old way: a request for a complete source
+                // starts a full round as well
+                let always = std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("always");
+                if s.removed.load(Ordering::SeqCst) || (!needs_analysis(&s) && !always) {
+                    return false; // a source that is complete: nothing changed, no round
+                }
+                if always && !st.stale.iter().any(|(d, _)| Arc::ptr_eq(d, &s.doc)) {
+                    st.stale.push((s.doc.clone(), "removal"));
+                }
+                if !st.requested.iter().any(|r| Arc::ptr_eq(r, &s)) {
+                    st.requested.push(s);
                 }
             }
             Msg::Ready(_) | Msg::Failed(_) => {}
             Msg::Remove { src, sources_left } => {
-                requested.retain(|r| !Arc::ptr_eq(r, &src));
+                st.requested.retain(|r| !Arc::ptr_eq(r, &src));
                 self.remove_track(&src, sources_left);
                 // the tracks that are left are analysed together again
                 if !src.doc.closing.load(Ordering::SeqCst)
                     && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("new-only")
-                    && !stale.iter().any(|d| Arc::ptr_eq(d, &src.doc))
                 {
-                    stale.push(src.doc.clone());
+                    // a removal outranks a change that came before it (the host destroys the
+                    // regions of a source before the source)
+                    match st.stale.iter_mut().find(|(d, _)| Arc::ptr_eq(d, &src.doc)) {
+                        Some(entry) => entry.1 = "removal",
+                        None => st.stale.push((src.doc.clone(), "removal")),
+                    }
+                }
+            }
+            Msg::Touch(doc) => {
+                if !doc.closing.load(Ordering::SeqCst) && !st.stale.iter().any(|(d, _)| Arc::ptr_eq(d, &doc)) {
+                    st.stale.push((doc, "change"));
                 }
             }
             Msg::Restore { doc, id, tracks } => self.restore_project(&doc, id, tracks),
             Msg::Close { doc, ack } => {
-                requested.retain(|r| !Arc::ptr_eq(&r.doc, &doc));
-                stale.retain(|d| !Arc::ptr_eq(d, &doc));
+                st.requested.retain(|r| !Arc::ptr_eq(&r.doc, &doc));
+                st.stale.retain(|(d, _)| !Arc::ptr_eq(d, &doc));
                 self.close_document(&doc);
                 let _ = ack.send(());
             }
+            Msg::Quit => return true,
         }
+        false
     }
 
-    /// One analysis round of a document over `targets` (the sources that asked; none after
-    /// a removal), then the report rows. Every track of the project is analysed.
-    fn run_job(&'static self, doc: &Arc<DocShared>, targets: &[Arc<SourceState>]) {
-        let after_removal = targets.is_empty();
-        // a source whose read failed has no audio: its analysis is complete without content
-        let (usable, failed): (Vec<_>, Vec<_>) = targets
-            .iter()
-            .cloned()
-            .partition(|s| s.wav.lock().map(|w| w.is_some()).unwrap_or(false));
-        for s in &failed {
-            s.has_events.store(true, Ordering::SeqCst);
+    /// One analysis round of a document over `targets` (the sources that asked; none after a
+    /// removal or a change), then the report rows. Every track of the project whose audio is
+    /// here is analysed, with a fresh snapshot of every source (so a change of the regions or
+    /// of the properties of an earlier source is seen). `force` runs the round even when
+    /// nothing changed (the fault run of the check).
+    fn run_job(&'static self, doc: &Arc<DocShared>, targets: &[Arc<SourceState>], reason: &'static str, force: bool) {
+        // a target whose read failed has no audio: its analysis ended without a result (the
+        // host does not wait for it; a new request reads it again)
+        let (usable, unread): (Vec<_>, Vec<_>) = targets.iter().cloned().partition(has_wav);
+        for s in &unread {
+            s.analysis_failed.store(true, Ordering::SeqCst);
         }
-        if usable.is_empty() && !after_removal {
-            return;
-        }
-        let snaps: Vec<service::SourceSnapshot> = usable.iter().map(|s| s.snapshot()).collect();
-        let worker_doc = doc.clone();
-        let outcome = guard("service job", Err("the service job panicked".to_string()), move || {
-            let mut svc = worker_doc.lock_svc();
-            let result = svc.analyse(&snaps)?;
-            Ok((result, svc.id().to_string(), svc.folder(), svc.home()))
-        });
-        let (result, id, folder, home) = match outcome {
-            Ok(r) => r,
-            Err(e) => {
-                self.log(format!("{{\"event\":\"job_failed\",\"error\":{e:?}}}"));
-                self.write_out();
-                return;
-            }
-        };
-        if result.analysed.is_empty() && after_removal {
-            if let Ok(mut m) = doc.events.lock() {
-                *m = result.events.clone();
-            }
-            return; // nothing is left to analyse
-        }
-        // the notes of every source of the document; a source that was complete before and
-        // whose notes changed is told to the host in `notifyModelUpdates`
         let members: Vec<Arc<SourceState>> = doc
             .members
             .lock()
             .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
             .unwrap_or_default();
+        let snaps: Vec<service::SourceSnapshot> =
+            members.iter().filter(|s| takes_part(s)).map(|s| s.snapshot()).collect();
+        let id_before = doc.id();
+        self.log(
+            json!({"event": "round_start", "doc": id_before, "reason": reason, "tracks": snaps.len(), "unix_ns": now_ns().to_string()})
+                .to_string(),
+        );
+        self.write_out();
+        let worker_doc = doc.clone();
+        let outcome = guard("service job", Err("the service job panicked".to_string()), move || {
+            let mut svc = worker_doc.lock_svc();
+            let result = svc.analyse(&snaps, force)?;
+            Ok((result, svc.id().to_string(), svc.folder(), svc.home()))
+        });
+        let (result, id, folder, home) = match outcome {
+            Ok(r) => r,
+            Err(e) => {
+                // the round ended without a result: the sources of the round are complete
+                // for the host (it must not wait for ever) and are tried again at the next
+                // request; their tracks stay (a source is one track for its life)
+                for s in &usable {
+                    s.analysis_failed.store(true, Ordering::SeqCst);
+                }
+                let outcome = if e.contains("cancelled") { "cancelled" } else { "failed" };
+                self.log(
+                    json!({"event": "round_end", "doc": id_before, "outcome": outcome, "unix_ns": now_ns().to_string()})
+                        .to_string(),
+                );
+                self.log(json!({"event": "job_failed", "doc": id_before, "error": e}).to_string());
+                self.write_out();
+                return;
+            }
+        };
+        if !result.ran {
+            self.log(
+                json!({"event": "round_end", "doc": id, "outcome": "idle", "unix_ns": now_ns().to_string()})
+                    .to_string(),
+            );
+            self.write_out();
+            return; // nothing had changed
+        }
+        let seq_of = |name: &str| result.tracks.iter().find(|(n, _)| n == name).map(|(_, s)| *s);
+        let by_seq = |seq: usize| members.iter().find(|s| s.seq == seq);
+        // a track the service could not analyse, and a target that was left out (its audio
+        // is not the file the reader wrote): the source has no result. It is complete for
+        // the host (no wait for ever) and has no notes; a new request tries again.
+        let mut failed_seqs: Vec<usize> = result.errors.iter().filter_map(|(n, _)| seq_of(n)).collect();
+        for (n, _) in &result.skipped {
+            if let Some(seq) = seq_of(n) {
+                if usable.iter().any(|u| u.seq == seq) {
+                    failed_seqs.push(seq);
+                }
+            }
+        }
         let mut changed: Vec<String> = Vec::new();
         for (seq, notes) in &result.notes {
-            let Some(s) = members.iter().find(|s| s.seq == *seq) else {
-                continue;
-            };
+            let Some(s) = by_seq(*seq) else { continue };
             let was_complete = s.has_events.load(Ordering::SeqCst);
-            let differs = s.notes.lock().map(|n| *n != *notes).unwrap_or(false);
+            let was_failed = s.analysis_failed.load(Ordering::SeqCst);
+            let failed = failed_seqs.contains(seq);
+            let notes = if failed { Vec::new() } else { notes.clone() };
+            let differs = s.notes.lock().map(|n| *n != notes).unwrap_or(false);
             if let Ok(mut n) = s.notes.lock() {
-                *n = notes.clone();
+                *n = notes;
             }
-            if let (Ok(mut t), Some(name)) = (s.track.lock(), result.track_of.get(seq)) {
-                *t = Some(name.clone());
+            if let (Ok(mut t), Some(name)) = (s.track.lock(), result.tracks.iter().find(|(_, q)| q == seq)) {
+                *t = Some(name.0.clone());
             }
-            if was_complete && differs && !s.removed.load(Ordering::SeqCst) {
+            if failed {
+                s.has_events.store(false, Ordering::SeqCst);
+                s.analysis_failed.store(true, Ordering::SeqCst);
+            } else if result.analysed.iter().any(|n| seq_of(n) == Some(*seq)) {
+                s.has_events.store(true, Ordering::SeqCst);
+                s.analysis_failed.store(false, Ordering::SeqCst);
+            }
+            // a complete source whose notes changed, or one that had no result and has one
+            // now, is told to the host
+            let told = (was_complete && differs) || (was_failed && !failed);
+            if told && !s.removed.load(Ordering::SeqCst) {
                 changed.push(s.props().name);
                 if let Ok(mut p) = doc.pending.lock() {
                     if !p.iter().any(|x| Arc::ptr_eq(x, s)) {
@@ -580,11 +812,17 @@ impl Session {
                 }
             }
         }
-        for s in &usable {
-            s.has_events.store(true, Ordering::SeqCst);
-        }
         if let Ok(mut m) = doc.events.lock() {
             *m = result.events.clone();
+        }
+        if result.analysed.is_empty() && usable.is_empty() {
+            // a removal that left nothing to analyse
+            self.log(
+                json!({"event": "round_end", "doc": id, "outcome": "idle", "unix_ns": now_ns().to_string()})
+                    .to_string(),
+            );
+            self.write_out();
+            return;
         }
         let round = doc.rounds.fetch_add(1, Ordering::SeqCst) + 1;
         ROUNDS.fetch_add(1, Ordering::SeqCst);
@@ -600,15 +838,34 @@ impl Session {
             .iter()
             .map(|(name, ev)| (name.clone(), json!(serde_json::to_string(ev).unwrap_or_default())))
             .collect();
+        let skipped: Vec<Value> = result
+            .skipped
+            .iter()
+            .map(|(t, why)| json!({"track": t, "why": why}))
+            .collect();
+        let errors: Vec<Value> = result
+            .errors
+            .iter()
+            .map(|(t, e)| json!({"track": t, "error": e}))
+            .collect();
+        self.log(
+            json!({
+                "event": "round_end", "doc": id, "outcome": "done", "unix_ns": now_ns().to_string(),
+            })
+            .to_string(),
+        );
         self.log(
             json!({
                 "event": "job",
                 "doc": id,
                 "folder": folder.display().to_string(),
                 "round": round,
-                "reason": if after_removal { "removal" } else { "request" },
+                "reason": reason,
                 "added": result.added,
                 "analysed": result.analysed,
+                "skipped": skipped,
+                "errors": errors,
+                "partial": result.partial(),
                 "changed_notes": changed,
                 "project_tracks": result.project_tracks,
                 "earlier_changed": result.earlier_changed,
@@ -679,8 +936,12 @@ impl Session {
         });
         match outcome {
             Ok((result, id, folder, home)) => {
-                if let Ok(mut m) = doc.events.lock() {
-                    *m = result.events.clone();
+                if std::env::var("DS_ARA_RESTORE_FAULT").as_deref() == Ok("late-events") {
+                    // the fault run: the events of the document are set here, on the worker
+                    // thread, as the first version did
+                    if let Ok(mut m) = doc.events.lock() {
+                        *m = result.events.clone();
+                    }
                 }
                 self.log(
                     json!({
@@ -704,6 +965,7 @@ impl Session {
     fn close_document(&'static self, doc: &Arc<DocShared>) {
         let worker_doc = doc.clone();
         guard("close document", (), move || worker_doc.lock_svc().shutdown());
+        self.log(json!({"event": "doc_closed", "doc": doc.id(), "unix_ns": now_ns().to_string()}).to_string());
         self.write_out();
     }
 
@@ -730,7 +992,7 @@ impl Session {
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        self.run_job(&doc, &targets);
+        self.run_job(&doc, &targets, "request", false);
     }
 }
 
@@ -759,13 +1021,63 @@ fn start_worker(s: &'static Session) {
     let mut tx = s.tx.lock().unwrap_or_else(|e| e.into_inner());
     if tx.is_none() {
         let (tx_, rx) = channel::<Msg>();
+        WORKER_RUNNING.store(true, Ordering::SeqCst);
         let spawned = std::thread::Builder::new()
             .name("drumspike-ara-analysis".into())
-            .spawn(move || s.worker_loop(rx));
-        if spawned.is_ok() {
-            *tx = Some(tx_);
+            .spawn(move || s.worker_main(rx));
+        match spawned {
+            Ok(handle) => {
+                *tx = Some(tx_);
+                *s.worker.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+            }
+            Err(_) => WORKER_RUNNING.store(false, Ordering::SeqCst),
         }
     }
+}
+
+/// The host unloads the plugin library (`clap_entry.deinit`): no round may run on in a
+/// thread of code that is about to be unmapped. Every live document is closed for new work
+/// and its running round is cancelled (the cancel takes effect between two tracks), the
+/// worker gets `Quit` and the unload waits for it at most [`UNLOAD_WAIT`]. A worker that is
+/// still inside one track after that stays behind: the plugin cannot stop a thread, so the
+/// report says `ended: false` and the unload goes on. A host that loads the library again in
+/// the same process gets a new worker. `DS_ARA_UNLOAD_FAULT=skip` (the check's fault run)
+/// does nothing here.
+fn unload_worker() {
+    if std::env::var("DS_ARA_UNLOAD_FAULT").as_deref() == Ok("skip") {
+        return;
+    }
+    let Some(s) = SESSION.get() else { return };
+    let started = std::time::Instant::now();
+    let docs: Vec<Arc<DocShared>> = LIVE_DOCS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter_map(std::sync::Weak::upgrade)
+        .collect();
+    for d in &docs {
+        d.closing.store(true, Ordering::SeqCst);
+        d.canceller.cancel();
+    }
+    if !send(s, Msg::Quit) {
+        return; // no worker was started
+    }
+    while WORKER_RUNNING.load(Ordering::SeqCst) && started.elapsed() < UNLOAD_WAIT {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let ended = !WORKER_RUNNING.load(Ordering::SeqCst);
+    if ended {
+        if let Some(h) = s.worker.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = h.join();
+        }
+        *s.tx.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+    s.log(
+        json!({"event": "worker_unloaded", "ended": ended, "ms": started.elapsed().as_millis() as u64,
+            "unix_ns": now_ns().to_string()})
+        .to_string(),
+    );
+    s.write_out();
 }
 
 /// Send a message to the worker; false when there is no worker.
@@ -894,9 +1206,12 @@ unsafe extern "C" fn dc_destroyDocumentController(controllerRef: ARADocumentCont
             stop_worker(src);
         }
         let started = std::time::Instant::now();
-        let long_wait = std::env::var("DS_ARA_CLOSE_FAULT").as_deref() == Ok("wait");
+        let close_fault = std::env::var("DS_ARA_CLOSE_FAULT").unwrap_or_default();
+        let long_wait = close_fault == "wait";
         ctl.doc.closing.store(true, Ordering::SeqCst);
-        if !long_wait {
+        // `DS_ARA_CLOSE_FAULT=nocancel` (the check's fault run): the running round is not
+        // cancelled and runs on behind the close
+        if !long_wait && close_fault != "nocancel" {
             ctl.doc.canceller.cancel();
         }
         let (ack, done) = channel::<()>();
@@ -921,6 +1236,8 @@ unsafe extern "C" fn dc_destroyDocumentController(controllerRef: ARADocumentCont
             ctl.doc.lock_svc().shutdown();
             s.write_out();
         }
+        // the id is free again (a document that restores it later may take it)
+        release_id(&ctl.doc.id());
         drop(ctl);
     })
 }
@@ -1273,6 +1590,8 @@ unsafe extern "C" fn dc_createAudioSource(
                 notes: Mutex::new(Vec::new()),
                 has_events: AtomicBool::new(false),
                 requested: AtomicBool::new(false),
+                analysis_failed: AtomicBool::new(false),
+                wav_len: AtomicU64::new(0),
             });
             list.push(src.clone());
             if let Ok(mut m) = ctl.doc.members.lock() {
@@ -1298,7 +1617,24 @@ unsafe extern "C" fn dc_updateAudioSourceProperties(
             p.sample_rate = (*properties).sampleRate;
             p.channels = (*properties).channelCount;
         };
+        touch(&src);
     })
+}
+
+/// The regions or the properties of a source that took part in the analysis changed: the
+/// document needs a round with fresh snapshots (it runs after the settle time; a change
+/// that alters nothing ends in a round that does nothing). `DS_ARA_TOUCH_FAULT=ignore` (the
+/// check's fault run) brings back the first version: the change is not seen.
+fn touch(src: &Arc<SourceState>) {
+    if std::env::var("DS_ARA_TOUCH_FAULT").as_deref() == Ok("ignore") {
+        return;
+    }
+    if src.removed.load(Ordering::SeqCst) {
+        return;
+    }
+    if src.requested.load(Ordering::SeqCst) || src.has_events.load(Ordering::SeqCst) {
+        send(session(), Msg::Touch(src.doc.clone()));
+    }
 }
 
 unsafe fn state_of(audioSourceRef: ARAAudioSourceRef) -> Option<Arc<SourceState>> {
@@ -1321,9 +1657,16 @@ unsafe fn stop_worker(src: &Arc<SourceState>) {
 
 unsafe fn destroy_reader(src: &Arc<SourceState>) {
     let reader = src.reader.lock().unwrap_or_else(|e| e.into_inner()).0;
-    if !reader.is_null() && !src.host.0.is_null() {
-        let iface = &*(*src.host.0).audioAccessControllerInterface;
-        (iface.destroyAudioReader.unwrap())((*src.host.0).audioAccessControllerHostRef, reader);
+    if reader.is_null() || src.host.0.is_null() {
+        return;
+    }
+    // the host's tables are optional input: a missing table or function is skipped, never unwrapped
+    let table = (*src.host.0).audioAccessControllerInterface;
+    if table.is_null() {
+        return;
+    }
+    if let Some(destroy) = (*table).destroyAudioReader {
+        destroy((*src.host.0).audioAccessControllerHostRef, reader);
         *src.reader.lock().unwrap_or_else(|e| e.into_inner()) = SyncPtr(std::ptr::null_mut());
     }
 }
@@ -1374,14 +1717,33 @@ unsafe extern "C" fn dc_enableAudioSourceSamplesAccess(
 }
 
 /// The reader is created on the calling (the host's main) thread and the reads run on
-/// their own thread (the ARA rule).
+/// their own thread (the ARA rule). A source that has its WAV is not read again; one whose
+/// read is still running is left alone; one whose read failed is read again.
 unsafe fn start_read(src: &Arc<SourceState>) {
-    if src.host.0.is_null() {
+    if src.host.0.is_null() || has_wav(src) {
         return;
     }
-    let iface = &*(*src.host.0).audioAccessControllerInterface;
-    let reader =
-        (iface.createAudioReaderForSource.unwrap())((*src.host.0).audioAccessControllerHostRef, src.host_ref.0, 0);
+    let running = src
+        .worker
+        .lock()
+        .map(|w| w.as_ref().is_some_and(|h| !h.is_finished()))
+        .unwrap_or(false);
+    if running {
+        return;
+    }
+    // a finished read that failed leaves its reader and its thread: clear them first
+    stop_worker(src);
+    src.failed.store(false, Ordering::SeqCst);
+    let table = (*src.host.0).audioAccessControllerInterface;
+    if table.is_null() {
+        src.failed.store(true, Ordering::SeqCst);
+        return;
+    }
+    let Some(create) = (*table).createAudioReaderForSource else {
+        src.failed.store(true, Ordering::SeqCst);
+        return;
+    };
+    let reader = create((*src.host.0).audioAccessControllerHostRef, src.host_ref.0, 0);
     *src.reader.lock().unwrap_or_else(|e| e.into_inner()) = SyncPtr(reader);
     let s = session();
     let worker_src = src.clone();
@@ -1393,23 +1755,103 @@ unsafe fn start_read(src: &Arc<SourceState>) {
     }
 }
 
+/// What one read gave: whether it worked, the hash of the samples, and its time.
+struct ReadOutcome {
+    ok: bool,
+    hash: u64,
+}
+
 /// The reader thread: read every sample through the host's audio access controller,
 /// write the source's WAV into the cache folder block by block, hash the samples on the
-/// way, and tell the worker.
+/// way, and tell the worker. The read runs inside the panic guard: a panic ends the read
+/// as a failure (the worker is told, the round of the document does not wait for the
+/// source), it never ends the thread without a message.
 fn read_source(src: Arc<SourceState>, s: &'static Session) {
     let started = std::time::Instant::now();
     let props = src.props();
     let (count, rate, ch) = (props.sample_count, props.sample_rate, props.channels.max(1) as usize);
     let dest = src.doc.wav_path(src.seq, &props.name);
+    let body_src = src.clone();
+    let body_dest = dest.clone();
+    let unguarded = std::env::var("DS_ARA_GUARD_FAULT").as_deref() == Ok("off");
+    let body = move || read_samples(&body_src, &body_dest, count, rate, ch);
+    let outcome = if unguarded {
+        Some(body())
+    } else {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).ok()
+    };
+    let ms = started.elapsed().as_millis() as u64;
+    let panicked = outcome.is_none();
+    if panicked {
+        eprintln!("drumspike-ara: caught panic in the reader thread");
+        s.log(json!({"event": "reader_panic", "name": props.name}).to_string());
+    }
+    let outcome = outcome.unwrap_or(ReadOutcome { ok: false, hash: 0 });
+    if outcome.ok {
+        src.wav_len
+            .store(wav::file_len(count.max(0) as usize, ch as u16), Ordering::SeqCst);
+        if let Ok(mut w) = src.wav.lock() {
+            *w = Some(dest.clone());
+        }
+        s.log(format!(
+            "{{\"event\":\"read\",\"name\":{:?},\"sample_count\":{},\"sample_rate\":{},\"channels\":{},\"read_ok\":true,\"fnv64\":\"{:016x}\",\"wav\":{:?},\"ms\":{},\"caller_thread\":\"main\",\"reader_thread\":\"{:?}\"}}",
+            props.name,
+            count,
+            rate,
+            ch,
+            outcome.hash,
+            dest.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
+            ms,
+            std::thread::current().id()
+        ));
+        corrupt_for_scenario(&src, &dest);
+        send(s, Msg::Ready(src));
+    } else {
+        src.failed.store(true, Ordering::SeqCst);
+        s.log(format!(
+            "{{\"event\":\"read\",\"name\":{:?},\"read_ok\":false}}",
+            props.name
+        ));
+        send(s, Msg::Failed(src));
+    }
+}
+
+/// `DS_ARA_SCENARIO=corrupt-wav:<n>` (the check's scenario switch): after the read of the
+/// source with the creation index `n` the plugin writes garbage over the first bytes of its
+/// WAV (the size stays), so the service cannot read that track.
+fn corrupt_for_scenario(src: &Arc<SourceState>, dest: &std::path::Path) {
+    let Ok(v) = std::env::var("DS_ARA_SCENARIO") else {
+        return;
+    };
+    if v.strip_prefix("corrupt-wav:").and_then(|n| n.parse::<usize>().ok()) != Some(src.seq) {
+        return;
+    }
+    use std::io::{Seek, Write};
+    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open(dest) {
+        let _ = f.seek(std::io::SeekFrom::Start(0));
+        let _ = f.write_all(b"NOTAWAVE-NOTAWAVE-NOTAWAVE");
+    }
+}
+
+/// The samples of one source into its WAV (the body of the reader thread).
+fn read_samples(src: &Arc<SourceState>, dest: &std::path::Path, count: i64, rate: f64, ch: usize) -> ReadOutcome {
     let hash = std::cell::Cell::new(0xcbf29ce484222325u64);
+    test_panic("reader");
     let ok = (|| -> bool {
-        let Ok(mut writer) = wav::WavWriter::create(&dest, rate as u32, ch as u16, count.max(0) as usize) else {
+        let Ok(mut writer) = wav::WavWriter::create(dest, rate as u32, ch as u16, count.max(0) as usize) else {
             return false;
         };
         if src.host.0.is_null() {
             return false;
         }
-        let iface = unsafe { &*(*src.host.0).audioAccessControllerInterface };
+        let table = unsafe { (*src.host.0).audioAccessControllerInterface };
+        if table.is_null() {
+            return false;
+        }
+        let iface = unsafe { &*table };
+        let Some(read_samples) = iface.readAudioSamples else {
+            return false;
+        };
         let ctl = unsafe { (*src.host.0).audioAccessControllerHostRef };
         let reader = src.reader.lock().unwrap_or_else(|e| e.into_inner()).0;
         const BLOCK: usize = 65536;
@@ -1421,7 +1863,7 @@ fn read_source(src: Arc<SourceState>, s: &'static Session) {
                 break;
             }
             let ptrs: Vec<*mut c_void> = bufs.iter_mut().map(|b| b.as_mut_ptr() as *mut c_void).collect();
-            let read = unsafe { (iface.readAudioSamples.unwrap())(ctl, reader, pos, n as i64, ptrs.as_ptr()) };
+            let read = unsafe { read_samples(ctl, reader, pos, n as i64, ptrs.as_ptr()) };
             if read == 0 {
                 return false;
             }
@@ -1442,33 +1884,10 @@ fn read_source(src: Arc<SourceState>, s: &'static Session) {
             }
             pos += n as i64;
         }
-        writer.commit().is_ok()
+        // a read that was cancelled is no finished file: the temporary is never committed
+        !src.cancel.load(Ordering::SeqCst) && writer.commit().is_ok()
     })();
-    let ms = started.elapsed().as_millis() as u64;
-    if ok {
-        if let Ok(mut w) = src.wav.lock() {
-            *w = Some(dest.clone());
-        }
-        s.log(format!(
-            "{{\"event\":\"read\",\"name\":{:?},\"sample_count\":{},\"sample_rate\":{},\"channels\":{},\"read_ok\":true,\"fnv64\":\"{:016x}\",\"wav\":{:?},\"ms\":{},\"caller_thread\":\"main\",\"reader_thread\":\"{:?}\"}}",
-            props.name,
-            count,
-            rate,
-            ch,
-            hash.get(),
-            dest.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
-            ms,
-            std::thread::current().id()
-        ));
-        send(s, Msg::Ready(src));
-    } else {
-        src.failed.store(true, Ordering::SeqCst);
-        s.log(format!(
-            "{{\"event\":\"read\",\"name\":{:?},\"read_ok\":false}}",
-            props.name
-        ));
-        send(s, Msg::Failed(src));
-    }
+    ReadOutcome { ok, hash: hash.get() }
 }
 
 unsafe extern "C" fn dc_requestAudioSourceContentAnalysis(
@@ -1503,7 +1922,10 @@ unsafe extern "C" fn dc_isAudioSourceContentAnalysisIncomplete(
 ) -> ARABool {
     guard("isAudioSourceContentAnalysisIncomplete", 1, move || {
         let Some(src) = state_of(audioSourceRef) else { return 1 };
-        (!src.has_events.load(Ordering::SeqCst)) as ARABool
+        // incomplete until the source has a result or its analysis ended without one (a failed
+        // round, a track the service could not analyse): the host never waits for ever, and a
+        // new request tries again
+        (!(src.has_events.load(Ordering::SeqCst) || src.analysis_failed.load(Ordering::SeqCst))) as ARABool
     })
 }
 
@@ -1648,6 +2070,7 @@ unsafe extern "C" fn dc_createPlaybackRegion(
                 if let Ok(mut rl) = src.regions.lock() {
                     rl.push(RegionSlot { id, rec });
                 }
+                touch(src);
             }
         }
         Box::into_raw(Box::new(PlaybackRegion { seq, id })) as ARAPlaybackRegionRef
@@ -1672,6 +2095,7 @@ unsafe extern "C" fn dc_updatePlaybackRegionProperties(
                         slot.rec = rec;
                     }
                 }
+                touch(src);
             }
         }
     })
@@ -1688,6 +2112,7 @@ unsafe extern "C" fn dc_destroyPlaybackRegion(c: ARADocumentControllerRef, r: AR
                 if let Ok(mut rl) = src.regions.lock() {
                     rl.retain(|slot| slot.id != region.id);
                 }
+                touch(src);
             }
         }
         drop(region);
@@ -1715,17 +2140,23 @@ fn archive_name_of(name: &str) -> String {
 
 /// The archived source of a host source: the persistent ID first, then the name. The
 /// archive stores the reduced name (`archive_name_of`), so the host's own name (it may be
-/// a path, with no persistent ID) is reduced the same way before the compare.
+/// a path, with no persistent ID) is reduced the same way before the compare. An entry that
+/// an earlier source took (`used`, by position) is not taken again: two sources of one name
+/// and no persistent ID get two different entries.
 fn find_archived<'a>(
     sources: &'a [state::ArchiveSource],
     persistent_id: &str,
     name: &str,
+    used: &[usize],
 ) -> Option<&'a state::ArchiveSource> {
     let reduced = archive_name_of(name);
+    let free = |i: usize| !used.contains(&i);
     sources
         .iter()
-        .find(|a| !a.persistent_id.is_empty() && a.persistent_id == persistent_id)
-        .or_else(|| sources.iter().find(|a| a.name == reduced))
+        .enumerate()
+        .find(|(i, a)| free(*i) && !a.persistent_id.is_empty() && a.persistent_id == persistent_id)
+        .or_else(|| sources.iter().enumerate().find(|(i, a)| free(*i) && a.name == reduced))
+        .map(|(_, a)| a)
 }
 
 /// The upper bound for an archive the host hands over: a hostile or broken host value
@@ -1805,31 +2236,68 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
         }
         let Ok(st) = state::decode(&bytes) else { return 0 };
         let fault = std::env::var("DS_ARA_RESTORE_FAULT").unwrap_or_default();
-        // the stored document id names the project folder again; an archive of M1a has
-        // none, and a fresh id stays. (Fault `newid`: the stored id is ignored.)
-        let id = (!st.doc_id.is_empty() && fault != "newid").then(|| st.doc_id.clone());
-        if let Some(id) = &id {
-            *ctl.doc.id.lock().unwrap_or_else(|e| e.into_inner()) = id.clone();
+        // The stored document id names the project folder again. It comes from a file the
+        // user may have damaged or edited: only the form the plugin makes (16 lowercase hex
+        // digits) is taken, anything else gets the fresh id the document already has, and
+        // the report says so. An id another live document of this process holds (a session
+        // file that was copied, or one that is open twice) is not taken either: the second
+        // claimant keeps its fresh id and its folder starts from the archive data. An
+        // archive of M1a has no id, and a fresh one stays. (Fault `newid`: the stored id is
+        // ignored.)
+        let mut id: Option<String> = None;
+        if !st.doc_id.is_empty() && fault != "newid" {
+            if !service::accept_doc_id(&st.doc_id) {
+                s.log(json!({"event": "doc_id_refused", "value": st.doc_id}).to_string());
+            } else if !claim_id(&ctl.doc.id(), &st.doc_id) {
+                s.log(json!({"event": "doc_id_taken", "value": st.doc_id}).to_string());
+            } else {
+                *ctl.doc.id.lock().unwrap_or_else(|e| e.into_inner()) = st.doc_id.clone();
+                id = Some(st.doc_id.clone());
+            }
+        }
+        // the events of the archive that name a track the plugin can keep (a name that is
+        // no path); the others are dropped and the report says how many
+        let events_ok: Vec<(&String, &Value)> = st
+            .events
+            .iter()
+            .filter(|(k, _)| service::accept_track_name(k))
+            .collect();
+        if events_ok.len() != st.events.len() {
+            s.log(
+                json!({"event": "restore_refused", "what": "events keyed by a bad track name",
+                    "count": st.events.len() - events_ok.len()})
+                .to_string(),
+            );
         }
         let mut restored: Vec<service::RestoredTrack> = Vec::new();
+        let mut used: Vec<usize> = Vec::new();
         if let Ok(list) = ctl.sources.lock() {
             for src in list.iter() {
                 let p = src.props();
-                let found = find_archived(&st.sources, &p.persistent_id, &p.name);
+                // two sources of one name and no persistent ID match two different entries
+                let found = find_archived(&st.sources, &p.persistent_id, &p.name, &used);
                 if let Some(a) = found {
+                    let at = st.sources.iter().position(|x| std::ptr::eq(x, a)).unwrap_or(0);
+                    used.push(at);
                     if let Ok(mut n) = src.notes.lock() {
                         *n = a.notes.clone();
                     }
                     src.has_events.store(true, Ordering::SeqCst);
                     // the track of the source: stored (M1b1), else derived from the stored
-                    // name the way the analysis named it (an archive of M1a)
-                    let at = st.sources.iter().position(|x| std::ptr::eq(x, a)).unwrap_or(0);
-                    let track = if a.track.is_empty() {
+                    // name the way the analysis named it (an archive of M1a); a stored name
+                    // that is a path is not trusted
+                    let track = if a.track.is_empty() || !service::accept_track_name(&a.track) {
+                        if !a.track.is_empty() {
+                            s.log(
+                                json!({"event": "restore_refused", "what": "bad track name", "value": a.track})
+                                    .to_string(),
+                            );
+                        }
                         drumspike_app::tracks::safe_name(&service::stem_of(&a.name), at)
                     } else {
                         a.track.clone()
                     };
-                    if let Some(events) = st.events.get(&track) {
+                    if let Some((_, events)) = events_ok.iter().find(|(k, _)| **k == track) {
                         if let Ok(mut t) = src.track.lock() {
                             *t = Some(track.clone());
                         }
@@ -1841,7 +2309,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                         restored.push(service::RestoredTrack {
                             snapshot,
                             track,
-                            events: if fault == "empty" { json!([]) } else { events.clone() },
+                            events: if fault == "empty" { json!([]) } else { (*events).clone() },
                         });
                     }
                 }
@@ -1850,6 +2318,18 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
         // the tracks in the order of the stored events
         let order: Vec<&String> = st.events.keys().collect();
         restored.sort_by_key(|t| order.iter().position(|k| **k == t.track).unwrap_or(usize::MAX));
+        // The events of the document are set here, on the calling thread, not by the
+        // worker: the worker is shared by all documents and may be busy for minutes, and a
+        // host that stores the document right after the restore (an autosave) must get the
+        // events, or the next restore would find none. (Fault `late-events`: the worker
+        // sets them, as the first version did.)
+        if fault != "late-events" {
+            let mut m = serde_json::Map::new();
+            for t in &restored {
+                m.insert(t.track.clone(), t.events.clone());
+            }
+            *ctl.doc.events.lock().unwrap_or_else(|e| e.into_inner()) = m;
+        }
         send(
             s,
             Msg::Restore {
@@ -2289,7 +2769,7 @@ unsafe extern "C" fn e_init(_plugin_path: *const c_char) -> bool {
     guard("entry init", true, move || true)
 }
 unsafe extern "C" fn e_deinit() {
-    guard("entry deinit", (), move || {})
+    guard("entry deinit", (), unload_worker)
 }
 unsafe extern "C" fn e_get_factory(id: *const c_char) -> *const c_void {
     guard("entry get_factory", std::ptr::null(), move || {
@@ -2331,15 +2811,15 @@ mod tests {
     #[test]
     fn a_path_name_with_no_persistent_id_finds_its_archived_source() {
         let stored = [entry("a", "kick.wav"), entry("b", "snare.wav")];
-        let found = find_archived(&stored, "", "/some/folder/snare.wav").expect("matched by name");
+        let found = find_archived(&stored, "", "/some/folder/snare.wav", &[]).expect("matched by name");
         assert_eq!(found.name, "snare.wav");
-        assert!(find_archived(&stored, "", "/some/folder/tom.wav").is_none());
+        assert!(find_archived(&stored, "", "/some/folder/tom.wav", &[]).is_none());
     }
 
     #[test]
     fn the_persistent_id_wins_over_the_name() {
         let stored = [entry("a", "kick.wav"), entry("b", "snare.wav")];
-        let found = find_archived(&stored, "a", "/x/snare.wav").expect("matched by id");
+        let found = find_archived(&stored, "a", "/x/snare.wav", &[]).expect("matched by id");
         assert_eq!(found.name, "kick.wav");
     }
 
@@ -2355,8 +2835,32 @@ mod tests {
     }
 
     #[test]
+    fn two_sources_of_one_name_without_persistent_id_get_two_entries() {
+        let stored = [entry("", "kick.wav"), entry("", "kick.wav")];
+        let first = find_archived(&stored, "", "/a/kick.wav", &[]).expect("first");
+        let at = stored.iter().position(|x| std::ptr::eq(x, first)).unwrap();
+        let second = find_archived(&stored, "", "/b/kick.wav", &[at]).expect("second");
+        assert!(!std::ptr::eq(first, second));
+        assert!(find_archived(&stored, "", "/c/kick.wav", &[0, 1]).is_none());
+    }
+
+    #[test]
+    fn a_second_document_cannot_take_an_id_a_live_document_holds() {
+        let a = fresh_id();
+        let b = fresh_id();
+        assert_ne!(a, b);
+        // b may not take a's id; a keeps it
+        assert!(!claim_id(&b, &a));
+        assert!(claim_id(&a, &a));
+        // when a ends, its id is free for b
+        release_id(&a);
+        assert!(claim_id(&b, &a));
+        release_id(&a);
+    }
+
+    #[test]
     fn a_clean_name_still_matches() {
         let stored = [entry("", "kick.wav")];
-        assert!(find_archived(&stored, "", "kick.wav").is_some());
+        assert!(find_archived(&stored, "", "kick.wav", &[]).is_some());
     }
 }

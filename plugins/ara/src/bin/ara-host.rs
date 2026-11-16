@@ -1059,6 +1059,8 @@ fn main() {
         "tables" => run_tables(bundle),
         "grow" => run_grow(bundle, &files, &rest),
         "close-busy" => run_close_busy(bundle, &files, &rest),
+        "restore2" => run_restore2(bundle, &files, &rest),
+        "restore-busy" => run_restore_busy(bundle, &files, &rest),
         "docs" => run_docs(bundle, &files, &args_list(&rest, "--files2")),
         other => {
             eprintln!("unknown mode {other:?}");
@@ -1153,8 +1155,18 @@ fn run_regions(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         }
     }
     let regions_of = |_state: &HostState, i: usize| if i == 0 { specs.clone() } else { Vec::new() };
+    // `--update-after`: the analysis first, then the updates, then the host waits (pumping the
+    // model updates) for the plugin to analyse again
+    let after = rest.iter().any(|a| a == "--update-after");
+    let pump_ms = args_value(rest, "--pump-ms")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(3000);
     let rc = with_document(bundle, files, &regions_of, Vec::new(), &|inst, state, pairs| {
         unsafe {
+            if after {
+                analyse(inst, pairs)?;
+                print_notes_at(inst, state, pairs, 0, Some("before-update"));
+            }
             // the ARA update and destroy calls on the created regions, by index
             let dc = iface_of(inst);
             let dc_ref = dc_ref_of(inst);
@@ -1179,6 +1191,17 @@ fn run_regions(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     updates.iter().map(|(i, _)| i).collect::<Vec<_>>(),
                     destroys,
                 );
+            }
+            if after {
+                set_phase("update");
+                let until = Instant::now() + Duration::from_millis(pump_ms);
+                while Instant::now() < until {
+                    pump(inst);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                pump(inst);
+                print_notes_at(inst, state, pairs, 0, Some("after-update"));
+                return Ok(());
             }
             analyse(inst, pairs)?;
         }
@@ -1213,10 +1236,15 @@ struct HostDoc {
 
 impl HostDoc {
     unsafe fn new(loaded: &Loaded) -> Result<HostDoc, String> {
+        HostDoc::with_archive(loaded, Vec::new())
+    }
+
+    /// A document whose host holds an archive (the restore reads it).
+    unsafe fn with_archive(loaded: &Loaded, archive: Vec<u8>) -> Result<HostDoc, String> {
         let state = Box::into_raw(Box::new(HostState {
             sources: Vec::new(),
             writers: Vec::new(),
-            loaded: Vec::new(),
+            loaded: archive,
             regions: Vec::new(),
         }));
         let inst = make_controller(loaded, state)?;
@@ -1244,6 +1272,17 @@ impl HostDoc {
         files: &[String],
         phase: &str,
     ) -> Result<(Vec<(ARAAudioSourceRef, ARAAudioModificationRef)>, usize), String> {
+        let (pairs, base) = self.add_only(files, phase)?;
+        request(self.inst, &pairs);
+        Ok((pairs, base))
+    }
+
+    /// The sources are added (one full-length region each); no request.
+    unsafe fn add_only(
+        &mut self,
+        files: &[String],
+        phase: &str,
+    ) -> Result<(Vec<(ARAAudioSourceRef, ARAAudioModificationRef)>, usize), String> {
         set_phase(phase);
         let dc = iface_of(self.inst);
         let dc_ref = dc_ref_of(self.inst);
@@ -1263,8 +1302,39 @@ impl HostDoc {
         if let Some(f) = dc.endEditing {
             f(dc_ref);
         }
-        request(self.inst, &pairs);
         Ok((pairs, base))
+    }
+
+    /// Restore the archive the host holds; the notes are read right after.
+    unsafe fn restore(&self) -> Result<(), String> {
+        let dc = iface_of(self.inst);
+        let ok = (dc.restoreObjectsFromArchive.expect("restoreObjectsFromArchive"))(
+            dc_ref_of(self.inst),
+            0 as ARAArchiveReaderHostRef,
+            std::ptr::null(),
+        );
+        if ok == 0 {
+            return Err("restoreObjectsFromArchive refused".into());
+        }
+        Ok(())
+    }
+
+    /// Store the archive of the document; the bytes the plugin wrote.
+    unsafe fn store(&self) -> Result<Vec<u8>, String> {
+        let dc = iface_of(self.inst);
+        let ok = (dc.storeObjectsToArchive.expect("storeObjectsToArchive"))(
+            dc_ref_of(self.inst),
+            0 as ARAArchiveWriterHostRef,
+            std::ptr::null(),
+        );
+        if ok == 0 {
+            return Err("storeObjectsToArchive refused".into());
+        }
+        (*self.state)
+            .writers
+            .first()
+            .cloned()
+            .ok_or_else(|| "the plugin wrote no archive bytes".to_string())
     }
 
     /// The notes of every source of the document that was not destroyed.
@@ -1344,6 +1414,20 @@ fn run_grow(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 }
             }
             doc.print_all_notes("final", None);
+            if rest.iter().any(|a| a == "--rerequest") {
+                // the host asks again for sources that are complete (or whose analysis
+                // failed): the plugin starts a round only when something changed
+                set_phase("rerequest");
+                let pairs = doc.pairs.clone();
+                request(doc.inst, &pairs);
+                let until = Instant::now() + Duration::from_millis(pump_ms.max(1500));
+                while Instant::now() < until {
+                    pump(doc.inst);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                wait_for(doc.inst, &pairs)?;
+                doc.print_all_notes("after-rerequest", None);
+            }
             if let Some(i) = destroy {
                 set_phase("destroy");
                 doc.destroy_source(i)?;
@@ -1381,6 +1465,10 @@ fn run_close_busy(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     let lead = args_value(rest, "--lead-ms")
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(1500);
+    let after = args_value(rest, "--after-ms")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    let deinit = rest.iter().any(|a| a == "--deinit");
     let result = (|| -> Result<f64, String> {
         unsafe {
             let loaded = load(bundle)?;
@@ -1388,15 +1476,101 @@ fn run_close_busy(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let (_pairs, _base) = doc.add_and_request(files, "busy")?;
             std::thread::sleep(Duration::from_millis(lead));
             let t0 = Instant::now();
+            let at = unix_ns();
             doc.close();
-            Ok(t0.elapsed().as_secs_f64() * 1000.0)
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            println!("{{\"event\":\"host_close\",\"ms\":{ms:.1},\"unix_ns\":{at}}}");
+            if deinit {
+                // the host unloads the plugin library: the entry's deinit, right after the destroy
+                let t1 = Instant::now();
+                if let Some(f) = (*loaded.entry).deinit {
+                    f();
+                }
+                println!(
+                    "{{\"event\":\"host_deinit\",\"ms\":{:.1},\"unix_ns\":{}}}",
+                    t1.elapsed().as_secs_f64() * 1000.0,
+                    unix_ns()
+                );
+            }
+            // the host stays alive: the plugin's worker keeps running in the process
+            std::thread::sleep(Duration::from_millis(after));
+            Ok(ms)
         }
     })();
     match result {
-        Ok(ms) => {
-            println!("{{\"event\":\"host_close\",\"ms\":{ms:.1}}}");
-            0
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            2
         }
+    }
+}
+
+/// `restore2`: the same archive restored into two document controllers of one process.
+fn run_restore2(bundle: &str, files: &[String], rest: &[String]) -> i32 {
+    let Some(archive) = args_value(rest, "--archive").and_then(|a| std::fs::read(a).ok()) else {
+        eprintln!("restore2: no readable --archive");
+        return 64;
+    };
+    let result = (|| -> Result<(), String> {
+        unsafe {
+            let loaded = load(bundle)?;
+            let mut docs = Vec::new();
+            for label in ["doc-1", "doc-2"] {
+                let mut d = HostDoc::with_archive(&loaded, archive.clone())?;
+                let (pairs, base) = d.add_only(files, label)?;
+                d.restore()?;
+                print_notes_at(d.inst, &*d.state, &pairs, base, Some(label));
+                d.pairs.extend(pairs);
+                docs.push(d);
+            }
+            for d in &docs {
+                d.close();
+            }
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// `restore-busy`: another document starts a long analysis (`--busy synth:<secs>...`), then
+/// this one restores `--archive` and stores at once (a host autosave right after the
+/// restore); the archive goes to `--out`. The process leaves without closing anything.
+fn run_restore_busy(bundle: &str, files: &[String], rest: &[String]) -> i32 {
+    let (Some(archive), Some(out)) = (
+        args_value(rest, "--archive").and_then(|a| std::fs::read(a).ok()),
+        args_value(rest, "--out"),
+    ) else {
+        eprintln!("restore-busy: want --archive <readable> --out <file>");
+        return 64;
+    };
+    let busy = args_list(rest, "--busy");
+    let result = (|| -> Result<(), String> {
+        unsafe {
+            let loaded = load(bundle)?;
+            let mut other = HostDoc::new(&loaded)?;
+            other.add_and_request(&busy, "busy")?;
+            std::thread::sleep(Duration::from_millis(1200));
+            let mut d = HostDoc::with_archive(&loaded, archive)?;
+            let (pairs, base) = d.add_only(files, "restore")?;
+            println!("{{\"event\":\"host_restore\",\"unix_ns\":{}}}", unix_ns());
+            d.restore()?;
+            print_notes_at(d.inst, &*d.state, &pairs, base, Some("restore"));
+            d.pairs.extend(pairs);
+            let blob = d.store()?;
+            std::fs::write(&out, &blob).map_err(|e| format!("{out}: {e}"))?;
+            println!("{{\"event\":\"stored\",\"bytes\":{}}}", blob.len());
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => 0,
         Err(e) => {
             eprintln!("{e}");
             2

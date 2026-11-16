@@ -19,6 +19,8 @@
 #                      threads, conformance in the ARATestHost, files, pluginval,
 #                      clap-validator, universal, standalone, crate trio, workspace trio).
 #   ./check.sh all     deps, build, check
+#   ./check.sh guard   only the start guard: fails when a fault or test switch of
+#                      switches.json is set in the caller's environment (every mode runs it)
 #
 # The cache folder the plugin writes below is named in README.md
 # (~/Library/Caches/DrumSpike/ARA); the check overrides it with DS_ARA_CACHE into out/
@@ -164,11 +166,30 @@ check() {
     LIBCLANG_PATH=$CLT/usr/lib /usr/bin/python3 -I check.py all || return 1
 }
 
+# A fault or test switch of the plugin (switches.json, the one list the README and
+# check.py use as well) in the caller's environment would bend a normal run: refuse it
+# before anything runs. The check sets its own switches per run, never through the caller.
+guard() {
+  local bad
+  bad=$(/usr/bin/python3 -I - "$PWD/switches.json" <<'PY'
+import json, os, sys
+names = [e["name"] for e in json.load(open(sys.argv[1])) if e["kind"] in ("fault", "scenario")]
+print(" ".join(n for n in names if n in os.environ))
+PY
+  ) || return 2
+  if [[ -n $bad ]]; then
+    echo "FAIL: a fault or test switch is set in the environment: $bad (unset it; the check sets its own)"
+    return 1
+  fi
+}
+guard || exit $?
+
 case ${1:-all} in
+  guard) ;;
   deps) deps || rc=1 ;;
   build) build || rc=1 ;;
   check) check || rc=1 ;;
   all) deps || rc=1; [[ $rc = 0 ]] && build || rc=1; [[ $rc = 0 ]] && check || rc=1 ;;
-  *) echo "usage: check.sh deps|build|check|all"; rc=64 ;;
+  *) echo "usage: check.sh deps|build|check|all|guard"; rc=64 ;;
 esac
 exit $rc
