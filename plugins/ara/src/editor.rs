@@ -63,6 +63,20 @@ pub static PANICS: AtomicUsize = AtomicUsize::new(0);
 pub static PEAK_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
 pub static QUITS: AtomicUsize = AtomicUsize::new(0);
 
+/// The threads that ran the progress of a job of the page, the request threads of its
+/// `analyze_start`, and the main thread: the check asserts the first two never meet the third.
+static PROGRESS_THREADS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static START_THREADS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static MAIN_THREAD: Mutex<Option<String>> = Mutex::new(None);
+
+fn note_thread(list: &Mutex<Vec<String>>) {
+    let me = format!("{:?}", std::thread::current().id());
+    let mut l = list.lock().unwrap_or_else(|e| e.into_inner());
+    if !l.contains(&me) && l.len() < 64 {
+        l.push(me);
+    }
+}
+
 #[link(name = "System")]
 extern "C" {
     fn pthread_main_np() -> i32;
@@ -172,12 +186,19 @@ pub struct Backend {
     pub page: Arc<PageHandle>,
     /// Called after a command changed the project: the plugin reads the events again.
     pub changed: Arc<dyn Fn() + Send + Sync>,
+    /// Called on the request thread, before the page gets the answer of a command that changed the
+    /// project: the events and notes of the document follow at once (F2).
+    pub record: Arc<dyn Fn(&drumspike_app::Service, &str) -> Result<bool, String> + Send + Sync>,
     pub doc_id: String,
 }
 
 struct Shared {
     backend: Backend,
+    /// The queue the long polls read.
     channels: Arc<Channels>,
+    /// The channels the commands write to: they note the thread of every message, then push
+    /// into `channels`.
+    run_channels: Arc<Channels>,
     closed: AtomicBool,
     inflight: AtomicUsize,
     page_dir: Option<PathBuf>,
@@ -415,6 +436,11 @@ fn route(sh: &Arc<Shared>, rest: &str, query: &str, body: &[u8]) -> Answer {
         let msgs = poll_channel(sh, id, std::time::Duration::from_millis(ms));
         return Answer::json(200, &Value::Array(msgs));
     }
+    if rest == "events" && fault() == "no-events" {
+        // the fault run: the events of the service never reach the page
+        std::thread::sleep(std::time::Duration::from_millis(ms.min(500)));
+        return Answer::json(200, &json!({"seq": sh.backend.page.log.head(), "events": []}));
+    }
     if rest == "events" {
         let log = &sh.backend.page.log;
         let after = query_value(query, "after")
@@ -444,7 +470,9 @@ fn poll_channel(sh: &Arc<Shared>, id: &str, total: std::time::Duration) -> Vec<V
 
 /// The commands that `call::run` leaves to the desktop shell (`SHELL_ONLY` of
 /// `crates/app/src/call.rs`), plus the one command of the drag plugin. Each has an answer.
-const SHELL_COMMANDS: [&str; 26] = [
+const SHELL_COMMANDS: [&str; 28] = [
+    "window_call_next",
+    "window_call_result",
     "about_info",
     "about_third_party",
     "open_link",
@@ -473,6 +501,189 @@ const SHELL_COMMANDS: [&str; 26] = [
     "plugin:drag|start_drag",
 ];
 
+/// F3: the host owns the track set of the document. The page cannot add, remove, rename or
+/// reorder tracks: the plugin's list of tracks follows the ARA sources.
+const REFUSED_TRACK_SET: [&str; 6] = [
+    "tracks_add",
+    "tracks_remove",
+    "tracks_restore",
+    "tracks_reorder",
+    "track_rename",
+    "tracks_scan",
+];
+
+/// F5: the host owns the project files and the document: no open, new, close, import, save
+/// as, rename, consolidate or relink.
+const REFUSED_PROJECT_FILES: [&str; 10] = [
+    "project_open",
+    "project_new",
+    "project_close",
+    "project_import",
+    "project_save_as",
+    "project_rename",
+    "project_consolidate",
+    "project_relink",
+    "relink_search",
+    "legacy_list",
+];
+
+/// F5: not in a plugin: the agent skill of the desktop app, the network post of a feedback
+/// report, and the app's own audio transport and output devices (the host plays the audio).
+const REFUSED_NOT_HERE: [&str; 11] = [
+    "agent_skill_install",
+    "agent_skill_status",
+    "feedback_send",
+    "transport_play",
+    "transport_stop",
+    "transport_seek",
+    "transport_mix",
+    "transport_clicks",
+    "transport_master",
+    "transport_status",
+    "outputs_list",
+];
+
+/// More commands that are not in a plugin (kept apart for the array length).
+const REFUSED_NOT_HERE_2: [&str; 1] = ["output_select"];
+
+/// F5: the commands the page may run on the service of the document. Every one of them writes
+/// only below the cache folder of the plugin (the document and the project folder of the
+/// document, its `Exports/` and `Analysis/` folders, the home of the document's service), or
+/// reads. The commands that name a folder or a file to write (`dest`, `path`) are refused
+/// when they carry one: see [`writes_outside`].
+const ALLOWED: [&str; 77] = [
+    "app_info",
+    "track_set_role",
+    "track_set_mix",
+    "project_get",
+    "project_list",
+    "tracks_get",
+    "events_get",
+    "events_set",
+    "peaks_info",
+    "peaks_tile",
+    "samples_window",
+    "analyze_start",
+    "analyze_status",
+    "reanalyze_selection",
+    "export_midi",
+    "export_spikes",
+    "export_all",
+    "velocities_recompute",
+    "project_save",
+    "project_clean_check",
+    "track_set_note",
+    "track_set_follow",
+    "app_settings_get",
+    "app_settings_set",
+    "project_recent",
+    "project_recent_clear",
+    "peaks_build_start",
+    "peaks_build_status",
+    "export_existing",
+    "export_dest_set",
+    "export_markers_set",
+    "export_compensate_set",
+    "export_last_get",
+    "export_last_set",
+    "export_drag_prepare",
+    "export_drag_take",
+    "kit_presets_list",
+    "kit_preset_save",
+    "kit_preset_load",
+    "job_status",
+    "job_cancel",
+    "track_histograms",
+    "track_repick",
+    "track_velocity_set",
+    "track_params_set",
+    "events_edit",
+    "track_shift_set",
+    "track_learn_mark",
+    "track_learn_remove",
+    "track_learn_forget_at",
+    "track_learn_flip",
+    "track_learn_forget",
+    "track_learn_set",
+    "track_learn_scores",
+    "tempo_map_get",
+    "tempo_map_set",
+    "tempo_map_detect",
+    "tempo_map_refit_bar1",
+    "tempo_map_import_midi",
+    "markers_get",
+    "markers_set",
+    "row_heights_get",
+    "row_heights_set",
+    "track_confidence",
+    "training_status",
+    "training_hand_placed",
+    "track_layer_set",
+    "track_layer_get",
+    "track_layer_align",
+    "track_layer_wave",
+    "export_layer",
+    "sampler_calibration_midi",
+    "track_sampler_get",
+    "track_sampler_set",
+    "track_sampler_wave",
+    // routes of the app without a registry row (the detector plug-ins of #387)
+    "plugins_list",
+    "plugin_accept",
+];
+
+/// The class of a command name for the editor.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum Class {
+    Allowed,
+    RefusedTrackSet,
+    RefusedFiles,
+    RefusedNotHere,
+    Shell,
+    Unclassed,
+}
+
+fn class_of(cmd: &str) -> Class {
+    let mut found = Vec::new();
+    if ALLOWED.contains(&cmd) {
+        found.push(Class::Allowed);
+    }
+    if REFUSED_TRACK_SET.contains(&cmd) {
+        found.push(Class::RefusedTrackSet);
+    }
+    if REFUSED_PROJECT_FILES.contains(&cmd) {
+        found.push(Class::RefusedFiles);
+    }
+    if REFUSED_NOT_HERE.contains(&cmd) || REFUSED_NOT_HERE_2.contains(&cmd) {
+        found.push(Class::RefusedNotHere);
+    }
+    if SHELL_COMMANDS.contains(&cmd) {
+        found.push(Class::Shell);
+    }
+    match found.as_slice() {
+        [one] => *one,
+        _ => Class::Unclassed,
+    }
+}
+
+/// True when a command that writes files carries a folder or a file of the caller: the plugin
+/// writes below its cache folder only, and the page has no file dialog yet (it answers cancel).
+fn writes_outside(cmd: &str, args: &Value) -> bool {
+    matches!(
+        cmd,
+        "export_all"
+            | "export_layer"
+            | "export_existing"
+            | "export_dest_set"
+            | "export_drag_prepare"
+            | "export_midi"
+            | "export_spikes"
+            | "sampler_calibration_midi"
+    ) && ["dest", "path"]
+        .iter()
+        .any(|k| args.get(k).and_then(Value::as_str).is_some_and(|s| !s.is_empty()))
+}
+
 /// In a test run the calls that would reach the system (a browser, the Finder) are recorded.
 fn open_system(arg: &str, reveal: bool) -> Result<(), String> {
     if test_mode().is_some() {
@@ -483,7 +694,8 @@ fn open_system(arg: &str, reveal: bool) -> Result<(), String> {
     if reveal {
         c.arg("-R");
     }
-    c.arg(arg).spawn().map(|_| ()).map_err(|e| format!("open: {e}"))
+    // wait for the child: no zombie stays in the host process
+    c.arg(arg).status().map(|_| ()).map_err(|e| format!("open: {e}"))
 }
 
 /// The fixed addresses of the About dialog: the page passes an id, never an address.
@@ -524,6 +736,9 @@ fn shell_command(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Option<Answer> {
             Answer::json(200, &json!({"ok": true}))
         }
         "open_paths_take" => Answer::json(200, &json!({"projects": [], "others": []})),
+        // the agent relay of the desktop window: the plugin has none, the page's loop ends
+        "window_call_next" => Answer::json(200, &json!({"enabled": false, "call": null})),
+        "window_call_result" => Answer::err(403, "the plugin has no agent relay"),
         // the host owns the window: the plugin never ends the host process
         "quit_app" => {
             QUITS.fetch_add(1, Ordering::SeqCst);
@@ -603,13 +818,43 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
             Err(e) => return Answer::err(400, format!("the arguments are no JSON: {e}")),
         }
     };
-    if SHELL_COMMANDS.contains(&cmd) && fault() != "no-shell" {
-        if let Some(a) = shell_command(sh, cmd, &args) {
-            return a;
+    if fault() != "no-shell" {
+        match class_of(cmd) {
+            Class::Shell => {
+                if let Some(a) = shell_command(sh, cmd, &args) {
+                    return a;
+                }
+            }
+            Class::RefusedTrackSet if fault() != "allow-track-set" => {
+                return Answer::err(
+                    403,
+                    format!("the host owns the track set of this document: {cmd} is not available in the plugin"),
+                )
+            }
+            Class::RefusedFiles => {
+                return Answer::err(
+                    403,
+                    format!("the host owns the project files: {cmd} is not available in the plugin"),
+                )
+            }
+            Class::RefusedNotHere => return Answer::err(403, format!("{cmd} is not in the plugin")),
+            Class::Unclassed if drumspike_app::api::find(cmd).is_some() => {
+                return Answer::err(403, format!("{cmd} is not classed for the plugin"))
+            }
+            _ => {}
         }
+    }
+    if writes_outside(cmd, &args) {
+        return Answer::err(
+            403,
+            format!("{cmd} writes only below the cache folder of the plugin: it takes no folder or file of its own"),
+        );
     }
     if on_main_thread() {
         OFF_MAIN.fetch_add(1, Ordering::SeqCst);
+    }
+    if cmd == "analyze_start" {
+        note_thread(&START_THREADS);
     }
     let Some(svc) = sh.backend.page.service() else {
         return Answer::err(503, "the document of this editor is closed");
@@ -617,11 +862,11 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
     if scenario_panics(cmd) {
         panic!("test scenario: the command {cmd} panics");
     }
-    match drumspike_app::call::run(&svc, &sh.channels, cmd, &args) {
+    match drumspike_app::call::run(&svc, &sh.run_channels, cmd, &args) {
         None => Answer::err(404, format!("unknown command {cmd}")),
         Some(Err(e)) => Answer::error(&e),
         Some(Ok(reply)) => {
-            changed_after(sh, cmd, &reply);
+            changed_after(sh, &svc, cmd, &args, &reply);
             match reply {
                 Reply::Json(v) => Answer::json(200, &v),
                 Reply::Bytes(b) => Answer {
@@ -634,15 +879,24 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
     }
 }
 
-/// After a command that changes the project, or a job that ended, the plugin reads the events
-/// again (on its worker thread): the archive and the notes follow the page's edit.
-fn changed_after(sh: &Arc<Shared>, cmd: &str, reply: &Reply) {
+/// After a command that changes the project, or a job that ended: the events and notes of the
+/// document follow at once, on this thread, before the page gets its answer (F2); the worker
+/// saves the project later.
+fn changed_after(sh: &Arc<Shared>, svc: &drumspike_app::Service, cmd: &str, args: &Value, reply: &Reply) {
     let writes = drumspike_app::api::find(cmd).is_some_and(|c| c.writes_project());
     let ended = matches!(cmd, "analyze_status" | "job_status")
         && matches!(reply, Reply::Json(v) if v.get("state").and_then(Value::as_str) == Some("done"));
-    if (writes || ended) && fault() != "no-sync" {
-        (sh.backend.changed)();
+    if !(writes || ended) || fault() == "no-sync" {
+        return;
     }
+    if fault() != "sync-late" {
+        if let Some(sid) = args.get("sid").and_then(Value::as_str) {
+            if let Err(e) = (sh.backend.record)(svc, sid) {
+                session().log(json!({"event": "page_record_failed", "command": cmd, "error": e}).to_string());
+            }
+        }
+    }
+    (sh.backend.changed)();
 }
 
 // ---------------------------------------------------------------- the editor
@@ -710,32 +964,41 @@ impl Editor {
             // non-persistent: nothing of the page is written outside the cache folder.
             .with_incognito(true)
             .with_asynchronous_custom_protocol(SCHEME.into(), move |_id, request, responder| {
-                let shared = for_handler.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                match shared {
-                    Some(shared) => handle(&shared, request, responder),
-                    None => responder.respond(respond(503, "text/plain", b"the editor is closed".to_vec(), false)),
-                }
+                guard("scheme handler", (), || {
+                    let shared = for_handler.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    match shared {
+                        Some(shared) => handle(&shared, request, responder),
+                        None => responder.respond(respond(503, "text/plain", b"the editor is closed".to_vec(), false)),
+                    }
+                })
             })
             .with_initialization_script(init)
             .with_navigation_handler(move |url: String| {
-                main_check("navigation");
-                let ok = url.starts_with("dspage://") || url == "about:blank";
-                if !ok {
-                    session().log(json!({"event": "page_navigation_refused", "url": url}).to_string());
-                }
-                ok
+                guard("navigation", false, || {
+                    main_check("navigation");
+                    let ok = url.starts_with("dspage://") || url == "about:blank";
+                    if !ok {
+                        session().log(json!({"event": "page_navigation_refused", "url": url}).to_string());
+                    }
+                    ok
+                })
             })
             .with_new_window_req_handler(|url: String, _features| {
-                session().log(json!({"event": "page_new_window_refused", "url": url}).to_string());
+                guard("new window", false, || {
+                    session().log(json!({"event": "page_new_window_refused", "url": url}).to_string());
+                    false
+                });
                 wry::NewWindowResponse::Deny
             });
         if mode.is_some() {
             builder = builder.with_ipc_handler(move |request: Request<String>| {
-                main_check("ipc");
-                let shared = for_ipc.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                if let Some(shared) = shared {
-                    report(&shared, request.into_body());
-                }
+                guard("ipc", (), || {
+                    main_check("ipc");
+                    let shared = for_ipc.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    if let Some(shared) = shared {
+                        report(&shared, request.into_body());
+                    }
+                })
             });
         }
         let webview = builder
@@ -767,9 +1030,19 @@ impl Editor {
                 "main_thread": on_main_thread()})
             .to_string(),
         );
+        if on_main_thread() {
+            *MAIN_THREAD.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{:?}", std::thread::current().id()));
+        }
+        let queue = Arc::new(Channels::default());
+        let sink_to = Arc::clone(&queue);
+        let run_channels = Arc::new(Channels::with_sink(move |id: &str, m: Value| {
+            note_thread(&PROGRESS_THREADS);
+            sink_to.push(id, m);
+        }));
         let shared = Arc::new(Shared {
             backend,
-            channels: Arc::new(Channels::default()),
+            channels: queue,
+            run_channels,
             closed: AtomicBool::new(false),
             inflight: AtomicUsize::new(0),
             page_dir: page.map(|(d, _)| d),
@@ -824,7 +1097,10 @@ impl Editor {
             json!({"event": "editor_close", "editor": shared.n, "main_thread": on_main_thread(),
                 "commands": COMMANDS.load(Ordering::SeqCst), "off_main": OFF_MAIN.load(Ordering::SeqCst),
                 "main_checks": MAIN_CHECKS.load(Ordering::SeqCst), "panics": PANICS.load(Ordering::SeqCst),
-                "peak_inflight": PEAK_INFLIGHT.load(Ordering::SeqCst)})
+                "peak_inflight": PEAK_INFLIGHT.load(Ordering::SeqCst),
+                "main_thread_id": MAIN_THREAD.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+                "progress_threads": PROGRESS_THREADS.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+                "start_threads": START_THREADS.lock().unwrap_or_else(|e| e.into_inner()).clone()})
             .to_string(),
         );
     }
@@ -937,13 +1213,28 @@ fn backend_of(plugin: &Plugin) -> Backend {
         None => Backend {
             page: crate::service::unbound_page(&session().cache),
             changed: Arc::new(|| {}),
+            record: Arc::new(|_, _| Ok(false)),
             doc_id: "unbound".to_string(),
         },
     }
 }
 
+/// F7: a gui entry that touches the web view runs on the host's main thread only; anywhere else
+/// it does nothing and answers false (the counter notes it, the check fails on it).
+fn main_only(what: &'static str) -> bool {
+    if on_main_thread() {
+        return true;
+    }
+    OFF_MAIN.fetch_add(1, Ordering::SeqCst);
+    eprintln!("drumspike-ara: {what} was called off the main thread and refused");
+    false
+}
+
 unsafe extern "C" fn g_set_parent(p: *const clap_plugin, window: *const clap_window) -> bool {
     guard("gui.set_parent", false, move || {
+        if !main_only("gui.set_parent") {
+            return false;
+        }
         let Some(plugin) = plugin_of(p) else { return false };
         if window.is_null() {
             return false;
@@ -953,14 +1244,17 @@ unsafe extern "C" fn g_set_parent(p: *const clap_plugin, window: *const clap_win
             return false;
         }
         let nsview = w.specific.cocoa;
-        let mut slot = plugin.editor.borrow_mut();
-        let made = match slot.as_ref() {
+        // the cell is not borrowed while the web view is made or moved
+        let existing = plugin.editor.borrow_mut().take();
+        let made = match existing {
             Some(ed) => {
                 ed.detach();
-                ed.attach(nsview, backend_of(plugin))
+                let r = ed.attach(nsview, backend_of(plugin));
+                *plugin.editor.borrow_mut() = Some(ed);
+                r
             }
             None => Editor::build(nsview, backend_of(plugin)).map(|ed| {
-                *slot = Some(ed);
+                *plugin.editor.borrow_mut() = Some(ed);
             }),
         };
         match made {
@@ -977,6 +1271,9 @@ unsafe extern "C" fn g_set_parent(p: *const clap_plugin, window: *const clap_win
 
 unsafe extern "C" fn g_destroy(p: *const clap_plugin) {
     guard("gui.destroy", (), move || {
+        if !main_only("gui.destroy") {
+            return;
+        }
         if let Some(plugin) = plugin_of(p) {
             // the web view stays with the plugin instance (see `Editor`); it leaves the host's view
             if let Some(ed) = plugin.editor.borrow().as_ref() {
@@ -989,6 +1286,9 @@ unsafe extern "C" fn g_destroy(p: *const clap_plugin) {
 
 unsafe extern "C" fn g_show(p: *const clap_plugin) -> bool {
     guard("gui.show", false, move || {
+        if !main_only("gui.show") {
+            return false;
+        }
         let Some(plugin) = plugin_of(p) else { return false };
         let ed = plugin.editor.borrow();
         match ed.as_ref() {
@@ -1038,6 +1338,9 @@ unsafe extern "C" fn g_adjust_size(_p: *const clap_plugin, w: *mut u32, h: *mut 
 
 unsafe extern "C" fn g_set_size(p: *const clap_plugin, w: u32, h: u32) -> bool {
     guard("gui.set_size", false, move || {
+        if !main_only("gui.set_size") {
+            return false;
+        }
         let Some(plugin) = plugin_of(p) else { return false };
         plugin.gui_size.set((w.max(320), h.max(240)));
         if let Some(ed) = plugin.editor.borrow().as_ref() {
@@ -1085,6 +1388,37 @@ mod tests {
         }
         assert!(link_address("website").is_some());
         assert!(link_address("nope").is_none());
+    }
+
+    /// F5: every command of the app (its registry, taken from the app crate) is in exactly one
+    /// class of the editor. A new command of the app fails this test until it is classed.
+    #[test]
+    fn every_command_of_the_app_is_in_exactly_one_class() {
+        let mut unclassed = Vec::new();
+        for c in drumspike_app::api::REGISTRY {
+            if class_of(c.name) == Class::Unclassed {
+                unclassed.push(c.name);
+            }
+        }
+        assert!(unclassed.is_empty(), "not classed for the editor: {unclassed:?}");
+        // no name of the lists is a name the app does not have (a list that kept a removed command)
+        for name in ALLOWED
+            .iter()
+            .chain(&REFUSED_TRACK_SET)
+            .chain(&REFUSED_PROJECT_FILES)
+            .chain(&REFUSED_NOT_HERE)
+            .chain(&REFUSED_NOT_HERE_2)
+            .chain(&SHELL_COMMANDS)
+        {
+            let known = drumspike_app::api::find(name).is_some()
+                || ["plugins_list", "plugin_accept", "plugin:drag|start_drag"].contains(name);
+            assert!(known, "{name} is not a command of the app");
+        }
+        assert_eq!(class_of("tracks_remove"), Class::RefusedTrackSet);
+        assert_eq!(class_of("events_edit"), Class::Allowed);
+        assert_eq!(class_of("app_ready"), Class::Shell);
+        assert!(writes_outside("export_all", &json!({"dest": "/tmp/x"})));
+        assert!(!writes_outside("export_all", &json!({"dest": null})));
     }
 
     #[test]

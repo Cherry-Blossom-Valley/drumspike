@@ -151,8 +151,8 @@ build host (Apple silicon, macOS 27, run from a shell). Values are of the last f
 
 | Gate line | Stage | Result |
 | --- | --- | --- |
-| 1 Window: `clap.gui`, web view child of the host view, 50 open/close cycles | `editor-ready`, `editor-ready-vst3`; fault `editor-fault-ready` | MET. Page ready 50 of 50 on the CLAP and 50 of 50 on the plugin inside the VST3. |
-| 2 Page from the bundle, no network, CLAP and VST3 | `editor-bundle`, `editor-net` (+ `-vst3`); faults `editor-fault-bundle`, `editor-fault-net` | MET. The page came from `<bundle>/Contents/Resources/page` (CLAP) and from `DrumSpikeAra.vst3/Contents/PlugIns/DrumSpikeAra.clap/Contents/Resources/page`, found by the path of `clap_entry.init` in both. 0 requests to another scheme or host, 0 CSP violations in 100 page loads. |
+| 1 Window: `clap.gui`, web view child of the host view, 50 open/close cycles | `editor-ready`, `editor-ready-vst3`; fault `editor-fault-ready` | MET. Page ready 50 of 50 on the CLAP and 50 of 50 on the CLAP inside the VST3 bundle (loaded directly; the wrapper view is `editor-vst3-view`). |
+| 2 Page from the bundle, no network, CLAP and the CLAP inside the VST3 bundle (not through the wrapper's view: see `editor-vst3-view` below) | `editor-bundle`, `editor-net` (+ `-vst3`); faults `editor-fault-bundle`, `editor-fault-net` | MET. The page came from `<bundle>/Contents/Resources/page` (CLAP) and from `DrumSpikeAra.vst3/Contents/PlugIns/DrumSpikeAra.clap/Contents/Resources/page`, found by the path of `clap_entry.init` in both. 0 requests to another scheme or host, 0 CSP violations in 100 page loads. |
 | 3 Shell, `invoke` on the service, binary answers, error shape, channels | `editor-tauri`, `editor-binary`, `editor-error`, `editor-threads` (channel messages) | MET. Keys `core, dialog, event`; 4 binary commands gave an ArrayBuffer (6756, 8008, 8008, 8008 bytes); error `{code: 404, message}`; 17 channel messages of a page-started analysis. The layer wave needs a track without playback regions (a segmented track has no layer: the app answers 400), so that run uses `--no-regions`. |
 | 4 Real data | `editor-data` (+ `-vst3`); fault `editor-fault-data` | MET. 4 tracks, 19 events; the events the page reads are byte for byte the reference (733 bytes) in all 100 page loads. |
 | 5 An edit lasts | `editor-edit`, `editor-edit-notes` (+ `-vst3`); fault `editor-edit-fault` | MET. Hit 1 of the kick moved 0.75002 to 0.76002 s through `B.eventsEdit`; the archive restored in a new process has that list and the other 3 tracks unchanged; the ARA notes carry sample 36481 and no longer 36001. |
@@ -176,6 +176,103 @@ whenever the window is occluded and measures the frame time (limit 33 ms, 8 s, s
 and zoom 2 times a second on the lanes) whenever it is visible. It has to run once on a host
 with an unlocked screen. Its fault run (`slow-frames`) fails here too, but for the same reason,
 so on this host that fault run proves nothing about the limit.
+
+## Round 2 (review of the coordinator)
+
+### The rules between the page and the plugin
+
+- **A round keeps the hand edits (F1).** A round of the plugin (a new source, a changed region)
+  analyses all tracks together as before, but with the app's own "keep my edits"
+  (`Service::analyze_start_keep` with `keep_edited = true`): the hits the user added or moved in
+  the page stay in the new events and win within 20 ms over the detected ones. After each round
+  and after each restore the plugin sends the event `plugin-reload` into the event log of the
+  document; the shell script of the page answers it with the page's own load path
+  (`flushEvents`, `initSessions`, `loadProject`), so the page holds the new track list and
+  events without a reload by hand. A burst of events is one reload. The event is not sent after
+  a command of the page itself (the page already holds that state).
+- **The editor before the first round (F8).** An editor that opens before any analysis shows the
+  page's own empty state ("no project is open: the host opens the project": the service has no
+  project yet). When the first round ends the `plugin-reload` event makes the page load the
+  project. Stage `editor-open-first`.
+- **An edit reaches the archive before the page gets its answer (F2).** After a command that
+  changes the project, the request thread reads the events of every track of the document and sets
+  the document's events and the notes of the sources, using only the locks of the document's own
+  state (never the `DocService` lock that the worker holds for a whole round). The worker saves
+  the project later. A store of the host that comes at once writes the edit; an edit just before
+  the destroy of the controller is not dropped.
+- **The host owns the track set and the project files (F3, F5).** The editor answers 403 for the
+  commands that add, remove, restore, reorder, rename or scan tracks, and for open, new, close,
+  import, save as, rename, consolidate, relink and legacy-import of a project. It answers 403 for
+  what is not in a plugin: the agent skill, the feedback post (a network request from the plugin
+  process), the app's own audio transport and output devices (the host plays the audio). The page
+  side (hiding these controls) is ticket #539. `window_call_next` answers `{enabled: false}`
+  (the page's agent relay then ends) and `window_call_result` 403. The sync of the worker reports
+  an error of `events_get` instead of keeping ghost events.
+- **Every command of the app has one class (F5).** `ALLOWED`, three refused lists and the shell
+  list in `editor.rs`; a unit test walks `drumspike_app::api::REGISTRY` and fails for a command in
+  no class or in two. A new command of the app fails that test until it is classed. (The two
+  routes without a registry row, `plugins_list` and `plugin_accept`, are in `ALLOWED` by name;
+  the public surface has no list of them.)
+- **Writes outside the cache folder.** Every allowed command writes below the cache folder (the
+  document, the project folder with `Exports/`, `Analysis/` and the peak cache, the home of the
+  document's service with settings, recent list and kit presets) or reads. `export_all`,
+  `export_layer`, `export_existing`, `export_dest_set`, `export_drag_prepare`, `export_midi`,
+  `export_spikes` and `sampler_calibration_midi` answer 403 when they carry a `dest` or `path` of
+  their own: the page's file dialogs answer cancel, so it has none. `reveal_path`, `open_link` and
+  `open_url` start `/usr/bin/open` (the plugin waits for the child, no zombie) and write nothing.
+  The file drag answers 501.
+- **A round and a job of the page (F4).** The app allows one job per project. A round of the
+  plugin waits (polling every 20 ms, at most 600 s, cancel-aware) while a job of the page is
+  queued or running, then starts. A `analyze_start` of the page while a round runs gets the app's
+  409 ("an analysis is already queued or running for this project: cancel it or wait for it").
+  Stage `editor-race`: a round (a new source) comes while the page's own analysis of a long source
+  runs; no round fails.
+- **Bursts.** More than 96 requests at once get 503 "the editor is busy" at once; the page shows
+  the error of that call. The page starts few requests at a time (peak seen in the checks: 3 to
+  about 12), so this is a safety bound.
+
+### Thread enforcement (F7)
+
+`set_parent`, `destroy`, `show` and `set_size` do nothing and answer false (or return) when they
+are not on the host's main thread; the counter `off_main` notes it. Every closure that wry calls
+(scheme handler, navigation, new window, ipc) runs inside the panic guard. `set_parent` does not
+hold the borrow of the editor slot while the web view is made or moved.
+
+### What the stages prove now
+
+| Finding | Stage and fault run |
+| --- | --- |
+| F1 round keeps hand edits, page follows | `editor-keep-edits`, `editor-follow` (+ `-vst3`); faults `editor-keep-edits-fault` (`drop-edits`), `editor-follow-fault` (`no-reload`) |
+| F2 edit reaches the archive at once | `editor-edit` (the archive is stored at once, no wait for the worker); fault `editor-edit-fault-sync-late` |
+| F3 track set owned by the host | `editor-refuse` (14 commands answer 403, tracks unchanged, a later round runs); fault `editor-refuse-fault` |
+| F4 round and page job | `editor-race`; fault `editor-race-fault` (`no-page-wait`) |
+| F5 command classes | unit test `every_command_of_the_app_is_in_exactly_one_class` (in `crate-test`) |
+| F6 notes evidence | `editor-edit-notes` always present, rate from the host's rows; fault `editor-edit-fault-no-notes` |
+| F8 editor before the first round | `editor-open-first`; fault `editor-open-first-fault` |
+| F9 page copy equals `static/` | `editor-page-copy` (81 files, hashes); fault `editor-page-copy-fault` |
+| F10 the wrapper's view | `editor-vst3-view` (pluginval opens the editor of the wrapped VST3); fault `editor-vst3-view-fault` |
+| F11 event reaches the page; analysis thread | `editor-events`; `editor-threads-analysis` (faults `editor-edit-fault-no-events`, `editor-threads-analysis-fault`) |
+
+### The VST3 stages, exactly (F10)
+
+The `-vst3` stages load the CLAP that sits inside the VST3 bundle directly with the test host
+(`DrumSpikeAra.vst3/Contents/PlugIns/DrumSpikeAra.clap`). They do NOT go through the wrapper's
+view. The stage `editor-vst3-view` does: pluginval at strictness 5 opens the editor of the
+wrapped VST3 through the wrapper's `IPlugView` (several times), and the plugin's report shows
+the page found in the VST3 bundle and ready. There the plugin has no ARA document, so the editor
+uses a service of its own with no project. A run in a real DAW with an ARA document is the hand
+check that remains.
+
+### Frame time: how to run it alone
+
+`plugins/ara/check.sh check` runs every stage. The two measure stages alone, on a host with an
+unlocked screen (after `check.sh build` and the stages `fixture` and `reference` have made
+`out/`):
+
+    cd plugins/ara && /usr/bin/python3 -I check.py fixture reference editor-gui
+
+`editor-gui` runs keys, focus, resize and measure on the CLAP and on the CLAP in the VST3. The
+stage `editor-measure` fails with the reason while the screen is locked.
 
 ## Findings
 

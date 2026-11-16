@@ -7,7 +7,14 @@
 //!
 //! ```text
 //! ara-host <bundle> editor --files <wav>... --editor-mode ready|keys|focus|resize|measure|edit|shell|analyse|net
+//!                          |edit-round|open-first|refuse|bigpost
 //!                          [--cycles N] [--archive <file>] [--arg <text>] [--no-ara]
+//!                          [--late-files <wav>...] [--no-sync-wait]
+//! `--late-files` are added to the document (and analysed) while the editor is open: in
+//! `open-first` when the page has booted (the files then are `--late-files` only), in
+//! `edit-round` and `refuse` after the page's report, in `analyse-race` when the page's own
+//! analysis has started. `--no-sync-wait`: the archive is stored at once after the page's
+//! edit, without waiting for the plugin's worker.
 //! ```
 //! Keys and clicks are real `NSEvent`s through `[NSApp sendEvent:]` (the S2 finding: the
 //! window server path needs the accessibility trust).
@@ -158,6 +165,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     let cycles: usize = args_value(rest, "--cycles").and_then(|v| v.parse().ok()).unwrap_or(1);
     let archive = args_value(rest, "--archive");
     let no_ara = arg_flag(rest, "--no-ara");
+    let late_files = args_list(rest, "--late-files");
+    let no_sync_wait = arg_flag(rest, "--no-sync-wait");
     std::env::set_var("DS_ARA_EDITOR_MODE", &mode);
     if let Some(a) = args_value(rest, "--arg") {
         std::env::set_var("DS_ARA_EDITOR_ARG", a);
@@ -213,7 +222,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 return 2;
             }
         };
-        if !files.is_empty() {
+        if !files.is_empty() && mode != "open-first" {
             if let Err(e) = doc.add_and_analyse(files, "editor") {
                 eprintln!("{e}");
                 return 2;
@@ -254,7 +263,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         let audio_stop = std::sync::Arc::new(AtomicBool::new(false));
         let audio_stats = std::sync::Arc::new(Mutex::new((0usize, 0usize, 0u128, 0u128)));
         let mut audio_thread = None;
-        if mode == "analyse" {
+        if mode == "analyse" || mode == "analyse-race" {
             ((*plugin).activate.expect("activate"))(plugin, SAMPLE_RATE, 64, 4096);
             ((*plugin).start_processing.expect("start_processing"))(plugin);
             let p = plugin as usize;
@@ -347,14 +356,20 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             }
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
-                "keys" | "focus" | "resize" | "measure" | "edit" | "shell" | "analyse" | "bigpost" => {
+                "keys" | "focus" | "resize" | "measure" | "edit" | "shell" | "analyse" | "bigpost" | "refuse" => {
                     Some(mode.as_str())
                 }
+                "analyse-race" => Some("analyse"),
+                "edit-round" | "open-first" => Some("follow"),
                 "net" => Some("now"),
                 _ => None,
             };
             let reports_before = want_kind.map_or(0, |k| count_rows("page_report", Some(k)));
             let boots_before = count_rows("page_report", Some("boot"));
+            let edits_before = count_rows("page_report", Some("edit"));
+            let refuse_before = count_rows("page_report", Some("refuse"));
+            let started_before = count_rows("page_report", Some("analyse-started"));
+            let mut late_done = false;
             if round == 1 {
                 // WebKit draws a page only while its window is not occluded: a locked screen
                 // hides every window, and the page is then suspended
@@ -413,6 +428,23 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         resized = 2;
                     }
                 }
+                if !late_done && !late_files.is_empty() {
+                    let trigger = match mode.as_str() {
+                        "open-first" => count_rows("page_report", Some("boot")) > boots_before,
+                        "edit-round" => count_rows("page_report", Some("edit")) > edits_before,
+                        "refuse" => count_rows("page_report", Some("refuse")) > refuse_before,
+                        "analyse-race" => count_rows("page_report", Some("analyse-started")) > started_before,
+                        _ => false,
+                    };
+                    if trigger {
+                        late_done = true;
+                        // the editor stays alive while the host works (its page waits)
+                        if let Err(e) = doc.add_and_analyse(&late_files, "late") {
+                            failed = Some(e);
+                            break;
+                        }
+                    }
+                }
                 pump(&app);
                 let ready_now = count_rows("page_ready", None) > ready_before;
                 let done = match want_kind {
@@ -434,7 +466,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 }
                 rss_open = rss_mb();
             }
-            if got && mode == "edit" {
+            if got && mode == "edit" && !no_sync_wait {
                 // the plugin reads the events again on its worker; wait for its row
                 let t = Instant::now();
                 while t.elapsed() < Duration::from_secs(15) && count_rows("page_sync", None) == 0 {

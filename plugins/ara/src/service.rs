@@ -675,7 +675,25 @@ impl DocService {
             if self.canceller.cancelled() {
                 return Err("the analysis was cancelled before it started".into());
             }
-            svc.analyze_start(&sid, Some(analysed.clone()), None, None)
+            // F4: a job of the page may run (the page's Re-analyze): this round waits for it
+            // instead of failing with the 409 of the app (the fault run takes the wait away)
+            if switch("DS_ARA_ROUND_FAULT").as_deref() != Some("no-page-wait") {
+                let began = std::time::Instant::now();
+                while matches!(svc.analyze_status(&sid)["state"].as_str(), Some("queued" | "running")) {
+                    if self.canceller.cancelled() {
+                        return Err("the analysis was cancelled before it started".into());
+                    }
+                    if began.elapsed() > std::time::Duration::from_secs(600) {
+                        return Err("a job of the page did not end in 600 s".into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+            // F1: a round keeps the hits the user placed in the page (the app's own
+            // "keep my edits": they stay in the new events and win within 20 ms over the
+            // detected ones). `DS_ARA_EDITOR_FAULT=drop-edits` brings back the plain analysis.
+            let keep = switch("DS_ARA_EDITOR_FAULT").as_deref() != Some("drop-edits");
+            svc.analyze_start_keep(&sid, Some(analysed.clone()), None, None, None, keep, false)
                 .map_err(err)?;
             let mut idle_since: Option<std::time::Instant> = None;
             let st = loop {
@@ -777,16 +795,12 @@ impl DocService {
         };
         let mut all = Map::new();
         for (name, _) in &self.tracks {
-            match svc.events_get(&sid, name) {
-                Ok(ev) => {
-                    all.insert(name.clone(), ev["events"].clone());
-                }
-                Err(_) => {
-                    if let Some(old) = self.events.get(name) {
-                        all.insert(name.clone(), old.clone());
-                    }
-                }
-            }
+            // an error is not swallowed: a track the project no longer has is reported (the host
+            // owns the track set, so this means the project changed behind the plugin's back)
+            let ev = svc
+                .events_get(&sid, name)
+                .map_err(|e| format!("events_get {name}: {e}"))?;
+            all.insert(name.clone(), ev["events"].clone());
         }
         if svc.project_get(&sid).is_ok_and(|p| p["dirty"] == true) {
             svc.project_save(&sid).map_err(err)?;
@@ -807,15 +821,7 @@ impl DocService {
         for (name, seq) in &self.tracks {
             let Some(s) = self.snaps.get(seq) else { continue };
             let list = events.get(name).and_then(Value::as_array).cloned().unwrap_or_default();
-            let mut per_source: Vec<[f64; 2]> = Vec::with_capacity(list.len());
-            for ev in list.iter().filter(|e| !drumspike_app::policy::is_out(e)) {
-                let t = ev.get("t").and_then(Value::as_f64).unwrap_or(f64::NAN);
-                let v = ev.get("v").and_then(Value::as_i64).unwrap_or(100);
-                if let Some(sample) = source_sample(t, &s.regions, s.sample_rate) {
-                    per_source.push([sample as f64, (v.clamp(0, 127) as f64) / 127.0]);
-                }
-            }
-            notes.insert(*seq, per_source);
+            notes.insert(*seq, notes_for(&list, &s.regions, s.sample_rate));
         }
         notes
     }
@@ -990,6 +996,21 @@ pub fn stem_of(name: &str) -> String {
     } else {
         safe
     }
+}
+
+/// The notes of one source from the events of its track: the hits that are not out of the
+/// output (the app's own `policy::is_out`), mapped back into the source.
+#[must_use]
+pub fn notes_for(list: &[Value], regions: &[RegionRec], rate: f64) -> Vec<[f64; 2]> {
+    let mut out: Vec<[f64; 2]> = Vec::with_capacity(list.len());
+    for ev in list.iter().filter(|e| !drumspike_app::policy::is_out(e)) {
+        let t = ev.get("t").and_then(Value::as_f64).unwrap_or(f64::NAN);
+        let v = ev.get("v").and_then(Value::as_i64).unwrap_or(100);
+        if let Some(sample) = source_sample(t, regions, rate) {
+            out.push([sample as f64, (v.clamp(0, 127) as f64) / 127.0]);
+        }
+    }
+    out
 }
 
 /// The source sample of a timeline event `t`. The track's timeline is the source's own

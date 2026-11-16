@@ -55,7 +55,6 @@
     }
     return (r.headers.get("content-type") || "").indexOf("application/json") === 0 ? r.json() : r.arrayBuffer();
   }
-  var listeners = {};
   var polling = false;
   async function pollEvents() {
     polling = true;
@@ -71,6 +70,25 @@
       }
     }
   }
+  // The plugin tells the page when it changed the data behind the page's back (a round of the
+  // plugin ended, an archive was restored): the page loads its project again. The page's own
+  // pending edits go first. A burst of events is one reload.
+  var reloading = false, again = false;
+  async function reloadProject() {
+    if (reloading) { again = true; return; }
+    reloading = true;
+    try {
+      do {
+        again = false;
+        if (typeof flushEvents === "function") await flushEvents();
+        if (typeof initSessions === "function") await initSessions();
+        if (typeof loadProject === "function") await loadProject();
+      } while (again);
+    } catch (e) { /* the page shows its own error */ }
+    reloading = false;
+  }
+  var listeners = {};
+  listeners["plugin-reload"] = [function () { reloadProject(); }];
   window.__TAURI__ = {
     core: { invoke: invoke, Channel: Channel },
     dialog: {
@@ -85,6 +103,7 @@
       }
     }
   };
+  pollEvents();   // the plugin's own listener starts at once
   try { window.localStorage.setItem("dsg_probe", "1"); window.localStorage.removeItem("dsg_probe"); }
   catch (e) {
     var mem = {};

@@ -53,6 +53,7 @@ use clap_sys::plugin::{clap_plugin, clap_plugin_descriptor};
 use clap_sys::process::{clap_process, clap_process_status, CLAP_PROCESS_CONTINUE};
 use clap_sys::version::CLAP_VERSION;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -350,6 +351,79 @@ impl DocShared {
     /// Where the reader writes the WAV of a source of this document.
     fn wav_path(&self, seq: usize, name: &str) -> PathBuf {
         service::wav_of(&self.cache, &self.id(), seq, name)
+    }
+
+    /// The page changed the project (F2): before the request thread answers, the events of every
+    /// track and the notes of the sources are in the document, so a host store that comes at once
+    /// writes them. Runs on the request thread: it takes no `DocService` lock (the worker may hold
+    /// it for a whole round), only the locks of the document's own state. The project is saved
+    /// later by the worker. `DS_ARA_EDITOR_FAULT=sync-late` takes this away (the old way: only
+    /// the worker syncs, behind its current work).
+    fn record_page_edit(&self, svc: &drumspike_app::Service, sid: &str) -> Result<bool, String> {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let mut all = serde_json::Map::new();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
+                continue;
+            };
+            let ev = svc
+                .events_get(sid, &track)
+                .map_err(|e| format!("events_get {track}: {e}"))?;
+            all.insert(track, ev["events"].clone());
+        }
+        let changed = {
+            let mut cur = self.events.lock().unwrap_or_else(|e| e.into_inner());
+            if *cur == all {
+                false
+            } else {
+                *cur = all.clone();
+                true
+            }
+        };
+        if !changed {
+            return Ok(false);
+        }
+        if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() != Ok("no-notes") {
+            for s in &members {
+                let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
+                    continue;
+                };
+                let list = all.get(&track).and_then(Value::as_array).cloned().unwrap_or_default();
+                let regions: Vec<service::RegionRec> = s
+                    .regions
+                    .lock()
+                    .map(|r| r.iter().map(|slot| slot.rec).collect())
+                    .unwrap_or_default();
+                let notes = service::notes_for(&list, &regions, s.props().sample_rate);
+                let differs = s.notes.lock().map(|old| *old != notes).unwrap_or(false);
+                if differs {
+                    if let Ok(mut old) = s.notes.lock() {
+                        *old = notes;
+                    }
+                    if s.has_events.load(Ordering::SeqCst) && !s.removed.load(Ordering::SeqCst) {
+                        if let Ok(mut p) = self.pending.lock() {
+                            if !p.iter().any(|x| Arc::ptr_eq(x, s)) {
+                                p.push(s.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Tell the page that the plugin changed its data (a round ended, a restore): the shell
+    /// script of the page reloads the project (F1, F8).
+    fn announce_reload(&self) {
+        if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-reload") {
+            return; // the fault run: the page is not told
+        }
+        self.page.log.push("plugin-reload", json!({"doc": self.id()}));
     }
 
     fn lock_svc(&self) -> std::sync::MutexGuard<'_, service::DocService> {
@@ -996,14 +1070,17 @@ impl Session {
             *sr = Some(row);
         }
         self.write_out();
+        // the page reloads its project: it holds the tracks and events of this round (F1, F8)
+        doc.announce_reload();
     }
 
     /// The page changed the project (an edit): the events of the tracks are read again, the
     /// project is saved, the document's events (the archive stores them) and the notes follow,
     /// and the host is told about the sources whose notes changed.
     fn page_sync(&'static self, doc: &Arc<DocShared>) {
-        if doc.closing.load(Ordering::SeqCst) {
-            return;
+        if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() == Ok("sync-late") {
+            // the fault run: the worker is busy for a while before it syncs
+            std::thread::sleep(std::time::Duration::from_secs(12));
         }
         let worker_doc = doc.clone();
         let outcome = guard("page sync", Err("the page sync panicked".to_string()), move || {
@@ -1017,6 +1094,11 @@ impl Session {
                     .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
                     .unwrap_or_default();
                 let mut changed: Vec<String> = Vec::new();
+                let notes = if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-notes") {
+                    HashMap::new() // the fault run: the notes do not follow
+                } else {
+                    notes
+                };
                 for (seq, n) in notes {
                     let Some(s) = members.iter().find(|s| s.seq == seq) else {
                         continue;
@@ -1123,6 +1205,7 @@ impl Session {
             Err(e) => self.log(format!("{{\"event\":\"restore_failed\",\"error\":{e:?}}}")),
         }
         self.write_out();
+        doc.announce_reload();
     }
 
     /// The document controller ends: the project is saved and closed, the service dropped.
@@ -1163,11 +1246,13 @@ impl Session {
 /// What the editor of a plugin instance needs from its document.
 fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let d = doc.clone();
+    let r = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
             let _ = send(session(), Msg::PageSync(d.clone()));
         }),
+        record: Arc::new(move |svc, sid| r.record_page_edit(svc, sid)),
         doc_id: doc.id(),
     }
 }
