@@ -43,6 +43,13 @@ fn header(channels: u16, sample_rate: u32, n_frames: usize) -> Vec<u8> {
     out
 }
 
+/// The size of a finished file of `n_frames` frames: the 44 bytes of the header and the
+/// samples. The plugin checks a cached file against it before the service reads it.
+#[must_use]
+pub fn file_len(n_frames: usize, channels: u16) -> u64 {
+    44 + (n_frames as u64) * 4 * u64::from(channels)
+}
+
 impl WavWriter {
     /// Open the temporary file and write the header for `n_frames` frames.
     ///
@@ -111,6 +118,8 @@ mod tests {
         let (mono, info) = drumspike_core::read_wav_mono(&dest, drumspike_core::MixMode::Ffmpeg).unwrap();
         assert_eq!(info.sample_rate, 48_000);
         assert_eq!(mono, vec![0.5, -0.25, 1e-3, 0.0]);
+        // the size the plugin expects of a finished file is the size on disk
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), file_len(4, 1));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

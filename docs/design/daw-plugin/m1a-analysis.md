@@ -1,5 +1,7 @@
 # M1a: the plugin analyses the host's tracks with the Drum Spike service (ARA, no editor)
 
+> Since M1b1 (#537) the cache layout is `<cache>/documents/<id>/{audio,project,service}` and one service lives for the life of each document controller: see `m1b1-session.md`. The text below describes M1a.
+
 Ticket #525, umbrella #503 (the DAW plugin program). First part of M1 (#510):
 `plugins/ara/`, one CLAP plugin in Rust with ARA 2, wrapped as one self-contained VST3
 (the CLAP inside the bundle). No editor: the plugin analyses, gives the hits back as ARA

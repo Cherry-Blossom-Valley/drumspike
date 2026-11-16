@@ -1,10 +1,13 @@
-# Drum Spike ARA plugin (M1a, #525)
+# Drum Spike ARA plugin (M1a, #525; M1b1, #537)
 
 The Drum Spike plugin for DAWs, without an editor: one CLAP plugin in Rust with ARA 2,
 wrapped as one self-contained VST3 (the CLAP inside the bundle). The plugin takes the
 audio sources and playback regions of the host, analyses them with the Drum Spike service
 (`drumspike-app`, the same detection as the desktop app), gives the hits back to the host
 as ARA notes, and keeps its state in the ARA archive of the session.
+
+Since M1b1 the plugin holds one Drum Spike service and one project for each ARA document,
+for the life of the document controller (see "The session" below).
 
 The crate is outside the Cargo workspace members (the workspace builds without the ARA
 SDK); it uses `drumspike-app` as a path dependency. The ARA 2 C API is generated with
@@ -34,11 +37,105 @@ The plugin writes only below one cache folder:
 
     ~/Library/Caches/DrumSpike/ARA
 
-(`DS_ARA_CACHE` overrides it in the check.) Inside it: `audio/<n>-<stem>.wav`, the source
-audio the host delivers through the ARA audio access controller, one file per ARA audio
-source, and `session/`, the Drum Spike project the analysis runs on (one track per audio
-source; the host's playback regions are the segments of the track). The plugin never
-writes into an audio file of the session.
+(`DS_ARA_CACHE` overrides it in the check.) Inside it, one folder for each ARA document:
+
+    documents/<id>/audio/<n>-<stem>.wav   the source audio the host delivers through the
+                                          ARA audio access controller, one file per ARA
+                                          audio source of this document
+    documents/<id>/project/               the Drum Spike project of the document (one track
+                                          per audio source; the host's playback regions
+                                          are the segments of the track)
+    documents/<id>/service/               the home folder of the service (its recent list)
+
+The plugin never writes into an audio file of the session, and nothing below the user's
+home outside this folder.
+
+The id registry (which keeps two live documents apart) holds for ONE process. Two processes
+that open the same session file share `documents/<id>`: the plugin does not lock the folder.
+A host that runs the plugin in more than one process (a plugin sandbox, two instances of the
+DAW) must not open one session in both at the same time.
+
+The plugin never removes a document folder. It cannot know whether an archive of the host
+still names it. The size of a folder is about the size of the audio of its sources as 32-bit
+float: 4 bytes for each sample and channel (a mono source at 48 kHz: about 11.5 MB for each
+minute), plus the project (small). A user can delete a folder of a session that is gone; the
+next restore of an archive that names it then starts from the stored events and the host's
+audio again. An automatic clean-up rule is an open point (see the session note).
+
+## The session
+
+One document controller owns one `drumspike_app::Service` (made with the controller,
+dropped with it) and one project folder. The id of the folder is made by the plugin once per
+document and stored in the ARA archive, so a restore in a new process finds the same folder.
+
+- A request to analyse sources adds them as tracks to the open project. The rule: whenever
+  the set of analysed tracks of a document changes (a request adds sources, a source is
+  destroyed, the regions or the properties of a source change), the result of ALL tracks is
+  the result of one analysis of all those tracks together, as the service gives it (the
+  session steps cross bleed, ghost gate, tom bleed and flam run over the tracks of one job,
+  so a job over the new tracks alone would never let a track see the other microphones).
+  Every round takes a fresh snapshot of every source. Requests that arrive within 250 ms of
+  each other (at most 2 s in all) are one round; the report names the number of rounds. The
+  project is saved after every round. A request for a source that already has its result
+  changes nothing and starts no round.
+- A source is one track for its life (the key is its creation index). A round that fails or
+  is cancelled leaves the tracks; the sources of that round are complete for the host (it
+  must not wait for ever) and have no notes, and the next request for them runs a round
+  again. The service answers a result for every track: a track it could not analyse (a WAV
+  that cannot be read) is named in the `errors` of the `job` row and the round is marked
+  `partial`. If that track never had events, it has none and no notes. If it had events from
+  an earlier round, they STAY in the document, in the archive and as notes, and the `job` row
+  names the track in `stale`: they are the events of an earlier round, never the result of
+  this one. The archive stores the mark per track (an archive without it loads as not stale); a
+  restored stale track needs analysis, so the next round with audio analyses it again. Its source ends without a new result (complete for the host, retried at the next
+  request). A track whose audio is not here (a track restored from
+  the archive, or a cached file that is not the one the reader wrote: the plugin checks the
+  size against the samples it wrote) is named in `skipped`, keeps its stored events, and
+  marks the round `partial` too. A source whose audio does not come is waited for 30 s after
+  its request; then the round goes on without it, the `job` row names it in `late`, a
+  `source_late` row is written and the round is `partial`. When the audio of that source comes
+  later, a round takes it at once (the host need not ask again); a later request does the same. The `job` row lists the tracks that took part. A move of a region in playback time
+  alone (not its modification range) is no change and starts no round.
+- The notes of an earlier source can change in a later round (a bleed hit leaves the output).
+  The plugin then tells the host: in `notifyModelUpdates` it calls the host's
+  `notifyAudioSourceContentChanged` for exactly those sources, and serves the new notes.
+- `destroyAudioSource` removes the source from the controller's list at once; its track
+  leaves the project (and its cached audio the cache) on the worker thread, and the tracks
+  that are left are analysed together again.
+- A restore from the archive sets the events of the document and the notes of the sources
+  on the calling thread, then sends the project part to the worker: the worker may be busy
+  for minutes with another document, and an archive stored in that time must carry the
+  events. The worker writes the project document with the stored events and opens it. It
+  decodes no audio file. The archive comes from a file the user may have edited: the stored
+  document id is taken only in the form the plugin makes (16 lowercase hex digits), a track
+  name only without a path separator and without `..`; anything else is replaced (a fresh id,
+  a name from the source name) and the report says so. An id that another live document of
+  the process holds (a session file that was copied, or opened twice) is not taken either:
+  the second document keeps its own fresh id and its folder starts from the archive data. A restored track's source points at the cache path where the
+  reader would write the audio; that file does not exist until the host gives the audio
+  again. `project_open` and `events_get` work without it; a call that needs the audio gets
+  the app's own offline answer (a crate test), and a later round skips such a track and keeps
+  its stored events. An archive of M1a (version 1, no document id) restores into a fresh id;
+  the archive version stays 1 (the two new fields are optional).
+- Two document controllers in one process have their own service, folder, source numbering
+  and file names.
+- All of this runs on the plugin's worker thread. Nothing runs on the audio thread, and the
+  host's main thread only reads and writes the state it needs for the ARA calls.
+  `destroyDocumentController` stops the readers (each ends at the next block of 64k samples,
+  so the join lasts as long as one host read call), cancels a running analysis, and then waits
+  for the worker for the rest of 500 ms, counted from the start of the call. The plugin bounds
+  its own work to 500 ms; the join of a reader is as long as the host's read call inside it,
+  which the plugin cannot bound (a cancel that arrives before the analysis starts ends the
+  round without running it); the worker owns the document through shared ownership and finishes the save on its
+  own. When the host unloads the plugin library (`clap_entry.deinit`), the plugin cancels
+  every running round, tells the worker to end and waits for it at most 1.5 s; the cancel
+  takes effect between two tracks. A worker that is still inside one track after that stays
+  behind (a thread cannot be stopped from outside), and the report says `ended: false`. A
+  host that loads the library again in the same process gets a new worker.
+- The reader threads and the worker thread run inside the panic guard. A panic in a reader
+  ends that read as a failure and tells the worker; a panic in the worker ends the round it
+  happened in (its sources end without a result) and the worker starts again. No function
+  pointer of the host is unwrapped in the plugin code (the host tables are optional input).
 
 ## The check
 
@@ -48,7 +145,17 @@ against `service_tool analyze` on the CLAP and on the plugin inside the VST3, th
 fixture (two regions, one trimmed; the track is made from segments), the archive store /
 restore with the decode counter at 0 and the committed fixture `fixtures/archive-v1.ara`,
 the audio-thread check with its fault run, the file probe, pluginval (strictness 5) and
-clap-validator, the standalone rule, and the crate and workspace trios. The ticket's "in
+clap-validator, the standalone rule, and the crate and workspace trios. The M1b1 stages
+(`doc-*`, each with a fault run) drive the host modes `grow` (sources arrive in batches, one
+can be destroyed) and `docs` (two document controllers in one process): one service per
+document, all tracks analysed together (a fixture whose split result differs), one round for
+requests that arrive close together, the host told about changed notes, two documents apart, the document id in the archive, a destroyed
+source leaves the project, the destroy of a controller during an analysis returns in under
+1 s, and the home of the service (a run with `HOME` below `out/`
+lists the files below it outside the cache folder: 0). The stages of the review round
+(`doc-id-hostile`, `doc-same-id`, `doc-restore-busy`, `doc-retry`, `doc-rerequest`,
+`doc-errors`, `doc-regions-change`, `doc-close`, `doc-panic`, `switches`, `no-unwrap`) are in
+`docs/design/daw-plugin/m1b1-session.md`, each with its fault run. The ticket's "in
 the ARA test host" is two hosts: the plugin's own `ara-host` drives the stages above, and
 the `ARATestHost` of the ARA SDK examples - built from the S1 pattern with the S1 patch -
 runs its own tests (ContentReading, PropertyUpdates, Archiving, PlaybackRendering,
@@ -58,13 +165,52 @@ passes audio through, so no test is skipped.
 
 ## Test switches of the check
 
-A real host sets none of these: `DS_ARA_CACHE` (the cache folder), `DS_ARA_OUT` (where the
-plugin writes its report, one JSON object per line), `DS_ARA_FAULT=in-process` (the fault
-switch: the analysis runs inside `process` on purpose, so the overrun check of the host
-can fail), `DS_ARA_TABLES_FAULT=1` (the plugin serves a document controller table with
-one emptied slot, so the table walk of the check can fail) and
-`DS_ARA_RESTORE_FAULT=decode` (the restore decodes one source on purpose, so the
-no-decode proof of the archive check can fail).
+A real host sets none of these. The list is `switches.json`: the table below is made from
+it (`check.py write-readme`), the stage `switches` fails when the source uses a variable that
+is not listed, when a listed variable is not used, or when this table was edited by hand, and
+`check.sh` fails at the start when a fault or scenario switch is set in the caller's
+environment. A normal run of the check clears every variable of the list for the programs it
+starts.
+
+The shipped build still reads these variables from the environment: the plugin does not
+compile them out. Two of them weaken safety on purpose: `DS_ARA_ID_FAULT=trust` (the plugin
+trusts the id, the track names and the source names that come from a file or from the host)
+and `DS_ARA_HOME_FAULT=1` (the service home goes below the user's home). To remove every
+fault and scenario switch from a delivery build (a cargo feature) is an open point for the
+delivery ticket M1c.
+
+<!-- switches:begin (made from switches.json by `check.py write-readme`) -->
+
+| Variable | Kind | Values | What it does |
+| --- | --- | --- | --- |
+| `DS_ARA_CACHE` | config | a folder | the cache folder the plugin writes below (default ~/Library/Caches/DrumSpike/ARA) |
+| `DS_ARA_OUT` | config | a file | where the plugin writes its report, one JSON object per line |
+| `DS_ARA_DEPS` | check | a folder | check.sh only: the folder of the third-party parts (default .deps) |
+| `DS_ARA_TESTHOST` | check | a file | check.sh only: the ARATestHost binary of the conformance stage |
+| `DS_ARA_FAULT` | fault | in-process | the analysis runs inside process on purpose, so the overrun check can fail |
+| `DS_ARA_TABLES_FAULT` | fault | 1 | the plugin serves a document controller table with one emptied slot |
+| `DS_ARA_RESTORE_FAULT` | fault | decode, newid, empty, late-events | the restore decodes one source, ignores the stored id, drops the stored events, or sets the events of the document on the worker thread |
+| `DS_ARA_SERVICE_FAULT` | fault | per-job | a new service for every job (the M1a way) |
+| `DS_ARA_TRACKS_FAULT` | fault | forget | a later request forgets the earlier tracks |
+| `DS_ARA_FOLDER_FAULT` | fault | shared | every document uses one folder |
+| `DS_ARA_DESTROY_FAULT` | fault | keep | a destroyed source stays in the list and the project |
+| `DS_ARA_HOME_FAULT` | fault | 1 | the service home is below the user's home, outside the cache folder |
+| `DS_ARA_ROUND_FAULT` | fault | new-only, always, no-deadline, no-late-round | a round analyses only the new tracks, a request for a complete source starts a full round, a request waits for ever for audio that does not come, or audio that comes after the deadline starts no round |
+| `DS_ARA_SETTLE_FAULT` | fault | none | no settle time: every request is a round |
+| `DS_ARA_CLOSE_FAULT` | fault | wait, nocancel | the destroy of a controller waits for the round, or does not cancel it |
+| `DS_ARA_ID_FAULT` | fault | trust | the plugin trusts the document id and the track names of an archive, and the names of the host sources |
+| `DS_ARA_REGISTRY_FAULT` | fault | off | no registry of the document ids in use: two live documents may share one |
+| `DS_ARA_ERRORS_FAULT` | fault | swallow | the error of a single track is not read |
+| `DS_ARA_RETRY_FAULT` | fault | duplicate | a retried source makes a second track |
+| `DS_ARA_TOUCH_FAULT` | fault | ignore, playback-time | a change of the regions or the properties of a source is not seen, or a move in playback time alone starts a round |
+| `DS_ARA_GUARD_FAULT` | fault | off | the reader thread and the worker thread run without the panic guard |
+| `DS_ARA_UNLOAD_FAULT` | fault | skip | the unload of the library does not stop the worker |
+| `DS_ARA_PANIC_TEST` | scenario | reader, worker | the reader thread or the worker thread panics once |
+| `DS_ARA_SCENARIO` | scenario | corrupt-wav:<n>, fail-first-round, slow-setup, audio-deadline-ms:<n> | the WAV of source n is damaged after the read, the first round fails once, every round waits 1.5 s before its analysis starts, or a request waits n ms for audio (default 30000) |
+
+Kinds: **config**: The plugin reads it (the check sets it for every run). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. **scenario**: Scenario switch: sets up a case for a stage (not a fault).
+
+<!-- switches:end -->
 
 ## Licences
 

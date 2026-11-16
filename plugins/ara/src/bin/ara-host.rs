@@ -12,7 +12,26 @@
 //! ara-host <bundle> restore  ... --no-persistent-id               sources without a persistent ID
 //! ara-host <bundle> blocks   --files <wav>... [--frames N]        the audio-thread check
 //! ara-host <bundle> tables                                        the interface-table walk
+//! ara-host <bundle> grow     --files <wav>... [--batch N] [--destroy I]
+//!                             the sources arrive in batches of N: each batch is added,
+//!                             analysed and waited for before the next one; then source I
+//!                             (an index) is destroyed (M1b1: one service and one project
+//!                             for the whole document)
+//!                             [--gap-ms G]: no wait between the batches, G ms between the
+//!                             requests, one wait for all at the end (a DAW sets the plugin
+//!                             on one track after the other)
+//! ara-host <bundle> close-busy --files synth:<secs>... [--lead-ms N]  destroy the controller
+//!                             while its analysis runs; prints the time of the destroy call
+//! ara-host <bundle> docs     --files <wav>... --files2 <wav>...   two document controllers
+//!                             in one process: the first document works, then the second
 //! ```
+//!
+//! A file `synth:<secs>` is a source the host makes itself (a kick-like figure, 48 kHz mono):
+//! long sources for the modes that need an analysis that takes seconds.
+//!
+//! The host implements the model update controller: every `notifyAudioSourceContentChanged`
+//! of the plugin is printed as a `host_content_changed` row (it comes only inside the
+//! host's `notifyModelUpdates` calls, which the host makes while it waits).
 //!
 //! Region spec: `<startInModificationTime>,<durationInModificationTime>,<startInPlaybackTime>`
 //! in seconds. Every mode prints one JSON object per line (the read and service rows of
@@ -53,6 +72,18 @@ const FRAMES: usize = 512;
 /// ID, as a host that has none does. A restore then has only the name to match on, and the
 /// name is the host's own (here the file path), not the reduced name the archive stores.
 static NO_PERSISTENT_ID: AtomicBool = AtomicBool::new(false);
+
+/// `--names <n>...`: the ARA names the host gives the sources, by creation index, instead of
+/// the file paths (hostile names for the check: `a/..`, an empty name).
+static NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// `--no-access <k>`: the host never enables the samples access of the k-th source of a
+/// request (and still requests its analysis): its audio never comes.
+static NO_ACCESS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(usize::MAX);
+
+/// How long `analyse` waits for the plugin (seconds; `--wait N` changes it, the check gives
+/// the new document modes a short bound so a broken plugin fails fast).
+static WAIT_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(300);
 const SAMPLE_RATE: f64 = 48_000.0;
 
 /// One audio source of the host: the samples per channel, loaded from the WAV.
@@ -216,6 +247,68 @@ static ARCHIVING: SyncPtr<ARAArchivingControllerInterface> = SyncPtr(ARAArchivin
     getDocumentArchiveID: Some(ar_id),
 });
 
+/// The phase label of the rows the model update callbacks print.
+static PHASE: Mutex<String> = Mutex::new(String::new());
+
+fn set_phase(p: &str) {
+    *PHASE.lock().unwrap() = p.to_string();
+}
+
+static MODEL_UPDATE: SyncPtr<ARAModelUpdateControllerInterface> = SyncPtr(ARAModelUpdateControllerInterface {
+    structSize: std::mem::size_of::<ARAModelUpdateControllerInterface>(),
+    notifyAudioSourceAnalysisProgress: Some(mu_progress),
+    notifyAudioSourceContentChanged: Some(mu_source_changed),
+    notifyAudioModificationContentChanged: Some(mu_other_changed),
+    notifyPlaybackRegionContentChanged: Some(mu_region_changed),
+    notifyDocumentDataChanged: Some(mu_document_changed),
+});
+
+unsafe extern "C" fn mu_document_changed(_ctl: ARAModelUpdateControllerHostRef) {}
+
+unsafe extern "C" fn mu_progress(
+    _ctl: ARAModelUpdateControllerHostRef,
+    _source: ARAAudioSourceHostRef,
+    _state: ARAAnalysisProgressState,
+    _value: f32,
+) {
+}
+
+/// The content of a source changed: the row names the source (the host ref is its index).
+unsafe extern "C" fn mu_source_changed(
+    ctl: ARAModelUpdateControllerHostRef,
+    source: ARAAudioSourceHostRef,
+    _range: *const ARAContentTimeRange,
+    flags: ARAContentUpdateFlags,
+) {
+    let state = &*(ctl as *const HostState);
+    let idx = source as usize;
+    let name = state
+        .sources
+        .get(idx)
+        .map(|s| s.name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    println!(
+        "{{\"event\":\"host_content_changed\",\"phase\":{:?},\"index\":{idx},\"name\":{name:?},\"flags\":{flags}}}",
+        PHASE.lock().unwrap().as_str()
+    );
+}
+
+unsafe extern "C" fn mu_other_changed(
+    _ctl: ARAModelUpdateControllerHostRef,
+    _m: ARAAudioModificationHostRef,
+    _range: *const ARAContentTimeRange,
+    _flags: ARAContentUpdateFlags,
+) {
+}
+
+unsafe extern "C" fn mu_region_changed(
+    _ctl: ARAModelUpdateControllerHostRef,
+    _r: ARAPlaybackRegionHostRef,
+    _range: *const ARAContentTimeRange,
+    _flags: ARAContentUpdateFlags,
+) {
+}
+
 unsafe extern "C" fn ar_size(_ctl: ARAArchivingControllerHostRef, _reader: ARAArchiveReaderHostRef) -> ARASize {
     let state = &*(_ctl as *const HostState);
     state.loaded.len() as ARASize
@@ -272,7 +365,9 @@ fn factory() -> &'static ARAFactory {
     unsafe { &*(*ARA_FACTORY.0.lock().unwrap()) }
 }
 
-static HOST_INSTANCE: SyncPtr<Mutex<Option<ARADocumentControllerHostInstance>>> = SyncPtr(Mutex::new(None));
+/// `initializeARAWithConfiguration` runs once per process, however many document
+/// controllers the host makes.
+static ARA_INITIALISED: AtomicBool = AtomicBool::new(false);
 
 /// The host instance: the two mandatory interfaces, the optional ones stay null (the
 /// plugin must check before calling them).
@@ -285,11 +380,40 @@ fn host_instance(state: *mut HostState) -> ARADocumentControllerHostInstance {
         archivingControllerInterface: &ARCHIVING.0,
         contentAccessControllerHostRef: std::ptr::null_mut(),
         contentAccessControllerInterface: std::ptr::null(),
-        modelUpdateControllerHostRef: std::ptr::null_mut(),
-        modelUpdateControllerInterface: std::ptr::null(),
+        modelUpdateControllerHostRef: state as ARAModelUpdateControllerHostRef,
+        modelUpdateControllerInterface: &MODEL_UPDATE.0,
         playbackControllerHostRef: std::ptr::null_mut(),
         playbackControllerInterface: std::ptr::null(),
     }
+}
+
+/// A dense kick-like figure of `secs` seconds at 48 kHz: a decaying 60 Hz burst every 40 ms,
+/// with a level that varies (many hits, so the analysis takes long; the source index shifts
+/// the pattern, so every source differs).
+fn synth_samples(i: usize, secs: f64) -> Vec<f32> {
+    let rate = 48_000.0f64;
+    let n = (rate * secs) as usize;
+    let mut out = vec![0f32; n];
+    let step = (rate * 0.04) as usize;
+    let first = (rate * (0.1 + 0.03 * i as f64)) as usize;
+    let burst = (rate * 0.035) as usize;
+    let mut at = first;
+    let mut k_hit = 0usize;
+    let mut lcg = 12345u32 + i as u32;
+    while at < n {
+        for k in 0..burst.min(n - at) {
+            let dt = k as f64 / rate;
+            let level = 0.5 + 0.4 * (((k_hit * 7 + i) % 5) as f64 / 4.0);
+            out[at + k] = ((2.0 * std::f64::consts::PI * 60.0 * dt).sin() * (-dt * 60.0).exp() * level) as f32;
+        }
+        k_hit += 1;
+        at += step;
+    }
+    for v in out.iter_mut() {
+        lcg = lcg.wrapping_mul(1_103_515_245).wrapping_add(12_345) & 0x7fff_ffff;
+        *v += ((f64::from(lcg) / f64::from(0x7fff_ffffu32) - 0.5) * 0.003) as f32;
+    }
+    out
 }
 
 /// One CLI region spec: `startInModificationTime,durationInModificationTime,startInPlaybackTime`.
@@ -441,10 +565,13 @@ unsafe fn make_controller(_loaded: &Loaded, state: *mut HostState) -> Result<Ins
         desiredApiGeneration: kARAAPIGeneration_2_0_Final as ARAAPIGeneration,
         assertFunctionAddress: std::ptr::null_mut(),
     };
-    (f.initializeARAWithConfiguration
-        .expect("initializeARAWithConfiguration"))(&config);
-    *HOST_INSTANCE.0.lock().unwrap() = Some(host_instance(state));
-    let host = HOST_INSTANCE.0.lock().unwrap().as_ref().unwrap() as *const ARADocumentControllerHostInstance;
+    if !ARA_INITIALISED.swap(true, Ordering::SeqCst) {
+        (f.initializeARAWithConfiguration
+            .expect("initializeARAWithConfiguration"))(&config);
+    }
+    // one host instance per document controller (the plugin keeps the pointer for the
+    // life of the controller; the host never frees it before the process ends)
+    let host = Box::leak(Box::new(host_instance(state))) as *const ARADocumentControllerHostInstance;
     let dc = (f
         .createDocumentControllerWithDocument
         .expect("createDocumentControllerWithDocument"))(host, std::ptr::null());
@@ -463,9 +590,23 @@ unsafe fn add_sources(
     let dc = iface_of(inst);
     let dc_ref = dc_ref_of(inst);
     let mut pairs = Vec::new();
-    for (i, file) in files.iter().enumerate() {
-        let (rate, channels) = load_wav(file)?;
-        let name = CString::new(file.clone()).unwrap();
+    // the host ref of a source is its index in `state.sources`: a later batch of the same
+    // document continues the numbering
+    let base = (*state).sources.len();
+    for (k, file) in files.iter().enumerate() {
+        let i = base + k;
+        let (rate, channels, name) = if let Some(secs) = file.strip_prefix("synth:") {
+            let secs: f64 = secs.parse().map_err(|_| format!("bad {file:?}: want synth:<secs>"))?;
+            (
+                48_000u32,
+                vec![synth_samples(i, secs)],
+                CString::new(format!("synth_kick_{i}.wav")).unwrap(),
+            )
+        } else {
+            let (rate, channels) = load_wav(file)?;
+            let shown = NAMES.lock().unwrap().get(i).cloned().unwrap_or_else(|| file.clone());
+            (rate, channels, CString::new(shown).unwrap())
+        };
         let pid = if NO_PERSISTENT_ID.load(Ordering::SeqCst) {
             CString::default()
         } else {
@@ -569,16 +710,40 @@ unsafe fn add_regions(
 /// Samples access on (the reader is created on this thread, the reads run on the
 /// plugin's threads), then the analysis request, then the wait.
 unsafe fn analyse(inst: Inst, pairs: &[(ARAAudioSourceRef, ARAAudioModificationRef)]) -> Result<(), String> {
+    request(inst, pairs);
+    wait_for(inst, pairs)
+}
+
+/// The host asks the plugin to send its pending model updates (outside of editing).
+unsafe fn pump(inst: Inst) {
+    let dc = iface_of(inst);
+    if let Some(f) = dc.notifyModelUpdates {
+        f(dc_ref_of(inst));
+    }
+}
+
+/// Samples access on and the analysis request for every source of `pairs` (no wait).
+unsafe fn request(inst: Inst, pairs: &[(ARAAudioSourceRef, ARAAudioModificationRef)]) {
     let dc = iface_of(inst);
     let dc_ref = dc_ref_of(inst);
     let types = [kARAContentTypeNotes as ARAContentType];
-    for (src, _) in pairs {
-        (dc.enableAudioSourceSamplesAccess
-            .expect("enableAudioSourceSamplesAccess"))(dc_ref, *src, 1);
+    for (k, (src, _)) in pairs.iter().enumerate() {
+        if k != NO_ACCESS.load(Ordering::SeqCst) {
+            (dc.enableAudioSourceSamplesAccess
+                .expect("enableAudioSourceSamplesAccess"))(dc_ref, *src, 1);
+        }
         (dc.requestAudioSourceContentAnalysis
             .expect("requestAudioSourceContentAnalysis"))(dc_ref, *src, types.len(), types.as_ptr());
     }
-    let deadline = Instant::now() + Duration::from_secs(300);
+}
+
+/// Wait until the analysis of every source of `pairs` is complete; the host pumps the model
+/// updates while it waits and once more at the end.
+unsafe fn wait_for(inst: Inst, pairs: &[(ARAAudioSourceRef, ARAAudioModificationRef)]) -> Result<(), String> {
+    let dc = iface_of(inst);
+    let dc_ref = dc_ref_of(inst);
+    let wait = WAIT_SECS.load(Ordering::SeqCst);
+    let deadline = Instant::now() + Duration::from_secs(wait);
     loop {
         let incomplete = pairs.iter().any(|(s, _)| {
             (dc.isAudioSourceContentAnalysisIncomplete
@@ -587,20 +752,36 @@ unsafe fn analyse(inst: Inst, pairs: &[(ARAAudioSourceRef, ARAAudioModificationR
             ) != 0
         });
         if !incomplete {
+            pump(inst);
             return Ok(());
         }
         if Instant::now() > deadline {
-            return Err("the analysis did not finish in 300 s".into());
+            return Err(format!("the analysis did not finish in {wait} s"));
         }
+        pump(inst);
         std::thread::sleep(Duration::from_millis(20));
     }
 }
 
 /// The notes of every source through the content readers, one JSON line per source.
 unsafe fn print_notes(inst: Inst, state: &HostState, pairs: &[(ARAAudioSourceRef, ARAAudioModificationRef)]) {
+    print_notes_at(inst, state, pairs, 0, None);
+}
+
+/// [`print_notes`] for the sources `base..` of the host state; a `phase` puts a label on
+/// the rows (the modes with more than one round print the notes of a source more than once).
+unsafe fn print_notes_at(
+    inst: Inst,
+    state: &HostState,
+    pairs: &[(ARAAudioSourceRef, ARAAudioModificationRef)],
+    base: usize,
+    phase: Option<&str>,
+) {
     let dc = iface_of(inst);
     let dc_ref = dc_ref_of(inst);
-    for (i, (s, _)) in pairs.iter().enumerate() {
+    let label = phase.map_or(String::new(), |p| format!("\"phase\":{p:?},"));
+    for (k, (s, _)) in pairs.iter().enumerate() {
+        let i = base + k;
         let reader = (dc
             .createAudioSourceContentReader
             .expect("createAudioSourceContentReader"))(
@@ -627,7 +808,7 @@ unsafe fn print_notes(inst: Inst, state: &HostState, pairs: &[(ARAAudioSourceRef
             .map(|[pos, _]| (pos * f64::from(src.rate)).round())
             .collect();
         println!(
-            "{{\"event\":\"host_notes\",\"name\":{:?},\"rate\":{},\"count\":{},\"samples\":{:?}}}",
+            "{{\"event\":\"host_notes\",{label}\"name\":{:?},\"rate\":{},\"count\":{},\"samples\":{:?}}}",
             src.name.to_string_lossy(),
             src.rate,
             notes.len(),
@@ -873,6 +1054,13 @@ fn main() {
     let mode = args.get(1).cloned().unwrap_or_default();
     let rest: Vec<String> = args[2.min(args.len())..].to_vec();
     NO_PERSISTENT_ID.store(rest.iter().any(|a| a == "--no-persistent-id"), Ordering::SeqCst);
+    *NAMES.lock().unwrap() = args_list(&rest, "--names");
+    if let Some(k) = args_value(&rest, "--no-access").and_then(|v| v.parse::<usize>().ok()) {
+        NO_ACCESS.store(k, Ordering::SeqCst);
+    }
+    if let Some(w) = args_value(&rest, "--wait").and_then(|v| v.parse::<u64>().ok()) {
+        WAIT_SECS.store(w, Ordering::SeqCst);
+    }
     let mut files = args_list(&rest, "--files");
     if files.is_empty() {
         files = args_value(&rest, "--file").into_iter().collect();
@@ -884,6 +1072,11 @@ fn main() {
         "restore" => run_restore(bundle, &files, args_value(&rest, "--archive")),
         "blocks" => run_blocks(bundle, &files, &rest),
         "tables" => run_tables(bundle),
+        "grow" => run_grow(bundle, &files, &rest),
+        "close-busy" => run_close_busy(bundle, &files, &rest),
+        "restore2" => run_restore2(bundle, &files, &rest),
+        "restore-busy" => run_restore_busy(bundle, &files, &rest),
+        "docs" => run_docs(bundle, &files, &args_list(&rest, "--files2")),
         other => {
             eprintln!("unknown mode {other:?}");
             64
@@ -977,8 +1170,18 @@ fn run_regions(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         }
     }
     let regions_of = |_state: &HostState, i: usize| if i == 0 { specs.clone() } else { Vec::new() };
+    // `--update-after`: the analysis first, then the updates, then the host waits (pumping the
+    // model updates) for the plugin to analyse again
+    let after = rest.iter().any(|a| a == "--update-after");
+    let pump_ms = args_value(rest, "--pump-ms")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(3000);
     let rc = with_document(bundle, files, &regions_of, Vec::new(), &|inst, state, pairs| {
         unsafe {
+            if after {
+                analyse(inst, pairs)?;
+                print_notes_at(inst, state, pairs, 0, Some("before-update"));
+            }
             // the ARA update and destroy calls on the created regions, by index
             let dc = iface_of(inst);
             let dc_ref = dc_ref_of(inst);
@@ -1004,6 +1207,17 @@ fn run_regions(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     destroys,
                 );
             }
+            if after {
+                set_phase("update");
+                let until = Instant::now() + Duration::from_millis(pump_ms);
+                while Instant::now() < until {
+                    pump(inst);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                pump(inst);
+                print_notes_at(inst, state, pairs, 0, Some("after-update"));
+                return Ok(());
+            }
             analyse(inst, pairs)?;
         }
         unsafe {
@@ -1012,6 +1226,421 @@ fn run_regions(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         Ok(())
     });
     match rc {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// The unix time in nanoseconds (the phase markers of `docs`: the check compares them with
+/// the modification times of the files).
+fn unix_ns() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos())
+}
+
+/// One host document: its state, its controller instance and its sources.
+struct HostDoc {
+    state: *mut HostState,
+    inst: Inst,
+    pairs: Vec<(ARAAudioSourceRef, ARAAudioModificationRef)>,
+}
+
+impl HostDoc {
+    unsafe fn new(loaded: &Loaded) -> Result<HostDoc, String> {
+        HostDoc::with_archive(loaded, Vec::new())
+    }
+
+    /// A document whose host holds an archive (the restore reads it).
+    unsafe fn with_archive(loaded: &Loaded, archive: Vec<u8>) -> Result<HostDoc, String> {
+        let state = Box::into_raw(Box::new(HostState {
+            sources: Vec::new(),
+            writers: Vec::new(),
+            loaded: archive,
+            regions: Vec::new(),
+        }));
+        let inst = make_controller(loaded, state)?;
+        Ok(HostDoc {
+            state,
+            inst,
+            pairs: Vec::new(),
+        })
+    }
+
+    /// One batch: add the sources with one full-length region each (inside the edit
+    /// cycle), then ask for the analysis and wait for it. Prints the notes of the batch
+    /// through the content readers under `phase`.
+    unsafe fn add_and_analyse(&mut self, files: &[String], phase: &str) -> Result<(), String> {
+        let (pairs, base) = self.add_and_request(files, phase)?;
+        wait_for(self.inst, &pairs)?;
+        print_notes_at(self.inst, &*self.state, &pairs, base, Some(phase));
+        self.pairs.extend(pairs);
+        Ok(())
+    }
+
+    /// The sources are added and their analysis is requested; nothing is waited for.
+    unsafe fn add_and_request(
+        &mut self,
+        files: &[String],
+        phase: &str,
+    ) -> Result<(Vec<(ARAAudioSourceRef, ARAAudioModificationRef)>, usize), String> {
+        let (pairs, base) = self.add_only(files, phase)?;
+        request(self.inst, &pairs);
+        Ok((pairs, base))
+    }
+
+    /// The sources are added (one full-length region each); no request.
+    unsafe fn add_only(
+        &mut self,
+        files: &[String],
+        phase: &str,
+    ) -> Result<(Vec<(ARAAudioSourceRef, ARAAudioModificationRef)>, usize), String> {
+        set_phase(phase);
+        let dc = iface_of(self.inst);
+        let dc_ref = dc_ref_of(self.inst);
+        let base = (*self.state).sources.len();
+        if let Some(f) = dc.beginEditing {
+            f(dc_ref);
+        }
+        let pairs = add_sources(self.inst, self.state, files)?;
+        for (k, (_, modification)) in pairs.iter().enumerate() {
+            add_regions(
+                self.inst,
+                self.state,
+                *modification,
+                &full_regions(&*self.state, base + k),
+            );
+        }
+        if let Some(f) = dc.endEditing {
+            f(dc_ref);
+        }
+        Ok((pairs, base))
+    }
+
+    /// Restore the archive the host holds; the notes are read right after.
+    unsafe fn restore(&self) -> Result<(), String> {
+        let dc = iface_of(self.inst);
+        let ok = (dc.restoreObjectsFromArchive.expect("restoreObjectsFromArchive"))(
+            dc_ref_of(self.inst),
+            0 as ARAArchiveReaderHostRef,
+            std::ptr::null(),
+        );
+        if ok == 0 {
+            return Err("restoreObjectsFromArchive refused".into());
+        }
+        Ok(())
+    }
+
+    /// Store the archive of the document; the bytes the plugin wrote.
+    unsafe fn store(&self) -> Result<Vec<u8>, String> {
+        let dc = iface_of(self.inst);
+        let ok = (dc.storeObjectsToArchive.expect("storeObjectsToArchive"))(
+            dc_ref_of(self.inst),
+            0 as ARAArchiveWriterHostRef,
+            std::ptr::null(),
+        );
+        if ok == 0 {
+            return Err("storeObjectsToArchive refused".into());
+        }
+        (*self.state)
+            .writers
+            .first()
+            .cloned()
+            .ok_or_else(|| "the plugin wrote no archive bytes".to_string())
+    }
+
+    /// The notes of every source of the document that was not destroyed.
+    unsafe fn print_all_notes(&self, phase: &str, skip: Option<usize>) {
+        for (i, pair) in self.pairs.iter().enumerate() {
+            if Some(i) == skip {
+                continue;
+            }
+            print_notes_at(self.inst, &*self.state, std::slice::from_ref(pair), i, Some(phase));
+        }
+    }
+
+    /// The ARA destroy order for one source: samples access off, its playback region, its
+    /// modification, then the source.
+    unsafe fn destroy_source(&self, i: usize) -> Result<(), String> {
+        let dc = iface_of(self.inst);
+        let dc_ref = dc_ref_of(self.inst);
+        let (src, modification) = *self
+            .pairs
+            .get(i)
+            .ok_or_else(|| format!("--destroy {i}: no such source"))?;
+        let st = &*self.state;
+        let region = *st.regions.get(i).ok_or_else(|| format!("--destroy {i}: no region"))?;
+        (dc.enableAudioSourceSamplesAccess
+            .expect("enableAudioSourceSamplesAccess"))(dc_ref, src, 0);
+        (dc.destroyPlaybackRegion.expect("destroyPlaybackRegion"))(dc_ref, region);
+        (dc.destroyAudioModification.expect("destroyAudioModification"))(dc_ref, modification);
+        (dc.destroyAudioSource.expect("destroyAudioSource"))(dc_ref, src);
+        println!(
+            "{{\"event\":\"host_destroyed\",\"index\":{i},\"name\":{:?}}}",
+            st.sources[i].name.to_string_lossy()
+        );
+        Ok(())
+    }
+
+    unsafe fn close(&self) {
+        let dc = iface_of(self.inst);
+        (dc.destroyDocumentController.expect("destroyDocumentController"))(dc_ref_of(self.inst));
+    }
+}
+
+/// `grow`: the sources of one document arrive in batches (`--batch`, default all at once);
+/// every batch is analysed and waited for before the next one. `--destroy I` destroys the
+/// I-th source at the end.
+fn run_grow(bundle: &str, files: &[String], rest: &[String]) -> i32 {
+    if files.is_empty() {
+        eprintln!("grow: no --files");
+        return 64;
+    }
+    let batch = args_value(rest, "--batch")
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|b| *b > 0)
+        .unwrap_or(files.len());
+    let destroy = args_value(rest, "--destroy").and_then(|v| v.parse::<usize>().ok());
+    let gap = args_value(rest, "--gap-ms").and_then(|v| v.parse::<u64>().ok());
+    let pump_ms = args_value(rest, "--pump-ms")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    let result = (|| -> Result<(), String> {
+        unsafe {
+            let loaded = load(bundle)?;
+            let mut doc = HostDoc::new(&loaded)?;
+            if let Some(gap) = gap {
+                // the sources are requested one after the other with `gap` ms between them,
+                // and waited for once at the end
+                let mut all = Vec::new();
+                for chunk in files.chunks(batch) {
+                    let (pairs, _base) = doc.add_and_request(chunk, "burst")?;
+                    all.extend(pairs);
+                    std::thread::sleep(Duration::from_millis(gap));
+                }
+                wait_for(doc.inst, &all)?;
+                doc.pairs.extend(all);
+            } else {
+                for (round, chunk) in files.chunks(batch).enumerate() {
+                    doc.add_and_analyse(chunk, &format!("round-{}", round + 1))?;
+                }
+            }
+            doc.print_all_notes("final", None);
+            if rest.iter().any(|a| a == "--rerequest") {
+                // the host asks again for sources that are complete (or whose analysis
+                // failed): the plugin starts a round only when something changed
+                set_phase("rerequest");
+                let pairs = doc.pairs.clone();
+                request(doc.inst, &pairs);
+                let until = Instant::now() + Duration::from_millis(pump_ms.max(1500));
+                while Instant::now() < until {
+                    pump(doc.inst);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                wait_for(doc.inst, &pairs)?;
+                doc.print_all_notes("after-rerequest", None);
+            }
+            if let Some(k) = args_value(rest, "--enable-late").and_then(|v| v.parse::<usize>().ok()) {
+                // the samples access of a source that had none comes now, after the first round
+                set_phase("late");
+                let dc = iface_of(doc.inst);
+                let src = doc
+                    .pairs
+                    .get(k)
+                    .ok_or_else(|| format!("--enable-late {k}: no such source"))?
+                    .0;
+                (dc.enableAudioSourceSamplesAccess
+                    .expect("enableAudioSourceSamplesAccess"))(dc_ref_of(doc.inst), src, 1);
+                let until = Instant::now() + Duration::from_millis(pump_ms.max(3000));
+                while Instant::now() < until {
+                    pump(doc.inst);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                pump(doc.inst);
+                doc.print_all_notes("after-late", None);
+            }
+            if let Some(i) = destroy {
+                set_phase("destroy");
+                doc.destroy_source(i)?;
+                // the plugin analyses the tracks that are left again; the host pumps the
+                // model updates while it waits for that
+                let until = Instant::now() + Duration::from_millis(pump_ms);
+                while Instant::now() < until {
+                    pump(doc.inst);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                pump(doc.inst);
+                doc.print_all_notes("after-destroy", Some(i));
+            }
+            doc.close();
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// `close-busy`: the sources are requested and the controller is destroyed while the
+/// analysis runs (`--lead-ms` after the requests); prints the time of the destroy call and
+/// leaves the process at once (the plugin's worker still holds what it needs).
+fn run_close_busy(bundle: &str, files: &[String], rest: &[String]) -> i32 {
+    if files.is_empty() {
+        eprintln!("close-busy: no --files");
+        return 64;
+    }
+    let lead = args_value(rest, "--lead-ms")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1500);
+    let after = args_value(rest, "--after-ms")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    let deinit = rest.iter().any(|a| a == "--deinit");
+    let result = (|| -> Result<f64, String> {
+        unsafe {
+            let loaded = load(bundle)?;
+            let mut doc = HostDoc::new(&loaded)?;
+            let (_pairs, _base) = doc.add_and_request(files, "busy")?;
+            std::thread::sleep(Duration::from_millis(lead));
+            let t0 = Instant::now();
+            let at = unix_ns();
+            doc.close();
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            println!("{{\"event\":\"host_close\",\"ms\":{ms:.1},\"unix_ns\":{at}}}");
+            if deinit {
+                // the host unloads the plugin library: the entry's deinit, right after the destroy
+                let t1 = Instant::now();
+                if let Some(f) = (*loaded.entry).deinit {
+                    f();
+                }
+                println!(
+                    "{{\"event\":\"host_deinit\",\"ms\":{:.1},\"unix_ns\":{}}}",
+                    t1.elapsed().as_secs_f64() * 1000.0,
+                    unix_ns()
+                );
+            }
+            // the host stays alive: the plugin's worker keeps running in the process
+            std::thread::sleep(Duration::from_millis(after));
+            Ok(ms)
+        }
+    })();
+    match result {
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// `restore2`: the same archive restored into two document controllers of one process.
+fn run_restore2(bundle: &str, files: &[String], rest: &[String]) -> i32 {
+    let Some(archive) = args_value(rest, "--archive").and_then(|a| std::fs::read(a).ok()) else {
+        eprintln!("restore2: no readable --archive");
+        return 64;
+    };
+    let result = (|| -> Result<(), String> {
+        unsafe {
+            let loaded = load(bundle)?;
+            let mut docs = Vec::new();
+            for label in ["doc-1", "doc-2"] {
+                let mut d = HostDoc::with_archive(&loaded, archive.clone())?;
+                let (pairs, base) = d.add_only(files, label)?;
+                d.restore()?;
+                print_notes_at(d.inst, &*d.state, &pairs, base, Some(label));
+                d.pairs.extend(pairs);
+                docs.push(d);
+            }
+            for d in &docs {
+                d.close();
+            }
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// `restore-busy`: another document starts a long analysis (`--busy synth:<secs>...`), then
+/// this one restores `--archive` and stores at once (a host autosave right after the
+/// restore); the archive goes to `--out`. The process leaves without closing anything.
+fn run_restore_busy(bundle: &str, files: &[String], rest: &[String]) -> i32 {
+    let (Some(archive), Some(out)) = (
+        args_value(rest, "--archive").and_then(|a| std::fs::read(a).ok()),
+        args_value(rest, "--out"),
+    ) else {
+        eprintln!("restore-busy: want --archive <readable> --out <file>");
+        return 64;
+    };
+    let busy = args_list(rest, "--busy");
+    let result = (|| -> Result<(), String> {
+        unsafe {
+            let loaded = load(bundle)?;
+            let mut other = HostDoc::new(&loaded)?;
+            other.add_and_request(&busy, "busy")?;
+            std::thread::sleep(Duration::from_millis(1200));
+            let mut d = HostDoc::with_archive(&loaded, archive)?;
+            let (pairs, base) = d.add_only(files, "restore")?;
+            println!("{{\"event\":\"host_restore\",\"unix_ns\":{}}}", unix_ns());
+            d.restore()?;
+            print_notes_at(d.inst, &*d.state, &pairs, base, Some("restore"));
+            d.pairs.extend(pairs);
+            let blob = d.store()?;
+            std::fs::write(&out, &blob).map_err(|e| format!("{out}: {e}"))?;
+            println!("{{\"event\":\"stored\",\"bytes\":{}}}", blob.len());
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// `docs`: two document controllers in one process. Both exist before the first one
+/// works; the first document is analysed and waited for, a phase marker is printed with
+/// the time, then the second one works.
+fn run_docs(bundle: &str, first: &[String], second: &[String]) -> i32 {
+    if first.is_empty() || second.is_empty() {
+        eprintln!("docs: want --files <wav>... --files2 <wav>...");
+        return 64;
+    }
+    let result = (|| -> Result<(), String> {
+        unsafe {
+            let loaded = load(bundle)?;
+            let mut a = HostDoc::new(&loaded)?;
+            let mut b = HostDoc::new(&loaded)?;
+            a.add_and_analyse(first, "doc-a")?;
+            println!(
+                "{{\"event\":\"host_phase\",\"doc\":\"b\",\"phase\":\"start\",\"unix_ns\":{}}}",
+                unix_ns()
+            );
+            b.add_and_analyse(second, "doc-b")?;
+            println!(
+                "{{\"event\":\"host_phase\",\"doc\":\"b\",\"phase\":\"done\",\"unix_ns\":{}}}",
+                unix_ns()
+            );
+            a.close();
+            b.close();
+        }
+        Ok(())
+    })();
+    match result {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("{e}");
