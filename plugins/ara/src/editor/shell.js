@@ -58,7 +58,7 @@
   var polling = false;
   async function pollEvents() {
     polling = true;
-    var after = "now";
+    var after = "open";   // from the moment this editor opened: an event announced before the first poll is not lost
     for (;;) {
       var r = null;
       try { r = await (await fetch(API + "events?after=" + after + "&timeout_ms=2000", { cache: "no-store" })).json(); }
@@ -71,18 +71,43 @@
     }
   }
   // The plugin tells the page when it changed the data behind the page's back (a round of the
-  // plugin ended, an archive was restored): the page loads its project again. The page's own
-  // pending edits go first. A burst of events is one reload.
+  // plugin ended, an archive was restored): the page loads its project again. The page's pending
+  // writes are DROPPED, not flushed: they hold the page's older list and would be written over
+  // the data of the round (S3). A burst of events is one reload. The view (zoom and scroll of
+  // the lanes) is kept across the reload; the undo history is not (open point of #539).
+  // PAGE_FUNCTIONS are the functions of the page that this script uses: a rename in static/
+  // must not make the reload do less in silence (S4): a missing one is reported at once.
+  var PAGE_FUNCTIONS = ["edIdleHook", "cancelEvents", "initSessions", "loadProject", "invalidate"];
+  function missingPageFunctions() {
+    return PAGE_FUNCTIONS.filter(function (n) {
+      try { return typeof (0, eval)(n) !== "function"; } catch (e) { return true; }
+    });
+  }
   var reloading = false, again = false;
   async function reloadProject() {
     if (reloading) { again = true; return; }
     reloading = true;
     try {
+      var missing = missingPageFunctions();
+      if (missing.length) {
+        console.error("drumspike plugin: the page has no " + missing.join(", ") + "; the reload does less");
+        try { await invoke("plugin_report", { missing_page_functions: missing }); } catch (e) { /* no plugin */ }
+      }
       do {
         again = false;
-        if (typeof flushEvents === "function") await flushEvents();
+        var view = null, scroll = 0;
+        try { view = { t0: S.view.t0, t1: S.view.t1 }; scroll = document.querySelector("#lanesScroll").scrollTop; } catch (e) { /* no view yet */ }
+        try { if (typeof edIdleHook === "function") await edIdleHook(); } catch (e) { /* the page's own queue */ }
+        try { if (typeof cancelEvents === "function" && S.sid) cancelEvents(S.sid); } catch (e) { /* none */ }
         if (typeof initSessions === "function") await initSessions();
         if (typeof loadProject === "function") await loadProject();
+        try {
+          if (view && S.order && S.order.length && view.t1 > view.t0) {
+            S.view = { t0: view.t0, t1: view.t1 };
+            if (typeof invalidate === "function" && typeof F !== "undefined") invalidate(F.VIEW);
+            document.querySelector("#lanesScroll").scrollTop = scroll;
+          }
+        } catch (e) { /* the page keeps its full view */ }
       } while (again);
     } catch (e) { /* the page shows its own error */ }
     reloading = false;

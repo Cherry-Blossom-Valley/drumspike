@@ -3354,7 +3354,8 @@ def edit_parts(rc: int, rows: list, restore_rc: int, restore_rows: list, ref: by
         parts["editor-edit-notes"] = (
             ms in row["samples"] and os_ not in row["samples"],
             f"the ARA notes of {name} after the restore carry the moved hit at sample {ms} (rate {rate}) and no longer {os_}: {row['samples']}")
-    dirty = r.get("dirty_events") or []
+    ev = page_reports(rows, "edit-events")
+    dirty = (ev[0].get("dirty_events") if ev else None) or []
     parts["editor-events"] = (
         any(d.get("dirty") is True for d in dirty),
         f"the event of the service (project-dirty) reached the page after its edit: {len(dirty)} event(s) {dirty[:2]}")
@@ -3362,11 +3363,15 @@ def edit_parts(rc: int, rows: list, restore_rc: int, restore_rows: list, ref: by
 
 
 def edit_run(label: str, bundle: Path, env: dict | None = None) -> dict:
+    """The page edits a hit; the archive is stored at once (the moment the edit is answered), while
+    the worker hears about the change 12 s late (the scenario `sync-delay`: only the worker's
+    sync is delayed, the request thread's own record is not)."""
     ref = _reference()
     archive = OUT / f"{label}.ara"
     if archive.exists():
         archive.unlink()
-    rc, summary, rows = run_phase(label, "edit", bundle, env, ["--archive", str(archive), "--no-sync-wait"])
+    env = {"DS_ARA_EDITOR_SCENARIO": "sync-delay", **(env or {})}
+    rc, summary, rows = run_phase(label, "edit", bundle, env, ["--store-at-edit", str(archive)])
     rrc, rtext, rlines = host_run(f"{label}-restore", bundle, ["restore", "--archive", str(archive), "--files", *[str(FIXTURES / f) for f in FILES]], f"cache-{label}")
     notes = [ln for ln in rlines if ln.get("event") == "host_notes"]
     return edit_parts(rc, rows, rrc, report_rows(f"{label}-restore"), ref, notes)
@@ -3387,7 +3392,7 @@ def stage_editor_edit_fault() -> bool:
     ok = True
     for fault, part, what in (
         ("no-sync", "editor-edit", "a command of the page does not reach the archive"),
-        ("sync-late", "editor-edit", "only the worker syncs, behind its current work: an archive stored at once misses the edit"),
+        ("no-record", "editor-edit", "the request thread does not record the edit (the worker hears 12 s late): an archive stored at once misses it"),
         ("no-notes", "editor-edit-notes", "the notes do not follow the edit"),
         ("no-events", "editor-events", "the events of the service do not reach the page"),
     ):
@@ -3409,7 +3414,7 @@ def threads_parts(rc: int, summary: dict, rows: list) -> dict:
         f"(worst {summary.get('audio_worst_us')} us of {summary.get('audio_budget_us')} us); "
         f"{last.get('off_main')} web view or command call(s) off the right thread"),
         "editor-threads-analysis": (
-            bool(last.get("progress_threads")) and bool(last.get("start_threads"))
+            bool(last.get("progress_threads")) and bool(last.get("start_threads")) and bool(last.get("main_thread_id"))
             and last.get("main_thread_id") not in (last.get("progress_threads") or []) + (last.get("start_threads") or [])
             and not set(last.get("progress_threads") or []) & set(last.get("start_threads") or []),
             f"the analysis the page started reported its progress from thread(s) {last.get('progress_threads')}; its start came from "
@@ -3652,6 +3657,165 @@ def stage_editor_vst3_view_fault() -> bool:
                       "a page that never reports ready")
 
 
+def disk_events(cache: str, name: str) -> list | None:
+    docs = project_docs(cache)
+    if not docs:
+        return None
+    tr = tracks_of_doc(docs[0]).get(name) or {}
+    return tr.get("events")
+
+
+def edit_destroy_parts(rc: int, rows: list, archive: Path, cache: str, ref: bytes, restore_rc: int, restore_rows: list) -> dict:
+    reps = page_reports(rows, "edit")
+    if not reps or reps[0].get("error"):
+        why = f"the page's edit did not run (rc={rc})"
+        return {"editor-edit-destroy-archive": (False, why), "editor-edit-destroy-disk": (False, why)}
+    r = reps[0]
+    after = json.loads(r["after_raw"])["events"]
+    restored = [x for x in restore_rows if x.get("event") == "doc_restored"]
+    got = json.loads(restored[-1]["events_json"]) if restored else {}
+    disk = disk_events(cache, r["name"])
+    return {
+        "editor-edit-destroy-archive": (
+            rc == 0 and restore_rc == 0 and got.get(r["name"]) == after,
+            f"the archive stored the moment the edit was answered, before the destroy, restored in a new process holds the edit ({len(after)} hits of {r['name']})"),
+        "editor-edit-destroy-disk": (
+            disk is not None and any(abs(h["t"] - r["to"]) < 1e-9 for h in disk) and not any(abs(h["t"] - r["from"]) < 1e-9 for h in disk),
+            f"the project on disk after the destroy of the controller holds the moved hit at {r['to']} (and not at {r['from']}): "
+            f"{None if disk is None else len(disk)} hits of {r['name']}"),
+    }
+
+
+def edit_destroy_run(label: str, env: dict | None = None) -> dict:
+    ref = _reference()
+    archive = OUT / f"{label}.ara"
+    if archive.exists():
+        archive.unlink()
+    cache = f"cache-{label}"
+    rc, summary, rows = run_phase(label, "edit-destroy", CLAP, {"DS_ARA_EDITOR_SCENARIO": "sync-delay", **(env or {})}, ["--store-at-edit", str(archive)])
+    rrc, rtext, rlines = host_run(f"{label}-restore", CLAP, ["restore", "--archive", str(archive), "--files", *[str(FIXTURES / f) for f in FILES]], f"cache-{label}-r")
+    return edit_destroy_parts(rc, rows, archive, f"cache-{label}", ref, rrc, report_rows(f"{label}-restore"))
+
+
+def stage_editor_edit_destroy() -> bool:
+    if _reference() is None or not HOST.exists():
+        return pass_fail("editor-edit-destroy", False, "no reference or host")
+    return print_parts("", edit_destroy_run("editor-edit-destroy"))
+
+
+def stage_editor_edit_destroy_fault() -> bool:
+    if _reference() is None:
+        return pass_fail("editor-edit-destroy-fault", False, "no reference")
+    parts = edit_destroy_run("editor-fault-edit-destroy", {"DS_ARA_EDITOR_FAULT": "no-record"})
+    return fault_part("editor-edit-destroy-fault", parts, "editor-edit-destroy-archive", "the request thread does not record the edit")
+
+
+def regions_keep_parts(rc: int, rows: list, ref: bytes) -> dict:
+    """M1: the user moves a hit and sets a role in the page, then the DAW trims the region of that
+    source: the hit and the role are still there; hits outside the new region stay in the event
+    list (the notes leave them out); the other tracks are as the service gives them."""
+    edits = page_reports(rows, "edit")
+    fol = page_reports(rows, "follow")
+    jobs = job_rows_of(rows)
+    if not edits or not fol:
+        return {"editor-regions-keep": (False, f"no edit or follow report (rc={rc})")}
+    e, f = edits[0], fol[0]
+    name = e["name"]
+    evs = json.loads(f["raw_events"][name])["events"]
+    moved = any(abs(h["t"] - e["to"]) < 1e-9 for h in evs)
+    role = (f.get("roles") or {}).get(name)
+    changed_round = len(jobs) >= 2 and jobs[-1].get("reason") in ("change", "request")
+    outside = [h["t"] for h in evs if h["t"] >= 1.0]   # the region was trimmed to the first second
+    refobj = json.loads(ref)
+    others_same = all(json.loads(f["raw_events"][n])["events"] == refobj[n] for n in f["tracks"] if n != name and n in refobj)
+    return {"editor-regions-keep": (
+        rc == 0 and f.get("ok") is True and moved and role == "cymbal" and changed_round and others_same,
+        f"after a hit moved and a role set in the page, the host trimmed the region of {name}: {len(jobs)} rounds, "
+        f"the moved hit is still in the events ({moved}), the role is {role!r} (set: 'cymbal'), the other tracks equal the reference ({others_same}), "
+        f"{len(outside)} hit(s) outside the new region stay in the list")}
+
+
+def stage_editor_regions_keep() -> bool:
+    ref = _reference()
+    if ref is None or not HOST.exists():
+        return pass_fail("editor-regions-keep", False, "no reference or host")
+    rc, summary, rows = run_phase("editor-regions-keep", "edit-region", CLAP, args=["--region", "0,1.0,0"])
+    return print_parts("", regions_keep_parts(rc, rows, ref))
+
+
+def stage_editor_regions_keep_fault() -> bool:
+    ref = _reference()
+    if ref is None:
+        return pass_fail("editor-regions-keep-fault", False, "no reference")
+    rc, summary, rows = run_phase("editor-fault-regions-keep", "edit-region", CLAP, {"DS_ARA_EDITOR_FAULT": "drop-track-data"}, ["--region", "0,1.0,0"])
+    return fault_part("editor-regions-keep-fault", regions_keep_parts(rc, rows, ref), "editor-regions-keep", "a region change drops the hand data of the track")
+
+
+def race_destroy_parts(rc: int, rows: list, window: Path) -> dict:
+    """M3: the page analyses a long source while the host destroys another source."""
+    jobs = job_rows_of(rows)
+    failed = [r for r in rows if r.get("event") in ("job_failed",)]
+    destroyed = [r for r in rows if r.get("event") == "source_destroyed"]
+    wb = json.loads(window.read_text()) if window.exists() else {}
+    ev = wb.get("events") or {}
+    nonempty = sorted(k for k, v in ev.items() if v)
+    keep = [n for n in FILES if safe_name(stem_of(n)) != safe_name(stem_of(FILES[0]))]
+    keep_names = [safe_name(stem_of(n)) for n in keep]
+    last = jobs[-1].get("project_tracks", []) if jobs else []
+    gone = safe_name(stem_of(FILES[0]))
+    return {"editor-race-destroy": (
+        rc == 0 and not failed and bool(destroyed) and not any(r.get("error") for r in destroyed)
+        and all(n in nonempty for n in keep_names) and gone not in last and len(last) == len(FILES),
+        f"the host destroyed a source while the page's analysis ran: a store in that window holds the events of {len(nonempty)} tracks "
+        f"(want the {len(keep_names)} others: {all(n in nonempty for n in keep_names)}); afterwards the removal ran "
+        f"({len(destroyed)} source_destroyed row(s), errors {[r.get('error') for r in destroyed]}), the last round has {len(last)} tracks without {gone}, "
+        f"{len(failed)} failed round(s)")}
+
+
+def race_destroy_run(label: str, env: dict | None = None) -> dict:
+    window = OUT / f"{label}.window.ara"
+    if window.exists():
+        window.unlink()
+    rc, summary, rows = run_phase(label, "analyse-race", CLAP, env, ["--destroy-late", "0", "--archive-window", str(window)],
+                                  files=[*[str(FIXTURES / f) for f in FILES], "synth:150"])
+    return race_destroy_parts(rc, rows, window)
+
+
+def stage_editor_race_destroy() -> bool:
+    return print_parts("", race_destroy_run("editor-race-destroy"))
+
+
+def stage_editor_race_destroy_fault() -> bool:
+    return fault_part("editor-race-destroy-fault", race_destroy_run("editor-fault-race-destroy", {"DS_ARA_ROUND_FAULT": "no-page-wait"}),
+                      "editor-race-destroy", "a removal does not wait for the job of the page and a failed removal wipes the events")
+
+
+def shell_function_parts(page: Path) -> tuple[bool, str]:
+    """S4: every function of the page that the shell script uses exists in the bundled page."""
+    src = (HERE / "src" / "editor" / "shell.js").read_text(encoding="utf-8")
+    m = re.search(r"var PAGE_FUNCTIONS = \[([^\]]*)\]", src)
+    names = re.findall(r'"([A-Za-z_]+)"', m.group(1)) if m else []
+    text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in sorted(page.glob("*.js")))
+    missing = [n for n in names if not re.search(rf"(function\s+{n}\s*\(|(const|let|var)\s+{n}\b)", text)]
+    return (bool(names) and not missing, f"the shell script uses {len(names)} functions of the page ({', '.join(names)}); {len(missing)} missing in the bundled page {missing}")
+
+
+def stage_editor_shell_functions() -> bool:
+    ok, ev = shell_function_parts(CLAP / "Contents" / "Resources" / "page")
+    return pass_fail("editor-shell-functions", ok, ev)
+
+
+def stage_editor_shell_functions_fault() -> bool:
+    tmp = OUT / "page-fn-fault"
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    shutil.copytree(CLAP / "Contents" / "Resources" / "page", tmp)
+    p = tmp / "session.js"
+    p.write_text(p.read_text().replace("async function loadProject(", "async function loadProjectRenamed("))
+    ok, ev = shell_function_parts(tmp)
+    return pass_fail("editor-shell-functions-fault", not ok, f"a renamed function of the page is found: {ev}")
+
+
 
 STAGES = {
     "fixture": stage_fixture,
@@ -3738,6 +3902,14 @@ STAGES = {
     "editor-page-copy-fault": stage_editor_page_copy_fault,
     "editor-vst3-view": stage_editor_vst3_view,
     "editor-vst3-view-fault": stage_editor_vst3_view_fault,
+    "editor-edit-destroy": stage_editor_edit_destroy,
+    "editor-edit-destroy-fault": stage_editor_edit_destroy_fault,
+    "editor-regions-keep": stage_editor_regions_keep,
+    "editor-regions-keep-fault": stage_editor_regions_keep_fault,
+    "editor-race-destroy": stage_editor_race_destroy,
+    "editor-race-destroy-fault": stage_editor_race_destroy_fault,
+    "editor-shell-functions": stage_editor_shell_functions,
+    "editor-shell-functions-fault": stage_editor_shell_functions_fault,
 }
 ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
@@ -3750,7 +3922,8 @@ ORDER = [
     "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault", "doc-late-audio-arrives", "doc-late-audio-arrives-fault",
     "editor-open", "editor-fault", "editor-gui", "editor-gui-fault", "editor-shell", "editor-shell-fault",
     "editor-edit", "editor-edit-fault", "editor-threads", "editor-threads-fault",
-    "editor-follow", "editor-follow-fault", "editor-refuse", "editor-refuse-fault", "editor-race", "editor-race-fault", "editor-page-copy", "editor-page-copy-fault", "editor-vst3-view", "editor-vst3-view-fault", 
+    "editor-follow", "editor-follow-fault", "editor-refuse", "editor-refuse-fault", "editor-race", "editor-race-fault", "editor-page-copy", "editor-page-copy-fault", "editor-vst3-view", "editor-vst3-view-fault",
+    "editor-edit-destroy", "editor-edit-destroy-fault", "editor-regions-keep", "editor-regions-keep-fault", "editor-race-destroy", "editor-race-destroy-fault", "editor-shell-functions", "editor-shell-functions-fault",  
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",

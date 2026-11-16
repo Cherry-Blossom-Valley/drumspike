@@ -206,6 +206,9 @@ struct Shared {
     inflight: AtomicUsize,
     page_dir: Option<PathBuf>,
     n: usize,
+    /// The head of the document's event log when this editor opened: the page's first poll of
+    /// events starts here, so an event announced before that poll is not lost.
+    opened_head: u64,
 }
 
 fn test_mode() -> Option<String> {
@@ -446,9 +449,12 @@ fn route(sh: &Arc<Shared>, rest: &str, query: &str, body: &[u8]) -> Answer {
     }
     if rest == "events" {
         let log = &sh.backend.page.log;
-        let after = query_value(query, "after")
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or_else(|| log.head());
+        let after = match query_value(query, "after").as_deref() {
+            // the first poll of a page: from the moment this editor opened
+            Some("open") => sh.opened_head,
+            Some(v) => v.parse::<u64>().unwrap_or_else(|_| log.head()),
+            None => log.head(),
+        };
         return Answer::json(200, &log.poll(after, std::time::Duration::from_millis(ms)));
     }
     Answer::err(404, format!("no such endpoint: {rest}"))
@@ -473,7 +479,8 @@ fn poll_channel(sh: &Arc<Shared>, id: &str, total: std::time::Duration) -> Vec<V
 
 /// The commands that `call::run` leaves to the desktop shell (`SHELL_ONLY` of
 /// `crates/app/src/call.rs`), plus the one command of the drag plugin. Each has an answer.
-const SHELL_COMMANDS: [&str; 28] = [
+const SHELL_COMMANDS: [&str; 29] = [
+    "plugin_report",
     "window_call_next",
     "window_call_result",
     "about_info",
@@ -742,6 +749,12 @@ fn shell_command(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Option<Answer> {
         // the agent relay of the desktop window: the plugin has none, the page's loop ends
         "window_call_next" => Answer::json(200, &json!({"enabled": false, "call": null})),
         "window_call_result" => Answer::err(403, "the plugin has no agent relay"),
+        // the shell script of the page reports a function of the page that is missing (S4)
+        "plugin_report" => {
+            session().log(json!({"event": "page_shell_report", "what": args}).to_string());
+            session().write_out();
+            Answer::json(200, &Value::Null)
+        }
         // the host owns the window: the plugin never ends the host process
         "quit_app" => {
             QUITS.fetch_add(1, Ordering::SeqCst);
@@ -801,6 +814,10 @@ Until then NOTICE of the repository and the licence table in plugins/ara/README.
     })
 }
 
+fn scenario() -> String {
+    std::env::var("DS_ARA_EDITOR_SCENARIO").unwrap_or_default()
+}
+
 /// The scenario `DS_ARA_EDITOR_SCENARIO=panic:<command>`: the command panics where `call::run`
 /// would run, so the guard of the request thread is what stops it.
 fn scenario_panics(cmd: &str) -> bool {
@@ -841,9 +858,9 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
                 )
             }
             Class::RefusedNotHere => return Answer::err(403, format!("{cmd} is not in the plugin")),
-            Class::Unclassed if drumspike_app::api::find(cmd).is_some() => {
-                return Answer::err(403, format!("{cmd} is not classed for the plugin"))
-            }
+            // a name in no list at all (a route of the app without a registry row, a new command)
+            // is refused, except the two named routes that `ALLOWED` lists
+            Class::Unclassed => return Answer::err(403, format!("{cmd} is not classed for the plugin")),
             _ => {}
         }
     }
@@ -892,12 +909,24 @@ fn changed_after(sh: &Arc<Shared>, svc: &drumspike_app::Service, cmd: &str, args
     if !(writes || ended) || fault() == "no-sync" {
         return;
     }
-    if fault() != "sync-late" {
+    if fault() != "no-record" {
         if let Some(sid) = args.get("sid").and_then(Value::as_str) {
             if let Err(e) = (sh.backend.record)(svc, sid) {
                 session().log(json!({"event": "page_record_failed", "command": cmd, "error": e}).to_string());
             }
         }
+    }
+    if scenario() == "sync-delay" {
+        // the scenario: the worker hears about the change late (it is not tied to the record
+        // above): a store of the host in that time must still carry the edit
+        let changed = Arc::clone(&sh.backend.changed);
+        let _ = std::thread::Builder::new()
+            .name("drumspike-ara-sync-delay".into())
+            .spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(12));
+                changed();
+            });
+        return;
     }
     (sh.backend.changed)();
 }
@@ -1042,6 +1071,7 @@ impl Editor {
             note_thread(&PROGRESS_THREADS);
             sink_to.push(id, m);
         }));
+        let opened_head = backend.page.log.head();
         let shared = Arc::new(Shared {
             backend,
             channels: queue,
@@ -1050,6 +1080,7 @@ impl Editor {
             inflight: AtomicUsize::new(0),
             page_dir: page.map(|(d, _)| d),
             n,
+            opened_head,
         });
         *self.current.lock().unwrap_or_else(|e| e.into_inner()) = Some(shared);
         self.webview
@@ -1275,6 +1306,10 @@ unsafe extern "C" fn g_set_parent(p: *const clap_plugin, window: *const clap_win
 unsafe extern "C" fn g_destroy(p: *const clap_plugin) {
     guard("gui.destroy", (), move || {
         if !main_only("gui.destroy") {
+            // the web view stays attached until the host calls again on the main thread: say so
+            session()
+                .log(json!({"event": "gui_destroy_off_main_refused", "main_thread": on_main_thread()}).to_string());
+            session().write_out();
             return;
         }
         if let Some(plugin) = plugin_of(p) {
@@ -1317,7 +1352,10 @@ unsafe extern "C" fn g_get_size(p: *const clap_plugin, w: *mut u32, h: *mut u32)
         if w.is_null() || h.is_null() {
             return false;
         }
-        let (cw, ch) = plugin_of(p).map_or((EDITOR_W, EDITOR_H), |pl| pl.gui_size.get());
+        let (cw, ch) = plugin_of(p).map_or((EDITOR_W, EDITOR_H), |pl| {
+            let v = pl.gui_size.load(Ordering::SeqCst);
+            ((v >> 32) as u32, (v & 0xffff_ffff) as u32)
+        });
         *w = cw;
         *h = ch;
         true
@@ -1345,7 +1383,9 @@ unsafe extern "C" fn g_set_size(p: *const clap_plugin, w: u32, h: u32) -> bool {
             return false;
         }
         let Some(plugin) = plugin_of(p) else { return false };
-        plugin.gui_size.set((w.max(320), h.max(240)));
+        plugin
+            .gui_size
+            .store((u64::from(w.max(320)) << 32) | u64::from(h.max(240)), Ordering::SeqCst);
         if let Some(ed) = plugin.editor.borrow().as_ref() {
             ed.set_size(w, h);
         }
@@ -1414,7 +1454,13 @@ mod tests {
             .chain(&SHELL_COMMANDS)
         {
             let known = drumspike_app::api::find(name).is_some()
-                || ["plugins_list", "plugin_accept", "plugin:drag|start_drag"].contains(name);
+                || [
+                    "plugins_list",
+                    "plugin_accept",
+                    "plugin:drag|start_drag",
+                    "plugin_report",
+                ]
+                .contains(name);
             assert!(known, "{name} is not a command of the app");
         }
         assert_eq!(class_of("tracks_remove"), Class::RefusedTrackSet);

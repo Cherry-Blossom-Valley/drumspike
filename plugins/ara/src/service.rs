@@ -332,6 +332,9 @@ fn home_of(cache: &Path, id: &str) -> PathBuf {
 #[derive(Default)]
 pub struct PageHandle {
     svc: std::sync::Mutex<Option<Service>>,
+    /// The sid of the document's open project (the editor and the worker ask whether a job of
+    /// the page runs without taking the `DocService` lock).
+    sid: std::sync::Mutex<Option<String>>,
     /// The events of the service (`project-dirty`, `track-layer`) as a numbered log; the page
     /// reads them with its own number, so an editor that opens later misses none it needs.
     pub log: std::sync::Arc<drumspike_app::bridge::EventLog>,
@@ -342,6 +345,23 @@ impl PageHandle {
     #[must_use]
     pub fn service(&self) -> Option<Service> {
         self.svc.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn set_sid(&self, sid: Option<String>) {
+        *self.sid.lock().unwrap_or_else(|e| e.into_inner()) = sid;
+    }
+
+    /// True while an analysis job of the project is queued or running (the app allows one job
+    /// at a time, and a job blocks the removal of tracks). Takes no `DocService` lock.
+    #[must_use]
+    pub fn job_running(&self) -> bool {
+        let (Some(svc), Some(sid)) = (
+            self.service(),
+            self.sid.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        ) else {
+            return false;
+        };
+        matches!(svc.analyze_status(&sid)["state"].as_str(), Some("queued" | "running"))
     }
 
     fn set(&self, svc: Option<Service>) {
@@ -412,6 +432,23 @@ impl Canceller {
 
     fn set(&self, live: Option<(Service, String)>) {
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = live;
+    }
+}
+
+/// A job of the page may start between the worker's check and its call (S1): the app answers
+/// 409. The call is tried again for a short, bounded time instead of failing the round.
+fn retry_busy<T>(mut f: impl FnMut() -> Result<T, drumspike_app::AppError>) -> Result<T, drumspike_app::AppError> {
+    let mut tries = 0;
+    loop {
+        match f() {
+            Err(e)
+                if e.code == 409 && tries < 100 && switch("DS_ARA_ROUND_FAULT").as_deref() != Some("no-page-wait") =>
+            {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            other => return other,
+        }
     }
 }
 
@@ -524,6 +561,7 @@ impl DocService {
         let opened = svc.project_open(&dir.display().to_string()).map_err(err)?;
         let sid = opened["sid"].as_str().unwrap_or_default().to_string();
         self.sid = Some(sid.clone());
+        self.page.set_sid(Some(sid.clone()));
         self.canceller.set(Some((svc, sid.clone())));
         Ok(sid)
     }
@@ -613,12 +651,37 @@ impl DocService {
                 continue;
             }
             let name = self.tracks[at].0.clone();
-            svc.tracks_remove(&sid, std::slice::from_ref(&name), false)
-                .map_err(err)?;
-            let row = json!({"name": name, "index": at, "order_index": at,
-                "track": serde_json::to_value(make_track(s, &dir)).unwrap_or(Value::Null)});
+            // M1: the track record is made again with the new segments, and EVERYTHING the user
+            // set on the track goes with it: the removal answers the whole old record (hits, role,
+            // note, mix, params, Learn data, layer, follow, every other key), and only its
+            // `segments` and `source` are replaced by the new ones. Hits that now lie outside the
+            // new regions stay in the event list (as the app keeps them); the notes leave them out.
+            let removed = retry_busy(|| svc.tracks_remove(&sid, std::slice::from_ref(&name), true)).map_err(err)?;
+            let mut track = removed["snapshot"][0]["track"].clone();
+            let fresh = serde_json::to_value(make_track(s, &dir)).unwrap_or(Value::Null);
+            if switch("DS_ARA_EDITOR_FAULT").as_deref() == Some("drop-track-data") {
+                track = fresh; // the fault run: the old behaviour, the hand data are gone
+            } else if let Some(obj) = track.as_object_mut() {
+                // what the analysis of this round writes again (the audio may have changed)
+                for key in ["sr", "n_samples", "duration"] {
+                    obj.remove(key);
+                }
+                for key in ["segments", "source"] {
+                    match fresh.get(key) {
+                        Some(v) => {
+                            obj.insert(key.to_string(), v.clone());
+                        }
+                        None => {
+                            obj.remove(key);
+                        }
+                    }
+                }
+            }
+            let row = json!({"name": name, "index": at, "order_index": at, "track": track});
             svc.tracks_restore(&sid, &Value::Array(vec![row])).map_err(err)?;
-            self.events.shift_remove(&name);
+            if switch("DS_ARA_EDITOR_FAULT").as_deref() == Some("drop-track-data") {
+                self.events.shift_remove(&name);
+            }
         }
         let new_sources: Vec<SourceSnapshot> = new.iter().map(|s| (*s).clone()).collect();
         let names = self.names_for(&new_sources);
@@ -675,25 +738,11 @@ impl DocService {
             if self.canceller.cancelled() {
                 return Err("the analysis was cancelled before it started".into());
             }
-            // F4: a job of the page may run (the page's Re-analyze): this round waits for it
-            // instead of failing with the 409 of the app (the fault run takes the wait away)
-            if switch("DS_ARA_ROUND_FAULT").as_deref() != Some("no-page-wait") {
-                let began = std::time::Instant::now();
-                while matches!(svc.analyze_status(&sid)["state"].as_str(), Some("queued" | "running")) {
-                    if self.canceller.cancelled() {
-                        return Err("the analysis was cancelled before it started".into());
-                    }
-                    if began.elapsed() > std::time::Duration::from_secs(600) {
-                        return Err("a job of the page did not end in 600 s".into());
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-            }
             // F1: a round keeps the hits the user placed in the page (the app's own
             // "keep my edits": they stay in the new events and win within 20 ms over the
             // detected ones). `DS_ARA_EDITOR_FAULT=drop-edits` brings back the plain analysis.
             let keep = switch("DS_ARA_EDITOR_FAULT").as_deref() != Some("drop-edits");
-            svc.analyze_start_keep(&sid, Some(analysed.clone()), None, None, None, keep, false)
+            retry_busy(|| svc.analyze_start_keep(&sid, Some(analysed.clone()), None, None, None, keep, false))
                 .map_err(err)?;
             let mut idle_since: Option<std::time::Instant> = None;
             let st = loop {
@@ -837,8 +886,7 @@ impl DocService {
             return Ok(self.track_names());
         };
         if let (Some(svc), Some(sid)) = (&self.svc, &self.sid) {
-            svc.tracks_remove(sid, std::slice::from_ref(&name), false)
-                .map_err(err)?;
+            retry_busy(|| svc.tracks_remove(sid, std::slice::from_ref(&name), false)).map_err(err)?;
             svc.project_save(sid).map_err(err)?;
         }
         self.tracks.retain(|(n, _)| *n != name);
@@ -893,6 +941,7 @@ impl DocService {
     /// Save the project when it has unsaved changes, then close it.
     fn close_project(&mut self) {
         self.canceller.set(None);
+        self.page.set_sid(None);
         if let (Some(svc), Some(sid)) = (&self.svc, self.sid.take()) {
             if svc.project_get(&sid).is_ok_and(|p| p["dirty"] == true) {
                 let _ = svc.project_save(&sid);

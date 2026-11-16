@@ -48,6 +48,10 @@ service of the ARA document. The design, the threads and the measured results ar
   document, on a thread of its own, never on the host's main thread.
 - The web view is made, used and dropped on the host's main thread only. One web view lives
   as long as the plugin instance (wry 0.57 leaks a dropped web view, see the design note).
+- Which hand edits survive a round: hits the user added, moved or edited, and the settings of a track
+  (role, mix, params), also across a region change. A hit the user DELETED comes back at the next
+  round (the app's "keep my edits" keeps added, moved and edited hits only; the note names the two
+  options for the owner).
 - A round of the plugin keeps the hits the user placed in the page (the app's "keep my edits"),
   and after a round the page loads its project again (the event `plugin-reload`). The host owns
   the track set and the project files: the editor answers 403 for the commands that change them,
@@ -220,7 +224,7 @@ delivery ticket M1c.
 | `DS_ARA_FOLDER_FAULT` | fault | shared | every document uses one folder |
 | `DS_ARA_DESTROY_FAULT` | fault | keep | a destroyed source stays in the list and the project |
 | `DS_ARA_HOME_FAULT` | fault | 1 | the service home is below the user's home, outside the cache folder |
-| `DS_ARA_ROUND_FAULT` | fault | new-only, always, no-deadline, no-late-round, no-page-wait | a round analyses only the new tracks, a request for a complete source starts a full round, a request waits for ever for audio that does not come, or audio that comes after the deadline starts no round; no-page-wait: a round does not wait for a job of the page and fails with its 409 |
+| `DS_ARA_ROUND_FAULT` | fault | new-only, always, no-deadline, no-late-round, no-page-wait | a round analyses only the new tracks, a request for a complete source starts a full round, a request waits for ever for audio that does not come, or audio that comes after the deadline starts no round; no-page-wait: a round or a removal does not wait for a job of the page: the round fails with its 409 and a failed removal wipes the events of the document |
 | `DS_ARA_SETTLE_FAULT` | fault | none | no settle time: every request is a round |
 | `DS_ARA_CLOSE_FAULT` | fault | wait, nocancel | the destroy of a controller waits for the round, or does not cancel it |
 | `DS_ARA_ID_FAULT` | fault | trust | the plugin trusts the document id and the track names of an archive, and the names of the host sources |
@@ -234,8 +238,8 @@ delivery ticket M1c.
 | `DS_ARA_SCENARIO` | scenario | corrupt-wav:<n>, fail-first-round, slow-setup, audio-deadline-ms:<n> | the WAV of source n is damaged after the read, the first round fails once, every round waits 1.5 s before its analysis starts, or a request waits n ms for audio (default 30000) |
 | `DS_ARA_EDITOR_MODE` | scenario | ready, keys, focus, resize, measure, edit, shell, analyse, net, bigpost | the editor page runs a test driver of that name and reports to the plugin (the test host sets it itself) |
 | `DS_ARA_EDITOR_ARG` | scenario | a text | the argument of the test driver of the editor page (a WAV path of the shell mode) |
-| `DS_ARA_EDITOR_FAULT` | fault | no-ready, no-bundle, no-shell, no-sync, sync-late, no-notes, no-reload, no-events, drop-edits, allow-track-set, no-focus, no-resize, inline, leak, slow-frames | the editor: the page's ready call is not counted, the plugin finds no page in its bundle, the shell commands are left to the service, a command of the page does not reach the archive or reaches it only through the worker behind its current work (sync-late), the notes do not follow an edit, the page is not told that a round ended or gets no event of the service, a round of the plugin drops the hand edits of the page, the page may change the track set, the web view is not the first responder or does not follow a resize, a command runs on the main thread, every editor leaks 4 MB, or the page draws slow frames |
-| `DS_ARA_EDITOR_SCENARIO` | scenario | panic:<command> | the named command of the page panics inside the plugin where the service would run it |
+| `DS_ARA_EDITOR_FAULT` | fault | no-ready, no-bundle, no-shell, no-sync, no-record, no-notes, no-reload, no-events, drop-edits, drop-track-data, allow-track-set, no-focus, no-resize, inline, leak, slow-frames | the editor: the page's ready call is not counted, the plugin finds no page in its bundle, the shell commands are left to the service, a command of the page does not reach the archive or the request thread does not record it before the page's answer (no-record), the notes do not follow an edit, the page is not told that a round ended or gets no event of the service, a round of the plugin drops the hand edits of the page, a region change drops the hand data of the track (hits, role, mix), the page may change the track set, the web view is not the first responder or does not follow a resize, a command runs on the main thread, every editor leaks 4 MB, or the page draws slow frames |
+| `DS_ARA_EDITOR_SCENARIO` | scenario | panic:<command>, sync-delay | the named command of the page panics inside the plugin where the service would run it, or the worker hears 12 s late about a change of the page (the request thread's own record is not delayed) |
 
 Kinds: **config**: The plugin reads it (the check sets it for every run). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. **scenario**: Scenario switch: sets up a case for a stage (not a fault).
 

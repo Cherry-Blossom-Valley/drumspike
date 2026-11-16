@@ -242,6 +242,20 @@ struct DocShared {
     pending: Mutex<Vec<Arc<SourceState>>>,
     /// The editor's way to the service (it never takes the `svc` lock the worker holds).
     page: Arc<service::PageHandle>,
+    /// S5: the regions and the rate each source had in the last round (or restore). The notes of
+    /// the sources are mapped with THESE, by the worker (`notes_of`) and by the request thread
+    /// (`record_page_edit`) alike: the events belong to that round, not to a region change of
+    /// the host that its next round has not seen yet.
+    round_regions: Mutex<HashMap<usize, (Vec<service::RegionRec>, f64)>>,
+}
+
+/// The regions and the rate to map the notes of a source with: those of the last round when
+/// there is one, else the live ones.
+fn regions_for_notes(
+    round: Option<&(Vec<service::RegionRec>, f64)>,
+    live: (Vec<service::RegionRec>, f64),
+) -> (Vec<service::RegionRec>, f64) {
+    round.cloned().unwrap_or(live)
 }
 
 /// The document ids in use in this process. Two live documents never share an id, so never
@@ -327,6 +341,7 @@ impl DocShared {
         let doc = Arc::new(DocShared {
             cache,
             page: svc.page_handle(),
+            round_regions: Mutex::new(HashMap::new()),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -357,7 +372,7 @@ impl DocShared {
     /// track and the notes of the sources are in the document, so a host store that comes at once
     /// writes them. Runs on the request thread: it takes no `DocService` lock (the worker may hold
     /// it for a whole round), only the locks of the document's own state. The project is saved
-    /// later by the worker. `DS_ARA_EDITOR_FAULT=sync-late` takes this away (the old way: only
+    /// later by the worker. `DS_ARA_EDITOR_FAULT=no-record` takes this away (the old way: only
     /// the worker syncs, behind its current work).
     fn record_page_edit(&self, svc: &drumspike_app::Service, sid: &str) -> Result<bool, String> {
         let members: Vec<Arc<SourceState>> = self
@@ -393,12 +408,19 @@ impl DocShared {
                     continue;
                 };
                 let list = all.get(&track).and_then(Value::as_array).cloned().unwrap_or_default();
-                let regions: Vec<service::RegionRec> = s
+                let live: Vec<service::RegionRec> = s
                     .regions
                     .lock()
                     .map(|r| r.iter().map(|slot| slot.rec).collect())
                     .unwrap_or_default();
-                let notes = service::notes_for(&list, &regions, s.props().sample_rate);
+                let round = self
+                    .round_regions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&s.seq)
+                    .cloned();
+                let (regions, rate) = regions_for_notes(round.as_ref(), (live, s.props().sample_rate));
+                let notes = service::notes_for(&list, &regions, rate);
                 let differs = s.notes.lock().map(|old| *old != notes).unwrap_or(false);
                 if differs {
                     if let Ok(mut old) = s.notes.lock() {
@@ -440,7 +462,18 @@ enum Msg {
     /// A source's read failed.
     Failed(Arc<SourceState>),
     /// The host destroyed a source: its track leaves the project.
-    Remove { src: Arc<SourceState>, sources_left: usize },
+    Remove {
+        src: Arc<SourceState>,
+        sources_left: usize,
+        tries: u32,
+    },
+    /// A round waits for a job of the page (S2): it comes back to the queue after a short time.
+    Defer {
+        doc: Arc<DocShared>,
+        targets: Vec<Arc<SourceState>>,
+        reason: &'static str,
+        since: std::time::Instant,
+    },
     /// The regions or the properties of a source changed: the document needs a round.
     Touch(Arc<DocShared>),
     /// The page changed the project: read the events again.
@@ -523,6 +556,22 @@ static ROUNDS: AtomicUsize = AtomicUsize::new(0);
 const SETTLE_QUIET: std::time::Duration = std::time::Duration::from_millis(250);
 const SETTLE_MAX: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// A round or a removal that waits for a job of the page is looked at again after this time, at
+/// most this many times (about 10 minutes).
+const DEFER_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+const DEFER_MAX_TRIES: u32 = 6000;
+
+/// Send `msg` to the worker after [`DEFER_EVERY`] (a short-lived thread: the worker itself never
+/// sleeps for a job of the page).
+fn defer_msg(msg: Msg) {
+    let _ = std::thread::Builder::new()
+        .name("drumspike-ara-defer".into())
+        .spawn(move || {
+            std::thread::sleep(DEFER_EVERY);
+            let _ = send(session(), msg);
+        });
+}
+
 /// The longest the unload of the library waits for the worker.
 const UNLOAD_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
@@ -540,6 +589,8 @@ fn services_row() -> String {
 /// What the worker holds between two messages.
 #[derive(Default)]
 struct WorkerState {
+    /// Since when the round of a document waits for a job of the page (by document id).
+    deferred_since: std::collections::HashMap<String, std::time::Instant>,
     /// Sources that asked for the analysis and still need it.
     requested: Vec<Arc<SourceState>>,
     /// Documents that need a round without a new request, with the reason (`removal`: a
@@ -772,6 +823,26 @@ impl Session {
                     // a source that needs analysis starts a round even when the service sees no
                     // change (a stale track after a restore: its snapshot did not change)
                     let force = !targets.is_empty();
+                    // S2: a job of the page runs: the round goes back to the queue (a timer
+                    // brings it again) and the worker serves the other documents
+                    let since = *st
+                        .deferred_since
+                        .entry(doc.id())
+                        .or_insert_with(std::time::Instant::now);
+                    if std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-page-wait")
+                        && doc.page.job_running()
+                        && since.elapsed() < std::time::Duration::from_secs(600)
+                    {
+                        defer_msg(Msg::Defer {
+                            doc: doc.clone(),
+                            targets: targets.clone(),
+                            reason: why,
+                            since,
+                        });
+                        st.current.clear();
+                        continue;
+                    }
+                    st.deferred_since.remove(&doc.id());
                     self.run_job(&doc, &targets, why, force);
                     st.current.clear();
                 }
@@ -839,9 +910,35 @@ impl Session {
                     st.requested.push(s);
                 }
             }
-            Msg::Remove { src, sources_left } => {
+            Msg::Remove {
+                src,
+                sources_left,
+                tries,
+            } => {
                 st.requested.retain(|r| !Arc::ptr_eq(r, &src));
-                self.remove_track(&src, sources_left);
+                let busy_fault = std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-page-wait");
+                // M3: a job of the page blocks the removal of a track (the app answers 409). The
+                // worker does not wait for it: the removal comes back to the queue, the events
+                // of the document stay as they are, and other documents are served meanwhile.
+                if !busy_fault && tries < DEFER_MAX_TRIES && src.doc.page.job_running() {
+                    defer_msg(Msg::Remove {
+                        src,
+                        sources_left,
+                        tries: tries + 1,
+                    });
+                    return false;
+                }
+                if let Err(e) = self.remove_track(&src, sources_left) {
+                    if !busy_fault && tries < DEFER_MAX_TRIES && !src.doc.closing.load(Ordering::SeqCst) {
+                        self.log(json!({"event": "source_destroy_retry", "doc": src.doc.id(), "error": e}).to_string());
+                        defer_msg(Msg::Remove {
+                            src,
+                            sources_left,
+                            tries: tries + 1,
+                        });
+                        return false;
+                    }
+                }
                 // the tracks that are left are analysed together again
                 if !src.doc.closing.load(Ordering::SeqCst)
                     && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("new-only")
@@ -853,6 +950,26 @@ impl Session {
                         None => st.stale.push((src.doc.clone(), "removal")),
                     }
                 }
+            }
+            Msg::Defer {
+                doc,
+                targets,
+                reason,
+                since,
+            } => {
+                if doc.closing.load(Ordering::SeqCst) {
+                    return false;
+                }
+                // back in the queue: the sources ask again, a round without sources is a stale mark
+                for s in targets {
+                    if !s.removed.load(Ordering::SeqCst) && !st.requested.iter().any(|r| Arc::ptr_eq(r, &s)) {
+                        st.requested.push(s);
+                    }
+                }
+                if !st.stale.iter().any(|(d, _)| Arc::ptr_eq(d, &doc)) {
+                    st.stale.push((doc.clone(), reason));
+                }
+                st.deferred_since.insert(doc.id(), since);
             }
             Msg::Touch(doc) => {
                 if !doc.closing.load(Ordering::SeqCst) && !st.stale.iter().any(|(d, _)| Arc::ptr_eq(d, &doc)) {
@@ -904,6 +1021,10 @@ impl Session {
                 .to_string(),
         );
         self.write_out();
+        let snap_regions: Vec<(usize, Vec<service::RegionRec>, f64)> = snaps
+            .iter()
+            .map(|x| (x.seq, x.regions.clone(), x.sample_rate))
+            .collect();
         let worker_doc = doc.clone();
         let outcome = guard("service job", Err("the service job panicked".to_string()), move || {
             let mut svc = worker_doc.lock_svc();
@@ -936,6 +1057,11 @@ impl Session {
             );
             self.write_out();
             return; // nothing had changed
+        }
+        if let Ok(mut rr) = doc.round_regions.lock() {
+            for (seq, regions, rate) in snap_regions {
+                rr.insert(seq, (regions, rate));
+            }
         }
         let seq_of = |name: &str| result.tracks.iter().find(|(n, _)| n == name).map(|(_, s)| *s);
         let by_seq = |seq: usize| members.iter().find(|s| s.seq == seq);
@@ -1078,10 +1204,6 @@ impl Session {
     /// project is saved, the document's events (the archive stores them) and the notes follow,
     /// and the host is told about the sources whose notes changed.
     fn page_sync(&'static self, doc: &Arc<DocShared>) {
-        if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() == Ok("sync-late") {
-            // the fault run: the worker is busy for a while before it syncs
-            std::thread::sleep(std::time::Duration::from_secs(12));
-        }
         let worker_doc = doc.clone();
         let outcome = guard("page sync", Err("the page sync panicked".to_string()), move || {
             worker_doc.lock_svc().sync_page_edits()
@@ -1139,7 +1261,7 @@ impl Session {
     }
 
     /// A destroyed source: its track leaves the project, its cached audio goes.
-    fn remove_track(&'static self, src: &Arc<SourceState>, sources_left: usize) {
+    fn remove_track(&'static self, src: &Arc<SourceState>, sources_left: usize) -> Result<(), String> {
         let doc = &src.doc;
         let removed = {
             let worker_doc = doc.clone();
@@ -1148,10 +1270,30 @@ impl Session {
                 worker_doc.lock_svc().remove(seq)
             })
         };
-        let tracks_left = removed.clone().unwrap_or_default();
-        if let Ok(mut m) = doc.events.lock() {
-            m.retain(|name, _| tracks_left.contains(name));
+        let busy_fault = std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-page-wait");
+        match (&removed, busy_fault) {
+            (Ok(left), _) => {
+                if let Ok(mut m) = doc.events.lock() {
+                    m.retain(|name, _| left.contains(name));
+                }
+            }
+            (Err(_), true) => {
+                // the fault run (the first version): an error was taken as "no track is left"
+                if let Ok(mut m) = doc.events.lock() {
+                    m.clear();
+                }
+            }
+            // M3: on an error the events stay (the caller retries the removal)
+            (Err(e), false) => {
+                self.log(
+                    json!({"event": "source_destroy_failed", "doc": doc.id(), "name": src.props().name, "error": e})
+                        .to_string(),
+                );
+                self.write_out();
+                return Err(e.clone());
+            }
         }
+        let tracks_left = removed.clone().unwrap_or_default();
         if let Some(wav) = src.wav.lock().ok().and_then(|w| w.clone()) {
             let _ = std::fs::remove_file(wav);
         }
@@ -1166,11 +1308,17 @@ impl Session {
             })
             .to_string(),
         );
+        Ok(())
     }
 
     /// The archive was restored: the project of the stored document id opens with the
     /// stored events. Nothing is decoded.
     fn restore_project(&'static self, doc: &Arc<DocShared>, id: Option<String>, tracks: Vec<service::RestoredTrack>) {
+        if let Ok(mut rr) = doc.round_regions.lock() {
+            for t in &tracks {
+                rr.insert(t.snapshot.seq, (t.snapshot.regions.clone(), t.snapshot.sample_rate));
+            }
+        }
         let worker_doc = doc.clone();
         let outcome = guard("restore project", Err("the restore panicked".to_string()), move || {
             let mut svc = worker_doc.lock_svc();
@@ -1965,6 +2113,7 @@ unsafe extern "C" fn dc_destroyAudioSource(c: ARADocumentControllerRef, audioSou
         let msg = Msg::Remove {
             src: src.0.clone(),
             sources_left: left,
+            tries: 0,
         };
         if !send(session(), msg) {
             // no worker: nothing was analysed, so no track exists
@@ -2752,7 +2901,9 @@ struct Plugin {
     doc: Mutex<Option<Arc<DocShared>>>,
     /// The editor; made and dropped on the host's main thread only.
     editor: std::cell::RefCell<Option<editor::Editor>>,
-    gui_size: std::cell::Cell<(u32, u32)>,
+    /// The size the editor asks for, packed (width << 32 | height): read by any thread the host calls
+    /// `get_size` from.
+    gui_size: std::sync::atomic::AtomicU64,
 }
 
 unsafe extern "C" fn pext_factory(_p: *const clap_plugin) -> *const ARAFactory {
@@ -3047,7 +3198,7 @@ unsafe extern "C" fn f_create(
             sample_rate: Mutex::new(0.0),
             doc: Mutex::new(None),
             editor: std::cell::RefCell::new(None),
-            gui_size: std::cell::Cell::new((1000, 640)),
+            gui_size: std::sync::atomic::AtomicU64::new((1000u64 << 32) | 640),
         }));
         (*p).clap.plugin_data = p as *mut c_void;
         &(*p).clap
@@ -3112,6 +3263,24 @@ pub static clap_entry: ClapEntry = ClapEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_map_with_the_regions_of_the_round_not_the_live_ones() {
+        let rec = |a: f64, d: f64| service::RegionRec {
+            start_mod: a,
+            dur_mod: d,
+            start_play: 0.0,
+        };
+        let round = (vec![rec(0.0, 1.0)], 48_000.0);
+        let live = (vec![rec(0.0, 0.5)], 48_000.0);
+        assert_eq!(regions_for_notes(Some(&round), live.clone()).0[0].dur_mod, 1.0);
+        assert_eq!(regions_for_notes(None, live).0[0].dur_mod, 0.5);
+        // the same list of events gives the same notes through both paths: a hit at 0.75 s
+        // is a note with the round's regions and none with the live ones
+        let list = vec![json!({"t": 0.75, "v": 100})];
+        assert_eq!(service::notes_for(&list, &round.0, round.1).len(), 1);
+        assert_eq!(service::notes_for(&list, &[rec(0.0, 0.5)], 48_000.0).len(), 0);
+    }
 
     fn entry(id: &str, name: &str) -> state::ArchiveSource {
         state::ArchiveSource {

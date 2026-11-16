@@ -8,6 +8,8 @@
   var T = window.__DS_TEST__ || { mode: "ready", arg: "", fault: "" };
   function post(o) { try { window.ipc.postMessage(JSON.stringify(o)); } catch (e) { /* no ipc */ } }
   var violations = [];
+  var reloads = 0;
+  try { window.__TAURI__.event.listen("plugin-reload", function () { reloads++; }); } catch (e) { /* no events */ }
   document.addEventListener("securitypolicyviolation", function (ev) {
     violations.push({ directive: ev.violatedDirective, blocked: ev.blockedURI });
   });
@@ -61,8 +63,9 @@
     if (T.mode === "keys") setTimeout(function () { post({ kind: "keys", seen: keySeen, hasFocus: document.hasFocus() }); }, 7000);
     if (T.mode === "focus") focus();
     if (T.mode === "resize") sizes();
-    if (T.mode === "edit") await edit(names);
+    if (T.mode === "edit" || T.mode === "edit-destroy") await edit(names);
     if (T.mode === "edit-round") { await edit(names); await follow(+T.arg || names.length + 1); }
+    if (T.mode === "edit-region") { var r0 = reloads; await edit(names, true); await follow(names.length, true, r0); }
     if (T.mode === "open-first") await follow(+T.arg || 4);
     if (T.mode === "refuse") await refuse(names);
     if (T.mode === "shell") await shell(names);
@@ -108,67 +111,33 @@
       if (performance.now() - t0 > 6000) { clearInterval(iv); post({ kind: "resize", samples: s }); }
     }, 200);
   }
-  async function edit(names) {   // move one hit through the page's own backend call
+  async function edit(names, withRole) {   // move one hit through the page's own backend call
     var dirty = [];
     try { await window.__TAURI__.event.listen("project-dirty", function (e) { dirty.push(e.payload); }); } catch (e) { /* no events */ }
     var name = names[0], before = await raw("events_get", { sid: S.sid, name: name });
     var evs = JSON.parse(before.text).events, idx = Math.min(1, evs.length - 1), from = evs[idx].t, to = from + 0.01;
-    var res = null, err = null;
+    var res = null, err = null, role = null;
     try { res = await B.eventsEdit(S.sid, name, [{ op: "move", index: idx, t: to }]); } catch (e) { err = String(e && e.message || e); }
+    if (withRole) { try { await window.__TAURI__.core.invoke("track_set_role", { sid: S.sid, name: name, role: "cymbal" }); role = "cymbal"; } catch (e) { err = String(e && e.message || e); } }
     var after = await raw("events_get", { sid: S.sid, name: name });
+    // the report goes at once: the host may store the archive the moment it sees it
+    post({ kind: "edit", name: name, index: idx, from: from, to: to, error: err, role: role, before_raw: before.text, after_raw: after.text });
     await new Promise(function (r) { setTimeout(r, 1500); });   // the event of the service comes by long poll
-    post({ kind: "edit", dirty_events: dirty, name: name, index: idx, from: from, to: to, error: err, before_raw: before.text, after_raw: after.text });
+    post({ kind: "edit-events", dirty_events: dirty });
   }
-  async function shell(names) {   // every shell command and the four binary commands
-    var out = {}, sid = S.sid, name = names[0];
-    var cmds = ["shell_sync", "shell_typing", "app_ready", "open_paths_take", "quit_app", "reveal_path", "about_info",
-      "about_third_party", "open_link", "open_url", "startup_mark", "splash_painted", "splash_dismiss", "splash_report",
-      "selftest_clock", "plugin:drag|start_drag"];
-    var args = { shell_sync: { has_project: true, state: null }, shell_typing: { on: true }, reveal_path: { path: T.arg || "/tmp" },
-      open_link: { id: "website" }, open_url: { url: "https://example.com/" } };
-    for (var i = 0; i < cmds.length; i++) {
-      try { var v = await window.__TAURI__.core.invoke(cmds[i], args[cmds[i]] || {}); out[cmds[i]] = { ok: true, v: v === undefined ? null : v }; }
-      catch (e) { out[cmds[i]] = { ok: false, code: e && e.code, message: e && e.message }; }
-    }
-    var bin = {};
-    async function bytes(label, cmd, a) {
-      try { var b = await window.__TAURI__.core.invoke(cmd, a); bin[label] = { ok: b instanceof ArrayBuffer, len: b.byteLength || 0 }; }
-      catch (e) { bin[label] = { ok: false, code: e && e.code, message: e && e.message }; }
-    }
-    var info = await window.__TAURI__.core.invoke("peaks_info", { sid: sid, name: name }).catch(function () { return null; });
-    var lv = info ? Object.keys(info.levels)[0] : "0";
-    await bytes("peaks_tile", "peaks_tile", { sid: sid, name: name, level: +lv, from: 0, to: info ? info.levels[lv].n : 1 });
-    await bytes("samples_window", "samples_window", { sid: sid, name: name, start: 0, end: 2000 });
-    if (T.arg) {
-      await window.__TAURI__.core.invoke("track_layer_set", { sid: sid, name: name, path: T.arg }).catch(function () {});
-      await bytes("track_layer_wave", "track_layer_wave", { sid: sid, name: name, start: 0, end: 2000 });
-      await window.__TAURI__.core.invoke("track_sampler_set", { sid: sid, name: name, path: T.arg }).catch(function () {});
-      await bytes("track_sampler_wave", "track_sampler_wave", { sid: sid, name: name, start: 0, end: 2000 });
-    }
-    var errc = null;
-    try { await window.__TAURI__.core.invoke("project_get", { sid: "no-such-sid" }); } catch (e) { errc = { code: e.code, message: e.message }; }
-    var nocmd = null;
-    try { await window.__TAURI__.core.invoke("no_such_command", {}); } catch (e) { nocmd = { code: e.code, message: e.message }; }
-    var panicked = null;
-    try { await window.__TAURI__.core.invoke("export_existing", { sid: sid }); panicked = "answered"; } catch (e) { panicked = { code: e.code, message: e.message }; }
-    // a channel message: a read-only command with a progress channel is not needed; the event
-    // listener is checked by registering one
-    var listened = false;
-    try { var un = await window.__TAURI__.event.listen("project-dirty", function () {}); listened = typeof un === "function"; } catch (e) { /* no */ }
-    post({ kind: "shell", commands: out, binary: bin, error_shape: errc, unknown: nocmd, export_existing: panicked, listen: listened,
-      keys: Object.keys(window.__TAURI__).sort(), core: Object.keys(window.__TAURI__.core).sort(), hostMode: window.__DS_HOST_MODE__ });
-  }
-  async function follow(expect) {   // wait for the plugin's reload event: the page holds the new tracks
-    var t0 = performance.now(), ok = false;
+  async function follow(expect, needReload, reloadsFrom) {   // wait for the plugin's reload event: the page holds the new tracks
+    var t0 = performance.now(), ok = false, reloads0 = reloadsFrom === undefined ? reloads : reloadsFrom;
     while (performance.now() - t0 < 30000) {
-      try { if (S.order.length >= expect && S.loaded > 0 && S.sid) { ok = true; break; } } catch (e) { /* not yet */ }
+      try { if (S.order.length >= expect && S.loaded > 0 && S.sid && (!needReload || reloads > reloads0)) { ok = true; break; } } catch (e) { /* not yet */ }
       await new Promise(function (r) { setTimeout(r, 200); });
     }
     await new Promise(function (r) { setTimeout(r, 500); });
     var names = [], page = {}, rawEv = {};
     try { names = S.order.slice(); names.forEach(function (n) { page[n] = (S.events[n] || []).map(function (e) { return { t: e.t, v: e.v }; }); }); } catch (e) { /* none */ }
     for (var i = 0; i < names.length; i++) rawEv[names[i]] = (await raw("events_get", { sid: S.sid, name: names[i] })).text;
-    post({ kind: "follow", ok: ok, tracks: names, page_events: page, raw_events: rawEv, sid: S.sid, ms: Math.round(performance.now() - t0) });
+    var roles = {};
+    try { names.forEach(function (n) { roles[n] = S.tracks[n] && S.tracks[n].role; }); } catch (e) { /* none */ }
+    post({ kind: "follow", ok: ok, roles: roles, reloads: reloads, tracks: names, page_events: page, raw_events: rawEv, sid: S.sid, ms: Math.round(performance.now() - t0) });
   }
   async function refuse(names) {   // F3: the page cannot change the track set
     var sid = S.sid, name = names[0], out = {};

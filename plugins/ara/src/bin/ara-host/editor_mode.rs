@@ -10,6 +10,11 @@
 //!                          |edit-round|open-first|refuse|bigpost
 //!                          [--cycles N] [--archive <file>] [--arg <text>] [--no-ara]
 //!                          [--late-files <wav>...] [--no-sync-wait]
+//! `--store-at-edit <file>`: the archive is stored the moment the page's edit report arrives
+//! (modes `edit`, `edit-destroy`, `edit-region`); `edit-destroy` then closes the editor and the
+//! document at once. `edit-region`: after the edit the host trims the region of the edited
+//! source (`--region a,d,p`). `analyse-race --destroy-late <i> --archive-window <file>`: the
+//! host destroys source `i` while the page's own analysis runs and stores an archive in that time.
 //! `--late-files` are added to the document (and analysed) while the editor is open: in
 //! `open-first` when the page has booted (the files then are `--late-files` only), in
 //! `edit-round` and `refuse` after the page's report, in `analyse-race` when the page's own
@@ -167,6 +172,10 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     let no_ara = arg_flag(rest, "--no-ara");
     let late_files = args_list(rest, "--late-files");
     let no_sync_wait = arg_flag(rest, "--no-sync-wait");
+    let store_at_edit = args_value(rest, "--store-at-edit");
+    let region_spec = args_value(rest, "--region").and_then(|v| parse_region(&v).ok());
+    let destroy_late: Option<usize> = args_value(rest, "--destroy-late").and_then(|v| v.parse().ok());
+    let archive_window = args_value(rest, "--archive-window");
     std::env::set_var("DS_ARA_EDITOR_MODE", &mode);
     if let Some(a) = args_value(rest, "--arg") {
         std::env::set_var("DS_ARA_EDITOR_ARG", a);
@@ -356,11 +365,14 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             }
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
-                "keys" | "focus" | "resize" | "measure" | "edit" | "shell" | "analyse" | "bigpost" | "refuse" => {
+                "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" => {
                     Some(mode.as_str())
                 }
+                // the edit mode ends with the event report that follows the edit report
+                "edit" => Some("edit-events"),
                 "analyse-race" => Some("analyse"),
-                "edit-round" | "open-first" => Some("follow"),
+                "edit-round" | "open-first" | "edit-region" => Some("follow"),
+                "edit-destroy" => Some("edit"),
                 "net" => Some("now"),
                 _ => None,
             };
@@ -370,6 +382,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let refuse_before = count_rows("page_report", Some("refuse"));
             let started_before = count_rows("page_report", Some("analyse-started"));
             let mut late_done = false;
+            let mut edit_handled = false;
+            let mut destroyed_jobs: Option<usize> = None;
             if round == 1 {
                 // WebKit draws a page only while its window is not occluded: a locked screen
                 // hides every window, and the page is then suspended
@@ -428,6 +442,71 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         resized = 2;
                     }
                 }
+                if !edit_handled && count_rows("page_report", Some("edit")) > edits_before && mode.starts_with("edit") {
+                    edit_handled = true;
+                    if let Some(path) = &store_at_edit {
+                        // the archive is stored the moment the page's edit is answered
+                        match doc.store() {
+                            Ok(blob) => {
+                                let _ = std::fs::write(path, &blob);
+                                println!("{{\"event\":\"stored_at_edit\",\"bytes\":{}}}", blob.len());
+                            }
+                            Err(e) => {
+                                failed = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                    if mode == "edit-destroy" {
+                        got = true;
+                        break; // the editor and the document close at once
+                    }
+                    if mode == "edit-region" {
+                        let name = rows()
+                            .iter()
+                            .rev()
+                            .find(|r| r["event"] == "page_report" && r["kind"] == "edit")
+                            .and_then(|r| r["report"]["name"].as_str().map(str::to_string))
+                            .unwrap_or_default();
+                        let at = files.iter().position(|f| stem_safe(f) == name);
+                        if let (Some(i), Some((a, d, p))) = (at, region_spec) {
+                            let jobs_before = count_rows("job", None);
+                            update_region(&doc, i, a, d, p);
+                            let t = Instant::now();
+                            while t.elapsed() < Duration::from_secs(30) && count_rows("job", None) <= jobs_before {
+                                pump(&app);
+                                doc_pump(&doc);
+                            }
+                        } else {
+                            failed = Some(format!("no source for the edited track {name:?} or no --region"));
+                            break;
+                        }
+                    }
+                }
+                if mode == "analyse-race" && destroyed_jobs.is_none() {
+                    if let Some(i) = destroy_late {
+                        if count_rows("page_report", Some("analyse-started")) > started_before {
+                            destroyed_jobs = Some(count_rows("job", None));
+                            if let Err(e) = doc.destroy_source(i) {
+                                failed = Some(e);
+                                break;
+                            }
+                            if let Some(path) = &archive_window {
+                                // a store while the page's job still runs and the track is not gone yet
+                                match doc.store() {
+                                    Ok(blob) => {
+                                        let _ = std::fs::write(path, &blob);
+                                        println!("{{\"event\":\"stored_in_window\",\"bytes\":{}}}", blob.len());
+                                    }
+                                    Err(e) => {
+                                        failed = Some(e);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 if !late_done && !late_files.is_empty() {
                     let trigger = match mode.as_str() {
                         "open-first" => count_rows("page_report", Some("boot")) > boots_before,
@@ -459,6 +538,10 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 pump(&app);
                 let ready_now = count_rows("page_ready", None) > ready_before;
                 let done = match want_kind {
+                    Some("analyse") if destroy_late.is_some() => {
+                        count_rows("page_report", Some("analyse")) > reports_before
+                            && destroyed_jobs.is_some_and(|j| count_rows("job", None) > j)
+                    }
                     Some(k) => count_rows("page_report", Some(k)) > reports_before,
                     // the ready mode waits for the page's boot report too (the driver sends it
                     // right after the ready call)
@@ -477,7 +560,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 }
                 rss_open = rss_mb();
             }
-            if got && mode == "edit" && !no_sync_wait {
+            if got && mode == "edit-sync-wait" && !no_sync_wait {
                 // the plugin reads the events again on its worker; wait for its row
                 let t = Instant::now();
                 while t.elapsed() < Duration::from_secs(15) && count_rows("page_sync", None) == 0 {
@@ -554,4 +637,38 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
 
 fn doc_pump(doc: &HostDoc) {
     unsafe { super::pump(doc.inst) }
+}
+
+fn stem_safe(file: &str) -> String {
+    // the track name of a file: the app's `safe_name` of its stem
+    let stem = std::path::Path::new(file)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut out = String::new();
+    let mut gap = false;
+    for c in stem.chars() {
+        if c.is_ascii() && (c.is_ascii_alphanumeric() || c == '-') {
+            if gap && !out.is_empty() {
+                out.push('_');
+            }
+            gap = false;
+            out.push(c);
+        } else {
+            gap = true;
+        }
+    }
+    out
+}
+
+fn update_region(doc: &HostDoc, i: usize, a: f64, d: f64, p: f64) {
+    unsafe {
+        let dc = iface_of(doc.inst);
+        let state = &*doc.state;
+        if let Some(r) = state.regions.get(i) {
+            let props = playback_props(a, d, p);
+            (dc.updatePlaybackRegionProperties
+                .expect("updatePlaybackRegionProperties"))(dc_ref_of(doc.inst), *r, &props);
+        }
+    }
 }

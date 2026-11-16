@@ -243,7 +243,7 @@ hold the borrow of the editor slot while the web view is made or moved.
 | Finding | Stage and fault run |
 | --- | --- |
 | F1 round keeps hand edits, page follows | `editor-keep-edits`, `editor-follow` (+ `-vst3`); faults `editor-keep-edits-fault` (`drop-edits`), `editor-follow-fault` (`no-reload`) |
-| F2 edit reaches the archive at once | `editor-edit` (the archive is stored at once, no wait for the worker); fault `editor-edit-fault-sync-late` |
+| F2 edit reaches the archive at once | `editor-edit` (the archive is stored at once, no wait for the worker); fault `editor-edit-fault-no-record` (with the scenario `sync-delay`) |
 | F3 track set owned by the host | `editor-refuse` (14 commands answer 403, tracks unchanged, a later round runs); fault `editor-refuse-fault` |
 | F4 round and page job | `editor-race`; fault `editor-race-fault` (`no-page-wait`) |
 | F5 command classes | unit test `every_command_of_the_app_is_in_exactly_one_class` (in `crate-test`) |
@@ -273,6 +273,71 @@ unlocked screen (after `check.sh build` and the stages `fixture` and `reference`
 
 `editor-gui` runs keys, focus, resize and measure on the CLAP and on the CLAP in the VST3. The
 stage `editor-measure` fails with the reason while the screen is locked.
+
+## Round 3 (second review of the coordinator)
+
+### What a region change keeps (M1)
+
+When the host changes the regions or the properties of a source, the plugin makes its track
+record again with the new segments. The removal answers the whole old record
+(`tracks_remove` with `snapshot`), and the plugin carries EVERYTHING the user set on the track
+into the new record: hits (also the edited ones), role, note, mix mode, volume and pan, params,
+Learn data, layer and sampler, follow, row data, and every other key. Only `segments` and `source`
+are replaced by the new ones; `sr`, `n_samples` and `duration` are dropped, because the analysis
+of the same round writes them again. Hits that now lie outside the new regions stay in the event
+list as the app keeps them; the notes leave them out. Then the round runs with "keep my edits".
+Stage `editor-regions-keep` (fault `drop-track-data`).
+
+### A job of the page and the worker (M3, S1, S2)
+
+- The worker never waits for a job of the page. A round or a removal that meets a running job
+  goes back to the queue (`Msg::Defer`, `Msg::Remove` with a counter) and comes again after 100 ms,
+  for at most about 10 minutes; the worker serves the other documents meanwhile. A destroy of
+  another document does not wait for it.
+- A removal that fails keeps the events of the document (it never takes an error for "no track is
+  left") and is tried again. The ghost track leaves the project when the job has ended. Stage
+  `editor-race-destroy` (fault: `no-page-wait`).
+- A job of the page may start between the check and the call: the calls that the job blocks
+  (`tracks_remove`, `analyze_start_keep`) are tried again for up to 10 s on a 409 (S1).
+
+### The edit stage (M2)
+
+The scenario `sync-delay` delays only the worker's sync (12 s); the request thread's own record
+is not delayed. `editor-edit` runs with it and stores the archive the moment the edit is
+answered; the fault `no-record` takes the record away and the stage fails. Stage
+`editor-edit-destroy` stores the archive at the edit, closes the editor and the document at once,
+and checks the archive in a new process and the project on disk.
+
+### The reload and the view (S3, S4, S7)
+
+The reload of the page after `plugin-reload` DROPS the page's pending writes (`cancelEvents`)
+instead of flushing them: they hold the page's older list and would be written over the data of
+the round. The zoom and the scroll of the lanes are kept across the reload (the script sets
+`S.view` and the scroll position; this uses two internals of the page, no change in `static/`).
+The undo and redo history is lost (`loadProject` resets it): open point for #539. The shell
+script uses five functions of the page (`PAGE_FUNCTIONS`); a missing one is reported (console
+error and the shell command `plugin_report`, a row `page_shell_report`), and the stage
+`editor-shell-functions` fails when one is missing in the bundled page. The first poll of events
+starts at the head of the log when the editor opened, so a `plugin-reload` announced before the
+first poll is not lost. A command that is in no list at all is refused (403). `get_size` reads an
+atomic; a `destroy` off the main thread is refused and leaves a row.
+
+### Same source for the notes (S5)
+
+The notes are mapped with the regions and the rate each source had in the last round (or restore),
+by the worker and by the request thread alike (`round_regions`), not with the live regions that a
+host change may have moved since. A test (`notes_map_with_the_regions_of_the_round_not_the_live_ones`)
+shows the difference.
+
+### Which hand edits survive a round (S6)
+
+Survive a DAW round: hits the user added, moved or edited in the page; the role, note, mix,
+params and every other setting of a track, also across a region change. Do NOT survive: a hit that
+the user DELETED. `keep_edited` of the app keeps added, moved and edited hits only, so the next
+round picks a deleted hit again, and a round of the plugin is silent. The plugin builds no
+workaround. Open points for the owner, two options: (a) the app writes a delete as a
+`deactivated` mark that the next analysis keeps (a change in `crates/`), or (b) the plugin
+re-applies the deletes after a round (it would have to remember them per track).
 
 ## Findings
 
