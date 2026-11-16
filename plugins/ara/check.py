@@ -3678,7 +3678,9 @@ def edit_destroy_parts(rc: int, rows: list, archive: Path, cache: str, ref: byte
     return {
         "editor-edit-destroy-archive": (
             rc == 0 and restore_rc == 0 and got.get(r["name"]) == after,
-            f"the archive stored the moment the edit was answered, before the destroy, restored in a new process holds the edit ({len(after)} hits of {r['name']})"),
+            f"the archive stored the moment the edit was answered, before the destroy, restored in a new process holds the edit "
+            f"({len(after)} hits of {r['name']}; restored list has {len(got.get(r['name'], []))} hits, restore rc {restore_rc}, "
+            f"{len(restored)} doc_restored row(s), first differing hit {next((i for i, (a, b) in enumerate(zip(after, got.get(r['name'], []))) if a != b), None)})"),
         "editor-edit-destroy-disk": (
             disk is not None and any(abs(h["t"] - r["to"]) < 1e-9 for h in disk) and not any(abs(h["t"] - r["from"]) < 1e-9 for h in disk),
             f"the project on disk after the destroy of the controller holds the moved hit at {r['to']} (and not at {r['from']}): "

@@ -68,7 +68,7 @@
     if (T.mode === "edit-region") { var r0 = reloads; await edit(names, true); await follow(names.length, true, r0); }
     if (T.mode === "open-first") await follow(+T.arg || 4);
     if (T.mode === "refuse") await refuse(names);
-    if (T.mode === "shell") await shell(names);
+    if (T.mode === "shell") { try { await shell(names); } catch (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); } }
     if (T.mode === "analyse" || T.mode === "analyse-race") await analyse(names);
     if (T.mode === "bigpost") await bigpost(names);
   });
@@ -124,6 +124,45 @@
     post({ kind: "edit", name: name, index: idx, from: from, to: to, error: err, role: role, before_raw: before.text, after_raw: after.text });
     await new Promise(function (r) { setTimeout(r, 1500); });   // the event of the service comes by long poll
     post({ kind: "edit-events", dirty_events: dirty });
+  }
+  async function shell(names) {   // every shell command and the four binary commands
+    var out = {}, sid = S.sid, name = names[0];
+    var cmds = ["shell_sync", "shell_typing", "app_ready", "open_paths_take", "quit_app", "reveal_path", "about_info",
+      "about_third_party", "open_link", "open_url", "startup_mark", "splash_painted", "splash_dismiss", "splash_report",
+      "selftest_clock", "plugin:drag|start_drag"];
+    var args = { shell_sync: { has_project: true, state: null }, shell_typing: { on: true }, reveal_path: { path: T.arg || "/tmp" },
+      open_link: { id: "website" }, open_url: { url: "https://example.com/" } };
+    for (var i = 0; i < cmds.length; i++) {
+      try { var v = await window.__TAURI__.core.invoke(cmds[i], args[cmds[i]] || {}); out[cmds[i]] = { ok: true, v: v === undefined ? null : v }; }
+      catch (e) { out[cmds[i]] = { ok: false, code: e && e.code, message: e && e.message }; }
+    }
+    var bin = {};
+    async function bytes(label, cmd, a) {
+      try { var b = await window.__TAURI__.core.invoke(cmd, a); bin[label] = { ok: b instanceof ArrayBuffer, len: b.byteLength || 0 }; }
+      catch (e) { bin[label] = { ok: false, code: e && e.code, message: e && e.message }; }
+    }
+    var info = await window.__TAURI__.core.invoke("peaks_info", { sid: sid, name: name }).catch(function () { return null; });
+    var lv = info ? Object.keys(info.levels)[0] : "0";
+    await bytes("peaks_tile", "peaks_tile", { sid: sid, name: name, level: +lv, from: 0, to: info ? info.levels[lv].n : 1 });
+    await bytes("samples_window", "samples_window", { sid: sid, name: name, start: 0, end: 2000 });
+    if (T.arg) {
+      await window.__TAURI__.core.invoke("track_layer_set", { sid: sid, name: name, path: T.arg }).catch(function () {});
+      await bytes("track_layer_wave", "track_layer_wave", { sid: sid, name: name, start: 0, end: 2000 });
+      await window.__TAURI__.core.invoke("track_sampler_set", { sid: sid, name: name, path: T.arg }).catch(function () {});
+      await bytes("track_sampler_wave", "track_sampler_wave", { sid: sid, name: name, start: 0, end: 2000 });
+    }
+    var errc = null;
+    try { await window.__TAURI__.core.invoke("project_get", { sid: "no-such-sid" }); } catch (e) { errc = { code: e.code, message: e.message }; }
+    var nocmd = null;
+    try { await window.__TAURI__.core.invoke("no_such_command", {}); } catch (e) { nocmd = { code: e.code, message: e.message }; }
+    var panicked = null;
+    try { await window.__TAURI__.core.invoke("export_existing", { sid: sid }); panicked = "answered"; } catch (e) { panicked = { code: e.code, message: e.message }; }
+    // a channel message: a read-only command with a progress channel is not needed; the event
+    // listener is checked by registering one
+    var listened = false;
+    try { var un = await window.__TAURI__.event.listen("project-dirty", function () {}); listened = typeof un === "function"; } catch (e) { /* no */ }
+    post({ kind: "shell", commands: out, binary: bin, error_shape: errc, unknown: nocmd, export_existing: panicked, listen: listened,
+      keys: Object.keys(window.__TAURI__).sort(), core: Object.keys(window.__TAURI__.core).sort(), hostMode: window.__DS_HOST_MODE__ });
   }
   async function follow(expect, needReload, reloadsFrom) {   // wait for the plugin's reload event: the page holds the new tracks
     var t0 = performance.now(), ok = false, reloads0 = reloadsFrom === undefined ? reloads : reloadsFrom;
