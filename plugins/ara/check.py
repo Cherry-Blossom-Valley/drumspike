@@ -3286,7 +3286,7 @@ def shell_parts(rc: int, rows: list) -> dict:
     return parts
 
 
-def panic_parts(rc: int, rows: list) -> dict:
+def page_panic_parts(rc: int, rows: list) -> dict:
     reps = page_reports(rows, "shell")
     r = reps[0] if reps else {}
     got = r.get("export_existing")
@@ -3303,7 +3303,7 @@ def stage_editor_shell() -> bool:
         rc, summary, rows = run_phase(f"editor-shell-{which}", "shell", bundle, args=["--no-regions", "--arg", wav])
         ok = print_parts(suffix, shell_parts(rc, rows)) and ok
     rc, summary, rows = run_phase("editor-panic", "shell", CLAP, {"DS_ARA_EDITOR_SCENARIO": "panic:export_existing"}, ["--no-regions", "--arg", wav])
-    ok = print_parts("", panic_parts(rc, rows)) and ok
+    ok = print_parts("", page_panic_parts(rc, rows)) and ok
     return ok
 
 
@@ -3315,7 +3315,7 @@ def stage_editor_shell_fault() -> bool:
     rc, summary, rows = run_phase(
         "editor-fault-panic", "shell", CLAP,
         {"DS_ARA_EDITOR_SCENARIO": "panic:export_existing", "DS_ARA_GUARD_FAULT": "off"}, ["--no-regions", "--arg", wav])
-    ok = fault_part("editor-panic-fault", panic_parts(rc, rows), "editor-panic", "the request thread has no panic guard") and ok
+    ok = fault_part("editor-panic-fault", page_panic_parts(rc, rows), "editor-panic", "the request thread has no panic guard") and ok
     return ok
 
 
