@@ -178,10 +178,26 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         );
         window.setReleasedWhenClosed(false);
         window.makeKeyAndOrderFront(None);
+        window.orderFrontRegardless();
+        window.setLevel(3);
         app.finishLaunching();
         #[allow(deprecated)]
         app.activateIgnoringOtherApps(true);
 
+        let mut shown = false;
+        for _ in 0..25 {
+            pump(&app);
+        }
+        // the page is "visible" to WebKit only while its window is not occluded
+        eprintln!(
+            "editor: window visible={} occlusion={:?} key={} app_active={}",
+            window.isVisible(),
+            window.occlusionState(),
+            window.isKeyWindow(),
+            app.isActive()
+        );
+        shown |= window.isVisible();
+        let _ = shown;
         let rss_closed = rss_mb();
         let lib = match load(bundle) {
             Ok(l) => l,
@@ -305,6 +321,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         let mut opened = 0usize;
         let mut failed: Option<String> = None;
         let mut rss_open = 0.0;
+        let mut window_visible = false;
         let ready_limit = Duration::from_secs(25);
         let phase_limit = Duration::from_secs(60);
         for round in 1..=cycles {
@@ -330,13 +347,30 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             }
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
-                "keys" | "focus" | "resize" | "measure" | "edit" | "shell" | "analyse" | "bigpost" => Some(mode.as_str()),
+                "keys" | "focus" | "resize" | "measure" | "edit" | "shell" | "analyse" | "bigpost" => {
+                    Some(mode.as_str())
+                }
                 "net" => Some("now"),
                 _ => None,
             };
             let reports_before = want_kind.map_or(0, |k| count_rows("page_report", Some(k)));
+            let boots_before = count_rows("page_report", Some("boot"));
+            if round == 1 {
+                // WebKit draws a page only while its window is not occluded: a locked screen
+                // hides every window, and the page is then suspended
+                for _ in 0..20 {
+                    pump(&app);
+                }
+                window_visible = window.occlusionState().0 & 2 != 0;
+            }
             let t0 = Instant::now();
-            let limit = if want_kind.is_some() { phase_limit } else { ready_limit };
+            let limit = if mode == "measure" && !window_visible {
+                Duration::from_secs(20)
+            } else if want_kind.is_some() {
+                phase_limit
+            } else {
+                ready_limit
+            };
             let mut schedule = schedule_of(&mode);
             let mut resized = 0usize;
             let mut saved_resp: Option<Retained<NSResponder>> = None;
@@ -383,7 +417,9 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 let ready_now = count_rows("page_ready", None) > ready_before;
                 let done = match want_kind {
                     Some(k) => count_rows("page_report", Some(k)) > reports_before,
-                    None => ready_now,
+                    // the ready mode waits for the page's boot report too (the driver sends it
+                    // right after the ready call)
+                    None => ready_now && count_rows("page_report", Some("boot")) > boots_before,
                 };
                 if done {
                     got = true;
@@ -426,6 +462,14 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             pump(&app);
         }
         let rss_after = rss_mb();
+        if let Some(h) = args_value(rest, "--hold").and_then(|v| v.parse::<u64>().ok()) {
+            // a debugging aid: stay alive so `leaks <pid>` or `vmmap <pid>` can look
+            eprintln!("editor: holding pid {}", std::process::id());
+            let t = Instant::now();
+            while t.elapsed() < Duration::from_secs(h) {
+                pump(&app);
+            }
+        }
         audio_stop.store(true, Ordering::SeqCst);
         if let Some(h) = audio_thread {
             let _ = h.join();
@@ -449,7 +493,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         ((*lib.entry).deinit.expect("deinit"))();
         let audio = audio_stats.lock().map(|s| *s).unwrap_or_default();
         println!(
-            "{{\"event\":\"editor_run\",\"mode\":{mode:?},\"cycles\":{cycles},\"opened\":{opened},\"ok\":{},\"why\":{:?},\"rss_closed_mb\":{rss_closed:.1},\"rss_open_mb\":{rss_open:.1},\"rss_after_mb\":{rss_after:.1},\"audio_blocks\":{},\"audio_overruns\":{},\"audio_worst_us\":{},\"audio_budget_us\":{}}}",
+            "{{\"event\":\"editor_run\",\"mode\":{mode:?},\"cycles\":{cycles},\"opened\":{opened},\"ok\":{},\"why\":{:?},\"window_visible\":{window_visible},\"rss_closed_mb\":{rss_closed:.1},\"rss_open_mb\":{rss_open:.1},\"rss_after_mb\":{rss_after:.1},\"audio_blocks\":{},\"audio_overruns\":{},\"audio_worst_us\":{},\"audio_budget_us\":{}}}",
             failed.is_none(),
             failed.clone().unwrap_or_default(),
             audio.0,

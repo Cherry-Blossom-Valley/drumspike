@@ -45,6 +45,7 @@
     try { fetch("http://127.0.0.1:9/x").catch(function () {}); } catch (e) { /* refused */ }
   }
 
+  window.addEventListener("error", function (ev) { post({ kind: "js_error", message: String(ev.message), line: ev.lineno }); });
   whenBooted(async function (loaded) {
     var names = [], rawEvents = {}, n = 0;
     try { names = S.order.slice(); } catch (e) { /* no state */ }
@@ -56,7 +57,7 @@
     post({ kind: "boot", loaded: loaded, sid: S.sid, tracks: names, n_events: n, raw_events: rawEvents,
       hostMode: typeof B !== "undefined" && !!B.hostMode, tauri: !!(window.__TAURI__ && window.__TAURI__.core),
       resources: resources(), violations: violations, innerW: window.innerWidth, innerH: window.innerHeight });
-    if (T.mode === "measure") measure(loaded);
+    try { if (T.mode === "measure") measure(loaded); } catch (e) { post({ kind: "js_error", message: String(e), stack: String(e && e.stack) }); }
     if (T.mode === "keys") setTimeout(function () { post({ kind: "keys", seen: keySeen, hasFocus: document.hasFocus() }); }, 7000);
     if (T.mode === "focus") focus();
     if (T.mode === "resize") sizes();
@@ -76,13 +77,17 @@
       c.dispatchEvent(new WheelEvent("wheel", opts));
       if (n % 25 === 0) { up = !up; c = cs[(n / 25) % cs.length | 0] || c; }
     }, 100);
+    setTimeout(function () {   // a hidden page (locked screen) draws no frame: say so
+      if (deltas.length < 30) { clearInterval(iv); post({ kind: "measure", visibility: document.visibilityState, frames: deltas.length, p95_ms: null, max_ms: null, canvases: cs.length, innerW: window.innerWidth, innerH: window.innerHeight }); }
+    }, 14000);
     (function loop(t) {
+      if (T.fault === "slow-frames") { var b = performance.now(); while (performance.now() - b < 50) { /* the fault run: a slow frame */ } }
       deltas.push(t - last); last = t;
       if (t - t0 < 8000) { requestAnimationFrame(loop); return; }
       clearInterval(iv);
       deltas = deltas.slice(20);
       var mx = 0; deltas.forEach(function (d) { if (d > mx) mx = d; });
-      post({ kind: "measure", frames: deltas.length, p95_ms: p95(deltas), max_ms: mx, canvases: cs.length,
+      post({ kind: "measure", visibility: document.visibilityState, frames: deltas.length, p95_ms: p95(deltas), max_ms: mx, canvases: cs.length,
         innerW: window.innerWidth, innerH: window.innerHeight });
     })(t0);
   }
@@ -139,12 +144,12 @@
     var nocmd = null;
     try { await window.__TAURI__.core.invoke("no_such_command", {}); } catch (e) { nocmd = { code: e.code, message: e.message }; }
     var panicked = null;
-    try { await window.__TAURI__.core.invoke("tracks_get", { sid: sid }); panicked = "answered"; } catch (e) { panicked = { code: e.code, message: e.message }; }
+    try { await window.__TAURI__.core.invoke("export_existing", { sid: sid }); panicked = "answered"; } catch (e) { panicked = { code: e.code, message: e.message }; }
     // a channel message: a read-only command with a progress channel is not needed; the event
     // listener is checked by registering one
     var listened = false;
     try { var un = await window.__TAURI__.event.listen("project-dirty", function () {}); listened = typeof un === "function"; } catch (e) { /* no */ }
-    post({ kind: "shell", commands: out, binary: bin, error_shape: errc, unknown: nocmd, tracks_get: panicked, listen: listened,
+    post({ kind: "shell", commands: out, binary: bin, error_shape: errc, unknown: nocmd, export_existing: panicked, listen: listened,
       keys: Object.keys(window.__TAURI__).sort(), core: Object.keys(window.__TAURI__.core).sort(), hostMode: window.__DS_HOST_MODE__ });
   }
   async function bigpost(names) {   // a 300 KB body through the custom scheme (events_set of a dense track)

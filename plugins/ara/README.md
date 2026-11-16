@@ -1,6 +1,6 @@
-# Drum Spike ARA plugin (M1a, #525; M1b1, #537)
+# Drum Spike ARA plugin (M1a, #525; M1b1, #537; M1b2, #538)
 
-The Drum Spike plugin for DAWs, without an editor: one CLAP plugin in Rust with ARA 2,
+The Drum Spike plugin for DAWs: one CLAP plugin in Rust with ARA 2 and, since M1b2, an editor window,
 wrapped as one self-contained VST3 (the CLAP inside the bundle). The plugin takes the
 audio sources and playback regions of the host, analyses them with the Drum Spike service
 (`drumspike-app`, the same detection as the desktop app), gives the hits back to the host
@@ -30,6 +30,26 @@ SDK 2.3.0 API headers, the ARA examples (with `ARA_Library` and the CLAP 1.1.9 a
 VST3 SDK v3.8.0_build_66 companions, patched like S1, for the independent conformance
 host), clap-wrapper 0.17.0 with the patch of `patches/`, pluginval 1.0.4 (pinned SHA-256)
 and clap-validator 0.4.1, and both macOS Rust targets. Heavy: run it under the host lock.
+
+## The editor (M1b2)
+
+The plugin has the CLAP extension `clap.gui` (cocoa, embedded). The editor is the Drum Spike
+page (`static/`) in a `wry` web view (WKWebView) as a child of the host's view, on the real
+service of the ARA document. The design, the threads and the measured results are in
+`docs/design/daw-plugin/m1b2-editor.md`. In short:
+
+- The build copies `static/` to `Contents/Resources/page` of the CLAP (the VST3 carries the
+  whole CLAP in `Contents/PlugIns`, page included). The plugin finds the page from the path
+  that the host gives to `clap_entry.init` (the wrapper gives the path of the embedded CLAP),
+  or from the address of its own code. A scheme handler for `dspage://localhost/` serves the
+  files; a Content-Security-Policy keeps every request on that scheme. There is no network.
+- A shell script (`src/editor/shell.js`) gives the page `window.__TAURI__` and sets
+  `window.__DS_HOST_MODE__`. `invoke` runs `drumspike_app::call::run` on the service of the
+  document, on a thread of its own, never on the host's main thread.
+- The web view is made, used and dropped on the host's main thread only. One web view lives
+  as long as the plugin instance (wry 0.57 leaks a dropped web view, see the design note).
+- The web view uses a non-persistent data store: the page keeps no settings between two
+  openings of the editor (open point: wry 0.57 cannot place a persistent store in the cache folder).
 
 ## Cache folder
 
@@ -207,6 +227,10 @@ delivery ticket M1c.
 | `DS_ARA_UNLOAD_FAULT` | fault | skip | the unload of the library does not stop the worker |
 | `DS_ARA_PANIC_TEST` | scenario | reader, worker | the reader thread or the worker thread panics once |
 | `DS_ARA_SCENARIO` | scenario | corrupt-wav:<n>, fail-first-round, slow-setup, audio-deadline-ms:<n> | the WAV of source n is damaged after the read, the first round fails once, every round waits 1.5 s before its analysis starts, or a request waits n ms for audio (default 30000) |
+| `DS_ARA_EDITOR_MODE` | scenario | ready, keys, focus, resize, measure, edit, shell, analyse, net, bigpost | the editor page runs a test driver of that name and reports to the plugin (the test host sets it itself) |
+| `DS_ARA_EDITOR_ARG` | scenario | a text | the argument of the test driver of the editor page (a WAV path of the shell mode) |
+| `DS_ARA_EDITOR_FAULT` | fault | no-ready, no-bundle, no-shell, no-sync, no-focus, no-resize, inline, leak, slow-frames | the editor: the page's ready call is not counted, the plugin finds no page in its bundle, the shell commands are left to the service, a command of the page does not reach the archive, the web view is not made the first responder or does not follow a resize, a command runs on the main thread, every editor leaks 4 MB, or the page draws slow frames |
+| `DS_ARA_EDITOR_SCENARIO` | scenario | panic:<command> | the named command of the page panics inside the plugin where the service would run it |
 
 Kinds: **config**: The plugin reads it (the check sets it for every run). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. **scenario**: Scenario switch: sets up a case for a stage (not a fault).
 
@@ -225,9 +249,13 @@ ones `.deps` fetches):
 | VST3 SDK | 3.8.0_build_66 | MIT | Compiled into the wrapped VST3 bundle (the wrapper's module and `pluginterfaces`). |
 | pluginval | 1.0.4 | GPL-3.0 (Tracktion) | Check-time tool only; never part of a bundle. |
 | clap-validator | 0.4.1 | MIT (Robbert van der Helm) | Check-time tool only; never part of a bundle. |
-| Rust crates of the plugin | `Cargo.lock` | 150 crates, all permissive (MIT, Apache-2.0, BSD-2/3-Clause, Zlib, ISC, Unlicense, Unicode-3.0, 0BSD); no copyleft | Compiled into the plugin binaries. `drumspike-app` and `drumspike-core` are this repository's own crates (Apache-2.0). |
+| wry | 0.57.0 | Apache-2.0 OR MIT | M1b2: the web view of the editor (macOS: WKWebView). No default features. |
+| objc2, objc2-foundation, objc2-app-kit (and the objc2-* crates they bring), block2, raw-window-handle, dpi, url and its icu crates, http, cookie and the small crates of wry (see the design note for the full list) | objc2 0.6.5, app-kit and foundation 0.3.2 | MIT, Zlib OR Apache-2.0 OR MIT, Unicode-3.0, ISC (libloading) | M1b2: compiled into the plugin binaries. `dirs-sys` brings `option-ext` 0.2.0, MPL-2.0 (a file-level copyleft; used unchanged as a library). |
+| The page (`static/` of this repository) | this commit | Apache-2.0 (repository code) | M1b2: copied into `Contents/Resources/page` of the CLAP. Its own third-party parts (help, brand files) go on the list of `NOTICE` before any delivery. |
+| Rust crates of the plugin | `Cargo.lock` | 149 crates outside this repository (`cargo metadata`, macOS): MIT, Apache-2.0, BSD-2/3-Clause, Zlib, ISC, Unlicense, Unicode-3.0, 0BSD, and one with a file-level copyleft: `option-ext` 0.2.0, MPL-2.0 (through `dirs-sys` of wry; used unchanged, so its notice and the MPL text go on the `NOTICE` list before delivery) | Compiled into the plugin binaries. `drumspike-app` and `drumspike-core` are this repository's own crates (Apache-2.0). |
 
 The crate itself is repository code under the repo licence (Apache-2.0, see `NOTICE` at
 the repository root). Before any delivery of a bundle (M1c), `NOTICE` must list the parts
+of the bundle (the web view crates, the page and its help and brand files, `option-ext` with the MPL-2.0 text) and the parts
 that end inside it (the wrapper and the VST3 SDK module, the plugin's crates and their
 notices) the way the app's `THIRD_PARTY.md` does.

@@ -320,6 +320,14 @@ fn spawn_request(shared: &Arc<Shared>, rest: String, query: String, body: Vec<u8
         ));
         return;
     }
+    if fault() == "inline" {
+        // the fault run: the command runs on the main thread, as a plugin that had no thread
+        // for it would do
+        let answer = route(shared, &rest, &query, &body);
+        shared.inflight.fetch_sub(1, Ordering::SeqCst);
+        responder.respond(respond(answer.status, answer.mime, answer.body, false));
+        return;
+    }
     let sh = Arc::clone(shared);
     let slot: Arc<Mutex<Option<Responder>>> = Arc::new(Mutex::new(Some(responder)));
     let slot2 = Arc::clone(&slot);
@@ -367,6 +375,26 @@ fn spawn_request(shared: &Arc<Shared>, rest: String, query: String, body: Vec<u8
     }
 }
 
+/// The command name of a request path (the page sends `encodeURIComponent`).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let hex = std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("zz");
+            if let Ok(v) = u8::from_str_radix(hex, 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn query_value(query: &str, key: &str) -> Option<String> {
     query
         .split('&')
@@ -377,7 +405,7 @@ fn query_value(query: &str, key: &str) -> Option<String> {
 
 fn route(sh: &Arc<Shared>, rest: &str, query: &str, body: &[u8]) -> Answer {
     if let Some(cmd) = rest.strip_prefix("invoke/") {
-        return invoke(sh, cmd, body);
+        return invoke(sh, &percent_decode(cmd), body);
     }
     let ms = query_value(query, "timeout_ms")
         .and_then(|v| v.parse::<u64>().ok())
@@ -575,7 +603,7 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
             Err(e) => return Answer::err(400, format!("the arguments are no JSON: {e}")),
         }
     };
-    if SHELL_COMMANDS.contains(&cmd) {
+    if SHELL_COMMANDS.contains(&cmd) && fault() != "no-shell" {
         if let Some(a) = shell_command(sh, cmd, &args) {
             return a;
         }
@@ -612,7 +640,7 @@ fn changed_after(sh: &Arc<Shared>, cmd: &str, reply: &Reply) {
     let writes = drumspike_app::api::find(cmd).is_some_and(|c| c.writes_project());
     let ended = matches!(cmd, "analyze_status" | "job_status")
         && matches!(reply, Reply::Json(v) if v.get("state").and_then(Value::as_str) == Some("done"));
-    if writes || ended {
+    if (writes || ended) && fault() != "no-sync" {
         (sh.backend.changed)();
     }
 }
@@ -629,9 +657,17 @@ impl wry::raw_window_handle::HasWindowHandle for ParentView {
 }
 
 /// The editor of one plugin instance: one web view as a child of the host's NSView.
+///
+/// wry 0.57 leaks a web view on purpose when it is dropped (its `Drop` retains the WKWebView
+/// and its content manager once more), about 1.2 MB of the host's memory each time. A DAW
+/// opens and closes the editor many times, so the plugin makes ONE web view for the life of
+/// the plugin instance: `destroy` detaches it from the host's view and sends it to a blank
+/// page, `set_parent` puts it into the new view and loads the page again. The one leak that
+/// is left is the one of the plugin instance's end.
 pub struct Editor {
     webview: wry::WebView,
-    shared: Arc<Shared>,
+    /// What the handlers of the web view serve now: `None` while the editor is closed.
+    current: Arc<Mutex<Option<Arc<Shared>>>>,
 }
 
 static NEXT_EDITOR: AtomicUsize = AtomicUsize::new(1);
@@ -642,23 +678,7 @@ impl Editor {
         if nsview.is_null() {
             return Err("the host passed no cocoa parent view".to_string());
         }
-        let page = page_dir();
-        let n = NEXT_EDITOR.fetch_add(1, Ordering::SeqCst);
-        session().log(
-            json!({"event": "editor_open", "editor": n, "doc": backend.doc_id,
-                "page_dir": page.as_ref().map(|(d, _)| d.display().to_string()),
-                "page_found_by": page.as_ref().map(|(_, how)| *how),
-                "main_thread": on_main_thread()})
-            .to_string(),
-        );
-        let shared = Arc::new(Shared {
-            backend,
-            channels: Arc::new(Channels::default()),
-            closed: AtomicBool::new(false),
-            inflight: AtomicUsize::new(0),
-            page_dir: page.map(|(d, _)| d),
-            n,
-        });
+        let current: Arc<Mutex<Option<Arc<Shared>>>> = Arc::new(Mutex::new(None));
         let mut init = String::new();
         let mode = test_mode();
         if let Some(m) = &mode {
@@ -678,19 +698,23 @@ impl Editor {
             position: wry::dpi::Position::Logical(wry::dpi::LogicalPosition::new(0.0, 0.0)),
             size: wry::dpi::Size::Logical(wry::dpi::LogicalSize::new(w, h)),
         };
-        let for_handler = Arc::clone(&shared);
-        let for_ipc = Arc::clone(&shared);
-        let id = format!("drumspike-ara-editor-{n}");
+        let for_handler = Arc::clone(&current);
+        let for_ipc = Arc::clone(&current);
+        let id = format!("drumspike-ara-editor-{}", NEXT_EDITOR.load(Ordering::SeqCst));
         let mut builder = wry::WebViewBuilder::new()
             .with_id(&id)
             .with_bounds(bounds)
-            .with_url(PAGE_URL)
+            .with_url("about:blank")
             // wry 0.57 cannot place a persistent data store in the plugin's cache folder (a
             // store with an identifier lives below ~/Library/WebKit), so the store is
             // non-persistent: nothing of the page is written outside the cache folder.
             .with_incognito(true)
             .with_asynchronous_custom_protocol(SCHEME.into(), move |_id, request, responder| {
-                handle(&for_handler, request, responder);
+                let shared = for_handler.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                match shared {
+                    Some(shared) => handle(&shared, request, responder),
+                    None => responder.respond(respond(503, "text/plain", b"the editor is closed".to_vec(), false)),
+                }
             })
             .with_initialization_script(init)
             .with_navigation_handler(move |url: String| {
@@ -708,7 +732,10 @@ impl Editor {
         if mode.is_some() {
             builder = builder.with_ipc_handler(move |request: Request<String>| {
                 main_check("ipc");
-                report(&for_ipc, request.into_body());
+                let shared = for_ipc.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                if let Some(shared) = shared {
+                    report(&shared, request.into_body());
+                }
             });
         }
         let webview = builder
@@ -720,11 +747,86 @@ impl Editor {
             let mask: objc2_app_kit::NSAutoresizingMaskOptions =
                 objc2_app_kit::NSAutoresizingMaskOptions::ViewWidthSizable
                     | objc2_app_kit::NSAutoresizingMaskOptions::ViewHeightSizable;
-            let _: () = msg_send![&*v, setAutoresizingMask: mask];
-            take_keys(&v);
+            if fault() != "no-resize" {
+                let _: () = msg_send![&*v, setAutoresizingMask: mask];
+            }
+        }
+        let ed = Editor { webview, current };
+        ed.open(backend, false)?;
+        Ok(ed)
+    }
+
+    /// Open the editor in the view it is in: a new `Shared` for the document, the page loads.
+    fn open(&self, backend: Backend, reload: bool) -> Result<(), String> {
+        let page = page_dir();
+        let n = NEXT_EDITOR.fetch_add(1, Ordering::SeqCst);
+        session().log(
+            json!({"event": "editor_open", "editor": n, "doc": backend.doc_id, "view_reused": reload,
+                "page_dir": page.as_ref().map(|(d, _)| d.display().to_string()),
+                "page_found_by": page.as_ref().map(|(_, how)| *how),
+                "main_thread": on_main_thread()})
+            .to_string(),
+        );
+        let shared = Arc::new(Shared {
+            backend,
+            channels: Arc::new(Channels::default()),
+            closed: AtomicBool::new(false),
+            inflight: AtomicUsize::new(0),
+            page_dir: page.map(|(d, _)| d),
+            n,
+        });
+        *self.current.lock().unwrap_or_else(|e| e.into_inner()) = Some(shared);
+        self.webview
+            .load_url(PAGE_URL)
+            .map_err(|e| format!("the page did not load: {e}"))?;
+        if fault() == "leak" {
+            // the fault run: every editor leaves 4 MB behind
+            let leaked = vec![1u8; 4 << 20];
+            std::hint::black_box(&leaked);
+            Box::leak(leaked.into_boxed_slice());
         }
         OPENED.fetch_add(1, Ordering::SeqCst);
-        Ok(Editor { webview, shared })
+        Ok(())
+    }
+
+    /// The host gives a new parent view: the web view moves into it and the page loads again.
+    fn attach(&self, nsview: *mut c_void, backend: Backend) -> Result<(), String> {
+        main_check("attach");
+        if nsview.is_null() {
+            return Err("the host passed no cocoa parent view".to_string());
+        }
+        unsafe {
+            let v = self.webview.webview();
+            let (w, h) = view_size(nsview);
+            let _: () = msg_send![nsview as *const AnyObject, addSubview: &*v];
+            let frame = objc2_foundation::NSRect::new(
+                objc2_foundation::NSPoint::new(0.0, 0.0),
+                objc2_foundation::NSSize::new(w, h),
+            );
+            let _: () = msg_send![&*v, setFrame: frame];
+        }
+        self.open(backend, true)
+    }
+
+    /// The editor closes: the page stops, the web view leaves the host's view and stays here.
+    fn detach(&self) {
+        main_check("detach");
+        let shared = self.current.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let Some(shared) = shared else { return };
+        shared.closed.store(true, Ordering::SeqCst);
+        let _ = self.webview.load_url("about:blank");
+        unsafe {
+            let v = self.webview.webview();
+            let _: () = msg_send![&*v, removeFromSuperview];
+        }
+        CLOSED.fetch_add(1, Ordering::SeqCst);
+        session().log(
+            json!({"event": "editor_close", "editor": shared.n, "main_thread": on_main_thread(),
+                "commands": COMMANDS.load(Ordering::SeqCst), "off_main": OFF_MAIN.load(Ordering::SeqCst),
+                "main_checks": MAIN_CHECKS.load(Ordering::SeqCst), "panics": PANICS.load(Ordering::SeqCst),
+                "peak_inflight": PEAK_INFLIGHT.load(Ordering::SeqCst)})
+            .to_string(),
+        );
     }
 
     /// Make the web view the first responder of its window. wry's `with_focused` does nothing
@@ -748,20 +850,15 @@ impl Editor {
 
 impl Drop for Editor {
     fn drop(&mut self) {
-        main_check("destroy");
-        self.shared.closed.store(true, Ordering::SeqCst);
-        CLOSED.fetch_add(1, Ordering::SeqCst);
-        session().log(
-            json!({"event": "editor_close", "editor": self.shared.n, "main_thread": on_main_thread(),
-                "commands": COMMANDS.load(Ordering::SeqCst), "off_main": OFF_MAIN.load(Ordering::SeqCst),
-                "main_checks": MAIN_CHECKS.load(Ordering::SeqCst), "panics": PANICS.load(Ordering::SeqCst),
-                "peak_inflight": PEAK_INFLIGHT.load(Ordering::SeqCst)})
-            .to_string(),
-        );
+        // the end of the plugin instance (the host's main thread)
+        self.detach();
     }
 }
 
 unsafe fn take_keys(view: &objc2::rc::Retained<wry::WryWebView>) {
+    if fault() == "no-focus" {
+        return; // the fault run: nothing makes the web view the first responder
+    }
     let win: *mut AnyObject = msg_send![&**view, window];
     if !win.is_null() {
         let _: bool = msg_send![win, makeFirstResponder: &**view];
@@ -855,12 +952,19 @@ unsafe extern "C" fn g_set_parent(p: *const clap_plugin, window: *const clap_win
         if !is_cocoa(w.api) {
             return false;
         }
-        plugin.editor.borrow_mut().take();
-        match Editor::build(w.specific.cocoa, backend_of(plugin)) {
-            Ok(ed) => {
-                *plugin.editor.borrow_mut() = Some(ed);
-                true
+        let nsview = w.specific.cocoa;
+        let mut slot = plugin.editor.borrow_mut();
+        let made = match slot.as_ref() {
+            Some(ed) => {
+                ed.detach();
+                ed.attach(nsview, backend_of(plugin))
             }
+            None => Editor::build(nsview, backend_of(plugin)).map(|ed| {
+                *slot = Some(ed);
+            }),
+        };
+        match made {
+            Ok(()) => true,
             Err(e) => {
                 eprintln!("drumspike-ara: {e}");
                 session().log(json!({"event": "editor_failed", "error": e}).to_string());
@@ -874,8 +978,10 @@ unsafe extern "C" fn g_set_parent(p: *const clap_plugin, window: *const clap_win
 unsafe extern "C" fn g_destroy(p: *const clap_plugin) {
     guard("gui.destroy", (), move || {
         if let Some(plugin) = plugin_of(p) {
-            let old = plugin.editor.borrow_mut().take();
-            drop(old);
+            // the web view stays with the plugin instance (see `Editor`); it leaves the host's view
+            if let Some(ed) = plugin.editor.borrow().as_ref() {
+                ed.detach();
+            }
             session().write_out();
         }
     })
@@ -979,6 +1085,13 @@ mod tests {
         }
         assert!(link_address("website").is_some());
         assert!(link_address("nope").is_none());
+    }
+
+    #[test]
+    fn a_command_name_of_the_path_is_decoded() {
+        assert_eq!(percent_decode("plugin%3Adrag%7Cstart_drag"), "plugin:drag|start_drag");
+        assert_eq!(percent_decode("events_get"), "events_get");
+        assert_eq!(percent_decode("a%"), "a%");
     }
 
     #[test]
