@@ -552,6 +552,19 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     break;
                 }
             }
+            // the report of the edit may arrive inside the same pump that ends the wait (the
+            // edit-destroy mode): the archive of that moment is stored here then
+            if got && !edit_handled && mode == "edit-destroy" {
+                if let Some(path) = &store_at_edit {
+                    match doc.store() {
+                        Ok(blob) => {
+                            let _ = std::fs::write(path, &blob);
+                            println!("{{\"event\":\"stored_at_edit\",\"bytes\":{}}}", blob.len());
+                        }
+                        Err(e) => failed = Some(e),
+                    }
+                }
+            }
             if round == 1 && got {
                 // let the page settle, then the first memory sample with the editor open
                 let t = Instant::now();
