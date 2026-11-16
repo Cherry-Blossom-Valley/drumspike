@@ -307,6 +307,8 @@ pub struct DocService {
     /// The test round that fails once (`DS_ARA_SCENARIO=fail-first-round`) has failed.
     failed_once: bool,
     canceller: Canceller,
+    /// The editor's way to the service (see [`PageHandle`]).
+    page: std::sync::Arc<PageHandle>,
 }
 
 /// The home folder of the service of a document: inside the document's folder, so inside
@@ -323,11 +325,58 @@ fn home_of(cache: &Path, id: &str) -> PathBuf {
     }
 }
 
-/// A new service with its home inside the document's folder.
-fn make_service(cache: &Path, id: &str) -> Service {
+/// The way the editor window reaches the service of a document (M1b2): a clone of the
+/// service (it is one `Arc`, shared with the worker) and the log of its events. The worker
+/// holds the `DocService` lock for a whole round, so the editor must never wait for that
+/// lock: it asks this handle, which has a lock of its own that nobody holds for long.
+#[derive(Default)]
+pub struct PageHandle {
+    svc: std::sync::Mutex<Option<Service>>,
+    /// The events of the service (`project-dirty`, `track-layer`) as a numbered log; the page
+    /// reads them with its own number, so an editor that opens later misses none it needs.
+    pub log: std::sync::Arc<drumspike_app::bridge::EventLog>,
+}
+
+impl PageHandle {
+    /// The service of the document, or `None` after the document closed.
+    #[must_use]
+    pub fn service(&self) -> Option<Service> {
+        self.svc.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn set(&self, svc: Option<Service>) {
+        *self.svc.lock().unwrap_or_else(|e| e.into_inner()) = svc;
+    }
+}
+
+/// The page handle of an editor whose plugin instance is bound to no ARA document (a host
+/// without ARA): a service of its own with no project, its home below the cache folder.
+#[must_use]
+pub fn unbound_page(cache: &Path) -> std::sync::Arc<PageHandle> {
+    let page = std::sync::Arc::new(PageHandle::default());
+    let svc = Service::new(ServiceConfig::from_env(Path::new("/")));
+    let home = cache.join("editor-unbound");
+    svc.set_home(home.join("service"));
+    svc.set_projects_dir(home.join("projects"));
+    let log = std::sync::Arc::clone(&page.log);
+    svc.set_emitter(std::sync::Arc::new(move |name: &str, payload: Value| {
+        log.push(name, payload)
+    }));
+    page.set(Some(svc));
+    page
+}
+
+/// A new service with its home inside the document's folder; its events go to the log of
+/// the page handle, and the handle holds a clone of it.
+fn make_service(cache: &Path, id: &str, page: &PageHandle) -> Service {
     let svc = Service::new(ServiceConfig::from_env(Path::new("/")));
     SERVICES_MADE.fetch_add(1, Ordering::SeqCst);
     point_service(&svc, cache, id);
+    let log = std::sync::Arc::clone(&page.log);
+    svc.set_emitter(std::sync::Arc::new(move |name: &str, payload: Value| {
+        log.push(name, payload)
+    }));
+    page.set(Some(svc.clone()));
     svc
 }
 
@@ -374,7 +423,8 @@ impl DocService {
     /// The service of a new document (made with the document controller).
     #[must_use]
     pub fn new(cache: PathBuf, id: String) -> DocService {
-        let svc = make_service(&cache, &id);
+        let page = std::sync::Arc::new(PageHandle::default());
+        let svc = make_service(&cache, &id, &page);
         DocService {
             cache,
             id,
@@ -386,7 +436,14 @@ impl DocService {
             dirty: false,
             failed_once: false,
             canceller: Canceller::default(),
+            page,
         }
+    }
+
+    /// The handle the editor window uses to reach the service without the document lock.
+    #[must_use]
+    pub fn page_handle(&self) -> std::sync::Arc<PageHandle> {
+        std::sync::Arc::clone(&self.page)
     }
 
     /// The handle that cancels the running job from another thread.
@@ -522,7 +579,7 @@ impl DocService {
         if switch("DS_ARA_SERVICE_FAULT").as_deref() == Some("per-job") {
             // the fault run: a new service for every job (the M1a way)
             self.close_service();
-            self.svc = Some(make_service(&self.cache, &self.id));
+            self.svc = Some(make_service(&self.cache, &self.id, &self.page));
         }
         let duplicate = switch("DS_ARA_RETRY_FAULT").as_deref() == Some("duplicate");
         let known: Vec<usize> = self.tracks.iter().map(|(_, s)| *s).collect();
@@ -706,6 +763,42 @@ impl DocService {
         })
     }
 
+    /// The page changed the project (an edit, a job of the page): read the events of every
+    /// track again and save the project. `Some((events, notes))` when the events differ from
+    /// the last known ones; the notes follow the events.
+    ///
+    /// # Errors
+    ///
+    /// A message when the project cannot be saved.
+    #[allow(clippy::type_complexity)]
+    pub fn sync_page_edits(&mut self) -> Result<Option<(Map<String, Value>, HashMap<usize, Vec<[f64; 2]>>)>, String> {
+        let (Some(svc), Some(sid)) = (self.svc.clone(), self.sid.clone()) else {
+            return Ok(None);
+        };
+        let mut all = Map::new();
+        for (name, _) in &self.tracks {
+            match svc.events_get(&sid, name) {
+                Ok(ev) => {
+                    all.insert(name.clone(), ev["events"].clone());
+                }
+                Err(_) => {
+                    if let Some(old) = self.events.get(name) {
+                        all.insert(name.clone(), old.clone());
+                    }
+                }
+            }
+        }
+        if svc.project_get(&sid).is_ok_and(|p| p["dirty"] == true) {
+            svc.project_save(&sid).map_err(err)?;
+        }
+        if all == self.events {
+            return Ok(None);
+        }
+        self.events = all.clone();
+        let notes = self.notes_of(&all);
+        Ok(Some((all, notes)))
+    }
+
     /// The notes of every source of the project from the events: the hits that are not out
     /// of the output (the app's own `policy::is_out`: cut, bleed, filtered or deactivated,
     /// unless kept), mapped back into the source.
@@ -804,6 +897,7 @@ impl DocService {
 
     fn close_service(&mut self) {
         self.close_project();
+        self.page.set(None);
         if self.svc.take().is_some() {
             SERVICES_DROPPED.fetch_add(1, Ordering::SeqCst);
         }

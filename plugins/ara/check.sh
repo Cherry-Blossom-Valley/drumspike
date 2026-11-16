@@ -128,6 +128,11 @@ build() {
   local arches
   arches=$(lipo -info $CLAP/Contents/MacOS/DrumSpikeAra) || return 1
   [[ $arches == *arm64* && $arches == *x86_64* ]] || { echo "FAIL: lipo -info does not name arm64 and x86_64: $arches"; return 1; }
+  # M1b2: the editor page, a copy of static/ inside the bundle (read, never changed); the
+  # embed into the VST3 below copies the whole bundle, page included
+  rm -rf $CLAP/Contents/Resources/page
+  mkdir -p $CLAP/Contents/Resources
+  ditto $ROOT/static $CLAP/Contents/Resources/page || return 1
   # the test host runs natively on this machine
   ARA_API_DIR=$DEPS/ARA_SDK/ARA_API LIBCLANG_PATH=$CLT/usr/lib cargo build --release --locked --bin ara-host || return 1
   # the wrapped VST3 from clap-wrapper (universal as well) ...

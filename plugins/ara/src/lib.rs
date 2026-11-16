@@ -40,6 +40,7 @@ pub mod ara {
     #![allow(non_upper_case_globals, non_camel_case_types, non_snake_case, dead_code)]
     include!(concat!(env!("OUT_DIR"), "/ara.rs"));
 }
+pub mod editor;
 pub mod service;
 pub mod state;
 pub mod wav;
@@ -238,6 +239,8 @@ struct DocShared {
     members: Mutex<Vec<std::sync::Weak<SourceState>>>,
     /// Sources whose notes changed in a later round: the host is told in `notifyModelUpdates`.
     pending: Mutex<Vec<Arc<SourceState>>>,
+    /// The editor's way to the service (it never takes the `svc` lock the worker holds).
+    page: Arc<service::PageHandle>,
 }
 
 /// The document ids in use in this process. Two live documents never share an id, so never
@@ -322,6 +325,7 @@ impl DocShared {
         let svc = service::DocService::new(cache.clone(), id.clone());
         let doc = Arc::new(DocShared {
             cache,
+            page: svc.page_handle(),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -365,6 +369,8 @@ enum Msg {
     Remove { src: Arc<SourceState>, sources_left: usize },
     /// The regions or the properties of a source changed: the document needs a round.
     Touch(Arc<DocShared>),
+    /// The page changed the project: read the events again.
+    PageSync(Arc<DocShared>),
     /// The plugin library is being unloaded: the worker ends.
     Quit,
     /// An archive was restored: the project opens with the stored events.
@@ -779,6 +785,7 @@ impl Session {
                     st.stale.push((doc, "change"));
                 }
             }
+            Msg::PageSync(doc) => self.page_sync(&doc),
             Msg::Restore { doc, id, tracks } => self.restore_project(&doc, id, tracks),
             Msg::Close { doc, ack } => {
                 st.requested.retain(|r| !Arc::ptr_eq(&r.doc, &doc));
@@ -991,6 +998,64 @@ impl Session {
         self.write_out();
     }
 
+    /// The page changed the project (an edit): the events of the tracks are read again, the
+    /// project is saved, the document's events (the archive stores them) and the notes follow,
+    /// and the host is told about the sources whose notes changed.
+    fn page_sync(&'static self, doc: &Arc<DocShared>) {
+        if doc.closing.load(Ordering::SeqCst) {
+            return;
+        }
+        let worker_doc = doc.clone();
+        let outcome = guard("page sync", Err("the page sync panicked".to_string()), move || {
+            worker_doc.lock_svc().sync_page_edits()
+        });
+        match outcome {
+            Ok(Some((events, notes))) => {
+                let members: Vec<Arc<SourceState>> = doc
+                    .members
+                    .lock()
+                    .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+                    .unwrap_or_default();
+                let mut changed: Vec<String> = Vec::new();
+                for (seq, n) in notes {
+                    let Some(s) = members.iter().find(|s| s.seq == seq) else {
+                        continue;
+                    };
+                    let differs = s.notes.lock().map(|old| *old != n).unwrap_or(false);
+                    if !differs {
+                        continue;
+                    }
+                    if let Ok(mut old) = s.notes.lock() {
+                        *old = n;
+                    }
+                    if s.has_events.load(Ordering::SeqCst) && !s.removed.load(Ordering::SeqCst) {
+                        changed.push(s.props().name);
+                        if let Ok(mut p) = doc.pending.lock() {
+                            if !p.iter().any(|x| Arc::ptr_eq(x, s)) {
+                                p.push(s.clone());
+                            }
+                        }
+                    }
+                }
+                let line = service::events_line(&events);
+                if let Ok(mut m) = doc.events.lock() {
+                    *m = events;
+                }
+                self.log(
+                    json!({"event": "page_sync", "doc": doc.id(), "changed_notes": changed,
+                        "events_json": line, "unix_ns": now_ns().to_string()})
+                    .to_string(),
+                );
+                self.write_out();
+            }
+            Ok(None) => {}
+            Err(e) => {
+                self.log(json!({"event": "page_sync_failed", "doc": doc.id(), "error": e}).to_string());
+                self.write_out();
+            }
+        }
+    }
+
     /// A destroyed source: its track leaves the project, its cached audio goes.
     fn remove_track(&'static self, src: &Arc<SourceState>, sources_left: usize) {
         let doc = &src.doc;
@@ -1092,6 +1157,18 @@ impl Session {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         self.run_job(&doc, &targets, "request", false);
+    }
+}
+
+/// What the editor of a plugin instance needs from its document.
+fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
+    let d = doc.clone();
+    editor::Backend {
+        page: doc.page.clone(),
+        changed: Arc::new(move || {
+            let _ = send(session(), Msg::PageSync(d.clone()));
+        }),
+        doc_id: doc.id(),
     }
 }
 
@@ -2586,6 +2663,11 @@ struct Plugin {
     clap: clap_plugin,
     ext: ARAPlugInExtensionInstance,
     sample_rate: Mutex<f64>,
+    /// The document the ARA bind call joined this instance to (the editor shows its service).
+    doc: Mutex<Option<Arc<DocShared>>>,
+    /// The editor; made and dropped on the host's main thread only.
+    editor: std::cell::RefCell<Option<editor::Editor>>,
+    gui_size: std::cell::Cell<(u32, u32)>,
 }
 
 unsafe extern "C" fn pext_factory(_p: *const clap_plugin) -> *const ARAFactory {
@@ -2593,12 +2675,15 @@ unsafe extern "C" fn pext_factory(_p: *const clap_plugin) -> *const ARAFactory {
 }
 unsafe extern "C" fn pext_bind(
     p: *const clap_plugin,
-    _dc: ARADocumentControllerRef,
+    dc: ARADocumentControllerRef,
     known: ARAPlugInInstanceRoleFlags,
     assigned: ARAPlugInInstanceRoleFlags,
 ) -> *const ARAPlugInExtensionInstance {
     guard("bind_to_document_controller", std::ptr::null(), move || {
         let plugin = (*p).plugin_data as *mut Plugin;
+        if !dc.is_null() {
+            *(*plugin).doc.lock().unwrap_or_else(|e| e.into_inner()) = Some(controller_of(dc).doc.clone());
+        }
         let me = plugin as *mut c_void;
         let has = |role: u32| assigned & role as i32 != 0;
         (*plugin).ext = ARAPlugInExtensionInstance {
@@ -2764,6 +2849,9 @@ unsafe extern "C" fn p_get_extension(_p: *const clap_plugin, id: *const c_char) 
         if id == EXT_ARA_PLUGIN || id == EXT_ARA_PLUGIN_DRAFT {
             return &ARA_PLUGIN_EXT as *const _ as *const c_void;
         }
+        if id == clap_sys::ext::gui::CLAP_EXT_GUI.to_bytes() {
+            return &editor::PLUGIN_GUI as *const _ as *const c_void;
+        }
         std::ptr::null()
     })
 }
@@ -2872,6 +2960,9 @@ unsafe extern "C" fn f_create(
             },
             ext: std::mem::zeroed(),
             sample_rate: Mutex::new(0.0),
+            doc: Mutex::new(None),
+            editor: std::cell::RefCell::new(None),
+            gui_size: std::cell::Cell::new((1000, 640)),
         }));
         (*p).clap.plugin_data = p as *mut c_void;
         &(*p).clap
@@ -2901,8 +2992,11 @@ pub struct ClapEntry {
 unsafe impl Send for ClapEntry {}
 unsafe impl Sync for ClapEntry {}
 
-unsafe extern "C" fn e_init(_plugin_path: *const c_char) -> bool {
-    guard("entry init", true, move || true)
+unsafe extern "C" fn e_init(plugin_path: *const c_char) -> bool {
+    guard("entry init", true, move || {
+        editor::set_bundle_hint(plugin_path);
+        true
+    })
 }
 unsafe extern "C" fn e_deinit() {
     guard("entry deinit", (), unload_worker)

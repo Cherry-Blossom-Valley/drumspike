@@ -54,6 +54,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[path = "ara-host/editor_mode.rs"]
+mod editor_mode;
+
 macro_rules! cs {
     ($s:literal) => {
         concat!($s, "\0").as_ptr() as *const c_char
@@ -1076,6 +1079,7 @@ fn main() {
         "close-busy" => run_close_busy(bundle, &files, &rest),
         "restore2" => run_restore2(bundle, &files, &rest),
         "restore-busy" => run_restore_busy(bundle, &files, &rest),
+        "editor" => editor_mode::run(bundle, &files, &rest),
         "docs" => run_docs(bundle, &files, &args_list(&rest, "--files2")),
         other => {
             eprintln!("unknown mode {other:?}");
