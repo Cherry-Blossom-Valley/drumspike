@@ -181,6 +181,9 @@ pub fn page_dir() -> Option<(PathBuf, &'static str)> {
 
 // ---------------------------------------------------------------- what an editor needs
 
+/// Reads the events of the document's tracks after a command of the page (see `Backend::record`).
+pub type RecordFn = Arc<dyn Fn(&drumspike_app::Service, &str) -> Result<bool, String> + Send + Sync>;
+
 /// What the editor needs from the document it belongs to.
 pub struct Backend {
     pub page: Arc<PageHandle>,
@@ -188,7 +191,7 @@ pub struct Backend {
     pub changed: Arc<dyn Fn() + Send + Sync>,
     /// Called on the request thread, before the page gets the answer of a command that changed the
     /// project: the events and notes of the document follow at once (F2).
-    pub record: Arc<dyn Fn(&drumspike_app::Service, &str) -> Result<bool, String> + Send + Sync>,
+    pub record: RecordFn,
     pub doc_id: String,
 }
 
