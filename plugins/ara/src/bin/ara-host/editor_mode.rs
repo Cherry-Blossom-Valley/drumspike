@@ -439,8 +439,19 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     if trigger {
                         late_done = true;
                         // the editor stays alive while the host works (its page waits)
+                        let jobs_before = count_rows("job", None);
                         if let Err(e) = doc.add_and_analyse(&late_files, "late") {
                             failed = Some(e);
+                            break;
+                        }
+                        // the source is complete a moment before the plugin writes the row of its
+                        // round: wait for the row, so the report is whole when the run ends
+                        let t = Instant::now();
+                        while t.elapsed() < Duration::from_secs(20) && count_rows("job", None) <= jobs_before {
+                            pump(&app);
+                        }
+                        if count_rows("job", None) <= jobs_before {
+                            failed = Some("the plugin wrote no row for the round of the late files in 20 s".into());
                             break;
                         }
                     }
