@@ -68,7 +68,7 @@ Every Mac that acts as the signing runner (the default one or a second one) need
 1. A "Developer ID Application" certificate **with its private key** in the login keychain:
    `security find-identity -v -p codesigning`.
 2. The notary profile `drumspike-notary` (`xcrun notarytool store-credentials drumspike-notary`).
-3. `gh` logged in as a maintainer (`gh auth status`) — the draft release is made with that login.
+3. `gh` logged in as a maintainer (`gh auth status`): the draft release is made with that login.
 4. The runner service with `SessionCreate` set to **false** in its launchd plist, so it can use
    the login keychain (see "Errors", `errSecInternalComponent`).
 5. Both Rust targets: `rustup target add aarch64-apple-darwin x86_64-apple-darwin` (the signing
@@ -82,7 +82,7 @@ Every Mac that acts as the signing runner (the default one or a second one) need
    label of that runner, for example `studio-mac`. The next release run (tag push or
    workflow_dispatch) runs `check`, `build` and `publish` there; `intel-check` stays on
    `x86-mac`.
-3. Switch back: set the variable back to the default host's label, or delete the variable —
+3. Switch back: set the variable back to the default host's label, or delete the variable:
    unset, the workflow uses the default signing runner (`arm64-mac`). No file changes are needed
    for either direction.
 
