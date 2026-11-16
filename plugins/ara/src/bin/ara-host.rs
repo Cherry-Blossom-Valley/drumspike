@@ -73,6 +73,14 @@ const FRAMES: usize = 512;
 /// name is the host's own (here the file path), not the reduced name the archive stores.
 static NO_PERSISTENT_ID: AtomicBool = AtomicBool::new(false);
 
+/// `--names <n>...`: the ARA names the host gives the sources, by creation index, instead of
+/// the file paths (hostile names for the check: `a/..`, an empty name).
+static NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// `--no-access <k>`: the host never enables the samples access of the k-th source of a
+/// request (and still requests its analysis): its audio never comes.
+static NO_ACCESS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(usize::MAX);
+
 /// How long `analyse` waits for the plugin (seconds; `--wait N` changes it, the check gives
 /// the new document modes a short bound so a broken plugin fails fast).
 static WAIT_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(300);
@@ -596,7 +604,8 @@ unsafe fn add_sources(
             )
         } else {
             let (rate, channels) = load_wav(file)?;
-            (rate, channels, CString::new(file.clone()).unwrap())
+            let shown = NAMES.lock().unwrap().get(i).cloned().unwrap_or_else(|| file.clone());
+            (rate, channels, CString::new(shown).unwrap())
         };
         let pid = if NO_PERSISTENT_ID.load(Ordering::SeqCst) {
             CString::default()
@@ -718,9 +727,11 @@ unsafe fn request(inst: Inst, pairs: &[(ARAAudioSourceRef, ARAAudioModificationR
     let dc = iface_of(inst);
     let dc_ref = dc_ref_of(inst);
     let types = [kARAContentTypeNotes as ARAContentType];
-    for (src, _) in pairs {
-        (dc.enableAudioSourceSamplesAccess
-            .expect("enableAudioSourceSamplesAccess"))(dc_ref, *src, 1);
+    for (k, (src, _)) in pairs.iter().enumerate() {
+        if k != NO_ACCESS.load(Ordering::SeqCst) {
+            (dc.enableAudioSourceSamplesAccess
+                .expect("enableAudioSourceSamplesAccess"))(dc_ref, *src, 1);
+        }
         (dc.requestAudioSourceContentAnalysis
             .expect("requestAudioSourceContentAnalysis"))(dc_ref, *src, types.len(), types.as_ptr());
     }
@@ -1043,6 +1054,10 @@ fn main() {
     let mode = args.get(1).cloned().unwrap_or_default();
     let rest: Vec<String> = args[2.min(args.len())..].to_vec();
     NO_PERSISTENT_ID.store(rest.iter().any(|a| a == "--no-persistent-id"), Ordering::SeqCst);
+    *NAMES.lock().unwrap() = args_list(&rest, "--names");
+    if let Some(k) = args_value(&rest, "--no-access").and_then(|v| v.parse::<usize>().ok()) {
+        NO_ACCESS.store(k, Ordering::SeqCst);
+    }
     if let Some(w) = args_value(&rest, "--wait").and_then(|v| v.parse::<u64>().ok()) {
         WAIT_SECS.store(w, Ordering::SeqCst);
     }

@@ -11,16 +11,16 @@
   {"name": "DS_ARA_FOLDER_FAULT", "kind": "fault", "values": "shared", "meaning": "every document uses one folder"},
   {"name": "DS_ARA_DESTROY_FAULT", "kind": "fault", "values": "keep", "meaning": "a destroyed source stays in the list and the project"},
   {"name": "DS_ARA_HOME_FAULT", "kind": "fault", "values": "1", "meaning": "the service home is below the user's home, outside the cache folder"},
-  {"name": "DS_ARA_ROUND_FAULT", "kind": "fault", "values": "new-only, always", "meaning": "a round analyses only the new tracks, or a request for a complete source starts a full round"},
+  {"name": "DS_ARA_ROUND_FAULT", "kind": "fault", "values": "new-only, always, no-deadline", "meaning": "a round analyses only the new tracks, a request for a complete source starts a full round, or a request waits for ever for audio that does not come"},
   {"name": "DS_ARA_SETTLE_FAULT", "kind": "fault", "values": "none", "meaning": "no settle time: every request is a round"},
   {"name": "DS_ARA_CLOSE_FAULT", "kind": "fault", "values": "wait, nocancel", "meaning": "the destroy of a controller waits for the round, or does not cancel it"},
-  {"name": "DS_ARA_ID_FAULT", "kind": "fault", "values": "trust", "meaning": "the plugin trusts the document id and the track names of an archive"},
+  {"name": "DS_ARA_ID_FAULT", "kind": "fault", "values": "trust", "meaning": "the plugin trusts the document id and the track names of an archive, and the names of the host sources"},
   {"name": "DS_ARA_REGISTRY_FAULT", "kind": "fault", "values": "off", "meaning": "no registry of the document ids in use: two live documents may share one"},
   {"name": "DS_ARA_ERRORS_FAULT", "kind": "fault", "values": "swallow", "meaning": "the error of a single track is not read"},
   {"name": "DS_ARA_RETRY_FAULT", "kind": "fault", "values": "duplicate", "meaning": "a retried source makes a second track"},
-  {"name": "DS_ARA_TOUCH_FAULT", "kind": "fault", "values": "ignore", "meaning": "a change of the regions or the properties of a source is not seen"},
+  {"name": "DS_ARA_TOUCH_FAULT", "kind": "fault", "values": "ignore, playback-time", "meaning": "a change of the regions or the properties of a source is not seen, or a move in playback time alone starts a round"},
   {"name": "DS_ARA_GUARD_FAULT", "kind": "fault", "values": "off", "meaning": "the reader thread and the worker thread run without the panic guard"},
   {"name": "DS_ARA_UNLOAD_FAULT", "kind": "fault", "values": "skip", "meaning": "the unload of the library does not stop the worker"},
   {"name": "DS_ARA_PANIC_TEST", "kind": "scenario", "values": "reader, worker", "meaning": "the reader thread or the worker thread panics once"},
-  {"name": "DS_ARA_SCENARIO", "kind": "scenario", "values": "corrupt-wav:<n>, fail-first-round, slow-setup", "meaning": "the WAV of source n is damaged after the read, the first round fails once, or every round waits 1.5 s before its analysis starts"}
+  {"name": "DS_ARA_SCENARIO", "kind": "scenario", "values": "corrupt-wav:<n>, fail-first-round, slow-setup, audio-deadline-ms:<n>", "meaning": "the WAV of source n is damaged after the read, the first round fails once, every round waits 1.5 s before its analysis starts, or a request waits n ms for audio (default 30000)"}
 ]

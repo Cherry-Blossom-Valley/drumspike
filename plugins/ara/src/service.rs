@@ -172,7 +172,18 @@ impl SourceSnapshot {
             && self.persistent_id == other.persistent_id
             && self.sample_rate == other.sample_rate
             && self.sample_count == other.sample_count
-            && self.regions == other.regions
+            && self.same_regions(other)
+    }
+
+    /// The regions the analysis uses: the modification range of each. A move in playback
+    /// time alone (`start_play`) changes nothing in the events or the notes.
+    /// `DS_ARA_TOUCH_FAULT=playback-time` (the check's fault run) compares it too.
+    fn same_regions(&self, other: &SourceSnapshot) -> bool {
+        let strict = switch("DS_ARA_TOUCH_FAULT").as_deref() == Some("playback-time");
+        self.regions.len() == other.regions.len()
+            && self.regions.iter().zip(&other.regions).all(|(a, b)| {
+                a.start_mod == b.start_mod && a.dur_mod == b.dur_mod && (!strict || a.start_play == b.start_play)
+            })
     }
 
     /// Why the audio of the source cannot be analysed now, or `None` when it can.
@@ -215,6 +226,8 @@ pub struct JobResult {
     pub errors: Vec<(String, String)>,
     /// Tracks left out of the round (track, why): the result is then partial.
     pub skipped: Vec<(String, String)>,
+    /// Tracks with an error that keep the events of an earlier round (stale, not fresh).
+    pub stale: Vec<String>,
     /// A round ran. False: nothing had changed (no new source, no changed source, nothing removed).
     pub ran: bool,
     /// The tracks of the project after the round with the creation index of their source.
@@ -246,6 +259,7 @@ impl JobResult {
             earlier_changed: 0,
             errors: Vec::new(),
             skipped: Vec::new(),
+            stale: Vec::new(),
             ran: false,
             tracks: Vec::new(),
         }
@@ -568,7 +582,12 @@ impl DocService {
         }
         self.tracks = placed;
         for s in snaps {
-            self.snaps.insert(s.seq, s.clone());
+            // a changed source without audio here keeps its old snapshot: its track record is
+            // not made again now, so the change must still be seen when the audio comes
+            let keep_old = s.audio_problem().is_some() && self.snaps.get(&s.seq).is_some_and(|old| !old.same_as(s));
+            if !keep_old {
+                self.snaps.insert(s.seq, s.clone());
+            }
         }
         self.dirty = true; // until a round has run to its end
         if switch("DS_ARA_SCENARIO").as_deref() == Some("slow-setup") {
@@ -601,6 +620,7 @@ impl DocService {
             }
             svc.analyze_start(&sid, Some(analysed.clone()), None, None)
                 .map_err(err)?;
+            let mut idle_since: Option<std::time::Instant> = None;
             let st = loop {
                 let st = svc.analyze_status(&sid);
                 if self.canceller.cancelled() {
@@ -608,8 +628,22 @@ impl DocService {
                 }
                 match st["state"].as_str() {
                     Some("done") => break st,
+                    // the service has no such state today (a cancelled job ends as `done`
+                    // with per-track states); the arm stays so a later service that has one
+                    // ends the round instead of polling for ever
                     Some("cancelled" | "cancelling") => return Err("the analysis was cancelled".into()),
-                    _ => std::thread::sleep(std::time::Duration::from_millis(5)),
+                    Some("idle") => {
+                        // a job that never shows up: not for ever
+                        let since = *idle_since.get_or_insert_with(std::time::Instant::now);
+                        if since.elapsed() > std::time::Duration::from_secs(10) {
+                            return Err("the service reports no job for this round".into());
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    _ => {
+                        idle_since = None;
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
                 }
             };
             if self.canceller.cancelled() {
@@ -641,12 +675,19 @@ impl DocService {
         svc.project_save(&sid).map_err(err)?;
         self.dirty = false;
         let analysis_ms = started.elapsed().as_millis() as u64;
-        let mut notes = self.notes_of(&all);
-        for (name, _) in &errors {
-            if let Some((_, seq)) = self.tracks.iter().find(|(n, _)| n == name) {
-                notes.insert(*seq, Vec::new());
-            }
-        }
+        // A track with an error that had events before keeps them (the service leaves them in
+        // the document) and so do its notes: they are STALE, from an earlier round, and the
+        // result says so (`stale`); they are never presented as the result of this round.
+        let stale: Vec<String> = errors
+            .iter()
+            .filter(|(n, _)| {
+                all.get(n.as_str())
+                    .and_then(Value::as_array)
+                    .is_some_and(|a| !a.is_empty())
+            })
+            .map(|(n, _)| n.clone())
+            .collect();
+        let notes = self.notes_of(&all);
         Ok(JobResult {
             events: all,
             decode_counts: svc.decode_counts(),
@@ -659,6 +700,7 @@ impl DocService {
             earlier_changed,
             errors,
             skipped,
+            stale,
             ran: true,
             tracks: self.tracks.clone(),
         })
@@ -823,12 +865,37 @@ fn make_track(s: &SourceSnapshot, dir: &Path) -> Track {
     }
 }
 
-/// The file stem of a source name (the ARA name of the test host is the file path).
+/// The file stem of a source name (the ARA name of the test host is the file path), as ONE
+/// safe path component for every input. The name comes from the host: it may be empty, hold
+/// `..` as its last component (then `file_stem` is `None`), or be an absolute path. The
+/// result has no separator and is never empty, `.` or `..`; any other character than a
+/// letter, a digit, `-`, `_`, `.` or a space becomes `_`; at most 100 characters. It names the
+/// cached WAV and gives the role guess, never a folder. `DS_ARA_ID_FAULT=trust` (the check's
+/// fault run) brings back the old stem.
 #[must_use]
 pub fn stem_of(name: &str) -> String {
-    Path::new(name)
+    let raw = Path::new(name)
         .file_stem()
-        .map_or_else(|| name.to_string(), |s| s.to_string_lossy().into_owned())
+        .map_or_else(|| name.to_string(), |s| s.to_string_lossy().into_owned());
+    if switch("DS_ARA_ID_FAULT").as_deref() == Some("trust") {
+        return raw;
+    }
+    let safe: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(100)
+        .collect();
+    if safe.is_empty() || safe.chars().all(|c| c == '.') {
+        "source".to_string()
+    } else {
+        safe
+    }
 }
 
 /// The source sample of a timeline event `t`. The track's timeline is the source's own
@@ -1317,6 +1384,111 @@ mod tests {
             ["kick"]
         );
         assert_eq!(doc.analyse(&[a, b], false).unwrap().project_tracks, ["kick", "kick_2"]);
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_host_source_name_never_makes_a_path_out_of_the_audio_folder() {
+        let cache = Path::new("/c");
+        let id = "0123456789abcdef";
+        for name in [
+            "../../x/..",
+            "a/..",
+            "..",
+            ".",
+            "/abs/path/..",
+            "x/../../../../../escape/..",
+            "",
+            "/",
+            "a\\..\\b",
+            "k\0ick",
+        ] {
+            let stem = stem_of(name);
+            assert!(!stem.is_empty() && stem != "." && stem != "..", "{name:?} -> {stem:?}");
+            assert!(!stem.contains(['/', '\\', '\0']), "{name:?} -> {stem:?}");
+            let wav = wav_of(cache, id, 3, name);
+            assert_eq!(
+                wav.parent(),
+                Some(audio_dir_of(cache, id).as_path()),
+                "{name:?} -> {wav:?}"
+            );
+            assert!(
+                wav.components().all(|c| !matches!(c, std::path::Component::ParentDir)),
+                "{name:?} -> {wav:?}"
+            );
+        }
+        // a clean name is kept
+        assert_eq!(stem_of("/a/b/kick_48k.wav"), "kick_48k");
+        assert_eq!(stem_of("m1a_kick.wav"), "m1a_kick");
+    }
+
+    #[test]
+    fn a_move_in_playback_time_alone_is_no_change() {
+        let cache = scratch("move");
+        let id = new_doc_id();
+        let mut a = snapshot_of(&cache, &id, 0, "kick.wav");
+        a.regions = vec![RegionRec {
+            start_mod: 0.0,
+            dur_mod: 1.0,
+            start_play: 0.0,
+        }];
+        let mut b = a.clone();
+        b.regions[0].start_play = 5.0;
+        assert!(a.same_as(&b), "only the playback time moved");
+        b.regions[0].dur_mod = 2.0;
+        assert!(!a.same_as(&b), "the modification range changed");
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_change_of_a_source_without_audio_is_not_lost() {
+        let cache = scratch("lost");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut kick = snapshot_of(&cache, &id, 0, "kick.wav");
+        kick.regions = vec![RegionRec {
+            start_mod: 0.0,
+            dur_mod: 1.0,
+            start_play: 0.0,
+        }];
+        doc.analyse(std::slice::from_ref(&kick), false).unwrap();
+        // the regions change while the audio is not here (ready false): the round skips the track
+        let mut changed = kick.clone();
+        changed.regions[0].dur_mod = 2.0;
+        let mut offline = changed.clone();
+        offline.ready = false;
+        doc.analyse(std::slice::from_ref(&offline), false).unwrap();
+        // the audio comes back: the change is still seen, the segment is the new one
+        let r = doc.analyse(std::slice::from_ref(&changed), false).unwrap();
+        assert!(r.ran, "the change was kept for the round with audio");
+        let text = std::fs::read_to_string(document_path(&doc.project_dir())).unwrap();
+        let on_disk: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(on_disk["tracks"]["kick"]["segments"][0]["length"], 2.0);
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_track_with_an_error_keeps_its_old_events_and_says_they_are_stale() {
+        let cache = scratch("stale");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let kick = snapshot_of(&cache, &id, 0, "kick.wav");
+        let first = doc.analyse(std::slice::from_ref(&kick), false).unwrap();
+        let old = first.events["kick"].clone();
+        assert!(old.as_array().is_some_and(|e| !e.is_empty()));
+        {
+            use std::io::{Seek, Write};
+            let mut f = std::fs::OpenOptions::new().write(true).open(&kick.wav).unwrap();
+            f.seek(std::io::SeekFrom::Start(0)).unwrap();
+            f.write_all(b"NOTAWAVE-NOTAWAVE-NOTAWAVE").unwrap();
+        }
+        let second = doc.analyse(std::slice::from_ref(&kick), true).unwrap();
+        assert_eq!(second.errors.len(), 1, "{:?}", second.errors);
+        assert_eq!(second.stale, ["kick"]);
+        assert_eq!(second.events["kick"], old, "the old events stay, marked stale");
+        assert!(second.partial());
         doc.shutdown();
         let _ = std::fs::remove_dir_all(&cache);
     }

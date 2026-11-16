@@ -113,21 +113,43 @@ How:
   `a_restored_track_without_audio_answers_the_offline_error_not_a_panic` checks this. A round
   skips such a track, names it in `skipped` and marks the round partial.
 - **Results of a round.** The service gives a result for each track. The plugin reads it: a
-  track with an error (for example a WAV the service cannot read) is named in `errors`, has no
-  events and no notes, and its source ends without a result: complete for the host (the host
-  must not wait for ever, and the ARA protocol has no error channel) and with no notes. A new
-  request for that source runs a round again. A WAV in the document folder is used only when
+  track with an error (for example a WAV the service cannot read) is named in `errors` and its
+  source ends without a new result: complete for the host (the host must not wait for ever, and
+  the ARA protocol has no error channel). A new request for that source runs a round again. The
+  rule for its events: a track that never had events has none and no notes. A track that had
+  events from an earlier round KEEPS them (in the document, in the archive and as notes) and the
+  `job` row names it in `stale`: they are never presented as the result of this round. A WAV in the document folder is used only when
   this process wrote it and its size is the size of the samples the reader wrote; a leftover
   file of an earlier session is not trusted. The `job` row lists the tracks that took part
   (`analysed`), the tracks left out (`skipped`, with the reason), the errors, and `partial`
-  (true when a track was left out or had an error).
+  (true when a track was left out, had an error, or a source was late).
+- **Late audio.** A request waits for the audio of its source at most 30 s (counted from the
+  request, not from the end of the settle time; the scenario `audio-deadline-ms:<n>` changes it
+  for a stage). After that the round goes on without the source: a `source_late` row, the name
+  in `late` in the `job` row, `partial`. The source ends without a result and a later request
+  starts a round again. A reader that cannot be made also sends the failure message now.
 - **A failed or cancelled round.** The tracks stay. The sources of the round get no result,
   are complete for the host, and the next request for them starts a round again (the
   `job_failed` row names the error). `isAudioSourceContentAnalysisIncomplete` is false for a
   source with a result and for one whose analysis ended without one; it is never stuck.
 - **A request for a source that is complete** changes nothing and starts no round.
+- **Regions.** Only the modification range of a region (`startInModificationTime`, duration)
+  is compared. A move in playback time alone changes nothing the analysis uses: no round, the
+  notes stay. A change of a source that has no audio here is not lost: the old snapshot stays
+  until a round with audio sees the change.
+- **Host strings and paths.** No string from the host becomes part of a path unchecked. The
+  name of the cached WAV is `<number>-<stem>.wav` where `stem_of` gives one safe component for
+  every input (a name that ends in `..`, an absolute path, an empty name, control characters);
+  the track name goes through the app's `safe_name`. The persistent id of a source is only
+  compared.
+- **Limits of the design.** (a) The registry of the ids holds for one process. Two processes
+  that open the same session file share `documents/<id>`, with no lock; a host must not do
+  that. (b) The shipped build reads the `DS_ARA_*` test switches from the environment. Two of
+  them weaken safety: `DS_ARA_ID_FAULT=trust` and `DS_ARA_HOME_FAULT=1`. Compiling them out of
+  a delivery build (a cargo feature) is an open point for M1c. (c) The timing limits of the
+  close stages and the values measured are in the result table below.
 - **Close.** `destroyDocumentController` stops the readers, cancels a running analysis, sends
-  a close message and waits at most 500 ms for the worker, then returns. The cancel flag also
+  a close message and waits for the worker for the rest of 500 ms (counted from the start of the call), then returns. What the plugin does not bound: the join of a reader lasts as long as the host's read call inside it. The cancel flag also
   covers a round that has not started its analysis yet: that round ends without running it.
   The worker owns the document through shared ownership (`Arc`); it finishes the save or drops
   the service on its own. Nothing of the controller is used after it is freed: the readers are
@@ -232,10 +254,35 @@ The four smaller points of the review:
 - The folders of the documents are never removed: the rule is stated in the README (never
   removed, with the size of a folder); a clean-up rule is open, see "Open points".
 
+## Review round 3 (the independent read of round 3)
+
+One MUST and several smaller points. Each has a test or a stage; a fault switch brings the old
+behaviour back for the stages.
+
+| # | Finding | Fix | Test, stage and fault run |
+| --- | --- | --- | --- |
+| 1 | A host source name that ends in `..` (`a/..`) gave `Path::file_stem` `None`; the old `stem_of` then used the whole name, so `audio/NNN-<name>.wav` could leave the cache folder (created, written and deleted there) | `stem_of` gives one safe component for every input; the other host strings (persistent id, track name) were checked: the id is only compared, the track name goes through `safe_name` | unit test `a_host_source_name_never_makes_a_path_out_of_the_audio_folder` (`../../x/..`, `a/..`, `..`, an absolute path, an empty name, a name with a NUL and with a backslash); stage `doc-source-names` (4 hostile names, one source destroyed: 0 files outside `documents/<id>/`); fault `DS_ARA_ID_FAULT=trust`: the folder `escape-name` appears next to the cache |
+| 2 | A move of a region in playback time alone started a round | only the modification range is compared; the update skips the touch | unit test `a_move_in_playback_time_alone_is_no_change`; stage `doc-region-move` (1 round, notes unchanged); fault `DS_ARA_TOUCH_FAULT=playback-time` (2 rounds) |
+| 3 | A changed source without audio lost its change | its old snapshot stays until a round with audio | unit test `a_change_of_a_source_without_audio_is_not_lost` |
+| 4 | One requested source without audio blocked the document for ever; `start_read` set `failed` without the message | a deadline of 30 s after the request; the late source is left out, named in `late`, the round is `partial`; the failure message is sent | stage `doc-late-audio` (the samples access of one source never comes: a round for the other source, byte for byte its reference, `late` names the source); fault `DS_ARA_ROUND_FAULT=no-deadline` (host timeout, no round) |
+| 5 | After an unload with `ended: false` a second init got no worker | `start_worker` tests the flag of the worker, the unload clears the sender, a generation number keeps an old worker from clearing the flag of a new one | unit test `a_second_init_gets_a_worker_when_the_first_has_ended` |
+| 6 | No null check on the archiving table | checked like the audio access table | stage `no-unwrap` now also finds a direct dereference of a host table (a pattern check: it finds that form, it cannot prove every access is checked); `no-unwrap-fault` has a sample |
+| 7 | The README said the destroy returns within half a second in every case | the timer starts at the first line of the call; README and this note say what is bounded: the plugin's own work, 500 ms; not the join of a reader, which lasts as long as one host read call | text |
+| 8 | An errored track that had events kept them while the README said it has none | rule: the old events and notes STAY and the `job` row names the track in `stale`; the README says so | unit test `a_track_with_an_error_keeps_its_old_events_and_says_they_are_stale` |
+| 9 | Limits not stated | stated in "The design" (limits of the design) and in the README | text |
+| 10 | Dead match arms, a poll loop that can run for ever, `LIVE_DOCS` grows | the arms stay with a comment (the service may get such a state); the poll loop stops after 10 s of `idle`; `LIVE_DOCS` is pruned at the destroy | text and the existing stages |
+
+Timing limits of the close stages and the values measured: the destroy call must return in
+under 1000 ms (measured 477 to 510 ms in the runs of rounds 3 and 4: it is the 500 ms wait,
+because the worker does not acknowledge sooner), and the round must end as cancelled within
+3500 ms after the destroy (measured 455 to 724 ms). Both limits are wide on purpose: a cancel
+takes effect between two tracks, and a loaded host makes both values longer. The fault run
+`wait` measures 4572 ms for the destroy.
+
 ## The result (the full run on the PR head)
 
-`./check.sh all`: exit 0, `M1A CHECK: PASS`, 125 `ok` lines, 0 `FAIL` (89 of round 2, 36 new
-lines: the new stages, their fault runs and the reference lines they print). The log is
+`./check.sh all`: exit 0, `M1A CHECK: PASS`, 133 `ok` lines, 0 `FAIL` (89 of round 2, 36 of
+round 3, 8 of round 4: the new stages, their fault runs and the reference lines they print). The log is
 `out/final-check.log` (not committed). The values below are from that run.
 
 | Stage | Result | Measured value | Fault switch that makes it fail, and the failure line |
@@ -252,6 +299,9 @@ lines: the new stages, their fault runs and the reference lines they print). The
 | doc-panic | ok | a panic in the worker: `worker_restarted`, the new request gives the reference result; a panic in a reader: `reader_panic`, the source is read again at the new request, reference result | `DS_ARA_GUARD_FAULT=off`: rc 2 for both, no result round |
 | switches, switches-fault | ok | 24 variables listed; the source, `check.sh` and the README use no other; 22 plugin variables cleared even when all are set; `check.sh guard` refuses a set fault switch | an unlisted variable, a listed one nobody uses, a hand-edited README table: each reported |
 | no-unwrap, no-unwrap-fault | ok | 0 unwrap or expect calls in the non-test code of 4 files | a sample with an unwrap and an expect: both found, a comment, `unwrap_or` and test code not |
+| doc-source-names | ok | 4 hostile source names (`x/../../../../../escape-name/..`, `a/..`, an absolute path ending in `..`, empty): 0 files outside the cache folder, every WAV directly in `audio/` with a plain name, one source destroyed and its WAV deleted inside the folder | `DS_ARA_ID_FAULT=trust`: the folder `escape-name` appears next to the cache, folders are made in `audio/` |
+| doc-region-move | ok | the second region moved in playback time only: 1 round in all, 4 notes before and after | `DS_ARA_TOUCH_FAULT=playback-time`: 2 rounds |
+| doc-late-audio | ok | the samples access of the second source never comes (deadline 1500 ms in the stage): 1 round, the events of the first source alone byte for byte its reference (5 events), `late` names the second source, `partial` true | `DS_ARA_ROUND_FAULT=no-deadline`: host timeout, rc 2, 0 rounds |
 | doc-two-fault | ok | now requires the own-folders line: `own folders False` | `DS_ARA_FOLDER_FAULT=shared` |
 | the 89 stages of round 2 | ok | doc-service, doc-tracks, doc-rounds, doc-two, doc-archive, doc-destroy, doc-home, regions, identity, archive, threads, conformance and the rest all pass as before | (their own fault runs) |
 | crate-fmt, -clippy, -test; workspace trio | ok | 31 unit tests, 0 warnings | |

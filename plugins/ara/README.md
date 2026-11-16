@@ -50,6 +50,11 @@ The plugin writes only below one cache folder:
 The plugin never writes into an audio file of the session, and nothing below the user's
 home outside this folder.
 
+The id registry (which keeps two live documents apart) holds for ONE process. Two processes
+that open the same session file share `documents/<id>`: the plugin does not lock the folder.
+A host that runs the plugin in more than one process (a plugin sandbox, two instances of the
+DAW) must not open one session in both at the same time.
+
 The plugin never removes a document folder. It cannot know whether an archive of the host
 still names it. The size of a folder is about the size of the audio of its sources as 32-bit
 float: 4 bytes for each sample and channel (a mono source at 48 kHz: about 11.5 MB for each
@@ -77,11 +82,19 @@ document and stored in the ARA archive, so a restore in a new process finds the 
   is cancelled leaves the tracks; the sources of that round are complete for the host (it
   must not wait for ever) and have no notes, and the next request for them runs a round
   again. The service answers a result for every track: a track it could not analyse (a WAV
-  that cannot be read) is named in the `errors` of the `job` row, has no events and no notes,
-  and the round is marked `partial`. A track whose audio is not here (a track restored from
+  that cannot be read) is named in the `errors` of the `job` row and the round is marked
+  `partial`. If that track never had events, it has none and no notes. If it had events from
+  an earlier round, they STAY in the document, in the archive and as notes, and the `job` row
+  names the track in `stale`: they are the events of an earlier round, never the result of
+  this one. Its source ends without a new result (complete for the host, retried at the next
+  request). A track whose audio is not here (a track restored from
   the archive, or a cached file that is not the one the reader wrote: the plugin checks the
   size against the samples it wrote) is named in `skipped`, keeps its stored events, and
-  marks the round `partial` too. The `job` row lists the tracks that took part.
+  marks the round `partial` too. A source whose audio does not come is waited for 30 s after
+  its request; then the round goes on without it, the `job` row names it in `late`, a
+  `source_late` row is written and the round is `partial`; a later request for it starts a round
+  again. The `job` row lists the tracks that took part. A move of a region in playback time
+  alone (not its modification range) is no change and starts no round.
 - The notes of an earlier source can change in a later round (a bleed hit leaves the output).
   The plugin then tells the host: in `notifyModelUpdates` it calls the host's
   `notifyAudioSourceContentChanged` for exactly those sources, and serves the new notes.
@@ -107,9 +120,12 @@ document and stored in the ARA archive, so a restore in a new process finds the 
   and file names.
 - All of this runs on the plugin's worker thread. Nothing runs on the audio thread, and the
   host's main thread only reads and writes the state it needs for the ARA calls.
-  `destroyDocumentController` cancels a running analysis and returns within half a second in
-  every case (a cancel that arrives before the analysis starts ends the round without running
-  it); the worker owns the document through shared ownership and finishes the save on its
+  `destroyDocumentController` stops the readers (each ends at the next block of 64k samples,
+  so the join lasts as long as one host read call), cancels a running analysis, and then waits
+  for the worker for the rest of 500 ms, counted from the start of the call. The plugin bounds
+  its own work to 500 ms; the join of a reader is as long as the host's read call inside it,
+  which the plugin cannot bound (a cancel that arrives before the analysis starts ends the
+  round without running it); the worker owns the document through shared ownership and finishes the save on its
   own. When the host unloads the plugin library (`clap_entry.deinit`), the plugin cancels
   every running round, tells the worker to end and waits for it at most 1.5 s; the cancel
   takes effect between two tracks. A worker that is still inside one track after that stays
@@ -155,6 +171,13 @@ is not listed, when a listed variable is not used, or when this table was edited
 environment. A normal run of the check clears every variable of the list for the programs it
 starts.
 
+The shipped build still reads these variables from the environment: the plugin does not
+compile them out. Two of them weaken safety on purpose: `DS_ARA_ID_FAULT=trust` (the plugin
+trusts the id, the track names and the source names that come from a file or from the host)
+and `DS_ARA_HOME_FAULT=1` (the service home goes below the user's home). To remove every
+fault and scenario switch from a delivery build (a cargo feature) is an open point for the
+delivery ticket M1c.
+
 <!-- switches:begin (made from switches.json by `check.py write-readme`) -->
 
 | Variable | Kind | Values | What it does |
@@ -171,18 +194,18 @@ starts.
 | `DS_ARA_FOLDER_FAULT` | fault | shared | every document uses one folder |
 | `DS_ARA_DESTROY_FAULT` | fault | keep | a destroyed source stays in the list and the project |
 | `DS_ARA_HOME_FAULT` | fault | 1 | the service home is below the user's home, outside the cache folder |
-| `DS_ARA_ROUND_FAULT` | fault | new-only, always | a round analyses only the new tracks, or a request for a complete source starts a full round |
+| `DS_ARA_ROUND_FAULT` | fault | new-only, always, no-deadline | a round analyses only the new tracks, a request for a complete source starts a full round, or a request waits for ever for audio that does not come |
 | `DS_ARA_SETTLE_FAULT` | fault | none | no settle time: every request is a round |
 | `DS_ARA_CLOSE_FAULT` | fault | wait, nocancel | the destroy of a controller waits for the round, or does not cancel it |
-| `DS_ARA_ID_FAULT` | fault | trust | the plugin trusts the document id and the track names of an archive |
+| `DS_ARA_ID_FAULT` | fault | trust | the plugin trusts the document id and the track names of an archive, and the names of the host sources |
 | `DS_ARA_REGISTRY_FAULT` | fault | off | no registry of the document ids in use: two live documents may share one |
 | `DS_ARA_ERRORS_FAULT` | fault | swallow | the error of a single track is not read |
 | `DS_ARA_RETRY_FAULT` | fault | duplicate | a retried source makes a second track |
-| `DS_ARA_TOUCH_FAULT` | fault | ignore | a change of the regions or the properties of a source is not seen |
+| `DS_ARA_TOUCH_FAULT` | fault | ignore, playback-time | a change of the regions or the properties of a source is not seen, or a move in playback time alone starts a round |
 | `DS_ARA_GUARD_FAULT` | fault | off | the reader thread and the worker thread run without the panic guard |
 | `DS_ARA_UNLOAD_FAULT` | fault | skip | the unload of the library does not stop the worker |
 | `DS_ARA_PANIC_TEST` | scenario | reader, worker | the reader thread or the worker thread panics once |
-| `DS_ARA_SCENARIO` | scenario | corrupt-wav:<n>, fail-first-round, slow-setup | the WAV of source n is damaged after the read, the first round fails once, or every round waits 1.5 s before its analysis starts |
+| `DS_ARA_SCENARIO` | scenario | corrupt-wav:<n>, fail-first-round, slow-setup, audio-deadline-ms:<n> | the WAV of source n is damaged after the read, the first round fails once, every round waits 1.5 s before its analysis starts, or a request waits n ms for audio (default 30000) |
 
 Kinds: **config**: The plugin reads it (the check sets it for every run). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. **scenario**: Scenario switch: sets up a case for a stage (not a fault).
 

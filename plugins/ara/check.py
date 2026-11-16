@@ -71,6 +71,11 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   doc-panic      a panic in the reader thread, and one in the worker thread: reported, the
                  worker goes on, a new request gives the reference result (fault: threads
                  without the guard)
+  doc-source-names  host source names that end in `..`, are absolute or empty: 0 files outside
+                 documents/<id>/ (fault: the plugin takes the host name as the file name)
+  doc-region-move  a region moved in playback time only starts no round (fault: it does)
+  doc-late-audio a source whose samples access never comes does not block the document: the
+                 round goes on without it, names it and is partial (fault: wait for ever)
   switches       one list (switches.json) of the DS_ARA_* variables: the source, check.sh
                  and the README use no other and the README table is made from it; a normal
                  run clears all of them; check.sh refuses one in the caller's environment
@@ -2336,6 +2341,184 @@ def stage_doc_panic_fault() -> bool:
     )
 
 
+# ---- review round 3, item 1: a host source name never leaves the audio folder
+
+# the first name climbs five levels from `audio/000-x`: out of audio, the document folder,
+# documents and the cache folder, to the folder next to the cache (`file_stem` is None for a name
+# that ends in `..`, and the old code used the whole name as the file name)
+HOSTILE_NAMES = ["x/../../../../../escape-name/..", "a/..", "/abs/path/..", ""]
+WAV_NAME = re.compile(r"^\d{3}-[^/\\]+\.wav$")
+
+
+def source_names_parts(label: str, rc: int) -> tuple[dict, str]:
+    root = OUT / f"hostile-{label}"
+    cache = root / "cache"
+    outside = sorted(p.name for p in root.iterdir() if p.name != "cache") if root.is_dir() else []
+    docs = [d for d in (cache / "documents").iterdir()] if (cache / "documents").is_dir() else []
+    wavs = [p for d in docs for p in (d / "audio").rglob("*") if p.is_file()]
+    flat = [p for d in docs for p in (d / "audio").iterdir()]
+    destroyed = event_rows(label, "source_destroyed")
+    parts = {
+        "rc": rc == 0,
+        "no_escape": not outside,
+        "one_document": len(docs) == 1,
+        "wavs_in_audio": bool(wavs) and all(p.parent == d / "audio" and WAV_NAME.match(p.name) for d in docs for p in wavs),
+        "no_stray_folders": all(p.is_file() for p in flat),
+        "job": len(job_rows(label)) >= 1,
+        "destroyed": len(destroyed) == 1 and destroyed[0].get("error") is None,
+    }
+    return parts, (
+        f"{len(HOSTILE_NAMES)} hostile source names: rc={rc}, outside the cache folder {outside}, {len(wavs)} WAV file(s), "
+        f"all directly in audio/ with a plain name {parts['wavs_in_audio']}, folders made in audio/ {not parts['no_stray_folders']}, "
+        f"{len(job_rows(label))} round(s), one source destroyed and its WAV deleted inside the folder {parts['destroyed']}"
+    )
+
+
+def source_names_run(label: str, extra: dict | None = None) -> int:
+    root = OUT / f"hostile-{label}"
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True)
+    rc, _text, _lines = host_run(
+        label,
+        CLAP,
+        ["grow", "--files", *fixture_args(FILES), "--names", *HOSTILE_NAMES, "--batch", "4", "--destroy", "3", "--pump-ms", "1500", "--wait", HOST_WAIT],
+        f"hostile-{label}/cache",
+        extra=extra,
+    )
+    return rc
+
+
+def stage_doc_source_names() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-source-names", False, "no host or no CLAP: run check.sh build first")
+    rc = source_names_run("doc-source-names")
+    parts, evidence = source_names_parts("doc-source-names", rc)
+    return pass_fail("doc-source-names", all(parts.values()), evidence)
+
+
+def stage_doc_source_names_fault() -> bool:
+    """The fault run: the old stem (the whole name when `file_stem` is None) names the WAV."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-source-names-fault", False, "no host or no CLAP: run check.sh build first")
+    rc = source_names_run("doc-source-names-fault", {"DS_ARA_ID_FAULT": "trust"})
+    parts, evidence = source_names_parts("doc-source-names-fault", rc)
+    return pass_fail(
+        "doc-source-names-fault",
+        parts["no_escape"] is False,
+        f"the fault switch took the host name as the file name and the check saw a folder outside the cache folder: {evidence}",
+    )
+
+
+# ---- review round 3, item 2: a move in playback time alone starts no round
+
+REGIONS_MOVE_SPEC = "1:1.8,0.5,3.5"  # the second region of REGIONS: the same slice, placed later on the timeline
+
+
+def region_move_parts(label: str, rc: int, lines: list) -> tuple[dict, str]:
+    jobs = job_rows(label)
+    before = [r for r in lines if r.get("event") == "host_notes" and r.get("phase") == "before-update"]
+    after = [r for r in lines if r.get("event") == "host_notes" and r.get("phase") == "after-update"]
+    parts = {
+        "rc": rc == 0,
+        "no_round": len(jobs) == 1 and services_row(label).get("rounds") == 1,
+        "notes": bool(before) and bool(after) and before[0].get("samples") == after[0].get("samples") and bool(before[0].get("samples")),
+    }
+    return parts, (
+        f"the second region moved in playback time only: {len(jobs)} round(s) in all (want 1, the first), "
+        f"notes unchanged {parts['notes']} ({len(before[0].get('samples', [])) if before else None} before, {len(after[0].get('samples', [])) if after else None} after)"
+    )
+
+
+def region_move_run(label: str, extra: dict | None = None) -> tuple[int, list]:
+    rc, _text, lines = host_run(
+        label,
+        CLAP,
+        [*regions_args(REGIONS), "--update-region", REGIONS_MOVE_SPEC, "--update-after", "--pump-ms", "2500"],
+        f"cache-{label}",
+        extra=extra,
+    )
+    return rc, lines
+
+
+def stage_doc_region_move() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-region-move", False, "no host or no CLAP: run check.sh build first")
+    rc, lines = region_move_run("doc-region-move")
+    parts, evidence = region_move_parts("doc-region-move", rc, lines)
+    return pass_fail("doc-region-move", all(parts.values()), evidence)
+
+
+def stage_doc_region_move_fault() -> bool:
+    """The fault run: a move in playback time starts a round (the first version of the compare)."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-region-move-fault", False, "no host or no CLAP: run check.sh build first")
+    rc, lines = region_move_run("doc-region-move-fault", {"DS_ARA_TOUCH_FAULT": "playback-time"})
+    parts, evidence = region_move_parts("doc-region-move-fault", rc, lines)
+    return pass_fail(
+        "doc-region-move-fault",
+        rc == 0 and parts["no_round"] is False,
+        f"the fault switch started a round for the move and the check refused it: {evidence}",
+    )
+
+
+# ---- review round 3, item 4: a source whose audio never comes does not block the document
+
+
+def late_parts(label: str, rc: int, ref_kick: bytes) -> tuple[dict, str]:
+    jobs = job_rows(label)
+    job = jobs[0] if jobs else {}
+    late = event_rows(label, "source_late")
+    parts = {
+        "rc": rc == 0,
+        "round": len(jobs) >= 1 and job.get("events_json", "").encode() == ref_kick,
+        "late_named": len(late) == 1 and [Path(n).stem for n in job.get("late", [])] == [Path(DOC_A[1]).stem],
+        "partial": job.get("partial") is True,
+    }
+    return parts, (
+        f"the audio of the second source never came: rc={rc}, {len(jobs)} round(s), the first with the events of the first source alone "
+        f"byte for byte the reference {parts['round']}, the late source named {job.get('late')}, round partial {job.get('partial')}"
+    )
+
+
+def late_run(label: str, extra: dict | None = None) -> int:
+    rc, _text, _lines = host_run(
+        label,
+        CLAP,
+        ["grow", "--files", *fixture_args(DOC_A), "--batch", "2", "--no-access", "1", "--wait", PANIC_WAIT],
+        f"cache-{label}",
+        extra={"DS_ARA_SCENARIO": "audio-deadline-ms:1500", **(extra or {})},
+    )
+    return rc
+
+
+def stage_doc_late_audio() -> bool:
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-late-audio", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b1-ref-kick", [DOC_A[0]])
+    if ref is None:
+        return pass_fail("doc-late-audio", False, "the reference failed")
+    rc = late_run("doc-late-audio")
+    parts, evidence = late_parts("doc-late-audio", rc, ref)
+    return pass_fail("doc-late-audio", all(parts.values()), evidence)
+
+
+def stage_doc_late_audio_fault() -> bool:
+    """The fault run: a request waits for ever for audio (the first version): the host times out."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("doc-late-audio-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b1-ref-kick", [DOC_A[0]])
+    if ref is None:
+        return pass_fail("doc-late-audio-fault", False, "the reference failed")
+    rc = late_run("doc-late-audio-fault", {"DS_ARA_ROUND_FAULT": "no-deadline"})
+    parts, evidence = late_parts("doc-late-audio-fault", rc, ref)
+    return pass_fail(
+        "doc-late-audio-fault",
+        parts["round"] is False and parts["late_named"] is False,
+        f"the fault switch waited for ever and the check refused it (no round for the first source): {evidence}",
+    )
+
+
 # ---- review round 2, item 8: one list of the DS_ARA_* variables
 
 README = HERE / "README.md"
@@ -2455,8 +2638,26 @@ def unwraps_in(text: str) -> list[tuple[int, str]]:
     return found
 
 
+HOST_TABLE_DEREF = re.compile(r"&\*\s*\(\s*\*[^;]*\.(archivingControllerInterface|audioAccessControllerInterface)\b")
+
+
+def table_derefs_in(text: str) -> list[tuple[int, str]]:
+    """The lines of the non-test code that dereference a host table straight from the host
+    instance, with no null check in between (`&*(*host).archivingControllerInterface`): the table
+    is read into a variable, checked, then dereferenced. A pattern check: it finds that form, it
+    cannot prove that every other access is checked."""
+    found = []
+    for n, line in enumerate(text.splitlines(), 1):
+        if line.strip().startswith("#[cfg(test)]"):
+            break
+        code = line.split("//", 1)[0]
+        if HOST_TABLE_DEREF.search(code):
+            found.append((n, line.strip()))
+    return found
+
+
 def stage_no_unwrap() -> bool:
-    bad = {f: unwraps_in((HERE / f).read_text(encoding="utf-8")) for f in UNWRAP_FILES}
+    bad = {f: unwraps_in((HERE / f).read_text(encoding="utf-8")) + table_derefs_in((HERE / f).read_text(encoding="utf-8")) for f in UNWRAP_FILES}
     n = sum(len(v) for v in bad.values())
     return pass_fail(
         "no-unwrap",
@@ -2475,7 +2676,13 @@ def stage_no_unwrap_fault() -> bool:
         "    let y = z.expect(\"no\");\n    let ok = w.unwrap_or(1);\n}\n#[cfg(test)]\nmod t { fn b() { x.unwrap(); } }\n"
     )
     found = unwraps_in(sample)
-    return pass_fail("no-unwrap-fault", [n for n, _ in found] == [2, 4], f"found the unwrap and the expect on lines {[n for n, _ in found]} of the sample, not the comment, unwrap_or or the test code")
+    deref = table_derefs_in("fn a() {\n    let a = &*(*ctl.host).archivingControllerInterface;\n    let t = (*h).audioAccessControllerInterface;\n}\n")
+    return pass_fail(
+        "no-unwrap-fault",
+        [n for n, _ in found] == [2, 4] and [n for n, _ in deref] == [2],
+        f"found the unwrap and the expect on lines {[n for n, _ in found]} of the sample, not the comment, unwrap_or or the test code; "
+        f"found the direct dereference of a host table on line {[n for n, _ in deref]}, not the checked read",
+    )
 
 
 def stage_conformance() -> bool:
@@ -2774,6 +2981,12 @@ STAGES = {
     "doc-regions-change": stage_doc_regions_change,
     "doc-regions-change-fault": stage_doc_regions_change_fault,
     "doc-panic": stage_doc_panic,
+    "doc-source-names": stage_doc_source_names,
+    "doc-source-names-fault": stage_doc_source_names_fault,
+    "doc-region-move": stage_doc_region_move,
+    "doc-region-move-fault": stage_doc_region_move_fault,
+    "doc-late-audio": stage_doc_late_audio,
+    "doc-late-audio-fault": stage_doc_late_audio_fault,
     "doc-panic-fault": stage_doc_panic_fault,
     "switches": stage_switches,
     "switches-fault": stage_switches_fault,
@@ -2799,6 +3012,7 @@ ORDER = [
     "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault",
     "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",
+    "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",
