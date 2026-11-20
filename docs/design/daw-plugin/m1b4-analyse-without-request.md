@@ -73,17 +73,36 @@ unchanged" is NOT set (no flags at all means everything changed), the samples ar
   until a round has analysed the audio of the live generation. The snapshot of a source reads its
   WAV path, its ready mark and its generation under one lock, and the update changes them under
   the same lock, so a round never sees the old path with the new generation.
-- If the read of the new audio fails, the source is complete without a new result for the host
-  (`analysis_failed`), the report row `source_read_failed` names it, and the plugin reads again
-  while the host's samples access is on: three tries, after the retry waits below. The reader is
-  made on the host's main thread, so the tries run inside `notifyModelUpdates`.
-- The files of the source go away: the old generation when the new one is committed (also the file
-  an earlier process left for a restored source), all of them when the source is destroyed.
+- If the read of the new audio fails, the source is in one of the states of the table below. A
+  read that a second update cancelled is not a failure: its failure carries the old generation
+  and is ignored, and an old read cannot commit its file (the commit checks the generation under
+  the lock). The tries of a failed read run inside `notifyModelUpdates`, because the reader is made
+  on the host's main thread. A retry time is cleared by an update, a destroy and an access off, and
+  a read that still runs is never touched.
+- The files of the source go away: the file of the old generation when a round has moved the track
+  to the new one (the project and the old snapshot point to the old file until then), all of them
+  when the source is destroyed.
 - A hand-placed hit beyond the end of shorter new audio stays in the project, but it is no note
   for the host (a note past the end of the source would be wrong).
 - A change of the properties only (name, rate, count) follows the rules of before.
 
-Stages `no-request-update` (fault `ignore-update`), `no-request-update-between` (`clear-stale`), `no-request-update-failed-read` (`no-read-retry`) and `no-request-files` (`keep-wavs`); a unit test proves that a hand edit survives a content update.
+Stages `no-request-update` (fault `ignore-update`), `no-request-update-between` (`clear-stale`), `no-request-update-failed-read` (`no-read-retry`), `no-request-update-failed-for-good` (`clear-failed`), `no-request-update-twice` (`cancel-fails`) and `no-request-files` (`keep-wavs`); a unit test proves that a hand edit survives a content update.
+
+
+### The states of a source after a content update
+
+| State | Read | `isAudioSourceContentAnalysisIncomplete` |
+| --- | --- | --- |
+| 1. read pending or running | the new read has not ended | incomplete |
+| 2. read failed, retry planned | tries are left and the samples access is on | incomplete (something is still coming) |
+| 3. read committed | the new WAV is here, the round is to come | incomplete |
+| 4. read failed for good | no tries left, or the access is off | complete and failed: the old hits stay |
+| 5. analysed on the live generation | a round used the new audio | complete |
+
+A round on the old audio (the service keeps the old snapshot while the new audio is not here) does
+not change the state: it clears neither the new-audio mark nor the failed mark. From state 4 a new
+enable of the samples access, a new update or a request starts again at state 1 (the request reads
+again when the access is on).
 
 ## Retry rule
 

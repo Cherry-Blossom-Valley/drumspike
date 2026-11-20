@@ -3015,6 +3015,114 @@ def stage_no_request_update_failed_read_fault() -> bool:
     )
 
 
+def forever_parts(label: str, rc: int, text: str) -> tuple[dict, str]:
+    jobs = job_rows(label)
+    failed = event_rows(label, "source_read_failed")
+    hat = track_names([HAT])[0]
+    first = json.loads(jobs[0]["events_json"]) if jobs else {}
+    last = json.loads(jobs[-1]["events_json"]) if jobs else {}
+    waited = "did not finish" in text
+    parts = {
+        "rc": rc == 0 and not waited,
+        "named": len(failed) == 4 and failed[-1].get("retry") is False,
+        "old_hits": bool(last.get(hat)) and last.get(hat) == first.get(hat),
+        "added": len(jobs) >= 2 and len(last) == len(FILES) + 1,
+    }
+    return parts, (
+        f"the read of the new audio failed for good ({len(failed)} source_read_failed rows, the last with retry {failed[-1].get('retry') if failed else None}), then another source was added: "
+        f"the host's wait {'did not end' if waited else 'ended (every source complete)'}, the hat keeps its old hits {parts['old_hits']}, {len(jobs)} round(s), {len(last)} tracks"
+    )
+
+
+def forever_run(label: str, env: dict | None = None) -> tuple[int, str]:
+    new = alt_hat()
+    ensure_bleed_fixture()
+    rc, text, _lines = host_run(
+        label,
+        CLAP,
+        ["grow", "--files", *fixture_args(FILES), "--batch", str(len(FILES)), "--no-request", "--update-content", f"3:{new}", "--update-fail-reads", "99",
+         "--linger-ms", "4000", "--add-late", str(FIXTURES / BETWEEN_EXTRA), "--wait", PANIC_WAIT],
+        f"cache-{label}",
+        extra={"DS_ARA_RETRY_MS": "300", **(env or {})},
+    )
+    return rc, text
+
+
+def stage_no_request_update_failed_for_good() -> bool:
+    """T1: a read of new audio that failed for good leaves the source complete-and-failed, also after another round."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("no-request-update-failed-for-good", False, "no host or no CLAP: run check.sh build first")
+    rc, text = forever_run("no-request-update-failed-for-good")
+    parts, evidence = forever_parts("no-request-update-failed-for-good", rc, text)
+    return pass_fail("no-request-update-failed-for-good", all(parts.values()), evidence)
+
+
+def stage_no_request_update_failed_for_good_fault() -> bool:
+    """The fault run: a later round clears the failed mark: the source is incomplete for ever and the host waits."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("no-request-update-failed-for-good-fault", False, "no host or no CLAP: run check.sh build first")
+    rc, text = forever_run("no-request-update-failed-for-good-fault", {"DS_ARA_ROUND_FAULT": "clear-failed"})
+    parts, evidence = forever_parts("no-request-update-failed-for-good-fault", rc, text)
+    return pass_fail(
+        "no-request-update-failed-for-good-fault",
+        not parts["rc"],
+        f"the fault switch cleared the failed mark in a later round and the check refused it (the host waited for ever): {evidence}",
+    )
+
+
+def twice_parts(label: str, rc: int, ref_new: bytes) -> tuple[dict, str]:
+    jobs = job_rows(label)
+    failed = event_rows(label, "source_read_failed")
+    parts = {
+        "rc": rc == 0,
+        "no_failure": len(failed) == 0,
+        "events_new": len(jobs) >= 2 and jobs[-1].get("events_json", "").encode() == ref_new,
+    }
+    return parts, (
+        f"two updates in a row, the first read was cancelled by the second: {len(failed)} source_read_failed row(s) (want 0: a cancelled read of an old generation is no failure), "
+        f"events at the end byte for byte the reference of the new audio {parts['events_new']}"
+    )
+
+
+def twice_run(label: str, env: dict | None = None) -> tuple[int, bytes | None]:
+    new = alt_hat()
+    ref = reference_alone("m1b4-ref-updated", [*FILES[:3], str(new)])
+    rc, _text, _lines = host_run(
+        label,
+        CLAP,
+        ["grow", "--files", *fixture_args(FILES), "--batch", str(len(FILES)), "--no-request", "--slow-read", "3:500", "--update-content", f"3:{new}", "--update-twice", "--wait", PANIC_WAIT],
+        f"cache-{label}",
+        extra={"DS_ARA_RETRY_MS": "300", **(env or {})},
+    )
+    return rc, ref
+
+
+def stage_no_request_update_twice() -> bool:
+    """T3: a read that a second update cancelled burns no retry and writes no failure row."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("no-request-update-twice", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    rc, ref = twice_run("no-request-update-twice")
+    if ref is None:
+        return pass_fail("no-request-update-twice", False, "the reference failed")
+    parts, evidence = twice_parts("no-request-update-twice", rc, ref)
+    return pass_fail("no-request-update-twice", all(parts.values()), evidence)
+
+
+def stage_no_request_update_twice_fault() -> bool:
+    """The fault run: the cancelled read counts as a failed read."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("no-request-update-twice-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    rc, ref = twice_run("no-request-update-twice-fault", {"DS_ARA_ROUND_FAULT": "cancel-fails"})
+    if ref is None:
+        return pass_fail("no-request-update-twice-fault", False, "the reference failed")
+    parts, evidence = twice_parts("no-request-update-twice-fault", rc, ref)
+    return pass_fail(
+        "no-request-update-twice-fault",
+        not parts["no_failure"],
+        f"the fault switch counted the cancelled read as a failure and the check refused it: {evidence}",
+    )
+
+
 def files_parts(label: str, rc: int) -> tuple[dict, str]:
     wavs = sorted(p.name for p in (OUT / f"cache-{label}").rglob("*.wav"))
     parts = {"rc": rc == 0, "live_only": [w[:3] for w in wavs] == ["000", "001", "002"]}
@@ -4666,6 +4774,10 @@ STAGES = {
     "no-request-update-failed-read-fault": stage_no_request_update_failed_read_fault,
     "no-request-files": stage_no_request_files,
     "no-request-files-fault": stage_no_request_files_fault,
+    "no-request-update-failed-for-good": stage_no_request_update_failed_for_good,
+    "no-request-update-failed-for-good-fault": stage_no_request_update_failed_for_good_fault,
+    "no-request-update-twice": stage_no_request_update_twice,
+    "no-request-update-twice-fault": stage_no_request_update_twice_fault,
     "state": stage_state,
     "state-fault": stage_state_fault,
     "editor-no-request": stage_editor_no_request,
@@ -4732,6 +4844,7 @@ ORDER = [
     "no-request-update", "no-request-update-fault", "no-request-retry", "no-request-retry-fault", "no-request-retry-limit", "no-request-retry-limit-fault",
     "no-request-cancel", "no-request-cancel-fault", "no-request-spawn", "no-request-spawn-fault",
     "no-request-update-between", "no-request-update-between-fault", "no-request-update-failed-read", "no-request-update-failed-read-fault",
+    "no-request-update-failed-for-good", "no-request-update-failed-for-good-fault", "no-request-update-twice", "no-request-update-twice-fault",
     "no-request-files", "no-request-files-fault", "state", "state-fault",
     "editor-open", "editor-fault", "editor-gui", "editor-gui-fault", "editor-shell", "editor-shell-fault",
     "editor-edit", "editor-edit-fault", "editor-threads", "editor-threads-fault",

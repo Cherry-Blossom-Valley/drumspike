@@ -272,6 +272,8 @@ struct DocShared {
     /// (`record_page_edit`) alike: the events belong to that round, not to a region change of
     /// the host that its next round has not seen yet.
     round_regions: Mutex<HashMap<usize, (Vec<service::RegionRec>, f64)>>,
+    /// The sample count of the snapshot of the last round, by source (the notes are made with it, T5).
+    round_samples: Mutex<HashMap<usize, i64>>,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -367,6 +369,7 @@ impl DocShared {
             cache,
             page: svc.page_handle(),
             round_regions: Mutex::new(HashMap::new()),
+            round_samples: Mutex::new(HashMap::new()),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -445,7 +448,18 @@ impl DocShared {
                     .get(&s.seq)
                     .cloned();
                 let (regions, rate) = regions_for_notes(round.as_ref(), (live, s.props().sample_rate));
-                let notes = service::notes_for(&list, &regions, rate, s.props().sample_count);
+                // the sample count of the snapshot the regions and the rate come from (T5)
+                let count = match round {
+                    Some(_) => self
+                        .round_samples
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(&s.seq)
+                        .copied(),
+                    None => None,
+                }
+                .unwrap_or_else(|| s.props().sample_count);
+                let notes = service::notes_for(&list, &regions, rate, count);
                 let differs = s.notes.lock().map(|old| *old != notes).unwrap_or(false);
                 if differs {
                     if let Ok(mut old) = s.notes.lock() {
@@ -488,7 +502,9 @@ enum Msg {
     /// A source's WAV is written.
     Ready(Arc<SourceState>),
     /// A source's read failed.
-    Failed(Arc<SourceState>),
+    /// The read of the audio of this generation failed (or was cancelled). A read of an older
+    /// generation, cancelled by a content update, is not a failure (T3).
+    Failed(Arc<SourceState>, u64),
     /// The host destroyed a source: its track leaves the project.
     Remove {
         src: Arc<SourceState>,
@@ -1125,27 +1141,36 @@ impl Session {
                     st.requested.push(s);
                 }
             }
-            Msg::Failed(s) => {
-                // R3: the read of the NEW audio of a content update failed. The source has old
-                // hits and no new audio: it shows as complete-without-new-result to the host
-                // (`analysis_failed`), a row names it, and the read is tried again (bounded) while
-                // the host's samples access is on. `DS_ARA_ROUND_FAULT=no-read-retry`: no retry.
+            Msg::Failed(s, gen) => {
+                // T3: a read that a content update cancelled belongs to an older generation: the
+                // new read follows, nothing failed. (`DS_ARA_ROUND_FAULT=cancel-fails` counts it.)
+                if gen != s.audio_gen.load(Ordering::SeqCst)
+                    && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("cancel-fails")
+                {
+                    return false;
+                }
+                // The read of the NEW audio of a content update failed (state table in the design
+                // note). With the samples access on and tries left, a retry is planned and the
+                // source stays incomplete (something is still coming). Else it fails for good:
+                // `analysis_failed` makes it complete for the host (the old hits stay), and the row
+                // names it. `DS_ARA_ROUND_FAULT=no-read-retry`: no retry.
                 if s.reanalyse.load(Ordering::SeqCst) && !s.removed.load(Ordering::SeqCst) {
-                    s.analysis_failed.store(true, Ordering::SeqCst);
                     let tries = s.read_tries.load(Ordering::SeqCst);
                     let retry = s.access.load(Ordering::SeqCst)
                         && tries < RETRY_MAX
                         && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-read-retry");
-                    self.log(
-                        json!({"event": "source_read_failed", "name": s.props().name, "tries": tries, "retry": retry})
-                            .to_string(),
-                    );
                     if retry {
                         s.read_tries.store(tries + 1, Ordering::SeqCst);
                         let wait = retry_base().saturating_mul(2u32.pow(tries.min(6)));
                         *s.read_retry_at.lock().unwrap_or_else(|e| e.into_inner()) =
                             Some(std::time::Instant::now() + wait);
+                    } else {
+                        s.analysis_failed.store(true, Ordering::SeqCst);
                     }
+                    self.log(
+                        json!({"event": "source_read_failed", "name": s.props().name, "tries": tries, "retry": retry})
+                            .to_string(),
+                    );
                     self.write_out();
                 }
             }
@@ -1320,6 +1345,7 @@ impl Session {
         );
         self.write_out();
         let snap_gens: HashMap<usize, (u64, bool)> = snaps.iter().map(|x| (x.seq, (x.audio_gen, x.ready))).collect();
+        let snap_counts: HashMap<usize, i64> = snaps.iter().map(|x| (x.seq, x.sample_count)).collect();
         let snap_regions: Vec<(usize, Vec<service::RegionRec>, f64)> = snaps
             .iter()
             .map(|x| (x.seq, x.regions.clone(), x.sample_rate))
@@ -1369,6 +1395,9 @@ impl Session {
                 rr.insert(*seq, r.clone());
             }
         }
+        if let Ok(mut rs) = doc.round_samples.lock() {
+            rs.extend(snap_counts.iter().map(|(k, v)| (*k, *v)));
+        }
         let seq_of = |name: &str| result.tracks.iter().find(|(n, _)| n == name).map(|(_, s)| *s);
         let by_seq = |seq: usize| members.iter().find(|s| s.seq == seq);
         // a track the service could not analyse, and a target that was left out (its audio
@@ -1406,19 +1435,29 @@ impl Session {
                 s.stale.store(stale, Ordering::SeqCst);
                 s.analysis_failed.store(true, Ordering::SeqCst);
             } else if result.analysed.iter().any(|n| seq_of(n) == Some(*seq)) {
-                s.has_events.store(true, Ordering::SeqCst);
-                s.analysis_failed.store(false, Ordering::SeqCst);
-                s.stale.store(false, Ordering::SeqCst);
-                // the new samples of a content update are analysed (a newer update, made while the
-                // round ran, keeps the mark)
-                // R1: only when the round really analysed the audio of the live generation: a snapshot
-                // that was not ready was analysed on the OLD audio (the service keeps the old
-                // snapshot), and the new read has still to come. `DS_ARA_ROUND_FAULT=clear-stale`
-                // brings back the first version: the mark goes whatever the audio was.
+                // R1: only a round that really analysed the audio of the live generation ends the
+                // new analysis: a snapshot that was not ready was analysed on the OLD audio (the
+                // service keeps the old snapshot), the new read has still to come or has failed
+                // for good. Then the state of the source does not change (T1: `analysis_failed`
+                // stays, so a source that failed for good stays complete-and-failed, not
+                // incomplete for ever). `clear-stale` and `clear-failed` bring back the two
+                // first versions.
                 let live = s.audio_gen.load(Ordering::SeqCst);
                 let fresh = snap_gens.get(seq).is_some_and(|(g, ready)| *g == live && *ready);
-                if fresh || std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("clear-stale") {
+                let fault = std::env::var("DS_ARA_ROUND_FAULT").unwrap_or_default();
+                let old_audio = s.reanalyse.load(Ordering::SeqCst) && !fresh && fault != "clear-stale";
+                if !old_audio || fault == "clear-failed" {
+                    s.has_events.store(true, Ordering::SeqCst);
+                    s.analysis_failed.store(false, Ordering::SeqCst);
+                    s.stale.store(false, Ordering::SeqCst);
+                }
+                if fresh || fault == "clear-stale" {
                     s.reanalyse.store(false, Ordering::SeqCst);
+                    // T4: the track points to the new file now: the files of the older generations go
+                    let old: Vec<PathBuf> = std::mem::take(&mut *s.old_wavs.lock().unwrap_or_else(|e| e.into_inner()));
+                    for p in old {
+                        let _ = std::fs::remove_file(p);
+                    }
                 }
             }
             // a complete source whose notes changed, or one that had no result and has one
@@ -1426,7 +1465,11 @@ impl Session {
             // a source the host never asked for does not wait for its notes: it is told when they
             // come (M1b4)
             let first = !was_complete && !was_failed && !failed && !s.asked.load(Ordering::SeqCst);
-            let told = (was_complete && differs) || (was_failed && !failed) || first;
+            let on_old_audio = s.reanalyse.load(Ordering::SeqCst)
+                && !snap_gens
+                    .get(seq)
+                    .is_some_and(|(g, ready)| *ready && *g == s.audio_gen.load(Ordering::SeqCst));
+            let told = (was_complete && differs) || (was_failed && !failed && !on_old_audio) || first;
             if told && !s.removed.load(Ordering::SeqCst) {
                 changed.push(s.props().name);
                 if let Ok(mut p) = doc.pending.lock() {
@@ -2023,25 +2066,8 @@ unsafe extern "C" fn dc_notifyModelUpdates(c: ARADocumentControllerRef) {
         let ctl = controller_of(c);
         // R3: a read of new audio that failed is tried again here, on the host's main thread (the
         // reader is made there); the worker only sets the time
-        let due: Vec<Arc<SourceState>> = ctl
-            .sources
-            .lock()
-            .map(|l| {
-                l.iter()
-                    .filter(|s| {
-                        let mut at = s.read_retry_at.lock().unwrap_or_else(|e| e.into_inner());
-                        let due = at.is_some_and(|t| t <= std::time::Instant::now());
-                        if due {
-                            *at = None;
-                        }
-                        due && s.access.load(Ordering::SeqCst) && !has_wav(s) && !s.removed.load(Ordering::SeqCst)
-                    })
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
+        let due = ctl.sources.lock().map(|l| due_read_retries(&l)).unwrap_or_default();
         for s in due {
-            stop_worker(&s);
             start_read(&s);
         }
         let pending: Vec<Arc<SourceState>> = match ctl.doc.pending.lock() {
@@ -2149,8 +2175,9 @@ unsafe extern "C" fn dc_updateAudioSourceContent(
         {
             return;
         }
-        // no read of the old samples may run on: stop it (the reader is made and dropped on this thread)
-        stop_worker(&src);
+        // The generation is raised FIRST, then the old read is stopped: the failure that the cancel
+        // makes carries the old generation and is ignored (T3), and a commit of the old read is
+        // refused under the same lock (see `read_source`).
         let old = {
             // under the lock the snapshots read (R2); a restored source has no path of this
             // process: the file an earlier process left for it goes too (R4)
@@ -2161,9 +2188,12 @@ unsafe extern "C" fn dc_updateAudioSourceContent(
         };
         src.old_wavs.lock().unwrap_or_else(|e| e.into_inner()).push(old);
         src.read_tries.store(0, Ordering::SeqCst);
-        src.failed.store(false, Ordering::SeqCst);
+        *src.read_retry_at.lock().unwrap_or_else(|e| e.into_inner()) = None; // T2: an old retry time is void
         src.analysis_failed.store(false, Ordering::SeqCst);
         src.reanalyse.store(true, Ordering::SeqCst);
+        // no read of the old samples may run on: stop it (the reader is made and dropped on this thread)
+        stop_worker(&src);
+        src.failed.store(false, Ordering::SeqCst);
         if src.access.load(Ordering::SeqCst) {
             start_read(&src);
         }
@@ -2493,6 +2523,7 @@ unsafe extern "C" fn dc_destroyAudioSource(c: ARADocumentControllerRef, audioSou
         let ptr = audioSourceRef as *mut SyncPtr<Arc<SourceState>>;
         let src = Box::from_raw(ptr);
         stop_worker(&src.0);
+        *src.0.read_retry_at.lock().unwrap_or_else(|e| e.into_inner()) = None;
         // the fault run keeps the destroyed source (the M1a way)
         if std::env::var("DS_ARA_DESTROY_FAULT").as_deref() == Ok("keep") {
             return;
@@ -2525,7 +2556,10 @@ unsafe extern "C" fn dc_enableAudioSourceSamplesAccess(
     guard("enableAudioSourceSamplesAccess", (), move || {
         let Some(src) = state_of(audioSourceRef) else { return };
         src.access.store(enable != 0, Ordering::SeqCst);
+        // T2: the retry of an earlier failed read is void; a new enable gives a new set of tries
+        *src.read_retry_at.lock().unwrap_or_else(|e| e.into_inner()) = None;
         if enable != 0 {
+            src.read_tries.store(0, Ordering::SeqCst);
             // the reader is created on the host's main thread; the reads run on the worker
             start_read(&src);
         } else {
@@ -2535,19 +2569,37 @@ unsafe extern "C" fn dc_enableAudioSourceSamplesAccess(
     })
 }
 
+/// A read of this source is running now (its thread has not ended).
+fn reader_running(src: &Arc<SourceState>) -> bool {
+    src.worker
+        .lock()
+        .map(|w| w.as_ref().is_some_and(|h| !h.is_finished()))
+        .unwrap_or(false)
+}
+
+/// The sources whose retry of a failed read is due (T2). A time that is due is taken; one whose
+/// reader still runs keeps its time (a healthy read is never touched, nothing is joined here); a
+/// source whose access is off or that has its audio needs no read. The caller reads again.
+fn due_read_retries(sources: &[Arc<SourceState>]) -> Vec<Arc<SourceState>> {
+    sources
+        .iter()
+        .filter(|s| {
+            let mut at = s.read_retry_at.lock().unwrap_or_else(|e| e.into_inner());
+            if !at.is_some_and(|t| t <= std::time::Instant::now()) || reader_running(s) {
+                return false;
+            }
+            *at = None;
+            s.access.load(Ordering::SeqCst) && !has_wav(s) && !s.removed.load(Ordering::SeqCst)
+        })
+        .cloned()
+        .collect()
+}
+
 /// The reader is created on the calling (the host's main) thread and the reads run on
 /// their own thread (the ARA rule). A source that has its WAV is not read again; one whose
 /// read is still running is left alone; one whose read failed is read again.
 unsafe fn start_read(src: &Arc<SourceState>) {
-    if src.host.0.is_null() || has_wav(src) {
-        return;
-    }
-    let running = src
-        .worker
-        .lock()
-        .map(|w| w.as_ref().is_some_and(|h| !h.is_finished()))
-        .unwrap_or(false);
-    if running {
+    if src.host.0.is_null() || has_wav(src) || reader_running(src) {
         return;
     }
     // a finished read that failed leaves its reader and its thread: clear them first
@@ -2563,7 +2615,10 @@ unsafe fn start_read(src: &Arc<SourceState>) {
         // no reader can be made: the read failed, and the worker is told (the round of the
         // document must not wait for this source)
         src.failed.store(true, Ordering::SeqCst);
-        send(session(), Msg::Failed(src.clone()));
+        send(
+            session(),
+            Msg::Failed(src.clone(), src.audio_gen.load(Ordering::SeqCst)),
+        );
         return;
     };
     let reader = create((*src.host.0).audioAccessControllerHostRef, src.host_ref.0, 0);
@@ -2573,19 +2628,20 @@ unsafe fn start_read(src: &Arc<SourceState>) {
     // audio is here
     send(s, Msg::Reading(src.clone()));
     let worker_src = src.clone();
+    let gen = src.audio_gen.load(Ordering::SeqCst);
     // `DS_ARA_SCENARIO=no-reader-thread`: the reader thread cannot be made
     let spawned = if std::env::var("DS_ARA_SCENARIO").as_deref() == Ok("no-reader-thread") {
         Err(std::io::Error::other("test: no reader thread"))
     } else {
         std::thread::Builder::new()
             .name(format!("drumspike-ara-read-{}", src.seq))
-            .spawn(move || read_source(worker_src, s))
+            .spawn(move || read_source(worker_src, s, gen))
     };
     if spawned.is_err() && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-spawn-failed") {
         // neither `Ready` nor `Failed` would follow: the source would wait for its audio until the
         // deadline and be named late. The read failed: say so at once.
         src.failed.store(true, Ordering::SeqCst);
-        send(s, Msg::Failed(src.clone()));
+        send(s, Msg::Failed(src.clone(), src.audio_gen.load(Ordering::SeqCst)));
     }
     if let Ok(mut w) = src.worker.lock() {
         *w = spawned.ok();
@@ -2603,11 +2659,12 @@ struct ReadOutcome {
 /// way, and tell the worker. The read runs inside the panic guard: a panic ends the read
 /// as a failure (the worker is told, the round of the document does not wait for the
 /// source), it never ends the thread without a message.
-fn read_source(src: Arc<SourceState>, s: &'static Session) {
+/// `gen` is the generation of the audio when the read was STARTED (on the host's thread): a thread
+/// that starts late must not take the generation of a later update.
+fn read_source(src: Arc<SourceState>, s: &'static Session, gen: u64) {
     let started = std::time::Instant::now();
     let props = src.props();
     let (count, rate, ch) = (props.sample_count, props.sample_rate, props.channels.max(1) as usize);
-    let gen = src.audio_gen.load(Ordering::SeqCst);
     let dest = src.doc.wav_path(src.seq, &props.name, gen);
     let body_src = src.clone();
     let body_dest = dest.clone();
@@ -2625,12 +2682,27 @@ fn read_source(src: Arc<SourceState>, s: &'static Session) {
         s.log(json!({"event": "reader_panic", "name": props.name}).to_string());
     }
     let outcome = outcome.unwrap_or(ReadOutcome { ok: false, hash: 0 });
+    let mut outcome = outcome;
     if outcome.ok {
-        src.wav_len
-            .store(wav::file_len(count.max(0) as usize, ch as u16), Ordering::SeqCst);
-        if let Ok(mut w) = src.wav.lock() {
-            *w = Some(dest.clone());
+        // commit under the lock the snapshots and the content update use, and only for the live
+        // generation: a content update that came while this read ran has raised it (T3), and
+        // the file is of the old audio
+        let kept = {
+            let mut w = src.wav.lock().unwrap_or_else(|e| e.into_inner());
+            let live = src.audio_gen.load(Ordering::SeqCst) == gen;
+            if live {
+                src.wav_len
+                    .store(wav::file_len(count.max(0) as usize, ch as u16), Ordering::SeqCst);
+                *w = Some(dest.clone());
+            }
+            live
+        };
+        if !kept {
+            let _ = std::fs::remove_file(&dest);
+            outcome.ok = false;
         }
+    }
+    if outcome.ok {
         s.log(format!(
             "{{\"event\":\"read\",\"name\":{:?},\"sample_count\":{},\"sample_rate\":{},\"channels\":{},\"read_ok\":true,\"fnv64\":\"{:016x}\",\"wav\":{:?},\"ms\":{},\"caller_thread\":\"main\",\"reader_thread\":\"{:?}\"}}",
             props.name,
@@ -2643,11 +2715,7 @@ fn read_source(src: Arc<SourceState>, s: &'static Session) {
             std::thread::current().id()
         ));
         src.read_tries.store(0, Ordering::SeqCst);
-        // the new generation is committed: the files of the earlier ones can go
-        let old: Vec<PathBuf> = std::mem::take(&mut *src.old_wavs.lock().unwrap_or_else(|e| e.into_inner()));
-        for p in old.iter().filter(|p| **p != dest) {
-            let _ = std::fs::remove_file(p);
-        }
+        // the files of the older generations stay until a round has moved the track to this one (T4)
         corrupt_for_scenario(&src, &dest);
         send(s, Msg::Ready(src));
     } else {
@@ -2656,7 +2724,7 @@ fn read_source(src: Arc<SourceState>, s: &'static Session) {
             "{{\"event\":\"read\",\"name\":{:?},\"read_ok\":false}}",
             props.name
         ));
-        send(s, Msg::Failed(src));
+        send(s, Msg::Failed(src, gen));
     }
 }
 
@@ -2753,6 +2821,12 @@ unsafe extern "C" fn dc_requestAudioSourceContentAnalysis(
         let Some(src) = state_of(audioSourceRef) else { return };
         src.requested.store(true, Ordering::SeqCst);
         src.asked.store(true, Ordering::SeqCst);
+        // T1: a source that failed for good (new audio, no retry left) reads again on a request
+        // while the samples access is on
+        if src.reanalyse.load(Ordering::SeqCst) && src.access.load(Ordering::SeqCst) {
+            src.read_tries.store(0, Ordering::SeqCst);
+            start_read(&src);
+        }
         if s.fault {
             return; // the fault switch runs the job inside process instead
         }
@@ -4192,6 +4266,40 @@ mod tests {
         let mut st = WorkerState::default();
         assert!(!session().absorb(Msg::Reading(src.clone()), &mut st));
         assert_eq!(st.requested.len(), 1, "the read of the new audio queues it");
+    }
+
+    #[test]
+    fn an_old_retry_time_never_touches_a_healthy_read() {
+        let doc = DocShared::new();
+        let src = bare_source(&doc, 0);
+        let past = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(1));
+        src.access.store(true, Ordering::SeqCst);
+        // no time planned: nothing is due
+        assert!(due_read_retries(std::slice::from_ref(&src)).is_empty());
+        // a time that is due, a reader that still runs (the new read): not touched, the time stays
+        *src.read_retry_at.lock().unwrap() = past;
+        let running = std::thread::spawn(|| std::thread::sleep(std::time::Duration::from_millis(300)));
+        *src.worker.lock().unwrap() = Some(running);
+        assert!(due_read_retries(std::slice::from_ref(&src)).is_empty());
+        assert!(
+            src.read_retry_at.lock().unwrap().is_some(),
+            "the time is kept for the next call"
+        );
+        // the reader has ended: the retry is due and taken
+        let ended = src.worker.lock().unwrap().take().unwrap();
+        ended.join().unwrap();
+        let done = std::thread::spawn(|| {});
+        *src.worker.lock().unwrap() = Some(done);
+        while !src.worker.lock().unwrap().as_ref().unwrap().is_finished() {
+            std::thread::yield_now();
+        }
+        assert_eq!(due_read_retries(std::slice::from_ref(&src)).len(), 1);
+        assert!(src.read_retry_at.lock().unwrap().is_none(), "taken");
+        // the host turned the access off: the time is void
+        *src.read_retry_at.lock().unwrap() = past;
+        src.access.store(false, Ordering::SeqCst);
+        assert!(due_read_retries(std::slice::from_ref(&src)).is_empty());
+        assert!(src.read_retry_at.lock().unwrap().is_none());
     }
 
     #[test]

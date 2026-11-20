@@ -36,7 +36,8 @@
 //! phase; `grow ... --update-content <k>:<wav>`: after the analysis the host replaces the samples
 //! of source k and sends `updateAudioSourceContent` (`--update-add <wav>`: with the access of
 //! the source off, and a new source analysed before the access is on again;
-//! `--update-fail-reads <n>`: the first n reads of the new audio fail); `grow ... --linger-ms <n>`: the host keeps
+//! `--update-twice`: a second update at once; `--update-fail-reads <n>`: the first n reads of the
+//! new audio fail); `--add-late <wav>`: a source is added at the end and the host waits for all; `grow ... --linger-ms <n>`: the host keeps
 //! pumping for n ms at the end;
 //! `restore ... --enable-access`: after the restore the host enables the samples access of
 //! every source (no request) and waits 3 s.
@@ -1630,6 +1631,15 @@ fn run_grow(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     std::ptr::null(),
                     kARAContentUpdateEverythingChanged as ARAContentUpdateFlags,
                 );
+                if rest.iter().any(|a| a == "--update-twice") {
+                    // a second update at once, while the read of the first one runs (use `--slow-read`)
+                    (dc.updateAudioSourceContent.expect("updateAudioSourceContent"))(
+                        dc_ref_of(doc.inst),
+                        src,
+                        std::ptr::null(),
+                        kARAContentUpdateEverythingChanged as ARAContentUpdateFlags,
+                    );
+                }
                 if let Some(extra) = add {
                     doc.add_and_analyse(&[extra], "update-add")?;
                     set_phase("update");
@@ -1644,6 +1654,14 @@ fn run_grow(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 set_phase("linger");
                 pump_for(doc.inst, ms);
                 doc.print_all_notes("after-linger", None);
+            }
+            if let Some(extra) = args_value(rest, "--add-late") {
+                // a source is added after everything else (a round runs over the document), and the
+                // host waits until every source is complete
+                doc.add_and_analyse(&[extra], "late-add")?;
+                let pairs = doc.pairs.clone();
+                wait_for(doc.inst, &pairs)?;
+                doc.print_all_notes("after-late-add", None);
             }
             if rest.iter().any(|a| a == "--rerequest") {
                 // the host asks again for sources that are complete (or whose analysis
