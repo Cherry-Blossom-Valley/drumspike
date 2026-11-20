@@ -137,12 +137,12 @@ struct SourceState {
     /// A job covered this source (its content is available).
     has_events: AtomicBool,
     /// The source takes part in the rounds once its audio is here: the host asked for its
-    /// analysis, or the plugin took it as wanted (see `by_plugin`).
+    /// analysis, or the plugin took it as wanted (see `asked`).
     requested: AtomicBool,
-    /// The plugin queued this source itself, because its audio was read and the host never
-    /// asked (LUNA does not ask). The host is told when the notes are here, since it did not
-    /// ask and so does not wait for them.
-    by_plugin: AtomicBool,
+    /// The host called `requestAudioSourceContentAnalysis` for this source. A source that the
+    /// host never asked for is analysed all the same (LUNA does not ask), and the host is told
+    /// when its notes are here, since it does not wait for them.
+    asked: AtomicBool,
     /// The analysis of this source ended without a result (its read failed, its round failed
     /// or the service could not analyse its track). The host sees the analysis as complete
     /// (it must not wait for ever), and a new request tries again.
@@ -924,9 +924,7 @@ impl Session {
         {
             return;
         }
-        if !s.requested.swap(true, Ordering::SeqCst) {
-            s.by_plugin.store(true, Ordering::SeqCst);
-        }
+        s.requested.store(true, Ordering::SeqCst);
         *s.requested_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
         st.requested.push(s.clone());
     }
@@ -959,7 +957,7 @@ impl Session {
                 // a request); `ready-only` queues a source only when its audio is here, so
                 // sources that arrive one after the other get a round each.
                 let fault = std::env::var("DS_ARA_ROUND_FAULT").unwrap_or_default();
-                if fault != "request-only" && fault != "ready-only" {
+                if fault != "request-only" && fault != "ready-only" && fault != "no-late-round" {
                     self.want(&s, st);
                 }
             }
@@ -1193,7 +1191,7 @@ impl Session {
             // now, is told to the host
             // a source the host never asked for does not wait for its notes: it is told when they
             // come (M1b4)
-            let first = !was_complete && !was_failed && !failed && s.by_plugin.load(Ordering::SeqCst);
+            let first = !was_complete && !was_failed && !failed && !s.asked.load(Ordering::SeqCst);
             let told = (was_complete && differs) || (was_failed && !failed) || first;
             if told && !s.removed.load(Ordering::SeqCst) {
                 changed.push(s.props().name);
@@ -2108,7 +2106,7 @@ unsafe extern "C" fn dc_createAudioSource(
                 notes: Mutex::new(Vec::new()),
                 has_events: AtomicBool::new(false),
                 requested: AtomicBool::new(false),
-                by_plugin: AtomicBool::new(false),
+                asked: AtomicBool::new(false),
                 analysis_failed: AtomicBool::new(false),
                 wav_len: AtomicU64::new(0),
                 stale: AtomicBool::new(false),
@@ -2437,6 +2435,7 @@ unsafe extern "C" fn dc_requestAudioSourceContentAnalysis(
         ));
         let Some(src) = state_of(audioSourceRef) else { return };
         src.requested.store(true, Ordering::SeqCst);
+        src.asked.store(true, Ordering::SeqCst);
         if s.fault {
             return; // the fault switch runs the job inside process instead
         }
@@ -3664,7 +3663,7 @@ mod tests {
             notes: Mutex::new(Vec::new()),
             has_events: AtomicBool::new(false),
             requested: AtomicBool::new(true),
-            by_plugin: AtomicBool::new(false),
+            asked: AtomicBool::new(false),
             analysis_failed: AtomicBool::new(false),
             wav_len: AtomicU64::new(0),
             stale: AtomicBool::new(false),
