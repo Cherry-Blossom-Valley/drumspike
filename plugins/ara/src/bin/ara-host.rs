@@ -54,6 +54,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[path = "ara-host/editor_mode.rs"]
+mod editor_mode;
+
 macro_rules! cs {
     ($s:literal) => {
         concat!($s, "\0").as_ptr() as *const c_char
@@ -71,6 +74,7 @@ const FRAMES: usize = 512;
 /// `--no-persistent-id`: the host gives every source and modification an empty persistent
 /// ID, as a host that has none does. A restore then has only the name to match on, and the
 /// name is the host's own (here the file path), not the reduced name the archive stores.
+static NO_REGIONS: AtomicBool = AtomicBool::new(false);
 static NO_PERSISTENT_ID: AtomicBool = AtomicBool::new(false);
 
 /// `--names <n>...`: the ARA names the host gives the sources, by creation index, instead of
@@ -1053,6 +1057,7 @@ fn main() {
     };
     let mode = args.get(1).cloned().unwrap_or_default();
     let rest: Vec<String> = args[2.min(args.len())..].to_vec();
+    NO_REGIONS.store(rest.iter().any(|a| a == "--no-regions"), Ordering::SeqCst);
     NO_PERSISTENT_ID.store(rest.iter().any(|a| a == "--no-persistent-id"), Ordering::SeqCst);
     *NAMES.lock().unwrap() = args_list(&rest, "--names");
     if let Some(k) = args_value(&rest, "--no-access").and_then(|v| v.parse::<usize>().ok()) {
@@ -1076,6 +1081,7 @@ fn main() {
         "close-busy" => run_close_busy(bundle, &files, &rest),
         "restore2" => run_restore2(bundle, &files, &rest),
         "restore-busy" => run_restore_busy(bundle, &files, &rest),
+        "editor" => editor_mode::run(bundle, &files, &rest),
         "docs" => run_docs(bundle, &files, &args_list(&rest, "--files2")),
         other => {
             eprintln!("unknown mode {other:?}");
@@ -1307,6 +1313,11 @@ impl HostDoc {
         }
         let pairs = add_sources(self.inst, self.state, files)?;
         for (k, (_, modification)) in pairs.iter().enumerate() {
+            if NO_REGIONS.load(Ordering::SeqCst) {
+                // `--no-regions`: sources without playback regions are plain tracks
+                (*self.state).regions.push(std::ptr::null_mut());
+                continue;
+            }
             add_regions(
                 self.inst,
                 self.state,

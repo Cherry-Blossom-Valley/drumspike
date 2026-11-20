@@ -232,6 +232,10 @@ pub struct JobResult {
     pub ran: bool,
     /// The tracks of the project after the round with the creation index of their source.
     pub tracks: Vec<(String, usize)>,
+    /// The regions and the rate each source of the project has in the snapshot the notes were
+    /// made with (R6): the plugin maps the notes of a page edit with exactly these, also for a
+    /// changed source without audio whose snapshot was kept.
+    pub regions: HashMap<usize, (Vec<RegionRec>, f64)>,
 }
 
 impl JobResult {
@@ -262,6 +266,7 @@ impl JobResult {
             stale: Vec::new(),
             ran: false,
             tracks: Vec::new(),
+            regions: HashMap::new(),
         }
     }
 }
@@ -307,6 +312,10 @@ pub struct DocService {
     /// The test round that fails once (`DS_ARA_SCENARIO=fail-first-round`) has failed.
     failed_once: bool,
     canceller: Canceller,
+    /// The editor's way to the service (see [`PageHandle`]).
+    page: std::sync::Arc<PageHandle>,
+    /// A test aid: the next calls of `tracks_restore` in a round fail (R2).
+    pub fail_restores: usize,
 }
 
 /// The home folder of the service of a document: inside the document's folder, so inside
@@ -323,11 +332,78 @@ fn home_of(cache: &Path, id: &str) -> PathBuf {
     }
 }
 
-/// A new service with its home inside the document's folder.
-fn make_service(cache: &Path, id: &str) -> Service {
+/// The way the editor window reaches the service of a document (M1b2): a clone of the
+/// service (it is one `Arc`, shared with the worker) and the log of its events. The worker
+/// holds the `DocService` lock for a whole round, so the editor must never wait for that
+/// lock: it asks this handle, which has a lock of its own that nobody holds for long.
+#[derive(Default)]
+pub struct PageHandle {
+    svc: std::sync::Mutex<Option<Service>>,
+    /// The sid of the document's open project (the editor and the worker ask whether a job of
+    /// the page runs without taking the `DocService` lock).
+    sid: std::sync::Mutex<Option<String>>,
+    /// The events of the service (`project-dirty`, `track-layer`) as a numbered log; the page
+    /// reads them with its own number, so an editor that opens later misses none it needs.
+    pub log: std::sync::Arc<drumspike_app::bridge::EventLog>,
+}
+
+impl PageHandle {
+    /// The service of the document, or `None` after the document closed.
+    #[must_use]
+    pub fn service(&self) -> Option<Service> {
+        self.svc.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn set_sid(&self, sid: Option<String>) {
+        *self.sid.lock().unwrap_or_else(|e| e.into_inner()) = sid;
+    }
+
+    /// True while an analysis job of the project is queued or running (the app allows one job
+    /// at a time, and a job blocks the removal of tracks). Takes no `DocService` lock.
+    #[must_use]
+    pub fn job_running(&self) -> bool {
+        let (Some(svc), Some(sid)) = (
+            self.service(),
+            self.sid.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        ) else {
+            return false;
+        };
+        matches!(svc.analyze_status(&sid)["state"].as_str(), Some("queued" | "running"))
+    }
+
+    fn set(&self, svc: Option<Service>) {
+        *self.svc.lock().unwrap_or_else(|e| e.into_inner()) = svc;
+    }
+}
+
+/// The page handle of an editor whose plugin instance is bound to no ARA document (a host
+/// without ARA): a service of its own with no project, its home below the cache folder.
+#[must_use]
+pub fn unbound_page(cache: &Path) -> std::sync::Arc<PageHandle> {
+    let page = std::sync::Arc::new(PageHandle::default());
+    let svc = Service::new(ServiceConfig::from_env(Path::new("/")));
+    let home = cache.join("editor-unbound");
+    svc.set_home(home.join("service"));
+    svc.set_projects_dir(home.join("projects"));
+    let log = std::sync::Arc::clone(&page.log);
+    svc.set_emitter(std::sync::Arc::new(move |name: &str, payload: Value| {
+        log.push(name, payload)
+    }));
+    page.set(Some(svc));
+    page
+}
+
+/// A new service with its home inside the document's folder; its events go to the log of
+/// the page handle, and the handle holds a clone of it.
+fn make_service(cache: &Path, id: &str, page: &PageHandle) -> Service {
     let svc = Service::new(ServiceConfig::from_env(Path::new("/")));
     SERVICES_MADE.fetch_add(1, Ordering::SeqCst);
     point_service(&svc, cache, id);
+    let log = std::sync::Arc::clone(&page.log);
+    svc.set_emitter(std::sync::Arc::new(move |name: &str, payload: Value| {
+        log.push(name, payload)
+    }));
+    page.set(Some(svc.clone()));
     svc
 }
 
@@ -366,6 +442,31 @@ impl Canceller {
     }
 }
 
+/// A job of the page may start between the worker's check and its call (S1): the app answers
+/// 409. The call is tried again for at most 1 s (R4: the worker holds the document lock meanwhile);
+/// a 409 after that goes back to the worker, which puts the round or the removal back in the
+/// queue like a job of the page.
+fn retry_busy<T>(mut f: impl FnMut() -> Result<T, drumspike_app::AppError>) -> Result<T, drumspike_app::AppError> {
+    let mut tries = 0;
+    loop {
+        match f() {
+            Err(e)
+                if e.code == 409 && tries < 10 && switch("DS_ARA_ROUND_FAULT").as_deref() != Some("no-page-wait") =>
+            {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            other => return other,
+        }
+    }
+}
+
+/// The app answers a track it does not have with a 400 "unknown track" (a 404 for a project it
+/// does not have).
+fn is_missing_track(e: &drumspike_app::AppError) -> bool {
+    e.code == 404 || (e.code == 400 && e.message.contains("unknown track"))
+}
+
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -374,7 +475,8 @@ impl DocService {
     /// The service of a new document (made with the document controller).
     #[must_use]
     pub fn new(cache: PathBuf, id: String) -> DocService {
-        let svc = make_service(&cache, &id);
+        let page = std::sync::Arc::new(PageHandle::default());
+        let svc = make_service(&cache, &id, &page);
         DocService {
             cache,
             id,
@@ -386,7 +488,15 @@ impl DocService {
             dirty: false,
             failed_once: false,
             canceller: Canceller::default(),
+            page,
+            fail_restores: 0,
         }
+    }
+
+    /// The handle the editor window uses to reach the service without the document lock.
+    #[must_use]
+    pub fn page_handle(&self) -> std::sync::Arc<PageHandle> {
+        std::sync::Arc::clone(&self.page)
     }
 
     /// The handle that cancels the running job from another thread.
@@ -467,6 +577,7 @@ impl DocService {
         let opened = svc.project_open(&dir.display().to_string()).map_err(err)?;
         let sid = opened["sid"].as_str().unwrap_or_default().to_string();
         self.sid = Some(sid.clone());
+        self.page.set_sid(Some(sid.clone()));
         self.canceller.set(Some((svc, sid.clone())));
         Ok(sid)
     }
@@ -522,7 +633,7 @@ impl DocService {
         if switch("DS_ARA_SERVICE_FAULT").as_deref() == Some("per-job") {
             // the fault run: a new service for every job (the M1a way)
             self.close_service();
-            self.svc = Some(make_service(&self.cache, &self.id));
+            self.svc = Some(make_service(&self.cache, &self.id, &self.page));
         }
         let duplicate = switch("DS_ARA_RETRY_FAULT").as_deref() == Some("duplicate");
         let known: Vec<usize> = self.tracks.iter().map(|(_, s)| *s).collect();
@@ -556,12 +667,79 @@ impl DocService {
                 continue;
             }
             let name = self.tracks[at].0.clone();
-            svc.tracks_remove(&sid, std::slice::from_ref(&name), false)
-                .map_err(err)?;
-            let row = json!({"name": name, "index": at, "order_index": at,
-                "track": serde_json::to_value(make_track(s, &dir)).unwrap_or(Value::Null)});
-            svc.tracks_restore(&sid, &Value::Array(vec![row])).map_err(err)?;
-            self.events.shift_remove(&name);
+            // M1: the track record is made again with the new segments, and EVERYTHING the user
+            // set on the track goes with it: the removal answers the whole old record (hits, role,
+            // note, mix, params, Learn data, layer, follow, every other key), and only its
+            // `segments` and `source` are replaced by the new ones. Hits that now lie outside the
+            // new regions stay in the event list (as the app keeps them); the notes leave them out.
+            let removed = match retry_busy(|| svc.tracks_remove(&sid, std::slice::from_ref(&name), true)) {
+                Ok(v) => v,
+                Err(e) if is_missing_track(&e) => {
+                    // R2: the project has no such track (it went behind the plugin's back): the
+                    // source is a new track at the next round
+                    self.forget_track(&name, s.seq);
+                    return Err(format!(
+                        "the track {name} is not in the project any more; it is made again at the next round"
+                    ));
+                }
+                Err(e) => return Err(err(e)),
+            };
+            // the snapshot row of the app as a whole (name, index, order_index, track, followers):
+            // only the track changes, so a new field of the app's snapshot is carried too (R1)
+            let old_row = removed["snapshot"][0].clone();
+            let mut track = old_row["track"].clone();
+            let fresh = serde_json::to_value(make_track(s, &dir)).unwrap_or(Value::Null);
+            let drop_data = switch("DS_ARA_EDITOR_FAULT").as_deref() == Some("drop-track-data");
+            if drop_data {
+                track = fresh; // the fault run: the old behaviour, the hand data are gone
+            } else if let Some(obj) = track.as_object_mut() {
+                // what the analysis of this round writes again (the audio may have changed)
+                for key in ["sr", "n_samples", "duration"] {
+                    obj.remove(key);
+                }
+                for key in ["segments", "source"] {
+                    match fresh.get(key) {
+                        Some(v) => {
+                            obj.insert(key.to_string(), v.clone());
+                        }
+                        None => {
+                            obj.remove(key);
+                        }
+                    }
+                }
+            }
+            let mut row = if drop_data {
+                json!({"name": name, "index": at, "order_index": at})
+            } else {
+                old_row.clone()
+            };
+            row["track"] = track;
+            let restored = if self.fail_restores > 0 {
+                self.fail_restores -= 1;
+                Err(drumspike_app::AppError::internal("test: the restore fails"))
+            } else {
+                svc.tracks_restore(&sid, &Value::Array(vec![row]))
+            };
+            if let Err(e) = restored {
+                // R2: the track is out of the project: the OLD record goes back; when that fails
+                // too, the track leaves the plugin's list, so that later rounds work
+                let back = if self.fail_restores > 0 {
+                    self.fail_restores -= 1;
+                    Err(drumspike_app::AppError::internal("test: the restore fails"))
+                } else {
+                    svc.tracks_restore(&sid, &Value::Array(vec![old_row]))
+                };
+                return Err(match back {
+                    Ok(_) => format!("the new record of {name} was refused ({e}); the old record is back"),
+                    Err(e2) => {
+                        self.forget_track(&name, s.seq);
+                        format!("the record of {name} could not be made again ({e}) nor put back ({e2}); the track left the plugin's list")
+                    }
+                });
+            }
+            if drop_data {
+                self.events.shift_remove(&name);
+            }
         }
         let new_sources: Vec<SourceSnapshot> = new.iter().map(|s| (*s).clone()).collect();
         let names = self.names_for(&new_sources);
@@ -618,7 +796,11 @@ impl DocService {
             if self.canceller.cancelled() {
                 return Err("the analysis was cancelled before it started".into());
             }
-            svc.analyze_start(&sid, Some(analysed.clone()), None, None)
+            // F1: a round keeps the hits the user placed in the page (the app's own
+            // "keep my edits": they stay in the new events and win within 20 ms over the
+            // detected ones). `DS_ARA_EDITOR_FAULT=drop-edits` brings back the plain analysis.
+            let keep = switch("DS_ARA_EDITOR_FAULT").as_deref() != Some("drop-edits");
+            retry_busy(|| svc.analyze_start_keep(&sid, Some(analysed.clone()), None, None, None, keep, false))
                 .map_err(err)?;
             let mut idle_since: Option<std::time::Instant> = None;
             let st = loop {
@@ -703,7 +885,46 @@ impl DocService {
             stale,
             ran: true,
             tracks: self.tracks.clone(),
+            regions: self
+                .snaps
+                .iter()
+                .map(|(q, x)| (*q, (x.regions.clone(), x.sample_rate)))
+                .collect(),
         })
+    }
+
+    /// The page changed the project (an edit, a job of the page): read the events of every
+    /// track again and save the project. `Some((events, notes))` when the events differ from
+    /// the last known ones; the notes follow the events.
+    ///
+    /// # Errors
+    ///
+    /// A message when the project cannot be saved.
+    #[allow(clippy::type_complexity)]
+    pub fn sync_page_edits(&mut self) -> Result<SyncOutcome, String> {
+        let (Some(svc), Some(sid)) = (self.svc.clone(), self.sid.clone()) else {
+            return Ok((None, false));
+        };
+        let mut all = Map::new();
+        for (name, _) in &self.tracks {
+            // an error is not swallowed: a track the project no longer has is reported (the host
+            // owns the track set, so this means the project changed behind the plugin's back)
+            let ev = svc
+                .events_get(&sid, name)
+                .map_err(|e| format!("events_get {name}: {e}"))?;
+            all.insert(name.clone(), ev["events"].clone());
+        }
+        let mut saved = false;
+        if svc.project_get(&sid).is_ok_and(|p| p["dirty"] == true) {
+            svc.project_save(&sid).map_err(err)?;
+            saved = true;
+        }
+        if all == self.events {
+            return Ok((None, saved));
+        }
+        self.events = all.clone();
+        let notes = self.notes_of(&all);
+        Ok((Some((all, notes)), saved))
     }
 
     /// The notes of every source of the project from the events: the hits that are not out
@@ -714,17 +935,16 @@ impl DocService {
         for (name, seq) in &self.tracks {
             let Some(s) = self.snaps.get(seq) else { continue };
             let list = events.get(name).and_then(Value::as_array).cloned().unwrap_or_default();
-            let mut per_source: Vec<[f64; 2]> = Vec::with_capacity(list.len());
-            for ev in list.iter().filter(|e| !drumspike_app::policy::is_out(e)) {
-                let t = ev.get("t").and_then(Value::as_f64).unwrap_or(f64::NAN);
-                let v = ev.get("v").and_then(Value::as_i64).unwrap_or(100);
-                if let Some(sample) = source_sample(t, &s.regions, s.sample_rate) {
-                    per_source.push([sample as f64, (v.clamp(0, 127) as f64) / 127.0]);
-                }
-            }
-            notes.insert(*seq, per_source);
+            notes.insert(*seq, notes_for(&list, &s.regions, s.sample_rate));
         }
         notes
+    }
+
+    /// The track is not in the project (any more): the plugin's list forgets it.
+    fn forget_track(&mut self, name: &str, seq: usize) {
+        self.tracks.retain(|(n, _)| n != name);
+        self.snaps.remove(&seq);
+        self.events.shift_remove(name);
     }
 
     /// The track of a destroyed source leaves the project (and the project is saved).
@@ -738,9 +958,14 @@ impl DocService {
             return Ok(self.track_names());
         };
         if let (Some(svc), Some(sid)) = (&self.svc, &self.sid) {
-            svc.tracks_remove(sid, std::slice::from_ref(&name), false)
-                .map_err(err)?;
-            svc.project_save(sid).map_err(err)?;
+            match retry_busy(|| svc.tracks_remove(sid, std::slice::from_ref(&name), false)) {
+                Ok(_) => {
+                    svc.project_save(sid).map_err(err)?;
+                }
+                // R2: no such track: it is gone already (no retries for a ghost)
+                Err(e) if is_missing_track(&e) => {}
+                Err(e) => return Err(err(e)),
+            }
         }
         self.tracks.retain(|(n, _)| *n != name);
         self.snaps.remove(&seq);
@@ -794,6 +1019,7 @@ impl DocService {
     /// Save the project when it has unsaved changes, then close it.
     fn close_project(&mut self) {
         self.canceller.set(None);
+        self.page.set_sid(None);
         if let (Some(svc), Some(sid)) = (&self.svc, self.sid.take()) {
             if svc.project_get(&sid).is_ok_and(|p| p["dirty"] == true) {
                 let _ = svc.project_save(&sid);
@@ -804,6 +1030,7 @@ impl DocService {
 
     fn close_service(&mut self) {
         self.close_project();
+        self.page.set(None);
         if self.svc.take().is_some() {
             SERVICES_DROPPED.fetch_add(1, Ordering::SeqCst);
         }
@@ -896,6 +1123,25 @@ pub fn stem_of(name: &str) -> String {
     } else {
         safe
     }
+}
+
+/// What a sync of the page's edits found: the new events and notes when they differ from the last
+/// known ones, and whether the project was saved (R3).
+pub type SyncOutcome = (Option<(Map<String, Value>, HashMap<usize, Vec<[f64; 2]>>)>, bool);
+
+/// The notes of one source from the events of its track: the hits that are not out of the
+/// output (the app's own `policy::is_out`), mapped back into the source.
+#[must_use]
+pub fn notes_for(list: &[Value], regions: &[RegionRec], rate: f64) -> Vec<[f64; 2]> {
+    let mut out: Vec<[f64; 2]> = Vec::with_capacity(list.len());
+    for ev in list.iter().filter(|e| !drumspike_app::policy::is_out(e)) {
+        let t = ev.get("t").and_then(Value::as_f64).unwrap_or(f64::NAN);
+        let v = ev.get("v").and_then(Value::as_i64).unwrap_or(100);
+        if let Some(sample) = source_sample(t, regions, rate) {
+            out.push([sample as f64, (v.clamp(0, 127) as f64) / 127.0]);
+        }
+    }
+    out
 }
 
 /// The source sample of a timeline event `t`. The track's timeline is the source's own
@@ -1073,6 +1319,84 @@ mod tests {
         one.shutdown();
         let _ = std::fs::remove_dir_all(&cache);
         let _ = std::fs::remove_dir_all(&cache2);
+    }
+
+    /// R2: the removal of a changed source's track succeeded and the restore of the new record is
+    /// refused: the OLD record is put back, the round reports it, and the next round works.
+    #[test]
+    fn a_refused_restore_puts_the_old_record_back_and_the_next_round_works() {
+        let cache = scratch("restore-once");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut kick = snapshot_of(&cache, &id, 0, "kick.wav");
+        let first = doc.analyse(std::slice::from_ref(&kick), false).unwrap();
+        let hits = first.events["kick"].as_array().unwrap().len();
+        kick.regions = vec![RegionRec {
+            start_mod: 0.0,
+            dur_mod: 2.0,
+            start_play: 0.0,
+        }];
+        doc.fail_restores = 1;
+        let e = doc.analyse(std::slice::from_ref(&kick), false).unwrap_err();
+        assert!(e.contains("the old record is back"), "{e}");
+        assert_eq!(doc.track_names(), vec!["kick".to_string()]);
+        let again = doc.analyse(std::slice::from_ref(&kick), false).unwrap();
+        assert!(
+            again.ran,
+            "the change is still seen: the next round makes the new record"
+        );
+        assert!(again.events["kick"].as_array().unwrap().len() >= hits - 1);
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    /// R2: when the old record cannot be put back either, the track leaves the plugin's list, so
+    /// that later rounds do not fail with a 404 for ever; the source is a new track then.
+    #[test]
+    fn a_track_that_cannot_be_put_back_leaves_the_list_and_later_rounds_work() {
+        let cache = scratch("restore-twice");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut kick = snapshot_of(&cache, &id, 0, "kick.wav");
+        doc.analyse(std::slice::from_ref(&kick), false).unwrap();
+        kick.regions = vec![RegionRec {
+            start_mod: 0.0,
+            dur_mod: 2.0,
+            start_play: 0.0,
+        }];
+        doc.fail_restores = 2;
+        let e = doc.analyse(std::slice::from_ref(&kick), false).unwrap_err();
+        assert!(
+            e.contains("left the plugin's list") || e.contains("old record is back"),
+            "{e}"
+        );
+        let later = doc.analyse(std::slice::from_ref(&kick), false).unwrap();
+        assert!(later.ran);
+        assert_eq!(
+            later.project_tracks.len(),
+            1,
+            "one track for the source, no ghost: {:?}",
+            later.project_tracks
+        );
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    /// R2: a removal of a track that the project does not have counts as removed (no retries).
+    #[test]
+    fn the_removal_of_a_track_the_project_lacks_counts_as_removed() {
+        let cache = scratch("remove-404");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let kick = snapshot_of(&cache, &id, 0, "kick.wav");
+        doc.analyse(std::slice::from_ref(&kick), false).unwrap();
+        // the track goes behind the plugin's back
+        let (svc, sid) = (doc.service().unwrap(), doc.sid.clone().unwrap());
+        svc.tracks_remove(&sid, &["kick".to_string()], false).unwrap();
+        let left = doc.remove(0).unwrap();
+        assert!(left.is_empty());
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
     }
 
     #[test]

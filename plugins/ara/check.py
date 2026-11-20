@@ -2678,7 +2678,7 @@ def stage_switches_fault() -> bool:
 
 # ---- review round 2, item 9: no unwrap and no expect in the non-test code of the plugin
 
-UNWRAP_FILES = ["src/lib.rs", "src/service.rs", "src/state.rs", "src/wav.rs"]
+UNWRAP_FILES = ["src/editor.rs", "src/lib.rs", "src/service.rs", "src/state.rs", "src/wav.rs"]
 UNWRAP_PATTERN = re.compile(r"\.(unwrap|expect)\s*\(|\.unwrap_unchecked\s*\(")
 
 
@@ -2999,6 +2999,905 @@ def stage_reference() -> bool:
     return True
 
 
+# ---------------------------------------------------------------- M1b2: the editor window
+#
+# The ara-host mode `editor` analyses the fixture session in an ARA document, binds a plugin
+# instance to it, opens the plugin's editor (clap.gui, cocoa) in a real AppKit window and runs
+# one phase. The page runs the real Drum Spike page on the real service of the document; a
+# test driver (src/editor/driver.js, only under DS_ARA_EDITOR_MODE) reports to the plugin's
+# report file. Every check is a function of the run that returns parts (name -> (ok,
+# evidence)); each fault run makes one named part fail.
+
+EDITOR_CYCLES = 50
+MEMORY_LIMIT_MB = 50.0
+FRAME_LIMIT_MS = 33.0
+
+
+def editor_run(
+    label: str, mode: str, bundle: Path | None = None, cycles: int = 1, env: dict | None = None,
+    args: list | None = None, timeout: int = 1500, files: list | None = None,
+) -> tuple[int, dict, list]:
+    """One `ara-host editor` run with a fresh cache and report file. `files`: the sources of the
+    document before the editor opens (default: the four fixtures; `[]`: none)."""
+    out_file = OUT / f"report-{label}.jsonl"
+    if out_file.exists():
+        out_file.unlink()
+    cache_dir = OUT / f"cache-{label}"
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+    e = {**no_switch(), "DS_ARA_CACHE": str(cache_dir), "DS_ARA_OUT": str(out_file)}
+    e.update(env or {})
+    srcs = [str(FIXTURES / f) for f in FILES] if files is None else files
+    cmd = [str(HOST), str(bundle or CLAP), "editor", *(["--files", *srcs] if srcs else []),
+           "--editor-mode", mode, "--cycles", str(cycles), *(args or [])]
+    rc, text = run(cmd, env=e, log=f"host-{label}.log", timeout=timeout)
+    summary: dict = {}
+    for ln in text.splitlines():
+        if ln.startswith("{") and '"editor_run"' in ln:
+            try:
+                summary = json.loads(ln)
+            except ValueError:
+                pass
+    return rc, summary, report_rows(label)
+
+
+def page_reports(rows: list, kind: str) -> list:
+    return [r["report"] for r in rows if r.get("event") == "page_report" and r.get("kind") == kind]
+
+
+def events_object_of(raw: dict, names: list) -> bytes:
+    """`{"<track>": <events array>, ...}` from the raw answers of `events_get`, byte for byte
+    as the service wrote the arrays (the reference line has the same compact form)."""
+    dec = json.JSONDecoder()
+    parts = []
+    for n in names:
+        text = raw[n]
+        i = text.index('"events":') + len('"events":')
+        _, end = dec.raw_decode(text, i)
+        parts.append(json.dumps(n) + ":" + text[i:end])
+    return ("{" + ",".join(parts) + "}").encode()
+
+
+def open_parts(rc: int, summary: dict, rows: list, cycles: int, ref: bytes, bundle_tail: str) -> dict:
+    """Gate lines 1, 2, 4, 7 (main thread) and 10 of one run of the `ready` mode."""
+    parts: dict = {}
+    ready = [r for r in rows if r.get("event") == "page_ready"]
+    parts["editor-ready"] = (
+        rc == 0 and summary.get("opened") == cycles and len(ready) == cycles,
+        f"the page was ready {len(ready)} of {cycles} times (rc={rc}, opened {summary.get('opened')}, {summary.get('why')})",
+    )
+    boots = page_reports(rows, "boot")
+    bad = []
+    n_tracks = n_events = 0
+    for b in boots:
+        names = b.get("tracks") or []
+        n_tracks, n_events = len(names), b.get("n_events", 0)
+        try:
+            same = events_object_of(b["raw_events"], names) == ref
+        except (KeyError, ValueError):
+            same = False
+        if not (b.get("loaded") and n_tracks == 4 and n_events > 0 and same and b.get("hostMode") and b.get("tauri")):
+            bad.append((len(names), n_events, same))
+    parts["editor-data"] = (
+        len(boots) == cycles and not bad and n_tracks > 0 and n_events > 0,
+        f"{len(boots)} boot reports: {n_tracks} tracks and {n_events} events in the page, the events the page reads "
+        f"are byte for byte the reference ({len(ref)} bytes); {len(bad)} report(s) differ",
+    )
+    foreign = [x for b in boots for x in b.get("resources", []) if not x.startswith("dspage://")]
+    viol = [v for b in boots for v in b.get("violations", [])]
+    parts["editor-net"] = (
+        bool(boots) and not foreign and not viol,
+        f"{len(foreign)} request(s) to another scheme or host, {len(viol)} Content-Security-Policy violation(s) in {len(boots)} page loads",
+    )
+    opens = [r for r in rows if r.get("event") == "editor_open"]
+    ok_dirs = [r for r in opens if str(r.get("page_dir", "")).endswith(bundle_tail) and r.get("page_found_by")]
+    parts["editor-bundle"] = (
+        bool(opens) and len(ok_dirs) == len(opens),
+        f"the page of {len(ok_dirs)} of {len(opens)} editors came from <bundle>/{bundle_tail} (found by "
+        f"{sorted({r.get('page_found_by') for r in opens})})",
+    )
+    closes = [r for r in rows if r.get("event") == "editor_close"]
+    last = closes[-1] if closes else {}
+    parts["editor-main-thread"] = (
+        bool(closes) and last.get("off_main") == 0 and last.get("main_checks", 0) > 0
+        and all(r.get("main_thread") for r in opens + closes),
+        f"{last.get('main_checks')} web view calls checked, {last.get('off_main')} off the main thread; "
+        f"every editor was made and dropped on the main thread",
+    )
+    after, first = summary.get("rss_after_mb", 0.0), summary.get("rss_open_mb", 0.0)
+    parts["editor-memory"] = (
+        rc == 0 and first > 0 and after - first <= MEMORY_LIMIT_MB,
+        f"resident memory of the test host: closed {summary.get('rss_closed_mb')} MB, open {first} MB, "
+        f"after {cycles} cycles {after} MB (limit: {MEMORY_LIMIT_MB:.0f} MB above the first open)",
+    )
+    return parts
+
+
+def print_parts(prefix: str, parts: dict, only: list | None = None) -> bool:
+    ok = True
+    for name, (good, ev) in parts.items():
+        if only and name not in only:
+            continue
+        ok = pass_fail(f"{name}{prefix}", good, ev) and ok
+    return ok
+
+
+def _reference() -> bytes | None:
+    p = OUT / "events-reference.json"
+    return p.read_bytes() if p.exists() else None
+
+
+_EDITOR_OPEN: dict = {}
+
+
+def editor_open_run(which: str) -> tuple[dict, str]:
+    bundle, tail = (CLAP, "DrumSpikeAra.clap/Contents/Resources/page") if which == "clap" else (
+        EMBEDDED_CLAP, "DrumSpikeAra.vst3/Contents/PlugIns/DrumSpikeAra.clap/Contents/Resources/page")
+    if which not in _EDITOR_OPEN:
+        ref = _reference()
+        if ref is None or not HOST.exists() or not bundle.exists():
+            _EDITOR_OPEN[which] = ({"editor-ready": (False, "no reference, host or bundle: run the earlier stages and check.sh build")}, tail)
+        else:
+            rc, summary, rows = editor_run(f"editor-open-{which}", "ready", bundle, EDITOR_CYCLES)
+            _EDITOR_OPEN[which] = (open_parts(rc, summary, rows, EDITOR_CYCLES, ref, tail), tail)
+    return _EDITOR_OPEN[which]
+
+
+def stage_editor_open() -> bool:
+    ok = True
+    for which, suffix in (("clap", ""), ("vst3", "-vst3")):
+        parts, _ = editor_open_run(which)
+        ok = print_parts(suffix, parts) and ok
+    return ok
+
+
+def fault_part(stage: str, parts: dict, name: str, what: str) -> bool:
+    good, ev = parts.get(name, (True, "part missing"))
+    return pass_fail(stage, not good, f"the fault run ({what}) makes {name} fail: {ev}")
+
+
+def stage_editor_fault() -> bool:
+    ref = _reference()
+    if ref is None:
+        return pass_fail("editor-fault", False, "no reference events")
+    ok = True
+    tail = "DrumSpikeAra.clap/Contents/Resources/page"
+    for label, mode, cycles, env, args, part, what in (
+        ("ready", "ready", 1, {"DS_ARA_EDITOR_FAULT": "no-ready"}, [], "editor-ready", "a page that never reports ready"),
+        ("bundle", "ready", 1, {"DS_ARA_EDITOR_FAULT": "no-bundle"}, [], "editor-bundle", "no page in the bundle"),
+        ("net", "net", 1, {}, [], "editor-net", "the page asks for a foreign host"),
+        ("data", "ready", 1, {}, ["--no-ara"], "editor-data", "an editor with no ARA document: no tracks"),
+        ("memory", "ready", 20, {"DS_ARA_EDITOR_FAULT": "leak"}, [], "editor-memory", "every editor leaks 4 MB"),
+        ("main", "ready", 1, {"DS_ARA_EDITOR_FAULT": "inline"}, [], "editor-main-thread", "a command runs on the main thread"),
+    ):
+        rc, summary, rows = editor_run(f"editor-fault-{label}", mode, CLAP, cycles, env, args, timeout=600)
+        if label == "net":
+            # the net mode waits for the page's `now` report; its violations are the evidence
+            rep = page_reports(rows, "now")
+            viol = [v for r in rep for v in r.get("violations", [])]
+            foreign = [x for r in rep for x in r.get("resources", []) if not x.startswith("dspage://")]
+            parts = {"editor-net": (not viol and not foreign, f"{len(viol)} violation(s), {len(foreign)} foreign request(s)")}
+        else:
+            parts = open_parts(rc, summary, rows, cycles, ref, tail)
+        ok = fault_part(f"editor-fault-{label}", parts, part, what) and ok
+    return ok
+
+
+def run_phase(
+    label: str, mode: str, bundle: Path, env: dict | None = None, args: list | None = None, files: list | None = None,
+) -> tuple[int, dict, list]:
+    return editor_run(label, mode, bundle, 1, env, args, timeout=300, files=files)
+
+
+def keys_parts(rc: int, rows: list) -> dict:
+    reps = page_reports(rows, "keys")
+    seen = {e["key"]: e for e in (reps[0].get("seen", []) if reps else [])}
+    want = ["Space", "Right", "Z", "Tab", "Esc"]
+    missing = [k for k in want if k not in seen]
+    acted = [k for k in want if k in seen and seen[k].get("page")]
+    return {"editor-keys": (
+        rc == 0 and bool(reps) and not missing and len(acted) >= 3 and seen.get("Z", {}).get("meta") is True,
+        f"Space, Right, Cmd+Z, Tab, Esc reached the page: missing {missing or 'none'}; the page ran a command for {acted}")}
+
+
+def focus_parts(rc: int, rows: list) -> dict:
+    reps = page_reports(rows, "focus")
+    keys = reps[0].get("keys", []) if reps else []
+    lost = [k for k in keys if 2800 <= k["t"] <= 4300]
+    back = [k for k in keys if k["t"] >= 4700]
+    return {"editor-focus": (
+        rc == 0 and bool(reps) and not lost and bool(back),
+        f"after a click in the host {len(lost)} key(s) reached the page (want 0); after a click in the editor {len(back)} did (want 1)")}
+
+
+def resize_parts(rc: int, rows: list) -> dict:
+    reps = page_reports(rows, "resize")
+    s = reps[0].get("samples", []) if reps else []
+    if len(s) < 3:
+        return {"editor-resize": (False, "too few samples")}
+    w0 = s[0]["innerW"]
+    big = max(x["innerW"] for x in s if x["t"] > 2500)
+    small = min(x["innerW"] for x in s if x["t"] > 4500)
+    return {"editor-resize": (rc == 0 and big > w0 + 100 and small < w0 - 100, f"the page follows the window: {w0} -> {big} -> {small} px wide")}
+
+
+def measure_parts(rc: int, rows: list, summary: dict | None = None) -> dict:
+    reps = page_reports(rows, "measure")
+    r = reps[0] if reps else {}
+    if summary is not None and summary.get("window_visible") is False:
+        return {"editor-measure": (False, "the window of the test host is occluded (the screen of this host is locked), so WebKit "
+                                          "suspends the page and it draws no frame: the frame time cannot be measured here")}
+    frames, p95 = r.get("frames", 0), r.get("p95_ms")
+    if r and r.get("visibility") != "visible":
+        return {"editor-measure": (False, f"the page is {r.get('visibility')}: the screen of this host is locked or its window occluded, "
+                                          f"so the page draws no frame and the frame time cannot be measured ({frames} frames)")}
+    return {"editor-measure": (
+        rc == 0 and frames >= 100 and p95 is not None and p95 <= FRAME_LIMIT_MS,
+        f"{frames} frames over 8 s of scroll and zoom, p95 {p95} ms (max {r.get('max_ms')} ms, limit {FRAME_LIMIT_MS:.0f} ms)")}
+
+
+def stage_editor_gui() -> bool:
+    """Gate line 8: keys, focus, resize and the frame time on the real page, on the CLAP and
+    on the plugin in the VST3; the first responder is the plugin's own call."""
+    ok = True
+    for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
+        for mode, fn in (("keys", keys_parts), ("focus", focus_parts), ("resize", resize_parts), ("measure", measure_parts)):
+            rc, summary, rows = run_phase(f"editor-{mode}-{which}", mode, bundle)
+            parts = fn(rc, rows, summary) if mode == "measure" else fn(rc, rows)
+            ok = print_parts(suffix, parts) and ok
+    return ok
+
+
+def stage_editor_gui_fault() -> bool:
+    ok = True
+    for mode, fn, fault, part, what in (
+        ("keys", keys_parts, "no-focus", "editor-keys", "the web view is not the first responder"),
+        ("focus", focus_parts, "no-focus", "editor-focus", "the web view is not the first responder"),
+        ("resize", resize_parts, "no-resize", "editor-resize", "the web view does not follow the host view"),
+        ("measure", measure_parts, "slow-frames", "editor-measure", "the page draws a slow frame every time"),
+    ):
+        rc, summary, rows = run_phase(f"editor-fault-{mode}", mode, CLAP, {"DS_ARA_EDITOR_FAULT": fault})
+        parts = fn(rc, rows, None) if mode == "measure" else fn(rc, rows)
+        ok = fault_part(f"editor-{mode}-fault", parts, part, what) and ok
+    return ok
+
+
+def shell_parts(rc: int, rows: list) -> dict:
+    reps = page_reports(rows, "shell")
+    r = reps[0] if reps else {}
+    cmds = r.get("commands", {})
+    unknown = [c for c, v in cmds.items() if not v.get("ok") and "unknown command" in str(v.get("message"))]
+    answered = [c for c, v in cmds.items() if v.get("ok") or isinstance(v.get("code"), int)]
+    bin_ = r.get("binary", {})
+    err = r.get("error_shape") or {}
+    parts = {
+        "editor-shell": (
+            rc == 0 and bool(reps) and len(cmds) >= 16 and not unknown and len(answered) == len(cmds),
+            f"{len(answered)} of {len(cmds)} shell commands have a defined answer, {len(unknown)} 'unknown command' {unknown}; "
+            f"quit_app answered and the host is alive (rc={rc})"),
+        "editor-binary": (
+            sorted(bin_) == ["peaks_tile", "samples_window", "track_layer_wave", "track_sampler_wave"]
+            and all(v.get("ok") and v.get("len", 0) > 8 for v in bin_.values()),
+            f"the four binary commands gave an ArrayBuffer: { {k: v.get('len') for k, v in bin_.items()} }"),
+        "editor-error": (
+            isinstance(err.get("code"), int) and isinstance(err.get("message"), str) and err.get("code") == 404,
+            f"an error reaches the page as {{code, message}}: {err}"),
+        "editor-tauri": (
+            r.get("keys") == ["core", "dialog", "event"] and r.get("core") == ["Channel", "invoke"] and r.get("listen") is True
+            and r.get("hostMode") is True,
+            f"window.__TAURI__ has {r.get('keys')} with core {r.get('core')}, event.listen works, __DS_HOST_MODE__={r.get('hostMode')}"),
+    }
+    return parts
+
+
+def page_panic_parts(rc: int, rows: list) -> dict:
+    reps = page_reports(rows, "shell")
+    r = reps[0] if reps else {}
+    got = r.get("export_existing")
+    caught = [x for x in rows if x.get("event") == "page_panic_caught"]
+    return {"editor-panic": (
+        rc == 0 and isinstance(got, dict) and got.get("code") == 500 and "panicked" in got.get("message", "") and bool(caught),
+        f"a command that panics gave the page {got}; {len(caught)} panic caught, the host stays alive (rc={rc})")}
+
+
+def stage_editor_shell() -> bool:
+    ok = True
+    wav = str(FIXTURES / FILES[1])
+    for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
+        rc, summary, rows = run_phase(f"editor-shell-{which}", "shell", bundle, args=["--no-regions", "--arg", wav])
+        ok = print_parts(suffix, shell_parts(rc, rows)) and ok
+    rc, summary, rows = run_phase("editor-panic", "shell", CLAP, {"DS_ARA_EDITOR_SCENARIO": "panic:export_existing"}, ["--no-regions", "--arg", wav])
+    ok = print_parts("", page_panic_parts(rc, rows)) and ok
+    return ok
+
+
+def stage_editor_shell_fault() -> bool:
+    wav = str(FIXTURES / FILES[1])
+    ok = True
+    rc, summary, rows = run_phase("editor-fault-shell", "shell", CLAP, {"DS_ARA_EDITOR_FAULT": "no-shell"}, ["--no-regions", "--arg", wav])
+    ok = fault_part("editor-shell-fault", shell_parts(rc, rows), "editor-shell", "the shell commands are left to the service") and ok
+    rc, summary, rows = run_phase(
+        "editor-fault-panic", "shell", CLAP,
+        {"DS_ARA_EDITOR_SCENARIO": "panic:export_existing", "DS_ARA_GUARD_FAULT": "off"}, ["--no-regions", "--arg", wav])
+    ok = fault_part("editor-panic-fault", page_panic_parts(rc, rows), "editor-panic", "the request thread has no panic guard") and ok
+    return ok
+
+
+def edit_parts(rc: int, rows: list, restore_rc: int, restore_rows: list, ref: bytes, notes_lines: list) -> dict:
+    """Gate line 5 (the edit lasts, also when the archive is stored at once) and its notes; the
+    event of the service that reaches the page (gate line 3)."""
+    reps = page_reports(rows, "edit")
+    r = reps[0] if reps else {}
+    if not r or r.get("error"):
+        why = f"the page's edit did not run: {r.get('error')} (rc={rc})"
+        return {"editor-edit": (False, why), "editor-edit-notes": (False, why), "editor-events": (False, why)}
+    name, idx = r["name"], r["index"]
+    before = json.loads(r["before_raw"])["events"]
+    after = json.loads(r["after_raw"])["events"]
+    moved = [i for i in range(len(before)) if before[i] != after[i]]
+    restored = [x for x in restore_rows if x.get("event") == "doc_restored"]
+    got = json.loads(restored[-1]["events_json"]) if restored else {}
+    want = json.loads(ref)
+    want[name] = after
+    other_same = all(got.get(k) == v for k, v in want.items() if k != name)
+    parts = {"editor-edit": (
+        rc == 0 and restore_rc == 0 and moved == [idx] and got.get(name) == after and other_same,
+        f"the page moved hit {idx} of {name} from {r['from']} to {r['to']} and the archive was stored at once; restored in a new "
+        f"process it has that list ({len(after)} hits, {len(moved)} differs from the analysis) and the other {len(want) - 1} tracks are unchanged")}
+    # the notes of the source: the rate comes from the host's own rows, the region is the whole source
+    row = next((n for n in notes_lines if safe_name(stem_of(n.get("name", ""))) == name), None)
+    if row is None:
+        parts["editor-edit-notes"] = (False, f"no host_notes row for {name} after the restore: the evidence is missing")
+    else:
+        rate = row["rate"]
+        ms, os_ = round(r["to"] * rate), round(r["from"] * rate)
+        parts["editor-edit-notes"] = (
+            ms in row["samples"] and os_ not in row["samples"],
+            f"the ARA notes of {name} after the restore carry the moved hit at sample {ms} (rate {rate}) and no longer {os_}: {row['samples']}")
+    ev = page_reports(rows, "edit-events")
+    dirty = (ev[0].get("dirty_events") if ev else None) or []
+    parts["editor-events"] = (
+        any(d.get("dirty") is True for d in dirty),
+        f"the event of the service (project-dirty) reached the page after its edit: {len(dirty)} event(s) {dirty[:2]}")
+    return parts
+
+
+def edit_run(label: str, bundle: Path, env: dict | None = None) -> dict:
+    """The page edits a hit; the archive is stored at once (the moment the edit is answered), while
+    the worker hears about the change 12 s late (the scenario `sync-delay`: only the worker's
+    sync is delayed, the request thread's own record is not)."""
+    ref = _reference()
+    archive = OUT / f"{label}.ara"
+    if archive.exists():
+        archive.unlink()
+    env = {"DS_ARA_EDITOR_SCENARIO": "sync-delay", **(env or {})}
+    rc, summary, rows = run_phase(label, "edit", bundle, env, ["--store-at-edit", str(archive)])
+    rrc, rtext, rlines = host_run(f"{label}-restore", bundle, ["restore", "--archive", str(archive), "--files", *[str(FIXTURES / f) for f in FILES]], f"cache-{label}")
+    notes = [ln for ln in rlines if ln.get("event") == "host_notes"]
+    return edit_parts(rc, rows, rrc, report_rows(f"{label}-restore"), ref, notes)
+
+
+def stage_editor_edit() -> bool:
+    if _reference() is None or not HOST.exists():
+        return pass_fail("editor-edit", False, "no reference or host")
+    ok = True
+    for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
+        ok = print_parts(suffix, edit_run(f"editor-edit-{which}", bundle)) and ok
+    return ok
+
+
+def stage_editor_edit_fault() -> bool:
+    if _reference() is None:
+        return pass_fail("editor-edit-fault", False, "no reference")
+    ok = True
+    for fault, part, what in (
+        ("no-sync", "editor-edit", "a command of the page does not reach the archive"),
+        ("no-record", "editor-edit", "the request thread does not record the edit (the worker hears 12 s late): an archive stored at once misses it"),
+        ("no-notes", "editor-edit-notes", "the notes do not follow the edit"),
+        ("no-events", "editor-events", "the events of the service do not reach the page"),
+    ):
+        parts = edit_run(f"editor-fault-edit-{fault}", CLAP, {"DS_ARA_EDITOR_FAULT": fault})
+        ok = fault_part(f"editor-edit-fault-{fault}", parts, part, what) and ok
+    return ok
+
+
+def threads_parts(rc: int, summary: dict, rows: list) -> dict:
+    reps = page_reports(rows, "analyse")
+    r = reps[0] if reps else {}
+    closes = [x for x in rows if x.get("event") == "editor_close"]
+    last = closes[-1] if closes else {}
+    return {"editor-threads": (
+        rc == 0 and r.get("state") == "done" and r.get("channel_messages", 0) > 0 and summary.get("audio_overruns") == 0
+        and summary.get("audio_blocks", 0) >= MIN_BLOCKS and last.get("off_main") == 0 and last.get("peak_inflight", 0) >= 1,
+        f"an analysis started from the page ended '{r.get('state')}' in {r.get('ms')} ms with {r.get('channel_messages')} channel messages; "
+        f"{summary.get('audio_blocks')} audio blocks ran meanwhile, {summary.get('audio_overruns')} overruns "
+        f"(worst {summary.get('audio_worst_us')} us of {summary.get('audio_budget_us')} us); "
+        f"{last.get('off_main')} web view or command call(s) off the right thread"),
+        "editor-threads-analysis": (
+            bool(last.get("progress_threads")) and bool(last.get("start_threads")) and bool(last.get("main_thread_id"))
+            and last.get("main_thread_id") not in (last.get("progress_threads") or []) + (last.get("start_threads") or [])
+            and not set(last.get("progress_threads") or []) & set(last.get("start_threads") or []),
+            f"the analysis the page started reported its progress from thread(s) {last.get('progress_threads')}; its start came from "
+            f"request thread(s) {last.get('start_threads')}; the main thread is {last.get('main_thread_id')}: the analysis ran on none of them")}
+
+
+def stage_editor_threads() -> bool:
+    ok = True
+    for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
+        rc, summary, rows = run_phase(f"editor-threads-{which}", "analyse", bundle)
+        ok = print_parts(suffix, threads_parts(rc, summary, rows)) and ok
+    return ok
+
+
+def stage_editor_threads_fault() -> bool:
+    rc, summary, rows = run_phase("editor-fault-threads", "analyse", CLAP, {"DS_ARA_EDITOR_FAULT": "inline"})
+    parts = threads_parts(rc, summary, rows)
+    ok = fault_part("editor-threads-fault", parts, "editor-threads", "a command runs on the main thread")
+    return fault_part("editor-threads-analysis-fault", parts, "editor-threads-analysis", "the start of the analysis runs on the main thread") and ok
+
+
+EXTRA_SYNTH = "synth:2"
+
+
+def job_rows_of(rows: list) -> list:
+    return [r for r in rows if r.get("event") == "job"]
+
+
+def keep_edits_parts(rc: int, rows: list) -> dict:
+    edits = page_reports(rows, "edit")
+    fol = page_reports(rows, "follow")
+    jobs = job_rows_of(rows)
+    failed = [r for r in rows if r.get("event") == "job_failed"]
+    if not edits or not fol:
+        why = f"no edit or follow report (rc={rc})"
+        return {"editor-keep-edits": (False, why), "editor-follow": (False, why)}
+    e, f = edits[0], fol[0]
+    name = e["name"]
+    kept_service = any(abs(h["t"] - e["to"]) < 1e-9 for h in json.loads(f["raw_events"].get(name, '{"events":[]}'))["events"])
+    kept_page = any(abs(h["t"] - e["to"]) < 1e-9 for h in f["page_events"].get(name, []))
+    gone_old = not any(abs(h["t"] - e["from"]) < 1e-9 for h in f["page_events"].get(name, []))
+    new_track = len(f["tracks"]) == len(FILES) + 1
+    same_as_service = True
+    for n in f["tracks"]:
+        svc = json.loads(f["raw_events"][n])["events"]
+        same_as_service = same_as_service and [(h["t"], h["v"]) for h in svc] == [(h["t"], h["v"]) for h in f["page_events"].get(n, [])]
+    return {
+        "editor-keep-edits": (
+            rc == 0 and len(jobs) >= 2 and not failed and kept_service and kept_page and gone_old and new_track,
+            f"a hit moved in the page ({e['from']} to {e['to']} on {name}), then the DAW added a source: {len(jobs)} rounds, "
+            f"the moved hit is still there (service {kept_service}, page {kept_page}), the old place is empty ({gone_old}), "
+            f"{len(f['tracks'])} tracks, {len(failed)} failed round(s)"),
+        "editor-follow": (
+            rc == 0 and f.get("ok") is True and new_track and same_as_service,
+            f"the page holds the {len(f['tracks'])} tracks and the events of the service after the round, without a reload by hand "
+            f"(ok {f.get('ok')}, same as the service {same_as_service}, {f.get('ms')} ms)"),
+    }
+
+
+def open_first_parts(rc: int, rows: list, ref: bytes) -> dict:
+    boots = page_reports(rows, "boot")
+    fol = page_reports(rows, "follow")
+    if not boots or not fol:
+        why = f"no boot or follow report (rc={rc})"
+        return {"editor-open-first": (False, why)}
+    b, f = boots[0], fol[0]
+    try:
+        same = events_object_of(f["raw_events"], f["tracks"]) == ref
+    except (KeyError, ValueError):
+        same = False
+    return {"editor-open-first": (
+        rc == 0 and b.get("tracks") == [] and b.get("tauri") is True and f.get("ok") is True and len(f["tracks"]) == 4 and same,
+        f"the editor opened before any analysis: {len(b.get('tracks', []))} tracks, page text {b.get('text', '')[:70]!r}; when the first round "
+        f"ended the page held {len(f['tracks'])} tracks without a reload by hand, the events byte for byte the reference ({same})")}
+
+
+REFUSED_CALLS = ["tracks_add", "tracks_remove", "tracks_restore", "tracks_reorder", "track_rename", "tracks_scan", "project_close",
+                 "project_open", "project_new", "project_save_as", "project_rename", "export_all", "transport_play", "feedback_send"]
+
+
+def refuse_parts(rc: int, rows: list) -> dict:
+    reps = page_reports(rows, "refuse")
+    jobs = job_rows_of(rows)
+    failed = [r for r in rows if r.get("event") == "job_failed"]
+    if not reps:
+        return {"editor-refuse": (False, f"no refuse report (rc={rc})")}
+    r = reps[0]
+    calls = r["calls"]
+    bad = [c for c in REFUSED_CALLS if calls.get(c, {}).get("code") != 403]
+    host_named = all("host" in calls.get(c, {}).get("message", "") or "not in the plugin" in calls.get(c, {}).get("message", "")
+                     or "cache folder" in calls.get(c, {}).get("message", "") for c in REFUSED_CALLS)
+    return {"editor-refuse": (
+        rc == 0 and not bad and host_named and r.get("tracks_same") is True and len(jobs) >= 2 and not failed
+        and len(jobs[-1].get("project_tracks", [])) == len(FILES) + 1,
+        f"{len(REFUSED_CALLS) - len(bad)} of {len(REFUSED_CALLS)} commands that change the track set or the project files answered 403 "
+        f"(not 403: {bad}), the track list is unchanged ({r.get('tracks_same')}), and a later round still ran "
+        f"({len(jobs)} rounds, {len(failed)} failed, {len(jobs[-1].get('project_tracks', [])) if jobs else 0} tracks)")}
+
+
+def race_parts(rc: int, rows: list) -> dict:
+    reps = page_reports(rows, "analyse")
+    jobs = job_rows_of(rows)
+    failed = [r for r in rows if r.get("event") == "job_failed"]
+    r = reps[0] if reps else {}
+    return {"editor-race": (
+        rc == 0 and r.get("state") == "done" and len(jobs) >= 2 and not failed
+        and len(jobs[-1].get("project_tracks", [])) == len(FILES) + 2,
+        f"a round of the DAW (a new source) came while the page's own analysis ran: the page's job ended '{r.get('state')}', "
+        f"{len(jobs)} rounds, {len(failed)} failed round(s) {[x.get('error') for x in failed][:1]}")}
+
+
+def stage_editor_follow() -> bool:
+    ref = _reference()
+    if ref is None or not HOST.exists():
+        return pass_fail("editor-follow", False, "no reference or host")
+    ok = True
+    extra = ["--late-files", EXTRA_SYNTH, "--arg", str(len(FILES) + 1)]
+    rc, summary, rows = run_phase("editor-follow", "edit-round", CLAP, args=extra)
+    ok = print_parts("", keep_edits_parts(rc, rows)) and ok
+    rc, summary, rows = run_phase("editor-follow-vst3", "edit-round", EMBEDDED_CLAP, args=extra)
+    ok = print_parts("-vst3", keep_edits_parts(rc, rows)) and ok
+    late = ["--late-files", *[str(FIXTURES / f) for f in FILES], "--arg", str(len(FILES))]
+    rc, summary, rows = run_phase("editor-open-first", "open-first", CLAP, args=late, files=[])
+    ok = print_parts("", open_first_parts(rc, rows, ref)) and ok
+    return ok
+
+
+def stage_editor_follow_fault() -> bool:
+    ref = _reference()
+    if ref is None:
+        return pass_fail("editor-follow-fault", False, "no reference")
+    extra = ["--late-files", EXTRA_SYNTH, "--arg", str(len(FILES) + 1)]
+    ok = True
+    rc, summary, rows = run_phase("editor-fault-keep", "edit-round", CLAP, {"DS_ARA_EDITOR_FAULT": "drop-edits"}, extra)
+    ok = fault_part("editor-keep-edits-fault", keep_edits_parts(rc, rows), "editor-keep-edits", "a round drops the hand edits of the page") and ok
+    rc, summary, rows = run_phase("editor-fault-follow", "edit-round", CLAP, {"DS_ARA_EDITOR_FAULT": "no-reload"}, extra)
+    ok = fault_part("editor-follow-fault", keep_edits_parts(rc, rows), "editor-follow", "the page is not told that a round ended") and ok
+    late = ["--late-files", *[str(FIXTURES / f) for f in FILES], "--arg", str(len(FILES))]
+    rc, summary, rows = run_phase("editor-fault-open-first", "open-first", CLAP, {"DS_ARA_EDITOR_FAULT": "no-reload"}, late, files=[])
+    ok = fault_part("editor-open-first-fault", open_first_parts(rc, rows, ref), "editor-open-first", "the page is not told that the first round ended") and ok
+    return ok
+
+
+def stage_editor_refuse() -> bool:
+    rc, summary, rows = run_phase("editor-refuse", "refuse", CLAP, args=["--late-files", EXTRA_SYNTH])
+    return print_parts("", refuse_parts(rc, rows))
+
+
+def stage_editor_refuse_fault() -> bool:
+    rc, summary, rows = run_phase("editor-fault-refuse", "refuse", CLAP, {"DS_ARA_EDITOR_FAULT": "allow-track-set"}, ["--late-files", EXTRA_SYNTH])
+    return fault_part("editor-refuse-fault", refuse_parts(rc, rows), "editor-refuse", "the page may change the track set")
+
+
+def race_run(label: str, env: dict | None = None) -> dict:
+    rc, summary, rows = run_phase(label, "analyse-race", CLAP, env, ["--late-files", EXTRA_SYNTH],
+                                  files=[*[str(FIXTURES / f) for f in FILES], "synth:150"])
+    return race_parts(rc, rows)
+
+
+def stage_editor_race() -> bool:
+    return print_parts("", race_run("editor-race"))
+
+
+def stage_editor_race_fault() -> bool:
+    return fault_part("editor-race-fault", race_run("editor-fault-race", {"DS_ARA_ROUND_FAULT": "no-page-wait"}), "editor-race",
+                      "a round does not wait for the page's job")
+
+
+def tree_hashes(root: Path) -> dict:
+    out = {}
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            out[str(p.relative_to(root))] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return out
+
+
+def page_copy_parts(label: str, copy: Path) -> tuple[bool, str]:
+    want = tree_hashes(ROOT / "static")
+    got = tree_hashes(copy) if copy.is_dir() else {}
+    missing = sorted(set(want) - set(got))
+    extra = sorted(set(got) - set(want))
+    diff = sorted(k for k in want if k in got and want[k] != got[k])
+    return (
+        bool(want) and not missing and not extra and not diff,
+        f"{label}: {len(got)} files against {len(want)} of static/: {len(missing)} missing, {len(extra)} extra, {len(diff)} with other bytes {(missing + extra + diff)[:3]}",
+    )
+
+
+def stage_editor_page_copy() -> bool:
+    ok = True
+    for label, copy in (("the CLAP", CLAP / "Contents" / "Resources" / "page"), ("the CLAP in the VST3", EMBEDDED_CLAP / "Contents" / "Resources" / "page")):
+        good, ev = page_copy_parts(label, copy)
+        ok = pass_fail("editor-page-copy", good, ev) and ok
+    return ok
+
+
+def stage_editor_page_copy_fault() -> bool:
+    tmp = OUT / "page-copy-fault"
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    shutil.copytree(CLAP / "Contents" / "Resources" / "page", tmp)
+    (tmp / "app.js").write_text((tmp / "app.js").read_text() + "\n// changed\n")
+    good, ev = page_copy_parts("a copy with one changed file", tmp)
+    ok = pass_fail("editor-page-copy-fault", not good, f"the comparison refuses a changed copy: {ev}")
+    (tmp / "app.js").unlink()
+    good, ev = page_copy_parts("a copy with one missing file", tmp)
+    return pass_fail("editor-page-copy-fault", not good, f"and a missing file: {ev}") and ok
+
+
+def view_parts(rc: int, rows: list) -> dict:
+    opens = [r for r in rows if r.get("event") == "editor_open"]
+    ready = [r for r in rows if r.get("event") == "page_ready"]
+    closes = [r for r in rows if r.get("event") == "editor_close"]
+    in_vst3 = [r for r in opens if "DrumSpikeAra.vst3/Contents/PlugIns/DrumSpikeAra.clap/Contents/Resources/page" in str(r.get("page_dir"))]
+    return {"editor-vst3-view": (
+        rc == 0 and bool(in_vst3) and bool(ready) and all(r.get("off_main") == 0 for r in closes),
+        f"pluginval opened the editor of the wrapped VST3 through the wrapper's view: {len(opens)} editors, the page of {len(in_vst3)} from the "
+        f"VST3 bundle, the page ready {len(ready)} times, 0 calls off the main thread (the plugin has no ARA document there)")}
+
+
+def view_run(label: str, env: dict | None = None) -> dict:
+    out_file = OUT / f"report-{label}.jsonl"
+    if out_file.exists():
+        out_file.unlink()
+    e = {**no_switch(), "DS_ARA_CACHE": str(OUT / f"cache-{label}"), "DS_ARA_OUT": str(out_file), **(env or {})}
+    rc, text = run([str(PLUGINVAL), "--strictness-level", "5", "--timeout-ms", "120000", str(VST3)], env=e, log=f"{label}.log")
+    return view_parts(rc, report_rows(label))
+
+
+def stage_editor_vst3_view() -> bool:
+    if not PLUGINVAL.exists() or not VST3.exists():
+        return pass_fail("editor-vst3-view", False, "no pluginval or no VST3")
+    return print_parts("", view_run("editor-vst3-view"))
+
+
+def stage_editor_vst3_view_fault() -> bool:
+    if not PLUGINVAL.exists() or not VST3.exists():
+        return pass_fail("editor-vst3-view-fault", False, "no pluginval or no VST3")
+    return fault_part("editor-vst3-view-fault", view_run("editor-fault-vst3-view", {"DS_ARA_EDITOR_FAULT": "no-ready"}), "editor-vst3-view",
+                      "a page that never reports ready")
+
+
+def edit_sync_parts(label: str, rc: int, rows: list, cache: str) -> dict:
+    """R3: without the delay scenario the worker's own sync runs: its row says it saved the project,
+    the events are on disk, and the host heard that the notes of the source changed."""
+    reps = page_reports(rows, "edit")
+    syncs = [r for r in rows if r.get("event") == "page_sync"]
+    if not reps:
+        return {"editor-edit-sync": (False, f"no edit report (rc={rc})")}
+    r = reps[0]
+    disk = disk_events(cache, r["name"])
+    on_disk = disk is not None and any(abs(h["t"] - r["to"]) < 1e-9 for h in disk)
+    log = (OUT / f"host-{label}.log").read_text(errors="replace") if (OUT / f"host-{label}.log").exists() else ""
+    told = [ln for ln in log.splitlines() if '"host_content_changed"' in ln and r["name"] in ln]
+    return {"editor-edit-sync": (
+        rc == 0 and bool(syncs) and any(x.get("saved") for x in syncs) and on_disk and bool(told),
+        f"with no delay the worker's page_sync ran ({len(syncs)} row(s), saved {[x.get('saved') for x in syncs]}), the moved hit is in the project on disk ({on_disk}), "
+        f"and the host was told that the notes of {r['name']} changed ({len(told)} notification(s))")}
+
+
+def edit_sync_run(label: str, env: dict | None = None) -> dict:
+    rc, summary, rows = run_phase(label, "edit", CLAP, env, ["--wait-sync"])
+    return edit_sync_parts(label, rc, rows, f"cache-{label}")
+
+
+def stage_editor_edit_sync() -> bool:
+    if _reference() is None or not HOST.exists():
+        return pass_fail("editor-edit-sync", False, "no reference or host")
+    return print_parts("", edit_sync_run("editor-edit-sync"))
+
+
+def stage_editor_edit_sync_fault() -> bool:
+    # the worker never hears about the change: no sync row, no save by the worker
+    return fault_part("editor-edit-sync-fault", edit_sync_run("editor-fault-edit-sync", {"DS_ARA_EDITOR_FAULT": "no-sync"}), "editor-edit-sync",
+                      "the worker does not hear about the change")
+
+
+def disk_events(cache: str, name: str) -> list | None:
+    docs = project_docs(cache)
+    if not docs:
+        return None
+    tr = tracks_of_doc(docs[0]).get(name) or {}
+    return tr.get("events")
+
+
+def edit_destroy_parts(rc: int, rows: list, archive: Path, cache: str, ref: bytes, restore_rc: int, restore_rows: list) -> dict:
+    reps = page_reports(rows, "edit")
+    if not reps or reps[0].get("error"):
+        why = f"the page's edit did not run (rc={rc})"
+        return {"editor-edit-destroy-archive": (False, why), "editor-edit-destroy-disk": (False, why)}
+    r = reps[0]
+    after = json.loads(r["after_raw"])["events"]
+    restored = [x for x in restore_rows if x.get("event") == "doc_restored"]
+    got = json.loads(restored[-1]["events_json"]) if restored else {}
+    disk = disk_events(cache, r["name"])
+    return {
+        "editor-edit-destroy-archive": (
+            rc == 0 and restore_rc == 0 and got.get(r["name"]) == after,
+            f"the archive stored the moment the edit was answered, before the destroy, restored in a new process holds the edit "
+            f"({len(after)} hits of {r['name']}; restored list has {len(got.get(r['name'], []))} hits, restore rc {restore_rc}, "
+            f"{len(restored)} doc_restored row(s), first differing hit {next((i for i, (a, b) in enumerate(zip(after, got.get(r['name'], []))) if a != b), None)})"),
+        "editor-edit-destroy-disk": (
+            disk is not None and any(abs(h["t"] - r["to"]) < 1e-9 for h in disk) and not any(abs(h["t"] - r["from"]) < 1e-9 for h in disk),
+            f"the project on disk after the destroy of the controller holds the moved hit at {r['to']} (and not at {r['from']}): "
+            f"{None if disk is None else len(disk)} hits of {r['name']}"),
+    }
+
+
+def edit_destroy_run(label: str, env: dict | None = None) -> dict:
+    ref = _reference()
+    archive = OUT / f"{label}.ara"
+    if archive.exists():
+        archive.unlink()
+    cache = f"cache-{label}"
+    rc, summary, rows = run_phase(label, "edit-destroy", CLAP, {"DS_ARA_EDITOR_SCENARIO": "sync-delay", **(env or {})}, ["--store-at-edit", str(archive)])
+    rrc, rtext, rlines = host_run(f"{label}-restore", CLAP, ["restore", "--archive", str(archive), "--files", *[str(FIXTURES / f) for f in FILES]], f"cache-{label}-r")
+    return edit_destroy_parts(rc, rows, archive, f"cache-{label}", ref, rrc, report_rows(f"{label}-restore"))
+
+
+def stage_editor_edit_destroy() -> bool:
+    if _reference() is None or not HOST.exists():
+        return pass_fail("editor-edit-destroy", False, "no reference or host")
+    return print_parts("", edit_destroy_run("editor-edit-destroy"))
+
+
+def stage_editor_edit_destroy_fault() -> bool:
+    if _reference() is None:
+        return pass_fail("editor-edit-destroy-fault", False, "no reference")
+    parts = edit_destroy_run("editor-fault-edit-destroy", {"DS_ARA_EDITOR_FAULT": "no-record"})
+    return fault_part("editor-edit-destroy-fault", parts, "editor-edit-destroy-archive", "the request thread does not record the edit")
+
+
+def regions_keep_parts(rc: int, rows: list, ref: bytes) -> dict:
+    """M1: the user moves a hit and sets a role in the page, then the DAW trims the region of that
+    source: the hit and the role are still there; hits outside the new region stay in the event
+    list (the notes leave them out); the other tracks are as the service gives them."""
+    edits = page_reports(rows, "edit")
+    fol = page_reports(rows, "follow")
+    jobs = job_rows_of(rows)
+    if not edits or not fol:
+        return {"editor-regions-keep": (False, f"no edit or follow report (rc={rc})")}
+    e, f = edits[0], fol[0]
+    name = e["name"]
+    evs = json.loads(f["raw_events"][name])["events"]
+    moved = any(abs(h["t"] - e["to"]) < 1e-9 for h in evs)
+    role = (f.get("roles") or {}).get(name)
+    changed_round = len(jobs) >= 2 and jobs[-1].get("reason") in ("change", "request")
+    outside = [h["t"] for h in evs if h["t"] >= 1.0]   # the region was trimmed to the first second
+    refobj = json.loads(ref)
+    follower = e.get("follower")
+    others_same = all(json.loads(f["raw_events"][n])["events"] == refobj[n] for n in f["tracks"] if n not in (name, follower) and n in refobj)
+    still_follows = bool(follower) and (f.get("follows") or {}).get(follower) == name   # R1: the follow link of the track survives the trim
+    return {"editor-regions-keep": (
+        rc == 0 and f.get("ok") is True and moved and role == "cymbal" and changed_round and others_same and still_follows,
+        f"after a hit moved and a role set in the page, the host trimmed the region of {name}: {len(jobs)} rounds, "
+        f"the moved hit is still in the events ({moved}), the role is {role!r} (set: 'cymbal'), the other tracks equal the reference ({others_same}), {follower!r} still follows it ({still_follows}), "
+        f"{len(outside)} hit(s) outside the new region stay in the list")}
+
+
+def stage_editor_regions_keep() -> bool:
+    ref = _reference()
+    if ref is None or not HOST.exists():
+        return pass_fail("editor-regions-keep", False, "no reference or host")
+    rc, summary, rows = run_phase("editor-regions-keep", "edit-region", CLAP, args=["--region", "0,1.0,0"])
+    return print_parts("", regions_keep_parts(rc, rows, ref))
+
+
+def stage_editor_regions_keep_fault() -> bool:
+    ref = _reference()
+    if ref is None:
+        return pass_fail("editor-regions-keep-fault", False, "no reference")
+    rc, summary, rows = run_phase("editor-fault-regions-keep", "edit-region", CLAP, {"DS_ARA_EDITOR_FAULT": "drop-track-data"}, ["--region", "0,1.0,0"])
+    return fault_part("editor-regions-keep-fault", regions_keep_parts(rc, rows, ref), "editor-regions-keep", "a region change drops the hand data of the track")
+
+
+def race_destroy_parts(rc: int, rows: list, window: Path) -> dict:
+    """M3: the page analyses a long source while the host destroys another source."""
+    jobs = job_rows_of(rows)
+    failed = [r for r in rows if r.get("event") in ("job_failed",)]
+    destroyed = [r for r in rows if r.get("event") == "source_destroyed"]
+    wb = json.loads(window.read_text()) if window.exists() else {}
+    ev = wb.get("events") or {}
+    nonempty = sorted(k for k, v in ev.items() if v)
+    keep = [n for n in FILES if safe_name(stem_of(n)) != safe_name(stem_of(FILES[0]))]
+    keep_names = [safe_name(stem_of(n)) for n in keep]
+    last = jobs[-1].get("project_tracks", []) if jobs else []
+    gone = safe_name(stem_of(FILES[0]))
+    return {"editor-race-destroy": (
+        rc == 0 and not failed and bool(destroyed) and not any(r.get("error") for r in destroyed)
+        and all(n in nonempty for n in keep_names) and gone not in last and len(last) == len(FILES),
+        f"the host destroyed a source while the page's analysis ran: a store in that window holds the events of {len(nonempty)} tracks "
+        f"(want the {len(keep_names)} others: {all(n in nonempty for n in keep_names)}); afterwards the removal ran "
+        f"({len(destroyed)} source_destroyed row(s), errors {[r.get('error') for r in destroyed]}), the last round has {len(last)} tracks without {gone}, "
+        f"{len(failed)} failed round(s)")}
+
+
+def race_destroy_run(label: str, env: dict | None = None) -> dict:
+    window = OUT / f"{label}.window.ara"
+    if window.exists():
+        window.unlink()
+    rc, summary, rows = run_phase(label, "analyse-race", CLAP, env, ["--destroy-late", "0", "--archive-window", str(window)],
+                                  files=[*[str(FIXTURES / f) for f in FILES], "synth:150"])
+    return race_destroy_parts(rc, rows, window)
+
+
+def stage_editor_race_destroy() -> bool:
+    return print_parts("", race_destroy_run("editor-race-destroy"))
+
+
+def stage_editor_race_destroy_fault() -> bool:
+    return fault_part("editor-race-destroy-fault", race_destroy_run("editor-fault-race-destroy", {"DS_ARA_ROUND_FAULT": "no-page-wait"}),
+                      "editor-race-destroy", "a removal does not wait for the job of the page and a failed removal wipes the events")
+
+
+def shell_function_parts(page: Path) -> tuple[bool, str]:
+    """S4, R5: every function, global and element of the page that the shell script uses exists in the bundled page."""
+    src = (HERE / "src" / "editor" / "shell.js").read_text(encoding="utf-8")
+
+    def listed(name: str) -> list:
+        m = re.search(rf"var {name} = \[([^\]]*)\]", src)
+        return re.findall(r'"([A-Za-z_]+)"', m.group(1)) if m else []
+
+    funcs, globs, ids = listed("PAGE_FUNCTIONS"), listed("PAGE_GLOBALS"), listed("PAGE_IDS")
+    text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in sorted(page.glob("*.js")))
+    html = (page / "index.html").read_text(encoding="utf-8", errors="replace")
+    missing = [n for n in funcs if not re.search(rf"function\s+{n}\s*\(", text)]
+    missing += [n for n in globs if not re.search(rf"(const|let|var)\s+{n}\b", text)]
+    missing += ["#" + n for n in ids if f'id="{n}"' not in html]
+    # S.view is the page's own object: its two keys are in the state
+    if not re.search(r"view:\s*\{\s*t0", text):
+        missing.append("S.view")
+    total = len(funcs) + len(globs) + len(ids) + 1
+    return (bool(funcs and globs and ids) and not missing,
+            f"the shell script uses {total} parts of the page (functions {funcs}, globals {globs} and S.view, element {ids}); {len(missing)} missing in the bundled page {missing}")
+
+
+def stage_editor_shell_functions() -> bool:
+    ok, ev = shell_function_parts(CLAP / "Contents" / "Resources" / "page")
+    return pass_fail("editor-shell-functions", ok, ev)
+
+
+def stage_editor_shell_functions_fault() -> bool:
+    tmp = OUT / "page-fn-fault"
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    shutil.copytree(CLAP / "Contents" / "Resources" / "page", tmp)
+    p = tmp / "session.js"
+    p.write_text(p.read_text().replace("async function loadProject(", "async function loadProjectRenamed("))
+    ok, ev = shell_function_parts(tmp)
+    return pass_fail("editor-shell-functions-fault", not ok, f"a renamed function of the page is found: {ev}")
+
+
+def shell_report_parts(rc: int, rows: list, expect: bool) -> dict:
+    """R5 (d): the shell's report of a missing function reaches the plugin: a row `page_shell_report`."""
+    reports = [r for r in rows if r.get("event") == "page_shell_report"]
+    names = [n for r in reports for n in (r.get("what") or {}).get("missing_page_functions", [])]
+    reloaded = bool(page_reports(rows, "follow"))
+    if expect:
+        return {"editor-shell-report": (rc == 0 and reloaded and "renamedLoadProject" in names,
+                f"a function the shell needs is missing in the page: the shell's report reached the plugin as a row ({names})")}
+    return {"editor-shell-report": (rc == 0 and reloaded and not reports,
+            f"the page has every part the shell uses: a reload ran and the plugin got no missing-function report ({len(reports)} rows)")}
+
+
+def shell_report_run(label: str, env: dict | None = None, expect: bool = True) -> dict:
+    rc, summary, rows = run_phase(label, "edit-round", CLAP, env, ["--late-files", EXTRA_SYNTH, "--arg", str(len(FILES) + 1)])
+    return shell_report_parts(rc, rows, expect)
+
+
+def stage_editor_shell_report() -> bool:
+    ok = print_parts("", shell_report_run("editor-shell-report", None, False))
+    return ok
+
+
+def stage_editor_shell_report_fault() -> bool:
+    # the injected missing function must reach the plugin as a row; the quiet check of the normal run refuses that run
+    parts = shell_report_run("editor-fault-shell-report", {"DS_ARA_EDITOR_FAULT": "missing-function"}, False)
+    ok = fault_part("editor-shell-report-fault", parts, "editor-shell-report", "a function of the page is missing")
+    parts = shell_report_run("editor-fault-shell-report2", {"DS_ARA_EDITOR_FAULT": "missing-function"}, True)
+    return print_parts("", parts) and ok
+
+
+
 STAGES = {
     "fixture": stage_fixture,
     "reference": stage_reference,
@@ -3064,6 +3963,38 @@ STAGES = {
     "crate": stage_crate,
     "workspace": stage_workspace,
     "make-fixture": stage_make_fixture,
+    "editor-open": stage_editor_open,
+    "editor-fault": stage_editor_fault,
+    "editor-gui": stage_editor_gui,
+    "editor-gui-fault": stage_editor_gui_fault,
+    "editor-shell": stage_editor_shell,
+    "editor-shell-fault": stage_editor_shell_fault,
+    "editor-edit": stage_editor_edit,
+    "editor-edit-fault": stage_editor_edit_fault,
+    "editor-threads": stage_editor_threads,
+    "editor-threads-fault": stage_editor_threads_fault,
+    "editor-follow": stage_editor_follow,
+    "editor-follow-fault": stage_editor_follow_fault,
+    "editor-refuse": stage_editor_refuse,
+    "editor-refuse-fault": stage_editor_refuse_fault,
+    "editor-race": stage_editor_race,
+    "editor-race-fault": stage_editor_race_fault,
+    "editor-page-copy": stage_editor_page_copy,
+    "editor-page-copy-fault": stage_editor_page_copy_fault,
+    "editor-vst3-view": stage_editor_vst3_view,
+    "editor-vst3-view-fault": stage_editor_vst3_view_fault,
+    "editor-edit-sync": stage_editor_edit_sync,
+    "editor-edit-sync-fault": stage_editor_edit_sync_fault,
+    "editor-edit-destroy": stage_editor_edit_destroy,
+    "editor-edit-destroy-fault": stage_editor_edit_destroy_fault,
+    "editor-regions-keep": stage_editor_regions_keep,
+    "editor-regions-keep-fault": stage_editor_regions_keep_fault,
+    "editor-race-destroy": stage_editor_race_destroy,
+    "editor-race-destroy-fault": stage_editor_race_destroy_fault,
+    "editor-shell-report": stage_editor_shell_report,
+    "editor-shell-report-fault": stage_editor_shell_report_fault,
+    "editor-shell-functions": stage_editor_shell_functions,
+    "editor-shell-functions-fault": stage_editor_shell_functions_fault,
 }
 ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
@@ -3074,6 +4005,10 @@ ORDER = [
     "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",
     "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault", "doc-late-audio-arrives", "doc-late-audio-arrives-fault",
+    "editor-open", "editor-fault", "editor-gui", "editor-gui-fault", "editor-shell", "editor-shell-fault",
+    "editor-edit", "editor-edit-fault", "editor-threads", "editor-threads-fault",
+    "editor-follow", "editor-follow-fault", "editor-refuse", "editor-refuse-fault", "editor-race", "editor-race-fault", "editor-page-copy", "editor-page-copy-fault", "editor-vst3-view", "editor-vst3-view-fault",
+    "editor-edit-sync", "editor-edit-sync-fault", "editor-edit-destroy", "editor-edit-destroy-fault", "editor-regions-keep", "editor-regions-keep-fault", "editor-race-destroy", "editor-race-destroy-fault", "editor-shell-functions", "editor-shell-functions-fault", "editor-shell-report", "editor-shell-report-fault",  
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",

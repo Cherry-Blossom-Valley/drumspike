@@ -40,6 +40,7 @@ pub mod ara {
     #![allow(non_upper_case_globals, non_camel_case_types, non_snake_case, dead_code)]
     include!(concat!(env!("OUT_DIR"), "/ara.rs"));
 }
+pub mod editor;
 pub mod service;
 pub mod state;
 pub mod wav;
@@ -52,6 +53,7 @@ use clap_sys::plugin::{clap_plugin, clap_plugin_descriptor};
 use clap_sys::process::{clap_process, clap_process_status, CLAP_PROCESS_CONTINUE};
 use clap_sys::version::CLAP_VERSION;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -238,6 +240,22 @@ struct DocShared {
     members: Mutex<Vec<std::sync::Weak<SourceState>>>,
     /// Sources whose notes changed in a later round: the host is told in `notifyModelUpdates`.
     pending: Mutex<Vec<Arc<SourceState>>>,
+    /// The editor's way to the service (it never takes the `svc` lock the worker holds).
+    page: Arc<service::PageHandle>,
+    /// S5: the regions and the rate each source had in the last round (or restore). The notes of
+    /// the sources are mapped with THESE, by the worker (`notes_of`) and by the request thread
+    /// (`record_page_edit`) alike: the events belong to that round, not to a region change of
+    /// the host that its next round has not seen yet.
+    round_regions: Mutex<HashMap<usize, (Vec<service::RegionRec>, f64)>>,
+}
+
+/// The regions and the rate to map the notes of a source with: those of the last round when
+/// there is one, else the live ones.
+fn regions_for_notes(
+    round: Option<&(Vec<service::RegionRec>, f64)>,
+    live: (Vec<service::RegionRec>, f64),
+) -> (Vec<service::RegionRec>, f64) {
+    round.cloned().unwrap_or(live)
 }
 
 /// The document ids in use in this process. Two live documents never share an id, so never
@@ -322,6 +340,8 @@ impl DocShared {
         let svc = service::DocService::new(cache.clone(), id.clone());
         let doc = Arc::new(DocShared {
             cache,
+            page: svc.page_handle(),
+            round_regions: Mutex::new(HashMap::new()),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -348,6 +368,86 @@ impl DocShared {
         service::wav_of(&self.cache, &self.id(), seq, name)
     }
 
+    /// The page changed the project (F2): before the request thread answers, the events of every
+    /// track and the notes of the sources are in the document, so a host store that comes at once
+    /// writes them. Runs on the request thread: it takes no `DocService` lock (the worker may hold
+    /// it for a whole round), only the locks of the document's own state. The project is saved
+    /// later by the worker. `DS_ARA_EDITOR_FAULT=no-record` takes this away (the old way: only
+    /// the worker syncs, behind its current work).
+    fn record_page_edit(&self, svc: &drumspike_app::Service, sid: &str) -> Result<bool, String> {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let mut all = serde_json::Map::new();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
+                continue;
+            };
+            let ev = svc
+                .events_get(sid, &track)
+                .map_err(|e| format!("events_get {track}: {e}"))?;
+            all.insert(track, ev["events"].clone());
+        }
+        let changed = {
+            let mut cur = self.events.lock().unwrap_or_else(|e| e.into_inner());
+            if *cur == all {
+                false
+            } else {
+                *cur = all.clone();
+                true
+            }
+        };
+        if !changed {
+            return Ok(false);
+        }
+        if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() != Ok("no-notes") {
+            for s in &members {
+                let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
+                    continue;
+                };
+                let list = all.get(&track).and_then(Value::as_array).cloned().unwrap_or_default();
+                let live: Vec<service::RegionRec> = s
+                    .regions
+                    .lock()
+                    .map(|r| r.iter().map(|slot| slot.rec).collect())
+                    .unwrap_or_default();
+                let round = self
+                    .round_regions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&s.seq)
+                    .cloned();
+                let (regions, rate) = regions_for_notes(round.as_ref(), (live, s.props().sample_rate));
+                let notes = service::notes_for(&list, &regions, rate);
+                let differs = s.notes.lock().map(|old| *old != notes).unwrap_or(false);
+                if differs {
+                    if let Ok(mut old) = s.notes.lock() {
+                        *old = notes;
+                    }
+                    if s.has_events.load(Ordering::SeqCst) && !s.removed.load(Ordering::SeqCst) {
+                        if let Ok(mut p) = self.pending.lock() {
+                            if !p.iter().any(|x| Arc::ptr_eq(x, s)) {
+                                p.push(s.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Tell the page that the plugin changed its data (a round ended, a restore): the shell
+    /// script of the page reloads the project (F1, F8).
+    fn announce_reload(&self) {
+        if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-reload") {
+            return; // the fault run: the page is not told
+        }
+        self.page.log.push("plugin-reload", json!({"doc": self.id()}));
+    }
+
     fn lock_svc(&self) -> std::sync::MutexGuard<'_, service::DocService> {
         self.svc.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -362,9 +462,22 @@ enum Msg {
     /// A source's read failed.
     Failed(Arc<SourceState>),
     /// The host destroyed a source: its track leaves the project.
-    Remove { src: Arc<SourceState>, sources_left: usize },
+    Remove {
+        src: Arc<SourceState>,
+        sources_left: usize,
+        tries: u32,
+    },
+    /// A round waits for a job of the page (S2): it comes back to the queue after a short time.
+    Defer {
+        doc: Arc<DocShared>,
+        targets: Vec<Arc<SourceState>>,
+        reason: &'static str,
+        since: std::time::Instant,
+    },
     /// The regions or the properties of a source changed: the document needs a round.
     Touch(Arc<DocShared>),
+    /// The page changed the project: read the events again.
+    PageSync(Arc<DocShared>),
     /// The plugin library is being unloaded: the worker ends.
     Quit,
     /// An archive was restored: the project opens with the stored events.
@@ -443,6 +556,22 @@ static ROUNDS: AtomicUsize = AtomicUsize::new(0);
 const SETTLE_QUIET: std::time::Duration = std::time::Duration::from_millis(250);
 const SETTLE_MAX: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// A round or a removal that waits for a job of the page is looked at again after this time, at
+/// most this many times (about 10 minutes).
+const DEFER_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+const DEFER_MAX_TRIES: u32 = 6000;
+
+/// Send `msg` to the worker after [`DEFER_EVERY`] (a short-lived thread: the worker itself never
+/// sleeps for a job of the page).
+fn defer_msg(msg: Msg) {
+    let _ = std::thread::Builder::new()
+        .name("drumspike-ara-defer".into())
+        .spawn(move || {
+            std::thread::sleep(DEFER_EVERY);
+            let _ = send(session(), msg);
+        });
+}
+
 /// The longest the unload of the library waits for the worker.
 const UNLOAD_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
@@ -460,6 +589,8 @@ fn services_row() -> String {
 /// What the worker holds between two messages.
 #[derive(Default)]
 struct WorkerState {
+    /// Since when the round of a document waits for a job of the page (by document id).
+    deferred_since: std::collections::HashMap<String, std::time::Instant>,
     /// Sources that asked for the analysis and still need it.
     requested: Vec<Arc<SourceState>>,
     /// Documents that need a round without a new request, with the reason (`removal`: a
@@ -692,7 +823,39 @@ impl Session {
                     // a source that needs analysis starts a round even when the service sees no
                     // change (a stale track after a restore: its snapshot did not change)
                     let force = !targets.is_empty();
-                    self.run_job(&doc, &targets, why, force);
+                    // S2: a job of the page runs: the round goes back to the queue (a timer
+                    // brings it again) and the worker serves the other documents
+                    let since = *st
+                        .deferred_since
+                        .entry(doc.id())
+                        .or_insert_with(std::time::Instant::now);
+                    if std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-page-wait")
+                        && doc.page.job_running()
+                        && since.elapsed() < std::time::Duration::from_secs(600)
+                    {
+                        defer_msg(Msg::Defer {
+                            doc: doc.clone(),
+                            targets: targets.clone(),
+                            reason: why,
+                            since,
+                        });
+                        st.current.clear();
+                        continue;
+                    }
+                    let allow = since.elapsed() < std::time::Duration::from_secs(600)
+                        && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-page-wait");
+                    if self.run_job(&doc, &targets, why, force, allow) {
+                        // R4: the 409 after the short retry goes back to the queue like a job of the page
+                        defer_msg(Msg::Defer {
+                            doc: doc.clone(),
+                            targets: targets.clone(),
+                            reason: why,
+                            since,
+                        });
+                        st.current.clear();
+                        continue;
+                    }
+                    st.deferred_since.remove(&doc.id());
                     st.current.clear();
                 }
                 settled = false;
@@ -759,9 +922,35 @@ impl Session {
                     st.requested.push(s);
                 }
             }
-            Msg::Remove { src, sources_left } => {
+            Msg::Remove {
+                src,
+                sources_left,
+                tries,
+            } => {
                 st.requested.retain(|r| !Arc::ptr_eq(r, &src));
-                self.remove_track(&src, sources_left);
+                let busy_fault = std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-page-wait");
+                // M3: a job of the page blocks the removal of a track (the app answers 409). The
+                // worker does not wait for it: the removal comes back to the queue, the events
+                // of the document stay as they are, and other documents are served meanwhile.
+                if !busy_fault && tries < DEFER_MAX_TRIES && src.doc.page.job_running() {
+                    defer_msg(Msg::Remove {
+                        src,
+                        sources_left,
+                        tries: tries + 1,
+                    });
+                    return false;
+                }
+                if let Err(e) = self.remove_track(&src, sources_left) {
+                    if !busy_fault && tries < DEFER_MAX_TRIES && !src.doc.closing.load(Ordering::SeqCst) {
+                        self.log(json!({"event": "source_destroy_retry", "doc": src.doc.id(), "error": e}).to_string());
+                        defer_msg(Msg::Remove {
+                            src,
+                            sources_left,
+                            tries: tries + 1,
+                        });
+                        return false;
+                    }
+                }
                 // the tracks that are left are analysed together again
                 if !src.doc.closing.load(Ordering::SeqCst)
                     && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("new-only")
@@ -774,11 +963,32 @@ impl Session {
                     }
                 }
             }
+            Msg::Defer {
+                doc,
+                targets,
+                reason,
+                since,
+            } => {
+                if doc.closing.load(Ordering::SeqCst) {
+                    return false;
+                }
+                // back in the queue: the sources ask again, a round without sources is a stale mark
+                for s in targets {
+                    if !s.removed.load(Ordering::SeqCst) && !st.requested.iter().any(|r| Arc::ptr_eq(r, &s)) {
+                        st.requested.push(s);
+                    }
+                }
+                if !st.stale.iter().any(|(d, _)| Arc::ptr_eq(d, &doc)) {
+                    st.stale.push((doc.clone(), reason));
+                }
+                st.deferred_since.insert(doc.id(), since);
+            }
             Msg::Touch(doc) => {
                 if !doc.closing.load(Ordering::SeqCst) && !st.stale.iter().any(|(d, _)| Arc::ptr_eq(d, &doc)) {
                     st.stale.push((doc, "change"));
                 }
             }
+            Msg::PageSync(doc) => self.page_sync(&doc),
             Msg::Restore { doc, id, tracks } => self.restore_project(&doc, id, tracks),
             Msg::Close { doc, ack } => {
                 st.requested.retain(|r| !Arc::ptr_eq(&r.doc, &doc));
@@ -796,7 +1006,14 @@ impl Session {
     /// here is analysed, with a fresh snapshot of every source (so a change of the regions or
     /// of the properties of an earlier source is seen). `force` runs the round even when
     /// nothing changed (the fault run of the check).
-    fn run_job(&'static self, doc: &Arc<DocShared>, targets: &[Arc<SourceState>], reason: &'static str, force: bool) {
+    fn run_job(
+        &'static self,
+        doc: &Arc<DocShared>,
+        targets: &[Arc<SourceState>],
+        reason: &'static str,
+        force: bool,
+        allow_defer: bool,
+    ) -> bool {
         // a target whose read failed has no audio: its analysis ended without a result (the
         // host does not wait for it; a new request reads it again)
         let (usable, unread): (Vec<_>, Vec<_>) = targets.iter().cloned().partition(has_wav);
@@ -823,6 +1040,10 @@ impl Session {
                 .to_string(),
         );
         self.write_out();
+        let snap_regions: Vec<(usize, Vec<service::RegionRec>, f64)> = snaps
+            .iter()
+            .map(|x| (x.seq, x.regions.clone(), x.sample_rate))
+            .collect();
         let worker_doc = doc.clone();
         let outcome = guard("service job", Err("the service job panicked".to_string()), move || {
             let mut svc = worker_doc.lock_svc();
@@ -831,6 +1052,12 @@ impl Session {
         });
         let (result, id, folder, home) = match outcome {
             Ok(r) => r,
+            Err(e) if allow_defer && e.starts_with("409") => {
+                // R4: a job of the page started after the check: the round goes back to the queue
+                self.log(json!({"event": "round_deferred", "doc": id_before, "reason": e}).to_string());
+                self.write_out();
+                return true;
+            }
             Err(e) => {
                 // the round ended without a result: the sources of the round are complete
                 // for the host (it must not wait for ever) and are tried again at the next
@@ -845,7 +1072,7 @@ impl Session {
                 );
                 self.log(json!({"event": "job_failed", "doc": id_before, "error": e}).to_string());
                 self.write_out();
-                return;
+                return false;
             }
         };
         if !result.ran {
@@ -854,7 +1081,13 @@ impl Session {
                     .to_string(),
             );
             self.write_out();
-            return; // nothing had changed
+            return false; // nothing had changed
+        }
+        if let Ok(mut rr) = doc.round_regions.lock() {
+            // the regions of the snapshots the notes were made with (R6), not of the live ones
+            for (seq, r) in &result.regions {
+                rr.insert(*seq, r.clone());
+            }
         }
         let seq_of = |name: &str| result.tracks.iter().find(|(n, _)| n == name).map(|(_, s)| *s);
         let by_seq = |seq: usize| members.iter().find(|s| s.seq == seq);
@@ -919,7 +1152,7 @@ impl Session {
                     .to_string(),
             );
             self.write_out();
-            return;
+            return false;
         }
         let round = doc.rounds.fetch_add(1, Ordering::SeqCst) + 1;
         ROUNDS.fetch_add(1, Ordering::SeqCst);
@@ -989,10 +1222,78 @@ impl Session {
             *sr = Some(row);
         }
         self.write_out();
+        // the page reloads its project: it holds the tracks and events of this round (F1, F8)
+        doc.announce_reload();
+        false
+    }
+
+    /// The page changed the project (an edit): the events of the tracks are read again, the
+    /// project is saved, the document's events (the archive stores them) and the notes follow,
+    /// and the host is told about the sources whose notes changed.
+    fn page_sync(&'static self, doc: &Arc<DocShared>) {
+        let worker_doc = doc.clone();
+        let outcome = guard("page sync", Err("the page sync panicked".to_string()), move || {
+            worker_doc.lock_svc().sync_page_edits()
+        });
+        match outcome {
+            Ok((None, saved)) => {
+                // R3: the events were already in the document (the request thread recorded them);
+                // the worker saved the project
+                self.log(json!({"event": "page_sync", "doc": doc.id(), "saved": saved, "changed_notes": [], "unix_ns": now_ns().to_string()}).to_string());
+                self.write_out();
+            }
+            Ok((Some((events, notes)), saved)) => {
+                let members: Vec<Arc<SourceState>> = doc
+                    .members
+                    .lock()
+                    .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+                    .unwrap_or_default();
+                let mut changed: Vec<String> = Vec::new();
+                let notes = if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-notes") {
+                    HashMap::new() // the fault run: the notes do not follow
+                } else {
+                    notes
+                };
+                for (seq, n) in notes {
+                    let Some(s) = members.iter().find(|s| s.seq == seq) else {
+                        continue;
+                    };
+                    let differs = s.notes.lock().map(|old| *old != n).unwrap_or(false);
+                    if !differs {
+                        continue;
+                    }
+                    if let Ok(mut old) = s.notes.lock() {
+                        *old = n;
+                    }
+                    if s.has_events.load(Ordering::SeqCst) && !s.removed.load(Ordering::SeqCst) {
+                        changed.push(s.props().name);
+                        if let Ok(mut p) = doc.pending.lock() {
+                            if !p.iter().any(|x| Arc::ptr_eq(x, s)) {
+                                p.push(s.clone());
+                            }
+                        }
+                    }
+                }
+                let line = service::events_line(&events);
+                if let Ok(mut m) = doc.events.lock() {
+                    *m = events;
+                }
+                self.log(
+                    json!({"event": "page_sync", "doc": doc.id(), "saved": saved, "changed_notes": changed,
+                        "events_json": line, "unix_ns": now_ns().to_string()})
+                    .to_string(),
+                );
+                self.write_out();
+            }
+            Err(e) => {
+                self.log(json!({"event": "page_sync_failed", "doc": doc.id(), "error": e}).to_string());
+                self.write_out();
+            }
+        }
     }
 
     /// A destroyed source: its track leaves the project, its cached audio goes.
-    fn remove_track(&'static self, src: &Arc<SourceState>, sources_left: usize) {
+    fn remove_track(&'static self, src: &Arc<SourceState>, sources_left: usize) -> Result<(), String> {
         let doc = &src.doc;
         let removed = {
             let worker_doc = doc.clone();
@@ -1001,9 +1302,34 @@ impl Session {
                 worker_doc.lock_svc().remove(seq)
             })
         };
+        let busy_fault = std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-page-wait");
+        match (&removed, busy_fault) {
+            (Ok(left), _) => {
+                if let Ok(mut m) = doc.events.lock() {
+                    m.retain(|name, _| left.contains(name));
+                }
+            }
+            (Err(_), true) => {
+                // the fault run (the first version): an error was taken as "no track is left"
+                if let Ok(mut m) = doc.events.lock() {
+                    m.clear();
+                }
+            }
+            // M3: on an error the events stay (the caller retries the removal)
+            (Err(e), false) => {
+                self.log(
+                    json!({"event": "source_destroy_failed", "doc": doc.id(), "name": src.props().name, "error": e})
+                        .to_string(),
+                );
+                self.write_out();
+                return Err(e.clone());
+            }
+        }
         let tracks_left = removed.clone().unwrap_or_default();
-        if let Ok(mut m) = doc.events.lock() {
-            m.retain(|name, _| tracks_left.contains(name));
+        if removed.is_ok() {
+            if let Ok(mut rr) = doc.round_regions.lock() {
+                rr.remove(&src.seq);
+            }
         }
         if let Some(wav) = src.wav.lock().ok().and_then(|w| w.clone()) {
             let _ = std::fs::remove_file(wav);
@@ -1019,11 +1345,17 @@ impl Session {
             })
             .to_string(),
         );
+        Ok(())
     }
 
     /// The archive was restored: the project of the stored document id opens with the
     /// stored events. Nothing is decoded.
     fn restore_project(&'static self, doc: &Arc<DocShared>, id: Option<String>, tracks: Vec<service::RestoredTrack>) {
+        if let Ok(mut rr) = doc.round_regions.lock() {
+            for t in &tracks {
+                rr.insert(t.snapshot.seq, (t.snapshot.regions.clone(), t.snapshot.sample_rate));
+            }
+        }
         let worker_doc = doc.clone();
         let outcome = guard("restore project", Err("the restore panicked".to_string()), move || {
             let mut svc = worker_doc.lock_svc();
@@ -1058,6 +1390,7 @@ impl Session {
             Err(e) => self.log(format!("{{\"event\":\"restore_failed\",\"error\":{e:?}}}")),
         }
         self.write_out();
+        doc.announce_reload();
     }
 
     /// The document controller ends: the project is saved and closed, the service dropped.
@@ -1091,7 +1424,21 @@ impl Session {
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        self.run_job(&doc, &targets, "request", false);
+        self.run_job(&doc, &targets, "request", false, false);
+    }
+}
+
+/// What the editor of a plugin instance needs from its document.
+fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
+    let d = doc.clone();
+    let r = doc.clone();
+    editor::Backend {
+        page: doc.page.clone(),
+        changed: Arc::new(move || {
+            let _ = send(session(), Msg::PageSync(d.clone()));
+        }),
+        record: Arc::new(move |svc, sid| r.record_page_edit(svc, sid)),
+        doc_id: doc.id(),
     }
 }
 
@@ -1803,6 +2150,7 @@ unsafe extern "C" fn dc_destroyAudioSource(c: ARADocumentControllerRef, audioSou
         let msg = Msg::Remove {
             src: src.0.clone(),
             sources_left: left,
+            tries: 0,
         };
         if !send(session(), msg) {
             // no worker: nothing was analysed, so no track exists
@@ -2586,6 +2934,13 @@ struct Plugin {
     clap: clap_plugin,
     ext: ARAPlugInExtensionInstance,
     sample_rate: Mutex<f64>,
+    /// The document the ARA bind call joined this instance to (the editor shows its service).
+    doc: Mutex<Option<Arc<DocShared>>>,
+    /// The editor; made and dropped on the host's main thread only.
+    editor: std::cell::RefCell<Option<editor::Editor>>,
+    /// The size the editor asks for, packed (width << 32 | height): read by any thread the host calls
+    /// `get_size` from.
+    gui_size: std::sync::atomic::AtomicU64,
 }
 
 unsafe extern "C" fn pext_factory(_p: *const clap_plugin) -> *const ARAFactory {
@@ -2593,12 +2948,15 @@ unsafe extern "C" fn pext_factory(_p: *const clap_plugin) -> *const ARAFactory {
 }
 unsafe extern "C" fn pext_bind(
     p: *const clap_plugin,
-    _dc: ARADocumentControllerRef,
+    dc: ARADocumentControllerRef,
     known: ARAPlugInInstanceRoleFlags,
     assigned: ARAPlugInInstanceRoleFlags,
 ) -> *const ARAPlugInExtensionInstance {
     guard("bind_to_document_controller", std::ptr::null(), move || {
         let plugin = (*p).plugin_data as *mut Plugin;
+        if !dc.is_null() {
+            *(*plugin).doc.lock().unwrap_or_else(|e| e.into_inner()) = Some(controller_of(dc).doc.clone());
+        }
         let me = plugin as *mut c_void;
         let has = |role: u32| assigned & role as i32 != 0;
         (*plugin).ext = ARAPlugInExtensionInstance {
@@ -2764,6 +3122,9 @@ unsafe extern "C" fn p_get_extension(_p: *const clap_plugin, id: *const c_char) 
         if id == EXT_ARA_PLUGIN || id == EXT_ARA_PLUGIN_DRAFT {
             return &ARA_PLUGIN_EXT as *const _ as *const c_void;
         }
+        if id == clap_sys::ext::gui::CLAP_EXT_GUI.to_bytes() {
+            return &editor::PLUGIN_GUI as *const _ as *const c_void;
+        }
         std::ptr::null()
     })
 }
@@ -2872,6 +3233,9 @@ unsafe extern "C" fn f_create(
             },
             ext: std::mem::zeroed(),
             sample_rate: Mutex::new(0.0),
+            doc: Mutex::new(None),
+            editor: std::cell::RefCell::new(None),
+            gui_size: std::sync::atomic::AtomicU64::new((1000u64 << 32) | 640),
         }));
         (*p).clap.plugin_data = p as *mut c_void;
         &(*p).clap
@@ -2901,8 +3265,11 @@ pub struct ClapEntry {
 unsafe impl Send for ClapEntry {}
 unsafe impl Sync for ClapEntry {}
 
-unsafe extern "C" fn e_init(_plugin_path: *const c_char) -> bool {
-    guard("entry init", true, move || true)
+unsafe extern "C" fn e_init(plugin_path: *const c_char) -> bool {
+    guard("entry init", true, move || {
+        editor::set_bundle_hint(plugin_path);
+        true
+    })
 }
 unsafe extern "C" fn e_deinit() {
     guard("entry deinit", (), unload_worker)
@@ -2933,6 +3300,24 @@ pub static clap_entry: ClapEntry = ClapEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_map_with_the_regions_of_the_round_not_the_live_ones() {
+        let rec = |a: f64, d: f64| service::RegionRec {
+            start_mod: a,
+            dur_mod: d,
+            start_play: 0.0,
+        };
+        let round = (vec![rec(0.0, 1.0)], 48_000.0);
+        let live = (vec![rec(0.0, 0.5)], 48_000.0);
+        assert_eq!(regions_for_notes(Some(&round), live.clone()).0[0].dur_mod, 1.0);
+        assert_eq!(regions_for_notes(None, live).0[0].dur_mod, 0.5);
+        // the same list of events gives the same notes through both paths: a hit at 0.75 s
+        // is a note with the round's regions and none with the live ones
+        let list = vec![json!({"t": 0.75, "v": 100})];
+        assert_eq!(service::notes_for(&list, &round.0, round.1).len(), 1);
+        assert_eq!(service::notes_for(&list, &[rec(0.0, 0.5)], 48_000.0).len(), 0);
+    }
 
     fn entry(id: &str, name: &str) -> state::ArchiveSource {
         state::ArchiveSource {

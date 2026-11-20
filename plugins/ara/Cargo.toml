@@ -29,6 +29,16 @@ indexmap = { version = "2", features = ["serde"] }
 # the test host of check.sh (src/bin/ara-host.rs): loads the CLAP bundle with dlopen
 libloading = "0.8"
 
+# M1b2: the editor window. A `wry` web view (WKWebView) as a child of the host's NSView, the
+# version of spike S2 (no default features: the Linux backends must not enter the build).
+# objc2 and the app kit and foundation bindings are what wry brings; the plugin needs them
+# to make the web view the first responder, to read the size of the host's view, and the
+# test host of check.sh to open a real window. The licences are in README.md.
+wry = { version = "=0.57.0", default-features = false }
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+
 [[bin]]
 name = "ara-host"
 path = "src/bin/ara-host.rs"
