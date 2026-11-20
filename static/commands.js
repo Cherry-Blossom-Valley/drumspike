@@ -199,6 +199,7 @@ function applyZoomSpan(v) {   // a preset span ("full" or seconds), centred on t
 /* #169: View > Show Overview: the overview strip is shown or hidden; the lanes take its height (the layout, then the
    ResizeObserver of P3-14d). The choice is the app setting overview. */
 function setOverview(on, save) {
+  hostFitTouch("overview");
   S.overviewOn = !!on;
   $("#overviewWrap").classList.toggle("hidden", !S.overviewOn);
   invalidate(F.SIZE | F.VIEW);
@@ -465,6 +466,7 @@ function toggleStopReturnMode() {
    the page plays. One flip sets the button state, the Settings checkbox, the menu check and the
    saved app settings together (like setClick). */
 function setAuditionTab(on) {
+  if (hostAbsent("audio")) return;   // #539: no audition in host mode; a saved setting stays off
   const st = SETTINGS();
   st.ui.auditionTab = !!on; saveSettings();
   $("#setAuditionTab").checked = st.ui.auditionTab;
@@ -473,6 +475,7 @@ function setAuditionTab(on) {
   DSShell.sync();
 }
 function toggleAuditionTab() {
+  if (hostAbsent("audio")) return;
   setAuditionTab(!SETTINGS().ui.auditionTab);
   setMsg(`audition on tab: ${SETTINGS().ui.auditionTab ? "on" : "off"}`);
 }
@@ -492,22 +495,25 @@ function followResume() {   // in the tick: 2 s of playback after the edit the f
 function setSnap(on) { S.snap = !!on; $("#snapChk").checked = S.snap; DSShell.sync(); }
 function toggleSnap() { setSnap(!S.snap); setMsg(S.snap ? "snap to hits on" : "snap to hits off"); }
 function setClick(on) {
+  if (hostAbsent("audio")) return;   // #539: no click in host mode
   const st = SETTINGS();
   st.click.enabled = !!on; saveSettings();
   $("#setClickOn").checked = st.click.enabled; $("#clickBtn").classList.toggle("on", st.click.enabled);
   DSShell.sync();
 }
 function toggleClick() {
+  if (hostAbsent("audio")) return;
   setClick(!SETTINGS().click.enabled);
   setMsg(SETTINGS().click.enabled ? "metronome click on — beeps on every hit of audible tracks" : "metronome click off");
 }
 function trackButton(cls) {   // Track > Mute or Solo Selected Track: the header button of the selected track
+  if (hostAbsent("audio")) return;   // #539: no mute and solo in host mode
   const n = needTrack();
   const row = n && document.querySelector(`.track[data-name="${CSS.escape(n)}"]`);
   if (row) row.querySelector(cls).click();
 }
 function analyzeSelected() { const n = needTrack(); if (n) startAnalysis([n]); }
-function exportSelectedTracks() { const n = needTrack(); if (n) return openExport("selected", n); }   // P4-30: Track > Export Selected Tracks…
+function exportSelectedTracks() { if (hostAbsent("files")) return; const n = needTrack(); if (n) return openExport("selected", n); }   // P4-30: Track > Export Selected Tracks…
 function showModal(id) {   // Settings and Keyboard Shortcuts: Escape or the button closes them
   const m = $(id);
   m._opener = document.activeElement;   // #387: the focus comes back to it on close
@@ -520,8 +526,9 @@ function showModal(id) {   // Settings and Keyboard Shortcuts: Escape or the but
 /* #387: the Settings dialog is a preferences window: a category list on the left, one category's
    rows on the right. The last open category is remembered per app home (localStorage). */
 const SET_CATS = ["audio", "keyboard", "view", "audition", "pitches", "plugins", "agent"];
+const HOST_SET_CATS = ["keyboard", "view", "plugins"];   // #539: the categories of Settings that a host mode page keeps (the audio, the audition and click, the pitches and the agent are absent)
 function settingsShowCat(cat) {
-  if (!SET_CATS.includes(cat)) cat = "audio";
+  if (!SET_CATS.includes(cat) || (hostMode() && !HOST_SET_CATS.includes(cat))) cat = hostMode() ? "keyboard" : "audio";
   document.querySelectorAll("#settingsModal .setCat").forEach(s => s.classList.toggle("active", s.dataset.cat === cat));
   document.querySelectorAll("#setCats .setCatBtn").forEach(b => {
     const on = b.dataset.cat === cat;
@@ -533,6 +540,7 @@ function settingsShowCat(cat) {
 }
 function settingsOpenCat() {
   const saved = localStorage.getItem("dsg_setcat");
+  if (hostMode()) return HOST_SET_CATS.includes(saved) ? saved : "keyboard";
   return SET_CATS.includes(saved) ? saved : "audio";
 }
 function settingsClose() {
@@ -546,7 +554,7 @@ function openSettings() {
   settingsShowCat(settingsOpenCat());
   const btn = document.querySelector("#setCats .setCatBtn.active"); if (btn) btn.focus();   // the focus moves into the dialog
   m._onclose = () => { if (m._opener && m._opener.focus) m._opener.focus(); };
-  refreshAudioOutput(); setPluginsFill(); agentSkillFill();
+  refreshAudioOutput(); setPluginsFill(); if (!hostMode()) agentSkillFill();   // #539: no agent skill in host mode
 }
 
 function openShortcuts() {

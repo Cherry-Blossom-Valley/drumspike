@@ -189,6 +189,7 @@ function appPause() {
   invalidate(F.HEAD);
 }
 function appMix() {   // AC.mix: the round trip of the last change and the transport's own latency (the self-test reads it)
+  if (hostMode()) return;   // #539: no mute and solo in host mode
   const a = performance.now();
   appCmd(() => B.transportMix(S.muted, S.solo))
     .then(r => {   // inbound: from the call to the change in the service, on the page clock estimated from the playhead messages
@@ -229,6 +230,7 @@ function auStop(quiet) {   // Escape, Space, a new play: the host pauses and giv
   return true;
 }
 async function audition(loop, hit, shot) {   // loop: Shift; hit: {track, t} of a step with Audition on Tab; shot: a track name whose layer one-shot plays once (P4-40e)
+  if (hostAbsent("audio")) return;   // #539: the host plays the audio; the page opens no second output
   if (!needProject()) return;
   let g;
   if (shot) {

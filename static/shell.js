@@ -31,6 +31,7 @@
   /* Asks Save, Discard or Cancel once for each project with unsaved changes. Cancel ends the flow and
      the app stays open. After the last answer the app ends (B.quitApp). Resolves true when it quit. */
   async function quitFlow() {
+    if (hostAbsent("process")) return false;   // #539: the host owns the window; the page never ends the process
     if (quitting) return false;
     quitting = true;
     try {
@@ -56,6 +57,7 @@
 
   /* ---------------- rename (File > Rename Project; replaces window.prompt) ---------------- */
   async function renameProject(s, name) {
+    if (hostAbsent("files")) return false;   // #539: the host owns the project name
     try { await B.renameSession(s.sid, name); }
     catch (e) { setMsg(`rename failed: ${e.message}`, "error"); return false; }
     if (s.sid === S.sid) { setProjName(name); setDirtyState(true); }
@@ -66,6 +68,7 @@
      the window title. Enter = Rename, Escape = Cancel; keydown stops here so the page's shortcuts do not run. A
      refresh of the project list does not touch the dialog (it is static markup, nothing rebuilds it). */
   function renameCurrent() {
+    if (hostAbsent("files")) return;
     if (!needProject()) return;
     const modal = $q("#renameModal"), input = $q("#renameField");
     if (!modal.classList.contains("hidden")) { input.focus(); return; }
@@ -187,6 +190,7 @@
     return m;
   }
   async function about() {
+    if (hostAbsent("process")) return;   // #539: no About window in host mode
     const m = aboutBox();
     let info = null;
     try { info = await B.aboutInfo(); } catch (e) { info = null; }
@@ -283,6 +287,7 @@
     return m;
   }
   async function feedback() {
+    if (hostAbsent("agent")) return;   // #539: no feedback form in host mode
     const m = feedbackBox();
     const meta = await feedbackMeta();
     /* The gateway URL is the app setting `feedback_url`, the built-in default when it is not set
@@ -353,6 +358,7 @@
   const hooks = { otherPaths: paths => setMsg(`${paths.length} dropped item(s) are no Drum Spike project`) };   // app.js sets it to addTracksFlow (P3-4c)
   /* The queue of the shell holds the paths; the event "open-paths" is only a nudge. */
   async function takeOpenPaths() {
+    if (hostMode()) return { projects: [], others: [] };   // #539: the host opens the projects and owns the files; no Finder paths
     const r = await B.takeOpenPaths();
     const projects = (r && r.projects) || [], others = (r && r.others) || [];
     for (const p of projects) await openProjectPath(p);
@@ -577,10 +583,10 @@
     const swallow = () => {};
     watchTyping();
     try { await B.listen("menu", p => { menu(p || {}); }); } catch (e) { swallow(e); }
-    try { await B.listen("open-paths", () => { takeOpenPaths().catch(swallow); }); } catch (e) { swallow(e); }
+    if (!hostMode()) try { await B.listen("open-paths", () => { takeOpenPaths().catch(swallow); }); } catch (e) { swallow(e); }   // #539: no Finder paths in host mode
     booted = true;
     await sync();
-    try { await takeOpenPaths(); } catch (e) { swallow(e); }   // a cold start with `open -a <app> <document>`
+    if (!hostMode()) try { await takeOpenPaths(); } catch (e) { swallow(e); }   // a cold start with `open -a <app> <document>`
   }
 
   window.DSShell = { menuOwnsKey, typingNow, menu, log, quitFlow, renameCurrent, renameProject,

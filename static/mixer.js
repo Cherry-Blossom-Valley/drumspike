@@ -82,6 +82,7 @@ function bindMixSlider(el, o) {
 /* Sends: one call in flight per target; a change during the call sends the latest value after it. */
 const _mixQ = {};
 function mixSend(key, call, onDone) {
+  if (hostMode()) return;   // #539: the host mixes; no volume, pan or master call
   const q = _mixQ[key] || (_mixQ[key] = { busy: false, again: false });
   if (q.busy) { q.again = true; return; }
   q.busy = true; q.again = false;
@@ -128,6 +129,7 @@ function markTrackChannels(names, channels) {
   });
 }
 function resetSelectedMix() {   // Track > Reset Volume and Pan
+  if (hostAbsent("audio")) return;
   const n = needTrack(); if (!n) return;
   setTrackMix(n, 0, 0); setMsg(`${n}: volume 0 dB, pan centre`);
 }
@@ -142,7 +144,7 @@ function setupMaster() {
     reset: () => setMasterDb(0, true), toPos: volPos, fromPos: posVol, fmt: fmtDb });
   MT.master = newMeter($("#masterMeter"), true);
   $("#masterMeter .mclip").addEventListener("click", () => clearClip(MT.master));
-  B.transportStatus().then(st => { if (st && typeof st.master_db === "number") setMasterDb(st.master_db, false); }).catch(() => {});
+  if (!hostMode()) B.transportStatus().then(st => { if (st && typeof st.master_db === "number") setMasterDb(st.master_db, false); }).catch(() => {});   // #539: no master in host mode
 }
 /* meters. P4-40h: the bars and the hold lines are drawn on ONE canvas per meter (a style write of any meter
    element triggers the Blink style/prepaint lifecycle of the whole 30-track page in every frame, measured at
@@ -272,6 +274,7 @@ function meterFallSoon() {
 }
 let _clicksTimer = null;
 function appClicksSoon() {   // settings sliders fire often: one call per 100 ms
+  if (hostMode()) return;   // #539: no click in host mode; a saved setting must not reach the app transport
   clearTimeout(_clicksTimer);
   _clicksTimer = setTimeout(() => { const c = SETTINGS().click; appCmd(() => B.transportClicks(c.enabled, c.volume, c.pitches)).catch(e => setMsg(`clicks failed: ${e.message}`, "error")); }, 100);
 }

@@ -11,6 +11,25 @@
   let history = [], at = -1;      // the visited sections and the position in them (back/forward)
   let current = null;             // the section id on screen
 
+  /* #539: in a DAW (host mode) the manual is one short section on how the page works there, then the chapters that name
+     no command that the host owns (the host owns the files, the tracks, the tempo and the playback: the chapters on
+     export, adding tracks, tempo, play and Training Mode are left out), then the Shortcuts. The section is made here, not
+     in docs/guide: the guide is the manual of the standalone app. */
+  const DAW_ID = "daw";
+  const DAW_CHAPTERS = ["01-why-sample-exact.html", "03-detection.html", "03b-detector-plugins.html", "04-first-sample.html",
+    "08-velocity.html", "10-bleed.html", "11-learn.html"];
+  const DAW_HTML = `<h2>Drum Spike in a DAW</h2>
+    <p>In a DAW, Drum Spike is the page of a plugin window. The host runs the session. The page finds the hits and lets you correct them.</p>
+    <ul>
+      <li><b>The host owns the tracks.</b> Put the plugin on a drum track: the track appears here. To add, remove, rename or reorder a track, do it in the DAW.</li>
+      <li><b>The host owns the files.</b> The audio comes from the DAW. The page has no file commands and no window commands.</li>
+      <li><b>The host owns the tempo.</b> The page reads the tempo map of the DAW.</li>
+      <li><b>The host plays the audio.</b> Play, stop and locate in the page and in the DAW move together. The page has no mixer, no click and no audition.</li>
+    </ul>
+    <p>What stays: Analyze All and the analysis of one track, every edit of a hit (move, add, delete, velocity), the review of doubtful hits, Learn, the zoom and the follow of the playhead, and Undo.</p>
+    <p>When the plugin is analyzing, the page says so and shows the hits when it is done.</p>`;
+  const dawList = () => hostMode() ? manifest.chapters.filter(c => DAW_CHAPTERS.includes(c.file)) : manifest.chapters;
+
   function page() { return $("#helpPage"); }
 
   function navEntry(id, label) {
@@ -27,7 +46,8 @@
     manifest = await (await fetch("help/index.json")).json();
     const nav = $("#helpChapters");
     nav.innerHTML = "";
-    for (const c of manifest.chapters) nav.appendChild(navEntry(c.file, c.title));
+    if (hostMode()) nav.appendChild(navEntry(DAW_ID, "In a DAW"));
+    for (const c of dawList()) nav.appendChild(navEntry(c.file, c.title));
     nav.appendChild(navEntry("shortcuts", "Shortcuts"));
     return manifest;
   }
@@ -42,8 +62,8 @@
     page().innerHTML =
       `<div id="helpShortcuts">
         <h2>Shortcuts</h2>
-        <p class="hint">Every command of the app, by menu. The keys without Cmd, Control or Option work when no text
-        field has the focus; the menu does not show them (it would take them from the text fields).</p>
+        <p class="hint">${hostMode() ? "The keys of the page, by menu name. The keys without Cmd, Control or Option work when no text field has the focus."
+          : "Every command of the app, by menu. The keys without Cmd, Control or Option work when no text field has the focus; the menu does not show them (it would take them from the text fields)."}</p>
         <p class="hint" id="keymapPreset"></p>
         <table class="keymap" id="keymapTable"></table>
       </div>`;
@@ -53,7 +73,12 @@
 
   async function show(id) {
     if (id === "shortcuts") { shortcutsSection(); }
-    else {
+    else if (id === DAW_ID) {
+      const div = document.createElement("div");
+      div.className = "helpChapterPage";
+      div.innerHTML = DAW_HTML;   // a fixed text of this file
+      page().replaceChildren(div);
+    } else {
       const html = await (await fetch(`help/${id}`)).text();
       const div = document.createElement("div");
       div.className = "helpChapterPage";
@@ -67,7 +92,8 @@
 
   async function openSection(id, push = true) {
     await ensureManifest();
-    if (!id) id = manifest.chapters[0].file;   // first chapter (the entry page)
+    if (hostMode() && id !== DAW_ID && id !== "shortcuts" && !DAW_CHAPTERS.includes(id)) id = DAW_ID;   // #539: a chapter of the standalone manual is not in the host mode manual
+    if (!id) id = hostMode() ? DAW_ID : manifest.chapters[0].file;   // first chapter (the entry page)
     if (push) {
       history = history.slice(0, at + 1);
       history.push(id);
@@ -82,7 +108,7 @@
     // Help > Drum Spike Help (no id): the last chapter read, else the first one; never the Shortcuts
     // section, which has its own menu item (Help > Keyboard Shortcuts opens it by id)
     showModal("#helpModal");
-    await openSection(id || (current && manifest?.chapters?.some(c => c.file === current) ? current : null));
+    await openSection(id || (current && (manifest?.chapters?.some(c => c.file === current) || current === DAW_ID) ? current : null));
   }
 
   function hooks() {

@@ -129,6 +129,7 @@ async function exTempoDefault() {
   catch (e) { if (my === EX.tempoSeq) EX.tempoDefault = false; }
 }
 async function openExport(scope, track) {
+  if (hostAbsent("files")) return;   // #539: the host owns the files; the MIDI file drag (exDragStart) stays for M1c
   if (!needProject()) return;
   if (EX.open) { $("#exGo").focus(); return; }
   if (EX.busy) { setMsg("the export is still running"); return; }   // P4-31: Export again owns the export; the dialog does not race it
@@ -297,6 +298,7 @@ function exRecord(ran) {
 }
 let exAgainBusy = false;
 async function exportAgain() {   // P4-31: File > Export Again: the last export of the project, no dialog
+  if (hostAbsent("files")) return;
   if (!needProject() || exAgainBusy || EX.busy) return;
   let last = null;
   try { last = (await B.exportLastGet(S.sid)).export_last; } catch (e) { setMsg(`export again failed: ${errText(e)}`, "error"); return; }

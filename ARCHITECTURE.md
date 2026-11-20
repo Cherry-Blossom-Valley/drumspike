@@ -193,6 +193,9 @@ checks the end of stages 8, 9, 10 and 11.
 - **A menu item or key:** the row in `static/keymap.js` (the shell compiles it in) and the item in
   `menu/items.rs`. The drift test and the menu snapshot (`menu/snapshot.json`) in `menu/tests.rs`
   keep them equal.
+- **A page control that the host owns or that cannot work in a plugin window:** its group in
+  `HOST_ABSENT` (`static/state.js`): the menu ids, the service commands, the control selectors and
+  the one short text. `tests/e2e_app/test_host_page.py` walks the list.
 - **A `DRUMSPIKE_*` name:** `ServiceConfig::from_lookup` / `from_env` in the app or `RuleSet` /
   `ResearchOverrides` in `crates/core/src/rules.rs`, passed down as a typed value.
 
@@ -218,9 +221,13 @@ These decisions shape the code. The detail is in the code comments and the ADRs.
   `tools/eval/enst_gate_baseline.json` and fails on a drop of more than 2 percent.
 - The app runs on the user's machine. Anything that sends audio or project data away is opt-in
   and says so.
-- The web page stays the user interface. A native UI or an ARA plug-in was studied and not
-  started: no hot path was near its budget, so the gain would be feel, not speed. A rewrite
-  would replace the whole `static/` set and the e2e suite.
+- The web page stays the user interface. The DAW plugin (the plugin program, #503; `plugins/ara`)
+  shows this page in a plugin window. There the page runs in host mode (`window.__DS_HOST_MODE__`,
+  `hostMode()` in `static/state.js`): the host owns the files, the tracks, the tempo and the
+  playback, and the page offers none of them (`HOST_OWNED` and `HOST_ABSENT`, the one list of the
+  absent command groups). With the mode off the page is the standalone page, unchanged. A native UI
+  was studied and not started: no hot path was near its budget, so the gain would be feel, not
+  speed. A rewrite would replace the whole `static/` set and the e2e suite.
 - Hit placement is refine version 10 (`refine::edge`): the steep edge of the stroke, then back
   to the last sample of the line before the stroke's first motion. Since version 10 the answer
   does not depend on the polarity of the audio, and the rule's counts of samples follow the

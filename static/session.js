@@ -152,7 +152,8 @@ async function loadProject() {
   if (gen !== _gen) return;
   S.exportAgain = false;
   if (SESSION_HOOKS.exTempoReset) SESSION_HOOKS.exTempoReset();   // #151: the default-tempo answer is per project, not per page session
-  try { S.exportAgain = !!(await B.exportLastGet(S.sid)).export_last; } catch (e) {}   // P4-31: File > Export Again follows the export shape of the project
+  // #539: no export shape in host mode (no Export Again there)
+  if (!hostMode()) try { S.exportAgain = !!(await B.exportLastGet(S.sid)).export_last; } catch (e) {}   // P4-31: File > Export Again follows the export shape of the project
   if (gen !== _gen) return;
   S.tracks = r.tracks; S.order = r.order || Object.keys(r.tracks);
   if (r.name !== undefined) setProjName(r.name);

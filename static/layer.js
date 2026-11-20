@@ -351,6 +351,7 @@ async function lyMeasure(name) {
   } catch (e) { setMsg(`alignment of ${name}: ${e.message}`); return null; }
 }
 async function lyRender(name) {
+  if (hostAbsent("files")) return null;   // #539: the host owns the files; no WAV export
   if (!S.sid) return null;
   const path = await B.pickSaveFile("Render the layer", joinFile(await exportFolder(), `${name} layer.wav`), "wav", "WAV audio");
   if (!path) { setMsg(`${name}: render cancelled`); return null; }
@@ -388,6 +389,7 @@ function smShow(name) {
   div.querySelector(".smRow2").classList.toggle("hidden", !s);
 }
 async function smCalibrate(name) {
+  if (hostAbsent("files")) return null;   // #539: the calibration MIDI is a file in the export folder
   if (!S.sid) return null;
   const path = await B.pickSaveFile("Write the calibration MIDI", joinFile(await exportFolder(), `${name} calibration.mid`), "mid", "MIDI file");
   if (!path) { setMsg(`${name}: calibration MIDI cancelled`); return null; }

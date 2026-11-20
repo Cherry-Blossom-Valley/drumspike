@@ -116,8 +116,99 @@ async function loadViewSettings() {   // at boot: the saved state of the Inspect
    the menus (shell.js) and the keys (keymap.js), and the play, stop and locate of the page
    go to the host transport (B.hostTransport, static/transport.js). */
 const HOST_OWNED = ["new", "open", "open_recent", "recent_clear", "close", "save", "save_as", "add_tracks", "import_old", "consolidate", "import_tempo_map", "detect_tempo"];
+
+/* #539: the command groups that are absent in host mode: the host plays the audio, owns the window,
+   the files and the track set, and there is no agent. THE one list: the menu items and the keys
+   (menu: the ids of static/keymap.js, so hostOwned() hides them in the menu, the key table and the
+   shortcut list), the page functions that call the service (commands: the names of the service
+   commands that no page call may reach in host mode; the e2e test counts them through a spy on the one
+   invoke), the controls (controls: CSS selectors, hidden by hostApply(); the ids stay in the page) and
+   the short text that names the host (say: what the status line shows when a key or a flow of the
+   group is used). With the mode off nothing here is read: the standalone page is the page of today.
+   Not in a group, because they work through the plugin: Analyze All, Analyze Selected Track,
+   Re-analyze Selection, the role of a track, every hit edit, Learn, tempo reads, zoom, follow, undo, and the
+   MIDI file drag (static/export.js exDragStart, which M1c wires). */
+const HOST_ABSENT = [
+  { group: "audio", say: "the host plays the audio",
+    menu: ["audition", "audition_tab", "click", "mute_track", "solo_track", "reset_mix"],
+    commands: ["transport_play", "transport_stop", "transport_seek", "transport_status", "transport_mix", "transport_clicks",
+      "transport_master", "track_set_mix", "outputs_list", "output_select"],
+    controls: ["#clickBtn", "#auditionTabBtn", ".master", "#insMixBox", ".tctl", ".meter", "#setCat-audio", "#setCat-audition",
+      "#setCat-pitches", "#setAudio", "#setAudition", "#setPitchCat"] },
+  { group: "process", say: "the host owns the window",
+    menu: ["quit", "about"],
+    commands: ["quit_app", "open_paths_take", "about_info", "about_third_party", "open_link"],
+    controls: ["#aboutModal"] },
+  { group: "files", say: "the host owns the files",
+    menu: ["export", "export_again", "export_selected", "rename"],
+    commands: ["export_all", "export_existing", "export_dest_set", "export_markers_set", "export_compensate_set", "export_last_get",
+      "export_last_set", "export_midi", "export_spikes", "export_layer", "sampler_calibration_midi", "reveal_path", "project_rename"],
+    controls: ["#exportAllBtn", "#exportModal", ".lyRender", ".smCal", "#insFileRow", "#insStateRow"] },
+  { group: "agent", say: "the host runs no agent or training",
+    menu: ["training_mode", "confirm_hit"],
+    commands: ["window_call_next", "window_call_result", "agent_skill_status", "agent_skill_install", "feedback_send",
+      "training_status", "training_hand_placed"],
+    controls: ["#feedbackBtn", "#fbModal", "#setCat-agent", "#setAgentSkill", "#stTraining"] },
+  { group: "tracks", say: "the host owns the tracks",
+    menu: ["tracks_remove"],
+    commands: ["tracks_add", "tracks_remove", "tracks_restore", "tracks_reorder", "track_rename", "tracks_scan"],
+    controls: ["#addTracksBtn", "#tracksModal", "#insRelink"] },
+];
 function hostMode() { return typeof B !== "undefined" && !!B.hostMode; }   // B is a top-level const: no window.B
-function hostOwned(id) { return hostMode() && HOST_OWNED.includes(id); }
+function hostOwned(id) { return hostMode() && (HOST_OWNED.includes(id) || HOST_ABSENT.some(g => g.menu.includes(id))); }
+/* The few texts of the page that name an absent command in the middle of a sentence (a tooltip of the Inspector). In host
+   mode they say it without the absent name; with the mode off the text is the text of today. */
+const HOST_WORDS = [["spikes, Export All, the click and a follower", "spikes and a follower"]];
+function hostWords(text) { return hostMode() ? HOST_WORDS.reduce((t, [from, to]) => t.split(from).join(to), text) : text; }
+/* A flow of a group was used (a key, a call by name, a control that is hidden): true when the group is absent, with the
+   text that names the host on the status line. The caller returns at once. */
+function hostAbsent(group) {
+  if (!hostMode()) return false;
+  const g = HOST_ABSENT.find(x => x.group === group);
+  setMsg(g ? g.say : "the host owns this");
+  return true;
+}
+/* The page of the host mode: one class on <body> (the layout of the low and wide window, style.css) and one rule that
+   hides the controls of the list. Idempotent; the mode off removes both again. */
+function hostApply() {
+  const on = hostMode();
+  document.body.classList.toggle("host", on);
+  let st = document.getElementById("hostStyle");
+  if (!on) { if (st) st.remove(); return; }
+  if (!st) { st = document.createElement("style"); st.id = "hostStyle"; document.head.appendChild(st); }
+  st.textContent = HOST_ABSENT.map(g => g.controls).flat().map(c => `body.host ${c}`).join(",\n") + " { display: none !important; }";
+}
+
+/* #539: a low and wide window. In LUNA the editor is a strip below the timeline, 300 to 400 px high and the full width,
+   so under HOST_LOW_H the page gives the lanes the room: the Inspector and the Overview step back and the tracks take the
+   small height. These are the page's own switches without saving, so the saved settings stay as the user made them;
+   when the window grows again the page puts back what it changed, unless the user has changed it since. The class
+   hostLow on <body> compacts the empty state (style.css, host mode only). */
+const HOST_LOW_H = 520;
+const HOST_FIT = { low: false, mem: null, busy: false, touched: {} };
+function hostFitTouch(what) { if (hostMode() && HOST_FIT.low && !HOST_FIT.busy) HOST_FIT.touched[what] = true; }   // the user changed it while the window was low
+function hostFit() {
+  if (!hostMode()) return;
+  const low = innerHeight < HOST_LOW_H;
+  document.body.classList.toggle("hostLow", low);
+  if (low === HOST_FIT.low) return;
+  HOST_FIT.low = low;
+  if (low) {
+    HOST_FIT.mem = { inspector: S.inspector, trackHeight: S.trackHeight, overview: S.overviewOn }; HOST_FIT.touched = {};
+    HOST_FIT.busy = true;
+    if (S.inspector) setInspector(false, false);
+    if (S.trackHeight !== "small") setTrackHeight("small", false);
+    if (S.overviewOn) setOverview(false, false);
+    HOST_FIT.busy = false;
+  } else if (HOST_FIT.mem) {
+    const m = HOST_FIT.mem; HOST_FIT.mem = null;
+    const t = HOST_FIT.touched; HOST_FIT.touched = {};   // what the user changed while the window was low stays as the user left it
+    if (m.inspector && !S.inspector && !t.inspector) setInspector(true, false);
+    if (m.trackHeight !== "small" && S.trackHeight === "small" && !t.trackHeight) setTrackHeight(m.trackHeight, false);
+    if (m.overview && !S.overviewOn && !t.overview) setOverview(true, false);
+  }
+  invalidate(F.SIZE | F.VIEW);
+}
 
 /* ---------------- the public names on window ----------------
    The e2e tests (page.evaluate) and shell.js read S, PH and the settings functions by name;

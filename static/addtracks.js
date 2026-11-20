@@ -210,6 +210,7 @@ async function applyAddFollows(pick, r) {
   return out;
 }
 async function addTracksDialog() {   // File > Add Tracks and the toolbar button: the native file dialog
+  if (hostAbsent("tracks")) return;   // #539: the host owns the track set
   const files = await B.pickAudioFiles();
   if (files && files.length) await addTracksFlow(files);
 }

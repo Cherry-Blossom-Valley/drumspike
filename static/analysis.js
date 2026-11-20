@@ -50,6 +50,7 @@ function copyProgress(label) {
   };
 }
 function setAnalysisButtons(disabled) {
+  if (typeof hostEmptyRefresh === "function") hostEmptyRefresh();   // #539: the empty state of host mode says that the analysis runs
   $("#analyzeAllBtn").disabled = disabled;
   $("#analyzeAllBtn").classList.toggle("running", disabled);   // 0.9.3: the accent colour while an analysis runs
   document.querySelectorAll(".bReanalyze").forEach(b => b.disabled = disabled);
@@ -149,6 +150,18 @@ function startAnalysisGo(tracks) {
   } else runAnalysis(list, false);
 }
 let pendingRA = null;
+/* #539: in host mode the plugin analyses the tracks without a request of this page (a page job of the service, since
+   #538). When one runs, show it like a run of the page: the progress bar, the buttons and the empty state say so, and the
+   hits load when it is done. One quiet read of the job state every 2 s; with the mode off nothing calls it. */
+async function hostWatchAnalysis() {
+  if (!hostMode() || !S.sid || analysisRunning) return;
+  let st;
+  try { st = await B.job(S.sid); } catch (e) { return; }
+  if (!st || (st.state !== "running" && st.state !== "queued") || analysisRunning) return;
+  analysisRunning = true; setAnalysisButtons(true);
+  showProgress(0, "analysis is running…");
+  pollJob();
+}
 function runAnalysis(list, keepManual) {
   $("#reanalyzeModal").classList.add("hidden");
   pendingKeep = !!keepManual && list.some(n => (S.events[n]||[]).some(isKept));
