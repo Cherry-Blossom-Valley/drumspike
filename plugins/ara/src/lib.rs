@@ -43,6 +43,7 @@ pub mod ara {
 pub mod editor;
 pub mod service;
 pub mod state;
+pub mod transport;
 pub mod wav;
 
 use ara::*;
@@ -476,6 +477,29 @@ impl DocShared {
             }
         }
         Ok(true)
+    }
+
+    /// The regions of every source, `(source index, region)`, as the notes use them (M1b5): those
+    /// of the last round when the source has one, else the live ones. The page maps the position
+    /// of the host with them. Takes no `DocService` lock.
+    fn round_region_list(&self) -> Vec<(usize, service::RegionRec)> {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let round = self.round_regions.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut out = Vec::new();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let live: Vec<service::RegionRec> = s
+                .regions
+                .lock()
+                .map(|r| r.iter().map(|slot| slot.rec).collect())
+                .unwrap_or_default();
+            let (regions, _) = regions_for_notes(round.get(&s.seq), (live, 0.0));
+            out.extend(regions.into_iter().map(|r| (s.seq, r)));
+        }
+        out
     }
 
     /// Tell the page that the plugin changed its data (a round ended, a restore): the shell
@@ -1814,12 +1838,14 @@ impl Session {
 fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let d = doc.clone();
     let r = doc.clone();
+    let g = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
             let _ = send(session(), Msg::PageSync(d.clone()));
         }),
         record: Arc::new(move |svc, sid| r.record_page_edit(svc, sid)),
+        regions: Arc::new(move || g.round_region_list()),
         doc_id: doc.id(),
     }
 }
@@ -3564,6 +3590,8 @@ unsafe extern "C" fn p_activate(p: *const clap_plugin, sr: f64, _min: u32, _max:
         let plugin: &Plugin = &*((*p).plugin_data as *mut Plugin);
         *plugin.sample_rate.lock().unwrap_or_else(|e| e.into_inner()) = sr;
         PROCESS_RATE_BITS.store(sr.to_bits(), Ordering::Relaxed);
+        transport::read_switches(); // off the audio thread: the process call reads atomics only
+        let _ = transport::now_us(); // makes the clock the process call stamps with
         true
     })
 }
@@ -3697,6 +3725,9 @@ impl Session {
             self.log(
                 json!({
                     "event": "transport_seen",
+                    // M1b5: where the position of the page comes from. ARA gives a plugin no
+                    // transport, so the process call is the only source.
+                    "source": "clap_process",
                     "has_seconds": f & CLAP_TRANSPORT_HAS_SECONDS_TIMELINE != 0,
                     "has_beats": f & CLAP_TRANSPORT_HAS_BEATS_TIMELINE != 0,
                     "has_tempo": f & CLAP_TRANSPORT_HAS_TEMPO != 0,
@@ -3799,6 +3830,8 @@ unsafe extern "C" fn p_process(_p: *const clap_plugin, process: *const clap_proc
             s.run_fault_job();
         }
         note_process(process);
+        // M1b5: the transport for the page, atomics only (see transport.rs)
+        transport::note(process, f64::from_bits(PROCESS_RATE_BITS.load(Ordering::Relaxed)));
         let pr = &*process;
         let frames = pr.frames_count as usize;
         if pr.audio_outputs_count > 0 {
@@ -4474,6 +4507,7 @@ mod tests {
     fn process_writes_no_row_on_the_audio_thread() {
         // the evidence flags are process-global: one test at a time may call `process`
         let _one = EVIDENCE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _slot = transport::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for flag in [&PROCESS_SEEN, &TRANSPORT_SEEN] {
             flag.store(0, Ordering::SeqCst);
         }

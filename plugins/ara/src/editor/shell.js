@@ -80,8 +80,8 @@
   // What this script uses of the page: functions, two globals and one element. A rename in
   // static/ must not make the reload do less in silence (S4): a missing one is reported at once
   // (console error, shell command plugin_report), and a stage checks the bundled page for them.
-  var PAGE_FUNCTIONS = ["cancelEvents", "initSessions", "loadProject", "invalidate"];
-  var PAGE_GLOBALS = ["S", "F"];
+  var PAGE_FUNCTIONS = ["cancelEvents", "initSessions", "loadProject", "invalidate", "appHostFollow"];
+  var PAGE_GLOBALS = ["S", "F", "AC"];
   var PAGE_IDS = ["lanesScroll"];
   function missingPageParts() {
     var names = PAGE_FUNCTIONS.slice();
@@ -140,6 +140,81 @@
     }
   };
   pollEvents();   // the plugin's own listener starts at once
+
+  /* The host transport (M1b5, #546). The plugin sets B.hostTransport (the interface of #518: the
+     page registers onPosition, and calls play, stop and locate) and feeds it from the host: a
+     long poll on /__ds/transport brings {epoch, t_ns, pos, playing}; the shell adds the sid and
+     hands it to onPosition. The page follows the host. play, stop and locate do not reach the
+     host (that is a later part): play is refused with a message, so the page never shows a play
+     that the host does not play; stop and locate answer at once and do nothing. B is a top-level
+     const of backend.js that does not exist yet when this script runs, so the shell installs the
+     object when the page has loaded and then calls appHostFollow() itself (static/transport.js:
+     a shell that injects the transport later does that). */
+  var HT = {
+    onPosition: null,
+    play: function () { return Promise.reject(new Error("the host plays: start playback in the DAW")); },
+    stop: function () { return Promise.resolve(); },
+    locate: function () { return Promise.resolve(); }
+  };
+  var tstate = { messages: 0, delivered: 0, held: null, installed: false, first_at: 0, last: null, log: [] };
+  window.__DS_TRANSPORT__ = tstate;
+  function lex(expr) { try { return (0, eval)(expr); } catch (e) { return undefined; } }
+  function installTransport() {
+    if (tstate.installed) return true;
+    var b = lex("typeof B === 'object' ? B : undefined");
+    if (!b || !b.hostMode || typeof lex("appHostFollow") !== "function") return false;
+    if (!b.hostTransport) b.hostTransport = HT;
+    if (b.hostTransport !== HT) HT = b.hostTransport;
+    lex("appHostFollow()");
+    tstate.installed = true;
+    if (tstate.held) { var m = tstate.held; tstate.held = null; deliverTransport(m); }
+    return true;
+  }
+  var holdTimer = null;
+  function deliverTransport(m) {
+    var sid = lex("typeof S === 'object' && S.sid ? S.sid : ''");
+    if (!tstate.installed || !sid || typeof HT.onPosition !== "function") {
+      tstate.held = m;   // the page is not ready: the newest message waits (a stopped host sends no more)
+      if (!holdTimer) holdTimer = setInterval(function () {
+        if (!tstate.held) { clearInterval(holdTimer); holdTimer = null; return; }
+        installTransport();
+        var h = tstate.held, s2 = lex("typeof S === 'object' && S.sid ? S.sid : ''");
+        if (tstate.installed && s2 && typeof HT.onPosition === "function") { tstate.held = null; deliverTransport(h); }
+      }, 100);
+      return;
+    }
+    tstate.delivered++;
+    tstate.last = m;
+    /* The page binds its follow state in appOnPlayhead only while AC.active is false, and a stopped
+       message leaves AC.active true: a host that stops and plays again would not be followed. The
+       shell resets the flag when the host starts to play and the page is not playing (the need is
+       reported for static/: the page should re-enter its follow branch itself). */
+    if (m.playing && lex("typeof S === 'object' && !S.playing && typeof AC === 'object' && AC.active === true")) lex("AC.active = false");
+    HT.onPosition({ sid: sid, epoch: m.epoch, t_ns: m.t_ns, pos: m.pos, playing: m.playing });
+  }
+  async function pollTransport() {
+    for (;;) {
+      var r = null;
+      try { r = await (await fetch(API + "transport?timeout_ms=2000", { cache: "no-store" })).json(); }
+      catch (e) { await sleep(300); continue; }
+      if (!r || !r.messages) { await sleep(300); continue; }
+      for (var i = 0; i < r.messages.length; i++) {
+        if (!tstate.messages++) tstate.first_at = Date.now();
+        if (tstate.log.length < 4000) tstate.log.push([Date.now(), r.messages[i].why]);
+        deliverTransport(r.messages[i]);
+      }
+    }
+  }
+  // after a reload of the project the page may have lost the position: the last message goes again
+  listeners["plugin-reload"].push(function () {
+    setTimeout(function () {
+      var m = tstate.last;
+      if (m && !m.playing) deliverTransport({ epoch: m.epoch, t_ns: m.t_ns, pos: m.pos, playing: false });
+    }, 1500);
+  });
+  document.addEventListener("DOMContentLoaded", installTransport);
+  (function installLoop(n) { if (!installTransport() && n < 400) setTimeout(function () { installLoop(n + 1); }, 50); })(0);
+  pollTransport();
   try { window.localStorage.setItem("dsg_probe", "1"); window.localStorage.removeItem("dsg_probe"); }
   catch (e) {
     var mem = {};

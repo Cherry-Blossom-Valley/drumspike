@@ -58,6 +58,9 @@ pub static CLOSED: AtomicUsize = AtomicUsize::new(0);
 pub static OFF_MAIN: AtomicUsize = AtomicUsize::new(0);
 pub static MAIN_CHECKS: AtomicUsize = AtomicUsize::new(0);
 pub static COMMANDS: AtomicUsize = AtomicUsize::new(0);
+/// The commands of the page whose name starts with `transport_` (the app's own audio transport).
+/// The host plays in a plugin: the check asserts 0 while the host plays (M1b5).
+pub static TRANSPORT_COMMANDS: AtomicUsize = AtomicUsize::new(0);
 pub static COMMAND_ERRORS: AtomicUsize = AtomicUsize::new(0);
 pub static PANICS: AtomicUsize = AtomicUsize::new(0);
 pub static PEAK_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
@@ -192,8 +195,14 @@ pub struct Backend {
     /// Called on the request thread, before the page gets the answer of a command that changed the
     /// project: the events and notes of the document follow at once (F2).
     pub record: RecordFn,
+    /// The regions of the document's sources, `(source index, region)`: the page maps the
+    /// position of the host with them (M1b5).
+    pub regions: RegionsFn,
     pub doc_id: String,
 }
+
+/// The playback regions of every source of the document, as the notes use them.
+pub type RegionsFn = Arc<dyn Fn() -> Vec<(usize, crate::service::RegionRec)> + Send + Sync>;
 
 struct Shared {
     backend: Backend,
@@ -209,6 +218,10 @@ struct Shared {
     /// The head of the document's event log when this editor opened: the page's first poll of
     /// events starts here, so an event announced before that poll is not lost.
     opened_head: u64,
+    /// The pacing of the transport messages of this page (M1b5).
+    pacer: Mutex<crate::transport::Pacer>,
+    /// The row of the first transport message of this editor is written.
+    transport_row: AtomicBool,
 }
 
 fn test_mode() -> Option<String> {
@@ -430,6 +443,77 @@ fn query_value(query: &str, key: &str) -> Option<String> {
         .map(|(_, v)| v.to_string())
 }
 
+fn transport_fault() -> String {
+    std::env::var("DS_ARA_TRANSPORT_FAULT").unwrap_or_default()
+}
+
+/// The long poll of the host transport (M1b5): answers `{"messages": [..]}` with at most one
+/// message, as soon as the pacer has one, or with none when the time is over. The thread sleeps
+/// 8 ms between looks; it reads atomics and the region list, never the audio thread's lock.
+fn poll_transport(sh: &Arc<Shared>, total: std::time::Duration) -> Vec<Value> {
+    use crate::transport as tr;
+    let end = std::time::Instant::now() + total;
+    let identity = transport_fault() == "identity";
+    let invent = transport_fault() == "invent";
+    loop {
+        if sh.closed.load(Ordering::SeqCst) {
+            return Vec::new();
+        }
+        let mut snap = tr::read();
+        if snap.is_none() && invent {
+            // the fault run: a plugin that assumes the host plays when it has seen no transport
+            snap = Some(tr::Snap {
+                generation: 0,
+                pos_s: 0.0,
+                pos_samples: 0,
+                seen_us: tr::now_us(),
+                playing: true,
+                frames: 0,
+                rate: 48000.0,
+            });
+        }
+        if snap.is_some() {
+            let regions = if identity { Vec::new() } else { (sh.backend.regions)() };
+            let now = tr::now_us();
+            let mut pacer = sh.pacer.lock().unwrap_or_else(|e| e.into_inner());
+            let was_stale = pacer.stale_seen;
+            let msg = pacer.step(snap, now, &|song| tr::page_time(song, &regions));
+            if pacer.stale_seen && !was_stale {
+                // the evidence for the next run of a real host: it stopped its process calls while playing
+                session().log(
+                    json!({"event": "transport_stale", "editor": sh.n, "last_position_seconds": snap.map(|s| s.pos_s)})
+                        .to_string(),
+                );
+                session().write_out();
+            }
+            drop(pacer);
+            if let Some(m) = msg {
+                if !sh.transport_row.swap(true, Ordering::SeqCst) {
+                    // the first transport of this page: where it came from and what the page got
+                    session().log(
+                        json!({"event": "transport_page_first", "editor": sh.n, "source": "clap_process",
+                            "host_position_seconds": m.song_s,
+                            "host_position_samples": snap.map(|s| s.pos_samples),
+                            "sample_rate": snap.map(|s| s.rate),
+                            "playing": m.playing, "page_time": m.pos,
+                            "mapped_by": format!("{:?}", m.mapped), "regions": regions.len()})
+                        .to_string(),
+                    );
+                    session().write_out();
+                }
+                return vec![
+                    json!({"epoch": m.epoch, "t_ns": m.t_ns, "pos": m.pos, "playing": m.playing,
+                    "why": format!("{:?}", m.why)}),
+                ];
+            }
+        }
+        if std::time::Instant::now() >= end {
+            return Vec::new();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+}
+
 fn route(sh: &Arc<Shared>, rest: &str, query: &str, body: &[u8]) -> Answer {
     if let Some(cmd) = rest.strip_prefix("invoke/") {
         return invoke(sh, &percent_decode(cmd), body);
@@ -441,6 +525,10 @@ fn route(sh: &Arc<Shared>, rest: &str, query: &str, body: &[u8]) -> Answer {
     if let Some(id) = rest.strip_prefix("channel/") {
         let msgs = poll_channel(sh, id, std::time::Duration::from_millis(ms));
         return Answer::json(200, &Value::Array(msgs));
+    }
+    if rest == "transport" {
+        let msgs = poll_transport(sh, std::time::Duration::from_millis(ms));
+        return Answer::json(200, &json!({"messages": msgs}));
     }
     if rest == "events" && fault() == "no-events" {
         // the fault run: the events of the service never reach the page
@@ -830,6 +918,9 @@ fn scenario_panics(cmd: &str) -> bool {
 /// One command of the page, on the thread of the request, never on the main thread.
 fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
     COMMANDS.fetch_add(1, Ordering::SeqCst);
+    if cmd.starts_with("transport_") {
+        TRANSPORT_COMMANDS.fetch_add(1, Ordering::SeqCst);
+    }
     let args: Value = if body.is_empty() {
         json!({})
     } else {
@@ -1081,6 +1172,12 @@ impl Editor {
             page_dir: page.map(|(d, _)| d),
             n,
             opened_head,
+            pacer: Mutex::new(crate::transport::Pacer::new(if transport_fault() == "flood" {
+                0
+            } else {
+                crate::transport::TICK_US
+            })),
+            transport_row: AtomicBool::new(false),
         });
         *self.current.lock().unwrap_or_else(|e| e.into_inner()) = Some(shared);
         self.webview
@@ -1129,7 +1226,8 @@ impl Editor {
         CLOSED.fetch_add(1, Ordering::SeqCst);
         session().log(
             json!({"event": "editor_close", "editor": shared.n, "main_thread": on_main_thread(),
-                "commands": COMMANDS.load(Ordering::SeqCst), "off_main": OFF_MAIN.load(Ordering::SeqCst),
+                "commands": COMMANDS.load(Ordering::SeqCst),
+                "transport_commands": TRANSPORT_COMMANDS.load(Ordering::SeqCst), "off_main": OFF_MAIN.load(Ordering::SeqCst),
                 "main_checks": MAIN_CHECKS.load(Ordering::SeqCst), "panics": PANICS.load(Ordering::SeqCst),
                 "peak_inflight": PEAK_INFLIGHT.load(Ordering::SeqCst),
                 "main_thread_id": MAIN_THREAD.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -1248,6 +1346,7 @@ fn backend_of(plugin: &Plugin) -> Backend {
             page: crate::service::unbound_page(&session().cache),
             changed: Arc::new(|| {}),
             record: Arc::new(|_, _| Ok(false)),
+            regions: Arc::new(Vec::new),
             doc_id: "unbound".to_string(),
         },
     }
