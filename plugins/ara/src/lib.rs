@@ -3140,9 +3140,6 @@ unsafe extern "C" fn p_reset(_p: *const clap_plugin) {
     guard("reset", (), move || {})
 }
 
-/// The audio thread: pass the first mono pair through (silence without an input), touch
-/// nothing else. The analysis runs on its own threads and is never reached here — except
-/// under the fault switch, which runs it inside `process` on purpose (the overrun proof).
 // ---- the evidence rows (M1b4): what a host sends. They change no behaviour.
 
 /// The time since the first call of this function, in ms.
@@ -3304,6 +3301,9 @@ static STATE_EXT: clap_sys::ext::state::clap_plugin_state = clap_sys::ext::state
     load: Some(state_load),
 };
 
+/// The audio thread: pass the first mono pair through (silence without an input), touch
+/// nothing else. The analysis runs on its own threads and is never reached here — except
+/// under the fault switch, which runs it inside `process` on purpose (the overrun proof).
 unsafe extern "C" fn p_process(_p: *const clap_plugin, process: *const clap_process) -> clap_process_status {
     guard("process", CLAP_PROCESS_CONTINUE, move || {
         let s = session();
