@@ -166,6 +166,36 @@ document and stored in the ARA archive, so a restore in a new process finds the 
   happened in (its sources end without a result) and the worker starts again. No function
   pointer of the host is unwrapped in the plugin code (the host tables are optional input).
 
+## Analysis without a request (M1b4)
+
+The plugin analyses a source as soon as its audio is here. The host need not call
+`requestAudioSourceContentAnalysis`: LUNA does not (the finding of the first run in a real DAW).
+A request still works and gives the same result, with no second round for the same audio. A
+source restored with its result is not analysed again because its audio is read. The rule and
+the finding are in `docs/design/daw-plugin/m1b4-analyse-without-request.md`.
+
+The plugin also reads new samples when the host sends `updateAudioSourceContent` (signal changed)
+and analyses them, and it tries a failed round again by itself (three times, then a row
+`retry_gave_up`). Stages `no-request-update`, `no-request-retry`, `no-request-retry-limit`,
+`no-request-cancel` and `no-request-spawn`, each with a fault run; the rules are in the design note.
+Test host options: `grow --update-content <k>:<wav>`, `--linger-ms <n>`, `--cancel-read <phase>`.
+
+The test host has a mode for it: `ara-host <bundle> grow --files <wav>... --no-request` (the
+host enables the samples access and never requests). `--request-order read-first|request-first`
+and `--slow-read <k>:<ms>` make the other orders of the stages `request-order` and
+`no-request-group`. The switch `DS_ARA_ROUND_FAULT=request-only` brings back the old way (a round
+only on a request); the stage `no-request` then fails with "no round". The stages are
+`no-request`, `request-order`, `no-request-group`, `no-request-restored` and
+`editor-no-request`, each with a fault run.
+
+The plugin has the CLAP extension `clap.state` (LUNA asks for the state of every instance and
+logged "loadPreset failed" without it). The state is a small versioned blob with no project
+data; load accepts an empty stream and a newer version. Stage `state`, with the fault switch
+`DS_ARA_STATE_FAULT=strict`. The VST3 wrapper maps `getState` and `setState` to these two
+functions; no tool in `.deps` calls them on the VST3 alone, so they also have unit tests.
+The report has evidence rows of what the host sends (`view_selection`, `view_hide_sequences`,
+`process_first`, `transport_seen`); the audio thread writes none of them.
+
 ## The check
 
 `plugins/ara/check.sh check` (-> `check.py all`) runs every gate line of the ticket: the
@@ -224,7 +254,7 @@ delivery ticket M1c.
 | `DS_ARA_FOLDER_FAULT` | fault | shared | every document uses one folder |
 | `DS_ARA_DESTROY_FAULT` | fault | keep | a destroyed source stays in the list and the project |
 | `DS_ARA_HOME_FAULT` | fault | 1 | the service home is below the user's home, outside the cache folder |
-| `DS_ARA_ROUND_FAULT` | fault | new-only, always, no-deadline, no-late-round, no-page-wait | a round analyses only the new tracks, a request for a complete source starts a full round, a request waits for ever for audio that does not come, or audio that comes after the deadline starts no round; no-page-wait: a round or a removal does not wait for a job of the page: the round fails with its 409 and a failed removal wipes the events of the document |
+| `DS_ARA_ROUND_FAULT` | fault | new-only, always, no-deadline, no-late-round, no-page-wait, request-only, ready-only, read-again, ignore-update, no-retry, retry-forever, force-failed, no-spawn-failed, clear-stale, no-read-retry, keep-wavs, clear-failed, cancel-fails | a round analyses only the new tracks, a request for a complete source starts a full round, a request waits for ever for audio that does not come, or audio that comes after the deadline starts no round; request-only: a round starts only on a request of the host (the plugin before M1b4: LUNA never asks, so it got no round); ready-only: a source is queued only when its audio is here, so sources whose audio comes one after the other get a round each; read-again: the read of a source that has its result (one restored from an archive) starts a round; ignore-update: updateAudioSourceContent does nothing (new samples of a source are never read or analysed); no-retry: a failed round is not tried again by the plugin; retry-forever: it never gives up; force-failed: a source whose read was cancelled forces a round of the complete tracks; no-spawn-failed: a reader thread that cannot start leaves its source waiting for the audio deadline; clear-stale: a round on the old audio marks the new audio of a content update as analysed; no-read-retry: a failed read of new audio is not tried again; keep-wavs: the WAV files of a destroyed source stay; clear-failed: a round on the old audio clears the failed mark of a source whose new read failed for good (it stays incomplete for ever); cancel-fails: a read that a content update cancelled counts as a failed read; no-page-wait: a round or a removal does not wait for a job of the page: the round fails with its 409 and a failed removal wipes the events of the document |
 | `DS_ARA_SETTLE_FAULT` | fault | none | no settle time: every request is a round |
 | `DS_ARA_CLOSE_FAULT` | fault | wait, nocancel | the destroy of a controller waits for the round, or does not cancel it |
 | `DS_ARA_ID_FAULT` | fault | trust | the plugin trusts the document id and the track names of an archive, and the names of the host sources |
@@ -235,7 +265,9 @@ delivery ticket M1c.
 | `DS_ARA_GUARD_FAULT` | fault | off | the reader thread and the worker thread run without the panic guard |
 | `DS_ARA_UNLOAD_FAULT` | fault | skip | the unload of the library does not stop the worker |
 | `DS_ARA_PANIC_TEST` | scenario | reader, worker | the reader thread or the worker thread panics once |
-| `DS_ARA_SCENARIO` | scenario | corrupt-wav:<n>, fail-first-round, slow-setup, audio-deadline-ms:<n> | the WAV of source n is damaged after the read, the first round fails once, every round waits 1.5 s before its analysis starts, or a request waits n ms for audio (default 30000) |
+| `DS_ARA_SCENARIO` | scenario | corrupt-wav:<n>, fail-first-round, slow-setup, audio-deadline-ms:<n>, fail-rounds:<n>, no-reader-thread | the WAV of source n is damaged after the read, the first round fails once, every round waits 1.5 s before its analysis starts, or a request waits n ms for audio (default 30000); fail-rounds:<n>: the first n rounds fail; no-reader-thread: the reader thread of a source cannot start |
+| `DS_ARA_RETRY_MS` | scenario | milliseconds | the first wait of the automatic retry of a failed round (default 2000, then twice as long each time; kept between 10 and 60000) |
+| `DS_ARA_STATE_FAULT` | fault | strict | the load of the plugin state refuses an empty stream, a newer version and anything else than its own blob (the host's instance creation then fails, as in LUNA) |
 | `DS_ARA_EDITOR_MODE` | scenario | ready, keys, focus, resize, measure, edit, shell, analyse, net, bigpost | the editor page runs a test driver of that name and reports to the plugin (the test host sets it itself) |
 | `DS_ARA_EDITOR_ARG` | scenario | a text | the argument of the test driver of the editor page (a WAV path of the shell mode) |
 | `DS_ARA_EDITOR_FAULT` | fault | no-ready, no-bundle, no-shell, no-sync, no-record, no-notes, no-reload, no-events, drop-edits, drop-track-data, missing-function, allow-track-set, no-focus, no-resize, inline, leak, slow-frames | the editor: the page's ready call is not counted, the plugin finds no page in its bundle, the shell commands are left to the service, a command of the page does not reach the archive or the request thread does not record it before the page's answer (no-record), the notes do not follow an edit, the page is not told that a round ended or gets no event of the service, a round of the plugin drops the hand edits of the page, the shell script of the page finds a function missing (it reports it), a region change drops the hand data of the track (hits, role, mix), the page may change the track set, the web view is not the first responder or does not follow a resize, a command runs on the main thread, every editor leaks 4 MB, or the page draws slow frames |

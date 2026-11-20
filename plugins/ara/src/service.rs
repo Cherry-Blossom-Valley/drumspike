@@ -104,7 +104,15 @@ pub fn audio_dir_of(cache: &Path, id: &str) -> PathBuf {
 /// The cached WAV of one source: `<seq>-<stem>.wav` in the audio folder of the document.
 #[must_use]
 pub fn wav_of(cache: &Path, id: &str, seq: usize, name: &str) -> PathBuf {
-    audio_dir_of(cache, id).join(format!("{seq:03}-{}.wav", stem_of(name)))
+    wav_of_gen(cache, id, seq, name, 0)
+}
+
+/// The WAV of one generation of the audio of a source: generation 0 is the first read, each
+/// content update of the host makes a new one (the old file stays until the new one is committed).
+#[must_use]
+pub fn wav_of_gen(cache: &Path, id: &str, seq: usize, name: &str, gen: u64) -> PathBuf {
+    let tag = if gen == 0 { String::new() } else { format!(".g{gen}") };
+    audio_dir_of(cache, id).join(format!("{seq:03}-{}{tag}.wav", stem_of(name)))
 }
 
 /// A new document id: 64 random bits as hex (the plugin makes it once per document; the
@@ -160,18 +168,22 @@ pub struct SourceSnapshot {
     /// The size the committed WAV must have (header and samples); a file of another size is
     /// not the one the reader wrote.
     pub wav_len: u64,
+    /// The generation of the audio (a content update of the host makes a new one).
+    pub audio_gen: u64,
     /// The playback regions of the source.
     pub regions: Vec<RegionRec>,
 }
 
 impl SourceSnapshot {
-    /// The same source with the same regions and properties (the WAV is not compared).
+    /// The same source with the same regions, properties and generation of the audio (the WAV
+    /// file is not compared).
     #[must_use]
     pub fn same_as(&self, other: &SourceSnapshot) -> bool {
         self.name == other.name
             && self.persistent_id == other.persistent_id
             && self.sample_rate == other.sample_rate
             && self.sample_count == other.sample_count
+            && self.audio_gen == other.audio_gen
             && self.same_regions(other)
     }
 
@@ -311,6 +323,8 @@ pub struct DocService {
     dirty: bool,
     /// The test round that fails once (`DS_ARA_SCENARIO=fail-first-round`) has failed.
     failed_once: bool,
+    /// How many rounds `DS_ARA_SCENARIO=fail-rounds:<n>` has failed.
+    failed_rounds: usize,
     canceller: Canceller,
     /// The editor's way to the service (see [`PageHandle`]).
     page: std::sync::Arc<PageHandle>,
@@ -487,6 +501,7 @@ impl DocService {
             snaps: HashMap::new(),
             dirty: false,
             failed_once: false,
+            failed_rounds: 0,
             canceller: Canceller::default(),
             page,
             fail_restores: 0,
@@ -776,6 +791,15 @@ impl DocService {
             self.failed_once = true;
             return Err("test: the round fails once".into());
         }
+        // `fail-rounds:<n>`: the first n rounds fail (the automatic retry of the plugin)
+        if let Some(n) =
+            switch("DS_ARA_SCENARIO").and_then(|v| v.strip_prefix("fail-rounds:").and_then(|n| n.parse::<usize>().ok()))
+        {
+            if self.failed_rounds < n {
+                self.failed_rounds += 1;
+                return Err(format!("test: round {} of {n} fails", self.failed_rounds));
+            }
+        }
         // the tracks of the round: every track whose audio is here (the fault run brings
         // back the M1a way: the new tracks only)
         let only_new = switch("DS_ARA_ROUND_FAULT").as_deref() == Some("new-only");
@@ -935,7 +959,7 @@ impl DocService {
         for (name, seq) in &self.tracks {
             let Some(s) = self.snaps.get(seq) else { continue };
             let list = events.get(name).and_then(Value::as_array).cloned().unwrap_or_default();
-            notes.insert(*seq, notes_for(&list, &s.regions, s.sample_rate));
+            notes.insert(*seq, notes_for(&list, &s.regions, s.sample_rate, s.sample_count));
         }
         notes
     }
@@ -1130,14 +1154,17 @@ pub fn stem_of(name: &str) -> String {
 pub type SyncOutcome = (Option<(Map<String, Value>, HashMap<usize, Vec<[f64; 2]>>)>, bool);
 
 /// The notes of one source from the events of its track: the hits that are not out of the
-/// output (the app's own `policy::is_out`), mapped back into the source.
+/// output (the app's own `policy::is_out`), mapped back into the source; a hit at or after
+/// `sample_count` is left out.
 #[must_use]
-pub fn notes_for(list: &[Value], regions: &[RegionRec], rate: f64) -> Vec<[f64; 2]> {
+pub fn notes_for(list: &[Value], regions: &[RegionRec], rate: f64, sample_count: i64) -> Vec<[f64; 2]> {
     let mut out: Vec<[f64; 2]> = Vec::with_capacity(list.len());
     for ev in list.iter().filter(|e| !drumspike_app::policy::is_out(e)) {
         let t = ev.get("t").and_then(Value::as_f64).unwrap_or(f64::NAN);
         let v = ev.get("v").and_then(Value::as_i64).unwrap_or(100);
-        if let Some(sample) = source_sample(t, regions, rate) {
+        // a hand-placed hit beyond the end of the source (new, shorter audio) stays in the project
+        // but is no note: the host would get a note past the end of the source
+        if let Some(sample) = source_sample(t, regions, rate).filter(|s| sample_count <= 0 || *s < sample_count) {
             out.push([sample as f64, (v.clamp(0, 127) as f64) / 127.0]);
         }
     }
@@ -1238,6 +1265,7 @@ mod tests {
             wav_len: std::fs::metadata(&wav).map_or(0, |m| m.len()),
             wav,
             ready: true,
+            audio_gen: 0,
             regions: Vec::new(),
         }
     }
@@ -1657,6 +1685,52 @@ mod tests {
         assert_eq!(on_disk["tracks"]["kick"]["segments"][0]["length"], 2.0);
         // the same snapshot again: nothing changed, no round
         assert!(!doc.analyse(&[kick], false).unwrap().ran);
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_hand_edit_survives_a_content_update_and_the_notes_stop_at_the_new_end() {
+        let cache = scratch("update");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let kick = snapshot_of(&cache, &id, 0, "kick.wav");
+        let first = doc.analyse(std::slice::from_ref(&kick), false).unwrap();
+        let n = first.events["kick"].as_array().unwrap().len();
+        assert!(n >= 3, "the first audio has three hits");
+        let (svc, sid) = (doc.svc.clone().unwrap(), doc.sid.clone().unwrap());
+        // the user moves the last hit to 2.0 s
+        svc.events_edit(&sid, "kick", &[json!({"op": "move", "index": n - 1, "t": 2.0})])
+            .unwrap();
+        // the host gives new audio, shorter (1.25 s) with other hits: generation 1
+        let mut new = kick.clone();
+        new.audio_gen = 1;
+        new.wav = wav_of_gen(&cache, &id, 0, "kick.wav", 1);
+        write_drum_wav(&new.wav, &[0.2, 0.6], 1.25);
+        new.sample_count = 60_000;
+        new.wav_len = std::fs::metadata(&new.wav).map_or(0, |m| m.len());
+        let second = doc.analyse(&[new], false).unwrap();
+        assert!(second.ran, "new audio starts a round");
+        let times: Vec<f64> = second.events["kick"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["t"].as_f64())
+            .collect();
+        assert!(
+            times.iter().any(|t| (t - 2.0).abs() < 1e-9),
+            "the hand-placed hit stays: {times:?}"
+        );
+        assert!(
+            !times.iter().any(|t| (t - 0.9).abs() < 0.05),
+            "a hit of the old audio is gone: {times:?}"
+        );
+        let notes = &second.notes[&0];
+        assert!(!notes.is_empty());
+        assert!(
+            notes.iter().all(|[sample, _]| *sample < 60_000.0),
+            "no note past the end of the new audio: {notes:?}"
+        );
         doc.shutdown();
         let _ = std::fs::remove_dir_all(&cache);
     }
