@@ -574,7 +574,7 @@
     }
   }
   window.DSAgentRelay = { start: relayLoop };
-  if (typeof B !== "undefined" && B.windowCallNext) relayLoop();
+  if (typeof B !== "undefined" && B.windowCallNext && !hostMode()) relayLoop();   // #539: no agent relay in host mode
 })();
 
 /* #371: Settings > Agent fine-tune skill. The status text (not installed / installed <version> / older copy), the Install
@@ -589,11 +589,12 @@ function agentSkillShow(st, note) {
 }
 async function agentSkillFill() {
   const el = $("#setSkillStatus");
-  if (!el || !B.agentSkillStatus) return;
+  if (hostMode() || !el || !B.agentSkillStatus) return;   // #539
   try { agentSkillShow(await B.agentSkillStatus()); }
   catch (e) { el.textContent = `agent skill: ${errText(e)}`; }
 }
 async function agentSkillInstall() {
+  if (hostAbsent("agent")) return;
   try {
     const r = await B.agentSkillInstall(), st = await B.agentSkillStatus();
     agentSkillShow(st, `${r.files} files in ${r.installed}`);

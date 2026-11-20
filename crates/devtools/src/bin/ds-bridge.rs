@@ -3,7 +3,8 @@
 //! a release build refuses to start, and the Tauri bundle does not contain it.
 //!
 //! Usage: `ds-bridge [--port N] [--static DIR] [--exit-on-stdin-eof]`. The first output line is
-//! `ds-bridge listening on http://127.0.0.1:<port>/`. The model-free main runs the DSP detector.
+//! `ds-bridge listening on http://127.0.0.1:<port>/`. #539: `GET /?host_mode=1` serves the page with
+//! `window.__DS_HOST_MODE__` set before the first page script (the host-mode start of the tests). The model-free main runs the DSP detector.
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -77,7 +78,7 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let bridge = Arc::new(Bridge::new(svc, args.static_dir));
+    let bridge = Arc::new(Bridge::new(svc, args.static_dir).allow_host_mode_query());
     println!("ds-bridge listening on http://127.0.0.1:{port}/");
     let _ = std::io::stdout().flush();
     if args.exit_on_stdin_eof {

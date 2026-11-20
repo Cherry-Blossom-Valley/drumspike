@@ -395,6 +395,25 @@ fn handle_channel_returns_the_queued_messages() {
 }
 
 #[test]
+fn the_host_mode_flag_comes_only_from_the_test_bridge_before_the_first_script() {
+    // #539: the plain bridge (the shipped page mode) never sets the host mode, query or not
+    let plain = bridge();
+    let page = |b: &Bridge, url: &str| String::from_utf8(b.handle("GET", url, b"").body).unwrap();
+    assert!(!page(&plain, "/?host_mode=1").contains("__DS_HOST_MODE__"));
+    // the test bridge sets it on `?host_mode=1` only, right after <head>: before any script of the page
+    let test_bridge = bridge().allow_host_mode_query();
+    let host = page(&test_bridge, "/?host_mode=1");
+    assert!(host.contains(&format!("<head>{BRIDGE_FLAG}{HOST_MODE_FLAG}")), "{host}");
+    assert!(!page(&test_bridge, "/").contains("__DS_HOST_MODE__"));
+    assert!(!page(&test_bridge, "/?host_mode=0").contains("__DS_HOST_MODE__"));
+    assert_eq!(
+        inject_flags("<head>a", true),
+        format!("<head>{BRIDGE_FLAG}{HOST_MODE_FLAG}a")
+    );
+    assert_eq!(inject_flags("<head>a", false), inject_flag("<head>a"));
+}
+
+#[test]
 fn inject_flag_goes_after_head_or_in_front() {
     assert_eq!(inject_flag("<head>a"), format!("<head>{BRIDGE_FLAG}a"));
     assert_eq!(inject_flag("zz"), format!("{BRIDGE_FLAG}zz"));

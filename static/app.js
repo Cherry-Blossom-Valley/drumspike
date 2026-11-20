@@ -746,6 +746,7 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
   persistInit({ edIdle });   // R17 step 2: persist waits for the edit queue through the injected hook (edit.js owns edIdle since step 3)
   editInit({ pushEvents, voidHitDrag: name => { if (hitDrag && hitDrag.track === name) hitDrag = null; } });   // R17 step 3: edit.js flushes the writes of other steps through the injected hook; voidHitDrag is the input layer's (a replaced hit list voids an in-flight drag)
   sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; }, exTempoReset: () => { EX.tempoAck = false; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks; #151: the default-tempo answer is per project
+  hostApply();   // #539: the page of the host mode (a class on <body>, the controls of the list hidden) before the first layout
   tmInit(); measureGeo(); geoObserve();   // P4-8: the map rulers; P3-14d: the geometry once now, then from the ResizeObserver
   // #518: the one host listener — the shell sets window.__DS_HOST_MODE__ and B.hostTransport
   // before the boot of the page; boot calls appHostFollow() once and only when the mode is on.
@@ -762,9 +763,11 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
   }
   try {
     await loadViewSettings();   // P3-14a: the Inspector's state, before the first layout the user sees
+    if (hostMode()) { hostFit(); window.addEventListener("resize", hostFit); }   // #539: a low and wide window gives the lanes the room
     await initSessions();
     await loadProject();
     showBackend();
+    if (hostMode()) { hostWatchAnalysis(); setInterval(hostWatchAnalysis, 2000); }   // #539: an analysis the plugin runs shows here
   } catch(e) {
     setMsg(`init failed: ${e.message}`, "error");
   }

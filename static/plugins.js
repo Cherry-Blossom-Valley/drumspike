@@ -159,9 +159,11 @@ function renderAudioOutput(a) {
   const note = $("#setOutputNote"); note.textContent = a.note || ""; note.classList.toggle("hidden", !a.note);
 }
 function refreshAudioOutput() {
+  if (hostMode()) return Promise.resolve();   // #539: the host owns the audio output
   return B.audioDevices().then(renderAudioOutput).catch(e => setMsg(`audio devices: ${e.message}`));
 }
 function chooseAudioOutput(name) {
+  if (hostAbsent("audio")) return Promise.resolve();
   return appCmd(() => B.audioOutput(name || null)).then(a => {
     renderAudioOutput(a);
     setMsg(a.note || `audio output: ${name || "system default"}`);

@@ -521,6 +521,8 @@ pub struct Bridge {
     channels: Arc<Channels>,
     events: Arc<EventLog>,
     static_source: StaticSource,
+    /// #539: with it, `GET /?host_mode=1` serves the page with [`HOST_MODE_FLAG`] (the test bridge only).
+    host_mode_query: bool,
 }
 
 use crate::command_policy::arg_str;
@@ -546,12 +548,27 @@ pub fn mime_of(path: &Path) -> &'static str {
 /// The flag the page reads to choose the bridge transport (`static/backend.js`).
 pub const BRIDGE_FLAG: &str = "<script>window.__DS_BRIDGE__ = true;</script>";
 
+/// The flag the plugin shell sets before the first page script (`static/backend.js` reads it).
+pub const HOST_MODE_FLAG: &str = "<script>window.__DS_HOST_MODE__ = true;</script>";
+
 /// `index.html` with [`BRIDGE_FLAG`] right after `<head>`.
 #[must_use]
 pub fn inject_flag(html: &str) -> String {
+    inject_flags(html, false)
+}
+
+/// `index.html` with [`BRIDGE_FLAG`] right after `<head>`, and with `host` also [`HOST_MODE_FLAG`]
+/// (#539): both come before every script of the page, so `backend.js` sees the mode on its first line.
+#[must_use]
+pub fn inject_flags(html: &str, host: bool) -> String {
+    let flags = if host {
+        format!("{BRIDGE_FLAG}{HOST_MODE_FLAG}")
+    } else {
+        BRIDGE_FLAG.to_string()
+    };
     match html.find("<head>") {
-        Some(i) => format!("{}{}{}", &html[..i + 6], BRIDGE_FLAG, &html[i + 6..]),
-        None => format!("{BRIDGE_FLAG}{html}"),
+        Some(i) => format!("{}{}{}", &html[..i + 6], flags, &html[i + 6..]),
+        None => format!("{flags}{html}"),
     }
 }
 
@@ -584,7 +601,17 @@ impl Bridge {
             channels,
             events,
             static_source: source,
+            host_mode_query: false,
         }
+    }
+
+    /// #539: let `GET /?host_mode=1` serve `index.html` with [`HOST_MODE_FLAG`] before the first
+    /// page script, as the plugin shell sets it. Only the test bridge (`ds-bridge`) calls this; the page
+    /// mode of the shipped app never does, so the standalone page has no way to switch the mode on.
+    #[must_use]
+    pub fn allow_host_mode_query(mut self) -> Bridge {
+        self.host_mode_query = true;
+        self
     }
 
     /// The event log (for tests and for the long poll of `GET /events`).
@@ -735,12 +762,13 @@ impl Bridge {
         if method != "GET" && method != "HEAD" {
             return HttpReply::text(405, "GET only");
         }
-        self.static_file(path)
+        let host = self.host_mode_query && query_value(query, "host_mode").as_deref() == Some("1");
+        self.static_file(path, host)
     }
 
     /// A file of the static source; `/` is `index.html` with the bridge flag. Paths with `..`
     /// or an absolute part are refused.
-    fn static_file(&self, path: &str) -> HttpReply {
+    fn static_file(&self, path: &str, host: bool) -> HttpReply {
         let rel = path.trim_start_matches('/');
         let rel = if rel.is_empty() { "index.html" } else { rel };
         let rel_path = Path::new(rel);
@@ -756,7 +784,7 @@ impl Bridge {
             Some(bytes) if rel == "index.html" => HttpReply {
                 status: 200,
                 content_type: mime,
-                body: inject_flag(&String::from_utf8_lossy(&bytes)).into_bytes(),
+                body: inject_flags(&String::from_utf8_lossy(&bytes), host).into_bytes(),
             },
             Some(bytes) => HttpReply {
                 status: 200,

@@ -7,7 +7,22 @@
 "use strict";
 
 /* ---------------- track DOM ---------------- */
+/* #539: the empty state of host mode. No button works there (the host owns the files and the track set), so the text says
+   what to do in the DAW; while the first analysis runs it says that it runs. */
+const HOST_EMPTY = "No drum tracks yet. In your DAW, put the Drum Spike plugin on a drum track.";
+const HOST_EMPTY_BUSY = "Analyzing the drum tracks. The hits appear here when it is done.";
+function hostEmptyText() { return analysisRunning ? HOST_EMPTY_BUSY : HOST_EMPTY; }
+function hostEmptyRefresh() {   // the text follows the analysis state (setAnalysisButtons)
+  const el = document.querySelector(".empty-state.hostEmpty");
+  if (el && el.textContent !== hostEmptyText()) el.textContent = hostEmptyText();
+}
+function renderHostEmpty(scroll) {
+  const box = document.createElement("div"); box.className = "empty-state hostEmpty";
+  box.textContent = hostEmptyText();
+  scroll.appendChild(box);
+}
 function renderNoProject(scroll) {
+  if (hostMode()) { renderHostEmpty(scroll); return; }   // #539
   const box = document.createElement("div"); box.className = "empty-state noProject";
   const p = document.createElement("div"); p.textContent = "No project is open."; box.appendChild(p);
   const acts = document.createElement("div"); acts.className = "esActs";
@@ -31,6 +46,7 @@ function buildTrackDOM() {
   const scroll = $("#lanesScroll"); releaseCanvases(scroll); scroll.innerHTML = "";
   MT.tracks = {};   // P3-16: the meters of the old rows are gone
   if (!S.sid) { renderNoProject(scroll); return; }
+  if (!S.order.length && hostMode()) { renderHostEmpty(scroll); return; }   // #539
   if (!S.order.length) {
     scroll.innerHTML = `<div class="empty-state">No tracks yet — drop audio files or a folder here, or click <b>⬆ Add tracks</b> to add kick, snare, toms and overheads.<br>Then hit <b>⚙ Analyze all</b>.</div>`;
     return;
@@ -42,7 +58,7 @@ function buildTrackDOM() {
     t.params = t.params || defaultParams(t.role);   // the Inspector edits these (P3-14a)
     row.innerHTML = `
       <div class="track-row">
-        <div class="thead" title="Click: select the track (the Inspector shows it). Drag: reorder. Right-click: Export…, Re-analyze, Reset Volume and Pan">
+        <div class="thead" title="${hostMode() ? "Click: select the track (the Inspector shows it). Right-click: Re-analyze" : "Click: select the track (the Inspector shows it). Drag: reorder. Right-click: Export…, Re-analyze, Reset Volume and Pan"}">
           <span class="tstrip" style="background:${t.color}"></span>
           <div class="tname"></div>
           <div class="tnote">${t.role} · <span class="nnote">${nameFromNote(t.note)}</span> (${t.note})<span class="tfollow"></span></div>
@@ -76,8 +92,8 @@ function buildTrackDOM() {
     // P3-14c: the header is compact; the 🔗 badge and the hit counts are in the Inspector (source state, Detected, Edited)
     if (t.offline) {
       const b = document.createElement("button"); b.className = "btn mini tOffline"; b.textContent = "offline";
-      b.title = `source ${t.status}: click to relink the audio file`;
-      b.onclick = () => relinkTrack(name);
+      if (hostMode()) { b.title = `source ${t.status}: the host provides the audio`; b.disabled = true; }   // #539: no relink in host mode
+      else { b.title = `source ${t.status}: click to relink the audio file`; b.onclick = () => relinkTrack(name); }
       tn.appendChild(b);
     }
     row.querySelector(".thead").addEventListener("click", ev => {
@@ -132,6 +148,7 @@ function setSelTrack(name) {   // the header click and the keys P and ; (P3-19)
 /* ---------------- track reordering (drag header, live reorder like Pro Tools) ---------------- */
 let headerDragged = false;
 function applyOrder(newOrder) {
+  if (hostAbsent("tracks")) return;   // #539: the host owns the order of the tracks
   S.order = newOrder;
   const scroll = $("#lanesScroll");
   for (const n of newOrder) {
@@ -146,7 +163,7 @@ function applyOrder(newOrder) {
 function setupTrackDrag(row) {
   const thead = row.querySelector(".thead");
   thead.addEventListener("mousedown", ev => {
-    if (ev.button !== 0) return;
+    if (ev.button !== 0 || hostMode()) return;   // #539: no reorder in host mode
     if (ev.target.closest("button") || ["INPUT","SELECT"].includes(ev.target.tagName)) return;
     ev.preventDefault();   // no text selection while grabbing the header
     const startY = ev.clientY;
@@ -477,7 +494,7 @@ function openTrackMenu(name, x, y) {
     ["export", "Export…", () => openExport("selected", name)],   // P4-30: the one Export dialog with this track
     ["reanalyze", "Re-analyze", () => startAnalysis([name])],
     ["mix", "Reset Volume and Pan", () => { setTrackMix(name, 0, 0); setMsg(`${name}: volume 0 dB, pan centre`); }],   // P3-16
-  ];
+  ].filter(it => !hostMode() || it[0] === "reanalyze");   // #539: in host mode only Re-analyze (the host owns the files and the mix)
   openCtxItems(items, x, y);
 }
 function openCtxItems(items, x, y) {   // [act, label, run] rows at a point (P4-6a: the Learn menus use it too)
@@ -561,6 +578,7 @@ async function roleApplyOp(op, reverse) {   // the undo and the redo of a role c
    key of the page (events, peaks, meters, the engine's tiles) carries the name, so the project is loaded again; the view,
    the playhead and the selection stay. */
 async function renameTrack(name, to) {
+  if (hostAbsent("tracks")) return false;   // #539: the host names the tracks
   to = String(to || "").trim();
   if (!to || to === name || !S.tracks[name]) return false;
   if (S.tracks[to]) { setMsg(`a track named "${to}" exists`); return false; }
@@ -597,6 +615,7 @@ async function trFlush(inQueue) {   // the hit edits on their way, then the page
   await Promise.all(pendingWriteTracks().map(pushEvents));
 }
 async function trRemove(name, op) {   // true when the service removed the track; op: the step that a redo runs again (it runs in the SH queue)
+  if (hostAbsent("tracks")) return false;   // #539: the host owns the track set
   const sid = S.sid;
   try { await trFlush(!!op); }
   catch (e) { setMsg(`remove failed: ${errText(e)}`, "error"); return false; }   // #249 R02: the removal must not run while its edits are refused
@@ -614,6 +633,7 @@ async function trRemove(name, op) {   // true when the service removed the track
   return true;
 }
 async function removeTrack(name) {   // Track > Remove Track, the Delete key: the confirm first
+  if (hostAbsent("tracks")) return false;
   if (!needProject() || !S.tracks[name]) return false;
   if (trModalOpen()) return false;
   if (analysisRunning) { setMsg("analysis running: remove the track after it"); return false; }

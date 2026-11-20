@@ -38,7 +38,7 @@ function insSteppers(div) {
 }
 function buildParamsPanel(div, name, p) {
   const t = S.tracks[name];
-  const info = txt => ` <span class="pinfo" title="${txt}">ⓘ</span>`;
+  const info = txt => ` <span class="pinfo" title="${hostWords(txt)}">ⓘ</span>`;
   const sec = insSecHTML;
   div.innerHTML = `
     <div class="pbody">
@@ -290,6 +290,7 @@ function syncInspector(force) {   // after a change of the selected track (updat
   if (!name) { insMixHome(); $("#insParams").textContent = ""; return; }
   const t = S.tracks[name];
   const nm = $("#insName"); nm.value = name; nm.dataset.name = name;
+  if (hostMode()) { nm.readOnly = true; nm.title = "Track name: the host names the tracks"; }   // #539
   $("#insColor").style.background = t.color || "#888";
   insRoleLine(); insCounts(); insSource(); insRoleControls();
   t.params = t.params || {};
@@ -363,7 +364,7 @@ function insSums() {
   const sens = Number.isFinite(p.sensitivity) ? Math.round(p.sensitivity) : Math.round(sensOf(Array.isArray(p.thresholds) && p.thresholds.length === 5 ? p.thresholds : SENS.BASE));
   const f = el && el.textContent && el.textContent !== "…" ? el.textContent : "";
   return {
-    track: [f, st ? st.textContent : ""].filter(Boolean).join(" · "),
+    track: hostMode() ? String(t.role || "") : [f, st ? st.textContent : ""].filter(Boolean).join(" · "),   // #539: the file and its state are the host's
     hits: `${evs.length}${out ? ` · ${out} out` : ""}`,
     detection: t.follows ? `follows ${t.follows}` : `sens ${sens} · gap ${num(p.min_gap_ms)} ms`,
     velocity: `${num(p.vel_lo_db)} to ${num(p.vel_hi_db)} dB${Number.isFinite(p.vel_cut_db) ? ` · cut ${num(p.vel_cut_db)}` : ""}`,

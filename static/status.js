@@ -62,7 +62,7 @@ function updateStatus() {   // P3-14b: the status bar is short; the info line ha
    on, every hit edit and Learn mark request carries training: true and the service logs one record per hit affected.
    The status bar shows "training: N records" while the mode is on (N from training_status). */
 const TRN = { sid: null, records: 0 };
-function trainingOn() { return !!SETTINGS().ui.training; }
+function trainingOn() { return !hostMode() && !!SETTINGS().ui.training; }   // #539: no Training Mode in host mode, whatever the saved setting says
 function drawTraining() {
   const el = $("#stTraining"), on = trainingOn();
   el.classList.toggle("hidden", !on);
@@ -83,12 +83,14 @@ function trainingNote(r) {   // the answer of a call that asked for a log
   trainingRefresh();
 }
 function setTraining(on) {
+  if (hostAbsent("agent")) return;
   SETTINGS().ui.training = !!on; saveSettings();
   if (S.sid) B.trainingStatus(S.sid, !!on).catch(() => {});   // the service reports the state (agents read it)
   TRN.sid = null; trainingSync();
   DSShell.sync();
 }
 function toggleTraining() {
+  if (hostAbsent("agent")) return;
   setTraining(!trainingOn());
   setMsg(`training mode: ${trainingOn() ? "on - every hit edit and Learn mark is logged with its audio" : "off"}`);
 }

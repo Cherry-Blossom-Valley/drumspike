@@ -313,9 +313,8 @@ def make_project(tmp_path):
     return make
 
 
-@pytest.fixture
-def app(page, warm_page, request):
-    """The page on the bridge. Fails the test on a page error, on a console error (a 4xx answer of a
+def _app_page(page, warm_page, request, query=""):
+    """The page on the bridge (`query`: "?host_mode=1" is the host-mode start of #539). Fails the test on a page error, on a console error (a 4xx answer of a
     command is expected: the bridge answers errors as the server does) and on any request to /api/
     (app.js must go through B). X-3: a Playwright trace runs during the test; it is kept only when the
     setup or the test fails (unless pytest-playwright's own --tracing is on)."""
@@ -332,7 +331,7 @@ def app(page, warm_page, request):
     page.on("dialog", lambda d: d.accept())
     page.add_init_script("localStorage.removeItem('dsg_sid')")
     try:
-        page.goto(bridge.url + "/")
+        page.goto(bridge.url + "/" + query)
         # the page opens the newest project of the bridge at start-up (the registry holds the earlier tests'
         # projects, dirty): wait for that load, else it sets the dirty flag again and File > Open asks first
         page.wait_for_function(READY)
@@ -368,3 +367,17 @@ def app(page, warm_page, request):
             page.context.tracing.stop()
     assert errors == [], errors
     assert direct == [], f"app.js reached the Python server routes: {direct}"
+
+
+@pytest.fixture
+def app(page, warm_page, request):
+    """The page on the bridge."""
+    yield from _app_page(page, warm_page, request)
+
+
+@pytest.fixture
+def host_app(page, warm_page, request):
+    """#539: the page on the bridge in host mode, as the plugin shell serves it: the test bridge sets
+    window.__DS_HOST_MODE__ before the first page script (GET /?host_mode=1), so backend.js reads the mode on its
+    first line and boot() runs hostApply() with the mode on. Same checks as `app` (page errors, direct /api/ calls)."""
+    yield from _app_page(page, warm_page, request, "?host_mode=1")

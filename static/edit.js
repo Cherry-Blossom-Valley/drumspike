@@ -342,6 +342,7 @@ function edDelete(trk, id) {   // delete the hit with this id (the key, the righ
    `confirm` op, the service applies nothing — the document, its dirty flag and the undo history stay as they were —
    and logs one record; the status line reads one record more (trainingNote). No undo step: there is nothing to undo. */
 function confirmHit() {
+  if (hostAbsent("agent")) return;   // #539: Confirm Hit is a Training Mode command
   if (!S.sel) { setMsg("no hit selected"); return; }
   const trk = S.sel.track, id = ((S.events[trk] || [])[(S.sel || {}).index] || {}).id;
   if (followerLocked(trk)) return;   // P3-18

@@ -168,6 +168,11 @@
     ["offline", "Track header: the file is missing or changed; click the badge to relink (the Inspector shows the source and its state)"],
   ];
 
+  /* #539: the gestures of host mode: null leaves the row out (the host owns the track order and the files), a text replaces
+     the one that names an absent command (Mute, Solo, Export Selected Tracks). */
+  const HOST_GESTURES = { "drag track header": null, "offline": null,
+    "click track header": "Select the track: the Inspector shows it; Tab and Analyze Selected Track use it" };
+
   const MODS = ["Control", "Option", "Shift", "Cmd"];
   const NAMES = ["Plus", "Minus", "Space", "Tab", "Return", "Delete", "Backspace", "Escape", "Left", "Right", "Up", "Down",
     "NumpadMinus", "NumpadPlus", "NumpadPeriod", "NumpadEnter", "Numpad0", "Numpad1", "Numpad2", "Numpad3", "Numpad4",
@@ -364,7 +369,11 @@
       n++;
     }
     row("kmGroup", null, "Mouse");
-    for (const [a, b] of GESTURES) row("", a, b);
+    for (const [a, b] of GESTURES) {
+      if (!hostMode()) { row("", a, b); continue; }
+      const own = HOST_GESTURES[a];   // #539: in host mode a gesture that names an absent command is left out or says it for the host
+      if (own !== null) row("", a, own === undefined ? b : own);
+    }
     return n;
   }
 
