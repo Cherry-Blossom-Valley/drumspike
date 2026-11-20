@@ -136,8 +136,13 @@ struct SourceState {
     notes: Mutex<Vec<[f64; 2]>>,
     /// A job covered this source (its content is available).
     has_events: AtomicBool,
-    /// The host asked for the analysis of this source.
+    /// The source takes part in the rounds once its audio is here: the host asked for its
+    /// analysis, or the plugin took it as wanted (see `by_plugin`).
     requested: AtomicBool,
+    /// The plugin queued this source itself, because its audio was read and the host never
+    /// asked (LUNA does not ask). The host is told when the notes are here, since it did not
+    /// ask and so does not wait for them.
+    by_plugin: AtomicBool,
     /// The analysis of this source ended without a result (its read failed, its round failed
     /// or the service could not analyse its track). The host sees the analysis as complete
     /// (it must not wait for ever), and a new request tries again.
@@ -457,6 +462,9 @@ impl DocShared {
 enum Msg {
     /// A source's analysis was requested.
     Request(Arc<SourceState>),
+    /// The host enabled the samples access of a source and its read starts: the source will
+    /// have audio soon, so a round waits for it (the audio deadline), also without a request.
+    Reading(Arc<SourceState>),
     /// A source's WAV is written.
     Ready(Arc<SourceState>),
     /// A source's read failed.
@@ -888,6 +896,34 @@ impl Session {
         }
     }
 
+    /// Queue a source that needs analysis and is not queued (and no round works on it) yet.
+    fn want(&self, s: &Arc<SourceState>, st: &mut WorkerState) {
+        // the fault run `DS_ARA_ROUND_FAULT=read-again`: the read of a source that has its
+        // result (one restored from an archive) starts a round of the document all the same
+        if std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("read-again")
+            && !self.fault
+            && !s.removed.load(Ordering::SeqCst)
+            && !needs_analysis(s)
+            && !st.stale.iter().any(|(d, _)| Arc::ptr_eq(d, &s.doc))
+        {
+            st.stale.push((s.doc.clone(), "removal"));
+            return;
+        }
+        if self.fault
+            || !needs_analysis(s)
+            || s.doc.closing.load(Ordering::SeqCst)
+            || st.requested.iter().any(|r| Arc::ptr_eq(r, s))
+            || st.current.iter().any(|r| Arc::ptr_eq(r, s))
+        {
+            return;
+        }
+        if !s.requested.swap(true, Ordering::SeqCst) {
+            s.by_plugin.store(true, Ordering::SeqCst);
+        }
+        *s.requested_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+        st.requested.push(s.clone());
+    }
+
     /// Take one message. True for `Msg::Quit`.
     fn absorb(&'static self, msg: Msg, st: &mut WorkerState) -> bool {
         match msg {
@@ -907,19 +943,35 @@ impl Session {
                 }
             }
             Msg::Failed(_) => {}
+            Msg::Reading(s) => {
+                // M1b4: the host reads the audio of a source and may never ask for its analysis
+                // (LUNA). The plugin takes the source as wanted when it has no result, so one
+                // round covers all the sources whose audio is on the way (the deadline of
+                // `audio_deadline` holds). A later request for it finds it queued or done.
+                // `DS_ARA_ROUND_FAULT=request-only` brings back the old way (a round only on
+                // a request); `ready-only` queues a source only when its audio is here, so
+                // sources that arrive one after the other get a round each.
+                let fault = std::env::var("DS_ARA_ROUND_FAULT").unwrap_or_default();
+                if fault != "request-only" && fault != "ready-only" {
+                    self.want(&s, st);
+                }
+            }
             Msg::Ready(s) => {
-                // The audio of a source that has no result (left out as late, a failed round,
-                // a stale track after a restore) is here now: a round takes it, the host need
-                // not ask again. (`DS_ARA_ROUND_FAULT=no-late-round` brings back the first
-                // version: nothing happens.)
-                if std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-late-round")
-                    && !s.removed.load(Ordering::SeqCst)
-                    && s.analysis_failed.load(Ordering::SeqCst)
-                    && !s.doc.closing.load(Ordering::SeqCst)
-                    && !st.requested.iter().any(|r| Arc::ptr_eq(r, &s))
-                {
-                    *s.requested_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
-                    st.requested.push(s);
+                // The audio of a source that has no result is here now. That is a source the
+                // host never asked for (M1b4), or one that has no result after a late audio, a
+                // failed round or a stale track after a restore: a round takes it, the host
+                // need not ask again. A restored source with a result is not queued.
+                // (`DS_ARA_ROUND_FAULT=no-late-round` brings back the first version: nothing
+                // happens; `request-only`: only a source whose analysis failed is queued.)
+                let fault = std::env::var("DS_ARA_ROUND_FAULT").unwrap_or_default();
+                if fault != "no-late-round" {
+                    if fault == "request-only" {
+                        if s.analysis_failed.load(Ordering::SeqCst) {
+                            self.want(&s, st);
+                        }
+                    } else {
+                        self.want(&s, st);
+                    }
                 }
             }
             Msg::Remove {
@@ -1132,7 +1184,10 @@ impl Session {
             }
             // a complete source whose notes changed, or one that had no result and has one
             // now, is told to the host
-            let told = (was_complete && differs) || (was_failed && !failed);
+            // a source the host never asked for does not wait for its notes: it is told when they
+            // come (M1b4)
+            let first = !was_complete && !was_failed && !failed && s.by_plugin.load(Ordering::SeqCst);
+            let told = (was_complete && differs) || (was_failed && !failed) || first;
             if told && !s.removed.load(Ordering::SeqCst) {
                 changed.push(s.props().name);
                 if let Ok(mut p) = doc.pending.lock() {
@@ -2046,6 +2101,7 @@ unsafe extern "C" fn dc_createAudioSource(
                 notes: Mutex::new(Vec::new()),
                 has_events: AtomicBool::new(false),
                 requested: AtomicBool::new(false),
+                by_plugin: AtomicBool::new(false),
                 analysis_failed: AtomicBool::new(false),
                 wav_len: AtomicU64::new(0),
                 stale: AtomicBool::new(false),
@@ -2209,6 +2265,9 @@ unsafe fn start_read(src: &Arc<SourceState>) {
     let reader = create((*src.host.0).audioAccessControllerHostRef, src.host_ref.0, 0);
     *src.reader.lock().unwrap_or_else(|e| e.into_inner()) = SyncPtr(reader);
     let s = session();
+    // before the reader thread starts, so the worker hears of the read before it hears that the
+    // audio is here
+    send(s, Msg::Reading(src.clone()));
     let worker_src = src.clone();
     let spawned = std::thread::Builder::new()
         .name(format!("drumspike-ara-read-{}", src.seq))
@@ -3398,6 +3457,7 @@ mod tests {
             notes: Mutex::new(Vec::new()),
             has_events: AtomicBool::new(false),
             requested: AtomicBool::new(true),
+            by_plugin: AtomicBool::new(false),
             analysis_failed: AtomicBool::new(false),
             wav_len: AtomicU64::new(0),
             stale: AtomicBool::new(false),

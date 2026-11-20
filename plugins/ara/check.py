@@ -2578,6 +2578,241 @@ def stage_doc_late_audio_fault() -> bool:
     )
 
 
+# ---- M1b4 (#545): a source is analysed as soon as its audio is here, with or without a request
+
+SHORT_WAIT = "8"  # seconds a fault run of these stages waits for a round that does not come
+
+
+def nr_parts(label: str, rc: int, lines: list, files: list, ref: bytes, requests: int | None = 0) -> tuple[dict, str]:
+    """A run in which the host never asks (`--no-request`): every source has its round, in one
+    round, the events are the reference of the run with requests, the host reads notes and was
+    told, and the report has no `request` row."""
+    starts = event_rows(label, "round_start")
+    jobs = job_rows(label)
+    asked = event_rows(label, "request")
+    notes = host_notes_of(lines, "round-1")
+    told = notified(lines, "round-1")
+    last = jobs[-1] if jobs else {}
+    parts = {
+        "rc": rc == 0,
+        "round": len(starts) == 1 and len(jobs) == 1,
+        "all_in_round": last.get("project_tracks") == track_names(files) and len(last.get("analysed") or []) == len(files),
+        "events": last.get("events_json", "").encode() == ref,
+        "no_request_row": len(asked) == 0 if requests == 0 else len(asked) == requests,
+        "notes": len(notes) == len(files) and all(notes.values()),
+        "told": len(told) == len(files),
+    }
+    what = "no round" if not starts else f"{len(starts)} round(s)"
+    return parts, (
+        f"the host enabled the samples access of {len(files)} sources and never asked for an analysis (rc={rc}): {what}, {len(jobs)} job row(s); "
+        f"the last round has {len(last.get('analysed') or [])} analysed tracks, events byte for byte the reference of the run with requests "
+        f"{parts['events']}; {len(asked)} request row(s); notes read after it {[len(v) for v in notes.values()]}; the host was told for {len(told)} source(s)"
+    )
+
+
+def nr_run(label: str, files: list, extra_args: list | None = None, env: dict | None = None, wait: str = HOST_WAIT) -> tuple[int, list]:
+    rc, _text, lines = host_run(
+        label,
+        CLAP,
+        ["grow", "--files", *fixture_args(files), "--batch", str(len(files)), "--wait", wait, *(extra_args or [])],
+        f"cache-{label}",
+        extra=env,
+    )
+    return rc, lines
+
+
+def stage_no_request() -> bool:
+    """M1b4 gate lines 1 and 7: the fixture in the mode "no request"; every source has a round, the events
+    equal the reference, no `request` row; the host's own questions (incomplete, notes, told) are right."""
+    ref_path = OUT / "events-reference.json"
+    if not HOST.exists() or not CLAP.exists() or not ref_path.exists():
+        return pass_fail("no-request", False, "no host, no CLAP or no reference events: run check.sh build and the reference stage first")
+    rc, lines = nr_run("no-request", FILES, ["--no-request"])
+    parts, evidence = nr_parts("no-request", rc, lines, FILES, ref_path.read_bytes())
+    return pass_fail("no-request", all(parts.values()), evidence)
+
+
+def stage_no_request_fault() -> bool:
+    """Gate line 2: the old behaviour (a round only on a request): the stage fails with "no round"."""
+    ref_path = OUT / "events-reference.json"
+    if not HOST.exists() or not CLAP.exists() or not ref_path.exists():
+        return pass_fail("no-request-fault", False, "no host, no CLAP or no reference events")
+    rc, lines = nr_run("no-request-fault", FILES, ["--no-request"], {"DS_ARA_ROUND_FAULT": "request-only"}, SHORT_WAIT)
+    parts, evidence = nr_parts("no-request-fault", rc, lines, FILES, ref_path.read_bytes())
+    starts = event_rows("no-request-fault", "round_start")
+    return pass_fail(
+        "no-request-fault",
+        not parts["round"] and not parts["events"] and not starts,
+        f"the fault switch gave a round only on a request and the check refused it (no round): {evidence}",
+    )
+
+
+def order_parts(label: str, rc: int, lines: list, ref: bytes) -> tuple[dict, str]:
+    starts = event_rows(label, "round_start")
+    jobs = job_rows(label)
+    asked = event_rows(label, "request")
+    parts = {
+        "rc": rc == 0,
+        "one_round": len(starts) == 1 and len(jobs) == 1 and services_row(label).get("rounds") == 1,
+        "events": len(jobs) >= 1 and jobs[-1].get("events_json", "").encode() == ref,
+        "asked": len(asked) == len(FILES),
+    }
+    return parts, (
+        f"{len(asked)} request(s): {len(starts)} round(s) started in all (want 1), {len(jobs)} job row(s), "
+        f"events byte for byte the reference {parts['events']}"
+    )
+
+
+def stage_request_order() -> bool:
+    """Gate line 3: a host that requests gets one round and the same events, whether the audio is read before
+    the request ("read, then request": the request comes after the analysis is complete) or after it
+    ("request, then read": the audio comes 300 ms after the request)."""
+    ref_path = OUT / "events-reference.json"
+    if not HOST.exists() or not CLAP.exists() or not ref_path.exists():
+        return pass_fail("request-order", False, "no host, no CLAP or no reference events: run check.sh build and the reference stage first")
+    ok = True
+    for order in ("read-first", "request-first"):
+        label = f"request-order-{order}"
+        rc, lines = nr_run(label, FILES, ["--request-order", order])
+        parts, evidence = order_parts(label, rc, lines, ref_path.read_bytes())
+        ok = pass_fail(f"request-order-{order}", all(parts.values()), evidence) and ok
+    return ok
+
+
+def stage_request_order_fault() -> bool:
+    """The fault run: a request for a source that is complete starts a full round, so "read, then request"
+    has two rounds and the check refuses it."""
+    ref_path = OUT / "events-reference.json"
+    if not HOST.exists() or not CLAP.exists() or not ref_path.exists():
+        return pass_fail("request-order-fault", False, "no host, no CLAP or no reference events")
+    rc, lines = nr_run("request-order-fault", FILES, ["--request-order", "read-first"], {"DS_ARA_ROUND_FAULT": "always"})
+    parts, evidence = order_parts("request-order-fault", rc, lines, ref_path.read_bytes())
+    return pass_fail(
+        "request-order-fault",
+        rc == 0 and parts["one_round"] is False,
+        f"the fault switch gave a second round for the request after the audio and the check refused it: {evidence}",
+    )
+
+
+GROUP_FILES = FILES[:3]
+
+
+def group_parts(label: str, rc: int, lines: list, ref: bytes) -> tuple[dict, str]:
+    parts, evidence = nr_parts(label, rc, lines, GROUP_FILES, ref)
+    return parts, evidence.replace("sources and never asked", "sources (the audio of the last one comes 700 ms after the others) and never asked")
+
+
+def group_run(label: str, env: dict | None = None) -> tuple[int, list]:
+    return nr_run(label, GROUP_FILES, ["--no-request", "--slow-read", "2:700"], env)
+
+
+def stage_no_request_group() -> bool:
+    """Gate line 4: three sources without a request, the audio of the last one comes after the others (more
+    than the settle time later): one round, all three tracks took part."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("no-request-group", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b4-ref-three", GROUP_FILES)
+    if ref is None:
+        return pass_fail("no-request-group", False, "the reference failed")
+    rc, lines = group_run("no-request-group")
+    parts, evidence = group_parts("no-request-group", rc, lines, ref)
+    return pass_fail("no-request-group", all(parts.values()), evidence)
+
+
+def stage_no_request_group_fault() -> bool:
+    """The fault run: a source is queued only when its audio is here: one round for the two early sources
+    and one for the late one."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("no-request-group-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    ref = reference_alone("m1b4-ref-three", GROUP_FILES)
+    if ref is None:
+        return pass_fail("no-request-group-fault", False, "the reference failed")
+    rc, lines = group_run("no-request-group-fault", {"DS_ARA_ROUND_FAULT": "ready-only"})
+    parts, evidence = group_parts("no-request-group-fault", rc, lines, ref)
+    return pass_fail(
+        "no-request-group-fault",
+        rc == 0 and parts["round"] is False and len(event_rows("no-request-group-fault", "round_start")) >= 2,
+        f"the fault switch gave a round to each source as its audio came and the check refused it: {evidence}",
+    )
+
+
+def restored_parts(label: str, rc: int, lines: list, before: dict) -> tuple[dict, str]:
+    starts = event_rows(label, "round_start")
+    reads = [r for r in report_rows(label) if r.get("event") == "read" and r.get("read_ok")]
+    after = {r["name"]: r["samples"] for r in lines if r.get("event") == "host_notes"}
+    parts = {
+        "rc": rc == 0,
+        "audio_read": len(reads) == len(FILES),
+        "no_round": len(starts) == 0 and len(job_rows(label)) == 0,
+        "notes": len(after) == len(FILES) and all(after.values()),
+    }
+    return parts, (
+        f"the archive was restored in a new process and the host read the audio of all sources without a request: {len(reads)} read row(s), "
+        f"{len(starts)} round(s) started (want 0), {len(job_rows(label))} job row(s), notes {[len(v) for v in after.values()]}"
+    )
+
+
+def restored_run(label: str, env: dict | None = None) -> tuple[int, list, dict]:
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return 1, [], {}
+    rc, _text, lines = host_run(
+        label, CLAP, ["restore", "--files", *fixture_args(FILES), "--archive", str(archive), "--enable-access"], f"cache-{label}", extra=env
+    )
+    return rc, lines, {}
+
+
+def stage_no_request_restored() -> bool:
+    """Gate line 5: a source that was restored with its result is not analysed again only because its audio is read."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("no-request-restored", False, "no host or no CLAP: run check.sh build first")
+    rc, lines, before = restored_run("no-request-restored")
+    parts, evidence = restored_parts("no-request-restored", rc, lines, before)
+    return pass_fail("no-request-restored", all(parts.values()), evidence)
+
+
+def stage_no_request_restored_fault() -> bool:
+    """The fault run: the read of a source with a result starts a round of the document."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("no-request-restored-fault", False, "no host or no CLAP: run check.sh build first")
+    rc, lines, before = restored_run("no-request-restored-fault", {"DS_ARA_ROUND_FAULT": "read-again"})
+    parts, evidence = restored_parts("no-request-restored-fault", rc, lines, before)
+    return pass_fail(
+        "no-request-restored-fault",
+        rc == 0 and parts["no_round"] is False,
+        f"the fault switch analysed the restored sources again when their audio was read and the check refused it: {evidence}",
+    )
+
+
+def editor_no_request_run(label: str, env: dict | None = None) -> tuple[int, list]:
+    late = ["--late-files", *[str(FIXTURES / f) for f in FILES], "--arg", str(len(FILES)), "--no-request", "--wait", SHORT_WAIT]
+    rc, _summary, rows = run_phase(label, "open-first", CLAP, env, late, files=[])
+    return rc, rows
+
+
+def stage_editor_no_request() -> bool:
+    """Gate line 6: the editor is open before the audio; the host never asks; the page gets the four tracks
+    without a reload by hand (the `plugin-reload` path)."""
+    ref = _reference()
+    if ref is None or not HOST.exists():
+        return pass_fail("editor-no-request", False, "no reference or host")
+    rc, rows = editor_no_request_run("editor-no-request")
+    parts = open_first_parts(rc, rows, ref)
+    asked = [r for r in rows if r.get("event") == "request"]
+    good, ev = parts["editor-open-first"]
+    return pass_fail("editor-no-request", good and not asked, f"{ev}; the host sent {len(asked)} request(s)")
+
+
+def stage_editor_no_request_fault() -> bool:
+    """The fault run: a round only on a request, so the page never gets a track."""
+    ref = _reference()
+    if ref is None:
+        return pass_fail("editor-no-request-fault", False, "no reference")
+    rc, rows = editor_no_request_run("editor-fault-no-request", {"DS_ARA_ROUND_FAULT": "request-only"})
+    good, ev = open_first_parts(rc, rows, ref)["editor-open-first"]
+    return pass_fail("editor-no-request-fault", not good, f"the fault switch gave a round only on a request and the check refused it: {ev}")
+
+
 # ---- review round 2, item 8: one list of the DS_ARA_* variables
 
 README = HERE / "README.md"
@@ -3948,6 +4183,16 @@ STAGES = {
     "doc-late-audio-arrives": stage_doc_late_audio_arrives,
     "doc-late-audio-arrives-fault": stage_doc_late_audio_arrives_fault,
     "doc-panic-fault": stage_doc_panic_fault,
+    "no-request": stage_no_request,
+    "no-request-fault": stage_no_request_fault,
+    "request-order": stage_request_order,
+    "request-order-fault": stage_request_order_fault,
+    "no-request-group": stage_no_request_group,
+    "no-request-group-fault": stage_no_request_group_fault,
+    "no-request-restored": stage_no_request_restored,
+    "no-request-restored-fault": stage_no_request_restored_fault,
+    "editor-no-request": stage_editor_no_request,
+    "editor-no-request-fault": stage_editor_no_request_fault,
     "switches": stage_switches,
     "switches-fault": stage_switches_fault,
     "no-unwrap": stage_no_unwrap,
@@ -4005,10 +4250,12 @@ ORDER = [
     "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",
     "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault", "doc-late-audio-arrives", "doc-late-audio-arrives-fault",
+    "no-request", "no-request-fault", "request-order", "request-order-fault", "no-request-group", "no-request-group-fault",
+    "no-request-restored", "no-request-restored-fault",
     "editor-open", "editor-fault", "editor-gui", "editor-gui-fault", "editor-shell", "editor-shell-fault",
     "editor-edit", "editor-edit-fault", "editor-threads", "editor-threads-fault",
     "editor-follow", "editor-follow-fault", "editor-refuse", "editor-refuse-fault", "editor-race", "editor-race-fault", "editor-page-copy", "editor-page-copy-fault", "editor-vst3-view", "editor-vst3-view-fault",
-    "editor-edit-sync", "editor-edit-sync-fault", "editor-edit-destroy", "editor-edit-destroy-fault", "editor-regions-keep", "editor-regions-keep-fault", "editor-race-destroy", "editor-race-destroy-fault", "editor-shell-functions", "editor-shell-functions-fault", "editor-shell-report", "editor-shell-report-fault",  
+    "editor-edit-sync", "editor-edit-sync-fault", "editor-edit-destroy", "editor-edit-destroy-fault", "editor-regions-keep", "editor-regions-keep-fault", "editor-race-destroy", "editor-race-destroy-fault", "editor-shell-functions", "editor-shell-functions-fault", "editor-shell-report", "editor-shell-report-fault", "editor-no-request", "editor-no-request-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",

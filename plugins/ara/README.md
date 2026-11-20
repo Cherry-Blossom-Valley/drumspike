@@ -166,6 +166,22 @@ document and stored in the ARA archive, so a restore in a new process finds the 
   happened in (its sources end without a result) and the worker starts again. No function
   pointer of the host is unwrapped in the plugin code (the host tables are optional input).
 
+## Analysis without a request (M1b4)
+
+The plugin analyses a source as soon as its audio is here. The host need not call
+`requestAudioSourceContentAnalysis`: LUNA does not (the finding of the first run in a real DAW).
+A request still works and gives the same result, with no second round for the same audio. A
+source restored with its result is not analysed again because its audio is read. The rule and
+the finding are in `docs/design/daw-plugin/m1b4-analyse-without-request.md`.
+
+The test host has a mode for it: `ara-host <bundle> grow --files <wav>... --no-request` (the
+host enables the samples access and never requests). `--request-order read-first|request-first`
+and `--slow-read <k>:<ms>` make the other orders of the stages `request-order` and
+`no-request-group`. The switch `DS_ARA_ROUND_FAULT=request-only` brings back the old way (a round
+only on a request); the stage `no-request` then fails with "no round". The stages are
+`no-request`, `request-order`, `no-request-group`, `no-request-restored` and
+`editor-no-request`, each with a fault run.
+
 ## The check
 
 `plugins/ara/check.sh check` (-> `check.py all`) runs every gate line of the ticket: the
@@ -224,7 +240,7 @@ delivery ticket M1c.
 | `DS_ARA_FOLDER_FAULT` | fault | shared | every document uses one folder |
 | `DS_ARA_DESTROY_FAULT` | fault | keep | a destroyed source stays in the list and the project |
 | `DS_ARA_HOME_FAULT` | fault | 1 | the service home is below the user's home, outside the cache folder |
-| `DS_ARA_ROUND_FAULT` | fault | new-only, always, no-deadline, no-late-round, no-page-wait | a round analyses only the new tracks, a request for a complete source starts a full round, a request waits for ever for audio that does not come, or audio that comes after the deadline starts no round; no-page-wait: a round or a removal does not wait for a job of the page: the round fails with its 409 and a failed removal wipes the events of the document |
+| `DS_ARA_ROUND_FAULT` | fault | new-only, always, no-deadline, no-late-round, no-page-wait, request-only, ready-only, read-again | a round analyses only the new tracks, a request for a complete source starts a full round, a request waits for ever for audio that does not come, or audio that comes after the deadline starts no round; request-only: a round starts only on a request of the host (the plugin before M1b4: LUNA never asks, so it got no round); ready-only: a source is queued only when its audio is here, so sources whose audio comes one after the other get a round each; read-again: the read of a source that has its result (one restored from an archive) starts a round; no-page-wait: a round or a removal does not wait for a job of the page: the round fails with its 409 and a failed removal wipes the events of the document |
 | `DS_ARA_SETTLE_FAULT` | fault | none | no settle time: every request is a round |
 | `DS_ARA_CLOSE_FAULT` | fault | wait, nocancel | the destroy of a controller waits for the round, or does not cancel it |
 | `DS_ARA_ID_FAULT` | fault | trust | the plugin trusts the document id and the track names of an archive, and the names of the host sources |
