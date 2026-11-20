@@ -2813,6 +2813,45 @@ def stage_editor_no_request_fault() -> bool:
     return pass_fail("editor-no-request-fault", not good, f"the fault switch gave a round only on a request and the check refused it: {ev}")
 
 
+def state_parts(label: str, rc: int, lines: list) -> tuple[dict, str]:
+    row = next((r for r in lines if r.get("event") == "plugin_state"), {})
+    keys = ["load_own", "load_empty", "load_newer", "load_garbage"]
+    parts = {
+        "has_state": row.get("has_state") is True,
+        "saved": row.get("save_ok") is True and row.get("versioned") is True,
+        "loads": all(row.get(k) is True for k in keys),
+    }
+    return parts, (
+        f"the plugin has clap.state ({row.get('has_state')}); save wrote {row.get('saved_bytes')} bytes with the magic and a version ({row.get('versioned')}); "
+        f"load answered true for its own blob {row.get('load_own')}, an empty stream {row.get('load_empty')}, a newer version {row.get('load_newer')} and garbage {row.get('load_garbage')} (rc={rc})"
+    )
+
+
+def stage_state() -> bool:
+    """M1b4 gate line 10: the plugin has `clap.state`. The CLAP path: the test host saves and loads. The VST3
+    wrapper maps getState and setState to the same two functions; no tool in `.deps` calls them on the VST3
+    alone (pluginval runs a state test only on its own terms), so the two functions have unit tests in the
+    crate (stage `crate`), and clap-validator (stage `validate`) runs its state tests on the CLAP."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("state", False, "no host or no CLAP: run check.sh build first")
+    rc, _text, lines = host_run("state", CLAP, ["state"], "cache-state")
+    parts, evidence = state_parts("state", rc, lines)
+    return pass_fail("state", rc == 0 and all(parts.values()), evidence)
+
+
+def stage_state_fault() -> bool:
+    """The fault run: the load refuses an empty stream, a newer version and garbage (LUNA then fails to make the instance)."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("state-fault", False, "no host or no CLAP: run check.sh build first")
+    rc, _text, lines = host_run("state-fault", CLAP, ["state"], "cache-state-fault", extra={"DS_ARA_STATE_FAULT": "strict"})
+    parts, evidence = state_parts("state-fault", rc, lines)
+    return pass_fail(
+        "state-fault",
+        parts["saved"] and not parts["loads"] and rc != 0,
+        f"the fault switch made the load refuse what it did not write and the check refused it: {evidence}",
+    )
+
+
 # ---- review round 2, item 8: one list of the DS_ARA_* variables
 
 README = HERE / "README.md"
@@ -4191,6 +4230,8 @@ STAGES = {
     "no-request-group-fault": stage_no_request_group_fault,
     "no-request-restored": stage_no_request_restored,
     "no-request-restored-fault": stage_no_request_restored_fault,
+    "state": stage_state,
+    "state-fault": stage_state_fault,
     "editor-no-request": stage_editor_no_request,
     "editor-no-request-fault": stage_editor_no_request_fault,
     "switches": stage_switches,
@@ -4251,7 +4292,7 @@ ORDER = [
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",
     "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault", "doc-late-audio-arrives", "doc-late-audio-arrives-fault",
     "no-request", "no-request-fault", "request-order", "request-order-fault", "no-request-group", "no-request-group-fault",
-    "no-request-restored", "no-request-restored-fault",
+    "no-request-restored", "no-request-restored-fault", "state", "state-fault",
     "editor-open", "editor-fault", "editor-gui", "editor-gui-fault", "editor-shell", "editor-shell-fault",
     "editor-edit", "editor-edit-fault", "editor-threads", "editor-threads-fault",
     "editor-follow", "editor-follow-fault", "editor-refuse", "editor-refuse-fault", "editor-race", "editor-race-fault", "editor-page-copy", "editor-page-copy-fault", "editor-vst3-view", "editor-vst3-view-fault",

@@ -506,6 +506,9 @@ struct Session {
     cache: PathBuf,
     /// Where the report goes (`DS_ARA_OUT`).
     out: Option<PathBuf>,
+    /// One writer of the report file at a time (the worker, and the host's main thread for the
+    /// rows of the editor view).
+    out_lock: Mutex<()>,
     /// The rows of the report (read, notes and job rows, in order).
     rows: Mutex<Vec<String>>,
     /// The last service row (rewritten by every job and by a restore; the last line).
@@ -546,6 +549,7 @@ fn session() -> &'static Session {
             .ok()
             .filter(|s| !s.is_empty())
             .map(PathBuf::from),
+        out_lock: Mutex::new(()),
         rows: Mutex::new(Vec::new()),
         service_row: Mutex::new(None),
         tx: Mutex::new(None),
@@ -710,6 +714,7 @@ impl Session {
     /// never sees half a file (write to a temporary, rename).
     fn write_out(&self) {
         let Some(out) = &self.out else { return };
+        let _one = self.out_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut text = self.rows.lock().map(|r| r.join("\n")).unwrap_or_default();
         if !text.is_empty() {
             text.push('\n');
@@ -775,12 +780,14 @@ impl Session {
         loop {
             // a request that waits for audio has a deadline: the wait for a message ends then
             // (a document that is ready now, for example one with a late source, runs first)
+            self.poll_evidence();
             let got = if !ready_documents(st).is_empty() {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout)
             } else {
                 match wait_left(&st.requested) {
                     Some(left) => rx.recv_timeout(left),
-                    None => rx.recv().map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected),
+                    // the wake of one second lets the worker write the evidence rows of the audio thread
+                    None => rx.recv_timeout(std::time::Duration::from_secs(1)),
                 }
             };
             match got {
@@ -3116,6 +3123,7 @@ unsafe extern "C" fn p_activate(p: *const clap_plugin, sr: f64, _min: u32, _max:
     guard("activate", false, move || {
         let plugin: &Plugin = &*((*p).plugin_data as *mut Plugin);
         *plugin.sample_rate.lock().unwrap_or_else(|e| e.into_inner()) = sr;
+        PROCESS_RATE_BITS.store(sr.to_bits(), Ordering::Relaxed);
         true
     })
 }
@@ -3136,12 +3144,174 @@ unsafe extern "C" fn p_reset(_p: *const clap_plugin) {
 /// The audio thread: pass the first mono pair through (silence without an input), touch
 /// nothing else. The analysis runs on its own threads and is never reached here — except
 /// under the fault switch, which runs it inside `process` on purpose (the overrun proof).
+// ---- the evidence rows (M1b4): what a host sends. They change no behaviour.
+
+/// The time since the first call of this function, in ms.
+fn mono_ms() -> u64 {
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+}
+
+const UNSET: u64 = u64::MAX;
+static SELECTION_LAST: AtomicU64 = AtomicU64::new(UNSET);
+static HIDE_LAST: AtomicU64 = AtomicU64::new(UNSET);
+
+/// True for the first call, and then at most once per `gap_ms` (the rate limit of the rows
+/// that a host may send many times a second).
+fn rate_gate(last: &AtomicU64, now_ms: u64, gap_ms: u64) -> bool {
+    let prev = last.load(Ordering::SeqCst);
+    (prev == UNSET || now_ms.saturating_sub(prev) >= gap_ms)
+        && last
+            .compare_exchange(prev, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+}
+
+/// What the audio thread saw. It only sets atomics here: the row is written by the worker
+/// ([`Session::poll_evidence`]), never on the audio thread. 0: not seen, 1: seen, 2: written.
+static PROCESS_SEEN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+static PROCESS_FRAMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static PROCESS_RATE_BITS: AtomicU64 = AtomicU64::new(0);
+static TRANSPORT_SEEN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+static TRANSPORT_FLAGS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// The position as the host gave it: CLAP seconds in fixed point (2^31 per second).
+static TRANSPORT_SECONDS_BITS: AtomicU64 = AtomicU64::new(0);
+
+/// The audio thread's part of the evidence: a few atomic stores, no lock, no allocation.
+unsafe fn note_process(process: *const clap_process) {
+    let pr = &*process;
+    if PROCESS_SEEN.load(Ordering::Relaxed) == 0 {
+        PROCESS_FRAMES.store(pr.frames_count, Ordering::Relaxed);
+        PROCESS_SEEN.store(1, Ordering::Release);
+    }
+    if TRANSPORT_SEEN.load(Ordering::Relaxed) == 0 && !pr.transport.is_null() {
+        let t = &*pr.transport;
+        TRANSPORT_FLAGS.store(t.flags, Ordering::Relaxed);
+        TRANSPORT_SECONDS_BITS.store(t.song_pos_seconds as u64, Ordering::Relaxed);
+        TRANSPORT_SEEN.store(1, Ordering::Release);
+    }
+}
+
+impl Session {
+    /// Write the rows `process_first` and `transport_seen` once, when the audio thread saw
+    /// them. Called by the worker, never by the audio thread.
+    fn poll_evidence(&self) {
+        use clap_sys::events::*;
+        let mut wrote = false;
+        let writer = format!("{:?}", std::thread::current().id());
+        if PROCESS_SEEN
+            .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.log(
+                json!({
+                    "event": "process_first",
+                    "sample_rate": f64::from_bits(PROCESS_RATE_BITS.load(Ordering::Relaxed)),
+                    "frames": PROCESS_FRAMES.load(Ordering::Relaxed),
+                    "writer_thread": writer,
+                })
+                .to_string(),
+            );
+            wrote = true;
+        }
+        if TRANSPORT_SEEN
+            .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let f = TRANSPORT_FLAGS.load(Ordering::Relaxed);
+            self.log(
+                json!({
+                    "event": "transport_seen",
+                    "has_seconds": f & CLAP_TRANSPORT_HAS_SECONDS_TIMELINE != 0,
+                    "has_beats": f & CLAP_TRANSPORT_HAS_BEATS_TIMELINE != 0,
+                    "has_tempo": f & CLAP_TRANSPORT_HAS_TEMPO != 0,
+                    "is_playing": f & CLAP_TRANSPORT_IS_PLAYING != 0,
+                    "position_seconds": (TRANSPORT_SECONDS_BITS.load(Ordering::Relaxed) as i64) as f64 / 2_147_483_648.0,
+                    "writer_thread": writer,
+                })
+                .to_string(),
+            );
+            wrote = true;
+        }
+        if wrote {
+            self.write_out();
+        }
+    }
+}
+
+// ---- the state extension (M1b4): LUNA asks every plugin for its state when it makes an
+// instance, and logs "loadPreset failed" when the plugin has none. The ARA archive holds the
+// data, so the state is only a small versioned blob.
+
+const STATE_MAGIC: &[u8; 6] = b"DSARA\0";
+const STATE_VERSION: u32 = 1;
+
+fn state_blob() -> Vec<u8> {
+    let mut b = STATE_MAGIC.to_vec();
+    b.extend_from_slice(&STATE_VERSION.to_le_bytes());
+    b
+}
+
+/// Load never fails the host's instance creation: an empty stream, a newer version and
+/// garbage are all accepted and ignored. `DS_ARA_STATE_FAULT=strict` (the check's fault run)
+/// refuses what is not a blob of version 1.
+fn state_accepts(bytes: &[u8]) -> bool {
+    if std::env::var("DS_ARA_STATE_FAULT").as_deref() == Ok("strict") {
+        return bytes == state_blob().as_slice();
+    }
+    true
+}
+
+unsafe extern "C" fn state_save(_p: *const clap_plugin, stream: *const clap_sys::stream::clap_ostream) -> bool {
+    guard("state_save", false, move || {
+        let Some(write) = (*stream).write else { return false };
+        let blob = state_blob();
+        let mut done = 0usize;
+        while done < blob.len() {
+            let n = write(
+                stream,
+                blob[done..].as_ptr() as *const c_void,
+                (blob.len() - done) as u64,
+            );
+            if n <= 0 {
+                return false;
+            }
+            done += n as usize;
+        }
+        true
+    })
+}
+
+unsafe extern "C" fn state_load(_p: *const clap_plugin, stream: *const clap_sys::stream::clap_istream) -> bool {
+    guard("state_load", false, move || {
+        let Some(read) = (*stream).read else {
+            return state_accepts(&[]);
+        };
+        let mut got: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 256];
+        // a bound: no state of this plugin is larger, and a host stream must not hold the thread
+        while got.len() < 65_536 {
+            let n = read(stream, buf.as_mut_ptr() as *mut c_void, buf.len() as u64);
+            if n <= 0 {
+                break;
+            }
+            got.extend_from_slice(&buf[..(n as usize).min(buf.len())]);
+        }
+        state_accepts(&got)
+    })
+}
+
+static STATE_EXT: clap_sys::ext::state::clap_plugin_state = clap_sys::ext::state::clap_plugin_state {
+    save: Some(state_save),
+    load: Some(state_load),
+};
+
 unsafe extern "C" fn p_process(_p: *const clap_plugin, process: *const clap_process) -> clap_process_status {
     guard("process", CLAP_PROCESS_CONTINUE, move || {
         let s = session();
         if s.fault && !s.fault_ran.swap(true, Ordering::SeqCst) {
             s.run_fault_job();
         }
+        note_process(process);
         let pr = &*process;
         let frames = pr.frames_count as usize;
         if pr.audio_outputs_count > 0 {
@@ -3183,6 +3353,9 @@ unsafe extern "C" fn p_get_extension(_p: *const clap_plugin, id: *const c_char) 
         }
         if id == clap_sys::ext::gui::CLAP_EXT_GUI.to_bytes() {
             return &editor::PLUGIN_GUI as *const _ as *const c_void;
+        }
+        if id == clap_sys::ext::state::CLAP_EXT_STATE.to_bytes() {
+            return &STATE_EXT as *const _ as *const c_void;
         }
         std::ptr::null()
     })
@@ -3238,15 +3411,49 @@ static ER_INTERFACE: SyncPtr<ARAEditorRendererInterface> = SyncPtr(ARAEditorRend
     removeRegionSequence: Some(er_removeRegionSequence),
 });
 
-unsafe extern "C" fn ev_notifySelection(_editorViewRef: ARAEditorViewRef, _selection: *const ARAViewSelection) {
-    guard("notifySelection", (), move || {})
+/// The report row of a selection (M1b4, evidence only): the counts of what the host selected
+/// and whether it gave a time range. The first call and then one a second.
+unsafe extern "C" fn ev_notifySelection(_editorViewRef: ARAEditorViewRef, selection: *const ARAViewSelection) {
+    guard("notifySelection", (), move || {
+        if !rate_gate(&SELECTION_LAST, mono_ms(), 1000) {
+            return;
+        }
+        let (mut regions, mut sequences, mut range) = (0usize, 0usize, false);
+        if !selection.is_null() {
+            // the struct of the host must reach the field before the plugin reads it
+            let declared = std::ptr::addr_of!((*selection).structSize).read_unaligned();
+            let end = |off: usize| off + std::mem::size_of::<usize>();
+            if declared >= end(std::mem::offset_of!(ARAViewSelection, playbackRegionRefsCount)) {
+                regions = std::ptr::addr_of!((*selection).playbackRegionRefsCount).read_unaligned();
+            }
+            if declared >= end(std::mem::offset_of!(ARAViewSelection, regionSequenceRefsCount)) {
+                sequences = std::ptr::addr_of!((*selection).regionSequenceRefsCount).read_unaligned();
+            }
+            if declared >= end(std::mem::offset_of!(ARAViewSelection, timeRange)) {
+                range = !std::ptr::addr_of!((*selection).timeRange).read_unaligned().is_null();
+            }
+        }
+        let s = session();
+        s.log(
+            json!({"event": "view_selection", "playback_regions": regions, "region_sequences": sequences, "time_range": range})
+                .to_string(),
+        );
+        s.write_out();
+    })
 }
 unsafe extern "C" fn ev_notifyHideRegionSequences(
     _editorViewRef: ARAEditorViewRef,
-    _regionSequenceRefsCount: ARASize,
+    regionSequenceRefsCount: ARASize,
     _regionSequenceRefs: *const ARARegionSequenceRef,
 ) {
-    guard("notifyHideRegionSequences", (), move || {})
+    guard("notifyHideRegionSequences", (), move || {
+        if !rate_gate(&HIDE_LAST, mono_ms(), 1000) {
+            return;
+        }
+        let s = session();
+        s.log(json!({"event": "view_hide_sequences", "count": regionSequenceRefsCount}).to_string());
+        s.write_out();
+    })
 }
 static EV_INTERFACE: SyncPtr<ARAEditorViewInterface> = SyncPtr(ARAEditorViewInterface {
     structSize: std::mem::size_of::<ARAEditorViewInterface>(),
@@ -3513,6 +3720,67 @@ mod tests {
         start_worker(s);
         assert!(WORKER_RUNNING.load(Ordering::SeqCst));
         assert!(send(s, Msg::Quit));
+    }
+
+    #[test]
+    fn the_selection_rows_are_rate_limited() {
+        let last = AtomicU64::new(UNSET);
+        assert!(rate_gate(&last, 0, 1000), "the first call writes a row");
+        assert!(!rate_gate(&last, 10, 1000));
+        assert!(!rate_gate(&last, 999, 1000));
+        assert!(rate_gate(&last, 1000, 1000), "one row a second");
+        assert!(!rate_gate(&last, 1500, 1000));
+        assert!(rate_gate(&last, 2600, 1000));
+    }
+
+    #[test]
+    fn process_writes_no_row_on_the_audio_thread() {
+        let s = session();
+        let rows_with = |ev: &str| -> usize {
+            s.rows
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| r.contains(&format!("\"event\":\"{ev}\"")))
+                .count()
+        };
+        let before = (rows_with("process_first"), rows_with("transport_seen"));
+        let mut transport: clap_sys::events::clap_event_transport = unsafe { std::mem::zeroed() };
+        transport.flags =
+            clap_sys::events::CLAP_TRANSPORT_HAS_SECONDS_TIMELINE | clap_sys::events::CLAP_TRANSPORT_IS_PLAYING;
+        let mut process: clap_process = unsafe { std::mem::zeroed() };
+        process.frames_count = 64;
+        process.transport = &transport;
+        let audio_thread = format!("{:?}", std::thread::current().id());
+        unsafe { p_process(std::ptr::null(), &process) };
+        // the audio thread wrote no row (the worker of another test may have written it already,
+        // so look at the thread that wrote it, not at the time)
+        let writer = std::thread::spawn(move || {
+            session().poll_evidence();
+            format!("{:?}", std::thread::current().id())
+        })
+        .join()
+        .unwrap();
+        assert_ne!(writer, audio_thread);
+        assert_eq!(
+            (rows_with("process_first"), rows_with("transport_seen")),
+            (before.0 + 1, before.1 + 1)
+        );
+        // a second call writes nothing more
+        unsafe { p_process(std::ptr::null(), &process) };
+        s.poll_evidence();
+        assert_eq!(rows_with("process_first"), before.0 + 1);
+    }
+
+    #[test]
+    fn the_state_saves_a_small_blob_and_loads_anything() {
+        assert_eq!(state_blob().len(), 10);
+        assert!(state_accepts(&state_blob()));
+        assert!(state_accepts(&[]), "an empty stream");
+        let mut newer = STATE_MAGIC.to_vec();
+        newer.extend_from_slice(&99u32.to_le_bytes());
+        assert!(state_accepts(&newer), "an unknown newer version");
+        assert!(state_accepts(b"garbage"));
     }
 
     #[test]

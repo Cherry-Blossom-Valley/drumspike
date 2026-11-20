@@ -182,6 +182,14 @@ only on a request); the stage `no-request` then fails with "no round". The stage
 `no-request`, `request-order`, `no-request-group`, `no-request-restored` and
 `editor-no-request`, each with a fault run.
 
+The plugin has the CLAP extension `clap.state` (LUNA asks for the state of every instance and
+logged "loadPreset failed" without it). The state is a small versioned blob with no project
+data; load accepts an empty stream and a newer version. Stage `state`, with the fault switch
+`DS_ARA_STATE_FAULT=strict`. The VST3 wrapper maps `getState` and `setState` to these two
+functions; no tool in `.deps` calls them on the VST3 alone, so they also have unit tests.
+The report has evidence rows of what the host sends (`view_selection`, `view_hide_sequences`,
+`process_first`, `transport_seen`); the audio thread writes none of them.
+
 ## The check
 
 `plugins/ara/check.sh check` (-> `check.py all`) runs every gate line of the ticket: the
@@ -252,6 +260,7 @@ delivery ticket M1c.
 | `DS_ARA_UNLOAD_FAULT` | fault | skip | the unload of the library does not stop the worker |
 | `DS_ARA_PANIC_TEST` | scenario | reader, worker | the reader thread or the worker thread panics once |
 | `DS_ARA_SCENARIO` | scenario | corrupt-wav:<n>, fail-first-round, slow-setup, audio-deadline-ms:<n> | the WAV of source n is damaged after the read, the first round fails once, every round waits 1.5 s before its analysis starts, or a request waits n ms for audio (default 30000) |
+| `DS_ARA_STATE_FAULT` | fault | strict | the load of the plugin state refuses an empty stream, a newer version and anything else than its own blob (the host's instance creation then fails, as in LUNA) |
 | `DS_ARA_EDITOR_MODE` | scenario | ready, keys, focus, resize, measure, edit, shell, analyse, net, bigpost | the editor page runs a test driver of that name and reports to the plugin (the test host sets it itself) |
 | `DS_ARA_EDITOR_ARG` | scenario | a text | the argument of the test driver of the editor page (a WAV path of the shell mode) |
 | `DS_ARA_EDITOR_FAULT` | fault | no-ready, no-bundle, no-shell, no-sync, no-record, no-notes, no-reload, no-events, drop-edits, drop-track-data, missing-function, allow-track-set, no-focus, no-resize, inline, leak, slow-frames | the editor: the page's ready call is not counted, the plugin finds no page in its bundle, the shell commands are left to the service, a command of the page does not reach the archive or the request thread does not record it before the page's answer (no-record), the notes do not follow an edit, the page is not told that a round ended or gets no event of the service, a round of the plugin drops the hand edits of the page, the shell script of the page finds a function missing (it reports it), a region change drops the hand data of the track (hits, role, mix), the page may change the track set, the web view is not the first responder or does not follow a resize, a command runs on the main thread, every editor leaks 4 MB, or the page draws slow frames |

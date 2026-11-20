@@ -33,6 +33,13 @@ but the plugin does not wait for the question.
   second round for the same audio, in either order ("read, then request" and "request, then
   read").
 
+## Role models
+
+We looked at three ARA plugins that run in LUNA. Auto-Align 2 and DynAssist declare no
+analyzable content types at all. Melodyne declares several. All three analyse on their own when
+the audio is readable. A host need not send an analysis request. This is the reason for the rule
+of this ticket: a plugin that waits for the request works in our test hosts and not in LUNA.
+
 ## What the host sees
 
 - `isAudioSourceContentAnalysisIncomplete` is true from the start of the read until the source
@@ -81,3 +88,33 @@ requests" case in the `conformance` stage.
   The result is the same.
 - A host that enables the samples access of a source but wants no analysis of it still gets one.
   The plugin treats the read as the wish. This is the point of M1b4.
+
+## The plugin state
+
+LUNA asks every plugin for its state when it makes an instance. It logged "loadPreset failed"
+for our plugin, because the plugin had no CLAP state extension (the VST3 wrapper maps `getState`
+and `setState` to it). The plugin now has `clap.state`.
+
+- Save writes a small blob: a magic (`DSARA` and a zero byte) and a version number (1, four
+  bytes). It holds no project data. The ARA archive holds the data.
+- Load accepts its own blob, an empty stream, a blob of a newer version and anything else. It
+  never fails the creation of an instance. It reads at most 64 KiB.
+- The stage `state` runs the test host on the CLAP: save, load, and the three odd streams. The
+  fault run `DS_ARA_STATE_FAULT=strict` refuses them and the stage fails. No tool in `.deps`
+  calls `getState` and `setState` on the VST3 alone, so the two functions also have a unit test,
+  and clap-validator runs its own state tests on the CLAP in the stage `validate`.
+
+## Evidence rows for the next LUNA run
+
+These rows change no behaviour. They tell us what a host sends.
+
+- `view_selection`: the counts of playback regions and region sequences in a selection, and
+  whether the host gave a time range. The first call, then at most one row a second.
+- `view_hide_sequences`: the count of hidden region sequences, same rate limit.
+- `process_first`: the sample rate and the block size of the first process call.
+- `transport_seen`: the flags of the first process call that carries a transport (seconds
+  timeline, beats timeline, tempo, playing) and its position in seconds.
+
+The audio thread writes no row. It sets a few atomics. The worker thread looks at them once a
+second and writes the two rows (the worker wakes up each second for this). Unit tests check the
+rate limit and that the writer of the rows is not the thread that ran `process`.

@@ -12,6 +12,7 @@
 //! ara-host <bundle> restore  ... --no-persistent-id               sources without a persistent ID
 //! ara-host <bundle> blocks   --files <wav>... [--frames N]        the audio-thread check
 //! ara-host <bundle> tables                                        the interface-table walk
+//! ara-host <bundle> state                                         save and load the plugin state (M1b4)
 //! ara-host <bundle> grow     --files <wav>... [--batch N] [--destroy I]
 //!                             the sources arrive in batches of N: each batch is added,
 //!                             analysed and waited for before the next one; then source I
@@ -1185,6 +1186,7 @@ fn main() {
         ),
         "blocks" => run_blocks(bundle, &files, &rest),
         "tables" => run_tables(bundle),
+        "state" => run_state(bundle),
         "grow" => run_grow(bundle, &files, &rest),
         "close-busy" => run_close_busy(bundle, &files, &rest),
         "restore2" => run_restore2(bundle, &files, &rest),
@@ -1804,6 +1806,87 @@ fn run_store(bundle: &str, files: &[String], archive: Option<String>) -> i32 {
             eprintln!("{e}");
             2
         }
+    }
+}
+
+unsafe extern "C" fn state_write(stream: *const clap_sys::stream::clap_ostream, buf: *const c_void, size: u64) -> i64 {
+    let out = &mut *((*stream).ctx as *mut Vec<u8>);
+    out.extend_from_slice(std::slice::from_raw_parts(buf as *const u8, size as usize));
+    size as i64
+}
+
+struct StateIn {
+    bytes: Vec<u8>,
+    at: usize,
+}
+
+unsafe extern "C" fn state_read(stream: *const clap_sys::stream::clap_istream, buf: *mut c_void, size: u64) -> i64 {
+    let input = &mut *((*stream).ctx as *mut StateIn);
+    let n = (input.bytes.len() - input.at).min(size as usize).min(7);
+    std::ptr::copy_nonoverlapping(input.bytes[input.at..].as_ptr(), buf as *mut u8, n);
+    input.at += n;
+    n as i64
+}
+
+/// `state` (M1b4): the host saves the state of the plugin and loads it back, then loads an
+/// empty stream, a blob of a newer version and garbage, as a host does when it makes an
+/// instance. The plugin must accept all of them. Prints one `plugin_state` row; the exit code
+/// is 0 when the plugin has the extension and every call answered true.
+fn run_state(bundle: &str) -> i32 {
+    unsafe {
+        let lib = match load(bundle) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("{e}");
+                return 2;
+            }
+        };
+        let plugin = match clap_plugin_of(&lib) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("{e}");
+                return 2;
+            }
+        };
+        let id = CString::new("clap.state").unwrap();
+        let ext = ((*plugin).get_extension.expect("get_extension"))(plugin, id.as_ptr())
+            as *const clap_sys::ext::state::clap_plugin_state;
+        if ext.is_null() {
+            println!("{{\"event\":\"plugin_state\",\"has_state\":false}}");
+            return 1;
+        }
+        let mut saved: Vec<u8> = Vec::new();
+        let ostream = clap_sys::stream::clap_ostream {
+            ctx: &mut saved as *mut Vec<u8> as *mut c_void,
+            write: Some(state_write),
+        };
+        let save_ok = ((*ext).save.expect("save"))(plugin, &ostream);
+        let load = |bytes: Vec<u8>| -> bool {
+            let mut input = StateIn { bytes, at: 0 };
+            let istream = clap_sys::stream::clap_istream {
+                ctx: &mut input as *mut StateIn as *mut c_void,
+                read: Some(state_read),
+            };
+            ((*ext).load.expect("load"))(plugin, &istream)
+        };
+        let mut newer = saved.clone();
+        if newer.len() >= 4 {
+            let at = newer.len() - 4;
+            newer[at..].copy_from_slice(&99u32.to_le_bytes());
+        }
+        let own = load(saved.clone());
+        let empty = load(Vec::new());
+        let newer_ok = load(newer);
+        let garbage = load(b"not a state of this plugin".to_vec());
+        println!(
+            "{}",
+            serde_json::json!({
+                "event": "plugin_state", "has_state": true, "saved_bytes": saved.len(),
+                "versioned": saved.len() == 10 && saved.starts_with(b"DSARA\0"),
+                "save_ok": save_ok, "load_own": own, "load_empty": empty, "load_newer": newer_ok, "load_garbage": garbage,
+            })
+        );
+        i32::from(!(save_ok && own && empty && newer_ok && garbage))
     }
 }
 
