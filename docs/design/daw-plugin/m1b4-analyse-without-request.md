@@ -98,6 +98,8 @@ Stages `no-request-update` (fault `ignore-update`), `no-request-update-between` 
 | 3. read committed | the new WAV is here, the round is to come | incomplete |
 | 4. read failed for good | no tries left, or the access is off | complete and failed: the old hits stay |
 | 5. analysed on the live generation | a round used the new audio | complete |
+| access off in state 1 or 2 | no reader reports back, no retry runs | goes to state 4: complete and failed, the host is told |
+| a round for another reason in state 1 or 2 | the source is left out of the round | unchanged (it is not marked failed or late) |
 
 A round on the old audio (the service keeps the old snapshot while the new audio is not here) does
 not change the state: it clears neither the new-audio mark nor the failed mark. From state 4 a new

@@ -716,6 +716,45 @@ fn drop_done(st: &mut WorkerState, doc: &Arc<DocShared>) {
     st.requested.retain(|s| !Arc::ptr_eq(&s.doc, doc) || needs_analysis(s));
 }
 
+/// A source with a result that waits for new audio (a content update) and has a read running or
+/// a retry planned: states 1 and 2 of the table in the design note. A round for another reason
+/// leaves it out and does not mark it failed (U2).
+fn waits_for_new_audio(s: &Arc<SourceState>) -> bool {
+    s.reanalyse.load(Ordering::SeqCst)
+        && s.has_events.load(Ordering::SeqCst)
+        && (reader_running(s) || s.read_retry_at.lock().map(|t| t.is_some()).unwrap_or(false))
+}
+
+/// The host is told that the analysis state of a source changed (it is complete now, without a new
+/// result): `notifyAudioSourceContentChanged` goes out inside `notifyModelUpdates`.
+fn tell_host_of_failure(s: &Arc<SourceState>) {
+    if let Ok(mut p) = s.doc.pending.lock() {
+        if !p.iter().any(|x| Arc::ptr_eq(x, s)) {
+            p.push(s.clone());
+        }
+    }
+}
+
+/// The host turned the samples access off. A source that waits for new audio and is not failed yet
+/// (state 1 or 2: no reader reports back any more, no retry will run) goes to state 4: failed for
+/// good, complete for the host, the old hits stay. A later enable starts again at state 1 (U1).
+fn leave_for_access_off(s: &Arc<SourceState>) -> bool {
+    if s.reanalyse.load(Ordering::SeqCst)
+        && !has_wav(s)
+        && !s.analysis_failed.load(Ordering::SeqCst)
+        && !s.removed.load(Ordering::SeqCst)
+    {
+        s.analysis_failed.store(true, Ordering::SeqCst);
+        tell_host_of_failure(s);
+        session().log_deferred(
+            json!({"event": "source_read_failed", "name": s.props().name, "tries": s.read_tries.load(Ordering::SeqCst), "retry": false, "why": "access off"})
+                .to_string(),
+        );
+        return true;
+    }
+    false
+}
+
 /// A round runs although the service sees no change only when a target has new audio to
 /// analyse. A source whose read was cancelled or failed has none: a round for it would
 /// analyse the complete tracks again for nothing (M1b4).
@@ -1166,6 +1205,7 @@ impl Session {
                             Some(std::time::Instant::now() + wait);
                     } else {
                         s.analysis_failed.store(true, Ordering::SeqCst);
+                        tell_host_of_failure(&s);
                     }
                     self.log(
                         json!({"event": "source_read_failed", "name": s.props().name, "tries": tries, "retry": retry})
@@ -1325,6 +1365,11 @@ impl Session {
         // out of the round and named: the result is partial
         let mut late_names: Vec<String> = Vec::new();
         for s in &unread {
+            // U2: a source that waits for new audio (a read runs, or a retry is planned) is left out of
+            // this round and keeps its old result: it is neither failed nor late
+            if waits_for_new_audio(s) {
+                continue;
+            }
             s.analysis_failed.store(true, Ordering::SeqCst);
             if !s.failed.load(Ordering::SeqCst) {
                 late_names.push(s.props().name);
@@ -2565,6 +2610,7 @@ unsafe extern "C" fn dc_enableAudioSourceSamplesAccess(
         } else {
             // no read may run after this call returns
             stop_worker(&src);
+            leave_for_access_off(&src);
         }
     })
 }
@@ -4300,6 +4346,50 @@ mod tests {
         src.access.store(false, Ordering::SeqCst);
         assert!(due_read_retries(std::slice::from_ref(&src)).is_empty());
         assert!(src.read_retry_at.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_round_for_another_reason_leaves_a_source_that_waits_for_new_audio_alone() {
+        let doc = DocShared::new();
+        let a = bare_source(&doc, 0);
+        a.has_events.store(true, Ordering::SeqCst);
+        assert!(!waits_for_new_audio(&a), "no update: not waiting");
+        a.reanalyse.store(true, Ordering::SeqCst);
+        assert!(!waits_for_new_audio(&a), "no read, no retry: the deadline rule applies");
+        // state 2: the read failed, a retry is planned
+        *a.read_retry_at.lock().unwrap() = Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+        assert!(waits_for_new_audio(&a));
+        // state 1: a read runs
+        *a.read_retry_at.lock().unwrap() = None;
+        let running = std::thread::spawn(|| std::thread::sleep(std::time::Duration::from_millis(200)));
+        *a.worker.lock().unwrap() = Some(running);
+        assert!(waits_for_new_audio(&a));
+        a.worker.lock().unwrap().take().unwrap().join().unwrap();
+        assert!(!waits_for_new_audio(&a));
+    }
+
+    #[test]
+    fn access_off_in_state_two_leaves_the_source_failed_not_incomplete_for_ever() {
+        let doc = DocShared::new();
+        let a = bare_source(&doc, 0);
+        a.has_events.store(true, Ordering::SeqCst);
+        a.reanalyse.store(true, Ordering::SeqCst);
+        // state 2: the read failed once and a retry was planned; the host now turns the access off
+        // (the retry time is cleared by the handler first)
+        assert!(leave_for_access_off(&a), "state 2 goes to state 4");
+        assert!(
+            a.analysis_failed.load(Ordering::SeqCst),
+            "complete for the host: the wait ends"
+        );
+        assert_eq!(doc.pending.lock().unwrap().len(), 1, "the host is told");
+        assert!(!leave_for_access_off(&a), "once only");
+        // a source with its audio, or one that is not waiting, is left alone
+        let b = bare_source(&doc, 1);
+        assert!(!leave_for_access_off(&b));
+        let c = bare_source(&doc, 2);
+        c.reanalyse.store(true, Ordering::SeqCst);
+        *c.wav.lock().unwrap() = Some(PathBuf::from("x.wav"));
+        assert!(!leave_for_access_off(&c));
     }
 
     #[test]
