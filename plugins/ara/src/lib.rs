@@ -161,6 +161,10 @@ struct SourceState {
     access: AtomicBool,
     /// WAV files of earlier generations, deleted when the new one is committed.
     old_wavs: Mutex<Vec<PathBuf>>,
+    /// The read of the new audio of a content update failed: when to try it again (the reader is
+    /// made on the host's main thread, so `notifyModelUpdates` does it), and how many tries were made.
+    read_retry_at: Mutex<Option<std::time::Instant>>,
+    read_tries: std::sync::atomic::AtomicU32,
     /// The events of the track are from an earlier round (its last round had an error); the
     /// archive stores the mark and a restore keeps the track "needs analysis".
     stale: AtomicBool,
@@ -176,21 +180,26 @@ impl SourceState {
     /// The snapshot the service job works on.
     fn snapshot(&self) -> service::SourceSnapshot {
         let p = self.props();
+        // R2: the path, the ready mark and the generation of the audio are read under ONE lock;
+        // the content update takes the WAV and raises the generation under the same lock, so a
+        // snapshot never holds the old path with the new generation
+        let (wav, ready, audio_gen) = {
+            let w = self.wav.lock().unwrap_or_else(|e| e.into_inner());
+            let gen = self.audio_gen.load(Ordering::SeqCst);
+            (w.clone(), w.is_some(), gen)
+        };
         service::SourceSnapshot {
             seq: self.seq,
-            name: p.name,
+            name: p.name.clone(),
             persistent_id: p.persistent_id,
             sample_rate: p.sample_rate,
             sample_count: p.sample_count,
             // the WAV of this process; without one (a restored source) the path where the
             // reader will write it, marked not ready
-            wav: self.wav.lock().ok().and_then(|w| w.clone()).unwrap_or_else(|| {
-                self.doc
-                    .wav_path(self.seq, &self.props().name, self.audio_gen.load(Ordering::SeqCst))
-            }),
-            ready: self.wav.lock().map(|w| w.is_some()).unwrap_or(false),
+            wav: wav.unwrap_or_else(|| self.doc.wav_path(self.seq, &p.name, audio_gen)),
+            ready,
             wav_len: self.wav_len.load(Ordering::SeqCst),
-            audio_gen: self.audio_gen.load(Ordering::SeqCst),
+            audio_gen,
             regions: self
                 .regions
                 .lock()
@@ -436,7 +445,7 @@ impl DocShared {
                     .get(&s.seq)
                     .cloned();
                 let (regions, rate) = regions_for_notes(round.as_ref(), (live, s.props().sample_rate));
-                let notes = service::notes_for(&list, &regions, rate);
+                let notes = service::notes_for(&list, &regions, rate, s.props().sample_count);
                 let differs = s.notes.lock().map(|old| *old != notes).unwrap_or(false);
                 if differs {
                     if let Ok(mut old) = s.notes.lock() {
@@ -653,7 +662,9 @@ fn retry_base() -> std::time::Duration {
     let ms = std::env::var("DS_ARA_RETRY_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(2000);
+        .unwrap_or(2000)
+        // clamped: no value of the variable may make the worker wait for hours or overflow
+        .clamp(10, 60_000);
     std::time::Duration::from_millis(ms)
 }
 
@@ -1065,7 +1076,7 @@ impl Session {
                     self.write_out();
                     return;
                 }
-                e.due = Some(now + retry_base() * 2u32.pow(e.tries.min(6)));
+                e.due = Some(now + retry_base().saturating_mul(2u32.pow(e.tries.min(6))));
                 e.tries += 1;
             }
         }
@@ -1114,7 +1125,30 @@ impl Session {
                     st.requested.push(s);
                 }
             }
-            Msg::Failed(_) => {}
+            Msg::Failed(s) => {
+                // R3: the read of the NEW audio of a content update failed. The source has old
+                // hits and no new audio: it shows as complete-without-new-result to the host
+                // (`analysis_failed`), a row names it, and the read is tried again (bounded) while
+                // the host's samples access is on. `DS_ARA_ROUND_FAULT=no-read-retry`: no retry.
+                if s.reanalyse.load(Ordering::SeqCst) && !s.removed.load(Ordering::SeqCst) {
+                    s.analysis_failed.store(true, Ordering::SeqCst);
+                    let tries = s.read_tries.load(Ordering::SeqCst);
+                    let retry = s.access.load(Ordering::SeqCst)
+                        && tries < RETRY_MAX
+                        && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-read-retry");
+                    self.log(
+                        json!({"event": "source_read_failed", "name": s.props().name, "tries": tries, "retry": retry})
+                            .to_string(),
+                    );
+                    if retry {
+                        s.read_tries.store(tries + 1, Ordering::SeqCst);
+                        let wait = retry_base().saturating_mul(2u32.pow(tries.min(6)));
+                        *s.read_retry_at.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(std::time::Instant::now() + wait);
+                    }
+                    self.write_out();
+                }
+            }
             Msg::Reading(s) => {
                 // M1b4: the host reads the audio of a source and may never ask for its analysis
                 // (LUNA). The plugin takes the source as wanted when it has no result, so one
@@ -1174,6 +1208,15 @@ impl Session {
                             tries: tries + 1,
                         });
                         return false;
+                    }
+                }
+                // R4: the files of a destroyed source go (its current WAV and the old generations)
+                if std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("keep-wavs") {
+                    let mut files: Vec<PathBuf> =
+                        std::mem::take(&mut *src.old_wavs.lock().unwrap_or_else(|e| e.into_inner()));
+                    files.extend(src.wav.lock().unwrap_or_else(|e| e.into_inner()).clone());
+                    for f in files {
+                        let _ = std::fs::remove_file(f);
                     }
                 }
                 // the tracks that are left are analysed together again
@@ -1276,7 +1319,7 @@ impl Session {
                 .to_string(),
         );
         self.write_out();
-        let snap_gens: HashMap<usize, u64> = snaps.iter().map(|x| (x.seq, x.audio_gen)).collect();
+        let snap_gens: HashMap<usize, (u64, bool)> = snaps.iter().map(|x| (x.seq, (x.audio_gen, x.ready))).collect();
         let snap_regions: Vec<(usize, Vec<service::RegionRec>, f64)> = snaps
             .iter()
             .map(|x| (x.seq, x.regions.clone(), x.sample_rate))
@@ -1368,7 +1411,13 @@ impl Session {
                 s.stale.store(false, Ordering::SeqCst);
                 // the new samples of a content update are analysed (a newer update, made while the
                 // round ran, keeps the mark)
-                if snap_gens.get(seq) == Some(&s.audio_gen.load(Ordering::SeqCst)) {
+                // R1: only when the round really analysed the audio of the live generation: a snapshot
+                // that was not ready was analysed on the OLD audio (the service keeps the old
+                // snapshot), and the new read has still to come. `DS_ARA_ROUND_FAULT=clear-stale`
+                // brings back the first version: the mark goes whatever the audio was.
+                let live = s.audio_gen.load(Ordering::SeqCst);
+                let fresh = snap_gens.get(seq).is_some_and(|(g, ready)| *g == live && *ready);
+                if fresh || std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("clear-stale") {
                     s.reanalyse.store(false, Ordering::SeqCst);
                 }
             }
@@ -1972,6 +2021,29 @@ unsafe extern "C" fn dc_endEditing(_c: ARADocumentControllerRef) {
 unsafe extern "C" fn dc_notifyModelUpdates(c: ARADocumentControllerRef) {
     guard("notifyModelUpdates", (), move || {
         let ctl = controller_of(c);
+        // R3: a read of new audio that failed is tried again here, on the host's main thread (the
+        // reader is made there); the worker only sets the time
+        let due: Vec<Arc<SourceState>> = ctl
+            .sources
+            .lock()
+            .map(|l| {
+                l.iter()
+                    .filter(|s| {
+                        let mut at = s.read_retry_at.lock().unwrap_or_else(|e| e.into_inner());
+                        let due = at.is_some_and(|t| t <= std::time::Instant::now());
+                        if due {
+                            *at = None;
+                        }
+                        due && s.access.load(Ordering::SeqCst) && !has_wav(s) && !s.removed.load(Ordering::SeqCst)
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        for s in due {
+            stop_worker(&s);
+            start_read(&s);
+        }
         let pending: Vec<Arc<SourceState>> = match ctl.doc.pending.lock() {
             Ok(mut p) => std::mem::take(&mut *p),
             Err(_) => return,
@@ -2079,11 +2151,16 @@ unsafe extern "C" fn dc_updateAudioSourceContent(
         }
         // no read of the old samples may run on: stop it (the reader is made and dropped on this thread)
         stop_worker(&src);
-        let old = src.wav.lock().unwrap_or_else(|e| e.into_inner()).take();
-        if let Some(old) = old {
-            src.old_wavs.lock().unwrap_or_else(|e| e.into_inner()).push(old);
-        }
-        src.audio_gen.fetch_add(1, Ordering::SeqCst);
+        let old = {
+            // under the lock the snapshots read (R2); a restored source has no path of this
+            // process: the file an earlier process left for it goes too (R4)
+            let mut w = src.wav.lock().unwrap_or_else(|e| e.into_inner());
+            let old_gen = src.audio_gen.fetch_add(1, Ordering::SeqCst);
+            w.take()
+                .unwrap_or_else(|| src.doc.wav_path(src.seq, &src.props().name, old_gen))
+        };
+        src.old_wavs.lock().unwrap_or_else(|e| e.into_inner()).push(old);
+        src.read_tries.store(0, Ordering::SeqCst);
         src.failed.store(false, Ordering::SeqCst);
         src.analysis_failed.store(false, Ordering::SeqCst);
         src.reanalyse.store(true, Ordering::SeqCst);
@@ -2328,6 +2405,8 @@ unsafe extern "C" fn dc_createAudioSource(
                 reanalyse: AtomicBool::new(false),
                 access: AtomicBool::new(false),
                 old_wavs: Mutex::new(Vec::new()),
+                read_retry_at: Mutex::new(None),
+                read_tries: std::sync::atomic::AtomicU32::new(0),
                 stale: AtomicBool::new(false),
                 requested_at: Mutex::new(None),
             });
@@ -2563,6 +2642,7 @@ fn read_source(src: Arc<SourceState>, s: &'static Session) {
             ms,
             std::thread::current().id()
         ));
+        src.read_tries.store(0, Ordering::SeqCst);
         // the new generation is committed: the files of the earlier ones can go
         let old: Vec<PathBuf> = std::mem::take(&mut *src.old_wavs.lock().unwrap_or_else(|e| e.into_inner()));
         for p in old.iter().filter(|p| **p != dest) {
@@ -3864,8 +3944,8 @@ mod tests {
         // the same list of events gives the same notes through both paths: a hit at 0.75 s
         // is a note with the round's regions and none with the live ones
         let list = vec![json!({"t": 0.75, "v": 100})];
-        assert_eq!(service::notes_for(&list, &round.0, round.1).len(), 1);
-        assert_eq!(service::notes_for(&list, &[rec(0.0, 0.5)], 48_000.0).len(), 0);
+        assert_eq!(service::notes_for(&list, &round.0, round.1, i64::MAX).len(), 1);
+        assert_eq!(service::notes_for(&list, &[rec(0.0, 0.5)], 48_000.0, i64::MAX).len(), 0);
     }
 
     fn entry(id: &str, name: &str) -> state::ArchiveSource {
@@ -3954,6 +4034,8 @@ mod tests {
             reanalyse: AtomicBool::new(false),
             access: AtomicBool::new(false),
             old_wavs: Mutex::new(Vec::new()),
+            read_retry_at: Mutex::new(None),
+            read_tries: std::sync::atomic::AtomicU32::new(0),
             stale: AtomicBool::new(false),
             requested_at: Mutex::new(None),
         })
@@ -4110,6 +4192,44 @@ mod tests {
         let mut st = WorkerState::default();
         assert!(!session().absorb(Msg::Reading(src.clone()), &mut st));
         assert_eq!(st.requested.len(), 1, "the read of the new audio queues it");
+    }
+
+    #[test]
+    fn a_snapshot_is_never_torn_by_a_content_update() {
+        // the update takes the WAV and raises the generation under the lock the snapshot reads under:
+        // a snapshot that is ready holds the path of ITS generation, never (old path, new generation)
+        let doc = DocShared::new();
+        let src = bare_source(&doc, 0);
+        let path_of = |g: u64| doc.wav_path(0, "", g);
+        *src.wav.lock().unwrap() = Some(path_of(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (src, stop) = (src.clone(), stop.clone());
+            let doc = doc.clone();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    {
+                        let mut w = src.wav.lock().unwrap();
+                        src.audio_gen.fetch_add(1, Ordering::SeqCst);
+                        *w = None; // what the update does
+                    }
+                    let mut w = src.wav.lock().unwrap();
+                    let g = src.audio_gen.load(Ordering::SeqCst);
+                    *w = Some(doc.wav_path(0, "", g)); // what the commit of the new read does
+                }
+            })
+        };
+        for _ in 0..20_000 {
+            let snap = src.snapshot();
+            assert_eq!(
+                snap.wav,
+                path_of(snap.audio_gen),
+                "path and generation belong together (ready: {})",
+                snap.ready
+            );
+        }
+        stop.store(true, Ordering::SeqCst);
+        writer.join().unwrap();
     }
 
     #[test]

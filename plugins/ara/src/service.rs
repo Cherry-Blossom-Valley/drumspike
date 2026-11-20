@@ -959,7 +959,7 @@ impl DocService {
         for (name, seq) in &self.tracks {
             let Some(s) = self.snaps.get(seq) else { continue };
             let list = events.get(name).and_then(Value::as_array).cloned().unwrap_or_default();
-            notes.insert(*seq, notes_for(&list, &s.regions, s.sample_rate));
+            notes.insert(*seq, notes_for(&list, &s.regions, s.sample_rate, s.sample_count));
         }
         notes
     }
@@ -1154,14 +1154,17 @@ pub fn stem_of(name: &str) -> String {
 pub type SyncOutcome = (Option<(Map<String, Value>, HashMap<usize, Vec<[f64; 2]>>)>, bool);
 
 /// The notes of one source from the events of its track: the hits that are not out of the
-/// output (the app's own `policy::is_out`), mapped back into the source.
+/// output (the app's own `policy::is_out`), mapped back into the source; a hit at or after
+/// `sample_count` is left out.
 #[must_use]
-pub fn notes_for(list: &[Value], regions: &[RegionRec], rate: f64) -> Vec<[f64; 2]> {
+pub fn notes_for(list: &[Value], regions: &[RegionRec], rate: f64, sample_count: i64) -> Vec<[f64; 2]> {
     let mut out: Vec<[f64; 2]> = Vec::with_capacity(list.len());
     for ev in list.iter().filter(|e| !drumspike_app::policy::is_out(e)) {
         let t = ev.get("t").and_then(Value::as_f64).unwrap_or(f64::NAN);
         let v = ev.get("v").and_then(Value::as_i64).unwrap_or(100);
-        if let Some(sample) = source_sample(t, regions, rate) {
+        // a hand-placed hit beyond the end of the source (new, shorter audio) stays in the project
+        // but is no note: the host would get a note past the end of the source
+        if let Some(sample) = source_sample(t, regions, rate).filter(|s| sample_count <= 0 || *s < sample_count) {
             out.push([sample as f64, (v.clamp(0, 127) as f64) / 127.0]);
         }
     }
@@ -1682,6 +1685,52 @@ mod tests {
         assert_eq!(on_disk["tracks"]["kick"]["segments"][0]["length"], 2.0);
         // the same snapshot again: nothing changed, no round
         assert!(!doc.analyse(&[kick], false).unwrap().ran);
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_hand_edit_survives_a_content_update_and_the_notes_stop_at_the_new_end() {
+        let cache = scratch("update");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let kick = snapshot_of(&cache, &id, 0, "kick.wav");
+        let first = doc.analyse(std::slice::from_ref(&kick), false).unwrap();
+        let n = first.events["kick"].as_array().unwrap().len();
+        assert!(n >= 3, "the first audio has three hits");
+        let (svc, sid) = (doc.svc.clone().unwrap(), doc.sid.clone().unwrap());
+        // the user moves the last hit to 2.0 s
+        svc.events_edit(&sid, "kick", &[json!({"op": "move", "index": n - 1, "t": 2.0})])
+            .unwrap();
+        // the host gives new audio, shorter (1.25 s) with other hits: generation 1
+        let mut new = kick.clone();
+        new.audio_gen = 1;
+        new.wav = wav_of_gen(&cache, &id, 0, "kick.wav", 1);
+        write_drum_wav(&new.wav, &[0.2, 0.6], 1.25);
+        new.sample_count = 60_000;
+        new.wav_len = std::fs::metadata(&new.wav).map_or(0, |m| m.len());
+        let second = doc.analyse(&[new], false).unwrap();
+        assert!(second.ran, "new audio starts a round");
+        let times: Vec<f64> = second.events["kick"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["t"].as_f64())
+            .collect();
+        assert!(
+            times.iter().any(|t| (t - 2.0).abs() < 1e-9),
+            "the hand-placed hit stays: {times:?}"
+        );
+        assert!(
+            !times.iter().any(|t| (t - 0.9).abs() < 0.05),
+            "a hit of the old audio is gone: {times:?}"
+        );
+        let notes = &second.notes[&0];
+        assert!(!notes.is_empty());
+        assert!(
+            notes.iter().all(|[sample, _]| *sample < 60_000.0),
+            "no note past the end of the new audio: {notes:?}"
+        );
         doc.shutdown();
         let _ = std::fs::remove_dir_all(&cache);
     }

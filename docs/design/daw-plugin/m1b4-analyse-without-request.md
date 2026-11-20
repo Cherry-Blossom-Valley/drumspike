@@ -68,14 +68,27 @@ unchanged" is NOT set (no flags at all means everything changed), the samples ar
 - The round keeps the hits the user placed by hand (the rule of #538: added, moved and edited
   hits stay and win over detected hits within 20 ms). The hits that the detection placed are made
   again from the new audio. Other tracks are analysed again together with it, as in every round.
+- A round that runs before the new samples are read (another source arrives, a retry, a region
+  change) analyses this source on the OLD audio. It does NOT end the new analysis: the mark stays
+  until a round has analysed the audio of the live generation. The snapshot of a source reads its
+  WAV path, its ready mark and its generation under one lock, and the update changes them under
+  the same lock, so a round never sees the old path with the new generation.
+- If the read of the new audio fails, the source is complete without a new result for the host
+  (`analysis_failed`), the report row `source_read_failed` names it, and the plugin reads again
+  while the host's samples access is on: three tries, after the retry waits below. The reader is
+  made on the host's main thread, so the tries run inside `notifyModelUpdates`.
+- The files of the source go away: the old generation when the new one is committed (also the file
+  an earlier process left for a restored source), all of them when the source is destroyed.
+- A hand-placed hit beyond the end of shorter new audio stays in the project, but it is no note
+  for the host (a note past the end of the source would be wrong).
 - A change of the properties only (name, rate, count) follows the rules of before.
 
-Stage `no-request-update` (fault `DS_ARA_ROUND_FAULT=ignore-update`).
+Stages `no-request-update` (fault `ignore-update`), `no-request-update-between` (`clear-stale`), `no-request-update-failed-read` (`no-read-retry`) and `no-request-files` (`keep-wavs`); a unit test proves that a hand edit survives a content update.
 
 ## Retry rule
 
 A failed round is not left until the DAW restarts. The worker tries again by itself, at most three
-times, after 2 s, 4 s and 8 s (`DS_ARA_RETRY_MS` sets the first wait for the check). After the third
+times, after 2 s, 4 s and 8 s (`DS_ARA_RETRY_MS` sets the first wait for the check; it is kept between 10 ms and 60 s). After the third
 retry it writes the row `retry_gave_up` and stops. Anything that changes for the document starts
 the count again: a new source, new audio, a region change, an end of a job of the page, a restore,
 a request of the host. A request still tries at once. A track that fails for ever (a damaged

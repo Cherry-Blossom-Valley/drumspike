@@ -2904,6 +2904,154 @@ def stage_no_request_update_fault() -> bool:
     )
 
 
+BETWEEN_EXTRA = TOM1_FILE
+
+
+def between_parts(label: str, rc: int, ref_new: bytes) -> tuple[dict, str]:
+    jobs = job_rows(label)
+    parts = {
+        "rc": rc == 0,
+        "rounds": len(jobs) == 3,
+        "events_new": len(jobs) >= 1 and jobs[-1].get("events_json", "").encode() == ref_new,
+    }
+    return parts, (
+        f"the host updated the audio of the hat with its samples access off, a new source was analysed meanwhile (a round on the OLD hat), then the access came back: "
+        f"{len(jobs)} round(s) (want 3), events at the end byte for byte the reference of the NEW audio {parts['events_new']}"
+    )
+
+
+def between_run(label: str, env: dict | None = None) -> tuple[int, bytes | None]:
+    ensure_bleed_fixture()
+    new = alt_hat()
+    extra = FIXTURES / BETWEEN_EXTRA
+    ref = reference_alone("m1b4-ref-between", [*FILES[:3], str(new), str(extra)])
+    rc, _text, _lines = host_run(
+        label,
+        CLAP,
+        ["grow", "--files", *fixture_args(FILES), "--batch", str(len(FILES)), "--no-request", "--update-content", f"3:{new}", "--update-add", str(extra), "--wait", PANIC_WAIT],
+        f"cache-{label}",
+        extra=env,
+    )
+    return rc, ref
+
+
+def stage_no_request_update_between() -> bool:
+    """R1: a round that runs before the new audio is read must not mark the source done."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("no-request-update-between", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    rc, ref = between_run("no-request-update-between")
+    if ref is None:
+        return pass_fail("no-request-update-between", False, "the reference failed")
+    parts, evidence = between_parts("no-request-update-between", rc, ref)
+    return pass_fail("no-request-update-between", all(parts.values()), evidence)
+
+
+def stage_no_request_update_between_fault() -> bool:
+    """The fault run: the mark goes after a round on the old audio: the hat keeps its old hits."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("no-request-update-between-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    rc, ref = between_run("no-request-update-between-fault", {"DS_ARA_ROUND_FAULT": "clear-stale"})
+    if ref is None:
+        return pass_fail("no-request-update-between-fault", False, "the reference failed")
+    parts, evidence = between_parts("no-request-update-between-fault", rc, ref)
+    return pass_fail(
+        "no-request-update-between-fault",
+        not parts["events_new"],
+        f"the fault switch cleared the mark after a round on the old audio and the check refused it: {evidence}",
+    )
+
+
+def failed_read_parts(label: str, rc: int, ref_new: bytes) -> tuple[dict, str]:
+    jobs = job_rows(label)
+    failed = event_rows(label, "source_read_failed")
+    parts = {
+        "rc": rc == 0,
+        "named": len(failed) >= 1,
+        # a round may run on the old audio while the read is out (the changed snapshot); the last one has the new audio
+        "events_new": len(jobs) >= 2 and jobs[-1].get("events_json", "").encode() == ref_new,
+    }
+    return parts, (
+        f"the first read of the new audio failed: {len(failed)} source_read_failed row(s) (retry {[r.get('retry') for r in failed]}), {len(jobs)} round(s) (at least 2), "
+        f"events at the end byte for byte the reference of the new audio {parts['events_new']}"
+    )
+
+
+def failed_read_run(label: str, env: dict | None = None) -> tuple[int, bytes | None]:
+    new = alt_hat()
+    ref = reference_alone("m1b4-ref-updated", [*FILES[:3], str(new)])
+    rc, _text, _lines = host_run(
+        label,
+        CLAP,
+        ["grow", "--files", *fixture_args(FILES), "--batch", str(len(FILES)), "--no-request", "--update-content", f"3:{new}", "--update-fail-reads", "1", "--linger-ms", "4000", "--wait", PANIC_WAIT],
+        f"cache-{label}",
+        extra={"DS_ARA_RETRY_MS": "300", **(env or {})},
+    )
+    return rc, ref
+
+
+def stage_no_request_update_failed_read() -> bool:
+    """R3: a failed read of the new audio is named and tried again."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("no-request-update-failed-read", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    rc, ref = failed_read_run("no-request-update-failed-read")
+    if ref is None:
+        return pass_fail("no-request-update-failed-read", False, "the reference failed")
+    parts, evidence = failed_read_parts("no-request-update-failed-read", rc, ref)
+    return pass_fail("no-request-update-failed-read", all(parts.values()), evidence)
+
+
+def stage_no_request_update_failed_read_fault() -> bool:
+    """The fault run: no new try of the read: the old hits stay."""
+    if not HOST.exists() or not CLAP.exists() or not SERVICE_TOOL.exists():
+        return pass_fail("no-request-update-failed-read-fault", False, "no host, no CLAP or no service_tool: run check.sh build first")
+    rc, ref = failed_read_run("no-request-update-failed-read-fault", {"DS_ARA_ROUND_FAULT": "no-read-retry"})
+    if ref is None:
+        return pass_fail("no-request-update-failed-read-fault", False, "the reference failed")
+    parts, evidence = failed_read_parts("no-request-update-failed-read-fault", rc, ref)
+    return pass_fail(
+        "no-request-update-failed-read-fault",
+        not parts["events_new"],
+        f"the fault switch made no new try of the read and the check refused it: {evidence}",
+    )
+
+
+def files_parts(label: str, rc: int) -> tuple[dict, str]:
+    wavs = sorted(p.name for p in (OUT / f"cache-{label}").rglob("*.wav"))
+    parts = {"rc": rc == 0, "live_only": [w[:3] for w in wavs] == ["000", "001", "002"]}
+    return parts, (
+        f"the audio of the hat was updated, its new read kept failing, then the hat was destroyed: WAV files in the cache {wavs} "
+        "(want one for each of the 3 live sources and none for the destroyed one, not even the file of its first audio)"
+    )
+
+
+def files_run(label: str, env: dict | None = None) -> int:
+    rc, _text, _lines = host_run(
+        label,
+        CLAP,
+        ["grow", "--files", *fixture_args(FILES), "--batch", str(len(FILES)), "--no-request", "--update-content", f"3:{alt_hat()}", "--update-fail-reads", "99", "--destroy", "3", "--pump-ms", "1500", "--wait", PANIC_WAIT],
+        f"cache-{label}",
+        extra={"DS_ARA_RETRY_MS": "300", **(env or {})},
+    )
+    return rc
+
+
+def stage_no_request_files() -> bool:
+    """R4: a destroyed source leaves no WAV in the cache (also the file of an earlier generation of its audio)."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("no-request-files", False, "no host or no CLAP: run check.sh build first")
+    parts, evidence = files_parts("no-request-files", files_run("no-request-files"))
+    return pass_fail("no-request-files", all(parts.values()), evidence)
+
+
+def stage_no_request_files_fault() -> bool:
+    """The fault run: the files of a destroyed source stay."""
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("no-request-files-fault", False, "no host or no CLAP: run check.sh build first")
+    rc = files_run("no-request-files-fault", {"DS_ARA_ROUND_FAULT": "keep-wavs"})
+    parts, evidence = files_parts("no-request-files-fault", rc)
+    return pass_fail("no-request-files-fault", rc == 0 and not parts["live_only"], f"the fault switch kept the files and the check refused it: {evidence}")
+
+
 def retry_parts_m2(label: str, rc: int, lines: list, ref: bytes, expect_ok: bool) -> tuple[dict, str]:
     failed = event_rows(label, "job_failed")
     retries = event_rows(label, "retry")
@@ -3042,30 +3190,33 @@ def stage_no_request_cancel_fault() -> bool:
     )
 
 
-def spawn_parts(label: str, rc: int) -> tuple[dict, str]:
+def spawn_parts(label: str, rc: int, text: str) -> tuple[dict, str]:
     late = event_rows(label, "source_late")
-    parts = {"rc": rc == 0, "not_late": len(late) == 0}
+    waited = "did not finish" in text
+    parts = {"rc": rc == 0, "not_late": len(late) == 0, "no_wait": not waited}
     return parts, (
-        f"the reader threads cannot start (rc={rc}; want 0: the host's wait ends within 8 s, not at the 30 s audio deadline), {len(late)} source_late row(s) (want 0)"
+        f"the reader threads cannot start (rc={rc}): the host {'timed out waiting for the analysis' if waited else 'saw the sources complete'} (want: complete within 8 s, "
+        f"not at the 30 s audio deadline), {len(late)} source_late row(s) (want 0)"
     )
 
 
-def spawn_run(label: str, env: dict | None = None) -> int:
-    rc, _text, _lines = host_run(
+def spawn_run(label: str, env: dict | None = None) -> tuple[int, str]:
+    rc, text, _lines = host_run(
         label,
         CLAP,
         ["grow", "--files", *fixture_args(FILES[:2]), "--batch", "2", "--no-request", "--wait", PANIC_WAIT],
         f"cache-{label}",
         extra={"DS_ARA_SCENARIO": "no-reader-thread", **(env or {})},
     )
-    return rc
+    return rc, text
 
 
 def stage_no_request_spawn() -> bool:
     """M3: a reader thread that cannot start ends the read as failed at once (no wait for the audio deadline)."""
     if not HOST.exists() or not CLAP.exists():
         return pass_fail("no-request-spawn", False, "no host or no CLAP: run check.sh build first")
-    parts, evidence = spawn_parts("no-request-spawn", spawn_run("no-request-spawn"))
+    rc, text = spawn_run("no-request-spawn")
+    parts, evidence = spawn_parts("no-request-spawn", rc, text)
     return pass_fail("no-request-spawn", all(parts.values()), evidence)
 
 
@@ -3073,11 +3224,11 @@ def stage_no_request_spawn_fault() -> bool:
     """The fault run: no `Failed` message: the sources wait for the audio deadline and the host times out."""
     if not HOST.exists() or not CLAP.exists():
         return pass_fail("no-request-spawn-fault", False, "no host or no CLAP: run check.sh build first")
-    rc = spawn_run("no-request-spawn-fault", {"DS_ARA_ROUND_FAULT": "no-spawn-failed"})
-    parts, evidence = spawn_parts("no-request-spawn-fault", rc)
+    rc, text = spawn_run("no-request-spawn-fault", {"DS_ARA_ROUND_FAULT": "no-spawn-failed"})
+    parts, evidence = spawn_parts("no-request-spawn-fault", rc, text)
     return pass_fail(
         "no-request-spawn-fault",
-        not parts["rc"],
+        not parts["no_wait"],
         f"the fault switch sent no message for the reader that could not start and the check refused it: {evidence}",
     )
 
@@ -4509,6 +4660,12 @@ STAGES = {
     "no-request-cancel-fault": stage_no_request_cancel_fault,
     "no-request-spawn": stage_no_request_spawn,
     "no-request-spawn-fault": stage_no_request_spawn_fault,
+    "no-request-update-between": stage_no_request_update_between,
+    "no-request-update-between-fault": stage_no_request_update_between_fault,
+    "no-request-update-failed-read": stage_no_request_update_failed_read,
+    "no-request-update-failed-read-fault": stage_no_request_update_failed_read_fault,
+    "no-request-files": stage_no_request_files,
+    "no-request-files-fault": stage_no_request_files_fault,
     "state": stage_state,
     "state-fault": stage_state_fault,
     "editor-no-request": stage_editor_no_request,
@@ -4573,7 +4730,9 @@ ORDER = [
     "no-request", "no-request-fault", "request-order", "request-order-fault", "no-request-group", "no-request-group-fault",
     "no-request-restored", "no-request-restored-fault",
     "no-request-update", "no-request-update-fault", "no-request-retry", "no-request-retry-fault", "no-request-retry-limit", "no-request-retry-limit-fault",
-    "no-request-cancel", "no-request-cancel-fault", "no-request-spawn", "no-request-spawn-fault", "state", "state-fault",
+    "no-request-cancel", "no-request-cancel-fault", "no-request-spawn", "no-request-spawn-fault",
+    "no-request-update-between", "no-request-update-between-fault", "no-request-update-failed-read", "no-request-update-failed-read-fault",
+    "no-request-files", "no-request-files-fault", "state", "state-fault",
     "editor-open", "editor-fault", "editor-gui", "editor-gui-fault", "editor-shell", "editor-shell-fault",
     "editor-edit", "editor-edit-fault", "editor-threads", "editor-threads-fault",
     "editor-follow", "editor-follow-fault", "editor-refuse", "editor-refuse-fault", "editor-race", "editor-race-fault", "editor-page-copy", "editor-page-copy-fault", "editor-vst3-view", "editor-vst3-view-fault",

@@ -34,7 +34,9 @@
 //! `--slow-read <k>:<ms>`: the audio of source k comes ms later than the audio of the others;
 //! `--cancel-read <phase>`: the host turns the access off 100 ms after it turned it on in that
 //! phase; `grow ... --update-content <k>:<wav>`: after the analysis the host replaces the samples
-//! of source k and sends `updateAudioSourceContent`; `grow ... --linger-ms <n>`: the host keeps
+//! of source k and sends `updateAudioSourceContent` (`--update-add <wav>`: with the access of
+//! the source off, and a new source analysed before the access is on again;
+//! `--update-fail-reads <n>`: the first n reads of the new audio fail); `grow ... --linger-ms <n>`: the host keeps
 //! pumping for n ms at the end;
 //! `restore ... --enable-access`: after the restore the host enables the samples access of
 //! every source (no request) and waits 3 s.
@@ -113,6 +115,10 @@ static REQUEST_ORDER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8:
 /// `--slow-read <k>:<ms>` (M1b4): the first read of source k takes ms more, so its audio comes
 /// after the audio of the other sources (the reads run on the plugin's reader threads).
 static SLOW_READ: Mutex<Option<(usize, u64)>> = Mutex::new(None);
+
+/// `--update-fail-reads <n>` (with `--update-content`): the first n reads of the new audio fail
+/// (the host's read call answers false), so the plugin has to read again.
+static FAIL_READS: Mutex<Option<(usize, usize)>> = Mutex::new(None);
 
 /// `--cancel-read <phase>` (M1b4): for the sources enabled in that phase the host turns the
 /// samples access off again 100 ms after it turned it on (the read is cancelled while it runs;
@@ -260,6 +266,14 @@ unsafe extern "C" fn aa_read(
 ) -> ARABool {
     let idx = *(reader as *mut usize);
     if sample_position == 0 {
+        let mut fail = FAIL_READS.lock().unwrap();
+        if let Some((k, left)) = fail.as_mut() {
+            if *k == idx && *left > 0 {
+                *left -= 1;
+                return 0;
+            }
+        }
+        drop(fail);
         let slow = *SLOW_READ.lock().unwrap();
         if let Some((k, ms)) = slow.filter(|(k, _)| *k == idx) {
             let _ = k;
@@ -1597,12 +1611,30 @@ fn run_grow(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     hs.channels = channels;
                 }
                 let dc = iface_of(doc.inst);
+                if let Some(n) = args_value(rest, "--update-fail-reads").and_then(|v| v.parse::<usize>().ok()) {
+                    *FAIL_READS.lock().unwrap() = Some((k, n));
+                }
+                // `--update-add <wav>`: the samples access of the source is off while the host
+                // updates the content; a new source is added and analysed (a round runs while the
+                // new audio of source k is not read); then the access is turned on again
+                let add = args_value(rest, "--update-add");
+                let enable = dc
+                    .enableAudioSourceSamplesAccess
+                    .expect("enableAudioSourceSamplesAccess");
+                if add.is_some() {
+                    enable(dc_ref_of(doc.inst), src, 0);
+                }
                 (dc.updateAudioSourceContent.expect("updateAudioSourceContent"))(
                     dc_ref_of(doc.inst),
                     src,
                     std::ptr::null(),
                     kARAContentUpdateEverythingChanged as ARAContentUpdateFlags,
                 );
+                if let Some(extra) = add {
+                    doc.add_and_analyse(&[extra], "update-add")?;
+                    set_phase("update");
+                    enable(dc_ref_of(doc.inst), src, 1);
+                }
                 let pairs = doc.pairs.clone();
                 wait_for(doc.inst, &pairs)?;
                 doc.print_all_notes("after-update", None);
