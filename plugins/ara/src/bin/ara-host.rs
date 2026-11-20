@@ -32,6 +32,10 @@
 //! `requestAudioSourceContentAnalysis`; `--request-order read-first|request-first`: the
 //! request comes after the audio was read and analysed, or 300 ms before the audio;
 //! `--slow-read <k>:<ms>`: the audio of source k comes ms later than the audio of the others;
+//! `--cancel-read <phase>`: the host turns the access off 100 ms after it turned it on in that
+//! phase; `grow ... --update-content <k>:<wav>`: after the analysis the host replaces the samples
+//! of source k and sends `updateAudioSourceContent`; `grow ... --linger-ms <n>`: the host keeps
+//! pumping for n ms at the end;
 //! `restore ... --enable-access`: after the restore the host enables the samples access of
 //! every source (no request) and waits 3 s.
 //!
@@ -109,6 +113,11 @@ static REQUEST_ORDER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8:
 /// `--slow-read <k>:<ms>` (M1b4): the first read of source k takes ms more, so its audio comes
 /// after the audio of the other sources (the reads run on the plugin's reader threads).
 static SLOW_READ: Mutex<Option<(usize, u64)>> = Mutex::new(None);
+
+/// `--cancel-read <phase>` (M1b4): for the sources enabled in that phase the host turns the
+/// samples access off again 100 ms after it turned it on (the read is cancelled while it runs;
+/// use it with `--slow-read`).
+static CANCEL_READ_PHASE: Mutex<Option<String>> = Mutex::new(None);
 
 /// How long `analyse` waits for the plugin (seconds; `--wait N` changes it, the check gives
 /// the new document modes a short bound so a broken plugin fails fast).
@@ -768,6 +777,16 @@ unsafe fn enable_access(inst: Inst, pairs: &[(ARAAudioSourceRef, ARAAudioModific
                 .expect("enableAudioSourceSamplesAccess"))(dc_ref, *src, 1);
         }
     }
+    let cancel = CANCEL_READ_PHASE.lock().unwrap().clone();
+    if cancel.is_some() && cancel.as_deref() == Some(PHASE.lock().unwrap().as_str()) {
+        std::thread::sleep(Duration::from_millis(100));
+        for (k, (src, _)) in pairs.iter().enumerate() {
+            if k != NO_ACCESS.load(Ordering::SeqCst) {
+                (dc.enableAudioSourceSamplesAccess
+                    .expect("enableAudioSourceSamplesAccess"))(dc_ref, *src, 0);
+            }
+        }
+    }
 }
 
 /// The analysis request for every source of `pairs`.
@@ -1158,6 +1177,9 @@ fn main() {
         Some("read-first") => REQUEST_ORDER.store(1, Ordering::SeqCst),
         Some("request-first") => REQUEST_ORDER.store(2, Ordering::SeqCst),
         _ => {}
+    }
+    if let Some(v) = args_value(&rest, "--cancel-read") {
+        *CANCEL_READ_PHASE.lock().unwrap() = Some(v);
     }
     if let Some(v) = args_value(&rest, "--slow-read") {
         if let Some((k, ms)) = v
@@ -1550,6 +1572,47 @@ fn run_grow(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 }
             }
             doc.print_all_notes("final", None);
+            if let Some(v) = args_value(rest, "--update-content") {
+                // M1b4: the host replaces the samples of source k (the same length and rate, other
+                // content) and tells the plugin: updateAudioSourceContent, everything changed. The
+                // samples access stays on. The host waits until the analysis is complete again.
+                set_phase("update");
+                let (k, path) = v
+                    .split_once(':')
+                    .and_then(|(k, p)| Some((k.parse::<usize>().ok()?, p.to_string())))
+                    .ok_or_else(|| format!("--update-content {v}: want <k>:<wav>"))?;
+                let (rate, channels) = load_wav(&path)?;
+                let src = doc
+                    .pairs
+                    .get(k)
+                    .ok_or_else(|| format!("--update-content {k}: no such source"))?
+                    .0;
+                {
+                    let st = &mut *doc.state;
+                    let hs = st
+                        .sources
+                        .get_mut(k)
+                        .ok_or_else(|| format!("--update-content {k}: no source"))?;
+                    hs.rate = rate;
+                    hs.channels = channels;
+                }
+                let dc = iface_of(doc.inst);
+                (dc.updateAudioSourceContent.expect("updateAudioSourceContent"))(
+                    dc_ref_of(doc.inst),
+                    src,
+                    std::ptr::null(),
+                    kARAContentUpdateEverythingChanged as ARAContentUpdateFlags,
+                );
+                let pairs = doc.pairs.clone();
+                wait_for(doc.inst, &pairs)?;
+                doc.print_all_notes("after-update", None);
+            }
+            if let Some(ms) = args_value(rest, "--linger-ms").and_then(|v| v.parse::<u64>().ok()) {
+                // the host keeps running and pumping (the plugin's own retries happen now)
+                set_phase("linger");
+                pump_for(doc.inst, ms);
+                doc.print_all_notes("after-linger", None);
+            }
             if rest.iter().any(|a| a == "--rerequest") {
                 // the host asks again for sources that are complete (or whose analysis
                 // failed): the plugin starts a round only when something changed

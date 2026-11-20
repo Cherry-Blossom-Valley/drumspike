@@ -51,6 +51,51 @@ of this ticket: a plugin that waits for the request works in our test hosts and 
   is here. As before, it is sent inside `notifyModelUpdates`, never from the worker thread. A
   host that did ask gets the same calls as before.
 
+## New audio: the content update rule
+
+The host may change the samples of a source (the user records again, or the host replaces the
+audio). It tells the plugin with `updateAudioSourceContent`. When the flag "signal scope remains
+unchanged" is NOT set (no flags at all means everything changed), the samples are new:
+
+- The audio of the source gets a new generation. Each generation has its own WAV file
+  (`...g1.wav`, `...g2.wav`). The old file stays until the new one is committed, then it is
+  deleted. A running read of the old samples is stopped first.
+- If the host's samples access is on, the plugin reads the new samples at once. Else it reads
+  them at the next enable.
+- The source needs a round although it has a result. Until that round ends,
+  `isAudioSourceContentAnalysisIncomplete` is true for it, so a host that waits sees the new
+  result. The host is told with `notifyAudioSourceContentChanged` when the notes differ.
+- The round keeps the hits the user placed by hand (the rule of #538: added, moved and edited
+  hits stay and win over detected hits within 20 ms). The hits that the detection placed are made
+  again from the new audio. Other tracks are analysed again together with it, as in every round.
+- A change of the properties only (name, rate, count) follows the rules of before.
+
+Stage `no-request-update` (fault `DS_ARA_ROUND_FAULT=ignore-update`).
+
+## Retry rule
+
+A failed round is not left until the DAW restarts. The worker tries again by itself, at most three
+times, after 2 s, 4 s and 8 s (`DS_ARA_RETRY_MS` sets the first wait for the check). After the third
+retry it writes the row `retry_gave_up` and stops. Anything that changes for the document starts
+the count again: a new source, new audio, a region change, an end of a job of the page, a restore,
+a request of the host. A request still tries at once. A track that fails for ever (a damaged
+file) costs three more rounds, then the plugin leaves it.
+
+Stages `no-request-retry` and `no-request-retry-limit` (faults `no-retry` and `retry-forever`).
+
+## A read that is cancelled or fails
+
+- A round for audio that did not come must not run. A source whose read was cancelled (the host
+  turned the samples access off) or failed has no new audio, so it does not force a round of the
+  complete tracks. The service sees no change and does nothing. Stage `no-request-cancel`
+  (fault `force-failed`).
+- When the reader thread cannot start, the plugin says so at once (`Failed`). The source is not
+  named late and does not wait for the audio deadline. Stage `no-request-spawn` (fault
+  `no-spawn-failed`).
+- A source that was queued by its read and is then restored with its result leaves the queue
+  and is not analysed. A restored source that is marked stale is analysed when its audio is read.
+  Both have unit tests.
+
 ## The editor
 
 The editor opens before the audio is here, and the project of the document is empty. When the
@@ -116,5 +161,8 @@ These rows change no behaviour. They tell us what a host sends.
   timeline, beats timeline, tempo, playing) and its position in seconds.
 
 The audio thread writes no row. It sets a few atomics. The worker thread looks at them once a
-second and writes the two rows (the worker wakes up each second for this). Unit tests check the
+second and writes the two rows (the worker wakes up each second for this). The editor view
+callbacks run on the host's main thread: they only keep the row, and the worker writes the report
+file. A row that the rate limit holds back is not lost: the newest one waits and the worker writes
+it when the second is over. Without a report file the plugin keeps only the last 512 rows. Unit tests check the
 rate limit and that the writer of the rows is not the thread that ran `process`.

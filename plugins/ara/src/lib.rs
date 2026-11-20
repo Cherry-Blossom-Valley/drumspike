@@ -149,6 +149,18 @@ struct SourceState {
     analysis_failed: AtomicBool,
     /// The size of the committed WAV.
     wav_len: AtomicU64,
+    /// The generation of the audio: the host changed the samples (`updateAudioSourceContent`)
+    /// that many times. Each generation has its own WAV file, so the old file stays until the
+    /// new one is committed (M1b4).
+    audio_gen: AtomicU64,
+    /// The samples changed and the new analysis is not done: the source is incomplete for the
+    /// host and needs a round although it has a result (M1b4).
+    reanalyse: AtomicBool,
+    /// The samples access of the host is on (the plugin reads the new samples at once when the
+    /// host updates the content).
+    access: AtomicBool,
+    /// WAV files of earlier generations, deleted when the new one is committed.
+    old_wavs: Mutex<Vec<PathBuf>>,
     /// The events of the track are from an earlier round (its last round had an error); the
     /// archive stores the mark and a restore keeps the track "needs analysis".
     stale: AtomicBool,
@@ -172,14 +184,13 @@ impl SourceState {
             sample_count: p.sample_count,
             // the WAV of this process; without one (a restored source) the path where the
             // reader will write it, marked not ready
-            wav: self
-                .wav
-                .lock()
-                .ok()
-                .and_then(|w| w.clone())
-                .unwrap_or_else(|| self.doc.wav_path(self.seq, &self.props().name)),
+            wav: self.wav.lock().ok().and_then(|w| w.clone()).unwrap_or_else(|| {
+                self.doc
+                    .wav_path(self.seq, &self.props().name, self.audio_gen.load(Ordering::SeqCst))
+            }),
             ready: self.wav.lock().map(|w| w.is_some()).unwrap_or(false),
             wav_len: self.wav_len.load(Ordering::SeqCst),
+            audio_gen: self.audio_gen.load(Ordering::SeqCst),
             regions: self
                 .regions
                 .lock()
@@ -369,8 +380,8 @@ impl DocShared {
     }
 
     /// Where the reader writes the WAV of a source of this document.
-    fn wav_path(&self, seq: usize, name: &str) -> PathBuf {
-        service::wav_of(&self.cache, &self.id(), seq, name)
+    fn wav_path(&self, seq: usize, name: &str, gen: u64) -> PathBuf {
+        service::wav_of_gen(&self.cache, &self.id(), seq, name, gen)
     }
 
     /// The page changed the project (F2): before the request thread answers, the events of every
@@ -559,6 +570,12 @@ fn session() -> &'static Session {
     })
 }
 
+/// The rows kept when no report file is set.
+const RING_ROWS: usize = 512;
+
+/// A row is waiting for the worker to write the report file.
+static ROWS_DIRTY: AtomicBool = AtomicBool::new(false);
+
 /// The analysis rounds run in this process (the report names the number: requests that
 /// arrive close together are one round).
 static ROUNDS: AtomicUsize = AtomicUsize::new(0);
@@ -608,16 +625,79 @@ struct WorkerState {
     /// Documents that need a round without a new request, with the reason (`removal`: a
     /// source was destroyed; `change`: the regions or the properties of a source changed).
     stale: Vec<(Arc<DocShared>, &'static str)>,
+    /// Documents with a failed round that the worker tries again by itself (M2).
+    retry: Vec<RetryEntry>,
     /// The sources of the round that runs now (a panic in the worker ends them as failed,
     /// so the host never waits for ever).
     current: Vec<Arc<SourceState>>,
+}
+
+/// The automatic retry of a failed round (M1b4): a host that never requests would leave a track
+/// without hits until the DAW restarts. The worker tries again `RETRY_MAX` times with a growing wait
+/// (`DS_ARA_RETRY_MS`, default 2000, then double), then writes the row `retry_gave_up` and stops.
+/// Anything that changes for the document (a new source, a region change, an end of a job of the
+/// page, a request) starts the count again.
+/// `DS_ARA_ROUND_FAULT=no-retry` brings back the old way: no retry; `retry-forever` never gives up.
+const RETRY_MAX: u32 = 3;
+
+struct RetryEntry {
+    doc: Arc<DocShared>,
+    /// How many retries were planned.
+    tries: u32,
+    /// When the next retry is due; `None` while it runs or after the plugin gave up.
+    due: Option<std::time::Instant>,
+    gave_up: bool,
+}
+
+fn retry_base() -> std::time::Duration {
+    let ms = std::env::var("DS_ARA_RETRY_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(2000);
+    std::time::Duration::from_millis(ms)
+}
+
+/// The time until the next retry is due.
+fn retry_left(st: &WorkerState) -> Option<std::time::Duration> {
+    st.retry
+        .iter()
+        .filter_map(|e| e.due)
+        .map(|d| d.saturating_duration_since(std::time::Instant::now()))
+        .filter(|d| !d.is_zero())
+        .min()
+}
+
+/// A source whose analysis failed, has its audio here and no read going on: a retry can help.
+fn retryable(s: &Arc<SourceState>) -> bool {
+    !s.removed.load(Ordering::SeqCst)
+        && s.analysis_failed.load(Ordering::SeqCst)
+        && !s.failed.load(Ordering::SeqCst)
+        && has_wav(s)
 }
 
 /// A source whose analysis is still to do: no result yet, or the last round ended without
 /// one. A request for any other source changes nothing and starts no round.
 fn needs_analysis(s: &Arc<SourceState>) -> bool {
     !s.removed.load(Ordering::SeqCst)
-        && (!s.has_events.load(Ordering::SeqCst) || s.analysis_failed.load(Ordering::SeqCst))
+        && (!s.has_events.load(Ordering::SeqCst)
+            || s.analysis_failed.load(Ordering::SeqCst)
+            || s.reanalyse.load(Ordering::SeqCst))
+}
+
+/// Take the sources of `doc` that need no analysis (they have their result) out of the queue.
+fn drop_done(st: &mut WorkerState, doc: &Arc<DocShared>) {
+    st.requested.retain(|s| !Arc::ptr_eq(&s.doc, doc) || needs_analysis(s));
+}
+
+/// A round runs although the service sees no change only when a target has new audio to
+/// analyse. A source whose read was cancelled or failed has none: a round for it would
+/// analyse the complete tracks again for nothing (M1b4).
+/// `DS_ARA_ROUND_FAULT=force-failed` brings back the old rule: any target forces a round.
+fn round_forced(targets: &[Arc<SourceState>]) -> bool {
+    if std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("force-failed") {
+        return !targets.is_empty();
+    }
+    targets.iter().any(has_wav)
 }
 
 /// How long a request waits for the audio of its source before the round goes on without it
@@ -706,8 +786,20 @@ fn ready_documents(st: &WorkerState) -> Vec<(Arc<DocShared>, Vec<Arc<SourceState
 impl Session {
     fn log(&self, line: String) {
         if let Ok(mut rows) = self.rows.lock() {
+            // without a report file nobody reads the rows: keep a small ring, not all of them
+            // for the life of the process (the unit tests read it)
+            if self.out.is_none() && rows.len() >= RING_ROWS {
+                rows.remove(0);
+            }
             rows.push(line);
         }
+    }
+
+    /// A row from a thread that must not write the file (the host's main thread, in the editor
+    /// view callbacks): the row is kept and the worker writes the file at its next wake.
+    fn log_deferred(&self, line: String) {
+        self.log(line);
+        ROWS_DIRTY.store(true, Ordering::SeqCst);
     }
 
     /// Rewrite the report: the rows, the services row, then the last service row. A reader
@@ -781,11 +873,12 @@ impl Session {
             // a request that waits for audio has a deadline: the wait for a message ends then
             // (a document that is ready now, for example one with a late source, runs first)
             self.poll_evidence();
+            self.run_due_retries(st);
             let got = if !ready_documents(st).is_empty() {
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout)
             } else {
-                match wait_left(&st.requested) {
-                    Some(left) => rx.recv_timeout(left),
+                match [wait_left(&st.requested), retry_left(st)].into_iter().flatten().min() {
+                    Some(left) => rx.recv_timeout(left.min(std::time::Duration::from_secs(1))),
                     // the wake of one second lets the worker write the evidence rows of the audio thread
                     None => rx.recv_timeout(std::time::Duration::from_secs(1)),
                 }
@@ -837,7 +930,7 @@ impl Session {
                     };
                     // a source that needs analysis starts a round even when the service sees no
                     // change (a stale track after a restore: its snapshot did not change)
-                    let force = !targets.is_empty();
+                    let force = round_forced(&targets);
                     // S2: a job of the page runs: the round goes back to the queue (a timer
                     // brings it again) and the worker serves the other documents
                     let since = *st
@@ -872,6 +965,7 @@ impl Session {
                     }
                     st.deferred_since.remove(&doc.id());
                     st.current.clear();
+                    self.plan_retry(&doc, st);
                 }
                 settled = false;
             }
@@ -924,9 +1018,81 @@ impl Session {
         {
             return;
         }
+        // a new source, new audio: the count of retries starts again
+        st.retry.retain(|e| !Arc::ptr_eq(&e.doc, &s.doc));
         s.requested.store(true, Ordering::SeqCst);
         *s.requested_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
         st.requested.push(s.clone());
+    }
+
+    /// After a round: plan a retry when a source of the document is left with a failed analysis.
+    fn plan_retry(&self, doc: &Arc<DocShared>, st: &mut WorkerState) {
+        if self.fault
+            || std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-retry")
+            || doc.closing.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        let failed_left = doc
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).any(|s| retryable(&s)))
+            .unwrap_or(false);
+        let at = st.retry.iter().position(|e| Arc::ptr_eq(&e.doc, doc));
+        if !failed_left {
+            if let Some(i) = at {
+                st.retry.remove(i);
+            }
+            return;
+        }
+        let now = std::time::Instant::now();
+        match at {
+            None => st.retry.push(RetryEntry {
+                doc: doc.clone(),
+                tries: 1,
+                due: Some(now + retry_base()),
+                gave_up: false,
+            }),
+            Some(i) => {
+                let e = &mut st.retry[i];
+                if e.gave_up {
+                    return;
+                }
+                if e.tries >= RETRY_MAX && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("retry-forever") {
+                    e.gave_up = true;
+                    e.due = None;
+                    self.log(json!({"event": "retry_gave_up", "doc": doc.id(), "tries": e.tries}).to_string());
+                    self.write_out();
+                    return;
+                }
+                e.due = Some(now + retry_base() * 2u32.pow(e.tries.min(6)));
+                e.tries += 1;
+            }
+        }
+    }
+
+    /// Start the retries that are due: the failed sources go back to the queue.
+    fn run_due_retries(&self, st: &mut WorkerState) {
+        let now = std::time::Instant::now();
+        let mut again: Vec<Arc<SourceState>> = Vec::new();
+        for e in st.retry.iter_mut() {
+            if e.due.is_some_and(|d| d <= now) {
+                e.due = None;
+                if e.doc.closing.load(Ordering::SeqCst) {
+                    continue;
+                }
+                self.log(json!({"event": "retry", "doc": e.doc.id(), "try": e.tries}).to_string());
+                if let Ok(m) = e.doc.members.lock() {
+                    again.extend(m.iter().filter_map(std::sync::Weak::upgrade).filter(retryable));
+                }
+            }
+        }
+        for s in again {
+            if !st.requested.iter().any(|r| Arc::ptr_eq(r, &s)) && !st.current.iter().any(|r| Arc::ptr_eq(r, &s)) {
+                *s.requested_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+                st.requested.push(s);
+            }
+        }
     }
 
     /// Take one message. True for `Msg::Quit`.
@@ -942,6 +1108,7 @@ impl Session {
                 if always && !st.stale.iter().any(|(d, _)| Arc::ptr_eq(d, &s.doc)) {
                     st.stale.push((s.doc.clone(), "removal"));
                 }
+                st.retry.retain(|e| !Arc::ptr_eq(&e.doc, &s.doc)); // a request tries at once, the count starts again
                 if !st.requested.iter().any(|r| Arc::ptr_eq(r, &s)) {
                     *s.requested_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
                     st.requested.push(s);
@@ -985,6 +1152,7 @@ impl Session {
                 tries,
             } => {
                 st.requested.retain(|r| !Arc::ptr_eq(r, &src));
+                st.retry.retain(|e| !Arc::ptr_eq(&e.doc, &src.doc));
                 let busy_fault = std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-page-wait");
                 // M3: a job of the page blocks the removal of a track (the app answers 409). The
                 // worker does not wait for it: the removal comes back to the queue, the events
@@ -1041,13 +1209,24 @@ impl Session {
                 st.deferred_since.insert(doc.id(), since);
             }
             Msg::Touch(doc) => {
+                st.retry.retain(|e| !Arc::ptr_eq(&e.doc, &doc));
                 if !doc.closing.load(Ordering::SeqCst) && !st.stale.iter().any(|(d, _)| Arc::ptr_eq(d, &doc)) {
                     st.stale.push((doc, "change"));
                 }
             }
-            Msg::PageSync(doc) => self.page_sync(&doc),
-            Msg::Restore { doc, id, tracks } => self.restore_project(&doc, id, tracks),
+            Msg::PageSync(doc) => {
+                st.retry.retain(|e| !Arc::ptr_eq(&e.doc, &doc));
+                self.page_sync(&doc);
+            }
+            Msg::Restore { doc, id, tracks } => {
+                st.retry.retain(|e| !Arc::ptr_eq(&e.doc, &doc));
+                self.restore_project(&doc, id, tracks);
+                // a source that was queued by its read before the restore and has its result now
+                // (S3: access, then restore) leaves the queue: it is not analysed
+                drop_done(st, &doc);
+            }
             Msg::Close { doc, ack } => {
+                st.retry.retain(|e| !Arc::ptr_eq(&e.doc, &doc));
                 st.requested.retain(|r| !Arc::ptr_eq(&r.doc, &doc));
                 st.stale.retain(|(d, _)| !Arc::ptr_eq(d, &doc));
                 self.close_document(&doc);
@@ -1097,6 +1276,7 @@ impl Session {
                 .to_string(),
         );
         self.write_out();
+        let snap_gens: HashMap<usize, u64> = snaps.iter().map(|x| (x.seq, x.audio_gen)).collect();
         let snap_regions: Vec<(usize, Vec<service::RegionRec>, f64)> = snaps
             .iter()
             .map(|x| (x.seq, x.regions.clone(), x.sample_rate))
@@ -1186,6 +1366,11 @@ impl Session {
                 s.has_events.store(true, Ordering::SeqCst);
                 s.analysis_failed.store(false, Ordering::SeqCst);
                 s.stale.store(false, Ordering::SeqCst);
+                // the new samples of a content update are analysed (a newer update, made while the
+                // round ran, keeps the mark)
+                if snap_gens.get(seq) == Some(&s.audio_gen.load(Ordering::SeqCst)) {
+                    s.reanalyse.store(false, Ordering::SeqCst);
+                }
             }
             // a complete source whose notes changed, or one that had no result and has one
             // now, is told to the host
@@ -1869,13 +2054,43 @@ unsafe extern "C" fn dc_updateMusicalContextContent(
 unsafe extern "C" fn dc_destroyMusicalContext(_c: ARADocumentControllerRef, _m: ARAMusicalContextRef) {
     guard("destroyMusicalContext", (), move || {})
 }
+/// The host changed the content of a source. When the signal changed (the flag
+/// `kARAContentUpdateSignalScopeRemainsUnchanged` is NOT set; no flags at all means everything)
+/// the samples are new (M1b4): the audio of the source gets a new generation, the old WAV stays
+/// until the new one is committed, the reader reads again at once when the host's samples access
+/// is on (else at the next enable), and the source needs a round although it has a result.
+/// The round keeps the hits the user placed (the rule of #538); the hits the detection placed are
+/// made again from the new audio. `DS_ARA_ROUND_FAULT=ignore-update` brings back the old way: the
+/// update does nothing.
 unsafe extern "C" fn dc_updateAudioSourceContent(
     _c: ARADocumentControllerRef,
-    _s: ARAAudioSourceRef,
+    audioSourceRef: ARAAudioSourceRef,
     _r: *const ARAContentTimeRange,
-    _f: ARAContentUpdateFlags,
+    flags: ARAContentUpdateFlags,
 ) {
-    guard("updateAudioSourceContent", (), move || {})
+    guard("updateAudioSourceContent", (), move || {
+        let Some(src) = state_of(audioSourceRef) else { return };
+        let signal_kept = flags & (kARAContentUpdateSignalScopeRemainsUnchanged as ARAContentUpdateFlags) != 0;
+        if signal_kept
+            || std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("ignore-update")
+            || src.removed.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        // no read of the old samples may run on: stop it (the reader is made and dropped on this thread)
+        stop_worker(&src);
+        let old = src.wav.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(old) = old {
+            src.old_wavs.lock().unwrap_or_else(|e| e.into_inner()).push(old);
+        }
+        src.audio_gen.fetch_add(1, Ordering::SeqCst);
+        src.failed.store(false, Ordering::SeqCst);
+        src.analysis_failed.store(false, Ordering::SeqCst);
+        src.reanalyse.store(true, Ordering::SeqCst);
+        if src.access.load(Ordering::SeqCst) {
+            start_read(&src);
+        }
+    })
 }
 unsafe extern "C" fn dc_deactivateAudioSourceForUndoHistory(
     _c: ARADocumentControllerRef,
@@ -2109,6 +2324,10 @@ unsafe extern "C" fn dc_createAudioSource(
                 asked: AtomicBool::new(false),
                 analysis_failed: AtomicBool::new(false),
                 wav_len: AtomicU64::new(0),
+                audio_gen: AtomicU64::new(0),
+                reanalyse: AtomicBool::new(false),
+                access: AtomicBool::new(false),
+                old_wavs: Mutex::new(Vec::new()),
                 stale: AtomicBool::new(false),
                 requested_at: Mutex::new(None),
             });
@@ -2226,6 +2445,7 @@ unsafe extern "C" fn dc_enableAudioSourceSamplesAccess(
 ) {
     guard("enableAudioSourceSamplesAccess", (), move || {
         let Some(src) = state_of(audioSourceRef) else { return };
+        src.access.store(enable != 0, Ordering::SeqCst);
         if enable != 0 {
             // the reader is created on the host's main thread; the reads run on the worker
             start_read(&src);
@@ -2274,9 +2494,20 @@ unsafe fn start_read(src: &Arc<SourceState>) {
     // audio is here
     send(s, Msg::Reading(src.clone()));
     let worker_src = src.clone();
-    let spawned = std::thread::Builder::new()
-        .name(format!("drumspike-ara-read-{}", src.seq))
-        .spawn(move || read_source(worker_src, s));
+    // `DS_ARA_SCENARIO=no-reader-thread`: the reader thread cannot be made
+    let spawned = if std::env::var("DS_ARA_SCENARIO").as_deref() == Ok("no-reader-thread") {
+        Err(std::io::Error::other("test: no reader thread"))
+    } else {
+        std::thread::Builder::new()
+            .name(format!("drumspike-ara-read-{}", src.seq))
+            .spawn(move || read_source(worker_src, s))
+    };
+    if spawned.is_err() && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-spawn-failed") {
+        // neither `Ready` nor `Failed` would follow: the source would wait for its audio until the
+        // deadline and be named late. The read failed: say so at once.
+        src.failed.store(true, Ordering::SeqCst);
+        send(s, Msg::Failed(src.clone()));
+    }
     if let Ok(mut w) = src.worker.lock() {
         *w = spawned.ok();
     }
@@ -2297,7 +2528,8 @@ fn read_source(src: Arc<SourceState>, s: &'static Session) {
     let started = std::time::Instant::now();
     let props = src.props();
     let (count, rate, ch) = (props.sample_count, props.sample_rate, props.channels.max(1) as usize);
-    let dest = src.doc.wav_path(src.seq, &props.name);
+    let gen = src.audio_gen.load(Ordering::SeqCst);
+    let dest = src.doc.wav_path(src.seq, &props.name, gen);
     let body_src = src.clone();
     let body_dest = dest.clone();
     let unguarded = std::env::var("DS_ARA_GUARD_FAULT").as_deref() == Ok("off");
@@ -2331,6 +2563,11 @@ fn read_source(src: Arc<SourceState>, s: &'static Session) {
             ms,
             std::thread::current().id()
         ));
+        // the new generation is committed: the files of the earlier ones can go
+        let old: Vec<PathBuf> = std::mem::take(&mut *src.old_wavs.lock().unwrap_or_else(|e| e.into_inner()));
+        for p in old.iter().filter(|p| **p != dest) {
+            let _ = std::fs::remove_file(p);
+        }
         corrupt_for_scenario(&src, &dest);
         send(s, Msg::Ready(src));
     } else {
@@ -2453,7 +2690,11 @@ unsafe extern "C" fn dc_isAudioSourceContentAnalysisIncomplete(
         // incomplete until the source has a result or its analysis ended without one (a failed
         // round, a track the service could not analyse): the host never waits for ever, and a
         // new request tries again
-        (!(src.has_events.load(Ordering::SeqCst) || src.analysis_failed.load(Ordering::SeqCst))) as ARABool
+        let failed = src.analysis_failed.load(Ordering::SeqCst);
+        // new samples (a content update) make a source with a result incomplete again
+        let pending =
+            !(src.has_events.load(Ordering::SeqCst) || failed) || (src.reanalyse.load(Ordering::SeqCst) && !failed);
+        pending as ARABool
     })
 }
 
@@ -2853,7 +3094,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                         let mut snapshot = src.snapshot();
                         if snapshot.wav.as_os_str().is_empty() {
                             // where the reader would write it: nothing is decoded now
-                            snapshot.wav = ctl.doc.wav_path(src.seq, &p.name);
+                            snapshot.wav = ctl.doc.wav_path(src.seq, &p.name, 0);
                         }
                         restored.push(service::RestoredTrack {
                             snapshot,
@@ -3149,8 +3390,6 @@ fn mono_ms() -> u64 {
 }
 
 const UNSET: u64 = u64::MAX;
-static SELECTION_LAST: AtomicU64 = AtomicU64::new(UNSET);
-static HIDE_LAST: AtomicU64 = AtomicU64::new(UNSET);
 
 /// True for the first call, and then at most once per `gap_ms` (the rate limit of the rows
 /// that a host may send many times a second).
@@ -3161,6 +3400,47 @@ fn rate_gate(last: &AtomicU64, now_ms: u64, gap_ms: u64) -> bool {
             .compare_exchange(prev, now_ms, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
 }
+
+/// The rows of one kind of host call, one a second at most. A row that the limit holds back is
+/// not lost: the newest one waits and the worker writes it when the second is over.
+struct RateRows {
+    last: AtomicU64,
+    pending: Mutex<Option<String>>,
+}
+
+impl RateRows {
+    const fn new() -> Self {
+        RateRows {
+            last: AtomicU64::new(UNSET),
+            pending: Mutex::new(None),
+        }
+    }
+
+    /// The row to write now, or `None` when it must wait (the newest waiting row is kept).
+    fn offer(&self, row: String, now_ms: u64, gap_ms: u64) -> Option<String> {
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        if rate_gate(&self.last, now_ms, gap_ms) {
+            *pending = None;
+            Some(row)
+        } else {
+            *pending = Some(row);
+            None
+        }
+    }
+
+    /// The waiting row, when the second is over.
+    fn flush(&self, now_ms: u64, gap_ms: u64) -> Option<String> {
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        if pending.is_some() && rate_gate(&self.last, now_ms, gap_ms) {
+            pending.take()
+        } else {
+            None
+        }
+    }
+}
+
+static SELECTION_ROWS: RateRows = RateRows::new();
+static HIDE_ROWS: RateRows = RateRows::new();
 
 /// What the audio thread saw. It only sets atomics here: the row is written by the worker
 /// ([`Session::poll_evidence`]), never on the audio thread. 0: not seen, 1: seen, 2: written.
@@ -3228,7 +3508,15 @@ impl Session {
             );
             wrote = true;
         }
-        if wrote {
+        // the rows that the rate limit held back, and the rows the host's main thread left
+        for pending in [SELECTION_ROWS.flush(mono_ms(), 1000), HIDE_ROWS.flush(mono_ms(), 1000)]
+            .into_iter()
+            .flatten()
+        {
+            self.log(pending);
+            wrote = true;
+        }
+        if ROWS_DIRTY.swap(false, Ordering::SeqCst) || wrote {
             self.write_out();
         }
     }
@@ -3411,12 +3699,10 @@ static ER_INTERFACE: SyncPtr<ARAEditorRendererInterface> = SyncPtr(ARAEditorRend
 });
 
 /// The report row of a selection (M1b4, evidence only): the counts of what the host selected
-/// and whether it gave a time range. The first call and then one a second.
+/// and whether it gave a time range. The first call and then one a second; a row the limit holds
+/// back waits for the worker (the newest one is kept).
 unsafe extern "C" fn ev_notifySelection(_editorViewRef: ARAEditorViewRef, selection: *const ARAViewSelection) {
     guard("notifySelection", (), move || {
-        if !rate_gate(&SELECTION_LAST, mono_ms(), 1000) {
-            return;
-        }
         let (mut regions, mut sequences, mut range) = (0usize, 0usize, false);
         if !selection.is_null() {
             // the struct of the host must reach the field before the plugin reads it
@@ -3432,12 +3718,12 @@ unsafe extern "C" fn ev_notifySelection(_editorViewRef: ARAEditorViewRef, select
                 range = !std::ptr::addr_of!((*selection).timeRange).read_unaligned().is_null();
             }
         }
-        let s = session();
-        s.log(
-            json!({"event": "view_selection", "playback_regions": regions, "region_sequences": sequences, "time_range": range})
-                .to_string(),
-        );
-        s.write_out();
+        let row = json!({"event": "view_selection", "playback_regions": regions, "region_sequences": sequences, "time_range": range})
+            .to_string();
+        // the callback only keeps the row; the worker writes the file (S1)
+        if let Some(row) = SELECTION_ROWS.offer(row, mono_ms(), 1000) {
+            session().log_deferred(row);
+        }
     })
 }
 unsafe extern "C" fn ev_notifyHideRegionSequences(
@@ -3446,12 +3732,10 @@ unsafe extern "C" fn ev_notifyHideRegionSequences(
     _regionSequenceRefs: *const ARARegionSequenceRef,
 ) {
     guard("notifyHideRegionSequences", (), move || {
-        if !rate_gate(&HIDE_LAST, mono_ms(), 1000) {
-            return;
+        let row = json!({"event": "view_hide_sequences", "count": regionSequenceRefsCount}).to_string();
+        if let Some(row) = HIDE_ROWS.offer(row, mono_ms(), 1000) {
+            session().log_deferred(row);
         }
-        let s = session();
-        s.log(json!({"event": "view_hide_sequences", "count": regionSequenceRefsCount}).to_string());
-        s.write_out();
     })
 }
 static EV_INTERFACE: SyncPtr<ARAEditorViewInterface> = SyncPtr(ARAEditorViewInterface {
@@ -3666,6 +3950,10 @@ mod tests {
             asked: AtomicBool::new(false),
             analysis_failed: AtomicBool::new(false),
             wav_len: AtomicU64::new(0),
+            audio_gen: AtomicU64::new(0),
+            reanalyse: AtomicBool::new(false),
+            access: AtomicBool::new(false),
+            old_wavs: Mutex::new(Vec::new()),
             stale: AtomicBool::new(false),
             requested_at: Mutex::new(None),
         })
@@ -3721,6 +4009,9 @@ mod tests {
         assert!(send(s, Msg::Quit));
     }
 
+    /// Held by every test that calls `p_process` (it sets process-global flags).
+    static EVIDENCE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn the_selection_rows_are_rate_limited() {
         let last = AtomicU64::new(UNSET);
@@ -3733,7 +4024,141 @@ mod tests {
     }
 
     #[test]
+    fn the_newest_row_of_a_burst_is_not_lost() {
+        let rows = RateRows::new();
+        assert_eq!(rows.offer("a".into(), 0, 1000).as_deref(), Some("a"));
+        assert_eq!(rows.offer("b".into(), 100, 1000), None);
+        assert_eq!(rows.offer("c".into(), 200, 1000), None, "held back");
+        assert_eq!(rows.flush(500, 1000), None, "the second is not over");
+        assert_eq!(
+            rows.flush(1000, 1000).as_deref(),
+            Some("c"),
+            "the newest one is written when it is"
+        );
+        assert_eq!(rows.flush(3000, 1000), None, "nothing waits any more");
+        assert_eq!(rows.offer("d".into(), 3100, 1000).as_deref(), Some("d"));
+    }
+
+    #[test]
+    fn without_a_report_file_the_rows_are_a_small_ring() {
+        let s = session();
+        if s.out.is_some() {
+            return; // a run with a report file keeps every row on purpose
+        }
+        for i in 0..(RING_ROWS * 2) {
+            s.log(format!("{{\"event\":\"ring_test\",\"i\":{i}}}"));
+        }
+        assert!(s.rows.lock().unwrap().len() <= RING_ROWS);
+    }
+
+    #[test]
+    fn a_round_for_a_cancelled_read_is_not_forced() {
+        let doc = DocShared::new();
+        let cancelled = bare_source(&doc, 0);
+        cancelled.failed.store(true, Ordering::SeqCst);
+        assert!(
+            !round_forced(std::slice::from_ref(&cancelled)),
+            "no new audio: no forced round"
+        );
+        assert!(!round_forced(&[]));
+        *cancelled.wav.lock().unwrap() = Some(PathBuf::from("x.wav"));
+        assert!(round_forced(&[cancelled]), "a source with audio forces the round");
+    }
+
+    #[test]
+    fn a_source_queued_by_its_read_and_then_restored_leaves_the_queue() {
+        let doc = DocShared::new();
+        let src = bare_source(&doc, 0);
+        let mut st = WorkerState::default();
+        assert!(!session().absorb(Msg::Reading(src.clone()), &mut st));
+        assert_eq!(st.requested.len(), 1, "the read queued it");
+        // the restore gives it its result (what restore_objects does)
+        src.has_events.store(true, Ordering::SeqCst);
+        drop_done(&mut st, &doc);
+        assert!(
+            st.requested.is_empty(),
+            "a restored source with a result is not analysed"
+        );
+        // its read ends later: still not queued
+        assert!(!session().absorb(Msg::Ready(src.clone()), &mut st));
+        assert!(st.requested.is_empty());
+    }
+
+    #[test]
+    fn a_restored_stale_source_is_analysed_again_when_its_audio_is_read() {
+        let doc = DocShared::new();
+        let src = bare_source(&doc, 0);
+        src.requested.store(false, Ordering::SeqCst);
+        // what a restore of a stale track sets
+        src.has_events.store(true, Ordering::SeqCst);
+        src.stale.store(true, Ordering::SeqCst);
+        src.analysis_failed.store(true, Ordering::SeqCst);
+        let mut st = WorkerState::default();
+        assert!(!session().absorb(Msg::Ready(src.clone()), &mut st));
+        assert_eq!(st.requested.len(), 1, "no request needed");
+        assert!(needs_analysis(&src));
+    }
+
+    #[test]
+    fn new_samples_make_a_source_with_a_result_need_a_round_until_it_is_done() {
+        let doc = DocShared::new();
+        let src = bare_source(&doc, 0);
+        src.has_events.store(true, Ordering::SeqCst);
+        assert!(!needs_analysis(&src));
+        src.reanalyse.store(true, Ordering::SeqCst);
+        assert!(needs_analysis(&src), "the content update marked it");
+        let mut st = WorkerState::default();
+        assert!(!session().absorb(Msg::Reading(src.clone()), &mut st));
+        assert_eq!(st.requested.len(), 1, "the read of the new audio queues it");
+    }
+
+    #[test]
+    fn a_failed_round_is_retried_three_times_then_the_plugin_gives_up() {
+        let doc = DocShared::new();
+        let src = bare_source(&doc, 0);
+        *src.wav.lock().unwrap() = Some(PathBuf::from("x.wav"));
+        src.analysis_failed.store(true, Ordering::SeqCst);
+        doc.members.lock().unwrap().push(Arc::downgrade(&src));
+        let s = session();
+        let mut st = WorkerState::default();
+        s.plan_retry(&doc, &mut st);
+        assert_eq!(
+            (st.retry.len(), st.retry[0].tries),
+            (1, 1),
+            "the first retry is planned"
+        );
+        for want in [2, 3] {
+            st.retry[0].due = None; // the retry ran and failed again
+            s.plan_retry(&doc, &mut st);
+            assert_eq!(st.retry[0].tries, want);
+            assert!(st.retry[0].due.is_some());
+        }
+        st.retry[0].due = None;
+        s.plan_retry(&doc, &mut st);
+        assert!(
+            st.retry[0].gave_up && st.retry[0].due.is_none(),
+            "after three tries: stop"
+        );
+        // a retry that works ends the count
+        src.analysis_failed.store(false, Ordering::SeqCst);
+        st.retry[0].gave_up = false;
+        s.plan_retry(&doc, &mut st);
+        assert!(st.retry.is_empty());
+        // anything that changes for the document starts the count again
+        src.analysis_failed.store(true, Ordering::SeqCst);
+        s.plan_retry(&doc, &mut st);
+        assert_eq!(st.retry.len(), 1);
+        assert!(!s.absorb(Msg::Touch(doc.clone()), &mut st));
+        assert!(st.retry.is_empty(), "a change of the document resets the retry count");
+    }
+
+    #[test]
     fn process_writes_no_row_on_the_audio_thread() {
+        // the evidence flags are process-global: one test at a time may call `process`
+        let _one = EVIDENCE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for flag in [&PROCESS_SEEN, &TRANSPORT_SEEN] {
+            flag.store(0, Ordering::SeqCst);
+        }
         let s = session();
         let rows_with = |ev: &str| -> usize {
             s.rows

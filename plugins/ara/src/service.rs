@@ -104,7 +104,15 @@ pub fn audio_dir_of(cache: &Path, id: &str) -> PathBuf {
 /// The cached WAV of one source: `<seq>-<stem>.wav` in the audio folder of the document.
 #[must_use]
 pub fn wav_of(cache: &Path, id: &str, seq: usize, name: &str) -> PathBuf {
-    audio_dir_of(cache, id).join(format!("{seq:03}-{}.wav", stem_of(name)))
+    wav_of_gen(cache, id, seq, name, 0)
+}
+
+/// The WAV of one generation of the audio of a source: generation 0 is the first read, each
+/// content update of the host makes a new one (the old file stays until the new one is committed).
+#[must_use]
+pub fn wav_of_gen(cache: &Path, id: &str, seq: usize, name: &str, gen: u64) -> PathBuf {
+    let tag = if gen == 0 { String::new() } else { format!(".g{gen}") };
+    audio_dir_of(cache, id).join(format!("{seq:03}-{}{tag}.wav", stem_of(name)))
 }
 
 /// A new document id: 64 random bits as hex (the plugin makes it once per document; the
@@ -160,18 +168,22 @@ pub struct SourceSnapshot {
     /// The size the committed WAV must have (header and samples); a file of another size is
     /// not the one the reader wrote.
     pub wav_len: u64,
+    /// The generation of the audio (a content update of the host makes a new one).
+    pub audio_gen: u64,
     /// The playback regions of the source.
     pub regions: Vec<RegionRec>,
 }
 
 impl SourceSnapshot {
-    /// The same source with the same regions and properties (the WAV is not compared).
+    /// The same source with the same regions, properties and generation of the audio (the WAV
+    /// file is not compared).
     #[must_use]
     pub fn same_as(&self, other: &SourceSnapshot) -> bool {
         self.name == other.name
             && self.persistent_id == other.persistent_id
             && self.sample_rate == other.sample_rate
             && self.sample_count == other.sample_count
+            && self.audio_gen == other.audio_gen
             && self.same_regions(other)
     }
 
@@ -311,6 +323,8 @@ pub struct DocService {
     dirty: bool,
     /// The test round that fails once (`DS_ARA_SCENARIO=fail-first-round`) has failed.
     failed_once: bool,
+    /// How many rounds `DS_ARA_SCENARIO=fail-rounds:<n>` has failed.
+    failed_rounds: usize,
     canceller: Canceller,
     /// The editor's way to the service (see [`PageHandle`]).
     page: std::sync::Arc<PageHandle>,
@@ -487,6 +501,7 @@ impl DocService {
             snaps: HashMap::new(),
             dirty: false,
             failed_once: false,
+            failed_rounds: 0,
             canceller: Canceller::default(),
             page,
             fail_restores: 0,
@@ -775,6 +790,15 @@ impl DocService {
         if switch("DS_ARA_SCENARIO").as_deref() == Some("fail-first-round") && !self.failed_once {
             self.failed_once = true;
             return Err("test: the round fails once".into());
+        }
+        // `fail-rounds:<n>`: the first n rounds fail (the automatic retry of the plugin)
+        if let Some(n) =
+            switch("DS_ARA_SCENARIO").and_then(|v| v.strip_prefix("fail-rounds:").and_then(|n| n.parse::<usize>().ok()))
+        {
+            if self.failed_rounds < n {
+                self.failed_rounds += 1;
+                return Err(format!("test: round {} of {n} fails", self.failed_rounds));
+            }
         }
         // the tracks of the round: every track whose audio is here (the fault run brings
         // back the M1a way: the new tracks only)
@@ -1238,6 +1262,7 @@ mod tests {
             wav_len: std::fs::metadata(&wav).map_or(0, |m| m.len()),
             wav,
             ready: true,
+            audio_gen: 0,
             regions: Vec::new(),
         }
     }
