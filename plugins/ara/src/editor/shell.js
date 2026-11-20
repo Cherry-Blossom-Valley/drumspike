@@ -207,8 +207,10 @@
   }
   // after a reload of the project the page may have lost the position: the last message goes again
   listeners["plugin-reload"].push(function () {
+    var seen = tstate.delivered;
     setTimeout(function () {
       var m = tstate.last;
+      if (tstate.delivered !== seen) return;   // a newer message came in: it is the truth, no re-send
       if (m && !m.playing) deliverTransport({ epoch: m.epoch, t_ns: m.t_ns, pos: m.pos, playing: false });
     }, 1500);
   });

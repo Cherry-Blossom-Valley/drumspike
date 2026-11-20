@@ -51,8 +51,17 @@ The slot is a **sequence lock** made of atomics (`src/transport.rs`):
   frame count, the sample rate and the time of the call, and makes the counter even. Half of the
   counter is the generation of the transport.
 - Several plugin instances of one host may call `process` at the same time, each on its own audio
-  thread. A writer that finds the lock taken skips its store: the other writer stores the same
-  host transport. No writer ever waits.
+  thread. One instance owns the slot (the address of its plugin object is the owner). Another
+  instance stores only when the owner has made no call for the stale time (see below), so two
+  instances at different positions never alternate: the page sees the owner. A writer that finds
+  the lock taken skips its store. No writer ever waits. The sample rate is stored with each write,
+  so it stays with the owner.
+- A call with a transport but without a seconds timeline stores its play state and no position
+  (`has_position` false). The reader then does not trust the older position: it sends nothing and
+  the report gets one row `transport_no_position` with the flags. The plugin does not compute a
+  position from beats and tempo.
+- `deactivate` and `reset` of the owner clear the slot, so a new editor does not move the playhead
+  to the position of an earlier session. The next process call fills it again.
 - The reader (the request thread of the editor) reads the counter, the fields, and the counter
   again. It throws away a read where the counter changed or was odd. It never blocks the audio
   thread.
@@ -81,7 +90,12 @@ offset to its own clock from the fastest message, so the clocks need not agree.
 
 ### The update rate
 
-The request thread looks at the slot every 8 ms. The `Pacer` decides:
+The request thread looks at the slot every 8 ms while the host plays. While the host is stopped
+and nothing changed it does no work and waits 50 ms (it reads atomics only; no call of the audio
+thread can wake it). The list of regions is fetched only when a look needs it, at most every
+200 ms: 0 fetches in 2 s of a stopped host (bound 2 in the unit test
+`a_stopped_host_costs_no_region_fetch_and_a_playing_one_at_most_five_a_second`), 5 a second while
+the host plays. The `Pacer` decides:
 
 | Case | Message |
 | --- | --- |
@@ -91,10 +105,13 @@ The request thread looks at the slot every 8 ms. The `Pacer` decides:
 | The host plays | one every 40 ms (25 a second), the same epoch |
 | The host is stopped and nothing changed | none |
 
-A jump is a difference of more than 18 ms between the position of the message and the position
-that the last message predicts. The page slews errors up to 20 ms and ignores larger ones, unless
-the epoch is new (then it anchors again). So 18 ms is the limit where the plugin asks for the
-hard anchor.
+A jump is a difference between the position of the message and the position that the last message
+predicts, of more than 18 ms or 1.5 blocks (`frames / rate`), whichever is larger. The page slews
+errors up to 20 ms and ignores larger ones, unless the epoch is new (then it anchors again), so 18
+ms is the floor where the plugin asks for the hard anchor. A block of 1024 frames at 44.1 kHz is
+23 ms: a host that calls ahead of the clock is no jump. A jump message goes out at most once every
+40 ms; the newest position goes at the next look (an offline bounce gives at most 25 a second).
+The unit test is `a_block_of_23_ms_is_no_jump_and_an_offline_bounce_gives_at_most_25_jumps_a_second`.
 
 The measured rate while the host plays is 22 to 24 messages a second (stage
 `editor-transport`, limit 15 to 40). While the host is stopped and unchanged it is 0.
@@ -108,7 +125,8 @@ length, and `start_in_song` (`start_play`).
 
 - **Inside a region:** `page time = start_in_source + (song - start_in_song)`. When several
   regions cover the position (several sources at the same place, the usual drum session), the
-  source that was made first wins. The other sources of such a session have the same offset.
+  source that was made first wins, then the region with the earliest start (`total_cmp`, so a
+  region before song 0 is right). The other sources of such a session have the same offset.
 - **Outside every region:** the region that ended last before the position gives the offset.
   Before every region, the first region gives it. The playhead runs on in the source time of that
   region. The page cannot hold a playhead that plays (it extrapolates until the next message), so
@@ -136,8 +154,9 @@ The fault run `DS_ARA_TRANSPORT_FAULT=identity` (no regions) makes it fail by 1.
 - **Process calls without a transport** (`transport` is null, or has no seconds timeline): the
   same. Stage `editor-transport-none`, kind `null`.
 - **A host that plays and stops calling `process`:** some hosts stop the calls of a plugin when
-  the transport stops. A last call that said "playing" and is older than 300 ms counts as a stop at
-  the last position: one message "stopped". The report has the row `transport_stale` once. The
+  the transport stops. A last call that said "playing" and is older than 300 ms, or three blocks
+  when that is longer (a block of 16384 frames at 44.1 kHz is 372 ms), counts as a stop at the
+  last position: one message "stopped". The report has the row `transport_stale` once. The
   next LUNA run shows whether LUNA does this.
 
 What LUNA does is not known yet: the first run had no transport rows. The rows `transport_seen`,
@@ -153,16 +172,20 @@ What LUNA does is not known yet: the first run had no transport rows. The rows `
 - **Latency.** The position is the one of the block that the host processes now. The sound comes
   out later by the output latency of the host. The page is ahead of the sound by that time. The
   plugin does not compensate.
-- **Two documents in one host process** share the slot. The last process call wins. One DAW has one
-  transport, so the value is the same.
+- **Two documents in one host process** share the slot. The instance that writes first owns it.
 - **A host whose calls come in bursts** (two blocks in one moment) makes errors of up to a block
   (about 10 ms). They are below the jump limit.
-- **The page does not re-enter its follow branch** after a stop (static/transport.js: a stopped
-  message leaves `AC.active` true, and the branch that sets the playing state runs only when it is
-  false). The shell sets `AC.active = false` when the host starts to play and the page is not
-  playing. The shell checks that `AC` and `appHostFollow` exist (stage `editor-shell-functions`).
-  This is a need for `static/`: the page should enter its follow state for a playing message by
-  itself. Then the line of the shell can go.
+- **The page does not re-enter its follow branch** after a stop. In `static/transport.js`, the
+  function `appOnPlayhead(m)` sets `S.playing = true`, starts `tick()` and shows the playing state
+  only inside the branch `if (!AC.active)`. A stopped message (`hostMode() && !m.playing`) leaves
+  `AC.active` true, so a later message with `playing: true` only slews `AC` and the page never
+  shows playing. The smallest change: in that function, run the branch also when
+  `hostMode() && m.playing && !S.playing` (or set `AC.active = false` in the stopped branch). The
+  shell sets `AC.active = false` when the host starts to play and the page is not playing, and
+  checks that `AC` and `appHostFollow` exist (stage `editor-shell-functions`). With the page
+  change the line of the shell can go.
+- **A reload of the project** re-sends the last stopped position after 1.5 s, unless a newer
+  message came in.
 
 ## What is measured
 
@@ -182,7 +205,9 @@ locate while playing, stop, locate before and after the region. Its process call
 clock (the row `transport_script`). The page driver samples the position that the frame loop
 draws, once a frame, with the same clock. The stage compares them.
 
-Result on the development Mac: the page is within 5 ms of the host while it plays (the largest
+The 50 ms limit is judged over the stable part of each play stretch: the first 0.5 s after a start
+or a locate and the last 0.1 s before the next change are not counted (a loaded machine may be late
+there). Result on the development Mac: the page is within 5 ms of the host while it plays (the largest
 error over all samples of three play stretches; the three sample points are within 1 ms), a stop and a locate
 show the exact position, and a locate of the playing host moves the page by 1.25 s at once.
 The frame time with the host playing in a loop is 18 ms at the 95th percentile (limit 33 ms).

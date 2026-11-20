@@ -219,7 +219,7 @@ struct Shared {
     /// events starts here, so an event announced before that poll is not lost.
     opened_head: u64,
     /// The pacing of the transport messages of this page (M1b5).
-    pacer: Mutex<crate::transport::Pacer>,
+    poller: Mutex<crate::transport::Poller>,
     /// The row of the first transport message of this editor is written.
     transport_row: AtomicBool,
 }
@@ -468,49 +468,71 @@ fn poll_transport(sh: &Arc<Shared>, total: std::time::Duration) -> Vec<Value> {
                 pos_samples: 0,
                 seen_us: tr::now_us(),
                 playing: true,
+                has_position: true,
+                flags: 0,
                 frames: 0,
                 rate: 48000.0,
             });
         }
-        if snap.is_some() {
-            let regions = if identity { Vec::new() } else { (sh.backend.regions)() };
-            let now = tr::now_us();
-            let mut pacer = sh.pacer.lock().unwrap_or_else(|e| e.into_inner());
-            let was_stale = pacer.stale_seen;
-            let msg = pacer.step(snap, now, &|song| tr::page_time(song, &regions));
-            if pacer.stale_seen && !was_stale {
-                // the evidence for the next run of a real host: it stopped its process calls while playing
+        let now = tr::now_us();
+        let (msg, wait, stale_row, nopos_row, regions) = {
+            let mut poller = sh.poller.lock().unwrap_or_else(|e| e.into_inner());
+            let (msg, wait) = poller.look(snap, now, &mut || {
+                if identity {
+                    Vec::new()
+                } else {
+                    (sh.backend.regions)()
+                }
+            });
+            (
+                msg,
+                wait,
+                poller.take_stale_row(),
+                poller.take_no_position_row(),
+                poller.region_count(),
+            )
+        };
+        if stale_row {
+            // the evidence for the next run of a real host: it stopped its process calls while playing
+            session().log(
+                json!({"event": "transport_stale", "editor": sh.n, "last_position_seconds": snap.map(|s| s.pos_s)})
+                    .to_string(),
+            );
+            session().write_out();
+        }
+        if nopos_row {
+            // a process call with a transport but no seconds timeline: the page cannot follow
+            session().log(
+                json!({"event": "transport_no_position", "editor": sh.n, "flags": snap.map(|s| s.flags),
+                    "playing": snap.map(|s| s.playing)})
+                .to_string(),
+            );
+            session().write_out();
+        }
+        if let Some(m) = msg {
+            if !sh.transport_row.swap(true, Ordering::SeqCst) {
+                // the first transport of this page: where it came from and what the page got
                 session().log(
-                    json!({"event": "transport_stale", "editor": sh.n, "last_position_seconds": snap.map(|s| s.pos_s)})
-                        .to_string(),
+                    json!({"event": "transport_page_first", "editor": sh.n, "source": "clap_process",
+                        "host_position_seconds": m.song_s,
+                        "host_position_samples": snap.map(|s| s.pos_samples),
+                        "sample_rate": snap.map(|s| s.rate),
+                        "playing": m.playing, "page_time": m.pos,
+                        "mapped_by": format!("{:?}", m.mapped), "regions": regions})
+                    .to_string(),
                 );
                 session().write_out();
             }
-            drop(pacer);
-            if let Some(m) = msg {
-                if !sh.transport_row.swap(true, Ordering::SeqCst) {
-                    // the first transport of this page: where it came from and what the page got
-                    session().log(
-                        json!({"event": "transport_page_first", "editor": sh.n, "source": "clap_process",
-                            "host_position_seconds": m.song_s,
-                            "host_position_samples": snap.map(|s| s.pos_samples),
-                            "sample_rate": snap.map(|s| s.rate),
-                            "playing": m.playing, "page_time": m.pos,
-                            "mapped_by": format!("{:?}", m.mapped), "regions": regions.len()})
-                        .to_string(),
-                    );
-                    session().write_out();
-                }
-                return vec![
-                    json!({"epoch": m.epoch, "t_ns": m.t_ns, "pos": m.pos, "playing": m.playing,
-                    "why": format!("{:?}", m.why)}),
-                ];
-            }
+            return vec![
+                json!({"epoch": m.epoch, "t_ns": m.t_ns, "pos": m.pos, "playing": m.playing,
+                "why": format!("{:?}", m.why)}),
+            ];
         }
-        if std::time::Instant::now() >= end {
+        let left = end.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
             return Vec::new();
         }
-        std::thread::sleep(std::time::Duration::from_millis(8));
+        std::thread::sleep(std::time::Duration::from_millis(wait).min(left));
     }
 }
 
@@ -1172,7 +1194,7 @@ impl Editor {
             page_dir: page.map(|(d, _)| d),
             n,
             opened_head,
-            pacer: Mutex::new(crate::transport::Pacer::new(if transport_fault() == "flood" {
+            poller: Mutex::new(crate::transport::Poller::new(if transport_fault() == "flood" {
                 0
             } else {
                 crate::transport::TICK_US

@@ -4711,6 +4711,9 @@ def stage_editor_shell_report_fault() -> bool:
 TRANSPORT_REGION = (0.4, 2.4, 2.0)
 TRANSPORT_ERR_MS = 50.0
 TRANSPORT_RATE = (15.0, 40.0)   # messages a second while the host plays
+# The 50 ms limit holds over the stable part of each play stretch: the first 0.5 s after a start or a
+# locate (the page anchors, a loaded machine may be late) and the last 0.1 s before the next change are not counted.
+STABLE_FROM_S = 0.5
 
 
 def transport_files() -> list:
@@ -4780,7 +4783,7 @@ def transport_parts(rc: int, rows: list, script: dict) -> dict:
     for g in play_segs:
         for x in samples:
             age = (x[0] - segs[g]["wall_ms"]) / 1000.0
-            if 0.4 <= age and x[0] < ends[g] - 50.0:
+            if STABLE_FROM_S <= age and x[0] < ends[g] - 100.0:
                 every.append(err_ms(g, x))
     worst = max(every) if every else 1e9
     mean = sum(every) / len(every) if every else 1e9
@@ -4789,7 +4792,7 @@ def transport_parts(rc: int, rows: list, script: dict) -> dict:
     else:
         follow = (max(pt_err) <= TRANSPORT_ERR_MS and worst <= TRANSPORT_ERR_MS,
                   f"the page follows the host during play: error at the three sample points {[round(e, 1) for e in pt_err]} ms, over all "
-                  f"{len(every)} samples of three play stretches max {worst:.1f} ms, mean {mean:.1f} ms (limit {TRANSPORT_ERR_MS:.0f} ms); "
+                  f"{len(every)} samples of the stable part (from {STABLE_FROM_S} s after a start or locate to 0.1 s before the next change) of three play stretches max {worst:.1f} ms, mean {mean:.1f} ms (limit {TRANSPORT_ERR_MS:.0f} ms); "
                   f"the page time moved {moved:.2f} s in 1 s" if max(pt_err) <= TRANSPORT_ERR_MS and worst <= TRANSPORT_ERR_MS else
                   f"the playhead is off by up to {worst:.1f} ms (the three points {[round(e, 1) for e in pt_err]} ms; limit {TRANSPORT_ERR_MS:.0f} ms)")
 
@@ -4824,9 +4827,15 @@ def transport_parts(rc: int, rows: list, script: dict) -> dict:
                 else f"{rate:.1f} messages a second while the host plays (want {TRANSPORT_RATE[0]:.0f} to {TRANSPORT_RATE[1]:.0f}), {still} while stopped (want 0)"))
     closes = [x for x in rows if x.get("event") == "editor_close"]
     tcmds = closes[-1].get("transport_commands") if closes else None
-    own = (tcmds == 0 and str(r.get("play", "")).startswith("rejected") and r.get("wired") is True,
-           f"transport commands of the page while the host plays: {tcmds} (want 0); the page's own play is {r.get('play')!r}; the listener is wired: {r.get('wired')}"
-           if tcmds == 0 else f"the page ran {tcmds} transport command(s) while the host plays (want 0); play is {r.get('play')!r}")
+    refused = str(r.get("play", "")).startswith("rejected") and r.get("wired") is True
+    if not closes or tcmds is None:
+        own = (False, "no editor_close row: the run did not end cleanly, the count of page commands is unknown")
+    elif tcmds != 0:
+        own = (False, f"the page ran {tcmds} transport command(s) while the host plays (want 0); play is {r.get('play')!r}")
+    elif not refused:
+        own = (False, f"the page's own play was not refused: {r.get('play')!r}, wired {r.get('wired')}")
+    else:
+        own = (True, f"transport commands of the page while the host plays: 0 (want 0); the page's own play is {r.get('play')!r}; the listener is wired: True")
     seen = [x for x in rows if x.get("event") == "transport_seen"]
     first = [x for x in rows if x.get("event") == "transport_page_first"]
     src = (bool(seen) and seen[0].get("source") == "clap_process" and bool(first) and first[0].get("source") == "clap_process",
@@ -4862,6 +4871,12 @@ def stage_editor_transport_fault() -> bool:
     ):
         rc, _summary, rows, script = transport_run(f"editor-fault-transport-{label}", CLAP, env)
         ok = fault_reason(f"editor-transport-fault-{label}", transport_parts(rc, rows, script), part, what, reason) and ok
+        if label == "own":
+            # a run that ended with no editor_close row must fail the stage, and not for the reason of the fault run
+            cut = [x for x in rows if x.get("event") != "editor_close"]
+            good, ev = transport_parts(rc, cut, script)["editor-transport-own-audio"]
+            ok = pass_fail("editor-transport-fault-noclose", (not good) and "no editor_close row" in ev and "ran" not in ev,
+                           f"a run with no editor_close row fails editor-transport-own-audio for its own reason: {ev}") and ok
     return ok
 
 

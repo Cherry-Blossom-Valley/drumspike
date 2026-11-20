@@ -27,15 +27,47 @@ const FLAG_PLAYING: u32 = clap_sys::events::CLAP_TRANSPORT_IS_PLAYING;
 const FLAG_SECONDS: u32 = clap_sys::events::CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
 
 /// A host that makes no process call for this long while its last call said "playing" has
-/// stopped (some hosts stop the process calls of a plugin when the transport stops).
+/// stopped (some hosts stop the process calls of a plugin when the transport stops). With large
+/// blocks the time is three blocks: see [`stale_us`].
 pub const STALE_US: u64 = 300_000;
-/// The page gets a message at least this often while the host plays.
+/// The page gets a message at least this often while the host plays, and a jump message at most
+/// this often (the newest jump wins).
 pub const TICK_US: u64 = 40_000;
 /// The page slews an error of up to 20 ms and ignores a larger one unless the message is a hard
-/// anchor (a new epoch): an error above this threshold is a jump.
+/// anchor (a new epoch): an error above this floor is a jump. The limit grows with the block
+/// ([`jump_s`]).
 pub const JUMP_S: f64 = 0.018;
 /// A position change while stopped that counts as a locate.
 const STOP_MOVE_S: f64 = 0.0005;
+/// The wait of the poll while the host is stopped and nothing changed (or went silent).
+pub const IDLE_MS: u64 = 50;
+/// The wait of the poll while the host plays.
+pub const PLAY_MS: u64 = 8;
+/// The region list is fetched again after this time at the most.
+const REGION_TTL_US: u64 = 200_000;
+/// Set in the flags of the slot when the instance that owned it was deactivated (our own bit,
+/// CLAP uses the low bits).
+const FLAG_CLEARED: u32 = 1 << 31;
+
+/// The time without a process call after which a playing host counts as stopped: 300 ms, or
+/// three blocks when that is longer (a block of 16384 frames at 44.1 kHz is 372 ms).
+pub fn stale_us(frames: u32, rate: f64) -> u64 {
+    if rate > 0.0 {
+        STALE_US.max((3.0 * f64::from(frames) / rate * 1e6) as u64)
+    } else {
+        STALE_US
+    }
+}
+
+/// The jump limit: 1.5 blocks, not below [`JUMP_S`]. A host that calls process in bursts or ahead
+/// of time makes errors of up to a block; they are no jumps.
+pub fn jump_s(frames: u32, rate: f64) -> f64 {
+    if rate > 0.0 {
+        JUMP_S.max(1.5 * f64::from(frames) / rate)
+    } else {
+        JUMP_S
+    }
+}
 
 // ---------------------------------------------------------------- the hand-over (audio thread)
 
@@ -65,8 +97,13 @@ pub fn now_us() -> u64 {
 
 /// The shared slot: a sequence lock. `seq` is odd while a writer stores. Every field is an atomic,
 /// so a torn read is only a wrong value that the sequence check throws away.
+///
+/// One instance owns the slot (`owner`, the address of its plugin object): another instance
+/// stores only when the owner has gone quiet for [`stale_us`]. So two instances at different
+/// positions (a render ahead, another context) never alternate: the page sees the owner.
 struct Slot {
     seq: AtomicU64,
+    owner: AtomicU64,
     pos_fixed: AtomicI64,
     seen_us: AtomicU64,
     flags: AtomicU32,
@@ -76,6 +113,7 @@ struct Slot {
 
 static SLOT: Slot = Slot {
     seq: AtomicU64::new(0),
+    owner: AtomicU64::new(0),
     pos_fixed: AtomicI64::new(0),
     seen_us: AtomicU64::new(0),
     flags: AtomicU32::new(0),
@@ -86,22 +124,37 @@ static SLOT: Slot = Slot {
 /// What the audio thread saw in one process call.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Snap {
-    /// The generation: the number of stores so far (twice the sequence).
+    /// The generation: the number of stores so far (half the sequence).
     pub generation: u64,
-    /// The song position of the host at the start of the block, in seconds.
+    /// The song position of the host at the start of the block, in seconds. Valid only with
+    /// `has_position`.
     pub pos_s: f64,
     /// The song position in samples of the host (seconds times the sample rate).
     pub pos_samples: i64,
     /// The time of the process call (microseconds, [`now_us`]).
     pub seen_us: u64,
     pub playing: bool,
+    /// The transport had a seconds timeline. Without it the position is unknown.
+    pub has_position: bool,
+    /// The flags of the CLAP transport.
+    pub flags: u32,
     pub frames: u32,
     pub rate: f64,
 }
 
-/// Store one transport. Lock-free and wait-free: a failed compare-exchange means another audio
-/// thread stores the same host transport right now, so the call returns at once.
-fn store(pos_fixed: i64, flags: u32, frames: u32, rate: f64, seen_us: u64) -> bool {
+/// Store one transport for the instance `id`. Lock-free and wait-free: a failed compare-exchange
+/// means another audio thread stores right now, a fresh owner means another instance owns the
+/// slot; in both cases the call returns at once.
+fn store_at(id: u64, new_owner: u64, pos_fixed: i64, flags: u32, frames: u32, rate: f64, seen_us: u64) -> bool {
+    let owner = SLOT.owner.load(Ordering::Relaxed);
+    if owner != 0 && owner != id {
+        let last = SLOT.seen_us.load(Ordering::Relaxed);
+        let fr = SLOT.frames.load(Ordering::Relaxed);
+        let r = f64::from_bits(SLOT.rate_bits.load(Ordering::Relaxed));
+        if seen_us.saturating_sub(last) < stale_us(fr, r) {
+            return false;
+        }
+    }
     let s = SLOT.seq.load(Ordering::Relaxed);
     if s & 1 == 1 {
         return false;
@@ -114,6 +167,7 @@ fn store(pos_fixed: i64, flags: u32, frames: u32, rate: f64, seen_us: u64) -> bo
         return false;
     }
     fence(Ordering::Release);
+    SLOT.owner.store(new_owner, Ordering::Relaxed);
     SLOT.pos_fixed.store(pos_fixed, Ordering::Relaxed);
     SLOT.seen_us.store(seen_us, Ordering::Relaxed);
     SLOT.flags.store(flags, Ordering::Relaxed);
@@ -123,13 +177,14 @@ fn store(pos_fixed: i64, flags: u32, frames: u32, rate: f64, seen_us: u64) -> bo
     true
 }
 
-/// The audio thread's part: a process call. Atomics only. A call with no transport, or one
-/// without a seconds timeline, stores nothing.
+/// The audio thread's part: a process call of the instance `id`. Atomics only. A call with no
+/// transport stores nothing. A call with a transport but no seconds timeline stores its play state
+/// with `has_position` false, so the reader does not trust the older position.
 ///
 /// # Safety
 /// `process` points to the host's valid `clap_process` of this call, and its `transport` is null
 /// or valid (the CLAP rule for the call).
-pub unsafe fn note(process: *const clap_sys::process::clap_process, rate: f64) {
+pub unsafe fn note(process: *const clap_sys::process::clap_process, rate: f64, id: u64) {
     if FAULT_OFF.load(Ordering::Relaxed) {
         return;
     }
@@ -141,15 +196,31 @@ pub unsafe fn note(process: *const clap_sys::process::clap_process, rate: f64) {
         return;
     }
     let t = &*pr.transport;
-    if t.flags & FLAG_SECONDS == 0 {
-        return;
-    }
-    store(t.song_pos_seconds, t.flags, pr.frames_count, rate, now_us());
+    let pos = if t.flags & FLAG_SECONDS != 0 {
+        t.song_pos_seconds
+    } else {
+        0
+    };
+    store_at(id, id, pos, t.flags & !FLAG_CLEARED, pr.frames_count, rate, now_us());
 }
 
-/// The newest transport the audio thread stored, or `None` when no process call carried one.
-/// Never waits long: a reader that meets a writer tries again a few times, then answers `None`
-/// (the next poll reads again).
+/// The instance `id` was deactivated or reset: when it owns the slot, the slot is cleared, so a
+/// new editor does not move the playhead to the position of an earlier session. Main thread.
+pub fn clear(id: u64) {
+    if SLOT.owner.load(Ordering::Relaxed) != id {
+        return;
+    }
+    for _ in 0..1000 {
+        if store_at(id, 0, 0, FLAG_CLEARED, 0, 0.0, now_us()) {
+            return;
+        }
+        std::hint::spin_loop();
+    }
+}
+
+/// The newest transport the audio thread stored, or `None` when no process call carried one (or
+/// the owner was deactivated since). Never waits long: a reader that meets a writer tries again a
+/// few times, then answers `None` (the next poll reads again).
 pub fn read() -> Option<Snap> {
     for _ in 0..64 {
         let s1 = SLOT.seq.load(Ordering::Acquire);
@@ -169,6 +240,9 @@ pub fn read() -> Option<Snap> {
         if SLOT.seq.load(Ordering::Relaxed) != s1 {
             continue;
         }
+        if flags & FLAG_CLEARED != 0 {
+            return None;
+        }
         let pos_s = pos_fixed as f64 / SEC_FIXED;
         return Some(Snap {
             generation: s1 / 2,
@@ -176,6 +250,8 @@ pub fn read() -> Option<Snap> {
             pos_samples: (pos_s * rate).round() as i64,
             seen_us,
             playing: flags & FLAG_PLAYING != 0,
+            has_position: flags & FLAG_SECONDS != 0,
+            flags,
             frames,
             rate,
         });
@@ -191,6 +267,7 @@ pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 pub fn reset_for_test() {
     SLOT.seq.store(0, Ordering::SeqCst);
+    SLOT.owner.store(0, Ordering::SeqCst);
 }
 
 // ---------------------------------------------------------------- the mapping
@@ -212,7 +289,7 @@ pub enum Mapped {
 ///
 /// - Inside a region: `start_in_source + (song - start_in_song)`. When several regions cover the
 ///   position (several sources at the same place, the usual drum session), the lowest source index
-///   wins; the other sources of such a session have the same offset.
+///   wins, then the earliest start; the other sources of such a session have the same offset.
 /// - Outside every region: the region that ended last before the position gives the offset (the
 ///   first region, when the position is before all). The playhead runs on in the source time of
 ///   that region: the page cannot hold a playhead that plays, so it must not be asked to.
@@ -230,7 +307,7 @@ pub fn page_time(song_s: f64, regions: &[(usize, RegionRec)]) -> (f64, Mapped) {
     let inside = usable
         .iter()
         .filter(|(_, r)| r.start_play <= song_s && song_s < end(r))
-        .min_by(|a, b| (a.0, a.1.start_play.to_bits()).cmp(&(b.0, b.1.start_play.to_bits())));
+        .min_by(|a, b| a.0.cmp(&b.0).then(a.1.start_play.total_cmp(&b.1.start_play)));
     let (pick, kind) = match inside {
         Some(p) => (*p, Mapped::Inside),
         None => {
@@ -296,6 +373,8 @@ pub struct Pacer {
     tick_us: u64,
     /// Set once: a playing host went silent (the row of the report).
     pub stale_seen: bool,
+    /// Set once: a process call had a transport without a seconds timeline (a row of the report).
+    pub no_position_seen: bool,
 }
 
 impl Pacer {
@@ -305,28 +384,42 @@ impl Pacer {
             last: None,
             tick_us,
             stale_seen: false,
+            no_position_seen: false,
         }
+    }
+
+    /// True when a playing host has made no process call for the stale time.
+    pub fn is_stale(s: &Snap, now_us: u64) -> bool {
+        s.playing && now_us.saturating_sub(s.seen_us) > stale_us(s.frames, s.rate)
     }
 
     /// One look at the transport. `map` gives the page time of a song position.
     pub fn step(&mut self, snap: Option<Snap>, now_us: u64, map: &dyn Fn(f64) -> (f64, Mapped)) -> Option<Msg> {
         let s = snap?;
+        if !s.has_position {
+            // the host plays or stops with no position: the old position must not be believed
+            self.no_position_seen = true;
+            return None;
+        }
         let age = now_us.saturating_sub(s.seen_us);
-        let stale = s.playing && age > STALE_US;
+        let stale = Self::is_stale(&s, now_us);
         if stale {
             self.stale_seen = true;
         }
         let playing = s.playing && !stale;
         let song = if playing { s.pos_s + age as f64 / 1e6 } else { s.pos_s };
         let (mapped_s, kind) = map(song);
+        let jump_limit = jump_s(s.frames, s.rate);
         let why = match self.last {
             None => Some(Why::First),
             Some(l) if l.playing != playing => Some(Why::State),
             Some(l) if playing => {
-                let expected = l.mapped_s + now_us.saturating_sub(l.at_us) as f64 / 1e6;
-                if (mapped_s - expected).abs() > JUMP_S {
-                    Some(Why::Jump)
-                } else if now_us.saturating_sub(l.at_us) >= self.tick_us {
+                let since = now_us.saturating_sub(l.at_us);
+                let expected = l.mapped_s + since as f64 / 1e6;
+                if (mapped_s - expected).abs() > jump_limit {
+                    // at most one jump message per tick: the newest position goes at the next look
+                    (since >= self.tick_us).then_some(Why::Jump)
+                } else if since >= self.tick_us {
                     Some(Why::Tick)
                 } else {
                     None
@@ -351,6 +444,94 @@ impl Pacer {
             song_s: song,
             mapped: kind,
         })
+    }
+
+    fn has_sent(&self) -> bool {
+        self.last.is_some()
+    }
+}
+
+/// The poll of one editor: the pacer, the region list, and the rule of when to look and how long
+/// to wait. While the host is stopped and nothing changed it does no work and waits [`IDLE_MS`];
+/// the region list is fetched only when a look needs it, at most every 200 ms.
+pub struct Poller {
+    pub pacer: Pacer,
+    last_key: Option<(u64, bool, bool)>,
+    regions: Vec<(usize, RegionRec)>,
+    fetched_at: Option<u64>,
+    /// How often the region list was fetched (the unit test counts it).
+    pub fetches: usize,
+    stale_reported: bool,
+    no_position_reported: bool,
+}
+
+impl Poller {
+    pub fn new(tick_us: u64) -> Poller {
+        Poller {
+            pacer: Pacer::new(tick_us),
+            last_key: None,
+            regions: Vec::new(),
+            fetched_at: None,
+            fetches: 0,
+            stale_reported: false,
+            no_position_reported: false,
+        }
+    }
+
+    /// The number of regions of the last fetch.
+    pub fn region_count(&self) -> usize {
+        self.regions.len()
+    }
+
+    /// True once, when a playing host went silent.
+    pub fn take_stale_row(&mut self) -> bool {
+        let new = self.pacer.stale_seen && !self.stale_reported;
+        self.stale_reported |= self.pacer.stale_seen;
+        new
+    }
+
+    /// True once, when the host sent a transport without a position.
+    pub fn take_no_position_row(&mut self) -> bool {
+        let new = self.pacer.no_position_seen && !self.no_position_reported;
+        self.no_position_reported |= self.pacer.no_position_seen;
+        new
+    }
+
+    /// One look: the message to send, if any, and how long to wait before the next look.
+    pub fn look(
+        &mut self,
+        snap: Option<Snap>,
+        now_us: u64,
+        fetch: &mut dyn FnMut() -> Vec<(usize, RegionRec)>,
+    ) -> (Option<Msg>, u64) {
+        let Some(s) = snap else {
+            return (None, IDLE_MS);
+        };
+        let key = (s.pos_s.to_bits(), s.playing, s.has_position);
+        if !s.playing && self.pacer.has_sent() && self.last_key == Some(key) {
+            return (None, IDLE_MS); // stopped and unchanged: nothing to do
+        }
+        self.last_key = Some(key);
+        if !s.has_position {
+            self.pacer.step(Some(s), now_us, &|x| (x, Mapped::NoRegions));
+            return (None, IDLE_MS);
+        }
+        if self
+            .fetched_at
+            .is_none_or(|at| now_us.saturating_sub(at) > REGION_TTL_US)
+        {
+            self.regions = fetch();
+            self.fetched_at = Some(now_us);
+            self.fetches += 1;
+        }
+        let regions = &self.regions;
+        let msg = self.pacer.step(Some(s), now_us, &|song| page_time(song, regions));
+        let wait = if s.playing && !Pacer::is_stale(&s, now_us) {
+            PLAY_MS
+        } else {
+            IDLE_MS
+        };
+        (msg, wait)
     }
 }
 
@@ -408,6 +589,8 @@ mod tests {
             pos_samples: (pos_s * 48000.0) as i64,
             seen_us,
             playing,
+            has_position: true,
+            flags: 0,
             frames: 512,
             rate: 48000.0,
         }
@@ -450,6 +633,9 @@ mod tests {
         }
         assert!((22..=26).contains(&n), "{n} messages in one second of play");
         // a locate while playing: a jump with a new epoch
+        // (a jump goes out at most once per tick: not within 40 ms of the last message)
+        assert!(p.step(Some(snap(7.0, true, t)), t + 1_000, &ident).is_none());
+        let t = t + 44_000;
         let m = p.step(Some(snap(7.0, true, t)), t + 1_000, &ident).unwrap();
         assert_eq!((m.why, m.epoch), (Why::Jump, 3));
         assert!((m.pos - 7.001).abs() < 1e-9);
@@ -491,19 +677,20 @@ mod tests {
         reset_for_test();
         // no transport, no seconds timeline: nothing stored
         let mut process: clap_sys::process::clap_process = unsafe { std::mem::zeroed() };
-        unsafe { note(&process, 48000.0) };
+        unsafe { note(&process, 48000.0, 1) };
         assert!(read().is_none());
         let mut t: clap_sys::events::clap_event_transport = unsafe { std::mem::zeroed() };
         let tp: *mut clap_sys::events::clap_event_transport = &mut t;
         process.transport = tp;
-        unsafe { note(&process, 48000.0) };
-        assert!(read().is_none(), "no seconds timeline: no position");
+        unsafe { note(&process, 48000.0, 1) };
+        let s0 = read().expect("a transport without seconds is stored as a play state");
+        assert!(!s0.has_position, "no seconds timeline: no position");
         unsafe {
             (*tp).flags = FLAG_SECONDS | FLAG_PLAYING;
             (*tp).song_pos_seconds = (2.5 * SEC_FIXED) as i64;
         }
         process.frames_count = 256;
-        unsafe { note(&process, 48000.0) };
+        unsafe { note(&process, 48000.0, 1) };
         let s = read().expect("stored");
         assert_eq!((s.pos_s, s.pos_samples, s.playing, s.frames), (2.5, 120_000, true, 256));
         // two writers and a reader: the position and the sample count of every read agree
@@ -516,7 +703,15 @@ mod tests {
                     while !stop.load(Ordering::Relaxed) {
                         k += 1;
                         // the value 1000 k seconds goes with k + 1000 frames: a torn read breaks this
-                        store((k * 1000) << 31, FLAG_SECONDS, (k + 1000) as u32, 48000.0, k as u64);
+                        store_at(
+                            1,
+                            1,
+                            (k * 1000) << 31,
+                            FLAG_SECONDS,
+                            (k + 1000) as u32,
+                            48000.0,
+                            k as u64,
+                        );
                     }
                 })
             })
@@ -571,16 +766,198 @@ mod tests {
         process.transport = tp;
         process.frames_count = 512;
         read_switches(); // the fault run sets DS_ARA_TRANSPORT_FAULT=alloc
-        unsafe { note(&process, 48000.0) }; // the first call makes the clock
+        unsafe { note(&process, 48000.0, 1) }; // the first call makes the clock
         let before = allocs();
         for k in 0..10_000i64 {
             unsafe {
                 (*tp).song_pos_seconds = k << 20;
-                note(&process, 48000.0);
+                note(&process, 48000.0, 1);
             }
         }
         assert_eq!(allocs() - before, 0, "the audio thread's call allocated");
         // the slot holds only atomics: its size is the sum of the atomics (no Mutex, no pointer)
-        assert_eq!(std::mem::size_of::<Slot>(), 8 * 4 + 4 * 2);
+        assert_eq!(std::mem::size_of::<Slot>(), 8 * 5 + 4 * 2);
+    }
+
+    fn region(a: f64, d: f64, p: f64) -> (usize, RegionRec) {
+        (0, reg(a, d, p))
+    }
+
+    #[test]
+    fn the_tie_break_of_overlapping_regions_is_right_for_a_negative_start() {
+        // both regions cover song -0.5; the earlier start (-3.0) must win (to_bits order would pick -1.0)
+        let r = [region(0.0, 2.0, -1.0), region(5.0, 4.0, -3.0)];
+        let (t, k) = page_time(-0.5, &r);
+        assert_eq!(k, Mapped::Inside);
+        assert!((t - 7.5).abs() < 1e-12, "{t}");
+    }
+
+    fn calls(id: u64, pos: f64, playing: bool, frames: u32) {
+        let mut t: clap_sys::events::clap_event_transport = unsafe { std::mem::zeroed() };
+        t.flags = FLAG_SECONDS | if playing { FLAG_PLAYING } else { 0 };
+        t.song_pos_seconds = (pos * SEC_FIXED) as i64;
+        let mut p: clap_sys::process::clap_process = unsafe { std::mem::zeroed() };
+        p.transport = &t;
+        p.frames_count = frames;
+        unsafe { note(&p, 48000.0, id) };
+    }
+
+    #[test]
+    fn two_instances_at_different_positions_give_one_owner_and_the_other_takes_over_when_it_is_quiet() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_for_test();
+        calls(11, 10.0, true, 512);
+        let mut seen = std::collections::BTreeSet::new();
+        for k in 0..200 {
+            calls(22, 500.0 + k as f64, true, 512); // another instance, far away
+            calls(11, 10.0 + k as f64 * 0.01, true, 512);
+            let s = read().unwrap();
+            seen.insert((s.pos_s / 100.0).floor() as i64);
+        }
+        assert_eq!(
+            seen.into_iter().collect::<Vec<_>>(),
+            vec![0],
+            "the reader saw only the owner"
+        );
+        // the owner goes quiet for longer than the stale time: the other takes over
+        std::thread::sleep(std::time::Duration::from_millis(350));
+        calls(22, 500.0, true, 512);
+        assert_eq!(read().unwrap().pos_s, 500.0);
+        // and the old owner does not take it back while the new one writes
+        calls(11, 10.0, true, 512);
+        assert_eq!(read().unwrap().pos_s, 500.0);
+    }
+
+    #[test]
+    fn a_deactivated_owner_clears_the_slot_and_another_instance_does_not() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_for_test();
+        calls(11, 10.0, false, 512);
+        clear(22); // not the owner
+        assert!(read().is_some());
+        clear(11);
+        assert!(read().is_none(), "a new editor sees no position of the earlier session");
+        calls(22, 3.0, false, 512);
+        assert_eq!(read().unwrap().pos_s, 3.0);
+    }
+
+    #[test]
+    fn a_call_without_a_seconds_timeline_stores_the_play_state_and_the_pacer_names_it() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_for_test();
+        calls(11, 5.0, false, 512);
+        let mut t: clap_sys::events::clap_event_transport = unsafe { std::mem::zeroed() };
+        t.flags = FLAG_PLAYING; // plays, no position
+        let mut p: clap_sys::process::clap_process = unsafe { std::mem::zeroed() };
+        p.transport = &t;
+        p.frames_count = 512;
+        unsafe { note(&p, 48000.0, 11) };
+        let s = read().unwrap();
+        assert!(s.playing && !s.has_position);
+        let mut pacer = Pacer::new(TICK_US);
+        assert!(
+            pacer.step(Some(s), 0, &ident).is_none(),
+            "the old position 5.0 is not believed"
+        );
+        assert!(pacer.no_position_seen);
+    }
+
+    #[test]
+    fn the_stale_time_is_three_blocks_for_large_blocks() {
+        assert_eq!(stale_us(512, 48000.0), STALE_US);
+        // 16384 frames at 44.1 kHz = 372 ms: three blocks = 1.1 s
+        assert!(stale_us(16384, 44100.0) > 1_100_000);
+        let mut p = Pacer::new(TICK_US);
+        let big = |pos: f64, seen: u64| Snap {
+            frames: 16384,
+            rate: 44100.0,
+            ..snap(pos, true, seen)
+        };
+        p.step(Some(big(1.0, 0)), 0, &ident).unwrap();
+        // 700 ms after the last call of a host with 372 ms blocks: still playing, no flip
+        let m = p.step(Some(big(1.0, 0)), 700_000, &ident);
+        assert!(m.is_none_or(|m| m.playing), "no flip to stopped");
+        assert!(!p.stale_seen);
+        assert!(p.step(Some(big(1.0, 0)), 1_300_000, &ident).is_some_and(|m| !m.playing));
+    }
+
+    #[test]
+    fn a_block_of_23_ms_is_no_jump_and_an_offline_bounce_gives_at_most_25_jumps_a_second() {
+        // blocks of 1024 frames at 44.1 kHz: a host that calls two blocks at once, then none
+        let snapb = |pos: f64, seen: u64| Snap {
+            frames: 1024,
+            rate: 44100.0,
+            ..snap(pos, true, seen)
+        };
+        assert!(jump_s(1024, 44100.0) > 0.034);
+        let mut p = Pacer::new(TICK_US);
+        p.step(Some(snapb(0.0, 0)), 0, &ident).unwrap();
+        let mut jumps = 0;
+        let mut t = 0u64;
+        while t < 2_000_000 {
+            t += 8_000;
+            // the call comes 23 ms early: the block start is one block ahead of the wall clock
+            let pos = t as f64 / 1e6 + 0.0232;
+            if let Some(m) = p.step(Some(snapb(pos, t)), t, &ident) {
+                if m.why == Why::Jump {
+                    jumps += 1;
+                }
+            }
+        }
+        assert_eq!(jumps, 0, "a block ahead of the clock is no jump");
+        // an offline bounce: the host runs at 10 times real time
+        let mut p = Pacer::new(TICK_US);
+        p.step(Some(snapb(0.0, 0)), 0, &ident).unwrap();
+        let (mut jumps, mut last_jump) = (0, 0u64);
+        let mut t = 0u64;
+        while t < 2_000_000 {
+            t += 8_000;
+            let pos = t as f64 / 1e5;
+            if let Some(m) = p.step(Some(snapb(pos, t)), t, &ident) {
+                if m.why == Why::Jump {
+                    jumps += 1;
+                    assert!(t - last_jump >= TICK_US, "two jumps {} us apart", t - last_jump);
+                    last_jump = t;
+                }
+            }
+        }
+        assert!(jumps <= 50, "{jumps} jumps in 2 s"); // 25 a second
+        assert!(jumps >= 30, "the bounce still follows: {jumps}");
+    }
+
+    #[test]
+    fn a_stopped_host_costs_no_region_fetch_and_a_playing_one_at_most_five_a_second() {
+        let mut poller = Poller::new(TICK_US);
+        let mut fetch = || vec![(0usize, reg(0.0, 3.0, 0.0))];
+        // 2 s of a stopped host that calls process every 10 ms with the same position
+        let mut t = 0u64;
+        let mut msgs = 0;
+        let mut looks = 0;
+        while t < 2_000_000 {
+            let (m, wait) = poller.look(Some(snap(2.0, false, t)), t, &mut fetch);
+            msgs += usize::from(m.is_some());
+            looks += 1;
+            t += wait * 1000;
+        }
+        assert_eq!(msgs, 1, "the first message only");
+        assert!(
+            poller.fetches <= 2,
+            "{} region fetches in 2 s of a stopped host (bound 2)",
+            poller.fetches
+        );
+        assert!(looks <= 45, "{looks} looks in 2 s: the wait is long");
+        // the host plays for 2 s
+        let mut poller = Poller::new(TICK_US);
+        let mut t = 0u64;
+        while t < 2_000_000 {
+            let seen = t - t % 10_000;
+            let (_, wait) = poller.look(Some(snap(seen as f64 / 1e6, true, seen)), t, &mut fetch);
+            t += wait * 1000;
+        }
+        assert!(
+            poller.fetches <= 11,
+            "{} region fetches in 2 s of play (bound 11)",
+            poller.fetches
+        );
     }
 }

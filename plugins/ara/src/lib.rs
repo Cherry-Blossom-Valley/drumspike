@@ -3596,8 +3596,8 @@ unsafe extern "C" fn p_activate(p: *const clap_plugin, sr: f64, _min: u32, _max:
     })
 }
 
-unsafe extern "C" fn p_deactivate(_p: *const clap_plugin) {
-    guard("deactivate", (), move || {})
+unsafe extern "C" fn p_deactivate(p: *const clap_plugin) {
+    guard("deactivate", (), move || transport::clear(p as u64))
 }
 unsafe extern "C" fn p_start(_p: *const clap_plugin) -> bool {
     guard("start_processing", true, move || true)
@@ -3605,8 +3605,8 @@ unsafe extern "C" fn p_start(_p: *const clap_plugin) -> bool {
 unsafe extern "C" fn p_stop(_p: *const clap_plugin) {
     guard("stop_processing", (), move || {})
 }
-unsafe extern "C" fn p_reset(_p: *const clap_plugin) {
-    guard("reset", (), move || {})
+unsafe extern "C" fn p_reset(p: *const clap_plugin) {
+    guard("reset", (), move || transport::clear(p as u64))
 }
 
 // ---- the evidence rows (M1b4): what a host sends. They change no behaviour.
@@ -3823,7 +3823,7 @@ static STATE_EXT: clap_sys::ext::state::clap_plugin_state = clap_sys::ext::state
 /// The audio thread: pass the first mono pair through (silence without an input), touch
 /// nothing else. The analysis runs on its own threads and is never reached here — except
 /// under the fault switch, which runs it inside `process` on purpose (the overrun proof).
-unsafe extern "C" fn p_process(_p: *const clap_plugin, process: *const clap_process) -> clap_process_status {
+unsafe extern "C" fn p_process(p: *const clap_plugin, process: *const clap_process) -> clap_process_status {
     guard("process", CLAP_PROCESS_CONTINUE, move || {
         let s = session();
         if s.fault && !s.fault_ran.swap(true, Ordering::SeqCst) {
@@ -3831,7 +3831,11 @@ unsafe extern "C" fn p_process(_p: *const clap_plugin, process: *const clap_proc
         }
         note_process(process);
         // M1b5: the transport for the page, atomics only (see transport.rs)
-        transport::note(process, f64::from_bits(PROCESS_RATE_BITS.load(Ordering::Relaxed)));
+        transport::note(
+            process,
+            f64::from_bits(PROCESS_RATE_BITS.load(Ordering::Relaxed)),
+            p as u64,
+        );
         let pr = &*process;
         let frames = pr.frames_count as usize;
         if pr.audio_outputs_count > 0 {
