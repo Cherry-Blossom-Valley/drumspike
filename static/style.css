@@ -371,6 +371,8 @@ canvas.spike.onHit { cursor: ew-resize; }
 .sbRecent .sbProjSub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .empty-state.noProject .esActs { display: flex; gap: 8px; justify-content: center; margin: 14px 0 18px; }
 .empty-state.noProject .ptitle { text-align: center; }
+body.host .empty-state.hostEmpty { padding: 28px 24px; font-size: 14px; line-height: 1.5; }   /* #539: host mode only; the text of the empty state asks for a track in the DAW */
+body.host.hostLow .empty-state.hostEmpty { padding: 12px 24px; }
 #esRecentList { max-width: 460px; margin: 0 auto; text-align: left; }
 /* #441: the Clear Recent control of the start screen, under the list */
 #esRecentClear { display: block; margin: 10px auto 0; font-size: 10px; padding: 3px 10px; }

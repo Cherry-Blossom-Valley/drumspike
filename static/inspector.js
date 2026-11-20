@@ -246,6 +246,7 @@ function refreshHeadNote(name) { refreshHeadRole(name); }   // P3-14a; P3-18: th
    handlers; no frame reads it, and the ResizeObserver of P3-14d gives the lanes their new width. */
 const INS = { name: null };
 function setInspector(on, save) {
+  hostFitTouch("inspector");
   S.inspector = !!on;
   $("#inspector").classList.toggle("hidden", !S.inspector);
   const ib = $("#inspectorBtn"); if (ib) { ib.classList.toggle("on", S.inspector); ib.setAttribute("aria-pressed", S.inspector ? "true" : "false"); }   // P4-25: the toolbar button follows (menu, key, button all end here)
@@ -265,6 +266,7 @@ const HEIGHT_ORDER = ["small", "medium", "large"];
 function laneHeights() { return TRACK_HEIGHTS[S.trackHeight] || TRACK_HEIGHTS.medium; }
 function setTrackHeight(name, save) {
   if (!TRACK_HEIGHTS[name]) return false;
+  hostFitTouch("trackHeight");
   S.trackHeight = name;
   const h = TRACK_HEIGHTS[name], st = document.documentElement.style;
   st.setProperty("--spike-h", `${h.spike}px`); st.setProperty("--wave-h", `${h.wave}px`);

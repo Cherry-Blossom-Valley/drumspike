@@ -199,6 +199,7 @@ function applyZoomSpan(v) {   // a preset span ("full" or seconds), centred on t
 /* #169: View > Show Overview: the overview strip is shown or hidden; the lanes take its height (the layout, then the
    ResizeObserver of P3-14d). The choice is the app setting overview. */
 function setOverview(on, save) {
+  hostFitTouch("overview");
   S.overviewOn = !!on;
   $("#overviewWrap").classList.toggle("hidden", !S.overviewOn);
   invalidate(F.SIZE | F.VIEW);

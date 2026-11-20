@@ -51,7 +51,7 @@ function gotoEvent(dir, forceGlobal) {
   S.playhead = snapSample(target.t, target.track);
   centerOn(S.playhead);
   updateStatus();   // the status bar: "track: hit n/N"; the info line has the rest
-  if (SETTINGS().ui.auditionTab && !S.playing) audition(false, { track: target.track, t: target.t });   // P4-40d: Audition on Tab
+  if (SETTINGS().ui.auditionTab && !S.playing && !hostMode()) audition(false, { track: target.track, t: target.t });   // P4-40d: Audition on Tab
 }
 
 /* ---------------- review queue (#150) ----------------

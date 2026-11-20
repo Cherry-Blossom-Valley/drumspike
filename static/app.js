@@ -761,13 +761,13 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
       listTimer = setTimeout(() => initSessions(true).catch(() => {}), 100);   // P3-4d: keepNone, else a late event reopens a project the user closed
     });
   }
+  if (hostMode()) setInterval(hostWatchAnalysis, 2000);   // #539: an analysis the plugin runs shows here; started before the boot steps, so a boot error cannot skip it
   try {
     await loadViewSettings();   // P3-14a: the Inspector's state, before the first layout the user sees
     if (hostMode()) { hostFit(); window.addEventListener("resize", hostFit); }   // #539: a low and wide window gives the lanes the room
     await initSessions();
     await loadProject();
     showBackend();
-    if (hostMode()) { hostWatchAnalysis(); setInterval(hostWatchAnalysis, 2000); }   // #539: an analysis the plugin runs shows here
   } catch(e) {
     setMsg(`init failed: ${e.message}`, "error");
   }

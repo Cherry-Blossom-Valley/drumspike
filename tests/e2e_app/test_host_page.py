@@ -76,6 +76,8 @@ def test_the_page_fits_a_low_and_wide_window(host_app, make_project, height):
     whole = [r for r in geo["rows"] if r["t"] >= geo["lanes"]["t"] - 1 and r["b"] <= geo["lanes"]["b"] + 1]
     assert len(whole) >= (2 if height < 400 else 3), (len(whole), geo["lanes"])
     assert geo["lanes"]["w"] > 600
+    # the host-low rules apply: the class on <body>, the small height and the Overview and Inspector stepped back
+    assert host_app.evaluate("() => [document.body.classList.contains('hostLow'), S.trackHeight, S.overviewOn, S.inspector]") == [True, "small", False, False]
     # the inspector does not cover the lanes
     if geo["insVisible"]:
         a, b = geo["ins"], geo["lanes"]
@@ -224,9 +226,23 @@ def test_the_same_actions_call_the_commands_with_the_mode_off(app, make_project)
     app.evaluate("() => document.activeElement && document.activeElement.blur()")
     app.keyboard.press("Shift+A")
     app.wait_for_timeout(500)
-    seen = {c for c in app.invokes}
-    assert {"track_set_mix", "transport_clicks", "transport_mix"} <= seen, sorted(seen)
     app.evaluate("() => setClick(false)")
+    # one real call of each other group, so that a wrong command name in the list fails here
+    app.evaluate("""async () => { await B.exportExisting(S.sid, {}); await B.reorder(S.sid, S.order.slice());
+      await B.trainingStatus(S.sid); }""")
+    seen = set(app.invokes)
+    groups = app.evaluate("() => JSON.parse(JSON.stringify(HOST_ABSENT))")
+    assert [g["group"] for g in groups] == GROUPS
+    # "process" cannot reach the wire on the test bridge: B.quitApp, B.takeOpenPaths, B.aboutThirdParty and B.openLink answer
+    # inside backend.js there (a counter, an empty list, a fixed text), and about_info is app_info on the bridge. For it the
+    # check is the second one below.
+    for g in groups:
+        if g["group"] != "process":
+            assert seen & set(g["commands"]), (g["group"], sorted(seen))
+    # every command name of every group is a name that backend.js calls (a misspelt name fails here, for process too)
+    backend = (ROOT / "static" / "backend.js").read_text()
+    missing = [c for g in groups for c in g["commands"] if f'invoke("{c}"' not in backend]
+    assert missing == [], missing
 
 
 def open_project_off(page, folder):
@@ -463,3 +479,54 @@ def test_the_text_scan_sees_the_commands_when_the_mode_is_off(app, make_project)
     app.wait_for_function("() => document.querySelector('#helpChapters .active')?.dataset.section === '05-export.html'")
     assert phrase_hits([("export", app.locator("#helpPage").inner_text())], phrases) != []
     assert app.evaluate("() => [...document.querySelectorAll('#helpChapters .helpChapter')].some(b => b.dataset.section === 'daw')") is False
+
+
+# ---------------------------------------------------------------- round 2 (S1 to S4)
+
+def test_the_empty_state_is_centred_and_readable_in_a_low_window(host_app, make_project):
+    host_app.set_viewport_size({"width": 1600, "height": 320})
+    host_open(host_app, make_project(tracks=()))
+    host_app.wait_for_function("() => document.querySelector('#lanesScroll .hostEmpty')")
+    st = host_app.evaluate("""() => { const e = document.querySelector('#lanesScroll .hostEmpty'), c = getComputedStyle(e), r = e.getBoundingClientRect(),
+      l = document.querySelector('#lanesScroll').getBoundingClientRect();
+      return { align: c.textAlign, size: parseFloat(c.fontSize), padTop: parseFloat(c.paddingTop), fits: r.top >= l.top - 1 && r.bottom <= l.bottom + 1 }; }""")
+    assert st["align"] == "center" and st["size"] >= 14 and st["padTop"] == 12 and st["fits"], st
+    host_app.screenshot(path=str(shot_dir("host-mode-empty-1600x320.png")))
+
+
+def test_a_boot_error_does_not_stop_the_analysis_watch(page, warm_page):
+    """S2: project_list fails at boot (initSessions throws); the watcher still starts and shows a plugin job."""
+    page.route("**/invoke/project_list", lambda r: r.fulfill(status=500, content_type="application/json", body='{"code":500,"message":"no"}'))
+    page.add_init_script("localStorage.removeItem('dsg_sid')")
+    page.goto(warm_page.url + "/?host_mode=1")
+    page.wait_for_function("() => typeof B !== 'undefined' && B.hostMode === true && document.querySelector('#stMsg')")
+    page.wait_for_function("() => /init failed/.test(document.querySelector('#stMsg').textContent)")   # the boot did fail
+    page.evaluate("""() => { window.__jobState = 'running'; B.job = async () => ({ state: window.__jobState, tracks: {} });
+      if (!S.sid) S.sid = 'x'; }""")
+    page.wait_for_function("() => analysisRunning === true", timeout=8000)   # the 2 s interval of the watcher
+
+
+def test_tab_steps_silently_with_audition_on_tab_saved_in_host_mode(host_app, make_project):
+    """S3: a saved ui.auditionTab true must not make a Tab step call audition (which says "the host plays the audio")."""
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("() => { SETTINGS().ui.auditionTab = true; setMsg(''); }")
+    n0 = len(host_app.invokes)
+    host_app.evaluate("() => document.activeElement && document.activeElement.blur()")
+    host_app.keyboard.press("Tab")
+    host_app.wait_for_function("() => !!S.sel")
+    assert host_app.locator("#stMsg").inner_text() != "the host plays the audio"
+    assert not [c for c in host_app.invokes[n0:] if c.startswith("transport_")]
+    host_app.evaluate("() => { SETTINGS().ui.auditionTab = false; }")
+
+
+def test_the_window_growing_keeps_what_the_user_did_while_it_was_low(host_app, make_project):
+    """S4: the user opens the Inspector in the low window and closes it again; growing the window must not open it."""
+    host_app.set_viewport_size({"width": 1600, "height": 1000})
+    host_open(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("() => { setInspector(true, false); setOverview(true, false); setTrackHeight('medium', false); }")
+    host_app.set_viewport_size({"width": 1600, "height": 320})
+    host_app.wait_for_function("() => document.body.classList.contains('hostLow') && !S.inspector")
+    host_app.evaluate("() => { setInspector(true, false); setInspector(false, false); }")   # the user opens it and closes it again
+    host_app.set_viewport_size({"width": 1600, "height": 1000})
+    host_app.wait_for_function("() => !document.body.classList.contains('hostLow')")
+    assert host_app.evaluate("() => [S.inspector, S.overviewOn, S.trackHeight]") == [False, True, "medium"]   # inspector stays closed; the others come back

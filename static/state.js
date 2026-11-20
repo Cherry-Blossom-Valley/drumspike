@@ -183,9 +183,10 @@ function hostApply() {
    so under HOST_LOW_H the page gives the lanes the room: the Inspector and the Overview step back and the tracks take the
    small height. These are the page's own switches without saving, so the saved settings stay as the user made them;
    when the window grows again the page puts back what it changed, unless the user has changed it since. The class
-   hostLow on <body> is for style.css. */
+   hostLow on <body> compacts the empty state (style.css, host mode only). */
 const HOST_LOW_H = 520;
-const HOST_FIT = { low: false, mem: null };
+const HOST_FIT = { low: false, mem: null, busy: false, touched: {} };
+function hostFitTouch(what) { if (hostMode() && HOST_FIT.low && !HOST_FIT.busy) HOST_FIT.touched[what] = true; }   // the user changed it while the window was low
 function hostFit() {
   if (!hostMode()) return;
   const low = innerHeight < HOST_LOW_H;
@@ -193,15 +194,18 @@ function hostFit() {
   if (low === HOST_FIT.low) return;
   HOST_FIT.low = low;
   if (low) {
-    HOST_FIT.mem = { inspector: S.inspector, trackHeight: S.trackHeight, overview: S.overviewOn };
+    HOST_FIT.mem = { inspector: S.inspector, trackHeight: S.trackHeight, overview: S.overviewOn }; HOST_FIT.touched = {};
+    HOST_FIT.busy = true;
     if (S.inspector) setInspector(false, false);
     if (S.trackHeight !== "small") setTrackHeight("small", false);
     if (S.overviewOn) setOverview(false, false);
+    HOST_FIT.busy = false;
   } else if (HOST_FIT.mem) {
     const m = HOST_FIT.mem; HOST_FIT.mem = null;
-    if (m.inspector && !S.inspector) setInspector(true, false);
-    if (m.trackHeight !== "small" && S.trackHeight === "small") setTrackHeight(m.trackHeight, false);
-    if (m.overview && !S.overviewOn) setOverview(true, false);
+    const t = HOST_FIT.touched; HOST_FIT.touched = {};   // what the user changed while the window was low stays as the user left it
+    if (m.inspector && !S.inspector && !t.inspector) setInspector(true, false);
+    if (m.trackHeight !== "small" && S.trackHeight === "small" && !t.trackHeight) setTrackHeight(m.trackHeight, false);
+    if (m.overview && !S.overviewOn && !t.overview) setOverview(true, false);
   }
   invalidate(F.SIZE | F.VIEW);
 }
