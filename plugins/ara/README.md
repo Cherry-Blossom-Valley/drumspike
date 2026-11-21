@@ -31,6 +31,9 @@ gate needs it for its fault runs. The delivery variant (`.deps/delivery/DrumSpik
 `.deps/delivery/DrumSpikeAra.vst3`) is built without it. It is the same wrapper with the CLAP
 that reads no test switch (see "Test switches of the check"). Only the plugin crate is built
 twice; the dependencies are built once.
+The delivery variant is built last, so the loose dylibs in `target/<triple>/release` are the
+delivery variant too. A later installer takes the bundles from `.deps/delivery`, never from
+`.deps` or `.deps/build-wrapper`.
 
 The version of every bundle is the `version` of `Cargo.toml`. The ARA factory and the CLAP
 descriptor take it at compile time. `check.sh` sets `CFBundleVersion` and

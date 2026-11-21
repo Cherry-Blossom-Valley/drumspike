@@ -168,11 +168,12 @@ sign_bundles() {
 build() {
   # the workspace release binary (service_tool) for the byte compares
   CARGO_TARGET_DIR=$WS_TARGET cargo build --release --locked --manifest-path $ROOT/Cargo.toml -p drumspike-devtools --bin service_tool || return 1
-  # the delivery variant first (no fault or test switch is read), then the gate variant
-  # (cargo feature test-switches): cargo keeps both builds of the plugin crate, only that crate
-  # is built twice, the dependencies once
-  make_clap $DELIVERY_CLAP "" || return 1
+  # the gate variant first (cargo feature test-switches), then the delivery variant (no fault or
+  # test switch is read): the loose dylibs that stay in target/<triple>/release are the LAST
+  # build, so they are the delivery variant. Only the plugin crate is built twice, the
+  # dependencies once.
   make_clap $CLAP test-switches || return 1
+  make_clap $DELIVERY_CLAP "" || return 1
   # the test host runs natively on this machine, with the test switches
   ARA_API_DIR=$DEPS/ARA_SDK/ARA_API LIBCLANG_PATH=$CLT/usr/lib cargo build --release --locked --features test-switches --bin ara-host || return 1
   # the wrapped VST3 from clap-wrapper (universal as well) ...

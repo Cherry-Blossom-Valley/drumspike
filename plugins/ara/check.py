@@ -3883,7 +3883,7 @@ def stage_bundle_sign() -> bool:
     """M1d1 gate line 3: every bundle is signed as a bundle (ad hoc, inner first): `codesign --verify --deep --strict` passes,
     the signature is no linker signature, and it seals the resources (the page among them)."""
     ok = True
-    for label, bundle in (("CLAP", CLAP), ("VST3", VST3), ("delivery VST3", DELIVERY_VST3)):
+    for label, bundle in (("CLAP", CLAP), ("VST3", VST3), ("delivery CLAP", DELIVERY_CLAP), ("delivery VST3", DELIVERY_VST3)):
         if not bundle.exists():
             return pass_fail("bundle-sign", False, f"no {label} at {bundle}")
         rc, text = codesign_verify(bundle)
@@ -3935,35 +3935,46 @@ def stage_bundle_sign_fault() -> bool:
 DELIVERY_ENV = {"DS_ARA_ROUND_FAULT": "request-only"}
 
 
-def delivery_run(label: str, bundle: Path) -> tuple[bool, str]:
+def delivery_run(label: str, bundle: Path) -> tuple[str, str]:
     """The fault switch `DS_ARA_ROUND_FAULT=request-only` makes a build that reads it start no round for a host that never asks.
-    True when the run gave the normal round (the switch had no effect), with the evidence."""
+    The state: "round" (the normal round: the switch had no effect), "no-round" (the host ran, the plugin reported, no round started
+    and no job), "other" (a run that is neither), "not-run" (no host, no bundle, no reference, or a run that left no report: a crash
+    or a missing part must never pass as "no round")."""
     ref_path = OUT / "events-reference.json"
     if not HOST.exists() or not bundle.exists() or not ref_path.exists():
-        return False, "no host, no bundle or no reference events: run check.sh build and the reference stage first"
+        return "not-run", "no host, no bundle or no reference events: run check.sh build and the reference stage first"
     cache = f"cache-{label}"
-    rc, _text, lines = host_run(
+    rc, text, lines = host_run(
         label, bundle, ["grow", "--files", *fixture_args(FILES), "--batch", str(len(FILES)), "--wait", SHORT_WAIT, "--no-request"], cache, extra=DELIVERY_ENV,
     )
     parts, evidence = nr_parts(label, rc, lines, FILES, ref_path.read_bytes())
     wrote = (OUT / cache).is_dir() and any((OUT / cache).rglob("*.wav"))
-    return all(parts.values()) and wrote, f"{evidence}; the cache folder has the audio files {wrote}"
+    rows = report_rows(label)
+    # a host that ran and waited for a round that never came says so (rc 2, "did not finish") after the plugin read the audio
+    waited = rc == 2 and "did not finish" in text and wrote
+    if not (rows and rc == 0) and not waited:
+        return "not-run", f"the host run crashed or left no usable result (rc={rc}, {len(rows)} report rows, the plugin wrote its cache {wrote}): {text.strip()[:120]}"
+    if all(parts.values()) and wrote:
+        return "round", f"{evidence}; the cache folder has the audio files {wrote}"
+    if waited and not event_rows(label, "round_start") and not job_rows(label):
+        return "no-round", f"the plugin read the audio and wrote its cache but started no round: {evidence}"
+    return "other", f"{evidence}; the cache folder has the audio files {wrote}"
 
 
 def stage_delivery_switches() -> bool:
     """M1d1 gate line 4: the rule is the cargo feature `test-switches` (the gate build has it, the delivery build has not). The delivery
     CLAP, inside the delivery VST3, ignores DS_ARA_ROUND_FAULT=request-only (it still gives the round); the report (DS_ARA_OUT) and the
-    cache folder (DS_ARA_CACHE) work in it. The control: the gate CLAP with the same variable gives no round."""
-    good, ev = delivery_run("delivery-switches", DELIVERY_EMBEDDED)
-    ok = pass_fail("delivery-switches", good, f"the delivery build with DS_ARA_ROUND_FAULT=request-only still gives the round: {ev}")
-    control, cev = delivery_run("delivery-switches-control", EMBEDDED_CLAP)
-    return pass_fail("delivery-switches-control", not control, f"the gate build with the same variable obeys it (no round): {cev}") and ok
+    cache folder (DS_ARA_CACHE) work in it. The control: the gate CLAP with the same variable ran and gave no round."""
+    state, ev = delivery_run("delivery-switches", DELIVERY_EMBEDDED)
+    ok = pass_fail("delivery-switches", state == "round", f"the delivery build with DS_ARA_ROUND_FAULT=request-only still gives the round (state {state}): {ev}")
+    state, cev = delivery_run("delivery-switches-control", EMBEDDED_CLAP)
+    return pass_fail("delivery-switches-control", state == "no-round", f"the gate build with the same variable obeys it, it ran and gave no round (state {state}): {cev}") and ok
 
 
 def stage_delivery_switches_fault() -> bool:
-    """The check can fail: a build that reads the switches (the gate CLAP) is refused by the same check."""
-    good, ev = delivery_run("delivery-switches-fault", CLAP)
-    return pass_fail("delivery-switches-fault", not good, f"the check refuses a build that reads the switch (the gate CLAP): {ev}")
+    """The check can fail: a build that reads the switches (the gate CLAP) ran and gave no round, so the same check refuses it as a delivery build."""
+    state, ev = delivery_run("delivery-switches-fault", CLAP)
+    return pass_fail("delivery-switches-fault", state == "no-round", f"the check refuses a build that reads the switch (the gate CLAP): it ran and gave no round (state {state}): {ev}")
 
 
 # ---------------------------------------------------------------- the cargo trios
@@ -3978,11 +3989,14 @@ def stage_crate() -> bool:
         ("clippy", ["cargo", "clippy", "--all-targets", "--locked", "--features", "test-switches", "--", "-D", "warnings"]),
         ("clippy-delivery", ["cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings"]),
         ("test", ["cargo", "test", "--locked", "--features", "test-switches"]),
+        ("test-delivery", ["cargo", "test", "--locked"]),
     ]
     ok = True
     for name, cmd in steps:
         rc, text = run(cmd, env=env, log=f"crate-{name}.log", cwd=HERE)
-        ok = pass_fail(f"crate-{name}", rc == 0, f"{name} of the plugin crate, rc={rc} (out/crate-{name}.log)") and ok
+        passed = sum(int(m) for m in re.findall(r"test result: ok\. (\d+) passed", text)) if name.startswith("test") else None
+        count = f", {passed} unit tests passed" if passed is not None else ""
+        ok = pass_fail(f"crate-{name}", rc == 0 and (passed is None or passed > 0), f"{name} of the plugin crate, rc={rc}{count} (out/crate-{name}.log)") and ok
     return ok
 
 
@@ -4642,7 +4656,12 @@ def page_copy_parts(label: str, copy: Path) -> tuple[bool, str]:
 
 def stage_editor_page_copy() -> bool:
     ok = True
-    for label, copy in (("the CLAP", CLAP / "Contents" / "Resources" / "page"), ("the CLAP in the VST3", EMBEDDED_CLAP / "Contents" / "Resources" / "page")):
+    for label, copy in (
+        ("the CLAP", CLAP / "Contents" / "Resources" / "page"),
+        ("the CLAP in the VST3", EMBEDDED_CLAP / "Contents" / "Resources" / "page"),
+        ("the delivery CLAP", DELIVERY_CLAP / "Contents" / "Resources" / "page"),
+        ("the CLAP in the delivery VST3", DELIVERY_EMBEDDED / "Contents" / "Resources" / "page"),
+    ):
         good, ev = page_copy_parts(label, copy)
         ok = pass_fail("editor-page-copy", good, ev) and ok
     return ok
