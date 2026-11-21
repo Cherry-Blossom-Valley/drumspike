@@ -151,7 +151,7 @@ function mxRefresh() {   // the panel: one row per other track, filled from the 
         const db = peak > 1e-6 ? `+${(20 * Math.log10(1 / peak)).toFixed(0)} dB` : "−∞ dB";
         const g = panel.querySelector(`.mxRow[data-name="${CSS.escape(n)}"] .mxGain`);
         if (g) g.textContent = db;
-        mxDraw(c, r, (e.t * sr - r.start) / r.data.length, S.tracks[n].color, peak);
+        mxDraw(c, r, (e.t * sr - r.start) / r.data.length, trackColor(n), peak);
       }
     }, () => {});
   }

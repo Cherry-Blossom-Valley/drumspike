@@ -426,7 +426,8 @@ function playStop(key) {   // key: the pressed key in the table's notation (a me
 /* P3-20b: Shift+Space (Pro Tools "Half-speed playback"): play from the playhead at half speed, one octave down;
    Space or Shift+Space stops. The transport resamples to twice the device rate; the playhead, the follow, the
    meters and the clicks run at the played speed (the messages carry speed 0.5). */
-function halfSpeedPlayStop(key) {   // P4-40d: Space and Shift+Space stop an audition first; key as in playStop (#207)
+function halfSpeedPlayStop(key) {   // #559: absent in host mode (the host plays at its own speed); P4-40d: Space and Shift+Space stop an audition first; key as in playStop (#207)
+  if (hostAbsent("audio")) return;
   return auStop() ? undefined : S.playing
     ? (S.playReturn && (key === "Space" || key === S.playReturn) ? stopAndReturn() : pause())
     : appPlay(0.5, key === "Option+Shift+Space" ? key : null);

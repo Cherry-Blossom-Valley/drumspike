@@ -36,6 +36,25 @@ menu (Drum Spike, Edit, View, Transport, Hits, Track, Help), with their key comm
 - **Standalone.** With the mode off `hostMenuInit()` returns at once: the page has no button and no
   panel. `test_standalone_page_has_no_menu_button_and_no_panel` checks it.
 
+- **Focus.** A command closes the panel with the focus on the menu button, so a dialog (Settings)
+  gives the focus back to the button after Escape. A click on a heading or the padding of the panel
+  keeps the focus in the panel (the panel has a tabindex), so Escape still closes it and no key reaches
+  the page.
+- **State of an open panel.** The marks and the greyed items are read when the panel opens and again
+  every 250 ms while it is open (a key, or the host, can change a setting under it). The page sends
+  no event to a panel; a short timer is the cheap way, and it runs only while the panel is open.
+- **Commands checked for host mode.** Half-Speed Play is absent (`HOST_ABSENT`, group audio): a play
+  request to the host carries no speed. Stop and Return and Stop Returns to Start act through the host:
+  the page stops the host and locates it to the start of the play. They stay. The tempo commands that
+  stay listed (Set Bar 1 at Playhead, Set Bar 1 at Audio Start, Set Marker at Selection, the ruler
+  toggles) are kept; the tempo of the host replaces them in a later part (#560).
+- **Help.** The external links of the manual use `open_url`, which the plugin implements (it opens the
+  system browser); `open_link` of the About dialog is the absent one. A refusal now shows the address
+  on the status line instead of nothing.
+- **Settings, Detector plug-ins.** The category lists the installed detector plug-ins and their
+  licences (`plugins_list`, which the plugin serves). The analysis of the plugin runs the same service,
+  so a plug-in applies there too; the category stays. I did not run a plug-in inside the plugin.
+
 Not done: keys that the DAW takes before the page (the host may keep Cmd+comma). The menu is the
 way that does not depend on a key.
 
@@ -67,7 +86,9 @@ bad end (`LN.sel` stays null after the new hit), a pointer-up that the page does
 view delivers the whole double click, down, up, click, dblclick), the lane colour of the learn or
 training state, and the WebGL lane path (the wave lane carries only the lines).
 
-**Repair.** `trackColors()` (`static/app.js`, called by `loadProject` in `session.js`) gives a track
+**Repair.** `trackColor(name)` is the colour of a track for drawing (its own, else its role's); every draw
+site of `app.js`, `wave.js`, `velocity.js` and `review.js` calls it, so a lane never builds "undefined0d".
+`trackColors()` (`static/app.js`, called by `loadProject` in `session.js`) gives a track
 without a colour of 6 hex digits the colour of its role (`ROLE_COLORS`, the page copy of `role_color`
 in `crates/app/src/roles.rs`). A role change takes the colour of the new role as long as it was only
 the default. The same defect is possible in the standalone app (a track record without a colour,
@@ -97,6 +118,14 @@ height and row height) fails in its fault run with "the lines span 0 to 55 of 84
 
 **Repair.** `sizeKey` includes the measured wave height of each row. The same defect is in the
 standalone app; the repair is there too. No expected value of an existing page test changed.
+
+## What the tests do not prove
+
+- The panel in the real web view with real single clicks and real keys. The test host hands a double
+  click to the page but not a single click, so `editor-menu` uses DOM mouse events and key events.
+  The Chromium tests use real Playwright clicks and keys, which is not the web view of a DAW.
+- The service of the plugin still writes no colour into its tracks. The page covers it at load, at a
+  role change and at every draw site (`trackColor` in `static/app.js`); the service is a later ticket.
 
 ## The stages
 

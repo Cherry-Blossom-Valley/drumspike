@@ -117,11 +117,26 @@ function hmRender(groupName) {   // level 0: the menus; level 1: the items of on
   }
 }
 
-function hmRun(it) {   // the same handler as the macOS menu; the panel closes first so a dialog (Settings) gets the focus
-  hostMenuClose(false);
+function hmRun(it) {   // the same handler as the macOS menu; the panel closes first, with the focus on the button: a dialog (Settings) stores it as its opener, so Escape gives it back
+  hostMenuClose(true);
   Promise.resolve(DSShell.menu({ id: it.id, ...(it.arg || {}) })).catch(e => setMsg(`${it.id} failed: ${e && e.message}`, "error"));
 }
 
+/* The panel shows the state of the moment it opened; while it is open the marks and the greyed items follow the page (a shortcut key
+   or the host changes a setting under it). The state has no change event that the page sends to a panel, so a short timer reads it. */
+function hmRefresh() {
+  if (!HM.open || HM.level !== 1) return;
+  const model = hostMenuModel().find(g => g.name === HM.group);
+  if (!model) return;
+  for (const it of model.items) {
+    const sel = `[data-cmd="${it.id}"]` + (it.arg ? `[data-arg='${JSON.stringify(it.arg)}']` : "");
+    const b = HM.panel.querySelector(sel);
+    if (!b) continue;
+    if (it.check) b.setAttribute("aria-checked", String(it.checked));
+    if (it.enabled) b.removeAttribute("aria-disabled"); else b.setAttribute("aria-disabled", "true");
+    const mark = b.querySelector(".hmMark"); if (mark) mark.textContent = it.check && it.checked ? "✓" : "";
+  }
+}
 function hostMenuOpen() {
   if (!hostMode() || HM.open) return;
   HM.open = true;
@@ -131,10 +146,11 @@ function hostMenuOpen() {
   hmRender(null);
   p.classList.remove("hidden"); HM.btn.setAttribute("aria-expanded", "true");
   hmFocus(hmItems()[0]);
+  HM.timer = setInterval(hmRefresh, 250);
 }
 function hostMenuClose(focusBtn) {
   if (!HM.open) return;
-  HM.open = false; HM.panel.classList.add("hidden"); HM.btn.setAttribute("aria-expanded", "false");
+  HM.open = false; clearInterval(HM.timer); HM.panel.classList.add("hidden"); HM.btn.setAttribute("aria-expanded", "false");
   if (focusBtn !== false) HM.btn.focus();
 }
 
@@ -169,10 +185,12 @@ function hostMenuInit() {
     if (["Enter", " ", "ArrowDown"].includes(ev.key)) { ev.preventDefault(); ev.stopPropagation(); if (!HM.open) hostMenuOpen(); }
     else if (ev.key === "Escape" && HM.open) { ev.preventDefault(); ev.stopPropagation(); hostMenuClose(true); }
   });
+  panel.tabIndex = -1;
   panel.addEventListener("keydown", hmKey);
+  panel.addEventListener("mousedown", ev => { if (!ev.target.closest('[role^="menuitem"]')) ev.preventDefault(); });   // a click on a heading or the padding keeps the focus on the item: Escape still closes, keys stay out of the page
   document.addEventListener("mousedown", ev => { if (HM.open && !panel.contains(ev.target) && ev.target !== btn) hostMenuClose(false); }, true);
   window.addEventListener("blur", () => hostMenuClose(false));
   window.addEventListener("resize", () => { if (HM.open) { hostMenuClose(false); } });
 }
 
-window.DSHostMenu = { model: hostMenuModel, audit: hostMenuAudit, open: hostMenuOpen, close: hostMenuClose, init: hostMenuInit, isOpen: () => HM.open, CHECKS: HM_CHECKS };
+window.DSHostMenu = { model: hostMenuModel, audit: hostMenuAudit, open: hostMenuOpen, close: hostMenuClose, init: hostMenuInit, isOpen: () => HM.open, refresh: hmRefresh, CHECKS: HM_CHECKS };

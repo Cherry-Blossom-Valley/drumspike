@@ -125,7 +125,7 @@ function glLane(canvas, name, view) {
   return { key: name, W, H, dw: Math.floor(W * dpr), dh: Math.floor(H * dpr), x: 0, y: 0,
            fade: row && row.classList.contains("muted") ? 0.35 : 1,   // the .tlanes opacity of a muted track
            fill: waveFill(d),   // P4-26: the solid min/max shape from a visible span of WAVE_FILL_S
-           color: S.tracks[name].color, peaks: B.peaksRaw ? undefined : p, amp: S.peakAmp[name] || 1, gain: S.ampZoom, span0, spanS,
+           color: trackColor(name), peaks: B.peaksRaw ? undefined : p, amp: S.peakAmp[name] || 1, gain: S.ampZoom, span0, spanS,
            samples: have ? (c.data ? { start: c.start, data: c.data } : { start: c.start, end: c.end }) : null, want: spanS <= 262144 && !have };
 }
 /* draw the lanes of items [{canvas, name}] at their places; false when WebGL2 is not available */
@@ -222,7 +222,7 @@ function drawWave(canvas, name) {
   if (!p) { ctx.fillStyle = "#7d8593"; ctx.fillText(S.peakErr[name] ? `cannot draw this track: ${S.peakErr[name]}` : "no peaks — re-analyze", 10, 20); return; }
   if (p.tiles) { ensureArrays(name); return; }   // P3-6b: the page holds the tiles in the engine only; the 2D path loads the arrays
   const sr = p.sr, span0 = S.view.t0*sr, spanS = viewDur()*sr, span1 = span0+spanS;   // P4-1b fix: the span of viewDur
-  const mid = H/2, color = t.color;
+  const mid = H/2, color = trackColor(name);
   const amp = S.peakAmp[name] || 1;
   const scale = (H*0.45) / amp * S.ampZoom;   // auto-gain: track peak → 90% of half-height; P3-20a: times the amplitude zoom (the canvas clips)
   const fill = waveFill(viewDur());   // the tile path below; the sample window path (up to 262144 samples) draws the exact wave, which the GL lane shows as solid columns too
@@ -286,7 +286,7 @@ function drawWave(canvas, name) {
 function drawSpike(canvas, name) {
   const ctx = canvas.getContext("2d"), [W, H] = laneSize(canvas);
   ctx.clearRect(0,0,W,H);
-  ctx.fillStyle = S.tracks[name].color + "0d"; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = trackColor(name) + "0d"; ctx.fillRect(0,0,W,H);
   ctx.strokeStyle = "#2c313c"; ctx.beginPath(); ctx.moveTo(0,H-0.5); ctx.lineTo(W,H-0.5); ctx.stroke();
   drawEventLines(canvas, name);
 }
@@ -314,7 +314,7 @@ function drawEventLines(canvas, name) {
   const isSpike = canvas.classList.contains("spike");
   drawGridLines(ctx, W, H);   // P4-8: the bar and beat lines lie under the hit lines
   lnDrawBand(ctx, W, H, name);   // P4-6a: the range selection
-  const color = S.tracks[name].color, events = S.events[name] || [];
+  const color = trackColor(name), events = S.events[name] || [];
   const lnNot = lnLearn(name) ? lnTimes(name).not : null;   // P4-6a: a hit marked "not"; P4-6c: grey when the filter took it out, else a red tint (it is exported, Tab stops on it)
   const pad = 5 * viewDur() / W;   // the hits up to 5 px outside the lane: their markers (8 px wide) reach into it (P4-1: a strip shows them too)
   // Owner request 2026-10-11: a hit line in the track colour vanished over the wave of that colour (the old 2D wave

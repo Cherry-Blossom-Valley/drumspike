@@ -78,7 +78,7 @@ function drawVelLane(canvas, name) {
   const ctx = canvas.getContext("2d"), [W, H] = laneSize(canvas);
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = "rgba(0,0,0,0.22)"; ctx.fillRect(0, 0, W, H);
-  const color = S.tracks[name].color;
+  const color = trackColor(name);
   // the floor and the ceiling of the loudness settings (P4-3): the ramp maps them to the velocities 20 and 127
   ctx.strokeStyle = "rgba(138,147,163,0.4)"; ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
   for (const v of [20, 127]) { const y = vlYOf(v, H) + 0.5; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }

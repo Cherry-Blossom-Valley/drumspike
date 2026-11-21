@@ -27,7 +27,7 @@ def shoot(page, name):
     page.screenshot(path=str(shot_dir(name)))
 
 
-RESTORE = """async () => { setOverview(true); setInspector(true); setTrackHeight('medium'); setZoomTall(false); setCounter('seconds');
+RESTORE = """async () => { setOverview(true); setInspector(true); setTrackHeight('medium'); setZoomTall(false); setCounter('seconds'); setKeyPreset('default');
   if (VL.on) vlToggle(); if (!tmShown('grid')) tmToggleUi('grid'); await new Promise(r => setTimeout(r, 200)); }"""
 
 
@@ -304,9 +304,9 @@ def test_a_new_hit_does_not_colour_the_lane_of_a_track_without_a_colour(request,
 
 
 def test_the_lane_check_sees_the_defect_when_the_colour_is_missing(host_app, make_project):
-    """The negative case: with the repair off (a no-op trackColors) the same steps give an opaque lane, so the check above can fail."""
+    """The negative case: with the repair off (no trackColors, no trackColor) the same steps give an opaque lane, so the check above can fail."""
     analyzed(host_app, make_project(tracks=(("Trk A", "other", 36), ("Trk B", "snare", 38)), seconds=6.0))
-    host_app.evaluate("() => { window.trackColors = () => {}; }")
+    host_app.evaluate("() => { window.trackColors = () => {}; window.trackColor = () => undefined; }")   # the repair off: at load and at the draw sites
     drop_colors(host_app)
     assert host_app.evaluate("() => S.tracks['Trk A'].color") is None
     add_hit_with_pointer(host_app)
@@ -319,3 +319,69 @@ def test_a_track_colour_that_the_service_gave_is_kept(host_app, make_project):
     host_open(host_app, make_project(tracks=FOUR, seconds=6.0))
     assert host_app.evaluate("() => S.order.map(n => S.tracks[n].color)") == ["#e05555", "#e0a13c", "#57b8e0", "#c9a0e0"]
     assert host_app.evaluate("() => { const t = { a: { role: 'hat' }, b: { role: 'x', color: '#123456' }, c: {} }; trackColors(t); return [t.a.color, t.b.color, t.c.color]; }") == ["#9be055", "#123456", "#8a93a6"]
+
+
+# ---------- round 2 (V2, V4, V5, V6) ----------
+
+def test_a_dialog_opened_from_the_menu_gives_the_focus_back_to_the_button(host_app, make_project, restore_settings):
+    """V2: Settings from the keyboard, then Escape: the focus is on the menu button, not on the page body."""
+    host_open(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.focus("#hostMenuBtn")
+    host_app.keyboard.press("Enter")
+    host_app.keyboard.press("ArrowRight")   # into Drum Spike
+    host_app.keyboard.press("ArrowDown")
+    assert host_app.evaluate("() => document.activeElement.dataset.cmd") == "settings"
+    host_app.keyboard.press("Enter")
+    host_app.wait_for_selector("#settingsModal:not(.hidden)")
+    host_app.keyboard.press("Escape")
+    host_app.wait_for_selector("#settingsModal.hidden", state="attached")
+    assert host_app.evaluate("() => document.activeElement.id") == "hostMenuBtn"
+
+
+def test_a_click_inside_the_panel_keeps_the_focus_in_the_panel(host_app, make_project):
+    """V4: a click on a heading or the padding must not move the focus to the body: Escape still closes, keys stay out of the page."""
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    open_menu(host_app); group(host_app, "View")
+    state = host_app.evaluate("() => [PH.v, S.playing, S.view.t0]")
+    host_app.locator("#hostMenu .hmHead").first.scroll_into_view_if_needed()
+    head = host_app.locator("#hostMenu .hmHead").first.bounding_box()
+    host_app.mouse.click(head["x"] + 5, head["y"] + 3)
+    pad = host_app.locator("#hostMenu").bounding_box()
+    host_app.mouse.click(pad["x"] + pad["width"] / 2, pad["y"] + 2)   # the padding above the first item
+    assert host_app.evaluate("() => document.querySelector('#hostMenu').contains(document.activeElement)") is True
+    host_app.keyboard.press("Space")
+    assert host_app.evaluate("() => [PH.v, S.playing, S.view.t0]") == state
+    host_app.keyboard.press("Escape"); host_app.keyboard.press("Escape")
+    assert host_app.evaluate("() => [DSHostMenu.isOpen(), document.activeElement.id]") == [False, "hostMenuBtn"]
+
+
+def test_an_open_panel_follows_a_change_of_the_page(host_app, make_project, restore_settings):
+    """V6: the marks and the greyed items of an open panel follow a change that comes from outside (a key, the host)."""
+    host_open(host_app, make_project(tracks=FOUR, seconds=6.0))
+    open_menu(host_app); group(host_app, "View")
+    assert item(host_app, "height_large").get_attribute("aria-checked") == "false"
+    host_app.evaluate("() => setTrackHeight('large')")
+    host_app.wait_for_function("() => document.querySelector('#hostMenu [data-cmd=height_large]').getAttribute('aria-checked') === 'true'")
+    assert item(host_app, "height_medium").get_attribute("aria-checked") == "false"
+    host_app.keyboard.press("Escape"); host_app.keyboard.press("Escape")
+
+
+def test_half_speed_is_absent_in_host_mode_and_the_other_return_commands_stay(host_app, make_project):
+    """V5c: the host has no half speed; Stop and Return and its mode act through the host transport and stay."""
+    host_open(host_app, make_project(tracks=FOUR, seconds=6.0))
+    ids = host_app.evaluate("() => DSHostMenu.model().flatMap(g => g.items.map(i => i.id))")
+    assert "half_speed" not in ids and {"stop_return", "stop_return_mode", "play_stop"} <= set(ids)
+    host_app.evaluate("() => { setMsg(''); halfSpeedPlayStop(); }")
+    assert host_app.evaluate("() => document.querySelector('#stMsg').textContent") == "the host plays the audio"
+    assert host_app.evaluate("() => S.playing") is False
+
+
+def test_a_help_link_that_cannot_open_says_its_address(host_app, make_project):
+    """V5a: an external link of the manual that the shell refuses shows the address on the status line, not silence."""
+    host_open(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("() => { B.openUrl = async () => { throw new Error('refused'); }; DSHelp.open('daw'); }")
+    host_app.wait_for_selector("#helpModal:not(.hidden)")
+    host_app.evaluate("""() => { const a = document.createElement('a'); a.className = 'ext'; a.href = 'https://example.org/x'; a.textContent = 'x'; a.id = 'zzLink';
+      document.querySelector('#helpPage').appendChild(a); setMsg(''); }""")
+    host_app.click("#zzLink")
+    host_app.wait_for_function("() => document.querySelector('#stMsg').textContent.includes('https://example.org/x')")

@@ -387,6 +387,7 @@
     var tracks = [];
     if (T.fault === "no-color") {   // the fault run: the service gives no colour and the page has no repair
       window.trackColors = function () { /* the repair is off */ };
+      window.trackColor = function () { return undefined; };
       names.forEach(function (n) { S.tracks[n].color = undefined; });
       invalidate(F.VIEW);
     }

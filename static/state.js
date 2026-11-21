@@ -130,7 +130,7 @@ const HOST_OWNED = ["new", "open", "open_recent", "recent_clear", "close", "save
    MIDI file drag (static/export.js exDragStart, which M1c wires). */
 const HOST_ABSENT = [
   { group: "audio", say: "the host plays the audio",
-    menu: ["audition", "audition_tab", "click", "mute_track", "solo_track", "reset_mix"],
+    menu: ["audition", "audition_tab", "click", "mute_track", "solo_track", "reset_mix", "half_speed"],   // #559: the host has no half speed (a play request carries no speed)
     commands: ["transport_play", "transport_stop", "transport_seek", "transport_status", "transport_mix", "transport_clicks",
       "transport_master", "track_set_mix", "outputs_list", "output_select"],
     controls: ["#clickBtn", "#auditionTabBtn", ".master", "#insMixBox", ".tctl", ".meter", "#setCat-audio", "#setCat-audition",

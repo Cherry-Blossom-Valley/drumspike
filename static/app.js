@@ -7,6 +7,8 @@ const OWN_ZOOM_NAME_MAX = 40;   // #169: the longest name of an own zoom preset
 const ROLE_DEFAULT_NOTE = { kick:36, snare:38, tom:48, hat:42, cymbal:49, other:36 };
 /* The lane colour of a role (`role_color` in crates/app/src/roles.rs). A track record without a colour (a project that the DAW plugin made, a restored track) draws in the colour of its role: the lane code appends an alpha to it ("#8a93a6" + "0d"), and "undefined0d" is no colour, so the 2D context would keep its last fill style and paint the lane in the colour of the last hit (magenta for a hand-added one, yellow for the selected one). */
 const ROLE_COLORS = { kick: "#e05555", snare: "#e0a13c", tom: "#57b8e0", hat: "#9be055", cymbal: "#c9a0e0", other: "#8a93a6" };
+/* The colour of a track for drawing: its own when it is 6 hex digits, else the colour of its role. Every draw site calls this, so a lane never builds "undefined0d" and never keeps the last fill style of the canvas. */
+function trackColor(name) { const t = S.tracks[name]; return t && /^#[0-9a-f]{6}$/i.test(t.color || "") ? t.color : ROLE_COLORS[t && t.role] || ROLE_COLORS.other; }
 function trackColors(tracks) { for (const t of Object.values(tracks || {})) if (t && !/^#[0-9a-f]{6}$/i.test(t.color || "")) { t.color = ROLE_COLORS[t.role] || ROLE_COLORS.other; t.colorFromRole = true; } }
 const ROLE_DEFAULT_CLICK = { kick:1000, snare:2500, tom:700, hat:4000, cymbal:3000, other:1500 };
 
@@ -335,7 +337,7 @@ function drawOverviewTracks(ctx, W, H) {
     const amp = S.peakAmp[name] || 1;
     const scale = ((rowH-4)/2) / amp;
     if (Array.isArray(L.rms)) {
-      ctx.fillStyle = S.tracks[name].color;
+      ctx.fillStyle = trackColor(name);
       for (let px=0; px<W; px++) {
         const b0 = Math.floor(px/W*L.n), b1 = Math.max(b0+1, Math.floor((px+1)/W*L.n));
         let r = 0; for (let b=b0;b<Math.min(b1,L.n);b++) r = Math.max(r, L.rms[b]);
@@ -343,7 +345,7 @@ function drawOverviewTracks(ctx, W, H) {
         if (hh>0.3) ctx.fillRect(px, y0+rowH/2-hh, 1, hh*2);
       }
     }
-    ctx.fillStyle = S.tracks[name].color + "66";
+    ctx.fillStyle = trackColor(name) + "66";
     for (let px=0; px<W; px++) {
       const b0 = Math.floor(px/W*L.n), b1 = Math.max(b0+1, Math.floor((px+1)/W*L.n));
       let mn=1, mx=-1;
@@ -360,7 +362,7 @@ function drawOverviewTracks(ctx, W, H) {
 const OV = { key: "", peaks: [], amps: [], canvas: null };
 function overviewTracks(c, W, H) {
   const peaks = S.order.map(n => S.peaks[n]), amps = S.order.map(n => S.peakAmp[n]);
-  const key = `${c.width}x${c.height}|${W}x${H}|${S.order.map(n => n + S.tracks[n].color).join("|")}`;
+  const key = `${c.width}x${c.height}|${W}x${H}|${S.order.map(n => n + trackColor(n)).join("|")}`;
   if (OV.canvas && key === OV.key && peaks.every((p, i) => p === OV.peaks[i]) && amps.every((a, i) => a === OV.amps[i])) return OV.canvas;
   OV.key = key; OV.peaks = peaks; OV.amps = amps;
   if (OV.canvas) { OV.canvas.width = 0; OV.canvas.height = 0; }
