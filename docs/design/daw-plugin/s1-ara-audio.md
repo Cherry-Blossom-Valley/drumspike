@@ -13,7 +13,7 @@ it can run. The LUNA column comes from the first run in LUNA on 2026-11-20 (see 
 
 | Question | Test host (ARA examples, script run) | Reaper | LUNA | Pro Tools |
 |---|---|---|---|---|
-| Does one instance see all tracks? | yes: one instance read all 3 sources of the document in full on the CLAP and the wrapped VST3 (144000 + 48000 + 192000 samples, FNV-1a equal to the WAV read; 6 source loads compared) | not on this host (no Reaper on x86-mac) | One ARA document for a session; every track that has the plugin joins it. | n/a until Avid admits the plugin |
+| Does one instance see all tracks? | yes: one instance read all 3 sources of the document in full on the CLAP and the wrapped VST3 (144000 + 48000 + 192000 samples, FNV-1a equal to the WAV read; 6 source loads compared) | not on this host (no Reaper on the Intel test host) | One ARA document for a session; every track that has the plugin joins it. | n/a until Avid admits the plugin |
 | How is the plugin added (track, event, take)? | the test host has no track/event/take model: it creates the ARA document controller and binds one plugin instance to the document; the DAW workflow is what the LUNA row shows | not on this host | The plugin is set per track, in the Warp control, sub-menu ARA. | n/a until Avid admits the plugin |
 | Are the playback regions correct after a clip is cut and moved? | not covered by check_s1.sh (the host runs no edit test; see "Not covered") | not on this host | not recorded yet | n/a until Avid admits the plugin |
 | Is the tempo map filled? | not covered by check_s1.sh (the host runs no musical timeline here) | not on this host | not recorded yet | n/a until Avid admits the plugin |
