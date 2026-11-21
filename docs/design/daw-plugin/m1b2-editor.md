@@ -399,5 +399,6 @@ re-applies the deletes after a round (it would have to remember them per track).
 - The memory figure counts the host process only.
 - `quit_app`, the file dialogs and the file drag are no-ops or errors (the host owns the
   window and the files; the drag is part M1c).
-- The host transport (position, play, stop, locate) is a later part: the page runs with
-  `__DS_HOST_MODE__` set and no `B.hostTransport`.
+- The host transport (position, play, stop, locate) came with M1b5 (#546,
+  `m1b5-host-transport.md`). Until then the page ran with `__DS_HOST_MODE__` set and no
+  `B.hostTransport`. Play and locate from the page to the host are still a later part.

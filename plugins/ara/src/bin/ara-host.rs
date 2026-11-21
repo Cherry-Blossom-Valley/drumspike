@@ -25,6 +25,16 @@
 //!                             while its analysis runs; prints the time of the destroy call
 //! ara-host <bundle> docs     --files <wav>... --files2 <wav>...   two document controllers
 //!                             in one process: the first document works, then the second
+//! ara-host <bundle> editor ... --transport script|loop|null|none|deactivate   the host transport (M1b5):
+//!                             `script`: stop at 2.5 s, play, stop, locate, play, locate while
+//!                             playing, stop, locate before and after the region; `loop`: play
+//!                             from 0 and wrap every 2.5 s; `null`: process calls with no
+//!                             transport; `none`: no process call at all. The thread of the
+//!                             process calls starts when the page has booted and prints the row
+//!                             `transport_script` (the host's own truth, on the wall clock).
+//!                             `deactivate`: plays 2 s, then deactivates the plugin with no stopped
+//!                             process call (the segments end with a stopped one at that time).
+//!                             `--regions-all a,d,p`: every source gets this one region.
 //! ```
 //!
 //! Options of the modes that request an analysis (M1b4, the finding from LUNA):
@@ -91,6 +101,9 @@ const FRAMES: usize = 512;
 /// ID, as a host that has none does. A restore then has only the name to match on, and the
 /// name is the host's own (here the file path), not the reduced name the archive stores.
 static NO_REGIONS: AtomicBool = AtomicBool::new(false);
+/// `--regions-all a,d,p` (M1b5): every source gets this one region instead of the back-to-back layout,
+/// so the sources of a session sit at the same place of the song (the usual drum session).
+static REGIONS_ALL: Mutex<Option<(f64, f64, f64)>> = Mutex::new(None);
 static NO_PERSISTENT_ID: AtomicBool = AtomicBool::new(false);
 
 /// `--names <n>...`: the ARA names the host gives the sources, by creation index, instead of
@@ -1204,6 +1217,9 @@ fn main() {
             *SLOW_READ.lock().unwrap() = Some((k, ms));
         }
     }
+    if let Some(r) = args_value(&rest, "--regions-all").and_then(|v| parse_region(&v).ok()) {
+        *REGIONS_ALL.lock().unwrap() = Some(r);
+    }
     if let Some(w) = args_value(&rest, "--wait").and_then(|v| v.parse::<u64>().ok()) {
         WAIT_SECS.store(w, Ordering::SeqCst);
     }
@@ -1240,6 +1256,9 @@ fn main() {
 
 /// The full-length region layout (the ARA test host's: the regions sit back to back).
 fn full_regions(state: &HostState, i: usize) -> Vec<(f64, f64, f64)> {
+    if let Some(all) = *REGIONS_ALL.lock().unwrap() {
+        return vec![all];
+    }
     let mut position = 0.0;
     for s in state.sources.iter().take(i) {
         position += s.channels.first().map_or(0.0, |c| c.len() as f64) / f64::from(s.rate);

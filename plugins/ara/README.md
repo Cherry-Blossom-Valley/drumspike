@@ -1,4 +1,4 @@
-# Drum Spike ARA plugin (M1a, #525; M1b1, #537; M1b2, #538)
+# Drum Spike ARA plugin (M1a, #525; M1b1, #537; M1b2, #538; M1b5, #546)
 
 The Drum Spike plugin for DAWs: one CLAP plugin in Rust with ARA 2 and, since M1b2, an editor window,
 wrapped as one self-contained VST3 (the CLAP inside the bundle). The plugin takes the
@@ -196,6 +196,33 @@ functions; no tool in `.deps` calls them on the VST3 alone, so they also have un
 The report has evidence rows of what the host sends (`view_selection`, `view_hide_sequences`,
 `process_first`, `transport_seen`); the audio thread writes none of them.
 
+## The host transport (M1b5)
+
+The page in the editor follows the transport of the host: the playhead moves with the host, stops
+with it and jumps at a locate. The plugin sets `B.hostTransport` in the shell script of the page
+and feeds it. The page plays no audio; its Play button says "the host plays: start playback in the
+DAW". Stop and locate from the page do nothing yet.
+
+- **Source:** the transport of the CLAP `process` call (song position in seconds, play flag). ARA
+  gives a plugin no transport. In the VST3 the wrapper fills the same fields from the host.
+- **Hand-over:** the audio thread stores atomics in a sequence lock (no mutex, no allocation, no
+  row). The long poll `/__ds/transport` of the editor reads it.
+- **Rate:** one message at a change of the state or a jump, 25 a second while the host plays, none
+  while it is stopped and unchanged.
+- **Mapping:** the playback regions of the last round (the ones the notes use) turn the song
+  position into the source time that the page shows. Outside every region the playhead runs on
+  with the offset of the nearest earlier region.
+- **No transport** (no process call, or a call without one): the playhead stays, no message, no
+  error row.
+- **Report rows:** `transport_seen` (first process call with a transport, with its `source`),
+  `transport_page_first` (first message to a page) and `transport_stale` (a playing host stopped
+  its process calls).
+
+The test host plays a transport script: `ara-host <bundle> editor --editor-mode transport
+--transport script|loop|null|none [--regions-all a,d,p]`. Stages `transport-handover`,
+`editor-transport`, `editor-transport-measure` and `editor-transport-none`, each with a fault run
+(switch `DS_ARA_TRANSPORT_FAULT`). The design is in `docs/design/daw-plugin/m1b5-host-transport.md`.
+
 ## The check
 
 `plugins/ara/check.sh check` (-> `check.py all`) runs every gate line of the ticket: the
@@ -268,9 +295,10 @@ delivery ticket M1c.
 | `DS_ARA_SCENARIO` | scenario | corrupt-wav:<n>, fail-first-round, slow-setup, audio-deadline-ms:<n>, fail-rounds:<n>, no-reader-thread | the WAV of source n is damaged after the read, the first round fails once, every round waits 1.5 s before its analysis starts, or a request waits n ms for audio (default 30000); fail-rounds:<n>: the first n rounds fail; no-reader-thread: the reader thread of a source cannot start |
 | `DS_ARA_RETRY_MS` | scenario | milliseconds | the first wait of the automatic retry of a failed round (default 2000, then twice as long each time; kept between 10 and 60000) |
 | `DS_ARA_STATE_FAULT` | fault | strict | the load of the plugin state refuses an empty stream, a newer version and anything else than its own blob (the host's instance creation then fails, as in LUNA) |
-| `DS_ARA_EDITOR_MODE` | scenario | ready, keys, focus, resize, measure, edit, shell, analyse, net, bigpost | the editor page runs a test driver of that name and reports to the plugin (the test host sets it itself) |
+| `DS_ARA_EDITOR_MODE` | scenario | ready, keys, focus, resize, measure, edit, shell, analyse, net, bigpost, transport | the editor page runs a test driver of that name and reports to the plugin (the test host sets it itself); transport: the page samples its drawn position while the host plays a transport script |
 | `DS_ARA_EDITOR_ARG` | scenario | a text | the argument of the test driver of the editor page (a WAV path of the shell mode) |
-| `DS_ARA_EDITOR_FAULT` | fault | no-ready, no-bundle, no-shell, no-sync, no-record, no-notes, no-reload, no-events, drop-edits, drop-track-data, missing-function, allow-track-set, no-focus, no-resize, inline, leak, slow-frames | the editor: the page's ready call is not counted, the plugin finds no page in its bundle, the shell commands are left to the service, a command of the page does not reach the archive or the request thread does not record it before the page's answer (no-record), the notes do not follow an edit, the page is not told that a round ended or gets no event of the service, a round of the plugin drops the hand edits of the page, the shell script of the page finds a function missing (it reports it), a region change drops the hand data of the track (hits, role, mix), the page may change the track set, the web view is not the first responder or does not follow a resize, a command runs on the main thread, every editor leaks 4 MB, or the page draws slow frames |
+| `DS_ARA_EDITOR_FAULT` | fault | no-ready, no-bundle, no-shell, no-sync, no-record, no-notes, no-reload, no-events, drop-edits, drop-track-data, missing-function, allow-track-set, no-focus, no-resize, inline, leak, slow-frames, page-transport | the editor: the page's ready call is not counted, the plugin finds no page in its bundle, the shell commands are left to the service, a command of the page does not reach the archive or the request thread does not record it before the page's answer (no-record), the notes do not follow an edit, the page is not told that a round ended or gets no event of the service, a round of the plugin drops the hand edits of the page, the shell script of the page finds a function missing (it reports it), a region change drops the hand data of the track (hits, role, mix), the page may change the track set, the web view is not the first responder or does not follow a resize, a command runs on the main thread, every editor leaks 4 MB, the page draws slow frames, or (page-transport) the page runs a command of the app's own transport |
+| `DS_ARA_TRANSPORT_FAULT` | fault | off, identity, flood, invent, alloc, keep-playing | the host transport of the page (M1b5): off: the audio thread stores no transport, so the page never follows; identity: the song position is the page time, the regions are not used; flood: a message to the page every 8 ms instead of every 40 ms; invent: with no transport seen, the page is told the host plays from 0; alloc: the audio thread allocates in its call (the unit test that names the hand-over fails); keep-playing: a cleared slot or a host with no position does not stop the page (the way before review round 3) |
 | `DS_ARA_EDITOR_SCENARIO` | scenario | panic:<command>, sync-delay | the named command of the page panics inside the plugin where the service would run it, or the worker hears 12 s late about a change of the page (the request thread's own record is not delayed) |
 
 Kinds: **config**: The plugin reads it (the check sets it for every run). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. **scenario**: Scenario switch: sets up a case for a stage (not a fault).

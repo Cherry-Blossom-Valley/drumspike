@@ -3480,7 +3480,7 @@ def stage_switches_fault() -> bool:
 
 # ---- review round 2, item 9: no unwrap and no expect in the non-test code of the plugin
 
-UNWRAP_FILES = ["src/editor.rs", "src/lib.rs", "src/service.rs", "src/state.rs", "src/wav.rs"]
+UNWRAP_FILES = ["src/editor.rs", "src/lib.rs", "src/service.rs", "src/state.rs", "src/transport.rs", "src/wav.rs"]
 UNWRAP_PATTERN = re.compile(r"\.(unwrap|expect)\s*\(|\.unwrap_unchecked\s*\(")
 
 
@@ -4700,6 +4700,328 @@ def stage_editor_shell_report_fault() -> bool:
 
 
 
+# ---------------------------------------------------------------- M1b5: the host transport (#546)
+#
+# The test host plays a transport script through process calls (it makes the plugin's audio thread
+# see play, stop and locate) and writes its own truth on the wall clock (the row transport_script).
+# The page driver samples what the page draws, a sample a frame, with the same clock. The stage
+# compares the two. The plugin's regions are one region for every source (start in the source 0.4 s,
+# length 2.4 s, at 2.0 s of the song), so the page time is the song position minus 1.6 s.
+
+TRANSPORT_REGION = (0.4, 2.4, 2.0)
+TRANSPORT_ERR_MS = 50.0
+TRANSPORT_RATE = (15.0, 40.0)   # messages a second while the host plays
+# The 50 ms limit holds over the stable part of each play stretch: the first 0.5 s after a start or a
+# locate (the page anchors, a loaded machine may be late) and the last 0.1 s before the next change are not counted.
+STABLE_FROM_S = 0.5
+
+
+def transport_files() -> list:
+    return [str(FIXTURES / FILES[0]), str(FIXTURES / FILES[2])]
+
+
+def host_row(label: str, event: str) -> dict:
+    """A row the test host printed to its stdout (out/host-<label>.log)."""
+    path = OUT / f"host-{label}.log"
+    if path.exists():
+        for ln in path.read_text(errors="replace").splitlines():
+            if ln.startswith("{") and f'"{event}"' in ln:
+                try:
+                    return json.loads(ln)
+                except ValueError:
+                    pass
+    return {}
+
+
+def region_page_time(song: float) -> float:
+    """The page time of a song position: the rule of the design note, for one region that every
+    source shares (inside and outside the region alike: the offset of the nearest region)."""
+    a, _d, p = TRANSPORT_REGION
+    return max(0.0, a + (song - p))
+
+
+def transport_run(label: str, bundle: Path, env: dict | None = None, kind: str = "script", arg: str = "11.5",
+                  mode: str = "transport", args: list | None = None, files: list | None = None) -> tuple[int, dict, list, dict]:
+    extra = ["--transport", kind, "--arg", arg, *(args if args is not None else ["--regions-all", ",".join(str(x) for x in TRANSPORT_REGION)])]
+    rc, summary, rows = run_phase(label, mode, bundle, env, extra, files=files if files is not None else transport_files())
+    return rc, summary, rows, host_row(label, "transport_script")
+
+
+def transport_parts(rc: int, rows: list, script: dict) -> dict:
+    names = ["editor-transport-follow", "editor-transport-stop", "editor-transport-locate", "editor-transport-jump",
+             "editor-transport-rate", "editor-transport-own-audio", "editor-transport-source"]
+    reps = page_reports(rows, "transport")
+    r = reps[0] if reps else {}
+    segs = script.get("segments", [])
+    samples = r.get("samples", [])
+    if not r or r.get("visibility") != "visible" or len(segs) != 9 or len(samples) < 100:
+        why = (f"the page is {r.get('visibility')}: the screen of this host is locked or its window occluded, so the page draws no frame"
+               if r and r.get("visibility") != "visible" else
+               f"no usable run: rc={rc}, page report {bool(r)}, {len(segs)} host segments (want 9), {len(samples)} samples")
+        return {n: (False, why) for n in names}
+    max_dur = r.get("max_dur") or 3.0
+
+    def at(seg: int, age_s: float) -> list:
+        """The sample nearest to `age_s` seconds after the start of the host segment."""
+        w = segs[seg]["wall_ms"] + age_s * 1000.0
+        return min(samples, key=lambda x: abs(x[0] - w))
+
+    def truth_song(seg: int, sample: list) -> float:
+        g = segs[seg]
+        return g["song"] + ((sample[0] - g["wall_ms"]) / 1000.0 if g["playing"] else 0.0)
+
+    def err_ms(seg: int, sample: list) -> float:
+        return abs((sample[1] if sample[1] is not None else 1e9) - min(region_page_time(truth_song(seg, sample)), max_dur)) * 1000.0
+
+    play_segs = [1, 4, 5]
+    # the three sample points of the first play stretch, and every sample of all play stretches
+    pts = [at(1, a) for a in (0.6, 1.1, 1.6)]
+    pt_err = [err_ms(1, x) for x in pts]
+    moved = pts[2][1] - pts[0][1] if None not in (pts[2][1], pts[0][1]) else 0.0
+    ends = [segs[i + 1]["wall_ms"] if i + 1 < len(segs) else 1e18 for i in range(len(segs))]
+    every = []
+    for g in play_segs:
+        for x in samples:
+            age = (x[0] - segs[g]["wall_ms"]) / 1000.0
+            if STABLE_FROM_S <= age and x[0] < ends[g] - 100.0:
+                every.append(err_ms(g, x))
+    worst = max(every) if every else 1e9
+    mean = sum(every) / len(every) if every else 1e9
+    if moved < 0.8:
+        follow = (False, f"playhead did not move: the page time went {pts[0][1]} -> {pts[2][1]} s over 1 s of host play ({len(samples)} samples)")
+    else:
+        follow = (max(pt_err) <= TRANSPORT_ERR_MS and worst <= TRANSPORT_ERR_MS,
+                  f"the page follows the host during play: error at the three sample points {[round(e, 1) for e in pt_err]} ms, over all "
+                  f"{len(every)} samples of the stable part (from {STABLE_FROM_S} s after a start or locate to 0.1 s before the next change) of three play stretches max {worst:.1f} ms, mean {mean:.1f} ms (limit {TRANSPORT_ERR_MS:.0f} ms); "
+                  f"the page time moved {moved:.2f} s in 1 s" if max(pt_err) <= TRANSPORT_ERR_MS and worst <= TRANSPORT_ERR_MS else
+                  f"the playhead is off by up to {worst:.1f} ms (the three points {[round(e, 1) for e in pt_err]} ms; limit {TRANSPORT_ERR_MS:.0f} ms)")
+
+    def held(seg_list: list, what: str) -> tuple[bool, str]:
+        out = []
+        for g in seg_list:
+            x = at(g, 0.6)
+            exp = min(region_page_time(segs[g]["song"]), max_dur)
+            out.append((g, x[1], round(exp, 4), x[2]))
+        ok_ = all(p is not None and abs(p - e) <= 0.003 and pl == 0 for _g, p, e, pl in out)
+        return ok_, f"{what}: " + ", ".join(f"segment {g}: page {p} s (want {e}), playing={pl}" for g, p, e, pl in out)
+
+    stop_ok, stop_ev = held([2, 6], "after a stop of the host the page stands at the host's position")
+    loc_ok, loc_ev = held([3, 7, 8], "after a locate of the stopped host (the last two before and after the region) the page shows")
+    before, after = at(5, -0.05), at(5, 0.5)
+    jump_err = max(err_ms(5, x) for x in samples if 0.3 <= (x[0] - segs[5]["wall_ms"]) / 1000.0 < 1.1)
+    step = abs((after[1] or 0.0) - (before[1] or 0.0))
+    jump = (step > 1.0 and jump_err <= TRANSPORT_ERR_MS,
+            f"a locate of the playing host (song 3.2+ -> 2.2): the page time stepped {step:.2f} s and is then within {jump_err:.1f} ms (limit {TRANSPORT_ERR_MS:.0f} ms)")
+    log = r.get("log", [])
+
+    def msgs_between(a: float, b: float) -> int:
+        return sum(1 for t, _why in log if a <= t < b)
+
+    pa, pb = segs[1]["wall_ms"] + 300.0, segs[2]["wall_ms"] - 100.0
+    rate = msgs_between(pa, pb) / ((pb - pa) / 1000.0)
+    still = msgs_between(segs[3]["wall_ms"] + 600.0, segs[4]["wall_ms"] - 100.0) + msgs_between(segs[7]["wall_ms"] + 600.0, segs[8]["wall_ms"] - 100.0)
+    rate_ok = TRANSPORT_RATE[0] <= rate <= TRANSPORT_RATE[1] and still == 0
+    rate_ev = (f"{rate:.1f} messages a second while the host plays (want {TRANSPORT_RATE[0]:.0f} to {TRANSPORT_RATE[1]:.0f}), {still} while it is stopped and unchanged (want 0)"
+               if rate_ok else
+               (f"too many updates: {rate:.1f} messages a second while the host plays (limit {TRANSPORT_RATE[1]:.0f})" if rate > TRANSPORT_RATE[1]
+                else f"{rate:.1f} messages a second while the host plays (want {TRANSPORT_RATE[0]:.0f} to {TRANSPORT_RATE[1]:.0f}), {still} while stopped (want 0)"))
+    closes = [x for x in rows if x.get("event") == "editor_close"]
+    tcmds = closes[-1].get("transport_commands") if closes else None
+    refused = str(r.get("play", "")).startswith("rejected") and r.get("wired") is True
+    if not closes or tcmds is None:
+        own = (False, "no editor_close row: the run did not end cleanly, the count of page commands is unknown")
+    elif tcmds != 0:
+        own = (False, f"the page ran {tcmds} transport command(s) while the host plays (want 0); play is {r.get('play')!r}")
+    elif not refused:
+        own = (False, f"the page's own play was not refused: {r.get('play')!r}, wired {r.get('wired')}")
+    else:
+        own = (True, f"transport commands of the page while the host plays: 0 (want 0); the page's own play is {r.get('play')!r}; the listener is wired: True")
+    seen = [x for x in rows if x.get("event") == "transport_seen"]
+    first = [x for x in rows if x.get("event") == "transport_page_first"]
+    src = (bool(seen) and seen[0].get("source") == "clap_process" and bool(first) and first[0].get("source") == "clap_process",
+           f"first transport seen by the audio thread: source {seen[0].get('source') if seen else None}, position {seen[0].get('position_seconds') if seen else None} s; "
+           f"first message to the page: host {first[0].get('host_position_seconds') if first else None} s = {first[0].get('host_position_samples') if first else None} samples "
+           f"at {first[0].get('sample_rate') if first else None} Hz, page time {first[0].get('page_time') if first else None} s, mapped by {first[0].get('mapped_by') if first else None}")
+    return dict(zip(names, [follow, (stop_ok, stop_ev), (loc_ok, loc_ev), jump, (rate_ok, rate_ev), own, src]))
+
+
+def stage_editor_transport() -> bool:
+    """Gate lines 1 to 5 (M1b5): the page follows the host transport, on the CLAP and on the plugin
+    inside the VST3 bundle."""
+    ok = True
+    for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
+        rc, _summary, rows, script = transport_run(f"editor-transport-{which}", bundle)
+        ok = print_parts(suffix, transport_parts(rc, rows, script)) and ok
+    return ok
+
+
+def fault_reason(stage: str, parts: dict, name: str, what: str, reason: str) -> bool:
+    """A fault run passes when the part fails, and for the named reason."""
+    good, ev = parts.get(name, (True, "part missing"))
+    return pass_fail(stage, (not good) and reason in ev, f"the fault run ({what}) makes {name} fail with '{reason}': {ev}")
+
+
+def stage_editor_transport_fault() -> bool:
+    ok = True
+    for label, env, part, what, reason in (
+        ("off", {"DS_ARA_TRANSPORT_FAULT": "off"}, "editor-transport-follow", "the hand-over is off: the audio thread stores nothing", "playhead did not move"),
+        ("identity", {"DS_ARA_TRANSPORT_FAULT": "identity"}, "editor-transport-follow", "the song position goes to the page without the regions", "off by"),
+        ("flood", {"DS_ARA_TRANSPORT_FAULT": "flood"}, "editor-transport-rate", "a message every 8 ms", "too many updates"),
+        ("own", {"DS_ARA_EDITOR_FAULT": "page-transport"}, "editor-transport-own-audio", "the page runs a command of the app's transport", "transport command"),
+    ):
+        rc, _summary, rows, script = transport_run(f"editor-fault-transport-{label}", CLAP, env)
+        ok = fault_reason(f"editor-transport-fault-{label}", transport_parts(rc, rows, script), part, what, reason) and ok
+        if label == "own":
+            # a run that ended with no editor_close row must fail the stage, and not for the reason of the fault run
+            cut = [x for x in rows if x.get("event") != "editor_close"]
+            good, ev = transport_parts(rc, cut, script)["editor-transport-own-audio"]
+            ok = pass_fail("editor-transport-fault-noclose", (not good) and "no editor_close row" in ev and "ran" not in ev,
+                           f"a run with no editor_close row fails editor-transport-own-audio for its own reason: {ev}") and ok
+    return ok
+
+
+def measure_playing_parts(rc: int, rows: list, summary: dict | None) -> dict:
+    parts = {"editor-transport-frames": measure_parts(rc, rows, summary)["editor-measure"]}
+    reps = page_reports(rows, "measure")
+    r = reps[0] if reps else {}
+    followed = bool(r.get("host_playing")) and (r.get("transport_msgs") or 0) >= 50
+    parts["editor-transport-follows"] = (
+        followed,
+        f"during the measure the host played in a loop and the page followed: playing={r.get('host_playing')}, {r.get('transport_msgs')} messages, "
+        f"position {r.get('host_pos')} s" if followed else
+        f"the page did not follow the host during the measure: playing={r.get('host_playing')}, {r.get('transport_msgs')} messages (want 50 or more)")
+    return parts
+
+
+def stage_editor_transport_measure() -> bool:
+    """Gate line 6: the frame time holds with the host playing (a looping transport: 8 s of scroll
+    and zoom while the page follows; limit 33 ms at the 95th percentile)."""
+    ok = True
+    for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
+        rc, summary, rows, _ = transport_run(f"editor-transport-measure-{which}", bundle, kind="loop", mode="measure",
+                                             args=["--regions-all", "0,1.5,0"], files=[str(FIXTURES / f) for f in FILES])
+        ok = print_parts(suffix, measure_playing_parts(rc, rows, summary), ["editor-transport-frames", "editor-transport-follows"]) and ok
+    return ok
+
+
+def stage_editor_transport_measure_fault() -> bool:
+    ok = True
+    for label, env, part, what in (
+        ("slow", {"DS_ARA_EDITOR_FAULT": "slow-frames"}, "editor-transport-frames", "the page draws a slow frame every time"),
+        ("off", {"DS_ARA_TRANSPORT_FAULT": "off"}, "editor-transport-follows", "the hand-over is off, the page does not follow"),
+    ):
+        rc, summary, rows, _ = transport_run(f"editor-fault-transport-measure-{label}", CLAP, env, kind="loop", mode="measure",
+                                             args=["--regions-all", "0,1.5,0"], files=[str(FIXTURES / f) for f in FILES])
+        if summary.get("window_visible") is False:
+            ok = pass_fail(f"editor-transport-measure-fault-{label}", False, "the window is occluded (locked screen)") and ok
+            continue
+        ok = fault_part(f"editor-transport-measure-fault-{label}", measure_playing_parts(rc, rows, summary), part, what) and ok
+    return ok
+
+
+def none_parts(rc: int, rows: list, kind: str) -> dict:
+    reps = page_reports(rows, "transport")
+    r = reps[0] if reps else {}
+    if not r or r.get("visibility") != "visible":
+        return {"editor-transport-none": (False, f"no usable run: rc={rc}, page report {bool(r)}, page {r.get('visibility')}")}
+    samples = r.get("samples", [])
+    positions = sorted({x[1] for x in samples})
+    playing = sum(x[2] for x in samples)
+    errors = [x for x in rows if x.get("event") in ("page_report",) and x.get("kind") == "js_error"] + \
+             [x for x in rows if x.get("event") in ("page_shell_report", "page_panic_caught", "page_record_failed")]
+    rowset = [x["event"] for x in rows if x.get("event") in ("transport_seen", "transport_page_first")]
+    good = (rc == 0 and len(samples) > 60 and positions == [0.0] and playing == 0 and r.get("messages") == 0 and r.get("wired") is True
+            and not errors and not rowset)
+    return {"editor-transport-none": (
+        good,
+        f"host with {kind}: the page stayed at {positions} s over {len(samples)} frames, playing in {playing} of them, {r.get('messages')} messages, "
+        f"{len(errors)} error rows, rows {rowset or 'none'}, the listener is wired: {r.get('wired')}" if good else
+        f"the playhead moved or a message came with no transport: positions {positions[:5]}, playing in {playing} frames, {r.get('messages')} messages, "
+        f"{len(errors)} error rows, rows {rowset}")}
+
+
+def stage_editor_transport_none() -> bool:
+    """Gate line 7: a host that never makes a process call, and one whose process calls carry no
+    transport, leave the page in a defined state: the playhead stays at 0, no message, no error row."""
+    ok = True
+    for kind in ("none", "null"):
+        rc, _s, rows, _ = transport_run(f"editor-transport-{kind}", CLAP, kind=kind, arg="4")
+        ok = print_parts(f"-{kind}", none_parts(rc, rows, kind)) and ok
+    return ok
+
+
+def stage_editor_transport_none_fault() -> bool:
+    ok = True
+    rc, _s, rows, _ = transport_run("editor-fault-transport-invent", CLAP, {"DS_ARA_TRANSPORT_FAULT": "invent"}, kind="none", arg="4")
+    ok = fault_part("editor-transport-none-fault-invent", none_parts(rc, rows, "none"), "editor-transport-none",
+                    "the plugin tells the page that the host plays when it saw no transport") and ok
+    # a host that does send a transport must not pass the quiet check
+    rc, _s, rows, _ = transport_run("editor-fault-transport-sends", CLAP, kind="loop", arg="4")
+    return fault_part("editor-transport-none-fault-sends", none_parts(rc, rows, "loop"), "editor-transport-none",
+                      "the host plays (the check for a quiet host must see it)") and ok
+
+
+def deactivate_parts(rc: int, rows: list, script: dict) -> dict:
+    """The host plays, then deactivates the plugin with no stopped process call: the page ends stopped."""
+    reps = page_reports(rows, "transport")
+    r = reps[0] if reps else {}
+    segs = script.get("segments", [])
+    samples = r.get("samples", [])
+    if not r or r.get("visibility") != "visible" or len(segs) != 2 or len(samples) < 60:
+        return {"editor-transport-deactivate": (False, f"no usable run: rc={rc}, page report {bool(r)}, page {r.get('visibility')}, {len(segs)} host segments (want 2), {len(samples)} samples")}
+    end = segs[1]["wall_ms"]
+    before = [x for x in samples if segs[0]["wall_ms"] + 700.0 <= x[0] < end - 100.0]
+    after = [x for x in samples if x[0] >= end + 700.0]
+    playing_before = sum(x[2] for x in before)
+    playing_after = sum(x[2] for x in after)
+    good = rc == 0 and bool(before) and playing_before == len(before) and bool(after) and playing_after == 0
+    return {"editor-transport-deactivate": (
+        good,
+        f"the host played {len(before)} frames, then deactivated the plugin with no stopped process call: the page played in {playing_before} of them and was stopped in all {len(after)} frames from 0.7 s later"
+        if good else
+        f"the page kept playing after the host deactivated: playing in {playing_after} of {len(after)} frames from 0.7 s after the deactivate (before: {playing_before} of {len(before)})")}
+
+
+def stage_editor_transport_deactivate() -> bool:
+    """A host that stops by deactivating the plugin, with no stopped process call, must not leave the
+    page running from the old position."""
+    rc, _s, rows, script = transport_run("editor-transport-deactivate", CLAP, kind="deactivate", arg="5")
+    return print_parts("", deactivate_parts(rc, rows, script))
+
+
+def stage_editor_transport_deactivate_fault() -> bool:
+    rc, _s, rows, script = transport_run("editor-fault-transport-deactivate", CLAP, {"DS_ARA_TRANSPORT_FAULT": "keep-playing"}, kind="deactivate", arg="5")
+    good, ev = deactivate_parts(rc, rows, script)["editor-transport-deactivate"]
+    return pass_fail("editor-transport-deactivate-fault", (not good) and "kept playing" in ev,
+                     f"the fault run (a cleared slot does not stop the page) makes editor-transport-deactivate fail with 'kept playing': {ev}")
+
+
+def handover_run(label: str, env: dict | None = None) -> tuple[int, str]:
+    e = {"ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib"}
+    e.update(env or {})
+    return run(["cargo", "test", "--locked", "--lib", "transport::tests::", "--", "--test-threads=1"], env=e, log=f"{label}.log", cwd=HERE)
+
+
+def stage_transport_handover() -> bool:
+    """Gate line 3: the hand-over from the audio thread is lock-free. The unit tests name the mechanism:
+    one sequence lock made of atomics (no mutex, no pointer: the size of the slot is the sum of its atomics),
+    a reader that never sees a torn value with two writers, and no allocation in the audio thread's call."""
+    rc, text = handover_run("transport-handover")
+    m = re.search(r"test result: (\w+)\. (\d+) passed; (\d+) failed", text)
+    needed = ["the_audio_thread_stores_only_atomics_and_a_reader_never_sees_a_torn_value", "the_audio_thread_call_allocates_nothing_and_takes_no_lock"]
+    ran = all(f"transport::tests::{n} ... ok" in text for n in needed)
+    return pass_fail("transport-handover", rc == 0 and bool(m) and ran,
+                     f"the sequence lock of atomics (no mutex): {m.group(2) if m else '?'} unit tests passed, among them the torn-read test with two writers "
+                     f"and the no-allocation test of the audio thread's call (out/transport-handover.log)")
+
+
+def stage_transport_handover_fault() -> bool:
+    rc, text = handover_run("fault-transport-handover", {"DS_ARA_TRANSPORT_FAULT": "alloc"})
+    named = "the audio thread's call allocated" in text
+    return pass_fail("transport-handover-fault", rc != 0 and named,
+                     f"the fault run (the audio thread allocates in its call) makes the unit test fail with 'the audio thread's call allocated': rc={rc}, named {named}")
+
+
 STAGES = {
     "fixture": stage_fixture,
     "reference": stage_reference,
@@ -4829,6 +5151,16 @@ STAGES = {
     "editor-shell-report-fault": stage_editor_shell_report_fault,
     "editor-shell-functions": stage_editor_shell_functions,
     "editor-shell-functions-fault": stage_editor_shell_functions_fault,
+    "transport-handover": stage_transport_handover,
+    "transport-handover-fault": stage_transport_handover_fault,
+    "editor-transport": stage_editor_transport,
+    "editor-transport-fault": stage_editor_transport_fault,
+    "editor-transport-measure": stage_editor_transport_measure,
+    "editor-transport-measure-fault": stage_editor_transport_measure_fault,
+    "editor-transport-none": stage_editor_transport_none,
+    "editor-transport-none-fault": stage_editor_transport_none_fault,
+    "editor-transport-deactivate": stage_editor_transport_deactivate,
+    "editor-transport-deactivate-fault": stage_editor_transport_deactivate_fault,
 }
 ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
@@ -4850,6 +5182,9 @@ ORDER = [
     "editor-edit", "editor-edit-fault", "editor-threads", "editor-threads-fault",
     "editor-follow", "editor-follow-fault", "editor-refuse", "editor-refuse-fault", "editor-race", "editor-race-fault", "editor-page-copy", "editor-page-copy-fault", "editor-vst3-view", "editor-vst3-view-fault",
     "editor-edit-sync", "editor-edit-sync-fault", "editor-edit-destroy", "editor-edit-destroy-fault", "editor-regions-keep", "editor-regions-keep-fault", "editor-race-destroy", "editor-race-destroy-fault", "editor-shell-functions", "editor-shell-functions-fault", "editor-shell-report", "editor-shell-report-fault", "editor-no-request", "editor-no-request-fault",
+    "transport-handover", "transport-handover-fault", "editor-transport", "editor-transport-fault",
+    "editor-transport-measure", "editor-transport-measure-fault", "editor-transport-none", "editor-transport-none-fault",
+    "editor-transport-deactivate", "editor-transport-deactivate-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",

@@ -6,7 +6,7 @@
 //! dispatch queue (the plugin answers the web view there) and the event delivery need it.
 //!
 //! ```text
-//! ara-host <bundle> editor --files <wav>... --editor-mode ready|keys|focus|resize|measure|edit|shell|analyse|net
+//! ara-host <bundle> editor --files <wav>... --editor-mode ready|keys|focus|resize|measure|edit|shell|analyse|net|transport
 //!                          |edit-round|open-first|refuse|bigpost
 //!                          [--cycles N] [--archive <file>] [--arg <text>] [--no-ara]
 //!                          [--late-files <wav>...] [--wait-sync]
@@ -336,6 +336,11 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             }));
         }
 
+        // the transport thread of the `--transport` option (M1b5): starts when the page has booted
+        let transport_kind = args_value(rest, "--transport").unwrap_or_else(|| "none".into());
+        let transport_stop = std::sync::Arc::new(AtomicBool::new(false));
+        let mut transport_thread: Option<std::thread::JoinHandle<Vec<Segment>>> = None;
+
         let mut opened = 0usize;
         let mut failed: Option<String> = None;
         let mut rss_open = 0.0;
@@ -365,7 +370,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             }
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
-                "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" => {
+                "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" | "transport" => {
                     Some(mode.as_str())
                 }
                 // the edit mode ends with the event report that follows the edit report
@@ -535,6 +540,18 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         }
                     }
                 }
+                if transport_thread.is_none()
+                    && transport_kind != "none"
+                    && count_rows("page_report", Some("boot")) > boots_before
+                {
+                    ((*plugin).activate.expect("activate"))(plugin, SAMPLE_RATE, 64, 4096);
+                    ((*plugin).start_processing.expect("start_processing"))(plugin);
+                    transport_thread = Some(spawn_transport(
+                        plugin as usize,
+                        &transport_kind,
+                        transport_stop.clone(),
+                    ));
+                }
                 pump(&app);
                 let ready_now = count_rows("page_ready", None) > ready_before;
                 let done = match want_kind {
@@ -616,6 +633,25 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 pump(&app);
             }
         }
+        transport_stop.store(true, Ordering::SeqCst);
+        if let Some(h) = transport_thread {
+            let segments = h.join().unwrap_or_default();
+            ((*plugin).stop_processing.expect("stop_processing"))(plugin);
+            ((*plugin).deactivate.expect("deactivate"))(plugin);
+            let list: Vec<String> = segments
+                .iter()
+                .map(|g| {
+                    format!(
+                        "{{\"wall_ms\":{:.3},\"playing\":{},\"song\":{:.6}}}",
+                        g.wall_ms, g.playing, g.song
+                    )
+                })
+                .collect();
+            println!(
+                "{{\"event\":\"transport_script\",\"kind\":{transport_kind:?},\"segments\":[{}]}}",
+                list.join(",")
+            );
+        }
         audio_stop.store(true, Ordering::SeqCst);
         if let Some(h) = audio_thread {
             let _ = h.join();
@@ -691,4 +727,149 @@ fn update_region(doc: &HostDoc, i: usize, a: f64, d: f64, p: f64) {
                 .expect("updatePlaybackRegionProperties"))(dc_ref_of(doc.inst), *r, &props);
         }
     }
+}
+
+/// One stretch of the host transport: the wall time (epoch ms) of its first block, whether it
+/// plays, and the song position (seconds) at that block. In a playing stretch the position at
+/// wall time `w` is `song + (w - wall_ms) / 1000`: the check computes the host's truth from it.
+pub struct Segment {
+    wall_ms: f64,
+    playing: bool,
+    song: f64,
+}
+
+/// The script of the transport: (start ms, playing, song position at the start). The `loop` kind
+/// is made in code.
+const SCRIPT: [(u64, bool, f64); 9] = [
+    (0, false, 2.5),
+    (1500, true, 2.5),
+    (3300, false, 4.3),
+    (4500, false, 3.2),
+    (5500, true, 3.2),
+    (6300, true, 2.2),
+    (7500, false, 3.4),
+    (8500, false, 1.0),
+    (9500, false, 4.5),
+];
+const SCRIPT_END_MS: u64 = 11_500;
+const LOOP_MS: u64 = 2_500;
+const DEACTIVATE_MS: u64 = 2_000;
+
+fn wall_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
+}
+
+/// The process calls of a host with a transport, paced like a real host (one block of `FRAMES`
+/// every `FRAMES / SAMPLE_RATE` s, to absolute deadlines). `kind`: `script`, `loop`, or `null`
+/// (calls that carry no transport).
+fn spawn_transport(
+    plugin_addr: usize,
+    kind: &str,
+    stop: std::sync::Arc<AtomicBool>,
+) -> std::thread::JoinHandle<Vec<Segment>> {
+    let kind = kind.to_string();
+    std::thread::spawn(move || unsafe {
+        let plugin = plugin_addr as *const clap_plugin;
+        let mut input = vec![0.0f32; FRAMES];
+        let mut output = vec![0.0f32; FRAMES];
+        let in_buf = clap_sys::audio_buffer::clap_audio_buffer {
+            data32: &mut input.as_mut_ptr(),
+            data64: std::ptr::null_mut(),
+            channel_count: 1,
+            latency: 0,
+            constant_mask: 0,
+        };
+        let mut out_buf = clap_sys::audio_buffer::clap_audio_buffer {
+            data32: &mut output.as_mut_ptr(),
+            data64: std::ptr::null_mut(),
+            channel_count: 1,
+            latency: 0,
+            constant_mask: 0,
+        };
+        let in_events = clap_sys::events::clap_input_events {
+            ctx: std::ptr::null_mut(),
+            size: Some(in_events_size),
+            get: Some(in_events_get),
+        };
+        let out_events = clap_sys::events::clap_output_events {
+            ctx: std::ptr::null_mut(),
+            try_push: Some(out_events_try_push),
+        };
+        let block = Duration::from_secs_f64(FRAMES as f64 / SAMPLE_RATE);
+        let go = Instant::now();
+        let mut transport: clap_sys::events::clap_event_transport = std::mem::zeroed();
+        let mut segments: Vec<Segment> = Vec::new();
+        let (mut seg_index, mut seg_block0) = (usize::MAX, 0u64);
+        let mut k = 0u64;
+        while !stop.load(Ordering::SeqCst) {
+            let due = go + block * k as u32;
+            let now = Instant::now();
+            if due > now {
+                std::thread::sleep(due - now);
+            }
+            let t_ms = (block.as_secs_f64() * 1000.0 * k as f64) as u64;
+            let (playing, start_song, index) = match kind.as_str() {
+                "loop" => (true, 0.0, (t_ms / LOOP_MS) as usize),
+                // plays from 2.5 s, then the host deactivates the plugin with no stopped process call
+                "deactivate" => {
+                    if t_ms >= DEACTIVATE_MS {
+                        segments.push(Segment {
+                            wall_ms: wall_ms(),
+                            playing: false,
+                            song: 2.5 + DEACTIVATE_MS as f64 / 1000.0,
+                        });
+                        ((*plugin).deactivate.expect("deactivate"))(plugin);
+                        break;
+                    }
+                    (true, 2.5, 0)
+                }
+                _ => {
+                    if t_ms >= SCRIPT_END_MS && kind == "script" {
+                        break;
+                    }
+                    let i = SCRIPT.iter().rposition(|(at, _, _)| *at <= t_ms).unwrap_or(0);
+                    (SCRIPT[i].1, SCRIPT[i].2, i)
+                }
+            };
+            if index != seg_index {
+                seg_index = index;
+                seg_block0 = k;
+                segments.push(Segment {
+                    wall_ms: wall_ms(),
+                    playing,
+                    song: start_song,
+                });
+            }
+            let song = start_song
+                + if playing {
+                    (k - seg_block0) as f64 * FRAMES as f64 / SAMPLE_RATE
+                } else {
+                    0.0
+                };
+            transport.flags = clap_sys::events::CLAP_TRANSPORT_HAS_SECONDS_TIMELINE
+                | if playing {
+                    clap_sys::events::CLAP_TRANSPORT_IS_PLAYING
+                } else {
+                    0
+                };
+            transport.song_pos_seconds = (song * 2_147_483_648.0) as i64;
+            let process = clap_process {
+                steady_time: (k * FRAMES as u64) as i64,
+                frames_count: FRAMES as u32,
+                transport: if kind == "null" { std::ptr::null() } else { &transport },
+                audio_inputs: &in_buf,
+                audio_outputs: &mut out_buf,
+                audio_inputs_count: 1,
+                audio_outputs_count: 1,
+                in_events: &in_events,
+                out_events: &out_events,
+            };
+            let _ = ((*plugin).process.expect("process"))(plugin, &process);
+            k += 1;
+        }
+        segments
+    })
 }

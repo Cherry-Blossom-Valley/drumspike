@@ -71,6 +71,7 @@
     if (T.mode === "shell") { try { await shell(names); } catch (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); } }
     if (T.mode === "analyse" || T.mode === "analyse-race") await analyse(names);
     if (T.mode === "bigpost") await bigpost(names);
+    if (T.mode === "transport") transportRun();
   });
 
   function measure() {
@@ -94,7 +95,8 @@
       deltas = deltas.slice(20);
       var mx = 0; deltas.forEach(function (d) { if (d > mx) mx = d; });
       post({ kind: "measure", visibility: document.visibilityState, frames: deltas.length, p95_ms: p95(deltas), max_ms: mx, canvases: cs.length,
-        innerW: window.innerWidth, innerH: window.innerHeight });
+        innerW: window.innerWidth, innerH: window.innerHeight,
+        host_playing: !!S.playing, host_pos: PH.v, transport_msgs: (window.__DS_TRANSPORT__ || {}).messages || 0 });   // M1b5: the page followed the host during the measure
     })(t0);
   }
   function focus() {
@@ -110,6 +112,36 @@
       s.push({ t: Math.round(performance.now() - t0), innerW: window.innerWidth, innerH: window.innerHeight });
       if (performance.now() - t0 > 6000) { clearInterval(iv); post({ kind: "resize", samples: s }); }
     }, 200);
+  }
+  /* Mode transport (M1b5): the page's drawn position, a sample a frame, for T.arg seconds (default 11.5).
+     The test host plays a script (play, stop, locate) and writes its own truth; the check compares
+     the two on the wall clock (epoch ms). The position is what the frame loop would draw now:
+     the extrapolated position while the page plays, else the playhead. */
+  function transportRun() {
+    var dur = (+T.arg || 11.5) * 1000, t0 = performance.now(), rows = [], sent = false;
+    var tr = window.__DS_TRANSPORT__ || { messages: 0, delivered: 0, log: [] };
+    function done(why) {
+      if (sent) return;
+      sent = true;
+      var maxd = null; try { maxd = maxDur(); } catch (e) { /* none */ }
+      var wired = false; try { wired = typeof B.hostTransport.onPosition === "function"; } catch (e) { /* none */ }
+      var asked = null;   // the page asks the host to play: the plugin refuses (the host plays, not the page)
+      try { asked = Promise.resolve(B.hostTransport.play(0)).then(function () { return "resolved"; }, function (e) { return "rejected: " + (e && e.message); }); } catch (e) { asked = Promise.resolve("threw"); }
+      asked.then(function (play) {
+        post({ kind: "transport", why: why, visibility: document.visibilityState, samples: rows, messages: tr.messages, delivered: tr.delivered,
+          log: tr.log, first_at: tr.first_at, max_dur: maxd, wired: wired, host_mode: !!B.hostMode, playing: !!S.playing, pos: PH.v, play: play });
+      });
+    }
+    setTimeout(function () { done("timer"); }, dur + 4000);   // a hidden page draws no frame
+    if (T.fault === "page-transport") {   // the fault run of the no-own-audio line: the page uses the app's transport
+      setTimeout(function () { window.__TAURI__.core.invoke("transport_status", {}).catch(function () { /* refused */ }); }, 1500);
+    }
+    (function frame(t) {
+      var pos = null;
+      try { pos = S.playing ? appPos(t) : PH.v; } catch (e) { /* no state */ }
+      rows.push([Math.round((performance.timeOrigin + t) * 10) / 10, pos === null ? null : Math.round(pos * 1e4) / 1e4, S.playing ? 1 : 0]);
+      if (t - t0 < dur) requestAnimationFrame(frame); else done("frames");
+    })(performance.now());
   }
   async function edit(names, withRole) {   // move one hit through the page's own backend call
     var dirty = [];

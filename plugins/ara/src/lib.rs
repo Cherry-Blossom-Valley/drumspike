@@ -43,6 +43,7 @@ pub mod ara {
 pub mod editor;
 pub mod service;
 pub mod state;
+pub mod transport;
 pub mod wav;
 
 use ara::*;
@@ -274,6 +275,9 @@ struct DocShared {
     round_regions: Mutex<HashMap<usize, (Vec<service::RegionRec>, f64)>>,
     /// The sample count of the snapshot of the last round, by source (the notes are made with it, T5).
     round_samples: Mutex<HashMap<usize, i64>>,
+    /// A cheap change counter of the regions the page maps the host position with (M1b5): it grows
+    /// when a region of a source changes, a round stores new regions, or a source leaves.
+    region_gen: AtomicU64,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -370,6 +374,7 @@ impl DocShared {
             page: svc.page_handle(),
             round_regions: Mutex::new(HashMap::new()),
             round_samples: Mutex::new(HashMap::new()),
+            region_gen: AtomicU64::new(0),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -476,6 +481,29 @@ impl DocShared {
             }
         }
         Ok(true)
+    }
+
+    /// The regions of every source, `(source index, region)`, as the notes use them (M1b5): those
+    /// of the last round when the source has one, else the live ones. The page maps the position
+    /// of the host with them. Takes no `DocService` lock.
+    fn round_region_list(&self) -> Vec<(usize, service::RegionRec)> {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let round = self.round_regions.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut out = Vec::new();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let live: Vec<service::RegionRec> = s
+                .regions
+                .lock()
+                .map(|r| r.iter().map(|slot| slot.rec).collect())
+                .unwrap_or_default();
+            let (regions, _) = regions_for_notes(round.get(&s.seq), (live, 0.0));
+            out.extend(regions.into_iter().map(|r| (s.seq, r)));
+        }
+        out
     }
 
     /// Tell the page that the plugin changed its data (a round ended, a restore): the shell
@@ -1434,6 +1462,7 @@ impl Session {
             self.write_out();
             return false; // nothing had changed
         }
+        doc.region_gen.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut rr) = doc.round_regions.lock() {
             // the regions of the snapshots the notes were made with (R6), not of the live ones
             for (seq, r) in &result.regions {
@@ -1709,6 +1738,7 @@ impl Session {
         }
         let tracks_left = removed.clone().unwrap_or_default();
         if removed.is_ok() {
+            doc.region_gen.fetch_add(1, Ordering::SeqCst);
             if let Ok(mut rr) = doc.round_regions.lock() {
                 rr.remove(&src.seq);
             }
@@ -1733,6 +1763,7 @@ impl Session {
     /// The archive was restored: the project of the stored document id opens with the
     /// stored events. Nothing is decoded.
     fn restore_project(&'static self, doc: &Arc<DocShared>, id: Option<String>, tracks: Vec<service::RestoredTrack>) {
+        doc.region_gen.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut rr) = doc.round_regions.lock() {
             for t in &tracks {
                 rr.insert(t.snapshot.seq, (t.snapshot.regions.clone(), t.snapshot.sample_rate));
@@ -1814,12 +1845,16 @@ impl Session {
 fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let d = doc.clone();
     let r = doc.clone();
+    let g = doc.clone();
+    let g2 = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
             let _ = send(session(), Msg::PageSync(d.clone()));
         }),
         record: Arc::new(move |svc, sid| r.record_page_edit(svc, sid)),
+        regions: Arc::new(move || g.round_region_list()),
+        regions_gen: Arc::new(move || g2.region_gen.load(Ordering::SeqCst)),
         doc_id: doc.id(),
     }
 }
@@ -2518,6 +2553,7 @@ unsafe extern "C" fn dc_updateAudioSourceProperties(
 /// that alters nothing ends in a round that does nothing). `DS_ARA_TOUCH_FAULT=ignore` (the
 /// check's fault run) brings back the first version: the change is not seen.
 fn touch(src: &Arc<SourceState>) {
+    src.doc.region_gen.fetch_add(1, Ordering::SeqCst);
     if std::env::var("DS_ARA_TOUCH_FAULT").as_deref() == Ok("ignore") {
         return;
     }
@@ -2574,6 +2610,7 @@ unsafe extern "C" fn dc_destroyAudioSource(c: ARADocumentControllerRef, audioSou
             return;
         }
         src.0.removed.store(true, Ordering::SeqCst);
+        src.0.doc.region_gen.fetch_add(1, Ordering::SeqCst);
         // the source leaves the controller's list now; its track leaves the project on the
         // worker thread (the service does disk work, never the host's main thread)
         let ctl = controller_of(c);
@@ -3564,12 +3601,14 @@ unsafe extern "C" fn p_activate(p: *const clap_plugin, sr: f64, _min: u32, _max:
         let plugin: &Plugin = &*((*p).plugin_data as *mut Plugin);
         *plugin.sample_rate.lock().unwrap_or_else(|e| e.into_inner()) = sr;
         PROCESS_RATE_BITS.store(sr.to_bits(), Ordering::Relaxed);
+        transport::read_switches(); // off the audio thread: the process call reads atomics only
+        let _ = transport::now_us(); // makes the clock the process call stamps with
         true
     })
 }
 
-unsafe extern "C" fn p_deactivate(_p: *const clap_plugin) {
-    guard("deactivate", (), move || {})
+unsafe extern "C" fn p_deactivate(p: *const clap_plugin) {
+    guard("deactivate", (), move || transport::clear(p as u64))
 }
 unsafe extern "C" fn p_start(_p: *const clap_plugin) -> bool {
     guard("start_processing", true, move || true)
@@ -3577,8 +3616,8 @@ unsafe extern "C" fn p_start(_p: *const clap_plugin) -> bool {
 unsafe extern "C" fn p_stop(_p: *const clap_plugin) {
     guard("stop_processing", (), move || {})
 }
-unsafe extern "C" fn p_reset(_p: *const clap_plugin) {
-    guard("reset", (), move || {})
+unsafe extern "C" fn p_reset(p: *const clap_plugin) {
+    guard("reset", (), move || transport::clear(p as u64))
 }
 
 // ---- the evidence rows (M1b4): what a host sends. They change no behaviour.
@@ -3697,6 +3736,9 @@ impl Session {
             self.log(
                 json!({
                     "event": "transport_seen",
+                    // M1b5: where the position of the page comes from. ARA gives a plugin no
+                    // transport, so the process call is the only source.
+                    "source": "clap_process",
                     "has_seconds": f & CLAP_TRANSPORT_HAS_SECONDS_TIMELINE != 0,
                     "has_beats": f & CLAP_TRANSPORT_HAS_BEATS_TIMELINE != 0,
                     "has_tempo": f & CLAP_TRANSPORT_HAS_TEMPO != 0,
@@ -3792,13 +3834,19 @@ static STATE_EXT: clap_sys::ext::state::clap_plugin_state = clap_sys::ext::state
 /// The audio thread: pass the first mono pair through (silence without an input), touch
 /// nothing else. The analysis runs on its own threads and is never reached here — except
 /// under the fault switch, which runs it inside `process` on purpose (the overrun proof).
-unsafe extern "C" fn p_process(_p: *const clap_plugin, process: *const clap_process) -> clap_process_status {
+unsafe extern "C" fn p_process(p: *const clap_plugin, process: *const clap_process) -> clap_process_status {
     guard("process", CLAP_PROCESS_CONTINUE, move || {
         let s = session();
         if s.fault && !s.fault_ran.swap(true, Ordering::SeqCst) {
             s.run_fault_job();
         }
         note_process(process);
+        // M1b5: the transport for the page, atomics only (see transport.rs)
+        transport::note(
+            process,
+            f64::from_bits(PROCESS_RATE_BITS.load(Ordering::Relaxed)),
+            p as u64,
+        );
         let pr = &*process;
         let frames = pr.frames_count as usize;
         if pr.audio_outputs_count > 0 {
@@ -4474,6 +4522,7 @@ mod tests {
     fn process_writes_no_row_on_the_audio_thread() {
         // the evidence flags are process-global: one test at a time may call `process`
         let _one = EVIDENCE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _slot = transport::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for flag in [&PROCESS_SEEN, &TRANSPORT_SEEN] {
             flag.store(0, Ordering::SeqCst);
         }
