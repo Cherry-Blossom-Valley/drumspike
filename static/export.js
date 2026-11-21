@@ -47,7 +47,7 @@ function exFormats() {   // #218: the spike type decides which WAV formats run: 
   return [EX.midi && "midi", ...spike].filter(Boolean);
 }
 function exOpts(withDest) {
-  const o = { tracks: exTrackSets().names, formats: exFormats(), midi_mode: EX.mode, compensate: EX.comp };
+  const o = { tracks: exTrackSets().names, formats: exFormats(), midi_mode: EX.mode, compensate: hostMode() ? false : EX.comp };
   if (withDest) o.dest = EX.dest;
   return o;
 }
@@ -87,6 +87,23 @@ function exRender() {   // the controls from EX; the Export button and the tiles
   }
   /* #151: on the default map the Drag MIDI tile shows the visible 120 BPM warning until the project's answer */
   $("#exDragMidi .exDragW").classList.toggle("hidden", !(EX.midi && EX.tempoDefault && !EX.tempoAck));
+  exHostNote();
+}
+/* #560: in a DAW the dialog says where the tempo of the MIDI comes from, how many exported tracks have a time-stretched region (the
+   files are made all the same) and that the audio-spike types come later. With the mode off nothing here shows. */
+function exHostNote() {
+  const el = $("#exHostNote");
+  if (!hostMode()) { el.classList.add("hidden"); return; }
+  const h = EX.hostTempo || { source: "none" }, parts = [];
+  if (EX.midi) parts.push(h.source === "ara" ? `MIDI tempo: the tempo map of the host (${h.steps + 1} tempo${h.steps ? "s" : ""})` :
+    h.source === "transport" ? `MIDI tempo: one tempo from the host, ${Math.round(h.bpm * 100) / 100} BPM, no tempo map` :
+    h.source === "transport-varies" ? `MIDI tempo: the host's tempo changes, the file has one tempo, ${Math.round(h.bpm * 100) / 100} BPM` :
+    "MIDI tempo: none from the host, the file has 120 BPM");
+  const names = exTrackSets().names, st = (h.stretched || []).filter(n => names.includes(n));
+  if (st.length) parts.push(`${st.length} exported track${st.length === 1 ? " has" : "s have"} a region that the host stretches in time: the hits are not stretched`);
+  parts.push("Files start at song position 0. Spike audio types (Audio, Both) come in a later part");
+  el.textContent = parts.join(". ") + ".";
+  el.classList.remove("hidden");
 }
 async function exInfo() {   // the replace count of the current options (the newest answer wins)
   const my = ++EX.infoSeq;
@@ -125,12 +142,18 @@ function exChanged() { $("#exResult").classList.add("hidden"); exRender(); exInf
 /* #151: the default-ness of the map drives the visible 120 BPM warning of the Drag MIDI tile; the newest answer wins */
 async function exTempoDefault() {
   const my = ++EX.tempoSeq, sid = S.sid;
-  try { const d = !!(await B.tempoMapGet(sid)).default; if (my === EX.tempoSeq) { EX.tempoDefault = d; exRender(); } }
+  try {
+    if (hostMode()) {   // #560: the tempo comes from the host (its timeline, or one tempo of its process call)
+      const h = await B.hostTempo();
+      if (my === EX.tempoSeq) { EX.hostTempo = h; EX.tempoDefault = h.source === "none"; exRender(); }
+      return;
+    }
+    const d = !!(await B.tempoMapGet(sid)).default; if (my === EX.tempoSeq) { EX.tempoDefault = d; exRender(); }
+  }
   catch (e) { if (my === EX.tempoSeq) EX.tempoDefault = false; }
 }
 async function openExport(scope, track) {
-  if (hostAbsent("files")) return;   // #539: the host owns the files; the MIDI file drag (exDragStart) stays for M1c
-  if (!needProject()) return;
+  if (!needProject()) return;   // #560: in a DAW the dialog works (files in song time, a folder sheet, the drag tiles)
   if (EX.open) { $("#exGo").focus(); return; }
   if (EX.busy) { setMsg("the export is still running"); return; }   // P4-31: Export again owns the export; the dialog does not race it
   try { await flushEvents(); }
@@ -153,6 +176,7 @@ async function openExport(scope, track) {
     EX.spikeType = last.formats.includes("spikes") && last.formats.includes("audio") ? "both" : last.formats.includes("audio") ? "audio" : "synthetic";   // #218: the spike type the project keeps
     EX.mode = last.midi_mode === "single" ? "single" : "per_track";   // P4-31: the choices the project keeps seed the dialog; compensate keeps its default (a recorded off was the default of an earlier export, not a choice)
   }
+  if (hostMode()) { EX.spikeType = "synthetic"; EX.comp = false; EX.markers = false; }   // #560: audio spikes, the sampler offset and markers are absent in a DAW
   EX.dest = EX.def;
   if (EX.remembered) {   // the folder of the last choice, when it can still be used
     try { await B.exportExisting(S.sid, { dest: EX.remembered }); EX.dest = EX.remembered; }
@@ -220,9 +244,12 @@ function exSummary(r) {   // "exported 2 MIDI and 2 spike files to Exports/ in t
    opens Track > Detect Tempo without writing; "cancel" writes nothing. A tempo_map_get that fails never asks. */
 async function askDefaultTempo() {
   let def = false;
-  try { def = !!(await B.tempoMapGet(S.sid)).default; } catch (e) { return "anyway"; }
+  try { def = hostMode() ? (await B.hostTempo()).source === "none" : !!(await B.tempoMapGet(S.sid)).default; } catch (e) { return "anyway"; }
   EX.tempoDefault = def;   // the same answer drives the visible warning of the Drag MIDI tile
   if (!def) return "anyway";
+  if (hostMode()) return await askConfirm({ title: "No tempo from the host",   // #560: the host gave no tempo; the tempo cannot be set here
+    msg: "The host gave no tempo, so the MIDI file has the default 120 BPM. Export anyway, or set the tempo in the host first.",
+    buttons: [{ label: "Cancel", act: "cancel" }, { label: "Export anyway", act: "anyway", cls: "primary" }] });
   return await askConfirm({ title: "No tempo set",
     msg: "The export uses the default 120 BPM. Set the tempo first: Track > Detect Tempo, File > Import Tempo Map, or the Tempo ruler. Or export anyway.",
     buttons: [{ label: "Cancel", act: "cancel" }, { label: "Set Tempo…", act: "set_tempo" }, { label: "Export anyway", act: "anyway", cls: "primary" }] });
@@ -248,8 +275,10 @@ async function exRun() {
     showProgress(100, bad.length ? `export done: ${bad.length} problems` : "export done");
     setTimeout(hideProgress, bad.length ? 8000 : 1500);
     const out = Object.entries(r.outside || {}).map(([k, c]) => `${k} ${c}`);   // P4-4
+    const song = Object.values(r.outside_song || {}).reduce((a, c) => [a[0] + c.no_region, a[1] + c.before_start], [0, 0]);   // #560: the hits the song time left out
     const msg = exSummary(r) + (bad.length ? `; ${bad.length} failed (${bad[0].name}: ${bad[0].message})` : "") +
       (out.length ? `; hits outside the audio file, not in the spike files: ${out.join(", ")} (the MIDI files keep them; a hit before the start sits at 0 s there)` : "") +
+      (song[0] + song[1] ? `; hits left out of the files: ${song[0]} in no playback region, ${song[1]} before the song start` : "") +
       exSamplerNote(r) +
       ((r.also_updated || []).length ? `. Also updated: ${r.also_updated.length} older spike file(s) in this folder` : "");   // #274
     setMsg(msg);
@@ -269,7 +298,7 @@ async function exDragStart(kind) {
   /* #151: a drag of the MIDI tile on the default map writes 120 BPM MIDI: the press asks the same notice
      first; Cancel starts no drag and no file moves, Set Tempo… opens Track > Detect Tempo, and only the
      project's "Export anyway" (the per-project answer) lets the tile drag. A set map never asks. */
-  if (kind === "midi" && !EX.tempoAck) {
+  if (kind === "midi" && !EX.tempoAck && !hostMode()) {   // #560: in a DAW the tile shows the warning; no question between the press and the drag
     const a = await askDefaultTempo();
     if (a !== "anyway") { if (a === "set_tempo") detectTempo(); return; }
     EX.tempoAck = true;
@@ -334,6 +363,7 @@ function setupExport() {
   $("#exMidi").onchange = ev => { EX.midi = ev.target.checked; exChanged(); exRecord(); };
   $("#exSpikes").onchange = ev => { EX.spikes = ev.target.checked; exChanged(); exRecord(); };
   $("#exComp").onchange = async ev => {   // #232: the checkbox is remembered per project (like the markers one)
+    if (hostAbsent("files")) return;   // #560: the row is hidden in a DAW (no sampler offset there)
     const on = ev.target.checked;
     EX.comp = on;
     try { await B.exportCompensateSet(S.sid, on); setDirtyState(true); }
@@ -341,6 +371,7 @@ function setupExport() {
     exChanged(); exRecord();
   };
   $("#exMarkers").onchange = async ev => {   // P4-40g: the checkbox is remembered per project
+    if (hostAbsent("files")) return;   // #560: the row is hidden in a DAW (no markers in a song-time file)
     const on = ev.target.checked;
     EX.markers = on;
     try { await B.exportMarkersSet(S.sid, on); setDirtyState(true); }

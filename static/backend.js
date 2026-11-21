@@ -326,6 +326,9 @@ function shellMethods(invoke, T) {
     exportLastSet: (sid, last) => invoke("export_last_set", { sid, ...last }),   // P4-31: the dialog's choices at once, and what an export ran with
     /* pre-renders the files of the drag tiles into Exports/.drag (hidden; never the chosen folder): {dir, midi: [paths], spikes: [paths], errors}; {clear: true} removes them */
     exportDragPrepare: (sid, o) => invoke("export_drag_prepare", { sid, ...(({ dest, ...rest }) => rest)(exportArgs(o)), clear: !!(o && o.clear) }),
+    /* #560: the tempo the plugin gives the export in a DAW: {source: ara | transport | transport-varies | none, bpm, steps, reason,
+       stretched: [track names with a time-stretched region]}. The test bridge has no host: it answers "none". */
+    hostTempo: () => (bridge() ? Promise.resolve({ source: "none", bpm: 120, steps: 0, reason: "", stretched: [] }) : invoke("plugin_host_tempo", {})),
     exportDragTake: (sid, paths) => invoke("export_drag_take", { sid, paths }),   // #433: a drag starts: the files move into Exports/ under their export names; {files}
     /* the native file drag out of the window (tauri-plugin-drag): the files must exist. The test bridge has no native drag: it records
        the paths in window.__DS_DRAG__ */

@@ -222,13 +222,13 @@
         <label class="exRow"><input type="radio" name="exMode" id="exModeTrack" value="per_track"> One file per track</label>
         <label class="exRow" title="One type 1 file: the project's tempo map and one MIDI track per drum track, each on its own note"><input type="radio" name="exMode" id="exModeSingle" value="single"> One multi-track file</label>
       </div>
-      <label class="exRow" title="One marker event (FF 06) per review marker in the one multi-track file, at its time; the note is the text, or Marker N"><input type="checkbox" id="exMarkers"> Markers in MIDI</label>
-      <label class="exRow"><input type="checkbox" id="exComp"> Compensate sampler offset</label>
+      <label class="exRow exHostOff" title="One marker event (FF 06) per review marker in the one multi-track file, at its time; the note is the text, or Marker N"><input type="checkbox" id="exMarkers"> Markers in MIDI</label>
+      <label class="exRow exHostOff"><input type="checkbox" id="exComp"> Compensate sampler offset</label>
       <label class="exRow" title="One blip WAV per track: a line per hit, drawn from the hit's data. Audio spikes cut the track's own audio instead (the body of the hit: about 1.5 cycles of its low tone per hit)."><input type="checkbox" id="exSpikes"> Spikes (.wav)</label>
       <div id="exSpikeOpts" class="exSub">
         <label class="exRow" title="The blip spike WAV of today: one line per hit."><input type="radio" name="exSpikeType" id="exSpikeSynth" value="synthetic"> Synthetic</label>
-        <label class="exRow" title="Audio spikes: one WAV per track that holds, at each hit, the body of the hit: about 1.5 cycles of the drum's low tone, ending on a zero crossing (2-60 ms, 10 ms without a tone, cut at the next hit); every sample outside the snippets is zero."><input type="radio" name="exSpikeType" id="exSpikeAudio" value="audio"> Audio (the body of each hit)</label>
-        <label class="exRow"><input type="radio" name="exSpikeType" id="exSpikeBoth" value="both"> Both</label>
+        <label class="exRow exHostOff" title="Audio spikes: one WAV per track that holds, at each hit, the body of the hit: about 1.5 cycles of the drum's low tone, ending on a zero crossing (2-60 ms, 10 ms without a tone, cut at the next hit); every sample outside the snippets is zero."><input type="radio" name="exSpikeType" id="exSpikeAudio" value="audio"> Audio (the body of each hit)</label>
+        <label class="exRow exHostOff"><input type="radio" name="exSpikeType" id="exSpikeBoth" value="both"> Both</label>
       </div>
     </div>
     <div class="exSec">
@@ -239,6 +239,7 @@
         <button id="exReset" class="btn mini" title="Back to Exports/ in the project folder">Reset</button>
       </div>
     </div>
+    <p id="exHostNote" class="hint hidden"></p>
     <p id="exReplace" class="hint"></p>
     <p id="exProblem" class="hint exWarn"></p>
     <div id="exResult" class="exResult hidden"><span id="exResultText"></span> <button id="exReveal" class="btn mini">Show in Finder</button></div>

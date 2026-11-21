@@ -84,7 +84,7 @@ def test_every_command_of_the_table_is_in_the_menu_or_in_one_of_the_two_lists(ho
     assert sorted(set(table)) == sorted((set(shown) - dynamic) | (set(table) & set(owned))), "a command of the table is in neither"
     assert not (set(shown) & set(owned))
     names = [g for g, _ in groups_of(host_app)]
-    assert names[0] == "Drum Spike" and {"Edit", "View", "Transport", "Hits", "Track", "Help"} <= set(names) and "File" not in names
+    assert names[0] == "Drum Spike" and {"File", "Edit", "View", "Transport", "Hits", "Track", "Help"} <= set(names)   # #560: File holds Export
     assert [i for g, ids in groups_of(host_app) if g == "Drum Spike" for i in ids] == ["settings"]   # About and Quit belong to the host
     # every check row of the table has a check state here, and no state without a row
     checks = host_app.evaluate("() => DSKeys.COMMANDS.filter(c => c.kind === 'check').map(c => c.id).sort()")
@@ -197,6 +197,7 @@ def test_the_menu_works_with_the_keyboard_and_the_keys_do_not_reach_the_page(hos
     host_app.focus("#hostMenuBtn")
     host_app.keyboard.press("Enter")
     assert host_app.evaluate("() => [DSHostMenu.isOpen(), document.activeElement.dataset.group]") == [True, "Drum Spike"]
+    host_app.keyboard.press("ArrowDown")   # #560: File (with Export) is the second menu
     host_app.keyboard.press("ArrowDown")
     host_app.keyboard.press("ArrowDown")
     assert host_app.evaluate("() => document.activeElement.dataset.group") == "View"
@@ -216,7 +217,7 @@ def test_the_menu_works_with_the_keyboard_and_the_keys_do_not_reach_the_page(hos
     assert host_app.evaluate("() => [DSHostMenu.isOpen(), document.activeElement.id]") == [False, "hostMenuBtn"]
     # choose an item with the keyboard: View > Track Height > Large
     host_app.keyboard.press("ArrowDown")   # Down on the button opens the menu
-    host_app.keyboard.press("ArrowDown"); host_app.keyboard.press("ArrowDown"); host_app.keyboard.press("ArrowRight")
+    host_app.keyboard.press("ArrowDown"); host_app.keyboard.press("ArrowDown"); host_app.keyboard.press("ArrowDown"); host_app.keyboard.press("ArrowRight")   # #560: File is a menu now
     assert host_app.evaluate("() => document.querySelector('#hostMenu').dataset.level") == "1"
     host_app.focus('#hostMenu [data-cmd="height_large"]')
     host_app.keyboard.press("Enter")

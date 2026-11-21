@@ -205,13 +205,43 @@ def test_every_absent_group_calls_no_command_through_its_controls_and_keys(host_
               f"{n_keys} keys pressed, {n_menus} menu ids")
     assert len(groups) > 0 and n_controls > 0 and n_keys > 0 and n_menus > 0
     # Gate 4: a flow that the page still has says what the host owns
-    flows = {"audio": "audition(false)", "process": "DSShell.quitFlow()", "files": "openExport('all')",
+    flows = {"audio": "audition(false)", "process": "DSShell.quitFlow()", "files": "exportAgain()",
              "agent": "toggleTraining()", "tracks": "removeTrack(S.order[0])"}
     for g in groups:
         text = host_app.evaluate("async f => { setMsg(''); await eval(f); return document.querySelector('#stMsg').textContent; }",
                                  flows[g["group"]])
         assert text == g["say"], (g["group"], text)
     assert [c for g in groups for c in host_app.invokes if c in g["commands"]] == []
+
+
+def test_the_export_dialog_works_in_host_mode_with_the_host_choices_only(host_app, make_project):
+    """#560: in a DAW the Export dialog is there: MIDI and synthetic spikes, the folder row, the drag tiles. The sampler offset,
+    the markers and the audio-spike types are not; the dialog says where the tempo comes from and that the audio types come
+    later. A press and a drag of the MIDI tile asks no question (the default-tempo question of the app is for the Export
+    button in a DAW) and starts the drag with the files of the dialog."""
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => !document.querySelector('#exportModal').classList.contains('hidden')")
+    for sel in ("#exMidi", "#exSpikes", "#exModeTrack", "#exModeSingle", "#exSpikeSynth", "#exChoose", "#exDragMidi", "#exDragSpikes"):
+        assert host_app.evaluate("s => document.querySelector(s).checkVisibility({ visibilityProperty: true })", sel) is True, sel
+    for sel in ("#exMarkers", "#exComp", "#exSpikeAudio", "#exSpikeBoth"):
+        assert host_app.evaluate("s => document.querySelector(s).closest('label').checkVisibility({ visibilityProperty: true })", sel) is False, sel
+    note = host_app.locator("#exHostNote")
+    host_app.wait_for_function("() => !document.querySelector('#exHostNote').classList.contains('hidden')")
+    text = note.inner_text()
+    assert "none from the host" in text and "song position 0" in text and "later part" in text, text
+    host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'", timeout=60000)
+    box = host_app.locator("#exDragMidi").bounding_box()
+    host_app.mouse.move(box["x"] + 5, box["y"] + 5)
+    host_app.mouse.down()
+    host_app.mouse.move(box["x"] + 60, box["y"] + 20, steps=4)
+    host_app.mouse.up()
+    host_app.wait_for_function("() => (window.__DS_DRAG__ || []).length > 0", timeout=60000)   # no confirm notice came between press and drag
+    assert host_app.evaluate("() => document.querySelector('#confirmModal').classList.contains('hidden')") is True
+    # the options that a DAW has no use for are never sent
+    opts = host_app.evaluate("() => exOpts(true)")
+    assert opts["compensate"] is False and opts["formats"] == ["midi", "spikes"]
+    host_app.evaluate("() => exClose()")
 
 
 def test_the_same_actions_call_the_commands_with_the_mode_off(app, make_project):
@@ -228,7 +258,7 @@ def test_the_same_actions_call_the_commands_with_the_mode_off(app, make_project)
     app.wait_for_timeout(500)
     app.evaluate("() => setClick(false)")
     # one real call of each other group, so that a wrong command name in the list fails here
-    app.evaluate("""async () => { await B.exportExisting(S.sid, {}); await B.reorder(S.sid, S.order.slice());
+    app.evaluate("""async () => { await B.exportExisting(S.sid, {}); await B.exportMarkersSet(S.sid, false); await B.reorder(S.sid, S.order.slice());
       await B.trainingStatus(S.sid); }""")
     seen = set(app.invokes)
     groups = app.evaluate("() => JSON.parse(JSON.stringify(HOST_ABSENT))")
@@ -474,7 +504,7 @@ def test_the_text_scan_sees_the_commands_when_the_mode_is_off(app, make_project)
     open_project(app, make_project(tracks=FOUR, seconds=6.0))
     phrases = command_phrases(app)
     hits = phrase_hits(app.evaluate(VISIBLE_TEXTS), phrases)
-    assert {h[1] for h in hits} >= {"add_tracks", "export", "click", "mute_track"}, hits
+    assert {h[1] for h in hits} >= {"add_tracks", "click", "mute_track"}, hits   # #560: Export is no command of the list any more
     app.evaluate("() => DSHelp.open('05-export.html')")
     app.wait_for_function("() => document.querySelector('#helpChapters .active')?.dataset.section === '05-export.html'")
     assert phrase_hits([("export", app.locator("#helpPage").inner_text())], phrases) != []
