@@ -511,17 +511,30 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     // M1b11: the driver of the page asks the host for what only a host can do: a window of another
                     // size (below and above the 520 px of the low window) and a real click of the pointer
                     if resized == 0 && count_rows("page_report", Some("host-low")) > 0 {
-                        window.setFrame_display(NSRect::new(NSPoint::new(120.0, 120.0), NSSize::new(1100.0, 420.0)), true);
+                        window.setFrame_display(
+                            NSRect::new(NSPoint::new(120.0, 120.0), NSSize::new(1100.0, 420.0)),
+                            true,
+                        );
                         resized = 1;
                     } else if resized == 1 && count_rows("page_report", Some("host-high")) > 0 {
-                        window.setFrame_display(NSRect::new(NSPoint::new(120.0, 120.0), NSSize::new(1100.0, 860.0)), true);
+                        window.setFrame_display(
+                            NSRect::new(NSPoint::new(120.0, 120.0), NSSize::new(1100.0, 860.0)),
+                            true,
+                        );
                         resized = 2;
                     }
                     let asked = count_rows("page_report", Some("host-click"));
                     if asked > clicks_done {
                         clicks_done = asked;
-                        if let Some(r) = rows().iter().rev().find(|r| r["event"] == "page_report" && r["kind"] == "host-click") {
-                            let (x, y) = (r["report"]["x"].as_f64().unwrap_or(0.0), r["report"]["y"].as_f64().unwrap_or(0.0));
+                        if let Some(r) = rows()
+                            .iter()
+                            .rev()
+                            .find(|r| r["event"] == "page_report" && r["kind"] == "host-click")
+                        {
+                            let (x, y) = (
+                                r["report"]["x"].as_f64().unwrap_or(0.0),
+                                r["report"]["y"].as_f64().unwrap_or(0.0),
+                            );
                             let n = r["report"]["count"].as_i64().unwrap_or(1) as isize;
                             post_click_at(&app, &window, x, y, n);
                         }
