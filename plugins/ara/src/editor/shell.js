@@ -206,6 +206,7 @@
     return typeof n === "string" ? n : "";
   }
   var watch = { v: 0 };
+  var sentTrack = null;
   /* One deadline for a play, from the call: the request may wait up to 2 s for the main thread of the
      host, and the host may take its time to start. After PLAY_MS the page gives up ("the host did not
      start playback"). If the host starts later, the follow of #546 shows playing, and the failure text
@@ -290,6 +291,10 @@
      docs/design/daw-plugin/m1b7-page-moves-host.md: the page should call locate itself. */
   setInterval(function () {
     if (!tstate.installed) return;
+    /* The selected track decides the mapping of both directions (the follow and the locate): the plugin
+       is told when it changes, at the first look and after a reload of the project. */
+    var tr = selectedTrack();
+    if (tr !== sentTrack) { sentTrack = tr; invoke("plugin_host_track", { track: tr }).catch(function () { sentTrack = null; }); }
     var cur = lex("typeof S === 'object' && typeof PH === 'object' && !S.playing && PH.user ? PH.v : null");
     if (typeof cur !== "number" || Math.abs(cur - watch.v) < 1e-9) return;
     watch.v = cur;
@@ -321,6 +326,7 @@
   }
   // after a reload of the project the page may have lost the position: the last message goes again
   listeners["plugin-reload"].push(function () {
+    sentTrack = null;   // the plugin is told the selected track again
     var seen = tstate.delivered;
     setTimeout(function () {
       var m = tstate.last;

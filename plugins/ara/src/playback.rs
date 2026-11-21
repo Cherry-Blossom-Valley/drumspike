@@ -713,4 +713,32 @@ mod tests {
         // a track with no source: all regions
         assert_eq!(regions_for(&r, &[7]).len(), 2);
     }
+
+    #[test]
+    fn for_the_selected_track_song_time_and_page_time_are_inverse() {
+        use crate::transport::page_time;
+        // two tracks with different offsets in the song: A at song 2 s (audio from 0.4 s), B at song 6 s
+        let r = [(0, reg(0.4, 2.4, 2.0)), (1, reg(0.5, 3.0, 6.0))];
+        for (seq, lo, hi) in [(0usize, 0.5, 2.7), (1usize, 0.6, 3.4)] {
+            let own = regions_for(&r, &[seq]);
+            for k in 0..=10 {
+                let x = lo + (hi - lo) * k as f64 / 10.0; // a page time inside the track's audio
+                let (song, _) = song_time(x, None, &own).unwrap();
+                assert!(
+                    (page_time(song, &own).0 - x).abs() < 1e-9,
+                    "page_time(song_time({x})) for track {seq}"
+                );
+                let t = own[0].1.start_play + (x - own[0].1.start_mod); // a song position inside its region
+                let (pt, _) = page_time(t, &own);
+                assert!(
+                    (song_time(pt, None, &own).unwrap().0 - t).abs() < 1e-9,
+                    "song_time(page_time({t})) for track {seq}"
+                );
+            }
+        }
+        // the two tracks differ: the same page time is another song position
+        let a = song_time(1.0, None, &regions_for(&r, &[0])).unwrap().0;
+        let b = song_time(1.0, None, &regions_for(&r, &[1])).unwrap().0;
+        assert!((b - a - 3.9).abs() < 1e-9, "offsets differ: {a} {b}");
+    }
 }

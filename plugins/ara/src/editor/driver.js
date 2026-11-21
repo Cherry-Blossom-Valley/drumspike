@@ -181,6 +181,16 @@
     // the first message of the host and the answer to the offer: the page is ready for a request
     for (var i = 0; i < 100 && !(tr.delivered >= 1 && tr.offer); i++) await sleepMs(100);
     var first = tr.delivered >= 1;
+    if (scenario === "tracks") {   // M1b7 Y1: two tracks at different song offsets; both directions use the selected track
+      var trackA = S.order[0], trackB = S.order[1];
+      await step("select-b", function () { S.selTrack = trackB; }, 500);
+      await step("locate-b", function () { S.playhead = 1.2; }, 600);
+      await step("select-a", function () { S.selTrack = trackA; }, 700);
+      stopped = true;
+      post({ kind: "playback", scenario: scenario, visibility: document.visibilityState, samples: rows, steps: steps, calls: tr.calls, seen: tr.seen,
+        offer: tr.offer, first_message: first, tracks: [trackA, trackB], host_mode: !!B.hostMode, wired: true });
+      return;
+    }
     if (scenario === "drag") {   // M1b7 X3: a drag in the ruler with a host that does not answer: the fallback must not jump under the pointer
       var ruler = document.getElementById("ruler"), rc = ruler.getBoundingClientRect(), during = [];
       function ev(type, f) { return new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: rc.left + rc.width * f, clientY: rc.top + rc.height / 2 }); }

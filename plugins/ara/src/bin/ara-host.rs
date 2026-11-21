@@ -105,6 +105,9 @@ static NO_REGIONS: AtomicBool = AtomicBool::new(false);
 /// `--regions-all a,d,p` (M1b5): every source gets this one region instead of the back-to-back layout,
 /// so the sources of a session sit at the same place of the song (the usual drum session).
 static REGIONS_ALL: Mutex<Option<(f64, f64, f64)>> = Mutex::new(None);
+/// `--regions-step s` (M1b7): with `--regions-all`, source k lies k * s seconds later in the song
+/// (tracks with different offsets).
+static REGIONS_STEP: Mutex<f64> = Mutex::new(0.0);
 static NO_PERSISTENT_ID: AtomicBool = AtomicBool::new(false);
 
 /// `--names <n>...`: the ARA names the host gives the sources, by creation index, instead of
@@ -1430,6 +1433,9 @@ fn main() {
     }
     if let Some(r) = args_value(&rest, "--regions-all").and_then(|v| parse_region(&v).ok()) {
         *REGIONS_ALL.lock().unwrap() = Some(r);
+        *REGIONS_STEP.lock().unwrap() = args_value(&rest, "--regions-step")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0);
     }
     if let Some(w) = args_value(&rest, "--wait").and_then(|v| v.parse::<u64>().ok()) {
         WAIT_SECS.store(w, Ordering::SeqCst);
@@ -1469,7 +1475,7 @@ fn main() {
 /// The full-length region layout (the ARA test host's: the regions sit back to back).
 fn full_regions(state: &HostState, i: usize) -> Vec<(f64, f64, f64)> {
     if let Some(all) = *REGIONS_ALL.lock().unwrap() {
-        return vec![all];
+        return vec![(all.0, all.1, all.2 + *REGIONS_STEP.lock().unwrap() * i as f64)];
     }
     let mut position = 0.0;
     for s in state.sources.iter().take(i) {

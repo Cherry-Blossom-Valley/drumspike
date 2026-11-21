@@ -116,16 +116,21 @@ position: it goes to 1 s.
 
 ### The selected track, and bounds
 
-- **The track of the page.** Stems of one length hold the same source time in several sources. The
-  shell sends the selected track (`S.selTrack`) with each locate and play. The plugin uses the
-  regions of the sources of that track (`playback::regions_for`). With no selected track, or a
-  track with no region, it uses all regions and the rule above (the lowest source index first).
-- **What the playhead shows.** The follow of M1b5 has no track: it maps a song position with the
-  first source. `page_time` and `song_time` are inverse to each other for the first source, and for
-  any track that has the same offset (the usual drum session). For a track with another offset, a
-  locate puts the host at the song position of that track. The follow then shows the first source's
-  page time for that position, so the playhead can move to another place after the host answers. This is
-  the limit of one playhead for all tracks.
+- **The track of the page.** Stems of one length hold the same source time in several sources, and
+  tracks can lie at different offsets in the song. Both directions use the same track: the one the
+  page has selected (`S.selTrack`). The shell tells the plugin with the command `plugin_host_track`
+  when the selection changes, at the first look after the editor opens, and after a `plugin-reload`.
+  A locate and a play carry the track too. The plugin keeps it per editor and uses the regions of
+  its sources (`playback::regions_for`) in `song_time` and in the `Poller` of the follow (`page_time`).
+  A change of the selection moves the change counter of the poll, so the position is sent again
+  with the new mapping (a new epoch, a hard anchor, like a change of a region). With no selected
+  track, or a track with no region, all regions and the rule above are used (the lowest source
+  index first). Unit test `for_the_selected_track_song_time_and_page_time_are_inverse`; stage
+  `editor-playback-tracks` (fault `first-track`: the follow ignores the selected track, and the
+  playhead jumps away from the click).
+- **What the playhead shows.** The page has one timeline. It shows the time of the source of the
+  selected track. Hits of a track with another offset in the song are not under the playhead at the
+  right time. This is an open point: a timeline of the page in song time is a later design part.
 - **Bounds.** A time that is not a number, or is above 24 h, is refused ("that time is out of
   range"). A time below 0, or above the length of the source (the longest source of the selected
   track), is clamped before it is mapped (`playback::bound_time`).
@@ -273,6 +278,9 @@ Result on the development Mac, CLAP and plugin in the VST3 alike:
   song position of every locate with 0 samples difference.
 
 ## Not done
+
+- A stage with the main thread really blocked (an open point). The queue limit and the budget are
+  unit tests only.
 
 - Cycle (loop) and tempo: not in scope. `requestSetCycleRange` and `requestEnableCycle` are not used.
 - Key commands of the host (the space bar in the plugin window): not in scope.

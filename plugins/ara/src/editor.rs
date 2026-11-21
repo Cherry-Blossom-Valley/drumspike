@@ -244,6 +244,10 @@ struct Shared {
     transport_row: AtomicBool,
     /// M1b7: the requests of the page to the host wait here for the main thread.
     host_queue: crate::playback::Queue,
+    /// The track the page has selected (the shell tells it). The follow and the locate use its regions.
+    selected: Mutex<String>,
+    /// Grows when the selected track changes: the poll maps the position again.
+    sel_gen: std::sync::atomic::AtomicU64,
     /// The order of arrival of the requests of the page.
     req_seq: std::sync::atomic::AtomicU64,
     /// M1b7: the row of the first request of each kind (play, stop, locate) is written.
@@ -541,12 +545,15 @@ fn poll_transport(sh: &Arc<Shared>, total: std::time::Duration) -> Vec<Value> {
         let (msg, wait, stale_row, nopos_row, regions) = {
             let mut poller = sh.poller.lock().unwrap_or_else(|e| e.into_inner());
             poller.no_stop_fault = keep_playing;
-            let gen = (sh.backend.regions_gen)();
+            // a change of the regions or of the selected track maps the position again
+            let gen = (sh.backend.regions_gen)().wrapping_add(sh.sel_gen.load(Ordering::SeqCst) << 40);
             let (msg, wait) = poller.look(snap, now, gen, &mut || {
                 if identity {
                     Vec::new()
+                } else if crate::test_switch("DS_ARA_PLAYBACK_FAULT").as_deref() == Ok("first-track") {
+                    (sh.backend.regions)() // the fault run: the follow ignores the selected track
                 } else {
-                    (sh.backend.regions)()
+                    sh.mapping_regions()
                 }
             });
             (
@@ -657,8 +664,9 @@ fn poll_channel(sh: &Arc<Shared>, id: &str, total: std::time::Duration) -> Vec<V
 
 /// The commands that `call::run` leaves to the desktop shell (`SHELL_ONLY` of
 /// `crates/app/src/call.rs`), plus the one command of the drag plugin. Each has an answer.
-const SHELL_COMMANDS: [&str; 33] = [
+const SHELL_COMMANDS: [&str; 34] = [
     "plugin_report",
+    "plugin_host_track",
     "plugin_host_offer",
     "plugin_host_play",
     "plugin_host_stop",
@@ -934,6 +942,10 @@ fn shell_command(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Option<Answer> {
         // the shell script of the page reports a function of the page that is missing (S4)
         // M1b7: the page asks the host to play, stop or locate (the shell script's HT object)
         "plugin_host_offer" => host_offer(sh),
+        "plugin_host_track" => {
+            sh.select_track(args.get("track").and_then(Value::as_str).unwrap_or(""));
+            Answer::json(200, &json!({"ok": true}))
+        }
         "plugin_host_play" => host_request(sh, crate::playback::Kind::Play, args),
         "plugin_host_stop" => host_request(sh, crate::playback::Kind::Stop, args),
         "plugin_host_locate" => host_request(sh, crate::playback::Kind::Locate, args),
@@ -1035,10 +1047,14 @@ fn host_request(sh: &Arc<Shared>, kind: crate::playback::Kind, args: &Value) -> 
     use crate::playback::{plan, Fault, HostAt, Plan};
     let fault = Fault::read();
     let offer = (sh.backend.playback_offer)();
-    let track = args.get("track").and_then(Value::as_str).unwrap_or("");
+    if let Some(t) = args.get("track").and_then(Value::as_str) {
+        sh.select_track(t); // the shell sends the track with the request: no race with its own track message
+    }
+    let track = sh.selected.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let track = track.as_str();
     // the regions of the selected track decide (stems of one length lie at the same source time);
     // no track, or a track with no region: the rule over all regions
-    let (seqs, len_s) = (sh.backend.track_info)(track);
+    let (_seqs, len_s) = (sh.backend.track_info)(track);
     let page_raw = args.get("t").and_then(Value::as_f64);
     let page_s = page_raw.and_then(|t| crate::playback::bound_time(t, Some(len_s)));
     if page_raw.is_some() && page_s.is_none() && kind == crate::playback::Kind::Locate {
@@ -1052,11 +1068,7 @@ fn host_request(sh: &Arc<Shared>, kind: crate::playback::Kind, args: &Value) -> 
         song_s: s.pos_s,
         playing: s.playing,
     });
-    let regions = if track.is_empty() {
-        (sh.backend.regions)()
-    } else {
-        crate::playback::regions_for(&(sh.backend.regions)(), &seqs)
-    };
+    let regions = sh.mapping_regions();
     let confirm = if crate::test_switch("DS_ARA_PLAYBACK_FAULT").as_deref() == Ok("no-fallback") {
         0
     } else {
@@ -1141,6 +1153,27 @@ fn host_request(sh: &Arc<Shared>, kind: crate::playback::Kind, args: &Value) -> 
             }
             Answer::json(200, &json!({"ok": true, "song_s": song_s, "confirm_ms": confirm}))
         }
+    }
+}
+
+impl Shared {
+    /// The page selected a track (empty: none). A change makes the poll map again.
+    fn select_track(&self, name: &str) {
+        let mut cur = self.selected.lock().unwrap_or_else(|e| e.into_inner());
+        if *cur != name {
+            *cur = name.to_string();
+            self.sel_gen.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// The regions that map the page time, in both directions: those of the selected track, else all.
+    fn mapping_regions(&self) -> Vec<(usize, crate::service::RegionRec)> {
+        let all = (self.backend.regions)();
+        let track = self.selected.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if track.is_empty() {
+            return all;
+        }
+        crate::playback::regions_for(&all, &(self.backend.track_info)(&track).0)
     }
 }
 
@@ -1466,6 +1499,8 @@ impl Editor {
             closed: AtomicBool::new(false),
             inflight: AtomicUsize::new(0),
             host_queue: crate::playback::Queue::default(),
+            selected: Mutex::new(String::new()),
+            sel_gen: std::sync::atomic::AtomicU64::new(0),
             req_seq: std::sync::atomic::AtomicU64::new(0),
             page_dir: page.map(|(d, _)| d),
             n,
@@ -1836,6 +1871,7 @@ mod tests {
             "splash_dismiss",
             "reveal_path",
             "plugin_host_offer",
+            "plugin_host_track",
             "plugin_host_play",
             "plugin_host_stop",
             "plugin_host_locate",
@@ -1875,6 +1911,7 @@ mod tests {
                     "plugin:drag|start_drag",
                     "plugin_report",
                     "plugin_host_offer",
+                    "plugin_host_track",
                     "plugin_host_play",
                     "plugin_host_stop",
                     "plugin_host_locate",

@@ -5293,14 +5293,18 @@ PB_RATE = 48000
 PB_STEPS = [("locate-stopped", "locate", 1.2), ("play", "play", None), ("locate-playing", "locate", 0.6),
             ("stop", "stop", None), ("locate-stopped-2", "locate", 2.6)]
 PB_LOOP_MS = 100.0
+PB_TRACK_STEP = 0.5   # the second source lies this many seconds later in the song than the first
 
 
 def playback_run(label: str, bundle: Path, scenario: str = "full", env: dict | None = None) -> tuple[int, dict, list, dict]:
     """scenario: full (all three calls), partial (no position call), ignore (the host records and does nothing),
     none (no playback controller)."""
-    args = ["--transport", "follow", "--arg", scenario, "--snap", str(PB_SNAP), "--regions-all", ",".join(str(x) for x in TRANSPORT_REGION)]
+    args = ["--transport", "follow", "--arg", scenario, "--snap", str(0.0 if scenario == "tracks" else PB_SNAP),
+            "--regions-all", ",".join(str(x) for x in TRANSPORT_REGION)]
+    if scenario == "tracks":
+        args += ["--regions-step", str(PB_TRACK_STEP)]
     if scenario != "none":
-        args += ["--playback", {"drag": "ignore", "late": "full"}.get(scenario, scenario)]
+        args += ["--playback", {"drag": "ignore", "late": "full", "tracks": "full"}.get(scenario, scenario)]
     if scenario == "late":
         args += ["--playback-delay", "2500"]
     rc, summary, rows = run_phase(label, "playback", bundle, env, args, files=transport_files())
@@ -5712,6 +5716,51 @@ def stage_editor_playback_late_fault() -> bool:
                      "a run with no page report fails with 'no usable run'") and ok
 
 
+def playback_tracks_parts(rc: int, rows: list, rec: dict) -> dict:
+    """Y1: two sources at different song offsets. Both directions use the selected track: with the second track
+    selected a click at page time t goes to the host at the song position of that track and the follow shows t
+    again (no jump away from the click); with the first track selected the same host position shows that track's time."""
+    name = "editor-playback-tracks"
+    reps = page_reports(rows, "playback")
+    rep = reps[0] if reps else {}
+    if not rep or rep.get("visibility") != "visible" or len(rep.get("steps", [])) < 3 or not rec or not rep.get("calls"):
+        return {name: (False, f"no usable run: rc={rc}, page report {bool(rep)}, page {rep.get('visibility') if rep else None}, host record {bool(rec)}")}
+    a, _d, p = TRANSPORT_REGION
+    t = 1.2
+    song_b = p + PB_TRACK_STEP + (t - a)
+    want_samples = pb_samples_of(song_b)
+    reqs = rec.get("requests", [])
+    steps, call, seen = rep["steps"], rep["calls"][0], rep.get("seen", [])
+    got = reqs[0]["samples"] if reqs and reqs[0]["kind"] == "locate" else None
+    arrive = next((m for m in seen if m[0] >= call["at"] and abs(m[1] - t) <= 0.002), None)
+    ms = arrive[0] - call["at"] if arrive else None
+    away = [m[1] for m in seen if call["at"] <= m[0] < steps[2]["at"] and abs(m[1] - t) > 0.002 and (arrive is None or m[0] >= arrive[0] - 1)]
+    page_a = a + (song_b - p)
+    good = (got == want_samples and ms is not None and ms <= PB_LOOP_MS and not away and abs(steps[1]["pos_after"] - t) <= 0.002
+            and abs(steps[2]["pos_after"] - page_a) <= 0.002)
+    return {name: (good,
+                   f"second track selected, click at {t} s: the host got song {song_b:.3f} s ({got} samples, want {want_samples}), the follow showed {t} s again {ms:.0f} ms after the call "
+                   f"(limit {PB_LOOP_MS:.0f} ms), no jump away from the click; first track selected: the same host position shows {steps[2]['pos_after']} s (want {page_a:.3f} s)" if good else
+                   f"the loop is not closed for the selected track: host got {got} samples (want {want_samples}), the follow came back after {ms} ms, positions that jumped away from the click {away[:3]}, "
+                   f"page after the click {steps[1]['pos_after']} s (want {t}), after selecting the first track {steps[2]['pos_after']} s (want {page_a:.3f})"
+                   + (": the playhead jumped away from the click" if away or (ms is None) else ""))}
+
+
+def stage_editor_playback_tracks() -> bool:
+    """Y1: the follow and the locate use the track the page has selected (two sources at different song offsets)."""
+    rc, _summary, rows, rec = playback_run("editor-playback-tracks", CLAP, "tracks")
+    return print_parts("", playback_tracks_parts(rc, rows, rec))
+
+
+def stage_editor_playback_tracks_fault() -> bool:
+    rc, _summary, rows, rec = playback_run("editor-fault-playback-tracks", CLAP, "tracks", {"DS_ARA_PLAYBACK_FAULT": "first-track"})
+    ok = fault_reason("editor-playback-tracks-fault-first-track", playback_tracks_parts(rc, rows, rec), "editor-playback-tracks",
+                      "the follow maps with the first source, the locate with the selected track", "jumped away from the click")
+    parts = playback_tracks_parts(2, [], {})
+    return pass_fail("editor-playback-tracks-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                     "a run with no page report fails with 'no usable run'") and ok
+
+
 PLAYBACK_MAP_FAULT_TEST = "playback::tests::the_locate_of_the_plan_uses_the_regions_not_the_page_time_itself"
 
 
@@ -5734,6 +5783,7 @@ PLAYBACK_MAP_TESTS = [
     "playback::tests::a_request_queued_before_the_editor_closed_makes_no_call",
     "playback::tests::a_time_is_bounded_before_it_reaches_the_host",
     "playback::tests::the_regions_of_the_selected_track_are_used_else_all",
+    "playback::tests::for_the_selected_track_song_time_and_page_time_are_inverse",
     "editor::tests::requests_to_the_host_do_not_use_the_budget_of_the_app_commands",
 ]
 PLAYBACK_QUEUE_TEST = "playback::tests::requests_run_in_the_order_of_arrival_and_the_newest_locate_wins"
@@ -5916,6 +5966,8 @@ STAGES = {
     "editor-playback-none-fault": stage_editor_playback_none_fault,
     "editor-playback-partial": stage_editor_playback_partial,
     "editor-playback-partial-fault": stage_editor_playback_partial_fault,
+    "editor-playback-tracks": stage_editor_playback_tracks,
+    "editor-playback-tracks-fault": stage_editor_playback_tracks_fault,
     "editor-playback-drag": stage_editor_playback_drag,
     "editor-playback-drag-fault": stage_editor_playback_drag_fault,
     "editor-playback-late": stage_editor_playback_late,
@@ -5949,6 +6001,7 @@ ORDER = [
     "playback-map", "playback-map-fault", "editor-playback", "editor-playback-fault", "editor-playback-none", "editor-playback-none-fault",
     "editor-playback-partial", "editor-playback-partial-fault", "editor-playback-refused", "editor-playback-refused-fault",
     "editor-playback-drag", "editor-playback-drag-fault", "editor-playback-late", "editor-playback-late-fault",
+    "editor-playback-tracks", "editor-playback-tracks-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",
