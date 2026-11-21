@@ -41,6 +41,7 @@ pub mod ara {
     include!(concat!(env!("OUT_DIR"), "/ara.rs"));
 }
 pub mod editor;
+pub mod keys;
 pub mod playback;
 pub mod service;
 pub mod state;

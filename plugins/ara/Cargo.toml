@@ -38,6 +38,7 @@ wry = { version = "=0.57.0", default-features = false }
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
+block2 = "0.6"
 
 # The rule for the fault and test switches (switches.json): a build with this feature reads them
 # from the environment (the gate builds so); a delivery build, without it, never does. The report

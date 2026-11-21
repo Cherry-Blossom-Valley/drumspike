@@ -534,6 +534,7 @@ name = "drumspike-ara"
 version = "0.1.0"
 dependencies = [
  "bindgen",
+ "block2",
  "clap-sys",
  "drumspike-app",
  "drumspike-core",

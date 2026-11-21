@@ -264,7 +264,7 @@ fn test_arg() -> String {
     crate::test_switch("DS_ARA_EDITOR_ARG").unwrap_or_default()
 }
 
-fn fault() -> String {
+pub(crate) fn fault() -> String {
     crate::test_switch("DS_ARA_EDITOR_FAULT").unwrap_or_default()
 }
 
@@ -1372,6 +1372,12 @@ impl wry::raw_window_handle::HasWindowHandle for ParentView {
 /// is left is the one of the plugin instance's end.
 pub struct Editor {
     webview: wry::WebView,
+    /// M1b12: the web view's superview. It is the child of the host's view and takes every key that the
+    /// page did not use (`crate::keys`).
+    shield: objc2::rc::Retained<crate::keys::KeyShield>,
+    /// The monitor that takes key equivalents before the host's menu (`crate::keys::watch_equivalents`); it lives
+    /// while the editor is in the host's view.
+    monitor: std::cell::RefCell<Option<crate::keys::Monitor>>,
     /// What the handlers of the web view serve now: `None` while the editor is closed.
     current: Arc<Mutex<Option<Arc<Shared>>>>,
 }
@@ -1395,11 +1401,31 @@ impl Editor {
             ));
         }
         init.push_str(include_str!("editor/shell.js"));
+        init.push_str(include_str!("editor/keys.js"));
         if mode.is_some() {
             init.push_str(include_str!("editor/driver.js"));
         }
-        let parent = ParentView(nsview);
+        // M1b12: the web view is a child of the key shield, the shield a child of the host's view
         let (w, h) = unsafe { view_size(nsview) };
+        let mtm = objc2::MainThreadMarker::new().ok_or("the editor must be made on the main thread")?;
+        let shield = crate::keys::KeyShield::new(
+            mtm,
+            objc2_foundation::NSRect::new(
+                objc2_foundation::NSPoint::new(0.0, 0.0),
+                objc2_foundation::NSSize::new(w, h),
+            ),
+        );
+        unsafe {
+            let mask: objc2_app_kit::NSAutoresizingMaskOptions =
+                objc2_app_kit::NSAutoresizingMaskOptions::ViewWidthSizable
+                    | objc2_app_kit::NSAutoresizingMaskOptions::ViewHeightSizable;
+            if fault() != "no-resize" {
+                let _: () = msg_send![&*shield, setAutoresizingMask: mask];
+            }
+            let _: () = msg_send![nsview as *const AnyObject, addSubview: &*shield];
+        }
+        let shield_ptr = (&*shield) as *const crate::keys::KeyShield as *mut c_void;
+        let parent = ParentView(shield_ptr);
         let bounds = wry::Rect {
             position: wry::dpi::Position::Logical(wry::dpi::LogicalPosition::new(0.0, 0.0)),
             size: wry::dpi::Size::Logical(wry::dpi::LogicalSize::new(w, h)),
@@ -1458,6 +1484,7 @@ impl Editor {
             .map_err(|e| format!("the web view did not build: {e}"))?;
         unsafe {
             let v = webview.webview();
+            shield.set_web_view(objc2::rc::Retained::as_ptr(&v) as *mut AnyObject);
             // fill the parent on every resize of the host (wry sets only ViewMinYMargin)
             let mask: objc2_app_kit::NSAutoresizingMaskOptions =
                 objc2_app_kit::NSAutoresizingMaskOptions::ViewWidthSizable
@@ -1466,7 +1493,13 @@ impl Editor {
                 let _: () = msg_send![&*v, setAutoresizingMask: mask];
             }
         }
-        let ed = Editor { webview, current };
+        let monitor = std::cell::RefCell::new(crate::keys::watch_equivalents(&shield));
+        let ed = Editor {
+            webview,
+            shield,
+            monitor,
+            current,
+        };
         ed.open(backend, false)?;
         Ok(ed)
     }
@@ -1537,12 +1570,16 @@ impl Editor {
         unsafe {
             let v = self.webview.webview();
             let (w, h) = view_size(nsview);
-            let _: () = msg_send![nsview as *const AnyObject, addSubview: &*v];
+            let _: () = msg_send![nsview as *const AnyObject, addSubview: &*self.shield];
             let frame = objc2_foundation::NSRect::new(
                 objc2_foundation::NSPoint::new(0.0, 0.0),
                 objc2_foundation::NSSize::new(w, h),
             );
+            let _: () = msg_send![&*self.shield, setFrame: frame];
             let _: () = msg_send![&*v, setFrame: frame];
+        }
+        if self.monitor.borrow().is_none() {
+            *self.monitor.borrow_mut() = crate::keys::watch_equivalents(&self.shield);
         }
         self.open(backend, true)
     }
@@ -1555,8 +1592,10 @@ impl Editor {
         shared.closed.store(true, Ordering::SeqCst);
         let _ = self.webview.load_url("about:blank");
         unsafe {
-            let v = self.webview.webview();
-            let _: () = msg_send![&*v, removeFromSuperview];
+            let _: () = msg_send![&*self.shield, removeFromSuperview];
+            if let Some(m) = self.monitor.borrow_mut().take() {
+                crate::keys::unwatch(&m);
+            }
         }
         CLOSED.fetch_add(1, Ordering::SeqCst);
         session().log(
@@ -1587,6 +1626,13 @@ impl Editor {
 
     fn set_size(&self, w: u32, h: u32) {
         main_check("set_size");
+        unsafe {
+            let frame = objc2_foundation::NSRect::new(
+                objc2_foundation::NSPoint::new(0.0, 0.0),
+                objc2_foundation::NSSize::new(f64::from(w.max(320)), f64::from(h.max(240))),
+            );
+            let _: () = msg_send![&*self.shield, setFrame: frame];
+        }
         let _ = self.webview.set_bounds(wry::Rect {
             position: wry::dpi::Position::Physical(wry::dpi::PhysicalPosition::new(0, 0)),
             size: wry::dpi::Size::Physical(wry::dpi::PhysicalSize::new(w.max(320), h.max(240))),
