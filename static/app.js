@@ -332,7 +332,7 @@ function drawOverviewTracks(ctx, W, H) {
     const amp = S.peakAmp[name] || 1;
     const scale = ((rowH-4)/2) / amp;
     if (Array.isArray(L.rms)) {
-      ctx.fillStyle = S.tracks[name].color;
+      ctx.fillStyle = trackColor(name);
       for (let px=0; px<W; px++) {
         const b0 = Math.floor(px/W*L.n), b1 = Math.max(b0+1, Math.floor((px+1)/W*L.n));
         let r = 0; for (let b=b0;b<Math.min(b1,L.n);b++) r = Math.max(r, L.rms[b]);
@@ -340,7 +340,7 @@ function drawOverviewTracks(ctx, W, H) {
         if (hh>0.3) ctx.fillRect(px, y0+rowH/2-hh, 1, hh*2);
       }
     }
-    ctx.fillStyle = S.tracks[name].color + "66";
+    ctx.fillStyle = trackColor(name) + "66";
     for (let px=0; px<W; px++) {
       const b0 = Math.floor(px/W*L.n), b1 = Math.max(b0+1, Math.floor((px+1)/W*L.n));
       let mn=1, mx=-1;
@@ -357,7 +357,7 @@ function drawOverviewTracks(ctx, W, H) {
 const OV = { key: "", peaks: [], amps: [], canvas: null };
 function overviewTracks(c, W, H) {
   const peaks = S.order.map(n => S.peaks[n]), amps = S.order.map(n => S.peakAmp[n]);
-  const key = `${c.width}x${c.height}|${W}x${H}|${S.order.map(n => n + S.tracks[n].color).join("|")}`;
+  const key = `${c.width}x${c.height}|${W}x${H}|${S.order.map(n => n + trackColor(n)).join("|")}`;
   if (OV.canvas && key === OV.key && peaks.every((p, i) => p === OV.peaks[i]) && amps.every((a, i) => a === OV.amps[i])) return OV.canvas;
   OV.key = key; OV.peaks = peaks; OV.amps = amps;
   if (OV.canvas) { OV.canvas.width = 0; OV.canvas.height = 0; }
@@ -746,6 +746,7 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
   persistInit({ edIdle });   // R17 step 2: persist waits for the edit queue through the injected hook (edit.js owns edIdle since step 3)
   editInit({ pushEvents, voidHitDrag: name => { if (hitDrag && hitDrag.track === name) hitDrag = null; } });   // R17 step 3: edit.js flushes the writes of other steps through the injected hook; voidHitDrag is the input layer's (a replaced hit list voids an in-flight drag)
   sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; }, exTempoReset: () => { EX.tempoAck = false; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks; #151: the default-tempo answer is per project
+  hostMenuInit();   // #559: the menu button of the host mode (returns at once with the mode off)
   hostApply();   // #539: the page of the host mode (a class on <body>, the controls of the list hidden) before the first layout
   tmInit(); measureGeo(); geoObserve();   // P4-8: the map rulers; P3-14d: the geometry once now, then from the ResizeObserver
   // #518: the one host listener — the shell sets window.__DS_HOST_MODE__ and B.hostTransport

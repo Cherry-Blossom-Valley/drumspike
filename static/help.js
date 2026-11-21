@@ -119,7 +119,7 @@
       const a = ev.target.closest("a");
       if (!a) return;
       ev.preventDefault();
-      if (a.classList.contains("ext")) B.openUrl(a.href);        // out: the default browser
+      if (a.classList.contains("ext")) Promise.resolve(B.openUrl(a.href)).catch(e => setMsg(`cannot open ${a.href}: ${e && e.message}`, "error"));        // out: the default browser; #559: a refusal shows the address on the status line
       else if (a.classList.contains("chapter")) openSection(a.getAttribute("href"));
       else if (a.getAttribute("href")?.startsWith("#")) openSection(a.getAttribute("href").slice(1));
     });

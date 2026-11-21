@@ -107,6 +107,11 @@ async function loadViewSettings() {   // at boot: the saved state of the Inspect
   } catch (e) { /* no settings */ }
 }
 
+/* The lane colour of a role (`role_color` in crates/app/src/roles.rs; #559: here, with the other shared helpers that session.js, tracks.js, wave.js, velocity.js, review.js and app.js all call). A track record without a colour (a project that the DAW plugin made, a restored track) draws in the colour of its role: the lane code appends an alpha to it ("#8a93a6" + "0d"), and "undefined0d" is no colour, so the 2D context would keep its last fill style and paint the lane in the colour of the last hit (magenta for a hand-added one, yellow for the selected one). */
+const ROLE_COLORS = { kick: "#e05555", snare: "#e0a13c", tom: "#57b8e0", hat: "#9be055", cymbal: "#c9a0e0", other: "#8a93a6" };
+/* The colour of a track for drawing: its own when it is 6 hex digits, else the colour of its role. Every draw site calls this, so a lane never builds "undefined0d" and never keeps the last fill style of the canvas. */
+function trackColor(name) { const t = S.tracks[name]; return t && /^#[0-9a-f]{6}$/i.test(t.color || "") ? t.color : ROLE_COLORS[t && t.role] || ROLE_COLORS.other; }
+function trackColors(tracks) { for (const t of Object.values(tracks || {})) if (t && !/^#[0-9a-f]{6}$/i.test(t.color || "")) { t.color = ROLE_COLORS[t.role] || ROLE_COLORS.other; t.colorFromRole = true; } }
 /* ---------------- host mode (DAW plugin P2, #509) ----------------
    In a DAW the host owns the files, the transport and the tempo. The plugin shell sets
    window.__DS_HOST_MODE__ before the page loads; backend.js turns it into the one flag
@@ -130,7 +135,7 @@ const HOST_OWNED = ["new", "open", "open_recent", "recent_clear", "close", "save
    MIDI file drag (static/export.js exDragStart, which M1c wires). */
 const HOST_ABSENT = [
   { group: "audio", say: "the host plays the audio",
-    menu: ["audition", "audition_tab", "click", "mute_track", "solo_track", "reset_mix"],
+    menu: ["audition", "audition_tab", "click", "mute_track", "solo_track", "reset_mix", "half_speed"],   // #559: the host has no half speed (a play request carries no speed)
     commands: ["transport_play", "transport_stop", "transport_seek", "transport_status", "transport_mix", "transport_clicks",
       "transport_master", "track_set_mix", "outputs_list", "output_select"],
     controls: ["#clickBtn", "#auditionTabBtn", ".master", "#insMixBox", ".tctl", ".meter", "#setCat-audio", "#setCat-audition",

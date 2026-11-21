@@ -2,7 +2,7 @@
    test switch DS_ARA_EDITOR_MODE is set (a real host sets none). It runs on the real page and
    reports to the plugin through window.ipc (rows "page_report" of the plugin's report).
    window.__DS_TEST__ = {mode, arg, fault} comes from the plugin.
-   Modes: ready (boot report only), measure, keys, focus, resize, edit, shell, analyse, net. */
+   Modes: ready (boot report only), measure, keys, focus, resize, edit, shell, analyse, net, and (M1b11) hit, menu, geometry. */
 (function () {
   "use strict";
   var T = window.__DS_TEST__ || { mode: "ready", arg: "", fault: "" };
@@ -72,6 +72,9 @@
     if (T.mode === "analyse" || T.mode === "analyse-race") await analyse(names);
     if (T.mode === "bigpost") await bigpost(names);
     if (T.mode === "transport") transportRun();
+    if (T.mode === "hit") hitRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "menu") menuRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "geometry") geometryRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "playback") playbackRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
   });
 
@@ -338,6 +341,169 @@
       }
     } catch (e) { err = String(e && e.message || e); }
     post({ kind: "analyse", state: st && st.state, ms: Math.round(performance.now() - t0), channel_messages: msgs, error: err });
+  }
+
+  /* ---- M1b11: the lanes, the menu and the geometry, read from what the page DREW ---- */
+  function sleepM(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  async function settle() {   // the page has drawn everything it was asked to
+    for (var i = 0; i < 60; i++) { await sleepM(100); try { if (FR.flags === 0 && !FR.raf) break; } catch (e) { /* none */ } }
+    await sleepM(300);
+  }
+  function laneStats(c) {   // the pixels of one lane canvas: the rows that carry a visible pixel, and the one colour that fills the lane
+    var r = c.getBoundingClientRect(), out = { kind: c.classList.contains("spike") ? "spike" : "wave", cssH: Math.round(r.height * 10) / 10, cssW: Math.round(r.width) };
+    if (c.width < 2) { out.tiny = true; return out; }
+    var d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data, dpr = c.width / r.width, minY = 1e9, maxY = -1, opaque = 0, n = 0, cnt = {};
+    for (var y = 0; y < c.height; y++) for (var x = 0; x < c.width; x++) {
+      var i = (y * c.width + x) * 4, a = d[i + 3];
+      n++;
+      if (a > 100) { opaque++; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+      if (x % 3 === 0) { var k = (d[i] >> 5) + "," + (d[i + 1] >> 5) + "," + (d[i + 2] >> 5) + "," + (a >> 6); cnt[k] = (cnt[k] || 0) + 1; }
+    }
+    var top = Object.keys(cnt).sort(function (a, b) { return cnt[b] - cnt[a]; })[0], tot = 0; Object.keys(cnt).forEach(function (k) { tot += cnt[k]; });
+    out.storeH = Math.round(c.height / dpr * 10) / 10; out.dpr = Math.round(dpr * 100) / 100;
+    out.minY = minY === 1e9 ? null : Math.round(minY / dpr * 10) / 10; out.maxY = maxY < 0 ? null : Math.round(maxY / dpr * 10) / 10;
+    out.opaque = Math.round(opaque / n * 1000) / 1000; out.top = top; out.share = Math.round(cnt[top] / tot * 1000) / 1000;
+    return out;
+  }
+  function lanesOf(name) {
+    var row = document.querySelector('.track[data-name="' + CSS.escape(name) + '"]'), o = {};
+    if (!row) return o;
+    row.querySelectorAll("canvas.lane").forEach(function (c) { var st = laneStats(c); o[st.kind] = st; });
+    return o;
+  }
+  function hostAsk(kind, extra) { post(Object.assign({ kind: kind }, extra || {})); }
+  async function pointerClick(el, fx, fy, count) {   // a real click of the pointer: the host sends the NSEvents
+    el.scrollIntoView({ block: "nearest" }); await sleepM(200);
+    var r = el.getBoundingClientRect();
+    hostAsk("host-click", { x: r.left + r.width * fx, y: r.top + r.height * fy, count: count });
+  }
+  /* Mode hit: a hit made with the pointer in the lane of a track of the role "other" and of a drum role; the report
+     carries the selection, the colour of the track and the pixels of both lanes before and after. */
+  var pointerLog = [];
+  ["mousedown", "mouseup", "click", "dblclick", "pointerdown", "pointerup"].forEach(function (t) {
+    window.addEventListener(t, function (ev) { if (T.mode === "hit" || T.mode === "menu") pointerLog.push([t, Math.round(ev.clientX), Math.round(ev.clientY), ev.detail, ev.target && (ev.target.className || ev.target.id || ev.target.tagName)]); }, true);
+  });
+  async function hitRun(names) {
+    var tracks = [];
+    if (T.fault === "no-color") {   // the fault run: the service gives no colour and the page has no repair
+      window.trackColors = function () { /* the repair is off */ };
+      window.trackColor = function () { return undefined; };
+      names.forEach(function (n) { S.tracks[n].color = undefined; });
+      invalidate(F.VIEW);
+    }
+    await settle();
+    var roleOther = null;
+    try { roleOther = await setTrackRole(names[0], "other"); } catch (e) { roleOther = "threw " + e; }
+    if (T.fault === "no-color") names.forEach(function (n) { S.tracks[n].color = undefined; });
+    await settle();
+    var pair = [names[0], names[1]];
+    for (var i = 0; i < pair.length; i++) {
+      var name = pair[i], n0 = (S.events[name] || []).length, before = lanesOf(name);
+      var spike = document.querySelector('.track[data-name="' + CSS.escape(name) + '"] canvas.spike');
+      var evs = S.events[name] || [], dur = S.tracks[name].duration || 1;
+      var t = evs.length >= 2 ? (evs[0].t + evs[1].t) / 2 : dur / 2;   // between two hits, inside the audio of the track
+      await pointerClick(spike, (t - S.view.t0) / (S.view.t1 - S.view.t0), 0.5, 2);
+      var added = false;
+      for (var k = 0; k < 60 && !added; k++) { await sleepM(100); added = (S.events[name] || []).length > n0; }
+      await settle();
+      var lanes = lanesOf(name);
+      tracks.push({ name: name, role: S.tracks[name].role, note: S.tracks[name].note, color: S.tracks[name].color === undefined ? null : S.tracks[name].color,
+        pointer_added: added, n0: n0, n1: (S.events[name] || []).length, sel: S.sel, ln_sel: LN.sel,
+        added_flags: (S.events[name] || []).filter(function (e) { return e.added; }).length, before: before, after: lanes });
+    }
+    post({ kind: "hit", visibility: document.visibilityState, role_other: roleOther, tracks: tracks, host_mode: !!B.hostMode, pointer_log: pointerLog.slice(0, 40) });
+  }
+  /* Mode geometry: the lines of the hits and of the grid must span the lane after every change of the zoom, of the track height
+     and of the window (also across the 520 px of the low window). One row per step: the size of each lane box, of its store and the
+     rows that carry a line. */
+  async function geometryRun() {
+    var names = S.order.slice(), steps = [];
+    if (T.fault === "stale-geometry") {   // the fault run: the page as it was before #559, the key of the sizes without the measured height of the rows
+      window.sizeKey = function () { return [GEO.laneW, GEO.rulerW, GEO.ovW, GEO.ovH, GEO.waveH, GEO.spikeH, GEO.dpr, rowHKey(), VL.on ? VL.h : 0].join(","); };
+    }
+    function centre() {   // a view of 500 ms with a hit of every track in it
+      var t = null;
+      names.forEach(function (n) { if (t === null && (S.events[n] || []).length) t = S.events[n][0].t; });
+      S.playhead = t === null ? 0 : t; zoomPreset(3);
+    }
+    async function rec(name) {
+      await settle();
+      var rows = {};
+      names.forEach(function (n) { rows[n] = lanesOf(n); });
+      steps.push({ name: name, th: S.trackHeight, win: [innerWidth, innerHeight], dpr: window.devicePixelRatio, low: document.body.classList.contains("hostLow"),
+        view: [S.view.t0, S.view.t1], geo: { waveH: GEO.waveH, spikeH: GEO.spikeH, dpr: GEO.dpr }, lanes: rows });
+    }
+    async function until(cond, ms) { var t0 = performance.now(); while (performance.now() - t0 < ms && !cond()) await sleepM(100); return cond(); }
+    await settle(); centre(); await rec("base");
+    setTrackHeight("large"); await rec("track-large");
+    zoomPreset(0); await rec("zoom-full");
+    setTrackHeight("small"); await rec("track-small");
+    centre(); await rec("zoom-in");
+    var own = {}; own[names[0]] = 1.5; setRowHeights(own); await rec("row-taller");   // the Zoom Toggle and the drag of a row: one row with its own height
+    setRowHeights({}); await rec("row-reset");
+    hostAsk("host-low"); var low = await until(function () { return innerHeight < 520; }, 30000);
+    await rec("window-low");
+    setTrackHeight("large"); await rec("low-track-large");
+    zoomPreset(0); await rec("low-zoom-full");
+    centre(); await rec("low-zoom-in");
+    hostAsk("host-high"); var high = await until(function () { return innerHeight >= 520; }, 30000);
+    await rec("window-high");
+    setTrackHeight("medium"); centre(); await rec("high-track-medium");
+    post({ kind: "geometry", visibility: document.visibilityState, went_low: low, went_high: high, steps: steps });
+  }
+  /* Mode menu: the menu button of the page in host mode: the commands, the settings, a view option, the keyboard and the low window. */
+  async function menuRun() {
+    await settle();
+    var rep = { visibility: document.visibilityState, host_mode: !!B.hostMode };
+    if (T.fault === "no-menu") { var b0 = document.getElementById("hostMenuBtn"); if (b0) b0.remove(); }
+    var btn = document.getElementById("hostMenuBtn"), panel = document.getElementById("hostMenu");
+    rep.button = !!btn; rep.panel = !!panel;
+    if (!btn) { post(Object.assign({ kind: "menu" }, rep)); return; }
+    function key(el, k) { el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); }
+    var model = DSHostMenu.model(); rep.groups = model.map(function (g) { return [g.name, g.items.length]; });
+    rep.audit = DSHostMenu.audit();
+    rep.first_title = btn.title;
+    // the keyboard: Enter opens, Down moves, Escape closes and the focus is back on the button
+    btn.focus(); key(btn, "Enter"); await sleepM(100);
+    var kb = { opened: DSHostMenu.isOpen(), focus: document.activeElement && document.activeElement.dataset && document.activeElement.dataset.group };
+    key(document.activeElement, "ArrowDown"); kb.moved = document.activeElement.dataset.group;
+    key(document.activeElement, "Escape"); await sleepM(100);
+    kb.closed = !DSHostMenu.isOpen(); kb.focus_back = document.activeElement && document.activeElement.id;
+    rep.keyboard = kb;
+    // a view option with the pointer: View > Track Height > Large
+    function mouse(el, type) { var r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, detail: 1 })); }
+    async function pick(group, cmd) {   // the clicks are DOM events: the web view of this host does not hand a single click of the host's NSEvents to the page (the double click of mode hit comes through)
+      mouse(btn, "mousedown"); mouse(btn, "mouseup"); mouse(btn, "click");
+      for (var i = 0; i < 20 && !DSHostMenu.isOpen(); i++) await sleepM(50);
+      if (!DSHostMenu.isOpen()) return "the click did not open the menu";
+      var g = panel.querySelector('[data-group="' + group + '"]'); mouse(g, "click"); await sleepM(100);
+      var it = panel.querySelector('[data-cmd="' + cmd + '"]'); if (!it) return "no item " + cmd;
+      mouse(it, "mousedown"); mouse(it, "mouseup"); mouse(it, "click");
+      for (var j = 0; j < 20 && DSHostMenu.isOpen(); j++) await sleepM(50);
+      return DSHostMenu.isOpen() ? "the click did not run the item" : "ok";
+    }
+    rep.pick_height = await pick("View", "height_large"); await settle();
+    rep.track_height = S.trackHeight;
+    // the settings
+    rep.pick_settings = await pick("Drum Spike", "settings"); await sleepM(300);
+    var modal = document.getElementById("settingsModal");
+    rep.settings = { visible: !!modal && !modal.classList.contains("hidden"),
+      cats: Array.prototype.filter.call(document.querySelectorAll("#setCats .setCatBtn"), function (b) { return b.checkVisibility({ visibilityProperty: true }); }).map(function (b) { return b.dataset.cat; }) };
+    var done = document.getElementById("settingsDone"); if (done) done.click(); await sleepM(300);
+    // the low window
+    hostAsk("host-low"); await (async function () { var t0 = performance.now(); while (performance.now() - t0 < 30000 && innerHeight >= 520) await sleepM(100); })();
+    await settle();
+    btn.click(); await sleepM(200);
+    panel.querySelector('[data-group="View"]').click(); await sleepM(200);
+    var pr = panel.getBoundingClientRect(), items = panel.querySelectorAll("[data-cmd]"), last = items[items.length - 1];
+    last.scrollIntoView({ block: "nearest" }); await sleepM(100);
+    var lr = last.getBoundingClientRect(), pr2 = panel.getBoundingClientRect();
+    rep.low = { innerH: innerHeight, innerW: innerWidth, top: pr2.top, bottom: pr2.bottom, left: pr2.left, right: pr2.right, scrolls: panel.scrollHeight > panel.clientHeight,
+      last_visible: lr.top >= pr2.top - 1 && lr.bottom <= pr2.bottom + 1, last_in_window: lr.bottom <= innerHeight };
+    key(document.activeElement, "Escape"); key(document.activeElement, "Escape"); await sleepM(100);
+    rep.low.closed = !DSHostMenu.isOpen();
+    rep.pointer_log = pointerLog.slice(0, 40);
+    post(Object.assign({ kind: "menu" }, rep));
   }
   /* a page-side post that the host can ask for at any time */
   window.__DS_REPORT_NOW__ = function () { post({ kind: "now", resources: resources(), violations: violations }); };
