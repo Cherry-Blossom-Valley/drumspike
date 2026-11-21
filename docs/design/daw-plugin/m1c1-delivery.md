@@ -404,18 +404,26 @@ Small commits, risky parts first. Each commit has its own tests; the heavy gates
    (private, outside the repository).
 9. The gate: `plugins/ara/check.sh all` and the complete gate of the app, in the background with one log per step; `tools/check_private.py --diff origin/main`.
 
-## Open questions for the coordinator
+## Decisions of the coordinator (answers to the open questions)
 
-1. May a stage post real mouse events (CGEvent, needs the accessibility permission) to run one real drag onto the test host window? The plan
-   without it: pasteboard of the real session plus a stub drop. With it we also see the drop and the mouse path, but the stage takes the mouse for a few seconds
-   and cannot run in the background gate.
-2. Audio spikes ("Audio" and "Both" types): out of M1c1 and hidden in host mode. Is that right, or do you want them in this part?
-3. The folder choice is an open panel in directory mode (as in the app), shown as a sheet, not a save panel. Is that wording acceptable for gate line 5?
-4. The default-tempo ask of the page (#151) moves out of the press-and-drag moment in host mode (it asks when the tiles are rendered, not on the drag).
-   This changes `exDragStart` in host mode only. Accept?
-5. Time-stretched regions: the note says "not handled" and the page says nothing. Should the page warn when a region has a stretch flag
-   (the plugin would read `playbackTransformation` flags)?
-6. File names from the DAW track name instead of the key (section 1). The coordinator confirms, because a rename of a DAW track between two exports leaves the old files in the folder.
-7. A hit before song 0 is dropped (today's MIDI rule puts it at tick 0). Confirm.
-8. Whether the first host offers tempo entries is unknown (section 2). If it does not, the transport tempo (source 2) is what the owner gets. Is one fixed tempo
-   acceptable for the first hand check, or should the page ask the user for a tempo?
+1. No stage posts a global event (no CGEvent, no accessibility permission, no take-over of the mouse). The stages use in-process events
+   posted to the window of the test host, the pasteboard of the real drag session, and the stub dragging info for the drop code. This does
+   not prove a real drop by a DAW or the real mouse path. The hand check sheet has one line for it: drag the MIDI and the spikes onto a DAW
+   track with the real mouse and note where each lands.
+2. The synthetic spike WAV and the MIDI are in M1c1. The audio-spike types ("Audio" and "Both") stay absent in host mode in this part; the
+   dialog says so with the short text of the group, and they are a later part.
+3. The folder choice is an open panel in directory mode, shown as a sheet on the window of the plugin view.
+4. The default-tempo ask moves out of the press-and-drag moment in host mode.
+5. The export dialog shows one short line when a region with a time stretch is among the exported tracks (it names how many tracks). The
+   files are still written.
+6. File names come from the DAW track name. A rename leaves the old files. Two tracks with one name use the numbered display name of #558. The name
+   is made safe for a file name with the rule the app already has.
+7. A hit before song 0 or in no region is dropped and counted; the dialog shows the counts.
+8. One fixed tempo from the process call is enough for the first hand check. The page names the tempo source and the report has the row
+   `musical_context`.
+
+Additions for phase 2: rebase onto main after the key shield of #561 (`plugins/ara/src/keys.rs`: a shield view above the web view, a local key
+monitor and a local mouse monitor that only change the first responder). A stage checks that a drag that starts in the page still works with
+that mouse monitor, and that the folder sheet gets its keys (a sheet is another window, so the monitors pass its events). `crates/` changes need
+the whole pytest suite and the Rust workspace tests. A byte golden for the standalone export is a must, and one for the multi-track MIDI mode
+too. Names in tests are synthetic.
