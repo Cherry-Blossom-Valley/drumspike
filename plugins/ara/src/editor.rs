@@ -198,6 +198,8 @@ pub struct Backend {
     /// The regions of the document's sources, `(source index, region)`: the page maps the
     /// position of the host with them (M1b5).
     pub regions: RegionsFn,
+    /// A change counter of those regions: the page maps again when it grows.
+    pub regions_gen: Arc<dyn Fn() -> u64 + Send + Sync>,
     pub doc_id: String,
 }
 
@@ -455,6 +457,7 @@ fn poll_transport(sh: &Arc<Shared>, total: std::time::Duration) -> Vec<Value> {
     let end = std::time::Instant::now() + total;
     let identity = transport_fault() == "identity";
     let invent = transport_fault() == "invent";
+    let keep_playing = transport_fault() == "keep-playing";
     loop {
         if sh.closed.load(Ordering::SeqCst) {
             return Vec::new();
@@ -477,7 +480,9 @@ fn poll_transport(sh: &Arc<Shared>, total: std::time::Duration) -> Vec<Value> {
         let now = tr::now_us();
         let (msg, wait, stale_row, nopos_row, regions) = {
             let mut poller = sh.poller.lock().unwrap_or_else(|e| e.into_inner());
-            let (msg, wait) = poller.look(snap, now, &mut || {
+            poller.no_stop_fault = keep_playing;
+            let gen = (sh.backend.regions_gen)();
+            let (msg, wait) = poller.look(snap, now, gen, &mut || {
                 if identity {
                     Vec::new()
                 } else {
@@ -533,6 +538,9 @@ fn poll_transport(sh: &Arc<Shared>, total: std::time::Duration) -> Vec<Value> {
             return Vec::new();
         }
         std::thread::sleep(std::time::Duration::from_millis(wait).min(left));
+        if sh.closed.load(Ordering::SeqCst) {
+            return Vec::new(); // the editor closed during the wait
+        }
     }
 }
 
@@ -1369,6 +1377,7 @@ fn backend_of(plugin: &Plugin) -> Backend {
             changed: Arc::new(|| {}),
             record: Arc::new(|_, _| Ok(false)),
             regions: Arc::new(Vec::new),
+            regions_gen: Arc::new(|| 0),
             doc_id: "unbound".to_string(),
         },
     }

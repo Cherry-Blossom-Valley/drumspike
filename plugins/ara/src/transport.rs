@@ -40,7 +40,7 @@ pub const JUMP_S: f64 = 0.018;
 /// A position change while stopped that counts as a locate.
 const STOP_MOVE_S: f64 = 0.0005;
 /// The wait of the poll while the host is stopped and nothing changed (or went silent).
-pub const IDLE_MS: u64 = 50;
+pub const IDLE_MS: u64 = 20;
 /// The wait of the poll while the host plays.
 pub const PLAY_MS: u64 = 8;
 /// The region list is fetched again after this time at the most.
@@ -446,6 +446,28 @@ impl Pacer {
         })
     }
 
+    /// The slot is gone (cleared by the owner's `deactivate` or `reset`) or has no position: when the
+    /// page was told "playing", it is told "stopped" at the last position it got, once. Without this the
+    /// page would run on for ever from the old position.
+    pub fn stop_at_last(&mut self, now_us: u64) -> Option<Msg> {
+        let l = self.last.filter(|l| l.playing)?;
+        self.epoch += 1;
+        self.last = Some(Last {
+            mapped_s: l.mapped_s,
+            at_us: now_us,
+            playing: false,
+        });
+        Some(Msg {
+            epoch: self.epoch,
+            t_ns: now_us * 1000,
+            pos: l.mapped_s,
+            playing: false,
+            why: Why::State,
+            song_s: f64::NAN,
+            mapped: Mapped::Inside,
+        })
+    }
+
     fn has_sent(&self) -> bool {
         self.last.is_some()
     }
@@ -463,6 +485,10 @@ pub struct Poller {
     pub fetches: usize,
     stale_reported: bool,
     no_position_reported: bool,
+    /// The change counter of the regions at the last fetch.
+    regions_gen: u64,
+    /// The fault run `keep-playing`: no stop message when the slot is cleared (the round 2 way).
+    pub no_stop_fault: bool,
 }
 
 impl Poller {
@@ -475,6 +501,16 @@ impl Poller {
             fetches: 0,
             stale_reported: false,
             no_position_reported: false,
+            regions_gen: 0,
+            no_stop_fault: false,
+        }
+    }
+
+    fn stop_msg(&mut self, now_us: u64) -> Option<Msg> {
+        if self.no_stop_fault {
+            None
+        } else {
+            self.pacer.stop_at_last(now_us)
         }
     }
 
@@ -502,25 +538,36 @@ impl Poller {
         &mut self,
         snap: Option<Snap>,
         now_us: u64,
+        regions_gen: u64,
         fetch: &mut dyn FnMut() -> Vec<(usize, RegionRec)>,
     ) -> (Option<Msg>, u64) {
         let Some(s) = snap else {
-            return (None, IDLE_MS);
+            return (self.stop_msg(now_us), IDLE_MS);
         };
         let key = (s.pos_s.to_bits(), s.playing, s.has_position);
-        if !s.playing && self.pacer.has_sent() && self.last_key == Some(key) {
-            return (None, IDLE_MS); // stopped and unchanged: nothing to do
+        let old = self
+            .fetched_at
+            .is_some_and(|at| now_us.saturating_sub(at) > REGION_TTL_US);
+        // stopped and unchanged: nothing to do, unless the regions changed (looked at every 200 ms at
+        // the most, and only when the change counter moved)
+        if !s.playing
+            && self.pacer.has_sent()
+            && self.last_key == Some(key)
+            && !(old && regions_gen != self.regions_gen)
+        {
+            return (None, IDLE_MS);
         }
         self.last_key = Some(key);
         if !s.has_position {
             self.pacer.step(Some(s), now_us, &|x| (x, Mapped::NoRegions));
-            return (None, IDLE_MS);
+            return (self.stop_msg(now_us), IDLE_MS);
         }
         if self
             .fetched_at
             .is_none_or(|at| now_us.saturating_sub(at) > REGION_TTL_US)
         {
             self.regions = fetch();
+            self.regions_gen = regions_gen;
             self.fetched_at = Some(now_us);
             self.fetches += 1;
         }
@@ -934,7 +981,7 @@ mod tests {
         let mut msgs = 0;
         let mut looks = 0;
         while t < 2_000_000 {
-            let (m, wait) = poller.look(Some(snap(2.0, false, t)), t, &mut fetch);
+            let (m, wait) = poller.look(Some(snap(2.0, false, t)), t, 0, &mut fetch);
             msgs += usize::from(m.is_some());
             looks += 1;
             t += wait * 1000;
@@ -945,13 +992,13 @@ mod tests {
             "{} region fetches in 2 s of a stopped host (bound 2)",
             poller.fetches
         );
-        assert!(looks <= 45, "{looks} looks in 2 s: the wait is long");
+        assert!(looks <= 105, "{looks} looks in 2 s: the wait is 20 ms");
         // the host plays for 2 s
         let mut poller = Poller::new(TICK_US);
         let mut t = 0u64;
         while t < 2_000_000 {
             let seen = t - t % 10_000;
-            let (_, wait) = poller.look(Some(snap(seen as f64 / 1e6, true, seen)), t, &mut fetch);
+            let (_, wait) = poller.look(Some(snap(seen as f64 / 1e6, true, seen)), t, 0, &mut fetch);
             t += wait * 1000;
         }
         assert!(
@@ -959,5 +1006,92 @@ mod tests {
             "{} region fetches in 2 s of play (bound 11)",
             poller.fetches
         );
+    }
+
+    #[test]
+    fn a_cleared_slot_while_the_page_plays_sends_stopped_at_the_last_position_once() {
+        let mut poller = Poller::new(TICK_US);
+        let mut fetch = || Vec::new();
+        let m = poller.look(Some(snap(2.0, true, 0)), 0, 0, &mut fetch).0.unwrap();
+        assert!(m.playing);
+        let m = poller
+            .look(Some(snap(2.04, true, 40_000)), 40_000, 0, &mut fetch)
+            .0
+            .unwrap();
+        assert_eq!(m.why, Why::Tick);
+        // the host stopped, made no stopped process call, and deactivated: the slot is gone
+        let m = poller.look(None, 80_000, 0, &mut fetch).0.expect("a stop message");
+        assert_eq!((m.playing, m.why), (false, Why::State));
+        assert!((m.pos - 2.04).abs() < 1e-9, "the last position the page got");
+        assert!(poller.look(None, 100_000, 0, &mut fetch).0.is_none(), "once");
+        // the fault run: the round 2 way sends nothing
+        let mut p2 = Poller::new(TICK_US);
+        p2.no_stop_fault = true;
+        p2.look(Some(snap(2.0, true, 0)), 0, 0, &mut fetch);
+        assert!(p2.look(None, 80_000, 0, &mut fetch).0.is_none());
+        // a host that was stopped sends nothing when the slot is cleared
+        let mut p3 = Poller::new(TICK_US);
+        p3.look(Some(snap(2.0, false, 0)), 0, 0, &mut fetch);
+        assert!(p3.look(None, 80_000, 0, &mut fetch).0.is_none());
+    }
+
+    #[test]
+    fn a_host_that_plays_with_no_position_stops_the_page_once() {
+        let mut poller = Poller::new(TICK_US);
+        let mut fetch = || Vec::new();
+        poller.look(Some(snap(2.0, true, 0)), 0, 0, &mut fetch).0.unwrap();
+        let nopos = Snap {
+            has_position: false,
+            ..snap(0.0, true, 50_000)
+        };
+        let m = poller
+            .look(Some(nopos), 50_000, 0, &mut fetch)
+            .0
+            .expect("a stop message");
+        assert!(!m.playing && (m.pos - 2.0).abs() < 1e-9);
+        assert!(poller.take_no_position_row());
+        assert!(poller
+            .look(
+                Some(Snap {
+                    seen_us: 60_000,
+                    ..nopos
+                }),
+                60_000,
+                0,
+                &mut fetch
+            )
+            .0
+            .is_none());
+        assert!(!poller.take_no_position_row(), "the row is written once");
+    }
+
+    #[test]
+    fn a_change_of_the_regions_while_stopped_is_fetched_once_after_the_wait() {
+        let mut poller = Poller::new(TICK_US);
+        let shift = std::cell::Cell::new(0.0);
+        let mut fetch = || vec![(0usize, reg(0.0 + shift.get(), 5.0, 0.0))];
+        let m = poller.look(Some(snap(2.0, false, 0)), 0, 1, &mut fetch).0.unwrap();
+        assert_eq!(m.pos, 2.0);
+        shift.set(1.0); // the regions changed: the counter moves
+                        // within 200 ms: no fetch
+        assert!(poller
+            .look(Some(snap(2.0, false, 0)), 100_000, 2, &mut fetch)
+            .0
+            .is_none());
+        assert_eq!(poller.fetches, 1);
+        // after 200 ms: one fetch and one message with the new mapping
+        let m = poller
+            .look(Some(snap(2.0, false, 0)), 250_000, 2, &mut fetch)
+            .0
+            .expect("the new mapping");
+        assert_eq!((m.pos, poller.fetches), (3.0, 2));
+        // and then nothing, and no fetch on every look
+        for k in 0..50 {
+            assert!(poller
+                .look(Some(snap(2.0, false, 0)), 300_000 + k * 20_000, 2, &mut fetch)
+                .0
+                .is_none());
+        }
+        assert_eq!(poller.fetches, 2);
     }
 }

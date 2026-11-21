@@ -91,9 +91,10 @@ offset to its own clock from the fastest message, so the clocks need not agree.
 ### The update rate
 
 The request thread looks at the slot every 8 ms while the host plays. While the host is stopped
-and nothing changed it does no work and waits 50 ms (it reads atomics only; no call of the audio
+and nothing changed it does no work and waits 20 ms (it reads atomics only; no call of the audio
 thread can wake it). The list of regions is fetched only when a look needs it, at most every
-200 ms: 0 fetches in 2 s of a stopped host (bound 2 in the unit test
+200 ms, and while the host is stopped only when a change counter of the regions moved (a unit test
+`a_change_of_the_regions_while_stopped_is_fetched_once_after_the_wait`): 0 fetches in 2 s of a stopped host (bound 2 in the unit test
 `a_stopped_host_costs_no_region_fetch_and_a_playing_one_at_most_five_a_second`), 5 a second while
 the host plays. The `Pacer` decides:
 
@@ -184,6 +185,13 @@ What LUNA does is not known yet: the first run had no transport rows. The rows `
   shell sets `AC.active = false` when the host starts to play and the page is not playing, and
   checks that `AC` and `appHostFollow` exist (stage `editor-shell-functions`). With the page
   change the line of the shell can go.
+- **The slot is cleared or has no position while the page plays.** Many hosts stop by ending the
+  process calls and calling `reset` or `deactivate`. The slot is then cleared, and the stale rule
+  would never run. So when the slot is gone, or has no position, and the last message to the page said
+  "playing", the page gets one message "stopped" at the last position it was given. Unit tests
+  `a_cleared_slot_while_the_page_plays_sends_stopped_at_the_last_position_once` and
+  `a_host_that_plays_with_no_position_stops_the_page_once`; stage `editor-transport-deactivate`
+  (fault `DS_ARA_TRANSPORT_FAULT=keep-playing`).
 - **A reload of the project** re-sends the last stopped position after 1.5 s, unless a newer
   message came in.
 

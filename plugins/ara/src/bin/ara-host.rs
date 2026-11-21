@@ -25,13 +25,15 @@
 //!                             while its analysis runs; prints the time of the destroy call
 //! ara-host <bundle> docs     --files <wav>... --files2 <wav>...   two document controllers
 //!                             in one process: the first document works, then the second
-//! ara-host <bundle> editor ... --transport script|loop|null|none   the host transport (M1b5):
+//! ara-host <bundle> editor ... --transport script|loop|null|none|deactivate   the host transport (M1b5):
 //!                             `script`: stop at 2.5 s, play, stop, locate, play, locate while
 //!                             playing, stop, locate before and after the region; `loop`: play
 //!                             from 0 and wrap every 2.5 s; `null`: process calls with no
 //!                             transport; `none`: no process call at all. The thread of the
 //!                             process calls starts when the page has booted and prints the row
 //!                             `transport_script` (the host's own truth, on the wall clock).
+//!                             `deactivate`: plays 2 s, then deactivates the plugin with no stopped
+//!                             process call (the segments end with a stopped one at that time).
 //!                             `--regions-all a,d,p`: every source gets this one region.
 //! ```
 //!

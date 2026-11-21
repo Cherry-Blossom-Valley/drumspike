@@ -275,6 +275,9 @@ struct DocShared {
     round_regions: Mutex<HashMap<usize, (Vec<service::RegionRec>, f64)>>,
     /// The sample count of the snapshot of the last round, by source (the notes are made with it, T5).
     round_samples: Mutex<HashMap<usize, i64>>,
+    /// A cheap change counter of the regions the page maps the host position with (M1b5): it grows
+    /// when a region of a source changes, a round stores new regions, or a source leaves.
+    region_gen: AtomicU64,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -371,6 +374,7 @@ impl DocShared {
             page: svc.page_handle(),
             round_regions: Mutex::new(HashMap::new()),
             round_samples: Mutex::new(HashMap::new()),
+            region_gen: AtomicU64::new(0),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -1458,6 +1462,7 @@ impl Session {
             self.write_out();
             return false; // nothing had changed
         }
+        doc.region_gen.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut rr) = doc.round_regions.lock() {
             // the regions of the snapshots the notes were made with (R6), not of the live ones
             for (seq, r) in &result.regions {
@@ -1733,6 +1738,7 @@ impl Session {
         }
         let tracks_left = removed.clone().unwrap_or_default();
         if removed.is_ok() {
+            doc.region_gen.fetch_add(1, Ordering::SeqCst);
             if let Ok(mut rr) = doc.round_regions.lock() {
                 rr.remove(&src.seq);
             }
@@ -1757,6 +1763,7 @@ impl Session {
     /// The archive was restored: the project of the stored document id opens with the
     /// stored events. Nothing is decoded.
     fn restore_project(&'static self, doc: &Arc<DocShared>, id: Option<String>, tracks: Vec<service::RestoredTrack>) {
+        doc.region_gen.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut rr) = doc.round_regions.lock() {
             for t in &tracks {
                 rr.insert(t.snapshot.seq, (t.snapshot.regions.clone(), t.snapshot.sample_rate));
@@ -1839,6 +1846,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let d = doc.clone();
     let r = doc.clone();
     let g = doc.clone();
+    let g2 = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
@@ -1846,6 +1854,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
         }),
         record: Arc::new(move |svc, sid| r.record_page_edit(svc, sid)),
         regions: Arc::new(move || g.round_region_list()),
+        regions_gen: Arc::new(move || g2.region_gen.load(Ordering::SeqCst)),
         doc_id: doc.id(),
     }
 }
@@ -2544,6 +2553,7 @@ unsafe extern "C" fn dc_updateAudioSourceProperties(
 /// that alters nothing ends in a round that does nothing). `DS_ARA_TOUCH_FAULT=ignore` (the
 /// check's fault run) brings back the first version: the change is not seen.
 fn touch(src: &Arc<SourceState>) {
+    src.doc.region_gen.fetch_add(1, Ordering::SeqCst);
     if std::env::var("DS_ARA_TOUCH_FAULT").as_deref() == Ok("ignore") {
         return;
     }
@@ -2600,6 +2610,7 @@ unsafe extern "C" fn dc_destroyAudioSource(c: ARADocumentControllerRef, audioSou
             return;
         }
         src.0.removed.store(true, Ordering::SeqCst);
+        src.0.doc.region_gen.fetch_add(1, Ordering::SeqCst);
         // the source leaves the controller's list now; its track leaves the project on the
         // worker thread (the service does disk work, never the host's main thread)
         let ctl = controller_of(c);

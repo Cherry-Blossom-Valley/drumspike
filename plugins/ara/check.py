@@ -4961,6 +4961,41 @@ def stage_editor_transport_none_fault() -> bool:
                       "the host plays (the check for a quiet host must see it)") and ok
 
 
+def deactivate_parts(rc: int, rows: list, script: dict) -> dict:
+    """The host plays, then deactivates the plugin with no stopped process call: the page ends stopped."""
+    reps = page_reports(rows, "transport")
+    r = reps[0] if reps else {}
+    segs = script.get("segments", [])
+    samples = r.get("samples", [])
+    if not r or r.get("visibility") != "visible" or len(segs) != 2 or len(samples) < 60:
+        return {"editor-transport-deactivate": (False, f"no usable run: rc={rc}, page report {bool(r)}, page {r.get('visibility')}, {len(segs)} host segments (want 2), {len(samples)} samples")}
+    end = segs[1]["wall_ms"]
+    before = [x for x in samples if segs[0]["wall_ms"] + 700.0 <= x[0] < end - 100.0]
+    after = [x for x in samples if x[0] >= end + 700.0]
+    playing_before = sum(x[2] for x in before)
+    playing_after = sum(x[2] for x in after)
+    good = rc == 0 and bool(before) and playing_before == len(before) and bool(after) and playing_after == 0
+    return {"editor-transport-deactivate": (
+        good,
+        f"the host played {len(before)} frames, then deactivated the plugin with no stopped process call: the page played in {playing_before} of them and was stopped in all {len(after)} frames from 0.7 s later"
+        if good else
+        f"the page kept playing after the host deactivated: playing in {playing_after} of {len(after)} frames from 0.7 s after the deactivate (before: {playing_before} of {len(before)})")}
+
+
+def stage_editor_transport_deactivate() -> bool:
+    """A host that stops by deactivating the plugin, with no stopped process call, must not leave the
+    page running from the old position."""
+    rc, _s, rows, script = transport_run("editor-transport-deactivate", CLAP, kind="deactivate", arg="5")
+    return print_parts("", deactivate_parts(rc, rows, script))
+
+
+def stage_editor_transport_deactivate_fault() -> bool:
+    rc, _s, rows, script = transport_run("editor-fault-transport-deactivate", CLAP, {"DS_ARA_TRANSPORT_FAULT": "keep-playing"}, kind="deactivate", arg="5")
+    good, ev = deactivate_parts(rc, rows, script)["editor-transport-deactivate"]
+    return pass_fail("editor-transport-deactivate-fault", (not good) and "kept playing" in ev,
+                     f"the fault run (a cleared slot does not stop the page) makes editor-transport-deactivate fail with 'kept playing': {ev}")
+
+
 def handover_run(label: str, env: dict | None = None) -> tuple[int, str]:
     e = {"ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib"}
     e.update(env or {})
@@ -5124,6 +5159,8 @@ STAGES = {
     "editor-transport-measure-fault": stage_editor_transport_measure_fault,
     "editor-transport-none": stage_editor_transport_none,
     "editor-transport-none-fault": stage_editor_transport_none_fault,
+    "editor-transport-deactivate": stage_editor_transport_deactivate,
+    "editor-transport-deactivate-fault": stage_editor_transport_deactivate_fault,
 }
 ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
@@ -5147,6 +5184,7 @@ ORDER = [
     "editor-edit-sync", "editor-edit-sync-fault", "editor-edit-destroy", "editor-edit-destroy-fault", "editor-regions-keep", "editor-regions-keep-fault", "editor-race-destroy", "editor-race-destroy-fault", "editor-shell-functions", "editor-shell-functions-fault", "editor-shell-report", "editor-shell-report-fault", "editor-no-request", "editor-no-request-fault",
     "transport-handover", "transport-handover-fault", "editor-transport", "editor-transport-fault",
     "editor-transport-measure", "editor-transport-measure-fault", "editor-transport-none", "editor-transport-none-fault",
+    "editor-transport-deactivate", "editor-transport-deactivate-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "conformance", "files", "pluginval", "validate", "universal", "standalone",
     "crate", "workspace",

@@ -753,6 +753,7 @@ const SCRIPT: [(u64, bool, f64); 9] = [
 ];
 const SCRIPT_END_MS: u64 = 11_500;
 const LOOP_MS: u64 = 2_500;
+const DEACTIVATE_MS: u64 = 2_000;
 
 fn wall_ms() -> f64 {
     std::time::SystemTime::now()
@@ -812,6 +813,19 @@ fn spawn_transport(
             let t_ms = (block.as_secs_f64() * 1000.0 * k as f64) as u64;
             let (playing, start_song, index) = match kind.as_str() {
                 "loop" => (true, 0.0, (t_ms / LOOP_MS) as usize),
+                // plays from 2.5 s, then the host deactivates the plugin with no stopped process call
+                "deactivate" => {
+                    if t_ms >= DEACTIVATE_MS {
+                        segments.push(Segment {
+                            wall_ms: wall_ms(),
+                            playing: false,
+                            song: 2.5 + DEACTIVATE_MS as f64 / 1000.0,
+                        });
+                        ((*plugin).deactivate.expect("deactivate"))(plugin);
+                        break;
+                    }
+                    (true, 2.5, 0)
+                }
                 _ => {
                     if t_ms >= SCRIPT_END_MS && kind == "script" {
                         break;
