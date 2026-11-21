@@ -995,11 +995,19 @@ unsafe fn ensure_sequence(inst: Inst, state: *mut HostState, j: usize) -> ARAReg
 /// A new name for region sequence `j` (a rename of the DAW track): `updateRegionSequenceProperties`.
 unsafe fn rename_sequence(inst: Inst, state: *mut HostState, j: usize, name: &str) {
     let r = ensure_sequence(inst, state, j);
-    let name = if name == "-" { None } else { Some(CString::new(name).unwrap()) };
+    let name = if name == "-" {
+        None
+    } else {
+        Some(CString::new(name).unwrap())
+    };
     let props = sequence_props(name.as_ref(), j as i32);
     let dc = iface_of(inst);
-    (dc.updateRegionSequenceProperties.expect("updateRegionSequenceProperties"))(dc_ref_of(inst), r, &props);
-    println!("{{\"event\":\"host_sequence_renamed\",\"index\":{j},\"name\":{:?}}}", name.map(|n| n.to_string_lossy().into_owned()));
+    (dc.updateRegionSequenceProperties
+        .expect("updateRegionSequenceProperties"))(dc_ref_of(inst), r, &props);
+    println!(
+        "{{\"event\":\"host_sequence_renamed\",\"index\":{j},\"name\":{:?}}}",
+        name.map(|n| n.to_string_lossy().into_owned())
+    );
 }
 
 /// Region `i` moves to region sequence `j`: `updatePlaybackRegionProperties` with the same times.
@@ -1014,7 +1022,8 @@ unsafe fn move_region(inst: Inst, state: *mut HostState, i: usize, j: usize) {
     let (a, d, p) = meta.times;
     let props = playback_props_for(&*state, i, a, d, p);
     let dc = iface_of(inst);
-    (dc.updatePlaybackRegionProperties.expect("updatePlaybackRegionProperties"))(dc_ref_of(inst), reg, &props);
+    (dc.updatePlaybackRegionProperties
+        .expect("updatePlaybackRegionProperties"))(dc_ref_of(inst), reg, &props);
     let _ = r;
     println!("{{\"event\":\"host_region_moved\",\"region\":{i},\"sequence\":{j}}}");
 }
@@ -1543,7 +1552,10 @@ fn main() {
     NO_PERSISTENT_ID.store(rest.iter().any(|a| a == "--no-persistent-id"), Ordering::SeqCst);
     *NAMES.lock().unwrap() = args_list(&rest, "--names");
     *SEQ_NAMES.lock().unwrap() = args_list(&rest, "--seq-names");
-    *SEQ_OF.lock().unwrap() = args_list(&rest, "--seq-of").iter().filter_map(|v| v.parse().ok()).collect();
+    *SEQ_OF.lock().unwrap() = args_list(&rest, "--seq-of")
+        .iter()
+        .filter_map(|v| v.parse().ok())
+        .collect();
     *REGION_NAMES.lock().unwrap() = args_list(&rest, "--region-names");
     if let Some(k) = args_value(&rest, "--no-access").and_then(|v| v.parse::<usize>().ok()) {
         NO_ACCESS.store(k, Ordering::SeqCst);
@@ -1835,7 +1847,11 @@ impl HostDoc {
             if NO_REGIONS.load(Ordering::SeqCst) {
                 // `--no-regions`: sources without playback regions are plain tracks
                 (*self.state).regions.push(std::ptr::null_mut());
-                (*self.state).region_meta.push(RegionMeta { seq: None, name: None, times: (0.0, 0.0, 0.0) });
+                (*self.state).region_meta.push(RegionMeta {
+                    seq: None,
+                    name: None,
+                    times: (0.0, 0.0, 0.0),
+                });
                 continue;
             }
             add_regions(

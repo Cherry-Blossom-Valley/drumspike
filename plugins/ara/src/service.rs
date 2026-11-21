@@ -186,7 +186,8 @@ impl SourceSnapshot {
     }
 
     /// The same source with the same regions, properties and generation of the audio (the WAV
-    /// file is not compared).
+    /// file is not compared). `self` is the older snapshot: a new name that gives no role is no
+    /// change (the role stays), a new name that gives another role is one.
     #[must_use]
     pub fn same_as(&self, other: &SourceSnapshot) -> bool {
         self.name == other.name
@@ -194,7 +195,7 @@ impl SourceSnapshot {
             && self.sample_rate == other.sample_rate
             && self.sample_count == other.sample_count
             && self.audio_gen == other.audio_gen
-            && self.label_role() == other.label_role()
+            && (other.label_role().is_none() || self.label_role() == other.label_role())
             && self.same_regions(other)
     }
 
@@ -1121,6 +1122,11 @@ fn pick_role(s: &SourceSnapshot) -> (&'static str, Option<&'static str>, Option<
     ("other", None, None)
 }
 
+thread_local! {
+    /// How often this thread asked the audio for a role (the unit test proves a name that gives a role never does).
+    static AUDIO_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A Drum Spike export gets no role from its audio (the app's rule of the scan).
 fn audio_hint_wanted(stem: &str) -> bool {
     !drumspike_app::roles::is_export_name(stem)
@@ -1130,6 +1136,7 @@ fn audio_hint_wanted(stem: &str) -> bool {
 /// (only a role whose confidence bar exists comes back). A file that cannot be read gives none.
 fn audio_role(wav: &Path) -> Option<&'static str> {
     const SUGGEST_S: usize = 30;
+    AUDIO_ASKS.with(|n| n.set(n.get() + 1));
     let decoded = drumspike_app::media::decode(wav, drumspike_core::MixMode::Ffmpeg).ok()?;
     let n = decoded.samples.len().min(decoded.sr as usize * SUGGEST_S);
     drumspike_core::role::role_from_audio(&decoded.samples[..n], decoded.sr).map(drumspike_core::role::Role::as_str)
@@ -1351,14 +1358,52 @@ mod tests {
 
     #[test]
     fn the_daw_name_gives_the_role_when_the_source_name_is_hex() {
-        for (label, role, note) in [("Kick In", "kick", 36), ("Snare Top", "snare", 38), ("Hi-Hat", "hat", 42)] {
+        for (label, role, note) in [
+            ("Kick In", "kick", 36),
+            ("Snare Top", "snare", 38),
+            ("Hi-Hat", "hat", 42),
+        ] {
             let t = make_track(&labelled(Some(label)), Path::new("/p"));
             assert_eq!((t.role.as_deref(), t.note), (Some(role), Some(note)), "{label}");
             assert_eq!(t.role_source.as_deref(), Some("guess"));
         }
+        // the names of the stage `editor-names` give no role
+        assert_eq!(guess_role("Drum A"), None);
+        assert_eq!(guess_role("Drum Big"), None);
         let none = make_track(&labelled(Some("Mystery")), Path::new("/p"));
-        assert_eq!(none.role.as_deref(), Some("other"), "a name with no role and no audio: other");
-        assert_eq!(make_track(&labelled(None), Path::new("/p")).role.as_deref(), Some("other"));
+        assert_eq!(
+            none.role.as_deref(),
+            Some("other"),
+            "a name with no role and no audio: other"
+        );
+        assert_eq!(
+            make_track(&labelled(None), Path::new("/p")).role.as_deref(),
+            Some("other")
+        );
+    }
+
+    #[test]
+    fn the_audio_is_asked_for_a_role_only_when_neither_name_gives_one() {
+        let asks = || AUDIO_ASKS.with(std::cell::Cell::get);
+        let mut s = labelled(Some("Kick In"));
+        s.ready = true;
+        let before = asks();
+        assert_eq!(pick_role(&s).0, "kick");
+        assert_eq!(asks(), before, "a DAW name that gives a role never asks the audio");
+        s.label = Some("Mystery".into());
+        s.name = "snare_top.wav".into();
+        assert_eq!(pick_role(&s).0, "snare");
+        assert_eq!(asks(), before, "a source name that gives a role never asks the audio");
+        s.name = "0123456789abcdef0123456789abcdef".into();
+        assert_eq!(pick_role(&s).0, "other");
+        assert_eq!(
+            asks(),
+            before + 1,
+            "no name gives a role: the audio is asked once (here the file is missing: no hint)"
+        );
+        s.ready = false;
+        let _ = pick_role(&s);
+        assert_eq!(asks(), before + 1, "a source whose audio is not here is not asked");
     }
 
     #[test]
@@ -1366,19 +1411,39 @@ mod tests {
         let snare = labelled(Some("Snare Bottom"));
         let mut auto = json!({"role": "other", "note": 36, "role_source": "guess"});
         assert!(apply_label_role(auto.as_object_mut().unwrap(), &snare));
-        assert_eq!((auto["role"].as_str(), auto["note"].as_i64()), (Some("snare"), Some(38)));
+        assert_eq!(
+            (auto["role"].as_str(), auto["note"].as_i64()),
+            (Some("snare"), Some(38))
+        );
         let mut by_hand = json!({"role": "cymbal", "note": 49, "role_source": "user"});
         assert!(!apply_label_role(by_hand.as_object_mut().unwrap(), &snare));
         assert_eq!(by_hand["role"], "cymbal");
         // a note the user changed stays
         let mut note = json!({"role": "other", "note": 40, "role_source": "guess"});
         assert!(apply_label_role(note.as_object_mut().unwrap(), &snare));
-        assert_eq!((note["role"].as_str(), note["note"].as_i64()), (Some("snare"), Some(40)));
+        assert_eq!(
+            (note["role"].as_str(), note["note"].as_i64()),
+            (Some("snare"), Some(40))
+        );
         // a name with no role leaves the role as it is
         let mut keep = json!({"role": "kick", "note": 36});
-        assert!(!apply_label_role(keep.as_object_mut().unwrap(), &labelled(Some("Mystery"))));
+        assert!(!apply_label_role(
+            keep.as_object_mut().unwrap(),
+            &labelled(Some("Mystery"))
+        ));
         assert!(!labelled(Some("Kick In")).same_as(&labelled(Some("Snare Bottom"))));
-        assert!(labelled(Some("Kick In")).same_as(&labelled(Some("Kick Inside"))), "a rename that keeps the role is no change");
+        assert!(
+            !labelled(Some("Mystery")).same_as(&labelled(Some("Snare Bottom"))),
+            "no role before, a role now"
+        );
+        assert!(
+            labelled(Some("Kick In")).same_as(&labelled(Some("Mystery"))),
+            "a name with no role leaves the role"
+        );
+        assert!(
+            labelled(Some("Kick In")).same_as(&labelled(Some("Kick Inside"))),
+            "a rename that keeps the role is no change"
+        );
     }
 
     fn snapshot_of(cache: &Path, id: &str, seq: usize, name: &str) -> SourceSnapshot {

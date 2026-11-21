@@ -179,11 +179,17 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     // (`--rename-seq <j>=<name>`) and moves regions to other sequences (`--move-region <i>=<j>`)
     let renames: Vec<(usize, String)> = args_list(rest, "--rename-seq")
         .iter()
-        .filter_map(|v| v.split_once('=').and_then(|(j, n)| Some((j.parse().ok()?, n.to_string()))))
+        .filter_map(|v| {
+            v.split_once('=')
+                .and_then(|(j, n)| Some((j.parse().ok()?, n.to_string())))
+        })
         .collect();
     let moves: Vec<(usize, usize)> = args_list(rest, "--move-region")
         .iter()
-        .filter_map(|v| v.split_once('=').and_then(|(i, j)| Some((i.parse().ok()?, j.parse().ok()?))))
+        .filter_map(|v| {
+            v.split_once('=')
+                .and_then(|(i, j)| Some((i.parse().ok()?, j.parse().ok()?)))
+        })
         .collect();
     let region_spec = args_value(rest, "--region").and_then(|v| parse_region(&v).ok());
     let destroy_late: Option<usize> = args_value(rest, "--destroy-late").and_then(|v| v.parse().ok());
