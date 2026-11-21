@@ -542,3 +542,18 @@ input.hgRange:disabled { cursor: default; opacity: .5; }
 #helpModal #helpPage code { font-size: 11px; }
 #helpModal #helpPage a { color: var(--accent); cursor: pointer; }
 #helpModal #helpPage a.ext::after { content: " \\2197"; font-size: 10px; }   /* the arrow says: opens in the browser */
+
+/* #559: the menu of the page in host mode (static/hostmenu.js). The button and the panel exist only while the mode is on. */
+.hostMenu { position: fixed; z-index: 60; min-width: 280px; max-width: calc(100vw - 8px); overflow-y: auto; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+.hostMenu.hidden { display: none; }
+.hmItem { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; color: var(--text); font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px; cursor: pointer; }
+.hmItem:hover, .hmItem:focus { background: #2b303b; outline: none; }
+.hmItem:focus-visible { box-shadow: 0 0 0 2px var(--accent) inset; }
+.hmItem[aria-disabled="true"] { opacity: .45; cursor: default; }
+.hmItem .hmMark { width: 14px; flex: none; color: var(--accent); }
+.hmItem .hmTitle { flex: 1; }
+.hmItem .hmKeys { margin-left: auto; opacity: .65; font-size: 12px; white-space: nowrap; }
+.hmGroup .hmKeys { margin-left: auto; }
+.hmGroup { justify-content: space-between; }
+.hmBack { font-weight: 600; border-bottom: 1px solid var(--line); border-radius: 5px 5px 0 0; margin-bottom: 2px; }
+.hmHead { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; opacity: .6; padding: 8px 8px 2px; }
