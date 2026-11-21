@@ -65,6 +65,30 @@ pub(crate) struct SyncPtr<T>(pub T);
 unsafe impl<T> Sync for SyncPtr<T> {}
 unsafe impl<T> Send for SyncPtr<T> {}
 
+/// The value of a fault or test switch of the check (`switches.json`, kinds `fault` and
+/// `scenario`). The rule of the build: only a build with the cargo feature `test-switches` (the
+/// gate builds it so) reads them; a delivery build has no such feature and always answers "not
+/// set", so a variable in the environment of a host cannot change the plugin. The report
+/// variables `DS_ARA_OUT` and `DS_ARA_CACHE` are not switches: they stay readable in both builds.
+#[cfg(feature = "test-switches")]
+pub(crate) fn test_switch(name: &str) -> Result<String, std::env::VarError> {
+    std::env::var(name)
+}
+
+/// See the build with the feature: here the answer is always "not set".
+#[cfg(not(feature = "test-switches"))]
+pub(crate) fn test_switch(_name: &str) -> Result<String, std::env::VarError> {
+    Err(std::env::VarError::NotPresent)
+}
+
+/// The version of the plugin crate as a C string: the ARA factory, the CLAP descriptor and the
+/// bundle files (`check.sh`) all name this one value.
+macro_rules! version_cs {
+    () => {
+        concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
+    };
+}
+
 macro_rules! cs {
     ($s:literal) => {
         concat!($s, "\0").as_ptr() as *const c_char
@@ -319,7 +343,7 @@ fn fresh_id() -> String {
 /// has it. `DS_ARA_REGISTRY_FAULT=off` (the check's fault run) takes it without looking.
 fn claim_id(old: &str, want: &str) -> bool {
     let mut used = IDS_IN_USE.lock().unwrap_or_else(|e| e.into_inner());
-    let off = std::env::var("DS_ARA_REGISTRY_FAULT").as_deref() == Ok("off");
+    let off = crate::test_switch("DS_ARA_REGISTRY_FAULT").as_deref() == Ok("off");
     if !off && used.iter().any(|u| u == want) && old != want {
         return false;
     }
@@ -343,7 +367,7 @@ fn now_ns() -> u128 {
 
 /// `DS_ARA_PANIC_TEST` (the check's scenario switch): `reader` or `worker`.
 fn panic_test() -> Option<String> {
-    std::env::var("DS_ARA_PANIC_TEST").ok().filter(|v| !v.is_empty())
+    crate::test_switch("DS_ARA_PANIC_TEST").ok().filter(|v| !v.is_empty())
 }
 
 static PANIC_READER_DONE: AtomicBool = AtomicBool::new(false);
@@ -435,7 +459,7 @@ impl DocShared {
         if !changed {
             return Ok(false);
         }
-        if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() != Ok("no-notes") {
+        if crate::test_switch("DS_ARA_EDITOR_FAULT").as_deref() != Ok("no-notes") {
             for s in &members {
                 let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
                     continue;
@@ -509,7 +533,7 @@ impl DocShared {
     /// Tell the page that the plugin changed its data (a round ended, a restore): the shell
     /// script of the page reloads the project (F1, F8).
     fn announce_reload(&self) {
-        if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-reload") {
+        if crate::test_switch("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-reload") {
             return; // the fault run: the page is not told
         }
         self.page.log.push("plugin-reload", json!({"doc": self.id()}));
@@ -619,7 +643,7 @@ fn session() -> &'static Session {
         tx: Mutex::new(None),
         worker: Mutex::new(None),
         fault_ran: AtomicBool::new(false),
-        fault: std::env::var("DS_ARA_FAULT").as_deref() == Ok("in-process"),
+        fault: crate::test_switch("DS_ARA_FAULT").as_deref() == Ok("in-process"),
     })
 }
 
@@ -703,7 +727,7 @@ struct RetryEntry {
 }
 
 fn retry_base() -> std::time::Duration {
-    let ms = std::env::var("DS_ARA_RETRY_MS")
+    let ms = crate::test_switch("DS_ARA_RETRY_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(2000)
@@ -788,7 +812,7 @@ fn leave_for_access_off(s: &Arc<SourceState>) -> bool {
 /// analyse the complete tracks again for nothing (M1b4).
 /// `DS_ARA_ROUND_FAULT=force-failed` brings back the old rule: any target forces a round.
 fn round_forced(targets: &[Arc<SourceState>]) -> bool {
-    if std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("force-failed") {
+    if crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() == Ok("force-failed") {
         return !targets.is_empty();
     }
     targets.iter().any(has_wav)
@@ -800,10 +824,10 @@ fn round_forced(targets: &[Arc<SourceState>]) -> bool {
 /// `DS_ARA_ROUND_FAULT=no-deadline` (the check's fault run) waits for ever, as the first
 /// version did.
 fn audio_deadline() -> Option<std::time::Duration> {
-    if std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-deadline") {
+    if crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-deadline") {
         return None;
     }
-    let ms = std::env::var("DS_ARA_SCENARIO")
+    let ms = crate::test_switch("DS_ARA_SCENARIO")
         .ok()
         .and_then(|v| v.strip_prefix("audio-deadline-ms:").and_then(|n| n.parse::<u64>().ok()))
         .unwrap_or(30_000);
@@ -925,7 +949,7 @@ impl Session {
     /// (the check's fault run) takes the guard away.
     fn worker_main(&'static self, rx: Receiver<Msg>, generation: usize) {
         let mut st = WorkerState::default();
-        let unguarded = std::env::var("DS_ARA_GUARD_FAULT").as_deref() == Ok("off");
+        let unguarded = crate::test_switch("DS_ARA_GUARD_FAULT").as_deref() == Ok("off");
         loop {
             let run = std::panic::AssertUnwindSafe(|| self.worker_loop(&rx, &mut st));
             if unguarded {
@@ -1031,7 +1055,7 @@ impl Session {
                         .deferred_since
                         .entry(doc.id())
                         .or_insert_with(std::time::Instant::now);
-                    if std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-page-wait")
+                    if crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-page-wait")
                         && doc.page.job_running()
                         && since.elapsed() < std::time::Duration::from_secs(600)
                     {
@@ -1045,7 +1069,7 @@ impl Session {
                         continue;
                     }
                     let allow = since.elapsed() < std::time::Duration::from_secs(600)
-                        && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-page-wait");
+                        && crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-page-wait");
                     if self.run_job(&doc, &targets, why, force, allow) {
                         // R4: the 409 after the short retry goes back to the queue like a job of the page
                         defer_msg(Msg::Defer {
@@ -1070,7 +1094,7 @@ impl Session {
     /// True when the worker must end (the channel is closed, or `Msg::Quit` came).
     fn settle(&'static self, rx: &Receiver<Msg>, st: &mut WorkerState) -> bool {
         // the fault run: no settle time, every request starts a round of its own
-        if std::env::var("DS_ARA_SETTLE_FAULT").as_deref() == Ok("none") {
+        if crate::test_switch("DS_ARA_SETTLE_FAULT").as_deref() == Ok("none") {
             return false;
         }
         let deadline = std::time::Instant::now() + SETTLE_MAX;
@@ -1095,7 +1119,7 @@ impl Session {
     fn want(&self, s: &Arc<SourceState>, st: &mut WorkerState) {
         // the fault run `DS_ARA_ROUND_FAULT=read-again`: the read of a source that has its
         // result (one restored from an archive) starts a round of the document all the same
-        if std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("read-again")
+        if crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() == Ok("read-again")
             && !self.fault
             && !s.removed.load(Ordering::SeqCst)
             && !needs_analysis(s)
@@ -1122,7 +1146,7 @@ impl Session {
     /// After a round: plan a retry when a source of the document is left with a failed analysis.
     fn plan_retry(&self, doc: &Arc<DocShared>, st: &mut WorkerState) {
         if self.fault
-            || std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-retry")
+            || crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-retry")
             || doc.closing.load(Ordering::SeqCst)
         {
             return;
@@ -1152,7 +1176,7 @@ impl Session {
                 if e.gave_up {
                     return;
                 }
-                if e.tries >= RETRY_MAX && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("retry-forever") {
+                if e.tries >= RETRY_MAX && crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() != Ok("retry-forever") {
                     e.gave_up = true;
                     e.due = None;
                     self.log(json!({"event": "retry_gave_up", "doc": doc.id(), "tries": e.tries}).to_string());
@@ -1195,7 +1219,7 @@ impl Session {
             Msg::Request(s) => {
                 // the fault run brings back the old way: a request for a complete source
                 // starts a full round as well
-                let always = std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("always");
+                let always = crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() == Ok("always");
                 if s.removed.load(Ordering::SeqCst) || (!needs_analysis(&s) && !always) {
                     return false; // a source that is complete: nothing changed, no round
                 }
@@ -1212,7 +1236,7 @@ impl Session {
                 // T3: a read that a content update cancelled belongs to an older generation: the
                 // new read follows, nothing failed. (`DS_ARA_ROUND_FAULT=cancel-fails` counts it.)
                 if gen != s.audio_gen.load(Ordering::SeqCst)
-                    && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("cancel-fails")
+                    && crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() != Ok("cancel-fails")
                 {
                     return false;
                 }
@@ -1225,7 +1249,7 @@ impl Session {
                     let tries = s.read_tries.load(Ordering::SeqCst);
                     let retry = s.access.load(Ordering::SeqCst)
                         && tries < RETRY_MAX
-                        && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-read-retry");
+                        && crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-read-retry");
                     if retry {
                         s.read_tries.store(tries + 1, Ordering::SeqCst);
                         let wait = retry_base().saturating_mul(2u32.pow(tries.min(6)));
@@ -1250,7 +1274,7 @@ impl Session {
                 // `DS_ARA_ROUND_FAULT=request-only` brings back the old way (a round only on
                 // a request); `ready-only` queues a source only when its audio is here, so
                 // sources that arrive one after the other get a round each.
-                let fault = std::env::var("DS_ARA_ROUND_FAULT").unwrap_or_default();
+                let fault = crate::test_switch("DS_ARA_ROUND_FAULT").unwrap_or_default();
                 if fault != "request-only" && fault != "ready-only" && fault != "no-late-round" {
                     self.want(&s, st);
                 }
@@ -1262,7 +1286,7 @@ impl Session {
                 // need not ask again. A restored source with a result is not queued.
                 // (`DS_ARA_ROUND_FAULT=no-late-round` brings back the first version: nothing
                 // happens; `request-only`: only a source whose analysis failed is queued.)
-                let fault = std::env::var("DS_ARA_ROUND_FAULT").unwrap_or_default();
+                let fault = crate::test_switch("DS_ARA_ROUND_FAULT").unwrap_or_default();
                 if fault != "no-late-round" {
                     if fault == "request-only" {
                         if s.analysis_failed.load(Ordering::SeqCst) {
@@ -1280,7 +1304,7 @@ impl Session {
             } => {
                 st.requested.retain(|r| !Arc::ptr_eq(r, &src));
                 st.retry.retain(|e| !Arc::ptr_eq(&e.doc, &src.doc));
-                let busy_fault = std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-page-wait");
+                let busy_fault = crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-page-wait");
                 // M3: a job of the page blocks the removal of a track (the app answers 409). The
                 // worker does not wait for it: the removal comes back to the queue, the events
                 // of the document stay as they are, and other documents are served meanwhile.
@@ -1304,7 +1328,7 @@ impl Session {
                     }
                 }
                 // R4: the files of a destroyed source go (its current WAV and the old generations)
-                if std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("keep-wavs") {
+                if crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() != Ok("keep-wavs") {
                     let mut files: Vec<PathBuf> =
                         std::mem::take(&mut *src.old_wavs.lock().unwrap_or_else(|e| e.into_inner()));
                     files.extend(src.wav.lock().unwrap_or_else(|e| e.into_inner()).clone());
@@ -1314,7 +1338,7 @@ impl Session {
                 }
                 // the tracks that are left are analysed together again
                 if !src.doc.closing.load(Ordering::SeqCst)
-                    && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("new-only")
+                    && crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() != Ok("new-only")
                 {
                     // a removal outranks a change that came before it (the host destroys the
                     // regions of a source before the source)
@@ -1518,7 +1542,7 @@ impl Session {
                 // first versions.
                 let live = s.audio_gen.load(Ordering::SeqCst);
                 let fresh = snap_gens.get(seq).is_some_and(|(g, ready)| *g == live && *ready);
-                let fault = std::env::var("DS_ARA_ROUND_FAULT").unwrap_or_default();
+                let fault = crate::test_switch("DS_ARA_ROUND_FAULT").unwrap_or_default();
                 let old_audio = s.reanalyse.load(Ordering::SeqCst) && !fresh && fault != "clear-stale";
                 if !old_audio || fault == "clear-failed" {
                     s.has_events.store(true, Ordering::SeqCst);
@@ -1660,7 +1684,7 @@ impl Session {
                     .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
                     .unwrap_or_default();
                 let mut changed: Vec<String> = Vec::new();
-                let notes = if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-notes") {
+                let notes = if crate::test_switch("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-notes") {
                     HashMap::new() // the fault run: the notes do not follow
                 } else {
                     notes
@@ -1713,7 +1737,7 @@ impl Session {
                 worker_doc.lock_svc().remove(seq)
             })
         };
-        let busy_fault = std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-page-wait");
+        let busy_fault = crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() == Ok("no-page-wait");
         match (&removed, busy_fault) {
             (Ok(left), _) => {
                 if let Ok(mut m) = doc.events.lock() {
@@ -1780,7 +1804,7 @@ impl Session {
         });
         match outcome {
             Ok((result, id, folder, home)) => {
-                if std::env::var("DS_ARA_RESTORE_FAULT").as_deref() == Ok("late-events") {
+                if crate::test_switch("DS_ARA_RESTORE_FAULT").as_deref() == Ok("late-events") {
                     // the fault run: the events of the document are set here, on the worker
                     // thread, as the first version did
                     if let Ok(mut m) = doc.events.lock() {
@@ -1909,7 +1933,7 @@ fn start_worker(s: &'static Session) {
 /// the same process gets a new worker. `DS_ARA_UNLOAD_FAULT=skip` (the check's fault run)
 /// does nothing here.
 fn unload_worker() {
-    if std::env::var("DS_ARA_UNLOAD_FAULT").as_deref() == Ok("skip") {
+    if crate::test_switch("DS_ARA_UNLOAD_FAULT").as_deref() == Ok("skip") {
         return;
     }
     let Some(s) = SESSION.get() else { return };
@@ -1971,7 +1995,7 @@ static FACTORY: SyncPtr<ARAFactory> = SyncPtr(ARAFactory {
     plugInName: cs!("Drum Spike ARA"),
     manufacturerName: cs!("Cherry Blossom Valley"),
     informationURL: cs!("https://github.com/Cherry-Blossom-Valley/drumspike"),
-    version: cs!("0.1.0"),
+    version: version_cs!(),
     createDocumentControllerWithDocument: Some(create_document_controller),
     documentArchiveID: cs!("com.cherryblossomvalley.drumspike.ara.archive.v1"),
     compatibleDocumentArchiveIDsCount: 0,
@@ -2012,7 +2036,7 @@ struct Controller {
 /// the plugin serves a copy with one emptied slot inside its declared structSize — the
 /// deliberate bug that proves the host's table walk can fail.
 fn dc_interface_of_instance() -> *const ARADocumentControllerInterface {
-    if std::env::var("DS_ARA_TABLES_FAULT").as_deref() != Ok("1") {
+    if crate::test_switch("DS_ARA_TABLES_FAULT").as_deref() != Ok("1") {
         return &DC_INTERFACE.0;
     }
     let mut incomplete: ARADocumentControllerInterface = unsafe { std::ptr::read(&DC_INTERFACE.0) };
@@ -2075,7 +2099,7 @@ unsafe extern "C" fn dc_destroyDocumentController(controllerRef: ARADocumentCont
         for src in &sources {
             stop_worker(src);
         }
-        let close_fault = std::env::var("DS_ARA_CLOSE_FAULT").unwrap_or_default();
+        let close_fault = crate::test_switch("DS_ARA_CLOSE_FAULT").unwrap_or_default();
         let long_wait = close_fault == "wait";
         ctl.doc.closing.store(true, Ordering::SeqCst);
         // `DS_ARA_CLOSE_FAULT=nocancel` (the check's fault run): the running round is not
@@ -2250,7 +2274,7 @@ unsafe extern "C" fn dc_updateAudioSourceContent(
         let Some(src) = state_of(audioSourceRef) else { return };
         let signal_kept = flags & (kARAContentUpdateSignalScopeRemainsUnchanged as ARAContentUpdateFlags) != 0;
         if signal_kept
-            || std::env::var("DS_ARA_ROUND_FAULT").as_deref() == Ok("ignore-update")
+            || crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() == Ok("ignore-update")
             || src.removed.load(Ordering::SeqCst)
         {
             return;
@@ -2554,7 +2578,7 @@ unsafe extern "C" fn dc_updateAudioSourceProperties(
 /// check's fault run) brings back the first version: the change is not seen.
 fn touch(src: &Arc<SourceState>) {
     src.doc.region_gen.fetch_add(1, Ordering::SeqCst);
-    if std::env::var("DS_ARA_TOUCH_FAULT").as_deref() == Ok("ignore") {
+    if crate::test_switch("DS_ARA_TOUCH_FAULT").as_deref() == Ok("ignore") {
         return;
     }
     if src.removed.load(Ordering::SeqCst) {
@@ -2606,7 +2630,7 @@ unsafe extern "C" fn dc_destroyAudioSource(c: ARADocumentControllerRef, audioSou
         stop_worker(&src.0);
         *src.0.read_retry_at.lock().unwrap_or_else(|e| e.into_inner()) = None;
         // the fault run keeps the destroyed source (the M1a way)
-        if std::env::var("DS_ARA_DESTROY_FAULT").as_deref() == Ok("keep") {
+        if crate::test_switch("DS_ARA_DESTROY_FAULT").as_deref() == Ok("keep") {
             return;
         }
         src.0.removed.store(true, Ordering::SeqCst);
@@ -2713,14 +2737,14 @@ unsafe fn start_read(src: &Arc<SourceState>) {
     let worker_src = src.clone();
     let gen = src.audio_gen.load(Ordering::SeqCst);
     // `DS_ARA_SCENARIO=no-reader-thread`: the reader thread cannot be made
-    let spawned = if std::env::var("DS_ARA_SCENARIO").as_deref() == Ok("no-reader-thread") {
+    let spawned = if crate::test_switch("DS_ARA_SCENARIO").as_deref() == Ok("no-reader-thread") {
         Err(std::io::Error::other("test: no reader thread"))
     } else {
         std::thread::Builder::new()
             .name(format!("drumspike-ara-read-{}", src.seq))
             .spawn(move || read_source(worker_src, s, gen))
     };
-    if spawned.is_err() && std::env::var("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-spawn-failed") {
+    if spawned.is_err() && crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-spawn-failed") {
         // neither `Ready` nor `Failed` would follow: the source would wait for its audio until the
         // deadline and be named late. The read failed: say so at once.
         src.failed.store(true, Ordering::SeqCst);
@@ -2751,7 +2775,7 @@ fn read_source(src: Arc<SourceState>, s: &'static Session, gen: u64) {
     let dest = src.doc.wav_path(src.seq, &props.name, gen);
     let body_src = src.clone();
     let body_dest = dest.clone();
-    let unguarded = std::env::var("DS_ARA_GUARD_FAULT").as_deref() == Ok("off");
+    let unguarded = crate::test_switch("DS_ARA_GUARD_FAULT").as_deref() == Ok("off");
     let body = move || read_samples(&body_src, &body_dest, count, rate, ch);
     let outcome = if unguarded {
         Some(body())
@@ -2815,7 +2839,7 @@ fn read_source(src: Arc<SourceState>, s: &'static Session, gen: u64) {
 /// source with the creation index `n` the plugin writes garbage over the first bytes of its
 /// WAV (the size stays), so the service cannot read that track.
 fn corrupt_for_scenario(src: &Arc<SourceState>, dest: &std::path::Path) {
-    let Ok(v) = std::env::var("DS_ARA_SCENARIO") else {
+    let Ok(v) = crate::test_switch("DS_ARA_SCENARIO") else {
         return;
     };
     if v.strip_prefix("corrupt-wav:").and_then(|n| n.parse::<usize>().ok()) != Some(src.seq) {
@@ -3104,7 +3128,7 @@ unsafe extern "C" fn dc_updatePlaybackRegionProperties(
                         // brings back the round)
                         moved = slot.rec.start_mod != rec.start_mod
                             || slot.rec.dur_mod != rec.dur_mod
-                            || std::env::var("DS_ARA_TOUCH_FAULT").as_deref() == Ok("playback-time");
+                            || crate::test_switch("DS_ARA_TOUCH_FAULT").as_deref() == Ok("playback-time");
                         slot.rec = rec;
                     }
                 }
@@ -3259,7 +3283,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
             return 0;
         }
         let Ok(st) = state::decode(&bytes) else { return 0 };
-        let fault = std::env::var("DS_ARA_RESTORE_FAULT").unwrap_or_default();
+        let fault = crate::test_switch("DS_ARA_RESTORE_FAULT").unwrap_or_default();
         // The stored document id names the project folder again. It comes from a file the
         // user may have damaged or edited: only the form the plugin makes (16 lowercase hex
         // digits) is taken, anything else gets the fresh id the document already has, and
@@ -3367,7 +3391,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
         );
         // the fault switch of the no-decode check: decode one source during the restore
         // on purpose, so the gate's "no read row, no cache WAV" proof can fail
-        if std::env::var("DS_ARA_RESTORE_FAULT").as_deref() == Ok("decode") {
+        if crate::test_switch("DS_ARA_RESTORE_FAULT").as_deref() == Ok("decode") {
             let first = ctl.sources.lock().ok().and_then(|l| l.first().cloned());
             if let Some(src) = first {
                 unsafe { start_read(&src) };
@@ -3420,7 +3444,7 @@ static DESCRIPTOR: clap_plugin_descriptor = clap_plugin_descriptor {
     url: cs!("https://github.com/Cherry-Blossom-Valley/drumspike"),
     manual_url: cs!(""),
     support_url: cs!(""),
-    version: cs!("0.1.0"),
+    version: version_cs!(),
     description: cs!("The Drum Spike service on the host's tracks (ARA, no editor)"),
     features: &FEATURES.0 as *const [*const c_char; 4] as *const *const c_char,
 };
@@ -3781,7 +3805,7 @@ fn state_blob() -> Vec<u8> {
 /// garbage are all accepted and ignored. `DS_ARA_STATE_FAULT=strict` (the check's fault run)
 /// refuses what is not a blob of version 1.
 fn state_accepts(bytes: &[u8]) -> bool {
-    if std::env::var("DS_ARA_STATE_FAULT").as_deref() == Ok("strict") {
+    if crate::test_switch("DS_ARA_STATE_FAULT").as_deref() == Ok("strict") {
         return bytes == state_blob().as_slice();
     }
     true

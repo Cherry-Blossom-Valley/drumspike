@@ -12,6 +12,7 @@
 //! ara-host <bundle> restore  ... --no-persistent-id               sources without a persistent ID
 //! ara-host <bundle> blocks   --files <wav>... [--frames N]        the audio-thread check
 //! ara-host <bundle> tables                                        the interface-table walk
+//! ara-host <bundle> version                                       the version of the ARA factory and of the CLAP descriptor
 //! ara-host <bundle> state                                         save and load the plugin state (M1b4)
 //! ara-host <bundle> grow     --files <wav>... [--batch N] [--destroy I]
 //!                             the sources arrive in batches of N: each batch is added,
@@ -1032,6 +1033,43 @@ unsafe fn clap_plugin_of(loaded: &Loaded) -> Result<*const clap_plugin, String> 
     Ok(plugin)
 }
 
+/// `version`: the version text of the ARA factory and of the CLAP plugin descriptor, one JSON line
+/// (the check compares both with the version of the crate and the bundle files).
+fn run_version(bundle: &str) -> i32 {
+    unsafe {
+        let loaded = match load(bundle) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("{e}");
+                return 2;
+            }
+        };
+        let text = |p: *const c_char| {
+            if p.is_null() {
+                String::new()
+            } else {
+                std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+            }
+        };
+        let ara = text(factory().version);
+        let factory_id = CString::new(CLAP_PLUGIN_FACTORY_ID.to_bytes()).unwrap();
+        let clap_factory = ((*loaded.entry).get_factory.expect("entry.get_factory"))(factory_id.as_ptr())
+            as *const clap_plugin_factory;
+        if clap_factory.is_null() {
+            eprintln!("no CLAP plugin factory");
+            return 2;
+        }
+        let desc = ((*clap_factory).get_plugin_descriptor.expect("get_plugin_descriptor"))(clap_factory, 0);
+        if desc.is_null() {
+            eprintln!("no plugin descriptor");
+            return 2;
+        }
+        let clap = text((*desc).version);
+        println!("{{\"event\":\"version\",\"ara_factory\":{ara:?},\"clap_descriptor\":{clap:?}}}");
+    }
+    0
+}
+
 /// `tables`: walk every ARA interface table the plugin exposes, up to the structSize it
 /// declares, and fail on an empty slot or on 0 slots checked (the gate line for the
 /// empty-slot class: ARA hosts call the slots inside the declared size unchecked). The
@@ -1239,6 +1277,7 @@ fn main() {
         ),
         "blocks" => run_blocks(bundle, &files, &rest),
         "tables" => run_tables(bundle),
+        "version" => run_version(bundle),
         "state" => run_state(bundle),
         "grow" => run_grow(bundle, &files, &rest),
         "close-busy" => run_close_busy(bundle, &files, &rest),

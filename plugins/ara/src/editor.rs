@@ -154,7 +154,7 @@ fn has_page(dir: &Path) -> bool {
 
 /// The folder of the page and how it was found (`init` or `dladdr`).
 pub fn page_dir() -> Option<(PathBuf, &'static str)> {
-    if std::env::var("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-bundle") {
+    if crate::test_switch("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-bundle") {
         return None;
     }
     if let Some(hint) = BUNDLE_HINT.lock().unwrap_or_else(|e| e.into_inner()).clone() {
@@ -227,15 +227,15 @@ struct Shared {
 }
 
 fn test_mode() -> Option<String> {
-    std::env::var("DS_ARA_EDITOR_MODE").ok().filter(|s| !s.is_empty())
+    crate::test_switch("DS_ARA_EDITOR_MODE").ok().filter(|s| !s.is_empty())
 }
 
 fn test_arg() -> String {
-    std::env::var("DS_ARA_EDITOR_ARG").unwrap_or_default()
+    crate::test_switch("DS_ARA_EDITOR_ARG").unwrap_or_default()
 }
 
 fn fault() -> String {
-    std::env::var("DS_ARA_EDITOR_FAULT").unwrap_or_default()
+    crate::test_switch("DS_ARA_EDITOR_FAULT").unwrap_or_default()
 }
 
 // ---------------------------------------------------------------- the scheme handler
@@ -377,7 +377,7 @@ fn spawn_request(shared: &Arc<Shared>, rest: String, query: String, body: Vec<u8
         .name("drumspike-ara-page".into())
         .spawn(move || {
             let run = || route(&sh, &rest, &query, &body);
-            let answer = if std::env::var("DS_ARA_GUARD_FAULT").as_deref() == Ok("off") {
+            let answer = if crate::test_switch("DS_ARA_GUARD_FAULT").as_deref() == Ok("off") {
                 // the fault run: no guard. A panic ends the thread, the responder is dropped and
                 // the page never gets an answer.
                 run()
@@ -446,7 +446,7 @@ fn query_value(query: &str, key: &str) -> Option<String> {
 }
 
 fn transport_fault() -> String {
-    std::env::var("DS_ARA_TRANSPORT_FAULT").unwrap_or_default()
+    crate::test_switch("DS_ARA_TRANSPORT_FAULT").unwrap_or_default()
 }
 
 /// The long poll of the host transport (M1b5): answers `{"messages": [..]}` with at most one
@@ -933,13 +933,13 @@ Until then NOTICE of the repository and the licence table in plugins/ara/README.
 }
 
 fn scenario() -> String {
-    std::env::var("DS_ARA_EDITOR_SCENARIO").unwrap_or_default()
+    crate::test_switch("DS_ARA_EDITOR_SCENARIO").unwrap_or_default()
 }
 
 /// The scenario `DS_ARA_EDITOR_SCENARIO=panic:<command>`: the command panics where `call::run`
 /// would run, so the guard of the request thread is what stops it.
 fn scenario_panics(cmd: &str) -> bool {
-    std::env::var("DS_ARA_EDITOR_SCENARIO")
+    crate::test_switch("DS_ARA_EDITOR_SCENARIO")
         .ok()
         .and_then(|v| v.strip_prefix("panic:").map(str::to_string))
         .is_some_and(|c| c == cmd)

@@ -34,7 +34,16 @@ clippy, the crate tests and the standalone rule.
 | --- | --- | --- | --- |
 | Test host of the script (x86_64 Mac, macOS 15.8.2, run from a shell) | all five reach the page; the host itself takes none (it has no key handling of its own) | yes - the input returns (the key after the click into the editor reaches the page again); document.hasFocus() cannot turn true on this host | yes, the page follows the window |
 | Reaper | not on this host - not measured | | |
-| LUNA (filled by the coordinator after the merge) | | | |
+| LUNA (first run, 2026-11-20) | not checked yet | not checked yet | not recorded yet (see "LUNA, first run") |
+
+### LUNA, first run
+
+The first run of the plugin in LUNA, on 2026-11-20. These are the facts of that run.
+
+- The editor is not a floating window. It is a section below the timeline, full width and low.
+- The page opened four times with no error.
+- Every window call came on the main thread.
+- Keys and focus: not checked yet.
 
 ## Findings (what does not work out of the box)
 

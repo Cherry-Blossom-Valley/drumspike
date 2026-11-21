@@ -9,15 +9,15 @@ It is a spike report: no product code.
 ## Result table
 
 One row per question of the gate, one column per host. The agent fills the rows of the hosts
-it can run; the coordinator fills the LUNA row after the merge.
+it can run. The LUNA column comes from the first run in LUNA on 2026-11-20 (see "LUNA, first run").
 
 | Question | Test host (ARA examples, script run) | Reaper | LUNA | Pro Tools |
 |---|---|---|---|---|
-| Does one instance see all tracks? | yes: one instance read all 3 sources of the document in full on the CLAP and the wrapped VST3 (144000 + 48000 + 192000 samples, FNV-1a equal to the WAV read; 6 source loads compared) | not on this host (no Reaper on x86-mac) | coordinator fills after the merge | n/a until Avid admits the plugin |
-| How is the plugin added (track, event, take)? | the test host has no track/event/take model: it creates the ARA document controller and binds one plugin instance to the document; the DAW workflow is what the LUNA row shows | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
-| Are the playback regions correct after a clip is cut and moved? | not covered by check_s1.sh (the host runs no edit test; see "Not covered") | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
-| Is the tempo map filled? | not covered by check_s1.sh (the host runs no musical timeline here) | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
-| Is the audio readable before the first playback? | yes: `-test ContentReading` runs with no playback; every read completed (read_ok) and ran on a background thread (caller ThreadId(1), readers 2/3/4) | not on this host | coordinator fills after the merge | n/a until Avid admits the plugin |
+| Does one instance see all tracks? | yes: one instance read all 3 sources of the document in full on the CLAP and the wrapped VST3 (144000 + 48000 + 192000 samples, FNV-1a equal to the WAV read; 6 source loads compared) | not on this host (no Reaper on x86-mac) | One ARA document for a session; every track that has the plugin joins it. | n/a until Avid admits the plugin |
+| How is the plugin added (track, event, take)? | the test host has no track/event/take model: it creates the ARA document controller and binds one plugin instance to the document; the DAW workflow is what the LUNA row shows | not on this host | The plugin is set per track, in the Warp control, sub-menu ARA. | n/a until Avid admits the plugin |
+| Are the playback regions correct after a clip is cut and moved? | not covered by check_s1.sh (the host runs no edit test; see "Not covered") | not on this host | not recorded yet | n/a until Avid admits the plugin |
+| Is the tempo map filled? | not covered by check_s1.sh (the host runs no musical timeline here) | not on this host | not recorded yet | n/a until Avid admits the plugin |
+| Is the audio readable before the first playback? | yes: `-test ContentReading` runs with no playback; every read completed (read_ok) and ran on a background thread (caller ThreadId(1), readers 2/3/4) | not on this host | yes: a 48 kHz mono source was read without error before the first playback | n/a until Avid admits the plugin |
 
 Script result on this host (2026-11-15, Intel, AppleClang 17, command line tools only):
 `S1 CHECK: PASS (6 source loads compared across the CLAP and the wrapped VST3, pluginval,
@@ -25,6 +25,20 @@ clap-validator, standalone rule)`; the seed check passed after it (`SPIKE: PASS 
 wrapped VST3)`): 4 sources with the hits returned as notes at the exact samples, the render
 back to back (all 7 clicks at 0 samples difference, no other non-zero samples), and
 EditorView, PropertyUpdates, Archiving on both paths.
+
+## LUNA, first run
+
+The first run of the plugin in LUNA, on 2026-11-20. These are the facts of that run.
+
+- One ARA document for a session. Every track that has the plugin joins it.
+- The plugin is set per track, in the Warp control, sub-menu ARA.
+- The audio of a source is readable before the first playback. A 48 kHz mono source was read
+  without error.
+- LUNA never calls `requestAudioSourceContentAnalysis`.
+- After the plugin is removed from a track and set again, the document is restored from the
+  archive.
+
+More about LUNA is in `hosts-luna.md`.
 
 ## What the script proves
 
