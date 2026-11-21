@@ -32,7 +32,8 @@ function appSlew(m) {   // #471: the shared slew/anchor of one sample (4 Hz play
      integrator (the line keeps its slope, the anchor time shifts). A new clock sync offset is slewed in the same
      way: appSync no longer steps AC.at, the next samples carry it in through this correction. */
   const hard = AC.sent === null || m.playing !== AC.running || m.epoch !== AC.epoch
-    || (typeof m.speed === "number" && m.speed > 0 && m.speed !== AC.speed);
+    || (typeof m.speed === "number" && m.speed > 0 && m.speed !== AC.speed)
+    || (hostMode() && m.playing && Math.abs(m.pos - appPos(recv)) > 0.25);   // #549: a locate of the host while it plays (its epoch may stay) re-anchors hard
   if (!hard) {
     const err = m.pos - appPos(recv), c = Math.abs(err) > CP_HARD_S ? 0 : CP_SLEW * err + AC.errI;   // song s
     AC.errI = Math.abs(err) > CP_HARD_S ? 0 : AC.errI + CP_SLEW_I * (err - AC.errI);
@@ -68,6 +69,7 @@ function appOnPlayhead(m) {
   if (hostMode() && !m.playing) {   // #518: the DAW stopped (or located while stopped): the host's position is the truth
     if (S.playing) { S.playing = false; $("#playBtn").textContent = "▶"; showSpeed(1); cpStop(); spLeave("pause"); }
     AC.pos = m.pos; AC.errI = 0;   // a stopped message never slews: the next play re-anchors hard anyway
+    AC.active = false;   // #549: the next host play takes the start branch above again (hard anchor, playing state); a stopped message that finds it false re-arms and clears it again
     PH.v = Math.max(0, Math.min(m.pos, maxDur()));
     invalidate(F.HEAD); updateStatus();
   }

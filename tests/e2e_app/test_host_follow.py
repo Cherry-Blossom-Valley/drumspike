@@ -146,3 +146,94 @@ def test_no_following_when_host_mode_is_off(app, make_project):
     assert app.evaluate("() => S.playing") is False
     assert app.evaluate("() => PH.v") == pytest.approx(0.0, abs=1e-9)
     assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "▶"
+
+
+def send_ep(app, pos, playing, epoch):
+    """Like send(), with a fixed epoch: a host that locates keeps its epoch (no epoch change helps the page)."""
+    app.evaluate("([pos, playing, epoch]) => B.hostTransport.send({ sid: S.sid, epoch, t_ns: performance.now() * 1e6, pos, playing })", [pos, playing, epoch])
+
+
+def assert_playing_at(app, lo):
+    app.wait_for_function("() => S.playing === true")
+    assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "⏸"
+    app.wait_for_function("(lo) => PH.v > lo && PH.v < lo + 1.0", arg=lo)   # the playhead runs from the host position
+
+
+def test_the_page_follows_every_start_and_stop_of_the_host(app, make_project):
+    """#549: play, stop, play, stop, play (a locate between two of them). On main the second play only
+    slews: AC.active stays true after the first stop, so the playing state never shows again."""
+    open_project(app, make_project(seconds=30.0))
+    set_host_mode(app)
+    send(app, 3.0, True)
+    assert_playing_at(app, 3.0)
+    send(app, 5.25, False)
+    app.wait_for_function("() => S.playing === false")
+    assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "▶"
+    assert app.evaluate("() => PH.v") == pytest.approx(5.25, abs=1e-9)
+    send(app, 7.0, True)   # the second play: this is the step that fails on main
+    assert_playing_at(app, 7.0)
+    send(app, 9.5, False)
+    app.wait_for_function("() => S.playing === false")
+    assert app.evaluate("() => PH.v") == pytest.approx(9.5, abs=1e-9)
+    send(app, 12.0, False)   # a locate while stopped
+    app.wait_for_function("() => Math.abs(PH.v - 12.0) < 1e-9")
+    assert app.evaluate("() => S.playing") is False
+    send(app, 14.0, True)   # the third play, after a stopped locate
+    assert_playing_at(app, 14.0)
+    send(app, 15.0, False)
+    app.wait_for_function("() => S.playing === false && Math.abs(PH.v - 15.0) < 1e-9")
+    assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "▶"
+    assert app.evaluate("() => B.hostTransport.calls") == []
+
+
+def test_a_locate_while_the_host_plays_after_a_stop_re_anchors_the_playhead(app, make_project):
+    open_project(app, make_project(seconds=30.0))
+    set_host_mode(app)
+    send_ep(app, 2.0, True, 1)
+    assert_playing_at(app, 2.0)
+    send_ep(app, 4.0, False, 1)
+    app.wait_for_function("() => S.playing === false")
+    send_ep(app, 6.0, True, 1)
+    assert_playing_at(app, 6.0)
+    send_ep(app, 20.0, True, 1)   # a locate while playing, same epoch: a hard re-anchor, no slew from 6 s
+    app.wait_for_function("() => PH.v > 20.0 && PH.v < 21.0", timeout=1500)
+
+
+def test_the_shell_workaround_before_a_play_message_does_not_double_start(app, make_project):
+    """The plugin shell sets AC.active = false when the host starts to play: the fixed page must still
+    show playing one time, with no second start and no stopped flicker."""
+    open_project(app, make_project(seconds=30.0))
+    set_host_mode(app)
+    send(app, 3.0, True)
+    assert_playing_at(app, 3.0)
+    send(app, 5.0, False)
+    app.wait_for_function("() => S.playing === false")
+    app.evaluate("() => { AC.active = false; }")   # the workaround, right before the play message
+    send(app, 8.0, True)
+    assert_playing_at(app, 8.0)
+    assert app.evaluate("() => AC.active") is True
+    assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "⏸"
+    send(app, 9.0, True)   # the next playing message only follows: still playing, no re-start
+    assert app.evaluate("() => S.playing") is True
+    assert app.evaluate("() => B.hostTransport.calls") == []
+    # the workaround while the host already plays (a second message after it) changes nothing visible
+    app.evaluate("() => { AC.active = false; }")
+    send(app, 9.5, True)
+    assert app.evaluate("() => S.playing") is True
+    assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "⏸"
+
+
+def test_a_play_of_the_page_itself_after_a_stop_still_works_with_the_mode_off(app, make_project):
+    """Standalone rule: with the mode off the page's own play, pause, play works as before."""
+    open_project(app, make_project(seconds=30.0))
+    assert app.evaluate("() => B.hostMode") is False
+    app.evaluate("() => appPlay()")
+    app.wait_for_function("() => S.playing === true && AC.active === true")
+    app.evaluate("() => appPause()")
+    app.wait_for_function("() => S.playing === false")
+    assert app.evaluate("() => AC.active") is False
+    app.evaluate("() => appPlay()")
+    app.wait_for_function("() => S.playing === true && AC.active === true")
+    assert app.evaluate("() => document.querySelector('#playBtn').textContent") == "⏸"
+    app.evaluate("() => appPause()")
+    app.wait_for_function("() => S.playing === false")
