@@ -26,10 +26,11 @@
 use super::*;
 use clap_sys::ext::gui::{clap_plugin_gui, clap_window, clap_window_handle};
 use objc2::rc::Retained;
-use objc2::MainThreadOnly;
+use objc2::runtime::NSObject;
+use objc2::{define_class, msg_send, sel, AnyThread, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSEventMask, NSEventModifierFlags,
-    NSEventType, NSResponder, NSView, NSWindow, NSWindowStyleMask,
+    NSEventType, NSMenu, NSMenuItem, NSResponder, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize};
 
@@ -49,8 +50,200 @@ const FLAG_COMMAND: u64 = 1 << 20;
 #[derive(Clone, Copy)]
 enum Action {
     Key(Key, u64),
+    /// M1b12: a key with a label, its characters, its characters without modifiers, its flags.
+    Hk(&'static str, Key, &'static str, &'static str, u64),
     ClickOut,
     ClickIn,
+}
+
+// ---- M1b12 (#561): the record of the keys that reach the host
+
+const FLAG_OPTION: u64 = 1 << 19;
+const K_F12: Key = 111;
+const K_F13: Key = 105;
+const K_F14: Key = 107;
+
+/// One key event that reached the host: through its view (`view`: the next responder of the plugin's view
+/// goes on to it) or its main menu (`menu`: a key command of the host, as a DAW has).
+struct SeenKey {
+    step: String,
+    via: &'static str,
+    kind: String,
+    code: u16,
+    chars: String,
+    flags: u64,
+    title: String,
+}
+
+static SEEN_KEYS: Mutex<Vec<SeenKey>> = Mutex::new(Vec::new());
+static KEY_STEP: Mutex<String> = Mutex::new(String::new());
+/// What the host posted, in order: (label, key code, flags).
+static POSTED_KEYS: Mutex<Vec<(String, u16, u64)>> = Mutex::new(Vec::new());
+
+fn set_step(label: &str) {
+    *KEY_STEP.lock().unwrap() = label.to_string();
+}
+
+fn see_key(via: &'static str, kind: &str, event: Option<&NSEvent>, title: &str) {
+    let (code, chars, flags) = match event {
+        Some(e) => {
+            let key_like = matches!(e.r#type(), NSEventType::KeyDown | NSEventType::KeyUp);
+            (
+                if key_like { e.keyCode() } else { 0 },
+                if key_like {
+                    e.charactersIgnoringModifiers()
+                        .map(|s| s.to_string())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                },
+                e.modifierFlags().0 as u64 & 0xffff_0000,
+            )
+        }
+        None => (0, String::new(), 0),
+    };
+    SEEN_KEYS.lock().unwrap().push(SeenKey {
+        step: KEY_STEP.lock().unwrap().clone(),
+        via,
+        kind: kind.to_string(),
+        code,
+        chars,
+        flags,
+        title: title.to_string(),
+    });
+}
+
+define_class!(
+    /// The host's content view: what a DAW's own view does with a key that nobody in the plugin took.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "AraHostKeyView"]
+    struct HostView;
+
+    impl HostView {
+        #[unsafe(method(acceptsFirstResponder))]
+        fn accepts_first_responder(&self) -> bool {
+            true
+        }
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            see_key("view", "keyDown", Some(event), "");
+        }
+        #[unsafe(method(keyUp:))]
+        fn key_up(&self, event: &NSEvent) {
+            see_key("view", "keyUp", Some(event), "");
+        }
+        #[unsafe(method(flagsChanged:))]
+        fn flags_changed(&self, event: &NSEvent) {
+            see_key("view", "flagsChanged", Some(event), "");
+        }
+    }
+);
+
+define_class!(
+    /// The target of the host's key commands (its main menu): every command only records that it ran.
+    #[unsafe(super(NSObject))]
+    #[name = "AraHostKeyCommands"]
+    struct HostCommands;
+
+    impl HostCommands {
+        #[unsafe(method(hostKey:))]
+        fn host_key(&self, sender: &NSMenuItem) {
+            let title = sender.title().to_string();
+            // a menu command records its title: the event that made it is not read (the current event of the app may be an older one)
+            see_key("menu", "command", None, &title);
+        }
+    }
+);
+
+/// The key commands of the host: the keys of a DAW's own commands (a clip trim, an undo, play) that the
+/// plugin's keys must not trigger. Cmd+H and Cmd+Q stand for the system's keys.
+const HOST_COMMANDS: [(&str, &str, u64); 11] = [
+    ("Host Play", " ", 0),
+    ("Host Grid", "g", 0),
+    ("Host Audition", "u", 0),
+    ("Host Export", "e", FLAG_COMMAND),
+    ("Host Y", "y", 0),
+    ("Host Cmd J", "j", FLAG_COMMAND),
+    ("Host Option X", "x", FLAG_OPTION),
+    ("Host Undo", "z", FLAG_COMMAND),
+    ("Host Q", "q", 0),
+    ("Host Hide", "h", FLAG_COMMAND),
+    ("Host Quit", "q", FLAG_COMMAND),
+];
+
+fn install_host_commands(app: &NSApplication, mtm: objc2::MainThreadMarker) -> Retained<HostCommands> {
+    let target: Retained<HostCommands> = unsafe { msg_send![super(HostCommands::alloc().set_ivars(())), init] };
+    let bar = NSMenu::new(mtm);
+    let top = NSMenuItem::new(mtm);
+    let menu = NSMenu::new(mtm);
+    for (title, key, mask) in HOST_COMMANDS {
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &objc2_foundation::NSString::from_str(title),
+                Some(sel!(hostKey:)),
+                &objc2_foundation::NSString::from_str(key),
+            )
+        };
+        item.setKeyEquivalentModifierMask(NSEventModifierFlags(mask as usize));
+        unsafe { item.setTarget(Some(&target)) };
+        menu.addItem(&item);
+    }
+    top.setSubmenu(Some(&menu));
+    bar.addItem(&top);
+    app.setMainMenu(Some(&bar));
+    target
+}
+
+fn key_record_row() -> String {
+    let posted: Vec<serde_json::Value> = POSTED_KEYS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(l, c, f)| serde_json::json!({"step": l, "code": c, "flags": f}))
+        .collect();
+    let seen: Vec<serde_json::Value> = SEEN_KEYS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|k| {
+            serde_json::json!({"step": k.step, "via": k.via, "kind": k.kind, "code": k.code, "chars": k.chars,
+                "flags": k.flags, "title": k.title})
+        })
+        .collect();
+    serde_json::json!({"event": "key_record", "posted": posted, "seen": seen}).to_string()
+}
+
+/// The steps of the `hostkeys` mode (M1b12), one every `HK_GAP_MS` after the page is ready. Each kind of key of the
+/// ticket: a page key, an absent command's key, a key with no command, a key with a modifier, the space bar, the
+/// same with a text field of the page in focus, the system keys, and a click out of the plugin and back in.
+const HK_GAP_MS: u64 = 900;
+
+fn hostkeys_steps() -> Vec<Action> {
+    use Action::*;
+    vec![
+        Hk("space", K_SPACE, " ", " ", 0),
+        Hk("page-key", 5, "g", "g", 0),
+        Hk("absent-key", 32, "u", "u", 0),
+        Hk("absent-key-cmd", 14, "e", "e", FLAG_COMMAND),
+        Hk("no-command", 16, "y", "y", 0),
+        Hk("no-command-cmd", 38, "j", "j", FLAG_COMMAND),
+        Hk("no-command-option", 7, "\u{2248}", "x", FLAG_OPTION),
+        Hk("page-key-cmd", K_Z, "z", "z", FLAG_COMMAND),
+        Hk("marker-field-on", K_F13, "\u{f710}", "\u{f710}", 0),
+        Hk("field-letter", 32, "u", "u", 0),
+        Hk("field-cmd-absent", 14, "e", "e", FLAG_COMMAND),
+        Hk("field-cmd-none", 38, "j", "j", FLAG_COMMAND),
+        Hk("marker-field-off", K_F14, "\u{f711}", "\u{f711}", 0),
+        Hk("system-hide", 4, "h", "h", FLAG_COMMAND),
+        Hk("system-quit", 12, "q", "q", FLAG_COMMAND),
+        ClickOut,
+        Hk("given-back", 12, "q", "q", 0),
+        ClickIn,
+        Hk("taken", 12, "q", "q", 0),
+        Hk("marker-end", K_F12, "\u{f70f}", "\u{f70f}", 0),
+    ]
 }
 
 fn schedule_of(mode: &str) -> Vec<(u64, Action)> {
@@ -83,11 +276,17 @@ fn chars_of(code: Key) -> &'static str {
 }
 
 fn post_key(code: Key, flags: u64, app: &NSApplication, window: &NSWindow) {
-    let chars = objc2_foundation::NSString::from_str(chars_of(code));
+    post_key_chars(code, chars_of(code), chars_of(code), flags, app, window);
+}
+
+/// A real key down and key up through `[NSApp sendEvent:]` to the window of this host (never a global event).
+fn post_key_chars(code: Key, chars: &str, ignoring: &str, flags: u64, app: &NSApplication, window: &NSWindow) {
+    let chars = objc2_foundation::NSString::from_str(chars);
+    let ignoring = objc2_foundation::NSString::from_str(ignoring);
     for ty in [NSEventType::KeyDown, NSEventType::KeyUp] {
         let ev = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
             ty, NSPoint::new(0.0, 0.0), NSEventModifierFlags(flags as usize), 0.0, window.windowNumber(), None,
-            &chars, &chars, false, code,
+            &chars, &ignoring, false, code,
         );
         if let Some(ev) = ev {
             app.sendEvent(&ev);
@@ -214,6 +413,14 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             false,
         );
         window.setReleasedWhenClosed(false);
+        // M1b12: the key stages give the host a content view and a main menu that record every key that reaches them
+        let _host_commands = if mode == "hostkeys" {
+            let hv: Retained<HostView> = msg_send![HostView::alloc(mtm), initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1000.0, 640.0))];
+            window.setContentView(Some(&hv));
+            Some(install_host_commands(&app, mtm))
+        } else {
+            None
+        };
         window.makeKeyAndOrderFront(None);
         window.orderFrontRegardless();
         window.setLevel(3);
@@ -390,7 +597,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
                 "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" | "transport"
-                | "playback" => Some(mode.as_str()),
+                | "playback" | "hostkeys" => Some(mode.as_str()),
                 // the edit mode ends with the event report that follows the edit report
                 "edit" => Some("edit-events"),
                 "analyse-race" => Some("analyse"),
@@ -424,6 +631,9 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 ready_limit
             };
             let mut schedule = schedule_of(&mode);
+            // M1b12: the key steps start when the page says it is ready (its transport is wired)
+            let hk_ready_before = count_rows("page_report", Some("hostkeys-ready"));
+            let mut hk_started = false;
             let mut resized = 0usize;
             let mut saved_resp: Option<Retained<NSResponder>> = None;
             let mut got = false;
@@ -435,16 +645,36 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     .map(|(_, a)| *a)
                     .collect();
                 schedule.retain(|(at, _)| *at > elapsed);
+                if mode == "hostkeys"
+                    && !hk_started
+                    && count_rows("page_report", Some("hostkeys-ready")) > hk_ready_before
+                {
+                    hk_started = true;
+                    schedule = hostkeys_steps()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, a)| (elapsed + 600 + i as u64 * HK_GAP_MS, a))
+                        .collect();
+                }
                 for a in due {
                     match a {
                         Action::Key(code, flags) => post_key(code, flags, &app, &window),
+                        Action::Hk(label, code, chars, ignoring, flags) => {
+                            set_step(label);
+                            POSTED_KEYS.lock().unwrap().push((label.to_string(), code, flags));
+                            post_key_chars(code, chars, ignoring, flags, &app, &window);
+                        }
                         Action::ClickOut => {
+                            set_step("click-out");
+                            POSTED_KEYS.lock().unwrap().push(("click-out".into(), 0, 0));
                             saved_resp = window.firstResponder();
                             if let Some(cv) = window.contentView() {
                                 window.makeFirstResponder(Some(&*cv));
                             }
                         }
                         Action::ClickIn => {
+                            set_step("click-in");
+                            POSTED_KEYS.lock().unwrap().push(("click-in".into(), 0, 0));
                             post_click(&app, &window);
                             if let Some(r) = &saved_resp {
                                 window.makeFirstResponder(Some(&**r));
@@ -672,6 +902,9 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         }
         if playback != "none" {
             println!("{}", playback_row(&playback, snap));
+        }
+        if mode == "hostkeys" {
+            println!("{}", key_record_row());
         }
         audio_stop.store(true, Ordering::SeqCst);
         if let Some(h) = audio_thread {

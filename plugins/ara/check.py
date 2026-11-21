@@ -5812,6 +5812,189 @@ def stage_playback_map_fault() -> bool:
                      f"the fault run (no locate of the queue is dropped for a newer one) makes the queue test fail with 'the newest locate wins': rc={rc2}, named {named2}") and ok
 
 
+# ---------------------------------------------------------------------------- M1b12 (#561): keys
+
+HK_FLAG_CMD = 1 << 20
+HK_STEPS = ["space", "page-key", "absent-key", "absent-key-cmd", "no-command", "no-command-cmd", "no-command-option", "page-key-cmd",
+            "marker-field-on", "field-letter", "field-cmd-absent", "field-cmd-none", "marker-field-off", "system-hide", "system-quit",
+            "click-out", "given-back", "click-in", "taken", "marker-end"]
+# the keys the page must see, in order (the others go to the host on purpose: the two system keys and the key after a click out)
+HK_PAGE_CODES = ["Space", "KeyG", "KeyU", "KeyE", "KeyY", "KeyJ", "KeyX", "KeyZ", "F13", "KeyU", "KeyE", "KeyJ", "F14", "KeyQ", "F12"]
+# what each of those keys is for the page: (kind, group) - the check proves the keys are what the stage says they are
+HK_PAGE_CLASS = [("page", None), ("page", None), ("absent", "audio"), ("absent", "files"), ("none", None), ("none", None), ("none", None),
+                 ("page", None), ("none", None), ("absent", "audio"), ("absent", "files"), ("none", None), ("none", None), ("none", None), ("none", None)]
+HK_SYSTEM_STEPS = {"system-hide": "Host Hide", "system-quit": "Host Quit"}   # Cmd+H, Cmd+Q: the exception list
+HK_MARKER_STEPS = {"marker-field-on", "marker-field-off", "marker-end"}
+
+
+def hostkeys_run(label: str, bundle: Path, env: dict | None = None) -> tuple[int, dict, list, dict, dict]:
+    """One run of the `hostkeys` mode: real key events posted to the window of the test host, a host with a playback
+    controller. Returns the rc, the summary, the rows of the plugin, the host's playback record and its key record."""
+    args = ["--transport", "follow", "--arg", "full", "--snap", str(PB_SNAP), "--playback", "full",
+            "--regions-all", ",".join(str(x) for x in TRANSPORT_REGION)]
+    rc, summary, rows = run_phase(label, "hostkeys", bundle, env, args, files=transport_files())
+    return rc, summary, rows, host_row(label, "playback_record"), host_row(label, "key_record")
+
+
+def hk_unusable(names: list, rc: int, rep: dict, krec: dict) -> dict | None:
+    """The parts all fail when the run did not happen: no host key record, not every step posted, or a hidden page. A run
+    whose page sent no report (the last key never reached it) is a run: the parts of the host record are still judged."""
+    posted = [x["step"] for x in krec.get("posted", [])] if krec else []
+    if not krec or posted != HK_STEPS or (rep and rep.get("visibility") != "visible"):
+        why = (f"the page is {rep.get('visibility')}: the screen of this host is locked or its window occluded"
+               if rep and rep.get("visibility") != "visible" else
+               f"no usable run: rc={rc}, page report {bool(rep)}, host key record {bool(krec)}, steps posted {len(posted)} of {len(HK_STEPS)}")
+        return {n: (False, why) for n in names}
+    return None
+
+
+def hk_leaks(krec: dict) -> list:
+    """The key events that reached the host and are not on the exception list. The two system keys may reach it (any
+    event of them), and the key after the click out of the plugin (step given-back) is the host's by design."""
+    out = []
+    for k in krec.get("seen", []):
+        if k["step"] in HK_SYSTEM_STEPS and k["via"] == "menu" and k["title"] == HK_SYSTEM_STEPS[k["step"]]:
+            continue
+        if k["step"] == "given-back" and k["via"] == "view" and k["code"] == 12 and not k["flags"]:
+            continue
+        out.append(k)
+    return out
+
+
+def hk_show(k: dict) -> str:
+    mods = ("Cmd+" if k["flags"] & HK_FLAG_CMD else "") + ("Option+" if k["flags"] & (1 << 19) else "")
+    what = f"{mods}{k['chars']}" if k["chars"] else (repr(k["title"]) if k["title"] else str(k["code"]))
+    return f"{k['step']}: {k['kind']} {what} via {k['via']}"
+
+
+def hostkeys_parts(rc: int, rows: list, rec: dict, krec: dict) -> dict:
+    names = ["editor-keys-classes", "editor-keys-host-record", "editor-keys-system", "editor-keys-space", "editor-keys-text",
+             "editor-keys-field", "editor-keys-focus"]
+    reps = page_reports(rows, "hostkeys")
+    rep = reps[0] if reps else {}
+    bad = hk_unusable(names, rc, rep, krec)
+    if bad:
+        return bad
+    keys = rep.get("keys", [])
+    codes = [k["code"] for k in keys]
+    leaks = hk_leaks(krec)
+    stops = [r for r in rows if r.get("event") == "key_stop"]
+    passes = [r for r in rows if r.get("event") == "key_pass"]
+    by_where: dict = {}
+    for r in stops:
+        by_where[r["where"]] = by_where.get(r["where"], 0) + 1
+    # --- classes: the keys are the kinds of key the ticket names, and the page saw them in order
+    cls = [(k["cls"].get("kind"), k["cls"].get("group")) for k in keys]
+    groups = {g["group"]: g["say"] for g in rep.get("groups", [])}
+    cls_ok = codes == HK_PAGE_CODES and len(keys) == len(HK_PAGE_CLASS)
+    wrong = []
+    if cls_ok:
+        for i, ((kind, grp), (wk, wg)) in enumerate(zip(cls, HK_PAGE_CLASS)):
+            if kind != wk or (wg and grp != wg):
+                wrong.append(f"{HK_PAGE_CODES[i]} is {kind}/{grp}, want {wk}/{wg}")
+    cls_ok = cls_ok and not wrong
+    cls_ev = (f"the page saw the {len(keys)} keys that stay in the plugin, in order {codes}: a page command (Space, G, Cmd+Z), an absent command "
+              f"(U: {groups.get('audio')!r}; Cmd+E: {groups.get('files')!r}), no command (Y, Cmd+J, Option+X), and the same absent and no-command keys with a text field in focus"
+              if cls_ok else f"the page did not see the keys it should, in order: saw {codes} (want {HK_PAGE_CODES}); {wrong}")
+    # --- host record: nothing but the exception list
+    rec_ok = not leaks and bool(krec.get("posted"))
+    rec_ev = (f"the host's view and menu (its key commands: play, grid, audition, export, undo, Y, Cmd+J, Option+X, Q) saw {len(krec.get('seen', []))} key event(s), all on the "
+              f"exception list or the click-out step; the plugin took {len(stops)} events ({by_where}) and passed {len(passes)} system key(s) on"
+              if rec_ok else f"{len(leaks)} key event(s) reached the host: {'; '.join(hk_show(k) for k in leaks[:8])}")
+    # --- system keys: Cmd+H and Cmd+Q do reach the host (its menu), and the page did not see them
+    sys_seen = {k["step"]: k for k in krec.get("seen", []) if k["via"] == "menu" and k["step"] in ("system-hide", "system-quit")}
+    sys_ok = (sys_seen.get("system-hide", {}).get("title") == "Host Hide" and sys_seen.get("system-quit", {}).get("title") == "Host Quit"
+              and len(passes) == 2)
+    sys_ev = (f"Cmd+H ran the host's 'Host Hide' and Cmd+Q its 'Host Quit' (the exception list); the plugin passed {len(passes)} keys on and the page saw neither"
+              if sys_ok else f"a system key did not reach the host: menu records {[(k['step'], k['title']) for k in sys_seen.values()]}, plugin passed {len(passes)} (want 2)")
+    # --- space: one play request through the page, no key
+    reqs = rec.get("requests", [])
+    kinds = [r["kind"] for r in reqs]
+    space_page = keys[0] if keys else {}
+    space_key = [k for k in krec.get("seen", []) if k["step"] == "space"]
+    calls = rep.get("calls", [])
+    # one play request in all, made within a second of the space bar (a stop and a locate follow about 10 s later, together:
+    # they are the page's own end-of-song stop, and they come at the same time when the rule is off)
+    plays = [c for c in calls if c["kind"] == "play"]
+    near = bool(plays) and bool(space_page) and abs(plays[0]["at"] - space_page.get("at", 0)) <= 1000
+    space_ok = (kinds.count("play") == 1 and len(plays) == 1 and near and not space_key
+                and space_page.get("prevented") is True and any(r["kind"] == "play" and r.get("playing_after") is True for r in reqs))
+    space_ev = (f"the space bar gave exactly one play request to the host (host requests {kinds}: the play within {plays[0]['at'] - space_page['at']} ms of the key, the stop and its locate "
+                f"{[c['at'] - space_page['at'] for c in calls if c['kind'] == 'stop']} ms later, together), through B.hostTransport (the page's keydown was taken by its play command), and no space key reached the host (its play key command ran 0 times)"
+                if space_ok else
+                f"the space bar did not give one play request: the host got {kinds}, the shell made {[c['kind'] for c in calls]}, the play call is "
+                f"{(plays[0]['at'] - space_page.get('at', 0)) if plays and space_page else None} ms from the space bar, "
+                f"page prevented={space_page.get('prevented')}, space key events at the host {len(space_key)}" + (" (no play request)" if "play" not in kinds else ""))
+    # --- text: the text of the group, for an absent command's key, and no text for the others
+    say = set(groups.values())
+    bad_text = []
+    for i, k in enumerate(keys[:len(HK_PAGE_CLASS)]):
+        typing = k.get("field") and not (k.get("meta") or k.get("ctrl"))   # a letter typed into a field is the field's
+        want = groups.get(HK_PAGE_CLASS[i][1]) if HK_PAGE_CLASS[i][0] == "absent" and not typing else None
+        msg = (k.get("msg") or "")
+        if want is not None and msg != want:
+            bad_text.append(f"{HK_PAGE_CODES[i]}: shows {msg!r}, want {want!r}")
+        if want is None and msg in say:
+            bad_text.append(f"{HK_PAGE_CODES[i]}: shows {msg!r}, want no group text")
+    text_ok = not bad_text and len(keys) == len(HK_PAGE_CLASS)
+    if len(keys) != len(HK_PAGE_CLASS):
+        bad_text = [f"the page saw {len(keys)} keys, want {len(HK_PAGE_CLASS)}: the text cannot be matched to its key (the page sent {'a' if rep else 'no'} report)"]
+    text_ev = (f"a key of an absent command showed the text of its group ({groups.get('audio')!r} for U, {groups.get('files')!r} for Cmd+E, also with a field in focus); "
+               f"the page keys, the keys of no command and a letter typed into the field showed none" if text_ok else
+               f"the text of the key of an absent command is missing or wrong: no text for the key, or the wrong one: {bad_text}")
+    # --- field: with a text field in focus the keys stay in the plugin, and the field still takes its letter
+    field_keys = [k for k in keys if k.get("field") and not k["code"].startswith("F")]
+    in_field = [k for k in krec.get("seen", []) if k["step"] in ("field-letter", "field-cmd-absent", "field-cmd-none")]
+    field_ok = (len(field_keys) == 3 and not in_field and rep.get("field_value") == "u" and rep.get("host_mode") is True)
+    field_ev = (f"with a text field of the page in focus 3 keys (U, Cmd+E, Cmd+J) were posted: the field took the letter ({rep.get('field_value')!r}), "
+                f"0 key events reached the host" if field_ok else
+                f"with a text field in focus a key reached the host or the field did not take its letter: {len(in_field)} host events "
+                f"({'; '.join(hk_show(k) for k in in_field[:4])}), field value {rep.get('field_value')!r}, {len(field_keys)} keys seen in the field")
+    # --- focus: the key after a click outside is the host's, the key after a click in the page is the plugin's
+    given = [k for k in krec.get("seen", []) if k["step"] == "given-back" and k["kind"] != "keyUp"]
+    taken = [k for k in krec.get("seen", []) if k["step"] == "taken"]
+    page_q = [k for k in keys if k["code"] == "KeyQ"]
+    focus_ok = bool(given) and not taken and len(page_q) == 1
+    focus_ev = (f"after a click outside the plugin the key Q ran the host's 'Host Q' ({given[0]['via']}) and the page saw 0; after a click in the page the same key reached the page "
+                f"({len(page_q)}) and the host 0 times" if focus_ok else
+                f"the keys did not follow the click: Q after a click outside reached the host {len(given)} time(s) (want 1), Q after a click in the page reached the host "
+                f"{len(taken)} time(s) (want 0) and the page {len(page_q)} time(s) (want 1)")
+    return dict(zip(names, [(cls_ok, cls_ev), (rec_ok, rec_ev), (sys_ok, sys_ev), (space_ok, space_ev), (text_ok, text_ev), (field_ok, field_ev), (focus_ok, focus_ev)]))
+
+
+def stage_editor_keys() -> bool:
+    """M1b12 gate lines 2, 3, 4, 5 and 6: with the focus in the plugin view no key reaches the host except the exception
+    list; the space bar plays through the page; an absent command's key shows its group text; a click outside gives
+    the keys back. Real key events posted to the window of the test host, on the CLAP and on the CLAP in the VST3."""
+    ok = True
+    for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
+        rc, _s, rows, rec, krec = hostkeys_run(f"editor-keys-{which}", bundle)
+        ok = print_parts(suffix, hostkeys_parts(rc, rows, rec, krec)) and ok
+    return ok
+
+
+def stage_editor_keys_fault() -> bool:
+    ok = True
+    for label, env, part, what, reason in (
+        ("pass", {"DS_ARA_EDITOR_FAULT": "keys-pass"}, "editor-keys-host-record", "the rule is off: every key goes on to the host", "reached the host"),
+        ("pass-field", {"DS_ARA_EDITOR_FAULT": "keys-pass"}, "editor-keys-field", "the rule is off: a key typed with a field in focus goes on", "reached the host"),
+        ("pass-focus", {"DS_ARA_EDITOR_FAULT": "keys-pass"}, "editor-keys-focus", "the rule is off: the key after a click in the page goes on", "reached the host"),
+        ("no-shield", {"DS_ARA_EDITOR_FAULT": "no-shield"}, "editor-keys-host-record", "the shield passes an unused key on to the host's view", "reached the host"),
+        ("no-monitor", {"DS_ARA_EDITOR_FAULT": "no-monitor"}, "editor-keys-host-record", "no monitor: a key with Command goes to the host's menu first", "reached the host"),
+        ("no-focus", {"DS_ARA_EDITOR_FAULT": "no-focus"}, "editor-keys-host-record", "the web view is not the first responder: the keys go to the host's view", "reached the host"),
+        ("no-system", {"DS_ARA_EDITOR_FAULT": "no-system-keys"}, "editor-keys-system", "the system keys are taken too", "did not reach the host"),
+        ("no-text", {"DS_ARA_EDITOR_FAULT": "no-key-text"}, "editor-keys-text", "the page does not show the text of an absent command's key", "missing or wrong"),
+        ("space", {"DS_ARA_PLAYBACK_FAULT": "skip"}, "editor-keys-space", "the plugin makes no call to the host and says it did", "no play request"),
+    ):
+        rc, _s, rows, rec, krec = hostkeys_run(f"editor-fault-keys-{label}", CLAP, env)
+        ok = fault_reason(f"editor-keys-fault-{label}", hostkeys_parts(rc, rows, rec, krec), part, what, reason) and ok
+    parts = hostkeys_parts(2, [], {}, {})
+    ok = pass_fail("editor-keys-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                   f"a run with no page report and no host key record fails all {len(parts)} parts with 'no usable run'") and ok
+    return ok
+
+
+
 STAGES = {
     "fixture": stage_fixture,
     "reference": stage_reference,
@@ -5974,6 +6157,8 @@ STAGES = {
     "editor-playback-late-fault": stage_editor_playback_late_fault,
     "editor-playback-refused": stage_editor_playback_refused,
     "editor-playback-refused-fault": stage_editor_playback_refused_fault,
+    "editor-keys": stage_editor_keys,
+    "editor-keys-fault": stage_editor_keys_fault,
 }
 ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
@@ -6001,7 +6186,7 @@ ORDER = [
     "playback-map", "playback-map-fault", "editor-playback", "editor-playback-fault", "editor-playback-none", "editor-playback-none-fault",
     "editor-playback-partial", "editor-playback-partial-fault", "editor-playback-refused", "editor-playback-refused-fault",
     "editor-playback-drag", "editor-playback-drag-fault", "editor-playback-late", "editor-playback-late-fault",
-    "editor-playback-tracks", "editor-playback-tracks-fault",
+    "editor-playback-tracks", "editor-playback-tracks-fault", "editor-keys", "editor-keys-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",
