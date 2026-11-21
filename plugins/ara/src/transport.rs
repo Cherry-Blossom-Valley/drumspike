@@ -1111,6 +1111,24 @@ mod tests {
     }
 
     #[test]
+    fn the_tempo_of_the_process_call_is_kept_and_a_second_value_says_it_varies() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_tempo();
+        assert_eq!(host_tempo(), None);
+        let has = clap_sys::events::CLAP_TRANSPORT_HAS_TEMPO;
+        store_tempo(0, 90.0); // no tempo flag: nothing is stored
+        assert_eq!(host_tempo(), None);
+        store_tempo(has, 97.3);
+        store_tempo(has, 97.3);
+        assert_eq!(host_tempo(), Some((97.3, false)));
+        store_tempo(has, 100.0);
+        assert_eq!(host_tempo(), Some((100.0, true)));
+        store_tempo(has, f64::NAN);
+        assert_eq!(host_tempo(), Some((100.0, true)), "a tempo that is no number is ignored");
+        reset_tempo();
+    }
+
+    #[test]
     fn a_stopped_host_costs_no_region_fetch_and_a_playing_one_at_most_five_a_second() {
         let mut poller = Poller::new(TICK_US);
         let mut fetch = || vec![(0usize, reg(0.0, 3.0, 0.0))];
