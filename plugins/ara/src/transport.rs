@@ -111,6 +111,33 @@ struct Slot {
     rate_bits: AtomicU64,
 }
 
+/// M1c1: the tempo of the process call (CLAP `transport.tempo` with `CLAP_TRANSPORT_HAS_TEMPO`): the newest BPM,
+/// and whether more than one value came. Atomics only, no allocation: the audio thread writes them in `note`.
+static TEMPO_BITS: AtomicU64 = AtomicU64::new(0);
+static TEMPO_VARIES: AtomicU32 = AtomicU32::new(0);
+
+fn store_tempo(flags: u32, bpm: f64) {
+    if flags & clap_sys::events::CLAP_TRANSPORT_HAS_TEMPO == 0 || !bpm.is_finite() || bpm <= 0.0 {
+        return;
+    }
+    let old = TEMPO_BITS.swap(bpm.to_bits(), Ordering::Relaxed);
+    if old != 0 && (f64::from_bits(old) - bpm).abs() > 1e-6 {
+        TEMPO_VARIES.store(1, Ordering::Relaxed);
+    }
+}
+
+/// The tempo the host sent in its process calls, `(bpm, varies)`; `None` when none came.
+pub fn host_tempo() -> Option<(f64, bool)> {
+    let b = TEMPO_BITS.load(Ordering::Relaxed);
+    (b != 0).then(|| (f64::from_bits(b), TEMPO_VARIES.load(Ordering::Relaxed) != 0))
+}
+
+/// For the tests and a new document: forget the tempo.
+pub fn reset_tempo() {
+    TEMPO_BITS.store(0, Ordering::Relaxed);
+    TEMPO_VARIES.store(0, Ordering::Relaxed);
+}
+
 static SLOT: Slot = Slot {
     seq: AtomicU64::new(0),
     owner: AtomicU64::new(0),
@@ -201,6 +228,7 @@ pub unsafe fn note(process: *const clap_sys::process::clap_process, rate: f64, i
     } else {
         0
     };
+    store_tempo(t.flags, t.tempo);
     store_at(id, id, pos, t.flags & !FLAG_CLEARED, pr.frames_count, rate, now_us());
 }
 

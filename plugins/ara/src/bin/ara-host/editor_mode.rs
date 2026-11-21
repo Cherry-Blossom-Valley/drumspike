@@ -850,7 +850,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
                 "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" | "transport"
-                | "playback" | "hit" | "menu" | "geometry" | "hostkeys" => Some(mode.as_str()),
+                | "playback" | "hit" | "menu" | "geometry" | "hostkeys" | "delivery" => Some(mode.as_str()),
                 // the edit mode ends with the event report that follows the edit report
                 "edit" => Some("edit-events"),
                 "analyse-race" => Some("analyse"),
