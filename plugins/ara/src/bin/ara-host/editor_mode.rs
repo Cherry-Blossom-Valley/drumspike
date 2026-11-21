@@ -190,6 +190,11 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         },
         snap,
     );
+    set_playback_delay(
+        args_value(rest, "--playback-delay")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+    );
     std::env::set_var("DS_ARA_EDITOR_MODE", &mode);
     if let Some(a) = args_value(rest, "--arg") {
         std::env::set_var("DS_ARA_EDITOR_ARG", a);

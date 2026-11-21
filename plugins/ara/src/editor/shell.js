@@ -177,26 +177,54 @@
     var m = tstate.last;
     if (m && !m.playing) deliverTransport({ epoch: m.epoch, t_ns: m.t_ns, pos: m.pos, playing: false, why: "again" });
   }
-  function afterRequest(r) {
-    if (!r.ok) { say(r.reason); showHostAgain(); return; }
+  /* The pointer is down in the ruler (a drag): the playhead is under the pointer, and no fallback may
+     move it. */
+  var pointer = { down: false };
+  document.addEventListener("mousedown", function (ev) {
+    var t = ev.target; pointer.down = !!(t && t.closest && t.closest("#rulerClip, #ruler"));
+  }, true);
+  window.addEventListener("mouseup", function () { pointer.down = false; }, true);
+  var lastLocate = 0;
+  function guardOn() { return !(tstate.offer && tstate.offer.fault === "no-drag-guard"); }
+  /* Show the host position again, unless a newer locate was sent after the one this belongs to, or the
+     pointer is down in the ruler (it asks again when the pointer is up). */
+  function fallback(seq, seen) {
+    if (guardOn()) {
+      if (seq && seq !== lastLocate) return;
+      if (pointer.down) { setTimeout(function () { fallback(seq, seen); }, 150); return; }
+    }
+    if (tstate.delivered === seen) showHostAgain();
+  }
+  function afterRequest(r, seq) {
+    if (r.superseded) return;   // a newer request passed it: that one decides
+    if (!r.ok) { say(r.reason); fallback(seq, tstate.delivered); return; }
     var seen = tstate.delivered;
-    if (r.confirm_ms > 0) setTimeout(function () { if (tstate.delivered === seen) showHostAgain(); }, r.confirm_ms);
+    if (r.confirm_ms > 0) setTimeout(function () { fallback(seq, seen); }, r.confirm_ms);
+  }
+  function selectedTrack() {
+    var n = lex("typeof S === 'object' && typeof S.selTrack === 'string' ? S.selTrack : ''");
+    return typeof n === "string" ? n : "";
   }
   var watch = { v: 0 };
+  /* One deadline for a play, from the call: the request may wait up to 2 s for the main thread of the
+     host, and the host may take its time to start. After PLAY_MS the page gives up ("the host did not
+     start playback"). If the host starts later, the follow of #546 shows playing, and the failure text
+     is taken away (deliverTransport). */
+  var PLAY_MS = 2000;
   var HT = {
     onPosition: null,
-    /* Play: the host starts (and moves first when the page stands elsewhere). The page shows the
-       playing state only when the host has said it plays: the promise ends with the first message
-       that says playing, or fails. With confirm_ms 0 (a fault run) it ends at once. */
     play: function (pos) {
       var t0 = Date.now();
-      return hostCall("play", { t: typeof pos === "number" ? pos : null }).then(function (r) {
-        if (!r.ok) throw new Error(r.reason);
-        if (!(r.confirm_ms > 0)) return;
-        return new Promise(function (resolve, reject) {
+      return new Promise(function (resolve, reject) {
+        var done = false;
+        function end(ok, e) { if (done) return; done = true; if (ok) resolve(); else { tstate.playFail = e.message; reject(e); } }
+        var timer = setTimeout(function () { end(false, new Error("the host did not start playback")); }, PLAY_MS);
+        hostCall("play", { t: typeof pos === "number" ? pos : null, track: selectedTrack() }).then(function (r) {
+          if (!r.ok) { clearTimeout(timer); end(false, new Error(r.reason)); return; }
+          if (!(r.confirm_ms > 0)) { clearTimeout(timer); end(true); return; }
           (function look() {
-            if (tstate.last && tstate.last.playing && tstate.lastAt >= t0) { resolve(); return; }
-            if (Date.now() - t0 > 1500) { reject(new Error("the host did not start playback")); return; }
+            if (done) return;
+            if (tstate.last && tstate.last.playing && tstate.lastAt >= t0) { clearTimeout(timer); end(true); return; }
             setTimeout(look, 10);
           })();
         });
@@ -204,10 +232,11 @@
     },
     stop: function (pos) {
       if (typeof pos === "number") watch.v = pos;   // the page's own stop sets its playhead: that is no locate
-      return hostCall("stop", {}).then(afterRequest);
+      return hostCall("stop", {}).then(function (r) { afterRequest(r, 0); });
     },
     locate: function (t) {
-      return hostCall("locate", { t: t }).then(afterRequest);
+      var seq = ++lastLocate;
+      return hostCall("locate", { t: t, track: selectedTrack() }).then(function (r) { afterRequest(r, seq); });
     }
   };
   function lex(expr) { try { return (0, eval)(expr); } catch (e) { return undefined; } }
@@ -240,6 +269,11 @@
     tstate.delivered++;
     tstate.last = m;
     tstate.lastAt = Date.now();
+    if (m.playing && tstate.playFail) {   // the host started after the page gave up: the failure text goes
+      var shown = null; try { shown = (document.getElementById("stMsg") || {}).textContent || ""; } catch (e) { /* none */ }
+      if (shown.indexOf("playback failed") >= 0 && !(tstate.offer && tstate.offer.fault === "keep-error")) { try { (0, eval)("setMsg")(""); } catch (e) { /* no page */ } }
+      tstate.playFail = null;
+    }
     if (tstate.seen.length < 4000) tstate.seen.push([tstate.lastAt, m.pos, m.playing ? 1 : 0, m.why || null]);
     /* The page binds its follow state in appOnPlayhead only while AC.active is false, and a stopped
        message leaves AC.active true: a host that stops and plays again would not be followed. The

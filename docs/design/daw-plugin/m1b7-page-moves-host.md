@@ -17,7 +17,8 @@ The way of a request:
    `plugin_host_stop` or `plugin_host_locate`. They are not commands of the app. The editor
    classes them as shell commands, like `plugin_report`.
 3. A request thread decides what to call (`playback::plan`, no host call yet).
-4. The request thread hands the calls to the main thread of the host and waits at most 2 s.
+4. The request thread puts the calls in the queue of host requests of the editor and waits at most
+   2 s (see "Order, floods and a closed editor").
 5. The main thread calls the ARA playback controller of the host.
 6. The host moves. Its position comes back through the transport follow of M1b5. That moves the page.
 
@@ -62,6 +63,35 @@ every call (`pthread_main_np`). The plugin counts its calls by thread (`editor_c
 run `DS_ARA_PLAYBACK_FAULT=direct` makes the request thread call the host. Both checks fail with
 "off the main thread".
 
+## Order, floods and a closed editor
+
+Each request of the page runs on its own thread. Without a rule, a drag could send locate A, B, C
+to the host as A, C, B, and a stop could pass a locate. So:
+
+- **One queue per editor** (`playback::Queue`). The scheme handler runs on the main thread, so it
+  gives each request a sequence number in the order of arrival. The queue keeps that order. One
+  drain job on the main thread runs the whole queue.
+- **Newest locate wins.** A locate that has not run and has a later locate in the queue is
+  dropped. The page gets `{ok: false, superseded: true}`. That is no error, and the shell does
+  nothing for it. Play, stop and the last locate keep their order. A request that is older than one
+  that already ran is dropped the same way.
+- **A small limit.** At most 8 requests wait. The next one is answered at once ("too many
+  requests wait for the host").
+- **Not the budget of the app commands.** A host request waits up to 2 s for the main thread.
+  If it used one of the 96 slots of `MAX_INFLIGHT`, a blocked main thread (menu tracking, a modal
+  dialog) and the 25 ms watch would fill them and every other command would get 503. The routes
+  `plugin_host_*` are not counted (`counts_inflight`); the queue limit bounds them.
+- **A closed editor.** The drain job checks `closed` before each call. A request that was queued
+  before `detach` makes no call and the answer is "the editor is closed". A request whose thread
+  stopped waiting (2 s) is marked late and does nothing.
+
+Tests: `playback::tests::requests_run_in_the_order_of_arrival_and_the_newest_locate_wins`,
+`..::the_queue_holds_a_few_requests_and_the_drain_job_starts_once`,
+`..::a_request_queued_before_the_editor_closed_makes_no_call` and
+`editor::tests::requests_to_the_host_do_not_use_the_budget_of_the_app_commands` (stage
+`playback-map`). Fault `DS_ARA_PLAYBACK_FAULT=no-supersede` makes the first one fail with "the
+newest locate wins".
+
 ## The mapping: page time to song position
 
 The page shows source time. The host wants song time. The mapping is the inverse of the follow of
@@ -84,6 +114,22 @@ Example: one source, two regions of the same audio, at song 0 s to 2 s and at so
 The host stands at 11 s. A locate to page time 1 s goes to 11 s. The host stands at 5 s or has no
 position: it goes to 1 s.
 
+### The selected track, and bounds
+
+- **The track of the page.** Stems of one length hold the same source time in several sources. The
+  shell sends the selected track (`S.selTrack`) with each locate and play. The plugin uses the
+  regions of the sources of that track (`playback::regions_for`). With no selected track, or a
+  track with no region, it uses all regions and the rule above (the lowest source index first).
+- **What the playhead shows.** The follow of M1b5 has no track: it maps a song position with the
+  first source. `page_time` and `song_time` are inverse to each other for the first source, and for
+  any track that has the same offset (the usual drum session). For a track with another offset, a
+  locate puts the host at the song position of that track. The follow then shows the first source's
+  page time for that position, so the playhead can move to another place after the host answers. This is
+  the limit of one playhead for all tracks.
+- **Bounds.** A time that is not a number, or is above 24 h, is refused ("that time is out of
+  range"). A time below 0, or above the length of the source (the longest source of the selected
+  track), is clamped before it is mapped (`playback::bound_time`).
+
 **No region** (no round yet, or a source without a playback region): nothing is sent. The page shows
 "no playback region maps this time yet: the host cannot be moved". The follow of M1b5 treats "no
 region" as "song time is page time". A locate does not, because a wrong position in the host is
@@ -96,14 +142,18 @@ test of the plan fails with "off by".
 
 ## Play
 
-`play(pos)` asks the host to start. A click in the ruler and then Play is the usual order, so when
+`play(pos)` asks the host to start. One deadline of 2 s counts for the whole chain, from the call of
+the page: the wait for the main thread, the call, and the wait for the host to say it plays. A click in the ruler and then Play is the usual order, so when
 `pos` maps to a song position that is more than 5 ms from the host position, and the host stands
 still, the plugin first sets the position and then starts. The page time of the position is a time of
 the source; the host starts from the song position that the mapping gives.
 
 The page shows "playing" only when the host says so. The promise of `play` ends with the first
-message that says playing (limit 1.5 s). If none comes, it fails with "the host did not start
-playback" and the page shows its usual "playback failed" text.
+message that says playing. If none comes in 2 s, it fails with "the host did not start
+playback" and the page shows its usual "playback failed" text. The host may still start later. Then
+the follow of #546 shows playing (the page is not in its play any more), and the shell takes the
+failure text away. Stage `editor-playback-late` (the test host starts 2.5 s late; fault
+`DS_ARA_PLAYBACK_FAULT=keep-error`: the text stays).
 
 ## What the page does itself (found in `static/`, not changed)
 
@@ -126,7 +176,10 @@ playback" and the page shows its usual "playback failed" text.
 - **A host that does not follow.** The page does not fall back by itself. The shell does it: after
   a request that the host did not follow (no message of the host in 1 s, or a refusal), the shell
   shows the last host position again, if the host was stopped. A host that plays sends its
-  position anyway. Stage `editor-playback-refused`, fault `DS_ARA_PLAYBACK_FAULT=no-fallback`.
+  position anyway. The fallback does not run when a newer locate was sent after the one it belongs
+  to, and not while the pointer is down in the ruler (it asks again every 150 ms until the pointer is
+  up). Stage `editor-playback-drag` (a drag of 3 s against a host that does nothing; fault
+  `no-drag-guard`: the playhead jumps back under the pointer). Stage `editor-playback-refused`, fault `DS_ARA_PLAYBACK_FAULT=no-fallback`.
 
 So the page does move its own playhead at a click (`PH.v`) and at a stop, before the host answers.
 The gate line "the page never moves its own playhead" holds in this form: the position that stays
@@ -195,6 +248,13 @@ position that the plugin reads in `process` is the one the controller set.
 | 6 no audio thread, no own audio | `editor-playback` (part `-own-audio`, and `editor-transport-own-audio` of M1b5) | `DS_ARA_EDITOR_FAULT=page-transport` ("transport command") |
 | 7 report rows | `editor-playback` (part `-report`), `editor-playback-none` (part `-report`) | |
 | a host that ignores the requests | `editor-playback-refused` | `no-fallback` ("stayed") |
+| no fallback in a drag | `editor-playback-drag` | `no-drag-guard` ("jumped back under the pointer") |
+| a host that starts late | `editor-playback-late` | `keep-error` ("stuck") |
+| order, newest locate, closed editor, budget, bounds, selected track | `playback-map` | `no-supersede` ("the newest locate wins") |
+
+The limit of 100 ms is the number of the ticket. A miss may be the load of the machine or a defect.
+On a miss the stage `editor-playback` measures once more and prints both results with the load
+average. The loop fails only if both runs miss.
 
 Each stage fails when its run did not happen: a run with no page report, a hidden page or no record of
 the host fails every part with "no usable run" (`editor-playback-fault-norun` and its siblings).

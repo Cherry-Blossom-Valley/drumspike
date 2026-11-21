@@ -465,6 +465,13 @@ pub enum PbMode {
 
 static PB_MODE: Mutex<PbMode> = Mutex::new(PbMode::None);
 
+/// `--playback-delay <ms>`: the host starts to play this long after it got the request (a slow host).
+static PB_DELAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn set_playback_delay(ms: u64) {
+    PB_DELAY_MS.store(ms, Ordering::SeqCst);
+}
+
 /// The transport of the test host when the playback controller moves it: the position of the next
 /// block and whether the host plays. The process thread (`--transport follow`) reads it every block.
 pub struct PbState {
@@ -505,7 +512,17 @@ fn pb_note(kind: &'static str, seconds: Option<f64>) {
     let mut st = PB_STATE.lock().unwrap();
     if mode == PbMode::Full || mode == PbMode::Partial {
         match kind {
-            "play" => st.playing = true,
+            "play" => {
+                let delay = PB_DELAY_MS.load(Ordering::SeqCst);
+                if delay == 0 {
+                    st.playing = true;
+                } else {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(delay));
+                        PB_STATE.lock().unwrap().playing = true;
+                    });
+                }
+            }
             "stop" => st.playing = false,
             _ => {
                 if let Some(t) = seconds {

@@ -208,10 +208,15 @@ pub struct Backend {
     /// Makes calls to the playback controller of the host, and answers the number made. It must run
     /// on the host's main thread (the thread of the document controller).
     pub playback_run: PlaybackRunFn,
+    /// The sources of a track (by name; empty name: all) and the longest of their lengths in seconds.
+    pub track_info: TrackInfoFn,
     /// The name the host gave (`clap_host.name`).
     pub host_name: String,
     pub doc_id: String,
 }
+
+/// The source indexes of a track and their longest length in seconds.
+pub type TrackInfoFn = Arc<dyn Fn(&str) -> (Vec<usize>, f64) + Send + Sync>;
 
 /// Makes calls to the playback controller of the host; answers the number of calls made.
 pub type PlaybackRunFn = Arc<dyn Fn(&[crate::playback::Call]) -> usize + Send + Sync>;
@@ -237,6 +242,10 @@ struct Shared {
     poller: Mutex<crate::transport::Poller>,
     /// The row of the first transport message of this editor is written.
     transport_row: AtomicBool,
+    /// M1b7: the requests of the page to the host wait here for the main thread.
+    host_queue: crate::playback::Queue,
+    /// The order of arrival of the requests of the page.
+    req_seq: std::sync::atomic::AtomicU64,
     /// M1b7: the row of the first request of each kind (play, stop, locate) is written.
     request_row: [AtomicBool; 3],
     /// M1b7: the row of the first refused request of each kind is written.
@@ -366,11 +375,37 @@ impl Answer {
     }
 }
 
+/// A request of the page to the host (M1b7) waits for the main thread, up to 2 s. It does not use
+/// the budget of the commands of the app: a blocked main thread (menu tracking, a modal dialog)
+/// must not make every other command of the page answer 503. The queue of host requests has its
+/// own small limit ([`crate::playback::MAX_PENDING`]).
+fn counts_inflight(rest: &str) -> bool {
+    !rest.starts_with("invoke/plugin_host_")
+}
+
+/// True when a request may start, given the number in flight after counting it.
+fn admit(counted: bool, now: usize) -> bool {
+    !counted || now <= MAX_INFLIGHT
+}
+
+thread_local! {
+    /// The order of arrival of the request this thread runs (set where the request thread starts).
+    static REQ_SEQ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 fn spawn_request(shared: &Arc<Shared>, rest: String, query: String, body: Vec<u8>, responder: Responder) {
-    let now = shared.inflight.fetch_add(1, Ordering::SeqCst) + 1;
+    let counted = counts_inflight(&rest);
+    let seq = shared.req_seq.fetch_add(1, Ordering::SeqCst);
+    let now = if counted {
+        shared.inflight.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        shared.inflight.load(Ordering::SeqCst)
+    };
     PEAK_INFLIGHT.fetch_max(now, Ordering::SeqCst);
-    if now > MAX_INFLIGHT || shared.closed.load(Ordering::SeqCst) {
-        shared.inflight.fetch_sub(1, Ordering::SeqCst);
+    if !admit(counted, now) || shared.closed.load(Ordering::SeqCst) {
+        if counted {
+            shared.inflight.fetch_sub(1, Ordering::SeqCst);
+        }
         responder.respond(respond(
             503,
             "application/json",
@@ -382,8 +417,11 @@ fn spawn_request(shared: &Arc<Shared>, rest: String, query: String, body: Vec<u8
     if fault() == "inline" {
         // the fault run: the command runs on the main thread, as a plugin that had no thread
         // for it would do
+        REQ_SEQ.with(|c| c.set(seq));
         let answer = route(shared, &rest, &query, &body);
-        shared.inflight.fetch_sub(1, Ordering::SeqCst);
+        if counted {
+            shared.inflight.fetch_sub(1, Ordering::SeqCst);
+        }
         responder.respond(respond(answer.status, answer.mime, answer.body, false));
         return;
     }
@@ -393,6 +431,7 @@ fn spawn_request(shared: &Arc<Shared>, rest: String, query: String, body: Vec<u8
     let spawned = std::thread::Builder::new()
         .name("drumspike-ara-page".into())
         .spawn(move || {
+            REQ_SEQ.with(|c| c.set(seq));
             let run = || route(&sh, &rest, &query, &body);
             let answer = if crate::test_switch("DS_ARA_GUARD_FAULT").as_deref() == Ok("off") {
                 // the fault run: no guard. A panic ends the thread, the responder is dropped and
@@ -412,7 +451,9 @@ fn spawn_request(shared: &Arc<Shared>, rest: String, query: String, body: Vec<u8
                     }
                 }
             };
-            sh.inflight.fetch_sub(1, Ordering::SeqCst);
+            if counted {
+                sh.inflight.fetch_sub(1, Ordering::SeqCst);
+            }
             let responder = slot2.lock().unwrap_or_else(|e| e.into_inner()).take();
             if let Some(responder) = responder {
                 on_main(Box::new(move || {
@@ -422,7 +463,9 @@ fn spawn_request(shared: &Arc<Shared>, rest: String, query: String, body: Vec<u8
             }
         });
     if spawned.is_err() {
-        shared.inflight.fetch_sub(1, Ordering::SeqCst);
+        if counted {
+            shared.inflight.fetch_sub(1, Ordering::SeqCst);
+        }
         if let Some(responder) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
             responder.respond(respond(
                 503,
@@ -980,7 +1023,8 @@ fn host_offer(sh: &Arc<Shared>) -> Answer {
     Answer::json(
         200,
         &json!({"host": sh.backend.host_name, "play": offer.start, "stop": offer.stop, "locate": offer.position,
-            "play_text": text(Kind::Play), "stop_text": text(Kind::Stop), "locate_text": text(Kind::Locate)}),
+            "play_text": text(Kind::Play), "stop_text": text(Kind::Stop), "locate_text": text(Kind::Locate),
+            "fault": crate::playback::shell_fault()}),
     )
 }
 
@@ -991,13 +1035,28 @@ fn host_request(sh: &Arc<Shared>, kind: crate::playback::Kind, args: &Value) -> 
     use crate::playback::{plan, Fault, HostAt, Plan};
     let fault = Fault::read();
     let offer = (sh.backend.playback_offer)();
-    let page_s = args.get("t").and_then(Value::as_f64);
+    let track = args.get("track").and_then(Value::as_str).unwrap_or("");
+    // the regions of the selected track decide (stems of one length lie at the same source time);
+    // no track, or a track with no region: the rule over all regions
+    let (seqs, len_s) = (sh.backend.track_info)(track);
+    let page_raw = args.get("t").and_then(Value::as_f64);
+    let page_s = page_raw.and_then(|t| crate::playback::bound_time(t, Some(len_s)));
+    if page_raw.is_some() && page_s.is_none() && kind == crate::playback::Kind::Locate {
+        return Answer::json(
+            200,
+            &json!({"ok": false, "reason": "that time is out of range", "confirm_ms": 0}),
+        );
+    }
     let snap = crate::transport::read().filter(|s| s.has_position);
     let host_at = snap.map(|s| HostAt {
         song_s: s.pos_s,
         playing: s.playing,
     });
-    let regions = (sh.backend.regions)();
+    let regions = if track.is_empty() {
+        (sh.backend.regions)()
+    } else {
+        crate::playback::regions_for(&(sh.backend.regions)(), &seqs)
+    };
     let confirm = if crate::test_switch("DS_ARA_PLAYBACK_FAULT").as_deref() == Ok("no-fallback") {
         0
     } else {
@@ -1024,18 +1083,41 @@ fn host_request(sh: &Arc<Shared>, kind: crate::playback::Kind, args: &Value) -> 
         }
         Plan::Send { calls, song_s, rule } => {
             let calls_made = calls.clone();
-            let made = if crate::test_switch("DS_ARA_PLAYBACK_FAULT").as_deref() == Ok("direct") {
+            use crate::playback::Outcome;
+            let outcome = if crate::test_switch("DS_ARA_PLAYBACK_FAULT").as_deref() == Ok("direct") {
                 // the fault run: the request thread calls the host itself (the thread the ARA rule keeps out)
                 PLAYBACK_OFF_MAIN.fetch_add(1, Ordering::SeqCst);
-                Some((sh.backend.playback_run)(&calls))
+                HostRun::Outcome(Outcome::Made((sh.backend.playback_run)(&calls)))
             } else {
-                run_on_main(sh, calls)
+                run_on_main(sh, kind, calls)
             };
-            let Some(made) = made else {
-                return Answer::json(
-                    200,
-                    &json!({"ok": false, "reason": "the host did not take the request in time", "confirm_ms": 0}),
-                );
+            let made = match outcome {
+                HostRun::Outcome(Outcome::Made(n)) => n,
+                // a newer request passed this one: no error, the page does not react
+                HostRun::Outcome(Outcome::Superseded) => {
+                    return Answer::json(
+                        200,
+                        &json!({"ok": false, "superseded": true, "reason": "superseded", "confirm_ms": 0}),
+                    )
+                }
+                HostRun::Outcome(Outcome::Closed) => {
+                    return Answer::json(
+                        200,
+                        &json!({"ok": false, "reason": "the editor is closed", "confirm_ms": 0}),
+                    )
+                }
+                HostRun::Busy => {
+                    return Answer::json(
+                        200,
+                        &json!({"ok": false, "reason": "too many requests wait for the host", "confirm_ms": 0}),
+                    )
+                }
+                HostRun::Timeout => {
+                    return Answer::json(
+                        200,
+                        &json!({"ok": false, "reason": "the host did not take the request in time", "confirm_ms": 0}),
+                    )
+                }
             };
             if !sh.request_row[k].swap(true, Ordering::SeqCst) {
                 let rate = snap.map(|s| s.rate);
@@ -1062,30 +1144,56 @@ fn host_request(sh: &Arc<Shared>, kind: crate::playback::Kind, args: &Value) -> 
     }
 }
 
-/// Hand the calls to the host's main thread and wait for the answer, at most [`MAIN_WAIT`]. A job
-/// that the main thread runs after the wait does nothing (the flag): the page was told "not taken".
-fn run_on_main(sh: &Arc<Shared>, calls: Vec<crate::playback::Call>) -> Option<usize> {
-    let (tx, rx) = std::sync::mpsc::channel::<usize>();
+/// What became of a request to the host's main thread, for the request thread.
+enum HostRun {
+    Outcome(crate::playback::Outcome),
+    /// Too many requests wait: answered at once.
+    Busy,
+    /// The main thread did not take it in time.
+    Timeout,
+}
+
+/// Hand the calls to the host's main thread through the queue of the editor and wait for the answer,
+/// at most [`MAIN_WAIT`]. The queue keeps the order of arrival, drops a locate that a newer locate
+/// passes, and makes no call after the editor closed. A job that the main thread meets after the
+/// wait does nothing (the flag): the page was told "not taken".
+fn run_on_main(sh: &Arc<Shared>, kind: crate::playback::Kind, calls: Vec<crate::playback::Call>) -> HostRun {
+    use crate::playback::Job;
+    let (tx, rx) = std::sync::mpsc::channel();
     let late = Arc::new(AtomicBool::new(false));
-    let late2 = Arc::clone(&late);
-    let run = Arc::clone(&sh.backend.playback_run);
-    on_main(Box::new(move || {
-        if late2.load(Ordering::SeqCst) {
-            return;
+    let job = Job {
+        seq: REQ_SEQ.with(|c| c.get()),
+        kind,
+        calls,
+        reply: tx,
+        late: Arc::clone(&late),
+    };
+    match sh.host_queue.push(job) {
+        Err(_) => return HostRun::Busy,
+        Ok(true) => {
+            let sh2 = Arc::clone(sh);
+            on_main(Box::new(move || {
+                main_check("playback request");
+                let run = Arc::clone(&sh2.backend.playback_run);
+                let sh3 = Arc::clone(&sh2);
+                sh2.host_queue
+                    .drain(&move || sh3.closed.load(Ordering::SeqCst), &mut |calls| {
+                        if on_main_thread() {
+                            PLAYBACK_ON_MAIN.fetch_add(1, Ordering::SeqCst);
+                        } else {
+                            PLAYBACK_OFF_MAIN.fetch_add(1, Ordering::SeqCst);
+                        }
+                        run(calls)
+                    });
+            }));
         }
-        main_check("playback request");
-        if on_main_thread() {
-            PLAYBACK_ON_MAIN.fetch_add(1, Ordering::SeqCst);
-        } else {
-            PLAYBACK_OFF_MAIN.fetch_add(1, Ordering::SeqCst);
-        }
-        let _ = tx.send(run(&calls));
-    }));
+        Ok(false) => {}
+    }
     match rx.recv_timeout(MAIN_WAIT) {
-        Ok(n) => Some(n),
+        Ok(o) => HostRun::Outcome(o),
         Err(_) => {
             late.store(true, Ordering::SeqCst);
-            None
+            HostRun::Timeout
         }
     }
 }
@@ -1357,6 +1465,8 @@ impl Editor {
             run_channels,
             closed: AtomicBool::new(false),
             inflight: AtomicUsize::new(0),
+            host_queue: crate::playback::Queue::default(),
+            req_seq: std::sync::atomic::AtomicU64::new(0),
             page_dir: page.map(|(d, _)| d),
             n,
             opened_head,
@@ -1547,6 +1657,7 @@ fn backend_of(plugin: &Plugin) -> Backend {
             regions_gen: Arc::new(|| 0),
             playback_offer: Arc::new(crate::playback::Offer::default),
             playback_run: Arc::new(|_| 0),
+            track_info: Arc::new(|_| (Vec::new(), 0.0)),
             host_name: plugin.host_name.clone(),
             doc_id: "unbound".to_string(),
         },
@@ -1776,6 +1887,29 @@ mod tests {
         assert_eq!(class_of("app_ready"), Class::Shell);
         assert!(writes_outside("export_all", &json!({"dest": "/tmp/x"})));
         assert!(!writes_outside("export_all", &json!({"dest": null})));
+    }
+
+    #[test]
+    fn requests_to_the_host_do_not_use_the_budget_of_the_app_commands() {
+        assert!(!counts_inflight("invoke/plugin_host_locate"));
+        assert!(!counts_inflight("invoke/plugin_host_offer"));
+        assert!(counts_inflight("invoke/events_get"));
+        assert!(counts_inflight("transport"));
+        // a blocked main thread: 8 host requests wait and the queue refuses the rest at once, while
+        // the app commands are admitted as long as their own budget holds
+        let mut counted = 0usize;
+        for _ in 0..200 {
+            if counts_inflight("invoke/plugin_host_locate") {
+                counted += 1;
+            }
+        }
+        assert_eq!(counted, 0, "200 host requests use none of the 96 slots");
+        assert!(admit(true, MAX_INFLIGHT));
+        assert!(!admit(true, MAX_INFLIGHT + 1));
+        assert!(
+            admit(false, MAX_INFLIGHT + 50),
+            "a host request is never refused by the app budget"
+        );
     }
 
     #[test]

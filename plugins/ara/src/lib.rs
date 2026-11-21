@@ -430,6 +430,29 @@ impl DocShared {
         self.id.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// The sources of a track (empty name: every source) and the longest of their lengths in
+    /// seconds: the page's locate uses the regions of the selected track and stays inside the source.
+    fn track_info(&self, name: &str) -> (Vec<usize>, f64) {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let mut seqs = Vec::new();
+        let mut longest = 0.0f64;
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let mine = name.is_empty() || s.track.lock().map(|t| t.as_deref() == Some(name)).unwrap_or(false);
+            if mine {
+                let p = s.props();
+                if p.sample_rate > 0.0 {
+                    longest = longest.max(p.sample_count as f64 / p.sample_rate);
+                }
+                seqs.push(s.seq);
+            }
+        }
+        (seqs, longest)
+    }
+
     /// The calls of the page to the host's playback controller (M1b7). The caller is on the host's
     /// main thread: the ARA calls of the plugin to the host go there. Answers the number of calls
     /// made (0 when the host took its controller away, or gives none).
@@ -1896,6 +1919,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let g2 = doc.clone();
     let p1 = doc.clone();
     let p2 = doc.clone();
+    let p3 = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
@@ -1906,6 +1930,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
         regions_gen: Arc::new(move || g2.region_gen.load(Ordering::SeqCst)),
         playback_offer: Arc::new(move || *p1.playback_offer.lock().unwrap_or_else(|e| e.into_inner())),
         playback_run: Arc::new(move |calls: &[playback::Call]| p2.run_playback(calls)),
+        track_info: Arc::new(move |name: &str| p3.track_info(name)),
         host_name: String::new(),
         doc_id: doc.id(),
     }

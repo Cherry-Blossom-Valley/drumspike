@@ -181,6 +181,32 @@
     // the first message of the host and the answer to the offer: the page is ready for a request
     for (var i = 0; i < 100 && !(tr.delivered >= 1 && tr.offer); i++) await sleepMs(100);
     var first = tr.delivered >= 1;
+    if (scenario === "drag") {   // M1b7 X3: a drag in the ruler with a host that does not answer: the fallback must not jump under the pointer
+      var ruler = document.getElementById("ruler"), rc = ruler.getBoundingClientRect(), during = [];
+      function ev(type, f) { return new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: rc.left + rc.width * f, clientY: rc.top + rc.height / 2 }); }
+      ruler.dispatchEvent(ev("mousedown", 0.5));
+      for (var k = 0; k < 15; k++) {   // 3 s of drag, a move every 200 ms (the fallback of the first locate is due at 1 s)
+        window.dispatchEvent(ev("mousemove", 0.4 + 0.2 * ((k % 5) / 5)));
+        for (var q = 0; q < 8; q++) { await sleepMs(25); during.push([Date.now(), PH.v]); }   // a sample every 25 ms: a jump back between two moves shows
+      }
+      var held = PH.v;
+      window.dispatchEvent(ev("mouseup", 0.5));
+      await sleepMs(1800);
+      stopped = true;
+      post({ kind: "playback", scenario: scenario, visibility: document.visibilityState, samples: rows, steps: [{ name: "drag", during: during, held: held, pos_after: PH.v, calls: tr.calls.length }], calls: tr.calls, seen: tr.seen,
+        offer: tr.offer, first_message: first, host_mode: !!B.hostMode, wired: true });
+      return;
+    }
+    if (scenario === "late") {   // M1b7 X4: the host starts 2.5 s after the request, after the page gave up
+      await step("locate-stopped", function () { S.playhead = 1.2; }, 600);
+      await step("play", function () { play(); }, 2300);   // not awaited: the snapshot is taken 2.3 s after the call
+      var gaveUp = { msg: text("stMsg"), playing: !!S.playing };
+      await sleepMs(3000);
+      stopped = true;
+      post({ kind: "playback", scenario: scenario, visibility: document.visibilityState, samples: rows, steps: steps, gave_up: gaveUp, final_playing: !!S.playing, final_msg: text("stMsg"),
+        calls: tr.calls, seen: tr.seen, offer: tr.offer, first_message: first, host_mode: !!B.hostMode, wired: true });
+      return;
+    }
     await step("locate-stopped", function () { S.playhead = 1.2; }, wait);
     await step("play", function () { return play(); }, wait + 200);
     await step("locate-playing", function () { S.playhead = 0.6; }, wait + 200);
