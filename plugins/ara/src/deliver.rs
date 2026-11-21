@@ -26,11 +26,11 @@ pub struct ExportRegion {
 
 pub type ExportRegionsFn = Arc<dyn Fn() -> Vec<(usize, ExportRegion)> + Send + Sync>;
 
-/// The regions of one source for the export (D1 of the review): `round` is what the last analysis round saw (`None`:
-/// no round yet), `live` the regions the host holds now as `(id, record)`, `lens` the length in the song by region id.
-/// The position in the source comes from the round (the hits belong to it), the position in the song from the live
-/// region of the same slice; a round region with no live one is gone and left out; a live region with no round entry
-/// uses its own values. `stale` (the fault run) takes the round alone, as the notes of #532 do.
+/// The regions of one source for the export. The hits are in source time, so the LIVE regions alone give the whole
+/// mapping (live slice, live position in the song, live length): a region the user trimmed or moved in the DAW needs
+/// no new analysis round. `round` (what the last round saw) is used only when the source has no live region; `stale`
+/// (the fault run) takes the round alone, as the notes of #532 do, so a moved clip exports at its old place.
+/// `lens` is the length in the song by region id.
 #[must_use]
 pub fn merge_regions(
     round: Option<&[crate::service::RegionRec]>,
@@ -38,20 +38,8 @@ pub fn merge_regions(
     lens: &HashMap<u64, f64>,
     stale: bool,
 ) -> Vec<ExportRegion> {
-    let play = |id: u64, rec: &crate::service::RegionRec| lens.get(&id).copied().unwrap_or(rec.dur_mod);
-    let Some(round) = round else {
-        return live
-            .iter()
-            .map(|(id, r)| ExportRegion {
-                start_mod: r.start_mod,
-                dur_mod: r.dur_mod,
-                start_play: r.start_play,
-                dur_play: play(*id, r),
-            })
-            .collect();
-    };
-    if stale {
-        return round
+    let from_round = |round: &[crate::service::RegionRec]| -> Vec<ExportRegion> {
+        round
             .iter()
             .map(|r| ExportRegion {
                 start_mod: r.start_mod,
@@ -59,36 +47,22 @@ pub fn merge_regions(
                 start_play: r.start_play,
                 dur_play: r.dur_mod,
             })
-            .collect();
+            .collect()
+    };
+    if stale {
+        return round.map(from_round).unwrap_or_default();
     }
-    let mut used = vec![false; live.len()];
-    let mut out = Vec::new();
-    for r in round {
-        let hit = live
-            .iter()
-            .enumerate()
-            .find(|(i, (_, l))| !used[*i] && l.start_mod == r.start_mod && l.dur_mod == r.dur_mod);
-        if let Some((i, (id, l))) = hit {
-            used[i] = true;
-            out.push(ExportRegion {
-                start_mod: r.start_mod,
-                dur_mod: r.dur_mod,
-                start_play: l.start_play,
-                dur_play: play(*id, l),
-            });
-        }
+    if live.is_empty() {
+        return round.map(from_round).unwrap_or_default();
     }
-    for (i, (id, l)) in live.iter().enumerate() {
-        if !used[i] {
-            out.push(ExportRegion {
-                start_mod: l.start_mod,
-                dur_mod: l.dur_mod,
-                start_play: l.start_play,
-                dur_play: play(*id, l),
-            });
-        }
-    }
-    out
+    live.iter()
+        .map(|(id, r)| ExportRegion {
+            start_mod: r.start_mod,
+            dur_mod: r.dur_mod,
+            start_play: r.start_play,
+            dur_play: lens.get(id).copied().unwrap_or(r.dur_mod),
+        })
+        .collect()
 }
 
 type NamesFn = Arc<dyn Fn() -> HashMap<String, String> + Send + Sync>;
@@ -627,41 +601,30 @@ mod tests {
     }
 
     #[test]
-    fn a_moved_region_exports_at_its_live_song_position_with_the_hits_of_the_round() {
+    fn a_moved_or_trimmed_region_exports_through_its_live_values() {
         let round = [rec(0.5, 2.0, 10.0), rec(5.0, 1.0, 20.0)];
-        // the host moved the first region to 30 s (no new round); the second one was deleted; a new one appeared
-        let live = [(7u64, rec(0.5, 2.0, 30.0)), (9, rec(8.0, 1.0, 40.0))];
-        let lens: HashMap<u64, f64> = [(7, 2.0), (9, 2.0)].into_iter().collect();
+        // the host moved the first region to 30 s, trimmed it to [1.0, 2.0) at 30.5 s, and deleted the second (no new round)
+        let live = [(7u64, rec(1.0, 1.0, 30.5))];
+        let lens: HashMap<u64, f64> = [(7, 1.0)].into_iter().collect();
         let got = merge_regions(Some(&round), &live, &lens, false);
         assert_eq!(
             got,
-            vec![
-                ExportRegion {
-                    start_mod: 0.5,
-                    dur_mod: 2.0,
-                    start_play: 30.0,
-                    dur_play: 2.0
-                },
-                ExportRegion {
-                    start_mod: 8.0,
-                    dur_mod: 1.0,
-                    start_play: 40.0,
-                    dur_play: 2.0
-                },
-            ]
+            vec![ExportRegion {
+                start_mod: 1.0,
+                dur_mod: 1.0,
+                start_play: 30.5,
+                dur_play: 1.0
+            }]
         );
+        // a stretched region carries its play length
+        let lens: HashMap<u64, f64> = [(7, 2.5)].into_iter().collect();
+        assert_eq!(merge_regions(Some(&round), &live, &lens, false)[0].dur_play, 2.5);
+        // no live region: the round is used
+        assert_eq!(merge_regions(Some(&round), &[], &HashMap::new(), false).len(), 2);
         // no round yet: the live regions
-        assert_eq!(merge_regions(None, &live, &lens, false).len(), 2);
-        // the fault run keeps the song position of the round
+        assert_eq!(merge_regions(None, &live, &lens, false).len(), 1);
+        // the fault run keeps the round
         assert_eq!(merge_regions(Some(&round), &live, &lens, true)[0].start_play, 10.0);
-        // two regions of one slice are matched one by one
-        let two = merge_regions(
-            Some(&[rec(0.0, 1.0, 1.0), rec(0.0, 1.0, 5.0)]),
-            &[(1, rec(0.0, 1.0, 11.0)), (2, rec(0.0, 1.0, 15.0))],
-            &HashMap::new(),
-            false,
-        );
-        assert_eq!(two.iter().map(|r| r.start_play).collect::<Vec<_>>(), vec![11.0, 15.0]);
     }
 
     #[test]

@@ -603,6 +603,15 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 .and_then(|(i, p)| Some((i.parse().ok()?, p.parse().ok()?)))
         })
         .collect();
+    // `--trim-region <i>=<start>,<length>`: region i keeps the source at the same song time but shows only that slice
+    let trims: Vec<(usize, f64, f64)> = args_list(rest, "--trim-region")
+        .iter()
+        .filter_map(|v| {
+            let (i, r) = v.split_once('=')?;
+            let (a, d) = r.split_once(',')?;
+            Some((i.parse().ok()?, a.parse().ok()?, d.parse().ok()?))
+        })
+        .collect();
     let region_spec = args_value(rest, "--region").and_then(|v| parse_region(&v).ok());
     let destroy_late: Option<usize> = args_value(rest, "--destroy-late").and_then(|v| v.parse().ok());
     let archive_window = args_value(rest, "--archive-window");
@@ -1109,6 +1118,9 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     for (i, p) in &shifts {
                         shift_region(doc.inst, doc.state, *i, *p);
                     }
+                    for (i, a, d) in &trims {
+                        trim_region(doc.inst, doc.state, *i, *a, *d);
+                    }
                 }
                 if mode == "names" && !names_handled && count_rows("page_report", Some("names")) > names_before {
                     names_handled = true;
@@ -1316,13 +1328,14 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         ((*lib.entry).deinit.expect("deinit"))();
         let audio = audio_stats.lock().map(|s| *s).unwrap_or_default();
         println!(
-            "{{\"event\":\"editor_run\",\"mode\":{mode:?},\"cycles\":{cycles},\"opened\":{opened},\"ok\":{},\"why\":{:?},\"window_visible\":{window_visible},\"rss_closed_mb\":{rss_closed:.1},\"rss_open_mb\":{rss_open:.1},\"rss_after_mb\":{rss_after:.1},\"audio_blocks\":{},\"audio_overruns\":{},\"audio_worst_us\":{},\"audio_budget_us\":{}}}",
+            "{{\"event\":\"editor_run\",\"mode\":{mode:?},\"cycles\":{cycles},\"opened\":{opened},\"ok\":{},\"why\":{:?},\"window_visible\":{window_visible},\"rss_closed_mb\":{rss_closed:.1},\"rss_open_mb\":{rss_open:.1},\"rss_after_mb\":{rss_after:.1},\"audio_blocks\":{},\"audio_overruns\":{},\"audio_worst_us\":{},\"audio_budget_us\":{},\"content\":{}}}",
             failed.is_none(),
             failed.clone().unwrap_or_default(),
             audio.0,
             audio.1,
             audio.2,
-            audio.3
+            audio.3,
+            content_counters()
         );
         if failed.is_none() {
             0

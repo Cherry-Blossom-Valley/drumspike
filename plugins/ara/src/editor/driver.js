@@ -394,6 +394,8 @@
     function err(e) { return { code: e && e.code, message: e && e.message }; }
     var png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
     // the host may move a region in playback time now (no new round): the export must follow it
+    out.events_before = {};
+    for (var b = 0; b < names.length; b++) out.events_before[names[b]] = JSON.parse((await raw("events_get", { sid: sid, name: names[b] })).text).events;
     post({ kind: "delivery-ready" });
     await new Promise(function (r) { setTimeout(r, 2500); });
     out.events = {};    for (var i = 0; i < names.length; i++) out.events[names[i]] = JSON.parse((await raw("events_get", { sid: sid, name: names[i] })).text).events;

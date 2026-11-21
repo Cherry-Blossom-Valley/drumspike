@@ -487,3 +487,21 @@ Hand check steps (for the owner, in a DAW):
 6. Drag the spike tile onto an audio track, at the session start. Check the same, and that the spike file does not start later than song position 0.
 7. Move a clip in the DAW, do not analyse again, export again: the notes and spikes follow the clip.
 8. Bounce the drag-in track, measure the offset against the clip in samples, and write it down.
+
+## Round 3
+
+- The export uses the LIVE regions of a source alone: the hits are in source time, so the live slice, the live song position and the live
+  length give the whole mapping. A region that the user trimmed or moved in the DAW needs no new analysis round; a hit outside the live slice is
+  left out and counted. The round's regions are used only when the source has no live region. There is no reason to match by region id: a hit
+  that lies outside the live slice is not in the region, and a live region that lies where no hit was found simply holds none. A trim in the DAW starts a new analysis
+  round in this plugin (the rule of M1b4), so after the round the live and the round regions agree and the hits are those of the live slice. The
+  fault `stale-regions` therefore shows only for a move in playback time, which starts no round (stage part "moved"). The live-only rule for a
+  trim is covered by the unit test `a_moved_or_trimmed_region_exports_through_its_live_values`; the stage part "trimmed" proves that every
+  note of the files lies in the live slice at its song position and that the trim left fewer hits. There is no fault run for the trim part.
+- The test host has a content access controller (`--musical tempo`: 120 BPM for 10 s, then 100 BPM, and signatures 4/4 and 3/4 from bar 5;
+  `--musical no-tempo`: a controller that says it has no tempo or bar content). Counters in the summary line of the host say how many
+  readers the plugin made and gave back and on which thread. Stage `delivery` (parts "ara"): the row `musical_context` has the entries, the page is told
+  source `ara`, readers created equal readers destroyed, and the exported MIDI files carry the tempo events 500000 and 600000 and the signatures.
+  The second part (no tempo content) shows the fallback with no reader made. Fault `keep-reader`.
+- The `any-path` fault run of the drag ends in a 504. The queued job did not answer in time. We do not know why; it was not investigated.
+  The stage only needs the answer not to be the refusal 403.

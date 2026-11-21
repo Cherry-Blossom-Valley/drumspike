@@ -99,7 +99,9 @@ pub unsafe fn read(host: *const ARADocumentControllerHostInstance, ctx: usize) -
                     });
                 }
             }
-            destroy(cref, r);
+            if !keep_reader() {
+                destroy(cref, r);
+            }
         }
     }
     if bars_ok {
@@ -123,7 +125,9 @@ pub unsafe fn read(host: *const ARADocumentControllerHostInstance, ctx: usize) -
                     });
                 }
             }
-            destroy(cref, r);
+            if !keep_reader() {
+                destroy(cref, r);
+            }
         }
     }
     let (tempo, reason, notes) = if !tempo_ok {
@@ -142,6 +146,11 @@ pub unsafe fn read(host: *const ARADocumentControllerHostInstance, ctx: usize) -
         "reason": reason, "notes": notes, "capped": capped,
         "bpm": tempo.as_ref().map(|c| c.map.bpm), "steps": tempo.as_ref().map(|c| c.map.steps.len())});
     Snapshot { tempo, report }
+}
+
+/// The fault run `keep-reader`: the plugin does not give the reader back.
+fn keep_reader() -> bool {
+    crate::test_switch("DS_ARA_DELIVERY_FAULT").as_deref() == Ok("keep-reader")
 }
 
 trait NullRef {

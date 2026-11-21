@@ -6649,10 +6649,15 @@ DELIVERY_RATES = {safe_name(stem_of(n)): r for n, r, *_ in SPEC}
 
 def midi_note_times(path: Path) -> list:
     """The times in seconds of the note-ons of a standard MIDI file, through its own tempo events."""
+    return midi_parse(path)[0]
+
+
+def midi_parse(path: Path) -> tuple:
+    """`(note times in seconds, tempo events in microseconds per quarter, time signatures)` of a standard MIDI file."""
     b = path.read_bytes()
     assert b[:4] == b"MThd"
     ppq = int.from_bytes(b[12:14], "big")
-    pos, tempi, notes = 14, [(0, 500000)], []
+    pos, tempi, notes, sigs = 14, [(0, 500000)], [], []
     while pos < len(b):
         assert b[pos:pos + 4] == b"MTrk"
         n = int.from_bytes(b[pos + 4:pos + 8], "big")
@@ -6670,6 +6675,8 @@ def midi_note_times(path: Path) -> list:
                 kind, ln = b[i + 1], b[i + 2]
                 if kind == 0x51:
                     tempi.append((tick, int.from_bytes(b[i + 3:i + 3 + ln], "big")))
+                if kind == 0x58:
+                    sigs.append((tick, b[i + 3], 1 << b[i + 4]))
                 i += 3 + ln
                 continue
             if b[i] & 0x80:
@@ -6693,7 +6700,7 @@ def midi_note_times(path: Path) -> list:
             t += (tk - t0) * us / (ppq * 1e6)
             t0, us = tk, u
         out.append(t + (nt - t0) * us / (ppq * 1e6))
-    return sorted(out)
+    return sorted(out), [u for _, u in tempi[1:]], sigs
 
 
 def wav_spikes(path: Path) -> dict:
@@ -6726,7 +6733,7 @@ def wav_spikes(path: Path) -> dict:
     return {"rate": rate, "frames": len(xs) // (ch if tag == 3 else 1), "tref": tref, "starts": starts}
 
 
-def delivery_run(label: str, env: dict | None = None, pressed: bool = True, region: tuple | None = DELIVERY_REGION, shift: float | None = None) -> dict:
+def delivery_run(label: str, env: dict | None = None, pressed: bool = True, region: tuple | None = DELIVERY_REGION, shift: float | None = None, extra: list | None = None) -> dict:
     out_dir = OUT / f"delivery-out-{label}"
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -6739,9 +6746,9 @@ def delivery_run(label: str, env: dict | None = None, pressed: bool = True, regi
     args = ["--regions-all", ",".join(str(x) for x in region)] if region else ["--no-regions"]
     if shift is not None:   # the host moves every region in playback time after the page has booted: no new analysis round
         args += ["--shift-region", *[f"{i}={shift}" for i in range(4)]]
-    rc, summary, rows = run_phase(f"delivery-{label}", "delivery", CLAP, e, args + ["--arg", str(OUT)])
+    rc, summary, rows = run_phase(f"delivery-{label}", "delivery", CLAP, e, args + (extra or []) + ["--arg", str(OUT)])
     reps = page_reports(rows, "delivery")
-    return {"rc": rc, "rows": rows, "rep": reps[0] if reps else {}, "dir": out_dir.resolve()}
+    return {"rc": rc, "rows": rows, "rep": reps[0] if reps else {}, "dir": out_dir.resolve(), "summary": summary}
 
 
 def delivery_parts(d: dict) -> dict:
@@ -6796,6 +6803,14 @@ def delivery_parts(d: dict) -> dict:
                                          f"{n_spikes} spikes at 0 samples difference from the song position; differences: {bad_spike}")
     parts["delivery-time-reference"] = (not bad_ref and n_spikes > 0, f"the bext time reference of every spike file is 0; differences: {bad_ref}")
     single = r.get("exported_single") or {}
+    if region and d.get("check_left"):
+        # a trim in the host starts a new analysis round (M1b4), so the hits are those of the live slice: every note of the files lies inside
+        # the slice at its song position, and the trim left fewer hits than the session had before it
+        before = sum(len(v) for v in (r.get("events_before") or {}).values())
+        lo, hi = region[2], region[2] + region[1]
+        notes = [t for k in names for t in midi_note_times(folder / f"{(r.get('display') or {}).get(k, k)}_spike.mid")]
+        parts["delivery-trim-range"] = (bool(notes) and all(lo - 1e-4 <= t <= hi + 1e-4 for t in notes) and len(notes) < before,
+                                        f"{len(notes)} notes of the trimmed files (of {before} hits before the trim) all lie in the live slice, song {lo} to {hi} s")
     parts["delivery-single-file"] = (bool(single.get("midi_file")) and Path(single["midi_file"]).is_file(),
                                      f"the one multi-track file: {single.get('midi_file')}")
     taken = [Path(f) for f in (r.get("taken") or {}).get("files", [])]
@@ -6813,6 +6828,46 @@ def delivery_parts(d: dict) -> dict:
     return parts
 
 
+def ara_parts(d: dict, want_ara: bool) -> dict:
+    """E2 of round 3: the content access controller of the test host (two tempos, two bar signatures) or one with no tempo content."""
+    r, rows = d["rep"], d["rows"]
+    c = (d.get("summary") or {}).get("content") or {}
+    row = next((x for x in rows if x.get("event") == "musical_context" and x.get("controller") is True), {})
+    t = r.get("tempo") or {}
+    parts: dict = {}
+    if want_ara:
+        parts["delivery-ara-source"] = (t.get("source") == "ara" and t.get("steps") == 1 and t.get("bpm") == 120 and row.get("tempo_available") is True
+                                        and row.get("entries") == 3 and row.get("bars") == 2,
+                                        f"the page is told {t}; the row musical_context: entries {row.get('entries')}, bars {row.get('bars')}, reason {row.get('reason')!r}")
+        parts["delivery-ara-reader"] = (c.get("created", 0) > 0 and c.get("created") == c.get("destroyed") and c.get("events") == 5 * (c.get("created", 0) // 2) and c.get("off_main") == 0,
+                                        f"the plugin made {c.get('created')} readers and gave back {c.get('destroyed')}, read {c.get('events')} events, {c.get('off_main')} calls off the main thread")
+        folder = d["dir"]
+        mids = sorted(folder.glob("*_spike.mid"))
+        tempi, sigs, bad = [], [], []
+        for m in mids:
+            _, tempi, sigs = midi_parse(m)
+            if tempi != [500000, 600000] or sorted({(n, dn) for _, n, dn in sigs}) != [(3, 4), (4, 4)]:
+                bad.append((m.name, tempi, sigs))
+        parts["delivery-ara-midi"] = (bool(mids) and not bad,
+                                      f"{len(mids)} MIDI files carry the host map: tempo events 500000 and 600000 microseconds per quarter and the signatures 4/4 and 3/4; differences {bad}")
+    else:
+        parts["delivery-ara-fallback"] = (t.get("source") != "ara" and row.get("tempo_available") is False and row.get("reason") == "no-tempo-content"
+                                          and c.get("available", 0) >= 1 and c.get("created") == 0 and c.get("events") == 0,
+                                          f"a controller with no tempo content: source {t.get('source')}, reason {row.get('reason')!r}, {c.get('available')} availability questions, {c.get('created')} readers")
+    return parts
+
+
+def _with_region(d: dict) -> dict:
+    d["region"] = DELIVERY_REGION
+    return d
+
+
+def delivery_ara_parts() -> bool:
+    ok = print_parts("-ara", ara_parts(dd := _with_region(delivery_run("clap-ara", extra=["--musical", "tempo"])), True) | {k: v for k, v in delivery_parts(dd).items() if k in ("delivery-midi-positions", "delivery-spike-positions")})
+    ok = print_parts("-ara-none", ara_parts(delivery_run("clap-ara-none", extra=["--musical", "no-tempo"]), False)) and ok
+    return ok
+
+
 def stage_delivery() -> bool:
     if not HOST.exists() or not CLAP.exists():
         return pass_fail("delivery", False, "no host or bundle: run check.sh build")
@@ -6823,6 +6878,12 @@ def stage_delivery() -> bool:
     dm = delivery_run("clap-moved", shift=30.0)
     dm["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
     ok = print_parts("-moved", delivery_parts(dm), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
+    # E1 of round 3: a region trimmed in the host exports through its LIVE slice
+    dt = delivery_run("clap-trimmed", extra=["--trim-region", *[f"{i}=1.0,1.0" for i in range(4)]])
+    dt["region"] = (1.0, 1.0, 10.5)
+    dt["check_left"] = True
+    ok = print_parts("-trimmed", delivery_parts(dt), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions", "delivery-trim-range"]) and ok
+    ok = delivery_ara_parts() and ok
     d2 = delivery_run("clap-noregion", region=None)
     d2["region"] = None
     ok = print_parts("-no-region", delivery_parts(d2), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
@@ -6853,6 +6914,8 @@ def stage_delivery_fault() -> bool:
     d = delivery_run("fault-stale-regions", {"DS_ARA_DELIVERY_FAULT": "stale-regions"}, shift=30.0)
     d["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
     ok = fault_part("delivery-fault-stale-regions", delivery_parts(d), "delivery-midi-positions", "the song position of the last round is used: a moved clip exports at its old place") and ok
+    d = delivery_run("fault-keep-reader", {"DS_ARA_DELIVERY_FAULT": "keep-reader"}, extra=["--musical", "tempo"])
+    ok = fault_part("delivery-fault-keep-reader", ara_parts(d, True), "delivery-ara-reader", "the plugin does not give the reader back") and ok
     d = delivery_run("fault-no-button-check", {"DS_ARA_EDITOR_FAULT": "no-button-check"}, pressed=False)
     r = d["rep"]
     ok = pass_fail("delivery-fault-no-button-check", r.get("drag_ok") is True,
