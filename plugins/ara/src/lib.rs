@@ -902,12 +902,11 @@ impl DocShared {
         *cur = snap;
     }
 
-    /// M1c1: the regions for the song-time export, `(source index, region)`. The hits belong to the last round, so
-    /// `start_mod` and `dur_mod` come from the round; where the region lies in the song is read LIVE (a move in
-    /// playback time starts no round). A round region is matched with a live one of the same source by
-    /// `(start_mod, dur_mod)`; a round region with no live match is gone (left out); a live region with no round
-    /// entry uses its live values.
-    fn export_region_list(&self) -> Vec<(usize, deliver::ExportRegion)> {
+    /// M1c1: the regions for the song-time export, `(source index, region)`, and the sources whose clips are all gone.
+    /// The hits are in source time, so the LIVE regions alone give the mapping (slice, song position, length): a move
+    /// or a trim in the DAW needs no new round. A source with no live region but regions at the last round is gone;
+    /// the round's regions are used only under the fault `stale-regions`.
+    fn export_region_list(&self) -> deliver::ExportRegions {
         let members: Vec<Arc<SourceState>> = self
             .members
             .lock()
@@ -916,19 +915,19 @@ impl DocShared {
         let round = self.round_regions.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let lens = self.play_len.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let stale = crate::test_switch("DS_ARA_DELIVERY_FAULT").as_deref() == Ok("stale-regions");
-        let mut out = Vec::new();
+        let mut out = deliver::ExportRegions::default();
         for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
             let live: Vec<RegionSlot> = s.regions.lock().map(|r| r.clone()).unwrap_or_default();
-            out.extend(
-                deliver::merge_regions(
-                    round.get(&s.seq).map(|(r, _)| r.as_slice()),
-                    &live.iter().map(|x| (x.id, x.rec)).collect::<Vec<_>>(),
-                    &lens,
-                    stale,
-                )
-                .into_iter()
-                .map(|r| (s.seq, r)),
+            let (list, gone) = deliver::merge_regions(
+                round.get(&s.seq).map(|(r, _)| r.as_slice()),
+                &live.iter().map(|x| (x.id, x.rec)).collect::<Vec<_>>(),
+                &lens,
+                stale,
             );
+            out.regions.extend(list.into_iter().map(|r| (s.seq, r)));
+            if gone {
+                out.gone.push(s.seq);
+            }
         }
         out
     }

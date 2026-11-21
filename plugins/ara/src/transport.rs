@@ -113,8 +113,8 @@ struct Slot {
 
 /// M1c1: the tempo of the process call (CLAP `transport.tempo` with `CLAP_TRANSPORT_HAS_TEMPO`): the newest BPM,
 /// and whether more than one value came. Atomics only, no allocation: the audio thread writes them in `note`.
-/// Keyed by the instance that sends it, like the transport slot: another instance that sends a tempo takes the slot
-/// and starts again, so two instances never mix.
+/// The newest sender and its tempo. Instances that alternate with different tempos make `varies` true; a new document
+/// ([`reset_tempo`]) clears all of it.
 static TEMPO_OWNER: AtomicU64 = AtomicU64::new(0);
 static TEMPO_BITS: AtomicU64 = AtomicU64::new(0);
 static TEMPO_VARIES: AtomicU32 = AtomicU32::new(0);
@@ -123,10 +123,8 @@ fn store_tempo(id: u64, flags: u32, bpm: f64) {
     if flags & clap_sys::events::CLAP_TRANSPORT_HAS_TEMPO == 0 || !bpm.is_finite() || bpm <= 0.0 {
         return;
     }
-    if TEMPO_OWNER.swap(id, Ordering::Relaxed) != id {
-        TEMPO_VARIES.store(0, Ordering::Relaxed);
-        TEMPO_BITS.store(0, Ordering::Relaxed);
-    }
+    // another instance that sends a different tempo makes the tempo vary; `varies` is cleared only by a new document
+    TEMPO_OWNER.store(id, Ordering::Relaxed);
     let old = TEMPO_BITS.swap(bpm.to_bits(), Ordering::Relaxed);
     if old != 0 && (f64::from_bits(old) - bpm).abs() > 1e-6 {
         TEMPO_VARIES.store(1, Ordering::Relaxed);
@@ -1137,9 +1135,24 @@ mod tests {
             Some((100.0, true)),
             "a tempo that is no number is ignored"
         );
-        // a second instance takes the slot and starts again: the first one's varying tempo is not carried over
+        // two instances that alternate with different tempos: `varies` stays set and is not lost at the change
+        reset_tempo();
+        store_tempo(1, has, 120.0);
+        store_tempo(2, has, 100.0);
+        store_tempo(1, has, 120.0);
+        assert_eq!(
+            host_tempo(),
+            Some((120.0, true)),
+            "alternating instances with two tempos vary"
+        );
+        reset_tempo();
+        store_tempo(1, has, 120.0);
         store_tempo(2, has, 120.0);
-        assert_eq!(host_tempo(), Some((120.0, false)));
+        assert_eq!(
+            host_tempo(),
+            Some((120.0, false)),
+            "two instances with the same tempo do not"
+        );
         reset_tempo();
     }
 

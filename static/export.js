@@ -104,7 +104,7 @@ function exHostNote() {
     h.source === "transport-varies" ? `MIDI tempo: the host's tempo changes, the file has one tempo, ${Math.round(h.bpm * 100) / 100} BPM` :
     "MIDI tempo: none from the host, the file has 120 BPM");
   const names = exTrackSets().names, st = (h.stretched || []).filter(n => names.includes(n));
-  if (st.length) parts.push(`${st.length} exported track${st.length === 1 ? " has" : "s have"} a region that the host stretches in time: the hits are not stretched`);
+  if (st.length) parts.push(`${st.length} exported track${st.length === 1 ? " has" : "s have"} a region that the host stretches in time: the hits follow the stretch as one linear factor; warp markers inside a clip are not followed`);
   parts.push("Files start at song position 0. Spike audio types (Audio, Both) come in a later part");
   el.textContent = parts.join(". ") + ".";
   el.classList.remove("hidden");

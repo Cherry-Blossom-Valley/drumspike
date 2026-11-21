@@ -130,17 +130,7 @@ pub unsafe fn read(host: *const ARADocumentControllerHostInstance, ctx: usize) -
             }
         }
     }
-    let (tempo, reason, notes) = if !tempo_ok {
-        (None, "no-tempo-content".to_string(), Vec::new())
-    } else {
-        match tempo_from_ara(&entries, &bars) {
-            Ok(c) => {
-                let n = c.notes.clone();
-                (Some(c), String::new(), n)
-            }
-            Err(why) => (None, why.to_string(), Vec::new()),
-        }
-    };
+    let (tempo, reason, notes) = convert(tempo_ok, capped, &entries, &bars);
     let report = json!({"event": "musical_context", "controller": true, "tempo_available": tempo_ok,
         "tempo_grade": tempo_grade, "entries": entries.len(), "bars_available": bars_ok, "bars": bars.len(),
         "reason": reason, "notes": notes, "capped": capped,
@@ -151,6 +141,30 @@ pub unsafe fn read(host: *const ARADocumentControllerHostInstance, ctx: usize) -
 /// The fault run `keep-reader`: the plugin does not give the reader back.
 fn keep_reader() -> bool {
     crate::test_switch("DS_ARA_DELIVERY_FAULT").as_deref() == Ok("keep-reader")
+}
+
+/// The map from what was read. A list that was cut at the event cap is no tempo map: the answer is no tempo with the
+/// reason `capped`, so that the fallback (the process-call tempo, then 120 BPM) runs.
+#[must_use]
+pub fn convert(
+    tempo_ok: bool,
+    capped: bool,
+    entries: &[Entry],
+    bars: &[Bar],
+) -> (Option<Converted>, String, Vec<&'static str>) {
+    if !tempo_ok {
+        return (None, "no-tempo-content".to_string(), Vec::new());
+    }
+    if capped {
+        return (None, "capped".to_string(), Vec::new());
+    }
+    match tempo_from_ara(entries, bars) {
+        Ok(c) => {
+            let n = c.notes.clone();
+            (Some(c), String::new(), n)
+        }
+        Err(why) => (None, why.to_string(), Vec::new()),
+    }
 }
 
 trait NullRef {
@@ -164,5 +178,22 @@ impl<T> NullRef for *mut T {
 impl NullRef for usize {
     fn is_null_ref(&self) -> bool {
         *self == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_list_cut_at_the_event_cap_is_no_tempo_map() {
+        let e = [Entry { t: 0.0, q: 0.0 }, Entry { t: 10.0, q: 20.0 }];
+        let (map, reason, _) = convert(true, false, &e, &[]);
+        assert!(map.is_some() && reason.is_empty());
+        let (map, reason, _) = convert(true, true, &e, &[]);
+        assert!(map.is_none());
+        assert_eq!(reason, "capped");
+        assert_eq!(convert(false, false, &e, &[]).1, "no-tempo-content");
+        assert_eq!(MAX_EVENTS, 100_000);
     }
 }

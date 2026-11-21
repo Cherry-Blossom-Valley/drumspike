@@ -24,20 +24,29 @@ pub struct ExportRegion {
     pub dur_play: f64,
 }
 
-pub type ExportRegionsFn = Arc<dyn Fn() -> Vec<(usize, ExportRegion)> + Send + Sync>;
+pub type ExportRegionsFn = Arc<dyn Fn() -> ExportRegions + Send + Sync>;
 
-/// The regions of one source for the export. The hits are in source time, so the LIVE regions alone give the whole
-/// mapping (live slice, live position in the song, live length): a region the user trimmed or moved in the DAW needs
-/// no new analysis round. `round` (what the last round saw) is used only when the source has no live region; `stale`
-/// (the fault run) takes the round alone, as the notes of #532 do, so a moved clip exports at its old place.
-/// `lens` is the length in the song by region id.
+/// The regions of every source for the export, and the sources whose clips are all gone.
+#[derive(Debug, Clone, Default)]
+pub struct ExportRegions {
+    pub regions: Vec<(usize, ExportRegion)>,
+    /// Sources that had regions at the last round and have none now (every clip was deleted in the DAW): every hit of
+    /// such a source is left out and counted. A source that never had a region keeps the identity time base.
+    pub gone: Vec<usize>,
+}
+
+/// The regions of one source for the export, and whether the source is gone. The hits are in source time, so the LIVE
+/// regions alone give the whole mapping (live slice, live position in the song, live length): a region the user trimmed
+/// or moved in the DAW needs no new analysis round. A source with NO live region but regions at the round is gone (every
+/// hit is left out); one that never had a region is the identity. `stale` (the fault run) takes the round alone, as the
+/// notes of #532 do, so a moved clip exports at its old place. `lens` is the length in the song by region id.
 #[must_use]
 pub fn merge_regions(
     round: Option<&[crate::service::RegionRec]>,
     live: &[(u64, crate::service::RegionRec)],
     lens: &HashMap<u64, f64>,
     stale: bool,
-) -> Vec<ExportRegion> {
+) -> (Vec<ExportRegion>, bool) {
     let from_round = |round: &[crate::service::RegionRec]| -> Vec<ExportRegion> {
         round
             .iter()
@@ -50,19 +59,22 @@ pub fn merge_regions(
             .collect()
     };
     if stale {
-        return round.map(from_round).unwrap_or_default();
+        return (round.map(from_round).unwrap_or_default(), false);
     }
     if live.is_empty() {
-        return round.map(from_round).unwrap_or_default();
+        return (Vec::new(), round.is_some_and(|r| !r.is_empty()));
     }
-    live.iter()
-        .map(|(id, r)| ExportRegion {
-            start_mod: r.start_mod,
-            dur_mod: r.dur_mod,
-            start_play: r.start_play,
-            dur_play: lens.get(id).copied().unwrap_or(r.dur_mod),
-        })
-        .collect()
+    (
+        live.iter()
+            .map(|(id, r)| ExportRegion {
+                start_mod: r.start_mod,
+                dur_mod: r.dur_mod,
+                start_play: r.start_play,
+                dur_play: lens.get(id).copied().unwrap_or(r.dur_mod),
+            })
+            .collect(),
+        false,
+    )
 }
 
 type NamesFn = Arc<dyn Fn() -> HashMap<String, String> + Send + Sync>;
@@ -90,11 +102,12 @@ impl ExportTime for HostTime {
                 hide_all: true,
             });
         }
+        let all = (self.regions)();
         let regions = if fault == "source-time" {
             // the fault run: the regions are left out, so the file keeps the time of the source
             Vec::new()
         } else {
-            (self.regions)()
+            all.regions
                 .into_iter()
                 .filter(|(i, _)| seqs.contains(i))
                 .map(|(_, r)| SongRegion {
@@ -105,10 +118,12 @@ impl ExportTime for HostTime {
                 })
                 .collect()
         };
+        // every source of the track lost all its clips: every hit is left out and counted, none goes out in source time
+        let gone = fault != "source-time" && regions.is_empty() && seqs.iter().all(|i| all.gone.contains(i));
         Some(SongTrack {
             regions,
             stem,
-            hide_all: false,
+            hide_all: gone,
         })
     }
 
@@ -606,7 +621,7 @@ mod tests {
         // the host moved the first region to 30 s, trimmed it to [1.0, 2.0) at 30.5 s, and deleted the second (no new round)
         let live = [(7u64, rec(1.0, 1.0, 30.5))];
         let lens: HashMap<u64, f64> = [(7, 1.0)].into_iter().collect();
-        let got = merge_regions(Some(&round), &live, &lens, false);
+        let (got, gone) = merge_regions(Some(&round), &live, &lens, false);
         assert_eq!(
             got,
             vec![ExportRegion {
@@ -616,21 +631,53 @@ mod tests {
                 dur_play: 1.0
             }]
         );
+        assert!(!gone);
         // a stretched region carries its play length
         let lens: HashMap<u64, f64> = [(7, 2.5)].into_iter().collect();
-        assert_eq!(merge_regions(Some(&round), &live, &lens, false)[0].dur_play, 2.5);
-        // no live region: the round is used
-        assert_eq!(merge_regions(Some(&round), &[], &HashMap::new(), false).len(), 2);
+        assert_eq!(merge_regions(Some(&round), &live, &lens, false).0[0].dur_play, 2.5);
         // no round yet: the live regions
-        assert_eq!(merge_regions(None, &live, &lens, false).len(), 1);
+        assert_eq!(merge_regions(None, &live, &lens, false).0.len(), 1);
         // the fault run keeps the round
-        assert_eq!(merge_regions(Some(&round), &live, &lens, true)[0].start_play, 10.0);
+        assert_eq!(merge_regions(Some(&round), &live, &lens, true).0[0].start_play, 10.0);
+    }
+
+    #[test]
+    fn a_source_whose_clips_are_all_deleted_is_gone_and_one_that_never_had_a_region_is_the_identity() {
+        let round = [rec(0.5, 2.0, 10.0)];
+        // no live region, regions at the round: gone (every hit is left out), never the round's positions
+        assert_eq!(merge_regions(Some(&round), &[], &HashMap::new(), false), (vec![], true));
+        // no region at the round and none now: the identity time base
+        assert_eq!(merge_regions(Some(&[]), &[], &HashMap::new(), false), (vec![], false));
+        assert_eq!(merge_regions(None, &[], &HashMap::new(), false), (vec![], false));
+        // the fault run keeps the old positions of the round
+        assert_eq!(merge_regions(Some(&round), &[], &HashMap::new(), true).0.len(), 1);
+        // the track of a gone source loses every hit
+        let t = HostTime {
+            regions: Arc::new(|| ExportRegions {
+                regions: vec![],
+                gone: vec![3],
+            }),
+            track_info: Arc::new(|_| (vec![3], 1.0)),
+            names: Arc::new(|| [("k".to_string(), "Floor Tom".to_string())].into_iter().collect()),
+            tempo: Arc::new(|| crate::tempo_ara::choose(None, "", None)),
+        };
+        let st = t.track("k").unwrap();
+        assert_eq!(
+            (st.hide_all, st.regions.len(), st.stem.as_deref()),
+            (true, 0, Some("Floor Tom"))
+        );
+        // a track with a source that never had a region keeps the identity
+        let t2 = HostTime {
+            track_info: Arc::new(|_| (vec![4], 1.0)),
+            ..t
+        };
+        assert!(!t2.track("k").unwrap().hide_all);
     }
 
     #[test]
     fn a_track_with_no_source_keeps_the_host_name_and_loses_every_hit() {
         let t = HostTime {
-            regions: Arc::new(Vec::new),
+            regions: Arc::new(ExportRegions::default),
             track_info: Arc::new(|_| (Vec::new(), 0.0)),
             names: Arc::new(|| [("key1".to_string(), "Snare Top".to_string())].into_iter().collect()),
             tempo: Arc::new(|| crate::tempo_ara::choose(None, "", None)),

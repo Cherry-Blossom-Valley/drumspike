@@ -50,9 +50,9 @@ Mapping of one hit with source time `t` (the time in the source, as stored in th
   to tick 0; in song time that note would be at the wrong place, so it is dropped. Both counts go into the answer
   (`outside`, new key `outside_song`) and the page says them: "N hits outside every region, M before the song
   start: not in the files".
-- A source with no playback region: identity (`s = t`); the file length is the source length. This is the rule
+- A source that never had a playback region: identity (`s = t`); the file length is the source length. A source whose clips were all deleted in the DAW is not that case: see round 3 and round 4 (every hit left out). This is the rule
   of `song_time` and `source_sample` for no region.
-- A region with a time stretch is not handled (as in m1b5): the length in the song is the length in the source.
+- A region with a time stretch: a hit follows the stretch as one linear factor (`dur_play / dur_mod`); warp markers inside a clip are not followed. The page says so. (m1b5 still maps the playhead without the stretch.)
   The note names this limit; the page does not hide it (open question 5).
 - Several sources at one offset (the usual drum session) give the same offsets; nothing special.
 
@@ -492,7 +492,7 @@ Hand check steps (for the owner, in a DAW):
 
 - The export uses the LIVE regions of a source alone: the hits are in source time, so the live slice, the live song position and the live
   length give the whole mapping. A region that the user trimmed or moved in the DAW needs no new analysis round; a hit outside the live slice is
-  left out and counted. The round's regions are used only when the source has no live region. There is no reason to match by region id: a hit
+  left out and counted. The round's regions are used only under the fault `stale-regions`. A source with no live region but regions at the last round (every clip deleted in the DAW) is gone: every hit is left out and counted in `outside_song`, and no file goes out in source time. A source that never had a region keeps the identity time base. There is no reason to match by region id: a hit
   that lies outside the live slice is not in the region, and a live region that lies where no hit was found simply holds none. A trim in the DAW starts a new analysis
   round in this plugin (the rule of M1b4), so after the round the live and the round regions agree and the hits are those of the live slice. The
   fault `stale-regions` therefore shows only for a move in playback time, which starts no round (stage part "moved"). The live-only rule for a
@@ -505,3 +505,13 @@ Hand check steps (for the owner, in a DAW):
   The second part (no tempo content) shows the fallback with no reader made. Fault `keep-reader`.
 - The `any-path` fault run of the drag ends in a 504. The queued job did not answer in time. We do not know why; it was not investigated.
   The stage only needs the answer not to be the refusal 403.
+
+## Round 4
+
+- A source whose clips are all deleted in the DAW is gone: every hit is left out and counted (`outside_song`), never exported at the old positions
+  and never in source time. The round's regions are used only under the fault `stale-regions`. Unit tests in `deliver.rs`; the crate
+  integration test covers the hide-all result. No stage part runs this case in the test host (no host flag deletes a region yet).
+- The stretch line of the dialog says that the hits follow the stretch as one linear factor and that warp markers inside a clip are not followed.
+- The process-call tempo keeps `varies` when instances alternate with different tempos; a new document clears it.
+- A list that the event cap cut is no tempo map: the answer is no tempo with the reason `capped`, so the fallback runs.
+- A drag may take the files that `export_existing` names too (relative to its `dest`).

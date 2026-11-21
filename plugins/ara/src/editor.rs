@@ -232,7 +232,7 @@ pub struct Backend {
     /// M1c1: the tracks with a region that the host stretches in time.
     pub stretched: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     /// M1c1: the regions for the song-time export (see `DocShared::export_region_list`).
-    pub export_regions: Arc<dyn Fn() -> Vec<(usize, crate::deliver::ExportRegion)> + Send + Sync>,
+    pub export_regions: Arc<dyn Fn() -> crate::deliver::ExportRegions + Send + Sync>,
 }
 
 /// The source indexes of a track and their longest length in seconds.
@@ -1056,26 +1056,49 @@ Until then NOTICE of the repository and the licence table in plugins/ara/README.
     })
 }
 
-/// Remember the files that an export or a drag take answered (`files`, `midi_file`): the drag may take only these.
-fn note_written(sh: &Arc<Shared>, answer: &Value) {
-    let mut set = sh.written.lock().unwrap_or_else(|e| e.into_inner());
-    let mut add = |p: &str| {
+/// The files that an answer of `export_all`, `export_drag_take` or `export_existing` names (`files`, `midi_file`; the
+/// names of `export_existing` are relative to its `dest`), as canonical paths of files that exist.
+fn written_paths(answer: &Value) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut add = |p: &Path| {
         if let Ok(c) = std::fs::canonicalize(p) {
-            set.insert(c);
+            out.push(c);
         }
     };
-    for f in answer
-        .get("files")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-    {
-        add(f);
+    let list = |k: &str| -> Vec<String> {
+        answer
+            .get(k)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
+    };
+    if answer.get("count").is_some() {
+        // `export_existing`: the files an earlier export left in the folder, by a name relative to `dest`
+        if let Some(dest) = answer.get("dest").and_then(Value::as_str) {
+            for f in list("files") {
+                if let Some(name) = Path::new(&f).file_name() {
+                    add(&Path::new(dest).join(name));
+                }
+            }
+        }
+    } else {
+        for f in list("files") {
+            add(Path::new(&f));
+        }
+        if let Some(m) = answer.get("midi_file").and_then(Value::as_str) {
+            add(Path::new(m));
+        }
     }
-    if let Some(m) = answer.get("midi_file").and_then(Value::as_str) {
-        add(m);
-    }
+    out
+}
+
+/// Remember the files that an export or a drag take answered: the drag may take only these.
+fn note_written(sh: &Arc<Shared>, answer: &Value) {
+    let found = written_paths(answer);
+    sh.written.lock().unwrap_or_else(|e| e.into_inner()).extend(found);
 }
 
 /// `plugin_pick_folder {title, start}`: the folder sheet on the window of the plugin view (M1c1). The answer is the
@@ -1556,7 +1579,7 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
         Some(Err(e)) => Answer::error(&e),
         Some(Ok(mut reply)) => {
             changed_after(sh, &svc, cmd, &args, &reply);
-            if matches!(cmd, "export_all" | "export_drag_take") {
+            if matches!(cmd, "export_all" | "export_drag_take" | "export_existing") {
                 if let Reply::Json(v) = &reply {
                     note_written(sh, v);
                 }
@@ -2025,7 +2048,7 @@ fn backend_of(plugin: &Plugin) -> Backend {
             display_names: Arc::new(std::collections::HashMap::new),
             tempo: Arc::new(|| crate::tempo_ara::choose(None, "no-document", None)),
             stretched: Arc::new(Vec::new),
-            export_regions: Arc::new(Vec::new),
+            export_regions: Arc::new(crate::deliver::ExportRegions::default),
         },
     }
 }
@@ -2257,6 +2280,27 @@ mod tests {
         assert_eq!(class_of("app_ready"), Class::Shell);
         assert!(writes_outside("export_all", &json!({"dest": "/tmp/x"})));
         assert!(!writes_outside("export_all", &json!({"dest": null})));
+    }
+
+    #[test]
+    fn the_files_of_an_export_a_drag_take_and_export_existing_may_be_dragged() {
+        let dir = std::env::temp_dir().join(format!("ds-written-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a_spike.mid"), dir.join("b_spike.wav"));
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::write(&b, b"y").unwrap();
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap();
+        // export_all: absolute names and the multi-track file
+        let got = written_paths(&json!({"files": [a.display().to_string()], "midi_file": b.display().to_string()}));
+        assert_eq!(got, vec![canon(&a), canon(&b)]);
+        // export_existing: names relative to dest, and a name that is not there adds nothing
+        let got = written_paths(
+            &json!({"count": 2, "files": ["Exports/a_spike.mid", "gone.mid"], "dest": dir.display().to_string()}),
+        );
+        assert_eq!(got, vec![canon(&a)]);
+        assert!(written_paths(&json!({"files": []})).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
