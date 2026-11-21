@@ -1612,13 +1612,14 @@ impl Editor {
     /// The editor closes: the page stops, the web view leaves the host's view and stays here.
     fn detach(&self) {
         main_check("detach");
+        // the monitors go whether the editor was opened or not (an editor that was made and never opened has them too)
+        crate::keys::unwatch(std::mem::take(&mut *self.monitor.borrow_mut()));
         let shared = self.current.lock().unwrap_or_else(|e| e.into_inner()).take();
         let Some(shared) = shared else { return };
         shared.closed.store(true, Ordering::SeqCst);
         let _ = self.webview.load_url("about:blank");
         unsafe {
             let _: () = msg_send![&*self.shield, removeFromSuperview];
-            crate::keys::unwatch(std::mem::take(&mut *self.monitor.borrow_mut()));
         }
         CLOSED.fetch_add(1, Ordering::SeqCst);
         session().log(

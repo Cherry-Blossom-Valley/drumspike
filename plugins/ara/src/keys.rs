@@ -542,6 +542,34 @@ fn current_key_event_is_ours_old(this: &AnyObject) -> bool {
     }
 }
 
+/// The decision of the second-pass guard: the same event as the last one that was given to the web view? The address alone is no
+/// proof (a later event may get it); the key code, the time stamp and the time since then count too.
+pub fn same_event(last: (usize, usize, u64, u64), now: (usize, usize, u64, u64)) -> bool {
+    last.0 == now.0 && last.1 == now.1 && last.2 == now.2 && now.3.saturating_sub(last.3) < 2000
+}
+
+/// Is this the second pass of the last event (WebKit sends an unused key again through `[NSApp sendEvent:]`)?
+fn is_second_pass(this: &AnyObject, event: &NSEvent) -> bool {
+    // SAFETY: the variables are `usize` and `u64`.
+    let last = unsafe {
+        (
+            *iv::<usize>(this, IV_LAST_AT),
+            *iv::<usize>(this, IV_LAST_CODE),
+            *iv::<u64>(this, IV_LAST_STAMP),
+            *iv::<u64>(this, IV_LAST_MS),
+        )
+    };
+    same_event(
+        last,
+        (
+            event as *const NSEvent as usize,
+            event_code(event) as usize,
+            event.timestamp().to_bits(),
+            now_ms(),
+        ),
+    )
+}
+
 /// Take a key event: give it to the web view as AppKit gives it to the first responder (key down, key up, modifier
 /// change), and nowhere else. The page then uses it or not. After a key down with Command that edits text, the page is
 /// asked (`__DS_KEYS__.edit()`) whether a text field has the key and no handler used it; the web view then runs the
@@ -551,18 +579,8 @@ fn take(this: &AnyObject, event: &NSEvent, where_: &str) {
     let stamp = event.timestamp().to_bits();
     let ms = now_ms();
     // SAFETY: the variables are `usize` and `u64`.
-    let (at, code, last_stamp, last_ms) = unsafe {
-        (
-            *iv::<usize>(this, IV_LAST_AT),
-            *iv::<usize>(this, IV_LAST_CODE),
-            *iv::<u64>(this, IV_LAST_STAMP),
-            *iv::<u64>(this, IV_LAST_MS),
-        )
-    };
     let code_now = event_code(event) as usize;
-    // the second pass of the same event (WebKit sends an unused key again through `[NSApp sendEvent:]`): it stays here.
-    // The address alone is no proof (a later event may get it); the key code, the time stamp and the time count too.
-    if at == me && code == code_now && last_stamp == stamp && ms.saturating_sub(last_ms) < 2000 {
+    if is_second_pass(this, event) {
         note("second-pass", event, None);
         return;
     }
@@ -769,7 +787,11 @@ pub fn watch(shield: &Retained<NSView>) -> Monitors {
                     std::ptr::null_mut()
                 }
                 // the key up of a key whose down the plugin did not take belongs to the host
-                NSEventType::KeyUp if !TAKEN.with(|t| t.borrow().contains(&event.keyCode())) => {
+                // (a second pass of a key up that the plugin took is the plugin's: `take` removed its code from the set)
+                NSEventType::KeyUp
+                    if !TAKEN.with(|t| t.borrow().contains(&event.keyCode()))
+                        && !is_second_pass(shield.as_ref(), event) =>
+                {
                     up_the_chain(&shield, event);
                     std::ptr::null_mut()
                 }
@@ -882,6 +904,22 @@ mod tests {
     #[test]
     fn an_action_is_not_swallowed_while_a_panel_is_key_or_the_host_is_in_the_background() {
         assert!(!action_is_ours(false, true, false, true, false, false));
+    }
+
+    #[test]
+    fn the_second_pass_of_an_event_is_the_same_event() {
+        let last = (0x1000, 12, 77, 5000);
+        assert!(
+            same_event(last, (0x1000, 12, 77, 5100)),
+            "the same event a moment later"
+        );
+        assert!(
+            !same_event(last, (0x1000, 12, 78, 5100)),
+            "another time stamp: another event at the same address"
+        );
+        assert!(!same_event(last, (0x1000, 13, 77, 5100)), "another key");
+        assert!(!same_event(last, (0x2000, 12, 77, 5100)), "another address");
+        assert!(!same_event(last, (0x1000, 12, 77, 9000)), "much later");
     }
 
     #[test]

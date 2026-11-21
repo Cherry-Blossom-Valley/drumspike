@@ -327,6 +327,16 @@ Fault runs (`editor-keys-fault`, `editor-keys-twin-fault`), each fails for the n
   happens while the plugin has the focus (the plugin drops that event). Hand check: hold Command in the DAW, click into the
   plugin, release, then click in the DAW: if Command seems stuck, this is the cause.
 
+- The result of `makeFirstResponder(nil)` on a click outside is not checked. If the web view refuses to resign (an input
+  method composition), the keys stay in the plugin until the next click: the safe side. After a click outside the host has no
+  first responder of its own until the user clicks a view that takes the focus. Hand check: click the DAW's empty area, then
+  press a key of the DAW; if it does nothing until you click a track, this is the cause.
+- An Objective-C exception that a host view raises inside the forwarded key up or modifier call is not caught.
+- A second pass of a key up that the plugin took (WebKit may send an unused key again) stays in the plugin: the monitor tests
+  the same dedupe as for a key down (address, time stamp, key code, time) before it decides that the up is the host's. The
+  decision is a unit test (`the_second_pass_of_an_event_is_the_same_event`).
+- An editor that was made and never opened has its monitors removed at `detach`.
+
 ## Open points
 
 - `onKeyDown` and `onKeyUp` of the wrapper (`plugview.cpp`) return `kResultFalse`. A host that asks

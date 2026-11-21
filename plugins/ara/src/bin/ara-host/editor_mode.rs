@@ -456,11 +456,11 @@ fn post_key_chars(
 
 fn post_click(app: &NSApplication, window: &NSWindow) {
     let f = window.frame();
-    post_click_at(app, window, f.size.width / 2.0, (f.size.height - 28.0) / 2.0);
+    post_click_window(app, window, f.size.width / 2.0, (f.size.height - 28.0) / 2.0);
 }
 
 /// A real mouse click at a point of the window (window coordinates), to the window of this host.
-fn post_click_at(app: &NSApplication, window: &NSWindow, x: f64, y: f64) {
+fn post_click_window(app: &NSApplication, window: &NSWindow, x: f64, y: f64) {
     let at = NSPoint::new(x, y);
     for (ty, pressure) in [(NSEventType::LeftMouseDown, 1.0), (NSEventType::LeftMouseUp, 0.0)] {
         let ev = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
@@ -965,7 +965,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         Action::Mouse(label, x, y) => {
                             set_step(label);
                             POSTED_KEYS.lock().unwrap().push((label.to_string(), 0, 0));
-                            post_click_at(&app, &window, x, y);
+                            post_click_window(&app, &window, x, y);
                         }
                         Action::Menu(label) => {
                             set_step(label);
