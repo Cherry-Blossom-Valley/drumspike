@@ -788,10 +788,20 @@ impl DocShared {
 
     /// The edit cycle ends: when it was the outer one and something changed in it, the names are computed once.
     fn edit_end(&self) {
-        let left = self
-            .edit_depth
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |d| Some(d.saturating_sub(1)))
-            .map_or(0, |d| d.saturating_sub(1));
+        // an end without a begin leaves the depth at 0
+        let left = loop {
+            let d = self.edit_depth.load(Ordering::SeqCst);
+            if d == 0 {
+                break 0;
+            }
+            if self
+                .edit_depth
+                .compare_exchange(d, d - 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                break d - 1;
+            }
+        };
         if left == 0 && self.names_dirty.swap(false, Ordering::SeqCst) {
             self.names_changed(true);
         }
