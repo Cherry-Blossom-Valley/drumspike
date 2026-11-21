@@ -55,7 +55,7 @@ def test_a_move_of_the_stopped_page_calls_locate_and_a_burst_is_rate_limited_wit
     assert 2 <= len(calls) < 25, len(calls)   # 40 moves in 200 ms: far fewer calls
     assert abs(calls[-1][0] - 6.4) < 1e-9, calls[-1]   # the last position is always sent
     gaps = [b[1] - a[1] for a, b in zip(calls[1:], calls[2:])]
-    assert all(g >= 35 for g in gaps), gaps   # about 25 a second at most
+    assert all(g >= 38 for g in gaps), gaps   # 40 ms apart; the clock of performance.now() and the timer round to a ms or two
 
 
 def test_a_write_that_is_no_user_move_sends_no_locate(app, make_project):
@@ -180,3 +180,22 @@ def test_the_end_of_the_song_in_host_mode_stops_then_locates_zero_once(app, make
     app.wait_for_timeout(300)
     kinds = app.evaluate("() => B.hostTransport.calls.map(c => c[0] === 'locate' ? ['locate', c[1]] : [c[0]])")
     assert kinds == [["stop"], ["locate", 0]], kinds
+
+
+def test_a_late_timer_does_not_send_a_second_locate_right_after_a_direct_one(app, make_project):
+    """Round 3: the event loop is blocked for more than 40 ms between two moves (the timer is late); the next
+    move takes the direct path. A third move at once must wait the full 40 ms: no stale timer sends it early."""
+    host_page(app, make_project)
+    app.evaluate("""async () => {
+      const spin = ms => { const t = performance.now(); while (performance.now() - t < ms) {} };
+      S.playhead = 5.0;                                  // direct send, sentAt = now
+      await new Promise(r => setTimeout(r, 1));
+      S.playhead = 5.1;                                  // waits: the timer is armed for the rest of the 40 ms
+      spin(60);                                          // the timer is due but cannot run
+      S.playhead = 5.2;                                  // past sentAt + 40: the direct path sends
+      S.playhead = 5.3;                                  // must wait 40 ms again
+      await new Promise(r => setTimeout(r, 200));
+    }""")
+    calls = locates(app)
+    assert [round(c[0], 3) for c in calls] == [5.0, 5.2, 5.3], calls
+    assert calls[2][1] - calls[1][1] >= 38, calls

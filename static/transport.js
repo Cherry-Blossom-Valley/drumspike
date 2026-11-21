@@ -129,19 +129,22 @@ function hostLocateInstall() {
   const up = () => { HL.down = false; if (HL.refusedSeq && HL.refusedSeq === HL.seq && HL.pending === null) hostLocateBack(); };
   window.addEventListener("mouseup", up, true); window.addEventListener("blur", up); window.addEventListener("contextmenu", up, true);
 }
-function hostLocateSend(t) {
-  HL.pending = t; HL.gen = S.loaded;
-  const wait = HL.sentAt + HL_MIN_MS - performance.now();
-  if (wait > 0) { if (!HL.timer) HL.timer = setTimeout(() => { HL.timer = null; hostLocateFlush(); }, wait); return; }
-  hostLocateFlush();
+function hostLocateArm(ms) {   // one timer at most
+  if (!HL.timer) HL.timer = setTimeout(() => { HL.timer = null; hostLocateFlush(); }, ms);
 }
+function hostLocateSend(t) { HL.pending = t; HL.gen = S.loaded; hostLocateFlush(); }
 /* U2, the rule for a move while the host starts (AC.starting, up to 2 s): the move waits. When the start is
    settled and the page plays, the waiting locate is dropped: PH.user is still set, and the tick seeks through
-   the path of a move while playing. When the start failed, the locate goes out then. */
+   the path of a move while playing. When the start failed, the locate goes out then.
+   Round 3: the rate check is made here, for the direct call and for the timer alike. A timer that fires late
+   must not send a position a few ms after a direct send; a send clears the armed timer. */
 function hostLocateFlush() {
   hostLocateSync();
   if (HL.pending === null) return;
-  if (AC.starting) { if (!HL.timer) HL.timer = setTimeout(() => { HL.timer = null; hostLocateFlush(); }, HL_MIN_MS); return; }
+  if (AC.starting) { hostLocateArm(HL_MIN_MS); return; }
+  const wait = HL.sentAt + HL_MIN_MS - performance.now();
+  if (wait > 0) { hostLocateArm(wait); return; }
+  clearTimeout(HL.timer); HL.timer = null;
   const t = HL.pending; HL.pending = null;
   if (S.playing || !S.loaded || HL.gen !== S.loaded) return;   // playing now: the tick seeks; a load came between: the move is old
   const host = typeof B !== "undefined" && B.hostTransport;

@@ -196,7 +196,7 @@ host position.
 click, keys) calls `B.hostTransport.locate(PH.v)`:
 
 - **Rate.** At most one call every 40 ms (about 25 a second). A move inside that time waits in a timer, and
-  the last position is always sent. A play that starts first drops the waiting one (the play carries the
+  the last position is always sent. The rate check runs in one place for the direct call and for the timer; a send clears the armed timer, so a late timer cannot send a second call right after a direct one. A play that starts first drops the waiting one (the play carries the
   position).
 - **Not a locate.** A write while the page plays (the tick seeks), the own stop of the page (`AC.stopping`)
   and a write of the same value (`loadProject`) send nothing.
