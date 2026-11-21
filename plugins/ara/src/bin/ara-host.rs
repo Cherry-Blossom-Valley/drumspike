@@ -1002,8 +1002,15 @@ unsafe fn rename_sequence(inst: Inst, state: *mut HostState, j: usize, name: &st
     };
     let props = sequence_props(name.as_ref(), j as i32);
     let dc = iface_of(inst);
+    // a host changes its model inside an edit cycle
+    if let Some(f) = dc.beginEditing {
+        f(dc_ref_of(inst));
+    }
     (dc.updateRegionSequenceProperties
         .expect("updateRegionSequenceProperties"))(dc_ref_of(inst), r, &props);
+    if let Some(f) = dc.endEditing {
+        f(dc_ref_of(inst));
+    }
     println!(
         "{{\"event\":\"host_sequence_renamed\",\"index\":{j},\"name\":{:?}}}",
         name.map(|n| n.to_string_lossy().into_owned())
@@ -1022,8 +1029,14 @@ unsafe fn move_region(inst: Inst, state: *mut HostState, i: usize, j: usize) {
     let (a, d, p) = meta.times;
     let props = playback_props_for(&*state, i, a, d, p);
     let dc = iface_of(inst);
+    if let Some(f) = dc.beginEditing {
+        f(dc_ref_of(inst));
+    }
     (dc.updatePlaybackRegionProperties
         .expect("updatePlaybackRegionProperties"))(dc_ref_of(inst), reg, &props);
+    if let Some(f) = dc.endEditing {
+        f(dc_ref_of(inst));
+    }
     let _ = r;
     println!("{{\"event\":\"host_region_moved\",\"region\":{i},\"sequence\":{j}}}");
 }
@@ -2389,6 +2402,9 @@ fn run_state(bundle: &str) -> i32 {
                 "save_ok": save_ok, "load_own": own, "load_empty": empty, "load_newer": newer_ok, "load_garbage": garbage,
             })
         );
+        // the plugin ends as a host ends it: the rows of the state calls (kept for the worker to write) reach the report here
+        ((*plugin).destroy.expect("destroy"))(plugin);
+        ((*lib.entry).deinit.expect("deinit"))();
         i32::from(!(save_ok && own && empty && newer_ok && garbage))
     }
 }

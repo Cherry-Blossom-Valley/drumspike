@@ -32,6 +32,8 @@ pub struct RegionView {
     pub sequence_name: Option<String>,
     /// The name of the playback region.
     pub region_name: Option<String>,
+    /// The `orderIndex` of the region sequence (the DAW track order).
+    pub sequence_order: Option<i32>,
 }
 
 /// One track: its identity, the creation order of its source and its regions.
@@ -95,16 +97,19 @@ pub fn pick_label(sequence_name: Option<&str>, region_name: Option<&str>) -> Opt
     sequence_name.and_then(clean).or_else(|| region_name.and_then(clean))
 }
 
+/// The first region of a track by song position (a tie goes to the region made first).
+fn first_region(t: &TrackView) -> Option<&RegionView> {
+    t.regions
+        .iter()
+        .min_by(|a, b| a.start_play.total_cmp(&b.start_play).then(a.id.cmp(&b.id)))
+}
+
 /// The display name of one track before the numbers: the rule of the module text.
 fn raw_name(t: &TrackView, fault: Fault) -> String {
     if fault.ignore {
         return t.track.clone();
     }
-    let first = t
-        .regions
-        .iter()
-        .min_by(|a, b| a.start_play.total_cmp(&b.start_play).then(a.id.cmp(&b.id)));
-    let Some(r) = first else {
+    let Some(r) = first_region(t) else {
         return t.track.clone();
     };
     let seq = r.sequence_name.as_deref().and_then(clean);
@@ -118,13 +123,20 @@ fn raw_name(t: &TrackView, fault: Fault) -> String {
 }
 
 /// The display name of every track, by track name. Equal names (compared without case) get a
-/// number in the order of the sources: the first keeps its name, the next ones are `name (2)`,
-/// `name (3)`. A numbered name that another track already shows is skipped.
+/// number in the order of the DAW tracks (the `orderIndex` of the region sequence of the first
+/// region, then the creation index of the source): the first keeps its name, the next ones are
+/// `name (2)`, `name (3)`. A numbered name that another track already shows is skipped. The order
+/// does not depend on the order in which the host made its objects.
 #[must_use]
 pub fn display_names(tracks: &[TrackView], fault: Fault) -> HashMap<String, String> {
     let mut order: Vec<&TrackView> = tracks.iter().collect();
-    order.sort_by_key(|t| t.seq);
-    let mut taken: Vec<String> = Vec::new();
+    order.sort_by_key(|t| {
+        (
+            first_region(t).and_then(|r| r.sequence_order).unwrap_or(i32::MAX),
+            t.seq,
+        )
+    });
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut out: HashMap<String, String> = HashMap::new();
     for t in order {
         let base = raw_name(t, fault);
@@ -136,7 +148,7 @@ pub fn display_names(tracks: &[TrackView], fault: Fault) -> HashMap<String, Stri
                 n += 1;
             }
         }
-        taken.push(shown.to_lowercase());
+        taken.insert(shown.to_lowercase());
         out.insert(t.track.clone(), shown);
     }
     out
@@ -152,10 +164,11 @@ mod tests {
             id,
             sequence_name: seq.map(str::to_string),
             region_name: name.map(str::to_string),
+            sequence_order: None,
         }
     }
 
-    fn track(name: &str, seq: usize, regions: Vec<RegionView>) -> TrackView {
+    fn track_of(name: &str, seq: usize, regions: Vec<RegionView>) -> TrackView {
         TrackView {
             track: name.into(),
             seq,
@@ -166,10 +179,10 @@ mod tests {
     #[test]
     fn the_region_sequence_name_wins_then_the_region_name_then_the_source() {
         let t = [
-            track("aa11", 0, vec![region(0.0, 1, Some("Kick In"), Some("take 3"))]),
-            track("bb22", 1, vec![region(0.0, 2, None, Some("Snare take"))]),
-            track("cc33", 2, vec![region(0.0, 3, Some("  "), None)]),
-            track("dd44", 3, vec![]),
+            track_of("aa11", 0, vec![region(0.0, 1, Some("Kick In"), Some("take 3"))]),
+            track_of("bb22", 1, vec![region(0.0, 2, None, Some("Snare take"))]),
+            track_of("cc33", 2, vec![region(0.0, 3, Some("  "), None)]),
+            track_of("dd44", 3, vec![]),
         ];
         let n = display_names(&t, Fault::default());
         assert_eq!(n["aa11"], "Kick In");
@@ -186,13 +199,13 @@ mod tests {
 
     #[test]
     fn the_first_region_by_song_position_decides() {
-        let t = [track(
+        let t = [track_of(
             "aa11",
             0,
             vec![region(9.0, 1, Some("Late"), None), region(2.0, 5, Some("Early"), None)],
         )];
         assert_eq!(display_names(&t, Fault::default())["aa11"], "Early");
-        let tie = [track(
+        let tie = [track_of(
             "aa11",
             0,
             vec![
@@ -206,9 +219,9 @@ mod tests {
     #[test]
     fn two_tracks_with_one_name_get_a_number_and_keep_their_keys() {
         let t = [
-            track("aa11", 1, vec![region(0.0, 2, Some("Toms"), None)]),
-            track("bb22", 0, vec![region(0.0, 1, Some("toms"), None)]),
-            track("cc33", 2, vec![region(0.0, 3, Some("Toms"), None)]),
+            track_of("aa11", 1, vec![region(0.0, 2, Some("Toms"), None)]),
+            track_of("bb22", 0, vec![region(0.0, 1, Some("toms"), None)]),
+            track_of("cc33", 2, vec![region(0.0, 3, Some("Toms"), None)]),
         ];
         let n = display_names(&t, Fault::default());
         assert_eq!(n["bb22"], "toms", "the first source keeps the name");
@@ -218,11 +231,41 @@ mod tests {
     }
 
     #[test]
+    fn the_number_follows_the_order_of_the_daw_tracks_not_the_order_of_creation() {
+        let with_order = |track: &str, seq: usize, order: i32| {
+            let mut r = region(0.0, seq as u64 + 1, Some("Overheads"), None);
+            r.sequence_order = Some(order);
+            track_of(track, seq, vec![r])
+        };
+        // the host made the lower DAW track second, then in the other order: the same names
+        let a = [with_order("aa11", 0, 5), with_order("bb22", 1, 2)];
+        let b = [with_order("aa11", 1, 5), with_order("bb22", 0, 2)];
+        for t in [&a, &b] {
+            let n = display_names(t, Fault::default());
+            assert_eq!(
+                n["bb22"], "Overheads",
+                "the DAW track with the lower order keeps the name"
+            );
+            assert_eq!(n["aa11"], "Overheads (2)");
+        }
+    }
+
+    #[test]
+    fn two_sources_on_one_daw_track_stay_two_tracks_with_a_number() {
+        let t = [
+            track_of("aa11", 0, vec![region(0.0, 1, Some("Toms"), None)]),
+            track_of("bb22", 1, vec![region(0.0, 2, Some("Toms"), None)]),
+        ];
+        let n = display_names(&t, Fault::default());
+        assert_eq!((n["aa11"].as_str(), n["bb22"].as_str()), ("Toms", "Toms (2)"));
+    }
+
+    #[test]
     fn a_numbered_name_never_lands_on_a_name_that_is_taken() {
         let t = [
-            track("aa11", 0, vec![region(0.0, 1, Some("Kick"), None)]),
-            track("bb22", 1, vec![region(0.0, 2, Some("Kick (2)"), None)]),
-            track("cc33", 2, vec![region(0.0, 3, Some("Kick"), None)]),
+            track_of("aa11", 0, vec![region(0.0, 1, Some("Kick"), None)]),
+            track_of("bb22", 1, vec![region(0.0, 2, Some("Kick (2)"), None)]),
+            track_of("cc33", 2, vec![region(0.0, 3, Some("Kick"), None)]),
         ];
         let n = display_names(&t, Fault::default());
         assert_eq!(n["aa11"], "Kick");
@@ -232,18 +275,22 @@ mod tests {
 
     #[test]
     fn a_host_name_is_cleaned_and_cut() {
-        let t = [track("aa11", 0, vec![region(0.0, 1, Some("  Ki\tck\u{7} In  "), None)])];
+        let t = [track_of(
+            "aa11",
+            0,
+            vec![region(0.0, 1, Some("  Ki\tck\u{7} In  "), None)],
+        )];
         assert_eq!(display_names(&t, Fault::default())["aa11"], "Kick In");
         let long = "x".repeat(500);
-        let t = [track("aa11", 0, vec![region(0.0, 1, Some(&long), None)])];
+        let t = [track_of("aa11", 0, vec![region(0.0, 1, Some(&long), None)])];
         assert_eq!(display_names(&t, Fault::default())["aa11"].chars().count(), MAX_CHARS);
     }
 
     #[test]
     fn the_faults_break_one_part_each() {
         let t = [
-            track("aa11", 0, vec![region(0.0, 1, Some("Kick"), Some("take"))]),
-            track("bb22", 1, vec![region(0.0, 2, Some("Kick"), None)]),
+            track_of("aa11", 0, vec![region(0.0, 1, Some("Kick"), Some("take"))]),
+            track_of("bb22", 1, vec![region(0.0, 2, Some("Kick"), None)]),
         ];
         let ign = display_names(
             &t,

@@ -200,6 +200,9 @@ struct SourceState {
     /// M1b10: the role that the DAW name gave at the last snapshot. A new name that gives another
     /// role marks the source as changed (the track gets the new role at the next round).
     label_role_seen: Mutex<Option<&'static str>>,
+    /// A new role from the DAW name already marked this source and no snapshot took it since: a rename
+    /// storm marks it once, and the settle time of the worker makes one round of it.
+    role_touch_pending: AtomicBool,
 }
 
 impl SourceState {
@@ -215,8 +218,7 @@ impl SourceState {
             .iter()
             .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play))?;
         seqs.get(&first.sequence)
-            .cloned()
-            .flatten()
+            .and_then(|q| q.name.clone())
             .or_else(|| first.name.clone())
     }
 
@@ -224,6 +226,7 @@ impl SourceState {
     fn snapshot(&self) -> service::SourceSnapshot {
         let p = self.props();
         let label = self.label();
+        self.role_touch_pending.store(false, Ordering::SeqCst);
         // the role the name gives is what the round saw now
         *self.label_role_seen.lock().unwrap_or_else(|e| e.into_inner()) =
             label.as_deref().and_then(drumspike_app::roles::guess_role);
@@ -270,11 +273,16 @@ impl SourceState {
             return None;
         }
         let seqs = self.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        self.label_in(&seqs)
+    }
+
+    /// [`SourceState::label`] with the region sequences already read (one copy for many sources).
+    fn label_in(&self, seqs: &HashMap<u64, SeqInfo>) -> Option<String> {
         let regions = self.regions.lock().ok()?;
         let first = regions
             .iter()
             .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play).then(a.id.cmp(&b.id)))?;
-        let seq_name = seqs.get(&first.sequence).cloned().flatten();
+        let seq_name = seqs.get(&first.sequence).and_then(|q| q.name.clone());
         names::pick_label(seq_name.as_deref(), first.name.as_deref())
     }
 }
@@ -301,6 +309,14 @@ struct RegionSlot {
 /// and nothing else. The id is the whole `ARARegionSequenceRef` (a counter, never a pointer), so a
 /// ref the host keeps after the destroy reaches nothing.
 static NEXT_SEQUENCE_ID: AtomicU64 = AtomicU64::new(1);
+
+/// What the plugin keeps of a region sequence: its name (the host may give none) and its place in the
+/// DAW (`orderIndex`).
+#[derive(Debug, Clone, Default)]
+struct SeqInfo {
+    name: Option<String>,
+    order: i32,
+}
 
 /// The next region id (unique per process, so a destroyed region's record cannot be
 /// confused with a later one).
@@ -364,7 +380,15 @@ struct DocShared {
     /// when a region of a source changes, a round stores new regions, or a source leaves.
     region_gen: AtomicU64,
     /// M1b10: the region sequences of the host by id, with their names.
-    sequences: Mutex<HashMap<u64, Option<String>>>,
+    sequences: Mutex<HashMap<u64, SeqInfo>>,
+    /// M1b10: the depth of the edit cycle of the host (`beginEditing` / `endEditing`) and whether a name or
+    /// a region changed inside it: the names are computed once, when the cycle ends.
+    edit_depth: AtomicUsize,
+    names_dirty: AtomicBool,
+    /// How often the display names were computed, and how often a source was marked for a new role (the
+    /// unit tests count them).
+    name_computes: AtomicUsize,
+    role_touches: AtomicUsize,
     /// M1b10: the display names that the page was last told (track name to display name).
     shown_names: Mutex<HashMap<String, String>>,
 }
@@ -465,6 +489,10 @@ impl DocShared {
             round_samples: Mutex::new(HashMap::new()),
             region_gen: AtomicU64::new(0),
             sequences: Mutex::new(HashMap::new()),
+            edit_depth: AtomicUsize::new(0),
+            names_dirty: AtomicBool::new(false),
+            name_computes: AtomicUsize::new(0),
+            role_touches: AtomicUsize::new(0),
             shown_names: Mutex::new(HashMap::new()),
             canceller: svc.canceller(),
             id: Mutex::new(id),
@@ -667,7 +695,8 @@ impl DocShared {
                         .map(|slot| names::RegionView {
                             start_play: slot.rec.start_play,
                             id: slot.id,
-                            sequence_name: seqs.get(&slot.sequence).cloned().flatten(),
+                            sequence_name: seqs.get(&slot.sequence).and_then(|q| q.name.clone()),
+                            sequence_order: seqs.get(&slot.sequence).map(|q| q.order),
                             region_name: slot.name.clone(),
                         })
                         .collect()
@@ -691,12 +720,17 @@ impl DocShared {
             .lock()
             .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
             .unwrap_or_default();
+        let seqs = self.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
         for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
-            let now = s.label().as_deref().and_then(drumspike_app::roles::guess_role);
+            let now = s.label_in(&seqs).as_deref().and_then(drumspike_app::roles::guess_role);
             // only a name that gives a role can change a role: a name with none leaves the role as it is
             let differs = now.is_some() && *s.label_role_seen.lock().unwrap_or_else(|e| e.into_inner()) != now;
             // a source that no round has seen has no track to change
-            if differs && s.track.lock().map(|t| t.is_some()).unwrap_or(false) {
+            if differs
+                && s.track.lock().map(|t| t.is_some()).unwrap_or(false)
+                && !s.role_touch_pending.swap(true, Ordering::SeqCst)
+            {
+                self.role_touches.fetch_add(1, Ordering::SeqCst);
                 touch(s);
             }
         }
@@ -716,25 +750,50 @@ impl DocShared {
     /// announces the reload itself).
     fn names_changed(&self, announce: bool) {
         self.touch_role_changes();
-        let now: HashMap<String, String> = self.display_names().into_iter().filter(|(k, v)| k != v).collect();
-        let changed = {
+        // computed and compared under the lock: the main thread and the worker cannot leave the older map
+        // in place of the newer, and no change goes without its announcement
+        let now = {
             let mut shown = self.shown_names.lock().unwrap_or_else(|e| e.into_inner());
+            self.name_computes.fetch_add(1, Ordering::SeqCst);
+            let now: HashMap<String, String> = self.display_names().into_iter().filter(|(k, v)| k != v).collect();
             if *shown == now {
-                false
-            } else {
-                *shown = now.clone();
-                true
+                return;
             }
+            *shown = now.clone();
+            now
         };
-        if !changed {
-            return;
-        }
         let mut sorted: Vec<(&String, &String)> = now.iter().collect();
         sorted.sort();
         let map: serde_json::Map<String, Value> = sorted.into_iter().map(|(k, v)| (k.clone(), json!(v))).collect();
         session().log_deferred(json!({"event": "track_names", "doc": self.id(), "names": map}).to_string());
         if announce && crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() != Ok("no-reload") {
             self.announce_reload();
+        }
+    }
+
+    /// M1b10: a name or a region of the host changed (a callback of the host, main thread). Inside an
+    /// edit cycle the change is only marked and the names are computed once at its end; a host that makes
+    /// no edit cycle gets the names at once.
+    fn names_touched(&self) {
+        if self.edit_depth.load(Ordering::SeqCst) > 0 {
+            self.names_dirty.store(true, Ordering::SeqCst);
+        } else {
+            self.names_changed(true);
+        }
+    }
+
+    fn edit_begin(&self) {
+        self.edit_depth.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// The edit cycle ends: when it was the outer one and something changed in it, the names are computed once.
+    fn edit_end(&self) {
+        let left = self
+            .edit_depth
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |d| Some(d.saturating_sub(1)))
+            .map_or(0, |d| d.saturating_sub(1));
+        if left == 0 && self.names_dirty.swap(false, Ordering::SeqCst) {
+            self.names_changed(true);
         }
     }
 
@@ -1826,6 +1885,7 @@ impl Session {
                 "round": round,
                 "reason": reason,
                 "added": result.added,
+                "role_audio": result.role_audio.iter().map(|(t, b, r)| json!({"track": t, "bytes": b, "role": r})).collect::<Vec<_>>(),
                 "analysed": result.analysed,
                 "skipped": skipped,
                 "errors": errors,
@@ -2377,11 +2437,11 @@ unsafe extern "C" fn dc_isLicensedForCapabilities(
 // The no-op stubs for the members M1a does not implement: the ARA test host of the SDK
 // examples calls them without a check (the same stub set the S1 spike passes with, see
 // plugins/ara-spike/src/stubs.rs). Every one runs inside the boundary guard.
-unsafe extern "C" fn dc_beginEditing(_c: ARADocumentControllerRef) {
-    guard("beginEditing", (), move || {})
+unsafe extern "C" fn dc_beginEditing(c: ARADocumentControllerRef) {
+    guard("beginEditing", (), move || controller_of(c).doc.edit_begin())
 }
-unsafe extern "C" fn dc_endEditing(_c: ARADocumentControllerRef) {
-    guard("endEditing", (), move || {})
+unsafe extern "C" fn dc_endEditing(c: ARADocumentControllerRef) {
+    guard("endEditing", (), move || controller_of(c).doc.edit_end())
 }
 /// The host asks for the pending model updates (the only call in which the plugin may call
 /// back into the host's model update controller): every source whose notes changed in a
@@ -2623,6 +2683,23 @@ unsafe fn sequence_name(p: *const ARARegionSequenceProperties) -> Option<String>
     }
 }
 
+/// The place of a region sequence in the DAW (`orderIndex`, ARA 2): the DAW track order. 0 when the struct
+/// is too short.
+unsafe fn sequence_order(p: *const ARARegionSequenceProperties) -> i32 {
+    if p.is_null() {
+        return 0;
+    }
+    let declared = std::ptr::addr_of!((*p).structSize).read_unaligned();
+    if !size_covers(
+        declared,
+        std::mem::offset_of!(ARARegionSequenceProperties, orderIndex),
+        std::mem::size_of::<i32>(),
+    ) {
+        return 0;
+    }
+    std::ptr::addr_of!((*p).orderIndex).read_unaligned()
+}
+
 /// The region sequence and the name of a playback region (M1b10): the sequence id (0 when the host
 /// gave none) and the name (None when the host gave none). Only the fields that the declared
 /// struct size covers are read.
@@ -2664,11 +2741,13 @@ unsafe extern "C" fn dc_createRegionSequence(
         // a ref that the host keeps after the destroy reaches nothing
         let id = NEXT_SEQUENCE_ID.fetch_add(1, Ordering::SeqCst);
         let ctl = controller_of(c);
-        ctl.doc
-            .sequences
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id, sequence_name(p));
+        ctl.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).insert(
+            id,
+            SeqInfo {
+                name: sequence_name(p),
+                order: sequence_order(p),
+            },
+        );
         id as usize as ARARegionSequenceRef
     })
 }
@@ -2687,11 +2766,11 @@ unsafe extern "C" fn dc_updateRegionSequenceProperties(
         }
         let ctl = controller_of(c);
         let id = r as usize as u64;
-        let name = sequence_name(p);
+        let (name, order) = (sequence_name(p), sequence_order(p));
         if let Some(slot) = ctl.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) {
-            *slot = name;
+            *slot = SeqInfo { name, order };
         }
-        ctl.doc.names_changed(true);
+        ctl.doc.names_touched();
         if fault == "round" {
             touch_all(ctl);
         }
@@ -2705,7 +2784,7 @@ unsafe extern "C" fn dc_destroyRegionSequence(c: ARADocumentControllerRef, r: AR
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&(r as usize as u64));
-        ctl.doc.names_changed(true);
+        ctl.doc.names_touched();
     })
 }
 
@@ -2868,6 +2947,7 @@ unsafe extern "C" fn dc_createAudioSource(
                 stale: AtomicBool::new(false),
                 requested_at: Mutex::new(None),
                 label_role_seen: Mutex::new(None),
+                role_touch_pending: AtomicBool::new(false),
             });
             list.push(src.clone());
             if let Ok(mut m) = ctl.doc.members.lock() {
@@ -3434,7 +3514,7 @@ unsafe extern "C" fn dc_createPlaybackRegion(
                 touch(src);
             }
         }
-        ctl.doc.names_changed(true);
+        ctl.doc.names_touched();
         Box::into_raw(Box::new(PlaybackRegion { seq, id })) as ARAPlaybackRegionRef
     })
 }
@@ -3474,7 +3554,7 @@ unsafe extern "C" fn dc_updatePlaybackRegionProperties(
                 }
             }
         }
-        ctl.doc.names_changed(true);
+        ctl.doc.names_touched();
     })
 }
 
@@ -3492,7 +3572,7 @@ unsafe extern "C" fn dc_destroyPlaybackRegion(c: ARADocumentControllerRef, r: AR
                 touch(src);
             }
         }
-        ctl.doc.names_changed(true);
+        ctl.doc.names_touched();
         drop(region);
     })
 }
@@ -4160,8 +4240,9 @@ fn state_row(kind: &str, bytes: usize, ok: bool) {
     if crate::test_switch("DS_ARA_STATE_FAULT").as_deref() == Ok("no-rows") {
         return; // the fault run: the call of the host is not reported
     }
-    session().log(json!({"event": "state_call", "kind": kind, "bytes": bytes, "ok": ok}).to_string());
-    session().write_out();
+    // a row from the host's main thread: the worker writes the file (a state call never waits for the
+    // report lock that the worker holds while it writes)
+    session().log_deferred(json!({"event": "state_call", "kind": kind, "bytes": bytes, "ok": ok}).to_string());
 }
 
 unsafe extern "C" fn state_save(_p: *const clap_plugin, stream: *const clap_sys::stream::clap_ostream) -> bool {
@@ -4610,7 +4691,167 @@ mod tests {
             stale: AtomicBool::new(false),
             requested_at: Mutex::new(None),
             label_role_seen: Mutex::new(None),
+            role_touch_pending: AtomicBool::new(false),
         })
+    }
+
+    /// A source with a track and `n` regions on region sequence `seq_id` (named in the document).
+    fn named_source(doc: &Arc<DocShared>, seq: usize, track: &str, seq_id: u64, n: usize) -> Arc<SourceState> {
+        let src = bare_source(doc, seq);
+        src.requested.store(false, Ordering::SeqCst); // a touch of it sends nothing to the worker
+        *src.track.lock().unwrap() = Some(track.to_string());
+        let mut regions = src.regions.lock().unwrap();
+        for i in 0..n {
+            regions.push(RegionSlot {
+                id: seq as u64 * 10_000 + i as u64 + 1,
+                rec: service::RegionRec {
+                    start_mod: 0.0,
+                    dur_mod: 1.0,
+                    start_play: i as f64,
+                },
+                sequence: seq_id,
+                name: Some(format!("take {i}")),
+            });
+        }
+        drop(regions);
+        doc.members.lock().unwrap().push(Arc::downgrade(&src));
+        src
+    }
+
+    #[test]
+    fn five_hundred_regions_in_one_edit_cycle_compute_the_names_once() {
+        let doc = DocShared::new();
+        doc.sequences.lock().unwrap().insert(
+            7,
+            SeqInfo {
+                name: Some("Kick".into()),
+                order: 0,
+            },
+        );
+        let id = doc.id();
+        let _src = named_source(&doc, 0, "t0", 7, 0);
+        doc.edit_begin();
+        for i in 0..500 {
+            _src.regions.lock().unwrap().push(RegionSlot {
+                id: i + 1,
+                rec: service::RegionRec {
+                    start_mod: 0.0,
+                    dur_mod: 1.0,
+                    start_play: i as f64,
+                },
+                sequence: 7,
+                name: None,
+            });
+            doc.names_touched();
+        }
+        assert_eq!(
+            doc.name_computes.load(Ordering::SeqCst),
+            0,
+            "nothing is computed inside the cycle"
+        );
+        doc.edit_end();
+        assert_eq!(
+            doc.name_computes.load(Ordering::SeqCst),
+            1,
+            "one computation at the end of the cycle"
+        );
+        let rows = session()
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.contains("track_names") && r.contains(&id))
+            .count();
+        assert_eq!(rows, 1, "one row for the one change");
+        // a host with no edit cycle gets the names at once
+        doc.names_touched();
+        assert_eq!(doc.name_computes.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_region_whose_sequence_is_destroyed_falls_back_to_its_own_name() {
+        let doc = DocShared::new();
+        doc.sequences.lock().unwrap().insert(
+            3,
+            SeqInfo {
+                name: Some("Snare".into()),
+                order: 0,
+            },
+        );
+        let _src = named_source(&doc, 0, "t0", 3, 1);
+        assert_eq!(doc.display_names()["t0"], "Snare");
+        doc.sequences.lock().unwrap().remove(&3);
+        assert_eq!(
+            doc.display_names()["t0"],
+            "take 0",
+            "no sequence any more: the name of the region"
+        );
+        // a ref of a sequence that never existed finds nothing, too
+        _src.regions.lock().unwrap()[0].sequence = 999;
+        assert_eq!(doc.display_names()["t0"], "take 0");
+    }
+
+    #[test]
+    fn a_rename_storm_marks_a_source_for_a_new_role_once() {
+        let doc = DocShared::new();
+        doc.sequences.lock().unwrap().insert(
+            1,
+            SeqInfo {
+                name: Some("Mystery".into()),
+                order: 0,
+            },
+        );
+        let src = named_source(&doc, 0, "t0", 1, 1);
+        src.regions.lock().unwrap()[0].name = None;
+        for i in 0..200 {
+            let name = if i % 2 == 0 { "Snare" } else { "Kick" };
+            doc.sequences.lock().unwrap().get_mut(&1).unwrap().name = Some(name.into());
+            doc.touch_role_changes();
+        }
+        assert_eq!(
+            doc.role_touches.load(Ordering::SeqCst),
+            1,
+            "200 renames, one mark: one round after the settle time"
+        );
+        // a round took a snapshot: the next new role marks it again
+        let _ = src.snapshot();
+        doc.touch_role_changes();
+        assert_eq!(
+            doc.role_touches.load(Ordering::SeqCst),
+            1,
+            "the snapshot saw the role of the last name"
+        );
+        doc.sequences.lock().unwrap().get_mut(&1).unwrap().name = Some("Hi-Hat".into());
+        doc.touch_role_changes();
+        assert_eq!(doc.role_touches.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn the_name_fields_of_a_short_struct_are_not_read_and_a_bad_name_is_cleaned() {
+        unsafe {
+            // a struct that ends before the name: no name, no order, and no read past its size
+            let mut seq: ARARegionSequenceProperties = std::mem::zeroed();
+            seq.structSize = std::mem::offset_of!(ARARegionSequenceProperties, name);
+            seq.name = 0xdead as *const c_char; // never read
+            seq.orderIndex = 9;
+            assert_eq!(sequence_name(&seq), None);
+            assert_eq!(sequence_order(&seq), 0);
+            let mut reg: ARAPlaybackRegionProperties = std::mem::zeroed();
+            reg.structSize = std::mem::offset_of!(ARAPlaybackRegionProperties, regionSequenceRef);
+            reg.name = 0xdead as *const c_char;
+            assert_eq!(region_labels(&reg), (0, None));
+            // a name with invalid UTF-8 is copied with the replacement character, and NULL is no name
+            let bad = std::ffi::CString::new(vec![b'K', 0xff, b'i']).unwrap();
+            let mut full: ARARegionSequenceProperties = std::mem::zeroed();
+            full.structSize = std::mem::size_of::<ARARegionSequenceProperties>();
+            full.name = bad.as_ptr();
+            full.orderIndex = 4;
+            assert_eq!(sequence_name(&full).as_deref(), Some("K\u{fffd}i"));
+            assert_eq!(sequence_order(&full), 4);
+            full.name = std::ptr::null();
+            assert_eq!(sequence_name(&full), None);
+            assert_eq!(sequence_name(std::ptr::null()), None);
+        }
     }
 
     #[test]

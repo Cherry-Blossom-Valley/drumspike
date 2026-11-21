@@ -98,9 +98,66 @@ impl WavWriter {
     }
 }
 
+/// The first `seconds` of a WAV the plugin wrote, as mono samples (M1b10, the role hint): the header
+/// is read, then only the frames needed, never the whole file. The mix to mono is the one of the
+/// service (`MixMode::Ffmpeg`, as the scan of the app uses it). Answers the samples, the rate and
+/// the bytes read from the file (header included); `None` when the file is not a WAV of this plugin.
+#[must_use]
+pub fn read_head_mono(path: &Path, seconds: usize) -> Option<(Vec<f32>, u32, usize)> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 44];
+    f.read_exact(&mut head).ok()?;
+    if &head[0..4] != b"RIFF" || &head[8..12] != b"WAVE" || &head[36..40] != b"data" {
+        return None;
+    }
+    let channels = u16::from_le_bytes([head[22], head[23]]);
+    let rate = u32::from_le_bytes([head[24], head[25], head[26], head[27]]);
+    let data_len = u32::from_le_bytes([head[40], head[41], head[42], head[43]]) as usize;
+    if channels == 0 || rate == 0 {
+        return None;
+    }
+    let frame = 4 * channels as usize;
+    let frames = (data_len / frame).min(rate as usize * seconds);
+    let mut data = vec![0u8; frames * frame];
+    f.read_exact(&mut data).ok()?;
+    let mut buf = header(channels, rate, frames);
+    buf.extend_from_slice(&data);
+    let info = drumspike_core::WavInfo::parse(&buf).ok()?;
+    let mono = info.decode_mono(&buf, drumspike_core::MixMode::Ffmpeg).ok()?;
+    Some((mono, rate, 44 + data.len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_head_of_a_long_file_is_read_alone() {
+        let dir = std::env::temp_dir().join(format!("drumspike-ara-wav-{}-head", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("long.wav");
+        // 120 s of stereo at 8 kHz: 7.7 MB on disk; the first 30 s are 1.9 MB
+        let rate = 8_000usize;
+        let n = rate * 120;
+        let mut w = WavWriter::create(&dest, rate as u32, 2, n).unwrap();
+        let block: Vec<f32> = (0..rate * 2).map(|i| if i % 2 == 0 { 0.5 } else { -0.5 }).collect();
+        for _ in 0..120 {
+            w.write_interleaved_f32(&block).unwrap();
+        }
+        w.commit().unwrap();
+        let (mono, sr, bytes) = read_head_mono(&dest, 30).unwrap();
+        assert_eq!(sr, rate as u32);
+        assert_eq!(mono.len(), rate * 30, "30 s of mono");
+        assert_eq!(
+            bytes,
+            44 + rate * 30 * 8,
+            "the header and 30 s of stereo frames, not the whole file"
+        );
+        assert!(bytes * 3 < file_len(n, 2) as usize, "a quarter of the file");
+        assert!(read_head_mono(&dir.join("missing.wav"), 30).is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn tmp_dir(label: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("drumspike-ara-wav-{}-{label}", std::process::id()));

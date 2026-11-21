@@ -104,11 +104,18 @@ and `role_match` with the matched words, as a track of the app does.
 
 **"Still the automatic guess" is `role_source`.** This is the field of the app. The app sets it to
 `user` when the user sets the role in the page (`track_set_role`); every other value, and an absent
-field, is a guess. The plugin stores nothing of its own, so a hand-set role survives a restore of the
-session too. The note: it follows the new role only when it is still the default note of the old
+field, is a guess. The plugin stores nothing of its own. (A restore of the session writes the project document
+again from the archive and guesses the roles again, as it did before M1b10: the archive holds no role.
+This part does not change it, so a role set by hand does not survive a restore of the session; the
+guess then reads the DAW names that the host has made by then.) The note: it follows the new role only when it is still the default note of the old
 role. A note that the user changed by hand stays. (The app does not mark a hand-set note, so a note
-that the user set to the default note of the old role is taken as automatic: this is the one case the
-plugin cannot tell.)
+that the user set to the default note of the old role is taken as automatic.) Known limit, the same
+kind: a role that the user set by hand to the value that was already guessed is not protected. The
+page writes nothing in that case (the app keeps `role_source` as it was when the role does not change), so
+the plugin cannot tell it from the guess. A track from an archive or project of before this change has no
+`role_source` and counts as automatic; that is wanted, because its role came from a hex name. Such a track
+on a DAW track named as a snare gets the snare role once, keeps every hit (also hand-edited ones), and its
+note follows only if it was the default note (unit test).
 
 **A new DAW name.** The snapshot of a source carries the role that its DAW name gives. A name that
 gives another role makes the source changed (`same_as`), and the plugin starts a round after the
@@ -121,6 +128,34 @@ detector of that track. When the new name gives no role, the role stays. The ide
 (its key) is not touched.
 
 The page is told through the same `plugin-reload` as for a name.
+
+**Cost and bounds (review round 1).**
+- The role is computed only when a track is made new (`make_track`); a remake of the record for a region
+  change takes only the layout (`track_layout`). The audio is read by `wav::read_head_mono`: the header
+  and the first 30 s of frames, never the whole file (unit test with a 120 s file: a quarter of it is
+  read). The `job` row names it in `role_audio` (track, bytes read, role).
+- A new DAW name that gives another role but whose track has a role of the user, or already has that
+  role, makes no change: the worker reads the record with `tracks_get` and keeps the snapshot, so the
+  touch ends in a round that does nothing. "Kick" to "Mystery" to "Kick" is no change; "Kick" to
+  "Mystery" to "Snare" is one.
+- A rename storm marks a source once until a round has taken its snapshot (`role_touch_pending`), so the
+  settle time of the worker makes one round of it.
+- In the callbacks of the host the names are only marked; they are computed once when the outer edit
+  cycle (`beginEditing`, `endEditing`) ends, or at once for a host without an edit cycle. 500 regions
+  made in one cycle give one computation (unit test). One `track_names` row per real change.
+- Numbering follows the DAW track order: the `orderIndex` of the region sequence of the first region,
+  then the creation index of the source. The order in which the host made its objects does not change
+  which of two equal names gets the number (unit test with both orders).
+- The `state_call` rows are written with `log_deferred`; the worker (or the unload of the library)
+  writes the file, so a state call of the host never waits for the report lock.
+
+**Where the page still shows the key in a DAW** (not changed here; the coordinator writes a page ticket;
+the list is from a search of `static/`, not exhaustive): the status line texts of an edit or a drag
+(`tracks.js` "moving", `velocity.js` "Set Velocity"), the text " follows <key>" on a follower, the
+follow selector and the track pick lists, the export dialog (the track list and the "Skipped" text),
+the Re-analyze and Examples (Learn) texts of the Inspector, the labels of the undo steps (`edit.js`),
+the context menu texts of a track, the tooltips that build a text from the key, and the mixer rows (the
+mixer is absent in host mode).
 
 Stages `editor-roles` and `editor-roles-fault`: four sources with hex names on DAW tracks named like
 a kick, a snare, a hi-hat and with no role get the roles and notes; a rename of the last track to a
