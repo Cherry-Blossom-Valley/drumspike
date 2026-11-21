@@ -104,10 +104,8 @@ and `role_match` with the matched words, as a track of the app does.
 
 **"Still the automatic guess" is `role_source`.** This is the field of the app. The app sets it to
 `user` when the user sets the role in the page (`track_set_role`); every other value, and an absent
-field, is a guess. The plugin stores nothing of its own. (A restore of the session writes the project document
-again from the archive and guesses the roles again, as it did before M1b10: the archive holds no role.
-This part does not change it, so a role set by hand does not survive a restore of the session; the
-guess then reads the DAW names that the host has made by then.) The note: it follows the new role only when it is still the default note of the old
+field, is a guess. The plugin stores nothing of its own for this: the field is in the track record, and the archive carries the record (see "The restore keeps the settings of the user").
+The note: it follows the new role only when it is still the default note of the old
 role. A note that the user changed by hand stays. (The app does not mark a hand-set note, so a note
 that the user set to the default note of the old role is taken as automatic.) Known limit, the same
 kind: a role that the user set by hand to the value that was already guessed is not protected. The
@@ -146,6 +144,9 @@ The page is told through the same `plugin-reload` as for a name.
 - Numbering follows the DAW track order: the `orderIndex` of the region sequence of the first region,
   then the creation index of the source. The order in which the host made its objects does not change
   which of two equal names gets the number (unit test with both orders).
+- The record that decides whether a new DAW name changes a role is read with `tracks_get` (all tracks); the app has
+  no getter for one track's role, so the read stays as it is, on the worker, only when a source changed by its role alone.
+- A struct of the host that is too short for `orderIndex` gives an unknown order: such a track is numbered last.
 - The `state_call` rows are written with `log_deferred`; the worker (or the unload of the library)
   writes the file, so a state call of the host never waits for the report lock.
 
@@ -161,6 +162,40 @@ Stages `editor-roles` and `editor-roles-fault`: four sources with hex names on D
 a kick, a snare, a hi-hat and with no role get the roles and notes; a rename of the last track to a
 snare name changes its role with one new round; a role that the user set survives a rename. Fault
 runs: `role-source`, `role-frozen`, `role-hand` (switch `DS_ARA_NAMES_FAULT`).
+
+## The restore keeps the settings of the user (N10)
+
+What a restore of the ARA archive did to a track record before this change (`DocService::restore`, called
+from `restoreObjectsFromArchive` through `Msg::Restore`): it wrote the project document again from an
+empty document, one `make_track` per archived track, and put the stored events in. So, field by field:
+
+| field | before | now |
+| --- | --- | --- |
+| hits and hand edits | kept (the archive holds the events of every track; the edits of the page are recorded in them) | kept |
+| role, `role_source`, `role_match` | lost: guessed again from the names | kept from the archive; guessed only for a track the archive holds no settings for |
+| note | lost (default note of the guessed role) | kept |
+| colour, detector parameters, mix mode, volume, pan, follow | lost (defaults) | kept |
+| Learn data, layer, sampler settings | lost | kept (they are keys of the record the service answers) |
+| segments, source, rate, length | made from the source | made from the source, as before |
+
+How it is kept: each archived source has an optional field `settings`, the track record as
+`tracks_get` answers it (without the keys the service computes, without events, segments and source).
+The plugin reads it after every round and after every command of the page that changes the project (a role
+or a note changes no hit, so the events alone would miss it), keeps it per document and writes it in
+`storeObjectsToArchive`. A restore lays it over the layout of the track (`track_layout`) and guesses nothing.
+A restored track whose settings say `role_source` `guess` still follows a new DAW name later (the same rule
+as for a track of this session). Because the new role is not guessed at the restore, the restore makes no
+round for it.
+
+Format version: the archive version stays 1. `settings` is optional in both directions: an archive of an
+earlier plugin has none, a restore then guesses the role as it always did (a unit test and the committed
+fixture `archive-v1.ara` cover it); an earlier plugin that reads a new archive ignores the unknown field (no
+field is denied). The field is left out of the file when empty. The archive is larger by the size of the track
+records (the Learn data of a track is the part that can grow).
+
+Stage `restore-settings` (fault run `DS_ARA_NAMES_FAULT=restore-guess`): the page sets a role, a note and a
+volume by hand, the test host stores the archive, a new document restores it: role, `role_source`, note,
+volume and the hits are the same, and the run that restores has no round and no job row.
 
 ## The test host
 

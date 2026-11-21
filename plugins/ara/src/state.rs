@@ -37,6 +37,14 @@ pub struct ArchiveSource {
     /// without the field loads as not stale).
     #[serde(default)]
     pub stale: bool,
+    /// M1b10 (N10): everything the user set on the track record, as the service holds it (role,
+    /// `role_source`, note, colour, detector parameters, mix, Learn data, layer, sampler ...), without the
+    /// events (they are in `events`) and without what the plugin makes from the source (segments, source,
+    /// rate, length). A restore puts it back and guesses nothing for such a track. Empty (and absent in the
+    /// file) in an archive of an earlier plugin: the restore then guesses the role, as it always did. The
+    /// version of the archive stays 1: the field is optional in both directions (an older plugin ignores it).
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The blob.
@@ -104,6 +112,7 @@ mod tests {
                 notes: vec![[12_000.0, 0.78], [72_000.0, 0.7]],
                 track: "kick".into(),
                 stale: true,
+                settings: serde_json::Map::new(),
             }],
         };
         let bytes = encode(&state);
@@ -166,6 +175,7 @@ mod tests {
                 notes: Vec::new(),
                 track: "kick".into(),
                 stale: false,
+                settings: serde_json::Map::new(),
             }],
         };
         let old: OldState = serde_json::from_slice(&encode(&state)).unwrap();

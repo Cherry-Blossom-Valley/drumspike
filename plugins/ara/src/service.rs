@@ -268,6 +268,8 @@ pub struct JobResult {
     /// M1b10: the tracks whose role was asked of the audio in this round: (track, bytes read from the WAV, the
     /// role the hint gave).
     pub role_audio: Vec<(String, usize, Option<String>)>,
+    /// M1b10 (N10): the settings of every track after the round (for the archive).
+    pub settings: Map<String, Value>,
 }
 
 impl JobResult {
@@ -300,6 +302,7 @@ impl JobResult {
             tracks: Vec::new(),
             regions: HashMap::new(),
             role_audio: Vec::new(),
+            settings: Map::new(),
         }
     }
 }
@@ -314,6 +317,42 @@ pub struct RestoredTrack {
     pub track: String,
     /// The stored events of the track.
     pub events: Value,
+    /// M1b10: the settings of the user that the archive holds for the track (empty: the role is guessed).
+    pub settings: Map<String, Value>,
+}
+
+/// The keys of a track answer of the service that are not settings of the user: what the service computes
+/// (`status`, `offline`, `n_events`, `source_mode`, `layer_status`) and what the plugin makes from the
+/// source on every restore (`sr`, `n_samples`, `duration`).
+const NOT_SETTINGS: [&str; 8] = [
+    "status",
+    "offline",
+    "n_events",
+    "source_mode",
+    "layer_status",
+    "sr",
+    "n_samples",
+    "duration",
+];
+
+/// The settings of the tracks `names` as the service holds them now (N10), by track name: the answer of
+/// `tracks_get` without the computed keys. The events, segments and source are not in it.
+pub fn settings_of(svc: &Service, sid: &str, names: &[String]) -> Map<String, Value> {
+    let mut out = Map::new();
+    let Ok(all) = svc.tracks_get(sid) else {
+        return out;
+    };
+    for n in names {
+        if let Some(obj) = all["tracks"][n.as_str()].as_object() {
+            let kept: Map<String, Value> = obj
+                .iter()
+                .filter(|(k, _)| !NOT_SETTINGS.contains(&k.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            out.insert(n.clone(), Value::Object(kept));
+        }
+    }
+    out
 }
 
 /// What a restore produced.
@@ -983,6 +1022,7 @@ impl DocService {
                 .map(|(q, x)| (*q, (x.regions.clone(), x.sample_rate)))
                 .collect(),
             role_audio,
+            settings: settings_of(&svc, &sid, &self.track_names()),
         })
     }
 
@@ -1079,7 +1119,20 @@ impl DocService {
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let mut doc = empty_document(&dir);
         for t in tracks {
-            let mut track = serde_json::to_value(make_track(&t.snapshot, &dir)).map_err(err)?;
+            // the archive holds the settings of the user for this track: they come back as they were and
+            // nothing is guessed (`DS_ARA_NAMES_FAULT=restore-guess` guesses again, as before M1b10)
+            let keep = !t.settings.is_empty() && switch("DS_ARA_NAMES_FAULT").as_deref() != Some("restore-guess");
+            let mut track = if keep {
+                let mut v = serde_json::to_value(track_layout(&t.snapshot, &dir)).map_err(err)?;
+                for (k, val) in &t.settings {
+                    if !["source", "segments", "events"].contains(&k.as_str()) {
+                        v[k.as_str()] = val.clone();
+                    }
+                }
+                v
+            } else {
+                serde_json::to_value(make_track(&t.snapshot, &dir)).map_err(err)?
+            };
             track["events"] = t.events.clone();
             // what the analysis would have recorded about the file (no decode needed)
             track["sr"] = json!(t.snapshot.sample_rate as i64);
@@ -1588,6 +1641,36 @@ mod tests {
     }
 
     #[test]
+    fn a_daw_name_that_gives_the_role_the_track_already_has_starts_no_round() {
+        let cache = scratch("role-same");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        // the role snare comes from the name of the source
+        let mut src = snapshot_of(&cache, &id, 0, "snare_top.wav");
+        let _ = doc.analyse(std::slice::from_ref(&src), false).unwrap();
+        let (svc, sid) = (doc.svc.clone().unwrap(), doc.sid.clone().unwrap());
+        let name = doc.tracks[0].0.clone();
+        assert_eq!(svc.tracks_get(&sid).unwrap()["tracks"][name.as_str()]["role"], "snare");
+        // the DAW name gives snare: the source counts as changed, the record keeps its role: the change is dropped
+        src.label = Some("Snare".into());
+        assert!(
+            !doc.snaps[&0].same_as(&src),
+            "a name that gives a role to a source with none is a change"
+        );
+        assert!(
+            !doc.analyse(std::slice::from_ref(&src), false).unwrap().ran,
+            "the role is already snare: no round"
+        );
+        assert_eq!(
+            doc.snaps[&0].label.as_deref(),
+            Some("Snare"),
+            "the new snapshot is kept"
+        );
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
     fn kick_then_mystery_then_snare_changes_an_automatic_role_once() {
         let cache = scratch("role-chain");
         let id = new_doc_id();
@@ -1854,12 +1937,69 @@ mod tests {
                 snapshot: snap,
                 track: "kick".into(),
                 events: stored.events["kick"].clone(),
+                settings: Map::new(),
             }])
             .unwrap();
         assert_eq!(restored.events["kick"].to_string(), stored.events["kick"].to_string());
         assert!(restored.decode_counts.is_empty(), "{:?}", restored.decode_counts);
         assert_eq!(restored.project_tracks, ["kick"]);
         again.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_restore_puts_back_what_the_user_set_and_guesses_nothing_for_a_track_the_archive_holds() {
+        let cache = scratch("restore-settings");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let hex = "0123456789abcdef0123456789abcdef";
+        let mut snap = snapshot_of(&cache, &id, 0, hex);
+        snap.label = Some("Kick In".into());
+        let stored = doc.analyse(std::slice::from_ref(&snap), false).unwrap();
+        let name = doc.tracks[0].0.clone();
+        let (svc, sid) = (doc.svc.clone().unwrap(), doc.sid.clone().unwrap());
+        // the user sets a role, a note and a volume by hand
+        svc.track_set_role(&sid, &name, "cymbal", Some(60), None, None, None)
+            .unwrap();
+        svc.track_set_mix(&sid, &name, Some(-3.0), None).unwrap();
+        let settings = settings_of(&svc, &sid, std::slice::from_ref(&name));
+        let held = settings[name.as_str()].as_object().unwrap();
+        assert_eq!(held["role_source"], "user");
+        assert!(!held.contains_key("events") && !held.contains_key("segments") && !held.contains_key("status"));
+        doc.shutdown();
+        // a new service (the new process) and a DAW name that would give another role
+        snap.label = Some("Snare Top".into());
+        let mut again = DocService::new(cache.clone(), id.clone());
+        let t = |settings: Map<String, Value>| RestoredTrack {
+            snapshot: snap.clone(),
+            track: name.clone(),
+            events: stored.events[name.as_str()].clone(),
+            settings,
+        };
+        again.restore(&[t(held.clone())]).unwrap();
+        let (svc2, sid2) = (again.svc.clone().unwrap(), again.sid.clone().unwrap());
+        let rec = svc2.tracks_get(&sid2).unwrap();
+        let rec = &rec["tracks"][name.as_str()];
+        assert_eq!(
+            (rec["role"].as_str(), rec["note"].as_i64(), rec["role_source"].as_str()),
+            (Some("cymbal"), Some(60), Some("user"))
+        );
+        assert_eq!(rec["volume_db"], -3.0);
+        assert_eq!(
+            svc2.events_get(&sid2, &name).unwrap()["events"].to_string(),
+            stored.events[name.as_str()].to_string(),
+            "the hits are the stored ones"
+        );
+        again.shutdown();
+        // an archive of an earlier plugin holds no settings: the role is guessed, as it always was
+        let mut old = DocService::new(cache.clone(), id.clone());
+        old.restore(&[t(Map::new())]).unwrap();
+        let (svc3, sid3) = (old.svc.clone().unwrap(), old.sid.clone().unwrap());
+        assert_eq!(
+            svc3.tracks_get(&sid3).unwrap()["tracks"][name.as_str()]["role"],
+            "snare"
+        );
+        old.shutdown();
         let _ = std::fs::remove_dir_all(&cache);
     }
 
@@ -1878,6 +2018,7 @@ mod tests {
                 snapshot: snap.clone(),
                 track: "kick".into(),
                 events: stored.events["kick"].clone(),
+                settings: Map::new(),
             }])
             .unwrap();
         // the project opens and answers the events without audio

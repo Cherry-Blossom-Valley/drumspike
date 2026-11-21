@@ -323,10 +323,16 @@
       await window.__TAURI__.core.invoke("track_set_role", { sid: S.sid, name: first.order[0], role: "cymbal" });
       first = await namesSnap();
     }
+    if (mode === "settings") {   // N10: the user sets a role, a note and a volume by hand
+      var inv = window.__TAURI__.core.invoke;
+      await inv("track_set_role", { sid: S.sid, name: first.order[0], role: "cymbal", note: 60 });
+      await inv("track_set_mix", { sid: S.sid, name: first.order[0], volume_db: -3 });
+      first = await namesSnap();
+    }
     first.roles_auto = auto;
     var base = reloads, t0 = performance.now();
     post(Object.assign({ kind: "names", reloads: reloads }, first));
-    var limit = T.arg === "base" ? 1500 : 15000;   // the baseline run renames nothing: no reload to wait for
+    var limit = (T.arg === "base" || T.arg === "settings") ? 1500 : 15000;   // the baseline run renames nothing: no reload to wait for
     while (reloads === base && performance.now() - t0 < limit) await sleepMs(100);
     var reloaded = reloads > base;
     if (mode.indexOf("roles") === 0) {   // a new role is a new round: its end is a second reload

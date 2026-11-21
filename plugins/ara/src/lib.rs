@@ -225,8 +225,10 @@ impl SourceState {
     /// The snapshot the service job works on.
     fn snapshot(&self) -> service::SourceSnapshot {
         let p = self.props();
-        let label = self.label();
+        // the mark is cleared BEFORE the name is read: a rename between the two marks the source again (at worst
+        // one round too many), and is never swallowed
         self.role_touch_pending.store(false, Ordering::SeqCst);
+        let label = self.label();
         // the role the name gives is what the round saw now
         *self.label_role_seen.lock().unwrap_or_else(|e| e.into_inner()) =
             label.as_deref().and_then(drumspike_app::roles::guess_role);
@@ -315,7 +317,8 @@ static NEXT_SEQUENCE_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Clone, Default)]
 struct SeqInfo {
     name: Option<String>,
-    order: i32,
+    /// `None`: the host gave no order (a struct too short): such a track is sorted last.
+    order: Option<i32>,
 }
 
 /// The next region id (unique per process, so a destroyed region's record cannot be
@@ -381,6 +384,9 @@ struct DocShared {
     region_gen: AtomicU64,
     /// M1b10: the region sequences of the host by id, with their names.
     sequences: Mutex<HashMap<u64, SeqInfo>>,
+    /// M1b10 (N10): the settings of every track (role, note, colour, parameters ...) as of the last round or
+    /// page edit, by track name. The archive stores them; a restore sets them on the calling thread.
+    settings: Mutex<serde_json::Map<String, Value>>,
     /// M1b10: the depth of the edit cycle of the host (`beginEditing` / `endEditing`) and whether a name or
     /// a region changed inside it: the names are computed once, when the cycle ends.
     edit_depth: AtomicUsize,
@@ -489,6 +495,7 @@ impl DocShared {
             round_samples: Mutex::new(HashMap::new()),
             region_gen: AtomicU64::new(0),
             sequences: Mutex::new(HashMap::new()),
+            settings: Mutex::new(serde_json::Map::new()),
             edit_depth: AtomicUsize::new(0),
             names_dirty: AtomicBool::new(false),
             name_computes: AtomicUsize::new(0),
@@ -570,6 +577,14 @@ impl DocShared {
             .lock()
             .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
             .unwrap_or_default();
+        // the settings of the tracks (a role or a note set in the page changes no event, so the archive
+        // would miss it): read at every edit
+        let track_names: Vec<String> = members
+            .iter()
+            .filter(|s| !s.removed.load(Ordering::SeqCst))
+            .filter_map(|s| s.track.lock().ok().and_then(|t| t.clone()))
+            .collect();
+        *self.settings.lock().unwrap_or_else(|e| e.into_inner()) = service::settings_of(svc, sid, &track_names);
         let mut all = serde_json::Map::new();
         for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
             let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
@@ -696,7 +711,7 @@ impl DocShared {
                             start_play: slot.rec.start_play,
                             id: slot.id,
                             sequence_name: seqs.get(&slot.sequence).and_then(|q| q.name.clone()),
-                            sequence_order: seqs.get(&slot.sequence).map(|q| q.order),
+                            sequence_order: seqs.get(&slot.sequence).and_then(|q| q.order),
                             region_name: slot.name.clone(),
                         })
                         .collect()
@@ -715,6 +730,12 @@ impl DocShared {
     /// changed: the next round makes its track record again (the role follows unless the user set
     /// it). A rename that keeps the role changes nothing and starts no round.
     fn touch_role_changes(&self) {
+        self.touch_role_changes_with(&|s| {
+            send(session(), Msg::Touch(s.doc.clone()));
+        });
+    }
+
+    fn touch_role_changes_with(&self, deliver: &dyn Fn(&Arc<SourceState>)) {
         let members: Vec<Arc<SourceState>> = self
             .members
             .lock()
@@ -730,8 +751,13 @@ impl DocShared {
                 && s.track.lock().map(|t| t.is_some()).unwrap_or(false)
                 && !s.role_touch_pending.swap(true, Ordering::SeqCst)
             {
-                self.role_touches.fetch_add(1, Ordering::SeqCst);
-                touch(s);
+                // the mark stays only when a touch was really made: a source nobody waits for is marked
+                // again by the next name
+                if touch_with(s, deliver) {
+                    self.role_touches.fetch_add(1, Ordering::SeqCst);
+                } else {
+                    s.role_touch_pending.store(false, Ordering::SeqCst);
+                }
             }
         }
     }
@@ -1848,6 +1874,9 @@ impl Session {
         if let Ok(mut m) = doc.events.lock() {
             *m = result.events.clone();
         }
+        if let Ok(mut m) = doc.settings.lock() {
+            *m = result.settings.clone();
+        }
         if result.analysed.is_empty() && usable.is_empty() {
             // a removal that left nothing to analyse
             self.log(
@@ -2693,11 +2722,11 @@ unsafe fn sequence_name(p: *const ARARegionSequenceProperties) -> Option<String>
     }
 }
 
-/// The place of a region sequence in the DAW (`orderIndex`, ARA 2): the DAW track order. 0 when the struct
+/// The place of a region sequence in the DAW (`orderIndex`, ARA 2): the DAW track order. None when the struct
 /// is too short.
-unsafe fn sequence_order(p: *const ARARegionSequenceProperties) -> i32 {
+unsafe fn sequence_order(p: *const ARARegionSequenceProperties) -> Option<i32> {
     if p.is_null() {
-        return 0;
+        return None;
     }
     let declared = std::ptr::addr_of!((*p).structSize).read_unaligned();
     if !size_covers(
@@ -2705,9 +2734,9 @@ unsafe fn sequence_order(p: *const ARARegionSequenceProperties) -> i32 {
         std::mem::offset_of!(ARARegionSequenceProperties, orderIndex),
         std::mem::size_of::<i32>(),
     ) {
-        return 0;
+        return None;
     }
-    std::ptr::addr_of!((*p).orderIndex).read_unaligned()
+    Some(std::ptr::addr_of!((*p).orderIndex).read_unaligned())
 }
 
 /// The region sequence and the name of a playback region (M1b10): the sequence id (0 when the host
@@ -2991,17 +3020,28 @@ unsafe extern "C" fn dc_updateAudioSourceProperties(
 /// document needs a round with fresh snapshots (it runs after the settle time; a change
 /// that alters nothing ends in a round that does nothing). `DS_ARA_TOUCH_FAULT=ignore` (the
 /// check's fault run) brings back the first version: the change is not seen.
-fn touch(src: &Arc<SourceState>) {
+fn touch(src: &Arc<SourceState>) -> bool {
+    touch_with(src, &|s| {
+        send(session(), Msg::Touch(s.doc.clone()));
+    })
+}
+
+/// [`touch`] with the way the message goes to the worker given (a unit test counts instead of sending).
+/// Answers whether a touch was due and made: false for the fault run, a removed source and a source that
+/// no round waits for (the first request will take its snapshot).
+fn touch_with(src: &Arc<SourceState>, deliver: &dyn Fn(&Arc<SourceState>)) -> bool {
     src.doc.region_gen.fetch_add(1, Ordering::SeqCst);
     if crate::test_switch("DS_ARA_TOUCH_FAULT").as_deref() == Ok("ignore") {
-        return;
+        return false;
     }
     if src.removed.load(Ordering::SeqCst) {
-        return;
+        return false;
     }
     if src.requested.load(Ordering::SeqCst) || src.has_events.load(Ordering::SeqCst) {
-        send(session(), Msg::Touch(src.doc.clone()));
+        deliver(src);
+        return true;
     }
+    false
 }
 
 unsafe fn state_of(audioSourceRef: ARAAudioSourceRef) -> Option<Arc<SourceState>> {
@@ -3651,6 +3691,15 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
                         notes: src.notes.lock().map(|n| n.clone()).unwrap_or_default(),
                         track: src.track.lock().ok().and_then(|t| t.clone()).unwrap_or_default(),
                         stale: src.stale.load(Ordering::SeqCst),
+                        settings: {
+                            let track = src.track.lock().ok().and_then(|t| t.clone()).unwrap_or_default();
+                            ctl.doc
+                                .settings
+                                .lock()
+                                .ok()
+                                .and_then(|m| m.get(&track).and_then(Value::as_object).cloned())
+                                .unwrap_or_default()
+                        },
                     }
                 })
                 .collect()
@@ -3790,6 +3839,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                             snapshot,
                             track,
                             events: if fault == "empty" { json!([]) } else { (*events).clone() },
+                            settings: a.settings.clone(),
                         });
                     }
                 }
@@ -3809,6 +3859,16 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                 m.insert(t.track.clone(), t.events.clone());
             }
             *ctl.doc.events.lock().unwrap_or_else(|e| e.into_inner()) = m;
+        }
+        // the settings too: an archive stored right after the restore carries them
+        {
+            let mut m = serde_json::Map::new();
+            for t in &restored {
+                if !t.settings.is_empty() {
+                    m.insert(t.track.clone(), Value::Object(t.settings.clone()));
+                }
+            }
+            *ctl.doc.settings.lock().unwrap_or_else(|e| e.into_inner()) = m;
         }
         send(
             s,
@@ -4618,6 +4678,7 @@ mod tests {
             notes: Vec::new(),
             track: String::new(),
             stale: false,
+            settings: serde_json::Map::new(),
         }
     }
 
@@ -4735,7 +4796,7 @@ mod tests {
             7,
             SeqInfo {
                 name: Some("Kick".into()),
-                order: 0,
+                order: Some(0),
             },
         );
         let id = doc.id();
@@ -4785,7 +4846,7 @@ mod tests {
             3,
             SeqInfo {
                 name: Some("Snare".into()),
-                order: 0,
+                order: Some(0),
             },
         );
         let _src = named_source(&doc, 0, "t0", 3, 1);
@@ -4801,39 +4862,92 @@ mod tests {
         assert_eq!(doc.display_names()["t0"], "take 0");
     }
 
-    #[test]
-    fn a_rename_storm_marks_a_source_for_a_new_role_once() {
+    /// A sequence named `name` with one source `t0` on it that a round waits for (a touch is really made).
+    fn rename_setup(name: &str) -> (Arc<DocShared>, Arc<SourceState>) {
         let doc = DocShared::new();
         doc.sequences.lock().unwrap().insert(
             1,
             SeqInfo {
-                name: Some("Mystery".into()),
-                order: 0,
+                name: Some(name.into()),
+                order: Some(0),
             },
         );
         let src = named_source(&doc, 0, "t0", 1, 1);
         src.regions.lock().unwrap()[0].name = None;
+        src.requested.store(true, Ordering::SeqCst);
+        (doc, src)
+    }
+
+    fn rename(doc: &Arc<DocShared>, name: &str) {
+        doc.sequences.lock().unwrap().get_mut(&1).unwrap().name = Some(name.into());
+    }
+
+    #[test]
+    fn a_rename_storm_marks_a_source_for_a_new_role_once() {
+        let (doc, src) = rename_setup("Mystery");
+        let sent = std::cell::Cell::new(0usize);
+        let deliver = |_: &Arc<SourceState>| sent.set(sent.get() + 1);
         for i in 0..200 {
-            let name = if i % 2 == 0 { "Snare" } else { "Kick" };
-            doc.sequences.lock().unwrap().get_mut(&1).unwrap().name = Some(name.into());
-            doc.touch_role_changes();
+            rename(&doc, if i % 2 == 0 { "Snare" } else { "Kick" });
+            doc.touch_role_changes_with(&deliver);
         }
         assert_eq!(
-            doc.role_touches.load(Ordering::SeqCst),
+            sent.get(),
             1,
-            "200 renames, one mark: one round after the settle time"
+            "200 renames, one touch sent: one round after the settle time"
         );
-        // a round took a snapshot: the next new role marks it again
+        assert_eq!(doc.role_touches.load(Ordering::SeqCst), 1);
+        // a round took its snapshot (it saw the last name, Kick): the same role marks nothing
         let _ = src.snapshot();
-        doc.touch_role_changes();
-        assert_eq!(
-            doc.role_touches.load(Ordering::SeqCst),
-            1,
-            "the snapshot saw the role of the last name"
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 1);
+        rename(&doc, "Hi-Hat");
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 2, "a new role after the snapshot is marked again");
+    }
+
+    #[test]
+    fn a_rename_between_the_clear_and_the_read_of_a_snapshot_is_not_swallowed() {
+        let (doc, src) = rename_setup("Mystery");
+        let sent = std::cell::Cell::new(0usize);
+        let deliver = |_: &Arc<SourceState>| sent.set(sent.get() + 1);
+        rename(&doc, "Snare");
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 1);
+        assert!(src.role_touch_pending.load(Ordering::SeqCst));
+        // the worker takes the snapshot: the mark is cleared first, then the name is read
+        let snap = src.snapshot();
+        assert!(
+            !src.role_touch_pending.load(Ordering::SeqCst),
+            "the snapshot cleared the mark"
         );
-        doc.sequences.lock().unwrap().get_mut(&1).unwrap().name = Some("Hi-Hat".into());
-        doc.touch_role_changes();
-        assert_eq!(doc.role_touches.load(Ordering::SeqCst), 2);
+        assert_eq!(snap.label.as_deref(), Some("Snare"));
+        // a rename right after the clear (the main thread ran between the two steps): the mark is free, the
+        // new name is touched, and the next snapshot has it
+        rename(&doc, "Hi-Hat");
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 2, "the rename is touched, not swallowed");
+        assert_eq!(src.snapshot().label.as_deref(), Some("Hi-Hat"));
+    }
+
+    #[test]
+    fn a_touch_that_sends_nothing_leaves_no_mark_behind() {
+        let (doc, src) = rename_setup("Mystery");
+        src.requested.store(false, Ordering::SeqCst); // no round waits for this source
+        let sent = std::cell::Cell::new(0usize);
+        let deliver = |_: &Arc<SourceState>| sent.set(sent.get() + 1);
+        rename(&doc, "Snare");
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 0);
+        assert!(
+            !src.role_touch_pending.load(Ordering::SeqCst),
+            "nothing was sent: no mark"
+        );
+        // a round waits now: the next name is touched
+        src.requested.store(true, Ordering::SeqCst);
+        rename(&doc, "Kick");
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 1, "the later rename is not swallowed");
     }
 
     #[test]
@@ -4845,7 +4959,7 @@ mod tests {
             seq.name = 0xdead as *const c_char; // never read
             seq.orderIndex = 9;
             assert_eq!(sequence_name(&seq), None);
-            assert_eq!(sequence_order(&seq), 0);
+            assert_eq!(sequence_order(&seq), None, "an unknown order, not 0");
             let mut reg: ARAPlaybackRegionProperties = std::mem::zeroed();
             reg.structSize = std::mem::offset_of!(ARAPlaybackRegionProperties, regionSequenceRef);
             reg.name = 0xdead as *const c_char;
@@ -4857,7 +4971,7 @@ mod tests {
             full.name = bad.as_ptr();
             full.orderIndex = 4;
             assert_eq!(sequence_name(&full).as_deref(), Some("K\u{fffd}i"));
-            assert_eq!(sequence_order(&full), 4);
+            assert_eq!(sequence_order(&full), Some(4));
             full.name = std::ptr::null();
             assert_eq!(sequence_name(&full), None);
             assert_eq!(sequence_name(std::ptr::null()), None);

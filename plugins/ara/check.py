@@ -6010,11 +6010,11 @@ def stage_editor_menu_fault() -> bool:
 # reported, the host renames the first DAW track and moves the region of the second source to it.
 # The names give no role (the role follows the DAW name, see the stage editor-roles): a rename or a move here
 # changes no role, so it must start no round.
-NAMES_ARGS = ["--seq-names", "Drum A", "-", "Overheads", "Overheads",
+NAMES_ARGS = ["--seq-names", "Drum A", "-", "Drum B", "Drum B",
               "--region-names", "first take", "Snare Top Take", "-", "-",
               "--rename-seq", "0=Drum Big", "--move-region", "1=0"]
-NAMES_BEFORE = ["Drum A", "Snare Top Take", "Overheads", "Overheads (2)"]
-NAMES_AFTER = ["Drum Big", "Drum Big (2)", "Overheads", "Overheads (2)"]
+NAMES_BEFORE = ["Drum A", "Snare Top Take", "Drum B", "Drum B (2)"]
+NAMES_AFTER = ["Drum Big", "Drum Big (2)", "Drum B", "Drum B (2)"]
 
 
 def host_lines(label: str) -> list:
@@ -6221,6 +6221,68 @@ def stage_editor_roles_fault() -> bool:
     return ok
 
 
+# ---- M1b10 N10: a restore of the archive puts back what the user set
+
+def restore_settings_parts(first_run: dict, run: dict, archive: Path, keys: list) -> dict:
+    """The user set a role, a note and a volume by hand in the page (run 1, archive stored); a new document
+    restores that archive (run 2): the same role, role_source, note and volume, the stored hits, and no guess and
+    no round because of it."""
+    rows1 = first_run["rows"]
+    after = (page_reports(rows1, "names-after") or [{}])[0]
+    want = {k: (r.get("role"), r.get("note"), r.get("role_source")) for k, r in (after.get("roles") or {}).items()}
+    try:
+        doc = tracks_of_doc(doc_of_run(run["cache"]))
+        arch = json.loads(archive.read_text())
+    except (OSError, ValueError, IndexError, StopIteration):
+        doc, arch = {}, {}
+    got = {k: (t.get("role"), t.get("note"), t.get("role_source")) for k, t in doc.items()}
+    first_key = keys[0]
+    rounds = [r for r in run["rows"] if r.get("event") in ("round_start", "job")]
+    held = [s for s in arch.get("sources", []) if s.get("settings")]
+    return {
+        "restore-settings": (
+            got == want and want.get(first_key) == ("cymbal", 60, "user") and len(held) == len(keys),
+            f"the archive holds the settings of {len(held)} of {len(keys)} tracks; the restored document has {got} (want {want}): the role, the note and "
+            f"role_source the user set, nothing guessed"),
+        "restore-volume": (
+            (doc.get(first_key) or {}).get("volume_db") == -3,
+            f"the volume the user set ({(doc.get(first_key) or {}).get('volume_db')}) is back"),
+        "restore-hits": (
+            bool(arch.get("events")) and {k: (t.get("events") or []) for k, t in doc.items()} == arch.get("events"),
+            "the hits of the restored document are the hits of the archive, edited ones too"),
+        "restore-no-round": (
+            not rounds,
+            f"{len(rounds)} round or job row(s) in the run that restored: the restore makes no round"),
+    }
+
+
+def restore_settings_run(label: str, env: dict | None = None) -> tuple[dict, dict, Path, list]:
+    keys = [safe_name(stem_of(h)) for h in ROLE_HEX]
+    archive = OUT / f"{label}.ara"
+    if archive.exists():
+        archive.unlink()
+    base = ["--names", *ROLE_HEX, "--seq-names", *ROLE_SEQS]
+    rc, summary, rows = run_phase(f"{label}-store", "names", CLAP, None, [*base, "--arg", "settings", "--archive", str(archive)])
+    first = {"rc": rc, "rows": rows}
+    cache = f"cache-{label}-restore"
+    rc2, text, lines = host_run(f"{label}-restore", CLAP, ["restore", "--files", *fixture_args(FILES), "--archive", str(archive), *base], cache, extra=env)
+    run = {"rc": rc2, "rows": report_rows(f"{label}-restore"), "cache": cache}
+    return first, run, archive, keys
+
+
+def stage_restore_settings() -> bool:
+    if not HOST.exists():
+        return pass_fail("restore-settings", False, "no host")
+    first, run, archive, keys = restore_settings_run("restore-settings")
+    return print_parts("", restore_settings_parts(first, run, archive, keys))
+
+
+def stage_restore_settings_fault() -> bool:
+    first, run, archive, keys = restore_settings_run("restore-settings-fault", {"DS_ARA_NAMES_FAULT": "restore-guess"})
+    return fault_part("restore-settings-fault", restore_settings_parts(first, run, archive, keys), "restore-settings",
+                      "the restore guesses the role again and drops the settings of the user")
+
+
 STAGES = {
     "fixture": stage_fixture,
     "reference": stage_reference,
@@ -6379,6 +6441,8 @@ STAGES = {
     "editor-names": stage_editor_names,
     "editor-names-fault": stage_editor_names_fault,
     "editor-roles": stage_editor_roles,
+    "restore-settings": stage_restore_settings,
+    "restore-settings-fault": stage_restore_settings_fault,
     "editor-roles-fault": stage_editor_roles_fault,
     "editor-playback-tracks-fault": stage_editor_playback_tracks_fault,
     "editor-playback-drag": stage_editor_playback_drag,
@@ -6422,7 +6486,7 @@ ORDER = [
     "editor-playback-drag", "editor-playback-drag-fault", "editor-playback-late", "editor-playback-late-fault",
     "editor-playback-tracks", "editor-playback-tracks-fault",
     "editor-hit", "editor-hit-fault", "editor-geometry", "editor-geometry-fault", "editor-menu", "editor-menu-fault",
-    "editor-names", "editor-names-fault", "editor-roles", "editor-roles-fault",
+    "editor-names", "editor-names-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",

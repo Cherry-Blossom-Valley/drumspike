@@ -118,7 +118,10 @@ pub fn read_head_mono(path: &Path, seconds: usize) -> Option<(Vec<f32>, u32, usi
         return None;
     }
     let frame = 4 * channels as usize;
-    let frames = (data_len / frame).min(rate as usize * seconds);
+    // what the header claims is capped by what the file holds: a header that lies reserves nothing, and a
+    // file shorter than its header decodes what is there (as the whole-file reader does)
+    let on_disk = f.metadata().ok()?.len().saturating_sub(44) as usize;
+    let frames = (data_len.min(on_disk) / frame).min(rate as usize * seconds);
     let mut data = vec![0u8; frames * frame];
     f.read_exact(&mut data).ok()?;
     let mut buf = header(channels, rate, frames);
@@ -177,6 +180,23 @@ mod tests {
         assert_eq!(mono, vec![0.5, -0.25, 1e-3, 0.0]);
         // the size the plugin expects of a finished file is the size on disk
         assert_eq!(std::fs::metadata(&dest).unwrap().len(), file_len(4, 1));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_header_that_claims_more_than_the_file_holds_reads_what_is_there() {
+        let dir = std::env::temp_dir().join(format!("drumspike-ara-wav-{}-lie", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("lie.wav");
+        // the header says 4 billion frames of 8 channels, the file holds 1000 mono-ish frames
+        let mut bytes = header(1, 8_000, 1_000_000_000);
+        for _ in 0..1000 {
+            bytes.extend_from_slice(&0.25f32.to_le_bytes());
+        }
+        std::fs::write(&dest, &bytes).unwrap();
+        let (mono, _, read) = read_head_mono(&dest, 30).unwrap();
+        assert_eq!(mono.len(), 1000);
+        assert_eq!(read, 44 + 4000);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
