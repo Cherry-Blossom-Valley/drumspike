@@ -328,6 +328,62 @@ pub fn page_time(song_s: f64, regions: &[(usize, RegionRec)]) -> (f64, Mapped) {
     ((pick.1.start_mod + (song_s - pick.1.start_play)).max(0.0), kind)
 }
 
+/// How [`song_time`] chose its region.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocateRule {
+    /// The region holds the page time in its source, and the host position in the song.
+    TimeAndHost,
+    /// The region holds the page time in its source (the first of them).
+    Time,
+    /// No region holds the page time: the region that holds the host position gives the offset.
+    Host,
+    /// No region holds the page time or the host position: the first region gives the offset.
+    First,
+}
+
+/// The song position (seconds) of a page time: the inverse of [`page_time`] (M1b7, #554).
+///
+/// `song = start_in_song + (page_time - start_in_source)` for one region. The rule that picks the
+/// region, one rule for a source with several regions (and for several sources):
+///
+/// 1. A region that holds the page time in its source time, and also holds the host position
+///    `host_song_s` in the song (the page asks for a time of the part the host plays now).
+/// 2. Else the first region that holds the page time in its source time.
+/// 3. Else (the time is in no region: before the start or after the end of the audio of the
+///    regions) a region that holds the host position gives the offset, as the follow does outside
+///    a region.
+/// 4. Else the first region.
+///
+/// "First" is the lowest source index, then the earliest start in the song (`total_cmp`).
+/// The result is never below 0 (the song starts at 0). With no usable region (no round yet, a
+/// source without a playback region) there is no answer: `None`, so nothing goes to the host.
+pub fn song_time(page_s: f64, host_song_s: Option<f64>, regions: &[(usize, RegionRec)]) -> Option<(f64, LocateRule)> {
+    let usable: Vec<&(usize, RegionRec)> = regions.iter().filter(|(_, r)| r.dur_mod > 0.0).collect();
+    if usable.is_empty() || !page_s.is_finite() {
+        return None;
+    }
+    let holds_time = |r: &RegionRec| r.start_mod <= page_s && page_s < r.start_mod + r.dur_mod;
+    let holds_host = |r: &RegionRec| host_song_s.is_some_and(|h| r.start_play <= h && h < r.start_play + r.dur_mod);
+    // (holds the time, holds the host position): the best pair wins, the first of equals
+    let best = usable
+        .iter()
+        .min_by(|a, b| {
+            let rank = |r: &RegionRec| (!holds_time(r), !holds_host(r));
+            rank(&a.1)
+                .cmp(&rank(&b.1))
+                .then(a.0.cmp(&b.0))
+                .then(a.1.start_play.total_cmp(&b.1.start_play))
+        })
+        .copied()?;
+    let rule = match (holds_time(&best.1), holds_host(&best.1)) {
+        (true, true) => LocateRule::TimeAndHost,
+        (true, false) => LocateRule::Time,
+        (false, true) => LocateRule::Host,
+        (false, false) => LocateRule::First,
+    };
+    Some(((best.1.start_play + (page_s - best.1.start_mod)).max(0.0), rule))
+}
+
 // ---------------------------------------------------------------- the pacing
 
 /// Why a message goes to the page.
@@ -617,6 +673,60 @@ mod tests {
         let (t, k) = page_time(2.0, &two);
         assert!((t - 2.0).abs() < 1e-12 && k == Mapped::Outside);
         assert_eq!(page_time(3.5, &two), (5.5, Mapped::Inside));
+    }
+
+    #[test]
+    fn a_page_time_inside_a_region_maps_back_to_the_song() {
+        let r = [(0, reg(0.4, 2.4, 2.0))];
+        let (song, rule) = song_time(1.0, None, &r).unwrap();
+        assert_eq!(song, 2.6);
+        assert_eq!(rule, LocateRule::Time);
+        // the inverse of the follow: page_time(song_time(t)) is t
+        assert_eq!(page_time(song, &r).0, 1.0);
+        let (s2, rule2) = song_time(1.0, Some(3.0), &r).unwrap();
+        assert_eq!((s2, rule2), (2.6, LocateRule::TimeAndHost));
+    }
+
+    #[test]
+    fn a_source_with_two_regions_takes_the_region_of_the_host_position_else_the_first() {
+        // one source, two regions of the same audio: song 0..2 and song 10..12
+        let r = [(0, reg(0.0, 2.0, 0.0)), (0, reg(0.0, 2.0, 10.0))];
+        // the host is in the second one: the second one
+        assert_eq!(song_time(1.0, Some(11.0), &r), Some((11.0, LocateRule::TimeAndHost)));
+        // the host is in the first one, or has no position, or is in a gap: the first one
+        assert_eq!(song_time(1.0, Some(0.5), &r), Some((1.0, LocateRule::TimeAndHost)));
+        assert_eq!(song_time(1.0, None, &r), Some((1.0, LocateRule::Time)));
+        assert_eq!(song_time(1.0, Some(5.0), &r), Some((1.0, LocateRule::Time)));
+        // a region that does not hold the time loses to one that does, whatever the host holds
+        let r2 = [(0, reg(0.0, 2.0, 0.0)), (0, reg(5.0, 2.0, 10.0))];
+        assert_eq!(song_time(1.0, Some(11.0), &r2), Some((1.0, LocateRule::Time)));
+        // two sources at different places: the lowest source index is the first
+        let r3 = [(1, reg(0.0, 2.0, 7.0)), (0, reg(0.0, 2.0, 3.0))];
+        assert_eq!(song_time(1.0, None, &r3), Some((4.0, LocateRule::Time)));
+    }
+
+    #[test]
+    fn no_region_gives_no_song_position() {
+        assert_eq!(song_time(1.0, Some(2.0), &[]), None);
+        // a region without length is no region
+        assert_eq!(song_time(1.0, None, &[(0, reg(0.0, 0.0, 0.0))]), None);
+        assert_eq!(song_time(f64::NAN, None, &[(0, reg(0.0, 1.0, 0.0))]), None);
+    }
+
+    #[test]
+    fn a_page_time_before_the_start_of_the_region_runs_on_with_its_offset_and_never_below_zero() {
+        let r = [(0, reg(0.4, 2.4, 2.0))];
+        // 0.1 s is before the audio of the region (0.4 s): the offset still holds, song 1.7 s
+        let (song, rule) = song_time(0.1, None, &r).unwrap();
+        assert!((song - 1.7).abs() < 1e-12);
+        assert_eq!(rule, LocateRule::First);
+        // the host position decides the rule name, not the number
+        assert_eq!(song_time(0.1, Some(3.0), &r).unwrap().1, LocateRule::Host);
+        // after the end of the audio: the same
+        assert!((song_time(3.5, None, &r).unwrap().0 - 5.1).abs() < 1e-12);
+        // a time that would give a negative song position stops at 0
+        let r0 = [(0, reg(1.0, 2.0, 0.0))];
+        assert_eq!(song_time(0.2, None, &r0).unwrap().0, 0.0);
     }
 
     #[test]

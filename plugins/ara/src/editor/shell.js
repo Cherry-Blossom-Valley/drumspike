@@ -80,9 +80,9 @@
   // What this script uses of the page: functions, two globals and one element. A rename in
   // static/ must not make the reload do less in silence (S4): a missing one is reported at once
   // (console error, shell command plugin_report), and a stage checks the bundled page for them.
-  var PAGE_FUNCTIONS = ["cancelEvents", "initSessions", "loadProject", "invalidate", "appHostFollow"];
-  var PAGE_GLOBALS = ["S", "F", "AC"];
-  var PAGE_IDS = ["lanesScroll"];
+  var PAGE_FUNCTIONS = ["cancelEvents", "initSessions", "loadProject", "invalidate", "appHostFollow", "setMsg"];
+  var PAGE_GLOBALS = ["S", "F", "AC", "PH"];
+  var PAGE_IDS = ["lanesScroll", "playBtn", "ruler"];
   function missingPageParts() {
     var names = PAGE_FUNCTIONS.slice();
     if (window.__DS_TEST__ && window.__DS_TEST__.fault === "missing-function") names.push("renamedLoadProject");   // the check's fault run
@@ -141,23 +141,75 @@
   };
   pollEvents();   // the plugin's own listener starts at once
 
-  /* The host transport (M1b5, #546). The plugin sets B.hostTransport (the interface of #518: the
-     page registers onPosition, and calls play, stop and locate) and feeds it from the host: a
-     long poll on /__ds/transport brings {epoch, t_ns, pos, playing}; the shell adds the sid and
-     hands it to onPosition. The page follows the host. play, stop and locate do not reach the
-     host (that is a later part): play is refused with a message, so the page never shows a play
-     that the host does not play; stop and locate answer at once and do nothing. B is a top-level
-     const of backend.js that does not exist yet when this script runs, so the shell installs the
-     object when the page has loaded and then calls appHostFollow() itself (static/transport.js:
-     a shell that injects the transport later does that). */
+  /* The host transport (M1b5, #546, and M1b7, #554). The plugin sets B.hostTransport (the interface
+     of #518: the page registers onPosition, and calls play, stop and locate) and feeds it from the
+     host: a long poll on /__ds/transport brings {epoch, t_ns, pos, playing}; the shell adds the sid
+     and hands it to onPosition. B is a top-level const of backend.js that does not exist yet when
+     this script runs, so the shell installs the object when the page has loaded and then calls
+     appHostFollow() itself (static/transport.js: a shell that injects the transport later does that).
+
+     M1b7: play, stop and locate go to the host. Each is a shell command of the plugin
+     (plugin_host_play, plugin_host_stop, plugin_host_locate); the plugin maps the page time to a
+     song position and calls the ARA playback controller of the host on the host's main thread. The
+     page time is a time of the source, the plugin sends a song position. The answer is
+     {ok, reason, confirm_ms}: a refusal (the host gives no control, or no region maps the time) is a
+     text for the page, not an error. The position that the host lands on comes back through the
+     transport poll below, and only that moves the page: this script never moves the page itself,
+     except to show the last position the host sent again when the host did not do what was asked
+     (a host that ignores a request must not leave the page where the click put it). */
+  var tstate = { messages: 0, delivered: 0, held: null, installed: false, first_at: 0, last: null, lastAt: 0, log: [], seen: [], calls: [], offer: null };
+  window.__DS_TRANSPORT__ = tstate;
+  function say(text) {
+    try { var f = (0, eval)("typeof setMsg === 'function' ? setMsg : undefined"); if (f && text) f(text); } catch (e) { /* no page */ }
+  }
+  function hostCall(kind, args) {
+    var rec = { kind: kind, at: Date.now(), t: args.t === undefined ? null : args.t, ok: null, reason: null, done: 0 };
+    if (tstate.calls.length < 400) tstate.calls.push(rec);
+    return invoke("plugin_host_" + kind, args).then(function (r) { return r || { ok: false, reason: "the plugin gave no answer", confirm_ms: 0 }; },
+      function (e) { return { ok: false, reason: "the plugin did not answer: " + (e && e.message || e), confirm_ms: 0 }; }).then(function (r) {
+      rec.ok = !!r.ok; rec.reason = r.reason || null; rec.done = Date.now();
+      return r;
+    });
+  }
+  /* The host did not do what was asked: show the last position it sent, so the page does not stay
+     where the click put it. A host that plays sends its position anyway, so only a stopped one needs this. */
+  function showHostAgain() {
+    var m = tstate.last;
+    if (m && !m.playing) deliverTransport({ epoch: m.epoch, t_ns: m.t_ns, pos: m.pos, playing: false, why: "again" });
+  }
+  function afterRequest(r) {
+    if (!r.ok) { say(r.reason); showHostAgain(); return; }
+    var seen = tstate.delivered;
+    if (r.confirm_ms > 0) setTimeout(function () { if (tstate.delivered === seen) showHostAgain(); }, r.confirm_ms);
+  }
+  var watch = { v: 0 };
   var HT = {
     onPosition: null,
-    play: function () { return Promise.reject(new Error("the host plays: start playback in the DAW")); },
-    stop: function () { return Promise.resolve(); },
-    locate: function () { return Promise.resolve(); }
+    /* Play: the host starts (and moves first when the page stands elsewhere). The page shows the
+       playing state only when the host has said it plays: the promise ends with the first message
+       that says playing, or fails. With confirm_ms 0 (a fault run) it ends at once. */
+    play: function (pos) {
+      var t0 = Date.now();
+      return hostCall("play", { t: typeof pos === "number" ? pos : null }).then(function (r) {
+        if (!r.ok) throw new Error(r.reason);
+        if (!(r.confirm_ms > 0)) return;
+        return new Promise(function (resolve, reject) {
+          (function look() {
+            if (tstate.last && tstate.last.playing && tstate.lastAt >= t0) { resolve(); return; }
+            if (Date.now() - t0 > 1500) { reject(new Error("the host did not start playback")); return; }
+            setTimeout(look, 10);
+          })();
+        });
+      });
+    },
+    stop: function (pos) {
+      if (typeof pos === "number") watch.v = pos;   // the page's own stop sets its playhead: that is no locate
+      return hostCall("stop", {}).then(afterRequest);
+    },
+    locate: function (t) {
+      return hostCall("locate", { t: t }).then(afterRequest);
+    }
   };
-  var tstate = { messages: 0, delivered: 0, held: null, installed: false, first_at: 0, last: null, log: [] };
-  window.__DS_TRANSPORT__ = tstate;
   function lex(expr) { try { return (0, eval)(expr); } catch (e) { return undefined; } }
   function installTransport() {
     if (tstate.installed) return true;
@@ -167,6 +219,8 @@
     if (b.hostTransport !== HT) HT = b.hostTransport;
     lex("appHostFollow()");
     tstate.installed = true;
+    watch.v = lex("typeof PH === 'object' ? PH.v : 0");
+    applyOffer(0);
     if (tstate.held) { var m = tstate.held; tstate.held = null; deliverTransport(m); }
     return true;
   }
@@ -185,12 +239,38 @@
     }
     tstate.delivered++;
     tstate.last = m;
+    tstate.lastAt = Date.now();
+    if (tstate.seen.length < 4000) tstate.seen.push([tstate.lastAt, m.pos, m.playing ? 1 : 0, m.why || null]);
     /* The page binds its follow state in appOnPlayhead only while AC.active is false, and a stopped
        message leaves AC.active true: a host that stops and plays again would not be followed. The
        shell resets the flag when the host starts to play and the page is not playing (the need is
        reported for static/: the page should re-enter its follow branch itself). */
     if (m.playing && lex("typeof S === 'object' && !S.playing && typeof AC === 'object' && AC.active === true")) lex("AC.active = false");
     HT.onPosition({ sid: sid, epoch: m.epoch, t_ns: m.t_ns, pos: m.pos, playing: m.playing });
+    watch.v = lex("typeof PH === 'object' ? PH.v : 0");   // what the host put on the page is no move of the user
+  }
+  /* The page asks the host to move only while it plays (appTickPos runs in tick()). A click in the
+     ruler of a stopped page only sets PH.v and PH.user. Without this watch a locate of the page while
+     the host stands would never reach the host. A move of the user (PH.user, a value that no message
+     of the host and no stop of the page put there) is a locate. The need in static/ is reported in
+     docs/design/daw-plugin/m1b7-page-moves-host.md: the page should call locate itself. */
+  setInterval(function () {
+    if (!tstate.installed) return;
+    var cur = lex("typeof S === 'object' && typeof PH === 'object' && !S.playing && PH.user ? PH.v : null");
+    if (typeof cur !== "number" || Math.abs(cur - watch.v) < 1e-9) return;
+    watch.v = cur;
+    HT.locate(cur);
+  }, 25);
+  /* What the host gives: play, stop and locate show as not available, with the text, when it gives no
+     control (the button, the ruler); the answer of each request says the same when used. */
+  function applyOffer(n) {
+    invoke("plugin_host_offer", {}).then(function (o) {
+      tstate.offer = o;
+      var btn = document.getElementById("playBtn"), ruler = document.getElementById("ruler");
+      if ((!btn || !ruler) && n < 40) { setTimeout(function () { applyOffer(n + 1); }, 100); return; }
+      if (btn && !o.play) { btn.disabled = true; btn.title = o.play_text; }
+      if (ruler && !o.locate) ruler.title = o.locate_text;
+    }, function () { /* no plugin answer: the page keeps its buttons */ });
   }
   async function pollTransport() {
     for (;;) {

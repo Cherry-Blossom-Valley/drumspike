@@ -3495,7 +3495,7 @@ def stage_switches_fault() -> bool:
 
 # ---- review round 2, item 9: no unwrap and no expect in the non-test code of the plugin
 
-UNWRAP_FILES = ["src/editor.rs", "src/lib.rs", "src/service.rs", "src/state.rs", "src/transport.rs", "src/wav.rs"]
+UNWRAP_FILES = ["src/editor.rs", "src/lib.rs", "src/playback.rs", "src/service.rs", "src/state.rs", "src/transport.rs", "src/wav.rs"]
 UNWRAP_PATTERN = re.compile(r"\.(unwrap|expect)\s*\(|\.unwrap_unchecked\s*\(")
 
 
@@ -5276,6 +5276,398 @@ def stage_transport_handover_fault() -> bool:
                      f"the fault run (the audio thread allocates in its call) makes the unit test fail with 'the audio thread's call allocated': rc={rc}, named {named}")
 
 
+
+# ---------------------------------------------------------------- M1b7: the page moves the host
+#
+# The test host has an ARA playback controller (--playback full) that records every request and moves its
+# transport (--transport follow), and a grid (--snap 0.5) that a position request lands on. The page
+# driver (mode playback) does what a user does: a click in the ruler (S.playhead = t), the Play button
+# (play()), the Stop button (pause()). The host's record says what it was asked (seconds and samples,
+# the thread, the wall time); the page's samples say where the page was, with the same clock.
+# The grid makes the click of the page and the answer of the host differ, so the check can tell the
+# page's own move from the host's position that came back.
+
+PB_SNAP = 0.5
+PB_RATE = 48000
+# what the driver does, in order: (step, request kind of the host, page time of the click or None)
+PB_STEPS = [("locate-stopped", "locate", 1.2), ("play", "play", None), ("locate-playing", "locate", 0.6),
+            ("stop", "stop", None), ("locate-stopped-2", "locate", 2.6)]
+PB_LOOP_MS = 100.0
+
+
+def playback_run(label: str, bundle: Path, scenario: str = "full", env: dict | None = None) -> tuple[int, dict, list, dict]:
+    """scenario: full (all three calls), partial (no position call), ignore (the host records and does nothing),
+    none (no playback controller)."""
+    args = ["--transport", "follow", "--arg", scenario, "--snap", str(PB_SNAP), "--regions-all", ",".join(str(x) for x in TRANSPORT_REGION)]
+    if scenario != "none":
+        args += ["--playback", scenario]
+    rc, summary, rows = run_phase(label, "playback", bundle, env, args, files=transport_files())
+    return rc, summary, rows, host_row(label, "playback_record")
+
+
+def pb_samples_of(seconds: float) -> int:
+    return int(math.floor(seconds * PB_RATE + 0.5))
+
+
+def pb_unusable(names: list, rc: int, rows: list, rep: dict, rec: dict, scenario: str) -> dict | None:
+    """The parts all fail when the run did not happen: no page report, a hidden page, no record of the host."""
+    steps = rep.get("steps", []) if rep else []
+    if not rep or rep.get("visibility") != "visible" or len(steps) < 5 or len(rep.get("samples", [])) < 100 or not rec:
+        why = (f"the page is {rep.get('visibility')}: the screen of this host is locked or its window occluded, so the page draws no frame"
+               if rep and rep.get("visibility") != "visible" else
+               f"no usable run: rc={rc}, page report {bool(rep)}, {len(steps)} steps (want 5), {len(rep.get('samples', [])) if rep else 0} samples, "
+               f"host record {bool(rec)}")
+        return {n: (False, why) for n in names}
+    return None
+
+
+def pb_first(samples: list, after_ms: float, pred) -> list | None:
+    for x in samples:
+        if x[0] >= after_ms and pred(x):
+            return x
+    return None
+
+
+def playback_parts(rc: int, rows: list, rec: dict) -> dict:
+    """Gate lines 1 to 4, 6 and 7 of M1b7 for the host with a full playback controller."""
+    names = ["editor-playback-play", "editor-playback-stop", "editor-playback-locate", "editor-playback-loop",
+             "editor-playback-thread", "editor-playback-own-audio", "editor-playback-report"]
+    reps = page_reports(rows, "playback")
+    rep = reps[0] if reps else {}
+    bad = pb_unusable(names, rc, rows, rep, rec, "full")
+    if bad:
+        return bad
+    a, _d, p = TRANSPORT_REGION
+    samples, steps, calls = rep["samples"], rep["steps"], rep["calls"]
+    reqs = rec.get("requests", [])
+    kinds = [r["kind"] for r in reqs]
+    want = [k for _s, k, _t in PB_STEPS]
+    # one call of the shell and one request of the host per step, in the order of the driver
+    seq_ok = kinds == want and [c["kind"] for c in calls] == want
+    seq_ev = f"the host got {kinds} (want {want}); the shell made {[c['kind'] for c in calls]}"
+
+    def page_of(song: float) -> float:
+        return region_page_time(song)
+
+    # --- play: the host starts, the page shows playing when the host says so
+    play_i = 1
+    play_ok, play_ev = False, seq_ev
+    if len(reqs) > play_i and kinds[play_i] == "play" and len(calls) > play_i:
+        c = calls[play_i]
+        x = pb_first(samples, c["at"], lambda s: s[2] == 1)
+        ms = (x[0] - c["at"]) if x else None
+        play_ok = reqs[play_i]["playing_after"] is True and steps[play_i]["playing_after"] is True and ms is not None and ms <= PB_LOOP_MS
+        play_ev = (f"play from the page: the host got requestStartPlayback and plays (host record playing={reqs[play_i]['playing_after']}), the page shows playing "
+                   f"{ms:.0f} ms after the call (limit {PB_LOOP_MS:.0f} ms), host plays from {reqs[play_i]['landed_song']} s" if play_ok else
+                   f"the host got no play request or did not start: kinds {kinds}, host playing={reqs[play_i]['playing_after']}, page playing={steps[play_i]['playing_after']}, "
+                   f"page shows playing after {ms} ms")
+    elif not any(k == "play" for k in kinds):
+        play_ev = f"the host got no play request: {seq_ev}"
+    # --- stop
+    stop_i = 3
+    stop_ok, stop_ev = False, seq_ev
+    if len(reqs) > stop_i and kinds[stop_i] == "stop" and len(calls) > stop_i:
+        c, landed = calls[stop_i], reqs[stop_i]["landed_song"]
+        exp = page_of(landed)
+        last = [x for x in samples if steps[stop_i]["at"] <= x[0] <= steps[stop_i]["end"]][-1]
+        x = pb_first(samples, c["at"], lambda s: s[2] == 0 and abs((s[1] or 1e9) - exp) <= 0.003)
+        ms = (x[0] - c["at"]) if x else None
+        stop_ok = (reqs[stop_i]["playing_after"] is False and last[2] == 0 and abs((last[1] or 1e9) - exp) <= 0.003 and ms is not None and ms <= PB_LOOP_MS)
+        stop_ev = (f"stop from the page: the host got requestStopPlayback and stands at {landed} s; the page shows stopped at page time {last[1]} s (host: {exp:.4f} s) "
+                   f"{ms:.0f} ms after the call (limit {PB_LOOP_MS:.0f} ms)" if stop_ok else
+                   f"stop did not land: host playing={reqs[stop_i]['playing_after']}, page {last[1]} s playing={last[2]} (host position {exp:.4f} s), converged after {ms} ms")
+    elif "stop" not in kinds:
+        stop_ev = f"the host got no stop request: {seq_ev}"
+    # --- locate: the song position at 0 samples difference, stopped (steps 0 and 4) and playing (step 2)
+    loc = []
+    for i, (name, kind, t) in enumerate(PB_STEPS):
+        if kind != "locate" or i >= len(reqs) or reqs[i]["kind"] != "locate":
+            continue
+        want_s = pb_samples_of(p + (t - a))
+        got = reqs[i]["samples"]
+        loc.append((name, t, want_s, got, (got - want_s) if got is not None else None))
+    loc_ok = len(loc) == 3 and all(d == 0 for *_x, d in loc) and seq_ok
+    loc_ev = ("a locate from the page lands at the mapped song position, 0 samples difference: " if loc_ok else "the locate is off by samples or missing: ") + \
+             ", ".join(f"{n}: page {t} s -> want {w}, host got {g} samples (off by {d})" for n, t, w, g, d in loc) + ("" if seq_ok else f"; {seq_ev}")
+    # --- loop: page locate -> host position -> page playhead, within 100 ms
+    parts = []
+    loop_ok = True
+    for i in (0, 2, 4):
+        if not (len(calls) > i and calls[i]["kind"] == "locate" and len(reqs) > i and reqs[i]["kind"] == "locate" and len(steps) > i):
+            loop_ok = False
+            parts.append(f"{PB_STEPS[i][0]}: no locate reached the host ({seq_ev})")
+            continue
+        c, name, t = calls[i], PB_STEPS[i][0], PB_STEPS[i][2]
+        landed, w = reqs[i]["landed_song"], reqs[i]["wall_ms"]
+        playing = steps[i]["playing_before"]
+        if playing:
+            x = pb_first(samples, c["at"], lambda s: s[2] == 1 and abs((s[1] or 1e9) - page_of(landed + (s[0] - w) / 1000.0)) <= 0.02)
+        else:
+            x = pb_first(samples, c["at"], lambda s: s[2] == 0 and abs((s[1] or 1e9) - page_of(landed)) <= 0.002)
+        own = [s for s in samples if c["at"] <= s[0] and (x is None or s[0] < x[0]) and abs((s[1] or 1e9) - t) <= 0.002]
+        ms = (x[0] - c["at"]) if x else None
+        click_ms = (x[0] - steps[i]["at"]) if x else None
+        loop_ok = loop_ok and x is not None and ms <= PB_LOOP_MS
+        parts.append(f"{name}: " + (f"the page showed its own click ({t} s) in {len(own)} frames after the call, then the host position {page_of(landed):.3f} s {ms:.0f} ms after the call to the host ({click_ms:.0f} ms after the click)"
+                                     if x else f"the host position did not come back to the page: it stayed at {steps[i]['pos_after']} s (host {page_of(landed):.3f} s)"))
+    loop_ev = ("page locate -> host position -> page playhead within " + f"{PB_LOOP_MS:.0f} ms: " if loop_ok else
+               "the loop is not closed: ") + "; ".join(parts)
+    # --- thread: every call to the host on the main thread
+    closes = [x for x in rows if x.get("event") == "editor_close"]
+    on_main = [r["main_thread"] for r in reqs]
+    cl = closes[-1] if closes else {}
+    thread_ok = bool(reqs) and all(on_main) and cl.get("playback_calls_main", 0) >= len(reqs) and cl.get("playback_calls_request_thread") == 0 and bool(closes)
+    thread_ev = (f"the host saw all {len(reqs)} calls on its main thread (host record), the plugin counted {cl.get('playback_calls_main')} calls on the main thread and "
+                 f"{cl.get('playback_calls_request_thread')} on a request thread" if thread_ok else
+                 f"a call was made off the main thread: host record {on_main}, plugin counts main {cl.get('playback_calls_main')}, request thread {cl.get('playback_calls_request_thread')}"
+                 + ("" if closes else " (no editor_close row)"))
+    # --- own audio: no command of the app's transport, no error row
+    jserr = [x for x in rows if x.get("event") == "page_report" and x.get("kind") == "js_error"] + \
+            [x for x in rows if x.get("event") in ("page_shell_report", "page_panic_caught", "page_record_failed")]
+    if not closes or cl.get("transport_commands") is None:
+        own = (False, "no editor_close row: the run did not end cleanly, the count of page commands is unknown")
+    else:
+        own_ok = cl["transport_commands"] == 0 and cl.get("command_errors", 1) == 0 and not jserr and rep.get("wired") is True
+        own = (own_ok, f"transport commands of the page during play, stop and locate: {cl['transport_commands']} (want 0), command errors {cl.get('command_errors')} (want 0), "
+                       f"{len(jserr)} error rows; the page starts no audio of its own, the host plays" if own_ok else
+               f"the page ran {cl['transport_commands']} transport command(s) (want 0), {cl.get('command_errors')} command errors, {len(jserr)} error rows")
+    # --- report rows: the offer, and the first request of each kind
+    offer = [x for x in rows if x.get("event") == "playback_offer"]
+    first = {k: [x for x in rows if x.get("event") == "playback_request" and x.get("kind") == k] for k in ("play", "stop", "locate")}
+    loc_row = first["locate"][0] if first["locate"] else {}
+    rep_ok = (bool(offer) and offer[0]["offer"].get("request_start") and offer[0]["offer"].get("request_stop") and offer[0]["offer"].get("request_set_position")
+              and all(len(v) == 1 and v[0].get("thread") == "main" and v[0].get("made", 0) >= 1 for v in first.values())
+              and loc_row.get("song_samples") == (reqs[0]["samples"] if reqs else None))
+    rep_row = (rep_ok, f"report rows: playback_offer {offer[0]['offer'] if offer else None}; playback_request once for each of {[k for k, v in first.items() if len(v) == 1]}, "
+                       f"the first locate row says song {loc_row.get('song_seconds')} s = {loc_row.get('song_samples')} samples, mapped by {loc_row.get('mapped_by')}, "
+                       f"host was at {loc_row.get('host_position_seconds')} s" if rep_ok else
+               f"a report row is missing or wrong: offer {offer[0]['offer'] if offer else None}, request rows by kind {({k: len(v) for k, v in first.items()})}, "
+               f"locate row samples {loc_row.get('song_samples')} (host {reqs[0]['samples'] if reqs else None})")
+    return dict(zip(names, [(play_ok, play_ev), (stop_ok, stop_ev), (loc_ok, loc_ev), (loop_ok, loop_ev), (thread_ok, thread_ev), own, rep_row]))
+
+
+def stage_editor_playback() -> bool:
+    """M1b7 gate lines 1 to 4, 6 and 7: play, stop and locate of the page move the transport of the test host
+    (its ARA playback controller), on the CLAP and on the plugin inside the VST3."""
+    ok = True
+    for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
+        rc, _summary, rows, rec = playback_run(f"editor-playback-{which}", bundle)
+        ok = print_parts(suffix, playback_parts(rc, rows, rec)) and ok
+    return ok
+
+
+def stage_editor_playback_fault() -> bool:
+    ok = True
+    for label, env, part, what, reason in (
+        ("direct", {"DS_ARA_PLAYBACK_FAULT": "direct"}, "editor-playback-thread", "the request thread calls the host itself", "off the main thread"),
+        ("identity", {"DS_ARA_PLAYBACK_FAULT": "identity"}, "editor-playback-locate", "the locate goes to the host with the page time, no regions", "off by"),
+        ("skip", {"DS_ARA_PLAYBACK_FAULT": "skip"}, "editor-playback-play", "the plugin calls nothing and says it did", "no play request"),
+        ("off", {"DS_ARA_TRANSPORT_FAULT": "off"}, "editor-playback-loop", "the hand-over of the position is off: the host position never comes back", "did not come back"),
+        ("own", {"DS_ARA_EDITOR_FAULT": "page-transport"}, "editor-playback-own-audio", "the page runs a command of the app's transport", "transport command"),
+    ):
+        rc, _summary, rows, rec = playback_run(f"editor-fault-playback-{label}", CLAP, "full", env)
+        ok = fault_reason(f"editor-playback-fault-{label}", playback_parts(rc, rows, rec), part, what, reason) and ok
+    # a run that did not happen fails every part for its own reason (not for the reason of a fault)
+    parts = playback_parts(2, [], {})
+    ok = pass_fail("editor-playback-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                   f"a run with no page report and no record of the host fails all {len(parts)} parts with 'no usable run'") and ok
+    return ok
+
+
+def pb_text_ok(text: str | None, *needles: str) -> bool:
+    return bool(text) and all(n in text for n in needles)
+
+
+def playback_none_parts(rc: int, rows: list, rec: dict) -> dict:
+    """Gate line 5 and the report row of line 7: a host with no playback controller."""
+    names = ["editor-playback-none-text", "editor-playback-none-calm", "editor-playback-none-report"]
+    reps = page_reports(rows, "playback")
+    rep = reps[0] if reps else {}
+    bad = pb_unusable(names, rc, rows, rep, rec, "none")
+    if bad:
+        return bad
+    steps = {s["name"]: s for s in rep["steps"]}
+    offer = rep.get("offer") or {}
+    host = "ara-host"
+    t_loc, t_play = steps["locate-stopped"], steps["play"]
+    # the page shows play, stop and locate as not available, with one short text that names the host
+    texts = {"play": offer.get("play_text"), "stop": offer.get("stop_text"), "locate": offer.get("locate_text")}
+    text_ok = (all(pb_text_ok(v, host) and len(v) <= 90 for v in texts.values())
+               and t_play["play_disabled"] is True and pb_text_ok(t_play["play_title"], host)
+               and pb_text_ok(t_loc["ruler_title"], host) and pb_text_ok(t_loc["msg"], host) and pb_text_ok(t_play["msg"], host)
+               and pb_text_ok(steps["stop-direct"]["msg"], host))
+    text_ev = (f"play, stop and locate show as not available, with a text that names the host: play button disabled with '{t_play['play_title']}', ruler '{t_loc['ruler_title']}', "
+               f"message after a click '{t_loc['msg']}', after Play '{t_play['msg']}', after Stop '{steps['stop-direct']['msg']}'" if text_ok else
+               f"the page does not show the three as not available with the name of the host: offer {texts}, play disabled {t_play['play_disabled']}, "
+               f"play title {t_play['play_title']!r}, ruler {t_loc['ruler_title']!r}, messages {t_loc['msg']!r} / {t_play['msg']!r} / {steps['stop-direct']['msg']!r}: the text does not name the host")
+    # no error row, no request to the host, the page does not stay where its own click put it, nothing plays
+    closes = [x for x in rows if x.get("event") == "editor_close"]
+    cl = closes[-1] if closes else {}
+    jserr = [x for x in rows if x.get("event") == "page_report" and x.get("kind") == "js_error"] + \
+            [x for x in rows if x.get("event") in ("page_shell_report", "page_panic_caught", "page_record_failed")]
+    back = abs(t_loc["pos_after"] - 0.0) <= 0.003   # the host stands at 0: the page shows the host again after the refusal
+    calm = (bool(closes) and cl.get("command_errors") == 0 and not jserr and not rec.get("requests") and cl.get("playback_calls_main") == 0
+            and cl.get("transport_commands") == 0 and back and not t_play["playing_after"])
+    calm_ev = (f"no error row written (command errors {cl.get('command_errors')}, {len(jserr)} error rows), the host got {len(rec.get('requests', []))} requests, "
+               f"the page shows the host position again after the click ({t_loc['pos_after']} s), nothing plays" if calm else
+               f"an error row was written or a call went out: command errors {cl.get('command_errors')}, {len(jserr)} error rows, host requests {len(rec.get('requests', []))}, "
+               f"page after the click {t_loc['pos_after']} s (host 0.0), playing {t_play['playing_after']}" + ("" if closes else " (no editor_close row)"))
+    # the report rows: what the host gave, and the first refused request of each kind
+    off = [x for x in rows if x.get("event") == "playback_offer"]
+    un = {k: [x for x in rows if x.get("event") == "playback_unavailable" and x.get("kind") == k] for k in ("play", "stop", "locate")}
+    rep_ok = (bool(off) and off[0]["offer"].get("interface_given") is False and not any(off[0]["offer"].get(k) for k in ("request_start", "request_stop", "request_set_position"))
+              and all(len(v) == 1 and pb_text_ok(v[0].get("text"), host) and v[0].get("host") == host for v in un.values()))
+    rep_row = (rep_ok, f"report rows: playback_offer {off[0]['offer'] if off else None}; playback_unavailable once for each of {[k for k, v in un.items() if len(v) == 1]}, the text '{(un['locate'] or [{}])[0].get('text')}'" if rep_ok else
+               f"a report row is missing or wrong: playback_offer {off[0]['offer'] if off else None}, playback_unavailable by kind {({k: len(v) for k, v in un.items()})}")
+    return dict(zip(names, [(text_ok, text_ev), (calm, calm_ev), rep_row]))
+
+
+def stage_editor_playback_none() -> bool:
+    """M1b7 gate line 5 (and the report row of line 7): a host that gives no playback controller. The page shows
+    play, stop and locate as not available with one text that names the host, and no error row is written."""
+    ok = True
+    for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
+        rc, _summary, rows, rec = playback_run(f"editor-playback-none-{which}", bundle, "none")
+        # the host with no controller records nothing: the row of the host is made only with --playback
+        rec = rec or {"requests": [], "mode": "none"}
+        ok = print_parts(suffix, playback_none_parts(rc, rows, rec)) and ok
+    return ok
+
+
+def stage_editor_playback_none_fault() -> bool:
+    ok = True
+    for label, env, part, what, reason in (
+        ("error-row", {"DS_ARA_PLAYBACK_FAULT": "error-row"}, "editor-playback-none-calm", "a refusal is an error of the page", "an error row was written"),
+        ("anonymous", {"DS_ARA_PLAYBACK_FAULT": "anonymous"}, "editor-playback-none-text", "the text does not name the host", "does not name the host"),
+    ):
+        rc, _summary, rows, rec = playback_run(f"editor-fault-playback-none-{label}", CLAP, "none", env)
+        rec = rec or {"requests": [], "mode": "none"}
+        ok = fault_reason(f"editor-playback-none-fault-{label}", playback_none_parts(rc, rows, rec), part, what, reason) and ok
+    parts = playback_none_parts(2, [], {})
+    ok = pass_fail("editor-playback-none-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                   f"a run with no page report fails all {len(parts)} parts with 'no usable run'") and ok
+    return ok
+
+
+def playback_partial_parts(rc: int, rows: list, rec: dict) -> dict:
+    """The call is not offered: a host whose interface struct ends before requestSetPlaybackPosition."""
+    names = ["editor-playback-partial"]
+    reps = page_reports(rows, "playback")
+    rep = reps[0] if reps else {}
+    bad = pb_unusable(names, rc, rows, rep, rec, "partial")
+    if bad:
+        return bad
+    steps = {s["name"]: s for s in rep["steps"]}
+    kinds = [r["kind"] for r in rec.get("requests", [])]
+    off = [x for x in rows if x.get("event") == "playback_offer"]
+    un = [x for x in rows if x.get("event") == "playback_unavailable"]
+    closes = [x for x in rows if x.get("event") == "editor_close"]
+    cl = closes[-1] if closes else {}
+    host = "ara-host"
+    good = (kinds == ["play", "stop"] and bool(off) and off[0]["offer"].get("request_start") and off[0]["offer"].get("request_stop")
+            and off[0]["offer"].get("request_set_position") is False
+            and [x["kind"] for x in un] == ["locate"] and pb_text_ok(un[0].get("text"), host, "position")
+            and pb_text_ok(steps["locate-stopped"]["msg"], host, "position") and steps["play"]["playing_after"] is True and steps["stop"]["playing_after"] is False
+            and bool(closes) and cl.get("command_errors") == 0)
+    return {"editor-playback-partial": (
+        good,
+        f"the host gives start and stop, not the position: the host got {kinds}, the locate is refused once with '{(un or [{}])[0].get('text')}' (row playback_unavailable), "
+        f"play and stop work, 0 command errors" if good else
+        f"wrong for a host without the position call: host got {kinds} (want ['play', 'stop']), offer {off[0]['offer'] if off else None}, unavailable rows {[x['kind'] for x in un]}, "
+        f"text {(un or [{}])[0].get('text')!r}, command errors {cl.get('command_errors')}: the text does not name the host or the call")}
+
+
+def stage_editor_playback_partial() -> bool:
+    """M1b7 gate line 5, the call is not offered: the interface struct of the host ends before requestSetPlaybackPosition."""
+    rc, _summary, rows, rec = playback_run("editor-playback-partial", CLAP, "partial")
+    return print_parts("", playback_partial_parts(rc, rows, rec))
+
+
+def stage_editor_playback_partial_fault() -> bool:
+    rc, _summary, rows, rec = playback_run("editor-fault-playback-partial", CLAP, "partial", {"DS_ARA_PLAYBACK_FAULT": "anonymous"})
+    ok = fault_reason("editor-playback-partial-fault-anonymous", playback_partial_parts(rc, rows, rec), "editor-playback-partial",
+                      "the text does not name the host", "does not name the host")
+    parts = playback_partial_parts(2, [], {})
+    return pass_fail("editor-playback-partial-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                     "a run with no page report fails with 'no usable run'") and ok
+
+
+def playback_refused_parts(rc: int, rows: list, rec: dict) -> dict:
+    """The host takes the requests and does nothing: the page must not stay where its own click or play put it."""
+    names = ["editor-playback-refused"]
+    reps = page_reports(rows, "playback")
+    rep = reps[0] if reps else {}
+    bad = pb_unusable(names, rc, rows, rep, rec, "ignore")
+    if bad:
+        return bad
+    steps = {s["name"]: s for s in rep["steps"]}
+    kinds = [r["kind"] for r in rec.get("requests", [])]
+    moved = [n for n in ("locate-stopped", "locate-playing", "locate-stopped-2") if abs(steps[n]["pos_after"] - 0.0) > 0.003]
+    plays = steps["play"]["playing_after"] or steps["locate-playing"]["playing_after"]
+    good = (not moved and not plays and "locate" in kinds and "play" in kinds and rec.get("final_song") == 0.0 and rec.get("final_playing") is False)
+    return {"editor-playback-refused": (
+        good,
+        f"the host recorded {kinds} and did nothing (it stands at {rec.get('final_song')} s): after each locate the page shows the host position 0.0 s again "
+        f"({[steps[n]['pos_after'] for n in ('locate-stopped', 'locate-playing', 'locate-stopped-2')]}), the page does not play (play said '{steps['play']['msg']}')" if good else
+        f"the page stayed where its own click or play put it: positions after the locates {[(n, steps[n]['pos_after']) for n in ('locate-stopped', 'locate-playing', 'locate-stopped-2')]} "
+        f"(host 0.0 s), playing after play {steps['play']['playing_after']}: the page stayed away from the host")}
+
+
+def stage_editor_playback_refused() -> bool:
+    """A host that ignores the requests (it records them and does not move): the page falls back to the host position."""
+    rc, _summary, rows, rec = playback_run("editor-playback-refused", CLAP, "ignore")
+    return print_parts("", playback_refused_parts(rc, rows, rec))
+
+
+def stage_editor_playback_refused_fault() -> bool:
+    rc, _summary, rows, rec = playback_run("editor-fault-playback-refused", CLAP, "ignore", {"DS_ARA_PLAYBACK_FAULT": "no-fallback"})
+    ok = fault_reason("editor-playback-refused-fault-no-fallback", playback_refused_parts(rc, rows, rec), "editor-playback-refused",
+                      "the shell never shows the host position again, and Play ends at once", "stayed")
+    parts = playback_refused_parts(2, [], {})
+    return pass_fail("editor-playback-refused-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                     "a run with no page report fails with 'no usable run'") and ok
+
+
+PLAYBACK_MAP_FAULT_TEST = "playback::tests::the_locate_of_the_plan_uses_the_regions_not_the_page_time_itself"
+
+
+def playback_map_run(label: str, env: dict | None = None) -> tuple[int, str]:
+    e = {"ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib"}
+    e.update(env or {})
+    return run(["cargo", "test", "--locked", "--features", "test-switches", "--lib", "--", *PLAYBACK_MAP_TESTS, PLAYBACK_MAP_FAULT_TEST, "--test-threads=1"], env=e, log=f"{label}.log", cwd=HERE)
+
+
+PLAYBACK_MAP_TESTS = [
+    "transport::tests::a_page_time_inside_a_region_maps_back_to_the_song",
+    "transport::tests::a_source_with_two_regions_takes_the_region_of_the_host_position_else_the_first",
+    "transport::tests::no_region_gives_no_song_position",
+    "transport::tests::a_page_time_before_the_start_of_the_region_runs_on_with_its_offset_and_never_below_zero",
+    "playback::tests::a_locate_goes_to_the_host_as_a_song_position_through_the_regions",
+    "playback::tests::a_locate_with_no_region_sends_nothing_and_says_why",
+    "playback::tests::a_host_without_a_call_gets_no_call_and_the_text_names_the_host",
+    "playback::tests::a_play_moves_a_stopped_host_first_when_the_page_stands_elsewhere",
+]
+
+
+def stage_playback_map() -> bool:
+    """M1b7 gate line 2: the locate maps a page time to a song position, the inverse of the follow of M1b5, with one
+    rule for a source with several regions. The unit tests: inside a region, two regions, no region, a time before the
+    start of the region, and the plan of each request (the text, the move before a play)."""
+    rc, text = playback_map_run("playback-map")
+    m = re.search(r"test result: (\w+)\. (\d+) passed; (\d+) failed", text)
+    ran = all(f"{n} ... ok" in text for n in PLAYBACK_MAP_TESTS + [PLAYBACK_MAP_FAULT_TEST])
+    return pass_fail("playback-map", rc == 0 and bool(m) and ran,
+                     f"{m.group(2) if m else '?'} unit tests passed: a page time inside a region, a source with two regions, no region (nothing is sent), "
+                     f"a time before the start of the region, the plan of play, stop and locate (out/playback-map.log)")
+
+
+def stage_playback_map_fault() -> bool:
+    rc, text = playback_map_run("fault-playback-map", {"DS_ARA_PLAYBACK_FAULT": "identity"})
+    named = "off by" in text and PLAYBACK_MAP_FAULT_TEST.split("::")[-1] in text
+    return pass_fail("playback-map-fault", rc != 0 and named,
+                     f"the fault run (the plan sends the page time as the song position) makes the unit test fail with 'off by': rc={rc}, named {named}")
+
+
 STAGES = {
     "fixture": stage_fixture,
     "reference": stage_reference,
@@ -5422,6 +5814,16 @@ STAGES = {
     "editor-transport-none-fault": stage_editor_transport_none_fault,
     "editor-transport-deactivate": stage_editor_transport_deactivate,
     "editor-transport-deactivate-fault": stage_editor_transport_deactivate_fault,
+    "playback-map": stage_playback_map,
+    "playback-map-fault": stage_playback_map_fault,
+    "editor-playback": stage_editor_playback,
+    "editor-playback-fault": stage_editor_playback_fault,
+    "editor-playback-none": stage_editor_playback_none,
+    "editor-playback-none-fault": stage_editor_playback_none_fault,
+    "editor-playback-partial": stage_editor_playback_partial,
+    "editor-playback-partial-fault": stage_editor_playback_partial_fault,
+    "editor-playback-refused": stage_editor_playback_refused,
+    "editor-playback-refused-fault": stage_editor_playback_refused_fault,
 }
 ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
@@ -5446,6 +5848,8 @@ ORDER = [
     "transport-handover", "transport-handover-fault", "editor-transport", "editor-transport-fault",
     "editor-transport-measure", "editor-transport-measure-fault", "editor-transport-none", "editor-transport-none-fault",
     "editor-transport-deactivate", "editor-transport-deactivate-fault",
+    "playback-map", "playback-map-fault", "editor-playback", "editor-playback-fault", "editor-playback-none", "editor-playback-none-fault",
+    "editor-playback-partial", "editor-playback-partial-fault", "editor-playback-refused", "editor-playback-refused-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",

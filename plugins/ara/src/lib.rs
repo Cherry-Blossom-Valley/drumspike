@@ -41,6 +41,7 @@ pub mod ara {
     include!(concat!(env!("OUT_DIR"), "/ara.rs"));
 }
 pub mod editor;
+pub mod playback;
 pub mod service;
 pub mod state;
 pub mod transport;
@@ -292,6 +293,13 @@ struct DocShared {
     pending: Mutex<Vec<Arc<SourceState>>>,
     /// The editor's way to the service (it never takes the `svc` lock the worker holds).
     page: Arc<service::PageHandle>,
+    /// The ARA playback controller of the host (M1b7), when the host gives one. Set in
+    /// `createDocumentController`, taken away in `destroyDocumentController`, and used only on the
+    /// host's main thread (the thread of the document controller): the lock makes the destroy and a
+    /// call of the editor meet one after the other.
+    playback: Mutex<Option<playback::Host>>,
+    /// What `probe` found at the creation: the row of the report, and the offer for the page.
+    playback_offer: Mutex<playback::Offer>,
     /// S5: the regions and the rate each source had in the last round (or restore). The notes of
     /// the sources are mapped with THESE, by the worker (`notes_of`) and by the request thread
     /// (`record_page_edit`) alike: the events belong to that round, not to a region change of
@@ -408,6 +416,8 @@ impl DocShared {
             closing: AtomicBool::new(false),
             members: Mutex::new(Vec::new()),
             pending: Mutex::new(Vec::new()),
+            playback: Mutex::new(None),
+            playback_offer: Mutex::new(playback::Offer::default()),
         });
         LIVE_DOCS
             .lock()
@@ -418,6 +428,19 @@ impl DocShared {
 
     fn id(&self) -> String {
         self.id.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The calls of the page to the host's playback controller (M1b7). The caller is on the host's
+    /// main thread: the ARA calls of the plugin to the host go there. Answers the number of calls
+    /// made (0 when the host took its controller away, or gives none).
+    fn run_playback(&self, calls: &[playback::Call]) -> usize {
+        guard("playback request", 0, || {
+            let held = self.playback.lock().unwrap_or_else(|e| e.into_inner());
+            match held.as_ref() {
+                Some(h) => unsafe { h.run(calls) },
+                None => 0,
+            }
+        })
     }
 
     /// Where the reader writes the WAV of a source of this document.
@@ -1871,6 +1894,8 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let r = doc.clone();
     let g = doc.clone();
     let g2 = doc.clone();
+    let p1 = doc.clone();
+    let p2 = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
@@ -1879,6 +1904,9 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
         record: Arc::new(move |svc, sid| r.record_page_edit(svc, sid)),
         regions: Arc::new(move || g.round_region_list()),
         regions_gen: Arc::new(move || g2.region_gen.load(Ordering::SeqCst)),
+        playback_offer: Arc::new(move || *p1.playback_offer.lock().unwrap_or_else(|e| e.into_inner())),
+        playback_run: Arc::new(move |calls: &[playback::Call]| p2.run_playback(calls)),
+        host_name: String::new(),
         doc_id: doc.id(),
     }
 }
@@ -2054,6 +2082,13 @@ unsafe extern "C" fn create_document_controller(
         // the service of the document is made here, with the controller
         let doc = DocShared::new();
         let doc_id = doc.id();
+        // the optional playback controller of the host: what it gives is a row of the report, so
+        // the next run in a DAW shows what that DAW offers
+        let (pb, pb_detail) = playback::probe(host);
+        *doc.playback_offer.lock().unwrap_or_else(|e| e.into_inner()) =
+            pb.as_ref().map(|h| h.offer).unwrap_or_default();
+        *doc.playback.lock().unwrap_or_else(|e| e.into_inner()) = pb;
+        s.log(json!({"event": "playback_offer", "doc": doc_id, "offer": pb_detail}).to_string());
         let c = Box::into_raw(Box::new(Controller {
             host,
             instance: std::mem::zeroed(),
@@ -2080,6 +2115,10 @@ unsafe fn controller_of(controllerRef: ARADocumentControllerRef) -> &'static Con
 unsafe extern "C" fn dc_destroyDocumentController(controllerRef: ARADocumentControllerRef) {
     guard("destroyDocumentController", (), move || {
         let ctl = Box::from_raw(controllerRef as *mut Controller);
+        // the host's playback controller goes with the controller: no request of the page may
+        // reach it after this (the calls are made on this thread, under this lock)
+        *ctl.doc.playback.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *ctl.doc.playback_offer.lock().unwrap_or_else(|e| e.into_inner()) = playback::Offer::default();
         // the fault job must not reach a controller that is gone
         if let Ok(mut g) = CURRENT.0.lock() {
             if *g == Some(controllerRef as *const Controller) {
@@ -3505,6 +3544,8 @@ struct Plugin {
     doc: Mutex<Option<Arc<DocShared>>>,
     /// The editor; made and dropped on the host's main thread only.
     editor: std::cell::RefCell<Option<editor::Editor>>,
+    /// The name the host gave in `clap_host.name` (M1b7: the text of a missing playback control names it).
+    host_name: String,
     /// The size the editor asks for, packed (width << 32 | height): read by any thread the host calls
     /// `get_size` from.
     gui_size: std::sync::atomic::AtomicU64,
@@ -4028,9 +4069,21 @@ unsafe extern "C" fn f_desc(_f: *const clap_plugin_factory, i: u32) -> *const cl
         }
     })
 }
+/// The name of the host (`clap_host.name`), copied: the text for the page and the report.
+unsafe fn host_name_of(host: *const clap_host) -> String {
+    if host.is_null() || (*host).name.is_null() {
+        return String::new();
+    }
+    CStr::from_ptr((*host).name)
+        .to_string_lossy()
+        .chars()
+        .take(64)
+        .collect()
+}
+
 unsafe extern "C" fn f_create(
     _f: *const clap_plugin_factory,
-    _host: *const clap_host,
+    host: *const clap_host,
     id: *const c_char,
 ) -> *const clap_plugin {
     guard("create_plugin", std::ptr::null(), move || {
@@ -4056,6 +4109,7 @@ unsafe extern "C" fn f_create(
             sample_rate: Mutex::new(0.0),
             doc: Mutex::new(None),
             editor: std::cell::RefCell::new(None),
+            host_name: host_name_of(host),
             gui_size: std::sync::atomic::AtomicU64::new((1000u64 << 32) | 640),
         }));
         (*p).clap.plugin_data = p as *mut c_void;
