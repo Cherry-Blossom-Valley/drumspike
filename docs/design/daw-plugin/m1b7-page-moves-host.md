@@ -79,7 +79,7 @@ to the host as A, C, B, and a stop could pass a locate. So:
   requests wait for the host").
 - **Not the budget of the app commands.** A host request waits up to 2 s for the main thread.
   If it used one of the 96 slots of `MAX_INFLIGHT`, a blocked main thread (menu tracking, a modal
-  dialog) and the 25 ms watch would fill them and every other command would get 503. The routes
+  dialog) and the locates of a drag would fill them and every other command would get 503. The routes
   `plugin_host_*` are not counted (`counts_inflight`); the queue limit bounds them.
 - **A closed editor.** The drain job checks `closed` before each call. A request that was queued
   before `detach` makes no call and the answer is "the editor is closed". A request whose thread
@@ -172,18 +172,15 @@ failure text away. Stage `editor-playback-late` (the test host starts 2.5 s late
 - **Locate while the host plays.** The click sets the playhead of the page (`PH.v`, at once). The
   next frame of `tick()` sends it to `appSeekNow`, at most every 60 ms, which calls `host.locate`
   and does not wait for it. The page shows its own click until the first host message comes.
-- **Locate while the host is stopped.** The page never calls `host.locate`. `appTickPos` runs only
-  in `tick()`, and `tick()` runs only while the page plays. A click in the ruler of a stopped page
-  sets `PH.v` and `PH.user` and nothing else. The shell script has a watch for this: every 25 ms, when the page is
-  not playing and `PH.user` is set and `PH.v` is not a value that the host or the page's own stop
-  put there, the shell calls `locate`. This is the one place where the shell reads page state; the
-  names are listed in `PAGE_GLOBALS` of the shell, and the stage `editor-shell-functions` checks them.
-- **A host that does not follow.** The page does not fall back by itself. The shell does it: after
-  a request that the host did not follow (no message of the host in 1 s, or a refusal), the shell
-  shows the last host position again, if the host was stopped. A host that plays sends its
-  position anyway. The fallback does not run when a newer locate was sent after the one it belongs
-  to, and not while the pointer is down in the ruler (it asks again every 150 ms until the pointer is
-  up). Stage `editor-playback-drag` (a drag of 3 s against a host that does nothing; fault
+- **Locate while the host is stopped.** Since #556 the page calls `host.locate` itself (see "M1b9"
+  below). Before that, `appTickPos` ran only in `tick()`, and `tick()` ran only while the page played, so
+  the shell script had a watch of `PH.user` every 25 ms. The watch is gone.
+- **A host that does not follow.** Two cases. A refusal (`ok: false`): the page shows the text and puts
+  the playhead back itself (#556, see "M1b9"). A locate that the host accepted and did not follow (no
+  message of the host in 1 s): the shell shows the last host position again, if the host was stopped. A
+  host that plays sends its position anyway. That fallback does not run when a newer locate was sent after
+  the one it belongs to, and not while the pointer is down in the ruler (it asks again every 150 ms until the
+  pointer is up). Stage `editor-playback-drag` (a drag of 3 s against a host that does nothing; fault
   `no-drag-guard`: the playhead jumps back under the pointer). Stage `editor-playback-refused`, fault `DS_ARA_PLAYBACK_FAULT=no-fallback`.
 
 So the page does move its own playhead at a click (`PH.v`) and at a stop, before the host answers.
@@ -192,14 +189,38 @@ is the host's. The test host snaps a position to a grid (`--snap 0.5`), so the c
 differ and the stage can tell them apart. The page shows its click for the time of the loop, then the
 host position.
 
-### Need in `static/` (one paragraph, for a later ticket)
+### M1b9 (#556): the page locates itself, in host mode
 
-In host mode `static/transport.js` should call `B.hostTransport.locate(PH.v)` itself when the user
-moves the playhead while the page is stopped (in `appTickPos`, or in the setter of `S.playhead`), and
-should not move `PH.v` in host mode before the host answers: it should keep the shown position until
-a host message arrives, or restore the last host position when `locate` or `stop` resolves with a
-refusal. Then the watch in the shell (`setInterval` in `shell.js`) and the "show the host position
-again" fallback can go.
+`static/transport.js` wraps the setter of `S.playhead` once, when the host listener is bound
+(`appHostFollow`, host mode only). A move of the user while the page is stopped (ruler click or drag, lane
+click, keys) calls `B.hostTransport.locate(PH.v)`:
+
+- **Rate.** At most one call every 40 ms (about 25 a second). A move inside that time waits in a timer, and
+  the last position is always sent. A play that starts first drops the waiting one (the play carries the
+  position).
+- **Not a locate.** A write while the page plays (the tick seeks), the own stop of the page (`AC.stopping`)
+  and a write of the same value (`loadProject`) send nothing.
+- **A refusal.** `locate` rejects with the text (the shell script does it for `ok: false`; a superseded
+  request is no refusal). The page shows the text and puts `PH.v` back on the last position the host sent.
+  Only the newest locate decides. While the primary button is down (a drag) the playhead stays under the
+  pointer; the page puts it back when the button goes up. A host that accepts and does not follow is still
+  the fallback of the shell (`afterRequest`, with the pointer guard).
+- **Roll-back details (round 2).** A change of project (`S.sid`) drops the waiting locate, its timer, the
+  refusal mark and the positions to go back to; a late refusal of the old project does nothing. A write
+  while a load runs (`S.loaded` is 0: the clamp of `loadProject`) is no move. With no host position yet, the
+  page goes back to the position before the first unsent move. After the roll-back the view moves to the
+  playhead if it is out of view (a refused key or marker jump had centred the view on the jump). A
+  ctrl+click does not count as a pointer that is down, and `contextmenu` and `blur` count as the pointer up.
+- **A move while the host starts (rule).** While `AC.starting` is set (up to 2 s) the move waits. When the
+  start is settled and the page plays, the waiting locate is dropped: the move is a seek of a playing page
+  and the tick sends it. When the start failed, the locate goes out then.
+- **The end of the song.** `tick()` ends the song with `pause()` and `S.playhead = 0`. At the host that is
+  stop, then one locate to 0 (test `test_the_end_of_the_song_in_host_mode_stops_then_locates_zero_once`).
+- **The shell.** The watch and the `PH` global are gone from `shell.js`. It still watches the selected track.
+- **Standalone.** Nothing of this exists with host mode off: the setter is not wrapped and no listener is bound.
+
+Stages: `editor-playback-*` run unchanged against the page call. Tests of the page:
+`tests/e2e_app/test_host_locate.py` (rate and last position, refusal, drag, standalone unchanged).
 
 ## No controller, or a call that is not offered
 
@@ -270,7 +291,7 @@ The test host calls its process every 10.7 ms (512 frames at 48 kHz). Its transp
 Result on the development Mac, CLAP and plugin in the VST3 alike:
 
 - **Locate, stopped:** the page shows the host position 12 to 21 ms after the shell calls `locate`
-  (18 to 32 ms after the click in the ruler: the watch of the shell waits up to 25 ms).
+  (measured before #556, when the watch of the shell waited up to 25 ms).
 - **Locate, playing:** 17 to 47 ms after the call. The page shows its own click for 0 to 2 frames.
 - **Play:** the page shows playing 36 to 49 ms after the call.
 - **Stop:** the page stands at the host position 30 to 34 ms after the call.

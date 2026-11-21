@@ -77,11 +77,11 @@
   // operation is index-based and would be applied to the new list. A burst of events is one
   // reload. The view (zoom and scroll of the lanes) is kept across the reload; the undo history
   // is not (open point of #539).
-  // What this script uses of the page: functions, two globals and one element. A rename in
+  // What this script uses of the page: functions, globals and elements. A rename in
   // static/ must not make the reload do less in silence (S4): a missing one is reported at once
   // (console error, shell command plugin_report), and a stage checks the bundled page for them.
   var PAGE_FUNCTIONS = ["cancelEvents", "initSessions", "loadProject", "invalidate", "appHostFollow", "setMsg"];
-  var PAGE_GLOBALS = ["S", "F", "AC", "PH"];
+  var PAGE_GLOBALS = ["S", "F", "AC"];
   var PAGE_IDS = ["lanesScroll", "playBtn", "ruler"];
   function missingPageParts() {
     var names = PAGE_FUNCTIONS.slice();
@@ -205,7 +205,6 @@
     var n = lex("typeof S === 'object' && typeof S.selTrack === 'string' ? S.selTrack : ''");
     return typeof n === "string" ? n : "";
   }
-  var watch = { v: 0 };
   var sentTrack = null;
   /* One deadline for a play, from the call: the request may wait up to 2 s for the main thread of the
      host, and the host may take its time to start. After PLAY_MS the page gives up ("the host did not
@@ -232,12 +231,17 @@
       });
     },
     stop: function (pos) {
-      if (typeof pos === "number") watch.v = pos;   // the page's own stop sets its playhead: that is no locate
       return hostCall("stop", {}).then(function (r) { afterRequest(r, 0); });
     },
     locate: function (t) {
       var seq = ++lastLocate;
-      return hostCall("locate", { t: t, track: selectedTrack() }).then(function (r) { afterRequest(r, seq); });
+      return hostCall("locate", { t: t, track: selectedTrack() }).then(function (r) {
+        /* A refusal rejects: the page shows the text and puts its playhead back on the last position the host
+           sent (static/transport.js, hostLocateRefused). A request the host accepted but did not follow is
+           still the fallback of this script (afterRequest). */
+        if (!r.ok && !r.superseded) throw new Error(r.reason);
+        afterRequest(r, seq);
+      });
     }
   };
   function lex(expr) { try { return (0, eval)(expr); } catch (e) { return undefined; } }
@@ -249,7 +253,6 @@
     if (b.hostTransport !== HT) HT = b.hostTransport;
     lex("appHostFollow()");
     tstate.installed = true;
-    watch.v = lex("typeof PH === 'object' ? PH.v : 0");
     applyOffer(0);
     if (tstate.held) { var m = tstate.held; tstate.held = null; deliverTransport(m); }
     return true;
@@ -282,23 +285,14 @@
        reported for static/: the page should re-enter its follow branch itself). */
     if (m.playing && lex("typeof S === 'object' && !S.playing && typeof AC === 'object' && AC.active === true")) lex("AC.active = false");
     HT.onPosition({ sid: sid, epoch: m.epoch, t_ns: m.t_ns, pos: m.pos, playing: m.playing });
-    watch.v = lex("typeof PH === 'object' ? PH.v : 0");   // what the host put on the page is no move of the user
   }
-  /* The page asks the host to move only while it plays (appTickPos runs in tick()). A click in the
-     ruler of a stopped page only sets PH.v and PH.user. Without this watch a locate of the page while
-     the host stands would never reach the host. A move of the user (PH.user, a value that no message
-     of the host and no stop of the page put there) is a locate. The need in static/ is reported in
-     docs/design/daw-plugin/m1b7-page-moves-host.md: the page should call locate itself. */
+  /* The selected track decides the mapping of both directions (the follow and the locate): the plugin
+     is told when it changes, at the first look and after a reload of the project. The locate of a move of
+     the playhead while stopped is the page's own call (#556); this script only watches the track. */
   setInterval(function () {
     if (!tstate.installed) return;
-    /* The selected track decides the mapping of both directions (the follow and the locate): the plugin
-       is told when it changes, at the first look and after a reload of the project. */
     var tr = selectedTrack();
     if (tr !== sentTrack) { sentTrack = tr; invoke("plugin_host_track", { track: tr }).catch(function () { sentTrack = null; }); }
-    var cur = lex("typeof S === 'object' && typeof PH === 'object' && !S.playing && PH.user ? PH.v : null");
-    if (typeof cur !== "number" || Math.abs(cur - watch.v) < 1e-9) return;
-    watch.v = cur;
-    HT.locate(cur);
   }, 25);
   /* What the host gives: play, stop and locate show as not available, with the text, when it gives no
      control (the button, the ruler); the answer of each request says the same when used. */
