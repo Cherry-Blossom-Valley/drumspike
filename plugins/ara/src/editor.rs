@@ -1151,7 +1151,20 @@ fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
                 session().log(json!({"event": "drag_result", "editor": n, "result": res}).to_string());
             })
         };
+        let ok = r.is_ok();
         let _ = tx.send(r.map(|()| crate::deliver::drag_pasteboard_paths()));
+        if ok && crate::test_switch("DS_ARA_DRAG_PRESSED").as_deref() == Ok("1") {
+            // the test host: let go of the mouse a moment later, so that the session ends
+            let sh3 = Arc::clone(&sh2);
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                on_main(Box::new(move || {
+                    if !sh3.closed.load(Ordering::SeqCst) {
+                        unsafe { crate::deliver::release_test_drag(sh3.view) };
+                    }
+                }));
+            });
+        }
     }));
     match rx.recv_timeout(MAIN_WAIT) {
         Ok(Ok(pasteboard)) => {

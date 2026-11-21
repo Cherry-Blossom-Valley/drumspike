@@ -427,3 +427,21 @@ monitor and a local mouse monitor that only change the first responder). A stage
 that mouse monitor, and that the folder sheet gets its keys (a sheet is another window, so the monitors pass its events). `crates/` changes need
 the whole pytest suite and the Rust workspace tests. A byte golden for the standalone export is a must, and one for the multi-track MIDI mode
 too. Names in tests are synthetic.
+
+## What phase 2 built, and where it differs from this note
+
+- `crates/app/src/export_song.rs` (trait `ExportTime`, `to_song`, `Service::set_export_time`) and `write_spikes_song` in
+  `crates/core/src/spike.rs`. The byte golden for the standalone export (per-track files and the multi-track file, on the default map
+  and on a map with a step) is `crates/app/tests/export_song.rs`; its hashes were made on the base commit.
+- The musical context in use is the first one that the host created (the note said: the one of the region sequence with the lowest
+  `orderIndex`). The plugin reads the content on the host's thread at the creation and update of a context and at the end of an edit cycle.
+- The stretch list: a region counts as stretched when its transformation flags say so or its length in the song differs from its length
+  in the source. The answer of `plugin_host_tempo` carries the track names; the dialog line counts the exported ones.
+- Faults that exist: `DS_ARA_DELIVERY_FAULT` = `source-time`, `one-tempo`, `invent-map`; `DS_ARA_EDITOR_FAULT` = `any-dest`, `prefix-dest`,
+  `any-path`, `no-button-check`. The faults `no-bext` and `stale-regions` of the table in section 6 were not built.
+- The test host has no content access controller and sends no tempo, so a stage can reach tempo source `none` only. The ARA reading
+  (`musical.rs`) is covered by the unit tests of the conversion (`tempo_ara.rs`) and by nothing that runs the host side; the first run
+  in a real host shows it in the row `musical_context`.
+- The drag evidence of the stages is the drag pasteboard of the real session (rows `drag_started`); there is no drop view and no stub
+  dragging info in the test host. A real drop, and the check that the mouse monitor of #561 leaves a drag from the page alone and that the
+  folder sheet gets its keys, are for the hand check sheet.

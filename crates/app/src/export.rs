@@ -1060,9 +1060,21 @@ impl Service {
                 }
                 (ev, _) => (ev, None),
             };
-            let stem = host.and_then(|h| h.stem).unwrap_or_else(|| name.clone());
+            let stem = host.clone().and_then(|h| h.stem).unwrap_or_else(|| name.clone());
+            // #560: a track of the plugin is made of segments (one per playback region, all of one source file); in a
+            // song-time export the spike file takes the rate and the format of that file
+            let source = match (&host, g.has_segments(&name)) {
+                (Some(_), Ok(true)) => g.track_audio(&name).and_then(|a| match a {
+                    crate::media::TrackAudio::File(p) => Ok(p),
+                    crate::media::TrackAudio::Timeline(v) => v
+                        .first()
+                        .map(|s| s.path.clone())
+                        .ok_or_else(|| AppError::bad(format!("track {name}: no segment"))),
+                }),
+                _ => g.source_no_segments(&name),
+            };
             jobs.push(Job {
-                source: g.source_no_segments(&name),
+                source,
                 events,
                 song,
                 stem,

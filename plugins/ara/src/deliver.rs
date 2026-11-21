@@ -392,3 +392,30 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     }
     Some(out)
 }
+
+/// The test host has no hand to let go of the mouse: post an in-process mouse up to the window of `view`, so the drag
+/// session that the stage started ends (the callback then says `cancelled`). Only `DS_ARA_DRAG_PRESSED` runs it. Main thread
+/// only. No event of the system is posted: this one goes to the application's own queue.
+///
+/// # Safety
+/// `view` is the live web view of the editor and the caller is on the host's main thread.
+pub unsafe fn release_test_drag(view: usize) {
+    use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSEventType};
+    use objc2_foundation::NSPoint;
+    let v = view as *mut NSView;
+    let (Some(window), Some(mtm)) = ((*v).window(), MainThreadMarker::new()) else { return };
+    let at = window.mouseLocationOutsideOfEventStream();
+    if let Some(up) = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        NSEventType::LeftMouseUp,
+        NSPoint::new(at.x, at.y),
+        NSEventModifierFlags::empty(),
+        0.0,
+        window.windowNumber(),
+        None,
+        0,
+        1,
+        0.0,
+    ) {
+        NSApplication::sharedApplication(mtm).postEvent_atStart(&up, true);
+    }
+}
