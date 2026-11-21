@@ -80,7 +80,7 @@ static FAULT_ALLOC: AtomicBool = AtomicBool::new(false);
 
 /// Read the test switches. Called by `activate` (never by the audio thread).
 pub fn read_switches() {
-    let v = std::env::var("DS_ARA_TRANSPORT_FAULT").unwrap_or_default();
+    let v = crate::test_switch("DS_ARA_TRANSPORT_FAULT").unwrap_or_default();
     FAULT_OFF.store(v == "off", Ordering::Relaxed);
     FAULT_ALLOC.store(v == "alloc", Ordering::Relaxed);
 }

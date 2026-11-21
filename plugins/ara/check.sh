@@ -8,7 +8,11 @@
 #                      of patches/, pluginval 1.0.4 with a pinned SHA-256,
 #                      clap-validator 0.4.1) and both macOS Rust targets. DS_ARA_DEPS
 #                      overrides the folder.
-#   ./check.sh build   the universal CLAP (arm64 + x86_64, joined with lipo - the script
+#   ./check.sh build   (M1d1: two variants of the plugin crate: the gate variant with the cargo
+#                      feature test-switches and the delivery variant without it, in
+#                      .deps/delivery; the version of Cargo.toml in every bundle; every
+#                      bundle signed ad hoc as the last step, inner first)
+#                      the universal CLAP (arm64 + x86_64, joined with lipo - the script
 #                      fails when lipo -info does not name both), the self-contained
 #                      wrapped VST3 (the CLAP is copied inside the bundle, the wrapper
 #                      finds it there without CLAP_PATH), the test host ara-host, the
@@ -39,6 +43,13 @@ WS_TARGET=${WS_CARGO_TARGET_DIR:-$CALLER_TARGET}   # the workspace keeps the cal
 TOOLS=${DS_SPIKE_TOOLS:-$WS_TARGET/release}
 CLAP=$DEPS/DrumSpikeAra.clap
 VST3=$DEPS/build-wrapper/DrumSpikeAra.vst3
+# the delivery variant (no fault or test switch is read): the same wrapper and the CLAP built
+# without the cargo feature test-switches; the proof stages and pluginval run on it as well
+DELIVERY_CLAP=$DEPS/delivery/DrumSpikeAra.clap
+DELIVERY_VST3=$DEPS/delivery/DrumSpikeAra.vst3
+# the version of the plugin crate: the one source of the version of every bundle
+VERSION=$(/usr/bin/awk -F'"' '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version *=/{print $2; exit}' Cargo.toml)
+[[ -n $VERSION ]] || { echo "FAIL: no version in Cargo.toml"; exit 2; }
 # SHA-256 of https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip
 PLUGINVAL_SHA256=3c4c533bda0c5059eea3ddaea752d757ee2025041f0f47e6bcb0e87f6082b29f
 rc=0
@@ -113,40 +124,78 @@ deps() {
   echo "deps: ok in $DEPS"
 }
 
+# The universal CLAP bundle at $1, built with the cargo features $2 (none when empty): both
+# macOS targets joined with lipo (the script fails unless lipo -info names both), the bundle
+# files with the version of the plugin crate, the editor page, a copy of static/ (read, never
+# changed). The gate build has the feature test-switches, the delivery build none.
+make_clap() {
+  local dest=$1 feat=$2
+  local -a fargs
+  fargs=()
+  [[ -n $feat ]] && fargs=(--features $feat)
+  ARA_API_DIR=$DEPS/ARA_SDK/ARA_API LIBCLANG_PATH=$CLT/usr/lib cargo build --release --locked --target x86_64-apple-darwin $fargs || return 1
+  ARA_API_DIR=$DEPS/ARA_SDK/ARA_API LIBCLANG_PATH=$CLT/usr/lib cargo build --release --locked --target aarch64-apple-darwin $fargs || return 1
+  rm -rf $dest
+  mkdir -p $dest/Contents/MacOS
+  cp Info.plist $dest/Contents/Info.plist
+  # the one version: Cargo.toml (the ARA factory and the CLAP descriptor read it at compile time)
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" -c "Set :CFBundleShortVersionString $VERSION" $dest/Contents/Info.plist || return 1
+  lipo -create target/x86_64-apple-darwin/release/libdrumspike_ara.dylib \
+             target/aarch64-apple-darwin/release/libdrumspike_ara.dylib \
+       -output $dest/Contents/MacOS/DrumSpikeAra || return 1
+  local arches
+  arches=$(lipo -info $dest/Contents/MacOS/DrumSpikeAra) || return 1
+  [[ $arches == *arm64* && $arches == *x86_64* ]] || { echo "FAIL: lipo -info does not name arm64 and x86_64: $arches"; return 1; }
+  # M1b2: the editor page inside the bundle; the embed into the VST3 copies the whole bundle
+  mkdir -p $dest/Contents/Resources
+  ditto $ROOT/static $dest/Contents/Resources/page || return 1
+}
+
+# Ad-hoc signing (a real identity is M2), the LAST step of the build: the CLAP inside the VST3
+# first, then the VST3 (a signature seals what is inside, so a later change of the bundle
+# breaks it). $1 is a VST3 with its CLAP inside; the loose CLAP at $2, if given, is signed too.
+sign_bundles() {
+  local vst3=$1 clap=${2:-}
+  xattr -cr $vst3 2>/dev/null
+  codesign --force -s - $vst3/Contents/PlugIns/DrumSpikeAra.clap || return 1
+  codesign --force -s - $vst3 || return 1
+  if [[ -n $clap ]]; then
+    xattr -cr $clap 2>/dev/null
+    codesign --force -s - $clap || return 1
+  fi
+}
+
 build() {
   # the workspace release binary (service_tool) for the byte compares
   CARGO_TARGET_DIR=$WS_TARGET cargo build --release --locked --manifest-path $ROOT/Cargo.toml -p drumspike-devtools --bin service_tool || return 1
-  # the plugin for both macOS targets (bindgen reads $ARA_API_DIR), then the universal
-  # binary inside the .clap bundle; the script fails unless lipo names both arches
-  ARA_API_DIR=$DEPS/ARA_SDK/ARA_API LIBCLANG_PATH=$CLT/usr/lib cargo build --release --locked --target x86_64-apple-darwin || return 1
-  ARA_API_DIR=$DEPS/ARA_SDK/ARA_API LIBCLANG_PATH=$CLT/usr/lib cargo build --release --locked --target aarch64-apple-darwin || return 1
-  mkdir -p $CLAP/Contents/MacOS
-  cp Info.plist $CLAP/Contents/Info.plist
-  lipo -create target/x86_64-apple-darwin/release/libdrumspike_ara.dylib \
-             target/aarch64-apple-darwin/release/libdrumspike_ara.dylib \
-       -output $CLAP/Contents/MacOS/DrumSpikeAra || return 1
-  local arches
-  arches=$(lipo -info $CLAP/Contents/MacOS/DrumSpikeAra) || return 1
-  [[ $arches == *arm64* && $arches == *x86_64* ]] || { echo "FAIL: lipo -info does not name arm64 and x86_64: $arches"; return 1; }
-  # M1b2: the editor page, a copy of static/ inside the bundle (read, never changed); the
-  # embed into the VST3 below copies the whole bundle, page included
-  rm -rf $CLAP/Contents/Resources/page
-  mkdir -p $CLAP/Contents/Resources
-  ditto $ROOT/static $CLAP/Contents/Resources/page || return 1
-  # the test host runs natively on this machine
-  ARA_API_DIR=$DEPS/ARA_SDK/ARA_API LIBCLANG_PATH=$CLT/usr/lib cargo build --release --locked --bin ara-host || return 1
+  # the gate variant first (cargo feature test-switches), then the delivery variant (no fault or
+  # test switch is read): the loose dylibs that stay in target/<triple>/release are the LAST
+  # build, so they are the delivery variant. Only the plugin crate is built twice, the
+  # dependencies once.
+  make_clap $CLAP test-switches || return 1
+  make_clap $DELIVERY_CLAP "" || return 1
+  # the test host runs natively on this machine, with the test switches
+  ARA_API_DIR=$DEPS/ARA_SDK/ARA_API LIBCLANG_PATH=$CLT/usr/lib cargo build --release --locked --features test-switches --bin ara-host || return 1
   # the wrapped VST3 from clap-wrapper (universal as well) ...
   cmake -S $DEPS/clap-wrapper -B $DEPS/build-wrapper \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
-    -DCLAP_WRAPPER_DOWNLOAD_DEPENDENCIES=TRUE -DCLAP_WRAPPER_OUTPUT_NAME=DrumSpikeAra || return 1
+    -DCLAP_WRAPPER_DOWNLOAD_DEPENDENCIES=TRUE -DCLAP_WRAPPER_OUTPUT_NAME=DrumSpikeAra \
+    -DCLAP_WRAPPER_BUNDLE_VERSION=$VERSION \
+    -DCLAP_WRAPPER_BUNDLE_IDENTIFIER=com.cherryblossomvalley.drumspike.ara.vst3 || return 1
   cmake --build $DEPS/build-wrapper --config Release || return 1
   [[ -d $DEPS/build-wrapper/DrumSpikeAra.vst3 ]] || { echo "no .vst3 in $DEPS/build-wrapper"; return 1; }
   # ... made self-contained: the CLAP goes inside the bundle, where the wrapper searches
   # first (Contents/PlugIns). No CLAP_PATH anywhere in the check: the embed is the proof.
-  rm -rf $VST3/Contents/PlugIns
+  rm -rf $VST3/Contents/PlugIns $VST3/Contents/_CodeSignature
   mkdir -p $VST3/Contents/PlugIns
   cp -R $CLAP $VST3/Contents/PlugIns/DrumSpikeAra.clap || return 1
+  # the delivery bundle: the same wrapper, the CLAP without the test switches inside
+  rm -rf $DEPS/delivery/DrumSpikeAra.vst3
+  mkdir -p $DEPS/delivery
+  ditto $VST3 $DELIVERY_VST3 || return 1
+  rm -rf $DELIVERY_VST3/Contents/PlugIns/DrumSpikeAra.clap
+  cp -R $DELIVERY_CLAP $DELIVERY_VST3/Contents/PlugIns/DrumSpikeAra.clap || return 1
   # the independent test host of the ARA SDK examples (the S1 build, plugins/ara-spike):
   # native to this machine, Debug, with the versioned SDK. XCODE_VERSION/SDKROOT also as
   # env: the SDK's CMake probes xcodebuild unless the env var is set, and this host has
@@ -160,6 +209,9 @@ build() {
     -DCMAKE_OSX_ARCHITECTURES=$host_arch -DCMAKE_OSX_SYSROOT=$host_sdk -DXCODE_VERSION=16.0 || return 1
   SDKROOT=$host_sdk XCODE_VERSION=16.0 cmake --build $DEPS/build-examples --config Debug --target ARATestHost --parallel || return 1
   [[ -x $DEPS/build-examples/bin/Debug/ARATestHost ]] || { echo "no ARATestHost in $DEPS/build-examples"; return 1; }
+  # the signature is the LAST step: any later change of a bundle breaks the seal
+  sign_bundles $VST3 $CLAP || return 1
+  sign_bundles $DELIVERY_VST3 $DELIVERY_CLAP || return 1
   echo "build: ok ($CLAP, $VST3 with the CLAP inside, $PWD/target/release/ara-host, $DEPS/build-examples/bin/Debug/ARATestHost)"
 }
 

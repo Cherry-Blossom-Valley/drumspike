@@ -45,7 +45,7 @@ pub static SERVICES_DROPPED: AtomicUsize = AtomicUsize::new(0);
 
 /// The value of a test switch of the check (a real host sets none of them).
 fn switch(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.is_empty())
+    crate::test_switch(name).ok().filter(|v| !v.is_empty())
 }
 
 /// True for an id of exactly the form the plugin makes: 16 lowercase hex digits. The id

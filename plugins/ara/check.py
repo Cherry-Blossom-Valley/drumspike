@@ -110,8 +110,18 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
                  override, so the plugin writes only below out/.
   files          the plugin wrote only below its cache folder: no file in the repo changed
                  since the fixture stage and no fixture audio file changed
-  pluginval      pluginval 1.0.4 at strictness 5 on the wrapped VST3 (no CLAP_PATH: the
-                 wrapper must find the CLAP inside its own bundle)
+  pluginval      pluginval 1.0.4 at strictness 10 on the wrapped VST3, the gate build and the
+                 delivery build (no CLAP_PATH: the wrapper must find the CLAP inside its own
+                 bundle); the fault run: a bundle without its CLAP, a log of another level
+  bundle-version M1d1 line 2: CFBundleVersion and CFBundleShortVersionString of the CLAP, the VST3
+                 and the CLAP inside it (both builds) are the version of Cargo.toml; the ARA
+                 factory and the CLAP descriptor say the same (fault: the old wrapper plist)
+  bundle-sign    M1d1 line 3: `codesign --verify --deep --strict` passes on the CLAP and on both
+                 VST3 bundles, the signature is ad hoc and no linker signature, the seal covers
+                 the page (fault: one changed page file fails the verify)
+  delivery-switches  M1d1 line 4: the delivery build (no cargo feature test-switches) ignores
+                 DS_ARA_ROUND_FAULT=request-only and gives the round; the gate build obeys it
+                 (fault: the same check refuses the gate build)
   validate       clap-validator 0.4.1 on the CLAP bundle
   universal      lipo -info names arm64 and x86_64 for the CLAP and the VST3 binary
   standalone     cargo metadata --no-deps at the repo root names no plugin crate; cargo
@@ -157,6 +167,11 @@ CLAP_BIN = CLAP / "Contents" / "MacOS" / "DrumSpikeAra"
 VST3 = DEPS / "build-wrapper" / "DrumSpikeAra.vst3"
 VST3_BIN = VST3 / "Contents" / "MacOS" / "DrumSpikeAra"
 EMBEDDED_CLAP = VST3 / "Contents" / "PlugIns" / "DrumSpikeAra.clap"
+# the delivery variant (check.sh build): the same wrapper, the CLAP built without the cargo feature
+# test-switches, so it reads no fault or test switch
+DELIVERY_CLAP = DEPS / "delivery" / "DrumSpikeAra.clap"
+DELIVERY_VST3 = DEPS / "delivery" / "DrumSpikeAra.vst3"
+DELIVERY_EMBEDDED = DELIVERY_VST3 / "Contents" / "PlugIns" / "DrumSpikeAra.clap"
 HOST = HERE / "target" / "release" / "ara-host"
 SERVICE_TOOL = TOOLS / "service_tool"
 PLUGINVAL = DEPS / "pluginval.app" / "Contents" / "MacOS" / "pluginval"
@@ -3389,10 +3404,10 @@ SOURCE_GLOBS = ["src/*.rs", "src/bin/*.rs", "check.sh", "build.rs"]  # what the 
 
 def readme_block() -> str:
     kinds = {
-        "config": "The plugin reads it (the check sets it for every run).",
+        "config": "The plugin reads it in every build, the delivery build too (the check sets it for every run; the hand checks in a DAW need it).",
         "check": "Read by the check only.",
-        "fault": "Fault switch: breaks one line of the gate on purpose, so the check of that line can fail.",
-        "scenario": "Scenario switch: sets up a case for a stage (not a fault).",
+        "fault": "Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. Read only by a build with the cargo feature `test-switches` (the gate build); a delivery build ignores it.",
+        "scenario": "Scenario switch: sets up a case for a stage (not a fault). Read only by a build with the cargo feature `test-switches`; a delivery build ignores it.",
     }
     lines = [README_BEGIN, "", "| Variable | Kind | Values | What it does |", "| --- | --- | --- | --- |"]
     for e in load_switches():
@@ -3661,24 +3676,70 @@ def stage_tables_fault() -> bool:
     )
 
 
-def stage_pluginval() -> bool:
-    if not PLUGINVAL.exists() or not VST3.exists():
-        return pass_fail("pluginval", False, f"no pluginval or no VST3 ({PLUGINVAL}, {VST3})")
-    env = {**no_switch(), "DS_ARA_CACHE": str(OUT / "cache-pluginval")}
-    rc, text = run(
-        [str(PLUGINVAL), "--strictness-level", "5", "--timeout-ms", "120000", str(VST3)],
+PLUGINVAL_STRICTNESS = "10"
+
+
+def pluginval_run(label: str, vst3: Path) -> tuple[int, str]:
+    """pluginval at strictness 10 on one VST3 (no CLAP_PATH: the wrapper finds the CLAP in the bundle)."""
+    env = {**no_switch(), "DS_ARA_CACHE": str(OUT / f"cache-{label}"), "CLAP_PATH": None}
+    return run(
+        [str(PLUGINVAL), "--strictness-level", PLUGINVAL_STRICTNESS, "--timeout-ms", "120000", str(vst3)],
         env=env,
-        log="pluginval.log",
+        log=f"{label}.log",
     )
-    ok = pass_fail("pluginval", rc == 0, f"strictness 5 on the wrapped VST3, rc={rc} (out/pluginval.log)")
-    if not ok:
-        return False
-    # pluginval is no ARA host: no document controller, so the plugin never runs an
-    # analysis here and writes no report. The proof that the scan drove THIS plugin is
-    # the log: the wrapper's plugin comes from the CLAP descriptor (the inner CLAP).
+
+
+def pluginval_problems(rc: int, text: str) -> list[str]:
+    """What is wrong with one pluginval run: a failure, a level other than 10, no word of success,
+    or a log that does not name the plugin (the scan must have driven THIS plugin)."""
+    bad = []
+    if rc != 0:
+        bad.append(f"rc={rc}")
+    if f"Strictness level: {PLUGINVAL_STRICTNESS}" not in text:
+        bad.append(f"the log does not say strictness level {PLUGINVAL_STRICTNESS}")
+    if "SUCCESS" not in text:
+        bad.append("the log has no SUCCESS")
     if "Drum Spike ARA" not in text:
-        return pass_fail("pluginval", False, "pluginval passed but its log does not name the plugin (is the CLAP inside?)")
-    return True
+        bad.append("the log does not name the plugin (is the CLAP inside?)")
+    return bad
+
+
+def stage_pluginval() -> bool:
+    """Gate line 1 of M1d1: pluginval at strictness 10 on the wrapped VST3, the gate build and the
+    delivery build (pluginval is no ARA host: no document controller, so no analysis runs here)."""
+    ok = True
+    for label, vst3 in (("pluginval", VST3), ("pluginval-delivery", DELIVERY_VST3)):
+        if not PLUGINVAL.exists() or not vst3.exists():
+            return pass_fail(label, False, f"no pluginval or no VST3 ({PLUGINVAL}, {vst3})")
+        rc, text = pluginval_run(label, vst3)
+        bad = pluginval_problems(rc, text)
+        ver = re.search(r"Drum Spike ARA v([0-9][^\s]*)", text)
+        ok = pass_fail(label, not bad, (
+            f"strictness {PLUGINVAL_STRICTNESS} on the wrapped VST3 ({'delivery' if 'delivery' in label else 'gate'} build), rc={rc}, "
+            f"the scan names the plugin version {ver.group(1) if ver else '?'} (out/{label}.log)") if not bad else "; ".join(bad) + f" (out/{label}.log)") and ok
+    return ok
+
+
+def stage_pluginval_fault() -> bool:
+    """The stage can fail: a VST3 whose CLAP was taken out of the bundle (the wrapper finds no plugin),
+    and a log that says another strictness level."""
+    if not PLUGINVAL.exists() or not VST3.exists():
+        return pass_fail("pluginval-fault", False, "no pluginval or no VST3")
+    tmp = OUT / "pluginval-fault"
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    broken = tmp / "DrumSpikeAra.vst3"
+    shutil.copytree(VST3, broken, symlinks=True)
+    shutil.rmtree(broken / "Contents" / "PlugIns")
+    rc, text = pluginval_run("pluginval-fault", broken)
+    bad = pluginval_problems(rc, text)
+    low = pluginval_problems(0, "Strictness level: 5\nSUCCESS\nDrum Spike ARA")
+    return pass_fail(
+        "pluginval-fault",
+        bool(bad) and rc != 0 and any("strictness level" in b for b in low),
+        f"a bundle without its CLAP is refused ({'; '.join(bad)}), and a log of strictness 5 is refused ({'; '.join(low)})",
+    )
 
 
 def stage_validate() -> bool:
@@ -3691,7 +3752,8 @@ def stage_validate() -> bool:
 
 def stage_universal() -> bool:
     ok = True
-    for name, binary in (("CLAP", CLAP_BIN), ("VST3", VST3_BIN)):
+    delivery = (("delivery CLAP", DELIVERY_CLAP / "Contents" / "MacOS" / "DrumSpikeAra"), ("delivery VST3", DELIVERY_VST3 / "Contents" / "MacOS" / "DrumSpikeAra"))
+    for name, binary in (("CLAP", CLAP_BIN), ("VST3", VST3_BIN), *delivery):
         if not binary.exists():
             return pass_fail("universal", False, f"no {name} binary at {binary}")
         rc, text = run(["lipo", "-info", str(binary)])
@@ -3734,20 +3796,207 @@ def stage_standalone() -> bool:
     return ok
 
 
+# ---------------------------------------------------------------- M1d1: the bundle hygiene
+
+
+def crate_version() -> str:
+    """The version of the plugin crate: Cargo.toml, the one source of every version in the bundles."""
+    text = (HERE / "Cargo.toml").read_text(encoding="utf-8")
+    package = text.split("[package]", 1)[1].split("\n[", 1)[0]
+    m = re.search(r'^version\s*=\s*"([^"]+)"', package, re.M)
+    return m.group(1) if m else ""
+
+
+def plist_version_problems(label: str, plist: Path, want: str) -> list[str]:
+    """CFBundleVersion and CFBundleShortVersionString of one Info.plist: both must be the version."""
+    import plistlib
+
+    if not plist.exists():
+        return [f"{label}: no Info.plist"]
+    data = plistlib.loads(plist.read_bytes())
+    return [f"{label}: {key} is {data.get(key)!r}, not {want!r}" for key in ("CFBundleVersion", "CFBundleShortVersionString") if data.get(key) != want]
+
+
+def bundle_version_targets() -> list[tuple[str, Path]]:
+    """Every bundle that carries the version: the CLAP, the VST3 with the CLAP inside, and both of the delivery build."""
+    return [
+        ("CLAP", CLAP), ("VST3", VST3), ("CLAP in the VST3", EMBEDDED_CLAP),
+        ("delivery CLAP", DELIVERY_CLAP), ("delivery VST3", DELIVERY_VST3), ("CLAP in the delivery VST3", DELIVERY_EMBEDDED),
+    ]
+
+
+def stage_bundle_version() -> bool:
+    """M1d1 gate line 2: both version fields of every bundle, and the ARA factory and the CLAP descriptor, name the version of the crate."""
+    want = crate_version()
+    if not want:
+        return pass_fail("bundle-version", False, "no version in Cargo.toml")
+    problems: list[str] = []
+    targets = bundle_version_targets()
+    for label, bundle in targets:
+        problems += plist_version_problems(label, bundle / "Contents" / "Info.plist", want)
+    described = []
+    for label, bundle in (("CLAP", CLAP), ("CLAP in the VST3", EMBEDDED_CLAP), ("delivery CLAP", DELIVERY_EMBEDDED)):
+        _rc, _text, lines = host_run(f"bundle-version-{len(described)}", bundle, ["version"], "cache-bundle-version")
+        row = next((r for r in lines if r.get("event") == "version"), None)
+        if row is None:
+            problems.append(f"{label}: the host read no version")
+            continue
+        described.append(label)
+        for key in ("ara_factory", "clap_descriptor"):
+            if row.get(key) != want:
+                problems.append(f"{label}: {key} is {row.get(key)!r}, not {want!r}")
+    return pass_fail(
+        "bundle-version",
+        not problems,
+        f"CFBundleVersion and CFBundleShortVersionString of {len(targets)} bundles are {want} (Cargo.toml); the ARA factory and the CLAP descriptor of {len(described)} CLAPs say {want}"
+        if not problems else "; ".join(problems),
+    )
+
+
+def stage_bundle_version_fault() -> bool:
+    """The stage can fail: the plist of the wrapper as it was (the unfilled text and an empty field), and a version that is another."""
+    want = crate_version() or "0.1.0"
+    tmp = OUT / "bundle-version-fault"
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    (tmp / "Contents").mkdir(parents=True)
+    import plistlib
+
+    old = {"CFBundleVersion": "MACOSX_BUNDLE_SHORT_VERSION_STRING", "CFBundleShortVersionString": ""}
+    (tmp / "Contents" / "Info.plist").write_bytes(plistlib.dumps(old))
+    unfilled = plist_version_problems("old wrapper plist", tmp / "Contents" / "Info.plist", want)
+    (tmp / "Contents" / "Info.plist").write_bytes(plistlib.dumps({"CFBundleVersion": want, "CFBundleShortVersionString": "0.0.1"}))
+    other = plist_version_problems("other short version", tmp / "Contents" / "Info.plist", want)
+    named = any("MACOSX_BUNDLE_SHORT_VERSION_STRING" in p for p in unfilled) and any("CFBundleShortVersionString is ''" in p for p in unfilled)
+    return pass_fail(
+        "bundle-version-fault",
+        named and len(unfilled) == 2 and len(other) == 1,
+        f"the old plist of the wrapper (unfilled text, empty field) gives {len(unfilled)} problems, a short version of another number gives {len(other)}",
+    )
+
+
+def codesign_verify(path: Path) -> tuple[int, str]:
+    return run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(path)])
+
+
+def stage_bundle_sign() -> bool:
+    """M1d1 gate line 3: every bundle is signed as a bundle (ad hoc, inner first): `codesign --verify --deep --strict` passes,
+    the signature is no linker signature, and it seals the resources (the page among them)."""
+    ok = True
+    for label, bundle in (("CLAP", CLAP), ("VST3", VST3), ("delivery CLAP", DELIVERY_CLAP), ("delivery VST3", DELIVERY_VST3)):
+        if not bundle.exists():
+            return pass_fail("bundle-sign", False, f"no {label} at {bundle}")
+        rc, text = codesign_verify(bundle)
+        # a VST3 seals the CLAP inside it as one nested component, and the CLAP's own seal covers the page
+        inner = bundle / "Contents" / "PlugIns" / "DrumSpikeAra.clap" if bundle.suffix == ".vst3" else bundle
+        _rc2, info = run(["codesign", "-dvv", str(bundle)])
+        _rc3, inner_info = run(["codesign", "-dvv", str(inner)])
+        sealed = re.search(r"Sealed Resources version=\d+ rules=\d+ files=(\d+)", inner_info)
+        outer = re.search(r"Sealed Resources version=\d+ rules=\d+ files=(\d+)", info)
+        page = inner / "Contents" / "Resources" / "page"
+        n_page = sum(1 for f in page.rglob("*") if f.is_file()) if page.is_dir() else 0
+        good = (
+            rc == 0 and bool(sealed) and bool(outer) and int(sealed.group(1)) >= n_page > 0
+            and "linker-signed" not in info + inner_info and "Signature=adhoc" in info and "Signature=adhoc" in inner_info
+        )
+        ok = pass_fail(
+            "bundle-sign",
+            good,
+            f"{label}: codesign --verify --deep --strict rc={rc}; ad hoc, no linker signature, the CLAP inside signed first; the seal of the CLAP covers "
+            f"{sealed.group(1) if sealed else '0'} resource files (the page has {n_page})" if good else
+            f"{label}: rc={rc}, sealed files {sealed.group(1) if sealed else None}, page files {n_page}: {text.strip()[:200]} {info.strip()[-300:]}",
+        ) and ok
+    return ok
+
+
+def stage_bundle_sign_fault() -> bool:
+    """The stage can fail: a copy of the VST3 verifies (the control); with one changed page file, one new file in the page and the
+    inner CLAP replaced by another binary, the same verify fails."""
+    if not VST3.exists():
+        return pass_fail("bundle-sign-fault", False, "no VST3")
+    tmp = OUT / "bundle-sign-fault"
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    copy = tmp / "DrumSpikeAra.vst3"
+    rc_subprocess = subprocess.run(["ditto", str(VST3), str(copy)])
+    rc0, _t0 = codesign_verify(copy)
+    page = copy / "Contents" / "PlugIns" / "DrumSpikeAra.clap" / "Contents" / "Resources" / "page"
+    target = page / "app.js"
+    target.write_text(target.read_text(encoding="utf-8") + "\n// changed\n", encoding="utf-8")
+    rc1, text1 = codesign_verify(copy)
+    return pass_fail(
+        "bundle-sign-fault",
+        rc_subprocess.returncode == 0 and rc0 == 0 and rc1 != 0 and "app.js" in text1,
+        f"a copy of the signed VST3 verifies (rc={rc0}); with one page file changed the verify fails (rc={rc1}) and names it: {next((ln.strip() for ln in text1.splitlines() if 'app.js' in ln), '')[-120:]}",
+    )
+
+
+DELIVERY_ENV = {"DS_ARA_ROUND_FAULT": "request-only"}
+
+
+def delivery_run(label: str, bundle: Path) -> tuple[str, str]:
+    """The fault switch `DS_ARA_ROUND_FAULT=request-only` makes a build that reads it start no round for a host that never asks.
+    The state: "round" (the normal round: the switch had no effect), "no-round" (the host ran, the plugin reported, no round started
+    and no job), "other" (a run that is neither), "not-run" (no host, no bundle, no reference, or a run that left no report: a crash
+    or a missing part must never pass as "no round")."""
+    ref_path = OUT / "events-reference.json"
+    if not HOST.exists() or not bundle.exists() or not ref_path.exists():
+        return "not-run", "no host, no bundle or no reference events: run check.sh build and the reference stage first"
+    cache = f"cache-{label}"
+    rc, text, lines = host_run(
+        label, bundle, ["grow", "--files", *fixture_args(FILES), "--batch", str(len(FILES)), "--wait", SHORT_WAIT, "--no-request"], cache, extra=DELIVERY_ENV,
+    )
+    parts, evidence = nr_parts(label, rc, lines, FILES, ref_path.read_bytes())
+    wrote = (OUT / cache).is_dir() and any((OUT / cache).rglob("*.wav"))
+    rows = report_rows(label)
+    # a host that ran and waited for a round that never came says so (rc 2, "did not finish") after the plugin read the audio
+    waited = rc == 2 and "did not finish" in text and wrote
+    if not (rows and rc == 0) and not waited:
+        return "not-run", f"the host run crashed or left no usable result (rc={rc}, {len(rows)} report rows, the plugin wrote its cache {wrote}): {text.strip()[:120]}"
+    if all(parts.values()) and wrote:
+        return "round", f"{evidence}; the cache folder has the audio files {wrote}"
+    if waited and not event_rows(label, "round_start") and not job_rows(label):
+        return "no-round", f"the plugin read the audio and wrote its cache but started no round: {evidence}"
+    return "other", f"{evidence}; the cache folder has the audio files {wrote}"
+
+
+def stage_delivery_switches() -> bool:
+    """M1d1 gate line 4: the rule is the cargo feature `test-switches` (the gate build has it, the delivery build has not). The delivery
+    CLAP, inside the delivery VST3, ignores DS_ARA_ROUND_FAULT=request-only (it still gives the round); the report (DS_ARA_OUT) and the
+    cache folder (DS_ARA_CACHE) work in it. The control: the gate CLAP with the same variable ran and gave no round."""
+    state, ev = delivery_run("delivery-switches", DELIVERY_EMBEDDED)
+    ok = pass_fail("delivery-switches", state == "round", f"the delivery build with DS_ARA_ROUND_FAULT=request-only still gives the round (state {state}): {ev}")
+    state, cev = delivery_run("delivery-switches-control", EMBEDDED_CLAP)
+    return pass_fail("delivery-switches-control", state == "no-round", f"the gate build with the same variable obeys it, it ran and gave no round (state {state}): {cev}") and ok
+
+
+def stage_delivery_switches_fault() -> bool:
+    """The check can fail: a build that reads the switches (the gate CLAP) ran and gave no round, so the same check refuses it as a delivery build."""
+    state, ev = delivery_run("delivery-switches-fault", CLAP)
+    return pass_fail("delivery-switches-fault", state == "no-round", f"the check refuses a build that reads the switch (the gate CLAP): it ran and gave no round (state {state}): {ev}")
+
+
 # ---------------------------------------------------------------- the cargo trios
 
 
 def stage_crate() -> bool:
     env = {"ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib"}
+    # the unit tests name fault switches (transport), so they run with the feature; clippy runs on
+    # both builds (a delivery build must be as clean as the gate build)
     steps = [
         ("fmt", ["cargo", "fmt", "--all", "--", "--check"]),
-        ("clippy", ["cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings"]),
-        ("test", ["cargo", "test", "--locked"]),
+        ("clippy", ["cargo", "clippy", "--all-targets", "--locked", "--features", "test-switches", "--", "-D", "warnings"]),
+        ("clippy-delivery", ["cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings"]),
+        ("test", ["cargo", "test", "--locked", "--features", "test-switches"]),
+        ("test-delivery", ["cargo", "test", "--locked"]),
     ]
     ok = True
     for name, cmd in steps:
         rc, text = run(cmd, env=env, log=f"crate-{name}.log", cwd=HERE)
-        ok = pass_fail(f"crate-{name}", rc == 0, f"{name} of the plugin crate, rc={rc} (out/crate-{name}.log)") and ok
+        passed = sum(int(m) for m in re.findall(r"test result: ok\. (\d+) passed", text)) if name.startswith("test") else None
+        count = f", {passed} unit tests passed" if passed is not None else ""
+        ok = pass_fail(f"crate-{name}", rc == 0 and (passed is None or passed > 0), f"{name} of the plugin crate, rc={rc}{count} (out/crate-{name}.log)") and ok
     return ok
 
 
@@ -4407,7 +4656,12 @@ def page_copy_parts(label: str, copy: Path) -> tuple[bool, str]:
 
 def stage_editor_page_copy() -> bool:
     ok = True
-    for label, copy in (("the CLAP", CLAP / "Contents" / "Resources" / "page"), ("the CLAP in the VST3", EMBEDDED_CLAP / "Contents" / "Resources" / "page")):
+    for label, copy in (
+        ("the CLAP", CLAP / "Contents" / "Resources" / "page"),
+        ("the CLAP in the VST3", EMBEDDED_CLAP / "Contents" / "Resources" / "page"),
+        ("the delivery CLAP", DELIVERY_CLAP / "Contents" / "Resources" / "page"),
+        ("the CLAP in the delivery VST3", DELIVERY_EMBEDDED / "Contents" / "Resources" / "page"),
+    ):
         good, ev = page_copy_parts(label, copy)
         ok = pass_fail("editor-page-copy", good, ev) and ok
     return ok
@@ -4999,7 +5253,7 @@ def stage_editor_transport_deactivate_fault() -> bool:
 def handover_run(label: str, env: dict | None = None) -> tuple[int, str]:
     e = {"ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib"}
     e.update(env or {})
-    return run(["cargo", "test", "--locked", "--lib", "transport::tests::", "--", "--test-threads=1"], env=e, log=f"{label}.log", cwd=HERE)
+    return run(["cargo", "test", "--locked", "--features", "test-switches", "--lib", "transport::tests::", "--", "--test-threads=1"], env=e, log=f"{label}.log", cwd=HERE)
 
 
 def stage_transport_handover() -> bool:
@@ -5113,6 +5367,13 @@ STAGES = {
     "conformance": stage_conformance,
     "files": stage_files,
     "pluginval": stage_pluginval,
+    "pluginval-fault": stage_pluginval_fault,
+    "bundle-version": stage_bundle_version,
+    "bundle-version-fault": stage_bundle_version_fault,
+    "bundle-sign": stage_bundle_sign,
+    "bundle-sign-fault": stage_bundle_sign_fault,
+    "delivery-switches": stage_delivery_switches,
+    "delivery-switches-fault": stage_delivery_switches_fault,
     "validate": stage_validate,
     "universal": stage_universal,
     "standalone": stage_standalone,
@@ -5186,7 +5447,8 @@ ORDER = [
     "editor-transport-measure", "editor-transport-measure-fault", "editor-transport-none", "editor-transport-none-fault",
     "editor-transport-deactivate", "editor-transport-deactivate-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
-    "conformance", "files", "pluginval", "validate", "universal", "standalone",
+    "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
+    "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",
     "crate", "workspace",
 ]
 

@@ -1,4 +1,4 @@
-# Drum Spike ARA plugin (M1a, #525; M1b1, #537; M1b2, #538; M1b5, #546)
+# Drum Spike ARA plugin (M1a, #525; M1b1, #537; M1b2, #538; M1b5, #546; M1d1, #552)
 
 The Drum Spike plugin for DAWs: one CLAP plugin in Rust with ARA 2 and, since M1b2, an editor window,
 wrapped as one self-contained VST3 (the CLAP inside the bundle). The plugin takes the
@@ -22,8 +22,28 @@ inside (`.deps/build-wrapper/DrumSpikeAra.vst3/Contents/PlugIns/DrumSpikeAra.cla
 wrapper searches its own bundle's `PlugIns` first, so no `CLAP_PATH` is needed):
 
     ./check.sh all        # deps, build, check
-    ./check.sh build      # the two bundles, both test hosts, service_tool
+    ./check.sh build      # the bundles, both test hosts, service_tool
     ./check.sh check      # the gate: check.py all
+
+The build makes two variants of the bundle. The gate variant (`.deps/DrumSpikeAra.clap` and
+`.deps/build-wrapper/DrumSpikeAra.vst3`) is built with the cargo feature `test-switches`; the
+gate needs it for its fault runs. The delivery variant (`.deps/delivery/DrumSpikeAra.clap` and
+`.deps/delivery/DrumSpikeAra.vst3`) is built without it. It is the same wrapper with the CLAP
+that reads no test switch (see "Test switches of the check"). Only the plugin crate is built
+twice; the dependencies are built once.
+The delivery variant is built last, so the loose dylibs in `target/<triple>/release` are the
+delivery variant too. A later installer takes the bundles from `.deps/delivery`, never from
+`.deps` or `.deps/build-wrapper`.
+
+The version of every bundle is the `version` of `Cargo.toml`. The ARA factory and the CLAP
+descriptor take it at compile time. `check.sh` sets `CFBundleVersion` and
+`CFBundleShortVersionString` of the CLAP, and gives it to the wrapper
+(`CLAP_WRAPPER_BUNDLE_VERSION`) for the VST3.
+
+The signature is the last step of the build. Every bundle is signed ad hoc with
+`codesign --force -s -`: first the CLAP inside the VST3, then the VST3 (a later change of a
+bundle file breaks the seal). `codesign --verify --deep --strict` passes on the bundle, and the
+seal covers the page. A real identity and the notarization are part of M2.
 
 `./check.sh deps` fetches the third-party parts into `.deps` (or `$DS_ARA_DEPS`): the ARA
 SDK 2.3.0 API headers, the ARA examples (with `ARA_Library` and the CLAP 1.1.9 and
@@ -230,7 +250,7 @@ fixture session (four tracks with bleed, roles from the names), the byte-for-byt
 against `service_tool analyze` on the CLAP and on the plugin inside the VST3, the regions
 fixture (two regions, one trimmed; the track is made from segments), the archive store /
 restore with the decode counter at 0 and the committed fixture `fixtures/archive-v1.ara`,
-the audio-thread check with its fault run, the file probe, pluginval (strictness 5) and
+the audio-thread check with its fault run, the file probe, pluginval (strictness 10, on both variants of the VST3) and
 clap-validator, the standalone rule, and the crate and workspace trios. The M1b1 stages
 (`doc-*`, each with a fault run) drive the host modes `grow` (sources arrive in batches, one
 can be destroyed) and `docs` (two document controllers in one process): one service per
@@ -258,12 +278,18 @@ is not listed, when a listed variable is not used, or when this table was edited
 environment. A normal run of the check clears every variable of the list for the programs it
 starts.
 
-The shipped build still reads these variables from the environment: the plugin does not
-compile them out. Two of them weaken safety on purpose: `DS_ARA_ID_FAULT=trust` (the plugin
-trusts the id, the track names and the source names that come from a file or from the host)
-and `DS_ARA_HOME_FAULT=1` (the service home goes below the user's home). To remove every
-fault and scenario switch from a delivery build (a cargo feature) is an open point for the
-delivery ticket M1c.
+The rule is a cargo feature. The fault and scenario switches are read only by a build with
+the feature `test-switches`; the gate builds the plugin so. A delivery build has no such
+feature and never reads them: a variable in the environment of a host cannot change the plugin.
+That includes the two that weaken safety on purpose, `DS_ARA_ID_FAULT=trust` and
+`DS_ARA_HOME_FAULT=1`. The code reads them only through one function (`test_switch` in
+`src/lib.rs`). `switches.json` stays the one list. `check.sh build` makes the delivery variant. The stage
+`delivery-switches` runs the delivery CLAP (inside the delivery VST3) with `DS_ARA_ROUND_FAULT=request-only`
+and shows that it still gives the round, while the gate CLAP obeys the variable. The fault run
+of that stage refuses the gate CLAP.
+
+The report variables `DS_ARA_OUT` and `DS_ARA_CACHE` are not switches. They work in both
+variants, because the hand checks in a DAW need them.
 
 <!-- switches:begin (made from switches.json by `check.py write-readme`) -->
 
@@ -301,7 +327,7 @@ delivery ticket M1c.
 | `DS_ARA_TRANSPORT_FAULT` | fault | off, identity, flood, invent, alloc, keep-playing | the host transport of the page (M1b5): off: the audio thread stores no transport, so the page never follows; identity: the song position is the page time, the regions are not used; flood: a message to the page every 8 ms instead of every 40 ms; invent: with no transport seen, the page is told the host plays from 0; alloc: the audio thread allocates in its call (the unit test that names the hand-over fails); keep-playing: a cleared slot or a host with no position does not stop the page (the way before review round 3) |
 | `DS_ARA_EDITOR_SCENARIO` | scenario | panic:<command>, sync-delay | the named command of the page panics inside the plugin where the service would run it, or the worker hears 12 s late about a change of the page (the request thread's own record is not delayed) |
 
-Kinds: **config**: The plugin reads it (the check sets it for every run). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. **scenario**: Scenario switch: sets up a case for a stage (not a fault).
+Kinds: **config**: The plugin reads it in every build, the delivery build too (the check sets it for every run; the hand checks in a DAW need it). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. Read only by a build with the cargo feature `test-switches` (the gate build); a delivery build ignores it. **scenario**: Scenario switch: sets up a case for a stage (not a fault). Read only by a build with the cargo feature `test-switches`; a delivery build ignores it.
 
 <!-- switches:end -->
 

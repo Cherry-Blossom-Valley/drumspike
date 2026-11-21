@@ -39,6 +39,13 @@ objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 
+# The rule for the fault and test switches (switches.json): a build with this feature reads them
+# from the environment (the gate builds so); a delivery build, without it, never does. The report
+# variables DS_ARA_OUT and DS_ARA_CACHE do not depend on it.
+[features]
+default = []
+test-switches = []
+
 [[bin]]
 name = "ara-host"
 path = "src/bin/ara-host.rs"
