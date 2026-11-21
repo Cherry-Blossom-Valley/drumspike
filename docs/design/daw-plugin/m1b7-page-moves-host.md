@@ -175,12 +175,12 @@ failure text away. Stage `editor-playback-late` (the test host starts 2.5 s late
 - **Locate while the host is stopped.** Since #556 the page calls `host.locate` itself (see "M1b9"
   below). Before that, `appTickPos` ran only in `tick()`, and `tick()` ran only while the page played, so
   the shell script had a watch of `PH.user` every 25 ms. The watch is gone.
-- **A host that does not follow.** The page does not fall back by itself. The shell does it: after
-  a request that the host did not follow (no message of the host in 1 s, or a refusal), the shell
-  shows the last host position again, if the host was stopped. A host that plays sends its
-  position anyway. The fallback does not run when a newer locate was sent after the one it belongs
-  to, and not while the pointer is down in the ruler (it asks again every 150 ms until the pointer is
-  up). Stage `editor-playback-drag` (a drag of 3 s against a host that does nothing; fault
+- **A host that does not follow.** Two cases. A refusal (`ok: false`): the page shows the text and puts
+  the playhead back itself (#556, see "M1b9"). A locate that the host accepted and did not follow (no
+  message of the host in 1 s): the shell shows the last host position again, if the host was stopped. A
+  host that plays sends its position anyway. That fallback does not run when a newer locate was sent after
+  the one it belongs to, and not while the pointer is down in the ruler (it asks again every 150 ms until the
+  pointer is up). Stage `editor-playback-drag` (a drag of 3 s against a host that does nothing; fault
   `no-drag-guard`: the playhead jumps back under the pointer). Stage `editor-playback-refused`, fault `DS_ARA_PLAYBACK_FAULT=no-fallback`.
 
 So the page does move its own playhead at a click (`PH.v`) and at a stop, before the host answers.
@@ -205,6 +205,17 @@ click, keys) calls `B.hostTransport.locate(PH.v)`:
   Only the newest locate decides. While the primary button is down (a drag) the playhead stays under the
   pointer; the page puts it back when the button goes up. A host that accepts and does not follow is still
   the fallback of the shell (`afterRequest`, with the pointer guard).
+- **Roll-back details (round 2).** A change of project (`S.sid`) drops the waiting locate, its timer, the
+  refusal mark and the positions to go back to; a late refusal of the old project does nothing. A write
+  while a load runs (`S.loaded` is 0: the clamp of `loadProject`) is no move. With no host position yet, the
+  page goes back to the position before the first unsent move. After the roll-back the view moves to the
+  playhead if it is out of view (a refused key or marker jump had centred the view on the jump). A
+  ctrl+click does not count as a pointer that is down, and `contextmenu` and `blur` count as the pointer up.
+- **A move while the host starts (rule).** While `AC.starting` is set (up to 2 s) the move waits. When the
+  start is settled and the page plays, the waiting locate is dropped: the move is a seek of a playing page
+  and the tick sends it. When the start failed, the locate goes out then.
+- **The end of the song.** `tick()` ends the song with `pause()` and `S.playhead = 0`. At the host that is
+  stop, then one locate to 0 (test `test_the_end_of_the_song_in_host_mode_stops_then_locates_zero_once`).
 - **The shell.** The watch and the `PH` global are gone from `shell.js`. It still watches the selected track.
 - **Standalone.** Nothing of this exists with host mode off: the setter is not wrapped and no listener is bound.
 

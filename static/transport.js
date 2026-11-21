@@ -57,7 +57,7 @@ function appOnPlayhead(m) {
     }
   }
   if (m.sid !== S.sid) return;
-  if (hostMode() && !m.playing && typeof m.pos === "number") HL.hostPos = m.pos;   // #556: where a refused locate puts the playhead back
+  if (hostMode() && !m.playing && typeof m.pos === "number" && HL.on) { hostLocateSync(); HL.hostPos = m.pos; }   // #556: where a refused locate puts the playhead back
   if (m.error && !m.end) { setMsg(`audio: ${m.error} (trying again)`); AC.running = false; return; }
   if (m.epoch < AC.minEpoch || AC.seeking || AC.pending !== null) return;   // older than our last seek
   const metered = !!m.meters;   // #471: the meter message (25 Hz) carries the playhead fields too
@@ -102,36 +102,52 @@ function appHostFollow() {
    the host sent (HL.hostPos); under the pointer of a drag it waits for the pointer to go up, so a drag keeps
    the playhead under the pointer (#554). The standalone page never gets here: hostMode() is false. */
 const HL_MIN_MS = 40;
-const HL = { on: false, down: false, seq: 0, sentAt: 0, timer: null, pending: null, hostPos: null, refusedSeq: 0, ref: 0 };
+const HL = { on: false, down: false, seq: 0, sentAt: 0, timer: null, pending: null, hostPos: null, base: null, refusedSeq: 0, ref: 0, sid: null, gen: 0 };
+/* A change of project (S.sid) drops everything that belongs to the old one: the waiting locate and its timer,
+   the refusal mark and the positions to go back to. */
+function hostLocateSync() {
+  if (HL.sid === S.sid) return;
+  HL.sid = S.sid; HL.pending = null; HL.refusedSeq = 0; HL.hostPos = null; HL.base = null; HL.ref = PH.v;
+  clearTimeout(HL.timer); HL.timer = null;
+}
 function hostLocateInstall() {
   if (HL.on) return;
-  HL.on = true; HL.ref = PH.v;
+  HL.on = true; HL.ref = PH.v; HL.sid = S.sid;
   let user = PH.user;
   Object.defineProperty(PH, "user", { enumerable: true, configurable: true, get() { return user; }, set(x) {
     user = x;
     if (!x || S.playing || typeof PH.v !== "number" || !isFinite(PH.v)) return;   // playing: the tick seeks
-    if (AC.stopping) { HL.ref = PH.v; return; }   // the own stop of the page (appPause) is no locate
+    hostLocateSync();
+    if (AC.stopping || !S.loaded) { HL.ref = PH.v; return; }   // the own stop of the page (appPause) and a write of a load (the clamp) are no locate
     if (Math.abs(PH.v - HL.ref) < 1e-9) return;
+    if (HL.hostPos === null && HL.base === null) HL.base = HL.ref;   // U4: where a refusal goes back to when the host sent no position yet
     HL.ref = PH.v;
     hostLocateSend(PH.v);
   } });
-  window.addEventListener("mousedown", ev => { if (ev.button === 0) HL.down = true; }, true);
+  // the primary button (not ctrl+click: that opens the context menu and may give no mouseup)
+  window.addEventListener("mousedown", ev => { if (ev.button === 0 && !ev.ctrlKey) HL.down = true; }, true);
   const up = () => { HL.down = false; if (HL.refusedSeq && HL.refusedSeq === HL.seq && HL.pending === null) hostLocateBack(); };
-  window.addEventListener("mouseup", up, true); window.addEventListener("blur", up);
+  window.addEventListener("mouseup", up, true); window.addEventListener("blur", up); window.addEventListener("contextmenu", up, true);
 }
 function hostLocateSend(t) {
-  HL.pending = t;
+  HL.pending = t; HL.gen = S.loaded;
   const wait = HL.sentAt + HL_MIN_MS - performance.now();
   if (wait > 0) { if (!HL.timer) HL.timer = setTimeout(() => { HL.timer = null; hostLocateFlush(); }, wait); return; }
   hostLocateFlush();
 }
+/* U2, the rule for a move while the host starts (AC.starting, up to 2 s): the move waits. When the start is
+   settled and the page plays, the waiting locate is dropped: PH.user is still set, and the tick seeks through
+   the path of a move while playing. When the start failed, the locate goes out then. */
 function hostLocateFlush() {
+  hostLocateSync();
+  if (HL.pending === null) return;
+  if (AC.starting) { if (!HL.timer) HL.timer = setTimeout(() => { HL.timer = null; hostLocateFlush(); }, HL_MIN_MS); return; }
   const t = HL.pending; HL.pending = null;
-  if (t === null || S.playing) return;   // the page plays now: the play call carries the position
+  if (S.playing || !S.loaded || HL.gen !== S.loaded) return;   // playing now: the tick seeks; a load came between: the move is old
   const host = typeof B !== "undefined" && B.hostTransport;
   if (!host || typeof host.locate !== "function") return;
-  const seq = ++HL.seq; HL.sentAt = performance.now();
-  const refused = e => { setMsg(String(e && e.message || e)); hostLocateRefused(seq); };
+  const seq = ++HL.seq, sid = S.sid; HL.sentAt = performance.now();
+  const refused = e => { setMsg(String(e && e.message || e)); if (sid === S.sid) hostLocateRefused(seq); };
   try { Promise.resolve(host.locate(t)).catch(refused); } catch (e) { refused(e); }
 }
 function hostLocateRefused(seq) {
@@ -141,8 +157,14 @@ function hostLocateRefused(seq) {
 }
 function hostLocateBack() {
   HL.refusedSeq = 0;
-  if (HL.hostPos === null || S.playing) return;
-  PH.v = HL.ref = Math.max(0, Math.min(HL.hostPos, maxDur()));
+  hostLocateSync();
+  const to = HL.hostPos !== null ? HL.hostPos : HL.base;
+  if (to === null || S.playing) return;
+  PH.v = HL.ref = Math.max(0, Math.min(to, maxDur()));
+  if (PH.v < S.view.t0 || PH.v > S.view.t1) {   // U5: a jump moved the view; the playhead must be in sight again
+    const d = S.view.t1 - S.view.t0, v = viewClamp(PH.v - d / 2, PH.v + d / 2);
+    setView(v.t0, v.t1);
+  }
   invalidate(F.HEAD); updateStatus();
 }
 /* Clock sync: the channel may deliver every message late (in the app, by about 25 ms), so the min-delay offset

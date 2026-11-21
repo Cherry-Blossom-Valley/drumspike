@@ -100,3 +100,83 @@ def test_with_host_mode_off_the_page_is_unchanged(app, make_project):
     app.evaluate("() => { B.hostTransport = { locate: function (p) { window.__loc = p; return Promise.resolve(); } }; S.playhead = 7.0; }")
     app.wait_for_timeout(200)
     assert app.evaluate("() => window.__loc === undefined") is True
+
+
+# ---- round 2 (U1 to U7) ----
+
+def test_a_reload_clamp_is_no_move_and_a_move_before_a_project_change_is_not_sent(app, make_project):
+    """U1: the clamp of loadProject sends no locate; a waiting locate of the old project is dropped."""
+    host_page(app, make_project)
+    app.evaluate("() => { PH.v = 99; }")   # beyond the song, no user write: the load clamps it
+    app.evaluate("async () => { await loadProject(); }")
+    app.wait_for_timeout(200)
+    assert locates(app) == [], locates(app)
+    app.evaluate("() => { S.playhead = 5; S.playhead = 6; }")   # the first goes out, the second waits in the timer
+    app.evaluate("() => { window.__sid = S.sid; S.sid = 'another-project'; }")
+    app.wait_for_timeout(200)
+    app.evaluate("() => { S.sid = window.__sid; }")
+    assert [round(c[0], 3) for c in locates(app)] == [5.0], locates(app)
+
+
+def test_a_refusal_of_the_old_project_does_not_move_the_new_one(app, make_project):
+    host_page(app, make_project)
+    app.evaluate("""() => { B.hostTransport.locate = function (p) { return new Promise((_, rej) => setTimeout(() => rej(new Error('late refusal')), 150)); };
+      S.playhead = 9.0; window.__sid = S.sid; S.sid = 'another-project'; }""")
+    app.wait_for_timeout(400)
+    app.evaluate("() => { S.sid = window.__sid; }")
+    assert abs(app.evaluate("() => PH.v") - 9.0) < 1e-9   # not put back by a refusal of another project
+
+
+def test_a_move_while_the_host_starts_waits_and_the_playing_page_seeks(app, make_project):
+    """U2: during AC.starting no locate goes out; after the start the tick seeks (the path while playing), once."""
+    host_page(app, make_project)
+    app.evaluate("() => { B.hostTransport.play = function (p) { this.calls.push(['play', p]); return new Promise(r => { window.__playDone = r; }); }; }")
+    app.click("#playBtn")
+    app.wait_for_function("() => AC.starting === true")
+    app.evaluate("() => { S.playhead = 9.0; }")
+    app.wait_for_timeout(250)
+    assert locates(app) == [], locates(app)
+    app.evaluate("() => window.__playDone()")
+    app.wait_for_function("() => B.hostTransport.calls.some(c => c[0] === 'locate' && Math.abs(c[1] - 9.0) < 1e-9)")
+    app.wait_for_timeout(200)
+    assert len(locates(app)) == 1, locates(app)
+
+
+def test_a_ctrl_click_and_a_context_menu_do_not_hold_the_playhead(app, make_project):
+    """U3: no mouseup after ctrl+click: the refusal still rolls back."""
+    host_page(app, make_project)
+    app.evaluate("""() => { B.hostTransport.refuse = 'refused'; window.dispatchEvent(new MouseEvent('mousedown', { button: 0, ctrlKey: true, bubbles: true })); S.playhead = 9.0; }""")
+    app.wait_for_function("() => Math.abs(PH.v - 2.0) < 1e-9")
+    app.evaluate("""() => { window.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })); S.playhead = 8.0; }""")
+    app.wait_for_timeout(200)
+    assert abs(app.evaluate("() => PH.v") - 8.0) < 1e-9   # the pointer is down
+    app.evaluate("() => window.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))")
+    app.wait_for_function("() => Math.abs(PH.v - 2.0) < 1e-9")
+
+
+def test_a_refusal_before_any_host_position_goes_back_to_the_position_before_the_move(app, make_project):
+    """U4: the host sent no position yet."""
+    open_project(app, make_project(seconds=30.0))
+    assert app.evaluate(STUB) is True
+    assert app.evaluate("() => appHostFollow()") is True
+    before = app.evaluate("() => PH.v")
+    app.evaluate("() => { B.hostTransport.refuse = 'refused'; S.playhead = 9.0; }")
+    app.wait_for_function("(b) => Math.abs(PH.v - b) < 1e-9", arg=before)
+
+
+def test_after_a_refused_jump_the_playhead_is_in_view_again(app, make_project):
+    """U5: centerOn moved the view to the jump; the roll-back brings the playhead into sight."""
+    host_page(app, make_project)
+    app.evaluate("() => { setView(0, 5); B.hostTransport.refuse = 'refused'; S.playhead = 20; centerOn(20); }")
+    app.wait_for_function("() => Math.abs(PH.v - 2.0) < 1e-9")
+    app.wait_for_function("() => S.view.t0 <= 2.0 && S.view.t1 >= 2.0")
+
+
+def test_the_end_of_the_song_in_host_mode_stops_then_locates_zero_once(app, make_project):
+    """U7: tick() ends the song with pause(); S.playhead = 0. Order at the host: stop, then locate 0, once."""
+    host_page(app, make_project)
+    app.evaluate("() => { B.hostTransport.calls.length = 0; B.hostTransport.send({ sid: S.sid, epoch: 2, t_ns: performance.now() * 1e6, pos: maxDur() - 0.1, playing: true }); }")
+    app.wait_for_function("() => B.hostTransport.calls.some(c => c[0] === 'locate')")
+    app.wait_for_timeout(300)
+    kinds = app.evaluate("() => B.hostTransport.calls.map(c => c[0] === 'locate' ? ['locate', c[1]] : [c[0]])")
+    assert kinds == [["stop"], ["locate", 0]], kinds
