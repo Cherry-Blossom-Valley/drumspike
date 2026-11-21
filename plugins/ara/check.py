@@ -5812,6 +5812,184 @@ def stage_playback_map_fault() -> bool:
                      f"the fault run (no locate of the queue is dropped for a newer one) makes the queue test fail with 'the newest locate wins': rc={rc2}, named {named2}") and ok
 
 
+# ---------------------------------------------------------------- M1b11: the menu and the lanes of the page (#559)
+#
+# Three runs of the test host editor read what the page DREW (the pixels of the lane canvases), not what its code says:
+#   hit       the host sends the double click of a real pointer into the lane of a track of the role "other" and of a drum
+#             role; the page reports the pixels of both lanes. The finding of the owner: the lane was one colour (magenta,
+#             yellow) with the hits as dark lines, because a track of the plugin has no colour and "undefined0d" is no colour.
+#   geometry  the rows that the lines of the hits span, after a change of the zoom, of the track height and of the window
+#             (across the 520 px of the low window, which the host resizes)
+#   menu      the menu button of the page in host mode, used with the pointer and the keyboard, in a normal and a low window
+
+
+def lane_runs(label: str, mode: str, env: dict | None = None) -> tuple[int, list, dict]:
+    rc, _summary, rows = run_phase(label, mode, CLAP, env)
+    reps = page_reports(rows, mode)
+    return rc, rows, (reps[0] if reps else {})
+
+
+def no_run(rc: int, rep: dict, names: list) -> dict | None:
+    if not rep or rep.get("visibility") != "visible":
+        why = (f"the page is {rep.get('visibility')}: the screen of this host is locked or its window occluded" if rep
+               else f"no usable run: rc={rc}, no page report")
+        return {n: (False, why) for n in names}
+    return None
+
+
+HIT_PARTS = ["editor-hit-pointer", "editor-hit-selected", "editor-hit-lane", "editor-hit-colour"]
+
+
+def hit_parts(rc: int, rep: dict) -> dict:
+    bad = no_run(rc, rep, HIT_PARTS)
+    if bad:
+        return bad
+    tr = rep.get("tracks", [])
+    if len(tr) != 2:
+        return {n: (False, f"no usable run: {len(tr)} track report(s), want 2") for n in HIT_PARTS}
+    roles = [t.get("role") for t in tr]
+    pointer = all(t.get("pointer_added") for t in tr) and roles[0] == "other"
+    sel = all(t.get("sel") and t["sel"].get("track") == t["name"] and not t.get("ln_sel") and t.get("added_flags", 0) >= 1 for t in tr)
+    bad_lane = []
+    for t in tr:
+        sp, wv = t["after"].get("spike", {}), t["after"].get("wave", {})
+        if sp.get("opaque", 1) > 0.5 or wv.get("opaque", 1) > 0.5:
+            bad_lane.append(f"{t['name']} ({t['role']}): the spike lane is one opaque colour: {round(sp.get('opaque', 0) * 100)} percent opaque, "
+                            f"one colour on {round(sp.get('share', 0) * 100)} percent (bucket {sp.get('top')}); the wave lane {round(wv.get('opaque', 0) * 100)} percent opaque")
+    colour = all(isinstance(t.get("color"), str) and re.fullmatch(r"#[0-9a-fA-F]{6}", t["color"]) for t in tr)
+    return {
+        "editor-hit-pointer": (pointer, f"a double click of the pointer (NSEvents of the host) added a hit on a track of the role {roles[0]!r} (hits {tr[0]['n0']} -> {tr[0]['n1']}) "
+                                        f"and on a track of the role {roles[1]!r} ({tr[1]['n0']} -> {tr[1]['n1']})" if pointer else
+                               f"the pointer click did not add a hit, or the first track is not of the role other: roles {roles}, added {[t.get('pointer_added') for t in tr]}"),
+        "editor-hit-selected": (sel, f"the new hit is the selected hit of its track and no range is selected: {[t.get('sel') for t in tr]}" if sel else
+                                f"selection after the new hit: {[(t.get('sel'), t.get('ln_sel'), t.get('added_flags')) for t in tr]}"),
+        "editor-hit-lane": (not bad_lane, "after the new hit the spike lanes are a translucent tint (opaque " + ", ".join(f"{round(t['after']['spike']['opaque'] * 100)}" for t in tr)
+                            + " percent) and the wave lanes carry only the lines" if not bad_lane else "; ".join(bad_lane)),
+        "editor-hit-colour": (colour, f"every track has a colour of 6 hex digits: {[t.get('color') for t in tr]}" if colour else
+                              f"a track has no colour: {[t.get('color') for t in tr]}"),
+    }
+
+
+def stage_editor_hit() -> bool:
+    if _reference() is None or not HOST.exists():
+        return pass_fail("editor-hit", False, "no reference or host")
+    rc, _rows, rep = lane_runs("editor-hit", "hit")
+    return print_parts("", hit_parts(rc, rep))
+
+
+def stage_editor_hit_fault() -> bool:
+    rc, _rows, rep = lane_runs("editor-fault-hit", "hit", {"DS_ARA_EDITOR_FAULT": "no-color"})
+    ok = fault_reason("editor-hit-fault-no-color", hit_parts(rc, rep), "editor-hit-lane", "the tracks have no colour and the page does not repair it", "one opaque colour")
+    ok = fault_part("editor-hit-fault-no-color-colour", hit_parts(rc, rep), "editor-hit-colour", "the same run") and ok
+    parts = hit_parts(2, {})
+    return pass_fail("editor-hit-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                     "a run with no page report fails with 'no usable run'") and ok
+
+
+GEO_PARTS = ["editor-geometry-span", "editor-geometry-store", "editor-geometry-window"]
+
+
+def geometry_parts(rc: int, rep: dict) -> dict:
+    bad = no_run(rc, rep, GEO_PARTS)
+    if bad:
+        return bad
+    steps = rep.get("steps", [])
+    if len(steps) < 13:
+        return {n: (False, f"no usable run: {len(steps)} steps, want 13") for n in GEO_PARTS}
+    short, store, checked = [], [], 0
+    for st in steps:
+        n_here = 0
+        for name, lanes in st["lanes"].items():
+            for kind, ln in lanes.items():
+                if ln.get("tiny"):
+                    continue
+                if abs(ln["storeH"] - ln["cssH"]) > 1.0:
+                    store.append(f"{st['name']}/{name}/{kind}: store {ln['storeH']} px, box {ln['cssH']} px")
+                if ln.get("maxY") is None:   # no line in this view
+                    continue
+                n_here += 1
+                if ln["minY"] > 1.5 or ln["maxY"] < ln["cssH"] - 2.5:
+                    short.append(f"{st['name']}/{name}/{kind}: the lines span {ln['minY']} to {ln['maxY']} of {ln['cssH']} px ({round((ln['maxY'] - ln['minY'] + 1) / ln['cssH'] * 100)} percent)")
+        checked += n_here
+        if n_here < 2:
+            short.append(f"{st['name']}: only {n_here} lane(s) with a line in the view, the step proves nothing")
+    lo, hi = next((s for s in steps if s["name"] == "window-low"), {}), next((s for s in steps if s["name"] == "window-high"), {})
+    win_ok = bool(rep.get("went_low")) and bool(rep.get("went_high")) and lo.get("win", [0, 9999])[1] < 520 and lo.get("low") is True and hi.get("win", [0, 0])[1] >= 520 and hi.get("low") is False
+    return {
+        "editor-geometry-span": (not short, f"after {len(steps)} steps (zoom, track height, a row with its own height, the window below and above 520 px) the lines of the hits span the whole lane on {checked} lanes"
+                                 if not short else "the lines span only part of the lane: " + "; ".join(short[:4])),
+        "editor-geometry-store": (not store, "the store of every lane canvas is as high as its box" if not store else "the canvas store is not the lane size: " + "; ".join(store[:3])),
+        "editor-geometry-window": (win_ok, f"the host made the window {lo.get('win')} (low: {lo.get('low')}) and then {hi.get('win')} (low: {hi.get('low')}), device pixel ratio {lo.get('dpr')}" if win_ok else
+                                   f"the window did not cross the 520 px limit both ways: low {rep.get('went_low')} {lo.get('win')} {lo.get('low')}, high {rep.get('went_high')} {hi.get('win')} {hi.get('low')}"),
+    }
+
+
+def stage_editor_geometry() -> bool:
+    if _reference() is None or not HOST.exists():
+        return pass_fail("editor-geometry", False, "no reference or host")
+    rc, _rows, rep = lane_runs("editor-geometry", "geometry")
+    return print_parts("", geometry_parts(rc, rep))
+
+
+def stage_editor_geometry_fault() -> bool:
+    rc, _rows, rep = lane_runs("editor-fault-geometry", "geometry", {"DS_ARA_EDITOR_FAULT": "stale-geometry"})
+    ok = fault_reason("editor-geometry-fault-stale", geometry_parts(rc, rep), "editor-geometry-span", "the page measures the rows after it drew them and does not draw again (the page before #559)", "the lines span only part")
+    parts = geometry_parts(2, {})
+    return pass_fail("editor-geometry-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                     "a run with no page report fails with 'no usable run'") and ok
+
+
+MENU_PARTS = ["editor-menu-button", "editor-menu-pointer", "editor-menu-keyboard", "editor-menu-low"]
+
+
+def menu_parts(rc: int, rep: dict) -> dict:
+    bad = no_run(rc, rep, MENU_PARTS)
+    if bad:
+        return bad
+    if not rep.get("button"):
+        why = "no menu button in the page in host mode"
+        return {"editor-menu-button": (False, why), **{n: (False, why) for n in MENU_PARTS[1:]}}
+    names = [g[0] for g in rep.get("groups", [])]
+    holes = {k: v for k, v in (rep.get("audit") or {}).items() if v}
+    button = (rep.get("host_mode") is True and rep.get("panel") is True and {"Drum Spike", "Edit", "View", "Transport", "Hits", "Track", "Help"} <= set(names)
+              and "File" not in names and not holes)
+    st = rep.get("settings", {})
+    cats = st.get("cats", [])
+    pointer = (rep.get("pick_height") == "ok" and rep.get("track_height") == "large" and rep.get("pick_settings") == "ok" and st.get("visible") is True
+               and "view" in cats and "keyboard" in cats and not {"audio", "audition", "pitches", "agent"} & set(cats))
+    kb = rep.get("keyboard", {})
+    keyboard = kb.get("opened") is True and kb.get("focus") == "Drum Spike" and kb.get("moved") == "Edit" and kb.get("closed") is True and kb.get("focus_back") == "hostMenuBtn"
+    lo = rep.get("low", {})
+    low = (lo.get("innerH", 9999) < 520 and lo.get("top", -1) >= 0 and lo.get("bottom", 9999) <= lo.get("innerH", 0) and lo.get("right", 9999) <= lo.get("innerW", 0)
+           and lo.get("scrolls") is True and lo.get("last_visible") is True and lo.get("closed") is True)
+    return {
+        "editor-menu-button": (button, f"the page has a menu button; groups {names}; every command of the table is in the panel or in the two lists (audit {holes or 'clean'})" if button else
+                               f"menu button {rep.get('button')}, panel {rep.get('panel')}, host mode {rep.get('host_mode')}, groups {names}, holes {holes}"),
+        "editor-menu-pointer": (pointer, f"a click opened the menu, View > Track Height > Large set the height ({rep.get('track_height')}), Settings opened with the categories {cats}" if pointer else
+                                f"pointer use failed: height {rep.get('pick_height')!r}/{rep.get('track_height')}, settings {rep.get('pick_settings')!r} visible {st.get('visible')} categories {cats}"),
+        "editor-menu-keyboard": (keyboard, f"Enter opens the menu with the focus on {kb.get('focus')!r}, Down moves to {kb.get('moved')!r}, Escape closes it and the focus is back on {kb.get('focus_back')!r}" if keyboard else
+                                 f"keyboard use failed: {kb}"),
+        "editor-menu-low": (low, f"in the low window ({lo.get('innerH')} px high) the panel ends at {lo.get('bottom')} px, scrolls, and its last item is reachable" if low else
+                            f"the low window breaks the menu: {lo}"),
+    }
+
+
+def stage_editor_menu() -> bool:
+    if _reference() is None or not HOST.exists():
+        return pass_fail("editor-menu", False, "no reference or host")
+    rc, _rows, rep = lane_runs("editor-menu", "menu")
+    return print_parts("", menu_parts(rc, rep))
+
+
+def stage_editor_menu_fault() -> bool:
+    rc, _rows, rep = lane_runs("editor-fault-menu", "menu", {"DS_ARA_EDITOR_FAULT": "no-menu"})
+    ok = fault_reason("editor-menu-fault-no-menu", menu_parts(rc, rep), "editor-menu-button", "the page has no menu button", "no menu button")
+    parts = menu_parts(2, {})
+    return pass_fail("editor-menu-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                     "a run with no page report fails with 'no usable run'") and ok
+
+
+
 STAGES = {
     "fixture": stage_fixture,
     "reference": stage_reference,
@@ -5974,6 +6152,12 @@ STAGES = {
     "editor-playback-late-fault": stage_editor_playback_late_fault,
     "editor-playback-refused": stage_editor_playback_refused,
     "editor-playback-refused-fault": stage_editor_playback_refused_fault,
+    "editor-hit": stage_editor_hit,
+    "editor-hit-fault": stage_editor_hit_fault,
+    "editor-geometry": stage_editor_geometry,
+    "editor-geometry-fault": stage_editor_geometry_fault,
+    "editor-menu": stage_editor_menu,
+    "editor-menu-fault": stage_editor_menu_fault,
 }
 ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
@@ -6002,6 +6186,7 @@ ORDER = [
     "editor-playback-partial", "editor-playback-partial-fault", "editor-playback-refused", "editor-playback-refused-fault",
     "editor-playback-drag", "editor-playback-drag-fault", "editor-playback-late", "editor-playback-late-fault",
     "editor-playback-tracks", "editor-playback-tracks-fault",
+    "editor-hit", "editor-hit-fault", "editor-geometry", "editor-geometry-fault", "editor-menu", "editor-menu-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",

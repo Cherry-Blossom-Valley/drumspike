@@ -559,6 +559,8 @@ async function setTrackRole(name, role, apply = {}) {   // apply: {note?, source
   catch (e) { setMsg(`role change failed: ${errText(e)}`, "error"); return false; }
   if (sid !== S.sid) return false;
   S.tracks[name].role = role;
+  if (S.tracks[name].colorFromRole) delete S.tracks[name].color;   // the colour of the old role was only a default
+  trackColors(S.tracks);
   S.tracks[name].note = r.note;
   S.tracks[name].role_source = r.role_source;
   S.tracks[name].role_match = apply.source === "user" || apply.source === "audio" ? null : (apply.role_match ?? S.tracks[name].role_match ?? null);

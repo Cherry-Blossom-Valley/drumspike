@@ -113,7 +113,10 @@ function measureGeo() {
   });
   GEO.rows = rows; GEO.dpr = window.devicePixelRatio || 1; GEO.ok = true; GEO.n++;
 }
-function sizeKey() { return [GEO.laneW, GEO.rulerW, GEO.ovW, GEO.ovH, GEO.waveH, GEO.spikeH, GEO.dpr, rowHKey(), VL.on ? VL.h : 0].join(","); }   // P3-14c: the lane heights too; P4-27: the rows with their own height; #208: the velocity lane's
+/* #559: the measured wave height of each row is part of the key. A row with its own height (the Zoom Toggle, a drag of the row)
+   is laid out after the page wrote the new store sizes: the first draw used the old height (the lines spanned 120 px of a 180 px lane)
+   and the key did not change when the observer measured the new one, so nothing drew the lines again. */
+function sizeKey() { return [GEO.laneW, GEO.rulerW, GEO.ovW, GEO.ovH, GEO.waveH, GEO.spikeH, GEO.dpr, rowHKey(), VL.on ? VL.h : 0, Object.values(GEO.rows).map(g => g.waveH).join("/")].join(","); }   // P3-14c: the lane heights too; P4-27: the rows with their own height; #208: the velocity lane's
 let _geoLanes = "";
 function onGeo() {   // the GL lanes are drawn again only when the lanes area or a row moved (not when, say, the status line wrapped)
   measureGeo();
