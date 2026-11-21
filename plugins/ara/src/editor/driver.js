@@ -76,8 +76,49 @@
     if (T.mode === "hit") hitRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "menu") menuRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "geometry") geometryRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "hostkeys") hostkeysRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "playback") playbackRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
   });
+
+  /* Mode hostkeys (M1b12, #561): the test host posts real key events to its window, one every 900 ms after the
+     "hostkeys-ready" report, and records every one that reaches the host. This side records what the PAGE saw of
+     each key: its notation, how the page classes it (page, absent, none: __DS_KEYS__.classify), whether a page
+     handler took it (defaultPrevented), and the text of the status line 600 ms later. The status line is cleared
+     before each key, so a text belongs to its key. The keys F13 and F14 are markers: they put the focus into a text
+     field that this driver adds to the page (a stand-in for a field of the page) and take it out; F12 ends the run. */
+  async function hostkeysRun() {
+    var K = window.__DS_KEYS__ || { classify: function () { return { kind: "none" }; }, shown: [] };
+    var tr = window.__DS_TRANSPORT__ || { delivered: 0, calls: [] };
+    function sleepMs(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    function msgText() { var el = document.getElementById("stMsg"); return el ? String(el.textContent || "") : null; }
+    var field = document.createElement("input");
+    field.type = "text"; field.id = "dsTestField";
+    field.spellcheck = false; field.setAttribute("autocorrect", "off"); field.setAttribute("autocapitalize", "off"); field.autocomplete = "off";   // the system must not change what the stage types
+    field.style.cssText = "position:fixed;left:4px;top:4px;width:120px;height:22px;z-index:99999";
+    document.body.appendChild(field);
+    var keys = [];
+    document.addEventListener("keydown", function (ev) {
+      if (/^(Shift|Meta|Alt|Control)/.test(ev.code)) return;   // the modifier keys that the host presses before a key are no key of the stage
+      try { setMsg(""); } catch (e) { /* no page */ }
+      var rec = { n: keys.length, code: ev.code, key: ev.key, meta: !!ev.metaKey, alt: !!ev.altKey, shift: !!ev.shiftKey, ctrl: !!ev.ctrlKey,
+        field: document.activeElement === field, at: Date.now(), cls: K.classify(ev), prevented: null, msg: null,
+        repeat: !!ev.repeat, undo0: S.undo.length, redo0: S.redo.length, undo: null, redo: null, value0: field.value, value: null };
+      keys.push(rec);
+      setTimeout(function () { rec.prevented = ev.defaultPrevented; }, 0);
+      setTimeout(function () { rec.msg = msgText(); rec.undo = S.undo.length; rec.redo = S.redo.length; rec.value = field.value; }, 600);
+      if (ev.code === "F13") field.focus();
+      if (ev.code === "F14") field.blur();
+      if (ev.code === "F12") setTimeout(report, 900);
+    }, true);
+    function report() {
+      post({ kind: "hostkeys", visibility: document.visibilityState, hasFocus: document.hasFocus(), keys: keys, shown: K.shown,
+        calls: tr.calls, field_value: field.value, host_mode: !!B.hostMode,
+        groups: (function () { try { return HOST_ABSENT.map(function (g) { return { group: g.group, say: g.say }; }); } catch (e) { return []; } })() });
+    }
+    for (var i = 0; i < 150 && !(tr.delivered >= 1 && tr.offer); i++) await sleepMs(100);
+    try { S.selTrack = S.order[0]; } catch (e) { /* no track: the key H adds no hit */ }   // the key H of the page adds a hit on the selected track
+    post({ kind: "hostkeys-ready", delivered: tr.delivered, offer: tr.offer || null });
+  }
 
   function measure() {
     var cs = Array.prototype.slice.call(document.querySelectorAll("#lanesScroll canvas"));

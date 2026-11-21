@@ -802,8 +802,21 @@ unsafe fn walk_table(
 /// The loaded plugin: the library keeps the code alive, the entry and the ARA factory
 /// are stored.
 struct Loaded {
-    _lib: Library,
+    _lib: std::mem::ManuallyDrop<Library>,
     entry: *const ClapEntry,
+}
+
+/// The `--twin` runs (M1b12): the first bundle stays loaded when its run ends, so a second copy of the plugin lives in
+/// the same process while the first one still has its classes registered.
+static KEEP_LOADED: AtomicBool = AtomicBool::new(false);
+
+impl Drop for Loaded {
+    fn drop(&mut self) {
+        if !KEEP_LOADED.load(Ordering::SeqCst) {
+            // SAFETY: dropped once, here.
+            unsafe { std::mem::ManuallyDrop::drop(&mut self._lib) };
+        }
+    }
 }
 
 /// dlopen the bundle, run the CLAP entry init, and take the ARA factory.
@@ -831,7 +844,10 @@ unsafe fn load(bundle: &str) -> Result<Loaded, String> {
         return Err("the ARA factory is null".into());
     }
     *ARA_FACTORY.0.lock().unwrap() = ara;
-    Ok(Loaded { _lib: lib, entry })
+    Ok(Loaded {
+        _lib: std::mem::ManuallyDrop::new(lib),
+        entry,
+    })
 }
 
 /// `initializeARAWithConfiguration` and one document controller over the host state.
@@ -1638,7 +1654,27 @@ fn main() {
         "close-busy" => run_close_busy(bundle, &files, &rest),
         "restore2" => run_restore2(bundle, &files, &rest),
         "restore-busy" => run_restore_busy(bundle, &files, &rest),
-        "editor" => editor_mode::run(bundle, &files, &rest),
+        "editor" => match args_value(&rest, "--twin") {
+            // M1b12: a second copy of the plugin in the same process (the first stays loaded)
+            Some(second) => {
+                KEEP_LOADED.store(true, Ordering::SeqCst);
+                let first = editor_mode::run(bundle, &files, &rest);
+                if let Some(out) = args_value(&rest, "--twin-out") {
+                    std::env::set_var("DS_ARA_OUT", out);
+                }
+                if let Some(cache) = args_value(&rest, "--twin-cache") {
+                    std::env::set_var("DS_ARA_CACHE", cache);
+                }
+                let second = editor_mode::run(&second, &files, &rest);
+                println!("{{\"event\":\"twin_run\",\"first\":{first},\"second\":{second}}}");
+                if first == 0 && second == 0 {
+                    0
+                } else {
+                    2
+                }
+            }
+            None => editor_mode::run(bundle, &files, &rest),
+        },
         "docs" => run_docs(bundle, &files, &args_list(&rest, "--files2")),
         other => {
             eprintln!("unknown mode {other:?}");

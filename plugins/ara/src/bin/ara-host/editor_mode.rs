@@ -28,10 +28,11 @@
 use super::*;
 use clap_sys::ext::gui::{clap_plugin_gui, clap_window, clap_window_handle};
 use objc2::rc::Retained;
-use objc2::MainThreadOnly;
+use objc2::runtime::{AnyObject, NSObject};
+use objc2::{define_class, msg_send, sel, AnyThread, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSEventMask, NSEventModifierFlags,
-    NSEventType, NSResponder, NSView, NSWindow, NSWindowStyleMask,
+    NSEventType, NSMenu, NSMenuItem, NSResponder, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize};
 
@@ -51,8 +52,332 @@ const FLAG_COMMAND: u64 = 1 << 20;
 #[derive(Clone, Copy)]
 enum Action {
     Key(Key, u64),
+    /// M1b12: a key with a label, its characters, its characters without modifiers, its flags.
+    Hk(&'static str, Key, &'static str, &'static str, u64),
+    /// A key down and up with `isARepeat` set: a key that is held.
+    HkRepeat(&'static str, Key, &'static str, &'static str, u64),
+    /// A key, then the host's main thread is blocked for 400 ms before it runs the loop again (a DAW that stalls).
+    HkSlow(&'static str, Key, &'static str, &'static str, u64),
+    /// A change of the modifier keys alone.
+    Flags(&'static str, u64),
+    /// A real mouse click (down and up through `[NSApp sendEvent:]`) at a point of the window.
+    Mouse(&'static str, f64, f64),
+    /// The action of a menu item with no target (Save): what a click on the menu sends.
+    Menu(&'static str),
     ClickOut,
     ClickIn,
+}
+
+// ---- M1b12 (#561): the record of the keys that reach the host
+
+const FLAG_OPTION: u64 = 1 << 19;
+const K_F12: Key = 111;
+const K_F13: Key = 105;
+const K_F14: Key = 107;
+
+/// One key event that reached the host: through its view (`view`: the next responder of the plugin's view
+/// goes on to it) or its main menu (`menu`: a key command of the host, as a DAW has).
+struct SeenKey {
+    step: String,
+    via: &'static str,
+    kind: String,
+    code: u16,
+    chars: String,
+    flags: u64,
+    title: String,
+}
+
+static SEEN_KEYS: Mutex<Vec<SeenKey>> = Mutex::new(Vec::new());
+static KEY_STEP: Mutex<String> = Mutex::new(String::new());
+/// What the host posted, in order: (label, key code, flags).
+/// The class of the window's first responder after a step that may move it: (step, class name).
+static FIRST_RESPONDER: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+static POSTED_KEYS: Mutex<Vec<(String, u16, u64)>> = Mutex::new(Vec::new());
+
+fn set_step(label: &str) {
+    *KEY_STEP.lock().unwrap() = label.to_string();
+}
+
+fn see_key(via: &'static str, kind: &str, event: Option<&NSEvent>, title: &str) {
+    let (code, chars, flags) = match event {
+        Some(e) => {
+            let key_like = matches!(e.r#type(), NSEventType::KeyDown | NSEventType::KeyUp);
+            (
+                if key_like { e.keyCode() } else { 0 },
+                if key_like {
+                    e.charactersIgnoringModifiers()
+                        .map(|s| s.to_string())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                },
+                e.modifierFlags().0 as u64 & 0xffff_0000,
+            )
+        }
+        None => (0, String::new(), 0),
+    };
+    SEEN_KEYS.lock().unwrap().push(SeenKey {
+        step: KEY_STEP.lock().unwrap().clone(),
+        via,
+        kind: kind.to_string(),
+        code,
+        chars,
+        flags,
+        title: title.to_string(),
+    });
+}
+
+define_class!(
+    /// The host's content view, an ANCESTOR of the plugin's view: what a DAW's own view does. It refuses the first
+    /// responder (many views of a DAW do), and it takes a key that has no Command as one of its own key commands (a
+    /// view above the plugin sees a key equivalent before the plugin's views do).
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "AraHostKeyView"]
+    struct HostView;
+
+    impl HostView {
+        #[unsafe(method(acceptsFirstResponder))]
+        fn accepts_first_responder(&self) -> bool {
+            false
+        }
+        #[unsafe(method(performKeyEquivalent:))]
+        fn perform_key_equivalent(&self, event: &NSEvent) -> objc2::runtime::Bool {
+            let key_like = matches!(event.r#type(), NSEventType::KeyDown);
+            if key_like && event.modifierFlags().0 as u64 & FLAG_COMMAND == 0 {
+                see_key("view", "equivalent", Some(event), "");
+                return objc2::runtime::Bool::YES;
+            }
+            objc2::runtime::Bool::NO
+        }
+        /// The editing commands that a host view above the plugin may implement, and that delete or move data: a command that
+        /// WebKit derives from a key the page did not use must not reach them while the plugin has the focus.
+        #[unsafe(method(flagsChanged:))]
+        fn flags_changed(&self, event: &NSEvent) {
+            see_key("view", "flagsChanged", Some(event), "");
+        }
+        #[unsafe(method(keyUp:))]
+        fn key_up(&self, event: &NSEvent) {
+            see_key("view", "keyUp", Some(event), "");
+        }
+        #[unsafe(method(deleteBackward:))]
+        fn delete_backward(&self, _sender: Option<&AnyObject>) {
+            see_key("action", "command", None, "deleteBackward:");
+        }
+        #[unsafe(method(deleteWordBackward:))]
+        fn delete_word_backward(&self, _sender: Option<&AnyObject>) {
+            see_key("action", "command", None, "deleteWordBackward:");
+        }
+        #[unsafe(method(moveWordLeft:))]
+        fn move_word_left(&self, _sender: Option<&AnyObject>) {
+            see_key("action", "command", None, "moveWordLeft:");
+        }
+        // what WebKit sends to the responder chain for a key it did not use (measured: `noop:`, and `complete:` for Escape)
+        #[unsafe(method(noop:))]
+        fn noop(&self, _sender: Option<&AnyObject>) {
+            see_key("action", "command", None, "noop:");
+        }
+        #[unsafe(method(complete:))]
+        fn complete(&self, _sender: Option<&AnyObject>) {
+            see_key("action", "command", None, "complete:");
+        }
+        #[unsafe(method(cancelOperation:))]
+        fn cancel_operation(&self, _sender: Option<&AnyObject>) {
+            see_key("action", "command", None, "cancelOperation:");
+        }
+        /// A menu action with no target that reaches this view through the responder chain.
+        #[unsafe(method(hostSave:))]
+        fn host_save(&self, _sender: Option<&AnyObject>) {
+            see_key("menu", "command", None, "Host Save");
+        }
+    }
+);
+
+define_class!(
+    /// A view of the host that DOES take the first responder (a text field, a button): the next key view of the plugin's
+    /// view, where a Tab would go if the plugin let it.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "AraHostFocusView"]
+    struct HostFocusView;
+
+    impl HostFocusView {
+        #[unsafe(method(acceptsFirstResponder))]
+        fn accepts_first_responder(&self) -> bool {
+            true
+        }
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            see_key("focus-view", "keyDown", Some(event), "");
+        }
+    }
+);
+
+define_class!(
+    /// The host's window: a key that nobody took ends here when the window itself is the first responder.
+    #[unsafe(super(NSWindow))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "AraHostKeyWindow"]
+    struct HostWindow;
+
+    impl HostWindow {
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            see_key("window", "keyDown", Some(event), "");
+        }
+        #[unsafe(method(keyUp:))]
+        fn key_up(&self, event: &NSEvent) {
+            see_key("window", "keyUp", Some(event), "");
+        }
+        #[unsafe(method(flagsChanged:))]
+        fn flags_changed(&self, event: &NSEvent) {
+            see_key("window", "flagsChanged", Some(event), "");
+        }
+    }
+);
+
+define_class!(
+    /// The target of the host's key commands (its main menu): every command only records that it ran.
+    #[unsafe(super(NSObject))]
+    #[name = "AraHostKeyCommands"]
+    struct HostCommands;
+
+    impl HostCommands {
+        #[unsafe(method(hostKey:))]
+        fn host_key(&self, sender: &NSMenuItem) {
+            let title = sender.title().to_string();
+            // a menu command records its title: the event that made it is not read (the current event of the app may be an older one)
+            see_key("menu", "command", None, &title);
+        }
+    }
+);
+
+/// The key commands of the host: the keys of a DAW's own commands (a clip trim, an undo, play) that the
+/// plugin's keys must not trigger. Cmd+H and Cmd+Q stand for the system's keys.
+const HOST_COMMANDS: [(&str, &str, u64); 11] = [
+    ("Host Play", " ", 0),
+    ("Host Grid", "g", 0),
+    ("Host Audition", "u", 0),
+    ("Host Export", "e", FLAG_COMMAND),
+    ("Host Y", "y", 0),
+    ("Host Cmd J", "j", FLAG_COMMAND),
+    ("Host Option X", "x", FLAG_OPTION),
+    ("Host Undo", "z", FLAG_COMMAND),
+    ("Host Q", "q", 0),
+    ("Host Hide", "h", FLAG_COMMAND),
+    ("Host Quit", "q", FLAG_COMMAND),
+];
+
+fn install_host_commands(app: &NSApplication, mtm: objc2::MainThreadMarker) -> Retained<HostCommands> {
+    let target: Retained<HostCommands> = unsafe { msg_send![super(HostCommands::alloc().set_ivars(())), init] };
+    let bar = NSMenu::new(mtm);
+    let top = NSMenuItem::new(mtm);
+    let menu = NSMenu::new(mtm);
+    for (title, key, mask) in HOST_COMMANDS {
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &objc2_foundation::NSString::from_str(title),
+                Some(sel!(hostKey:)),
+                &objc2_foundation::NSString::from_str(key),
+            )
+        };
+        item.setKeyEquivalentModifierMask(NSEventModifierFlags(mask as usize));
+        unsafe { item.setTarget(Some(&target)) };
+        menu.addItem(&item);
+    }
+    top.setSubmenu(Some(&menu));
+    bar.addItem(&top);
+    app.setMainMenu(Some(&bar));
+    target
+}
+
+fn key_record_row() -> String {
+    let posted: Vec<serde_json::Value> = POSTED_KEYS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(l, c, f)| serde_json::json!({"step": l, "code": c, "flags": f}))
+        .collect();
+    let seen: Vec<serde_json::Value> = SEEN_KEYS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|k| {
+            serde_json::json!({"step": k.step, "via": k.via, "kind": k.kind, "code": k.code, "chars": k.chars,
+                "flags": k.flags, "title": k.title})
+        })
+        .collect();
+    let responders: Vec<serde_json::Value> = FIRST_RESPONDER
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(l, c)| serde_json::json!({"step": l, "class": c}))
+        .collect();
+    serde_json::json!({"event": "key_record", "posted": posted, "seen": seen, "first_responder": responders})
+        .to_string()
+}
+
+/// The steps of the `hostkeys` mode (M1b12), one every `HK_GAP_MS` after the page is ready. Each kind of key of the
+/// ticket: a page key, an absent command's key, a key with no command, a key with a modifier, the space bar, the
+/// same with a text field of the page in focus, the system keys, and a click out of the plugin and back in.
+const HK_GAP_MS: u64 = 900;
+
+fn hostkeys_steps() -> Vec<Action> {
+    use Action::*;
+    const SHIFT: u64 = 1 << 17;
+    const CONTROL: u64 = 1 << 18;
+    vec![
+        Hk("space", K_SPACE, " ", " ", 0),
+        HkRepeat("space-repeat", K_SPACE, " ", " ", 0),
+        Hk("page-key", 5, "g", "g", 0),
+        Hk("page-add-hit", 4, "h", "h", 0),
+        Hk("absent-key", 32, "u", "u", 0),
+        Hk("absent-key-cmd", 14, "e", "e", FLAG_COMMAND),
+        Hk("no-command", 16, "y", "y", 0),
+        Hk("no-command-shift", 16, "Y", "Y", SHIFT),
+        Hk("no-command-cmd", 38, "j", "j", FLAG_COMMAND),
+        Hk("no-command-option", 7, "\u{2248}", "x", FLAG_OPTION),
+        Hk("page-key-cmd", K_Z, "z", "z", FLAG_COMMAND),
+        Hk("escape", K_ESCAPE, "\u{1b}", "\u{1b}", 0),
+        Hk("return", 36, "\r", "\r", 0),
+        Hk("arrow-left", 123, "\u{f702}", "\u{f702}", 0),
+        Hk("function-key", 96, "\u{f708}", "\u{f708}", 0),
+        Hk("control-key", 37, "l", "l", CONTROL),
+        Hk("cmd-s", 1, "s", "s", FLAG_COMMAND),
+        Hk("cmd-w", 13, "w", "w", FLAG_COMMAND),
+        HkSlow("slow-delete", 51, "\u{7f}", "\u{7f}", FLAG_OPTION),
+        HkSlow("slow-move", 123, "\u{f702}", "\u{f702}", FLAG_OPTION),
+        Hk("marker-field-on", K_F13, "\u{f710}", "\u{f710}", 0),
+        Hk("field-letter", 32, "u", "u", 0),
+        Hk("field-space", K_SPACE, " ", " ", 0),
+        Hk("field-cmd-absent", 14, "e", "e", FLAG_COMMAND),
+        Hk("field-cmd-none", 38, "j", "j", FLAG_COMMAND),
+        Hk("field-option-at", 37, "@", "l", FLAG_OPTION),
+        Hk("field-option-lbracket", 23, "[", "5", FLAG_OPTION),
+        Hk("field-option-rbracket", 22, "]", "6", FLAG_OPTION),
+        Hk("field-delete", 51, "\u{7f}", "\u{7f}", 0),
+        Hk("field-undo", K_Z, "z", "z", FLAG_COMMAND),
+        Hk("field-tab", K_TAB, "\t", "\t", 0),
+        Hk("field-tab-2", K_TAB, "\t", "\t", 0),
+        Hk("field-tab-3", K_TAB, "\t", "\t", 0),
+        Hk("field-tab-4", K_TAB, "\t", "\t", 0),
+        Hk("after-tab", 16, "y", "y", 0),
+        Hk("marker-field-off", K_F14, "\u{f711}", "\u{f711}", 0),
+        Menu("menu-action"),
+        Hk("system-hide", 4, "h", "h", FLAG_COMMAND),
+        Hk("system-quit", 12, "q", "q", FLAG_COMMAND),
+        Mouse("click-out", 50.0, 300.0),
+        Hk("given-back", 12, "q", "q", 0),
+        Flags("mod-down", FLAG_COMMAND),
+        Mouse("click-in", 560.0, 300.0),
+        Flags("mod-up", 0),
+        Hk("taken", 12, "q", "q", 0),
+        Mouse("click-overlay", 940.0, 540.0),
+        Hk("overlay-key", 12, "q", "q", 0),
+        Mouse("click-in-again", 560.0, 300.0),
+        Hk("marker-end", K_F12, "\u{f70f}", "\u{f70f}", 0),
+    ]
 }
 
 fn schedule_of(mode: &str) -> Vec<(u64, Action)> {
@@ -85,24 +410,61 @@ fn chars_of(code: Key) -> &'static str {
 }
 
 fn post_key(code: Key, flags: u64, app: &NSApplication, window: &NSWindow) {
-    let chars = objc2_foundation::NSString::from_str(chars_of(code));
+    post_key_chars(code, chars_of(code), chars_of(code), flags, false, app, window);
+}
+
+/// A real key down and key up through `[NSApp sendEvent:]` to the window of this host (never a global event).
+fn post_key_chars(
+    code: Key,
+    chars: &str,
+    ignoring: &str,
+    flags: u64,
+    repeat: bool,
+    app: &NSApplication,
+    window: &NSWindow,
+) {
+    let chars = objc2_foundation::NSString::from_str(chars);
+    let ignoring = objc2_foundation::NSString::from_str(ignoring);
+    let none = objc2_foundation::NSString::from_str("");
+    let stamp = || objc2_foundation::NSProcessInfo::processInfo().systemUptime();
+    // a real keyboard sends a change of the modifier keys before and after a key with a modifier
+    let modifier_code: Option<Key> = [(FLAG_COMMAND, 55), (FLAG_OPTION, 58), (1 << 18, 59), (1 << 17, 56)]
+        .iter()
+        .find(|(f, _)| flags & f != 0)
+        .map(|(_, c)| *c);
+    let flags_changed = |now: u64| {
+        if let Some(c) = modifier_code {
+            if let Some(ev) = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+                NSEventType::FlagsChanged, NSPoint::new(0.0, 0.0), NSEventModifierFlags(now as usize), stamp(), window.windowNumber(), None, &none, &none, false, c,
+            ) {
+                app.sendEvent(&ev);
+            }
+        }
+    };
+    flags_changed(flags);
     for ty in [NSEventType::KeyDown, NSEventType::KeyUp] {
         let ev = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
-            ty, NSPoint::new(0.0, 0.0), NSEventModifierFlags(flags as usize), 0.0, window.windowNumber(), None,
-            &chars, &chars, false, code,
+            ty, NSPoint::new(0.0, 0.0), NSEventModifierFlags(flags as usize), objc2_foundation::NSProcessInfo::processInfo().systemUptime(),
+            window.windowNumber(), None, &chars, &ignoring, repeat, code,
         );
         if let Some(ev) = ev {
             app.sendEvent(&ev);
         }
     }
+    flags_changed(0);
 }
 
 fn post_click(app: &NSApplication, window: &NSWindow) {
     let f = window.frame();
-    let at = NSPoint::new(f.size.width / 2.0, (f.size.height - 28.0) / 2.0);
+    post_click_window(app, window, f.size.width / 2.0, (f.size.height - 28.0) / 2.0);
+}
+
+/// A real mouse click at a point of the window (window coordinates), to the window of this host.
+fn post_click_window(app: &NSApplication, window: &NSWindow, x: f64, y: f64) {
+    let at = NSPoint::new(x, y);
     for (ty, pressure) in [(NSEventType::LeftMouseDown, 1.0), (NSEventType::LeftMouseUp, 0.0)] {
         let ev = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
-            ty, at, NSEventModifierFlags(0), 0.0, window.windowNumber(), None, 1, 1, pressure,
+            ty, at, NSEventModifierFlags(0), objc2_foundation::NSProcessInfo::processInfo().systemUptime(), window.windowNumber(), None, 1, 1, pressure,
         );
         if let Some(ev) = ev {
             app.sendEvent(&ev);
@@ -265,14 +627,47 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     unsafe {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
-        let window = NSWindow::initWithContentRect_styleMask_backing_defer(
-            NSWindow::alloc(mtm),
-            NSRect::new(NSPoint::new(120.0, 120.0), NSSize::new(1000.0, 640.0)),
-            NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
-            NSBackingStoreType::Buffered,
-            false,
-        );
+        let rect = NSRect::new(NSPoint::new(120.0, 120.0), NSSize::new(1000.0, 640.0));
+        let style = NSWindowStyleMask::Titled | NSWindowStyleMask::Closable;
+        let window: Retained<NSWindow> = if mode == "hostkeys" {
+            // M1b12: the key stages use a window that records the keys that end at it
+            let w: Retained<HostWindow> = msg_send![HostWindow::alloc(mtm), initWithContentRect: rect, styleMask: style, backing: NSBackingStoreType::Buffered, defer: false];
+            Retained::into_super(w)
+        } else {
+            NSWindow::initWithContentRect_styleMask_backing_defer(
+                NSWindow::alloc(mtm),
+                rect,
+                style,
+                NSBackingStoreType::Buffered,
+                false,
+            )
+        };
         window.setReleasedWhenClosed(false);
+        // M1b12: the key stages give the host a content view and a main menu that record every key that reaches them
+        let mut slot_view: Option<Retained<NSView>> = None;
+        let _host_commands = if mode == "hostkeys" {
+            let hv: Retained<HostView> = msg_send![HostView::alloc(mtm), initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1000.0, 640.0))];
+            window.setContentView(Some(&hv));
+            // the plugin gets the right part of the window; the left strip (120 pt) is the host's own area
+            let slot = NSView::initWithFrame(
+                NSView::alloc(mtm),
+                NSRect::new(NSPoint::new(120.0, 0.0), NSSize::new(880.0, 640.0)),
+            );
+            hv.addSubview(&slot);
+            // a host view that takes the focus, at the top of the left strip (the click outside lands lower)
+            let focus: Retained<HostFocusView> = msg_send![HostFocusView::alloc(mtm), initWithFrame: NSRect::new(NSPoint::new(10.0, 500.0), NSSize::new(100.0, 100.0))];
+            hv.addSubview(&focus);
+            // a host view OVER a part of the plugin (an overlay, a resize grip): a plain view, it refuses the first responder
+            let overlay = NSView::initWithFrame(
+                NSView::alloc(mtm),
+                NSRect::new(NSPoint::new(900.0, 500.0), NSSize::new(80.0, 80.0)),
+            );
+            hv.addSubview(&overlay);
+            slot_view = Some(slot);
+            Some(install_host_commands(&app, mtm))
+        } else {
+            None
+        };
         window.makeKeyAndOrderFront(None);
         window.orderFrontRegardless();
         window.setLevel(3);
@@ -430,9 +825,10 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 failed = Some("gui create refused".into());
                 break;
             }
-            let parent_view = window
-                .contentView()
-                .map(|v| (&*v) as *const NSView as *mut c_void)
+            let parent_view = slot_view
+                .as_ref()
+                .map(|v| (&**v) as *const NSView as *mut c_void)
+                .or_else(|| window.contentView().map(|v| (&*v) as *const NSView as *mut c_void))
                 .unwrap_or(std::ptr::null_mut());
             let parent = clap_window {
                 api: cocoa.as_ptr(),
@@ -446,10 +842,15 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 failed = Some("gui show refused".into());
                 break;
             }
+            if mode == "hostkeys" && !((*gui).show.expect("show"))(plugin) {
+                // a host may call show again while the page has the focus
+                failed = Some("the second gui show refused".into());
+                break;
+            }
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
                 "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" | "transport"
-                | "playback" | "hit" | "menu" | "geometry" => Some(mode.as_str()),
+                | "playback" | "hit" | "menu" | "geometry" | "hostkeys" => Some(mode.as_str()),
                 // the edit mode ends with the event report that follows the edit report
                 "edit" => Some("edit-events"),
                 "analyse-race" => Some("analyse"),
@@ -487,6 +888,9 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 ready_limit
             };
             let mut schedule = schedule_of(&mode);
+            // M1b12: the key steps start when the page says it is ready (its transport is wired)
+            let hk_ready_before = count_rows("page_report", Some("hostkeys-ready"));
+            let mut hk_started = false;
             let mut resized = 0usize;
             let mut clicks_done = 0usize;
             let mut saved_resp: Option<Retained<NSResponder>> = None;
@@ -499,16 +903,99 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     .map(|(_, a)| *a)
                     .collect();
                 schedule.retain(|(at, _)| *at > elapsed);
+                if mode == "hostkeys"
+                    && !hk_started
+                    && count_rows("page_report", Some("hostkeys-ready")) > hk_ready_before
+                {
+                    hk_started = true;
+                    schedule = hostkeys_steps()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, a)| (elapsed + 600 + i as u64 * HK_GAP_MS, a))
+                        .collect();
+                }
+                if !due.is_empty() && mode == "hostkeys" {
+                    // the first responder after the step before (a Tab may have moved it)
+                    let prev = KEY_STEP.lock().unwrap().clone();
+                    if !prev.is_empty() {
+                        let first = window
+                            .firstResponder()
+                            .map(|r| r.class().name().to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        FIRST_RESPONDER.lock().unwrap().push((prev, first));
+                    }
+                }
                 for a in due {
                     match a {
                         Action::Key(code, flags) => post_key(code, flags, &app, &window),
+                        Action::Hk(label, code, chars, ignoring, flags) => {
+                            set_step(label);
+                            POSTED_KEYS.lock().unwrap().push((label.to_string(), code, flags));
+                            post_key_chars(code, chars, ignoring, flags, false, &app, &window);
+                        }
+                        Action::HkSlow(label, code, chars, ignoring, flags) => {
+                            set_step(label);
+                            POSTED_KEYS.lock().unwrap().push((label.to_string(), code, flags));
+                            post_key_chars(code, chars, ignoring, flags, false, &app, &window);
+                            std::thread::sleep(Duration::from_millis(400));
+                        }
+                        Action::Flags(label, flags) => {
+                            set_step(label);
+                            POSTED_KEYS.lock().unwrap().push((label.to_string(), 0, flags));
+                            if let Some(ev) = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+                                NSEventType::FlagsChanged,
+                                NSPoint::new(0.0, 0.0),
+                                NSEventModifierFlags(flags as usize),
+                                objc2_foundation::NSProcessInfo::processInfo().systemUptime(),
+                                window.windowNumber(),
+                                None,
+                                &objc2_foundation::NSString::from_str(""),
+                                &objc2_foundation::NSString::from_str(""),
+                                false,
+                                55,
+                            ) {
+                                app.sendEvent(&ev);
+                            }
+                        }
+                        Action::HkRepeat(label, code, chars, ignoring, flags) => {
+                            set_step(label);
+                            POSTED_KEYS.lock().unwrap().push((label.to_string(), code, flags));
+                            post_key_chars(code, chars, ignoring, flags, true, &app, &window);
+                        }
+                        Action::Mouse(label, x, y) => {
+                            set_step(label);
+                            POSTED_KEYS.lock().unwrap().push((label.to_string(), 0, 0));
+                            post_click_window(&app, &window, x, y);
+                        }
+                        Action::Menu(label) => {
+                            set_step(label);
+                            POSTED_KEYS.lock().unwrap().push((label.to_string(), 0, 0));
+                            // what a click on a menu item with no target sends
+                            // the action comes later than 2 s after the last key of the plugin (a menu click long after a key)
+                            std::thread::sleep(Duration::from_millis(2200));
+                            // the action goes down the responder chain from the first responder, as the application does for a menu item with no target
+                            let done: bool = match window.firstResponder() {
+                                Some(r) => {
+                                    msg_send![&*r, tryToPerform: sel!(hostSave:), with: std::ptr::null::<AnyObject>()]
+                                }
+                                None => false,
+                            };
+                            FIRST_RESPONDER
+                                .lock()
+                                .unwrap()
+                                .push(("menu-action-sent".to_string(), format!("{done}")));
+                        }
                         Action::ClickOut => {
+                            set_step("click-out");
+                            POSTED_KEYS.lock().unwrap().push(("click-out".into(), 0, 0));
                             saved_resp = window.firstResponder();
                             if let Some(cv) = window.contentView() {
                                 window.makeFirstResponder(Some(&*cv));
                             }
                         }
                         Action::ClickIn => {
+                            set_step("click-in");
+                            POSTED_KEYS.lock().unwrap().push(("click-in".into(), 0, 0));
                             post_click(&app, &window);
                             if let Some(r) = &saved_resp {
                                 window.makeFirstResponder(Some(&**r));
@@ -782,6 +1269,9 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         }
         if playback != "none" {
             println!("{}", playback_row(&playback, snap));
+        }
+        if mode == "hostkeys" {
+            println!("{}", key_record_row());
         }
         audio_stop.store(true, Ordering::SeqCst);
         if let Some(h) = audio_thread {
