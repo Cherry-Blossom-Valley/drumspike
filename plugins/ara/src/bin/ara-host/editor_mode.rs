@@ -176,6 +176,25 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     let region_spec = args_value(rest, "--region").and_then(|v| parse_region(&v).ok());
     let destroy_late: Option<usize> = args_value(rest, "--destroy-late").and_then(|v| v.parse().ok());
     let archive_window = args_value(rest, "--archive-window");
+    // M1b7: the playback controller of the host (`--playback full|ignore|partial`, default none) and the
+    // grid that a position request snaps to (`--snap <s>`). The mode must be set before the document
+    // is made: the controller is part of the host instance.
+    let playback = args_value(rest, "--playback").unwrap_or_else(|| "none".into());
+    let snap: f64 = args_value(rest, "--snap").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    set_playback(
+        match playback.as_str() {
+            "full" => PbMode::Full,
+            "ignore" => PbMode::Ignore,
+            "partial" => PbMode::Partial,
+            _ => PbMode::None,
+        },
+        snap,
+    );
+    set_playback_delay(
+        args_value(rest, "--playback-delay")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+    );
     std::env::set_var("DS_ARA_EDITOR_MODE", &mode);
     if let Some(a) = args_value(rest, "--arg") {
         std::env::set_var("DS_ARA_EDITOR_ARG", a);
@@ -370,9 +389,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             }
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
-                "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" | "transport" => {
-                    Some(mode.as_str())
-                }
+                "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" | "transport"
+                | "playback" => Some(mode.as_str()),
                 // the edit mode ends with the event report that follows the edit report
                 "edit" => Some("edit-events"),
                 "analyse-race" => Some("analyse"),
@@ -652,6 +670,9 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 list.join(",")
             );
         }
+        if playback != "none" {
+            println!("{}", playback_row(&playback, snap));
+        }
         audio_stop.store(true, Ordering::SeqCst);
         if let Some(h) = audio_thread {
             let _ = h.join();
@@ -812,6 +833,15 @@ fn spawn_transport(
             }
             let t_ms = (block.as_secs_f64() * 1000.0 * k as f64) as u64;
             let (playing, start_song, index) = match kind.as_str() {
+                // M1b7: the position and the play state are the playback controller's (`PB_STATE`)
+                "follow" => {
+                    let mut st = PB_STATE.lock().unwrap();
+                    let now = (st.playing, st.song);
+                    if st.playing {
+                        st.song += FRAMES as f64 / SAMPLE_RATE;
+                    }
+                    (now.0, now.1, 0)
+                }
                 "loop" => (true, 0.0, (t_ms / LOOP_MS) as usize),
                 // plays from 2.5 s, then the host deactivates the plugin with no stopped process call
                 "deactivate" => {
@@ -844,7 +874,7 @@ fn spawn_transport(
                 });
             }
             let song = start_song
-                + if playing {
+                + if playing && kind != "follow" {
                     (k - seg_block0) as f64 * FRAMES as f64 / SAMPLE_RATE
                 } else {
                     0.0

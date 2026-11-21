@@ -15,8 +15,8 @@ sets `B.hostTransport` and feeds it.
 - The host plays: the page shows the playing state and the playhead moves with the host.
 - The host stops: the page shows the stopped state at the position of the host.
 - The host locates (stopped or playing): the playhead jumps.
-- The page starts no audio. Its Play button is refused with the message "the host plays: start
-  playback in the DAW". Stop and locate from the page do nothing yet (a later part).
+- The page starts no audio. This part left Play, stop and locate of the page open. M1b7 (#554,
+  `m1b7-page-moves-host.md`) made them move the host.
 
 ## The source of the transport
 

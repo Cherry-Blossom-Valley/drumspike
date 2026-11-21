@@ -105,6 +105,9 @@ static NO_REGIONS: AtomicBool = AtomicBool::new(false);
 /// `--regions-all a,d,p` (M1b5): every source gets this one region instead of the back-to-back layout,
 /// so the sources of a session sit at the same place of the song (the usual drum session).
 static REGIONS_ALL: Mutex<Option<(f64, f64, f64)>> = Mutex::new(None);
+/// `--regions-step s` (M1b7): with `--regions-all`, source k lies k * s seconds later in the song
+/// (tracks with different offsets).
+static REGIONS_STEP: Mutex<f64> = Mutex::new(0.0);
 static NO_PERSISTENT_ID: AtomicBool = AtomicBool::new(false);
 
 /// `--names <n>...`: the ARA names the host gives the sources, by creation index, instead of
@@ -443,9 +446,182 @@ fn factory() -> &'static ARAFactory {
 /// controllers the host makes.
 static ARA_INITIALISED: AtomicBool = AtomicBool::new(false);
 
+// ------------------------------------------------------------ the playback controller (M1b7)
+
+#[link(name = "System")]
+extern "C" {
+    fn pthread_main_np() -> i32;
+}
+
+/// `--playback full|ignore|partial` of the editor mode: `none` (the default) gives no playback
+/// controller (the instance's pointer stays null); `full`: the three calls, recorded, and the
+/// transport of the host moves; `ignore`: recorded, the transport stays; `partial`: the host
+/// declares an interface struct that ends before `requestSetPlaybackPosition` (a host that
+/// does not offer the call).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PbMode {
+    None,
+    Full,
+    Ignore,
+    Partial,
+}
+
+static PB_MODE: Mutex<PbMode> = Mutex::new(PbMode::None);
+
+/// `--playback-delay <ms>`: the host starts to play this long after it got the request (a slow host).
+static PB_DELAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn set_playback_delay(ms: u64) {
+    PB_DELAY_MS.store(ms, Ordering::SeqCst);
+}
+
+/// The transport of the test host when the playback controller moves it: the position of the next
+/// block and whether the host plays. The process thread (`--transport follow`) reads it every block.
+pub struct PbState {
+    pub playing: bool,
+    pub song: f64,
+    /// `--snap <s>`: a position request lands on the nearest multiple of this many seconds (a DAW
+    /// grid). 0: exactly where asked.
+    pub snap: f64,
+}
+
+pub static PB_STATE: Mutex<PbState> = Mutex::new(PbState {
+    playing: false,
+    song: 0.0,
+    snap: 0.0,
+});
+
+/// One request of the plugin, as the host recorded it.
+pub struct PbReq {
+    pub kind: &'static str,
+    pub seconds: Option<f64>,
+    pub wall_ms: f64,
+    /// The song position of the host right after the request (where it landed, or where it stands).
+    pub landed: f64,
+    pub playing_after: bool,
+    pub main_thread: bool,
+}
+
+pub static PB_LOG: Mutex<Vec<PbReq>> = Mutex::new(Vec::new());
+
+pub fn set_playback(mode: PbMode, snap: f64) {
+    *PB_MODE.lock().unwrap() = mode;
+    PB_STATE.lock().unwrap().snap = snap;
+}
+
+fn pb_note(kind: &'static str, seconds: Option<f64>) {
+    let main_thread = unsafe { pthread_main_np() == 1 };
+    let mode = *PB_MODE.lock().unwrap();
+    let mut st = PB_STATE.lock().unwrap();
+    if mode == PbMode::Full || mode == PbMode::Partial {
+        match kind {
+            "play" => {
+                let delay = PB_DELAY_MS.load(Ordering::SeqCst);
+                if delay == 0 {
+                    st.playing = true;
+                } else {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(delay));
+                        PB_STATE.lock().unwrap().playing = true;
+                    });
+                }
+            }
+            "stop" => st.playing = false,
+            _ => {
+                if let Some(t) = seconds {
+                    st.song = if st.snap > 0.0 {
+                        (t / st.snap).round() * st.snap
+                    } else {
+                        t
+                    };
+                }
+            }
+        }
+    }
+    let wall_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
+    PB_LOG.lock().unwrap().push(PbReq {
+        kind,
+        seconds,
+        wall_ms,
+        landed: st.song,
+        playing_after: st.playing,
+        main_thread,
+    });
+}
+
+unsafe extern "C" fn pb_start(_r: ARAPlaybackControllerHostRef) {
+    pb_note("play", None);
+}
+unsafe extern "C" fn pb_stop(_r: ARAPlaybackControllerHostRef) {
+    pb_note("stop", None);
+}
+unsafe extern "C" fn pb_position(_r: ARAPlaybackControllerHostRef, t: ARATimePosition) {
+    pb_note("locate", Some(t));
+}
+unsafe extern "C" fn pb_cycle_range(_r: ARAPlaybackControllerHostRef, _s: ARATimePosition, _d: ARATimeDuration) {}
+unsafe extern "C" fn pb_cycle(_r: ARAPlaybackControllerHostRef, _e: ARABool) {}
+
+static PLAYBACK_FULL: SyncPtr<ARAPlaybackControllerInterface> = SyncPtr(ARAPlaybackControllerInterface {
+    structSize: std::mem::size_of::<ARAPlaybackControllerInterface>(),
+    requestStartPlayback: Some(pb_start),
+    requestStopPlayback: Some(pb_stop),
+    requestSetPlaybackPosition: Some(pb_position),
+    requestSetCycleRange: Some(pb_cycle_range),
+    requestEnableCycle: Some(pb_cycle),
+});
+
+/// The struct size ends before `requestSetPlaybackPosition`: the pointer is there, the host does
+/// not offer the call.
+static PLAYBACK_PARTIAL: SyncPtr<ARAPlaybackControllerInterface> = SyncPtr(ARAPlaybackControllerInterface {
+    structSize: std::mem::offset_of!(ARAPlaybackControllerInterface, requestSetPlaybackPosition),
+    requestStartPlayback: Some(pb_start),
+    requestStopPlayback: Some(pb_stop),
+    requestSetPlaybackPosition: Some(pb_position),
+    requestSetCycleRange: Some(pb_cycle_range),
+    requestEnableCycle: Some(pb_cycle),
+});
+
+/// The row `playback_record`: what the host was asked, in the order it was asked, and where its
+/// transport stands now. The check compares it with the song positions it computes itself.
+pub fn playback_row(mode: &str, snap: f64) -> String {
+    let log = PB_LOG.lock().unwrap();
+    let st = PB_STATE.lock().unwrap();
+    let list: Vec<String> = log
+        .iter()
+        .map(|r| {
+            format!(
+                "{{\"kind\":{:?},\"seconds\":{},\"samples\":{},\"wall_ms\":{:.3},\"landed_song\":{:.6},\"playing_after\":{},\"main_thread\":{}}}",
+                r.kind,
+                r.seconds.map_or("null".to_string(), |v| format!("{v:.9}")),
+                r.seconds.map_or("null".to_string(), |v| ((v * SAMPLE_RATE).round() as i64).to_string()),
+                r.wall_ms,
+                r.landed,
+                r.playing_after,
+                r.main_thread
+            )
+        })
+        .collect();
+    format!(
+        "{{\"event\":\"playback_record\",\"mode\":{mode:?},\"snap\":{snap},\"rate\":{SAMPLE_RATE},\"requests\":[{}],\"final_playing\":{},\"final_song\":{:.6}}}",
+        list.join(","),
+        st.playing,
+        st.song
+    )
+}
+
 /// The host instance: the two mandatory interfaces, the optional ones stay null (the
-/// plugin must check before calling them).
+/// plugin must check before calling them). The playback controller is given only with
+/// `--playback` (`set_playback`).
 fn host_instance(state: *mut HostState) -> ARADocumentControllerHostInstance {
+    let (pb_ref, pb_iface): (ARAPlaybackControllerHostRef, *const ARAPlaybackControllerInterface) =
+        match *PB_MODE.lock().unwrap() {
+            PbMode::None => (std::ptr::null_mut(), std::ptr::null()),
+            PbMode::Full | PbMode::Ignore => (state as ARAPlaybackControllerHostRef, &PLAYBACK_FULL.0),
+            PbMode::Partial => (state as ARAPlaybackControllerHostRef, &PLAYBACK_PARTIAL.0),
+        };
     ARADocumentControllerHostInstance {
         structSize: std::mem::size_of::<ARADocumentControllerHostInstance>(),
         audioAccessControllerHostRef: state as ARAAudioAccessControllerHostRef,
@@ -456,8 +632,8 @@ fn host_instance(state: *mut HostState) -> ARADocumentControllerHostInstance {
         contentAccessControllerInterface: std::ptr::null(),
         modelUpdateControllerHostRef: state as ARAModelUpdateControllerHostRef,
         modelUpdateControllerInterface: &MODEL_UPDATE.0,
-        playbackControllerHostRef: std::ptr::null_mut(),
-        playbackControllerInterface: std::ptr::null(),
+        playbackControllerHostRef: pb_ref,
+        playbackControllerInterface: pb_iface,
     }
 }
 
@@ -1257,6 +1433,9 @@ fn main() {
     }
     if let Some(r) = args_value(&rest, "--regions-all").and_then(|v| parse_region(&v).ok()) {
         *REGIONS_ALL.lock().unwrap() = Some(r);
+        *REGIONS_STEP.lock().unwrap() = args_value(&rest, "--regions-step")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0);
     }
     if let Some(w) = args_value(&rest, "--wait").and_then(|v| v.parse::<u64>().ok()) {
         WAIT_SECS.store(w, Ordering::SeqCst);
@@ -1296,7 +1475,7 @@ fn main() {
 /// The full-length region layout (the ARA test host's: the regions sit back to back).
 fn full_regions(state: &HostState, i: usize) -> Vec<(f64, f64, f64)> {
     if let Some(all) = *REGIONS_ALL.lock().unwrap() {
-        return vec![all];
+        return vec![(all.0, all.1, all.2 + *REGIONS_STEP.lock().unwrap() * i as f64)];
     }
     let mut position = 0.0;
     for s in state.sources.iter().take(i) {

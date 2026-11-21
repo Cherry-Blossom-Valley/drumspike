@@ -80,9 +80,9 @@
   // What this script uses of the page: functions, two globals and one element. A rename in
   // static/ must not make the reload do less in silence (S4): a missing one is reported at once
   // (console error, shell command plugin_report), and a stage checks the bundled page for them.
-  var PAGE_FUNCTIONS = ["cancelEvents", "initSessions", "loadProject", "invalidate", "appHostFollow"];
-  var PAGE_GLOBALS = ["S", "F", "AC"];
-  var PAGE_IDS = ["lanesScroll"];
+  var PAGE_FUNCTIONS = ["cancelEvents", "initSessions", "loadProject", "invalidate", "appHostFollow", "setMsg"];
+  var PAGE_GLOBALS = ["S", "F", "AC", "PH"];
+  var PAGE_IDS = ["lanesScroll", "playBtn", "ruler"];
   function missingPageParts() {
     var names = PAGE_FUNCTIONS.slice();
     if (window.__DS_TEST__ && window.__DS_TEST__.fault === "missing-function") names.push("renamedLoadProject");   // the check's fault run
@@ -141,23 +141,105 @@
   };
   pollEvents();   // the plugin's own listener starts at once
 
-  /* The host transport (M1b5, #546). The plugin sets B.hostTransport (the interface of #518: the
-     page registers onPosition, and calls play, stop and locate) and feeds it from the host: a
-     long poll on /__ds/transport brings {epoch, t_ns, pos, playing}; the shell adds the sid and
-     hands it to onPosition. The page follows the host. play, stop and locate do not reach the
-     host (that is a later part): play is refused with a message, so the page never shows a play
-     that the host does not play; stop and locate answer at once and do nothing. B is a top-level
-     const of backend.js that does not exist yet when this script runs, so the shell installs the
-     object when the page has loaded and then calls appHostFollow() itself (static/transport.js:
-     a shell that injects the transport later does that). */
+  /* The host transport (M1b5, #546, and M1b7, #554). The plugin sets B.hostTransport (the interface
+     of #518: the page registers onPosition, and calls play, stop and locate) and feeds it from the
+     host: a long poll on /__ds/transport brings {epoch, t_ns, pos, playing}; the shell adds the sid
+     and hands it to onPosition. B is a top-level const of backend.js that does not exist yet when
+     this script runs, so the shell installs the object when the page has loaded and then calls
+     appHostFollow() itself (static/transport.js: a shell that injects the transport later does that).
+
+     M1b7: play, stop and locate go to the host. Each is a shell command of the plugin
+     (plugin_host_play, plugin_host_stop, plugin_host_locate); the plugin maps the page time to a
+     song position and calls the ARA playback controller of the host on the host's main thread. The
+     page time is a time of the source, the plugin sends a song position. The answer is
+     {ok, reason, confirm_ms}: a refusal (the host gives no control, or no region maps the time) is a
+     text for the page, not an error. The position that the host lands on comes back through the
+     transport poll below, and only that moves the page: this script never moves the page itself,
+     except to show the last position the host sent again when the host did not do what was asked
+     (a host that ignores a request must not leave the page where the click put it). */
+  var tstate = { messages: 0, delivered: 0, held: null, installed: false, first_at: 0, last: null, lastAt: 0, log: [], seen: [], calls: [], offer: null };
+  window.__DS_TRANSPORT__ = tstate;
+  function say(text) {
+    try { var f = (0, eval)("typeof setMsg === 'function' ? setMsg : undefined"); if (f && text) f(text); } catch (e) { /* no page */ }
+  }
+  function hostCall(kind, args) {
+    var rec = { kind: kind, at: Date.now(), t: args.t === undefined ? null : args.t, ok: null, reason: null, done: 0 };
+    if (tstate.calls.length < 400) tstate.calls.push(rec);
+    return invoke("plugin_host_" + kind, args).then(function (r) { return r || { ok: false, reason: "the plugin gave no answer", confirm_ms: 0 }; },
+      function (e) { return { ok: false, reason: "the plugin did not answer: " + (e && e.message || e), confirm_ms: 0 }; }).then(function (r) {
+      rec.ok = !!r.ok; rec.reason = r.reason || null; rec.done = Date.now();
+      return r;
+    });
+  }
+  /* The host did not do what was asked: show the last position it sent, so the page does not stay
+     where the click put it. A host that plays sends its position anyway, so only a stopped one needs this. */
+  function showHostAgain() {
+    var m = tstate.last;
+    if (m && !m.playing) deliverTransport({ epoch: m.epoch, t_ns: m.t_ns, pos: m.pos, playing: false, why: "again" });
+  }
+  /* The pointer is down in the ruler (a drag): the playhead is under the pointer, and no fallback may
+     move it. */
+  var pointer = { down: false };
+  document.addEventListener("mousedown", function (ev) {
+    var t = ev.target; pointer.down = !!(t && t.closest && t.closest("#rulerClip, #ruler"));
+  }, true);
+  window.addEventListener("mouseup", function () { pointer.down = false; }, true);
+  var lastLocate = 0;
+  function guardOn() { return !(tstate.offer && tstate.offer.fault === "no-drag-guard"); }
+  /* Show the host position again, unless a newer locate was sent after the one this belongs to, or the
+     pointer is down in the ruler (it asks again when the pointer is up). */
+  function fallback(seq, seen) {
+    if (guardOn()) {
+      if (seq && seq !== lastLocate) return;
+      if (pointer.down) { setTimeout(function () { fallback(seq, seen); }, 150); return; }
+    }
+    if (tstate.delivered === seen) showHostAgain();
+  }
+  function afterRequest(r, seq) {
+    if (r.superseded) return;   // a newer request passed it: that one decides
+    if (!r.ok) { say(r.reason); fallback(seq, tstate.delivered); return; }
+    var seen = tstate.delivered;
+    if (r.confirm_ms > 0) setTimeout(function () { fallback(seq, seen); }, r.confirm_ms);
+  }
+  function selectedTrack() {
+    var n = lex("typeof S === 'object' && typeof S.selTrack === 'string' ? S.selTrack : ''");
+    return typeof n === "string" ? n : "";
+  }
+  var watch = { v: 0 };
+  var sentTrack = null;
+  /* One deadline for a play, from the call: the request may wait up to 2 s for the main thread of the
+     host, and the host may take its time to start. After PLAY_MS the page gives up ("the host did not
+     start playback"). If the host starts later, the follow of #546 shows playing, and the failure text
+     is taken away (deliverTransport). */
+  var PLAY_MS = 2000;
   var HT = {
     onPosition: null,
-    play: function () { return Promise.reject(new Error("the host plays: start playback in the DAW")); },
-    stop: function () { return Promise.resolve(); },
-    locate: function () { return Promise.resolve(); }
+    play: function (pos) {
+      var t0 = Date.now();
+      return new Promise(function (resolve, reject) {
+        var done = false;
+        function end(ok, e) { if (done) return; done = true; if (ok) resolve(); else { tstate.playFail = e.message; reject(e); } }
+        var timer = setTimeout(function () { end(false, new Error("the host did not start playback")); }, PLAY_MS);
+        hostCall("play", { t: typeof pos === "number" ? pos : null, track: selectedTrack() }).then(function (r) {
+          if (!r.ok) { clearTimeout(timer); end(false, new Error(r.reason)); return; }
+          if (!(r.confirm_ms > 0)) { clearTimeout(timer); end(true); return; }
+          (function look() {
+            if (done) return;
+            if (tstate.last && tstate.last.playing && tstate.lastAt >= t0) { clearTimeout(timer); end(true); return; }
+            setTimeout(look, 10);
+          })();
+        });
+      });
+    },
+    stop: function (pos) {
+      if (typeof pos === "number") watch.v = pos;   // the page's own stop sets its playhead: that is no locate
+      return hostCall("stop", {}).then(function (r) { afterRequest(r, 0); });
+    },
+    locate: function (t) {
+      var seq = ++lastLocate;
+      return hostCall("locate", { t: t, track: selectedTrack() }).then(function (r) { afterRequest(r, seq); });
+    }
   };
-  var tstate = { messages: 0, delivered: 0, held: null, installed: false, first_at: 0, last: null, log: [] };
-  window.__DS_TRANSPORT__ = tstate;
   function lex(expr) { try { return (0, eval)(expr); } catch (e) { return undefined; } }
   function installTransport() {
     if (tstate.installed) return true;
@@ -167,6 +249,8 @@
     if (b.hostTransport !== HT) HT = b.hostTransport;
     lex("appHostFollow()");
     tstate.installed = true;
+    watch.v = lex("typeof PH === 'object' ? PH.v : 0");
+    applyOffer(0);
     if (tstate.held) { var m = tstate.held; tstate.held = null; deliverTransport(m); }
     return true;
   }
@@ -185,12 +269,47 @@
     }
     tstate.delivered++;
     tstate.last = m;
+    tstate.lastAt = Date.now();
+    if (m.playing && tstate.playFail) {   // the host started after the page gave up: the failure text goes
+      var shown = null; try { shown = (document.getElementById("stMsg") || {}).textContent || ""; } catch (e) { /* none */ }
+      if (shown.indexOf("playback failed") >= 0 && !(tstate.offer && tstate.offer.fault === "keep-error")) { try { (0, eval)("setMsg")(""); } catch (e) { /* no page */ } }
+      tstate.playFail = null;
+    }
+    if (tstate.seen.length < 4000) tstate.seen.push([tstate.lastAt, m.pos, m.playing ? 1 : 0, m.why || null]);
     /* The page binds its follow state in appOnPlayhead only while AC.active is false, and a stopped
        message leaves AC.active true: a host that stops and plays again would not be followed. The
        shell resets the flag when the host starts to play and the page is not playing (the need is
        reported for static/: the page should re-enter its follow branch itself). */
     if (m.playing && lex("typeof S === 'object' && !S.playing && typeof AC === 'object' && AC.active === true")) lex("AC.active = false");
     HT.onPosition({ sid: sid, epoch: m.epoch, t_ns: m.t_ns, pos: m.pos, playing: m.playing });
+    watch.v = lex("typeof PH === 'object' ? PH.v : 0");   // what the host put on the page is no move of the user
+  }
+  /* The page asks the host to move only while it plays (appTickPos runs in tick()). A click in the
+     ruler of a stopped page only sets PH.v and PH.user. Without this watch a locate of the page while
+     the host stands would never reach the host. A move of the user (PH.user, a value that no message
+     of the host and no stop of the page put there) is a locate. The need in static/ is reported in
+     docs/design/daw-plugin/m1b7-page-moves-host.md: the page should call locate itself. */
+  setInterval(function () {
+    if (!tstate.installed) return;
+    /* The selected track decides the mapping of both directions (the follow and the locate): the plugin
+       is told when it changes, at the first look and after a reload of the project. */
+    var tr = selectedTrack();
+    if (tr !== sentTrack) { sentTrack = tr; invoke("plugin_host_track", { track: tr }).catch(function () { sentTrack = null; }); }
+    var cur = lex("typeof S === 'object' && typeof PH === 'object' && !S.playing && PH.user ? PH.v : null");
+    if (typeof cur !== "number" || Math.abs(cur - watch.v) < 1e-9) return;
+    watch.v = cur;
+    HT.locate(cur);
+  }, 25);
+  /* What the host gives: play, stop and locate show as not available, with the text, when it gives no
+     control (the button, the ruler); the answer of each request says the same when used. */
+  function applyOffer(n) {
+    invoke("plugin_host_offer", {}).then(function (o) {
+      tstate.offer = o;
+      var btn = document.getElementById("playBtn"), ruler = document.getElementById("ruler");
+      if ((!btn || !ruler) && n < 40) { setTimeout(function () { applyOffer(n + 1); }, 100); return; }
+      if (btn && !o.play) { btn.disabled = true; btn.title = o.play_text; }
+      if (ruler && !o.locate) ruler.title = o.locate_text;
+    }, function () { /* no plugin answer: the page keeps its buttons */ });
   }
   async function pollTransport() {
     for (;;) {
@@ -207,6 +326,7 @@
   }
   // after a reload of the project the page may have lost the position: the last message goes again
   listeners["plugin-reload"].push(function () {
+    sentTrack = null;   // the plugin is told the selected track again
     var seen = tstate.delivered;
     setTimeout(function () {
       var m = tstate.last;

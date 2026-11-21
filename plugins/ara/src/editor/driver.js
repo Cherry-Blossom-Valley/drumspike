@@ -72,6 +72,7 @@
     if (T.mode === "analyse" || T.mode === "analyse-race") await analyse(names);
     if (T.mode === "bigpost") await bigpost(names);
     if (T.mode === "transport") transportRun();
+    if (T.mode === "playback") playbackRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
   });
 
   function measure() {
@@ -142,6 +143,90 @@
       rows.push([Math.round((performance.timeOrigin + t) * 10) / 10, pos === null ? null : Math.round(pos * 1e4) / 1e4, S.playing ? 1 : 0]);
       if (t - t0 < dur) requestAnimationFrame(frame); else done("frames");
     })(performance.now());
+  }
+  /* Mode playback (M1b7): the page asks the host to move. The driver does what a user does: a click in
+     the ruler (S.playhead = t, as rulerDown does), the Play button (play()), the Stop button (pause()).
+     The test host has a playback controller (--playback full|ignore|partial, or none) and a transport
+     that follows it (--transport follow, --snap 0.5: a position request lands on the grid, so the
+     page's own click and the host's answer differ and the check can tell them apart). The page's
+     position is sampled once a frame, with the wall clock (epoch ms). The report carries the samples,
+     the steps (what the driver did, when, and what the page showed after) and the calls and messages
+     that the shell script noted. The check compares them with the record of the host. */
+  async function playbackRun() {
+    var scenario = T.arg || "full";
+    var wait = scenario === "ignore" ? 1800 : 750;
+    var rows = [], steps = [], stopped = false;
+    function sleepMs(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    var tr = window.__DS_TRANSPORT__ || { messages: 0, delivered: 0, log: [], seen: [], calls: [] };
+    if (T.fault === "page-transport") {   // the fault run of the no-own-audio line: the page uses the app's transport
+      setTimeout(function () { window.__TAURI__.core.invoke("transport_status", {}).catch(function () { /* refused */ }); }, 1500);
+    }
+    (function frame(t) {
+      var pos = null;
+      try { pos = S.playing ? appPos(t) : PH.v; } catch (e) { /* no state */ }
+      rows.push([Math.round((performance.timeOrigin + t) * 10) / 10, pos === null ? null : Math.round(pos * 1e4) / 1e4, S.playing ? 1 : 0]);
+      if (!stopped) requestAnimationFrame(frame);
+    })(performance.now());
+    function text(id) { var el = document.getElementById(id); return el ? String(el.textContent || "") : null; }
+    async function step(name, fn, ms) {
+      var st = { name: name, at: Date.now(), playing_before: !!S.playing, calls_before: tr.calls.length };
+      try { await fn(); } catch (e) { st.threw = String(e && e.message || e); }
+      await sleepMs(ms || wait);
+      var btn = document.getElementById("playBtn"), ruler = document.getElementById("ruler");
+      st.msg = text("stMsg"); st.playing_after = !!S.playing; st.pos_after = PH.v;
+      st.play_disabled = !!(btn && btn.disabled); st.play_title = btn ? btn.title : null; st.ruler_title = ruler ? ruler.title : null;
+      st.end = Date.now();
+      steps.push(st);
+    }
+    // the first message of the host and the answer to the offer: the page is ready for a request
+    for (var i = 0; i < 100 && !(tr.delivered >= 1 && tr.offer); i++) await sleepMs(100);
+    var first = tr.delivered >= 1;
+    if (scenario === "tracks") {   // M1b7 Y1: two tracks at different song offsets; both directions use the selected track
+      var trackA = S.order[0], trackB = S.order[1];
+      await step("select-b", function () { S.selTrack = trackB; }, 500);
+      await step("locate-b", function () { S.playhead = 1.2; }, 600);
+      await step("select-a", function () { S.selTrack = trackA; }, 700);
+      stopped = true;
+      post({ kind: "playback", scenario: scenario, visibility: document.visibilityState, samples: rows, steps: steps, calls: tr.calls, seen: tr.seen,
+        offer: tr.offer, first_message: first, tracks: [trackA, trackB], host_mode: !!B.hostMode, wired: true });
+      return;
+    }
+    if (scenario === "drag") {   // M1b7 X3: a drag in the ruler with a host that does not answer: the fallback must not jump under the pointer
+      var ruler = document.getElementById("ruler"), rc = ruler.getBoundingClientRect(), during = [];
+      function ev(type, f) { return new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: rc.left + rc.width * f, clientY: rc.top + rc.height / 2 }); }
+      ruler.dispatchEvent(ev("mousedown", 0.5));
+      for (var k = 0; k < 15; k++) {   // 3 s of drag, a move every 200 ms (the fallback of the first locate is due at 1 s)
+        window.dispatchEvent(ev("mousemove", 0.4 + 0.2 * ((k % 5) / 5)));
+        for (var q = 0; q < 8; q++) { await sleepMs(25); during.push([Date.now(), PH.v]); }   // a sample every 25 ms: a jump back between two moves shows
+      }
+      var held = PH.v;
+      window.dispatchEvent(ev("mouseup", 0.5));
+      await sleepMs(1800);
+      stopped = true;
+      post({ kind: "playback", scenario: scenario, visibility: document.visibilityState, samples: rows, steps: [{ name: "drag", during: during, held: held, pos_after: PH.v, calls: tr.calls.length }], calls: tr.calls, seen: tr.seen,
+        offer: tr.offer, first_message: first, host_mode: !!B.hostMode, wired: true });
+      return;
+    }
+    if (scenario === "late") {   // M1b7 X4: the host starts 2.5 s after the request, after the page gave up
+      await step("locate-stopped", function () { S.playhead = 1.2; }, 600);
+      await step("play", function () { play(); }, 2300);   // not awaited: the snapshot is taken 2.3 s after the call
+      var gaveUp = { msg: text("stMsg"), playing: !!S.playing };
+      await sleepMs(3000);
+      stopped = true;
+      post({ kind: "playback", scenario: scenario, visibility: document.visibilityState, samples: rows, steps: steps, gave_up: gaveUp, final_playing: !!S.playing, final_msg: text("stMsg"),
+        calls: tr.calls, seen: tr.seen, offer: tr.offer, first_message: first, host_mode: !!B.hostMode, wired: true });
+      return;
+    }
+    await step("locate-stopped", function () { S.playhead = 1.2; }, wait);
+    await step("play", function () { return play(); }, wait + 200);
+    await step("locate-playing", function () { S.playhead = 0.6; }, wait + 200);
+    await step("stop", function () { return pause(); }, wait);
+    await step("locate-stopped-2", function () { S.playhead = 2.6; }, wait);
+    if (scenario === "none") await step("stop-direct", function () { return B.hostTransport.stop(0); }, 400);   // the shell's stop, called as a script: no host control, no error
+    var maxd = null; try { maxd = maxDur(); } catch (e) { /* none */ }
+    stopped = true;
+    post({ kind: "playback", scenario: scenario, visibility: document.visibilityState, first_message: first, samples: rows, steps: steps, calls: tr.calls, seen: tr.seen,
+      offer: tr.offer, max_dur: maxd, host_mode: !!B.hostMode, wired: typeof B.hostTransport.onPosition === "function" });
   }
   async function edit(names, withRole) {   // move one hit through the page's own backend call
     var dirty = [];
