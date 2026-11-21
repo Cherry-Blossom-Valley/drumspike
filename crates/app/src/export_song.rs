@@ -19,10 +19,12 @@ use crate::Service;
 pub struct SongRegion {
     /// Start in the source.
     pub start_mod: f64,
-    /// Length of the slice.
+    /// Length of the slice in the source.
     pub dur_mod: f64,
     /// Start in the song.
     pub start_play: f64,
+    /// Length in the song: equal to `dur_mod` unless the host stretches the region in time.
+    pub dur_play: f64,
 }
 
 /// What the host says about one track.
@@ -32,6 +34,8 @@ pub struct SongTrack {
     pub regions: Vec<SongRegion>,
     /// The file stem of the track's files (the DAW track name); `None`: the track name.
     pub stem: Option<String>,
+    /// The host has no source for this track: every hit is left out (and counted), the files are still made.
+    pub hide_all: bool,
 }
 
 /// The song time base of the host, asked once per export.
@@ -54,7 +58,7 @@ pub struct SongCounts {
 /// The end of the last region in song time; `None` without a region.
 #[must_use]
 pub fn song_end(regions: &[SongRegion]) -> Option<f64> {
-    regions.iter().map(|r| r.start_play + r.dur_mod).reduce(f64::max)
+    regions.iter().map(|r| r.start_play + r.dur_play).reduce(f64::max)
 }
 
 /// Map the events of a track (source time) to song time: one copy of an event per region that holds it, its `t`
@@ -75,7 +79,7 @@ pub fn to_song(events: &[Value], regions: &[SongRegion]) -> (Vec<Value>, SongCou
         let holding: Vec<f64> = regions
             .iter()
             .filter(|r| t >= r.start_mod && t < r.start_mod + r.dur_mod)
-            .map(|r| r.start_play + (t - r.start_mod))
+            .map(|r| r.start_play + (t - r.start_mod) * r.dur_play / r.dur_mod)
             .collect();
         if holding.is_empty() {
             counts.no_region += 1;
@@ -98,11 +102,19 @@ pub fn to_song(events: &[Value], regions: &[SongRegion]) -> (Vec<Value>, SongCou
 impl Service {
     /// Install the song time base of the host (the DAW plugin), or remove it.
     pub fn set_export_time(&self, t: Option<Arc<dyn ExportTime>>) {
-        *self.inner.export_time.write().unwrap_or_else(std::sync::PoisonError::into_inner) = t;
+        *self
+            .inner
+            .export_time
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = t;
     }
 
     pub(crate) fn export_time(&self) -> Option<Arc<dyn ExportTime>> {
-        self.inner.export_time.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        self.inner
+            .export_time
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// The file stem of a track's export files: the host's name for it, else the track name.
@@ -124,6 +136,7 @@ mod tests {
             start_mod: a,
             dur_mod: d,
             start_play: p,
+            dur_play: d,
         }
     }
     fn ts(v: &[Value]) -> Vec<f64> {
@@ -165,6 +178,30 @@ mod tests {
                 before_start: 1
             }
         );
+    }
+
+    #[test]
+    fn a_stretched_region_moves_the_hit_with_the_stretch_and_the_song_end_uses_the_play_length() {
+        // [1, 3) of the source sits at song 10 s with a length of 1 s (half) or 4 s (double)
+        let half = SongRegion {
+            start_mod: 1.0,
+            dur_mod: 2.0,
+            start_play: 10.0,
+            dur_play: 1.0,
+        };
+        let double = SongRegion {
+            start_mod: 1.0,
+            dur_mod: 2.0,
+            start_play: 10.0,
+            dur_play: 4.0,
+        };
+        let ev = vec![json!({"t": 2.0})];
+        for (reg, want) in [(half, 10.5), (double, 12.0)] {
+            let (o, _) = to_song(&ev, &[reg]);
+            assert!((ts(&o)[0] - want).abs() * 48_000.0 < 1.0, "{want}");
+        }
+        assert_eq!(song_end(&[half]), Some(11.0));
+        assert_eq!(song_end(&[double]), Some(14.0));
     }
 
     #[test]

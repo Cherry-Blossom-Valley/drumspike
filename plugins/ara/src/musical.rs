@@ -10,6 +10,9 @@ use crate::ara::*;
 use crate::tempo_ara::{tempo_from_ara, Bar, Converted, Entry};
 use serde_json::{json, Value};
 
+/// The most events of one kind that the plugin reads; more are left unread and the report row says so.
+pub const MAX_EVENTS: i32 = 100_000;
+
 /// What the plugin knows of the host's timeline.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
@@ -75,27 +78,49 @@ pub unsafe fn read(host: *const ARADocumentControllerHostInstance, ctx: usize) -
     let tempo_grade = grade(cref, mctx, kARAContentTypeTempoEntries as ARAContentType) as i64;
     let mut entries: Vec<Entry> = Vec::new();
     let mut bars: Vec<Bar> = Vec::new();
+    let mut capped = false;
     if tempo_ok {
-        let r = create(cref, mctx, kARAContentTypeTempoEntries as ARAContentType, std::ptr::null());
+        let r = create(
+            cref,
+            mctx,
+            kARAContentTypeTempoEntries as ARAContentType,
+            std::ptr::null(),
+        );
         if !r.is_null_ref() {
-            for i in 0..count(cref, r) {
+            let n = count(cref, r);
+            capped |= n > MAX_EVENTS;
+            for i in 0..n.min(MAX_EVENTS) {
                 let p = data(cref, r, i) as *const ARAContentTempoEntry;
                 if !p.is_null() {
                     let e = p.read_unaligned();
-                    entries.push(Entry { t: e.timePosition, q: e.quarterPosition });
+                    entries.push(Entry {
+                        t: e.timePosition,
+                        q: e.quarterPosition,
+                    });
                 }
             }
             destroy(cref, r);
         }
     }
     if bars_ok {
-        let r = create(cref, mctx, kARAContentTypeBarSignatures as ARAContentType, std::ptr::null());
+        let r = create(
+            cref,
+            mctx,
+            kARAContentTypeBarSignatures as ARAContentType,
+            std::ptr::null(),
+        );
         if !r.is_null_ref() {
-            for i in 0..count(cref, r) {
+            let n = count(cref, r);
+            capped |= n > MAX_EVENTS;
+            for i in 0..n.min(MAX_EVENTS) {
                 let p = data(cref, r, i) as *const ARAContentBarSignature;
                 if !p.is_null() {
                     let b = p.read_unaligned();
-                    bars.push(Bar { num: b.numerator, den: b.denominator, q: b.position });
+                    bars.push(Bar {
+                        num: b.numerator,
+                        den: b.denominator,
+                        q: b.position,
+                    });
                 }
             }
             destroy(cref, r);
@@ -114,7 +139,7 @@ pub unsafe fn read(host: *const ARADocumentControllerHostInstance, ctx: usize) -
     };
     let report = json!({"event": "musical_context", "controller": true, "tempo_available": tempo_ok,
         "tempo_grade": tempo_grade, "entries": entries.len(), "bars_available": bars_ok, "bars": bars.len(),
-        "reason": reason, "notes": notes,
+        "reason": reason, "notes": notes, "capped": capped,
         "bpm": tempo.as_ref().map(|c| c.map.bpm), "steps": tempo.as_ref().map(|c| c.map.steps.len())});
     Snapshot { tempo, report }
 }

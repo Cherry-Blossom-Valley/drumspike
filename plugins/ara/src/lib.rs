@@ -403,9 +403,11 @@ struct DocShared {
     shown_names: Mutex<HashMap<String, String>>,
     /// M1c1: the host refs of the musical contexts in the order the host made them, and what the plugin read of the
     /// timeline of the first one (the tempo map for the export).
-    contexts: Mutex<Vec<usize>>,
+    contexts: Mutex<Vec<(usize, i32)>>,
     /// M1c1: the ids of the playback regions that the host stretches in time (the export does not follow a stretch).
     stretched: Mutex<std::collections::HashSet<u64>>,
+    /// M1c1: the length in the song of each playback region by id (the song-time export maps a stretched region).
+    play_len: Mutex<HashMap<u64, f64>>,
     musical: Mutex<musical::Snapshot>,
 }
 
@@ -496,6 +498,7 @@ fn test_panic(kind: &str) {
 impl DocShared {
     fn new() -> Arc<DocShared> {
         let cache = session().cache.clone();
+        transport::reset_tempo(); // M1c1: a new document does not take the tempo of an earlier one
         let id = fresh_id();
         let svc = service::DocService::new(cache.clone(), id.clone());
         let doc = Arc::new(DocShared {
@@ -513,6 +516,7 @@ impl DocShared {
             shown_names: Mutex::new(HashMap::new()),
             contexts: Mutex::new(Vec::new()),
             stretched: Mutex::new(std::collections::HashSet::new()),
+            play_len: Mutex::new(HashMap::new()),
             musical: Mutex::new(musical::Snapshot::default()),
             canceller: svc.canceller(),
             id: Mutex::new(id),
@@ -867,11 +871,21 @@ impl DocShared {
         self.edit_depth.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// The edit cycle ends: when it was the outer one and something changed in it, the names are computed once.
-    /// M1c1: read the timeline of the host again (the host's thread). A row `musical_context` goes to the report
-    /// when what the plugin found differs from the row before.
+    /// M1c1: read the timeline of the host again. Main thread only (the callbacks of the host come there; a call from
+    /// another thread does nothing). A row `musical_context` goes to the report when what the plugin found differs
+    /// from the row before. The context with the lowest `orderIndex` is read.
     unsafe fn refresh_musical(&self, host: *const ARADocumentControllerHostInstance) {
-        let first = self.contexts.lock().unwrap_or_else(|e| e.into_inner()).first().copied();
+        if !editor::on_main_thread_pub() {
+            editor::note_off_main("refresh_musical");
+            return;
+        }
+        let first = self
+            .contexts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .min_by_key(|(_, order)| *order)
+            .map(|(h, _)| *h);
         let snap = match first {
             Some(c) => musical::read(host, c),
             None => musical::Snapshot {
@@ -888,6 +902,37 @@ impl DocShared {
         *cur = snap;
     }
 
+    /// M1c1: the regions for the song-time export, `(source index, region)`. The hits belong to the last round, so
+    /// `start_mod` and `dur_mod` come from the round; where the region lies in the song is read LIVE (a move in
+    /// playback time starts no round). A round region is matched with a live one of the same source by
+    /// `(start_mod, dur_mod)`; a round region with no live match is gone (left out); a live region with no round
+    /// entry uses its live values.
+    fn export_region_list(&self) -> Vec<(usize, deliver::ExportRegion)> {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let round = self.round_regions.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let lens = self.play_len.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let stale = crate::test_switch("DS_ARA_DELIVERY_FAULT").as_deref() == Ok("stale-regions");
+        let mut out = Vec::new();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let live: Vec<RegionSlot> = s.regions.lock().map(|r| r.clone()).unwrap_or_default();
+            out.extend(
+                deliver::merge_regions(
+                    round.get(&s.seq).map(|(r, _)| r.as_slice()),
+                    &live.iter().map(|x| (x.id, x.rec)).collect::<Vec<_>>(),
+                    &lens,
+                    stale,
+                )
+                .into_iter()
+                .map(|r| (s.seq, r)),
+            );
+        }
+        out
+    }
+
     /// M1c1: the tracks that have a region the host stretches in time.
     fn stretched_tracks(&self) -> Vec<String> {
         let st = self.stretched.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -901,7 +946,11 @@ impl DocShared {
             .unwrap_or_default();
         let mut out = Vec::new();
         for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
-            let any = s.regions.lock().map(|r| r.iter().any(|x| st.contains(&x.id))).unwrap_or(false);
+            let any = s
+                .regions
+                .lock()
+                .map(|r| r.iter().any(|x| st.contains(&x.id)))
+                .unwrap_or(false);
             if any {
                 if let Some(t) = s.track.lock().ok().and_then(|t| t.clone()) {
                     out.push(t);
@@ -916,11 +965,21 @@ impl DocShared {
         let m = self.musical.lock().unwrap_or_else(|e| e.into_inner());
         let reason = m.report.get("reason").and_then(Value::as_str).unwrap_or("").to_string();
         if crate::test_switch("DS_ARA_DELIVERY_FAULT").as_deref() == Ok("invent-map") {
-            return tempo_ara::Answer { map: Some(drumspike_core::tempo::TempoMap { bpm: 111.0, ..Default::default() }), source: "ara", bpm: 111.0, steps: 0, reason };
+            return tempo_ara::Answer {
+                map: Some(drumspike_core::tempo::TempoMap {
+                    bpm: 111.0,
+                    ..Default::default()
+                }),
+                source: "ara",
+                bpm: 111.0,
+                steps: 0,
+                reason,
+            };
         }
         tempo_ara::choose(m.tempo.as_ref(), &reason, transport::host_tempo())
     }
 
+    /// The edit cycle ends: when it was the outer one and something changed in it, the names are computed once.
     fn edit_end(&self) {
         // an end without a begin leaves the depth at 0
         let left = loop {
@@ -2293,6 +2352,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let p4 = doc.clone();
     let p5 = doc.clone();
     let p6 = doc.clone();
+    let p7 = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
@@ -2309,6 +2369,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
         display_names: Arc::new(move || p4.display_names()),
         tempo: Arc::new(move || p5.song_tempo()),
         stretched: Arc::new(move || p6.stretched_tracks()),
+        export_regions: Arc::new(move || p7.export_region_list()),
     }
 }
 
@@ -2676,22 +2737,54 @@ unsafe extern "C" fn dc_updateDocumentProperties(_c: ARADocumentControllerRef, _
 unsafe extern "C" fn dc_createMusicalContext(
     c: ARADocumentControllerRef,
     h: ARAMusicalContextHostRef,
-    _p: *const ARAMusicalContextProperties,
+    p: *const ARAMusicalContextProperties,
 ) -> ARAMusicalContextRef {
     guard("createMusicalContext", std::ptr::null_mut(), move || {
         // M1c1: the record keeps the host ref (the content reader of the timeline needs it)
         let ctl = controller_of(c);
-        ctl.doc.contexts.lock().unwrap_or_else(|e| e.into_inner()).push(h as usize);
+        ctl.doc
+            .contexts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((h as usize, context_order(p)));
         ctl.doc.refresh_musical(ctl.host);
         Box::into_raw(Box::new(h as usize as u64)) as ARAMusicalContextRef
     })
 }
+/// The place of a musical context in the host (`orderIndex`, ARA 2); `i32::MAX` when the struct is too short.
+unsafe fn context_order(p: *const ARAMusicalContextProperties) -> i32 {
+    if p.is_null() {
+        return i32::MAX;
+    }
+    let declared = std::ptr::addr_of!((*p).structSize).read_unaligned();
+    if size_covers(
+        declared,
+        std::mem::offset_of!(ARAMusicalContextProperties, orderIndex),
+        std::mem::size_of::<i32>(),
+    ) {
+        std::ptr::addr_of!((*p).orderIndex).read_unaligned()
+    } else {
+        i32::MAX
+    }
+}
 unsafe extern "C" fn dc_updateMusicalContextProperties(
-    _c: ARADocumentControllerRef,
-    _m: ARAMusicalContextRef,
-    _p: *const ARAMusicalContextProperties,
+    c: ARADocumentControllerRef,
+    m: ARAMusicalContextRef,
+    p: *const ARAMusicalContextProperties,
 ) {
-    guard("updateMusicalContextProperties", (), move || {})
+    guard("updateMusicalContextProperties", (), move || {
+        if m.is_null() {
+            return;
+        }
+        let ctl = controller_of(c);
+        let h = *(m as *const u64) as usize;
+        for e in ctl.doc.contexts.lock().unwrap_or_else(|e| e.into_inner()).iter_mut() {
+            if e.0 == h {
+                e.1 = context_order(p);
+            }
+        }
+        ctl.doc.refresh_musical(ctl.host);
+    })
 }
 unsafe extern "C" fn dc_updateMusicalContextContent(
     c: ARADocumentControllerRef,
@@ -2709,7 +2802,11 @@ unsafe extern "C" fn dc_destroyMusicalContext(c: ARADocumentControllerRef, m: AR
         let ctl = controller_of(c);
         if !m.is_null() {
             let h = *(m as *const u64) as usize;
-            ctl.doc.contexts.lock().unwrap_or_else(|e| e.into_inner()).retain(|x| *x != h);
+            ctl.doc
+                .contexts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|x| x.0 != h);
             drop(Box::from_raw(m as *mut u64));
         }
         ctl.doc.refresh_musical(ctl.host);
@@ -3683,7 +3780,9 @@ unsafe fn region_stretched(p: *const ARAPlaybackRegionProperties) -> bool {
         declared,
         std::mem::offset_of!(ARAPlaybackRegionProperties, transformationFlags),
         std::mem::size_of::<u32>(),
-    ) && (std::ptr::addr_of!((*p).transformationFlags).read_unaligned() as u32) & (kARAPlaybackTransformationTimestretch as u32) != 0;
+    ) && (std::ptr::addr_of!((*p).transformationFlags).read_unaligned() as u32)
+        & kARAPlaybackTransformationTimestretch
+        != 0;
     let dur = size_covers(
         declared,
         std::mem::offset_of!(ARAPlaybackRegionProperties, durationInPlaybackTime),
@@ -3693,6 +3792,21 @@ unsafe fn region_stretched(p: *const ARAPlaybackRegionProperties) -> bool {
     .abs()
         > 1e-6;
     flag || dur
+}
+
+/// M1c1: the length of a region in the song (`durationInPlaybackTime`), the length in the source when the struct
+/// does not carry it.
+unsafe fn region_play_len(p: *const ARAPlaybackRegionProperties) -> f64 {
+    let declared = std::ptr::addr_of!((*p).structSize).read_unaligned();
+    if size_covers(
+        declared,
+        std::mem::offset_of!(ARAPlaybackRegionProperties, durationInPlaybackTime),
+        std::mem::size_of::<f64>(),
+    ) {
+        std::ptr::addr_of!((*p).durationInPlaybackTime).read_unaligned()
+    } else {
+        (*p).durationInModificationTime
+    }
 }
 
 unsafe fn region_times(p: *const ARAPlaybackRegionProperties) -> service::RegionRec {
@@ -3718,6 +3832,11 @@ unsafe extern "C" fn dc_createPlaybackRegion(
         if region_stretched(p) {
             ctl.doc.stretched.lock().unwrap_or_else(|e| e.into_inner()).insert(id);
         }
+        ctl.doc
+            .play_len
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, region_play_len(p));
         if let Ok(list) = ctl.sources.lock() {
             if let Some(src) = list.iter().find(|s| s.seq == seq) {
                 if let Ok(mut rl) = src.regions.lock() {
@@ -3756,6 +3875,11 @@ unsafe extern "C" fn dc_updatePlaybackRegionProperties(
                 st.remove(&region.id);
             }
         }
+        ctl.doc
+            .play_len
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(region.id, region_play_len(p));
         let mut moved = false;
         if let Ok(list) = ctl.sources.lock() {
             if let Some(src) = list.iter().find(|s| s.seq == region.seq) {
@@ -3789,7 +3913,16 @@ unsafe extern "C" fn dc_destroyPlaybackRegion(c: ARADocumentControllerRef, r: AR
         // longer part of the document)
         let region = Box::from_raw(r as *mut PlaybackRegion);
         let ctl = controller_of(c);
-        ctl.doc.stretched.lock().unwrap_or_else(|e| e.into_inner()).remove(&region.id);
+        ctl.doc
+            .stretched
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&region.id);
+        ctl.doc
+            .play_len
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&region.id);
         if let Ok(list) = ctl.sources.lock() {
             if let Some(src) = list.iter().find(|s| s.seq == region.seq) {
                 if let Ok(mut rl) = src.regions.lock() {

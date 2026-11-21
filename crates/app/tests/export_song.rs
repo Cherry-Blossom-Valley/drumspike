@@ -168,14 +168,17 @@ fn a_song_time_export_puts_the_hits_at_their_song_positions_in_the_midi_and_the_
                             start_mod: 0.25,
                             dur_mod: 1.0,
                             start_play: 10.0,
+                            dur_play: 1.0,
                         },
                         SongRegion {
                             start_mod: 1.75,
                             dur_mod: 0.75,
                             start_play: 20.0,
+                            dur_play: 0.75,
                         },
                     ],
                     stem: Some("Kick Drum".into()),
+                    hide_all: false,
                 },
             ),
             (
@@ -183,6 +186,7 @@ fn a_song_time_export_puts_the_hits_at_their_song_positions_in_the_midi_and_the_
                 SongTrack {
                     regions: vec![],
                     stem: Some("Snare".into()),
+                    hide_all: false,
                 },
             ),
         ],
@@ -253,8 +257,10 @@ fn a_song_time_export_counts_the_hits_it_leaves_out_and_names_the_files_after_th
                     start_mod: 0.0,
                     dur_mod: 0.75,
                     start_play: 5.0,
+                    dur_play: 0.75,
                 }],
                 stem: None,
+                hide_all: false,
             },
         )],
         map: None,
@@ -274,5 +280,52 @@ fn a_song_time_export_counts_the_hits_it_leaves_out_and_names_the_files_after_th
     );
     assert!(out.join("Song_drums.mid").is_file());
     let _: Value = r;
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_track_the_host_has_no_source_for_loses_every_hit_and_a_region_before_song_zero_makes_no_empty_spike_file() {
+    let (svc, sid, _dir, root) = opened("song_edge");
+    svc.set_export_time(Some(Arc::new(Fixed {
+        tracks: vec![
+            // no source of the host: every hit is left out and counted, the files keep the host's name
+            (
+                "Kick_In".into(),
+                SongTrack {
+                    regions: vec![],
+                    stem: Some("Kick Host".into()),
+                    hide_all: true,
+                },
+            ),
+            // a region that ends before song 0: no spike file, and the answer says why
+            (
+                "Snare_Top".into(),
+                SongTrack {
+                    regions: vec![SongRegion {
+                        start_mod: 0.0,
+                        dur_mod: 0.5,
+                        start_play: -1.0,
+                        dur_play: 0.5,
+                    }],
+                    stem: Some("Snare Host".into()),
+                    hide_all: false,
+                },
+            ),
+        ],
+        map: None,
+    })));
+    let out = root.join("o3");
+    std::fs::create_dir(&out).unwrap();
+    let o = ExportOpts::from_args(&json!({"dest": out.to_str().unwrap()})).unwrap();
+    let r = svc.export_all_opts(&sid, &o, None).unwrap();
+    assert_eq!(r["outside_song"]["Kick_In"], json!({"no_region": 3, "before_start": 0}));
+    assert!(out.join("Kick Host_spike.mid").is_file() && out.join("Kick Host_spike.wav").is_file());
+    assert!(!out.join("Snare Host_spike.wav").exists(), "no 0-frame file");
+    let errs = r["errors"].as_array().unwrap();
+    assert!(
+        errs.iter()
+            .any(|e| e["message"].as_str().unwrap_or("").contains("no spike file")),
+        "{errs:?}"
+    );
     std::fs::remove_dir_all(&root).unwrap();
 }

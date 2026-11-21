@@ -594,6 +594,15 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 .and_then(|(i, j)| Some((i.parse().ok()?, j.parse().ok()?)))
         })
         .collect();
+    // M1c1: `--shift-region <i>=<song seconds>` moves region i in playback time only (no new analysis round), in mode
+    // `delivery` after the page's report `delivery-ready`
+    let shifts: Vec<(usize, f64)> = args_list(rest, "--shift-region")
+        .iter()
+        .filter_map(|v| {
+            v.split_once('=')
+                .and_then(|(i, p)| Some((i.parse().ok()?, p.parse().ok()?)))
+        })
+        .collect();
     let region_spec = args_value(rest, "--region").and_then(|v| parse_region(&v).ok());
     let destroy_late: Option<usize> = args_value(rest, "--destroy-late").and_then(|v| v.parse().ok());
     let archive_window = args_value(rest, "--archive-window");
@@ -865,6 +874,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let boots_before = count_rows("page_report", Some("boot"));
             let names_before = count_rows("page_report", Some("names"));
             let mut names_handled = false;
+            let mut shift_handled = false;
+            let delivery_ready_before = count_rows("page_report", Some("delivery-ready"));
             let edits_before = count_rows("page_report", Some("edit"));
             let refuse_before = count_rows("page_report", Some("refuse"));
             let started_before = count_rows("page_report", Some("analyse-started"));
@@ -1088,6 +1099,15 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                             failed = Some(format!("no source for the edited track {name:?} or no --region"));
                             break;
                         }
+                    }
+                }
+                if mode == "delivery"
+                    && !shift_handled
+                    && count_rows("page_report", Some("delivery-ready")) > delivery_ready_before
+                {
+                    shift_handled = true;
+                    for (i, p) in &shifts {
+                        shift_region(doc.inst, doc.state, *i, *p);
                     }
                 }
                 if mode == "names" && !names_handled && count_rows("page_report", Some("names")) > names_before {

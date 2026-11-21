@@ -445,3 +445,45 @@ too. Names in tests are synthetic.
 - The drag evidence of the stages is the drag pasteboard of the real session (rows `drag_started`); there is no drop view and no stub
   dragging info in the test host. A real drop, and the check that the mouse monitor of #561 leaves a drag from the page alone and that the
   folder sheet gets its keys, are for the hand check sheet.
+
+## Round 2 (review of the first build)
+
+What changed after the review:
+
+- A clip that the user moves in the DAW exports at its new song position. A move in playback time alone starts no analysis round, so the
+  song position is read live; the slice of the source and its length come from the round (the hits belong to it). A round region with no live
+  region of the same slice is gone and is left out; a live region with no round entry uses its live values (`deliver::merge_regions`).
+  Stage `delivery` (part "moved") with the fault `stale-regions`.
+- A region that the host stretches in time maps a hit by `start_play + (t - start_mod) * dur_play / dur_mod`; the song end uses the play length.
+- The tempo of the process call is kept per sending instance and cleared when a document is created.
+- The context with the lowest `orderIndex` is read. The event count of the reader is capped at 100000 (the row says when it was hit). A call
+  from another thread does nothing.
+- Bar numbers: with bar 1 before song 0 the meter changes are counted from song 0; when song 0 lies inside a bar they are dropped with a reason.
+  A section that lies completely before song 0 does not refuse the map. A single sync point carries no tempo (a tempo needs two points), so
+  it still falls back; the note stays as it was.
+- File stems are numbered with the app's `file_name_key` and cut at 80 bytes on a character boundary.
+- A drag takes only files that this editor's exports or drag takes wrote. A request that timed out leaves an abandoned flag, so the queued job
+  starts no drag later. The folder sheet is refused at once when the window is not visible and ends after 10 minutes.
+- A track with no source of the host keeps the host name; every hit is left out and counted. A hit on the sample after the last region is kept
+  (the file gets one frame more). A region that ends before song 0 makes no spike file; the answer says so.
+- The dialog shows a clear warning line when the host's tempo changed (the bar positions of the MIDI file can be wrong; the times are right).
+
+Not proved by a stage (a hand check or a later ticket):
+
+- The real folder sheet, and the keys that the sheet gets.
+- The real mouse drag, with the key shield of #561 on; a drop view in the test host.
+- The ARA reading of the tempo (`musical.rs`): the test host has no content access controller, so only the conversion is tested. Whether the
+  reader is destroyed on every path was read in the code, not counted by the test host.
+- The faults `no-bext` and `stale-regions` of the table in section 6: `stale-regions` exists now; `no-bext` does not.
+- The `any-path` fault run ends with a 504 because the queued job never answered in time; the stage only needs "not 403".
+
+Hand check steps (for the owner, in a DAW):
+
+1. Open a session with three clips of different lengths that start at different song positions. Open the plugin on the clips and let the analysis finish.
+2. Open Export. Check the note under the options: it names where the tempo of the MIDI file comes from, and the line that files start at song position 0.
+3. Press Choose, pick an empty folder in the sheet. Check that the sheet takes the keyboard (arrow keys, Return, Escape) and that the DAW does not react.
+4. Press Export. Check the folder: one MIDI file and one WAV per track, named after the DAW tracks; Show in Finder opens the folder.
+5. Drag the MIDI tile onto an instrument track, at the session start. Check that each note sits on the hit it belongs to (zoom to samples on a loud hit).
+6. Drag the spike tile onto an audio track, at the session start. Check the same, and that the spike file does not start later than song position 0.
+7. Move a clip in the DAW, do not analyse again, export again: the notes and spikes follow the clip.
+8. Bounce the drag-in track, measure the offset against the clip in samples, and write it down.

@@ -680,9 +680,24 @@ pub fn write_spike_file_song(
     })?;
     let info = &wav.info;
     let format = spike_format(info.sample_format, info.bytes_per_sample);
-    let n_frames = end_s.map_or(info.n_frames, |e| {
+    let mut n_frames = end_s.map_or(info.n_frames, |e| {
         (e * f64::from(info.sample_rate)).ceil().max(0.0) as usize
     });
+    // a hit on the sample just after the end of the last region is kept, as the MIDI file keeps it: one frame longer
+    if let Some(last) = times
+        .iter()
+        .map(|t| (t * f64::from(info.sample_rate)).round())
+        .filter(|s| *s >= 0.0)
+        .reduce(f64::max)
+    {
+        n_frames = n_frames.max(last as usize + 1);
+    }
+    if n_frames == 0 {
+        return Err(AppError::bad(format!(
+            "{}: no region of the track lies after song position 0, so there is no spike file",
+            source.display()
+        )));
+    }
     write_spikes_song(out, info.sample_rate, n_frames, times, format)
         .map_err(|e| AppError::internal(format!("{}: {e}", out.display())))?;
     let size = std::fs::metadata(out).map_or(0, |m| m.len());
@@ -1049,7 +1064,17 @@ impl Service {
             let host = song_time.as_ref().and_then(|t| t.track(&name));
             let (events, song) = match (events, &host) {
                 (Ok(ev), Some(h)) => {
-                    let (mapped, counts) = to_song(&ev, &h.regions);
+                    let (mapped, counts) = if h.hide_all {
+                        (
+                            Vec::new(),
+                            crate::export_song::SongCounts {
+                                no_region: ev.len(),
+                                before_start: 0,
+                            },
+                        )
+                    } else {
+                        to_song(&ev, &h.regions)
+                    };
                     (
                         Ok(mapped),
                         Some(SongJob {

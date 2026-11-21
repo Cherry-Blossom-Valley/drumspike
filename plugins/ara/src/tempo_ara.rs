@@ -71,7 +71,12 @@ pub fn tempo_from_ara(entries: &[Entry], bars: &[Bar]) -> Result<Converted, &'st
     let n = e.len();
     // the tempo of section i (between point i and i + 1), i in 0..n-1
     let tempo: Vec<f64> = (0..n - 1).map(|i| section_bpm(e[i], e[i + 1])).collect();
-    if tempo.iter().any(|b| !(4.0..=1000.0).contains(b)) {
+    // a section that lies completely before song time 0 plays no part in the file: only the others must be in range
+    if tempo
+        .iter()
+        .enumerate()
+        .any(|(i, b)| e[i + 1].t > 0.0 && !(4.0..=1000.0).contains(b))
+    {
         return Err("tempo-range");
     }
     let mut notes = Vec::new();
@@ -97,37 +102,69 @@ pub fn tempo_from_ara(entries: &[Entry], bars: &[Bar]) -> Result<Converted, &'st
                 None => map.bpm = tempo[i],
             }
         } else {
-            map.steps.push(TempoStep { t: e[i].t, bpm: tempo[i] });
+            map.steps.push(TempoStep {
+                t: e[i].t,
+                bpm: tempo[i],
+            });
         }
         cur = tempo[i];
     }
     if merged {
         notes.push("steps-merged");
     }
-    // the bar signatures: the first one is bar 1
+    // the bar signatures: the first one is bar 1. Bar numbers are the song's; the file counts bars from song time 0, so
+    // when bar 1 lies before 0 every number is shifted by the whole bars before 0 (not whole: the changes are dropped)
     let mut b: Vec<Bar> = bars.to_vec();
     b.sort_by(|x, y| x.q.total_cmp(&y.q));
     if let Some(first) = b.first().copied() {
         if valid_meter(first.num, first.den) && first.q.is_finite() {
-            map.meter = (first.num as u8, first.den as u8);
             let bar1 = time_of_quarter(&e, first.q);
-            if bar1 < 0.0 {
-                notes.push("bar1-before-start");
-            } else {
-                map.bar1_s = bar1;
-            }
-            let (mut bar, mut cur_q, mut cur_m) = (1u32, first.q, (first.num, first.den));
+            // the song bars of the signatures
+            let mut song: Vec<(f64, i32, i32, f64)> = vec![(1.0, first.num, first.den, first.q)];
             for s in b.iter().skip(1) {
-                let len = 4.0 * f64::from(cur_m.0) / f64::from(cur_m.1);
-                let bars_between = (s.q - cur_q) / len;
-                if !valid_meter(s.num, s.den) || (bars_between - bars_between.round()).abs() > 1e-6 || bars_between < 0.5 {
+                let (bar, n0, d0, q0) = *song.last().unwrap_or(&(1.0, first.num, first.den, first.q));
+                let bars_between = (s.q - q0) / (4.0 * f64::from(n0) / f64::from(d0));
+                if !valid_meter(s.num, s.den)
+                    || (bars_between - bars_between.round()).abs() > 1e-6
+                    || bars_between < 0.5
+                {
                     notes.push("bars-not-whole");
                     break;
                 }
-                bar += bars_between.round() as u32;
-                map.changes.push(MeterChange { bar, num: s.num as u8, den: s.den as u8 });
-                cur_q = s.q;
-                cur_m = (s.num, s.den);
+                song.push((bar + bars_between.round(), s.num, s.den, s.q));
+            }
+            let mut shift = 0.0;
+            let mut usable = true;
+            if bar1 < 0.0 {
+                notes.push("bar1-before-start");
+                let q_at0 = {
+                    let i = e.partition_point(|x| x.t <= 0.0).clamp(1, n - 1);
+                    e[i - 1].q + (0.0 - e[i - 1].t) * (e[i].q - e[i - 1].q) / (e[i].t - e[i - 1].t)
+                };
+                let (bar, n0, d0, q0) = *song.iter().rfind(|x| x.3 <= q_at0).unwrap_or(&song[0]);
+                let bars_to_0 = bar - 1.0 + (q_at0 - q0) / (4.0 * f64::from(n0) / f64::from(d0));
+                if (bars_to_0 - bars_to_0.round()).abs() > 1e-6 {
+                    notes.push("bar1-before-start-not-whole");
+                    usable = false;
+                } else {
+                    shift = bars_to_0.round();
+                }
+            } else {
+                map.bar1_s = bar1;
+            }
+            if usable {
+                // the meter in force at the file's bar 1, then the changes after it
+                let at1 = song.iter().rfind(|x| x.0 - shift <= 1.0).unwrap_or(&song[0]);
+                map.meter = (at1.1 as u8, at1.2 as u8);
+                for x in song.iter().filter(|x| x.0 - shift > 1.0) {
+                    map.changes.push(MeterChange {
+                        bar: (x.0 - shift) as u32,
+                        num: x.1 as u8,
+                        den: x.2 as u8,
+                    });
+                }
+            } else {
+                map.meter = (first.num as u8, first.den as u8);
             }
         } else {
             notes.push("bars-invalid");
@@ -165,14 +202,23 @@ pub fn choose(ara: Option<&Converted>, ara_reason: &str, transport: Option<(f64,
     }
     if let Some((bpm, varies)) = transport.filter(|(b, _)| (4.0..=1000.0).contains(b)) {
         return Answer {
-            map: Some(TempoMap { bpm, ..TempoMap::default() }),
+            map: Some(TempoMap {
+                bpm,
+                ..TempoMap::default()
+            }),
             source: if varies { "transport-varies" } else { "transport" },
             bpm,
             steps: 0,
             reason: ara_reason.to_string(),
         };
     }
-    Answer { map: None, source: "none", bpm: 120.0, steps: 0, reason: ara_reason.to_string() }
+    Answer {
+        map: None,
+        source: "none",
+        bpm: 120.0,
+        steps: 0,
+        reason: ara_reason.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -204,7 +250,11 @@ mod tests {
         assert_eq!((c.map.bpm, c.map.steps.len()), (120.0, 0));
         // the tempo at song 0 is the section that holds it, here the second one
         let c = tempo_from_ara(&[e(-4.0, -4.0), e(-1.0, -1.0), e(3.0, 7.0)], &[]).unwrap();
-        assert_eq!((c.map.bpm, c.map.steps.len()), (120.0, 0), "the second section holds song 0");
+        assert_eq!(
+            (c.map.bpm, c.map.steps.len()),
+            (120.0, 0),
+            "the second section holds song 0"
+        );
     }
 
     #[test]
@@ -226,24 +276,128 @@ mod tests {
     fn bar_signatures_give_the_meter_the_changes_and_the_place_of_bar_one() {
         let bars = [
             Bar { num: 4, den: 4, q: 4.0 },
-            Bar { num: 3, den: 4, q: 20.0 },
-            Bar { num: 7, den: 8, q: 29.0 },
+            Bar {
+                num: 3,
+                den: 4,
+                q: 20.0,
+            },
+            Bar {
+                num: 7,
+                den: 8,
+                q: 29.0,
+            },
         ];
         let c = tempo_from_ara(&two_tempos(), &bars).unwrap();
         assert_eq!(c.map.meter, (4, 4));
         assert!((c.map.bar1_s - 2.0).abs() < 1e-12, "quarter 4 at 120 BPM is 2 s");
         assert_eq!(
             c.map.changes,
-            vec![MeterChange { bar: 5, num: 3, den: 4 }, MeterChange { bar: 8, num: 7, den: 8 }]
+            vec![
+                MeterChange { bar: 5, num: 3, den: 4 },
+                MeterChange { bar: 8, num: 7, den: 8 }
+            ]
         );
     }
 
     #[test]
     fn bar_one_before_the_start_stays_at_zero_and_a_split_bar_drops_the_rest() {
-        let c = tempo_from_ara(&two_tempos(), &[Bar { num: 4, den: 4, q: -8.0 }, Bar { num: 3, den: 4, q: 1.0 }]).unwrap();
+        let c = tempo_from_ara(
+            &two_tempos(),
+            &[
+                Bar {
+                    num: 4,
+                    den: 4,
+                    q: -8.0,
+                },
+                Bar { num: 3, den: 4, q: 1.0 },
+            ],
+        )
+        .unwrap();
         assert_eq!(c.map.bar1_s, 0.0);
         assert!(c.notes.contains(&"bar1-before-start") && c.notes.contains(&"bars-not-whole"));
         assert!(c.map.changes.is_empty());
+    }
+
+    #[test]
+    fn with_bar_one_before_the_start_the_changes_sit_on_the_bars_counted_from_song_zero() {
+        // 4/4 from quarter -8 (two bars before song 0, 120 BPM), 3/4 from quarter 16, 7/8 from quarter 25
+        let bars = [
+            Bar {
+                num: 4,
+                den: 4,
+                q: -8.0,
+            },
+            Bar {
+                num: 3,
+                den: 4,
+                q: 16.0,
+            },
+            Bar {
+                num: 7,
+                den: 8,
+                q: 25.0,
+            },
+        ];
+        let c = tempo_from_ara(&two_tempos(), &bars).unwrap();
+        // song bars: 3/4 is bar 7, 7/8 is bar 10; two bars lie before song 0: file bars 5 and 8
+        assert_eq!(c.map.meter, (4, 4));
+        assert_eq!(c.map.bar1_s, 0.0);
+        assert_eq!(
+            c.map.changes,
+            vec![
+                MeterChange { bar: 5, num: 3, den: 4 },
+                MeterChange { bar: 8, num: 7, den: 8 }
+            ]
+        );
+        // song 0 in the middle of a bar: the changes are dropped with a reason
+        let mid = tempo_from_ara(
+            &two_tempos(),
+            &[
+                Bar {
+                    num: 4,
+                    den: 4,
+                    q: -7.0,
+                },
+                Bar {
+                    num: 3,
+                    den: 4,
+                    q: 17.0,
+                },
+            ],
+        )
+        .unwrap();
+        assert!(mid.notes.contains(&"bar1-before-start-not-whole") && mid.map.changes.is_empty());
+        // the meter in force at song 0 becomes the start meter when a change lies before 0
+        let c2 = tempo_from_ara(
+            &two_tempos(),
+            &[
+                Bar {
+                    num: 4,
+                    den: 4,
+                    q: -8.0,
+                },
+                Bar {
+                    num: 2,
+                    den: 4,
+                    q: -4.0,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(c2.map.meter, (2, 4));
+        assert!(c2.map.changes.is_empty());
+    }
+
+    #[test]
+    fn a_section_that_lies_completely_before_song_zero_does_not_refuse_the_map() {
+        // the first section runs at 2000 BPM before song 0, the rest is a normal 120 BPM
+        let c = tempo_from_ara(&[e(-1.0, -1.0), e(-0.9, 2.3), e(10.0, 22.0)], &[]);
+        assert!(c.is_ok(), "{c:?}");
+        // a section that reaches past 0 and is out of range still refuses
+        assert_eq!(
+            tempo_from_ara(&[e(-0.001, 0.0), e(5.0, 100.0)], &[]),
+            Err("tempo-range")
+        );
     }
 
     #[test]
@@ -256,7 +410,11 @@ mod tests {
         assert_eq!(choose(None, "x", Some((97.3, true))).source, "transport-varies");
         let n = choose(None, "no-controller", None);
         assert_eq!((n.source, n.map), ("none", None));
-        assert_eq!(choose(None, "x", Some((0.5, false))).source, "none", "a tempo out of range is no tempo");
+        assert_eq!(
+            choose(None, "x", Some((0.5, false))).source,
+            "none",
+            "a tempo out of range is no tempo"
+        );
     }
 
     #[test]
@@ -283,8 +441,12 @@ mod tests {
         let c = tempo_from_ara(&[e(0.0, 0.0), e(60.0, 97.3), e(120.0, 194.6)], &[]).unwrap();
         assert!((c.map.bpm - 97.3).abs() < 1e-9);
         let ppq = export_ppq(48_000, &c.map, 120.0);
-        let ev: Vec<drumspike_core::midi::MidiEvent> =
-            (0..100).map(|k| drumspike_core::midi::MidiEvent { t: f64::from(k) * 0.37, v: 90 }).collect();
+        let ev: Vec<drumspike_core::midi::MidiEvent> = (0..100)
+            .map(|k| drumspike_core::midi::MidiEvent {
+                t: f64::from(k) * 0.37,
+                v: 90,
+            })
+            .collect();
         let w = drumspike_core::midi::worst_error_samples(&ev, ppq, &c.map, 120.0, 48_000).unwrap();
         assert!(w <= 1.0, "the grid is finer than 2 samples at 97 BPM: {w}");
     }

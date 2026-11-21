@@ -113,12 +113,19 @@ struct Slot {
 
 /// M1c1: the tempo of the process call (CLAP `transport.tempo` with `CLAP_TRANSPORT_HAS_TEMPO`): the newest BPM,
 /// and whether more than one value came. Atomics only, no allocation: the audio thread writes them in `note`.
+/// Keyed by the instance that sends it, like the transport slot: another instance that sends a tempo takes the slot
+/// and starts again, so two instances never mix.
+static TEMPO_OWNER: AtomicU64 = AtomicU64::new(0);
 static TEMPO_BITS: AtomicU64 = AtomicU64::new(0);
 static TEMPO_VARIES: AtomicU32 = AtomicU32::new(0);
 
-fn store_tempo(flags: u32, bpm: f64) {
+fn store_tempo(id: u64, flags: u32, bpm: f64) {
     if flags & clap_sys::events::CLAP_TRANSPORT_HAS_TEMPO == 0 || !bpm.is_finite() || bpm <= 0.0 {
         return;
+    }
+    if TEMPO_OWNER.swap(id, Ordering::Relaxed) != id {
+        TEMPO_VARIES.store(0, Ordering::Relaxed);
+        TEMPO_BITS.store(0, Ordering::Relaxed);
     }
     let old = TEMPO_BITS.swap(bpm.to_bits(), Ordering::Relaxed);
     if old != 0 && (f64::from_bits(old) - bpm).abs() > 1e-6 {
@@ -134,6 +141,7 @@ pub fn host_tempo() -> Option<(f64, bool)> {
 
 /// For the tests and a new document: forget the tempo.
 pub fn reset_tempo() {
+    TEMPO_OWNER.store(0, Ordering::Relaxed);
     TEMPO_BITS.store(0, Ordering::Relaxed);
     TEMPO_VARIES.store(0, Ordering::Relaxed);
 }
@@ -228,7 +236,7 @@ pub unsafe fn note(process: *const clap_sys::process::clap_process, rate: f64, i
     } else {
         0
     };
-    store_tempo(t.flags, t.tempo);
+    store_tempo(id, t.flags, t.tempo);
     store_at(id, id, pos, t.flags & !FLAG_CLEARED, pr.frames_count, rate, now_us());
 }
 
@@ -1116,15 +1124,22 @@ mod tests {
         reset_tempo();
         assert_eq!(host_tempo(), None);
         let has = clap_sys::events::CLAP_TRANSPORT_HAS_TEMPO;
-        store_tempo(0, 90.0); // no tempo flag: nothing is stored
+        store_tempo(1, 0, 90.0); // no tempo flag: nothing is stored
         assert_eq!(host_tempo(), None);
-        store_tempo(has, 97.3);
-        store_tempo(has, 97.3);
+        store_tempo(1, has, 97.3);
+        store_tempo(1, has, 97.3);
         assert_eq!(host_tempo(), Some((97.3, false)));
-        store_tempo(has, 100.0);
+        store_tempo(1, has, 100.0);
         assert_eq!(host_tempo(), Some((100.0, true)));
-        store_tempo(has, f64::NAN);
-        assert_eq!(host_tempo(), Some((100.0, true)), "a tempo that is no number is ignored");
+        store_tempo(1, has, f64::NAN);
+        assert_eq!(
+            host_tempo(),
+            Some((100.0, true)),
+            "a tempo that is no number is ignored"
+        );
+        // a second instance takes the slot and starts again: the first one's varying tempo is not carried over
+        store_tempo(2, has, 120.0);
+        assert_eq!(host_tempo(), Some((120.0, false)));
         reset_tempo();
     }
 

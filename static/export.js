@@ -92,8 +92,12 @@ function exRender() {   // the controls from EX; the Export button and the tiles
 /* #560: in a DAW the dialog says where the tempo of the MIDI comes from, how many exported tracks have a time-stretched region (the
    files are made all the same) and that the audio-spike types come later. With the mode off nothing here shows. */
 function exHostNote() {
-  const el = $("#exHostNote");
-  if (!hostMode()) { el.classList.add("hidden"); return; }
+  const el = $("#exHostNote"), warn = $("#exHostWarn");
+  if (!hostMode()) { el.classList.add("hidden"); warn.classList.add("hidden"); return; }
+  /* the tempo of the host changed while it played and the file has one tempo: a clear line, no block */
+  const varies = EX.midi && EX.hostTempo && EX.hostTempo.source === "transport-varies";
+  warn.textContent = varies ? "The host's tempo changes, but the MIDI file has one tempo: the bar positions of the MIDI file can be wrong. The times in seconds are right." : "";
+  warn.classList.toggle("hidden", !varies);
   const h = EX.hostTempo || { source: "none" }, parts = [];
   if (EX.midi) parts.push(h.source === "ara" ? `MIDI tempo: the tempo map of the host (${h.steps + 1} tempo${h.steps ? "s" : ""})` :
     h.source === "transport" ? `MIDI tempo: one tempo from the host, ${Math.round(h.bpm * 100) / 100} BPM, no tempo map` :

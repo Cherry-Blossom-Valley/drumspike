@@ -230,6 +230,13 @@ def test_the_export_dialog_works_in_host_mode_with_the_host_choices_only(host_ap
     host_app.wait_for_function("() => !document.querySelector('#exHostNote').classList.contains('hidden')")
     text = note.inner_text()
     assert "none from the host" in text and "song position 0" in text and "later part" in text, text
+    # a tempo that varied in the host's process calls: a clear warning line, the dialog stays usable
+    assert host_app.evaluate("() => document.querySelector('#exHostWarn').classList.contains('hidden')") is True
+    host_app.evaluate("() => { EX.hostTempo = { source: 'transport-varies', bpm: 97.3, steps: 0, stretched: [] }; exRender(); }")
+    warn = host_app.locator("#exHostWarn")
+    assert warn.is_visible() and "bar positions of the MIDI file can be wrong" in warn.inner_text() and "times in seconds are right" in warn.inner_text()
+    host_app.evaluate("() => { EX.hostTempo = { source: 'none', bpm: 120, steps: 0, stretched: [] }; exRender(); }")
+    assert host_app.evaluate("() => document.querySelector('#exHostWarn').classList.contains('hidden')") is True
     host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'", timeout=60000)
     box = host_app.locator("#exDragMidi").bounding_box()
     host_app.mouse.move(box["x"] + 5, box["y"] + 5)

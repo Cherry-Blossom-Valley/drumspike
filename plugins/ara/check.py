@@ -3509,7 +3509,7 @@ def stage_switches_fault() -> bool:
 
 # ---- review round 2, item 9: no unwrap and no expect in the non-test code of the plugin
 
-UNWRAP_FILES = ["src/editor.rs", "src/lib.rs", "src/playback.rs", "src/service.rs", "src/state.rs", "src/transport.rs", "src/wav.rs"]
+UNWRAP_FILES = ["src/deliver.rs", "src/editor.rs", "src/lib.rs", "src/musical.rs", "src/playback.rs", "src/service.rs", "src/state.rs", "src/tempo_ara.rs", "src/transport.rs", "src/wav.rs"]
 UNWRAP_PATTERN = re.compile(r"\.(unwrap|expect)\s*\(|\.unwrap_unchecked\s*\(")
 
 
@@ -6726,7 +6726,7 @@ def wav_spikes(path: Path) -> dict:
     return {"rate": rate, "frames": len(xs) // (ch if tag == 3 else 1), "tref": tref, "starts": starts}
 
 
-def delivery_run(label: str, env: dict | None = None, pressed: bool = True, region: tuple | None = DELIVERY_REGION) -> dict:
+def delivery_run(label: str, env: dict | None = None, pressed: bool = True, region: tuple | None = DELIVERY_REGION, shift: float | None = None) -> dict:
     out_dir = OUT / f"delivery-out-{label}"
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -6737,6 +6737,8 @@ def delivery_run(label: str, env: dict | None = None, pressed: bool = True, regi
         e["DS_ARA_DRAG_PRESSED"] = "1"
     e.update(env or {})
     args = ["--regions-all", ",".join(str(x) for x in region)] if region else ["--no-regions"]
+    if shift is not None:   # the host moves every region in playback time after the page has booted: no new analysis round
+        args += ["--shift-region", *[f"{i}={shift}" for i in range(4)]]
     rc, summary, rows = run_phase(f"delivery-{label}", "delivery", CLAP, e, args + ["--arg", str(OUT)])
     reps = page_reports(rows, "delivery")
     return {"rc": rc, "rows": rows, "rep": reps[0] if reps else {}, "dir": out_dir.resolve()}
@@ -6817,6 +6819,10 @@ def stage_delivery() -> bool:
     d = delivery_run("clap")
     d["region"] = DELIVERY_REGION
     ok = print_parts("", delivery_parts(d))
+    # D1 of the review: a clip moved in the host (playback time only, no new round) exports at its NEW song position
+    dm = delivery_run("clap-moved", shift=30.0)
+    dm["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
+    ok = print_parts("-moved", delivery_parts(dm), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
     d2 = delivery_run("clap-noregion", region=None)
     d2["region"] = None
     ok = print_parts("-no-region", delivery_parts(d2), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
@@ -6844,6 +6850,9 @@ def stage_delivery_fault() -> bool:
         d = delivery_run(f"fault-{label}", env, pressed)
         d["region"] = DELIVERY_REGION
         ok = fault_part(f"delivery-fault-{label}", delivery_parts(d), part, what) and ok
+    d = delivery_run("fault-stale-regions", {"DS_ARA_DELIVERY_FAULT": "stale-regions"}, shift=30.0)
+    d["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
+    ok = fault_part("delivery-fault-stale-regions", delivery_parts(d), "delivery-midi-positions", "the song position of the last round is used: a moved clip exports at its old place") and ok
     d = delivery_run("fault-no-button-check", {"DS_ARA_EDITOR_FAULT": "no-button-check"}, pressed=False)
     r = d["rep"]
     ok = pass_fail("delivery-fault-no-button-check", r.get("drag_ok") is True,

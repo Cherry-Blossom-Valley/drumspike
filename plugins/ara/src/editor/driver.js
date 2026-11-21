@@ -393,8 +393,10 @@
     var inv = window.__TAURI__.core.invoke, sid = S.sid, out = { names: names };
     function err(e) { return { code: e && e.code, message: e && e.message }; }
     var png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
-    out.events = {};
-    for (var i = 0; i < names.length; i++) out.events[names[i]] = JSON.parse((await raw("events_get", { sid: sid, name: names[i] })).text).events;
+    // the host may move a region in playback time now (no new round): the export must follow it
+    post({ kind: "delivery-ready" });
+    await new Promise(function (r) { setTimeout(r, 2500); });
+    out.events = {};    for (var i = 0; i < names.length; i++) out.events[names[i]] = JSON.parse((await raw("events_get", { sid: sid, name: names[i] })).text).events;
     out.tempo = await inv("plugin_host_tempo", {});
     out.display = {};
     var tg = JSON.parse((await raw("tracks_get", { sid: sid })).text);

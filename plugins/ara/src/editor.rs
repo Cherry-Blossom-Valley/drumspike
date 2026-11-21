@@ -103,6 +103,16 @@ fn on_main_thread() -> bool {
     unsafe { pthread_main_np() == 1 }
 }
 
+/// For the callbacks of the host in `lib.rs`: true on the host's main thread.
+pub(crate) fn on_main_thread_pub() -> bool {
+    on_main_thread()
+}
+
+/// A call that had to run on the main thread came from another thread: counted and noted, nothing else.
+pub(crate) fn note_off_main(what: &str) {
+    eprintln!("drumspike-ara: {what} was called off the main thread and did nothing");
+}
+
 /// Count one use of the web view and note when it is not on the main thread.
 fn main_check(what: &'static str) {
     MAIN_CHECKS.fetch_add(1, Ordering::SeqCst);
@@ -221,6 +231,8 @@ pub struct Backend {
     pub tempo: Arc<dyn Fn() -> crate::tempo_ara::Answer + Send + Sync>,
     /// M1c1: the tracks with a region that the host stretches in time.
     pub stretched: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// M1c1: the regions for the song-time export (see `DocShared::export_region_list`).
+    pub export_regions: Arc<dyn Fn() -> Vec<(usize, crate::deliver::ExportRegion)> + Send + Sync>,
 }
 
 /// The source indexes of a track and their longest length in seconds.
@@ -268,6 +280,8 @@ struct Shared {
     /// M1c1: the folders (canonical) that the user chose in the sheet of this editor session: the only `dest` the
     /// export may write to outside the document folder.
     chosen: Mutex<Vec<PathBuf>>,
+    /// The files that this editor's exports and drag takes wrote (canonical): the only files a drag may take.
+    written: Mutex<std::collections::HashSet<PathBuf>>,
     /// A folder sheet is open.
     picking: AtomicBool,
     /// The sheet panel while it is shown (0: none), so the close of the editor can end it.
@@ -1028,8 +1042,11 @@ Until then NOTICE of the repository and the licence table in plugins/ara/README.
         "plugin_pick_folder" => pick_folder_command(sh, args),
         "plugin_host_tempo" => {
             let a = (sh.backend.tempo)();
-            Answer::json(200, &json!({"source": a.source, "bpm": a.bpm, "steps": a.steps, "reason": a.reason,
-                "stretched": (sh.backend.stretched)()}))
+            Answer::json(
+                200,
+                &json!({"source": a.source, "bpm": a.bpm, "steps": a.steps, "reason": a.reason,
+                "stretched": (sh.backend.stretched)()}),
+            )
         }
         c if c.starts_with("selftest_") => Answer::err(
             404,
@@ -1037,6 +1054,28 @@ Until then NOTICE of the repository and the licence table in plugins/ara/README.
         ),
         _ => return None,
     })
+}
+
+/// Remember the files that an export or a drag take answered (`files`, `midi_file`): the drag may take only these.
+fn note_written(sh: &Arc<Shared>, answer: &Value) {
+    let mut set = sh.written.lock().unwrap_or_else(|e| e.into_inner());
+    let mut add = |p: &str| {
+        if let Ok(c) = std::fs::canonicalize(p) {
+            set.insert(c);
+        }
+    };
+    for f in answer
+        .get("files")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        add(f);
+    }
+    if let Some(m) = answer.get("midi_file").and_then(Value::as_str) {
+        add(m);
+    }
 }
 
 /// `plugin_pick_folder {title, start}`: the folder sheet on the window of the plugin view (M1c1). The answer is the
@@ -1059,7 +1098,11 @@ fn pick_folder_command(sh: &Arc<Shared>, args: &Value) -> Answer {
     };
     if let Some(v) = crate::test_switch("DS_ARA_PICK_DIR").ok().filter(|v| !v.is_empty()) {
         // the test host has no hand to click the sheet: the switch answers for it
-        return if v == "cancel" { Answer::json(200, &Value::Null) } else { add(PathBuf::from(v)) };
+        return if v == "cancel" {
+            Answer::json(200, &Value::Null)
+        } else {
+            add(PathBuf::from(v))
+        };
     }
     if sh.picking.swap(true, Ordering::SeqCst) {
         return Answer::err(409, "the folder dialog is open");
@@ -1080,17 +1123,28 @@ fn pick_folder_command(sh: &Arc<Shared>, args: &Value) -> Answer {
             })
         };
         match r {
-            Ok(panel) => sh2.sheet.store(objc2::rc::Retained::as_ptr(&panel) as usize, Ordering::SeqCst),
+            Ok(panel) => sh2
+                .sheet
+                .store(objc2::rc::Retained::as_ptr(&panel) as usize, Ordering::SeqCst),
             Err(e) => {
                 let _ = tx.send(Err(e));
             }
         }
     }));
+    let started = std::time::Instant::now();
     let got = loop {
         match rx.recv_timeout(std::time::Duration::from_millis(250)) {
             Ok(r) => break r,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !sh.closed.load(Ordering::SeqCst) => {}
-            Err(_) => break Ok(None),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                if !crate::deliver::sheet_wait_over(started.elapsed(), sh.closed.load(Ordering::SeqCst)) => {}
+            Err(_) => {
+                // the limit or a closed editor: end the sheet, so that a later pick can show one
+                let sh4 = Arc::clone(sh);
+                on_main(Box::new(move || unsafe {
+                    crate::deliver::end_sheet(sh4.sheet.swap(0, Ordering::SeqCst))
+                }));
+                break Ok(None);
+            }
         }
     };
     sh.picking.store(false, Ordering::SeqCst);
@@ -1105,7 +1159,11 @@ fn pick_folder_command(sh: &Arc<Shared>, args: &Value) -> Answer {
 /// file directly in `Exports/` of the document or in a folder chosen in this editor session. The session starts on the
 /// main thread, only while the left mouse button is down. The answer comes when the session has started.
 fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
-    let Some(items) = args.get("item").and_then(Value::as_array).filter(|a| !a.is_empty() && a.len() <= 64) else {
+    let Some(items) = args
+        .get("item")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty() && a.len() <= 64)
+    else {
         return Answer::err(400, "item must list 1 to 64 file paths");
     };
     let Some(png) = args
@@ -1125,9 +1183,13 @@ fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
             }
         }
     }
+    let written = sh.written.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let mut files = Vec::new();
     for it in items {
-        match it.as_str().and_then(|p| crate::deliver::drag_path_ok(&roots, p)) {
+        match it
+            .as_str()
+            .and_then(|p| crate::deliver::drag_path_ok(&roots, &written, p))
+        {
             Some(p) => files.push(p),
             None => {
                 return Answer::err(
@@ -1139,7 +1201,13 @@ fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
     }
     let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<String>, String>>();
     let (sh2, files2) = (Arc::clone(sh), files.clone());
+    // set when the request gave up waiting: a job that the main thread meets later starts no drag
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let abandoned2 = Arc::clone(&abandoned);
     on_main(Box::new(move || {
+        if abandoned2.load(Ordering::SeqCst) {
+            return;
+        }
         main_check("file drag");
         if sh2.closed.load(Ordering::SeqCst) {
             let _ = tx.send(Err("the editor is closed".into()));
@@ -1176,7 +1244,10 @@ fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
             Answer::json(200, &Value::Null)
         }
         Ok(Err(e)) => Answer::err(409, e),
-        Err(_) => Answer::err(504, "the host's main thread did not start the drag"),
+        Err(_) => {
+            abandoned.store(true, Ordering::SeqCst);
+            Answer::err(504, "the host's main thread did not start the drag")
+        }
     }
 }
 
@@ -1474,7 +1545,7 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
     if cmd.starts_with("export_") {
         // M1c1: the export takes the song time base of the host (the page cannot set it)
         svc.set_export_time(Some(Arc::new(crate::deliver::HostTime {
-            regions: Arc::clone(&sh.backend.regions),
+            regions: Arc::clone(&sh.backend.export_regions),
             track_info: Arc::clone(&sh.backend.track_info),
             names: Arc::clone(&sh.backend.display_names),
             tempo: Arc::clone(&sh.backend.tempo),
@@ -1485,6 +1556,11 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
         Some(Err(e)) => Answer::error(&e),
         Some(Ok(mut reply)) => {
             changed_after(sh, &svc, cmd, &args, &reply);
+            if matches!(cmd, "export_all" | "export_drag_take") {
+                if let Reply::Json(v) = &reply {
+                    note_written(sh, v);
+                }
+            }
             if matches!(cmd, "tracks_get" | "project_get") {
                 if let Reply::Json(v) = &mut reply {
                     add_display_names(v, &(sh.backend.display_names)());
@@ -1747,6 +1823,7 @@ impl Editor {
             refused_row: [AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false)],
             view: (&*self.webview.webview()) as *const wry::WryWebView as usize,
             chosen: Mutex::new(Vec::new()),
+            written: Mutex::new(std::collections::HashSet::new()),
             picking: AtomicBool::new(false),
             sheet: AtomicUsize::new(0),
         });
@@ -1948,6 +2025,7 @@ fn backend_of(plugin: &Plugin) -> Backend {
             display_names: Arc::new(std::collections::HashMap::new),
             tempo: Arc::new(|| crate::tempo_ara::choose(None, "no-document", None)),
             stretched: Arc::new(Vec::new),
+            export_regions: Arc::new(Vec::new),
         },
     }
 }

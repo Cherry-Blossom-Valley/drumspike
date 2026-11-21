@@ -1061,6 +1061,28 @@ unsafe fn move_region(inst: Inst, state: *mut HostState, i: usize, j: usize) {
     println!("{{\"event\":\"host_region_moved\",\"region\":{i},\"sequence\":{j}}}");
 }
 
+/// M1c1: region `i` moves to song position `play` (its source slice and length stay): an update in playback time alone.
+unsafe fn shift_region(inst: Inst, state: *mut HostState, i: usize, play: f64) {
+    let st = &mut *state;
+    let (Some(reg), Some(meta)) = (st.regions.get(i).copied(), st.region_meta.get_mut(i)) else {
+        eprintln!("--shift-region {i}: no such region");
+        return;
+    };
+    let (a, d, _) = meta.times;
+    meta.times = (a, d, play);
+    let props = playback_props_for(&*state, i, a, d, play);
+    let dc = iface_of(inst);
+    if let Some(f) = dc.beginEditing {
+        f(dc_ref_of(inst));
+    }
+    (dc.updatePlaybackRegionProperties
+        .expect("updatePlaybackRegionProperties"))(dc_ref_of(inst), reg, &props);
+    if let Some(f) = dc.endEditing {
+        f(dc_ref_of(inst));
+    }
+    println!("{{\"event\":\"host_region_shifted\",\"region\":{i},\"play\":{play}}}");
+}
+
 /// The properties of region `i` with the sequence and the name it was made with (M1b10): an update
 /// that left them out would move the region to no sequence. The name pointer lives in `state`.
 fn playback_props_for(state: &HostState, i: usize, a: f64, d: f64, p: f64) -> ARAPlaybackRegionProperties {

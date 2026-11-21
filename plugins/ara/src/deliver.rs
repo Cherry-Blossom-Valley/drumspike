@@ -5,7 +5,7 @@
 //! check of a `dest`, the check of a drag path) and the two parts that touch AppKit (the sheet and the drag session,
 //! both on the host's main thread only).
 
-use crate::editor::{RegionsFn, TrackInfoFn};
+use crate::editor::TrackInfoFn;
 use crate::tempo_ara::Answer;
 use drumspike_app::export_song::{ExportTime, SongRegion, SongTrack};
 use drumspike_core::tempo::TempoMap;
@@ -14,12 +14,89 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// One playback region for the export: the slice of the source `[start_mod, start_mod + dur_mod)` (from the round of the
+/// analysis, so it belongs to the hits) sits in the song from `start_play` for `dur_play` seconds (live).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExportRegion {
+    pub start_mod: f64,
+    pub dur_mod: f64,
+    pub start_play: f64,
+    pub dur_play: f64,
+}
+
+pub type ExportRegionsFn = Arc<dyn Fn() -> Vec<(usize, ExportRegion)> + Send + Sync>;
+
+/// The regions of one source for the export (D1 of the review): `round` is what the last analysis round saw (`None`:
+/// no round yet), `live` the regions the host holds now as `(id, record)`, `lens` the length in the song by region id.
+/// The position in the source comes from the round (the hits belong to it), the position in the song from the live
+/// region of the same slice; a round region with no live one is gone and left out; a live region with no round entry
+/// uses its own values. `stale` (the fault run) takes the round alone, as the notes of #532 do.
+#[must_use]
+pub fn merge_regions(
+    round: Option<&[crate::service::RegionRec]>,
+    live: &[(u64, crate::service::RegionRec)],
+    lens: &HashMap<u64, f64>,
+    stale: bool,
+) -> Vec<ExportRegion> {
+    let play = |id: u64, rec: &crate::service::RegionRec| lens.get(&id).copied().unwrap_or(rec.dur_mod);
+    let Some(round) = round else {
+        return live
+            .iter()
+            .map(|(id, r)| ExportRegion {
+                start_mod: r.start_mod,
+                dur_mod: r.dur_mod,
+                start_play: r.start_play,
+                dur_play: play(*id, r),
+            })
+            .collect();
+    };
+    if stale {
+        return round
+            .iter()
+            .map(|r| ExportRegion {
+                start_mod: r.start_mod,
+                dur_mod: r.dur_mod,
+                start_play: r.start_play,
+                dur_play: r.dur_mod,
+            })
+            .collect();
+    }
+    let mut used = vec![false; live.len()];
+    let mut out = Vec::new();
+    for r in round {
+        let hit = live
+            .iter()
+            .enumerate()
+            .find(|(i, (_, l))| !used[*i] && l.start_mod == r.start_mod && l.dur_mod == r.dur_mod);
+        if let Some((i, (id, l))) = hit {
+            used[i] = true;
+            out.push(ExportRegion {
+                start_mod: r.start_mod,
+                dur_mod: r.dur_mod,
+                start_play: l.start_play,
+                dur_play: play(*id, l),
+            });
+        }
+    }
+    for (i, (id, l)) in live.iter().enumerate() {
+        if !used[i] {
+            out.push(ExportRegion {
+                start_mod: l.start_mod,
+                dur_mod: l.dur_mod,
+                start_play: l.start_play,
+                dur_play: play(*id, l),
+            });
+        }
+    }
+    out
+}
+
 type NamesFn = Arc<dyn Fn() -> HashMap<String, String> + Send + Sync>;
 type TempoFn = Arc<dyn Fn() -> Answer + Send + Sync>;
 
 /// The song time base of the host for the export of one document.
 pub struct HostTime {
-    pub regions: RegionsFn,
+    pub regions: ExportRegionsFn,
     pub track_info: TrackInfoFn,
     pub names: NamesFn,
     pub tempo: TempoFn,
@@ -29,8 +106,15 @@ impl ExportTime for HostTime {
     fn track(&self, name: &str) -> Option<SongTrack> {
         let fault = crate::test_switch("DS_ARA_DELIVERY_FAULT").unwrap_or_default();
         let (seqs, _) = (self.track_info)(name);
+        let names = (self.names)();
+        let stem = file_stems(&names).get(name).cloned();
         if seqs.is_empty() {
-            return None;
+            // no source of the host for this track: its files keep the host's name and every hit is left out
+            return Some(SongTrack {
+                regions: Vec::new(),
+                stem,
+                hide_all: true,
+            });
         }
         let regions = if fault == "source-time" {
             // the fault run: the regions are left out, so the file keeps the time of the source
@@ -43,38 +127,53 @@ impl ExportTime for HostTime {
                     start_mod: r.start_mod,
                     dur_mod: r.dur_mod,
                     start_play: r.start_play,
+                    dur_play: r.dur_play,
                 })
                 .collect()
         };
-        let names = (self.names)();
-        let stem = file_stems(&names).get(name).cloned();
-        Some(SongTrack { regions, stem })
+        Some(SongTrack {
+            regions,
+            stem,
+            hide_all: false,
+        })
     }
 
     fn tempo(&self) -> Option<TempoMap> {
-        let a = (self.tempo)();
-        if crate::test_switch("DS_ARA_DELIVERY_FAULT").as_deref() == Ok("one-tempo") {
-            return a.map.map(|m| TempoMap { steps: Vec::new(), ..m });
-        }
-        a.map
+        (self.tempo)().map
     }
 }
 
 /// A DAW track name as a file stem: the characters that a file name cannot hold (the rule of the app's
 /// `multi_file_name`: control characters and `/ \ : * ? " < > |`) become `-`; leading dots go (no hidden file, no
-/// `..`); at most 100 characters; empty gives `None`.
+/// `..`); at most [`STEM_BYTES`] bytes; empty gives `None`.
+/// The longest file stem in bytes (a file name holds 255; the suffix and a number need room).
+pub const STEM_BYTES: usize = 80;
+
 #[must_use]
 pub fn safe_stem(name: &str) -> Option<String> {
     let n: String = name
         .chars()
-        .map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '-' } else { c })
+        .map(|c| {
+            if c.is_control() || "/\\:*?\"<>|".contains(c) {
+                '-'
+            } else {
+                c
+            }
+        })
         .collect();
-    let n: String = n.trim().trim_start_matches('.').trim().chars().take(100).collect();
-    (!n.is_empty()).then_some(n)
+    let n = n.trim().trim_start_matches('.').trim();
+    // at most 80 bytes of UTF-8, cut on a character boundary
+    let mut end = n.len().min(STEM_BYTES);
+    while !n.is_char_boundary(end) {
+        end -= 1;
+    }
+    let n = n[..end].trim_end();
+    (!n.is_empty()).then(|| n.to_string())
 }
 
 /// The file stem of every track: its display name made safe; the key when the name gives none. Two tracks that
-/// end on one stem (compared without case, as APFS does) number the later one by the order of the keys.
+/// end on one stem (compared by the app's `file_name_key`, the key the plan check uses) number the later one by the
+/// order of the keys.
 #[must_use]
 pub fn file_stems(display: &HashMap<String, String>) -> HashMap<String, String> {
     let mut keys: Vec<&String> = display.keys().collect();
@@ -82,14 +181,16 @@ pub fn file_stems(display: &HashMap<String, String>) -> HashMap<String, String> 
     let mut seen: Vec<String> = Vec::new();
     let mut out = HashMap::new();
     for k in keys {
-        let base = safe_stem(&display[k]).or_else(|| safe_stem(k)).unwrap_or_else(|| "track".to_string());
+        let base = safe_stem(&display[k])
+            .or_else(|| safe_stem(k))
+            .unwrap_or_else(|| "track".to_string());
         let mut stem = base.clone();
         let mut n = 2;
-        while seen.contains(&stem.to_lowercase()) {
+        while seen.contains(&drumspike_app::export::file_name_key(&stem)) {
             stem = format!("{base} ({n})");
             n += 1;
         }
-        seen.push(stem.to_lowercase());
+        seen.push(drumspike_app::export::file_name_key(&stem));
         out.insert(k.clone(), stem);
     }
     out
@@ -117,17 +218,20 @@ pub fn dest_allowed(chosen: &[PathBuf], cmd: &str, args: &Value) -> bool {
     if !p.is_absolute() {
         return false;
     }
-    let Ok(canon) = std::fs::canonicalize(p) else { return false };
+    let Ok(canon) = std::fs::canonicalize(p) else {
+        return false;
+    };
     if crate::editor::fault() == "prefix-dest" {
         return chosen.iter().any(|c| canon.starts_with(c));
     }
-    chosen.iter().any(|c| *c == canon)
+    chosen.contains(&canon)
 }
 
-/// A path the page may hand to a drag: absolute, a regular file, and its folder is one of `roots` (canonical).
+/// A path the page may hand to a drag: absolute, a regular file, its folder is one of `roots` (canonical), and the
+/// plugin instance wrote it itself in this process (`written`: the paths that its exports and drag takes answered).
 /// Returns the canonical path.
 #[must_use]
-pub fn drag_path_ok(roots: &[PathBuf], path: &str) -> Option<PathBuf> {
+pub fn drag_path_ok(roots: &[PathBuf], written: &std::collections::HashSet<PathBuf>, path: &str) -> Option<PathBuf> {
     if crate::editor::fault() == "any-path" {
         return std::fs::canonicalize(path).ok();
     }
@@ -140,7 +244,16 @@ pub fn drag_path_ok(roots: &[PathBuf], path: &str) -> Option<PathBuf> {
         return None;
     }
     let parent = canon.parent()?;
-    roots.iter().any(|r| r == parent).then_some(canon)
+    (roots.iter().any(|r| r == parent) && written.contains(&canon)).then_some(canon)
+}
+
+/// The longest a folder sheet may stay open before the plugin ends it (D8 of the review).
+pub const SHEET_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// True when the wait for the sheet is over: it ran for the limit, or the editor closed.
+#[must_use]
+pub fn sheet_wait_over(waited: std::time::Duration, closed: bool) -> bool {
+    closed || waited >= SHEET_LIMIT
 }
 
 // ---------------------------------------------------------------- AppKit (main thread only)
@@ -177,7 +290,12 @@ pub fn left_button_down() -> bool {
 ///
 /// # Safety
 /// `view` is the live web view of the editor (an `NSView`), and the caller is on the host's main thread.
-pub unsafe fn start_drag(view: usize, files: Vec<PathBuf>, png: Vec<u8>, done: impl Fn(&str) + Send + 'static) -> Result<(), String> {
+pub unsafe fn start_drag(
+    view: usize,
+    files: Vec<PathBuf>,
+    png: Vec<u8>,
+    done: impl Fn(&str) + Send + 'static,
+) -> Result<(), String> {
     let v = view as *mut AnyObject;
     if v.is_null() {
         return Err("the editor has no view".into());
@@ -234,9 +352,17 @@ pub fn drag_pasteboard_paths() -> Vec<String> {
 ///
 /// # Safety
 /// `view` is the live web view of the editor and the caller is on the host's main thread.
-pub unsafe fn folder_sheet(view: usize, title: &str, start: &str, done: impl FnOnce(Option<PathBuf>) + 'static) -> Result<Retained<AnyObject>, String> {
+pub unsafe fn folder_sheet(
+    view: usize,
+    title: &str,
+    start: &str,
+    done: impl FnOnce(Option<PathBuf>) + 'static,
+) -> Result<Retained<AnyObject>, String> {
     let v = view as *mut NSView;
     let window = (*v).window().ok_or_else(|| "the editor has no window".to_string())?;
+    if !window.isVisible() {
+        return Err("the plugin window is not visible".to_string());
+    }
     let mtm = MainThreadMarker::new().ok_or("the sheet needs the main thread")?;
     let panel = NSOpenPanel::openPanel(mtm);
     panel.setCanChooseDirectories(true);
@@ -263,93 +389,6 @@ pub unsafe fn folder_sheet(view: usize, title: &str, start: &str, done: impl FnO
     });
     panel.beginSheetModalForWindow_completionHandler(&window, &block);
     Ok(Retained::cast_unchecked(panel))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn d(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("ds-deliver-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        std::fs::canonicalize(p).unwrap()
-    }
-
-    #[test]
-    fn a_track_name_becomes_a_safe_file_stem_and_double_names_are_numbered() {
-        assert_eq!(safe_stem("Kick In/Out: 2").as_deref(), Some("Kick In-Out- 2"));
-        assert_eq!(safe_stem("..hidden").as_deref(), Some("hidden"));
-        assert_eq!(safe_stem(".."), None);
-        assert_eq!(safe_stem("   "), None);
-        assert_eq!(safe_stem(&"x".repeat(150)).unwrap().len(), 100);
-        let m: HashMap<String, String> = [("k1", "Snare"), ("k2", "snare"), ("k3", "A/B"), ("k4", "A:B"), ("k5", "")]
-            .into_iter()
-            .map(|(a, b)| (a.to_string(), b.to_string()))
-            .collect();
-        let s = file_stems(&m);
-        assert_eq!((s["k1"].as_str(), s["k2"].as_str()), ("Snare", "snare (2)"));
-        assert_eq!((s["k3"].as_str(), s["k4"].as_str()), ("A-B", "A-B (2)"));
-        assert_eq!(s["k5"], "k5", "no name: the key");
-    }
-
-    #[test]
-    fn only_a_folder_chosen_in_this_session_is_a_dest() {
-        let a = d("a");
-        let sub = a.join("sub");
-        std::fs::create_dir(&sub).unwrap();
-        let other = d("b");
-        let chosen = vec![a.clone()];
-        let args = |dest: &str| json!({"dest": dest});
-        assert!(dest_allowed(&chosen, "export_all", &args(a.to_str().unwrap())));
-        assert!(dest_allowed(&chosen, "export_existing", &args(a.to_str().unwrap())));
-        assert!(dest_allowed(&chosen, "export_dest_set", &args(a.to_str().unwrap())));
-        assert!(!dest_allowed(&chosen, "export_all", &args(other.to_str().unwrap())), "another folder");
-        assert!(!dest_allowed(&chosen, "export_all", &args(sub.to_str().unwrap())), "a subfolder");
-        assert!(!dest_allowed(&chosen, "export_all", &args("relative")));
-        assert!(!dest_allowed(&chosen, "export_all", &args("/definitely/not/there")));
-        assert!(!dest_allowed(&[], "export_all", &args(a.to_str().unwrap())), "nothing chosen yet");
-        for cmd in ["export_drag_prepare", "export_midi", "export_spikes", "export_layer", "sampler_calibration_midi"] {
-            assert!(!dest_allowed(&chosen, cmd, &args(a.to_str().unwrap())), "{cmd}");
-        }
-        assert!(!dest_allowed(&chosen, "export_all", &json!({"dest": a.to_str().unwrap(), "path": "/x"})));
-        // a dest with a dot-dot that leads to the chosen folder is the same folder; one that leads elsewhere is not
-        let dd = format!("{}/sub/..", a.display());
-        assert!(dest_allowed(&chosen, "export_all", &args(&dd)));
-        let dd2 = format!("{}/..", a.display());
-        assert!(!dest_allowed(&chosen, "export_all", &args(&dd2)));
-        // a folder replaced by a link to another folder no longer equals the chosen one
-        let link = other.join("link");
-        std::os::unix::fs::symlink(&a, &link).unwrap();
-        assert!(dest_allowed(&chosen, "export_all", &args(link.to_str().unwrap())), "a link to the chosen folder is that folder");
-        let b2 = d("c");
-        let chosen2 = vec![b2.clone()];
-        assert!(!dest_allowed(&chosen2, "export_all", &args(link.to_str().unwrap())), "a link to another folder is refused");
-    }
-
-    #[test]
-    fn base64_decodes_the_drag_image() {
-        assert_eq!(base64_decode("aGVsbG8=").as_deref(), Some(&b"hello"[..]));
-        assert_eq!(base64_decode("aGVs bG8").as_deref(), Some(&b"hello"[..]));
-        assert_eq!(base64_decode("a*b"), None);
-    }
-
-    #[test]
-    fn a_drag_takes_only_a_file_directly_in_a_root() {
-        let a = d("drag");
-        let f = a.join("x_spike.mid");
-        std::fs::write(&f, b"x").unwrap();
-        let sub = a.join("sub");
-        std::fs::create_dir(&sub).unwrap();
-        std::fs::write(sub.join("y.mid"), b"y").unwrap();
-        let roots = vec![a.clone()];
-        assert_eq!(drag_path_ok(&roots, f.to_str().unwrap()), Some(f.clone()));
-        assert_eq!(drag_path_ok(&roots, sub.join("y.mid").to_str().unwrap()), None, "a file in a subfolder");
-        assert_eq!(drag_path_ok(&roots, a.to_str().unwrap()), None, "a folder");
-        assert_eq!(drag_path_ok(&roots, "/etc/hosts"), None, "a file elsewhere");
-        assert_eq!(drag_path_ok(&roots, "x_spike.mid"), None, "a relative path");
-    }
 }
 
 /// End the sheet `panel` (a pointer made by [`folder_sheet`] that is still shown). Main thread only.
@@ -403,7 +442,9 @@ pub unsafe fn release_test_drag(view: usize) {
     use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSEventType};
     use objc2_foundation::NSPoint;
     let v = view as *mut NSView;
-    let (Some(window), Some(mtm)) = ((*v).window(), MainThreadMarker::new()) else { return };
+    let (Some(window), Some(mtm)) = ((*v).window(), MainThreadMarker::new()) else {
+        return;
+    };
     let at = window.mouseLocationOutsideOfEventStream();
     if let Some(up) = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
         NSEventType::LeftMouseUp,
@@ -417,5 +458,232 @@ pub unsafe fn release_test_drag(view: usize) {
         0.0,
     ) {
         NSApplication::sharedApplication(mtm).postEvent_atStart(&up, true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn d(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("ds-deliver-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::canonicalize(p).unwrap()
+    }
+
+    #[test]
+    fn a_track_name_becomes_a_safe_file_stem_and_double_names_are_numbered() {
+        assert_eq!(safe_stem("Kick In/Out: 2").as_deref(), Some("Kick In-Out- 2"));
+        assert_eq!(safe_stem("..hidden").as_deref(), Some("hidden"));
+        assert_eq!(safe_stem(".."), None);
+        assert_eq!(safe_stem("   "), None);
+        assert_eq!(safe_stem(&"x".repeat(150)).unwrap().len(), STEM_BYTES);
+        // 100 emoji (4 bytes each): cut on a character boundary, at most 80 bytes
+        let e = safe_stem(&"\u{1F941}".repeat(100)).unwrap();
+        assert_eq!((e.len(), e.chars().count()), (80, 20));
+        let m: HashMap<String, String> = [
+            ("k1", "Snare"),
+            ("k2", "snare"),
+            ("k3", "A/B"),
+            ("k4", "A:B"),
+            ("k5", ""),
+        ]
+        .into_iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+        let s = file_stems(&m);
+        assert_eq!((s["k1"].as_str(), s["k2"].as_str()), ("Snare", "snare (2)"));
+        assert_eq!((s["k3"].as_str(), s["k4"].as_str()), ("A-B", "A-B (2)"));
+        assert_eq!(s["k5"], "k5", "no name: the key");
+        // names that the plan check sees as one file name (the app's file_name_key) are numbered, not refused later
+        let m: HashMap<String, String> = [
+            ("a", "Stra\u{DF}e"),
+            ("b", "STRASSE"),
+            ("c", "Cafe\u{301}"),
+            ("d", "Caf\u{E9}"),
+        ]
+        .into_iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+        let s = file_stems(&m);
+        assert_eq!(
+            (s["a"].as_str(), s["b"].as_str()),
+            ("Stra\u{DF}e", "STRASSE (2)"),
+            "a sharp s and SS"
+        );
+        assert_eq!(s["d"], "Caf\u{E9} (2)", "a decomposed and a composed accent");
+        let keys: std::collections::HashSet<String> =
+            s.values().map(|v| drumspike_app::export::file_name_key(v)).collect();
+        assert_eq!(keys.len(), 4, "no two stems share a key");
+    }
+
+    #[test]
+    fn only_a_folder_chosen_in_this_session_is_a_dest() {
+        let a = d("a");
+        let sub = a.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let other = d("b");
+        let chosen = vec![a.clone()];
+        let args = |dest: &str| json!({"dest": dest});
+        assert!(dest_allowed(&chosen, "export_all", &args(a.to_str().unwrap())));
+        assert!(dest_allowed(&chosen, "export_existing", &args(a.to_str().unwrap())));
+        assert!(dest_allowed(&chosen, "export_dest_set", &args(a.to_str().unwrap())));
+        assert!(
+            !dest_allowed(&chosen, "export_all", &args(other.to_str().unwrap())),
+            "another folder"
+        );
+        assert!(
+            !dest_allowed(&chosen, "export_all", &args(sub.to_str().unwrap())),
+            "a subfolder"
+        );
+        assert!(!dest_allowed(&chosen, "export_all", &args("relative")));
+        assert!(!dest_allowed(&chosen, "export_all", &args("/definitely/not/there")));
+        assert!(
+            !dest_allowed(&[], "export_all", &args(a.to_str().unwrap())),
+            "nothing chosen yet"
+        );
+        for cmd in [
+            "export_drag_prepare",
+            "export_midi",
+            "export_spikes",
+            "export_layer",
+            "sampler_calibration_midi",
+        ] {
+            assert!(!dest_allowed(&chosen, cmd, &args(a.to_str().unwrap())), "{cmd}");
+        }
+        assert!(!dest_allowed(
+            &chosen,
+            "export_all",
+            &json!({"dest": a.to_str().unwrap(), "path": "/x"})
+        ));
+        // a dest with a dot-dot that leads to the chosen folder is the same folder; one that leads elsewhere is not
+        let dd = format!("{}/sub/..", a.display());
+        assert!(dest_allowed(&chosen, "export_all", &args(&dd)));
+        let dd2 = format!("{}/..", a.display());
+        assert!(!dest_allowed(&chosen, "export_all", &args(&dd2)));
+        // a folder replaced by a link to another folder no longer equals the chosen one
+        let link = other.join("link");
+        std::os::unix::fs::symlink(&a, &link).unwrap();
+        assert!(
+            dest_allowed(&chosen, "export_all", &args(link.to_str().unwrap())),
+            "a link to the chosen folder is that folder"
+        );
+        let b2 = d("c");
+        let chosen2 = vec![b2.clone()];
+        assert!(
+            !dest_allowed(&chosen2, "export_all", &args(link.to_str().unwrap())),
+            "a link to another folder is refused"
+        );
+    }
+
+    #[test]
+    fn base64_decodes_the_drag_image() {
+        assert_eq!(base64_decode("aGVsbG8=").as_deref(), Some(&b"hello"[..]));
+        assert_eq!(base64_decode("aGVs bG8").as_deref(), Some(&b"hello"[..]));
+        assert_eq!(base64_decode("a*b"), None);
+    }
+
+    #[test]
+    fn a_drag_takes_only_a_file_directly_in_a_root() {
+        let a = d("drag");
+        let f = a.join("x_spike.mid");
+        std::fs::write(&f, b"x").unwrap();
+        let sub = a.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("y.mid"), b"y").unwrap();
+        let other = a.join("notes.txt");
+        std::fs::write(&other, b"z").unwrap();
+        let roots = vec![a.clone()];
+        let written: std::collections::HashSet<PathBuf> = [f.clone(), sub.join("y.mid")].into_iter().collect();
+        assert_eq!(drag_path_ok(&roots, &written, f.to_str().unwrap()), Some(f.clone()));
+        assert_eq!(
+            drag_path_ok(&roots, &written, sub.join("y.mid").to_str().unwrap()),
+            None,
+            "a file in a subfolder"
+        );
+        assert_eq!(drag_path_ok(&roots, &written, a.to_str().unwrap()), None, "a folder");
+        assert_eq!(drag_path_ok(&roots, &written, "/etc/hosts"), None, "a file elsewhere");
+        assert_eq!(drag_path_ok(&roots, &written, "x_spike.mid"), None, "a relative path");
+        assert_eq!(
+            drag_path_ok(&roots, &written, other.to_str().unwrap()),
+            None,
+            "a file in the folder that the plugin did not write"
+        );
+        assert_eq!(
+            drag_path_ok(&roots, &std::collections::HashSet::new(), f.to_str().unwrap()),
+            None,
+            "nothing written yet"
+        );
+    }
+
+    fn rec(a: f64, d: f64, p: f64) -> crate::service::RegionRec {
+        crate::service::RegionRec {
+            start_mod: a,
+            dur_mod: d,
+            start_play: p,
+        }
+    }
+
+    #[test]
+    fn a_moved_region_exports_at_its_live_song_position_with_the_hits_of_the_round() {
+        let round = [rec(0.5, 2.0, 10.0), rec(5.0, 1.0, 20.0)];
+        // the host moved the first region to 30 s (no new round); the second one was deleted; a new one appeared
+        let live = [(7u64, rec(0.5, 2.0, 30.0)), (9, rec(8.0, 1.0, 40.0))];
+        let lens: HashMap<u64, f64> = [(7, 2.0), (9, 2.0)].into_iter().collect();
+        let got = merge_regions(Some(&round), &live, &lens, false);
+        assert_eq!(
+            got,
+            vec![
+                ExportRegion {
+                    start_mod: 0.5,
+                    dur_mod: 2.0,
+                    start_play: 30.0,
+                    dur_play: 2.0
+                },
+                ExportRegion {
+                    start_mod: 8.0,
+                    dur_mod: 1.0,
+                    start_play: 40.0,
+                    dur_play: 2.0
+                },
+            ]
+        );
+        // no round yet: the live regions
+        assert_eq!(merge_regions(None, &live, &lens, false).len(), 2);
+        // the fault run keeps the song position of the round
+        assert_eq!(merge_regions(Some(&round), &live, &lens, true)[0].start_play, 10.0);
+        // two regions of one slice are matched one by one
+        let two = merge_regions(
+            Some(&[rec(0.0, 1.0, 1.0), rec(0.0, 1.0, 5.0)]),
+            &[(1, rec(0.0, 1.0, 11.0)), (2, rec(0.0, 1.0, 15.0))],
+            &HashMap::new(),
+            false,
+        );
+        assert_eq!(two.iter().map(|r| r.start_play).collect::<Vec<_>>(), vec![11.0, 15.0]);
+    }
+
+    #[test]
+    fn a_track_with_no_source_keeps_the_host_name_and_loses_every_hit() {
+        let t = HostTime {
+            regions: Arc::new(Vec::new),
+            track_info: Arc::new(|_| (Vec::new(), 0.0)),
+            names: Arc::new(|| [("key1".to_string(), "Snare Top".to_string())].into_iter().collect()),
+            tempo: Arc::new(|| crate::tempo_ara::choose(None, "", None)),
+        };
+        let st = t.track("key1").unwrap();
+        assert_eq!(
+            (st.stem.as_deref(), st.hide_all, st.regions.len()),
+            (Some("Snare Top"), true, 0)
+        );
+    }
+
+    #[test]
+    fn the_wait_for_the_sheet_ends_with_the_limit_or_a_closed_editor() {
+        use std::time::Duration;
+        assert!(!sheet_wait_over(Duration::from_secs(599), false));
+        assert!(sheet_wait_over(SHEET_LIMIT, false));
+        assert!(sheet_wait_over(Duration::from_secs(1), true));
     }
 }
