@@ -98,11 +98,11 @@ pub fn to_song(events: &[Value], regions: &[SongRegion]) -> (Vec<Value>, SongCou
 impl Service {
     /// Install the song time base of the host (the DAW plugin), or remove it.
     pub fn set_export_time(&self, t: Option<Arc<dyn ExportTime>>) {
-        *self.inner.export_time.write().unwrap_or_else(|e| e.into_inner()) = t;
+        *self.inner.export_time.write().unwrap_or_else(std::sync::PoisonError::into_inner) = t;
     }
 
     pub(crate) fn export_time(&self) -> Option<Arc<dyn ExportTime>> {
-        self.inner.export_time.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.inner.export_time.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     /// The file stem of a track's export files: the host's name for it, else the track name.

@@ -6731,6 +6731,7 @@ def delivery_run(label: str, env: dict | None = None, pressed: bool = True, regi
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
+    (out_dir / "sub").mkdir()   # a folder that exists below the chosen one: the rule must still refuse it
     e = {"DS_ARA_PICK_DIR": str(out_dir)}
     if pressed:
         e["DS_ARA_DRAG_PRESSED"] = "1"
