@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use drumspike_app::roles::{default_note, guess_role};
+use drumspike_app::roles::{default_note, guess_role, guess_role_matched};
 use drumspike_app::tracks::safe_name;
 use drumspike_app::{Service, ServiceConfig};
 use drumspike_core::project::{build_source, document_path, write_document, Document, Segment, Source, Track, FORMAT};
@@ -172,13 +172,30 @@ pub struct SourceSnapshot {
     pub audio_gen: u64,
     /// The playback regions of the source.
     pub regions: Vec<RegionRec>,
+    /// M1b10: the name the DAW shows for the track of the source (the name of the region sequence
+    /// of the first region, else the name of that region), when the host gave one. The role guess
+    /// reads it before the name of the audio source.
+    pub label: Option<String>,
 }
 
 impl SourceSnapshot {
+    /// The role the DAW name gives (`guess_role` of the label), when it gives one.
+    #[must_use]
+    pub fn label_role(&self) -> Option<&'static str> {
+        self.label.as_deref().and_then(guess_role)
+    }
+
     /// The same source with the same regions, properties and generation of the audio (the WAV
-    /// file is not compared).
+    /// file is not compared). `self` is the older snapshot: a new name that gives no role is no
+    /// change (the role stays), a new name that gives another role is one.
     #[must_use]
     pub fn same_as(&self, other: &SourceSnapshot) -> bool {
+        self.same_but_label(other) && (other.label_role().is_none() || self.label_role() == other.label_role())
+    }
+
+    /// [`SourceSnapshot::same_as`] without the role that the DAW name gives.
+    #[must_use]
+    pub fn same_but_label(&self, other: &SourceSnapshot) -> bool {
         self.name == other.name
             && self.persistent_id == other.persistent_id
             && self.sample_rate == other.sample_rate
@@ -248,6 +265,9 @@ pub struct JobResult {
     /// made with (R6): the plugin maps the notes of a page edit with exactly these, also for a
     /// changed source without audio whose snapshot was kept.
     pub regions: HashMap<usize, (Vec<RegionRec>, f64)>,
+    /// M1b10: the tracks whose role was asked of the audio in this round: (track, bytes read from the WAV, the
+    /// role the hint gave).
+    pub role_audio: Vec<(String, usize, Option<String>)>,
 }
 
 impl JobResult {
@@ -279,6 +299,7 @@ impl JobResult {
             ran: false,
             tracks: Vec::new(),
             regions: HashMap::new(),
+            role_audio: Vec::new(),
         }
     }
 }
@@ -293,6 +314,113 @@ pub struct RestoredTrack {
     pub track: String,
     /// The stored events of the track.
     pub events: Value,
+    /// M1b10: the settings of the user that the archive holds for the track (empty: the role is guessed).
+    pub settings: Map<String, Value>,
+}
+
+/// The keys of a track answer of the service that are not settings of the user: what the service computes
+/// (`status`, `offline`, `n_events`, `source_mode`, `layer_status`) and what the plugin makes from the
+/// source on every restore (`sr`, `n_samples`, `duration`).
+const NOT_SETTINGS: [&str; 8] = [
+    "status",
+    "offline",
+    "n_events",
+    "source_mode",
+    "layer_status",
+    "sr",
+    "n_samples",
+    "duration",
+];
+
+/// The keys of a track record that are settings of the user, in ONE place (the restore lays only these over
+/// a track; a key of an archive that is in no list is dropped): the typed fields of the record and the keys
+/// the app keeps in `extra` (`detector`, `learn`, `layer`, `sampler`; the shift is in `params`). The unit test
+/// `every_key_of_a_track_answer_is_a_setting_or_computed` fails when the answer of the service gets a key that
+/// is in neither this list nor [`NOT_SETTINGS`].
+pub const SETTINGS: [&str; 14] = [
+    "role",
+    "role_source",
+    "role_match",
+    "note",
+    "color",
+    "params",
+    "mix_mode",
+    "volume_db",
+    "pan",
+    "follows",
+    "detector",
+    "learn",
+    "layer",
+    "sampler",
+];
+
+/// The settings of the tracks `names` as the service holds them now (N10), by track name: the answer of
+/// `tracks_get` without the computed keys. The events, segments and source are not in it. `None` when the
+/// service cannot answer (the caller keeps what it had).
+pub fn settings_of(svc: &Service, sid: &str, names: &[String]) -> Option<Map<String, Value>> {
+    let all = svc.tracks_get(sid).ok()?;
+    let mut out = Map::new();
+    for n in names {
+        if let Some(obj) = all["tracks"][n.as_str()].as_object() {
+            let kept: Map<String, Value> = obj
+                .iter()
+                .filter(|(k, _)| !NOT_SETTINGS.contains(&k.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            out.insert(n.clone(), Value::Object(kept));
+        }
+    }
+    Some(out)
+}
+
+/// The settings to keep after a read (R1): a failed read (`fresh` is None) keeps the old map; a track that is
+/// missing from the answer keeps its old entry; an entry leaves only with its track (`names`: the tracks of the
+/// document now).
+#[must_use]
+pub fn merge_settings(
+    old: &Map<String, Value>,
+    fresh: Option<Map<String, Value>>,
+    names: &[String],
+) -> Map<String, Value> {
+    let Some(fresh) = fresh else {
+        return old.clone();
+    };
+    let mut out = Map::new();
+    for n in names {
+        if let Some(v) = fresh.get(n).or_else(|| old.get(n)) {
+            out.insert(n.clone(), v.clone());
+        }
+    }
+    out
+}
+
+/// The type a setting must have (the record keeps a key of another type in `extra`, where it would shadow
+/// the setting): a text, an integer, a number or an object. A key of another type is not laid over.
+fn setting_type_ok(key: &str, v: &Value) -> bool {
+    match key {
+        "role" | "role_source" | "role_match" | "color" | "mix_mode" | "follows" => v.is_string(),
+        "note" => v.is_i64(),
+        "volume_db" | "pan" => v.is_number(),
+        _ => v.is_object(),
+    }
+}
+
+/// The settings of an archive laid over `base` (the record a track gets from its layout, or from a guess)
+/// (R2): only the keys of [`SETTINGS`], and the role keys only when the archive holds a role. When the
+/// result is not a valid track record (a wrong type in a hostile archive) there is no overlay (`None`).
+fn overlay_settings(base: &Value, settings: &Map<String, Value>) -> Option<Value> {
+    let has_role = settings.get("role").is_some_and(Value::is_string);
+    let mut v = base.clone();
+    for (k, val) in settings {
+        if !SETTINGS.contains(&k.as_str()) || !setting_type_ok(k, val) {
+            continue;
+        }
+        if !has_role && ["role", "note", "role_source", "role_match"].contains(&k.as_str()) {
+            continue;
+        }
+        v[k.as_str()] = val.clone();
+    }
+    serde_json::from_value::<Track>(v.clone()).is_ok().then_some(v)
 }
 
 /// What a restore produced.
@@ -383,6 +511,12 @@ impl PageHandle {
             return false;
         };
         matches!(svc.analyze_status(&sid)["state"].as_str(), Some("queued" | "running"))
+    }
+
+    /// The sid of the document's open project.
+    #[must_use]
+    pub fn sid(&self) -> Option<String> {
+        self.sid.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn set(&self, svc: Option<Service>) {
@@ -615,6 +749,42 @@ impl DocService {
         out
     }
 
+    /// M1b10: a source whose only change is the role that its DAW name gives is no change when the track
+    /// record would keep its role: the user set it (`role_source` is `user`) or it is the role already. The
+    /// new snapshot is kept at once, so such a name starts no analysis (the touch ends as a round that does
+    /// nothing). The record is read with `tracks_get`; when it cannot be read the source stays changed.
+    fn without_role_noops<'a>(&mut self, changed: Vec<&'a SourceSnapshot>) -> Vec<&'a SourceSnapshot> {
+        let role_only =
+            |me: &DocService, s: &SourceSnapshot| me.snaps.get(&s.seq).is_some_and(|old| old.same_but_label(s));
+        if !changed.iter().any(|s| role_only(self, s)) {
+            return changed;
+        }
+        let (Some(sid), Some(svc)) = (self.sid.clone(), self.svc.clone()) else {
+            return changed;
+        };
+        let Ok(all) = svc.tracks_get(&sid) else {
+            return changed;
+        };
+        let mut keep = Vec::with_capacity(changed.len());
+        for s in changed {
+            if role_only(self, s) {
+                let track = self.tracks.iter().find(|(_, q)| *q == s.seq).map(|(n, _)| n.clone());
+                let rec = track.as_ref().map(|n| &all["tracks"][n.as_str()]);
+                let blocked = rec.is_some_and(|r| {
+                    (r["role_source"].as_str() == Some("user")
+                        && switch("DS_ARA_NAMES_FAULT").as_deref() != Some("role-hand"))
+                        || s.label_role().is_none_or(|new| r["role"].as_str() == Some(new))
+                });
+                if blocked {
+                    self.snaps.insert(s.seq, s.clone());
+                    continue;
+                }
+            }
+            keep.push(s);
+        }
+        keep
+    }
+
     /// One analysis round over the sources of the document in `snaps` (every source that took
     /// part in an analysis, with a fresh snapshot): a source without a track gets one (a
     /// source is one track for its life, keyed by its creation index, so a retry never makes
@@ -657,6 +827,7 @@ impl DocService {
             .iter()
             .filter(|s| !duplicate && self.snaps.get(&s.seq).is_some_and(|old| !old.same_as(s)))
             .collect();
+        let changed = self.without_role_noops(changed);
         if !force && new.is_empty() && changed.is_empty() && !self.dirty {
             return Ok(JobResult::noop(self.track_names()));
         }
@@ -703,7 +874,7 @@ impl DocService {
             // only the track changes, so a new field of the app's snapshot is carried too (R1)
             let old_row = removed["snapshot"][0].clone();
             let mut track = old_row["track"].clone();
-            let fresh = serde_json::to_value(make_track(s, &dir)).unwrap_or(Value::Null);
+            let fresh = serde_json::to_value(track_layout(s, &dir)).unwrap_or(Value::Null);
             let drop_data = switch("DS_ARA_EDITOR_FAULT").as_deref() == Some("drop-track-data");
             if drop_data {
                 track = fresh; // the fault run: the old behaviour, the hand data are gone
@@ -722,6 +893,11 @@ impl DocService {
                         }
                     }
                 }
+                // M1b10: the DAW name gives another role than the track has, and the user did not
+                // set the role (`role_source` is `user` only for a role set by hand in the page):
+                // the role is guessed again, with its default note when the note is still the
+                // default note of the old role
+                apply_label_role(obj, s);
             }
             let mut row = if drop_data {
                 json!({"name": name, "index": at, "order_index": at})
@@ -763,11 +939,16 @@ impl DocService {
         let mut placed: Vec<(String, usize)> = self.tracks.clone();
         let mut rows: Vec<Value> = Vec::with_capacity(new_sources.len());
         let mut track_of = HashMap::new();
+        let mut role_audio: Vec<(String, usize, Option<String>)> = Vec::new();
         for (s, name) in new_sources.iter().zip(&names) {
             let at = placed.iter().position(|(_, q)| *q > s.seq).unwrap_or(placed.len());
             placed.insert(at, (name.clone(), s.seq));
+            let (track, bytes) = make_track_audited(s, &dir);
+            if let Some(b) = bytes {
+                role_audio.push((name.clone(), b, track.role_source.as_ref().and(track.role.clone())));
+            }
             rows.push(json!({"name": name, "index": at, "order_index": at,
-                "track": serde_json::to_value(make_track(s, &dir)).unwrap_or(Value::Null)}));
+                "track": serde_json::to_value(track).unwrap_or(Value::Null)}));
             track_of.insert(s.seq, name.clone());
         }
         if !rows.is_empty() {
@@ -914,6 +1095,7 @@ impl DocService {
                 .iter()
                 .map(|(q, x)| (*q, (x.regions.clone(), x.sample_rate)))
                 .collect(),
+            role_audio,
         })
     }
 
@@ -1010,7 +1192,25 @@ impl DocService {
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let mut doc = empty_document(&dir);
         for t in tracks {
-            let mut track = serde_json::to_value(make_track(&t.snapshot, &dir)).map_err(err)?;
+            // the archive holds the settings of the user for this track: they come back as they were and
+            // no role is guessed when the archive holds one (`DS_ARA_NAMES_FAULT=restore-guess` guesses again,
+            // as before M1b10); without a role in it the role is guessed and the other settings come over it
+            let use_settings =
+                !t.settings.is_empty() && switch("DS_ARA_NAMES_FAULT").as_deref() != Some("restore-guess");
+            let has_role = t.settings.get("role").is_some_and(Value::is_string);
+            let layout = || serde_json::to_value(track_layout(&t.snapshot, &dir)).map_err(err);
+            let guessed = || serde_json::to_value(make_track(&t.snapshot, &dir)).map_err(err);
+            let overlaid = if !use_settings {
+                None
+            } else if has_role {
+                overlay_settings(&layout()?, &t.settings)
+            } else {
+                overlay_settings(&guessed()?, &t.settings)
+            };
+            let mut track = match overlaid {
+                Some(v) => v,
+                None => guessed()?,
+            };
             track["events"] = t.events.clone();
             // what the analysis would have recorded about the file (no decode needed)
             track["sr"] = json!(t.snapshot.sample_rate as i64);
@@ -1084,11 +1284,105 @@ fn empty_document(dir: &Path) -> Document {
     }
 }
 
-/// The track of one source: the role from the name, the whole file or the playback regions
-/// as segments.
-fn make_track(s: &SourceSnapshot, dir: &Path) -> Track {
+/// The role of a new track and where it comes from (M1b10): the DAW name first, then the name of
+/// the audio source, then (as the scan of the app does, only for a name that gives no role) the
+/// model-free suggestion from the audio, at last `other`. The second item is the `role_source` of
+/// the track (`guess` from a name, `audio` from the audio; `None` for `other`), the third the words
+/// of the name that matched.
+/// The fourth item is the number of bytes read from the WAV when the audio was asked (None: it was not).
+#[allow(clippy::type_complexity)]
+fn pick_role(s: &SourceSnapshot) -> (&'static str, Option<&'static str>, Option<String>, Option<usize>) {
+    if let Some((role, words)) = s.label.as_deref().and_then(guess_role_matched) {
+        return (role, Some("guess"), Some(words), None);
+    }
     let stem = stem_of(&s.name);
-    let role = guess_role(&stem).unwrap_or("other");
+    if let Some((role, words)) = guess_role_matched(&stem) {
+        return (role, Some("guess"), Some(words), None);
+    }
+    if s.ready && audio_hint_wanted(&stem) {
+        let (hint, bytes) = audio_role(&s.wav);
+        if let Some(role) = hint {
+            return (role, Some("audio"), None, Some(bytes));
+        }
+        return ("other", None, None, Some(bytes));
+    }
+    ("other", None, None, None)
+}
+
+thread_local! {
+    /// How often this thread asked the audio for a role (the unit test proves a name that gives a role never does).
+    static AUDIO_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A Drum Spike export gets no role from its audio (the app's rule of the scan).
+fn audio_hint_wanted(stem: &str) -> bool {
+    !drumspike_app::roles::is_export_name(stem)
+}
+
+/// The suggestion of `role_from_audio` for the first 30 s of the cached WAV: the app's hint mode
+/// (only a role whose confidence bar exists comes back). Only the header and those 30 s are read from
+/// the file (`wav::read_head_mono`), never the whole file; the second item is the number of bytes read.
+/// A file that cannot be read gives no hint.
+fn audio_role(wav: &Path) -> (Option<&'static str>, usize) {
+    const SUGGEST_S: usize = 30;
+    AUDIO_ASKS.with(|n| n.set(n.get() + 1));
+    let Some((mono, sr, bytes)) = crate::wav::read_head_mono(wav, SUGGEST_S) else {
+        return (None, 0);
+    };
+    (
+        drumspike_core::role::role_from_audio(&mono, sr).map(drumspike_core::role::Role::as_str),
+        bytes,
+    )
+}
+
+/// The record of a track (`obj`, JSON) gets the role that the DAW name of `s` gives, unless the
+/// user set the role. Returns whether the role changed.
+fn apply_label_role(obj: &mut Map<String, Value>, s: &SourceSnapshot) -> bool {
+    if switch("DS_ARA_NAMES_FAULT").as_deref() == Some("role-hand") {
+        // the fault run: the guess overwrites a role the user set
+    } else if obj.get("role_source").and_then(Value::as_str) == Some("user") {
+        return false;
+    }
+    if switch("DS_ARA_NAMES_FAULT").as_deref() == Some("role-frozen") {
+        return false; // the fault run: the role is guessed once and never again
+    }
+    let Some((new_role, words)) = s.label.as_deref().and_then(guess_role_matched) else {
+        return false;
+    };
+    let current = obj.get("role").and_then(Value::as_str).unwrap_or("other").to_string();
+    if current == new_role {
+        return false;
+    }
+    let note_is_default = obj.get("note").and_then(Value::as_i64) == Some(default_note(&current));
+    obj.insert("role".into(), Value::from(new_role));
+    obj.insert("role_source".into(), Value::from("guess"));
+    obj.insert("role_match".into(), Value::from(words));
+    if note_is_default {
+        obj.insert("note".into(), Value::from(default_note(new_role)));
+    }
+    true
+}
+
+/// The track of one NEW source: the layout (below) and the role from the DAW name, the name of the
+/// source or the audio. A remake of a track record (a region change) takes only the layout: the role is
+/// not asked again there, so the audio is not read for nothing.
+fn make_track(s: &SourceSnapshot, dir: &Path) -> Track {
+    make_track_audited(s, dir).0
+}
+
+/// [`make_track`] and the bytes read from the WAV for the role (None: the audio was not asked).
+fn make_track_audited(s: &SourceSnapshot, dir: &Path) -> (Track, Option<usize>) {
+    let (role, role_source, role_match, bytes) = pick_role(s);
+    let mut t = track_layout(s, dir);
+    t.role = Some(role.to_string());
+    t.note = Some(default_note(role));
+    t.role_source = role_source.map(str::to_string);
+    t.role_match = role_match;
+    (t, bytes)
+}
+
+/// The track of one source without a role: the whole file or the playback regions as segments.
+fn track_layout(s: &SourceSnapshot, dir: &Path) -> Track {
     let segments: Option<Vec<Segment>> = if s.regions.is_empty() {
         None
     } else {
@@ -1106,8 +1400,6 @@ fn make_track(s: &SourceSnapshot, dir: &Path) -> Track {
         )
     };
     Track {
-        role: Some(role.to_string()),
-        note: Some(default_note(role)),
         mix_mode: Some("average".into()),
         source: segments.is_none().then(|| Some(wav_source(&s.wav, dir))),
         events: Some(Vec::new()),
@@ -1253,6 +1545,256 @@ mod tests {
         w.commit().unwrap();
     }
 
+    fn labelled(label: Option<&str>) -> SourceSnapshot {
+        SourceSnapshot {
+            seq: 0,
+            name: "0123456789abcdef0123456789abcdef".into(),
+            persistent_id: String::new(),
+            sample_rate: 48_000.0,
+            sample_count: 0,
+            wav: PathBuf::from("/nonexistent.wav"),
+            ready: false,
+            wav_len: 0,
+            audio_gen: 0,
+            regions: Vec::new(),
+            label: label.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn the_daw_name_gives_the_role_when_the_source_name_is_hex() {
+        for (label, role, note) in [
+            ("Kick In", "kick", 36),
+            ("Snare Top", "snare", 38),
+            ("Hi-Hat", "hat", 42),
+        ] {
+            let t = make_track(&labelled(Some(label)), Path::new("/p"));
+            assert_eq!((t.role.as_deref(), t.note), (Some(role), Some(note)), "{label}");
+            assert_eq!(t.role_source.as_deref(), Some("guess"));
+        }
+        // the names of the stage `editor-names` give no role
+        assert_eq!(guess_role("Drum A"), None);
+        assert_eq!(guess_role("Drum Big"), None);
+        let none = make_track(&labelled(Some("Mystery")), Path::new("/p"));
+        assert_eq!(
+            none.role.as_deref(),
+            Some("other"),
+            "a name with no role and no audio: other"
+        );
+        assert_eq!(
+            make_track(&labelled(None), Path::new("/p")).role.as_deref(),
+            Some("other")
+        );
+    }
+
+    #[test]
+    fn the_audio_is_asked_for_a_role_only_when_neither_name_gives_one() {
+        let asks = || AUDIO_ASKS.with(std::cell::Cell::get);
+        let mut s = labelled(Some("Kick In"));
+        s.ready = true;
+        let before = asks();
+        assert_eq!(pick_role(&s).0, "kick");
+        assert_eq!(asks(), before, "a DAW name that gives a role never asks the audio");
+        s.label = Some("Mystery".into());
+        s.name = "snare_top.wav".into();
+        assert_eq!(pick_role(&s).0, "snare");
+        assert_eq!(asks(), before, "a source name that gives a role never asks the audio");
+        s.name = "0123456789abcdef0123456789abcdef".into();
+        assert_eq!(pick_role(&s).0, "other");
+        assert_eq!(
+            asks(),
+            before + 1,
+            "no name gives a role: the audio is asked once (here the file is missing: no hint)"
+        );
+        s.ready = false;
+        let _ = pick_role(&s);
+        assert_eq!(asks(), before + 1, "a source whose audio is not here is not asked");
+    }
+
+    #[test]
+    fn a_new_daw_name_changes_an_automatic_role_and_never_a_role_of_the_user() {
+        let snare = labelled(Some("Snare Bottom"));
+        let mut auto = json!({"role": "other", "note": 36, "role_source": "guess"});
+        assert!(apply_label_role(auto.as_object_mut().unwrap(), &snare));
+        assert_eq!(
+            (auto["role"].as_str(), auto["note"].as_i64()),
+            (Some("snare"), Some(38))
+        );
+        let mut by_hand = json!({"role": "cymbal", "note": 49, "role_source": "user"});
+        assert!(!apply_label_role(by_hand.as_object_mut().unwrap(), &snare));
+        assert_eq!(by_hand["role"], "cymbal");
+        // a note the user changed stays
+        let mut note = json!({"role": "other", "note": 40, "role_source": "guess"});
+        assert!(apply_label_role(note.as_object_mut().unwrap(), &snare));
+        assert_eq!(
+            (note["role"].as_str(), note["note"].as_i64()),
+            (Some("snare"), Some(40))
+        );
+        // a name with no role leaves the role as it is
+        let mut keep = json!({"role": "kick", "note": 36});
+        assert!(!apply_label_role(
+            keep.as_object_mut().unwrap(),
+            &labelled(Some("Mystery"))
+        ));
+        assert!(!labelled(Some("Kick In")).same_as(&labelled(Some("Snare Bottom"))));
+        assert!(
+            !labelled(Some("Mystery")).same_as(&labelled(Some("Snare Bottom"))),
+            "no role before, a role now"
+        );
+        assert!(
+            labelled(Some("Kick In")).same_as(&labelled(Some("Mystery"))),
+            "a name with no role leaves the role"
+        );
+        assert!(
+            labelled(Some("Kick In")).same_as(&labelled(Some("Kick Inside"))),
+            "a rename that keeps the role is no change"
+        );
+    }
+
+    #[test]
+    fn a_remake_of_a_track_record_never_asks_the_audio_for_a_role() {
+        let cache = scratch("role-remake");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let hex = "0123456789abcdef0123456789abcdef";
+        let mut src = snapshot_of(&cache, &id, 0, hex);
+        let asks = || AUDIO_ASKS.with(std::cell::Cell::get);
+        let before = asks();
+        let first = doc.analyse(std::slice::from_ref(&src), false).unwrap();
+        assert_eq!(
+            asks(),
+            before + 1,
+            "a new track with no role in any name asks the audio once"
+        );
+        assert_eq!(first.role_audio.len(), 1, "the round says it");
+        assert!(
+            first.role_audio[0].1 > 44 && first.role_audio[0].1 <= 44 + 30 * 48_000 * 4,
+            "bytes read: {:?}",
+            first.role_audio
+        );
+        // a region change makes the track record again: the role is not asked again
+        src.regions = vec![RegionRec {
+            start_mod: 0.0,
+            dur_mod: 1.0,
+            start_play: 0.0,
+        }];
+        let second = doc.analyse(std::slice::from_ref(&src), false).unwrap();
+        assert!(second.ran);
+        assert_eq!(asks(), before + 1, "a remake computes no role and reads no audio");
+        assert!(second.role_audio.is_empty());
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_new_daw_name_starts_no_round_when_the_role_is_the_users_or_the_same() {
+        let cache = scratch("role-noop");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let hex = "0123456789abcdef0123456789abcdef";
+        let mut src = snapshot_of(&cache, &id, 0, hex);
+        src.label = Some("Kick In".into());
+        let _ = doc.analyse(std::slice::from_ref(&src), false).unwrap();
+        // Kick -> Mystery -> Kick: no role change, no round
+        src.label = Some("Mystery".into());
+        assert!(!doc.analyse(std::slice::from_ref(&src), false).unwrap().ran);
+        src.label = Some("Kick Inside".into());
+        assert!(
+            !doc.analyse(std::slice::from_ref(&src), false).unwrap().ran,
+            "the same role again"
+        );
+        // the user sets the role by hand: a name that gives another role changes nothing and starts no round
+        let (svc, sid) = (doc.svc.clone().unwrap(), doc.sid.clone().unwrap());
+        let name = doc.tracks[0].0.clone();
+        svc.track_set_role(&sid, &name, "cymbal", None, None, None, None)
+            .unwrap();
+        src.label = Some("Snare Bottom".into());
+        assert!(
+            !doc.analyse(std::slice::from_ref(&src), false).unwrap().ran,
+            "a role of the user: no round"
+        );
+        assert_eq!(svc.tracks_get(&sid).unwrap()["tracks"][name.as_str()]["role"], "cymbal");
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_daw_name_that_gives_the_role_the_track_already_has_starts_no_round() {
+        let cache = scratch("role-same");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        // the role snare comes from the name of the source
+        let mut src = snapshot_of(&cache, &id, 0, "snare_top.wav");
+        let _ = doc.analyse(std::slice::from_ref(&src), false).unwrap();
+        let (svc, sid) = (doc.svc.clone().unwrap(), doc.sid.clone().unwrap());
+        let name = doc.tracks[0].0.clone();
+        assert_eq!(svc.tracks_get(&sid).unwrap()["tracks"][name.as_str()]["role"], "snare");
+        // the DAW name gives snare: the source counts as changed, the record keeps its role: the change is dropped
+        src.label = Some("Snare".into());
+        assert!(
+            !doc.snaps[&0].same_as(&src),
+            "a name that gives a role to a source with none is a change"
+        );
+        assert!(
+            !doc.analyse(std::slice::from_ref(&src), false).unwrap().ran,
+            "the role is already snare: no round"
+        );
+        assert_eq!(
+            doc.snaps[&0].label.as_deref(),
+            Some("Snare"),
+            "the new snapshot is kept"
+        );
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn kick_then_mystery_then_snare_changes_an_automatic_role_once() {
+        let cache = scratch("role-chain");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut src = snapshot_of(&cache, &id, 0, "0123456789abcdef0123456789abcdef");
+        src.label = Some("Kick In".into());
+        let _ = doc.analyse(std::slice::from_ref(&src), false).unwrap();
+        src.label = Some("Mystery".into());
+        assert!(!doc.analyse(std::slice::from_ref(&src), false).unwrap().ran);
+        src.label = Some("Snare".into());
+        assert!(doc.analyse(std::slice::from_ref(&src), false).unwrap().ran);
+        let (svc, sid) = (doc.svc.clone().unwrap(), doc.sid.clone().unwrap());
+        let name = doc.tracks[0].0.clone();
+        let t = svc.tracks_get(&sid).unwrap();
+        assert_eq!(
+            (
+                t["tracks"][name.as_str()]["role"].as_str(),
+                t["tracks"][name.as_str()]["note"].as_i64()
+            ),
+            (Some("snare"), Some(38))
+        );
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_record_from_before_this_change_has_no_role_source_and_counts_as_automatic() {
+        // the record of an archive of M1b9: a role from the hex name (other), a note, hits the user edited
+        let mut rec = json!({"role": "other", "note": 36, "events": [{"t": 0.5, "v": 100, "edited": true}]});
+        let snare = labelled(Some("Snare Top"));
+        assert!(
+            apply_label_role(rec.as_object_mut().unwrap(), &snare),
+            "the role is guessed once"
+        );
+        assert_eq!(
+            (rec["role"].as_str(), rec["note"].as_i64(), rec["role_source"].as_str()),
+            (Some("snare"), Some(38), Some("guess"))
+        );
+        assert_eq!(rec["events"][0]["edited"], true, "every hit stays, the edited ones too");
+        assert!(!apply_label_role(rec.as_object_mut().unwrap(), &snare), "and only once");
+        // a note that was not the default note stays
+        let mut own = json!({"role": "other", "note": 40});
+        assert!(apply_label_role(own.as_object_mut().unwrap(), &snare));
+        assert_eq!(own["note"].as_i64(), Some(40));
+    }
+
     fn snapshot_of(cache: &Path, id: &str, seq: usize, name: &str) -> SourceSnapshot {
         let wav = wav_of(cache, id, seq, name);
         write_drum_wav(&wav, &[0.2, 0.9, 1.5], 2.5);
@@ -1267,6 +1809,7 @@ mod tests {
             ready: true,
             audio_gen: 0,
             regions: Vec::new(),
+            label: None,
         }
     }
 
@@ -1472,11 +2015,229 @@ mod tests {
                 snapshot: snap,
                 track: "kick".into(),
                 events: stored.events["kick"].clone(),
+                settings: Map::new(),
             }])
             .unwrap();
         assert_eq!(restored.events["kick"].to_string(), stored.events["kick"].to_string());
         assert!(restored.decode_counts.is_empty(), "{:?}", restored.decode_counts);
         assert_eq!(restored.project_tracks, ["kick"]);
+        again.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_restore_puts_back_what_the_user_set_and_guesses_nothing_for_a_track_the_archive_holds() {
+        let cache = scratch("restore-settings");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let hex = "0123456789abcdef0123456789abcdef";
+        let mut snap = snapshot_of(&cache, &id, 0, hex);
+        snap.label = Some("Kick In".into());
+        let stored = doc.analyse(std::slice::from_ref(&snap), false).unwrap();
+        let name = doc.tracks[0].0.clone();
+        let (svc, sid) = (doc.svc.clone().unwrap(), doc.sid.clone().unwrap());
+        // the user sets a role, a note and a volume by hand
+        svc.track_set_role(&sid, &name, "cymbal", Some(60), None, None, None)
+            .unwrap();
+        svc.track_set_mix(&sid, &name, Some(-3.0), None).unwrap();
+        let settings = settings_of(&svc, &sid, std::slice::from_ref(&name)).unwrap();
+        let held = settings[name.as_str()].as_object().unwrap();
+        assert_eq!(held["role_source"], "user");
+        assert!(!held.contains_key("events") && !held.contains_key("segments") && !held.contains_key("status"));
+        doc.shutdown();
+        // a new service (the new process) and a DAW name that would give another role
+        snap.label = Some("Snare Top".into());
+        let mut again = DocService::new(cache.clone(), id.clone());
+        let t = |settings: Map<String, Value>| RestoredTrack {
+            snapshot: snap.clone(),
+            track: name.clone(),
+            events: stored.events[name.as_str()].clone(),
+            settings,
+        };
+        again.restore(&[t(held.clone())]).unwrap();
+        let (svc2, sid2) = (again.svc.clone().unwrap(), again.sid.clone().unwrap());
+        let rec = svc2.tracks_get(&sid2).unwrap();
+        let rec = &rec["tracks"][name.as_str()];
+        assert_eq!(
+            (rec["role"].as_str(), rec["note"].as_i64(), rec["role_source"].as_str()),
+            (Some("cymbal"), Some(60), Some("user"))
+        );
+        assert_eq!(rec["volume_db"], -3.0);
+        assert_eq!(
+            svc2.events_get(&sid2, &name).unwrap()["events"].to_string(),
+            stored.events[name.as_str()].to_string(),
+            "the hits are the stored ones"
+        );
+        again.shutdown();
+        // an archive of an earlier plugin holds no settings: the role is guessed, as it always was
+        let mut old = DocService::new(cache.clone(), id.clone());
+        old.restore(&[t(Map::new())]).unwrap();
+        let (svc3, sid3) = (old.svc.clone().unwrap(), old.sid.clone().unwrap());
+        assert_eq!(
+            svc3.tracks_get(&sid3).unwrap()["tracks"][name.as_str()]["role"],
+            "snare"
+        );
+        old.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    fn map(v: Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_failed_read_or_a_missing_track_keeps_the_old_settings() {
+        let old = map(json!({"a": {"role": "snare"}, "b": {"role": "kick"}, "gone": {"role": "hat"}}));
+        let names = ["a".to_string(), "b".to_string()];
+        // the read failed: the old map stays whole
+        assert_eq!(merge_settings(&old, None, &names), old);
+        // `b` is not in the answer: its old entry stays; `a` is replaced; `gone` leaves with its track
+        let fresh = map(json!({"a": {"role": "tom"}}));
+        let merged = merge_settings(&old, Some(fresh), &names);
+        assert_eq!(
+            Value::Object(merged),
+            json!({"a": {"role": "tom"}, "b": {"role": "kick"}})
+        );
+    }
+
+    #[test]
+    fn every_key_of_a_track_answer_is_a_setting_or_computed() {
+        let cache = scratch("keys");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut snap = snapshot_of(&cache, &id, 0, "kick.wav");
+        snap.label = Some("Kick In".into());
+        let _ = doc.analyse(std::slice::from_ref(&snap), false).unwrap();
+        let (svc, sid) = (doc.svc.clone().unwrap(), doc.sid.clone().unwrap());
+        svc.track_set_mix(&sid, "kick", Some(-3.0), Some(0.5)).unwrap();
+        let all = svc.tracks_get(&sid).unwrap();
+        for key in all["tracks"]["kick"].as_object().unwrap().keys() {
+            assert!(
+                SETTINGS.contains(&key.as_str()) || NOT_SETTINGS.contains(&key.as_str()),
+                "the answer of the service has a key `{key}` that is neither a setting nor computed: decide it in service.rs"
+            );
+        }
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn the_overlay_takes_only_settings_and_all_of_them_and_survives_a_hostile_archive() {
+        let base = json!({"role": "other", "note": 36, "mix_mode": "average", "source": {"kind": "wav"}, "segments": [{"start": 0.0}]});
+        let hostile = map(json!({
+            "role": "cymbal", "note": 60, "role_source": "user", "role_match": null, "color": "#112233",
+            "params": {"min_gap_ms": 30, "shift_samples": 12}, "mix_mode": "ffmpeg", "volume_db": -3.0, "pan": 0.5,
+            "follows": "kick", "detector": {"detector": "rust-dsp"}, "learn": {"marks": [1]}, "layer": {"file": "x.wav"},
+            "sampler": {"o": 1}, "status": "offline", "offline": true, "source": null, "segments": "x", "events": 5,
+            "sr": 1, "n_samples": 2, "duration": 3.0, "zz_unknown": 1
+        }));
+        let v = overlay_settings(&base, &hostile).expect("a valid record");
+        for (k, want) in [
+            ("role", json!("cymbal")),
+            ("note", json!(60)),
+            ("role_source", json!("user")),
+            ("color", json!("#112233")),
+            ("params", json!({"min_gap_ms": 30, "shift_samples": 12})),
+            ("mix_mode", json!("ffmpeg")),
+            ("volume_db", json!(-3.0)),
+            ("pan", json!(0.5)),
+            ("follows", json!("kick")),
+            ("detector", json!({"detector": "rust-dsp"})),
+            ("learn", json!({"marks": [1]})),
+            ("layer", json!({"file": "x.wav"})),
+            ("sampler", json!({"o": 1})),
+        ] {
+            assert_eq!(v[k], want, "{k}");
+        }
+        assert_eq!(v["source"], base["source"], "the source is never laid over");
+        assert_eq!(v["segments"], base["segments"], "the segments neither");
+        for k in [
+            "status",
+            "offline",
+            "events",
+            "sr",
+            "n_samples",
+            "duration",
+            "zz_unknown",
+        ] {
+            assert!(v.get(k).is_none(), "{k} is not a setting");
+        }
+        // a wrong type (a note that is a string, a pan that is a list) is not laid over; the rest is
+        let v = overlay_settings(
+            &base,
+            &map(json!({"role": "snare", "note": "high", "pan": [1], "volume_db": -6.0})),
+        )
+        .unwrap();
+        assert_eq!(
+            (v["role"].as_str(), v["note"].as_i64(), v["volume_db"].as_f64()),
+            (Some("snare"), Some(36), Some(-6.0))
+        );
+        assert!(v.get("pan").is_none());
+    }
+
+    #[test]
+    fn a_settings_map_with_no_role_guesses_the_role_and_takes_the_rest() {
+        let cache = scratch("restore-norole");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut snap = snapshot_of(&cache, &id, 0, "0123456789abcdef0123456789abcdef");
+        snap.label = Some("Snare Top".into());
+        let stored = doc.analyse(std::slice::from_ref(&snap), false).unwrap();
+        let name = doc.tracks[0].0.clone();
+        doc.shutdown();
+        let mut again = DocService::new(cache.clone(), id.clone());
+        again
+            .restore(&[RestoredTrack {
+                snapshot: snap,
+                track: name.clone(),
+                events: stored.events[name.as_str()].clone(),
+                settings: map(json!({"volume_db": -3.0, "note": 77, "status": "offline"})),
+            }])
+            .unwrap();
+        let (svc, sid) = (again.svc.clone().unwrap(), again.sid.clone().unwrap());
+        let t = svc.tracks_get(&sid).unwrap();
+        let t = &t["tracks"][name.as_str()];
+        assert_eq!(
+            (t["role"].as_str(), t["note"].as_i64()),
+            (Some("snare"), Some(38)),
+            "a guessed role with its note, not no role"
+        );
+        assert_eq!(t["volume_db"], -3.0, "the other setting comes over it");
+        again.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn an_automatic_role_from_an_archive_follows_a_new_daw_name_after_the_restore() {
+        let cache = scratch("restore-follow");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut snap = snapshot_of(&cache, &id, 0, "0123456789abcdef0123456789abcdef");
+        snap.label = Some("Kick In".into());
+        let stored = doc.analyse(std::slice::from_ref(&snap), false).unwrap();
+        let name = doc.tracks[0].0.clone();
+        let (svc, sid) = (doc.svc.clone().unwrap(), doc.sid.clone().unwrap());
+        let settings = settings_of(&svc, &sid, std::slice::from_ref(&name)).unwrap();
+        let held = settings[name.as_str()].as_object().unwrap().clone();
+        assert_eq!(held["role"], "kick");
+        doc.shutdown();
+        let mut again = DocService::new(cache.clone(), id.clone());
+        again
+            .restore(&[RestoredTrack {
+                snapshot: snap.clone(),
+                track: name.clone(),
+                events: stored.events[name.as_str()].clone(),
+                settings: held,
+            }])
+            .unwrap();
+        // the DAW name changes after the restore: the automatic role follows, with one round
+        snap.label = Some("Snare Bottom".into());
+        assert!(again.analyse(std::slice::from_ref(&snap), false).unwrap().ran);
+        let (svc2, sid2) = (again.svc.clone().unwrap(), again.sid.clone().unwrap());
+        assert_eq!(
+            svc2.tracks_get(&sid2).unwrap()["tracks"][name.as_str()]["role"],
+            "snare"
+        );
         again.shutdown();
         let _ = std::fs::remove_dir_all(&cache);
     }
@@ -1496,6 +2257,7 @@ mod tests {
                 snapshot: snap.clone(),
                 track: "kick".into(),
                 events: stored.events["kick"].clone(),
+                settings: Map::new(),
             }])
             .unwrap();
         // the project opens and answers the events without audio

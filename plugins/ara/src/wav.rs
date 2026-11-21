@@ -98,9 +98,69 @@ impl WavWriter {
     }
 }
 
+/// The first `seconds` of a WAV the plugin wrote, as mono samples (M1b10, the role hint): the header
+/// is read, then only the frames needed, never the whole file. The mix to mono is the one of the
+/// service (`MixMode::Ffmpeg`, as the scan of the app uses it). Answers the samples, the rate and
+/// the bytes read from the file (header included); `None` when the file is not a WAV of this plugin.
+#[must_use]
+pub fn read_head_mono(path: &Path, seconds: usize) -> Option<(Vec<f32>, u32, usize)> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 44];
+    f.read_exact(&mut head).ok()?;
+    if &head[0..4] != b"RIFF" || &head[8..12] != b"WAVE" || &head[36..40] != b"data" {
+        return None;
+    }
+    let channels = u16::from_le_bytes([head[22], head[23]]);
+    let rate = u32::from_le_bytes([head[24], head[25], head[26], head[27]]);
+    let data_len = u32::from_le_bytes([head[40], head[41], head[42], head[43]]) as usize;
+    if channels == 0 || rate == 0 {
+        return None;
+    }
+    let frame = 4 * channels as usize;
+    // what the header claims is capped by what the file holds: a header that lies reserves nothing, and a
+    // file shorter than its header decodes what is there (as the whole-file reader does)
+    let on_disk = f.metadata().ok()?.len().saturating_sub(44) as usize;
+    let frames = (data_len.min(on_disk) / frame).min(rate as usize * seconds);
+    let mut data = vec![0u8; frames * frame];
+    f.read_exact(&mut data).ok()?;
+    let mut buf = header(channels, rate, frames);
+    buf.extend_from_slice(&data);
+    let info = drumspike_core::WavInfo::parse(&buf).ok()?;
+    let mono = info.decode_mono(&buf, drumspike_core::MixMode::Ffmpeg).ok()?;
+    Some((mono, rate, 44 + data.len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_head_of_a_long_file_is_read_alone() {
+        let dir = std::env::temp_dir().join(format!("drumspike-ara-wav-{}-head", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("long.wav");
+        // 120 s of stereo at 8 kHz: 7.7 MB on disk; the first 30 s are 1.9 MB
+        let rate = 8_000usize;
+        let n = rate * 120;
+        let mut w = WavWriter::create(&dest, rate as u32, 2, n).unwrap();
+        let block: Vec<f32> = (0..rate * 2).map(|i| if i % 2 == 0 { 0.5 } else { -0.5 }).collect();
+        for _ in 0..120 {
+            w.write_interleaved_f32(&block).unwrap();
+        }
+        w.commit().unwrap();
+        let (mono, sr, bytes) = read_head_mono(&dest, 30).unwrap();
+        assert_eq!(sr, rate as u32);
+        assert_eq!(mono.len(), rate * 30, "30 s of mono");
+        assert_eq!(
+            bytes,
+            44 + rate * 30 * 8,
+            "the header and 30 s of stereo frames, not the whole file"
+        );
+        assert!(bytes * 3 < file_len(n, 2) as usize, "a quarter of the file");
+        assert!(read_head_mono(&dir.join("missing.wav"), 30).is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn tmp_dir(label: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("drumspike-ara-wav-{}-{label}", std::process::id()));
@@ -120,6 +180,37 @@ mod tests {
         assert_eq!(mono, vec![0.5, -0.25, 1e-3, 0.0]);
         // the size the plugin expects of a finished file is the size on disk
         assert_eq!(std::fs::metadata(&dest).unwrap().len(), file_len(4, 1));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_header_that_claims_more_than_the_file_holds_reads_what_is_there() {
+        let dir = std::env::temp_dir().join(format!("drumspike-ara-wav-{}-lie", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("lie.wav");
+        // the header says 4 billion frames of 8 channels, the file holds 1000 mono-ish frames
+        let mut bytes = header(1, 8_000, 1_000_000_000);
+        for _ in 0..1000 {
+            bytes.extend_from_slice(&0.25f32.to_le_bytes());
+        }
+        std::fs::write(&dest, &bytes).unwrap();
+        let (mono, _, read) = read_head_mono(&dest, 30).unwrap();
+        assert_eq!(mono.len(), 1000);
+        assert_eq!(read, 44 + 4000);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_header_only_file_and_an_empty_file_read_no_samples() {
+        let dir = std::env::temp_dir().join(format!("drumspike-ara-wav-{}-empty", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let head_only = dir.join("head.wav");
+        std::fs::write(&head_only, header(1, 8_000, 0)).unwrap();
+        let (mono, sr, read) = read_head_mono(&head_only, 30).unwrap();
+        assert_eq!((mono.len(), sr, read), (0, 8_000, 44));
+        let empty = dir.join("empty.wav");
+        std::fs::write(&empty, b"").unwrap();
+        assert!(read_head_mono(&empty, 30).is_none(), "an empty file is no WAV");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

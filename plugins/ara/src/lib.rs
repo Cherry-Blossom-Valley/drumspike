@@ -41,6 +41,7 @@ pub mod ara {
     include!(concat!(env!("OUT_DIR"), "/ara.rs"));
 }
 pub mod editor;
+pub mod names;
 pub mod playback;
 pub mod service;
 pub mod state;
@@ -196,6 +197,12 @@ struct SourceState {
     stale: AtomicBool,
     /// When the worker took the request that still waits for the audio of this source.
     requested_at: Mutex<Option<std::time::Instant>>,
+    /// M1b10: the role that the DAW name gave at the last snapshot. A new name that gives another
+    /// role marks the source as changed (the track gets the new role at the next round).
+    label_role_seen: Mutex<Option<&'static str>>,
+    /// A new role from the DAW name already marked this source and no snapshot took it since: a rename
+    /// storm marks it once, and the settle time of the worker makes one round of it.
+    role_touch_pending: AtomicBool,
 }
 
 impl SourceState {
@@ -203,9 +210,28 @@ impl SourceState {
         self.props.lock().map(|p| p.clone()).unwrap_or_default()
     }
 
+    /// The name of the DAW track of the first region (only for the fault run `key`).
+    fn fault_key_name(&self) -> Option<String> {
+        let seqs = self.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let regions = self.regions.lock().ok()?;
+        let first = regions
+            .iter()
+            .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play))?;
+        seqs.get(&first.sequence)
+            .and_then(|q| q.name.clone())
+            .or_else(|| first.name.clone())
+    }
+
     /// The snapshot the service job works on.
     fn snapshot(&self) -> service::SourceSnapshot {
         let p = self.props();
+        // the mark is cleared BEFORE the name is read: a rename between the two marks the source again (at worst
+        // one round too many), and is never swallowed
+        self.role_touch_pending.store(false, Ordering::SeqCst);
+        let label = self.label();
+        // the role the name gives is what the round saw now
+        *self.label_role_seen.lock().unwrap_or_else(|e| e.into_inner()) =
+            label.as_deref().and_then(drumspike_app::roles::guess_role);
         // R2: the path, the ready mark and the generation of the audio are read under ONE lock;
         // the content update takes the WAV and raises the generation under the same lock, so a
         // snapshot never holds the old path with the new generation
@@ -216,7 +242,13 @@ impl SourceState {
         };
         service::SourceSnapshot {
             seq: self.seq,
-            name: p.name.clone(),
+            // `DS_ARA_NAMES_FAULT=key` (the check's fault run): the track key follows the name of
+            // the DAW track, which the identity of a track must never do
+            name: if crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("key") {
+                self.fault_key_name().unwrap_or_else(|| p.name.clone())
+            } else {
+                p.name.clone()
+            },
             persistent_id: p.persistent_id,
             sample_rate: p.sample_rate,
             sample_count: p.sample_count,
@@ -231,7 +263,29 @@ impl SourceState {
                 .lock()
                 .map(|r| r.iter().map(|slot| slot.rec).collect())
                 .unwrap_or_default(),
+            label,
         }
+    }
+
+    /// M1b10: the name the DAW shows for the track of this source (the rule of `names.rs` without
+    /// the numbers): the role guess reads it. `DS_ARA_NAMES_FAULT=role-source` (the check's fault
+    /// run) leaves it out, so the role comes from the name of the audio source only.
+    fn label(&self) -> Option<String> {
+        if crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("role-source") {
+            return None;
+        }
+        let seqs = self.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        self.label_in(&seqs)
+    }
+
+    /// [`SourceState::label`] with the region sequences already read (one copy for many sources).
+    fn label_in(&self, seqs: &HashMap<u64, SeqInfo>) -> Option<String> {
+        let regions = self.regions.lock().ok()?;
+        let first = regions
+            .iter()
+            .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play).then(a.id.cmp(&b.id)))?;
+        let seq_name = seqs.get(&first.sequence).and_then(|q| q.name.clone());
+        names::pick_label(seq_name.as_deref(), first.name.as_deref())
     }
 }
 
@@ -243,10 +297,28 @@ struct Modification {
 
 /// One playback region record of a source: its id (the handle the update and destroy
 /// calls carry) and the times the service builds the segments from.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct RegionSlot {
     id: u64,
     rec: service::RegionRec,
+    /// The region sequence (the DAW track) of the region, 0 when the host gave none (M1b10).
+    sequence: u64,
+    /// The name of the playback region, when the host gave one (M1b10).
+    name: Option<String>,
+}
+
+/// The region sequences of a document by the id the plugin handed to the host (M1b10): the name
+/// and nothing else. The id is the whole `ARARegionSequenceRef` (a counter, never a pointer), so a
+/// ref the host keeps after the destroy reaches nothing.
+static NEXT_SEQUENCE_ID: AtomicU64 = AtomicU64::new(1);
+
+/// What the plugin keeps of a region sequence: its name (the host may give none) and its place in the
+/// DAW (`orderIndex`).
+#[derive(Debug, Clone, Default)]
+struct SeqInfo {
+    name: Option<String>,
+    /// `None`: the host gave no order (a struct too short): such a track is sorted last.
+    order: Option<i32>,
 }
 
 /// The next region id (unique per process, so a destroyed region's record cannot be
@@ -310,6 +382,21 @@ struct DocShared {
     /// A cheap change counter of the regions the page maps the host position with (M1b5): it grows
     /// when a region of a source changes, a round stores new regions, or a source leaves.
     region_gen: AtomicU64,
+    /// M1b10: the region sequences of the host by id, with their names.
+    sequences: Mutex<HashMap<u64, SeqInfo>>,
+    /// M1b10 (N10): the settings of every track (role, note, colour, parameters ...) as of the last round or
+    /// page edit, by track name. The archive stores them; a restore sets them on the calling thread.
+    settings: Mutex<serde_json::Map<String, Value>>,
+    /// M1b10: the depth of the edit cycle of the host (`beginEditing` / `endEditing`) and whether a name or
+    /// a region changed inside it: the names are computed once, when the cycle ends.
+    edit_depth: AtomicUsize,
+    names_dirty: AtomicBool,
+    /// How often the display names were computed, and how often a source was marked for a new role (the
+    /// unit tests count them).
+    name_computes: AtomicUsize,
+    role_touches: AtomicUsize,
+    /// M1b10: the display names that the page was last told (track name to display name).
+    shown_names: Mutex<HashMap<String, String>>,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -407,6 +494,13 @@ impl DocShared {
             round_regions: Mutex::new(HashMap::new()),
             round_samples: Mutex::new(HashMap::new()),
             region_gen: AtomicU64::new(0),
+            sequences: Mutex::new(HashMap::new()),
+            settings: Mutex::new(serde_json::Map::new()),
+            edit_depth: AtomicUsize::new(0),
+            names_dirty: AtomicBool::new(false),
+            name_computes: AtomicUsize::new(0),
+            role_touches: AtomicUsize::new(0),
+            shown_names: Mutex::new(HashMap::new()),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -471,6 +565,50 @@ impl DocShared {
         service::wav_of_gen(&self.cache, &self.id(), seq, name, gen)
     }
 
+    /// The names of the tracks of the live sources (the settings are kept for these).
+    fn live_track_names(&self) -> Vec<String> {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        members
+            .iter()
+            .filter(|s| !s.removed.load(Ordering::SeqCst))
+            .filter_map(|s| s.track.lock().ok().and_then(|t| t.clone()))
+            .collect()
+    }
+
+    /// M1b10 (R1): the settings of the tracks as the service holds them now, or `None` when it cannot answer
+    /// (the report gets one row and the caller keeps the map it had). Takes no lock of the document.
+    fn read_settings(&self, svc: &drumspike_app::Service, sid: &str) -> Option<serde_json::Map<String, Value>> {
+        let fresh = service::settings_of(svc, sid, &self.live_track_names());
+        if fresh.is_none() {
+            session().log_deferred(json!({"event": "settings_read_failed", "doc": self.id()}).to_string());
+        }
+        fresh
+    }
+
+    /// Keep `fresh` (R1): an old entry stays when the read failed or the track is not in the answer, and
+    /// leaves with its track. Called with the lock of `settings` held.
+    fn merge_settings_in(
+        &self,
+        cur: &mut serde_json::Map<String, Value>,
+        fresh: Option<serde_json::Map<String, Value>>,
+    ) {
+        *cur = service::merge_settings(cur, fresh, &self.live_track_names());
+    }
+
+    /// Read the settings again from the service (the worker, after a page change: R3a/b).
+    fn refresh_settings(&self) {
+        let (Some(svc), Some(sid)) = (self.page.service(), self.page.sid()) else {
+            return;
+        };
+        let fresh = self.read_settings(&svc, &sid);
+        let mut cur = self.settings.lock().unwrap_or_else(|e| e.into_inner());
+        self.merge_settings_in(&mut cur, fresh);
+    }
+
     /// The page changed the project (F2): before the request thread answers, the events of every
     /// track and the notes of the sources are in the document, so a host store that comes at once
     /// writes them. Runs on the request thread: it takes no `DocService` lock (the worker may hold
@@ -483,6 +621,10 @@ impl DocShared {
             .lock()
             .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
             .unwrap_or_default();
+        // the settings of the tracks (a role or a note set in the page changes no event, so the archive
+        // would miss it): read at every edit, and set together with the events (below), so a store never sees a
+        // new role with old hits
+        let fresh_settings = self.read_settings(svc, sid);
         let mut all = serde_json::Map::new();
         for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
             let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
@@ -495,6 +637,8 @@ impl DocShared {
         }
         let changed = {
             let mut cur = self.events.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = self.settings.lock().unwrap_or_else(|e| e.into_inner());
+            self.merge_settings_in(&mut st, fresh_settings);
             if *cur == all {
                 false
             } else {
@@ -583,6 +727,152 @@ impl DocShared {
             return; // the fault run: the page is not told
         }
         self.page.log.push("plugin-reload", json!({"doc": self.id()}));
+    }
+
+    /// M1b10: the tracks of the document as the display name rule needs them: the track name, the
+    /// creation index of the source and its live playback regions with their names. A source
+    /// that has no track yet (no round made one) is not in the list.
+    fn name_views(&self) -> Vec<names::TrackView> {
+        let seqs = self.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
+                continue;
+            };
+            let regions = s
+                .regions
+                .lock()
+                .map(|r| {
+                    r.iter()
+                        .map(|slot| names::RegionView {
+                            start_play: slot.rec.start_play,
+                            id: slot.id,
+                            sequence_name: seqs.get(&slot.sequence).and_then(|q| q.name.clone()),
+                            sequence_order: seqs.get(&slot.sequence).and_then(|q| q.order),
+                            region_name: slot.name.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.push(names::TrackView {
+                track,
+                seq: s.seq,
+                regions,
+            });
+        }
+        out
+    }
+
+    /// M1b10: a source whose DAW name now gives another role than the last round saw counts as
+    /// changed: the next round makes its track record again (the role follows unless the user set
+    /// it). A rename that keeps the role changes nothing and starts no round.
+    fn touch_role_changes(&self) {
+        self.touch_role_changes_with(&|s| {
+            send(session(), Msg::Touch(s.doc.clone()));
+        });
+    }
+
+    fn touch_role_changes_with(&self, deliver: &dyn Fn(&Arc<SourceState>)) {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let seqs = self.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let now = s.label_in(&seqs).as_deref().and_then(drumspike_app::roles::guess_role);
+            // only a name that gives a role can change a role: a name with none leaves the role as it is
+            let differs = now.is_some() && *s.label_role_seen.lock().unwrap_or_else(|e| e.into_inner()) != now;
+            // a source that no round has seen has no track to change
+            if differs
+                && s.track.lock().map(|t| t.is_some()).unwrap_or(false)
+                && !s.role_touch_pending.swap(true, Ordering::SeqCst)
+            {
+                // the mark stays only when a touch was really made: a source nobody waits for is marked
+                // again by the next name
+                if touch_with(s, deliver) {
+                    self.role_touches.fetch_add(1, Ordering::SeqCst);
+                } else {
+                    s.role_touch_pending.store(false, Ordering::SeqCst);
+                }
+            }
+        }
+    }
+
+    /// M1b10: the display name of every track, by track name (the page shows it; the key of the
+    /// track is the track name and stays).
+    fn display_names(&self) -> HashMap<String, String> {
+        names::display_names(&self.name_views(), names::Fault::read())
+    }
+
+    /// M1b10: a name or a region of the host changed. When a display name differs from what the
+    /// page was told last, the report gets one row `track_names` and, with `announce`, the page
+    /// reloads its project (no analysis round: the hits are the same). Only the names that differ
+    /// from the track name count: a document without host names makes no row and no reload. The
+    /// caller is the host's main thread (an update) or the worker (a round or a restore ended, which
+    /// announces the reload itself).
+    fn names_changed(&self, announce: bool) {
+        self.touch_role_changes();
+        // computed and compared under the lock: the main thread and the worker cannot leave the older map
+        // in place of the newer, and no change goes without its announcement
+        let now = {
+            let mut shown = self.shown_names.lock().unwrap_or_else(|e| e.into_inner());
+            self.name_computes.fetch_add(1, Ordering::SeqCst);
+            let now: HashMap<String, String> = self.display_names().into_iter().filter(|(k, v)| k != v).collect();
+            if *shown == now {
+                return;
+            }
+            *shown = now.clone();
+            now
+        };
+        let mut sorted: Vec<(&String, &String)> = now.iter().collect();
+        sorted.sort();
+        let map: serde_json::Map<String, Value> = sorted.into_iter().map(|(k, v)| (k.clone(), json!(v))).collect();
+        session().log_deferred(json!({"event": "track_names", "doc": self.id(), "names": map}).to_string());
+        if announce && crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() != Ok("no-reload") {
+            self.announce_reload();
+        }
+    }
+
+    /// M1b10: a name or a region of the host changed (a callback of the host, main thread). Inside an
+    /// edit cycle the change is only marked and the names are computed once at its end; a host that makes
+    /// no edit cycle gets the names at once.
+    fn names_touched(&self) {
+        if self.edit_depth.load(Ordering::SeqCst) > 0 {
+            self.names_dirty.store(true, Ordering::SeqCst);
+        } else {
+            self.names_changed(true);
+        }
+    }
+
+    fn edit_begin(&self) {
+        self.edit_depth.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// The edit cycle ends: when it was the outer one and something changed in it, the names are computed once.
+    fn edit_end(&self) {
+        // an end without a begin leaves the depth at 0
+        let left = loop {
+            let d = self.edit_depth.load(Ordering::SeqCst);
+            if d == 0 {
+                break 0;
+            }
+            if self
+                .edit_depth
+                .compare_exchange(d, d - 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                break d - 1;
+            }
+        };
+        if left == 0 && self.names_dirty.swap(false, Ordering::SeqCst) {
+            self.names_changed(true);
+        }
     }
 
     fn lock_svc(&self) -> std::sync::MutexGuard<'_, service::DocService> {
@@ -1623,8 +1913,16 @@ impl Session {
                 }
             }
         }
-        if let Ok(mut m) = doc.events.lock() {
-            *m = result.events.clone();
+        // the events and the settings of the round are set in one step (R3c)
+        let fresh_settings = match (doc.page.service(), doc.page.sid()) {
+            (Some(svc), Some(sid)) => doc.read_settings(&svc, &sid),
+            _ => None,
+        };
+        {
+            let mut ev = doc.events.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = doc.settings.lock().unwrap_or_else(|e| e.into_inner());
+            *ev = result.events.clone();
+            doc.merge_settings_in(&mut st, fresh_settings);
         }
         if result.analysed.is_empty() && usable.is_empty() {
             // a removal that left nothing to analyse
@@ -1673,6 +1971,7 @@ impl Session {
                 "round": round,
                 "reason": reason,
                 "added": result.added,
+                "role_audio": result.role_audio.iter().map(|(t, b, r)| json!({"track": t, "bytes": b, "role": r})).collect::<Vec<_>>(),
                 "analysed": result.analysed,
                 "skipped": skipped,
                 "errors": errors,
@@ -1704,6 +2003,7 @@ impl Session {
         }
         self.write_out();
         // the page reloads its project: it holds the tracks and events of this round (F1, F8)
+        doc.names_changed(false);
         doc.announce_reload();
         false
     }
@@ -1712,6 +2012,9 @@ impl Session {
     /// project is saved, the document's events (the archive stores them) and the notes follow,
     /// and the host is told about the sources whose notes changed.
     fn page_sync(&'static self, doc: &Arc<DocShared>) {
+        // the settings again: a page edit that came between a round's read and its assignment, or a job of
+        // the page that ended after its poll (R3)
+        doc.refresh_settings();
         let worker_doc = doc.clone();
         let outcome = guard("page sync", Err("the page sync panicked".to_string()), move || {
             worker_doc.lock_svc().sync_page_edits()
@@ -1873,6 +2176,7 @@ impl Session {
             Err(e) => self.log(format!("{{\"event\":\"restore_failed\",\"error\":{e:?}}}")),
         }
         self.write_out();
+        doc.names_changed(false);
         doc.announce_reload();
     }
 
@@ -1920,6 +2224,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let p1 = doc.clone();
     let p2 = doc.clone();
     let p3 = doc.clone();
+    let p4 = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
@@ -1933,6 +2238,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
         track_info: Arc::new(move |name: &str| p3.track_info(name)),
         host_name: String::new(),
         doc_id: doc.id(),
+        display_names: Arc::new(move || p4.display_names()),
     }
 }
 
@@ -2220,11 +2526,11 @@ unsafe extern "C" fn dc_isLicensedForCapabilities(
 // The no-op stubs for the members M1a does not implement: the ARA test host of the SDK
 // examples calls them without a check (the same stub set the S1 spike passes with, see
 // plugins/ara-spike/src/stubs.rs). Every one runs inside the boundary guard.
-unsafe extern "C" fn dc_beginEditing(_c: ARADocumentControllerRef) {
-    guard("beginEditing", (), move || {})
+unsafe extern "C" fn dc_beginEditing(c: ARADocumentControllerRef) {
+    guard("beginEditing", (), move || controller_of(c).doc.edit_begin())
 }
-unsafe extern "C" fn dc_endEditing(_c: ARADocumentControllerRef) {
-    guard("endEditing", (), move || {})
+unsafe extern "C" fn dc_endEditing(c: ARADocumentControllerRef) {
+    guard("endEditing", (), move || controller_of(c).doc.edit_end())
 }
 /// The host asks for the pending model updates (the only call in which the plugin may call
 /// back into the host's model update controller): every source whose notes changed in a
@@ -2438,24 +2744,146 @@ unsafe extern "C" fn dc_createPlaybackRegionContentReader(
         Box::into_raw(Box::new(Reader { notes: Vec::new() })) as ARAContentReaderRef
     })
 }
+/// True when the `structSize` a host declared covers the field that ends at `offset + size`
+/// (ARA marks the newer fields of a properties struct by its size).
+unsafe fn size_covers(declared: ARASize, offset: usize, size: usize) -> bool {
+    declared >= offset + size
+}
+
+/// The name of a region sequence (M1b10): the host may give none (NULL), and an old host's struct
+/// may end before the field. The pointer is valid for the call only: the text is copied.
+unsafe fn sequence_name(p: *const ARARegionSequenceProperties) -> Option<String> {
+    if p.is_null() {
+        return None;
+    }
+    let declared = std::ptr::addr_of!((*p).structSize).read_unaligned();
+    if !size_covers(
+        declared,
+        std::mem::offset_of!(ARARegionSequenceProperties, name),
+        std::mem::size_of::<usize>(),
+    ) {
+        return None;
+    }
+    let name = std::ptr::addr_of!((*p).name).read_unaligned();
+    if name.is_null() {
+        None
+    } else {
+        Some(text(name))
+    }
+}
+
+/// The place of a region sequence in the DAW (`orderIndex`, ARA 2): the DAW track order. None when the struct
+/// is too short.
+unsafe fn sequence_order(p: *const ARARegionSequenceProperties) -> Option<i32> {
+    if p.is_null() {
+        return None;
+    }
+    let declared = std::ptr::addr_of!((*p).structSize).read_unaligned();
+    if !size_covers(
+        declared,
+        std::mem::offset_of!(ARARegionSequenceProperties, orderIndex),
+        std::mem::size_of::<i32>(),
+    ) {
+        return None;
+    }
+    Some(std::ptr::addr_of!((*p).orderIndex).read_unaligned())
+}
+
+/// The region sequence and the name of a playback region (M1b10): the sequence id (0 when the host
+/// gave none) and the name (None when the host gave none). Only the fields that the declared
+/// struct size covers are read.
+unsafe fn region_labels(p: *const ARAPlaybackRegionProperties) -> (u64, Option<String>) {
+    if p.is_null() {
+        return (0, None);
+    }
+    let declared = std::ptr::addr_of!((*p).structSize).read_unaligned();
+    let word = std::mem::size_of::<usize>();
+    let sequence = if size_covers(
+        declared,
+        std::mem::offset_of!(ARAPlaybackRegionProperties, regionSequenceRef),
+        word,
+    ) {
+        std::ptr::addr_of!((*p).regionSequenceRef).read_unaligned() as usize as u64
+    } else {
+        0
+    };
+    let name = if size_covers(declared, std::mem::offset_of!(ARAPlaybackRegionProperties, name), word) {
+        let n = std::ptr::addr_of!((*p).name).read_unaligned();
+        if n.is_null() {
+            None
+        } else {
+            Some(text(n))
+        }
+    } else {
+        None
+    };
+    (sequence, name)
+}
+
 unsafe extern "C" fn dc_createRegionSequence(
-    _c: ARADocumentControllerRef,
+    c: ARADocumentControllerRef,
     _h: ARARegionSequenceHostRef,
-    _p: *const ARARegionSequenceProperties,
+    p: *const ARARegionSequenceProperties,
 ) -> ARARegionSequenceRef {
     guard("createRegionSequence", std::ptr::null_mut(), move || {
-        Box::into_raw(Box::new(0u64)) as ARARegionSequenceRef
+        // the ref is a counter, never a pointer: the plugin keeps the name in the document, and
+        // a ref that the host keeps after the destroy reaches nothing
+        let id = NEXT_SEQUENCE_ID.fetch_add(1, Ordering::SeqCst);
+        let ctl = controller_of(c);
+        ctl.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).insert(
+            id,
+            SeqInfo {
+                name: sequence_name(p),
+                order: sequence_order(p),
+            },
+        );
+        id as usize as ARARegionSequenceRef
     })
 }
 unsafe extern "C" fn dc_updateRegionSequenceProperties(
-    _c: ARADocumentControllerRef,
-    _r: ARARegionSequenceRef,
-    _p: *const ARARegionSequenceProperties,
+    c: ARADocumentControllerRef,
+    r: ARARegionSequenceRef,
+    p: *const ARARegionSequenceProperties,
 ) {
-    guard("updateRegionSequenceProperties", (), move || {})
+    guard("updateRegionSequenceProperties", (), move || {
+        // a rename of the DAW track: the page shows the new name at once. Nothing else changes:
+        // the hits are the same, so no round starts (`DS_ARA_NAMES_FAULT=no-rename` ignores the
+        // update, `round` starts a round)
+        let fault = crate::test_switch("DS_ARA_NAMES_FAULT").unwrap_or_default();
+        if fault == "no-rename" {
+            return;
+        }
+        let ctl = controller_of(c);
+        let id = r as usize as u64;
+        let (name, order) = (sequence_name(p), sequence_order(p));
+        if let Some(slot) = ctl.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) {
+            *slot = SeqInfo { name, order };
+        }
+        ctl.doc.names_touched();
+        if fault == "round" {
+            touch_all(ctl);
+        }
+    })
 }
-unsafe extern "C" fn dc_destroyRegionSequence(_c: ARADocumentControllerRef, _r: ARARegionSequenceRef) {
-    guard("destroyRegionSequence", (), move || {})
+unsafe extern "C" fn dc_destroyRegionSequence(c: ARADocumentControllerRef, r: ARARegionSequenceRef) {
+    guard("destroyRegionSequence", (), move || {
+        let ctl = controller_of(c);
+        ctl.doc
+            .sequences
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&(r as usize as u64));
+        ctl.doc.names_touched();
+    })
+}
+
+/// The fault run `DS_ARA_NAMES_FAULT=round`: every source of the controller counts as changed, so
+/// a rename or a move starts an analysis round that it must not start.
+fn touch_all(ctl: &Controller) {
+    let list = ctl.sources.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    for s in &list {
+        touch(s);
+    }
 }
 unsafe extern "C" fn dc_getPlaybackRegionHeadAndTailTime(
     _c: ARADocumentControllerRef,
@@ -2607,6 +3035,8 @@ unsafe extern "C" fn dc_createAudioSource(
                 read_tries: std::sync::atomic::AtomicU32::new(0),
                 stale: AtomicBool::new(false),
                 requested_at: Mutex::new(None),
+                label_role_seen: Mutex::new(None),
+                role_touch_pending: AtomicBool::new(false),
             });
             list.push(src.clone());
             if let Ok(mut m) = ctl.doc.members.lock() {
@@ -2640,17 +3070,30 @@ unsafe extern "C" fn dc_updateAudioSourceProperties(
 /// document needs a round with fresh snapshots (it runs after the settle time; a change
 /// that alters nothing ends in a round that does nothing). `DS_ARA_TOUCH_FAULT=ignore` (the
 /// check's fault run) brings back the first version: the change is not seen.
-fn touch(src: &Arc<SourceState>) {
+fn touch(src: &Arc<SourceState>) -> bool {
+    // a region or a property changed: the page maps the host position with new regions (a source that no
+    // round waits for counts, too). A role touch from a name (`touch_with` alone) changes no region.
     src.doc.region_gen.fetch_add(1, Ordering::SeqCst);
+    touch_with(src, &|s| {
+        send(session(), Msg::Touch(s.doc.clone()));
+    })
+}
+
+/// [`touch`] with the way the message goes to the worker given (a unit test counts instead of sending).
+/// Answers whether a touch was due and made: false for the fault run, a removed source and a source that
+/// no round waits for (the first request will take its snapshot).
+fn touch_with(src: &Arc<SourceState>, deliver: &dyn Fn(&Arc<SourceState>)) -> bool {
     if crate::test_switch("DS_ARA_TOUCH_FAULT").as_deref() == Ok("ignore") {
-        return;
+        return false;
     }
     if src.removed.load(Ordering::SeqCst) {
-        return;
+        return false;
     }
     if src.requested.load(Ordering::SeqCst) || src.has_events.load(Ordering::SeqCst) {
-        send(session(), Msg::Touch(src.doc.clone()));
+        deliver(src);
+        return true;
     }
+    false
 }
 
 unsafe fn state_of(audioSourceRef: ARAAudioSourceRef) -> Option<Arc<SourceState>> {
@@ -3157,16 +3600,23 @@ unsafe extern "C" fn dc_createPlaybackRegion(
     guard("createPlaybackRegion", std::ptr::null_mut(), move || {
         let seq = (*(m as *mut Modification)).seq;
         let rec = region_times(p);
+        let (sequence, name) = region_labels(p);
         let id = NEXT_REGION_ID.fetch_add(1, Ordering::SeqCst);
         let ctl = controller_of(c);
         if let Ok(list) = ctl.sources.lock() {
             if let Some(src) = list.iter().find(|s| s.seq == seq) {
                 if let Ok(mut rl) = src.regions.lock() {
-                    rl.push(RegionSlot { id, rec });
+                    rl.push(RegionSlot {
+                        id,
+                        rec,
+                        sequence,
+                        name,
+                    });
                 }
                 touch(src);
             }
         }
+        ctl.doc.names_touched();
         Box::into_raw(Box::new(PlaybackRegion { seq, id })) as ARAPlaybackRegionRef
     })
 }
@@ -3181,12 +3631,17 @@ unsafe extern "C" fn dc_updatePlaybackRegionProperties(
         // other regions of the source keep their times
         let region: &PlaybackRegion = &*(r as *const PlaybackRegion);
         let rec = region_times(p);
+        let (sequence, name) = region_labels(p);
         let ctl = controller_of(c);
         let mut moved = false;
         if let Ok(list) = ctl.sources.lock() {
             if let Some(src) = list.iter().find(|s| s.seq == region.seq) {
                 if let Ok(mut rl) = src.regions.lock() {
                     if let Some(slot) = rl.iter_mut().find(|slot| slot.id == region.id) {
+                        // a move of the region to another DAW track (or a new name of the region)
+                        // changes the label only: no round, the hits are the same
+                        slot.sequence = sequence;
+                        slot.name = name;
                         // a move in playback time alone changes nothing the analysis uses: the
                         // record is kept, no round starts (`DS_ARA_TOUCH_FAULT=playback-time`
                         // brings back the round)
@@ -3196,11 +3651,12 @@ unsafe extern "C" fn dc_updatePlaybackRegionProperties(
                         slot.rec = rec;
                     }
                 }
-                if moved {
+                if moved || crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("round") {
                     touch(src);
                 }
             }
         }
+        ctl.doc.names_touched();
     })
 }
 
@@ -3218,6 +3674,7 @@ unsafe extern "C" fn dc_destroyPlaybackRegion(c: ARADocumentControllerRef, r: AR
                 touch(src);
             }
         }
+        ctl.doc.names_touched();
         drop(region);
     })
 }
@@ -3273,8 +3730,12 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
 ) -> ARABool {
     guard("storeObjectsToArchive", 0, move || {
         let s = session();
+        let ctl = controller_of(_c);
+        // the events and the settings are read under both locks (the order everywhere: events, then
+        // settings), so the archive never holds a new role with old hits
+        let events_guard = ctl.doc.events.lock().unwrap_or_else(|e| e.into_inner());
+        let settings_guard = ctl.doc.settings.lock().unwrap_or_else(|e| e.into_inner());
         let sources: Vec<state::ArchiveSource> = {
-            let ctl = controller_of(_c);
             let Ok(list) = ctl.sources.lock() else { return 0 };
             list.iter()
                 .map(|src| {
@@ -3286,13 +3747,23 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
                         notes: src.notes.lock().map(|n| n.clone()).unwrap_or_default(),
                         track: src.track.lock().ok().and_then(|t| t.clone()).unwrap_or_default(),
                         stale: src.stale.load(Ordering::SeqCst),
+                        settings: {
+                            let track = src.track.lock().ok().and_then(|t| t.clone()).unwrap_or_default();
+                            settings_guard
+                                .get(&track)
+                                .and_then(Value::as_object)
+                                .cloned()
+                                .unwrap_or_default()
+                        },
+                        sample_count: p.sample_count,
                     }
                 })
                 .collect()
         };
-        let ctl = controller_of(_c);
         // the events of the project of this document (not of the last job of the process)
-        let events = ctl.doc.events.lock().map(|e| e.clone()).unwrap_or_default();
+        let events = events_guard.clone();
+        drop(settings_guard);
+        drop(events_guard);
         let blob = state::encode(&state::ArchiveState {
             version: state::ARCHIVE_VERSION,
             archive_id: ARCHIVE_ID.into(),
@@ -3315,6 +3786,11 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
         let ok = write_bytes(host_ref, writer, 0, blob.len(), blob.as_ptr());
         ok as ARABool
     })
+}
+
+/// The audio of a source is not the stored one: the archive knows the sample count (not 0) and it differs.
+fn audio_changed(stored: i64, now: i64) -> bool {
+    stored > 0 && now > 0 && stored != now
 }
 
 unsafe extern "C" fn dc_restoreObjectsFromArchive(
@@ -3395,9 +3871,12 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                         *n = a.notes.clone();
                     }
                     src.has_events.store(true, Ordering::SeqCst);
-                    // a stale track needs a new analysis: the next round with audio takes it
-                    src.stale.store(a.stale, Ordering::SeqCst);
-                    src.analysis_failed.store(a.stale, Ordering::SeqCst);
+                    // a stale track needs a new analysis: the next round with audio takes it. So does a source
+                    // whose sample count is not the one stored: its audio changed while the session was
+                    // closed, and the stored hits and settings are those of other audio (R4; the hand edits stay)
+                    let stale = a.stale || audio_changed(a.sample_count, p.sample_count);
+                    src.stale.store(stale, Ordering::SeqCst);
+                    src.analysis_failed.store(stale, Ordering::SeqCst);
                     // the track of the source: stored (M1b1), else derived from the stored
                     // name the way the analysis named it (an archive of M1a); a stored name
                     // that is a path is not trusted
@@ -3425,6 +3904,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                             snapshot,
                             track,
                             events: if fault == "empty" { json!([]) } else { (*events).clone() },
+                            settings: a.settings.clone(),
                         });
                     }
                 }
@@ -3444,6 +3924,16 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                 m.insert(t.track.clone(), t.events.clone());
             }
             *ctl.doc.events.lock().unwrap_or_else(|e| e.into_inner()) = m;
+        }
+        // the settings too: an archive stored right after the restore carries them
+        {
+            let mut m = serde_json::Map::new();
+            for t in &restored {
+                if !t.settings.is_empty() {
+                    m.insert(t.track.clone(), Value::Object(t.settings.clone()));
+                }
+            }
+            *ctl.doc.settings.lock().unwrap_or_else(|e| e.into_inner()) = m;
         }
         send(
             s,
@@ -3877,7 +4367,26 @@ fn state_accepts(bytes: &[u8]) -> bool {
     true
 }
 
+/// M1b10: one report row for every call of the host to the state (evidence for the next run in a
+/// real host: LUNA logs "loadPreset failed" and the report did not say whether LUNA calls the state
+/// at all). The calls are on the host's main thread, never on the audio thread; a host saves the
+/// state a few times in a session, so the report is written at once.
+fn state_row(kind: &str, bytes: usize, ok: bool) {
+    if crate::test_switch("DS_ARA_STATE_FAULT").as_deref() == Ok("no-rows") {
+        return; // the fault run: the call of the host is not reported
+    }
+    // a row from the host's main thread: the worker writes the file (a state call never waits for the
+    // report lock that the worker holds while it writes)
+    session().log_deferred(json!({"event": "state_call", "kind": kind, "bytes": bytes, "ok": ok}).to_string());
+}
+
 unsafe extern "C" fn state_save(_p: *const clap_plugin, stream: *const clap_sys::stream::clap_ostream) -> bool {
+    let ok = state_save_inner(stream);
+    state_row("save", state_blob().len(), ok);
+    ok
+}
+
+unsafe fn state_save_inner(stream: *const clap_sys::stream::clap_ostream) -> bool {
     guard("state_save", false, move || {
         let Some(write) = (*stream).write else { return false };
         let blob = state_blob();
@@ -3898,9 +4407,16 @@ unsafe extern "C" fn state_save(_p: *const clap_plugin, stream: *const clap_sys:
 }
 
 unsafe extern "C" fn state_load(_p: *const clap_plugin, stream: *const clap_sys::stream::clap_istream) -> bool {
-    guard("state_load", false, move || {
+    let (ok, bytes) = state_load_inner(stream);
+    state_row("load", bytes, ok);
+    ok
+}
+
+/// The answer of a load and the number of bytes the host's stream gave.
+unsafe fn state_load_inner(stream: *const clap_sys::stream::clap_istream) -> (bool, usize) {
+    guard("state_load", (false, 0), move || {
         let Some(read) = (*stream).read else {
-            return state_accepts(&[]);
+            return (state_accepts(&[]), 0);
         };
         let mut got: Vec<u8> = Vec::new();
         let mut buf = [0u8; 256];
@@ -3912,7 +4428,7 @@ unsafe extern "C" fn state_load(_p: *const clap_plugin, stream: *const clap_sys:
             }
             got.extend_from_slice(&buf[..(n as usize).min(buf.len())]);
         }
-        state_accepts(&got)
+        (state_accepts(&got), got.len())
     })
 }
 
@@ -4227,6 +4743,8 @@ mod tests {
             notes: Vec::new(),
             track: String::new(),
             stale: false,
+            settings: serde_json::Map::new(),
+            sample_count: 0,
         }
     }
 
@@ -4309,7 +4827,248 @@ mod tests {
             read_tries: std::sync::atomic::AtomicU32::new(0),
             stale: AtomicBool::new(false),
             requested_at: Mutex::new(None),
+            label_role_seen: Mutex::new(None),
+            role_touch_pending: AtomicBool::new(false),
         })
+    }
+
+    /// A source with a track and `n` regions on region sequence `seq_id` (named in the document).
+    fn named_source(doc: &Arc<DocShared>, seq: usize, track: &str, seq_id: u64, n: usize) -> Arc<SourceState> {
+        let src = bare_source(doc, seq);
+        src.requested.store(false, Ordering::SeqCst); // a touch of it sends nothing to the worker
+        *src.track.lock().unwrap() = Some(track.to_string());
+        let mut regions = src.regions.lock().unwrap();
+        for i in 0..n {
+            regions.push(RegionSlot {
+                id: seq as u64 * 10_000 + i as u64 + 1,
+                rec: service::RegionRec {
+                    start_mod: 0.0,
+                    dur_mod: 1.0,
+                    start_play: i as f64,
+                },
+                sequence: seq_id,
+                name: Some(format!("take {i}")),
+            });
+        }
+        drop(regions);
+        doc.members.lock().unwrap().push(Arc::downgrade(&src));
+        src
+    }
+
+    #[test]
+    fn five_hundred_regions_in_one_edit_cycle_compute_the_names_once() {
+        let doc = DocShared::new();
+        doc.sequences.lock().unwrap().insert(
+            7,
+            SeqInfo {
+                name: Some("Kick".into()),
+                order: Some(0),
+            },
+        );
+        let id = doc.id();
+        let _src = named_source(&doc, 0, "t0", 7, 0);
+        doc.edit_begin();
+        for i in 0..500 {
+            _src.regions.lock().unwrap().push(RegionSlot {
+                id: i + 1,
+                rec: service::RegionRec {
+                    start_mod: 0.0,
+                    dur_mod: 1.0,
+                    start_play: i as f64,
+                },
+                sequence: 7,
+                name: None,
+            });
+            doc.names_touched();
+        }
+        assert_eq!(
+            doc.name_computes.load(Ordering::SeqCst),
+            0,
+            "nothing is computed inside the cycle"
+        );
+        doc.edit_end();
+        assert_eq!(
+            doc.name_computes.load(Ordering::SeqCst),
+            1,
+            "one computation at the end of the cycle"
+        );
+        let rows = session()
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.contains("track_names") && r.contains(&id))
+            .count();
+        assert_eq!(rows, 1, "one row for the one change");
+        // a host with no edit cycle gets the names at once
+        doc.names_touched();
+        assert_eq!(doc.name_computes.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_region_whose_sequence_is_destroyed_falls_back_to_its_own_name() {
+        let doc = DocShared::new();
+        doc.sequences.lock().unwrap().insert(
+            3,
+            SeqInfo {
+                name: Some("Snare".into()),
+                order: Some(0),
+            },
+        );
+        let _src = named_source(&doc, 0, "t0", 3, 1);
+        assert_eq!(doc.display_names()["t0"], "Snare");
+        doc.sequences.lock().unwrap().remove(&3);
+        assert_eq!(
+            doc.display_names()["t0"],
+            "take 0",
+            "no sequence any more: the name of the region"
+        );
+        // a ref of a sequence that never existed finds nothing, too
+        _src.regions.lock().unwrap()[0].sequence = 999;
+        assert_eq!(doc.display_names()["t0"], "take 0");
+    }
+
+    /// A sequence named `name` with one source `t0` on it that a round waits for (a touch is really made).
+    fn rename_setup(name: &str) -> (Arc<DocShared>, Arc<SourceState>) {
+        let doc = DocShared::new();
+        doc.sequences.lock().unwrap().insert(
+            1,
+            SeqInfo {
+                name: Some(name.into()),
+                order: Some(0),
+            },
+        );
+        let src = named_source(&doc, 0, "t0", 1, 1);
+        src.regions.lock().unwrap()[0].name = None;
+        src.requested.store(true, Ordering::SeqCst);
+        (doc, src)
+    }
+
+    fn rename(doc: &Arc<DocShared>, name: &str) {
+        doc.sequences.lock().unwrap().get_mut(&1).unwrap().name = Some(name.into());
+    }
+
+    #[test]
+    fn a_rename_storm_marks_a_source_for_a_new_role_once() {
+        let (doc, src) = rename_setup("Mystery");
+        let sent = std::cell::Cell::new(0usize);
+        let deliver = |_: &Arc<SourceState>| sent.set(sent.get() + 1);
+        for i in 0..200 {
+            rename(&doc, if i % 2 == 0 { "Snare" } else { "Kick" });
+            doc.touch_role_changes_with(&deliver);
+        }
+        assert_eq!(
+            sent.get(),
+            1,
+            "200 renames, one touch sent: one round after the settle time"
+        );
+        assert_eq!(doc.role_touches.load(Ordering::SeqCst), 1);
+        // a round took its snapshot (it saw the last name, Kick): the same role marks nothing
+        let _ = src.snapshot();
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 1);
+        rename(&doc, "Hi-Hat");
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 2, "a new role after the snapshot is marked again");
+    }
+
+    #[test]
+    fn a_rename_between_the_clear_and_the_read_of_a_snapshot_is_not_swallowed() {
+        let (doc, src) = rename_setup("Mystery");
+        let sent = std::cell::Cell::new(0usize);
+        let deliver = |_: &Arc<SourceState>| sent.set(sent.get() + 1);
+        rename(&doc, "Snare");
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 1);
+        assert!(src.role_touch_pending.load(Ordering::SeqCst));
+        // the worker takes the snapshot: the mark is cleared first, then the name is read
+        let snap = src.snapshot();
+        assert!(
+            !src.role_touch_pending.load(Ordering::SeqCst),
+            "the snapshot cleared the mark"
+        );
+        assert_eq!(snap.label.as_deref(), Some("Snare"));
+        // a rename right after the clear (the main thread ran between the two steps): the mark is free, the
+        // new name is touched, and the next snapshot has it
+        rename(&doc, "Hi-Hat");
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 2, "the rename is touched, not swallowed");
+        assert_eq!(src.snapshot().label.as_deref(), Some("Hi-Hat"));
+    }
+
+    #[test]
+    fn a_touch_that_sends_nothing_leaves_no_mark_behind() {
+        let (doc, src) = rename_setup("Mystery");
+        src.requested.store(false, Ordering::SeqCst); // no round waits for this source
+        let sent = std::cell::Cell::new(0usize);
+        let deliver = |_: &Arc<SourceState>| sent.set(sent.get() + 1);
+        rename(&doc, "Snare");
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 0);
+        assert!(
+            !src.role_touch_pending.load(Ordering::SeqCst),
+            "nothing was sent: no mark"
+        );
+        // a round waits now: the next name is touched
+        src.requested.store(true, Ordering::SeqCst);
+        rename(&doc, "Kick");
+        doc.touch_role_changes_with(&deliver);
+        assert_eq!(sent.get(), 1, "the later rename is not swallowed");
+    }
+
+    #[test]
+    fn the_name_fields_of_a_short_struct_are_not_read_and_a_bad_name_is_cleaned() {
+        unsafe {
+            // a struct that ends before the name: no name, no order, and no read past its size
+            let mut seq: ARARegionSequenceProperties = std::mem::zeroed();
+            seq.structSize = std::mem::offset_of!(ARARegionSequenceProperties, name);
+            seq.name = 0xdead as *const c_char; // never read
+            seq.orderIndex = 9;
+            assert_eq!(sequence_name(&seq), None);
+            assert_eq!(sequence_order(&seq), None, "an unknown order, not 0");
+            let mut reg: ARAPlaybackRegionProperties = std::mem::zeroed();
+            reg.structSize = std::mem::offset_of!(ARAPlaybackRegionProperties, regionSequenceRef);
+            reg.name = 0xdead as *const c_char;
+            assert_eq!(region_labels(&reg), (0, None));
+            // a name with invalid UTF-8 is copied with the replacement character, and NULL is no name
+            let bad = std::ffi::CString::new(vec![b'K', 0xff, b'i']).unwrap();
+            let mut full: ARARegionSequenceProperties = std::mem::zeroed();
+            full.structSize = std::mem::size_of::<ARARegionSequenceProperties>();
+            full.name = bad.as_ptr();
+            full.orderIndex = 4;
+            assert_eq!(sequence_name(&full).as_deref(), Some("K\u{fffd}i"));
+            assert_eq!(sequence_order(&full), Some(4));
+            full.name = std::ptr::null();
+            assert_eq!(sequence_name(&full), None);
+            assert_eq!(sequence_name(std::ptr::null()), None);
+        }
+    }
+
+    #[test]
+    fn audio_that_changed_while_the_session_was_closed_is_known_by_the_sample_count() {
+        assert!(audio_changed(96_000, 48_000), "another length: the audio changed");
+        assert!(!audio_changed(96_000, 96_000));
+        assert!(
+            !audio_changed(0, 96_000),
+            "an archive of an earlier plugin stores no count"
+        );
+        assert!(!audio_changed(96_000, 0), "the host gave no count");
+    }
+
+    #[test]
+    fn a_region_change_bumps_the_region_counter_and_a_role_touch_from_a_name_does_not() {
+        let (doc, src) = rename_setup("Mystery");
+        let before = doc.region_gen.load(Ordering::SeqCst);
+        rename(&doc, "Snare");
+        doc.touch_role_changes_with(&|_| {});
+        assert_eq!(doc.region_gen.load(Ordering::SeqCst), before, "a name moves no region");
+        src.requested.store(false, Ordering::SeqCst);
+        touch(&src);
+        assert_eq!(
+            doc.region_gen.load(Ordering::SeqCst),
+            before + 1,
+            "a region change does, also for a source nobody waits for"
+        );
     }
 
     #[test]
