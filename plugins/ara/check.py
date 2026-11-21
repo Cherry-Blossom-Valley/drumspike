@@ -5234,7 +5234,7 @@ def stage_editor_transport_deactivate_fault() -> bool:
 def handover_run(label: str, env: dict | None = None) -> tuple[int, str]:
     e = {"ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib"}
     e.update(env or {})
-    return run(["cargo", "test", "--locked", "--lib", "transport::tests::", "--", "--test-threads=1"], env=e, log=f"{label}.log", cwd=HERE)
+    return run(["cargo", "test", "--locked", "--features", "test-switches", "--lib", "transport::tests::", "--", "--test-threads=1"], env=e, log=f"{label}.log", cwd=HERE)
 
 
 def stage_transport_handover() -> bool:
