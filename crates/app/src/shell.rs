@@ -117,6 +117,8 @@ impl Service {
             if crate::export::file_owner(&g, name).is_some() {
                 continue; // P4-4: Export All does not write this track's files (they are another track's)
             }
+            let stem = self.out_stem(name);
+            let name = &stem;
             let mut exts = Vec::new();
             if opts.midi && opts.midi_mode == MidiMode::PerTrack {
                 exts.push("mid");

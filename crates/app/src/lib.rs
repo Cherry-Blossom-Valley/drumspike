@@ -25,6 +25,7 @@ pub mod cross_bleed;
 pub mod edit;
 pub mod error;
 pub mod export;
+pub mod export_song;
 pub mod feedback;
 pub mod flam;
 pub mod follow;
@@ -172,6 +173,8 @@ pub(crate) struct Inner {
     pub(crate) training: training::State,
     /// #388: the queue between the window endpoint and the page's helpers.
     pub(crate) window: window_relay::WindowRelay,
+    /// #560: the song time base of an export (set by the DAW plugin only; `None` is the standalone export).
+    pub(crate) export_time: std::sync::RwLock<Option<Arc<dyn export_song::ExportTime>>>,
 }
 
 /// The state of the app: cheap to clone (one `Arc`), shared by every command and by the
@@ -198,6 +201,7 @@ impl Service {
             lock_client: std::sync::Mutex::new(None),
             training: training::State::default(),
             window: window_relay::WindowRelay::default(),
+            export_time: std::sync::RwLock::new(None),
         });
         autosave::spawn(&inner);
         Service { inner }
