@@ -565,6 +565,50 @@ impl DocShared {
         service::wav_of_gen(&self.cache, &self.id(), seq, name, gen)
     }
 
+    /// The names of the tracks of the live sources (the settings are kept for these).
+    fn live_track_names(&self) -> Vec<String> {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        members
+            .iter()
+            .filter(|s| !s.removed.load(Ordering::SeqCst))
+            .filter_map(|s| s.track.lock().ok().and_then(|t| t.clone()))
+            .collect()
+    }
+
+    /// M1b10 (R1): the settings of the tracks as the service holds them now, or `None` when it cannot answer
+    /// (the report gets one row and the caller keeps the map it had). Takes no lock of the document.
+    fn read_settings(&self, svc: &drumspike_app::Service, sid: &str) -> Option<serde_json::Map<String, Value>> {
+        let fresh = service::settings_of(svc, sid, &self.live_track_names());
+        if fresh.is_none() {
+            session().log_deferred(json!({"event": "settings_read_failed", "doc": self.id()}).to_string());
+        }
+        fresh
+    }
+
+    /// Keep `fresh` (R1): an old entry stays when the read failed or the track is not in the answer, and
+    /// leaves with its track. Called with the lock of `settings` held.
+    fn merge_settings_in(
+        &self,
+        cur: &mut serde_json::Map<String, Value>,
+        fresh: Option<serde_json::Map<String, Value>>,
+    ) {
+        *cur = service::merge_settings(cur, fresh, &self.live_track_names());
+    }
+
+    /// Read the settings again from the service (the worker, after a page change: R3a/b).
+    fn refresh_settings(&self) {
+        let (Some(svc), Some(sid)) = (self.page.service(), self.page.sid()) else {
+            return;
+        };
+        let fresh = self.read_settings(&svc, &sid);
+        let mut cur = self.settings.lock().unwrap_or_else(|e| e.into_inner());
+        self.merge_settings_in(&mut cur, fresh);
+    }
+
     /// The page changed the project (F2): before the request thread answers, the events of every
     /// track and the notes of the sources are in the document, so a host store that comes at once
     /// writes them. Runs on the request thread: it takes no `DocService` lock (the worker may hold
@@ -578,13 +622,9 @@ impl DocShared {
             .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
             .unwrap_or_default();
         // the settings of the tracks (a role or a note set in the page changes no event, so the archive
-        // would miss it): read at every edit
-        let track_names: Vec<String> = members
-            .iter()
-            .filter(|s| !s.removed.load(Ordering::SeqCst))
-            .filter_map(|s| s.track.lock().ok().and_then(|t| t.clone()))
-            .collect();
-        *self.settings.lock().unwrap_or_else(|e| e.into_inner()) = service::settings_of(svc, sid, &track_names);
+        // would miss it): read at every edit, and set together with the events (below), so a store never sees a
+        // new role with old hits
+        let fresh_settings = self.read_settings(svc, sid);
         let mut all = serde_json::Map::new();
         for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
             let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
@@ -597,6 +637,8 @@ impl DocShared {
         }
         let changed = {
             let mut cur = self.events.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = self.settings.lock().unwrap_or_else(|e| e.into_inner());
+            self.merge_settings_in(&mut st, fresh_settings);
             if *cur == all {
                 false
             } else {
@@ -1871,11 +1913,16 @@ impl Session {
                 }
             }
         }
-        if let Ok(mut m) = doc.events.lock() {
-            *m = result.events.clone();
-        }
-        if let Ok(mut m) = doc.settings.lock() {
-            *m = result.settings.clone();
+        // the events and the settings of the round are set in one step (R3c)
+        let fresh_settings = match (doc.page.service(), doc.page.sid()) {
+            (Some(svc), Some(sid)) => doc.read_settings(&svc, &sid),
+            _ => None,
+        };
+        {
+            let mut ev = doc.events.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = doc.settings.lock().unwrap_or_else(|e| e.into_inner());
+            *ev = result.events.clone();
+            doc.merge_settings_in(&mut st, fresh_settings);
         }
         if result.analysed.is_empty() && usable.is_empty() {
             // a removal that left nothing to analyse
@@ -1965,6 +2012,9 @@ impl Session {
     /// project is saved, the document's events (the archive stores them) and the notes follow,
     /// and the host is told about the sources whose notes changed.
     fn page_sync(&'static self, doc: &Arc<DocShared>) {
+        // the settings again: a page edit that came between a round's read and its assignment, or a job of
+        // the page that ended after its poll (R3)
+        doc.refresh_settings();
         let worker_doc = doc.clone();
         let outcome = guard("page sync", Err("the page sync panicked".to_string()), move || {
             worker_doc.lock_svc().sync_page_edits()
@@ -3021,6 +3071,9 @@ unsafe extern "C" fn dc_updateAudioSourceProperties(
 /// that alters nothing ends in a round that does nothing). `DS_ARA_TOUCH_FAULT=ignore` (the
 /// check's fault run) brings back the first version: the change is not seen.
 fn touch(src: &Arc<SourceState>) -> bool {
+    // a region or a property changed: the page maps the host position with new regions (a source that no
+    // round waits for counts, too). A role touch from a name (`touch_with` alone) changes no region.
+    src.doc.region_gen.fetch_add(1, Ordering::SeqCst);
     touch_with(src, &|s| {
         send(session(), Msg::Touch(s.doc.clone()));
     })
@@ -3030,7 +3083,6 @@ fn touch(src: &Arc<SourceState>) -> bool {
 /// Answers whether a touch was due and made: false for the fault run, a removed source and a source that
 /// no round waits for (the first request will take its snapshot).
 fn touch_with(src: &Arc<SourceState>, deliver: &dyn Fn(&Arc<SourceState>)) -> bool {
-    src.doc.region_gen.fetch_add(1, Ordering::SeqCst);
     if crate::test_switch("DS_ARA_TOUCH_FAULT").as_deref() == Ok("ignore") {
         return false;
     }
@@ -3678,8 +3730,12 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
 ) -> ARABool {
     guard("storeObjectsToArchive", 0, move || {
         let s = session();
+        let ctl = controller_of(_c);
+        // the events and the settings are read under both locks (the order everywhere: events, then
+        // settings), so the archive never holds a new role with old hits
+        let events_guard = ctl.doc.events.lock().unwrap_or_else(|e| e.into_inner());
+        let settings_guard = ctl.doc.settings.lock().unwrap_or_else(|e| e.into_inner());
         let sources: Vec<state::ArchiveSource> = {
-            let ctl = controller_of(_c);
             let Ok(list) = ctl.sources.lock() else { return 0 };
             list.iter()
                 .map(|src| {
@@ -3693,20 +3749,21 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
                         stale: src.stale.load(Ordering::SeqCst),
                         settings: {
                             let track = src.track.lock().ok().and_then(|t| t.clone()).unwrap_or_default();
-                            ctl.doc
-                                .settings
-                                .lock()
-                                .ok()
-                                .and_then(|m| m.get(&track).and_then(Value::as_object).cloned())
+                            settings_guard
+                                .get(&track)
+                                .and_then(Value::as_object)
+                                .cloned()
                                 .unwrap_or_default()
                         },
+                        sample_count: p.sample_count,
                     }
                 })
                 .collect()
         };
-        let ctl = controller_of(_c);
         // the events of the project of this document (not of the last job of the process)
-        let events = ctl.doc.events.lock().map(|e| e.clone()).unwrap_or_default();
+        let events = events_guard.clone();
+        drop(settings_guard);
+        drop(events_guard);
         let blob = state::encode(&state::ArchiveState {
             version: state::ARCHIVE_VERSION,
             archive_id: ARCHIVE_ID.into(),
@@ -3729,6 +3786,11 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
         let ok = write_bytes(host_ref, writer, 0, blob.len(), blob.as_ptr());
         ok as ARABool
     })
+}
+
+/// The audio of a source is not the stored one: the archive knows the sample count (not 0) and it differs.
+fn audio_changed(stored: i64, now: i64) -> bool {
+    stored > 0 && now > 0 && stored != now
 }
 
 unsafe extern "C" fn dc_restoreObjectsFromArchive(
@@ -3809,9 +3871,12 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                         *n = a.notes.clone();
                     }
                     src.has_events.store(true, Ordering::SeqCst);
-                    // a stale track needs a new analysis: the next round with audio takes it
-                    src.stale.store(a.stale, Ordering::SeqCst);
-                    src.analysis_failed.store(a.stale, Ordering::SeqCst);
+                    // a stale track needs a new analysis: the next round with audio takes it. So does a source
+                    // whose sample count is not the one stored: its audio changed while the session was
+                    // closed, and the stored hits and settings are those of other audio (R4; the hand edits stay)
+                    let stale = a.stale || audio_changed(a.sample_count, p.sample_count);
+                    src.stale.store(stale, Ordering::SeqCst);
+                    src.analysis_failed.store(stale, Ordering::SeqCst);
                     // the track of the source: stored (M1b1), else derived from the stored
                     // name the way the analysis named it (an archive of M1a); a stored name
                     // that is a path is not trusted
@@ -4679,6 +4744,7 @@ mod tests {
             track: String::new(),
             stale: false,
             settings: serde_json::Map::new(),
+            sample_count: 0,
         }
     }
 
@@ -4976,6 +5042,33 @@ mod tests {
             assert_eq!(sequence_name(&full), None);
             assert_eq!(sequence_name(std::ptr::null()), None);
         }
+    }
+
+    #[test]
+    fn audio_that_changed_while_the_session_was_closed_is_known_by_the_sample_count() {
+        assert!(audio_changed(96_000, 48_000), "another length: the audio changed");
+        assert!(!audio_changed(96_000, 96_000));
+        assert!(
+            !audio_changed(0, 96_000),
+            "an archive of an earlier plugin stores no count"
+        );
+        assert!(!audio_changed(96_000, 0), "the host gave no count");
+    }
+
+    #[test]
+    fn a_region_change_bumps_the_region_counter_and_a_role_touch_from_a_name_does_not() {
+        let (doc, src) = rename_setup("Mystery");
+        let before = doc.region_gen.load(Ordering::SeqCst);
+        rename(&doc, "Snare");
+        doc.touch_role_changes_with(&|_| {});
+        assert_eq!(doc.region_gen.load(Ordering::SeqCst), before, "a name moves no region");
+        src.requested.store(false, Ordering::SeqCst);
+        touch(&src);
+        assert_eq!(
+            doc.region_gen.load(Ordering::SeqCst),
+            before + 1,
+            "a region change does, also for a source nobody waits for"
+        );
     }
 
     #[test]

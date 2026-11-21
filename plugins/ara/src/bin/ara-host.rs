@@ -122,6 +122,10 @@ static NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static SEQ_NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static SEQ_OF: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 static REGION_NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// `--rename-seq <j>=<name>` in the modes `restore`: the names arrive AFTER the restore (a real host may make
+/// them late), and `--linger-ms <n>`: the host keeps pumping that long at the end (a late round would show).
+static RENAMES_AFTER_RESTORE: Mutex<Vec<(usize, String)>> = Mutex::new(Vec::new());
+static LINGER_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// `--no-access <k>`: the host never enables the samples access of the k-th source of a
 /// request (and still requests its analysis): its audio never comes.
@@ -1570,6 +1574,19 @@ fn main() {
         .filter_map(|v| v.parse().ok())
         .collect();
     *REGION_NAMES.lock().unwrap() = args_list(&rest, "--region-names");
+    *RENAMES_AFTER_RESTORE.lock().unwrap() = args_list(&rest, "--rename-seq")
+        .iter()
+        .filter_map(|v| {
+            v.split_once('=')
+                .and_then(|(j, n)| Some((j.parse().ok()?, n.to_string())))
+        })
+        .collect();
+    LINGER_MS.store(
+        args_value(&rest, "--linger-ms")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+        Ordering::SeqCst,
+    );
     if let Some(k) = args_value(&rest, "--no-access").and_then(|v| v.parse::<usize>().ok()) {
         NO_ACCESS.store(k, Ordering::SeqCst);
     }
@@ -2444,12 +2461,20 @@ fn run_restore(bundle: &str, files: &[String], archive: Option<String>, with_acc
             if ok == 0 {
                 return Err("restoreObjectsFromArchive refused".into());
             }
+            // M1b10: names that arrive after the restore
+            for (j, name) in RENAMES_AFTER_RESTORE.lock().unwrap().iter() {
+                rename_sequence(inst, state as *const HostState as *mut HostState, *j, name);
+            }
             if with_access {
                 // M1b4: the host reads the audio of the restored sources and never asks for an
                 // analysis; they have their result, so the plugin must start no round (the
                 // pump runs longer than the settle time and a round would need)
                 enable_access(inst, pairs);
                 pump_for(inst, 3000);
+            }
+            let linger = LINGER_MS.load(Ordering::SeqCst);
+            if linger > 0 {
+                pump_for(inst, linger);
             }
             print_notes(inst, state, pairs);
             Ok(())

@@ -118,8 +118,8 @@ note follows only if it was the default note (unit test).
 **A new DAW name.** The snapshot of a source carries the role that its DAW name gives. A name that
 gives another role makes the source changed (`same_as`), and the plugin starts a round after the
 settle time, like a change of a region. A rename that keeps the role (Kick In to Kick Inside) changes
-nothing and starts no round. In that round the track record is made again with everything the user
-set (the same path as a region change). If the role is not `user` and the new name gives another role,
+nothing and starts no round. In that round the track record is made again with everything the user set on the track
+(the same path as a region change). If the role is not `user` and the new name gives another role,
 the record gets the new role, its `role_source` `guess` and, when the note was the default, the new
 default note. The round analyses the tracks together, as every round does, and the role steers the
 detector of that track. When the new name gives no role, the role stays. The identity of the track
@@ -192,6 +192,38 @@ earlier plugin has none, a restore then guesses the role as it always did (a uni
 fixture `archive-v1.ara` cover it); an earlier plugin that reads a new archive ignores the unknown field (no
 field is denied). The field is left out of the file when empty. The archive is larger by the size of the track
 records (the Learn data of a track is the part that can grow).
+
+**What the restore trusts (review round 3).** The write side keeps every key of the record except the keys the
+service computes. The read side is an allow-list (`service::SETTINGS`, one place; a unit test fails when the
+answer of the service gets a key that is in neither list): role, `role_source`, `role_match`, note, colour,
+parameters (the shift is in them), mix mode, volume, pan, follow, `detector`, `learn`, `layer`, `sampler`. A key
+of another type is not laid over; a key that is in no list (a future key, `status`, `source`, `segments`,
+`events`) is dropped. The settings count as "a role set" only when they hold a text `role`: without it the role
+(and its note) is guessed and the other allowed keys come over it. `"settings": null` or any non-object is read
+as no settings, so a damaged field never loses the hits of the archive. A failed read of the settings (the
+service cannot answer) keeps the map the plugin had and writes one report row `settings_read_failed`; a track
+that is missing from an answer keeps its entry; an entry leaves with its track.
+
+The settings are read after each round (set together with the events), after each command of the page that
+writes the project (together with the events, so a store never sees a new role with old hits), and again by the
+worker after every page sync. The store takes the events and the settings under both locks. Not covered: a job
+that the page starts and that ends after the editor closed, before the page polled its end, is recorded only at
+the next round or page change; a store in between holds the older parameters of that track.
+
+Audio that changed while the session was closed: the archive entry stores the sample count of the source
+(`sample_count`, optional, 0 for an archive of an earlier plugin). A restore whose source has another count
+marks the track stale, like a stale track of #545: the next round with audio analyses it again, the hand edits
+stay. Names that arrive after the restore (a real host may make them late): the stage `restore-late-names`
+makes the sequences with no name and names two of them after the restore. The automatic track with the snare
+name gets the snare role with one round (the restored parameters are kept); the track with the role of the user
+keeps it; no other round runs. A restore into an EMPTY cache folder followed by an analysis showed the errors
+"track is offline (changed)" in the test host (the cached WAV is not the one the record names). That was not
+caused by this part and is not fixed here; the stage keeps the cache of the run that stored the archive, as a
+session does.
+
+**Not in the archive.** The settings of the document are not stored by the plugin: the tempo map, the markers,
+the export settings and the row heights. A restore does not bring them back. The sentence "everything the user
+set" in this note means the settings of a track. A ticket for the document level is open with the coordinator.
 
 Stage `restore-settings` (fault run `DS_ARA_NAMES_FAULT=restore-guess`): the page sets a role, a note and a
 volume by hand, the test host stores the archive, a new document restores it: role, `role_source`, note,

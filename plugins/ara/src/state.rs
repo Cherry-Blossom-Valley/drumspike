@@ -43,8 +43,30 @@ pub struct ArchiveSource {
     /// rate, length). A restore puts it back and guesses nothing for such a track. Empty (and absent in the
     /// file) in an archive of an earlier plugin: the restore then guesses the role, as it always did. The
     /// version of the archive stays 1: the field is optional in both directions (an older plugin ignores it).
-    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "lenient_map",
+        skip_serializing_if = "serde_json::Map::is_empty"
+    )]
     pub settings: serde_json::Map<String, serde_json::Value>,
+    /// M1b10 (R4): the sample count of the source when the archive was stored (0: not stored, an archive of an
+    /// earlier plugin). A restore whose source has another count knows that the audio changed while the session
+    /// was closed: the track is analysed again (the rule of a stale track), the hand edits stay.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sample_count: i64,
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
+}
+
+/// `settings` is read leniently (R2): `null`, a list or anything that is not an object is "no settings", so a
+/// damaged field never makes the whole archive (the hits too) fail to parse.
+fn lenient_map<'de, D: serde::Deserializer<'de>>(d: D) -> Result<serde_json::Map<String, serde_json::Value>, D::Error> {
+    Ok(match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Object(m) => m,
+        _ => serde_json::Map::new(),
+    })
 }
 
 /// The blob.
@@ -113,6 +135,7 @@ mod tests {
                 track: "kick".into(),
                 stale: true,
                 settings: serde_json::Map::new(),
+                sample_count: 0,
             }],
         };
         let bytes = encode(&state);
@@ -176,10 +199,60 @@ mod tests {
                 track: "kick".into(),
                 stale: false,
                 settings: serde_json::Map::new(),
+                sample_count: 0,
             }],
         };
         let old: OldState = serde_json::from_slice(&encode(&state)).unwrap();
         assert_eq!(old.version, 1);
+    }
+
+    #[test]
+    fn a_damaged_settings_field_never_fails_the_archive_and_an_old_reader_ignores_a_full_one() {
+        for bad in ["null", "[1,2]", "\"x\"", "7"] {
+            let text = format!(
+                r#"{{"version":1,"archive_id":"x","events":{{"k":[{{"t":0.1}}]}},"sources":[{{"persistent_id":"p","name":"k.wav","sample_rate":48000.0,"notes":[],"settings":{bad}}}]}}"#
+            );
+            let st = decode(text.as_bytes()).unwrap_or_else(|e| panic!("{bad}: {e}"));
+            assert!(st.sources[0].settings.is_empty(), "{bad}: no settings");
+            assert_eq!(st.events.len(), 1, "{bad}: the hits are still there");
+        }
+        // a reader of an earlier plugin (no `settings`, no `sample_count`) reads an archive that has both
+        #[derive(serde::Deserialize)]
+        struct OldSource {
+            name: String,
+            notes: Vec<[f64; 2]>,
+        }
+        #[derive(serde::Deserialize)]
+        struct OldState {
+            version: i64,
+            sources: Vec<OldSource>,
+        }
+        let mut settings = serde_json::Map::new();
+        settings.insert("role".into(), serde_json::json!("snare"));
+        settings.insert("params".into(), serde_json::json!({"min_gap_ms": 30}));
+        let state = ArchiveState {
+            version: ARCHIVE_VERSION,
+            archive_id: "x".into(),
+            doc_id: "abc".into(),
+            events: serde_json::Map::new(),
+            sources: vec![ArchiveSource {
+                persistent_id: "p".into(),
+                name: "snare.wav".into(),
+                sample_rate: 48_000.0,
+                notes: vec![[1.0, 0.5]],
+                track: "snare".into(),
+                stale: false,
+                settings,
+                sample_count: 96_000,
+            }],
+        };
+        let bytes = encode(&state);
+        let old: OldState = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            (old.version, old.sources[0].name.as_str(), old.sources[0].notes.len()),
+            (1, "snare.wav", 1)
+        );
+        assert_eq!(decode(&bytes).unwrap(), state, "and the new reader round-trips it");
     }
 
     #[test]

@@ -6122,6 +6122,11 @@ def stage_editor_names() -> bool:
         return pass_fail("editor-names", False, "no reference or host")
     base = names_base()
     ok = True
+    # M1b10 R5d: a run with no edit of the page: the archive holds the settings of every track from the END OF THE
+    # ROUND (the refresh after a round, not only after a page edit)
+    srcs = (base.get("archive") or {}).get("sources") or []
+    ok = pass_fail("editor-names-round-settings", bool(srcs) and all(isinstance((x.get("settings") or {}).get("role"), str) for x in srcs),
+                   f"{len(srcs)} sources in the archive of a run with no page edit, each with the settings of its track from the round") and ok
     for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
         run_ = names_run(f"editor-names-{which}", bundle, True)
         ok = print_parts(suffix, names_parts(run_, ref, base)) and ok
@@ -6265,22 +6270,63 @@ def restore_settings_run(label: str, env: dict | None = None) -> tuple[dict, dic
     rc, summary, rows = run_phase(f"{label}-store", "names", CLAP, None, [*base, "--arg", "settings", "--archive", str(archive)])
     first = {"rc": rc, "rows": rows}
     cache = f"cache-{label}-restore"
-    rc2, text, lines = host_run(f"{label}-restore", CLAP, ["restore", "--files", *fixture_args(FILES), "--archive", str(archive), *base], cache, extra=env)
+    # --enable-access: the host reads the audio of the restored sources and pumps 3 s, longer than the settle time of
+    # the plugin: a round that the restore wrongly started would show in the report
+    rc2, text, lines = host_run(f"{label}-restore", CLAP, ["restore", "--files", *fixture_args(FILES), "--archive", str(archive), *base, "--enable-access"], cache, extra=env)
     run = {"rc": rc2, "rows": report_rows(f"{label}-restore"), "cache": cache}
     return first, run, archive, keys
+
+def late_names_run(label: str, archive: Path, store_cache: str, env: dict | None = None) -> dict:
+    """The names arrive AFTER the restore (a real host may make them late): the sequences are made with no name, then the
+    host names two of them. One automatic track gets a snare name, the track with the hand-set role gets a hi-hat name."""
+    keys = [safe_name(stem_of(h)) for h in ROLE_HEX]
+    # the cache folder of the run that stored the archive stays (a session keeps its cache): a restore into an empty cache
+    # that then analyses finds the cached WAV records changed (observed: "offline (changed)", see the design note)
+    cache = store_cache
+    args = ["restore", "--files", *fixture_args(FILES), "--archive", str(archive), "--names", *ROLE_HEX,
+            "--seq-names", "-", "-", "-", "-", "--rename-seq", "3=Snare Bottom", "--rename-seq", "0=Hi-Hat Top",
+            "--enable-access", "--linger-ms", "8000"]
+    rc, text, lines = host_run(label, CLAP, args, cache, extra=env, keep_cache=True)
+    return {"rc": rc, "rows": report_rows(label), "cache": cache, "keys": keys}
+
+
+def late_names_parts(run: dict, archive: Path) -> dict:
+    keys = run["keys"]
+    try:
+        doc = tracks_of_doc(doc_of_run(run["cache"]))
+        arch = json.loads(archive.read_text())
+    except (OSError, ValueError, IndexError, StopIteration):
+        doc, arch = {}, {}
+    held = {s.get("track"): s.get("settings") or {} for s in arch.get("sources", [])}
+    rounds = [r for r in run["rows"] if r.get("event") == "round_start"]
+    t0, t3 = doc.get(keys[0]) or {}, doc.get(keys[3]) or {}
+    params_same = all((doc.get(k) or {}).get("params") == (held.get(k) or {}).get("params") for k in keys)
+    return {"restore-late-names": (
+        run["rc"] == 0 and len(rounds) == 1 and (t0.get("role"), t0.get("note"), t0.get("role_source"), t0.get("volume_db")) == ("cymbal", 60, "user", -3)
+        and (t3.get("role"), t3.get("note")) == ("snare", 38) and params_same,
+        f"names that came after the restore: {len(rounds)} round (want 1, with the restored parameters); the hand-set track is "
+        f"{(t0.get('role'), t0.get('note'), t0.get('role_source'), t0.get('volume_db'))} (want cymbal, 60, user, -3: a hi-hat name changes nothing), the "
+        f"automatic track with a snare name is {(t3.get('role'), t3.get('note'))} (want snare, 38), parameters of all tracks the stored ones ({params_same})")}
 
 
 def stage_restore_settings() -> bool:
     if not HOST.exists():
         return pass_fail("restore-settings", False, "no host")
     first, run, archive, keys = restore_settings_run("restore-settings")
-    return print_parts("", restore_settings_parts(first, run, archive, keys))
+    ok = print_parts("", restore_settings_parts(first, run, archive, keys))
+    late = late_names_run("restore-late-names", archive, "cache-restore-settings-store")
+    return print_parts("", late_names_parts(late, archive)) and ok
 
 
 def stage_restore_settings_fault() -> bool:
     first, run, archive, keys = restore_settings_run("restore-settings-fault", {"DS_ARA_NAMES_FAULT": "restore-guess"})
-    return fault_part("restore-settings-fault", restore_settings_parts(first, run, archive, keys), "restore-settings",
-                      "the restore guesses the role again and drops the settings of the user")
+    ok = fault_part("restore-settings-fault", restore_settings_parts(first, run, archive, keys), "restore-settings",
+                    "the restore guesses the role again and drops the settings of the user")
+    # the hand-set role must survive a name that arrives after the restore: the fault run lets the name overwrite it
+    ok_archive = OUT / "restore-settings-fault.ara"
+    late = late_names_run("restore-late-names-fault", ok_archive, "cache-restore-settings-fault-store", {"DS_ARA_NAMES_FAULT": "role-hand"})
+    return fault_part("restore-late-names-fault", late_names_parts(late, ok_archive), "restore-late-names",
+                      "a name that arrives after the restore overwrites the role the user set") and ok
 
 
 STAGES = {

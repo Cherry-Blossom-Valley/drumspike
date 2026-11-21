@@ -201,6 +201,20 @@ mod tests {
     }
 
     #[test]
+    fn a_header_only_file_and_an_empty_file_read_no_samples() {
+        let dir = std::env::temp_dir().join(format!("drumspike-ara-wav-{}-empty", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let head_only = dir.join("head.wav");
+        std::fs::write(&head_only, header(1, 8_000, 0)).unwrap();
+        let (mono, sr, read) = read_head_mono(&head_only, 30).unwrap();
+        assert_eq!((mono.len(), sr, read), (0, 8_000, 44));
+        let empty = dir.join("empty.wav");
+        std::fs::write(&empty, b"").unwrap();
+        assert!(read_head_mono(&empty, 30).is_none(), "an empty file is no WAV");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_failed_writer_leaves_no_destination() {
         let dir = tmp_dir("gone");
         let dest = dir.join("gone.wav");
