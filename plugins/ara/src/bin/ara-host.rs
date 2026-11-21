@@ -114,6 +114,15 @@ static NO_PERSISTENT_ID: AtomicBool = AtomicBool::new(false);
 /// the file paths (hostile names for the check: `a/..`, an empty name).
 static NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// `--seq-names <n>...` (M1b10): the host makes one ARA region sequence (a DAW track) per name,
+/// by index, with that name (`-`: a sequence with no name). `--seq-of <j>...`: the sequence of
+/// source i is `j[i]` (default: i), so two sources may lie on one DAW track. `--region-names
+/// <n>...`: the name of the playback region of source i (`-`: none). No `--seq-names`: no region
+/// sequence at all, as before.
+static SEQ_NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static SEQ_OF: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+static REGION_NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 /// `--no-access <k>`: the host never enables the samples access of the k-th source of a
 /// request (and still requests its analysis): its audio never comes.
 static NO_ACCESS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(usize::MAX);
@@ -155,7 +164,17 @@ struct HostSource {
     channels: Vec<Vec<f32>>,
 }
 
+/// What the host keeps of one playback region besides its ref (M1b10): the source it belongs to,
+/// its region sequence, its name and the times it was made with (a move to another sequence is an
+/// update with the same times).
+struct RegionMeta {
+    seq: Option<usize>,
+    name: Option<CString>,
+    times: (f64, f64, f64),
+}
+
 /// The state the ARA callbacks read and write (the controller host refs point at it).
+#[derive(Default)]
 struct HostState {
     sources: Vec<HostSource>,
     /// The bytes written per archive writer (one entry per writer index).
@@ -165,6 +184,10 @@ struct HostState {
     /// The playback regions in creation order (the update and destroy calls of the
     /// regions mode address them by index).
     regions: Vec<ARAPlaybackRegionRef>,
+    /// The region sequences made so far, by index (null: not made yet).
+    sequences: Vec<ARARegionSequenceRef>,
+    /// One entry per entry of `regions`.
+    region_meta: Vec<RegionMeta>,
 }
 
 /// The bundle binary of a `.clap` bundle path.
@@ -916,6 +939,101 @@ unsafe fn iface_of(inst: Inst) -> &'static ARADocumentControllerInterface {
     &*std::ptr::addr_of!((*inst).documentControllerInterface).read_unaligned()
 }
 
+/// The region sequence index of source `i` (M1b10), or None when the host makes no sequences, or the
+/// source has none.
+fn seq_index_of(i: usize) -> Option<usize> {
+    let names = SEQ_NAMES.lock().unwrap();
+    if names.is_empty() {
+        return None;
+    }
+    let j = SEQ_OF.lock().unwrap().get(i).copied().unwrap_or(i);
+    (j < names.len()).then_some(j)
+}
+
+/// The name of a `--seq-names` or `--region-names` entry: `-` is no name.
+fn name_of_arg(list: &Mutex<Vec<String>>, i: usize) -> Option<CString> {
+    list.lock()
+        .unwrap()
+        .get(i)
+        .filter(|n| n.as_str() != "-")
+        .map(|n| CString::new(n.as_str()).unwrap())
+}
+
+fn sequence_props(name: Option<&CString>, order: i32) -> ARARegionSequenceProperties {
+    ARARegionSequenceProperties {
+        structSize: std::mem::size_of::<ARARegionSequenceProperties>(),
+        name: name.map_or(std::ptr::null(), |n| n.as_ptr()),
+        orderIndex: order,
+        musicalContextRef: std::ptr::null_mut(),
+        color: std::ptr::null(),
+    }
+}
+
+/// The region sequence `j` of the host: made on first use (inside the edit cycle), by `createRegionSequence`.
+unsafe fn ensure_sequence(inst: Inst, state: *mut HostState, j: usize) -> ARARegionSequenceRef {
+    let st = &mut *state;
+    if st.sequences.len() <= j {
+        st.sequences.resize(j + 1, std::ptr::null_mut());
+    }
+    if st.sequences.get(j).is_some_and(|r| r.is_null()) {
+        let name = name_of_arg(&SEQ_NAMES, j);
+        let props = sequence_props(name.as_ref(), j as i32);
+        let dc = iface_of(inst);
+        let r = (dc.createRegionSequence.expect("createRegionSequence"))(
+            dc_ref_of(inst),
+            j as ARARegionSequenceHostRef,
+            &props,
+        );
+        if r.is_null() {
+            eprintln!("createRegionSequence failed");
+        }
+        st.sequences[j] = r;
+    }
+    st.sequences[j]
+}
+
+/// A new name for region sequence `j` (a rename of the DAW track): `updateRegionSequenceProperties`.
+unsafe fn rename_sequence(inst: Inst, state: *mut HostState, j: usize, name: &str) {
+    let r = ensure_sequence(inst, state, j);
+    let name = if name == "-" { None } else { Some(CString::new(name).unwrap()) };
+    let props = sequence_props(name.as_ref(), j as i32);
+    let dc = iface_of(inst);
+    (dc.updateRegionSequenceProperties.expect("updateRegionSequenceProperties"))(dc_ref_of(inst), r, &props);
+    println!("{{\"event\":\"host_sequence_renamed\",\"index\":{j},\"name\":{:?}}}", name.map(|n| n.to_string_lossy().into_owned()));
+}
+
+/// Region `i` moves to region sequence `j`: `updatePlaybackRegionProperties` with the same times.
+unsafe fn move_region(inst: Inst, state: *mut HostState, i: usize, j: usize) {
+    let r = ensure_sequence(inst, state, j);
+    let st = &mut *state;
+    let (Some(reg), Some(meta)) = (st.regions.get(i).copied(), st.region_meta.get_mut(i)) else {
+        eprintln!("--move-region {i}: no such region");
+        return;
+    };
+    meta.seq = Some(j);
+    let (a, d, p) = meta.times;
+    let props = playback_props_for(&*state, i, a, d, p);
+    let dc = iface_of(inst);
+    (dc.updatePlaybackRegionProperties.expect("updatePlaybackRegionProperties"))(dc_ref_of(inst), reg, &props);
+    let _ = r;
+    println!("{{\"event\":\"host_region_moved\",\"region\":{i},\"sequence\":{j}}}");
+}
+
+/// The properties of region `i` with the sequence and the name it was made with (M1b10): an update
+/// that left them out would move the region to no sequence. The name pointer lives in `state`.
+fn playback_props_for(state: &HostState, i: usize, a: f64, d: f64, p: f64) -> ARAPlaybackRegionProperties {
+    let mut props = playback_props(a, d, p);
+    if let Some(meta) = state.region_meta.get(i) {
+        if let Some(j) = meta.seq {
+            props.regionSequenceRef = state.sequences.get(j).copied().unwrap_or(std::ptr::null_mut());
+        }
+        if let Some(n) = &meta.name {
+            props.name = n.as_ptr();
+        }
+    }
+    props
+}
+
 /// The properties of one playback region spec (shared by the create and the update call).
 fn playback_props(a: f64, d: f64, p: f64) -> ARAPlaybackRegionProperties {
     ARAPlaybackRegionProperties {
@@ -937,13 +1055,24 @@ fn playback_props(a: f64, d: f64, p: f64) -> ARAPlaybackRegionProperties {
 unsafe fn add_regions(
     inst: Inst,
     state: *mut HostState,
+    source: usize,
     modification: ARAAudioModificationRef,
     specs: &[(f64, f64, f64)],
 ) {
     let dc = iface_of(inst);
     let dc_ref = dc_ref_of(inst);
+    let seq = seq_index_of(source);
+    if let Some(j) = seq {
+        ensure_sequence(inst, state, j);
+    }
     for (a, d, p) in specs {
-        let props = playback_props(*a, *d, *p);
+        // the meta of the region goes in first: the properties take the sequence and the name from it
+        (*state).region_meta.push(RegionMeta {
+            seq,
+            name: name_of_arg(&REGION_NAMES, source),
+            times: (*a, *d, *p),
+        });
+        let props = playback_props_for(&*state, (*state).regions.len(), *a, *d, *p);
         let r = (dc.createPlaybackRegion.expect("createPlaybackRegion"))(
             dc_ref,
             modification,
@@ -1152,6 +1281,7 @@ fn with_document(
         writers: Vec::new(),
         loaded,
         regions: Vec::new(),
+        ..Default::default()
     }));
     unsafe {
         let loaded = load(bundle)?;
@@ -1165,7 +1295,7 @@ fn with_document(
         let pairs = add_sources(inst, state, files)?;
         for (i, (_, modification)) in pairs.iter().enumerate() {
             let specs = regions_of(&*state, i);
-            add_regions(inst, state, *modification, &specs);
+            add_regions(inst, state, i, *modification, &specs);
         }
         if let Some(f) = dc.endEditing {
             f(dc_ref);
@@ -1258,6 +1388,7 @@ fn run_tables(bundle: &str) -> i32 {
         writers: Vec::new(),
         loaded: Vec::new(),
         regions: Vec::new(),
+        ..Default::default()
     }));
     unsafe {
         let loaded = match load(bundle) {
@@ -1411,6 +1542,9 @@ fn main() {
     NO_REGIONS.store(rest.iter().any(|a| a == "--no-regions"), Ordering::SeqCst);
     NO_PERSISTENT_ID.store(rest.iter().any(|a| a == "--no-persistent-id"), Ordering::SeqCst);
     *NAMES.lock().unwrap() = args_list(&rest, "--names");
+    *SEQ_NAMES.lock().unwrap() = args_list(&rest, "--seq-names");
+    *SEQ_OF.lock().unwrap() = args_list(&rest, "--seq-of").iter().filter_map(|v| v.parse().ok()).collect();
+    *REGION_NAMES.lock().unwrap() = args_list(&rest, "--region-names");
     if let Some(k) = args_value(&rest, "--no-access").and_then(|v| v.parse::<usize>().ok()) {
         NO_ACCESS.store(k, Ordering::SeqCst);
     }
@@ -1579,7 +1713,7 @@ fn run_regions(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 let Some(r) = state.regions.get(*i) else {
                     return Err(format!("--update-region {i}: no region with that index"));
                 };
-                let props = playback_props(*a, *d, *p);
+                let props = playback_props_for(state, *i, *a, *d, *p);
                 (dc.updatePlaybackRegionProperties
                     .expect("updatePlaybackRegionProperties"))(dc_ref, *r, &props);
             }
@@ -1651,6 +1785,7 @@ impl HostDoc {
             writers: Vec::new(),
             loaded: archive,
             regions: Vec::new(),
+            ..Default::default()
         }));
         let inst = make_controller(loaded, state)?;
         Ok(HostDoc {
@@ -1700,11 +1835,13 @@ impl HostDoc {
             if NO_REGIONS.load(Ordering::SeqCst) {
                 // `--no-regions`: sources without playback regions are plain tracks
                 (*self.state).regions.push(std::ptr::null_mut());
+                (*self.state).region_meta.push(RegionMeta { seq: None, name: None, times: (0.0, 0.0, 0.0) });
                 continue;
             }
             add_regions(
                 self.inst,
                 self.state,
+                base + k,
                 *modification,
                 &full_regions(&*self.state, base + k),
             );
@@ -2321,6 +2458,7 @@ fn run_blocks(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         writers: Vec::new(),
         loaded: Vec::new(),
         regions: Vec::new(),
+        ..Default::default()
     }));
     unsafe {
         let lib = match load(bundle) {
@@ -2352,7 +2490,7 @@ fn run_blocks(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             }
         };
         for (i, (_, modification)) in pairs.iter().enumerate() {
-            add_regions(inst, state, *modification, &full_regions(&*state, i));
+            add_regions(inst, state, i, *modification, &full_regions(&*state, i));
         }
         if let Some(f) = dc.endEditing {
             f(dc_ref);

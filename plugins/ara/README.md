@@ -1,4 +1,4 @@
-# Drum Spike ARA plugin (M1a, #525; M1b1, #537; M1b2, #538; M1b5, #546; M1d1, #552)
+# Drum Spike ARA plugin (M1a, #525; M1b1, #537; M1b2, #538; M1b5, #546; M1d1, #552; M1b10, #558)
 
 The Drum Spike plugin for DAWs: one CLAP plugin in Rust with ARA 2 and, since M1b2, an editor window,
 wrapped as one self-contained VST3 (the CLAP inside the bundle). The plugin takes the
@@ -278,6 +278,41 @@ none). Stages `playback-map`, `editor-playback`, `editor-playback-none`, `editor
 and `editor-playback-refused`, each with a fault run (switch `DS_ARA_PLAYBACK_FAULT`). The design
 is in `docs/design/daw-plugin/m1b7-page-moves-host.md`.
 
+## The names of the tracks (M1b10)
+
+A DAW may give an audio source a machine name (LUNA: 32 hex characters). The page shows the name that
+the user sees in the DAW. The plugin keeps the names from `createRegionSequence`,
+`updateRegionSequenceProperties`, the playback region properties (`regionSequenceRef` and `name`)
+and the audio source. The display name of a track is, in this order:
+
+1. the name of the region sequence (the DAW track) of its first playback region (the lowest start
+   in song time),
+2. the name of that playback region,
+3. the name of the audio source (the track name as it was before M1b10; a source with no playback
+   region has this one).
+
+Two tracks with one display name show a difference: the later source gets a number (`Toms (2)`).
+The display name is a label. The key of a track (its hits, its files, the archive) stays what it
+is: the archive has no name from the host, so an archive and the events are byte for byte the same
+as without names.
+
+- **Where the page gets it:** `display_name` in every track of the answer of `tracks_get` and
+  `project_get` (the plugin adds the one key; the track key is not touched). The page must show it:
+  `static/tracks.js` writes the key into the header and `static/inspector.js` into the name field.
+  Until the page reads `display_name`, the page shows the key (see the design note).
+- **A rename of the DAW track and a move of a region** to another track change the display name
+  with no analysis round: the plugin tells the page to reload its project (`plugin-reload`).
+- **Report rows:** `track_names` (the display names that differ from the track name, when they
+  change) and `state_call` (every call of the host to `clap.state`, M1b10).
+- **The role follows the DAW name (item 8):** the role guess of a new track reads the DAW name, then the
+  name of the audio source, then the audio (as the scan of the app does), then `other`. A new DAW name that
+  gives another role changes the role of a track whose `role_source` is not `user`, with its default note,
+  and starts one round. A role set by hand is never changed. Stages `editor-roles` and `editor-roles-fault`.
+- **Test host:** `--seq-names`, `--seq-of`, `--region-names` (region sequences and region names),
+  and in the editor mode `names`: `--rename-seq <j>=<name>` and `--move-region <i>=<j>`.
+  Stages `editor-names` (on the CLAP and on the plugin inside the VST3) and `editor-names-fault`
+  (switch `DS_ARA_NAMES_FAULT`). The design is in `docs/design/daw-plugin/m1b10-track-names.md`.
+
 ## The check
 
 `plugins/ara/check.sh check` (-> `check.py all`) runs every gate line of the ticket: the
@@ -355,12 +390,13 @@ variants, because the hand checks in a DAW need them.
 | `DS_ARA_PANIC_TEST` | scenario | reader, worker | the reader thread or the worker thread panics once |
 | `DS_ARA_SCENARIO` | scenario | corrupt-wav:<n>, fail-first-round, slow-setup, audio-deadline-ms:<n>, fail-rounds:<n>, no-reader-thread | the WAV of source n is damaged after the read, the first round fails once, every round waits 1.5 s before its analysis starts, or a request waits n ms for audio (default 30000); fail-rounds:<n>: the first n rounds fail; no-reader-thread: the reader thread of a source cannot start |
 | `DS_ARA_RETRY_MS` | scenario | milliseconds | the first wait of the automatic retry of a failed round (default 2000, then twice as long each time; kept between 10 and 60000) |
-| `DS_ARA_STATE_FAULT` | fault | strict | the load of the plugin state refuses an empty stream, a newer version and anything else than its own blob (the host's instance creation then fails, as in LUNA) |
-| `DS_ARA_EDITOR_MODE` | scenario | ready, keys, focus, resize, measure, edit, shell, analyse, net, bigpost, transport, playback | the editor page runs a test driver of that name and reports to the plugin (the test host sets it itself); transport: the page samples its drawn position while the host plays a transport script; playback: the page does play, stop and locate like a user and the host records what it is asked |
+| `DS_ARA_STATE_FAULT` | fault | strict, no-rows | strict: the load of the plugin state refuses an empty stream, a newer version and anything else than its own blob (the host's instance creation then fails, as in LUNA); no-rows: a call of the host to the state is not written to the report |
+| `DS_ARA_EDITOR_MODE` | scenario | ready, keys, focus, resize, measure, edit, shell, analyse, net, bigpost, transport, playback, names | the editor page runs a test driver of that name and reports to the plugin (the test host sets it itself); transport: the page samples its drawn position while the host plays a transport script; playback: the page does play, stop and locate like a user and the host records what it is asked; names: the page reports the display names of the tracks, the host renames a DAW track and moves a region, the page reports again |
 | `DS_ARA_EDITOR_ARG` | scenario | a text | the argument of the test driver of the editor page (a WAV path of the shell mode) |
 | `DS_ARA_EDITOR_FAULT` | fault | no-ready, no-bundle, no-shell, no-sync, no-record, no-notes, no-reload, no-events, drop-edits, drop-track-data, missing-function, allow-track-set, no-focus, no-resize, inline, leak, slow-frames, page-transport | the editor: the page's ready call is not counted, the plugin finds no page in its bundle, the shell commands are left to the service, a command of the page does not reach the archive or the request thread does not record it before the page's answer (no-record), the notes do not follow an edit, the page is not told that a round ended or gets no event of the service, a round of the plugin drops the hand edits of the page, the shell script of the page finds a function missing (it reports it), a region change drops the hand data of the track (hits, role, mix), the page may change the track set, the web view is not the first responder or does not follow a resize, a command runs on the main thread, every editor leaks 4 MB, the page draws slow frames, or (page-transport) the page runs a command of the app's own transport |
 | `DS_ARA_TRANSPORT_FAULT` | fault | off, identity, flood, invent, alloc, keep-playing | the host transport of the page (M1b5): off: the audio thread stores no transport, so the page never follows; identity: the song position is the page time, the regions are not used; flood: a message to the page every 8 ms instead of every 40 ms; invent: with no transport seen, the page is told the host plays from 0; alloc: the audio thread allocates in its call (the unit test that names the hand-over fails); keep-playing: a cleared slot or a host with no position does not stop the page (the way before review round 3) |
 | `DS_ARA_PLAYBACK_FAULT` | fault | direct, identity, skip, anonymous, error-row, no-fallback, no-supersede, no-drag-guard, keep-error, first-track | the page moves the host (M1b7): direct: the request thread calls the ARA playback controller itself, not the main thread; identity: a locate goes to the host with the page time as song position (no regions); skip: the plugin makes no call to the host and says it did; anonymous: the text of a missing control does not name the host; error-row: a refused request of the page is an error (an error row is written); no-fallback: the shell never shows the host position again after a request the host did not follow, and Play ends at once; no-supersede: every locate of the queue of host requests runs, none is dropped for a newer one; no-drag-guard: the shell shows the host position again under the pointer of a drag; keep-error: the text of a failed play stays when the host starts later; first-track: the follow of the host transport maps with the first source, not the selected track |
+| `DS_ARA_NAMES_FAULT` | fault | ignore, region-first, no-number, no-rename, no-reload, round, key, role-source, role-hand, role-frozen | the names of the tracks (M1b10): role-source: the role guess reads the name of the audio source only, not the name of the DAW track; role-hand: a new DAW name overwrites a role the user set; role-frozen: the role is guessed once and never again; ignore: the names of the host are ignored and the page shows the track key; region-first: the name of a playback region wins over the name of its region sequence; no-number: two tracks with one DAW name show one name; no-rename: updateRegionSequenceProperties is ignored; no-reload: a rename or a move does not tell the page; round: a rename or a move starts an analysis round; key: the key of a track follows the name of the DAW track (the identity of a track must not) |
 | `DS_ARA_EDITOR_SCENARIO` | scenario | panic:<command>, sync-delay | the named command of the page panics inside the plugin where the service would run it, or the worker hears 12 s late about a change of the page (the request thread's own record is not delayed) |
 
 Kinds: **config**: The plugin reads it in every build, the delivery build too (the check sets it for every run; the hand checks in a DAW need it). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. Read only by a build with the cargo feature `test-switches` (the gate build); a delivery build ignores it. **scenario**: Scenario switch: sets up a case for a stage (not a fault). Read only by a build with the cargo feature `test-switches`; a delivery build ignores it.

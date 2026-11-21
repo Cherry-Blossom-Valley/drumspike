@@ -41,6 +41,7 @@ pub mod ara {
     include!(concat!(env!("OUT_DIR"), "/ara.rs"));
 }
 pub mod editor;
+pub mod names;
 pub mod playback;
 pub mod service;
 pub mod state;
@@ -196,6 +197,9 @@ struct SourceState {
     stale: AtomicBool,
     /// When the worker took the request that still waits for the audio of this source.
     requested_at: Mutex<Option<std::time::Instant>>,
+    /// M1b10: the role that the DAW name gave at the last snapshot. A new name that gives another
+    /// role marks the source as changed (the track gets the new role at the next round).
+    label_role_seen: Mutex<Option<&'static str>>,
 }
 
 impl SourceState {
@@ -203,9 +207,22 @@ impl SourceState {
         self.props.lock().map(|p| p.clone()).unwrap_or_default()
     }
 
+    /// The name of the DAW track of the first region (only for the fault run `key`).
+    fn fault_key_name(&self) -> Option<String> {
+        let seqs = self.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let regions = self.regions.lock().ok()?;
+        let first = regions
+            .iter()
+            .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play))?;
+        seqs.get(&first.sequence).cloned().flatten().or_else(|| first.name.clone())
+    }
+
     /// The snapshot the service job works on.
     fn snapshot(&self) -> service::SourceSnapshot {
         let p = self.props();
+        let label = self.label();
+        // the role the name gives is what the round saw now
+        *self.label_role_seen.lock().unwrap_or_else(|e| e.into_inner()) = label.as_deref().and_then(drumspike_app::roles::guess_role);
         // R2: the path, the ready mark and the generation of the audio are read under ONE lock;
         // the content update takes the WAV and raises the generation under the same lock, so a
         // snapshot never holds the old path with the new generation
@@ -216,7 +233,13 @@ impl SourceState {
         };
         service::SourceSnapshot {
             seq: self.seq,
-            name: p.name.clone(),
+            // `DS_ARA_NAMES_FAULT=key` (the check's fault run): the track key follows the name of
+            // the DAW track, which the identity of a track must never do
+            name: if crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("key") {
+                self.fault_key_name().unwrap_or_else(|| p.name.clone())
+            } else {
+                p.name.clone()
+            },
             persistent_id: p.persistent_id,
             sample_rate: p.sample_rate,
             sample_count: p.sample_count,
@@ -231,7 +254,24 @@ impl SourceState {
                 .lock()
                 .map(|r| r.iter().map(|slot| slot.rec).collect())
                 .unwrap_or_default(),
+            label,
         }
+    }
+
+    /// M1b10: the name the DAW shows for the track of this source (the rule of `names.rs` without
+    /// the numbers): the role guess reads it. `DS_ARA_NAMES_FAULT=role-source` (the check's fault
+    /// run) leaves it out, so the role comes from the name of the audio source only.
+    fn label(&self) -> Option<String> {
+        if crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("role-source") {
+            return None;
+        }
+        let seqs = self.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let regions = self.regions.lock().ok()?;
+        let first = regions
+            .iter()
+            .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play).then(a.id.cmp(&b.id)))?;
+        let seq_name = seqs.get(&first.sequence).cloned().flatten();
+        names::pick_label(seq_name.as_deref(), first.name.as_deref())
     }
 }
 
@@ -243,11 +283,20 @@ struct Modification {
 
 /// One playback region record of a source: its id (the handle the update and destroy
 /// calls carry) and the times the service builds the segments from.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct RegionSlot {
     id: u64,
     rec: service::RegionRec,
+    /// The region sequence (the DAW track) of the region, 0 when the host gave none (M1b10).
+    sequence: u64,
+    /// The name of the playback region, when the host gave one (M1b10).
+    name: Option<String>,
 }
+
+/// The region sequences of a document by the id the plugin handed to the host (M1b10): the name
+/// and nothing else. The id is the whole `ARARegionSequenceRef` (a counter, never a pointer), so a
+/// ref the host keeps after the destroy reaches nothing.
+static NEXT_SEQUENCE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The next region id (unique per process, so a destroyed region's record cannot be
 /// confused with a later one).
@@ -310,6 +359,10 @@ struct DocShared {
     /// A cheap change counter of the regions the page maps the host position with (M1b5): it grows
     /// when a region of a source changes, a round stores new regions, or a source leaves.
     region_gen: AtomicU64,
+    /// M1b10: the region sequences of the host by id, with their names.
+    sequences: Mutex<HashMap<u64, Option<String>>>,
+    /// M1b10: the display names that the page was last told (track name to display name).
+    shown_names: Mutex<HashMap<String, String>>,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -407,6 +460,8 @@ impl DocShared {
             round_regions: Mutex::new(HashMap::new()),
             round_samples: Mutex::new(HashMap::new()),
             region_gen: AtomicU64::new(0),
+            sequences: Mutex::new(HashMap::new()),
+            shown_names: Mutex::new(HashMap::new()),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -583,6 +638,99 @@ impl DocShared {
             return; // the fault run: the page is not told
         }
         self.page.log.push("plugin-reload", json!({"doc": self.id()}));
+    }
+
+    /// M1b10: the tracks of the document as the display name rule needs them: the track name, the
+    /// creation index of the source and its live playback regions with their names. A source
+    /// that has no track yet (no round made one) is not in the list.
+    fn name_views(&self) -> Vec<names::TrackView> {
+        let seqs = self.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
+                continue;
+            };
+            let regions = s
+                .regions
+                .lock()
+                .map(|r| {
+                    r.iter()
+                        .map(|slot| names::RegionView {
+                            start_play: slot.rec.start_play,
+                            id: slot.id,
+                            sequence_name: seqs.get(&slot.sequence).cloned().flatten(),
+                            region_name: slot.name.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.push(names::TrackView {
+                track,
+                seq: s.seq,
+                regions,
+            });
+        }
+        out
+    }
+
+    /// M1b10: a source whose DAW name now gives another role than the last round saw counts as
+    /// changed: the next round makes its track record again (the role follows unless the user set
+    /// it). A rename that keeps the role changes nothing and starts no round.
+    fn touch_role_changes(&self) {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let now = s.label().as_deref().and_then(drumspike_app::roles::guess_role);
+            let differs = *s.label_role_seen.lock().unwrap_or_else(|e| e.into_inner()) != now;
+            // a source that no round has seen has no track to change
+            if differs && s.track.lock().map(|t| t.is_some()).unwrap_or(false) {
+                touch(s);
+            }
+        }
+    }
+
+    /// M1b10: the display name of every track, by track name (the page shows it; the key of the
+    /// track is the track name and stays).
+    fn display_names(&self) -> HashMap<String, String> {
+        names::display_names(&self.name_views(), names::Fault::read())
+    }
+
+    /// M1b10: a name or a region of the host changed. When a display name differs from what the
+    /// page was told last, the report gets one row `track_names` and, with `announce`, the page
+    /// reloads its project (no analysis round: the hits are the same). Only the names that differ
+    /// from the track name count: a document without host names makes no row and no reload. The
+    /// caller is the host's main thread (an update) or the worker (a round or a restore ended, which
+    /// announces the reload itself).
+    fn names_changed(&self, announce: bool) {
+        self.touch_role_changes();
+        let now: HashMap<String, String> = self.display_names().into_iter().filter(|(k, v)| k != v).collect();
+        let changed = {
+            let mut shown = self.shown_names.lock().unwrap_or_else(|e| e.into_inner());
+            if *shown == now {
+                false
+            } else {
+                *shown = now.clone();
+                true
+            }
+        };
+        if !changed {
+            return;
+        }
+        let mut sorted: Vec<(&String, &String)> = now.iter().collect();
+        sorted.sort();
+        let map: serde_json::Map<String, Value> = sorted.into_iter().map(|(k, v)| (k.clone(), json!(v))).collect();
+        session().log_deferred(json!({"event": "track_names", "doc": self.id(), "names": map}).to_string());
+        if announce && crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() != Ok("no-reload") {
+            self.announce_reload();
+        }
     }
 
     fn lock_svc(&self) -> std::sync::MutexGuard<'_, service::DocService> {
@@ -1704,6 +1852,7 @@ impl Session {
         }
         self.write_out();
         // the page reloads its project: it holds the tracks and events of this round (F1, F8)
+        doc.names_changed(false);
         doc.announce_reload();
         false
     }
@@ -1873,6 +2022,7 @@ impl Session {
             Err(e) => self.log(format!("{{\"event\":\"restore_failed\",\"error\":{e:?}}}")),
         }
         self.write_out();
+        doc.names_changed(false);
         doc.announce_reload();
     }
 
@@ -1920,6 +2070,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let p1 = doc.clone();
     let p2 = doc.clone();
     let p3 = doc.clone();
+    let p4 = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
@@ -1933,6 +2084,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
         track_info: Arc::new(move |name: &str| p3.track_info(name)),
         host_name: String::new(),
         doc_id: doc.id(),
+        display_names: Arc::new(move || p4.display_names()),
     }
 }
 
@@ -2438,24 +2590,119 @@ unsafe extern "C" fn dc_createPlaybackRegionContentReader(
         Box::into_raw(Box::new(Reader { notes: Vec::new() })) as ARAContentReaderRef
     })
 }
+/// True when the `structSize` a host declared covers the field that ends at `offset + size`
+/// (ARA marks the newer fields of a properties struct by its size).
+unsafe fn size_covers(declared: ARASize, offset: usize, size: usize) -> bool {
+    declared >= offset + size
+}
+
+/// The name of a region sequence (M1b10): the host may give none (NULL), and an old host's struct
+/// may end before the field. The pointer is valid for the call only: the text is copied.
+unsafe fn sequence_name(p: *const ARARegionSequenceProperties) -> Option<String> {
+    if p.is_null() {
+        return None;
+    }
+    let declared = std::ptr::addr_of!((*p).structSize).read_unaligned();
+    if !size_covers(declared, std::mem::offset_of!(ARARegionSequenceProperties, name), std::mem::size_of::<usize>()) {
+        return None;
+    }
+    let name = std::ptr::addr_of!((*p).name).read_unaligned();
+    if name.is_null() {
+        None
+    } else {
+        Some(text(name))
+    }
+}
+
+/// The region sequence and the name of a playback region (M1b10): the sequence id (0 when the host
+/// gave none) and the name (None when the host gave none). Only the fields that the declared
+/// struct size covers are read.
+unsafe fn region_labels(p: *const ARAPlaybackRegionProperties) -> (u64, Option<String>) {
+    if p.is_null() {
+        return (0, None);
+    }
+    let declared = std::ptr::addr_of!((*p).structSize).read_unaligned();
+    let word = std::mem::size_of::<usize>();
+    let sequence = if size_covers(declared, std::mem::offset_of!(ARAPlaybackRegionProperties, regionSequenceRef), word) {
+        std::ptr::addr_of!((*p).regionSequenceRef).read_unaligned() as usize as u64
+    } else {
+        0
+    };
+    let name = if size_covers(declared, std::mem::offset_of!(ARAPlaybackRegionProperties, name), word) {
+        let n = std::ptr::addr_of!((*p).name).read_unaligned();
+        if n.is_null() {
+            None
+        } else {
+            Some(text(n))
+        }
+    } else {
+        None
+    };
+    (sequence, name)
+}
+
 unsafe extern "C" fn dc_createRegionSequence(
-    _c: ARADocumentControllerRef,
+    c: ARADocumentControllerRef,
     _h: ARARegionSequenceHostRef,
-    _p: *const ARARegionSequenceProperties,
+    p: *const ARARegionSequenceProperties,
 ) -> ARARegionSequenceRef {
     guard("createRegionSequence", std::ptr::null_mut(), move || {
-        Box::into_raw(Box::new(0u64)) as ARARegionSequenceRef
+        // the ref is a counter, never a pointer: the plugin keeps the name in the document, and
+        // a ref that the host keeps after the destroy reaches nothing
+        let id = NEXT_SEQUENCE_ID.fetch_add(1, Ordering::SeqCst);
+        let ctl = controller_of(c);
+        ctl.doc
+            .sequences
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, sequence_name(p));
+        id as usize as ARARegionSequenceRef
     })
 }
 unsafe extern "C" fn dc_updateRegionSequenceProperties(
-    _c: ARADocumentControllerRef,
-    _r: ARARegionSequenceRef,
-    _p: *const ARARegionSequenceProperties,
+    c: ARADocumentControllerRef,
+    r: ARARegionSequenceRef,
+    p: *const ARARegionSequenceProperties,
 ) {
-    guard("updateRegionSequenceProperties", (), move || {})
+    guard("updateRegionSequenceProperties", (), move || {
+        // a rename of the DAW track: the page shows the new name at once. Nothing else changes:
+        // the hits are the same, so no round starts (`DS_ARA_NAMES_FAULT=no-rename` ignores the
+        // update, `round` starts a round)
+        let fault = crate::test_switch("DS_ARA_NAMES_FAULT").unwrap_or_default();
+        if fault == "no-rename" {
+            return;
+        }
+        let ctl = controller_of(c);
+        let id = r as usize as u64;
+        let name = sequence_name(p);
+        if let Some(slot) = ctl.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) {
+            *slot = name;
+        }
+        ctl.doc.names_changed(true);
+        if fault == "round" {
+            touch_all(ctl);
+        }
+    })
 }
-unsafe extern "C" fn dc_destroyRegionSequence(_c: ARADocumentControllerRef, _r: ARARegionSequenceRef) {
-    guard("destroyRegionSequence", (), move || {})
+unsafe extern "C" fn dc_destroyRegionSequence(c: ARADocumentControllerRef, r: ARARegionSequenceRef) {
+    guard("destroyRegionSequence", (), move || {
+        let ctl = controller_of(c);
+        ctl.doc
+            .sequences
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&(r as usize as u64));
+        ctl.doc.names_changed(true);
+    })
+}
+
+/// The fault run `DS_ARA_NAMES_FAULT=round`: every source of the controller counts as changed, so
+/// a rename or a move starts an analysis round that it must not start.
+fn touch_all(ctl: &Controller) {
+    let list = ctl.sources.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    for s in &list {
+        touch(s);
+    }
 }
 unsafe extern "C" fn dc_getPlaybackRegionHeadAndTailTime(
     _c: ARADocumentControllerRef,
@@ -2607,6 +2854,7 @@ unsafe extern "C" fn dc_createAudioSource(
                 read_tries: std::sync::atomic::AtomicU32::new(0),
                 stale: AtomicBool::new(false),
                 requested_at: Mutex::new(None),
+                label_role_seen: Mutex::new(None),
             });
             list.push(src.clone());
             if let Ok(mut m) = ctl.doc.members.lock() {
@@ -3157,16 +3405,18 @@ unsafe extern "C" fn dc_createPlaybackRegion(
     guard("createPlaybackRegion", std::ptr::null_mut(), move || {
         let seq = (*(m as *mut Modification)).seq;
         let rec = region_times(p);
+        let (sequence, name) = region_labels(p);
         let id = NEXT_REGION_ID.fetch_add(1, Ordering::SeqCst);
         let ctl = controller_of(c);
         if let Ok(list) = ctl.sources.lock() {
             if let Some(src) = list.iter().find(|s| s.seq == seq) {
                 if let Ok(mut rl) = src.regions.lock() {
-                    rl.push(RegionSlot { id, rec });
+                    rl.push(RegionSlot { id, rec, sequence, name });
                 }
                 touch(src);
             }
         }
+        ctl.doc.names_changed(true);
         Box::into_raw(Box::new(PlaybackRegion { seq, id })) as ARAPlaybackRegionRef
     })
 }
@@ -3181,12 +3431,17 @@ unsafe extern "C" fn dc_updatePlaybackRegionProperties(
         // other regions of the source keep their times
         let region: &PlaybackRegion = &*(r as *const PlaybackRegion);
         let rec = region_times(p);
+        let (sequence, name) = region_labels(p);
         let ctl = controller_of(c);
         let mut moved = false;
         if let Ok(list) = ctl.sources.lock() {
             if let Some(src) = list.iter().find(|s| s.seq == region.seq) {
                 if let Ok(mut rl) = src.regions.lock() {
                     if let Some(slot) = rl.iter_mut().find(|slot| slot.id == region.id) {
+                        // a move of the region to another DAW track (or a new name of the region)
+                        // changes the label only: no round, the hits are the same
+                        slot.sequence = sequence;
+                        slot.name = name;
                         // a move in playback time alone changes nothing the analysis uses: the
                         // record is kept, no round starts (`DS_ARA_TOUCH_FAULT=playback-time`
                         // brings back the round)
@@ -3196,11 +3451,12 @@ unsafe extern "C" fn dc_updatePlaybackRegionProperties(
                         slot.rec = rec;
                     }
                 }
-                if moved {
+                if moved || crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("round") {
                     touch(src);
                 }
             }
         }
+        ctl.doc.names_changed(true);
     })
 }
 
@@ -3218,6 +3474,7 @@ unsafe extern "C" fn dc_destroyPlaybackRegion(c: ARADocumentControllerRef, r: AR
                 touch(src);
             }
         }
+        ctl.doc.names_changed(true);
         drop(region);
     })
 }
@@ -3877,7 +4134,25 @@ fn state_accepts(bytes: &[u8]) -> bool {
     true
 }
 
+/// M1b10: one report row for every call of the host to the state (evidence for the next run in a
+/// real host: LUNA logs "loadPreset failed" and the report did not say whether LUNA calls the state
+/// at all). The calls are on the host's main thread, never on the audio thread; a host saves the
+/// state a few times in a session, so the report is written at once.
+fn state_row(kind: &str, bytes: usize, ok: bool) {
+    if crate::test_switch("DS_ARA_STATE_FAULT").as_deref() == Ok("no-rows") {
+        return; // the fault run: the call of the host is not reported
+    }
+    session().log(json!({"event": "state_call", "kind": kind, "bytes": bytes, "ok": ok}).to_string());
+    session().write_out();
+}
+
 unsafe extern "C" fn state_save(_p: *const clap_plugin, stream: *const clap_sys::stream::clap_ostream) -> bool {
+    let ok = state_save_inner(stream);
+    state_row("save", state_blob().len(), ok);
+    ok
+}
+
+unsafe fn state_save_inner(stream: *const clap_sys::stream::clap_ostream) -> bool {
     guard("state_save", false, move || {
         let Some(write) = (*stream).write else { return false };
         let blob = state_blob();
@@ -3898,9 +4173,16 @@ unsafe extern "C" fn state_save(_p: *const clap_plugin, stream: *const clap_sys:
 }
 
 unsafe extern "C" fn state_load(_p: *const clap_plugin, stream: *const clap_sys::stream::clap_istream) -> bool {
-    guard("state_load", false, move || {
+    let (ok, bytes) = state_load_inner(stream);
+    state_row("load", bytes, ok);
+    ok
+}
+
+/// The answer of a load and the number of bytes the host's stream gave.
+unsafe fn state_load_inner(stream: *const clap_sys::stream::clap_istream) -> (bool, usize) {
+    guard("state_load", (false, 0), move || {
         let Some(read) = (*stream).read else {
-            return state_accepts(&[]);
+            return (state_accepts(&[]), 0);
         };
         let mut got: Vec<u8> = Vec::new();
         let mut buf = [0u8; 256];
@@ -3912,7 +4194,7 @@ unsafe extern "C" fn state_load(_p: *const clap_plugin, stream: *const clap_sys:
             }
             got.extend_from_slice(&buf[..(n as usize).min(buf.len())]);
         }
-        state_accepts(&got)
+        (state_accepts(&got), got.len())
     })
 }
 
@@ -4309,6 +4591,7 @@ mod tests {
             read_tries: std::sync::atomic::AtomicU32::new(0),
             stale: AtomicBool::new(false),
             requested_at: Mutex::new(None),
+            label_role_seen: Mutex::new(None),
         })
     }
 
