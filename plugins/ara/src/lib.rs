@@ -42,6 +42,7 @@ pub mod ara {
 }
 pub mod editor;
 pub mod names;
+pub mod keys;
 pub mod playback;
 pub mod service;
 pub mod state;
