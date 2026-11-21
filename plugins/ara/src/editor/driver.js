@@ -67,6 +67,7 @@
     if (T.mode === "edit-round") { await edit(names); await follow(+T.arg || names.length + 1); }
     if (T.mode === "edit-region") { var r0 = reloads; await edit(names, true); await follow(names.length, true, r0); }
     if (T.mode === "open-first") await follow(+T.arg || 4);
+    if (T.mode === "names") { try { await namesRun(); } catch (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); } }
     if (T.mode === "refuse") await refuse(names);
     if (T.mode === "shell") { try { await shell(names); } catch (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); } }
     if (T.mode === "analyse" || T.mode === "analyse-race") await analyse(names);
@@ -300,6 +301,42 @@
     var roles = {}, follows = {};
     try { names.forEach(function (n) { roles[n] = S.tracks[n] && S.tracks[n].role; follows[n] = S.tracks[n] && S.tracks[n].follows; }); } catch (e) { /* none */ }
     post({ kind: "follow", ok: ok, roles: roles, follows: follows, reloads: reloads, tracks: names, page_events: page, raw_events: rawEv, sid: S.sid, ms: Math.round(performance.now() - t0) });
+  }
+  /* M1b10: what the page gets as the names of the tracks. `names`: the answer of tracks_get (the key
+     and display_name of every track) and the raw events; the host then renames a DAW track and moves
+     a region; `names-after`: the same after the plugin's reload event, with no new analysis round. */
+  async function namesSnap() {
+    var o = JSON.parse((await raw("tracks_get", { sid: S.sid })).text);
+    var keys = Object.keys(o.tracks || {}), display = {}, rawEv = {};
+    var roles = {};
+    keys.forEach(function (k) { display[k] = o.tracks[k].display_name; roles[k] = { role: o.tracks[k].role, note: o.tracks[k].note, role_source: o.tracks[k].role_source }; });
+    for (var i = 0; i < keys.length; i++) rawEv[keys[i]] = (await raw("events_get", { sid: S.sid, name: keys[i] })).text;
+    var dom = Array.prototype.slice.call(document.querySelectorAll("#lanesScroll .tnm")).map(function (e) { return e.textContent; });
+    return { order: o.order, display: display, roles: roles, raw_events: rawEv, dom_names: dom };
+  }
+  async function namesRun() {
+    function sleepMs(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    var mode = T.arg || "";   // roles: the roles of the tracks follow the DAW names; roles-hand: the user sets the role of the first track first
+    var first = await namesSnap();
+    var auto = first.roles;
+    if (mode === "roles-hand") {
+      await window.__TAURI__.core.invoke("track_set_role", { sid: S.sid, name: first.order[0], role: "cymbal" });
+      first = await namesSnap();
+    }
+    first.roles_auto = auto;
+    var base = reloads, t0 = performance.now();
+    post(Object.assign({ kind: "names", reloads: reloads }, first));
+    var limit = T.arg === "base" ? 1500 : 15000;   // the baseline run renames nothing: no reload to wait for
+    while (reloads === base && performance.now() - t0 < limit) await sleepMs(100);
+    var reloaded = reloads > base;
+    if (mode.indexOf("roles") === 0) {   // a new role is a new round: its end is a second reload
+      var t1 = performance.now();
+      while (reloads < base + 2 && performance.now() - t1 < 12000) await sleepMs(100);
+      await sleepMs(1000);
+    }
+    await sleepMs(800);   // the rename and the move are two calls of the host: the last state
+    var after = await namesSnap();
+    post(Object.assign({ kind: "names-after", reloads: reloads, reloaded: reloaded, waited_ms: Math.round(performance.now() - t0) }, after));
   }
   async function refuse(names) {   // F3: the page cannot change the track set
     var sid = S.sid, name = names[0], out = {};

@@ -15,6 +15,8 @@
 //! document at once. `edit-region`: after the edit the host trims the region of the edited
 //! source (`--region a,d,p`). `analyse-race --destroy-late <i> --archive-window <file>`: the
 //! host destroys source `i` while the page's own analysis runs and stores an archive in that time.
+//! Mode `names` (M1b10): after the page's `names` report the host renames region sequences
+//! (`--rename-seq <j>=<name>`) and moves regions (`--move-region <i>=<j>`); the page reports again.
 //! `--late-files` are added to the document (and analysed) while the editor is open: in
 //! `open-first` when the page has booted (the files then are `--late-files` only), in
 //! `edit-round` and `refuse` after the page's report, in `analyse-race` when the page's own
@@ -214,6 +216,16 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     let late_files = args_list(rest, "--late-files");
     let wait_sync = arg_flag(rest, "--wait-sync");
     let store_at_edit = args_value(rest, "--store-at-edit");
+    // M1b10 (mode `names`): after the page's first report the host renames region sequences
+    // (`--rename-seq <j>=<name>`) and moves regions to other sequences (`--move-region <i>=<j>`)
+    let renames: Vec<(usize, String)> = args_list(rest, "--rename-seq")
+        .iter()
+        .filter_map(|v| v.split_once('=').and_then(|(j, n)| Some((j.parse().ok()?, n.to_string()))))
+        .collect();
+    let moves: Vec<(usize, usize)> = args_list(rest, "--move-region")
+        .iter()
+        .filter_map(|v| v.split_once('=').and_then(|(i, j)| Some((i.parse().ok()?, j.parse().ok()?))))
+        .collect();
     let region_spec = args_value(rest, "--region").and_then(|v| parse_region(&v).ok());
     let destroy_late: Option<usize> = args_value(rest, "--destroy-late").and_then(|v| v.parse().ok());
     let archive_window = args_value(rest, "--archive-window");
@@ -436,12 +448,16 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 "edit" => Some("edit-events"),
                 "analyse-race" => Some("analyse"),
                 "edit-round" | "open-first" | "edit-region" => Some("follow"),
+                // the page reports the names it got, the host renames and moves, the page reports again
+                "names" => Some("names-after"),
                 "edit-destroy" => Some("edit"),
                 "net" => Some("now"),
                 _ => None,
             };
             let reports_before = want_kind.map_or(0, |k| count_rows("page_report", Some(k)));
             let boots_before = count_rows("page_report", Some("boot"));
+            let names_before = count_rows("page_report", Some("names"));
+            let mut names_handled = false;
             let edits_before = count_rows("page_report", Some("edit"));
             let refuse_before = count_rows("page_report", Some("refuse"));
             let started_before = count_rows("page_report", Some("analyse-started"));
@@ -581,6 +597,15 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         }
                     }
                 }
+                if mode == "names" && !names_handled && count_rows("page_report", Some("names")) > names_before {
+                    names_handled = true;
+                    for (j, name) in &renames {
+                        rename_sequence(doc.inst, doc.state, *j, name);
+                    }
+                    for (i, j) in &moves {
+                        move_region(doc.inst, doc.state, *i, *j);
+                    }
+                }
                 if mode == "analyse-race" && destroyed_jobs.is_none() {
                     if let Some(i) = destroy_late {
                         if count_rows("page_report", Some("analyse-started")) > started_before {
@@ -674,6 +699,10 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         Err(e) => failed = Some(e),
                     }
                 }
+            }
+            if got && mode == "names" {
+                // the notes after the rename and the move: the same notes as before them
+                doc.print_all_notes("after-names", None);
             }
             if round == 1 && got {
                 // let the page settle, then the first memory sample with the editor open
@@ -818,7 +847,7 @@ fn update_region(doc: &HostDoc, i: usize, a: f64, d: f64, p: f64) {
         let dc = iface_of(doc.inst);
         let state = &*doc.state;
         if let Some(r) = state.regions.get(i) {
-            let props = playback_props(a, d, p);
+            let props = playback_props_for(state, i, a, d, p);
             (dc.updatePlaybackRegionProperties
                 .expect("updatePlaybackRegionProperties"))(dc_ref_of(doc.inst), *r, &props);
         }

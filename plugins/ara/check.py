@@ -3359,14 +3359,20 @@ def stage_no_request_spawn_fault() -> bool:
 def state_parts(label: str, rc: int, lines: list) -> tuple[dict, str]:
     row = next((r for r in lines if r.get("event") == "plugin_state"), {})
     keys = ["load_own", "load_empty", "load_newer", "load_garbage"]
+    # M1b10: the report has a row for every call of the host to the state (kind, bytes, answer), so a run in
+    # a real host says whether it calls the state at all
+    calls = [(r.get("kind"), r.get("bytes"), r.get("ok")) for r in report_rows(label) if r.get("event") == "state_call"]
     parts = {
         "has_state": row.get("has_state") is True,
         "saved": row.get("save_ok") is True and row.get("versioned") is True,
         "loads": all(row.get(k) is True for k in keys),
+        "rows": [c[:2] for c in calls] == [("save", 10), ("load", 10), ("load", 0), ("load", 10), ("load", 26)]
+        and all(c[2] is True for c in calls),
     }
     return parts, (
         f"the plugin has clap.state ({row.get('has_state')}); save wrote {row.get('saved_bytes')} bytes with the magic and a version ({row.get('versioned')}); "
-        f"load answered true for its own blob {row.get('load_own')}, an empty stream {row.get('load_empty')}, a newer version {row.get('load_newer')} and garbage {row.get('load_garbage')} (rc={rc})"
+        f"load answered true for its own blob {row.get('load_own')}, an empty stream {row.get('load_empty')}, a newer version {row.get('load_newer')} and garbage {row.get('load_garbage')}; "
+        f"the report has {len(calls)} state_call rows {calls} (rc={rc})"
     )
 
 
@@ -3388,11 +3394,19 @@ def stage_state_fault() -> bool:
         return pass_fail("state-fault", False, "no host or no CLAP: run check.sh build first")
     rc, _text, lines = host_run("state-fault", CLAP, ["state"], "cache-state-fault", extra={"DS_ARA_STATE_FAULT": "strict"})
     parts, evidence = state_parts("state-fault", rc, lines)
-    return pass_fail(
+    ok = pass_fail(
         "state-fault",
         parts["saved"] and not parts["loads"] and rc != 0,
         f"the fault switch made the load refuse what it did not write and the check refused it: {evidence}",
     )
+    # M1b10: a plugin that leaves the state calls out of the report fails the rows part
+    rc, _text, lines = host_run("state-fault-rows", CLAP, ["state"], "cache-state-fault-rows", extra={"DS_ARA_STATE_FAULT": "no-rows"})
+    parts, evidence = state_parts("state-fault-rows", rc, lines)
+    return pass_fail(
+        "state-fault-rows",
+        parts["saved"] and parts["loads"] and not parts["rows"],
+        f"the fault switch (no report row for a call of the host to the state) made the rows part fail: {evidence}",
+    ) and ok
 
 
 # ---- review round 2, item 8: one list of the DS_ARA_* variables
@@ -5989,6 +6003,217 @@ def stage_editor_menu_fault() -> bool:
                      "a run with no page report fails with 'no usable run'") and ok
 
 
+# ---- M1b10 (#558): the tracks show the names of the DAW tracks
+
+# The test host makes four region sequences (the DAW tracks): "Kick In" with a region name that must
+# lose against it, one with no name whose region has one, and two with the same name. After the page
+# reported, the host renames the first DAW track and moves the region of the second source to it.
+NAMES_ARGS = ["--seq-names", "Kick In", "-", "Overheads", "Overheads",
+              "--region-names", "kick take", "Snare Top Take", "-", "-",
+              "--rename-seq", "0=Kick Inside", "--move-region", "1=0"]
+NAMES_BEFORE = ["Kick In", "Snare Top Take", "Overheads", "Overheads (2)"]
+NAMES_AFTER = ["Kick Inside", "Kick Inside (2)", "Overheads", "Overheads (2)"]
+
+
+def host_lines(label: str) -> list:
+    """The JSON lines the test host printed in one run (out/host-<label>.log)."""
+    path = OUT / f"host-{label}.log"
+    out = []
+    if path.exists():
+        for ln in path.read_text().splitlines():
+            if ln.startswith("{"):
+                try:
+                    out.append(json.loads(ln))
+                except ValueError:
+                    pass
+    return out
+
+
+def archive_core(path: Path) -> dict | None:
+    """The stored archive without its document id (a fresh random id in every run)."""
+    try:
+        d = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    d.pop("doc_id", None)
+    return d
+
+
+def names_run(label: str, bundle: Path, named: bool, env: dict | None = None) -> dict:
+    """One `ara-host editor` run of the mode `names`: the page reports the names it got, the host renames and
+    moves (`named`; the baseline run makes no sequence at all), the page reports again after the reload."""
+    archive = OUT / f"{label}.ara"
+    if archive.exists():
+        archive.unlink()
+    args = (NAMES_ARGS if named else ["--arg", "base"]) + ["--archive", str(archive)]
+    rc, summary, rows = run_phase(label, "names", bundle, env, args)
+    lines = host_lines(label)
+    notes = {}
+    for phase in ("editor", "after-names"):
+        notes[phase] = host_notes_of(lines, phase)
+    return {"rc": rc, "rows": rows, "notes": notes, "archive": archive_core(archive), "named": named}
+
+
+_NAMES_BASE: dict = {}
+
+
+def names_base() -> dict:
+    if not _NAMES_BASE:
+        _NAMES_BASE.update(names_run("editor-names-base", CLAP, False))
+    return _NAMES_BASE
+
+
+def shown(rep: dict, keys: list) -> list:
+    return [(rep.get("display") or {}).get(k) for k in keys]
+
+
+def names_parts(run: dict, ref: bytes, base: dict) -> dict:
+    """M1b10 gate lines 1 to 5: what the page gets as the names of the tracks, after the rename of the DAW track and
+    the move of a region, and that nothing else changes."""
+    rows = run["rows"]
+    keys = track_names(FILES)
+    first = (page_reports(rows, "names") or [{}])[0]
+    after = (page_reports(rows, "names-after") or [{}])[0]
+    jobs = job_rows_of(rows)
+    rounds = [r for r in rows if r.get("event") == "round_start"]
+    parts: dict = {}
+    parts["editor-names-shown"] = (
+        run["rc"] == 0 and first.get("order") == keys and shown(first, keys) == NAMES_BEFORE,
+        f"the page got the display names {shown(first, keys)} for the tracks {first.get('order')} (want {NAMES_BEFORE}): the name of the "
+        f"DAW track first, the name of the region when the track has none, the same name twice gets a number")
+    parts["editor-names-rename"] = (
+        after.get("reloaded") is True and shown(after, keys) == NAMES_AFTER,
+        f"after the host renamed a DAW track and moved a region the page got {shown(after, keys)} (want {NAMES_AFTER}) once the plugin said "
+        f"it reloaded ({after.get('reloaded')}, {after.get('waited_ms')} ms)")
+    parts["editor-names-no-round"] = (
+        len(jobs) == 1 and len(rounds) == 1,
+        f"{len(jobs)} analysis job(s) and {len(rounds)} round(s) in the whole run: the rename and the move started none")
+    same_keys = first.get("order") == keys and after.get("order") == keys
+    try:
+        events_same = (events_object_of(first["raw_events"], keys) == ref and events_object_of(after["raw_events"], keys) == ref)
+    except (KeyError, ValueError):
+        events_same = False
+    notes_same = bool(run["notes"]["editor"]) and run["notes"]["editor"] == run["notes"]["after-names"] == base["notes"]["editor"]
+    archive_same = run["archive"] is not None and run["archive"] == base["archive"]
+    parts["editor-names-identity"] = (
+        same_keys and events_same and notes_same and archive_same,
+        f"the keys of the tracks are the same before and after ({same_keys}), the events the page reads are byte for byte the reference "
+        f"before and after ({events_same}), the notes before and after are the notes of a run with no names ({notes_same}), the stored "
+        f"archive (without its document id) is the archive of that run ({archive_same})")
+    rep_rows = [r for r in rows if r.get("event") == "track_names"]
+    want_before = {k: v for k, v in zip(keys, NAMES_BEFORE) if k != v}
+    want_after = {k: v for k, v in zip(keys, NAMES_AFTER) if k != v}
+    seen = [r.get("names") for r in rep_rows]
+    parts["editor-names-row"] = (
+        want_before in seen and (seen[-1] if seen else None) == want_after,
+        f"the report has {len(rep_rows)} track_names row(s); the first change is the names the page got first ({want_before in seen}) and the last is "
+        f"the names after the rename ({(seen[-1] if seen else None) == want_after})")
+    return parts
+
+
+def stage_editor_names() -> bool:
+    ref = _reference()
+    if ref is None or not HOST.exists():
+        return pass_fail("editor-names", False, "no reference or host")
+    base = names_base()
+    ok = True
+    for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
+        run_ = names_run(f"editor-names-{which}", bundle, True)
+        ok = print_parts(suffix, names_parts(run_, ref, base)) and ok
+    dom = (page_reports(base["rows"], "names") or [{}])[0].get("dom_names")
+    print(f"    the header of the page shows {dom}: it shows the key of the track until static/tracks.js shows display_name (report of #558)")
+    return ok
+
+
+def stage_editor_names_fault() -> bool:
+    ref = _reference()
+    if ref is None:
+        return pass_fail("editor-names-fault", False, "no reference")
+    base = names_base()
+    ok = True
+    for label, fault, part, what in (
+        ("ignore", "ignore", "editor-names-shown", "the names of the host are ignored: the page gets the key as the name"),
+        ("region-first", "region-first", "editor-names-shown", "the name of the region wins over the name of the DAW track"),
+        ("no-number", "no-number", "editor-names-shown", "two DAW tracks with one name show one name"),
+        ("no-rename", "no-rename", "editor-names-rename", "the rename of a DAW track is not seen"),
+        ("no-reload", "no-reload", "editor-names-rename", "the page is not told about a rename and keeps the old name"),
+        ("round", "round", "editor-names-no-round", "a rename and a move start an analysis round"),
+        ("key", "key", "editor-names-identity", "the key of a track follows the name of the DAW track"),
+    ):
+        run_ = names_run(f"editor-names-fault-{label}", CLAP, True, {"DS_ARA_NAMES_FAULT": fault})
+        ok = fault_part(f"editor-names-fault-{label}", names_parts(run_, ref, base), part, what) and ok
+    return ok
+
+
+# ---- M1b10 item 8: the role of a track follows the name of the DAW track
+
+# The sources have machine names (32 hex characters). The DAW tracks are named like a kick, a snare, a hi-hat
+# and a track with no role in its name. The host then renames the last one to a snare name (a track whose role is
+# the automatic guess changes), or the user sets a role by hand and the host renames that track (the role stays).
+ROLE_HEX = ["3f9a1c7e5b2d4a8f9c0e1d2b3a4f5e6d", "7b1e9d3c5a2f4e8b0c6d1a3f5e7b9c2d",
+            "c4d2e6a8b0f1394a5c7e9b1d3f5a7c9e", "0a2c4e6f8b1d3f5a7c9e0b2d4f6a8c1e"]
+ROLE_SEQS = ["Kick In", "Snare Top", "Hi-Hat", "Mystery"]
+ROLES_BEFORE = [("kick", 36), ("snare", 38), ("hat", 42), ("other", 36)]
+
+
+def roles_run(label: str, hand: bool, env: dict | None = None) -> dict:
+    keys = [safe_name(stem_of(h)) for h in ROLE_HEX]
+    rename = "0=Hi-Hat Top" if hand else "3=Snare Bottom"
+    args = ["--names", *ROLE_HEX, "--seq-names", *ROLE_SEQS, "--rename-seq", rename,
+            "--arg", "roles-hand" if hand else "roles"]
+    rc, summary, rows = run_phase(label, "names", CLAP, env, args)
+    return {"rc": rc, "rows": rows, "keys": keys}
+
+
+def got_roles(rep: dict, keys: list) -> list:
+    return [((rep.get("roles") or {}).get(k) or {}) for k in keys]
+
+
+def roles_parts(run: dict, hand: bool) -> dict:
+    rows, keys = run["rows"], run["keys"]
+    first = (page_reports(rows, "names") or [{}])[0]
+    after = (page_reports(rows, "names-after") or [{}])[0]
+    rounds = [r for r in rows if r.get("event") == "round_start"]
+    b, a = got_roles(first, keys), got_roles(after, keys)
+    pair = lambda lst: [(r.get("role"), r.get("note")) for r in lst]
+    parts: dict = {}
+    if not hand:
+        auto = got_roles({"roles": first.get("roles_auto")}, keys)
+        parts["editor-roles-daw"] = (
+            run["rc"] == 0 and first.get("order") == keys and pair(auto) == ROLES_BEFORE and all(r.get("role_source") == "guess" for r in auto[:3]),
+            f"four sources with machine names on DAW tracks named {ROLE_SEQS} got the roles and default notes {pair(auto)} (want {ROLES_BEFORE})")
+        parts["editor-roles-rename"] = (
+            pair(a) == ROLES_BEFORE[:3] + [("snare", 38)] and pair(b) == ROLES_BEFORE,
+            f"after the DAW track with no role in its name was renamed to a snare name the roles are {pair(a)} (want the first three unchanged and 'snare', 38)")
+        parts["editor-roles-one-round"] = (
+            len(rounds) == 2,
+            f"{len(rounds)} round(s) in the whole run (want 2: the first analysis and one for the changed role)")
+    else:
+        parts["editor-roles-hand"] = (
+            run["rc"] == 0 and bool(b) and b[0].get("role") == "cymbal" and b[0].get("role_source") == "user"
+            and bool(a) and a[0].get("role") == "cymbal" and pair(a[1:]) == ROLES_BEFORE[1:],
+            f"the user set the role of the first track to cymbal ({pair(b)[:1]}); the DAW track was renamed to a hi-hat name; the roles are now {pair(a)} (want cymbal first, the others unchanged)")
+    return parts
+
+
+def stage_editor_roles() -> bool:
+    if not HOST.exists():
+        return pass_fail("editor-roles", False, "no host")
+    ok = print_parts("", roles_parts(roles_run("editor-roles", False), False))
+    return print_parts("", roles_parts(roles_run("editor-roles-hand", True), True)) and ok
+
+
+def stage_editor_roles_fault() -> bool:
+    ok = True
+    for label, fault, hand, part, what in (
+        ("source", "role-source", False, "editor-roles-daw", "the role guess reads the name of the audio source only: hex names give 'other'"),
+        ("frozen", "role-frozen", False, "editor-roles-rename", "the role is guessed once and a rename of the DAW track never changes it"),
+        ("hand", "role-hand", True, "editor-roles-hand", "a new DAW name overwrites the role that the user set"),
+    ):
+        run_ = roles_run(f"editor-roles-fault-{label}", hand, {"DS_ARA_NAMES_FAULT": fault})
+        ok = fault_part(f"editor-roles-fault-{label}", roles_parts(run_, hand), part, what) and ok
+    return ok
+
 
 STAGES = {
     "fixture": stage_fixture,
@@ -6145,6 +6370,10 @@ STAGES = {
     "editor-playback-partial": stage_editor_playback_partial,
     "editor-playback-partial-fault": stage_editor_playback_partial_fault,
     "editor-playback-tracks": stage_editor_playback_tracks,
+    "editor-names": stage_editor_names,
+    "editor-names-fault": stage_editor_names_fault,
+    "editor-roles": stage_editor_roles,
+    "editor-roles-fault": stage_editor_roles_fault,
     "editor-playback-tracks-fault": stage_editor_playback_tracks_fault,
     "editor-playback-drag": stage_editor_playback_drag,
     "editor-playback-drag-fault": stage_editor_playback_drag_fault,
@@ -6187,6 +6416,7 @@ ORDER = [
     "editor-playback-drag", "editor-playback-drag-fault", "editor-playback-late", "editor-playback-late-fault",
     "editor-playback-tracks", "editor-playback-tracks-fault",
     "editor-hit", "editor-hit-fault", "editor-geometry", "editor-geometry-fault", "editor-menu", "editor-menu-fault",
+    "editor-names", "editor-names-fault", "editor-roles", "editor-roles-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",

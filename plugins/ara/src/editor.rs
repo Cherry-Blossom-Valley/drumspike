@@ -213,6 +213,10 @@ pub struct Backend {
     /// The name the host gave (`clap_host.name`).
     pub host_name: String,
     pub doc_id: String,
+    /// The display name of every track by track name (M1b10): the name of the DAW track. The page
+    /// gets it as `display_name` in the answer of `tracks_get` and `project_get`; the key of a
+    /// track stays its own name.
+    pub display_names: Arc<dyn Fn() -> std::collections::HashMap<String, String> + Send + Sync>,
 }
 
 /// The source indexes of a track and their longest length in seconds.
@@ -1305,8 +1309,13 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
     match drumspike_app::call::run(&svc, &sh.run_channels, cmd, &args) {
         None => Answer::err(404, format!("unknown command {cmd}")),
         Some(Err(e)) => Answer::error(&e),
-        Some(Ok(reply)) => {
+        Some(Ok(mut reply)) => {
             changed_after(sh, &svc, cmd, &args, &reply);
+            if matches!(cmd, "tracks_get" | "project_get") {
+                if let Reply::Json(v) = &mut reply {
+                    add_display_names(v, &(sh.backend.display_names)());
+                }
+            }
             match reply {
                 Reply::Json(v) => Answer::json(200, &v),
                 Reply::Bytes(b) => Answer {
@@ -1315,6 +1324,22 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
                     body: b,
                 },
             }
+        }
+    }
+}
+
+/// M1b10: every track of an answer of `tracks_get` or `project_get` gets `display_name`, the name
+/// that the DAW shows (the track's own name when the host gave none). Only that one key is added:
+/// the key of the track, its hits and its files are not touched. `DS_ARA_NAMES_FAULT=ignore` and the
+/// rule of `names.rs` decide what the map holds.
+fn add_display_names(answer: &mut Value, names: &std::collections::HashMap<String, String>) {
+    let Some(tracks) = answer.get_mut("tracks").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (key, track) in tracks.iter_mut() {
+        if let Some(obj) = track.as_object_mut() {
+            let shown = names.get(key).cloned().unwrap_or_else(|| key.clone());
+            obj.insert("display_name".into(), Value::from(shown));
         }
     }
 }
@@ -1695,6 +1720,7 @@ fn backend_of(plugin: &Plugin) -> Backend {
             track_info: Arc::new(|_| (Vec::new(), 0.0)),
             host_name: plugin.host_name.clone(),
             doc_id: "unbound".to_string(),
+            display_names: Arc::new(std::collections::HashMap::new),
         },
     }
 }
