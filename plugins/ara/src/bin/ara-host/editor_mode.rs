@@ -6,7 +6,7 @@
 //! dispatch queue (the plugin answers the web view there) and the event delivery need it.
 //!
 //! ```text
-//! ara-host <bundle> editor --files <wav>... --editor-mode ready|keys|focus|resize|measure|edit|shell|analyse|net|transport
+//! ara-host <bundle> editor --files <wav>... --editor-mode ready|keys|focus|resize|measure|edit|shell|analyse|net|transport|hit|menu|geometry
 //!                          |edit-round|open-first|refuse|bigpost
 //!                          [--cycles N] [--archive <file>] [--arg <text>] [--no-ara]
 //!                          [--late-files <wav>...] [--wait-sync]
@@ -105,6 +105,47 @@ fn post_click(app: &NSApplication, window: &NSWindow) {
         if let Some(ev) = ev {
             app.sendEvent(&ev);
         }
+    }
+}
+
+/// A click of the pointer at a place of the page (CSS pixels from the top left of the web view, which fills the
+/// content view): `count` presses and releases, the click count of each one rising, as a user's double click does
+/// (M1b11: the finding of a hit made with the pointer in a real web view).
+fn post_click_at(app: &NSApplication, window: &NSWindow, x: f64, y: f64, count: isize) {
+    // the event number rises with every event: a web view drops an event whose number it has seen
+    static EVENT_NO: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(5000);
+    let Some(view) = window.contentView() else { return };
+    let at = view.convertPoint_toView(NSPoint::new(x, view.bounds().size.height - y), None);
+    // the pointer arrives first (a user moves it before the press): a web view takes the first press at a new place as
+    // the move that makes it the target
+    let moved = |app: &NSApplication| {
+        let mv = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            NSEventType::MouseMoved, at, NSEventModifierFlags(0), objc2_foundation::NSProcessInfo::processInfo().systemUptime(), window.windowNumber(), None,
+            EVENT_NO.fetch_add(1, Ordering::SeqCst), 0, 0.0,
+        );
+        if let Some(ev) = mv {
+            app.postEvent_atStart(&ev, false);
+        }
+        pump(app);
+    };
+    for _ in 0..12 {
+        moved(app);
+    }
+    for n in 1..=count {
+        for (ty, pressure) in [(NSEventType::LeftMouseDown, 1.0), (NSEventType::LeftMouseUp, 0.0)] {
+            let ev = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                ty, at, NSEventModifierFlags(0), objc2_foundation::NSProcessInfo::processInfo().systemUptime(), window.windowNumber(), None,
+                EVENT_NO.fetch_add(1, Ordering::SeqCst), n, pressure,
+            );
+            if let Some(ev) = ev {
+                app.postEvent_atStart(&ev, false);
+            }
+            pump(app);
+        }
+    }
+    // and the pointer moves on: a web view hands the release to the page with the next event
+    for _ in 0..6 {
+        moved(app);
     }
 }
 
@@ -390,7 +431,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
                 "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" | "transport"
-                | "playback" => Some(mode.as_str()),
+                | "playback" | "hit" | "menu" | "geometry" => Some(mode.as_str()),
                 // the edit mode ends with the event report that follows the edit report
                 "edit" => Some("edit-events"),
                 "analyse-race" => Some("analyse"),
@@ -425,6 +466,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             };
             let mut schedule = schedule_of(&mode);
             let mut resized = 0usize;
+            let mut clicks_done = 0usize;
             let mut saved_resp: Option<Retained<NSResponder>> = None;
             let mut got = false;
             while t0.elapsed() < limit {
@@ -463,6 +505,26 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         window
                             .setFrame_display(NSRect::new(NSPoint::new(120.0, 120.0), NSSize::new(760.0, 480.0)), true);
                         resized = 2;
+                    }
+                }
+                if matches!(mode.as_str(), "hit" | "menu" | "geometry") {
+                    // M1b11: the driver of the page asks the host for what only a host can do: a window of another
+                    // size (below and above the 520 px of the low window) and a real click of the pointer
+                    if resized == 0 && count_rows("page_report", Some("host-low")) > 0 {
+                        window.setFrame_display(NSRect::new(NSPoint::new(120.0, 120.0), NSSize::new(1100.0, 420.0)), true);
+                        resized = 1;
+                    } else if resized == 1 && count_rows("page_report", Some("host-high")) > 0 {
+                        window.setFrame_display(NSRect::new(NSPoint::new(120.0, 120.0), NSSize::new(1100.0, 860.0)), true);
+                        resized = 2;
+                    }
+                    let asked = count_rows("page_report", Some("host-click"));
+                    if asked > clicks_done {
+                        clicks_done = asked;
+                        if let Some(r) = rows().iter().rev().find(|r| r["event"] == "page_report" && r["kind"] == "host-click") {
+                            let (x, y) = (r["report"]["x"].as_f64().unwrap_or(0.0), r["report"]["y"].as_f64().unwrap_or(0.0));
+                            let n = r["report"]["count"].as_i64().unwrap_or(1) as isize;
+                            post_click_at(&app, &window, x, y, n);
+                        }
                     }
                 }
                 if !edit_handled && count_rows("page_report", Some("edit")) > edits_before && mode.starts_with("edit") {

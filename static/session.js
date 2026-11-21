@@ -156,6 +156,7 @@ async function loadProject() {
   if (!hostMode()) try { S.exportAgain = !!(await B.exportLastGet(S.sid)).export_last; } catch (e) {}   // P4-31: File > Export Again follows the export shape of the project
   if (gen !== _gen) return;
   S.tracks = r.tracks; S.order = r.order || Object.keys(r.tracks);
+  trackColors(S.tracks);   // a track without a colour draws in the colour of its role
   if (r.name !== undefined) setProjName(r.name);
   if (r.dirty !== undefined) setDirtyState(r.dirty);
   S.events = {}; S.peaks = {}; S.peakErr = {}; S.samplesCache = {}; S.peakAmp = {};

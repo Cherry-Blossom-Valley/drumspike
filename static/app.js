@@ -5,6 +5,9 @@
 
 const OWN_ZOOM_NAME_MAX = 40;   // #169: the longest name of an own zoom preset
 const ROLE_DEFAULT_NOTE = { kick:36, snare:38, tom:48, hat:42, cymbal:49, other:36 };
+/* The lane colour of a role (`role_color` in crates/app/src/roles.rs). A track record without a colour (a project that the DAW plugin made, a restored track) draws in the colour of its role: the lane code appends an alpha to it ("#8a93a6" + "0d"), and "undefined0d" is no colour, so the 2D context would keep its last fill style and paint the lane in the colour of the last hit (magenta for a hand-added one, yellow for the selected one). */
+const ROLE_COLORS = { kick: "#e05555", snare: "#e0a13c", tom: "#57b8e0", hat: "#9be055", cymbal: "#c9a0e0", other: "#8a93a6" };
+function trackColors(tracks) { for (const t of Object.values(tracks || {})) if (t && !/^#[0-9a-f]{6}$/i.test(t.color || "")) { t.color = ROLE_COLORS[t.role] || ROLE_COLORS.other; t.colorFromRole = true; } }
 const ROLE_DEFAULT_CLICK = { kick:1000, snare:2500, tom:700, hat:4000, cymbal:3000, other:1500 };
 
 /* ---------------- backend ---------------- */
@@ -746,6 +749,7 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
   persistInit({ edIdle });   // R17 step 2: persist waits for the edit queue through the injected hook (edit.js owns edIdle since step 3)
   editInit({ pushEvents, voidHitDrag: name => { if (hitDrag && hitDrag.track === name) hitDrag = null; } });   // R17 step 3: edit.js flushes the writes of other steps through the injected hook; voidHitDrag is the input layer's (a replaced hit list voids an in-flight drag)
   sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; }, exTempoReset: () => { EX.tempoAck = false; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks; #151: the default-tempo answer is per project
+  hostMenuInit();   // #559: the menu button of the host mode (returns at once with the mode off)
   hostApply();   // #539: the page of the host mode (a class on <body>, the controls of the list hidden) before the first layout
   tmInit(); measureGeo(); geoObserve();   // P4-8: the map rulers; P3-14d: the geometry once now, then from the ResizeObserver
   // #518: the one host listener — the shell sets window.__DS_HOST_MODE__ and B.hostTransport

@@ -192,7 +192,9 @@ checks the end of stages 8, 9, 10 and 11.
   only through `B` (`backend.js`) and other features only through the hooks.
 - **A menu item or key:** the row in `static/keymap.js` (the shell compiles it in) and the item in
   `menu/items.rs`. The drift test and the menu snapshot (`menu/snapshot.json`) in `menu/tests.rs`
-  keep them equal.
+  keep them equal. In host mode the page menu (`static/hostmenu.js`) is made from the same table: a new
+  row appears there; a command that the host owns goes in `HOST_OWNED` or `HOST_ABSENT`, and the e2e test
+  `test_host_menu.py` fails for a row in neither.
 - **A page control that the host owns or that cannot work in a plugin window:** its group in
   `HOST_ABSENT` (`static/state.js`): the menu ids, the service commands, the control selectors and
   the one short text. `tests/e2e_app/test_host_page.py` walks the list.
