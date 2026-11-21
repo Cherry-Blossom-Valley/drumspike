@@ -2,7 +2,7 @@
 
 Ticket #558, umbrella #503 (the DAW plugin program), part of M1 (#510). Found in the first
 complete run in LUNA with the build of #554. The plugin lives in `plugins/ara/`. Nothing in
-`static/` or `crates/` changed (see "What the page must change").
+`crates/` changed. In `static/` only the two lines named in "What the page shows" changed.
 
 ## The problem
 
@@ -63,24 +63,23 @@ that the page was told last. When they differ it writes one report row `track_na
 event `plugin-reload`; the shell script of the page then loads the tracks again. A document with no
 host names makes no row and no reload.
 
-## What the page gets, and what the page must change
+## What the page gets, and what the page shows
 
 The plugin adds one key, `display_name`, to every track of the answers of `tracks_get` and
-`project_get`. It never changes another key. The standalone app does not have it.
+`project_get`. It never changes another key. The standalone app does not have the key.
 
-The page does not read `display_name` yet. The scope of this ticket is `plugins/ara/` and the
-docs, so `static/` is not changed here. The exact need:
+The page shows it (the coordinator accepted this change of `static/` for this ticket):
 
-- `static/tracks.js`, in `renderTracks`, the line that writes the name into the header
-  (`nm.textContent = name; nm.title = name;`): write `t.display_name || name`, keep the key in
-  `row.dataset` and in every call.
-- `static/inspector.js`, `insFill`: the name field (`nm.value = name`) shows
-  `t.display_name || name` and stays read-only in host mode.
-- Any other place that shows a track name to the user (the mixer rows are absent in host mode) must
-  do the same. No place may use the display name as a key.
+- `static/tracks.js`, the track header: text and title are `t.display_name || name`.
+- `static/inspector.js`, the name field: the value is `t.display_name || name`. The field keeps the key
+  in `dataset.name` and the shown text in `dataset.shown`; a blur renames the track only when the
+  text differs from the shown text, so a blur that changed nothing never sends the display name as a
+  new key. Select, rename, analyse and every data attribute use the key.
 
-The stage `editor-names` therefore checks the answer that the page gets (`tracks_get`), not the
-text the page draws. It prints the text that the header shows at the moment: the key.
+Without `display_name` (the standalone app) the page is as before; the existing page tests keep
+their expected values. `tests/e2e_app/test_display_name.py` proves the other side: with a
+`display_name` the header and the Inspector show it, and select, rename and analyse send the key.
+The stage `editor-names` reads the text that the header draws (part `editor-names-header`).
 
 ## The role follows the DAW name (item 8)
 
@@ -93,7 +92,10 @@ in this order (`service.rs`, `pick_role`):
 2. the name of the audio source (as before),
 3. the audio, as the scan of the app does for a name that gives no role: `role_from_audio` of
    `drumspike-core` (the hint mode, only a role with a confidence bar comes back, the first 30 s, no
-   suggestion for a Drum Spike export name). The app uses it in `tracks_scan` and takes the hint for
+   suggestion for a Drum Spike export name). It runs only when neither the DAW name nor the name of
+   the source gives a role, and only when the audio of the source is here (a unit test proves that a
+   name that gives a role never asks the audio). It runs once, when the track is made; a later new DAW
+   name never asks the audio. The app uses it in `tracks_scan` and takes the hint for
    the new track; the plugin has no scan, so it takes the hint at the make of the track,
 4. `other`.
 

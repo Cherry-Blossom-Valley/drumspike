@@ -297,9 +297,9 @@ is: the archive has no name from the host, so an archive and the events are byte
 as without names.
 
 - **Where the page gets it:** `display_name` in every track of the answer of `tracks_get` and
-  `project_get` (the plugin adds the one key; the track key is not touched). The page must show it:
-  `static/tracks.js` writes the key into the header and `static/inspector.js` into the name field.
-  Until the page reads `display_name`, the page shows the key (see the design note).
+  `project_get` (the plugin adds the one key; the track key is not touched). The page shows it in the
+  track header and in the Inspector name field (`static/tracks.js`, `static/inspector.js`); every
+  command still sends the key.
 - **A rename of the DAW track and a move of a region** to another track change the display name
   with no analysis round: the plugin tells the page to reload its project (`plugin-reload`).
 - **Report rows:** `track_names` (the display names that differ from the track name, when they

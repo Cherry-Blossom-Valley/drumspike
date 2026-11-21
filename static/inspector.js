@@ -291,7 +291,8 @@ function syncInspector(force) {   // after a change of the selected track (updat
   $("#insBody").classList.toggle("hidden", !name);
   if (!name) { insMixHome(); $("#insParams").textContent = ""; return; }
   const t = S.tracks[name];
-  const nm = $("#insName"); nm.value = name; nm.dataset.name = name;
+  const nm = $("#insName"), shown = t.display_name || name;   // #558: a host shows the name of its track; the key stays the name
+  nm.value = shown; nm.dataset.name = name; nm.dataset.shown = shown;
   if (hostMode()) { nm.readOnly = true; nm.title = "Track name: the host names the tracks"; }   // #539
   $("#insColor").style.background = t.color || "#888";
   insRoleLine(); insCounts(); insSource(); insRoleControls();
@@ -430,11 +431,12 @@ function setupInspector() {   // once, at boot: the name field, the Relink butto
   nm.addEventListener("keydown", ev => {
     ev.stopPropagation();   // the page's shortcuts must not run while the user types
     if (ev.key === "Enter") { ev.preventDefault(); nm.blur(); }
-    else if (ev.key === "Escape") { ev.preventDefault(); nm.value = nm.dataset.name || ""; nm.blur(); }
+    else if (ev.key === "Escape") { ev.preventDefault(); nm.value = nm.dataset.shown || nm.dataset.name || ""; nm.blur(); }
   });
   nm.addEventListener("blur", async () => {
     const from = nm.dataset.name;
-    if (from && nm.value.trim() !== from && !(await renameTrack(from, nm.value)) && INS.name === from) nm.value = from;
+    const shown = nm.dataset.shown || from;   // #558: the field holds the shown name; only a change of it renames the track
+    if (from && nm.value.trim() !== shown && !(await renameTrack(from, nm.value)) && INS.name === from) nm.value = shown;
   });
   $("#insRelink").onclick = () => { if (INS.name) relinkTrack(INS.name); };
   $("#insRoleSel").onchange = ev => {   // 0.9.1: the role of the selected track

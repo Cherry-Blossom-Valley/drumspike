@@ -174,8 +174,14 @@ mod tests {
         let n = display_names(&t, Fault::default());
         assert_eq!(n["aa11"], "Kick In");
         assert_eq!(n["bb22"], "Snare take");
-        assert_eq!(n["cc33"], "cc33", "an empty name is no name: the name of the source stays");
-        assert_eq!(n["dd44"], "dd44", "a source with no region shows the name of the source");
+        assert_eq!(
+            n["cc33"], "cc33",
+            "an empty name is no name: the name of the source stays"
+        );
+        assert_eq!(
+            n["dd44"], "dd44",
+            "a source with no region shows the name of the source"
+        );
     }
 
     #[test]
@@ -189,7 +195,10 @@ mod tests {
         let tie = [track(
             "aa11",
             0,
-            vec![region(1.0, 7, Some("Second"), None), region(1.0, 4, Some("First"), None)],
+            vec![
+                region(1.0, 7, Some("Second"), None),
+                region(1.0, 4, Some("First"), None),
+            ],
         )];
         assert_eq!(display_names(&tie, Fault::default())["aa11"], "First");
     }
@@ -236,11 +245,29 @@ mod tests {
             track("aa11", 0, vec![region(0.0, 1, Some("Kick"), Some("take"))]),
             track("bb22", 1, vec![region(0.0, 2, Some("Kick"), None)]),
         ];
-        let ign = display_names(&t, Fault { ignore: true, ..Fault::default() });
+        let ign = display_names(
+            &t,
+            Fault {
+                ignore: true,
+                ..Fault::default()
+            },
+        );
         assert_eq!(ign["aa11"], "aa11");
-        let rf = display_names(&t, Fault { region_first: true, ..Fault::default() });
+        let rf = display_names(
+            &t,
+            Fault {
+                region_first: true,
+                ..Fault::default()
+            },
+        );
         assert_eq!(rf["aa11"], "take");
-        let nn = display_names(&t, Fault { no_number: true, ..Fault::default() });
+        let nn = display_names(
+            &t,
+            Fault {
+                no_number: true,
+                ..Fault::default()
+            },
+        );
         assert_eq!(nn["bb22"], "Kick");
     }
 }

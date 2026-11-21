@@ -6008,11 +6008,13 @@ def stage_editor_menu_fault() -> bool:
 # The test host makes four region sequences (the DAW tracks): "Kick In" with a region name that must
 # lose against it, one with no name whose region has one, and two with the same name. After the page
 # reported, the host renames the first DAW track and moves the region of the second source to it.
-NAMES_ARGS = ["--seq-names", "Kick In", "-", "Overheads", "Overheads",
-              "--region-names", "kick take", "Snare Top Take", "-", "-",
-              "--rename-seq", "0=Kick Inside", "--move-region", "1=0"]
-NAMES_BEFORE = ["Kick In", "Snare Top Take", "Overheads", "Overheads (2)"]
-NAMES_AFTER = ["Kick Inside", "Kick Inside (2)", "Overheads", "Overheads (2)"]
+# The names give no role (the role follows the DAW name, see the stage editor-roles): a rename or a move here
+# changes no role, so it must start no round.
+NAMES_ARGS = ["--seq-names", "Drum A", "-", "Overheads", "Overheads",
+              "--region-names", "first take", "Snare Top Take", "-", "-",
+              "--rename-seq", "0=Drum Big", "--move-region", "1=0"]
+NAMES_BEFORE = ["Drum A", "Snare Top Take", "Overheads", "Overheads (2)"]
+NAMES_AFTER = ["Drum Big", "Drum Big (2)", "Overheads", "Overheads (2)"]
 
 
 def host_lines(label: str) -> list:
@@ -6100,6 +6102,9 @@ def names_parts(run: dict, ref: bytes, base: dict) -> dict:
         f"the keys of the tracks are the same before and after ({same_keys}), the events the page reads are byte for byte the reference "
         f"before and after ({events_same}), the notes before and after are the notes of a run with no names ({notes_same}), the stored "
         f"archive (without its document id) is the archive of that run ({archive_same})")
+    parts["editor-names-header"] = (
+        first.get("dom_names") == NAMES_BEFORE and after.get("dom_names") == NAMES_AFTER,
+        f"the header of the page draws {first.get('dom_names')} and, after the rename and the move, {after.get('dom_names')} (want {NAMES_BEFORE} and {NAMES_AFTER})")
     rep_rows = [r for r in rows if r.get("event") == "track_names"]
     want_before = {k: v for k, v in zip(keys, NAMES_BEFORE) if k != v}
     want_after = {k: v for k, v in zip(keys, NAMES_AFTER) if k != v}
@@ -6120,8 +6125,6 @@ def stage_editor_names() -> bool:
     for which, bundle, suffix in (("clap", CLAP, ""), ("vst3", EMBEDDED_CLAP, "-vst3")):
         run_ = names_run(f"editor-names-{which}", bundle, True)
         ok = print_parts(suffix, names_parts(run_, ref, base)) and ok
-    dom = (page_reports(base["rows"], "names") or [{}])[0].get("dom_names")
-    print(f"    the header of the page shows {dom}: it shows the key of the track until static/tracks.js shows display_name (report of #558)")
     return ok
 
 
@@ -6141,7 +6144,10 @@ def stage_editor_names_fault() -> bool:
         ("key", "key", "editor-names-identity", "the key of a track follows the name of the DAW track"),
     ):
         run_ = names_run(f"editor-names-fault-{label}", CLAP, True, {"DS_ARA_NAMES_FAULT": fault})
-        ok = fault_part(f"editor-names-fault-{label}", names_parts(run_, ref, base), part, what) and ok
+        parts = names_parts(run_, ref, base)
+        ok = fault_part(f"editor-names-fault-{label}", parts, part, what) and ok
+        if label in ("ignore", "no-reload"):
+            ok = fault_part(f"editor-names-fault-{label}-header", parts, "editor-names-header", what + " (the drawn header text)") and ok
     return ok
 
 

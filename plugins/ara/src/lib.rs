@@ -214,7 +214,10 @@ impl SourceState {
         let first = regions
             .iter()
             .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play))?;
-        seqs.get(&first.sequence).cloned().flatten().or_else(|| first.name.clone())
+        seqs.get(&first.sequence)
+            .cloned()
+            .flatten()
+            .or_else(|| first.name.clone())
     }
 
     /// The snapshot the service job works on.
@@ -222,7 +225,8 @@ impl SourceState {
         let p = self.props();
         let label = self.label();
         // the role the name gives is what the round saw now
-        *self.label_role_seen.lock().unwrap_or_else(|e| e.into_inner()) = label.as_deref().and_then(drumspike_app::roles::guess_role);
+        *self.label_role_seen.lock().unwrap_or_else(|e| e.into_inner()) =
+            label.as_deref().and_then(drumspike_app::roles::guess_role);
         // R2: the path, the ready mark and the generation of the audio are read under ONE lock;
         // the content update takes the WAV and raises the generation under the same lock, so a
         // snapshot never holds the old path with the new generation
@@ -689,7 +693,8 @@ impl DocShared {
             .unwrap_or_default();
         for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
             let now = s.label().as_deref().and_then(drumspike_app::roles::guess_role);
-            let differs = *s.label_role_seen.lock().unwrap_or_else(|e| e.into_inner()) != now;
+            // only a name that gives a role can change a role: a name with none leaves the role as it is
+            let differs = now.is_some() && *s.label_role_seen.lock().unwrap_or_else(|e| e.into_inner()) != now;
             // a source that no round has seen has no track to change
             if differs && s.track.lock().map(|t| t.is_some()).unwrap_or(false) {
                 touch(s);
@@ -2603,7 +2608,11 @@ unsafe fn sequence_name(p: *const ARARegionSequenceProperties) -> Option<String>
         return None;
     }
     let declared = std::ptr::addr_of!((*p).structSize).read_unaligned();
-    if !size_covers(declared, std::mem::offset_of!(ARARegionSequenceProperties, name), std::mem::size_of::<usize>()) {
+    if !size_covers(
+        declared,
+        std::mem::offset_of!(ARARegionSequenceProperties, name),
+        std::mem::size_of::<usize>(),
+    ) {
         return None;
     }
     let name = std::ptr::addr_of!((*p).name).read_unaligned();
@@ -2623,7 +2632,11 @@ unsafe fn region_labels(p: *const ARAPlaybackRegionProperties) -> (u64, Option<S
     }
     let declared = std::ptr::addr_of!((*p).structSize).read_unaligned();
     let word = std::mem::size_of::<usize>();
-    let sequence = if size_covers(declared, std::mem::offset_of!(ARAPlaybackRegionProperties, regionSequenceRef), word) {
+    let sequence = if size_covers(
+        declared,
+        std::mem::offset_of!(ARAPlaybackRegionProperties, regionSequenceRef),
+        word,
+    ) {
         std::ptr::addr_of!((*p).regionSequenceRef).read_unaligned() as usize as u64
     } else {
         0
@@ -3411,7 +3424,12 @@ unsafe extern "C" fn dc_createPlaybackRegion(
         if let Ok(list) = ctl.sources.lock() {
             if let Some(src) = list.iter().find(|s| s.seq == seq) {
                 if let Ok(mut rl) = src.regions.lock() {
-                    rl.push(RegionSlot { id, rec, sequence, name });
+                    rl.push(RegionSlot {
+                        id,
+                        rec,
+                        sequence,
+                        name,
+                    });
                 }
                 touch(src);
             }

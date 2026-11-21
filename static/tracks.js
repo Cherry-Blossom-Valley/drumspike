@@ -86,7 +86,7 @@ function buildTrackDOM() {
     scroll.appendChild(row);
     if (t.follows) { row.querySelector(".tfollow").textContent = ` · follows ${t.follows}`; row.classList.add("follower"); }   // P3-18: names are data
     const tn = row.querySelector(".tname");   // C1: name as text node — no HTML injection
-    const nm = document.createElement("span"); nm.className = "tnm"; nm.textContent = name; nm.title = name;
+    const nm = document.createElement("span"); nm.className = "tnm"; nm.textContent = t.display_name || name; nm.title = t.display_name || name;   // #558: a host shows the name of its track; the key stays the name
     tn.appendChild(nm);
     setHeadIcon(row, t.role);   // 0.9.3: the role icon left of the name
     // P3-14c: the header is compact; the 🔗 badge and the hit counts are in the Inspector (source state, Detected, Edited)
