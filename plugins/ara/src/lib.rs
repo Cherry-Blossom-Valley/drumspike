@@ -46,6 +46,7 @@ pub mod keys;
 pub mod musical;
 pub mod names;
 pub mod playback;
+pub mod selection;
 pub mod service;
 pub mod state;
 pub mod tempo_ara;
@@ -409,6 +410,14 @@ struct DocShared {
     /// M1c1: the length in the song of each playback region by id (the song-time export maps a stretched region).
     play_len: Mutex<HashMap<u64, f64>>,
     musical: Mutex<musical::Snapshot>,
+    /// M1b13: the refs of the live playback regions (the address of each `PlaybackRegion` the host holds). A selection of the host
+    /// names regions by ref; a ref is read only when it is in this set, so a ref of a destroyed region is never read.
+    live_regions: Mutex<std::collections::HashSet<usize>>,
+    /// M1b13: what the host selected and hides, and the payload the page was told last.
+    view: Mutex<selection::ViewState>,
+    view_pushed: Mutex<Option<Value>>,
+    /// How many selection events the page was sent (the report and the unit tests count them).
+    view_events: AtomicU64,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -518,6 +527,10 @@ impl DocShared {
             stretched: Mutex::new(std::collections::HashSet::new()),
             play_len: Mutex::new(HashMap::new()),
             musical: Mutex::new(musical::Snapshot::default()),
+            live_regions: Mutex::new(std::collections::HashSet::new()),
+            view: Mutex::new(selection::ViewState::default()),
+            view_pushed: Mutex::new(None),
+            view_events: AtomicU64::new(0),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -754,6 +767,86 @@ impl DocShared {
             return; // the fault run: the page is not told
         }
         self.page.log.push("plugin-reload", json!({"doc": self.id()}));
+        // M1b13: a round ended: the tracks and the regions the selection maps through are the new ones
+        self.selection_changed();
+    }
+
+    /// M1b13: the tracks of the document as the selection rules need them: the key, the creation index of the source and
+    /// its live playback regions `(region id, region sequence id)`. A source that has no track yet is not in the list.
+    fn selection_facts(&self) -> Vec<selection::TrackFacts> {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
+                continue;
+            };
+            let regions = s
+                .regions
+                .lock()
+                .map(|r| r.iter().map(|slot| (slot.id, slot.sequence)).collect())
+                .unwrap_or_default();
+            out.push(selection::TrackFacts {
+                track,
+                seq: s.seq,
+                regions,
+            });
+        }
+        out
+    }
+
+    /// M1b13: the payload of the page event `plugin-selection` from what the host selected and hides now. Takes no lock
+    /// across another and makes no call of the host.
+    fn selection_payload(&self) -> Value {
+        let state = self.view.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let facts = self.selection_facts();
+        let order: HashMap<u64, Option<i32>> = self
+            .sequences
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(k, v)| (*k, v.order))
+            .collect();
+        let all = self.round_region_list();
+        selection::payload(
+            &state,
+            &facts,
+            &order,
+            &|seq| all.iter().filter(|(i, _)| *i == seq).map(|(_, r)| *r).collect(),
+            selection::Fault::read(),
+        )
+    }
+
+    /// M1b13: tell the page when the selection it should show changed (a call of the host, a round, a rename). One event
+    /// per change: the same payload twice sends nothing. The row goes to the report through the deferred path.
+    fn selection_changed(&self) {
+        let payload = self.selection_payload();
+        {
+            let mut last = self.view_pushed.lock().unwrap_or_else(|e| e.into_inner());
+            if last.as_ref() == Some(&payload) {
+                return;
+            }
+            *last = Some(payload.clone());
+        }
+        let n = self.view_events.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut event = payload.clone();
+        event["n"] = json!(n);
+        self.page.log.push("plugin-selection", event);
+        session()
+            .log_deferred(json!({"event": "view_applied", "doc": self.id(), "n": n, "payload": payload}).to_string());
+    }
+
+    /// M1b13: what the page needs now (the pull of a page that has just opened or loaded again).
+    fn selection_now(&self) -> Value {
+        if selection::Fault::read().no_pull {
+            return Value::Null;
+        }
+        let mut p = self.selection_payload();
+        p["n"] = json!(self.view_events.load(Ordering::SeqCst));
+        p
     }
 
     /// M1b10: the tracks of the document as the display name rule needs them: the track name, the
@@ -845,6 +938,8 @@ impl DocShared {
     /// announces the reload itself).
     fn names_changed(&self, announce: bool) {
         self.touch_role_changes();
+        // M1b13: a region or a sequence changed: the tracks that the host's selection names may be others now
+        self.selection_changed();
         // computed and compared under the lock: the main thread and the worker cannot leave the older map
         // in place of the newer, and no change goes without its announcement
         let now = {
@@ -2402,6 +2497,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let p5 = doc.clone();
     let p6 = doc.clone();
     let p7 = doc.clone();
+    let p8 = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
@@ -2419,6 +2515,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
         tempo: Arc::new(move || p5.song_tempo()),
         stretched: Arc::new(move || p6.stretched_tracks()),
         export_regions: Arc::new(move || p7.export_region_list()),
+        selection: Arc::new(move || p8.selection_now()),
     }
 }
 
@@ -3900,7 +3997,13 @@ unsafe extern "C" fn dc_createPlaybackRegion(
             }
         }
         ctl.doc.names_touched();
-        Box::into_raw(Box::new(PlaybackRegion { seq, id })) as ARAPlaybackRegionRef
+        let made = Box::into_raw(Box::new(PlaybackRegion { seq, id })) as ARAPlaybackRegionRef;
+        ctl.doc
+            .live_regions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(made as usize);
+        made
     })
 }
 
@@ -3960,8 +4063,13 @@ unsafe extern "C" fn dc_destroyPlaybackRegion(c: ARADocumentControllerRef, r: AR
     guard("destroyPlaybackRegion", (), move || {
         // the region record leaves the source with the ref (the destroyed region is no
         // longer part of the document)
-        let region = Box::from_raw(r as *mut PlaybackRegion);
         let ctl = controller_of(c);
+        ctl.doc
+            .live_regions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&(r as usize));
+        let region = Box::from_raw(r as *mut PlaybackRegion);
         ctl.doc
             .stretched
             .lock()
@@ -4878,11 +4986,75 @@ static ER_INTERFACE: SyncPtr<ARAEditorRendererInterface> = SyncPtr(ARAEditorRend
     removeRegionSequence: Some(er_removeRegionSequence),
 });
 
-/// The report row of a selection (M1b4, evidence only): the counts of what the host selected
-/// and whether it gave a time range. The first call and then one a second; a row the limit holds
-/// back waits for the worker (the newest one is kept).
-unsafe extern "C" fn ev_notifySelection(_editorViewRef: ARAEditorViewRef, selection: *const ARAViewSelection) {
+/// The most ids of a selection or of a hide list that the plugin reads from one call (a hostile or broken host).
+const VIEW_LIST_MAX: usize = 4096;
+
+/// The document of the plugin instance that the host's editor view ref names (the ref is the plugin, see `pext_bind`).
+unsafe fn doc_of_view(editor_view_ref: ARAEditorViewRef) -> Option<Arc<DocShared>> {
+    if editor_view_ref.is_null() {
+        return None;
+    }
+    let plugin = &*(editor_view_ref as *const Plugin);
+    plugin.doc.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+impl DocShared {
+    /// M1b13: the host selected something (a callback of the host, main thread): keep it, and tell the page when what it
+    /// shows changed. Returns the payload for the report row. The fault `keep-range` drops an empty selection, so the
+    /// page keeps its range.
+    fn selection_set(&self, raw: selection::RawSel) -> Value {
+        let fault = selection::Fault::read();
+        if !(fault.keep_range && !raw.names_track() && raw.range.is_none()) {
+            let facts = self.selection_facts();
+            let order: HashMap<u64, Option<i32>> = self
+                .sequences
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .map(|(k, v)| (*k, v.order))
+                .collect();
+            // a selection that names a track of the plugin is the one a later range alone maps through
+            let resolves = raw.names_track() && !selection::tracks_named(&raw, &facts, &order).is_empty();
+            {
+                let mut v = self.view.lock().unwrap_or_else(|e| e.into_inner());
+                if resolves {
+                    v.named = raw.clone();
+                }
+                v.raw = raw;
+                v.seen = true;
+            }
+            self.selection_changed();
+        }
+        self.selection_payload()
+    }
+
+    /// M1b13: the host hides these region sequences (every call replaces the list).
+    fn selection_hide(&self, hidden: Vec<u64>) -> Value {
+        self.view.lock().unwrap_or_else(|e| e.into_inner()).hidden = hidden;
+        self.selection_changed();
+        self.selection_payload()
+    }
+}
+
+/// The ids of a list of refs of the host: a counter for a region sequence (never a pointer), and the id of a live playback
+/// region for a region (a ref that is not in the live set is not read).
+unsafe fn read_refs<T>(base: *const *mut T, count: usize) -> Vec<usize> {
+    if base.is_null() || count == 0 {
+        return Vec::new();
+    }
+    (0..count.min(VIEW_LIST_MAX))
+        .map(|i| base.add(i).read_unaligned() as usize)
+        .collect()
+}
+
+/// A selection of the host (M1b4 rows, M1b13 follow): the plugin copies the ids and the range during the call (the host's
+/// pointers are valid only then), keeps them, and tells the page what they mean. The callback blocks on nothing and writes no
+/// file: the row is kept and the worker writes it. The row names the counts, the names of the selected DAW tracks, the range of
+/// the host and what the plugin made of it; the first call and then one a second.
+unsafe extern "C" fn ev_notifySelection(editorViewRef: ARAEditorViewRef, selection: *const ARAViewSelection) {
     guard("notifySelection", (), move || {
+        let doc = doc_of_view(editorViewRef);
+        let mut raw = selection::RawSel::default();
         let (mut regions, mut sequences, mut range) = (0usize, 0usize, false);
         if !selection.is_null() {
             // the struct of the host must reach the field before the plugin reads it
@@ -4895,11 +5067,46 @@ unsafe extern "C" fn ev_notifySelection(_editorViewRef: ARAEditorViewRef, select
                 sequences = std::ptr::addr_of!((*selection).regionSequenceRefsCount).read_unaligned();
             }
             if declared >= end(std::mem::offset_of!(ARAViewSelection, timeRange)) {
-                range = !std::ptr::addr_of!((*selection).timeRange).read_unaligned().is_null();
+                let tr = std::ptr::addr_of!((*selection).timeRange).read_unaligned();
+                range = !tr.is_null();
+                if range {
+                    let start = std::ptr::addr_of!((*tr).start).read_unaligned();
+                    let duration = std::ptr::addr_of!((*tr).duration).read_unaligned();
+                    raw.range = Some((start, duration));
+                }
+            }
+            if declared >= end(std::mem::offset_of!(ARAViewSelection, regionSequenceRefs)) {
+                let base = std::ptr::addr_of!((*selection).regionSequenceRefs).read_unaligned();
+                raw.sequences = read_refs(base, sequences).into_iter().map(|r| r as u64).collect();
+            }
+            if declared >= end(std::mem::offset_of!(ARAViewSelection, playbackRegionRefs)) {
+                let base = std::ptr::addr_of!((*selection).playbackRegionRefs).read_unaligned();
+                if let Some(d) = &doc {
+                    let live = d.live_regions.lock().unwrap_or_else(|e| e.into_inner());
+                    raw.regions = read_refs(base, regions)
+                        .into_iter()
+                        .filter(|r| live.contains(r))
+                        .map(|r| (*(r as *const PlaybackRegion)).id)
+                        .collect();
+                }
             }
         }
-        let row = json!({"event": "view_selection", "playback_regions": regions, "region_sequences": sequences, "time_range": range})
-            .to_string();
+        let names: Vec<String> = doc
+            .as_ref()
+            .map(|d| {
+                let seqs = d.sequences.lock().unwrap_or_else(|e| e.into_inner());
+                raw.sequences
+                    .iter()
+                    .filter_map(|id| seqs.get(id).and_then(|q| q.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let (start, duration) = raw.range.unzip();
+        let resolved = doc.as_ref().map(|d| d.selection_set(raw)).unwrap_or(Value::Null);
+        let row = json!({"event": "view_selection", "playback_regions": regions, "region_sequences": sequences, "time_range": range,
+            "sequence_names": names, "range_start_s": start, "range_duration_s": duration,
+            "tracks": resolved["tracks"], "none": resolved["none"], "range": resolved["range"], "range_why": resolved["range_why"]})
+        .to_string();
         // the callback only keeps the row; the worker writes the file (S1)
         if let Some(row) = SELECTION_ROWS.offer(row, mono_ms(), 1000) {
             session().log_deferred(row);
@@ -4907,12 +5114,19 @@ unsafe extern "C" fn ev_notifySelection(_editorViewRef: ARAEditorViewRef, select
     })
 }
 unsafe extern "C" fn ev_notifyHideRegionSequences(
-    _editorViewRef: ARAEditorViewRef,
+    editorViewRef: ARAEditorViewRef,
     regionSequenceRefsCount: ARASize,
-    _regionSequenceRefs: *const ARARegionSequenceRef,
+    regionSequenceRefs: *const ARARegionSequenceRef,
 ) {
     guard("notifyHideRegionSequences", (), move || {
-        let row = json!({"event": "view_hide_sequences", "count": regionSequenceRefsCount}).to_string();
+        let hidden: Vec<u64> = read_refs(regionSequenceRefs as *const *mut c_void, regionSequenceRefsCount)
+            .into_iter()
+            .map(|r| r as u64)
+            .collect();
+        let resolved = doc_of_view(editorViewRef)
+            .map(|d| d.selection_hide(hidden))
+            .unwrap_or(Value::Null);
+        let row = json!({"event": "view_hide_sequences", "count": regionSequenceRefsCount, "hidden_tracks": resolved["hidden"]}).to_string();
         if let Some(row) = HIDE_ROWS.offer(row, mono_ms(), 1000) {
             session().log_deferred(row);
         }
@@ -5229,6 +5443,66 @@ mod tests {
         // a host with no edit cycle gets the names at once
         doc.names_touched();
         assert_eq!(doc.name_computes.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_selection_of_the_host_reaches_the_page_once_per_change_and_a_region_ref_is_read_only_when_it_is_live() {
+        let doc = DocShared::new();
+        for (id, name, order) in [(7u64, "Kick", 0), (8, "Snare", 1)] {
+            doc.sequences.lock().unwrap().insert(
+                id,
+                SeqInfo {
+                    name: Some(name.into()),
+                    order: Some(order),
+                },
+            );
+        }
+        let _k = named_source(&doc, 0, "kick", 7, 1);
+        let _s = named_source(&doc, 1, "snare", 8, 2);
+        let events = || {
+            doc.page.log.poll(0, std::time::Duration::from_millis(1))["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e["event"] == "plugin-selection")
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(events().len(), 0, "the host said nothing yet");
+        let raw = selection::RawSel {
+            sequences: vec![8],
+            range: Some((1.25, 0.5)),
+            ..selection::RawSel::default()
+        };
+        let p = doc.selection_set(raw.clone());
+        assert_eq!(p["tracks"], json!(["snare"]));
+        assert_eq!(
+            p["range"],
+            json!({"t0": 0.25, "t1": 0.75}),
+            "mapped through the second region of the snare (song 1 to 2)"
+        );
+        assert_eq!(events().len(), 1);
+        doc.selection_set(raw);
+        assert_eq!(events().len(), 1, "the same selection twice sends one event");
+        // the kick and the snare are hidden: one more event with the two keys; an unknown sequence in the list changes nothing
+        doc.selection_hide(vec![7, 8, 99]);
+        let evs = events();
+        assert_eq!(evs.len(), 2);
+        assert_eq!(evs[1]["payload"]["hidden"], json!(["kick", "snare"]));
+        assert_eq!(evs[1]["payload"]["n"], json!(2));
+        doc.selection_hide(vec![7, 8]);
+        assert_eq!(events().len(), 2, "the same hide list twice sends one event");
+        // a region that left the document: its ref is not in the live set, so it is not read
+        assert!(doc.live_regions.lock().unwrap().is_empty());
+        // the pull of a page that opened later sees the same state
+        let now = doc.selection_now();
+        assert_eq!(
+            (now["n"].clone(), now["hidden"].clone()),
+            (json!(2), json!(["kick", "snare"]))
+        );
+        // a rename or a region change that moves no selection sends nothing
+        doc.names_touched();
+        assert_eq!(events().len(), 2);
     }
 
     #[test]

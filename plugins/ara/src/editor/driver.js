@@ -2,7 +2,7 @@
    test switch DS_ARA_EDITOR_MODE is set (a real host sets none). It runs on the real page and
    reports to the plugin through window.ipc (rows "page_report" of the plugin's report).
    window.__DS_TEST__ = {mode, arg, fault} comes from the plugin.
-   Modes: ready (boot report only), measure, keys, focus, resize, edit, shell, analyse, net, and (M1b11) hit, menu, geometry. */
+   Modes: ready (boot report only), measure, keys, focus, resize, edit, shell, analyse, net, and (M1b11) hit, menu, geometry, (M1b13) selection. */
 (function () {
   "use strict";
   var T = window.__DS_TEST__ || { mode: "ready", arg: "", fault: "" };
@@ -10,6 +10,8 @@
   var violations = [];
   var reloads = 0;
   try { window.__TAURI__.event.listen("plugin-reload", function () { reloads++; }); } catch (e) { /* no events */ }
+  var selEvents = 0, selLast = null;   // M1b13: the events of the host's selection that the page got
+  try { window.__TAURI__.event.listen("plugin-selection", function (e) { selEvents++; selLast = e.payload; }); } catch (e) { /* no events */ }
   document.addEventListener("securitypolicyviolation", function (ev) {
     violations.push({ directive: ev.violatedDirective, blocked: ev.blockedURI });
   });
@@ -78,8 +80,85 @@
     if (T.mode === "geometry") geometryRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "hostkeys") hostkeysRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "delivery") deliveryRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "selection") selectionRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "playback") playbackRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
   });
+
+  /* Mode selection (M1b13, #562): the host's view sends a list of selections and hide lists (the steps of `--sel-steps`, which the plugin passes
+     in T.arg too). Each step is `[pre@]host step`. The pre action is the page's: `zoom` (the view 0 to 1.2 s), `pointer` (the button of the pointer
+     goes down and stays), `user` (the same, and the user selects the third track), `key` (a key goes down and stays), `off` and `on` (the
+     page's menu item Follow the DAW Selection, clicked through the DOM). After the pre action the page reports `sel-armed`; the host sends its step;
+     the page waits for the event of the plugin (or 1.2 s when none comes), lets the page settle, and reads what it shows (`snap1`); it then ends
+     the pointer or key action, waits for the page to settle again and reads again (`snap2`), and reports `sel-snap`. The last report `selection`
+     carries every step. */
+  function selClick(el) { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })); }
+  async function selMenuFollow() {   // View > Follow the DAW Selection through the panel of the page (clicks on the real elements)
+    selClick(document.getElementById("hostMenuBtn"));
+    await sleepM(150);
+    selClick(document.querySelector('#hostMenu [data-group="View"]'));
+    await sleepM(150);
+    var it = document.querySelector('#hostMenu [data-host="host_follow_selection"]');
+    var was = it && it.getAttribute("aria-checked");
+    if (it) selClick(it);
+    await sleepM(150);
+    return was;
+  }
+  function selSnap(names) {
+    var sc = document.getElementById("lanesScroll"), c = sc.getBoundingClientRect();
+    var row = function (n) { return document.querySelector('.track[data-name="' + CSS.escape(n) + '"]'); };
+    var rowIn = function (n) { var r = row(n); if (!r) return null; var b = r.getBoundingClientRect(); return b.height > 0 && b.top >= c.top - 1 && b.bottom <= c.bottom + 1; };
+    var st = DSHostSel.state(), b = document.getElementById("hostRange"), br = b.getBoundingClientRect(), ed = document.getElementById("editor").getBoundingClientRect();
+    return { sel: S.selTrack, marked: st.marked, hidden: st.hidden, note: st.note, range: st.range, follow: st.follow, pending: st.pending, n: st.n,
+      band: { shown: getComputedStyle(b).display !== "none", left: br.left - ed.left, width: br.width,
+        want_left: st.range ? S.theadW + Math.max(0, tToX(st.range.t0, laneWidth())) : null,   // the band is cut at the edges of the lane area
+        want_width: st.range ? Math.min(laneWidth(), tToX(st.range.t1, laneWidth())) - Math.max(0, tToX(st.range.t0, laneWidth())) : null, top: br.top - ed.top, bottom: br.bottom - ed.top, h: ed.height },
+      view: [S.view.t0, S.view.t1], scroll_top: sc.scrollTop, sel_in_view: S.selTrack ? rowIn(S.selTrack) : null,
+      rows_in_view: (function () { var o = {}; names.forEach(function (n) { o[n] = rowIn(n); }); return o; })(),
+      rows_shown: names.filter(function (n) { var r = row(n); return r && r.getBoundingClientRect().height > 0; }),
+      own_range: !!LN.sel, hit: S.sel ? true : false, events: selEvents, last_event: selLast };
+  }
+  async function selectionRun() {
+    var names = S.order.slice();
+    var steps = (T.arg || "").split(";").filter(function (x) { return x; });
+    if (T.fault === "sel-no-guard") window.hostSelBusy = function () { return false; };   // the fault run: the page overwrites a selection while an action runs
+    if (T.fault === "sel-own-range") window.hostSelRange = function (r) { if (r) lnSetSel(S.selTrack, r.t0, r.t1); else lnClearSel(); };   // the page takes the range of the host as its own hit selection
+    if (T.fault === "sel-no-scroll") { window.hostSelReveal = function () { }; window.hostSelScrollTo = function () { }; }   // nothing scrolls to the track or the range
+    if (T.fault === "sel-no-switch") window.hostSelFollowOn = function () { return true; };   // the switch of the menu does not stop the follow
+    if (T.fault === "sel-no-note") { var h0 = window.hostSelHidden; window.hostSelHidden = function (n) { h0(n); if (HS.note) { HS.note.textContent = ""; HS.note.classList.add("hidden"); } }; }   // the rows hide, with no text
+    setTrackHeight("large"); setInspector(false, false);
+    for (var w = 0; w < 50 && !DSHostSel.state().payload; w++) await sleepM(100);   // the pull of the state the host gave before the editor opened
+    await sleepM(600);
+    var initial = selSnap(names);
+    var results = [], held = null;
+    post({ kind: "sel-ready", initial: initial, names: names, steps: steps, rows: names.map(function (n) { var r = document.querySelector('.track[data-name="' + CSS.escape(n) + '"]').getBoundingClientRect(); return Math.round(r.height); }),
+      lanes_h: Math.round(document.getElementById("lanesScroll").getBoundingClientRect().height), follow: DSHostSel.follows() });
+    for (var k = 0; k < steps.length; k++) {
+      var pre = steps[k].indexOf("@") >= 0 ? steps[k].split("@")[0] : "";
+      var base = selEvents, doc = document;
+      if (pre === "zoom") setView(0, 1.2);
+      if (pre === "pointer" || pre === "user") { doc.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); doc.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); held = "pointer"; }
+      if (pre === "user") setSelTrack(names[2]);   // the user selects a track while the button is down
+      if (pre === "key") { doc.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true })); held = "key"; }
+      var menuWas = null;
+      if (pre === "off" || pre === "on") menuWas = await selMenuFollow();
+      await sleepM(250);
+      var before = selSnap(names);
+      post({ kind: "sel-armed", k: k, step: steps[k] });
+      var t0 = performance.now();
+      while (selEvents === base && performance.now() - t0 < 1200) await sleepM(50);
+      var gotEvent = selEvents > base;
+      await sleepM(900);
+      var snap1 = selSnap(names);
+      if (held === "pointer") { doc.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); doc.dispatchEvent(new PointerEvent("pointerup", { bubbles: true })); }
+      if (held === "key") doc.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", bubbles: true }));
+      held = null;
+      await sleepM(900);
+      var snap2 = selSnap(names);
+      results.push({ k: k, step: steps[k], pre: pre, got_event: gotEvent, menu_was: menuWas, before: before, snap1: snap1, snap2: snap2 });
+      post({ kind: "sel-snap", k: k });
+    }
+    post({ kind: "selection", visibility: document.visibilityState, names: names, steps: results, host_mode: !!B.hostMode, display: (function () { var d = {}; names.forEach(function (n) { d[n] = S.tracks[n].display_name; }); return d; })() });
+  }
 
   /* Mode hostkeys (M1b12, #561): the test host posts real key events to its window, one every 900 ms after the
      "hostkeys-ready" report, and records every one that reaches the host. This side records what the PAGE saw of

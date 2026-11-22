@@ -233,6 +233,8 @@ pub struct Backend {
     pub stretched: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     /// M1c1: the regions for the song-time export (see `DocShared::export_region_list`).
     pub export_regions: Arc<dyn Fn() -> crate::deliver::ExportRegions + Send + Sync>,
+    /// M1b13: the selection of the host as the page shows it (the payload of the page event `plugin-selection`).
+    pub selection: Arc<dyn Fn() -> Value + Send + Sync>,
 }
 
 /// The source indexes of a track and their longest length in seconds.
@@ -696,11 +698,12 @@ fn poll_channel(sh: &Arc<Shared>, id: &str, total: std::time::Duration) -> Vec<V
 
 /// The commands that `call::run` leaves to the desktop shell (`SHELL_ONLY` of
 /// `crates/app/src/call.rs`), plus the one command of the drag plugin. Each has an answer.
-const SHELL_COMMANDS: [&str; 36] = [
+const SHELL_COMMANDS: [&str; 37] = [
     "plugin_report",
     "plugin_pick_folder",
     "plugin_host_tempo",
     "plugin_host_track",
+    "plugin_host_selection",
     "plugin_host_offer",
     "plugin_host_play",
     "plugin_host_stop",
@@ -980,6 +983,8 @@ fn shell_command(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Option<Answer> {
             sh.select_track(args.get("track").and_then(Value::as_str).unwrap_or(""));
             Answer::json(200, &json!({"ok": true}))
         }
+        // M1b13: the page (its shell script) asks for the selection of the host once the project is loaded
+        "plugin_host_selection" => Answer::json(200, &(sh.backend.selection)()),
         "plugin_host_play" => host_request(sh, crate::playback::Kind::Play, args),
         "plugin_host_stop" => host_request(sh, crate::playback::Kind::Stop, args),
         "plugin_host_locate" => host_request(sh, crate::playback::Kind::Locate, args),
@@ -2049,6 +2054,7 @@ fn backend_of(plugin: &Plugin) -> Backend {
             tempo: Arc::new(|| crate::tempo_ara::choose(None, "no-document", None)),
             stretched: Arc::new(Vec::new),
             export_regions: Arc::new(crate::deliver::ExportRegions::default),
+            selection: Arc::new(|| Value::Null),
         },
     }
 }
@@ -2266,6 +2272,7 @@ mod tests {
                     "plugin_report",
                     "plugin_host_offer",
                     "plugin_host_track",
+                    "plugin_host_selection",
                     "plugin_host_play",
                     "plugin_host_stop",
                     "plugin_host_locate",

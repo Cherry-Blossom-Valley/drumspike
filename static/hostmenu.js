@@ -38,6 +38,9 @@ const HM_NEEDS = { undo: "undo", redo: "redo", delete_hit: "selHit", nudge_earli
   audition: "selHit", toggle_hit_active: "selHit", reanalyze_selection: "selRange", follow_own: "selected" };
 
 const HM = { open: false, group: null, level: 0, saved: null };
+/* #562: the items that only the host mode has. The app menu has none of them, so they are not in the command table, the model and the
+   audit never see them; the panel adds them at the end of the group. */
+const HM_EXTRA = [{ id: "host_follow_selection", group: "View", title: "Follow the DAW Selection", checked: () => DSHostSel.follows(), run: () => DSHostSel.setFollow(!DSHostSel.follows()) }];
 
 /* The entries of the panel: [{name, items: [{id, title, keys, check, checked, enabled, sub, arg}]}], one group per menu of the
    app (the first part of the path), the items in the order of the table, a submenu as the heading `sub` on its items. */
@@ -101,6 +104,14 @@ function hmRender(groupName) {   // level 0: the menus; level 1: the items of on
   const back = hmEl("button", "hmItem hmBack", `‹ ${groupName}`); back.type = "button"; back.setAttribute("role", "menuitem"); back.tabIndex = -1; back.dataset.back = "1";
   back.onclick = () => { hmRender(null); hmFocus(p.querySelector(`[data-group="${CSS.escape(groupName)}"]`)); };
   p.appendChild(back);
+  /* #562: the host-only items come first in the group, so the last item of a group stays the last item of the table */
+  for (const x of HM_EXTRA.filter(e => e.group === groupName)) {
+    const b = hmEl("button", "hmItem", ""); b.type = "button"; b.tabIndex = -1; b.setAttribute("role", "menuitemcheckbox"); b.dataset.host = x.id;
+    b.setAttribute("aria-checked", String(x.checked()));
+    b.appendChild(hmEl("span", "hmMark", x.checked() ? "✓" : "")); b.appendChild(hmEl("span", "hmTitle", x.title)); b.appendChild(hmEl("span", "hmKeys", ""));
+    b.onclick = () => { hostMenuClose(true); x.run(); };
+    p.appendChild(b);
+  }
   let sub;
   for (const it of g ? g.items : []) {
     if (it.sub !== sub) { sub = it.sub; if (sub) p.appendChild(hmEl("div", "hmHead", sub)); }
@@ -135,6 +146,10 @@ function hmRefresh() {
     if (it.check) b.setAttribute("aria-checked", String(it.checked));
     if (it.enabled) b.removeAttribute("aria-disabled"); else b.setAttribute("aria-disabled", "true");
     const mark = b.querySelector(".hmMark"); if (mark) mark.textContent = it.check && it.checked ? "✓" : "";
+  }
+  for (const x of HM_EXTRA.filter(e => e.group === HM.group)) {
+    const b = HM.panel.querySelector(`[data-host="${x.id}"]`);
+    if (b) { b.setAttribute("aria-checked", String(x.checked())); b.querySelector(".hmMark").textContent = x.checked() ? "✓" : ""; }
   }
 }
 function hostMenuOpen() {

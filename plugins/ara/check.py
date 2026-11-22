@@ -6229,6 +6229,166 @@ def stage_editor_menu_fault() -> bool:
                      "a run with no page report fails with 'no usable run'") and ok
 
 
+# ---------------------------------------------------------------- M1b13: the page follows the selection of the DAW (#562)
+#
+# The test host sends what a DAW sends through the ARA editor view: a selection (region sequences, playback regions, a time range) and a list
+# of hidden region sequences. The page runs in the real web view; the driver reads what the page SHOWS after each step (the selected track, the
+# marks, the band of the range, the view, the rows), and the pointer, the key and the menu item are the page's own. The steps are in SEL_STEPS;
+# a step is `[pre action of the page@]host step`. The host has four sources (kick 3.0 s at song 0, snare 2.0 s at 3.0, tom 3.0 s at 5.0, hat
+# 1.6 s at 8.0), each on its own region sequence 0 to 3, and a fifth sequence "Empty Track" that has no clip of the plugin.
+
+SEL_ARGS = ["--seq-names", "Drum A", "Drum B", "Drum C", "Drum D", "Empty Track"]
+SEL_PRE = "seq:2;hide:3"   # sent before the editor opens: the tom track is selected and the hat track is hidden
+SEL_STEPS = [
+    "hide:",                       # -  the DAW shows every track (the page had the hat hidden from the state at its opening)
+    "seq:1",                       # 0  the DAW selects the snare track
+    "seq:2,0",                     # 1  two tracks: the first in the order of the DAW (the kick) is selected, the tom is marked
+    "reg:3",                       # 2  a playback region of the hat selects the hat track
+    "zoom@seq:1+range:3.3,0.6",    # 3  the snare and a range of song 3.3 to 3.9 (source 0.3 to 0.9); the page shows 0 to 1.2 s
+    "range:6.0,1.0",               # 4  a range alone, in the song 6 to 7: no region of the snare holds it
+    "seq:3+range:9.3,0.2",         # 5  the hat, song 9.3 to 9.5 (source 1.3 to 1.5): out of the view 0 to 1.2 s
+    "seq:4",                       # 6  a DAW track with no source of the plugin: nothing changes
+    "empty",                       # 7  an empty selection: the range goes
+    "hide:0,1",                    # 8  the DAW hides the kick and the snare track
+    "hide:",                       # 9  and shows them again
+    "pointer@seq:0",               # 10 the pointer is down in the page when the DAW selects the kick: it waits for the end of the action
+    "user@seq:1",                  # 11 the user selects the tom while the pointer is down: the DAW's snare is dropped
+    "key@seq:3",                   # 12 a key is down when the DAW selects the hat: it waits
+    "off@seq:0+range:0.5,1.0",     # 13 the user switches the follow off in the menu, then the DAW selects the kick and a range: nothing follows
+    "on@noop",                     # 14 the user switches it on again: the page takes the last selection of the host
+]
+SEL_PARTS = ["editor-selection-open", "editor-selection-track", "editor-selection-several", "editor-selection-range", "editor-selection-range-view", "editor-selection-outside",
+             "editor-selection-empty", "editor-selection-unknown", "editor-selection-hidden", "editor-selection-guard", "editor-selection-switch",
+             "editor-selection-row", "editor-selection-no-round"]
+
+
+def selection_run(label: str, env: dict | None = None) -> dict:
+    steps = ";".join(SEL_STEPS)
+    rc, _summary, rows = run_phase(label, "selection", CLAP, env, [*SEL_ARGS, "--sel-pre", SEL_PRE, "--sel-steps", steps, "--arg", steps])
+    reps = page_reports(rows, "selection")
+    ready = page_reports(rows, "sel-ready")
+    return {"rc": rc, "rows": rows, "rep": reps[0] if reps else {}, "ready": ready[0] if ready else {}}
+
+
+def close(a, b, tol=0.02) -> bool:
+    return a is not None and b is not None and abs(a - b) <= tol
+
+
+def selection_parts(run: dict) -> dict:
+    rep, rows = run["rep"], run["rows"]
+    bad = no_run(run["rc"], rep, SEL_PARTS)
+    if bad:
+        return bad
+    steps = rep.get("steps") or []
+    if len(steps) != len(SEL_STEPS):
+        return {n: (False, f"no usable run: {len(steps)} step(s) reported, want {len(SEL_STEPS)}") for n in SEL_PARTS}
+    steps = steps[1:]   # the first step only shows every track again; the numbers in the comments of SEL_STEPS count from the second
+    keys = track_names(FILES)
+    K, S_, T_, H = keys
+    st = lambda i, w="snap2": steps[i][w]
+    band_ok = lambda b: b["shown"] and close(b["left"], b["want_left"], 1.0) and close(b["width"], b["want_width"], 1.5) and b["top"] <= 1 and b["bottom"] >= b["h"] - 1
+    parts: dict = {}
+    first = run.get("ready", {}).get("initial") or {}
+    parts["editor-selection-open"] = (
+        first.get("sel") == T_ and first.get("hidden") == [H] and first.get("note") == "1 track hidden in the DAW" and first.get("marked") == [],
+        f"the DAW selected the tom track and hid the hat track before the editor opened: the page opens with {first.get('sel')!r} selected (want {T_!r}), hidden {first.get('hidden')} "
+        f"(want {[H]}) and the text {first.get('note')!r}")
+    # the page can only scroll to a track that is out of the lanes area: step 2 needs the hat row out of view before it
+    pre_out = steps[2]["before"]["rows_in_view"].get(H) is False
+    parts["editor-selection-track"] = (
+        st(0)["sel"] == S_ and st(0)["marked"] == [] and st(2)["sel"] == H and st(2, "before").get("sel") != H and st(2)["sel_in_view"] is True and st(2)["scroll_top"] > steps[2]["before"]["scroll_top"]
+        and st(2)["range"] is None and pre_out,
+        f"the DAW selected the snare track and the page selected {st(0)['sel']!r} (want {S_!r}); a playback region of the hat selected {st(2)['sel']!r} (want {H!r}), "
+        f"the row is inside the lanes area ({st(2)['sel_in_view']}) after the page scrolled it from {steps[2]['before']['scroll_top']} to {st(2)['scroll_top']} px")
+    parts["editor-selection-several"] = (
+        st(1)["sel"] == K and st(1)["marked"] == [T_] and st(2)["marked"] == [],
+        f"two tracks: the first in the order of the DAW is selected ({st(1)['sel']!r}, want {K!r}), the other is marked ({st(1)['marked']}, want {[T_]}); "
+        f"a later selection of one track takes the marks away ({st(2)['marked']})")
+    r3 = st(3)["range"] or {}
+    parts["editor-selection-range"] = (
+        st(3)["sel"] == S_ and close(r3.get("t0"), 0.3) and close(r3.get("t1"), 0.9) and band_ok(st(3)["band"]) and st(3)["own_range"] is False and st(3)["hit"] is False,
+        f"the DAW range song 3.3 to 3.9 on the snare track is drawn as source {r3.get('t0')} to {r3.get('t1')} (want 0.3 to 0.9); the band: {st(3)['band']}; "
+        f"the page's own range selection is {st(3)['own_range']} and no hit is selected ({st(3)['hit']})")
+    v5 = st(5, "snap1")["view"]
+    parts["editor-selection-range-view"] = (
+        steps[5]["before"]["view"][1] < 1.3 and v5[0] <= 1.3 and v5[1] >= 1.5 and st(3)["view"] == steps[3]["before"]["view"] and band_ok(st(5)["band"]),
+        f"the view was {steps[5]['before']['view']} and the range 1.3 to 1.5 is out of it: the view is {v5} after the step; a range inside the view (step 3) leaves it "
+        f"({steps[3]['before']['view']} then {st(3)['view']})")
+    parts["editor-selection-outside"] = (
+        st(4)["range"] is None and st(4)["band"]["shown"] is False and st(4)["sel"] == S_ and steps[3]["snap2"]["range"] is not None,
+        f"a range in no region of the snare track removes the band (range {st(4)['range']}, shown {st(4)['band']['shown']}) and keeps the selected track {st(4)['sel']!r}")
+    parts["editor-selection-empty"] = (
+        st(7)["range"] is None and st(7)["band"]["shown"] is False and st(7)["sel"] == H and st(5)["range"] is not None,
+        f"an empty selection removes the range ({st(7)['range']}, band shown {st(7)['band']['shown']}) and keeps the selected track {st(7)['sel']!r}")
+    same = ["sel", "marked", "range", "view", "hidden"]
+    parts["editor-selection-unknown"] = (
+        steps[6]["got_event"] is True and all(st(6, "snap1")[k] == steps[6]["before"][k] for k in same) and st(6, "snap1")["band"]["shown"] == steps[6]["before"]["band"]["shown"] is True,
+        f"a DAW track with no source of the plugin: the page got the event ({steps[6]['got_event']}) and changed nothing: "
+        f"{ {k: (steps[6]['before'][k], st(6, 'snap1')[k]) for k in same if st(6, 'snap1')[k] != steps[6]['before'][k]} or 'selection, marks, range, view and hidden rows are the same' }")
+    parts["editor-selection-hidden"] = (
+        st(8)["hidden"] == [K, S_] and st(8)["rows_shown"] == [T_, H] and st(8)["note"] == "2 tracks hidden in the DAW"
+        and st(9)["hidden"] == [] and st(9)["note"] == "" and st(9)["rows_shown"] == keys,
+        f"hidden by the DAW: {st(8)['hidden']}, rows shown {st(8)['rows_shown']}, text {st(8)['note']!r}; after the DAW shows them again: hidden {st(9)['hidden']}, rows shown {st(9)['rows_shown']}, text {st(9)['note']!r}")
+    parts["editor-selection-guard"] = (
+        st(10, "snap1")["sel"] == H and st(10, "snap1")["pending"] is True and st(10)["sel"] == K
+        and st(11, "snap1")["sel"] == T_ and st(11)["sel"] == T_
+        and st(12, "snap1")["sel"] == T_ and st(12, "snap1")["pending"] is True and st(12)["sel"] == H,
+        f"pointer down: the page keeps {st(10, 'snap1')['sel']!r} (pending {st(10, 'snap1')['pending']}), after the action it selects {st(10)['sel']!r} (want {H!r} then {K!r}); "
+        f"the user selected {T_!r} meanwhile and keeps it: {st(11, 'snap1')['sel']!r}, {st(11)['sel']!r}; a key down: {st(12, 'snap1')['sel']!r} then {st(12)['sel']!r} (want {T_!r} then {H!r})")
+    parts["editor-selection-switch"] = (
+        steps[13]["menu_was"] == "true" and st(13)["follow"] is False and st(13)["sel"] == H and st(13)["marked"] == [] and st(13)["band"]["shown"] is False and st(13)["hidden"] == []
+        and steps[14]["menu_was"] == "false" and st(14)["follow"] is True and st(14)["sel"] == K and band_ok(st(14)["band"]) and close((st(14)["range"] or {}).get("t0"), 0.5),
+        f"switched off in the menu: nothing follows (selected {st(13)['sel']!r}, band shown {st(13)['band']['shown']}); switched on: the page takes the last selection "
+        f"(selected {st(14)['sel']!r}, range {st(14)['range']}, band {st(14)['band']})")
+    sel_rows = [r for r in rows if r.get("event") == "view_selection"]
+    mapped = [r for r in sel_rows if r.get("range_start_s") == 3.3]
+    parts["editor-selection-row"] = (
+        bool(mapped) and mapped[0].get("tracks") == [S_] and mapped[0].get("sequence_names") == ["Drum B"] and close((mapped[0].get("range") or {}).get("t0"), 0.3) and len(sel_rows) >= 8,
+        f"{len(sel_rows)} view_selection row(s); the row of step 3 names the DAW track {mapped[0].get('sequence_names') if mapped else None}, the track {mapped[0].get('tracks') if mapped else None} "
+        f"and the range {mapped[0].get('range') if mapped else None}")
+    jobs, rounds = job_rows_of(rows), [r for r in rows if r.get("event") == "round_start"]
+    parts["editor-selection-no-round"] = (
+        len(jobs) == 1 and len(rounds) == 1,
+        f"{len(jobs)} analysis job(s) and {len(rounds)} round(s) in the whole run: a selection or a hide list of the DAW starts none")
+    return parts
+
+
+def stage_editor_selection() -> bool:
+    if _reference() is None or not HOST.exists():
+        return pass_fail("editor-selection", False, "no reference or host")
+    return print_parts("", selection_parts(selection_run("editor-selection")))
+
+
+def stage_editor_selection_fault() -> bool:
+    ok = True
+    K, S_, T_, _H = track_names(FILES)
+    sel = lambda v: {"DS_ARA_SELECTION_FAULT": v}
+    page = lambda v: {"DS_ARA_EDITOR_FAULT": v}
+    # (run name, env, [(part, what the fault breaks, the text that the failing evidence must hold)])
+    for label, env, checks in (
+        ("no-track", sel("no-track"), [("editor-selection-track", "the plugin never gives the page the track", f"selected {K!r} (want {S_!r})")]),
+        ("no-pull", sel("no-pull"), [("editor-selection-open", "the page that opens later is told nothing of the selection that came before", f"opens with {K!r} selected (want {T_!r})")]),
+        ("no-others", sel("no-others"), [("editor-selection-several", "only the first track is given: the others are not marked", "the other is marked ([]")]),
+        ("song-range", sel("song-range"), [("editor-selection-range", "the range stays in song time: no mapping through the regions", "drawn as source 3.3 to 3.9")]),
+        ("unknown-clears", sel("unknown-clears"), [("editor-selection-unknown", "a selection of a track with no source clears the range", "'range':")]),
+        ("keep-range", sel("keep-range"), [("editor-selection-empty", "an empty selection is not passed on: the range stays", "band shown True")]),
+        ("outside-draws", sel("outside-draws"), [("editor-selection-outside", "a range in no region is drawn at the nearest region", "shown True")]),
+        ("no-hidden", sel("no-hidden"), [("editor-selection-hidden", "the hidden tracks are ignored", "hidden by the DAW: []")]),
+        ("no-guard", page("sel-no-guard"), [("editor-selection-guard", "the page overwrites the selection while a pointer or key action runs", "(pending False)")]),
+        ("own-range", page("sel-own-range"), [("editor-selection-range", "the range of the host is the page's own hit selection", "own range selection is True")]),
+        ("no-scroll", page("sel-no-scroll"), [("editor-selection-range-view", "nothing scrolls the view to the range", "out of it: the view is [0, 1.2]"),
+                                              ("editor-selection-track", "nothing scrolls the selected track into view", "lanes area (False)")]),
+        ("no-switch", page("sel-no-switch"), [("editor-selection-switch", "the switch of the menu does not stop the follow", "band shown True")]),
+        ("no-note", page("sel-no-note"), [("editor-selection-hidden", "the hidden rows have no text", "text ''")]),
+    ):
+        parts = selection_parts(selection_run(f"editor-fault-selection-{label}", env))
+        for part, what, reason in checks:
+            ok = fault_reason(f"editor-selection-fault-{label}-{part.rsplit('-', 1)[-1]}", parts, part, what, reason) and ok
+    parts = selection_parts({"rc": 2, "rows": [], "rep": {}, "ready": {}})
+    return pass_fail("editor-selection-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                     "a run with no page report fails with 'no usable run'") and ok
+
+
 # ---- M1b10 (#558): the tracks show the names of the DAW tracks
 
 # The test host makes four region sequences (the DAW tracks): "Kick In" with a region name that must
@@ -7330,6 +7490,8 @@ STAGES = {
     "editor-geometry": stage_editor_geometry,
     "editor-geometry-fault": stage_editor_geometry_fault,
     "editor-menu": stage_editor_menu,
+    "editor-selection": stage_editor_selection,
+    "editor-selection-fault": stage_editor_selection_fault,
     "editor-menu-fault": stage_editor_menu_fault,
     "editor-keys": stage_editor_keys,
     "editor-keys-fault": stage_editor_keys_fault,
@@ -7364,6 +7526,7 @@ ORDER = [
     "editor-playback-drag", "editor-playback-drag-fault", "editor-playback-late", "editor-playback-late-fault",
     "editor-playback-tracks", "editor-playback-tracks-fault",
     "editor-hit", "editor-hit-fault", "editor-geometry", "editor-geometry-fault", "editor-menu", "editor-menu-fault",
+    "editor-selection", "editor-selection-fault",
     "editor-keys", "editor-keys-fault", "editor-keys-twin", "editor-keys-twin-fault",
     "editor-names", "editor-names-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
     "delivery", "delivery-release", "delivery-fault",
