@@ -75,7 +75,12 @@ pub unsafe fn read(host: *const ARADocumentControllerHostInstance, ctx: usize) -
     let mctx = ctx as ARAMusicalContextHostRef;
     let tempo_ok = available(cref, mctx, kARAContentTypeTempoEntries as ARAContentType) != 0;
     let bars_ok = available(cref, mctx, kARAContentTypeBarSignatures as ARAContentType) != 0;
-    let tempo_grade = grade(cref, mctx, kARAContentTypeTempoEntries as ARAContentType) as i64;
+    // the grade may be asked only for content that is available (the ARA validation of a strict host aborts otherwise)
+    let tempo_grade = if tempo_ok {
+        grade(cref, mctx, kARAContentTypeTempoEntries as ARAContentType) as i64
+    } else {
+        -1
+    };
     let mut entries: Vec<Entry> = Vec::new();
     let mut bars: Vec<Bar> = Vec::new();
     let mut capped = false;
