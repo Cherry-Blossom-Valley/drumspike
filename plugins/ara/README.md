@@ -180,7 +180,8 @@ document and stored in the ARA archive, so a restore in a new process finds the 
   A store by the host at any time (the host stores while a round publishes, or before the first round has ended) writes
   the last complete state: the document before the round or after it, never the notes of a round with the events of
   the round before. A store before the first round has ended writes the sources with no notes and no events; the
-  sources then have no result, so the next round with their audio analyses them. The store never waits for a round
+  sources then have no result (a restore treats a source with no events entry for its track so, also in an archive
+  written in the window of an older build), so the next round with their audio analyses them. The store never waits for a round
   (it waits only for the publication of one, which copies notes and takes microseconds). Design note:
   `docs/design/daw-plugin/f5-restore-empty.md`.
 - The notes of an earlier source can change in a later round (a bleed hit leaves the output).

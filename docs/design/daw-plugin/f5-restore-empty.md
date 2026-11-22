@@ -57,10 +57,19 @@ document that state has the sources, no notes and no events: there is nothing el
 for the round (a round runs for seconds or minutes). Good data is not replaced by it, because a document that had
 a restore or an earlier round keeps its events in the document, and the store writes them.
 
-The restore of such an early archive had a second defect. It marked every archived source as complete, so a
-source with no result stayed without hits for ever. A source that the archive holds with no track name, no note
-and no events is now left without a result, and the next round with its audio analyses it (the report row
-`restore_no_result`).
+Lock scope. The same rule holds for every place that changes notes and events together: the round
+(`run_job`), the page sync of the worker (`page_sync`) and the record of a page edit (`record_page_edit`). Each takes
+the events lock, then the settings lock, the order of a store. Inside the section there is only the copy of notes and
+flags: no file access, no service call, no wait. The old WAV files of a source are collected inside the round and
+deleted after the locks are dropped. In `record_page_edit` the notes are made before the locks are taken.
+
+The restore had a second defect. It marked every archived source as complete, so a source with no result stayed
+without hits for ever. Now a source whose track has NO ENTRY in the events of the archive has no result. This covers
+an early archive (no track name, no note), an archive that an older build wrote inside the window (notes and a track
+name, no events) and a source whose round failed. Such a source gets no notes, is not complete, and the next round
+with its audio analyses it. The report has one `restore_no_result` row for each. A track that was analysed to zero
+hits has its key with an empty list in the events: it is a result and is not matched (stage `doc-restore-repair`
+checks both, and the committed version-1 archive restores as before in `doc-archive-v1`).
 
 A restore never shows an empty document while the archive holds events: the events of the archive are set on the
 calling thread (this was already so, proved by `doc-restore-busy`).
@@ -71,15 +80,20 @@ calling thread (this was already so, proved by `doc-restore-busy`).
 |---|---|---|
 | `doc-store-window` | store in the middle of a publication: 19 notes and 19 events, byte for byte the reference | `doc-store-window-fault` (`events-late`): 19 notes, 0 events |
 | `doc-store-window` (part `doc-store-early`) | store before the first round has ended: no notes, no events, the call takes under 1 s while the round needs 1.5 s more; the late archive of the same process holds every event; the early archive restored in a new process is analysed again and gives the reference events and notes | `doc-store-early-fault` (`DS_ARA_RESTORE_FAULT=result`): no round, no note |
-| `archive_store()` | refuses an archive with no event and names the cause | - |
+| `doc-restore-repair` | an archive from the old window (19 notes, track names, 0 events) restores as 4 sources with no result, one round, reference events and notes; a track with an empty events list is a result and starts no round | `doc-restore-repair-fault` (`DS_ARA_RESTORE_FAULT=result`): no round, no notes |
+| `archive_store()` | refuses an archive with no event, or one that cannot be read, and names the cause | - |
 
 ## Limits
 
 - The test switches `publish-delay` and `events-late` exist only in the test build (`test-switches`); the
   delivery build reads no switch.
-- An archive that an older build wrote in the window (all notes, no events) is not repaired by the restore. It
-  holds no hit; only a new analysis brings them back. The plugin is not released yet (assumption of the author, not checked against any session file).
+- An archive that an older build wrote in the window holds no hit; the restore now repairs it by analysing the
+  sources again (the hand edits in it cannot come back). The settings of a source with no result stay in the document
+  and in the next archive, but a round reads the settings from the service and replaces them: the project has no track
+  for such a source (a track restored with no audio file is offline for the analysis). They are not applied to the new
+  track.
 - Events in an archive whose source the host does not give again (the source is gone or has another name and
   persistent ID) are not placed. This is a separate case and was not changed.
 - The stage times a store in the window with a delay of the plugin. Real rounds publish in microseconds, so the
   real window is small, but the host cannot be made to avoid it.
+- Every fault stage also asserts that the fault run was healthy (rc 0, the restore row and the notes of every source), so a crash cannot count as a refusal.

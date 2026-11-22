@@ -663,20 +663,10 @@ impl DocShared {
                 .map_err(|e| format!("events_get {track}: {e}"))?;
             all.insert(track, ev["events"].clone());
         }
-        let changed = {
-            let mut cur = self.events.lock().unwrap_or_else(|e| e.into_inner());
-            let mut st = self.settings.lock().unwrap_or_else(|e| e.into_inner());
-            self.merge_settings_in(&mut st, fresh_settings);
-            if *cur == all {
-                false
-            } else {
-                *cur = all.clone();
-                true
-            }
-        };
-        if !changed {
-            return Ok(false);
-        }
+        // F5 (#572): the notes are made first (they take no lock of the events), then the events, the settings and
+        // the notes are set under the locks of a store (events, then settings): a store never sees new events
+        // with old notes. Nothing inside waits for anything but the short locks of the document's own state.
+        let mut made: Vec<(Arc<SourceState>, Vec<[f64; 2]>)> = Vec::new();
         if crate::test_switch("DS_ARA_EDITOR_FAULT").as_deref() != Ok("no-notes") {
             for s in &members {
                 let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
@@ -706,17 +696,26 @@ impl DocShared {
                     None => None,
                 }
                 .unwrap_or_else(|| s.props().sample_count);
-                let notes = service::notes_for(&list, &regions, rate, count);
-                let differs = s.notes.lock().map(|old| *old != notes).unwrap_or(false);
-                if differs {
-                    if let Ok(mut old) = s.notes.lock() {
-                        *old = notes;
-                    }
-                    if s.has_events.load(Ordering::SeqCst) && !s.removed.load(Ordering::SeqCst) {
-                        if let Ok(mut p) = self.pending.lock() {
-                            if !p.iter().any(|x| Arc::ptr_eq(x, s)) {
-                                p.push(s.clone());
-                            }
+                made.push((s.clone(), service::notes_for(&list, &regions, rate, count)));
+            }
+        }
+        let mut cur = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = self.settings.lock().unwrap_or_else(|e| e.into_inner());
+        self.merge_settings_in(&mut st, fresh_settings);
+        if *cur == all {
+            return Ok(false);
+        }
+        *cur = all;
+        for (s, notes) in made {
+            let differs = s.notes.lock().map(|old| *old != notes).unwrap_or(false);
+            if differs {
+                if let Ok(mut old) = s.notes.lock() {
+                    *old = notes;
+                }
+                if s.has_events.load(Ordering::SeqCst) && !s.removed.load(Ordering::SeqCst) {
+                    if let Ok(mut p) = self.pending.lock() {
+                        if !p.iter().any(|x| Arc::ptr_eq(x, &s)) {
+                            p.push(s.clone());
                         }
                     }
                 }
@@ -2010,6 +2009,7 @@ impl Session {
             ))
         };
         let mut changed: Vec<String> = Vec::new();
+        let mut old_files: Vec<PathBuf> = Vec::new();
         for (seq, notes) in &result.notes {
             let Some(s) = by_seq(*seq) else { continue };
             let was_complete = s.has_events.load(Ordering::SeqCst);
@@ -2052,10 +2052,10 @@ impl Session {
                 if fresh || fault == "clear-stale" {
                     s.reanalyse.store(false, Ordering::SeqCst);
                     // T4: the track points to the new file now: the files of the older generations go
-                    let old: Vec<PathBuf> = std::mem::take(&mut *s.old_wavs.lock().unwrap_or_else(|e| e.into_inner()));
-                    for p in old {
-                        let _ = std::fs::remove_file(p);
-                    }
+                    // (deleted after the locks of the publication are dropped: a store waits on them)
+                    old_files.extend(std::mem::take(
+                        &mut *s.old_wavs.lock().unwrap_or_else(|e| e.into_inner()),
+                    ));
                 }
             }
             // a complete source whose notes changed, or one that had no result and has one
@@ -2091,6 +2091,9 @@ impl Session {
         doc.merge_settings_in(&mut st, fresh_settings);
         drop(st);
         drop(ev);
+        for f in old_files {
+            let _ = std::fs::remove_file(f);
+        }
         if result.analysed.is_empty() && usable.is_empty() {
             // a removal that left nothing to analyse
             self.log(
@@ -2205,6 +2208,10 @@ impl Session {
                 } else {
                     notes
                 };
+                // F5 (#572): the notes and the events change under the locks of a store (events, then settings,
+                // the order of a round); nothing in this section waits for anything else
+                let mut ev_guard = doc.events.lock().unwrap_or_else(|e| e.into_inner());
+                let _st_guard = doc.settings.lock().unwrap_or_else(|e| e.into_inner());
                 for (seq, n) in notes {
                     let Some(s) = members.iter().find(|s| s.seq == seq) else {
                         continue;
@@ -2226,9 +2233,9 @@ impl Session {
                     }
                 }
                 let line = service::events_line(&events);
-                if let Ok(mut m) = doc.events.lock() {
-                    *m = events;
-                }
+                *ev_guard = events;
+                drop(_st_guard);
+                drop(ev_guard);
                 self.log(
                     json!({"event": "page_sync", "doc": doc.id(), "saved": saved, "changed_notes": changed,
                         "events_json": line, "unix_ns": now_ns().to_string()})
@@ -4158,6 +4165,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
         }
         let mut restored: Vec<service::RestoredTrack> = Vec::new();
         let mut used: Vec<usize> = Vec::new();
+        let mut no_result: Vec<(String, serde_json::Map<String, Value>)> = Vec::new();
         if let Ok(list) = ctl.sources.lock() {
             for src in list.iter() {
                 let p = src.props();
@@ -4180,16 +4188,18 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                     } else {
                         a.track.clone()
                     };
-                    // F5 (#572): a source that the archive holds with no result (no track name, no note, no
-                    // events: the host stored before its first round had ended) has no result here either, so the
-                    // next round with its audio analyses it. It is not marked complete with no hits.
-                    // (Fault `result`: the old way, every archived source has its result.)
-                    if fault != "result"
-                        && a.track.is_empty()
-                        && a.notes.is_empty()
-                        && !events_ok.iter().any(|(k, _)| **k == track)
-                    {
-                        s.log(json!({"event": "restore_no_result", "name": a.name}).to_string());
+                    // F5 (#572): a source with no EVENTS ENTRY for its track has no result: the archive was written
+                    // in the window of a round (notes and a track name, no events), or its round failed. It is not
+                    // complete, has no notes, and the next round with its audio analyses it; the report says so. A
+                    // track that was analysed and has no hit has its key with an empty list and is not this case.
+                    // The settings of the user stay in the document until the first round (see below). (Fault
+                    // `result`: the old way, every archived source has its result.)
+                    let has_entry = events_ok.iter().any(|(k, _)| **k == track);
+                    if fault != "result" && !has_entry {
+                        s.log(json!({"event": "restore_no_result", "name": a.name, "track": track}).to_string());
+                        if !a.settings.is_empty() {
+                            no_result.push((track, a.settings.clone()));
+                        }
                         continue;
                     }
                     if let Ok(mut n) = src.notes.lock() {
@@ -4243,6 +4253,11 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                 if !t.settings.is_empty() {
                     m.insert(t.track.clone(), Value::Object(t.settings.clone()));
                 }
+            }
+            // the settings of a source with no result stay in the document (and so in the next archive) until
+            // its first round: the project has no track for it, and a round reads the settings of the service
+            for (track, settings) in &no_result {
+                m.insert(track.clone(), Value::Object(settings.clone()));
             }
             *ctl.doc.settings.lock().unwrap_or_else(|e| e.into_inner()) = m;
         }

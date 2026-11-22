@@ -62,6 +62,9 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   doc-store-window  a store while a round publishes, and a store before the first round has
                  ended (F5, #572): the archive never holds the notes of a round without its
                  events (fault: the events come after the notes, as before)
+  doc-restore-repair  an archive from that window (notes, no events) restores as sources with no
+                 result and one round analyses them; a track analysed to
+                 zero hits is a result (fault: the restore counts every source as done)
   doc-retry      a round that fails once, then a new request: one track per source, the
                  reference result (fault: a second track for every retried source)
   doc-rerequest  a request for sources that are complete starts no round (fault: a full
@@ -1371,13 +1374,13 @@ def stage_doc_two_fault() -> bool:
 _ARCHIVE_STORE: dict[str, Path] = {}
 
 
-def archive_events(archive: Path) -> int:
-    """The number of events an archive holds (all tracks)."""
+def archive_events(archive: Path) -> int | None:
+    """The number of events an archive holds (all tracks); None when the archive cannot be read."""
     try:
         blob = json.loads(archive.read_text())
-    except (OSError, ValueError):
-        return 0
-    return sum(len(v) for v in (blob.get("events") or {}).values())
+        return sum(len(v) for v in (blob.get("events") or {}).values())
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
 
 
 def archive_store() -> tuple[bool, Path, str]:
@@ -1390,6 +1393,8 @@ def archive_store() -> tuple[bool, Path, str]:
         if rc != 0 or not archive.exists():
             return False, archive, f"ara-host store rc={rc} (out/host-doc-archive-store.log)"
         held = archive_events(archive)
+        if held is None:
+            return False, archive, "the store archive cannot be read (not JSON, or not an archive): see out/host-doc-archive-store.log"
         if held == 0:
             # F5 (#572): name the defect here, not in the four stages that read this archive
             return False, archive, "the store archive holds no event: the store came in the window of a round that published its notes before its events"
@@ -2056,28 +2061,44 @@ def store_window_run(label: str, fault: str) -> tuple[int, Path]:
     return rc, out
 
 
-def early_restore_check(label: str, early: Path, late: Path, fault: str | None = None) -> tuple[bool, str]:
-    """The early archive (no result for any source) restored in a NEW process, the host reads the audio and
-    never asks: the sources have no result, so one round analyses them and the notes are those of the late
-    archive. (Fault `result`: the restore counts every archived source as done, so nothing is analysed.)"""
+def restore_run_facts(label: str, archive: Path, extra: dict | None = None) -> dict:
+    """One restore in a NEW process with the audio read and no request (`--enable-access`): what the report and
+    the host say. `healthy`: the run ended with rc 0 and the restore row and the notes of every source are there,
+    so a crash cannot pass as a refusal of the check."""
     rc, _text, lines = host_run(
         label,
         CLAP,
-        ["restore", "--files", *fixture_args(FILES), "--archive", str(early), "--enable-access"],
+        ["restore", "--files", *fixture_args(FILES), "--archive", str(archive), "--enable-access"],
         f"cache-{label}",
-        extra={"DS_ARA_RESTORE_FAULT": fault} if fault else None,
+        extra=extra,
     )
-    want = json.loads(late.read_text()) if late.exists() else {}
     counts = [r.get("count") for r in lines if r.get("event") == "host_notes"]
-    want_counts = [len(s.get("notes") or []) for s in want.get("sources", [])]
     jobs = job_rows(label)
+    restored = event_rows(label, "doc_restored")
+    return {
+        "rc": rc,
+        "counts": counts,
+        "jobs": jobs,
+        "restored": restored,
+        "no_result": len(event_rows(label, "restore_no_result")),
+        "healthy": rc == 0 and len(counts) == len(FILES) and len(restored) == 1,
+    }
+
+
+def early_restore_check(label: str, early: Path, late: Path, fault: str | None = None) -> tuple[bool, str, dict]:
+    """The early archive (no result for any source) restored in a NEW process, the host reads the audio and
+    never asks: the sources have no result, so one round analyses them and the notes are those of the late
+    archive. (Fault `result`: the restore counts every archived source as done, so nothing is analysed.)"""
+    f = restore_run_facts(label, early, {"DS_ARA_RESTORE_FAULT": fault} if fault else None)
+    want = json.loads(late.read_text()) if late.exists() else {}
+    want_counts = [len(s.get("notes") or []) for s in want.get("sources", [])]
     reference = (OUT / "events-reference.json").read_bytes().decode()
-    ok = rc == 0 and bool(want_counts) and counts == want_counts and bool(jobs) and jobs[-1].get("events_json") == reference
+    same = bool(f["jobs"]) and f["jobs"][-1].get("events_json") == reference
+    ok = f["healthy"] and bool(want_counts) and f["counts"] == want_counts and same
     return ok, (
-        f"restored in a new process with the audio read: {len(event_rows(label, 'restore_no_result'))} source(s) with no result, "
-        f"{len(jobs)} round(s), notes per source {counts} (want {want_counts}), events byte for byte the reference "
-        f"{bool(jobs) and jobs[-1].get('events_json') == reference}"
-    )
+        f"restored in a new process with the audio read (rc {f['rc']}): {f['no_result']} source(s) with no result, "
+        f"{len(f['jobs'])} round(s), notes per source {f['counts']} (want {want_counts}), events byte for byte the reference {same}"
+    ), f
 
 
 def stage_doc_store_early_fault() -> bool:
@@ -2088,11 +2109,71 @@ def stage_doc_store_early_fault() -> bool:
     early, late = OUT / "doc-store-early.araarchive", OUT / "doc-store-late.araarchive"
     if not early.exists() or not late.exists():
         stage_doc_store_window()
-    ok, evidence = early_restore_check("doc-store-early-restore-fault", early, late, "result")
+    ok, evidence, facts = early_restore_check("doc-store-early-restore-fault", early, late, "result")
     return pass_fail(
         "doc-store-early-fault",
-        not ok,
-        f"the fault switch counted every archived source as done and the check refused it: {evidence}",
+        facts["healthy"] and not ok and not facts["jobs"] and facts["no_result"] == 0,
+        f"the fault switch counted every archived source as done and the check refused it (a healthy run, no round): {evidence}",
+    )
+
+
+def stage_doc_restore_repair() -> bool:
+    """An archive from the window of the old order (all notes, a track name for each source, no events) and one
+    with a track analysed to zero hits. (1) The old archive: every source has no result, one round analyses
+    them, the events and notes equal the reference. (2) The zero-hit track
+    has its events key with an empty list: it is a result, no round runs for it."""
+    if not HOST.exists() or not CLAP.exists() or not (OUT / "events-reference.json").exists():
+        return pass_fail("doc-restore-repair", False, "no host, no CLAP or no reference events")
+    old, late = OUT / "doc-restore-repair-old.araarchive", OUT / "doc-restore-repair-late.araarchive"
+    for f in (old, late):
+        if f.exists():
+            f.unlink()
+    rc, _text, _lines = host_run(
+        "doc-restore-repair-store", CLAP, ["store", "--files", *fixture_args(FILES), "--archive", str(old)], "cache-doc-restore-repair-store",
+        extra={"DS_ARA_ROUND_FAULT": "events-late"},
+    )
+    good = False
+    blob: dict = {}
+    if rc == 0 and old.exists():
+        blob = json.loads(old.read_text())
+        good = archive_events(old) == 0 and all(s.get("notes") and s.get("track") for s in blob.get("sources", []))
+    if not good:
+        return pass_fail("doc-restore-repair", False, f"the old-order archive was not made (rc={rc}, notes and track names with no events wanted)")
+    # the late archive of a normal store: the notes to compare with
+    rc_l, _t, _l = host_run("doc-restore-repair-late", CLAP, ["store", "--files", *fixture_args(FILES), "--archive", str(late)], "cache-doc-restore-repair-late")
+    ok1, ev1, f1 = early_restore_check("doc-restore-repair-old", old, late)
+    ok1 = ok1 and rc_l == 0 and f1["no_result"] == len(FILES)
+    # (2) a good archive with one track analysed to zero hits
+    good_blob = json.loads(late.read_text())
+    zero = good_blob["sources"][1]["track"]
+    good_blob["events"][zero] = []
+    good_blob["sources"][1]["notes"] = []
+    zero_archive = OUT / "doc-restore-repair-zero.araarchive"
+    zero_archive.write_text(json.dumps(good_blob))
+    f2 = restore_run_facts("doc-restore-repair-zero", zero_archive)
+    kept = json.loads(f2["restored"][0].get("events_json") or "{}") if f2["restored"] else {}
+    ok2 = f2["healthy"] and f2["no_result"] == 0 and not f2["jobs"] and kept.get(zero) == [] and f2["counts"][1] == 0
+    return pass_fail(
+        "doc-restore-repair",
+        ok1 and ok2,
+        f"old-order archive: {ev1}; zero-hit track {zero!r}: "
+        f"{f2['no_result']} no-result row(s), {len(f2['jobs'])} round(s), events key kept as an empty list {kept.get(zero) == []}",
+    )
+
+
+def stage_doc_restore_repair_fault() -> bool:
+    """The fault run: the restore counts the sources of the old-order archive as done (the way before #572)."""
+    if not HOST.exists() or not CLAP.exists() or not (OUT / "events-reference.json").exists():
+        return pass_fail("doc-restore-repair-fault", False, "no host, no CLAP or no reference events")
+    old = OUT / "doc-restore-repair-old.araarchive"
+    late = OUT / "doc-restore-repair-late.araarchive"
+    if not old.exists() or not late.exists():
+        stage_doc_restore_repair()
+    ok, evidence, facts = early_restore_check("doc-restore-repair-fault-run", old, late, "result")
+    return pass_fail(
+        "doc-restore-repair-fault",
+        facts["healthy"] and not ok and not facts["jobs"],
+        f"the fault switch counted every archived source as done and the check refused it (a healthy run, no round): {evidence}",
     )
 
 
@@ -2124,7 +2205,7 @@ def stage_doc_store_window() -> bool:
     early_notes = sum(len(s.get("notes") or []) for s in e.get("sources", []))
     early_events = sum(len(v) for v in (e.get("events") or {}).values())
     late_parts, late_evidence = store_window_parts(late)
-    again_ok, again_evidence = early_restore_check("doc-store-early-restore", early, late)
+    again_ok, again_evidence, _facts = early_restore_check("doc-store-early-restore", early, late)
     early_ok = again_ok and (
         rc2 == 0
         and bool(e)
@@ -7103,6 +7184,8 @@ STAGES = {
     "doc-store-window": stage_doc_store_window,
     "doc-store-window-fault": stage_doc_store_window_fault,
     "doc-store-early-fault": stage_doc_store_early_fault,
+    "doc-restore-repair": stage_doc_restore_repair,
+    "doc-restore-repair-fault": stage_doc_restore_repair_fault,
     "doc-retry": stage_doc_retry,
     "doc-retry-fault": stage_doc_retry_fault,
     "doc-rerequest": stage_doc_rerequest,
@@ -7258,7 +7341,7 @@ ORDER = [
     "archive-paths-fault", "archive-restore-pathname",
     "threads", "doc-service", "doc-service-fault", "doc-tracks", "doc-tracks-fault", "doc-rounds", "doc-rounds-fault", "doc-two", "doc-two-fault",
     "doc-archive", "doc-archive-fault", "doc-destroy", "doc-destroy-fault", "doc-close", "doc-close-fault", "doc-home", "doc-home-fault",
-    "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault", "doc-store-window", "doc-store-window-fault", "doc-store-early-fault",
+    "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault", "doc-store-window", "doc-store-window-fault", "doc-store-early-fault", "doc-restore-repair", "doc-restore-repair-fault",
     "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",
     "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault", "doc-late-audio-arrives", "doc-late-audio-arrives-fault",
