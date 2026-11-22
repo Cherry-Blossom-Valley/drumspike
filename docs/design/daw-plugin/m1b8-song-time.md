@@ -181,3 +181,27 @@ Risks:
 5. The tempo grid and the bars of the page are in source time; with no tempo map from the host they are off in song mode.
 
 Out: tempo and bars from the host, time stretch (warp markers), loop, row-wide Learn, one file per DAW track (#576).
+
+## 10. What was built, and where it differs from the plan above
+
+- **Settings of a row.** The audio group of the page (mute, solo, volume, pan, the mixer) is absent in a DAW (`HOST_ABSENT`, #539), so
+  those settings need no fan-out. Role and note go to every source of the row (`setTrackRole`, `saveMetaNote`); an undo of the role
+  of the first source puts all sources back to that role (the others keep no undo step of their own). Sensitivity, Loudness (the
+  velocity map), the shift and Learn stay with ONE source: the first source of the row (the Inspector shows it) or the source of
+  the hit or clip you work in. They are re-picks of one audio file with their own histograms and undo steps; a fan-out would be
+  one undo step per source. The Inspector says so in one line when a row has more than one source. A hand value of a
+  non-first source for role or note is overwritten by a change of the row.
+- **Waveform without WebGL2.** The page draws the waveform of each clip in the Canvas 2D path too (the min/max envelope from the
+  peak arrays, `drawClipEnvelopes` in `wave.js`); it has no sample-exact window there. The web view of the plugin has WebGL2 on macOS,
+  so this path is the fallback after a lost GL context only.
+- **Sample-exact zoom.** The exact samples window of the GL lane is one window for each source. When two clips of ONE source are both
+  inside a sample-exact view (about 5 s or less across), one of them shows the exact wave and the other the coarse peak tiles (the
+  finest level, 256 samples a column): never empty, never at the wrong place, only less sharp until it is the one in the window.
+- **Faults.** The fault runs of the page are a flag, `HT.fault` of `static/hosttime.js`, which the page code reads; only the test driver of
+  the plugin sets it (from `DS_ARA_SONG_FAULT`), so a delivery build never does. `round-regions` is a switch in the plugin. The e2e
+  test `test_the_fault_flags_change_what_the_page_does` runs the flags in the app tests.
+- **Keys.** A merged source is hidden through `.hostMerged`; `hostHidden` (Tab over all tracks, `;`, `P`) skips it, `setSelTrack` maps a source to
+  the row that shows it, Tab on a row walks the hits of all its sources in song order, the review queue (D) takes the hits of
+  merged sources with their DAW track and puts the playhead at the song time of the hit.
+- **Not built.** The status line count of hits outside every clip (the clips and the stored hits are both in the page, the plugin
+  answers `gone` for sources with no clip). A source that is the home of two rows shows its first row only.

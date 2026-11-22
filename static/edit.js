@@ -93,13 +93,14 @@ function pushUndo(op) { undoMeta(op); S.undo.push(op); if (S.undo.length>300) S.
 function undoReveal(op, isUndo) {   // after an undo or redo: the track is selected, the hit is selected, the view shows the place
   const w = opWhere(op, isUndo);
   if (!w.track || !S.tracks[w.track]) return;
-  if (S.selTrack !== w.track) setSelTrack(w.track);
+  if (S.selTrack !== HT.homeFor(w.track)) setSelTrack(w.track);
   if (w.t === null || w.t === undefined) return;
   const evs = S.events[w.track] || [];
   let j = op.id ? evs.findIndex(e => e.id === op.id) : -1;
   if (j < 0) { let best = 0.005; evs.forEach((e, i) => { if (Math.abs(e.t - w.t) < best) { best = Math.abs(e.t - w.t); j = i; } }); }
   if (j >= 0) S.sel = { track: w.track, index: j };
-  if (w.t < S.view.t0 || w.t > S.view.t1) centerOn(w.t);
+  const wt = HT.on() ? HT.songTime(w.track, w.t) : w.t;   // #555: the view is song time
+  if (wt !== null && (wt < S.view.t0 || wt > S.view.t1)) centerOn(wt);
   invalidateHits(w.track); updateStatus();
 }
 function applyOp(op, reverse) {   // a step of the service (shift, add, del, move, setv) answers a promise: true when it was applied

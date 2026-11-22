@@ -65,22 +65,42 @@ function lnSelText() {
 }
 /* the drawing: the band (both lanes, under the hit lines) and the marks (spike lane, over them) */
 function lnDrawBand(ctx, W, H, name) {
-  const s = LN.sel; if (!s || s.track !== name) return;
-  const x0 = Math.max(0, tToX(s.t0, W)), x1 = Math.min(W, tToX(s.t1, W));
+  const s = LN.sel; if (!s) return;
+  const clips = HT.clips(name);
+  if (clips) {   // #555: the range is in the source time of one source; each clip of it that holds a part shows that part at its song time
+    for (const c of clips) {
+      if (c.src !== s.track) continue;
+      const a = Math.max(s.t0, c.a), b = Math.min(s.t1, c.b);
+      if (b > a) lnPaintBand(ctx, W, H, tToX(HT.toSong(c, a), W), tToX(HT.toSong(c, b), W));
+    }
+    return;
+  }
+  if (s.track !== name) return;
+  lnPaintBand(ctx, W, H, tToX(s.t0, W), tToX(s.t1, W));
+}
+function lnPaintBand(ctx, W, H, xa, xb) {
+  const x0 = Math.max(0, xa), x1 = Math.min(W, xb);
   if (x1 < 0 || x0 > W) return;
   ctx.globalAlpha = 0.2; ctx.fillStyle = "#4da3ff"; ctx.fillRect(x0, 0, Math.max(1, x1 - x0), H);
   ctx.globalAlpha = 0.75; ctx.fillRect(Math.round(x0), 0, 1, H); ctx.fillRect(Math.round(x1) - (x1 - x0 < 1 ? 0 : 1), 0, 1, H);
   ctx.globalAlpha = 1;
 }
-function lnBarSpan(m, W) {   // the x range of a mark bar: at least 6 px (one hit)
-  const a = tToX(m.t0, W), b = tToX(m.t1, W), mid = (a + b) / 2, w = Math.max(6, b - a);
+function lnBarSpan(m, W, c) {   // the x range of a mark bar: at least 6 px (one hit); #555: c = the clip of a DAW track that shows it (song time)
+  const X = t => tToX(c ? HT.toSong(c, Math.max(c.a, Math.min(t, c.b))) : t, W);
+  const a = X(m.t0), b = X(m.t1), mid = (a + b) / 2, w = Math.max(6, b - a);
   return [mid - w / 2, mid + w / 2];
 }
 function lnDrawMarks(ctx, W, H, name) {
+  const clips = HT.clips(name);
+  if (clips) { for (const c of clips) lnDrawMarksOf(ctx, W, H, c.src, c); return; }   // #555: the marks of every source of the DAW track, in its clips
+  lnDrawMarksOf(ctx, W, H, name, null);
+}
+function lnDrawMarksOf(ctx, W, H, name, c) {
   const learn = lnLearn(name); if (!learn) return;
   const dim = learn.on === false, shift = lnTimes(name).shift;
   for (const m of learn.marks) {
-    const [x0, x1] = lnBarSpan(m, W);
+    if (c && (m.t1 < c.a || m.t0 >= c.b)) continue;   // a mark of the source that this clip does not show
+    const [x0, x1] = lnBarSpan(m, W, c);
     if (x1 < -6 || x0 > W + 6) continue;
     const sel = LN.mark && LN.mark.track === name && LN.mark.id === m.id, col = m.kind === "not" ? LN_NOT : LN_THIS;
     const pulse = sel && LN.pulse && performance.now() < LN.pulse.until, r = pulse ? 3.5 : 2;   // the ticks of a selected mark pulse once
@@ -88,7 +108,8 @@ function lnDrawMarks(ctx, W, H, name) {
     ctx.fillRect(x0, 0, x1 - x0, sel ? LN_BAR + 1 : LN_BAR);   // the bar and the ticks stay in the top 4 px (concept 2.4)
     if (sel) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.strokeRect(x0 + 0.5, 0.5, x1 - x0 - 1, LN_BAR); }
     for (const a of m.at || []) {
-      const x = Math.round(tToX(a + shift, W)) + 0.5;
+      if (c && (a + shift < c.a || a + shift >= c.b)) continue;
+      const x = Math.round(tToX(c ? HT.toSong(c, a + shift) : a + shift, W)) + 0.5;
       if (x < -4 || x > W + 4) continue;
       if (m.kind === "not") { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x - r, 2 - r); ctx.lineTo(x + r, 2 + r); ctx.moveTo(x + r, 2 - r); ctx.lineTo(x - r, 2 + r); ctx.stroke(); }
       else { ctx.beginPath(); ctx.arc(x, 2, r, 0, 6.2832); ctx.fill(); }
@@ -97,8 +118,19 @@ function lnDrawMarks(ctx, W, H, name) {
   ctx.globalAlpha = 1; ctx.lineWidth = 1;
 }
 function lnMarkAt(name, px, py) {   // the mark bar under a point of the spike lane (its top 6 px), the last one drawn
-  const learn = lnLearn(name); if (!learn || py > 6) return null;
-  const W = laneWidth(); let hit = null;
+  if (py > 6) return null;
+  const clips = HT.clips(name), W = laneWidth(); let hit = null;
+  if (clips) {   // #555: the marks of every source of the DAW track; the answer says which source holds the mark
+    for (const c of clips) {
+      const learn = lnLearn(c.src); if (!learn) continue;
+      for (const m of learn.marks) {
+        if (m.t1 < c.a || m.t0 >= c.b) continue;
+        const [x0, x1] = lnBarSpan(m, W, c); if (px >= x0 - 1 && px <= x1 + 1) hit = Object.assign({}, m, { src: c.src });
+      }
+    }
+    return hit;
+  }
+  const learn = lnLearn(name); if (!learn) return null;
   for (const m of learn.marks) { const [x0, x1] = lnBarSpan(m, W); if (px >= x0 - 1 && px <= x1 + 1) hit = m; }
   return hit;
 }
@@ -106,18 +138,25 @@ function lnMarkAt(name, px, py) {   // the mark bar under a point of the spike l
 function lnClampT(name, t) { const d = (S.tracks[name] && S.tracks[name].duration) || maxDur(); return Math.max(0, Math.min(t, d)); }
 function lnRangeGesture(ev, name) {
   S.followHold = true;
-  const W = laneWidth(), startCX = ev.clientX, startX = laneXOf(ev), t0 = lnClampT(name, xToT(startX, W));
+  const W = laneWidth(), startCX = ev.clientX, startX = laneXOf(ev);
+  /* #555: in a DAW the range starts in the clip under the pointer and stays in it: it is a range of that source, in source time (a Learn mark is
+     a pattern of one source's audio). A start in no clip is a click: the playhead only. */
+  const clips = HT.clips(name), w0 = clips ? HT.toSource(clips, xToT(startX, W)) : null, c0 = w0 && w0.clip;
+  const src = c0 ? c0.src : name;
+  const tOf = x => c0 ? Math.max(c0.a, Math.min(c0.a + (xToT(x, W) - c0.s) / c0.k, c0.b)) : lnClampT(name, xToT(x, W));
+  const t0 = c0 ? w0.t : tOf(startX);
   let moved = false;
   const mv = ev2 => {
+    if (clips && !c0) return;
     if (!moved && Math.abs(ev2.clientX - startCX) <= 3) return;
     moved = true;
-    lnSetSel(name, t0, lnClampT(name, xToT(laneXOf(ev2), W)));
+    lnSetSel(src, t0, tOf(laneXOf(ev2)));
   };
   const up = () => {
     window.removeEventListener("mousemove", mv); window.removeEventListener("mouseup", up);
     if (moved) {
       if (S.selTrack !== name) setSelTrack(name);
-      setMsg(`${name}: ${lnSelText()} (K: Learn This, Shift+K: Forget This)`);
+      setMsg(`${trackLabel(src)}: ${lnSelText()} (K: Learn This, Shift+K: Forget This)`);
       return;
     }
     S.playhead = snapPlayhead(xToT(startX, W));
@@ -547,7 +586,8 @@ function lnInspector() {
     x.onclick = ev => { ev.stopPropagation(); learnRemove(tgt, m.id); };
     d.onclick = () => {   // a click on a row selects the mark and moves the playhead to its first example (concept 2.7)
       lnSetMark(tgt, m.id);
-      const t = ((m.at || [])[0] ?? m.t0) + lnTimes(tgt).shift;
+      const t0s = ((m.at || [])[0] ?? m.t0) + lnTimes(tgt).shift, t = HT.on() ? HT.songTime(tgt, t0s) : t0s;   // #555: the playhead is song time
+      if (t === null) return;
       S.followHold = true; S.playhead = Math.max(0, t);
       if (t < S.view.t0 || t > S.view.t1) centerOn(t);
       invalidate(F.HEAD); updateStatus();

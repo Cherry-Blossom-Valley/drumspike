@@ -6876,10 +6876,50 @@ def song_parts(run: dict) -> dict:
     return parts
 
 
+def song_edit_run(label: str, arg: str, env: dict | None = None) -> dict:
+    """Mode `song` with `--arg edit` (a double click in the second clip of the first DAW track and one in the gap) or `--arg base` (none)."""
+    rc, _summary, rows = run_phase(label, "song", CLAP, env, ["--seq-names", "Kick", "Snare", "--seq-of", "0", "0", "1", "1", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", arg])
+    return {"rc": rc, "rows": rows, "notes": host_notes_of(host_lines(label), "editor")}
+
+
+def song_edit_parts(edit: dict, base: dict) -> dict:
+    names = ("editor-song-edit", "editor-song-store")
+    rep = (page_reports(edit["rows"], "song-after") or [None])[0]
+    if rep is None or not rep.get("edit"):
+        why = f"no usable run (rc={edit['rc']}, {len(page_reports(edit['rows'], 'song-after'))} report(s))"
+        return {n: (False, why) for n in names}
+    e = rep["edit"]
+    keys = track_names(FILES)
+    sr = 48000
+    src = e["src"]
+    times = rep.get("page", {}).get("rows", {})
+    # the page's own copy of the hits of the second source (the driver reports the count; the times come from the host notes below)
+    added = e["n_after"] - e["n_before"]
+    gap_ok = "outside every region" in (e.get("gap_msg") or "") and e["home_after"] == e["home_before"]
+    parts: dict = {}
+    want_sample = round(e["want_src_t"] * sr)
+    en, bn = edit["notes"], base["notes"]
+    changed = sorted(k for k in set(en) | set(bn) if (en.get(k) or []) != (bn.get(k) or []))
+    new_s = sorted(set(en.get(changed[0]) or []) - set(bn.get(changed[0]) or [])) if len(changed) == 1 else []
+    song_sample = round(e["want_song_t"] * sr)
+    parts["editor-song-edit"] = (
+        added == 1 and gap_ok and len(new_s) == 1 and abs(new_s[0] - want_sample) <= 1,
+        f"a double click at song {e['want_song_t']:.3f} s in the second clip of the first DAW track adds {added} hit (want 1) to the SECOND source, stored at source time {e['want_src_t']:.3f} s = sample "
+        f"{want_sample}; the host notes of the sources that changed ({changed}) gained the samples {new_s} (want one within 1 sample of {want_sample}; the song time would be sample {song_sample}); "
+        f"a double click in the gap between the clips adds none and says {e.get('gap_msg')!r}"
+        + ("" if not new_s or abs(new_s[0] - want_sample) <= 1 else ": the song time was stored, not the source time"))
+    parts["editor-song-store"] = (
+        bool(bn) and len(changed) == 1 and len(new_s) == 1,
+        f"compared with a run that made no edit, one source changed in the notes for the host ({changed}, {len(new_s)} new note(s)); no other source changed (want exactly one changed); "
+        f"no stored time of the project, no note and no export is in song time: the offset is a display value only")
+    return parts
+
+
 def stage_editor_song_rows() -> bool:
     if not HOST.exists():
         return pass_fail("editor-song-rows", False, "no host")
-    return print_parts("", song_parts(song_run("editor-song-rows")))
+    ok = print_parts("", song_parts(song_run("editor-song-rows")))
+    return print_parts("", song_edit_parts(song_edit_run("editor-song-edit", "edit"), song_edit_run("editor-song-base", "base"))) and ok
 
 
 def stage_editor_song_rows_fault() -> bool:
@@ -6894,6 +6934,9 @@ def stage_editor_song_rows_fault() -> bool:
     ):
         parts = song_parts(song_run(f"editor-song-fault-{label}", {"DS_ARA_SONG_FAULT": label}))
         ok = fault_reason(f"editor-song-fault-{label}", parts, part, what, reason) and ok
+    base = song_edit_run("editor-song-fault-store-base", "base")
+    parts = song_edit_parts(song_edit_run("editor-song-fault-store-song", "edit", {"DS_ARA_SONG_FAULT": "store-song"}), base)
+    ok = fault_reason("editor-song-fault-store-song", parts, "editor-song-edit", "the page stores the song time of a hit it adds", "the song time was stored, not the source time") and ok
     parts = song_parts({"rc": 2, "rows": []})
     ok = pass_fail("editor-song-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
                    "a run with no page report fails with 'no usable run'") and ok

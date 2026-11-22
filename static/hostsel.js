@@ -49,6 +49,12 @@ function hostHidden(name) {
   const r = document.querySelector(`.track[data-name="${CSS.escape(name)}"]`);
   return !!r && (r.classList.contains("hostHidden") || r.classList.contains("hostMerged"));   // #555: a merged row is hidden too: no key stops on it
 }
+/* A track that the DAW hides, by the row that shows it (#555): a merged source follows the row of its DAW track. */
+function hostDawHidden(name) {
+  if (!hostMode()) return false;
+  const r = document.querySelector(`.track[data-name="${CSS.escape(HT.homeFor(name))}"]`);
+  return !!r && r.classList.contains("hostHidden");
+}
 const hsRow = name => document.querySelector(`.track[data-name="${CSS.escape(name)}"]`);
 
 /* Scroll the lanes area so that the row is inside it (a row taller than the area: its top). The view in time is not touched. */

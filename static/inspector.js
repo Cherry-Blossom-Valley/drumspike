@@ -233,7 +233,11 @@ function buildParamsPanel(div, name, p) {
 }
 
 async function saveMetaNote(name) {
-  try { await B.setNote(S.sid, name, S.tracks[name].note); setDirtyState(true); }
+  try {
+    await B.setNote(S.sid, name, S.tracks[name].note);
+    for (const o of HT.srcsOf(name)) if (o !== name && S.tracks[o]) { S.tracks[o].note = S.tracks[name].note; await B.setNote(S.sid, o, S.tracks[name].note); }   // #555: the row owns the note
+    setDirtyState(true);
+  }
   catch(e) { setMsg(`note failed: ${e.message}`, "error"); }
 }
 function refreshHeadNote(name) { refreshHeadRole(name); }   // P3-14a; P3-18: the follow text is on the same line

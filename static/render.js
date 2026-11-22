@@ -42,7 +42,7 @@ window.__DS_TEST_RAF_DELAY_MS = 0;
 }
 function invalidate(flags) { FR.flags |= flags; requestFrame(); }
 function invalidateHits(track) {   // no track: every track (new events from an analysis, velocities)
-  for (const n of track ? [track] : S.order) FR.tracks.add(n);
+  for (const n of track ? [HT.homeFor(track)] : S.order) FR.tracks.add(n);   // #555: the lane of the DAW track that shows the source
   requestFrame();
 }
 /* P4-40c: the 60 Hz cap. On a 120 Hz display a scrub or a hit drag asked for a redraw in every animation frame.

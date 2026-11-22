@@ -136,3 +136,145 @@ def test_the_standalone_app_shows_source_time_and_has_no_rows(app, make_project)
     assert app.evaluate("() => [HT.clips(S.order[0]), maxDur(), document.querySelectorAll('.track.hostMerged').length, trackLabel(S.order[0])]") == [None, 10, 0, NAMES[0]]
     assert app.evaluate("() => HT.hitCount(S.order[0], S.events)") == 0
     app.evaluate("() => { HT.rows = []; HT.rebuild(); }")
+
+
+# ---------------------------------------------------------------- input: a hit is edited in the source of the clip under the pointer
+
+def spike_event(page, row, kind, song_t, dx=0):
+    """A mouse event of the spike lane of the row at a song time (a pointer in the page; the drag listens on the window)."""
+    page.evaluate("""([n, kind, t, dx]) => {
+      const c = document.querySelector(`.track[data-name="${CSS.escape(n)}"] canvas.spike`), x = GEO.laneX + tToX(t, laneWidth()) + dx, r = c.getBoundingClientRect();
+      const ev = new MouseEvent(kind, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: r.top + r.height / 2 });
+      (kind === 'mousemove' || kind === 'mouseup' ? window : c).dispatchEvent(ev); }""", [row, kind, song_t, dx])
+
+
+def wait_idle(page):
+    page.wait_for_function("() => !FR.raf && FR.flags === 0")
+    page.wait_for_function("() => typeof SH === 'undefined' || !SH.pending")
+
+
+def test_a_double_click_in_the_second_clip_adds_a_hit_in_the_source_time_of_that_source(host):
+    a, b = NAMES[0], NAMES[1]
+    take(host, rows_payload())
+    host.evaluate("() => setView(0, 12)")
+    wait_idle(host)
+    n_a, n_b = host.evaluate("([a, b]) => [S.events[a].length, S.events[b].length]", [a, b])
+    spike_event(host, a, "dblclick", 11.2)   # song 11.2 s lies in the second clip (the audio of the second source from 1.0 s, at song 10 s)
+    host.wait_for_function("([b, n]) => S.events[b].length === n", [b, n_b + 1])
+    got = host.evaluate("([a, b]) => ({ a: S.events[a].length, t: S.events[b].map(e => e.t) })", [a, b])
+    assert got["a"] == n_a, "the first source is not touched"
+    assert any(abs(t - 2.2) <= 1 / 48000 for t in got["t"]), f"stored in source time 1.0 + (11.2 - 10.0): {got['t']}"
+    assert not any(abs(t - 11.2) < 0.01 for t in got["t"]), "the song time was not stored"
+    assert host.evaluate("([a, b]) => HT.hitRefs(HT.clips(a), S.events, 11.0, 11.4).map(r => [r.src === b, Math.round(r.t * 1000) / 1000])", [a, b]) == [[True, 11.2]]
+    # the same point in a gap (song 7 s: no clip of this DAW track holds it): no hit, and the message says why
+    spike_event(host, a, "dblclick", 7.0)
+    wait_idle(host)
+    assert host.evaluate("([a, b]) => [S.events[a].length, S.events[b].length]", [a, b]) == [n_a, n_b + 1]
+    assert "outside every region" in host.evaluate("() => document.getElementById('stMsg').textContent")
+
+
+def test_a_hit_drag_moves_the_hit_in_its_source_and_stays_in_its_clip(host):
+    a, b = NAMES[0], NAMES[1]
+    take(host, rows_payload())
+    host.evaluate("() => setView(0, 12)")
+    wait_idle(host)
+    # the second source has a hit at 2.5 s of its audio: song 11.5 s
+    px_per_s = host.evaluate("() => laneWidth() / viewDur()")
+    spike_event(host, a, "mousedown", 11.5)
+    spike_event(host, a, "mousemove", 11.5, dx=-0.25 * px_per_s)
+    spike_event(host, a, "mouseup", 11.5, dx=-0.25 * px_per_s)
+    host.wait_for_function("([b]) => S.events[b].some(e => Math.abs(e.t - 2.25) < 0.002)", [b])
+    # a drag far to the left stops at the start of the clip: the source time never goes below 1.0 s
+    spike_event(host, a, "mousedown", 10.5)   # the hit at 1.5 s of the second source
+    spike_event(host, a, "mousemove", 10.5, dx=-3 * px_per_s)
+    spike_event(host, a, "mouseup", 10.5, dx=-3 * px_per_s)
+    wait_idle(host)
+    assert host.evaluate("([b]) => Math.min(...S.events[b].filter(e => e.t > 0.9).map(e => e.t))", [b]) >= 1.0 - 1e-9, "the hit stops at the start of its clip"
+
+
+def test_tab_and_the_track_keys_treat_a_merged_row_as_one_row_and_never_select_a_hidden_one(host):
+    a, b, c, d = NAMES
+    take(host, rows_payload())
+    host.evaluate("([a]) => { setSelTrack(a); S.playhead = 0; }", [a])
+    seen = []
+    for _ in range(6):
+        host.evaluate("() => gotoEvent(1)")
+        seen.append(host.evaluate("() => [S.sel.track, S.sel.index, Math.round(S.playhead * 1000) / 1000]"))
+    assert seen[:5] == [[a, 0, 0.5], [a, 1, 1.5], [a, 2, 2.5], [b, 1, 10.5], [b, 2, 11.5]], "Tab walks the hits of both sources of the DAW track in song order"
+    assert host.evaluate("() => S.selTrack") == a, "the selection is the row, not the hidden source"
+    host.evaluate("() => { S.playhead = 12; }")
+    host.evaluate("() => gotoEvent(-1)")
+    assert host.evaluate("() => [S.sel.track, S.sel.index]") == [b, 2]
+    host.evaluate("([a]) => setSelTrack(a)", [a])
+    order = []
+    for _ in range(3):
+        host.evaluate("() => selectTrackStep(1)")
+        order.append(host.evaluate("() => S.selTrack"))
+    assert order == [c, d, d], "; steps over the merged row (the second source of the first DAW track) and stops at the last row"
+    order = []
+    for _ in range(3):
+        host.evaluate("() => selectTrackStep(-1)")
+        order.append(host.evaluate("() => S.selTrack"))
+    assert order == [c, a, a], "P steps back over it and stops at the first row"
+    host.evaluate("([b]) => setSelTrack(b)", [b])
+    assert host.evaluate("() => S.selTrack") == a, "a source that is merged into a row selects that row"
+    # the Tab over all tracks walks one list too
+    host.evaluate("() => { S.selTrack = null; S.playhead = 0; }")
+    assert host.evaluate("() => allEventsSorted(null).filter(p => p.track === S.order[1]).length") == 2, "only the hits of the second source inside its clip"
+
+
+def test_role_and_note_of_a_row_reach_every_source_and_the_inspector_says_so(host):
+    a, b = NAMES[0], NAMES[1]
+    take(host, rows_payload())
+    host.evaluate("([a]) => { setSelTrack(a); syncInspector(true); }", [a])
+    host.wait_for_function("() => !FR.raf && FR.flags === 0")
+    text = host.evaluate("() => document.getElementById('insRowNote') && document.getElementById('insRowNote').textContent")
+    assert text and "2 sources" in text and "role and note apply to all of them" in text
+    assert host.evaluate("([a]) => document.getElementById('insRowNote').textContent", [a])
+    ok = host.evaluate("async ([a]) => await setTrackRole(a, 'tom')", [a])
+    assert ok is True
+    host.wait_for_function("() => !FR.raf && FR.flags === 0")
+    roles = host.evaluate("([a, b]) => [S.tracks[a].role, S.tracks[b].role, S.tracks[a].note === S.tracks[b].note]", [a, b])
+    assert roles == ["tom", "tom", True], "the second source of the DAW track got the role and the note of the row"
+    assert host.evaluate("() => HT.on()") is True, "the rows survive the reload of the project"
+
+
+def test_a_row_of_one_source_has_no_note_line(host):
+    take(host, rows_payload())
+    host.evaluate("([c]) => { setSelTrack(c); syncInspector(true); }", [NAMES[2]])
+    host.wait_for_function("() => !FR.raf && FR.flags === 0")
+    assert host.evaluate("() => !document.getElementById('insRowNote')")
+
+
+def test_the_fault_flags_change_what_the_page_does(host):
+    """The fault runs of the check (DS_ARA_SONG_FAULT): each flag breaks one rule of this file, so the tests above can fail."""
+    a, b = NAMES[0], NAMES[1]
+    take(host, rows_payload())
+    host.evaluate("() => setView(0, 12)")
+    wait_idle(host)
+    host.evaluate("() => { HT.fault = 'source-x'; invalidateHits(); }")
+    wait_idle(host)
+    assert not line_at(host, a, 10.5) and line_at(host, a, 1.5), "source-x: the hit of the second source is drawn at its source time"
+    host.evaluate("() => { HT.fault = 'no-cut-start'; invalidateHits(); }")
+    wait_idle(host)
+    assert not line_at(host, a, 10.5), "no-cut-start: the cut of the clip is ignored (the hit is at 11.5, not 10.5)"
+    host.evaluate("() => { HT.fault = 'home-only'; invalidateHits(); }")
+    wait_idle(host)
+    assert not line_at(host, a, 10.5) and line_at(host, a, 1.5), "home-only: only the first source of the DAW track is drawn"
+    host.evaluate("() => { HT.fault = 'store-song'; }")
+    n_b = host.evaluate("([b]) => S.events[b].length", [b])
+    host.evaluate("() => { HT.fault = ''; }")
+    n_a = host.evaluate("([a]) => S.events[a].length", [a])
+    host.evaluate("() => { HT.fault = 'store-song'; }")
+    spike_event(host, a, "dblclick", 11.2)
+    host.wait_for_function("([b, n]) => S.events[b].length === n", [b, n_b + 1])
+    assert host.evaluate("([b]) => S.events[b].some(e => Math.abs(e.t - 11.2) < 0.01)", [b]), "store-song: the song time was stored"
+    host.evaluate("() => { HT.fault = ''; }")
+
+
+def test_the_leak_fault_turns_the_mode_on_in_the_standalone_page_and_the_standalone_checks_see_it(app, make_project):
+    open_project(app, make_project(tracks=FOUR, seconds=6.0))
+    app.evaluate("p => HT.take(p)", rows_payload())
+    app.evaluate("() => { HT.fault = 'leak'; HT.rebuild(); }")
+    assert app.evaluate("() => [HT.on(), HT.clips(S.order[0]) !== null, maxDur()]") == [True, True, 12.0], "the values the standalone test refuses"
+    app.evaluate("() => { HT.fault = ''; HT.rows = []; HT.rebuild(); }")

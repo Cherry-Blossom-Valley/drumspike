@@ -313,13 +313,7 @@
     for (var i = 0; i < 100 && !(tr.delivered >= 1 && tr.offer); i++) await sleepMs(100);
     var first = tr.delivered >= 1;
     if (scenario === "tracks") {   // M1b8: ONE DAW track holds two sources, clip 2 later in the song than clip 1; a second DAW track holds the third
-      if (T.song === "selected-track") {   // the fault run: the page maps the host position through the first clip of the selected row (the way of #554)
-        var onPos = window.appOnPlayhead;
-        window.appOnPlayhead = function (m) {
-          var r = HT.rows.find(function (x) { return x.srcs.indexOf(S.selTrack) >= 0; }), c = r && r.clips[0];
-          return onPos(c && typeof m.pos === "number" ? Object.assign({}, m, { pos: m.pos - c.s + c.a }) : m);
-        };
-      }
+      HT.fault = T.song || "";   // selected-track: the fault run maps the follow through the selected row (static/transport.js)
       var rowA = HT.rows[0], rowB = HT.rows[1], homeA = rowA && rowA.srcs[0], homeB = rowB && rowB.srcs[0];
       var inClip2 = rowA.clips[1].s + 1.0;   // inside the second clip of the first DAW track
       await step("select-b", function () { S.selTrack = homeB; }, 500);
@@ -487,22 +481,8 @@
      the page DRAWS for those rows (the pixels of the hit lines in the lanes, the rows shown, the headers); the host then renames a DAW track, moves a
      region to another one and shifts and trims others (`--rename-seq`, `--move-region`, `--shift-region`, `--trim-region`); the second report `song-after`
      carries the answer again, the events `plugin-regions` the page got and what the page draws then. Fault runs (DS_ARA_SONG_FAULT, made here in the page):
-     `source-x` (the hit lines are drawn at source time), `no-cut-start` (the mapping ignores where a clip starts in its source), `home-only` (only the first
-     source of a DAW track is drawn). */
-  function songFaults() {
-    if (T.song === "source-x") {
-      HT.hitRefs = function (clips, events, t0, t1) {
-        var out = [];
-        clips.forEach(function (c) { (events[c.src] || []).forEach(function (e, i) { if (e.t >= t0 && e.t <= t1) out.push({ src: c.src, i: i, t: e.t, clip: c }); }); });
-        return out;
-      };
-    }
-    if (T.song === "no-cut-start") HT.toSong = function (c, t) { return c.s + t * c.k; };
-    if (T.song === "home-only") {
-      var clips0 = HT.clips;
-      HT.clips = function (name) { var c = clips0(name); return c && c.filter(function (x) { return x.src === name; }); };
-    }
-  }
+     `source-x`, `no-cut-start`, `home-only`: the driver sets the flag HT.fault, which the page code (static/hosttime.js) reads. */
+  function songFaults() { HT.fault = T.song || ""; }   // the fault runs are in the page (static/hosttime.js reads the flag); the driver only sets it
   async function songDraw(answer, upto) {   // what the page draws for the rows the plugin gave: one entry for each hit that the clips hold, and each one outside them
     setView(0, upto); invalidate(F.VIEW); flushFrame();
     await new Promise(function (r) { setTimeout(r, 500); });
@@ -534,6 +514,28 @@
     await sleepM(600);
     var first = await songSnap(8);
     post(Object.assign({ kind: "song" }, first));
+    if (T.arg === "edit" || T.arg === "base") {   // the edit run: a double click in the second clip of the first DAW track, then one in the gap; `base`: no edit (the notes to compare with)
+      var row0 = first.rows.rows[0], home = row0.srcs[0], c1 = row0.clips[1], gapT = (row0.clips[0].s + (row0.clips[0].b - row0.clips[0].a) + c1.s) / 2, out = {};
+      function dbl(t) {
+        var cv = document.querySelector('.track[data-name="' + CSS.escape(home) + '"] canvas.spike');
+        cv.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, button: 0, clientX: GEO.laneX + tToX(t, laneWidth()), clientY: cv.getBoundingClientRect().top + 8 }));
+      }
+      var n0 = (S.events[c1.src] || []).length, nh = (S.events[home] || []).length;
+      if (T.arg === "edit") {
+        dbl(c1.s + 0.6);   // 0.6 s into the second clip: source time c1.a + 0.6
+        for (var w = 0; w < 50 && (S.events[c1.src] || []).length === n0; w++) await sleepM(100);
+        out.added_at = (S.events[c1.src] || []).map(function (e) { return e.t; }).filter(function (t, i, all) { return i >= 0; });
+        out.want_src_t = c1.a + 0.6; out.want_song_t = c1.s + 0.6;
+        await sleepM(500);
+        dbl(gapT);
+        await sleepM(800);
+        out.gap_msg = (document.getElementById("stMsg") || {}).textContent;
+      }
+      out.n_before = n0; out.n_after = (S.events[c1.src] || []).length; out.home_before = nh; out.home_after = (S.events[home] || []).length; out.src = c1.src;
+      await sleepM(4500);   // the plugin takes the edit into its notes
+      post(Object.assign({ kind: "song-after", edit: out }, await songSnap(8)));
+      return;
+    }
     var base = regEvents, t0 = performance.now();
     while (regEvents === base && performance.now() - t0 < 15000) await sleepM(100);
     await sleepM(1000);   // the host makes its changes in several calls: the last state

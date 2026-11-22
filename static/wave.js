@@ -241,11 +241,33 @@ async function laneImage(name) {
   return out;
 }
 
+function drawClipEnvelopes(ctx, W, H, name) {   // #555: the Canvas 2D waveform of a DAW track: from the arrays of the peaks (the tiles are loaded first), no sample-exact window
+  const clips = HT.clips(name) || [], mid = H / 2;
+  for (const c of clips) {
+    const p = S.peaks[c.src];
+    if (!p) continue;
+    if (p.tiles) { ensureArrays(c.src); continue; }   // the arrays arrive and redraw the view
+    const x0 = Math.max(0, Math.floor(tToX(c.s, W))), x1 = Math.min(W, Math.ceil(tToX(c.s + HT.songLen(c), W)));
+    const level = pickLevel(p, (viewDur() / W) / c.k * p.sr) || 256, L = p.levels[level];
+    if (!L) continue;
+    const scale = (H * 0.45) / (S.peakAmp[c.src] || 1) * S.ampZoom;
+    ctx.fillStyle = trackColor(name);
+    for (let px = x0; px < x1; px++) {
+      const ta = Math.max(c.a, c.a + (xToT(px, W) - c.s) / c.k), tb = Math.min(c.b, c.a + (xToT(px + 1, W) - c.s) / c.k);
+      const b0 = Math.max(0, Math.floor(ta * p.sr / level)), b1 = Math.min(L.n, Math.max(b0 + 1, Math.ceil(tb * p.sr / level)));
+      let mn = 1, mx = -1;
+      for (let b = b0; b < b1; b++) { mn = Math.min(mn, L.min[b]); mx = Math.max(mx, L.max[b]); }
+      if (mx < mn) continue;
+      ctx.fillRect(px, mid - mx * scale, 1, Math.max(1, (mx - mn) * scale));
+    }
+  }
+}
 function drawWave(canvas, name) {
   if (glPush(canvas, name)) return;   // P3-6a: WebGL2 draws this lane
-  if (HT.on()) {   // #555: the Canvas 2D path draws one window of one source; a DAW track in song time needs WebGL2 (the WKWebView has it), so here only the hits
+  if (HT.on()) {   // #555: the Canvas 2D path of a DAW track (WebGL2 lost or not there): the min/max envelope of each clip at its song position, then the hits
     const c0 = canvas.getContext("2d"), [W0, H0] = laneSize(canvas);
     c0.clearRect(0, 0, W0, H0); c0.fillStyle = "#101318"; c0.fillRect(0, 0, W0, H0);
+    drawClipEnvelopes(c0, W0, H0, name);
     drawEventLines(canvas, name);
     return;
   }

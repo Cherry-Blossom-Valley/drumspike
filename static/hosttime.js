@@ -17,7 +17,7 @@
 const HT = {
   rows: [],          // the rows as the plugin gave them
   gen: 0,            // the change counter of the plugin
-  fault: "",         // the fault run of the check: "leak" turns the mode on without the host-mode switch (the test driver sets it)
+  fault: "",         // the fault runs of the check (DS_ARA_SONG_FAULT, set by the test driver of the plugin, never in a delivery build): leak (the mode is on without the host-mode switch), source-x (hits at source time), no-cut-start (the mapping ignores a, where a clip starts in its source), home-only (a row draws and edits its first source only), store-song (an added hit is stored with its song time), selected-track (the follow maps through the first clip of the selected row)
   view: [],          // [{row, home, srcs, clips}] for the rows that have a home source in this project
   homeOf: new Map(), // source key -> its entry (the row it is the home of)
   inRow: new Map(),  // source key -> the first entry that holds it (home or not)
@@ -68,7 +68,7 @@ HT.rebuild = function () {
 HT.clips = function (name) {
   if (!HT.on()) return null;
   const e = HT.homeOf.get(name);
-  if (e) return e.clips;
+  if (e) return HT.fault === "home-only" ? e.clips.filter(c => c.src === name) : e.clips;
   if (HT.merged.has(name)) return [];
   const t = typeof S !== "undefined" && S.tracks && S.tracks[name];
   return t ? [{ src: name, a: 0, b: t.duration || 0, s: 0, k: 1 }] : [];
@@ -81,7 +81,7 @@ HT.homeFor = src => { const e = HT.on() && HT.inRow.get(src); return e ? e.home 
 /* The name of the DAW track of a source (the row it is in), for the texts of the page; null with the mode off or for no row. */
 HT.label = src => { const e = HT.on() && HT.inRow.get(src); return e ? e.name : null; };
 
-HT.toSong = (c, t) => c.s + (t - c.a) * c.k;
+HT.toSong = (c, t) => c.s + (t - (HT.fault === "no-cut-start" ? 0 : c.a)) * c.k;
 HT.songLen = c => (c.b - c.a) * c.k;
 /* A point at song time x in the clips: {t, clip} of the LAST clip that holds it (a later clip lies over an earlier one), or null. */
 HT.toSource = function (clips, x) {
@@ -107,10 +107,15 @@ HT.hitRefs = function (clips, events, t0, t1, skip) {
     for (const i of hitsIn(evs, a, b, sk)) {
       const t = evs[i].t;
       if (t < c.a || t >= c.b) continue;   // [a, b) of the clip
-      out.push({ src: c.src, i, t: HT.toSong(c, t), clip: c });
+      out.push({ src: c.src, i, t: HT.fault === "source-x" ? t : HT.toSong(c, t), clip: c });
     }
   }
   return out;
+};
+/* The song time of a hit of a source: through the first clip (in the order of the song) of any row that holds it; null when no clip does. */
+HT.songTime = function (src, t) {
+  for (const e of HT.view) for (const c of e.clips) if (c.src === src && t >= c.a && t < c.b) return HT.toSong(c, t);
+  return null;
 };
 /* Times of one source each ({src: [t, ...]}) in the song: the ghosts of the Sensitivity drag. */
 HT.mapTimes = function (clips, bySrc) {
