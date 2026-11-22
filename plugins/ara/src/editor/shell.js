@@ -338,6 +338,16 @@
   });
   document.addEventListener("DOMContentLoaded", installTransport);
   (function installLoop(n) { if (!installTransport() && n < 400) setTimeout(function () { installLoop(n + 1); }, 50); })(0);
+  /* M1b13 (#562): the selection of the host. The plugin sends a page event for every change; this asks for the state once, when the page
+     can take it (the project is loaded), because an event that came before the editor opened was not kept. The page (static/hostsel.js)
+     ignores a message older than the last one it has. */
+  (function pullSelection(n) {
+    var ready = lex("typeof DSHostSel === 'object' && DSHostSel.ready === true && typeof S === 'object' && S.sid && S.order && S.order.length > 0");
+    if (!ready) { if (n < 600) setTimeout(function () { pullSelection(n + 1); }, 100); return; }
+    invoke("plugin_host_selection", {}).then(function (p) {
+      if (p && typeof p === "object" && (p.seen || (p.hidden && p.hidden.length))) lex("DSHostSel").event(p);
+    }, function () { /* no answer: the events still come */ });
+  })(0);
   pollTransport();
   try { window.localStorage.setItem("dsg_probe", "1"); window.localStorage.removeItem("dsg_probe"); }
   catch (e) {

@@ -105,6 +105,7 @@ function measureGeo() {
   GEO.ovX = $("#overview").getBoundingClientRect().left; GEO.rulerX = $("#rulerClip").getBoundingClientRect().left;
   const rows = {}, y0 = GEO.top - GEO.scY;
   sc.querySelectorAll(".track").forEach(row => {   // P4-1: the lane box, not the canvas, which a strip moves by a transform
+    if (row.classList.contains("hostHidden")) { const t = row.getBoundingClientRect().top + y0; rows[row.dataset.name] = { top: t, bottom: t, wave: t, waveH: 0 }; return; }   // #562: a row that the DAW hides has no size, and must not set the lane heights of the others
     const r = row.getBoundingClientRect(), w = row.querySelector("canvas.wave"), s = row.querySelector("canvas.spike");
     const tr = row.querySelector(".tlanes").getBoundingClientRect(), wt = tr.top + w.offsetTop;
     rows[row.dataset.name] = { top: r.top + y0, bottom: r.bottom + y0, wave: wt + y0, waveH: w.clientHeight };   // P4-27: a row can be taller than the others (waveH of its own)

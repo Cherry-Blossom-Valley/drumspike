@@ -614,6 +614,18 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         })
         .collect();
     let region_spec = args_value(rest, "--region").and_then(|v| parse_region(&v).ok());
+    // M1b13 (mode `selection`): the steps of the host's view, `[<pre action of the page>@]<host step>` separated by `;`. The page does the
+    // pre action (a pointer or key held down, the switch in the menu, a zoom) and then reports `sel-armed`; the host sends its step, the
+    // page reports `sel-snap` with what it shows. The host step is described at `view_step`.
+    let sel_steps: Vec<String> = args_value(rest, "--sel-steps")
+        .map(|v| v.split(';').filter(|x| !x.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default();
+    // `--sel-pre <step>;<step>`: sent before the editor opens (the page must take it from the plugin when it opens)
+    let sel_pre: Vec<String> = args_value(rest, "--sel-pre")
+        .map(|v| v.split(';').filter(|x| !x.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default();
+    let mut sel_sent: usize;
+    let mut view_handle: Option<ViewHandle> = None;
     let destroy_late: Option<usize> = args_value(rest, "--destroy-late").and_then(|v| v.parse().ok());
     let archive_window = args_value(rest, "--archive-window");
     // M1b7: the playback controller of the host (`--playback full|ignore|partial`, default none) and the
@@ -751,6 +763,15 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 eprintln!("bind_to_document_controller returned null");
                 return 2;
             }
+            view_handle = Some(ViewHandle {
+                view: std::ptr::addr_of!((*pext).editorViewRef).read_unaligned(),
+                iface: std::ptr::addr_of!((*pext).editorViewInterface).read_unaligned(),
+            });
+        }
+        if let Some(h) = view_handle {
+            for spec in &sel_pre {
+                view_step(&doc, h, spec);
+            }
         }
         let gui_id = CString::new("clap.gui").unwrap();
         let gui = ((*plugin).get_extension.expect("get_extension"))(plugin, gui_id.as_ptr()) as *const clap_plugin_gui;
@@ -869,7 +890,9 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
                 "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" | "transport"
-                | "playback" | "hit" | "menu" | "geometry" | "hostkeys" | "delivery" => Some(mode.as_str()),
+                | "playback" | "hit" | "menu" | "geometry" | "hostkeys" | "delivery" | "selection" => {
+                    Some(mode.as_str())
+                }
                 // the edit mode ends with the event report that follows the edit report
                 "edit" => Some("edit-events"),
                 "analyse-race" => Some("analyse"),
@@ -885,6 +908,9 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let names_before = count_rows("page_report", Some("names"));
             let mut names_handled = false;
             let mut shift_handled = false;
+            let sel_armed_before = count_rows("page_report", Some("sel-armed"));
+            let sel_snap_before = count_rows("page_report", Some("sel-snap"));
+            sel_sent = 0;
             let delivery_ready_before = count_rows("page_report", Some("delivery-ready"));
             let edits_before = count_rows("page_report", Some("edit"));
             let refuse_before = count_rows("page_report", Some("refuse"));
@@ -1121,6 +1147,24 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     }
                     for (i, a, d) in &trims {
                         trim_region(doc.inst, doc.state, *i, *a, *d);
+                    }
+                }
+                if mode == "selection" {
+                    // M1b13: the host sends step k when the page is armed for it (its pre action is done), and the next one when
+                    // the page has reported what it showed for step k
+                    let armed = count_rows("page_report", Some("sel-armed")) - sel_armed_before;
+                    let snapped = count_rows("page_report", Some("sel-snap")) - sel_snap_before;
+                    if sel_sent < sel_steps.len() && armed > sel_sent && snapped >= sel_sent {
+                        let step = &sel_steps[sel_sent];
+                        let spec = step.split_once('@').map_or(step.as_str(), |(_, h)| h);
+                        match view_handle {
+                            Some(h) => view_step(&doc, h, spec),
+                            None => {
+                                failed = Some("the selection mode needs the ARA view of the plugin".into());
+                                break;
+                            }
+                        }
+                        sel_sent += 1;
                     }
                 }
                 if mode == "names" && !names_handled && count_rows("page_report", Some("names")) > names_before {

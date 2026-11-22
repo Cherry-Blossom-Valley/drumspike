@@ -112,6 +112,7 @@ function buildTrackDOM() {
   }
   refreshCounts();
   document.querySelectorAll(".track").forEach(r => r.classList.toggle("selTrack", r.dataset.name === S.selTrack));   // P4-39c: the first track is selected at open
+  hostSelReapply();   // #562: the rows are new: the marks and the hidden tracks of the DAW selection again (nothing with the mode off)
   syncInspector(true);   // P3-14a: the rows are new; the Inspector shows the selected track or its empty state
   sizeCanvases();   // P3-14d: the new canvases get their CSS size now (from GEO: no layout read); the frame draws them
   invalidate(F.VIEW | F.NEAR);

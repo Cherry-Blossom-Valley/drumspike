@@ -1226,6 +1226,107 @@ unsafe fn move_region(inst: Inst, state: *mut HostState, i: usize, j: usize) {
     println!("{{\"event\":\"host_region_moved\",\"region\":{i},\"sequence\":{j}}}");
 }
 
+/// M1b13: the editor view of the plugin that the host bound (its ref and its interface), for the selection steps of the mode `selection`.
+#[derive(Clone, Copy)]
+struct ViewHandle {
+    view: ARAEditorViewRef,
+    iface: *const ARAEditorViewInterface,
+}
+
+/// M1b13: one step of the host's view: `seq:a,b` selects region sequences (by the index the host made them with), `reg:i,j` playback regions,
+/// `range:start,duration` a time range in song seconds, `empty` an empty selection (a plain step with no token is the same); tokens join with `+`.
+/// `hide:a,b` tells the plugin which sequences are hidden (`hide:` none: all are shown again); `noop` sends nothing.
+/// A sequence that no source uses is made on first use (a DAW track with no clip of the plugin).
+unsafe fn view_step(doc: &HostDoc, handle: ViewHandle, spec: &str) {
+    let ids = |list: &str| -> Vec<usize> { list.split(',').filter_map(|v| v.trim().parse().ok()).collect() };
+    if spec == "noop" {
+        println!("{{\"event\":\"host_view_step\",\"spec\":{spec:?},\"sent\":false}}");
+        return;
+    }
+    // `flood:<n>`: n selections of the snare track with a range that moves a little each time, in a tight loop (a drag in the ruler)
+    if let Some(n) = spec.strip_prefix("flood:").and_then(|v| v.parse::<usize>().ok()) {
+        for i in 0..n {
+            view_step(doc, handle, &format!("seq:1+range:{},0.5", 3.0 + i as f64 * 0.005));
+        }
+        return;
+    }
+    let mut seqs: Vec<ARARegionSequenceRef> = Vec::new();
+    let mut regs: Vec<ARAPlaybackRegionRef> = Vec::new();
+    let mut range: Option<ARAContentTimeRange> = None;
+    let mut hide: Option<Vec<ARARegionSequenceRef>> = None;
+    for token in spec.split('+') {
+        let (kind, arg) = token.split_once(':').unwrap_or((token, ""));
+        match kind {
+            "seq" => {
+                for j in ids(arg) {
+                    seqs.push(ensure_sequence(doc.inst, doc.state, j));
+                }
+            }
+            "reg" => {
+                let list: &Vec<ARAPlaybackRegionRef> = &(*doc.state).regions;
+                for i in ids(arg) {
+                    if let Some(r) = list.get(i) {
+                        regs.push(*r);
+                    }
+                }
+            }
+            "range" => {
+                let v: Vec<f64> = arg.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if v.len() == 2 {
+                    range = Some(ARAContentTimeRange {
+                        start: v[0],
+                        duration: v[1],
+                    });
+                }
+            }
+            "hide" => {
+                let mut list = Vec::new();
+                for j in ids(arg) {
+                    list.push(ensure_sequence(doc.inst, doc.state, j));
+                }
+                hide = Some(list);
+            }
+            _ => {}
+        }
+    }
+    if let Some(list) = hide {
+        let f = (*handle.iface)
+            .notifyHideRegionSequences
+            .expect("notifyHideRegionSequences");
+        f(
+            handle.view,
+            list.len(),
+            if list.is_empty() {
+                std::ptr::null()
+            } else {
+                list.as_ptr()
+            },
+        );
+    } else {
+        let sel = ARAViewSelection {
+            structSize: std::mem::size_of::<ARAViewSelection>(),
+            playbackRegionRefsCount: regs.len(),
+            playbackRegionRefs: if regs.is_empty() {
+                std::ptr::null()
+            } else {
+                regs.as_ptr()
+            },
+            regionSequenceRefsCount: seqs.len(),
+            regionSequenceRefs: if seqs.is_empty() {
+                std::ptr::null()
+            } else {
+                seqs.as_ptr()
+            },
+            timeRange: range
+                .as_ref()
+                .map_or(std::ptr::null(), |r| r as *const ARAContentTimeRange),
+        };
+        let f = (*handle.iface).notifySelection.expect("notifySelection");
+        f(handle.view, &sel);
+    }
+    println!("{{\"event\":\"host_view_step\",\"spec\":{spec:?},\"sent\":true}}");
+}
+
 /// M1c1: region `i` moves to song position `play` (its source slice and length stay): an update in playback time alone.
 unsafe fn shift_region(inst: Inst, state: *mut HostState, i: usize, play: f64) {
     let st = &mut *state;
