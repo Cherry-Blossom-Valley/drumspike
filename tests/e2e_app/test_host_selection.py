@@ -17,7 +17,8 @@ NAMES = [n for n, *_ in FOUR]
 
 def payload(tracks=(), range_=None, hidden=(), n=None, none=False):
     n = payload.n = (payload.n + 1) if n is None else n
-    return {"n": n, "seen": True, "tracks": list(tracks), "none": none, "range": range_, "range_why": "ok" if range_ else "none",
+    ranges = [] if not range_ else (range_ if isinstance(range_, list) else [range_])
+    return {"n": n, "seen": True, "tracks": list(tracks), "none": none, "ranges": ranges, "range_why": "ok" if ranges else "none",
             "hidden": list(hidden)}
 
 
@@ -35,8 +36,8 @@ def state(page):
 
 
 def band(page):
-    return page.evaluate("""() => { const b = document.getElementById('hostRange'); const cs = getComputedStyle(b), r = b.getBoundingClientRect(), e = document.getElementById('editor').getBoundingClientRect();
-      return { shown: cs.display !== 'none', left: r.left - e.left, width: r.width, top: r.top - e.top, bottom: r.bottom - e.top, h: e.height,
+    return page.evaluate("""() => { const c = document.getElementById('hostRange'), b = c.querySelector('.hostBand') || c; const cs = getComputedStyle(b), r = b.getBoundingClientRect(), e = document.getElementById('editor').getBoundingClientRect();
+      return { shown: getComputedStyle(c).display !== 'none' && cs.display !== 'none' && !!c.querySelector('.hostBand'), n: c.querySelectorAll('.hostBand').length, left: r.left - e.left, width: r.width, top: r.top - e.top, bottom: r.bottom - e.top, h: e.height,
         want0: S.theadW + tToX(DSHostSel.state().range ? DSHostSel.state().range.t0 : 0, laneWidth()) }; }""")
 
 
@@ -80,7 +81,7 @@ def test_several_tracks_select_the_first_and_mark_the_others(host):
 def test_a_selection_of_a_track_with_no_source_changes_nothing(host):
     send(host, payload([NAMES[1], NAMES[2]], {"t0": 1.0, "t1": 2.0}))
     before = state(host)
-    send(host, {**payload(), "tracks": [], "none": True, "range": None, "range_why": "none"})
+    send(host, {**payload(), "tracks": [], "none": True, "ranges": [], "range_why": "none"})
     assert state(host) == before, "the selection, the marks, the band and the view stay"
     # a track name the page does not have: the page keeps what it has (no error)
     send(host, payload(["No Such Track"]))
@@ -94,7 +95,7 @@ def test_the_range_of_the_daw_is_a_band_of_the_host_and_not_the_hit_selection(ho
     assert b["shown"] and abs(b["left"] - b["want0"]) < 1.0 and b["width"] > 20
     assert b["top"] <= 1 and b["bottom"] >= b["h"] - 1, "the band spans the ruler and the lanes"
     assert st["own"] is None and st["hit"] is None, "the range of the host is not a selection of the page"
-    assert host.evaluate("() => { const w = tToX(2.5, laneWidth()) - tToX(1.0, laneWidth()); return Math.abs(document.getElementById('hostRange').getBoundingClientRect().width - w) < 1.0; }")
+    assert host.evaluate("() => { const w = tToX(2.5, laneWidth()) - tToX(1.0, laneWidth()); return Math.abs(document.querySelector('#hostRange .hostBand').getBoundingClientRect().width - w) < 1.0; }")
     # it follows the view: a zoom moves and widens the band
     host.evaluate("() => setView(0.5, 3.5)")
     host.wait_for_function("() => !FR.raf && FR.flags === 0")
@@ -105,7 +106,7 @@ def test_the_range_of_the_daw_is_a_band_of_the_host_and_not_the_hit_selection(ho
     assert band(host)["shown"] is False and state(host)["range"] is None
     send(host, payload([NAMES[1]], {"t0": 1.0, "t1": 2.0}))
     assert band(host)["shown"] is True
-    send(host, {**payload([NAMES[1]]), "range_why": "outside"})
+    send(host, {**payload([NAMES[1]]), "range_why": "outside", "ranges": []})
     assert band(host)["shown"] is False
     send(host, payload([NAMES[1]], {"t0": 2.0, "t1": 2.0}))
     assert band(host)["shown"] is False, "a range of no length is none"
@@ -241,3 +242,75 @@ def test_standalone_page_has_nothing_of_the_follow(app, make_project):
     assert app.evaluate("() => [document.querySelectorAll('.hostSel, .hostHidden').length, !!document.getElementById('hostRange'), S.selTrack]")[:2] == [0, False]
     assert app.evaluate("() => DSHostSel.state().payload") is None
     assert app.evaluate("() => DSHostMenu.init() || document.querySelectorAll('[data-host]').length") == 0
+
+
+# ---------- review round 1 of #562 ----------
+
+def test_a_selected_track_that_is_hidden_is_not_selected_and_keys_skip_it(host):
+    host.click("#analyzeAllBtn")
+    host.wait_for_function("() => S.order.length > 0 && S.order.every(n => (S.events[n] || []).length > 0) && !analysisRunning", timeout=60000)
+    host.evaluate("() => setSelTrack('%s')" % NAMES[3])
+    send(host, payload([NAMES[0], NAMES[1]], None, [NAMES[0]]))
+    st = state(host)
+    assert st["sel"] == NAMES[1] and st["hidden"] == [NAMES[0]], "the first selected track that is shown is selected"
+    # all selected tracks are hidden: the selection of the page does not change
+    send(host, payload([NAMES[0], NAMES[2]], None, [NAMES[0], NAMES[2]]))
+    assert state(host)["sel"] == NAMES[1]
+    assert state(host)["marked"] == []
+    # P and ; step over a hidden row
+    host.evaluate("() => { setSelTrack('%s'); }" % NAMES[3])
+    send(host, payload([], None, [NAMES[2]]))
+    host.evaluate("() => selectTrackStep(-1)")
+    assert state(host)["sel"] == NAMES[1], "P from the hat skips the hidden tom"
+    host.evaluate("() => selectTrackStep(1)")
+    assert state(host)["sel"] == NAMES[3], "; skips it again"
+    # Tab (the next hit over all tracks) never stops on a hit of a hidden track
+    send(host, payload([], None, [NAMES[0], NAMES[1], NAMES[2]]))
+    seen = host.evaluate("""() => { const out = new Set(); S.playhead = 0; S.sel = null;
+      for (let i = 0; i < 30; i++) { gotoEvent(1, true); if (S.sel) out.add(S.sel.track); } return [...out]; }""")
+    assert seen == [NAMES[3]], seen
+    # a hit selected on a track that the DAW then hides is not selected any more
+    send(host, payload([], None, []))
+    host.evaluate("n => { S.sel = { track: n, index: 0 }; }", NAMES[1])
+    send(host, payload([], None, [NAMES[1]]))
+    assert state(host)["hit"] is None
+
+
+def test_a_selection_the_user_made_counts_as_seen_when_the_project_loads_again(host):
+    send(host, payload([NAMES[0]]))
+    host.mouse.move(700, 300)
+    host.mouse.down()
+    host.evaluate("n => setSelTrack(n)", NAMES[1])
+    send(host, payload([NAMES[2]]))
+    host.mouse.up()
+    host.wait_for_timeout(400)
+    assert state(host)["sel"] == NAMES[1]
+    host.evaluate("async () => { await loadProject(); }")
+    host.wait_for_function("() => !FR.raf && FR.flags === 0")
+    assert state(host)["sel"] == NAMES[1], "the load does not select the dropped host selection over the user's"
+
+
+def test_two_regions_in_one_range_are_two_bands_and_the_view_goes_to_the_first(host):
+    host.evaluate("() => setView(0, 1.0)")
+    send(host, payload([NAMES[0]], [{"t0": 4.0, "t1": 4.5}, {"t0": 5.0, "t1": 5.4}]))
+    assert band(host)["n"] == 2
+    v = state(host)["view"]
+    assert v[0] <= 4.0 and v[1] >= 4.5, v
+    host.evaluate("() => setView(3.5, 5.5)")
+    host.wait_for_function("() => !FR.raf && FR.flags === 0")
+    boxes = host.evaluate("() => [...document.querySelectorAll('#hostRange .hostBand')].map(b => [b.getBoundingClientRect().left, b.getBoundingClientRect().width])")
+    assert boxes[1][0] > boxes[0][0] + boxes[0][1], "the gap between the two regions is not drawn"
+    send(host, payload([NAMES[0]], [{"t0": 1.0, "t1": 1.5}]))
+    assert band(host)["n"] == 1
+
+
+def test_a_focused_text_field_holds_the_selection_of_the_host_until_it_is_left(host):
+    send(host, payload([NAMES[0]]))
+    host.evaluate("() => { const i = document.createElement('input'); i.id = 'zzField'; i.type = 'text'; document.body.appendChild(i); i.focus(); }")
+    assert host.evaluate("() => DSHostSel.busy()")
+    send(host, payload([NAMES[2]]))
+    st = state(host)
+    assert st["sel"] == NAMES[0] and st["pending"] is True
+    host.evaluate("() => document.getElementById('zzField').blur()")
+    host.wait_for_function("() => S.selTrack === '" + NAMES[2] + "'", timeout=3000)
+    host.evaluate("() => document.getElementById('zzField').remove()")

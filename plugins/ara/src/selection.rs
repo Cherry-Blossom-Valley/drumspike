@@ -19,7 +19,6 @@
 //!   a track; with none yet, through the first track of the page.
 //! - A track of the page is hidden when every DAW track that holds one of its regions is hidden.
 
-use crate::service::RegionRec;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -51,15 +50,25 @@ pub struct TrackFacts {
     pub regions: Vec<(u64, u64)>,
 }
 
-/// What the page is told about a time range.
+/// One playback region for the mapping: the slice `[start_mod, start_mod + dur_mod)` of the source sits in the song from
+/// `start_play` for `dur_play` seconds (the numbers of `deliver::ExportRegion`; they differ for a region that the host stretches).
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Slice {
+    pub start_mod: f64,
+    pub dur_mod: f64,
+    pub start_play: f64,
+    pub dur_play: f64,
+}
+
+/// What the page is told about a time range.
+#[derive(Debug, Clone, PartialEq)]
 pub enum RangeOut {
-    /// No range, or an empty one: the page removes its range of the host.
+    /// No range, or an empty one: the page removes its bands of the host.
     None,
-    /// A range that lies in no region of the track: not drawn (the page removes its range).
+    /// A range that lies in no region of the track: not drawn (the page removes its bands).
     Outside,
-    /// The range in source time of the track, `(t0, t1)`.
-    At(f64, f64),
+    /// The range in source time of the track: one `(t0, t1)` for each part, in order, parts that touch joined.
+    Bands(Vec<(f64, f64)>),
 }
 
 /// The fault runs of the check: each breaks one rule. A delivery build reads none (see `crate::test_switch`).
@@ -81,6 +90,12 @@ pub struct Fault {
     pub outside_draws: bool,
     /// The pull of a page that opened later answers nothing: it sees only the events that come after it.
     pub no_pull: bool,
+    /// Every change is pushed to the page at once and every change writes a row (no gate).
+    pub no_throttle: bool,
+    /// The row of a selection has no names and no result.
+    pub no_row: bool,
+    /// A selection starts an analysis round (every source counts as changed).
+    pub round: bool,
 }
 
 impl Fault {
@@ -96,6 +111,9 @@ impl Fault {
             Ok("keep-range") => f.keep_range = true,
             Ok("outside-draws") => f.outside_draws = true,
             Ok("no-pull") => f.no_pull = true,
+            Ok("no-throttle") => f.no_throttle = true,
+            Ok("no-row") => f.no_row = true,
+            Ok("round") => f.round = true,
             _ => {}
         }
         f
@@ -126,27 +144,85 @@ pub fn tracks_named(raw: &RawSel, tracks: &[TrackFacts], order: &HashMap<u64, Op
 }
 
 /// Song seconds to source seconds through the regions of one track (the rules of the module header). `start` and
-/// `duration` are the range of the host. An empty or invalid range, and a range in no region, are not an answer.
+/// `duration` are the range of the host. This is the ONE place that maps the range of the host to the time of the page; ticket
+/// #555 (the song-time timeline) replaces it. A region keeps the part of the range that lies in it, mapped linearly with the
+/// length it has in the song (`dur_play`, so a stretched region is right); the parts come back as bands, one for each region, and
+/// parts that touch are one band. An empty or invalid range, and a range in no region, are not bands.
 #[must_use]
-pub fn range_to_source(start: f64, duration: f64, regions: &[RegionRec]) -> RangeOut {
+pub fn range_to_source(start: f64, duration: f64, regions: &[Slice]) -> RangeOut {
     if !start.is_finite() || !duration.is_finite() || duration <= 0.0 {
         return RangeOut::None;
     }
     let end = start + duration;
-    let mut lo = f64::INFINITY;
-    let mut hi = f64::NEG_INFINITY;
-    for r in regions.iter().filter(|r| r.dur_mod > 0.0) {
+    let mut parts: Vec<(f64, f64)> = Vec::new();
+    for r in regions.iter().filter(|r| r.dur_mod > 0.0 && r.dur_play > 0.0) {
         let s = start.max(r.start_play);
-        let e = end.min(r.start_play + r.dur_mod);
+        let e = end.min(r.start_play + r.dur_play);
         if e > s {
-            lo = lo.min(r.start_mod + (s - r.start_play));
-            hi = hi.max(r.start_mod + (e - r.start_play));
+            let k = r.dur_mod / r.dur_play;
+            parts.push((
+                (r.start_mod + (s - r.start_play) * k).max(0.0),
+                r.start_mod + (e - r.start_play) * k,
+            ));
         }
     }
-    if hi > lo {
-        RangeOut::At(lo.max(0.0), hi)
-    } else {
+    parts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut bands: Vec<(f64, f64)> = Vec::new();
+    for p in parts {
+        match bands.last_mut() {
+            Some(last) if p.0 <= last.1 + 1e-9 => last.1 = last.1.max(p.1),
+            _ => bands.push(p),
+        }
+    }
+    if bands.is_empty() {
         RangeOut::Outside
+    } else {
+        RangeOut::Bands(bands)
+    }
+}
+
+/// The shortest time between two page messages of the selection. A drag in the ruler of the DAW sends many ranges; the page gets
+/// at most one message in this time, always with the newest state, and the last state always comes.
+pub const PUSH_GAP_MS: u64 = 50;
+
+/// What the gate says about one message.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Offer {
+    /// Send it now.
+    Now(Value),
+    /// It waits (the newest one is kept). `schedule`: nobody is set to send it yet, the caller must.
+    Later { schedule: bool },
+}
+
+/// The gate of the page messages: pure, the caller gives the time.
+#[derive(Debug, Default)]
+pub struct PushGate {
+    last: Option<u64>,
+    pending: Option<Value>,
+    scheduled: bool,
+}
+
+impl PushGate {
+    pub fn offer(&mut self, event: Value, now_ms: u64, gap_ms: u64) -> Offer {
+        if self.last.is_none_or(|l| now_ms.saturating_sub(l) >= gap_ms) {
+            self.last = Some(now_ms);
+            self.pending = None;
+            return Offer::Now(event);
+        }
+        self.pending = Some(event);
+        let schedule = !self.scheduled;
+        self.scheduled = true;
+        Offer::Later { schedule }
+    }
+
+    /// The waiting message, when the sender that was scheduled runs.
+    pub fn take(&mut self, now_ms: u64) -> Option<Value> {
+        self.scheduled = false;
+        let e = self.pending.take();
+        if e.is_some() {
+            self.last = Some(now_ms);
+        }
+        e
     }
 }
 
@@ -181,14 +257,14 @@ pub struct ViewState {
 
 /// The payload of the page event `plugin-selection`: the state of the selection of the host as the page applies it.
 /// `tracks` are page keys in the order of the DAW; `none` is true when the selection names a DAW track or a region that
-/// no track of the plugin has (the page changes nothing); `range` is `{t0, t1}` in source time of `tracks[0]`, or null;
+/// no track of the plugin has (the page changes nothing); `ranges` is a list of `{t0, t1}` in source time of `tracks[0]`, one for each region part, empty for none;
 /// `hidden` is the list of hidden page keys.
 #[must_use]
 pub fn payload(
     state: &ViewState,
     tracks: &[TrackFacts],
     order: &HashMap<u64, Option<i32>>,
-    regions_of: &dyn Fn(usize) -> Vec<RegionRec>,
+    regions_of: &dyn Fn(usize) -> Vec<Slice>,
     fault: Fault,
 ) -> Value {
     let hidden: Vec<&str> = if fault.no_hidden {
@@ -200,7 +276,7 @@ pub fn payload(
             .collect()
     };
     if !state.seen {
-        return json!({"seen": false, "tracks": [], "none": false, "range": null, "range_why": "none", "hidden": hidden});
+        return json!({"seen": false, "tracks": [], "none": false, "ranges": [], "range_why": "none", "hidden": hidden});
     }
     let raw = &state.raw;
     let named = if raw.names_track() {
@@ -220,17 +296,17 @@ pub fn payload(
     } else {
         None
     };
-    let mut range = Value::Null;
+    let mut ranges: Vec<Value> = Vec::new();
     let mut why = "none";
     if let (Some((start, dur)), Some(i)) = (raw.range, map_via) {
         if fault.song_range && dur > 0.0 {
-            range = json!({"t0": start, "t1": start + dur});
+            ranges = vec![json!({"t0": start, "t1": start + dur})];
             why = "ok";
         } else {
             let regs = regions_of(tracks[i].seq);
             match range_to_source(start, dur, &regs) {
-                RangeOut::At(a, b) => {
-                    range = json!({"t0": a, "t1": b});
+                RangeOut::Bands(list) => {
+                    ranges = list.iter().map(|(a, b)| json!({"t0": a, "t1": b})).collect();
                     why = "ok";
                 }
                 RangeOut::Outside => {
@@ -240,7 +316,7 @@ pub fn payload(
                             .iter()
                             .min_by(|x, y| (x.start_play - start).abs().total_cmp(&(y.start_play - start).abs()))
                         {
-                            range = json!({"t0": r.start_mod, "t1": r.start_mod + r.dur_mod.min(dur)});
+                            ranges = vec![json!({"t0": r.start_mod, "t1": r.start_mod + r.dur_mod.min(dur)})];
                         }
                     }
                 }
@@ -255,7 +331,7 @@ pub fn payload(
         keys.truncate(1);
     }
     let none = if fault.unknown_clears { false } else { none };
-    json!({"seen": true, "tracks": keys, "none": none, "range": range, "range_why": why,
+    json!({"seen": true, "tracks": keys, "none": none, "ranges": ranges, "range_why": why,
         "track_range": map_via.map(|i| tracks[i].track.as_str()), "hidden": hidden})
 }
 
@@ -263,11 +339,12 @@ pub fn payload(
 mod tests {
     use super::*;
 
-    fn rec(start_mod: f64, dur_mod: f64, start_play: f64) -> RegionRec {
-        RegionRec {
+    fn rec(start_mod: f64, dur_mod: f64, start_play: f64) -> Slice {
+        Slice {
             start_mod,
             dur_mod,
             start_play,
+            dur_play: dur_mod,
         }
     }
 
@@ -297,7 +374,7 @@ mod tests {
         HashMap::from([(1, Some(5)), (2, Some(0)), (3, Some(2)), (4, None)])
     }
 
-    fn regions_of(seq: usize) -> Vec<RegionRec> {
+    fn regions_of(seq: usize) -> Vec<Slice> {
         match seq {
             0 => vec![rec(0.0, 3.0, 0.0)],
             1 => vec![rec(0.0, 2.0, 3.0)],
@@ -362,8 +439,8 @@ mod tests {
         assert_eq!(p["none"], json!(true), "the page changes nothing");
         assert_eq!(p["tracks"], json!([]));
         assert_eq!(
-            p["range"],
-            Value::Null,
+            p["ranges"],
+            json!([]),
             "the range of such a selection is not used either"
         );
     }
@@ -371,24 +448,41 @@ mod tests {
     #[test]
     fn the_range_goes_from_song_time_to_source_time_through_the_regions_of_the_first_track() {
         // the snare region holds source 0..2 at song 3..5: the range 3.5..4.5 is source 0.5..1.5
-        assert_eq!(range_to_source(3.5, 1.0, &regions_of(1)), RangeOut::At(0.5, 1.5));
-        // a trimmed region (source from 0.4, song from 2.0, length 2.4): song 3.0 is source 1.4
-        let RangeOut::At(a, b) = range_to_source(3.0, 1.0, &[rec(0.4, 2.4, 2.0)]) else {
-            panic!("inside the region");
-        };
-        assert!((a - 1.4).abs() < 1e-9 && (b - 2.4).abs() < 1e-9, "{a} {b}");
-        // the same mapping as the follow of the transport: the start of the range is page_time of its start
-        let (page, _) = crate::transport::page_time(3.5, &[(1, regions_of(1)[0])]);
         assert_eq!(
             range_to_source(3.5, 1.0, &regions_of(1)),
-            RangeOut::At(page, page + 1.0)
+            RangeOut::Bands(vec![(0.5, 1.5)])
+        );
+        // a trimmed region (source from 0.4, song from 2.0, length 2.4): song 3.0 is source 1.4
+        let RangeOut::Bands(list) = range_to_source(3.0, 1.0, &[rec(0.4, 2.4, 2.0)]) else {
+            panic!("inside the region");
+        };
+        let (a, b) = list[0];
+        assert!((a - 1.4).abs() < 1e-9 && (b - 2.4).abs() < 1e-9, "{a} {b}");
+        // the same mapping as the follow of the transport: the start of the range is page_time of its start
+        let (page, _) = crate::transport::page_time(
+            3.5,
+            &[(
+                1,
+                crate::service::RegionRec {
+                    start_mod: 0.0,
+                    dur_mod: 2.0,
+                    start_play: 3.0,
+                },
+            )],
+        );
+        assert_eq!(
+            range_to_source(3.5, 1.0, &regions_of(1)),
+            RangeOut::Bands(vec![(page, page + 1.0)])
         );
     }
 
     #[test]
     fn a_range_that_leaves_the_region_is_cut_and_one_inside_no_region_is_not_drawn() {
         // 4.5..5.5 holds only 4.5..5.0 of the region
-        assert_eq!(range_to_source(4.5, 1.0, &regions_of(1)), RangeOut::At(1.5, 2.0));
+        assert_eq!(
+            range_to_source(4.5, 1.0, &regions_of(1)),
+            RangeOut::Bands(vec![(1.5, 2.0)])
+        );
         // before the region, and behind it
         assert_eq!(range_to_source(0.5, 1.0, &regions_of(1)), RangeOut::Outside);
         assert_eq!(
@@ -398,8 +492,44 @@ mod tests {
         );
         // a track with no region at all
         assert_eq!(range_to_source(1.0, 1.0, &[]), RangeOut::Outside);
-        // two regions: the answer is the smallest range that holds both parts
-        assert_eq!(range_to_source(5.5, 4.0, &regions_of(2)), RangeOut::At(0.5, 2.5));
+        // two regions: one band for each part, not one over the gap
+        assert_eq!(
+            range_to_source(5.5, 4.0, &regions_of(2)),
+            RangeOut::Bands(vec![(0.5, 1.0), (2.0, 2.5)])
+        );
+        // regions that touch in the source are one band
+        let touching = [rec(0.0, 1.0, 0.0), rec(1.0, 1.0, 1.0)];
+        assert_eq!(range_to_source(0.5, 1.0, &touching), RangeOut::Bands(vec![(0.5, 1.5)]));
+    }
+
+    #[test]
+    fn a_stretched_region_maps_with_its_length_in_the_song() {
+        let ok = |got: RangeOut, want: (f64, f64)| {
+            let RangeOut::Bands(l) = got else { panic!("no band") };
+            assert!(
+                (l[0].0 - want.0).abs() < 1e-9 && (l[0].1 - want.1).abs() < 1e-9,
+                "{l:?} want {want:?}"
+            );
+        };
+        // the source slice 0..2 plays in 1 s of the song (double speed): song 0.25..0.75 is source 0.5..1.5
+        let fast = [Slice {
+            start_mod: 0.0,
+            dur_mod: 2.0,
+            start_play: 0.0,
+            dur_play: 1.0,
+        }];
+        ok(range_to_source(0.25, 0.5, &fast), (0.5, 1.5));
+        // the slice 0..1 plays in 2 s (half speed): song 1.0..2.0 is source 0.5..1.0, and the part behind 2 s is cut
+        let slow = [Slice {
+            start_mod: 0.0,
+            dur_mod: 1.0,
+            start_play: 0.0,
+            dur_play: 2.0,
+        }];
+        ok(range_to_source(1.0, 5.0, &slow), (0.5, 1.0));
+        // one sample (at 48 kHz) of the song is half a sample of the source in the slow region
+        let one = 1.0 / 48_000.0;
+        ok(range_to_source(0.0, one, &slow), (0.0, one / 2.0));
     }
 
     #[test]
@@ -423,13 +553,13 @@ mod tests {
         let p = payload(&st, &facts(), &order(), &regions_of, Fault::default());
         assert_eq!(p["tracks"], json!([]), "a range alone selects no track");
         assert_eq!(p["track_range"], json!("snare"));
-        assert_eq!(p["range"], json!({"t0": 0.5, "t1": 1.5}));
+        assert_eq!(p["ranges"], json!([{"t0": 0.5, "t1": 1.5}]));
         // no track named yet: the first track of the page
         st.named = RawSel::default();
         st.raw.range = Some((1.0, 1.0));
         let p = payload(&st, &facts(), &order(), &regions_of, Fault::default());
         assert_eq!(p["track_range"], json!("kick"));
-        assert_eq!(p["range"], json!({"t0": 1.0, "t1": 2.0}));
+        assert_eq!(p["ranges"], json!([{"t0": 1.0, "t1": 2.0}]));
     }
 
     #[test]
@@ -441,7 +571,7 @@ mod tests {
             &regions_of,
             Fault::default(),
         );
-        assert_eq!((p["range"].clone(), p["none"].clone()), (Value::Null, json!(false)));
+        assert_eq!((p["ranges"].clone(), p["none"].clone()), (json!([]), json!(false)));
         let out = RawSel {
             sequences: vec![2],
             range: Some((20.0, 1.0)),
@@ -449,8 +579,8 @@ mod tests {
         };
         let p = payload(&state(out), &facts(), &order(), &regions_of, Fault::default());
         assert_eq!(
-            (p["range"].clone(), p["range_why"].clone()),
-            (Value::Null, json!("outside"))
+            (p["ranges"].clone(), p["range_why"].clone()),
+            (json!([]), json!("outside"))
         );
         assert_eq!(p["tracks"], json!(["snare"]), "the track is selected all the same");
     }
@@ -490,6 +620,35 @@ mod tests {
     }
 
     #[test]
+    fn the_gate_sends_the_first_message_at_once_holds_a_burst_and_keeps_the_newest() {
+        let mut g = PushGate::default();
+        assert_eq!(g.offer(json!(1), 0, 50), Offer::Now(json!(1)));
+        assert_eq!(g.offer(json!(2), 10, 50), Offer::Later { schedule: true });
+        assert_eq!(
+            g.offer(json!(3), 20, 50),
+            Offer::Later { schedule: false },
+            "one sender is enough"
+        );
+        assert_eq!(
+            g.take(50),
+            Some(json!(3)),
+            "the newest state comes, the one before it is gone"
+        );
+        assert_eq!(g.take(60), None, "nothing waits any more");
+        assert_eq!(
+            g.offer(json!(4), 70, 50),
+            Offer::Later { schedule: true },
+            "50 ms count from the last send"
+        );
+        assert_eq!(g.take(100), Some(json!(4)));
+        assert_eq!(g.offer(json!(5), 400, 50), Offer::Now(json!(5)));
+        // a message that goes now takes the place of one that waits
+        assert_eq!(g.offer(json!(6), 410, 50), Offer::Later { schedule: true });
+        assert_eq!(g.offer(json!(7), 460, 50), Offer::Now(json!(7)));
+        assert_eq!(g.take(470), None);
+    }
+
+    #[test]
     fn each_fault_breaks_its_rule() {
         let raw = RawSel {
             sequences: vec![1, 2],
@@ -517,8 +676,8 @@ mod tests {
             f(Fault {
                 song_range: true,
                 ..Fault::default()
-            })["range"],
-            json!({"t0": 3.5, "t1": 4.5})
+            })["ranges"],
+            json!([{"t0": 3.5, "t1": 4.5}])
         );
     }
 }

@@ -1243,6 +1243,13 @@ unsafe fn view_step(doc: &HostDoc, handle: ViewHandle, spec: &str) {
         println!("{{\"event\":\"host_view_step\",\"spec\":{spec:?},\"sent\":false}}");
         return;
     }
+    // `flood:<n>`: n selections of the snare track with a range that moves a little each time, in a tight loop (a drag in the ruler)
+    if let Some(n) = spec.strip_prefix("flood:").and_then(|v| v.parse::<usize>().ok()) {
+        for i in 0..n {
+            view_step(doc, handle, &format!("seq:1+range:{},0.5", 3.0 + i as f64 * 0.005));
+        }
+        return;
+    }
     let mut seqs: Vec<ARARegionSequenceRef> = Vec::new();
     let mut regs: Vec<ARAPlaybackRegionRef> = Vec::new();
     let mut range: Option<ARAContentTimeRange> = None;

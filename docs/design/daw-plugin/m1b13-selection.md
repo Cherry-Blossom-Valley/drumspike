@@ -59,17 +59,17 @@ functions in `plugins/ara/src/selection.rs`; the page side is `static/hostsel.js
 | Case | Rule |
 |---|---|
 | One region sequence, or one playback region, selected | The track of the page whose source has a region on that sequence (or that region) is the selected track of the page (`setSelTrack`). The page scrolls its row into view. |
-| Several tracks | The tracks come in the order of the DAW (`orderIndex` of the region sequence; a sequence with no order after the others), then in the order of the page. The first is selected. The others get a mark (a dashed outline and a dot after the name), which a later selection takes away. The order of the list the host sent does not matter. |
+| Several tracks | The tracks come in the order of the DAW (`orderIndex` of the region sequence; a sequence with no order after the others), then in the order of the page. The first one that is shown (not hidden, see below) is selected; when every selected track is hidden the selection of the page does not change. The others get a mark (a dashed outline and a dot after the name), which a later selection takes away. The order of the list the host sent does not matter. |
 | A DAW track with no source of the plugin | The page changes nothing: no selection, no marks, no range, no scroll. The plugin still sends the event (with `none: true`), so a test can see that the page got it and ignored it. The range of such a selection is not used either. |
-| Time range | The range of the host is a band over the ruler and the lanes (`#hostRange`, teal). It is not the hit selection of the page (`LN.sel`, `S.sel`): nothing in the page treats it as a selection, Delete and the nudge keys do not see it. |
-| Mapping | The song time of the range is mapped to the source time of the page through the playback regions of the first selected track, with the regions of the last round (the same list the follow of the transport and the locate use, `round_region_list`, and the same formula as `transport::page_time`). Each region keeps the part of the range that lies in it; the answer is the smallest range that holds those parts (gaps between regions inside it are drawn too). A track with a time stretch is not handled, as in the follow. |
+| Time range | The range of the host is one or more bands over the ruler and the lanes (`#hostRange`, one `.hostBand` for each part, teal). It is not the hit selection of the page (`LN.sel`, `S.sel`): nothing in the page treats it as a selection, Delete and the nudge keys do not see it. |
+| Mapping | The song time of the range is mapped to the source time of the page through the playback regions of the first selected track, with the regions of the export (`deliver::ExportRegion`: the slice of the source, the place in the song and the length in the song). A region keeps the part of the range that lies in it and maps it linearly with its length in the song, so a region that the host stretches is right (the unit test has half and double length). The answer is one band for each part: two regions in one range are two bands and the gap between them is not drawn; parts that touch in the source are one band. A warp inside a region (non-linear stretch) is not handled. |
 | Range outside every region | The band is not drawn and the range of an earlier selection is removed. The page shows no text (a range in a part of the song where this track has no audio is not an error). The report row says `range_why: outside`. |
 | Empty range, no range, empty selection | The band is removed. The selected track stays. A range of no length, or a start that is not a number, is empty. |
 | A range and no track | The range is mapped through the first track of the last selection that named a track of the plugin; with none yet, through the first track of the page. |
-| Range out of view | The page moves its view (keeps the zoom) so that the range is in the middle; a range longer than 90 percent of the view starts at the left. A range that is partly in view leaves the view as it is: the user sees it already. |
-| Hidden tracks | A page track is hidden when every region sequence that holds one of its regions is hidden. Its row is hidden. One short text in the status bar names how many ("2 tracks hidden in the DAW"), and nothing when none is hidden. A track with a region on no sequence is never hidden. The list of a call replaces the list of the call before. The hidden track keeps its hits; only the row is not shown. |
+| Range out of view | The page moves its view (keeps the zoom) so that the first band is in the middle; a range longer than 90 percent of the view starts at the left. A range with a band that is partly in view leaves the view as it is: the user sees it already. |
+| Hidden tracks | A page track is hidden when every region sequence that holds one of its regions is hidden. Its row is hidden. One short text in the status bar names how many ("2 tracks hidden in the DAW"), and nothing when none is hidden. A track with a region on no sequence is never hidden. The list of a call replaces the list of the call before. The hidden track keeps its hits and is still analysed and exported: hiding is display only, in the page as in the DAW. The page never selects a hidden track; the keys that move the track (`P` and `;`), Tab over the hits, and the review queue skip it; a hit that was selected on a track the DAW then hides is deselected, so no key acts on a hit nobody can see. |
 | Follow off | View > Follow the DAW Selection in the page menu (host mode only). Off: the marks, the band and the hidden rows go, nothing follows, the selected track stays. On: the page takes the last selection of the host. The choice lasts for the page (it is kept in `localStorage` when the web view has one; the plugin view has none that survives, see M1b2). |
-| A selection the user makes | While a pointer button or a key is down in the page, and for 300 ms after a key, the selection of the host waits. When the action ends the page takes it, unless the user changed the selection of the page during the action; then the host's selection is dropped. The hidden rows are applied in both cases, they are not a selection of the user. An action that never ends (the window lost the up event) counts for 20 s. |
+| A selection the user makes | While a pointer button or a key is down in the page, and for 300 ms after a key, the selection of the host waits. When the action ends the page takes it, unless the user changed the selection of the page during the action; then the host's selection is dropped. The hidden rows are applied in both cases, they are not a selection of the user. A host selection that was dropped counts as seen: a later load of the project does not select it over the user's choice. A text field that has the focus counts as an action: the host's selection waits until the field is left (focus out), under the same rule. An action that never ends (the window lost the up event) counts for 20 s. |
 | Page opens, project loads again | The shell script of the page asks the plugin for the state once the project is loaded (`plugin_host_selection`), because an event from before the editor opened is not kept. After every load of the project the marks, the band and the hidden rows are made again; a load does not select again. A message older than the last one is ignored. |
 | The other direction | A click on a track in the page does not change the selection of the DAW. ARA has no call for it (section 1). The page changes itself only. This is also why the two can differ after a click: the DAW stays as the user left it. |
 | A double click on a hit | Moves the DAW playhead. This is #554 and is not changed here; the stages `editor-playback` and `editor-hit` of the check still run it. |
@@ -80,7 +80,9 @@ checks it.
 
 ## 5. Threads and locks
 
-The callbacks run on the main thread of the host. They copy the ids and the range, change two small in-memory states under short
+The callbacks run on the main thread of the host. The compare of the new payload with the last one, its number, and the reading of the tracks and regions it is made from are under ONE lock (`selection_step`), so a callback of the host and the end of a round cannot leave the older payload in place of the newer. The lock is not held across the page message or the log call. The numbers and the facts are read once for each call; during an edit cycle of the host only a mark is set and the payload is computed at its end (the rule of #558). A burst of changes (a drag in the ruler of the DAW) reaches the page as at most one message in 50 ms, always with the newest state (a short thread sends the last one), and writes at most one `view_applied` row a second (the newest is kept).
+
+The callbacks They copy the ids and the range, change two small in-memory states under short
 locks, push one event into the in-memory log of the page, and offer the report row to the rate limiter. They write no file (the
 worker writes the row), wait for no lock that is held across a call of the host, and make no call of the host.
 
@@ -111,15 +113,25 @@ replaces `range_to_source`; the page stays as it is, or, if the page gets song t
 - Page tests (`tests/e2e_app/test_host_selection.py`, Chromium, host mode): scroll into view, several tracks, a DAW track with no source, the
   band and its place, the view, the hidden rows and their text, the menu switch, the pointer, the key and the user's own selection, an older
   message, a load of the project, no call to the host from a click, the standalone page.
-- Plugin stage `editor-selection` (`plugins/ara/check.py`): the test host sends a selection and a hide list before the editor opens (the page must take them from the plugin), then 15 steps through the ARA editor view (selections
+- Plugin stage `editor-selection` (`plugins/ara/check.py`): the test host sends a selection and a hide list before the editor opens (the page must take them from the plugin), then 17 steps through the ARA editor view (selections
   and hide lists) and the page in the real web view reports what it shows after each. The pointer and the key are down in the page for
-  steps 10 to 12 and the menu item is clicked for steps 13 and 14. Thirteen parts, each with a fault run (`editor-selection-fault`) that
+  steps 10 to 12 and the menu item is clicked for steps 13 and 14. Fifteen parts, each with a fault run (`editor-selection-fault`) that
   fails for the named reason. The faults are switches of the plugin (`DS_ARA_SELECTION_FAULT`) and of the page driver (`DS_ARA_EDITOR_FAULT`,
   values `sel-*`); a delivery build reads none.
 
 What the stage does not prove: that a real DAW sends these calls in these combinations, that the band sits on the right bar of the
 DAW's timeline (the song-time timeline of #555 does not exist yet; the mapping is through the regions, section 4), and that the
 selection looks right next to the editors of the role models.
+
+## 7a. What the report holds
+
+The row `view_selection` carries the names of the selected DAW tracks (`sequence_names`) and the keys of the page tracks. Track names are
+the names of the user's tracks, so the row is private data of the user, like the row `track_names`: it is written only when the report
+switch (`DS_ARA_OUT`) is set, else it stays in the small in-memory ring and leaves with the process. Nothing sends it anywhere, and no
+test data with real names goes into git. The rows are limited to one a second (`view_selection`, `view_hide_sequences`, `view_applied`).
+
+The cache version of the page scripts (`?v=` in `index.html`) is not bumped: the earlier host-mode tickets (#559, #560) changed `app.js`
+and others without a bump, and the plugin serves the page from its own bundle, so no old copy exists to refresh.
 
 ## 8. Hand check in a real DAW
 
@@ -145,8 +157,6 @@ selection looks right next to the editors of the role models.
 - What a real DAW sends for each user gesture (section 2). If it sends a region sequence with every range, the rule "a range and no track"
   is not used; if it sends regions only, the track rule is the one that matters.
 - Several tracks: the first in the order of the DAW is selected. The other choice is the one the user clicked last, which ARA does not tell.
-- Several regions in the range: one hull. A range that holds two regions with a gap draws the gap too. A list of bands would need a
-  list in the page; I did not add it for a case that a drum session (one region per take) rarely has.
-- The keys Tab, `P` and `;` of the page walk over a hidden track, as they walk over any track; the hidden row is not shown.
+- Warps inside a stretched region (a non-linear stretch) are not mapped; only the linear length of the region is.
 - The song-time timeline of #555 will replace the mapping through the regions of one track; the payload keeps the range in the source time
   of the first selected track, so the page side stays as it is.

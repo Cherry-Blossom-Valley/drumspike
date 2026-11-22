@@ -6256,10 +6256,11 @@ SEL_STEPS = [
     "key@seq:3",                   # 12 a key is down when the DAW selects the hat: it waits
     "off@seq:0+range:0.5,1.0",     # 13 the user switches the follow off in the menu, then the DAW selects the kick and a range: nothing follows
     "on@noop",                     # 14 the user switches it on again: the page takes the last selection of the host
+    "flood:200",                   # 15 a drag in the ruler: 200 ranges in a tight loop; the page gets few messages and shows the last range
 ]
 SEL_PARTS = ["editor-selection-open", "editor-selection-track", "editor-selection-several", "editor-selection-range", "editor-selection-range-view", "editor-selection-outside",
-             "editor-selection-empty", "editor-selection-unknown", "editor-selection-hidden", "editor-selection-guard", "editor-selection-switch",
-             "editor-selection-row", "editor-selection-no-round"]
+             "editor-selection-empty", "editor-selection-unknown", "editor-selection-hidden", "editor-selection-guard", "editor-selection-user", "editor-selection-switch",
+             "editor-selection-flood", "editor-selection-row", "editor-selection-no-round"]
 
 
 def selection_run(label: str, env: dict | None = None) -> dict:
@@ -6324,17 +6325,29 @@ def selection_parts(run: dict) -> dict:
     parts["editor-selection-unknown"] = (
         steps[6]["got_event"] is True and all(st(6, "snap1")[k] == steps[6]["before"][k] for k in same) and st(6, "snap1")["band"]["shown"] == steps[6]["before"]["band"]["shown"] is True,
         f"a DAW track with no source of the plugin: the page got the event ({steps[6]['got_event']}) and changed nothing: "
-        f"{ {k: (steps[6]['before'][k], st(6, 'snap1')[k]) for k in same if st(6, 'snap1')[k] != steps[6]['before'][k]} or 'selection, marks, range, view and hidden rows are the same' }")
+        f"{ {k: (steps[6]['before'][k], st(6, 'snap1')[k]) for k in same if st(6, 'snap1')[k] != steps[6]['before'][k]} or 'selection, marks, range, view and hidden rows are the same' }; "
+        f"the plugin said none={(steps[6]['snap1'].get('last_event') or {}).get('none')} (want True: the selection names a DAW track that no track of the plugin has)")
     parts["editor-selection-hidden"] = (
         st(8)["hidden"] == [K, S_] and st(8)["rows_shown"] == [T_, H] and st(8)["note"] == "2 tracks hidden in the DAW"
         and st(9)["hidden"] == [] and st(9)["note"] == "" and st(9)["rows_shown"] == keys,
         f"hidden by the DAW: {st(8)['hidden']}, rows shown {st(8)['rows_shown']}, text {st(8)['note']!r}; after the DAW shows them again: hidden {st(9)['hidden']}, rows shown {st(9)['rows_shown']}, text {st(9)['note']!r}")
     parts["editor-selection-guard"] = (
         st(10, "snap1")["sel"] == H and st(10, "snap1")["pending"] is True and st(10)["sel"] == K
-        and st(11, "snap1")["sel"] == T_ and st(11)["sel"] == T_
         and st(12, "snap1")["sel"] == T_ and st(12, "snap1")["pending"] is True and st(12)["sel"] == H,
         f"pointer down: the page keeps {st(10, 'snap1')['sel']!r} (pending {st(10, 'snap1')['pending']}), after the action it selects {st(10)['sel']!r} (want {H!r} then {K!r}); "
-        f"the user selected {T_!r} meanwhile and keeps it: {st(11, 'snap1')['sel']!r}, {st(11)['sel']!r}; a key down: {st(12, 'snap1')['sel']!r} then {st(12)['sel']!r} (want {T_!r} then {H!r})")
+        f"a key down: {st(12, 'snap1')['sel']!r} then {st(12)['sel']!r} (want {T_!r} then {H!r})")
+    parts["editor-selection-user"] = (
+        st(11, "snap1")["sel"] == T_ and st(11)["sel"] == T_,
+        f"the user selected {T_!r} while the pointer was down and the DAW selected the snare track: the page shows {st(11, 'snap1')['sel']!r} during and {st(11)['sel']!r} after the action (want {T_!r} both)")
+    fl = steps[15]
+    n_last = (fl["snap2"].get("last_event") or {}).get("n", 0)
+    n_rows = len([r for r in rows if r.get("event") == "view_applied"])
+    sent = fl["snap2"]["events"] - fl["before"]["events"]
+    r15 = fl["snap2"].get("range") or {}
+    parts["editor-selection-flood"] = (
+        n_last >= 150 and sent <= 12 and n_rows <= 40 and close(r15.get("t0"), 0.995) and close(r15.get("t1"), 1.495),
+        f"200 ranges in a tight loop: the page got {sent} message(s) (want at most 12), the plugin wrote {n_rows} view_applied row(s) in the whole run (want at most 40), "
+        f"the numbers went up to {n_last}, and the page shows the last range {r15.get('t0')} to {r15.get('t1')} (want 0.995 to 1.495)")
     parts["editor-selection-switch"] = (
         steps[13]["menu_was"] == "true" and st(13)["follow"] is False and st(13)["sel"] == H and st(13)["marked"] == [] and st(13)["band"]["shown"] is False and st(13)["hidden"] == []
         and steps[14]["menu_was"] == "false" and st(14)["follow"] is True and st(14)["sel"] == K and band_ok(st(14)["band"]) and close((st(14)["range"] or {}).get("t0"), 0.5),
@@ -6343,9 +6356,9 @@ def selection_parts(run: dict) -> dict:
     sel_rows = [r for r in rows if r.get("event") == "view_selection"]
     mapped = [r for r in sel_rows if r.get("range_start_s") == 3.3]
     parts["editor-selection-row"] = (
-        bool(mapped) and mapped[0].get("tracks") == [S_] and mapped[0].get("sequence_names") == ["Drum B"] and close((mapped[0].get("range") or {}).get("t0"), 0.3) and len(sel_rows) >= 8,
+        bool(mapped) and mapped[0].get("tracks") == [S_] and mapped[0].get("sequence_names") == ["Drum B"] and close(((mapped[0].get("ranges") or [{}])[0]).get("t0"), 0.3) and len(sel_rows) >= 8,
         f"{len(sel_rows)} view_selection row(s); the row of step 3 names the DAW track {mapped[0].get('sequence_names') if mapped else None}, the track {mapped[0].get('tracks') if mapped else None} "
-        f"and the range {mapped[0].get('range') if mapped else None}")
+        f"and the ranges {mapped[0].get('ranges') if mapped else None}")
     jobs, rounds = job_rows_of(rows), [r for r in rows if r.get("event") == "round_start"]
     parts["editor-selection-no-round"] = (
         len(jobs) == 1 and len(rounds) == 1,
@@ -6370,9 +6383,13 @@ def stage_editor_selection_fault() -> bool:
         ("no-pull", sel("no-pull"), [("editor-selection-open", "the page that opens later is told nothing of the selection that came before", f"opens with {K!r} selected (want {T_!r})")]),
         ("no-others", sel("no-others"), [("editor-selection-several", "only the first track is given: the others are not marked", "the other is marked ([]")]),
         ("song-range", sel("song-range"), [("editor-selection-range", "the range stays in song time: no mapping through the regions", "drawn as source 3.3 to 3.9")]),
-        ("unknown-clears", sel("unknown-clears"), [("editor-selection-unknown", "a selection of a track with no source clears the range", "'range':")]),
+        ("unknown-clears", sel("unknown-clears"), [("editor-selection-unknown", "a selection of a track with no source is not marked as none, so the page treats it as an empty selection and clears the range", "none=False (want True")]),
         ("keep-range", sel("keep-range"), [("editor-selection-empty", "an empty selection is not passed on: the range stays", "band shown True")]),
         ("outside-draws", sel("outside-draws"), [("editor-selection-outside", "a range in no region is drawn at the nearest region", "shown True")]),
+        ("no-row", sel("no-row"), [("editor-selection-row", "the row of a selection has the counts only", "names the DAW track None")]),
+        ("round", sel("round"), [("editor-selection-no-round", "a selection of the DAW starts an analysis round", "round(s) in the whole run")]),
+        ("no-throttle", sel("no-throttle"), [("editor-selection-flood", "every change is sent to the page and written as a row at once", "message(s) (want at most 12)")]),
+        ("user-loses", page("sel-user-loses"), [("editor-selection-user", "the page cannot tell that the user changed the selection during the action", "after the action (want")]),
         ("no-hidden", sel("no-hidden"), [("editor-selection-hidden", "the hidden tracks are ignored", "hidden by the DAW: []")]),
         ("no-guard", page("sel-no-guard"), [("editor-selection-guard", "the page overwrites the selection while a pointer or key action runs", "(pending False)")]),
         ("own-range", page("sel-own-range"), [("editor-selection-range", "the range of the host is the page's own hit selection", "own range selection is True")]),

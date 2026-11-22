@@ -107,9 +107,9 @@
     var sc = document.getElementById("lanesScroll"), c = sc.getBoundingClientRect();
     var row = function (n) { return document.querySelector('.track[data-name="' + CSS.escape(n) + '"]'); };
     var rowIn = function (n) { var r = row(n); if (!r) return null; var b = r.getBoundingClientRect(); return b.height > 0 && b.top >= c.top - 1 && b.bottom <= c.bottom + 1; };
-    var st = DSHostSel.state(), b = document.getElementById("hostRange"), br = b.getBoundingClientRect(), ed = document.getElementById("editor").getBoundingClientRect();
+    var st = DSHostSel.state(), b = document.getElementById("hostRange"), bb = b.querySelector(".hostBand"), br = (bb || b).getBoundingClientRect(), ed = document.getElementById("editor").getBoundingClientRect();
     return { sel: S.selTrack, marked: st.marked, hidden: st.hidden, note: st.note, range: st.range, follow: st.follow, pending: st.pending, n: st.n,
-      band: { shown: getComputedStyle(b).display !== "none", left: br.left - ed.left, width: br.width,
+      band: { shown: getComputedStyle(b).display !== "none" && !!bb && getComputedStyle(bb).display !== "none", n: b.querySelectorAll(".hostBand").length, left: br.left - ed.left, width: br.width,
         want_left: st.range ? S.theadW + Math.max(0, tToX(st.range.t0, laneWidth())) : null,   // the band is cut at the edges of the lane area
         want_width: st.range ? Math.min(laneWidth(), tToX(st.range.t1, laneWidth())) - Math.max(0, tToX(st.range.t0, laneWidth())) : null, top: br.top - ed.top, bottom: br.bottom - ed.top, h: ed.height },
       view: [S.view.t0, S.view.t1], scroll_top: sc.scrollTop, sel_in_view: S.selTrack ? rowIn(S.selTrack) : null,
@@ -121,8 +121,9 @@
     var names = S.order.slice();
     var steps = (T.arg || "").split(";").filter(function (x) { return x; });
     if (T.fault === "sel-no-guard") window.hostSelBusy = function () { return false; };   // the fault run: the page overwrites a selection while an action runs
-    if (T.fault === "sel-own-range") window.hostSelRange = function (r) { if (r) lnSetSel(S.selTrack, r.t0, r.t1); else lnClearSel(); };   // the page takes the range of the host as its own hit selection
+    if (T.fault === "sel-own-range") window.hostSelRange = function (list) { if (list && list.length) lnSetSel(S.selTrack, list[0].t0, list[0].t1); else lnClearSel(); };   // the page takes the range of the host as its own hit selection
     if (T.fault === "sel-no-scroll") { window.hostSelReveal = function () { }; window.hostSelScrollTo = function () { }; }   // nothing scrolls to the track or the range
+    if (T.fault === "sel-user-loses") window.hostSelSig = function () { return ""; };   // the page cannot tell that the user changed the selection during an action
     if (T.fault === "sel-no-switch") window.hostSelFollowOn = function () { return true; };   // the switch of the menu does not stop the follow
     if (T.fault === "sel-no-note") { var h0 = window.hostSelHidden; window.hostSelHidden = function (n) { h0(n); if (HS.note) { HS.note.textContent = ""; HS.note.classList.add("hidden"); } }; }   // the rows hide, with no text
     setTrackHeight("large"); setInspector(false, false);

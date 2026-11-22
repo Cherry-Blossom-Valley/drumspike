@@ -9,6 +9,7 @@ function allEventsSorted(trackFilter) {
   const out = [];
   for (const name of S.order) {
     if (trackFilter && name !== trackFilter) continue;
+    if (hostHidden(name)) continue;   // #562: Tab does not stop on a hit of a track that the DAW hides (nothing with the mode off)
     const evs = S.events[name] || [];
     for (let i=0;i<evs.length;i++) out.push({t: evs[i].t, track: name, index: i});
   }
@@ -73,7 +74,7 @@ async function rqRatings(n) {
 async function rqQueue() {   // [{track, e, c}], lowest confidence first; ties by time, then by track order
   const q = [];
   for (const n of S.order) {
-    if (!S.tracks[n] || S.tracks[n].follows || !(S.events[n] || []).length) continue;   // a follower's hits are its source's
+    if (!S.tracks[n] || S.tracks[n].follows || !(S.events[n] || []).length || hostHidden(n)) continue;   // #562: not a hidden track; a follower's hits are its source's
     const rs = await rqRatings(n);
     S.events[n].forEach((e, i) => { if (rs[i] && rs[i].doubt) q.push({ track: n, e, c: rs[i].c }); });
   }

@@ -21,14 +21,18 @@
 "use strict";
 
 const HS = { ready: false, follow: true, state: null, n: 0, applied: "", pending: null, actionSig: "", timer: 0,
-  pointer: false, pointerAt: 0, keyDown: false, keyAt: -1e9, range: null, band: null, note: null, hiddenKey: "" };
+  pointer: false, pointerAt: 0, keyDown: false, keyAt: -1e9, ranges: [], band: null, note: null, hiddenKey: "" };
 const HS_KEY_TAIL_MS = 300;    // a key action ends this long after its key up (the command it started may still be running)
 const HS_STUCK_MS = 20000;     // a pointer or key that was never released (the window lost the up event) stops counting
 
 /* A pointer or key action runs: the button is down in the page, or a key is down or was released a moment ago. */
+function hostSelEditing() {   // a text field has the focus: the user types; the host's selection waits until the field is left
+  const e = document.activeElement;
+  return !!e && (e.isContentEditable || e.tagName === "TEXTAREA" || e.tagName === "SELECT" || (e.tagName === "INPUT" && !["checkbox", "radio", "button", "range", "color", "file"].includes(e.type)));
+}
 function hostSelBusy() {
   const now = performance.now();
-  return (HS.pointer && now - HS.pointerAt < HS_STUCK_MS) || (HS.keyDown && now - HS.keyAt < HS_STUCK_MS) || now - HS.keyAt < HS_KEY_TAIL_MS;
+  return hostSelEditing() || (HS.pointer && now - HS.pointerAt < HS_STUCK_MS) || (HS.keyDown && now - HS.keyAt < HS_STUCK_MS) || now - HS.keyAt < HS_KEY_TAIL_MS;
 }
 function hostSelFollowOn() { return HS.follow; }
 
@@ -38,6 +42,12 @@ function hostSelSig() {
   return [S.selTrack, S.sel ? `${S.sel.track}:${S.sel.index}` : "", typeof LN !== "undefined" && LN.sel ? `${LN.sel.track}:${LN.sel.t0}:${LN.sel.t1}` : ""].join("|");
 }
 
+/* A track that the DAW hides (its row is hidden). The keys that move the selection of the track or step over the hits skip it. */
+function hostHidden(name) {
+  if (!hostMode()) return false;
+  const r = document.querySelector(`.track[data-name="${CSS.escape(name)}"]`);
+  return !!r && r.classList.contains("hostHidden");
+}
 const hsRow = name => document.querySelector(`.track[data-name="${CSS.escape(name)}"]`);
 
 /* Scroll the lanes area so that the row is inside it (a row taller than the area: its top). The view in time is not touched. */
@@ -64,57 +74,66 @@ function hostSelHidden(names) {
     HS.note.textContent = set.size ? `${set.size} ${set.size === 1 ? "track" : "tracks"} hidden in the DAW` : "";
     HS.note.classList.toggle("hidden", !set.size);
   }
+  if (S.sel && set.has(S.sel.track)) { S.sel = null; updateStatus(); }   // no key may act on a hit that nobody can see
   if (key !== HS.hiddenKey) { HS.hiddenKey = key; invalidate(F.SIZE | F.VIEW); }   // the rows moved: the page measures and draws again
 }
 
-/* The band of the host range over the ruler and the lanes. Called by drawHead (every frame that moves the view). */
+/* The bands of the host range over the ruler and the lanes, one for each part of the range (a part for each region of the track that
+   holds a piece of it). Called by drawHead (every frame that moves the view). */
 function hostSelPaint() {
   const b = HS.band;
   if (!b) return;
-  const r = HS.range;
-  if (!r || !hostMode()) { b.style.display = "none"; return; }
-  const W = laneWidth(), x0 = Math.max(0, tToX(r.t0, W)), x1 = Math.min(W, tToX(r.t1, W));
-  if (x1 <= 0 || x0 >= W || x1 <= x0) { b.style.display = "none"; return; }
-  b.style.display = "block";
-  b.style.left = `${S.theadW + x0}px`;
-  b.style.width = `${Math.max(2, x1 - x0)}px`;
+  if (!HS.ranges.length || !hostMode()) { b.style.display = "none"; return; }
+  const W = laneWidth();
+  while (b.children.length < HS.ranges.length) { const d = document.createElement("div"); d.className = "hostBand"; b.appendChild(d); }
+  while (b.children.length > HS.ranges.length) b.lastChild.remove();
+  let any = false;
+  HS.ranges.forEach((r, i) => {
+    const el = b.children[i], x0 = Math.max(0, tToX(r.t0, W)), x1 = Math.min(W, tToX(r.t1, W));
+    if (x1 <= 0 || x0 >= W || x1 <= x0) { el.style.display = "none"; return; }
+    any = true;
+    el.style.display = "block"; el.style.left = `${S.theadW + x0}px`; el.style.width = `${Math.max(2, x1 - x0)}px`;
+  });
+  b.style.display = any ? "block" : "none";
 }
 
-/* Scroll the view in time to a range that is out of it. A range that is partly in view stays. */
-function hostSelScrollTo(r) {
-  if (r.t1 > S.view.t0 && r.t0 < S.view.t1) return;
-  const span = viewDur(), mid = (r.t0 + r.t1) / 2;
+/* Scroll the view in time to the first band, when no band is in view. A band that is partly in view stays. */
+function hostSelScrollTo(ranges) {
+  if (ranges.some(r => r.t1 > S.view.t0 && r.t0 < S.view.t1)) return;
+  const r = ranges[0], span = viewDur(), mid = (r.t0 + r.t1) / 2;
   if (r.t1 - r.t0 <= span * 0.9) setView(mid - span / 2, mid + span / 2);
   else setView(r.t0 - span * 0.05, r.t0 - span * 0.05 + span);
 }
 
-function hostSelRange(range, reveal) {
-  const r = range && Number.isFinite(range.t0) && Number.isFinite(range.t1) && range.t1 > range.t0 ? { t0: range.t0, t1: range.t1 } : null;
-  HS.range = r;
+function hostSelRange(list, reveal) {
+  const rs = (Array.isArray(list) ? list : []).filter(r => r && Number.isFinite(r.t0) && Number.isFinite(r.t1) && r.t1 > r.t0).map(r => ({ t0: r.t0, t1: r.t1 }));
+  HS.ranges = rs;
   hostSelPaint();
-  if (r && reveal) hostSelScrollTo(r);
+  if (rs.length && reveal) hostSelScrollTo(rs);
 }
 
 /* Take the selection of the payload. `fresh`: a new message (it selects, scrolls, may move the view); not fresh: the page
    was built again (a project load): marks, hidden rows and the band only. Returns what it did (the tests read it). */
+function hostSelKey(p) { return JSON.stringify([p.tracks || [], p.ranges || []]); }
 function hostSelApply(p, fresh, hiddenOnly) {
   hostSelHidden(p.hidden);
   if (hiddenOnly || p.none) return { hidden: true };
-  const keys = (p.tracks || []).filter(n => S.tracks[n]);
-  const key = JSON.stringify([p.tracks || [], p.range || null]);
+  const hid = new Set(p.hidden || []);
+  const keys = (p.tracks || []).filter(n => S.tracks[n] && !hid.has(n));   // a hidden track is never selected: the first one that is shown is
+  const key = hostSelKey(p);
   const changed = key !== HS.applied;
   if (keys.length) {
     if (fresh && changed) { if (S.selTrack !== keys[0]) setSelTrack(keys[0]); hostSelReveal(keys[0]); }
     hostSelMarks(keys.slice(1));
-  } else hostSelMarks([]);
-  hostSelRange(p.range, fresh && changed);
+  } else hostSelMarks([]);   // all selected tracks are hidden (or none is named): the selection of the page does not change
+  hostSelRange(p.ranges, fresh && changed);
   if (fresh && (changed || keys.length)) HS.applied = key;
   return { selected: keys[0] || null, marked: keys.slice(1) };
 }
 
 function hostSelClear() {
   HS.applied = ""; HS.pending = null;
-  hostSelMarks([]); hostSelHidden([]); hostSelRange(null, false);
+  hostSelMarks([]); hostSelHidden([]); hostSelRange([], false);
 }
 
 /* The state of the host is shown now, or waits for the end of an action. */
@@ -137,7 +156,9 @@ function hostSelWait() {
     if (hostSelBusy()) { hostSelWait(); return; }
     const p = HS.pending; HS.pending = null;
     // the user changed the selection during the action: that one stays, the hidden tracks are still applied
-    hostSelApply(p, true, hostSelSig() !== HS.actionSig);
+    const userChanged = hostSelSig() !== HS.actionSig;
+    if (userChanged) HS.applied = hostSelKey(p);   // dropped: it counts as seen, so a later load of the project does not select it over the user's choice
+    hostSelApply(p, true, userChanged);
   }, 60);
 }
 
@@ -193,6 +214,8 @@ function hostSelInit() {
   document.addEventListener("keydown", () => { begin(); HS.keyDown = true; HS.keyAt = performance.now(); }, true);
   document.addEventListener("keyup", () => { HS.keyDown = false; HS.keyAt = performance.now(); if (HS.pending) hostSelWait(); }, true);
   document.addEventListener("mouseup", () => { if (HS.pending) hostSelWait(); }, true);
+  document.addEventListener("focusin", () => { if (!HS.pointer && !HS.keyDown) HS.actionSig = hostSelSig(); }, true);   // a field gets the focus (also by Tab): the selection of the page now is the one the user had
+  document.addEventListener("focusout", () => { if (HS.pending) hostSelWait(); }, true);
   if (B.listen) B.listen("plugin-selection", hostSelEvent).catch(() => {});
   HS.ready = true;
 }
@@ -200,7 +223,7 @@ function hostSelInit() {
 window.DSHostSel = {
   init: hostSelInit, event: hostSelEvent, setFollow: hostSelSetFollow, follows: () => HS.follow, busy: hostSelBusy, reapply: hostSelReapply,
   get ready() { return HS.ready; },
-  state: () => ({ follow: HS.follow, n: HS.n, range: HS.range, pending: !!HS.pending, applied: HS.applied, payload: HS.state,
+  state: () => ({ follow: HS.follow, n: HS.n, range: HS.ranges[0] || null, ranges: HS.ranges, pending: !!HS.pending, applied: HS.applied, payload: HS.state,
     marked: [...document.querySelectorAll(".track.hostSel")].map(r => r.dataset.name),
     hidden: [...document.querySelectorAll(".track.hostHidden")].map(r => r.dataset.name), note: HS.note ? HS.note.textContent : "" }),
 };

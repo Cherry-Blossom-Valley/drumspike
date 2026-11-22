@@ -403,7 +403,8 @@ function zoomToggle(keep) {
 function selectTrackStep(dir) {
   if (!needProject() || !S.order.length) return;
   const i = S.order.indexOf(S.selTrack);
-  const j = i < 0 ? (dir > 0 ? 0 : S.order.length - 1) : i + dir;
+  let j = i < 0 ? (dir > 0 ? 0 : S.order.length - 1) : i + dir;
+  while (j >= 0 && j < S.order.length && hostHidden(S.order[j])) j += dir;   // #562: a track that the DAW hides is skipped (nothing with the mode off)
   if (j < 0 || j >= S.order.length) return;
   setSelTrack(S.order[j]);
   const row = document.querySelector(`.track[data-name="${CSS.escape(S.order[j])}"]`);

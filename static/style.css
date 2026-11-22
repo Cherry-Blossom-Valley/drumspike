@@ -559,8 +559,8 @@ input.hgRange:disabled { cursor: default; opacity: .5; }
 .hmHead { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; opacity: .6; padding: 8px 8px 2px; }
 
 /* #562 (DAW plugin M1b13): the page follows the selection of the DAW. Host mode only: the classes are set by static/hostsel.js and nothing sets them with the mode off. */
-#hostRange { display: none; position: absolute; top: 0; bottom: 0; left: 0; width: 0; z-index: 29; pointer-events: none;
-  background: rgba(54, 197, 160, 0.16); border-left: 1px dashed #36c5a0; border-right: 1px dashed #36c5a0; }   /* the range of the host: teal, never the accent colour of the page's own selection */
+#hostRange { display: none; position: absolute; top: 0; bottom: 0; left: 0; right: 0; z-index: 29; pointer-events: none; }   /* the bands of the range of the host: one .hostBand for each part */
+#hostRange .hostBand { position: absolute; top: 0; bottom: 0; width: 0; background: rgba(54, 197, 160, 0.16); border-left: 1px dashed #36c5a0; border-right: 1px dashed #36c5a0; }   /* teal, never the accent colour of the page's own selection */
 body.host .track.hostSel { outline: 1px dashed #36c5a0; }   /* the other tracks that the DAW selected */
 body.host .track.hostSel .tname::after { content: " ·"; color: #36c5a0; }
 body.host .track.hostHidden { display: none; }
