@@ -1580,6 +1580,15 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
             _ => {}
         }
     }
+    if cmd.starts_with("export_") && crate::test_switch("DS_ARA_EDITOR_SCENARIO").as_deref() == Ok("rm-exports") {
+        // the scenario of the dialog stage: the first export command finds no `Exports/` (an empty folder is removed once)
+        static DONE: AtomicBool = AtomicBool::new(false);
+        if !DONE.swap(true, Ordering::SeqCst) {
+            if let Some(d) = default_exports(sh) {
+                let _ = std::fs::remove_dir(d);
+            }
+        }
+    }
     if writes_outside(cmd, &args) {
         let default = default_exports(sh);
         if !crate::deliver::dest_allowed_in(&allowed_folders(sh), default.as_deref(), cmd, &args) {
@@ -1597,8 +1606,13 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
             args.get("dest").and_then(Value::as_str).filter(|s| !s.is_empty()),
         ) {
             if fault() != "old-dest" && crate::deliver::is_default_dest(d, Path::new(dest)) {
+                let existed = d.is_dir();
                 if let Err(e) = std::fs::create_dir_all(d) {
                     return Answer::err(500, format!("{}: {e}", d.display()));
+                }
+                if !existed {
+                    // the stage reads this row: the first call that names the default folder found it missing
+                    session().log(json!({"event": "default_dest_made", "editor": sh.n, "command": cmd}).to_string());
                 }
             }
         }

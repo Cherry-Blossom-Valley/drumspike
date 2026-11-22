@@ -686,6 +686,10 @@ pub fn write_spike_file_song(
     let mut n_frames = end_s.map_or(info.n_frames, |e| {
         (e * f64::from(info.sample_rate)).ceil().max(0.0) as usize
     });
+    // #579 R2: a song time that is not a finite number of at most 24 h is no hit of the file: it is dropped and counted as outside
+    let sane: Vec<f64> = times.iter().copied().filter(|t| song_time_ok(*t)).collect();
+    let dropped = times.len() - sane.len();
+    let times = &sane[..];
     // a hit on the sample just after the end of the last region is kept, as the MIDI file keeps it: one frame longer
     if let Some(last) = times
         .iter()
@@ -711,7 +715,7 @@ pub fn write_spike_file_song(
         n_samples: n_frames,
         format,
         time_reference: Some(0),
-        outside: outside_count(times, info.sample_rate, n_frames),
+        outside: outside_count(times, info.sample_rate, n_frames) + dropped,
     })
 }
 
@@ -823,6 +827,14 @@ pub fn write_audio_spike_file_song(
     })?;
     let sr = info.sample_rate;
     let mut n_frames = end_s.map_or(samples.len(), |e| (e * f64::from(sr)).ceil().max(0.0) as usize);
+    // #579 R2: a pair whose song or source time is not finite, or whose song time is over 24 h, is dropped and counted as outside
+    let sane: Vec<(f64, f64)> = pairs
+        .iter()
+        .copied()
+        .filter(|p| p.0.is_finite() && song_time_ok(p.1))
+        .collect();
+    let dropped = pairs.len() - sane.len();
+    let pairs = &sane[..];
     if let Some(last) = pairs
         .iter()
         .map(|p| (p.1 * f64::from(sr)).round())
@@ -849,10 +861,17 @@ pub fn write_audio_spike_file_song(
             n_samples: n_frames,
             format,
             time_reference: Some(0),
-            outside: outside_count(&song_times, sr, n_frames),
+            outside: outside_count(&song_times, sr, n_frames) + dropped,
         },
         no_period,
     ))
+}
+
+/// #579 R2: the longest song time a song-time file takes a hit at (24 h); a time that is not finite or is over it is no hit.
+const MAX_SONG_S: f64 = 86_400.0;
+
+fn song_time_ok(t: f64) -> bool {
+    t.is_finite() && t <= MAX_SONG_S
 }
 
 fn spike_json(f: &SpikeFile, n_events: usize) -> Value {
@@ -1753,6 +1772,36 @@ mod tests {
         let ev = midi_events(&[json!({"t": 0.5}), json!({"t": 1.0, "v": 90})]).unwrap();
         assert_eq!((ev[0].v, ev[1].v), (100, 90));
         assert_eq!(midi_events(&[json!({"t": 0.5, "v": 1.5})]).unwrap_err().code, 400);
+    }
+
+    #[test]
+    fn a_song_time_that_is_not_finite_or_over_24_hours_is_dropped_and_counted_as_outside() {
+        use drumspike_core::io::{WavFormat, WavSpec, write_wav};
+        let d = std::env::temp_dir().join(format!("ds_app_export_song_sane_{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let src = d.join("src.wav");
+        let spec = WavSpec {
+            sample_rate: 8_000,
+            channels: 1,
+            format: WavFormat::Pcm16,
+            extensible: false,
+            channel_mask: 0,
+        };
+        let x: Vec<f32> = (0..16_000).map(|i| ((i as f32) * 0.05).sin() * 0.5).collect();
+        write_wav(&src, &spec, &x, None).unwrap();
+        let bad = [f64::INFINITY, f64::NAN, 1e12, 86_400.5, f64::NEG_INFINITY];
+        // the synthetic file: one good hit and five bad ones; the file keeps the length of the region, no huge allocation
+        let mut times = vec![0.5];
+        times.extend(bad);
+        let f = write_spike_file_song(&src, &d.join("s.wav"), &times, Some(2.0)).unwrap();
+        assert_eq!((f.n_samples, f.outside), (16_000, 5), "the five bad times are outside");
+        // the audio file: the pairs with a bad song time (or a bad source time) are dropped the same way
+        let mut pairs = vec![(0.5, 0.5)];
+        pairs.extend(bad.iter().map(|&t| (0.5, t)));
+        pairs.push((f64::NAN, 0.7));
+        let (f, _) = write_audio_spike_file_song(&src, &d.join("a.wav"), &pairs, Some(2.0)).unwrap();
+        assert_eq!((f.n_samples, f.outside), (16_000, 6));
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

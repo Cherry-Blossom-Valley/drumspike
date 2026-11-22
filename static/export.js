@@ -51,6 +51,15 @@ function exOpts(withDest) {
   if (withDest) o.dest = EX.dest;
   return o;
 }
+/* #579 R1: in a DAW a call to the plugin that does not answer must not leave a tile at "preparing…": after EX.waitMs (30 s) the
+   call fails with a reason, and the tile shows the error state. Host mode only; EX.waitMs is a hook for the tests. */
+function exWait(p) {
+  if (!hostMode()) return p;
+  return new Promise((ok, no) => {
+    const t = setTimeout(() => no(new Error("no answer from the plugin")), EX.waitMs || 30000);
+    p.then(v => { clearTimeout(t); ok(v); }, e => { clearTimeout(t); no(e); });
+  });
+}
 const exPlural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 function exRender() {   // the controls from EX; the Export button and the tiles follow
   const { names, skipped } = exTrackSets(), all = S.order.length, sel = EX.selected && S.tracks[EX.selected] ? 1 : 0;
@@ -118,7 +127,7 @@ async function exInfo() {   // the replace count of the current options (the new
   const my = ++EX.infoSeq;
   if (!exFormats().length || !exTrackSets().names.length) { EX.replace = 0; exRender(); return; }
   try {
-    const r = await B.exportExisting(S.sid, exOpts(true));
+    const r = await exWait(B.exportExisting(S.sid, exOpts(true)));
     if (my !== EX.infoSeq || !EX.open) return;
     EX.replace = r.count; EX.destOk = true; EX.destNote = EX.destNote.startsWith("The folder") ? EX.destNote : "";
     if (hostMode() && EX.drag.byDest) { exRender(); exDragSchedule(true); return; }   // #579: the folder works now: the tiles prepare again
@@ -144,7 +153,7 @@ function exDragSchedule(now) {   // the tiles show "preparing…" until the file
       if (my !== EX.dragSeq || !EX.open) return;
       try {
         await flushEvents();
-        const r = await B.exportDragPrepare(S.sid, exOpts(false));
+        const r = await exWait(B.exportDragPrepare(S.sid, exOpts(false)));
         exportedFollowers(r);   // P4-4: the render derives stale followers like the export it previews; the page takes the new hits even when the export then finds everything fresh
         if (my !== EX.dragSeq || !EX.open) return;
         EX.drag = { midi: r.midi, spikes: r.spikes, failed: false };
@@ -197,7 +206,7 @@ async function openExport(scope, track) {
   if (hostMode()) { EX.comp = false; EX.markers = false; }   // #560: the sampler offset and markers are absent in a DAW (#579: the audio spike types are there, in song time)
   EX.dest = EX.def;
   if (EX.remembered) {   // the folder of the last choice, when it can still be used
-    try { await B.exportExisting(S.sid, { dest: EX.remembered }); EX.dest = EX.remembered; }
+    try { await exWait(B.exportExisting(S.sid, { dest: EX.remembered })); EX.dest = EX.remembered; }
     catch (e) {
       if (hostMode()) {   // #579: a remembered folder that is gone (or not allowed any more): the default folder and one short text, no error
         EX.destNote = "The folder chosen before is not available: Exports/ is used.";

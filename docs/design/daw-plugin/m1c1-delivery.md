@@ -529,8 +529,9 @@ be used" at once, and the two drag tiles never left "preparing". The gate of M1c
 - The rule of section 4 allowed an explicit `dest` only when it equalled a folder that the user chose in the sheet of THIS editor session
   (`chosen`, empty at the start). The default folder of the document (`Exports/` below its project folder) was not in it, so
   `export_existing` answered 403, the page set `destOk = false` and wrote "The folder cannot be used", and Export stayed off. A
-  second fault stood behind the first: the service checks that a `dest` is an existing folder (`check_dest`), and `Exports/` does not exist
-  until the first export, so even an allowed default folder gave a 404.
+  second fault stood behind the first: the service checks that a `dest` is an existing folder (`check_dest`). A project is made with its `Exports/`,
+  so it is normally there; where it is missing (the user deleted it) an allowed default folder would still give a 404. This second fault was found
+  by reading the code; the stage proves it with the scenario `rm-exports` (the first export command finds no `Exports/`).
 - The tiles had two causes in the page. The render timer of the dialog ran after a refused `dest`, and `exDragSchedule` returned early at
   `!EX.destOk` with no state, so a tile that did not prepare had no way to say so (`exRender` shows "preparing" when it has neither files nor
   an error).
@@ -545,7 +546,7 @@ A `dest` (commands `export_all`, `export_existing`, `export_dest_set`; `export_d
 
 1. the default export folder of the document, `Exports/` of its project (`deliver::is_default_dest`): the same place by `resolve_lenient`,
    which makes the existing part of both paths canonical and keeps the missing names behind it, so it holds also while the folder does
-   not exist; a missing part with a `..` is refused. The plugin makes this one folder (`create_dir_all`, and nothing else) before the service
+   not exist; a missing part with a `..` is refused. The plugin makes this one folder (`create_dir_all`, and nothing else; a row `default_dest_made` says so) before the service
    checks it. Or
 2. equal (exact canonical path, no prefix, no subfolder) to a folder that the user chose in the sheet: in this editor session, or in the list
    of the document (below).

@@ -7409,7 +7409,7 @@ def export_dialog_run(label: str, env: dict | None = None) -> dict:
         shutil.rmtree(pick)
     pick.mkdir(parents=True)
     pick = pick.resolve()
-    e = {"DS_ARA_PICK_DIR": str(pick), "DS_ARA_DRAG_PRESSED": "1"}
+    e = {"DS_ARA_PICK_DIR": str(pick), "DS_ARA_DRAG_PRESSED": "1", "DS_ARA_EDITOR_SCENARIO": "rm-exports"}   # rm-exports: Exports/ is gone at the first open
     e.update(env or {})
     rc, summary, rows = editor_run(f"exdialog-{label}", "exportdialog", CLAP, 2, e,
                                    ["--regions-all", ",".join(str(x) for x in DELIVERY_REGION), "--arg", str(pick)], timeout=400)
@@ -7447,6 +7447,9 @@ def export_dialog_parts(d: dict) -> dict:
         all(s.get("export_finished") is True and (s.get("result") or "").startswith("Exported 4 MIDI and 4 spike files") for s in (step(r1, "export1"), step(r1, "export2"))),
         f"Export wrote the files at the first open and after a close: {[(step(r1, k).get('export_finished'), step(r1, k).get('result')) for k in ('export1', 'export2')]}")
     mids, wavs = files_of(default)
+    made = [x for x in rows if x.get("event") == "default_dest_made"]
+    parts["export-dialog-folder-missing"] = (len(made) == 1 and made[0].get("command") == "export_existing",
+                                             f"Exports/ did not exist (the scenario removes the empty folder) when the dialog first named it: the plugin made it once ({len(made)} rows, by {[x.get('command') for x in made]})")
     parts["export-dialog-files"] = (len(mids) == 4 and len(wavs) == 4, f"{len(mids)} MIDI and {len(wavs)} WAV files in {default.name}/ of the document")
     drag = step(r1, "drag")
     started = [x for x in rows if x.get("event") == "drag_started"]

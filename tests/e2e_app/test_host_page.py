@@ -272,6 +272,25 @@ def test_a_drag_tile_that_cannot_prepare_shows_the_reason_and_never_waits_in_hos
     host_app.evaluate("() => exClose()")
 
 
+def test_a_call_that_never_answers_leaves_no_tile_at_preparing_in_host_mode(host_app, make_project):
+    """#579 round 2 (R1): a prepare or a folder check that the plugin never answers gives the error state with the reason after the
+    wait (30 s; the test sets a short one), not "preparing..." for ever."""
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("() => { EX.waitMs = 400; B.exportDragPrepare = () => new Promise(() => {}); }")
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'error'", timeout=20000)
+    assert tiles(host_app) == [["error", "error: no answer from the plugin"], ["error", "error: no answer from the plugin"]]
+    host_app.evaluate("() => exClose()")
+    # a folder check that never answers: the dialog says so and the tiles say why
+    host_app.evaluate("""() => { const o = B.exportExisting; B.exportExisting = (sid, opts) => (opts && opts.dest) ? new Promise(() => {}) : o(sid, opts); }""")
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'error'", timeout=20000)
+    for state, text in tiles(host_app):
+        assert state == "error" and "no answer from the plugin" in text, (state, text)
+    assert "no answer from the plugin" in host_app.locator("#exProblem").inner_text()
+    host_app.evaluate("() => exClose()")
+
+
 def test_a_render_that_fails_shows_its_reason_on_the_tile_in_host_mode(host_app, make_project):
     analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
     host_app.evaluate("() => { B.exportDragPrepare = async () => { throw new Error('409: the disk is full'); }; }")
