@@ -333,7 +333,8 @@ fn hostkeys_steps() -> Vec<Action> {
         Hk("page-key", 5, "g", "g", 0),
         Hk("page-add-hit", 4, "h", "h", 0),
         Hk("absent-key", 32, "u", "u", 0),
-        Hk("absent-key-cmd", 14, "e", "e", FLAG_COMMAND),
+        // Export (Cmd+E) is a command of the DAW page since #560; Export Again (Option+Cmd+E) is still absent in host mode
+        Hk("absent-key-cmd", 14, "\u{b4}", "e", FLAG_COMMAND | FLAG_OPTION),
         Hk("no-command", 16, "y", "y", 0),
         Hk("no-command-shift", 16, "Y", "Y", SHIFT),
         Hk("no-command-cmd", 38, "j", "j", FLAG_COMMAND),
@@ -351,7 +352,7 @@ fn hostkeys_steps() -> Vec<Action> {
         Hk("marker-field-on", K_F13, "\u{f710}", "\u{f710}", 0),
         Hk("field-letter", 32, "u", "u", 0),
         Hk("field-space", K_SPACE, " ", " ", 0),
-        Hk("field-cmd-absent", 14, "e", "e", FLAG_COMMAND),
+        Hk("field-cmd-absent", 14, "\u{b4}", "e", FLAG_COMMAND | FLAG_OPTION),
         Hk("field-cmd-none", 38, "j", "j", FLAG_COMMAND),
         Hk("field-option-at", 37, "@", "l", FLAG_OPTION),
         Hk("field-option-lbracket", 23, "[", "5", FLAG_OPTION),

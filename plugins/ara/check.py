@@ -5965,14 +5965,15 @@ def menu_parts(rc: int, rep: dict) -> dict:
         return {"editor-menu-button": (False, why), **{n: (False, why) for n in MENU_PARTS[1:]}}
     names = [g[0] for g in rep.get("groups", [])]
     holes = {k: v for k, v in (rep.get("audit") or {}).items() if v}
-    button = (rep.get("host_mode") is True and rep.get("panel") is True and {"Drum Spike", "Edit", "View", "Transport", "Hits", "Track", "Help"} <= set(names)
-              and "File" not in names and not holes)
+    # #560: File is a menu in host mode again (it holds Export); the list of groups is exact
+    button = (rep.get("host_mode") is True and rep.get("panel") is True
+              and names == ["Drum Spike", "File", "Edit", "View", "Transport", "Hits", "Track", "Help"] and not holes)
     st = rep.get("settings", {})
     cats = st.get("cats", [])
     pointer = (rep.get("pick_height") == "ok" and rep.get("track_height") == "large" and rep.get("pick_settings") == "ok" and st.get("visible") is True
                and "view" in cats and "keyboard" in cats and not {"audio", "audition", "pitches", "agent"} & set(cats))
     kb = rep.get("keyboard", {})
-    keyboard = kb.get("opened") is True and kb.get("focus") == "Drum Spike" and kb.get("moved") == "Edit" and kb.get("closed") is True and kb.get("focus_back") == "hostMenuBtn"
+    keyboard = kb.get("opened") is True and kb.get("focus") == "Drum Spike" and kb.get("moved") == "File" and kb.get("closed") is True and kb.get("focus_back") == "hostMenuBtn"
     lo = rep.get("low", {})
     low = (lo.get("innerH", 9999) < 520 and lo.get("top", -1) >= 0 and lo.get("bottom", 9999) <= lo.get("innerH", 0) and lo.get("right", 9999) <= lo.get("innerW", 0)
            and lo.get("scrolls") is True and lo.get("last_visible") is True and lo.get("closed") is True)
@@ -6733,7 +6734,7 @@ def wav_spikes(path: Path) -> dict:
     return {"rate": rate, "frames": len(xs) // (ch if tag == 3 else 1), "tref": tref, "starts": starts}
 
 
-def delivery_run(label: str, env: dict | None = None, pressed: bool = True, region: tuple | None = DELIVERY_REGION, shift: float | None = None, extra: list | None = None) -> dict:
+def song_delivery_run(label: str, env: dict | None = None, pressed: bool = True, region: tuple | None = DELIVERY_REGION, shift: float | None = None, extra: list | None = None) -> dict:
     out_dir = OUT / f"delivery-out-{label}"
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -6863,28 +6864,28 @@ def _with_region(d: dict) -> dict:
 
 
 def delivery_ara_parts() -> bool:
-    ok = print_parts("-ara", ara_parts(dd := _with_region(delivery_run("clap-ara", extra=["--musical", "tempo"])), True) | {k: v for k, v in delivery_parts(dd).items() if k in ("delivery-midi-positions", "delivery-spike-positions")})
-    ok = print_parts("-ara-none", ara_parts(delivery_run("clap-ara-none", extra=["--musical", "no-tempo"]), False)) and ok
+    ok = print_parts("-ara", ara_parts(dd := _with_region(song_delivery_run("clap-ara", extra=["--musical", "tempo"])), True) | {k: v for k, v in delivery_parts(dd).items() if k in ("delivery-midi-positions", "delivery-spike-positions")})
+    ok = print_parts("-ara-none", ara_parts(song_delivery_run("clap-ara-none", extra=["--musical", "no-tempo"]), False)) and ok
     return ok
 
 
 def stage_delivery() -> bool:
     if not HOST.exists() or not CLAP.exists():
         return pass_fail("delivery", False, "no host or bundle: run check.sh build")
-    d = delivery_run("clap")
+    d = song_delivery_run("clap")
     d["region"] = DELIVERY_REGION
     ok = print_parts("", delivery_parts(d))
     # D1 of the review: a clip moved in the host (playback time only, no new round) exports at its NEW song position
-    dm = delivery_run("clap-moved", shift=30.0)
+    dm = song_delivery_run("clap-moved", shift=30.0)
     dm["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
     ok = print_parts("-moved", delivery_parts(dm), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
     # E1 of round 3: a region trimmed in the host exports through its LIVE slice
-    dt = delivery_run("clap-trimmed", extra=["--trim-region", *[f"{i}=1.0,1.0" for i in range(4)]])
+    dt = song_delivery_run("clap-trimmed", extra=["--trim-region", *[f"{i}=1.0,1.0" for i in range(4)]])
     dt["region"] = (1.0, 1.0, 10.5)
     dt["check_left"] = True
     ok = print_parts("-trimmed", delivery_parts(dt), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions", "delivery-trim-range"]) and ok
     ok = delivery_ara_parts() and ok
-    d2 = delivery_run("clap-noregion", region=None)
+    d2 = song_delivery_run("clap-noregion", region=None)
     d2["region"] = None
     ok = print_parts("-no-region", delivery_parts(d2), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
     return ok
@@ -6892,7 +6893,7 @@ def stage_delivery() -> bool:
 
 def stage_delivery_release() -> bool:
     """No mouse button down: the drag starts no session."""
-    d = delivery_run("release", pressed=False)
+    d = song_delivery_run("release", pressed=False)
     r = d["rep"]
     started = [x for x in d["rows"] if x.get("event") == "drag_started"]
     return pass_fail("delivery-drag-release", r.get("drag_ok") is False and (r.get("drag_error") or {}).get("code") == 409 and not started,
@@ -6908,15 +6909,15 @@ def stage_delivery_fault() -> bool:
         ("any-path", {"DS_ARA_EDITOR_FAULT": "any-path"}, True, "delivery-drag-guard", "a drag takes a path outside Exports/"),
         ("invent-map", {"DS_ARA_DELIVERY_FAULT": "invent-map"}, True, "delivery-notempo", "the plugin invents a tempo map"),
     ):
-        d = delivery_run(f"fault-{label}", env, pressed)
+        d = song_delivery_run(f"fault-{label}", env, pressed)
         d["region"] = DELIVERY_REGION
         ok = fault_part(f"delivery-fault-{label}", delivery_parts(d), part, what) and ok
-    d = delivery_run("fault-stale-regions", {"DS_ARA_DELIVERY_FAULT": "stale-regions"}, shift=30.0)
+    d = song_delivery_run("fault-stale-regions", {"DS_ARA_DELIVERY_FAULT": "stale-regions"}, shift=30.0)
     d["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
     ok = fault_part("delivery-fault-stale-regions", delivery_parts(d), "delivery-midi-positions", "the song position of the last round is used: a moved clip exports at its old place") and ok
-    d = delivery_run("fault-keep-reader", {"DS_ARA_DELIVERY_FAULT": "keep-reader"}, extra=["--musical", "tempo"])
+    d = song_delivery_run("fault-keep-reader", {"DS_ARA_DELIVERY_FAULT": "keep-reader"}, extra=["--musical", "tempo"])
     ok = fault_part("delivery-fault-keep-reader", ara_parts(d, True), "delivery-ara-reader", "the plugin does not give the reader back") and ok
-    d = delivery_run("fault-no-button-check", {"DS_ARA_EDITOR_FAULT": "no-button-check"}, pressed=False)
+    d = song_delivery_run("fault-no-button-check", {"DS_ARA_EDITOR_FAULT": "no-button-check"}, pressed=False)
     r = d["rep"]
     ok = pass_fail("delivery-fault-no-button-check", r.get("drag_ok") is True,
                    f"the fault run (no check of the mouse button) starts the session with no button down: ok={r.get('drag_ok')}") and ok
