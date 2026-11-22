@@ -90,7 +90,7 @@
   });
 
   /* Mode selection (M1b13, #562): the host's view sends a list of selections and hide lists (the steps of `--sel-steps`, which the plugin passes
-     in T.arg too). Each step is `[pre@]host step`. The pre action is the page's: `zoom` (the view 0 to 1.2 s), `pointer` (the button of the pointer
+     in T.arg too). Each step is `[pre@]host step`. The pre action is the page's: `zoom` (the view song 3.0 to 4.2 s), `pointer` (the button of the pointer
      goes down and stays), `user` (the same, and the user selects the third track), `key` (a key goes down and stays), `off` and `on` (the
      page's menu item Follow the DAW Selection, clicked through the DOM). After the pre action the page reports `sel-armed`; the host sends its step;
      the page waits for the event of the plugin (or 1.2 s when none comes), lets the page settle, and reads what it shows (`snap1`); it then ends
@@ -141,7 +141,7 @@
     for (var k = 0; k < steps.length; k++) {
       var pre = steps[k].indexOf("@") >= 0 ? steps[k].split("@")[0] : "";
       var base = selEvents, doc = document;
-      if (pre === "zoom") setView(0, 1.2);
+      if (pre === "zoom") setView(3.0, 4.2);
       if (pre === "pointer" || pre === "user") { doc.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); doc.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); held = "pointer"; }
       if (pre === "user") setSelTrack(names[2]);   // the user selects a track while the button is down
       if (pre === "key") { doc.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true })); held = "key"; }
@@ -312,14 +312,26 @@
     // the first message of the host and the answer to the offer: the page is ready for a request
     for (var i = 0; i < 100 && !(tr.delivered >= 1 && tr.offer); i++) await sleepMs(100);
     var first = tr.delivered >= 1;
-    if (scenario === "tracks") {   // M1b7 Y1: two tracks at different song offsets; both directions use the selected track
-      var trackA = S.order[0], trackB = S.order[1];
-      await step("select-b", function () { S.selTrack = trackB; }, 500);
-      await step("locate-b", function () { S.playhead = 1.2; }, 600);
-      await step("select-a", function () { S.selTrack = trackA; }, 700);
+    if (scenario === "tracks") {   // M1b8: ONE DAW track holds two sources, clip 2 later in the song than clip 1; a second DAW track holds the third
+      if (T.song === "selected-track") {   // the fault run: the page maps the host position through the first clip of the selected row (the way of #554)
+        var onPos = window.appOnPlayhead;
+        window.appOnPlayhead = function (m) {
+          var r = HT.rows.find(function (x) { return x.srcs.indexOf(S.selTrack) >= 0; }), c = r && r.clips[0];
+          return onPos(c && typeof m.pos === "number" ? Object.assign({}, m, { pos: m.pos - c.s + c.a }) : m);
+        };
+      }
+      var rowA = HT.rows[0], rowB = HT.rows[1], homeA = rowA && rowA.srcs[0], homeB = rowB && rowB.srcs[0];
+      var inClip2 = rowA.clips[1].s + 1.0;   // inside the second clip of the first DAW track
+      await step("select-b", function () { S.selTrack = homeB; }, 500);
+      await step("locate-clip2", function () { S.playhead = inClip2; }, 600);
+      await step("select-a", function () { S.selTrack = homeA; }, 700);
+      await step("play", function () { return play(); }, 900);
+      await step("select-b-playing", function () { S.selTrack = homeB; }, 500);
+      await step("stop", function () { return pause(); }, 700);
       stopped = true;
       post({ kind: "playback", scenario: scenario, visibility: document.visibilityState, samples: rows, steps: steps, calls: tr.calls, seen: tr.seen,
-        offer: tr.offer, first_message: first, tracks: [trackA, trackB], host_mode: !!B.hostMode, wired: true });
+        offer: tr.offer, first_message: first, tracks: [homeA, homeB], rows: HT.rows.map(function (x) { return { id: x.id, srcs: x.srcs, clips: x.clips }; }), in_clip2: inClip2,
+        host_mode: !!B.hostMode, wired: true });
       return;
     }
     if (scenario === "drag") {   // M1b7 X3: a drag in the ruler with a host that does not answer: the fallback must not jump under the pointer
@@ -471,22 +483,61 @@
     var after = await namesSnap();
     post(Object.assign({ kind: "names-after", reloads: reloads, reloaded: reloaded, waited_ms: Math.round(performance.now() - t0) }, after));
   }
-  /* Mode song (M1b8, #555): the rows of the page in song time. The first report `song` carries what the plugin answers to `plugin_host_regions`;
-     the host then renames a DAW track, moves a region to another one and shifts and trims others (`--rename-seq`, `--move-region`,
-     `--shift-region`, `--trim-region`); the second report `song-after` carries the answer again and the events `plugin-regions` the page got. */
-  async function songSnap() {
+  /* Mode song (M1b8, #555): the rows of the page in song time. The first report `song` carries what the plugin answers to `plugin_host_regions` and what
+     the page DRAWS for those rows (the pixels of the hit lines in the lanes, the rows shown, the headers); the host then renames a DAW track, moves a
+     region to another one and shifts and trims others (`--rename-seq`, `--move-region`, `--shift-region`, `--trim-region`); the second report `song-after`
+     carries the answer again, the events `plugin-regions` the page got and what the page draws then. Fault runs (DS_ARA_SONG_FAULT, made here in the page):
+     `source-x` (the hit lines are drawn at source time), `no-cut-start` (the mapping ignores where a clip starts in its source), `home-only` (only the first
+     source of a DAW track is drawn). */
+  function songFaults() {
+    if (T.song === "source-x") {
+      HT.hitRefs = function (clips, events, t0, t1) {
+        var out = [];
+        clips.forEach(function (c) { (events[c.src] || []).forEach(function (e, i) { if (e.t >= t0 && e.t <= t1) out.push({ src: c.src, i: i, t: e.t, clip: c }); }); });
+        return out;
+      };
+    }
+    if (T.song === "no-cut-start") HT.toSong = function (c, t) { return c.s + t * c.k; };
+    if (T.song === "home-only") {
+      var clips0 = HT.clips;
+      HT.clips = function (name) { var c = clips0(name); return c && c.filter(function (x) { return x.src === name; }); };
+    }
+  }
+  async function songDraw(answer, upto) {   // what the page draws for the rows the plugin gave: one entry for each hit that the clips hold, and each one outside them
+    setView(0, upto); invalidate(F.VIEW); flushFrame();
+    await new Promise(function (r) { setTimeout(r, 500); });
+    var W = laneWidth(), dpr = GEO.dpr, rows = {};
+    answer.rows.forEach(function (r) {
+      var home = r.srcs[0], cv = document.querySelector('.track[data-name="' + CSS.escape(home) + '"] canvas.spike'), cx = cv.getContext("2d"), hits = [], outside = [];
+      function drawn(song) { var x = Math.round(tToX(song, W)) + 0.5, d = cx.getImageData(Math.floor(x * dpr), Math.floor(cv.height / 2), 1, 1).data; return d[3] > 100; }
+      var seen = {};
+      r.clips.forEach(function (c) {
+        (S.events[c.src] || []).forEach(function (e) {
+          var song = c.s + (e.t - c.a) * c.k;   // the formula of the export, written here and not taken from the page
+          if (e.t >= c.a && e.t < c.b) hits.push({ src: c.src, t: e.t, song: song, drawn: drawn(song) });
+          else outside.push({ src: c.src, t: e.t, song: song, drawn: drawn(song) });
+        });
+      });
+      rows[r.id] = { home: home, hits: hits, outside: outside };
+    });
+    var shown = [].slice.call(document.querySelectorAll(".track")).filter(function (r) { return getComputedStyle(r).display !== "none"; });
+    return { rows: rows, shown: shown.map(function (r) { return r.dataset.name; }), headers: shown.map(function (r) { return r.querySelector(".tnm").textContent; }),
+      merged: [].slice.call(document.querySelectorAll(".track.hostMerged")).map(function (r) { return r.dataset.name; }), max_dur: maxDur() };
+  }
+  async function songSnap(upto) {
     var rows = await window.__TAURI__.core.invoke("plugin_host_regions", {});
-    return { rows: rows, events: regEvents, last_event: regLast, order: S.order.slice(), sel: S.selTrack };
+    return { rows: rows, events: regEvents, last_event: regLast, order: S.order.slice(), sel: S.selTrack, page: await songDraw(rows, upto) };
   }
   async function songRun() {
     function sleepM(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    songFaults();
     await sleepM(600);
-    var first = await songSnap();
+    var first = await songSnap(8);
     post(Object.assign({ kind: "song" }, first));
     var base = regEvents, t0 = performance.now();
     while (regEvents === base && performance.now() - t0 < 15000) await sleepM(100);
     await sleepM(1000);   // the host makes its changes in several calls: the last state
-    var after = await songSnap();
+    var after = await songSnap(22);
     post(Object.assign({ kind: "song-after", waited_ms: Math.round(performance.now() - t0) }, after));
   }
   /* Mode leftovers (M1d1, #575): the page shows the name of the DAW track where it names a track (progress, info line, status bar, undo label,

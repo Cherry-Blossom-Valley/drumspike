@@ -827,29 +827,6 @@ impl DocShared {
         Ok(true)
     }
 
-    /// The regions of every source, `(source index, region)`, as the notes use them (M1b5): those
-    /// of the last round when the source has one, else the live ones. The page maps the position
-    /// of the host with them. Takes no `DocService` lock.
-    fn round_region_list(&self) -> Vec<(usize, service::RegionRec)> {
-        let members: Vec<Arc<SourceState>> = self
-            .members
-            .lock()
-            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
-            .unwrap_or_default();
-        let round = self.round_regions.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let mut out = Vec::new();
-        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
-            let live: Vec<service::RegionRec> = s
-                .regions
-                .lock()
-                .map(|r| r.iter().map(|slot| slot.rec).collect())
-                .unwrap_or_default();
-            let (regions, _) = regions_for_notes(round.get(&s.seq), (live, 0.0));
-            out.extend(regions.into_iter().map(|r| (s.seq, r)));
-        }
-        out
-    }
-
     /// Tell the page that the plugin changed its data (a round ended, a restore): the shell
     /// script of the page reloads the project (F1, F8).
     fn announce_reload(&self, audio: &[String]) {
@@ -917,22 +894,6 @@ impl DocShared {
             .iter()
             .map(|(k, v)| (*k, v.order))
             .collect();
-        let slices: Vec<(usize, selection::Slice)> = self
-            .export_region_list()
-            .regions
-            .into_iter()
-            .map(|(i, r)| {
-                (
-                    i,
-                    selection::Slice {
-                        start_mod: r.start_mod,
-                        dur_mod: r.dur_mod,
-                        start_play: r.start_play,
-                        dur_play: r.dur_play,
-                    },
-                )
-            })
-            .collect();
         let state = {
             let mut v = self.view.lock().unwrap_or_else(|e| e.into_inner());
             change(&mut v, &facts, &order);
@@ -942,7 +903,6 @@ impl DocShared {
             &state,
             &facts,
             &order,
-            &|seq| slices.iter().filter(|(i, _)| *i == seq).map(|(_, r)| *r).collect(),
             selection::Fault::read(),
         );
         if last.as_ref() == Some(&payload) {
@@ -2856,7 +2816,6 @@ impl Session {
 fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let d = doc.clone();
     let r = doc.clone();
-    let g = doc.clone();
     let g2 = doc.clone();
     let p1 = doc.clone();
     let p2 = doc.clone();
@@ -2874,7 +2833,6 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
             let _ = send(session(), Msg::PageSync(d.clone()));
         }),
         record: Arc::new(move |svc, sid| r.record_page_edit(svc, sid)),
-        regions: Arc::new(move || g.round_region_list()),
         regions_gen: Arc::new(move || g2.region_gen.load(Ordering::SeqCst)),
         playback_offer: Arc::new(move || *p1.playback_offer.lock().unwrap_or_else(|e| e.into_inner())),
         playback_run: Arc::new(move |calls: &[playback::Call]| p2.run_playback(calls)),
@@ -5909,8 +5867,8 @@ mod tests {
         assert_eq!(p["tracks"], json!(["snare"]));
         assert_eq!(
             p["ranges"],
-            json!([{"t0": 0.25, "t1": 0.75}]),
-            "mapped through the second region of the snare (song 1 to 2)"
+            json!([{"t0": 1.25, "t1": 1.75}]),
+            "the range goes to the page as it is, in song time"
         );
         assert_eq!(selection_events(&doc).len(), 1);
         doc.selection_set(raw);
@@ -5965,7 +5923,7 @@ mod tests {
             "the last state is the one that arrived last"
         );
         let t0 = last["payload"]["ranges"][0]["t0"].as_f64().unwrap();
-        assert!((t0 - (0.0 + 199.0 * 0.002)).abs() < 1e-9, "{t0}");
+        assert!((t0 - (1.0 + 199.0 * 0.002)).abs() < 1e-9, "{t0}");
     }
 
     #[test]
@@ -5994,7 +5952,7 @@ mod tests {
             assert_eq!(fresh.1, None, "nothing is newer than what the page has");
             assert_eq!(
                 fresh.0["ranges"],
-                json!([{"t0": 0.75, "t1": 1.25}]),
+                json!([{"t0": 1.25, "t1": 1.75}]),
                 "host first: {host_first}"
             );
             assert_eq!(doc.view_pushed.lock().unwrap().as_ref(), Some(&fresh.0));

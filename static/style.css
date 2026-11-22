@@ -565,6 +565,6 @@ input.hgRange:disabled { cursor: default; opacity: .5; }
 #hostRange .hostBand { position: absolute; top: 0; bottom: 0; width: 0; background: rgba(54, 197, 160, 0.16); border-left: 1px dashed #36c5a0; border-right: 1px dashed #36c5a0; }   /* teal, never the accent colour of the page's own selection */
 body.host .track.hostSel { outline: 1px dashed #36c5a0; }   /* the other tracks that the DAW selected */
 body.host .track.hostSel .tname::after { content: " ·"; color: #36c5a0; }
-body.host .track.hostHidden { display: none; }
+body.host .track.hostHidden, body.host .track.hostMerged { display: none; }   /* #555: the DOM rows of the other sources of a DAW track */
 #hostHiddenNote { color: #36c5a0; }
 #hostIntro { color: var(--accent); }   /* #575: the first-open line of the host mode */

@@ -3962,7 +3962,7 @@ def stage_switches_fault() -> bool:
 
 # ---- review round 2, item 9: no unwrap and no expect in the non-test code of the plugin
 
-UNWRAP_FILES = ["src/deliver.rs", "src/editor.rs", "src/lib.rs", "src/musical.rs", "src/playback.rs", "src/service.rs", "src/state.rs", "src/tempo_ara.rs", "src/transport.rs", "src/wav.rs"]
+UNWRAP_FILES = ["src/deliver.rs", "src/editor.rs", "src/lib.rs", "src/musical.rs", "src/playback.rs", "src/rows.rs", "src/service.rs", "src/state.rs", "src/tempo_ara.rs", "src/transport.rs", "src/wav.rs"]
 UNWRAP_PATTERN = re.compile(r"\.(unwrap|expect)\s*\(|\.unwrap_unchecked\s*\(")
 
 
@@ -5455,10 +5455,9 @@ def host_row(label: str, event: str) -> dict:
 
 
 def region_page_time(song: float) -> float:
-    """The page time of a song position: the rule of the design note, for one region that every
-    source shares (inside and outside the region alike: the offset of the nearest region)."""
-    a, _d, p = TRANSPORT_REGION
-    return max(0.0, a + (song - p))
+    """The page time of a song position. Since M1b8 (#555) the page shows song time: the position of the host goes to the
+    page as it is, with no mapping through a region or a track (the name stays for the many callers)."""
+    return max(0.0, song)
 
 
 def transport_run(label: str, bundle: Path, env: dict | None = None, kind: str = "script", arg: str = "11.5",
@@ -5562,7 +5561,7 @@ def transport_parts(rc: int, rows: list, script: dict) -> dict:
     src = (bool(seen) and seen[0].get("source") == "clap_process" and bool(first) and first[0].get("source") == "clap_process",
            f"first transport seen by the audio thread: source {seen[0].get('source') if seen else None}, position {seen[0].get('position_seconds') if seen else None} s; "
            f"first message to the page: host {first[0].get('host_position_seconds') if first else None} s = {first[0].get('host_position_samples') if first else None} samples "
-           f"at {first[0].get('sample_rate') if first else None} Hz, page time {first[0].get('page_time') if first else None} s, mapped by {first[0].get('mapped_by') if first else None}")
+           f"at {first[0].get('sample_rate') if first else None} Hz, page time {first[0].get('page_time') if first else None} s")
     return dict(zip(names, [follow, (stop_ok, stop_ev), (loc_ok, loc_ev), jump, (rate_ok, rate_ev), own, src]))
 
 
@@ -5586,7 +5585,6 @@ def stage_editor_transport_fault() -> bool:
     ok = True
     for label, env, part, what, reason in (
         ("off", {"DS_ARA_TRANSPORT_FAULT": "off"}, "editor-transport-follow", "the hand-over is off: the audio thread stores nothing", "playhead did not move"),
-        ("identity", {"DS_ARA_TRANSPORT_FAULT": "identity"}, "editor-transport-follow", "the song position goes to the page without the regions", "off by"),
         ("flood", {"DS_ARA_TRANSPORT_FAULT": "flood"}, "editor-transport-rate", "a message every 8 ms", "too many updates"),
         ("own", {"DS_ARA_EDITOR_FAULT": "page-transport"}, "editor-transport-own-audio", "the page runs a command of the app's transport", "transport command"),
     ):
@@ -5768,13 +5766,16 @@ def playback_run(label: str, bundle: Path, scenario: str = "full", env: dict | N
     none (no playback controller)."""
     args = ["--transport", "follow", "--arg", scenario, "--snap", str(0.0 if scenario == "tracks" else PB_SNAP),
             "--regions-all", ",".join(str(x) for x in TRANSPORT_REGION)]
+    files = transport_files()
     if scenario == "tracks":
-        args += ["--regions-step", str(PB_TRACK_STEP)]
+        # M1b8: sources 0 and 1 lie on ONE DAW track (clip 1 at song 2.0 s, clip 2 of another file 0.5 s later), source 2 on a second one
+        files = [*files, str(FIXTURES / FILES[1])]
+        args += ["--regions-step", str(PB_TRACK_STEP), "--seq-names", "Drum A", "Drum B", "--seq-of", "0", "0", "1"]
     if scenario != "none":
         args += ["--playback", {"drag": "ignore", "late": "full", "tracks": "full"}.get(scenario, scenario)]
     if scenario == "late":
         args += ["--playback-delay", "2500"]
-    rc, summary, rows = run_phase(label, "playback", bundle, env, args, files=transport_files())
+    rc, summary, rows = run_phase(label, "playback", bundle, env, args, files=files)
     return rc, summary, rows, host_row(label, "playback_record")
 
 
@@ -5856,7 +5857,7 @@ def playback_parts(rc: int, rows: list, rec: dict) -> dict:
     for i, (name, kind, t) in enumerate(PB_STEPS):
         if kind != "locate" or i >= len(reqs) or reqs[i]["kind"] != "locate":
             continue
-        want_s = pb_samples_of(p + (t - a))
+        want_s = pb_samples_of(t)
         got = reqs[i]["samples"]
         loc.append((name, t, want_s, got, (got - want_s) if got is not None else None))
     loc_ok = len(loc) == 3 and all(d == 0 for *_x, d in loc) and seq_ok
@@ -5912,7 +5913,7 @@ def playback_parts(rc: int, rows: list, rec: dict) -> dict:
               and all(len(v) == 1 and v[0].get("thread") == "main" and v[0].get("made", 0) >= 1 for v in first.values())
               and loc_row.get("song_samples") == (reqs[0]["samples"] if reqs else None))
     rep_row = (rep_ok, f"report rows: playback_offer {offer[0]['offer'] if offer else None}; playback_request once for each of {[k for k, v in first.items() if len(v) == 1]}, "
-                       f"the first locate row says song {loc_row.get('song_seconds')} s = {loc_row.get('song_samples')} samples, mapped by {loc_row.get('mapped_by')}, "
+                       f"the first locate row says song {loc_row.get('song_seconds')} s = {loc_row.get('song_samples')} samples, "
                        f"host was at {loc_row.get('host_position_seconds')} s" if rep_ok else
                f"a report row is missing or wrong: offer {offer[0]['offer'] if offer else None}, request rows by kind {({k: len(v) for k, v in first.items()})}, "
                f"locate row samples {loc_row.get('song_samples')} (host {reqs[0]['samples'] if reqs else None})")
@@ -5946,7 +5947,6 @@ def stage_editor_playback_fault() -> bool:
     ok = True
     for label, env, part, what, reason in (
         ("direct", {"DS_ARA_PLAYBACK_FAULT": "direct"}, "editor-playback-thread", "the request thread calls the host itself", "off the main thread"),
-        ("identity", {"DS_ARA_PLAYBACK_FAULT": "identity"}, "editor-playback-locate", "the locate goes to the host with the page time, no regions", "off by"),
         ("skip", {"DS_ARA_PLAYBACK_FAULT": "skip"}, "editor-playback-play", "the plugin calls nothing and says it did", "no play request"),
         ("off", {"DS_ARA_TRANSPORT_FAULT": "off"}, "editor-playback-loop", "the hand-over of the position is off: the host position never comes back", "did not come back"),
         ("own", {"DS_ARA_EDITOR_FAULT": "page-transport"}, "editor-playback-own-audio", "the page runs a command of the app's transport", "transport command"),
@@ -6184,99 +6184,109 @@ def stage_editor_playback_late_fault() -> bool:
 
 
 def playback_tracks_parts(rc: int, rows: list, rec: dict) -> dict:
-    """Y1: two sources at different song offsets. Both directions use the selected track: with the second track
-    selected a click at page time t goes to the host at the song position of that track and the follow shows t
-    again (no jump away from the click); with the first track selected the same host position shows that track's time."""
+    """M1b8 (#555), the owner's defect: ONE DAW track holds two sources (clip 1 at song 2.0 s, clip 2 of another file 0.5 s later), a second DAW
+    track holds the third source. The page shows song time: a click inside clip 2 goes to the host as that song time (no mapping through one
+    track), the follow shows it again, the playhead does not move when the selection changes from one row to the other, and when the
+    host plays from there the playhead is the host position (no jump at play start), with the selection on either row."""
     name = "editor-playback-tracks"
     reps = page_reports(rows, "playback")
     rep = reps[0] if reps else {}
-    if not rep or rep.get("visibility") != "visible" or len(rep.get("steps", [])) < 3 or not rec or not rep.get("calls"):
+    if not rep or rep.get("visibility") != "visible" or len(rep.get("steps", [])) < 6 or not rec or not rep.get("calls"):
         return {name: (False, f"no usable run: rc={rc}, page report {bool(rep)}, page {rep.get('visibility') if rep else None}, host record {bool(rec)}")}
-    a, _d, p = TRANSPORT_REGION
-    t = 1.2
-    song_b = p + PB_TRACK_STEP + (t - a)
-    want_samples = pb_samples_of(song_b)
+    x = rep["in_clip2"]
+    want_samples = pb_samples_of(x)
     reqs = rec.get("requests", [])
-    steps, call, seen = rep["steps"], rep["calls"][0], rep.get("seen", [])
-    got = reqs[0]["samples"] if reqs and reqs[0]["kind"] == "locate" else None
-    arrive = next((m for m in seen if m[0] >= call["at"] and abs(m[1] - t) <= 0.002), None)
+    steps, calls, seen = rep["steps"], rep["calls"], rep.get("seen", [])
+    kinds = [r["kind"] for r in reqs]
+    loc = next((r for r in reqs if r["kind"] == "locate"), None)
+    play = next((r for r in reqs if r["kind"] == "play"), None)
+    call = calls[0]
+    got = loc["samples"] if loc else None
+    arrive = next((m for m in seen if m[0] >= call["at"] and abs(m[1] - x) <= 0.002), None)
     ms = arrive[0] - call["at"] if arrive else None
-    away = [m[1] for m in seen if call["at"] <= m[0] < steps[2]["at"] and abs(m[1] - t) > 0.002 and (arrive is None or m[0] >= arrive[0] - 1)]
-    page_a = a + (song_b - p)
-    good = (got == want_samples and ms is not None and ms <= PB_LOOP_MS and not away and abs(steps[1]["pos_after"] - t) <= 0.002
-            and abs(steps[2]["pos_after"] - page_a) <= 0.002)
+    away = [m[1] for m in seen if call["at"] <= m[0] < steps[2]["at"] and abs(m[1] - x) > 0.002 and (arrive is None or m[0] >= arrive[0] - 1)]
+    n_rows = len(rep.get("rows", []))
+    two_clips = n_rows == 2 and len(rep["rows"][0]["clips"]) == 2 and len(rep["rows"][0]["srcs"]) == 2
+    # the frames while the host plays: the page position is the host position, with the selection on the first row and then on the second
+    jump = None
+    if play:
+        w0, pos0 = play["wall_ms"], play["landed_song"]
+        t_play, t_stop = steps[3]["at"], steps[5]["at"]
+        late = [s for s in rep["samples"] if t_play + 400 <= s[0] <= t_stop and s[2] == 1 and s[1] is not None]
+        errs = [abs(s[1] - (pos0 + (s[0] - w0) / 1000.0)) for s in late]
+        jump = max(errs) if errs else None
+    stop_pos = steps[5]["pos_after"]
+    stop_host = next((r["landed_song"] for r in reqs if r["kind"] == "stop"), None)
+    good = (two_clips and got == want_samples and ms is not None and ms <= PB_LOOP_MS and not away and abs(steps[1]["pos_after"] - x) <= 0.002
+            and abs(steps[2]["pos_after"] - x) <= 0.002 and jump is not None and jump <= 0.05
+            and stop_host is not None and abs(stop_pos - stop_host) <= 0.003)
     return {name: (good,
-                   f"second track selected, click at {t} s: the host got song {song_b:.3f} s ({got} samples, want {want_samples}), the follow showed {t} s again {ms:.0f} ms after the call "
-                   f"(limit {PB_LOOP_MS:.0f} ms), no jump away from the click; first track selected: the same host position shows {steps[2]['pos_after']} s (want {page_a:.3f} s)" if good else
-                   f"the loop is not closed for the selected track: host got {got} samples (want {want_samples}), the follow came back after {ms} ms, positions that jumped away from the click {away[:3]}, "
-                   f"page after the click {steps[1]['pos_after']} s (want {t}), after selecting the first track {steps[2]['pos_after']} s (want {page_a:.3f})"
-                   + (": the playhead jumped away from the click" if away or (ms is None) else ""))}
+                   f"one DAW track with two sources and a second DAW track ({n_rows} rows, {len(rep['rows'][0]['clips']) if n_rows else 0} clips in the first): a click in clip 2 at song {x:.3f} s: "
+                   f"the host got {got} samples (want {want_samples}), the follow showed it again {ms:.0f} ms after the call (limit {PB_LOOP_MS:.0f} ms), the selection changed to the first row "
+                   f"and the playhead stayed at {steps[2]['pos_after']} s; play from there: the page position was the host position within {jump * 1000:.1f} ms over the whole play "
+                   f"(limit 50 ms), with the selection on the other row too; after the stop the page shows {stop_pos} s, the host {stop_host} s" if good else
+                   f"the page does not show song time for the DAW track: rows {n_rows} (want 2, two clips and two sources in the first: {two_clips}), host got {got} samples (want {want_samples}), "
+                   f"the follow came back after {ms} ms, positions that jumped away from the click {away[:3]}, page after the click {steps[1]['pos_after']} s (want {x}), "
+                   f"after selecting the first row {steps[2]['pos_after']} s (want {x}), the playhead is off the host position by up to {jump} s while the host plays (limit 0.05), "
+                   f"after the stop the page shows {stop_pos} s and the host {stop_host} s"
+                   + (": the playhead jumped away from the click or from the host position" if away or (jump is not None and jump > 0.05) else ""))}
 
 
 def stage_editor_playback_tracks() -> bool:
-    """Y1: the follow and the locate use the track the page has selected (two sources at different song offsets)."""
+    """M1b8: the page shows song time (a DAW track with two sources; the selection does not matter)."""
     rc, _summary, rows, rec = playback_run("editor-playback-tracks", CLAP, "tracks")
     return print_parts("", playback_tracks_parts(rc, rows, rec))
 
 
 def stage_editor_playback_tracks_fault() -> bool:
-    rc, _summary, rows, rec = playback_run("editor-fault-playback-tracks", CLAP, "tracks", {"DS_ARA_PLAYBACK_FAULT": "first-track"})
-    ok = fault_reason("editor-playback-tracks-fault-first-track", playback_tracks_parts(rc, rows, rec), "editor-playback-tracks",
-                      "the follow maps with the first source, the locate with the selected track", "jumped away from the click")
+    rc, _summary, rows, rec = playback_run("editor-fault-playback-tracks", CLAP, "tracks", {"DS_ARA_SONG_FAULT": "selected-track"})
+    ok = fault_reason("editor-playback-tracks-fault-selected-track", playback_tracks_parts(rc, rows, rec), "editor-playback-tracks",
+                      "the page maps the host position through the first clip of the selected row (the way of #554)", "jumped away from the click or from the host position")
     parts = playback_tracks_parts(2, [], {})
     return pass_fail("editor-playback-tracks-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
                      "a run with no page report fails with 'no usable run'") and ok
 
 
-PLAYBACK_MAP_FAULT_TEST = "playback::tests::the_locate_of_the_plan_uses_the_regions_not_the_page_time_itself"
-
-
 def playback_map_run(label: str, env: dict | None = None) -> tuple[int, str]:
     e = {"ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib"}
     e.update(env or {})
-    return run(["cargo", "test", "--locked", "--features", "test-switches", "--lib", "--", *PLAYBACK_MAP_TESTS, PLAYBACK_MAP_FAULT_TEST, PLAYBACK_QUEUE_TEST, "--test-threads=1"], env=e, log=f"{label}.log", cwd=HERE)
+    return run(["cargo", "test", "--locked", "--features", "test-switches", "--lib", "--", *PLAYBACK_MAP_TESTS, PLAYBACK_QUEUE_TEST, "--test-threads=1"], env=e, log=f"{label}.log", cwd=HERE)
 
 
+# M1b8 (#555): the page shows song time, so the locate goes to the host as the time of the page. The tests of the mapping through
+# the regions (page_time, song_time, regions_for) are deleted with those functions; the stage editor-playback-tracks (the acceptance
+# case: one DAW track with two sources, the selection on either row) and the unit tests below cover the same invariant.
 PLAYBACK_MAP_TESTS = [
-    "transport::tests::a_page_time_inside_a_region_maps_back_to_the_song",
-    "transport::tests::a_source_with_two_regions_takes_the_region_of_the_host_position_else_the_first",
-    "transport::tests::no_region_gives_no_song_position",
-    "transport::tests::a_page_time_before_the_start_of_the_region_runs_on_with_its_offset_and_never_below_zero",
-    "playback::tests::a_locate_goes_to_the_host_as_a_song_position_through_the_regions",
-    "playback::tests::a_locate_with_no_region_sends_nothing_and_says_why",
+    "transport::tests::a_loop_of_the_host_is_a_jump_each_time_and_the_page_time_is_the_song_position",
+    "playback::tests::a_locate_goes_to_the_host_as_the_song_position_the_page_shows_song_time",
+    "playback::tests::a_locate_with_no_time_sends_nothing_and_says_why",
     "playback::tests::a_host_without_a_call_gets_no_call_and_the_text_names_the_host",
     "playback::tests::a_play_moves_a_stopped_host_first_when_the_page_stands_elsewhere",
     "playback::tests::the_queue_holds_a_few_requests_and_the_drain_job_starts_once",
     "playback::tests::a_request_queued_before_the_editor_closed_makes_no_call",
     "playback::tests::a_time_is_bounded_before_it_reaches_the_host",
-    "playback::tests::the_regions_of_the_selected_track_are_used_else_all",
-    "playback::tests::for_the_selected_track_song_time_and_page_time_are_inverse",
     "editor::tests::requests_to_the_host_do_not_use_the_budget_of_the_app_commands",
 ]
 PLAYBACK_QUEUE_TEST = "playback::tests::requests_run_in_the_order_of_arrival_and_the_newest_locate_wins"
 
 
 def stage_playback_map() -> bool:
-    """M1b7 gate line 2: the locate maps a page time to a song position, the inverse of the follow of M1b5, with one
-    rule for a source with several regions. The unit tests: inside a region, two regions, no region, a time before the
-    start of the region, and the plan of each request (the text, the move before a play)."""
+    """M1b7 gate line 2, since M1b8 (#555) song time: the locate goes to the host as the song position the page shows, with no
+    mapping through a region or a track. The unit tests: the locate, the plan of each request (the text, the move before a play),
+    the page time of the pacer."""
     rc, text = playback_map_run("playback-map")
     m = re.search(r"test result: (\w+)\. (\d+) passed; (\d+) failed", text)
-    ran = all(f"{n} ... ok" in text for n in PLAYBACK_MAP_TESTS + [PLAYBACK_MAP_FAULT_TEST, PLAYBACK_QUEUE_TEST])
+    ran = all(f"{n} ... ok" in text for n in PLAYBACK_MAP_TESTS + [PLAYBACK_QUEUE_TEST])
     return pass_fail("playback-map", rc == 0 and bool(m) and ran,
-                     f"{m.group(2) if m else '?'} unit tests passed: a page time inside a region, a source with two regions, no region (nothing is sent), "
-                     f"a time before the start of the region, the plan of play, stop and locate (out/playback-map.log)")
+                     f"{m.group(2) if m else '?'} unit tests passed: the locate is the song position, no time sends nothing, the plan of play, stop and locate "
+                     f"(out/playback-map.log)")
 
 
 def stage_playback_map_fault() -> bool:
-    rc, text = playback_map_run("fault-playback-map", {"DS_ARA_PLAYBACK_FAULT": "identity"})
-    named = "off by" in text and PLAYBACK_MAP_FAULT_TEST.split("::")[-1] in text
-    ok = pass_fail("playback-map-fault", rc != 0 and named,
-                   f"the fault run (the plan sends the page time as the song position) makes the unit test fail with 'off by': rc={rc}, named {named}")
     rc2, text2 = playback_map_run("fault-playback-map-queue", {"DS_ARA_PLAYBACK_FAULT": "no-supersede"})
     named2 = "the newest locate wins" in text2 and PLAYBACK_QUEUE_TEST.split("::")[-1] in text2
     return pass_fail("playback-map-fault-queue", rc2 != 0 and named2,
-                     f"the fault run (no locate of the queue is dropped for a newer one) makes the queue test fail with 'the newest locate wins': rc={rc2}, named {named2}") and ok
+                     f"the fault run (no locate of the queue is dropped for a newer one) makes the queue test fail with 'the newest locate wins': rc={rc2}, named {named2}")
 
 
 # ---------------------------------------------------------------- M1b11: the menu and the lanes of the page (#559)
@@ -6472,9 +6482,9 @@ SEL_STEPS = [
     "seq:1",                       # 0  the DAW selects the snare track
     "seq:2,0",                     # 1  two tracks: the first in the order of the DAW (the kick) is selected, the tom is marked
     "reg:3",                       # 2  a playback region of the hat selects the hat track
-    "zoom@seq:1+range:3.3,0.6",    # 3  the snare and a range of song 3.3 to 3.9 (source 0.3 to 0.9); the page shows 0 to 1.2 s
-    "range:6.0,1.0",               # 4  a range alone, in the song 6 to 7: no region of the snare holds it
-    "seq:3+range:9.3,0.2",         # 5  the hat, song 9.3 to 9.5 (source 1.3 to 1.5): out of the view 0 to 1.2 s
+    "zoom@seq:1+range:3.3,0.6",    # 3  the snare and a range of song 3.3 to 3.9; the page shows song 3.0 to 4.2 s (the page shows song time since M1b8)
+    "range:6.0,1.0",               # 4  a range alone, in the song 6 to 7: no clip of the snare holds it, it is drawn all the same (song time)
+    "seq:3+range:9.3,0.2",         # 5  the hat, song 9.3 to 9.5: out of the view
     "seq:4",                       # 6  a DAW track with no source of the plugin: nothing changes
     "empty",                       # 7  an empty selection: the range goes
     "hide:0,1",                    # 8  the DAW hides the kick and the snare track
@@ -6535,17 +6545,18 @@ def selection_parts(run: dict) -> dict:
         f"a later selection of one track takes the marks away ({st(2)['marked']})")
     r3 = st(3)["range"] or {}
     parts["editor-selection-range"] = (
-        st(3)["sel"] == S_ and close(r3.get("t0"), 0.3) and close(r3.get("t1"), 0.9) and band_ok(st(3)["band"]) and st(3)["own_range"] is False and st(3)["hit"] is False,
-        f"the DAW range song 3.3 to 3.9 on the snare track is drawn as source {r3.get('t0')} to {r3.get('t1')} (want 0.3 to 0.9); the band: {st(3)['band']}; "
+        st(3)["sel"] == S_ and close(r3.get("t0"), 3.3) and close(r3.get("t1"), 3.9) and band_ok(st(3)["band"]) and st(3)["own_range"] is False and st(3)["hit"] is False,
+        f"the DAW range song 3.3 to 3.9 on the snare track is drawn as song {r3.get('t0')} to {r3.get('t1')} (want 3.3 to 3.9); the band: {st(3)['band']}; "
         f"the page's own range selection is {st(3)['own_range']} and no hit is selected ({st(3)['hit']})")
     v5 = st(5, "snap1")["view"]
     parts["editor-selection-range-view"] = (
-        steps[5]["before"]["view"][1] < 1.3 and v5[0] <= 1.3 and v5[1] >= 1.5 and st(3)["view"] == steps[3]["before"]["view"] and band_ok(st(5)["band"]),
-        f"the view was {steps[5]['before']['view']} and the range 1.3 to 1.5 is out of it: the view is {v5} after the step; a range inside the view (step 3) leaves it "
+        steps[5]["before"]["view"][1] < 9.3 and v5[0] <= 9.3 and v5[1] >= 9.5 and st(3)["view"] == steps[3]["before"]["view"] and band_ok(st(5)["band"]),
+        f"the view was {steps[5]['before']['view']} and the range 9.3 to 9.5 is out of it: the view is {v5} after the step; a range inside the view (step 3) leaves it "
         f"({steps[3]['before']['view']} then {st(3)['view']})")
+    r4 = st(4)["range"] or {}
     parts["editor-selection-outside"] = (
-        st(4)["range"] is None and st(4)["band"]["shown"] is False and st(4)["sel"] == S_ and steps[3]["snap2"]["range"] is not None,
-        f"a range in no region of the snare track removes the band (range {st(4)['range']}, shown {st(4)['band']['shown']}) and keeps the selected track {st(4)['sel']!r}")
+        close(r4.get("t0"), 6.0) and close(r4.get("t1"), 7.0) and st(4)["band"]["shown"] is True and band_ok(st(4)["band"]) and st(4)["sel"] == S_,
+        f"a range in no clip of the snare track is drawn all the same, in song time (range {st(4)['range']}, want 6.0 to 7.0, shown {st(4)['band']['shown']}) and keeps the selected track {st(4)['sel']!r}")
     parts["editor-selection-empty"] = (
         st(7)["range"] is None and st(7)["band"]["shown"] is False and st(7)["sel"] == H and st(5)["range"] is not None,
         f"an empty selection removes the range ({st(7)['range']}, band shown {st(7)['band']['shown']}) and keeps the selected track {st(7)['sel']!r}")
@@ -6573,9 +6584,9 @@ def selection_parts(run: dict) -> dict:
     sent = fl["snap2"]["events"] - fl["before"]["events"]
     r15 = fl["snap2"].get("range") or {}
     parts["editor-selection-flood"] = (
-        n_last >= 150 and sent <= 12 and n_rows <= 40 and close(r15.get("t0"), 0.995) and close(r15.get("t1"), 1.495),
+        n_last >= 150 and sent <= 12 and n_rows <= 40 and close(r15.get("t0"), 3.995) and close(r15.get("t1"), 4.495),
         f"200 ranges in a tight loop: the page got {sent} message(s) (want at most 12), the plugin wrote {n_rows} view_applied row(s) in the whole run (want at most 40), "
-        f"the numbers went up to {n_last}, and the page shows the last range {r15.get('t0')} to {r15.get('t1')} (want 0.995 to 1.495)")
+        f"the numbers went up to {n_last}, and the page shows the last range {r15.get('t0')} to {r15.get('t1')} (want 3.995 to 4.495)")
     parts["editor-selection-switch"] = (
         steps[13]["menu_was"] == "true" and st(13)["follow"] is False and st(13)["sel"] == H and st(13)["marked"] == [] and st(13)["band"]["shown"] is False and st(13)["hidden"] == []
         and steps[14]["menu_was"] == "false" and st(14)["follow"] is True and st(14)["sel"] == K and band_ok(st(14)["band"]) and close((st(14)["range"] or {}).get("t0"), 0.5),
@@ -6584,7 +6595,7 @@ def selection_parts(run: dict) -> dict:
     sel_rows = [r for r in rows if r.get("event") == "view_selection"]
     mapped = [r for r in sel_rows if r.get("range_start_s") == 3.3]
     parts["editor-selection-row"] = (
-        bool(mapped) and mapped[0].get("tracks") == [S_] and mapped[0].get("sequence_names") == ["Drum B"] and close(((mapped[0].get("ranges") or [{}])[0]).get("t0"), 0.3) and len(sel_rows) >= 8,
+        bool(mapped) and mapped[0].get("tracks") == [S_] and mapped[0].get("sequence_names") == ["Drum B"] and close(((mapped[0].get("ranges") or [{}])[0]).get("t0"), 3.3) and len(sel_rows) >= 8,
         f"{len(sel_rows)} view_selection row(s); the row of step 3 names the DAW track {mapped[0].get('sequence_names') if mapped else None}, the track {mapped[0].get('tracks') if mapped else None} "
         f"and the ranges {mapped[0].get('ranges') if mapped else None}")
     jobs, rounds = job_rows_of(rows), [r for r in rows if r.get("event") == "round_start"]
@@ -6610,10 +6621,8 @@ def stage_editor_selection_fault() -> bool:
         ("no-track", sel("no-track"), [("editor-selection-track", "the plugin never gives the page the track", f"selected {K!r} (want {S_!r})")]),
         ("no-pull", sel("no-pull"), [("editor-selection-open", "the page that opens later is told nothing of the selection that came before", f"opens with {K!r} selected (want {T_!r})")]),
         ("no-others", sel("no-others"), [("editor-selection-several", "only the first track is given: the others are not marked", "the other is marked ([]")]),
-        ("song-range", sel("song-range"), [("editor-selection-range", "the range stays in song time: no mapping through the regions", "drawn as source 3.3 to 3.9")]),
         ("unknown-clears", sel("unknown-clears"), [("editor-selection-unknown", "a selection of a track with no source is not marked as none, so the page treats it as an empty selection and clears the range", "none=False (want True")]),
         ("keep-range", sel("keep-range"), [("editor-selection-empty", "an empty selection is not passed on: the range stays", "band shown True")]),
-        ("outside-draws", sel("outside-draws"), [("editor-selection-outside", "a range in no region is drawn at the nearest region", "shown True")]),
         ("no-row", sel("no-row"), [("editor-selection-row", "the row of a selection has the counts only", "names the DAW track None")]),
         ("round", sel("round"), [("editor-selection-no-round", "a selection of the DAW starts an analysis round", "round(s) in the whole run")]),
         ("no-throttle", sel("no-throttle"), [("editor-selection-flood", "every change is sent to the page and written as a row at once", "message(s) (want at most 12)")]),
@@ -6621,7 +6630,7 @@ def stage_editor_selection_fault() -> bool:
         ("no-hidden", sel("no-hidden"), [("editor-selection-hidden", "the hidden tracks are ignored", "hidden by the DAW: []")]),
         ("no-guard", page("sel-no-guard"), [("editor-selection-guard", "the page overwrites the selection while a pointer or key action runs", "(pending False)")]),
         ("own-range", page("sel-own-range"), [("editor-selection-range", "the range of the host is the page's own hit selection", "own range selection is True")]),
-        ("no-scroll", page("sel-no-scroll"), [("editor-selection-range-view", "nothing scrolls the view to the range", "out of it: the view is [0, 1.2]"),
+        ("no-scroll", page("sel-no-scroll"), [("editor-selection-range-view", "nothing scrolls the view to the range", "out of it: the view is [3, 4.2]"),
                                               ("editor-selection-track", "nothing scrolls the selected track into view", "lanes area (False)")]),
         ("no-switch", page("sel-no-switch"), [("editor-selection-switch", "the switch of the menu does not stop the follow", "band shown True")]),
         ("no-note", page("sel-no-note"), [("editor-selection-hidden", "the hidden rows have no text", "text ''")]),
@@ -6809,7 +6818,7 @@ def song_parts(run: dict) -> dict:
     rows = run["rows"]
     first = (page_reports(rows, "song") or [None])[0]
     after = (page_reports(rows, "song-after") or [None])[0]
-    names = ("editor-song-rows", "editor-song-live", "editor-song-id", "editor-song-event")
+    names = ("editor-song-rows", "editor-song-live", "editor-song-id", "editor-song-event", "editor-song-draw", "editor-song-cut")
     if first is None or after is None:
         why = f"no usable run (rc={run['rc']}, {len(page_reports(rows, 'song'))} first and {len(page_reports(rows, 'song-after'))} second report)"
         return {n: (False, why) for n in names}
@@ -6839,6 +6848,31 @@ def song_parts(run: dict) -> dict:
         after.get("events", 0) >= 1 and ev.get("rows") == after["rows"]["rows"] and ev.get("gen", 0) >= 1,
         f"the page got {after.get('events')} event(s) plugin-regions after the first answer; the last one carries the rows of the final answer "
         f"({ev.get('rows') == after['rows']['rows']}) and the change counter {ev.get('gen')}")
+    # what the page DRAWS (the pixels of the hit lines in the lanes), written independently of the page's own mapping
+    pa, pb = first.get("page") or {}, after.get("page") or {}
+    ra = pa.get("rows") or {}
+    row_a, row_b = (a[0]["id"] if a else None), (a[1]["id"] if len(a) > 1 else None)
+    h0, h1 = (ra.get(row_a) or {}).get("hits", []), (ra.get(row_b) or {}).get("hits", [])
+    out0 = (ra.get(row_a) or {}).get("outside", [])
+    by_src = lambda hits, k: [h for h in hits if h["src"] == k]
+    miss = [(h["src"][-12:], round(h["song"], 3)) for h in h0 + h1 if not h["drawn"]]
+    stray = [(h["src"][-12:], round(h["song"], 3)) for h in out0 + (ra.get(row_b) or {}).get("outside", []) if h["drawn"]]
+    second = by_src(h0, keys[1])
+    parts["editor-song-draw"] = (
+        bool(h0) and bool(second) and bool(h1) and not miss and not stray and pa.get("shown") == [keys[0], keys[2]] and pa.get("headers") == ["Kick", "Snare"]
+        and pa.get("merged") == [keys[1], keys[3]],
+        f"the page draws {len(h0)} hit(s) in the row of the first DAW track ({len(second)} of them of the SECOND source of that track, in song time) and {len(h1)} in the row of the second; "
+        f"hit lines missing at song {miss}; hit lines at the song time of a hit that lies outside every clip {stray}; rows shown {pa.get('shown')} (want {[keys[0], keys[2]]}), "
+        f"headers {pa.get('headers')} (want ['Kick', 'Snare']), rows hidden as merged {pa.get('merged')} (want {[keys[1], keys[3]]})"
+        + ("" if not second or all(h["drawn"] for h in second) else f": the second source of the DAW track is not drawn at its song position (clip at {a[0]['clips'][1]['s'] if a else None} s)"))
+    rb = pb.get("rows") or {}
+    cut = (rb.get(b[1]["id"]) or {}).get("hits", []) if len(b) > 1 else []
+    cut_out = (rb.get(b[1]["id"]) or {}).get("outside", []) if len(b) > 1 else []
+    parts["editor-song-cut"] = (
+        bool(cut) and all(h["drawn"] for h in cut) and not any(h["drawn"] for h in cut_out) and bool(cut_out),
+        f"after the host trimmed the clip of source 2 to its slice 0.5 s to 1.5 s and put it at song 4.5 s: {len(cut)} hit(s) of the slice drawn at {[round(h['song'], 3) for h in cut]} "
+        f"(all drawn: {all(h['drawn'] for h in cut)}), {len(cut_out)} hit(s) before the start of the slice, not drawn: {[h['drawn'] for h in cut_out]} (want all False)"
+        + ("" if all(h["drawn"] for h in cut) else ": the cut start of the clip is ignored"))
     return parts
 
 
@@ -6853,6 +6887,16 @@ def stage_editor_song_rows_fault() -> bool:
     run_ = song_run("editor-song-fault-round-regions", {"DS_ARA_SONG_FAULT": "round-regions"})
     ok = fault_part("editor-song-fault-round-regions", song_parts(run_), "editor-song-live",
                     "the rows are made from the regions of the last round: a clip moved in the DAW is not seen") and ok
+    for label, part, what, reason in (
+        ("source-x", "editor-song-draw", "the page draws the hit lines at source time, not at song time", "is not drawn at its song position"),
+        ("home-only", "editor-song-draw", "the page draws only the first source of a DAW track", "is not drawn at its song position"),
+        ("no-cut-start", "editor-song-cut", "the mapping ignores where a clip starts in its source", "the cut start of the clip is ignored"),
+    ):
+        parts = song_parts(song_run(f"editor-song-fault-{label}", {"DS_ARA_SONG_FAULT": label}))
+        ok = fault_reason(f"editor-song-fault-{label}", parts, part, what, reason) and ok
+    parts = song_parts({"rc": 2, "rows": []})
+    ok = pass_fail("editor-song-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                   "a run with no page report fails with 'no usable run'") and ok
     return ok
 
 

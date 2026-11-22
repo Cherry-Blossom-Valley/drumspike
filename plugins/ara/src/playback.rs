@@ -15,8 +15,6 @@
 #![allow(clippy::missing_safety_doc)]
 
 use crate::ara::*;
-use crate::service::RegionRec;
-use crate::transport::{song_time, LocateRule};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -290,7 +288,6 @@ pub enum Plan {
         calls: Vec<Call>,
         /// The song position the locate goes to, when the request has one.
         song_s: Option<f64>,
-        rule: Option<LocateRule>,
     },
     /// Send nothing; the page shows this text.
     Refuse(String),
@@ -299,8 +296,6 @@ pub enum Plan {
 /// The fault switch `DS_ARA_PLAYBACK_FAULT` (`switches.json`), read where the plan is made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Fault {
-    /// The locate goes to the host with the page time as song position (no regions).
-    pub identity: bool,
     /// The plugin makes no call to the host and says it did.
     pub skip: bool,
     /// The refusal text does not name the host.
@@ -320,7 +315,6 @@ impl Fault {
     pub fn read() -> Fault {
         let v = crate::test_switch("DS_ARA_PLAYBACK_FAULT").unwrap_or_default();
         Fault {
-            identity: v == "identity",
             skip: v == "skip",
             anonymous: v == "anonymous",
         }
@@ -359,9 +353,8 @@ pub fn unavailable_text(host_name: &str, offer: Offer, kind: Kind, fault: Fault)
 /// A page time above this many seconds (24 h) is refused; nothing in a drum session is longer.
 pub const MAX_PAGE_S: f64 = 86_400.0;
 
-/// Bound the page time of a locate before it is mapped: a time that is not a number, or is
-/// above [`MAX_PAGE_S`], is refused (`None`); a time below 0 or above the length of the source
-/// (`limit_s`, when known) is clamped to it.
+/// Bound the time of a locate (song time since M1b8): a time that is not a number, or is above
+/// [`MAX_PAGE_S`], is refused (`None`); a time below 0 or above `limit_s` (when given) is clamped to it.
 pub fn bound_time(t: f64, limit_s: Option<f64>) -> Option<f64> {
     if !t.is_finite() || t > MAX_PAGE_S {
         return None;
@@ -370,19 +363,8 @@ pub fn bound_time(t: f64, limit_s: Option<f64>) -> Option<f64> {
     Some(t.clamp(0.0, top))
 }
 
-/// The regions of the selected track (the sources whose track is `seqs`). With no selected
-/// track, or a track with no region, all regions: the rule of `song_time` then picks.
-pub fn regions_for(regions: &[(usize, RegionRec)], seqs: &[usize]) -> Vec<(usize, RegionRec)> {
-    let own: Vec<(usize, RegionRec)> = regions.iter().filter(|(i, _)| seqs.contains(i)).copied().collect();
-    if own.is_empty() {
-        regions.to_vec()
-    } else {
-        own
-    }
-}
-
-/// The text when the time of a locate maps to no region.
-pub const NO_REGION_TEXT: &str = "no playback region maps this time yet: the host cannot be moved";
+/// The text when a locate has no time.
+pub const NO_TIME_TEXT: &str = "the page sent no time: the host cannot be moved";
 
 /// Decide what one request of the page does. Pure: no host call, no thread.
 ///
@@ -391,14 +373,13 @@ pub const NO_REGION_TEXT: &str = "no playback region maps this time yet: the hos
 ///   the host is moved first (the page's click in the ruler of a stopped host is a locate, the
 ///   Play that follows starts there).
 /// - `stop`: needs `requestStopPlayback`.
-/// - `locate`: needs `requestSetPlaybackPosition` and a region: [`song_time`] of the regions of the
-///   last round. No region, nothing is sent.
+/// - `locate`: needs `requestSetPlaybackPosition`. The page shows song time, so its time IS the song
+///   position (M1b8, #555): no mapping through a region or a track.
 pub fn plan(
     kind: Kind,
     page_s: Option<f64>,
     offer: Offer,
     host_name: &str,
-    regions: &[(usize, RegionRec)],
     host_at: Option<HostAt>,
     fault: Fault,
 ) -> Plan {
@@ -409,44 +390,34 @@ pub fn plan(
         return Plan::Send {
             calls: Vec::new(),
             song_s: None,
-            rule: None,
         };
     }
-    let map = |t: f64| -> Option<(f64, Option<LocateRule>)> {
-        if fault.identity {
-            return Some((t.max(0.0), None));
-        }
-        song_time(t, host_at.map(|h| h.song_s), regions).map(|(s, r)| (s, Some(r)))
-    };
+    let map = |t: f64| -> Option<f64> { t.is_finite().then(|| t.max(0.0)) };
     match kind {
         Kind::Stop => Plan::Send {
             calls: vec![Call::Stop],
             song_s: None,
-            rule: None,
         },
         Kind::Locate => match page_s.and_then(map) {
-            Some((s, rule)) => Plan::Send {
+            Some(s) => Plan::Send {
                 calls: vec![Call::SetPosition(s)],
                 song_s: Some(s),
-                rule,
             },
-            None => Plan::Refuse(NO_REGION_TEXT.to_string()),
+            None => Plan::Refuse(NO_TIME_TEXT.to_string()),
         },
         Kind::Play => {
             let target = page_s.and_then(map);
             let move_first = offer.position
                 && target
-                    .is_some_and(|(s, _)| host_at.is_some_and(|h| !h.playing && (s - h.song_s).abs() > PLAY_MOVE_S));
+                    .is_some_and(|s| host_at.is_some_and(|h| !h.playing && (s - h.song_s).abs() > PLAY_MOVE_S));
             match (move_first, target) {
-                (true, Some((s, rule))) => Plan::Send {
+                (true, Some(s)) => Plan::Send {
                     calls: vec![Call::SetPosition(s), Call::Start],
                     song_s: Some(s),
-                    rule,
                 },
                 _ => Plan::Send {
                     calls: vec![Call::Start],
                     song_s: None,
-                    rule: None,
                 },
             }
         }
@@ -457,14 +428,6 @@ pub fn plan(
 mod tests {
     use super::*;
 
-    fn reg(a: f64, d: f64, p: f64) -> RegionRec {
-        RegionRec {
-            start_mod: a,
-            dur_mod: d,
-            start_play: p,
-        }
-    }
-
     const FULL: Offer = Offer {
         start: true,
         stop: true,
@@ -472,34 +435,26 @@ mod tests {
     };
 
     #[test]
-    fn a_locate_goes_to_the_host_as_a_song_position_through_the_regions() {
-        let r = [(0, reg(0.4, 2.4, 2.0))];
-        let p = plan(Kind::Locate, Some(1.0), FULL, "Host", &r, None, Fault::default());
+    fn a_locate_goes_to_the_host_as_the_song_position_the_page_shows_song_time() {
+        let p = plan(Kind::Locate, Some(12.5), FULL, "Host", None, Fault::default());
         assert_eq!(
             p,
             Plan::Send {
-                calls: vec![Call::SetPosition(2.6)],
-                song_s: Some(2.6),
-                rule: Some(LocateRule::Time)
+                calls: vec![Call::SetPosition(12.5)],
+                song_s: Some(12.5),
             }
         );
+        // the host position and the page's selection change nothing: the time is the song time
+        let at = Some(HostAt { song_s: 99.0, playing: true });
+        assert_eq!(plan(Kind::Locate, Some(12.5), FULL, "Host", at, Fault::default()), p);
     }
 
     #[test]
-    fn a_locate_with_no_region_sends_nothing_and_says_why() {
-        let p = plan(Kind::Locate, Some(1.0), FULL, "Host", &[], None, Fault::default());
-        assert_eq!(p, Plan::Refuse(NO_REGION_TEXT.to_string()));
-        // a locate with no time at all is the same
+    fn a_locate_with_no_time_sends_nothing_and_says_why() {
+        let p = plan(Kind::Locate, None, FULL, "Host", None, Fault::default());
+        assert_eq!(p, Plan::Refuse(NO_TIME_TEXT.to_string()));
         assert!(matches!(
-            plan(
-                Kind::Locate,
-                None,
-                FULL,
-                "Host",
-                &[(0, reg(0.0, 1.0, 0.0))],
-                None,
-                Fault::default()
-            ),
+            plan(Kind::Locate, Some(f64::NAN), FULL, "Host", None, Fault::default()),
             Plan::Refuse(_)
         ));
     }
@@ -508,15 +463,7 @@ mod tests {
     fn a_host_without_a_call_gets_no_call_and_the_text_names_the_host() {
         let none = Offer::default();
         for k in [Kind::Play, Kind::Stop, Kind::Locate] {
-            let p = plan(
-                k,
-                Some(1.0),
-                none,
-                "LUNA",
-                &[(0, reg(0.0, 2.0, 0.0))],
-                None,
-                Fault::default(),
-            );
+            let p = plan(k, Some(1.0), none, "LUNA", None, Fault::default());
             let Plan::Refuse(t) = p else {
                 panic!("{k:?} must refuse")
             };
@@ -529,19 +476,11 @@ mod tests {
             position: false,
         };
         assert!(matches!(
-            plan(Kind::Locate, Some(1.0), part, "LUNA", &[(0, reg(0.0, 2.0, 0.0))], None, Fault::default()),
+            plan(Kind::Locate, Some(1.0), part, "LUNA", None, Fault::default()),
             Plan::Refuse(t) if t.contains("LUNA") && t.contains("position")
         ));
         assert!(matches!(
-            plan(
-                Kind::Play,
-                Some(1.0),
-                part,
-                "LUNA",
-                &[(0, reg(0.0, 2.0, 0.0))],
-                None,
-                Fault::default()
-            ),
+            plan(Kind::Play, Some(1.0), part, "LUNA", None, Fault::default()),
             Plan::Send { .. }
         ));
         // the host has no name
@@ -550,52 +489,33 @@ mod tests {
 
     #[test]
     fn a_play_moves_a_stopped_host_first_when_the_page_stands_elsewhere() {
-        let r = [(0, reg(0.0, 4.0, 1.0))];
         let at = |s: f64, playing: bool| Some(HostAt { song_s: s, playing });
-        // the page stands at 2.0 (song 3.0), the host at song 1.0: move, then start
-        let p = plan(Kind::Play, Some(2.0), FULL, "H", &r, at(1.0, false), Fault::default());
+        // the page stands at song 3.0, the host at song 1.0: move, then start
+        let p = plan(Kind::Play, Some(3.0), FULL, "H", at(1.0, false), Fault::default());
         assert!(
             matches!(&p, Plan::Send { calls, .. } if calls == &vec![Call::SetPosition(3.0), Call::Start]),
             "{p:?}"
         );
-        // the page stands where the host stands: only start
-        let p = plan(Kind::Play, Some(2.0), FULL, "H", &r, at(3.001, false), Fault::default());
+        // the page stands where the host stands: only start (no jump at play start)
+        let p = plan(Kind::Play, Some(3.0), FULL, "H", at(3.001, false), Fault::default());
         assert!(
             matches!(&p, Plan::Send { calls, .. } if calls == &vec![Call::Start]),
             "{p:?}"
         );
         // a playing host is not moved by a play
-        let p = plan(Kind::Play, Some(2.0), FULL, "H", &r, at(1.0, true), Fault::default());
+        let p = plan(Kind::Play, Some(3.0), FULL, "H", at(1.0, true), Fault::default());
         assert!(
             matches!(&p, Plan::Send { calls, .. } if calls == &vec![Call::Start]),
             "{p:?}"
         );
-        // no region: only start
-        let p = plan(Kind::Play, Some(2.0), FULL, "H", &[], at(1.0, false), Fault::default());
+        // no time of the page: only start
+        let p = plan(Kind::Play, None, FULL, "H", at(1.0, false), Fault::default());
         assert!(
             matches!(&p, Plan::Send { calls, .. } if calls == &vec![Call::Start]),
             "{p:?}"
         );
     }
 
-    /// The fault switch `DS_ARA_PLAYBACK_FAULT=identity` is the plan without the regions: the
-    /// stage `playback-map` runs this test with the switch set, and it fails by 1.6 s.
-    #[test]
-    fn the_locate_of_the_plan_uses_the_regions_not_the_page_time_itself() {
-        let r = [(0, reg(0.4, 2.4, 2.0))];
-        let p = plan(Kind::Locate, Some(1.0), FULL, "H", &r, None, Fault::read());
-        let Plan::Send { calls, .. } = p else {
-            panic!("a locate with a region is sent")
-        };
-        let Call::SetPosition(s) = calls[0] else {
-            panic!("a locate is a position")
-        };
-        assert!(
-            (s - 2.6).abs() < 1e-9,
-            "the locate of page time 1.0 s went to song {s} s (want 2.6 s: off by {:.1} s)",
-            (s - 2.6).abs()
-        );
-    }
     fn job(seq: u64, kind: Kind, calls: Vec<Call>) -> (Job, std::sync::mpsc::Receiver<Outcome>, Arc<AtomicBool>) {
         let (tx, rx) = std::sync::mpsc::channel();
         let late = Arc::new(AtomicBool::new(false));
@@ -698,47 +618,5 @@ mod tests {
         assert_eq!(bound_time(f64::INFINITY, None), None);
         assert_eq!(bound_time(f64::NAN, None), None);
         assert_eq!(bound_time(5000.0, None), Some(5000.0));
-    }
-
-    #[test]
-    fn the_regions_of_the_selected_track_are_used_else_all() {
-        // two stems of one length at different places of the song: source 0 at 0 s, source 1 at 10 s
-        let r = [(0, reg(0.0, 3.0, 0.0)), (1, reg(0.0, 3.0, 10.0))];
-        // no track selected: today's rule, the lowest source index
-        let all = regions_for(&r, &[]);
-        assert_eq!(song_time(1.0, None, &all).unwrap().0, 1.0);
-        // the track of source 1 is selected: its region decides
-        let own = regions_for(&r, &[1]);
-        assert_eq!(song_time(1.0, None, &own).unwrap().0, 11.0);
-        // a track with no source: all regions
-        assert_eq!(regions_for(&r, &[7]).len(), 2);
-    }
-
-    #[test]
-    fn for_the_selected_track_song_time_and_page_time_are_inverse() {
-        use crate::transport::page_time;
-        // two tracks with different offsets in the song: A at song 2 s (audio from 0.4 s), B at song 6 s
-        let r = [(0, reg(0.4, 2.4, 2.0)), (1, reg(0.5, 3.0, 6.0))];
-        for (seq, lo, hi) in [(0usize, 0.5, 2.7), (1usize, 0.6, 3.4)] {
-            let own = regions_for(&r, &[seq]);
-            for k in 0..=10 {
-                let x = lo + (hi - lo) * k as f64 / 10.0; // a page time inside the track's audio
-                let (song, _) = song_time(x, None, &own).unwrap();
-                assert!(
-                    (page_time(song, &own).0 - x).abs() < 1e-9,
-                    "page_time(song_time({x})) for track {seq}"
-                );
-                let t = own[0].1.start_play + (x - own[0].1.start_mod); // a song position inside its region
-                let (pt, _) = page_time(t, &own);
-                assert!(
-                    (song_time(pt, None, &own).unwrap().0 - t).abs() < 1e-9,
-                    "song_time(page_time({t})) for track {seq}"
-                );
-            }
-        }
-        // the two tracks differ: the same page time is another song position
-        let a = song_time(1.0, None, &regions_for(&r, &[0])).unwrap().0;
-        let b = song_time(1.0, None, &regions_for(&r, &[1])).unwrap().0;
-        assert!((b - a - 3.9).abs() < 1e-9, "offsets differ: {a} {b}");
     }
 }

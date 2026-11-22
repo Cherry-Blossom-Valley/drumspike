@@ -14,9 +14,9 @@
 //!   gets a message: at the first one, at each change of the play state, at each jump of the
 //!   position, and every 40 ms while the host plays. It sends nothing while the host is stopped
 //!   and unchanged.
-//! - **Mapping.** [`page_time`] maps the song position of the host to the time the page shows
-//!   (source time), with the playback regions of the last round: the same regions the notes use.
-use crate::service::RegionRec;
+//! - **Song time (M1b8, #555).** The page shows the song time of the DAW, so the position goes to the page as it is: no mapping
+//!   through a region, no dependence on the track the page has selected. The clips of a DAW track are in
+//!   `docs/design/daw-plugin/m1b8-song-time.md` and `rows.rs`.
 use std::sync::atomic::{fence, AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -43,8 +43,6 @@ const STOP_MOVE_S: f64 = 0.0005;
 pub const IDLE_MS: u64 = 20;
 /// The wait of the poll while the host plays.
 pub const PLAY_MS: u64 = 8;
-/// The region list is fetched again after this time at the most.
-const REGION_TTL_US: u64 = 200_000;
 /// Set in the flags of the slot when the instance that owned it was deactivated (our own bit,
 /// CLAP uses the low bits).
 const FLAG_CLEARED: u32 = 1 << 31;
@@ -304,120 +302,6 @@ pub fn reset_for_test() {
     SLOT.owner.store(0, Ordering::SeqCst);
 }
 
-// ---------------------------------------------------------------- the mapping
-
-/// How [`page_time`] found its answer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mapped {
-    /// The position is inside a playback region.
-    Inside,
-    /// The position is outside every region: the nearest earlier region (or the first one, before all)
-    /// gives the offset and the time runs on.
-    Outside,
-    /// The document has no region: the song position is the page time.
-    NoRegions,
-}
-
-/// The page time (source time, seconds) of a song position. `regions` are `(source index,
-/// region)` pairs of the last round.
-///
-/// - Inside a region: `start_in_source + (song - start_in_song)`. When several regions cover the
-///   position (several sources at the same place, the usual drum session), the lowest source index
-///   wins, then the earliest start; the other sources of such a session have the same offset.
-/// - Outside every region: the region that ended last before the position gives the offset (the
-///   first region, when the position is before all). The playhead runs on in the source time of
-///   that region: the page cannot hold a playhead that plays, so it must not be asked to.
-/// - No region: the song position.
-/// - Never below 0 (the page time starts at 0).
-///
-/// The length of a region in song time is its length in source time: a region with a time
-/// stretch is not handled (the plugin analyses the source, not the stretched audio).
-pub fn page_time(song_s: f64, regions: &[(usize, RegionRec)]) -> (f64, Mapped) {
-    let usable: Vec<&(usize, RegionRec)> = regions.iter().filter(|(_, r)| r.dur_mod > 0.0).collect();
-    if usable.is_empty() {
-        return (song_s.max(0.0), Mapped::NoRegions);
-    }
-    let end = |r: &RegionRec| r.start_play + r.dur_mod;
-    let inside = usable
-        .iter()
-        .filter(|(_, r)| r.start_play <= song_s && song_s < end(r))
-        .min_by(|a, b| a.0.cmp(&b.0).then(a.1.start_play.total_cmp(&b.1.start_play)));
-    let (pick, kind) = match inside {
-        Some(p) => (*p, Mapped::Inside),
-        None => {
-            let before = usable
-                .iter()
-                .filter(|(_, r)| end(r) <= song_s)
-                .max_by(|a, b| end(&a.1).total_cmp(&end(&b.1)).then(b.0.cmp(&a.0)));
-            let p = match before {
-                Some(p) => *p,
-                None => *usable
-                    .iter()
-                    .min_by(|a, b| a.1.start_play.total_cmp(&b.1.start_play).then(a.0.cmp(&b.0)))
-                    .unwrap_or(&usable[0]),
-            };
-            (p, Mapped::Outside)
-        }
-    };
-    ((pick.1.start_mod + (song_s - pick.1.start_play)).max(0.0), kind)
-}
-
-/// How [`song_time`] chose its region.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LocateRule {
-    /// The region holds the page time in its source, and the host position in the song.
-    TimeAndHost,
-    /// The region holds the page time in its source (the first of them).
-    Time,
-    /// No region holds the page time: the region that holds the host position gives the offset.
-    Host,
-    /// No region holds the page time or the host position: the first region gives the offset.
-    First,
-}
-
-/// The song position (seconds) of a page time: the inverse of [`page_time`] (M1b7, #554).
-///
-/// `song = start_in_song + (page_time - start_in_source)` for one region. The rule that picks the
-/// region, one rule for a source with several regions (and for several sources):
-///
-/// 1. A region that holds the page time in its source time, and also holds the host position
-///    `host_song_s` in the song (the page asks for a time of the part the host plays now).
-/// 2. Else the first region that holds the page time in its source time.
-/// 3. Else (the time is in no region: before the start or after the end of the audio of the
-///    regions) a region that holds the host position gives the offset, as the follow does outside
-///    a region.
-/// 4. Else the first region.
-///
-/// "First" is the lowest source index, then the earliest start in the song (`total_cmp`).
-/// The result is never below 0 (the song starts at 0). With no usable region (no round yet, a
-/// source without a playback region) there is no answer: `None`, so nothing goes to the host.
-pub fn song_time(page_s: f64, host_song_s: Option<f64>, regions: &[(usize, RegionRec)]) -> Option<(f64, LocateRule)> {
-    let usable: Vec<&(usize, RegionRec)> = regions.iter().filter(|(_, r)| r.dur_mod > 0.0).collect();
-    if usable.is_empty() || !page_s.is_finite() {
-        return None;
-    }
-    let holds_time = |r: &RegionRec| r.start_mod <= page_s && page_s < r.start_mod + r.dur_mod;
-    let holds_host = |r: &RegionRec| host_song_s.is_some_and(|h| r.start_play <= h && h < r.start_play + r.dur_mod);
-    // (holds the time, holds the host position): the best pair wins, the first of equals
-    let best = usable
-        .iter()
-        .min_by(|a, b| {
-            let rank = |r: &RegionRec| (!holds_time(r), !holds_host(r));
-            rank(&a.1)
-                .cmp(&rank(&b.1))
-                .then(a.0.cmp(&b.0))
-                .then(a.1.start_play.total_cmp(&b.1.start_play))
-        })
-        .copied()?;
-    let rule = match (holds_time(&best.1), holds_host(&best.1)) {
-        (true, true) => LocateRule::TimeAndHost,
-        (true, false) => LocateRule::Time,
-        (false, true) => LocateRule::Host,
-        (false, false) => LocateRule::First,
-    };
-    Some(((best.1.start_play + (page_s - best.1.start_mod)).max(0.0), rule))
-}
-
 // ---------------------------------------------------------------- the pacing
 
 /// Why a message goes to the page.
@@ -427,7 +311,7 @@ pub enum Why {
     First,
     /// The play state changed.
     State,
-    /// The position jumped (a locate, a loop, a move of the mapping).
+    /// The position jumped (a locate, a loop).
     Jump,
     /// The regular message while the host plays.
     Tick,
@@ -440,18 +324,17 @@ pub struct Msg {
     pub epoch: u64,
     /// The time of the position, in nanoseconds of the plugin's own monotonic clock.
     pub t_ns: u64,
-    /// The page time.
+    /// The page time: the song position of the host (the page shows song time).
     pub pos: f64,
     pub playing: bool,
     pub why: Why,
     /// The song position of the host at `t_ns`.
     pub song_s: f64,
-    pub mapped: Mapped,
 }
 
 #[derive(Clone, Copy)]
 struct Last {
-    mapped_s: f64,
+    page_s: f64,
     at_us: u64,
     playing: bool,
 }
@@ -483,8 +366,8 @@ impl Pacer {
         s.playing && now_us.saturating_sub(s.seen_us) > stale_us(s.frames, s.rate)
     }
 
-    /// One look at the transport. `map` gives the page time of a song position.
-    pub fn step(&mut self, snap: Option<Snap>, now_us: u64, map: &dyn Fn(f64) -> (f64, Mapped)) -> Option<Msg> {
+    /// One look at the transport.
+    pub fn step(&mut self, snap: Option<Snap>, now_us: u64) -> Option<Msg> {
         let s = snap?;
         if !s.has_position {
             // the host plays or stops with no position: the old position must not be believed
@@ -498,15 +381,15 @@ impl Pacer {
         }
         let playing = s.playing && !stale;
         let song = if playing { s.pos_s + age as f64 / 1e6 } else { s.pos_s };
-        let (mapped_s, kind) = map(song);
+        let page_s = song.max(0.0);
         let jump_limit = jump_s(s.frames, s.rate);
         let why = match self.last {
             None => Some(Why::First),
             Some(l) if l.playing != playing => Some(Why::State),
             Some(l) if playing => {
                 let since = now_us.saturating_sub(l.at_us);
-                let expected = l.mapped_s + since as f64 / 1e6;
-                if (mapped_s - expected).abs() > jump_limit {
+                let expected = l.page_s + since as f64 / 1e6;
+                if (page_s - expected).abs() > jump_limit {
                     // at most one jump message per tick: the newest position goes at the next look
                     (since >= self.tick_us).then_some(Why::Jump)
                 } else if since >= self.tick_us {
@@ -515,24 +398,23 @@ impl Pacer {
                     None
                 }
             }
-            Some(l) => ((mapped_s - l.mapped_s).abs() > STOP_MOVE_S).then_some(Why::Jump),
+            Some(l) => ((page_s - l.page_s).abs() > STOP_MOVE_S).then_some(Why::Jump),
         }?;
         if why != Why::Tick {
             self.epoch += 1;
         }
         self.last = Some(Last {
-            mapped_s,
+            page_s,
             at_us: now_us,
             playing,
         });
         Some(Msg {
             epoch: self.epoch,
             t_ns: now_us * 1000,
-            pos: mapped_s,
+            pos: page_s,
             playing,
             why,
             song_s: song,
-            mapped: kind,
         })
     }
 
@@ -543,18 +425,17 @@ impl Pacer {
         let l = self.last.filter(|l| l.playing)?;
         self.epoch += 1;
         self.last = Some(Last {
-            mapped_s: l.mapped_s,
+            page_s: l.page_s,
             at_us: now_us,
             playing: false,
         });
         Some(Msg {
             epoch: self.epoch,
             t_ns: now_us * 1000,
-            pos: l.mapped_s,
+            pos: l.page_s,
             playing: false,
             why: Why::State,
             song_s: f64::NAN,
-            mapped: Mapped::Inside,
         })
     }
 
@@ -563,20 +444,13 @@ impl Pacer {
     }
 }
 
-/// The poll of one editor: the pacer, the region list, and the rule of when to look and how long
-/// to wait. While the host is stopped and nothing changed it does no work and waits [`IDLE_MS`];
-/// the region list is fetched only when a look needs it, at most every 200 ms.
+/// The poll of one editor: the pacer and the rule of when to look and how long to wait. While the host is stopped and
+/// nothing changed it does no work and waits [`IDLE_MS`].
 pub struct Poller {
     pub pacer: Pacer,
     last_key: Option<(u64, bool, bool)>,
-    regions: Vec<(usize, RegionRec)>,
-    fetched_at: Option<u64>,
-    /// How often the region list was fetched (the unit test counts it).
-    pub fetches: usize,
     stale_reported: bool,
     no_position_reported: bool,
-    /// The change counter of the regions at the last fetch.
-    regions_gen: u64,
     /// The fault run `keep-playing`: no stop message when the slot is cleared (the round 2 way).
     pub no_stop_fault: bool,
 }
@@ -586,12 +460,8 @@ impl Poller {
         Poller {
             pacer: Pacer::new(tick_us),
             last_key: None,
-            regions: Vec::new(),
-            fetched_at: None,
-            fetches: 0,
             stale_reported: false,
             no_position_reported: false,
-            regions_gen: 0,
             no_stop_fault: false,
         }
     }
@@ -602,11 +472,6 @@ impl Poller {
         } else {
             self.pacer.stop_at_last(now_us)
         }
-    }
-
-    /// The number of regions of the last fetch.
-    pub fn region_count(&self) -> usize {
-        self.regions.len()
     }
 
     /// True once, when a playing host went silent.
@@ -624,45 +489,21 @@ impl Poller {
     }
 
     /// One look: the message to send, if any, and how long to wait before the next look.
-    pub fn look(
-        &mut self,
-        snap: Option<Snap>,
-        now_us: u64,
-        regions_gen: u64,
-        fetch: &mut dyn FnMut() -> Vec<(usize, RegionRec)>,
-    ) -> (Option<Msg>, u64) {
+    pub fn look(&mut self, snap: Option<Snap>, now_us: u64) -> (Option<Msg>, u64) {
         let Some(s) = snap else {
             return (self.stop_msg(now_us), IDLE_MS);
         };
         let key = (s.pos_s.to_bits(), s.playing, s.has_position);
-        let old = self
-            .fetched_at
-            .is_some_and(|at| now_us.saturating_sub(at) > REGION_TTL_US);
-        // stopped and unchanged: nothing to do, unless the regions changed (looked at every 200 ms at
-        // the most, and only when the change counter moved)
-        if !s.playing
-            && self.pacer.has_sent()
-            && self.last_key == Some(key)
-            && !(old && regions_gen != self.regions_gen)
-        {
+        // stopped and unchanged: nothing to do
+        if !s.playing && self.pacer.has_sent() && self.last_key == Some(key) {
             return (None, IDLE_MS);
         }
         self.last_key = Some(key);
         if !s.has_position {
-            self.pacer.step(Some(s), now_us, &|x| (x, Mapped::NoRegions));
+            self.pacer.step(Some(s), now_us);
             return (self.stop_msg(now_us), IDLE_MS);
         }
-        if self
-            .fetched_at
-            .is_none_or(|at| now_us.saturating_sub(at) > REGION_TTL_US)
-        {
-            self.regions = fetch();
-            self.regions_gen = regions_gen;
-            self.fetched_at = Some(now_us);
-            self.fetches += 1;
-        }
-        let regions = &self.regions;
-        let msg = self.pacer.step(Some(s), now_us, &|song| page_time(song, regions));
+        let msg = self.pacer.step(Some(s), now_us);
         let wait = if s.playing && !Pacer::is_stale(&s, now_us) {
             PLAY_MS
         } else {
@@ -676,102 +517,6 @@ impl Poller {
 mod tests {
     use super::*;
     use std::cell::Cell;
-
-    fn reg(a: f64, d: f64, p: f64) -> RegionRec {
-        RegionRec {
-            start_mod: a,
-            dur_mod: d,
-            start_play: p,
-        }
-    }
-
-    #[test]
-    fn a_position_inside_a_region_maps_with_its_offsets() {
-        let r = [(0, reg(0.4, 2.4, 2.0))];
-        assert_eq!(page_time(3.0, &r), (1.4, Mapped::Inside));
-        assert_eq!(page_time(2.0, &r).0, 0.4);
-    }
-
-    #[test]
-    fn a_position_outside_every_region_runs_on_with_the_nearest_earlier_region() {
-        let r = [(0, reg(0.4, 2.4, 2.0))];
-        // after the end (4.4): the same offset, the time runs on
-        let (t, k) = page_time(4.5, &r);
-        assert!((t - 2.9).abs() < 1e-12 && k == Mapped::Outside);
-        // before the first region: the first region's offset, never below 0
-        assert_eq!(page_time(1.0, &r), (0.0, Mapped::Outside));
-        let r2 = [(0, reg(1.0, 2.0, 2.0))];
-        assert!((page_time(1.5, &r2).0 - 0.5).abs() < 1e-12);
-        // two regions with a gap: the position in the gap follows the earlier region
-        let two = [(0, reg(0.0, 1.0, 0.0)), (0, reg(5.0, 1.0, 3.0))];
-        let (t, k) = page_time(2.0, &two);
-        assert!((t - 2.0).abs() < 1e-12 && k == Mapped::Outside);
-        assert_eq!(page_time(3.5, &two), (5.5, Mapped::Inside));
-    }
-
-    #[test]
-    fn a_page_time_inside_a_region_maps_back_to_the_song() {
-        let r = [(0, reg(0.4, 2.4, 2.0))];
-        let (song, rule) = song_time(1.0, None, &r).unwrap();
-        assert_eq!(song, 2.6);
-        assert_eq!(rule, LocateRule::Time);
-        // the inverse of the follow: page_time(song_time(t)) is t
-        assert_eq!(page_time(song, &r).0, 1.0);
-        let (s2, rule2) = song_time(1.0, Some(3.0), &r).unwrap();
-        assert_eq!((s2, rule2), (2.6, LocateRule::TimeAndHost));
-    }
-
-    #[test]
-    fn a_source_with_two_regions_takes_the_region_of_the_host_position_else_the_first() {
-        // one source, two regions of the same audio: song 0..2 and song 10..12
-        let r = [(0, reg(0.0, 2.0, 0.0)), (0, reg(0.0, 2.0, 10.0))];
-        // the host is in the second one: the second one
-        assert_eq!(song_time(1.0, Some(11.0), &r), Some((11.0, LocateRule::TimeAndHost)));
-        // the host is in the first one, or has no position, or is in a gap: the first one
-        assert_eq!(song_time(1.0, Some(0.5), &r), Some((1.0, LocateRule::TimeAndHost)));
-        assert_eq!(song_time(1.0, None, &r), Some((1.0, LocateRule::Time)));
-        assert_eq!(song_time(1.0, Some(5.0), &r), Some((1.0, LocateRule::Time)));
-        // a region that does not hold the time loses to one that does, whatever the host holds
-        let r2 = [(0, reg(0.0, 2.0, 0.0)), (0, reg(5.0, 2.0, 10.0))];
-        assert_eq!(song_time(1.0, Some(11.0), &r2), Some((1.0, LocateRule::Time)));
-        // two sources at different places: the lowest source index is the first
-        let r3 = [(1, reg(0.0, 2.0, 7.0)), (0, reg(0.0, 2.0, 3.0))];
-        assert_eq!(song_time(1.0, None, &r3), Some((4.0, LocateRule::Time)));
-    }
-
-    #[test]
-    fn no_region_gives_no_song_position() {
-        assert_eq!(song_time(1.0, Some(2.0), &[]), None);
-        // a region without length is no region
-        assert_eq!(song_time(1.0, None, &[(0, reg(0.0, 0.0, 0.0))]), None);
-        assert_eq!(song_time(f64::NAN, None, &[(0, reg(0.0, 1.0, 0.0))]), None);
-    }
-
-    #[test]
-    fn a_page_time_before_the_start_of_the_region_runs_on_with_its_offset_and_never_below_zero() {
-        let r = [(0, reg(0.4, 2.4, 2.0))];
-        // 0.1 s is before the audio of the region (0.4 s): the offset still holds, song 1.7 s
-        let (song, rule) = song_time(0.1, None, &r).unwrap();
-        assert!((song - 1.7).abs() < 1e-12);
-        assert_eq!(rule, LocateRule::First);
-        // the host position decides the rule name, not the number
-        assert_eq!(song_time(0.1, Some(3.0), &r).unwrap().1, LocateRule::Host);
-        // after the end of the audio: the same
-        assert!((song_time(3.5, None, &r).unwrap().0 - 5.1).abs() < 1e-12);
-        // a time that would give a negative song position stops at 0
-        let r0 = [(0, reg(1.0, 2.0, 0.0))];
-        assert_eq!(song_time(0.2, None, &r0).unwrap().0, 0.0);
-    }
-
-    #[test]
-    fn the_lowest_source_wins_where_regions_overlap_and_no_region_is_identity() {
-        let r = [(1, reg(10.0, 5.0, 0.0)), (0, reg(0.0, 5.0, 0.0))];
-        assert_eq!(page_time(1.0, &r), (1.0, Mapped::Inside));
-        assert_eq!(page_time(1.25, &[]), (1.25, Mapped::NoRegions));
-        assert_eq!(page_time(-1.0, &[]).0, 0.0);
-        // a region of length 0 is not used
-        assert_eq!(page_time(1.0, &[(0, reg(0.0, 0.0, 0.0))]).1, Mapped::NoRegions);
-    }
 
     fn snap(pos_s: f64, playing: bool, seen_us: u64) -> Snap {
         Snap {
@@ -787,27 +532,23 @@ mod tests {
         }
     }
 
-    fn ident(s: f64) -> (f64, Mapped) {
-        (s, Mapped::Inside)
-    }
-
     #[test]
     fn the_pacer_sends_nothing_without_a_transport_and_nothing_while_stopped_and_unchanged() {
         let mut p = Pacer::new(TICK_US);
-        assert!(p.step(None, 1_000, &ident).is_none());
-        let first = p.step(Some(snap(2.0, false, 0)), 1_000, &ident).unwrap();
+        assert!(p.step(None, 1_000).is_none());
+        let first = p.step(Some(snap(2.0, false, 0)), 1_000).unwrap();
         assert_eq!((first.why, first.epoch, first.playing), (Why::First, 1, false));
         for t in 2..200u64 {
-            assert!(p.step(Some(snap(2.0, false, 0)), t * 10_000, &ident).is_none());
+            assert!(p.step(Some(snap(2.0, false, 0)), t * 10_000).is_none());
         }
     }
 
     #[test]
     fn the_pacer_sends_state_changes_jumps_and_a_tick_every_40_ms_while_playing() {
         let mut p = Pacer::new(TICK_US);
-        p.step(Some(snap(2.0, false, 0)), 0, &ident).unwrap();
+        p.step(Some(snap(2.0, false, 0)), 0).unwrap();
         // play: one state message
-        let m = p.step(Some(snap(2.0, true, 100_000)), 100_000, &ident).unwrap();
+        let m = p.step(Some(snap(2.0, true, 100_000)), 100_000).unwrap();
         assert_eq!((m.why, m.epoch, m.playing), (Why::State, 2, true));
         // one second of play: a message every 40 ms, the epoch stays (the page slews)
         let mut n = 0;
@@ -817,7 +558,7 @@ mod tests {
             // the host calls process every 10.67 ms: the block start moves with its call time
             let seen = (t / 10_667) * 10_667;
             let pos = 2.0 + (seen - 100_000) as f64 / 1e6;
-            if let Some(m) = p.step(Some(snap(pos, true, seen)), t, &ident) {
+            if let Some(m) = p.step(Some(snap(pos, true, seen)), t) {
                 assert_eq!((m.why, m.epoch), (Why::Tick, 2), "at {t}");
                 n += 1;
             }
@@ -825,41 +566,40 @@ mod tests {
         assert!((22..=26).contains(&n), "{n} messages in one second of play");
         // a locate while playing: a jump with a new epoch
         // (a jump goes out at most once per tick: not within 40 ms of the last message)
-        assert!(p.step(Some(snap(7.0, true, t)), t + 1_000, &ident).is_none());
+        assert!(p.step(Some(snap(7.0, true, t)), t + 1_000).is_none());
         let t = t + 44_000;
-        let m = p.step(Some(snap(7.0, true, t)), t + 1_000, &ident).unwrap();
+        let m = p.step(Some(snap(7.0, true, t)), t + 1_000).unwrap();
         assert_eq!((m.why, m.epoch), (Why::Jump, 3));
         assert!((m.pos - 7.001).abs() < 1e-9);
         // a stop and a locate while stopped
-        let m = p.step(Some(snap(7.2, false, t + 20_000)), t + 21_000, &ident).unwrap();
+        let m = p.step(Some(snap(7.2, false, t + 20_000)), t + 21_000).unwrap();
         assert_eq!((m.why, m.playing), (Why::State, false));
-        let m = p.step(Some(snap(1.0, false, t + 40_000)), t + 41_000, &ident).unwrap();
+        let m = p.step(Some(snap(1.0, false, t + 40_000)), t + 41_000).unwrap();
         assert_eq!((m.why, m.epoch, m.pos), (Why::Jump, 5, 1.0));
     }
 
     #[test]
     fn a_host_that_went_silent_while_playing_counts_as_stopped_at_its_last_position() {
         let mut p = Pacer::new(TICK_US);
-        p.step(Some(snap(3.0, true, 0)), 1_000, &ident).unwrap();
-        let m = p.step(Some(snap(3.0, true, 0)), STALE_US + 10_000, &ident).unwrap();
+        p.step(Some(snap(3.0, true, 0)), 1_000).unwrap();
+        let m = p.step(Some(snap(3.0, true, 0)), STALE_US + 10_000).unwrap();
         assert_eq!((m.why, m.playing, m.pos), (Why::State, false, 3.0));
         assert!(p.stale_seen);
         // and sends nothing more
-        assert!(p.step(Some(snap(3.0, true, 0)), STALE_US + 500_000, &ident).is_none());
+        assert!(p.step(Some(snap(3.0, true, 0)), STALE_US + 500_000).is_none());
     }
 
     #[test]
-    fn a_loop_of_the_host_is_a_jump_each_time_and_a_mapping_step_is_a_jump_too() {
+    fn a_loop_of_the_host_is_a_jump_each_time_and_the_page_time_is_the_song_position() {
         let mut p = Pacer::new(TICK_US);
-        let r = [(0, reg(0.0, 1.0, 0.0)), (0, reg(5.0, 1.0, 1.0))];
-        let map = |s: f64| page_time(s, &r);
-        p.step(Some(snap(0.9, true, 0)), 0, &map).unwrap();
-        // the song passes 1.0: the second region starts, the page time steps from 1.0 to 5.0
-        let m = p.step(Some(snap(1.05, true, 150_000)), 150_000, &map).unwrap();
-        assert_eq!(m.why, Why::Jump);
+        let m = p.step(Some(snap(0.9, true, 0)), 0).unwrap();
+        assert_eq!(m.pos, 0.9, "no region maps the position: the page shows song time");
         // the host loops back to 0.2
-        let m = p.step(Some(snap(0.2, true, 300_000)), 300_000, &map).unwrap();
-        assert_eq!(m.why, Why::Jump);
+        let m = p.step(Some(snap(0.2, true, 300_000)), 300_000).unwrap();
+        assert_eq!((m.why, m.pos), (Why::Jump, 0.2));
+        // a position far inside a later part of the song is shown as it is, with no jump of its own
+        let m = p.step(Some(snap(512.2, true, 340_000)), 340_000).unwrap();
+        assert_eq!((m.why, m.pos), (Why::Jump, 512.2));
     }
 
     #[test]
@@ -970,19 +710,6 @@ mod tests {
         assert_eq!(std::mem::size_of::<Slot>(), 8 * 5 + 4 * 2);
     }
 
-    fn region(a: f64, d: f64, p: f64) -> (usize, RegionRec) {
-        (0, reg(a, d, p))
-    }
-
-    #[test]
-    fn the_tie_break_of_overlapping_regions_is_right_for_a_negative_start() {
-        // both regions cover song -0.5; the earlier start (-3.0) must win (to_bits order would pick -1.0)
-        let r = [region(0.0, 2.0, -1.0), region(5.0, 4.0, -3.0)];
-        let (t, k) = page_time(-0.5, &r);
-        assert_eq!(k, Mapped::Inside);
-        assert!((t - 7.5).abs() < 1e-12, "{t}");
-    }
-
     fn calls(id: u64, pos: f64, playing: bool, frames: u32) {
         let mut t: clap_sys::events::clap_event_transport = unsafe { std::mem::zeroed() };
         t.flags = FLAG_SECONDS | if playing { FLAG_PLAYING } else { 0 };
@@ -1047,7 +774,7 @@ mod tests {
         assert!(s.playing && !s.has_position);
         let mut pacer = Pacer::new(TICK_US);
         assert!(
-            pacer.step(Some(s), 0, &ident).is_none(),
+            pacer.step(Some(s), 0).is_none(),
             "the old position 5.0 is not believed"
         );
         assert!(pacer.no_position_seen);
@@ -1064,12 +791,12 @@ mod tests {
             rate: 44100.0,
             ..snap(pos, true, seen)
         };
-        p.step(Some(big(1.0, 0)), 0, &ident).unwrap();
+        p.step(Some(big(1.0, 0)), 0).unwrap();
         // 700 ms after the last call of a host with 372 ms blocks: still playing, no flip
-        let m = p.step(Some(big(1.0, 0)), 700_000, &ident);
+        let m = p.step(Some(big(1.0, 0)), 700_000);
         assert!(m.is_none_or(|m| m.playing), "no flip to stopped");
         assert!(!p.stale_seen);
-        assert!(p.step(Some(big(1.0, 0)), 1_300_000, &ident).is_some_and(|m| !m.playing));
+        assert!(p.step(Some(big(1.0, 0)), 1_300_000).is_some_and(|m| !m.playing));
     }
 
     #[test]
@@ -1082,14 +809,14 @@ mod tests {
         };
         assert!(jump_s(1024, 44100.0) > 0.034);
         let mut p = Pacer::new(TICK_US);
-        p.step(Some(snapb(0.0, 0)), 0, &ident).unwrap();
+        p.step(Some(snapb(0.0, 0)), 0).unwrap();
         let mut jumps = 0;
         let mut t = 0u64;
         while t < 2_000_000 {
             t += 8_000;
             // the call comes 23 ms early: the block start is one block ahead of the wall clock
             let pos = t as f64 / 1e6 + 0.0232;
-            if let Some(m) = p.step(Some(snapb(pos, t)), t, &ident) {
+            if let Some(m) = p.step(Some(snapb(pos, t)), t) {
                 if m.why == Why::Jump {
                     jumps += 1;
                 }
@@ -1098,13 +825,13 @@ mod tests {
         assert_eq!(jumps, 0, "a block ahead of the clock is no jump");
         // an offline bounce: the host runs at 10 times real time
         let mut p = Pacer::new(TICK_US);
-        p.step(Some(snapb(0.0, 0)), 0, &ident).unwrap();
+        p.step(Some(snapb(0.0, 0)), 0).unwrap();
         let (mut jumps, mut last_jump) = (0, 0u64);
         let mut t = 0u64;
         while t < 2_000_000 {
             t += 8_000;
             let pos = t as f64 / 1e5;
-            if let Some(m) = p.step(Some(snapb(pos, t)), t, &ident) {
+            if let Some(m) = p.step(Some(snapb(pos, t)), t) {
                 if m.why == Why::Jump {
                     jumps += 1;
                     assert!(t - last_jump >= TICK_US, "two jumps {} us apart", t - last_jump);
@@ -1157,79 +884,41 @@ mod tests {
     }
 
     #[test]
-    fn a_stopped_host_costs_no_region_fetch_and_a_playing_one_at_most_five_a_second() {
-        let mut poller = Poller::new(TICK_US);
-        let mut fetch = || vec![(0usize, reg(0.0, 3.0, 0.0))];
-        // 2 s of a stopped host that calls process every 10 ms with the same position
-        let mut t = 0u64;
-        let mut msgs = 0;
-        let mut looks = 0;
-        while t < 2_000_000 {
-            let (m, wait) = poller.look(Some(snap(2.0, false, t)), t, 0, &mut fetch);
-            msgs += usize::from(m.is_some());
-            looks += 1;
-            t += wait * 1000;
-        }
-        assert_eq!(msgs, 1, "the first message only");
-        assert!(
-            poller.fetches <= 2,
-            "{} region fetches in 2 s of a stopped host (bound 2)",
-            poller.fetches
-        );
-        assert!(looks <= 105, "{looks} looks in 2 s: the wait is 20 ms");
-        // the host plays for 2 s
-        let mut poller = Poller::new(TICK_US);
-        let mut t = 0u64;
-        while t < 2_000_000 {
-            let seen = t - t % 10_000;
-            let (_, wait) = poller.look(Some(snap(seen as f64 / 1e6, true, seen)), t, 0, &mut fetch);
-            t += wait * 1000;
-        }
-        assert!(
-            poller.fetches <= 11,
-            "{} region fetches in 2 s of play (bound 11)",
-            poller.fetches
-        );
-    }
-
-    #[test]
     fn a_cleared_slot_while_the_page_plays_sends_stopped_at_the_last_position_once() {
         let mut poller = Poller::new(TICK_US);
-        let mut fetch = || Vec::new();
-        let m = poller.look(Some(snap(2.0, true, 0)), 0, 0, &mut fetch).0.unwrap();
+        let m = poller.look(Some(snap(2.0, true, 0)), 0).0.unwrap();
         assert!(m.playing);
         let m = poller
-            .look(Some(snap(2.04, true, 40_000)), 40_000, 0, &mut fetch)
+            .look(Some(snap(2.04, true, 40_000)), 40_000)
             .0
             .unwrap();
         assert_eq!(m.why, Why::Tick);
         // the host stopped, made no stopped process call, and deactivated: the slot is gone
-        let m = poller.look(None, 80_000, 0, &mut fetch).0.expect("a stop message");
+        let m = poller.look(None, 80_000).0.expect("a stop message");
         assert_eq!((m.playing, m.why), (false, Why::State));
         assert!((m.pos - 2.04).abs() < 1e-9, "the last position the page got");
-        assert!(poller.look(None, 100_000, 0, &mut fetch).0.is_none(), "once");
+        assert!(poller.look(None, 100_000).0.is_none(), "once");
         // the fault run: the round 2 way sends nothing
         let mut p2 = Poller::new(TICK_US);
         p2.no_stop_fault = true;
-        p2.look(Some(snap(2.0, true, 0)), 0, 0, &mut fetch);
-        assert!(p2.look(None, 80_000, 0, &mut fetch).0.is_none());
+        p2.look(Some(snap(2.0, true, 0)), 0);
+        assert!(p2.look(None, 80_000).0.is_none());
         // a host that was stopped sends nothing when the slot is cleared
         let mut p3 = Poller::new(TICK_US);
-        p3.look(Some(snap(2.0, false, 0)), 0, 0, &mut fetch);
-        assert!(p3.look(None, 80_000, 0, &mut fetch).0.is_none());
+        p3.look(Some(snap(2.0, false, 0)), 0);
+        assert!(p3.look(None, 80_000).0.is_none());
     }
 
     #[test]
     fn a_host_that_plays_with_no_position_stops_the_page_once() {
         let mut poller = Poller::new(TICK_US);
-        let mut fetch = || Vec::new();
-        poller.look(Some(snap(2.0, true, 0)), 0, 0, &mut fetch).0.unwrap();
+        poller.look(Some(snap(2.0, true, 0)), 0).0.unwrap();
         let nopos = Snap {
             has_position: false,
             ..snap(0.0, true, 50_000)
         };
         let m = poller
-            .look(Some(nopos), 50_000, 0, &mut fetch)
+            .look(Some(nopos), 50_000)
             .0
             .expect("a stop message");
         assert!(!m.playing && (m.pos - 2.0).abs() < 1e-9);
@@ -1241,41 +930,10 @@ mod tests {
                     ..nopos
                 }),
                 60_000,
-                0,
-                &mut fetch
             )
             .0
             .is_none());
         assert!(!poller.take_no_position_row(), "the row is written once");
     }
 
-    #[test]
-    fn a_change_of_the_regions_while_stopped_is_fetched_once_after_the_wait() {
-        let mut poller = Poller::new(TICK_US);
-        let shift = std::cell::Cell::new(0.0);
-        let mut fetch = || vec![(0usize, reg(0.0 + shift.get(), 5.0, 0.0))];
-        let m = poller.look(Some(snap(2.0, false, 0)), 0, 1, &mut fetch).0.unwrap();
-        assert_eq!(m.pos, 2.0);
-        shift.set(1.0); // the regions changed: the counter moves
-                        // within 200 ms: no fetch
-        assert!(poller
-            .look(Some(snap(2.0, false, 0)), 100_000, 2, &mut fetch)
-            .0
-            .is_none());
-        assert_eq!(poller.fetches, 1);
-        // after 200 ms: one fetch and one message with the new mapping
-        let m = poller
-            .look(Some(snap(2.0, false, 0)), 250_000, 2, &mut fetch)
-            .0
-            .expect("the new mapping");
-        assert_eq!((m.pos, poller.fetches), (3.0, 2));
-        // and then nothing, and no fetch on every look
-        for k in 0..50 {
-            assert!(poller
-                .look(Some(snap(2.0, false, 0)), 300_000 + k * 20_000, 2, &mut fetch)
-                .0
-                .is_none());
-        }
-        assert_eq!(poller.fetches, 2);
-    }
 }

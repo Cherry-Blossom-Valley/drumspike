@@ -216,11 +216,6 @@
     var seen = tstate.delivered;
     if (r.confirm_ms > 0) setTimeout(function () { fallback(seq, seen); }, r.confirm_ms);
   }
-  function selectedTrack() {
-    var n = lex("typeof S === 'object' && typeof S.selTrack === 'string' ? S.selTrack : ''");
-    return typeof n === "string" ? n : "";
-  }
-  var sentTrack = null;
   /* One deadline for a play, from the call: the request may wait up to 2 s for the main thread of the
      host, and the host may take its time to start. After PLAY_MS the page gives up ("the host did not
      start playback"). If the host starts later, the follow of #546 shows playing, and the failure text
@@ -234,7 +229,7 @@
         var done = false;
         function end(ok, e) { if (done) return; done = true; if (ok) resolve(); else { tstate.playFail = e.message; reject(e); } }
         var timer = setTimeout(function () { end(false, new Error("the host did not start playback")); }, PLAY_MS);
-        hostCall("play", { t: typeof pos === "number" ? pos : null, track: selectedTrack() }).then(function (r) {
+        hostCall("play", { t: typeof pos === "number" ? pos : null }).then(function (r) {
           if (!r.ok) { clearTimeout(timer); end(false, new Error(r.reason)); return; }
           if (!(r.confirm_ms > 0)) { clearTimeout(timer); end(true); return; }
           (function look() {
@@ -250,7 +245,7 @@
     },
     locate: function (t) {
       var seq = ++lastLocate;
-      return hostCall("locate", { t: t, track: selectedTrack() }).then(function (r) {
+      return hostCall("locate", { t: t }).then(function (r) {
         /* A refusal rejects: the page shows the text and puts its playhead back on the last position the host
            sent (static/transport.js, hostLocateRefused). A request the host accepted but did not follow is
            still the fallback of this script (afterRequest). */
@@ -301,14 +296,6 @@
     if (m.playing && lex("typeof S === 'object' && !S.playing && typeof AC === 'object' && AC.active === true")) lex("AC.active = false");
     HT.onPosition({ sid: sid, epoch: m.epoch, t_ns: m.t_ns, pos: m.pos, playing: m.playing });
   }
-  /* The selected track decides the mapping of both directions (the follow and the locate): the plugin
-     is told when it changes, at the first look and after a reload of the project. The locate of a move of
-     the playhead while stopped is the page's own call (#556); this script only watches the track. */
-  setInterval(function () {
-    if (!tstate.installed) return;
-    var tr = selectedTrack();
-    if (tr !== sentTrack) { sentTrack = tr; invoke("plugin_host_track", { track: tr }).catch(function () { sentTrack = null; }); }
-  }, 25);
   /* What the host gives: play, stop and locate show as not available, with the text, when it gives no
      control (the button, the ruler); the answer of each request says the same when used. */
   function applyOffer(n) {
@@ -335,7 +322,6 @@
   }
   // after a reload of the project the page may have lost the position: the last message goes again
   listeners["plugin-reload"].push(function () {
-    sentTrack = null;   // the plugin is told the selected track again
     var seen = tstate.delivered;
     setTimeout(function () {
       var m = tstate.last;

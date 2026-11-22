@@ -91,11 +91,15 @@ function drawVelLane(canvas, name) {
   ctx.textBaseline = "middle";
   ctx.textAlign = "right"; ctx.fillText("64", W - 3, vlYOf(64, H)); ctx.fillText("0", W - 3, H - 6);
   const evs = S.events[name] || [];
-  const range = LN.sel && LN.sel.track === name ? LN.sel : null;
-  for (const i of hitsIn(evs, S.view.t0 - 8 * viewDur() / W, S.view.t1 + 8 * viewDur() / W, dragSkip(name))) {
-    const e = evs[i], x = Math.round(tToX(e.t, W));
+  const clips = HT.clips(name);   // #555: the clips of the DAW track: the hits of every source of the row at their song time
+  const pad = 8 * viewDur() / W;
+  const refs = clips ? HT.hitRefs(clips, S.events, S.view.t0 - pad, S.view.t1 + pad, hitDrag)
+    : hitsIn(evs, S.view.t0 - pad, S.view.t1 + pad, dragSkip(name)).map(i => ({ src: name, i, t: evs[i].t }));
+  for (const h of refs) {
+    const e = (S.events[h.src] || evs)[h.i], i = h.i, x = Math.round(tToX(h.t, W));
     if (x < -2 || x > W + 2) continue;
-    const out = hgIsCut(e), sel = S.sel && S.sel.track === name && S.sel.index === i;
+    const range = LN.sel && LN.sel.track === h.src ? LN.sel : null;
+    const out = hgIsCut(e), sel = S.sel && S.sel.track === h.src && S.sel.index === i;
     const inRange = !!range && e.t >= range.t0 && e.t <= range.t1;
     ctx.fillStyle = out ? HG_GREY : e.edited || isManual(e) ? MANUAL_COLOR : color;
     const y = vlYOf(e.v, H);
@@ -108,9 +112,11 @@ function drawVelLane(canvas, name) {
     const d = VL.drag, x0 = tToX(d.t0, W), x1 = d.curX;
     ctx.strokeStyle = "rgba(255,255,255,0.55)"; ctx.beginPath(); ctx.moveTo(x0, d.y0); ctx.lineTo(x1, d.curY); ctx.stroke();
   }
-  const hv = VL.hover && VL.hover.track === name ? evs.find(x => x.id === VL.hover.id) : null;
+  const hvSrc = VL.hover && (clips ? clips.some(c => c.src === VL.hover.track) : VL.hover.track === name) ? VL.hover.track : null;
+  const hv = hvSrc ? (S.events[hvSrc] || []).find(x => x.id === VL.hover.id) : null;
   if (hv) {   // the hover label: the velocity, the time, and why a grey stalk is grey
-    const x = Math.round(tToX(hv.t, W));
+    const hc = clips ? clips.find(c => c.src === hvSrc && hv.t >= c.a && hv.t < c.b) : null;
+    const x = Math.round(tToX(hc ? HT.toSong(hc, hv.t) : hv.t, W));
     const txt = `velocity ${hv.v} · ${fmt(hv.t)} s${hgIsCut(hv) ? " · grey: leaves the output (cut)" : ""}`;
     const tw = ctx.measureText(txt).width + 8, bx = Math.max(2, Math.min(x + 6, W - tw - 2));
     ctx.fillStyle = "rgba(16,20,28,0.92)"; ctx.fillRect(bx, H - 15, tw, 13);

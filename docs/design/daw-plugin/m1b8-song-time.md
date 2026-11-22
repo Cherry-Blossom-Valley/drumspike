@@ -123,10 +123,10 @@ input. Without `window.__DS_HOST_MODE__` the module answers `on() === false` and
   (`editor.rs:1462,985,1457,275`). It stays for nobody: with no region at all the identity clip makes song time equal source time.
   Tests of the removed functions are deleted in that commit; the stage `editor-song-transport` and the unit tests of the new rule
   cover the same invariant (position 1:1, no dependence on the selection).
-- #562: `selection::range_to_source` (`selection.rs:152`) is replaced by the song-time range itself: the payload already carries
-  `range_start_s` and `range_duration_s`; the page draws one band over all rows at those song seconds. The track list of the
-  payload becomes the list of ROW ids (a DAW track selects its row directly: no `tracks_named` search through sources).
-  `hostRangeToView` is the one page function for it and returns the range unchanged.
+- #562: `selection::range_to_source` (`selection.rs:152`) is replaced by the song-time range itself: the payload carries it as one
+  `{t0, t1}` in song seconds (`ranges`); the page draws one band over all rows. The track list of the payload stays a list of source
+  keys; the page maps each to the DOM row that shows it (`HT.homeFor`), so a DAW track selects its row. Deleted with
+  `range_to_source`: the faults `song-range` and `outside-draws` of the selection (the song range is now the rule), the cap of 64 bands.
 
 ## 7. Export and drag (decision 6)
 
@@ -139,6 +139,11 @@ gets the number `(2)` in its file name (the stem rule `file_stems`, `deliver.rs:
 The note says so, and the page does not hide the limit.
 
 ## 8. Commit plan (decision 7)
+
+Built order (the coordinator's points of 2026-11-22): the transport and the selection range go direct in the SAME commit as the drawing,
+because a page that draws song time with a playhead in source time is not a state that can be looked at. So: 1 the note, 2 the
+plugin gives the rows, 3 the page draws song time and the transport and the range are direct (the owner's two defects), 4 input, edits,
+the settings of a row and the keys, 5 what is left (stages retargeted, text, final runs). The list below is the first plan.
 
 Each stage has a fault run that fails for its named reason (`DS_ARA_SONG_FAULT`, listed in `plugins/ara/switches.json`).
 

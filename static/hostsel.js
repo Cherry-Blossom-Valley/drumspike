@@ -47,7 +47,7 @@ function hostSelSig() {
 function hostHidden(name) {
   if (!hostMode()) return false;
   const r = document.querySelector(`.track[data-name="${CSS.escape(name)}"]`);
-  return !!r && r.classList.contains("hostHidden");
+  return !!r && (r.classList.contains("hostHidden") || r.classList.contains("hostMerged"));   // #555: a merged row is hidden too: no key stops on it
 }
 const hsRow = name => document.querySelector(`.track[data-name="${CSS.escape(name)}"]`);
 
@@ -121,7 +121,7 @@ function hostSelApply(p, fresh, hiddenOnly) {
   hostSelHidden(p.hidden);
   if (hiddenOnly || p.none) return { hidden: true };
   const hid = new Set(p.hidden || []);
-  const keys = (p.tracks || []).filter(n => S.tracks[n] && !hid.has(n));   // a hidden track is never selected: the first one that is shown is
+  const keys = [...new Set((p.tracks || []).filter(n => S.tracks[n] && !hid.has(n)).map(HT.homeFor))];   // a hidden track is never selected: the first one that is shown is; #555: a source selects the row that shows it
   const key = hostSelKey(p);
   const changed = key !== HS.applied;
   if (keys.length) {
