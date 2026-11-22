@@ -59,6 +59,9 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   doc-restore-busy  restore, then store at once while the worker is busy with another
                  document: the second archive has every event (fault: the events are set on
                  the worker thread)
+  doc-store-window  a store while a round publishes, and a store before the first round has
+                 ended (F5, #572): the archive never holds the notes of a round without its
+                 events (fault: the events come after the notes, as before)
   doc-retry      a round that fails once, then a new request: one track per source, the
                  reference result (fault: a second track for every retried source)
   doc-rerequest  a request for sources that are complete starts no round (fault: a full
@@ -1368,6 +1371,15 @@ def stage_doc_two_fault() -> bool:
 _ARCHIVE_STORE: dict[str, Path] = {}
 
 
+def archive_events(archive: Path) -> int:
+    """The number of events an archive holds (all tracks)."""
+    try:
+        blob = json.loads(archive.read_text())
+    except (OSError, ValueError):
+        return 0
+    return sum(len(v) for v in (blob.get("events") or {}).values())
+
+
 def archive_store() -> tuple[bool, Path, str]:
     """Store the four-source session once (memoised): the archive, the cache folder stays."""
     archive = OUT / "doc-archive.araarchive"
@@ -1377,6 +1389,10 @@ def archive_store() -> tuple[bool, Path, str]:
         )
         if rc != 0 or not archive.exists():
             return False, archive, f"ara-host store rc={rc} (out/host-doc-archive-store.log)"
+        held = archive_events(archive)
+        if held == 0:
+            # F5 (#572): name the defect here, not in the four stages that read this archive
+            return False, archive, "the store archive holds no event: the store came in the window of a round that published its notes before its events"
         _ARCHIVE_STORE["archive"] = archive
     return True, archive, ""
 
@@ -2008,6 +2024,134 @@ def stage_doc_restore_busy_fault() -> bool:
         "doc-restore-busy-fault",
         parts["rc"] and parts["busy"] and parts["events"] is False,
         f"the fault switch set the events on the worker thread and the archive stored in the window lost them: {evidence}",
+    )
+
+
+# ---- F5 (#572): a store that the host asks for while a round publishes, or before the first round has ended
+
+
+def store_window_parts(archive: Path) -> tuple[dict, str]:
+    """What an archive stored in the publication of a round holds: with the notes of the sources it
+    must hold their events (the round publishes both in one step)."""
+    blob = json.loads(archive.read_text()) if archive.exists() else {}
+    want = json.loads((OUT / "events-reference.json").read_text())
+    got = blob.get("events") or {}
+    n_notes = sum(len(s.get("notes") or []) for s in blob.get("sources", []))
+    n_events = sum(len(v) for v in got.values())
+    parts = {
+        "notes": n_notes > 0,
+        "events": got == want and n_events > 0,
+        "tracks": sorted(s.get("track") for s in blob.get("sources", [])) == sorted(want),
+    }
+    return parts, f"the archive holds {n_notes} note(s) and {n_events} event(s) in {len(got)} track(s) (the reference: {sum(len(v) for v in want.values())} in {len(want)}), equal {parts['events']}"
+
+
+def store_window_run(label: str, fault: str) -> tuple[int, Path]:
+    out = OUT / f"{label}.araarchive"
+    if out.exists():
+        out.unlink()
+    rc, _text, _lines = host_run(
+        label, CLAP, ["store", "--files", *fixture_args(FILES), "--archive", str(out)], f"cache-{label}", extra={"DS_ARA_ROUND_FAULT": fault}
+    )
+    return rc, out
+
+
+def early_restore_check(label: str, early: Path, late: Path, fault: str | None = None) -> tuple[bool, str]:
+    """The early archive (no result for any source) restored in a NEW process, the host reads the audio and
+    never asks: the sources have no result, so one round analyses them and the notes are those of the late
+    archive. (Fault `result`: the restore counts every archived source as done, so nothing is analysed.)"""
+    rc, _text, lines = host_run(
+        label,
+        CLAP,
+        ["restore", "--files", *fixture_args(FILES), "--archive", str(early), "--enable-access"],
+        f"cache-{label}",
+        extra={"DS_ARA_RESTORE_FAULT": fault} if fault else None,
+    )
+    want = json.loads(late.read_text()) if late.exists() else {}
+    counts = [r.get("count") for r in lines if r.get("event") == "host_notes"]
+    want_counts = [len(s.get("notes") or []) for s in want.get("sources", [])]
+    jobs = job_rows(label)
+    reference = (OUT / "events-reference.json").read_bytes().decode()
+    ok = rc == 0 and bool(want_counts) and counts == want_counts and bool(jobs) and jobs[-1].get("events_json") == reference
+    return ok, (
+        f"restored in a new process with the audio read: {len(event_rows(label, 'restore_no_result'))} source(s) with no result, "
+        f"{len(jobs)} round(s), notes per source {counts} (want {want_counts}), events byte for byte the reference "
+        f"{bool(jobs) and jobs[-1].get('events_json') == reference}"
+    )
+
+
+def stage_doc_store_early_fault() -> bool:
+    """The fault run: the restore counts a source of the early archive as done (the old way). No round
+    analyses it, and the restored document shows no hit."""
+    if not HOST.exists() or not CLAP.exists() or not (OUT / "events-reference.json").exists():
+        return pass_fail("doc-store-early-fault", False, "no host, no CLAP or no reference events")
+    early, late = OUT / "doc-store-early.araarchive", OUT / "doc-store-late.araarchive"
+    if not early.exists() or not late.exists():
+        stage_doc_store_window()
+    ok, evidence = early_restore_check("doc-store-early-restore-fault", early, late, "result")
+    return pass_fail(
+        "doc-store-early-fault",
+        not ok,
+        f"the fault switch counted every archived source as done and the check refused it: {evidence}",
+    )
+
+
+def stage_doc_store_window() -> bool:
+    """(1) The host stores the moment its poll sees the first source complete, and the round
+    needs 800 ms to publish (switch `publish-delay`, 200 ms for each source): the store waits for the
+    publication and the archive holds all events. (2) The host stores before the first round has ended
+    (the round waits 1.5 s before its analysis): the early archive is the last complete state, a
+    document with no notes and no events, and the store does not wait for the round; the late
+    archive of the same process holds every event, byte for byte the reference."""
+    if not HOST.exists() or not CLAP.exists() or not (OUT / "events-reference.json").exists():
+        return pass_fail("doc-store-window", False, "no host, no CLAP or no reference events")
+    rc, archive = store_window_run("doc-store-window", "publish-delay")
+    parts, evidence = store_window_parts(archive)
+    ok = pass_fail("doc-store-window", rc == 0 and all(parts.values()), f"store in the publication (rc={rc}): {evidence}")
+    early, late = OUT / "doc-store-early.araarchive", OUT / "doc-store-late.araarchive"
+    for f in (early, late):
+        if f.exists():
+            f.unlink()
+    rc2, _text, lines = host_run(
+        "doc-store-early",
+        CLAP,
+        ["store-early", "--files", *fixture_args(FILES), "--archive", str(early), "--out", str(late), "--wait", HOST_WAIT],
+        "cache-doc-store-early",
+        extra={"DS_ARA_SCENARIO": "slow-setup"},
+    )
+    e = json.loads(early.read_text()) if early.exists() else {}
+    row = next((r for r in lines if r.get("event") == "stored_early"), {})
+    early_notes = sum(len(s.get("notes") or []) for s in e.get("sources", []))
+    early_events = sum(len(v) for v in (e.get("events") or {}).values())
+    late_parts, late_evidence = store_window_parts(late)
+    again_ok, again_evidence = early_restore_check("doc-store-early-restore", early, late)
+    early_ok = again_ok and (
+        rc2 == 0
+        and bool(e)
+        and early_notes == 0
+        and early_events == 0
+        and len(e.get("sources", [])) == len(FILES)
+        and row.get("store_ms", 10**9) < 1000
+    )
+    return pass_fail(
+        "doc-store-early",
+        early_ok and all(late_parts.values()),
+        f"store before the first round ended (rc={rc2}): {len(e.get('sources', []))} source(s), {early_notes} note(s), {early_events} event(s), "
+        f"store call {row.get('store_ms')} ms (the round needs 1.5 s more); the late archive: {late_evidence}; {again_evidence}",
+    ) and ok
+
+
+def stage_doc_store_window_fault() -> bool:
+    """The fault run: the events come after the notes, with no lock held between (the old order). The
+    archive of the store in that window holds all notes and no event, and the check must refuse it."""
+    if not HOST.exists() or not CLAP.exists() or not (OUT / "events-reference.json").exists():
+        return pass_fail("doc-store-window-fault", False, "no host, no CLAP or no reference events")
+    rc, archive = store_window_run("doc-store-window-fault", "events-late")
+    parts, evidence = store_window_parts(archive)
+    return pass_fail(
+        "doc-store-window-fault",
+        rc == 0 and parts["notes"] and parts["events"] is False,
+        f"the fault switch put the events after the notes and the archive stored in the window lost them: {evidence}",
     )
 
 
@@ -6956,6 +7100,9 @@ STAGES = {
     "doc-same-id-fault": stage_doc_same_id_fault,
     "doc-restore-busy": stage_doc_restore_busy,
     "doc-restore-busy-fault": stage_doc_restore_busy_fault,
+    "doc-store-window": stage_doc_store_window,
+    "doc-store-window-fault": stage_doc_store_window_fault,
+    "doc-store-early-fault": stage_doc_store_early_fault,
     "doc-retry": stage_doc_retry,
     "doc-retry-fault": stage_doc_retry_fault,
     "doc-rerequest": stage_doc_rerequest,
@@ -7111,7 +7258,7 @@ ORDER = [
     "archive-paths-fault", "archive-restore-pathname",
     "threads", "doc-service", "doc-service-fault", "doc-tracks", "doc-tracks-fault", "doc-rounds", "doc-rounds-fault", "doc-two", "doc-two-fault",
     "doc-archive", "doc-archive-fault", "doc-destroy", "doc-destroy-fault", "doc-close", "doc-close-fault", "doc-home", "doc-home-fault",
-    "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault",
+    "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault", "doc-store-window", "doc-store-window-fault", "doc-store-early-fault",
     "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",
     "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault", "doc-late-audio-arrives", "doc-late-audio-arrives-fault",

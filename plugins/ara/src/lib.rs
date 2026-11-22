@@ -599,7 +599,18 @@ impl DocShared {
     /// M1b10 (R1): the settings of the tracks as the service holds them now, or `None` when it cannot answer
     /// (the report gets one row and the caller keeps the map it had). Takes no lock of the document.
     fn read_settings(&self, svc: &drumspike_app::Service, sid: &str) -> Option<serde_json::Map<String, Value>> {
-        let fresh = service::settings_of(svc, sid, &self.live_track_names());
+        self.read_settings_for(svc, sid, &self.live_track_names())
+    }
+
+    /// [`Self::read_settings`] for the named tracks (a round reads the settings of its new tracks before it
+    /// publishes their names).
+    fn read_settings_for(
+        &self,
+        svc: &drumspike_app::Service,
+        sid: &str,
+        names: &[String],
+    ) -> Option<serde_json::Map<String, Value>> {
+        let fresh = service::settings_of(svc, sid, names);
         if fresh.is_none() {
             session().log_deferred(json!({"event": "settings_read_failed", "doc": self.id()}).to_string());
         }
@@ -1969,6 +1980,35 @@ impl Session {
                 }
             }
         }
+        // F5 (#572): a round PUBLISHES in one step. The notes, the track names and the completeness of its
+        // sources become visible to the host (it asks `isAudioSourceContentAnalysisIncomplete` and stores the
+        // archive at any time), and the events and the settings of the document are set with them. The two
+        // locks that a store takes (events, then settings) are held from the first source to the last
+        // assignment, so a store sees the document before the round or after it, never the notes of the
+        // round with the events of the round before (an archive with all notes and no hit: the restore
+        // showed no track and no event). The read of the settings (a service call) is made before: it takes
+        // no lock of the document. `DS_ARA_ROUND_FAULT=events-late` brings back the old order: the events
+        // came after the notes, with no lock held between; `publish-delay` widens the window in both orders.
+        let events_late = crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() == Ok("events-late");
+        let publish_delay = crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() == Ok("publish-delay") || events_late;
+        let fresh_settings = match (doc.page.service(), doc.page.sid()) {
+            (Some(svc), Some(sid)) => {
+                let mut names = doc.live_track_names();
+                names.extend(result.tracks.iter().map(|(n, _)| n.clone()));
+                names.sort();
+                names.dedup();
+                doc.read_settings_for(&svc, &sid, &names)
+            }
+            _ => None,
+        };
+        let mut published = if events_late {
+            None
+        } else {
+            Some((
+                doc.events.lock().unwrap_or_else(|e| e.into_inner()),
+                doc.settings.lock().unwrap_or_else(|e| e.into_inner()),
+            ))
+        };
         let mut changed: Vec<String> = Vec::new();
         for (seq, notes) in &result.notes {
             let Some(s) = by_seq(*seq) else { continue };
@@ -2036,18 +2076,21 @@ impl Session {
                     }
                 }
             }
+            if publish_delay {
+                std::thread::sleep(std::time::Duration::from_millis(if events_late { 100 } else { 200 }));
+            }
         }
-        // the events and the settings of the round are set in one step (R3c)
-        let fresh_settings = match (doc.page.service(), doc.page.sid()) {
-            (Some(svc), Some(sid)) => doc.read_settings(&svc, &sid),
-            _ => None,
-        };
-        {
-            let mut ev = doc.events.lock().unwrap_or_else(|e| e.into_inner());
-            let mut st = doc.settings.lock().unwrap_or_else(|e| e.into_inner());
-            *ev = result.events.clone();
-            doc.merge_settings_in(&mut st, fresh_settings);
-        }
+        // the events and the settings of the round are set in one step (R3c), still inside the publication (F5)
+        let (mut ev, mut st) = published.take().unwrap_or_else(|| {
+            (
+                doc.events.lock().unwrap_or_else(|e| e.into_inner()),
+                doc.settings.lock().unwrap_or_else(|e| e.into_inner()),
+            )
+        });
+        *ev = result.events.clone();
+        doc.merge_settings_in(&mut st, fresh_settings);
+        drop(st);
+        drop(ev);
         if result.analysed.is_empty() && usable.is_empty() {
             // a removal that left nothing to analyse
             self.log(
@@ -4123,16 +4166,6 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                 if let Some(a) = found {
                     let at = st.sources.iter().position(|x| std::ptr::eq(x, a)).unwrap_or(0);
                     used.push(at);
-                    if let Ok(mut n) = src.notes.lock() {
-                        *n = a.notes.clone();
-                    }
-                    src.has_events.store(true, Ordering::SeqCst);
-                    // a stale track needs a new analysis: the next round with audio takes it. So does a source
-                    // whose sample count is not the one stored: its audio changed while the session was
-                    // closed, and the stored hits and settings are those of other audio (R4; the hand edits stay)
-                    let stale = a.stale || audio_changed(a.sample_count, p.sample_count);
-                    src.stale.store(stale, Ordering::SeqCst);
-                    src.analysis_failed.store(stale, Ordering::SeqCst);
                     // the track of the source: stored (M1b1), else derived from the stored
                     // name the way the analysis named it (an archive of M1a); a stored name
                     // that is a path is not trusted
@@ -4147,6 +4180,28 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                     } else {
                         a.track.clone()
                     };
+                    // F5 (#572): a source that the archive holds with no result (no track name, no note, no
+                    // events: the host stored before its first round had ended) has no result here either, so the
+                    // next round with its audio analyses it. It is not marked complete with no hits.
+                    // (Fault `result`: the old way, every archived source has its result.)
+                    if fault != "result"
+                        && a.track.is_empty()
+                        && a.notes.is_empty()
+                        && !events_ok.iter().any(|(k, _)| **k == track)
+                    {
+                        s.log(json!({"event": "restore_no_result", "name": a.name}).to_string());
+                        continue;
+                    }
+                    if let Ok(mut n) = src.notes.lock() {
+                        *n = a.notes.clone();
+                    }
+                    src.has_events.store(true, Ordering::SeqCst);
+                    // a stale track needs a new analysis: the next round with audio takes it. So does a source
+                    // whose sample count is not the one stored: its audio changed while the session was
+                    // closed, and the stored hits and settings are those of other audio (R4; the hand edits stay)
+                    let stale = a.stale || audio_changed(a.sample_count, p.sample_count);
+                    src.stale.store(stale, Ordering::SeqCst);
+                    src.analysis_failed.store(stale, Ordering::SeqCst);
                     if let Some((_, events)) = events_ok.iter().find(|(k, _)| **k == track) {
                         if let Ok(mut t) = src.track.lock() {
                             *t = Some(track.clone());

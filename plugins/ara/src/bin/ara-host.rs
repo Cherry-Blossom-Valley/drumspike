@@ -1872,6 +1872,7 @@ fn main() {
         "close-busy" => run_close_busy(bundle, &files, &rest),
         "restore2" => run_restore2(bundle, &files, &rest),
         "restore-busy" => run_restore_busy(bundle, &files, &rest),
+        "store-early" => run_store_early(bundle, &files, &rest),
         "editor" => match args_value(&rest, "--twin") {
             // M1b12: a second copy of the plugin in the same process (the first stays loaded)
             Some(second) => {
@@ -2509,6 +2510,47 @@ fn run_restore_busy(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let blob = d.store()?;
             std::fs::write(&out, &blob).map_err(|e| format!("{out}: {e}"))?;
             println!("{{\"event\":\"stored\",\"bytes\":{}}}", blob.len());
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// `store-early` (F5, #572): the host asks for the analysis and stores at once, before the first round has
+/// ended (`--archive`: the early archive), then waits for the round and stores again (`--out`: the late archive).
+/// With `DS_ARA_SCENARIO=slow-setup` the round needs 1.5 s, so the first store is well inside it.
+fn run_store_early(bundle: &str, files: &[String], rest: &[String]) -> i32 {
+    let (Some(early), Some(late)) = (args_value(rest, "--archive"), args_value(rest, "--out")) else {
+        eprintln!("store-early: want --archive <file> --out <file>");
+        return 64;
+    };
+    let result = (|| -> Result<(), String> {
+        unsafe {
+            let loaded = load(bundle)?;
+            let mut d = HostDoc::new(&loaded)?;
+            let (pairs, _base) = d.add_and_request(files, "early")?;
+            let t = Instant::now();
+            let first = d.store()?;
+            println!(
+                "{{\"event\":\"stored_early\",\"bytes\":{},\"store_ms\":{}}}",
+                first.len(),
+                t.elapsed().as_millis()
+            );
+            std::fs::write(&early, &first).map_err(|e| format!("{early}: {e}"))?;
+            wait_for(d.inst, &pairs)?;
+            d.pairs.extend(pairs);
+            // the host's writer 0 is written at position 0 again: start from an empty one
+            (*d.state).writers.clear();
+            let second = d.store()?;
+            std::fs::write(&late, &second).map_err(|e| format!("{late}: {e}"))?;
+            println!("{{\"event\":\"stored\",\"bytes\":{}}}", second.len());
+            d.close();
         }
         Ok(())
     })();
