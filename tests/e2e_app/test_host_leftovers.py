@@ -245,6 +245,28 @@ def test_the_daw_export_dialog_has_a_drop_hint_no_development_note_and_a_collaps
     host.evaluate("() => { EX.dest = EX.def; exRender(); exCancel(); }")
 
 
+def test_the_daw_destination_row_stays_open_after_reset_and_the_toggle_names_the_default_folder(host):
+    host.evaluate("() => openExport('all')")
+    host.wait_for_function("() => !document.querySelector('#exportModal').classList.contains('hidden')")
+    toggle = host.locator("#exDestToggle")
+    assert host.evaluate("() => EX.def") in toggle.get_attribute("title") and toggle.get_attribute("title").strip(), "the default folder is on the collapsed button"
+    toggle.click()
+    # a chosen folder, then Reset: the folder is the default again, the row must stay open
+    host.evaluate("() => { EX.dest = EX.def + '/elsewhere'; exRender(); }")
+    host.evaluate("() => { EX.dest = EX.def; document.querySelector('#exReset').focus(); EX.destNote = ''; exRender(); }")
+    assert host.locator("#exDest").is_visible() and host.locator("#exReset").is_visible()
+    assert host.locator("#exChoose").is_visible(), "the row does not collapse under the user"
+    # the real Reset handler opens the row too (a dialog that never opened it by the button)
+    host.evaluate("() => { exCancel(); openExport('all'); }")
+    host.wait_for_function("() => !document.querySelector('#exportModal').classList.contains('hidden')")
+    assert host.evaluate("() => document.querySelector('#exDest').checkVisibility({ visibilityProperty: true })") is False
+    host.evaluate("() => { window.__old = B.exportDestSet; EX.destOpen = false; B.exportDestSet = async () => null; }")
+    host.evaluate("async () => { try { await exReset(); } finally { B.exportDestSet = window.__old; } }")
+    assert host.evaluate("() => EX.destOpen") is True
+    assert host.locator("#exDest").is_visible()
+    host.evaluate("() => exCancel()")
+
+
 def test_the_standalone_export_dialog_shows_the_destination_row_as_before(plain):
     plain.evaluate("() => openExport('all')")
     plain.wait_for_function("() => !document.querySelector('#exportModal').classList.contains('hidden')")

@@ -6635,6 +6635,8 @@ def stage_editor_leftovers_fault() -> bool:
     ok = True
     for label, env, part, what, reason in (
         ("key", {"DS_ARA_EDITOR_FAULT": "left-key"}, "editor-leftovers-names", "the label helper returns the key of the track", "holds the key"),
+        ("dot", {"DS_ARA_EDITOR_FAULT": "left-dot"}, "editor-leftovers-page", "the unsaved dot shows in a DAW", "the unsaved dot hidden False"),
+        ("dest", {"DS_ARA_EDITOR_FAULT": "left-dest"}, "editor-leftovers-page", "the destination row is not collapsed", "destination row visible True"),
         ("no-audio-reason", {"DS_ARA_LEFTOVER_FAULT": "no-audio-reason"}, "editor-leftovers-audio", "the round names no track whose audio changed", "no audio message if empty"),
     ):
         parts = leftovers_parts(leftovers_run(f"editor-leftovers-fault-{label}", env))

@@ -24,10 +24,10 @@
       <li>Put the plugin on the drum clips of the DAW. The page shows when a track with the plugin is selected.</li>
       <li>Wait for the analysis. The page says when the hits are ready.</li>
       <li>Check the hits and correct them.</li>
-      <li>Set the note and the role of each track in the Inspector.</li>
+      <li>Set the note and the role of each track.</li>
       <li>Drag or export the MIDI and the spikes into the DAW. Drop them at the start of the session.</li>
     </ol>
-    <p>The host owns the tracks, the files and the tempo. To add, remove or rename a track, or to change the tempo, do it in the DAW. The host plays the audio: play, stop and locate in the page and in the DAW move together. The page has no mixer, no click and no audition.</p>
+    <p>The DAW owns the tracks, the files and the tempo. To add, remove or rename a track, or to change the tempo, do it in the DAW. The DAW plays the audio: play, stop and locate in the page and in the DAW move together. The page has no mixer, no click and no audition.</p>
     <p>What stays: Analyze All and the analysis of one track, every edit of a hit, the review of doubtful hits, Learn, the zoom and the follow of the playhead, and Undo.</p>`;
   const dawList = () => hostMode() ? manifest.chapters.filter(c => DAW_CHAPTERS.includes(c.file)) : manifest.chapters;
 

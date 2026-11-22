@@ -22,7 +22,7 @@ never changed twice. With the mode off it returns the text as it is.
 
 The rule for a new text: a track that the user reads goes through `trackLabel`. The key goes only into a command, a data attribute or
 a lookup. As a net under the sites that were changed one by one, the status line (`setMsgLvl` in `static/status.js`), its detail
-(`setMsgDetail`) and the progress text pass through `trackText`.
+(`setMsgDetail`) and the progress text pass through `trackText`. That net holds only for texts that pass `setMsg` or the progress text: a new direct text sink needs `trackLabel`.
 
 The places that showed the machine key before this change (found with a search of `static/` and the audit; the list is not a proof
 that no other place exists, the net above catches a status text of a place that was missed):
@@ -56,6 +56,9 @@ Rule: `tmHostLocked()` (`static/tempomap.js`). In host mode it stops every edit 
 fields of the tempo, meter and bar-1 rulers (`tmEditStart`), the drag of a tempo step, the drag and the double click of the bar-1
 marker, Delete on a selected step, Set Bar 1 at Playhead and at Audio Start (`tmSetBar1`), and every commit (`tmCommit`, the net under
 all paths). In the page menu the two Set Bar 1 items are greyed. The markers ruler is not part of the tempo and works as before.
+
+The rulers are locked in a DAW also when the DAW gives no tempo. The reason: an edit would write a map into the service that the DAW does not
+have, so the page and the DAW would disagree and the edit would look lost, as before this change.
 
 What happens when the DAW gives no tempo: the page has no map (`TM.map` is empty). The tempo rulers draw nothing, no field opens, and
 the status text says "The DAW gives no tempo: the rulers stay empty and the MIDI file has the tempo the export dialog names." The
@@ -91,7 +94,7 @@ The help of the page in a DAW (section "In a DAW", `static/help.js`) starts with
 1. Put the plugin on the drum clips of the DAW. The page shows when a track with the plugin is selected.
 2. Wait for the analysis. The page says when the hits are ready.
 3. Check the hits and correct them.
-4. Set the note and the role of each track in the Inspector.
+4. Set the note and the role of each track.
 5. Drag or export the MIDI and the spikes into the DAW. Drop them at the start of the session.
 
 The list of what the DAW owns follows. The first open shows one line in the status bar: "Step 1 of 5: put the plugin on the drum clips.

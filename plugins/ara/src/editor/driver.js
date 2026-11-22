@@ -472,9 +472,11 @@
      follower text, export dialog, Follow menu), and after the host changed the audio of one source it says what happened. The first report
      `leftovers` carries the texts; the host then replaces the audio of a source (`--update-content-after`); the plugin analyses it again and
      tells the page; the second report `leftovers-after` carries the status line that the page shows. Fault runs (DS_ARA_EDITOR_FAULT):
-     `left-key` (the label helper returns the key). The plugin fault `DS_ARA_LEFTOVER_FAULT=no-audio-reason` sends no audio reason. */
+     `left-key` (the label helper returns the key), `left-dot` (the unsaved dot shows), `left-dest` (the destination row is not collapsed). The plugin fault `DS_ARA_LEFTOVER_FAULT=no-audio-reason` sends no audio reason. */
   async function leftoversRun() {
     if (T.fault === "left-key") window.trackLabel = function (k) { return k; };   // the fault run: the page shows the key of a track
+    if (T.fault === "left-dot") window.setDirtyState = function (d) { S.dirty = !!d; document.getElementById("dirtyDot").classList.toggle("hidden", !S.dirty); };   // the fault run: the standalone dot shows in a DAW
+    if (T.fault === "left-dest") window.exDestFold = function () {};   // the fault run: the destination row is never collapsed
     var order = S.order.slice(), text = function (id) { return document.querySelector(id).textContent; };
     await sleepM(600);
     var a = order[0], b = order[2], out = { order: order, a: a, b: b };

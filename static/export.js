@@ -63,7 +63,8 @@ function exWait(p) {
 const exPlural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 /* #575: in a DAW the destination row is collapsed: the files go to the cache folder of the document and the user drags them, so the folder is
    rarely the point. One click on the button opens the row (the folder, Choose, Reset). A folder that was chosen, or a note about the folder,
-   keeps the row open. With the mode off the button stays hidden and the row shows as before. */
+   keeps the row open. Once the user opened the row (the button, Choose or Reset) it stays open until the dialog closes: a Reset
+   that makes the folder the default again must not collapse the row under the focused button. With the mode off the button stays hidden and the row shows as before. */
 function exDestFold() {
   const sec = $("#exDestSec"), btn = $("#exDestToggle");
   if (!hostMode()) { sec.classList.remove("exFold", "open"); btn.classList.add("hidden"); return; }
@@ -72,6 +73,7 @@ function exDestFold() {
   const open = EX.destOpen || forced;
   sec.classList.add("exFold"); sec.classList.toggle("open", open);
   btn.classList.toggle("hidden", open); btn.setAttribute("aria-expanded", String(open));
+  btn.title = `The files go to ${EX.def || "the folder of the document"}`;   // R2: the default folder is visible without a click
 }
 function exRender() {   // the controls from EX; the Export button and the tiles follow
   const { names, skipped } = exTrackSets(), all = S.order.length, sel = EX.selected && S.tracks[EX.selected] ? 1 : 0;
@@ -249,6 +251,7 @@ function exKey(ev) {   // the dialog owns every key: no page key (Space plays, J
   ev.stopPropagation();
 }
 async function exChoose() {
+  EX.destOpen = true;   // #575: the user is in the row
   const pick = await pickFolder({ title: "Choose the export folder", start: EX.dest });
   if (!pick || !pick.dir) return;
   try {
@@ -260,6 +263,7 @@ async function exChoose() {
   exChanged(); exRecord();   // P4-31: the folder is part of the export shape
 }
 async function exReset() {
+  EX.destOpen = true;   // #575: the row stays open under the focused Reset button
   try { await B.exportDestSet(S.sid, null); } catch (e) { EX.destNote = errText(e); exRender(); return; }
   EX.dest = EX.def; EX.remembered = null; EX.destNote = ""; EX.destOk = true;
   setDirtyState(true);
