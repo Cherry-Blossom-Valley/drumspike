@@ -570,7 +570,7 @@ def test_the_title_texts_the_menu_and_the_help_name_no_command_of_the_list(host_
     assert nav[0] == "daw" and nav[-1] == "shortcuts" and len(nav) > 3, nav
     daw = host_app.locator("#helpPage").inner_text()
     assert len(daw.split()) < 200, "the section is short"
-    for word in ("host", "files", "tracks", "tempo", "plays the audio"):
+    for word in ("DAW owns", "files", "tracks", "tempo", "plays the audio"):   # #575: the text says DAW, not host
         assert word in daw, word
     checked = 0
     for section in nav:
