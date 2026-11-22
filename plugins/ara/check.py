@@ -128,6 +128,9 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   delivery-switches  M1d1 line 4: the delivery build (no cargo feature test-switches) ignores
                  DS_ARA_ROUND_FAULT=request-only and gives the round; the gate build obeys it
                  (fault: the same check refuses the gate build)
+  drag-source    round 3 of #579: no gate run starts a system drag session (a drop lands on the owner's desktop): the
+                 source has one call of the system drag, in one function behind the test branch, and no posted event,
+                 NSWorkspace or general pasteboard (fault: a second call is planted)
   export-dialog  M1c2 (#579): the REAL Export dialog in the REAL page, opened from the host-mode menu in two
                  editors of one document: no folder error, both drag tiles ready with a file count, a drag
                  starts, Export writes the files, a second open does the same, Choose keeps the folder for
@@ -7291,10 +7294,12 @@ def delivery_parts(d: dict) -> dict:
     taken = [Path(f) for f in (r.get("taken") or {}).get("files", [])]
     started = [x for x in rows if x.get("event") == "drag_started"]
     pb = {str(Path(p).resolve()) for x in started for p in x.get("pasteboard", [])}
+    # a gate run starts NO system drag session (round 3 of #579): the plugin runs the guards, makes the items, writes them to a private
+    # pasteboard and reads them back; every row says session "test". A real drag into a DAW is a hand check.
     parts["delivery-drag-pasteboard"] = (r.get("drag_ok") is True and len(taken) == 8 and bool(started)
-                                         and pb == {str(f.resolve()) for f in taken},
-                                         f"the real drag session started (ok={r.get('drag_ok')} {r.get('drag_error')}); its pasteboard holds "
-                                         f"{len(pb)} file URLs, the {len(taken)} files of one MIDI and one WAV per track")
+                                         and pb == {str(f.resolve()) for f in taken} and all(x.get("session") == "test" for x in started),
+                                         f"the drag command ran its guards and made the items (ok={r.get('drag_ok')} {r.get('drag_error')}); the private pasteboard holds "
+                                         f"{len(pb)} file URLs, the {len(taken)} files of one MIDI and one WAV per track; sessions {sorted({x.get('session') for x in started})} (no system session)")
     parts["delivery-drag-guard"] = ((r.get("drag_outside") or {}).get("code") == 403,
                                     f"a drag of a file outside Exports/: {r.get('drag_outside')}")
     closes = [x for x in rows if x.get("event") == "editor_close"]
@@ -7366,12 +7371,12 @@ def stage_delivery() -> bool:
 
 
 def stage_delivery_release() -> bool:
-    """No mouse button down: the drag starts no session."""
+    """No mouse button down: the drag command refuses (no items made)."""
     d = song_delivery_run("release", pressed=False)
     r = d["rep"]
     started = [x for x in d["rows"] if x.get("event") == "drag_started"]
     return pass_fail("delivery-drag-release", r.get("drag_ok") is False and (r.get("drag_error") or {}).get("code") == 409 and not started,
-                     f"with no button down the drag answered {r.get('drag_error')} and no session started ({len(started)} rows)")
+                     f"with no button down the drag answered {r.get('drag_error')} and no items were made ({len(started)} rows)")
 
 
 def stage_delivery_fault() -> bool:
@@ -7397,7 +7402,10 @@ def stage_delivery_fault() -> bool:
     d = song_delivery_run("fault-no-button-check", {"DS_ARA_EDITOR_FAULT": "no-button-check"}, pressed=False)
     r = d["rep"]
     ok = pass_fail("delivery-fault-no-button-check", r.get("drag_ok") is True,
-                   f"the fault run (no check of the mouse button) starts the session with no button down: ok={r.get('drag_ok')}") and ok
+                   f"the fault run (no check of the mouse button) makes the drag items with no button down (a test session, no system drag): ok={r.get('drag_ok')}") and ok
+    d = song_delivery_run("fault-test-row-real", {"DS_ARA_EDITOR_FAULT": "test-row-real"})
+    d["region"] = DELIVERY_REGION
+    ok = fault_part("delivery-fault-test-row-real", delivery_parts(d), "delivery-drag-pasteboard", "a drag row that says session real (the check that no gate run starts a system session can fail; the fault only changes the row)") and ok
     return ok
 
 
@@ -7454,10 +7462,10 @@ def export_dialog_parts(d: dict) -> dict:
     drag = step(r1, "drag")
     started = [x for x in rows if x.get("event") == "drag_started"]
     pb = {str(Path(p).resolve()) for x in started for p in x.get("pasteboard", [])}
-    parts["export-dialog-drag"] = (str(drag.get("msg", "")).startswith("dragged 4 files") and bool(started)
+    parts["export-dialog-drag"] = (str(drag.get("msg", "")).startswith("dragged 4 files") and bool(started) and all(x.get("session") == "test" for x in started)
                                    and pb and all(Path(p).parent.resolve() == default.resolve() for p in pb) and len(pb) == 4,
-                                   f"a press and a move on the Drag MIDI tile started the real drag session: message {drag.get('msg')!r}, "
-                                   f"{len(started)} sessions, pasteboard {len(pb)} files, all in Exports/")
+                                   f"a press and a move on the Drag MIDI tile ran the drag command up to the items (no system session): message {drag.get('msg')!r}, "
+                                   f"{len(started)} test sessions, private pasteboard {len(pb)} files, all in Exports/")
     ch = step(r1, "chosen")
     cm, cw = files_of(pick)
     cw = [f for f in cw if not f.name.endswith("_audio_spike.wav")]   # the type Both writes the audio files there too
@@ -7506,6 +7514,62 @@ def stage_export_dialog_fault() -> bool:
     d = export_dialog_run("fault-no-remember", {"DS_ARA_EDITOR_FAULT": "no-remember"})
     return fault_part("export-dialog-fault-no-remember", export_dialog_parts(d), "export-dialog-remembered",
                       "the chosen folder is not kept: a new editor opens with the default folder") and ok
+
+
+def drag_source_check(src: Path) -> tuple[bool, str]:
+    """Round 3 of #579: no gate run may start a system drag session, post an event that leaves the process or touch the general pasteboard.
+    A grep-level read of the plugin source: the call of the crate `drag` is in exactly one function, behind the test branch."""
+    def code_lines(f: Path):
+        for i, ln in enumerate(f.read_text().splitlines(), 1):
+            t = ln.strip()
+            if t and not t.startswith("//"):
+                yield i, ln
+
+    problems: list[str] = []
+    calls = []
+    for f in sorted(src.rglob("*.rs")):
+        lines = list(code_lines(f))
+        all_lines = f.read_text().splitlines()
+        in_tests = len(all_lines) + 1
+        for i, ln in enumerate(all_lines, 1):
+            if ln.startswith("#[cfg(test)]"):
+                in_tests = i
+                break
+        for i, ln in lines:
+            if i >= in_tests:
+                break
+            rel = f.relative_to(src)
+            if "drag::start_drag(" in ln:
+                fn = next((all_lines[j].split("fn ", 1)[1].split("(")[0].split("<")[0] for j in range(i - 1, -1, -1) if re.match(r"\s*(pub )?(unsafe )?fn ", all_lines[j])), "?")
+                guarded = fn != "?" and any("drag_is_test()" in all_lines[k] for k in range(i - 1 - 14, i - 1))
+                calls.append((str(rel), i, fn, guarded))
+            for bad in ("release_test_drag", "generalPasteboard", "NSPasteboardNameGeneral", "NSWorkspace", "CGEventPost", "CGEventCreate", "CGPostMouse",
+                        "beginDraggingSession", "NSDraggingSession"):
+                if bad in ln:
+                    problems.append(f"{rel}:{i}: {bad}")
+            if "NSPasteboardNameDrag" in ln and not (str(rel) == "deliver.rs"):
+                problems.append(f"{rel}:{i}: the drag pasteboard is read outside deliver.rs")
+            if "postEvent_atStart" in ln and not str(rel).startswith("bin/"):
+                problems.append(f"{rel}:{i}: an event is posted in the plugin")
+    if len(calls) != 1 or calls[0][0] != "deliver.rs" or calls[0][2] != "start_drag_system" or not calls[0][3]:
+        problems.append(f"the system drag call must be once, in deliver.rs fn start_drag_system, behind drag_is_test(): found {calls}")
+    return not problems, f"{len(calls)} call(s) of drag::start_drag {calls}; problems: {problems}"
+
+
+def stage_drag_source() -> bool:
+    ok, ev = drag_source_check(HERE / "src")
+    return pass_fail("drag-source", ok, f"no gate run can start a system drag session, post an event out of the process or touch the general pasteboard: {ev}")
+
+
+def stage_drag_source_fault() -> bool:
+    plant = OUT / "drag-source-fault"
+    if plant.exists():
+        shutil.rmtree(plant)
+    shutil.copytree(HERE / "src", plant)
+    ed = plant / "editor.rs"
+    ed.write_text("fn planted(h: &H) { drag::start_drag(h, a, b, c, d); }\n" + ed.read_text())
+    ok, ev = drag_source_check(plant)
+    return pass_fail("drag-source-fault", not ok, f"the fault run (a second call of the system drag in editor.rs) fails the source check: {ev}")
 
 
 STAGES = {
@@ -7670,6 +7734,8 @@ STAGES = {
     "editor-playback-tracks": stage_editor_playback_tracks,
     "editor-names": stage_editor_names,
     "delivery": stage_delivery,
+    "drag-source": stage_drag_source,
+    "drag-source-fault": stage_drag_source_fault,
     "export-dialog": stage_export_dialog,
     "export-dialog-fault": stage_export_dialog_fault,
     "delivery-release": stage_delivery_release,
@@ -7730,7 +7796,7 @@ ORDER = [
     "editor-selection", "editor-selection-fault",
     "editor-keys", "editor-keys-fault", "editor-keys-twin", "editor-keys-twin-fault",
     "editor-names", "editor-names-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
-    "delivery", "delivery-release", "delivery-fault", "export-dialog", "export-dialog-fault",
+    "drag-source", "drag-source-fault", "delivery", "delivery-release", "delivery-fault", "export-dialog", "export-dialog-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",

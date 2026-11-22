@@ -1162,6 +1162,10 @@ fn pick_folder_command(sh: &Arc<Shared>, args: &Value) -> Answer {
             add(PathBuf::from(v))
         };
     }
+    if test_mode().is_some() {
+        // a gate run shows no real panel (round 3): with no DS_ARA_PICK_DIR the sheet answers cancel
+        return Answer::json(200, &Value::Null);
+    }
     if sh.picking.swap(true, Ordering::SeqCst) {
         return Answer::err(409, "the folder dialog is open");
     }
@@ -1257,7 +1261,7 @@ fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
             }
         }
     }
-    let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<String>, String>>();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(Vec<String>, &'static str), String>>();
     let (sh2, files2) = (Arc::clone(sh), files.clone());
     // set when the request gave up waiting: a job that the main thread meets later starts no drag
     let abandoned = Arc::new(AtomicBool::new(false));
@@ -1277,25 +1281,17 @@ fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
                 session().log(json!({"event": "drag_result", "editor": n, "result": res}).to_string());
             })
         };
-        let ok = r.is_ok();
-        let _ = tx.send(r.map(|()| crate::deliver::drag_pasteboard_paths()));
-        if ok && crate::test_switch("DS_ARA_DRAG_PRESSED").as_deref() == Ok("1") {
-            // the test host: let go of the mouse a moment later, so that the session ends
-            let sh3 = Arc::clone(&sh2);
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(400));
-                on_main(Box::new(move || {
-                    if !sh3.closed.load(Ordering::SeqCst) {
-                        unsafe { crate::deliver::release_test_drag(sh3.view) };
-                    }
-                }));
-            });
-        }
+        let _ = tx.send(r.map(|started| match started {
+            crate::deliver::DragStart::Real => (crate::deliver::drag_pasteboard_paths(), "real"),
+            crate::deliver::DragStart::Test(paths) => (paths, "test"),
+        }));
     }));
     match rx.recv_timeout(MAIN_WAIT) {
-        Ok(Ok(pasteboard)) => {
+        Ok(Ok((pasteboard, kind))) => {
+            // `session`: "test" in a gate run (a private pasteboard, no system session), "real" for a system drag session
+            let kind = if fault() == "test-row-real" { "real" } else { kind };
             session().log(
-                json!({"event": "drag_started", "editor": sh.n, "files": files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>(),
+                json!({"event": "drag_started", "editor": sh.n, "session": kind, "files": files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>(),
                     "pasteboard": pasteboard})
                 .to_string(),
             );

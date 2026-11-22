@@ -354,9 +354,9 @@ reason.
 | `delivery_moved` | a region cut and moved (changes `start_play` and `start_mod`): the positions follow; a source with two regions gives each hit twice | `DS_ARA_DELIVERY_FAULT=stale-regions`: the live regions, not the round's, are used; the stage sees the old song time |
 | `delivery_rate` | a second run with another session and source rate (44.1 and 96 kHz): positions equal, ticks per quarter as the rule says, the reported bound equals the measured one | `DS_ARA_DELIVERY_FAULT=fixed-rate`: the rate is taken as 48 kHz |
 | `delivery_notempo` | no musical context content: source `transport`, then `none`; the page text names the source | `DS_ARA_DELIVERY_FAULT=invent-map`: the plugin invents a map, the stage sees steps with no host source |
-| `delivery_drag` | the real session starts; the drag pasteboard holds the file URLs of the one MIDI and the WAV per track; the drop view records the same paths | `DS_ARA_DRAG_FAULT=no-write`: the URLs are written after the session starts, the pasteboard is empty |
+| `delivery_drag` | (as built, round 3: no system session) the drag command makes the items of the one MIDI and the WAV per track and a private pasteboard holds their file URLs; the real session is a hand check | `DS_ARA_DRAG_FAULT=no-write`: the URLs are written after the session starts, the pasteboard is empty |
 | `delivery_drag_guard` | a path outside `Exports/` and outside a chosen folder: 403, no session | `DS_ARA_DRAG_FAULT=any-path` |
-| `delivery_drag_release` | no mouse button down: `ok: false`, no session | `DS_ARA_DRAG_FAULT=no-button-check` |
+| `delivery_drag_release` | no mouse button down: `ok: false`, no items | `DS_ARA_DRAG_FAULT=no-button-check` |
 | `delivery_drag_thread` | `OFF_MAIN` stays 0; a call from a request thread is the hop | `DS_ARA_EDITOR_FAULT=inline` (exists) |
 | `delivery_folder` | `plugin_pick_folder` with `DS_ARA_PICK_DIR`: the export writes into the chosen folder; a second folder is refused; a subfolder is refused; a symlink swapped in is refused | `any-dest` and `prefix-dest` (section 4) |
 | `delivery_folder_cancel` | cancel: the answer is null, nothing is chosen, the export into any `dest` is refused | none needed (the stage proves the refusal) |
@@ -407,7 +407,7 @@ Small commits, risky parts first. Each commit has its own tests; the heavy gates
 ## Decisions of the coordinator (answers to the open questions)
 
 1. No stage posts a global event (no CGEvent, no accessibility permission, no take-over of the mouse). The stages use in-process events
-   posted to the window of the test host, the pasteboard of the real drag session, and the stub dragging info for the drop code. This does
+   posted to the window of the test host. They start NO system drag session (round 3 below). This does
    not prove a real drop by a DAW or the real mouse path. The hand check sheet has one line for it: drag the MIDI and the spikes onto a DAW
    track with the real mouse and note where each lands.
 2. The synthetic spike WAV and the MIDI are in M1c1. The audio-spike types ("Audio" and "Both") stay absent in host mode in this part; the
@@ -442,8 +442,8 @@ too. Names in tests are synthetic.
 - The test host has no content access controller and sends no tempo, so a stage can reach tempo source `none` only. The ARA reading
   (`musical.rs`) is covered by the unit tests of the conversion (`tempo_ara.rs`) and by nothing that runs the host side; the first run
   in a real host shows it in the row `musical_context`.
-- The drag evidence of the stages is the drag pasteboard of the real session (rows `drag_started`); there is no drop view and no stub
-  dragging info in the test host. A real drop, and the check that the mouse monitor of #561 leaves a drag from the page alone and that the
+- The drag evidence of the stages is a private pasteboard that the plugin fills with the items (rows `drag_started`, `session: test`; round 3); no
+  system drag session starts, and there is no drop view and no stub dragging info in the test host. A real drop, and the check that the mouse monitor of #561 leaves a drag from the page alone and that the
   folder sheet gets its keys, are for the hand check sheet.
 
 ## Round 2 (review of the first build)
@@ -571,8 +571,8 @@ at "preparing". In the app the page is as before.
 
 Stage `export-dialog` (mode `exportdialog` of the test host and of `driver.js`) drives the REAL dialog in the REAL page of the plugin, from the
 menu: File > Export... by DOM clicks, in two editors of one document. It reports what the dialog shows at each step: no folder text, the default
-folder, both tiles "ready" with 4 files, a press and a move on the Drag MIDI tile starts the real drag session (the pasteboard holds the 4 files
-in `Exports/`), Export writes 4 MIDI and 4 WAV files, a second open after a close does the same, Choose... (answered by `DS_ARA_PICK_DIR`) shows
+folder, both tiles "ready" with 4 files, a press and a move on the Drag MIDI tile runs the drag command up to the items (a private pasteboard holds the 4 files
+in `Exports/`; no system drag session, see round 3), Export writes 4 MIDI and 4 WAV files, a second open after a close does the same, Choose... (answered by `DS_ARA_PICK_DIR`) shows
 the chosen folder and Export writes there, and a new editor of the document opens with that folder. Fault runs: `old-dest` (the rule of M1c1) gives
 the folder error and the tiles do not reach "ready"; `no-remember` (the choice is not kept) opens the new editor with the default folder.
 
@@ -622,3 +622,23 @@ note said "come in a later part".
 
 Hand check steps for the audio spikes: in the dialog choose "Audio" (or "Both"), press Export, drag the WAV from `Exports/` onto an audio track at the session
 start: each snippet sits on the hit it belongs to and the file does not start later than song position 0; the audio of the snippet is the audio of the clip.
+
+## Round 3 (#579): no gate run starts a system drag session
+
+The stages `delivery` and `export-dialog` started a REAL AppKit drag session under `DS_ARA_DRAG_PRESSED` and then posted an in-process mouse up.
+The comment said the session then ends as "cancelled". That was false: the system drops the files on the window under the real pointer, and
+128 fixture files landed as uploads in an app of the owner (2026-11-22). The rule now: no gate stage, fault run or test starts a system drag
+session, posts an event that leaves the process, or touches the general or drag pasteboard of the system.
+
+- In a gate run (`deliver::drag_is_test`: the test host's editor mode, or `DS_ARA_DRAG_TEST=1`; both read only by a build with the feature
+  `test-switches`, so a delivery build is always a real drag) the drag command runs everything up to the session: button check, view and window,
+  path guard, file list, the image. The items go to a private `NSPasteboard` with a unique name, are read back for the row `drag_started` (`session: "test"`),
+  and the pasteboard is released. The row `drag_result` says `test`. `release_test_drag` and its thread are gone.
+- The system call (`drag::start_drag`) is in one function, `deliver::start_drag_system`, which refuses in a gate run. Stage `drag-source` reads the
+  source: exactly one such call, in that function, behind that check, and no `release_test_drag`, general pasteboard, `NSWorkspace`, CGEvent or posted
+  event in the plugin source; its fault run plants a second call and must fail. The delivery stages assert that every `drag_started` row says `session: test`
+  (fault `test-row-real` changes only the row, so the check can fail without a system session).
+- What the stages prove now: the guards (a path outside `Exports/` is 403, no button gives 409), the items and their file URLs. They do NOT prove a real
+  drag session. A real drag into a DAW (and where each file lands) is a hand check.
+- The fault run `no-button-check` now shows that the drag command passes with no button down (a test session); it does not start a session.
+- The folder sheet: a gate run never shows a real panel; with no `DS_ARA_PICK_DIR` the command answers cancel.

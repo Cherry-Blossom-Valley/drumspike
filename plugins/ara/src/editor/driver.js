@@ -468,7 +468,7 @@
     post(Object.assign({ kind: "names-after", reloads: reloads, reloaded: reloaded, waited_ms: Math.round(performance.now() - t0) }, after));
   }
   /* Mode delivery (M1c1, #560): the export in song time, the folder rule and the file drag, through the page's own invoke.
-     DS_ARA_PICK_DIR answers the folder sheet; DS_ARA_DRAG_PRESSED stands in for the mouse button. The report carries what each
+     DS_ARA_PICK_DIR answers the folder sheet; DS_ARA_DRAG_PRESSED stands in for the mouse button; a gate run starts NO system drag session (the plugin writes the items to a private pasteboard). The report carries what each
      call answered and the hits of every track, so the check reads the files and compares them with the hits. */
   async function deliveryRun(names) {
     var inv = window.__TAURI__.core.invoke, sid = S.sid, out = { names: names };
@@ -509,7 +509,7 @@
      the replace line, the tiles and their count, the result line); the check reads the files that the Export button wrote.
      Steps: open, drag a tile, Export, close, open again, Export, Choose a folder (DS_ARA_PICK_DIR answers the sheet; T.arg is
      that folder), Export, close. `--cycles 2` runs it in a second editor of the same document: the folder of the choice
-     must then be the one the dialog opens with. DS_ARA_DRAG_PRESSED stands in for the mouse button of the drag. */
+     must then be the one the dialog opens with. DS_ARA_DRAG_PRESSED stands in for the mouse button of the drag; no system drag session starts in a gate run. */
   async function exportDialogRun(names) {
     var out = { names: names, def: null, steps: [] };
     function q(sel) { return document.querySelector(sel); }

@@ -396,6 +396,16 @@ impl HasWindowHandle for ViewHandle {
     }
 }
 
+/// A gate run (M1c2 round 3): no system drag session may start. True when the test host drives the plugin
+/// (`DS_ARA_EDITOR_MODE`, set by the test host for every editor run) or `DS_ARA_DRAG_TEST=1`; both are read only by a build
+/// with the feature `test-switches`, so a delivery build is always false. A drag session that is dropped lands on whatever
+/// window is under the real pointer: on 2026-11-22 a stage did that to the owner's desktop apps.
+#[must_use]
+pub fn drag_is_test() -> bool {
+    crate::test_switch("DS_ARA_DRAG_TEST").as_deref() == Ok("1")
+        || crate::test_switch("DS_ARA_EDITOR_MODE").is_ok_and(|v| !v.is_empty())
+}
+
 /// The left mouse button is down now (AppKit's own state, readable from any thread).
 #[must_use]
 pub fn left_button_down() -> bool {
@@ -405,7 +415,18 @@ pub fn left_button_down() -> bool {
     NSEvent::pressedMouseButtons() & 1 != 0
 }
 
+/// What [`start_drag`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DragStart {
+    /// The system drag session started; the files are on the drag pasteboard.
+    Real,
+    /// A gate run: the items were written to a private pasteboard and read back (their paths); no session started.
+    Test(Vec<String>),
+}
+
 /// Start the native file drag of `files` from the web view `view`. Main thread only. `Err` is the reason text.
+/// In a gate run ([`drag_is_test`]) everything up to the session happens (the button check, the view and window, the items),
+/// the items go to a PRIVATE pasteboard that is read back and released, and no system drag session starts.
 ///
 /// # Safety
 /// `view` is the live web view of the editor (an `NSView`), and the caller is on the host's main thread.
@@ -414,7 +435,7 @@ pub unsafe fn start_drag(
     files: Vec<PathBuf>,
     png: Vec<u8>,
     done: impl Fn(&str) + Send + 'static,
-) -> Result<(), String> {
+) -> Result<DragStart, String> {
     let v = view as *mut AnyObject;
     if v.is_null() {
         return Err("the editor has no view".into());
@@ -425,6 +446,28 @@ pub unsafe fn start_drag(
     }
     if crate::editor::fault() != "no-button-check" && !left_button_down() {
         return Err("the mouse button was released".into());
+    }
+    if drag_is_test() {
+        if png.is_empty() {
+            return Err("the drag image is empty".into());
+        }
+        let paths = private_pasteboard_paths(&files)?;
+        done("test");
+        return Ok(DragStart::Test(paths));
+    }
+    start_drag_system(v, files, png, done).map(|()| DragStart::Real)
+}
+
+/// THE ONLY place that starts a system drag session (the stage `drag-source` reads the source for exactly one call of the
+/// crate `drag` here). It refuses in a gate run, so even a wrong caller cannot start a session there.
+unsafe fn start_drag_system(
+    v: *mut AnyObject,
+    files: Vec<PathBuf>,
+    png: Vec<u8>,
+    done: impl Fn(&str) + Send + 'static,
+) -> Result<(), String> {
+    if drag_is_test() {
+        return Err("a gate run starts no system drag session".into());
     }
     let handle = ViewHandle(v.cast());
     drag::start_drag(
@@ -442,28 +485,55 @@ pub unsafe fn start_drag(
     .map_err(|e| format!("{e}"))
 }
 
-/// The file URLs on the drag pasteboard now (what a drop target reads); the stage compares them with the files.
-#[must_use]
-pub fn drag_pasteboard_paths() -> Vec<String> {
-    use objc2_app_kit::{NSPasteboard, NSPasteboardNameDrag};
+/// The file URLs of `pb`'s items (what a drop target reads).
+fn pasteboard_paths(pb: &objc2_app_kit::NSPasteboard) -> Vec<String> {
     use objc2_foundation::NSURL;
-    unsafe {
-        let pb = NSPasteboard::pasteboardWithName(NSPasteboardNameDrag);
-        let mut out = Vec::new();
-        if let Some(items) = pb.pasteboardItems() {
-            for it in items.iter() {
-                let t = NSString::from_str("public.file-url");
-                if let Some(s) = it.stringForType(&t) {
-                    if let Some(u) = NSURL::URLWithString(&s) {
-                        if let Some(p) = u.path() {
-                            out.push(p.to_string());
-                        }
+    let mut out = Vec::new();
+    if let Some(items) = pb.pasteboardItems() {
+        for it in items.iter() {
+            let t = NSString::from_str("public.file-url");
+            if let Some(s) = it.stringForType(&t) {
+                if let Some(u) = NSURL::URLWithString(&s) {
+                    if let Some(p) = u.path() {
+                        out.push(p.to_string());
                     }
                 }
             }
         }
-        out
     }
+    out
+}
+
+/// A gate run: write the files as items to a private pasteboard with a unique name (never the general or the drag
+/// pasteboard of the system), read the paths back and release it.
+fn private_pasteboard_paths(files: &[PathBuf]) -> Result<Vec<String>, String> {
+    use objc2::runtime::ProtocolObject;
+    use objc2_app_kit::{NSPasteboard, NSPasteboardWriting};
+    use objc2_foundation::{NSArray, NSURL};
+    let pb = NSPasteboard::pasteboardWithUniqueName();
+    pb.clearContents();
+    let urls: Vec<_> = files
+        .iter()
+        .map(|f| {
+            let u = NSURL::fileURLWithPath(&NSString::from_str(&f.display().to_string()));
+            ProtocolObject::<dyn NSPasteboardWriting>::from_retained(u)
+        })
+        .collect();
+    let ok = pb.writeObjects(&NSArray::from_retained_slice(&urls));
+    let paths = pasteboard_paths(&pb);
+    let _: () = unsafe { objc2::msg_send![&*pb, releaseGlobally] };
+    if ok {
+        Ok(paths)
+    } else {
+        Err("the items could not be written to the pasteboard".into())
+    }
+}
+
+/// The file URLs on the drag pasteboard now (what a drop target reads) after a REAL session started. Never read in a gate run.
+#[must_use]
+pub fn drag_pasteboard_paths() -> Vec<String> {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardNameDrag};
+    unsafe { pasteboard_paths(&NSPasteboard::pasteboardWithName(NSPasteboardNameDrag)) }
 }
 
 /// Show the folder sheet on the window of `view` and call `done` with the chosen folder (`None`: cancelled) on the
@@ -549,35 +619,6 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
-}
-
-/// The test host has no hand to let go of the mouse: post an in-process mouse up to the window of `view`, so the drag
-/// session that the stage started ends (the callback then says `cancelled`). Only `DS_ARA_DRAG_PRESSED` runs it. Main thread
-/// only. No event of the system is posted: this one goes to the application's own queue.
-///
-/// # Safety
-/// `view` is the live web view of the editor and the caller is on the host's main thread.
-pub unsafe fn release_test_drag(view: usize) {
-    use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSEventType};
-    use objc2_foundation::NSPoint;
-    let v = view as *mut NSView;
-    let (Some(window), Some(mtm)) = ((*v).window(), MainThreadMarker::new()) else {
-        return;
-    };
-    let at = window.mouseLocationOutsideOfEventStream();
-    if let Some(up) = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
-        NSEventType::LeftMouseUp,
-        NSPoint::new(at.x, at.y),
-        NSEventModifierFlags::empty(),
-        0.0,
-        window.windowNumber(),
-        None,
-        0,
-        1,
-        0.0,
-    ) {
-        NSApplication::sharedApplication(mtm).postEvent_atStart(&up, true);
-    }
 }
 
 #[cfg(test)]
@@ -882,6 +923,42 @@ mod tests {
             load_folders(&file).is_empty(),
             "the folder is a link to another one now"
         );
+    }
+
+    #[test]
+    fn the_items_of_a_drag_go_to_a_private_pasteboard_and_read_back() {
+        let a = d("pb");
+        let (f1, f2) = (a.join("one_spike.mid"), a.join("two spike.wav"));
+        std::fs::write(&f1, b"1").unwrap();
+        std::fs::write(&f2, b"2").unwrap();
+        let got = private_pasteboard_paths(&[f1.clone(), f2.clone()]).unwrap();
+        assert_eq!(got, vec![f1.display().to_string(), f2.display().to_string()]);
+        assert!(private_pasteboard_paths(&[]).unwrap().is_empty());
+    }
+
+    #[cfg(not(feature = "test-switches"))]
+    #[test]
+    fn a_delivery_build_is_never_a_test_drag_whatever_the_environment_says() {
+        std::env::set_var("DS_ARA_DRAG_TEST", "1");
+        std::env::set_var("DS_ARA_EDITOR_MODE", "delivery");
+        assert!(
+            !drag_is_test(),
+            "the switches are inert in a delivery build: the drag is the real one"
+        );
+        std::env::remove_var("DS_ARA_DRAG_TEST");
+        std::env::remove_var("DS_ARA_EDITOR_MODE");
+    }
+
+    #[cfg(feature = "test-switches")]
+    #[test]
+    fn a_gate_run_is_a_test_drag_and_the_system_session_function_refuses() {
+        // the unit tests run with the feature test-switches; DS_ARA_DRAG_TEST makes the run a test run
+        std::env::set_var("DS_ARA_DRAG_TEST", "1");
+        assert!(drag_is_test());
+        // the function that starts the system session refuses before it touches the crate `drag`
+        let r = unsafe { start_drag_system(std::ptr::null_mut(), Vec::new(), Vec::new(), |_| {}) };
+        assert_eq!(r, Err("a gate run starts no system drag session".to_string()));
+        std::env::remove_var("DS_ARA_DRAG_TEST");
     }
 
     #[test]
