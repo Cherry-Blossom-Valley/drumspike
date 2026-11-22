@@ -263,7 +263,7 @@ def test_the_daw_help_is_a_path_of_five_steps(host):
     host.wait_for_selector("#helpPage #dawSteps")
     steps = host.evaluate("() => [...document.querySelectorAll('#dawSteps li')].map(l => l.textContent)")
     assert len(steps) == 5, steps
-    for step, words in zip(steps, (["plugin", "drum clips"], ["analysis"], ["Check", "correct"], ["note", "role"], ["MIDI", "spikes", "start of the session"])):
+    for step, words in zip(steps, (["plugin", "drum clips", "track with the plugin is selected"], ["analysis"], ["Check", "correct"], ["note", "role"], ["MIDI", "spikes", "start of the session"])):
         assert all(w in step for w in words), (step, words)
 
 

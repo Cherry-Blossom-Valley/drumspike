@@ -88,7 +88,7 @@ existing test changed. This is the one place where I read the ticket and the rul
 
 The help of the page in a DAW (section "In a DAW", `static/help.js`) starts with a path of five steps:
 
-1. Put the plugin on the drum clips of the DAW.
+1. Put the plugin on the drum clips of the DAW. The page shows when a track with the plugin is selected.
 2. Wait for the analysis. The page says when the hits are ready.
 3. Check the hits and correct them.
 4. Set the note and the role of each track in the Inspector.
