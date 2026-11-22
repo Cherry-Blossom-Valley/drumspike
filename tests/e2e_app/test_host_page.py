@@ -222,14 +222,14 @@ def test_the_export_dialog_works_in_host_mode_with_the_host_choices_only(host_ap
     analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
     host_app.evaluate("() => openExport('all')")
     host_app.wait_for_function("() => !document.querySelector('#exportModal').classList.contains('hidden')")
-    for sel in ("#exMidi", "#exSpikes", "#exModeTrack", "#exModeSingle", "#exSpikeSynth", "#exSpikeAudio", "#exSpikeBoth", "#exChoose", "#exDragMidi", "#exDragSpikes"):
+    for sel in ("#exMidi", "#exSpikes", "#exModeTrack", "#exModeSingle", "#exSpikeSynth", "#exSpikeAudio", "#exSpikeBoth", "#exDragMidi", "#exDragSpikes"):   # #575: the destination row (#exChoose) is collapsed in a DAW until one click (test_host_leftovers.py)
         assert host_app.evaluate("s => document.querySelector(s).checkVisibility({ visibilityProperty: true })", sel) is True, sel
     for sel in ("#exMarkers", "#exComp"):
         assert host_app.evaluate("s => document.querySelector(s).closest('label').checkVisibility({ visibilityProperty: true })", sel) is False, sel
     note = host_app.locator("#exHostNote")
     host_app.wait_for_function("() => !document.querySelector('#exHostNote').classList.contains('hidden')")
     text = note.inner_text()
-    assert "none from the host" in text and "song position 0" in text and "later part" not in text, text
+    assert "none from the host" in text and "song position 0" in text and "later part" not in text, text   # #575: the development note is gone, the drop hint is in test_host_leftovers.py
     # a tempo that varied in the host's process calls: a clear warning line, the dialog stays usable
     assert host_app.evaluate("() => document.querySelector('#exHostWarn').classList.contains('hidden')") is True
     host_app.evaluate("() => { EX.hostTempo = { source: 'transport-varies', bpm: 97.3, steps: 0, stretched: [] }; exRender(); }")

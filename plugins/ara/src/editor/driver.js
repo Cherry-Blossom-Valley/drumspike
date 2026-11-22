@@ -2,7 +2,7 @@
    test switch DS_ARA_EDITOR_MODE is set (a real host sets none). It runs on the real page and
    reports to the plugin through window.ipc (rows "page_report" of the plugin's report).
    window.__DS_TEST__ = {mode, arg, fault} comes from the plugin.
-   Modes: ready (boot report only), measure, keys, focus, resize, edit, shell, analyse, net, and (M1b11) hit, menu, geometry, (M1b13) selection. */
+   Modes: ready (boot report only), measure, keys, focus, resize, edit, shell, analyse, net, and (M1b11) hit, menu, geometry, (M1b13) selection, (M1d1) leftovers. */
 (function () {
   "use strict";
   var T = window.__DS_TEST__ || { mode: "ready", arg: "", fault: "" };
@@ -81,6 +81,7 @@
     if (T.mode === "hostkeys") hostkeysRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "exportdialog") exportDialogRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "delivery") deliveryRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "leftovers") leftoversRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "selection") selectionRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "playback") playbackRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
   });
@@ -466,6 +467,46 @@
     await sleepMs(800);   // the rename and the move are two calls of the host: the last state
     var after = await namesSnap();
     post(Object.assign({ kind: "names-after", reloads: reloads, reloaded: reloaded, waited_ms: Math.round(performance.now() - t0) }, after));
+  }
+  /* Mode leftovers (M1d1, #575): the page shows the name of the DAW track where it names a track (progress, info line, status bar, undo label,
+     follower text, export dialog, Follow menu), and after the host changed the audio of one source it says what happened. The first report
+     `leftovers` carries the texts; the host then replaces the audio of a source (`--update-content-after`); the plugin analyses it again and
+     tells the page; the second report `leftovers-after` carries the status line that the page shows. Fault runs (DS_ARA_EDITOR_FAULT):
+     `left-key` (the label helper returns the key). The plugin fault `DS_ARA_LEFTOVER_FAULT=no-audio-reason` sends no audio reason. */
+  async function leftoversRun() {
+    if (T.fault === "left-key") window.trackLabel = function (k) { return k; };   // the fault run: the page shows the key of a track
+    var order = S.order.slice(), text = function (id) { return document.querySelector(id).textContent; };
+    await sleepM(600);
+    var a = order[0], b = order[2], out = { order: order, a: a, b: b };
+    var real = B.job, jobs = {};
+    jobs[a] = { state: "done" }; jobs[b] = { state: "running", stage: "detecting" };
+    B.job = async function () { return { state: "running", tracks: jobs }; };
+    pollJob(); await sleepM(400); clearTimeout(pollTimer); B.job = real;
+    out.progress = text("#progressText"); hideProgress();
+    S.selTrack = b; S.sel = { track: b, index: 0 }; updateStatus(); drawInfo();
+    out.info = text("#ilTrack"); out.sel = text("#stSel");
+    S.sel = null; updateStatus();
+    pushUndo({ type: "del", track: b, t: 1.5 }); out.undo = undoTitles().undoTitle; S.undo.pop();
+    S.tracks[a].follows = b; followerLocked(a); out.follower = text("#stMsg"); delete S.tracks[a].follows;
+    setMsg(b + ": 12 hits"); out.status = text("#stMsg");
+    openExport("selected", b);
+    for (var w = 0; w < 50 && document.querySelector("#exportModal").classList.contains("hidden"); w++) await sleepM(100);
+    out.export_sel = text("#exSelText"); out.export_note = text("#exHostNote");
+    out.dest_visible = !!document.querySelector("#exDest").offsetParent;
+    exCancel();
+    out.follow_menu = DSHostMenu.model().flatMap(function (g) { return g.items; }).filter(function (i) { return i.id === "follow"; }).map(function (i) { return i.title; });
+    out.header = Array.prototype.slice.call(document.querySelectorAll("#lanesScroll .tnm")).map(function (e) { return e.textContent; });
+    out.dirty_dot_hidden = (setDirtyState(true), document.getElementById("dirtyDot").classList.contains("hidden")); setDirtyState(false);
+    setMsg("");
+    post(Object.assign({ kind: "leftovers", reloads: reloads }, out));
+    var base = reloads, t0 = performance.now(), msg = "";
+    while (performance.now() - t0 < 30000) {
+      msg = text("#stMsg");
+      if (/^The DAW changed the audio/.test(msg)) break;
+      await sleepM(200);
+    }
+    post({ kind: "leftovers-after", reloads: reloads, reloaded: reloads > base, waited_ms: Math.round(performance.now() - t0), msg: msg,
+      header: Array.prototype.slice.call(document.querySelectorAll("#lanesScroll .tnm")).map(function (e) { return e.textContent; }) });
   }
   /* Mode delivery (M1c1, #560): the export in song time, the folder rule and the file drag, through the page's own invoke.
      DS_ARA_PICK_DIR answers the folder sheet; DS_ARA_DRAG_PRESSED stands in for the mouse button; a gate run starts NO system drag session (the plugin writes the items to a private pasteboard). The report carries what each

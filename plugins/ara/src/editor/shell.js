@@ -80,7 +80,7 @@
   // What this script uses of the page: functions, globals and elements. A rename in
   // static/ must not make the reload do less in silence (S4): a missing one is reported at once
   // (console error, shell command plugin_report), and a stage checks the bundled page for them.
-  var PAGE_FUNCTIONS = ["cancelEvents", "initSessions", "loadProject", "invalidate", "appHostFollow", "setMsg"];
+  var PAGE_FUNCTIONS = ["cancelEvents", "initSessions", "loadProject", "invalidate", "appHostFollow", "setMsg", "hostAudioChanged"];
   var PAGE_GLOBALS = ["S", "F", "AC"];
   var PAGE_IDS = ["lanesScroll", "playBtn", "ruler"];
   function missingPageParts() {
@@ -95,8 +95,11 @@
     PAGE_IDS.forEach(function (n) { if (!document.getElementById(n)) out.push("#" + n); });
     return out;
   }
-  var reloading = false, again = false;
-  async function reloadProject() {
+  var reloading = false, again = false, pendingAudio = [];
+  /* #575: a round that read new audio of the DAW names the tracks (`audio`, their keys) in its event; once the page has loaded the
+     project again, hostAudioChanged() says on the status line what happened. A burst of events is one reload and one message. */
+  async function reloadProject(audio) {
+    if (Array.isArray(audio)) pendingAudio = pendingAudio.concat(audio);
     if (reloading) { again = true; return; }
     reloading = true;
     try {
@@ -120,11 +123,15 @@
           }
         } catch (e) { /* the page keeps its full view */ }
       } while (again);
+      if (pendingAudio.length) {
+        var changed = pendingAudio; pendingAudio = [];
+        try { if (typeof hostAudioChanged === "function") hostAudioChanged(changed); } catch (e) { /* no message */ }
+      }
     } catch (e) { /* the page shows its own error */ }
     reloading = false;
   }
   var listeners = {};
-  listeners["plugin-reload"] = [function () { reloadProject(); }];
+  listeners["plugin-reload"] = [function (m) { reloadProject(m && m.payload && m.payload.audio); }];
   window.__TAURI__ = {
     core: { invoke: invoke, Channel: Channel },
     dialog: {

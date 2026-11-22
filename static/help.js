@@ -19,15 +19,16 @@
   const DAW_CHAPTERS = ["01-why-sample-exact.html", "03-detection.html", "03b-detector-plugins.html", "04-first-sample.html",
     "08-velocity.html", "10-bleed.html", "11-learn.html"];
   const DAW_HTML = `<h2>Drum Spike in a DAW</h2>
-    <p>In a DAW, Drum Spike is the page of a plugin window. The host runs the session. The page finds the hits and lets you correct them.</p>
-    <ul>
-      <li><b>The host owns the tracks.</b> Put the plugin on a drum track: the track appears here. To add, remove, rename or reorder a track, do it in the DAW.</li>
-      <li><b>The host owns the files.</b> The audio comes from the DAW. The page has no file commands and no window commands.</li>
-      <li><b>The host owns the tempo.</b> The page reads the tempo map of the DAW.</li>
-      <li><b>The host plays the audio.</b> Play, stop and locate in the page and in the DAW move together. The page has no mixer, no click and no audition.</li>
-    </ul>
-    <p>What stays: Analyze All and the analysis of one track, every edit of a hit (move, add, delete, velocity), the review of doubtful hits, Learn, the zoom and the follow of the playhead, and Undo.</p>
-    <p>When the plugin is analyzing, the page says so and shows the hits when it is done.</p>`;
+    <p>In a DAW, Drum Spike is the page of a plugin window. The path has five steps:</p>
+    <ol id="dawSteps">
+      <li>Put the plugin on the drum clips of the DAW.</li>
+      <li>Wait for the analysis. The page says when the hits are ready.</li>
+      <li>Check the hits and correct them.</li>
+      <li>Set the note and the role of each track in the Inspector.</li>
+      <li>Drag or export the MIDI and the spikes into the DAW. Drop them at the start of the session.</li>
+    </ol>
+    <p>The host owns the tracks, the files and the tempo. To add, remove or rename a track, or to change the tempo, do it in the DAW. The host plays the audio: play, stop and locate in the page and in the DAW move together. The page has no mixer, no click and no audition.</p>
+    <p>What stays: Analyze All and the analysis of one track, every edit of a hit, the review of doubtful hits, Learn, the zoom and the follow of the playhead, and Undo.</p>`;
   const dawList = () => hostMode() ? manifest.chapters.filter(c => DAW_CHAPTERS.includes(c.file)) : manifest.chapters;
 
   function page() { return $("#helpPage"); }

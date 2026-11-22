@@ -16,7 +16,7 @@ function midiOutsideNote(n, before) {   // the MIDI file keeps a hit after the e
 function exportedFollowers(r) { if (r && Array.isArray(r.followers) && r.followers.length) reloadFollowers(r.followers); }   // P4-4: a stale follower was derived again
 
 /* ---------------- P3-3c: spike files, Export all (app only), error detail ---------------- */
-function setMsgDetail(detail) { $("#stMsg").title = detail || ""; }   // the core's text behind a clear message
+function setMsgDetail(detail) { $("#stMsg").title = trackText(detail || ""); }   // the core's text behind a clear message
 function markLaneDetail(name, detail) {   // tooltip of a lane that cannot draw
   const c = document.querySelector(`.track[data-name="${name}"] canvas.wave`);
   if (c) c.title = detail || "";
@@ -61,13 +61,25 @@ function exWait(p) {
   });
 }
 const exPlural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+/* #575: in a DAW the destination row is collapsed: the files go to the cache folder of the document and the user drags them, so the folder is
+   rarely the point. One click on the button opens the row (the folder, Choose, Reset). A folder that was chosen, or a note about the folder,
+   keeps the row open. With the mode off the button stays hidden and the row shows as before. */
+function exDestFold() {
+  const sec = $("#exDestSec"), btn = $("#exDestToggle");
+  if (!hostMode()) { sec.classList.remove("exFold", "open"); btn.classList.add("hidden"); return; }
+  if (EX.destOpen === undefined) EX.destOpen = false;
+  const forced = EX.dest !== EX.def || !!EX.destNote;
+  const open = EX.destOpen || forced;
+  sec.classList.add("exFold"); sec.classList.toggle("open", open);
+  btn.classList.toggle("hidden", open); btn.setAttribute("aria-expanded", String(open));
+}
 function exRender() {   // the controls from EX; the Export button and the tiles follow
   const { names, skipped } = exTrackSets(), all = S.order.length, sel = EX.selected && S.tracks[EX.selected] ? 1 : 0;
   $("#exScopeAll").checked = EX.scope === "all"; $("#exScopeSel").checked = EX.scope === "selected";
   $("#exAllText").textContent = `All tracks (${all})`;
-  $("#exSelText").textContent = sel ? `Selected track (1): ${EX.selected}` : "Selected track (none selected)";
+  $("#exSelText").textContent = sel ? `Selected track (1): ${trackLabel(EX.selected)}` : "Selected track (none selected)";
   $("#exScopeSel").disabled = !sel; $("#exScopeSel").closest(".exRow").classList.toggle("off", !sel);
-  $("#exSkipped").textContent = skipped.length ? `Skipped: ${skipped.map(k => `${k.name} (${k.why})`).join(", ")}` : "";
+  $("#exSkipped").textContent = skipped.length ? `Skipped: ${skipped.map(k => `${trackLabel(k.name)} (${k.why})`).join(", ")}` : "";
   $("#exMidi").checked = EX.midi; $("#exSpikes").checked = EX.spikes;
   $("#exMarkers").checked = EX.markers;
   $("#exModeTrack").checked = EX.mode === "per_track"; $("#exModeSingle").checked = EX.mode === "single";
@@ -75,7 +87,7 @@ function exRender() {   // the controls from EX; the Export button and the tiles
   for (const id of ["#exSpikeSynth", "#exSpikeAudio", "#exSpikeBoth"]) { $(id).disabled = !EX.spikes; $(id).closest(".exRow").classList.toggle("off", !EX.spikes); }
   const cal = S.order.filter(n => smOf(n));   // P4-7c: the tracks with a sampler calibration
   $("#exComp").checked = EX.comp; $("#exComp").disabled = !EX.midi; $("#exComp").closest(".exRow").classList.toggle("off", !EX.midi);
-  $("#exComp").closest(".exRow").title = cal.length ? `The MIDI notes of ${cal.join(", ")} move by the sampler offset (the aligned attack minus the offset)` : "No track has a sampler calibration yet (Inspector > Layer > Calibration MIDI…)";
+  $("#exComp").closest(".exRow").title = cal.length ? `The MIDI notes of ${cal.map(trackLabel).join(", ")} move by the sampler offset (the aligned attack minus the offset)` : "No track has a sampler calibration yet (Inspector > Layer > Calibration MIDI…)";
   for (const id of ["#exModeTrack", "#exModeSingle"]) { $(id).disabled = !EX.midi; $(id).closest(".exRow").classList.toggle("off", !EX.midi); }
   $("#exDest").value = EX.dest; $("#exDest").title = EX.dest;
   $("#exReset").disabled = EX.dest === EX.def;
@@ -102,9 +114,10 @@ function exRender() {   // the controls from EX; the Export button and the tiles
   /* #151: on the default map the Drag MIDI tile shows the visible 120 BPM warning until the project's answer */
   $("#exDragMidi .exDragW").classList.toggle("hidden", !(EX.midi && EX.tempoDefault && !EX.tempoAck));
   exHostNote();
+  exDestFold();
 }
 /* #560: in a DAW the dialog says where the tempo of the MIDI comes from, how many exported tracks have a time-stretched region (the
-   files are made all the same) and that the files start at song position 0. With the mode off nothing here shows. */
+   files are made all the same) and where to drop the files (#575: the session start). With the mode off nothing here shows. */
 function exHostNote() {
   const el = $("#exHostNote"), warn = $("#exHostWarn");
   if (!hostMode()) { el.classList.add("hidden"); warn.classList.add("hidden"); return; }
@@ -119,7 +132,7 @@ function exHostNote() {
     "MIDI tempo: none from the host, the file has 120 BPM");
   const names = exTrackSets().names, st = (h.stretched || []).filter(n => names.includes(n));
   if (st.length) parts.push(`${st.length} exported track${st.length === 1 ? " has" : "s have"} a region that the host stretches in time: the hits follow the stretch as one linear factor; warp markers inside a clip are not followed`);
-  parts.push("Files start at song position 0");
+  parts.push("Files start at song position 0: drop them at the start of the session in your DAW");   // #575: where to drop them; no development note
   el.textContent = parts.join(". ") + ".";
   el.classList.remove("hidden");
 }
@@ -215,7 +228,7 @@ async function openExport(scope, track) {
       } else EX.destNote = `The folder kept for this project cannot be used (${errText(e)}): Exports/ is used.`;
     }
   }
-  EX.open = true;
+  EX.open = true; EX.destOpen = false;   // #575: a DAW starts with the destination row collapsed
   $("#exportModal").classList.remove("hidden");
   document.addEventListener("keydown", exKey, true);
   exChanged();
@@ -309,14 +322,14 @@ async function exRun() {
     setTimeout(hideProgress, bad.length ? 8000 : 1500);
     const out = Object.entries(r.outside || {}).map(([k, c]) => `${k} ${c}`);   // P4-4
     const song = Object.values(r.outside_song || {}).reduce((a, c) => [a[0] + c.no_region, a[1] + c.before_start], [0, 0]);   // #560: the hits the song time left out
-    const msg = exSummary(r) + (bad.length ? `; ${bad.length} failed (${bad[0].name}: ${bad[0].message})` : "") +
+    const msg = exSummary(r) + (bad.length ? `; ${bad.length} failed (${trackLabel(bad[0].name)}: ${bad[0].message})` : "") +
       (out.length ? `; hits outside the audio file, not in the spike files: ${out.join(", ")} (the MIDI files keep them; a hit before the start sits at 0 s there)` : "") +
       (song[0] + song[1] ? `; hits left out of the files: ${song[0]} in no playback region, ${song[1]} before the song start` : "") +
       exSamplerNote(r) +
       ((r.also_updated || []).length ? `. Also updated: ${r.also_updated.length} older spike file(s) in this folder` : "");   // #274
     setMsg(msg);
     exportedFollowers(r);
-    setMsgDetail(bad.map(e => `${e.name}: ${e.message}` + (e.detail ? `\n  (${e.detail})` : "")).join("\n"));
+    setMsgDetail(bad.map(e => `${trackLabel(e.name)}: ${e.message}` + (e.detail ? `\n  (${e.detail})` : "")).join("\n"));
     EX.lastFile = (r.files || [])[0] || null;
     exRecord(true);   // P4-31: the project keeps what this export ran with (even with per-file errors)
     $("#exResultText").textContent = msg.replace(/^exported/, "Exported");
@@ -416,6 +429,7 @@ function setupExport() {
   $("#exSpikeSynth").onchange = () => { EX.spikeType = "synthetic"; exChanged(); exRecord(); };   // #218: the spike type is part of the export shape
   $("#exSpikeAudio").onchange = () => { EX.spikeType = "audio"; exChanged(); exRecord(); };
   $("#exSpikeBoth").onchange = () => { EX.spikeType = "both"; exChanged(); exRecord(); };
+  $("#exDestToggle").onclick = () => { EX.destOpen = true; exDestFold(); $("#exChoose").focus(); };   // #575
   $("#exChoose").onclick = () => exChoose();
   $("#exReset").onclick = () => exReset();
   $("#exGo").onclick = () => exRun();

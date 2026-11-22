@@ -15,6 +15,8 @@
 //! document at once. `edit-region`: after the edit the host trims the region of the edited
 //! source (`--region a,d,p`). `analyse-race --destroy-late <i> --archive-window <file>`: the
 //! host destroys source `i` while the page's own analysis runs and stores an archive in that time.
+//! Mode `leftovers` (M1d1): after the page's `leftovers` report the host replaces the audio of source k (`--update-content-after <k>:<wav>`);
+//! the page reports again once the plugin has analysed it and told the page.
 //! Mode `names` (M1b10): after the page's `names` report the host renames region sequences
 //! (`--rename-seq <j>=<name>`) and moves regions (`--move-region <i>=<j>`); the page reports again.
 //! `--late-files` are added to the document (and analysed) while the editor is open: in
@@ -614,6 +616,11 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         })
         .collect();
     let region_spec = args_value(rest, "--region").and_then(|v| parse_region(&v).ok());
+    // M1d1 (mode `leftovers`): after the page's `leftovers` report the host replaces the audio of source k (`--update-content-after <k>:<wav>`)
+    let update_after: Option<(usize, String)> = args_value(rest, "--update-content-after").and_then(|v| {
+        v.split_once(':')
+            .and_then(|(k, p)| Some((k.parse().ok()?, p.to_string())))
+    });
     // M1b13 (mode `selection`): the steps of the host's view, `[<pre action of the page>@]<host step>` separated by `;`. The page does the
     // pre action (a pointer or key held down, the switch in the menu, a zoom) and then reports `sel-armed`; the host sends its step, the
     // page reports `sel-snap` with what it shows. The host step is described at `view_step`.
@@ -899,6 +906,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 "edit-round" | "open-first" | "edit-region" => Some("follow"),
                 // the page reports the names it got, the host renames and moves, the page reports again
                 "names" => Some("names-after"),
+                "leftovers" => Some("leftovers-after"),
                 "edit-destroy" => Some("edit"),
                 "net" => Some("now"),
                 _ => None,
@@ -906,6 +914,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let reports_before = want_kind.map_or(0, |k| count_rows("page_report", Some(k)));
             let boots_before = count_rows("page_report", Some("boot"));
             let names_before = count_rows("page_report", Some("names"));
+            let leftovers_before = count_rows("page_report", Some("leftovers"));
+            let mut update_handled = false;
             let mut names_handled = false;
             let mut shift_handled = false;
             let sel_armed_before = count_rows("page_report", Some("sel-armed"));
@@ -1165,6 +1175,18 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                             }
                         }
                         sel_sent += 1;
+                    }
+                }
+                if mode == "leftovers"
+                    && !update_handled
+                    && count_rows("page_report", Some("leftovers")) > leftovers_before
+                {
+                    update_handled = true;
+                    if let Some((k, path)) = &update_after {
+                        if let Err(e) = update_source_content(&doc, *k, path) {
+                            failed = Some(e);
+                            break;
+                        }
                     }
                 }
                 if mode == "names" && !names_handled && count_rows("page_report", Some("names")) > names_before {
