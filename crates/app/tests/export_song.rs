@@ -329,3 +329,210 @@ fn a_track_the_host_has_no_source_for_loses_every_hit_and_a_region_before_song_z
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+// ---------------------------------------------------------------- #579: the audio spikes (format "audio")
+
+/// The bytes of the standalone export of the formats `audio` and `spikes` + `audio` (no `ExportTime` object). The hashes
+/// were made on the base commit (main 4c3c4ec) before any change of #579.
+#[test]
+fn the_standalone_audio_export_writes_the_same_bytes_as_before_the_audio_song_time() {
+    let (svc, sid, _dir, root) = opened("audio_golden");
+    let mut got = Vec::new();
+    for (label, formats) in [("audio", json!(["audio"])), ("both", json!(["spikes", "audio"]))] {
+        let out = root.join(format!("out_{label}"));
+        std::fs::create_dir(&out).unwrap();
+        let o = ExportOpts::from_args(&json!({"dest": out.to_str().unwrap(), "formats": formats})).unwrap();
+        let r = svc.export_all_opts(&sid, &o, None).unwrap();
+        assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+        for (n, h) in sha_of_dir(&out) {
+            got.push(format!("{label}/{n} {h}"));
+        }
+    }
+    assert_eq!(got.join("\n"), AUDIO_GOLDEN.trim());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+const AUDIO_GOLDEN: &str = "
+audio/Kick_In_audio_spike.wav 5752557692c51dc390129806353882333397e0a9201f9e2c554a624068d24736
+audio/Snare_Top_audio_spike.wav 2c6497671102545f45cdb8aa425e1d31a1ff8c9cd2a4f36da3119eb213a9e24f
+both/Kick_In_audio_spike.wav 5752557692c51dc390129806353882333397e0a9201f9e2c554a624068d24736
+both/Kick_In_spike.wav 72f897e475d92e58920691c61ffba438edb4eb55ff43784ab777acc446e60663
+both/Snare_Top_audio_spike.wav 2c6497671102545f45cdb8aa425e1d31a1ff8c9cd2a4f36da3119eb213a9e24f
+both/Snare_Top_spike.wav e86fb899bfc8b71c4503620727c44df75a07b1135f98af6e12c11d5a8a7ef25c
+";
+
+fn song_kick_time() -> Arc<Fixed> {
+    // kick: [0.25, 1.25) at song 10 s and [1.75, 2.5) at song 20 s (the hits 0.5 and 1.0 sit in the first, 2.0 in the second);
+    // snare: no region (identity)
+    Arc::new(Fixed {
+        tracks: vec![
+            (
+                "Kick_In".into(),
+                SongTrack {
+                    regions: vec![
+                        SongRegion {
+                            start_mod: 0.25,
+                            dur_mod: 1.0,
+                            start_play: 10.0,
+                            dur_play: 1.0,
+                        },
+                        SongRegion {
+                            start_mod: 1.75,
+                            dur_mod: 0.75,
+                            start_play: 20.0,
+                            dur_play: 0.75,
+                        },
+                    ],
+                    stem: Some("Kick Drum".into()),
+                    hide_all: false,
+                },
+            ),
+            (
+                "Snare_Top".into(),
+                SongTrack {
+                    regions: vec![],
+                    stem: Some("Snare".into()),
+                    hide_all: false,
+                },
+            ),
+        ],
+        map: None,
+    })
+}
+
+#[test]
+fn a_song_time_export_puts_the_audio_spikes_at_the_song_positions_with_the_synthetic_rules() {
+    use drumspike_core::io::{MappedWav, MixMode};
+    let (svc, sid, _dir, root) = opened("audio_song");
+    svc.set_export_time(Some(song_kick_time()));
+    let out = root.join("out");
+    std::fs::create_dir(&out).unwrap();
+    let o = ExportOpts::from_args(
+        &json!({"dest": out.to_str().unwrap(), "formats": ["spikes", "audio"], "midi_mode": "per_track"}),
+    )
+    .unwrap();
+    let r = svc.export_all_opts(&sid, &o, None).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!((r["spikes"].as_u64(), r["audio"].as_u64()), (Some(2), Some(2)));
+    let names: Vec<String> = sha_of_dir(&out).into_iter().map(|x| x.0).collect();
+    // the same naming rule as the synthetic files: the host's name for the track, then the suffix
+    assert_eq!(
+        names,
+        [
+            "Kick Drum_audio_spike.wav",
+            "Kick Drum_spike.wav",
+            "Snare_audio_spike.wav",
+            "Snare_spike.wav"
+        ]
+    );
+    let src = |n: &str| {
+        MappedWav::open(&root.join("daw").join(format!("{n}.wav")))
+            .unwrap()
+            .decode_mono(MixMode::Ffmpeg)
+            .unwrap()
+    };
+    let kick_src = src("Kick_In");
+    let w = MappedWav::open(&out.join("Kick Drum_audio_spike.wav")).unwrap();
+    let synth = MappedWav::open(&out.join("Kick Drum_spike.wav")).unwrap();
+    // the same start at song position 0, the same length, the same rate as the synthetic file; time reference 0
+    assert_eq!(
+        (w.info.n_frames, w.info.sample_rate),
+        (synth.info.n_frames, synth.info.sample_rate)
+    );
+    assert_eq!(w.info.n_frames, 996_000, "song end 20.75 s");
+    assert_eq!(w.info.bext.as_ref().map(|b| b.time_reference), Some(0));
+    assert_eq!(
+        w.info.bext.as_ref().map(|b| b.description.as_str()),
+        Some("Drum Spike audio spikes")
+    );
+    let x = w.decode_mono(MixMode::Ffmpeg).unwrap();
+    // each snippet is the source audio of its hit, at the song sample of the hit: 0 samples of difference
+    let mut inside = vec![false; x.len()];
+    for (t_src, t_song) in [(0.5_f64, 10.25_f64), (1.0, 10.75), (2.0, 20.25)] {
+        let a = (t_src * 48_000.0).round() as usize;
+        let d = (t_song * 48_000.0).round() as usize;
+        let n = 96; // 2 ms: the shortest snippet, before the fade of 1 ms at its end
+        for k in 0..n {
+            assert!(
+                (x[d + k] - kick_src[a + k]).abs() < 1e-6,
+                "snippet of the hit {t_src}: sample {k}"
+            );
+            inside[d + k] = true;
+        }
+        assert_eq!(x[d - 1], 0.0, "exact silence before the snippet");
+        for (k, slot) in inside.iter_mut().enumerate().skip(d).take(2_880) {
+            *slot |= x[k] != 0.0;
+        }
+    }
+    let stray = x
+        .iter()
+        .zip(&inside)
+        .filter(|(v, inside)| **v != 0.0 && !**inside)
+        .count();
+    assert_eq!(stray, 0, "every sample outside the snippets is exact zero");
+    // the snare has no region: identity, so its audio spike file holds what the standalone export holds
+    let standalone = root.join("standalone");
+    std::fs::create_dir(&standalone).unwrap();
+    svc.set_export_time(None);
+    let o2 = ExportOpts::from_args(&json!({"dest": standalone.to_str().unwrap(), "formats": ["audio"]})).unwrap();
+    svc.export_all_opts(&sid, &o2, None).unwrap();
+    let a = MappedWav::open(&out.join("Snare_audio_spike.wav")).unwrap();
+    let b = MappedWav::open(&standalone.join("Snare_Top_audio_spike.wav")).unwrap();
+    assert_eq!(a.info.n_frames, b.info.n_frames);
+    assert_eq!(
+        a.decode_mono(MixMode::Ffmpeg).unwrap(),
+        b.decode_mono(MixMode::Ffmpeg).unwrap()
+    );
+    assert_eq!(
+        a.info.bext.as_ref().map(|b| b.time_reference),
+        Some(0),
+        "song time: reference 0"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// The byte golden of the audio format in song time: the files of `a_song_time_export_puts_the_audio_spikes...` made once
+/// by this commit (the standalone bytes above were made on the base commit).
+#[test]
+fn the_song_time_audio_export_writes_these_bytes() {
+    let (svc, sid, _dir, root) = opened("audio_song_golden");
+    svc.set_export_time(Some(song_kick_time()));
+    let out = root.join("out");
+    std::fs::create_dir(&out).unwrap();
+    let o = ExportOpts::from_args(&json!({"dest": out.to_str().unwrap(), "formats": ["audio"]})).unwrap();
+    let r = svc.export_all_opts(&sid, &o, None).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let got: Vec<String> = sha_of_dir(&out).into_iter().map(|(n, h)| format!("{n} {h}")).collect();
+    assert_eq!(got.join("\n"), SONG_AUDIO_GOLDEN.trim());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+const SONG_AUDIO_GOLDEN: &str = "
+Kick Drum_audio_spike.wav 1062b29857a25989f5ba4600954edc4596448df049ccfa9955afa27976199cf8
+Snare_audio_spike.wav f17de617e494c22bbb8bff08ee28bfea4cb1a62b457ed1f9b0b81a2b62ffc440
+";
+
+#[test]
+fn an_older_spike_file_of_the_other_type_is_made_again_in_song_time() {
+    use drumspike_core::io::MappedWav;
+    let (svc, sid, _dir, root) = opened("audio_also");
+    svc.set_export_time(Some(song_kick_time()));
+    let out = root.join("out");
+    std::fs::create_dir(&out).unwrap();
+    // an audio-spike file of an earlier export is in the folder; a synthetic-only export makes it again from the same hits
+    std::fs::write(out.join("Kick Drum_audio_spike.wav"), b"old").unwrap();
+    let o = ExportOpts::from_args(&json!({"dest": out.to_str().unwrap(), "formats": ["spikes"]})).unwrap();
+    let r = svc.export_all_opts(&sid, &o, None).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let w = MappedWav::open(&out.join("Kick Drum_audio_spike.wav")).unwrap();
+    assert_eq!(w.info.n_frames, 996_000, "in song time, not the length of the source");
+    assert_eq!(w.info.bext.as_ref().map(|b| b.time_reference), Some(0));
+    // and the other way round: an audio-only export rewrites the older synthetic file in song time
+    let o = ExportOpts::from_args(&json!({"dest": out.to_str().unwrap(), "formats": ["audio"]})).unwrap();
+    std::fs::write(out.join("Kick Drum_spike.wav"), b"old").unwrap();
+    let r = svc.export_all_opts(&sid, &o, None).unwrap();
+    assert!(r["errors"].as_array().unwrap().is_empty(), "{r}");
+    let w = MappedWav::open(&out.join("Kick Drum_spike.wav")).unwrap();
+    assert_eq!(w.info.n_frames, 996_000);
+    std::fs::remove_dir_all(&root).unwrap();
+}

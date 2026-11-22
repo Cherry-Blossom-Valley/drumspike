@@ -490,6 +490,8 @@
     if (typeof out.folder === "string") {
       try { out.exported = await inv("export_all", { sid: sid, dest: out.folder, formats: ["midi", "spikes"], compensate: false }); } catch (e) { out.exported = { error: err(e) }; }
       try { out.exported_single = await inv("export_all", { sid: sid, dest: out.folder, formats: ["midi"], midi_mode: "single", compensate: false }); } catch (e) { out.exported_single = { error: err(e) }; }
+      // M1c2 (#579): the audio spikes, in song time like the synthetic ones
+      try { out.exported_audio = await inv("export_all", { sid: sid, dest: out.folder, formats: ["audio"], compensate: false }); } catch (e) { out.exported_audio = { error: err(e) }; }
       try { await inv("export_all", { sid: sid, dest: out.folder + "/sub", formats: ["midi"] }); out.subfolder = { ok: true }; } catch (e) { out.subfolder = err(e); }
       try { await inv("export_all", { sid: sid, dest: T.arg || "/tmp", formats: ["midi"] }); out.other = { ok: true }; } catch (e) { out.other = err(e); }
     }
@@ -587,6 +589,12 @@
       await until(tilesDone, 40000);
       snap("chosen");
       await exportNow("export3");
+      // #579: the spike type Both in the dialog: the tiles prepare the synthetic and the audio files, Export writes both
+      q("#exSpikeBoth").click();
+      await sleepM(200);
+      await until(tilesDone, 40000);
+      snap("both");
+      await exportNow("export4");
     }
     await close();
     post(Object.assign({ kind: "exportdialog" }, out));

@@ -111,6 +111,9 @@ design, with the reasons and the risks, is `docs/design/daw-plugin/m1c1-delivery
 - Tempo: the MIDI file has the tempo map of the host when the host gives its ARA timeline (`musical.rs`, `tempo_ara.rs`);
   else one tempo of the process call; else 120 BPM, and the page says which. The report row `musical_context` says what the
   host offered.
+- Audio spikes (M1c2): the spike types Audio and Both of the dialog write `<track>_audio_spike.wav` in song time: the snippet of each hit is
+  cut from the source audio and put at the song position of the hit (`export_song::song_pairs`); same length, start and time reference 0 as the
+  synthetic file.
 - Drag: `plugin:drag|start_drag` starts the native drag on the host's main thread, only with the left button down, for files
   in `Exports/` of the document or in a folder chosen in this editor (`deliver.rs`).
 - Folder: `dialog.open` with `directory` is the sheet `plugin_pick_folder` (an open panel in directory mode on the window of

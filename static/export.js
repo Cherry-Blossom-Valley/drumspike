@@ -95,7 +95,7 @@ function exRender() {   // the controls from EX; the Export button and the tiles
   exHostNote();
 }
 /* #560: in a DAW the dialog says where the tempo of the MIDI comes from, how many exported tracks have a time-stretched region (the
-   files are made all the same) and that the audio-spike types come later. With the mode off nothing here shows. */
+   files are made all the same) and that the files start at song position 0. With the mode off nothing here shows. */
 function exHostNote() {
   const el = $("#exHostNote"), warn = $("#exHostWarn");
   if (!hostMode()) { el.classList.add("hidden"); warn.classList.add("hidden"); return; }
@@ -110,7 +110,7 @@ function exHostNote() {
     "MIDI tempo: none from the host, the file has 120 BPM");
   const names = exTrackSets().names, st = (h.stretched || []).filter(n => names.includes(n));
   if (st.length) parts.push(`${st.length} exported track${st.length === 1 ? " has" : "s have"} a region that the host stretches in time: the hits follow the stretch as one linear factor; warp markers inside a clip are not followed`);
-  parts.push("Files start at song position 0. Spike audio types (Audio, Both) come in a later part");
+  parts.push("Files start at song position 0");
   el.textContent = parts.join(". ") + ".";
   el.classList.remove("hidden");
 }
@@ -194,7 +194,7 @@ async function openExport(scope, track) {
     EX.spikeType = last.formats.includes("spikes") && last.formats.includes("audio") ? "both" : last.formats.includes("audio") ? "audio" : "synthetic";   // #218: the spike type the project keeps
     EX.mode = last.midi_mode === "single" ? "single" : "per_track";   // P4-31: the choices the project keeps seed the dialog; compensate keeps its default (a recorded off was the default of an earlier export, not a choice)
   }
-  if (hostMode()) { EX.spikeType = "synthetic"; EX.comp = false; EX.markers = false; }   // #560: audio spikes, the sampler offset and markers are absent in a DAW
+  if (hostMode()) { EX.comp = false; EX.markers = false; }   // #560: the sampler offset and markers are absent in a DAW (#579: the audio spike types are there, in song time)
   EX.dest = EX.def;
   if (EX.remembered) {   // the folder of the last choice, when it can still be used
     try { await B.exportExisting(S.sid, { dest: EX.remembered }); EX.dest = EX.remembered; }

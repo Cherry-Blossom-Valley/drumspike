@@ -99,6 +99,33 @@ pub fn to_song(events: &[Value], regions: &[SongRegion]) -> (Vec<Value>, SongCou
     (out, counts)
 }
 
+/// The audio-spike pairs of a track (#579): for every hit that [`to_song`] keeps, `(t in the source, t in the song)`, once
+/// per region that holds it. The audio-spike file cuts its snippets from the source at the first time and puts them at
+/// the second. No region: every hit is its own pair (identity). A hit with no `t` is left out (the writers refuse it).
+#[must_use]
+pub fn song_pairs(events: &[Value], regions: &[SongRegion]) -> Vec<(f64, f64)> {
+    let mut out = Vec::with_capacity(events.len());
+    for e in events {
+        let Some(t) = e.get("t").and_then(Value::as_f64) else {
+            continue;
+        };
+        if regions.is_empty() {
+            out.push((t, t));
+            continue;
+        }
+        for r in regions
+            .iter()
+            .filter(|r| t >= r.start_mod && t < r.start_mod + r.dur_mod)
+        {
+            let s = r.start_play + (t - r.start_mod) * r.dur_play / r.dur_mod;
+            if s >= 0.0 {
+                out.push((t, s));
+            }
+        }
+    }
+    out
+}
+
 impl Service {
     /// Install the song time base of the host (the DAW plugin), or remove it.
     pub fn set_export_time(&self, t: Option<Arc<dyn ExportTime>>) {
@@ -151,6 +178,37 @@ mod tests {
         assert_eq!(o[0]["v"], 90);
         assert_eq!(o[0]["keep"], true, "the other keys stay");
         assert_eq!(c, SongCounts::default());
+    }
+
+    #[test]
+    fn the_audio_pairs_hold_the_source_time_and_the_song_time_of_each_kept_hit() {
+        let ev = vec![
+            json!({"t": 0.5}),
+            json!({"t": 1.5}),
+            json!({"t": 5.0}),
+            json!({"t": 2.5}),
+        ];
+        // the same regions as in `a_hit_in_no_region_or_before_song_zero_is_left_out_and_counted`
+        let pairs = song_pairs(&ev, &[r(1.0, 1.0, -1.0), r(2.0, 1.0, 0.0)]);
+        assert_eq!(pairs, vec![(2.5, 0.5)]);
+        // two regions that hold one hit: two pairs, as `to_song` gives two events
+        let pairs = song_pairs(&[json!({"t": 1.5})], &[r(1.0, 2.0, 10.0), r(0.0, 4.0, 20.0)]);
+        assert_eq!(pairs, vec![(1.5, 10.5), (1.5, 21.5)]);
+        // no region: the identity
+        assert_eq!(song_pairs(&[json!({"t": 0.5})], &[]), vec![(0.5, 0.5)]);
+        // a stretched region moves the song time
+        let half = SongRegion {
+            start_mod: 1.0,
+            dur_mod: 2.0,
+            start_play: 10.0,
+            dur_play: 1.0,
+        };
+        assert_eq!(song_pairs(&[json!({"t": 2.0})], &[half]), vec![(2.0, 10.5)]);
+        // the pairs and `to_song` agree on the song times
+        let regs = [r(1.0, 2.0, 10.0), r(0.0, 4.0, 20.0)];
+        let ev = vec![json!({"t": 0.5}), json!({"t": 1.5}), json!({"t": 3.0})];
+        let a: Vec<f64> = song_pairs(&ev, &regs).iter().map(|p| p.1).collect();
+        assert_eq!(a, ts(&to_song(&ev, &regs).0));
     }
 
     #[test]

@@ -215,21 +215,21 @@ def test_every_absent_group_calls_no_command_through_its_controls_and_keys(host_
 
 
 def test_the_export_dialog_works_in_host_mode_with_the_host_choices_only(host_app, make_project):
-    """#560: in a DAW the Export dialog is there: MIDI and synthetic spikes, the folder row, the drag tiles. The sampler offset,
-    the markers and the audio-spike types are not; the dialog says where the tempo comes from and that the audio types come
-    later. A press and a drag of the MIDI tile asks no question (the default-tempo question of the app is for the Export
+    """#560: in a DAW the Export dialog is there: MIDI and spikes (#579: with the types Synthetic, Audio and Both), the folder row,
+    the drag tiles. The sampler offset and the markers are not; the dialog says where the tempo comes from and that the files
+    start at song position 0. A press and a drag of the MIDI tile asks no question (the default-tempo question of the app is for the Export
     button in a DAW) and starts the drag with the files of the dialog."""
     analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
     host_app.evaluate("() => openExport('all')")
     host_app.wait_for_function("() => !document.querySelector('#exportModal').classList.contains('hidden')")
-    for sel in ("#exMidi", "#exSpikes", "#exModeTrack", "#exModeSingle", "#exSpikeSynth", "#exChoose", "#exDragMidi", "#exDragSpikes"):
+    for sel in ("#exMidi", "#exSpikes", "#exModeTrack", "#exModeSingle", "#exSpikeSynth", "#exSpikeAudio", "#exSpikeBoth", "#exChoose", "#exDragMidi", "#exDragSpikes"):
         assert host_app.evaluate("s => document.querySelector(s).checkVisibility({ visibilityProperty: true })", sel) is True, sel
-    for sel in ("#exMarkers", "#exComp", "#exSpikeAudio", "#exSpikeBoth"):
+    for sel in ("#exMarkers", "#exComp"):
         assert host_app.evaluate("s => document.querySelector(s).closest('label').checkVisibility({ visibilityProperty: true })", sel) is False, sel
     note = host_app.locator("#exHostNote")
     host_app.wait_for_function("() => !document.querySelector('#exHostNote').classList.contains('hidden')")
     text = note.inner_text()
-    assert "none from the host" in text and "song position 0" in text and "later part" in text, text
+    assert "none from the host" in text and "song position 0" in text and "later part" not in text, text
     # a tempo that varied in the host's process calls: a clear warning line, the dialog stays usable
     assert host_app.evaluate("() => document.querySelector('#exHostWarn').classList.contains('hidden')") is True
     host_app.evaluate("() => { EX.hostTempo = { source: 'transport-varies', bpm: 97.3, steps: 0, stretched: [] }; exRender(); }")
@@ -294,6 +294,25 @@ def test_a_remembered_folder_that_is_gone_falls_back_to_the_default_with_one_sho
     got = host_app.evaluate("() => [EX.dest === EX.def, EX.destOk, EX.destNote, document.querySelector('#exProblem').textContent, document.querySelector('#exGo').disabled]")
     assert got == [True, True, "The folder chosen before is not available: Exports/ is used.", "The folder chosen before is not available: Exports/ is used.", False], got
     assert host_app.evaluate("async () => (await B.exportExisting(S.sid, {})).remembered") is None   # forgotten: the text comes once
+    host_app.evaluate("() => exClose()")
+
+
+def test_the_audio_spike_types_work_in_host_mode_and_a_kept_type_is_kept(host_app, make_project):
+    """#579 gate line 5 (page side): Audio and Both are in the dialog in a DAW, they choose the formats, the tile of the spikes holds
+    the files of the type, and the type that the project keeps is the type the dialog opens with (it was forced to Synthetic)."""
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragSpikes').dataset.state === 'ready'", timeout=60000)
+    for rid, want in (("#exSpikeAudio", ["midi", "audio"]), ("#exSpikeBoth", ["midi", "spikes", "audio"]), ("#exSpikeSynth", ["midi", "spikes"])):
+        host_app.locator(rid).check()
+        assert host_app.evaluate("() => exOpts(true).formats") == want, rid
+    host_app.locator("#exSpikeAudio").check()
+    host_app.wait_for_function("() => document.querySelector('#exDragSpikes').dataset.state === 'ready'", timeout=60000)
+    assert "later part" not in host_app.locator("#exHostNote").inner_text()
+    host_app.evaluate("() => exClose()")
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exportModal').classList.contains('hidden') === false")
+    assert host_app.evaluate("() => EX.spikeType") == "audio"
     host_app.evaluate("() => exClose()")
 
 

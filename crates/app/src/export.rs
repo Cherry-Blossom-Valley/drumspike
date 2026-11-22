@@ -23,14 +23,15 @@ use drumspike_core::midi::{
 };
 use drumspike_core::project::EXPORTS_DIR;
 use drumspike_core::spike::{
-    export_audio_spikes, export_spikes as write_spikes, export_spikes_song as write_spikes_song, hit_index,
+    export_audio_spikes, export_audio_spikes_song, export_spikes as write_spikes,
+    export_spikes_song as write_spikes_song, hit_index,
 };
 use drumspike_core::tempo::TempoMap;
 use drumspike_core::velocity::{VelocityMap, velocity_map};
 use serde_json::{Value, json};
 
 use crate::error::AppError;
-use crate::export_song::{SongCounts, song_end, to_song};
+use crate::export_song::{SongCounts, song_end, song_pairs, to_song};
 use crate::media::mix_mode;
 use crate::registry::{OpenProject, Shared, lock};
 use crate::reply::Channels;
@@ -573,6 +574,8 @@ struct SongJob {
     /// The end of the last region in song time (`None`: no region, the spike file has the source length).
     end_s: Option<f64>,
     counts: SongCounts,
+    /// #579: `(t in the source, t in the song)` of every kept hit: the audio-spike file cuts at the first, puts at the second.
+    pairs: Vec<(f64, f64)>,
 }
 
 /// The reply accumulators of `export_all_opts` (R10): the written files with their counts, the
@@ -775,6 +778,78 @@ pub fn write_audio_spike_file(source: &Path, out: &Path, times: &[f64]) -> Resul
             format,
             time_reference: info.bext.as_ref().map(|b| b.time_reference),
             outside: outside_count(times, info.sample_rate, n_frames),
+        },
+        no_period,
+    ))
+}
+
+/// #579: [`write_audio_spike_file`] for a song-time export: the snippets are cut from the audio of `source` at the source
+/// time of each pair `(t in the source, t in the song)` and put at the song time; the file starts at song position 0 (a
+/// `bext` chunk with time reference 0, no chunk of the source copied), is as long as the song to the end of the last region
+/// (`end_s`; the source length without a region) and, as the spike file, one frame longer when a hit sits just after that end.
+/// Only the plugin installs a song time base, so the standalone export never runs it.
+///
+/// # Errors
+///
+/// A 400 `AppError` when `out` is the source file; a 400 (or the core's code) naming `source` when it cannot be opened or
+/// decoded, and when no region of the track lies after song position 0 (no spike file); a 500 when `out` cannot be written.
+pub fn write_audio_spike_file_song(
+    source: &Path,
+    out: &Path,
+    pairs: &[(f64, f64)],
+    end_s: Option<f64>,
+) -> Result<(SpikeFile, usize), AppError> {
+    if out_is_source(source, out) {
+        return Err(AppError::bad(format!(
+            "the output path is the track's source file: {}",
+            source.display()
+        )));
+    }
+    let wav = MappedWav::open(source).map_err(|e| {
+        let e = AppError::from(e);
+        AppError {
+            code: e.code,
+            message: format!("{}: {}", source.display(), e.message),
+        }
+    })?;
+    let info = &wav.info;
+    let format = spike_format(info.sample_format, info.bytes_per_sample);
+    let samples = wav.decode_mono(MixMode::Ffmpeg).map_err(|e| {
+        let e = AppError::from(e);
+        AppError {
+            code: e.code,
+            message: format!("{}: {}", source.display(), e.message),
+        }
+    })?;
+    let sr = info.sample_rate;
+    let mut n_frames = end_s.map_or(samples.len(), |e| (e * f64::from(sr)).ceil().max(0.0) as usize);
+    if let Some(last) = pairs
+        .iter()
+        .map(|p| (p.1 * f64::from(sr)).round())
+        .filter(|s| *s >= 0.0)
+        .reduce(f64::max)
+    {
+        n_frames = n_frames.max(last as usize + 1);
+    }
+    if n_frames == 0 {
+        return Err(AppError::bad(format!(
+            "{}: no region of the track lies after song position 0, so there is no spike file",
+            source.display()
+        )));
+    }
+    let no_period = export_audio_spikes_song(out, sr, n_frames, pairs, &samples, format)
+        .map_err(|e| AppError::internal(format!("{}: {e}", out.display())))?;
+    let size = std::fs::metadata(out).map_or(0, |m| m.len());
+    let song_times: Vec<f64> = pairs.iter().map(|p| p.1).collect();
+    Ok((
+        SpikeFile {
+            path: out.to_path_buf(),
+            size,
+            sr,
+            n_samples: n_frames,
+            format,
+            time_reference: Some(0),
+            outside: outside_count(&song_times, sr, n_frames),
         },
         no_period,
     ))
@@ -1075,11 +1150,17 @@ impl Service {
                     } else {
                         to_song(&ev, &h.regions)
                     };
+                    let pairs = if h.hide_all {
+                        Vec::new()
+                    } else {
+                        song_pairs(&ev, &h.regions)
+                    };
                     (
                         Ok(mapped),
                         Some(SongJob {
                             end_s: song_end(&h.regions),
                             counts,
+                            pairs,
                         }),
                     )
                 }
@@ -1494,7 +1575,13 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
     if opts.audio {
         // #209: the audio-spike file, cut from the track's own audio (1.5 periods per hit)
         let audio = hit_times(events).and_then(|times| match &job.source {
-            Ok(src) => write_audio_spike_file(src, &dir.join(format!("{}_audio_spike.wav", job.stem)), &times),
+            Ok(src) => {
+                let out = dir.join(format!("{}_audio_spike.wav", job.stem));
+                match &job.song {
+                    Some(song) => write_audio_spike_file_song(src, &out, &song.pairs, song.end_s),
+                    None => write_audio_spike_file(src, &out, &times),
+                }
+            }
             Err(e) => Err(e.clone()),
         });
         match audio {
@@ -1503,10 +1590,15 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
         }
     }
     for old in older_spike_files(dir, &job.stem, opts) {
-        let done = hit_times(events).and_then(|times| match &job.source {
-            Ok(src) if opts.audio => write_spike_file(src, &old, &times).map(|f| f.path),
-            Ok(src) => write_audio_spike_file(src, &old, &times).map(|(f, _)| f.path),
-            Err(e) => Err(e.clone()),
+        let done = hit_times(events).and_then(|times| match (&job.source, &job.song) {
+            // #579: in a song-time export the older file of the other type is made in song time too
+            (Ok(src), Some(song)) if opts.audio => write_spike_file_song(src, &old, &times, song.end_s).map(|f| f.path),
+            (Ok(src), Some(song)) => {
+                write_audio_spike_file_song(src, &old, &song.pairs, song.end_s).map(|(f, _)| f.path)
+            }
+            (Ok(src), None) if opts.audio => write_spike_file(src, &old, &times).map(|f| f.path),
+            (Ok(src), None) => write_audio_spike_file(src, &old, &times).map(|(f, _)| f.path),
+            (Err(e), _) => Err(e.clone()),
         });
         match done {
             Ok(p) => r.also.push(p),

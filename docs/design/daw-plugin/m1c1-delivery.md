@@ -593,3 +593,31 @@ the folder error and the tiles do not reach "ready"; `no-remember` (the choice i
 5. Drag the "Drag MIDI" tile onto an instrument track and the "Drag Spikes" tile onto an audio track, at the session start.
 6. Press Choose..., pick a folder, press Export: the files are in that folder. Close the plug-in window and open it again: the dialog opens with that
    folder. Delete the folder in the Finder, close and open the window again: the dialog opens with `Exports/` and one short line, and Export works.
+
+### The audio spikes in song time (M1c2, line 5 of #579)
+
+The spike types "Audio" and "Both" (format `audio` of the app, #209) work in a DAW. In M1c1 the page forced "Synthetic" and hid the rows, and the
+note said "come in a later part".
+
+- What the format does: for each hit it copies the source audio (about 1.5 periods of the low tone, at least 2 ms, at most 60 ms, the next hit cuts
+  it, a fade-out of at most 1 ms) into a file that is exact zero elsewhere. In the app the file is as long as the source and the hit is at its
+  source time, so the old code cut the snippet from the audio at the hit time.
+- In song time the hit time is a song position, so the old code would have cut the wrong audio. New: the export keeps, for every hit that
+  the song map keeps, the pair (time in the source, time in the song) (`export_song::song_pairs`, one pair per region that holds the hit). The
+  snippet is cut from the source at the first time and put at the second (`spike::export_audio_spikes_song`, `export::write_audio_spike_file_song`).
+  The length of a snippet is the length of the app (the next hit of the SOURCE cuts it); in the song the next snippet cuts it again.
+- The same rules as the synthetic file: the file starts at song position 0 and ends at the end of the last region (one frame more when a hit sits just
+  after it), the rate and sample format are those of the source file, the `bext` chunk has time reference 0 (the audio-spike description), the name
+  is `<DAW track name>_audio_spike.wav`, a hit in no region or before song 0 is left out and counted, a track the host has no source for gets an
+  all-zero file. The older file of the other type in the folder (#274) is made again in song time as well.
+- The standalone export is not touched: the new code runs only where `ExportTime` is installed (the plugin; the page cannot set it). Proof: the
+  hashes of the standalone `audio` and `spikes`+`audio` files, made on the base commit, are a test (`crates/app/tests/export_song.rs`); the
+  synthetic golden is unchanged. With an identity map the song signal equals the signal of the app (unit test in `spike.rs`).
+- Tests: the byte golden of the audio format in song time (`the_song_time_audio_export_writes_these_bytes`); the structure test (each snippet is
+  the source audio of its hit at the song sample, exact zero elsewhere); the stage `delivery` (part `delivery-audio-positions`, fault `source-time`
+  and `stale-regions`); the stage `export-dialog` (part `export-dialog-audio`: the type Both in the real dialog writes four audio files).
+- Not proved: a clip that the host stretches in time gets the snippet unstretched at the song position of the hit (a hit moves with the stretch, the
+  audio does not stretch). The note of the dialog about stretched regions still holds for the hit positions.
+
+Hand check steps for the audio spikes: in the dialog choose "Audio" (or "Both"), press Export, drag the WAV from `Exports/` onto an audio track at the session
+start: each snippet sits on the hit it belongs to and the file does not start later than song position 0; the audio of the snippet is the audio of the clip.

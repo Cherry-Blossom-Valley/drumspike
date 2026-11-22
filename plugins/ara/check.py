@@ -7140,6 +7140,32 @@ def wav_spikes(path: Path) -> dict:
     return {"rate": rate, "frames": len(xs) // (ch if tag == 3 else 1), "tref": tref, "starts": starts}
 
 
+def wav_samples(path: Path) -> dict:
+    """Rate, channels, the `bext` time reference and the first channel of a WAV file as floats (PCM 16/24/32 or float 32)."""
+    import struct
+    b = path.read_bytes()
+    pos, fmt, tref, data = 12, None, None, b""
+    while pos + 8 <= len(b):
+        cid, n = b[pos:pos + 4], struct.unpack("<I", b[pos + 4:pos + 8])[0]
+        body = b[pos + 8:pos + 8 + n]
+        if cid == b"fmt ":
+            fmt = struct.unpack("<HHIIHH", body[:16])
+        elif cid == b"bext":
+            t = struct.unpack("<II", body[338:346])
+            tref = t[0] | (t[1] << 32)
+        elif cid == b"data":
+            data = body
+        pos += 8 + n + (n & 1)
+    tag, ch, rate, _, _, bits = fmt
+    step = bits // 8
+    if tag == 3:
+        raw = struct.unpack(f"<{len(data) // 4}f", data)
+        xs = list(raw[0::ch])
+    else:
+        xs = [int.from_bytes(data[i:i + step], "little", signed=True) / float(1 << (bits - 1)) for i in range(0, len(data) - step + 1, step * ch)]
+    return {"rate": rate, "ch": ch, "tref": tref, "xs": xs}
+
+
 def song_delivery_run(label: str, env: dict | None = None, pressed: bool = True, region: tuple | None = DELIVERY_REGION, shift: float | None = None, extra: list | None = None) -> dict:
     out_dir = OUT / f"delivery-out-{label}"
     if out_dir.exists():
@@ -7209,6 +7235,48 @@ def delivery_parts(d: dict) -> dict:
     parts["delivery-spike-positions"] = (not bad_spike and n_spikes > 0,
                                          f"{n_spikes} spikes at 0 samples difference from the song position; differences: {bad_spike}")
     parts["delivery-time-reference"] = (not bad_ref and n_spikes > 0, f"the bext time reference of every spike file is 0; differences: {bad_ref}")
+    # M1c2 (#579): the audio spikes are in song time as the synthetic ones: same file length and rate, time reference 0, and each snippet is
+    # the source audio of its hit (a mono source: sample for sample) at the song sample of the hit; every sample outside the snippets is zero
+    ea = r.get("exported_audio") or {}
+    src_of = {safe_name(stem_of(n)): FIXTURES / n for n, *_ in SPEC}
+    bad_audio, n_snip = [], 0
+    for key in names:
+        stem = (r.get("display") or {}).get(key, key)
+        rate = DELIVERY_RATES.get(key, 48000)
+        aw, sw = folder / f"{stem}_audio_spike.wav", folder / f"{stem}_spike.wav"
+        if not (aw.is_file() and sw.is_file()):
+            bad_audio.append(f"{stem}: no file")
+            continue
+        a, sp = wav_samples(aw), wav_samples(sw)
+        if (a["rate"], len(a["xs"]), a["tref"]) != (sp["rate"], len(sp["xs"]), 0):
+            bad_audio.append((stem, "rate/length/time reference", a["rate"], len(a["xs"]), a["tref"], sp["rate"], len(sp["xs"])))
+            continue
+        src = wav_samples(src_of[key]) if key in src_of else None
+        pairs = []
+        for t in [e["t"] for e in (r.get("events") or {}).get(key, [])]:
+            if region:
+                if region[0] <= t < region[0] + region[1]:
+                    pairs.append((t, region[2] + (t - region[0])))
+            else:
+                pairs.append((t, t))
+        covered = [False] * len(a["xs"])
+        window = int(0.061 * rate) + 2
+        for ts, tg in pairs:
+            i, j = round(ts * rate), round(tg * rate)
+            for k in range(j, min(j + window, len(covered))):
+                covered[k] = True
+            n_snip += 1
+            seg = a["xs"][j:j + window]
+            if not any(seg):
+                bad_audio.append((stem, "no snippet at", j))
+            elif src and src["ch"] == 1 and any(abs(x - y) > 1e-6 for x, y in zip(a["xs"][j:j + 40], src["xs"][i:i + 40])):
+                bad_audio.append((stem, "snippet is not the source audio of the hit", j, i))
+        stray = sum(1 for x, c in zip(a["xs"], covered) if x != 0.0 and not c)
+        if stray:
+            bad_audio.append((stem, "nonzero samples outside the snippets", stray))
+    parts["delivery-audio-positions"] = (not bad_audio and n_snip > 0 and not ea.get("errors") and ea.get("audio") == len(names),
+                                         f"{n_snip} audio snippets at their song samples, the source audio of their hit, exact zero elsewhere, the length, rate and time reference 0 of the "
+                                         f"synthetic files; {ea.get('audio')} audio files; differences: {bad_audio[:4]}")
     single = r.get("exported_single") or {}
     if region and d.get("check_left"):
         # a trim in the host starts a new analysis round (M1b4), so the hits are those of the live slice: every note of the files lies inside
@@ -7284,16 +7352,16 @@ def stage_delivery() -> bool:
     # D1 of the review: a clip moved in the host (playback time only, no new round) exports at its NEW song position
     dm = song_delivery_run("clap-moved", shift=30.0)
     dm["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
-    ok = print_parts("-moved", delivery_parts(dm), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
+    ok = print_parts("-moved", delivery_parts(dm), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions", "delivery-audio-positions"]) and ok
     # E1 of round 3: a region trimmed in the host exports through its LIVE slice
     dt = song_delivery_run("clap-trimmed", extra=["--trim-region", *[f"{i}=1.0,1.0" for i in range(4)]])
     dt["region"] = (1.0, 1.0, 10.5)
     dt["check_left"] = True
-    ok = print_parts("-trimmed", delivery_parts(dt), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions", "delivery-trim-range"]) and ok
+    ok = print_parts("-trimmed", delivery_parts(dt), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions", "delivery-audio-positions", "delivery-trim-range"]) and ok
     ok = delivery_ara_parts() and ok
     d2 = song_delivery_run("clap-noregion", region=None)
     d2["region"] = None
-    ok = print_parts("-no-region", delivery_parts(d2), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
+    ok = print_parts("-no-region", delivery_parts(d2), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions", "delivery-audio-positions"]) and ok
     return ok
 
 
@@ -7318,9 +7386,12 @@ def stage_delivery_fault() -> bool:
         d = song_delivery_run(f"fault-{label}", env, pressed)
         d["region"] = DELIVERY_REGION
         ok = fault_part(f"delivery-fault-{label}", delivery_parts(d), part, what) and ok
+        if label == "source-time":
+            ok = fault_part("delivery-fault-source-time-audio", delivery_parts(d), "delivery-audio-positions", "the audio spikes keep the time of the source") and ok
     d = song_delivery_run("fault-stale-regions", {"DS_ARA_DELIVERY_FAULT": "stale-regions"}, shift=30.0)
     d["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
     ok = fault_part("delivery-fault-stale-regions", delivery_parts(d), "delivery-midi-positions", "the song position of the last round is used: a moved clip exports at its old place") and ok
+    ok = fault_part("delivery-fault-stale-regions-audio", delivery_parts(d), "delivery-audio-positions", "a moved clip exports its audio spikes at the old place") and ok
     d = song_delivery_run("fault-keep-reader", {"DS_ARA_DELIVERY_FAULT": "keep-reader"}, extra=["--musical", "tempo"])
     ok = fault_part("delivery-fault-keep-reader", ara_parts(d, True), "delivery-ara-reader", "the plugin does not give the reader back") and ok
     d = song_delivery_run("fault-no-button-check", {"DS_ARA_EDITOR_FAULT": "no-button-check"}, pressed=False)
@@ -7369,7 +7440,7 @@ def export_dialog_parts(d: dict) -> dict:
         all(s.get("open") and s.get("problem") == "" and s.get("dest") == str(default) and s.get("dest_ok") is True and "cannot be used" not in (s.get("problem") or "") for s in opened)
         and default.name == "Exports",
         f"the dialog opens with the default folder and no folder error, at the first open and after a close: {[(s.get('dest'), s.get('problem')) for s in opened]}")
-    tile_ok = lambda t: bool(t) and t.get("state") == "ready" and re.fullmatch(r"4 files", t.get("text", "")) is not None
+    tile_ok = lambda t, n=4: bool(t) and t.get("state") == "ready" and re.fullmatch(rf"{n} files", t.get("text", "")) is not None
     parts["export-dialog-tiles"] = (all(tile_ok(s.get("midi")) and tile_ok(s.get("spikes")) for s in opened),
                                     f"both drag tiles are ready with a file count: {[(s.get('midi'), s.get('spikes')) for s in opened]}")
     parts["export-dialog-export"] = (
@@ -7386,13 +7457,23 @@ def export_dialog_parts(d: dict) -> dict:
                                    f"{len(started)} sessions, pasteboard {len(pb)} files, all in Exports/")
     ch = step(r1, "chosen")
     cm, cw = files_of(pick)
+    cw = [f for f in cw if not f.name.endswith("_audio_spike.wav")]   # the type Both writes the audio files there too
     parts["export-dialog-choose"] = (str(Path(ch.get("dest", "")).resolve()) == str(pick) and ch.get("problem") == "" and tile_ok(ch.get("midi")) and tile_ok(ch.get("spikes"))
                                      and step(r1, "export3").get("export_finished") is True and len(cm) == 4 and len(cw) == 4,
                                      f"after Choose the dialog shows {ch.get('dest')!r}, no error, ready tiles; Export wrote {len(cm)} MIDI and {len(cw)} WAV files there")
+    both = step(r1, "both")
+    ex4 = step(r1, "export4")
+    aw = [f for f in files_of(pick)[1] if f.name.endswith("_audio_spike.wav")]
+    parts["export-dialog-audio"] = (both.get("spike_audio_visible") is True and both.get("spike_both_visible") is True and "later part" not in (both.get("note") or "")
+                                    and tile_ok(both.get("midi")) and re.fullmatch(r"8 files", (both.get("spikes") or {}).get("text", "")) is not None
+                                    and ex4.get("export_finished") is True and (ex4.get("result") or "").startswith("Exported 4 MIDI and 4 spike and 4 audio spike files")
+                                    and len(aw) == 4 and all(wav_samples(f)["tref"] == 0 for f in aw),
+                                    f"in the dialog of a DAW the spike types Audio and Both are shown ({both.get('spike_audio_visible')}, {both.get('spike_both_visible')}), "
+                                    f"the note has no 'later part', Both gives 8 spike files on the tile and Export writes {len(aw)} audio spike files with time reference 0: {ex4.get('result')!r}")
     o2 = step(r2, "open")
     parts["export-dialog-remembered"] = (str(Path(o2.get("dest", "")).resolve()) == str(pick) and o2.get("problem") == "" and o2.get("dest_ok") is True
-                                         and tile_ok(o2.get("midi")) and tile_ok(o2.get("spikes")) and step(r2, "export1").get("export_finished") is True,
-                                         f"a new editor of the document opens with the folder chosen before: dest {o2.get('dest')!r}, problem {o2.get('problem')!r}")
+                                         and tile_ok(o2.get("midi")) and tile_ok(o2.get("spikes"), 8) and step(r2, "export1").get("export_finished") is True,
+                                         f"a new editor of the document opens with the folder chosen before (and the spike type Both that the project keeps, 8 spike files): dest {o2.get('dest')!r}, problem {o2.get('problem')!r}")
     lists = sorted(d["cache"].glob("documents/*/export-folders.json"))
     try:
         listed = [str(Path(x).resolve()) for x in json.loads(lists[0].read_text()).get("folders", [])] if lists else []
