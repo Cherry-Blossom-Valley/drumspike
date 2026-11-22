@@ -235,6 +235,8 @@ pub struct Backend {
     pub export_regions: Arc<dyn Fn() -> crate::deliver::ExportRegions + Send + Sync>,
     /// M1b13: the selection of the host as the page shows it (the payload of the page event `plugin-selection`).
     pub selection: Arc<dyn Fn() -> Value + Send + Sync>,
+    /// M1b8: the rows of the page in song time (the answer of `plugin_host_regions`).
+    pub rows: Arc<dyn Fn() -> Value + Send + Sync>,
     /// M1c2: the file of the document that lists the folders the user chose in the sheet (`deliver::FOLDERS_FILE` in the
     /// folder of the document); `None` for an editor with no document.
     pub export_folders: Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>,
@@ -701,12 +703,13 @@ fn poll_channel(sh: &Arc<Shared>, id: &str, total: std::time::Duration) -> Vec<V
 
 /// The commands that `call::run` leaves to the desktop shell (`SHELL_ONLY` of
 /// `crates/app/src/call.rs`), plus the one command of the drag plugin. Each has an answer.
-const SHELL_COMMANDS: [&str; 37] = [
+const SHELL_COMMANDS: [&str; 38] = [
     "plugin_report",
     "plugin_pick_folder",
     "plugin_host_tempo",
     "plugin_host_track",
     "plugin_host_selection",
+    "plugin_host_regions",
     "plugin_host_offer",
     "plugin_host_play",
     "plugin_host_stop",
@@ -988,6 +991,8 @@ fn shell_command(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Option<Answer> {
         }
         // M1b13: the page (its shell script) asks for the selection of the host once the project is loaded
         "plugin_host_selection" => Answer::json(200, &(sh.backend.selection)()),
+        // M1b8: the rows of the page in song time (one per DAW track, its clips at their song positions)
+        "plugin_host_regions" => Answer::json(200, &(sh.backend.rows)()),
         "plugin_host_play" => host_request(sh, crate::playback::Kind::Play, args),
         "plugin_host_stop" => host_request(sh, crate::playback::Kind::Stop, args),
         "plugin_host_locate" => host_request(sh, crate::playback::Kind::Locate, args),
@@ -2110,6 +2115,7 @@ fn backend_of(plugin: &Plugin) -> Backend {
             stretched: Arc::new(Vec::new),
             export_regions: Arc::new(crate::deliver::ExportRegions::default),
             selection: Arc::new(|| Value::Null),
+            rows: Arc::new(|| Value::Null),
             export_folders: Arc::new(|| None),
         },
     }
@@ -2329,6 +2335,7 @@ mod tests {
                     "plugin_host_offer",
                     "plugin_host_track",
                     "plugin_host_selection",
+                    "plugin_host_regions",
                     "plugin_host_play",
                     "plugin_host_stop",
                     "plugin_host_locate",

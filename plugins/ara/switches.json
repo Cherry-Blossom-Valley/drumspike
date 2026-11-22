@@ -37,5 +37,6 @@
   {"name": "DS_ARA_LEFTOVER_FAULT", "kind": "fault", "values": "no-audio-reason", "meaning": "(M1d1) no-audio-reason: a round that read new audio of the host names no track in its page event and its job row, so the page cannot say that the DAW changed the audio"},
   {"name": "DS_ARA_PICK_DIR", "kind": "scenario", "values": "a folder, cancel", "meaning": "the folder sheet of the plugin answers with this folder (or cancel) without showing: the test host has no hand to click it"},
   {"name": "DS_ARA_DRAG_PRESSED", "kind": "scenario", "values": "1", "meaning": "the file drag acts as if the left mouse button is down: the test host has no real mouse. A gate run never starts a system drag session: the plugin writes the items to a private pasteboard (DS_ARA_DRAG_TEST=1 or the test host's editor mode)"},
-  {"name": "DS_ARA_DRAG_TEST", "kind": "scenario", "values": "1", "meaning": "the file drag makes its items on a private pasteboard and starts no system drag session (an editor run of the test host implies it)"}
+  {"name": "DS_ARA_DRAG_TEST", "kind": "scenario", "values": "1", "meaning": "the file drag makes its items on a private pasteboard and starts no system drag session (an editor run of the test host implies it)"},
+  {"name": "DS_ARA_SONG_FAULT", "kind": "fault", "values": "round-regions", "meaning": "the page in song time (M1b8): round-regions: the rows of the page are made from the regions of the last analysis round, not from the live ones (a clip moved in the host is not seen)"}
 ]

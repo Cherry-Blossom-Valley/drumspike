@@ -46,6 +46,7 @@ pub mod keys;
 pub mod musical;
 pub mod names;
 pub mod playback;
+pub mod rows;
 pub mod selection;
 pub mod service;
 pub mod state;
@@ -500,6 +501,9 @@ struct DocShared {
     selection_computes: AtomicUsize,
     /// How many selection events the page was sent (the report and the unit tests count them).
     view_events: AtomicU64,
+    /// M1b8: the rows of the page in song time as the page was told last (the text), and how often they changed.
+    rows_pushed: Mutex<Option<String>>,
+    rows_gen: AtomicU64,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -615,6 +619,8 @@ impl DocShared {
             view_gate: Arc::new(Mutex::new(selection::PushGate::default())),
             selection_computes: AtomicUsize::new(0),
             view_events: AtomicU64::new(0),
+            rows_pushed: Mutex::new(None),
+            rows_gen: AtomicU64::new(0),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -850,6 +856,7 @@ impl DocShared {
         self.announce_reload_page(audio);
         // M1b13: a round ended: the tracks and the regions the selection maps through are the new ones
         self.selection_changed();
+        self.rows_changed();
     }
 
     /// The page event alone (a rename computes the selection itself, once).
@@ -1004,6 +1011,91 @@ impl DocShared {
         p
     }
 
+    /// M1b8: the rows of the page in song time (one per DAW track), from the LIVE regions (the hits are in source time, so the
+    /// live slice, position and length give the whole mapping; a clip the user moved in the DAW needs no round).
+    fn rows_value(&self) -> rows::Rows {
+        let seqs: HashMap<u64, rows::SeqFact> = self
+            .sequences
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(k, v)| (*k, rows::SeqFact { name: v.name.clone(), order: v.order }))
+            .collect();
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let lens = self.play_len.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let round = self.round_regions.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let fault = rows::Fault::read();
+        let mut facts = Vec::new();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let Some(key) = s.track.lock().ok().and_then(|t| t.clone()) else {
+                continue;
+            };
+            let live: Vec<RegionSlot> = s.regions.lock().map(|r| r.clone()).unwrap_or_default();
+            let p = s.props();
+            let mut regions: Vec<rows::RegionFact> = live
+                .iter()
+                .map(|x| rows::RegionFact {
+                    sequence: x.sequence,
+                    start_mod: x.rec.start_mod,
+                    dur_mod: x.rec.dur_mod,
+                    start_play: x.rec.start_play,
+                    dur_play: lens.get(&x.id).copied().unwrap_or(x.rec.dur_mod),
+                    region_id: x.id,
+                })
+                .collect();
+            if fault.round_regions {
+                // the fault run: the regions of the last round, so a clip the user moved is not seen
+                regions = round
+                    .get(&s.seq)
+                    .map(|(r, _)| r.iter().map(|x| rows::RegionFact {
+                        sequence: live.first().map_or(0, |l| l.sequence),
+                        start_mod: x.start_mod,
+                        dur_mod: x.dur_mod,
+                        start_play: x.start_play,
+                        dur_play: x.dur_mod,
+                        region_id: 0,
+                    }).collect())
+                    .unwrap_or_default();
+            }
+            let region_name = live
+                .iter()
+                .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play).then(a.id.cmp(&b.id)))
+                .and_then(|x| x.name.clone());
+            facts.push(rows::SrcFacts {
+                key,
+                seq: s.seq,
+                len_s: if p.sample_rate > 0.0 { p.sample_count as f64 / p.sample_rate } else { 0.0 },
+                // the sources whose clips are all gone are known to the export list
+                gone: regions.is_empty() && round.get(&s.seq).is_some_and(|(r, _)| !r.is_empty()),
+                regions,
+                region_name,
+            });
+        }
+        rows::build(&facts, &seqs)
+    }
+
+    /// M1b8: the answer of `plugin_host_regions`: the rows and the number of their last change.
+    fn rows_now(&self) -> Value {
+        self.rows_value().to_json(self.rows_gen.load(Ordering::SeqCst))
+    }
+
+    /// M1b8: a region, a sequence or a round changed: when the rows differ from what the page was told last, the page gets
+    /// the new rows as the event `plugin-regions` (the same answer as `plugin_host_regions`).
+    fn rows_changed(&self) {
+        let mut last = self.rows_pushed.lock().unwrap_or_else(|e| e.into_inner());
+        let text = self.rows_value().to_json(0).to_string();
+        if last.as_deref() == Some(text.as_str()) {
+            return;
+        }
+        *last = Some(text);
+        let gen = self.rows_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        self.page.log.push("plugin-regions", self.rows_value().to_json(gen));
+    }
+
     /// M1b10: the tracks of the document as the display name rule needs them: the track name, the
     /// creation index of the source and its live playback regions with their names. A source
     /// that has no track yet (no round made one) is not in the list.
@@ -1095,6 +1187,7 @@ impl DocShared {
         self.touch_role_changes();
         // M1b13: a region or a sequence changed: the tracks that the host's selection names may be others now
         self.selection_changed();
+        self.rows_changed();
         // computed and compared under the lock: the main thread and the worker cannot leave the older map
         // in place of the newer, and no change goes without its announcement
         let now = {
@@ -2774,6 +2867,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let p7 = doc.clone();
     let p8 = doc.clone();
     let p9 = doc.clone();
+    let p10 = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
@@ -2792,6 +2886,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
         stretched: Arc::new(move || p6.stretched_tracks()),
         export_regions: Arc::new(move || p7.export_region_list()),
         selection: Arc::new(move || p8.selection_now()),
+        rows: Arc::new(move || p10.rows_now()),
         export_folders: Arc::new(move || Some(service::folder_of(&p9.cache, &p9.id()).join(deliver::FOLDERS_FILE))),
     }
 }

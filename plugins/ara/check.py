@@ -6787,6 +6787,75 @@ def stage_editor_names_fault() -> bool:
     return ok
 
 
+# ---- M1b8 (#555): the page shows song time; one row is one DAW track
+
+# Mode `song`. The test host makes two DAW tracks: sources 0 and 1 lie on the first (clips at song 0 s and 2 s), sources 2 and 3 on the second
+# (4 s and 6 s); every clip is 1.5 s of its file. The page asks for the rows. Then the host renames the first DAW track, moves the region of
+# source 3 to it, moves the clip of source 1 to song 20 s and trims the clip of source 2 to the slice 0.5 s to 1.5 s.
+SONG_ARGS = ["--seq-names", "Kick", "Snare", "--seq-of", "0", "0", "1", "1", "--regions-all", "0,1.5,0", "--regions-step", "2",
+             "--rename-seq", "0=Kick In", "--move-region", "3=0", "--shift-region", "1=20", "--trim-region", "2=0.5,1.0"]
+
+
+def song_run(label: str, env: dict | None = None) -> dict:
+    rc, _summary, rows = run_phase(label, "song", CLAP, env, SONG_ARGS)
+    return {"rc": rc, "rows": rows}
+
+
+def song_clip(row: dict, key: str) -> list:
+    return [(round(c["a"], 6), round(c["b"], 6), round(c["s"], 6), round(c["k"], 6)) for c in row.get("clips", []) if c.get("src") == key]
+
+
+def song_parts(run: dict) -> dict:
+    rows = run["rows"]
+    first = (page_reports(rows, "song") or [None])[0]
+    after = (page_reports(rows, "song-after") or [None])[0]
+    names = ("editor-song-rows", "editor-song-live", "editor-song-id", "editor-song-event")
+    if first is None or after is None:
+        why = f"no usable run (rc={run['rc']}, {len(page_reports(rows, 'song'))} first and {len(page_reports(rows, 'song-after'))} second report)"
+        return {n: (False, why) for n in names}
+    keys = track_names(FILES)
+    a, b = first["rows"]["rows"], after["rows"]["rows"]
+    parts: dict = {}
+    one = len(a) == 2 and a[0]["srcs"] == keys[:2] and a[1]["srcs"] == keys[2:]
+    clips0 = [(c["src"], c["s"], c["b"] - c["a"], c["k"]) for c in a[0]["clips"]] if a else []
+    parts["editor-song-rows"] = (
+        one and clips0 == [(keys[0], 0.0, 1.5, 1.0), (keys[1], 2.0, 1.5, 1.0)] and a[0]["name"] == "Kick",
+        f"{len(a)} row(s) for two DAW tracks (want 2); the sources of the rows are {[r['srcs'] for r in a]} (want {[keys[:2], keys[2:]]}), the clips of "
+        f"the first row are {clips0} (want both sources at their song positions in ONE row), its name is {a[0]['name'] if a else None!r}")
+    ok_after = len(b) == 2 and b[0]["srcs"] == [keys[0], keys[1], keys[3]] and b[1]["srcs"] == [keys[2]]
+    s1 = song_clip(b[0], keys[1]) if b else None
+    s2 = song_clip(b[1], keys[2]) if len(b) > 1 else None
+    old = " (start_play is old: the rows were made from the last analysis round, not from the live regions)" if s1 == [(0.0, 1.5, 2.0, 1.0)] else ""
+    parts["editor-song-live"] = (
+        ok_after and s1 == [(0.0, 1.5, 20.0, 1.0)] and s2 == [(0.5, 1.5, 4.5, 1.0)] and b[0]["name"] == "Kick In",
+        f"after the host renamed, moved, shifted and trimmed: the sources of the rows are {[r['srcs'] for r in b]}, the clip of source 1 is {s1} "
+        f"(want [(0.0, 1.5, 20.0, 1.0)]){old}, the trimmed clip of source 2 is {s2} (want [(0.5, 1.5, 4.5, 1.0)]), the name is {b[0]['name'] if b else None!r}")
+    parts["editor-song-id"] = (
+        len(a) == 2 and len(b) == 2 and a[0]["id"] == b[0]["id"] and a[1]["id"] == b[1]["id"],
+        f"the ids of the rows before {[r['id'] for r in a]} and after {[r['id'] for r in b]} (the rename, the move of a region to the row and "
+        f"the move in time keep the id, so the selection and the scroll of the page stay)")
+    ev = after.get("last_event") or {}
+    parts["editor-song-event"] = (
+        after.get("events", 0) >= 1 and ev.get("rows") == after["rows"]["rows"] and ev.get("gen", 0) >= 1,
+        f"the page got {after.get('events')} event(s) plugin-regions after the first answer; the last one carries the rows of the final answer "
+        f"({ev.get('rows') == after['rows']['rows']}) and the change counter {ev.get('gen')}")
+    return parts
+
+
+def stage_editor_song_rows() -> bool:
+    if not HOST.exists():
+        return pass_fail("editor-song-rows", False, "no host")
+    return print_parts("", song_parts(song_run("editor-song-rows")))
+
+
+def stage_editor_song_rows_fault() -> bool:
+    ok = True
+    run_ = song_run("editor-song-fault-round-regions", {"DS_ARA_SONG_FAULT": "round-regions"})
+    ok = fault_part("editor-song-fault-round-regions", song_parts(run_), "editor-song-live",
+                    "the rows are made from the regions of the last round: a clip moved in the DAW is not seen") and ok
+    return ok
+
+
 # ---- M1d1 (#575): the page in a DAW shows no standalone leftovers
 
 # Mode `leftovers`: the four DAW tracks of the names run (no rename, no move). The page reports every text that names a track, the dirty dot and the
@@ -8037,6 +8106,8 @@ STAGES = {
     "editor-playback-partial-fault": stage_editor_playback_partial_fault,
     "editor-playback-tracks": stage_editor_playback_tracks,
     "editor-names": stage_editor_names,
+    "editor-song-rows": stage_editor_song_rows,
+    "editor-song-rows-fault": stage_editor_song_rows_fault,
     "delivery": stage_delivery,
     "drag-source": stage_drag_source,
     "drag-source-fault": stage_drag_source_fault,
@@ -8101,7 +8172,7 @@ ORDER = [
     "editor-hit", "editor-hit-fault", "editor-geometry", "editor-geometry-fault", "editor-menu", "editor-menu-fault",
     "editor-selection", "editor-selection-fault",
     "editor-keys", "editor-keys-fault", "editor-keys-twin", "editor-keys-twin-fault",
-    "editor-names", "editor-names-fault", "editor-leftovers", "editor-leftovers-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
+    "editor-names", "editor-names-fault", "editor-song-rows", "editor-song-rows-fault", "editor-leftovers", "editor-leftovers-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
     "drag-source", "drag-source-fault", "delivery", "delivery-release", "delivery-fault", "export-dialog", "export-dialog-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",

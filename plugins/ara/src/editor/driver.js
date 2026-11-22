@@ -12,6 +12,8 @@
   try { window.__TAURI__.event.listen("plugin-reload", function () { reloads++; }); } catch (e) { /* no events */ }
   var selEvents = 0, selLast = null;   // M1b13: the events of the host's selection that the page got
   try { window.__TAURI__.event.listen("plugin-selection", function (e) { selEvents++; selLast = e.payload; }); } catch (e) { /* no events */ }
+  var regEvents = 0, regLast = null;   // M1b8: the events with the rows of the page in song time
+  try { window.__TAURI__.event.listen("plugin-regions", function (e) { regEvents++; regLast = e.payload; }); } catch (e) { /* no events */ }
   document.addEventListener("securitypolicyviolation", function (ev) {
     violations.push({ directive: ev.violatedDirective, blocked: ev.blockedURI });
   });
@@ -83,6 +85,7 @@
     if (T.mode === "delivery") deliveryRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "leftovers") leftoversRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "selection") selectionRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "song") songRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "playback") playbackRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
   });
 
@@ -467,6 +470,24 @@
     await sleepMs(800);   // the rename and the move are two calls of the host: the last state
     var after = await namesSnap();
     post(Object.assign({ kind: "names-after", reloads: reloads, reloaded: reloaded, waited_ms: Math.round(performance.now() - t0) }, after));
+  }
+  /* Mode song (M1b8, #555): the rows of the page in song time. The first report `song` carries what the plugin answers to `plugin_host_regions`;
+     the host then renames a DAW track, moves a region to another one and shifts and trims others (`--rename-seq`, `--move-region`,
+     `--shift-region`, `--trim-region`); the second report `song-after` carries the answer again and the events `plugin-regions` the page got. */
+  async function songSnap() {
+    var rows = await window.__TAURI__.core.invoke("plugin_host_regions", {});
+    return { rows: rows, events: regEvents, last_event: regLast, order: S.order.slice(), sel: S.selTrack };
+  }
+  async function songRun() {
+    function sleepM(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    await sleepM(600);
+    var first = await songSnap();
+    post(Object.assign({ kind: "song" }, first));
+    var base = regEvents, t0 = performance.now();
+    while (regEvents === base && performance.now() - t0 < 15000) await sleepM(100);
+    await sleepM(1000);   // the host makes its changes in several calls: the last state
+    var after = await songSnap();
+    post(Object.assign({ kind: "song-after", waited_ms: Math.round(performance.now() - t0) }, after));
   }
   /* Mode leftovers (M1d1, #575): the page shows the name of the DAW track where it names a track (progress, info line, status bar, undo label,
      follower text, export dialog, Follow menu), and after the host changed the audio of one source it says what happened. The first report

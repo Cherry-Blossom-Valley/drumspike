@@ -907,6 +907,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 // the page reports the names it got, the host renames and moves, the page reports again
                 "names" => Some("names-after"),
                 "leftovers" => Some("leftovers-after"),
+                // M1b8: the page reports the rows it got, the host renames, moves, shifts and trims, the page reports again
+                "song" => Some("song-after"),
                 "edit-destroy" => Some("edit"),
                 "net" => Some("now"),
                 _ => None,
@@ -915,6 +917,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let boots_before = count_rows("page_report", Some("boot"));
             let names_before = count_rows("page_report", Some("names"));
             let leftovers_before = count_rows("page_report", Some("leftovers"));
+            let song_before = count_rows("page_report", Some("song"));
+            let mut song_handled = false;
             let mut update_handled = false;
             let mut names_handled = false;
             let mut shift_handled = false;
@@ -1196,6 +1200,21 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     }
                     for (i, j) in &moves {
                         move_region(doc.inst, doc.state, *i, *j);
+                    }
+                }
+                if mode == "song" && !song_handled && count_rows("page_report", Some("song")) > song_before {
+                    song_handled = true;
+                    for (j, name) in &renames {
+                        rename_sequence(doc.inst, doc.state, *j, name);
+                    }
+                    for (i, j) in &moves {
+                        move_region(doc.inst, doc.state, *i, *j);
+                    }
+                    for (i, p) in &shifts {
+                        shift_region(doc.inst, doc.state, *i, *p);
+                    }
+                    for (i, a, d) in &trims {
+                        trim_region(doc.inst, doc.state, *i, *a, *d);
                     }
                 }
                 if mode == "analyse-race" && destroyed_jobs.is_none() {

@@ -48,7 +48,9 @@ A row is the set of playback regions that lie on one region sequence, over all t
 - **Region with sequence 0** (the host gave none, `lib.rs:310`): the source forms its own row, keyed `"s<creation index>"`.
 - **A source on two sequences:** it is a member of both rows, with only the clips of that row's regions in each. Its hits are
   drawn in each row where a clip holds them. Its project track is one; the row that comes first in the DAW order is its "home" row
-  for the settings (section 4).
+  for the settings (section 4). Limit: the page has one DOM row per source and a row is drawn by the DOM row of its home source,
+  so a source can be the home of one row only; a row whose every source is already the home of an earlier row is not shown, and the
+  status line counts it.
 
 ## 3. Clip model (decision 2)
 
@@ -100,11 +102,13 @@ plugin gives the page `plugin_host_regions` (new shell command; `SHELL_COMMANDS`
 test host list):
 
 ```
-{gen, rows: [{id, name, srcs: [key...], clips: [{src, a, b, s, k}...]}], song_end, outside: {key: n}, gone: [key...]}
+{gen, rows: [{id, name, srcs: [key...], clips: [{src, a, b, s, k}...]}], song_end, gone: [key...]}
 ```
 
-built from the live regions (the `export_region_list` merge, plus the sequence id of each slot). The transport message gets `rgen`;
-the page fetches again when it changes (the poll already wakes on a region change). The page module `static/hosttime.js` (new,
+built from the live regions (the `export_region_list` merge, plus the sequence id of each slot; `plugins/ara/src/rows.rs`). The
+plugin pushes the same answer as the page event `plugin-regions` whenever a region, a sequence or a round changes the rows (the
+document compares the text with what the page was told last), so no counter has to travel with the transport message. The page
+counts the hits outside every clip itself (the stored hits and the clips are both in the page). The page module `static/hosttime.js` (new,
 pure functions, no DOM, in `JS_FILES`) keeps the rows. The page rows are built from it: the DOM row of the home source
 draws all sources of the row; the other source rows of a merged row are hidden (`.hostMerged`), not deleted. Stored times stay source
 times: `S.events`, the undo steps and every call of the backend never see song time. Only the module converts, at drawing and at

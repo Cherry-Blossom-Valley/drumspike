@@ -464,6 +464,7 @@ variants, because the hand checks in a DAW need them.
 | `DS_ARA_PICK_DIR` | scenario | a folder, cancel | the folder sheet of the plugin answers with this folder (or cancel) without showing: the test host has no hand to click it |
 | `DS_ARA_DRAG_PRESSED` | scenario | 1 | the file drag acts as if the left mouse button is down: the test host has no real mouse. A gate run never starts a system drag session: the plugin writes the items to a private pasteboard (DS_ARA_DRAG_TEST=1 or the test host's editor mode) |
 | `DS_ARA_DRAG_TEST` | scenario | 1 | the file drag makes its items on a private pasteboard and starts no system drag session (an editor run of the test host implies it) |
+| `DS_ARA_SONG_FAULT` | fault | round-regions | the page in song time (M1b8): round-regions: the rows of the page are made from the regions of the last analysis round, not from the live ones (a clip moved in the host is not seen) |
 
 Kinds: **config**: The plugin reads it in every build, the delivery build too (the check sets it for every run; the hand checks in a DAW need it). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. Read only by a build with the cargo feature `test-switches` (the gate build); a delivery build ignores it. **scenario**: Scenario switch: sets up a case for a stage (not a fault). Read only by a build with the cargo feature `test-switches`; a delivery build ignores it.
 
