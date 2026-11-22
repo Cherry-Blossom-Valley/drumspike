@@ -128,6 +128,10 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   delivery-switches  M1d1 line 4: the delivery build (no cargo feature test-switches) ignores
                  DS_ARA_ROUND_FAULT=request-only and gives the round; the gate build obeys it
                  (fault: the same check refuses the gate build)
+  export-dialog  M1c2 (#579): the REAL Export dialog in the REAL page, opened from the host-mode menu in two
+                 editors of one document: no folder error, both drag tiles ready with a file count, a drag
+                 starts, Export writes the files, a second open does the same, Choose keeps the folder for
+                 the document (faults: the rule of M1c1, no memory of the chosen folder)
   validate       clap-validator 0.4.1 on the CLAP bundle
   universal      lipo -info names arm64 and x86_64 for the CLAP and the VST3 binary
   standalone     cargo metadata --no-deps at the repo root names no plugin crate; cargo
@@ -7326,6 +7330,100 @@ def stage_delivery_fault() -> bool:
     return ok
 
 
+def export_dialog_run(label: str, env: dict | None = None) -> dict:
+    """M1c2 (#579): the REAL Export dialog in the REAL page of the plugin, driven from the host-mode menu (mode exportdialog), in two
+    editors of one document (`--cycles 2`). The sheet is answered by DS_ARA_PICK_DIR with a folder below out/."""
+    pick = OUT / f"exdialog-pick-{label}"
+    if pick.exists():
+        shutil.rmtree(pick)
+    pick.mkdir(parents=True)
+    pick = pick.resolve()
+    e = {"DS_ARA_PICK_DIR": str(pick), "DS_ARA_DRAG_PRESSED": "1"}
+    e.update(env or {})
+    rc, summary, rows = editor_run(f"exdialog-{label}", "exportdialog", CLAP, 2, e,
+                                   ["--regions-all", ",".join(str(x) for x in DELIVERY_REGION), "--arg", str(pick)], timeout=400)
+    return {"rc": rc, "summary": summary, "rows": rows, "reps": page_reports(rows, "exportdialog"), "pick": pick,
+            "cache": (OUT / f"cache-exdialog-{label}").resolve()}
+
+
+def export_dialog_parts(d: dict) -> dict:
+    reps, rows, pick = d["reps"], d["rows"], d["pick"]
+    parts: dict = {}
+    r1 = reps[0] if reps else {}
+    r2 = reps[1] if len(reps) > 1 else {}
+
+    def step(r: dict, label: str) -> dict:
+        return next((x for x in r.get("steps", []) if x.get("label") == label), {})
+
+    def files_of(folder: Path) -> tuple[list, list]:
+        if not folder.is_dir():
+            return [], []
+        return sorted(folder.glob("*.mid")), sorted(folder.glob("*.wav"))
+
+    parts["export-dialog-ran"] = (d["rc"] == 0 and len(reps) == 2 and all(r.get("menu") == "ok" and r.get("menu2") == "ok" and "error" not in r for r in reps),
+                                  f"the host ran the driver in 2 editors (rc={d['rc']}), {len(reps)} reports; the dialog opened from File > Export...: "
+                                  f"{[(r.get('menu'), r.get('menu2')) for r in reps]}")
+    default = Path(str(r1.get("def") or "/none"))
+    opened = [step(r1, "open"), step(r1, "reopen")]
+    parts["export-dialog-no-folder-error"] = (
+        all(s.get("open") and s.get("problem") == "" and s.get("dest") == str(default) and s.get("dest_ok") is True and "cannot be used" not in (s.get("problem") or "") for s in opened)
+        and default.name == "Exports",
+        f"the dialog opens with the default folder and no folder error, at the first open and after a close: {[(s.get('dest'), s.get('problem')) for s in opened]}")
+    tile_ok = lambda t: bool(t) and t.get("state") == "ready" and re.fullmatch(r"4 files", t.get("text", "")) is not None
+    parts["export-dialog-tiles"] = (all(tile_ok(s.get("midi")) and tile_ok(s.get("spikes")) for s in opened),
+                                    f"both drag tiles are ready with a file count: {[(s.get('midi'), s.get('spikes')) for s in opened]}")
+    parts["export-dialog-export"] = (
+        all(s.get("export_finished") is True and (s.get("result") or "").startswith("Exported 4 MIDI and 4 spike files") for s in (step(r1, "export1"), step(r1, "export2"))),
+        f"Export wrote the files at the first open and after a close: {[(step(r1, k).get('export_finished'), step(r1, k).get('result')) for k in ('export1', 'export2')]}")
+    mids, wavs = files_of(default)
+    parts["export-dialog-files"] = (len(mids) == 4 and len(wavs) == 4, f"{len(mids)} MIDI and {len(wavs)} WAV files in {default.name}/ of the document")
+    drag = step(r1, "drag")
+    started = [x for x in rows if x.get("event") == "drag_started"]
+    pb = {str(Path(p).resolve()) for x in started for p in x.get("pasteboard", [])}
+    parts["export-dialog-drag"] = (str(drag.get("msg", "")).startswith("dragged 4 files") and bool(started)
+                                   and pb and all(Path(p).parent.resolve() == default.resolve() for p in pb) and len(pb) == 4,
+                                   f"a press and a move on the Drag MIDI tile started the real drag session: message {drag.get('msg')!r}, "
+                                   f"{len(started)} sessions, pasteboard {len(pb)} files, all in Exports/")
+    ch = step(r1, "chosen")
+    cm, cw = files_of(pick)
+    parts["export-dialog-choose"] = (str(Path(ch.get("dest", "")).resolve()) == str(pick) and ch.get("problem") == "" and tile_ok(ch.get("midi")) and tile_ok(ch.get("spikes"))
+                                     and step(r1, "export3").get("export_finished") is True and len(cm) == 4 and len(cw) == 4,
+                                     f"after Choose the dialog shows {ch.get('dest')!r}, no error, ready tiles; Export wrote {len(cm)} MIDI and {len(cw)} WAV files there")
+    o2 = step(r2, "open")
+    parts["export-dialog-remembered"] = (str(Path(o2.get("dest", "")).resolve()) == str(pick) and o2.get("problem") == "" and o2.get("dest_ok") is True
+                                         and tile_ok(o2.get("midi")) and tile_ok(o2.get("spikes")) and step(r2, "export1").get("export_finished") is True,
+                                         f"a new editor of the document opens with the folder chosen before: dest {o2.get('dest')!r}, problem {o2.get('problem')!r}")
+    lists = sorted(d["cache"].glob("documents/*/export-folders.json"))
+    try:
+        listed = [str(Path(x).resolve()) for x in json.loads(lists[0].read_text()).get("folders", [])] if lists else []
+    except ValueError:
+        listed = []
+    inside = sorted(d["cache"].glob("documents/*/project/**/export-folders.json")) + sorted(d["cache"].glob("documents/*/service/**/export-folders.json"))
+    parts["export-dialog-list"] = (listed == [str(pick)] and not inside,
+                                   f"the plugin keeps the chosen folder in the folder of the document, outside project/ and service/: {listed}, copies inside {len(inside)}")
+    closes = [x for x in rows if x.get("event") == "editor_close"]
+    parts["export-dialog-main-thread"] = (bool(closes) and closes[-1].get("off_main") == 0,
+                                          f"the sheet and the drag ran on the main thread: off_main {closes[-1].get('off_main') if closes else None}")
+    return parts
+
+
+def stage_export_dialog() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("export-dialog", False, "no host or bundle: run check.sh build")
+    return print_parts("", export_dialog_parts(export_dialog_run("clap")))
+
+
+def stage_export_dialog_fault() -> bool:
+    d = export_dialog_run("fault-old-dest", {"DS_ARA_EDITOR_FAULT": "old-dest"})
+    parts = export_dialog_parts(d)
+    ok = fault_part("export-dialog-fault-old-dest", parts, "export-dialog-no-folder-error",
+                    "the default folder is refused as a dest (the rule before #579): the dialog says the folder cannot be used")
+    ok = fault_part("export-dialog-fault-old-dest-tiles", parts, "export-dialog-tiles", "the tiles do not reach ready") and ok
+    d = export_dialog_run("fault-no-remember", {"DS_ARA_EDITOR_FAULT": "no-remember"})
+    return fault_part("export-dialog-fault-no-remember", export_dialog_parts(d), "export-dialog-remembered",
+                      "the chosen folder is not kept: a new editor opens with the default folder") and ok
+
+
 STAGES = {
     "fixture": stage_fixture,
     "reference": stage_reference,
@@ -7488,6 +7586,8 @@ STAGES = {
     "editor-playback-tracks": stage_editor_playback_tracks,
     "editor-names": stage_editor_names,
     "delivery": stage_delivery,
+    "export-dialog": stage_export_dialog,
+    "export-dialog-fault": stage_export_dialog_fault,
     "delivery-release": stage_delivery_release,
     "delivery-fault": stage_delivery_fault,
     "editor-names-fault": stage_editor_names_fault,
@@ -7546,7 +7646,7 @@ ORDER = [
     "editor-selection", "editor-selection-fault",
     "editor-keys", "editor-keys-fault", "editor-keys-twin", "editor-keys-twin-fault",
     "editor-names", "editor-names-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
-    "delivery", "delivery-release", "delivery-fault",
+    "delivery", "delivery-release", "delivery-fault", "export-dialog", "export-dialog-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",

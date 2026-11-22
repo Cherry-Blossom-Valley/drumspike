@@ -235,6 +235,9 @@ pub struct Backend {
     pub export_regions: Arc<dyn Fn() -> crate::deliver::ExportRegions + Send + Sync>,
     /// M1b13: the selection of the host as the page shows it (the payload of the page event `plugin-selection`).
     pub selection: Arc<dyn Fn() -> Value + Send + Sync>,
+    /// M1c2: the file of the document that lists the folders the user chose in the sheet (`deliver::FOLDERS_FILE` in the
+    /// folder of the document); `None` for an editor with no document.
+    pub export_folders: Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>,
 }
 
 /// The source indexes of a track and their longest length in seconds.
@@ -1106,6 +1109,29 @@ fn note_written(sh: &Arc<Shared>, answer: &Value) {
     sh.written.lock().unwrap_or_else(|e| e.into_inner()).extend(found);
 }
 
+/// M1c2: the default export folder of the document, `Exports/` of its project (it may not exist yet).
+fn default_exports(sh: &Arc<Shared>) -> Option<PathBuf> {
+    let (svc, sid) = (sh.backend.page.service()?, sh.backend.page.sid()?);
+    svc.drag_dir(&sid).ok()?.parent().map(Path::to_path_buf)
+}
+
+/// M1c2: the folders that a `dest` may name besides the default folder: the ones chosen in this editor session and the
+/// ones the document remembers (`deliver::FOLDERS_FILE`, written by the plugin from the sheet, checked again at every use).
+fn allowed_folders(sh: &Arc<Shared>) -> Vec<PathBuf> {
+    let mut all = sh.chosen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if fault() == "no-remember" {
+        return all;
+    }
+    if let Some(file) = (sh.backend.export_folders)() {
+        for f in crate::deliver::load_folders(&file) {
+            if !all.contains(&f) {
+                all.push(f);
+            }
+        }
+    }
+    all
+}
+
 /// `plugin_pick_folder {title, start}`: the folder sheet on the window of the plugin view (M1c1). The answer is the
 /// canonical path of the chosen folder (it joins the list of this editor session) or null when the user cancelled.
 /// The request thread waits for the sheet in slices and ends the wait when the editor closes. One sheet at a time.
@@ -1118,7 +1144,11 @@ fn pick_folder_command(sh: &Arc<Shared>, args: &Value) -> Answer {
                 if !l.contains(&c) {
                     l.push(c.clone());
                 }
-                session().log(json!({"event": "folder_chosen", "editor": sh.n}).to_string());
+                drop(l);
+                // M1c2: the document remembers the folder (only the plugin writes the list, and only from here)
+                let remembered = fault() != "no-remember"
+                    && (sh.backend.export_folders)().is_some_and(|f| crate::deliver::remember_folder(&f, &c).is_ok());
+                session().log(json!({"event": "folder_chosen", "editor": sh.n, "remembered": remembered}).to_string());
                 Answer::json(200, &json!(c.display().to_string()))
             }
             _ => Answer::err(400, "the chosen path is not a folder"),
@@ -1203,7 +1233,7 @@ fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
     else {
         return Answer::err(400, "image must be a PNG data URL of at most 256 KB");
     };
-    let mut roots: Vec<PathBuf> = sh.chosen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut roots: Vec<PathBuf> = allowed_folders(sh);
     if let (Some(svc), Some(sid)) = (sh.backend.page.service(), sh.backend.page.sid()) {
         if let Some(exports) = svc.drag_dir(&sid).ok().and_then(|d| d.parent().map(Path::to_path_buf)) {
             if let Ok(c) = std::fs::canonicalize(exports) {
@@ -1550,13 +1580,28 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
             _ => {}
         }
     }
-    if writes_outside(cmd, &args)
-        && !crate::deliver::dest_allowed(&sh.chosen.lock().unwrap_or_else(|e| e.into_inner()), cmd, &args)
-    {
-        return Answer::err(
-            403,
-            format!("{cmd} writes only below the cache folder of the plugin: it takes no folder or file of its own"),
-        );
+    if writes_outside(cmd, &args) {
+        let default = default_exports(sh);
+        if !crate::deliver::dest_allowed_in(&allowed_folders(sh), default.as_deref(), cmd, &args) {
+            return Answer::err(
+                403,
+                format!(
+                    "{cmd} writes only below the cache folder of the plugin: it takes no folder or file of its own"
+                ),
+            );
+        }
+        // M1c2: the default folder is a `dest` the page may name, also before it exists: the service checks that a `dest`
+        // is a folder, so the plugin makes this one (and only this one) first
+        if let (Some(d), Some(dest)) = (
+            default.as_deref(),
+            args.get("dest").and_then(Value::as_str).filter(|s| !s.is_empty()),
+        ) {
+            if fault() != "old-dest" && crate::deliver::is_default_dest(d, Path::new(dest)) {
+                if let Err(e) = std::fs::create_dir_all(d) {
+                    return Answer::err(500, format!("{}: {e}", d.display()));
+                }
+            }
+        }
     }
     if on_main_thread() {
         OFF_MAIN.fetch_add(1, Ordering::SeqCst);
@@ -2055,6 +2100,7 @@ fn backend_of(plugin: &Plugin) -> Backend {
             stretched: Arc::new(Vec::new),
             export_regions: Arc::new(crate::deliver::ExportRegions::default),
             selection: Arc::new(|| Value::Null),
+            export_folders: Arc::new(|| None),
         },
     }
 }

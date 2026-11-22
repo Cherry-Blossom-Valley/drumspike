@@ -189,8 +189,57 @@ pub fn file_stems(display: &HashMap<String, String>) -> HashMap<String, String> 
 /// `chosen` holds canonical paths. The command must be one that takes a `dest` for an export, the `dest` must be
 /// absolute, and its canonical form must EQUAL an entry (no prefix, no subfolder): a folder that was replaced by a
 /// link after the choice no longer equals. A `path` key never passes.
+///
+/// This is the rule of M1c1 with no default folder; [`dest_allowed_in`] adds the default folder of the document.
 #[must_use]
 pub fn dest_allowed(chosen: &[PathBuf], cmd: &str, args: &Value) -> bool {
+    dest_allowed_in(chosen, None, cmd, args)
+}
+
+/// The path with the links of its existing part resolved, also when the end of it does not exist yet: the deepest
+/// existing ancestor is made canonical and the missing names are put behind it. `None` for a relative path, and for a
+/// path with a `..` in its missing part (it cannot be resolved without the folder). Two paths of one place give one answer.
+#[must_use]
+pub fn resolve_lenient(p: &Path) -> Option<PathBuf> {
+    if !p.is_absolute() {
+        return None;
+    }
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = p.to_path_buf();
+    loop {
+        match std::fs::canonicalize(&cur) {
+            Ok(mut c) => {
+                for name in missing.iter().rev() {
+                    c.push(name);
+                }
+                return Some(c);
+            }
+            Err(_) => {
+                // a `..` or a `.` at the end has no file name: the path cannot be resolved
+                let name = cur.file_name()?.to_os_string();
+                missing.push(name);
+                cur = cur.parent()?.to_path_buf();
+            }
+        }
+    }
+}
+
+/// True when `dest` is the default export folder of the document (`default`, `Exports/` of its project): the same
+/// place by [`resolve_lenient`], so also while the folder does not exist yet. Exact: no prefix, no subfolder.
+#[must_use]
+pub fn is_default_dest(default: &Path, dest: &Path) -> bool {
+    match (resolve_lenient(default), resolve_lenient(dest)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// [`dest_allowed`] with the default export folder of the document (M1c2, #579): the page names it as an explicit `dest`
+/// (it takes it from `export_existing`), so it is always allowed, also when it does not exist yet. It is the one folder
+/// below the cache folder that the page may name; the rule stays exact. `DS_ARA_EDITOR_FAULT=old-dest` is the rule of
+/// M1c1 (the default folder is refused like any other).
+#[must_use]
+pub fn dest_allowed_in(chosen: &[PathBuf], default: Option<&Path>, cmd: &str, args: &Value) -> bool {
     if crate::editor::fault() == "any-dest" {
         return true;
     }
@@ -207,6 +256,9 @@ pub fn dest_allowed(chosen: &[PathBuf], cmd: &str, args: &Value) -> bool {
     if !p.is_absolute() {
         return false;
     }
+    if crate::editor::fault() != "old-dest" && default.is_some_and(|d| is_default_dest(d, p)) {
+        return true;
+    }
     let Ok(canon) = std::fs::canonicalize(p) else {
         return false;
     };
@@ -214,6 +266,84 @@ pub fn dest_allowed(chosen: &[PathBuf], cmd: &str, args: &Value) -> bool {
         return chosen.iter().any(|c| canon.starts_with(c));
     }
     chosen.contains(&canon)
+}
+
+// ---------------------------------------------------------------- the folders of the document
+
+/// The file in the cache folder of a document that lists the folders the user chose in the sheet (M1c2, #579). Only the
+/// plugin writes it, from the sheet; no command of the page reaches it (it lies next to `project/`, not inside).
+pub const FOLDERS_FILE: &str = "export-folders.json";
+
+/// The most folders the list keeps (the oldest go first).
+pub const FOLDERS_MAX: usize = 32;
+
+/// The largest list file the plugin reads (a bigger file is not ours).
+const FOLDERS_BYTES: u64 = 64 * 1024;
+
+/// The folders of the file `file` that can still be a `dest`: each entry is a string that is an absolute, canonical path of
+/// a folder that exists NOW (equal to its own `canonicalize`, so a folder that was replaced by a link, or a path that is a file
+/// now, drops out). A missing file, a file that is too big or not JSON of the shape `{"v":1,"folders":[...]}`, and every entry of
+/// another type or form give nothing for that entry. Never an error: the list is a convenience.
+#[must_use]
+pub fn load_folders(file: &Path) -> Vec<PathBuf> {
+    let Ok(meta) = std::fs::metadata(file) else {
+        return Vec::new();
+    };
+    if !meta.is_file() || meta.len() > FOLDERS_BYTES {
+        return Vec::new();
+    }
+    let Ok(text) = std::fs::read_to_string(file) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else {
+        return Vec::new();
+    };
+    let Some(list) = v.get("folders").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = Vec::new();
+    for e in list.iter().take(FOLDERS_MAX * 4) {
+        let Some(s) = e.as_str() else { continue };
+        let p = Path::new(s);
+        if !p.is_absolute() {
+            continue;
+        }
+        let Ok(canon) = std::fs::canonicalize(p) else {
+            continue;
+        };
+        if canon != p || !canon.is_dir() || out.contains(&canon) {
+            continue;
+        }
+        out.push(canon);
+    }
+    out
+}
+
+/// Write the list: a temporary file next to it, then a rename, so a reader sees the old or the new list.
+///
+/// # Errors
+/// The error of the file system.
+pub fn save_folders(file: &Path, list: &[PathBuf]) -> std::io::Result<()> {
+    let start = list.len().saturating_sub(FOLDERS_MAX);
+    let names: Vec<String> = list[start..].iter().map(|p| p.display().to_string()).collect();
+    let body = serde_json::to_string(&serde_json::json!({"v": 1, "folders": names}))?;
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = file.with_extension("json.tmp");
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(&tmp, file)
+}
+
+/// Add the canonical folder `canon` to the list in `file` (the other entries are checked again as in [`load_folders`]).
+///
+/// # Errors
+/// The error of the file system.
+pub fn remember_folder(file: &Path, canon: &Path) -> std::io::Result<()> {
+    let mut list = load_folders(file);
+    list.retain(|p| p != canon);
+    list.push(canon.to_path_buf());
+    save_folders(file, &list)
 }
 
 /// A path the page may hand to a drag: absolute, a regular file, its folder is one of `roots` (canonical), and the
@@ -564,6 +694,193 @@ mod tests {
         assert!(
             !dest_allowed(&chosen2, "export_all", &args(link.to_str().unwrap())),
             "a link to another folder is refused"
+        );
+    }
+
+    #[test]
+    fn the_default_folder_is_a_dest_also_before_it_exists_and_the_rule_stays_exact() {
+        let doc = d("default");
+        let default = doc.join("project").join("Exports");
+        let args = |dest: &Path| json!({"dest": dest.to_str().unwrap()});
+        // nothing chosen, the folder does not exist yet
+        assert!(!default.exists());
+        for cmd in ["export_all", "export_existing", "export_dest_set"] {
+            assert!(dest_allowed_in(&[], Some(&default), cmd, &args(&default)), "{cmd}");
+        }
+        // the rule of M1c1 (no default given) refuses it: the defect of #579
+        assert!(!dest_allowed(&[], "export_existing", &args(&default)));
+        // the same place by another spelling (a dot, a double slash, a link to the project folder)
+        assert!(dest_allowed_in(
+            &[],
+            Some(&default),
+            "export_existing",
+            &json!({"dest": format!("{}//./Exports", doc.join("project").display())})
+        ));
+        let link = doc.join("link");
+        std::os::unix::fs::symlink(doc.join("project"), &link).unwrap();
+        std::fs::create_dir_all(doc.join("project")).unwrap();
+        assert!(dest_allowed_in(
+            &[],
+            Some(&default),
+            "export_existing",
+            &args(&link.join("Exports"))
+        ));
+        // exact: no subfolder, no parent, no sibling, no other name, no folder with a double dot in the missing part
+        for bad in [
+            default.join("sub"),
+            default.join(".drag"),
+            doc.join("project"),
+            doc.join("project").join("Exports2"),
+            doc.join("project").join("exports-x"),
+            doc.join("other").join("Exports"),
+            doc.join("project").join("missing").join("..").join("Exports"),
+        ] {
+            assert!(
+                !dest_allowed_in(&[], Some(&default), "export_existing", &args(&bad)),
+                "{bad:?}"
+            );
+        }
+        assert!(
+            !dest_allowed_in(&[], Some(&default), "export_existing", &json!({"dest": "Exports"})),
+            "relative"
+        );
+        // the other commands that take a dest stay refused, and a `path` never passes
+        for cmd in [
+            "export_drag_prepare",
+            "export_midi",
+            "export_spikes",
+            "export_layer",
+            "sampler_calibration_midi",
+        ] {
+            assert!(!dest_allowed_in(&[], Some(&default), cmd, &args(&default)), "{cmd}");
+        }
+        assert!(!dest_allowed_in(
+            &[],
+            Some(&default),
+            "export_all",
+            &json!({"dest": default.to_str().unwrap(), "path": "/x"})
+        ));
+        // the folder that exists now is the same answer
+        std::fs::create_dir_all(&default).unwrap();
+        assert!(dest_allowed_in(&[], Some(&default), "export_all", &args(&default)));
+        assert!(!dest_allowed_in(
+            &[],
+            Some(&default),
+            "export_all",
+            &args(&default.join("sub"))
+        ));
+    }
+
+    #[test]
+    fn a_missing_end_of_a_path_is_resolved_behind_its_existing_part() {
+        let a = d("lenient");
+        assert_eq!(resolve_lenient(&a.join("x").join("y")), Some(a.join("x").join("y")));
+        assert_eq!(resolve_lenient(&a), Some(a.clone()));
+        assert_eq!(resolve_lenient(Path::new("relative/x")), None);
+        assert_eq!(
+            resolve_lenient(&a.join("x").join("..").join("y")),
+            None,
+            "a double dot in the missing part"
+        );
+    }
+
+    fn list_file(tag: &str) -> (PathBuf, PathBuf) {
+        let dir = d(tag);
+        let file = dir.join(FOLDERS_FILE);
+        (dir, file)
+    }
+
+    #[test]
+    fn a_remembered_folder_is_kept_in_the_file_and_loaded_again() {
+        let (dir, file) = list_file("rem1");
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        assert!(load_folders(&file).is_empty(), "no file yet");
+        remember_folder(&file, &a).unwrap();
+        remember_folder(&file, &b).unwrap();
+        remember_folder(&file, &a).unwrap();
+        assert_eq!(
+            load_folders(&file),
+            vec![b.clone(), a.clone()],
+            "no double entry, the newest last"
+        );
+        // the folder is gone: it falls out of the list
+        std::fs::remove_dir(&b).unwrap();
+        assert_eq!(load_folders(&file), vec![a.clone()]);
+        // the list keeps the newest FOLDERS_MAX entries
+        let many: Vec<PathBuf> = (0..FOLDERS_MAX + 3)
+            .map(|i| {
+                let p = dir.join(format!("m{i}"));
+                std::fs::create_dir(&p).unwrap();
+                p
+            })
+            .collect();
+        save_folders(&file, &many).unwrap();
+        let got = load_folders(&file);
+        assert_eq!(got.len(), FOLDERS_MAX);
+        assert_eq!(got.last(), many.last());
+        // the temporary file does not stay
+        assert!(!file.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn hostile_content_of_the_folder_list_gives_no_folder() {
+        let (dir, file) = list_file("rem2");
+        let ok = dir.join("ok");
+        std::fs::create_dir(&ok).unwrap();
+        let a_file = dir.join("now-a-file");
+        std::fs::write(&a_file, b"x").unwrap();
+        let moved = dir.join("moved");
+        let target = dir.join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::create_dir(&moved).unwrap();
+        // a folder that was a folder when it was chosen and is a link to another folder now
+        std::fs::remove_dir(&moved).unwrap();
+        std::os::unix::fs::symlink(&target, &moved).unwrap();
+        let ds = |v: &Value| std::fs::write(&file, v.to_string()).unwrap();
+        // wrong types at the top: not an object, no list, a list that is a string, a number
+        for top in [
+            json!([]),
+            json!("x"),
+            json!(7),
+            json!(null),
+            json!({"v": 1}),
+            json!({"folders": "/tmp"}),
+            json!({"folders": 3}),
+        ] {
+            ds(&top);
+            assert!(load_folders(&file).is_empty(), "{top}");
+        }
+        // entries of the wrong type or form: dropped one by one, the good one stays
+        ds(&json!({"v": 1, "folders": [
+            7, null, true, ["/tmp"], {"p": "/tmp"}, "", "relative/path", "~/x", "../x",
+            a_file.to_str().unwrap(),     // a path that is a file now
+            moved.to_str().unwrap(),      // a link that moved: not its own canonical form
+            dir.join("missing").to_str().unwrap(),
+            format!("{}/./ok", dir.display()),   // not canonical
+            format!("{}/ok/", dir.display()),    // not canonical
+            ok.to_str().unwrap(),
+        ]}));
+        assert_eq!(load_folders(&file), vec![ok.clone()]);
+        // not JSON, an empty file, a file that is too big, a folder in place of the file
+        std::fs::write(&file, b"{not json").unwrap();
+        assert!(load_folders(&file).is_empty());
+        std::fs::write(&file, b"").unwrap();
+        assert!(load_folders(&file).is_empty());
+        std::fs::write(&file, vec![b' '; (FOLDERS_BYTES as usize) + 1]).unwrap();
+        assert!(load_folders(&file).is_empty());
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert!(load_folders(&file).is_empty());
+        // a symlink that moved after the choice is not allowed as a dest either
+        std::fs::remove_dir(&file).unwrap();
+        save_folders(&file, std::slice::from_ref(&ok)).unwrap();
+        std::fs::remove_dir(&ok).unwrap();
+        std::os::unix::fs::symlink(&target, &ok).unwrap();
+        assert!(
+            load_folders(&file).is_empty(),
+            "the folder is a link to another one now"
         );
     }
 

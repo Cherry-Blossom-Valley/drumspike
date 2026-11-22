@@ -2570,6 +2570,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let p6 = doc.clone();
     let p7 = doc.clone();
     let p8 = doc.clone();
+    let p9 = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
@@ -2588,6 +2589,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
         stretched: Arc::new(move || p6.stretched_tracks()),
         export_regions: Arc::new(move || p7.export_region_list()),
         selection: Arc::new(move || p8.selection_now()),
+        export_folders: Arc::new(move || Some(service::folder_of(&p9.cache, &p9.id()).join(deliver::FOLDERS_FILE))),
     }
 }
 

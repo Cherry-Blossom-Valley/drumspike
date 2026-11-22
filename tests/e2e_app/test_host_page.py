@@ -251,6 +251,52 @@ def test_the_export_dialog_works_in_host_mode_with_the_host_choices_only(host_ap
     host_app.evaluate("() => exClose()")
 
 
+def tiles(page):
+    return page.evaluate("""() => ['#exDragMidi', '#exDragSpikes'].map(k => { const t = document.querySelector(k);
+      return [t.dataset.state, t.querySelector('.exDragN').textContent]; })""")
+
+
+def test_a_drag_tile_that_cannot_prepare_shows_the_reason_and_never_waits_in_host_mode(host_app, make_project):
+    """#579 gate line 3: a refused destination (the plugin said 403) and a render that fails are both an error state with the
+    reason on the tile. Before, the tile stayed at "preparing..." for ever."""
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("""() => { const o = B.exportExisting;
+      B.exportExisting = async (sid, opts) => { if (opts && opts.dest) { const e = new Error('writes only below the cache folder of the plugin'); e.code = 403; throw e; } return o(sid, opts); }; }""")
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'error' && document.querySelector('#exDragSpikes').dataset.state === 'error'")
+    for state, text in tiles(host_app):
+        assert state == "error" and text.startswith("error: ") and "folder" in text, (state, text)
+    host_app.wait_for_timeout(1200)   # the 400 ms render timer of the dialog must not bring a tile back to "preparing"
+    assert [t[0] for t in tiles(host_app)] == ["error", "error"]
+    assert "cannot be used" in host_app.locator("#exProblem").inner_text()
+    host_app.evaluate("() => exClose()")
+
+
+def test_a_render_that_fails_shows_its_reason_on_the_tile_in_host_mode(host_app, make_project):
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("() => { B.exportDragPrepare = async () => { throw new Error('409: the disk is full'); }; }")
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'error'")
+    assert tiles(host_app) == [["error", "error: the disk is full"], ["error", "error: the disk is full"]]
+    host_app.evaluate("() => exClose()")
+
+
+def test_a_remembered_folder_that_is_gone_falls_back_to_the_default_with_one_short_text_in_host_mode(host_app, make_project, tmp_path):
+    """#579 gate line 4: the project keeps a folder that does not exist any more: the dialog opens with the default folder, says so
+    in one short text (no error: Export works and the tiles prepare), and forgets the folder."""
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    gone = tmp_path / "chosen-before"
+    gone.mkdir()
+    host_app.evaluate("async d => { await B.exportDestSet(S.sid, d); }", str(gone))
+    gone.rmdir()
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'", timeout=60000)
+    got = host_app.evaluate("() => [EX.dest === EX.def, EX.destOk, EX.destNote, document.querySelector('#exProblem').textContent, document.querySelector('#exGo').disabled]")
+    assert got == [True, True, "The folder chosen before is not available: Exports/ is used.", "The folder chosen before is not available: Exports/ is used.", False], got
+    assert host_app.evaluate("async () => (await B.exportExisting(S.sid, {})).remembered") is None   # forgotten: the text comes once
+    host_app.evaluate("() => exClose()")
+
+
 def test_the_same_actions_call_the_commands_with_the_mode_off(app, make_project):
     """The control of the walk above: with the mode off, the actions of the groups call the commands. A count of 0 in host
     mode means something only if the same spy sees a count above 0 here."""

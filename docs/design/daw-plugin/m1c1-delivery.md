@@ -515,3 +515,81 @@ Hand check steps (for the owner, in a DAW):
 - The process-call tempo keeps `varies` when instances alternate with different tempos; a new document clears it.
 - A list that the event cap cut is no tempo map: the answer is no tempo with the reason `capped`, so the fallback runs.
 - A drag may take the files that `export_existing` names too (relative to its `dest`).
+
+## M1c2 (#579): the export dialog and the drag with the default folder
+
+The owner opened the export dialog in a real DAW for the first time (2026-11-22). Two things were wrong: the dialog said "The folder cannot
+be used" at once, and the two drag tiles never left "preparing". The gate of M1c1 did not see either.
+
+### Cause
+
+- The page does not ask for the default folder with no `dest`. At open it reads `default_dest` from `export_existing` and keeps it as the
+  destination (`EX.dest = EX.def`); from then on `exInfo` calls `export_existing` with `dest` = that folder. In the app this is the normal
+  way; the folder is an explicit, absolute path.
+- The rule of section 4 allowed an explicit `dest` only when it equalled a folder that the user chose in the sheet of THIS editor session
+  (`chosen`, empty at the start). The default folder of the document (`Exports/` below its project folder) was not in it, so
+  `export_existing` answered 403, the page set `destOk = false` and wrote "The folder cannot be used", and Export stayed off. A
+  second fault stood behind the first: the service checks that a `dest` is an existing folder (`check_dest`), and `Exports/` does not exist
+  until the first export, so even an allowed default folder gave a 404.
+- The tiles had two causes in the page. The render timer of the dialog ran after a refused `dest`, and `exDragSchedule` returned early at
+  `!EX.destOk` with no state, so a tile that did not prepare had no way to say so (`exRender` shows "preparing" when it has neither files nor
+  an error).
+- Why the stages did not see it: stage `delivery` calls the commands of the service directly through `window.__TAURI__.core.invoke`, and it
+  chooses the folder first (`DS_ARA_PICK_DIR`), so the explicit `dest` it uses is always the one in `chosen`. It never opened the dialog, so
+  the page code that names the default folder (`openExport`, `exInfo`, `exDragSchedule`) never ran in the real page. The page tests of
+  `tests/e2e_app` run on the test bridge, which has no destination rule at all. Nothing ran the page and the rule together.
+
+### The rule now
+
+A `dest` (commands `export_all`, `export_existing`, `export_dest_set`; `export_drag_prepare` still takes none) is allowed when it is
+
+1. the default export folder of the document, `Exports/` of its project (`deliver::is_default_dest`): the same place by `resolve_lenient`,
+   which makes the existing part of both paths canonical and keeps the missing names behind it, so it holds also while the folder does
+   not exist; a missing part with a `..` is refused. The plugin makes this one folder (`create_dir_all`, and nothing else) before the service
+   checks it. Or
+2. equal (exact canonical path, no prefix, no subfolder) to a folder that the user chose in the sheet: in this editor session, or in the list
+   of the document (below).
+
+Nothing else changes: a subfolder of the default folder, another folder below the cache folder and a `path` key are still refused
+(unit test `the_default_folder_is_a_dest_also_before_it_exists_and_the_rule_stays_exact`; the fault runs `any-dest`, `prefix-dest` and
+`any-path` of stage `delivery` still fail for their reasons).
+
+The list of folders: `export-folders.json` in the folder of the document (next to `project/`, not inside it). Only the plugin writes it, from
+`plugin_pick_folder` after the sheet; no command of the page reaches it. It is read at every check, and every entry is checked again: it must be a string, an absolute path that is equal to its own
+`canonicalize` (a link that moved to another folder is no longer equal) and a folder now (a path that is a file now, or gone, drops out);
+the file must be at most 64 KB and the list keeps the newest 32. A wrong type, a relative path or a broken file gives no folder, never an error
+(unit tests `hostile_content_of_the_folder_list_gives_no_folder` and `a_remembered_folder_is_kept_in_the_file_and_loaded_again`). A drag may
+also take files from a remembered folder, as from a chosen one.
+
+The page (host mode only): a remembered folder that is not allowed or not there any more gives the default folder and one short text, "The
+folder chosen before is not available: Exports/ is used." (no error: Export and the tiles work), and the project forgets the folder, so the
+text comes once. A tile that cannot prepare, because the destination is refused or the render failed, shows `error: <reason>`; it never stays
+at "preparing". In the app the page is as before.
+
+### The stage that closes the hole
+
+Stage `export-dialog` (mode `exportdialog` of the test host and of `driver.js`) drives the REAL dialog in the REAL page of the plugin, from the
+menu: File > Export... by DOM clicks, in two editors of one document. It reports what the dialog shows at each step: no folder text, the default
+folder, both tiles "ready" with 4 files, a press and a move on the Drag MIDI tile starts the real drag session (the pasteboard holds the 4 files
+in `Exports/`), Export writes 4 MIDI and 4 WAV files, a second open after a close does the same, Choose... (answered by `DS_ARA_PICK_DIR`) shows
+the chosen folder and Export writes there, and a new editor of the document opens with that folder. Fault runs: `old-dest` (the rule of M1c1) gives
+the folder error and the tiles do not reach "ready"; `no-remember` (the choice is not kept) opens the new editor with the default folder.
+
+### Not proved by a stage
+
+- A DAW session that is closed and opened again (the document id comes back from the archive, so the folder of the document and its list are the
+  same): the stage runs two editors of one document, not a restored archive. The unit tests cover the file.
+- A remembered folder that is deleted between two runs: the test host cannot delete it. Covered by the unit tests of the list and by the page
+  test `test_a_remembered_folder_that_is_gone_falls_back_to_the_default_with_one_short_text_in_host_mode`.
+- The real mouse drag into a DAW track, and the real folder sheet: hand check.
+
+### Hand check steps (for the owner, in a DAW)
+
+1. Open the plugin on a drum track and let the analysis finish. Open File > Export... from the plugin menu.
+2. The dialog shows the folder `Exports/` of the document and no red text. "Drag MIDI" and "Drag Spikes" change from "preparing..." to a file count
+   within a few seconds.
+3. Press Export. The result line names the files; Show in Finder opens `Exports/` and holds one MIDI and one WAV file per track.
+4. Close the dialog and open it again: the same, with no text.
+5. Drag the "Drag MIDI" tile onto an instrument track and the "Drag Spikes" tile onto an audio track, at the session start.
+6. Press Choose..., pick a folder, press Export: the files are in that folder. Close the plug-in window and open it again: the dialog opens with that
+   folder. Delete the folder in the Finder, close and open the window again: the dialog opens with `Exports/` and one short line, and Export works.

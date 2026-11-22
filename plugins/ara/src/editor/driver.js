@@ -79,6 +79,7 @@
     if (T.mode === "menu") menuRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "geometry") geometryRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "hostkeys") hostkeysRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "exportdialog") exportDialogRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "delivery") deliveryRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "selection") selectionRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "playback") playbackRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
@@ -500,6 +501,95 @@
       try { await inv("plugin:drag|start_drag", { item: ["/etc/hosts"], image: png, onEvent: null }); out.drag_outside = { ok: true }; } catch (e) { out.drag_outside = err(e); }
     } catch (e) { out.prepare_error = err(e); }
     post(Object.assign({ kind: "delivery" }, out));
+  }
+  /* Mode exportdialog (M1c2, #579): the REAL Export dialog in the REAL page of the plugin, opened from the host-mode menu
+     (File > Export...) by DOM clicks, as a user does it. The report holds what the dialog shows at each step (the folder text,
+     the replace line, the tiles and their count, the result line); the check reads the files that the Export button wrote.
+     Steps: open, drag a tile, Export, close, open again, Export, Choose a folder (DS_ARA_PICK_DIR answers the sheet; T.arg is
+     that folder), Export, close. `--cycles 2` runs it in a second editor of the same document: the folder of the choice
+     must then be the one the dialog opens with. DS_ARA_DRAG_PRESSED stands in for the mouse button of the drag. */
+  async function exportDialogRun(names) {
+    var out = { names: names, def: null, steps: [] };
+    function q(sel) { return document.querySelector(sel); }
+    function txt(sel) { var e = q(sel); return e ? String(e.textContent || "") : null; }
+    function shown(sel) { var e = q(sel); return !!e && !e.classList.contains("hidden"); }
+    function mouse(el, type, dx) { var r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: r.left + r.width / 2 + (dx || 0), clientY: r.top + r.height / 2, detail: 1 })); }
+    async function until(fn, ms) { var t0 = performance.now(); for (;;) { var v = false; try { v = fn(); } catch (e) { /* not yet */ } if (v) return true; if (performance.now() - t0 > ms) return false; await sleepM(80); } }
+    function tile(id) { var t = q(id); return t ? { state: t.dataset.state, text: String(t.querySelector(".exDragN").textContent || ""), hidden: t.classList.contains("hidden") } : null; }
+    function snap(label) {
+      var r = { label: label, open: shown("#exportModal") === true && !q("#exportModal").classList.contains("hidden"), dest: q("#exDest") ? q("#exDest").value : null,
+        problem: txt("#exProblem"), replace: txt("#exReplace"), go_disabled: q("#exGo") ? q("#exGo").disabled : null, note: txt("#exHostNote"),
+        result: shown("#exResult") ? txt("#exResultText") : null, midi: tile("#exDragMidi"), spikes: tile("#exDragSpikes"),
+        dest_ok: EX.destOk, def: EX.def, msg: txt("#stMsg"), spike_audio_visible: !!q("#exSpikeAudio") && q("#exSpikeAudio").closest("label").checkVisibility({ visibilityProperty: true }),
+        spike_both_visible: !!q("#exSpikeBoth") && q("#exSpikeBoth").closest("label").checkVisibility({ visibilityProperty: true }) };
+      out.steps.push(r);
+      return r;
+    }
+    function tilesDone() { var a = tile("#exDragMidi"), b = tile("#exDragSpikes"); return a && b && a.state !== "preparing" && b.state !== "preparing"; }
+    var btn = document.getElementById("hostMenuBtn"), panel = document.getElementById("hostMenu");
+    if (!btn || !panel) { out.error = "no menu button"; post(Object.assign({ kind: "exportdialog" }, out)); return; }
+    async function openFromMenu() {   // File > Export... with clicks, as a user does
+      mouse(btn, "mousedown"); mouse(btn, "mouseup"); btn.click();
+      if (!(await until(function () { return DSHostMenu.isOpen(); }, 3000))) return "the click did not open the menu";
+      var g = panel.querySelector('[data-group="File"]'); if (!g) return "no File group";
+      g.click(); await sleepM(100);
+      var it = panel.querySelector('[data-cmd="export"]'); if (!it) return "no item export";
+      mouse(it, "mousedown"); mouse(it, "mouseup"); it.click();
+      if (!(await until(function () { return !q("#exportModal").classList.contains("hidden"); }, 10000))) return "the dialog did not open";
+      return "ok";
+    }
+    async function answerNotice() {   // the host gave no tempo: the dialog asks once, per document
+      var go = await until(function () { return !q("#confirmModal").classList.contains("hidden"); }, 1500);
+      if (!go) return false;
+      var b = q('#confirmActions button[data-act="anyway"]'); if (b) b.click();
+      return true;
+    }
+    async function exportNow(label) {
+      var n0 = EX.done;
+      if (q("#exGo").disabled) { var r0 = snap(label); r0.export_finished = false; r0.disabled = true; return r0; }   // the dialog refuses the export: nothing to wait for
+      q("#exGo").click();
+      out["notice_" + label] = await answerNotice();
+      var ok = await until(function () { return EX.done > n0 && !EX.busy; }, 60000);
+      await sleepM(400);
+      var r = snap(label); r.export_finished = ok; return r;
+    }
+    async function close() {
+      q("#exCancel").click();
+      await until(function () { return q("#exportModal").classList.contains("hidden"); }, 5000);
+      await sleepM(300);
+    }
+    // the tracks have their hits
+    await until(function () { return names.every(function (n) { return (S.events[n] || []).length > 0; }); }, 30000);
+    await settle();
+    out.menu = await openFromMenu();
+    await until(tilesDone, 40000);
+    out.def = EX.def; out.remembered = EX.remembered;
+    snap("open");
+    // the drag of a tile: a press and a move on the tile, as a user does (the files move into Exports/, the native drag starts)
+    var mt = q("#exDragMidi");
+    if (mt && mt.dataset.state === "ready") {
+      mouse(mt, "mousedown"); mouse(mt, "mousemove", 30); mouse(mt, "mouseup", 30);
+      await until(function () { return /^dragged|^drag failed/.test(txt("#stMsg") || ""); }, 15000);
+      await until(tilesDone, 40000);
+      snap("drag");
+    }
+    await exportNow("export1");
+    await close();
+    out.menu2 = await openFromMenu();
+    await until(tilesDone, 40000);
+    snap("reopen");
+    await exportNow("export2");
+    // Choose... : the sheet is answered by DS_ARA_PICK_DIR; the folder becomes the destination
+    var before = EX.dest;
+    if (T.arg && EX.dest !== T.arg) {
+      q("#exChoose").click();
+      await until(function () { return EX.dest !== before; }, 15000);
+      await until(tilesDone, 40000);
+      snap("chosen");
+      await exportNow("export3");
+    }
+    await close();
+    post(Object.assign({ kind: "exportdialog" }, out));
   }
   async function refuse(names) {   // F3: the page cannot change the track set
     var sid = S.sid, name = names[0], out = {};
