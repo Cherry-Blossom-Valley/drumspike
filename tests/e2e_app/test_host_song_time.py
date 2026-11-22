@@ -13,6 +13,8 @@ from app_support import open_project
 from test_host_page import FOUR, host_open
 
 NAMES = [n for n, *_ in FOUR]
+HITS = [0.5, 1.5, 2.5]
+TRACKS = tuple((n, r, k, [{"t": t, "v": 100} for t in HITS]) for n, r, k in FOUR)   # every track has stored hits at 0.5 s, 1.5 s and 2.5 s of its audio
 
 
 def rows_payload(gen=1):
@@ -28,7 +30,7 @@ def rows_payload(gen=1):
 
 @pytest.fixture
 def host(host_app, make_project):
-    host_open(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_open(host_app, make_project(tracks=TRACKS, seconds=6.0))
     host_app.evaluate("() => { setTrackHeight('large'); }")
     yield host_app
     host_app.evaluate("() => { HT.rows = []; HT.gen = 0; HT.fault = ''; HT.rebuild(); HT.paint(); }")
@@ -127,7 +129,7 @@ def test_the_timeline_is_the_song_the_end_of_the_last_clip(host):
 
 
 def test_the_standalone_app_shows_source_time_and_has_no_rows(app, make_project):
-    open_project(app, make_project(tracks=FOUR, seconds=6.0))
+    open_project(app, make_project(tracks=TRACKS, seconds=6.0))
     assert app.evaluate("() => HT.on()") is False
     # even with rows given (a test sends them), the mode is off without the switch: nothing changes
     app.evaluate("p => HT.take(p)", rows_payload())
@@ -160,7 +162,7 @@ def test_a_double_click_in_the_second_clip_adds_a_hit_in_the_source_time_of_that
     wait_idle(host)
     n_a, n_b = host.evaluate("([a, b]) => [S.events[a].length, S.events[b].length]", [a, b])
     spike_event(host, a, "dblclick", 11.2)   # song 11.2 s lies in the second clip (the audio of the second source from 1.0 s, at song 10 s)
-    host.wait_for_function("([b, n]) => S.events[b].length === n", [b, n_b + 1])
+    host.wait_for_function("([b, n]) => S.events[b].length === n", arg=[b, n_b + 1])
     got = host.evaluate("([a, b]) => ({ a: S.events[a].length, t: S.events[b].map(e => e.t) })", [a, b])
     assert got["a"] == n_a, "the first source is not touched"
     assert any(abs(t - 2.2) <= 1 / 48000 for t in got["t"]), f"stored in source time 1.0 + (11.2 - 10.0): {got['t']}"
@@ -183,7 +185,7 @@ def test_a_hit_drag_moves_the_hit_in_its_source_and_stays_in_its_clip(host):
     spike_event(host, a, "mousedown", 11.5)
     spike_event(host, a, "mousemove", 11.5, dx=-0.25 * px_per_s)
     spike_event(host, a, "mouseup", 11.5, dx=-0.25 * px_per_s)
-    host.wait_for_function("([b]) => S.events[b].some(e => Math.abs(e.t - 2.25) < 0.002)", [b])
+    host.wait_for_function("([b]) => S.events[b].some(e => Math.abs(e.t - 2.25) < 0.002)", arg=[b])
     # a drag far to the left stops at the start of the clip: the source time never goes below 1.0 s
     spike_event(host, a, "mousedown", 10.5)   # the hit at 1.5 s of the second source
     spike_event(host, a, "mousemove", 10.5, dx=-3 * px_per_s)
@@ -267,13 +269,13 @@ def test_the_fault_flags_change_what_the_page_does(host):
     n_a = host.evaluate("([a]) => S.events[a].length", [a])
     host.evaluate("() => { HT.fault = 'store-song'; }")
     spike_event(host, a, "dblclick", 11.2)
-    host.wait_for_function("([b, n]) => S.events[b].length === n", [b, n_b + 1])
+    host.wait_for_function("([b, n]) => S.events[b].length === n", arg=[b, n_b + 1])
     assert host.evaluate("([b]) => S.events[b].some(e => Math.abs(e.t - 11.2) < 0.01)", [b]), "store-song: the song time was stored"
     host.evaluate("() => { HT.fault = ''; }")
 
 
 def test_the_leak_fault_turns_the_mode_on_in_the_standalone_page_and_the_standalone_checks_see_it(app, make_project):
-    open_project(app, make_project(tracks=FOUR, seconds=6.0))
+    open_project(app, make_project(tracks=TRACKS, seconds=6.0))
     app.evaluate("p => HT.take(p)", rows_payload())
     app.evaluate("() => { HT.fault = 'leak'; HT.rebuild(); }")
     assert app.evaluate("() => [HT.on(), HT.clips(S.order[0]) !== null, maxDur()]") == [True, True, 12.0], "the values the standalone test refuses"
