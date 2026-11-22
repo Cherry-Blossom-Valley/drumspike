@@ -155,15 +155,24 @@ pub fn range_to_source(start: f64, duration: f64, regions: &[Slice]) -> RangeOut
     }
     let end = start + duration;
     let mut parts: Vec<(f64, f64)> = Vec::new();
-    for r in regions.iter().filter(|r| r.dur_mod > 0.0 && r.dur_play > 0.0) {
+    for r in regions.iter().filter(|r| {
+        [r.start_mod, r.dur_mod, r.start_play, r.dur_play]
+            .iter()
+            .all(|v| v.is_finite())
+            && r.dur_mod > 0.0
+            && r.dur_play > 0.0
+    }) {
         let s = start.max(r.start_play);
         let e = end.min(r.start_play + r.dur_play);
         if e > s {
             let k = r.dur_mod / r.dur_play;
-            parts.push((
+            let (a, b) = (
                 (r.start_mod + (s - r.start_play) * k).max(0.0),
                 r.start_mod + (e - r.start_play) * k,
-            ));
+            );
+            if a.is_finite() && b.is_finite() {
+                parts.push((a, b));
+            }
         }
     }
     parts.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -181,6 +190,9 @@ pub fn range_to_source(start: f64, duration: f64, regions: &[Slice]) -> RangeOut
     }
 }
 
+/// The most bands of the range of the host that the page is told about.
+pub const MAX_BANDS: usize = 64;
+
 /// The shortest time between two page messages of the selection. A drag in the ruler of the DAW sends many ranges; the page gets
 /// at most one message in this time, always with the newest state, and the last state always comes.
 pub const PUSH_GAP_MS: u64 = 50;
@@ -197,15 +209,26 @@ pub enum Offer {
 /// The gate of the page messages: pure, the caller gives the time.
 #[derive(Debug, Default)]
 pub struct PushGate {
+    /// The number of the newest message that was sent.
+    sent_n: u64,
     last: Option<u64>,
     pending: Option<Value>,
     scheduled: bool,
 }
 
 impl PushGate {
+    /// Two threads may offer in the wrong order: the message with the higher number `n` always wins, a lower one is dropped.
     pub fn offer(&mut self, event: Value, now_ms: u64, gap_ms: u64) -> Offer {
+        let n = event["n"].as_u64().unwrap_or(0);
+        if n != 0 && n <= self.sent_n {
+            return Offer::Later { schedule: false };
+        }
+        if self.pending.as_ref().is_some_and(|p| p["n"].as_u64().unwrap_or(0) > n) {
+            return Offer::Later { schedule: false };
+        }
         if self.last.is_none_or(|l| now_ms.saturating_sub(l) >= gap_ms) {
             self.last = Some(now_ms);
+            self.sent_n = n;
             self.pending = None;
             return Offer::Now(event);
         }
@@ -218,9 +241,13 @@ impl PushGate {
     /// The waiting message, when the sender that was scheduled runs.
     pub fn take(&mut self, now_ms: u64) -> Option<Value> {
         self.scheduled = false;
-        let e = self.pending.take();
-        if e.is_some() {
+        let e = self
+            .pending
+            .take()
+            .filter(|e| e["n"].as_u64().unwrap_or(0) > self.sent_n);
+        if let Some(e) = &e {
             self.last = Some(now_ms);
+            self.sent_n = e["n"].as_u64().unwrap_or(0);
         }
         e
     }
@@ -306,8 +333,13 @@ pub fn payload(
             let regs = regions_of(tracks[i].seq);
             match range_to_source(start, dur, &regs) {
                 RangeOut::Bands(list) => {
-                    ranges = list.iter().map(|(a, b)| json!({"t0": a, "t1": b})).collect();
-                    why = "ok";
+                    // a range over very many regions: the first MAX_BANDS are drawn, the rest is dropped and the reason says so
+                    why = if list.len() > MAX_BANDS { "capped" } else { "ok" };
+                    ranges = list
+                        .iter()
+                        .take(MAX_BANDS)
+                        .map(|(a, b)| json!({"t0": a, "t1": b}))
+                        .collect();
                 }
                 RangeOut::Outside => {
                     why = "outside";
@@ -621,31 +653,98 @@ mod tests {
 
     #[test]
     fn the_gate_sends_the_first_message_at_once_holds_a_burst_and_keeps_the_newest() {
+        let m = |n: u64| json!({"n": n});
         let mut g = PushGate::default();
-        assert_eq!(g.offer(json!(1), 0, 50), Offer::Now(json!(1)));
-        assert_eq!(g.offer(json!(2), 10, 50), Offer::Later { schedule: true });
+        assert_eq!(g.offer(m(1), 0, 50), Offer::Now(m(1)));
+        assert_eq!(g.offer(m(2), 10, 50), Offer::Later { schedule: true });
         assert_eq!(
-            g.offer(json!(3), 20, 50),
+            g.offer(m(3), 20, 50),
             Offer::Later { schedule: false },
             "one sender is enough"
         );
         assert_eq!(
             g.take(50),
-            Some(json!(3)),
+            Some(m(3)),
             "the newest state comes, the one before it is gone"
         );
         assert_eq!(g.take(60), None, "nothing waits any more");
         assert_eq!(
-            g.offer(json!(4), 70, 50),
+            g.offer(m(4), 70, 50),
             Offer::Later { schedule: true },
             "50 ms count from the last send"
         );
-        assert_eq!(g.take(100), Some(json!(4)));
-        assert_eq!(g.offer(json!(5), 400, 50), Offer::Now(json!(5)));
+        assert_eq!(g.take(100), Some(m(4)));
+        assert_eq!(g.offer(m(5), 400, 50), Offer::Now(m(5)));
         // a message that goes now takes the place of one that waits
-        assert_eq!(g.offer(json!(6), 410, 50), Offer::Later { schedule: true });
-        assert_eq!(g.offer(json!(7), 460, 50), Offer::Now(json!(7)));
+        assert_eq!(g.offer(m(6), 410, 50), Offer::Later { schedule: true });
+        assert_eq!(g.offer(m(7), 460, 50), Offer::Now(m(7)));
         assert_eq!(g.take(470), None);
+    }
+
+    #[test]
+    fn the_gate_keeps_the_higher_number_when_two_threads_offer_in_the_wrong_order() {
+        let m = |n: u64| json!({"n": n});
+        // waiting: 6 arrives before 5
+        let mut g = PushGate::default();
+        assert_eq!(g.offer(m(1), 0, 50), Offer::Now(m(1)));
+        assert_eq!(g.offer(m(6), 10, 50), Offer::Later { schedule: true });
+        assert_eq!(g.offer(m(5), 11, 50), Offer::Later { schedule: false });
+        assert_eq!(g.take(60), Some(m(6)), "the page ends on the newer state");
+        // direct: 6 went out, 5 comes late and is dropped, also after the gap
+        assert_eq!(g.offer(m(5), 500, 50), Offer::Later { schedule: false });
+        assert_eq!(g.take(510), None);
+        assert_eq!(g.offer(m(7), 520, 50), Offer::Now(m(7)));
+        // the other order: 5 waits, 6 replaces it
+        let mut g = PushGate::default();
+        assert_eq!(g.offer(m(1), 0, 50), Offer::Now(m(1)));
+        assert_eq!(g.offer(m(5), 10, 50), Offer::Later { schedule: true });
+        assert_eq!(g.offer(m(6), 11, 50), Offer::Later { schedule: false });
+        assert_eq!(g.take(60), Some(m(6)));
+    }
+
+    #[test]
+    fn a_region_with_a_number_that_is_not_finite_gives_no_band_and_many_bands_are_capped() {
+        let bad = vec![
+            Slice {
+                start_mod: 0.0,
+                dur_mod: f64::NAN,
+                start_play: 0.0,
+                dur_play: 1.0,
+            },
+            Slice {
+                start_mod: f64::INFINITY,
+                dur_mod: 1.0,
+                start_play: 0.0,
+                dur_play: 1.0,
+            },
+        ];
+        assert_eq!(range_to_source(0.0, 1.0, &bad), RangeOut::Outside);
+        let sel = |range| {
+            state(RawSel {
+                sequences: vec![2],
+                range: Some(range),
+                ..RawSel::default()
+            })
+        };
+        let p = payload(&sel((3.0, 1.0)), &facts(), &order(), &|_| bad.clone(), Fault::default());
+        assert_eq!(
+            (p["ranges"].clone(), p["range_why"].clone()),
+            (json!([]), json!("outside")),
+            "not ok"
+        );
+        // 200 regions that do not touch: 64 bands and the reason says so
+        let many: Vec<Slice> = (0..200)
+            .map(|i| rec(f64::from(i) * 2.0, 0.5, f64::from(i) * 2.0))
+            .collect();
+        let p = payload(
+            &sel((0.0, 1000.0)),
+            &facts(),
+            &order(),
+            &|_| many.clone(),
+            Fault::default(),
+        );
+        assert_eq!(p["ranges"].as_array().unwrap().len(), MAX_BANDS);
+        assert_eq!(p["range_why"], json!("capped"));
     }
 
     #[test]

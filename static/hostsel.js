@@ -28,6 +28,7 @@ const HS_STUCK_MS = 20000;     // a pointer or key that was never released (the 
 /* A pointer or key action runs: the button is down in the page, or a key is down or was released a moment ago. */
 function hostSelEditing() {   // a text field has the focus: the user types; the host's selection waits until the field is left
   const e = document.activeElement;
+  if (!document.hasFocus()) return false;   // the user works in the DAW: the field keeps its focus in the page, but nobody types in it
   return !!e && (e.isContentEditable || e.tagName === "TEXTAREA" || e.tagName === "SELECT" || (e.tagName === "INPUT" && !["checkbox", "radio", "button", "range", "color", "file"].includes(e.type)));
 }
 function hostSelBusy() {
@@ -74,7 +75,8 @@ function hostSelHidden(names) {
     HS.note.textContent = set.size ? `${set.size} ${set.size === 1 ? "track" : "tracks"} hidden in the DAW` : "";
     HS.note.classList.toggle("hidden", !set.size);
   }
-  if (S.sel && set.has(S.sel.track)) { S.sel = null; updateStatus(); }   // no key may act on a hit that nobody can see
+  if (S.sel && set.has(S.sel.track)) { S.sel = null; updateStatus(); }
+  if (LN.sel && set.has(LN.sel.track)) lnClearSel();   // nor on the range selection of a hidden track   // no key may act on a hit that nobody can see
   if (key !== HS.hiddenKey) { HS.hiddenKey = key; invalidate(F.SIZE | F.VIEW); }   // the rows moved: the page measures and draws again
 }
 

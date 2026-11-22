@@ -314,3 +314,24 @@ def test_a_focused_text_field_holds_the_selection_of_the_host_until_it_is_left(h
     host.evaluate("() => document.getElementById('zzField').blur()")
     host.wait_for_function("() => S.selTrack === '" + NAMES[2] + "'", timeout=3000)
     host.evaluate("() => document.getElementById('zzField').remove()")
+
+
+# ---------- review round 2 of #562 ----------
+
+def test_a_field_that_keeps_the_focus_does_not_hold_the_selection_when_the_page_has_lost_the_window_focus(host):
+    send(host, payload([NAMES[0]]))
+    host.evaluate("() => { const i = document.createElement('input'); i.id = 'zzField'; i.type = 'text'; document.body.appendChild(i); i.focus(); window.__hf = document.hasFocus; document.hasFocus = () => false; }")
+    assert host.evaluate("() => DSHostSel.busy()") is False, "the user works in the DAW: nobody types in the field"
+    send(host, payload([NAMES[2]]))
+    assert state(host)["sel"] == NAMES[2] and state(host)["pending"] is False
+    host.evaluate("() => { document.hasFocus = window.__hf; document.getElementById('zzField').remove(); }")
+
+
+def test_the_range_selection_of_a_track_that_becomes_hidden_is_cleared(host):
+    host.evaluate("n => lnSetSel(n, 1.0, 2.0)", NAMES[1])
+    assert host.evaluate("() => !!LN.sel")
+    send(host, payload([NAMES[0]], None, [NAMES[1]]))
+    assert host.evaluate("() => LN.sel") is None
+    host.evaluate("n => lnSetSel(n, 1.0, 2.0)", NAMES[2])
+    send(host, payload([NAMES[0]], None, [NAMES[1]]))
+    assert host.evaluate("() => !!LN.sel"), "the range selection of a track that is shown stays"

@@ -912,7 +912,11 @@ impl DocShared {
         if selection::Fault::read().no_pull {
             return Value::Null;
         }
-        let (mut p, _) = self.selection_step(|_, _, _| {});
+        let (mut p, n) = self.selection_step(|_, _, _| {});
+        if let Some(n) = n {
+            // the pull found a change that no callback had sent yet (a round ended): it goes to the page and the report as well
+            self.selection_send(&p, n);
+        }
         p["n"] = json!(self.view_events.load(Ordering::SeqCst));
         p
     }
@@ -5078,7 +5082,11 @@ impl DocShared {
     fn selection_set(&self, raw: selection::RawSel) -> Value {
         let fault = selection::Fault::read();
         if fault.keep_range && !raw.names_track() && raw.range.is_none() {
-            return self.selection_step(|_, _, _| {}).0;
+            let (payload, n) = self.selection_step(|_, _, _| {});
+            if let Some(n) = n {
+                self.selection_send(&payload, n);
+            }
+            return payload;
         }
         let (payload, n) = self.selection_step(|v, facts, order| {
             // a selection that names a track of the plugin is the one a later range alone maps through
