@@ -408,8 +408,7 @@ pub fn plan(
         Kind::Play => {
             let target = page_s.and_then(map);
             let move_first = offer.position
-                && target
-                    .is_some_and(|s| host_at.is_some_and(|h| !h.playing && (s - h.song_s).abs() > PLAY_MOVE_S));
+                && target.is_some_and(|s| host_at.is_some_and(|h| !h.playing && (s - h.song_s).abs() > PLAY_MOVE_S));
             match (move_first, target) {
                 (true, Some(s)) => Plan::Send {
                     calls: vec![Call::SetPosition(s), Call::Start],
@@ -445,7 +444,10 @@ mod tests {
             }
         );
         // the host position and the page's selection change nothing: the time is the song time
-        let at = Some(HostAt { song_s: 99.0, playing: true });
+        let at = Some(HostAt {
+            song_s: 99.0,
+            playing: true,
+        });
         assert_eq!(plan(Kind::Locate, Some(12.5), FULL, "Host", at, Fault::default()), p);
     }
 

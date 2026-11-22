@@ -31,7 +31,7 @@ def host(host_app, make_project):
     host_open(host_app, make_project(tracks=FOUR, seconds=6.0))
     host_app.evaluate("() => { setTrackHeight('large'); }")
     yield host_app
-    host_app.evaluate("() => { HT.rows = []; HT.rebuild(); HT.paint(); }")
+    host_app.evaluate("() => { HT.rows = []; HT.gen = 0; HT.fault = ''; HT.rebuild(); HT.paint(); }")
 
 
 def take(page, p):
@@ -135,7 +135,7 @@ def test_the_standalone_app_shows_source_time_and_has_no_rows(app, make_project)
     assert app.evaluate("() => HT.on()") is False
     assert app.evaluate("() => [HT.clips(S.order[0]), maxDur(), document.querySelectorAll('.track.hostMerged').length, trackLabel(S.order[0])]") == [None, 10, 0, NAMES[0]]
     assert app.evaluate("() => HT.hitCount(S.order[0], S.events)") == 0
-    app.evaluate("() => { HT.rows = []; HT.rebuild(); }")
+    app.evaluate("() => { HT.rows = []; HT.gen = 0; HT.rebuild(); }")
 
 
 # ---------------------------------------------------------------- input: a hit is edited in the source of the clip under the pointer
@@ -277,4 +277,4 @@ def test_the_leak_fault_turns_the_mode_on_in_the_standalone_page_and_the_standal
     app.evaluate("p => HT.take(p)", rows_payload())
     app.evaluate("() => { HT.fault = 'leak'; HT.rebuild(); }")
     assert app.evaluate("() => [HT.on(), HT.clips(S.order[0]) !== null, maxDur()]") == [True, True, 12.0], "the values the standalone test refuses"
-    app.evaluate("() => { HT.fault = ''; HT.rows = []; HT.rebuild(); }")
+    app.evaluate("() => { HT.fault = ''; HT.rows = []; HT.gen = 0; HT.rebuild(); }")

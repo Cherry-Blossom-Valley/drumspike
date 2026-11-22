@@ -207,12 +207,7 @@ pub struct ViewState {
 /// no track of the plugin has (the page changes nothing); `ranges` is the range of the host as one `{t0, t1}` in song time (M1b8), empty for none;
 /// `hidden` is the list of hidden page keys.
 #[must_use]
-pub fn payload(
-    state: &ViewState,
-    tracks: &[TrackFacts],
-    order: &HashMap<u64, Option<i32>>,
-    fault: Fault,
-) -> Value {
+pub fn payload(state: &ViewState, tracks: &[TrackFacts], order: &HashMap<u64, Option<i32>>, fault: Fault) -> Value {
     let hidden: Vec<&str> = if fault.no_hidden {
         Vec::new()
     } else {
@@ -372,7 +367,11 @@ mod tests {
                 ..RawSel::default()
             });
             let p = payload(&st, &facts(), &order(), Fault::default());
-            assert_eq!((p["ranges"].clone(), p["range_why"].clone()), (json!([]), json!("empty")), "{s} {d}");
+            assert_eq!(
+                (p["ranges"].clone(), p["range_why"].clone()),
+                (json!([]), json!("empty")),
+                "{s} {d}"
+            );
         }
         let p = payload(&state(RawSel::default()), &facts(), &order(), Fault::default());
         assert_eq!((p["ranges"].clone(), p["none"].clone()), (json!([]), json!(false)));

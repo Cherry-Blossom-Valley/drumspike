@@ -147,13 +147,25 @@ pub fn build(sources: &[SrcFacts], seqs: &HashMap<u64, SeqFact>) -> Rows {
         };
         if usable.is_empty() {
             // no region ever: the identity clip, song time = source time
-            let clip = Clip { src: src.key.clone(), a: 0.0, b: src.len_s.max(0.0), s: 0.0, k: 1.0 };
+            let clip = Clip {
+                src: src.key.clone(),
+                a: 0.0,
+                b: src.len_s.max(0.0),
+                s: 0.0,
+                k: 1.0,
+            };
             place(format!("s{}", src.seq), 1, 0, clip);
             continue;
         }
         for r in usable {
             let k = if r.dur_play > 0.0 { r.dur_play / r.dur_mod } else { 1.0 };
-            let clip = Clip { src: src.key.clone(), a: r.start_mod, b: r.start_mod + r.dur_mod, s: r.start_play, k };
+            let clip = Clip {
+                src: src.key.clone(),
+                a: r.start_mod,
+                b: r.start_mod + r.dur_mod,
+                s: r.start_play,
+                k,
+            };
             if r.sequence == 0 {
                 place(format!("s{}", src.seq), 1, 0, clip);
             } else {
@@ -161,9 +173,7 @@ pub fn build(sources: &[SrcFacts], seqs: &HashMap<u64, SeqFact>) -> Rows {
             }
         }
     }
-    accs.sort_by(|x, y| {
-        (x.group, x.order, x.first_seq, &x.id).cmp(&(y.group, y.order, y.first_seq, &y.id))
-    });
+    accs.sort_by(|x, y| (x.group, x.order, x.first_seq, &x.id).cmp(&(y.group, y.order, y.first_seq, &y.id)));
     // equal names (without case) show a number, as the tracks did: the first keeps the name
     let mut taken: HashSet<String> = HashSet::new();
     for a in accs {
@@ -182,7 +192,12 @@ pub fn build(sources: &[SrcFacts], seqs: &HashMap<u64, SeqFact>) -> Rows {
         for c in &clips {
             out.song_end = out.song_end.max(c.s + (c.b - c.a) * c.k);
         }
-        out.rows.push(Row { id: a.id, name: shown, srcs: srcs.into_iter().map(|(_, k)| k).collect(), clips });
+        out.rows.push(Row {
+            id: a.id,
+            name: shown,
+            srcs: srcs.into_iter().map(|(_, k)| k).collect(),
+            clips,
+        });
     }
     out
 }
@@ -208,19 +223,39 @@ mod tests {
     use super::*;
 
     fn reg(sequence: u64, a: f64, d: f64, p: f64) -> RegionFact {
-        RegionFact { sequence, start_mod: a, dur_mod: d, start_play: p, dur_play: d, region_id: 1 }
+        RegionFact {
+            sequence,
+            start_mod: a,
+            dur_mod: d,
+            start_play: p,
+            dur_play: d,
+            region_id: 1,
+        }
     }
     fn src(key: &str, seq: usize, regions: Vec<RegionFact>) -> SrcFacts {
-        SrcFacts { key: key.into(), seq, len_s: 30.0, regions, gone: false, region_name: None }
+        SrcFacts {
+            key: key.into(),
+            seq,
+            len_s: 30.0,
+            regions,
+            gone: false,
+            region_name: None,
+        }
     }
     fn seq(name: &str, order: i32) -> SeqFact {
-        SeqFact { name: Some(name.into()), order: Some(order) }
+        SeqFact {
+            name: Some(name.into()),
+            order: Some(order),
+        }
     }
 
     #[test]
     fn one_sequence_with_two_sources_is_one_row_with_both_clips_at_their_song_positions() {
         // the owner's case: clip 1 at song 0 to 10 s from one file, clip 2 at 12 to 20 s from another
-        let s = [src("f1", 0, vec![reg(7, 0.0, 10.0, 0.0)]), src("f2", 1, vec![reg(7, 0.0, 8.0, 12.0)])];
+        let s = [
+            src("f1", 0, vec![reg(7, 0.0, 10.0, 0.0)]),
+            src("f2", 1, vec![reg(7, 0.0, 8.0, 12.0)]),
+        ];
         let seqs = HashMap::from([(7, seq("Kick", 0))]);
         let r = build(&s, &seqs);
         assert_eq!(r.rows.len(), 1);
@@ -244,7 +279,11 @@ mod tests {
         let r = build(&s, &seqs);
         let names: Vec<_> = r.rows.iter().map(|x| (x.id.as_str(), x.name.as_str())).collect();
         assert_eq!(names, [("q1", "Snare"), ("q2", "Snare (2)"), ("q3", "Tom")]);
-        assert_eq!(r.rows[2].srcs, ["c", "d"], "two sources of one DAW track give no number");
+        assert_eq!(
+            r.rows[2].srcs,
+            ["c", "d"],
+            "two sources of one DAW track give no number"
+        );
     }
 
     #[test]
@@ -254,7 +293,16 @@ mod tests {
         assert_eq!(r.rows[0].id, "q5");
         assert_eq!(r.rows[1].id, "s0");
         assert_eq!(r.rows[1].name, "free");
-        assert_eq!(r.rows[1].clips, [Clip { src: "free".into(), a: 0.0, b: 30.0, s: 0.0, k: 1.0 }]);
+        assert_eq!(
+            r.rows[1].clips,
+            [Clip {
+                src: "free".into(),
+                a: 0.0,
+                b: 30.0,
+                s: 0.0,
+                k: 1.0
+            }]
+        );
     }
 
     #[test]
@@ -267,13 +315,20 @@ mod tests {
 
     #[test]
     fn a_region_with_no_sequence_makes_a_row_of_its_source_and_a_source_on_two_sequences_is_in_both_rows() {
-        let s = [src("a", 0, vec![reg(0, 0.0, 4.0, 0.0)]), src("b", 1, vec![reg(1, 0.0, 4.0, 0.0), reg(2, 1.0, 2.0, 8.0)])];
+        let s = [
+            src("a", 0, vec![reg(0, 0.0, 4.0, 0.0)]),
+            src("b", 1, vec![reg(1, 0.0, 4.0, 0.0), reg(2, 1.0, 2.0, 8.0)]),
+        ];
         let r = build(&s, &HashMap::from([(1, seq("One", 0)), (2, seq("Two", 1))]));
         let ids: Vec<_> = r.rows.iter().map(|x| x.id.as_str()).collect();
         assert_eq!(ids, ["q1", "q2", "s0"]);
         assert_eq!(r.rows[0].srcs, ["b"]);
         assert_eq!(r.rows[1].srcs, ["b"]);
-        assert_eq!((r.rows[1].clips[0].a, r.rows[1].clips[0].s), (1.0, 8.0), "only the clip of that sequence");
+        assert_eq!(
+            (r.rows[1].clips[0].a, r.rows[1].clips[0].s),
+            (1.0, 8.0),
+            "only the clip of that sequence"
+        );
     }
 
     #[test]
@@ -287,8 +342,14 @@ mod tests {
 
     #[test]
     fn the_id_of_a_row_survives_a_region_move_and_a_rename_of_the_daw_track() {
-        let before = build(&[src("a", 0, vec![reg(7, 1.0, 4.0, 2.0)])], &HashMap::from([(7, seq("Kick", 0))]));
-        let after = build(&[src("a", 0, vec![reg(7, 1.5, 3.0, 30.0)])], &HashMap::from([(7, seq("Kick In", 0))]));
+        let before = build(
+            &[src("a", 0, vec![reg(7, 1.0, 4.0, 2.0)])],
+            &HashMap::from([(7, seq("Kick", 0))]),
+        );
+        let after = build(
+            &[src("a", 0, vec![reg(7, 1.5, 3.0, 30.0)])],
+            &HashMap::from([(7, seq("Kick In", 0))]),
+        );
         assert_eq!(before.rows[0].id, after.rows[0].id);
         assert_ne!(before.rows[0].name, after.rows[0].name);
         assert_eq!(after.rows[0].clips[0].s, 30.0);
@@ -296,7 +357,10 @@ mod tests {
 
     #[test]
     fn the_json_answer_has_the_shape_the_page_reads() {
-        let r = build(&[src("a", 0, vec![reg(7, 1.0, 4.0, 2.0)])], &HashMap::from([(7, seq("Kick", 0))]));
+        let r = build(
+            &[src("a", 0, vec![reg(7, 1.0, 4.0, 2.0)])],
+            &HashMap::from([(7, seq("Kick", 0))]),
+        );
         let v = r.to_json(3);
         assert_eq!(v["gen"], 3);
         assert_eq!(v["rows"][0]["clips"][0]["s"], 2.0);

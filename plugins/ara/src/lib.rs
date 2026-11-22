@@ -899,12 +899,7 @@ impl DocShared {
             change(&mut v, &facts, &order);
             v.clone()
         };
-        let payload = selection::payload(
-            &state,
-            &facts,
-            &order,
-            selection::Fault::read(),
-        );
+        let payload = selection::payload(&state, &facts, &order, selection::Fault::read());
         if last.as_ref() == Some(&payload) {
             return (payload, None);
         }
@@ -979,7 +974,15 @@ impl DocShared {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .map(|(k, v)| (*k, rows::SeqFact { name: v.name.clone(), order: v.order }))
+            .map(|(k, v)| {
+                (
+                    *k,
+                    rows::SeqFact {
+                        name: v.name.clone(),
+                        order: v.order,
+                    },
+                )
+            })
             .collect();
         let members: Vec<Arc<SourceState>> = self
             .members
@@ -1011,14 +1014,18 @@ impl DocShared {
                 // the fault run: the regions of the last round, so a clip the user moved is not seen
                 regions = round
                     .get(&s.seq)
-                    .map(|(r, _)| r.iter().map(|x| rows::RegionFact {
-                        sequence: live.first().map_or(0, |l| l.sequence),
-                        start_mod: x.start_mod,
-                        dur_mod: x.dur_mod,
-                        start_play: x.start_play,
-                        dur_play: x.dur_mod,
-                        region_id: 0,
-                    }).collect())
+                    .map(|(r, _)| {
+                        r.iter()
+                            .map(|x| rows::RegionFact {
+                                sequence: live.first().map_or(0, |l| l.sequence),
+                                start_mod: x.start_mod,
+                                dur_mod: x.dur_mod,
+                                start_play: x.start_play,
+                                dur_play: x.dur_mod,
+                                region_id: 0,
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
             }
             let region_name = live
@@ -1028,7 +1035,11 @@ impl DocShared {
             facts.push(rows::SrcFacts {
                 key,
                 seq: s.seq,
-                len_s: if p.sample_rate > 0.0 { p.sample_count as f64 / p.sample_rate } else { 0.0 },
+                len_s: if p.sample_rate > 0.0 {
+                    p.sample_count as f64 / p.sample_rate
+                } else {
+                    0.0
+                },
                 // the sources whose clips are all gone are known to the export list
                 gone: regions.is_empty() && round.get(&s.seq).is_some_and(|(r, _)| !r.is_empty()),
                 regions,

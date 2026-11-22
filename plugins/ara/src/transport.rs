@@ -773,10 +773,7 @@ mod tests {
         let s = read().unwrap();
         assert!(s.playing && !s.has_position);
         let mut pacer = Pacer::new(TICK_US);
-        assert!(
-            pacer.step(Some(s), 0).is_none(),
-            "the old position 5.0 is not believed"
-        );
+        assert!(pacer.step(Some(s), 0).is_none(), "the old position 5.0 is not believed");
         assert!(pacer.no_position_seen);
     }
 
@@ -888,10 +885,7 @@ mod tests {
         let mut poller = Poller::new(TICK_US);
         let m = poller.look(Some(snap(2.0, true, 0)), 0).0.unwrap();
         assert!(m.playing);
-        let m = poller
-            .look(Some(snap(2.04, true, 40_000)), 40_000)
-            .0
-            .unwrap();
+        let m = poller.look(Some(snap(2.04, true, 40_000)), 40_000).0.unwrap();
         assert_eq!(m.why, Why::Tick);
         // the host stopped, made no stopped process call, and deactivated: the slot is gone
         let m = poller.look(None, 80_000).0.expect("a stop message");
@@ -917,10 +911,7 @@ mod tests {
             has_position: false,
             ..snap(0.0, true, 50_000)
         };
-        let m = poller
-            .look(Some(nopos), 50_000)
-            .0
-            .expect("a stop message");
+        let m = poller.look(Some(nopos), 50_000).0.expect("a stop message");
         assert!(!m.playing && (m.pos - 2.0).abs() < 1e-9);
         assert!(poller.take_no_position_row());
         assert!(poller
@@ -935,5 +926,4 @@ mod tests {
             .is_none());
         assert!(!poller.take_no_position_row(), "the row is written once");
     }
-
 }

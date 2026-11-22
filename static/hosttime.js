@@ -130,14 +130,6 @@ HT.hitCount = function (name, events) {
   if (clips) for (const c of clips) for (const e of events[c.src] || []) if (e.t >= c.a && e.t < c.b) n++;
   return n;
 };
-/* The hits of a source that lie in no clip of any row that holds it (they stay stored; the page counts them). */
-HT.outside = function (src, events) {
-  let n = 0;
-  const clips = HT.view.flatMap(e => e.clips).filter(c => c.src === src);
-  for (const e of events[src] || []) if (!clips.some(c => e.t >= c.a && e.t < c.b)) n++;
-  return n;
-};
-
 /* The DOM: the rows of merged sources are hidden, the header of a row shows the name of the DAW track. Called after the rows changed and
    after the page built its rows again. */
 HT.paint = function () {
