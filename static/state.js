@@ -133,8 +133,8 @@ const HOST_OWNED = ["new", "open", "open_recent", "recent_clear", "close", "save
    Not in a group, because they work through the plugin: Analyze All, Analyze Selected Track,
    Re-analyze Selection, the role of a track, every hit edit, Learn, tempo reads, zoom, follow, undo, and (#560) the
    Export dialog with its MIDI and spike files, its folder choice and its drag tiles (static/export.js). The group "files" keeps what
-   still has no meaning in a DAW: Export Again, the rename, the markers and the sampler offset of the export, the audio-spike
-   types (a later part) and the layer and calibration controls. */
+   still has no meaning in a DAW: Export Again, the rename, the markers and the sampler offset of the export, and the layer and
+   calibration controls (#579: the audio-spike types Audio and Both work in a DAW, in song time). */
 const HOST_ABSENT = [
   { group: "audio", say: "the host plays the audio",
     menu: ["audition", "audition_tab", "click", "mute_track", "solo_track", "reset_mix", "half_speed"],   // #559: the host has no half speed (a play request carries no speed)

@@ -51,6 +51,15 @@ function exOpts(withDest) {
   if (withDest) o.dest = EX.dest;
   return o;
 }
+/* #579 R1: in a DAW a call to the plugin that does not answer must not leave a tile at "preparing…": after EX.waitMs (30 s) the
+   call fails with a reason, and the tile shows the error state. Host mode only; EX.waitMs is a hook for the tests. */
+function exWait(p) {
+  if (!hostMode()) return p;
+  return new Promise((ok, no) => {
+    const t = setTimeout(() => no(new Error("no answer from the plugin")), EX.waitMs || 30000);
+    p.then(v => { clearTimeout(t); ok(v); }, e => { clearTimeout(t); no(e); });
+  });
+}
 const exPlural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 function exRender() {   // the controls from EX; the Export button and the tiles follow
   const { names, skipped } = exTrackSets(), all = S.order.length, sel = EX.selected && S.tracks[EX.selected] ? 1 : 0;
@@ -84,13 +93,18 @@ function exRender() {   // the controls from EX; the Export button and the tiles
     const files = EX.drag[k];
     t.dataset.state = !names.length || !EX.midi && !EX.spikes ? "disabled" : EX.drag.failed ? "error" : files ? "ready" : "preparing";
     t.querySelector(".exDragN").textContent = t.dataset.state === "preparing" ? "preparing…" : files ? exPlural(files.length, "file", "files") : "";
+    if (hostMode()) {   // #579: a tile that cannot prepare shows the reason; it never stays at "preparing…"
+      const why = t.dataset.state === "error" ? `error: ${EX.drag.why || "the files could not be prepared"}` : "";
+      if (why) t.querySelector(".exDragN").textContent = why.length > 60 ? why.slice(0, 57) + "…" : why;
+      t.querySelector(".exDragN").title = why;
+    }
   }
   /* #151: on the default map the Drag MIDI tile shows the visible 120 BPM warning until the project's answer */
   $("#exDragMidi .exDragW").classList.toggle("hidden", !(EX.midi && EX.tempoDefault && !EX.tempoAck));
   exHostNote();
 }
 /* #560: in a DAW the dialog says where the tempo of the MIDI comes from, how many exported tracks have a time-stretched region (the
-   files are made all the same) and that the audio-spike types come later. With the mode off nothing here shows. */
+   files are made all the same) and that the files start at song position 0. With the mode off nothing here shows. */
 function exHostNote() {
   const el = $("#exHostNote"), warn = $("#exHostWarn");
   if (!hostMode()) { el.classList.add("hidden"); warn.classList.add("hidden"); return; }
@@ -105,7 +119,7 @@ function exHostNote() {
     "MIDI tempo: none from the host, the file has 120 BPM");
   const names = exTrackSets().names, st = (h.stretched || []).filter(n => names.includes(n));
   if (st.length) parts.push(`${st.length} exported track${st.length === 1 ? " has" : "s have"} a region that the host stretches in time: the hits follow the stretch as one linear factor; warp markers inside a clip are not followed`);
-  parts.push("Files start at song position 0. Spike audio types (Audio, Both) come in a later part");
+  parts.push("Files start at song position 0");
   el.textContent = parts.join(". ") + ".";
   el.classList.remove("hidden");
 }
@@ -113,12 +127,14 @@ async function exInfo() {   // the replace count of the current options (the new
   const my = ++EX.infoSeq;
   if (!exFormats().length || !exTrackSets().names.length) { EX.replace = 0; exRender(); return; }
   try {
-    const r = await B.exportExisting(S.sid, exOpts(true));
+    const r = await exWait(B.exportExisting(S.sid, exOpts(true)));
     if (my !== EX.infoSeq || !EX.open) return;
     EX.replace = r.count; EX.destOk = true; EX.destNote = EX.destNote.startsWith("The folder") ? EX.destNote : "";
+    if (hostMode() && EX.drag.byDest) { exRender(); exDragSchedule(true); return; }   // #579: the folder works now: the tiles prepare again
   } catch (e) {
     if (my !== EX.infoSeq || !EX.open) return;
     EX.destOk = false; EX.destNote = `The folder cannot be used: ${errText(e)}`; EX.replace = 0;
+    if (hostMode()) { clearTimeout(EX.timer); EX.dragSeq++; EX.drag = { midi: null, spikes: null, failed: true, why: EX.destNote, byDest: true }; }   // #579: the tiles say why, they do not wait
   }
   exRender();
 }
@@ -127,17 +143,24 @@ function exDragSchedule(now) {   // the tiles show "preparing…" until the file
   const my = ++EX.dragSeq;
   EX.drag = { midi: null, spikes: null, failed: false };
   exRender();
-  if (!exFormats().length || !exTrackSets().names.length || !EX.destOk) return;
+  if (!exFormats().length || !exTrackSets().names.length) return;
+  if (!EX.destOk) {
+    if (hostMode()) { EX.drag = { midi: null, spikes: null, failed: true, why: EX.destNote || "the folder cannot be used", byDest: true }; exRender(); }   // #579
+    return;
+  }
   EX.timer = setTimeout(() => {
     EX.dragChain = EX.dragChain.then(async () => {   // one render at a time: two would clear each other's files
       if (my !== EX.dragSeq || !EX.open) return;
       try {
         await flushEvents();
-        const r = await B.exportDragPrepare(S.sid, exOpts(false));
+        const r = await exWait(B.exportDragPrepare(S.sid, exOpts(false)));
         exportedFollowers(r);   // P4-4: the render derives stale followers like the export it previews; the page takes the new hits even when the export then finds everything fresh
         if (my !== EX.dragSeq || !EX.open) return;
         EX.drag = { midi: r.midi, spikes: r.spikes, failed: false };
-      } catch (e) { if (my === EX.dragSeq) EX.drag = { midi: null, spikes: null, failed: true }; }
+        /* #579: in a DAW a kind with no file and an error from the render is an error, not "ready" with no file */
+        const bad = hostMode() ? (r.errors || []).map(x => x && x.message || String(x)).join("; ") : "";
+        if (bad && ((EX.midi && !(r.midi || []).length) || (EX.spikes && !(r.spikes || []).length))) EX.drag = { midi: null, spikes: null, failed: true, why: bad };
+      } catch (e) { if (my === EX.dragSeq) EX.drag = { midi: null, spikes: null, failed: true, why: errText(e) }; }
       if (EX.open) exRender();
     });
   }, now ? 0 : 400);
@@ -180,11 +203,17 @@ async function openExport(scope, track) {
     EX.spikeType = last.formats.includes("spikes") && last.formats.includes("audio") ? "both" : last.formats.includes("audio") ? "audio" : "synthetic";   // #218: the spike type the project keeps
     EX.mode = last.midi_mode === "single" ? "single" : "per_track";   // P4-31: the choices the project keeps seed the dialog; compensate keeps its default (a recorded off was the default of an earlier export, not a choice)
   }
-  if (hostMode()) { EX.spikeType = "synthetic"; EX.comp = false; EX.markers = false; }   // #560: audio spikes, the sampler offset and markers are absent in a DAW
+  if (hostMode()) { EX.comp = false; EX.markers = false; }   // #560: the sampler offset and markers are absent in a DAW (#579: the audio spike types are there, in song time)
   EX.dest = EX.def;
   if (EX.remembered) {   // the folder of the last choice, when it can still be used
-    try { await B.exportExisting(S.sid, { dest: EX.remembered }); EX.dest = EX.remembered; }
-    catch (e) { EX.destNote = `The folder kept for this project cannot be used (${errText(e)}): Exports/ is used.`; }
+    try { await exWait(B.exportExisting(S.sid, { dest: EX.remembered })); EX.dest = EX.remembered; }
+    catch (e) {
+      if (hostMode()) {   // #579: a remembered folder that is gone (or not allowed any more): the default folder and one short text, no error
+        EX.destNote = "The folder chosen before is not available: Exports/ is used.";
+        EX.remembered = null;
+        B.exportDestSet(S.sid, null).catch(() => {});
+      } else EX.destNote = `The folder kept for this project cannot be used (${errText(e)}): Exports/ is used.`;
+    }
   }
   EX.open = true;
   $("#exportModal").classList.remove("hidden");

@@ -128,6 +128,13 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   delivery-switches  M1d1 line 4: the delivery build (no cargo feature test-switches) ignores
                  DS_ARA_ROUND_FAULT=request-only and gives the round; the gate build obeys it
                  (fault: the same check refuses the gate build)
+  drag-source    round 3 of #579: no gate run starts a system drag session (a drop lands on the owner's desktop): the
+                 source has one call of the system drag, in one function behind the test branch, and no posted event,
+                 NSWorkspace or general pasteboard (fault: a second call is planted)
+  export-dialog  M1c2 (#579): the REAL Export dialog in the REAL page, opened from the host-mode menu in two
+                 editors of one document: no folder error, both drag tiles ready with a file count, a drag
+                 starts, Export writes the files, a second open does the same, Choose keeps the folder for
+                 the document (faults: the rule of M1c1, no memory of the chosen folder)
   validate       clap-validator 0.4.1 on the CLAP bundle
   universal      lipo -info names arm64 and x86_64 for the CLAP and the VST3 binary
   standalone     cargo metadata --no-deps at the repo root names no plugin crate; cargo
@@ -7136,6 +7143,32 @@ def wav_spikes(path: Path) -> dict:
     return {"rate": rate, "frames": len(xs) // (ch if tag == 3 else 1), "tref": tref, "starts": starts}
 
 
+def wav_samples(path: Path) -> dict:
+    """Rate, channels, the `bext` time reference and the first channel of a WAV file as floats (PCM 16/24/32 or float 32)."""
+    import struct
+    b = path.read_bytes()
+    pos, fmt, tref, data = 12, None, None, b""
+    while pos + 8 <= len(b):
+        cid, n = b[pos:pos + 4], struct.unpack("<I", b[pos + 4:pos + 8])[0]
+        body = b[pos + 8:pos + 8 + n]
+        if cid == b"fmt ":
+            fmt = struct.unpack("<HHIIHH", body[:16])
+        elif cid == b"bext":
+            t = struct.unpack("<II", body[338:346])
+            tref = t[0] | (t[1] << 32)
+        elif cid == b"data":
+            data = body
+        pos += 8 + n + (n & 1)
+    tag, ch, rate, _, _, bits = fmt
+    step = bits // 8
+    if tag == 3:
+        raw = struct.unpack(f"<{len(data) // 4}f", data)
+        xs = list(raw[0::ch])
+    else:
+        xs = [int.from_bytes(data[i:i + step], "little", signed=True) / float(1 << (bits - 1)) for i in range(0, len(data) - step + 1, step * ch)]
+    return {"rate": rate, "ch": ch, "tref": tref, "xs": xs}
+
+
 def song_delivery_run(label: str, env: dict | None = None, pressed: bool = True, region: tuple | None = DELIVERY_REGION, shift: float | None = None, extra: list | None = None) -> dict:
     out_dir = OUT / f"delivery-out-{label}"
     if out_dir.exists():
@@ -7205,6 +7238,48 @@ def delivery_parts(d: dict) -> dict:
     parts["delivery-spike-positions"] = (not bad_spike and n_spikes > 0,
                                          f"{n_spikes} spikes at 0 samples difference from the song position; differences: {bad_spike}")
     parts["delivery-time-reference"] = (not bad_ref and n_spikes > 0, f"the bext time reference of every spike file is 0; differences: {bad_ref}")
+    # M1c2 (#579): the audio spikes are in song time as the synthetic ones: same file length and rate, time reference 0, and each snippet is
+    # the source audio of its hit (a mono source: sample for sample) at the song sample of the hit; every sample outside the snippets is zero
+    ea = r.get("exported_audio") or {}
+    src_of = {safe_name(stem_of(n)): FIXTURES / n for n, *_ in SPEC}
+    bad_audio, n_snip = [], 0
+    for key in names:
+        stem = (r.get("display") or {}).get(key, key)
+        rate = DELIVERY_RATES.get(key, 48000)
+        aw, sw = folder / f"{stem}_audio_spike.wav", folder / f"{stem}_spike.wav"
+        if not (aw.is_file() and sw.is_file()):
+            bad_audio.append(f"{stem}: no file")
+            continue
+        a, sp = wav_samples(aw), wav_samples(sw)
+        if (a["rate"], len(a["xs"]), a["tref"]) != (sp["rate"], len(sp["xs"]), 0):
+            bad_audio.append((stem, "rate/length/time reference", a["rate"], len(a["xs"]), a["tref"], sp["rate"], len(sp["xs"])))
+            continue
+        src = wav_samples(src_of[key]) if key in src_of else None
+        pairs = []
+        for t in [e["t"] for e in (r.get("events") or {}).get(key, [])]:
+            if region:
+                if region[0] <= t < region[0] + region[1]:
+                    pairs.append((t, region[2] + (t - region[0])))
+            else:
+                pairs.append((t, t))
+        covered = [False] * len(a["xs"])
+        window = int(0.061 * rate) + 2
+        for ts, tg in pairs:
+            i, j = round(ts * rate), round(tg * rate)
+            for k in range(j, min(j + window, len(covered))):
+                covered[k] = True
+            n_snip += 1
+            seg = a["xs"][j:j + window]
+            if not any(seg):
+                bad_audio.append((stem, "no snippet at", j))
+            elif src and src["ch"] == 1 and any(abs(x - y) > 1e-6 for x, y in zip(a["xs"][j:j + 40], src["xs"][i:i + 40])):
+                bad_audio.append((stem, "snippet is not the source audio of the hit", j, i))
+        stray = sum(1 for x, c in zip(a["xs"], covered) if x != 0.0 and not c)
+        if stray:
+            bad_audio.append((stem, "nonzero samples outside the snippets", stray))
+    parts["delivery-audio-positions"] = (not bad_audio and n_snip > 0 and not ea.get("errors") and ea.get("audio") == len(names),
+                                         f"{n_snip} audio snippets at their song samples, the source audio of their hit, exact zero elsewhere, the length, rate and time reference 0 of the "
+                                         f"synthetic files; {ea.get('audio')} audio files; differences: {bad_audio[:4]}")
     single = r.get("exported_single") or {}
     if region and d.get("check_left"):
         # a trim in the host starts a new analysis round (M1b4), so the hits are those of the live slice: every note of the files lies inside
@@ -7219,10 +7294,12 @@ def delivery_parts(d: dict) -> dict:
     taken = [Path(f) for f in (r.get("taken") or {}).get("files", [])]
     started = [x for x in rows if x.get("event") == "drag_started"]
     pb = {str(Path(p).resolve()) for x in started for p in x.get("pasteboard", [])}
+    # a gate run starts NO system drag session (round 3 of #579): the plugin runs the guards, makes the items, writes them to a private
+    # pasteboard and reads them back; every row says session "test". A real drag into a DAW is a hand check.
     parts["delivery-drag-pasteboard"] = (r.get("drag_ok") is True and len(taken) == 8 and bool(started)
-                                         and pb == {str(f.resolve()) for f in taken},
-                                         f"the real drag session started (ok={r.get('drag_ok')} {r.get('drag_error')}); its pasteboard holds "
-                                         f"{len(pb)} file URLs, the {len(taken)} files of one MIDI and one WAV per track")
+                                         and pb == {str(f.resolve()) for f in taken} and all(x.get("session") == "test" for x in started),
+                                         f"the drag command ran its guards and made the items (ok={r.get('drag_ok')} {r.get('drag_error')}); the private pasteboard holds "
+                                         f"{len(pb)} file URLs, the {len(taken)} files of one MIDI and one WAV per track; sessions {sorted({x.get('session') for x in started})} (no system session)")
     parts["delivery-drag-guard"] = ((r.get("drag_outside") or {}).get("code") == 403,
                                     f"a drag of a file outside Exports/: {r.get('drag_outside')}")
     closes = [x for x in rows if x.get("event") == "editor_close"]
@@ -7280,26 +7357,26 @@ def stage_delivery() -> bool:
     # D1 of the review: a clip moved in the host (playback time only, no new round) exports at its NEW song position
     dm = song_delivery_run("clap-moved", shift=30.0)
     dm["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
-    ok = print_parts("-moved", delivery_parts(dm), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
+    ok = print_parts("-moved", delivery_parts(dm), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions", "delivery-audio-positions"]) and ok
     # E1 of round 3: a region trimmed in the host exports through its LIVE slice
     dt = song_delivery_run("clap-trimmed", extra=["--trim-region", *[f"{i}=1.0,1.0" for i in range(4)]])
     dt["region"] = (1.0, 1.0, 10.5)
     dt["check_left"] = True
-    ok = print_parts("-trimmed", delivery_parts(dt), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions", "delivery-trim-range"]) and ok
+    ok = print_parts("-trimmed", delivery_parts(dt), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions", "delivery-audio-positions", "delivery-trim-range"]) and ok
     ok = delivery_ara_parts() and ok
     d2 = song_delivery_run("clap-noregion", region=None)
     d2["region"] = None
-    ok = print_parts("-no-region", delivery_parts(d2), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
+    ok = print_parts("-no-region", delivery_parts(d2), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions", "delivery-audio-positions"]) and ok
     return ok
 
 
 def stage_delivery_release() -> bool:
-    """No mouse button down: the drag starts no session."""
+    """No mouse button down: the drag command refuses (no items made)."""
     d = song_delivery_run("release", pressed=False)
     r = d["rep"]
     started = [x for x in d["rows"] if x.get("event") == "drag_started"]
     return pass_fail("delivery-drag-release", r.get("drag_ok") is False and (r.get("drag_error") or {}).get("code") == 409 and not started,
-                     f"with no button down the drag answered {r.get('drag_error')} and no session started ({len(started)} rows)")
+                     f"with no button down the drag answered {r.get('drag_error')} and no items were made ({len(started)} rows)")
 
 
 def stage_delivery_fault() -> bool:
@@ -7314,16 +7391,185 @@ def stage_delivery_fault() -> bool:
         d = song_delivery_run(f"fault-{label}", env, pressed)
         d["region"] = DELIVERY_REGION
         ok = fault_part(f"delivery-fault-{label}", delivery_parts(d), part, what) and ok
+        if label == "source-time":
+            ok = fault_part("delivery-fault-source-time-audio", delivery_parts(d), "delivery-audio-positions", "the audio spikes keep the time of the source") and ok
     d = song_delivery_run("fault-stale-regions", {"DS_ARA_DELIVERY_FAULT": "stale-regions"}, shift=30.0)
     d["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
     ok = fault_part("delivery-fault-stale-regions", delivery_parts(d), "delivery-midi-positions", "the song position of the last round is used: a moved clip exports at its old place") and ok
+    ok = fault_part("delivery-fault-stale-regions-audio", delivery_parts(d), "delivery-audio-positions", "a moved clip exports its audio spikes at the old place") and ok
     d = song_delivery_run("fault-keep-reader", {"DS_ARA_DELIVERY_FAULT": "keep-reader"}, extra=["--musical", "tempo"])
     ok = fault_part("delivery-fault-keep-reader", ara_parts(d, True), "delivery-ara-reader", "the plugin does not give the reader back") and ok
     d = song_delivery_run("fault-no-button-check", {"DS_ARA_EDITOR_FAULT": "no-button-check"}, pressed=False)
     r = d["rep"]
     ok = pass_fail("delivery-fault-no-button-check", r.get("drag_ok") is True,
-                   f"the fault run (no check of the mouse button) starts the session with no button down: ok={r.get('drag_ok')}") and ok
+                   f"the fault run (no check of the mouse button) makes the drag items with no button down (a test session, no system drag): ok={r.get('drag_ok')}") and ok
+    d = song_delivery_run("fault-test-row-real", {"DS_ARA_EDITOR_FAULT": "test-row-real"})
+    d["region"] = DELIVERY_REGION
+    ok = fault_part("delivery-fault-test-row-real", delivery_parts(d), "delivery-drag-pasteboard", "a drag row that says session real (the check that no gate run starts a system session can fail; the fault only changes the row)") and ok
     return ok
+
+
+def export_dialog_run(label: str, env: dict | None = None) -> dict:
+    """M1c2 (#579): the REAL Export dialog in the REAL page of the plugin, driven from the host-mode menu (mode exportdialog), in two
+    editors of one document (`--cycles 2`). The sheet is answered by DS_ARA_PICK_DIR with a folder below out/."""
+    pick = OUT / f"exdialog-pick-{label}"
+    if pick.exists():
+        shutil.rmtree(pick)
+    pick.mkdir(parents=True)
+    pick = pick.resolve()
+    e = {"DS_ARA_PICK_DIR": str(pick), "DS_ARA_DRAG_PRESSED": "1", "DS_ARA_EDITOR_SCENARIO": "rm-exports"}   # rm-exports: Exports/ is gone at the first open
+    e.update(env or {})
+    rc, summary, rows = editor_run(f"exdialog-{label}", "exportdialog", CLAP, 2, e,
+                                   ["--regions-all", ",".join(str(x) for x in DELIVERY_REGION), "--arg", str(pick)], timeout=400)
+    return {"rc": rc, "summary": summary, "rows": rows, "reps": page_reports(rows, "exportdialog"), "pick": pick,
+            "cache": (OUT / f"cache-exdialog-{label}").resolve()}
+
+
+def export_dialog_parts(d: dict) -> dict:
+    reps, rows, pick = d["reps"], d["rows"], d["pick"]
+    parts: dict = {}
+    r1 = reps[0] if reps else {}
+    r2 = reps[1] if len(reps) > 1 else {}
+
+    def step(r: dict, label: str) -> dict:
+        return next((x for x in r.get("steps", []) if x.get("label") == label), {})
+
+    def files_of(folder: Path) -> tuple[list, list]:
+        if not folder.is_dir():
+            return [], []
+        return sorted(folder.glob("*.mid")), sorted(folder.glob("*.wav"))
+
+    parts["export-dialog-ran"] = (d["rc"] == 0 and len(reps) == 2 and all(r.get("menu") == "ok" and r.get("menu2") == "ok" and "error" not in r for r in reps),
+                                  f"the host ran the driver in 2 editors (rc={d['rc']}), {len(reps)} reports; the dialog opened from File > Export...: "
+                                  f"{[(r.get('menu'), r.get('menu2')) for r in reps]}")
+    default = Path(str(r1.get("def") or "/none"))
+    opened = [step(r1, "open"), step(r1, "reopen")]
+    parts["export-dialog-no-folder-error"] = (
+        all(s.get("open") and s.get("problem") == "" and s.get("dest") == str(default) and s.get("dest_ok") is True and "cannot be used" not in (s.get("problem") or "") for s in opened)
+        and default.name == "Exports",
+        f"the dialog opens with the default folder and no folder error, at the first open and after a close: {[(s.get('dest'), s.get('problem')) for s in opened]}")
+    tile_ok = lambda t, n=4: bool(t) and t.get("state") == "ready" and re.fullmatch(rf"{n} files", t.get("text", "")) is not None
+    parts["export-dialog-tiles"] = (all(tile_ok(s.get("midi")) and tile_ok(s.get("spikes")) for s in opened),
+                                    f"both drag tiles are ready with a file count: {[(s.get('midi'), s.get('spikes')) for s in opened]}")
+    parts["export-dialog-export"] = (
+        all(s.get("export_finished") is True and (s.get("result") or "").startswith("Exported 4 MIDI and 4 spike files") for s in (step(r1, "export1"), step(r1, "export2"))),
+        f"Export wrote the files at the first open and after a close: {[(step(r1, k).get('export_finished'), step(r1, k).get('result')) for k in ('export1', 'export2')]}")
+    mids, wavs = files_of(default)
+    made = [x for x in rows if x.get("event") == "default_dest_made"]
+    parts["export-dialog-folder-missing"] = (len(made) == 1 and made[0].get("command") == "export_existing",
+                                             f"Exports/ did not exist (the scenario removes the empty folder) when the dialog first named it: the plugin made it once ({len(made)} rows, by {[x.get('command') for x in made]})")
+    parts["export-dialog-files"] = (len(mids) == 4 and len(wavs) == 4, f"{len(mids)} MIDI and {len(wavs)} WAV files in {default.name}/ of the document")
+    drag = step(r1, "drag")
+    started = [x for x in rows if x.get("event") == "drag_started"]
+    pb = {str(Path(p).resolve()) for x in started for p in x.get("pasteboard", [])}
+    parts["export-dialog-drag"] = (str(drag.get("msg", "")).startswith("dragged 4 files") and bool(started) and all(x.get("session") == "test" for x in started)
+                                   and pb and all(Path(p).parent.resolve() == default.resolve() for p in pb) and len(pb) == 4,
+                                   f"a press and a move on the Drag MIDI tile ran the drag command up to the items (no system session): message {drag.get('msg')!r}, "
+                                   f"{len(started)} test sessions, private pasteboard {len(pb)} files, all in Exports/")
+    ch = step(r1, "chosen")
+    cm, cw = files_of(pick)
+    cw = [f for f in cw if not f.name.endswith("_audio_spike.wav")]   # the type Both writes the audio files there too
+    parts["export-dialog-choose"] = (str(Path(ch.get("dest", "")).resolve()) == str(pick) and ch.get("problem") == "" and tile_ok(ch.get("midi")) and tile_ok(ch.get("spikes"))
+                                     and step(r1, "export3").get("export_finished") is True and len(cm) == 4 and len(cw) == 4,
+                                     f"after Choose the dialog shows {ch.get('dest')!r}, no error, ready tiles; Export wrote {len(cm)} MIDI and {len(cw)} WAV files there")
+    both = step(r1, "both")
+    ex4 = step(r1, "export4")
+    aw = [f for f in files_of(pick)[1] if f.name.endswith("_audio_spike.wav")]
+    parts["export-dialog-audio"] = (both.get("spike_audio_visible") is True and both.get("spike_both_visible") is True and "later part" not in (both.get("note") or "")
+                                    and tile_ok(both.get("midi")) and re.fullmatch(r"8 files", (both.get("spikes") or {}).get("text", "")) is not None
+                                    and ex4.get("export_finished") is True and (ex4.get("result") or "").startswith("Exported 4 MIDI and 4 spike and 4 audio spike files")
+                                    and len(aw) == 4 and all(wav_samples(f)["tref"] == 0 for f in aw),
+                                    f"in the dialog of a DAW the spike types Audio and Both are shown ({both.get('spike_audio_visible')}, {both.get('spike_both_visible')}), "
+                                    f"the note has no 'later part', Both gives 8 spike files on the tile and Export writes {len(aw)} audio spike files with time reference 0: {ex4.get('result')!r}")
+    o2 = step(r2, "open")
+    parts["export-dialog-remembered"] = (str(Path(o2.get("dest", "")).resolve()) == str(pick) and o2.get("problem") == "" and o2.get("dest_ok") is True
+                                         and tile_ok(o2.get("midi")) and tile_ok(o2.get("spikes"), 8) and step(r2, "export1").get("export_finished") is True,
+                                         f"a new editor of the document opens with the folder chosen before (and the spike type Both that the project keeps, 8 spike files): dest {o2.get('dest')!r}, problem {o2.get('problem')!r}")
+    lists = sorted(d["cache"].glob("documents/*/export-folders.json"))
+    try:
+        listed = [str(Path(x).resolve()) for x in json.loads(lists[0].read_text()).get("folders", [])] if lists else []
+    except ValueError:
+        listed = []
+    inside = sorted(d["cache"].glob("documents/*/project/**/export-folders.json")) + sorted(d["cache"].glob("documents/*/service/**/export-folders.json"))
+    parts["export-dialog-list"] = (listed == [str(pick)] and not inside,
+                                   f"the plugin keeps the chosen folder in the folder of the document, outside project/ and service/: {listed}, copies inside {len(inside)}")
+    closes = [x for x in rows if x.get("event") == "editor_close"]
+    parts["export-dialog-main-thread"] = (bool(closes) and closes[-1].get("off_main") == 0,
+                                          f"the sheet and the drag ran on the main thread: off_main {closes[-1].get('off_main') if closes else None}")
+    return parts
+
+
+def stage_export_dialog() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("export-dialog", False, "no host or bundle: run check.sh build")
+    return print_parts("", export_dialog_parts(export_dialog_run("clap")))
+
+
+def stage_export_dialog_fault() -> bool:
+    d = export_dialog_run("fault-old-dest", {"DS_ARA_EDITOR_FAULT": "old-dest"})
+    parts = export_dialog_parts(d)
+    ok = fault_part("export-dialog-fault-old-dest", parts, "export-dialog-no-folder-error",
+                    "the default folder is refused as a dest (the rule before #579): the dialog says the folder cannot be used")
+    ok = fault_part("export-dialog-fault-old-dest-tiles", parts, "export-dialog-tiles", "the tiles do not reach ready") and ok
+    d = export_dialog_run("fault-no-remember", {"DS_ARA_EDITOR_FAULT": "no-remember"})
+    return fault_part("export-dialog-fault-no-remember", export_dialog_parts(d), "export-dialog-remembered",
+                      "the chosen folder is not kept: a new editor opens with the default folder") and ok
+
+
+def drag_source_check(src: Path) -> tuple[bool, str]:
+    """Round 3 of #579: no gate run may start a system drag session, post an event that leaves the process or touch the general pasteboard.
+    A grep-level read of the plugin source: the call of the crate `drag` is in exactly one function, behind the test branch."""
+    def code_lines(f: Path):
+        for i, ln in enumerate(f.read_text().splitlines(), 1):
+            t = ln.strip()
+            if t and not t.startswith("//"):
+                yield i, ln
+
+    problems: list[str] = []
+    calls = []
+    for f in sorted(src.rglob("*.rs")):
+        lines = list(code_lines(f))
+        all_lines = f.read_text().splitlines()
+        in_tests = len(all_lines) + 1
+        for i, ln in enumerate(all_lines, 1):
+            if ln.startswith("#[cfg(test)]"):
+                in_tests = i
+                break
+        for i, ln in lines:
+            if i >= in_tests:
+                break
+            rel = f.relative_to(src)
+            if "drag::start_drag(" in ln:
+                fn = next((all_lines[j].split("fn ", 1)[1].split("(")[0].split("<")[0] for j in range(i - 1, -1, -1) if re.match(r"\s*(pub )?(unsafe )?fn ", all_lines[j])), "?")
+                guarded = fn != "?" and any("drag_is_test()" in all_lines[k] for k in range(i - 1 - 14, i - 1))
+                calls.append((str(rel), i, fn, guarded))
+            for bad in ("release_test_drag", "generalPasteboard", "NSPasteboardNameGeneral", "NSWorkspace", "CGEventPost", "CGEventCreate", "CGPostMouse",
+                        "beginDraggingSession", "NSDraggingSession"):
+                if bad in ln:
+                    problems.append(f"{rel}:{i}: {bad}")
+            if "NSPasteboardNameDrag" in ln and not (str(rel) == "deliver.rs"):
+                problems.append(f"{rel}:{i}: the drag pasteboard is read outside deliver.rs")
+            if "postEvent_atStart" in ln and not str(rel).startswith("bin/"):
+                problems.append(f"{rel}:{i}: an event is posted in the plugin")
+    if len(calls) != 1 or calls[0][0] != "deliver.rs" or calls[0][2] != "start_drag_system" or not calls[0][3]:
+        problems.append(f"the system drag call must be once, in deliver.rs fn start_drag_system, behind drag_is_test(): found {calls}")
+    return not problems, f"{len(calls)} call(s) of drag::start_drag {calls}; problems: {problems}"
+
+
+def stage_drag_source() -> bool:
+    ok, ev = drag_source_check(HERE / "src")
+    return pass_fail("drag-source", ok, f"no gate run can start a system drag session, post an event out of the process or touch the general pasteboard: {ev}")
+
+
+def stage_drag_source_fault() -> bool:
+    plant = OUT / "drag-source-fault"
+    if plant.exists():
+        shutil.rmtree(plant)
+    shutil.copytree(HERE / "src", plant)
+    ed = plant / "editor.rs"
+    ed.write_text("fn planted(h: &H) { drag::start_drag(h, a, b, c, d); }\n" + ed.read_text())
+    ok, ev = drag_source_check(plant)
+    return pass_fail("drag-source-fault", not ok, f"the fault run (a second call of the system drag in editor.rs) fails the source check: {ev}")
 
 
 STAGES = {
@@ -7488,6 +7734,10 @@ STAGES = {
     "editor-playback-tracks": stage_editor_playback_tracks,
     "editor-names": stage_editor_names,
     "delivery": stage_delivery,
+    "drag-source": stage_drag_source,
+    "drag-source-fault": stage_drag_source_fault,
+    "export-dialog": stage_export_dialog,
+    "export-dialog-fault": stage_export_dialog_fault,
     "delivery-release": stage_delivery_release,
     "delivery-fault": stage_delivery_fault,
     "editor-names-fault": stage_editor_names_fault,
@@ -7546,7 +7796,7 @@ ORDER = [
     "editor-selection", "editor-selection-fault",
     "editor-keys", "editor-keys-fault", "editor-keys-twin", "editor-keys-twin-fault",
     "editor-names", "editor-names-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
-    "delivery", "delivery-release", "delivery-fault",
+    "drag-source", "drag-source-fault", "delivery", "delivery-release", "delivery-fault", "export-dialog", "export-dialog-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",

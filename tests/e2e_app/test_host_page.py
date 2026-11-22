@@ -215,21 +215,21 @@ def test_every_absent_group_calls_no_command_through_its_controls_and_keys(host_
 
 
 def test_the_export_dialog_works_in_host_mode_with_the_host_choices_only(host_app, make_project):
-    """#560: in a DAW the Export dialog is there: MIDI and synthetic spikes, the folder row, the drag tiles. The sampler offset,
-    the markers and the audio-spike types are not; the dialog says where the tempo comes from and that the audio types come
-    later. A press and a drag of the MIDI tile asks no question (the default-tempo question of the app is for the Export
+    """#560: in a DAW the Export dialog is there: MIDI and spikes (#579: with the types Synthetic, Audio and Both), the folder row,
+    the drag tiles. The sampler offset and the markers are not; the dialog says where the tempo comes from and that the files
+    start at song position 0. A press and a drag of the MIDI tile asks no question (the default-tempo question of the app is for the Export
     button in a DAW) and starts the drag with the files of the dialog."""
     analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
     host_app.evaluate("() => openExport('all')")
     host_app.wait_for_function("() => !document.querySelector('#exportModal').classList.contains('hidden')")
-    for sel in ("#exMidi", "#exSpikes", "#exModeTrack", "#exModeSingle", "#exSpikeSynth", "#exChoose", "#exDragMidi", "#exDragSpikes"):
+    for sel in ("#exMidi", "#exSpikes", "#exModeTrack", "#exModeSingle", "#exSpikeSynth", "#exSpikeAudio", "#exSpikeBoth", "#exChoose", "#exDragMidi", "#exDragSpikes"):
         assert host_app.evaluate("s => document.querySelector(s).checkVisibility({ visibilityProperty: true })", sel) is True, sel
-    for sel in ("#exMarkers", "#exComp", "#exSpikeAudio", "#exSpikeBoth"):
+    for sel in ("#exMarkers", "#exComp"):
         assert host_app.evaluate("s => document.querySelector(s).closest('label').checkVisibility({ visibilityProperty: true })", sel) is False, sel
     note = host_app.locator("#exHostNote")
     host_app.wait_for_function("() => !document.querySelector('#exHostNote').classList.contains('hidden')")
     text = note.inner_text()
-    assert "none from the host" in text and "song position 0" in text and "later part" in text, text
+    assert "none from the host" in text and "song position 0" in text and "later part" not in text, text
     # a tempo that varied in the host's process calls: a clear warning line, the dialog stays usable
     assert host_app.evaluate("() => document.querySelector('#exHostWarn').classList.contains('hidden')") is True
     host_app.evaluate("() => { EX.hostTempo = { source: 'transport-varies', bpm: 97.3, steps: 0, stretched: [] }; exRender(); }")
@@ -248,6 +248,90 @@ def test_the_export_dialog_works_in_host_mode_with_the_host_choices_only(host_ap
     # the options that a DAW has no use for are never sent
     opts = host_app.evaluate("() => exOpts(true)")
     assert opts["compensate"] is False and opts["formats"] == ["midi", "spikes"]
+    host_app.evaluate("() => exClose()")
+
+
+def tiles(page):
+    return page.evaluate("""() => ['#exDragMidi', '#exDragSpikes'].map(k => { const t = document.querySelector(k);
+      return [t.dataset.state, t.querySelector('.exDragN').textContent]; })""")
+
+
+def test_a_drag_tile_that_cannot_prepare_shows_the_reason_and_never_waits_in_host_mode(host_app, make_project):
+    """#579 gate line 3: a refused destination (the plugin said 403) and a render that fails are both an error state with the
+    reason on the tile. Before, the tile stayed at "preparing..." for ever."""
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("""() => { const o = B.exportExisting;
+      B.exportExisting = async (sid, opts) => { if (opts && opts.dest) { const e = new Error('writes only below the cache folder of the plugin'); e.code = 403; throw e; } return o(sid, opts); }; }""")
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'error' && document.querySelector('#exDragSpikes').dataset.state === 'error'")
+    for state, text in tiles(host_app):
+        assert state == "error" and text.startswith("error: ") and "folder" in text, (state, text)
+    host_app.wait_for_timeout(1200)   # the 400 ms render timer of the dialog must not bring a tile back to "preparing"
+    assert [t[0] for t in tiles(host_app)] == ["error", "error"]
+    assert "cannot be used" in host_app.locator("#exProblem").inner_text()
+    host_app.evaluate("() => exClose()")
+
+
+def test_a_call_that_never_answers_leaves_no_tile_at_preparing_in_host_mode(host_app, make_project):
+    """#579 round 2 (R1): a prepare or a folder check that the plugin never answers gives the error state with the reason after the
+    wait (30 s; the test sets a short one), not "preparing..." for ever."""
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("() => { EX.waitMs = 400; B.exportDragPrepare = () => new Promise(() => {}); }")
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'error'", timeout=20000)
+    assert tiles(host_app) == [["error", "error: no answer from the plugin"], ["error", "error: no answer from the plugin"]]
+    host_app.evaluate("() => exClose()")
+    # a folder check that never answers: the dialog says so and the tiles say why
+    host_app.evaluate("""() => { const o = B.exportExisting; B.exportExisting = (sid, opts) => (opts && opts.dest) ? new Promise(() => {}) : o(sid, opts); }""")
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'error'", timeout=20000)
+    for state, text in tiles(host_app):
+        assert state == "error" and "no answer from the plugin" in text, (state, text)
+    assert "no answer from the plugin" in host_app.locator("#exProblem").inner_text()
+    host_app.evaluate("() => exClose()")
+
+
+def test_a_render_that_fails_shows_its_reason_on_the_tile_in_host_mode(host_app, make_project):
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("() => { B.exportDragPrepare = async () => { throw new Error('409: the disk is full'); }; }")
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'error'")
+    assert tiles(host_app) == [["error", "error: the disk is full"], ["error", "error: the disk is full"]]
+    host_app.evaluate("() => exClose()")
+
+
+def test_a_remembered_folder_that_is_gone_falls_back_to_the_default_with_one_short_text_in_host_mode(host_app, make_project, tmp_path):
+    """#579 gate line 4: the project keeps a folder that does not exist any more: the dialog opens with the default folder, says so
+    in one short text (no error: Export works and the tiles prepare), and forgets the folder."""
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    gone = tmp_path / "chosen-before"
+    gone.mkdir()
+    host_app.evaluate("async d => { await B.exportDestSet(S.sid, d); }", str(gone))
+    gone.rmdir()
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'", timeout=60000)
+    got = host_app.evaluate("() => [EX.dest === EX.def, EX.destOk, EX.destNote, document.querySelector('#exProblem').textContent, document.querySelector('#exGo').disabled]")
+    assert got == [True, True, "The folder chosen before is not available: Exports/ is used.", "The folder chosen before is not available: Exports/ is used.", False], got
+    assert host_app.evaluate("async () => (await B.exportExisting(S.sid, {})).remembered") is None   # forgotten: the text comes once
+    host_app.evaluate("() => exClose()")
+
+
+def test_the_audio_spike_types_work_in_host_mode_and_a_kept_type_is_kept(host_app, make_project):
+    """#579 gate line 5 (page side): Audio and Both are in the dialog in a DAW, they choose the formats, the tile of the spikes holds
+    the files of the type, and the type that the project keeps is the type the dialog opens with (it was forced to Synthetic)."""
+    analyzed(host_app, make_project(tracks=FOUR, seconds=6.0))
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exDragSpikes').dataset.state === 'ready'", timeout=60000)
+    for rid, want in (("#exSpikeAudio", ["midi", "audio"]), ("#exSpikeBoth", ["midi", "spikes", "audio"]), ("#exSpikeSynth", ["midi", "spikes"])):
+        host_app.locator(rid).check()
+        assert host_app.evaluate("() => exOpts(true).formats") == want, rid
+    host_app.locator("#exSpikeAudio").check()
+    host_app.wait_for_function("() => document.querySelector('#exDragSpikes').dataset.state === 'ready'", timeout=60000)
+    assert "later part" not in host_app.locator("#exHostNote").inner_text()
+    host_app.evaluate("() => exClose()")
+    host_app.evaluate("() => openExport('all')")
+    host_app.wait_for_function("() => document.querySelector('#exportModal').classList.contains('hidden') === false")
+    assert host_app.evaluate("() => EX.spikeType") == "audio"
     host_app.evaluate("() => exClose()")
 
 

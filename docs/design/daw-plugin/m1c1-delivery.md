@@ -354,9 +354,9 @@ reason.
 | `delivery_moved` | a region cut and moved (changes `start_play` and `start_mod`): the positions follow; a source with two regions gives each hit twice | `DS_ARA_DELIVERY_FAULT=stale-regions`: the live regions, not the round's, are used; the stage sees the old song time |
 | `delivery_rate` | a second run with another session and source rate (44.1 and 96 kHz): positions equal, ticks per quarter as the rule says, the reported bound equals the measured one | `DS_ARA_DELIVERY_FAULT=fixed-rate`: the rate is taken as 48 kHz |
 | `delivery_notempo` | no musical context content: source `transport`, then `none`; the page text names the source | `DS_ARA_DELIVERY_FAULT=invent-map`: the plugin invents a map, the stage sees steps with no host source |
-| `delivery_drag` | the real session starts; the drag pasteboard holds the file URLs of the one MIDI and the WAV per track; the drop view records the same paths | `DS_ARA_DRAG_FAULT=no-write`: the URLs are written after the session starts, the pasteboard is empty |
+| `delivery_drag` | (as built, round 3: no system session) the drag command makes the items of the one MIDI and the WAV per track and a private pasteboard holds their file URLs; the real session is a hand check | `DS_ARA_DRAG_FAULT=no-write`: the URLs are written after the session starts, the pasteboard is empty |
 | `delivery_drag_guard` | a path outside `Exports/` and outside a chosen folder: 403, no session | `DS_ARA_DRAG_FAULT=any-path` |
-| `delivery_drag_release` | no mouse button down: `ok: false`, no session | `DS_ARA_DRAG_FAULT=no-button-check` |
+| `delivery_drag_release` | no mouse button down: `ok: false`, no items | `DS_ARA_DRAG_FAULT=no-button-check` |
 | `delivery_drag_thread` | `OFF_MAIN` stays 0; a call from a request thread is the hop | `DS_ARA_EDITOR_FAULT=inline` (exists) |
 | `delivery_folder` | `plugin_pick_folder` with `DS_ARA_PICK_DIR`: the export writes into the chosen folder; a second folder is refused; a subfolder is refused; a symlink swapped in is refused | `any-dest` and `prefix-dest` (section 4) |
 | `delivery_folder_cancel` | cancel: the answer is null, nothing is chosen, the export into any `dest` is refused | none needed (the stage proves the refusal) |
@@ -407,7 +407,7 @@ Small commits, risky parts first. Each commit has its own tests; the heavy gates
 ## Decisions of the coordinator (answers to the open questions)
 
 1. No stage posts a global event (no CGEvent, no accessibility permission, no take-over of the mouse). The stages use in-process events
-   posted to the window of the test host, the pasteboard of the real drag session, and the stub dragging info for the drop code. This does
+   posted to the window of the test host. They start NO system drag session (round 3 below). This does
    not prove a real drop by a DAW or the real mouse path. The hand check sheet has one line for it: drag the MIDI and the spikes onto a DAW
    track with the real mouse and note where each lands.
 2. The synthetic spike WAV and the MIDI are in M1c1. The audio-spike types ("Audio" and "Both") stay absent in host mode in this part; the
@@ -442,8 +442,8 @@ too. Names in tests are synthetic.
 - The test host has no content access controller and sends no tempo, so a stage can reach tempo source `none` only. The ARA reading
   (`musical.rs`) is covered by the unit tests of the conversion (`tempo_ara.rs`) and by nothing that runs the host side; the first run
   in a real host shows it in the row `musical_context`.
-- The drag evidence of the stages is the drag pasteboard of the real session (rows `drag_started`); there is no drop view and no stub
-  dragging info in the test host. A real drop, and the check that the mouse monitor of #561 leaves a drag from the page alone and that the
+- The drag evidence of the stages is a private pasteboard that the plugin fills with the items (rows `drag_started`, `session: test`; round 3); no
+  system drag session starts, and there is no drop view and no stub dragging info in the test host. A real drop, and the check that the mouse monitor of #561 leaves a drag from the page alone and that the
   folder sheet gets its keys, are for the hand check sheet.
 
 ## Round 2 (review of the first build)
@@ -515,3 +515,130 @@ Hand check steps (for the owner, in a DAW):
 - The process-call tempo keeps `varies` when instances alternate with different tempos; a new document clears it.
 - A list that the event cap cut is no tempo map: the answer is no tempo with the reason `capped`, so the fallback runs.
 - A drag may take the files that `export_existing` names too (relative to its `dest`).
+
+## M1c2 (#579): the export dialog and the drag with the default folder
+
+The owner opened the export dialog in a real DAW for the first time (2026-11-22). Two things were wrong: the dialog said "The folder cannot
+be used" at once, and the two drag tiles never left "preparing". The gate of M1c1 did not see either.
+
+### Cause
+
+- The page does not ask for the default folder with no `dest`. At open it reads `default_dest` from `export_existing` and keeps it as the
+  destination (`EX.dest = EX.def`); from then on `exInfo` calls `export_existing` with `dest` = that folder. In the app this is the normal
+  way; the folder is an explicit, absolute path.
+- The rule of section 4 allowed an explicit `dest` only when it equalled a folder that the user chose in the sheet of THIS editor session
+  (`chosen`, empty at the start). The default folder of the document (`Exports/` below its project folder) was not in it, so
+  `export_existing` answered 403, the page set `destOk = false` and wrote "The folder cannot be used", and Export stayed off. A
+  second fault stood behind the first: the service checks that a `dest` is an existing folder (`check_dest`). A project is made with its `Exports/`,
+  so it is normally there; where it is missing (the user deleted it) an allowed default folder would still give a 404. This second fault was found
+  by reading the code; the stage proves it with the scenario `rm-exports` (the first export command finds no `Exports/`).
+- The tiles had two causes in the page. The render timer of the dialog ran after a refused `dest`, and `exDragSchedule` returned early at
+  `!EX.destOk` with no state, so a tile that did not prepare had no way to say so (`exRender` shows "preparing" when it has neither files nor
+  an error).
+- Why the stages did not see it: stage `delivery` calls the commands of the service directly through `window.__TAURI__.core.invoke`, and it
+  chooses the folder first (`DS_ARA_PICK_DIR`), so the explicit `dest` it uses is always the one in `chosen`. It never opened the dialog, so
+  the page code that names the default folder (`openExport`, `exInfo`, `exDragSchedule`) never ran in the real page. The page tests of
+  `tests/e2e_app` run on the test bridge, which has no destination rule at all. Nothing ran the page and the rule together.
+
+### The rule now
+
+A `dest` (commands `export_all`, `export_existing`, `export_dest_set`; `export_drag_prepare` still takes none) is allowed when it is
+
+1. the default export folder of the document, `Exports/` of its project (`deliver::is_default_dest`): the same place by `resolve_lenient`,
+   which makes the existing part of both paths canonical and keeps the missing names behind it, so it holds also while the folder does
+   not exist; a missing part with a `..` is refused. The plugin makes this one folder (`create_dir_all`, and nothing else; a row `default_dest_made` says so) before the service
+   checks it. Or
+2. equal (exact canonical path, no prefix, no subfolder) to a folder that the user chose in the sheet: in this editor session, or in the list
+   of the document (below).
+
+Nothing else changes: a subfolder of the default folder, another folder below the cache folder and a `path` key are still refused
+(unit test `the_default_folder_is_a_dest_also_before_it_exists_and_the_rule_stays_exact`; the fault runs `any-dest`, `prefix-dest` and
+`any-path` of stage `delivery` still fail for their reasons).
+
+The list of folders: `export-folders.json` in the folder of the document (next to `project/`, not inside it). Only the plugin writes it, from
+`plugin_pick_folder` after the sheet; no command of the page reaches it. It is read at every check, and every entry is checked again: it must be a string, an absolute path that is equal to its own
+`canonicalize` (a link that moved to another folder is no longer equal) and a folder now (a path that is a file now, or gone, drops out);
+the file must be at most 64 KB and the list keeps the newest 32. A wrong type, a relative path or a broken file gives no folder, never an error
+(unit tests `hostile_content_of_the_folder_list_gives_no_folder` and `a_remembered_folder_is_kept_in_the_file_and_loaded_again`). A drag may
+also take files from a remembered folder, as from a chosen one.
+
+The page (host mode only): a remembered folder that is not allowed or not there any more gives the default folder and one short text, "The
+folder chosen before is not available: Exports/ is used." (no error: Export and the tiles work), and the project forgets the folder, so the
+text comes once. A tile that cannot prepare, because the destination is refused or the render failed, shows `error: <reason>`; it never stays
+at "preparing". In the app the page is as before.
+
+### The stage that closes the hole
+
+Stage `export-dialog` (mode `exportdialog` of the test host and of `driver.js`) drives the REAL dialog in the REAL page of the plugin, from the
+menu: File > Export... by DOM clicks, in two editors of one document. It reports what the dialog shows at each step: no folder text, the default
+folder, both tiles "ready" with 4 files, a press and a move on the Drag MIDI tile runs the drag command up to the items (a private pasteboard holds the 4 files
+in `Exports/`; no system drag session, see round 3), Export writes 4 MIDI and 4 WAV files, a second open after a close does the same, Choose... (answered by `DS_ARA_PICK_DIR`) shows
+the chosen folder and Export writes there, and a new editor of the document opens with that folder. Fault runs: `old-dest` (the rule of M1c1) gives
+the folder error and the tiles do not reach "ready"; `no-remember` (the choice is not kept) opens the new editor with the default folder.
+
+### Not proved by a stage
+
+- A DAW session that is closed and opened again (the document id comes back from the archive, so the folder of the document and its list are the
+  same): the stage runs two editors of one document, not a restored archive. The unit tests cover the file.
+- A remembered folder that is deleted between two runs: the test host cannot delete it. Covered by the unit tests of the list and by the page
+  test `test_a_remembered_folder_that_is_gone_falls_back_to_the_default_with_one_short_text_in_host_mode`.
+- The real mouse drag into a DAW track, and the real folder sheet: hand check.
+
+### Hand check steps (for the owner, in a DAW)
+
+1. Open the plugin on a drum track and let the analysis finish. Open File > Export... from the plugin menu.
+2. The dialog shows the folder `Exports/` of the document and no red text. "Drag MIDI" and "Drag Spikes" change from "preparing..." to a file count
+   within a few seconds.
+3. Press Export. The result line names the files; Show in Finder opens `Exports/` and holds one MIDI and one WAV file per track.
+4. Close the dialog and open it again: the same, with no text.
+5. Drag the "Drag MIDI" tile onto an instrument track and the "Drag Spikes" tile onto an audio track, at the session start.
+6. Press Choose..., pick a folder, press Export: the files are in that folder. Close the plug-in window and open it again: the dialog opens with that
+   folder. Delete the folder in the Finder, close and open the window again: the dialog opens with `Exports/` and one short line, and Export works.
+
+### The audio spikes in song time (M1c2, line 5 of #579)
+
+The spike types "Audio" and "Both" (format `audio` of the app, #209) work in a DAW. In M1c1 the page forced "Synthetic" and hid the rows, and the
+note said "come in a later part".
+
+- What the format does: for each hit it copies the source audio (about 1.5 periods of the low tone, at least 2 ms, at most 60 ms, the next hit cuts
+  it, a fade-out of at most 1 ms) into a file that is exact zero elsewhere. In the app the file is as long as the source and the hit is at its
+  source time, so the old code cut the snippet from the audio at the hit time.
+- In song time the hit time is a song position, so the old code would have cut the wrong audio. New: the export keeps, for every hit that
+  the song map keeps, the pair (time in the source, time in the song) (`export_song::song_pairs`, one pair per region that holds the hit). The
+  snippet is cut from the source at the first time and put at the second (`spike::export_audio_spikes_song`, `export::write_audio_spike_file_song`).
+  The length of a snippet is the length of the app (the next hit of the SOURCE cuts it); in the song the next snippet cuts it again.
+- The same rules as the synthetic file: the file starts at song position 0 and ends at the end of the last region (one frame more when a hit sits just
+  after it), the rate and sample format are those of the source file, the `bext` chunk has time reference 0 (the audio-spike description), the name
+  is `<DAW track name>_audio_spike.wav`, a hit in no region or before song 0 is left out and counted, a track the host has no source for gets an
+  all-zero file. The older file of the other type in the folder (#274) is made again in song time as well.
+- The standalone export is not touched: the new code runs only where `ExportTime` is installed (the plugin; the page cannot set it). Proof: the
+  hashes of the standalone `audio` and `spikes`+`audio` files, made on the base commit, are a test (`crates/app/tests/export_song.rs`); the
+  synthetic golden is unchanged. With an identity map the song signal equals the signal of the app (unit test in `spike.rs`).
+- Tests: the byte golden of the audio format in song time (`the_song_time_audio_export_writes_these_bytes`); the structure test (each snippet is
+  the source audio of its hit at the song sample, exact zero elsewhere); the stage `delivery` (part `delivery-audio-positions`, fault `source-time`
+  and `stale-regions`); the stage `export-dialog` (part `export-dialog-audio`: the type Both in the real dialog writes four audio files).
+- Not proved: a clip that the host stretches in time gets the snippet unstretched at the song position of the hit (a hit moves with the stretch, the
+  audio does not stretch). The note of the dialog about stretched regions still holds for the hit positions.
+
+Hand check steps for the audio spikes: in the dialog choose "Audio" (or "Both"), press Export, drag the WAV from `Exports/` onto an audio track at the session
+start: each snippet sits on the hit it belongs to and the file does not start later than song position 0; the audio of the snippet is the audio of the clip.
+
+## Round 3 (#579): no gate run starts a system drag session
+
+The stages `delivery` and `export-dialog` started a REAL AppKit drag session under `DS_ARA_DRAG_PRESSED` and then posted an in-process mouse up.
+The comment said the session then ends as "cancelled". That was false: the system drops the files on the window under the real pointer, and
+128 fixture files landed as uploads in an app of the owner (2026-11-22). The rule now: no gate stage, fault run or test starts a system drag
+session, posts an event that leaves the process, or touches the general or drag pasteboard of the system.
+
+- In a gate run (`deliver::drag_is_test`: the test host's editor mode, or `DS_ARA_DRAG_TEST=1`; both read only by a build with the feature
+  `test-switches`, so a delivery build is always a real drag) the drag command runs everything up to the session: button check, view and window,
+  path guard, file list, the image. The items go to a private `NSPasteboard` with a unique name, are read back for the row `drag_started` (`session: "test"`),
+  and the pasteboard is released. The row `drag_result` says `test`. `release_test_drag` and its thread are gone.
+- The system call (`drag::start_drag`) is in one function, `deliver::start_drag_system`, which refuses in a gate run. Stage `drag-source` reads the
+  source: exactly one such call, in that function, behind that check, and no `release_test_drag`, general pasteboard, `NSWorkspace`, CGEvent or posted
+  event in the plugin source; its fault run plants a second call and must fail. The delivery stages assert that every `drag_started` row says `session: test`
+  (fault `test-row-real` changes only the row, so the check can fail without a system session).
+- What the stages prove now: the guards (a path outside `Exports/` is 403, no button gives 409), the items and their file URLs. They do NOT prove a real
+  drag session. A real drag into a DAW (and where each file lands) is a hand check.
+- The fault run `no-button-check` now shows that the drag command passes with no button down (a test session); it does not start a session.
+- The folder sheet: a gate run never shows a real panel; with no `DS_ARA_PICK_DIR` the command answers cancel.

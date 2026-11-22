@@ -445,6 +445,59 @@ pub(crate) fn audio_spike_signal(source: &[f32], sr: u32, times: &[f64]) -> (Vec
     (out, no_low)
 }
 
+/// The mono audio-spike signal of a song-time export (#579): `n_samples` zeros with a copy of the `source` audio for every
+/// hit, like [`audio_spike_signal`], but each snippet sits at the SONG position of its hit. `hits` are pairs `(t in the
+/// source, t in the song)` in seconds: the snippet is cut from the source at the first and put at the second (a hit in two
+/// regions of one source gives two pairs and two snippets). The length of a snippet (about 1.5 periods of the low tone,
+/// the next hit of the SOURCE cuts it) is the length of [`audio_spike_signal`]; in the song the next snippet cuts it
+/// again, then the fade-out of at most [`AUDIO_FADE_S`] comes. A pair outside the source or outside `n_samples` is left
+/// out. With every song time equal to its source time this is [`audio_spike_signal`] (the unit test
+/// `the_song_audio_signal_is_the_source_time_signal_with_an_identity_map` says so). Returns the signal and the number of
+/// snippets that got the default length (no dominant low component).
+#[must_use]
+pub(crate) fn audio_spike_signal_song(
+    source: &[f32],
+    sr: u32,
+    hits: &[(f64, f64)],
+    n_samples: usize,
+) -> (Vec<f32>, usize) {
+    let src_times: Vec<f64> = hits.iter().map(|h| h.0).collect();
+    let ends = snippet_ends(source, sr, &src_times);
+    // every hit that lies in the source and in the file: (song start, source start); a snippet that the source rule dropped
+    // (nothing to copy) still counts as a hit that cuts the one before it, as in [`audio_spike_signal`]
+    let mut all: Vec<(usize, usize)> = Vec::new();
+    for &(ts, tg) in hits {
+        if let (Some(a), Some(d)) = (hit_index(ts, sr, source.len()), hit_index(tg, sr, n_samples)) {
+            all.push((d, a));
+        }
+    }
+    all.sort_unstable();
+    all.dedup();
+    let mut out = vec![0.0f32; n_samples];
+    let mut no_low = 0;
+    for (k, &(d, a)) in all.iter().enumerate() {
+        let Ok(e) = ends.binary_search_by_key(&a, |e| e.0) else {
+            continue;
+        };
+        let (start, end, found) = ends[e];
+        let next = all[k + 1..].iter().map(|p| p.0).find(|n| *n > d).unwrap_or(usize::MAX);
+        let len = (end - start).min(next - d).min(n_samples - d);
+        if len <= 1 {
+            continue; // nothing to copy
+        }
+        if !found {
+            no_low += 1;
+        }
+        let fade = (((AUDIO_FADE_S * f64::from(sr)).round() as usize).max(1)).min(len);
+        out[d..d + len].copy_from_slice(&source[start..start + len]);
+        for j in 0..fade {
+            let i = len - fade + j;
+            out[d + i] = source[start + i] * (fade - j) as f32 / fade as f32;
+        }
+    }
+    (out, no_low)
+}
+
 /// The length in seconds of the audio-spike snippet of every distinct hit of `times`
 /// (ascending hit index; hits outside the file and degenerate zero-length snippets have no
 /// entry), for the measurement tools (#378). The same lengths the real export
@@ -561,6 +614,44 @@ pub fn export_spikes_song(
         blocks.fill(n_samples, start, buf);
         Ok(())
     })
+}
+
+/// #579: the audio-spike file of a song-time export: like [`export_audio_spikes`], but the snippets sit at the song
+/// positions of `hits` ([`audio_spike_signal_song`]), the file is `n_samples` long, and it always has a `bext` chunk
+/// (the audio-spike description) whose time reference is 0: the file starts at song position 0.
+///
+/// # Errors
+///
+/// The I/O error when the file at `path` cannot be created or written.
+pub fn export_audio_spikes_song(
+    path: &Path,
+    sr: u32,
+    n_samples: usize,
+    hits: &[(f64, f64)],
+    source: &[f32],
+    format: WavFormat,
+) -> std::io::Result<usize> {
+    let (signal, no_low) = audio_spike_signal_song(source, sr, hits, n_samples);
+    let spec = WavSpec {
+        sample_rate: sr,
+        channels: 1,
+        format,
+        extensible: false,
+        channel_mask: 0,
+    };
+    let origin = Bext {
+        description: String::new(),
+        originator: String::new(),
+        originator_reference: String::new(),
+        origination_date: String::new(),
+        origination_time: String::new(),
+        time_reference: 0,
+        version: 1,
+        coding_history: String::new(),
+    };
+    let bext = audio_spike_bext(&origin, sr, format);
+    write_wav(path, &spec, &signal, Some(&bext))?;
+    Ok(no_low)
 }
 
 #[cfg(test)]
@@ -731,6 +822,87 @@ mod tests {
             assert!((x[j] - want).abs() < 1e-6, "fade at {j}");
         }
         assert!(x[end..].iter().all(|&v| v == 0.0), "exact silence after the snippet");
+    }
+
+    fn two_tone_source(sr: u32, secs: f64) -> Vec<f32> {
+        (0..(secs * f64::from(sr)) as usize)
+            .map(|i| {
+                let t = i as f64 / f64::from(sr);
+                ((std::f64::consts::TAU * 200.0 * t).sin() * (-t * 3.0).exp()) as f32
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_song_audio_signal_is_the_source_time_signal_with_an_identity_map() {
+        let sr = 48_000u32;
+        let source = two_tone_source(sr, 2.0);
+        // hits that cut each other (two within 5 ms), one at the start, one near the end of the file
+        let times = [0.0, 0.3, 0.305, 0.9, 1.2, 1.999];
+        let (want, n_want) = audio_spike_signal(&source, sr, &times);
+        let hits: Vec<(f64, f64)> = times.iter().map(|&t| (t, t)).collect();
+        let (got, n_got) = audio_spike_signal_song(&source, sr, &hits, source.len());
+        assert_eq!(got, want);
+        assert_eq!(n_got, n_want);
+    }
+
+    #[test]
+    fn a_song_audio_snippet_is_the_source_snippet_moved_to_the_song_position() {
+        let sr = 48_000u32;
+        let source = two_tone_source(sr, 2.0);
+        let (src_only, _) = audio_spike_signal(&source, sr, &[0.5]);
+        let start_src = 24_000usize;
+        let end_src = (start_src + 1..).find(|&j| src_only[j] == 0.0).unwrap();
+        // the hit at 0.5 s of the source sits at 10 s in the song; the file is 12 s long
+        let n = 12 * sr as usize;
+        let (x, _) = audio_spike_signal_song(&source, sr, &[(0.5, 10.0)], n);
+        let d = 10 * sr as usize;
+        assert_eq!(x.len(), n);
+        assert_eq!(&x[d..d + (end_src - start_src)], &src_only[start_src..end_src]);
+        assert!(x[..d].iter().all(|&v| v == 0.0), "exact silence before the snippet");
+        assert!(
+            x[d + (end_src - start_src)..].iter().all(|&v| v == 0.0),
+            "exact silence after it"
+        );
+        // a hit in two regions: two snippets, both from the same source samples
+        let (y, _) = audio_spike_signal_song(&source, sr, &[(0.5, 3.0), (0.5, 8.0)], n);
+        let (a, b) = (3 * sr as usize, 8 * sr as usize);
+        assert_eq!(&y[a..a + 100], &src_only[start_src..start_src + 100]);
+        assert_eq!(&y[b..b + 100], &src_only[start_src..start_src + 100]);
+        // a pair outside the source or outside the file is left out
+        let (z, _) = audio_spike_signal_song(&source, sr, &[(5.0, 1.0), (0.5, 13.0), (0.5, -1.0)], n);
+        assert!(z.iter().all(|&v| v == 0.0));
+        // the next snippet of the song cuts the one before it
+        let (w, _) = audio_spike_signal_song(&source, sr, &[(0.5, 1.0), (0.9, 1.001)], n);
+        let cut = (1.001 * f64::from(sr)).round() as usize;
+        assert!(
+            w[cut - 1] != 0.0 || w[cut - 2] != 0.0 || w[cut - 3] != 0.0,
+            "the first snippet runs up to the second"
+        );
+        assert_eq!(
+            w[cut],
+            source[(0.9 * f64::from(sr)).round() as usize],
+            "the second starts at its song sample"
+        );
+    }
+
+    #[test]
+    fn the_song_audio_file_has_a_bext_with_time_reference_zero_and_the_audio_description() {
+        let dir = std::env::temp_dir().join(format!("ds-song-audio-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("a.wav");
+        let sr = 48_000u32;
+        let source = two_tone_source(sr, 1.0);
+        export_audio_spikes_song(&out, sr, 96_000, &[(0.25, 1.0)], &source, WavFormat::Pcm24).unwrap();
+        let w = crate::io::MappedWav::open(&out).unwrap();
+        assert_eq!((w.info.sample_rate, w.info.n_frames), (sr, 96_000));
+        let b = w.info.bext.as_ref().expect("a bext chunk");
+        assert_eq!(b.time_reference, 0);
+        assert_eq!(b.description, AUDIO_BEXT_DESCRIPTION);
+        let x = w.decode_mono(crate::io::MixMode::Ffmpeg).unwrap();
+        assert!(x[48_000 + 20].abs() > 0.01, "the snippet is at song 1 s");
+        assert!(x[..48_000].iter().all(|&v| v == 0.0));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
