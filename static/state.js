@@ -131,8 +131,10 @@ const HOST_OWNED = ["new", "open", "open_recent", "recent_clear", "close", "save
    the short text that names the host (say: what the status line shows when a key or a flow of the
    group is used). With the mode off nothing here is read: the standalone page is the page of today.
    Not in a group, because they work through the plugin: Analyze All, Analyze Selected Track,
-   Re-analyze Selection, the role of a track, every hit edit, Learn, tempo reads, zoom, follow, undo, and the
-   MIDI file drag (static/export.js exDragStart, which M1c wires). */
+   Re-analyze Selection, the role of a track, every hit edit, Learn, tempo reads, zoom, follow, undo, and (#560) the
+   Export dialog with its MIDI and spike files, its folder choice and its drag tiles (static/export.js). The group "files" keeps what
+   still has no meaning in a DAW: Export Again, the rename, the markers and the sampler offset of the export, the audio-spike
+   types (a later part) and the layer and calibration controls. */
 const HOST_ABSENT = [
   { group: "audio", say: "the host plays the audio",
     menu: ["audition", "audition_tab", "click", "mute_track", "solo_track", "reset_mix", "half_speed"],   // #559: the host has no half speed (a play request carries no speed)
@@ -145,10 +147,10 @@ const HOST_ABSENT = [
     commands: ["quit_app", "open_paths_take", "about_info", "about_third_party", "open_link"],
     controls: ["#aboutModal"] },
   { group: "files", say: "the host owns the files",
-    menu: ["export", "export_again", "export_selected", "rename"],
-    commands: ["export_all", "export_existing", "export_dest_set", "export_markers_set", "export_compensate_set", "export_last_get",
-      "export_last_set", "export_midi", "export_spikes", "export_layer", "sampler_calibration_midi", "reveal_path", "project_rename"],
-    controls: ["#exportAllBtn", "#exportModal", ".lyRender", ".smCal", "#insFileRow", "#insStateRow"] },
+    menu: ["export_again", "rename"],
+    commands: ["export_markers_set", "export_compensate_set", "export_midi", "export_spikes", "export_layer", "sampler_calibration_midi",
+      "project_rename"],
+    controls: [".lyRender", ".smCal", "#insFileRow", "#insStateRow", "#exportModal .exHostOff"] },
   { group: "agent", say: "the host runs no agent or training",
     menu: ["training_mode", "confirm_hit"],
     commands: ["window_call_next", "window_call_result", "agent_skill_status", "agent_skill_install", "feedback_send",
@@ -179,9 +181,16 @@ function hostApply() {
   const on = hostMode();
   document.body.classList.toggle("host", on);
   let st = document.getElementById("hostStyle");
-  if (!on) { if (st) st.remove(); return; }
+  if (!on) {
+    if (st) st.remove();
+    const e0 = document.getElementById("exportAllBtn");
+    if (e0 && e0.dataset.title0) { e0.title = e0.dataset.title0; delete e0.dataset.title0; }
+    return;
+  }
   if (!st) { st = document.createElement("style"); st.id = "hostStyle"; document.head.appendChild(st); }
   st.textContent = HOST_ABSENT.map(g => g.controls).flat().map(c => `body.host ${c}`).join(",\n") + " { display: none !important; }";
+  const eb = document.getElementById("exportAllBtn");   // #560: the tooltip of the Export button says no "file" in a DAW (the tooltip test names the words)
+  if (eb) { if (!eb.dataset.title0) eb.dataset.title0 = eb.title; eb.title = "Export… (Cmd+E): choose what to export (MIDI, spike WAV) and where"; }
 }
 
 /* #539: a low and wide window. In LUNA the editor is a strip below the timeline, 300 to 400 px high and the full width,

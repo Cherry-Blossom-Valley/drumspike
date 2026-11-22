@@ -639,6 +639,163 @@ pub fn playback_row(mode: &str, snap: f64) -> String {
     )
 }
 
+// ---- M1c1: the content access controller of the host (the musical context: tempo entries and bar signatures)
+
+/// `--musical tempo`: the host offers two tempos (120 BPM for 10 s, then 100 BPM) and two bar signatures (4/4, then 3/4 from
+/// bar 5). `--musical no-tempo`: the controller is there and says it has no tempo or bar content. `--musical leak`:
+/// like `tempo`, and the host counts what it was asked. 0: no controller (the default).
+static MUSICAL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+/// What the plugin did through the controller: availability questions, readers created, destroyed, events read.
+pub static CA_AVAILABLE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static CA_CREATED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static CA_DESTROYED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static CA_COUNTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static CA_EVENTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static CA_OFF_MAIN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+static CONTENT_ACCESS: SyncPtr<ARAContentAccessControllerInterface> = SyncPtr(ARAContentAccessControllerInterface {
+    structSize: std::mem::size_of::<ARAContentAccessControllerInterface>(),
+    isMusicalContextContentAvailable: Some(ca_available),
+    getMusicalContextContentGrade: Some(ca_grade),
+    createMusicalContextContentReader: Some(ca_create),
+    isAudioSourceContentAvailable: None,
+    getAudioSourceContentGrade: None,
+    createAudioSourceContentReader: None,
+    getContentReaderEventCount: Some(ca_count),
+    getContentReaderDataForEvent: Some(ca_data),
+    destroyContentReader: Some(ca_destroy),
+});
+
+static TEMPO_ENTRIES: [ARAContentTempoEntry; 3] = [
+    ARAContentTempoEntry {
+        timePosition: 0.0,
+        quarterPosition: 0.0,
+    },
+    ARAContentTempoEntry {
+        timePosition: 10.0,
+        quarterPosition: 20.0,
+    },
+    ARAContentTempoEntry {
+        timePosition: 40.0,
+        quarterPosition: 70.0,
+    },
+];
+static BAR_SIGNATURES: [ARAContentBarSignature; 2] = [
+    ARAContentBarSignature {
+        numerator: 4,
+        denominator: 4,
+        position: 0.0,
+    },
+    ARAContentBarSignature {
+        numerator: 3,
+        denominator: 4,
+        position: 16.0,
+    },
+];
+
+fn ca_main_note() {
+    if unsafe { libc_main() } != 1 {
+        CA_OFF_MAIN.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[link(name = "System")]
+extern "C" {
+    #[link_name = "pthread_main_np"]
+    fn libc_main() -> i32;
+}
+
+unsafe extern "C" fn ca_available(
+    _c: ARAContentAccessControllerHostRef,
+    _m: ARAMusicalContextHostRef,
+    _t: ARAContentType,
+) -> ARABool {
+    ca_main_note();
+    CA_AVAILABLE.fetch_add(1, Ordering::SeqCst);
+    ARABool::from(MUSICAL.load(Ordering::SeqCst) != 2)
+}
+unsafe extern "C" fn ca_grade(
+    _c: ARAContentAccessControllerHostRef,
+    _m: ARAMusicalContextHostRef,
+    _t: ARAContentType,
+) -> ARAContentGrade {
+    kARAContentGradeApproved as ARAContentGrade
+}
+unsafe extern "C" fn ca_create(
+    _c: ARAContentAccessControllerHostRef,
+    _m: ARAMusicalContextHostRef,
+    t: ARAContentType,
+    range: *const ARAContentTimeRange,
+) -> ARAContentReaderHostRef {
+    ca_main_note();
+    CA_CREATED.fetch_add(1, Ordering::SeqCst);
+    // a null range is the whole context: the plugin passes null
+    let kind = if range.is_null() { t } else { 0 };
+    Box::into_raw(Box::new(kind)) as ARAContentReaderHostRef
+}
+unsafe extern "C" fn ca_count(_c: ARAContentAccessControllerHostRef, r: ARAContentReaderHostRef) -> ARAInt32 {
+    CA_COUNTS.fetch_add(1, Ordering::SeqCst);
+    match *(r as *const ARAContentType) {
+        x if x == kARAContentTypeTempoEntries as ARAContentType => TEMPO_ENTRIES.len() as ARAInt32,
+        x if x == kARAContentTypeBarSignatures as ARAContentType => BAR_SIGNATURES.len() as ARAInt32,
+        _ => 0,
+    }
+}
+unsafe extern "C" fn ca_data(
+    _c: ARAContentAccessControllerHostRef,
+    r: ARAContentReaderHostRef,
+    i: ARAInt32,
+) -> *const c_void {
+    CA_EVENTS.fetch_add(1, Ordering::SeqCst);
+    match *(r as *const ARAContentType) {
+        x if x == kARAContentTypeTempoEntries as ARAContentType => TEMPO_ENTRIES
+            .get(i as usize)
+            .map_or(std::ptr::null(), |e| e as *const _ as *const c_void),
+        x if x == kARAContentTypeBarSignatures as ARAContentType => BAR_SIGNATURES
+            .get(i as usize)
+            .map_or(std::ptr::null(), |e| e as *const _ as *const c_void),
+        _ => std::ptr::null(),
+    }
+}
+unsafe extern "C" fn ca_destroy(_c: ARAContentAccessControllerHostRef, r: ARAContentReaderHostRef) {
+    CA_DESTROYED.fetch_add(1, Ordering::SeqCst);
+    drop(Box::from_raw(r as *mut ARAContentType));
+}
+
+/// The row of the counters, for the summary line of a run.
+pub fn content_counters() -> String {
+    format!(
+        "{{\"mode\":{},\"available\":{},\"created\":{},\"destroyed\":{},\"counts\":{},\"events\":{},\"off_main\":{}}}",
+        MUSICAL.load(Ordering::SeqCst),
+        CA_AVAILABLE.load(Ordering::SeqCst),
+        CA_CREATED.load(Ordering::SeqCst),
+        CA_DESTROYED.load(Ordering::SeqCst),
+        CA_COUNTS.load(Ordering::SeqCst),
+        CA_EVENTS.load(Ordering::SeqCst),
+        CA_OFF_MAIN.load(Ordering::SeqCst)
+    )
+}
+
+/// The host makes one musical context (inside an edit cycle) when it offers a content controller.
+unsafe fn make_musical_context(inst: Inst, state: *mut HostState) {
+    if MUSICAL.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    let dc = iface_of(inst);
+    let dc_ref = dc_ref_of(inst);
+    if let Some(f) = dc.beginEditing {
+        f(dc_ref);
+    }
+    let props = ARAMusicalContextProperties {
+        structSize: std::mem::size_of::<ARAMusicalContextProperties>(),
+        ..Default::default()
+    };
+    let _ = (dc.createMusicalContext.expect("createMusicalContext"))(dc_ref, state as ARAMusicalContextHostRef, &props);
+    if let Some(f) = dc.endEditing {
+        f(dc_ref);
+    }
+}
+
 /// The host instance: the two mandatory interfaces, the optional ones stay null (the
 /// plugin must check before calling them). The playback controller is given only with
 /// `--playback` (`set_playback`).
@@ -655,8 +812,16 @@ fn host_instance(state: *mut HostState) -> ARADocumentControllerHostInstance {
         audioAccessControllerInterface: &AUDIO_ACCESS.0,
         archivingControllerHostRef: state as ARAArchivingControllerHostRef,
         archivingControllerInterface: &ARCHIVING.0,
-        contentAccessControllerHostRef: std::ptr::null_mut(),
-        contentAccessControllerInterface: std::ptr::null(),
+        contentAccessControllerHostRef: if MUSICAL.load(Ordering::SeqCst) == 0 {
+            std::ptr::null_mut()
+        } else {
+            state as ARAContentAccessControllerHostRef
+        },
+        contentAccessControllerInterface: if MUSICAL.load(Ordering::SeqCst) == 0 {
+            std::ptr::null()
+        } else {
+            &CONTENT_ACCESS.0
+        },
         modelUpdateControllerHostRef: state as ARAModelUpdateControllerHostRef,
         modelUpdateControllerInterface: &MODEL_UPDATE.0,
         playbackControllerHostRef: pb_ref,
@@ -1059,6 +1224,51 @@ unsafe fn move_region(inst: Inst, state: *mut HostState, i: usize, j: usize) {
     }
     let _ = r;
     println!("{{\"event\":\"host_region_moved\",\"region\":{i},\"sequence\":{j}}}");
+}
+
+/// M1c1: region `i` moves to song position `play` (its source slice and length stay): an update in playback time alone.
+unsafe fn shift_region(inst: Inst, state: *mut HostState, i: usize, play: f64) {
+    let st = &mut *state;
+    let (Some(reg), Some(meta)) = (st.regions.get(i).copied(), st.region_meta.get_mut(i)) else {
+        eprintln!("--shift-region {i}: no such region");
+        return;
+    };
+    let (a, d, _) = meta.times;
+    meta.times = (a, d, play);
+    let props = playback_props_for(&*state, i, a, d, play);
+    let dc = iface_of(inst);
+    if let Some(f) = dc.beginEditing {
+        f(dc_ref_of(inst));
+    }
+    (dc.updatePlaybackRegionProperties
+        .expect("updatePlaybackRegionProperties"))(dc_ref_of(inst), reg, &props);
+    if let Some(f) = dc.endEditing {
+        f(dc_ref_of(inst));
+    }
+    println!("{{\"event\":\"host_region_shifted\",\"region\":{i},\"play\":{play}}}");
+}
+
+/// M1c1: region `i` is trimmed to the slice `[a, a + d)` of its source; what stays of it plays at the same song time as before.
+unsafe fn trim_region(inst: Inst, state: *mut HostState, i: usize, a: f64, d: f64) {
+    let st = &mut *state;
+    let (Some(reg), Some(meta)) = (st.regions.get(i).copied(), st.region_meta.get_mut(i)) else {
+        eprintln!("--trim-region {i}: no such region");
+        return;
+    };
+    let (a0, _, p0) = meta.times;
+    let play = p0 + (a - a0);
+    meta.times = (a, d, play);
+    let props = playback_props_for(&*state, i, a, d, play);
+    let dc = iface_of(inst);
+    if let Some(f) = dc.beginEditing {
+        f(dc_ref_of(inst));
+    }
+    (dc.updatePlaybackRegionProperties
+        .expect("updatePlaybackRegionProperties"))(dc_ref_of(inst), reg, &props);
+    if let Some(f) = dc.endEditing {
+        f(dc_ref_of(inst));
+    }
+    println!("{{\"event\":\"host_region_trimmed\",\"region\":{i},\"start\":{a},\"length\":{d}}}");
 }
 
 /// The properties of region `i` with the sequence and the name it was made with (M1b10): an update
@@ -1582,6 +1792,14 @@ fn main() {
     let mode = args.get(1).cloned().unwrap_or_default();
     let rest: Vec<String> = args[2.min(args.len())..].to_vec();
     NO_REGIONS.store(rest.iter().any(|a| a == "--no-regions"), Ordering::SeqCst);
+    MUSICAL.store(
+        match args_value(&rest, "--musical").as_deref() {
+            Some("tempo") => 1,
+            Some("no-tempo") => 2,
+            _ => 0,
+        },
+        Ordering::SeqCst,
+    );
     NO_PERSISTENT_ID.store(rest.iter().any(|a| a == "--no-persistent-id"), Ordering::SeqCst);
     *NAMES.lock().unwrap() = args_list(&rest, "--names");
     *SEQ_NAMES.lock().unwrap() = args_list(&rest, "--seq-names");
@@ -1866,6 +2084,7 @@ impl HostDoc {
             ..Default::default()
         }));
         let inst = make_controller(loaded, state)?;
+        make_musical_context(inst, state);
         Ok(HostDoc {
             state,
             inst,

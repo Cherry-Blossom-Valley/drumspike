@@ -333,7 +333,8 @@ fn hostkeys_steps() -> Vec<Action> {
         Hk("page-key", 5, "g", "g", 0),
         Hk("page-add-hit", 4, "h", "h", 0),
         Hk("absent-key", 32, "u", "u", 0),
-        Hk("absent-key-cmd", 14, "e", "e", FLAG_COMMAND),
+        // Export (Cmd+E) is a command of the DAW page since #560; Export Again (Option+Cmd+E) is still absent in host mode
+        Hk("absent-key-cmd", 14, "\u{b4}", "e", FLAG_COMMAND | FLAG_OPTION),
         Hk("no-command", 16, "y", "y", 0),
         Hk("no-command-shift", 16, "Y", "Y", SHIFT),
         Hk("no-command-cmd", 38, "j", "j", FLAG_COMMAND),
@@ -351,7 +352,7 @@ fn hostkeys_steps() -> Vec<Action> {
         Hk("marker-field-on", K_F13, "\u{f710}", "\u{f710}", 0),
         Hk("field-letter", 32, "u", "u", 0),
         Hk("field-space", K_SPACE, " ", " ", 0),
-        Hk("field-cmd-absent", 14, "e", "e", FLAG_COMMAND),
+        Hk("field-cmd-absent", 14, "\u{b4}", "e", FLAG_COMMAND | FLAG_OPTION),
         Hk("field-cmd-none", 38, "j", "j", FLAG_COMMAND),
         Hk("field-option-at", 37, "@", "l", FLAG_OPTION),
         Hk("field-option-lbracket", 23, "[", "5", FLAG_OPTION),
@@ -592,6 +593,24 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         .filter_map(|v| {
             v.split_once('=')
                 .and_then(|(i, j)| Some((i.parse().ok()?, j.parse().ok()?)))
+        })
+        .collect();
+    // M1c1: `--shift-region <i>=<song seconds>` moves region i in playback time only (no new analysis round), in mode
+    // `delivery` after the page's report `delivery-ready`
+    let shifts: Vec<(usize, f64)> = args_list(rest, "--shift-region")
+        .iter()
+        .filter_map(|v| {
+            v.split_once('=')
+                .and_then(|(i, p)| Some((i.parse().ok()?, p.parse().ok()?)))
+        })
+        .collect();
+    // `--trim-region <i>=<start>,<length>`: region i keeps the source at the same song time but shows only that slice
+    let trims: Vec<(usize, f64, f64)> = args_list(rest, "--trim-region")
+        .iter()
+        .filter_map(|v| {
+            let (i, r) = v.split_once('=')?;
+            let (a, d) = r.split_once(',')?;
+            Some((i.parse().ok()?, a.parse().ok()?, d.parse().ok()?))
         })
         .collect();
     let region_spec = args_value(rest, "--region").and_then(|v| parse_region(&v).ok());
@@ -850,7 +869,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
                 "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" | "transport"
-                | "playback" | "hit" | "menu" | "geometry" | "hostkeys" => Some(mode.as_str()),
+                | "playback" | "hit" | "menu" | "geometry" | "hostkeys" | "delivery" => Some(mode.as_str()),
                 // the edit mode ends with the event report that follows the edit report
                 "edit" => Some("edit-events"),
                 "analyse-race" => Some("analyse"),
@@ -865,6 +884,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let boots_before = count_rows("page_report", Some("boot"));
             let names_before = count_rows("page_report", Some("names"));
             let mut names_handled = false;
+            let mut shift_handled = false;
+            let delivery_ready_before = count_rows("page_report", Some("delivery-ready"));
             let edits_before = count_rows("page_report", Some("edit"));
             let refuse_before = count_rows("page_report", Some("refuse"));
             let started_before = count_rows("page_report", Some("analyse-started"));
@@ -1090,6 +1111,18 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         }
                     }
                 }
+                if mode == "delivery"
+                    && !shift_handled
+                    && count_rows("page_report", Some("delivery-ready")) > delivery_ready_before
+                {
+                    shift_handled = true;
+                    for (i, p) in &shifts {
+                        shift_region(doc.inst, doc.state, *i, *p);
+                    }
+                    for (i, a, d) in &trims {
+                        trim_region(doc.inst, doc.state, *i, *a, *d);
+                    }
+                }
                 if mode == "names" && !names_handled && count_rows("page_report", Some("names")) > names_before {
                     names_handled = true;
                     for (j, name) in &renames {
@@ -1296,13 +1329,14 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         ((*lib.entry).deinit.expect("deinit"))();
         let audio = audio_stats.lock().map(|s| *s).unwrap_or_default();
         println!(
-            "{{\"event\":\"editor_run\",\"mode\":{mode:?},\"cycles\":{cycles},\"opened\":{opened},\"ok\":{},\"why\":{:?},\"window_visible\":{window_visible},\"rss_closed_mb\":{rss_closed:.1},\"rss_open_mb\":{rss_open:.1},\"rss_after_mb\":{rss_after:.1},\"audio_blocks\":{},\"audio_overruns\":{},\"audio_worst_us\":{},\"audio_budget_us\":{}}}",
+            "{{\"event\":\"editor_run\",\"mode\":{mode:?},\"cycles\":{cycles},\"opened\":{opened},\"ok\":{},\"why\":{:?},\"window_visible\":{window_visible},\"rss_closed_mb\":{rss_closed:.1},\"rss_open_mb\":{rss_open:.1},\"rss_after_mb\":{rss_after:.1},\"audio_blocks\":{},\"audio_overruns\":{},\"audio_worst_us\":{},\"audio_budget_us\":{},\"content\":{}}}",
             failed.is_none(),
             failed.clone().unwrap_or_default(),
             audio.0,
             audio.1,
             audio.2,
-            audio.3
+            audio.3,
+            content_counters()
         );
         if failed.is_none() {
             0

@@ -111,6 +111,39 @@ struct Slot {
     rate_bits: AtomicU64,
 }
 
+/// M1c1: the tempo of the process call (CLAP `transport.tempo` with `CLAP_TRANSPORT_HAS_TEMPO`): the newest BPM,
+/// and whether more than one value came. Atomics only, no allocation: the audio thread writes them in `note`.
+/// The newest sender and its tempo. Instances that alternate with different tempos make `varies` true; a new document
+/// ([`reset_tempo`]) clears all of it.
+static TEMPO_OWNER: AtomicU64 = AtomicU64::new(0);
+static TEMPO_BITS: AtomicU64 = AtomicU64::new(0);
+static TEMPO_VARIES: AtomicU32 = AtomicU32::new(0);
+
+fn store_tempo(id: u64, flags: u32, bpm: f64) {
+    if flags & clap_sys::events::CLAP_TRANSPORT_HAS_TEMPO == 0 || !bpm.is_finite() || bpm <= 0.0 {
+        return;
+    }
+    // another instance that sends a different tempo makes the tempo vary; `varies` is cleared only by a new document
+    TEMPO_OWNER.store(id, Ordering::Relaxed);
+    let old = TEMPO_BITS.swap(bpm.to_bits(), Ordering::Relaxed);
+    if old != 0 && (f64::from_bits(old) - bpm).abs() > 1e-6 {
+        TEMPO_VARIES.store(1, Ordering::Relaxed);
+    }
+}
+
+/// The tempo the host sent in its process calls, `(bpm, varies)`; `None` when none came.
+pub fn host_tempo() -> Option<(f64, bool)> {
+    let b = TEMPO_BITS.load(Ordering::Relaxed);
+    (b != 0).then(|| (f64::from_bits(b), TEMPO_VARIES.load(Ordering::Relaxed) != 0))
+}
+
+/// For the tests and a new document: forget the tempo.
+pub fn reset_tempo() {
+    TEMPO_OWNER.store(0, Ordering::Relaxed);
+    TEMPO_BITS.store(0, Ordering::Relaxed);
+    TEMPO_VARIES.store(0, Ordering::Relaxed);
+}
+
 static SLOT: Slot = Slot {
     seq: AtomicU64::new(0),
     owner: AtomicU64::new(0),
@@ -201,6 +234,7 @@ pub unsafe fn note(process: *const clap_sys::process::clap_process, rate: f64, i
     } else {
         0
     };
+    store_tempo(id, t.flags, t.tempo);
     store_at(id, id, pos, t.flags & !FLAG_CLEARED, pr.frames_count, rate, now_us());
 }
 
@@ -1080,6 +1114,46 @@ mod tests {
         }
         assert!(jumps <= 50, "{jumps} jumps in 2 s"); // 25 a second
         assert!(jumps >= 30, "the bounce still follows: {jumps}");
+    }
+
+    #[test]
+    fn the_tempo_of_the_process_call_is_kept_and_a_second_value_says_it_varies() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_tempo();
+        assert_eq!(host_tempo(), None);
+        let has = clap_sys::events::CLAP_TRANSPORT_HAS_TEMPO;
+        store_tempo(1, 0, 90.0); // no tempo flag: nothing is stored
+        assert_eq!(host_tempo(), None);
+        store_tempo(1, has, 97.3);
+        store_tempo(1, has, 97.3);
+        assert_eq!(host_tempo(), Some((97.3, false)));
+        store_tempo(1, has, 100.0);
+        assert_eq!(host_tempo(), Some((100.0, true)));
+        store_tempo(1, has, f64::NAN);
+        assert_eq!(
+            host_tempo(),
+            Some((100.0, true)),
+            "a tempo that is no number is ignored"
+        );
+        // two instances that alternate with different tempos: `varies` stays set and is not lost at the change
+        reset_tempo();
+        store_tempo(1, has, 120.0);
+        store_tempo(2, has, 100.0);
+        store_tempo(1, has, 120.0);
+        assert_eq!(
+            host_tempo(),
+            Some((120.0, true)),
+            "alternating instances with two tempos vary"
+        );
+        reset_tempo();
+        store_tempo(1, has, 120.0);
+        store_tempo(2, has, 120.0);
+        assert_eq!(
+            host_tempo(),
+            Some((120.0, false)),
+            "two instances with the same tempo do not"
+        );
+        reset_tempo();
     }
 
     #[test]

@@ -103,6 +103,16 @@ fn on_main_thread() -> bool {
     unsafe { pthread_main_np() == 1 }
 }
 
+/// For the callbacks of the host in `lib.rs`: true on the host's main thread.
+pub(crate) fn on_main_thread_pub() -> bool {
+    on_main_thread()
+}
+
+/// A call that had to run on the main thread came from another thread: counted and noted, nothing else.
+pub(crate) fn note_off_main(what: &str) {
+    eprintln!("drumspike-ara: {what} was called off the main thread and did nothing");
+}
+
 /// Count one use of the web view and note when it is not on the main thread.
 fn main_check(what: &'static str) {
     MAIN_CHECKS.fetch_add(1, Ordering::SeqCst);
@@ -217,6 +227,12 @@ pub struct Backend {
     /// gets it as `display_name` in the answer of `tracks_get` and `project_get`; the key of a
     /// track stays its own name.
     pub display_names: Arc<dyn Fn() -> std::collections::HashMap<String, String> + Send + Sync>,
+    /// M1c1: the tempo the export uses and where it came from (the ARA timeline, the process call, or none).
+    pub tempo: Arc<dyn Fn() -> crate::tempo_ara::Answer + Send + Sync>,
+    /// M1c1: the tracks with a region that the host stretches in time.
+    pub stretched: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// M1c1: the regions for the song-time export (see `DocShared::export_region_list`).
+    pub export_regions: Arc<dyn Fn() -> crate::deliver::ExportRegions + Send + Sync>,
 }
 
 /// The source indexes of a track and their longest length in seconds.
@@ -258,6 +274,18 @@ struct Shared {
     request_row: [AtomicBool; 3],
     /// M1b7: the row of the first refused request of each kind is written.
     refused_row: [AtomicBool; 3],
+    /// M1c1: the web view (an `NSView`) for the sheet and the drag; valid while the editor is open (it lives as long as
+    /// the plugin instance). Only a job on the main thread uses it, and only while `closed` is false.
+    view: usize,
+    /// M1c1: the folders (canonical) that the user chose in the sheet of this editor session: the only `dest` the
+    /// export may write to outside the document folder.
+    chosen: Mutex<Vec<PathBuf>>,
+    /// The files that this editor's exports and drag takes wrote (canonical): the only files a drag may take.
+    written: Mutex<std::collections::HashSet<PathBuf>>,
+    /// A folder sheet is open.
+    picking: AtomicBool,
+    /// The sheet panel while it is shown (0: none), so the close of the editor can end it.
+    sheet: AtomicUsize,
 }
 
 fn test_mode() -> Option<String> {
@@ -668,8 +696,10 @@ fn poll_channel(sh: &Arc<Shared>, id: &str, total: std::time::Duration) -> Vec<V
 
 /// The commands that `call::run` leaves to the desktop shell (`SHELL_ONLY` of
 /// `crates/app/src/call.rs`), plus the one command of the drag plugin. Each has an answer.
-const SHELL_COMMANDS: [&str; 34] = [
+const SHELL_COMMANDS: [&str; 36] = [
     "plugin_report",
+    "plugin_pick_folder",
+    "plugin_host_tempo",
     "plugin_host_track",
     "plugin_host_offer",
     "plugin_host_play",
@@ -1008,13 +1038,240 @@ Until then NOTICE of the repository and the licence table in plugins/ara/README.
                 Answer::err(404, format!("not an http(s) address: {url}"))
             }
         }
-        "plugin:drag|start_drag" => Answer::err(501, "the file drag out of the plugin comes with part M1c"),
+        "plugin:drag|start_drag" => start_drag_command(sh, args),
+        "plugin_pick_folder" => pick_folder_command(sh, args),
+        "plugin_host_tempo" => {
+            let a = (sh.backend.tempo)();
+            Answer::json(
+                200,
+                &json!({"source": a.source, "bpm": a.bpm, "steps": a.steps, "reason": a.reason,
+                "stretched": (sh.backend.stretched)()}),
+            )
+        }
         c if c.starts_with("selftest_") => Answer::err(
             404,
             format!("{c} is a test command of the desktop app; the plugin has none"),
         ),
         _ => return None,
     })
+}
+
+/// The files that an answer of `export_all`, `export_drag_take` or `export_existing` names (`files`, `midi_file`; the
+/// names of `export_existing` are relative to its `dest`), as canonical paths of files that exist.
+fn written_paths(answer: &Value) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut add = |p: &Path| {
+        if let Ok(c) = std::fs::canonicalize(p) {
+            out.push(c);
+        }
+    };
+    let list = |k: &str| -> Vec<String> {
+        answer
+            .get(k)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
+    };
+    if answer.get("count").is_some() {
+        // `export_existing`: the files an earlier export left in the folder, by a name relative to `dest`
+        if let Some(dest) = answer.get("dest").and_then(Value::as_str) {
+            for f in list("files") {
+                if let Some(name) = Path::new(&f).file_name() {
+                    add(&Path::new(dest).join(name));
+                }
+            }
+        }
+    } else {
+        for f in list("files") {
+            add(Path::new(&f));
+        }
+        if let Some(m) = answer.get("midi_file").and_then(Value::as_str) {
+            add(Path::new(m));
+        }
+    }
+    out
+}
+
+/// Remember the files that an export or a drag take answered: the drag may take only these.
+fn note_written(sh: &Arc<Shared>, answer: &Value) {
+    let found = written_paths(answer);
+    sh.written.lock().unwrap_or_else(|e| e.into_inner()).extend(found);
+}
+
+/// `plugin_pick_folder {title, start}`: the folder sheet on the window of the plugin view (M1c1). The answer is the
+/// canonical path of the chosen folder (it joins the list of this editor session) or null when the user cancelled.
+/// The request thread waits for the sheet in slices and ends the wait when the editor closes. One sheet at a time.
+fn pick_folder_command(sh: &Arc<Shared>, args: &Value) -> Answer {
+    let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let add = |p: PathBuf| -> Answer {
+        match std::fs::canonicalize(&p) {
+            Ok(c) if c.is_dir() => {
+                let mut l = sh.chosen.lock().unwrap_or_else(|e| e.into_inner());
+                if !l.contains(&c) {
+                    l.push(c.clone());
+                }
+                session().log(json!({"event": "folder_chosen", "editor": sh.n}).to_string());
+                Answer::json(200, &json!(c.display().to_string()))
+            }
+            _ => Answer::err(400, "the chosen path is not a folder"),
+        }
+    };
+    if let Some(v) = crate::test_switch("DS_ARA_PICK_DIR").ok().filter(|v| !v.is_empty()) {
+        // the test host has no hand to click the sheet: the switch answers for it
+        return if v == "cancel" {
+            Answer::json(200, &Value::Null)
+        } else {
+            add(PathBuf::from(v))
+        };
+    }
+    if sh.picking.swap(true, Ordering::SeqCst) {
+        return Answer::err(409, "the folder dialog is open");
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Option<PathBuf>, String>>();
+    let (sh2, title, start) = (Arc::clone(sh), text("title"), text("start"));
+    on_main(Box::new(move || {
+        main_check("folder sheet");
+        if sh2.closed.load(Ordering::SeqCst) {
+            let _ = tx.send(Ok(None));
+            return;
+        }
+        let (tx2, sh3) = (tx.clone(), Arc::clone(&sh2));
+        let r = unsafe {
+            crate::deliver::folder_sheet(sh2.view, &title, &start, move |c| {
+                sh3.sheet.store(0, Ordering::SeqCst);
+                let _ = tx2.send(Ok(c));
+            })
+        };
+        match r {
+            Ok(panel) => sh2
+                .sheet
+                .store(objc2::rc::Retained::as_ptr(&panel) as usize, Ordering::SeqCst),
+            Err(e) => {
+                let _ = tx.send(Err(e));
+            }
+        }
+    }));
+    let started = std::time::Instant::now();
+    let got = loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(250)) {
+            Ok(r) => break r,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                if !crate::deliver::sheet_wait_over(started.elapsed(), sh.closed.load(Ordering::SeqCst)) => {}
+            Err(_) => {
+                // the limit or a closed editor: end the sheet, so that a later pick can show one
+                let sh4 = Arc::clone(sh);
+                on_main(Box::new(move || unsafe {
+                    crate::deliver::end_sheet(sh4.sheet.swap(0, Ordering::SeqCst))
+                }));
+                break Ok(None);
+            }
+        }
+    };
+    sh.picking.store(false, Ordering::SeqCst);
+    match got {
+        Ok(Some(p)) => add(p),
+        Ok(None) => Answer::json(200, &Value::Null),
+        Err(e) => Answer::err(409, e),
+    }
+}
+
+/// `plugin:drag|start_drag {item, image, onEvent}`: start the native file drag of the files (M1c1). Every path must be a
+/// file directly in `Exports/` of the document or in a folder chosen in this editor session. The session starts on the
+/// main thread, only while the left mouse button is down. The answer comes when the session has started.
+fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
+    let Some(items) = args
+        .get("item")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty() && a.len() <= 64)
+    else {
+        return Answer::err(400, "item must list 1 to 64 file paths");
+    };
+    let Some(png) = args
+        .get("image")
+        .and_then(Value::as_str)
+        .and_then(|s| s.strip_prefix("data:image/png;base64,"))
+        .filter(|s| s.len() <= 350_000)
+        .and_then(crate::deliver::base64_decode)
+    else {
+        return Answer::err(400, "image must be a PNG data URL of at most 256 KB");
+    };
+    let mut roots: Vec<PathBuf> = sh.chosen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let (Some(svc), Some(sid)) = (sh.backend.page.service(), sh.backend.page.sid()) {
+        if let Some(exports) = svc.drag_dir(&sid).ok().and_then(|d| d.parent().map(Path::to_path_buf)) {
+            if let Ok(c) = std::fs::canonicalize(exports) {
+                roots.push(c);
+            }
+        }
+    }
+    let written = sh.written.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut files = Vec::new();
+    for it in items {
+        match it
+            .as_str()
+            .and_then(|p| crate::deliver::drag_path_ok(&roots, &written, p))
+        {
+            Some(p) => files.push(p),
+            None => {
+                return Answer::err(
+                    403,
+                    "a drag takes only files in Exports/ of the document or in a folder chosen in this editor",
+                )
+            }
+        }
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<String>, String>>();
+    let (sh2, files2) = (Arc::clone(sh), files.clone());
+    // set when the request gave up waiting: a job that the main thread meets later starts no drag
+    let abandoned = Arc::new(AtomicBool::new(false));
+    let abandoned2 = Arc::clone(&abandoned);
+    on_main(Box::new(move || {
+        if abandoned2.load(Ordering::SeqCst) {
+            return;
+        }
+        main_check("file drag");
+        if sh2.closed.load(Ordering::SeqCst) {
+            let _ = tx.send(Err("the editor is closed".into()));
+            return;
+        }
+        let n = sh2.n;
+        let r = unsafe {
+            crate::deliver::start_drag(sh2.view, files2, png, move |res| {
+                session().log(json!({"event": "drag_result", "editor": n, "result": res}).to_string());
+            })
+        };
+        let ok = r.is_ok();
+        let _ = tx.send(r.map(|()| crate::deliver::drag_pasteboard_paths()));
+        if ok && crate::test_switch("DS_ARA_DRAG_PRESSED").as_deref() == Ok("1") {
+            // the test host: let go of the mouse a moment later, so that the session ends
+            let sh3 = Arc::clone(&sh2);
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                on_main(Box::new(move || {
+                    if !sh3.closed.load(Ordering::SeqCst) {
+                        unsafe { crate::deliver::release_test_drag(sh3.view) };
+                    }
+                }));
+            });
+        }
+    }));
+    match rx.recv_timeout(MAIN_WAIT) {
+        Ok(Ok(pasteboard)) => {
+            session().log(
+                json!({"event": "drag_started", "editor": sh.n, "files": files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>(),
+                    "pasteboard": pasteboard})
+                .to_string(),
+            );
+            Answer::json(200, &Value::Null)
+        }
+        Ok(Err(e)) => Answer::err(409, e),
+        Err(_) => {
+            abandoned.store(true, Ordering::SeqCst);
+            Answer::err(504, "the host's main thread did not start the drag")
+        }
+    }
 }
 
 /// How long the shell waits for a position of the host before it shows the last host position
@@ -1288,7 +1545,9 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
             _ => {}
         }
     }
-    if writes_outside(cmd, &args) {
+    if writes_outside(cmd, &args)
+        && !crate::deliver::dest_allowed(&sh.chosen.lock().unwrap_or_else(|e| e.into_inner()), cmd, &args)
+    {
         return Answer::err(
             403,
             format!("{cmd} writes only below the cache folder of the plugin: it takes no folder or file of its own"),
@@ -1306,11 +1565,25 @@ fn invoke(sh: &Arc<Shared>, cmd: &str, body: &[u8]) -> Answer {
     if scenario_panics(cmd) {
         panic!("test scenario: the command {cmd} panics");
     }
+    if cmd.starts_with("export_") {
+        // M1c1: the export takes the song time base of the host (the page cannot set it)
+        svc.set_export_time(Some(Arc::new(crate::deliver::HostTime {
+            regions: Arc::clone(&sh.backend.export_regions),
+            track_info: Arc::clone(&sh.backend.track_info),
+            names: Arc::clone(&sh.backend.display_names),
+            tempo: Arc::clone(&sh.backend.tempo),
+        })));
+    }
     match drumspike_app::call::run(&svc, &sh.run_channels, cmd, &args) {
         None => Answer::err(404, format!("unknown command {cmd}")),
         Some(Err(e)) => Answer::error(&e),
         Some(Ok(mut reply)) => {
             changed_after(sh, &svc, cmd, &args, &reply);
+            if matches!(cmd, "export_all" | "export_drag_take" | "export_existing") {
+                if let Reply::Json(v) = &reply {
+                    note_written(sh, v);
+                }
+            }
             if matches!(cmd, "tracks_get" | "project_get") {
                 if let Reply::Json(v) = &mut reply {
                     add_display_names(v, &(sh.backend.display_names)());
@@ -1571,6 +1844,11 @@ impl Editor {
             transport_row: AtomicBool::new(false),
             request_row: [AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false)],
             refused_row: [AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false)],
+            view: (&*self.webview.webview()) as *const wry::WryWebView as usize,
+            chosen: Mutex::new(Vec::new()),
+            written: Mutex::new(std::collections::HashSet::new()),
+            picking: AtomicBool::new(false),
+            sheet: AtomicUsize::new(0),
         });
         *self.current.lock().unwrap_or_else(|e| e.into_inner()) = Some(shared);
         self.webview
@@ -1617,6 +1895,7 @@ impl Editor {
         let shared = self.current.lock().unwrap_or_else(|e| e.into_inner()).take();
         let Some(shared) = shared else { return };
         shared.closed.store(true, Ordering::SeqCst);
+        unsafe { crate::deliver::end_sheet(shared.sheet.swap(0, Ordering::SeqCst)) };
         let _ = self.webview.load_url("about:blank");
         unsafe {
             let _: () = msg_send![&*self.shield, removeFromSuperview];
@@ -1767,6 +2046,9 @@ fn backend_of(plugin: &Plugin) -> Backend {
             host_name: plugin.host_name.clone(),
             doc_id: "unbound".to_string(),
             display_names: Arc::new(std::collections::HashMap::new),
+            tempo: Arc::new(|| crate::tempo_ara::choose(None, "no-document", None)),
+            stretched: Arc::new(Vec::new),
+            export_regions: Arc::new(crate::deliver::ExportRegions::default),
         },
     }
 }
@@ -1987,6 +2269,8 @@ mod tests {
                     "plugin_host_play",
                     "plugin_host_stop",
                     "plugin_host_locate",
+                    "plugin_pick_folder",
+                    "plugin_host_tempo",
                 ]
                 .contains(name);
             assert!(known, "{name} is not a command of the app");
@@ -1996,6 +2280,27 @@ mod tests {
         assert_eq!(class_of("app_ready"), Class::Shell);
         assert!(writes_outside("export_all", &json!({"dest": "/tmp/x"})));
         assert!(!writes_outside("export_all", &json!({"dest": null})));
+    }
+
+    #[test]
+    fn the_files_of_an_export_a_drag_take_and_export_existing_may_be_dragged() {
+        let dir = std::env::temp_dir().join(format!("ds-written-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a_spike.mid"), dir.join("b_spike.wav"));
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::write(&b, b"y").unwrap();
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap();
+        // export_all: absolute names and the multi-track file
+        let got = written_paths(&json!({"files": [a.display().to_string()], "midi_file": b.display().to_string()}));
+        assert_eq!(got, vec![canon(&a), canon(&b)]);
+        // export_existing: names relative to dest, and a name that is not there adds nothing
+        let got = written_paths(
+            &json!({"count": 2, "files": ["Exports/a_spike.mid", "gone.mid"], "dest": dir.display().to_string()}),
+        );
+        assert_eq!(got, vec![canon(&a)]);
+        assert!(written_paths(&json!({"files": []})).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -38,6 +38,10 @@ wry = { version = "=0.57.0", default-features = false }
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
+# M1c1 (#560): the file drag out of the web view (the crate behind tauri-plugin-drag, which the app uses), the
+# folder sheet needs blocks, and the drag crate takes a raw window handle. Licences in README.md.
+drag = { version = "=2.1.1", default-features = false }
+raw-window-handle = "0.6"
 block2 = "0.6"
 
 # The rule for the fault and test switches (switches.json): a build with this feature reads them

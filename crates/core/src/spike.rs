@@ -525,6 +525,44 @@ pub fn export_spikes(
     )
 }
 
+/// #560: the spike file of a song-time export: like [`export_spikes`], but it always has a `bext` chunk whose
+/// time reference is 0 (the file starts at song position 0) and it does not copy a source's chunk.
+///
+/// # Errors
+///
+/// The I/O error when the file at `path` cannot be created or written.
+pub fn export_spikes_song(
+    path: &Path,
+    sr: u32,
+    n_samples: usize,
+    times: &[f64],
+    format: WavFormat,
+) -> std::io::Result<()> {
+    let spec = WavSpec {
+        sample_rate: sr,
+        channels: 1,
+        format,
+        extensible: false,
+        channel_mask: 0,
+    };
+    let origin = Bext {
+        description: String::new(),
+        originator: String::new(),
+        originator_reference: String::new(),
+        origination_date: String::new(),
+        origination_time: String::new(),
+        time_reference: 0,
+        version: 1,
+        coding_history: String::new(),
+    };
+    let bext = spike_bext(&origin, sr, format);
+    let blocks = SpikeSignalBlocks::new(sr, n_samples, times);
+    write_wav_blockwise(path, &spec, n_samples, Some(&bext), WRITE_BLOCK_FRAMES, |start, buf| {
+        blocks.fill(n_samples, start, buf);
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,6 +590,26 @@ mod tests {
         // a signal of no frames has no hits and fills nothing
         let empty = SpikeSignalBlocks::new(sr, 0, &times);
         assert!(empty.starts.is_empty());
+    }
+
+    #[test]
+    fn the_song_spike_file_has_a_bext_with_time_reference_zero_and_the_hits_at_their_samples() {
+        let dir = std::env::temp_dir().join(format!("ds-song-spike-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("a.wav");
+        export_spikes_song(&out, 48_000, 96_000, &[0.5, 1.25], WavFormat::Pcm24).unwrap();
+        let w = crate::io::MappedWav::open(&out).unwrap();
+        assert_eq!((w.info.sample_rate, w.info.n_frames), (48_000, 96_000));
+        let b = w.info.bext.as_ref().expect("a bext chunk");
+        assert_eq!(b.time_reference, 0);
+        assert_eq!(b.description, BEXT_DESCRIPTION);
+        let x = w.decode_mono(crate::io::MixMode::Ffmpeg).unwrap();
+        for t in [0.5_f64, 1.25] {
+            let i = hit_index(t, 48_000, x.len()).unwrap();
+            assert!(x[i].abs() > 0.1, "a spike at {t}");
+            assert!(x[i.saturating_sub(10)].abs() < 1e-6 || i < 10);
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

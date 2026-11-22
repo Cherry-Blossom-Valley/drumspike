@@ -22,12 +22,15 @@ use drumspike_core::midi::{
     MidiEvent, MidiTrack, export_midi_map as write_midi, export_multi_midi, export_ppq, worst_error_samples,
 };
 use drumspike_core::project::EXPORTS_DIR;
-use drumspike_core::spike::{export_audio_spikes, export_spikes as write_spikes, hit_index};
+use drumspike_core::spike::{
+    export_audio_spikes, export_spikes as write_spikes, export_spikes_song as write_spikes_song, hit_index,
+};
 use drumspike_core::tempo::TempoMap;
 use drumspike_core::velocity::{VelocityMap, velocity_map};
 use serde_json::{Value, json};
 
 use crate::error::AppError;
+use crate::export_song::{SongCounts, song_end, to_song};
 use crate::media::mix_mode;
 use crate::registry::{OpenProject, Shared, lock};
 use crate::reply::Channels;
@@ -559,6 +562,17 @@ struct Job {
     /// P4-7c: the MIDI events of the track (the sampler offset applied) and what that did; `None` when the
     /// export writes no MIDI or the track's hits could not be read.
     midi: Option<Result<MidiPlan, AppError>>,
+    /// #560: the song time base of this track (`None`: the old path); the events above are already in song time.
+    song: Option<SongJob>,
+    /// The file stem of the track's files (the track name, or the host's name in a song-time export).
+    stem: String,
+}
+
+/// #560: what a track of a song-time export needs besides its events.
+struct SongJob {
+    /// The end of the last region in song time (`None`: no region, the spike file has the source length).
+    end_s: Option<f64>,
+    counts: SongCounts,
 }
 
 /// The reply accumulators of `export_all_opts` (R10): the written files with their counts, the
@@ -641,6 +655,60 @@ pub fn write_spike_file(source: &Path, out: &Path, times: &[f64]) -> Result<Spik
         format,
         time_reference: info.bext.as_ref().map(|b| b.time_reference),
         outside: outside_count(times, info.sample_rate, info.n_frames),
+    })
+}
+
+/// #560: the spike file of a song-time export: the rate and the sample format of `source`, a `bext` with time
+/// reference 0, and the length from song position 0 to the end of the last region (`end_s`; `None`: the length of
+/// the source). `times` are song times.
+///
+/// # Errors
+///
+/// A 400 naming `source` when it cannot be opened as a WAV file; a 500 when `out` cannot be written.
+pub fn write_spike_file_song(
+    source: &Path,
+    out: &Path,
+    times: &[f64],
+    end_s: Option<f64>,
+) -> Result<SpikeFile, AppError> {
+    let wav = MappedWav::open(source).map_err(|e| {
+        let e = AppError::from(e);
+        AppError {
+            code: e.code,
+            message: format!("{}: {}", source.display(), e.message),
+        }
+    })?;
+    let info = &wav.info;
+    let format = spike_format(info.sample_format, info.bytes_per_sample);
+    let mut n_frames = end_s.map_or(info.n_frames, |e| {
+        (e * f64::from(info.sample_rate)).ceil().max(0.0) as usize
+    });
+    // a hit on the sample just after the end of the last region is kept, as the MIDI file keeps it: one frame longer
+    if let Some(last) = times
+        .iter()
+        .map(|t| (t * f64::from(info.sample_rate)).round())
+        .filter(|s| *s >= 0.0)
+        .reduce(f64::max)
+    {
+        n_frames = n_frames.max(last as usize + 1);
+    }
+    if n_frames == 0 {
+        return Err(AppError::bad(format!(
+            "{}: no region of the track lies after song position 0, so there is no spike file",
+            source.display()
+        )));
+    }
+    write_spikes_song(out, info.sample_rate, n_frames, times, format)
+        .map_err(|e| AppError::internal(format!("{}: {e}", out.display())))?;
+    let size = std::fs::metadata(out).map_or(0, |m| m.len());
+    Ok(SpikeFile {
+        path: out.to_path_buf(),
+        size,
+        sr: info.sample_rate,
+        n_samples: n_frames,
+        format,
+        time_reference: Some(0),
+        outside: outside_count(times, info.sample_rate, n_frames),
     })
 }
 
@@ -886,7 +954,7 @@ impl Service {
         let _dest_guard = export_dest_acquire(&dir);
         let single_name = multi_file_name(&lock(&op).project.name());
         let (mut refused, refreshed) = self.refresh_followers(&op, &names);
-        let mut jobs = Self::build_jobs(&op, &names, &mut refused)?;
+        let mut jobs = Self::build_jobs(self, &op, &names, &mut refused)?;
         self.precompute_midi(sid, opts, &mut jobs);
         self.check_plan_staged(&dir, opts, &names, &single_name, &refused)?;
         let total = jobs.len();
@@ -903,7 +971,7 @@ impl Service {
         } else {
             Value::Null
         };
-        let out = json!({
+        let mut out = json!({
             "dest": dir.display().to_string(),
             "midi_file": midi_file,
             "files": tally.files,
@@ -920,6 +988,21 @@ impl Service {
             "ticks_per_quarter": tally.ticks_per_quarter,
             "worst_error_samples": tally.worst_error_samples,
         });
+        if jobs.iter().any(|j| j.song.is_some()) {
+            // #560: the hits that the song time base left out, per track; the key exists only in a song-time export
+            let left: serde_json::Map<String, Value> = jobs
+                .iter()
+                .filter_map(|j| {
+                    j.song.as_ref().filter(|s| s.counts != SongCounts::default()).map(|s| {
+                        (
+                            j.name.clone(),
+                            json!({"no_region": s.counts.no_region, "before_start": s.counts.before_start}),
+                        )
+                    })
+                })
+                .collect();
+            out["outside_song"] = Value::Object(left);
+        }
         say(json!({"state": "done", "done": total, "total": total, "result": out}));
         Ok(out)
     }
@@ -954,13 +1037,18 @@ impl Service {
     /// The export jobs of `export_all_opts`: per track the source, the uncut events (or the error
     /// that refused the track, removed from `refused` here), the note and the project's tempo map.
     fn build_jobs(
+        svc: &Service,
         op: &Shared,
         names: &[String],
         refused: &mut std::collections::HashMap<String, AppError>,
     ) -> Result<Vec<Job>, AppError> {
         let g = lock(op);
         let mut jobs = Vec::with_capacity(names.len());
-        let map = crate::tempo::doc_map(&g.project.doc)?;
+        let song_time = svc.export_time();
+        let map = match song_time.as_ref().and_then(|t| t.tempo()) {
+            Some(m) => m,
+            None => crate::tempo::doc_map(&g.project.doc)?,
+        };
         for name in names.iter().cloned() {
             let note = g.track(&name)?.note.unwrap_or(36);
             let events = match refused.remove(&name) {
@@ -973,9 +1061,48 @@ impl Service {
                     .and_then(Value::as_array)
                     .map_or_else(Vec::new, |a| uncut(a))
             });
+            let host = song_time.as_ref().and_then(|t| t.track(&name));
+            let (events, song) = match (events, &host) {
+                (Ok(ev), Some(h)) => {
+                    let (mapped, counts) = if h.hide_all {
+                        (
+                            Vec::new(),
+                            crate::export_song::SongCounts {
+                                no_region: ev.len(),
+                                before_start: 0,
+                            },
+                        )
+                    } else {
+                        to_song(&ev, &h.regions)
+                    };
+                    (
+                        Ok(mapped),
+                        Some(SongJob {
+                            end_s: song_end(&h.regions),
+                            counts,
+                        }),
+                    )
+                }
+                (ev, _) => (ev, None),
+            };
+            let stem = host.clone().and_then(|h| h.stem).unwrap_or_else(|| name.clone());
+            // #560: a track of the plugin is made of segments (one per playback region, all of one source file); in a
+            // song-time export the spike file takes the rate and the format of that file
+            let source = match (&host, g.has_segments(&name)) {
+                (Some(_), Ok(true)) => g.track_audio(&name).and_then(|a| match a {
+                    crate::media::TrackAudio::File(p) => Ok(p),
+                    crate::media::TrackAudio::Timeline(v) => v
+                        .first()
+                        .map(|s| s.path.clone())
+                        .ok_or_else(|| AppError::bad(format!("track {name}: no segment"))),
+                }),
+                _ => g.source_no_segments(&name),
+            };
             jobs.push(Job {
-                source: g.source_no_segments(&name),
+                source,
                 events,
+                song,
+                stem,
                 note,
                 map: map.clone(),
                 rate: track_rate(&g, &name),
@@ -993,7 +1120,7 @@ impl Service {
             for job in jobs.iter_mut() {
                 let midi = match &job.events {
                     Ok(events) => Some((|| {
-                        let shift = if opts.compensate {
+                        let shift = if opts.compensate && job.song.is_none() {
                             self.sampler_shift(sid, &job.name, events)?
                         } else {
                             None
@@ -1025,6 +1152,8 @@ impl Service {
             if refused.contains_key(name) {
                 continue;
             }
+            let stem = self.out_stem(name);
+            let name = &stem;
             if opts.midi && opts.midi_mode == MidiMode::PerTrack {
                 plan.push(dir.join(format!("{name}_spike.mid")));
             }
@@ -1322,7 +1451,7 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
     if opts.midi && opts.midi_mode == MidiMode::PerTrack {
         match &job.midi {
             Some(Ok((ev, info))) => {
-                let out = dir.join(format!("{}_spike.mid", job.name));
+                let out = dir.join(format!("{}_spike.mid", job.stem));
                 // #441: the ticks per quarter note from the track's source rate and the map
                 let ppq = export_ppq(job.rate, &job.map, EXPORT_TEMPO);
                 match write_midi(ev, job.note, &out, ppq, &job.map, EXPORT_TEMPO, job.rate) {
@@ -1346,7 +1475,12 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
     }
     if opts.spikes {
         let spike = hit_times(events).and_then(|times| match &job.source {
-            Ok(src) => write_spike_file(src, &dir.join(format!("{}_spike.wav", job.name)), &times),
+            Ok(src) => match &job.song {
+                Some(song) => {
+                    write_spike_file_song(src, &dir.join(format!("{}_spike.wav", job.stem)), &times, song.end_s)
+                }
+                None => write_spike_file(src, &dir.join(format!("{}_spike.wav", job.stem)), &times),
+            },
             Err(e) => Err(e.clone()),
         });
         match spike {
@@ -1360,7 +1494,7 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
     if opts.audio {
         // #209: the audio-spike file, cut from the track's own audio (1.5 periods per hit)
         let audio = hit_times(events).and_then(|times| match &job.source {
-            Ok(src) => write_audio_spike_file(src, &dir.join(format!("{}_audio_spike.wav", job.name)), &times),
+            Ok(src) => write_audio_spike_file(src, &dir.join(format!("{}_audio_spike.wav", job.stem)), &times),
             Err(e) => Err(e.clone()),
         });
         match audio {
@@ -1368,7 +1502,7 @@ fn export_track(job: &Job, dir: &Path, opts: &ExportOpts) -> TrackResult {
             Err(e) => r.errors.push(e),
         }
     }
-    for old in older_spike_files(dir, &job.name, opts) {
+    for old in older_spike_files(dir, &job.stem, opts) {
         let done = hit_times(events).and_then(|times| match &job.source {
             Ok(src) if opts.audio => write_spike_file(src, &old, &times).map(|f| f.path),
             Ok(src) => write_audio_spike_file(src, &old, &times).map(|(f, _)| f.path),

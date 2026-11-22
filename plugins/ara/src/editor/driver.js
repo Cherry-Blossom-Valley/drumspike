@@ -77,6 +77,7 @@
     if (T.mode === "menu") menuRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "geometry") geometryRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "hostkeys") hostkeysRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "delivery") deliveryRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "playback") playbackRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
   });
 
@@ -384,6 +385,41 @@
     await sleepMs(800);   // the rename and the move are two calls of the host: the last state
     var after = await namesSnap();
     post(Object.assign({ kind: "names-after", reloads: reloads, reloaded: reloaded, waited_ms: Math.round(performance.now() - t0) }, after));
+  }
+  /* Mode delivery (M1c1, #560): the export in song time, the folder rule and the file drag, through the page's own invoke.
+     DS_ARA_PICK_DIR answers the folder sheet; DS_ARA_DRAG_PRESSED stands in for the mouse button. The report carries what each
+     call answered and the hits of every track, so the check reads the files and compares them with the hits. */
+  async function deliveryRun(names) {
+    var inv = window.__TAURI__.core.invoke, sid = S.sid, out = { names: names };
+    function err(e) { return { code: e && e.code, message: e && e.message }; }
+    var png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    // the host may move a region in playback time now (no new round): the export must follow it
+    out.events_before = {};
+    for (var b = 0; b < names.length; b++) out.events_before[names[b]] = JSON.parse((await raw("events_get", { sid: sid, name: names[b] })).text).events;
+    post({ kind: "delivery-ready" });
+    await new Promise(function (r) { setTimeout(r, 2500); });
+    out.events = {};    for (var i = 0; i < names.length; i++) out.events[names[i]] = JSON.parse((await raw("events_get", { sid: sid, name: names[i] })).text).events;
+    out.tempo = await inv("plugin_host_tempo", {});
+    out.display = {};
+    var tg = JSON.parse((await raw("tracks_get", { sid: sid })).text);
+    names.forEach(function (n) { out.display[n] = tg.tracks[n].display_name; });
+    // before any choice a dest outside the document folder is refused
+    try { await inv("export_all", { sid: sid, dest: T.arg || "/tmp" }); out.before_choice = { ok: true }; } catch (e) { out.before_choice = err(e); }
+    out.folder = await window.__TAURI__.dialog.open({ directory: true, title: "Choose the export folder" });
+    if (typeof out.folder === "string") {
+      try { out.exported = await inv("export_all", { sid: sid, dest: out.folder, formats: ["midi", "spikes"], compensate: false }); } catch (e) { out.exported = { error: err(e) }; }
+      try { out.exported_single = await inv("export_all", { sid: sid, dest: out.folder, formats: ["midi"], midi_mode: "single", compensate: false }); } catch (e) { out.exported_single = { error: err(e) }; }
+      try { await inv("export_all", { sid: sid, dest: out.folder + "/sub", formats: ["midi"] }); out.subfolder = { ok: true }; } catch (e) { out.subfolder = err(e); }
+      try { await inv("export_all", { sid: sid, dest: T.arg || "/tmp", formats: ["midi"] }); out.other = { ok: true }; } catch (e) { out.other = err(e); }
+    }
+    try {
+      var prep = await inv("export_drag_prepare", { sid: sid, formats: ["midi", "spikes"], compensate: false });
+      out.prepared = prep;
+      out.taken = await inv("export_drag_take", { sid: sid, paths: prep.midi.concat(prep.spikes) });
+      try { out.drag = await inv("plugin:drag|start_drag", { item: out.taken.files, image: png, onEvent: null }); out.drag_ok = true; } catch (e) { out.drag_ok = false; out.drag_error = err(e); }
+      try { await inv("plugin:drag|start_drag", { item: ["/etc/hosts"], image: png, onEvent: null }); out.drag_outside = { ok: true }; } catch (e) { out.drag_outside = err(e); }
+    } catch (e) { out.prepare_error = err(e); }
+    post(Object.assign({ kind: "delivery" }, out));
   }
   async function refuse(names) {   // F3: the page cannot change the track set
     var sid = S.sid, name = names[0], out = {};

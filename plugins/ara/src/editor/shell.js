@@ -128,7 +128,15 @@
   window.__TAURI__ = {
     core: { invoke: invoke, Channel: Channel },
     dialog: {
-      open: async function (opts) { window.__dialogOpts = opts; return null; },
+      /* M1c1: a folder choice is the sheet of the plugin (plugin_pick_folder); the file dialogs of the absent groups cancel */
+      open: async function (opts) {
+        window.__dialogOpts = opts;
+        if (opts && opts.directory) {
+          var r = await invoke("plugin_pick_folder", { title: opts.title || "", start: opts.defaultPath || "" });
+          return typeof r === "string" ? r : null;
+        }
+        return null;
+      },
       save: async function (opts) { window.__saveOpts = opts; return null; }
     },
     event: {

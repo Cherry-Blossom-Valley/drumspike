@@ -3509,7 +3509,7 @@ def stage_switches_fault() -> bool:
 
 # ---- review round 2, item 9: no unwrap and no expect in the non-test code of the plugin
 
-UNWRAP_FILES = ["src/editor.rs", "src/lib.rs", "src/playback.rs", "src/service.rs", "src/state.rs", "src/transport.rs", "src/wav.rs"]
+UNWRAP_FILES = ["src/deliver.rs", "src/editor.rs", "src/lib.rs", "src/musical.rs", "src/playback.rs", "src/service.rs", "src/state.rs", "src/tempo_ara.rs", "src/transport.rs", "src/wav.rs"]
 UNWRAP_PATTERN = re.compile(r"\.(unwrap|expect)\s*\(|\.unwrap_unchecked\s*\(")
 
 
@@ -5965,14 +5965,15 @@ def menu_parts(rc: int, rep: dict) -> dict:
         return {"editor-menu-button": (False, why), **{n: (False, why) for n in MENU_PARTS[1:]}}
     names = [g[0] for g in rep.get("groups", [])]
     holes = {k: v for k, v in (rep.get("audit") or {}).items() if v}
-    button = (rep.get("host_mode") is True and rep.get("panel") is True and {"Drum Spike", "Edit", "View", "Transport", "Hits", "Track", "Help"} <= set(names)
-              and "File" not in names and not holes)
+    # #560: File is a menu in host mode again (it holds Export); the list of groups is exact
+    button = (rep.get("host_mode") is True and rep.get("panel") is True
+              and names == ["Drum Spike", "File", "Edit", "View", "Transport", "Hits", "Track", "Help"] and not holes)
     st = rep.get("settings", {})
     cats = st.get("cats", [])
     pointer = (rep.get("pick_height") == "ok" and rep.get("track_height") == "large" and rep.get("pick_settings") == "ok" and st.get("visible") is True
                and "view" in cats and "keyboard" in cats and not {"audio", "audition", "pitches", "agent"} & set(cats))
     kb = rep.get("keyboard", {})
-    keyboard = kb.get("opened") is True and kb.get("focus") == "Drum Spike" and kb.get("moved") == "Edit" and kb.get("closed") is True and kb.get("focus_back") == "hostMenuBtn"
+    keyboard = kb.get("opened") is True and kb.get("focus") == "Drum Spike" and kb.get("moved") == "File" and kb.get("closed") is True and kb.get("focus_back") == "hostMenuBtn"
     lo = rep.get("low", {})
     low = (lo.get("innerH", 9999) < 520 and lo.get("top", -1) >= 0 and lo.get("bottom", 9999) <= lo.get("innerH", 0) and lo.get("right", 9999) <= lo.get("innerW", 0)
            and lo.get("scrolls") is True and lo.get("last_visible") is True and lo.get("closed") is True)
@@ -6640,6 +6641,289 @@ def stage_editor_keys_twin_fault() -> bool:
                         "the key shield class has one fixed name", "did not open its editor")
 
 
+
+# ---- M1c1 (#560): the delivery: the export in song time, the folder rule and the file drag
+
+DELIVERY_REGION = (0.5, 2.0, 10.0)   # every source: the slice [0.5, 2.5) of the source sits at song 10 s
+DELIVERY_RATES = {safe_name(stem_of(n)): r for n, r, *_ in SPEC}
+
+
+def midi_note_times(path: Path) -> list:
+    """The times in seconds of the note-ons of a standard MIDI file, through its own tempo events."""
+    return midi_parse(path)[0]
+
+
+def midi_parse(path: Path) -> tuple:
+    """`(note times in seconds, tempo events in microseconds per quarter, time signatures)` of a standard MIDI file."""
+    b = path.read_bytes()
+    assert b[:4] == b"MThd"
+    ppq = int.from_bytes(b[12:14], "big")
+    pos, tempi, notes, sigs = 14, [(0, 500000)], [], []
+    while pos < len(b):
+        assert b[pos:pos + 4] == b"MTrk"
+        n = int.from_bytes(b[pos + 4:pos + 8], "big")
+        i, end, tick, status = pos + 8, pos + 8 + n, 0, 0
+        while i < end:
+            d = 0
+            while True:
+                c = b[i]
+                i += 1
+                d = (d << 7) | (c & 0x7F)
+                if not c & 0x80:
+                    break
+            tick += d
+            if b[i] == 0xFF:
+                kind, ln = b[i + 1], b[i + 2]
+                if kind == 0x51:
+                    tempi.append((tick, int.from_bytes(b[i + 3:i + 3 + ln], "big")))
+                if kind == 0x58:
+                    sigs.append((tick, b[i + 3], 1 << b[i + 4]))
+                i += 3 + ln
+                continue
+            if b[i] & 0x80:
+                status = b[i]
+                i += 1
+            hi = status & 0xF0
+            if hi in (0xC0, 0xD0):
+                i += 1
+            else:
+                if hi == 0x90 and b[i + 1] > 0:
+                    notes.append(tick)
+                i += 2
+        pos = end
+    tempi.sort()
+    out = []
+    for nt in notes:
+        t, t0, us = 0.0, 0, tempi[0][1]
+        for tk, u in tempi[1:]:
+            if tk >= nt:
+                break
+            t += (tk - t0) * us / (ppq * 1e6)
+            t0, us = tk, u
+        out.append(t + (nt - t0) * us / (ppq * 1e6))
+    return sorted(out), [u for _, u in tempi[1:]], sigs
+
+
+def wav_spikes(path: Path) -> dict:
+    """Rate, length, the `bext` time reference and the first sample of each spike of a spike WAV."""
+    import struct
+    b = path.read_bytes()
+    pos, fmt, tref, data = 12, None, None, b""
+    while pos + 8 <= len(b):
+        cid, n = b[pos:pos + 4], struct.unpack("<I", b[pos + 4:pos + 8])[0]
+        body = b[pos + 8:pos + 8 + n]
+        if cid == b"fmt ":
+            fmt = struct.unpack("<HHIIHH", body[:16])
+        elif cid == b"bext":
+            tref = struct.unpack("<II", body[338:346])
+            tref = tref[0] | (tref[1] << 32)
+        elif cid == b"data":
+            data = body
+        pos += 8 + n + (n & 1)
+    tag, ch, rate, _, _, bits = fmt
+    step = bits // 8
+    if tag == 3 or (tag == 0xFFFE and bits == 32 and False):
+        xs = struct.unpack(f"<{len(data) // 4}f", data)
+    else:
+        xs = [int.from_bytes(data[i:i + step], "little", signed=True) / float(1 << (bits - 1)) for i in range(0, len(data) - step + 1, step * ch)]
+    starts, quiet = [], 10 ** 9
+    for i, x in enumerate(xs):
+        if abs(x) > 0.05 and quiet >= 200:
+            starts.append(i)
+        quiet = 0 if abs(x) > 0.05 else quiet + 1
+    return {"rate": rate, "frames": len(xs) // (ch if tag == 3 else 1), "tref": tref, "starts": starts}
+
+
+def song_delivery_run(label: str, env: dict | None = None, pressed: bool = True, region: tuple | None = DELIVERY_REGION, shift: float | None = None, extra: list | None = None) -> dict:
+    out_dir = OUT / f"delivery-out-{label}"
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+    (out_dir / "sub").mkdir()   # a folder that exists below the chosen one: the rule must still refuse it
+    e = {"DS_ARA_PICK_DIR": str(out_dir)}
+    if pressed:
+        e["DS_ARA_DRAG_PRESSED"] = "1"
+    e.update(env or {})
+    args = ["--regions-all", ",".join(str(x) for x in region)] if region else ["--no-regions"]
+    if shift is not None:   # the host moves every region in playback time after the page has booted: no new analysis round
+        args += ["--shift-region", *[f"{i}={shift}" for i in range(4)]]
+    rc, summary, rows = run_phase(f"delivery-{label}", "delivery", CLAP, e, args + (extra or []) + ["--arg", str(OUT)])
+    reps = page_reports(rows, "delivery")
+    return {"rc": rc, "rows": rows, "rep": reps[0] if reps else {}, "dir": out_dir.resolve(), "summary": summary}
+
+
+def delivery_parts(d: dict) -> dict:
+    r, rows, folder = d["rep"], d["rows"], d["dir"]
+    parts: dict = {}
+    names = r.get("names") or []
+    parts["delivery-ran"] = (d["rc"] == 0 and bool(r) and len(names) == 4 and "prepare_error" not in r,
+                             f"the host ran the delivery driver (rc={d['rc']}), {len(names)} tracks, {r.get('prepare_error')}")
+    parts["delivery-notempo"] = ((r.get("tempo") or {}).get("source") == "none" and (r.get("tempo") or {}).get("bpm") == 120,
+                                 f"no tempo from the test host: the page is told {r.get('tempo')}")
+    parts["delivery-before-choice"] = ((r.get("before_choice") or {}).get("code") == 403,
+                                       f"a dest outside the document folder before any choice: {r.get('before_choice')}")
+    parts["delivery-folder"] = (r.get("folder") is not None and Path(str(r.get("folder"))).resolve() == folder,
+                                f"the sheet (answered by DS_ARA_PICK_DIR) gave {r.get('folder')}")
+    parts["delivery-dest-rule"] = (((r.get("subfolder") or {}).get("code") == 403) and ((r.get("other") or {}).get("code") == 403),
+                                   f"a subfolder of the chosen folder: {r.get('subfolder')}; another folder: {r.get('other')}")
+    ex = r.get("exported") or {}
+    files = [Path(f) for f in ex.get("files", [])]
+    mids = [f for f in files if f.suffix == ".mid"]
+    wavs = [f for f in files if f.suffix == ".wav"]
+    parts["delivery-files"] = (len(mids) == 4 and len(wavs) == 4 and all(f.parent.resolve() == folder and f.is_file() for f in files)
+                               and not ex.get("errors") and "outside_song" in ex,
+                               f"{len(mids)} MIDI and {len(wavs)} WAV files in the chosen folder, errors {ex.get('errors')}")
+    bad_midi, bad_spike, bad_ref, n_notes, n_spikes = [], [], [], 0, 0
+    region = d.get("region")
+    for key in names:
+        stem = (r.get("display") or {}).get(key, key)
+        rate = DELIVERY_RATES.get(key, 48000)
+        times = [e["t"] for e in (r.get("events") or {}).get(key, [])]
+        if region:
+            want = sorted(region[2] + (t - region[0]) for t in times if region[0] <= t < region[0] + region[1])
+        else:
+            want = sorted(times)
+        mid, wav = folder / f"{stem}_spike.mid", folder / f"{stem}_spike.wav"
+        if not (mid.is_file() and wav.is_file()):
+            bad_midi.append(f"{stem}: no file")
+            continue
+        got = midi_note_times(mid)
+        n_notes += len(got)
+        if len(got) != len(want) or any(abs(g - w) * rate > 1.0 for g, w in zip(got, sorted(want))):
+            bad_midi.append((stem, len(got), len(want), [round((g - w) * rate, 2) for g, w in zip(got, want)][:6]))
+        sp = wav_spikes(wav)
+        n_spikes += len(sp["starts"])
+        idx = [round(w * sp["rate"]) for w in want]
+        if sp["starts"] != idx:
+            bad_spike.append((stem, sp["starts"][:6], idx[:6]))
+        if sp["tref"] != 0:
+            bad_ref.append((stem, sp["tref"]))
+    parts["delivery-midi-positions"] = (not bad_midi and n_notes > 0,
+                                        f"{n_notes} note-ons within 1 sample of the song position of their hit; differences: {bad_midi}")
+    parts["delivery-spike-positions"] = (not bad_spike and n_spikes > 0,
+                                         f"{n_spikes} spikes at 0 samples difference from the song position; differences: {bad_spike}")
+    parts["delivery-time-reference"] = (not bad_ref and n_spikes > 0, f"the bext time reference of every spike file is 0; differences: {bad_ref}")
+    single = r.get("exported_single") or {}
+    if region and d.get("check_left"):
+        # a trim in the host starts a new analysis round (M1b4), so the hits are those of the live slice: every note of the files lies inside
+        # the slice at its song position, and the trim left fewer hits than the session had before it
+        before = sum(len(v) for v in (r.get("events_before") or {}).values())
+        lo, hi = region[2], region[2] + region[1]
+        notes = [t for k in names for t in midi_note_times(folder / f"{(r.get('display') or {}).get(k, k)}_spike.mid")]
+        parts["delivery-trim-range"] = (bool(notes) and all(lo - 1e-4 <= t <= hi + 1e-4 for t in notes) and len(notes) < before,
+                                        f"{len(notes)} notes of the trimmed files (of {before} hits before the trim) all lie in the live slice, song {lo} to {hi} s")
+    parts["delivery-single-file"] = (bool(single.get("midi_file")) and Path(single["midi_file"]).is_file(),
+                                     f"the one multi-track file: {single.get('midi_file')}")
+    taken = [Path(f) for f in (r.get("taken") or {}).get("files", [])]
+    started = [x for x in rows if x.get("event") == "drag_started"]
+    pb = {str(Path(p).resolve()) for x in started for p in x.get("pasteboard", [])}
+    parts["delivery-drag-pasteboard"] = (r.get("drag_ok") is True and len(taken) == 8 and bool(started)
+                                         and pb == {str(f.resolve()) for f in taken},
+                                         f"the real drag session started (ok={r.get('drag_ok')} {r.get('drag_error')}); its pasteboard holds "
+                                         f"{len(pb)} file URLs, the {len(taken)} files of one MIDI and one WAV per track")
+    parts["delivery-drag-guard"] = ((r.get("drag_outside") or {}).get("code") == 403,
+                                    f"a drag of a file outside Exports/: {r.get('drag_outside')}")
+    closes = [x for x in rows if x.get("event") == "editor_close"]
+    parts["delivery-main-thread"] = (bool(closes) and closes[-1].get("off_main") == 0 and closes[-1].get("command_errors", 0) >= 0,
+                                     f"the sheet and the drag ran on the main thread: off_main {closes[-1].get('off_main') if closes else None}")
+    return parts
+
+
+def ara_parts(d: dict, want_ara: bool) -> dict:
+    """E2 of round 3: the content access controller of the test host (two tempos, two bar signatures) or one with no tempo content."""
+    r, rows = d["rep"], d["rows"]
+    c = (d.get("summary") or {}).get("content") or {}
+    row = next((x for x in rows if x.get("event") == "musical_context" and x.get("controller") is True), {})
+    t = r.get("tempo") or {}
+    parts: dict = {}
+    if want_ara:
+        parts["delivery-ara-source"] = (t.get("source") == "ara" and t.get("steps") == 1 and t.get("bpm") == 120 and row.get("tempo_available") is True
+                                        and row.get("entries") == 3 and row.get("bars") == 2,
+                                        f"the page is told {t}; the row musical_context: entries {row.get('entries')}, bars {row.get('bars')}, reason {row.get('reason')!r}")
+        parts["delivery-ara-reader"] = (c.get("created", 0) > 0 and c.get("created") == c.get("destroyed") and c.get("events") == 5 * (c.get("created", 0) // 2) and c.get("off_main") == 0,
+                                        f"the plugin made {c.get('created')} readers and gave back {c.get('destroyed')}, read {c.get('events')} events, {c.get('off_main')} calls off the main thread")
+        folder = d["dir"]
+        mids = sorted(folder.glob("*_spike.mid"))
+        tempi, sigs, bad = [], [], []
+        for m in mids:
+            _, tempi, sigs = midi_parse(m)
+            if tempi != [500000, 600000] or sorted({(n, dn) for _, n, dn in sigs}) != [(3, 4), (4, 4)]:
+                bad.append((m.name, tempi, sigs))
+        parts["delivery-ara-midi"] = (bool(mids) and not bad,
+                                      f"{len(mids)} MIDI files carry the host map: tempo events 500000 and 600000 microseconds per quarter and the signatures 4/4 and 3/4; differences {bad}")
+    else:
+        parts["delivery-ara-fallback"] = (t.get("source") != "ara" and row.get("tempo_available") is False and row.get("reason") == "no-tempo-content"
+                                          and c.get("available", 0) >= 1 and c.get("created") == 0 and c.get("events") == 0,
+                                          f"a controller with no tempo content: source {t.get('source')}, reason {row.get('reason')!r}, {c.get('available')} availability questions, {c.get('created')} readers")
+    return parts
+
+
+def _with_region(d: dict) -> dict:
+    d["region"] = DELIVERY_REGION
+    return d
+
+
+def delivery_ara_parts() -> bool:
+    ok = print_parts("-ara", ara_parts(dd := _with_region(song_delivery_run("clap-ara", extra=["--musical", "tempo"])), True) | {k: v for k, v in delivery_parts(dd).items() if k in ("delivery-midi-positions", "delivery-spike-positions")})
+    ok = print_parts("-ara-none", ara_parts(song_delivery_run("clap-ara-none", extra=["--musical", "no-tempo"]), False)) and ok
+    return ok
+
+
+def stage_delivery() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("delivery", False, "no host or bundle: run check.sh build")
+    d = song_delivery_run("clap")
+    d["region"] = DELIVERY_REGION
+    ok = print_parts("", delivery_parts(d))
+    # D1 of the review: a clip moved in the host (playback time only, no new round) exports at its NEW song position
+    dm = song_delivery_run("clap-moved", shift=30.0)
+    dm["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
+    ok = print_parts("-moved", delivery_parts(dm), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
+    # E1 of round 3: a region trimmed in the host exports through its LIVE slice
+    dt = song_delivery_run("clap-trimmed", extra=["--trim-region", *[f"{i}=1.0,1.0" for i in range(4)]])
+    dt["region"] = (1.0, 1.0, 10.5)
+    dt["check_left"] = True
+    ok = print_parts("-trimmed", delivery_parts(dt), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions", "delivery-trim-range"]) and ok
+    ok = delivery_ara_parts() and ok
+    d2 = song_delivery_run("clap-noregion", region=None)
+    d2["region"] = None
+    ok = print_parts("-no-region", delivery_parts(d2), ["delivery-ran", "delivery-midi-positions", "delivery-spike-positions"]) and ok
+    return ok
+
+
+def stage_delivery_release() -> bool:
+    """No mouse button down: the drag starts no session."""
+    d = song_delivery_run("release", pressed=False)
+    r = d["rep"]
+    started = [x for x in d["rows"] if x.get("event") == "drag_started"]
+    return pass_fail("delivery-drag-release", r.get("drag_ok") is False and (r.get("drag_error") or {}).get("code") == 409 and not started,
+                     f"with no button down the drag answered {r.get('drag_error')} and no session started ({len(started)} rows)")
+
+
+def stage_delivery_fault() -> bool:
+    ok = True
+    for label, env, pressed, part, what in (
+        ("source-time", {"DS_ARA_DELIVERY_FAULT": "source-time"}, True, "delivery-midi-positions", "the files keep the time of the source"),
+        ("any-dest", {"DS_ARA_EDITOR_FAULT": "any-dest"}, True, "delivery-before-choice", "a dest outside the document folder is written without a choice"),
+        ("prefix-dest", {"DS_ARA_EDITOR_FAULT": "prefix-dest"}, True, "delivery-dest-rule", "a subfolder of the chosen folder passes"),
+        ("any-path", {"DS_ARA_EDITOR_FAULT": "any-path"}, True, "delivery-drag-guard", "a drag takes a path outside Exports/"),
+        ("invent-map", {"DS_ARA_DELIVERY_FAULT": "invent-map"}, True, "delivery-notempo", "the plugin invents a tempo map"),
+    ):
+        d = song_delivery_run(f"fault-{label}", env, pressed)
+        d["region"] = DELIVERY_REGION
+        ok = fault_part(f"delivery-fault-{label}", delivery_parts(d), part, what) and ok
+    d = song_delivery_run("fault-stale-regions", {"DS_ARA_DELIVERY_FAULT": "stale-regions"}, shift=30.0)
+    d["region"] = (DELIVERY_REGION[0], DELIVERY_REGION[1], 30.0)
+    ok = fault_part("delivery-fault-stale-regions", delivery_parts(d), "delivery-midi-positions", "the song position of the last round is used: a moved clip exports at its old place") and ok
+    d = song_delivery_run("fault-keep-reader", {"DS_ARA_DELIVERY_FAULT": "keep-reader"}, extra=["--musical", "tempo"])
+    ok = fault_part("delivery-fault-keep-reader", ara_parts(d, True), "delivery-ara-reader", "the plugin does not give the reader back") and ok
+    d = song_delivery_run("fault-no-button-check", {"DS_ARA_EDITOR_FAULT": "no-button-check"}, pressed=False)
+    r = d["rep"]
+    ok = pass_fail("delivery-fault-no-button-check", r.get("drag_ok") is True,
+                   f"the fault run (no check of the mouse button) starts the session with no button down: ok={r.get('drag_ok')}") and ok
+    return ok
+
+
 STAGES = {
     "fixture": stage_fixture,
     "reference": stage_reference,
@@ -6796,6 +7080,9 @@ STAGES = {
     "editor-playback-partial-fault": stage_editor_playback_partial_fault,
     "editor-playback-tracks": stage_editor_playback_tracks,
     "editor-names": stage_editor_names,
+    "delivery": stage_delivery,
+    "delivery-release": stage_delivery_release,
+    "delivery-fault": stage_delivery_fault,
     "editor-names-fault": stage_editor_names_fault,
     "editor-roles": stage_editor_roles,
     "restore-settings": stage_restore_settings,
@@ -6849,6 +7136,7 @@ ORDER = [
     "editor-hit", "editor-hit-fault", "editor-geometry", "editor-geometry-fault", "editor-menu", "editor-menu-fault",
     "editor-keys", "editor-keys-fault", "editor-keys-twin", "editor-keys-twin-fault",
     "editor-names", "editor-names-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
+    "delivery", "delivery-release", "delivery-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",
