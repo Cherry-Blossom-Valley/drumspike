@@ -72,17 +72,17 @@ One JSON object, versioned:
 {
   "v": 1,
   "roles": {
-    "kick":  { "note": 36, "params": { "thresholds": [0.22, 0.24, 0.32, 0.22, 0.30], "min_gap_ms": 20, "refine": true,
+    "kick":  { "notes": [36], "params": { "thresholds": [0.22, 0.24, 0.32, 0.22, 0.30], "min_gap_ms": 20, "refine": true,
                                         "vel_lo_db": -40, "vel_hi_db": -6, "vel_cut_db": -50 } },
-    "snare": { "note": 38 }
+    "snare": { "notes": [38] }
   },
   "follow": { "mode": "smooth", "suspend_on_edit": false, "host_selection": true },
   "export": { "formats": ["midi", "spikes"], "midi_mode": "per_track", "compensate": true }
 }
 ```
 
-- `roles.<role>.note`: integer 0 to 127. `roles.<role>.params`: only the keys of the table below; each key is optional.
-  A role or a key that is absent means "built-in". The velocity setting is the three `vel_*` keys of `params` (one place, as the
+- `roles.<role>.notes`: list of 1 to 8 integers, each 0 to 127 (a single `note` in a file is read as a list of one). `roles.<role>.params`: only the keys of the table below; each key is optional.
+  A role or a key that is absent means "built-in". A new track of a role takes the first note of the list that no other track of the same role in the document uses; when all are used, the last. Several new tracks of one round are served in DAW track order. The velocity setting is the three `vel_*` keys of `params` (one place, as the
   service has it); `shift_samples`, `weak_signal`, `click_freq` and every other key are NOT defaults (they belong to the audio of
   one track or to the monitor).
 - `follow`: the page options of section 1 (`mode` is smooth, page or off). They are global, not per role. The leader of a
@@ -100,7 +100,7 @@ Ranges (every value is checked on read, never trusted):
 |---|---|---|
 | `v` | integer 1 | see "version" in section 4 |
 | role name | one of the six roles | entry kept as unknown data, not used |
-| `note` | integer 0 to 127 | field dropped |
+| `notes` (or `note`) | list of 1 to 8 integers, each 0 to 127 (`note`: one integer) | field dropped |
 | `thresholds` | list of 5 numbers, each 0.01 to 0.85 (`SENS.FLOOR`, `SENS.CEIL`) | field dropped |
 | `min_gap_ms` | number 1 to 1000 | field dropped |
 | `refine` | boolean | field dropped |
@@ -151,6 +151,8 @@ Reading (`userdefaults::load`):
   values. In both cases ONE report row `defaults_invalid` per load of a changed file (keyed by size and mtime, so a file that
   stays bad writes one row, not one per track) with the count and the first five paths (`roles.snare.note`). The page can ask for
   the same text once, in the status line of the menu panel: "The defaults file is damaged; built-in values are used."
+- A defaults or preset file that is a symlink, a directory or unreadable gives built-in values and one report row; it is never followed and never a crash (ruling R8).
+- A Save that fails (read-only folder, sandboxed host) shows `error: the defaults could not be saved: <reason>` in the status of the page (ruling R12).
 - The plugin never stops because of this file. A read error, a missing folder and a permission error are "none" and one row.
 - Cache: the parsed result is kept with `(mtime, size)`; each use compares them, so a Save in another host process takes effect on
   the next new track without a restart.
@@ -191,7 +193,7 @@ Two buttons in the Inspector, under the role and note line (`insRoleLine`, `insR
 by new code in a new file `static/hostdefaults.js` that returns at once when `hostMode()` is false, so the standalone page has no new
 element, nothing focusable and no new text. Both act on the ROLE of the selected row, never on the track:
 
-- "Save as default for new snare tracks": writes the MIDI note and the detection settings (`params` filtered to section 3) of the
+- "Save as default for new snare tracks": writes the MIDI notes of ALL tracks of that role in the document (DAW track order; for toms the text is "for new tom tracks: 50, 48, 47") and the detection settings (`params` filtered to section 3) of the
   selected row as the entry `snare` of the file. Tooltip: "New snare tracks in every session start with this MIDI note and these
   detection settings. Tracks that exist keep theirs." Status line after: "Saved: new snare tracks start with note 38 (D1) and these settings."
 - "Reset to default for new snare tracks": removes the entry `snare` from the file. New snare tracks start with the built-in values
@@ -226,8 +228,9 @@ the ranges of section 3 apply to a preset file. Unknown fields are kept when a p
   typed text, trimmed, at most 80 characters.
 - Built-in: "General MIDI" is code, not a file. It is first in the list, it cannot be overwritten, renamed or deleted, and `Presets/`
   can hold no file that shadows it. Map (per role, notes of the General MIDI drum map): kick 36, snare 38, tom 48, hat 42,
-  cymbal 49. It has no `params`, so a load changes notes only. The role `other` is not in it. General MIDI has several tom notes
-  (41, 43, 45, 47, 48, 50); one role has one note, so the built-in uses 48, the app's tom note. This is a limit (open question 6).
+  cymbal 49, tom [50, 48, 47, 45, 43, 41]. It has no `params`, so a load changes notes only. The role `other` is not in it. General MIDI has several tom notes
+  (41, 43, 45, 47, 48, 50); one role has one note, so the tom entry is a list (ruling R3).
+- Delete: each user preset in the Load Preset dialog has a Delete control with a confirm in the page ("Delete preset "X"? The file is removed."); the built-in one has none. The plugin command `plugin_preset_delete {name}` removes only a plain file of `Presets/`.
 - Bounds: at most 200 preset files are listed (the first 200 by name); each file at most 64 KB; a file that fails the checks of
   section 4 is skipped with one report row `preset_invalid`; it never stops the list.
 - Menu (`static/hostmenu.js`): two new host-only entries in the group "Track" (where the other role commands live): "Load Preset..." and "Save Preset...". `HM_EXTRA` has check items only today, so it gets a second kind
@@ -292,13 +295,7 @@ writes the project (`track_set_note` is `Effect::Doc`) wakes the worker through 
   with a default note do) makes the MIDI set of that row and the merged set stale, and they are made again. The spike sets do not
   depend on the note and stay ready. This is already true; this ticket adds a test that proves it for the Load Preset path
   (stage `deliver-defaults`).
-- Export settings (`formats`, `midi_mode`, `compensate`) are NOT inputs of the prepared files. The handles decide the kind
-  (`Kind::Midi`, `Spike`, `Audio`, `Merged`), the wav kinds are made after the first press (`used`), the files use `EXPORT_TEMPO`, and
-  `prepare.rs` never reads `export_last` or `compensate`. The brief says a changed export setting must make the files stale; with
-  the code as it is, no export setting changes a byte of them. We do NOT add a setting to the fingerprint without an effect (it would
-  make the worker do needless work after each change of the dialog). The test proves the other half: a change of the export settings
-  leaves the ready sets ready and makes no job. If a later change makes the drag files depend on a setting, the setting goes into
-  `fingerprint` in that change. Open question 7.
+- Export settings are not inputs of the prepared files (ruling R5: no rule for them). A test proves that a change of them makes no job. Whether `compensate` applies to dragged files is ticket #589.
 - Presets and defaults apply their changes through the same page commands as the Inspector, so no new wake path exists.
 
 ## 10. Stages and fault runs
@@ -363,7 +360,7 @@ the comparison MUST fire (a positive control: the harness can see a write).
    (pattern to note, the shape of the app's kit rules) would solve it; it is a larger change and is not in this ticket.
 7. Export settings and the prepared files (section 9): the brief and the code disagree; the note keeps the code and tests the
    independence. If `compensate` should apply to dragged files, that is a change of `prepare.rs` and of its fingerprint.
-8. No "Delete preset" in the menu (a file in `Presets/` can be removed in the Finder). Add it if the owner wants it; it needs a confirm.
+8. (closed by R6) Delete is in the Load Preset dialog.
 9. Two DAW processes that save at the same moment: last writer wins and one role entry may be lost in a window of a few milliseconds.
 10. `export-folders.json` uses a fixed temporary name (`json.tmp`, `save_folders` in `deliver.rs`). It is not part of this ticket. The new
     file uses `write_atomic`, which has a temporary name of its own.
@@ -375,3 +372,14 @@ Commit 1: this note. Then, one commit per line or pair: (2) `userdefaults.rs`, t
 (3) presets, the menu entries, the dialogs and the undo step with `editor-defaults`; (4) the archive field with `doc-archive-export`
 and `deliver-defaults`; (5) the unit tests of the hostile files (with line 2); (6) the standalone proof; README, `switches.json` and
 the stage list in `check.py` with each commit that adds a switch or a stage.
+
+## 14. Rulings of the coordinator (applied above)
+
+R1 path accepted, folder created at the first Save only; the README sentence and stage `files` allow exactly this folder. R2 apply point
+accepted; Q4 is tested FIRST (a source that the archive holds without a result must keep the session values). R3 notes are a list per role
+(section 3). R4 follow options are the page options; export defaults seed a new document only. R5 export settings do not touch the prepared files; #589
+decides `compensate`. R6 own preset format; Delete in the Load Preset dialog; the `note` step of `edit.js` with a page test that the standalone
+undo list is unchanged. R7 no "Apply default to this track". R8 symlink, directory, unreadable: built-in values and one row. R9 the archive `export`
+field is range-checked like the file. R10 the standalone proof uses a temp `HOME`. R11 `HM_EXTRA` second kind, `hostMenuAudit` still passes, the two
+entries exist in host mode only. R12 see section 4. Report rows carry the fixed word `defaults-folder`, never an absolute path; the rows are
+listed in the privacy class list of the README.
