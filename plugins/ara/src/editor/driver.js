@@ -573,6 +573,17 @@
     var mt = await inv("plugin_deliver_take", { items: st.rows.map(function (r) { return { row: r.id, kind: "midi" }; }) }); out.take_midi = mt;
     var mg = await inv("plugin_deliver_take", { items: [{ row: "", kind: "merged" }] }); out.take_merged = mg;
     if (T.arg === "short") { post(Object.assign({ kind: "deliver" }, out)); return; }   // the hostile-name run: the MIDI files are enough
+    if (T.arg === "late") {   // round 3 (P1): a row "Snare_audio" shows up after the first take (scenario late-row); its spike file has the name of the audio file of "Snare"
+      var first = st.rows[0].id;
+      await inv("plugin_deliver_want", { kind: "spike" }); await inv("plugin_deliver_want", { kind: "audio" });
+      out.t_late = await until(async function () { var s1 = await state(); return s1 && s1.rows.length === 1 && s1.rows[0].spike.state === "ready" && s1.rows[0].audio.state === "ready"; }, 60000);
+      out.late1 = await inv("plugin_deliver_take", { items: [{ row: first, kind: "audio" }] });
+      out.t_late2 = await until(async function () { var s2 = await state(); return s2 && s2.rows.length === 2 && s2.rows.every(function (r) { return ["midi", "spike", "audio"].every(function (k) { return r[k].state === "ready"; }); }); }, 60000);
+      var s3 = await state(); var second = s3.rows.filter(function (r) { return r.id !== first; })[0];
+      out.late_rows = s3.rows.map(function (r) { return r.name; });
+      out.late2 = await inv("plugin_deliver_take", { items: [{ row: first, kind: "audio" }, { row: second ? second.id : "none", kind: "spike" }] });
+      post(Object.assign({ kind: "deliver" }, out)); return;
+    }
     out.take_spike_off = await inv("plugin_deliver_take", { items: [{ row: st.rows[0].id, kind: "spike" }] });
     out.want_spike = await inv("plugin_deliver_want", { kind: "spike" });
     out.t_spike = await until(async function () { return allIn(await state(), "spike", "ready"); }, 60000);

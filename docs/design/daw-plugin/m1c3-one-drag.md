@@ -417,3 +417,19 @@ One commit per line or pair, risky parts first. This note is commit 1 (Gate line
 8. Make the row header small (Track Height Small) and narrow the window under 520 px: the handles collapse to one handle and a menu; the menu
    lists the three kinds and a keyboard can reach it.
 9. Close and open the session: the folder choice of the dialog is remembered (line 7, M1c2); the handles prepare again after the first round.
+
+## 16. Round 3
+
+- P1: the final file name is part of `fp` (a renamed set is stale and made again), and `job` looks at who holds the prepared path before it writes: a
+  ready set that is still the wanted state holds it (the job fails with `the file name is held by another set` and is tried again by the back-off); a stale
+  holder is dropped from the ready sets because its file is about to change, so a take never delivers the content of one set under the name of another.
+  Unit test `a_new_row_whose_spike_file_has_the_name_of_another_rows_audio_file_never_changes_that_audio_set`; stage part `deliver-name-clash` (scenario
+  `late-row`: the row `Snare_audio` shows after the first take of a wav kind), fault `fp-no-name` with `no-held-check`.
+- P2: a take links; when the link fails it copies to a temporary name in `Exports/Dragged/` and renames it (still never over a file: numbered). The same file
+  already there is the same inode or, when inodes cannot match, the same bytes. An error only when the copy fails too. Unit test with a forced link failure;
+  the test switch `no-hard-link` forces it in a gate build.
+- P3: the worker compares the tempo of the host at every tick; a change wakes it (`tempo_changed`, unit test). The ARA timeline already woke it.
+- P4: the stop sign is read between sources of an audio sum, in the merged file, at the start of `make`, and between jobs. A call into the writers of the app
+  cannot be interrupted, so one single long write ends first. Unit test `a_stop_during_a_long_job_ends_the_worker_within_the_unload_wait`.
+- P5: `MEM_CAP_BYTES` is used in `write_audio_row` (test `the_size_is_estimated_before_anything_is_written...`); `no_folder` is used in `state_for`, which
+  `state_json` calls (test `with_no_export_folder_the_state_the_page_gets_says_so...`); `deliver-delivered-keeps` fails when the file is missing.

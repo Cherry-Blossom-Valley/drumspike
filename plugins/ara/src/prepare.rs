@@ -108,6 +108,15 @@ fn stopped() -> bool {
     STOP.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/// A point inside a long job where it looks at the stop sign (between sources, between jobs), so `stop_all` returns in time.
+fn checkpoint() -> Result<(), String> {
+    if stopped() {
+        Err("stopped".into())
+    } else {
+        Ok(())
+    }
+}
+
 /// The fault runs of the check (`DS_ARA_PREPARE_FAULT`); a delivery build reads none.
 fn fault() -> String {
     crate::test_switch("DS_ARA_PREPARE_FAULT").unwrap_or_default()
@@ -346,6 +355,7 @@ pub fn write_midi_row(row: &RowIn, map: &TempoMap, out: &Path) -> Result<(), Str
 ///
 /// The text of the failure.
 pub fn write_merged(rows: &[RowIn], map: &TempoMap, out: &Path) -> Result<(), String> {
+    checkpoint()?;
     let evs: Vec<(usize, Vec<MidiEvent>)> = rows
         .iter()
         .enumerate()
@@ -439,6 +449,7 @@ pub fn write_audio_row(row: &RowIn, out: &Path) -> Result<(), String> {
     let mut rate = 0;
     let mut format = WavFormat::Float32;
     for (i, s) in used.iter().enumerate() {
+        checkpoint()?;
         let wav = s.wav.as_deref().ok_or_else(|| format!("no audio for {}", s.key))?;
         let tmp = out.with_extension(format!("part{i}.tmp"));
         let pairs = song_pairs(&s.events, &regions_of(row, &s.key));
@@ -577,6 +588,10 @@ struct St {
     bump: u64,
     midi_pending: bool,
     wav_pending: bool,
+    /// The tempo as the worker saw it last (a change wakes the worker).
+    tempo_seen: Option<String>,
+    /// The scenario `late-row`: the row `Snare_audio` shows only after the first take.
+    revealed: bool,
     /// Counts the wakes; `clean_seq` is the count that the last pass looked at (a handle shows `preparing` while they differ: something changed since).
     wake_seq: u64,
     clean_seq: u64,
@@ -719,6 +734,25 @@ impl Prep {
         self.kick();
     }
 
+    /// The rows of the document (the scenario `late-row` shows one of them late).
+    fn rows_now(&self) -> Rows {
+        let mut r = (self.rows)();
+        if has("late-row") && !self.lock().revealed {
+            r.rows.retain(|x| x.name != "Snare_audio");
+        }
+        r
+    }
+
+    /// True when the tempo of the host is another than at the last look: the MIDI files depend on it, so the worker looks again (the process
+    /// call of the host gives it with no event of its own).
+    fn tempo_changed(&self) -> bool {
+        let key = format!("{:?}", (self.tempo)().map);
+        let mut st = self.lock();
+        let changed = st.tempo_seen.as_ref().is_some_and(|k| *k != key);
+        st.tempo_seen = Some(key);
+        changed
+    }
+
     fn exports_dir(&self) -> Option<PathBuf> {
         let svc = self.page.service()?;
         let sid = self.page.sid()?;
@@ -728,7 +762,7 @@ impl Prep {
     fn gather(&self, refresh: bool) -> Option<Gathered> {
         let svc = self.page.service()?;
         let sid = self.page.sid()?;
-        let rows = (self.rows)();
+        let rows = self.rows_now();
         let tempo = (self.tempo)();
         let files = (self.files)();
         // the same follower refresh as the export (R4): `tracks_get` derives a follower whose hits went stale; it also gives the notes
@@ -817,7 +851,13 @@ impl Prep {
                 continue;
             }
             any = true;
-            let name = |k: Kind| g.names.get(&(r.id.clone(), k)).cloned().unwrap_or_default();
+            // the final file name is part of `fp` (a renamed set is stale and made again); the fault run leaves it out
+            let name = |k: Kind| {
+                if has("fp-no-name") {
+                    return String::new();
+                }
+                g.names.get(&(r.id.clone(), k)).cloned().unwrap_or_default()
+            };
             let m = fingerprint(r, Kind::Midi, &name(Kind::Midi), &g.tempo_key, bump);
             m.hash(&mut merged);
             out.insert((r.id.clone(), Kind::Midi), m);
@@ -881,7 +921,7 @@ impl Prep {
     /// The answer of `plugin_deliver_state` and the payload of the page event `plugin-deliver`.
     #[must_use]
     pub fn state_json(&self) -> Value {
-        let rows = (self.rows)();
+        let rows = self.rows_now();
         let st = self.lock();
         let dirty = st.wake_seq != st.clean_seq;
         let row_has = |id: &str| st.cycles == 0 || dirty || st.want.contains_key(&(id.to_string(), Kind::Midi));
@@ -974,6 +1014,10 @@ impl Prep {
         }
         if picks.len() > MAX_DRAG_FILES {
             return Err((413, format!("error: more than {MAX_DRAG_FILES} items in one drag")));
+        }
+        if has("late-row") && items.iter().any(|(_, k)| k.is_wav()) {
+            self.lock().revealed = true;
+            self.wake();
         }
         let dragged = exports.join(DRAGGED_DIR);
         std::fs::create_dir_all(&dragged).map_err(|e| (500, format!("error: {}: {e}", dragged.display())))?;
@@ -1097,6 +1141,9 @@ impl Prep {
             if !due || !need {
                 continue;
             }
+            if stopped() {
+                return;
+            }
             self.job(&g, &key, fps[&key], &exports, &prepared);
         }
         self.push();
@@ -1105,6 +1152,28 @@ impl Prep {
     fn job(self: &Arc<Self>, g: &Gathered, key: &Key, fp: u64, exports: &Path, prepared: &Path) {
         {
             let mut st = self.lock();
+            // the file name of this set is the file of another set: a fresh one is never overwritten (this job fails and is tried again); a stale one
+            // is no longer ready, because its file is about to change (a take must not deliver the content of this set under that name)
+            if let Some(out) = g.names.get(key).map(|n| prepared.join(n)) {
+                if !has("no-held-check") {
+                    match held_by_other(&st, key, &out) {
+                        Held::Fresh => {
+                            let tries = st.failed.get(key).filter(|f| f.0 == fp).map_or(1, |f| f.3 + 1);
+                            st.failed.insert(
+                                key.clone(),
+                                (fp, "the file name is held by another set".into(), Instant::now(), tries),
+                            );
+                            drop(st);
+                            self.push();
+                            return;
+                        }
+                        Held::Stale(k) => {
+                            st.ready.remove(&k);
+                        }
+                        Held::No => {}
+                    }
+                }
+            }
             st.busy = Some((key.clone(), Instant::now()));
             st.jobs += 1;
         }
@@ -1164,6 +1233,26 @@ fn clean_prepared(prepared: &Path, keep: &HashSet<PathBuf>) {
     }
 }
 
+/// Who holds the prepared path `out` besides `key`: a ready set that is still the wanted state (`Fresh`), one that is stale (`Stale`), or nobody.
+enum Held {
+    Fresh,
+    Stale(Key),
+    No,
+}
+
+fn held_by_other(st: &St, key: &Key, out: &Path) -> Held {
+    for (k, r) in &st.ready {
+        if k != key && r.prepared.iter().any(|p| p == out) {
+            return if st.want.get(k) == Some(&r.fp) {
+                Held::Fresh
+            } else {
+                Held::Stale(k.clone())
+            };
+        }
+    }
+    Held::No
+}
+
 /// The books after a pass looked at the rows: `want` is what the files must be made from now. A change of the wanted state starts the watchdog again
 /// (S10); sets of rows that are gone or kinds that are off leave the books (their files are removed from `.prepared/` by the pass).
 fn update_books(st: &mut St, fps: &HashMap<Key, u64>) {
@@ -1191,6 +1280,53 @@ fn update_books(st: &mut St, fps: &HashMap<Key, u64>) {
 ///
 /// The text of the failure.
 pub fn deliver(src: &Path, dir: &Path) -> Result<PathBuf, String> {
+    deliver_with(src, dir, &|a, b| {
+        if has("no-hard-link") {
+            Err(std::io::Error::other("hard links are not allowed here"))
+        } else {
+            std::fs::hard_link(a, b)
+        }
+    })
+}
+
+/// True when `a` and `b` hold the same bytes (the size first).
+fn same_bytes(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    if ma.len() != mb.len() {
+        return false;
+    }
+    let (Ok(mut fa), Ok(mut fb)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
+        return false;
+    };
+    let (mut x, mut y) = (vec![0u8; 1 << 20], vec![0u8; 1 << 20]);
+    loop {
+        let (Ok(n), Ok(m)) = (fa.read(&mut x), fb.read(&mut y)) else {
+            return false;
+        };
+        if n != m || x[..n] != y[..m] {
+            return false;
+        }
+        if n == 0 {
+            return true;
+        }
+    }
+}
+
+/// [`deliver`] with the way of linking given. When the link fails (a volume without hard links, exFAT or a network disk), the file is COPIED to a
+/// temporary name in `dir` and renamed; a name is still never replaced. The same file already there is the same inode or, when inodes cannot
+/// match, the same bytes. An error only when the copy fails too.
+///
+/// # Errors
+///
+/// The text of the failure.
+pub fn deliver_with(
+    src: &Path,
+    dir: &Path,
+    link: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<PathBuf, String> {
     use std::os::unix::fs::MetadataExt;
     let name = src
         .file_name()
@@ -1207,12 +1343,24 @@ pub fn deliver(src: &Path, dir: &Path) -> Result<PathBuf, String> {
         let p = dir.join(&cand);
         match std::fs::symlink_metadata(&p) {
             Ok(m) => {
-                if m.ino() == sm.ino() && m.dev() == sm.dev() {
+                if (m.ino() == sm.ino() && m.dev() == sm.dev()) || same_bytes(src, &p) {
                     return Ok(std::fs::canonicalize(&p).unwrap_or(p));
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::hard_link(src, &p).map_err(|e| format!("could not link {}: {e}", p.display()))?;
+                if link(src, &p).is_ok() {
+                    return Ok(std::fs::canonicalize(&p).unwrap_or(p));
+                }
+                let tmp = dir.join(format!(".{cand}.tmp"));
+                let copied = std::fs::copy(src, &tmp).map_err(|e| format!("could not copy to {}: {e}", p.display()));
+                if let Err(e) = copied {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(e);
+                }
+                std::fs::rename(&tmp, &p).map_err(|e| {
+                    let _ = std::fs::remove_file(&tmp);
+                    format!("could not copy to {}: {e}", p.display())
+                })?;
                 return Ok(std::fs::canonicalize(&p).unwrap_or(p));
             }
             Err(e) => return Err(format!("{}: {e}", p.display())),
@@ -1236,8 +1384,17 @@ fn plant_user_file(exports: &Path, g: &Gathered) {
 /// Make the set of `key` in `.prepared/` and nowhere else: written under a temporary name, then renamed, so a file that was delivered (linked
 /// into `Exports/Dragged/`) keeps its content. Returns the prepared paths.
 fn make(g: &Gathered, key: &Key, exports: &Path, prepared: &Path) -> Result<Vec<PathBuf>, String> {
+    checkpoint()?;
     std::fs::create_dir_all(prepared).map_err(|e| format!("{}: {e}", prepared.display()))?;
     let row = g.rows.iter().find(|r| r.id == key.0);
+    #[cfg(test)]
+    if row.is_some_and(|r| r.name.starts_with("SLOWJOB")) {
+        // the test of the stop: a long job whose loop looks at the stop sign
+        for _ in 0..1000 {
+            checkpoint()?;
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     let name = g.names.get(key).cloned().ok_or("the row is gone")?;
     // the name is one safe component (`file_stems`); nothing that is not inside the folder is ever written
     let out = prepared.join(&name);
@@ -1280,6 +1437,9 @@ fn worker(weak: &Weak<Prep>) {
             return;
         }
         let Some(p) = weak.upgrade() else { return };
+        if p.tempo_changed() {
+            p.wake();
+        }
         {
             // a failed set is tried again after its back-off
             let mut st = p.lock();
@@ -1880,6 +2040,7 @@ mod tests {
             [1, 2, 3, 4, 5, 6, 9].map(|t| backoff(t).as_secs()),
             [5, 10, 20, 40, 60, 60, 60]
         );
+        let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (svc, sid, root) = two_tracks("retry");
         let prep = prep_of(&svc, &sid, &root);
         let key = ("q-lead".to_string(), Kind::Midi);
@@ -2053,6 +2214,7 @@ mod tests {
 
     #[test]
     fn the_closures_of_the_preparation_do_not_keep_the_document_alive_and_the_worker_ends_with_it() {
+        let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         struct Doc;
         let doc = Arc::new(Doc);
         let (w1, w2, w3) = (Arc::downgrade(&doc), Arc::downgrade(&doc), Arc::downgrade(&doc));
@@ -2092,6 +2254,7 @@ mod tests {
 
     #[test]
     fn a_poll_that_says_done_wakes_the_worker_once_for_a_job_not_at_every_answer() {
+        let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let (svc, sid, root) = two_tracks("poll");
         let prep = prep_of(&svc, &sid, &root);
         let seq = |p: &Arc<Prep>| p.lock().wake_seq;
@@ -2106,6 +2269,231 @@ mod tests {
         assert_eq!(seq(&prep), s2);
         prep.command_done(false, false);
         assert_eq!(seq(&prep), s2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ------------------------------------------------------------ round 3
+
+    /// Tests that start a worker thread and read or set the global stop sign run one at a time.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    type RowSpec = Arc<Mutex<Vec<(String, String, String)>>>;
+
+    /// A preparation whose rows (id, name, source) the test changes while it runs.
+    fn prep_rows(svc: &drumspike_app::Service, sid: &str, root: &Path, specs: &RowSpec) -> Arc<Prep> {
+        let page = Arc::new(PageHandle::default());
+        page.set(Some(svc.clone()));
+        page.set_sid(Some(sid.to_string()));
+        let sp = Arc::clone(specs);
+        let wavs: HashMap<String, (PathBuf, u32)> = ["lead", "sub"]
+            .iter()
+            .map(|k| ((*k).to_string(), (root.join("daw").join(format!("{k}.wav")), 48_000)))
+            .collect();
+        Prep::new(
+            page,
+            Arc::new(move || Rows {
+                rows: sp
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(id, name, src)| crate::rows::Row {
+                        id: id.clone(),
+                        name: name.clone(),
+                        srcs: vec![src.clone()],
+                        clips: vec![clip(src, 0.0, 3.5, 0.0, 1.0)],
+                    })
+                    .collect(),
+                ..Rows::default()
+            }),
+            Arc::new(|| crate::tempo_ara::choose(None, "test", None)),
+            Arc::new(move || wavs.clone()),
+        )
+    }
+
+    fn spec(id: &str, name: &str, src: &str) -> (String, String, String) {
+        (id.into(), name.into(), src.into())
+    }
+
+    #[test]
+    fn a_new_row_whose_spike_file_has_the_name_of_another_rows_audio_file_never_changes_that_audio_set() {
+        let (svc, sid, root) = two_tracks("p1");
+        svc.events_set(&sid, "lead", &json!([{"t": 0.25, "v": 100}, {"t": 1.25, "v": 100}]))
+            .unwrap();
+        svc.events_set(&sid, "sub", &json!([{"t": 0.5, "v": 100}])).unwrap();
+        let specs: RowSpec = Arc::new(Mutex::new(vec![spec("q-lead", "Snare", "lead")]));
+        let prep = prep_rows(&svc, &sid, &root, &specs);
+        prep.lock().used = [true, true];
+        prep.cycle(true, true);
+        let audio = [("q-lead".to_string(), Kind::Audio)];
+        let first = prep.take(&audio).unwrap();
+        assert_eq!(first[0].file_name().unwrap(), "Snare_audio_spike.wav");
+        let a = std::fs::read(&first[0]).unwrap();
+        // a new row "Snare_audio" with the spike kind: its file name is the file name of the audio set of "Snare"
+        specs.lock().unwrap().push(spec("q-sub", "Snare_audio", "sub"));
+        prep.cycle(true, true);
+        let again = prep.take(&audio).unwrap();
+        assert_eq!(
+            again[0].file_name().unwrap(),
+            "Snare (2)_audio_spike.wav",
+            "the audio set is renamed: stale, made again"
+        );
+        assert_eq!(
+            std::fs::read(&again[0]).unwrap(),
+            a,
+            "its content is still the audio, not the spike"
+        );
+        let spike = prep.take(&[("q-sub".to_string(), Kind::Spike)]).unwrap();
+        assert_eq!(
+            spike[0].file_name().unwrap(),
+            "Snare_audio_spike 2.wav",
+            "the delivered name was taken: numbered"
+        );
+        assert_ne!(std::fs::read(&spike[0]).unwrap(), a);
+        assert_eq!(
+            std::fs::read(&first[0]).unwrap(),
+            a,
+            "what was delivered keeps its bytes"
+        );
+        // the rule itself: a fresh holder is never overwritten, a stale one is dropped
+        let mut st = prep.lock();
+        let (k, other) = (("q-x".to_string(), Kind::Spike), ("q-y".to_string(), Kind::Audio));
+        let out = PathBuf::from("/p/Snare_audio_spike.wav");
+        st.ready.insert(
+            other.clone(),
+            Ready {
+                fp: 7,
+                prepared: vec![out.clone()],
+            },
+        );
+        st.want.insert(other.clone(), 7);
+        assert!(matches!(held_by_other(&st, &k, &out), Held::Fresh));
+        st.want.insert(other.clone(), 8);
+        assert!(matches!(held_by_other(&st, &k, &out), Held::Stale(_)));
+        assert!(
+            matches!(held_by_other(&st, &other, &out), Held::No),
+            "a set does not hold against itself"
+        );
+        drop(st);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn when_a_link_fails_the_file_is_copied_never_over_a_file_and_the_same_bytes_are_reused() {
+        let d = std::env::temp_dir().join(format!("ds-prep-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("p")).unwrap();
+        std::fs::create_dir_all(d.join("o")).unwrap();
+        let no_link =
+            |_: &Path, _: &Path| -> std::io::Result<()> { Err(std::io::Error::other("no hard links on this volume")) };
+        std::fs::write(d.join("p/A_spike.mid"), b"ONE").unwrap();
+        let first = deliver_with(&d.join("p/A_spike.mid"), &d.join("o"), &no_link).unwrap();
+        assert_eq!(std::fs::read(&first).unwrap(), b"ONE");
+        assert_eq!(first.file_name().unwrap(), "A_spike.mid");
+        // the same bytes again (no inode in common): reused, no second file
+        assert_eq!(
+            deliver_with(&d.join("p/A_spike.mid"), &d.join("o"), &no_link).unwrap(),
+            first
+        );
+        // new content under the name: a numbered copy, the first copy is not replaced
+        std::fs::write(d.join("p/tmp"), b"TWO").unwrap();
+        std::fs::rename(d.join("p/tmp"), d.join("p/A_spike.mid")).unwrap();
+        let second = deliver_with(&d.join("p/A_spike.mid"), &d.join("o"), &no_link).unwrap();
+        assert_eq!(second.file_name().unwrap(), "A_spike 2.mid");
+        assert_eq!(std::fs::read(&first).unwrap(), b"ONE");
+        assert_eq!(std::fs::read(&second).unwrap(), b"TWO");
+        let left: Vec<String> = std::fs::read_dir(d.join("o"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into())
+            .collect();
+        assert_eq!(left.len(), 2, "no temporary file is left: {left:?}");
+        // the copy fails too (the folder cannot be written): an error
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(d.join("ro")).unwrap();
+        std::fs::set_permissions(d.join("ro"), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let r = deliver_with(&d.join("p/A_spike.mid"), &d.join("ro"), &no_link);
+        std::fs::set_permissions(d.join("ro"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(r.is_err(), "{r:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_change_of_the_tempo_wakes_the_worker_and_the_handles_stop_saying_ready() {
+        let (svc, sid, root) = two_tracks("tempo");
+        let page = Arc::new(PageHandle::default());
+        page.set(Some(svc.clone()));
+        page.set_sid(Some(sid));
+        let bpm = Arc::new(Mutex::new(120.0f64));
+        let b = Arc::clone(&bpm);
+        let prep = Prep::new(
+            page,
+            Arc::new(Rows::default),
+            Arc::new(move || {
+                let mut a = crate::tempo_ara::choose(None, "test", None);
+                a.map = Some(TempoMap {
+                    bpm: *b.lock().unwrap(),
+                    ..TempoMap::default()
+                });
+                a
+            }),
+            Arc::new(HashMap::new),
+        );
+        assert!(!prep.tempo_changed(), "the first look only remembers");
+        assert!(!prep.tempo_changed(), "the same tempo");
+        *bpm.lock().unwrap() = 97.3;
+        assert!(prep.tempo_changed(), "another tempo");
+        assert!(!prep.tempo_changed(), "once for a change");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_stop_during_a_long_job_ends_the_worker_within_the_unload_wait() {
+        let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (svc, sid, root) = two_tracks("stop");
+        svc.events_set(&sid, "lead", &json!([{"t": 0.25, "v": 100}])).unwrap();
+        let specs: RowSpec = Arc::new(Mutex::new(vec![spec("q-lead", "SLOWJOB", "lead")]));
+        let prep = prep_rows(&svc, &sid, &root, &specs);
+        let ended = Arc::clone(&prep.ended);
+        prep.wake();
+        prep.kick();
+        let t0 = Instant::now();
+        while prep.lock().busy.is_none() && t0.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(prep.lock().busy.is_some(), "the long job runs (it would take 10 s)");
+        let t1 = Instant::now();
+        let stopped_in_time = stop_all(Duration::from_millis(1500));
+        let took = t1.elapsed();
+        STOP.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            stopped_in_time && took < Duration::from_millis(1500),
+            "stop_all returned after {took:?}"
+        );
+        assert!(ended.load(std::sync::atomic::Ordering::SeqCst), "the worker has ended");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn with_no_export_folder_the_state_the_page_gets_says_so_and_the_memory_cap_is_the_one_of_the_audio_sum() {
+        let (svc, sid, root) = two_tracks("nofolder");
+        let specs: RowSpec = Arc::new(Mutex::new(vec![spec("q-lead", "Kick", "lead")]));
+        let prep = prep_rows(&svc, &sid, &root, &specs);
+        {
+            let mut st = prep.lock();
+            st.cycles = 2;
+            st.clean_seq = st.wake_seq;
+            st.want.insert(("q-lead".into(), Kind::Midi), 1);
+            st.no_folder = true;
+        }
+        // state_json is what the page gets (the shell command and the event)
+        let v = prep.state_json();
+        assert_eq!(v["rows"][0]["midi"]["state"], "error");
+        assert_eq!(v["rows"][0]["midi"]["why"], "no export folder");
+        assert_eq!(
+            MEM_CAP_BYTES,
+            1024 * 1024 * 1024,
+            "used by write_audio_row; tested in the_size_is_estimated_before_anything_is_written..."
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

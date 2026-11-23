@@ -8162,7 +8162,7 @@ def deliver_edit_parts(d: dict) -> dict:
     plan = b"USER FILE Kick_spike.mid"
     now = keep[0].read_bytes() if keep else None
     parts["deliver-user-file"] = (now == plan, f"a file of the user, Exports/Kick_spike.mid with known bytes, is the same after the preparation, takes and edits ({now!r}, want {plan!r})")
-    parts["deliver-delivered-keeps"] = (len({f.name for f in ta}) == len(ta) and any(re.search(r" \d+\.", f.name) for f in ta) and (not first or first.stat().st_size > 0),
+    parts["deliver-delivered-keeps"] = (len({f.name for f in ta}) == len(ta) and any(re.search(r" \d+\.", f.name) for f in ta) and (first is not None and first.stat().st_size > 0),
                                         f"after the edit the take delivered NEW numbered files and left the first ones as they were ({sorted(f.name for f in ta)})")
     parts["deliver-cost"] = (jobs == 4, f"three edits in one DAW track, 400 ms apart, make only its own sets, once: {jobs} jobs (MIDI, spike, audio of that row and the merged file = 4; every row would be 7, a pass for each edit 12)")
     return parts
@@ -8196,11 +8196,28 @@ def deliver_names_parts(d: dict) -> dict:
                                    f"rows 'Snare' and 'Snare_audio': the six delivered files have six different names without case, the later audio file is numbered: {names} (want {want})")}
 
 
+def deliver_late_parts(d: dict) -> dict:
+    """Round 3 (P1): a new row whose spike file has the name of another row's audio file must not change that audio set."""
+    r = d["rep"]
+    l1 = [Path(f) for f in ((r.get("late1") or {}).get("v") or {}).get("files", [])]
+    l2 = [Path(f) for f in ((r.get("late2") or {}).get("v") or {}).get("files", [])]
+    a = l1[0].read_bytes() if l1 and l1[0].is_file() else None
+    audio2 = l2[0] if len(l2) == 2 else None
+    spike2 = l2[1] if len(l2) == 2 else None
+    ok = (a is not None and audio2 is not None and audio2.is_file() and spike2 is not None and spike2.is_file()
+          and audio2.read_bytes() == a and spike2.read_bytes() != a and l1[0].read_bytes() == a
+          and re.fullmatch(r"Snare \(2\)_audio_spike( \d+)?\.wav", audio2.name) is not None)
+    return {"deliver-name-clash": (ok, f"rows {r.get('late_rows')}: the audio set of 'Snare' is renamed and made again (delivered as {audio2.name if audio2 else None}), its bytes are still the audio "
+                                       f"({audio2.read_bytes() == a if audio2 and audio2.is_file() and a is not None else None}); the spike of 'Snare_audio' has other bytes "
+                                       f"({spike2.name if spike2 else None}); the file delivered before is unchanged")}
+
+
 def stage_deliver() -> bool:
     if not HOST.exists() or not CLAP.exists():
         return pass_fail("deliver", False, "no host or bundle: run check.sh build")
     ok = print_parts("", deliver_parts(deliver_run("base", None, DELIVER_ARGS + ["--arg", "noedit"])))
     ok = print_parts("", deliver_edit_parts(deliver_run("edit", {"DS_ARA_PREPARE_FAULT": "user-file", "DS_ARA_PREPARE_TRACE": "1"}))) and ok
+    ok = print_parts("", deliver_late_parts(deliver_run("late", {"DS_ARA_PREPARE_FAULT": "late-row"}, ["--seq-names", "Snare", "Snare_audio", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "late"]))) and ok
     ok = print_parts("", deliver_names_parts(deliver_run("names", None, ["--seq-names", "Snare", "Snare_audio", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "noedit"]))) and ok
     ok = print_parts("", deliver_watchdog_parts(deliver_run("watchdog", {"DS_ARA_PREPARE_FAULT": "forever", "DS_ARA_PREPARE_WAIT_MS": "3000"}, DELIVER_ARGS + ["--arg", "short"]))) and ok
     return print_parts("", deliver_hostile_parts(deliver_run("hostile", None, ["--seq-names", "../evil", "/abs", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "short"]))) and ok
@@ -8218,6 +8235,8 @@ def stage_deliver_fault() -> bool:
     ):
         parts = parts_of(deliver_run(f"fault-{label}", {"DS_ARA_PREPARE_FAULT": fault}, args))
         ok = fault_part(f"deliver-fault-{label}", parts, part, what) and ok
+    d = deliver_run("fault-late", {"DS_ARA_PREPARE_FAULT": "late-row,fp-no-name,no-held-check"}, ["--seq-names", "Snare", "Snare_audio", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "late"])
+    ok = fault_part("deliver-fault-fp-no-name", deliver_late_parts(d), "deliver-name-clash", "the final name is not in fp and a name held by another set is overwritten: the audio set of one row delivers the spike content of another") and ok
     d = deliver_run("fault-names", {"DS_ARA_PREPARE_FAULT": "no-file-numbering"}, ["--seq-names", "Snare", "Snare_audio", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "noedit"])
     ok = fault_part("deliver-fault-no-file-numbering", deliver_names_parts(d), "deliver-file-names", "two sets get one file name: the later one replaces the first") and ok
     d = deliver_run("fault-watchdog", {"DS_ARA_PREPARE_FAULT": "forever,no-watchdog", "DS_ARA_PREPARE_WAIT_MS": "3000"}, DELIVER_ARGS + ["--arg", "short"])
