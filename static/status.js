@@ -56,6 +56,7 @@ function updateStatus() {   // P3-14b: the status bar is short; the info line ha
   mxRefresh();   // #157: the other mics of the selected hit
   selShellSync();   // #158 (rank 9): the selection-dependent menu items follow the selection
   trainingSync();   // #343
+  HT.noteOutside();   // #555: the hits that no clip of a DAW track shows (nothing with the mode off)
 }
 
 /* #343: View > Training Mode. A page setting (SETTINGS().ui.training, off by default, saved with saveSettings): with it

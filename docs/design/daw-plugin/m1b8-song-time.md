@@ -185,12 +185,20 @@ Out: tempo and bars from the host, time stretch (warp markers), loop, row-wide L
 ## 10. What was built, and where it differs from the plan above
 
 - **Settings of a row.** The audio group of the page (mute, solo, volume, pan, the mixer) is absent in a DAW (`HOST_ABSENT`, #539), so
-  those settings need no fan-out. Role and note go to every source of the row (`setTrackRole`, `saveMetaNote`); an undo of the role
-  of the first source puts all sources back to that role (the others keep no undo step of their own). Sensitivity, Loudness (the
-  velocity map), the shift and Learn stay with ONE source: the first source of the row (the Inspector shows it) or the source of
-  the hit or clip you work in. They are re-picks of one audio file with their own histograms and undo steps; a fan-out would be
-  one undo step per source. The Inspector says so in one line when a row has more than one source. A hand value of a
-  non-first source for role or note is overwritten by a change of the row.
+  those settings need no fan-out. Role, note, Sensitivity, Loudness (the velocity map) and Shift apply to every source of the row as
+  ONE undo step: the page has an undo entry `{type: "group", steps}` (`pushGroup`, `groupApplyOp` in `edit.js`) that holds the step of each source, undo
+  takes them back in reverse order, redo does them again. With one source (a standalone project, or a row with one source) `pushGroup` pushes
+  the plain step, so the standalone undo path is the one of today. Sensitivity and Loudness run the same service call for each other source after the first
+  (`rowRepick`, `rowLoud`), Shift runs `shiftApply` for each. The first source of the row is the one whose histograms the Inspector shows.
+  An undo of the role of a row puts all sources back to the role of the first source.
+- **Learn is not fanned out.** A Learn mark is a pattern of one source's audio (`track_learn_mark` reads the features at the marked time of that
+  file); the rule set (the examples with their fingerprints, the Match and Add lines) belongs to that source. Applying it to the other sources of
+  the row needs a new service command that takes the marks of one track and measures them on another track's audio (and a decision whether the examples of
+  two files may mix). That is more than a fan-out of the existing call, so Learn stays with the source of the clip you work in, and the Inspector line says so.
+- **Hand values.** A hand value of role or note in a non-first source is overwritten the next time the row is changed (the row owns role and note);
+  until then it is kept and shown in the history of that source only. The Inspector shows the first source.
+- **Outside every clip.** The status line says "N hits outside every clip" when a source has stored hits that no clip of its row shows (they stay stored and are not
+  in the files); at zero there is no text (`HT.noteOutside`).
 - **Waveform without WebGL2.** The page draws the waveform of each clip in the Canvas 2D path too (the min/max envelope from the
   peak arrays, `drawClipEnvelopes` in `wave.js`); it has no sample-exact window there. The web view of the plugin has WebGL2 on macOS,
   so this path is the fallback after a lost GL context only.
@@ -203,5 +211,4 @@ Out: tempo and bars from the host, time stretch (warp markers), loop, row-wide L
 - **Keys.** A merged source is hidden through `.hostMerged`; `hostHidden` (Tab over all tracks, `;`, `P`) skips it, `setSelTrack` maps a source to
   the row that shows it, Tab on a row walks the hits of all its sources in song order, the review queue (D) takes the hits of
   merged sources with their DAW track and puts the playhead at the song time of the hit.
-- **Not built.** The status line count of hits outside every clip (the clips and the stored hits are both in the page, the plugin
-  answers `gone` for sources with no clip). A source that is the home of two rows shows its first row only.
+- **Not built.** Learn on a row (see above). A source that is the home of two rows shows its first row only.

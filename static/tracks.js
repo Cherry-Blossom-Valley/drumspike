@@ -566,7 +566,7 @@ function insRowNote(name) {
   const k = HT.srcsOf(name).length;
   if (k <= 1) { if (n) n.remove(); return; }
   if (!n) { n = document.createElement("div"); n.id = "insRowNote"; n.style.cssText = "font-size:11px;color:#8a93a3;margin:4px 0;line-height:1.35"; $("#insRoleSrcRow").after(n); }
-  n.textContent = `This DAW track has ${k} sources: role and note apply to all of them. Sensitivity and Loudness change the first source; Learn and hit edits change the source of the clip you work in.`;
+  n.textContent = `This DAW track has ${k} sources: role, note, Sensitivity, Loudness and Shift apply to all of them (one undo step). Learn marks and hit edits belong to the source of the clip you work in.`;
 }
 function insRoleControls(offer) {   // the role select, the source hint and the note offer of the selected track
   const t = S.tracks[INS.name], sel = $("#insRoleSel");

@@ -206,7 +206,13 @@ function buildParamsPanel(div, name, p) {
         if (nv === shiftNow(name)) return;
         const ov = shiftNow(name);
         if (!await shiftApply(name, nv)) return;
-        pushUndo({ type: "shift", track: name, from: ov, to: nv });   // one undo step, none for a refused shift
+        const steps = [{ type: "shift", track: name, from: ov, to: nv }];
+        for (const o of HT.srcsOf(name)) {   // #555: the other sources of a DAW track shift by the same value, in the same undo step
+          if (o === name || !S.tracks[o] || shiftNow(o) === nv) continue;
+          const ovo = shiftNow(o);
+          if (await shiftApply(o, nv)) steps.push({ type: "shift", track: o, from: ovo, to: nv });
+        }
+        pushGroup("Shift Hits", steps);   // one undo step, none for a refused shift
         setMsg(`shifted all hits of ${trackLabel(name)} by ${nv-ov} samples`);
       } finally {
         const f = document.querySelector("#insParams .pShift");

@@ -10,7 +10,10 @@ Each test track has hits at 0.5 s, 1.5 s and 2.5 s of its own audio (6 s long)."
 import pytest
 
 from app_support import open_project
+from app_support import inspect_track
+from test_histograms import build as hist_build
 from test_host_page import FOUR, host_open
+from test_subtracks import analyse
 
 NAMES = [n for n, *_ in FOUR]
 HITS = [0.5, 1.5, 2.5]
@@ -232,7 +235,7 @@ def test_role_and_note_of_a_row_reach_every_source_and_the_inspector_says_so(hos
     host.evaluate("([a]) => { setSelTrack(a); syncInspector(true); }", [a])
     host.wait_for_function("() => !FR.raf && FR.flags === 0")
     text = host.evaluate("() => document.getElementById('insRowNote') && document.getElementById('insRowNote').textContent")
-    assert text and "2 sources" in text and "role and note apply to all of them" in text
+    assert text and "2 sources" in text and "role, note, Sensitivity, Loudness and Shift apply to all of them" in text and "one undo step" in text
     assert host.evaluate("([a]) => document.getElementById('insRowNote').textContent", [a])
     ok = host.evaluate("async ([a]) => await setTrackRole(a, 'tom')", [a])
     assert ok is True
@@ -290,3 +293,126 @@ def test_the_leak_fault_turns_the_mode_on_in_the_standalone_page_and_the_standal
     app.evaluate("() => { HT.fault = 'leak'; HT.rebuild(); }")
     assert app.evaluate("() => [HT.on(), HT.clips(S.order[0]) !== null, maxDur()]") == [True, True, 12.0], "the values the standalone test refuses"
     app.evaluate("() => { HT.fault = ''; HT.rows = []; HT.gen = 0; HT.rebuild(); }")
+
+
+# ---------------------------------------------------------------- the settings of a DAW track reach all its sources, as one undo step
+
+A2, B2 = "Kick In", "Kick Sub"
+
+
+def two_source_rows(gen=1):
+    """One DAW track with the two sources of the histogram project: the first at song 0 s, the second at song 10 s (both 6 s of audio)."""
+    return {"gen": gen, "song_end": 16.0, "gone": [], "rows": [
+        {"id": "q1", "name": "Drums", "srcs": [A2, B2], "clips": [
+            {"src": A2, "a": 0.0, "b": 6.0, "s": 0.0, "k": 1.0}, {"src": B2, "a": 0.0, "b": 6.0, "s": 10.0, "k": 1.0}]}]}
+
+
+@pytest.fixture
+def host2(host_app, make_project, tmp_path):
+    host_open(host_app, hist_build(make_project, tmp_path, "Row"))
+    analyse(host_app)
+    host_app.evaluate("p => HT.take(p)", two_source_rows())
+    host_app.wait_for_function("() => !FR.raf && FR.flags === 0")
+    inspect_track(host_app, A2)
+    yield host_app
+    host_app.evaluate("() => { HT.rows = []; HT.gen = 0; HT.fault = ''; HT.rebuild(); HT.paint(); }")
+
+
+def undo_top(page):
+    return page.evaluate("() => { const o = S.undo[S.undo.length - 1]; return o ? [o.type, o.steps ? o.steps.map(x => x.track) : null, S.undo.length] : null; }")
+
+
+def shift_of(page):
+    return page.evaluate("([a, b]) => [S.tracks[a].params.shift_samples || 0, S.tracks[b].params.shift_samples || 0]", [A2, B2])
+
+
+def set_shift(page, v):
+    page.evaluate("v => { const f = document.querySelector('#insParams .pShift'); f.value = v; f.dispatchEvent(new Event('change')); }", v)
+
+
+def test_shift_of_a_row_moves_all_its_sources_and_one_undo_restores_both(host2):
+    n0 = host2.evaluate("() => S.undo.length")
+    set_shift(host2, 12)
+    host2.wait_for_function("([a, b]) => S.tracks[b].params && S.tracks[b].params.shift_samples === 12 && S.tracks[a].params.shift_samples === 12", arg=[A2, B2])
+    assert undo_top(host2) == ["group", [A2, B2], n0 + 1], "one undo step that holds the step of each source"
+    host2.evaluate("() => undo()")
+    host2.wait_for_function("() => S.undo.length === %d" % n0)
+    host2.wait_for_function("([a, b]) => !S.tracks[a].params.shift_samples && !S.tracks[b].params.shift_samples", arg=[A2, B2])
+    host2.evaluate("() => redo()")
+    host2.wait_for_function("([a, b]) => S.tracks[a].params.shift_samples === 12 && S.tracks[b].params.shift_samples === 12", arg=[A2, B2])
+
+
+def test_loudness_of_a_row_reaches_all_its_sources_in_one_undo_step(host2):
+    n0 = host2.evaluate("() => S.undo.length")
+    host2.evaluate("async ([a]) => { await hgVelCommit(a, S.tracks[a].params, -50, -10, null); }", [A2])
+    got = host2.evaluate("([a, b]) => [S.tracks[a].params.vel_lo_db, S.tracks[b].params.vel_lo_db, S.tracks[a].params.vel_hi_db, S.tracks[b].params.vel_hi_db]", [A2, B2])
+    assert got == [-50, -50, -10, -10]
+    assert undo_top(host2) == ["group", [A2, B2], n0 + 1]
+    host2.evaluate("() => undo()")
+    host2.wait_for_function("([a, b]) => S.tracks[a].params.vel_lo_db !== -50 && S.tracks[b].params.vel_lo_db !== -50", arg=[A2, B2])
+    assert host2.evaluate("() => S.undo.length") == n0
+
+
+def test_sensitivity_of_a_row_repicks_all_its_sources_in_one_undo_step(host2):
+    host2.wait_for_function("() => DSHist.state().detection === 'ok'")
+    n0 = host2.evaluate("() => S.undo.length")
+    before = host2.evaluate("([a, b]) => [S.events[a].length, S.events[b].length]", [A2, B2])
+    host2.evaluate("() => { const s = document.querySelector('#insParams .pSens'); s.value = 150; s.dispatchEvent(new Event('input')); }")
+    host2.evaluate("() => document.querySelector('#insParams .pSens').dispatchEvent(new Event('change'))")
+    host2.wait_for_function("() => !HG.sens.base && !DSHist.state().busy")
+    host2.wait_for_function("(n) => S.undo.length === n + 1", arg=n0)
+    top = undo_top(host2)
+    assert top[0] == "group" and top[1] == [A2, B2], top
+    sens = host2.evaluate("([a, b]) => [S.tracks[a].params.sensitivity, S.tracks[b].params.sensitivity]", [A2, B2])
+    assert sens[0] == sens[1] == 150, "both sources have the sensitivity of the row"
+    host2.evaluate("() => undo()")
+    host2.wait_for_function("(n) => S.undo.length === n", arg=n0)
+    assert host2.evaluate("([a, b]) => [S.events[a].length, S.events[b].length]", [A2, B2]) == before, "one undo restores the hits of both sources"
+    assert host2.evaluate("([a, b]) => [S.tracks[a].params.sensitivity, S.tracks[b].params.sensitivity]", [A2, B2])[0] != 150
+
+
+def test_the_fault_flags_of_the_settings_break_the_rule(host2):
+    n0 = host2.evaluate("() => S.undo.length")
+    host2.evaluate("() => { HT.fault = 'no-fan-out'; }")
+    set_shift(host2, 7)
+    host2.wait_for_function("([a]) => S.tracks[a].params.shift_samples === 7", arg=[A2])
+    assert shift_of(host2) == [7, 0], "no-fan-out: the second source is not shifted"
+    host2.evaluate("() => { undo(); }")
+    host2.wait_for_function("() => S.undo.length === %d" % n0)
+    host2.evaluate("() => { HT.fault = 'no-group'; }")
+    set_shift(host2, 9)
+    host2.wait_for_function("([a, b]) => S.tracks[a].params.shift_samples === 9 && S.tracks[b].params.shift_samples === 9", arg=[A2, B2])
+    assert host2.evaluate("() => S.undo.length") == n0 + 2, "no-group: one undo entry for each source"
+
+
+def test_the_standalone_twin_shifts_one_track_with_one_plain_undo_step(app, make_project, tmp_path):
+    open_project(app, hist_build(make_project, tmp_path, "Twin"))
+    analyse(app)
+    inspect_track(app, A2)
+    n0 = app.evaluate("() => S.undo.length")
+    set_shift(app, 12)
+    app.wait_for_function("([a]) => S.tracks[a].params.shift_samples === 12", arg=[A2])
+    assert shift_of(app) == [12, 0], "only the selected track shifts"
+    top = app.evaluate("() => { const o = S.undo[S.undo.length - 1]; return [o.type, S.undo.length]; }")
+    assert top == ["shift", n0 + 1], "a plain step, no group"
+    app.evaluate("async ([a]) => { await hgVelCommit(a, S.tracks[a].params, -50, -10, null); }", [A2])
+    assert app.evaluate("() => S.undo[S.undo.length - 1].type") == "loud"
+    assert app.evaluate("([b]) => S.tracks[b].params.vel_lo_db !== -50", [B2])
+
+
+def test_hits_outside_every_clip_are_counted_in_the_status_line(host):
+    take(host, rows_payload())
+    note = lambda: host.evaluate("() => { const e = document.getElementById('hostOutsideNote'); return e ? e.textContent.trim() : null; }")
+    # the second source has a clip from 1.0 s: its hit at 0.5 s is in no clip of the row
+    assert note() == "· 1 hit outside every clip"
+    full = rows_payload(2)
+    full["rows"][0]["clips"][1]["a"] = 0.0
+    take(host, full)
+    host.evaluate("() => updateStatus()")
+    assert note() is None, "zero hits outside: no text"
+
+
+def test_the_standalone_status_line_has_no_outside_note(app, make_project):
+    open_project(app, make_project(tracks=TRACKS, seconds=6.0))
+    app.evaluate("() => updateStatus()")
+    assert app.evaluate("() => document.getElementById('hostOutsideNote')") is None

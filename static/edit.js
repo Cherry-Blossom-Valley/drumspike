@@ -65,6 +65,7 @@ function undoMeta(op) {
     case "reanalyze": set(`Re-analyze Selection (${trackLabel(op.track)}, ${fmt((op.t0), 3)} to ${fmt((op.t1), 3)} s)`, at(op.track, op.t0)); break;   // #265
     case "loud": set("Set Loudness Range", at(op.track, null)); break;
     case "learn": set("Learn Change", at(op.track, null)); break;
+    case "group": { const f = op.steps[0]; undoMeta(f); set(op.label || f.label || "Edit", f.where); break; }   // #555: one step of a DAW track that holds the steps of its sources
     case "trkdel": set(`Remove Track ${trackLabel(op.name)}`, at(op.name, null)); break;
     case "role": set(`Set Role (${trackLabel(op.track)})`, at(op.track, null)); break;
     case "tempo": set(/^bar 1/.test(op.what || "") ? "Set Bar 1" : op.what ? op.what.charAt(0).toUpperCase() + op.what.slice(1) : "Tempo Map Change", at(null, null)); break;
@@ -104,6 +105,7 @@ function undoReveal(op, isUndo) {   // after an undo or redo: the track is selec
   invalidateHits(w.track); updateStatus();
 }
 function applyOp(op, reverse) {   // a step of the service (shift, add, del, move, setv) answers a promise: true when it was applied
+  if (op.type === "group") return groupApplyOp(op, reverse);   // #555: the steps of the sources of a DAW track, one undo step
   if (op.type === "vel") { DSShell.applyVel(op, reverse); updateStatus(); return; }   // P3-4b: Recompute Velocities, all tracks in one step
   if (op.type === "learn") { lnApplyOp(op, reverse); return; }   // P4-6a: a Learn mark, removal, flip or Forget
   if (op.type === "tempo") { tmApplyOp(op, reverse); return; }   // P4-8: a change of the tempo and meter map
@@ -120,7 +122,22 @@ function applyOp(op, reverse) {   // a step of the service (shift, add, del, mov
    undo or redo leaves the stacks as the service is. While a shift or an edit is on its way, an undo or a redo joins the
    same queue and runs after it (it takes the step that is on top then); the other waits (tm, ln, hg) still drop it with a
    message, because their own busy flags have no hook that could run it later. */
-function edOwns(op) { return !!op && (op.type === "trkdel" || op.type === "shift" || op.type === "add" || op.type === "del" || op.type === "move" || op.type === "setv" || op.type === "setv-many" || op.type === "del-many" || op.type === "move-many" || op.type === "toggle"); }
+/* #555: a DAW track with several sources changes a setting of all of them as ONE undo step: the step holds the step of each source. Undo takes them back
+   in the reverse order, redo does them again in order; a refused one stops the group (the stacks stay as the service is). pushGroup makes the entry; with one
+   step (a standalone project, or a row with one source) it is that step itself, so the standalone undo path is the one of today. */
+async function groupApplyOp(op, reverse) {
+  const list = reverse ? op.steps.slice().reverse() : op.steps;
+  for (const s of list) {
+    const r = applyOp(s, reverse);
+    if (r && typeof r.then === "function" && !(await r)) return false;
+  }
+  return true;
+}
+function pushGroup(label, steps) {
+  if (steps.length === 1 || HT.fault === "no-group") { for (const s of steps) pushUndo(s); return; }   // no-group: the fault run (one entry for each source)
+  pushUndo({ type: "group", label, steps });
+}
+function edOwns(op) { return !!op && (op.type === "group" ? op.steps.some(edOwns) : false) || !!op && (op.type === "trkdel" || op.type === "shift" || op.type === "add" || op.type === "del" || op.type === "move" || op.type === "setv" || op.type === "setv-many" || op.type === "del-many" || op.type === "move-many" || op.type === "toggle"); }
 async function undoStep(isUndo) {
   const from = isUndo ? S.undo : S.redo, to = isUndo ? S.redo : S.undo, op = from[from.length - 1];
   if (tmUndoWaits() || lnUndoWaits() || hgUndoWaits(op) || !op) return;

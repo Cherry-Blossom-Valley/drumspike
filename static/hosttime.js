@@ -75,7 +75,7 @@ HT.clips = function (name) {
 };
 HT.isMerged = name => HT.on() && HT.merged.has(name);
 /* The sources of the row of the DOM row `name`: where a setting of the row goes (the row owns role, note, parameters and mix). */
-HT.srcsOf = name => { const e = HT.on() && HT.homeOf.get(name); return e ? e.srcs : [name]; };
+HT.srcsOf = name => { const e = HT.on() && HT.fault !== "no-fan-out" && HT.homeOf.get(name); return e ? e.srcs : [name]; };   // no-fan-out: the fault run (a setting reaches the first source only)
 /* The DOM row (the home source) that draws the source `src`, for a click that names a source (a hit, the DAW selection). */
 HT.homeFor = src => { const e = HT.on() && HT.inRow.get(src); return e ? e.home : src; };
 /* The name of the DAW track of a source (the row it is in), for the texts of the page; null with the mode off or for no row. */
@@ -130,6 +130,24 @@ HT.hitCount = function (name, events) {
   if (clips) for (const c of clips) for (const e of events[c.src] || []) if (e.t >= c.a && e.t < c.b) n++;
   return n;
 };
+/* The hits of the sources of the rows that no clip of THEIR row shows: they stay stored, and the page counts them. */
+HT.outsideCount = function () {
+  let n = 0;
+  for (const e of HT.view) for (const src of e.srcs) {
+    const cl = e.clips.filter(c => c.src === src);
+    for (const ev of S.events[src] || []) if (!cl.some(c => ev.t >= c.a && ev.t < c.b)) n++;
+  }
+  return n;
+};
+/* The status line: one short text, none at zero. */
+HT.noteOutside = function () {
+  if (typeof document === "undefined") return;
+  let el = document.getElementById("hostOutsideNote");
+  const n = HT.on() ? HT.outsideCount() : 0;
+  if (!n) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement("span"); el.id = "hostOutsideNote"; el.style.color = "#8a93a3"; el.title = "Hits that lie outside every clip of their DAW track are kept but not shown, and they are not in the files of the export"; const st = document.getElementById("stSel"); st.parentNode.insertBefore(el, st.nextSibling); }
+  el.textContent = ` · ${n} ${n === 1 ? "hit" : "hits"} outside every clip`;
+};
 /* The DOM: the rows of merged sources are hidden, the header of a row shows the name of the DAW track. Called after the rows changed and
    after the page built its rows again. */
 HT.paint = function () {
@@ -155,6 +173,7 @@ HT.take = function (p) {
   const changed = HT.apply(p);
   HT.paint();
   if (changed) { invalidate(F.SIZE | F.VIEW | F.GL); if (typeof updateStatus === "function") updateStatus(); }
+  else HT.noteOutside();
   return changed;
 };
 HT.init = function () {
