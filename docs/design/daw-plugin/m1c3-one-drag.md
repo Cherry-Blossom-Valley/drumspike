@@ -77,19 +77,22 @@ Decision: a new module `plugins/ara/src/prepare.rs` (the producer) that works pe
   (the usual case) is that call with `export_song::song_pairs`. A row with several sources: one temporary file per source,
   then the producer adds them sample by sample into one file. The cached sources of the plugin are always float 32 bit
   (`wav.rs`), and the snippets of two sources can overlap only where two clips overlap in the song, so a plain sum is right.
-  Sources with different rates in one row give the error `sources of this DAW track have different sample rates` (open
-  question 3).
+  Sources with different rates in one row give the error `clips have different sample rates` (ruling R8, unit test).
 - What the producer does not do: it does not call `export_drag_prepare` or `export_all` (they are per source, and
   `export_drag_prepare` clears the folder of the dialog tiles). It does not change `crates/app`.
 
 Why not extend `ExportTime`/`build_jobs` in `crates/app` (a row as one job): the change is about 60 lines in the central export
 path (events of several sources, pairs from several files), it touches code under the byte golden of the standalone export,
 and the ticket scope is `plugins/ara/`, `static/`, docs, tests. The producer duplicates only the mapping and the file calls,
-and every rule it needs is a public function with its own tests. Cost of the choice: the producer does not run the follower
-refresh (`follow::fresh_for_export` is crate private). A follower track (`follows`) whose hits are stale reaches the producer
-as it is stored. The page derives followers after every edit (`refresh_followers`), so a stale follower needs an earlier
-offline source; the plugin's sources are always cached. This is open question 4.
+and every rule it needs is a public function with its own tests. Followers (ruling R4): a prepared set is never staler than File > Export...
+would be. Before it reads the events of a source, the producer calls the same refresh as the export, `follow::fresh_for_export`
+(`crates/app/src/follow.rs`); the only change in `crates/app` is its visibility, `pub(crate)` to `pub`. The refresh needs the
+shared project (`registry::Shared`), which the producer gets through `Service` (a thin public wrapper is NOT added: if the
+visibility change is not enough to call it, that point stops and is reported). The follower leader's edit is part of `fp`
+because the follower's stored hits are in `fp` after the refresh.
 
+Limits (ruling R1): the dialog and `File > Export...` keep the per-source export in this ticket. For a row with several sources the
+dialog writes one file per source and the handles write one file per DAW track. A follow-up ticket moves the dialog to rows.
 The dialog and `File > Export...` keep the per-source export. For a host where every DAW track has one source (the usual case)
 the dialog and the handles write the same file names and the same bytes. For a row with several sources they differ, and the
 dialog is the one that is "wrong" by the rule of this ticket. This is open question 1 (move the dialog to rows later).
@@ -105,9 +108,8 @@ The stem is the name of the DAW track: `Row.name`, which `rows::build_with` alre
 and the numbering by `export::file_name_key` for two names that end on one stem on the file system. Empty gives `track`.
 This is the numbering of #560 applied to rows; the display-name numbering of `names.rs` is per source and is not used.
 
-The merged MIDI file: `<project name>_drums.mid` (`export::multi_file_name`, the name of the single file of the dialog). We have
-not read what the plugin names its project; the phase-2 commit reads it. With no usable name `multi_file_name` gives
-`project_drums.mid`.
+The merged MIDI file (ruling R7): `Drums_merged.mid`, a fixed stem with no project name lookup. When a row stem equals `Drums_merged` the
+file is numbered by the same numbering as the other stems (`Drums_merged (2).mid`).
 
 ## 5. Where the files live; prepared set; staleness
 
@@ -116,10 +118,11 @@ Rule of the coordinator: prepared files live only in the default `Exports/` fold
 producer with `create_dir_all`). The dialog tiles use `Exports/.drag/` and clear it on close; the two folders do not meet.
 
 A drag does not move the prepared file (the dialog does: `export_drag_take` renames). The prepared set must stay valid for the
-next drag. New: `plugin_deliver_take` makes a hard link of the prepared file in `Exports/` under the final name (`fs::hard_link`,
-a copy when the link fails; both folders are on one volume). The file in `Exports/` is what the DAW gets. A new preparation
-writes a NEW file in `.prepared/` (temporary name, rename), so the linked file in `Exports/` keeps its old content until the
-next drag of the same handle replaces the link (remove, then link). This keeps the contract of the dialog: "Exports/ gets a file
+next drag. Ruling R5: the WORKER makes the final-name file in `Exports/` (a hard link, `fs::hard_link`; a copy when the link fails; both folders
+are on one volume) as part of "ready". A copy that still runs means `preparing`. `plugin_deliver_take` makes no file: it only
+checks `fp` and the files and answers their paths, so nothing heavy runs at the press and never on the main thread. The file in `Exports/` is what the DAW gets. A new preparation
+writes a NEW file in `.prepared/` (temporary name, rename), and the worker replaces the link in `Exports/` when the new set is ready
+(the kind is `preparing` meanwhile, so no drag takes the old link). This keeps the contract of the dialog: "Exports/ gets a file
 only by a drag or an export", the file names are the export names, and a DAW that references the file in place does not see it
 change under it. Asking the user to delete old clips before a new drop is the hint of the audit (item 8).
 
@@ -143,7 +146,7 @@ Handle states, per (row, kind):
 | `ready` (count) | a set with the current `fp` exists; count = files (1 per row and kind; the toolbar adds up) | yes |
 | `preparing` | the `fp` differs from the set, or no set; a job is queued or runs | no |
 | `error: reason` | the last job for the current `fp` failed, or ran for more than 30 s | no |
-| `off` | audio spike before its first use; the press starts the preparation | no, a press starts it |
+| `off` | a wav kind before its first use ("press to prepare"); the press starts the preparation | no, a press starts it |
 | `none` | the row has no hit | no, text "no hits" |
 
 An older set is never dragged: the state is computed from `fp` at the moment of the take, so a take that arrives after an edit
@@ -163,7 +166,7 @@ places:
 - a change of the tempo snapshot (`musical.rs`) and of the document at restore.
 
 Debounce: the worker waits for 800 ms with no wake, at most 5 s from the first wake, then compares `fp` and prepares what
-differs. Order: MIDI of all rows, then spikes, then audio spikes. One job at a time (the files are big). Never in an audio
+differs. Order: MIDI of all rows, then spikes, then audio spikes (the wav kinds only after their first use, quiet time 3 s). One job at a time (the files are big). Never in an audio
 callback: the audio thread has no part in it (`transport.rs` allocates nothing, and the stage `threads` keeps proving it); the
 worker takes the service only through `events_get`. The preparation does not start while an analysis round of the document runs
 (the hits are about to change): it waits for the round end.
@@ -171,17 +174,23 @@ worker takes the service only through `events_get`. The preparation does not sta
 Cost, with numbers from the code:
 
 - MIDI: a few KB per row, milliseconds.
-- Synthetic spike: `write_spikes_song` writes the FULL length of the song end in the sample format of the source. The plugin's cached
+- Ruling R3: only MIDI is prepared eagerly. BOTH wav kinds (Spike and Audio spike) are `off` ("press to prepare") until their
+  first use in the document session. A press on the handle (no drag needed) starts the kind for all rows; then `preparing`, then
+  `ready`. From then on the kind is kept current for the changed rows only, with a quiet time of 3 s (MIDI: 800 ms). The toolbar
+  "Drag spikes" and "Drag all" follow the same rule. The existing writers and their formats and lengths do not change.
+- Synthetic spike (the numbers below are why R3 exists): `write_spikes_song` writes the FULL length of the song end in the sample format of the source. The plugin's cached
   sources are float 32 bit, so a spike file is `song_end * rate * 4 * channels` bytes: 10 minutes at 48 kHz mono is 115 MB per
   row, 8 rows about 920 MB. That is as expensive as the audio spike. The brief defers only the audio spike. Per-row `fp` keeps the
-  cost in line: an edit in one row writes one file. Open question 2: defer the synthetic spike too above a size, or keep it
-  eager as the owner decided.
-- Audio spike: reads the source and writes the same length, plus the sum for a multi-source row. It is prepared only after its first
-  use in the document session (a press on the handle, or "Drag all" with audio chosen). `off` until then; the handle says
-  "press to prepare". After the first use it follows the other two. The flag is in memory per document and starts `off` after a reopen.
+  cost in line: an edit in one row writes one file. Ruling R3 defers it.
+- Audio spike: reads the source and writes the same length, plus the sum for a multi-source row. The flags "spike used" and "audio
+  used" are in memory per document and start `off` after a reopen.
 - Disk: one prepared file per (row, kind) in `.prepared/`, plus links in `Exports/`. The producer removes the files of a row
   that is gone, and the whole folder when the editor of the last instance of the document closes. A prepared file is removed only
-  inside `.prepared/`.
+  inside `.prepared/`. Rule of size (ruling R11): at each wake the worker removes every set whose row or kind no longer exists
+  and every temporary file; the folder is bounded at 2 GiB: a job whose file would take the folder over that sum fails with `error:
+  prepared files exceed 2 GB`. `.prepared/` is a fixed child of the default folder written only by the plugin; no user path reaches
+  it, and the exact-path rule for user destinations (#579) does not change. A file name is made by `file_stems` from the row name, so
+  a hostile row name (`../x`, `/abs`, empty, 300 characters) stays one safe name inside the folder; a fault run proves the stage can see a name that leaves it.
 
 ## 7. The handles in the page (host mode only)
 
@@ -227,7 +236,8 @@ New shell commands (plugin shell commands like `plugin_host_regions`, listed in 
 - `plugin_deliver_want {kind: "audio"}` -> starts the first-use preparation of the audio spikes.
 
 The limit of the drag command is 64 files (`start_drag_command`). "Drag all" of 22 or more rows with three kinds exceeds it, so
-the limit goes to 512 (open question 5). The pasteboard writes one URL per file; the cost is not measured.
+the limit goes to 512 (ruling R6, unit test of the bound). A request over the bound is an error state with the reason (`error:
+more than 512 files`), no partial drag. "Drag all" (MIDI and wav in one drag) stays and is a hand check.
 
 ## 8. Faults and gate safety
 
@@ -309,7 +319,9 @@ Each new stage has a fault run that fails for its named reason. Names are propos
 | Stage | What it proves | Fault run |
 |---|---|---|
 | `prepare-rows` (unit + CLAP) | one file per DAW track and kind with the hits of all clips of the row at song time (two sources in one row, a source in two rows, a clip moved in the DAW); names = row names plus suffix, equal names numbered; the file bytes read back (ticks within 1 sample, spike samples) | `DS_ARA_PREPARE_FAULT=per-source`: one file per source, the stage sees two files for one row |
-| `prepare-state` | after a round and after an edit the sets become `ready` by themselves; a take during `preparing` answers 409; an old set is never taken after an edit; a state never stays `preparing` (30 s watchdog, shortened by `DS_ARA_PREPARE_WAIT_MS`); the audio kind is `off` until its first press | `stale-ok`: the take ignores `fp` (an old set is taken); `forever`: no job ends (the watchdog must fire) |
+| `prepare-state` | after a round and after an edit the sets become `ready` by themselves; a take during `preparing` answers 409; an old set is never taken after an edit; a state never stays `preparing` (30 s watchdog, shortened by `DS_ARA_PREPARE_WAIT_MS`); both wav kinds are `off` until their first press | `stale-ok`: the take ignores `fp` (an old set is taken); `forever`: no job ends (the watchdog must fire) |
+| `prepare-follower` | a follower row prepared after an edit of its leader carries the refreshed hits (R4) | `no-refresh`: the producer reads the stored hits, the stage sees the old ones |
+| `prepare-names` | a hostile row name (`../x`, `/abs`, empty, 300 chars) gives a safe name inside `.prepared/`; orphaned sets are removed; the 2 GiB bound (R11) | `raw-name`: the row name is used as given, the stage sees a file outside the folder |
 | `prepare-cost` | an edit in one row prepares only that row (count of jobs); no work in an audio callback (`OFF_AUDIO` stays 0, the allocation test of `threads`) | `all-rows`: every row prepares on each edit |
 | `deliver-handles` | the REAL page in the REAL editor in host mode: three handles in a row header, four in the toolbar, states from the plugin event, the collapse to one handle at the small height and under 520 px; a press and a move on a handle runs `plugin_deliver_take` and the drag command up to the private pasteboard (files in `Exports/`, `session: test`); the hint text | `no-collapse`: the collapse rule is off, the stage sees three handles at the small size |
 | `deliver-merged` | the merged file has one note track, the notes of all drums, bytes of one track equal the per-drum file | `two-tracks`: the writer makes one track per drum |
@@ -335,16 +347,12 @@ One commit per line or pair, risky parts first. This note is commit 1 (Gate line
 
 1. The dialog exports per source, the handles per row. For a row with several sources the two ways give different files. Move the
    dialog to rows later (a ticket), or keep both. This ticket leaves the dialog as it is.
-2. Eager synthetic spikes cost as much as audio spikes (section 6). Keep eager (owner), or defer above a total size (for example 500 MB).
-3. A row whose sources have different sample rates: the spike file takes the rate of the first source; the audio sum refuses. The
-   alternative is to resample (not built).
-4. The producer does not run the follower refresh. A follower with stale hits is exported stale. A stage with a follower row would show it.
-5. "Drag all" and the limit of 64 files; and whether a DAW takes MIDI and WAV in one drag (the audit says "assumption, test
-   first"). The hand check sheet gets one line for it. If a DAW refuses mixed types, "Drag all" stays and the page text says to drag a kind.
-6. Hard link in `Exports/`: if the volume refuses links, the producer copies. A copy of a 115 MB file at the press can take seconds.
-   It runs in `plugin_deliver_take`, before the drag command, so it is not under the 2 s of `MAIN_WAIT`; but the user waits with the
-   button down. We did not measure it.
-7. Names: the project name of the plugin project is not read yet (the merged file name, section 4).
+2. (Settled by R3: only MIDI is eager.)
+3. A row whose sources have different sample rates: the audio sum refuses with `clips have different sample rates` (R8); the spike
+   takes the rate of the first source.
+4. (Settled by R4: the same refresh as the export.)
+5. Whether a DAW takes MIDI and WAV in one drag ("Drag all"): hand check (R6).
+6. Hard link in `Exports/`: if the volume refuses links, the worker copies; the kind is `preparing` until the copy ends (R5).
 8. The tempo source of a real LUNA session is unknown (section 9). If it is `none`, the MIDI is right only at 120 BPM.
 9. Rows that the page cannot show (`HT.dropped`: every source already the home of another row) get no header, so no handles; the
    toolbar still delivers them. The status line already counts them.
