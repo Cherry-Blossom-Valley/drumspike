@@ -504,6 +504,9 @@ struct DocShared {
     /// M1b8: the rows of the page in song time as the page was told last (the text), and how often they changed.
     rows_pushed: Mutex<Option<String>>,
     rows_gen: AtomicU64,
+    /// M1b8: the gate of the `plugin-regions` messages (at most one in 50 ms, the newest always arrives) and how many changes it was offered (the unit test counts).
+    rows_gate: Arc<Mutex<selection::PushGate>>,
+    rows_pushes: AtomicUsize,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -621,6 +624,8 @@ impl DocShared {
             view_events: AtomicU64::new(0),
             rows_pushed: Mutex::new(None),
             rows_gen: AtomicU64::new(0),
+            rows_gate: Arc::new(Mutex::new(selection::PushGate::default())),
+            rows_pushes: AtomicUsize::new(0),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -1051,23 +1056,51 @@ impl DocShared {
 
     /// M1b8: the answer of `plugin_host_regions`: the rows and the number of their last change.
     fn rows_now(&self) -> Value {
-        self.rows_value().to_json(self.rows_gen.load(Ordering::SeqCst))
+        self.rows_value()
+            .to_json(self.rows_gen.load(Ordering::SeqCst), &self.id())
     }
 
     /// M1b8: a region, a sequence or a round changed: when the rows differ from what the page was told last, the page gets
-    /// the new rows as the event `plugin-regions` (the same answer as `plugin_host_regions`).
+    /// the new rows as the event `plugin-regions` (the same answer as `plugin_host_regions`). The rows are built once; the push
+    /// goes through the gate of the selection (at most one message in 50 ms, the newest state always arrives), because a host
+    /// without an edit cycle calls this for every region it makes.
     fn rows_changed(&self) {
         if crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("no-reload") {
             return; // the fault run: the page is told of no change of the DAW tracks (the way of the display names)
         }
+        let rows = self.rows_value();
         let mut last = self.rows_pushed.lock().unwrap_or_else(|e| e.into_inner());
-        let text = self.rows_value().to_json(0).to_string();
+        let text = rows.to_json(0, "").to_string();
         if last.as_deref() == Some(text.as_str()) {
             return;
         }
         *last = Some(text);
         let gen = self.rows_gen.fetch_add(1, Ordering::SeqCst) + 1;
-        self.page.log.push("plugin-regions", self.rows_value().to_json(gen));
+        if rows.bad > 0 {
+            session().log(json!({"event": "rows_dropped", "doc": self.id(), "clips": rows.bad}).to_string());
+        }
+        let event = rows.to_json(gen, &self.id());
+        drop(last);
+        self.rows_pushes.fetch_add(1, Ordering::SeqCst);
+        let offer =
+            self.rows_gate
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .offer(event, mono_ms(), selection::PUSH_GAP_MS);
+        match offer {
+            selection::Offer::Now(e) => self.page.log.push("plugin-regions", e),
+            selection::Offer::Later { schedule: true } => {
+                let (gate, log) = (self.rows_gate.clone(), self.page.log.clone());
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(selection::PUSH_GAP_MS));
+                    let e = gate.lock().unwrap_or_else(|e| e.into_inner()).take(mono_ms());
+                    if let Some(e) = e {
+                        log.push("plugin-regions", e);
+                    }
+                });
+            }
+            selection::Offer::Later { schedule: false } => {}
+        }
     }
 
     /// M1b10: the tracks of the document as the display name rule needs them: the track name, the
@@ -5915,6 +5948,57 @@ mod tests {
         // a rename or a region change that moves no selection sends nothing
         doc.names_touched();
         assert_eq!(selection_events(&doc).len(), 2);
+    }
+
+    fn region_events(doc: &Arc<DocShared>) -> Vec<Value> {
+        doc.page.log.poll(0, std::time::Duration::from_millis(1))["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["event"] == "plugin-regions")
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn a_burst_of_region_changes_sends_few_rows_and_the_last_state_always_arrives() {
+        let (doc, _k, s) = two_track_doc();
+        // a host without an edit cycle changes a region 500 times in a tight loop: the rows are built once for each change, the page gets few messages
+        for i in 0..500 {
+            s.regions.lock().unwrap()[0].rec.start_play = 10.0 + f64::from(i);
+            doc.rows_changed();
+        }
+        wait_gate();
+        let evs = region_events(&doc);
+        assert!(evs.len() <= 6, "{} messages for 500 changes", evs.len());
+        assert_eq!(
+            doc.rows_pushes.load(Ordering::SeqCst),
+            500,
+            "every change was offered to the gate once"
+        );
+        let last = evs.last().unwrap();
+        assert_eq!(last["payload"]["gen"], json!(500), "the last state arrives");
+        assert_eq!(last["payload"]["doc"], json!(doc.id()));
+        let s_at = last["payload"]["rows"][1]["clips"][0]["s"].as_f64().unwrap();
+        assert_eq!(s_at, 10.0 + 499.0, "and it is the newest rows: {s_at}");
+    }
+
+    #[test]
+    fn a_new_document_starts_its_counter_again_and_names_itself() {
+        let (d1, _k, _s) = two_track_doc();
+        let (d2, _k2, _s2) = two_track_doc();
+        d1.rows_changed();
+        d2.rows_changed();
+        assert_eq!(
+            d1.rows_now()["gen"],
+            d2.rows_now()["gen"],
+            "both count from the same start"
+        );
+        assert_ne!(
+            d1.rows_now()["doc"],
+            d2.rows_now()["doc"],
+            "the page tells them apart by the id of the document"
+        );
     }
 
     #[test]

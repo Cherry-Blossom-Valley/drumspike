@@ -383,8 +383,8 @@ function attachTrackHandlers(row, name) {
   const addAt = (px, snap) => {   // Option-click and double click add a hit; in a DAW only inside a clip
     const p = pointOf(px);
     if (!p) { setMsg("outside every region of this track: no hit is added"); return; }
-    if (HT.fault === "store-song" && p.clip) { addHitAt(p.src, snapSample(xToT(px, laneWidth()), p.src), snap); return; }   // the fault run: the song time is stored
-    addHitAt(p.src, p.t, snap);
+    if (HT.fault === "store-song" && p.clip) { addHitAt(p.src, snapSample(xToT(px, laneWidth()), p.src), snap, p.clip); return; }   // the fault run: the song time is stored
+    addHitAt(p.src, p.t, snap, p.clip);
   };
   let dragState = null;
   function startPanGesture(ev) {
@@ -603,16 +603,21 @@ async function setTrackRole(name, role, apply = {}) {   // apply: {note?, source
   S.tracks[name].note = r.note;
   S.tracks[name].role_source = r.role_source;
   S.tracks[name].role_match = apply.source === "user" || apply.source === "audio" ? null : (apply.role_match ?? S.tracks[name].role_match ?? null);
-  for (const o of HT.srcsOf(name)) {   // #555: the row owns role and note: the other sources of the DAW track get the same (their hits are re-picked at their stored settings)
+  const steps = [{ type: "role", sid, track: name, before: r.previous, after: { role, note: r.note, role_source: r.role_source, role_match: S.tracks[name].role_match } }];
+  let refused = null;
+  if (!apply.op) for (const o of HT.srcsOf(name)) {   // #555: the row owns role and note: the other sources of the DAW track get the same (their hits are re-picked at their stored settings); an undo step applies its own source only (op)
     if (o === name || !S.tracks[o]) continue;
-    try { await B.trackSetRole(sid, o, role, r.note, apply.source ?? null, apply.role_match ?? null, null); S.tracks[o].role = role; S.tracks[o].note = r.note; S.tracks[o].role_source = r.role_source; }
-    catch (e) { setMsg(`role change of ${trackLabel(o)} failed: ${errText(e)}`, "error"); }
+    try {
+      const r2 = await B.trackSetRole(sid, o, role, r.note, apply.source ?? null, apply.role_match ?? null, null);
+      S.tracks[o].role = role; S.tracks[o].note = r2.note; S.tracks[o].role_source = r2.role_source;
+      steps.push({ type: "role", sid, track: o, before: r2.previous, after: { role, note: r2.note, role_source: r2.role_source, role_match: apply.source === "user" || apply.source === "audio" ? null : (apply.role_match ?? S.tracks[o].role_match ?? null) } });   // each source keeps its own previous state (its hand edits come back with the undo)
+    } catch (e) { refused = o; setMsg(`role change of ${trackLabel(o)} failed: ${errText(e)}; the sources before it have the new role (one undo step takes them back)`, "error"); break; }   // a refused source stops the row: the entry holds exactly the sources that changed
   }
   await trReload(!!apply.op, name);   // the lanes, histograms and the panel follow the new role
   refreshHeadRole(name);
-  if (!apply.op) pushUndo({ type: "role", sid, track: name, before: r.previous, after: { role, note: r.note, role_source: r.role_source, role_match: S.tracks[name].role_match } });
+  if (!apply.op) pushGroup(`Set Role (${trackLabel(name)})`, steps);
   insRoleControls(r);
-  setMsg(apply.op ? `${name} is a ${role} track again` : `${name} is now a ${role} track${r.reanalyzed ? " (the hits are re-picked)" : ""}`);
+  if (!refused) setMsg(apply.op ? `${name} is a ${role} track again` : `${name} is now a ${role} track${r.reanalyzed ? " (the hits are re-picked)" : ""}`);
   return true;
 }
 async function roleApplyOp(op, reverse) {   // the undo and the redo of a role change

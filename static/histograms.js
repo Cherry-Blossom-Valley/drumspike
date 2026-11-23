@@ -16,7 +16,7 @@
    ceiling handles of the velocity map and the 20 to 127 ramp over it; the velocities follow live (velOfDb, the core's
    velocity_of_db) and are stored when the handle is let go (one undo step, as Recompute Velocities). A follower shows
    its loudness histogram only. Both canvases draw only on a change: new data, a control, a resize; nothing per frame. */
-const HG = { name: null, p: null, el: null, d: null, lv: new Map(), gen: 0, ghosts: {}, refresh: 0, ro: null, kept: null, draws: 0,
+const HG = { rowBusy: 0, name: null, p: null, el: null, d: null, lv: new Map(), gen: 0, ghosts: {}, refresh: 0, ro: null, kept: null, draws: 0,
   sens: { base: null, want: null, busy: false, n: null, weak: null },   // base: the events and params at the drag start
   vel: { base: null, drag: null } };
 const HG_THUMB = 12;   // px: the slider thumb (style.css .hgRange); the bars sit on the thumb's travel
@@ -248,6 +248,8 @@ function hgStored(name, r, params) {
 }
 async function rowRepick(homeOp, others, params) {   // #555: the same stored re-pick for the other sources of a DAW track; one undo step for all
   const steps = [homeOp], sid = S.sid;
+  HG.rowBusy++;
+  try {
   for (const o of others) {
     try {
       await edIdle(); await settleEvents(o);
@@ -265,6 +267,7 @@ async function rowRepick(homeOp, others, params) {   // #555: the same stored re
     } catch (e) { setMsg(`re-pick of ${trackLabel(o)}: ${errText(e)}`); }
   }
   pushGroup("Re-pick Hits", steps);
+  } finally { HG.rowBusy--; }
   updateStatus();
 }
 function insSensRefresh(p) {   // the slider, its readout and the note after a stored re-pick (the same as buildParamsPanel sets at build)
@@ -299,7 +302,7 @@ function hgSerial(track, call) {
   q[track] = next;
   return next;
 }
-function hgRepickBusy() { return HG.sens.busy || !!HG.sens.want || !!HG.sens.base; }   // a re-pick (or its store) is on its way
+function hgRepickBusy() { return HG.sens.busy || !!HG.sens.want || !!HG.sens.base || HG.rowBusy > 0; }   // #555: also while the other sources of a DAW track are being re-picked or mapped (no newer step lands before the group)   // a re-pick (or its store) is on its way
 function hgUndoWaits(op) {   // round 2: undo and redo of a re-pick step wait while a re-pick is on its way
   if (op && op.type === "group") return op.steps.some(hgUndoWaits);   // #555
   if (!op || (op.type !== "repick" && op.type !== "shift") || !hgRepickBusy()) return false;
@@ -535,6 +538,8 @@ async function hgVelCommit(name, p, lo, hi, cut, fromDrag) {   // a handle let g
 }
 async function rowLoud(homeOp, others, lo, hi, cut) {   // #555: one undo step for the loudness range of all sources of a DAW track
   const steps = [homeOp];
+  HG.rowBusy++;
+  try {
   for (const o of others) {
     try {
       const t = S.tracks[o]; if (!t) continue;
@@ -555,6 +560,7 @@ async function rowLoud(homeOp, others, lo, hi, cut) {   // #555: one undo step f
     } catch (e) { setMsg(`velocities of ${trackLabel(o)}: ${errText(e)}`); }
   }
   pushGroup("Set Loudness Range", steps);
+  } finally { HG.rowBusy--; }
 }
 function hgApplyLoudOp(op, reverse, initial) {   // applyOp of a "loud" step: the floor, ceiling and cut, the velocities and cut marks
   const st = reverse ? op.before : op.after, t = S.tracks[op.track];

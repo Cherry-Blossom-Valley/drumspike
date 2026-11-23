@@ -16,7 +16,8 @@
 
 const HT = {
   rows: [],          // the rows as the plugin gave them
-  gen: 0,            // the change counter of the plugin
+  gen: 0,            // the change counter of the plugin (per document: `doc` names it, a new one starts again)
+  doc: "",
   fault: "",         // the fault runs of the check (DS_ARA_SONG_FAULT, set by the test driver of the plugin, never in a delivery build): leak (the mode is on without the host-mode switch), source-x (hits at source time), no-cut-start (the mapping ignores a, where a clip starts in its source), home-only (a row draws and edits its first source only), store-song (an added hit is stored with its song time), selected-track (the follow maps through the first clip of the selected row)
   view: [],          // [{row, home, srcs, clips}] for the rows that have a home source in this project
   homeOf: new Map(), // source key -> its entry (the row it is the home of)
@@ -30,7 +31,8 @@ HT.on = () => (hostMode() || HT.fault === "leak") && HT.view.length > 0;
 /* Take the answer of plugin_host_regions or the payload of plugin-regions. Returns true when the rows changed. */
 HT.apply = function (p) {
   if (!p || typeof p !== "object" || !Array.isArray(p.rows)) return false;
-  if (Number.isFinite(p.gen) && p.gen < HT.gen) return false;   // an older message
+  if (typeof p.doc === "string" && p.doc !== HT.doc) { HT.doc = p.doc; HT.gen = 0; }   // a new document of the plugin counts its changes from 0 again
+  if (Number.isFinite(p.gen) && p.gen < HT.gen) return false;   // an older message of this document
   const fin = Number.isFinite;
   const rows = [];
   for (const r of p.rows) {
@@ -112,6 +114,20 @@ HT.hitRefs = function (clips, events, t0, t1, skip) {
   }
   return out;
 };
+/* A time of a source kept inside the clip that holds `from` (the nudge and the add stay in their clip): to is returned as it is when the mode is off or no
+   clip holds `from`. The last sample of a clip is b - 1/sr. */
+HT.clampTo = function (src, from, to) {
+  if (!HT.on()) return to;
+  const sr = (S.tracks[src] && S.tracks[src].sr) || 48000;
+  for (const e of HT.view) for (const c of e.clips) if (c.src === src && from >= c.a && from < c.b) return Math.max(c.a, Math.min(to, c.b - 1 / sr));
+  return to;
+};
+HT.clampInto = function (c, t, sr) { return Math.max(c.a, Math.min(t, c.b - 1 / (sr || 48000))); };
+/* The song range of a range [t0, t1] of one source: through the first clip of any row that holds t0; null when none does. */
+HT.songRange = function (src, t0, t1) {
+  for (const e of HT.view) for (const c of e.clips) if (c.src === src && t0 >= c.a && t0 < c.b) return [HT.toSong(c, t0), HT.toSong(c, Math.min(t1, c.b))];
+  return null;
+};
 /* The song time of a hit of a source: through the first clip (in the order of the song) of any row that holds it; null when no clip does. */
 HT.songTime = function (src, t) {
   for (const e of HT.view) for (const c of e.clips) if (c.src === src && t >= c.a && t < c.b) return HT.toSong(c, t);
@@ -143,15 +159,15 @@ HT.outsideCount = function () {
 HT.noteOutside = function () {
   if (typeof document === "undefined") return;
   let el = document.getElementById("hostOutsideNote");
-  const n = HT.on() ? HT.outsideCount() : 0;
-  if (!n) { if (el) el.remove(); return; }
-  if (!el) { el = document.createElement("span"); el.id = "hostOutsideNote"; el.style.color = "#8a93a3"; el.title = "Hits that lie outside every clip of their DAW track are kept but not shown, and they are not in the files of the export"; const st = document.getElementById("stSel"); st.parentNode.insertBefore(el, st.nextSibling); }
-  el.textContent = ` · ${n} ${n === 1 ? "hit" : "hits"} outside every clip`;
+  const n = HT.on() ? HT.outsideCount() : 0, d = HT.on() ? HT.dropped : 0;
+  if (!n && !d) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement("span"); el.id = "hostOutsideNote"; el.style.color = "#8a93a3"; el.title = "Hits that lie outside every clip of their DAW track are kept but not shown, and they are not in the files of the export. A DAW track that has no row of its own (its source is the first source of an earlier track) is counted too"; const st = document.getElementById("stSel"); st.parentNode.insertBefore(el, st.nextSibling); }
+  el.textContent = (n ? ` · ${n} ${n === 1 ? "hit" : "hits"} outside every clip` : "") + (d ? ` · ${d} DAW ${d === 1 ? "track" : "tracks"} not shown` : "");
 };
 /* The DOM: the rows of merged sources are hidden, the header of a row shows the name of the DAW track. Called after the rows changed and
    after the page built its rows again. */
 HT.paint = function () {
-  if (typeof document === "undefined") return;
+  if (typeof document === "undefined" || (!hostMode() && HT.fault !== "leak")) return;   // the standalone page gets no attribute and no class from here
   const on = HT.on();
   for (const row of document.querySelectorAll(".track")) {
     const n = row.dataset.name;

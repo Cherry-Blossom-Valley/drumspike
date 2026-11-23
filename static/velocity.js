@@ -132,10 +132,10 @@ function vlBind(row, name) {
   let hitSrc = name;   // the source of the stalk that hitAt found
   let cur = name;   // #555: the source that a gesture edits: in a DAW the source of the clip that holds the hit (standalone: this track)
   const evs = () => S.events[cur] || [];
-  const hitsOf = (t0, t1) => {   // the hits of the current source in [t0, t1] of the page time: [{i, t}] (t on the page)
+  const hitsOf = (t0, t1, skip) => {   // the hits of the current source in [t0, t1] of the page time: [{i, t}] (t on the page); skip is the hit that the old call left out (here -1: none)
     const clips = HT.clips(name);
     if (clips) return HT.hitRefs(clips, S.events, t0, t1, hitDrag).filter(r => r.src === cur);
-    return hitsIn(evs(), t0, t1, dragSkip(name)).map(i => ({ i, t: evs()[i].t }));
+    return hitsIn(evs(), t0, t1, skip).map(i => ({ i, t: evs()[i].t }));
   };
   const hitAt = px => {
     const W = laneWidth(), t = xToT(px, W), d = 4 * viewDur() / W, clips = HT.clips(name);
@@ -168,7 +168,7 @@ function vlBind(row, name) {
     const W = laneWidth(), evsL = evs();
     const fOf = x => (x1 === x0 ? 1 : (x - x0) / (x1 - x0));
     const ta = Math.min(xToT(x0, W), xToT(x1, W)), tb = Math.max(xToT(x0, W), xToT(x1, W));
-    for (const { i, t } of hitsOf(ta, tb)) {
+    for (const { i, t } of hitsOf(ta, tb, -1)) {
       const v = Math.round(v0 + (v1 - v0) * fOf(tToX(t, W)));
       const id = evsL[i].id;
       if (!VL.drag.set.has(id)) VL.drag.set.set(id, [evsL[i].v, evsL[i].v, hitWas(evsL[i])]);   // R05: the field presence before the gesture
@@ -205,7 +205,7 @@ function vlBind(row, name) {
         setRange(tToX(d.t0, W2), vlVOf(d.y0, H), d.curX, vlVOf(d.curY, H));
       } else if (d.mode === "free") {
         const v = vlVOf(d.curY, H);
-        for (const { i, t } of hitsOf(S.view.t0 - 1e-6, S.view.t1 + 1e-6)) {   // the hits crossed since the last move
+        for (const { i, t } of hitsOf(S.view.t0 - 1e-6, S.view.t1 + 1e-6, -1)) {   // the hits crossed since the last move
           const x = tToX(t, W2);
           if (Math.abs(x - d.curX) < 4) {
             const id = evsL[i].id;

@@ -114,7 +114,11 @@ function hostSelScrollTo(ranges) {
 }
 
 function hostSelRange(list, reveal) {
-  const rs = (Array.isArray(list) ? list : []).filter(r => r && Number.isFinite(r.t0) && Number.isFinite(r.t1) && r.t1 > r.t0).map(r => ({ t0: r.t0, t1: r.t1 }));
+  let rs = (Array.isArray(list) ? list : []).filter(r => r && Number.isFinite(r.t0) && Number.isFinite(r.t1) && r.t1 > r.t0).map(r => ({ t0: r.t0, t1: r.t1 }));
+  if (HT.fault === "range-source") {   // the fault run: the range of the DAW is shown in the source time of the first clip of the selected row (the old rule of #562)
+    const e = HT.view.find(x => x.srcs.includes(S.selTrack)), c = e && e.clips[0];
+    if (c) rs = rs.map(r => ({ t0: r.t0 - c.s + c.a, t1: r.t1 - c.s + c.a }));
+  }
   HS.ranges = rs;
   hostSelPaint();
   if (rs.length && reveal) hostSelScrollTo(rs);

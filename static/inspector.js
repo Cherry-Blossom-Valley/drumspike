@@ -241,7 +241,11 @@ function buildParamsPanel(div, name, p) {
 async function saveMetaNote(name) {
   try {
     await B.setNote(S.sid, name, S.tracks[name].note);
-    for (const o of HT.srcsOf(name)) if (o !== name && S.tracks[o]) { S.tracks[o].note = S.tracks[name].note; await B.setNote(S.sid, o, S.tracks[name].note); }   // #555: the row owns the note
+    for (const o of HT.srcsOf(name)) {   // #555: the row owns the note (a note has no undo step: nothing to restore); a refusal of one source says which
+      if (o === name || !S.tracks[o]) continue;
+      try { await B.setNote(S.sid, o, S.tracks[name].note); S.tracks[o].note = S.tracks[name].note; }
+      catch (e) { setMsg(`note of ${trackLabel(o)} failed: ${errText(e)}`, "error"); }
+    }
     setDirtyState(true);
   }
   catch(e) { setMsg(`note failed: ${e.message}`, "error"); }

@@ -485,7 +485,7 @@
   function songFaults() { HT.fault = T.song || ""; }   // the fault runs are in the page (static/hosttime.js reads the flag); the driver only sets it
   async function songDraw(answer, upto) {   // what the page draws for the rows the plugin gave: one entry for each hit that the clips hold, and each one outside them
     setView(0, upto); invalidate(F.VIEW); flushFrame();
-    await new Promise(function (r) { setTimeout(r, 500); });
+    for (var w0 = 0; w0 < 50 && (FR.raf || FR.flags !== 0); w0++) await new Promise(function (r) { setTimeout(r, 100); });   // the frame that draws the view is done
     var W = laneWidth(), dpr = GEO.dpr, rows = {};
     answer.rows.forEach(function (r) {
       var home = r.srcs[0], cv = document.querySelector('.track[data-name="' + CSS.escape(home) + '"] canvas.spike'), cx = cv.getContext("2d"), hits = [], outside = [];
@@ -524,15 +524,15 @@
       if (T.arg === "edit") {
         dbl(c1.s + 0.6);   // 0.6 s into the second clip: source time c1.a + 0.6
         for (var w = 0; w < 50 && (S.events[c1.src] || []).length === n0; w++) await sleepM(100);
-        out.added_at = (S.events[c1.src] || []).map(function (e) { return e.t; }).filter(function (t, i, all) { return i >= 0; });
+        out.added_at = (S.events[c1.src] || []).map(function (e) { return e.t; });
         out.want_src_t = c1.a + 0.6; out.want_song_t = c1.s + 0.6;
-        await sleepM(500);
+        for (var w1 = 0; w1 < 30 && (FR.raf || FR.flags !== 0); w1++) await sleepM(100);
         dbl(gapT);
-        await sleepM(800);
+        for (var w2 = 0; w2 < 30 && !/outside every region/.test((document.getElementById("stMsg") || {}).textContent || ""); w2++) await sleepM(100);
         out.gap_msg = (document.getElementById("stMsg") || {}).textContent;
       }
       out.n_before = n0; out.n_after = (S.events[c1.src] || []).length; out.home_before = nh; out.home_after = (S.events[home] || []).length; out.src = c1.src;
-      await sleepM(4500);   // the plugin takes the edit into its notes
+      await sleepM(4500);   // the plugin takes the edit into its notes: no condition that the page can read (the host waits for the row page_sync as well)
       post(Object.assign({ kind: "song-after", edit: out }, await songSnap(8)));
       return;
     }

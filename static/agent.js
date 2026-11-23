@@ -52,7 +52,7 @@
   function select(track, index) {
     if (S.selTrack !== track) setSelTrack(track);
     S.sel = { track, index };
-    S.playhead = snapSample(S.events[track][index].t, track);
+    S.playhead = HT.on() ? (HT.songTime(track, S.events[track][index].t) ?? S.playhead) : snapSample(S.events[track][index].t, track);   // #555: the playhead is song time
     updateStatus();
   }
 

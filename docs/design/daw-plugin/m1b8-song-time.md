@@ -212,3 +212,22 @@ Out: tempo and bars from the host, time stretch (warp markers), loop, row-wide L
   the row that shows it, Tab on a row walks the hits of all its sources in song order, the review queue (D) takes the hits of
   merged sources with their DAW track and puts the playhead at the song time of the hit.
 - **Not built.** Learn on a row (see above). A source that is the home of two rows shows its first row only.
+
+## 11. Review round (PR 585)
+
+- **Menu Add Hit at the playhead** goes through the clip under the playhead (`HT.toSource`), to the source of that clip, in source time; no clip: no hit and one text. The add by double click or Option-click, and the
+  nudge, keep the hit inside its clip (`HT.clampInto`, `HT.clampTo`; an attack snap that lands past the edge is moved back into the clip by a second step).
+- **Tab** does not snap a song time to the grid of one source (the compare finds the same hit again otherwise); same for the review queue.
+- **Role of a row:** each source keeps its own `previous` (its hits, its hand edits); the change is ONE group step of `role` steps; a source that refuses stops the row,
+  the entry holds exactly the sources that changed, and one text names the refused source. An undo step applies its own source only.
+  A note has no undo step; a refusal of one source says which.
+- **Group undo is all or nothing:** a refused step takes the steps applied before it back. `hgRepickBusy()` stays true until every source of the row answered
+  (`HG.rowBusy`), so no newer step lands before the group.
+- **Readers of the playhead and of a hit time:** Go to End is `HT.songEnd()`; the zoom toggle and the review queue use song time; the tempo map (Set Bar 1 at Playhead), the
+  markers (M, Option+M) are in the time of the audio of each source and are inert in a DAW with one text; `agent.js` select uses song time.
+- **Plugin cost:** `rows_changed` builds the rows once and pushes through the 50 ms gate of the selection (the newest state always arrives); a unit test makes 500 changes.
+- **Bad values:** a clip with a value that is not finite, or a stretch outside 1/64 to 64, is dropped and counted; one log row `rows_dropped` says how many.
+- **New document:** the payload names its document (`doc`); the page starts counting again when the id changes (the counter of a new `DocShared` starts at 0).
+- **Selection band** at the song position of an offset clip: the page test `test_the_range_of_the_daw_stands_at_the_song_position_of_an_offset_clip` with the fault flag `range-source`
+  (the removed selection faults of the plugin are replaced by it).
+- **`HT.dropped`** (a track with no row of its own) is shown in the status line: "N DAW tracks not shown".

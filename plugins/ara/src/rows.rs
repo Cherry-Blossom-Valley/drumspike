@@ -94,6 +94,28 @@ pub struct Rows {
     pub gone: Vec<String>,
     /// The end of the last clip in the song.
     pub song_end: f64,
+    /// Clips dropped for a value that is not finite or a stretch outside [`K_MIN`, `K_MAX`] (the plugin writes one log row).
+    pub bad: usize,
+}
+
+/// The stretch of a clip (`dur_play / dur_mod`) must lie in this range: a host that stretches a clip by more is not a stretch the page can draw.
+pub const K_MIN: f64 = 1.0 / 64.0;
+pub const K_MAX: f64 = 64.0;
+
+fn k_of(r: &RegionFact) -> f64 {
+    if r.dur_play > 0.0 {
+        r.dur_play / r.dur_mod
+    } else {
+        1.0
+    }
+}
+
+/// A region the page can draw: finite numbers and a stretch in range (a length of 0 or less is no clip, as before, and is not counted).
+fn drawable(r: &RegionFact) -> bool {
+    [r.start_mod, r.dur_mod, r.start_play, r.dur_play]
+        .iter()
+        .all(|v| v.is_finite())
+        && (K_MIN..=K_MAX).contains(&k_of(r))
 }
 
 /// A name for a row: the name of the sequence, else the name of its first region, else the key of its first source. `nf` is the fault run
@@ -140,7 +162,12 @@ pub fn build_with(sources: &[SrcFacts], seqs: &HashMap<u64, SeqFact>, nf: crate:
             out.gone.push(src.key.clone());
             continue;
         }
-        let usable: Vec<&RegionFact> = src.regions.iter().filter(|r| r.dur_mod > 0.0).collect();
+        let usable: Vec<&RegionFact> = src.regions.iter().filter(|r| r.dur_mod > 0.0 && drawable(r)).collect();
+        out.bad += src
+            .regions
+            .iter()
+            .filter(|r| !(r.dur_mod.is_finite() && r.dur_mod <= 0.0) && !drawable(r))
+            .count();
         let mut place = |id: String, group: u8, seq_id: u64, clip: Clip| {
             let at = *index.entry(id.clone()).or_insert_with(|| {
                 let q = seqs.get(&seq_id);
@@ -166,7 +193,7 @@ pub fn build_with(sources: &[SrcFacts], seqs: &HashMap<u64, SeqFact>, nf: crate:
             let clip = Clip {
                 src: src.key.clone(),
                 a: 0.0,
-                b: src.len_s.max(0.0),
+                b: if src.len_s.is_finite() { src.len_s.max(0.0) } else { 0.0 },
                 s: 0.0,
                 k: 1.0,
             };
@@ -174,7 +201,7 @@ pub fn build_with(sources: &[SrcFacts], seqs: &HashMap<u64, SeqFact>, nf: crate:
             continue;
         }
         for r in usable {
-            let k = if r.dur_play > 0.0 { r.dur_play / r.dur_mod } else { 1.0 };
+            let k = k_of(r);
             let clip = Clip {
                 src: src.key.clone(),
                 a: r.start_mod,
@@ -221,9 +248,11 @@ pub fn build_with(sources: &[SrcFacts], seqs: &HashMap<u64, SeqFact>, nf: crate:
 impl Rows {
     /// The answer of `plugin_host_regions` and the payload of the page event `plugin-regions`.
     #[must_use]
-    pub fn to_json(&self, gen: u64) -> Value {
+    pub fn to_json(&self, gen: u64, doc: &str) -> Value {
         json!({
             "gen": gen,
+            "n": gen,
+            "doc": doc,
             "rows": self.rows.iter().map(|r| json!({
                 "id": r.id, "name": r.name, "srcs": r.srcs,
                 "clips": r.clips.iter().map(|c| json!({"src": c.src, "a": c.a, "b": c.b, "s": c.s, "k": c.k})).collect::<Vec<_>>(),
@@ -372,13 +401,41 @@ mod tests {
     }
 
     #[test]
+    fn a_clip_with_a_value_that_is_not_finite_or_a_stretch_out_of_range_is_dropped_and_counted() {
+        let mut nan = reg(1, 0.0, 4.0, 0.0);
+        nan.start_play = f64::NAN;
+        let mut inf = reg(1, 0.0, 4.0, 0.0);
+        inf.dur_play = f64::INFINITY;
+        let mut wild = reg(1, 0.0, 1.0, 0.0);
+        wild.dur_play = 1e6;
+        let mut tiny = reg(1, 0.0, 1.0, 0.0);
+        tiny.dur_play = 1e-6;
+        let ok = reg(1, 0.0, 4.0, 2.0);
+        let r = build(&[src("a", 0, vec![nan, inf, wild, tiny, ok])], &HashMap::new());
+        assert_eq!(r.bad, 4);
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.rows[0].clips.len(), 1);
+        assert!(r.song_end.is_finite());
+        // a source whose every region is bad has no usable region: the identity clip
+        let r = build(&[src("b", 0, vec![reg(1, f64::NAN, 1.0, 0.0)])], &HashMap::new());
+        assert_eq!((r.bad, r.rows[0].id.as_str()), (1, "s0"));
+        // a stretch at the edges of the range is still drawn
+        let mut edge = reg(1, 0.0, 1.0, 0.0);
+        edge.dur_play = K_MAX;
+        assert_eq!(build(&[src("c", 0, vec![edge])], &HashMap::new()).bad, 0);
+    }
+
+    #[test]
     fn the_json_answer_has_the_shape_the_page_reads() {
         let r = build(
             &[src("a", 0, vec![reg(7, 1.0, 4.0, 2.0)])],
             &HashMap::from([(7, seq("Kick", 0))]),
         );
-        let v = r.to_json(3);
-        assert_eq!(v["gen"], 3);
+        let v = r.to_json(3, "d");
+        assert_eq!(
+            (v["gen"].clone(), v["n"].clone(), v["doc"].clone()),
+            (json!(3), json!(3), json!("d"))
+        );
         assert_eq!(v["rows"][0]["clips"][0]["s"], 2.0);
         assert_eq!(v["rows"][0]["srcs"][0], "a");
         assert_eq!(v["song_end"], 6.0);

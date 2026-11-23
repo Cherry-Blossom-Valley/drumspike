@@ -229,7 +229,7 @@ def test_a_click_on_a_track_in_the_page_calls_no_host_selection(host):
     host.click(f'.track[data-name="{NAMES[2]}"] .thead .tname')
     assert state(host)["sel"] == NAMES[2]
     after = host.invokes[n0:]
-    assert not [c for c in after if c.startswith("plugin_host_") and c != "plugin_host_track"], after
+    assert not [c for c in after if c.startswith("plugin_host_")], after
 
 
 # ---------- the standalone page ----------

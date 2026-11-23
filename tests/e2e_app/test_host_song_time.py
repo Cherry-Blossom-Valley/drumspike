@@ -416,3 +416,186 @@ def test_the_standalone_status_line_has_no_outside_note(app, make_project):
     open_project(app, make_project(tracks=TRACKS, seconds=6.0))
     app.evaluate("() => updateStatus()")
     assert app.evaluate("() => document.getElementById('hostOutsideNote')") is None
+
+
+# ---------------------------------------------------------------- review round: the playhead, Tab, role undo, clamps, readers of the playhead
+
+def test_add_hit_at_the_playhead_goes_to_the_source_of_the_clip_under_it_in_source_time(host):
+    a, b = NAMES[0], NAMES[1]
+    p = rows_payload()
+    p["rows"][0]["clips"][1].update({"a": 0.0, "b": 3.0, "s": 10.0})   # the second source at song 10 s, from the start of its audio
+    take(host, p)
+    n_a, n_b = host.evaluate("([a, b]) => [S.events[a].length, S.events[b].length]", [a, b])
+    host.evaluate("([a]) => { setSelTrack(a); S.playhead = 11.2; addHitAtPlayhead(); }", [a])
+    host.wait_for_function("([b, n]) => S.events[b].length === n", arg=[b, n_b + 1])
+    got = host.evaluate("([a, b]) => ({ a: S.events[a].length, t: S.events[b].map(e => e.t) })", [a, b])
+    assert got["a"] == n_a
+    assert any(abs(t - 1.2) <= 1 / 48000 + 1e-9 for t in got["t"]), f"stored in source time 11.2 - 10.0: {got['t']}"
+    assert not any(abs(t - 11.2) < 0.01 for t in got["t"])
+    host.evaluate("() => { S.playhead = 7.0; addHitAtPlayhead(); }")   # no clip of the row holds song 7 s
+    wait_idle(host)
+    assert host.evaluate("([a, b]) => [S.events[a].length, S.events[b].length]", [a, b]) == [n_a, n_b + 1]
+    assert "outside every region" in host.evaluate("() => document.getElementById('stMsg').textContent")
+
+
+def test_the_store_song_fault_stores_the_song_time_of_the_playhead(host):
+    a, b = NAMES[0], NAMES[1]
+    moved = rows_payload()
+    moved["rows"][0]["clips"][1].update({"a": 0.0, "b": 3.0, "s": 3.5})
+    take(host, moved)
+    n_b = host.evaluate("([b]) => S.events[b].length", [b])
+    host.evaluate("([a]) => { HT.fault = 'store-song'; setSelTrack(a); S.playhead = 4.0; addHitAtPlayhead(); }", [a])
+    host.wait_for_function("([b, n]) => S.events[b].length === n", arg=[b, n_b + 1])
+    host.evaluate("() => { HT.fault = ''; }")
+    assert host.evaluate("([b]) => S.events[b].some(e => Math.abs(e.t - 4.0) < 0.01)", [b]), "store-song: the song time was stored as source time"
+
+
+def tab_walk(page, a, steps):
+    out = []
+    for d in steps:
+        page.evaluate("d => gotoEvent(d)", d)
+        out.append(page.evaluate("() => [S.sel.track, S.sel.index]"))
+    return out
+
+
+def tab_rows(s_a, s_b):
+    a, b = NAMES[0], NAMES[1]
+    return {"gen": 1, "song_end": 12.0, "gone": [], "rows": [{"id": "q1", "name": "Drums", "srcs": [a, b], "clips": [
+        {"src": a, "a": 0.0, "b": 2.0, "s": s_a, "k": 1.0}, {"src": b, "a": 0.0, "b": 1.0, "s": s_b, "k": 1.0}]}]}
+
+
+def test_tab_and_shift_tab_walk_the_hits_of_two_clips_at_an_offset_that_is_not_on_the_sample_grid(host):
+    a, b = NAMES[0], NAMES[1]
+    take(host, tab_rows(0.1234567, 5.1234))   # the song times 0.6234567, 1.6234567 and 5.6234 are not on the grid of 48 kHz
+    host.evaluate("([a]) => { setSelTrack(a); S.playhead = 0; }", [a])
+    fwd = tab_walk(host, a, [1, 1, 1])
+    assert fwd == [[a, 0], [a, 1], [b, 0]], "Tab visits each hit once, in song order"
+    back = tab_walk(host, a, [-1, -1])
+    assert back == [[a, 1], [a, 0]], "Shift-Tab walks back over the same hits"
+    assert host.evaluate("() => S.playhead") == pytest.approx(0.6234567, abs=1e-12), "the playhead is the song time, not snapped"
+
+
+def test_the_snap_song_fault_makes_tab_find_the_same_hit_again(host):
+    a, b = NAMES[0], NAMES[1]
+    take(host, tab_rows(0.1234567, 5.1234))
+    host.evaluate("([a]) => { HT.fault = 'snap-song'; setSelTrack(a); S.playhead = 0; }", [a])
+    fwd = tab_walk(host, a, [1, 1, 1])
+    back = tab_walk(host, a, [-1, -1])
+    host.evaluate("() => { HT.fault = ''; }")
+    assert fwd != [[a, 0], [a, 1], [b, 0]] or back != [[a, 1], [a, 0]], f"the old snap makes the walk stop or repeat: {fwd} {back}"
+
+
+def test_a_role_change_of_a_row_is_one_undo_step_that_brings_back_the_hits_of_every_source(host2):
+    a, b = A2, B2
+    host2.evaluate("([b]) => { addHitAt(b, 5.55, false); }", [b])
+    host2.wait_for_function("([b]) => S.events[b].some(e => Math.abs(e.t - 5.55) < 0.002)", arg=[b])
+    wait_idle(host2)
+    before = host2.evaluate("([a, b]) => [S.events[a].map(e => e.t.toFixed(6)).join(), S.events[b].map(e => e.t.toFixed(6)).join(), S.tracks[a].role, S.tracks[b].role]", [a, b])
+    n0 = host2.evaluate("() => S.undo.length")
+    assert host2.evaluate("async ([a]) => await setTrackRole(a, 'tom')", [a]) is True
+    assert host2.evaluate("() => { const o = S.undo[S.undo.length - 1]; return [o.type, o.steps.map(x => x.track), S.undo.length]; }") == ["group", [a, b], n0 + 1]
+    assert host2.evaluate("([a, b]) => [S.tracks[a].role, S.tracks[b].role]", [a, b]) == ["tom", "tom"]
+    assert host2.evaluate("async () => await undoRedo(true)") is True
+    wait_idle(host2)
+    after = host2.evaluate("([a, b]) => [S.events[a].map(e => e.t.toFixed(6)).join(), S.events[b].map(e => e.t.toFixed(6)).join(), S.tracks[a].role, S.tracks[b].role]", [a, b])
+    assert after == before, "one undo: the roles and the hits of both sources, the hand edit of the second included"
+    assert host2.evaluate("() => S.undo.length") == n0
+
+
+def test_a_group_step_that_is_refused_takes_the_applied_steps_back(host):
+    out = host.evaluate("""async () => {
+      const calls = [], keep = window.applyOp;
+      window.applyOp = (s, rev) => { calls.push([s.id, rev]); return s.id === 'first' ? false : true; };
+      const r = await groupApplyOp({ type: 'group', steps: [{ id: 'first' }, { id: 'second' }] }, true);   // an undo takes the last step first
+      window.applyOp = keep;
+      return { r, calls }; }""")
+    assert out["r"] is False
+    assert out["calls"] == [["second", True], ["first", True], ["second", False]], "the refused step takes the one before it back"
+
+
+def test_the_nudge_and_the_add_stay_inside_the_clip(host):
+    a, b = NAMES[0], NAMES[1]
+    p = rows_payload()
+    p["rows"][0]["clips"][1].update({"a": 1.0, "b": 2.6, "s": 10.0})
+    take(host, p)
+    # the hit at 2.5 s of the second source: a nudge of +10000 samples stops at the last sample of the clip (2.6 s - 1 sample)
+    idx = host.evaluate("([b]) => S.events[b].findIndex(e => Math.abs(e.t - 2.5) < 0.01)", [b])
+    host.evaluate("([b, i]) => { setSelTrack(S.order[0]); S.sel = { track: b, index: i }; nudgeSelected(10000); }", [b, idx])
+    host.wait_for_function("([b]) => S.events[b].some(e => Math.abs(e.t - (2.6 - 1 / 48000)) < 1e-6)", arg=[b])
+    n_b = host.evaluate("([b]) => S.events[b].length", [b])
+    host.evaluate("([b]) => { addHitAt(b, 99, false, HT.clips(S.order[0]).find(c => c.src === b)); }", [b])
+    host.wait_for_function("([b, n]) => S.events[b].length === n", arg=[b, n_b + 1])
+    assert host.evaluate("([b]) => Math.max(...S.events[b].map(e => e.t)) < 2.6", [b]), "an add past the end of the clip lands at its last sample"
+
+
+def test_the_readers_of_the_playhead_in_a_daw_use_song_time_or_are_inert(host):
+    a, b = NAMES[0], NAMES[1]
+    take(host, rows_payload())
+    assert host.evaluate("() => projectEnd()") == 12.0, "Go to End is the end of the song"
+    host.evaluate("() => goTo(projectEnd())")
+    assert host.evaluate("() => S.playhead") == 12.0
+    # the zoom toggle on a selected hit of the second source centres on its song time (10.5 s), not on its source time (1.5 s)
+    idx = host.evaluate("([b]) => S.events[b].findIndex(e => Math.abs(e.t - 1.5) < 0.01)", [b])
+    host.evaluate("([a, b, i]) => { setSelTrack(a); S.sel = { track: b, index: i }; S.zoomBack = null; zoomToggle(); }", [a, b, idx])
+    mid = host.evaluate("() => (S.view.t0 + S.view.t1) / 2")
+    assert abs(mid - 10.5) < 0.01, mid
+    # the tempo map and the markers are in the time of each source: inert in a DAW, with one text
+    assert host.evaluate("() => setBar1AtPlayhead()") is None
+    assert "the DAW owns" in host.evaluate("() => document.getElementById('stMsg').textContent")
+    assert host.evaluate("async () => await markerAtSelection()") is False
+    host.evaluate("() => { MK.list = [{ t: 1.0 }]; markerJump(1); }")
+    assert "the DAW owns the markers" in host.evaluate("() => document.getElementById('stMsg').textContent")
+    host.evaluate("() => { MK.list = []; }")
+
+
+def test_a_new_document_of_the_plugin_is_accepted_and_an_older_message_of_the_same_document_is_not(host):
+    p = rows_payload(5)
+    p["doc"] = "d1"
+    assert take(host, p) is True
+    older = rows_payload(3)
+    older["doc"] = "d1"
+    older["rows"][0]["name"] = "Old"
+    assert take(host, older) is False, "an older counter of the same document is dropped"
+    fresh = rows_payload(1)
+    fresh["doc"] = "d2"
+    fresh["rows"][0]["name"] = "New document"
+    assert take(host, fresh) is True, "a new document counts from 0 again"
+    assert host.evaluate("() => HT.rows[0].name") == "New document"
+
+
+def test_the_range_of_the_daw_stands_at_the_song_position_of_an_offset_clip(host):
+    a = NAMES[0]
+    p = rows_payload()
+    p["rows"][0]["clips"][0].update({"a": 0.0, "b": 3.0, "s": 4.0})   # the first source lies at song 4 s
+    take(host, p)
+    host.evaluate("() => { setView(0, 12); DSHostSel.setFollow(true); }")
+    sel = {"n": 50, "seen": True, "tracks": [], "none": False, "ranges": [{"t0": 5.0, "t1": 6.0}], "range_why": "ok", "hidden": []}
+    host.evaluate("p => DSHostSel.event(p)", sel)
+    wait_idle(host)
+    got = host.evaluate("""() => { const b = document.querySelector('#hostRange .hostBand'), r = b.getBoundingClientRect(), e = document.getElementById('editor').getBoundingClientRect();
+      return { t0: DSHostSel.state().range.t0, left: r.left - e.left, want: S.theadW + tToX(5.0, laneWidth()) }; }""")
+    assert got["t0"] == 5.0 and abs(got["left"] - got["want"]) <= 1.5, got
+    host.evaluate("() => { HT.fault = 'range-source'; }")
+    host.evaluate("p => DSHostSel.event({ ...p, n: 51, ranges: [{ t0: 5.1, t1: 6.0 }] })", sel)
+    wait_idle(host)
+    fault = host.evaluate("() => DSHostSel.state().range.t0")
+    host.evaluate("() => { HT.fault = ''; }")
+    assert abs(fault - 5.1) > 1.0, f"range-source: the range was shown in the source time of the clip: {fault}"
+
+
+def test_a_track_that_has_no_row_of_its_own_is_counted_in_the_status_line(host):
+    a, b = NAMES[0], NAMES[1]
+    p = rows_payload()
+    p["rows"].insert(1, {"id": "q9", "name": "Second", "srcs": [a], "clips": [{"src": a, "a": 0.0, "b": 3.0, "s": 20.0, "k": 1.0}]})   # the first source sits on a second DAW track as well
+    take(host, p)
+    assert host.evaluate("() => HT.dropped") == 1
+    host.evaluate("() => updateStatus()")
+    assert "1 DAW track not shown" in host.evaluate("() => document.getElementById('hostOutsideNote').textContent")
+
+
+def test_the_standalone_page_has_no_row_attribute(app, make_project):
+    open_project(app, make_project(tracks=TRACKS, seconds=6.0))
+    app.evaluate("p => HT.take(p)", rows_payload())
+    app.wait_for_function("() => !FR.raf && FR.flags === 0")
+    assert app.evaluate("() => document.querySelectorAll('.track[data-host-row]').length") == 0
+    app.evaluate("() => { HT.rows = []; HT.gen = 0; HT.rebuild(); }")

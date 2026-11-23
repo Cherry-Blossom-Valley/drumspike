@@ -53,7 +53,7 @@ function gotoEvent(dir, forceGlobal) {
     if (!target) { setMsg(trackFilter ? `start of ${trackFilter} events` : "no previous event"); return; }
   }
   S.sel = {track: target.track, index: target.index};
-  S.playhead = snapSample(target.t, target.track);
+  S.playhead = HT.on() && HT.fault !== "snap-song" ? target.t : snapSample(target.t, target.track);   // snap-song: the fault run (the old rule)   // #555: a song time is not snapped to the grid of one source: the compare above finds the same hit again
   centerOn(S.playhead);
   updateStatus();   // the status bar: "track: hit n/N"; the info line has the rest
   if (SETTINGS().ui.auditionTab && !S.playing && !hostMode()) audition(false, { track: target.track, t: target.t });   // P4-40d: Audition on Tab
@@ -96,7 +96,7 @@ async function reviewStep(dir) {   // Hits > Next Doubtful Hit (dir 1), Previous
   if (i < 0) { setMsg("no earlier doubtful hits"); return; }
   const p = q[i];
   S.sel = { track: p.track, index: S.events[p.track].indexOf(p.e) };
-  S.playhead = snapSample(HT.on() ? HT.songTime(p.track, p.e.t) : p.e.t, p.track);   // #555: the playhead is song time
+  S.playhead = HT.on() ? HT.songTime(p.track, p.e.t) : snapSample(p.e.t, p.track);   // #555: the playhead is song time, not snapped
   centerOn(S.playhead);
   updateStatus();
   setMsg(`doubtful hit ${i + 1} of ${q.length}`);

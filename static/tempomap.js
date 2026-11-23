@@ -448,6 +448,7 @@ function tmSetBar1(t) {
 }
 function setBar1AtPlayhead() {   // Track > Set Bar 1 at Playhead: the selected hit's time when a hit is selected, else the playhead
   if (!needProject()) return null;
+  if (HT.on()) { setMsg("the tempo map is in the time of the audio of each source: the DAW owns the tempo and the bars"); return null; }   // #555: inert in a DAW (the playhead is song time)
   const e = S.sel && (S.events[S.sel.track] || [])[S.sel.index];
   return tmSetBar1(e ? e.t : S.playhead);
 }
