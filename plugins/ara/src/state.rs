@@ -54,6 +54,11 @@ pub struct ArchiveSource {
     /// was closed: the track is analysed again (the rule of a stale track), the hand edits stay.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub sample_count: i64,
+    /// F6 (#582): the hash (FNV-1a, 16 hex digits) of the samples the plugin read when the archive was stored
+    /// (empty: not read in that session, or an archive of an earlier plugin). A restore that reads the audio again
+    /// compares it: the same hash keeps the hits and the settings, another one makes a new analysis.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content_hash: String,
 }
 
 fn is_zero(n: &i64) -> bool {
@@ -136,6 +141,7 @@ mod tests {
                 stale: true,
                 settings: serde_json::Map::new(),
                 sample_count: 0,
+                content_hash: String::new(),
             }],
         };
         let bytes = encode(&state);
@@ -200,6 +206,7 @@ mod tests {
                 stale: false,
                 settings: serde_json::Map::new(),
                 sample_count: 0,
+                content_hash: String::new(),
             }],
         };
         let old: OldState = serde_json::from_slice(&encode(&state)).unwrap();
@@ -244,6 +251,7 @@ mod tests {
                 stale: false,
                 settings,
                 sample_count: 96_000,
+                content_hash: String::new(),
             }],
         };
         let bytes = encode(&state);
@@ -253,6 +261,36 @@ mod tests {
             (1, "snare.wav", 1)
         );
         assert_eq!(decode(&bytes).unwrap(), state, "and the new reader round-trips it");
+    }
+
+    #[test]
+    fn the_content_hash_round_trips_and_an_archive_without_it_loads() {
+        let text = r#"{"version":1,"archive_id":"x","events":{},"sources":[{"persistent_id":"p","name":"k.wav","sample_rate":48000.0,"notes":[],"content_hash":"00000000000000ff"}]}"#;
+        let st = decode(text.as_bytes()).unwrap();
+        assert_eq!(st.sources[0].content_hash, "00000000000000ff");
+        assert!(String::from_utf8(encode(&st)).unwrap().contains("content_hash"));
+        let old = decode(br#"{"version":1,"archive_id":"x","events":{},"sources":[{"persistent_id":"p","name":"k.wav","sample_rate":48000.0,"notes":[]}]}"#).unwrap();
+        assert_eq!(old.sources[0].content_hash, "");
+        assert!(
+            !String::from_utf8(encode(&old)).unwrap().contains("content_hash"),
+            "nothing is written for a source that was not read"
+        );
+    }
+
+    #[test]
+    fn a_reader_of_an_earlier_plugin_loads_an_archive_with_a_content_hash() {
+        #[derive(serde::Deserialize)]
+        struct OldSource {
+            name: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct OldState {
+            version: i64,
+            sources: Vec<OldSource>,
+        }
+        let text = r#"{"version":1,"archive_id":"x","events":{},"sources":[{"persistent_id":"p","name":"k.wav","sample_rate":48000.0,"notes":[],"content_hash":"00000000000000ff"}]}"#;
+        let old: OldState = serde_json::from_str(text).unwrap();
+        assert_eq!((old.version, old.sources[0].name.as_str()), (1, "k.wav"));
     }
 
     #[test]
