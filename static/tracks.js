@@ -383,7 +383,7 @@ function attachTrackHandlers(row, name) {
   const addAt = (px, snap) => {   // Option-click and double click add a hit; in a DAW only inside a clip
     const p = pointOf(px);
     if (!p) { setMsg("outside every region of this track: no hit is added"); return; }
-    if (HT.fault === "store-song" && p.clip) { addHitAt(p.src, snapSample(xToT(px, laneWidth()), p.src), snap, p.clip); return; }   // the fault run: the song time is stored
+    if (HT.fault === "store-song" && p.clip) { addHitAt(p.src, snapSample(xToT(px, laneWidth()), p.src), snap); return; }   // the fault run: the song time is stored
     addHitAt(p.src, p.t, snap, p.clip);
   };
   let dragState = null;

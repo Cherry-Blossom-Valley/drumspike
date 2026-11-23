@@ -43,7 +43,7 @@ function addHitAtPlayhead() {
   if (clips) {   // #555: the playhead is song time: the hit goes to the source of the clip under it, at the source time of that point
     const w = HT.toSource(clips, S.playhead);
     if (!w) { setMsg("outside every region of this track: no hit is added"); return; }
-    if (HT.fault === "store-song") { addHitAt(w.clip.src, snapSample(S.playhead, w.clip.src), false, w.clip); return; }   // the fault run: the song time is stored
+    if (HT.fault === "store-song") { addHitAt(w.clip.src, snapSample(S.playhead, w.clip.src), false); return; }   // the fault run: the song time is stored
     addHitAt(w.clip.src, snapSample(w.t, w.clip.src), false, w.clip);
     return;
   }

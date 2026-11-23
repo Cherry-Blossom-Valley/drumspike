@@ -491,24 +491,22 @@ def test_a_role_change_of_a_row_is_one_undo_step_that_brings_back_the_hits_of_ev
     host2.wait_for_function("([b]) => S.events[b].some(e => Math.abs(e.t - 5.55) < 0.002)", arg=[b])
     wait_idle(host2)
     before = host2.evaluate("([a, b]) => [S.events[a].map(e => e.t.toFixed(6)).join(), S.events[b].map(e => e.t.toFixed(6)).join(), S.tracks[a].role, S.tracks[b].role]", [a, b])
-    n0 = host2.evaluate("() => S.undo.length")
     assert host2.evaluate("async ([a]) => await setTrackRole(a, 'tom')", [a]) is True
-    assert host2.evaluate("() => { const o = S.undo[S.undo.length - 1]; return [o.type, o.steps.map(x => x.track), S.undo.length]; }") == ["group", [a, b], n0 + 1]
+    # the role change loads the project again (the stacks start empty): the group is the one entry on them
+    assert host2.evaluate("() => { const o = S.undo[S.undo.length - 1]; return [o.type, o.steps.map(x => x.track), S.undo.length]; }") == ["group", [a, b], 1]
     assert host2.evaluate("([a, b]) => [S.tracks[a].role, S.tracks[b].role]", [a, b]) == ["tom", "tom"]
     assert host2.evaluate("async () => await undoRedo(true)") is True
     wait_idle(host2)
     after = host2.evaluate("([a, b]) => [S.events[a].map(e => e.t.toFixed(6)).join(), S.events[b].map(e => e.t.toFixed(6)).join(), S.tracks[a].role, S.tracks[b].role]", [a, b])
     assert after == before, "one undo: the roles and the hits of both sources, the hand edit of the second included"
-    assert host2.evaluate("() => S.undo.length") == n0
+    assert host2.evaluate("() => S.undo.length") == 0
 
 
 def test_a_group_step_that_is_refused_takes_the_applied_steps_back(host):
     out = host.evaluate("""async () => {
-      const calls = [], keep = window.applyOp;
-      window.applyOp = (s, rev) => { calls.push([s.id, rev]); return s.id === 'first' ? false : true; };
-      const r = await groupApplyOp({ type: 'group', steps: [{ id: 'first' }, { id: 'second' }] }, true);   // an undo takes the last step first
-      window.applyOp = keep;
-      return { r, calls }; }""")
+      const calls = [], apply = (s, rev) => { calls.push([s.id, rev]); return s.id === 'first' ? false : true; };
+      const r = await groupApplyOp({ type: 'group', steps: [{ id: 'first' }, { id: 'second' }] }, true, apply);   # an undo takes the last step first
+      return { r, calls }; }""".replace("#", "//"))
     assert out["r"] is False
     assert out["calls"] == [["second", True], ["first", True], ["second", False]], "the refused step takes the one before it back"
 
