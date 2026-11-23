@@ -1202,6 +1202,35 @@ unsafe fn rename_sequence(inst: Inst, state: *mut HostState, j: usize, name: &st
     );
 }
 
+/// M1d1 (mode `leftovers`): the host replaces the samples of source `k` (the same length and rate, other content) and tells the plugin
+/// (`updateAudioSourceContent`, everything changed), as a DAW does when the user edits the audio. It does not wait for the analysis.
+unsafe fn update_source_content(doc: &HostDoc, k: usize, path: &str) -> Result<(), String> {
+    let (rate, channels) = load_wav(path)?;
+    let src = doc
+        .pairs
+        .get(k)
+        .ok_or_else(|| format!("--update-content-after {k}: no such source"))?
+        .0;
+    {
+        let st = &mut *doc.state;
+        let hs = st
+            .sources
+            .get_mut(k)
+            .ok_or_else(|| format!("--update-content-after {k}: no source"))?;
+        hs.rate = rate;
+        hs.channels = channels;
+    }
+    let dc = iface_of(doc.inst);
+    (dc.updateAudioSourceContent.expect("updateAudioSourceContent"))(
+        dc_ref_of(doc.inst),
+        src,
+        std::ptr::null(),
+        kARAContentUpdateEverythingChanged as ARAContentUpdateFlags,
+    );
+    println!("{{\"event\":\"host_content_updated\",\"source\":{k}}}");
+    Ok(())
+}
+
 /// Region `i` moves to region sequence `j`: `updatePlaybackRegionProperties` with the same times.
 unsafe fn move_region(inst: Inst, state: *mut HostState, i: usize, j: usize) {
     let r = ensure_sequence(inst, state, j);

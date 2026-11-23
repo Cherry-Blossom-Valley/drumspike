@@ -768,18 +768,23 @@ impl DocShared {
 
     /// Tell the page that the plugin changed its data (a round ended, a restore): the shell
     /// script of the page reloads the project (F1, F8).
-    fn announce_reload(&self) {
-        self.announce_reload_page();
+    fn announce_reload(&self, audio: &[String]) {
+        self.announce_reload_page(audio);
         // M1b13: a round ended: the tracks and the regions the selection maps through are the new ones
         self.selection_changed();
     }
 
     /// The page event alone (a rename computes the selection itself, once).
-    fn announce_reload_page(&self) {
+    ///
+    /// M1d1 (#575): `audio` holds the keys of the tracks whose audio the host changed and that this round analysed again; the page
+    /// says so once. A reload for another reason (a name, a restore, a first analysis) sends an empty list.
+    fn announce_reload_page(&self, audio: &[String]) {
         if crate::test_switch("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-reload") {
             return; // the fault run: the page is not told
         }
-        self.page.log.push("plugin-reload", json!({"doc": self.id()}));
+        self.page
+            .log
+            .push("plugin-reload", json!({"doc": self.id(), "audio": audio}));
     }
 
     /// M1b13: the tracks of the document as the selection rules need them: the key, the creation index of the source and
@@ -1029,7 +1034,7 @@ impl DocShared {
         let map: serde_json::Map<String, Value> = sorted.into_iter().map(|(k, v)| (k.clone(), json!(v))).collect();
         session().log_deferred(json!({"event": "track_names", "doc": self.id(), "names": map}).to_string());
         if announce && crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() != Ok("no-reload") {
-            self.announce_reload_page();
+            self.announce_reload_page(&[]);
         }
     }
 
@@ -2176,6 +2181,7 @@ impl Session {
             ))
         };
         let mut changed: Vec<String> = Vec::new();
+        let mut audio_changed: Vec<String> = Vec::new(); // M1d1: tracks whose changed audio this round analysed again
         let mut old_files: Vec<PathBuf> = Vec::new();
         for (seq, notes) in &result.notes {
             let Some(s) = by_seq(*seq) else { continue };
@@ -2215,6 +2221,14 @@ impl Session {
                     s.has_events.store(true, Ordering::SeqCst);
                     s.analysis_failed.store(false, Ordering::SeqCst);
                     s.stale.store(false, Ordering::SeqCst);
+                }
+                if fresh
+                    && s.reanalyse.load(Ordering::SeqCst)
+                    && crate::test_switch("DS_ARA_LEFTOVER_FAULT").as_deref() != Ok("no-audio-reason")
+                {
+                    if let Some(key) = s.track.lock().ok().and_then(|t| t.clone()) {
+                        audio_changed.push(key);
+                    }
                 }
                 if fresh || fault == "clear-stale" {
                     s.reanalyse.store(false, Ordering::SeqCst);
@@ -2316,6 +2330,7 @@ impl Session {
                 "late": late_names,
                 "partial": result.partial() || !late_names.is_empty(),
                 "changed_notes": changed,
+                "audio_changed": audio_changed,
                 "project_tracks": result.project_tracks,
                 "earlier_changed": result.earlier_changed,
                 "decodes": result.decode_counts.values().sum::<usize>(),
@@ -2341,7 +2356,7 @@ impl Session {
         self.write_out();
         // the page reloads its project: it holds the tracks and events of this round (F1, F8)
         doc.names_changed(false);
-        doc.announce_reload();
+        doc.announce_reload(&audio_changed);
         false
     }
 
@@ -2518,7 +2533,7 @@ impl Session {
         }
         self.write_out();
         doc.names_changed(false);
-        doc.announce_reload();
+        doc.announce_reload(&[]);
     }
 
     /// The document controller ends: the project is saved and closed, the service dropped.

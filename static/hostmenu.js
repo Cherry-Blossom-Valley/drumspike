@@ -52,13 +52,14 @@ function hostMenuModel() {
     if (!c.menu || !c.path || hostOwned(c.id)) continue;
     const parts = c.path.split(" > "), sub = c.id === "follow_own" ? "Follow Hits Of" : parts.slice(1).join(" > ") || null;
     let enabled = !c.needs_project || have;
+    if (hostMode() && (c.id === "set_bar1" || c.id === "set_bar1_audio")) enabled = false;   // #575: the DAW gives the tempo
     if (HM_NEEDS[c.id]) enabled = enabled && !!st[HM_NEEDS[c.id]];
     let title = c.title;
     if (c.id === "undo" && st.undoTitle) title = st.undoTitle;
     if (c.id === "redo" && st.redoTitle) title = st.redoTitle;
     const check = c.kind === "check", key = DSKeys.shownKeyOf(c, DSKeys.preset);
     grp(parts[0]).items.push({ id: c.id, title, keys: key ? DSKeys.display(key) : "", check, checked: check && !!(HM_CHECKS[c.id] && HM_CHECKS[c.id](st)), enabled, sub });
-    if (c.id === "follow_own") for (const n of st.tracks || []) if (n !== st.selected) grp(parts[0]).items.push({ id: "follow", title: n, keys: "", check: true, checked: n === st.follows, enabled: !!st.selected, sub, arg: { name: n } });
+    if (c.id === "follow_own") for (const n of st.tracks || []) if (n !== st.selected) grp(parts[0]).items.push({ id: "follow", title: trackLabel(n), keys: "", check: true, checked: n === st.follows, enabled: !!st.selected, sub, arg: { name: n } });
     if (c.id === "zoom_organize") (st.zoomOwn || []).forEach((n, i) => grp(parts[0]).items.push({ id: "zoom_own", title: n, keys: "", check: false, checked: false, enabled: have, sub, arg: { n: i } }));
   }
   return groups;

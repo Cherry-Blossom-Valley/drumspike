@@ -31,7 +31,7 @@ function showProgress(pct, text, cancelable) {   // pct 0..100, or -1 = indeterm
   // 0% determinate is invisible — animate until there is real progress to show
   bar.classList.toggle("indeterminate", pct <= 0);
   if (pct > 0) bar.style.width = pct + "%";
-  NOTE.base = text || "";
+  NOTE.base = trackText(text || "");   // #575
   $("#progressText").textContent = NOTE.base + (NOTE.until > Date.now() ? ` · ${NOTE.text}` : "");
 }
 const NOTE = { base: "", text: "", until: 0 };   // a refusal while a job runs: the status message is hidden then, so the progress text carries it for a few seconds
@@ -85,7 +85,7 @@ function reanalyzeSelected() {
       $("#reanalyzeMsg").innerHTML = "";
       const p = $("#reanalyzeMsg");
       p.appendChild(document.createTextNode(
-        `Re-analyzing ${s.track} from ${fmt(s.t0, 3)} to ${fmt(s.t1, 3)} s: ` +
+        `Re-analyzing ${trackLabel(s.track)} from ${fmt(s.t0, 3)} to ${fmt(s.t1, 3)} s: ` +
         `${inside} ${inside === 1 ? "hit" : "hits"} in the range, ${kept} edited.`));
       $("#reanalyzeModal").classList.remove("hidden");
       pendingRASel = { track: s.track, t0: s.t0, t1: s.t1 };
@@ -143,7 +143,7 @@ function startAnalysisGo(tracks) {
       const p = $("#reanalyzeMsg");
       p.appendChild(document.createTextNode(
         `Re-analyzing ${withEvents.length} track(s): ` +
-        withEvents.map(n => `${n} (${(S.events[n]||[]).filter(isKept).length} edited)`).join(", ") + "."));
+        withEvents.map(n => `${trackLabel(n)} (${(S.events[n]||[]).filter(isKept).length} edited)`).join(", ") + "."));
       $("#reanalyzeModal").classList.remove("hidden");
       pendingRA = list;   // runAnalysis is called by the modal buttons
     }
@@ -186,7 +186,7 @@ function pollJob() {
       const cur = names.find(n => (st.tracks[n].state||"") === "running");
       const stage = cur ? (st.tracks[cur].stage || "analyzing") : st.state;
       showProgress(Math.round(100*(done+failed)/total),
-        `Analyzing ${done+failed}/${total}` + (cur ? ` — ${cur}: ${stage}` : "") + (failed ? ` (${failed} failed)` : ""));
+        `Analyzing ${done+failed}/${total}` + (cur ? ` — ${trackLabel(cur)}: ${stage}` : "") + (failed ? ` (${failed} failed)` : ""));
       pollTimer = setTimeout(pollJob, 800);
       return;
     }
@@ -201,7 +201,7 @@ function pollJob() {
         if (kept) setMsgBg("analysis done — edited hits kept");
         markTrackErrors(st.tracks);
         const weak = weakSignals(st.tracks);   // P3-18: "weak signal: sensitivity raised to ..." or "no hits found"
-        if (bad.length) { setMsgBg(`analysis: ${bad.length} of ${total} tracks failed (${bad[0][0]}: ${bad[0][1]})`, "error"); setMsgDetail(bad[0][2]); }
+        if (bad.length) { setMsgBg(`analysis: ${bad.length} of ${total} tracks failed (${trackLabel(bad[0][0])}: ${bad[0][1]})`, "error"); setMsgDetail(bad[0][2]); }
         else if (weak.length) { setMsgBg(weak.map(w => w[1]).join("; ")); setMsgDetail(weak.map(w => w[1]).join("\n")); }
       });
     } else hideProgress();   // idle: nothing to show
@@ -239,7 +239,7 @@ function showDetector(tracks, bleed) {
   el.textContent = parts.join(" · ");
   el.classList.toggle("warn", notes.length > 0);
   el.classList.toggle("err", bad.length > 0);
-  el.title = bad.length ? bad.map(([n, m, d]) => `${n}: ${m}` + (d ? `\n  (${d})` : "")).join("\n") : notes.join("\n");
+  el.title = bad.length ? bad.map(([n, m, d]) => `${trackLabel(n)}: ${m}` + (d ? `\n  (${d})` : "")).join("\n") : notes.join("\n");
 }
 function markTrackErrors(tracks) {   // a red mark and the message in the header of each failed track
   document.querySelectorAll(".track").forEach(row => {

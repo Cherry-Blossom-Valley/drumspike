@@ -6566,6 +6566,86 @@ def stage_editor_names_fault() -> bool:
     return ok
 
 
+# ---- M1d1 (#575): the page in a DAW shows no standalone leftovers
+
+# Mode `leftovers`: the four DAW tracks of the names run (no rename, no move). The page reports every text that names a track, the dirty dot and the
+# export dialog; the host then replaces the audio of the hat (source 3) and the page reports the status line that it shows after the reload.
+LEFT_ARGS = NAMES_ARGS[:10]
+
+
+def leftovers_run(label: str, env: dict | None = None) -> dict:
+    new = alt_hat()
+    rc, summary, rows = run_phase(label, "leftovers", CLAP, env, [*LEFT_ARGS, "--update-content-after", f"3:{new}"])
+    return {"rc": rc, "summary": summary, "rows": rows}
+
+
+def leftovers_parts(run: dict) -> dict:
+    rows = run["rows"]
+    first = (page_reports(rows, "leftovers") or [None])[0]
+    after = (page_reports(rows, "leftovers-after") or [None])[0]
+    keys = track_names(FILES)
+    if first is None or after is None:
+        why = f"no usable run (rc={run['rc']}, {len(page_reports(rows, 'leftovers'))} first and {len(page_reports(rows, 'leftovers-after'))} second report)"
+        return {n: (False, why) for n in ("editor-leftovers-names", "editor-leftovers-page", "editor-leftovers-audio")}
+    parts: dict = {}
+    a, b = first.get("a"), first.get("b")
+    da, db = NAMES_BEFORE[0], NAMES_BEFORE[2]
+    texts = {k: first.get(k) or "" for k in ("progress", "info", "sel", "undo", "follower", "status", "export_sel")}
+    texts["follow_menu"] = " | ".join(first.get("follow_menu") or [])
+    holds_key = sorted(k for k, t in texts.items() if any(x in t for x in keys))
+    want = {"info": db, "undo": f"Undo Delete Hit ({db}, 1.500 s)", "status": f"{db}: 12 hits", "export_sel": f"Selected track (1): {db}"}
+    wrong = sorted(k for k, v in want.items() if texts[k] != v)
+    if not texts["sel"].startswith(f"{db}:"):
+        wrong.append("sel")
+    if not texts["follower"].startswith(f"{da} follows {db}:"):
+        wrong.append("follower")
+    if db not in texts["progress"]:
+        wrong.append("progress")
+    if sorted(first.get("follow_menu") or []) != sorted([NAMES_BEFORE[0], NAMES_BEFORE[1], NAMES_BEFORE[3]]):
+        wrong.append("follow_menu")
+    parts["editor-leftovers-names"] = (
+        not holds_key and not wrong and a == keys[0] and b == keys[2],
+        f"the page showed the DAW names where it names a track ({list(texts)}); texts that hold the key of a track: {holds_key or 'none'} "
+        f"(the page holds the key in these places: {holds_key}); texts that are not the expected DAW text: {wrong or 'none'}; progress {texts['progress']!r}, "
+        f"info line {texts['info']!r}, undo {texts['undo']!r}, export {texts['export_sel']!r}, Follow menu {first.get('follow_menu')}")
+    note = first.get("export_note") or ""
+    parts["editor-leftovers-page"] = (
+        first.get("dirty_dot_hidden") is True and "start of the session" in note and "later part" not in note and first.get("dest_visible") is False,
+        f"in the DAW page: the unsaved dot hidden {first.get('dirty_dot_hidden')}, the export note {note!r} (drop hint and no development note), "
+        f"destination row visible {first.get('dest_visible')} (want collapsed)")
+    jobs = job_rows_of(rows)
+    hat = keys[3]
+    changed = [j.get("audio_changed") for j in jobs]
+    msg = after.get("msg") or ""
+    want_msg = f"The DAW changed the audio of {NAMES_BEFORE[3]}. The hits were detected again. The hits you added, moved or edited are kept."
+    parts["editor-leftovers-audio"] = (
+        msg == want_msg and len(jobs) == 2 and changed == [[], [hat]],
+        f"after the host replaced the audio of the hat the page said {msg!r} (want {want_msg!r}) after {after.get('waited_ms')} ms (no audio message if empty); "
+        f"{len(jobs)} job row(s), the tracks whose changed audio each round analysed again: {changed} (want [[], [{hat!r}]])")
+    return parts
+
+
+def stage_editor_leftovers() -> bool:
+    if _reference() is None or not HOST.exists():
+        return pass_fail("editor-leftovers", False, "no reference or host")
+    return print_parts("", leftovers_parts(leftovers_run("editor-leftovers")))
+
+
+def stage_editor_leftovers_fault() -> bool:
+    ok = True
+    for label, env, part, what, reason in (
+        ("key", {"DS_ARA_EDITOR_FAULT": "left-key"}, "editor-leftovers-names", "the label helper returns the key of the track", "holds the key"),
+        ("dot", {"DS_ARA_EDITOR_FAULT": "left-dot"}, "editor-leftovers-page", "the unsaved dot shows in a DAW", "the unsaved dot hidden False"),
+        ("dest", {"DS_ARA_EDITOR_FAULT": "left-dest"}, "editor-leftovers-page", "the destination row is not collapsed", "destination row visible True"),
+        ("no-audio-reason", {"DS_ARA_LEFTOVER_FAULT": "no-audio-reason"}, "editor-leftovers-audio", "the round names no track whose audio changed", "no audio message if empty"),
+    ):
+        parts = leftovers_parts(leftovers_run(f"editor-leftovers-fault-{label}", env))
+        ok = fault_reason(f"editor-leftovers-fault-{label}", parts, part, what, reason) and ok
+    parts = leftovers_parts({"rc": 2, "rows": [], "summary": {}})
+    return pass_fail("editor-leftovers-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
+                     "a run with no page report fails with 'no usable run'") and ok
+
+
 # ---- M1b10 item 8: the role of a track follows the name of the DAW track
 
 # The sources have machine names (32 hex characters). The DAW tracks are named like a kick, a snare, a hi-hat
@@ -7741,6 +7821,8 @@ STAGES = {
     "delivery-release": stage_delivery_release,
     "delivery-fault": stage_delivery_fault,
     "editor-names-fault": stage_editor_names_fault,
+    "editor-leftovers": stage_editor_leftovers,
+    "editor-leftovers-fault": stage_editor_leftovers_fault,
     "editor-roles": stage_editor_roles,
     "restore-settings": stage_restore_settings,
     "restore-settings-fault": stage_restore_settings_fault,
@@ -7795,7 +7877,7 @@ ORDER = [
     "editor-hit", "editor-hit-fault", "editor-geometry", "editor-geometry-fault", "editor-menu", "editor-menu-fault",
     "editor-selection", "editor-selection-fault",
     "editor-keys", "editor-keys-fault", "editor-keys-twin", "editor-keys-twin-fault",
-    "editor-names", "editor-names-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
+    "editor-names", "editor-names-fault", "editor-leftovers", "editor-leftovers-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
     "drag-source", "drag-source-fault", "delivery", "delivery-release", "delivery-fault", "export-dialog", "export-dialog-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",

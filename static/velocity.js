@@ -205,7 +205,7 @@ function vlBind(row, name) {
         return;
       }
       const n = [...d.set.values()].filter(s => s[1] !== s[0]).length;
-      $("#stSel").textContent = `${name}: Set Velocity (${n} ${n === 1 ? "hit" : "hits"})`;
+      $("#stSel").textContent = `${trackLabel(name)}: Set Velocity (${n} ${n === 1 ? "hit" : "hits"})`;
     };
     const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); commit(); };
     window.addEventListener("mousemove", move);

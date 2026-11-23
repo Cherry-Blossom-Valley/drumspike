@@ -84,9 +84,9 @@ function buildTrackDOM() {
         </div>
       </div>`;
     scroll.appendChild(row);
-    if (t.follows) { row.querySelector(".tfollow").textContent = ` · follows ${t.follows}`; row.classList.add("follower"); }   // P3-18: names are data
+    if (t.follows) { row.querySelector(".tfollow").textContent = ` · follows ${trackLabel(t.follows)}`; row.classList.add("follower"); }   // P3-18: names are data
     const tn = row.querySelector(".tname");   // C1: name as text node — no HTML injection
-    const nm = document.createElement("span"); nm.className = "tnm"; nm.textContent = t.display_name || name; nm.title = t.display_name || name;   // #558: a host shows the name of its track; the key stays the name
+    const nm = document.createElement("span"); nm.className = "tnm"; nm.textContent = trackLabel(name); nm.title = trackLabel(name);   // #558: a host shows the name of its track; the key stays the name
     tn.appendChild(nm);
     setHeadIcon(row, t.role);   // 0.9.3: the role icon left of the name
     // P3-14c: the header is compact; the 🔗 badge and the hit counts are in the Inspector (source state, Detected, Edited)
@@ -274,11 +274,11 @@ function setHeadIcon(row, role) {   // the drawing sits right-aligned in the hea
   if (t && t.color) s.style.color = t.color;
   th.appendChild(s);
 }
-function roleLineText(t) { return `${t.role} · ${nameFromNote(t.note)} (${t.note})` + (t.follows ? ` · follows ${t.follows}` : ""); }
+function roleLineText(t) { return `${t.role} · ${nameFromNote(t.note)} (${t.note})` + (t.follows ? ` · follows ${trackLabel(t.follows)}` : ""); }
 function followerLocked(name) {   // true (with the message) when the track's hits are derived from another track
   const t = S.tracks[name];
   if (!t || !t.follows) return false;
-  setMsg(`${name} follows ${t.follows}: its hits are derived, edit the hits of ${t.follows}`);
+  setMsg(`${trackLabel(name)} follows ${trackLabel(t.follows)}: its hits are derived, edit the hits of ${trackLabel(t.follows)}`);
   return true;
 }
 function refreshHeadRole(name) {   // the role line of the header, and the Inspector's when it shows the track
@@ -286,7 +286,7 @@ function refreshHeadRole(name) {   // the role line of the header, and the Inspe
   if (row && t) {
     setHeadIcon(row, t.role);   // 0.9.3: a role change swaps the icon at once
     row.querySelector(".nnote").textContent = nameFromNote(t.note);
-    row.querySelector(".tfollow").textContent = t.follows ? ` · follows ${t.follows}` : "";   // textContent: a track name is data
+    row.querySelector(".tfollow").textContent = t.follows ? ` · follows ${trackLabel(t.follows)}` : "";   // textContent: a track name is data
     row.classList.toggle("follower", !!t.follows);
   }
   if (name === INS.name) insRoleLine();
@@ -335,9 +335,9 @@ async function setTrackFollow(name, src) {
   DSShell.sync();   // the check marks of Track > Follow Hits Of
   if (src) {   // #411: one hit reads "1 hit", not "1 hits"
     const n = S.events[name].length;
-    setMsg(`${name} follows ${src}: ${n} ${n === 1 ? "hit" : "hits"}, velocities from its own signal`);
+    setMsg(`${trackLabel(name)} follows ${trackLabel(src)}: ${n} ${n === 1 ? "hit" : "hits"}, velocities from its own signal`);
   } else {
-    setMsg(`${name}: own detection (re-analyze to detect its hits)`);
+    setMsg(`${trackLabel(name)}: own detection (re-analyze to detect its hits)`);
   }
   return true;
 }
@@ -445,7 +445,7 @@ function attachTrackHandlers(row, name) {
     evsL[i].t = snapSample(dragState.origT + dt, name);
     invalidateHits(name);
     const dSmp = Math.round((evsL[i].t - dragState.origT)*dragState.sr);
-    $("#stSel").textContent = `${name}: moving ${dSmp>0?"+":""}${dSmp} smp`;
+    $("#stSel").textContent = `${trackLabel(name)}: moving ${dSmp>0?"+":""}${dSmp} smp`;
     drawInfo();
   });
   spike.addEventListener("mouseleave", () => { spike.classList.remove("onHit"); curOver(false); });
