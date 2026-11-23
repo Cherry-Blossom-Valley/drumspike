@@ -866,7 +866,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         let mut rss_open = 0.0;
         let mut window_visible = false;
         let ready_limit = Duration::from_secs(25);
-        let phase_limit = Duration::from_secs(60);
+        // mode `deliver` (M1c3) waits for the first use of the wav kinds, an edit and the files after it: minutes, not one
+        let phase_limit = Duration::from_secs(if mode == "deliver" { 300 } else { 60 });
         for round in 1..=cycles {
             if !((*gui).create.expect("create"))(plugin, cocoa.as_ptr(), false) {
                 failed = Some("gui create refused".into());
@@ -897,9 +898,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let ready_before = count_rows("page_ready", None);
             let want_kind: Option<&str> = match mode.as_str() {
                 "keys" | "focus" | "resize" | "measure" | "shell" | "analyse" | "bigpost" | "refuse" | "transport"
-                | "playback" | "hit" | "menu" | "geometry" | "hostkeys" | "delivery" | "selection" | "exportdialog" => {
-                    Some(mode.as_str())
-                }
+                | "playback" | "hit" | "menu" | "geometry" | "hostkeys" | "delivery" | "selection" | "exportdialog"
+                | "deliver" => Some(mode.as_str()),
                 // the edit mode ends with the event report that follows the edit report
                 "edit" => Some("edit-events"),
                 "analyse-race" => Some("analyse"),

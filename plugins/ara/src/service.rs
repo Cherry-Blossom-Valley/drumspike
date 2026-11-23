@@ -520,7 +520,7 @@ impl PageHandle {
         self.svc.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    fn set_sid(&self, sid: Option<String>) {
+    pub(crate) fn set_sid(&self, sid: Option<String>) {
         *self.sid.lock().unwrap_or_else(|e| e.into_inner()) = sid;
     }
 
@@ -543,7 +543,7 @@ impl PageHandle {
         self.sid.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    fn set(&self, svc: Option<Service>) {
+    pub(crate) fn set(&self, svc: Option<Service>) {
         *self.svc.lock().unwrap_or_else(|e| e.into_inner()) = svc;
     }
 }

@@ -968,10 +968,14 @@ fn shell_command(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Option<Answer> {
         "plugin_host_regions" => Answer::json(200, &(sh.backend.rows)()),
         // M1c3: the handles of the page (the state of the prepared files, the files of a drag, the first use of a wav kind)
         "plugin_deliver_state" => {
-            sh.backend.prep.wake();
+            sh.backend.prep.ensure_started();
             Answer::json(200, &sh.backend.prep.state_json())
         }
-        "plugin_deliver_want" => match args.get("kind").and_then(Value::as_str).and_then(crate::prepare::Kind::parse) {
+        "plugin_deliver_want" => match args
+            .get("kind")
+            .and_then(Value::as_str)
+            .and_then(crate::prepare::Kind::parse)
+        {
             Some(k @ (crate::prepare::Kind::Spike | crate::prepare::Kind::Audio)) => {
                 sh.backend.prep.want_kind(k);
                 Answer::json(200, &sh.backend.prep.state_json())
@@ -1217,7 +1221,10 @@ fn deliver_take(sh: &Arc<Shared>, args: &Value) -> Answer {
     };
     let mut items = Vec::new();
     for it in list {
-        let kind = it.get("kind").and_then(Value::as_str).and_then(crate::prepare::Kind::parse);
+        let kind = it
+            .get("kind")
+            .and_then(Value::as_str)
+            .and_then(crate::prepare::Kind::parse);
         let row = it.get("row").and_then(Value::as_str).unwrap_or("");
         match kind {
             Some(k) => items.push((row.to_string(), k)),
@@ -1226,8 +1233,14 @@ fn deliver_take(sh: &Arc<Shared>, args: &Value) -> Answer {
     }
     match sh.backend.prep.take(&items) {
         Ok(files) => {
-            let canon: Vec<PathBuf> = files.iter().map(|f| std::fs::canonicalize(f).unwrap_or_else(|_| f.clone())).collect();
-            sh.written.lock().unwrap_or_else(|e| e.into_inner()).extend(canon.iter().cloned());
+            let canon: Vec<PathBuf> = files
+                .iter()
+                .map(|f| std::fs::canonicalize(f).unwrap_or_else(|_| f.clone()))
+                .collect();
+            sh.written
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(canon.iter().cloned());
             let strs: Vec<String> = canon.iter().map(|f| f.display().to_string()).collect();
             Answer::json(200, &json!({"files": strs}))
         }
@@ -2085,29 +2098,30 @@ fn backend_of(plugin: &Plugin) -> Backend {
         None => {
             let page = crate::service::unbound_page(&session().cache);
             Backend {
-            prep: crate::prepare::Prep::new(
-                page.clone(),
-                Arc::new(crate::rows::Rows::default),
-                Arc::new(|| crate::tempo_ara::choose(None, "no-document", None)),
-                Arc::new(std::collections::HashMap::new),
-            ),
-            page,
-            changed: Arc::new(|| {}),
-            record: Arc::new(|_, _| Ok(false)),
-            regions_gen: Arc::new(|| 0),
-            playback_offer: Arc::new(crate::playback::Offer::default),
-            playback_run: Arc::new(|_| 0),
-            track_info: Arc::new(|_| (Vec::new(), 0.0)),
-            host_name: plugin.host_name.clone(),
-            doc_id: "unbound".to_string(),
-            display_names: Arc::new(std::collections::HashMap::new),
-            tempo: Arc::new(|| crate::tempo_ara::choose(None, "no-document", None)),
-            stretched: Arc::new(Vec::new),
-            export_regions: Arc::new(crate::deliver::ExportRegions::default),
-            selection: Arc::new(|| Value::Null),
-            rows: Arc::new(|| Value::Null),
-            export_folders: Arc::new(|| None),
-        }},
+                prep: crate::prepare::Prep::new(
+                    page.clone(),
+                    Arc::new(crate::rows::Rows::default),
+                    Arc::new(|| crate::tempo_ara::choose(None, "no-document", None)),
+                    Arc::new(std::collections::HashMap::new),
+                ),
+                page,
+                changed: Arc::new(|| {}),
+                record: Arc::new(|_, _| Ok(false)),
+                regions_gen: Arc::new(|| 0),
+                playback_offer: Arc::new(crate::playback::Offer::default),
+                playback_run: Arc::new(|_| 0),
+                track_info: Arc::new(|_| (Vec::new(), 0.0)),
+                host_name: plugin.host_name.clone(),
+                doc_id: "unbound".to_string(),
+                display_names: Arc::new(std::collections::HashMap::new),
+                tempo: Arc::new(|| crate::tempo_ara::choose(None, "no-document", None)),
+                stretched: Arc::new(Vec::new),
+                export_regions: Arc::new(crate::deliver::ExportRegions::default),
+                selection: Arc::new(|| Value::Null),
+                rows: Arc::new(|| Value::Null),
+                export_folders: Arc::new(|| None),
+            }
+        }
     }
 }
 

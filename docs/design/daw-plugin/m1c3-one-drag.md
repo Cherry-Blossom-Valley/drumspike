@@ -358,3 +358,42 @@ One commit per line or pair, risky parts first. This note is commit 1 (Gate line
    toolbar still delivers them. The status line already counts them.
 10. A DAW that references a dropped file in place sees the old link until the next drag replaces it. The hint says "delete the old clips,
     then drop again".
+
+## 15. What phase 2 built, and where it differs from this note
+
+- `plugins/ara/src/prepare.rs`: the producer and the worker (`Prep`). One file per DAW track and kind: `<DAW track>_spike.mid`,
+  `<DAW track>_spike.wav`, `<DAW track>_audio_spike.wav`, and `Drums_merged.mid`. A set is `ready` only when its `fp` equals the `fp` of
+  the hits now; a wake of the worker (an edit, a round, a change of rows or of the tempo) shows every set as `preparing` until the next pass has looked.
+- Quiet time: MIDI 800 ms (at most 5 s from the first change), the wav kinds 3 s (at most 10 s). `DS_ARA_PREPARE_QUIET_MS` shortens it for the check.
+- Followers (R4): the producer calls `tracks_get`, which runs the refresh of stale followers that the export runs (`follow::refresh_stale` ->
+  `fresh_for_export`). `fresh_for_export` stays `pub(crate)` and `crates/app` is not changed: the plugin has no way to get the shared
+  project, and the visibility change alone would not have been enough. What is not the same as the export: a follower that cannot be derived
+  (its audio is offline) is read as stored, where the export refuses with a 409. In the plugin the sources are cached files, so the case needs
+  an audio file that was removed by hand. The unit test `a_follower_row_carries_the_refreshed_hits_after_an_edit_of_its_leader` makes the stale
+  follower (audio away during the edit of the leader, back afterwards) and shows the refreshed hits with the refresh and the stale ones without it.
+- The only change outside `plugins/ara` and `static/` is `merged_midi_bytes` and `export_merged_midi` in `crates/core/src/midi.rs` (about 55
+  lines with doc comments, two unit tests; nothing in `crates/app`).
+- `plugin_deliver_state` starts the worker once; a poll of the page wakes nothing (the page asks again every 1.5 s while a handle is `preparing`).
+- The drag limit is 512 files (`deliver::drag_count_ok`, unit test); `plugin_deliver_take` refuses more with `error: more than 512 files`.
+- A dropped row (`HT.dropped`) is named in the hint line beside the toolbar handles (R10).
+- Stage `deliver` (parts `deliver-ran`, `-rows`, `-wav`, `-size`, `-merged`, `-state`, `-drag`, `-prepared-folder`, `-handles`, `-stale`, `-cost`,
+  `-watchdog`, `-hostile-name`) and `deliver-fault` (faults `per-source`, `two-tracks`, `stale-ok`, `all-rows`, `no-debounce`, `forever` with
+  `no-watchdog`, `raw-name`). The page tests are `tests/e2e_app/test_host_deliver.py` (the fault run `leak` is a test there).
+- The test host has no DAW and no mouse: the stages prove the files, the states, the handles in the real page and the drag command up to a private
+  pasteboard. The real drag into a DAW is a hand check.
+
+### Hand checks in a real DAW (owner)
+
+1. Open a session with a drum track whose clips come from two audio files. Let the analysis finish. The MIDI handle of the row shows `ready 1`,
+   the spike handles say `press to prepare`.
+2. Drag the MIDI handle of the row onto an instrument track at the session start. The notes of both clips sit on their hits.
+3. Press the Spike handle (no drag): it goes to `preparing`, then `ready 1` within a few seconds. Drag it onto an audio track at the session
+   start. Check that the file starts at song position 0 and the spikes sit on the hits (zoom to samples on a loud hit).
+4. Press the Audio spike handle, drag it onto an audio track: the snippets sit on their hits.
+5. Edit a hit. The handles of that track show `preparing`, then `ready`. Drag again: the new hit is in the file. Delete the old clips first.
+6. Drag "Drag all" (MIDI and wav files in one drag) and note whether the DAW takes mixed types and where each file lands.
+7. Drag "Drag merged MIDI": one MIDI track with all drums on their notes. If the DAW asks about the tempo, choose the current tempo map and
+   note what the report row `musical_context` says (source ara, transport or none).
+8. Make the row header small (Track Height Small) and narrow the window under 520 px: the handles collapse to one handle and a menu; the menu
+   lists the three kinds and a keyboard can reach it.
+9. Close and open the session: the folder choice of the dialog is remembered (line 7, M1c2); the handles prepare again after the first round.

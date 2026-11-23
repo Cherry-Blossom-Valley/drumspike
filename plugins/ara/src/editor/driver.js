@@ -83,6 +83,7 @@
     if (T.mode === "hostkeys") hostkeysRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "exportdialog") exportDialogRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "delivery") deliveryRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "deliver") deliverRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "leftovers") leftoversRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "selection") selectionRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "song") songRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
@@ -541,6 +542,67 @@
     await sleepM(1000);   // the host makes its changes in several calls: the last state
     var after = await songSnap(22);
     post(Object.assign({ kind: "song-after", waited_ms: Math.round(performance.now() - t0) }, after));
+  }
+  /* Mode deliver (M1c3, #576): the files that the plugin prepares by itself, and the handles of the page. The first report `deliver` holds: the rows of
+     the plugin (plugin_host_regions) and the stored hits of each source, the states after the first round (MIDI is made at once, the wav kinds say
+     "press to prepare"), the handles in the DOM, the paths of a take of the MIDI and the merged file, the refused take of a wav kind that is off,
+     the first use of both wav kinds (time to ready), one take of everything and the drag of it through the page (a private pasteboard in a gate run),
+     then an edit of one hit (the take at once: stale, a 409; the wait; the new set) and the counters of the worker. Fault runs: DS_ARA_PREPARE_FAULT. */
+  async function deliverRun() {
+    var out = { steps: [] };
+    function inv(c, a) { return window.__TAURI__.core.invoke(c, a || {}).then(function (v) { return { ok: true, v: v }; }, function (e) { return { ok: false, code: e && e.status, msg: String(e && (e.message || e)) }; }); }
+    function sleepD(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    async function until(fn, ms) { var t0 = performance.now(); for (;;) { var v = false; try { v = await fn(); } catch (e) { /* not yet */ } if (v) return Math.round(performance.now() - t0); if (performance.now() - t0 > ms) return -1; await sleepD(100); } }
+    async function state() { var r = await inv("plugin_deliver_state"); return r.ok ? r.v : null; }
+    function allIn(st, kind, want) { return st && st.rows.length > 0 && st.rows.every(function (r) { return r[kind].state === want; }); }
+    function dom() {
+      function hs(sel) { return Array.prototype.map.call(document.querySelectorAll(sel + " .dlvH"), function (h) { return { kind: h.dataset.kind, state: h.dataset.state, text: h.querySelector(".dlvT").textContent }; }); }
+      var rows = {};
+      Array.prototype.forEach.call(document.querySelectorAll("#lanesScroll .track"), function (el) { var s = el.querySelector(".tdel"); if (s) rows[el.dataset.name] = hs('#lanesScroll .track[data-name="' + CSS.escape(el.dataset.name) + '"] .tdel'); });
+      return { rows: rows, bar: hs("#dlvBar"), hint: (document.getElementById("dlvHint") || {}).textContent };
+    }
+    await until(function () { return S.order.length > 0 && S.order.every(function (n) { return (S.events[n] || []).length > 0; }); }, 40000);
+    await settle();
+    var regions = await inv("plugin_host_regions"); out.regions = regions.v;
+    out.events = {};
+    for (var i = 0; i < S.order.length; i++) { var g = await inv("events_get", { sid: S.sid, name: S.order[i] }); out.events[S.order[i]] = g.v ? g.v.events : null; }
+    out.t_midi = await until(async function () { return allIn(await state(), "midi", "ready"); }, 40000);
+    var st = await state(); out.state1 = st;
+    await sleepD(300); out.dom1 = dom();
+    if (out.t_midi < 0) { post(Object.assign({ kind: "deliver" }, out)); return; }   // the watchdog run: nothing else to do
+    var mt = await inv("plugin_deliver_take", { items: st.rows.map(function (r) { return { row: r.id, kind: "midi" }; }) }); out.take_midi = mt;
+    var mg = await inv("plugin_deliver_take", { items: [{ row: "", kind: "merged" }] }); out.take_merged = mg;
+    if (T.arg === "short") { post(Object.assign({ kind: "deliver" }, out)); return; }   // the hostile-name run: the MIDI files are enough
+    out.take_spike_off = await inv("plugin_deliver_take", { items: [{ row: st.rows[0].id, kind: "spike" }] });
+    out.want_spike = await inv("plugin_deliver_want", { kind: "spike" });
+    out.t_spike = await until(async function () { return allIn(await state(), "spike", "ready"); }, 60000);
+    out.want_audio = await inv("plugin_deliver_want", { kind: "audio" });
+    out.t_audio = await until(async function () { return allIn(await state(), "audio", "ready"); }, 90000);
+    var st2 = await state(); out.state2 = st2; await sleepD(300); out.dom2 = dom();
+    var items = []; st2.rows.forEach(function (r) { ["midi", "spike", "audio"].forEach(function (k) { items.push({ row: r.id, kind: k }); }); });
+    var all = await inv("plugin_deliver_take", { items: items }); out.take_all = all;
+    if (all.ok) { try { await B.dragFiles(all.v.files); out.drag = "ok"; } catch (e) { out.drag = String(e && e.message || e); } }
+    out.count_before = (await state()).counters;
+    if (T.arg === "noedit") { out.dom3 = dom(); post(Object.assign({ kind: "deliver" }, out)); return; }   // the run that reads the files as they were made
+    // an edit of one hit of the first source of the first row, taken at once (the set is stale) and later (the set is new)
+    var home = st2.rows[0].srcs[0], clip = regions.v.rows[0].clips.filter(function (c) { return c.src === home; })[0];
+    // three edits 400 ms apart: the preparation waits for the quiet time, so they make ONE set of files (a pass for each would be the fault no-debounce)
+    var adds = [0.9, 1.0, 1.1], eds = [];
+    for (var ai = 0; ai < adds.length; ai++) {
+      var ed1 = await inv("events_edit", { sid: S.sid, name: home, ops: [{ op: "add", t: clip.a + adds[ai], v: 100 }] });
+      eds.push(ed1.ok);
+      if (ai < adds.length - 1) await sleepD(400);
+    }
+    out.edit = { ok: eds.every(Boolean), src: home, songs: adds.map(function (x) { return clip.s + x; }) };
+    out.take_stale = await inv("plugin_deliver_take", { items: [{ row: st2.rows[0].id, kind: "midi" }] });
+    out.t_after = await until(async function () { var s = await state(); return allIn(s, "midi", "ready") && allIn(s, "spike", "ready") && allIn(s, "audio", "ready") && s.merged.state === "ready" && s.counters.jobs > out.count_before.jobs; }, 60000);
+    await sleepD(500);
+    out.count_after = (await state()).counters;
+    var st3 = await state(); out.state3 = st3;
+    out.take_after = await inv("plugin_deliver_take", { items: items });
+    out.take_merged_after = await inv("plugin_deliver_take", { items: [{ row: "", kind: "merged" }] });
+    out.dom3 = dom();
+    post(Object.assign({ kind: "deliver" }, out));
   }
   /* Mode leftovers (M1d1, #575): the page shows the name of the DAW track where it names a track (progress, info line, status bar, undo label,
      follower text, export dialog, Follow menu), and after the host changed the audio of one source it says what happened. The first report
