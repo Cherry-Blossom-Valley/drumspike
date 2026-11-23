@@ -336,10 +336,7 @@ pub fn write_audio_row(row: &RowIn, out: &Path) -> Result<(), String> {
         .collect();
     if used.len() <= 1 {
         let s = used.first().copied().or(row.srcs.first()).ok_or("no source")?;
-        let wav = s
-            .wav
-            .as_deref()
-            .ok_or_else(|| format!("no audio for {}", row.name))?;
+        let wav = s.wav.as_deref().ok_or_else(|| format!("no audio for {}", row.name))?;
         let pairs = song_pairs(&s.events, &regions_of(row, &s.key));
         return write_audio_spike_file_song(wav, out, &pairs, end)
             .map(|_| ())
@@ -836,6 +833,28 @@ impl Prep {
         (st.cycles, st.jobs)
     }
 
+    /// A wake that changed nothing (the same hits, clips, tempo and names) must not leave the handles on `preparing` for the quiet time: one look
+    /// with no job; when the wanted state is the one of the last pass the handles are clean again.
+    fn settle_dirty(self: &Arc<Self>) {
+        let seen = {
+            let st = self.lock();
+            if st.wake_seq == st.clean_seq || st.cycles == 0 {
+                return;
+            }
+            st.wake_seq
+        };
+        let Some(g) = self.gather(true) else { return };
+        let fps = self.fps(&g);
+        {
+            let mut st = self.lock();
+            if st.want != fps {
+                return;
+            }
+            st.clean_seq = seen;
+        }
+        self.push();
+    }
+
     // one pass: look at the rows, set the wanted fps, make what is due
     fn cycle(self: &Arc<Self>, midi_due: bool, wav_due: bool) {
         let seen = self.lock().wake_seq;
@@ -1037,7 +1056,11 @@ fn worker(weak: &Weak<Prep>) {
                 st.wav_pending && (quiet >= Duration::from_millis(quiet_ms(true)) || waited >= Duration::from_secs(10));
             (m, w)
         };
-        if !(midi || wav) || p.page.job_running() {
+        if p.page.job_running() {
+            continue;
+        }
+        if !(midi || wav) {
+            p.settle_dirty();
             continue;
         }
         {

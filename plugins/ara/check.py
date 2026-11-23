@@ -7939,6 +7939,7 @@ def export_dialog_parts(d: dict) -> dict:
         all(s.get("export_finished") is True and (s.get("result") or "").startswith("Exported 4 MIDI and 4 spike files") for s in (step(r1, "export1"), step(r1, "export2"))),
         f"Export wrote the files at the first open and after a close: {[(step(r1, k).get('export_finished'), step(r1, k).get('result')) for k in ('export1', 'export2')]}")
     mids, wavs = files_of(default)
+    mids = [f for f in mids if f.name != "Drums_merged.mid"]   # M1c3 (#576): the preparation of the files also makes the merged MIDI file there
     made = [x for x in rows if x.get("event") == "default_dest_made"]
     parts["export-dialog-folder-missing"] = (len(made) == 1 and made[0].get("command") == "export_existing",
                                              f"Exports/ did not exist (the scenario removes the empty folder) when the dialog first named it: the plugin made it once ({len(made)} rows, by {[x.get('command') for x in made]})")
