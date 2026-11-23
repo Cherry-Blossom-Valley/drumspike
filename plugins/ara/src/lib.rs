@@ -1068,19 +1068,22 @@ impl DocShared {
         if crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("no-reload") {
             return; // the fault run: the page is told of no change of the DAW tracks (the way of the display names)
         }
-        let rows = self.rows_value();
-        let mut last = self.rows_pushed.lock().unwrap_or_else(|e| e.into_inner());
-        let text = rows.to_json(0, "").to_string();
-        if last.as_deref() == Some(text.as_str()) {
-            return;
+        // the rows are built, compared and numbered under ONE lock (as the selection is): two threads (the main thread and the worker) cannot
+        // number an older state after a newer one. The lock is not held across the log call or the page push.
+        let (event, bad) = {
+            let mut last = self.rows_pushed.lock().unwrap_or_else(|e| e.into_inner());
+            let rows = self.rows_value();
+            let text = rows.to_json(0, "").to_string();
+            if last.as_deref() == Some(text.as_str()) {
+                return;
+            }
+            *last = Some(text);
+            let gen = self.rows_gen.fetch_add(1, Ordering::SeqCst) + 1;
+            (rows.to_json(gen, &self.id()), rows.bad)
+        };
+        if bad > 0 {
+            session().log(json!({"event": "rows_dropped", "doc": self.id(), "clips": bad}).to_string());
         }
-        *last = Some(text);
-        let gen = self.rows_gen.fetch_add(1, Ordering::SeqCst) + 1;
-        if rows.bad > 0 {
-            session().log(json!({"event": "rows_dropped", "doc": self.id(), "clips": rows.bad}).to_string());
-        }
-        let event = rows.to_json(gen, &self.id());
-        drop(last);
         self.rows_pushes.fetch_add(1, Ordering::SeqCst);
         let offer =
             self.rows_gate
@@ -5984,6 +5987,45 @@ mod tests {
             clips.iter().any(|c| c["s"].as_f64() == Some(10.0 + 499.0)),
             "and it is the newest rows: {clips:?}"
         );
+    }
+
+    #[test]
+    fn two_threads_that_report_a_change_in_either_order_leave_the_newest_rows_with_the_highest_number() {
+        // the main thread and the worker both call rows_changed: whatever the order, the page ends with the rows of the state now, and the numbers never
+        // go back (the rows are built, compared and numbered under one lock)
+        for main_first in [true, false] {
+            let (doc, _k, s) = two_track_doc();
+            let work = |d: Arc<DocShared>, s: Arc<SourceState>, base: f64| {
+                std::thread::spawn(move || {
+                    for i in 0..100 {
+                        s.regions.lock().unwrap()[0].rec.start_play = base + f64::from(i);
+                        d.rows_changed();
+                    }
+                })
+            };
+            let (a, b) = if main_first {
+                (
+                    work(doc.clone(), s.clone(), 1000.0),
+                    work(doc.clone(), s.clone(), 2000.0),
+                )
+            } else {
+                let b = work(doc.clone(), s.clone(), 2000.0);
+                (work(doc.clone(), s.clone(), 1000.0), b)
+            };
+            a.join().unwrap();
+            b.join().unwrap();
+            doc.rows_changed(); // the last change has been reported: the state now
+            wait_gate();
+            let evs = region_events(&doc);
+            let last = evs.last().unwrap();
+            assert_eq!(
+                last["payload"]["rows"],
+                doc.rows_now()["rows"],
+                "main first: {main_first}: the page shows the rows of the state now"
+            );
+            let gens: Vec<u64> = evs.iter().map(|e| e["payload"]["gen"].as_u64().unwrap()).collect();
+            assert!(gens.windows(2).all(|w| w[0] < w[1]), "the numbers only go up: {gens:?}");
+        }
     }
 
     #[test]

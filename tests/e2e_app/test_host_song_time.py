@@ -597,3 +597,22 @@ def test_the_standalone_page_has_no_row_attribute(app, make_project):
     app.wait_for_function("() => !FR.raf && FR.flags === 0")
     assert app.evaluate("() => document.querySelectorAll('.track[data-host-row]').length") == 0
     app.evaluate("() => { HT.rows = []; HT.gen = 0; HT.rebuild(); }")
+
+
+def test_an_add_whose_snap_lands_past_the_clip_is_one_undo_entry(host):
+    a, b = NAMES[0], NAMES[1]
+    p = rows_payload()
+    p["rows"][0]["clips"][1].update({"a": 1.0, "b": 2.495, "s": 10.0})   # the hit at 2.5 s of the second source lies 5 ms past the end of the clip
+    take(host, p)
+    wait_idle(host)
+    n_b = host.evaluate("([b]) => S.events[b].length", [b])
+    host.evaluate("([a, b]) => { addHitAt(b, 2.49, true, HT.clips(a).find(c => c.src === b)); }", [a, b])
+    host.wait_for_function("([b, n]) => S.events[b].length === n", arg=[b, n_b + 1])
+    host.wait_for_function("() => S.undo.length > 0 && S.undo[S.undo.length - 1].type === 'group'")   # the add and the move into the clip are joined
+    wait_idle(host)
+    top = host.evaluate("() => { const o = S.undo[S.undo.length - 1]; return [o.type, o.steps.map(s => s.type), S.undo.length]; }")
+    assert top == ["group", ["add", "move"], 1], top
+    assert host.evaluate("([b]) => S.events[b].filter(e => e.added || e.edited).every(e => e.t < 2.495)", [b]), "the new hit is inside its clip"
+    host.evaluate("() => undo()")
+    host.wait_for_function("([b, n]) => S.events[b].length === n", arg=[b, n_b])
+    assert host.evaluate("() => S.undo.length") == 0, "one undo took the add and the move back: no hit is left outside the clip"
