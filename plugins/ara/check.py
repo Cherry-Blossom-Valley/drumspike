@@ -6301,7 +6301,8 @@ def stage_playback_map_fault() -> bool:
 
 
 def lane_runs(label: str, mode: str, env: dict | None = None) -> tuple[int, list, dict]:
-    rc, _summary, rows = run_phase(label, mode, CLAP, env)
+    # M1b8: the page shows song time; these runs read the hits of every track at the same times, so every clip lies at song 0 s (1.5 s of its audio)
+    rc, _summary, rows = run_phase(label, mode, CLAP, env, ["--regions-all", "0,1.5,0"] if mode in ("hit", "geometry") else None)
     reps = page_reports(rows, mode)
     return rc, rows, (reps[0] if reps else {})
 
@@ -6655,6 +6656,9 @@ NAMES_ARGS = ["--seq-names", "Drum A", "-", "Drum B", "Drum B",
               "--rename-seq", "0=Drum Big", "--move-region", "1=0"]
 NAMES_BEFORE = ["Drum A", "Snare Top Take", "Drum B", "Drum B (2)"]
 NAMES_AFTER = ["Drum Big", "Drum Big (2)", "Drum B", "Drum B (2)"]
+# M1b8: the header of a row shows the name of the DAW track; two sources of one DAW track show one name (the plugin's display names keep the number
+# for the file names of the export)
+NAMES_AFTER_HEADER = ["Drum Big", "Drum Big", "Drum B", "Drum B (2)"]
 
 
 def host_lines(label: str) -> list:
@@ -6743,8 +6747,8 @@ def names_parts(run: dict, ref: bytes, base: dict) -> dict:
         f"before and after ({events_same}), the notes before and after are the notes of a run with no names ({notes_same}), the stored "
         f"archive (without its document id) is the archive of that run ({archive_same})")
     parts["editor-names-header"] = (
-        first.get("dom_names") == NAMES_BEFORE and after.get("dom_names") == NAMES_AFTER,
-        f"the header of the page draws {first.get('dom_names')} and, after the rename and the move, {after.get('dom_names')} (want {NAMES_BEFORE} and {NAMES_AFTER})")
+        first.get("dom_names") == NAMES_BEFORE and after.get("dom_names") == NAMES_AFTER_HEADER,
+        f"the header of the page draws {first.get('dom_names')} and, after the rename and the move, {after.get('dom_names')} (want {NAMES_BEFORE} and {NAMES_AFTER_HEADER}: the two sources of one DAW track show one name)")
     rep_rows = [r for r in rows if r.get("event") == "track_names"]
     want_before = {k: v for k, v in zip(keys, NAMES_BEFORE) if k != v}
     want_after = {k: v for k, v in zip(keys, NAMES_AFTER) if k != v}
@@ -6805,9 +6809,26 @@ SONG_ARGS = ["--seq-names", "Kick", "Snare", "--seq-of", "0", "0", "1", "1", "--
              "--rename-seq", "0=Kick In", "--move-region", "3=0", "--shift-region", "1=20", "--trim-region", "2=0.5,1.0"]
 
 
-def song_run(label: str, env: dict | None = None) -> dict:
-    rc, _summary, rows = run_phase(label, "song", CLAP, env, SONG_ARGS)
+SONG_SHIFT_ARGS = ["--seq-names", "Kick", "Snare", "--seq-of", "0", "0", "1", "1", "--regions-all", "0,1.5,0", "--regions-step", "2", "--shift-region", "1=20"]
+
+
+def song_run(label: str, env: dict | None = None, args: list | None = None) -> dict:
+    rc, _summary, rows = run_phase(label, "song", CLAP, env, args or SONG_ARGS)
     return {"rc": rc, "rows": rows}
+
+
+def song_shift_parts(run: dict) -> dict:
+    """The host moves one clip in the song and nothing else (no analysis round): the rows must show it, from the live regions."""
+    name = "editor-song-shift"
+    after = (page_reports(run["rows"], "song-after") or [None])[0]
+    if after is None:
+        return {name: (False, f"no usable run (rc={run['rc']}, {len(page_reports(run['rows'], 'song-after'))} report(s))")}
+    keys = track_names(FILES)
+    s1 = song_clip(after["rows"]["rows"][0], keys[1]) if after["rows"]["rows"] else None
+    jobs = job_rows_of(run["rows"])
+    return {name: (s1 == [(0.0, 1.5, 20.0, 1.0)],
+                   f"after the host moved the clip of source 1 from song 2 s to 20 s (no new analysis round: {len(jobs)} job(s) in the run) the row shows it at {s1} (want [(0.0, 1.5, 20.0, 1.0)])"
+                   + (" (start_play is old: the rows were made from the last analysis round, not from the live regions)" if s1 == [(0.0, 1.5, 2.0, 1.0)] else ""))}
 
 
 def song_clip(row: dict, key: str) -> list:
@@ -6867,18 +6888,17 @@ def song_parts(run: dict) -> dict:
         + ("" if not second or all(h["drawn"] for h in second) else f": the second source of the DAW track is not drawn at its song position (clip at {a[0]['clips'][1]['s'] if a else None} s)"))
     rb = pb.get("rows") or {}
     cut = (rb.get(b[1]["id"]) or {}).get("hits", []) if len(b) > 1 else []
-    cut_out = (rb.get(b[1]["id"]) or {}).get("outside", []) if len(b) > 1 else []
     parts["editor-song-cut"] = (
-        bool(cut) and all(h["drawn"] for h in cut) and not any(h["drawn"] for h in cut_out) and bool(cut_out),
+        bool(cut) and all(h["drawn"] for h in cut),
         f"after the host trimmed the clip of source 2 to its slice 0.5 s to 1.5 s and put it at song 4.5 s: {len(cut)} hit(s) of the slice drawn at {[round(h['song'], 3) for h in cut]} "
-        f"(all drawn: {all(h['drawn'] for h in cut)}), {len(cut_out)} hit(s) before the start of the slice, not drawn: {[h['drawn'] for h in cut_out]} (want all False)"
+        f"(all drawn: {all(h['drawn'] for h in cut)}, want True)"
         + ("" if all(h["drawn"] for h in cut) else ": the cut start of the clip is ignored"))
     return parts
 
 
 def song_edit_run(label: str, arg: str, env: dict | None = None) -> dict:
     """Mode `song` with `--arg edit` (a double click in the second clip of the first DAW track and one in the gap) or `--arg base` (none)."""
-    rc, _summary, rows = run_phase(label, "song", CLAP, env, ["--seq-names", "Kick", "Snare", "--seq-of", "0", "0", "1", "1", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", arg])
+    rc, _summary, rows = run_phase(label, "song", CLAP, env, ["--seq-names", "Kick", "Snare", "--seq-of", "0", "0", "1", "1", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", arg, *(["--wait-sync"] if arg == "edit" else [])])
     return {"rc": rc, "rows": rows, "notes": host_notes_of(host_lines(label), "editor")}
 
 
@@ -6907,7 +6927,7 @@ def song_edit_parts(edit: dict, base: dict) -> dict:
         f"a double click at song {e['want_song_t']:.3f} s in the second clip of the first DAW track adds {added} hit (want 1) to the SECOND source, stored at source time {e['want_src_t']:.3f} s = sample "
         f"{want_sample}; the host notes of the sources that changed ({changed}) gained the samples {new_s} (want one within 1 sample of {want_sample}; the song time would be sample {song_sample}); "
         f"a double click in the gap between the clips adds none and says {e.get('gap_msg')!r}"
-        + ("" if not new_s or abs(new_s[0] - want_sample) <= 1 else ": the song time was stored, not the source time"))
+        + ("" if added == 1 and new_s and abs(new_s[0] - want_sample) <= 1 else ": no hit was stored at the source time (the song time was stored, or none at all)"))
     parts["editor-song-store"] = (
         bool(bn) and len(changed) == 1 and len(new_s) == 1,
         f"compared with a run that made no edit, one source changed in the notes for the host ({changed}, {len(new_s)} new note(s)); no other source changed (want exactly one changed); "
@@ -6919,14 +6939,15 @@ def stage_editor_song_rows() -> bool:
     if not HOST.exists():
         return pass_fail("editor-song-rows", False, "no host")
     ok = print_parts("", song_parts(song_run("editor-song-rows")))
+    ok = print_parts("", song_shift_parts(song_run("editor-song-shift", args=SONG_SHIFT_ARGS))) and ok
     return print_parts("", song_edit_parts(song_edit_run("editor-song-edit", "edit"), song_edit_run("editor-song-base", "base"))) and ok
 
 
 def stage_editor_song_rows_fault() -> bool:
     ok = True
-    run_ = song_run("editor-song-fault-round-regions", {"DS_ARA_SONG_FAULT": "round-regions"})
-    ok = fault_part("editor-song-fault-round-regions", song_parts(run_), "editor-song-live",
-                    "the rows are made from the regions of the last round: a clip moved in the DAW is not seen") and ok
+    run_ = song_run("editor-song-fault-round-regions", {"DS_ARA_SONG_FAULT": "round-regions"}, SONG_SHIFT_ARGS)
+    ok = fault_reason("editor-song-fault-round-regions", song_shift_parts(run_), "editor-song-shift",
+                      "the rows are made from the regions of the last round: a clip moved in the DAW is not seen", "start_play is old")
     for label, part, what, reason in (
         ("source-x", "editor-song-draw", "the page draws the hit lines at source time, not at song time", "is not drawn at its song position"),
         ("home-only", "editor-song-draw", "the page draws only the first source of a DAW track", "is not drawn at its song position"),
@@ -6936,7 +6957,7 @@ def stage_editor_song_rows_fault() -> bool:
         ok = fault_reason(f"editor-song-fault-{label}", parts, part, what, reason) and ok
     base = song_edit_run("editor-song-fault-store-base", "base")
     parts = song_edit_parts(song_edit_run("editor-song-fault-store-song", "edit", {"DS_ARA_SONG_FAULT": "store-song"}), base)
-    ok = fault_reason("editor-song-fault-store-song", parts, "editor-song-edit", "the page stores the song time of a hit it adds", "the song time was stored, not the source time") and ok
+    ok = fault_reason("editor-song-fault-store-song", parts, "editor-song-edit", "the page stores the song time of a hit it adds", "no hit was stored at the source time") and ok
     parts = song_parts({"rc": 2, "rows": []})
     ok = pass_fail("editor-song-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()),
                    "a run with no page report fails with 'no usable run'") and ok

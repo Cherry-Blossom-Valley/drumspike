@@ -1323,7 +1323,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 }
                 rss_open = rss_mb();
             }
-            if got && mode == "edit" && wait_sync {
+            if got && (mode == "edit" || mode == "song") && wait_sync {
                 // the plugin reads the events again on its worker; wait for its row
                 let t = Instant::now();
                 while t.elapsed() < Duration::from_secs(15) && count_rows("page_sync", None) == 0 {

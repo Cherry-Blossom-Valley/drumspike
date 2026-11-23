@@ -229,7 +229,9 @@ pub fn payload(state: &ViewState, tracks: &[TrackFacts], order: &HashMap<u64, Op
     // the range is in song time and the page shows song time: it goes as it is
     let mut ranges: Vec<Value> = Vec::new();
     let mut why = "none";
-    if let Some((start, dur)) = raw.range {
+    // a selection that names a DAW track no source of the plugin has changes nothing in the page: its range is not used either
+    let range = if none { None } else { raw.range };
+    if let Some((start, dur)) = range {
         if start.is_finite() && dur.is_finite() && dur > 0.0 {
             ranges = vec![json!({"t0": start, "t1": start + dur})];
             why = "ok";

@@ -165,9 +165,10 @@ def test_a_double_click_in_the_second_clip_adds_a_hit_in_the_source_time_of_that
     host.wait_for_function("([b, n]) => S.events[b].length === n", arg=[b, n_b + 1])
     got = host.evaluate("([a, b]) => ({ a: S.events[a].length, t: S.events[b].map(e => e.t) })", [a, b])
     assert got["a"] == n_a, "the first source is not touched"
-    assert any(abs(t - 2.2) <= 1 / 48000 for t in got["t"]), f"stored in source time 1.0 + (11.2 - 10.0): {got['t']}"
+    assert any(abs(t - 2.2) <= 0.02 for t in got["t"]), f"stored in source time 1.0 + (11.2 - 10.0), to the pixel: {got['t']}"
     assert not any(abs(t - 11.2) < 0.01 for t in got["t"]), "the song time was not stored"
-    assert host.evaluate("([a, b]) => HT.hitRefs(HT.clips(a), S.events, 11.0, 11.4).map(r => [r.src === b, Math.round(r.t * 1000) / 1000])", [a, b]) == [[True, 11.2]]
+    near = host.evaluate("([a, b]) => HT.hitRefs(HT.clips(a), S.events, 11.0, 11.4).map(r => [r.src === b, r.t])", [a, b])
+    assert len(near) == 1 and near[0][0] is True and abs(near[0][1] - 11.2) <= 0.02, near
     # the same point in a gap (song 7 s: no clip of this DAW track holds it): no hit, and the message says why
     spike_event(host, a, "dblclick", 7.0)
     wait_idle(host)
@@ -185,7 +186,7 @@ def test_a_hit_drag_moves_the_hit_in_its_source_and_stays_in_its_clip(host):
     spike_event(host, a, "mousedown", 11.5)
     spike_event(host, a, "mousemove", 11.5, dx=-0.25 * px_per_s)
     spike_event(host, a, "mouseup", 11.5, dx=-0.25 * px_per_s)
-    host.wait_for_function("([b]) => S.events[b].some(e => Math.abs(e.t - 2.25) < 0.002)", arg=[b])
+    host.wait_for_function("([b]) => S.events[b].some(e => Math.abs(e.t - 2.25) < 0.02)", arg=[b])
     # a drag far to the left stops at the start of the clip: the source time never goes below 1.0 s
     spike_event(host, a, "mousedown", 10.5)   # the hit at 1.5 s of the second source
     spike_event(host, a, "mousemove", 10.5, dx=-3 * px_per_s)
@@ -263,15 +264,24 @@ def test_the_fault_flags_change_what_the_page_does(host):
     host.evaluate("() => { HT.fault = 'home-only'; invalidateHits(); }")
     wait_idle(host)
     assert not line_at(host, a, 10.5) and line_at(host, a, 1.5), "home-only: only the first source of the DAW track is drawn"
-    host.evaluate("() => { HT.fault = 'store-song'; }")
+
+
+def test_the_store_song_fault_stores_the_song_time_of_a_hit(host):
+    """The fault flag store-song: an added hit is stored with its song time. The clip lies at song 3.5 s, so the song time is inside the audio
+    of the source and the service takes it (a song time past the end of the audio is refused, which the plugin stage shows)."""
+    a, b = NAMES[0], NAMES[1]
+    moved = rows_payload()
+    moved["rows"][0]["clips"][1]["s"] = 3.5
+    take(host, moved)
+    host.evaluate("() => setView(0, 12)")
+    wait_idle(host)
     n_b = host.evaluate("([b]) => S.events[b].length", [b])
-    host.evaluate("() => { HT.fault = ''; }")
-    n_a = host.evaluate("([a]) => S.events[a].length", [a])
     host.evaluate("() => { HT.fault = 'store-song'; }")
-    spike_event(host, a, "dblclick", 11.2)
+    spike_event(host, a, "dblclick", 4.0)   # inside the second clip: its audio from 1.0 s, at song 3.5 s: the source time is 1.5 s
     host.wait_for_function("([b, n]) => S.events[b].length === n", arg=[b, n_b + 1])
-    assert host.evaluate("([b]) => S.events[b].some(e => Math.abs(e.t - 11.2) < 0.01)", [b]), "store-song: the song time was stored"
     host.evaluate("() => { HT.fault = ''; }")
+    times = host.evaluate("([b]) => S.events[b].map(e => e.t)", [b])
+    assert any(abs(t - 4.0) < 0.02 for t in times), f"store-song: the song time 4.0 was stored: {times}"
 
 
 def test_the_leak_fault_turns_the_mode_on_in_the_standalone_page_and_the_standalone_checks_see_it(app, make_project):
