@@ -2253,6 +2253,45 @@ def readd_same(f: dict, tracks: list, events: dict) -> tuple[bool, str]:
     )
 
 
+def readd_unknown_parts(label: str, env: dict | None) -> list:
+    """Parts of the M1 rule: (name, ok, evidence, run facts)."""
+    ok_store, archive, why = archive_store()
+    blob = json.loads(archive.read_text())
+    src = blob["sources"][READD_SOURCE]
+    track = src["track"]
+    kick = FILES[0]
+    twin = "m1a_twin_96k_mono.wav"  # the length of the tom, other hits
+    make_wav(FIXTURES / twin, 96000, 1, 3.0, [(0.30, 90.0, 0.9), (1.10, 90.0, 0.85), (2.20, 90.0, 0.9)], [])
+    out = []
+
+    def one(pname: str, edit, files: list, what: str):
+        a = readd_archive(pname, edit)
+        f = readd_run(f"{label}-{pname}", a, files, env, by_name=True)
+        job = f["jobs"][-1] if f["jobs"] else {}
+        ok = (
+            f["healthy"] and len(f["jobs"]) == 1 and job.get("analysed") == [track] and not job.get("errors")
+            and not job.get("skipped") and not f["repairs"] and f["online"]
+        )
+        out.append((pname, ok, f"{what}: {len(f['jobs'])} round(s) analysing {job.get('analysed')} (want 1 for {[track]}), "
+                    f"{len(f['repairs'])} repair row(s) (want 0), project document online on disk {f['online']}", f))
+
+    def other_length(b):
+        s = b["sources"][READD_SOURCE]
+        s.pop("content_hash", None)
+        b["sources"][0]["name"] = "unused.wav"  # the archive matches the first source of that name: the kick entry must not
+        s["name"] = kick  # the kick is 1.5 times shorter than the tom of the archive: the stored count differs
+
+    def no_count_same_length(b):
+        s = b["sources"][READD_SOURCE]
+        s.pop("content_hash", None)
+        s.pop("sample_count", None)
+        s["name"] = twin  # the length of the tom, so only the content is other
+
+    one("oldother-len", other_length, [kick], "an old archive (no hash) and a file of another length")
+    one("oldother-nocount", no_count_same_length, [twin], "an old archive (no hash, no sample count) and other audio of the same length")
+    return out
+
+
 def stage_doc_readd(fault: str | None = None) -> bool:
     """F6 (#582): sources A and B were analysed and stored, every source was destroyed and the document closed, a new
     document is restored from the archive and the audio is read again. The restored project record of a track holds no
@@ -2275,11 +2314,14 @@ def stage_doc_readd(fault: str | None = None) -> bool:
     env = {"DS_ARA_RESTORE_FAULT": fault} if fault else None
     parts = {}
     parts["archive-hash"] = (hashed and len(events.get(track) or []) > 0, f"the stored archive carries a content hash for every source: {hashed}")
+    runs: list = []
     f = readd_run(f"{label}-all", archive, FILES, env)
+    runs.append(f)
     parts["all"] = readd_same(f, [s["track"] for s in srcs], events)
     healthy = f["healthy"]
     offline_on_disk = not f["online"]
     f = readd_run(f"{label}-one", archive, [FILES[READD_SOURCE]], env, by_name=True)
+    runs.append(f)
     parts["one"] = readd_same(f, [track], events)
     healthy = healthy and f["healthy"]
     offline_on_disk = offline_on_disk and not f["online"]
@@ -2316,6 +2358,11 @@ def stage_doc_readd(fault: str | None = None) -> bool:
         f"another content hash: {len(f['differs'])} difference row(s), {len(f['jobs'])} round(s) analysing {job.get('analysed')} "
         f"(errors {job.get('errors')}, skipped {job.get('skipped')}), project document online on disk {f['online']}",
     )
+    # M1 (review 1): an archive of an older build holds no hash and perhaps no sample count. Other audio under the same
+    # name must never get the old hits: other length = stale, no count = unknown = stale, one round for each.
+    for pname, ok_u, ev_u, fu in readd_unknown_parts(label, env):
+        parts[pname] = (ok_u, ev_u)
+        runs.append(fu)
     ok = True
     for name, (good, evidence) in parts.items():
         ok = bool(good) and ok
@@ -2325,8 +2372,8 @@ def stage_doc_readd(fault: str | None = None) -> bool:
         refused = not parts["one"][0] and not parts["all"][0]
         return pass_fail(
             label,
-            healthy and refused and offline_on_disk,
-            f"the plugin did not point the record of a restored track at the new cache file: both restores ran healthy ({healthy}), "
+            healthy and refused and offline_on_disk and not any(r["repairs"] for r in runs[:2]),
+            f"the plugin did not point the record of a restored track at the new cache file: both restores ran healthy ({healthy}) with no repair row, "
             f"the project document on disk holds records with no identity ({offline_on_disk}) and the check refused them ({refused})",
         )
     return pass_fail(label, ok, f"{len(parts)} parts")
@@ -2334,6 +2381,28 @@ def stage_doc_readd(fault: str | None = None) -> bool:
 
 def stage_doc_readd_fault() -> bool:
     return stage_doc_readd("no-repair")
+
+
+def stage_doc_readd_unknown_fault() -> bool:
+    """The fault run of the M1 rule (`unknown-same`): an archive with no hash and no sample count counts as the same
+    audio, so other audio of the same length gets the old hits and no round runs. The check must refuse that."""
+    label = "doc-readd-unknown-fault"
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail(label, False, "no host or no CLAP: run check.sh build first")
+    ok_store, _archive, why = archive_store()
+    if not ok_store:
+        return pass_fail(label, False, why)
+    parts = readd_unknown_parts(label, {"DS_ARA_RESTORE_FAULT": "unknown-same"})
+    by = {p[0]: p for p in parts}
+    nocount = by["oldother-nocount"]
+    f = nocount[3]
+    refused = not nocount[1]
+    return pass_fail(
+        label,
+        f["healthy"] and refused and len(f["jobs"]) == 0 and len(f["repairs"]) == 1,
+        f"the fault switch took an unknown content as the same audio: the restore ran healthy ({f['healthy']}), put the old hits "
+        f"on other audio with {len(f['repairs'])} repair row(s) and {len(f['jobs'])} round(s), and the check refused it ({refused})",
+    )
 
 
 def stage_doc_store_window() -> bool:
@@ -7843,6 +7912,7 @@ STAGES = {
     "doc-restore-repair-fault": stage_doc_restore_repair_fault,
     "doc-readd": stage_doc_readd,
     "doc-readd-fault": stage_doc_readd_fault,
+    "doc-readd-unknown-fault": stage_doc_readd_unknown_fault,
     "doc-retry": stage_doc_retry,
     "doc-retry-fault": stage_doc_retry_fault,
     "doc-rerequest": stage_doc_rerequest,
@@ -8006,7 +8076,7 @@ ORDER = [
     "archive-paths-fault", "archive-restore-pathname",
     "threads", "doc-service", "doc-service-fault", "doc-tracks", "doc-tracks-fault", "doc-rounds", "doc-rounds-fault", "doc-two", "doc-two-fault",
     "doc-archive", "doc-archive-fault", "doc-destroy", "doc-destroy-fault", "doc-close", "doc-close-fault", "doc-home", "doc-home-fault",
-    "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault", "doc-store-window", "doc-store-window-fault", "doc-store-early-fault", "doc-restore-repair", "doc-restore-repair-fault", "doc-readd", "doc-readd-fault",
+    "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault", "doc-store-window", "doc-store-window-fault", "doc-store-early-fault", "doc-restore-repair", "doc-restore-repair-fault", "doc-readd", "doc-readd-fault", "doc-readd-unknown-fault",
     "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",
     "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault", "doc-late-audio-arrives", "doc-late-audio-arrives-fault",

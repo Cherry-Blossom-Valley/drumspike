@@ -431,7 +431,7 @@ variants, because the hand checks in a DAW need them.
 | `DS_ARA_TESTHOST` | check | a file | check.sh only: the ARATestHost binary of the conformance stage |
 | `DS_ARA_FAULT` | fault | in-process | the analysis runs inside process on purpose, so the overrun check can fail |
 | `DS_ARA_TABLES_FAULT` | fault | 1 | the plugin serves a document controller table with one emptied slot |
-| `DS_ARA_RESTORE_FAULT` | fault | decode, newid, empty, late-events, result, no-repair | the restore decodes one source, ignores the stored id, drops the stored events, sets the events of the document on the worker thread, or counts a source that the archive holds with no result as done (the way before #572: it is never analysed), or (F6, #582) does not point the record of a restored track at the new cache file when its audio is read (the track stays offline (changed)) |
+| `DS_ARA_RESTORE_FAULT` | fault | decode, newid, empty, late-events, result, no-repair, unknown-same | the restore decodes one source, ignores the stored id, drops the stored events, sets the events of the document on the worker thread, or counts a source that the archive holds with no result as done (the way before #572: it is never analysed), or (F6, #582) does not point the record of a restored track at the new cache file when its audio is read (the track stays offline (changed)), or (F6, M1) counts a content that nobody compared (no hash and no sample count in the archive) as the same audio |
 | `DS_ARA_SERVICE_FAULT` | fault | per-job | a new service for every job (the M1a way) |
 | `DS_ARA_TRACKS_FAULT` | fault | forget | a later request forgets the earlier tracks |
 | `DS_ARA_FOLDER_FAULT` | fault | shared | every document uses one folder |

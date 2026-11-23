@@ -49,22 +49,28 @@ state it saw).
 
 ## Fix rule
 
-A restored source carries a mark `repair` until its audio is read. When the read is committed (`Msg::Ready`):
+A restored source carries a mark `repair` from the restore (also when its audio was read before the restore; the worker then
+judges it after the restore). When the read is committed (`Msg::Ready`), `repair_restored` decides:
 
-1. The archive now stores `content_hash`: the FNV-1a hash (`fnv64`, the hash the read already computes) of the samples
-   that the plugin read when it stored. A source that was not read in that session carries the hash of the archive it
-   was restored from. An archive without the field (an earlier plugin) loads as before; its audio counts as the same
-   when the sample count is the same (the rule of the restore, R4).
-2. Same hash, or no hash stored: `DocService::repoint` makes the record of the track again with the new file (only
-   `segments` and `source`; the hits and every setting of the user stay), saves the project, tells the page to reload.
-   No round runs. The report has a `track_repair` row with the status before and after.
-3. Another hash: the restored hits belong to other audio. The source is marked stale (the rule of a changed sample
-   count): the next round analyses it, keeps the hits that the user placed (the `keep` rule of the round), and
-   the round points the record first (`analyse` calls `repoint` before it looks for changes). The report has a
-   `restore_audio` row with `same: false`.
-4. A failed repair (the service is busy with a job of the page) is tried again every 100 ms for as long as the other
-   retries of the worker run. If the read fails, nothing is claimed: the mark stays, and the next good read repairs
-   the track without a user action.
+1. The archive stores `content_hash`: the FNV-1a hash (`fnv64`, the hash the read already computes) of the samples that the
+   plugin read when it stored. A source that was not read in that session carries the hash of the archive it was restored
+   from. While the host's new samples wait for their round (`reanalyse`) or the source is stale, the hits are those of the OLD
+   audio: the archive stores the source as stale and with no hash, so a restore analyses it again.
+2. The verdict on the audio. Both hashes known: equal is the same audio, else other audio. No stored hash (an archive of an
+   earlier plugin): the sample count decides, equal is the same audio (the rule of the restore, R4), another count is other
+   audio. No hash and no usable count: the content is UNKNOWN, and unknown content never gets old hits.
+3. Same audio: `DocService::repoint` makes the record of the track again with the new file (only `segments` and `source`; the
+   hits and every setting of the user stay), saves the project, tells the page to reload. No round runs. The report has a
+   `track_repair` row with the status before and after.
+4. Other or unknown audio: the source is stale; one round analyses it, keeps the hits that the user placed (the `keep` rule of
+   the round), and points the record first (`analyse` calls `repoint` before it looks for changes). The report has a
+   `restore_audio` row with `same: false` and the verdict.
+5. The mark is cleared only when a row comes back with status `ok`. No row (the restore has not reached the service, no such
+   track, no file) or a track that is not `ok` keeps the mark and tries again every 100 ms for 10 s. A busy service (error
+   text starts with `409`, the text the round deferral reads) is tried again for as long as the other deferrals. A permanent
+   error (a refused record, a failed save) writes ONE row and stops; the next read starts again. A save that failed stays
+   owed (`save_owed`): the next call finds the track `ok` in memory and saves again.
+6. A repair error inside a round (not a 409) is reported and the round goes on; a 409 defers the round.
 5. No page text is changed. The text of an offline track names "relink" (it comes from the app). A host-mode word
    mapping in `static/` was tried and taken out: the stage `standalone-diff` allows no file outside `plugins/ara/` and
    `docs/design/daw-plugin/`. After this fix the state that shows the text (an audio file the service cannot match)
@@ -78,10 +84,11 @@ A restored source carries a mark `repair` until its audio is read. When the read
 | `doc-readd` part `all` | four sources restored, audio read: every track online (record on disk matches the file), the stored hits byte for byte, no round | `doc-readd-fault` (`no-repair`) |
 | part `one` | one source alone (the others are gone, its file number differs): the same | same |
 | part `hand` | hits and settings that the user changed survive (a hit value, role, note) | - |
-| part `nohash` | an archive without a content hash is the same audio | - |
+| part `nohash` | an archive without a content hash but with the same sample count is the same audio | - |
+| parts `oldother-len`, `oldother-nocount` | an old archive and other audio (another length; the same length with no stored count): one round, no repair row, no old hits put on it | `doc-readd-unknown-fault` (`unknown-same`) |
 | part `other` | another content hash: one round analyses the track, which ends online | - |
 
-The #572 stages (`doc-store-window`, `doc-store-early`, `doc-restore-repair` and the restore stages) pass unchanged.
+The fault run `doc-readd-fault` also asserts that no `track_repair` row was written. The #572 stages (`doc-store-window`, `doc-store-early`, `doc-restore-repair` and the restore stages) pass unchanged.
 
 ## Limits
 
@@ -92,3 +99,7 @@ The #572 stages (`doc-store-window`, `doc-store-early`, `doc-restore-repair` and
 - A round that analyses one stale source analyses every track whose audio is here, as every round does; the hits that
   the user placed are kept by the round, a hit that the user only deleted can come back in the tracks of that round
   (not changed by this fix).
+- Is the hash stable across host decodes of one file? Not known. The plugin hashes the samples that the host's reader
+  hands over (`readAudioSamples`, as 32-bit floats). The same file read twice by the same host gives the same samples in
+  every stage here. Another host, another sample-rate conversion or dither in the host's reader would give another hash: the
+  result is one extra analysis (hand edits kept by the `keep` rule), never old hits on other audio.

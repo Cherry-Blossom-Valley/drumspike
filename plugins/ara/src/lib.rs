@@ -204,6 +204,8 @@ struct SourceState {
     content_hash: Mutex<Option<u64>>,
     /// F6 (#582): the hash the archive stored for this source (a restore); an archive stores the live hash first.
     restored_hash: Mutex<Option<u64>>,
+    /// F6: the sample count the archive stored (0: none; an archive of an earlier plugin).
+    restored_count: std::sync::atomic::AtomicI64,
     /// F6 (#582): the source was restored with a track and its audio is not read yet. The project record of the
     /// track holds no file identity then; when the audio is read, the record is pointed at the new cache file
     /// (or, when the content is another, a new analysis follows). Cleared when the record is right.
@@ -228,12 +230,25 @@ impl SourceState {
         live.or(*self.restored_hash.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
-    /// F6 (#582): does the audio read now differ from the audio the archive stored? `false` when either hash is
-    /// unknown (an archive of an earlier plugin: the sample count decides at the restore, as before).
-    fn audio_differs_from_archive(&self) -> bool {
+    /// F6 (#582): is the audio read now the audio the archive stored the hits for? The hash decides when both
+    /// are known. Without a stored hash (an archive of an earlier plugin) the sample count decides: the same count
+    /// is taken as the same audio (the rule of the restore, R4), another count is other audio. With neither
+    /// the content is not known, and hits must not be put on audio nobody has compared: `Unknown` is treated as
+    /// stale by the caller. (`DS_ARA_RESTORE_FAULT=unknown-same`: Unknown counts as the same audio.)
+    fn audio_verdict(&self) -> Verdict {
         let live = *self.content_hash.lock().unwrap_or_else(|e| e.into_inner());
         let stored = *self.restored_hash.lock().unwrap_or_else(|e| e.into_inner());
-        matches!((live, stored), (Some(a), Some(b)) if a != b)
+        if let (Some(a), Some(b)) = (live, stored) {
+            return if a == b { Verdict::Same } else { Verdict::Differs };
+        }
+        let (rc, now) = (self.restored_count.load(Ordering::SeqCst), self.props().sample_count);
+        if rc > 0 && now > 0 {
+            return if rc == now { Verdict::Same } else { Verdict::Differs };
+        }
+        if crate::test_switch("DS_ARA_RESTORE_FAULT").as_deref() == Ok("unknown-same") {
+            return Verdict::Same;
+        }
+        Verdict::Unknown
     }
 
     fn props(&self) -> SourceProps {
@@ -317,6 +332,44 @@ impl SourceState {
         let seq_name = seqs.get(&first.sequence).and_then(|q| q.name.clone());
         names::pick_label(seq_name.as_deref(), first.name.as_deref())
     }
+}
+
+/// F6 (#582): the stale mark and the content hash an archive stores for a source. While the host's new samples wait
+/// for their round (`reanalyse`), or the source is stale, the hits are those of OLD audio: the archive says so
+/// (stale) and carries no hash, so a restore analyses the source again and never pairs old hits with a new hash.
+fn archive_marks(src: &SourceState) -> (bool, String) {
+    let stale = src.stale.load(Ordering::SeqCst) || src.reanalyse.load(Ordering::SeqCst);
+    let hash = if stale {
+        String::new()
+    } else {
+        src.stored_hash().map(|h| format!("{h:016x}")).unwrap_or_default()
+    };
+    (stale, hash)
+}
+
+/// F6: how the audio of a restored source compares with the audio of its stored hits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    Same,
+    Differs,
+    Unknown,
+}
+
+/// F6: what one try to repair a restored source came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Repair {
+    /// Nothing to do (no mark, removed, closing).
+    Skip,
+    /// The track is online; the mark is cleared.
+    Done,
+    /// Another audio (or unknown): the source is stale and a round analyses it; the round points the record.
+    Stale,
+    /// Not possible yet (the restore did not reach the service, the file is not there): try again.
+    Wait,
+    /// The service was busy with a job of the page (409): try again.
+    Busy,
+    /// A permanent error: one report row, no retry.
+    Stop,
 }
 
 /// One audio modification: the creation index of its source (the ARA graph links regions
@@ -1784,38 +1837,49 @@ impl Session {
 
     /// F6 (#582): the audio of a RESTORED source was read. The project record of its track was written at the
     /// restore, when the cache file did not exist, so it holds no file identity and the service calls the track
-    /// offline (changed) for ever. Same content (or no stored hash: the sample count decided at the restore): the
-    /// record is pointed at the new file, no round runs, the hits and settings stay. Other content: the source
-    /// is stale, a round analyses it (that round points the record first). A failed repair is tried again.
-    /// (`DS_ARA_RESTORE_FAULT=no-repair`: the old behaviour, nothing happens.)
-    fn repair_restored(&self, s: &Arc<SourceState>) {
+    /// offline (changed) for ever. Same content: the record is pointed at the new file, no round runs, the hits and
+    /// settings stay. Other or unknown content: the source is stale, a round analyses it and points the record first.
+    /// The mark `repair` is cleared only when the track answers `ok`. Busy (409) and not-yet cases are tried again
+    /// by the caller; a permanent error logs one row and stops. (`DS_ARA_RESTORE_FAULT=no-repair`: the old
+    /// behaviour, nothing happens.)
+    fn repair_restored(&self, s: &Arc<SourceState>) -> Repair {
         if !s.repair.load(Ordering::SeqCst)
             || s.removed.load(Ordering::SeqCst)
             || s.doc.closing.load(Ordering::SeqCst)
             || crate::test_switch("DS_ARA_RESTORE_FAULT").as_deref() == Ok("no-repair")
         {
-            return;
+            return Repair::Skip;
         }
         let name = s.props().name;
-        if s.audio_differs_from_archive() {
+        let verdict = s.audio_verdict();
+        if verdict != Verdict::Same || s.stale.load(Ordering::SeqCst) {
             s.repair.store(false, Ordering::SeqCst);
             s.stale.store(true, Ordering::SeqCst);
             s.analysis_failed.store(true, Ordering::SeqCst);
-            self.log(json!({"event": "restore_audio", "doc": s.doc.id(), "name": name, "same": false}).to_string());
-            return;
+            self.log(
+                json!({"event": "restore_audio", "doc": s.doc.id(), "name": name, "same": false,
+                    "verdict": format!("{verdict:?}")})
+                .to_string(),
+            );
+            return Repair::Stale;
         }
         // only the path: a snapshot would also take the mark of a rename that a round has still to see
         let Some(wav) = s.wav.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
-            return;
+            if s.repair_tries.load(Ordering::SeqCst) == 0 {
+                self.log(
+                    json!({"event": "track_repair_wait", "doc": s.doc.id(), "name": name, "why": "no audio file yet"})
+                        .to_string(),
+                );
+            }
+            return Repair::Wait;
         };
         let outcome = guard("track repair", Err("the track repair panicked".to_string()), || {
             let mut svc = s.doc.lock_svc();
             svc.repoint(&[(s.seq, wav.clone())])
         });
         match outcome {
-            Ok(rows) => {
+            Ok(rows) if !rows.is_empty() && rows.iter().all(|r| r.after == "ok") => {
                 s.repair.store(false, Ordering::SeqCst);
-                let moved = rows.iter().any(|r| r.repointed);
                 self.log(
                     json!({"event": "track_repair", "doc": s.doc.id(), "name": name, "same": true,
                         "tracks": rows.iter().map(|r| json!({
@@ -1824,24 +1888,57 @@ impl Session {
                         })).collect::<Vec<_>>()})
                     .to_string(),
                 );
-                if moved {
+                if rows.iter().any(|r| r.repointed) {
                     // the page holds the track as offline: it reads the project again
-                    s.doc.announce_reload();
+                    s.doc.announce_reload(&[]);
                 }
+                self.write_out();
+                Repair::Done
             }
-            Err(e) => {
-                let tries = s.repair_tries.fetch_add(1, Ordering::SeqCst);
-                let again = tries < DEFER_MAX_TRIES;
-                self.log(
-                    json!({"event": "track_repair_failed", "doc": s.doc.id(), "name": name, "error": e, "again": again})
+            // no row (the restore has not reached the service, no such track, no file) or a track that is not ok
+            Ok(rows) => {
+                if s.repair_tries.load(Ordering::SeqCst) == 0 {
+                    self.log(
+                        json!({"event": "track_repair_wait", "doc": s.doc.id(), "name": name,
+                            "why": if rows.is_empty() { "no track in the project yet" } else { "the track is not ok yet" }})
                         .to_string(),
-                );
-                if again {
-                    defer_msg(Msg::Ready(s.clone()));
+                    );
                 }
+                Repair::Wait
+            }
+            Err(e) if e.starts_with("409") => Repair::Busy,
+            Err(e) => {
+                self.log(
+                    json!({"event": "track_repair_failed", "doc": s.doc.id(), "name": name, "error": e}).to_string(),
+                );
+                self.write_out();
+                Repair::Stop
             }
         }
-        self.write_out();
+    }
+
+    /// Run [`Self::repair_restored`] and plan the retry it asks for (every 100 ms; a wait for the service ends after
+    /// 10 s, a busy service after the other deferrals). Rows are written once, not on every try.
+    fn repair_and_retry(&self, s: &Arc<SourceState>) {
+        let r = self.repair_restored(s);
+        let (retry, limit) = match r {
+            Repair::Wait => (true, 100),
+            Repair::Busy => (true, DEFER_MAX_TRIES),
+            _ => (false, 0),
+        };
+        if !retry {
+            return;
+        }
+        let tries = s.repair_tries.fetch_add(1, Ordering::SeqCst);
+        if tries < limit {
+            defer_msg(Msg::Ready(s.clone()));
+        } else {
+            self.log(
+                json!({"event": "track_repair_failed", "doc": s.doc.id(), "name": s.props().name, "error": "gave up"})
+                    .to_string(),
+            );
+            self.write_out();
+        }
     }
 
     /// Queue a source that needs analysis and is not queued (and no round works on it) yet.
@@ -2009,7 +2106,7 @@ impl Session {
                 }
             }
             Msg::Ready(s) => {
-                self.repair_restored(&s);
+                self.repair_and_retry(&s);
                 // The audio of a source that has no result is here now. That is a source the
                 // host never asked for (M1b4), or one that has no result after a late audio, a
                 // failed round or a stale track after a restore: a round takes it, the host
@@ -2208,6 +2305,9 @@ impl Session {
                 return false;
             }
         };
+        if let Some(e) = &result.repair_error {
+            self.log(json!({"event": "track_repair_failed", "doc": id, "error": e, "in_round": true}).to_string());
+        }
         if !result.ran {
             self.log(
                 json!({"event": "round_end", "doc": id, "outcome": "idle", "unix_ns": now_ns().to_string()})
@@ -3545,6 +3645,7 @@ unsafe extern "C" fn dc_createAudioSource(
                 stale: AtomicBool::new(false),
                 content_hash: Mutex::new(None),
                 restored_hash: Mutex::new(None),
+                restored_count: std::sync::atomic::AtomicI64::new(0),
                 repair: AtomicBool::new(false),
                 repair_tries: std::sync::atomic::AtomicU32::new(0),
                 requested_at: Mutex::new(None),
@@ -4342,7 +4443,9 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
                         sample_rate: p.sample_rate,
                         notes: src.notes.lock().map(|n| n.clone()).unwrap_or_default(),
                         track: src.track.lock().ok().and_then(|t| t.clone()).unwrap_or_default(),
-                        stale: src.stale.load(Ordering::SeqCst),
+                        // F6 (#582): while the host's new samples wait for their round, the hits are those of the OLD audio:
+                        // the archive says so (stale) and carries no hash, so a restore analyses the source again
+                        stale: archive_marks(src).0,
                         settings: {
                             let track = src.track.lock().ok().and_then(|t| t.clone()).unwrap_or_default();
                             settings_guard
@@ -4352,7 +4455,7 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
                                 .unwrap_or_default()
                         },
                         sample_count: p.sample_count,
-                        content_hash: src.stored_hash().map(|h| format!("{h:016x}")).unwrap_or_default(),
+                        content_hash: archive_marks(src).1,
                     }
                 })
                 .collect()
@@ -4508,14 +4611,9 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                     // exist yet). A source whose audio is read already is judged at once.
                     *src.restored_hash.lock().unwrap_or_else(|e| e.into_inner()) =
                         u64::from_str_radix(&a.content_hash, 16).ok();
-                    if has_wav(src) {
-                        if src.audio_differs_from_archive() {
-                            src.stale.store(true, Ordering::SeqCst);
-                            src.analysis_failed.store(true, Ordering::SeqCst);
-                        }
-                    } else {
-                        src.repair.store(true, Ordering::SeqCst);
-                    }
+                    src.restored_count.store(a.sample_count, Ordering::SeqCst);
+                    src.repair_tries.store(0, Ordering::SeqCst);
+                    src.repair.store(true, Ordering::SeqCst);
                     if let Some((_, events)) = events_ok.iter().find(|(k, _)| **k == track) {
                         if let Ok(mut t) = src.track.lock() {
                             *t = Some(track.clone());
@@ -4573,6 +4671,13 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                 tracks: restored,
             },
         );
+        // F6 (#582): a source whose audio was read before the restore has no read to come: its content is judged now,
+        // by the worker, after the restore (the messages keep their order)
+        if let Ok(list) = ctl.sources.lock() {
+            for src in list.iter().filter(|x| x.repair.load(Ordering::SeqCst) && has_wav(x)) {
+                send(s, Msg::Ready(src.clone()));
+            }
+        }
         // the fault switch of the no-decode check: decode one source during the restore
         // on purpose, so the gate's "no read row, no cache WAV" proof can fail
         if crate::test_switch("DS_ARA_RESTORE_FAULT").as_deref() == Ok("decode") {
@@ -5583,6 +5688,7 @@ mod tests {
             stale: AtomicBool::new(false),
             content_hash: Mutex::new(None),
             restored_hash: Mutex::new(None),
+            restored_count: std::sync::atomic::AtomicI64::new(0),
             repair: AtomicBool::new(false),
             repair_tries: std::sync::atomic::AtomicU32::new(0),
             requested_at: Mutex::new(None),
@@ -6152,6 +6258,100 @@ mod tests {
         // its read ends later: still not queued
         assert!(!session().absorb(Msg::Ready(src.clone()), &mut st));
         assert!(st.requested.is_empty());
+    }
+
+    /// A source as a restore leaves it: a track with hits, its audio not read yet.
+    fn restored_source(doc: &Arc<DocShared>, hash: Option<u64>, count: i64) -> Arc<SourceState> {
+        let src = bare_source(doc, 0);
+        src.requested.store(false, Ordering::SeqCst);
+        src.has_events.store(true, Ordering::SeqCst);
+        src.repair.store(true, Ordering::SeqCst);
+        *src.restored_hash.lock().unwrap() = hash;
+        src.restored_count.store(count, Ordering::SeqCst);
+        src
+    }
+
+    #[test]
+    fn the_verdict_on_the_audio_of_a_restored_source_never_guesses_for_an_unknown_content() {
+        let doc = DocShared::new();
+        let read = |src: &Arc<SourceState>, hash: u64, count: i64| {
+            *src.content_hash.lock().unwrap() = Some(hash);
+            src.props.lock().unwrap().sample_count = count;
+        };
+        let a = restored_source(&doc, Some(7), 1000);
+        read(&a, 7, 2000);
+        assert_eq!(a.audio_verdict(), Verdict::Same, "the hash decides when both are known");
+        read(&a, 8, 1000);
+        assert_eq!(a.audio_verdict(), Verdict::Differs);
+        let b = restored_source(&doc, None, 1000);
+        read(&b, 8, 1000);
+        assert_eq!(
+            b.audio_verdict(),
+            Verdict::Same,
+            "no hash: the same count is the same audio"
+        );
+        read(&b, 8, 2000);
+        assert_eq!(
+            b.audio_verdict(),
+            Verdict::Differs,
+            "no hash: another count is other audio"
+        );
+        let c = restored_source(&doc, None, 0);
+        read(&c, 8, 1000);
+        assert_eq!(
+            c.audio_verdict(),
+            Verdict::Unknown,
+            "no hash and no count: nobody compared it"
+        );
+        let mut st = WorkerState::default();
+        assert!(!session().absorb(Msg::Ready(c.clone()), &mut st));
+        assert!(c.stale.load(Ordering::SeqCst) && !c.repair.load(Ordering::SeqCst));
+        assert_eq!(st.requested.len(), 1, "one round analyses it");
+    }
+
+    #[test]
+    fn the_mark_stays_until_the_track_answers_ok_and_a_read_before_the_restore_waits() {
+        // S2: the audio is read before the service has the track (no restore has reached it): nothing is cleared
+        let doc = DocShared::new();
+        let src = restored_source(&doc, Some(7), 1000);
+        *src.content_hash.lock().unwrap() = Some(7);
+        assert_eq!(session().repair_restored(&src), Repair::Wait, "no audio file yet");
+        *src.wav.lock().unwrap() = Some(std::env::temp_dir().join("drumspike-ara-no-such.wav"));
+        assert_eq!(
+            session().repair_restored(&src),
+            Repair::Wait,
+            "no track in the project yet"
+        );
+        assert!(src.repair.load(Ordering::SeqCst), "the mark is kept for the retry");
+        // a source with no mark is left alone
+        src.repair.store(false, Ordering::SeqCst);
+        assert_eq!(session().repair_restored(&src), Repair::Skip);
+    }
+
+    #[test]
+    fn an_archive_taken_while_new_samples_wait_for_their_round_carries_no_hash_and_restores_as_one_round() {
+        // S6: content update, read commit (the new hash is there), archive before the round ended
+        let doc = DocShared::new();
+        let src = bare_source(&doc, 0);
+        src.has_events.store(true, Ordering::SeqCst);
+        *src.content_hash.lock().unwrap() = Some(9);
+        assert_eq!(
+            archive_marks(&src),
+            (false, format!("{:016x}", 9u64)),
+            "a settled source stores its hash"
+        );
+        src.reanalyse.store(true, Ordering::SeqCst);
+        let (stale, hash) = archive_marks(&src);
+        assert!(stale && hash.is_empty(), "the hits are of the old audio");
+        // the restore of that archive: stale, no hash: one round when the audio is read
+        let back = restored_source(&doc, None, 0);
+        back.stale.store(stale, Ordering::SeqCst);
+        back.analysis_failed.store(stale, Ordering::SeqCst);
+        *back.content_hash.lock().unwrap() = Some(9);
+        let mut st = WorkerState::default();
+        assert!(!session().absorb(Msg::Ready(back.clone()), &mut st));
+        assert_eq!(st.requested.len(), 1);
+        assert!(needs_analysis(&back));
     }
 
     #[test]

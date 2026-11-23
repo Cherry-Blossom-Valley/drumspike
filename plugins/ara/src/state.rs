@@ -278,6 +278,22 @@ mod tests {
     }
 
     #[test]
+    fn a_reader_of_an_earlier_plugin_loads_an_archive_with_a_content_hash() {
+        #[derive(serde::Deserialize)]
+        struct OldSource {
+            name: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct OldState {
+            version: i64,
+            sources: Vec<OldSource>,
+        }
+        let text = r#"{"version":1,"archive_id":"x","events":{},"sources":[{"persistent_id":"p","name":"k.wav","sample_rate":48000.0,"notes":[],"content_hash":"00000000000000ff"}]}"#;
+        let old: OldState = serde_json::from_str(text).unwrap();
+        assert_eq!((old.version, old.sources[0].name.as_str()), (1, "k.wav"));
+    }
+
+    #[test]
     fn a_foreign_version_is_refused() {
         let bytes = br#"{"version":99,"archive_id":"x","events":{},"sources":[]}"#;
         let e = decode(bytes).unwrap_err();

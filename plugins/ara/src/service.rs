@@ -278,6 +278,8 @@ pub struct JobResult {
     pub stale: Vec<String>,
     /// A round ran. False: nothing had changed (no new source, no changed source, nothing removed).
     pub ran: bool,
+    /// F6: the repair of a restored track's record failed with a permanent error (the round went on).
+    pub repair_error: Option<String>,
     /// The tracks of the project after the round with the creation index of their source.
     pub tracks: Vec<(String, usize)>,
     /// The regions and the rate each source of the project has in the snapshot the notes were
@@ -316,6 +318,7 @@ impl JobResult {
             skipped: Vec::new(),
             stale: Vec::new(),
             ran: false,
+            repair_error: None,
             tracks: Vec::new(),
             regions: HashMap::new(),
             role_audio: Vec::new(),
@@ -468,6 +471,8 @@ pub struct DocService {
     snaps: HashMap<usize, SourceSnapshot>,
     /// A source left the project: the tracks that are left need a round.
     dirty: bool,
+    /// F6: a repointed record is in the open project but the project was not saved yet (the save failed or is due).
+    save_owed: bool,
     /// The test round that fails once (`DS_ARA_SCENARIO=fail-first-round`) has failed.
     failed_once: bool,
     /// How many rounds `DS_ARA_SCENARIO=fail-rounds:<n>` has failed.
@@ -653,6 +658,7 @@ impl DocService {
             events: Map::new(),
             snaps: HashMap::new(),
             dirty: false,
+            save_owed: false,
             failed_once: false,
             failed_rounds: 0,
             canceller: Canceller::default(),
@@ -846,8 +852,15 @@ impl DocService {
             .filter(|s| s.ready && s.audio_problem().is_none())
             .map(|s| (s.seq, s.wav.clone()))
             .collect();
+        let mut repair_error = None;
         if !ready.is_empty() && self.snaps.values().any(|o| !o.ready) {
-            self.repoint(&ready)?;
+            match self.repoint(&ready) {
+                Ok(_) => {}
+                // a job of the page is running: the round is deferred like any other 409
+                Err(e) if e.starts_with("409") => return Err(e),
+                // anything else: the round goes on (the track may be analysed by another record); the report says so
+                Err(e) => repair_error = Some(e),
+            }
         }
         let duplicate = switch("DS_ARA_RETRY_FAULT").as_deref() == Some("duplicate");
         let known: Vec<usize> = self.tracks.iter().map(|(_, s)| *s).collect();
@@ -858,7 +871,9 @@ impl DocService {
             .collect();
         let changed = self.without_role_noops(changed);
         if !force && new.is_empty() && changed.is_empty() && !self.dirty {
-            return Ok(JobResult::noop(self.track_names()));
+            let mut idle = JobResult::noop(self.track_names());
+            idle.repair_error = repair_error;
+            return Ok(idle);
         }
         let sid = self.ensure_open()?;
         let svc = self.service()?;
@@ -1118,6 +1133,7 @@ impl DocService {
             skipped,
             stale,
             ran: true,
+            repair_error,
             tracks: self.tracks.clone(),
             regions: self
                 .snaps
@@ -1292,7 +1308,6 @@ impl DocService {
             return Ok(rows);
         };
         let dir = self.project_dir();
-        let mut saved = false;
         for (seq, wav) in wavs {
             let Some(old) = self.snaps.get(seq) else { continue };
             if !wav.is_file() {
@@ -1335,7 +1350,7 @@ impl DocService {
                     });
                 }
                 repointed = true;
-                saved = true;
+                self.save_owed = true;
             }
             let all = svc.tracks_get(&sid).map_err(err)?;
             let record = &all["tracks"][name.as_str()];
@@ -1350,8 +1365,10 @@ impl DocService {
                 note: record["note"].as_i64().unwrap_or(-1),
             });
         }
-        if saved {
-            svc.project_save(&sid).map_err(err)?;
+        // a save that failed stays owed: the next call finds the track `ok` in memory and saves again
+        if self.save_owed {
+            retry_busy(|| svc.project_save(&sid)).map_err(err)?;
+            self.save_owed = false;
         }
         Ok(rows)
     }
@@ -2464,6 +2481,15 @@ mod tests {
         // a track that is online is left as it is
         let rows = again.repoint(&[(0, snap.wav.clone())]).unwrap();
         assert!(!rows[0].repointed && rows[0].after == "ok");
+        assert!(!again.save_owed, "the save of the repointed record passed");
+        // S4: a save that failed stays owed; the next call finds the track `ok` in memory and still saves
+        again.save_owed = true;
+        let rows = again.repoint(&[(0, snap.wav.clone())]).unwrap();
+        assert!(!rows[0].repointed && !again.save_owed, "the owed save was made");
+        // a source with no track gives no row (the caller keeps its mark and asks again)
+        assert!(again.repoint(&[(5, snap.wav.clone())]).unwrap().is_empty());
+        // S5: the text of a busy service starts with the code, the way the round deferral reads it
+        assert!(err(drumspike_app::AppError::conflict("a job of the page is running")).starts_with("409"));
         again.shutdown();
         let _ = std::fs::remove_dir_all(&cache);
     }
