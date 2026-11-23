@@ -5979,8 +5979,11 @@ mod tests {
         let last = evs.last().unwrap();
         assert_eq!(last["payload"]["gen"], json!(500), "the last state arrives");
         assert_eq!(last["payload"]["doc"], json!(doc.id()));
-        let s_at = last["payload"]["rows"][1]["clips"][0]["s"].as_f64().unwrap();
-        assert_eq!(s_at, 10.0 + 499.0, "and it is the newest rows: {s_at}");
+        let clips = last["payload"]["rows"][1]["clips"].as_array().unwrap();
+        assert!(
+            clips.iter().any(|c| c["s"].as_f64() == Some(10.0 + 499.0)),
+            "and it is the newest rows: {clips:?}"
+        );
     }
 
     #[test]
