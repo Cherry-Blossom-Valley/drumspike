@@ -155,7 +155,27 @@ The plugin writes only below one cache folder:
     documents/<id>/service/               the home folder of the service (its recent list)
 
 The plugin never writes into an audio file of the session, and nothing below the user's
-home outside this folder.
+home outside this folder and one more: the folder of the user defaults (below). That folder is
+made at the first Save of a default or a preset, never by a read.
+
+## User defaults and presets (M1d3, #577)
+
+    ~/Library/Application Support/DrumSpike ARA/defaults.json
+    ~/Library/Application Support/DrumSpike ARA/Presets/<name>.json
+
+The design is `docs/design/daw-plugin/m1d3-defaults.md`. Three levels: built-in values, then this file, then the session (the project of
+the document and the ARA archive). The file applies to NEW tracks only; a restore never reads it, and a session opens as it was saved. It
+holds per role (kick, snare, tom, hat, cymbal, other) a list of 1 to 8 MIDI notes and the detection settings (thresholds, min_gap_ms,
+refine, vel_lo_db, vel_hi_db, vel_cut_db), and the page options `follow` and the export shape `export` of a new document. Every value is
+range-checked on read; a bad value gives the built-in value and one report row. A file that is a link, a folder, bigger than 256 KB or
+unreadable is ignored. A file with `v` above 1 is read and never written. A Save changes one role and keeps every field it does not know;
+two processes that save at once: the last writer wins and a reader never sees half a file (a temporary file and a rename).
+`DS_ARA_USER_DIR` moves the folder in a gate build; a gate build without it has no folder, and a delivery build reads no variable.
+Presets: `General MIDI` is built in; a file preset is `{"v":1,"name":...,"roles":{...}}` (not the kit preset format of the app).
+
+Report rows of this part never hold a path: the folder is the fixed word `defaults-folder`. Rows: `defaults_invalid` (file, why, count, the
+first five names of the bad fields), `defaults_path_refused`, `preset_invalid` (why, count), `restore_refused` (what, the names of the
+refused export fields). They are in the privacy class "no path, no track name, no audio name".
 
 The id registry (which keeps two live documents apart) holds for ONE process. Two processes
 that open the same session file share `documents/<id>`: the plugin does not lock the folder.
@@ -480,7 +500,8 @@ variants, because the hand checks in a DAW need them.
 | `DS_ARA_PREPARE_WAIT_MS` | scenario | a number of milliseconds | the watchdog of the prepared files (default 30000): how long a handle may stay preparing before it says error |
 | `DS_ARA_PREPARE_QUIET_MS` | scenario | a number of milliseconds | the quiet time before the MIDI files are made again after a change (default 800; the wav kinds wait three times as long) |
 | `DS_ARA_PREPARE_TRACE` | scenario | any value | the preparation writes a report row prepare_wake (file and line of the caller, time) for each wake of its worker |
-| `DS_ARA_DEFAULTS_FAULT` | fault | lose-kept | (#577) lose-kept: the settings that the archive holds for a source with no result are dropped in its first round (the way of main before #577) |
+| `DS_ARA_DEFAULTS_FAULT` | fault | lose-kept, trust, real-path, in-place, all-roles, always, session-loses, no-role, no-confirm, two-steps | (#577) lose-kept: the settings that the archive holds for a source with no result are dropped in its first round (the way of main before #577); trust: the defaults file is not range-checked; real-path: a gate build without DS_ARA_USER_DIR resolves the real folder; in-place: the defaults file is written in place, not atomically; all-roles: Save as default writes every role; always: a restore applies the defaults too; session-loses: the defaults overwrite the settings of a restored track; no-role: a new track without a role takes the entry of snare; no-confirm: Load Preset applies at once; two-steps: Load Preset makes one undo step per track |
+| `DS_ARA_USER_DIR` | scenario | a folder | (#577) the folder of the user defaults and presets; a gate build has no folder without it (the real folder is never reached by a stage); a delivery build reads no variable |
 
 Kinds: **config**: The plugin reads it in every build, the delivery build too (the check sets it for every run; the hand checks in a DAW need it). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. Read only by a build with the cargo feature `test-switches` (the gate build); a delivery build ignores it. **scenario**: Scenario switch: sets up a case for a stage (not a fault). Read only by a build with the cargo feature `test-switches`; a delivery build ignores it.
 

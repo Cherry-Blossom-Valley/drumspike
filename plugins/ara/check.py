@@ -231,6 +231,23 @@ ABSENT = [1.5, 2.6]
 FILES = [name for name, *_ in SPEC]
 
 
+USER_DIR_NONE = "<none>"
+
+
+def guard_user_dir(cmd: list, e: dict, log: str | None) -> None:
+    """#577: a run of the host never reaches the real folder of the user defaults. Every host process gets `DS_ARA_USER_DIR` below out/ (one
+    folder per log name); the value USER_DIR_NONE leaves it unset (the stage `defaults-real-path`); a value outside out/ is refused here."""
+    if not cmd or str(cmd[0]) != str(HOST):
+        return
+    if e.get("DS_ARA_USER_DIR") == USER_DIR_NONE:
+        e.pop("DS_ARA_USER_DIR")
+    elif not e.get("DS_ARA_USER_DIR"):
+        e["DS_ARA_USER_DIR"] = str(OUT / ("user-" + (log or "run").replace("/", "-")))
+    d = e.get("DS_ARA_USER_DIR")
+    if d and not Path(d).resolve().is_relative_to(OUT.resolve()):
+        raise AssertionError(f"a run would use {d} as the folder of the user defaults: outside {OUT}")
+
+
 def run(
     cmd: list, env: dict | None = None, log: str | None = None, cwd: Path | None = None, timeout: int = 1800,
 ) -> tuple[int, str]:
@@ -243,6 +260,7 @@ def run(
                 e.pop(k, None)
             else:
                 e[k] = v
+    guard_user_dir(cmd, e, log)
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, env=e, timeout=timeout, cwd=cwd)
     except subprocess.TimeoutExpired:
@@ -1764,7 +1782,8 @@ def check_home(label: str, home: Path, cache: Path) -> tuple[bool, str]:
     """The files written below `home` outside `cache`: 0. The files inside the cache and
     the service home inside it (with its recent list) make the check non-vacuous."""
     below = [p for p in home.rglob("*") if p.is_file()] if home.is_dir() else []
-    outside = [p for p in below if cache not in p.parents]
+    allowed = home / "Library" / "Application Support" / "DrumSpike ARA"   # #577: the one other folder the plugin may write (the first Save only)
+    outside = [p for p in below if cache not in p.parents and allowed not in p.parents]
     inside = [p for p in below if cache in p.parents]
     jobs = job_rows(label)
     svc_home = Path(jobs[-1].get("service_home", "")) if jobs else Path("")

@@ -678,8 +678,13 @@ fn poll_channel(sh: &Arc<Shared>, id: &str, total: std::time::Duration) -> Vec<V
 
 /// The commands that `call::run` leaves to the desktop shell (`SHELL_ONLY` of
 /// `crates/app/src/call.rs`), plus the one command of the drag plugin. Each has an answer.
-const SHELL_COMMANDS: [&str; 40] = [
+const SHELL_COMMANDS: [&str; 45] = [
     "plugin_report",
+    "plugin_defaults_get",
+    "plugin_defaults_save_role",
+    "plugin_defaults_reset_role",
+    "plugin_preset_save",
+    "plugin_preset_delete",
     "plugin_pick_folder",
     "plugin_host_tempo",
     "plugin_host_selection",
@@ -904,6 +909,85 @@ fn writes_outside(cmd: &str, args: &Value) -> bool {
         .any(|k| args.get(k).and_then(Value::as_str).is_some_and(|s| !s.is_empty()))
 }
 
+fn roles_json(c: &crate::userdefaults::Checked) -> Value {
+    let m: serde_json::Map<String, Value> = c
+        .roles
+        .iter()
+        .map(|(r, e)| (r.clone(), json!({"notes": e.notes, "params": e.params})))
+        .collect();
+    Value::Object(m)
+}
+
+/// The roles of a page argument, checked like a file (`roles`: `{role: {notes, params}}`).
+fn roles_arg(v: &Value) -> std::collections::BTreeMap<String, crate::userdefaults::RoleEntry> {
+    let mut bad = Vec::new();
+    crate::userdefaults::roles_of(v, "roles", &mut bad)
+}
+
+/// M1d3 (#577): the commands of the user defaults. None takes a path; the folder is `userdefaults::dir()`, which a gate build has only
+/// with `DS_ARA_USER_DIR`. An answer with an `error` text is what the page shows in its status line.
+fn defaults_command(cmd: &str, args: &Value) -> Answer {
+    use crate::userdefaults as ud;
+    let Some(dir) = ud::dir() else {
+        return if cmd == "plugin_defaults_get" {
+            Answer::json(
+                200,
+                &json!({"status": "nofolder", "text": "", "roles": {}, "follow": {}, "export": {}, "builtin": ud::BUILTIN, "presets": []}),
+            )
+        } else {
+            Answer::err(409, "the defaults could not be saved: there is no folder for them")
+        };
+    };
+    let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    match cmd {
+        "plugin_defaults_get" => {
+            let l = ud::current();
+            let (status, why) = match &l.status {
+                ud::Status::Ok if l.bad.is_empty() => ("ok", String::new()),
+                ud::Status::Ok => ("damaged", "Some values in the defaults file are not valid; built-in values are used for them.".into()),
+                ud::Status::None => ("none", String::new()),
+                ud::Status::Damaged(_) => ("damaged", "The defaults file is damaged; built-in values are used.".into()),
+                ud::Status::Newer => ("newer", "The defaults file is from a newer version of the plugin; it is read, never changed.".into()),
+            };
+            let presets: Vec<Value> = ud::list_at(&dir)
+                .into_iter()
+                .map(|p| json!({"name": p.name, "builtin": p.builtin, "roles": roles_json(&p.checked)}))
+                .collect();
+            Answer::json(
+                200,
+                &json!({"status": status, "text": why, "roles": roles_json(&l.checked), "follow": l.checked.follow,
+                    "export": l.checked.export, "builtin": ud::BUILTIN, "presets": presets}),
+            )
+        }
+        "plugin_defaults_save_role" => {
+            let role = text("role");
+            let mut one = serde_json::Map::new();
+            one.insert(role.clone(), json!({"notes": args.get("notes").cloned().unwrap_or(Value::Null), "params": args.get("params").cloned().unwrap_or(json!({}))}));
+            let mut roles = roles_arg(&Value::Object(one));
+            match roles.remove(&role) {
+                Some(e) => match ud::save_role_at(&dir, &role, Some(&e)) {
+                    Ok(()) => Answer::json(200, &json!({"role": role, "notes": e.notes})),
+                    Err(m) => Answer::err(409, m),
+                },
+                None => Answer::err(400, "the defaults could not be saved: nothing in it is valid"),
+            }
+        }
+        "plugin_defaults_reset_role" => match ud::save_role_at(&dir, &text("role"), None) {
+            Ok(()) => Answer::json(200, &json!({"role": text("role")})),
+            Err(m) => Answer::err(409, m),
+        },
+        "plugin_preset_save" => match ud::save_preset_at(&dir, &text("name"), &roles_arg(args.get("roles").unwrap_or(&Value::Null))) {
+            Ok(()) => Answer::json(200, &json!({"name": text("name").trim()})),
+            Err(m) => Answer::err(409, m),
+        },
+        "plugin_preset_delete" => match ud::delete_preset_at(&dir, &text("name")) {
+            Ok(()) => Answer::json(200, &json!({})),
+            Err(m) => Answer::err(409, m),
+        },
+        _ => Answer::err(404, format!("unknown command {cmd}")),
+    }
+}
+
 /// In a test run the calls that would reach the system (a browser, the Finder) are recorded.
 fn open_system(arg: &str, reveal: bool) -> Result<(), String> {
     if test_mode().is_some() {
@@ -1043,6 +1127,8 @@ Until then NOTICE of the repository and the licence table in plugins/ara/README.
         }
         "plugin:drag|start_drag" => start_drag_command(sh, args),
         "plugin_pick_folder" => pick_folder_command(sh, args),
+        // M1d3 (#577): the user defaults and the presets of the plugin
+        c if c.starts_with("plugin_defaults_") || c.starts_with("plugin_preset_") => defaults_command(c, args),
         "plugin_host_tempo" => {
             let a = (sh.backend.tempo)();
             Answer::json(
@@ -2353,6 +2439,11 @@ mod tests {
                     "plugin_host_locate",
                     "plugin_pick_folder",
                     "plugin_host_tempo",
+                    "plugin_defaults_get",
+                    "plugin_defaults_save_role",
+                    "plugin_defaults_reset_role",
+                    "plugin_preset_save",
+                    "plugin_preset_delete",
                 ]
                 .contains(name);
             assert!(known, "{name} is not a command of the app");
