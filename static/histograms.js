@@ -16,7 +16,7 @@
    ceiling handles of the velocity map and the 20 to 127 ramp over it; the velocities follow live (velOfDb, the core's
    velocity_of_db) and are stored when the handle is let go (one undo step, as Recompute Velocities). A follower shows
    its loudness histogram only. Both canvases draw only on a change: new data, a control, a resize; nothing per frame. */
-const HG = { name: null, p: null, el: null, d: null, lv: new Map(), gen: 0, ghosts: {}, refresh: 0, ro: null, kept: null, draws: 0,
+const HG = { rowBusy: 0, name: null, p: null, el: null, d: null, lv: new Map(), gen: 0, ghosts: {}, refresh: 0, ro: null, kept: null, draws: 0,
   sens: { base: null, want: null, busy: false, n: null, weak: null },   // base: the events and params at the drag start
   vel: { base: null, drag: null } };
 const HG_THUMB = 12;   // px: the slider thumb (style.css .hgRange); the bars sit on the thumb's travel
@@ -230,9 +230,12 @@ function hgStored(name, r, params) {
   if (r.weak_signal && r.weak_signal.to != null) {   // the retry of a 0-hit pick: the params the service stored
     p.thresholds = r.weak_signal.thresholds; p.sensitivity = r.weak_signal.to; p.weak_signal = r.weak_signal;
   } else if (r.weak_signal) p.weak_signal = r.weak_signal;
-  pushUndo({ type: "repick", track: name,
+  const homeOp = { type: "repick", track: name,
     before: { events: base.events, thresholds: base.thresholds, sensitivity: base.sensitivity },
-    after: { events: after.map(e => ({ ...e })), thresholds: (p.thresholds || []).slice(), sensitivity: p.sensitivity } });
+    after: { events: after.map(e => ({ ...e })), thresholds: (p.thresholds || []).slice(), sensitivity: p.sensitivity } };
+  const others = HT.srcsOf(name).filter(o => o !== name && S.tracks[o]);   // #555: the other sources of the DAW track get the same sensitivity, in the same undo step
+  if (others.length) rowRepick(homeOp, others, { thresholds: (p.thresholds || []).slice(), sensitivity: p.sensitivity });
+  else pushUndo(homeOp);
   s.base = null; s.n = null; s.weak = null;
   if (S.sel && S.sel.track === name) S.sel = null;
   setDirtyState(true);   // the service stored the merged hits
@@ -242,6 +245,30 @@ function hgStored(name, r, params) {
   setMsg(`${name}: ${r.n_events} ${r.n_events === 1 ? "hit" : "hits"} at sensitivity ${p.sensitivity}` + (r.weak_signal ? ` (${weakSignalText(r.weak_signal)})` : ""));   // #411: singular for one hit
   if (t === S.tracks[name] && INS.name === name) { hgRememberParams(p); insSensRefresh(p); insCounts(); insSumRefresh(); hgDrawSens(); }   // P4-25: in place, no rebuild of the panel (it flickered)
   hgLoad();
+}
+async function rowRepick(homeOp, others, params) {   // #555: the same stored re-pick for the other sources of a DAW track; one undo step for all
+  const steps = [homeOp], sid = S.sid;
+  HG.rowBusy++;
+  try {
+  for (const o of others) {
+    try {
+      await edIdle(); await settleEvents(o);
+      const t = S.tracks[o]; if (!t) continue;
+      t.params = t.params || defaultParams(t.role);
+      const bev = (S.events[o] || []).map(e => ({ ...e })), bthr = (t.params.thresholds || []).slice(), bsens = t.params.sensitivity;
+      const r = await B.repick(sid, o, { ...params, thresholds: params.thresholds.slice() }, true);
+      if (sid !== S.sid || !S.tracks[o]) continue;
+      const after = adoptEvents(r.events, bev);
+      S.events[o] = after; EDGEN[o] = (EDGEN[o] || 0) + 1;
+      t.params.thresholds = params.thresholds.slice(); t.params.sensitivity = params.sensitivity;
+      steps.push({ type: "repick", track: o, before: { events: bev, thresholds: bthr, sensitivity: bsens },
+        after: { events: after.map(e => ({ ...e })), thresholds: params.thresholds.slice(), sensitivity: params.sensitivity } });
+      markDirty(o); invalidateHits(o); refreshCounts(o);
+    } catch (e) { setMsg(`re-pick of ${trackLabel(o)}: ${errText(e)}`); }
+  }
+  pushGroup("Re-pick Hits", steps);
+  } finally { HG.rowBusy--; }
+  updateStatus();
 }
 function insSensRefresh(p) {   // the slider, its readout and the note after a stored re-pick (the same as buildParamsPanel sets at build)
   const div = $("#insParams"), sens = div.querySelector(".pSens"); if (!sens) return;
@@ -275,8 +302,9 @@ function hgSerial(track, call) {
   q[track] = next;
   return next;
 }
-function hgRepickBusy() { return HG.sens.busy || !!HG.sens.want || !!HG.sens.base; }   // a re-pick (or its store) is on its way
+function hgRepickBusy() { return HG.sens.busy || !!HG.sens.want || !!HG.sens.base || HG.rowBusy > 0; }   // #555: also while the other sources of a DAW track are being re-picked or mapped (no newer step lands before the group)   // a re-pick (or its store) is on its way
 function hgUndoWaits(op) {   // round 2: undo and redo of a re-pick step wait while a re-pick is on its way
+  if (op && op.type === "group") return op.steps.some(hgUndoWaits);   // #555
   if (!op || (op.type !== "repick" && op.type !== "shift") || !hgRepickBusy()) return false;
   setMsg("a re-pick is being stored: undo and redo wait for it");
   return true;
@@ -488,7 +516,9 @@ async function hgVelCommit(name, p, lo, hi, cut, fromDrag) {   // a handle let g
         const b = base.v.get(o.id) || [o.v, !!o.cut];
         op.before.hits[o.id] = b; op.after.hits[o.id] = [e.v, !!e.cut];
       });
-      hgApplyLoudOp(op, false, true); pushUndo(op);
+      hgApplyLoudOp(op, false, true);
+      const others = HT.srcsOf(name).filter(o => o !== name && S.tracks[o]);   // #555: the same floor, ceiling and cut for the other sources of the DAW track, in the same undo step
+      if (others.length) await rowLoud(op, others, lo, hi, cut); else pushUndo(op);
     }
     setMsg(`${name}: velocity 20 at ${lo} dB, 127 at ${hi} dB` + (cut === null ? "" : `, hits below ${cut} dB cut`));
   } catch (e) {
@@ -505,6 +535,32 @@ async function hgVelCommit(name, p, lo, hi, cut, fromDrag) {   // a handle let g
     invalidateHits(name); updateStatus();
   }
   if (HG.name === name) hgDrawLoud();
+}
+async function rowLoud(homeOp, others, lo, hi, cut) {   // #555: one undo step for the loudness range of all sources of a DAW track
+  const steps = [homeOp];
+  HG.rowBusy++;
+  try {
+  for (const o of others) {
+    try {
+      const t = S.tracks[o]; if (!t) continue;
+      t.params = t.params || defaultParams(t.role);
+      const base = hgLoudBase(o), sent = S.events[o] || [];
+      t.params.vel_lo_db = lo; t.params.vel_hi_db = hi;
+      if (cut === null) delete t.params.vel_cut_db; else t.params.vel_cut_db = cut;
+      const r = await B.velocitySet(S.sid, o, lo, hi, cut, sent.map(e => ({ t: e.t, id: e.id, ...(e.added ? { added: true } : {}), ...(e.orig !== undefined ? { orig: e.orig } : {}) })));
+      if (r.follows) { S.events[o] = normEvents(r.events); invalidateHits(o); refreshCounts(o); continue; }
+      const op = { type: "loud", track: o, before: { lo: base.lo, hi: base.hi, cut: base.cut, hits: {} }, after: { lo, hi, cut, hits: {} } };
+      r.events.forEach((e, i) => {
+        const s0 = sent[i];
+        if (!s0 || s0.id !== e.id) return;
+        const b = base.v.get(s0.id) || [s0.v, !!s0.cut];
+        op.before.hits[s0.id] = b; op.after.hits[s0.id] = [e.v, !!e.cut];
+      });
+      hgApplyLoudOp(op, false, true); steps.push(op);
+    } catch (e) { setMsg(`velocities of ${trackLabel(o)}: ${errText(e)}`); }
+  }
+  pushGroup("Set Loudness Range", steps);
+  } finally { HG.rowBusy--; }
 }
 function hgApplyLoudOp(op, reverse, initial) {   // applyOp of a "loud" step: the floor, ceiling and cut, the velocities and cut marks
   const st = reverse ? op.before : op.after, t = S.tracks[op.track];

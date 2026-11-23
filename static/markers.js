@@ -56,10 +56,12 @@ function markerAdd(t, note) {   // one more marker at t (the service stores the 
 }
 function markerAtSelection() {   // M: the selected hit's time, else the playhead (as Set Bar 1 at Playhead)
   if (!needProject()) return Promise.resolve(false);
+  if (HT.on()) { setMsg("markers are in the time of the audio of each source: the DAW owns the markers"); return Promise.resolve(false); }   // #555: inert in a DAW (the playhead is song time)
   const e = S.sel && (S.events[S.sel.track] || [])[S.sel.index];
   return markerAdd(e ? e.t : S.playhead);
 }
 function markerJump(dir) {   // Option+M and Option+Shift+M: the next or the previous marker from the playhead
+  if (HT.on()) { setMsg("markers are in the time of the audio of each source: the DAW owns the markers"); return; }   // #555: inert in a DAW
   if (!MK.list.length) { setMsg(dir > 0 ? "no next marker" : "no previous marker"); return; }
   const at = S.playhead;
   const m = dir > 0 ? MK.list.find(x => x.t > at + 1e-9) : MK.list.slice().reverse().find(x => x.t < at - 1e-9);

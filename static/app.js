@@ -175,7 +175,7 @@ const viewDur = () => Math.round((S.view.t1 - S.view.t0) * 1e9) / 1e9;
 const spanOf = v => Math.round((v.t1 - v.t0) * 1e9) / 1e9;   // the same for any view
 function tToX(t, w) { return (t - S.view.t0) / viewDur() * w; }
 function xToT(x, w) { return S.view.t0 + x / w * viewDur(); }
-function maxDur() { return Math.max(10, ...S.order.map(n => S.tracks[n].duration)); }
+function maxDur() { return HT.on() ? Math.max(10, HT.songEnd()) : Math.max(10, ...S.order.map(n => S.tracks[n].duration)); }   // #555: in a DAW the timeline is the song
 function snapSample(t, name) { const sr = S.tracks[name].sr; return Math.round(t*sr)/sr; }
 /* #353: the view of a hit edit in Training Mode: the visible span of the waveform in milliseconds and the pixels
    one sample occupies (the waveform canvas width over the samples the span holds on the track). */
@@ -194,6 +194,14 @@ function snapPlayhead(t) {
   const thresh = Math.min(10 * pxTime, 0.030);
   let best = null, bestDt = thresh;
   for (const n of S.order) {   // W6: only the hits within the threshold (binary search)
+    const clips = HT.clips(n);
+    if (clips) {   // #555: song time; the hits of every source of the row
+      for (const r of HT.hitRefs(clips, S.events, t - thresh, t + thresh, hitDrag)) {
+        const dt = Math.abs(r.t - t);
+        if (dt < bestDt) { bestDt = dt; best = r.t; }
+      }
+      continue;
+    }
     const evs = S.events[n] || [];
     for (const i of hitsIn(evs, t - thresh, t + thresh, dragSkip(n))) {
       const dt = Math.abs(evs[i].t - t);
@@ -322,7 +330,33 @@ function curOver(del, ev) { CUR.del = del; if (ev) { CUR.alt = !!ev.altKey; CUR.
 for (const t of ["keydown", "keyup", "mousemove"]) window.addEventListener(t, ev => { if (ev.target !== window) curMods(ev); }, { capture: true, passive: true });
 window.addEventListener("blur", () => { CUR.alt = CUR.shift = false; curApply(); });
 
+/* #555: the overview of a DAW: one row for each DAW track, every clip at its song position (the min/max envelope of the slice of its source) */
+function drawOverviewSong(ctx, W, H) {
+  ctx.fillStyle = "#161920"; ctx.fillRect(0, 0, W, H);
+  const maxD = maxDur(), shown = S.order.filter(n => !HT.isMerged(n)), rowH = H / Math.max(1, shown.length);
+  shown.forEach((name, idx) => {
+    const y0 = idx * rowH;
+    ctx.fillStyle = "rgba(255,255,255,0.04)"; ctx.fillRect(0, y0, W, rowH - 1);
+    for (const c of HT.clips(name) || []) {
+      const p = S.peaks[c.src]; if (!p) continue;
+      const bs = p.levels[65536] ? 65536 : p.levels[4096] ? 4096 : 256, L = p.levels[bs]; if (!L) continue;
+      const scale = ((rowH - 4) / 2) / (S.peakAmp[c.src] || 1);
+      ctx.fillStyle = trackColor(name) + "66";
+      const px0 = Math.max(0, Math.floor(c.s / maxD * W)), px1 = Math.min(W, Math.ceil((c.s + HT.songLen(c)) / maxD * W));
+      for (let px = px0; px < px1; px++) {
+        const t0 = Math.max(c.a, c.a + (px / W * maxD - c.s) / c.k), t1 = Math.min(c.b, c.a + ((px + 1) / W * maxD - c.s) / c.k);
+        const b0 = Math.max(0, Math.floor(t0 * p.sr / bs)), b1 = Math.min(L.n, Math.max(b0 + 1, Math.ceil(t1 * p.sr / bs)));
+        let mn = 1, mx = -1;
+        for (let b = b0; b < b1; b++) { mn = Math.min(mn, L.min[b]); mx = Math.max(mx, L.max[b]); }
+        if (mx < mn) continue;
+        const yy0 = y0 + rowH / 2 - mx * scale, yy1 = y0 + rowH / 2 - mn * scale;
+        ctx.fillRect(px, yy0, 1, Math.max(1, yy1 - yy0));
+      }
+    }
+  });
+}
 function drawOverviewTracks(ctx, W, H) {
+  if (HT.on()) { drawOverviewSong(ctx, W, H); return; }
   ctx.fillStyle = "#161920"; ctx.fillRect(0,0,W,H);
   const rowH = H / Math.max(1, S.order.length);
   S.order.forEach((name, idx) => {
@@ -358,7 +392,7 @@ function drawOverviewTracks(ctx, W, H) {
 const OV = { key: "", peaks: [], amps: [], canvas: null };
 function overviewTracks(c, W, H) {
   const peaks = S.order.map(n => S.peaks[n]), amps = S.order.map(n => S.peakAmp[n]);
-  const key = `${c.width}x${c.height}|${W}x${H}|${S.order.map(n => n + trackColor(n)).join("|")}`;
+  const key = `${c.width}x${c.height}|${W}x${H}|${S.order.map(n => n + trackColor(n)).join("|")}${HT.on() ? "|" + JSON.stringify(HT.view.map(e => [e.home, e.clips])) : ""}`;   // #555: the clips are part of the key
   if (OV.canvas && key === OV.key && peaks.every((p, i) => p === OV.peaks[i]) && amps.every((a, i) => a === OV.amps[i])) return OV.canvas;
   OV.key = key; OV.peaks = peaks; OV.amps = amps;
   if (OV.canvas) { OV.canvas.width = 0; OV.canvas.height = 0; }
@@ -749,6 +783,7 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
   sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; }, exTempoReset: () => { EX.tempoAck = false; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks; #151: the default-tempo answer is per project
   hostMenuInit();   // #559: the menu button of the host mode (returns at once with the mode off)
   hostSelInit();   // #562: the follow of the DAW selection (returns at once with the mode off)
+  HT.init();   // #555: the rows of the DAW tracks in song time (returns at once with the mode off)
   hostApply();   // #539: the page of the host mode (a class on <body>, the controls of the list hidden) before the first layout
   tmInit(); measureGeo(); geoObserve();   // P4-8: the map rulers; P3-14d: the geometry once now, then from the ResizeObserver
   // #518: the one host listener — the shell sets window.__DS_HOST_MODE__ and B.hostTransport

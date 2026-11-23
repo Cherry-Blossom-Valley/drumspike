@@ -91,11 +91,15 @@ function drawVelLane(canvas, name) {
   ctx.textBaseline = "middle";
   ctx.textAlign = "right"; ctx.fillText("64", W - 3, vlYOf(64, H)); ctx.fillText("0", W - 3, H - 6);
   const evs = S.events[name] || [];
-  const range = LN.sel && LN.sel.track === name ? LN.sel : null;
-  for (const i of hitsIn(evs, S.view.t0 - 8 * viewDur() / W, S.view.t1 + 8 * viewDur() / W, dragSkip(name))) {
-    const e = evs[i], x = Math.round(tToX(e.t, W));
+  const clips = HT.clips(name);   // #555: the clips of the DAW track: the hits of every source of the row at their song time
+  const pad = 8 * viewDur() / W;
+  const refs = clips ? HT.hitRefs(clips, S.events, S.view.t0 - pad, S.view.t1 + pad, hitDrag)
+    : hitsIn(evs, S.view.t0 - pad, S.view.t1 + pad, dragSkip(name)).map(i => ({ src: name, i, t: evs[i].t }));
+  for (const h of refs) {
+    const e = (S.events[h.src] || evs)[h.i], i = h.i, x = Math.round(tToX(h.t, W));
     if (x < -2 || x > W + 2) continue;
-    const out = hgIsCut(e), sel = S.sel && S.sel.track === name && S.sel.index === i;
+    const range = LN.sel && LN.sel.track === h.src ? LN.sel : null;
+    const out = hgIsCut(e), sel = S.sel && S.sel.track === h.src && S.sel.index === i;
     const inRange = !!range && e.t >= range.t0 && e.t <= range.t1;
     ctx.fillStyle = out ? HG_GREY : e.edited || isManual(e) ? MANUAL_COLOR : color;
     const y = vlYOf(e.v, H);
@@ -108,9 +112,11 @@ function drawVelLane(canvas, name) {
     const d = VL.drag, x0 = tToX(d.t0, W), x1 = d.curX;
     ctx.strokeStyle = "rgba(255,255,255,0.55)"; ctx.beginPath(); ctx.moveTo(x0, d.y0); ctx.lineTo(x1, d.curY); ctx.stroke();
   }
-  const hv = VL.hover && VL.hover.track === name ? evs.find(x => x.id === VL.hover.id) : null;
+  const hvSrc = VL.hover && (clips ? clips.some(c => c.src === VL.hover.track) : VL.hover.track === name) ? VL.hover.track : null;
+  const hv = hvSrc ? (S.events[hvSrc] || []).find(x => x.id === VL.hover.id) : null;
   if (hv) {   // the hover label: the velocity, the time, and why a grey stalk is grey
-    const x = Math.round(tToX(hv.t, W));
+    const hc = clips ? clips.find(c => c.src === hvSrc && hv.t >= c.a && hv.t < c.b) : null;
+    const x = Math.round(tToX(hc ? HT.toSong(hc, hv.t) : hv.t, W));
     const txt = `velocity ${hv.v} · ${fmt(hv.t)} s${hgIsCut(hv) ? " · grey: leaves the output (cut)" : ""}`;
     const tw = ctx.measureText(txt).width + 8, bx = Math.max(2, Math.min(x + 6, W - tw - 2));
     ctx.fillStyle = "rgba(16,20,28,0.92)"; ctx.fillRect(bx, H - 15, tw, 13);
@@ -123,9 +129,22 @@ function drawVelLane(canvas, name) {
 function vlBind(row, name) {
   const c = row.querySelector(".vel");
   if (!c) return;   // the lane is off: the row has no vel canvas (vlSyncRow binds when it appears)
-  const evs = () => S.events[name] || [];
+  let hitSrc = name;   // the source of the stalk that hitAt found
+  let cur = name;   // #555: the source that a gesture edits: in a DAW the source of the clip that holds the hit (standalone: this track)
+  const evs = () => S.events[cur] || [];
+  const hitsOf = (t0, t1, skip) => {   // the hits of the current source in [t0, t1] of the page time: [{i, t}] (t on the page); skip is the hit that the old call left out (here -1: none)
+    const clips = HT.clips(name);
+    if (clips) return HT.hitRefs(clips, S.events, t0, t1, hitDrag).filter(r => r.src === cur);
+    return hitsIn(evs(), t0, t1, skip).map(i => ({ i, t: evs()[i].t }));
+  };
   const hitAt = px => {
-    const W = laneWidth(), t = xToT(px, W), d = 4 * viewDur() / W;
+    const W = laneWidth(), t = xToT(px, W), d = 4 * viewDur() / W, clips = HT.clips(name);
+    hitSrc = name;
+    if (clips) {   // #555: the nearest stalk of any source of the DAW track; the gesture edits that source
+      let best = -1, bd = 4;
+      for (const r of HT.hitRefs(clips, S.events, t - d, t + d, hitDrag)) { const dx = Math.abs(tToX(r.t, W) - px); if (dx < bd) { bd = dx; best = r.i; hitSrc = r.src; } }
+      return best;
+    }
     for (const i of hitsIn(evs(), t - d, t + d, dragSkip(name))) if (Math.abs(tToX(evs()[i].t, W) - px) < 4) return i;
     return -1;
   };
@@ -134,6 +153,7 @@ function vlBind(row, name) {
     const d = VL.drag; VL.drag = null;
     if (!d) return;
     const list = [...d.set.entries()].map(([id, [from, to, was]]) => ({ id, from, to, ...(was ? { was } : {}) })).filter(s => s.to !== s.from);
+    const name = d.track;   // #555: the source the gesture edited
     if (!list.length || d.gen !== (EDGEN[name] || 0)) { invalidateHits(name); if (list.length) setMsg("the hits changed during the drag: the velocities were dropped"); return; }
     const step = list.length === 1
       ? { type: "setv", track: name, id: list[0].id, from: list[0].from, to: list[0].to, ...(list[0].was ? { was: list[0].was } : {}) }
@@ -148,8 +168,8 @@ function vlBind(row, name) {
     const W = laneWidth(), evsL = evs();
     const fOf = x => (x1 === x0 ? 1 : (x - x0) / (x1 - x0));
     const ta = Math.min(xToT(x0, W), xToT(x1, W)), tb = Math.max(xToT(x0, W), xToT(x1, W));
-    for (const i of hitsIn(evsL, ta, tb, -1)) {
-      const v = Math.round(v0 + (v1 - v0) * fOf(tToX(evsL[i].t, W)));
+    for (const { i, t } of hitsOf(ta, tb, -1)) {
+      const v = Math.round(v0 + (v1 - v0) * fOf(tToX(t, W)));
       const id = evsL[i].id;
       if (!VL.drag.set.has(id)) VL.drag.set.set(id, [evsL[i].v, evsL[i].v, hitWas(evsL[i])]);   // R05: the field presence before the gesture
       preview(evsL[i], v); VL.drag.set.get(id)[1] = v;
@@ -158,31 +178,35 @@ function vlBind(row, name) {
   c.addEventListener("mousedown", ev => {
     if (ev.button === 2 || !VL.on || !S.sid || followerLocked(name)) return;
     ev.preventDefault();
+    cur = name;
     const px = laneXOf(ev), [W, H] = laneSize(c), hi = hitAt(px);
+    if (hi >= 0) cur = hitSrc;
+    else if (HT.clips(name)) { const w0 = HT.toSource(HT.clips(name), xToT(px, W)); if (w0) cur = w0.clip.src; }   // a line or a free gesture starting off a stalk edits the source of the clip under the pointer
+    const src = cur;
     const mode = ev.metaKey || ev.ctrlKey ? "free" : ev.altKey ? "line" : "stalk";
     if (mode === "stalk" && hi < 0) return;
     const t0 = xToT(px, W);
     const rect = c.getBoundingClientRect();   // cached: the row does not move during a gesture (offsetY lies once the pointer leaves the canvas)
-    VL.drag = { track: name, mode, gen: EDGEN[name] || 0, x0: px, y0: ev.offsetY, curX: px, curY: ev.offsetY, t0, set: new Map(), rect };
-    if (hasPendingWrite(name)) pushEvents(name).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
+    VL.drag = { track: src, mode, gen: EDGEN[src] || 0, x0: px, y0: ev.offsetY, curX: px, curY: ev.offsetY, t0, set: new Map(), rect };
+    if (hasPendingWrite(src)) pushEvents(src).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
     if (mode === "stalk") {
-      const e = evs()[hi], grp = vlGroup(name, e);   // #208: a selected stalk moves the selection, scaled
+      const e = evs()[hi], grp = vlGroup(src, e);   // #208: a selected stalk moves the selection, scaled
       VL.drag.anchor = e.id; VL.drag.v0 = e.v; VL.drag.base = grp.length > 1 ? new Map(grp.map(g => [g.id, g.v])) : null;
       for (const g of grp) VL.drag.set.set(g.id, [g.v, g.v, hitWas(g)]);
       preview(e, vlVOf(ev.offsetY, H)); VL.drag.set.get(e.id)[1] = e.v;
       if (VL.drag.base) vlScale(VL.drag, evs(), VL.drag.set.get(e.id)[1]);
     }
-    invalidateHits(name);
+    invalidateHits(src);
     const move = e2 => {
-      const d = VL.drag; if (!d || d.track !== name) return;
+      const d = VL.drag; if (!d || d.track !== src) return;
       d.curX = e2.clientX - d.rect.left; d.curY = e2.clientY - d.rect.top;
       const evsL = evs(), W2 = laneWidth();
       if (d.mode === "line") {
         setRange(tToX(d.t0, W2), vlVOf(d.y0, H), d.curX, vlVOf(d.curY, H));
       } else if (d.mode === "free") {
         const v = vlVOf(d.curY, H);
-        for (const i of hitsIn(evsL, S.view.t0 - 1e-6, S.view.t1 + 1e-6, -1)) {   // the hits crossed since the last move
-          const x = tToX(evsL[i].t, W2);
+        for (const { i, t } of hitsOf(S.view.t0 - 1e-6, S.view.t1 + 1e-6, -1)) {   // the hits crossed since the last move
+          const x = tToX(t, W2);
           if (Math.abs(x - d.curX) < 4) {
             const id = evsL[i].id;
             if (!d.set.has(id)) d.set.set(id, [evsL[i].v, evsL[i].v]);
@@ -196,35 +220,36 @@ function vlBind(row, name) {
         const i = evsL.findIndex(x => x.id === d.anchor);
         if (i >= 0) { preview(evsL[i], vlVOf(d.curY, H)); d.set.get(d.anchor)[1] = evsL[i].v; }
       }
-      invalidateHits(name);
+      invalidateHits(src);
       if (d.mode === "stalk") {   // the value while the stalk moves
         const n = [...d.set.values()].filter(s => s[1] !== s[0]).length;
         $("#stSel").textContent = d.base
-          ? `${name}: velocity ${d.set.get(d.anchor)[1]}, ${d.base.size} hits scaled by ${(d.set.get(d.anchor)[1] / d.v0).toFixed(2)}`
-          : `${name}: velocity ${d.set.get(d.anchor)[1]}`;
+          ? `${trackLabel(src)}: velocity ${d.set.get(d.anchor)[1]}, ${d.base.size} hits scaled by ${(d.set.get(d.anchor)[1] / d.v0).toFixed(2)}`
+          : `${trackLabel(src)}: velocity ${d.set.get(d.anchor)[1]}`;
         return;
       }
       const n = [...d.set.values()].filter(s => s[1] !== s[0]).length;
-      $("#stSel").textContent = `${trackLabel(name)}: Set Velocity (${n} ${n === 1 ? "hit" : "hits"})`;
+      $("#stSel").textContent = `${trackLabel(src)}: Set Velocity (${n} ${n === 1 ? "hit" : "hits"})`;
     };
     const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); commit(); };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
   });
   c.addEventListener("mousemove", ev => {
-    const hi = VL.on ? hitAt(laneXOf(ev)) : -1;
+    const hi = VL.on ? hitAt(laneXOf(ev)) : -1, hsrc = hitSrc;
     c.classList.toggle("onStalk", hi >= 0);
-    const id = hi >= 0 ? evs()[hi].id : null;
+    const id = hi >= 0 ? (S.events[hsrc] || [])[hi].id : null;
     const was = VL.hover;
-    if (id !== (was && was.track === name ? was.id : null)) {   // the hover label follows the stalk under the pointer
-      VL.hover = id ? { track: name, id } : null;
+    if (id !== (was && was.track === hsrc ? was.id : null)) {   // the hover label follows the stalk under the pointer
+      VL.hover = id ? { track: hsrc, id } : null;
       if (was || id) drawVelLane(c, name);
     }
     curOver(false, ev);
   });
   c.addEventListener("mouseleave", () => {
     c.classList.remove("onStalk", "onTop");
-    if (VL.hover && VL.hover.track === name) { VL.hover = null; drawVelLane(c, name); }
+    const hc = HT.clips(name);
+    if (VL.hover && (hc ? hc.some(x => x.src === VL.hover.track) : VL.hover.track === name)) { VL.hover = null; drawVelLane(c, name); }
   });
 }
 /* #437: the lane's resize handle is the row's bottom border (the .rowResize div sits on the velocity

@@ -65,6 +65,7 @@ function undoMeta(op) {
     case "reanalyze": set(`Re-analyze Selection (${trackLabel(op.track)}, ${fmt((op.t0), 3)} to ${fmt((op.t1), 3)} s)`, at(op.track, op.t0)); break;   // #265
     case "loud": set("Set Loudness Range", at(op.track, null)); break;
     case "learn": set("Learn Change", at(op.track, null)); break;
+    case "group": { const f = op.steps[0]; undoMeta(f); set(op.label || f.label || "Edit", f.where); break; }   // #555: one step of a DAW track that holds the steps of its sources
     case "trkdel": set(`Remove Track ${trackLabel(op.name)}`, at(op.name, null)); break;
     case "role": set(`Set Role (${trackLabel(op.track)})`, at(op.track, null)); break;
     case "tempo": set(/^bar 1/.test(op.what || "") ? "Set Bar 1" : op.what ? op.what.charAt(0).toUpperCase() + op.what.slice(1) : "Tempo Map Change", at(null, null)); break;
@@ -93,16 +94,18 @@ function pushUndo(op) { undoMeta(op); S.undo.push(op); if (S.undo.length>300) S.
 function undoReveal(op, isUndo) {   // after an undo or redo: the track is selected, the hit is selected, the view shows the place
   const w = opWhere(op, isUndo);
   if (!w.track || !S.tracks[w.track]) return;
-  if (S.selTrack !== w.track) setSelTrack(w.track);
+  if (S.selTrack !== HT.homeFor(w.track)) setSelTrack(w.track);
   if (w.t === null || w.t === undefined) return;
   const evs = S.events[w.track] || [];
   let j = op.id ? evs.findIndex(e => e.id === op.id) : -1;
   if (j < 0) { let best = 0.005; evs.forEach((e, i) => { if (Math.abs(e.t - w.t) < best) { best = Math.abs(e.t - w.t); j = i; } }); }
   if (j >= 0) S.sel = { track: w.track, index: j };
-  if (w.t < S.view.t0 || w.t > S.view.t1) centerOn(w.t);
+  const wt = HT.on() ? HT.songTime(w.track, w.t) : w.t;   // #555: the view is song time
+  if (wt !== null && (wt < S.view.t0 || wt > S.view.t1)) centerOn(wt);
   invalidateHits(w.track); updateStatus();
 }
 function applyOp(op, reverse) {   // a step of the service (shift, add, del, move, setv) answers a promise: true when it was applied
+  if (op.type === "group") return groupApplyOp(op, reverse);   // #555: the steps of the sources of a DAW track, one undo step
   if (op.type === "vel") { DSShell.applyVel(op, reverse); updateStatus(); return; }   // P3-4b: Recompute Velocities, all tracks in one step
   if (op.type === "learn") { lnApplyOp(op, reverse); return; }   // P4-6a: a Learn mark, removal, flip or Forget
   if (op.type === "tempo") { tmApplyOp(op, reverse); return; }   // P4-8: a change of the tempo and meter map
@@ -119,7 +122,25 @@ function applyOp(op, reverse) {   // a step of the service (shift, add, del, mov
    undo or redo leaves the stacks as the service is. While a shift or an edit is on its way, an undo or a redo joins the
    same queue and runs after it (it takes the step that is on top then); the other waits (tm, ln, hg) still drop it with a
    message, because their own busy flags have no hook that could run it later. */
-function edOwns(op) { return !!op && (op.type === "trkdel" || op.type === "shift" || op.type === "add" || op.type === "del" || op.type === "move" || op.type === "setv" || op.type === "setv-many" || op.type === "del-many" || op.type === "move-many" || op.type === "toggle"); }
+/* #555: a DAW track with several sources changes a setting of all of them as ONE undo step: the step holds the step of each source. Undo takes them back
+   in the reverse order, redo does them again in order; a refused one stops the group (the stacks stay as the service is). pushGroup makes the entry; with one
+   step (a standalone project, or a row with one source) it is that step itself, so the standalone undo path is the one of today. */
+async function groupApplyOp(op, reverse, apply) {   // all or nothing: a refused step takes the steps before it back, so the stacks stay as the service is
+  const list = reverse ? op.steps.slice().reverse() : op.steps, done = [];
+  const run = async (s, rev) => { try { const r = (apply || applyOp)(s, rev); return r === false ? false : r && typeof r.then === "function" ? !!(await r) : true; } catch (e) { return false; } };
+  for (const s of list) {
+    if (await run(s, reverse)) { done.push(s); continue; }
+    for (const d of done.reverse()) await run(d, !reverse);
+    setMsg(`${reverse ? "undo" : "redo"}: a step of ${trackLabel(s.track || (s.where && s.where.track) || "")} was refused; the steps before it were taken back`);
+    return false;
+  }
+  return true;
+}
+function pushGroup(label, steps) {
+  if (steps.length === 1 || HT.fault === "no-group") { for (const s of steps) pushUndo(s); return; }   // no-group: the fault run (one entry for each source)
+  pushUndo({ type: "group", label, steps });
+}
+function edOwns(op) { return !!op && (op.type === "group" ? op.steps.some(edOwns) : false) || !!op && (op.type === "trkdel" || op.type === "shift" || op.type === "add" || op.type === "del" || op.type === "move" || op.type === "setv" || op.type === "setv-many" || op.type === "del-many" || op.type === "move-many" || op.type === "toggle"); }
 async function undoStep(isUndo) {
   const from = isUndo ? S.undo : S.redo, to = isUndo ? S.redo : S.undo, op = from[from.length - 1];
   if (tmUndoWaits() || lnUndoWaits() || hgUndoWaits(op) || !op) return;

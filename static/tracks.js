@@ -112,6 +112,7 @@ function buildTrackDOM() {
   }
   refreshCounts();
   document.querySelectorAll(".track").forEach(r => r.classList.toggle("selTrack", r.dataset.name === S.selTrack));   // P4-39c: the first track is selected at open
+  HT.rebuild(); HT.paint();   // #555: the rows of the DAW tracks again for the new DOM rows (nothing with the mode off)
   hostSelReapply();   // #562: the rows are new: the marks and the hidden tracks of the DAW selection again (nothing with the mode off)
   syncInspector(true);   // P3-14a: the rows are new; the Inspector shows the selected track or its empty state
   sizeCanvases();   // P3-14d: the new canvases get their CSS size now (from GEO: no layout read); the frame draws them
@@ -141,6 +142,7 @@ function ensureSelTrack() {   // in updateStatus: a lost selection moves on; the
 }
 function setSelTrack(name) {   // the header click and the keys P and ; (P3-19)
   if (!name || !S.tracks[name]) name = pickSelTrack(selMem.order, S.selTrack);   // P4-39c: never none while tracks exist
+  if (name) name = HT.homeFor(name);   // #555: a source that is merged into a DAW track selects the row that shows it, never a hidden row
   S.selTrack = name;
   document.querySelectorAll(".track").forEach(r => r.classList.toggle("selTrack", r.dataset.name === S.selTrack));
   invalidate(F.HEAD);   // P3-14b: the sub counter uses the rate of the selected track
@@ -353,14 +355,37 @@ const ovXOf = ev => ev.clientX - GEO.ovX;
 function attachTrackHandlers(row, name) {
   const spike = row.querySelector(".spike"), wave = row.querySelector(".wave");
   const evs = () => S.events[name] || [];
-  function hitEvent(px) {   // W6: the hits within 4 px (binary search)
-    const evsL = evs(), W = laneWidth(), t = xToT(px, W), d = 4 * viewDur() / W;
+  /* #555: in a DAW this row is a DAW track and shows the clips of its sources in song time. The hit under the pointer is {src, i, clip}: an edit goes
+     to the source of the clip, in source time (the stored hits never see song time). Standalone: the hit of this track, src = name, no clip. */
+  function hitRef(px) {   // W6: the hits within 4 px (binary search)
+    const clips = HT.clips(name), W = laneWidth(), t = xToT(px, W), d = 4 * viewDur() / W;
+    if (clips) {
+      let best = null, bd = 4;
+      for (const r of HT.hitRefs(clips, S.events, t - d, t + d, hitDrag)) { const dx = Math.abs(tToX(r.t, W) - px); if (dx < bd) { bd = dx; best = r; } }
+      return best;
+    }
+    const evsL = evs();
     for (const i of hitsIn(evsL, t - d, t + d, dragSkip(name))) {
       const x = tToX(evsL[i].t, W);
-      if (Math.abs(x-px) < 4) return i;
+      if (Math.abs(x-px) < 4) return { src: name, i, t: evsL[i].t, clip: null };
     }
-    return -1;
+    return null;
   }
+  const hitEvent = px => { const r = hitRef(px); return r ? r.i : -1; };
+  /* the source and the source time of a point of the lane: in a DAW the clip under the pointer decides (the later clip if they overlap); a point in no
+     clip is null. Standalone: this track, snapped to the sample. */
+  function pointOf(px) {
+    const clips = HT.clips(name), W = laneWidth();
+    if (!clips) return { src: name, t: snapSample(xToT(px, W), name) };
+    const w = HT.toSource(clips, xToT(px, W));
+    return w ? { src: w.clip.src, t: snapSample(w.t, w.clip.src), clip: w.clip } : null;
+  }
+  const addAt = (px, snap) => {   // Option-click and double click add a hit; in a DAW only inside a clip
+    const p = pointOf(px);
+    if (!p) { setMsg("outside every region of this track: no hit is added"); return; }
+    if (HT.fault === "store-song" && p.clip) { addHitAt(p.src, snapSample(xToT(px, laneWidth()), p.src), snap); return; }   // the fault run: the song time is stored
+    addHitAt(p.src, p.t, snap, p.clip);
+  };
   let dragState = null;
   function startPanGesture(ev) {
     S.followHold = true;   // F1: user view change pauses follow until next play
@@ -390,7 +415,7 @@ function attachTrackHandlers(row, name) {
     window.removeEventListener("mouseup", endHitDrag);
     const ds = dragState; dragState = null;
     if (!ds) return;
-    const e = evs()[ds.i];
+    const name = ds.src, e = (S.events[name] || [])[ds.i];   // #555: the source of the clip that held the hit
     if (!ds.moved || !e || ds.gen !== (EDGEN[name] || 0) || !hitDrag) { hitDrag = null; invalidateHits(name); if (ds.moved) { updateStatus(); setMsg("the hits changed during the drag: the move was dropped"); } return; }   // void: the list was replaced meanwhile
     const id = e.id, to = e.t, from = ds.origT, i = ds.i;
     edCall(name, evs2 => {   // the preview keeps the hit at the pointer until the stored hits arrive; its index is the stored one
@@ -404,26 +429,26 @@ function attachTrackHandlers(row, name) {
     ev.preventDefault();   // no text selection during event drags / pans
     const px = laneXOf(ev);
     if (ev.altKey && ev.shiftKey) {   // P4-40b: Option+Shift-click on a hit deletes it (one undo step, as Delete); off a hit it stays the Shift click
-      const hi = hitEvent(px);
-      if (hi >= 0) { if (!followerLocked(name)) edDelete(name, evs()[hi].id); return; }
+      const hr = hitRef(px);
+      if (hr) { if (!followerLocked(hr.src)) edDelete(hr.src, S.events[hr.src][hr.i].id); return; }
     }
     if (ev.shiftKey) { lnClearSel(); S.playhead = snapPlayhead(xToT(px, laneWidth())); invalidate(F.HEAD); updateStatus(); return; }
-    if (ev.altKey) { addHitAt(name, snapSample(xToT(px, laneWidth()), name), true); return; }   // P3-13b: Option-click adds a hit (Cubase); #144: on the attack
-    const i = hitEvent(px);
+    if (ev.altKey) { addAt(px, true); return; }   // P3-13b: Option-click adds a hit (Cubase); #144: on the attack
+    const hr = hitRef(px), i = hr ? hr.i : -1, src = hr ? hr.src : name;   // #555: the source of the clip that holds the hit
     if (i < 0) {   // P4-6a: a click on a Learn mark bar selects the mark (Delete removes it)
       const lm = lnMarkAt(name, px, ev.offsetY);
-      if (lm) { lnClearSel(); S.sel = null; lnSetMark(name, lm.id); updateStatus(); setMsg(`${name}: mark ${lm.id} (${lm.kind === "not" ? "not this" : "this"}, ${(lm.at || []).length} ${(lm.at || []).length === 1 ? "example" : "examples"}); Delete removes it, right-click for more`); return; }
+      if (lm) { lnClearSel(); S.sel = null; lnSetMark(lm.src || name, lm.id); updateStatus(); setMsg(`${trackLabel(lm.src || name)}: mark ${lm.id} (${lm.kind === "not" ? "not this" : "this"}, ${(lm.at || []).length} ${(lm.at || []).length === 1 ? "example" : "examples"}); Delete removes it, right-click for more`); return; }
     }
     lnClearSel(); if (LN.mark) lnSetMark(null);
-    if (i >= 0 && followerLocked(name)) { S.sel = {track:name, index:i}; invalidateHits(name); updateStatus(); return; }   // P3-18: select, no drag
+    if (i >= 0 && followerLocked(src)) { S.sel = {track:src, index:i}; invalidateHits(src); updateStatus(); return; }   // P3-18: select, no drag
     if (i >= 0) {
-      S.sel = {track:name, index:i};
-      if (SH.pending || hgRepickBusy()) { invalidateHits(name); updateStatus(); return; }   // an edit is on its way: select, no drag (the hits on the page are not the stored ones yet)
-      if (hasPendingWrite(name)) pushEvents(name).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
-      dragState = {i, startX: px, origT: evs()[i].t, moved:false, sr: S.tracks[name].sr, gen: EDGEN[name] || 0};
-      hitDrag = { track: name, index: i };
+      S.sel = {track:src, index:i};
+      if (SH.pending || hgRepickBusy()) { invalidateHits(src); updateStatus(); return; }   // an edit is on its way: select, no drag (the hits on the page are not the stored ones yet)
+      if (hasPendingWrite(src)) pushEvents(src).catch(() => {});   // a write of another step goes out before the drag moves the page's copy; #249 R02: a refusal shows on the status line
+      dragState = {i, src, clip: hr.clip, startX: px, origT: S.events[src][i].t, moved:false, sr: S.tracks[src].sr, gen: EDGEN[src] || 0};
+      hitDrag = { track: src, index: i };
       window.addEventListener("mouseup", endHitDrag);
-      invalidateHits(name); updateStatus();
+      invalidateHits(src); updateStatus();
       return;
     }
     startPanGesture(ev);   // empty spike area: click = playhead, drag = pan
@@ -434,35 +459,38 @@ function attachTrackHandlers(row, name) {
       const on = hitEvent(px) >= 0;
       spike.classList.toggle("onHit", on); curOver(on && !followerLocked(name), ev); return;
     }
-    const dt = xToT(px, laneWidth()) - xToT(dragState.startX, laneWidth());
+    const cl = dragState.clip, dsrc = dragState.src;
+    const dt = (xToT(px, laneWidth()) - xToT(dragState.startX, laneWidth())) / (cl ? cl.k : 1);   // #555: a distance in song time is 1/k in the source
     if (Math.abs(px-dragState.startX) > 2) dragState.moved = true;
-    const i = dragState.i, evsL = evs();
-    if (!evsL[i] || dragState.gen !== (EDGEN[name] || 0)) {   // the list was replaced: the drag is void (and says so, as at release)
-      const moved = dragState.moved; dragState = null; hitDrag = null; invalidateHits(name);
+    const i = dragState.i, evsL = S.events[dsrc] || [];
+    if (!evsL[i] || dragState.gen !== (EDGEN[dsrc] || 0)) {   // the list was replaced: the drag is void (and says so, as at release)
+      const moved = dragState.moved; dragState = null; hitDrag = null; invalidateHits(dsrc);
       if (moved) setMsg("the hits changed during the drag: the move was dropped");
       return;
     }
-    evsL[i].t = snapSample(dragState.origT + dt, name);
-    invalidateHits(name);
+    let nt = snapSample(dragState.origT + dt, dsrc);
+    if (cl) nt = Math.max(cl.a, Math.min(nt, cl.b - 1 / dragState.sr));   // #555: the hit stays inside its clip
+    evsL[i].t = nt;
+    invalidateHits(dsrc);
     const dSmp = Math.round((evsL[i].t - dragState.origT)*dragState.sr);
     $("#stSel").textContent = `${trackLabel(name)}: moving ${dSmp>0?"+":""}${dSmp} smp`;
     drawInfo();
   });
   spike.addEventListener("mouseleave", () => { spike.classList.remove("onHit"); curOver(false); });
-  spike.addEventListener("dblclick", ev => addHitAt(name, snapSample(xToT(laneXOf(ev), laneWidth()), name)));
+  spike.addEventListener("dblclick", ev => addAt(laneXOf(ev)));
   spike.addEventListener("contextmenu", ev => {
-    const i = hitEvent(laneXOf(ev));
-    if (i < 0) { lnContext(ev, name, "spike"); ev.preventDefault(); return; }   // P4-6a: the menus of a mark bar and of the selection; no browser menu on an empty lane
+    const hr = hitRef(laneXOf(ev));
+    if (!hr) { lnContext(ev, name, "spike"); ev.preventDefault(); return; }   // P4-6a: the menus of a mark bar and of the selection; no browser menu on an empty lane
     ev.preventDefault();
-    if (followerLocked(name)) return;   // P3-18: a follower's hits are not deleted here
-    edDelete(name, evs()[i].id);   // P4-9 stage 2: events_edit delete
+    if (followerLocked(hr.src)) return;   // P3-18: a follower's hits are not deleted here
+    edDelete(hr.src, S.events[hr.src][hr.i].id);   // P4-9 stage 2: events_edit delete
   });
   wave.addEventListener("mousedown", ev => {
     if (ev.button!==0) return;
     ev.preventDefault();
     const px = laneXOf(ev);
     if (ev.shiftKey) { lnClearSel(); S.playhead = snapPlayhead(xToT(px, laneWidth())); invalidate(F.HEAD); updateStatus(); return; }
-    if (ev.altKey) { lnClearSel(); addHitAt(name, snapSample(xToT(px, laneWidth()), name), true); return; }     // P3-13b: Option-click adds a hit; #144: on the attack
+    if (ev.altKey) { lnClearSel(); addAt(px, true); return; }     // P3-13b: Option-click adds a hit; #144: on the attack
     lnRangeGesture(ev, name);   // P4-6a: click = playhead, drag = select a range (the pan stays on the spike lane, the wheel and the overview)
   });
   wave.addEventListener("mousemove", ev => curOver(false, ev));   // P4-40b
@@ -531,12 +559,22 @@ function insRoleSourceText(t) {   // where the role comes from; absent: an older
   if (s === "none" || s === "guess") return "not recognised from the name: choose the role";
   return t.role === "other" ? "not recognised from the name: choose the role" : "from the name";
 }
+/* #555: a DAW track with several sources: one short line says what the settings of the row reach. The row owns role and note (every source gets them);
+   Sensitivity, Loudness, Learn and the hits stay with one source: the first one (the Inspector shows it) or the source of the hit or clip you work in. */
+function insRowNote(name) {
+  let n = document.getElementById("insRowNote");
+  const k = HT.srcsOf(name).length;
+  if (k <= 1) { if (n) n.remove(); return; }
+  if (!n) { n = document.createElement("div"); n.id = "insRowNote"; n.style.cssText = "font-size:11px;color:#8a93a3;margin:4px 0;line-height:1.35"; $("#insRoleSrcRow").after(n); }
+  n.textContent = `This DAW track has ${k} sources: role, note, Sensitivity, Loudness and Shift apply to all of them (one undo step). Learn marks and hit edits belong to the source of the clip you work in.`;
+}
 function insRoleControls(offer) {   // the role select, the source hint and the note offer of the selected track
   const t = S.tracks[INS.name], sel = $("#insRoleSel");
   if (!t || !sel) return;
   if (!sel.options.length) for (const r of INS_ROLES) { const o = document.createElement("option"); o.value = r; o.textContent = r; sel.appendChild(o); }
   sel.value = INS_ROLES.includes(t.role) ? t.role : "other";
   $("#insRoleSrcRow").classList.remove("hidden");
+  insRowNote(INS.name);
   const srcTxt = insRoleSourceText(t);
   $("#insRoleSrc").textContent = srcTxt;
   $("#insRoleSrc").classList.toggle("lyWarn", srcTxt.startsWith("not recognised"));
@@ -565,11 +603,21 @@ async function setTrackRole(name, role, apply = {}) {   // apply: {note?, source
   S.tracks[name].note = r.note;
   S.tracks[name].role_source = r.role_source;
   S.tracks[name].role_match = apply.source === "user" || apply.source === "audio" ? null : (apply.role_match ?? S.tracks[name].role_match ?? null);
+  const steps = [{ type: "role", sid, track: name, before: r.previous, after: { role, note: r.note, role_source: r.role_source, role_match: S.tracks[name].role_match } }];
+  let refused = null;
+  if (!apply.op) for (const o of HT.srcsOf(name)) {   // #555: the row owns role and note: the other sources of the DAW track get the same (their hits are re-picked at their stored settings); an undo step applies its own source only (op)
+    if (o === name || !S.tracks[o]) continue;
+    try {
+      const r2 = await B.trackSetRole(sid, o, role, r.note, apply.source ?? null, apply.role_match ?? null, null);
+      S.tracks[o].role = role; S.tracks[o].note = r2.note; S.tracks[o].role_source = r2.role_source;
+      steps.push({ type: "role", sid, track: o, before: r2.previous, after: { role, note: r2.note, role_source: r2.role_source, role_match: apply.source === "user" || apply.source === "audio" ? null : (apply.role_match ?? S.tracks[o].role_match ?? null) } });   // each source keeps its own previous state (its hand edits come back with the undo)
+    } catch (e) { refused = o; setMsg(`role change of ${trackLabel(o)} failed: ${errText(e)}; the sources before it have the new role (one undo step takes them back)`, "error"); break; }   // a refused source stops the row: the entry holds exactly the sources that changed
+  }
   await trReload(!!apply.op, name);   // the lanes, histograms and the panel follow the new role
   refreshHeadRole(name);
-  if (!apply.op) pushUndo({ type: "role", sid, track: name, before: r.previous, after: { role, note: r.note, role_source: r.role_source, role_match: S.tracks[name].role_match } });
+  if (!apply.op) pushGroup(`Set Role (${trackLabel(name)})`, steps);
   insRoleControls(r);
-  setMsg(apply.op ? `${name} is a ${role} track again` : `${name} is now a ${role} track${r.reanalyzed ? " (the hits are re-picked)" : ""}`);
+  if (!refused) setMsg(apply.op ? `${name} is a ${role} track again` : `${name} is now a ${role} track${r.reanalyzed ? " (the hits are re-picked)" : ""}`);
   return true;
 }
 async function roleApplyOp(op, reverse) {   // the undo and the redo of a role change

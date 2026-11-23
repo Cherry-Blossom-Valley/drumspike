@@ -9,10 +9,11 @@
 /* ---------------- editor commands (P3-13a) ----------------
    One function per command of the native menu (shell.js `handlers`); the keys and the toolbar call the same
    function, so a menu item, its key and its button do the same thing. */
-function addHitAt(name, t, snap) {   // hand-added → manual (magenta): events_edit add, one undo step; #144: snap puts it on the attack near t
+function addHitAt(name, t, snap, clip) {   // hand-added → manual (magenta): events_edit add, one undo step; #144: snap puts it on the attack near t; #555: clip = the clip of a DAW track that holds the point: the hit stays inside it
   if (followerLocked(name)) return;   // P3-18
   const id = newId();
-  return edCall(name, () => {
+  if (clip) t = HT.clampInto(clip, t, S.tracks[name].sr);
+  const p = edCall(name, () => {
     const pl = { ops: [{ op: "add", t, ...(snap ? { snap: true } : {}) }], make: [[t, id]], sel: id, step: { type: "add", track: name, id, t, v: 100 } };
     if (snap) pl.done = r => {   // the step and the page id follow the hit to where it landed; the redo adds it there, without a new snap
       const s = r && r.snaps && r.snaps[0];
@@ -24,13 +25,39 @@ function addHitAt(name, t, snap) {   // hand-added → manual (magenta): events_
     };
     return pl;
   });
+  if (clip && p && typeof p.then === "function") p.then(ok => ok && hitIntoClip(name, id, clip));   // the attack snap may land past the edge of the clip: a second step moves the hit into it
+  return p;
+}
+/* #555: a hit that lies outside its clip (an attack snap past the edge) is moved to the last sample of the clip; the add and the move are ONE undo entry (a group), so one
+   undo leaves no hit behind. Answers a promise (true when it moved a hit). */
+function hitIntoClip(name, id, clip) {
+  const evs = S.events[name] || [], j = evs.findIndex(e => e.id === id);
+  if (j < 0 || !(evs[j].t < clip.a || evs[j].t >= clip.b)) return Promise.resolve(false);
+  const m = setHitTime(name, j, HT.clampInto(clip, evs[j].t, S.tracks[name].sr), "Move Hit into its clip");
+  return Promise.resolve(m).then(done => {
+    const n = S.undo.length, mv = S.undo[n - 1], ad = S.undo[n - 2];
+    if (done && ad && mv && ad.type === "add" && ad.id === id && mv.type === "move" && mv.id === id) { S.undo.splice(n - 2, 2); pushGroup("Add Hit", [ad, mv]); }
+    return !!done;
+  });
 }
 function needTrack() {   // the selected track (header click), or a message
   if (!needProject()) return null;
   if (!S.selTrack || !S.tracks[S.selTrack]) { setMsg("no track selected: click a track header first"); return null; }
   return S.selTrack;
 }
-function addHitAtPlayhead() { const n = needTrack(); if (n) addHitAt(n, snapSample(S.playhead, n)); }
+function addHitAtPlayhead() {
+  const n = needTrack();
+  if (!n) return;
+  const clips = HT.clips(n);
+  if (clips) {   // #555: the playhead is song time: the hit goes to the source of the clip under it, at the source time of that point
+    const w = HT.toSource(clips, S.playhead);
+    if (!w) { setMsg("outside every region of this track: no hit is added"); return; }
+    if (HT.fault === "store-song") { addHitAt(w.clip.src, snapSample(S.playhead, w.clip.src), false); return; }   // the fault run: the song time is stored
+    addHitAt(w.clip.src, snapSample(w.t, w.clip.src), false, w.clip);
+    return;
+  }
+  addHitAt(n, snapSample(S.playhead, n));
+}
 function deleteSelectedHit() {
   if (LN.sel) return rangeDelete();   // #151: a range selection takes the key: every hit of the range, one undo step
   if (!S.sel) { setMsg("no hit selected"); return; }
@@ -176,7 +203,7 @@ function setHitTime(trk, i, t, label) {   // move hit i of the track to the samp
   return edCall(trk, evs => {
     const j = edIndex(evs, id);
     if (j < 0) return null;
-    const from = evs[j].t, to = Math.max(0, Math.round((typeof t === "function" ? t(from) : t) * sr) / sr);
+    const from = evs[j].t, to = HT.clampTo(trk, from, Math.max(0, Math.round((typeof t === "function" ? t(from) : t) * sr) / sr));   // #555: a hit stays in its clip
     if (to === from) return null;
     return { ops: [{ op: "move", index: j, t: to }], drop: [id], make: [[to, id]], sel: S.sel && S.sel.track === trk ? id : undefined,
       step: { type: "move", track: trk, id, from, to, ...(label ? { label } : {}), was: hitWas(evs[j]) } };
@@ -388,8 +415,8 @@ function zoomToggle(keep) {
   const rg = LN.sel && S.tracks[LN.sel.track] && LN.sel.t1 > LN.sel.t0 ? LN.sel : null;
   const e = S.sel ? (S.events[S.sel.track] || [])[S.sel.index] : null;
   S.zoomBack = { t0: S.view.t0, t1: S.view.t1, rowH: null, top: sc.scrollTop };
-  if (rg) setView(rg.t0, rg.t1);   // the range fills the lane width
-  else { const t = e ? e.t : S.playhead; setView(t - ZOOM_TOGGLE_SPAN / 2, t + ZOOM_TOGGLE_SPAN / 2); }
+  if (rg) { const sr = HT.on() ? HT.songRange(rg.track, rg.t0, rg.t1) : [rg.t0, rg.t1]; setView(sr ? sr[0] : S.view.t0, sr ? sr[1] : S.view.t1); }   // the range fills the lane width; #555: in song time
+  else { const t = e ? (HT.on() ? (HT.songTime(S.sel.track, e.t) ?? S.playhead) : e.t) : S.playhead; setView(t - ZOOM_TOGGLE_SPAN / 2, t + ZOOM_TOGGLE_SPAN / 2); }   // #555: the view is song time
   const trk = rg ? rg.track : e ? S.sel.track : null, row = trk && rowOf(trk);
   if (S.zoomTall && row) {
     S.zoomBack.rowH = { ...S.rowH };
@@ -411,7 +438,7 @@ function selectTrackStep(dir) {
   if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
 }
 function zoomToProject() { S.followHold = true; setAmpZoom(1); setView(0, maxDur()); }   // P3-20a: also resets the amplitude zoom (A1 p. 34)
-function projectEnd() { return S.order.length ? Math.max(...S.order.map(n => S.tracks[n].duration || 0)) : 0; }
+function projectEnd() { if (HT.on()) return HT.songEnd(); return S.order.length ? Math.max(...S.order.map(n => S.tracks[n].duration || 0)) : 0; }
 function goTo(t) {   // Transport > Go to ...: the playhead moves (a seek while playing), the view follows it
   S.playhead = Math.max(0, t);
   if (S.playhead < S.view.t0 || S.playhead > S.view.t1) centerOn(S.playhead);

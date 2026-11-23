@@ -12,6 +12,8 @@
   try { window.__TAURI__.event.listen("plugin-reload", function () { reloads++; }); } catch (e) { /* no events */ }
   var selEvents = 0, selLast = null;   // M1b13: the events of the host's selection that the page got
   try { window.__TAURI__.event.listen("plugin-selection", function (e) { selEvents++; selLast = e.payload; }); } catch (e) { /* no events */ }
+  var regEvents = 0, regLast = null;   // M1b8: the events with the rows of the page in song time
+  try { window.__TAURI__.event.listen("plugin-regions", function (e) { regEvents++; regLast = e.payload; }); } catch (e) { /* no events */ }
   document.addEventListener("securitypolicyviolation", function (ev) {
     violations.push({ directive: ev.violatedDirective, blocked: ev.blockedURI });
   });
@@ -83,11 +85,12 @@
     if (T.mode === "delivery") deliveryRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "leftovers") leftoversRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "selection") selectionRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "song") songRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "playback") playbackRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
   });
 
   /* Mode selection (M1b13, #562): the host's view sends a list of selections and hide lists (the steps of `--sel-steps`, which the plugin passes
-     in T.arg too). Each step is `[pre@]host step`. The pre action is the page's: `zoom` (the view 0 to 1.2 s), `pointer` (the button of the pointer
+     in T.arg too). Each step is `[pre@]host step`. The pre action is the page's: `zoom` (the view song 3.0 to 4.2 s), `pointer` (the button of the pointer
      goes down and stays), `user` (the same, and the user selects the third track), `key` (a key goes down and stays), `off` and `on` (the
      page's menu item Follow the DAW Selection, clicked through the DOM). After the pre action the page reports `sel-armed`; the host sends its step;
      the page waits for the event of the plugin (or 1.2 s when none comes), lets the page settle, and reads what it shows (`snap1`); it then ends
@@ -138,7 +141,7 @@
     for (var k = 0; k < steps.length; k++) {
       var pre = steps[k].indexOf("@") >= 0 ? steps[k].split("@")[0] : "";
       var base = selEvents, doc = document;
-      if (pre === "zoom") setView(0, 1.2);
+      if (pre === "zoom") setView(3.0, 4.2);
       if (pre === "pointer" || pre === "user") { doc.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); doc.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); held = "pointer"; }
       if (pre === "user") setSelTrack(names[2]);   // the user selects a track while the button is down
       if (pre === "key") { doc.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true })); held = "key"; }
@@ -309,14 +312,20 @@
     // the first message of the host and the answer to the offer: the page is ready for a request
     for (var i = 0; i < 100 && !(tr.delivered >= 1 && tr.offer); i++) await sleepMs(100);
     var first = tr.delivered >= 1;
-    if (scenario === "tracks") {   // M1b7 Y1: two tracks at different song offsets; both directions use the selected track
-      var trackA = S.order[0], trackB = S.order[1];
-      await step("select-b", function () { S.selTrack = trackB; }, 500);
-      await step("locate-b", function () { S.playhead = 1.2; }, 600);
-      await step("select-a", function () { S.selTrack = trackA; }, 700);
+    if (scenario === "tracks") {   // M1b8: ONE DAW track holds two sources, clip 2 later in the song than clip 1; a second DAW track holds the third
+      HT.fault = T.song || "";   // selected-track: the fault run maps the follow through the selected row (static/transport.js)
+      var rowA = HT.rows[0], rowB = HT.rows[1], homeA = rowA && rowA.srcs[0], homeB = rowB && rowB.srcs[0];
+      var inClip2 = rowA.clips[1].s + 1.0;   // inside the second clip of the first DAW track
+      await step("select-b", function () { S.selTrack = homeB; }, 500);
+      await step("locate-clip2", function () { S.playhead = inClip2; }, 600);
+      await step("select-a", function () { S.selTrack = homeA; }, 700);
+      await step("play", function () { return play(); }, 900);
+      await step("select-b-playing", function () { S.selTrack = homeB; }, 500);
+      await step("stop", function () { return pause(); }, 700);
       stopped = true;
       post({ kind: "playback", scenario: scenario, visibility: document.visibilityState, samples: rows, steps: steps, calls: tr.calls, seen: tr.seen,
-        offer: tr.offer, first_message: first, tracks: [trackA, trackB], host_mode: !!B.hostMode, wired: true });
+        offer: tr.offer, first_message: first, tracks: [homeA, homeB], rows: HT.rows.map(function (x) { return { id: x.id, srcs: x.srcs, clips: x.clips }; }), in_clip2: inClip2,
+        host_mode: !!B.hostMode, wired: true });
       return;
     }
     if (scenario === "drag") {   // M1b7 X3: a drag in the ruler with a host that does not answer: the fallback must not jump under the pointer
@@ -467,6 +476,71 @@
     await sleepMs(800);   // the rename and the move are two calls of the host: the last state
     var after = await namesSnap();
     post(Object.assign({ kind: "names-after", reloads: reloads, reloaded: reloaded, waited_ms: Math.round(performance.now() - t0) }, after));
+  }
+  /* Mode song (M1b8, #555): the rows of the page in song time. The first report `song` carries what the plugin answers to `plugin_host_regions` and what
+     the page DRAWS for those rows (the pixels of the hit lines in the lanes, the rows shown, the headers); the host then renames a DAW track, moves a
+     region to another one and shifts and trims others (`--rename-seq`, `--move-region`, `--shift-region`, `--trim-region`); the second report `song-after`
+     carries the answer again, the events `plugin-regions` the page got and what the page draws then. Fault runs (DS_ARA_SONG_FAULT, made here in the page):
+     `source-x`, `no-cut-start`, `home-only`: the driver sets the flag HT.fault, which the page code (static/hosttime.js) reads. */
+  function songFaults() { HT.fault = T.song || ""; }   // the fault runs are in the page (static/hosttime.js reads the flag); the driver only sets it
+  async function songDraw(answer, upto) {   // what the page draws for the rows the plugin gave: one entry for each hit that the clips hold, and each one outside them
+    setView(0, upto); invalidate(F.VIEW); flushFrame();
+    for (var w0 = 0; w0 < 50 && (FR.raf || FR.flags !== 0); w0++) await new Promise(function (r) { setTimeout(r, 100); });   // the frame that draws the view is done
+    var W = laneWidth(), dpr = GEO.dpr, rows = {};
+    answer.rows.forEach(function (r) {
+      var home = r.srcs[0], cv = document.querySelector('.track[data-name="' + CSS.escape(home) + '"] canvas.spike'), cx = cv.getContext("2d"), hits = [], outside = [];
+      function drawn(song) { var x = Math.round(tToX(song, W)) + 0.5, d = cx.getImageData(Math.floor(x * dpr), Math.floor(cv.height / 2), 1, 1).data; return d[3] > 100; }
+      var seen = {};
+      r.clips.forEach(function (c) {
+        (S.events[c.src] || []).forEach(function (e) {
+          var song = c.s + (e.t - c.a) * c.k;   // the formula of the export, written here and not taken from the page
+          if (e.t >= c.a && e.t < c.b) hits.push({ src: c.src, t: e.t, song: song, drawn: drawn(song) });
+          else outside.push({ src: c.src, t: e.t, song: song, drawn: drawn(song) });
+        });
+      });
+      rows[r.id] = { home: home, hits: hits, outside: outside };
+    });
+    var shown = [].slice.call(document.querySelectorAll(".track")).filter(function (r) { return getComputedStyle(r).display !== "none"; });
+    return { rows: rows, shown: shown.map(function (r) { return r.dataset.name; }), headers: shown.map(function (r) { return r.querySelector(".tnm").textContent; }),
+      merged: [].slice.call(document.querySelectorAll(".track.hostMerged")).map(function (r) { return r.dataset.name; }), max_dur: maxDur() };
+  }
+  async function songSnap(upto) {
+    var rows = await window.__TAURI__.core.invoke("plugin_host_regions", {});
+    return { rows: rows, events: regEvents, last_event: regLast, order: S.order.slice(), sel: S.selTrack, page: await songDraw(rows, upto) };
+  }
+  async function songRun() {
+    function sleepM(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    songFaults();
+    await sleepM(600);
+    var first = await songSnap(8);
+    post(Object.assign({ kind: "song" }, first));
+    if (T.arg === "edit" || T.arg === "base") {   // the edit run: a double click in the second clip of the first DAW track, then one in the gap; `base`: no edit (the notes to compare with)
+      var row0 = first.rows.rows[0], home = row0.srcs[0], c1 = row0.clips[1], gapT = (row0.clips[0].s + (row0.clips[0].b - row0.clips[0].a) + c1.s) / 2, out = {};
+      function dbl(t) {
+        var cv = document.querySelector('.track[data-name="' + CSS.escape(home) + '"] canvas.spike');
+        cv.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, button: 0, clientX: GEO.laneX + tToX(t, laneWidth()), clientY: cv.getBoundingClientRect().top + 8 }));
+      }
+      var n0 = (S.events[c1.src] || []).length, nh = (S.events[home] || []).length;
+      if (T.arg === "edit") {
+        dbl(c1.s + 0.6);   // 0.6 s into the second clip: source time c1.a + 0.6
+        for (var w = 0; w < 50 && (S.events[c1.src] || []).length === n0; w++) await sleepM(100);
+        out.added_at = (S.events[c1.src] || []).map(function (e) { return e.t; });
+        out.want_src_t = c1.a + 0.6; out.want_song_t = c1.s + 0.6;
+        for (var w1 = 0; w1 < 30 && (FR.raf || FR.flags !== 0); w1++) await sleepM(100);
+        dbl(gapT);
+        for (var w2 = 0; w2 < 30 && !/outside every region/.test((document.getElementById("stMsg") || {}).textContent || ""); w2++) await sleepM(100);
+        out.gap_msg = (document.getElementById("stMsg") || {}).textContent;
+      }
+      out.n_before = n0; out.n_after = (S.events[c1.src] || []).length; out.home_before = nh; out.home_after = (S.events[home] || []).length; out.src = c1.src;
+      await sleepM(4500);   // the plugin takes the edit into its notes: no condition that the page can read (the host waits for the row page_sync as well)
+      post(Object.assign({ kind: "song-after", edit: out }, await songSnap(8)));
+      return;
+    }
+    var base = regEvents, t0 = performance.now();
+    while (regEvents === base && performance.now() - t0 < 15000) await sleepM(100);
+    await sleepM(1000);   // the host makes its changes in several calls: the last state
+    var after = await songSnap(22);
+    post(Object.assign({ kind: "song-after", waited_ms: Math.round(performance.now() - t0) }, after));
   }
   /* Mode leftovers (M1d1, #575): the page shows the name of the DAW track where it names a track (progress, info line, status bar, undo label,
      follower text, export dialog, Follow menu), and after the host changed the audio of one source it says what happened. The first report

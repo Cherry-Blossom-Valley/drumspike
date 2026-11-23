@@ -42,7 +42,7 @@ window.__DS_TEST_RAF_DELAY_MS = 0;
 }
 function invalidate(flags) { FR.flags |= flags; requestFrame(); }
 function invalidateHits(track) {   // no track: every track (new events from an analysis, velocities)
-  for (const n of track ? [track] : S.order) FR.tracks.add(n);
+  for (const n of track ? [HT.homeFor(track)] : S.order) FR.tracks.add(n);   // #555: the lane of the DAW track that shows the source
   requestFrame();
 }
 /* P4-40c: the 60 Hz cap. On a 120 Hz display a scrub or a hit drag asked for a redraw in every animation frame.
@@ -105,7 +105,7 @@ function measureGeo() {
   GEO.ovX = $("#overview").getBoundingClientRect().left; GEO.rulerX = $("#rulerClip").getBoundingClientRect().left;
   const rows = {}, y0 = GEO.top - GEO.scY;
   sc.querySelectorAll(".track").forEach(row => {   // P4-1: the lane box, not the canvas, which a strip moves by a transform
-    if (row.classList.contains("hostHidden")) { const t = row.getBoundingClientRect().top + y0; rows[row.dataset.name] = { top: t, bottom: t, wave: t, waveH: 0 }; return; }   // #562: a row that the DAW hides has no size, and must not set the lane heights of the others
+    if (row.classList.contains("hostHidden") || row.classList.contains("hostMerged")) { const t = row.getBoundingClientRect().top + y0; rows[row.dataset.name] = { top: t, bottom: t, wave: t, waveH: 0 }; return; }   // #562: a row that the DAW hides has no size, and must not set the lane heights of the others
     const r = row.getBoundingClientRect(), w = row.querySelector("canvas.wave"), s = row.querySelector("canvas.spike");
     const tr = row.querySelector(".tlanes").getBoundingClientRect(), wt = tr.top + w.offsetTop;
     rows[row.dataset.name] = { top: r.top + y0, bottom: r.bottom + y0, wave: wt + y0, waveH: w.clientHeight };   // P4-27: a row can be taller than the others (waveH of its own)

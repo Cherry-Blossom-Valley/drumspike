@@ -206,7 +206,13 @@ function buildParamsPanel(div, name, p) {
         if (nv === shiftNow(name)) return;
         const ov = shiftNow(name);
         if (!await shiftApply(name, nv)) return;
-        pushUndo({ type: "shift", track: name, from: ov, to: nv });   // one undo step, none for a refused shift
+        const steps = [{ type: "shift", track: name, from: ov, to: nv }];
+        for (const o of HT.srcsOf(name)) {   // #555: the other sources of a DAW track shift by the same value, in the same undo step
+          if (o === name || !S.tracks[o] || shiftNow(o) === nv) continue;
+          const ovo = shiftNow(o);
+          if (await shiftApply(o, nv)) steps.push({ type: "shift", track: o, from: ovo, to: nv });
+        }
+        pushGroup("Shift Hits", steps);   // one undo step, none for a refused shift
         setMsg(`shifted all hits of ${trackLabel(name)} by ${nv-ov} samples`);
       } finally {
         const f = document.querySelector("#insParams .pShift");
@@ -233,7 +239,15 @@ function buildParamsPanel(div, name, p) {
 }
 
 async function saveMetaNote(name) {
-  try { await B.setNote(S.sid, name, S.tracks[name].note); setDirtyState(true); }
+  try {
+    await B.setNote(S.sid, name, S.tracks[name].note);
+    for (const o of HT.srcsOf(name)) {   // #555: the row owns the note (a note has no undo step: nothing to restore); a refusal of one source says which
+      if (o === name || !S.tracks[o]) continue;
+      try { await B.setNote(S.sid, o, S.tracks[name].note); S.tracks[o].note = S.tracks[name].note; }
+      catch (e) { setMsg(`note of ${trackLabel(o)} failed: ${errText(e)}`, "error"); }
+    }
+    setDirtyState(true);
+  }
   catch(e) { setMsg(`note failed: ${e.message}`, "error"); }
 }
 function refreshHeadNote(name) { refreshHeadRole(name); }   // P3-14a; P3-18: the follow text is on the same line

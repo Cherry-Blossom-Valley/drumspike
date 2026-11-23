@@ -46,6 +46,7 @@ pub mod keys;
 pub mod musical;
 pub mod names;
 pub mod playback;
+pub mod rows;
 pub mod selection;
 pub mod service;
 pub mod state;
@@ -500,6 +501,12 @@ struct DocShared {
     selection_computes: AtomicUsize,
     /// How many selection events the page was sent (the report and the unit tests count them).
     view_events: AtomicU64,
+    /// M1b8: the rows of the page in song time as the page was told last (the text), and how often they changed.
+    rows_pushed: Mutex<Option<String>>,
+    rows_gen: AtomicU64,
+    /// M1b8: the gate of the `plugin-regions` messages (at most one in 50 ms, the newest always arrives) and how many changes it was offered (the unit test counts).
+    rows_gate: Arc<Mutex<selection::PushGate>>,
+    rows_pushes: AtomicUsize,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -615,6 +622,10 @@ impl DocShared {
             view_gate: Arc::new(Mutex::new(selection::PushGate::default())),
             selection_computes: AtomicUsize::new(0),
             view_events: AtomicU64::new(0),
+            rows_pushed: Mutex::new(None),
+            rows_gen: AtomicU64::new(0),
+            rows_gate: Arc::new(Mutex::new(selection::PushGate::default())),
+            rows_pushes: AtomicUsize::new(0),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -821,35 +832,13 @@ impl DocShared {
         Ok(true)
     }
 
-    /// The regions of every source, `(source index, region)`, as the notes use them (M1b5): those
-    /// of the last round when the source has one, else the live ones. The page maps the position
-    /// of the host with them. Takes no `DocService` lock.
-    fn round_region_list(&self) -> Vec<(usize, service::RegionRec)> {
-        let members: Vec<Arc<SourceState>> = self
-            .members
-            .lock()
-            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
-            .unwrap_or_default();
-        let round = self.round_regions.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let mut out = Vec::new();
-        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
-            let live: Vec<service::RegionRec> = s
-                .regions
-                .lock()
-                .map(|r| r.iter().map(|slot| slot.rec).collect())
-                .unwrap_or_default();
-            let (regions, _) = regions_for_notes(round.get(&s.seq), (live, 0.0));
-            out.extend(regions.into_iter().map(|r| (s.seq, r)));
-        }
-        out
-    }
-
     /// Tell the page that the plugin changed its data (a round ended, a restore): the shell
     /// script of the page reloads the project (F1, F8).
     fn announce_reload(&self, audio: &[String]) {
         self.announce_reload_page(audio);
         // M1b13: a round ended: the tracks and the regions the selection maps through are the new ones
         self.selection_changed();
+        self.rows_changed();
     }
 
     /// The page event alone (a rename computes the selection itself, once).
@@ -910,34 +899,12 @@ impl DocShared {
             .iter()
             .map(|(k, v)| (*k, v.order))
             .collect();
-        let slices: Vec<(usize, selection::Slice)> = self
-            .export_region_list()
-            .regions
-            .into_iter()
-            .map(|(i, r)| {
-                (
-                    i,
-                    selection::Slice {
-                        start_mod: r.start_mod,
-                        dur_mod: r.dur_mod,
-                        start_play: r.start_play,
-                        dur_play: r.dur_play,
-                    },
-                )
-            })
-            .collect();
         let state = {
             let mut v = self.view.lock().unwrap_or_else(|e| e.into_inner());
             change(&mut v, &facts, &order);
             v.clone()
         };
-        let payload = selection::payload(
-            &state,
-            &facts,
-            &order,
-            &|seq| slices.iter().filter(|(i, _)| *i == seq).map(|(_, r)| *r).collect(),
-            selection::Fault::read(),
-        );
+        let payload = selection::payload(&state, &facts, &order, selection::Fault::read());
         if last.as_ref() == Some(&payload) {
             return (payload, None);
         }
@@ -1002,6 +969,141 @@ impl DocShared {
         }
         p["n"] = json!(self.view_events.load(Ordering::SeqCst));
         p
+    }
+
+    /// M1b8: the rows of the page in song time (one per DAW track), from the LIVE regions (the hits are in source time, so the
+    /// live slice, position and length give the whole mapping; a clip the user moved in the DAW needs no round).
+    fn rows_value(&self) -> rows::Rows {
+        let seqs: HashMap<u64, rows::SeqFact> = self
+            .sequences
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(k, v)| {
+                (
+                    *k,
+                    rows::SeqFact {
+                        name: v.name.clone(),
+                        order: v.order,
+                    },
+                )
+            })
+            .collect();
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        let lens = self.play_len.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let round = self.round_regions.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let fault = rows::Fault::read();
+        let mut facts = Vec::new();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            let Some(key) = s.track.lock().ok().and_then(|t| t.clone()) else {
+                continue;
+            };
+            let live: Vec<RegionSlot> = s.regions.lock().map(|r| r.clone()).unwrap_or_default();
+            let p = s.props();
+            let mut regions: Vec<rows::RegionFact> = live
+                .iter()
+                .map(|x| rows::RegionFact {
+                    sequence: x.sequence,
+                    start_mod: x.rec.start_mod,
+                    dur_mod: x.rec.dur_mod,
+                    start_play: x.rec.start_play,
+                    dur_play: lens.get(&x.id).copied().unwrap_or(x.rec.dur_mod),
+                    region_id: x.id,
+                })
+                .collect();
+            if fault.round_regions {
+                // the fault run: the regions of the last round, so a clip the user moved is not seen
+                regions = round
+                    .get(&s.seq)
+                    .map(|(r, _)| {
+                        r.iter()
+                            .map(|x| rows::RegionFact {
+                                sequence: live.first().map_or(0, |l| l.sequence),
+                                start_mod: x.start_mod,
+                                dur_mod: x.dur_mod,
+                                start_play: x.start_play,
+                                dur_play: x.dur_mod,
+                                region_id: 0,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+            }
+            let region_name = live
+                .iter()
+                .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play).then(a.id.cmp(&b.id)))
+                .and_then(|x| x.name.clone());
+            facts.push(rows::SrcFacts {
+                key,
+                seq: s.seq,
+                len_s: if p.sample_rate > 0.0 {
+                    p.sample_count as f64 / p.sample_rate
+                } else {
+                    0.0
+                },
+                // the sources whose clips are all gone are known to the export list
+                gone: regions.is_empty() && round.get(&s.seq).is_some_and(|(r, _)| !r.is_empty()),
+                regions,
+                region_name,
+            });
+        }
+        rows::build_with(&facts, &seqs, names::Fault::read())
+    }
+
+    /// M1b8: the answer of `plugin_host_regions`: the rows and the number of their last change.
+    fn rows_now(&self) -> Value {
+        self.rows_value()
+            .to_json(self.rows_gen.load(Ordering::SeqCst), &self.id())
+    }
+
+    /// M1b8: a region, a sequence or a round changed: when the rows differ from what the page was told last, the page gets
+    /// the new rows as the event `plugin-regions` (the same answer as `plugin_host_regions`). The rows are built once; the push
+    /// goes through the gate of the selection (at most one message in 50 ms, the newest state always arrives), because a host
+    /// without an edit cycle calls this for every region it makes.
+    fn rows_changed(&self) {
+        if crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("no-reload") {
+            return; // the fault run: the page is told of no change of the DAW tracks (the way of the display names)
+        }
+        // the rows are built, compared and numbered under ONE lock (as the selection is): two threads (the main thread and the worker) cannot
+        // number an older state after a newer one. The lock is not held across the log call or the page push.
+        let (event, bad) = {
+            let mut last = self.rows_pushed.lock().unwrap_or_else(|e| e.into_inner());
+            let rows = self.rows_value();
+            let text = rows.to_json(0, "").to_string();
+            if last.as_deref() == Some(text.as_str()) {
+                return;
+            }
+            *last = Some(text);
+            let gen = self.rows_gen.fetch_add(1, Ordering::SeqCst) + 1;
+            (rows.to_json(gen, &self.id()), rows.bad)
+        };
+        if bad > 0 {
+            session().log(json!({"event": "rows_dropped", "doc": self.id(), "clips": bad}).to_string());
+        }
+        self.rows_pushes.fetch_add(1, Ordering::SeqCst);
+        let offer =
+            self.rows_gate
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .offer(event, mono_ms(), selection::PUSH_GAP_MS);
+        match offer {
+            selection::Offer::Now(e) => self.page.log.push("plugin-regions", e),
+            selection::Offer::Later { schedule: true } => {
+                let (gate, log) = (self.rows_gate.clone(), self.page.log.clone());
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(selection::PUSH_GAP_MS));
+                    let e = gate.lock().unwrap_or_else(|e| e.into_inner()).take(mono_ms());
+                    if let Some(e) = e {
+                        log.push("plugin-regions", e);
+                    }
+                });
+            }
+            selection::Offer::Later { schedule: false } => {}
+        }
     }
 
     /// M1b10: the tracks of the document as the display name rule needs them: the track name, the
@@ -1095,6 +1197,7 @@ impl DocShared {
         self.touch_role_changes();
         // M1b13: a region or a sequence changed: the tracks that the host's selection names may be others now
         self.selection_changed();
+        self.rows_changed();
         // computed and compared under the lock: the main thread and the worker cannot leave the older map
         // in place of the newer, and no change goes without its announcement
         let now = {
@@ -2763,7 +2866,6 @@ impl Session {
 fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let d = doc.clone();
     let r = doc.clone();
-    let g = doc.clone();
     let g2 = doc.clone();
     let p1 = doc.clone();
     let p2 = doc.clone();
@@ -2774,13 +2876,13 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let p7 = doc.clone();
     let p8 = doc.clone();
     let p9 = doc.clone();
+    let p10 = doc.clone();
     editor::Backend {
         page: doc.page.clone(),
         changed: Arc::new(move || {
             let _ = send(session(), Msg::PageSync(d.clone()));
         }),
         record: Arc::new(move |svc, sid| r.record_page_edit(svc, sid)),
-        regions: Arc::new(move || g.round_region_list()),
         regions_gen: Arc::new(move || g2.region_gen.load(Ordering::SeqCst)),
         playback_offer: Arc::new(move || *p1.playback_offer.lock().unwrap_or_else(|e| e.into_inner())),
         playback_run: Arc::new(move |calls: &[playback::Call]| p2.run_playback(calls)),
@@ -2792,6 +2894,7 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
         stretched: Arc::new(move || p6.stretched_tracks()),
         export_regions: Arc::new(move || p7.export_region_list()),
         selection: Arc::new(move || p8.selection_now()),
+        rows: Arc::new(move || p10.rows_now()),
         export_folders: Arc::new(move || Some(service::folder_of(&p9.cache, &p9.id()).join(deliver::FOLDERS_FILE))),
     }
 }
@@ -5814,8 +5917,8 @@ mod tests {
         assert_eq!(p["tracks"], json!(["snare"]));
         assert_eq!(
             p["ranges"],
-            json!([{"t0": 0.25, "t1": 0.75}]),
-            "mapped through the second region of the snare (song 1 to 2)"
+            json!([{"t0": 1.25, "t1": 1.75}]),
+            "the range goes to the page as it is, in song time"
         );
         assert_eq!(selection_events(&doc).len(), 1);
         doc.selection_set(raw);
@@ -5850,6 +5953,99 @@ mod tests {
         assert_eq!(selection_events(&doc).len(), 2);
     }
 
+    fn region_events(doc: &Arc<DocShared>) -> Vec<Value> {
+        doc.page.log.poll(0, std::time::Duration::from_millis(1))["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["event"] == "plugin-regions")
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn a_burst_of_region_changes_sends_few_rows_and_the_last_state_always_arrives() {
+        let (doc, _k, s) = two_track_doc();
+        // a host without an edit cycle changes a region 500 times in a tight loop: the rows are built once for each change, the page gets few messages
+        for i in 0..500 {
+            s.regions.lock().unwrap()[0].rec.start_play = 10.0 + f64::from(i);
+            doc.rows_changed();
+        }
+        wait_gate();
+        let evs = region_events(&doc);
+        assert!(evs.len() <= 6, "{} messages for 500 changes", evs.len());
+        assert_eq!(
+            doc.rows_pushes.load(Ordering::SeqCst),
+            500,
+            "every change was offered to the gate once"
+        );
+        let last = evs.last().unwrap();
+        assert_eq!(last["payload"]["gen"], json!(500), "the last state arrives");
+        assert_eq!(last["payload"]["doc"], json!(doc.id()));
+        let clips = last["payload"]["rows"][1]["clips"].as_array().unwrap();
+        assert!(
+            clips.iter().any(|c| c["s"].as_f64() == Some(10.0 + 499.0)),
+            "and it is the newest rows: {clips:?}"
+        );
+    }
+
+    #[test]
+    fn two_threads_that_report_a_change_in_either_order_leave_the_newest_rows_with_the_highest_number() {
+        // the main thread and the worker both call rows_changed: whatever the order, the page ends with the rows of the state now, and the numbers never
+        // go back (the rows are built, compared and numbered under one lock)
+        for main_first in [true, false] {
+            let (doc, _k, s) = two_track_doc();
+            let work = |d: Arc<DocShared>, s: Arc<SourceState>, base: f64| {
+                std::thread::spawn(move || {
+                    for i in 0..100 {
+                        s.regions.lock().unwrap()[0].rec.start_play = base + f64::from(i);
+                        d.rows_changed();
+                    }
+                })
+            };
+            let (a, b) = if main_first {
+                (
+                    work(doc.clone(), s.clone(), 1000.0),
+                    work(doc.clone(), s.clone(), 2000.0),
+                )
+            } else {
+                let b = work(doc.clone(), s.clone(), 2000.0);
+                (work(doc.clone(), s.clone(), 1000.0), b)
+            };
+            a.join().unwrap();
+            b.join().unwrap();
+            doc.rows_changed(); // the last change has been reported: the state now
+            wait_gate();
+            let evs = region_events(&doc);
+            let last = evs.last().unwrap();
+            assert_eq!(
+                last["payload"]["rows"],
+                doc.rows_now()["rows"],
+                "main first: {main_first}: the page shows the rows of the state now"
+            );
+            let gens: Vec<u64> = evs.iter().map(|e| e["payload"]["gen"].as_u64().unwrap()).collect();
+            assert!(gens.windows(2).all(|w| w[0] < w[1]), "the numbers only go up: {gens:?}");
+        }
+    }
+
+    #[test]
+    fn a_new_document_starts_its_counter_again_and_names_itself() {
+        let (d1, _k, _s) = two_track_doc();
+        let (d2, _k2, _s2) = two_track_doc();
+        d1.rows_changed();
+        d2.rows_changed();
+        assert_eq!(
+            d1.rows_now()["gen"],
+            d2.rows_now()["gen"],
+            "both count from the same start"
+        );
+        assert_ne!(
+            d1.rows_now()["doc"],
+            d2.rows_now()["doc"],
+            "the page tells them apart by the id of the document"
+        );
+    }
+
     #[test]
     fn a_burst_of_ranges_sends_few_messages_and_the_newest_state_always_comes() {
         let (doc, _k, _s) = two_track_doc();
@@ -5870,7 +6066,7 @@ mod tests {
             "the last state is the one that arrived last"
         );
         let t0 = last["payload"]["ranges"][0]["t0"].as_f64().unwrap();
-        assert!((t0 - (0.0 + 199.0 * 0.002)).abs() < 1e-9, "{t0}");
+        assert!((t0 - (1.0 + 199.0 * 0.002)).abs() < 1e-9, "{t0}");
     }
 
     #[test]
@@ -5899,7 +6095,7 @@ mod tests {
             assert_eq!(fresh.1, None, "nothing is newer than what the page has");
             assert_eq!(
                 fresh.0["ranges"],
-                json!([{"t0": 0.75, "t1": 1.25}]),
+                json!([{"t0": 1.25, "t1": 1.75}]),
                 "host first: {host_first}"
             );
             assert_eq!(doc.view_pushed.lock().unwrap().as_ref(), Some(&fresh.0));

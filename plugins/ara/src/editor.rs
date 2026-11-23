@@ -208,10 +208,7 @@ pub struct Backend {
     /// Called on the request thread, before the page gets the answer of a command that changed the
     /// project: the events and notes of the document follow at once (F2).
     pub record: RecordFn,
-    /// The regions of the document's sources, `(source index, region)`: the page maps the
-    /// position of the host with them (M1b5).
-    pub regions: RegionsFn,
-    /// A change counter of those regions: the page maps again when it grows.
+    /// A change counter of the regions of the document's sources (a region changed, a round stored new ones, a source left).
     pub regions_gen: Arc<dyn Fn() -> u64 + Send + Sync>,
     /// What the host gives of the ARA playback controller (M1b7).
     pub playback_offer: Arc<dyn Fn() -> crate::playback::Offer + Send + Sync>,
@@ -235,6 +232,8 @@ pub struct Backend {
     pub export_regions: Arc<dyn Fn() -> crate::deliver::ExportRegions + Send + Sync>,
     /// M1b13: the selection of the host as the page shows it (the payload of the page event `plugin-selection`).
     pub selection: Arc<dyn Fn() -> Value + Send + Sync>,
+    /// M1b8: the rows of the page in song time (the answer of `plugin_host_regions`).
+    pub rows: Arc<dyn Fn() -> Value + Send + Sync>,
     /// M1c2: the file of the document that lists the folders the user chose in the sheet (`deliver::FOLDERS_FILE` in the
     /// folder of the document); `None` for an editor with no document.
     pub export_folders: Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>,
@@ -245,9 +244,6 @@ pub type TrackInfoFn = Arc<dyn Fn(&str) -> (Vec<usize>, f64) + Send + Sync>;
 
 /// Makes calls to the playback controller of the host; answers the number of calls made.
 pub type PlaybackRunFn = Arc<dyn Fn(&[crate::playback::Call]) -> usize + Send + Sync>;
-
-/// The playback regions of every source of the document, as the notes use them.
-pub type RegionsFn = Arc<dyn Fn() -> Vec<(usize, crate::service::RegionRec)> + Send + Sync>;
 
 struct Shared {
     backend: Backend,
@@ -269,10 +265,6 @@ struct Shared {
     transport_row: AtomicBool,
     /// M1b7: the requests of the page to the host wait here for the main thread.
     host_queue: crate::playback::Queue,
-    /// The track the page has selected (the shell tells it). The follow and the locate use its regions.
-    selected: Mutex<String>,
-    /// Grows when the selected track changes: the poll maps the position again.
-    sel_gen: std::sync::atomic::AtomicU64,
     /// The order of arrival of the requests of the page.
     req_seq: std::sync::atomic::AtomicU64,
     /// M1b7: the row of the first request of each kind (play, stop, locate) is written.
@@ -556,7 +548,6 @@ fn transport_fault() -> String {
 fn poll_transport(sh: &Arc<Shared>, total: std::time::Duration) -> Vec<Value> {
     use crate::transport as tr;
     let end = std::time::Instant::now() + total;
-    let identity = transport_fault() == "identity";
     let invent = transport_fault() == "invent";
     let keep_playing = transport_fault() == "keep-playing";
     loop {
@@ -579,27 +570,12 @@ fn poll_transport(sh: &Arc<Shared>, total: std::time::Duration) -> Vec<Value> {
             });
         }
         let now = tr::now_us();
-        let (msg, wait, stale_row, nopos_row, regions) = {
+        let (msg, wait, stale_row, nopos_row) = {
             let mut poller = sh.poller.lock().unwrap_or_else(|e| e.into_inner());
             poller.no_stop_fault = keep_playing;
-            // a change of the regions or of the selected track maps the position again
-            let gen = (sh.backend.regions_gen)().wrapping_add(sh.sel_gen.load(Ordering::SeqCst) << 40);
-            let (msg, wait) = poller.look(snap, now, gen, &mut || {
-                if identity {
-                    Vec::new()
-                } else if crate::test_switch("DS_ARA_PLAYBACK_FAULT").as_deref() == Ok("first-track") {
-                    (sh.backend.regions)() // the fault run: the follow ignores the selected track
-                } else {
-                    sh.mapping_regions()
-                }
-            });
-            (
-                msg,
-                wait,
-                poller.take_stale_row(),
-                poller.take_no_position_row(),
-                poller.region_count(),
-            )
+            // M1b8: the page shows song time, so the position goes as it is (no region, no selected track)
+            let (msg, wait) = poller.look(snap, now);
+            (msg, wait, poller.take_stale_row(), poller.take_no_position_row())
         };
         if stale_row {
             // the evidence for the next run of a real host: it stopped its process calls while playing
@@ -626,8 +602,7 @@ fn poll_transport(sh: &Arc<Shared>, total: std::time::Duration) -> Vec<Value> {
                         "host_position_seconds": m.song_s,
                         "host_position_samples": snap.map(|s| s.pos_samples),
                         "sample_rate": snap.map(|s| s.rate),
-                        "playing": m.playing, "page_time": m.pos,
-                        "mapped_by": format!("{:?}", m.mapped), "regions": regions})
+                        "playing": m.playing, "page_time": m.pos})
                     .to_string(),
                 );
                 session().write_out();
@@ -705,8 +680,8 @@ const SHELL_COMMANDS: [&str; 37] = [
     "plugin_report",
     "plugin_pick_folder",
     "plugin_host_tempo",
-    "plugin_host_track",
     "plugin_host_selection",
+    "plugin_host_regions",
     "plugin_host_offer",
     "plugin_host_play",
     "plugin_host_stop",
@@ -982,12 +957,10 @@ fn shell_command(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Option<Answer> {
         // the shell script of the page reports a function of the page that is missing (S4)
         // M1b7: the page asks the host to play, stop or locate (the shell script's HT object)
         "plugin_host_offer" => host_offer(sh),
-        "plugin_host_track" => {
-            sh.select_track(args.get("track").and_then(Value::as_str).unwrap_or(""));
-            Answer::json(200, &json!({"ok": true}))
-        }
         // M1b13: the page (its shell script) asks for the selection of the host once the project is loaded
         "plugin_host_selection" => Answer::json(200, &(sh.backend.selection)()),
+        // M1b8: the rows of the page in song time (one per DAW track, its clips at their song positions)
+        "plugin_host_regions" => Answer::json(200, &(sh.backend.rows)()),
         "plugin_host_play" => host_request(sh, crate::playback::Kind::Play, args),
         "plugin_host_stop" => host_request(sh, crate::playback::Kind::Stop, args),
         "plugin_host_locate" => host_request(sh, crate::playback::Kind::Locate, args),
@@ -1339,16 +1312,9 @@ fn host_request(sh: &Arc<Shared>, kind: crate::playback::Kind, args: &Value) -> 
     use crate::playback::{plan, Fault, HostAt, Plan};
     let fault = Fault::read();
     let offer = (sh.backend.playback_offer)();
-    if let Some(t) = args.get("track").and_then(Value::as_str) {
-        sh.select_track(t); // the shell sends the track with the request: no race with its own track message
-    }
-    let track = sh.selected.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let track = track.as_str();
-    // the regions of the selected track decide (stems of one length lie at the same source time);
-    // no track, or a track with no region: the rule over all regions
-    let (_seqs, len_s) = (sh.backend.track_info)(track);
+    // M1b8: the page shows song time: its time IS the song position, whatever track it has selected
     let page_raw = args.get("t").and_then(Value::as_f64);
-    let page_s = page_raw.and_then(|t| crate::playback::bound_time(t, Some(len_s)));
+    let page_s = page_raw.and_then(|t| crate::playback::bound_time(t, None));
     if page_raw.is_some() && page_s.is_none() && kind == crate::playback::Kind::Locate {
         return Answer::json(
             200,
@@ -1360,21 +1326,20 @@ fn host_request(sh: &Arc<Shared>, kind: crate::playback::Kind, args: &Value) -> 
         song_s: s.pos_s,
         playing: s.playing,
     });
-    let regions = sh.mapping_regions();
     let confirm = if crate::test_switch("DS_ARA_PLAYBACK_FAULT").as_deref() == Ok("no-fallback") {
         0
     } else {
         CONFIRM_MS
     };
     let k = kind.index();
-    match plan(kind, page_s, offer, &sh.backend.host_name, &regions, host_at, fault) {
+    match plan(kind, page_s, offer, &sh.backend.host_name, host_at, fault) {
         Plan::Refuse(text) => {
             if !sh.refused_row[k].swap(true, Ordering::SeqCst) {
                 // the evidence for the next run of a real host: what it gave, and what the page was told
                 session().log(
                     json!({"event": "playback_unavailable", "editor": sh.n, "kind": kind.name(), "host": sh.backend.host_name,
                         "offer": {"start": offer.start, "stop": offer.stop, "set_position": offer.position},
-                        "regions": regions.len(), "page_time": page_s, "text": text})
+                        "page_time": page_s, "text": text})
                     .to_string(),
                 );
                 session().write_out();
@@ -1385,7 +1350,7 @@ fn host_request(sh: &Arc<Shared>, kind: crate::playback::Kind, args: &Value) -> 
             }
             Answer::json(200, &json!({"ok": false, "reason": text, "confirm_ms": 0}))
         }
-        Plan::Send { calls, song_s, rule } => {
+        Plan::Send { calls, song_s } => {
             let calls_made = calls.clone();
             use crate::playback::Outcome;
             let outcome = if crate::test_switch("DS_ARA_PLAYBACK_FAULT").as_deref() == Ok("direct") {
@@ -1429,7 +1394,6 @@ fn host_request(sh: &Arc<Shared>, kind: crate::playback::Kind, args: &Value) -> 
                     json!({"event": "playback_request", "editor": sh.n, "kind": kind.name(), "host": sh.backend.host_name,
                         "offer": {"start": offer.start, "stop": offer.stop, "set_position": offer.position},
                         "page_time": page_s, "song_seconds": song_s, "song_samples": song_s.zip(rate).map(|(s, r)| (s * r).round() as i64),
-                        "mapped_by": rule.map(|r| format!("{r:?}")), "regions": regions.len(),
                         "host_position_seconds": host_at.map(|h| h.song_s), "host_playing": host_at.map(|h| h.playing),
                         "calls": calls_made.iter().map(|c| format!("{c:?}")).collect::<Vec<_>>(), "made": made,
                         "thread": "main"})
@@ -1445,27 +1409,6 @@ fn host_request(sh: &Arc<Shared>, kind: crate::playback::Kind, args: &Value) -> 
             }
             Answer::json(200, &json!({"ok": true, "song_s": song_s, "confirm_ms": confirm}))
         }
-    }
-}
-
-impl Shared {
-    /// The page selected a track (empty: none). A change makes the poll map again.
-    fn select_track(&self, name: &str) {
-        let mut cur = self.selected.lock().unwrap_or_else(|e| e.into_inner());
-        if *cur != name {
-            *cur = name.to_string();
-            self.sel_gen.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    /// The regions that map the page time, in both directions: those of the selected track, else all.
-    fn mapping_regions(&self) -> Vec<(usize, crate::service::RegionRec)> {
-        let all = (self.backend.regions)();
-        let track = self.selected.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        if track.is_empty() {
-            return all;
-        }
-        crate::playback::regions_for(&all, &(self.backend.track_info)(&track).0)
     }
 }
 
@@ -1753,9 +1696,10 @@ impl Editor {
         let mode = test_mode();
         if let Some(m) = &mode {
             init.push_str(&format!(
-                "window.__DS_TEST__={{mode:{m:?},arg:{:?},fault:{:?}}};\n",
+                "window.__DS_TEST__={{mode:{m:?},arg:{:?},fault:{:?},song:{:?}}};\n",
                 test_arg(),
-                fault()
+                fault(),
+                crate::test_switch("DS_ARA_SONG_FAULT").unwrap_or_default()
             ));
         }
         init.push_str(include_str!("editor/shell.js"));
@@ -1890,8 +1834,6 @@ impl Editor {
             closed: AtomicBool::new(false),
             inflight: AtomicUsize::new(0),
             host_queue: crate::playback::Queue::default(),
-            selected: Mutex::new(String::new()),
-            sel_gen: std::sync::atomic::AtomicU64::new(0),
             req_seq: std::sync::atomic::AtomicU64::new(0),
             page_dir: page.map(|(d, _)| d),
             n,
@@ -2098,7 +2040,6 @@ fn backend_of(plugin: &Plugin) -> Backend {
             page: crate::service::unbound_page(&session().cache),
             changed: Arc::new(|| {}),
             record: Arc::new(|_, _| Ok(false)),
-            regions: Arc::new(Vec::new),
             regions_gen: Arc::new(|| 0),
             playback_offer: Arc::new(crate::playback::Offer::default),
             playback_run: Arc::new(|_| 0),
@@ -2110,6 +2051,7 @@ fn backend_of(plugin: &Plugin) -> Backend {
             stretched: Arc::new(Vec::new),
             export_regions: Arc::new(crate::deliver::ExportRegions::default),
             selection: Arc::new(|| Value::Null),
+            rows: Arc::new(|| Value::Null),
             export_folders: Arc::new(|| None),
         },
     }
@@ -2287,7 +2229,6 @@ mod tests {
             "splash_dismiss",
             "reveal_path",
             "plugin_host_offer",
-            "plugin_host_track",
             "plugin_host_play",
             "plugin_host_stop",
             "plugin_host_locate",
@@ -2327,8 +2268,8 @@ mod tests {
                     "plugin:drag|start_drag",
                     "plugin_report",
                     "plugin_host_offer",
-                    "plugin_host_track",
                     "plugin_host_selection",
+                    "plugin_host_regions",
                     "plugin_host_play",
                     "plugin_host_stop",
                     "plugin_host_locate",

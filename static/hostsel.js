@@ -47,6 +47,12 @@ function hostSelSig() {
 function hostHidden(name) {
   if (!hostMode()) return false;
   const r = document.querySelector(`.track[data-name="${CSS.escape(name)}"]`);
+  return !!r && (r.classList.contains("hostHidden") || r.classList.contains("hostMerged"));   // #555: a merged row is hidden too: no key stops on it
+}
+/* A track that the DAW hides, by the row that shows it (#555): a merged source follows the row of its DAW track. */
+function hostDawHidden(name) {
+  if (!hostMode()) return false;
+  const r = document.querySelector(`.track[data-name="${CSS.escape(HT.homeFor(name))}"]`);
   return !!r && r.classList.contains("hostHidden");
 }
 const hsRow = name => document.querySelector(`.track[data-name="${CSS.escape(name)}"]`);
@@ -108,7 +114,11 @@ function hostSelScrollTo(ranges) {
 }
 
 function hostSelRange(list, reveal) {
-  const rs = (Array.isArray(list) ? list : []).filter(r => r && Number.isFinite(r.t0) && Number.isFinite(r.t1) && r.t1 > r.t0).map(r => ({ t0: r.t0, t1: r.t1 }));
+  let rs = (Array.isArray(list) ? list : []).filter(r => r && Number.isFinite(r.t0) && Number.isFinite(r.t1) && r.t1 > r.t0).map(r => ({ t0: r.t0, t1: r.t1 }));
+  if (HT.fault === "range-source") {   // the fault run: the range of the DAW is shown in the source time of the first clip of the selected row (the old rule of #562)
+    const e = HT.view.find(x => x.srcs.includes(S.selTrack)), c = e && e.clips[0];
+    if (c) rs = rs.map(r => ({ t0: r.t0 - c.s + c.a, t1: r.t1 - c.s + c.a }));
+  }
   HS.ranges = rs;
   hostSelPaint();
   if (rs.length && reveal) hostSelScrollTo(rs);
@@ -121,7 +131,7 @@ function hostSelApply(p, fresh, hiddenOnly) {
   hostSelHidden(p.hidden);
   if (hiddenOnly || p.none) return { hidden: true };
   const hid = new Set(p.hidden || []);
-  const keys = (p.tracks || []).filter(n => S.tracks[n] && !hid.has(n));   // a hidden track is never selected: the first one that is shown is
+  const keys = [...new Set((p.tracks || []).filter(n => S.tracks[n] && !hid.has(n)).map(HT.homeFor))];   // a hidden track is never selected: the first one that is shown is; #555: a source selects the row that shows it
   const key = hostSelKey(p);
   const changed = key !== HS.applied;
   if (keys.length) {

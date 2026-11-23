@@ -111,7 +111,7 @@ async function setLanesGL(on) {   // test hook: switch the renderer
   return !!glEngine();
 }
 function glPush(canvas, name) {
-  if (!glEngine() || !S.peaks[name] || !S.tracks[name]) return false;
+  if (!glEngine() || !(S.peaks[name] || HT.clips(name)) || !S.tracks[name]) return false;   // #555: a DAW track draws the peaks of its clips' sources
   GLQ.q.push({ canvas, name });
   return true;
 }
@@ -127,6 +127,25 @@ function glLane(canvas, name, view) {
            fill: waveFill(d),   // P4-26: the solid min/max shape from a visible span of WAVE_FILL_S
            color: trackColor(name), peaks: B.peaksRaw ? undefined : p, amp: S.peakAmp[name] || 1, gain: S.ampZoom, span0, spanS,
            samples: have ? (c.data ? { start: c.start, data: c.data } : { start: c.start, end: c.end }) : null, want: spanS <= 262144 && !have };
+}
+/* #555: the lane of ONE clip of a DAW track: the part of the clip that lies in the view, at its song position. The slice [a, b) of the source
+   `c.src` is drawn from the tiles and samples of that source; the lane box is narrower than the row (x is the offset in the row, in CSS px).
+   null when the clip is out of the view or its source has no peaks yet. */
+function glClipLane(canvas, name, view, c) {
+  const p = S.peaks[c.src];
+  if (!p) return null;
+  const v0 = Math.max(view.t0, c.s), v1 = Math.min(view.t1, c.s + HT.songLen(c));
+  if (!(v1 > v0)) return null;
+  const s0 = c.a + (v0 - c.s) / c.k, s1 = c.a + (v1 - c.s) / c.k;
+  const span0 = s0 * p.sr, spanS = (s1 - s0) * p.sr, cache = S.samplesCache[c.src];
+  const have = spanS <= 262144 && cache && cache.start <= span0 && cache.end >= span0 + spanS && !!cache.data === !B.peaksRaw;
+  const row = canvas.closest(".track");
+  const [W, H] = laneSize(canvas), dpr = GEO.dpr;
+  const x0 = tToX(v0, W), wpx = (v1 - v0) / viewDur() * W;
+  return { key: c.src, W: wpx, H, dw: Math.max(1, Math.floor(wpx * dpr)), dh: Math.floor(H * dpr), x: 0, y: 0, off: x0,
+           fade: row && row.classList.contains("muted") ? 0.35 : 1, fill: waveFill(s1 - s0), color: trackColor(name), peaks: B.peaksRaw ? undefined : p,
+           amp: S.peakAmp[c.src] || 1, gain: S.ampZoom, span0, spanS,
+           samples: have ? (cache.data ? { start: cache.start, data: cache.data } : { start: cache.start, end: cache.end }) : null, want: spanS <= 262144 && !have };
 }
 /* draw the lanes of items [{canvas, name}] at their places; false when WebGL2 is not available */
 function glDraw(items) {   // P3-14d: places from GEO; the GL canvas style is written only when its box changed
@@ -144,6 +163,16 @@ function glDraw(items) {   // P3-14d: places from GEO; the GL canvas style is wr
     if (!g) continue;   // not measured yet: the observer repaints when it is
     const y = g.wave - GEO.top, H = g.waveH || GEO.waveH;
     if (!GLQ.all && (y + H < 0 || y > chh || x + W < 0 || x > cw)) continue;   // scrolled out of view
+    const clips = HT.clips(it.name);
+    if (clips) {   // #555: one lane for each clip of the DAW track, at its song position
+      for (const c of clips) {
+        const l = glClipLane(it.canvas, it.name, view, c);
+        if (!l) continue;
+        l.x = Math.round((x + l.off) * dpr); l.y = Math.round(y * dpr);
+        l.item = it; lanes.push(l);
+      }
+      continue;
+    }
     const l = glLane(it.canvas, it.name, view);
     l.x = Math.round(x * dpr); l.y = Math.round(y * dpr);
     l.item = it; lanes.push(l);
@@ -169,7 +198,7 @@ function glItems() {   // every lane that WebGL2 draws, from the DOM
   const out = [];
   for (const name of S.order) {
     const row = rowOf(name);
-    if (row && S.peaks[name] && S.tracks[name]) out.push({ canvas: row.querySelector(".wave"), name });
+    if (row && (S.peaks[name] || HT.clips(name)) && S.tracks[name]) out.push({ canvas: row.querySelector(".wave"), name });   // #555: a DAW track draws the peaks of its clips' sources
   }
   return out;
 }
@@ -189,7 +218,7 @@ function glFlush() {   // the end of drawAll: draw the queued lanes, then the 2D
     c2.clearRect(0, 0, W, H);
     drawEventLines(it.canvas, it.name);
     const p = S.peaks[it.name];
-    if (!B.peaksRaw && !GLQ.warmed.has(p)) { GLQ.warmed.add(p); GLQ.eng.warm([{ key: it.name, peaks: p }]); }
+    if (p && !B.peaksRaw && !GLQ.warmed.has(p)) { GLQ.warmed.add(p); GLQ.eng.warm([{ key: it.name, peaks: p }]); }
   }
 }
 /* The pixels of a lane as the user sees it (the GL lane under the 2D canvas); tests and the self-test read this,
@@ -212,8 +241,36 @@ async function laneImage(name) {
   return out;
 }
 
+function drawClipEnvelopes(ctx, W, H, name) {   // #555: the Canvas 2D waveform of a DAW track: from the arrays of the peaks (the tiles are loaded first), no sample-exact window
+  const clips = HT.clips(name) || [], mid = H / 2;
+  for (const c of clips) {
+    const p = S.peaks[c.src];
+    if (!p) continue;
+    if (p.tiles) { ensureArrays(c.src); continue; }   // the arrays arrive and redraw the view
+    const x0 = Math.max(0, Math.floor(tToX(c.s, W))), x1 = Math.min(W, Math.ceil(tToX(c.s + HT.songLen(c), W)));
+    const level = pickLevel(p, (viewDur() / W) / c.k * p.sr) || 256, L = p.levels[level];
+    if (!L) continue;
+    const scale = (H * 0.45) / (S.peakAmp[c.src] || 1) * S.ampZoom;
+    ctx.fillStyle = trackColor(name);
+    for (let px = x0; px < x1; px++) {
+      const ta = Math.max(c.a, c.a + (xToT(px, W) - c.s) / c.k), tb = Math.min(c.b, c.a + (xToT(px + 1, W) - c.s) / c.k);
+      const b0 = Math.max(0, Math.floor(ta * p.sr / level)), b1 = Math.min(L.n, Math.max(b0 + 1, Math.ceil(tb * p.sr / level)));
+      let mn = 1, mx = -1;
+      for (let b = b0; b < b1; b++) { mn = Math.min(mn, L.min[b]); mx = Math.max(mx, L.max[b]); }
+      if (mx < mn) continue;
+      ctx.fillRect(px, mid - mx * scale, 1, Math.max(1, (mx - mn) * scale));
+    }
+  }
+}
 function drawWave(canvas, name) {
   if (glPush(canvas, name)) return;   // P3-6a: WebGL2 draws this lane
+  if (HT.on()) {   // #555: the Canvas 2D path of a DAW track (WebGL2 lost or not there): the min/max envelope of each clip at its song position, then the hits
+    const c0 = canvas.getContext("2d"), [W0, H0] = laneSize(canvas);
+    c0.clearRect(0, 0, W0, H0); c0.fillStyle = "#101318"; c0.fillRect(0, 0, W0, H0);
+    drawClipEnvelopes(c0, W0, H0, name);
+    drawEventLines(canvas, name);
+    return;
+  }
   const ctx = canvas.getContext("2d"), [W, H] = laneSize(canvas);
   const t = S.tracks[name], p = S.peaks[name];
   const gen = canvas._gen = (canvas._gen || 0) + 1;   // P4-26: a draw that waits for its samples is dropped when a newer draw of this lane came meanwhile
@@ -315,7 +372,9 @@ function drawEventLines(canvas, name) {
   drawGridLines(ctx, W, H);   // P4-8: the bar and beat lines lie under the hit lines
   lnDrawBand(ctx, W, H, name);   // P4-6a: the range selection
   const color = trackColor(name), events = S.events[name] || [];
-  const lnNot = lnLearn(name) ? lnTimes(name).not : null;   // P4-6a: a hit marked "not"; P4-6c: grey when the filter took it out, else a red tint (it is exported, Tab stops on it)
+  const clips = HT.clips(name);   // #555: in a DAW the row is a DAW track: its clips (of every source of the row) lie at their song time; null otherwise
+  const notOf = new Map();   // P4-6a: a hit marked "not"; P4-6c: grey when the filter took it out, else a red tint (it is exported, Tab stops on it); per source
+  const lnNotOf = src => { if (!notOf.has(src)) notOf.set(src, lnLearn(src) ? lnTimes(src).not : null); return notOf.get(src); };
   const pad = 5 * viewDur() / W;   // the hits up to 5 px outside the lane: their markers (8 px wide) reach into it (P4-1: a strip shows them too)
   // Owner request 2026-10-11: a hit line in the track colour vanished over the wave of that colour (the old 2D wave
   // filled its body at 33 %, the GL wave is solid). In the wave lane the lines are the UI text grey at 60 %, with a
@@ -323,18 +382,22 @@ function drawEventLines(canvas, name) {
   // Manual hits stay magenta, the selected hit yellow. Three passes: the halos in one path, then the lines per colour.
   const groups = new Map();   // colour -> [x, ...]
   let sel = null;
-  for (const i of hitsIn(events, S.view.t0 - pad, S.view.t1 + pad, dragSkip(name))) {
-    const x = Math.round(tToX(events[i].t, W)) + 0.5;
+  const refs = clips ? HT.hitRefs(clips, S.events, S.view.t0 - pad, S.view.t1 + pad, hitDrag)
+    : hitsIn(events, S.view.t0 - pad, S.view.t1 + pad, dragSkip(name)).map(i => ({ src: name, i, t: events[i].t }));   // #555: {source, index, time on the page}
+  for (const h of refs) {
+    const evs = S.events[h.src] || events, ev = evs[h.i], src = h.src, i = h.i;
+    const x = Math.round(tToX(h.t, W)) + 0.5;
     if (x < -5 || x > W+5) continue;
-    const t0 = events[i].t;
-    const pv = lnPreview(name, events[i]);   // P4-6c: a threshold drag shows the grey of the live threshold
-    const evGrey = pv === null ? hgIsCut(events[i]) : pv || hgCutOnly(events[i]);
-    if (S.sel && S.sel.track===name && S.sel.index===i) { sel = { x, i, grey: evGrey }; continue; }   // #175: a selected deactivated hit keeps its state visible
+    const t0 = ev.t;
+    const pv = lnPreview(src, ev);   // P4-6c: a threshold drag shows the grey of the live threshold
+    const evGrey = pv === null ? hgIsCut(ev) : pv || hgCutOnly(ev);
+    if (S.sel && S.sel.track===src && S.sel.index===i) { sel = { x, i, n: evs.length, grey: evGrey }; continue; }   // #175: a selected deactivated hit keeps its state visible
+    const lnNot = lnNotOf(src);
     const notTint = !evGrey && lnNot && lnNot.length && lnNear(lnNot, t0);   // marked "not", still in the output (filter off, or an edited hit)
-    const c = evGrey ? HG_GREY : notTint ? LN_NOT_TINT : (isManual(events[i]) || events[i].edited) ? MANUAL_COLOR : (isSpike ? color : "#cdd3de");   // P4-3: a cut hit is grey; P4-6c: so is a hit the Learn filter took out; a "not" example still in the output is tinted; P4-40f: a hand velocity keeps the manual colour
+    const c = evGrey ? HG_GREY : notTint ? LN_NOT_TINT : (isManual(ev) || ev.edited) ? MANUAL_COLOR : (isSpike ? color : "#cdd3de");   // P4-3: a cut hit is grey; P4-6c: so is a hit the Learn filter took out; a "not" example still in the output is tinted; P4-40f: a hand velocity keeps the manual colour
     (groups.get(c) || groups.set(c, []).get(c)).push(x);
   }
-  const gone = HG.ghosts[name];   // P4-3: while the Sensitivity moves, the hits that go stay as grey lines
+  const gone = clips ? HT.mapTimes(clips, HG.ghosts) : HG.ghosts[name];   // P4-3: while the Sensitivity moves, the hits that go stay as grey lines
   if (gone && gone.length) {
     ctx.strokeStyle = "#7a818d"; ctx.lineWidth = 1.25; ctx.globalAlpha = 1; ctx.setLineDash([4, 3]); ctx.beginPath();
     for (const t of gone) { const x = Math.round(tToX(t, W)) + 0.5; if (x >= -5 && x <= W + 5) { ctx.moveTo(x, 0); ctx.lineTo(x, H); } }
@@ -365,7 +428,7 @@ function drawEventLines(canvas, name) {
         ctx.beginPath(); ctx.arc(sel.x, 3.5, 7, 0, 2 * Math.PI); ctx.stroke();
         ctx.font = "9px sans-serif";
         ctx.fillStyle = "#cdd3de";
-        ctx.fillText(`${sel.i+1}/${events.length} · deactivated`, sel.x+5, 9);
+        ctx.fillText(`${sel.i+1}/${sel.n === undefined ? events.length : sel.n} · deactivated`, sel.x+5, 9);
       }
     } else {
       ctx.strokeStyle = "#ffe066"; ctx.lineWidth = 2;
@@ -374,7 +437,7 @@ function drawEventLines(canvas, name) {
         ctx.fillStyle = "#ffe066";
         ctx.beginPath(); ctx.moveTo(sel.x-4, 0); ctx.lineTo(sel.x+4, 0); ctx.lineTo(sel.x, 7); ctx.closePath(); ctx.fill();
         ctx.font = "9px sans-serif"; ctx.fillStyle = "#ffe066";
-        ctx.fillText(`${sel.i+1}/${events.length}`, sel.x+5, 9);
+        ctx.fillText(`${sel.i+1}/${sel.n === undefined ? events.length : sel.n}`, sel.x+5, 9);
       }
     }
   }

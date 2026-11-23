@@ -117,7 +117,7 @@ function trackColors(tracks) { for (const t of Object.values(tracks || {})) if (
    that names a track for the user (progress, info line, export dialog, menus, undo labels, status texts, tooltips) calls this;
    a key goes only into a command, a data attribute or a lookup. Only the plugin sets `display_name`, so the standalone page
    shows the key everywhere, as before. */
-function trackLabel(key) { const t = typeof S !== "undefined" && S.tracks && S.tracks[key]; return t && t.display_name || key; }
+function trackLabel(key) { const t = typeof S !== "undefined" && S.tracks && S.tracks[key], l = typeof HT !== "undefined" && HT.label(key); return l || t && t.display_name || key; }   // #555: in a DAW the name of the DAW track (the row)
 /* A text that already holds keys (an answer of the service: "Snare Top: 12 hits ..."): in host mode each key that differs from its
    label becomes the label, in one pass; a label that is already in the text stays (the alternation holds the labels first). With
    the mode off the text is returned as it is. */

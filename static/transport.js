@@ -45,6 +45,10 @@ function appSlew(m) {   // #471: the shared slew/anchor of one sample (4 Hz play
 }
 function appOnPlayhead(m) {
   if (!m) return;
+  if (HT.fault === "selected-track" && typeof m.pos === "number") {   // the fault run: the position of the host is mapped through the first clip of the selected row (the way of #554)
+    const e = HT.view.find(x => x.srcs.includes(S.selTrack)), c = e && e.clips[0];
+    if (c) m = Object.assign({}, m, { pos: m.pos - c.s + c.a });
+  }
   if (!AC.active) {   // #518: the DAW starts playback in the DAW, not in the plugin window: the page follows
     if (!hostMode() || m.sid !== S.sid || AC.starting) return;   // the host's guest, or a Play of the page is starting (its own branch takes over)
     Object.assign(AC, { active: true, off: Infinity, minEpoch: 0, pending: null, seeking: false, running: false, errI: 0,

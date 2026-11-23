@@ -10,6 +10,11 @@ function allEventsSorted(trackFilter) {
   for (const name of S.order) {
     if (trackFilter && name !== trackFilter) continue;
     if (hostHidden(name)) continue;   // #562: Tab does not stop on a hit of a track that the DAW hides (nothing with the mode off)
+    const clips = HT.clips(name);
+    if (clips) {   // #555: a DAW track is one row: the hits of all its sources in the order of the song (a merged source is hidden and is not walked by itself)
+      for (const r of HT.hitRefs(clips, S.events, -Infinity, Infinity)) out.push({t: r.t, track: r.src, index: r.i});
+      continue;
+    }
     const evs = S.events[name] || [];
     for (let i=0;i<evs.length;i++) out.push({t: evs[i].t, track: name, index: i});
   }
@@ -25,10 +30,9 @@ function gotoEvent(dir, forceGlobal) {
   // Ties are ordered by POSITION IN THE SORTED LIST (D1) — matching the sort order,
   // not an alphabetical key that disagrees with it.
   let refT = S.playhead, refPos = -1;
-  if (S.sel && (!trackFilter || S.sel.track === trackFilter)) {
-    const e = (S.events[S.sel.track]||[])[S.sel.index];
-    if (e && Math.abs(e.t - S.playhead) < 1e-9)
-      refPos = all.findIndex(p => p.track === S.sel.track && p.index === S.sel.index);
+  if (S.sel && (!trackFilter || HT.homeFor(S.sel.track) === trackFilter)) {   // #555: a hit of any source of the row
+    const k = all.findIndex(p => p.track === S.sel.track && p.index === S.sel.index);
+    if (k >= 0 && Math.abs(all[k].t - S.playhead) < 1e-9) refPos = k;
   }
   // #175: the "Tab moves to" setting. "all found hits" visits the deactivated hits too; the default
   // ("active hits only") skips them and the grey hits of the Learn filter (P4-6c).
@@ -49,7 +53,7 @@ function gotoEvent(dir, forceGlobal) {
     if (!target) { setMsg(trackFilter ? `start of ${trackFilter} events` : "no previous event"); return; }
   }
   S.sel = {track: target.track, index: target.index};
-  S.playhead = snapSample(target.t, target.track);
+  S.playhead = HT.on() && HT.fault !== "snap-song" ? target.t : snapSample(target.t, target.track);   // snap-song: the fault run (the old rule)   // #555: a song time is not snapped to the grid of one source: the compare above finds the same hit again
   centerOn(S.playhead);
   updateStatus();   // the status bar: "track: hit n/N"; the info line has the rest
   if (SETTINGS().ui.auditionTab && !S.playing && !hostMode()) audition(false, { track: target.track, t: target.t });   // P4-40d: Audition on Tab
@@ -74,9 +78,9 @@ async function rqRatings(n) {
 async function rqQueue() {   // [{track, e, c}], lowest confidence first; ties by time, then by track order
   const q = [];
   for (const n of S.order) {
-    if (!S.tracks[n] || S.tracks[n].follows || !(S.events[n] || []).length || hostHidden(n)) continue;   // #562: not a hidden track; a follower's hits are its source's
+    if (!S.tracks[n] || S.tracks[n].follows || !(S.events[n] || []).length || hostDawHidden(n)) continue;   // #562: not a hidden track; a follower's hits are its source's; #555: a merged source is walked with its DAW track
     const rs = await rqRatings(n);
-    S.events[n].forEach((e, i) => { if (rs[i] && rs[i].doubt) q.push({ track: n, e, c: rs[i].c }); });
+    S.events[n].forEach((e, i) => { if (rs[i] && rs[i].doubt && (!HT.on() || HT.songTime(n, e.t) !== null)) q.push({ track: n, e, c: rs[i].c }); });   // #555: a hit in no clip is not in the song
   }
   return q.sort((a, b) => a.c - b.c || a.e.t - b.e.t || S.order.indexOf(a.track) - S.order.indexOf(b.track));
 }
@@ -92,7 +96,7 @@ async function reviewStep(dir) {   // Hits > Next Doubtful Hit (dir 1), Previous
   if (i < 0) { setMsg("no earlier doubtful hits"); return; }
   const p = q[i];
   S.sel = { track: p.track, index: S.events[p.track].indexOf(p.e) };
-  S.playhead = snapSample(p.e.t, p.track);
+  S.playhead = HT.on() ? HT.songTime(p.track, p.e.t) : snapSample(p.e.t, p.track);   // #555: the playhead is song time, not snapped
   centerOn(S.playhead);
   updateStatus();
   setMsg(`doubtful hit ${i + 1} of ${q.length}`);

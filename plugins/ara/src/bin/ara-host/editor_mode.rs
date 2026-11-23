@@ -907,6 +907,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 // the page reports the names it got, the host renames and moves, the page reports again
                 "names" => Some("names-after"),
                 "leftovers" => Some("leftovers-after"),
+                // M1b8: the page reports the rows it got, the host renames, moves, shifts and trims, the page reports again
+                "song" => Some("song-after"),
                 "edit-destroy" => Some("edit"),
                 "net" => Some("now"),
                 _ => None,
@@ -915,6 +917,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let boots_before = count_rows("page_report", Some("boot"));
             let names_before = count_rows("page_report", Some("names"));
             let leftovers_before = count_rows("page_report", Some("leftovers"));
+            let song_before = count_rows("page_report", Some("song"));
+            let mut song_handled = false;
             let mut update_handled = false;
             let mut names_handled = false;
             let mut shift_handled = false;
@@ -1198,6 +1202,21 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         move_region(doc.inst, doc.state, *i, *j);
                     }
                 }
+                if mode == "song" && !song_handled && count_rows("page_report", Some("song")) > song_before {
+                    song_handled = true;
+                    for (j, name) in &renames {
+                        rename_sequence(doc.inst, doc.state, *j, name);
+                    }
+                    for (i, j) in &moves {
+                        move_region(doc.inst, doc.state, *i, *j);
+                    }
+                    for (i, p) in &shifts {
+                        shift_region(doc.inst, doc.state, *i, *p);
+                    }
+                    for (i, a, d) in &trims {
+                        trim_region(doc.inst, doc.state, *i, *a, *d);
+                    }
+                }
                 if mode == "analyse-race" && destroyed_jobs.is_none() {
                     if let Some(i) = destroy_late {
                         if count_rows("page_report", Some("analyse-started")) > started_before {
@@ -1304,7 +1323,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 }
                 rss_open = rss_mb();
             }
-            if got && mode == "edit" && wait_sync {
+            if got && (mode == "edit" || mode == "song") && wait_sync {
                 // the plugin reads the events again on its worker; wait for its row
                 let t = Instant::now();
                 while t.elapsed() < Duration::from_secs(15) && count_rows("page_sync", None) == 0 {
@@ -1318,6 +1337,10 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     pump(&app);
                     doc_pump(&doc);
                 }
+            }
+            if got && mode == "song" {
+                // M1b8: the notes for the host after the page's edit (the first notes of the run are made before any edit)
+                doc.print_all_notes("after-song", None);
             }
             ((*gui).destroy.expect("gui.destroy"))(plugin);
             if !got {
