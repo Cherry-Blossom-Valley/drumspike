@@ -127,6 +127,17 @@ design, with the reasons and the risks, is `docs/design/daw-plugin/m1c1-delivery
   the document folder only when it is the default export folder of the document (`Exports/` of its project, also before it
   exists) or one of those folders (exact canonical equality, no prefix; `deliver::dest_allowed_in`).
 
+## One drag (M1c3)
+
+The plugin makes the files of the delivery before the user asks (design: `docs/design/daw-plugin/m1c3-one-drag.md`). A worker thread (never an
+audio callback, never the main thread) looks again after each round and each edit, after 0.8 s of quiet, and writes ONE file per DAW track and kind
+to `Exports/.prepared/` of the document: `<DAW track>_spike.mid` (made at once), and `<DAW track>_spike.wav` and `<DAW track>_audio_spike.wav` (made after
+their first use in the session, 3 s of quiet), plus `Drums_merged.mid` (all drums on one note track). A set carries a hash of what it was made from; a
+handle whose set is older than the hits now says `preparing` and is not draggable. The worker writes only in `.prepared/`; a take (the start of a drag) hard-links the prepared file into `Exports/Dragged/` under its name (numbered when another file of that name is there; nothing in `Exports/` or `Exports/Dragged/` is ever replaced or deleted).
+The page shows three handles in each row header and four in the toolbar (`static/deliver.js`, host mode only). The shell commands are
+`plugin_deliver_state` (and the page event `plugin-deliver`), `plugin_deliver_take` and `plugin_deliver_want`. `.prepared/` is bounded at 2 GiB.
+A delivered file keeps its content; a new drop after an edit brings a new numbered file. Delete the old clips in the DAW before the new drop.
+
 ## Cache folder
 
 The plugin writes only below one cache folder:
@@ -465,6 +476,10 @@ variants, because the hand checks in a DAW need them.
 | `DS_ARA_DRAG_PRESSED` | scenario | 1 | the file drag acts as if the left mouse button is down: the test host has no real mouse. A gate run never starts a system drag session: the plugin writes the items to a private pasteboard (DS_ARA_DRAG_TEST=1 or the test host's editor mode) |
 | `DS_ARA_DRAG_TEST` | scenario | 1 | the file drag makes its items on a private pasteboard and starts no system drag session (an editor run of the test host implies it) |
 | `DS_ARA_SONG_FAULT` | fault | round-regions, source-x, no-cut-start, home-only, store-song, selected-track, leak | the page in song time (M1b8): round-regions: the rows of the page are made from the regions of the last analysis round, not from the live ones (a clip moved in the host is not seen); the other values are made by the test driver in the page: source-x: the page draws the hits in source time, not in song time; no-cut-start: the mapping ignores where a clip starts in its source; home-only: the page draws only the first source of a DAW track and a setting reaches only that source; store-song: a hit the page adds is stored with its song time, not its source time; selected-track: the page maps the position of the host through the first clip of the selected row (the way of #554); leak: the song-time mode is on without the host-mode switch of the page (the standalone page must not change) |
+| `DS_ARA_PREPARE_FAULT` | fault | per-source, stale-ok, all-rows, two-tracks, forever, no-watchdog, no-refresh, raw-name, no-debounce, user-file, link-exports, no-file-numbering, late-row, fp-no-name, no-held-check, no-hard-link | the prepared files of M1c3 (several, separated by commas): per-source: one file per source, as the dialog makes them; stale-ok: a take ignores the state of the hits (an old set is taken); all-rows: every row is made again after an edit in one row; two-tracks: the merged MIDI file has one track per drum; forever: a job never ends; no-watchdog: the handle stays preparing for ever; no-refresh: the follower refresh of the preparation is skipped; raw-name: the DAW track name goes into the file name as it is; no-debounce: no quiet time; user-file (a scenario): a file of the user with known bytes lies in Exports/ under a row's MIDI name before the first set is made; link-exports: the old behaviour, the worker links its file into Exports/ and replaces a file of the user; no-file-numbering: two sets with one file name are not numbered; late-row (a scenario): the row 'Snare_audio' shows only after the first take; fp-no-name: the final file name is not part of fp; no-held-check: a job may overwrite the prepared file of another set; no-hard-link: a take cannot link, it copies |
+| `DS_ARA_PREPARE_WAIT_MS` | scenario | a number of milliseconds | the watchdog of the prepared files (default 30000): how long a handle may stay preparing before it says error |
+| `DS_ARA_PREPARE_QUIET_MS` | scenario | a number of milliseconds | the quiet time before the MIDI files are made again after a change (default 800; the wav kinds wait three times as long) |
+| `DS_ARA_PREPARE_TRACE` | scenario | any value | the preparation writes a report row prepare_wake (file and line of the caller, time) for each wake of its worker |
 
 Kinds: **config**: The plugin reads it in every build, the delivery build too (the check sets it for every run; the hand checks in a DAW need it). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. Read only by a build with the cargo feature `test-switches` (the gate build); a delivery build ignores it. **scenario**: Scenario switch: sets up a case for a stage (not a fault). Read only by a build with the cargo feature `test-switches`; a delivery build ignores it.
 

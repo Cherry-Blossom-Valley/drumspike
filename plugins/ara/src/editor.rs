@@ -203,6 +203,8 @@ pub type RecordFn = Arc<dyn Fn(&drumspike_app::Service, &str) -> Result<bool, St
 /// What the editor needs from the document it belongs to.
 pub struct Backend {
     pub page: Arc<PageHandle>,
+    /// M1c3: the preparation of the files that leave the plugin (the handles of the page).
+    pub prep: Arc<crate::prepare::Prep>,
     /// Called after a command changed the project: the plugin reads the events again.
     pub changed: Arc<dyn Fn() + Send + Sync>,
     /// Called on the request thread, before the page gets the answer of a command that changed the
@@ -676,12 +678,15 @@ fn poll_channel(sh: &Arc<Shared>, id: &str, total: std::time::Duration) -> Vec<V
 
 /// The commands that `call::run` leaves to the desktop shell (`SHELL_ONLY` of
 /// `crates/app/src/call.rs`), plus the one command of the drag plugin. Each has an answer.
-const SHELL_COMMANDS: [&str; 37] = [
+const SHELL_COMMANDS: [&str; 40] = [
     "plugin_report",
     "plugin_pick_folder",
     "plugin_host_tempo",
     "plugin_host_selection",
     "plugin_host_regions",
+    "plugin_deliver_state",
+    "plugin_deliver_take",
+    "plugin_deliver_want",
     "plugin_host_offer",
     "plugin_host_play",
     "plugin_host_stop",
@@ -961,6 +966,23 @@ fn shell_command(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Option<Answer> {
         "plugin_host_selection" => Answer::json(200, &(sh.backend.selection)()),
         // M1b8: the rows of the page in song time (one per DAW track, its clips at their song positions)
         "plugin_host_regions" => Answer::json(200, &(sh.backend.rows)()),
+        // M1c3: the handles of the page (the state of the prepared files, the files of a drag, the first use of a wav kind)
+        "plugin_deliver_state" => {
+            sh.backend.prep.ensure_started();
+            Answer::json(200, &sh.backend.prep.state_json())
+        }
+        "plugin_deliver_want" => match args
+            .get("kind")
+            .and_then(Value::as_str)
+            .and_then(crate::prepare::Kind::parse)
+        {
+            Some(k) => {
+                sh.backend.prep.want_kind(k, args.get("row").and_then(Value::as_str));
+                Answer::json(200, &sh.backend.prep.state_json())
+            }
+            None => Answer::err(400, "kind must be midi, spike, audio or merged"),
+        },
+        "plugin_deliver_take" => deliver_take(sh, args),
         "plugin_host_play" => host_request(sh, crate::playback::Kind::Play, args),
         "plugin_host_stop" => host_request(sh, crate::playback::Kind::Stop, args),
         "plugin_host_locate" => host_request(sh, crate::playback::Kind::Locate, args),
@@ -1190,6 +1212,42 @@ fn pick_folder_command(sh: &Arc<Shared>, args: &Value) -> Answer {
     }
 }
 
+/// M1c3: `plugin_deliver_take {items: [{row, kind}]}` answers the files of a drag when every item is ready for the CURRENT
+/// state of the events (a stale or unfinished one is a 409 with its state). The files exist already (the worker made them as part
+/// of "ready"): this makes none. They go to the set of files that this editor may drag.
+fn deliver_take(sh: &Arc<Shared>, args: &Value) -> Answer {
+    let Some(list) = args.get("items").and_then(Value::as_array) else {
+        return Answer::err(400, "items must be a list of {row, kind}");
+    };
+    let mut items = Vec::new();
+    for it in list {
+        let kind = it
+            .get("kind")
+            .and_then(Value::as_str)
+            .and_then(crate::prepare::Kind::parse);
+        let row = it.get("row").and_then(Value::as_str).unwrap_or("");
+        match kind {
+            Some(k) => items.push((row.to_string(), k)),
+            None => return Answer::err(400, "an item needs a kind: midi, spike, audio or merged"),
+        }
+    }
+    match sh.backend.prep.take(&items) {
+        Ok(files) => {
+            let canon: Vec<PathBuf> = files
+                .iter()
+                .map(|f| std::fs::canonicalize(f).unwrap_or_else(|_| f.clone()))
+                .collect();
+            sh.written
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(canon.iter().cloned());
+            let strs: Vec<String> = canon.iter().map(|f| f.display().to_string()).collect();
+            Answer::json(200, &json!({"files": strs}))
+        }
+        Err((code, text)) => Answer::err(code, text),
+    }
+}
+
 /// `plugin:drag|start_drag {item, image, onEvent}`: start the native file drag of the files (M1c1). Every path must be a
 /// file directly in `Exports/` of the document or in a folder chosen in this editor session. The session starts on the
 /// main thread, only while the left mouse button is down. The answer comes when the session has started.
@@ -1197,9 +1255,9 @@ fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
     let Some(items) = args
         .get("item")
         .and_then(Value::as_array)
-        .filter(|a| !a.is_empty() && a.len() <= 64)
+        .filter(|a| crate::deliver::drag_count_ok(a.len()))
     else {
-        return Answer::err(400, "item must list 1 to 64 file paths");
+        return Answer::err(400, "item must list 1 to 512 file paths");
     };
     let Some(png) = args
         .get("image")
@@ -1213,7 +1271,11 @@ fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
     let mut roots: Vec<PathBuf> = allowed_folders(sh);
     if let (Some(svc), Some(sid)) = (sh.backend.page.service(), sh.backend.page.sid()) {
         if let Some(exports) = svc.drag_dir(&sid).ok().and_then(|d| d.parent().map(Path::to_path_buf)) {
-            if let Ok(c) = std::fs::canonicalize(exports) {
+            if let Ok(c) = std::fs::canonicalize(&exports) {
+                roots.push(c);
+            }
+            // the plugin-owned folder that a take links its files into (round 2)
+            if let Ok(c) = std::fs::canonicalize(exports.join(crate::prepare::DRAGGED_DIR)) {
                 roots.push(c);
             }
         }
@@ -1649,6 +1711,10 @@ fn changed_after(sh: &Arc<Shared>, svc: &drumspike_app::Service, cmd: &str, args
             });
         return;
     }
+    if crate::test_switch("DS_ARA_PREPARE_TRACE").is_ok() {
+        session().log(json!({"event": "prepare_cmd", "cmd": cmd, "ms": crate::mono_ms()}).to_string());
+    }
+    sh.backend.prep.command_done(writes, ended);
     (sh.backend.changed)();
 }
 
@@ -2036,24 +2102,33 @@ fn backend_of(plugin: &Plugin) -> Backend {
             b.host_name = plugin.host_name.clone();
             b
         }
-        None => Backend {
-            page: crate::service::unbound_page(&session().cache),
-            changed: Arc::new(|| {}),
-            record: Arc::new(|_, _| Ok(false)),
-            regions_gen: Arc::new(|| 0),
-            playback_offer: Arc::new(crate::playback::Offer::default),
-            playback_run: Arc::new(|_| 0),
-            track_info: Arc::new(|_| (Vec::new(), 0.0)),
-            host_name: plugin.host_name.clone(),
-            doc_id: "unbound".to_string(),
-            display_names: Arc::new(std::collections::HashMap::new),
-            tempo: Arc::new(|| crate::tempo_ara::choose(None, "no-document", None)),
-            stretched: Arc::new(Vec::new),
-            export_regions: Arc::new(crate::deliver::ExportRegions::default),
-            selection: Arc::new(|| Value::Null),
-            rows: Arc::new(|| Value::Null),
-            export_folders: Arc::new(|| None),
-        },
+        None => {
+            let page = crate::service::unbound_page(&session().cache);
+            Backend {
+                prep: crate::prepare::Prep::new(
+                    page.clone(),
+                    Arc::new(crate::rows::Rows::default),
+                    Arc::new(|| crate::tempo_ara::choose(None, "no-document", None)),
+                    Arc::new(std::collections::HashMap::new),
+                ),
+                page,
+                changed: Arc::new(|| {}),
+                record: Arc::new(|_, _| Ok(false)),
+                regions_gen: Arc::new(|| 0),
+                playback_offer: Arc::new(crate::playback::Offer::default),
+                playback_run: Arc::new(|_| 0),
+                track_info: Arc::new(|_| (Vec::new(), 0.0)),
+                host_name: plugin.host_name.clone(),
+                doc_id: "unbound".to_string(),
+                display_names: Arc::new(std::collections::HashMap::new),
+                tempo: Arc::new(|| crate::tempo_ara::choose(None, "no-document", None)),
+                stretched: Arc::new(Vec::new),
+                export_regions: Arc::new(crate::deliver::ExportRegions::default),
+                selection: Arc::new(|| Value::Null),
+                rows: Arc::new(|| Value::Null),
+                export_folders: Arc::new(|| None),
+            }
+        }
     }
 }
 
@@ -2270,6 +2345,9 @@ mod tests {
                     "plugin_host_offer",
                     "plugin_host_selection",
                     "plugin_host_regions",
+                    "plugin_deliver_state",
+                    "plugin_deliver_take",
+                    "plugin_deliver_want",
                     "plugin_host_play",
                     "plugin_host_stop",
                     "plugin_host_locate",

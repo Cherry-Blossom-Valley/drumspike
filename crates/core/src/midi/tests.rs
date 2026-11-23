@@ -788,3 +788,110 @@ fn a_multi_track_file_refuses_a_bad_note_a_bad_velocity_and_writes_the_path() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn the_merged_file_of_one_drum_is_the_per_drum_file_byte_for_byte() {
+    // #576: the merged writer is the per-drum writer for one drum, on the default map and on a map with a step
+    let evs = [ev(0.5, 90), ev(0.52, 100), ev(1.25, 64)];
+    let stepped = TempoMap {
+        bpm: 100.0,
+        ..TempoMap::default()
+    };
+    for (map, ppq) in [(TempoMap::default(), DEFAULT_PPQ), (stepped, 480)] {
+        let one = MidiTrack {
+            name: "x",
+            note: 38,
+            rate: 48_000,
+            events: &evs,
+        };
+        let merged = merged_midi_bytes(&[one], ppq, &map, DEFAULT_TEMPO).unwrap();
+        let single = midi_bytes_map(&evs, 38, ppq, &map, DEFAULT_TEMPO, 48_000).unwrap();
+        assert_eq!(merged, single);
+    }
+}
+
+#[test]
+fn the_merged_file_holds_all_drums_on_one_note_track_in_tick_order() {
+    let kick = [ev(0.5, 90), ev(1.0, 90)];
+    let snare = [ev(0.75, 100)];
+    let tracks = [
+        MidiTrack {
+            name: "k",
+            note: 36,
+            rate: 48_000,
+            events: &kick,
+        },
+        MidiTrack {
+            name: "s",
+            note: 38,
+            rate: 48_000,
+            events: &snare,
+        },
+    ];
+    let bytes = merged_midi_bytes(&tracks, DEFAULT_PPQ, &TempoMap::default(), DEFAULT_TEMPO).unwrap();
+    let smf = midly::Smf::parse(&bytes).unwrap();
+    assert_eq!(smf.tracks.len(), 2, "the tempo track and ONE note track");
+    let ons: Vec<(u64, u8)> = {
+        let mut t = 0u64;
+        smf.tracks[1]
+            .iter()
+            .filter_map(|e| {
+                t += u64::from(e.delta.as_int());
+                match e.kind {
+                    midly::TrackEventKind::Midi {
+                        message: midly::MidiMessage::NoteOn { key, vel },
+                        ..
+                    } if vel.as_int() > 0 => Some((t, key.as_int())),
+                    _ => None,
+                }
+            })
+            .collect()
+    };
+    assert_eq!(ons.iter().map(|x| x.1).collect::<Vec<_>>(), vec![36, 38, 36]);
+    assert!(ons.windows(2).all(|w| w[0].0 < w[1].0));
+}
+
+#[test]
+fn two_drums_on_one_note_keep_every_note_on_and_every_note_off_in_the_merged_file() {
+    // #576 round 2 (S15): the notes of two rows that share a pitch merge on that pitch; each keeps its own on and off, none is lost or doubled
+    let a = [ev(0.50, 90), ev(1.00, 80)];
+    let b = [ev(0.52, 100), ev(1.01, 70)];
+    let tracks = [
+        MidiTrack {
+            name: "a",
+            note: 38,
+            rate: 48_000,
+            events: &a,
+        },
+        MidiTrack {
+            name: "b",
+            note: 38,
+            rate: 48_000,
+            events: &b,
+        },
+    ];
+    let bytes = merged_midi_bytes(&tracks, DEFAULT_PPQ, &TempoMap::default(), DEFAULT_TEMPO).unwrap();
+    let smf = midly::Smf::parse(&bytes).unwrap();
+    assert_eq!(smf.tracks.len(), 2);
+    let mut t = 0u64;
+    let (mut on, mut off, mut order_ok, mut last) = (Vec::new(), Vec::new(), true, 0u64);
+    for e in &smf.tracks[1] {
+        t += u64::from(e.delta.as_int());
+        order_ok &= t >= last;
+        last = t;
+        if let midly::TrackEventKind::Midi {
+            message: midly::MidiMessage::NoteOn { key, vel },
+            ..
+        } = e.kind
+        {
+            assert_eq!(key.as_int(), 38);
+            if vel.as_int() > 0 { on.push(t) } else { off.push(t) }
+        }
+    }
+    assert_eq!((on.len(), off.len()), (4, 4), "four note-ons and four note-offs");
+    assert!(order_ok);
+    let single_a = midi_bytes_map(&a, 38, DEFAULT_PPQ, &TempoMap::default(), DEFAULT_TEMPO, 48_000).unwrap();
+    let smf_a = midly::Smf::parse(&single_a).unwrap();
+    let ons_a = smf_a.tracks[1].iter().filter(|e| matches!(e.kind, midly::TrackEventKind::Midi { message: midly::MidiMessage::NoteOn { vel, .. }, .. } if vel.as_int() > 0)).count();
+    assert_eq!(ons_a, 2);
+}

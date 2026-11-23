@@ -474,6 +474,54 @@ pub fn export_midi_map(
     Ok(())
 }
 
+/// #576 (M1c3): the bytes of ONE file with ONE note track that holds the hits of several drums, each on its own note and anchored at
+/// its own rate. The tempo track is the one of the per-drum file ([`midi_bytes_map`]); with one drum the bytes are those of
+/// [`midi_bytes_map`] for it. Only the DAW plugin calls this.
+///
+/// # Errors
+///
+/// The errors of [`midi_bytes_map`].
+pub fn merged_midi_bytes(
+    tracks: &[MidiTrack],
+    ppq: u16,
+    map: &TempoMap,
+    legacy_tempo: f64,
+) -> Result<Vec<u8>, MidiError> {
+    let (notes, track0) = if map.is_default() {
+        let tm = single_tick_map(ppq, legacy_tempo)?;
+        let us = tempo_us(legacy_tempo).map_err(MidiError::Map)?;
+        (merged_notes(tracks, &tm)?, default_track0(us))
+    } else {
+        let tm = TickMap::new(ppq, map).map_err(MidiError::Map)?;
+        (merged_notes(tracks, &tm)?, map_track0(&tm, map)?)
+    };
+    write_file(&track1_messages(&notes), ppq, &track0)
+}
+
+fn merged_notes(tracks: &[MidiTrack], tm: &TickMap) -> Result<Vec<NoteEvent>, MidiError> {
+    let mut all = Vec::new();
+    for t in tracks {
+        all.extend(note_events_tm(t.events, t.note, tm, t.rate)?);
+    }
+    Ok(all)
+}
+
+/// [`merged_midi_bytes`] written to `path` (atomic).
+///
+/// # Errors
+///
+/// Every error of [`merged_midi_bytes`]; [`MidiError::Io`] when the write fails.
+pub fn export_merged_midi(
+    tracks: &[MidiTrack],
+    path: &Path,
+    ppq: u16,
+    map: &TempoMap,
+    legacy_tempo: f64,
+) -> Result<(), MidiError> {
+    crate::io::write_atomic(path, &merged_midi_bytes(tracks, ppq, map, legacy_tempo)?)?;
+    Ok(())
+}
+
 /// One drum track of a multi-track file (P4-30): its name, its note and its hits. #441: `rate`
 /// is the track's source rate, the rate its note-ons are anchored at.
 #[derive(Debug, Clone, Copy)]

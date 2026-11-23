@@ -138,6 +138,10 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
                  editors of one document: no folder error, both drag tiles ready with a file count, a drag
                  starts, Export writes the files, a second open does the same, Choose keeps the folder for
                  the document (faults: the rule of M1c1, no memory of the chosen folder)
+  deliver        M1c3 (#576): the files are made before the user asks: one MIDI, spike and audio spike file per DAW track with the hits of
+                 all clips at their song positions, the merged MIDI file, states and the stale rule, the handles in the page, the cost of
+                 an edit, a job that never ends, hostile track names (faults: one file per source, a stale take, every row again, one MIDI
+                 track per drum, no watchdog, the raw track name)
   validate       clap-validator 0.4.1 on the CLAP bundle
   universal      lipo -info names arm64 and x86_64 for the CLAP and the VST3 binary
   standalone     cargo metadata --no-deps at the repo root names no plugin crate; cargo
@@ -7996,6 +8000,252 @@ def stage_export_dialog_fault() -> bool:
                       "the chosen folder is not kept: a new editor opens with the default folder") and ok
 
 
+# ---------------------------------------------------------------- M1c3 (#576): the files made before the user asks, and the handles
+
+DELIVER_ARGS = ["--seq-names", "Kick", "Snare", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2"]
+
+
+def deliver_run(label: str, env: dict | None = None, args: list | None = None) -> dict:
+    e = {"DS_ARA_DRAG_PRESSED": "1"}
+    e.update(env or {})
+    rc, summary, rows = run_phase(f"deliver-{label}", "deliver", CLAP, e, args or DELIVER_ARGS)
+    reps = page_reports(rows, "deliver")
+    return {"rc": rc, "rows": rows, "rep": reps[0] if reps else {}, "cache": (OUT / f"cache-deliver-{label}").resolve()}
+
+
+def deliver_expected(rep: dict, extra: tuple | None = None) -> dict:
+    """`extra`: (row id, [song times]) hits that an edit added."""
+    """The song times (seconds, sorted) of the hits of each row, from the rows and the stored hits that the page reported."""
+    out = {}
+    ev = rep.get("events") or {}
+    for r in (rep.get("regions") or {}).get("rows", []):
+        ts = []
+        for c in r["clips"]:
+            ts += [c["s"] + (e["t"] - c["a"]) * c["k"] for e in ev.get(c["src"], []) if c["a"] <= e["t"] < c["b"]]
+        if extra and extra[0] == r["id"]:
+            ts += list(extra[1])
+        out[r["id"]] = sorted(ts)
+    return out
+
+
+def file_of(files: list, base: str, ext: str):
+    """The delivered file of a set: `<base><ext>`, or numbered (`<base> 2<ext>`) when an older delivered file of that name exists."""
+    return next((f for f in files if re.fullmatch(rf"{re.escape(base)}(?: \d+)?{re.escape(ext)}", f.name)), None)
+
+
+def midi_tracks(path: Path) -> int:
+    return int.from_bytes(path.read_bytes()[10:12], "big")
+
+
+def deliver_parts(d: dict) -> dict:
+    """The run `noedit`: the files as they were made (rows, wav kinds, merged file, states, drag, folder, handles)."""
+    r = d["rep"]
+    parts: dict = {}
+    rows = (r.get("regions") or {}).get("rows", [])
+    names = {x["id"]: x["name"] for x in rows}
+    parts["deliver-ran"] = (d["rc"] == 0 and bool(r) and len(rows) == 2 and r.get("t_midi", -1) > 0 and "dom3" in r,
+                            f"the host ran the driver (rc={d['rc']}), {len(rows)} rows, MIDI ready after {r.get('t_midi')} ms")
+    want = deliver_expected(r)
+    take = r.get("take_midi") or {}
+    files = [Path(f) for f in (take.get("v") or {}).get("files", [])]
+    bad = []
+    for f in files:
+        got = midi_note_times(f) if f.is_file() else []
+        row = next((i for i, n in names.items() if file_of([f], f"{n}_spike", ".mid")), None)
+        w = want.get(row, [])
+        if row is None or len(got) != len(w) or any(abs(a - b) > 2 / 48000 for a, b in zip(got, w)):
+            bad.append((f.name, len(got), len(w)))
+    parts["deliver-rows"] = (take.get("ok") is True and len(files) == len(rows) == 2 and not bad and sorted(len(v) for v in want.values()) == [3, 6]
+                             and len({f.name for f in files}) == 2,
+                             f"ONE MIDI file per DAW track ({len(files)} files for {len(rows)} rows, named {[f.name for f in files]}) with the hits of all clips of the "
+                             f"row at their song positions (within 2 samples); wrong: {bad}; hits per row {[len(v) for v in want.values()]} (three sources and one)")
+    all_files = [Path(f) for f in ((r.get("take_all") or {}).get("v") or {}).get("files", [])]
+    spikes = [f for f in all_files if f.name.endswith("_spike.wav") and not f.name.endswith("_audio_spike.wav")]
+    audios = [f for f in all_files if f.name.endswith("_audio_spike.wav")]
+    bad_s, bad_a = [], []
+    for f in spikes:
+        w = wav_samples(f)
+        row = next((i for i, n in names.items() if file_of([f], f"{n}_spike", ".wav")), None)
+        peaks = {i for i, v in enumerate(w["xs"]) if v > 0.5}
+        miss = [t for t in want.get(row, []) if round(t * w["rate"]) not in peaks]
+        if row is None or miss or w["tref"] != 0:
+            bad_s.append((f.name, len(miss), w["tref"]))
+    for f in audios:
+        w = wav_samples(f)
+        row = next((i for i, n in names.items() if file_of([f], f"{n}_audio_spike", ".wav")), None)
+        quiet = [t for t in want.get(row, []) if not any(abs(v) > 0 for v in w["xs"][round(t * w["rate"]):round(t * w["rate"]) + 48])]
+        if row is None or quiet or w["tref"] != 0:
+            bad_a.append((f.name, len(quiet), w["tref"]))
+    parts["deliver-wav"] = (len(spikes) == 2 and len(audios) == 2 and not bad_s and not bad_a and r.get("t_spike", -1) > 0 and r.get("t_audio", -1) > 0,
+                            f"one spike file and one audio spike file per DAW track, each hit at its song sample, time reference 0 ({len(spikes)} + {len(audios)} files; wrong spikes {bad_s}, "
+                            f"wrong audio {bad_a}); first use made them ready after {r.get('t_spike')} ms and {r.get('t_audio')} ms")
+    sizes, bad_size = [], []
+    for f in spikes:
+        w = wav_samples(f)
+        row = next((i for i, n in names.items() if file_of([f], f"{n}_spike", ".wav")), None)
+        clips = next((x["clips"] for x in rows if x["id"] == row), [])
+        end = max((c["s"] + (c["b"] - c["a"]) * c["k"] for c in clips), default=0)
+        n = math.ceil(end * w["rate"] - 1e-9)
+        size = f.stat().st_size
+        sizes.append((f.name, size, w["rate"], n))
+        # the length is the end of the last clip in the song, in float 32: the file is 4 bytes a frame and a header of less than 2000 bytes
+        if not (len(w["xs"]) in (n, n + 1) and 4 * n <= size <= 4 * n + 2000):
+            bad_size.append((f.name, size, n))
+    parts["deliver-size"] = (len(sizes) == 2 and not bad_size,
+                             f"the spike files have the computed size (4 bytes x ceil(song end x rate) + a header under 2000): {sizes} (name, bytes, rate, frames), wrong {bad_size}; "
+                             f"ready {r.get('t_spike')} ms after the press for {len(rows)} rows (song end {(r.get('regions') or {}).get('song_end')} s); audio spikes ready {r.get('t_audio')} ms")
+    mg = [Path(f) for f in ((r.get("take_merged") or {}).get("v") or {}).get("files", [])]
+    total = sum(len(v) for v in want.values())
+    n_mg = len(midi_note_times(mg[0])) if mg and mg[0].is_file() else None
+    parts["deliver-merged"] = (len(mg) == 1 and mg[0].name == "Drums_merged.mid" and mg[0].is_file() and midi_tracks(mg[0]) == 2 and n_mg == total,
+                               f"one merged MIDI file {[m.name for m in mg]} with the tempo track and ONE note track ({midi_tracks(mg[0]) if mg and mg[0].is_file() else None} tracks, want 2) "
+                               f"holding all {total} hits ({n_mg})")
+    s1, s2 = r.get("state1") or {}, r.get("state2") or {}
+    st1 = [(x["midi"]["state"], x["spike"]["state"], x["audio"]["state"]) for x in s1.get("rows", [])]
+    refused = r.get("take_spike_off") or {}
+    parts["deliver-state"] = (st1 == [("ready", "off", "off")] * 2 and refused.get("ok") is False and "not prepared yet" in str(refused.get("msg"))
+                              and all(x["spike"]["state"] == x["audio"]["state"] == "ready" for x in s2.get("rows", [])) and bool(s2.get("rows")),
+                              f"after the round MIDI is ready and the wav kinds say press to prepare ({st1}); a take of a kind that is off is refused ({refused.get('msg')!r}); after the first use all are ready")
+    started = [x for x in d["rows"] if x.get("event") == "drag_started"]
+    prep_dirs = {str(Path(f).parent) for f in all_files}
+    parts["deliver-drag"] = (r.get("drag") == "ok" and bool(started) and all(x.get("session") == "test" for x in started) and len(started[-1].get("files", [])) == len(all_files) == 6
+                             and all(Path(x).parent.name == "Dragged" and Path(x).parent.parent.name == "Exports" for x in started[-1].get("files", [])) and len(prep_dirs) == 1,
+                             f"the drag of all files through the page: {r.get('drag')}; the drag command got {len(started[-1].get('files', [])) if started else 0} files (want 6), all in Exports/Dragged/, "
+                             f"as a private pasteboard (no system session)")
+    expo = Path(next(iter(prep_dirs))).parent if prep_dirs else None
+    prep = sorted(p.name for p in (expo / ".prepared").iterdir()) if expo and (expo / ".prepared").is_dir() else []
+    parts["deliver-prepared-folder"] = (len(prep) == 7 and not any(n.endswith(".tmp") for n in prep),
+                                        f".prepared/ holds the 7 sets and no temporary file: {prep}")
+    loose = sorted(p.name for p in expo.iterdir() if p.is_file()) if expo and expo.is_dir() else ["no Exports/"]
+    delivered = sorted(p.name for p in (expo / "Dragged").iterdir()) if expo and (expo / "Dragged").is_dir() else []
+    parts["deliver-exports-clean"] = (loose == [] and len(delivered) == 7,
+                                      f"the worker wrote no file in Exports/ itself (files there: {loose}); the takes linked 7 files into Exports/Dragged/ ({delivered})")
+    d1, d2 = r.get("dom1") or {}, r.get("dom2") or {}
+    strips = list((d1.get("rows") or {}).values())
+    parts["deliver-handles"] = (len(strips) == 2 and all([h["kind"] for h in s_] == ["midi", "spike", "audio"] for s_ in strips)
+                                and all([h["state"] for h in s_] == ["ready", "off", "off"] for s_ in strips)
+                                and [h["kind"] for h in d1.get("bar", [])] == ["midi", "spike", "all", "merged"]
+                                and [h["state"] for h in d2.get("bar", [])] == ["ready"] * 4 and d1.get("hint") == "Drop at the start of the session",
+                                f"two DAW tracks have a strip of three handles ({[[h['state'] for h in s_] for s_ in strips]}), the toolbar has four ({[h['kind'] for h in d1.get('bar', [])]}) and "
+                                f"all are ready after the first use ({[h['state'] for h in d2.get('bar', [])]}); the hint {d1.get('hint')!r}")
+    return parts
+
+
+def deliver_edit_parts(d: dict) -> dict:
+    """The run with the edit: a take right after it is stale, the sets are made again by themselves, only the row of the edit."""
+    r = d["rep"]
+    rows = (r.get("regions") or {}).get("rows", [])
+    names = {x["id"]: x["name"] for x in rows}
+    stale = r.get("take_stale") or {}
+    ed = r.get("edit") or {}
+    after = deliver_expected(r, (rows[0]["id"], ed.get("songs", [])) if rows else None)
+    ta = [Path(f) for f in ((r.get("take_after") or {}).get("v") or {}).get("files", [])]
+    first = file_of(ta, names[rows[0]["id"]] + "_spike", ".mid") if rows else None
+    spk = file_of(ta, names[rows[0]["id"]] + "_spike", ".wav") if rows else None
+    sw = wav_samples(spk) if spk and spk.is_file() else {"rate": 48000, "xs": [], "tref": None}
+    peaks = {i for i, v in enumerate(sw["xs"]) if v > 0.5}
+    miss = [t for t in (after[rows[0]["id"]] if rows else []) if round(t * sw["rate"]) not in peaks]
+    got = midi_note_times(first) if first and first.is_file() else []
+    mg = [Path(f) for f in ((r.get("take_merged_after") or {}).get("v") or {}).get("files", [])]
+    n_mg = len(midi_note_times(mg[0])) if mg and mg[0].is_file() else None
+    parts = {}
+    parts["deliver-stale"] = (ed.get("ok") is True and stale.get("ok") is False and "preparing" in str(stale.get("msg"))
+                              and r.get("t_after", -1) > 0 and bool(rows) and len(got) == len(after[rows[0]["id"]]) and all(any(abs(g - t) < 2 / 48000 for g in got) for t in ed.get("songs", [0]))
+                              and n_mg == sum(len(v) for v in after.values()),
+                              f"a take right after an edit is refused as stale ({stale.get('msg')!r}); the set becomes ready by itself after {r.get('t_after')} ms and holds the new hit "
+                              f"({len(got)} notes, want {len(after[rows[0]['id']]) if rows else None}); the merged file has {n_mg} notes (want {sum(len(v) for v in after.values())})")
+    c0, c1 = r.get("count_before") or {}, r.get("count_after") or {}
+    jobs = c1.get("jobs", 0) - c0.get("jobs", 0)
+    parts["deliver-spike-after"] = (spk is not None and not miss and sw["tref"] == 0 and bool(peaks),
+                                    f"the spike file of the edited row after the edit (delivered as {spk.name if spk else None}) has a spike at every hit, the new ones too ({len(miss)} missing of {len(after[rows[0]['id']]) if rows else 0})")
+    keep = sorted(d["cache"].glob("documents/*/project/Exports/Kick_spike.mid"))
+    plan = b"USER FILE Kick_spike.mid"
+    now = keep[0].read_bytes() if keep else None
+    parts["deliver-user-file"] = (now == plan, f"a file of the user, Exports/Kick_spike.mid with known bytes, is the same after the preparation, takes and edits ({now!r}, want {plan!r})")
+    parts["deliver-delivered-keeps"] = (len({f.name for f in ta}) == len(ta) and any(re.search(r" \d+\.", f.name) for f in ta) and (first is not None and first.stat().st_size > 0),
+                                        f"after the edit the take delivered NEW numbered files and left the first ones as they were ({sorted(f.name for f in ta)})")
+    parts["deliver-cost"] = (jobs == 4, f"three edits in one DAW track, 400 ms apart, make only its own sets, once: {jobs} jobs (MIDI, spike, audio of that row and the merged file = 4; every row would be 7, a pass for each edit 12)")
+    return parts
+
+
+def deliver_watchdog_parts(d: dict) -> dict:
+    r = d["rep"]
+    st = [x["midi"] for x in (r.get("state1") or {}).get("rows", [])]
+    return {"deliver-watchdog": (bool(st) and all(x["state"] == "error" and "no answer" in x["why"] for x in st),
+                                 f"a job that never ends: after the watchdog the handles say error, never preparing for ever: {[(x['state'], x['why']) for x in st]}")}
+
+
+def deliver_hostile_parts(d: dict) -> dict:
+    r = d["rep"]
+    cache = d["cache"]
+    outside = [p for p in cache.glob("documents/*/project/Exports/*") if p.is_file() and p.name.startswith((".", "evil"))] if cache.exists() else []
+    outside += [p for p in cache.glob("documents/*/project/*") if p.is_file() and p.suffix != ".drumspike"]
+    prepared = [p for p in cache.glob("documents/*/project/Exports/.prepared/*") if p.is_file()]
+    state = [x["midi"]["state"] for x in (r.get("state1") or {}).get("rows", [])]
+    return {"deliver-hostile-name": (len(prepared) >= 1 and not outside and not any("/" in p.name for p in prepared) and state == ["ready", "ready"],
+                                     f"DAW tracks named '../evil' and '/abs': {len(prepared)} files stay inside .prepared/, none outside ({[p.name for p in outside]}), states {state}")}
+
+
+def deliver_names_parts(d: dict) -> dict:
+    r = d["rep"]
+    files = [Path(f) for f in ((r.get("take_all") or {}).get("v") or {}).get("files", [])]
+    names = sorted(f.name for f in files)
+    want = sorted(["Snare_spike.mid", "Snare_audio_spike.mid", "Snare_spike.wav", "Snare_audio_spike.wav", "Snare (2)_audio_spike.wav", "Snare_audio_audio_spike.wav"])
+    low = {n.lower() for n in names}
+    return {"deliver-file-names": (names == want and len(low) == 6,
+                                   f"rows 'Snare' and 'Snare_audio': the six delivered files have six different names without case, the later audio file is numbered: {names} (want {want})")}
+
+
+def deliver_late_parts(d: dict) -> dict:
+    """Round 3 (P1): a new row whose spike file has the name of another row's audio file must not change that audio set."""
+    r = d["rep"]
+    l1 = [Path(f) for f in ((r.get("late1") or {}).get("v") or {}).get("files", [])]
+    l2 = [Path(f) for f in ((r.get("late2") or {}).get("v") or {}).get("files", [])]
+    a = l1[0].read_bytes() if l1 and l1[0].is_file() else None
+    audio2 = l2[0] if len(l2) == 2 else None
+    spike2 = l2[1] if len(l2) == 2 else None
+    ok = (a is not None and audio2 is not None and audio2.is_file() and spike2 is not None and spike2.is_file()
+          and audio2.read_bytes() == a and spike2.read_bytes() != a and l1[0].read_bytes() == a
+          and re.fullmatch(r"Snare \(2\)_audio_spike( \d+)?\.wav", audio2.name) is not None)
+    return {"deliver-name-clash": (ok, f"rows {r.get('late_rows')}: the audio set of 'Snare' is renamed and made again (delivered as {audio2.name if audio2 else None}), its bytes are still the audio "
+                                       f"({audio2.read_bytes() == a if audio2 and audio2.is_file() and a is not None else None}); the spike of 'Snare_audio' has other bytes "
+                                       f"({spike2.name if spike2 else None}); the file delivered before is unchanged")}
+
+
+def stage_deliver() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("deliver", False, "no host or bundle: run check.sh build")
+    ok = print_parts("", deliver_parts(deliver_run("base", None, DELIVER_ARGS + ["--arg", "noedit"])))
+    ok = print_parts("", deliver_edit_parts(deliver_run("edit", {"DS_ARA_PREPARE_FAULT": "user-file", "DS_ARA_PREPARE_TRACE": "1"}))) and ok
+    ok = print_parts("", deliver_late_parts(deliver_run("late", {"DS_ARA_PREPARE_FAULT": "late-row"}, ["--seq-names", "Snare", "Snare_audio", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "late"]))) and ok
+    ok = print_parts("", deliver_names_parts(deliver_run("names", None, ["--seq-names", "Snare", "Snare_audio", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "noedit"]))) and ok
+    ok = print_parts("", deliver_watchdog_parts(deliver_run("watchdog", {"DS_ARA_PREPARE_FAULT": "forever", "DS_ARA_PREPARE_WAIT_MS": "3000"}, DELIVER_ARGS + ["--arg", "short"]))) and ok
+    return print_parts("", deliver_hostile_parts(deliver_run("hostile", None, ["--seq-names", "../evil", "/abs", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "short"]))) and ok
+
+
+def stage_deliver_fault() -> bool:
+    ok = True
+    for label, fault, parts_of, args, part, what in (
+        ("per-source", "per-source", deliver_parts, DELIVER_ARGS + ["--arg", "noedit"], "deliver-rows", "one file per source, as the dialog makes them: the sources of a DAW track give several files"),
+        ("two-tracks", "two-tracks", deliver_parts, DELIVER_ARGS + ["--arg", "noedit"], "deliver-merged", "the merged file has one MIDI track per drum"),
+        ("stale-ok", "stale-ok,user-file", deliver_edit_parts, None, "deliver-stale", "a take ignores the state of the hits: an old set is taken"),
+        ("link-exports", "user-file,link-exports", deliver_edit_parts, None, "deliver-user-file", "the old behaviour: the worker links its file into Exports/ and replaces a file of the user"),
+        ("all-rows", "all-rows,user-file", deliver_edit_parts, None, "deliver-cost", "every row is made again after an edit in one row"),
+        ("no-debounce", "no-debounce,user-file", deliver_edit_parts, None, "deliver-cost", "the files are made again at every edit, with no quiet time"),
+    ):
+        parts = parts_of(deliver_run(f"fault-{label}", {"DS_ARA_PREPARE_FAULT": fault}, args))
+        ok = fault_part(f"deliver-fault-{label}", parts, part, what) and ok
+    d = deliver_run("fault-late", {"DS_ARA_PREPARE_FAULT": "late-row,fp-no-name,no-held-check"}, ["--seq-names", "Snare", "Snare_audio", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "late"])
+    ok = fault_part("deliver-fault-fp-no-name", deliver_late_parts(d), "deliver-name-clash", "the final name is not in fp and a name held by another set is overwritten: the audio set of one row delivers the spike content of another") and ok
+    d = deliver_run("fault-names", {"DS_ARA_PREPARE_FAULT": "no-file-numbering"}, ["--seq-names", "Snare", "Snare_audio", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "noedit"])
+    ok = fault_part("deliver-fault-no-file-numbering", deliver_names_parts(d), "deliver-file-names", "two sets get one file name: the later one replaces the first") and ok
+    d = deliver_run("fault-watchdog", {"DS_ARA_PREPARE_FAULT": "forever,no-watchdog", "DS_ARA_PREPARE_WAIT_MS": "3000"}, DELIVER_ARGS + ["--arg", "short"])
+    ok = fault_part("deliver-fault-no-watchdog", deliver_watchdog_parts(d), "deliver-watchdog", "a job that never ends and no watchdog: the handle stays preparing") and ok
+    d = deliver_run("fault-raw-name", {"DS_ARA_PREPARE_FAULT": "raw-name"}, ["--seq-names", "../evil", "/abs", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "short"])
+    ok = fault_part("deliver-fault-raw-name", deliver_hostile_parts(d), "deliver-hostile-name", "the row name goes into the file name as it is: the name reaches the path and the plugin refuses to write it (the state is an error, no file outside the folder)") and ok
+    return ok
+
+
 def drag_source_check(src: Path) -> tuple[bool, str]:
     """Round 3 of #579: no gate run may start a system drag session, post an event that leaves the process or touch the general pasteboard.
     A grep-level read of the plugin source: the call of the crate `drag` is in exactly one function, behind the test branch."""
@@ -8221,6 +8471,8 @@ STAGES = {
     "delivery": stage_delivery,
     "drag-source": stage_drag_source,
     "drag-source-fault": stage_drag_source_fault,
+    "deliver": stage_deliver,
+    "deliver-fault": stage_deliver_fault,
     "export-dialog": stage_export_dialog,
     "export-dialog-fault": stage_export_dialog_fault,
     "delivery-release": stage_delivery_release,
@@ -8283,7 +8535,7 @@ ORDER = [
     "editor-selection", "editor-selection-fault",
     "editor-keys", "editor-keys-fault", "editor-keys-twin", "editor-keys-twin-fault",
     "editor-names", "editor-names-fault", "editor-song-rows", "editor-song-rows-fault", "editor-leftovers", "editor-leftovers-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
-    "drag-source", "drag-source-fault", "delivery", "delivery-release", "delivery-fault", "export-dialog", "export-dialog-fault",
+    "drag-source", "drag-source-fault", "delivery", "delivery-release", "delivery-fault", "export-dialog", "export-dialog-fault", "deliver", "deliver-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",
