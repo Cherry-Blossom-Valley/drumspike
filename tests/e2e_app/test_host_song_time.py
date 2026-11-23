@@ -600,19 +600,24 @@ def test_the_standalone_page_has_no_row_attribute(app, make_project):
 
 
 def test_an_add_whose_snap_lands_past_the_clip_is_one_undo_entry(host):
+    """The attack snap of the service can put a new hit past the end of its clip. The test makes that state without the snap (a hit 4 ms past the end, added
+    with no clip) and runs the step that addHitAt runs after the add (hitIntoClip): the hit moves to the last sample of the clip, and the add and the move are
+    ONE undo entry."""
     a, b = NAMES[0], NAMES[1]
     p = rows_payload()
-    p["rows"][0]["clips"][1].update({"a": 1.0, "b": 2.495, "s": 10.0})   # the hit at 2.5 s of the second source lies 5 ms past the end of the clip
+    p["rows"][0]["clips"][1].update({"a": 1.0, "b": 2.495, "s": 10.0})
     take(host, p)
     wait_idle(host)
     n_b = host.evaluate("([b]) => S.events[b].length", [b])
-    host.evaluate("([a, b]) => { addHitAt(b, 2.49, true, HT.clips(a).find(c => c.src === b)); }", [a, b])
+    host.evaluate("([b]) => { addHitAt(b, 2.499, false); }", [b])
     host.wait_for_function("([b, n]) => S.events[b].length === n", arg=[b, n_b + 1])
-    host.wait_for_function("() => S.undo.length > 0 && S.undo[S.undo.length - 1].type === 'group'")   # the add and the move into the clip are joined
+    wait_idle(host)
+    moved = host.evaluate("async ([a, b]) => { const ad = S.undo[S.undo.length - 1]; return await hitIntoClip(b, ad.id, HT.clips(a).find(c => c.src === b)); }", [a, b])
+    assert moved is True
     wait_idle(host)
     top = host.evaluate("() => { const o = S.undo[S.undo.length - 1]; return [o.type, o.steps.map(s => s.type), S.undo.length]; }")
     assert top == ["group", ["add", "move"], 1], top
-    assert host.evaluate("([b]) => S.events[b].filter(e => e.added || e.edited).every(e => e.t < 2.495)", [b]), "the new hit is inside its clip"
+    assert host.evaluate("([b]) => S.events[b].filter(e => e.added).every(e => e.t < 2.495)", [b]), "the new hit is inside its clip"
     host.evaluate("() => undo()")
     host.wait_for_function("([b, n]) => S.events[b].length === n", arg=[b, n_b])
     assert host.evaluate("() => S.undo.length") == 0, "one undo took the add and the move back: no hit is left outside the clip"

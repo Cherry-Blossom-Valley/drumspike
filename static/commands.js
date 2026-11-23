@@ -25,16 +25,20 @@ function addHitAt(name, t, snap, clip) {   // hand-added → manual (magenta): e
     };
     return pl;
   });
-  if (clip && p && typeof p.then === "function") p.then(ok => {   // the attack snap may land past the edge of the clip: a second step moves the hit into it
-    const evs = S.events[name] || [], j = evs.findIndex(e => e.id === id);
-    if (!(ok && j >= 0 && (evs[j].t < clip.a || evs[j].t >= clip.b))) return;
-    const m = setHitTime(name, j, HT.clampInto(clip, evs[j].t, S.tracks[name].sr), "Move Hit into its clip");
-    if (m && typeof m.then === "function") m.then(done => {   // the add and the move into the clip are ONE undo entry: one undo leaves no hit behind
-      const n = S.undo.length, mv = S.undo[n - 1], ad = S.undo[n - 2];
-      if (done && ad && mv && ad.type === "add" && ad.id === id && mv.type === "move" && mv.id === id) { S.undo.splice(n - 2, 2); pushGroup("Add Hit", [ad, mv]); }
-    });
-  });
+  if (clip && p && typeof p.then === "function") p.then(ok => ok && hitIntoClip(name, id, clip));   // the attack snap may land past the edge of the clip: a second step moves the hit into it
   return p;
+}
+/* #555: a hit that lies outside its clip (an attack snap past the edge) is moved to the last sample of the clip; the add and the move are ONE undo entry (a group), so one
+   undo leaves no hit behind. Answers a promise (true when it moved a hit). */
+function hitIntoClip(name, id, clip) {
+  const evs = S.events[name] || [], j = evs.findIndex(e => e.id === id);
+  if (j < 0 || !(evs[j].t < clip.a || evs[j].t >= clip.b)) return Promise.resolve(false);
+  const m = setHitTime(name, j, HT.clampInto(clip, evs[j].t, S.tracks[name].sr), "Move Hit into its clip");
+  return Promise.resolve(m).then(done => {
+    const n = S.undo.length, mv = S.undo[n - 1], ad = S.undo[n - 2];
+    if (done && ad && mv && ad.type === "add" && ad.id === id && mv.type === "move" && mv.id === id) { S.undo.splice(n - 2, 2); pushGroup("Add Hit", [ad, mv]); }
+    return !!done;
+  });
 }
 function needTrack() {   // the selected track (header click), or a message
   if (!needProject()) return null;
