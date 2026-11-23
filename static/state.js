@@ -183,7 +183,8 @@ function hostMode() { return typeof B !== "undefined" && !!B.hostMode; }   // B 
 function hostOwned(id) { return hostMode() && (HOST_OWNED.includes(id) || HOST_ABSENT.some(g => g.menu.includes(id))); }
 /* The few texts of the page that name an absent command in the middle of a sentence (a tooltip of the Inspector). In host
    mode they say it without the absent name; with the mode off the text is the text of today. */
-const HOST_WORDS = [["spikes, Export All, the click and a follower", "spikes and a follower"]];
+const HOST_WORDS = [["spikes, Export All, the click and a follower", "spikes and a follower"],
+  ["relink it first", "the DAW has to deliver its audio again"]];   // #582: a track whose audio is not read (yet) has no relink in a DAW; the plugin repairs it at the next good read
 function hostWords(text) { return hostMode() ? HOST_WORDS.reduce((t, [from, to]) => t.split(from).join(to), text) : text; }
 /* A flow of a group was used (a key, a call by name, a control that is hidden): true when the group is absent, with the
    text that names the host on the status line. The caller returns at once. */

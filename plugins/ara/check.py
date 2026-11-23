@@ -65,6 +65,9 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   doc-restore-repair  an archive from that window (notes, no events) restores as sources with no
                  result and one round analyses them; a track analysed to
                  zero hits is a result (fault: the restore counts every source as done)
+  doc-readd      a restored track is online after its audio is read, with its stored hits and settings, and
+                 a track whose audio content differs is analysed again (F6, #582) (fault: the record of a
+                 restored track is not pointed at the new cache file)
   doc-retry      a round that fails once, then a new request: one track per source, the
                  reference result (fault: a second track for every retried source)
   doc-rerequest  a request for sources that are complete starts no round (fault: a full
@@ -2182,6 +2185,155 @@ def stage_doc_restore_repair_fault() -> bool:
         facts["healthy"] and not ok and not facts["jobs"],
         f"the fault switch counted every archived source as done and the check refused it (a healthy run, no round): {evidence}",
     )
+
+
+# ---- F6 (#582): a restored track is online after its audio is read
+
+READD_SOURCE = 2  # the source of the archive that the runs restore alone (a track with hits)
+
+
+def readd_archive(name: str, edit) -> Path:
+    """A copy of the stored four-source archive with `edit(blob)` applied (the plugin's own archive, not a made-up one)."""
+    ok, archive, why = archive_store()
+    if not ok:
+        raise RuntimeError(why)
+    blob = json.loads(archive.read_text())
+    edit(blob)
+    out = OUT / f"doc-readd-{name}.araarchive"
+    out.write_text(json.dumps(blob))
+    return out
+
+
+def readd_disk(cache: str) -> dict:
+    """Track -> (size of the source record, size of the file it names): what the project document on disk says."""
+    out: dict = {}
+    for doc in project_docs(cache):
+        for name, t in tracks_of_doc(doc).items():
+            src = t.get("source") or ((t.get("segments") or [{}])[0].get("source")) or {}
+            path = Path(src.get("path") or "")
+            out[name] = (src.get("size"), path.stat().st_size if path.is_file() else None, bool(src.get("head_sha1")))
+    return out
+
+
+def readd_run(label: str, archive: Path, files: list, env: dict | None = None, by_name: bool = False) -> dict:
+    """One restore in a NEW process with a fresh cache, the host reads the audio of every source it was given
+    (the DAW sequence of F6: the cache folder has no file of the source when the document is restored)."""
+    rc, _text, lines = host_run(
+        label, CLAP, ["restore", "--files", *fixture_args(files), "--archive", str(archive), "--enable-access", *(["--no-persistent-id"] if by_name else [])],
+        f"cache-{label}", extra=env,
+    )
+    restored = event_rows(label, "doc_restored")
+    repairs = event_rows(label, "track_repair")
+    rows = [t for r in repairs for t in r.get("tracks", [])]
+    disk = readd_disk(f"cache-{label}")
+    return {
+        "rc": rc,
+        "healthy": rc == 0 and len(restored) == 1,
+        "tracks": restored[0].get("project_tracks") if restored else None,
+        "repairs": rows,
+        "rounds": len(event_rows(label, "round_start")),
+        "jobs": job_rows(label),
+        "differs": [r for r in event_rows(label, "restore_audio") if r.get("same") is False],
+        "disk": disk,
+        "online": bool(disk) and all(sz is not None and sz == real and h for sz, real, h in disk.values()),
+    }
+
+
+def readd_same(f: dict, tracks: list, events: dict) -> tuple[bool, str]:
+    """The restored tracks are repaired, online on disk, kept their hits and started no round."""
+    got = {r["track"]: r for r in f["repairs"]}
+    kept = all(t in got and json.loads(got[t]["events_json"]) == events[t] for t in tracks)
+    after = all(t in got and got[t]["after"] == "ok" for t in tracks)
+    moved = all(t in got and got[t]["repointed"] for t in tracks)
+    ok = f["healthy"] and sorted(f["tracks"] or []) == sorted(tracks) and kept and after and moved and f["rounds"] == 0 and f["online"] and not f["differs"]
+    return ok, (
+        f"rc {f['rc']}, tracks {f['tracks']}, {len(got)} repair row(s) (status after: {[r['after'] for r in got.values()]}, "
+        f"before: {[r['before'] for r in got.values()]}), hits kept {kept}, {f['rounds']} round(s), "
+        f"project document online on disk {f['online']} {f['disk'] and sorted(f['disk'].values(), key=str)[:1]}"
+    )
+
+
+def stage_doc_readd(fault: str | None = None) -> bool:
+    """F6 (#582): sources A and B were analysed and stored, every source was destroyed and the document closed, a new
+    document is restored from the archive and the audio is read again. The restored project record of a track holds no
+    file identity (the cache file did not exist), so the service called the track offline (changed) for ever and no
+    round ran. Now: (1) all four sources: every track online, its stored hits, no round; (2) one source alone
+    (the others are gone; the host gives no persistent ID, so the archive matches it by name; its index in the document is not its index in the archive): the same; (3) hits and settings that the user changed
+    in the archive survive; (4) an archive without a content hash (an earlier plugin) is treated as the same audio;
+    (5) another content hash: one round analyses the track, which ends online."""
+    label = "doc-readd" + ("-fault" if fault else "")
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail(label, False, "no host or no CLAP: run check.sh build first")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail(label, False, why)
+    blob = json.loads(archive.read_text())
+    srcs = blob["sources"]
+    events = blob["events"]
+    track = srcs[READD_SOURCE]["track"]
+    hashed = all(len(s.get("content_hash") or "") == 16 for s in srcs)
+    env = {"DS_ARA_RESTORE_FAULT": fault} if fault else None
+    parts = {}
+    parts["archive-hash"] = (hashed and len(events.get(track) or []) > 0, f"the stored archive carries a content hash for every source: {hashed}")
+    f = readd_run(f"{label}-all", archive, FILES, env)
+    parts["all"] = readd_same(f, [s["track"] for s in srcs], events)
+    healthy = f["healthy"]
+    offline_on_disk = not f["online"]
+    f = readd_run(f"{label}-one", archive, [FILES[READD_SOURCE]], env, by_name=True)
+    parts["one"] = readd_same(f, [track], events)
+    healthy = healthy and f["healthy"]
+    offline_on_disk = offline_on_disk and not f["online"]
+
+    def hand(b):
+        b["events"][track][0] = {**b["events"][track][0], "v": 7}
+        b["sources"][READD_SOURCE]["settings"] = {**b["sources"][READD_SOURCE].get("settings", {}), "role": "cymbal", "note": 70, "role_source": "user"}
+
+    edited = readd_archive("hand", hand)
+    eblob = json.loads(edited.read_text())
+    f = readd_run(f"{label}-hand", edited, [FILES[READD_SOURCE]], env, by_name=True)
+    ok, ev = readd_same(f, [track], eblob["events"])
+    got = {r["track"]: r for r in f["repairs"]}.get(track, {})
+    parts["hand"] = (ok and got.get("note") == 70 and got.get("role") == "cymbal", f"hand edits and settings: {ev}; role {got.get('role')!r} note {got.get('note')} (want cymbal, 70)")
+
+    def nohash(b):
+        for s in b["sources"]:
+            s.pop("content_hash", None)
+
+    old = readd_archive("nohash", nohash)
+    f = readd_run(f"{label}-nohash", old, [FILES[READD_SOURCE]], env, by_name=True)
+    ok, ev = readd_same(f, [track], events)
+    parts["nohash"] = (ok, f"an archive with no content hash: {ev}")
+
+    def other(b):
+        b["sources"][READD_SOURCE]["content_hash"] = "0000000000000001"
+
+    changed = readd_archive("other", other)
+    f = readd_run(f"{label}-other", changed, [FILES[READD_SOURCE]], env, by_name=True)
+    job = f["jobs"][-1] if f["jobs"] else {}
+    parts["other"] = (
+        f["healthy"] and len(f["differs"]) == 1 and len(f["jobs"]) == 1 and job.get("analysed") == [track]
+        and not job.get("errors") and not job.get("skipped") and f["online"],
+        f"another content hash: {len(f['differs'])} difference row(s), {len(f['jobs'])} round(s) analysing {job.get('analysed')} "
+        f"(errors {job.get('errors')}, skipped {job.get('skipped')}), project document online on disk {f['online']}",
+    )
+    ok = True
+    for name, (good, evidence) in parts.items():
+        ok = bool(good) and ok
+        print(f"    {'ok  ' if good else ('refused' if fault else 'FAIL')} {label}:{name}: {evidence}")
+    if fault:
+        # the fault run must be refused on the line it breaks (the repair), with a healthy restore
+        refused = not parts["one"][0] and not parts["all"][0]
+        return pass_fail(
+            label,
+            healthy and refused and offline_on_disk,
+            f"the plugin did not point the record of a restored track at the new cache file: both restores ran healthy ({healthy}), "
+            f"the project document on disk holds records with no identity ({offline_on_disk}) and the check refused them ({refused})",
+        )
+    return pass_fail(label, ok, f"{len(parts)} parts")
+
+
+def stage_doc_readd_fault() -> bool:
+    return stage_doc_readd("no-repair")
 
 
 def stage_doc_store_window() -> bool:
@@ -7689,6 +7841,8 @@ STAGES = {
     "doc-store-early-fault": stage_doc_store_early_fault,
     "doc-restore-repair": stage_doc_restore_repair,
     "doc-restore-repair-fault": stage_doc_restore_repair_fault,
+    "doc-readd": stage_doc_readd,
+    "doc-readd-fault": stage_doc_readd_fault,
     "doc-retry": stage_doc_retry,
     "doc-retry-fault": stage_doc_retry_fault,
     "doc-rerequest": stage_doc_rerequest,
@@ -7852,7 +8006,7 @@ ORDER = [
     "archive-paths-fault", "archive-restore-pathname",
     "threads", "doc-service", "doc-service-fault", "doc-tracks", "doc-tracks-fault", "doc-rounds", "doc-rounds-fault", "doc-two", "doc-two-fault",
     "doc-archive", "doc-archive-fault", "doc-destroy", "doc-destroy-fault", "doc-close", "doc-close-fault", "doc-home", "doc-home-fault",
-    "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault", "doc-store-window", "doc-store-window-fault", "doc-store-early-fault", "doc-restore-repair", "doc-restore-repair-fault",
+    "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault", "doc-store-window", "doc-store-window-fault", "doc-store-early-fault", "doc-restore-repair", "doc-restore-repair-fault", "doc-readd", "doc-readd-fault",
     "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",
     "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault", "doc-late-audio-arrives", "doc-late-audio-arrives-fault",

@@ -200,6 +200,16 @@ struct SourceState {
     /// The events of the track are from an earlier round (its last round had an error); the
     /// archive stores the mark and a restore keeps the track "needs analysis".
     stale: AtomicBool,
+    /// F6 (#582): the hash of the samples of the live read (set when the read is committed).
+    content_hash: Mutex<Option<u64>>,
+    /// F6 (#582): the hash the archive stored for this source (a restore); an archive stores the live hash first.
+    restored_hash: Mutex<Option<u64>>,
+    /// F6 (#582): the source was restored with a track and its audio is not read yet. The project record of the
+    /// track holds no file identity then; when the audio is read, the record is pointed at the new cache file
+    /// (or, when the content is another, a new analysis follows). Cleared when the record is right.
+    repair: AtomicBool,
+    /// How often the repair of the record failed and was planned again.
+    repair_tries: std::sync::atomic::AtomicU32,
     /// When the worker took the request that still waits for the audio of this source.
     requested_at: Mutex<Option<std::time::Instant>>,
     /// M1b10: the role that the DAW name gave at the last snapshot. A new name that gives another
@@ -211,6 +221,21 @@ struct SourceState {
 }
 
 impl SourceState {
+    /// F6 (#582): the hash of the audio of this source that an archive stores: the live read first, else the
+    /// hash the last archive carried (a restored source whose audio is not read yet keeps it for the next store).
+    fn stored_hash(&self) -> Option<u64> {
+        let live = *self.content_hash.lock().unwrap_or_else(|e| e.into_inner());
+        live.or(*self.restored_hash.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// F6 (#582): does the audio read now differ from the audio the archive stored? `false` when either hash is
+    /// unknown (an archive of an earlier plugin: the sample count decides at the restore, as before).
+    fn audio_differs_from_archive(&self) -> bool {
+        let live = *self.content_hash.lock().unwrap_or_else(|e| e.into_inner());
+        let stored = *self.restored_hash.lock().unwrap_or_else(|e| e.into_inner());
+        matches!((live, stored), (Some(a), Some(b)) if a != b)
+    }
+
     fn props(&self) -> SourceProps {
         self.props.lock().map(|p| p.clone()).unwrap_or_default()
     }
@@ -1757,6 +1782,68 @@ impl Session {
         }
     }
 
+    /// F6 (#582): the audio of a RESTORED source was read. The project record of its track was written at the
+    /// restore, when the cache file did not exist, so it holds no file identity and the service calls the track
+    /// offline (changed) for ever. Same content (or no stored hash: the sample count decided at the restore): the
+    /// record is pointed at the new file, no round runs, the hits and settings stay. Other content: the source
+    /// is stale, a round analyses it (that round points the record first). A failed repair is tried again.
+    /// (`DS_ARA_RESTORE_FAULT=no-repair`: the old behaviour, nothing happens.)
+    fn repair_restored(&self, s: &Arc<SourceState>) {
+        if !s.repair.load(Ordering::SeqCst)
+            || s.removed.load(Ordering::SeqCst)
+            || s.doc.closing.load(Ordering::SeqCst)
+            || crate::test_switch("DS_ARA_RESTORE_FAULT").as_deref() == Ok("no-repair")
+        {
+            return;
+        }
+        let name = s.props().name;
+        if s.audio_differs_from_archive() {
+            s.repair.store(false, Ordering::SeqCst);
+            s.stale.store(true, Ordering::SeqCst);
+            s.analysis_failed.store(true, Ordering::SeqCst);
+            self.log(json!({"event": "restore_audio", "doc": s.doc.id(), "name": name, "same": false}).to_string());
+            return;
+        }
+        // only the path: a snapshot would also take the mark of a rename that a round has still to see
+        let Some(wav) = s.wav.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+            return;
+        };
+        let outcome = guard("track repair", Err("the track repair panicked".to_string()), || {
+            let mut svc = s.doc.lock_svc();
+            svc.repoint(&[(s.seq, wav.clone())])
+        });
+        match outcome {
+            Ok(rows) => {
+                s.repair.store(false, Ordering::SeqCst);
+                let moved = rows.iter().any(|r| r.repointed);
+                self.log(
+                    json!({"event": "track_repair", "doc": s.doc.id(), "name": name, "same": true,
+                        "tracks": rows.iter().map(|r| json!({
+                            "track": r.track, "before": r.before, "after": r.after, "repointed": r.repointed,
+                            "events_json": r.events_json, "role": r.role, "note": r.note,
+                        })).collect::<Vec<_>>()})
+                    .to_string(),
+                );
+                if moved {
+                    // the page holds the track as offline: it reads the project again
+                    s.doc.announce_reload();
+                }
+            }
+            Err(e) => {
+                let tries = s.repair_tries.fetch_add(1, Ordering::SeqCst);
+                let again = tries < DEFER_MAX_TRIES;
+                self.log(
+                    json!({"event": "track_repair_failed", "doc": s.doc.id(), "name": name, "error": e, "again": again})
+                        .to_string(),
+                );
+                if again {
+                    defer_msg(Msg::Ready(s.clone()));
+                }
+            }
+        }
+        self.write_out();
+    }
+
     /// Queue a source that needs analysis and is not queued (and no round works on it) yet.
     fn want(&self, s: &Arc<SourceState>, st: &mut WorkerState) {
         // the fault run `DS_ARA_ROUND_FAULT=read-again`: the read of a source that has its
@@ -1922,6 +2009,7 @@ impl Session {
                 }
             }
             Msg::Ready(s) => {
+                self.repair_restored(&s);
                 // The audio of a source that has no result is here now. That is a source the
                 // host never asked for (M1b4), or one that has no result after a late audio, a
                 // failed round or a stale track after a restore: a round takes it, the host
@@ -3455,6 +3543,10 @@ unsafe extern "C" fn dc_createAudioSource(
                 read_retry_at: Mutex::new(None),
                 read_tries: std::sync::atomic::AtomicU32::new(0),
                 stale: AtomicBool::new(false),
+                content_hash: Mutex::new(None),
+                restored_hash: Mutex::new(None),
+                repair: AtomicBool::new(false),
+                repair_tries: std::sync::atomic::AtomicU32::new(0),
                 requested_at: Mutex::new(None),
                 label_role_seen: Mutex::new(None),
                 role_touch_pending: AtomicBool::new(false),
@@ -3729,6 +3821,7 @@ fn read_source(src: Arc<SourceState>, s: &'static Session, gen: u64) {
                 src.wav_len
                     .store(wav::file_len(count.max(0) as usize, ch as u16), Ordering::SeqCst);
                 *w = Some(dest.clone());
+                *src.content_hash.lock().unwrap_or_else(|e| e.into_inner()) = Some(outcome.hash);
             }
             live
         };
@@ -4259,6 +4352,7 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
                                 .unwrap_or_default()
                         },
                         sample_count: p.sample_count,
+                        content_hash: src.stored_hash().map(|h| format!("{h:016x}")).unwrap_or_default(),
                     }
                 })
                 .collect()
@@ -4409,6 +4503,19 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                     let stale = a.stale || audio_changed(a.sample_count, p.sample_count);
                     src.stale.store(stale, Ordering::SeqCst);
                     src.analysis_failed.store(stale, Ordering::SeqCst);
+                    // F6 (#582): the hash of the stored audio, and the mark that the project record of this track has
+                    // no file identity until the audio is read (a restored record points at a cache file that does not
+                    // exist yet). A source whose audio is read already is judged at once.
+                    *src.restored_hash.lock().unwrap_or_else(|e| e.into_inner()) =
+                        u64::from_str_radix(&a.content_hash, 16).ok();
+                    if has_wav(src) {
+                        if src.audio_differs_from_archive() {
+                            src.stale.store(true, Ordering::SeqCst);
+                            src.analysis_failed.store(true, Ordering::SeqCst);
+                        }
+                    } else {
+                        src.repair.store(true, Ordering::SeqCst);
+                    }
                     if let Some((_, events)) = events_ok.iter().find(|(k, _)| **k == track) {
                         if let Ok(mut t) = src.track.lock() {
                             *t = Some(track.clone());
@@ -5392,6 +5499,7 @@ mod tests {
             stale: false,
             settings: serde_json::Map::new(),
             sample_count: 0,
+            content_hash: String::new(),
         }
     }
 
@@ -5473,6 +5581,10 @@ mod tests {
             read_retry_at: Mutex::new(None),
             read_tries: std::sync::atomic::AtomicU32::new(0),
             stale: AtomicBool::new(false),
+            content_hash: Mutex::new(None),
+            restored_hash: Mutex::new(None),
+            repair: AtomicBool::new(false),
+            repair_tries: std::sync::atomic::AtomicU32::new(0),
             requested_at: Mutex::new(None),
             label_role_seen: Mutex::new(None),
             role_touch_pending: AtomicBool::new(false),
