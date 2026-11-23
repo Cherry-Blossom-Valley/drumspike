@@ -976,11 +976,11 @@ fn shell_command(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Option<Answer> {
             .and_then(Value::as_str)
             .and_then(crate::prepare::Kind::parse)
         {
-            Some(k @ (crate::prepare::Kind::Spike | crate::prepare::Kind::Audio)) => {
-                sh.backend.prep.want_kind(k);
+            Some(k) => {
+                sh.backend.prep.want_kind(k, args.get("row").and_then(Value::as_str));
                 Answer::json(200, &sh.backend.prep.state_json())
             }
-            _ => Answer::err(400, "kind must be spike or audio"),
+            None => Answer::err(400, "kind must be midi, spike, audio or merged"),
         },
         "plugin_deliver_take" => deliver_take(sh, args),
         "plugin_host_play" => host_request(sh, crate::playback::Kind::Play, args),
@@ -1271,7 +1271,11 @@ fn start_drag_command(sh: &Arc<Shared>, args: &Value) -> Answer {
     let mut roots: Vec<PathBuf> = allowed_folders(sh);
     if let (Some(svc), Some(sid)) = (sh.backend.page.service(), sh.backend.page.sid()) {
         if let Some(exports) = svc.drag_dir(&sid).ok().and_then(|d| d.parent().map(Path::to_path_buf)) {
-            if let Ok(c) = std::fs::canonicalize(exports) {
+            if let Ok(c) = std::fs::canonicalize(&exports) {
+                roots.push(c);
+            }
+            // the plugin-owned folder that a take links its files into (round 2)
+            if let Ok(c) = std::fs::canonicalize(exports.join(crate::prepare::DRAGGED_DIR)) {
                 roots.push(c);
             }
         }
@@ -1707,7 +1711,10 @@ fn changed_after(sh: &Arc<Shared>, svc: &drumspike_app::Service, cmd: &str, args
             });
         return;
     }
-    sh.backend.prep.wake();
+    if crate::test_switch("DS_ARA_PREPARE_TRACE").is_ok() {
+        session().log(json!({"event": "prepare_cmd", "cmd": cmd, "ms": crate::mono_ms()}).to_string());
+    }
+    sh.backend.prep.command_done(writes, ended);
     (sh.backend.changed)();
 }
 

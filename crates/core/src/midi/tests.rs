@@ -850,3 +850,48 @@ fn the_merged_file_holds_all_drums_on_one_note_track_in_tick_order() {
     assert_eq!(ons.iter().map(|x| x.1).collect::<Vec<_>>(), vec![36, 38, 36]);
     assert!(ons.windows(2).all(|w| w[0].0 < w[1].0));
 }
+
+#[test]
+fn two_drums_on_one_note_keep_every_note_on_and_every_note_off_in_the_merged_file() {
+    // #576 round 2 (S15): the notes of two rows that share a pitch merge on that pitch; each keeps its own on and off, none is lost or doubled
+    let a = [ev(0.50, 90), ev(1.00, 80)];
+    let b = [ev(0.52, 100), ev(1.01, 70)];
+    let tracks = [
+        MidiTrack {
+            name: "a",
+            note: 38,
+            rate: 48_000,
+            events: &a,
+        },
+        MidiTrack {
+            name: "b",
+            note: 38,
+            rate: 48_000,
+            events: &b,
+        },
+    ];
+    let bytes = merged_midi_bytes(&tracks, DEFAULT_PPQ, &TempoMap::default(), DEFAULT_TEMPO).unwrap();
+    let smf = midly::Smf::parse(&bytes).unwrap();
+    assert_eq!(smf.tracks.len(), 2);
+    let mut t = 0u64;
+    let (mut on, mut off, mut order_ok, mut last) = (Vec::new(), Vec::new(), true, 0u64);
+    for e in &smf.tracks[1] {
+        t += u64::from(e.delta.as_int());
+        order_ok &= t >= last;
+        last = t;
+        if let midly::TrackEventKind::Midi {
+            message: midly::MidiMessage::NoteOn { key, vel },
+            ..
+        } = e.kind
+        {
+            assert_eq!(key.as_int(), 38);
+            if vel.as_int() > 0 { on.push(t) } else { off.push(t) }
+        }
+    }
+    assert_eq!((on.len(), off.len()), (4, 4), "four note-ons and four note-offs");
+    assert!(order_ok);
+    let single_a = midi_bytes_map(&a, 38, DEFAULT_PPQ, &TempoMap::default(), DEFAULT_TEMPO, 48_000).unwrap();
+    let smf_a = midly::Smf::parse(&single_a).unwrap();
+    let ons_a = smf_a.tracks[1].iter().filter(|e| matches!(e.kind, midly::TrackEventKind::Midi { message: midly::MidiMessage::NoteOn { vel, .. }, .. } if vel.as_int() > 0)).count();
+    assert_eq!(ons_a, 2);
+}

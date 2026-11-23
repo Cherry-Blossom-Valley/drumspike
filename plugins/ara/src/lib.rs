@@ -1115,12 +1115,18 @@ impl DocShared {
     fn prep(self: &Arc<Self>) -> Arc<prepare::Prep> {
         self.prep
             .get_or_init(|| {
-                let (d1, d2, d3) = (self.clone(), self.clone(), self.clone());
+                // the closures hold the document WEAKLY: the document owns the preparation, so a strong clone would be a cycle that
+                // nothing frees (the worker thread would never end)
+                let (d1, d2, d3) = (Arc::downgrade(self), Arc::downgrade(self), Arc::downgrade(self));
                 prepare::Prep::new(
                     self.page.clone(),
-                    Arc::new(move || d1.rows_value()),
-                    Arc::new(move || d2.song_tempo()),
-                    Arc::new(move || d3.source_files()),
+                    Arc::new(move || d1.upgrade().map(|d| d.rows_value()).unwrap_or_default()),
+                    Arc::new(move || {
+                        d2.upgrade()
+                            .map(|d| d.song_tempo())
+                            .unwrap_or_else(|| tempo_ara::choose(None, "closed", None))
+                    }),
+                    Arc::new(move || d3.upgrade().map(|d| d.source_files()).unwrap_or_default()),
                 )
             })
             .clone()
@@ -3002,6 +3008,8 @@ fn unload_worker() {
     if crate::test_switch("DS_ARA_UNLOAD_FAULT").as_deref() == Ok("skip") {
         return;
     }
+    // the worker threads of the preparation of the files (M1c3) run library code too: they stop before the library can be unmapped
+    prepare::stop_all(UNLOAD_WAIT);
     let Some(s) = SESSION.get() else { return };
     let started = std::time::Instant::now();
     let docs: Vec<Arc<DocShared>> = LIVE_DOCS

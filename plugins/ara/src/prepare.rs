@@ -32,6 +32,10 @@ pub const MAX_DRAG_FILES: usize = 512;
 pub const WATCHDOG: Duration = Duration::from_secs(30);
 /// The bound of `.prepared/` (ruling R11): a set that would take the folder over it fails with a reason.
 pub const CAP_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// The fixed plugin-owned folder below `Exports/` that a take hard-links its files into (round 2: the worker never writes in `Exports/`).
+pub const DRAGGED_DIR: &str = "Dragged";
+/// What the sum of several audio-spike parts may hold in memory (round 2, S8).
+pub const MEM_CAP_BYTES: u64 = 1024 * 1024 * 1024;
 /// The fixed stem of the merged MIDI file (ruling R7).
 pub const MERGED_STEM: &str = "Drums_merged";
 
@@ -70,6 +74,38 @@ impl Kind {
     fn is_wav(self) -> bool {
         matches!(self, Kind::Spike | Kind::Audio)
     }
+}
+
+/// The worker threads that run (a plugin unload waits for them), and the stop sign that unload sets.
+static LIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// How many worker threads of the preparation run now.
+#[must_use]
+pub fn live_threads() -> usize {
+    LIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The plugin library is about to be unmapped: every worker thread of the preparation stops. Waits at most `wait` for them; true when none runs.
+pub fn stop_all(wait: Duration) -> bool {
+    STOP.store(true, std::sync::atomic::Ordering::SeqCst);
+    let t0 = Instant::now();
+    while live_threads() > 0 && t0.elapsed() < wait {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    live_threads() == 0
+}
+
+struct LiveGuard(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for LiveGuard {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        LIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn stopped() -> bool {
+    STOP.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// The fault runs of the check (`DS_ARA_PREPARE_FAULT`); a delivery build reads none.
@@ -175,6 +211,15 @@ fn midi_events(events: &[Value]) -> Result<Vec<MidiEvent>, String> {
         .collect()
 }
 
+/// The first source that has a clip in the row (its rate and file are those of the row's MIDI, spike and audio files).
+#[must_use]
+pub fn first_used(row: &RowIn) -> Option<&SrcIn> {
+    row.srcs
+        .iter()
+        .find(|s| !regions_of(row, &s.key).is_empty())
+        .or_else(|| row.srcs.first())
+}
+
 /// The file stem of every row: the DAW track name made safe by `deliver::file_stems` (the numbering of #560 over the rows).
 /// `MERGED_STEM` takes part under the id `~merged`, so a row of that name is numbered, not overwritten by it.
 #[must_use]
@@ -193,6 +238,42 @@ pub fn stems(rows: &[RowIn]) -> HashMap<String, String> {
 
 fn file_name(stem: &str, kind: Kind) -> String {
     format!("{stem}{}", kind.suffix())
+}
+
+/// The final file name of every set, unique inside its extension (S5): MIDI and the merged file share `.mid`, the spike and the audio spike
+/// share `.wav`; two names that equal each other without case (`drumspike_app::export::file_name_key`) number the later one `Stem (2)`.
+/// The key of a row set is `(row id, kind)`, the one of the merged file `("", Merged)`.
+#[must_use]
+pub fn final_names(rows: &[RowIn], stems: &HashMap<String, String>) -> HashMap<(String, Kind), String> {
+    let mut out = HashMap::new();
+    let mut ids: Vec<&RowIn> = rows.iter().collect();
+    ids.sort_by(|a, b| a.id.cmp(&b.id));
+    for set in [[Kind::Midi, Kind::Merged], [Kind::Spike, Kind::Audio]] {
+        let mut seen: HashSet<String> = HashSet::new();
+        for kind in set {
+            let entries: Vec<(String, String)> = if kind == Kind::Merged {
+                vec![(
+                    String::new(),
+                    stems.get("~merged").cloned().unwrap_or_else(|| MERGED_STEM.into()),
+                )]
+            } else {
+                ids.iter()
+                    .filter_map(|r| stems.get(&r.id).map(|st| (r.id.clone(), st.clone())))
+                    .collect()
+            };
+            for (id, stem) in entries {
+                let mut n = 1;
+                let mut name = file_name(&stem, kind);
+                while !has("no-file-numbering") && seen.contains(&drumspike_app::export::file_name_key(&name)) {
+                    n += 1;
+                    name = file_name(&format!("{stem} ({n})"), kind);
+                }
+                seen.insert(drumspike_app::export::file_name_key(&name));
+                out.insert((id, kind), name);
+            }
+        }
+    }
+    out
 }
 
 /// The error of an audio-spike set whose sources have different sample rates (ruling R8), checked before anything is written.
@@ -221,9 +302,9 @@ fn h_f(h: &mut impl Hasher, v: f64) {
 /// `fp`: everything the file of `kind` for `row` is made from. A change of any input changes it; an input that the kind does not
 /// read (the velocity of a spike) does not.
 #[must_use]
-pub fn fingerprint(row: &RowIn, kind: Kind, stem: &str, tempo_key: &str, bump: u64) -> u64 {
+pub fn fingerprint(row: &RowIn, kind: Kind, name: &str, tempo_key: &str, bump: u64) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (kind.word(), stem, bump).hash(&mut h);
+    (kind.word(), name, bump).hash(&mut h);
     for c in &row.clips {
         (&c.src, c.a.to_bits(), c.b.to_bits(), c.s.to_bits(), c.k.to_bits()).hash(&mut h);
     }
@@ -255,7 +336,7 @@ fn ppq_of(rate: u32, map: &TempoMap) -> u16 {
 /// The text of the failure.
 pub fn write_midi_row(row: &RowIn, map: &TempoMap, out: &Path) -> Result<(), String> {
     let ev = midi_events(&mapped_events(row))?;
-    let rate = row.srcs.first().map_or(48_000, |s| s.rate);
+    let rate = first_used(row).map_or(48_000, |s| s.rate);
     export_midi_map(&ev, row.note, out, ppq_of(rate, map), map, EXPORT_TEMPO, rate).map_err(|e| e.to_string())
 }
 
@@ -276,7 +357,7 @@ pub fn write_merged(rows: &[RowIn], map: &TempoMap, out: &Path) -> Result<(), St
         .map(|(i, e)| MidiTrack {
             name: &rows[*i].name,
             note: rows[*i].note,
-            rate: rows[*i].srcs.first().map_or(48_000, |s| s.rate),
+            rate: first_used(&rows[*i]).map_or(48_000, |s| s.rate),
             events: e,
         })
         .collect();
@@ -290,10 +371,18 @@ pub fn write_merged(rows: &[RowIn], map: &TempoMap, out: &Path) -> Result<(), St
 }
 
 fn home_wav(row: &RowIn) -> Result<&Path, String> {
-    row.srcs
-        .first()
+    first_used(row)
         .and_then(|s| s.wav.as_deref())
         .ok_or_else(|| format!("no audio for {}", row.name))
+}
+
+/// The bytes a spike or audio-spike file of the row will take (float 32, one channel, the length of the row in the song): the check of the
+/// bound of `.prepared/` runs before anything is written (S8).
+#[must_use]
+pub fn estimate_bytes(row: &RowIn) -> u64 {
+    let rate = first_used(row).map_or(48_000, |s| s.rate);
+    let frames = row_end(row).map_or(0.0, |e| (e * f64::from(rate)).ceil().max(0.0));
+    (frames as u64).saturating_mul(4)
 }
 
 /// The synthetic spike file of one row: the times of every source, the rate and format of the first source.
@@ -302,6 +391,7 @@ fn home_wav(row: &RowIn) -> Result<&Path, String> {
 ///
 /// The text of the failure.
 pub fn write_spike_row(row: &RowIn, out: &Path) -> Result<(), String> {
+    check_rates(row)?;
     let times: Vec<f64> = mapped_events(row).iter().filter_map(|e| e["t"].as_f64()).collect();
     write_spike_file_song(home_wav(row)?, out, &times, row_end(row))
         .map(|_| ())
@@ -341,6 +431,9 @@ pub fn write_audio_row(row: &RowIn, out: &Path) -> Result<(), String> {
         return write_audio_spike_file_song(wav, out, &pairs, end)
             .map(|_| ())
             .map_err(|e| e.message);
+    }
+    if (used.len() as u64).saturating_mul(estimate_bytes(row)) > MEM_CAP_BYTES {
+        return Err("not enough memory for the audio spikes of this row".into());
     }
     let mut parts = Vec::new();
     let mut rate = 0;
@@ -443,10 +536,22 @@ type Key = (String, Kind);
 
 struct Ready {
     fp: u64,
-    /// The files in `Exports/` (the paths a drag takes).
-    files: Vec<PathBuf>,
-    /// The files in `.prepared/`.
+    /// The files in `.prepared/` (the worker writes nowhere else).
     prepared: Vec<PathBuf>,
+}
+
+/// One failed job: the `fp` it failed for, the reason, when, and how many times in a row.
+type Failed = (u64, String, Instant, u32);
+
+/// The wait before a failed job is tried again by itself: 5 s, doubled for each failure, at most 60 s.
+#[must_use]
+pub fn backoff(tries: u32) -> Duration {
+    Duration::from_secs((5u64 << tries.saturating_sub(1).min(4)).min(60))
+}
+
+/// True while a failure holds the work back (the same `fp`, the back-off not over).
+fn failed_blocks(f: &Failed, fp: u64) -> bool {
+    f.0 == fp && f.2.elapsed() < backoff(f.3)
 }
 
 #[derive(Default)]
@@ -456,7 +561,9 @@ struct St {
     used: [bool; 2],
     want: HashMap<Key, u64>,
     ready: HashMap<Key, Ready>,
-    failed: HashMap<Key, (u64, String)>,
+    failed: HashMap<Key, Failed>,
+    /// The document has no export folder (the service is open but gives none): the handles say so.
+    no_folder: bool,
     pending_since: HashMap<Key, Instant>,
     busy: Option<(Key, Instant)>,
     /// (id, name, srcs) of the rows at the last cycle.
@@ -486,6 +593,10 @@ pub struct Prep {
     files: FilesFn,
     st: Mutex<St>,
     cv: Condvar,
+    /// Set by the worker thread when it ends.
+    ended: Arc<std::sync::atomic::AtomicBool>,
+    /// A command that writes the project ran and no `done` of a job was seen since (see [`Prep::command_done`]).
+    job_open: std::sync::atomic::AtomicBool,
 }
 
 struct Gathered {
@@ -493,6 +604,8 @@ struct Gathered {
     map: TempoMap,
     tempo_key: String,
     stems: HashMap<String, String>,
+    /// The final file name of every set.
+    names: HashMap<Key, String>,
 }
 
 impl Prep {
@@ -510,6 +623,8 @@ impl Prep {
             files,
             st: Mutex::new(St::default()),
             cv: Condvar::new(),
+            ended: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            job_open: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -518,9 +633,20 @@ impl Prep {
     }
 
     /// Something changed (an edit, a round, a row, the tempo): the worker looks again after the quiet time.
+    #[track_caller]
     pub fn wake(self: &Arc<Self>) {
+        if crate::test_switch("DS_ARA_PREPARE_TRACE").is_ok() {
+            let at = std::panic::Location::caller();
+            crate::session().log(
+                json!({"event": "prepare_wake", "at": format!("{}:{}", at.file(), at.line()), "ms": crate::mono_ms()})
+                    .to_string(),
+            );
+        }
         {
             let mut st = self.lock();
+            if stopped() && live_threads() == 0 {
+                STOP.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
             let now = Instant::now();
             st.first.get_or_insert(now);
             st.last = Some(now);
@@ -531,9 +657,17 @@ impl Prep {
             if !st.started {
                 st.started = true;
                 let weak = Arc::downgrade(self);
-                let _ = std::thread::Builder::new()
+                let ended = Arc::clone(&self.ended);
+                LIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let spawned = std::thread::Builder::new()
                     .name("drumspike-ara-prepare".into())
-                    .spawn(move || worker(&weak));
+                    .spawn(move || {
+                        let _live = LiveGuard(ended);
+                        worker(&weak);
+                    });
+                if spawned.is_err() {
+                    LIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                }
             }
         }
         self.cv.notify_all();
@@ -546,8 +680,32 @@ impl Prep {
         }
     }
 
-    /// A press on the handle of a wav kind: the first use. The work is due at once.
-    pub fn want_kind(self: &Arc<Self>, kind: Kind) {
+    /// The page's answer to a command, as `changed_after` sees it: a command that writes the project wakes the worker; a poll of the job status that
+    /// says `done` wakes it ONCE for the job (the page polls every 2 s: a wake for each answer would restart the quiet time for ever).
+    #[track_caller]
+    pub fn command_done(self: &Arc<Self>, writes: bool, ended: bool) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if writes {
+            self.job_open.store(true, SeqCst);
+            self.wake();
+        } else if ended && self.job_open.swap(false, SeqCst) {
+            self.wake();
+        }
+    }
+
+    /// Due at once: the next pass looks and works with no quiet time.
+    fn kick(&self) {
+        let mut st = self.lock();
+        let ago = Instant::now().checked_sub(Duration::from_secs(60));
+        st.midi_pending = true;
+        st.wav_pending = true;
+        st.first = ago;
+        st.last = ago;
+    }
+
+    /// A press on a handle: the first use of a wav kind (it is kept current from now on), or a new try of a set that failed (a press on an error).
+    /// `row` names one row; `None`: every row of the kind. The work is due at once.
+    pub fn want_kind(self: &Arc<Self>, kind: Kind, row: Option<&str>) {
         {
             let mut st = self.lock();
             match kind {
@@ -555,13 +713,10 @@ impl Prep {
                 Kind::Audio => st.used[1] = true,
                 _ => {}
             }
-            st.failed.retain(|k, _| k.1 != kind);
+            st.failed.retain(|k, _| !(k.1 == kind && row.is_none_or(|r| r == k.0)));
         }
         self.wake();
-        let mut st = self.lock();
-        let ago = Instant::now().checked_sub(Duration::from_secs(60));
-        st.first = ago;
-        st.last = ago;
+        self.kick();
     }
 
     fn exports_dir(&self) -> Option<PathBuf> {
@@ -637,6 +792,7 @@ impl Prep {
                 .collect();
         }
         let stems = stems(&out);
+        let names = final_names(&out, &stems);
         let map = tempo.map.clone().unwrap_or_default();
         let tempo_key = format!("{:?}", tempo.map);
         Some(Gathered {
@@ -644,6 +800,7 @@ impl Prep {
             map,
             tempo_key,
             stems,
+            names,
         })
     }
 
@@ -660,19 +817,25 @@ impl Prep {
                 continue;
             }
             any = true;
-            let stem = &g.stems[&r.id];
-            let m = fingerprint(r, Kind::Midi, stem, &g.tempo_key, bump);
+            let name = |k: Kind| g.names.get(&(r.id.clone(), k)).cloned().unwrap_or_default();
+            let m = fingerprint(r, Kind::Midi, &name(Kind::Midi), &g.tempo_key, bump);
             m.hash(&mut merged);
             out.insert((r.id.clone(), Kind::Midi), m);
             if used[0] {
-                out.insert((r.id.clone(), Kind::Spike), fingerprint(r, Kind::Spike, stem, "", bump));
+                out.insert(
+                    (r.id.clone(), Kind::Spike),
+                    fingerprint(r, Kind::Spike, &name(Kind::Spike), "", bump),
+                );
             }
             if used[1] {
-                out.insert((r.id.clone(), Kind::Audio), fingerprint(r, Kind::Audio, stem, "", bump));
+                out.insert(
+                    (r.id.clone(), Kind::Audio),
+                    fingerprint(r, Kind::Audio, &name(Kind::Audio), "", bump),
+                );
             }
         }
         if any {
-            g.stems["~merged"].hash(&mut merged);
+            g.names.get(&(String::new(), Kind::Merged)).hash(&mut merged);
             out.insert((String::new(), Kind::Merged), merged.finish());
         }
         out
@@ -688,25 +851,26 @@ impl Prep {
             return State::Off;
         }
         let want = if has_hits { st.want.get(key).copied() } else { None };
-        // before the first cycle nothing is known: a row has hits until a cycle says it has none
-        let want = if has_hits && want.is_none() && st.cycles == 0 {
+        let dirty = st.wake_seq != st.clean_seq;
+        // before the first cycle, and while something changed since the last one, nothing is known: a row has hits (a row that gets its first
+        // hit shows preparing, not "no hits") until a pass says it has none
+        let want = if has_hits && want.is_none() && (st.cycles == 0 || dirty) {
             Some(0)
         } else {
             want
         };
-        let ready = st.ready.get(key).map(|r| (r.fp, r.files.len()));
-        let failed = st
-            .failed
-            .get(key)
-            .filter(|(fp, _)| Some(*fp) == want)
-            .map(|(_, w)| w.as_str());
+        let ready = st.ready.get(key).map(|r| (r.fp, r.prepared.len()));
+        let failed = st.failed.get(key).filter(|f| Some(f.0) == want).map(|f| f.1.as_str());
         let mut pending = st.pending_since.get(key).map(|t| t.elapsed());
         if let Some((bk, since)) = &st.busy {
             if bk == key {
                 pending = Some(since.elapsed());
             }
         }
-        let state = state_of(key.1, used, want, ready, failed, pending, limit());
+        let mut state = state_of(key.1, used, want, ready, failed, pending, limit());
+        if st.no_folder && matches!(state, State::Ready(_) | State::Preparing) {
+            state = State::Error("no export folder".into());
+        }
         // something changed since the last pass looked: a set that is ready for the old state is not ready for the new one
         if st.wake_seq != st.clean_seq && matches!(state, State::Ready(_)) {
             return State::Preparing;
@@ -719,7 +883,8 @@ impl Prep {
     pub fn state_json(&self) -> Value {
         let rows = (self.rows)();
         let st = self.lock();
-        let row_has = |id: &str| st.cycles == 0 || st.want.contains_key(&(id.to_string(), Kind::Midi));
+        let dirty = st.wake_seq != st.clean_seq;
+        let row_has = |id: &str| st.cycles == 0 || dirty || st.want.contains_key(&(id.to_string(), Kind::Midi));
         let items: Vec<Value> = rows
             .rows
             .iter()
@@ -756,43 +921,66 @@ impl Prep {
         self.page.log.push("plugin-deliver", v);
     }
 
-    /// The files of the items, when every one of them is ready for the CURRENT state of the events.
+    /// The files of the items, when every one of them is ready for the CURRENT state of the events: each prepared file is hard-linked into
+    /// `Exports/Dragged/` under its final name (the plugin-owned folder; nothing there is ever replaced or deleted) and the paths there are
+    /// answered. A set whose file is gone from `.prepared/` is stale. A failed set is tried again.
     ///
     /// # Errors
     ///
-    /// `(status, text)`: 409 with the state of the first item that is not ready, 413 over the bound of a drag.
+    /// `(status, text)`: 409 with the state of the first item that is not ready, 413 over the bound of a drag, 500 when a link fails.
     pub fn take(self: &Arc<Self>, items: &[(String, Kind)]) -> Result<Vec<PathBuf>, (u16, String)> {
         let Some(g) = self.gather(true) else {
             return Err((503, "the document is closed".into()));
         };
+        let Some(exports) = self.exports_dir() else {
+            return Err((409, "error: no export folder".into()));
+        };
         let fps = self.fps(&g);
-        let mut out: Vec<PathBuf> = Vec::new();
+        let mut picks: Vec<PathBuf> = Vec::new();
         {
-            let st = self.lock();
+            let mut st = self.lock();
             for (id, kind) in items {
                 let key = (id.clone(), *kind);
+                let files_ok = st
+                    .ready
+                    .get(&key)
+                    .is_some_and(|r| r.prepared.iter().all(|f| f.is_file()));
+                if st.ready.contains_key(&key) && !files_ok {
+                    st.ready.remove(&key); // the file is gone: the set is stale, it is made again
+                }
                 let ok = match (fps.get(&key), st.ready.get(&key)) {
                     (Some(want), Some(r)) => *want == r.fp || has("stale-ok"),
                     _ => false,
                 };
                 if !ok {
                     let why = match self.state_for_fps(&st, &key, &fps) {
-                        State::Error(w) => format!("error: {w}"),
+                        State::Error(w) => format!("error: {w} (trying again)"),
                         State::Off => "not prepared yet".into(),
                         State::None => "no hits".into(),
                         _ => "preparing".into(),
                     };
+                    let was_error = st.failed.remove(&key).is_some();
                     drop(st);
                     self.wake();
+                    if was_error {
+                        self.kick(); // a press on a failed set is a new try, at once
+                    }
                     return Err((409, format!("{}: {why}", self.name_of(&g, id))));
                 }
-                out.extend(st.ready[&key].files.iter().cloned());
+                if let Some(r) = st.ready.get(&key) {
+                    picks.extend(r.prepared.iter().cloned());
+                }
             }
         }
-        if out.len() > MAX_DRAG_FILES {
+        if picks.len() > MAX_DRAG_FILES {
             return Err((413, format!("error: more than {MAX_DRAG_FILES} items in one drag")));
         }
-        Ok(out)
+        let dragged = exports.join(DRAGGED_DIR);
+        std::fs::create_dir_all(&dragged).map_err(|e| (500, format!("error: {}: {e}", dragged.display())))?;
+        picks
+            .iter()
+            .map(|p| deliver(p, &dragged).map_err(|e| (500, format!("error: {e}"))))
+            .collect()
     }
 
     fn name_of(&self, g: &Gathered, id: &str) -> String {
@@ -817,12 +1005,8 @@ impl Prep {
             return State::Off;
         }
         let want = fps.get(key).copied();
-        let ready = st.ready.get(key).map(|r| (r.fp, r.files.len()));
-        let failed = st
-            .failed
-            .get(key)
-            .filter(|(fp, _)| Some(*fp) == want)
-            .map(|(_, w)| w.as_str());
+        let ready = st.ready.get(key).map(|r| (r.fp, r.prepared.len()));
+        let failed = st.failed.get(key).filter(|f| Some(f.0) == want).map(|f| f.1.as_str());
         state_of(key.1, used, want, ready, failed, None, limit())
     }
 
@@ -860,10 +1044,15 @@ impl Prep {
         let seen = self.lock().wake_seq;
         let Some(g) = self.gather(true) else { return };
         let fps = self.fps(&g);
-        let Some(exports) = self.exports_dir() else { return };
+        let Some(exports) = self.exports_dir() else {
+            self.lock().no_folder = true;
+            self.push();
+            return;
+        };
         let prepared = exports.join(PREPARED_DIR);
         {
             let mut st = self.lock();
+            st.no_folder = false;
             st.cycles += 1;
             st.clean_seq = seen;
             st.meta = g
@@ -877,25 +1066,16 @@ impl Prep {
                     )
                 })
                 .collect();
-            for (k, fp) in &fps {
-                let fresh = st.ready.get(k).is_some_and(|r| r.fp == *fp);
-                if fresh {
-                    st.pending_since.remove(k);
-                } else if st.want.get(k) != Some(fp) || !st.pending_since.contains_key(k) {
-                    st.pending_since.entry(k.clone()).or_insert_with(Instant::now);
-                }
-            }
-            st.want = fps.clone();
-            st.pending_since.retain(|k, _| fps.contains_key(k));
-            // sets of rows that are gone or kinds that are off: removed from the books, their files below
-            st.ready.retain(|k, _| fps.contains_key(k));
-            st.failed.retain(|k, _| fps.contains_key(k));
+            update_books(&mut st, &fps);
         }
         self.push();
         let keep: HashSet<PathBuf> = {
             let st = self.lock();
             st.ready.values().flat_map(|r| r.prepared.iter().cloned()).collect()
         };
+        if has("user-file") {
+            plant_user_file(&exports, &g);
+        }
         clean_prepared(&prepared, &keep);
         let mut order: Vec<Key> = Vec::new();
         for kind in [Kind::Midi, Kind::Merged, Kind::Spike, Kind::Audio] {
@@ -911,7 +1091,8 @@ impl Prep {
             let need = {
                 let st = self.lock();
                 let fp = fps[&key];
-                !st.ready.get(&key).is_some_and(|r| r.fp == fp) && !st.failed.get(&key).is_some_and(|(f, _)| *f == fp)
+                !st.ready.get(&key).is_some_and(|r| r.fp == fp)
+                    && !st.failed.get(&key).is_some_and(|f| failed_blocks(f, fp))
             };
             if !due || !need {
                 continue;
@@ -930,7 +1111,7 @@ impl Prep {
         self.push();
         if has("forever") {
             // the fault run: the job never ends; the state must say so after the watchdog
-            while Arc::strong_count(self) > 1 {
+            while Arc::strong_count(self) > 1 && !stopped() {
                 std::thread::sleep(Duration::from_millis(100));
             }
             return;
@@ -940,20 +1121,15 @@ impl Prep {
         let mut st = self.lock();
         st.busy = None;
         match r {
-            Ok((prep, fin)) => {
+            Ok(prep) => {
                 st.failed.remove(key);
                 st.pending_since.remove(key);
-                st.ready.insert(
-                    key.clone(),
-                    Ready {
-                        fp,
-                        files: fin,
-                        prepared: prep,
-                    },
-                );
+                st.ready.insert(key.clone(), Ready { fp, prepared: prep });
             }
             Err(why) => {
-                st.failed.insert(key.clone(), (fp, why));
+                let tries = st.failed.get(key).filter(|f| f.0 == fp).map_or(1, |f| f.3 + 1);
+                st.failed.insert(key.clone(), (fp, why, Instant::now(), tries));
+                st.pending_since.remove(key); // the failure is the state now; the watchdog counts from the next change
             }
         }
         drop(st);
@@ -988,21 +1164,93 @@ fn clean_prepared(prepared: &Path, keep: &HashSet<PathBuf>) {
     }
 }
 
-/// Make the set of `key`: write it to `.prepared/` (temporary name, then a rename), then link it into `Exports/` under the same
-/// name. Returns the prepared and the final paths.
-fn make(g: &Gathered, key: &Key, exports: &Path, prepared: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), String> {
+/// The books after a pass looked at the rows: `want` is what the files must be made from now. A change of the wanted state starts the watchdog again
+/// (S10); sets of rows that are gone or kinds that are off leave the books (their files are removed from `.prepared/` by the pass).
+fn update_books(st: &mut St, fps: &HashMap<Key, u64>) {
+    for (k, fp) in fps {
+        let fresh = st.ready.get(k).is_some_and(|r| r.fp == *fp);
+        if fresh {
+            st.pending_since.remove(k);
+        } else if st.want.get(k) != Some(fp) {
+            st.pending_since.insert(k.clone(), Instant::now());
+        } else {
+            st.pending_since.entry(k.clone()).or_insert_with(Instant::now);
+        }
+    }
+    st.want = fps.clone();
+    st.pending_since.retain(|k, _| fps.contains_key(k));
+    st.ready.retain(|k, _| fps.contains_key(k));
+    st.failed.retain(|k, _| fps.contains_key(k));
+}
+
+/// Hard-link the prepared file `src` into `dir` under its name. The same file (the same inode) already there is reused; another file of that
+/// name is never replaced: the new name is numbered (`Snare_spike 2.mid`). Nothing in `dir` is ever deleted. No copy fallback: a failed link
+/// is an error.
+///
+/// # Errors
+///
+/// The text of the failure.
+pub fn deliver(src: &Path, dir: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::MetadataExt;
+    let name = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "the prepared file has no name".to_string())?;
+    let (stem, ext) = name.rsplit_once('.').map_or((name, ""), |(a, b)| (a, b));
+    let sm = std::fs::metadata(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    for n in 1..10_000u32 {
+        let cand = match (n, ext.is_empty()) {
+            (1, _) => name.to_string(),
+            (_, true) => format!("{stem} {n}"),
+            (_, false) => format!("{stem} {n}.{ext}"),
+        };
+        let p = dir.join(&cand);
+        match std::fs::symlink_metadata(&p) {
+            Ok(m) => {
+                if m.ino() == sm.ino() && m.dev() == sm.dev() {
+                    return Ok(std::fs::canonicalize(&p).unwrap_or(p));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::hard_link(src, &p).map_err(|e| format!("could not link {}: {e}", p.display()))?;
+                return Ok(std::fs::canonicalize(&p).unwrap_or(p));
+            }
+            Err(e) => return Err(format!("{}: {e}", p.display())),
+        }
+    }
+    Err("too many files of that name".into())
+}
+
+/// The scenario `user-file` of the check: a file of the user, with known bytes, lies in `Exports/` under the name of a row's MIDI file before the
+/// first set is made. Nothing of the preparation may change it.
+fn plant_user_file(exports: &Path, g: &Gathered) {
+    for r in &g.rows {
+        let name = format!("{}_spike.mid", r.name);
+        let p = exports.join(&name);
+        if !p.exists() {
+            let _ = std::fs::write(&p, format!("USER FILE {name}").as_bytes());
+        }
+    }
+}
+
+/// Make the set of `key` in `.prepared/` and nowhere else: written under a temporary name, then renamed, so a file that was delivered (linked
+/// into `Exports/Dragged/`) keeps its content. Returns the prepared paths.
+fn make(g: &Gathered, key: &Key, exports: &Path, prepared: &Path) -> Result<Vec<PathBuf>, String> {
     std::fs::create_dir_all(prepared).map_err(|e| format!("{}: {e}", prepared.display()))?;
     let row = g.rows.iter().find(|r| r.id == key.0);
-    let stem = g
-        .stems
-        .get(&key.0)
-        .cloned()
-        .or_else(|| (key.1 == Kind::Merged).then(|| g.stems["~merged"].clone()));
-    let stem = stem.ok_or("the row is gone")?;
-    let name = file_name(&stem, key.1);
-    // the name is one safe component (`file_stems`): nothing of the row name can leave the folder
+    let name = g.names.get(key).cloned().ok_or("the row is gone")?;
+    // the name is one safe component (`file_stems`); nothing that is not inside the folder is ever written
     let out = prepared.join(&name);
     let tmp = prepared.join(format!("{name}.tmp"));
+    if out.parent() != Some(prepared) || tmp.parent() != Some(prepared) {
+        return Err("the name is not allowed".into());
+    }
+    let others = dir_size(prepared).saturating_sub(std::fs::metadata(&out).map_or(0, |m| m.len()));
+    if let (true, Some(r)) = (key.1.is_wav(), row) {
+        if over_cap(others, estimate_bytes(r)) {
+            return Err("not enough room for the prepared files (limit 2 GiB)".into());
+        }
+    }
     match (key.1, row) {
         (Kind::Midi, Some(r)) => write_midi_row(r, &g.map, &tmp)?,
         (Kind::Spike, Some(r)) => write_spike_row(r, &tmp)?,
@@ -1011,28 +1259,42 @@ fn make(g: &Gathered, key: &Key, exports: &Path, prepared: &Path) -> Result<(Vec
         _ => return Err("the row is gone".into()),
     }
     let size = std::fs::metadata(&tmp).map_or(0, |m| m.len());
-    let others = dir_size(prepared).saturating_sub(std::fs::metadata(&out).map_or(0, |m| m.len()));
     if over_cap(others, size) {
         let _ = std::fs::remove_file(&tmp);
-        return Err("prepared items exceed 2 GB".into());
+        return Err("not enough room for the prepared files (limit 2 GiB)".into());
     }
     std::fs::rename(&tmp, &out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let fin = exports.join(&name);
-    if fin.parent() != Some(exports) {
-        return Err("the name is not allowed".into());
+    if has("link-exports") {
+        // the fault run: the old behaviour, a link in Exports/ under the final name that replaces a file of the user
+        let fin = exports.join(&name);
+        let _ = std::fs::remove_file(&fin);
+        let _ = std::fs::hard_link(&out, &fin);
     }
-    let _ = std::fs::remove_file(&fin);
-    if std::fs::hard_link(&out, &fin).is_err() {
-        std::fs::copy(&out, &fin).map_err(|e| format!("{}: {e}", fin.display()))?;
-    }
-    let fin = std::fs::canonicalize(&fin).unwrap_or(fin);
-    Ok((vec![out], vec![fin]))
+    Ok(vec![out])
 }
 
 fn worker(weak: &Weak<Prep>) {
     loop {
         std::thread::sleep(Duration::from_millis(150));
+        if stopped() {
+            return;
+        }
         let Some(p) = weak.upgrade() else { return };
+        {
+            // a failed set is tried again after its back-off
+            let mut st = p.lock();
+            let due = st
+                .failed
+                .iter()
+                .any(|(k, f)| st.want.get(k) == Some(&f.0) && f.2.elapsed() >= backoff(f.3));
+            if due {
+                st.midi_pending = true;
+                st.wav_pending = true;
+                let ago = Instant::now().checked_sub(Duration::from_secs(60));
+                st.first = ago;
+                st.last = ago;
+            }
+        }
         let need_push = {
             let mut st = p.lock();
             let need = st.wake_seq != st.pushed_seq;
@@ -1426,6 +1688,424 @@ mod tests {
             3,
             "the refresh derived the follower again: its row has the hit of the leader's edit"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ------------------------------------------------------------ round 2
+
+    /// A document with two tracks `lead` and `sub` (kick-like bursts), no follow; the service, the sid and the folder of the files.
+    fn two_tracks(tag: &str) -> (drumspike_app::Service, String, PathBuf) {
+        use drumspike_app::{Service, ServiceConfig};
+        use drumspike_core::io::{encode_wav, WavFormat, WavSpec};
+        use drumspike_core::project::{add_track, build_source, new_project, save_project};
+        let root = std::env::temp_dir().join(format!("ds-prep-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let sr = 48_000u32;
+        let mut p = new_project(&root, "Two").unwrap();
+        for name in ["lead", "sub"] {
+            let wav = root.join("daw").join(format!("{name}.wav"));
+            std::fs::create_dir_all(wav.parent().unwrap()).unwrap();
+            let spec = WavSpec {
+                sample_rate: sr,
+                channels: 1,
+                format: WavFormat::Float32,
+                extensible: false,
+                channel_mask: 0,
+            };
+            let x = vec![0.1f32; (3.5 * f64::from(sr)) as usize];
+            std::fs::write(&wav, encode_wav(&spec, &x, None)).unwrap();
+            let rec = build_source(&wav, &p.dir, "referenced").unwrap();
+            let tr = add_track(&mut p, name, Some(rec), "kick", 36, Some("average")).unwrap();
+            tr.sr = Some(i64::from(sr));
+            tr.n_samples = Some(x.len() as i64);
+            tr.duration = Some(x.len() as f64 / f64::from(sr));
+            tr.color = Some("#e05555".into());
+        }
+        save_project(&mut p).unwrap();
+        let svc = Service::new(ServiceConfig::default());
+        svc.set_home(root.join("home"));
+        let sid = svc.project_open(&p.dir.display().to_string()).unwrap()["sid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        (svc, sid, root)
+    }
+
+    fn prep_of(svc: &drumspike_app::Service, sid: &str, root: &Path) -> Arc<Prep> {
+        let page = Arc::new(PageHandle::default());
+        page.set(Some(svc.clone()));
+        page.set_sid(Some(sid.to_string()));
+        let rows = Rows {
+            rows: ["lead", "sub"]
+                .iter()
+                .map(|k| crate::rows::Row {
+                    id: format!("q-{k}"),
+                    name: (*k).into(),
+                    srcs: vec![(*k).into()],
+                    clips: vec![clip(k, 0.0, 3.5, 0.0, 1.0)],
+                })
+                .collect(),
+            ..Rows::default()
+        };
+        let wavs: HashMap<String, (PathBuf, u32)> = ["lead", "sub"]
+            .iter()
+            .map(|k| ((*k).to_string(), (root.join("daw").join(format!("{k}.wav")), 48_000)))
+            .collect();
+        Prep::new(
+            page,
+            Arc::new(move || rows.clone()),
+            Arc::new(|| crate::tempo_ara::choose(None, "test", None)),
+            Arc::new(move || wavs.clone()),
+        )
+    }
+
+    #[test]
+    fn a_delivered_file_keeps_its_bytes_and_the_next_take_delivers_a_numbered_new_one() {
+        let (svc, sid, root) = two_tracks("deliver");
+        svc.events_set(&sid, "lead", &json!([{"t": 0.25, "v": 100}, {"t": 1.25, "v": 100}]))
+            .unwrap();
+        svc.events_set(&sid, "sub", &json!([{"t": 0.5, "v": 100}])).unwrap();
+        let prep = prep_of(&svc, &sid, &root);
+        prep.lock().used = [true, false];
+        prep.cycle(true, true);
+        let exports = prep.exports_dir().unwrap();
+        // the user's own file of the same name in Exports/ is never touched by the preparation
+        let user = exports.join("lead_spike.mid");
+        std::fs::write(&user, b"USER").unwrap();
+        prep.cycle(true, true);
+        let item = [("q-lead".to_string(), Kind::Midi)];
+        let first = prep.take(&item).unwrap();
+        assert_eq!(first[0].parent().unwrap().file_name().unwrap(), DRAGGED_DIR);
+        assert_eq!(first[0].file_name().unwrap(), "lead_spike.mid");
+        let old_bytes = std::fs::read(&first[0]).unwrap();
+        assert_eq!(
+            prep.take(&item).unwrap(),
+            first,
+            "the same set again: the same delivered file"
+        );
+        // an edit: the set in .prepared/ is replaced by a new file; the delivered one keeps its content
+        svc.events_set(
+            &sid,
+            "lead",
+            &json!([{"t": 0.25, "v": 100}, {"t": 1.25, "v": 100}, {"t": 2.25, "v": 100}]),
+        )
+        .unwrap();
+        assert!(prep.take(&item).is_err(), "stale until the pass made it again");
+        prep.cycle(true, true);
+        let second = prep.take(&item).unwrap();
+        assert_eq!(second[0].file_name().unwrap(), "lead_spike 2.mid");
+        assert_eq!(
+            std::fs::read(&first[0]).unwrap(),
+            old_bytes,
+            "the delivered file has the old bytes"
+        );
+        assert_ne!(std::fs::read(&second[0]).unwrap(), old_bytes);
+        assert_eq!(
+            std::fs::read(&user).unwrap(),
+            b"USER",
+            "a file of the user in Exports/ is not changed"
+        );
+        // a prepared file that is gone makes the set stale: not ready, made again
+        let gone = exports.join(PREPARED_DIR).join("sub_spike.mid");
+        assert!(prep.take(&[("q-sub".to_string(), Kind::Midi)]).is_ok());
+        std::fs::remove_file(&gone).unwrap();
+        assert_eq!(prep.take(&[("q-sub".to_string(), Kind::Midi)]).unwrap_err().0, 409);
+        prep.cycle(true, true);
+        assert!(gone.is_file(), "made again");
+        assert!(prep.take(&[("q-sub".to_string(), Kind::Midi)]).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_name_that_exists_in_the_delivery_folder_with_other_content_is_numbered_never_replaced_and_a_failed_link_is_an_error(
+    ) {
+        let d = std::env::temp_dir().join(format!("ds-prep-del-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("p")).unwrap();
+        std::fs::create_dir_all(d.join("o")).unwrap();
+        std::fs::write(d.join("p/Snare_spike.mid"), b"NEW").unwrap();
+        std::fs::write(d.join("o/Snare_spike.mid"), b"OTHER").unwrap();
+        let got = deliver(&d.join("p/Snare_spike.mid"), &d.join("o")).unwrap();
+        assert_eq!(got.file_name().unwrap(), "Snare_spike 2.mid");
+        assert_eq!(std::fs::read(d.join("o/Snare_spike.mid")).unwrap(), b"OTHER");
+        assert_eq!(std::fs::read(&got).unwrap(), b"NEW");
+        assert_eq!(
+            deliver(&d.join("p/Snare_spike.mid"), &d.join("o")).unwrap(),
+            got,
+            "the same inode: reused"
+        );
+        assert!(
+            deliver(&d.join("p/none.mid"), &d.join("o")).is_err(),
+            "no source: an error, no copy"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn file_names_are_unique_per_kind_set_without_case() {
+        let rows = vec![
+            row("q1", "Snare", vec![], vec![]),
+            row("q2", "Snare_audio", vec![], vec![]),
+        ];
+        let stems: HashMap<String, String> = [("q1", "Snare"), ("q2", "Snare_audio"), ("~merged", MERGED_STEM)]
+            .iter()
+            .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
+            .collect();
+        let n = final_names(&rows, &stems);
+        assert_eq!(n[&("q2".to_string(), Kind::Spike)], "Snare_audio_spike.wav");
+        assert_eq!(
+            n[&("q1".to_string(), Kind::Audio)],
+            "Snare (2)_audio_spike.wav",
+            "the later one is numbered"
+        );
+        let low: HashSet<String> = n.values().map(|v| v.to_lowercase()).collect();
+        assert_eq!(low.len(), n.len());
+        // case only
+        let rows = vec![
+            row("q1", "snare_audio", vec![], vec![]),
+            row("q2", "Snare", vec![], vec![]),
+        ];
+        let stems: HashMap<String, String> = [("q1", "snare_audio"), ("q2", "Snare"), ("~merged", MERGED_STEM)]
+            .iter()
+            .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
+            .collect();
+        let n = final_names(&rows, &stems);
+        let low: HashSet<String> = n.values().map(|v| v.to_lowercase()).collect();
+        assert_eq!(low.len(), n.len(), "{n:?}");
+    }
+
+    #[test]
+    fn a_failure_is_tried_again_on_a_press_a_take_and_after_the_back_off() {
+        assert_eq!(
+            [1, 2, 3, 4, 5, 6, 9].map(|t| backoff(t).as_secs()),
+            [5, 10, 20, 40, 60, 60, 60]
+        );
+        let (svc, sid, root) = two_tracks("retry");
+        let prep = prep_of(&svc, &sid, &root);
+        let key = ("q-lead".to_string(), Kind::Midi);
+        prep.lock()
+            .failed
+            .insert(key.clone(), (1, "x".into(), Instant::now(), 1));
+        assert!(
+            failed_blocks(&prep.lock().failed[&key], 1),
+            "held back inside the back-off"
+        );
+        assert!(
+            !failed_blocks(&(1, "x".into(), Instant::now() - Duration::from_secs(6), 1), 1),
+            "free after it"
+        );
+        assert!(
+            !failed_blocks(&(1, "x".into(), Instant::now(), 1), 2),
+            "a new state is not held back"
+        );
+        prep.want_kind(Kind::Midi, Some("q-lead"));
+        assert!(prep.lock().failed.is_empty(), "a press on the error handle");
+        prep.lock()
+            .failed
+            .insert(key.clone(), (1, "x".into(), Instant::now(), 1));
+        let _ = prep.take(&[key.clone()]);
+        assert!(prep.lock().failed.is_empty(), "a take");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_change_of_the_hits_starts_the_watchdog_again_after_an_old_failure() {
+        let (svc, sid, root) = two_tracks("watch");
+        let prep = prep_of(&svc, &sid, &root);
+        let key = ("q-lead".to_string(), Kind::Midi);
+        let mut st = prep.lock();
+        st.cycles = 1;
+        st.want.insert(key.clone(), 1);
+        st.failed.insert(key.clone(), (1, "old".into(), Instant::now(), 1));
+        st.pending_since
+            .insert(key.clone(), Instant::now() - Duration::from_secs(120));
+        assert_eq!(prep.state_for(&st, &key, true), State::Error("old".into()));
+        // an edit: the wanted state changes, the old failure no longer counts and the old time is gone
+        update_books(&mut st, &HashMap::from([(key.clone(), 2)]));
+        assert_eq!(prep.state_for(&st, &key, true), State::Preparing);
+        assert!(st.pending_since[&key].elapsed() < Duration::from_secs(5));
+        drop(st);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_row_with_its_first_hit_shows_preparing_and_no_export_folder_is_an_error() {
+        let (svc, sid, root) = two_tracks("states");
+        let prep = prep_of(&svc, &sid, &root);
+        let key = ("q-lead".to_string(), Kind::Midi);
+        let mut st = prep.lock();
+        st.cycles = 3;
+        assert_eq!(prep.state_for(&st, &key, false), State::None, "no hits");
+        st.wake_seq = 5; // something changed since the last pass: the row may have its first hit now
+        assert_eq!(prep.state_for(&st, &key, true), State::Preparing);
+        st.clean_seq = 5;
+        st.no_folder = true;
+        st.want.insert(key.clone(), 1);
+        assert_eq!(prep.state_for(&st, &key, true), State::Error("no export folder".into()));
+        drop(st);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_spike_set_needs_one_rate_and_a_file_for_the_first_used_source_like_the_audio_set() {
+        let mixed = row(
+            "q1",
+            "A",
+            vec![clip("x", 0.0, 2.0, 0.0, 1.0), clip("y", 0.0, 2.0, 3.0, 1.0)],
+            vec![src("x", &[1.0], 48_000), src("y", &[1.0], 44_100)],
+        );
+        let out = std::env::temp_dir().join(format!("ds-prep-s16-{}.wav", std::process::id()));
+        assert_eq!(
+            write_spike_row(&mixed, &out),
+            Err("clips have different sample rates".into())
+        );
+        assert_eq!(
+            write_audio_row(&mixed, &out),
+            Err("clips have different sample rates".into())
+        );
+        let nofile = row(
+            "q1",
+            "A",
+            vec![clip("y", 0.0, 2.0, 0.0, 1.0)],
+            vec![src("x", &[1.0], 48_000), src("y", &[1.0], 48_000)],
+        );
+        // the first source has no clip in this row: the first USED source (`y`) decides; it has no file
+        assert_eq!(write_spike_row(&nofile, &out), Err("no audio for A".into()));
+        assert!(!out.exists());
+    }
+
+    #[test]
+    fn the_size_is_estimated_before_anything_is_written_and_a_set_over_the_bound_is_refused() {
+        let long = row(
+            "q1",
+            "Long",
+            vec![clip("x", 0.0, 600.0, 0.0, 1.0)],
+            vec![src("x", &[1.0], 48_000)],
+        );
+        assert_eq!(estimate_bytes(&long), 600 * 48_000 * 4);
+        let huge = row(
+            "q1",
+            "Huge",
+            vec![clip("x", 0.0, 100_000.0, 0.0, 1.0)],
+            vec![src("x", &[1.0], 48_000)],
+        );
+        let d = std::env::temp_dir().join(format!("ds-prep-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let key = ("q1".to_string(), Kind::Spike);
+        let g = Gathered {
+            rows: vec![huge],
+            map: TempoMap::default(),
+            tempo_key: String::new(),
+            stems: HashMap::from([
+                ("q1".to_string(), "Huge".to_string()),
+                ("~merged".to_string(), MERGED_STEM.to_string()),
+            ]),
+            names: HashMap::from([(key.clone(), "Huge_spike.wav".to_string())]),
+        };
+        let r = make(&g, &key, &d, &d.join(PREPARED_DIR));
+        assert_eq!(
+            r,
+            Err("not enough room for the prepared files (limit 2 GiB)".to_string())
+        );
+        assert!(
+            !d.join(PREPARED_DIR).join("Huge_spike.wav.tmp").exists(),
+            "nothing was written"
+        );
+        // the sum of several audio parts is bounded in memory too
+        let parts = row(
+            "q1",
+            "P",
+            vec![clip("x", 0.0, 100_000.0, 0.0, 1.0), clip("y", 0.0, 100_000.0, 0.0, 1.0)],
+            vec![src("x", &[1.0], 48_000), src("y", &[1.0], 48_000)],
+        );
+        assert_eq!(
+            write_audio_row(&parts, &d.join("o.wav")),
+            Err("not enough memory for the audio spikes of this row".into())
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_hostile_name_never_reaches_a_path_outside_the_prepared_folder() {
+        let d = std::env::temp_dir().join(format!("ds-prep-host-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let r = row(
+            "q1",
+            "x",
+            vec![clip("x", 0.0, 1.0, 0.0, 1.0)],
+            vec![src("x", &[0.5], 48_000)],
+        );
+        for bad in ["../x_spike.mid", "/abs_spike.mid", "a/b_spike.mid"] {
+            let key = ("q1".to_string(), Kind::Midi);
+            let g = Gathered {
+                rows: vec![r.clone()],
+                map: TempoMap::default(),
+                tempo_key: String::new(),
+                stems: HashMap::new(),
+                names: HashMap::from([(key.clone(), bad.to_string())]),
+            };
+            let out = make(&g, &key, &d, &d.join(PREPARED_DIR));
+            assert_eq!(out, Err("the name is not allowed".to_string()), "{bad}");
+        }
+        assert!(!d.join("x_spike.mid").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_closures_of_the_preparation_do_not_keep_the_document_alive_and_the_worker_ends_with_it() {
+        struct Doc;
+        let doc = Arc::new(Doc);
+        let (w1, w2, w3) = (Arc::downgrade(&doc), Arc::downgrade(&doc), Arc::downgrade(&doc));
+        let page = Arc::new(PageHandle::default());
+        let prep = Prep::new(
+            page,
+            Arc::new(move || w1.upgrade().map(|_| Rows::default()).unwrap_or_default()),
+            Arc::new(move || {
+                w2.upgrade().map(|_| ()).map_or_else(
+                    || crate::tempo_ara::choose(None, "closed", None),
+                    |_| crate::tempo_ara::choose(None, "x", None),
+                )
+            }),
+            Arc::new(move || w3.upgrade().map(|_| HashMap::new()).unwrap_or_default()),
+        );
+        let weak_doc = Arc::downgrade(&doc);
+        let weak_prep = Arc::downgrade(&prep);
+        prep.wake();
+        let ended = Arc::clone(&prep.ended);
+        assert!(!ended.load(std::sync::atomic::Ordering::SeqCst), "the worker runs");
+        drop(doc);
+        assert!(
+            weak_doc.upgrade().is_none(),
+            "the document is freed although the preparation lives"
+        );
+        drop(prep);
+        let t0 = Instant::now();
+        while !ended.load(std::sync::atomic::Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(weak_prep.upgrade().is_none(), "the preparation is freed");
+        assert!(
+            ended.load(std::sync::atomic::Ordering::SeqCst),
+            "the worker thread has ended"
+        );
+    }
+
+    #[test]
+    fn a_poll_that_says_done_wakes_the_worker_once_for_a_job_not_at_every_answer() {
+        let (svc, sid, root) = two_tracks("poll");
+        let prep = prep_of(&svc, &sid, &root);
+        let seq = |p: &Arc<Prep>| p.lock().wake_seq;
+        prep.command_done(true, false); // a command that writes the project
+        let s1 = seq(&prep);
+        prep.command_done(false, true); // the first `done` of the job
+        let s2 = seq(&prep);
+        assert_eq!(s2, s1 + 1);
+        for _ in 0..5 {
+            prep.command_done(false, true); // the page polls every 2 s: no wake, or the quiet time would restart for ever
+        }
+        assert_eq!(seq(&prep), s2);
+        prep.command_done(false, false);
+        assert_eq!(seq(&prep), s2);
         let _ = std::fs::remove_dir_all(&root);
     }
 
