@@ -16,7 +16,7 @@ function setMsgLvl(m, lvl, bg) {
   const now = performance.now();
   if (bg && _msgLevel === "error" && now < _msgHoldUntil) return;   // a held error stays readable
   _msgSeq++;
-  $("#stMsg").textContent = trackText(m);   // #575: a DAW shows the DAW track name, never the key
+  $("#stMsg").textContent = m;
   _msgLevel = lvl;
   _msgHoldUntil = lvl === "error" ? now + MSG_HOLD : 0;
 }
@@ -48,7 +48,7 @@ function selShellSync() {   // #158 (rank 9): Delete, the nudge items and Auditi
 function updateStatus() {   // P3-14b: the status bar is short; the info line has the details
   const e = S.sel && (S.events[S.sel.track] || [])[S.sel.index];
   const cut = e ? (hgIsCut(e) || (lnLearn(S.sel.track) && lnGreyHit(S.sel.track, e))) : false;   // #175: a deactivated hit says so
-  $("#stSel").textContent = e ? `${trackLabel(S.sel.track)}: hit ${S.sel.index + 1}/${S.events[S.sel.track].length}${cut ? " · deactivated" : ""}` : "no selection";
+  $("#stSel").textContent = e ? `${S.sel.track}: hit ${S.sel.index + 1}/${S.events[S.sel.track].length}${cut ? " · deactivated" : ""}` : "no selection";
   ensureSelTrack();   // P4-39c
   drawInfo();
   syncInspector();   // P3-14a: the Inspector follows the selected track
@@ -126,7 +126,7 @@ function drawInfo() {
   if (empty.classList.contains("hidden") !== !!e) empty.classList.toggle("hidden", !!e);
   if (!e) return;
   const tr = S.tracks[S.sel.track], sr = tr.sr, o = hitOrigin(e, sr);
-  ilSet("ilTrack", trackLabel(S.sel.track));   // #575: a DAW shows the name of the DAW track
+  ilSet("ilTrack", S.sel.track);
   const cut = hgIsCut(e) || (lnLearn(S.sel.track) && lnGreyHit(S.sel.track, e));   // #175: a deactivated hit says so
   ilSet("ilIndex", `${S.sel.index + 1}/${S.events[S.sel.track].length}${cut ? " · deactivated" : ""}`);
   ilSet("ilTime", `${fmt(e.t, 6)} s`);

@@ -499,8 +499,6 @@ input.hgRange:disabled { cursor: default; opacity: .5; }
 #exportModal .exSub { margin: 0 0 2px 22px; }
 #exportModal .exDest { display: flex; gap: 6px; align-items: center; }
 #exportModal #exDest { flex: 1; min-width: 0; box-sizing: border-box; font: inherit; font-size: 12px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; user-select: text; -webkit-user-select: text; text-overflow: ellipsis; }
-/* #575: host mode only (the class exFold is set by static/export.js only with the mode on): the destination row is collapsed until one click */
-#exportModal .exFold:not(.open) .exDest, #exportModal .exFold:not(.open) .exLbl { display: none; }
 #exportModal .exWarn { color: var(--orange); min-height: 0; margin: 2px 0; }
 #exportModal .exWarn:empty, #exportModal #exReplace:empty { display: none; }
 #exportModal .exResult { font-size: 12px; margin: 6px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -567,4 +565,3 @@ body.host .track.hostSel { outline: 1px dashed #36c5a0; }   /* the other tracks 
 body.host .track.hostSel .tname::after { content: " ·"; color: #36c5a0; }
 body.host .track.hostHidden { display: none; }
 #hostHiddenNote { color: #36c5a0; }
-#hostIntro { color: var(--accent); }   /* #575: the first-open line of the host mode */

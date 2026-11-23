@@ -767,7 +767,7 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
   if (hostMode()) setInterval(hostWatchAnalysis, 2000);   // #539: an analysis the plugin runs shows here; started before the boot steps, so a boot error cannot skip it
   try {
     await loadViewSettings();   // P3-14a: the Inspector's state, before the first layout the user sees
-    if (hostMode()) { hostFit(); window.addEventListener("resize", hostFit); hostIntroInit(); }   // #539: a low and wide window gives the lanes the room; #575: the first-open line
+    if (hostMode()) { hostFit(); window.addEventListener("resize", hostFit); }   // #539: a low and wide window gives the lanes the room
     await initSessions();
     await loadProject();
     showBackend();

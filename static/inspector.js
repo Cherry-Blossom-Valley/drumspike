@@ -162,7 +162,7 @@ function buildParamsPanel(div, name, p) {
   const own = document.createElement("option"); own.value = ""; own.textContent = "own detection"; follow.appendChild(own);
   for (const n of S.order) {
     if (n === name) continue;
-    const o = document.createElement("option"); o.value = n; o.textContent = `follow ${trackLabel(n)}`; follow.appendChild(o);   // names are data
+    const o = document.createElement("option"); o.value = n; o.textContent = `follow ${n}`; follow.appendChild(o);   // names are data
   }
   follow.value = t.follows && S.tracks[t.follows] ? t.follows : "";
   follow.onchange = () => setTrackFollow(name, follow.value || null);
@@ -184,7 +184,7 @@ function buildParamsPanel(div, name, p) {
   }
   if (t.follows) {   // the detection settings are not used for a follower
     for (const sel of [".pSens", ".pGap", ".pRefine", ".pRefineLo", ".pRefineHi", ".pFlam"]) { const el = div.querySelector(sel); if (el) el.disabled = true; }
-    noteRow.classList.remove("hidden"); note.textContent = `follows ${trackLabel(t.follows)}: the hits are derived from it, the detection settings are not used`;
+    noteRow.classList.remove("hidden"); note.textContent = `follows ${t.follows}: the hits are derived from it, the detection settings are not used`;
     div.querySelector(".pactions .phint").textContent = "re-analyze derives the hits from the followed track again";
   }
   div.querySelector(".pGap").onchange = ev => p.min_gap_ms = +ev.target.value;
@@ -207,7 +207,7 @@ function buildParamsPanel(div, name, p) {
         const ov = shiftNow(name);
         if (!await shiftApply(name, nv)) return;
         pushUndo({ type: "shift", track: name, from: ov, to: nv });   // one undo step, none for a refused shift
-        setMsg(`shifted all hits of ${trackLabel(name)} by ${nv-ov} samples`);
+        setMsg(`shifted all hits of ${name} by ${nv-ov} samples`);
       } finally {
         const f = document.querySelector("#insParams .pShift");
         if (SH.pending <= 1 && f && INS.name === name) f.value = shiftNow(name);   // 1: this call itself

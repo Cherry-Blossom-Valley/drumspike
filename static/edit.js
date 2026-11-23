@@ -47,26 +47,26 @@ function undoMeta(op) {
     case "setv": set("Set Velocity", at(op.track, hitT(op.track, op.id))); break;
     case "setv-many": {   // P4-40f: one velocity gesture over several hits, one step
       const n = (op.list || []).length;
-      set(`Set Velocity (${trackLabel(op.track)}, ${n} hits)`, at(op.track, n ? hitT(op.track, (op.list)[0].id) : null));
+      set(`Set Velocity (${op.track}, ${n} hits)`, at(op.track, n ? hitT(op.track, (op.list)[0].id) : null));
       break;
     }
     case "del-many": {   // #151: one Delete over a range selection
       const n = (op.list || []).length;
-      set(`Delete Hits (${trackLabel(op.track)}, ${n} hits)`, at(op.track, n ? (op.list)[0].t : null));
+      set(`Delete Hits (${op.track}, ${n} hits)`, at(op.track, n ? (op.list)[0].t : null));
       break;
     }
     case "move-many": {   // #151: one nudge over a range selection
       const n = (op.list || []).length;
-      set(`Nudge Hits (${trackLabel(op.track)}, ${n} hits)`, at(op.track, n ? (op.list)[0].from : null));
+      set(`Nudge Hits (${op.track}, ${n} hits)`, at(op.track, n ? (op.list)[0].from : null));
       break;
     }
     case "shift": set("Shift Hits", at(op.track, null)); break;
     case "repick": set("Re-pick Hits", at(op.track, null)); break;
-    case "reanalyze": set(`Re-analyze Selection (${trackLabel(op.track)}, ${fmt((op.t0), 3)} to ${fmt((op.t1), 3)} s)`, at(op.track, op.t0)); break;   // #265
+    case "reanalyze": set(`Re-analyze Selection (${op.track}, ${fmt((op.t0), 3)} to ${fmt((op.t1), 3)} s)`, at(op.track, op.t0)); break;   // #265
     case "loud": set("Set Loudness Range", at(op.track, null)); break;
     case "learn": set("Learn Change", at(op.track, null)); break;
-    case "trkdel": set(`Remove Track ${trackLabel(op.name)}`, at(op.name, null)); break;
-    case "role": set(`Set Role (${trackLabel(op.track)})`, at(op.track, null)); break;
+    case "trkdel": set(`Remove Track ${op.name}`, at(op.name, null)); break;
+    case "role": set(`Set Role (${op.track})`, at(op.track, null)); break;
     case "tempo": set(/^bar 1/.test(op.what || "") ? "Set Bar 1" : op.what ? op.what.charAt(0).toUpperCase() + op.what.slice(1) : "Tempo Map Change", at(null, null)); break;
     case "vel": {
       const name = Object.keys(op.tracks || {})[0], id = name ? Object.keys(op.tracks[name].after)[0] : null;
@@ -80,7 +80,7 @@ function undoMeta(op) {
 function opWhere(op, isUndo) { return op.type === "move" && isUndo ? { track: op.track, t: op.from } : (op.where || { track: null, t: null }); }
 function stepText(op, isUndo) {   // "Delete Hit (s top, 12.345 s)"
   const w = opWhere(op, isUndo), parts = [];
-  if (w.track) parts.push(trackLabel(w.track));   // #575
+  if (w.track) parts.push(w.track);
   if (w.t !== null && w.t !== undefined) parts.push(`${w.t.toFixed(3)} s`);
   return (op.label || "Edit") + (parts.length ? ` (${parts.join(", ")})` : "");
 }

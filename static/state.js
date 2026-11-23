@@ -78,9 +78,8 @@ function saveSettings() { localStorage.setItem("dsg_settings", JSON.stringify(SE
    project has unsaved changes; the server's flag is the truth (B.projectGet) */
 function setDirtyState(dirty) {
   S.dirty = !!dirty;
-  const mark = S.dirty && !hostMode();   // #575: in a DAW the session of the DAW is the only save: no unsaved dot, no mark in the title (S.dirty itself stays)
-  $("#dirtyDot").classList.toggle("hidden", !mark);
-  document.title = (mark ? "● " : "") + (S.name || "Drum Spike") + (S.name ? " - Drum Spike" : "");
+  $("#dirtyDot").classList.toggle("hidden", !S.dirty);
+  document.title = (S.dirty ? "● " : "") + (S.name || "Drum Spike") + (S.name ? " - Drum Spike" : "");
   if (typeof DSShell !== "undefined") DSShell.sync();   // P4-26: the native window title follows the name and the unsaved flag
 }
 
@@ -113,23 +112,6 @@ const ROLE_COLORS = { kick: "#e05555", snare: "#e0a13c", tom: "#57b8e0", hat: "#
 /* The colour of a track for drawing: its own when it is 6 hex digits, else the colour of its role. Every draw site calls this, so a lane never builds "undefined0d" and never keeps the last fill style of the canvas. */
 function trackColor(name) { const t = S.tracks[name]; return t && /^#[0-9a-f]{6}$/i.test(t.color || "") ? t.color : ROLE_COLORS[t && t.role] || ROLE_COLORS.other; }
 function trackColors(tracks) { for (const t of Object.values(tracks || {})) if (t && !/^#[0-9a-f]{6}$/i.test(t.color || "")) { t.color = ROLE_COLORS[t.role] || ROLE_COLORS.other; t.colorFromRole = true; } }
-/* #575: the ONE label helper. The label of a track is the name the DAW shows (`display_name`, #558), else its key. Every text
-   that names a track for the user (progress, info line, export dialog, menus, undo labels, status texts, tooltips) calls this;
-   a key goes only into a command, a data attribute or a lookup. Only the plugin sets `display_name`, so the standalone page
-   shows the key everywhere, as before. */
-function trackLabel(key) { const t = typeof S !== "undefined" && S.tracks && S.tracks[key]; return t && t.display_name || key; }
-/* A text that already holds keys (an answer of the service: "Snare Top: 12 hits ..."): in host mode each key that differs from its
-   label becomes the label, in one pass; a label that is already in the text stays (the alternation holds the labels first). With
-   the mode off the text is returned as it is. */
-function trackText(text) {
-  if (!hostMode() || typeof text !== "string" || !text) return text;
-  const map = new Map();
-  let differs = false;
-  for (const k of Object.keys(S.tracks || {})) { const l = trackLabel(k); if (l !== k) differs = true; map.set(l, l); map.set(k, l); }   // every key is in: the longest name wins ("Kick In" before "Kick")
-  if (!differs) return text;
-  const re = new RegExp([...map.keys()].sort((a, b) => b.length - a.length).map(x => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
-  return text.replace(re, m => map.get(m));
-}
 /* ---------------- host mode (DAW plugin P2, #509) ----------------
    In a DAW the host owns the files, the transport and the tempo. The plugin shell sets
    window.__DS_HOST_MODE__ before the page loads; backend.js turns it into the one flag
@@ -209,38 +191,6 @@ function hostApply() {
   st.textContent = HOST_ABSENT.map(g => g.controls).flat().map(c => `body.host ${c}`).join(",\n") + " { display: none !important; }";
   const eb = document.getElementById("exportAllBtn");   // #560: the tooltip of the Export button says no "file" in a DAW (the tooltip test names the words)
   if (eb) { if (!eb.dataset.title0) eb.dataset.title0 = eb.title; eb.title = "Export… (Cmd+E): choose what to export (MIDI, spike WAV) and where"; }
-}
-
-/* #575: the first-open line and the message after a change of the audio. Both exist in host mode only.
-   The line names the first of the five steps of the help ("DAW" section of help.js) and goes away after the first action of the user (a click or a
-   key in the page); the service settings keep that it went (`host_intro_done`), so the next opening of the editor of the document does not show it.
-   A key or a click of the DAW does not reach this page. */
-const HOST_INTRO_TEXT = "Step 1 of 5: put the plugin on the drum clips. Help shows all five steps.";
-async function hostIntroInit() {
-  if (!hostMode() || document.getElementById("hostIntro")) return;
-  let done = false;
-  try { const st = await B.appSettingsGet(); done = !!(st && st.host_intro_done); } catch (e) { /* no settings: the line shows */ }
-  if (done || document.getElementById("hostIntro")) return;
-  const el = document.createElement("span");
-  el.id = "hostIntro"; el.textContent = HOST_INTRO_TEXT; el.title = "The first step of the path in the DAW. It goes away after your first action.";
-  const spacer = document.querySelector("#statusbar .spacer");
-  spacer.parentNode.insertBefore(el, spacer);
-  const gone = () => {
-    document.removeEventListener("pointerdown", gone, true); document.removeEventListener("keydown", gone, true);
-    el.remove();
-    try { B.appSettingsSet("host_intro_done", true).catch(() => {}); } catch (e) { /* not kept */ }
-  };
-  document.addEventListener("pointerdown", gone, true); document.addEventListener("keydown", gone, true);
-}
-/* The DAW changed the audio of some tracks and the plugin analysed them again: the shell script of the plugin calls this once the page has
-   loaded the project again, with the keys of those tracks. One status message says what happened and what is kept. The hits the user
-   added, moved or edited stay (the rule of the plugin); a hit the user deleted can come back (open point of #538). */
-function hostAudioChanged(keys) {
-  if (!hostMode() || !Array.isArray(keys)) return;
-  const names = [...new Set(keys)].filter(k => S.tracks[k]).map(trackLabel);
-  if (!names.length) return;
-  const list = names.length > 3 ? `${names.slice(0, 3).join(", ")} and ${names.length - 3} more tracks` : names.join(", ");
-  setMsg(`The DAW changed the audio of ${list}. The hits were detected again. The hits you added, moved or edited are kept.`);
 }
 
 /* #539: a low and wide window. In LUNA the editor is a strip below the timeline, 300 to 400 px high and the full width,
